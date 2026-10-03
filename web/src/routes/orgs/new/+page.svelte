@@ -6,6 +6,7 @@
   import Input from '$lib/components/Input.svelte';
   import FormField from '$lib/components/FormField.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
+  import { sensitiveMutationBlocker } from '$lib/stores/sensitive-intents.svelte.js';
 
   let name = $state('');
   let displayName = $state('');
@@ -16,9 +17,9 @@
   function slugifyOrgName(value) {
     return String(value || '')
       .toLowerCase()
-      .replace(/[^a-z0-9._-]/g, '-')
+      .replace(/[^a-z0-9-]/g, '-')
       .replace(/-+/g, '-')
-      .replace(/^[-.]|[-.]$/g, '')
+      .replace(/^-|-$/g, '')
       .slice(0, 32);
   }
 
@@ -36,8 +37,8 @@
     
     if (!name) {
       errors.name = 'Name is required';
-    } else if (!/^[a-z0-9][a-z0-9._-]*[a-z0-9]$|^[a-z0-9]$/.test(name)) {
-      errors.name = 'Name must start and end with a letter or digit, and may contain lowercase letters, numbers, hyphens, underscores, and dots';
+    } else if (!/^[a-z][a-z0-9-]{1,38}[a-z0-9]$/.test(name)) {
+      errors.name = 'Name must be 3–40 lowercase letters, numbers, or hyphens, starting with a letter and ending with a letter or digit';
     } else if (name.length < 3) {
       errors.name = 'Name must be at least 3 characters';
     } else if (name.length > 32) {
@@ -89,7 +90,7 @@
         />
       </FormField>
 
-      <FormField label="URL Name" error={errors.name} hint="Lowercase letters, numbers, hyphens, underscores, and dots. Cannot be changed later.">
+      <FormField label="URL Name" error={errors.name} hint="Lowercase letters, numbers, and hyphens. Cannot be changed later.">
         <Input
           bind:value={name}
           placeholder="my-team"
@@ -100,7 +101,7 @@
 
       <div class="actions">
         <a href="/orgs" class="btn-cancel">Cancel</a>
-        <LoadingButton type="submit" loading={submitting}>
+        <LoadingButton type="submit" loading={submitting} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
           Create Organization
         </LoadingButton>
       </div>

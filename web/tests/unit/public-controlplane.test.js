@@ -4,7 +4,10 @@ const requestEncryptedResultMock = vi.hoisted(() => vi.fn());
 const publishEncryptedRequestMock = vi.hoisted(() => vi.fn());
 const bootstrapMock = vi.hoisted(() => vi.fn());
 const gotoMock = vi.hoisted(() => vi.fn());
+const publishIntentMock = vi.hoisted(() => vi.fn());
+const canonicalIntentRecordMock = vi.hoisted(() => vi.fn());
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const ORG_ID = '3b45458b-2724-4dda-9fc6-66f12249660d';
 
 vi.mock('$app/navigation', () => ({
   goto: gotoMock
@@ -20,12 +23,20 @@ vi.mock('../../src/lib/stores/controlplane.svelte.js', () => ({
   bootstrapControlplane: bootstrapMock
 }));
 
+vi.mock('$lib/nostr/intent-client.svelte.js', () => ({
+  publishIntent: publishIntentMock,
+  canonicalIntentRecord: canonicalIntentRecordMock,
+  resolveIntentOrgId: (domain, explicit) => explicit || (domain === 'backup' || domain === 'package' ? 'f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7' : '3b45458b-2724-4dda-9fc6-66f12249660d')
+}));
+
 describe('public controlplane command helpers', () => {
   let api;
 
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    publishIntentMock.mockResolvedValue({ pending: true });
+    canonicalIntentRecordMock.mockReturnValue(null);
     bootstrapMock.mockResolvedValue({ ok: true });
     publishEncryptedRequestMock.mockResolvedValue({
       requestEventId: 'req-1',
@@ -38,11 +49,14 @@ describe('public controlplane command helpers', () => {
       requestEventId: 'req-1',
       result: { status: 'ok' }
     });
+    publishIntentMock.mockImplementation(async request => ({ pending: true, desiredState: request.content,
+      intentId: 'intent-1', coordinate: request.coordinate }));
     api = await import('../../src/lib/stores/public-controlplane.svelte.js');
   });
 
-  it('creates services through canonical ContextVM encrypted requests', async () => {
+  it('creates services through signed intents, not ContextVM requests', async () => {
     const payload = {
+      org_id: ORG_ID,
       name: 'api',
       repo_url: '',
       artifact_repo: 'ghcr.io/example/api',
@@ -52,52 +66,48 @@ describe('public controlplane command helpers', () => {
 
     await api.createService(payload);
 
-    expect(bootstrapMock).toHaveBeenCalledTimes(1);
-    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
-      operation: 'service/create',
-      payload: { ...payload, id: expect.stringMatching(UUID_V7) },
-      tags: [],
-      kind: 25910,
-      resultKinds: [25910],
-      signal: undefined,
-      timeoutMs: undefined
-    });
+    expect(bootstrapMock).not.toHaveBeenCalled();
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
+    expect(publishIntentMock).toHaveBeenCalledWith(expect.objectContaining({
+      domain: 'service', op: 'create', orgId: ORG_ID, coordinate: expect.stringMatching(UUID_V7),
+      content: { ...payload, id: expect.stringMatching(UUID_V7) }
+    }));
   });
 
   it('mints a client entity id for service and environment creates when absent (bahia-irsry.35)', async () => {
-    await api.createService({ name: 'api', artifact_repo: 'ghcr.io/example/api' });
-    await api.createEnvironment({ org_id: 'org-1', name: 'staging' });
+    await api.createService({ org_id: ORG_ID, name: 'api', artifact_repo: 'ghcr.io/example/api' });
+    await api.createEnvironment({ org_id: ORG_ID, name: 'staging' });
 
-    const [serviceCall, environmentCall] = requestEncryptedResultMock.mock.calls.map(([request]) => request);
-    expect(serviceCall.operation).toBe('service/create');
-    expect(serviceCall.payload.id).toMatch(UUID_V7);
-    expect(environmentCall.operation).toBe('environment/create');
-    expect(environmentCall.payload.id).toMatch(UUID_V7);
-    expect(environmentCall.payload.id).not.toBe(serviceCall.payload.id);
+    const [serviceCall, environmentCall] = publishIntentMock.mock.calls.map(([request]) => request);
+    expect(serviceCall.domain).toBe('service');
+    expect(serviceCall.content.id).toMatch(UUID_V7);
+    expect(environmentCall.domain).toBe('environment');
+    expect(environmentCall.content.id).toMatch(UUID_V7);
+    expect(environmentCall.content.id).not.toBe(serviceCall.content.id);
   });
 
   it('mints a client entity id for policy and LLM route creates and keeps a supplied one (bahia-irsry.42)', async () => {
     const id = '01920d4e-7b3a-7c3d-9f2e-0123456789ab';
-    await api.createPolicy({ name: 'sig', rules: [{ type: 'require_signature' }], enforcement: 'block', enabled: true });
-    await api.createPolicy({ id, name: 'sig', rules: [{ type: 'require_signature' }], enforcement: 'block', enabled: true });
+    await api.createPolicy({ org_id: ORG_ID, name: 'sig', rules: [{ type: 'require_signature' }], enforcement: 'block', enabled: true });
+    await api.createPolicy({ id, org_id: ORG_ID, name: 'sig', rules: [{ type: 'require_signature' }], enforcement: 'block', enabled: true });
     await api.createLLMRoute({ name: 'chat' });
     await api.createLLMRoute({ id, name: 'chat' });
 
-    const calls = requestEncryptedResultMock.mock.calls.map(([request]) => request);
-    expect(calls.map((call) => call.operation)).toEqual(['policy/create', 'policy/create', 'llm/route-create', 'llm/route-create']);
-    expect(calls[0].payload.id).toMatch(UUID_V7);
-    expect(calls[1].payload.id).toBe(id);
-    expect(calls[2].payload.id).toMatch(UUID_V7);
-    expect(calls[3].payload.id).toBe(id);
+    const policyCalls = publishIntentMock.mock.calls.map(([request]) => request);
+    expect(policyCalls.map(call => call.domain)).toEqual(['policy', 'policy', 'llm', 'llm']);
+    expect(policyCalls[0].content.id).toMatch(UUID_V7);
+    expect(policyCalls[1].content.id).toBe(id);
+    expect(publishIntentMock.mock.calls[2][0].content.id).toMatch(UUID_V7);
+    expect(publishIntentMock.mock.calls[3][0].content.id).toBe(id);
     await expect(api.createPolicy({ id: 'Not-A-UUID', name: 'x', rules: [] })).rejects.toThrow(/Invalid entity id/);
   });
 
   it('sends a caller-minted entity id unchanged so retries stay idempotent', async () => {
     const id = '01920d4e-7b3a-7c3d-9f2e-0123456789ab';
-    await api.createService({ id, name: 'api', artifact_repo: 'ghcr.io/example/api' });
-    await api.createService({ id, name: 'api', artifact_repo: 'ghcr.io/example/api' });
+    await api.createService({ id, org_id: ORG_ID, name: 'api', artifact_repo: 'ghcr.io/example/api' });
+    await api.createService({ id, org_id: ORG_ID, name: 'api', artifact_repo: 'ghcr.io/example/api' });
 
-    expect(requestEncryptedResultMock.mock.calls.map(([request]) => request.payload.id)).toEqual([id, id]);
+    expect(publishIntentMock.mock.calls.map(([request]) => request.content.id)).toEqual([id, id]);
     await expect(api.createEnvironment({ id: 'Not-A-UUID', name: 'prod' })).rejects.toThrow(/Invalid entity id/);
   });
 
@@ -217,19 +227,23 @@ describe('public controlplane command helpers', () => {
     }));
   });
 
-  it('uses the desired-state hash to idempotently persist managed service configuration', async () => {
+  it('publishes full desired state with the current canonical revision', async () => {
     const hash = `sha256:${'c'.repeat(64)}`;
+    canonicalIntentRecordMock.mockReturnValue({ content: {
+      id: 'svc-1', org_id: ORG_ID, name: 'api', updated_at: '2026-08-29T12:00:00Z'
+    } });
     await api.updateService('svc-1', {
       expected_updated_at: '2026-08-29T12:00:00Z',
       managed_runtime_config: { schema_version: '1', service_name: 'web' },
       idempotency_key: hash
     });
 
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({
-      operation: 'service/update',
-      requestId: hash,
-      payload: expect.objectContaining({ id: 'svc-1', expected_updated_at: '2026-08-29T12:00:00Z', idempotency_key: hash })
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      domain: 'service', op: 'update', coordinate: 'svc-1',
+      currentRecord: expect.objectContaining({ updated_at: '2026-08-29T12:00:00Z' }),
+      content: expect.objectContaining({ id: 'svc-1', name: 'api', idempotency_key: hash })
     }));
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
   it('approves deployment intents through canonical ContextVM approval requests', async () => {
@@ -246,7 +260,7 @@ describe('public controlplane command helpers', () => {
     });
   });
 
-  it('creates LLM routes and releases through canonical ContextVM operations', async () => {
+  it('creates LLM routes and releases through signed intents', async () => {
     const routePayload = {
       name: 'chat-prod',
       description: 'Public chat completions route',
@@ -256,32 +270,23 @@ describe('public controlplane command helpers', () => {
       }
     };
     await api.createLLMRoute(routePayload);
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
-      operation: 'llm/route-create',
-      tags: [],
-      payload: { ...routePayload, id: expect.stringMatching(UUID_V7) },
-      kind: 25910,
-      resultKinds: [25910],
-      signal: undefined,
-      timeoutMs: undefined
-    });
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      domain: 'llm', op: 'create', coordinate: expect.stringMatching(UUID_V7),
+      content: { ...routePayload, id: expect.stringMatching(UUID_V7) }
+    }));
 
     const releasePayload = {
-      route_id: 'llm-route-1',
+      route_id: '01920d4e-7b3a-7c3d-9f2e-0123456789ab',
       version: 'v1',
       model_ref: 'hf://meta-llama/Llama-3',
       model_source: 'huggingface'
     };
     await api.registerLLMRelease(releasePayload);
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
-      operation: 'llm/release-register',
-      tags: [['route', 'llm-route-1']],
-      payload: releasePayload,
-      kind: 25910,
-      resultKinds: [25910],
-      signal: undefined,
-      timeoutMs: undefined
-    });
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      domain: 'llm', op: 'release-register', coordinate: expect.stringMatching(/^llm-release:/),
+      content: { ...releasePayload, id: expect.stringMatching(UUID_V7) }
+    }));
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
   it('requests LLM deploys and rollbacks through canonical ContextVM lifecycle methods', async () => {
@@ -490,34 +495,36 @@ describe('public controlplane command helpers', () => {
     }));
   });
 
-  it('publishes backup mutation and operation helpers through registered ContextVM methods', async () => {
+  it('publishes backup mutations and operations as handler-compatible intents', async () => {
     await api.registerBackupRepository({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive', idempotency_key: 'repo-1' });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({
-      operation: 'backup/repository-register',
-      tags: expect.arrayContaining([['d', 'repo-1'], ['repository', 'archive']]),
-      payload: expect.objectContaining({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive', idempotency_key: 'repo-1' })
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      domain: 'backup', op: 'repository-register', coordinate: expect.stringMatching(/^backup-repository:/),
+      content: expect.objectContaining({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive' })
     }));
 
     await api.applyBackupPolicy({ name: 'verified', require_verification: true, verification_mode: 'kopia_snapshot_verify', idempotency_key: 'policy-1' });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/policy-apply' }));
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'policy-apply' }));
 
     await api.applyBackupRecipe({ name: 'daily', version: 'v1', backend: 'kopia', repository_id: 'repo-id', target_ref: 'fs:/srv/app', idempotency_key: 'recipe-1' });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/recipe-apply' }));
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'recipe-apply' }));
 
     await api.applyBackupDefinition({ name: 'daily-app', repository_id: 'repo-id', policy_id: 'policy-id', recipe_id: 'recipe-id', idempotency_key: 'definition-1' });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/definition-apply' }));
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'definition-apply' }));
 
-    await api.requestBackupRun({ id: 'recipe-id', name: 'daily', version: 'v1' });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/run' }));
+    await api.requestBackupRun({ id: 'recipe-id', repository_id: 'repo-id', backend: 'kopia', target_ref: 'fs:/srv/app' });
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'run',
+      content: expect.objectContaining({ recipe_id: 'recipe-id', repository_id: 'repo-id', backend: 'kopia', target_ref: 'fs:/srv/app' }) }));
 
     await api.requestBackupVerification({ id: 'run-id', verification_mode: 'kopia_snapshot_verify' });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/verification' }));
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'verification' }));
 
     await api.requestBackupRestore({ id: 'run-id' }, 'fs:/restore');
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/restore' }));
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'restore' }));
 
-    await api.requestBackupRetention({ repository_id: 'repo-id', policy_id: 'policy-id', dry_run: true });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/retention' }));
+    await api.requestBackupRetention({ repository_id: 'repo-id', policy_id: 'policy-id', backend: 'kopia', dry_run: true });
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'retention',
+      content: expect.objectContaining({ repository_id: 'repo-id', backend: 'kopia', dry_run: true }) }));
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
   it('evaluates deployment policy through ContextVM and unwraps successful payload envelopes', async () => {
@@ -553,34 +560,25 @@ describe('public controlplane command helpers', () => {
     });
   });
 
-  it('preserves structured ContextVM error metadata for revision handling', async () => {
-    requestEncryptedResultMock.mockResolvedValueOnce({
-      requestEventId: 'req-1',
-      result: {
-        status: 'error',
-        error: {
-          code: -32009,
-          message: 'environment revision conflict',
-          data: { expected_updated_at: 'old' }
-        }
-      }
-    });
+  it('requires a canonical revision before signing an environment update', async () => {
+    await expect(api.updateEnvironment('env-1', { deployment_units: [] })).rejects.toThrow(/re-read and resubmit/);
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
+  });
 
-    let thrown;
-    try {
-      await api.updateEnvironment('env-1', {
-        expected_updated_at: 'old',
-        deployment_units: []
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toMatchObject({
-      message: 'environment revision conflict',
-      code: -32009,
-      operation: 'environment/update'
-    });
-    expect(thrown.data).toEqual({ expected_updated_at: 'old' });
+  it('signs package promote and yank intents without ContextVM CRUD requests', async () => {
+    const artifact = { org_id: ORG_ID, repository_id: 'repo-a', target_repository_id: 'repo-b',
+      namespace: 'team', package_name: 'api', version: '1.0', filename: 'api.tgz' };
+    await api.promotePackage({ ...artifact, source_repository_id: 'repo-a' });
+    await api.yankPackage(artifact);
+    expect(publishIntentMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      domain: 'package', op: 'promote', orgId: ORG_ID,
+      coordinate: 'package:repo-b:team:api:1.0:api.tgz'
+    }));
+    expect(publishIntentMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      domain: 'package', op: 'yank', orgId: ORG_ID,
+      coordinate: 'package:repo-a:team:api:1.0:api.tgz'
+    }));
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
   it('surfaces terminal error results from ContextVM command replies', async () => {

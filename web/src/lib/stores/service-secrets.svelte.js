@@ -1,5 +1,7 @@
 import { requestEncryptedResult, encryptedRequestsAvailable, servicePubkeyFromSystemInfo } from '$lib/nostr/encrypted-controlplane.js';
-import { encryptNip44 } from '$lib/nostr/nip07-crypto.js';
+import { encryptWithAuth } from './auth.svelte.js';
+import { mintEntityId } from '$lib/entity-id.js';
+import { orgIdFor, submitSensitiveIntent } from './sensitive-intents.svelte.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
 export const serviceSecretsState = $state({
@@ -11,9 +13,6 @@ export const serviceSecretsState = $state({
 
 export const SERVICE_SECRET_ENCRYPTED_OPERATIONS = {
   list: 'services.secrets.list',
-  create: 'services.secrets.create',
-  update: 'services.secrets.update',
-  delete: 'services.secrets.delete',
   reveal: 'services.secrets.reveal'
 };
 
@@ -176,37 +175,43 @@ export async function listServiceSecrets(serviceId) {
 
 export async function createServiceSecret(serviceId, payload) {
   const id = String(serviceId || '').trim();
-  const info = await ensureEncryptedSecrets();
+  const info = currentSystemInfo() || await loadSystemInfo();
   const servicePubkey = servicePubkeyFromSystemInfo(info);
   const { value, ...rest } = payload;
-  // NIP-44 encrypt secret value client-side to the daemon pubkey.
-  // The server stores the ciphertext as-is and never sees plaintext.
-  const encrypted_value = value ? await encryptNip44(servicePubkey, value) : undefined;
-  const result = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.create, { service_id: id, ...rest, ...(encrypted_value ? { encrypted_value } : {}) });
-  const secret = result?.secret ?? result;
-  if (secret?.id) upsertServiceSecret(id, secret);
+  const secretId = mintEntityId();
+  const orgId = orgIdFor(payload, getServiceSecrets(id));
+  const encrypted_value = value ? await encryptWithAuth(servicePubkey, value) : undefined;
+  const intent = await submitSensitiveIntent({ domain: 'secret', op: 'create', coordinate: secretId, orgId,
+    content: { id: secretId, service_id: id, ...rest, ...(encrypted_value ? { encrypted_value } : {}) } });
+  const secret = { id: secretId, service_id: id, name: rest.name, org_id: orgId, pending: true, pendingIntentId: intent.intentId };
+  upsertServiceSecret(id, secret);
   return secret;
 }
 
 export async function updateServiceSecret(serviceId, secretId, payload) {
   const id = String(serviceId || '').trim();
-  const info = await ensureEncryptedSecrets();
+  const info = currentSystemInfo() || await loadSystemInfo();
   const servicePubkey = servicePubkeyFromSystemInfo(info);
   const { value, ...rest } = payload;
-  // NIP-44 encrypt secret value client-side to the daemon pubkey.
-  const encrypted_value = value ? await encryptNip44(servicePubkey, value) : undefined;
-  const result = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.update, { service_id: id, secret_id: secretId, ...rest, ...(encrypted_value ? { encrypted_value } : {}) });
-  const secret = result?.secret ?? result;
-  if (secret?.id) upsertServiceSecret(id, secret);
+  const current = getServiceSecrets(id).find(secret => secret.id === secretId);
+  if (!current) throw new Error('Load the canonical secret reference before updating it');
+  const encrypted_value = value ? await encryptWithAuth(servicePubkey, value) : undefined;
+  const intent = await submitSensitiveIntent({ domain: 'secret', op: 'update', coordinate: secretId,
+    orgId: orgIdFor({ ...current, ...payload }), currentRecord: current,
+    content: { id: secretId, service_id: id, name: current.name, ...rest,
+      ...(encrypted_value ? { encrypted_value } : {}) } });
+  const secret = { ...current, ...rest, pending: true, pendingIntentId: intent.intentId };
+  upsertServiceSecret(id, secret);
   return secret;
 }
 
-export async function deleteServiceSecret(serviceId, secretId) {
+export async function deleteServiceSecret(serviceId, secretId, orgId = null) {
   const id = String(serviceId || '').trim();
-  const result = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.delete, { service_id: id, secret_id: secretId });
-  const current = serviceSecretsState.secretsByService[id] || [];
-  setServiceSecrets(id, current.filter((secret) => secret.id !== secretId));
-  return result;
+  const current = getServiceSecrets(id).find(secret => secret.id === secretId);
+  const intent = await submitSensitiveIntent({ domain: 'secret', op: 'delete', coordinate: secretId,
+    orgId: orgIdFor({ ...current, org_id: orgId || current?.org_id }), content: { id: secretId, service_id: id } });
+  upsertServiceSecret(id, { ...current, id: secretId, pending: true, pendingDelete: true, pendingIntentId: intent.intentId });
+  return { id: secretId, pending: true, pendingIntentId: intent.intentId };
 }
 
 export async function revealServiceSecret(serviceId, secretId) {

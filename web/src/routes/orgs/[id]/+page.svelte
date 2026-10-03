@@ -3,11 +3,13 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { authState } from '$lib/stores/auth.js';
+  import { roleForOrg } from '$lib/stores/auth-roles.svelte.js';
   import {
     createOrgInvite,
     deleteOrg as deletePrivateOrg,
     loadOrgDetail,
     orgDetailState,
+    orgMemberListState,
     removeOrgMember,
     revokeOrgInvite,
     subscribeToOrgsUpdates,
@@ -15,6 +17,7 @@
   } from '$lib/stores/orgs.svelte.js';
   import { toast } from '$lib/components/toast.js';
   import Card from '$lib/components/Card.svelte';
+  import SensitiveIntentNotice from '$lib/components/SensitiveIntentNotice.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Input from '$lib/components/Input.svelte';
@@ -23,13 +26,15 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { OrganizationIcon, PendingIcon, WarningIcon } from '$lib/icons/domain-icons.js';
+  import { sensitiveMutationBlocker } from '$lib/stores/sensitive-intents.svelte.js';
 
   let org = $derived(orgDetailState.org);
-  let members = $derived(orgDetailState.members);
+  let members = $derived(orgMemberListState.orgID === page.params.id ? orgMemberListState.members : []);
   let invites = $derived(orgDetailState.invites);
   let loading = $derived(orgDetailState.loading);
   let error = $derived(orgDetailState.error);
-  let myRole = $derived(orgDetailState.myRole);
+  let orgId = $derived(page.params.id);
+  let myRole = $derived(roleForOrg(orgId));
 
   // Invite modal state
   let showInviteModal = $state(false);
@@ -47,7 +52,6 @@
     { value: 'admin', label: 'Admin' }
   ];
 
-  let orgId = $derived(page.params.id);
   let canManageMembers = $derived(myRole === 'owner' || myRole === 'admin');
   let canDelete = $derived(myRole === 'owner');
 
@@ -171,6 +175,8 @@
   <title>{org?.display_name || org?.name || 'Organization'} | Bahia</title>
 </svelte:head>
 
+<SensitiveIntentNotice domain="org" />
+
 {#if loading}
   <div class="loading">Loading...</div>
 {:else if error}
@@ -193,7 +199,7 @@
     <div class="section-header">
       <h2><OrganizationIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Members ({members.length})</h2>
       {#if canManageMembers}
-        <button class="btn-primary" onclick={() => showInviteModal = true}>
+        <button class="btn-primary" onclick={() => showInviteModal = true} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
           Invite Member
         </button>
       {/if}
@@ -229,6 +235,8 @@
                     value={member.role}
                     onchange={(e) => updateRole(member, e.target.value)}
                     class="role-select"
+                    disabled={Boolean(sensitiveMutationBlocker())}
+                    title={sensitiveMutationBlocker() || undefined}
                   >
                     {#each roleOptions as opt}
                       <option value={opt.value}>{opt.label}</option>
@@ -241,7 +249,7 @@
               {#if canManageMembers}
                 <td>
                   {#if member.role !== 'owner' && member.pubkey !== authState.pubkey}
-                    <button class="btn-danger-small" onclick={() => removeMember(member)}>
+                    <button class="btn-danger-small" onclick={() => removeMember(member)} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
                       Remove
                     </button>
                   {/if}
@@ -274,7 +282,7 @@
                 <td><Badge variant={getRoleBadgeType(invite.role)}>{invite.role}</Badge></td>
                 <td>{new Date(invite.expires_at).toLocaleDateString()}</td>
                 <td>
-                  <button class="btn-danger-small" onclick={() => revokeInvite(invite)}>
+                  <button class="btn-danger-small" onclick={() => revokeInvite(invite)} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
                     Revoke
                   </button>
                 </td>
@@ -295,7 +303,7 @@
             <strong>Delete this organization</strong>
             <p>Once deleted, all data will be permanently removed.</p>
           </div>
-          <button class="btn-danger" onclick={() => showDeleteConfirm = true}>
+          <button class="btn-danger" onclick={() => showDeleteConfirm = true} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
             Delete Organization
           </button>
         </div>
@@ -318,7 +326,7 @@
         <button type="button" class="btn-cancel" onclick={() => showInviteModal = false}>
           Cancel
         </button>
-        <LoadingButton type="submit" loading={inviting}>
+        <LoadingButton type="submit" loading={inviting} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
           Send Invite
         </LoadingButton>
       </div>

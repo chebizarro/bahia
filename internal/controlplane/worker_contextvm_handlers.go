@@ -10,11 +10,14 @@ import (
 // entrypoints. The handlers publish canonical worker command events and return
 // an immediate receipt; durable state and terminal outcomes are emitted by the
 // worker control-plane handlers as worker status/result/state observables.
-func RegisterWorkerContextVMHandlers(transport *EncryptedRequestTransport, gate *FleetOperatorGate) {
+func RegisterWorkerContextVMHandlers(transport *EncryptedRequestTransport, gate *FleetOperatorGate, processors ...*IntentProcessor) {
 	if transport == nil || transport.responder == nil {
 		return
 	}
 	h := workerContextVMHandlers{publisher: NewWorkerCommandPublisher(transport.responder.publisher, transport.responder.signer)}
+	if len(processors) > 0 {
+		h.intentProcessor = processors[0]
+	}
 	transport.RegisterContextVMHandler(ContextVMMethodWorkerCleanup, gate.wrap(h.cleanup))
 	transport.RegisterContextVMHandler(ContextVMMethodWorkerCordon, gate.wrap(h.cordon))
 	transport.RegisterContextVMHandler(ContextVMMethodWorkerDrain, gate.wrap(h.drain))
@@ -23,7 +26,8 @@ func RegisterWorkerContextVMHandlers(transport *EncryptedRequestTransport, gate 
 }
 
 type workerContextVMHandlers struct {
-	publisher *WorkerCommandPublisher
+	publisher       *WorkerCommandPublisher
+	intentProcessor *IntentProcessor
 }
 
 type workerContextVMPayload struct {
@@ -41,32 +45,44 @@ func (h workerContextVMHandlers) cleanup(ctx context.Context, request ContextVMR
 	if err != nil {
 		return nil, err
 	}
+	if h.intentEnabled() {
+		return h.dualDispatch(ctx, request, "cleanup", payload, "")
+	}
 	receipt, err := h.publisher.PublishWorkerCleanupRequest(ctx, cmd, payload.CleanupMode)
 	return workerCommandAck(receipt), err
 }
 
 func (h workerContextVMHandlers) cordon(ctx context.Context, request ContextVMRequest) (any, error) {
-	_, cmd, err := h.lifecycleCommand(request)
+	payload, cmd, err := h.lifecycleCommand(request)
 	if err != nil {
 		return nil, err
+	}
+	if h.intentEnabled() {
+		return h.dualDispatch(ctx, request, "cordon", payload, "cordoned")
 	}
 	receipt, err := h.publisher.PublishWorkerCordonRequest(ctx, cmd)
 	return workerCommandAck(receipt), err
 }
 
 func (h workerContextVMHandlers) drain(ctx context.Context, request ContextVMRequest) (any, error) {
-	_, cmd, err := h.lifecycleCommand(request)
+	payload, cmd, err := h.lifecycleCommand(request)
 	if err != nil {
 		return nil, err
+	}
+	if h.intentEnabled() {
+		return h.dualDispatch(ctx, request, "drain", payload, "draining")
 	}
 	receipt, err := h.publisher.PublishWorkerDrainRequest(ctx, cmd)
 	return workerCommandAck(receipt), err
 }
 
 func (h workerContextVMHandlers) maintenanceExit(ctx context.Context, request ContextVMRequest) (any, error) {
-	_, cmd, err := h.lifecycleCommand(request)
+	payload, cmd, err := h.lifecycleCommand(request)
 	if err != nil {
 		return nil, err
+	}
+	if h.intentEnabled() {
+		return h.dualDispatch(ctx, request, "maintenance-exit", payload, "active")
 	}
 	receipt, err := h.publisher.PublishWorkerMaintenanceExitRequest(ctx, cmd)
 	return workerCommandAck(receipt), err
@@ -79,6 +95,9 @@ func (h workerContextVMHandlers) labelsUpdate(ctx context.Context, request Conte
 	}
 	if len(payload.Labels) == 0 {
 		return nil, fmt.Errorf("labels are required")
+	}
+	if h.intentEnabled() {
+		return h.dualDispatch(ctx, request, "labels-update", payload, "")
 	}
 	receipt, err := h.publisher.PublishWorkerLabelsUpdateRequest(ctx, WorkerLabelsUpdateCommand{
 		WorkerPubKey:     payload.WorkerPubKey,
@@ -109,6 +128,53 @@ func (h workerContextVMHandlers) lifecycleCommand(request ContextVMRequest) (wor
 		AgentID:          payload.AgentID,
 	}
 	return payload, cmd, nil
+}
+
+func (h workerContextVMHandlers) intentEnabled() bool {
+	return h.intentProcessor != nil && h.intentProcessor.Handler("worker") != nil
+}
+
+func (h workerContextVMHandlers) dualDispatch(ctx context.Context, request ContextVMRequest, op string, payload workerContextVMPayload, state string) (any, error) {
+	if request.Event == nil {
+		return nil, fmt.Errorf("worker intent requires an authenticated requester")
+	}
+	handler, ok := h.intentProcessor.Handler("worker").(*WorkerIntentHandler)
+	if !ok || handler.reactor == nil || handler.reactor.workerRepo == nil {
+		return nil, fmt.Errorf("worker intent handler is not configured")
+	}
+	worker, err := handler.reactor.workerRepo.GetByPubKey(ctx, payload.WorkerPubKey)
+	if err != nil {
+		return nil, err
+	}
+	desiredState := "active"
+	labels := map[string]interface{}{}
+	if worker != nil {
+		if worker.SchedulingState != "" {
+			desiredState = string(worker.SchedulingState)
+		}
+		for k, v := range worker.Labels {
+			labels[k] = v
+		}
+	}
+	if state != "" {
+		desiredState = state
+	}
+	if op == "labels-update" {
+		labels = make(map[string]interface{}, len(payload.Labels))
+		for k, v := range payload.Labels {
+			labels[k] = v
+		}
+	}
+	content := map[string]interface{}{"worker_pubkey": payload.WorkerPubKey, "reason": payload.Reason,
+		"scheduling_state": desiredState, "labels": labels}
+	if op == "cleanup" {
+		content["cleanup_mode"] = payload.CleanupMode
+	}
+	intentID := effectiveIdempotencyKey(request, request.Event.ID.Hex())
+	if err := h.intentProcessor.ProcessInProcess(ctx, &Intent{Domain: "worker", Op: op, Coordinate: "worker:" + payload.WorkerPubKey, IntentID: intentID, Content: content, Actor: request.Event.PubKey.Hex()}); err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": "succeeded", "command": op, "worker_pubkey": payload.WorkerPubKey}, nil
 }
 
 func workerCommandAck(receipt *WorkerCommandReceipt) map[string]any {

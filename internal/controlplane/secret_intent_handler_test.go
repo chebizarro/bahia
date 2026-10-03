@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -264,6 +265,8 @@ func TestSecretIntentHandler_CreateWithPlaintext_DualDispatch(t *testing.T) {
 func TestSecretIntentHandler_Update(t *testing.T) {
 	f := newSecretIntentFixture(t)
 	ctx := context.Background()
+	statuses := &statusCollector{}
+	f.processor.status = NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop())
 
 	// Create first.
 	secretID := domain.NewEntityID()
@@ -278,10 +281,13 @@ func TestSecretIntentHandler_Update(t *testing.T) {
 	if err := f.processor.ProcessRelayIntent(ctx, ev); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
+	current, _ := f.repo.GetByID(ctx, secretID)
+	revision := current.UpdatedAt.Format(time.RFC3339Nano)
 
 	// Update.
 	content["encrypted_value"] = "nip44:v2"
 	content["name"] = "DB_HOST_UPDATED"
+	content["expected_updated_at"] = revision
 	ev2 := makeTestSecretIntent(t, "update", content, uuid.New().String(), f.ownerPub)
 	if err := f.processor.ProcessRelayIntent(ctx, ev2); err != nil {
 		t.Fatalf("update failed: %v", err)
@@ -299,6 +305,13 @@ func TestSecretIntentHandler_Update(t *testing.T) {
 	}
 	if len(f.publisher.published) != 2 {
 		t.Fatalf("expected 2 publish calls (create+update), got %d", len(f.publisher.published))
+	}
+	stale := makeTestSecretIntent(t, "update", content, uuid.New().String(), f.ownerPub)
+	if err := f.processor.ProcessRelayIntent(ctx, stale); !IsRevisionConflict(err) {
+		t.Fatalf("stale revision must conflict: %v", err)
+	}
+	if len(f.publisher.published) != 2 || len(statuses.events) != 3 || tagValueNostr(statuses.events[2].Tags, "status") != "conflict" {
+		t.Fatal("stale secret update mutated state or missed conflict status")
 	}
 }
 

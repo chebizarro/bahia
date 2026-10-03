@@ -427,6 +427,7 @@ test.describe('SBOM workflow', () => {
     await installE2EMocks(page, { systemInfo: relaySystemInfo });
     const dialog = await openCreatePolicyDialog(page);
 
+    await dialog.locator('#policy-org-id').fill('3b45458b-2724-4dda-9fc6-66f12249660d');
     await dialog.locator('#policy-name').fill('empty-sbom-policy');
     await dialog.getByRole('button', { name: /^Create$/ }).click();
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -156,9 +157,11 @@ func TestConfigFabricPublishApplyStatusClearsDriftEndToEnd(t *testing.T) {
 	// successful publications, without assuming accepted arrives before applied.
 	deadline := time.After(5 * time.Second)
 	statuses := make(map[string]bool, 2)
+	var observed []nostr.Event
 	for range 2 {
 		select {
 		case event := <-statusPublisher.published:
+			observed = append(observed, event)
 			var content struct {
 				Status        string `json:"status"`
 				ConfigEventID string `json:"config_event_id"`
@@ -183,6 +186,10 @@ func TestConfigFabricPublishApplyStatusClearsDriftEndToEnd(t *testing.T) {
 	}
 	if len(drift) != 1 || drift[0].Drift || drift[0].AppliedEventID != receipt.EventID {
 		t.Fatalf("drift after apply status = %#v", drift)
+	}
+	local, err := ConfigDriftFromEvents(append(append([]nostr.Event(nil), desiredPublisher.events...), observed...))
+	if err != nil || !reflect.DeepEqual(local, drift) {
+		t.Fatalf("local drift differs from REST projection: local=%#v REST=%#v err=%v", local, drift, err)
 	}
 }
 
@@ -333,6 +340,49 @@ func TestConfigFabricRollbackRepublishesPriorContentAtHigherVersion(t *testing.T
 	}
 	if content.Version != 3 || content.Policy["query"].(map[string]any)["max_limit"] != float64(500) {
 		t.Fatalf("rollback content = %#v", content)
+	}
+}
+
+func TestLocalDriftRetainsAppliedVersionWhenLatestStatusIsAccepted(t *testing.T) {
+	operator, daemon := nostr.Generate(), nostr.Generate()
+	firstRequest := validPolicyRequest(1)
+	first, err := ComposeConfigEvent(firstRequest, time.Now().Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Sign(operator); err != nil {
+		t.Fatal(err)
+	}
+	secondRequest := validPolicyRequest(2)
+	second, err := ComposeConfigEvent(secondRequest, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Sign(operator); err != nil {
+		t.Fatal(err)
+	}
+	content, err := json.Marshal(map[string]any{
+		"service_id": "khatru-relay", "scope": "prod", "version": 2,
+		"policy_schema": "cascadia.config.rate-limits.v1", "config_event_id": second.ID.Hex(),
+		"status": "accepted", "effective_version": 1, "last_applied_event_id": first.ID.Hex(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := nostr.Event{Kind: ConfigFabricStatusKind, CreatedAt: nostr.Now(), Content: string(content), Tags: nostr.Tags{
+		{"d", "config-status:khatru-relay:rate-limits:prod"}, {"domain", "config-status"},
+		{"schema", "cascadia.config.status.v3"}, {"service", "khatru-relay"}, {"scope", "prod"},
+		{"version", "2"}, {"status", "accepted"}, {"e", second.ID.Hex()},
+	}}
+	if err := status.Sign(daemon); err != nil {
+		t.Fatal(err)
+	}
+	view, err := ConfigDriftFromEvents([]nostr.Event{*second, status})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view) != 1 || view[0].DesiredVersion != 2 || view[0].AppliedVersion != 1 || view[0].AppliedEventID != first.ID.Hex() || !view[0].Drift {
+		t.Fatalf("local drift lost prior effective config: %#v", view)
 	}
 }
 

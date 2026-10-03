@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"fiatjaf.com/nostr"
-	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
+	"fiatjaf.com/nostr/nip59"
 	casnostr "git.sharegap.net/cascadia/cascadia-go/nostr"
 	"go.uber.org/zap"
 )
@@ -61,8 +61,39 @@ func (ig *IntentGiftWrapIngress) isSensitiveDomain(domain string) bool {
 	return ig.sensitiveDomains[domain]
 }
 
-// ProcessGiftWrappedIntent unwraps a kind 1059 event, verifies the inner
-// signature, extracts the inner 30900 intent, and hands it to the processor.
+// UnwrapIntent verifies the NIP-59 envelope and returns an authenticated
+// 30900 rumor. The rumor is unsigned by NIP-59; the signed seal binds its author.
+func (ig *IntentGiftWrapIngress) UnwrapIntent(ctx context.Context, outer *nostr.Event) (*nostr.Event, error) {
+	if outer == nil || outer.Kind != 1059 {
+		return nil, fmt.Errorf("expected kind 1059 gift wrap")
+	}
+	if !casnostr.VerifyEvent(outer) {
+		return nil, fmt.Errorf("invalid gift wrap signature or id")
+	}
+	servicePubkey, err := ig.signer.GetPublicKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !tagContains(outer.Tags, "p", servicePubkey.Hex()) {
+		return nil, fmt.Errorf("gift wrap is not addressed to this service")
+	}
+	inner, err := nip59.GiftUnwrap(*outer, func(other nostr.PubKey, ciphertext string) (string, error) {
+		return ig.signer.Decrypt(ctx, ciphertext, other)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if inner.Kind != 30900 || !IsIntentEvent(&inner) {
+		return nil, nil
+	}
+	if inner.Sig != [64]byte{} {
+		return nil, fmt.Errorf("NIP-59 rumor must be unsigned")
+	}
+	return &inner, nil
+}
+
+// ProcessGiftWrappedIntent unwraps a kind 1059 event and hands a verified
+// NIP-59 rumor to the intent processor.
 func (ig *IntentGiftWrapIngress) ProcessGiftWrappedIntent(ctx context.Context, outer *nostr.Event) error {
 	if outer == nil {
 		return fmt.Errorf("nil outer event")
@@ -71,8 +102,7 @@ func (ig *IntentGiftWrapIngress) ProcessGiftWrappedIntent(ctx context.Context, o
 		return fmt.Errorf("expected kind 1059 gift wrap, got %d", outer.Kind)
 	}
 
-	// Unwrap using the existing NIP-59 / NIP-44 logic (same as ContextVM).
-	inner, _, err := cascontextvm.UnwrapAny(ctx, ig.signer, outer)
+	inner, err := ig.UnwrapIntent(ctx, outer)
 	if err != nil {
 		ig.logger.Debug("failed to unwrap gift-wrapped intent",
 			zap.String("outer_id", outer.ID.Hex()),
@@ -84,15 +114,6 @@ func (ig *IntentGiftWrapIngress) ProcessGiftWrappedIntent(ctx context.Context, o
 		return nil
 	}
 
-	// Verify inner event signature.
-	if !inner.VerifySignature() {
-		ig.logger.Debug("gift-wrapped intent inner signature invalid",
-			zap.String("outer_id", outer.ID.Hex()),
-			zap.String("inner_id", inner.ID.Hex()),
-		)
-		return nil // silent drop for invalid signatures
-	}
-
 	// The inner event must be a 30900 intent.
 	if int(inner.Kind) != 30900 {
 		ig.logger.Debug("gift-wrapped inner event is not a 30900 intent",
@@ -102,25 +123,7 @@ func (ig *IntentGiftWrapIngress) ProcessGiftWrappedIntent(ctx context.Context, o
 		return nil
 	}
 
-	// Parse and hand off to the processor.
-	intent, err := ParseIntent(inner)
-	if err != nil {
-		ig.logger.Debug("failed to parse gift-wrapped inner intent",
-			zap.String("outer_id", outer.ID.Hex()),
-			zap.Error(err),
-		)
-		return nil
-	}
-	intent.Actor = inner.PubKey.Hex()
-
-	// Verify domain is sensitive.
-	if !ig.sensitiveDomains[intent.Domain] {
-		ig.logger.Debug("gift-wrapped intent for non-sensitive domain, processing normally",
-			zap.String("domain", intent.Domain),
-		)
-	}
-
-	return ig.processor.process(ctx, intent)
+	return ig.processVerifiedRumor(ctx, inner)
 }
 
 // RejectPlaintextSensitiveIntent checks if a plaintext 30900 intent is for a
@@ -143,15 +146,11 @@ func (ig *IntentGiftWrapIngress) RejectPlaintextSensitiveIntent(ctx context.Cont
 	return true
 }
 
-// ProcessUnwrappedIntent handles an inner 30900 intent that was already
-// unwrapped from a kind 1059 gift-wrap by the EncryptedRequestTransport.
-// The transport has already verified the outer routing and unwrapped the
-// NIP-59 seal; this method verifies the inner signature, parses the intent,
-// and hands it to the processor pipeline.
+// ProcessUnwrappedIntent handles a signed 30900 extracted by a transport that
+// preserves the inner signature. NIP-59 rumors instead enter through
+// UnwrapIntent and processVerifiedRumor after the seal is authenticated.
 //
-// This is the production entry point: the transport's event handler calls this
-// when an unwrapped inner event is kind 30900 with t=bahia-intent, instead of
-// dispatching it as a ContextVM message.
+// Signed inner intents are dispatched here instead of as ContextVM messages.
 func (ig *IntentGiftWrapIngress) ProcessUnwrappedIntent(ctx context.Context, inner *nostr.Event) error {
 	if inner == nil {
 		return fmt.Errorf("nil inner event")
@@ -173,10 +172,22 @@ func (ig *IntentGiftWrapIngress) ProcessUnwrappedIntent(ctx context.Context, inn
 		)
 		return nil
 	}
+	return ig.processVerifiedRumor(ctx, inner)
+}
 
+// processVerifiedRumor is reached only after a valid signed seal (NIP-59) or
+// an independently verified signed inner event has authenticated its author.
+func (ig *IntentGiftWrapIngress) processVerifiedRumor(ctx context.Context, inner *nostr.Event) error {
 	// Parse and hand off to the processor.
 	intent, err := ParseIntent(inner)
 	if err != nil {
+		if intent != nil && ig.processor.trustSet.IsKnownPrincipal(inner.PubKey.Hex()) {
+			intent.Actor = inner.PubKey.Hex()
+			if ig.processor.status != nil {
+				ig.processor.status.PublishRejection(ctx, intent, err.Error())
+			}
+			return err
+		}
 		ig.logger.Debug("failed to parse unwrapped inner intent",
 			zap.String("inner_id", inner.ID.Hex()),
 			zap.Error(err),

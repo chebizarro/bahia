@@ -205,15 +205,8 @@ func (h *PolicyIntentHandler) updateWithRevision(ctx context.Context, policy *do
 	}
 
 	// Check revision.
-	expectedTime := time.Unix(0, *intent.ExpectedUpdatedAt)
-	if raw, ok := intent.Content["expected_updated_at"]; ok {
-		if v, ok := raw.(string); ok {
-			if parsed, parseErr := time.Parse(time.RFC3339Nano, v); parseErr == nil {
-				expectedTime = parsed
-			}
-		}
-	}
-	if !domain.SameRevision(existing.UpdatedAt, expectedTime) {
+	expectedTime := *intent.ExpectedUpdatedAt
+	if !intent.RevisionMatches(existing.UpdatedAt) {
 		if h.status != nil {
 			h.status.PublishConflict(ctx, intent)
 		}

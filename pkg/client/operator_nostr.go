@@ -457,11 +457,12 @@ type ServiceCIConfigRequest struct {
 	WorkflowPath string `json:"workflow_path,omitempty"`
 }
 
-// CreateServiceNostrRequest is the signer-first service/create payload.
+// CreateServiceNostrRequest is the service/create desired-state input shared
+// by the CLI intent builder and legacy compatibility callers.
 type CreateServiceNostrRequest struct {
 	// ID is the client-minted service id (bahia-irsry.42): a canonical
-	// UUIDv7 (or v4). CreateServiceNostr mints one when it is empty; reuse
-	// it to retry the same create idempotently.
+	// UUIDv7 (or v4). The CLI mints one when it is empty; reuse it to
+	// target the same entity when retrying a create.
 	ID                   string                       `json:"id,omitempty"`
 	OrgID                string                       `json:"org_id,omitempty"`
 	Name                 string                       `json:"name"`
@@ -773,86 +774,6 @@ func (c *OperatorControlPlaneClient) PublishPolicyCreateNostr(ctx context.Contex
 	return receipt, nil
 }
 
-// CreateServiceNostr publishes a signer-first service/create mutation and awaits its correlated acknowledgment.
-func (c *OperatorControlPlaneClient) CreateServiceNostr(ctx context.Context, req CreateServiceNostrRequest, onStatus func(OperatorStatusEvent)) (*ServiceCommandResult, error) {
-	req.Name = strings.TrimSpace(req.Name)
-	req.ArtifactRepo = strings.TrimSpace(req.ArtifactRepo)
-	req.RuntimeType = strings.TrimSpace(req.RuntimeType)
-	req.DefaultBranch = strings.TrimSpace(req.DefaultBranch)
-	req.RepoURL = strings.TrimSpace(req.RepoURL)
-	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
-	if req.Name == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate service create request", RequestAccepted: false, Cause: fmt.Errorf("name is required")}
-	}
-	if req.ArtifactRepo == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate service create request", RequestAccepted: false, Cause: fmt.Errorf("artifact_repo is required")}
-	}
-	id, err := resolveCreateRequestID(req.ID)
-	if err != nil {
-		return nil, &ControlPlaneRequestError{Phase: "validate service create request", RequestAccepted: false, Cause: err}
-	}
-	req.ID = id
-	tags := nostr.Tags{{"service", req.Name}}
-	if req.IdempotencyKey != "" {
-		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
-	}
-	event, err := c.publishAndAwait(ctx, operatorRequest{
-		Method:  controlplane.ContextVMMethodServiceCreate,
-		Tags:    tags,
-		Payload: req,
-	}, onStatus)
-	if err != nil {
-		return nil, err
-	}
-	var result ServiceCommandResult
-	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
-		return nil, fmt.Errorf("decode service create result: %w", err)
-	}
-	if result.Status == "" {
-		result.Status = "created"
-	}
-	if result.ServiceID == "" && result.Service != nil {
-		result.ServiceID = result.Service.ID.String()
-	}
-	return &result, nil
-}
-
-// UpdateServiceNostr publishes a signer-first service/update mutation and awaits its correlated acknowledgment.
-func (c *OperatorControlPlaneClient) UpdateServiceNostr(ctx context.Context, req UpdateServiceNostrRequest, onStatus func(OperatorStatusEvent)) (*ServiceCommandResult, error) {
-	req.ID = strings.TrimSpace(req.ID)
-	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
-	if req.OrgID != nil {
-		trimmed := strings.TrimSpace(*req.OrgID)
-		req.OrgID = &trimmed
-	}
-	if req.ID == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate service update request", RequestAccepted: false, Cause: fmt.Errorf("id is required")}
-	}
-	tags := nostr.Tags{{"service", req.ID}}
-	if req.IdempotencyKey != "" {
-		tags = append(nostr.Tags{{"d", req.IdempotencyKey}}, tags...)
-	}
-	event, err := c.publishAndAwait(ctx, operatorRequest{
-		Method:  controlplane.ContextVMMethodServiceUpdate,
-		Tags:    tags,
-		Payload: req,
-	}, onStatus)
-	if err != nil {
-		return nil, err
-	}
-	var result ServiceCommandResult
-	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
-		return nil, fmt.Errorf("decode service update result: %w", err)
-	}
-	if result.Status == "" {
-		result.Status = "updated"
-	}
-	if result.ServiceID == "" {
-		result.ServiceID = req.ID
-	}
-	return &result, nil
-}
-
 // BuildRequestNostr publishes a signer-first build/request mutation and awaits its queued lineage acknowledgment.
 func (c *OperatorControlPlaneClient) BuildRequestNostr(ctx context.Context, req BuildRequestNostrRequest, onStatus func(OperatorStatusEvent)) (*BuildCommandResult, error) {
 	req.ServiceID = strings.TrimSpace(req.ServiceID)
@@ -1140,39 +1061,6 @@ func (c *OperatorControlPlaneClient) publishDNSCommand(ctx context.Context, meth
 	return &result, nil
 }
 
-// CreateEnvironmentNostr publishes a signer-first environment/create mutation and awaits its correlated acknowledgment.
-func (c *OperatorControlPlaneClient) CreateEnvironmentNostr(ctx context.Context, req CreateEnvironmentNostrRequest, onStatus func(OperatorStatusEvent)) (*EnvironmentCommandResult, error) {
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate environment create request", RequestAccepted: false, Cause: fmt.Errorf("name is required")}
-	}
-	req.OrgID = strings.TrimSpace(req.OrgID)
-	id, err := resolveCreateRequestID(req.ID)
-	if err != nil {
-		return nil, &ControlPlaneRequestError{Phase: "validate environment create request", RequestAccepted: false, Cause: err}
-	}
-	req.ID = id
-	event, err := c.publishAndAwait(ctx, operatorRequest{
-		Method:  controlplane.ContextVMMethodEnvironmentCreate,
-		Tags:    nostr.Tags{{"environment_name", req.Name}},
-		Payload: req,
-	}, onStatus)
-	if err != nil {
-		return nil, err
-	}
-	var result EnvironmentCommandResult
-	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
-		return nil, fmt.Errorf("decode environment create result: %w", err)
-	}
-	if result.Status == "" {
-		result.Status = "created"
-	}
-	if result.EnvironmentID == "" && result.Environment != nil {
-		result.EnvironmentID = result.Environment.ID.String()
-	}
-	return &result, nil
-}
-
 // GetEnvironmentDetailsNostr publishes a signer-first environment/get-details read and awaits its correlated result.
 func (c *OperatorControlPlaneClient) GetEnvironmentDetailsNostr(ctx context.Context, environmentID string, onStatus func(OperatorStatusEvent)) (*EnvironmentDetails, error) {
 	environmentID = strings.TrimSpace(environmentID)
@@ -1194,40 +1082,9 @@ func (c *OperatorControlPlaneClient) GetEnvironmentDetailsNostr(ctx context.Cont
 	return &result, nil
 }
 
-// UpdateEnvironmentNostr publishes a signer-first environment/update mutation and awaits its correlated acknowledgment.
-func (c *OperatorControlPlaneClient) UpdateEnvironmentNostr(ctx context.Context, req UpdateEnvironmentNostrRequest, onStatus func(OperatorStatusEvent)) (*EnvironmentCommandResult, error) {
-	req.ID = strings.TrimSpace(req.ID)
-	if req.ID == "" {
-		return nil, &ControlPlaneRequestError{Phase: "validate environment update request", RequestAccepted: false, Cause: fmt.Errorf("id is required")}
-	}
-	if req.OrgID != nil {
-		trimmed := strings.TrimSpace(*req.OrgID)
-		req.OrgID = &trimmed
-	}
-	event, err := c.publishAndAwait(ctx, operatorRequest{
-		Method:  controlplane.ContextVMMethodEnvironmentUpdate,
-		Tags:    nostr.Tags{{"environment", req.ID}},
-		Payload: req,
-	}, onStatus)
-	if err != nil {
-		return nil, err
-	}
-	var result EnvironmentCommandResult
-	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
-		return nil, fmt.Errorf("decode environment update result: %w", err)
-	}
-	if result.Status == "" {
-		result.Status = "updated"
-	}
-	if result.EnvironmentID == "" {
-		result.EnvironmentID = req.ID
-	}
-	return &result, nil
-}
-
 // DeployServiceRuntimeNostr requests a direct runtime deploy over Nostr.
-func (c *OperatorControlPlaneClient) DeployServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, artifactID *string, onStatus func(OperatorStatusEvent)) (*RuntimeActionResult, error) {
-	return c.runtimeAction(ctx, "deploy", serviceID, envID, artifactID, onStatus)
+func (c *OperatorControlPlaneClient) DeployServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, artifactID *string, onStatus func(OperatorStatusEvent), idempotencyKey ...string) (*RuntimeActionResult, error) {
+	return c.runtimeAction(ctx, "deploy", serviceID, envID, artifactID, onStatus, idempotencyKey...)
 }
 
 // CreateDeploymentIntentNostr publishes a signer-first service/deploy intent and awaits the correlated ContextVM acknowledgment.
@@ -1495,13 +1352,13 @@ func (c *OperatorControlPlaneClient) ApproveDeploymentNostr(ctx context.Context,
 }
 
 // RestartServiceRuntimeNostr requests a direct runtime restart over Nostr.
-func (c *OperatorControlPlaneClient) RestartServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, onStatus func(OperatorStatusEvent)) (*RuntimeActionResult, error) {
-	return c.runtimeAction(ctx, "restart", serviceID, envID, nil, onStatus)
+func (c *OperatorControlPlaneClient) RestartServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, onStatus func(OperatorStatusEvent), idempotencyKey ...string) (*RuntimeActionResult, error) {
+	return c.runtimeAction(ctx, "restart", serviceID, envID, nil, onStatus, idempotencyKey...)
 }
 
 // StopServiceRuntimeNostr requests a direct runtime stop over Nostr.
-func (c *OperatorControlPlaneClient) StopServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, onStatus func(OperatorStatusEvent)) (*RuntimeActionResult, error) {
-	return c.runtimeAction(ctx, "stop", serviceID, envID, nil, onStatus)
+func (c *OperatorControlPlaneClient) StopServiceRuntimeNostr(ctx context.Context, serviceID string, envID string, onStatus func(OperatorStatusEvent), idempotencyKey ...string) (*RuntimeActionResult, error) {
+	return c.runtimeAction(ctx, "stop", serviceID, envID, nil, onStatus, idempotencyKey...)
 }
 
 // ScanAdoptionNostr requests adoption scan previews over Nostr.
@@ -1554,7 +1411,7 @@ func (c *OperatorControlPlaneClient) ImportAdoptionNostr(ctx context.Context, re
 	return nil, terminalEventError("adoption import", event)
 }
 
-func (c *OperatorControlPlaneClient) runtimeAction(ctx context.Context, action string, serviceID string, envID string, artifactID *string, onStatus func(OperatorStatusEvent)) (*RuntimeActionResult, error) {
+func (c *OperatorControlPlaneClient) runtimeAction(ctx context.Context, action string, serviceID string, envID string, artifactID *string, onStatus func(OperatorStatusEvent), idempotencyKey ...string) (*RuntimeActionResult, error) {
 	serviceID = strings.TrimSpace(serviceID)
 	envID = strings.TrimSpace(envID)
 	action = strings.ToLower(strings.TrimSpace(action))
@@ -1569,6 +1426,9 @@ func (c *OperatorControlPlaneClient) runtimeAction(ctx context.Context, action s
 	}
 	payload := directRuntimeActionEventRequest{Action: action, ServiceID: serviceID, EnvironmentID: envID}
 	tags := nostr.Tags{{"action", action}, {"service", serviceID}, {"environment", envID}}
+	if len(idempotencyKey) > 0 && strings.TrimSpace(idempotencyKey[0]) != "" {
+		tags = append(nostr.Tags{{"d", strings.TrimSpace(idempotencyKey[0])}}, tags...)
+	}
 	if artifactID != nil && strings.TrimSpace(*artifactID) != "" {
 		if action != "deploy" {
 			return nil, &ControlPlaneRequestError{Phase: "validate runtime action request", RequestAccepted: false, Cause: fmt.Errorf("artifact_id is only valid for deploy actions")}
@@ -1798,6 +1658,9 @@ func (c *ContextVMRequestClient) awaitOperatorResult(ctx context.Context, sub *o
 				message := strings.TrimSpace(rpc.Error.Message)
 				if message == "" {
 					message = fmt.Sprintf("ContextVM error code %d", rpc.Error.Code)
+				}
+				if rpc.Error.Code == controlplane.ContextVMDuplicateRequestErrorCode {
+					message += fmt.Sprintf("; retry with --idempotency-key %s, or choose a new key to re-execute", requestID)
 				}
 				return nil, &ContextVMRemoteError{Code: rpc.Error.Code, Message: message}
 			}

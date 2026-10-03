@@ -10,6 +10,8 @@
   import Card from '$lib/components/Card.svelte';
   import Badge from '$lib/components/Badge.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import SensitiveIntentNotice from '$lib/components/SensitiveIntentNotice.svelte';
+  import { sensitiveMutationBlocker } from '$lib/stores/sensitive-intents.svelte.js';
 
   let orgs = $derived(orgsState.orgs);
   let myInvites = $derived(orgsState.myInvites);
@@ -74,8 +76,14 @@
 
 <div class="page-header">
   <h1>Organizations</h1>
-  <a href="/orgs/new" class="btn-primary">+ New Organization</a>
+  {#if sensitiveMutationBlocker()}
+    <button class="btn-primary" disabled title={sensitiveMutationBlocker()}>+ New Organization</button>
+  {:else}
+    <a href="/orgs/new" class="btn-primary">+ New Organization</a>
+  {/if}
 </div>
+
+<SensitiveIntentNotice domain="org" />
 
 {#if loading}
   <div class="loading">Loading...</div>
@@ -96,7 +104,7 @@
                 <strong>{invite.org_display_name || invite.org_name}</strong>
                 <Badge variant={getRoleBadgeType(invite.role)}>{invite.role}</Badge>
               </div>
-              <button class="btn-success" onclick={() => acceptInvite(invite)}>
+              <button class="btn-success" onclick={() => acceptInvite(invite)} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
                 Accept
               </button>
             </div>

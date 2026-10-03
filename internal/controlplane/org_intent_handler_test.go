@@ -587,7 +587,7 @@ func TestOrgIntentHandler_StaleRevisionConflict(t *testing.T) {
 		ID: orgID, Name: "test-org", DisplayName: "Test", UpdatedAt: now,
 	})
 
-	staleTime := now.Add(-time.Hour).UnixNano()
+	staleTime := now.Add(-time.Hour)
 	intent := &Intent{
 		Domain: "org", Op: "update", Schema: "bahia.intent.org.v1",
 		OrgID: orgID, IntentID: uuid.New().String(), Coordinate: orgID.String(),
@@ -602,6 +602,18 @@ func TestOrgIntentHandler_StaleRevisionConflict(t *testing.T) {
 	}
 	if !IsRevisionConflict(err) {
 		t.Errorf("expected revision conflict, got: %v", err)
+	}
+	matching := *intent
+	matching.IntentID = uuid.New().String()
+	current, getErr := orgs.GetByID(ctx, orgID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	matchingRevision := current.UpdatedAt
+	matching.ExpectedUpdatedAt = &matchingRevision
+	matching.Content = map[string]interface{}{"id": orgID.String(), "display_name": "Updated", "expected_updated_at": matchingRevision.Format(time.RFC3339Nano)}
+	if err := handler.HandleIntent(ctx, &matching); err != nil {
+		t.Fatalf("canonical revision should be accepted: %v", err)
 	}
 }
 
@@ -718,6 +730,46 @@ func TestSelfAuthorizingHandler_MemberAddByOrgOwnerAccepted(t *testing.T) {
 	err := handler.AuthorizeIntent(ctx, trustSet, intent)
 	if err != nil {
 		t.Fatalf("expected owner to be authorized for member add: %v", err)
+	}
+}
+
+func TestSelfAuthorizingHandler_InviteeCanOnlyAcceptMatchingInvite(t *testing.T) {
+	handler, _, members, invites, publisher, _ := newTestOrgHandler(t)
+	ctx := context.Background()
+	orgID := uuid.New()
+	invite := &domain.OrgInvite{ID: uuid.New(), OrgID: orgID, Pubkey: "invitee", Role: domain.RoleViewer, ExpiresAt: time.Now().Add(time.Hour)}
+	if err := invites.Create(ctx, invite); err != nil {
+		t.Fatal(err)
+	}
+	intent := memberAddIntent(orgID, "invitee", domain.RoleViewer, "invitee")
+	intent.Content["invite_id"] = invite.ID.String()
+	trustSet := NewTrustSet(nil, zap.NewNop())
+	if err := handler.AuthorizeIntent(ctx, trustSet, intent); err != nil {
+		t.Fatalf("valid acceptance rejected: %v", err)
+	}
+	if err := handler.HandleIntent(ctx, intent); err != nil {
+		t.Fatalf("acceptance failed: %v", err)
+	}
+	if member, err := members.GetMember(ctx, orgID, "invitee"); err != nil || member.Role != domain.RoleViewer {
+		t.Fatalf("membership missing: %v, %v", member, err)
+	}
+	if _, err := invites.GetByID(ctx, orgID, invite.ID); err != repository.ErrNotFound {
+		t.Fatalf("accepted invite was not consumed: %v", err)
+	}
+	if len(publisher.publishedInvites) != 1 || !publisher.publishedInvites[0].Deleted {
+		t.Fatal("accepted invite tombstone not published")
+	}
+	if err := handler.AuthorizeIntent(ctx, trustSet, intent); err == nil {
+		t.Fatal("reused invite accepted")
+	}
+
+	bad := &domain.OrgInvite{ID: uuid.New(), OrgID: orgID, Pubkey: "other", Role: domain.RoleViewer, ExpiresAt: time.Now().Add(time.Hour)}
+	if err := invites.Create(ctx, bad); err != nil {
+		t.Fatal(err)
+	}
+	intent.Content["invite_id"] = bad.ID.String()
+	if err := handler.AuthorizeIntent(ctx, trustSet, intent); err == nil {
+		t.Fatal("different invitee accepted")
 	}
 }
 

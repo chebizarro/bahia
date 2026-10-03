@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { installE2EMocks, TEST_PUBKEY } from './helpers.js';
 import {
   SERVICE_PUBKEY,
+  TEST_ORG_ID,
   createPublicState,
   installPublicServiceDeploymentHarness
 } from './harnesses/service-deployment-public.js';
@@ -71,10 +72,18 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
     await page.goto('/services');
     await expect(page.getByRole('heading', { name: 'Services', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Create Service' }).first().click();
+    await page.locator('#service-org-id').fill(TEST_ORG_ID);
     await page.locator('#service-name').fill('mixed-created-service');
     await page.locator('#artifact-repo-path').fill('ghcr.io/example/mixed-created-service');
     await page.getByRole('dialog', { name: 'Create Service' }).getByRole('button', { name: 'Create' }).click();
     await expect(page.getByRole('cell', { name: 'mixed-created-service', exact: true })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.__BAHIA_E2E_PUBLIC_REQUESTS.some(request =>
+      request.kind === 30900 && request.operation === 'service/create'))).toBe(true);
+    const publicTrace = await page.evaluate(() => ({
+      requests: window.__BAHIA_E2E_PUBLIC_REQUESTS,
+      oks: window.__BAHIA_E2E_PUBLIC_OKS,
+      results: window.__BAHIA_E2E_PUBLIC_RESULTS
+    }));
 
     await page.goto('/notifications');
     await expect(page.getByRole('heading', { name: 'Notifications' })).toBeVisible();
@@ -93,14 +102,17 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
       encryptedResults: window.__BAHIA_E2E_ENCRYPTED_RESULTS,
       encryptedOperations: window.__BAHIA_E2E_ENCRYPTED_OPERATIONS
     }));
+    trace.publicRequests = publicTrace.requests;
+    trace.publicOks = publicTrace.oks;
+    trace.publicResults = publicTrace.results;
     const normalizeRelay = (relay) => String(relay || '').replace(/\/$/, '');
 
     expect(trace.publicRequests).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 25910, operation: 'service/create' })
+      expect.objectContaining({ kind: 30900, operation: 'service/create' })
     ]));
-    expect(trace.publicRequests.every((request) => request.kind === 25910)).toBe(true);
+    expect(trace.publicRequests.every((request) => request.kind === 30900)).toBe(true);
     expect(new Set(trace.publicRequests.map((request) => normalizeRelay(request.relay))))
-      .toEqual(new Set([ENCRYPTED_RELAY, PUBLIC_RELAY]));
+      .toEqual(new Set([PUBLIC_RELAY]));
     expect(trace.publicRequests.some((request) => request.kind === KIND_GIFT_WRAP)).toBe(false);
     for (const request of trace.publicRequests) {
       expect(trace.publicOks).toEqual(expect.arrayContaining([

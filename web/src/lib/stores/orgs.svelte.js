@@ -2,6 +2,8 @@ import { authState, initializeAuth } from '$lib/stores/auth.js';
 import { encryptedRequestsAvailable, requestEncryptedResult, servicePubkeyFromSystemInfo } from '$lib/nostr/encrypted-controlplane.js';
 import { subscribeToDomainRefresh } from '$lib/nostr/retained-domain-subscription.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
+import { mintEntityId } from '$lib/entity-id.js';
+import { submitSensitiveIntent } from './sensitive-intents.svelte.js';
 
 export const orgsState = $state({
   orgs: [],
@@ -12,11 +14,16 @@ export const orgsState = $state({
 
 export const orgDetailState = $state({
   org: null,
-  members: [],
   invites: [],
-  myRole: null,
   loading: false,
   error: null
+});
+
+// Full org member list for the detail page. Unlike auth-roles.orgRoles, this
+// intentionally includes other members and must never grant UI permissions.
+export const orgMemberListState = $state({
+  orgID: '',
+  members: []
 });
 
 const ORG_ENCRYPTED_DOMAIN_TAG = ['domain', 'orgs'];
@@ -66,9 +73,9 @@ export function resetOrgsState() {
 
 export function resetOrgDetailState() {
   orgDetailState.org = null;
-  orgDetailState.members = [];
+  orgMemberListState.orgID = '';
+  orgMemberListState.members = [];
   orgDetailState.invites = [];
-  orgDetailState.myRole = null;
   orgDetailState.loading = false;
   orgDetailState.error = null;
 }
@@ -155,9 +162,9 @@ export async function loadOrgDetail(id) {
   try {
     const detail = await encryptedOrgRequest('orgs.detail', { id: orgId });
     orgDetailState.org = detail?.org ?? null;
-    orgDetailState.members = Array.isArray(detail?.members) ? detail.members : [];
+    orgMemberListState.orgID = orgId;
+    orgMemberListState.members = Array.isArray(detail?.members) ? detail.members : [];
     orgDetailState.invites = Array.isArray(detail?.invites) ? detail.invites : [];
-    orgDetailState.myRole = detail?.my_role || null;
     return detail;
   } catch (error) {
     orgDetailState.error = error?.message || 'Failed to load organization';
@@ -168,34 +175,40 @@ export async function loadOrgDetail(id) {
 }
 
 export async function createOrg({ name, displayName }) {
-  return encryptedOrgRequest('orgs.create', { name, display_name: displayName });
+  const id = mintEntityId();
+  return submitSensitiveIntent({ domain: 'org', op: 'create', coordinate: id, orgId: id,
+    content: { id, name, display_name: displayName } });
 }
 
 export async function deleteOrg(id) {
-  return encryptedOrgRequest('orgs.delete', { id });
+  return submitSensitiveIntent({ domain: 'org', op: 'delete', coordinate: id, orgId: id, content: { id } });
 }
 
 export async function acceptInvite(inviteId) {
-  return encryptedOrgRequest('orgs.accept_invite', { invite_id: inviteId });
+  const invite = orgsState.myInvites.find(item => item.id === inviteId);
+  if (!invite?.org_id || !invite?.role) throw new Error('Invite state is not available from the canonical store');
+  return submitSensitiveIntent({ domain: 'org', op: 'create',
+    coordinate: `org:member:${invite.org_id}:${authState.pubkey}`, orgId: invite.org_id,
+    schema: 'bahia.intent.org-member.v1', content: { pubkey: authState.pubkey, role: invite.role, invite_id: inviteId } });
 }
 
 export async function createOrgInvite(orgId, { pubkey, role, expiresIn = 72 } = {}) {
-  return encryptedOrgRequest('orgs.create_invite', {
-    org_id: orgId,
-    pubkey,
-    role,
-    expires_in: expiresIn
-  });
+  const id = mintEntityId();
+  return submitSensitiveIntent({ domain: 'org', op: 'create', coordinate: id, orgId,
+    schema: 'bahia.intent.org-invite.v1', content: { id, pubkey, role, expires_in: expiresIn } });
 }
 
 export async function revokeOrgInvite(orgId, inviteId) {
-  return encryptedOrgRequest('orgs.revoke_invite', { org_id: orgId, invite_id: inviteId });
+  return submitSensitiveIntent({ domain: 'org', op: 'delete', coordinate: inviteId, orgId,
+    schema: 'bahia.intent.org-invite.v1', content: { id: inviteId } });
 }
 
 export async function updateOrgMemberRole(orgId, pubkey, { role }) {
-  return encryptedOrgRequest('orgs.update_member_role', { org_id: orgId, pubkey, role });
+  return submitSensitiveIntent({ domain: 'org', op: 'create',
+    coordinate: `org:member:${orgId}:${pubkey}`, orgId, schema: 'bahia.intent.org-member.v1', content: { pubkey, role } });
 }
 
 export async function removeOrgMember(orgId, pubkey) {
-  return encryptedOrgRequest('orgs.remove_member', { org_id: orgId, pubkey });
+  return submitSensitiveIntent({ domain: 'org', op: 'delete',
+    coordinate: `org:member:${orgId}:${pubkey}`, orgId, schema: 'bahia.intent.org-member.v1', content: { pubkey } });
 }

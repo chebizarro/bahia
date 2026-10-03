@@ -9,6 +9,7 @@
   import { currentRouteDocsRef } from '$lib/components/nav-model.js';
   import { loadAll, unsubscribeFromEvents } from '$lib/stores';
   import { boot, getEventStore, getServicePubkey, shutdown } from '$lib/nostr/boot.js';
+  import { resumeIntentClient, stopIntentClient } from '$lib/nostr/intent-client.svelte.js';
   import { startRoleDerivation, stopRoleDerivation } from '$lib/stores/auth-roles.svelte.js';
   import { initServiceStoreBinding, teardownServiceStoreBinding } from '$lib/stores/collections/services.svelte.js';
   import { initEnvironmentStoreBinding, teardownEnvironmentStoreBinding } from '$lib/stores/collections/environments.svelte.js';
@@ -108,6 +109,13 @@
       unsubscribeFromEvents();
       disconnectAssistant();
     };
+  });
+
+  $effect(() => {
+    const pubkey = authState.status === 'authenticated' ? authState.pubkey : '';
+    if (!eventStoreReady || !pubkey) return;
+    void resumeIntentClient().catch(error => console.error('[layout] intent client failed:', error));
+    return stopIntentClient;
   });
 
   $effect(() => {

@@ -32,7 +32,6 @@ type ServiceReader interface {
 type ServiceIntentHandler struct {
 	registry RegistryMutationBackend
 	reader   ServiceReader
-	status   *IntentStatusPublisher
 	logger   *zap.Logger
 }
 
@@ -44,7 +43,6 @@ type ServiceIntentHandlerConfig struct {
 	Registry RegistryMutationBackend
 	// Reader is the service repository for level-triggered entity lookups.
 	Reader ServiceReader
-	Status *IntentStatusPublisher
 	Logger *zap.Logger
 }
 
@@ -57,7 +55,6 @@ func NewServiceIntentHandler(cfg ServiceIntentHandlerConfig) *ServiceIntentHandl
 	return &ServiceIntentHandler{
 		registry: cfg.Registry,
 		reader:   cfg.Reader,
-		status:   cfg.Status,
 		logger:   logger.Named("service-intent"),
 	}
 }
@@ -90,16 +87,7 @@ func (h *ServiceIntentHandler) handleCreateOrUpdate(ctx context.Context, intent 
 
 	// Check expected_updated_at revision if present.
 	if intent.ExpectedUpdatedAt != nil {
-		expectedTime := time.Unix(0, *intent.ExpectedUpdatedAt)
-		// Try parsing as RFC3339Nano from content first (higher precision).
-		if raw, ok := intent.Content["expected_updated_at"]; ok {
-			if v, ok := raw.(string); ok {
-				if parsed, parseErr := time.Parse(time.RFC3339Nano, v); parseErr == nil {
-					expectedTime = parsed
-				}
-			}
-		}
-		return h.updateWithRevision(ctx, svc, expectedTime, intent)
+		return h.updateWithRevision(ctx, svc, *intent.ExpectedUpdatedAt, intent)
 	}
 
 	// Level-triggered: try to load existing, create or update accordingly.
@@ -107,6 +95,9 @@ func (h *ServiceIntentHandler) handleCreateOrUpdate(ctx context.Context, intent 
 	if existing == nil {
 		// Entity doesn't exist: create it.
 		return h.createService(ctx, svc, intent)
+	}
+	if existing.OrgID != intent.OrgID {
+		return fmt.Errorf("service %s belongs to a different organization", svc.ID)
 	}
 
 	// Entity exists: update it.
@@ -173,21 +164,21 @@ func (h *ServiceIntentHandler) updateService(ctx context.Context, svc *domain.Se
 func (h *ServiceIntentHandler) updateWithRevision(ctx context.Context, svc *domain.Service, expectedUpdatedAt time.Time, intent *Intent) error {
 	existing, _ := h.reader.GetByID(ctx, svc.ID)
 	if existing == nil {
-		// No entity for a revisioned update — conflict.
-		if h.status != nil {
-			h.status.PublishConflict(ctx, intent)
-		}
-		return fmt.Errorf("service %s not found for revisioned update", svc.ID)
+		return &revisionConflictError{entityType: "service", entityID: svc.ID, expected: expectedUpdatedAt}
+	}
+	if existing.OrgID != intent.OrgID {
+		return fmt.Errorf("service %s belongs to a different organization", svc.ID)
+	}
+
+	if !intent.RevisionMatches(existing.UpdatedAt) {
+		return &revisionConflictError{entityType: "service", entityID: svc.ID, expected: expectedUpdatedAt, actual: existing.UpdatedAt}
 	}
 
 	mergeServiceOntoExisting(existing, svc)
 
 	if err := h.registry.UpdateServiceWithExpectedRevision(ctx, existing, expectedUpdatedAt); err != nil {
-		// Check if this is a revision conflict.
 		if strings.Contains(err.Error(), "revision conflict") {
-			if h.status != nil {
-				h.status.PublishConflict(ctx, intent)
-			}
+			return &revisionConflictError{entityType: "service", entityID: svc.ID, expected: expectedUpdatedAt, actual: existing.UpdatedAt}
 		}
 		return fmt.Errorf("update service with revision: %w", err)
 	}
@@ -254,18 +245,38 @@ func serviceFromIntentContent(intent *Intent) (*domain.Service, error) {
 	// Repository ref (structured).
 	if repoData, ok := content["repository"]; ok && repoData != nil {
 		repoBytes, err := json.Marshal(repoData)
-		if err == nil {
-			var ref domain.RepositoryRef
-			if err := json.Unmarshal(repoBytes, &ref); err == nil {
-				svc.Repository = &ref
+		if err != nil {
+			return nil, fmt.Errorf("marshal repository: %w", err)
+		}
+		var ref domain.RepositoryRef
+		if err := json.Unmarshal(repoBytes, &ref); err != nil {
+			return nil, fmt.Errorf("parse repository: %w", err)
+		}
+		svc.Repository = &ref
+	}
+	if runtimeData, ok := content["runtime_config"]; ok && runtimeData != nil {
+		raw, err := json.Marshal(runtimeData)
+		if err != nil {
+			return nil, fmt.Errorf("marshal runtime_config: %w", err)
+		}
+		var runtimeConfig domain.ServiceRuntimeConfig
+		if err := json.Unmarshal(raw, &runtimeConfig); err != nil {
+			return nil, fmt.Errorf("parse runtime_config: %w", err)
+		}
+		if runtimeConfig.Managed != nil {
+			runtimeConfig.Managed = domain.NormalizeManagedRuntimeConfig(runtimeConfig.Managed)
+			if err := domain.ValidateManagedRuntimeConfig(runtimeConfig.Managed); err != nil {
+				return nil, fmt.Errorf("invalid managed runtime_config: %w", err)
 			}
 		}
+		svc.RuntimeConfig = &runtimeConfig
 	}
 
-	// OrgID from content overrides tag when present.
+	// The org tag is the authorization scope; content cannot override it.
 	if orgStr, ok := content["org_id"].(string); ok && orgStr != "" {
-		if orgID, err := uuid.Parse(orgStr); err == nil && orgID != uuid.Nil {
-			svc.OrgID = orgID
+		orgID, err := uuid.Parse(orgStr)
+		if err != nil || orgID != intent.OrgID {
+			return nil, fmt.Errorf("service org_id does not match authorized org tag")
 		}
 	}
 
@@ -274,30 +285,17 @@ func serviceFromIntentContent(intent *Intent) (*domain.Service, error) {
 
 // mergeServiceOntoExisting applies the intent's desired state fields onto the
 // loaded entity. The intent carries the complete desired state (§1.2), so
-// every non-zero field replaces the existing one.
+// every field replaces the existing one, including explicit empty values.
 func mergeServiceOntoExisting(existing, intent *domain.Service) {
-	if intent.Name != "" {
-		existing.Name = intent.Name
+	existing.Name = intent.Name
+	existing.RepoURL = intent.RepoURL
+	existing.Repository = intent.Repository
+	if existing.Repository != nil && existing.Repository.CloneURL != "" {
+		existing.RepoURL = existing.Repository.CloneURL
 	}
-	if intent.RepoURL != "" {
-		existing.RepoURL = intent.RepoURL
-	}
-	if intent.Repository != nil {
-		existing.Repository = intent.Repository
-		if existing.Repository.CloneURL != "" {
-			existing.RepoURL = existing.Repository.CloneURL
-		}
-	}
-	if intent.ArtifactRepo != "" {
-		existing.ArtifactRepo = intent.ArtifactRepo
-	}
-	if intent.DefaultBranch != "" {
-		existing.DefaultBranch = intent.DefaultBranch
-	}
-	if intent.RuntimeType != "" {
-		existing.RuntimeType = intent.RuntimeType
-	}
-	if intent.OrgID != uuid.Nil {
-		existing.OrgID = intent.OrgID
-	}
+	existing.RuntimeConfig = intent.RuntimeConfig
+	existing.ArtifactRepo = intent.ArtifactRepo
+	existing.DefaultBranch = intent.DefaultBranch
+	existing.RuntimeType = intent.RuntimeType
+	existing.OrgID = intent.OrgID
 }

@@ -608,8 +608,7 @@ func (h *EncryptedRouteHandlers) UpdateService(ctx context.Context, request Cont
 		if payload.ExpectedUpdatedAt != nil && !payload.ExpectedUpdatedAt.IsZero() {
 			ts := payload.ExpectedUpdatedAt.Format(time.RFC3339Nano)
 			intent.Content["expected_updated_at"] = ts
-			epoch := payload.ExpectedUpdatedAt.UnixNano()
-			intent.ExpectedUpdatedAt = &epoch
+			intent.ExpectedUpdatedAt = payload.ExpectedUpdatedAt
 		}
 		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
 			return nil, fmt.Errorf("failed to update service: %w", err)
@@ -765,16 +764,6 @@ func (h *EncryptedRouteHandlers) environmentDualDispatch(ctx context.Context, re
 		Coordinate: envID.String(),
 		Content:    content,
 		Actor:      request.Event.PubKey.Hex(),
-	}
-	// Check for expected_updated_at in content.
-	if raw, ok := content["expected_updated_at"]; ok {
-		switch v := raw.(type) {
-		case float64:
-			ts := int64(v)
-			intent.ExpectedUpdatedAt = &ts
-		case int64:
-			intent.ExpectedUpdatedAt = &v
-		}
 	}
 	return h.intentProcessor.ProcessInProcess(ctx, intent)
 }
@@ -1017,7 +1006,7 @@ func (h *EncryptedRouteHandlers) UpdateEnvironment(ctx context.Context, request 
 	// Phase 3 F3 dual dispatch: route through intent processor when enabled.
 	if ddContent := h.buildEnvironmentIntentContent(env, units); ddContent != nil {
 		if payload.ExpectedUpdatedAt != nil && !payload.ExpectedUpdatedAt.IsZero() {
-			ddContent["expected_updated_at"] = payload.ExpectedUpdatedAt.UnixMicro()
+			ddContent["expected_updated_at"] = payload.ExpectedUpdatedAt.Format(time.RFC3339Nano)
 		}
 		if err := h.environmentDualDispatch(ctx, request, "update", env.ID, env.OrgID, ddContent); err != nil {
 			return nil, fmt.Errorf("failed to update environment: %w", err)

@@ -15,6 +15,8 @@
   import { createEnvironment as createEnvironmentCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { isEntityIdConflict, mintEntityId } from '$lib/entity-id.js';
   import { orgsState } from '$lib/stores/orgs.svelte.js';
+  import { pendingIntentRows } from '$lib/nostr/intent-client.svelte.js';
+  import { mergeWithPending } from '$lib/stores/pending-intents.svelte.js';
   import { parseKeyValueLines } from '../ml/page-model.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
   import {
@@ -29,7 +31,13 @@
 
   // Create modal state
   let createOpen = $state(false);
+  let nowSeconds = $state(Math.floor(Date.now() / 1000));
+  $effect(() => {
+    const timer = setInterval(() => { nowSeconds = Math.floor(Date.now() / 1000); }, 1000);
+    return () => clearInterval(timer);
+  });
   let liveEnvironmentOperations = $derived(operationsForDomain(operations, 'environment'));
+  let visibleEnvironments = $derived(mergeWithPending(environments, pendingIntentRows, 'environment'));
   let creating = $state(false);
   let createError = $state(null);
   // Client-minted entity id for this create attempt, reused on retry and
@@ -84,6 +92,10 @@
   let columns = $derived([
     { key: 'name', label: 'Name', icon: EnvironmentIcon, text: (r) => r.name || '-', href: (r) => `/environments/${encodeURIComponent(r.id)}` },
     { key: 'deploy_strategy', label: 'Strategy' },
+    { key: 'intentStatus', label: 'Intent', text: (r) => r.intentStatus === 'pending'
+      ? `pending ${Math.max(0, nowSeconds - r.intentCreatedAt)} s`
+      : r.intentStatus === 'conflict' ? `conflict — re-read and resubmit: ${r.intentReason}`
+        : r.intentStatus ? `${r.intentStatus}: ${r.intentReason || ''}` : 'confirmed' },
     {
       key: 'protected',
       label: 'Protected',
@@ -216,7 +228,7 @@
         <EnvironmentIcon size={28} strokeWidth={1.75} ariaHidden="true" />
         Environments
       </h1>
-      <span class="count">{environments.length} environments</span>
+      <span class="count">{visibleEnvironments.length} environments</span>
       {#if syncStatus.phase === 'syncing'}
         <span class="sync-badge syncing" title="Syncing with relays…">syncing…</span>
       {:else if syncStatus.phase === 'live'}
@@ -230,14 +242,14 @@
 
   <OperationalActivity items={liveEnvironmentOperations} title="Live environment activity" />
 
-  {#if environments.length === 0}
+  {#if visibleEnvironments.length === 0}
     <EmptyState
       iconComponent={EnvironmentIcon}
       title="No environments yet"
       message="Create your first environment to define deployment targets"
     />
   {:else}
-    <Table {columns} data={environments} rowClickable={true} onRowClick={(row) => goto(`/environments/${row.id}`)} />
+    <Table {columns} data={visibleEnvironments} rowClickable={true} onRowClick={(row) => goto(`/environments/${row.id}`)} />
   {/if}
 </div>
 

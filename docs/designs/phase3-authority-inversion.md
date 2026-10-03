@@ -55,12 +55,27 @@ The relay keeps only the latest `(kind, pubkey, d)` for each author. An offline 
 
 **Tag grammar:**
 - `d` = entity coordinate, per existing `docs/event-spec.md` grammar (e.g. `<service-id>` for services, `<environment-id>` for environments, `service:<sid>:environment:<eid>` for state).
-- `domain` = the domain family (`service`, `environment`, `policy`, `llm`, `dns`, `backup`, `ml`, `package`, `org`, `secret`, `notification`).
+- `domain` = the domain family (`service`, `environment`, `policy`, `deployment`, `runtime`, `llm`, `dns`, `backup`, `ml`, `package`, `org`, `secret`, `notification`).
 - `schema` = `bahia.intent.<domain>.v1`. Distinct from the daemon's state schema `bahia.cp-state.v1`.
 - `t` = `bahia-intent` (enables `#t` filtering for all intents) plus the domain topic tag (e.g. `service-registry`).
 - `op` = `create`, `update`, or `delete` — advisory, not load-bearing (§1.2).
-- `org` = the org UUID the entity belongs to (enables `#org` filtering for trust-scoped subscriptions).
+- `org` = the org UUID the entity belongs to (enables `#org` filtering for trust-scoped subscriptions). Fleet-only DNS, ML, and worker intents may omit `org`; these handlers authorize against configured fleet operators and do not derive an org from the entity.
 - `intent_id` = a UUIDv7 minted by the client per intent attempt, carried in both tags and content. Used for **idempotency and correlation only** — the intent_id does not determine processing order or conflict resolution.
+
+**Deployment-operation domain table** (see `web/tests/fixtures/deployment-intents.json` for parseable wire examples):
+
+| Domain | `op` | Required content | Permission |
+|---|---|---|---|
+| `deployment` | `create` | `service_id`, `environment_id`, `artifact_id` | `deployments:write` |
+| `deployment` | `rollback` | `service_id`, `environment_id`, `target_artifact_id` or `target_run_id`, `supersedes_intent_id` | `deployments:write` |
+| `deployment` | `approve`, `reject` | `deployment_intent_id`; optional `expected_updated_at` | `deployments:approve` |
+| `runtime` | `deploy`, `restart`, `stop` | `service_id`, `environment_id`; optional `artifact_id` for deploy only | `deployments:write` |
+| `llm` | `deploy` | `route_id`, `environment_id`, `release_id` | fleet operator |
+| `llm` | `rollback` | `route_id`, `environment_id` | fleet operator |
+| `llm` | `approve`, `reject` | `deployment_intent_id`; optional `expected_updated_at` | fleet operator |
+| `backup` | `restore-approval` | `restore_id`, `decision` (`approve` or `reject`); optional `expected_updated_at` | fleet operator |
+
+All update decisions compare `expected_updated_at` to the canonical entity revision when present. The operation tag selects the legacy-equivalent side-effect path; durable progress is the bounded `30315` status and daemon-authored canonical state, not the ContextVM acknowledgment.
 
 ### 1.4 Relationship to today's cp-state 30900 records
 
@@ -75,6 +90,8 @@ The ContextVM create/update/delete handlers (`internal/controlplane/encrypted_ro
 ### 1.5 Cross-author ordering and conflict resolution
 
 **The newest intent by `(created_at, lowest event id)` across all trusted authors for a coordinate wins**, subject to the `expected_updated_at` revision check.
+
+`expected_updated_at` is the canonical record's `updated_at` RFC3339/RFC3339Nano string, not a numeric Unix epoch. Clients copy that string into the intent content; the daemon rejects malformed or numeric values and compares revisions at the canonical record's microsecond precision.
 
 When multiple trusted operators publish intents for the same coordinate:
 1. The relay keeps only the newest per `(kind, pubkey, d)` — one per author.
@@ -506,6 +523,10 @@ nostr:
   intent_domains:
     - service     # accepts intent events for services
     - environment # accepts intent events for environments
+    - deployment  # deployment create/approval/rollback
+    - runtime     # direct runtime actions
+    - llm         # LLM registry and deployment lifecycle
+    - backup      # backup lifecycle, including restore approval
 ```
 
 When a domain is listed in `intent_domains`:
@@ -517,6 +538,14 @@ When a domain is listed in `intent_domains`:
 
 When a domain is _not_ in `intent_domains`:
 - The existing handler processes it as today, unchanged.
+
+D70's handler coverage in this window is deliberately bounded by existing durable mutation boundaries. Fleet-scoped authorizations use configured operator pubkeys rather than org RBAC; each accepted intent receives bounded kind-30315 status from `IntentProcessor`.
+
+| Domain | 30900 intent ops admitted | ContextVM dual dispatch | Unsupported until a durable mutation path exists |
+|--------|---------------------------|-------------------------|--------------------------------------------------|
+| `dns` | `zone-create`, `policy-apply`, `record-set`, `override-retire` | `dns/zone-create`, `dns/policy-apply`, `dns/record-set`, `dns/override-retire`; drift remediation stays legacy | Zone update/delete; endpoint create/update/delete (derived); backend create/update/delete (static config); policy update/delete. Unsupported intent ops receive bounded 30315 rejection. |
+| `ml` | `model-create/update`, `version-create/update`, `endpoint-create/update` | No ContextVM registry CRUD methods exist; existing ML command handlers remain legacy | Model/version/endpoint delete; identity-changing updates (old canonical coordinate cannot be tombstoned). Unsupported intent ops receive bounded 30315 rejection. |
+| `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter/exit`, `labels-update`, `cleanup`; every content carries desired `scheduling_state` and full `labels` | All eight corresponding worker ContextVM methods | Other worker actions remain outside this domain handler. |
 
 This dual-path window closes per domain when:
 1. The web (Phase 4) and CLI (Phase 5) sign intents directly.
@@ -818,6 +847,10 @@ intentProcessor.RegisterHandler("service", &controlplane.ServiceIntentHandler{
 nostr:
   intent_domains:
     - service
+    - deployment
+    - runtime
+    - llm
+    - backup
 ```
 
 ### 10.4 Wire dual dispatch

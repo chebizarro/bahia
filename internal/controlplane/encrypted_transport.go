@@ -710,6 +710,14 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 			t.logger.Debug("ContextVM gift wrap not addressed to this service", zap.String("event_id", outer.ID.Hex()), zap.String("service_pubkey", t.responder.ServicePubkey()))
 			return
 		}
+		if outer.Kind == KindContextVMGiftWrap && t.giftWrapIntentIngress != nil {
+			if rumor, unwrapErr := t.giftWrapIntentIngress.UnwrapIntent(ctx, outer); unwrapErr == nil && rumor != nil {
+				if err := t.giftWrapIntentIngress.processVerifiedRumor(ctx, rumor); err != nil {
+					t.logger.Warn("gift-wrapped intent processing failed", zap.String("event_id", outer.ID.Hex()), zap.Error(err))
+				}
+				return
+			}
+		}
 		unwrapped, format, err := t.unwrapContextVMEvent(ctx, outer)
 		if err != nil {
 			t.logger.Warn("failed to unwrap ContextVM event", zap.String("event_id", outer.ID.Hex()), zap.Error(err))

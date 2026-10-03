@@ -261,3 +261,7 @@ Use `bahia dns drift-remediate [--zone <zone>]` for the CLI path. MCP clients ca
 - [Services](services.md) — Endpoint sources
 - [Workers](workers.md) — Worker endpoints
 - [LLM Routes](llm-routes.md) — LLM endpoints
+
+## Signed DNS intents
+
+Fleet operators can publish `bahia.intent.dns.v1` kind-30900 desired-state events for `zone-create`, `policy-apply`, `record-set`, and `override-retire`. The daemon uses the existing DNS persistence/reconcile path and emits a bounded kind-30315 acceptance or rejection. DNS endpoint and backend records are derived/config-backed, so their CRUD intents—and zone/policy update/delete intents—are rejected rather than silently accepted. Existing ContextVM drift remediation remains available.

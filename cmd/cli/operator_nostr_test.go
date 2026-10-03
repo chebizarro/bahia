@@ -527,6 +527,101 @@ func TestDeploymentsDeployCommandPublishesExplicitIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestDeploymentContextVMKeyIsFreshUUIDv7OrCallerSupplied(t *testing.T) {
+	cmd := &cobra.Command{Use: "test"}
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+	first, err := deploymentRequestKey(cmd, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := deploymentRequestKey(cmd, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("separate invocations reused a ContextVM key")
+	}
+	for _, key := range []string{first, second} {
+		parsed, err := uuid.Parse(key)
+		if err != nil || parsed.Version() != 7 {
+			t.Fatalf("key %q is not UUIDv7: %v", key, err)
+		}
+		if !strings.Contains(stderr.String(), key) {
+			t.Fatalf("retry key %s was not shown", key)
+		}
+	}
+	explicit, err := deploymentRequestKey(cmd, " retry-key ")
+	if err != nil || explicit != "retry-key" {
+		t.Fatalf("explicit key = %q, %v", explicit, err)
+	}
+}
+
+func TestDeploymentAndApprovalCommandsMintContextVMRetryKeys(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+	t.Setenv("BAHIA_NOSTR_RELAYS", "wss://relay.example")
+	var deployKey, approvalKey string
+	restore := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{
+			deploymentIntent: func(req client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error) {
+				deployKey = req.IdempotencyKey
+				return &client.DeploymentCommandResult{Status: "submitted"}, nil
+			},
+			deploymentApproval: func(req client.DeploymentApprovalNostrRequest) (*client.DeploymentCommandResult, error) {
+				approvalKey = req.IdempotencyKey
+				return &client.DeploymentCommandResult{Status: "submitted"}, nil
+			},
+		}, nil
+	})
+	defer restore()
+	for _, args := range [][]string{
+		{"deployments", "deploy", "--service", "svc", "--environment", "env", "--artifact", "art"},
+		{"deployments", "approve", "--intent", "intent"},
+	} {
+		root := newOperatorFlagTestCommand(t).Root()
+		root.AddCommand(deployCommands())
+		root.SetArgs(args)
+		if err := root.ExecuteContext(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, key := range []string{deployKey, approvalKey} {
+		parsed, err := uuid.Parse(key)
+		if err != nil || parsed.Version() != 7 {
+			t.Fatalf("generated key %q is not UUIDv7: %v", key, err)
+		}
+	}
+	if deployKey == approvalKey {
+		t.Fatal("distinct operations shared a key")
+	}
+}
+
+func TestRuntimeRestartCommandForwardsExplicitRetryKey(t *testing.T) {
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
+	t.Setenv("BAHIA_NOSTR_RELAYS", "wss://relay.example")
+	var captured string
+	restore := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
+		return fakeCLIOperatorClient{runtimeRestart: func(key string) (*client.RuntimeActionResult, error) {
+			captured = key
+			return &client.RuntimeActionResult{Action: "restart"}, nil
+		}}, nil
+	})
+	defer restore()
+	root := newOperatorFlagTestCommand(t).Root()
+	root.AddCommand(servicesCommands())
+	root.SetArgs([]string{"services", "actions", "restart", "--service", "svc", "--environment", "env", "--idempotency-key", "runtime-retry-1"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if captured != "runtime-retry-1" {
+		t.Fatalf("runtime key = %q", captured)
+	}
+}
+
 func TestDeploymentsPreviewCommandBuildsSignedPreviewRequest(t *testing.T) {
 	resetOperatorGlobals(t)
 	outputFormat = "json"
@@ -597,102 +692,6 @@ func TestDeploymentsRouteAttachCommandBuildsSignedRouteRequest(t *testing.T) {
 		captured.PublicRoute.Hostname != "api.example.com" || captured.PublicRoute.UpstreamScheme != "http" || captured.PublicRoute.UpstreamPort != 8080 ||
 		captured.PublicRoute.HealthPath != "/healthz" || captured.PublicRoute.TLS != "managed" || captured.Internal == nil || *captured.Internal || captured.IdempotencyKey != "route:1" {
 		t.Fatalf("captured route attach = %#v", captured)
-	}
-}
-
-func TestServicesCreateCommandPublishesSignerFirstManagedService(t *testing.T) {
-	resetOperatorGlobals(t)
-	outputFormat = "json"
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
-
-	configPath := writeTempFile(t, `{
-		"schema_version":"1",
-		"service_name":"astillero",
-		"ports":["127.0.0.1:18088:8080"],
-		"restart_policy":"unless-stopped",
-		"pull_policy":"if-not-present"
-	}`)
-
-	var captured client.CreateServiceNostrRequest
-	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{serviceCreate: func(req client.CreateServiceNostrRequest) (*client.ServiceCommandResult, error) {
-			captured = req
-			return &client.ServiceCommandResult{Status: "created", ServiceID: "svc-1"}, nil
-		}}, nil
-	})
-	defer restoreFactory()
-
-	root := newOperatorFlagTestCommand(t).Root()
-	root.AddCommand(servicesCommands())
-	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
-		t.Fatalf("set relay: %v", err)
-	}
-	root.SetArgs([]string{
-		"services", "create",
-		"--name", "astillero",
-		"--artifact-repo", "harbor.sharegap.net/cascadia/astillero",
-		"--repo-url", "https://git.sharegap.net/chebizar-coinos.io-336e0b4c237a0c000c1e/astillero.git",
-		"--repo-source", "gitea",
-		"--repo-coordinate", "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero",
-		"--ci-provider", "hiveci",
-		"--default-branch", "main",
-		"--managed-runtime-config-file", configPath,
-		"--idempotency-key", "service:create:astillero",
-	})
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("execute services create: %v", err)
-	}
-	if captured.Name != "astillero" ||
-		captured.ArtifactRepo != "harbor.sharegap.net/cascadia/astillero" ||
-		captured.Repository == nil ||
-		captured.Repository.RepoCoordinate != "chebizar-coinos.io-336e0b4c237a0c000c1e/astillero" ||
-		captured.Repository.CI == nil ||
-		captured.Repository.CI.Provider != "hiveci" ||
-		captured.ManagedRuntimeConfig == nil ||
-		captured.ManagedRuntimeConfig.ServiceName != "astillero" ||
-		captured.IdempotencyKey != "service:create:astillero" {
-		t.Fatalf("captured service create = %#v", captured)
-	}
-}
-
-func TestServicesUpdateCommandPublishesOnlyChangedFields(t *testing.T) {
-	resetOperatorGlobals(t)
-	outputFormat = "json"
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
-
-	var captured client.UpdateServiceNostrRequest
-	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{serviceUpdate: func(req client.UpdateServiceNostrRequest) (*client.ServiceCommandResult, error) {
-			captured = req
-			return &client.ServiceCommandResult{Status: "updated", ServiceID: req.ID}, nil
-		}}, nil
-	})
-	defer restoreFactory()
-
-	root := newOperatorFlagTestCommand(t).Root()
-	root.AddCommand(servicesCommands())
-	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
-		t.Fatalf("set relay: %v", err)
-	}
-	root.SetArgs([]string{
-		"services", "update",
-		"--service", "11111111-1111-1111-1111-111111111111",
-		"--org", "22222222-2222-2222-2222-222222222222",
-		"--artifact-repo", "harbor.sharegap.net/cascadia/astillero",
-		"--idempotency-key", "service:update:astillero",
-	})
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("execute services update: %v", err)
-	}
-	if captured.ID != "11111111-1111-1111-1111-111111111111" ||
-		captured.OrgID == nil ||
-		*captured.OrgID != "22222222-2222-2222-2222-222222222222" ||
-		captured.ArtifactRepo == nil ||
-		*captured.ArtifactRepo != "harbor.sharegap.net/cascadia/astillero" ||
-		captured.Name != nil ||
-		captured.RuntimeType != nil ||
-		captured.IdempotencyKey != "service:update:astillero" {
-		t.Fatalf("captured service update = %#v", captured)
 	}
 }
 
@@ -884,8 +883,6 @@ type fakeCLIOperatorClient struct {
 	closeClient            func()
 	restartErr             error
 	policyCreate           func(controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
-	serviceCreate          func(client.CreateServiceNostrRequest) (*client.ServiceCommandResult, error)
-	serviceUpdate          func(client.UpdateServiceNostrRequest) (*client.ServiceCommandResult, error)
 	buildRequest           func(client.BuildRequestNostrRequest) (*client.BuildCommandResult, error)
 	buildGet               func(string) (*client.BuildDetailsResult, error)
 	buildList              func(client.BuildListNostrRequest) (*client.BuildListResult, error)
@@ -896,31 +893,18 @@ type fakeCLIOperatorClient struct {
 	dnsRecordSet           func(client.DNSRecordSetRequest) (*client.DNSCommandResult, error)
 	dnsDriftRemediate      func(client.DNSDriftRemediateRequest) (*client.DNSCommandResult, error)
 	dnsOverrideRetire      func(client.DNSOverrideRetireRequest) (*client.DNSCommandResult, error)
-	environmentCreate      func(client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
 	environmentGetDetails  func(string) (*client.EnvironmentDetails, error)
-	environmentUpdate      func(client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error)
 	deploymentIntent       func(client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error)
 	deploymentPreview      func(client.DeploymentPreviewNostrRequest) (map[string]any, error)
 	routeAttach            func(client.RouteAttachRequest) (*client.DeploymentCommandResult, error)
 	deploymentApproval     func(client.DeploymentApprovalNostrRequest) (*client.DeploymentCommandResult, error)
+	runtimeRestart         func(string) (*client.RuntimeActionResult, error)
 }
 
 func (f fakeCLIOperatorClient) Close() {
 	if f.closeClient != nil {
 		f.closeClient()
 	}
-}
-func (f fakeCLIOperatorClient) CreateServiceNostr(_ context.Context, req client.CreateServiceNostrRequest, _ func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error) {
-	if f.serviceCreate != nil {
-		return f.serviceCreate(req)
-	}
-	return nil, errors.New("not implemented")
-}
-func (f fakeCLIOperatorClient) UpdateServiceNostr(_ context.Context, req client.UpdateServiceNostrRequest, _ func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error) {
-	if f.serviceUpdate != nil {
-		return f.serviceUpdate(req)
-	}
-	return nil, errors.New("not implemented")
 }
 func (f fakeCLIOperatorClient) BuildRequestNostr(_ context.Context, req client.BuildRequestNostrRequest, _ func(client.OperatorStatusEvent)) (*client.BuildCommandResult, error) {
 	if f.buildRequest != nil {
@@ -990,25 +974,13 @@ func (f fakeCLIOperatorClient) DNSOverrideRetire(_ context.Context, req client.D
 	}
 	return nil, errors.New("not implemented")
 }
-func (f fakeCLIOperatorClient) CreateEnvironmentNostr(_ context.Context, req client.CreateEnvironmentNostrRequest, _ func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error) {
-	if f.environmentCreate != nil {
-		return f.environmentCreate(req)
-	}
-	return nil, errors.New("not implemented")
-}
 func (f fakeCLIOperatorClient) GetEnvironmentDetailsNostr(_ context.Context, environmentID string, _ func(client.OperatorStatusEvent)) (*client.EnvironmentDetails, error) {
 	if f.environmentGetDetails != nil {
 		return f.environmentGetDetails(environmentID)
 	}
 	return nil, errors.New("not implemented")
 }
-func (f fakeCLIOperatorClient) UpdateEnvironmentNostr(_ context.Context, req client.UpdateEnvironmentNostrRequest, _ func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error) {
-	if f.environmentUpdate != nil {
-		return f.environmentUpdate(req)
-	}
-	return nil, errors.New("not implemented")
-}
-func (f fakeCLIOperatorClient) DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error) {
+func (f fakeCLIOperatorClient) DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent), ...string) (*client.RuntimeActionResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (f fakeCLIOperatorClient) CreateDeploymentIntentNostr(context.Context, string, string, string, string, string, string, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error) {
@@ -1041,13 +1013,19 @@ func (f fakeCLIOperatorClient) ApproveDeploymentNostr(_ context.Context, req cli
 	}
 	return nil, errors.New("not implemented")
 }
-func (f fakeCLIOperatorClient) RestartServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error) {
+func (f fakeCLIOperatorClient) RestartServiceRuntimeNostr(_ context.Context, _, _ string, _ func(client.OperatorStatusEvent), keys ...string) (*client.RuntimeActionResult, error) {
+	if f.runtimeRestart != nil {
+		if len(keys) != 1 {
+			return nil, errors.New("missing runtime idempotency key")
+		}
+		return f.runtimeRestart(keys[0])
+	}
 	if f.restartErr != nil {
 		return nil, f.restartErr
 	}
 	return &client.RuntimeActionResult{Action: "restart"}, nil
 }
-func (f fakeCLIOperatorClient) StopServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent)) (*client.RuntimeActionResult, error) {
+func (f fakeCLIOperatorClient) StopServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent), ...string) (*client.RuntimeActionResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (f fakeCLIOperatorClient) ScanAdoptionNostr(context.Context, client.AdoptionScanRequest, func(client.OperatorStatusEvent)) ([]client.AdoptionPreview, error) {

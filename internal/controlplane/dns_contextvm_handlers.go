@@ -205,11 +205,14 @@ func dnsZoneFromTagsOrParams(tags nostr.Tags, rawParams json.RawMessage) (string
 
 // RegisterDNSContextVMHandlers bridges encrypted ContextVM DNS methods from the
 // browser to the app-owned DNS reconciliation and persistence boundary.
-func RegisterDNSContextVMHandlers(transport *EncryptedRequestTransport, operator DNSControlPlaneOperator, enabled bool, gate *FleetOperatorGate) {
+func RegisterDNSContextVMHandlers(transport *EncryptedRequestTransport, operator DNSControlPlaneOperator, enabled bool, gate *FleetOperatorGate, processors ...*IntentProcessor) {
 	if transport == nil {
 		return
 	}
 	h := dnsContextVMHandlers{operator: operator, enabled: enabled}
+	if len(processors) > 0 {
+		h.intentProcessor = processors[0]
+	}
 	transport.RegisterContextVMHandler(ContextVMMethodDNSZoneCreate, gate.wrap(h.whenEnabled(h.zoneCreate)))
 	transport.RegisterContextVMHandler(ContextVMMethodDNSPolicyApply, gate.wrap(h.whenEnabled(h.policyApply)))
 	transport.RegisterContextVMHandler(ContextVMMethodDNSRecordSet, gate.wrap(h.whenEnabled(h.recordSet)))
@@ -218,8 +221,9 @@ func RegisterDNSContextVMHandlers(transport *EncryptedRequestTransport, operator
 }
 
 type dnsContextVMHandlers struct {
-	operator DNSControlPlaneOperator
-	enabled  bool
+	operator        DNSControlPlaneOperator
+	enabled         bool
+	intentProcessor *IntentProcessor
 }
 
 func (h dnsContextVMHandlers) whenEnabled(next ContextVMHandler) ContextVMHandler {
@@ -232,14 +236,58 @@ func (h dnsContextVMHandlers) whenEnabled(next ContextVMHandler) ContextVMHandle
 }
 
 func (h dnsContextVMHandlers) zoneCreate(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.intentEnabled() {
+		var zone domain.DNSZone
+		if err := json.Unmarshal(request.RPC.Params, &zone); err != nil {
+			return nil, err
+		}
+		if err := h.dualDispatch(ctx, request, "zone-create", "zone:"+strings.TrimSpace(zone.Name), request.RPC.Params); err != nil {
+			return nil, err
+		}
+		return dnsResult(dnsActionZoneCreate, "succeeded", "completed", "DNS zone persisted; reconcile completed", map[string]any{"zone": zone.Name}), nil
+	}
 	return dnsZoneCreateOp(ctx, h.operator, request.RPC.Params, nil).toMap(), nil
 }
 
 func (h dnsContextVMHandlers) policyApply(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.intentEnabled() {
+		var policy domain.DNSPolicy
+		if err := json.Unmarshal(request.RPC.Params, &policy); err != nil {
+			return nil, err
+		}
+		if policy.ID == uuid.Nil {
+			policy.ID = domain.NewEntityID()
+		}
+		content, err := json.Marshal(policy)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.dualDispatch(ctx, request, "policy-apply", "dnspolicy:"+policy.ID.String(), content); err != nil {
+			return nil, err
+		}
+		return dnsResult(dnsActionPolicyApply, "succeeded", "completed", "DNS policy persisted; reconcile completed", map[string]any{"policy_id": policy.ID.String()}), nil
+	}
 	return dnsPolicyApplyOp(ctx, h.operator, request.RPC.Params).toMap(), nil
 }
 
 func (h dnsContextVMHandlers) recordSet(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.intentEnabled() {
+		var override domain.DNSRecordOverride
+		if err := json.Unmarshal(request.RPC.Params, &override); err != nil {
+			return nil, err
+		}
+		if override.ID == uuid.Nil {
+			override.ID = domain.NewEntityID()
+		}
+		content, err := json.Marshal(override)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.dualDispatch(ctx, request, "record-set", "dns-override:"+override.ID.String(), content); err != nil {
+			return nil, err
+		}
+		return dnsResult(dnsActionRecordOverride, "succeeded", "completed", "DNS record override persisted; reconcile completed", map[string]any{"override_id": override.ID.String()}), nil
+	}
 	pubkey := ""
 	if request.Event != nil {
 		pubkey = request.Event.PubKey.Hex()
@@ -248,6 +296,18 @@ func (h dnsContextVMHandlers) recordSet(ctx context.Context, request ContextVMRe
 }
 
 func (h dnsContextVMHandlers) overrideRetire(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.intentEnabled() {
+		var payload struct {
+			OverrideID string `json:"override_id"`
+		}
+		if err := json.Unmarshal(request.RPC.Params, &payload); err != nil {
+			return nil, err
+		}
+		if err := h.dualDispatch(ctx, request, "override-retire", "dns-override:"+strings.TrimSpace(payload.OverrideID), request.RPC.Params); err != nil {
+			return nil, err
+		}
+		return dnsResult(dnsActionOverrideRetire, "succeeded", "completed", "DNS override retired; reconcile completed", map[string]any{"override_id": payload.OverrideID}), nil
+	}
 	pubkey := ""
 	if request.Event != nil {
 		pubkey = request.Event.PubKey.Hex()
@@ -257,6 +317,25 @@ func (h dnsContextVMHandlers) overrideRetire(ctx context.Context, request Contex
 
 func (h dnsContextVMHandlers) driftRemediate(ctx context.Context, request ContextVMRequest) (any, error) {
 	return dnsDriftRemediateOp(ctx, h.operator, request.RPC.Params, nil).toMap(), nil
+}
+
+func (h dnsContextVMHandlers) intentEnabled() bool {
+	return h.intentProcessor != nil && h.intentProcessor.Handler("dns") != nil
+}
+
+func (h dnsContextVMHandlers) dualDispatch(ctx context.Context, request ContextVMRequest, op, coordinate string, raw json.RawMessage) error {
+	if request.Event == nil {
+		return fmt.Errorf("DNS intent requires an authenticated requester")
+	}
+	var content map[string]interface{}
+	if err := json.Unmarshal(raw, &content); err != nil {
+		return err
+	}
+	if content == nil {
+		return fmt.Errorf("DNS intent requires JSON object content")
+	}
+	intentID := effectiveIdempotencyKey(request, request.Event.ID.Hex())
+	return h.intentProcessor.ProcessInProcess(ctx, &Intent{Domain: "dns", Op: op, Coordinate: coordinate, IntentID: intentID, Content: content, Actor: request.Event.PubKey.Hex()})
 }
 
 func dnsZoneFromParams(params json.RawMessage) (string, error) {

@@ -68,7 +68,7 @@
     <div class="mutation-heading">
       <div>
         <h2>{actionLabel}</h2>
-        <p>Publishes a signed ContextVM command; status and terminal truth arrive through canonical backup read models.</p>
+        <p>Publishes a signed intent; daemon acceptance and canonical backup state resolve the pending badge.</p>
       </div>
       <button type="button" onclick={() => (expanded = !expanded)}>{expanded ? 'Close' : actionLabel}</button>
     </div>

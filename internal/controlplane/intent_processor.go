@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -87,8 +89,8 @@ type Intent struct {
 	Coordinate string
 	// Content is the parsed JSON content.
 	Content map[string]interface{}
-	// ExpectedUpdatedAt is the optional revision check timestamp.
-	ExpectedUpdatedAt *int64
+	// ExpectedUpdatedAt is the canonical record's updated_at revision.
+	ExpectedUpdatedAt *time.Time
 	// Actor is the pubkey that originated the intent. For relay-path intents
 	// this is Event.PubKey; for in-process dispatch it is the ContextVM/REST
 	// caller's pubkey.
@@ -163,6 +165,11 @@ func (p *IntentProcessor) Handler(domain string) DomainHandler {
 func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Event) error {
 	intent, err := ParseIntent(ev)
 	if err != nil {
+		if intent != nil && p.trustSet.IsKnownPrincipal(ev.PubKey.Hex()) && p.status != nil {
+			intent.Actor = ev.PubKey.Hex()
+			p.status.PublishRejection(ctx, intent, err.Error())
+			return err
+		}
 		p.logger.Debug("dropping malformed intent event",
 			zap.String("event_id", ev.ID.Hex()),
 			zap.Error(err),
@@ -187,6 +194,16 @@ func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Even
 // This path shares the same pipeline and idempotency store as the relay path,
 // preventing double application (§4.1).
 func (p *IntentProcessor) ProcessInProcess(ctx context.Context, intent *Intent) error {
+	if raw, ok := intent.Content["expected_updated_at"]; ok {
+		revision, err := parseIntentRevision(raw)
+		if err != nil {
+			if p.status != nil {
+				p.status.PublishRejection(ctx, intent, err.Error())
+			}
+			return err
+		}
+		intent.ExpectedUpdatedAt = revision
+	}
 	return p.process(ctx, intent)
 }
 
@@ -423,30 +440,31 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 	if intent.IntentID == "" {
 		return nil, fmt.Errorf("missing intent_id tag")
 	}
-	if intent.OrgID == uuid.Nil {
+	if intent.OrgID == uuid.Nil && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" {
 		return nil, fmt.Errorf("missing or invalid org tag")
 	}
 
 	// Parse content.
 	if ev.Content != "" {
 		var content map[string]interface{}
-		if err := json.Unmarshal([]byte(ev.Content), &content); err != nil {
+		decoder := json.NewDecoder(strings.NewReader(ev.Content))
+		decoder.UseNumber()
+		if err := decoder.Decode(&content); err != nil {
 			return nil, fmt.Errorf("invalid content JSON: %w", err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return nil, fmt.Errorf("invalid content JSON: trailing data")
 		}
 		intent.Content = content
 
 		// Check for expected_updated_at in content.
 		if raw, ok := content["expected_updated_at"]; ok {
-			switch v := raw.(type) {
-			case float64:
-				ts := int64(v)
-				intent.ExpectedUpdatedAt = &ts
-			case json.Number:
-				ts, err := v.Int64()
-				if err == nil {
-					intent.ExpectedUpdatedAt = &ts
-				}
+			revision, err := parseIntentRevision(raw)
+			if err != nil {
+				return intent, err
 			}
+			intent.ExpectedUpdatedAt = revision
 		}
 	}
 
@@ -456,6 +474,26 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 	}
 
 	return intent, nil
+}
+
+// parseIntentRevision accepts the wire representation of a canonical updated_at.
+// Numeric epochs have no defined unit in the intent protocol and are rejected.
+func parseIntentRevision(raw any) (*time.Time, error) {
+	value, ok := raw.(string)
+	if !ok {
+		return nil, fmt.Errorf("invalid expected_updated_at: must be an RFC3339 timestamp string, got %T", raw)
+	}
+	revision, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid expected_updated_at: %w", err)
+	}
+	return &revision, nil
+}
+
+// RevisionMatches compares an intent token with the precision published in
+// canonical records (Postgres timestamptz microseconds).
+func (intent *Intent) RevisionMatches(recordUpdatedAt time.Time) bool {
+	return intent.ExpectedUpdatedAt != nil && domain.SameRevision(recordUpdatedAt, *intent.ExpectedUpdatedAt)
 }
 
 // IntentDomainEnabled reports whether a domain is in the enabled set.

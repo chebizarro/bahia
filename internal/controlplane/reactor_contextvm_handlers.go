@@ -63,6 +63,30 @@ func (r *Reactor) handleWorkerSchedulingContextVM(ctx context.Context, request C
 	if !consistentOptionalTag(workerIdempotencyKey(request.Event), request.ProgressToken) {
 		return nil, fmt.Errorf("d tag and idempotency key must match")
 	}
+	if r.intentProcessor != nil && r.intentProcessor.Handler("worker") != nil {
+		op := map[string]string{
+			WorkerCommandUncordon:         "uncordon",
+			WorkerCommandUndrain:          "undrain",
+			WorkerCommandMaintenanceEnter: "maintenance-enter",
+		}[command]
+		worker, err := r.workerRepo.GetByPubKey(ctx, payload.WorkerPubKey)
+		if err != nil {
+			return nil, err
+		}
+		labels := map[string]interface{}{}
+		if worker != nil {
+			for k, v := range worker.Labels {
+				labels[k] = v
+			}
+		}
+		intent := &Intent{Domain: "worker", Op: op, Coordinate: "worker:" + payload.WorkerPubKey,
+			IntentID: request.ProgressToken, Actor: request.Event.PubKey.Hex(),
+			Content: map[string]interface{}{"worker_pubkey": payload.WorkerPubKey, "reason": payload.Reason, "scheduling_state": string(target), "labels": labels}}
+		if err := r.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "succeeded", "command": command, "worker_pubkey": payload.WorkerPubKey, "scheduling_state": target}, nil
+	}
 	worker, _, err := r.updateWorkerSchedulingState(ctx, payload.WorkerPubKey, payload.Reason, command, target)
 	if err != nil {
 		return nil, err

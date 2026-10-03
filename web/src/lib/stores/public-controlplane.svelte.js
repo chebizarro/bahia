@@ -2,7 +2,37 @@ import { goto } from '$app/navigation';
 import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
 import { CONTEXTVM_MESSAGE_KIND, publishEncryptedRequest, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
-import { withEntityId } from '$lib/entity-id.js';
+import { mintEntityId, withEntityId } from '$lib/entity-id.js';
+import { publishIntent, canonicalIntentRecord, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
+import { orgRoles } from './auth-roles.svelte.js';
+import { orgsState } from './orgs.svelte.js';
+import { currentSystemInfo } from './system.svelte.js';
+import { backupRecipes, backupRepositories, backupPolicies, backupDefinitions } from './collections/backup.svelte.js';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function intentOrgId(payload, current, domain) {
+  const explicit = [payload?.org_id, current?.org_id,
+    payload?.environment_id ? canonicalIntentRecord(payload.environment_id)?.content?.org_id : null]
+    .find(value => UUID.test(String(value || '')));
+  return resolveIntentOrgId(domain, explicit, [...Object.keys(orgRoles),
+    ...orgsState.orgs.map(org => org.id || org.org_id), currentSystemInfo()?.organization_id]);
+}
+
+async function mutateIntent(domain, op, payload, id = payload?.id) {
+  const coordinate = String(id || '').trim();
+  if (!coordinate) throw new Error(`${domain} intent requires an entity id`);
+  const current = op === 'create' ? null : canonicalIntentRecord(coordinate);
+  if (op === 'update' && !current?.content?.updated_at) {
+    throw new Error('Current canonical revision is unavailable; re-read and resubmit');
+  }
+  const orgId = intentOrgId(payload, current?.content, domain);
+  const content = op === 'delete'
+    ? { id: coordinate, org_id: orgId, deleted: true, ...(payload?.force ? { force: true } : {}) }
+    : { ...(current?.content || {}), ...payload, id: coordinate, org_id: orgId };
+  delete content.expected_updated_at;
+  return publishIntent({ domain, op, coordinate, orgId, content, currentRecord: current?.content });
+}
 
 function operationResultEvent({ requestEventId, resultEvent, result }) {
   if (result !== undefined) {
@@ -33,6 +63,7 @@ function unwrapCommandPayload(content) {
 }
 
 export function resultContent(event) {
+  if (event?.pending) return { ...event.desiredState, status: 'pending', message: 'Signed intent pending daemon acceptance' };
   return unwrapCommandPayload(parseJsonContent(event, {}));
 }
 
@@ -105,33 +136,27 @@ export async function publishCommandOnly({ operation, tags = [], content = {}, p
 // Create intents carry a client-minted entity id (bahia-irsry.35). Callers that
 // may retry should mint it once and pass it in; otherwise one is minted here.
 export async function createService(payload) {
-  return publishCommand({ operation: 'service/create', content: withEntityId(payload) });
+  return mutateIntent('service', 'create', withEntityId(payload));
 }
 
 export function updateService(id, payload) {
-  const content = { ...payload, id };
-  return publishCommand({
-    operation: 'service/update',
-    tags: [['service', id]],
-    content,
-    ...(content.idempotency_key ? { requestId: content.idempotency_key } : {})
-  });
+  return mutateIntent('service', 'update', payload, id);
 }
 
 export function deleteService(id, force = false) {
-  return publishCommand({ operation: 'service/delete', tags: [['service', id]], content: { id, force } });
+  return mutateIntent('service', 'delete', { id, force }, id);
 }
 
 export async function createEnvironment(payload) {
-  return publishCommand({ operation: 'environment/create', content: withEntityId(payload) });
+  return mutateIntent('environment', 'create', withEntityId(payload));
 }
 
 export function updateEnvironment(id, payload) {
-  return publishCommand({ operation: 'environment/update', tags: [['environment', id]], content: { ...payload, id } });
+  return mutateIntent('environment', 'update', payload, id);
 }
 
 export function deleteEnvironment(id, force = false) {
-  return publishCommand({ operation: 'environment/delete', tags: [['environment', id]], content: { id, force } });
+  return mutateIntent('environment', 'delete', { id, force }, id);
 }
 
 export async function previewServiceDeployment(payload) {
@@ -212,15 +237,15 @@ export function rejectDeploymentIntent(id) {
 // The route id is client-minted (bahia-irsry.42): pass the same payload.id to
 // retry; one is minted when absent.
 export async function createLLMRoute(payload) {
-  return publishCommand({ operation: 'llm/route-create', content: withEntityId(payload) });
+  const content = withEntityId(payload);
+  return publishIntent({ domain: 'llm', op: 'create', coordinate: content.id,
+    orgId: intentOrgId(content, canonicalIntentRecord(content.id)?.content, 'llm'), content });
 }
 
 export function registerLLMRelease(payload) {
-  return publishCommand({
-    operation: 'llm/release-register',
-    tags: [['route', payload.route_id]].filter((tag) => tag[1]),
-    content: payload
-  });
+  const content = withEntityId(payload);
+  return publishIntent({ domain: 'llm', op: 'release-register', coordinate: `llm-release:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`llm-release:${content.id}`)?.content, 'llm'), content });
 }
 
 async function requestLLMAsyncLifecycle(operation, payload, tags) {
@@ -452,51 +477,31 @@ export function importArtifactSBOM(artifact, { format = 'spdx', payloadBase64 = 
 }
 
 export function promotePackage(payload) {
-  return publishCommand({
-    operation: 'package/promote',
-    tags: [
-      ['operation', 'promote'],
-      ['repository', payload.source_repository_id],
-      ['repository_name', payload.source_repository_name],
-      ['target_repository', payload.target_repository_id],
-      ['target_repository_name', payload.target_repository_name],
-      ['namespace', payload.namespace],
-      ['package', payload.package_name],
-      ['version', payload.version],
-      ['filename', payload.filename]
-    ].filter((tag) => tag[1]),
-    content: payload
-  });
+  const coordinate = ['package', payload.target_repository_id, payload.namespace,
+    payload.package_name, payload.version, payload.filename].map(encodeURIComponent).join(':');
+  return publishIntent({ domain: 'package', op: 'promote', coordinate,
+    orgId: intentOrgId(payload, null, 'package'), content: payload });
 }
 
 export function yankPackage(payload) {
-  return publishCommand({
-    operation: 'package/yank',
-    tags: [
-      ['operation', payload.deprecated ? 'deprecate' : 'yank'],
-      ['repository', payload.repository_id],
-      ['repository_name', payload.repository_name],
-      ['namespace', payload.namespace],
-      ['package', payload.package_name],
-      ['version', payload.version],
-      ['filename', payload.filename]
-    ].filter((tag) => tag[1]),
-    content: payload
-  });
+  const coordinate = ['package', payload.repository_id, payload.namespace,
+    payload.package_name, payload.version, payload.filename].map(encodeURIComponent).join(':');
+  return publishIntent({ domain: 'package', op: 'yank', coordinate,
+    orgId: intentOrgId(payload, null, 'package'), content: payload });
 }
 
 // The policy id is client-minted (bahia-irsry.42): pass the same payload.id to
 // retry; one is minted when absent.
 export async function createPolicy(payload) {
-  return publishCommand({ operation: 'policy/create', tags: payload.environment_id ? [['environment', payload.environment_id]] : [], content: withEntityId(payload) });
+  return mutateIntent('policy', 'create', withEntityId(payload));
 }
 
 export function updatePolicy(id, payload) {
-  return publishCommand({ operation: 'policy/update', tags: [['policy', id]], content: { ...payload, id } });
+  return mutateIntent('policy', 'update', payload, id);
 }
 
 export function deletePolicy(id) {
-  return publishCommand({ operation: 'policy/delete', tags: [['policy', id]], content: { id } });
+  return mutateIntent('policy', 'delete', { id }, id);
 }
 
 export async function evaluatePolicy(payload) {
@@ -538,51 +543,35 @@ function backupRequired(value, label) {
   return text;
 }
 
-function backupRecipeCoordinate(recipe) {
-  const explicit = String(recipe?.recipe || '').trim();
-  if (explicit) return explicit;
-  const name = String(recipe?.name || recipe?.recipe_name || '').trim();
-  const version = String(recipe?.version || recipe?.recipe_version || '').trim();
-  return name && version ? `recipe:${name}:${version}` : name;
-}
-
 export function registerBackupRepository(payload) {
   const name = backupRequired(payload?.name, 'repository name');
   const backend = backupRequired(payload?.backend, 'repository backend');
   const repositoryUri = backupRequired(payload?.repository_uri || payload?.uri, 'repository URI');
-  const idempotencyKey = String(payload?.idempotency_key || '').trim() || backupIdempotencyKey('repository_register', name);
+  const existing = backupRepositories.find(row => row.name === name);
   const content = {
-    ...payload,
+    ...withEntityId({ ...payload, id: payload?.id || existing?.id }),
     name,
     backend,
     repository_uri: repositoryUri,
-    idempotency_key: idempotencyKey,
     metadata: backupMetadata('web.backup.repositories.register', payload?.metadata)
   };
-  return publishCommand({
-    operation: 'backup/repository-register',
-    tags: [['d', idempotencyKey], ['repository', name], ['name', name], ['backend', backend], ['repository_uri', repositoryUri], ['repository_id', payload?.id || payload?.repository_id]].filter((tag) => tag[1]),
-    content
-  });
+  return publishIntent({ domain: 'backup', op: 'repository-register', coordinate: `backup-repository:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-repository:${content.id}`)?.content, 'backup'), content });
 }
 
 export function applyBackupPolicy(payload) {
   const name = backupRequired(payload?.name, 'policy name');
   const verificationMode = String(payload?.verification_mode || (payload?.require_verification ? 'kopia_snapshot_verify' : 'none')).trim() || 'none';
-  const idempotencyKey = String(payload?.idempotency_key || '').trim() || backupIdempotencyKey('policy_apply', name);
+  const existing = backupPolicies.find(row => row.name === name);
   const content = {
-    ...payload,
+    ...withEntityId({ ...payload, id: payload?.id || existing?.id }),
     name,
     require_verification: Boolean(payload?.require_verification),
     verification_mode: verificationMode,
-    idempotency_key: idempotencyKey,
     metadata: backupMetadata('web.backup.policies.apply', payload?.metadata)
   };
-  return publishCommand({
-    operation: 'backup/policy-apply',
-    tags: [['d', idempotencyKey], ['policy', name], ['name', name], ['policy_id', payload?.id || payload?.policy_id], ['verification', verificationMode]].filter((tag) => tag[1]),
-    content
-  });
+  return publishIntent({ domain: 'backup', op: 'policy-apply', coordinate: `backup-policy:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-policy:${content.id}`)?.content, 'backup'), content });
 }
 
 export function applyBackupRecipe(payload) {
@@ -591,24 +580,19 @@ export function applyBackupRecipe(payload) {
   const repositoryId = backupRequired(payload?.repository_id, 'repository id');
   const backend = backupRequired(payload?.backend, 'recipe backend');
   const targetRef = backupRequired(payload?.target_ref || payload?.target, 'target ref');
-  const recipe = backupRecipeCoordinate({ ...payload, name, version });
-  const idempotencyKey = String(payload?.idempotency_key || '').trim() || backupIdempotencyKey('recipe_apply', `${name}:${version}`);
+  const existing = backupRecipes.find(row => row.name === name && row.version === version);
   const content = {
-    ...payload,
+    ...withEntityId({ ...payload, id: payload?.id || existing?.id }),
     name,
     version,
     backend,
     repository_id: repositoryId,
     target_ref: targetRef,
     verification_mode: String(payload?.verification_mode || 'none').trim() || 'none',
-    idempotency_key: idempotencyKey,
     metadata: backupMetadata('web.backup.recipes.apply', payload?.metadata)
   };
-  return publishCommand({
-    operation: 'backup/recipe-apply',
-    tags: [['d', idempotencyKey], ['recipe', recipe], ['recipe_id', payload?.id || payload?.recipe_id], ['repository_id', repositoryId], ['policy_id', payload?.policy_id], ['backend', backend], ['target', targetRef]].filter((tag) => tag[1]),
-    content
-  });
+  return publishIntent({ domain: 'backup', op: 'recipe-apply', coordinate: `backup-recipe:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-recipe:${content.id}`)?.content, 'backup'), content });
 }
 
 export function applyBackupDefinition(payload) {
@@ -616,110 +600,75 @@ export function applyBackupDefinition(payload) {
   const repositoryId = backupRequired(payload?.repository_id, 'repository id');
   const policyId = backupRequired(payload?.policy_id, 'policy id');
   const recipeId = backupRequired(payload?.recipe_id, 'recipe id');
-  const idempotencyKey = String(payload?.idempotency_key || '').trim() || backupIdempotencyKey('definition_apply', name);
+  const existing = backupDefinitions.find(row => row.name === name);
   const content = {
-    ...payload,
+    ...withEntityId({ ...payload, id: payload?.id || existing?.id }),
     name,
     repository_id: repositoryId,
     policy_id: policyId,
     recipe_id: recipeId,
     schedule_enabled: Boolean(payload?.schedule_enabled),
     requires_approval: Boolean(payload?.requires_approval),
-    idempotency_key: idempotencyKey,
     metadata: backupMetadata('web.backup.definitions.apply', payload?.metadata)
   };
-  return publishCommand({
-    operation: 'backup/definition-apply',
-    tags: [['d', idempotencyKey], ['definition', name], ['name', name], ['definition_id', payload?.id || payload?.definition_id], ['repository_id', repositoryId], ['policy_id', policyId], ['recipe_id', recipeId]].filter((tag) => tag[1]),
-    content
-  });
+  return publishIntent({ domain: 'backup', op: 'definition-apply', coordinate: `backup-definition:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-definition:${content.id}`)?.content, 'backup'), content });
 }
 
 export function requestBackupRun(recipeOrDefinition) {
-  const recipeId = String(recipeOrDefinition?.recipe_id || recipeOrDefinition?.id || '').trim();
-  const recipe = backupRecipeCoordinate(recipeOrDefinition);
-  if (!recipeId && !recipe) throw new Error('recipe id or recipe coordinate is required');
-  const idempotencyKey = backupIdempotencyKey('run', recipeId || recipe);
-  return publishCommand({
-    operation: 'backup/run',
-    tags: [['d', idempotencyKey], ['recipe_id', recipeId], ['recipe', recipe]].filter((tag) => tag[1]),
-    content: {
-      recipe_id: recipeId,
-      recipe,
-      idempotency_key: idempotencyKey,
-      metadata: { source: 'web.backup.run' }
-    }
-  });
+  const recipeId = backupRequired(recipeOrDefinition?.recipe_id || recipeOrDefinition?.id, 'recipe id');
+  const recipe = backupRecipes.find(row => row.id === recipeId) || recipeOrDefinition;
+  const content = {
+    id: mintEntityId(), recipe_id: recipeId,
+    repository_id: backupRequired(recipe.repository_id, 'repository id'),
+    ...(recipe.policy_id ? { policy_id: recipe.policy_id } : {}),
+    backend: backupRequired(recipe.backend, 'backup backend'),
+    target_ref: backupRequired(recipe.target_ref, 'target ref'),
+    verification_mode: recipe.verification_mode || 'none',
+    metadata: { source: 'web.backup.run' }
+  };
+  return publishIntent({ domain: 'backup', op: 'run', coordinate: `backup-run:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-run:${content.id}`)?.content, 'backup'), content });
 }
 
 export function requestBackupVerification(run, mode = '') {
   const backupRunId = backupRequired(run?.id || run?.backup_run_id || run?.run_id, 'backup run id');
   const verificationMode = String(mode || run?.verification_mode || 'kopia_snapshot_verify').trim() || 'kopia_snapshot_verify';
-  const idempotencyKey = backupIdempotencyKey('verification', backupRunId);
-  return publishCommand({
-    operation: 'backup/verification',
-    tags: [['d', idempotencyKey], ['backup_run_id', backupRunId], ['run', backupRunId], ['verification_mode', verificationMode]],
-    content: {
-      backup_run_id: backupRunId,
-      mode: verificationMode,
-      idempotency_key: idempotencyKey,
-      metadata: { source: 'web.backup.verification' }
-    }
-  });
+  const content = { id: mintEntityId(), backup_run_id: backupRunId, mode: verificationMode,
+    status: 'pending', verified: false };
+  return publishIntent({ domain: 'backup', op: 'verification', coordinate: `backup-verification:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-verification:${content.id}`)?.content, 'backup'), content });
 }
 
 export function requestBackupRestore(run, restoreTargetRef) {
   const backupRunId = backupRequired(run?.id || run?.backup_run_id || run?.run_id, 'backup run id');
   const target = backupRequired(restoreTargetRef || run?.restore_target_ref || run?.target_ref, 'restore target');
-  const idempotencyKey = backupIdempotencyKey('restore', `${backupRunId}:${target}`);
-  return publishCommand({
-    operation: 'backup/restore',
-    tags: [['d', idempotencyKey], ['backup_run_id', backupRunId], ['run', backupRunId], ['target', target]],
-    content: {
-      backup_run_id: backupRunId,
-      restore_target_ref: target,
-      idempotency_key: idempotencyKey,
-      metadata: { source: 'web.backup.restore' }
-    }
-  });
+  const content = { id: mintEntityId(), backup_run_id: backupRunId,
+    restore_target_ref: target, metadata: { source: 'web.backup.restore' } };
+  return publishIntent({ domain: 'backup', op: 'restore', coordinate: `backup-restore:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-restore:${content.id}`)?.content, 'backup'), content });
 }
 
 export function requestBackupRetention(input) {
   const repositoryId = backupRequired(input?.repository_id || input?.id, 'repository id');
-  const policyId = backupRequired(input?.policy_id, 'policy id');
+  const repository = backupRepositories.find(row => row.id === repositoryId) || input;
+  const policyId = input?.policy_id || '';
   const dryRun = Boolean(input?.dry_run);
-  const idempotencyKey = backupIdempotencyKey('retention', `${repositoryId}:${policyId}:${dryRun}`);
-  return publishCommand({
-    operation: 'backup/retention',
-    tags: [['d', idempotencyKey], ['repository_id', repositoryId], ['policy_id', policyId], ['dry_run', String(dryRun)]],
-    content: {
-      repository_id: repositoryId,
-      policy_id: policyId,
-      dry_run: dryRun,
-      idempotency_key: idempotencyKey,
-      metadata: { source: 'web.backup.retention' }
-    }
-  });
+  const content = { id: mintEntityId(), repository_id: repositoryId,
+    ...(policyId ? { policy_id: policyId } : {}),
+    backend: backupRequired(repository.backend, 'repository backend'), dry_run: dryRun,
+    metadata: { source: 'web.backup.retention' } };
+  return publishIntent({ domain: 'backup', op: 'retention', coordinate: `backup-retention:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-retention:${content.id}`)?.content, 'backup'), content });
 }
 
 export function probeBackupRepository(repository) {
   const repositoryId = repository?.id || repository?.repository_id || '';
   if (!repositoryId) throw new Error('repository id is required');
-  const idempotencyKey = backupIdempotencyKey('repository_probe', repositoryId);
-  return publishCommand({
-    operation: 'backup/repository-probe',
-    tags: [
-      ['d', idempotencyKey],
-      ['repository_id', repositoryId],
-      ['repository', repository?.name || repositoryId]
-    ].filter((tag) => tag[1]),
-    content: {
-      repository_id: repositoryId,
-      repository: repository?.name || '',
-      idempotency_key: idempotencyKey,
-      metadata: { source: 'web.backup.repositories' }
-    }
-  });
+  const content = { repository_id: repositoryId, repository: repository?.name || '',
+    metadata: { source: 'web.backup.repositories' } };
+  return publishIntent({ domain: 'backup', op: 'repository-probe',
+    coordinate: `backup-repository-probe:${mintEntityId()}`, orgId: intentOrgId(content, null, 'backup'), content });
 }
 
 export function decideBackupRestore(restore, approved, message = '') {

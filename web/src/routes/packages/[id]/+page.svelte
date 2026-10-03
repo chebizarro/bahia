@@ -7,6 +7,7 @@
   import Textarea from '$lib/components/Textarea.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
   import { ArtifactIcon, WarningIcon, UnknownIcon } from '$lib/icons/domain-icons.js';
   import {
     packageRepositories,
@@ -15,6 +16,7 @@
     operations
   } from '$lib/stores';
   import { promotePackage, yankPackage } from '$lib/stores/public-controlplane.svelte.js';
+  import { pendingIntentRows } from '$lib/nostr/intent-client.svelte.js';
   import { packageDriftOutcome, packageOperationLabel, packageOperationsForRepository } from '../page-model.js';
 import { formatBytes } from '../../instance-health/page-model.js';
 
@@ -22,12 +24,20 @@ import { formatBytes } from '../../instance-health/page-model.js';
   let promoteOpen = $state(false);
   let yankOpen = $state(false);
   let submitting = $state(false);
+  let nowSeconds = $state(Math.floor(Date.now() / 1000));
+  $effect(() => {
+    const timer = setInterval(() => { nowSeconds = Math.floor(Date.now() / 1000); }, 1000);
+    return () => clearInterval(timer);
+  });
   let selectedArtifact = $state(null);
   let promoteForm = $state({ target_repository_id: '', environment: '', channel: '', metadata: '' });
   let yankForm = $state({ reason: '', deprecated: false, metadata: '' });
 
   let repositoryId = $derived(page.params.id);
   let repository = $derived(packageRepositories.find((candidate) => candidate.id === repositoryId) || null);
+  let repositoryIntents = $derived(pendingIntentRows.filter(row => row.domain === 'package' &&
+    (row.desiredState?.repository_id === repositoryId || row.desiredState?.source_repository_id === repositoryId ||
+      row.desiredState?.target_repository_id === repositoryId)));
   let artifacts = $derived(packageArtifacts.filter((artifact) => artifact.repository_id === repositoryId && !artifact.deleted));
   let promotions = $derived(packagePromotions.filter((promotion) => promotion.repository_id === repositoryId || artifacts.some((artifact) => artifact.id === promotion.artifact_id)));
   let liveOperations = $derived(packageOperationsForRepository(operations, repositoryId));
@@ -104,6 +114,7 @@ import { formatBytes } from '../../instance-health/page-model.js';
     actionError = null;
     try {
       await promotePackage({
+        org_id: target?.org_id || repository.org_id,
         source_repository_id: repository.id,
         source_repository_name: repository.name,
         target_repository_id: target?.id,
@@ -117,7 +128,6 @@ import { formatBytes } from '../../instance-health/page-model.js';
         metadata: parseMetadata(promoteForm.metadata || '')
       });
       promoteOpen = false;
-      await loadDetail();
     } catch (err) {
       actionError = err.message || 'Failed to promote package';
     } finally {
@@ -131,6 +141,7 @@ import { formatBytes } from '../../instance-health/page-model.js';
     actionError = null;
     try {
       await yankPackage({
+        org_id: repository.org_id,
         repository_id: repository.id,
         repository_name: repository.name,
         namespace: selectedArtifact.namespace || '',
@@ -142,7 +153,6 @@ import { formatBytes } from '../../instance-health/page-model.js';
         metadata: parseMetadata(yankForm.metadata || '')
       });
       yankOpen = false;
-      await loadDetail();
     } catch (err) {
       actionError = err.message || 'Failed to yank package';
     } finally {
@@ -176,6 +186,7 @@ import { formatBytes } from '../../instance-health/page-model.js';
 </script>
 
 <div class="page">
+  <PendingDomainIntents domain="package" />
   <a href="/packages" class="back">← Packages</a>
 
   {#if repository}
@@ -183,6 +194,11 @@ import { formatBytes } from '../../instance-health/page-model.js';
       <h1><ArtifactIcon size={28} strokeWidth={1.75} ariaHidden="true" /> {repository.name}</h1>
       <span class="drift {liveDrift?.status || driftStatus(repository)}">Drift: {liveDrift?.status || driftStatus(repository)}</span>
     </div>
+    {#each repositoryIntents as intent (intent.intentId)}
+      <p role="status">Package {intent.op}: {intent.status === 'pending'
+        ? `pending ${Math.max(0, nowSeconds - intent.createdAt)} s`
+        : `${intent.status}: ${intent.reason || 're-read and resubmit'}`}</p>
+    {/each}
 
     <div class="info-grid">
       <Card title="Backend" titleIcon={ArtifactIcon} value={repository.backend_type || '-'} subtitle={repository.backend_ref || ''} />

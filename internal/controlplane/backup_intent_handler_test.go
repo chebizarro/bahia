@@ -2,11 +2,14 @@ package controlplane
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -154,6 +157,7 @@ type fakeBackupIntentRegistry struct {
 	restores          map[uuid.UUID]*domain.BackupRestoreRun
 	verifications     map[uuid.UUID]*domain.BackupVerificationRecord
 	retentionRuns     map[uuid.UUID]*domain.BackupRetentionRun
+	restoreApprovals  int
 }
 
 func newFakeBackupIntentRegistry() *fakeBackupIntentRegistry {
@@ -291,4 +295,56 @@ func (p *fakeBackupIntentPublisher) PublishDefinition(_ context.Context, _ *doma
 func (p *fakeBackupIntentPublisher) PublishDeleted(_ context.Context, _ int, _ string, _ gonostr.Tags, _ string, _ string, _ *uuid.UUID) error {
 	p.deletedCount++
 	return nil
+}
+
+func (r *fakeBackupIntentRegistry) ApplyBackupRestoreApproval(_ context.Context, id uuid.UUID, approved bool, _, _, _ string, _ ...any) (*domain.BackupRestoreRun, bool, error) {
+	restore := r.restores[id]
+	if restore == nil {
+		return nil, false, fmt.Errorf("restore not found")
+	}
+	r.restoreApprovals++
+	if approved {
+		restore.ApprovalStatus = domain.BackupApprovalApproved
+	} else {
+		restore.ApprovalStatus = domain.BackupApprovalRejected
+	}
+	return restore, true, nil
+}
+
+func TestBackupIntentHandler_RestoreApproval(t *testing.T) {
+	ctx := context.Background()
+	id := uuid.New()
+	registry := newFakeBackupIntentRegistry()
+	registry.restores[id] = &domain.BackupRestoreRun{ID: id, ApprovalStatus: domain.BackupApprovalPending, UpdatedAt: time.Unix(1790985600, 0).UTC()}
+	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{Registry: registry, Logger: zap.NewNop()})
+	statuses := &statusCollector{}
+	proc := NewIntentProcessor(NewTrustSet([]string{testPubkey}, zap.NewNop(), WithBootstrapOwners(map[string]string{testOrgID().String(): "0000000000000000000000000000000000000000000000000000000000000001"})), openTestStore(t), NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()), IntentProcessorConfig{EnabledDomains: map[string]bool{"backup": true}}, zap.NewNop())
+	proc.RegisterHandler("backup", handler)
+	intent := &Intent{Domain: "backup", Op: "restore-approval", OrgID: testOrgID(), Actor: testPubkey, IntentID: "restore-approval-1", Coordinate: id.String(), Content: map[string]any{"restore_id": id.String(), "decision": "approve"}}
+	require.NoError(t, proc.ProcessInProcess(ctx, intent))
+	require.Equal(t, 1, registry.restoreApprovals)
+	require.Equal(t, domain.BackupApprovalApproved, registry.restores[id].ApprovalStatus)
+	require.Len(t, statuses.events, 1)
+	require.NoError(t, proc.ProcessInProcess(ctx, intent))
+	require.Equal(t, 1, registry.restoreApprovals)
+	stale := *intent
+	stale.IntentID = "restore-approval-stale"
+	revision := time.Unix(1790985500, 0).UTC()
+	stale.ExpectedUpdatedAt = &revision
+	require.Error(t, proc.ProcessInProcess(ctx, &stale))
+	require.Equal(t, "conflict", tagValueNostr(statuses.events[1].Tags, "status"))
+	require.Equal(t, 1, registry.restoreApprovals)
+	matching := *intent
+	matching.IntentID = "restore-approval-matching"
+	matching.Content = map[string]any{"restore_id": id.String(), "decision": "approve",
+		"expected_updated_at": registry.restores[id].UpdatedAt.Format(time.RFC3339Nano)}
+	require.NoError(t, proc.ProcessInProcess(ctx, &matching))
+	require.Equal(t, "accepted", tagValueNostr(statuses.events[2].Tags, "status"))
+	require.Equal(t, 2, registry.restoreApprovals)
+	denied := *intent
+	denied.IntentID = "restore-approval-denied"
+	denied.Actor = "0000000000000000000000000000000000000000000000000000000000000001"
+	require.Error(t, proc.ProcessInProcess(ctx, &denied))
+	require.Equal(t, "rejected", tagValueNostr(statuses.events[3].Tags, "status"))
+	require.Equal(t, 2, registry.restoreApprovals)
 }

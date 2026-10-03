@@ -93,7 +93,7 @@ func TestIntentPublisher_ParseIntentRoundTrip_WithExpectedUpdatedAt(t *testing.T
 	require.NoError(t, err)
 	defer pub.Close()
 
-	ts := int64(1727740800)
+	ts := time.Unix(1727740800, 0).UTC()
 	req := PublishIntentRequest{
 		Domain:            "environment",
 		Op:                "update",
@@ -115,6 +115,19 @@ func TestIntentPublisher_ParseIntentRoundTrip_WithExpectedUpdatedAt(t *testing.T
 
 	require.NotNil(t, intent.ExpectedUpdatedAt, "expected_updated_at should be parsed")
 	assert.Equal(t, ts, *intent.ExpectedUpdatedAt)
+}
+
+func TestIntentPublisher_PreservesCanonicalRevisionString(t *testing.T) {
+	const revision = "2026-10-03T09:12:13.123456+02:00"
+	publisher := &IntentPublisher{}
+	base := PublishIntentRequest{Domain: "service", Op: "update", Coordinate: "service:one",
+		OrgID: uuid.NewString(), IntentID: uuid.NewString(), Content: map[string]interface{}{"expected_updated_at": revision}}
+	event, err := publisher.BuildIntentEvent(base)
+	require.NoError(t, err)
+	require.Contains(t, event.Content, `"expected_updated_at":"`+revision+`"`)
+	base.Content = map[string]interface{}{"expected_updated_at": 42}
+	_, err = publisher.BuildIntentEvent(base)
+	require.ErrorContains(t, err, "invalid expected_updated_at")
 }
 
 // --- Round-trip test: IntentPublisher gift-wrap → nip59.GiftUnwrap → ParseIntent ---

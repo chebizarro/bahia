@@ -12,6 +12,13 @@ LLM Routes provide:
 - **Deployment workflow** — Deploy with approvals
 - **State tracking** — Monitor active deployments
 
+The web console signs kind-`30900` intents for route creation and release
+registration. A pending badge remains until the service publishes a matching
+`30315` intent status or newer canonical route state; relay acceptance alone
+does not mean the mutation succeeded. Deployment, rollback, and approval
+actions still use ContextVM because the daemon has no corresponding intent
+handler for those operations.
+
 ## Gateway administration credentials
 
 Production gateway-manager credentials should be mounted as files rather than
@@ -33,6 +40,10 @@ llm:
 trims surrounding whitespace, and fails startup if the file is missing or
 empty. `auth_token` remains available for compatibility, but the two settings
 are mutually exclusive.
+
+## Signed deployment operations
+
+With `llm` enabled in `nostr.intent_domains`, fleet operators can publish kind `30900` LLM intents: `deploy` (`route_id`, `environment_id`, `release_id`), `rollback` (`route_id`, `environment_id`), and `approve`/`reject` (`deployment_intent_id`, preferably with `expected_updated_at`). Bahia uses the same LLM registry transitions as the legacy operator path and reports admission through bounded kind `30315` intent status. The legacy path remains active when the domain is disabled.
 
 ## Key Concepts
 

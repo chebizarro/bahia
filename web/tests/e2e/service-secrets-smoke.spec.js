@@ -10,6 +10,7 @@ const ENCRYPTED_RELAY = 'wss://relay.example.com';
 const mockService = {
   schema: 'bahia.registry.service.v1',
   id: SERVICE_ID,
+  org_id: '0199c749-9300-7444-8444-444444444444',
   name: 'web-app',
   artifact_repo: 'ghcr.io/test/web-app',
   repo_url: 'https://github.com/test/web-app',
@@ -48,8 +49,8 @@ const mockArtifacts = [{
 }];
 
 const seededSecrets = [
-  { id: 'secret-1', service_id: SERVICE_ID, name: 'DATABASE_URL', value: 'postgres://hidden.example/db', redacted_value: '********', version: 1, created_at: '2026-05-13T12:15:00.000Z' },
-  { id: 'secret-2', service_id: SERVICE_ID, name: 'API_KEY', value: 'api-key-hidden-value', redacted_value: '********', version: 1, created_at: '2026-05-13T12:16:00.000Z' }
+  { id: 'secret-1', org_id: mockService.org_id, service_id: SERVICE_ID, name: 'DATABASE_URL', value: 'postgres://hidden.example/db', redacted_value: '********', version: 1, created_at: '2026-05-13T12:15:00.000Z', updated_at: '2026-05-13T12:15:00.000Z' },
+  { id: 'secret-2', org_id: mockService.org_id, service_id: SERVICE_ID, name: 'API_KEY', value: 'api-key-hidden-value', redacted_value: '********', version: 1, created_at: '2026-05-13T12:16:00.000Z', updated_at: '2026-05-13T12:16:00.000Z' }
 ];
 
 const relaySystemInfo = {
@@ -141,12 +142,9 @@ test.describe('Service Secrets Smoke Test', () => {
     expect(pageContent).not.toContain('api-key-hidden-value');
   });
 
-  test('creates a secret through ContextVM request coverage', async ({ page }) => {
+  test('creates a secret through a 1059 intent and receives 30315 accepted', async ({ page }) => {
     await page.goto(`/services/${SERVICE_ID}`);
     await expect(page.getByRole('heading', { name: 'web-app' })).toBeVisible();
-
-    await queueContextVMOperation(page, secretOperation('services.secrets.create', { name: 'NEW_SECRET', value: 'super-secret-value-123' }));
-    await queueContextVMOperation(page, secretOperation('services.secrets.list'));
 
     await page.getByRole('button', { name: 'Add Secret' }).click();
     await expect(page.getByRole('dialog', { name: 'Add Secret' })).toBeVisible();
@@ -157,6 +155,14 @@ test.describe('Service Secrets Smoke Test', () => {
     await expect(page.getByRole('dialog', { name: 'Add Secret' })).not.toBeVisible();
     await expect(page.locator('.secret-row:has-text("NEW_SECRET")')).toBeVisible();
     expect(await page.content()).not.toContain('super-secret-value-123');
+    await expect.poll(() => page.evaluate(() => window.__BAHIA_E2E_INTENT_WRAPS.length)).toBe(1);
+    const trace = await page.evaluate(() => ({ wraps: window.__BAHIA_E2E_INTENT_WRAPS, statuses: window.__BAHIA_E2E_INTENT_STATUS_EVENTS }));
+    expect(trace.wraps).toHaveLength(1);
+    expect(trace.wraps[0].outer.kind).toBe(1059);
+    expect(trace.wraps[0].outer.tags).toContainEqual(['p', E2E_SERVICE_PUBKEY]);
+    expect(trace.wraps[0].inner.kind).toBe(30900);
+    expect(trace.wraps[0].inner.content).not.toContain('super-secret-value-123');
+    expect(trace.statuses[0].tags).toContainEqual(['status', 'accepted']);
   });
 
   test('reveals, copies, updates, and deletes via encrypted secret state', async ({ page }) => {
@@ -181,19 +187,23 @@ test.describe('Service Secrets Smoke Test', () => {
     expect(await page.evaluate(() => window.__copied_secret_value)).toBe('postgres://hidden.example/db');
     await page.getByRole('dialog', { name: 'Reveal Secret Value' }).getByText('Close', { exact: true }).click();
 
-    await queueContextVMOperation(page, secretOperation('services.secrets.update', { secret_id: 'secret-1', value: 'updated-secret-value-xyz' }));
-    await queueContextVMOperation(page, secretOperation('services.secrets.list'));
     await page.locator('.secret-row:has-text("DATABASE_URL") button:has-text("Update")').click();
     await page.locator('#secret-update-value').fill('updated-secret-value-xyz');
     await page.getByRole('dialog', { name: 'Update Secret' }).getByRole('button', { name: 'Update Secret' }).click();
     await expect(page.getByRole('dialog', { name: 'Update Secret' })).not.toBeVisible();
     expect(await page.content()).not.toContain('updated-secret-value-xyz');
 
-    await queueContextVMOperation(page, secretOperation('services.secrets.delete', { secret_id: 'secret-2' }));
-    await queueContextVMOperation(page, secretOperation('services.secrets.list'));
     await page.locator('.secret-row:has-text("API_KEY") button:has-text("Delete")').click();
     await expect(page.getByRole('dialog', { name: 'Delete Secret' })).toBeVisible();
     await page.getByRole('dialog', { name: 'Delete Secret' }).getByRole('button', { name: 'Delete' }).click();
     await expect(page.locator('.secret-row:has-text("API_KEY")')).not.toBeVisible();
+  });
+
+  test('disables Create Secret with an explanatory NIP-44 tooltip when unavailable', async ({ page }) => {
+    await page.addInitScript(() => { if (window.nostr) delete window.nostr.nip44; });
+    await page.goto(`/services/${SERVICE_ID}`);
+    const create = page.getByRole('button', { name: 'Add Secret' });
+    await expect(create).toBeDisabled();
+    await expect(create).toHaveAttribute('title', /NIP-44/);
   });
 });

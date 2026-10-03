@@ -1,0 +1,8 @@
+{
+  "criteria": [
+    { "id": "FX68-1", "text": "Another member's encrypted record grants the signed-in member no role; both d-tag and decrypted pubkey must match." },
+    { "id": "FX68-2", "text": "The signed-in member's own current record grants its role independently per organization." },
+    { "id": "FX68-3", "text": "A newer encrypted tombstone revokes and a newer downgrade replaces an older role regardless of query order." },
+    { "id": "FX68-4", "text": "The organization page displays all members but bases its own mutation affordances on the current session's derived role." }
+  ]
+}

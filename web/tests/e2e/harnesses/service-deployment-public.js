@@ -3,6 +3,7 @@ import { E2E_SERVICE_PUBKEY } from '../helpers.js';
 
 export const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 export const PUBLIC_RELAY = 'ws://relay.test.local';
+export const TEST_ORG_ID = '3b45458b-2724-4dda-9fc6-66f12249660d';
 
 export function createPublicSystemInfo({ publicRelay = PUBLIC_RELAY, servicePubkey = SERVICE_PUBKEY, extraFeatures = {} } = {}) {
   return {
@@ -116,7 +117,7 @@ export async function installPublicServiceDeploymentHarness(
     emitCreateServiceProjection = true
   } = {}
 ) {
-  await page.addInitScript(({ servicePubkey, publicRelay, initialState, nowSeconds, policyPreviewMode, policyPreviewError, emitCreateServiceProjection }) => {
+  await page.addInitScript(({ servicePubkey, publicRelay, initialState, nowSeconds, policyPreviewMode, policyPreviewError, emitCreateServiceProjection, testOrgId }) => {
     function loadPersistedJson(key, fallback) {
       try {
         const value = JSON.parse(localStorage.getItem(key) || 'null');
@@ -153,8 +154,8 @@ export async function installPublicServiceDeploymentHarness(
         nextIntentId: initialState.nextIntentId || 2,
         nextRunId: initialState.nextRunId || 2,
         nextArtifactId: initialState.nextArtifactId || 2,
-        services: (initialState.services || []).map((item) => ({ ...item })),
-        environments: (initialState.environments || []).map((item) => ({ ...item })),
+        services: (initialState.services || []).map((item) => ({ org_id: testOrgId, updated_at: item.updated_at || item.created_at || new Date().toISOString(), ...item })),
+        environments: (initialState.environments || []).map((item) => ({ org_id: testOrgId, updated_at: item.updated_at || item.created_at || new Date().toISOString(), ...item })),
         builds: (initialState.builds || []).map((item) => ({ ...item })),
         artifacts: (initialState.artifacts || []).map((item) => ({ ...item })),
         serviceStates: (initialState.serviceStates || []).map((item) => ({ ...item })),
@@ -176,6 +177,8 @@ export async function installPublicServiceDeploymentHarness(
     }
 
     window.__BAHIA_E2E_PUBLIC_STATE = loadPersistedState();
+    window.__BAHIA_E2E_PENDING_INTENTS = new Map();
+    window.__BAHIA_E2E_INTENT_AUTO_STATUS = true;
 
     const KIND_CONTEXTVM = 25910;
     const STATE_SCHEMAS = {
@@ -431,13 +434,15 @@ export async function installPublicServiceDeploymentHarness(
       const state = window.__BAHIA_E2E_PUBLIC_STATE;
       const service = {
         id: payload.id || `svc-created-${state.nextServiceId++}`,
+        org_id: payload.org_id || testOrgId,
         name: payload.name,
         repo_url: payload.repo_url || '',
         artifact_repo: payload.artifact_repo,
         runtime_type: payload.runtime_type,
         default_branch: payload.default_branch || 'main',
         deleted: false,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       };
       state.services = [...state.services, service];
       persistReadModelEvents();
@@ -594,7 +599,7 @@ export async function installPublicServiceDeploymentHarness(
         };
       }
       const current = state.environments[index];
-      if (Array.isArray(payload.deployment_units) && payload.expected_updated_at !== current.updated_at) {
+      if (payload.expected_updated_at && payload.expected_updated_at !== current.updated_at) {
         return {
           projections: [],
           resultEvent: () => nostrEvent({
@@ -986,6 +991,50 @@ export async function installPublicServiceDeploymentHarness(
       }
     }
 
+    function resolveSignedIntent(eventId, outcome = 'accepted') {
+      const requestEvent = window.__BAHIA_E2E_PENDING_INTENTS.get(eventId);
+      if (!requestEvent) return false;
+      const tag = (name) => requestEvent.tags?.find((item) => item[0] === name)?.[1] || '';
+      const domain = tag('domain');
+      const op = tag('op');
+      const payload = JSON.parse(requestEvent.content || '{}');
+      const canonical = domain === 'service'
+        ? window.__BAHIA_E2E_PUBLIC_STATE.services.find(item => item.id === tag('d'))
+        : domain === 'environment'
+          ? window.__BAHIA_E2E_PUBLIC_STATE.environments.find(item => item.id === tag('d')) : null;
+      if (outcome === 'accepted' && op === 'update' &&
+        payload.expected_updated_at !== canonical?.updated_at) outcome = 'conflict';
+      let result = null;
+      if (outcome === 'accepted') {
+        if (domain === 'service') {
+          if (op === 'create') result = serviceCreateResult(payload);
+          if (op === 'update') result = serviceUpdateResult(requestEvent, payload);
+          if (op === 'delete') result = serviceDeleteResult(requestEvent, payload);
+        }
+        if (domain === 'environment') {
+          if (op === 'create') result = environmentCreateResult(payload);
+          if (op === 'update') result = environmentUpdateResult(requestEvent, payload);
+          if (op === 'delete') result = environmentDeleteResult(requestEvent, payload);
+        }
+        const resultBody = result?.resultEvent ? JSON.parse(result.resultEvent(requestEvent).content || '{}') : {};
+        if (resultBody.status === 'failed') outcome = String(resultBody.error?.message || resultBody.error || '').includes('revision conflict') ? 'conflict' : 'rejected';
+      }
+      const reason = outcome === 'conflict' ? 'revision_conflict' : outcome === 'rejected' ? 'intent rejected' : '';
+      const status = window.__BAHIA_E2E_MAKE_INTENT_STATUS(requestEvent,
+        { status: outcome, reason, id: `intent-status-${eventId}` });
+      queueRelayEvent(status, { traceAs: 'result', traceRequestEventId: eventId });
+      if (outcome === 'accepted') {
+        for (const projection of result?.projections || []) {
+          projection.created_at = Math.max(projection.created_at, requestEvent.created_at + 1);
+          queueRelayEvent(projection, { traceAs: 'projection', traceRequestEventId: eventId });
+        }
+      }
+      window.__BAHIA_E2E_PENDING_INTENTS.delete(eventId);
+      return true;
+    }
+
+    window.__BAHIA_E2E_RESOLVE_INTENT = resolveSignedIntent;
+
     persistReadModelEvents();
 
     const OriginalWebSocket = window.WebSocket;
@@ -1026,6 +1075,28 @@ export async function installPublicServiceDeploymentHarness(
       if (Array.isArray(message) && message[0] === 'CLOSE') {
         this.__bahiaSubs?.delete(message[1]);
         return originalSend.call(this, data);
+      }
+      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === 30900 &&
+        message[1]?.tags?.some((tag) => tag[0] === 't' && tag[1] === 'bahia-intent')) {
+        const requestEvent = message[1];
+        const domain = requestEvent.tags.find((tag) => tag[0] === 'domain')?.[1];
+        const op = requestEvent.tags.find((tag) => tag[0] === 'op')?.[1];
+        if (!['service', 'environment'].includes(domain)) return originalSend.call(this, data);
+        window.__BAHIA_E2E_PUBLIC_PUBLISHES.push({ relay: this.url, eventId: requestEvent.id, kind: 30900 });
+        window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS.push(30900);
+        window.__BAHIA_E2E_PUBLIC_REQUESTS.push({ relay: this.url, kind: 30900,
+          operation: `${domain}/${op}`, eventId: requestEvent.id, tags: requestEvent.tags,
+          content: requestEvent.content, payload: JSON.parse(requestEvent.content || '{}') });
+        window.__BAHIA_E2E_PUBLIC_OKS.push({ relay: this.url, eventId: requestEvent.id, kind: 30900,
+          sent: true, accepted: true, message: '' });
+        persistPublicTrace();
+        const sent = originalSend.call(this, data);
+        if (!window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS.has(requestEvent.id)) {
+          window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS.add(requestEvent.id);
+          window.__BAHIA_E2E_PENDING_INTENTS.set(requestEvent.id, requestEvent);
+          if (window.__BAHIA_E2E_INTENT_AUTO_STATUS) resolveSignedIntent(requestEvent.id);
+        }
+        return sent;
       }
       if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === KIND_CONTEXTVM) {
         const requestEvent = message[1];
@@ -1096,5 +1167,5 @@ export async function installPublicServiceDeploymentHarness(
     };
 
     window.__BAHIA_E2E_PUBLIC_EXPECTED_RELAY = publicRelay;
-  }, { servicePubkey, publicRelay, initialState, nowSeconds, policyPreviewMode, policyPreviewError, emitCreateServiceProjection });
+  }, { servicePubkey, publicRelay, initialState, nowSeconds, policyPreviewMode, policyPreviewError, emitCreateServiceProjection, testOrgId: TEST_ORG_ID });
 }

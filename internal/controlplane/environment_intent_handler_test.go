@@ -140,7 +140,7 @@ func TestEnvironmentIntentHandler_StaleRevisionConflict(t *testing.T) {
 	handler := NewEnvironmentIntentHandler(reg, nil, zap.NewNop())
 
 	// Use a stale expected_updated_at (1 second earlier).
-	staleTime := now.Add(-time.Second).UnixMicro()
+	staleTime := now.Add(-time.Second)
 	intent := &Intent{
 		Domain:            "environment",
 		Op:                "update",
@@ -190,7 +190,7 @@ func TestEnvironmentIntentHandler_ConflictStatus(t *testing.T) {
 	)
 	proc.RegisterHandler("environment", NewEnvironmentIntentHandler(reg, nil, zap.NewNop()))
 
-	staleTime := now.Add(-time.Second).UnixMicro()
+	staleTime := now.Add(-time.Second)
 	intent := &Intent{
 		Domain:            "environment",
 		Op:                "update",
@@ -554,7 +554,7 @@ func TestEnvironmentIntentHandler_RevisionMicrosecondPrecision(t *testing.T) {
 	handler := NewEnvironmentIntentHandler(reg, nil, zap.NewNop())
 
 	// Matching revision at microsecond precision should succeed.
-	matchingTime := now.UnixMicro()
+	matchingTime := now
 	intent := &Intent{
 		Domain:            "environment",
 		Op:                "update",
@@ -625,8 +625,8 @@ type envCreateRecord struct {
 }
 
 type envUpdateRecord struct {
-	env              *domain.Environment
-	units            []*domain.DeploymentUnit
+	env               *domain.Environment
+	units             []*domain.DeploymentUnit
 	expectedUpdatedAt time.Time
 }
 
@@ -636,13 +636,13 @@ type envDeleteRecord struct {
 }
 
 type stubEnvironmentRegistry struct {
-	mu              sync.Mutex
-	created         []envCreateRecord
+	mu               sync.Mutex
+	created          []envCreateRecord
 	createdWithUnits []envCreateRecord
-	updated         []envUpdateRecord
+	updated          []envUpdateRecord
 	updatedWithUnits []envUpdateRecord
-	deleted         []envDeleteRecord
-	getByID         map[uuid.UUID]*domain.Environment
+	deleted          []envDeleteRecord
+	getByID          map[uuid.UUID]*domain.Environment
 }
 
 func (r *stubEnvironmentRegistry) CreateEnvironment(_ context.Context, env *domain.Environment) error {

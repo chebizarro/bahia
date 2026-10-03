@@ -92,23 +92,23 @@ TEST_OCK[0] = 0xDE;
 TEST_OCK[1] = 0xAD;
 TEST_OCK[31] = 0xBE;
 
-function buildFixtureKeyEnvelope() {
+function buildFixtureKeyEnvelope(orgID = TEST_ORG_ID) {
   const wrapPayload = JSON.stringify({
     schema: OCK_WRAP_SCHEMA,
-    org_id: TEST_ORG_ID,
-    key_ref: 'ock:' + TEST_ORG_ID,
+    org_id: orgID,
+    key_ref: 'ock:' + orgID,
     version: 1,
     key: base64Encode(TEST_OCK),
     recipient_pubkey: TEST_USER_PUBKEY
   });
 
   return {
-    id: 'envelope-event-id-1',
+    id: `envelope-${orgID}`,
     pubkey: TEST_SERVICE_PUBKEY,
     created_at: 1700000000,
     kind: 30900,
     tags: [
-      ['d', 'org-key:' + TEST_ORG_ID + ':v1:handle123'],
+      ['d', 'org-key:' + orgID + ':v1:handle123'],
       ['t', 'org-key-envelope']
     ],
     content: wrapPayload, // In real life this would be NIP-44 encrypted
@@ -116,21 +116,21 @@ function buildFixtureKeyEnvelope() {
   };
 }
 
-function buildFixtureMemberRecord() {
+function buildFixtureMemberRecord({ orgID = TEST_ORG_ID, pubkey = TEST_USER_PUBKEY, role = 'admin', deleted = false, createdAt = 1700000001, id = `member-${orgID}-${pubkey}-${createdAt}`, dTagPubkey = pubkey } = {}) {
   const memberPlaintext = JSON.stringify({
-    org_id: TEST_ORG_ID,
-    pubkey: TEST_USER_PUBKEY,
-    role: 'admin',
-    deleted: false
+    org_id: orgID,
+    pubkey,
+    ...(deleted ? {} : { role }),
+    deleted
   });
 
   const ad = {
     schema: CONFIDENTIAL_SCHEMA,
-    key_org: TEST_ORG_ID,
-    key_ref: 'ock:' + TEST_ORG_ID,
+    key_org: orgID,
+    key_ref: 'ock:' + orgID,
     key_version: 'v1',
     legacy_kind: '32006',
-    d: 'org:member:' + TEST_ORG_ID + ':' + TEST_USER_PUBKEY,
+    d: 'org:member:' + orgID + ':' + dTagPubkey,
     t: 'org-member'
   };
 
@@ -141,25 +141,27 @@ function buildFixtureMemberRecord() {
 
   const nonce = new Uint8Array(24);
   nonce[0] = 0x02;
+  nonce[1] = createdAt & 0xff;
 
   const cipher = xchacha20poly1305(TEST_OCK, nonce, adBytes);
   const ciphertext = cipher.encrypt(new TextEncoder().encode(memberPlaintext));
 
   return {
-    id: 'member-event-id-1',
+    id,
     pubkey: TEST_SERVICE_PUBKEY,
-    created_at: 1700000001,
+    created_at: createdAt,
     kind: 30900,
     tags: [
-      ['d', 'org:member:' + TEST_ORG_ID + ':' + TEST_USER_PUBKEY],
+      ['d', 'org:member:' + orgID + ':' + dTagPubkey],
       ['t', 'org-member'],
-      ['legacy_kind', '32006']
+      ['legacy_kind', '32006'],
+      ['deleted', String(deleted)]
     ],
     content: JSON.stringify({
       schema: CONFIDENTIAL_SCHEMA,
       algorithm: CONFIDENTIAL_ALGORITHM,
-      key_org: TEST_ORG_ID,
-      key_ref: 'ock:' + TEST_ORG_ID,
+      key_org: orgID,
+      key_ref: 'ock:' + orgID,
       key_version: 'v1',
       nonce: base64Encode(nonce),
       ciphertext: base64Encode(ciphertext),
@@ -194,7 +196,11 @@ function createMockStore(events = []) {
         if (idx >= 0) subscribers.splice(idx, 1);
       };
     },
-    _subscribers: subscribers
+    _subscribers: subscribers,
+    emit(event) {
+      events.push(event);
+      for (const { cb } of subscribers) cb(event);
+    }
   };
 }
 
@@ -228,6 +234,83 @@ describe('auth-roles', () => {
 
     expect(orgRoles[TEST_ORG_ID]).toBe('admin');
 
+    stopRoleDerivation();
+  });
+
+  it('does not grant member A\'s role to signed-in member B', async () => {
+    const { startRoleDerivation, orgRoles, hasAnyRole, stopRoleDerivation } = await import('../../src/lib/stores/auth-roles.svelte.js');
+    const envelope = buildFixtureKeyEnvelope();
+    await startRoleDerivation({
+      store: createMockStore([envelope, buildFixtureMemberRecord({ pubkey: 'c'.repeat(64), role: 'owner' })]),
+      userPubkey: TEST_USER_PUBKEY,
+      servicePubkey: TEST_SERVICE_PUBKEY,
+      signer: { decryptNip44: vi.fn().mockResolvedValue(envelope.content) }
+    });
+
+    expect(orgRoles[TEST_ORG_ID]).toBeUndefined();
+    expect(hasAnyRole(['owner'])).toBe(false);
+    stopRoleDerivation();
+  });
+
+  it('requires both the coordinate and decrypted member pubkey to match the session', async () => {
+    const { startRoleDerivation, orgRoles, stopRoleDerivation } = await import('../../src/lib/stores/auth-roles.svelte.js');
+    const envelope = buildFixtureKeyEnvelope();
+    const mismatchedContent = buildFixtureMemberRecord({ pubkey: 'c'.repeat(64), dTagPubkey: TEST_USER_PUBKEY, role: 'owner' });
+    const mismatchedCoordinate = buildFixtureMemberRecord({ pubkey: TEST_USER_PUBKEY, dTagPubkey: 'd'.repeat(64), role: 'admin' });
+    await startRoleDerivation({
+      store: createMockStore([envelope, mismatchedContent, mismatchedCoordinate]),
+      userPubkey: TEST_USER_PUBKEY,
+      servicePubkey: TEST_SERVICE_PUBKEY,
+      signer: { decryptNip44: vi.fn().mockResolvedValue(envelope.content) }
+    });
+
+    expect(orgRoles[TEST_ORG_ID]).toBeUndefined();
+    stopRoleDerivation();
+  });
+
+  it('revokes the current role on a newer encrypted member tombstone', async () => {
+    const { startRoleDerivation, orgRoles, stopRoleDerivation } = await import('../../src/lib/stores/auth-roles.svelte.js');
+    const envelope = buildFixtureKeyEnvelope();
+    const store = createMockStore([envelope, buildFixtureMemberRecord({ role: 'owner' })]);
+    await startRoleDerivation({ store, userPubkey: TEST_USER_PUBKEY, servicePubkey: TEST_SERVICE_PUBKEY,
+      signer: { decryptNip44: vi.fn().mockResolvedValue(envelope.content) } });
+    expect(orgRoles[TEST_ORG_ID]).toBe('owner');
+
+    store.emit(buildFixtureMemberRecord({ deleted: true, createdAt: 1700000002 }));
+    expect(orgRoles[TEST_ORG_ID]).toBeUndefined();
+    stopRoleDerivation();
+  });
+
+  it('uses created_at, not query order, for role downgrades', async () => {
+    const { startRoleDerivation, orgRoles, stopRoleDerivation } = await import('../../src/lib/stores/auth-roles.svelte.js');
+    const envelope = buildFixtureKeyEnvelope();
+    const store = createMockStore([envelope,
+      buildFixtureMemberRecord({ role: 'viewer', createdAt: 1700000002 }),
+      buildFixtureMemberRecord({ role: 'owner', createdAt: 1700000001 })]);
+    await startRoleDerivation({ store, userPubkey: TEST_USER_PUBKEY, servicePubkey: TEST_SERVICE_PUBKEY,
+      signer: { decryptNip44: vi.fn().mockResolvedValue(envelope.content) } });
+    expect(orgRoles[TEST_ORG_ID]).toBe('viewer');
+
+    store.emit(buildFixtureMemberRecord({ role: 'admin', createdAt: 1700000000 }));
+    expect(orgRoles[TEST_ORG_ID]).toBe('viewer');
+    stopRoleDerivation();
+  });
+
+  it('isolates roles and removals across orgs with mixed member records', async () => {
+    const { startRoleDerivation, orgRoles, stopRoleDerivation } = await import('../../src/lib/stores/auth-roles.svelte.js');
+    const otherOrg = 'org-fixture-2';
+    const firstEnvelope = buildFixtureKeyEnvelope();
+    const secondEnvelope = buildFixtureKeyEnvelope(otherOrg);
+    const store = createMockStore([firstEnvelope, secondEnvelope,
+      buildFixtureMemberRecord({ role: 'viewer' }),
+      buildFixtureMemberRecord({ orgID: otherOrg, pubkey: 'c'.repeat(64), role: 'owner' }),
+      buildFixtureMemberRecord({ orgID: otherOrg, role: 'deployer' })]);
+    await startRoleDerivation({ store, userPubkey: TEST_USER_PUBKEY, servicePubkey: TEST_SERVICE_PUBKEY,
+      signer: { decryptNip44: vi.fn(async (_sender, ciphertext) => ciphertext) } });
+    expect(orgRoles).toEqual({ [TEST_ORG_ID]: 'viewer', [otherOrg]: 'deployer' });
+
+    store.emit(buildFixtureMemberRecord({ orgID: otherOrg, deleted: true, createdAt: 1700000002 }));
+    expect(orgRoles).toEqual({ [TEST_ORG_ID]: 'viewer' });
     stopRoleDerivation();
   });
 

@@ -35,6 +35,7 @@ type policy struct {
 	// TrustSet changes. Protected by intentAuthorsMu.
 	intentAuthorsMu sync.RWMutex
 	intentAuthors   map[string]bool
+	configAuthors   map[string]bool
 }
 
 func newPolicy(cfg config.NostrConfig) (*policy, error) {
@@ -72,6 +73,9 @@ func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, stri
 		// NIP-86 setintentauthors method as its TrustSet changes. Non-intent
 		// events from intent authors remain blocked.
 		if isIntentEvent(event) && p.admitsIntentAuthor(event.PubKey.Hex()) {
+			return false, ""
+		}
+		if (event.Kind == configListKind || event.Kind == configPolicyKind) && p.configAuthors[event.PubKey.Hex()] {
 			return false, ""
 		}
 		return true, "blocked: pubkey is not admitted by the persisted relay policy"

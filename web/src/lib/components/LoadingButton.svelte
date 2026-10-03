@@ -6,6 +6,7 @@
   export let disabled = false;
   export let fullWidth = false;
   export let onclick = null;
+  export let title = undefined;
 </script>
 
 <button
@@ -14,6 +15,7 @@
   class:loading
   class:full-width={fullWidth}
   disabled={disabled || loading}
+  {title}
   {onclick}
 >
   {#if loading}

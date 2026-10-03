@@ -378,9 +378,55 @@ func (h *BackupIntentHandler) handleRestore(ctx context.Context, intent *Intent)
 	return nil
 }
 
-func (h *BackupIntentHandler) handleRestoreApproval(_ context.Context, _ *Intent) error {
-	// Restore approval is handled through the existing approval flow.
-	return fmt.Errorf("restore-approval via intent is not yet implemented; use the ContextVM path")
+func (h *BackupIntentHandler) handleRestoreApproval(ctx context.Context, intent *Intent) error {
+	restoreID, err := uuid.Parse(firstIntentString(intent.Content, "restore_id"))
+	if err != nil || restoreID == uuid.Nil {
+		return fmt.Errorf("restore_id must be a UUID")
+	}
+	if intent.ExpectedUpdatedAt != nil {
+		current, err := h.registry.GetBackupRestore(ctx, restoreID)
+		if err != nil {
+			return err
+		}
+		if current == nil {
+			return fmt.Errorf("backup restore %s not found", restoreID)
+		}
+		expected := *intent.ExpectedUpdatedAt
+		if !intent.RevisionMatches(current.UpdatedAt) {
+			return &revisionConflictError{entityID: restoreID, expected: expected, actual: current.UpdatedAt}
+		}
+	}
+	var approvedPtr *bool
+	if value, ok := intent.Content["approved"].(bool); ok {
+		approvedPtr = &value
+	}
+	approved, _, err := normalizeBackupApprovalDecision(approvedPtr, firstIntentString(intent.Content, "decision"))
+	if err != nil {
+		return err
+	}
+	eventID := intent.IntentID
+	if intent.Event != nil {
+		eventID = intent.Event.ID.Hex()
+	}
+	reason, _ := intent.Content["reason"].(map[string]any)
+	approvals, ok := h.registry.(interface {
+		ApplyBackupRestoreApproval(context.Context, uuid.UUID, bool, string, string, string, ...any) (*domain.BackupRestoreRun, bool, error)
+	})
+	if !ok {
+		return fmt.Errorf("backup restore approval registry is not configured")
+	}
+	restore, changed, err := approvals.ApplyBackupRestoreApproval(ctx, restoreID, approved, eventID, intent.Actor, firstIntentString(intent.Content, "message"), firstIntentString(intent.Content, "reason_code"), reason)
+	if err != nil {
+		return fmt.Errorf("apply backup restore approval: %w", err)
+	}
+	if changed && approved && restore != nil && restore.ApprovalStatus == domain.BackupApprovalApproved && !backupRestoreTerminal(restore) && h.executors.RestoreExecutor != nil {
+		go func() {
+			if err := h.executors.RestoreExecutor.ProcessBackupRestore(context.Background(), restore.ID); err != nil {
+				h.logger.Warn("backup restore execution failed", zap.String("restore_id", restore.ID.String()), zap.Error(err))
+			}
+		}()
+	}
+	return nil
 }
 
 func (h *BackupIntentHandler) handleVerification(ctx context.Context, intent *Intent) error {

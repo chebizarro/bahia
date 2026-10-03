@@ -23,7 +23,10 @@ test('dedicated LLM browser workflow uses signer-first requests for route, relea
   await page.locator('input[name="public-model"]').fill('bahia/chat');
   await page.locator('textarea[name="route-description"]').fill('Public chat completions route');
   await page.locator('[data-testid="llm-create-route-form"]').getByRole('button', { name: 'Create route' }).click();
-  await expect(page.getByTestId('llm-notice')).toContainText('Created LLM route');
+  await expect(page.getByTestId('llm-notice')).toContainText('pending daemon acceptance');
+  await expect(page.getByTestId('llm-pending-intents')).toContainText('Pending');
+  await page.evaluate(() => window.__BAHIA_E2E_LLM_ACCEPT_INTENTS());
+  await expect(page.getByTestId('llm-pending-intents')).toHaveCount(0);
 
   await page.locator('select[name="release-route"]').selectOption({ label: 'chat-prod' });
   await page.locator('input[name="release-version"]').fill('v1');
@@ -31,7 +34,10 @@ test('dedicated LLM browser workflow uses signer-first requests for route, relea
   await page.locator('select[name="backend-mode"]').selectOption('external');
   await page.locator('input[name="external-base-url"]').fill('https://llm-v1.example.com');
   await page.locator('[data-testid="llm-register-release-form"]').getByRole('button', { name: 'Register release' }).click();
-  await expect(page.getByTestId('llm-notice')).toContainText('Registered release v1');
+  await expect(page.getByTestId('llm-notice')).toContainText('pending daemon acceptance');
+  await expect(page.getByTestId('llm-pending-intents')).toContainText('Pending');
+  await page.evaluate(() => window.__BAHIA_E2E_LLM_ACCEPT_INTENTS());
+  await expect(page.getByTestId('llm-pending-intents')).toHaveCount(0);
 
   await page.locator('select[name="deploy-route"]').selectOption({ label: 'chat-prod' });
   await page.locator('select[name="deploy-environment"]').selectOption({ label: 'production' });
@@ -49,7 +55,10 @@ test('dedicated LLM browser workflow uses signer-first requests for route, relea
   await page.locator('select[name="backend-mode"]').selectOption('external');
   await page.locator('input[name="external-base-url"]').fill('https://llm-v2.example.com');
   await page.locator('[data-testid="llm-register-release-form"]').getByRole('button', { name: 'Register release' }).click();
-  await expect(page.getByTestId('llm-notice')).toContainText('Registered release v2');
+  await expect(page.getByTestId('llm-notice')).toContainText('pending daemon acceptance');
+  await expect(page.getByTestId('llm-pending-intents')).toContainText('Pending');
+  await page.evaluate(() => window.__BAHIA_E2E_LLM_ACCEPT_INTENTS());
+  await expect(page.getByTestId('llm-pending-intents')).toHaveCount(0);
 
   await page.locator('select[name="deploy-route"]').selectOption({ label: 'chat-prod' });
   await page.locator('select[name="deploy-environment"]').selectOption({ label: 'production' });
@@ -65,7 +74,7 @@ test('dedicated LLM browser workflow uses signer-first requests for route, relea
   await expect(page.getByTestId('llm-activity-table')).toContainText('LLM rollback completed');
 
   const requestKinds = await page.evaluate(() => JSON.parse(localStorage.getItem('__BAHIA_E2E_LLM_REQUEST_KINDS') || '[]'));
-  expect(requestKinds).toEqual([25910, 25910, 25910, 25910, 25910, 25910, 25910, 25910]);
+  expect(requestKinds).toEqual([30900, 30900, 25910, 25910, 30900, 25910, 25910, 25910]);
 
   const requests = await page.evaluate(() => JSON.parse(localStorage.getItem('__BAHIA_E2E_LLM_REQUESTS') || '[]'));
   expect(requests).toHaveLength(8);

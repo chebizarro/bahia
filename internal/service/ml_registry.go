@@ -86,7 +86,9 @@ func (s *MLRegistryService) CreateOrUpdateModel(ctx context.Context, model *doma
 		return err
 	}
 	s.publish(ctx, EventMLModelChanged, model.ID.String(), map[string]any{"model_id": model.ID.String(), "slug": model.Slug})
-	s.publishCPStateModel(ctx, model)
+	if err := s.publishCPStateModel(ctx, model); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -123,7 +125,9 @@ func (s *MLRegistryService) CreateOrUpdateModelVersion(ctx context.Context, vers
 		return err
 	}
 	s.publish(ctx, EventMLVersionChanged, version.ID.String(), map[string]any{"model_id": version.ModelID.String(), "model_version_id": version.ID.String(), "version": version.Version})
-	s.publishCPStateModelVersion(ctx, version)
+	if err := s.publishCPStateModelVersion(ctx, version); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -252,7 +256,9 @@ func (s *MLRegistryService) CreateOrUpdateInferenceEndpoint(ctx context.Context,
 		return err
 	}
 	s.publish(ctx, EventMLEndpointChanged, endpoint.ID.String(), map[string]any{"endpoint_id": endpoint.ID.String(), "environment_id": endpoint.EnvironmentID.String()})
-	s.publishCPStateEndpoint(ctx, endpoint)
+	if err := s.publishCPStateEndpoint(ctx, endpoint); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -645,31 +651,34 @@ func computeMLDriftStatus(state *domain.MLInferenceState, obs *domain.MLInferenc
 	return domain.DriftStatusDrifted
 }
 
-func (s *MLRegistryService) publishCPStateModel(ctx context.Context, model *domain.MLModel) {
+func (s *MLRegistryService) publishCPStateModel(ctx context.Context, model *domain.MLModel) error {
 	if s.cpState == nil {
-		return
+		return nil
 	}
 	if err := s.cpState.PublishModel(ctx, model); err != nil {
-		s.logger.Warn("publish ML model cp-state failed", zap.String("model_id", model.ID.String()), zap.Error(err))
+		return fmt.Errorf("publish ML model cp-state: %w", err)
 	}
+	return nil
 }
 
-func (s *MLRegistryService) publishCPStateModelVersion(ctx context.Context, version *domain.MLModelVersion) {
+func (s *MLRegistryService) publishCPStateModelVersion(ctx context.Context, version *domain.MLModelVersion) error {
 	if s.cpState == nil {
-		return
+		return nil
 	}
 	if err := s.cpState.PublishModelVersion(ctx, version); err != nil {
-		s.logger.Warn("publish ML model version cp-state failed", zap.String("model_version_id", version.ID.String()), zap.Error(err))
+		return fmt.Errorf("publish ML model version cp-state: %w", err)
 	}
+	return nil
 }
 
-func (s *MLRegistryService) publishCPStateEndpoint(ctx context.Context, endpoint *domain.MLInferenceEndpoint) {
+func (s *MLRegistryService) publishCPStateEndpoint(ctx context.Context, endpoint *domain.MLInferenceEndpoint) error {
 	if s.cpState == nil {
-		return
+		return nil
 	}
 	if err := s.cpState.PublishEndpoint(ctx, endpoint); err != nil {
-		s.logger.Warn("publish ML endpoint cp-state failed", zap.String("endpoint_id", endpoint.ID.String()), zap.Error(err))
+		return fmt.Errorf("publish ML endpoint cp-state: %w", err)
 	}
+	return nil
 }
 
 func (s *MLRegistryService) publishCPStateEndpointState(ctx context.Context, state *domain.MLInferenceState) {

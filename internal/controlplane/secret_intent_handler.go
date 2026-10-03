@@ -132,6 +132,9 @@ func (h *SecretIntentHandler) handleCreateOrUpdate(ctx context.Context, intent *
 	// Level-triggered: try to load existing.
 	existing, _ := h.registry.GetByID(ctx, parsed.ID)
 	if existing == nil {
+		if intent.ExpectedUpdatedAt != nil {
+			return &revisionConflictError{entityType: "secret", entityID: parsed.ID, expected: *intent.ExpectedUpdatedAt}
+		}
 		// Create.
 		if parsed.Version == 0 {
 			parsed.Version = 1
@@ -147,6 +150,9 @@ func (h *SecretIntentHandler) handleCreateOrUpdate(ctx context.Context, intent *
 			return fmt.Errorf("create secret: %w", err)
 		}
 	} else {
+		if intent.ExpectedUpdatedAt != nil && !intent.RevisionMatches(existing.UpdatedAt) {
+			return &revisionConflictError{entityType: "secret", entityID: parsed.ID, expected: *intent.ExpectedUpdatedAt, actual: existing.UpdatedAt}
+		}
 		// Update: keep existing metadata, update value.
 		existing.EncryptedValue = parsed.EncryptedValue
 		existing.EncryptionMethod = parsed.EncryptionMethod

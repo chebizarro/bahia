@@ -40,7 +40,8 @@ export async function installE2EMocks(
     nostrEvents = [],
     systemInfo = null,
     routeRoleRequirements = null,
-    contextVMOperations = []
+    contextVMOperations = [],
+    nip44 = true
   } = {}
 ) {
   const discoveryInfo = systemInfo || {
@@ -63,7 +64,7 @@ export async function installE2EMocks(
   await page.route('**/api/v1/orgs', (route) => route.fulfill({
     json: { data: [{ id: 'org-e2e', name: 'E2E organization', role: backendRole }] }
   }));
-  await page.addInitScript(({ authenticated, extension, pubkey, backendRole, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations, defaultServicePubkey }) => {
+  await page.addInitScript(({ authenticated, extension, nip44, pubkey, backendRole, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations, defaultServicePubkey }) => {
     const existingSseEvents = localStorage.getItem('__bahia_e2e_sse_events');
     if (!existingSseEvents || (Array.isArray(sseEvents) && sseEvents.length > 0)) {
       localStorage.setItem('__bahia_e2e_sse_events', JSON.stringify(sseEvents || []));
@@ -122,6 +123,22 @@ export async function installE2EMocks(
     sessionStorage.removeItem('bahia_dashboard_pending_deployments');
     window.__BAHIA_E2E_CONTEXTVM_OPERATIONS = (contextVMOperations || []).map((entry) => ({ ...entry }));
     window.__BAHIA_E2E_CONTEXTVM_REQUESTS = [];
+    window.__BAHIA_E2E_SIGNED_INTENTS = [];
+    window.__BAHIA_E2E_INTENT_WRAPS = [];
+    window.__BAHIA_E2E_INTENT_STATUS_EVENTS = [];
+    // All harnesses derive the same scoped daemon status shape from a signed intent.
+    window.__BAHIA_E2E_MAKE_INTENT_STATUS = (intent, { status = 'accepted', reason = '', id,
+      created_at = Math.max(Math.floor(Date.now() / 1000), intent.created_at || 0) } = {}) => {
+      const tag = name => intent.tags?.find(item => item[0] === name)?.[1] || '';
+      const coordinate = tag('d');
+      const intentId = tag('intent_id');
+      return { id: id || `intent-status-${intent.id || intentId}`, kind: 30315, pubkey: servicePubkey,
+        created_at,
+        tags: [['d', `intent-status:${intent.pubkey}:${coordinate}`], ['domain', 'intent'],
+          ['status', status], ['t', 'intent-status'], ['p', intent.pubkey], ['intent_id', intentId],
+          ...(reason ? [['reason', reason]] : [])],
+        content: JSON.stringify({ status, intent_id: intentId, coordinate, reason }) };
+    };
 
     if (authenticated) {
       localStorage.removeItem('bahia_token');
@@ -142,14 +159,20 @@ export async function installE2EMocks(
       const decodeMockCiphertext = (ciphertext) => decodeURIComponent(escape(atob(String(ciphertext).replace(/^mock-nip44:/, ''))));
       window.nostr = {
         getPublicKey: async () => pubkey,
-        signEvent: async (event) => window.__bahiaE2ESignMockEvent({ ...event, pubkey }, pubkey),
+        signEvent: async (event) => {
+          const signed = await window.__bahiaE2ESignMockEvent({ ...event, pubkey }, pubkey);
+          if (signed.kind === 30900 && signed.tags?.some(tag => tag[0] === 't' && tag[1] === 'bahia-intent')) {
+            window.__BAHIA_E2E_SIGNED_INTENTS.push(signed);
+          }
+          return signed;
+        },
         getRelays: async () => ({
           'wss://relay.example.com': { read: true, write: true }
         }),
-        nip44: {
+        ...(nip44 ? { nip44: {
           encrypt: async (_recipient, plaintext) => encodeMockCiphertext(plaintext),
           decrypt: async (_sender, ciphertext) => decodeMockCiphertext(ciphertext)
-        }
+        } } : {})
       };
     } else {
       delete window.nostr;
@@ -351,6 +374,33 @@ export async function installE2EMocks(
       return encryptedContextVMResponse(event, envelope, payload);
     }
 
+    function processMockIntent(inner, outer) {
+      const tags = inner.tags || [];
+      const tag = name => tags.find(item => item[0] === name)?.[1];
+      const content = JSON.parse(inner.content || '{}');
+      const domain = tag('domain');
+      const statusOverride = window.__BAHIA_E2E_INTENT_STATUS_OVERRIDE?.[`${domain}.${tag('op')}`];
+      if (domain === 'secret') {
+        const state = readMockServiceSecrets();
+        const serviceId = content.service_id;
+        const secrets = Array.isArray(state[serviceId]) ? state[serviceId] : [];
+        if (tag('op') === 'delete') state[serviceId] = secrets.filter(secret => secret.id !== content.id);
+        else {
+          const value = content.encrypted_value?.startsWith('mock-nip44:')
+            ? decodeURIComponent(escape(atob(content.encrypted_value.slice('mock-nip44:'.length)))) : '';
+          const record = { ...content, value, version: (secrets.find(secret => secret.id === content.id)?.version || 0) + 1,
+            updated_at: new Date().toISOString() };
+          state[serviceId] = [record, ...secrets.filter(secret => secret.id !== content.id)];
+        }
+        writeMockServiceSecrets(state);
+      }
+      window.__BAHIA_E2E_INTENT_WRAPS.push({ outer, inner });
+      const status = window.__BAHIA_E2E_MAKE_INTENT_STATUS(inner,
+        { status: statusOverride ? 'rejected' : 'accepted', reason: statusOverride || '' });
+      window.__BAHIA_E2E_INTENT_STATUS_EVENTS.push(status);
+      publishMockNostrEvent(status);
+    }
+
     function handleEncryptedSBOMRequest(event) {
       let envelope = decodeEncryptedContextVMEnvelope(event);
       const nextOperation = window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION;
@@ -537,7 +587,9 @@ export async function installE2EMocks(
         } else if (Array.isArray(message) && message[0] === 'EVENT') {
           const event = message[1];
           persistMockNostrEvent(event);
-          const encryptedResult = handleEncryptedServiceSecretRequest(event)
+          const signedIntent = event?.kind === 1059 ? window.__BAHIA_E2E_SIGNED_INTENTS.shift() : null;
+          if (signedIntent) processMockIntent(signedIntent, event);
+          const encryptedResult = signedIntent ? null : handleEncryptedServiceSecretRequest(event)
             || handleEncryptedSBOMRequest(event)
             || handleQueuedContextVMRequest(event);
           if (encryptedResult) {
@@ -638,6 +690,7 @@ export async function installE2EMocks(
   }, {
     authenticated,
     extension,
+    nip44,
     pubkey: TEST_PUBKEY,
     backendRole,
     sseEvents,

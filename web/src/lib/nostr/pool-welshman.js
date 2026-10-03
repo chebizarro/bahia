@@ -15,6 +15,7 @@
 
 import {
   Pool,
+  SocketStatus,
   request as welshmanRequest,
   publish as welshmanPublish,
   PublishStatus,
@@ -66,6 +67,8 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
 
   /** @type {Map<string, ManagedSubscription>} */
   const subs = new Map();
+  const relayReadyListeners = new Set();
+  const socketListeners = new Map();
 
   /** @type {((event: any) => Promise<any>) | null} */
   let signFn = sign;
@@ -82,6 +85,19 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
 
   // Wire NIP-42 AUTH handling: when a socket requests auth, sign and respond
   pool.subscribe((socket) => {
+    const emitReady = (auth) => {
+      for (const { listener, relays } of relayReadyListeners) {
+        if (!relays.size || relays.has(socket.url)) listener({ relay: socket.url, auth });
+      }
+    };
+    const onStatus = (status) => { if (status === SocketStatus.Open) emitReady(false); };
+    const onAuthStatus = (status) => { if (status === 'ok') emitReady(true); };
+    socket.on('status', onStatus);
+    socket.auth?.on('status', onAuthStatus);
+    socketListeners.set(socket, () => {
+      socket.off('status', onStatus);
+      socket.auth?.off('status', onAuthStatus);
+    });
     if (!socket.auth) return;
     socket.auth.on('status', (status) => {
       if (status === 'requested' && signFn) {
@@ -98,6 +114,21 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
    */
   function setSign(fn) {
     signFn = fn;
+  }
+
+  function getConnectedRelays(relays) {
+    return relays.filter(url => pool.has(url) && pool.get(url).status === SocketStatus.Open);
+  }
+
+  function onRelayReady(listener, relays = []) {
+    const registration = { listener, relays: new Set(relays) };
+    relayReadyListeners.add(registration);
+    for (const relay of relays) {
+      if (pool.has(relay) && pool.get(relay).status === SocketStatus.Open) {
+        listener({ relay, auth: false });
+      }
+    }
+    return () => relayReadyListeners.delete(registration);
   }
 
   /**
@@ -257,6 +288,9 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
       sub.controller.abort();
     }
     subs.clear();
+    for (const cleanup of socketListeners.values()) cleanup();
+    socketListeners.clear();
+    relayReadyListeners.clear();
     pool.clear();
   }
 
@@ -264,6 +298,8 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
     subscribe,
     addRef,
     publishEvent,
+    getConnectedRelays,
+    onRelayReady,
     setSign,
     getPool,
     destroy,

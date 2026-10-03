@@ -12,6 +12,8 @@
   import { ArtifactIcon, ServiceIcon, UnknownIcon } from '$lib/icons/domain-icons.js';
   import { services, operations, operationsForDomain } from '$lib/stores';
   import { syncStatus } from '$lib/stores/sync-status.svelte.js';
+  import { pendingIntentRows } from '$lib/nostr/intent-client.svelte.js';
+  import { mergeWithPending } from '$lib/stores/pending-intents.svelte.js';
 
   let servicesPageInitialized = $state(false);
   let liveServiceOperations = $derived(operationsForDomain(operations, 'service'));
@@ -40,6 +42,12 @@
   }
 
   let searchQuery = $state('');
+  let nowSeconds = $state(Math.floor(Date.now() / 1000));
+  $effect(() => {
+    const timer = setInterval(() => { nowSeconds = Math.floor(Date.now() / 1000); }, 1000);
+    return () => clearInterval(timer);
+  });
+  let visibleServices = $derived(mergeWithPending(services, pendingIntentRows, 'service'));
   let runtimeFilter = $state('all');
   let pageSize = $state('25');
   let currentPage = $state(1);
@@ -52,13 +60,13 @@
 
   let runtimeFilterOptions = $derived([
     { value: 'all', label: 'All runtimes' },
-    ...Array.from(new Set(services.map((service) => service.runtime_type).filter(Boolean))).map((runtimeType) => ({
+    ...Array.from(new Set(visibleServices.map((service) => service.runtime_type).filter(Boolean))).map((runtimeType) => ({
       value: runtimeType,
       label: runtimeType
     }))
   ]);
 
-  let filteredServices = $derived(services.filter((service) => {
+  let filteredServices = $derived(visibleServices.filter((service) => {
     const matchesSearch =
       !searchQuery ||
       service.name?.toLowerCase().includes(searchQuery.trim().toLowerCase());
@@ -88,6 +96,10 @@
     { key: 'name', label: 'Name', icon: ServiceIcon, text: (r) => r.name || '-' },
     { key: 'artifact_repo', label: 'Artifact Repo', icon: ArtifactIcon, text: (r) => r.artifact_repo || '-' },
     { key: 'runtime_type', label: 'Runtime' },
+    { key: 'intentStatus', label: 'Intent', text: (r) => r.intentStatus === 'pending'
+      ? `pending ${Math.max(0, nowSeconds - r.intentCreatedAt)} s`
+      : r.intentStatus === 'conflict' ? `conflict — re-read and resubmit: ${r.intentReason}`
+        : r.intentStatus ? `${r.intentStatus}: ${r.intentReason || ''}` : 'confirmed' },
     { key: 'default_branch', label: 'Branch' },
     { key: 'id', label: 'ID', render: (r) => `<code>${r.id?.slice(0, 8)}...</code>` }
   ]);
@@ -107,7 +119,7 @@
         <ServiceIcon size={28} strokeWidth={1.75} ariaHidden="true" />
         Services
       </h1>
-      <span class="count">{services.length} services</span>
+      <span class="count">{visibleServices.length} services</span>
       {#if syncBadge === 'syncing'}
         <span class="sync-badge syncing" title="Syncing with relays…">syncing…</span>
       {:else if syncBadge === 'live'}
@@ -138,7 +150,7 @@
     </div>
   </div>
 
-  {#if services.length === 0}
+  {#if visibleServices.length === 0}
     <EmptyState
       iconComponent={ServiceIcon}
       title="No services yet"

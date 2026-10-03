@@ -212,6 +212,10 @@ func (h *OrgIntentHandler) AuthorizeIntent(ctx context.Context, trustSet *TrustS
 		return nil
 
 	case orgSubMember, orgSubInvite:
+		if sub == orgSubMember && intent.Op == "create" && stringField(intent.Content, "invite_id") != "" {
+			_, err := h.acceptanceInvite(ctx, intent)
+			return err
+		}
 		if !trustSet.HasPermission(ctx, intent.OrgID, intent.Actor, domain.PermManageMembers) {
 			return fmt.Errorf("insufficient permission: %s", domain.PermManageMembers)
 		}
@@ -220,6 +224,26 @@ func (h *OrgIntentHandler) AuthorizeIntent(ctx context.Context, trustSet *TrustS
 	default:
 		return fmt.Errorf("unknown org sub-entity")
 	}
+}
+
+// acceptanceInvite permits only the named, unexpired invitee to join with the
+// server-side invite role. It never authorizes an existing member role change.
+func (h *OrgIntentHandler) acceptanceInvite(ctx context.Context, intent *Intent) (*domain.OrgInvite, error) {
+	inviteID, err := uuid.Parse(stringField(intent.Content, "invite_id"))
+	if err != nil || inviteID == uuid.Nil || h.invites == nil || h.members == nil {
+		return nil, fmt.Errorf("invalid invite acceptance")
+	}
+	invite, err := h.invites.GetByID(ctx, intent.OrgID, inviteID)
+	if err != nil || invite == nil || invite.OrgID != intent.OrgID || invite.IsExpired() ||
+		normalizeEncryptedPubkey(invite.Pubkey) != intent.Actor ||
+		normalizeEncryptedPubkey(stringField(intent.Content, "pubkey")) != intent.Actor ||
+		string(invite.Role) != stringField(intent.Content, "role") {
+		return nil, fmt.Errorf("invite is missing, expired, or does not match the signer and role")
+	}
+	if member, err := h.members.GetMember(ctx, intent.OrgID, intent.Actor); err != repository.ErrNotFound || member != nil {
+		return nil, fmt.Errorf("invite acceptance cannot change an existing membership")
+	}
+	return invite, nil
 }
 
 // --- Org operations ---
@@ -322,16 +346,8 @@ func (h *OrgIntentHandler) updateOrgWithRevision(ctx context.Context, org *domai
 	}
 
 	// Check revision.
-	expectedNanos := *intent.ExpectedUpdatedAt
-	expectedTime := time.Unix(0, expectedNanos)
-	if raw, ok := intent.Content["expected_updated_at"]; ok {
-		if v, ok := raw.(string); ok {
-			if parsed, parseErr := time.Parse(time.RFC3339Nano, v); parseErr == nil {
-				expectedTime = parsed
-			}
-		}
-	}
-	if !existing.UpdatedAt.Equal(expectedTime) {
+	expectedTime := *intent.ExpectedUpdatedAt
+	if !intent.RevisionMatches(existing.UpdatedAt) {
 		if h.status != nil {
 			h.status.PublishConflict(ctx, intent)
 		}
@@ -382,6 +398,14 @@ func (h *OrgIntentHandler) handleMember(ctx context.Context, intent *Intent) err
 }
 
 func (h *OrgIntentHandler) addOrUpdateMember(ctx context.Context, intent *Intent) error {
+	var acceptedInvite *domain.OrgInvite
+	if stringField(intent.Content, "invite_id") != "" {
+		var err error
+		acceptedInvite, err = h.acceptanceInvite(ctx, intent)
+		if err != nil {
+			return err
+		}
+	}
 	pubkey := normalizeEncryptedPubkey(stringField(intent.Content, "pubkey"))
 	if pubkey == "" {
 		return fmt.Errorf("member intent must carry pubkey")
@@ -438,6 +462,15 @@ func (h *OrgIntentHandler) addOrUpdateMember(ctx context.Context, intent *Intent
 	}
 	if err := h.members.Add(ctx, member); err != nil {
 		return fmt.Errorf("add member: %w", err)
+	}
+	if acceptedInvite != nil {
+		if err := h.invites.Delete(ctx, acceptedInvite.ID); err != nil {
+			h.logger.Warn("accepted invite could not be removed", zap.Error(err))
+		} else if h.publisher != nil {
+			if err := h.publisher.PublishInvite(ctx, acceptedInvite, true); err != nil {
+				h.logger.Warn("failed to publish accepted invite tombstone", zap.Error(err))
+			}
+		}
 	}
 
 	if h.publisher != nil {

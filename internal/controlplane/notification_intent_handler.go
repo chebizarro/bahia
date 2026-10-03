@@ -96,6 +96,9 @@ func (h *NotificationIntentHandler) handleCreateOrUpdate(ctx context.Context, in
 	// Level-triggered: try to load existing.
 	existing, _ := h.registry.GetChannelByID(ctx, ch.ID)
 	if existing == nil {
+		if intent.ExpectedUpdatedAt != nil {
+			return &revisionConflictError{entityType: "notification", entityID: ch.ID, expected: *intent.ExpectedUpdatedAt}
+		}
 		// Create.
 		now := time.Now().UTC()
 		ch.CreatedAt = now
@@ -105,6 +108,9 @@ func (h *NotificationIntentHandler) handleCreateOrUpdate(ctx context.Context, in
 			return fmt.Errorf("create notification channel: %w", err)
 		}
 	} else {
+		if intent.ExpectedUpdatedAt != nil && !intent.RevisionMatches(existing.UpdatedAt) {
+			return &revisionConflictError{entityType: "notification", entityID: ch.ID, expected: *intent.ExpectedUpdatedAt, actual: existing.UpdatedAt}
+		}
 		// Update: merge onto existing.
 		mergeNotificationChannelOntoExisting(existing, ch)
 		existing.UpdatedAt = time.Now().UTC()

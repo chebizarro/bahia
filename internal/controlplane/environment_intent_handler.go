@@ -23,9 +23,9 @@ import (
 //
 // See design §7 Wave 1 F3.
 type EnvironmentIntentHandler struct {
-	registry      service.EnvironmentIntentRegistry
+	registry       service.EnvironmentIntentRegistry
 	statePublisher service.RelayFirstStatePublisher
-	logger        *zap.Logger
+	logger         *zap.Logger
 }
 
 // NewEnvironmentIntentHandler constructs the handler. registry is the
@@ -107,16 +107,18 @@ func (h *EnvironmentIntentHandler) handleUpdate(ctx context.Context, intent *Int
 		// Entity not found — level-triggered create.
 		return h.handleCreate(ctx, intent)
 	}
+	if existing.OrgID != intent.OrgID {
+		return fmt.Errorf("environment %s belongs to a different organization", env.ID)
+	}
 
 	// Check expected_updated_at revision if provided.
 	if intent.ExpectedUpdatedAt != nil {
-		expectedTime := time.UnixMicro(*intent.ExpectedUpdatedAt)
-		if !domain.SameRevision(existing.UpdatedAt, expectedTime) {
+		if !intent.RevisionMatches(existing.UpdatedAt) {
 			// Revision conflict — publish conflict status and return error.
 			return &revisionConflictError{
-				entityID:    env.ID,
-				expected:    expectedTime,
-				actual:      existing.UpdatedAt,
+				entityID: env.ID,
+				expected: *intent.ExpectedUpdatedAt,
+				actual:   existing.UpdatedAt,
 			}
 		}
 	}
@@ -124,7 +126,7 @@ func (h *EnvironmentIntentHandler) handleUpdate(ctx context.Context, intent *Int
 	if units != nil {
 		expectedUpdatedAt := existing.UpdatedAt
 		if intent.ExpectedUpdatedAt != nil {
-			expectedUpdatedAt = time.UnixMicro(*intent.ExpectedUpdatedAt)
+			expectedUpdatedAt = *intent.ExpectedUpdatedAt
 		}
 		if err := h.registry.UpdateEnvironmentWithDeploymentUnits(ctx, env, units, expectedUpdatedAt); err != nil {
 			return fmt.Errorf("updating environment with deployment units: %w", err)
@@ -282,15 +284,15 @@ func environmentIDFromIntentContent(intent *Intent) (uuid.UUID, error) {
 // environmentIntentPayload is the JSON shape of an environment intent's
 // content field. It mirrors the ContextVM payload structure.
 type environmentIntentPayload struct {
-	ID                 string                        `json:"id"`
-	Name               string                        `json:"name"`
-	LoomWorkerSelector map[string]any                `json:"loom_worker_selector,omitempty"`
-	RuntimeConfig      map[string]any                `json:"runtime_config,omitempty"`
-	Targeting          *environmentIntentTargeting    `json:"targeting,omitempty"`
-	DeploymentUnits    []environmentIntentUnit        `json:"deployment_units,omitempty"`
-	ReconcileMode      string                        `json:"reconcile_mode,omitempty"`
-	DeployStrategy     string                        `json:"deploy_strategy,omitempty"`
-	Protected          bool                          `json:"protected,omitempty"`
+	ID                 string                      `json:"id"`
+	Name               string                      `json:"name"`
+	LoomWorkerSelector map[string]any              `json:"loom_worker_selector,omitempty"`
+	RuntimeConfig      map[string]any              `json:"runtime_config,omitempty"`
+	Targeting          *environmentIntentTargeting `json:"targeting,omitempty"`
+	DeploymentUnits    []environmentIntentUnit     `json:"deployment_units,omitempty"`
+	ReconcileMode      string                      `json:"reconcile_mode,omitempty"`
+	DeployStrategy     string                      `json:"deploy_strategy,omitempty"`
+	Protected          bool                        `json:"protected,omitempty"`
 }
 
 type environmentIntentTargeting struct {
@@ -301,17 +303,17 @@ type environmentIntentTargeting struct {
 }
 
 type environmentIntentUnit struct {
-	Key            string            `json:"key"`
-	DisplayName    string            `json:"display_name,omitempty"`
-	RuntimeType    string            `json:"runtime_type,omitempty"`
-	EndpointRef    string            `json:"endpoint_ref,omitempty"`
-	ComposeDir     string            `json:"compose_dir,omitempty"`
-	Namespace      string            `json:"namespace,omitempty"`
-	NetworkProfile map[string]string `json:"network_profile,omitempty"`
+	Key            string                      `json:"key"`
+	DisplayName    string                      `json:"display_name,omitempty"`
+	RuntimeType    string                      `json:"runtime_type,omitempty"`
+	EndpointRef    string                      `json:"endpoint_ref,omitempty"`
+	ComposeDir     string                      `json:"compose_dir,omitempty"`
+	Namespace      string                      `json:"namespace,omitempty"`
+	NetworkProfile map[string]string           `json:"network_profile,omitempty"`
 	GitSource      *environmentIntentGitSource `json:"git_source,omitempty"`
-	ReconcileMode  string            `json:"reconcile_mode,omitempty"`
-	OwnershipMode  string            `json:"ownership_mode,omitempty"`
-	RuntimeConfig  map[string]any    `json:"runtime_config,omitempty"`
+	ReconcileMode  string                      `json:"reconcile_mode,omitempty"`
+	OwnershipMode  string                      `json:"ownership_mode,omitempty"`
+	RuntimeConfig  map[string]any              `json:"runtime_config,omitempty"`
 }
 
 type environmentIntentGitSource struct {
@@ -324,15 +326,20 @@ type environmentIntentGitSource struct {
 // revisionConflictError signals an expected_updated_at mismatch. The intent
 // processor uses this to publish a bounded conflict status (§3.3).
 type revisionConflictError struct {
-	entityID uuid.UUID
-	expected time.Time
-	actual   time.Time
+	entityType string
+	entityID   uuid.UUID
+	expected   time.Time
+	actual     time.Time
 }
 
 func (e *revisionConflictError) Error() string {
+	entityType := e.entityType
+	if entityType == "" {
+		entityType = "environment"
+	}
 	return fmt.Sprintf(
-		"environment %s revision conflict (expected %s, actual %s)",
-		e.entityID,
+		"%s %s revision conflict (expected %s, actual %s)",
+		entityType, e.entityID,
 		e.expected.UTC().Format(time.RFC3339Nano),
 		e.actual.UTC().Format(time.RFC3339Nano),
 	)
@@ -340,6 +347,9 @@ func (e *revisionConflictError) Error() string {
 
 // IsRevisionConflict reports whether err is a revision conflict.
 func IsRevisionConflict(err error) bool {
-	_, ok := err.(*revisionConflictError)
+	if _, ok := err.(*revisionConflictError); ok {
+		return true
+	}
+	_, ok := err.(*intentRevisionConflictError)
 	return ok
 }

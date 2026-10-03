@@ -15,6 +15,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import DeploymentUnitsSection from './DeploymentUnitsSection.svelte';
   import { operations, operationsForEntity } from '$lib/stores';
+  import { pendingIntentRows } from '$lib/nostr/intent-client.svelte.js';
   import {
     environments,
     states as allStates,
@@ -71,6 +72,7 @@
   ]);
 
   let environmentId = $derived(page.params.id);
+  let intentFeedback = $derived(pendingIntentRows.find(row => row.coordinate === environmentId && row.status !== 'pending'));
   let liveEnvironmentOperations = $derived(operationsForEntity(operations, 'environment', environmentId));
 
   // Edit modal state
@@ -382,14 +384,6 @@
         deploy_strategy: editForm.deploy_strategy,
         protected: editForm.protected
       });
-      environment = {
-        ...environment,
-        name: editForm.name.trim(),
-        loom_worker_selector: editForm.loom_worker_selector.trim(),
-        runtime_config: parsedRuntimeConfig,
-        deploy_strategy: editForm.deploy_strategy,
-        protected: editForm.protected
-      };
       closeEditModal();
     } catch (err) {
       editError = err.message || 'Failed to update environment';
@@ -424,6 +418,11 @@
 </script>
 
 <div class="page">
+  {#if intentFeedback}
+    <p role="alert" class="error">{intentFeedback.status === 'conflict' ? 'Revision conflict — re-read and resubmit.' : `Intent ${intentFeedback.status}.`} {intentFeedback.reason}
+      <button type="button" onclick={() => window.location.reload()}>Re-read canonical state</button>
+    </p>
+  {/if}
   <a href="/environments" class="back">← Environments</a>
 
   {#if error}

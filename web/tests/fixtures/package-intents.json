@@ -1,0 +1,125 @@
+{
+  "cases": [
+    {
+      "name": "promote",
+      "request": {
+        "domain": "package",
+        "op": "promote",
+        "coordinate": "package:018f1fae-7b91-7bea-81d6-0669758de945:acme:api:v1:api.tgz",
+        "orgId": "f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7",
+        "intentId": "018f1fae-7b91-7bea-81d6-0669758de954",
+        "createdAt": 1720000000,
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content": {
+          "filename": "api.tgz",
+          "namespace": "acme",
+          "package_name": "api",
+          "source_repository_id": "018f1fae-7b91-7bea-81d6-0669758de943",
+          "target_repository_id": "018f1fae-7b91-7bea-81d6-0669758de945",
+          "version": "v1"
+        }
+      },
+      "event": {
+        "content": "{\"filename\":\"api.tgz\",\"namespace\":\"acme\",\"package_name\":\"api\",\"source_repository_id\":\"018f1fae-7b91-7bea-81d6-0669758de943\",\"target_repository_id\":\"018f1fae-7b91-7bea-81d6-0669758de945\",\"version\":\"v1\"}",
+        "created_at": 1720000000,
+        "kind": 30900,
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tags": [
+          [
+            "d",
+            "package:018f1fae-7b91-7bea-81d6-0669758de945:acme:api:v1:api.tgz"
+          ],
+          [
+            "domain",
+            "package"
+          ],
+          [
+            "schema",
+            "bahia.intent.package.v1"
+          ],
+          [
+            "t",
+            "bahia-intent"
+          ],
+          [
+            "t",
+            "package"
+          ],
+          [
+            "op",
+            "promote"
+          ],
+          [
+            "org",
+            "f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7"
+          ],
+          [
+            "intent_id",
+            "018f1fae-7b91-7bea-81d6-0669758de954"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "yank",
+      "request": {
+        "domain": "package",
+        "op": "yank",
+        "coordinate": "package:018f1fae-7b91-7bea-81d6-0669758de943:acme:api:v1:api.tgz",
+        "orgId": "f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7",
+        "intentId": "018f1fae-7b91-7bea-81d6-0669758de955",
+        "createdAt": 1720000000,
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "content": {
+          "deprecated": true,
+          "filename": "api.tgz",
+          "namespace": "acme",
+          "package_name": "api",
+          "reason": "superseded",
+          "repository_id": "018f1fae-7b91-7bea-81d6-0669758de943",
+          "version": "v1"
+        }
+      },
+      "event": {
+        "content": "{\"deprecated\":true,\"filename\":\"api.tgz\",\"namespace\":\"acme\",\"package_name\":\"api\",\"reason\":\"superseded\",\"repository_id\":\"018f1fae-7b91-7bea-81d6-0669758de943\",\"version\":\"v1\"}",
+        "created_at": 1720000000,
+        "kind": 30900,
+        "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tags": [
+          [
+            "d",
+            "package:018f1fae-7b91-7bea-81d6-0669758de943:acme:api:v1:api.tgz"
+          ],
+          [
+            "domain",
+            "package"
+          ],
+          [
+            "schema",
+            "bahia.intent.package.v1"
+          ],
+          [
+            "t",
+            "bahia-intent"
+          ],
+          [
+            "t",
+            "package"
+          ],
+          [
+            "op",
+            "yank"
+          ],
+          [
+            "org",
+            "f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7"
+          ],
+          [
+            "intent_id",
+            "018f1fae-7b91-7bea-81d6-0669758de955"
+          ]
+        ]
+      }
+    }
+  ]
+}

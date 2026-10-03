@@ -17,6 +17,7 @@ const updateError = {
 };
 const existingChannel = {
   id: 'ch-1',
+  org_id: '0199c749-9300-7444-8444-444444444444',
   name: 'Ops Webhook',
   channel_type: 'webhook',
   config: { url: 'https://hooks.example.com/ops' },
@@ -35,15 +36,18 @@ async function installFailureHarness(page, { initialChannels = [], operationErro
   });
 }
 
-test.describe('Notifications encrypted form failures and accessibility', () => {
-  test('preserves valid form values and surfaces an alert after encrypted create failure', async ({ page }) => {
+test.describe('Notifications intent failures and accessibility', () => {
+  test('submits a create intent and reports a rejected 30315 rather than an RPC error', async ({ page }) => {
     await installFailureHarness(page, {
+      initialChannels: [existingChannel],
       operationErrors: {
-        'notifications.channels.create': createError
+        'notification.intent.create': createError
       }
     });
 
-    await page.goto('/notifications/new');
+    await page.goto('/notifications');
+    await expect(page.getByText('Ops Webhook')).toBeVisible();
+    await page.getByRole('button', { name: 'Create channel' }).click();
 
     await expect(page.getByRole('heading', { name: 'Create notification channel' })).toBeVisible();
 
@@ -54,27 +58,18 @@ test.describe('Notifications encrypted form failures and accessibility', () => {
     await webhookUrlInput.fill('https://hooks.example.com/pagerduty');
     await page.locator('form').getByRole('button', { name: 'Create channel' }).click();
 
-    await expect(page).toHaveURL(/\/notifications\/new$/);
-    await expect(page.getByRole('alert')).toHaveText(createError.message);
-    await expect(nameInput).toHaveValue('PagerDuty Webhook');
-    await expect(webhookUrlInput).toHaveValue('https://hooks.example.com/pagerduty');
-
-    const encryptedErrors = await page.evaluate(() => window.__BAHIA_E2E_ENCRYPTED_RESULTS);
-    expect(encryptedErrors).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: KIND_GIFT_WRAP,
-        operation: 'notifications.channels.create',
-        status: 'error',
-        error: expect.objectContaining(createError)
-      })
-    ]));
+    await expect(page).toHaveURL(/\/notifications$/);
+    await expect.poll(() => page.evaluate(() => window.__BAHIA_E2E_INTENT_STATUS_EVENTS.at(-1)?.tags))
+      .toEqual(expect.arrayContaining([['status', 'rejected'], ['reason', createError.message]]));
+    await expect(page.getByRole('status')).toContainText(createError.message);
+    expect(await page.evaluate(() => window.__BAHIA_E2E_INTENT_WRAPS.at(-1)?.outer.kind)).toBe(KIND_GIFT_WRAP);
   });
 
-  test('preserves valid form values and surfaces an alert after encrypted update failure', async ({ page }) => {
+  test('submits an update intent and reports a rejected 30315', async ({ page }) => {
     await installFailureHarness(page, {
       initialChannels: [existingChannel],
       operationErrors: {
-        'notifications.channels.update': updateError
+        'notification.intent.update': updateError
       }
     });
 
@@ -92,22 +87,23 @@ test.describe('Notifications encrypted form failures and accessibility', () => {
     await webhookUrlInput.fill('https://hooks.example.com/ops-updated');
     await page.locator('form').getByRole('button', { name: 'Save channel' }).click();
 
-    await expect(page).toHaveURL(/\/notifications\/ch-1\/edit$/);
-    await expect(page.getByRole('alert')).toHaveText(updateError.message);
-    await expect(nameInput).toHaveValue('Ops Webhook Updated');
-    await expect(webhookUrlInput).toHaveValue('https://hooks.example.com/ops-updated');
+    await expect(page).toHaveURL(/\/notifications$/);
+    await expect.poll(() => page.evaluate(() => window.__BAHIA_E2E_INTENT_STATUS_EVENTS.at(-1)?.tags))
+      .toEqual(expect.arrayContaining([['status', 'rejected'], ['reason', updateError.message]]));
   });
 
   test('exposes labelled controls, headings, and alert regions on notifications routes', async ({ page }) => {
     await installFailureHarness(page, {
+      initialChannels: [existingChannel],
       operationErrors: {
-        'notifications.channels.create': createError
+        'notification.intent.create': createError
       }
     });
 
     await page.goto('/notifications');
 
     await expect(page.getByRole('heading', { name: 'Notifications' })).toBeVisible();
+    await expect(page.getByText('Ops Webhook')).toBeVisible();
     await expect(page.getByLabel('Status')).toBeVisible();
     await expect(page.getByLabel('Channel type')).toBeVisible();
     await expect(page.getByLabel('Search channels')).toBeVisible();
@@ -125,6 +121,8 @@ test.describe('Notifications encrypted form failures and accessibility', () => {
     await page.getByLabel('Webhook URL *').fill('https://hooks.example.com/pagerduty');
     await page.locator('form').getByRole('button', { name: 'Create channel' }).click();
 
-    await expect(page.getByRole('alert')).toHaveText(createError.message);
+    await expect(page).toHaveURL(/\/notifications$/);
+    await expect.poll(() => page.evaluate(() => window.__BAHIA_E2E_INTENT_STATUS_EVENTS.at(-1)?.tags))
+      .toEqual(expect.arrayContaining([['status', 'rejected']]));
   });
 });
