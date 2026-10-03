@@ -757,6 +757,7 @@ func prepareEnvironmentCreate(env *domain.Environment, units []*domain.Deploymen
 		if unit.ID == uuid.Nil {
 			unit.ID = domain.NewEntityID()
 		}
+		domain.StampCreateRevision(&unit.CreatedAt, &unit.UpdatedAt)
 	}
 	return nil
 }

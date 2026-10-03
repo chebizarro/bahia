@@ -63,6 +63,7 @@ func newRootCommand() *cobra.Command {
 
 	rootCmd.PersistentFlags().StringVar(&serverURL, "server", getEnvOrDefault("BAHIA_SERVER", "http://localhost:8080"), "Bahia server URL")
 	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table, json, yaml")
+	rootCmd.PersistentFlags().DurationVar(&cliEOSETimeout, "eose-timeout", client.DefaultEOSETimeout, "Maximum wait for relay EOSE on Nostr reads (env BAHIA_EOSE_TIMEOUT)")
 	rootCmd.PersistentFlags().StringVar(&nostrKeyFile, "nostr-key-file", "", "Read the Nostr private key from this file (use - for stdin; env BAHIA_NOSTR_KEY_FILE, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY)")
 	rootCmd.PersistentFlags().StringVar(&nostrBunkerFile, "nostr-bunker-file", "", "Read the NIP-46 bunker URI from this file (env BAHIA_NOSTR_BUNKER_FILE or BAHIA_NOSTR_BUNKER_URI)")
 	rootCmd.PersistentFlags().StringArrayVar(&nostrBunkerRelays, "nostr-bunker-relay", nil, "NIP-46 signer relay when it is stored separately from the bunker URI (repeatable; env BAHIA_NOSTR_BUNKER_RELAYS)")
@@ -71,7 +72,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringArrayVar(&operatorBootstrapRelays, "bootstrap-relay", nil, "Bootstrap relay URL for trusted operator relay discovery when --relay/BAHIA_NOSTR_RELAYS are absent (repeatable; env BAHIA_NOSTR_BOOTSTRAP_RELAYS)")
 	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "Trusted Bahia service pubkey for operator bootstrap discovery (repeatable; env BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS)")
-	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Allow explicit HTTP compatibility fallback only before any relay accepts a signer-first operator request")
+	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Use the legacy HTTP read path or permit explicit operator compatibility fallback")
 	rootCmd.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "Encrypt operator ContextVM requests and responses with NIP-59/NIP-44 (requires --service-pubkey)")
 	rootCmd.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "Maximum time to await a ContextVM result per publish attempt")
 	rootCmd.PersistentFlags().IntVar(&operatorResultRetries, "result-retries", client.DefaultOperatorResultRetries, "Number of idempotent ContextVM re-publish attempts after result timeout")
@@ -141,35 +142,34 @@ func authCommands() *cobra.Command {
 func servicesCommands() *cobra.Command {
 	cmd := &cobra.Command{Use: "services", Short: "Manage services", Aliases: []string{"svc"}}
 
-	var useNostr bool
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all services",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if useNostr {
-				return runServicesListNostr(cmd)
+			if operatorHTTPFallback {
+				services, err := apiClient.ListServices(cmd.Context())
+				if err != nil {
+					return err
+				}
+				return renderServices(services)
 			}
-			services, err := apiClient.ListServices(cmd.Context())
-			if err != nil {
-				return err
-			}
-			return output(services, []string{"ID", "NAME", "ARTIFACT_REPO", "RUNTIME"}, func(s domain.Service) []string {
-				return []string{s.ID.String(), s.Name, s.ArtifactRepo, string(s.RuntimeType)}
-			})
+			return runServicesListNostr(cmd)
 		},
 	}
-	listCmd.Flags().BoolVar(&useNostr, "nostr", false, "Read service state from Nostr relays instead of the HTTP API")
 
 	getCmd := &cobra.Command{
 		Use:   "get [id]",
 		Short: "Get a service by ID",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, err := apiClient.GetService(cmd.Context(), args[0])
-			if err != nil {
-				return err
+			if operatorHTTPFallback {
+				svc, err := apiClient.GetService(cmd.Context(), args[0])
+				if err != nil {
+					return err
+				}
+				return outputSingle(svc)
 			}
-			return outputSingle(svc)
+			return runServiceGetNostr(cmd, args[0])
 		},
 	}
 
