@@ -33,6 +33,7 @@ function relaySettingsStateEvent({ browserRelays = [], contextVMRelays = [], ser
 const systemInfo = {
   nostr: {
     browser_relays: [BROWSER_RELAY],
+    contextvm_relays: [BROWSER_RELAY],
     service_relays: SERVICE_RELAYS,
     service_pubkey: SERVICE_PUBKEY,
     service_npub: 'npub1serviceexample',

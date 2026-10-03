@@ -270,13 +270,23 @@ export function subscribeRelayPolicyReadModel({
   });
 }
 
+// Module-level dedup: a single in-flight getRelayPolicy request is shared
+// across callers. This prevents duplicate encrypted requests when the
+// component re-mounts (e.g. AuthGuard auth-state transition) while a
+// request is already in flight.
+let inflightRelayPolicyGet = null;
+
 export async function getRelayPolicy({ signal } = {}) {
-  return requestEncryptedResult({
+  if (inflightRelayPolicyGet) return inflightRelayPolicyGet;
+  inflightRelayPolicyGet = requestEncryptedResult({
     operation: RELAY_SETTINGS_OPERATIONS.GET,
     payload: {},
     tags: [['domain', 'relay-settings'], ['action', 'relay_policy_get']],
     signal
+  }).finally(() => {
+    inflightRelayPolicyGet = null;
   });
+  return inflightRelayPolicyGet;
 }
 
 export async function applyRelayPolicy({ policy, expectedProjection = null, replacementConfirmation = null, signal } = {}) {
@@ -315,4 +325,36 @@ export async function callRelayAdmin({ targetRef, method, params = [], signal } 
     tags: [['domain', 'relay-settings'], ['action', 'relay_admin_call'], ['target', String(targetRef || '').trim()]],
     signal
   });
+}
+
+/**
+ * Guard that deduplicates async projection hydration calls per key.
+ *
+ * Once acquired for a key, subsequent acquire() calls with the same key
+ * return false — whether the original call is still in flight or already
+ * completed.  On error, release() re-opens the key for retry.  reset()
+ * clears the guard entirely (e.g. on identity/key change).
+ */
+export function createProjectionHydrationGuard() {
+  let activeKey = '';
+  return {
+    /** Returns true and locks the key if hydration should proceed; false if already acquired. */
+    acquire(key) {
+      if (!key || activeKey === key) return false;
+      activeKey = key;
+      return true;
+    },
+    /** Releases the guard for the given key (call on error to allow retry). */
+    release(key) {
+      if (activeKey === key) activeKey = '';
+    },
+    /** Clears the guard entirely (call on identity/key change). */
+    reset() {
+      activeKey = '';
+    },
+    /** The currently guarded key (empty string when idle). */
+    get currentKey() {
+      return activeKey;
+    }
+  };
 }
