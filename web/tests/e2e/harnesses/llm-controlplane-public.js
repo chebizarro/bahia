@@ -117,6 +117,9 @@ export async function installPublicLLMControlplaneHarness(
       .filter((event) => event.kind === KIND_CONTROL_STATE)
       .map((event) => [`${event.kind}:${event.pubkey}:${event.tags.find((tag) => tag[0] === 'd')?.[1] || ''}`, event]));
     function nostrEvent({ id, kind, pubkey = servicePubkey, created_at = Math.floor(Date.now() / 1000), tags = [], content = {} }) {
+      if (kind === KIND_STATUS && !tags.some((tag) => tag[0] === 'd')) {
+        tags = [['d', `llm-status:${id}`], ...tags];
+      }
       const serialized = typeof content === 'string' ? content : JSON.stringify(content);
       const coordinate = `${kind}:${pubkey}:${tags.find((tag) => tag[0] === 'd')?.[1] || ''}`;
       const previous = kind === KIND_CONTROL_STATE ? readModelEvents.get(coordinate) : null;

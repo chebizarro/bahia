@@ -90,7 +90,6 @@ export async function loadArtifacts() { return bootstrapControlplane(); }
 export async function loadBuilds() { return bootstrapControlplane(); }
 export async function loadDeploymentIntents() { return bootstrapControlplane(); }
 export async function loadDeploymentRuns() { return bootstrapControlplane(); }
-export async function loadBackupControlplane() { return bootstrapControlplane(); }
 
 export async function loadAll() {
   if (inFlight.all) return inFlight.all;

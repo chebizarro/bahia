@@ -11,11 +11,12 @@ import Table from '$lib/components/Table.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import SBOMDetails from '$lib/components/SBOMDetails.svelte';
   import { artifacts, services, loadArtifacts, operations, operationsForEntity } from '$lib/stores';
-  import { getSBOMRefsForArtifact, sbomRefs } from '$lib/stores/controlplane/index.js';
+  import { sbomRefs, sbomAvailability } from '$lib/stores/collections/sbom.svelte.js';
+  import { onStoreRefresh } from '$lib/nostr/boot.js';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
   import { generateArtifactSBOM, importArtifactSBOM, inlineSBOMLimitMessage, MAX_CONTEXTVM_INLINE_SBOM_BYTES } from '$lib/stores/public-controlplane.svelte.js';
-  import { ensureRelayConnection, getTagValue, nostr, parseJsonContent } from '$lib/nostr/client.js';
+  import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
   import { BAHIA_SBOM_AVAILABLE_LIST_SCHEMA, BAHIA_SBOM_REFERENCE_SCHEMA, SBOM_AVAILABILITY_LIST, SBOM_REFERENCE, SBOM_REFERENCE_TOPIC, SBOM_AVAILABILITY_TOPIC } from '$lib/nostr/kinds.gen.js';
   import {
     ArtifactIcon,
@@ -53,9 +54,9 @@ import Table from '$lib/components/Table.svelte';
   let error = $state(null);
   let loadSequence = 0;
   let lastArtifactRequestId = null;
-  let sbomReferenceEvents = new Map();
-  let sbomAvailabilityEvents = new Map();
   let sbomReferenceUnsubscribe = null;
+  let sbomReferenceEventIds = new Set();
+  let sbomGenerationBaseline = new Set();
   
   // Tab state
   let activeTab = $state('overview'); // overview, sbom, signatures
@@ -168,9 +169,8 @@ import Table from '$lib/components/Table.svelte';
   }
 
   function clearSBOMEventCache() {
-    sbomReferenceEvents = new Map();
-    sbomAvailabilityEvents = new Map();
     sbomReferenceCount = 0;
+    sbomReferenceEventIds = new Set();
   }
 
   function resetSBOMFromArtifact(source) {
@@ -183,8 +183,6 @@ import Table from '$lib/components/Table.svelte';
       : Array.isArray(embeddedSBOM?.packages)
         ? embeddedSBOM.packages
         : [];
-    // Don't set sbomLoaded or sbomLoading here — let loadSBOMDetails
-    // manage both so the loading lifecycle is consistent.
   }
 
   function artifactSBOMSummary(source) {
@@ -202,51 +200,23 @@ import Table from '$lib/components/Table.svelte';
     return Object.values(summary).some((value) => value !== null && value !== undefined && value !== '') ? summary : null;
   }
 
-  async function loadSBOMDetails() {
-    if (!artifact || sbomLoading) return;
-    sbomLoading = true;
+  function loadSBOMDetails() {
+    if (!artifact) return;
     resetSBOMFromArtifact(artifact);
-    try {
-      // Query SBOM events from the relay (Nostr-native path).
-      // The projector republishes published SBOM manifests into the sidecar relay
-      // on startup, so events survive server restarts.
-      await refreshSBOMReferenceEvents();
-    } finally {
-      sbomLoading = false;
-      sbomLoaded = true;
-    }
+    refreshSBOMReferenceEvents();
+    sbomLoaded = true;
   }
 
-  async function refreshSBOMReferenceEvents() {
-    const id = String(artifact?.id || '').trim();
-    if (!id) return 0;
-    const digest = artifactSBOMDigest(artifact);
-    try {
-      await ensureRelayConnection();
-      const filters = [
-        { kinds: [SBOM_REFERENCE], '#artifact': [id], limit: 20 },
-        { kinds: [SBOM_AVAILABILITY_LIST], '#artifact': [id], limit: 5 }
-      ];
-      if (digest) {
-        filters.push(
-          { kinds: [SBOM_REFERENCE], '#subject': [digest], '#t': [SBOM_REFERENCE_TOPIC], limit: 20 },
-          { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#t': [SBOM_AVAILABILITY_TOPIC], limit: 5 }
-        );
-      }
-      const events = await new Promise((resolve) => {
-        const collected = [];
-        nostr.subscribe(filters, {
-          onEvent: (event) => collected.push(event),
-          onEose: () => resolve(collected),
-          onClosed: () => resolve(collected)
-        });
-      });
-      return applySBOMReferenceEvents(events);
-    } catch (err) {
-      console.warn('[sbom] relay query failed:', err);
-      return 0;
-    }
+  function refreshSBOMReferenceEvents() {
+    const events = [...sbomRefs, ...sbomAvailability].map((row) => row.nostr_event);
+    return applySBOMReferenceEvents(events);
   }
+
+  $effect(() => {
+    if (!artifact?.id) return;
+    untrack(refreshSBOMReferenceEvents);
+    return onStoreRefresh(refreshSBOMReferenceEvents);
+  });
 
   function applySBOMReferenceEvents(events) {
     const refs = [];
@@ -263,14 +233,17 @@ import Table from '$lib/components/Table.svelte';
       if (!matchesArtifact && !matchesSubject) continue;
       if (!event.id) continue;
       const content = parseJsonContent(event, {});
-      if (Number(event.kind) === SBOM_REFERENCE) sbomReferenceEvents.set(event.id, { event, content });
-      if (Number(event.kind) === SBOM_AVAILABILITY_LIST) sbomAvailabilityEvents.set(event.id, { event, content });
+      if (Number(event.kind) === SBOM_REFERENCE) refs.push({ event, content });
+      if (Number(event.kind) === SBOM_AVAILABILITY_LIST) availability.push({ event, content });
     }
-    refs.push(...sbomReferenceEvents.values());
-    availability.push(...sbomAvailabilityEvents.values());
     refs.sort((left, right) => Number(right.event?.created_at || 0) - Number(left.event?.created_at || 0));
     availability.sort((left, right) => Number(right.event?.created_at || 0) - Number(left.event?.created_at || 0));
-    if (refs.length === 0 && availability.length === 0) return 0;
+    sbomReferenceEventIds = new Set([...refs, ...availability].map(({ event }) => event.id));
+    if (refs.length === 0 && availability.length === 0) {
+      resetSBOMFromArtifact(artifact);
+      sbomReferenceCount = 0;
+      return 0;
+    }
 
     const primary = preferredSBOMReference(refs) || null;
     const available = availability[0] || null;
@@ -307,6 +280,8 @@ import Table from '$lib/components/Table.svelte';
     sbomImportError = null;
     sbomRequestEventId = null;
     sbomGenerationStatus = 'publishing';
+    refreshSBOMReferenceEvents();
+    sbomGenerationBaseline = new Set(sbomReferenceEventIds);
     clearSBOMEventCache();
     subscribeGeneratedSBOMReferences();
     try {
@@ -376,6 +351,8 @@ import Table from '$lib/components/Table.svelte';
     sbomImporting = true;
     sbomRequestEventId = null;
     sbomGenerationStatus = 'publishing';
+    refreshSBOMReferenceEvents();
+    sbomGenerationBaseline = new Set(sbomReferenceEventIds);
     clearSBOMEventCache();
     subscribeGeneratedSBOMReferences();
     try {
@@ -404,43 +381,17 @@ import Table from '$lib/components/Table.svelte';
   }
 
   function subscribeGeneratedSBOMReferences() {
-    const id = String(artifact?.id || '').trim();
-    if (!id) return;
-    const digest = artifactSBOMDigest(artifact);
     closeSBOMReferenceSubscription();
-    // Subscribe by artifact ID (primary) and by subject digest (fallback).
-    // Both 30078 and 30004 events carry an artifact resource tag and a subject
-    // digest tag; querying both paths ensures resilience if one tag is missing.
-    const filters = [
-      { kinds: [SBOM_REFERENCE], '#artifact': [id], limit: 20 },
-      { kinds: [SBOM_AVAILABILITY_LIST], '#artifact': [id], limit: 5 }
-    ];
-    if (digest) {
-      filters.push(
-        { kinds: [SBOM_REFERENCE], '#subject': [digest], '#t': [SBOM_REFERENCE_TOPIC], limit: 20 },
-        { kinds: [SBOM_AVAILABILITY_LIST], '#subject': [digest], '#t': [SBOM_AVAILABILITY_TOPIC], limit: 5 }
-      );
-    }
-    sbomReferenceUnsubscribe = nostr.subscribe(filters, {
-      onEvent: (event) => {
-        if (applySBOMReferenceEvents([event]) > 0) {
-          sbomGenerationStatus = 'completed';
-        }
-      },
-      onClosed: (reason, _relay) => {
-        if (sbomGenerationStatus === 'publishing' || sbomGenerationStatus === 'waiting') {
-          const targetError = `SBOM request is still pending, but a relay closed the SBOM event subscription${reason ? `: ${reason}` : ''}`;
-          if (sbomOperation === 'import') sbomImportError = targetError;
-          else sbomGenerateError = targetError;
-        }
-      }
+    sbomReferenceUnsubscribe = onStoreRefresh(() => {
+      refreshSBOMReferenceEvents();
+      if ([...sbomReferenceEventIds].some((id) => !sbomGenerationBaseline.has(id))) sbomGenerationStatus = 'completed';
     });
   }
 
   async function observeGeneratedSBOMReferences() {
     try {
-      const observed = await refreshSBOMReferenceEvents();
-      if (observed > 0) {
+      await refreshSBOMReferenceEvents();
+      if ([...sbomReferenceEventIds].some((id) => !sbomGenerationBaseline.has(id))) {
         sbomGenerationStatus = 'completed';
         toast.success(sbomOperation === 'import' ? 'SBOM imported successfully' : 'SBOM generated successfully');
       }
@@ -794,7 +745,7 @@ import Table from '$lib/components/Table.svelte';
             sbom={sbomData}
             packages={sbomPackages}
             attestation={sbomAttestation}
-            loading={sbomLoading}
+            loading={false}
           />
         </section>
 

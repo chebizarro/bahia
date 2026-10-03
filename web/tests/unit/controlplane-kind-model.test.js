@@ -8,8 +8,8 @@ import {
   resetEventRouting
 } from '../../src/lib/stores/controlplane/events.svelte.js';
 import { controlplaneConnection } from '../../src/lib/stores/controlplane/connection.svelte.js';
-import { applyActivityEvent, events as activity, refreshActivity, resetActivity } from '../../src/lib/stores/collections/activity.svelte.js';
-import { CP_AUDIT_TOPIC, CP_STATE_TOPICS, CP_STATE_TOPIC_BY_SCHEMA } from '../../src/lib/nostr/kinds.gen.js';
+import { events as activity, resetActivity } from '../../src/lib/stores/collections/activity.svelte.js';
+import { BAHIA_STATE_SCHEMAS, CP_AUDIT_TOPIC, CP_STATE_TOPICS, CP_STATE_TOPIC_BY_SCHEMA } from '../../src/lib/nostr/kinds.gen.js';
 
 const SERVICE_PUBKEY = 'b'.repeat(64);
 const SERVICE_ID = '11111111-1111-4111-8111-111111111111';
@@ -64,15 +64,14 @@ describe('controlplane read-model filters on single-letter topics', () => {
     expect(stateFilters[0]['#t']).toEqual(controlplaneStateTopics());
   });
 
-  it('routes only remaining legacy families, not store-first workers or DNS', () => {
+  it('routes only remaining legacy families, not store-first domains or DNS', () => {
     const topics = new Set(controlplaneStateTopics());
-    for (const topic of [CP_STATE_TOPICS.SERVICE_REGISTRY, CP_STATE_TOPICS.SERVICE_STATE, CP_STATE_TOPICS.POLICY_REGISTRY,
-      CP_STATE_TOPICS.PACKAGE_REPOSITORY, CP_STATE_TOPICS.BACKUP_RUN, CP_STATE_TOPICS.ML_MODEL]) {
-      expect(topics.has(topic), topic).toBe(true);
+    for (const schema of ['LLM_ROUTE_REGISTRY', 'LLM_ROUTE_STATE', 'ARTIFACT_REGISTRY', 'BUILD_REGISTRY', 'DEPLOYMENT_INTENT_REGISTRY', 'DEPLOYMENT_RUN_REGISTRY']) {
+      expect(topics.has(CP_STATE_TOPIC_BY_SCHEMA[BAHIA_STATE_SCHEMAS[schema]])).toBe(true);
     }
-    // /dns state is owned by the DNS store's own #t subscription.
-    expect(topics.has('dns-zone')).toBe(false);
-    expect(topics.has('worker-state')).toBe(false);
+    for (const topic of [CP_STATE_TOPICS.SERVICE_REGISTRY, CP_STATE_TOPICS.SERVICE_STATE, CP_STATE_TOPICS.POLICY_REGISTRY, CP_STATE_TOPICS.PACKAGE_REPOSITORY, CP_STATE_TOPICS.BACKUP_RUN, CP_STATE_TOPICS.ML_MODEL, CP_STATE_TOPICS.PAYMENT_RECORD, CP_STATE_TOPICS.SECURITY_FINDING, 'dns-zone', 'worker-state']) {
+      expect(topics.has(topic), topic).toBe(false);
+    }
     expect(new Set(Object.values(CP_STATE_TOPIC_BY_SCHEMA)).size).toBe(Object.keys(CP_STATE_TOPIC_BY_SCHEMA).length);
   });
 
@@ -83,8 +82,8 @@ describe('controlplane read-model filters on single-letter topics', () => {
     const pkg = projectedState({ id: 'c'.repeat(64), legacyKind: 31971, topic: CP_STATE_TOPICS.PACKAGE_REPOSITORY, d: 'package:repository:r1' });
     const untopiced = { ...service, id: 'd'.repeat(64), tags: service.tags.filter((tag) => tag[0] !== 't') };
 
-    expect(matchFilter(stateFilter, service)).toBe(true);
-    expect(matchFilter(stateFilter, pkg)).toBe(true);
+    expect(matchFilter(stateFilter, service)).toBe(false);
+    expect(matchFilter(stateFilter, pkg)).toBe(false);
     expect(matchFilter(stateFilter, untopiced)).toBe(false);
 
     expect(applyControlplaneEvent(service)).toBe(false); // core view is fed by BahiaEventStore, not the legacy router
@@ -93,17 +92,17 @@ describe('controlplane read-model filters on single-letter topics', () => {
 
 describe('activity feed audit facts', () => {
   it('keeps repeated audits of one entity and drops a republished fact', () => {
-    const [activityFilter] = readModelFilters().filter((filter) => filter.kinds.includes(4903));
+    expect(readModelFilters().some((filter) => filter.kinds.includes(4903))).toBe(false);
     const first = auditFact({ id: '1'.repeat(64), fact: 'f'.repeat(64) });
     const second = auditFact({ id: '2'.repeat(64), fact: 'e'.repeat(64), createdAt: NOW - 60 });
     const republished = auditFact({ id: '3'.repeat(64), fact: 'f'.repeat(64), createdAt: NOW });
 
-    for (const ev of [first, second, republished]) expect(matchFilter(activityFilter, ev)).toBe(true);
-    expect(applyActivityEvent(first)).toBe(true);
-    expect(applyActivityEvent(second)).toBe(true);
-    expect(applyActivityEvent(republished)).toBe(false);
-    refreshActivity();
-    expect(activity.map((item) => item.id)).toEqual([second.id, first.id]);
-    expect(activity.every((item) => item.entity_id === SERVICE_ID && item.type === 'drift.detected')).toBe(true);
+
+    // Activity is no longer projected by this legacy router. The BahiaEventStore
+    // query path is covered by rest-store-first.test.js.
+    expect(applyControlplaneEvent(first)).toBe(false);
+    expect(applyControlplaneEvent(second)).toBe(false);
+    expect(applyControlplaneEvent(republished)).toBe(false);
+    expect(activity).toEqual([]);
   });
 });

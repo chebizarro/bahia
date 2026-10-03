@@ -42,11 +42,9 @@ describe('legacy collection cache for unmigrated domains', () => {
     routing?.resetEventRouting();
   });
 
-  it('persists only domains still owned by the router, not core store-first views', async () => {
-    // W2-S2 moved workers to the BahiaEventStore too; their legacy cache names are no longer routed.
-    const legacyCollections = collections.PERSISTED_CONTROLPLANE_COLLECTIONS.filter((name) => !['workers', 'workerAssignments', 'workerDrainStatuses'].includes(name));
-    expect([...routing.persistedRouteCollections].sort()).toEqual([...legacyCollections].sort());
-    for (const name of ['services', 'environments', 'states', 'policies', 'packageRepositories', 'packageArtifacts']) {
+  it('persists only remaining router-owned domains', async () => {
+    expect([...routing.persistedRouteCollections].sort()).toEqual([...collections.PERSISTED_CONTROLPLANE_COLLECTIONS].sort());
+    for (const name of ['services', 'environments', 'states', 'policies', 'packageRepositories', 'packageArtifacts', 'workers', 'workerAssignments', 'workerDrainStatuses', 'backupRepositories', 'mlModels', 'sbomRefs']) {
       expect(collections.PERSISTED_CONTROLPLANE_COLLECTIONS).not.toContain(name);
     }
     routing.applyControlplaneEvent(route('route-1'));

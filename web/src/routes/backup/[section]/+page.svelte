@@ -16,8 +16,7 @@
     backupVerifications,
     backupRestores,
     backupRetentionRuns,
-    backupRuntimeObservations,
-    loadBackupControlplane
+    backupRuntimeObservations
   } from '$lib/stores';
   import {
     approveBackupRestore,
@@ -43,8 +42,6 @@
     uniqueStatuses
   } from '$lib/backup/model.js';
 
-  let loading = $state(true);
-  let error = $state(null);
   let query = $state('');
   let statusFilter = $state('all');
   let notice = $state(null);
@@ -63,20 +60,9 @@
     const currentSection = section;
     statusFilter = 'all';
     query = '';
-    if (currentSection) void loadBackup();
   });
 
-  async function loadBackup() {
-    loading = true;
-    error = null;
-    try {
-      await loadBackupControlplane();
-    } catch (err) {
-      error = err?.message || 'Failed to load backup read models';
-    } finally {
-      loading = false;
-    }
-  }
+
 
   function rowHref(row) {
     return `/backup/${section}/${encodeURIComponent(row.id || row.backup_run_id)}`;
@@ -192,17 +178,12 @@
 <BackupShell title={config ? config.label : 'Backup section'} subtitle={config?.description || 'Unknown backup section'}>
   {#if !config}
     <EmptyState iconComponent={WarningIcon} title="Unknown backup section" message={`No backup page is registered for ${section}.`} />
-  {:else if loading}
-    <p class="loading">Loading {config.label.toLowerCase()}...</p>
-  {:else if error}
-    <EmptyState iconComponent={WarningIcon} title={`Unable to load ${config.label.toLowerCase()}`} message={error} />
   {:else}
     <BackupMutationPanel
       {section}
       repositories={backupRepositories}
       policies={backupPolicies}
       recipes={backupRecipes}
-      onAccepted={loadBackup}
     />
 
     <div class="toolbar">
@@ -286,7 +267,6 @@
 </BackupShell>
 
 <style>
-  .loading { color: var(--text-muted); padding: 2rem; text-align: center; }
   .toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(160px, 240px) auto; align-items: end; gap: 0.75rem; }
   label { display: flex; flex-direction: column; gap: 0.3rem; color: var(--text-muted); font-size: 0.85rem; }
   input, select { border: 1px solid var(--border-color); border-radius: 0.45rem; background: var(--card-bg); color: var(--text-primary); padding: 0.55rem 0.65rem; }

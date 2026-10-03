@@ -45,6 +45,7 @@ const _refreshCallbacks = new Set();
 /** @type {number | null} */
 let _rafId = null;
 let _dirty = false;
+let _storeUnsubscribe = null;
 
 /**
  * Register a callback to be called when the store has new events.
@@ -145,6 +146,7 @@ async function _bootInternal({ store: injectedStore, pool: injectedPool, seed: i
   if (!injectedStore) {
     await _store.open();
   }
+  _storeUnsubscribe = _store.subscribe?.({}, scheduleRefresh) || null;
 
   // Create the pool (but don't connect yet — bootstrap does that).
   _pool = injectedPool || createBahiaPool({ store: _store });
@@ -158,6 +160,8 @@ async function _bootInternal({ store: injectedStore, pool: injectedPool, seed: i
 // ---------------------------------------------------------------------------
 
 export async function shutdown() {
+  _storeUnsubscribe?.();
+  _storeUnsubscribe = null;
   if (_rafId !== null && typeof cancelAnimationFrame === 'function') {
     cancelAnimationFrame(_rafId);
     _rafId = null;

@@ -13,10 +13,12 @@
     StandardIcon,
     WarningIcon
   } from '$lib/icons/domain-icons.js';
-  import { requestPaymentHistoryRecords } from '$lib/stores/payments.svelte.js';
+  import { paymentRecordsSnapshot } from '$lib/stores/payments.svelte.js';
+  import { onStoreRefresh } from '$lib/nostr/boot.js';
+  import { onContentKeyChange } from '$lib/stores/auth-roles.svelte.js';
   import { kindLabel } from '$lib/nostr/kind-labels.js';
   import { services, environments, states, workers, driftedStates, events, deploymentIntents, controlplaneConnection, discoveryState, operations } from '$lib/stores';
-  import { formatDashboardSats, normalizePaymentHistory, summarizeRecentSpend } from './dashboard-cost-summary.js';
+  import { formatDashboardSats, summarizeRecentSpend } from './dashboard-cost-summary.js';
   import { summarizeWorkerActivity } from './workers/list-utils.js';
   import { summarizeDriftCause, shortHash } from './dashboard-drift-summary.js';
 
@@ -29,11 +31,7 @@
 
   // Dashboard cost summary state
   let costSummary = $state({ totalSats: 0, paymentCount: 0, workerCount: 0, latestPaymentAt: '' });
-  let costSummaryLoading = $state(false);
-  let costSummaryError = $state(null);
-  let costSummaryPartialFailures = $state(0);
-  let costSummaryLoadSequence = 0;
-  let lastCostSummaryWorkerKey = null;
+  let costSummaryUnreadable = $state(false);
   let timeColumnLabel = $state('Time (local)');
   let selectedActivityEvent = $state(null);
   let activityEventDialogOpen = $state(false);
@@ -45,7 +43,6 @@
   // Cache configuration
   const PENDING_CACHE_KEY = 'bahia_dashboard_pending_deployments';
   const PENDING_CACHE_TTL_MS = 30000; // 30 seconds
-  const COST_HISTORY_LIMIT_PER_WORKER = 25;
 
 
 
@@ -167,10 +164,6 @@
 
   function formatMetricValue(value, syncing) {
     return syncing && Number(value) === 0 ? '...' : value;
-  }
-
-  function emptyCostSummary(workerCount = 0) {
-    return { totalSats: 0, paymentCount: 0, workerCount, latestPaymentAt: '' };
   }
 
   function eventData(row) {
@@ -389,28 +382,6 @@
     }, null, 2);
   }
 
-  // Helper: bounded concurrency for async operations
-  async function withBoundedConcurrency(tasks, limit) {
-    const results = [];
-    const executing = [];
-    
-    for (const task of tasks) {
-      const promise = task().then(result => {
-        executing.splice(executing.indexOf(promise), 1);
-        return result;
-      });
-      
-      results.push(promise);
-      executing.push(promise);
-      
-      if (executing.length >= limit) {
-        await Promise.race(executing);
-      }
-    }
-    
-    return Promise.all(results);
-  }
-
   // Helper: get cached pending count if fresh
   function getCachedPendingCount() {
     if (typeof sessionStorage === 'undefined') return null;
@@ -446,55 +417,12 @@
     }
   }
 
-  // Load dashboard cost summary
-  async function loadDashboardCostSummary(workerPubkeys) {
-    const sequence = ++costSummaryLoadSequence;
-    costSummaryError = null;
-    costSummaryPartialFailures = 0;
-
-    if (workerPubkeys.length === 0) {
-      costSummary = emptyCostSummary(workerPubkeys.length);
-      costSummaryLoading = false;
-      return;
-    }
-
-    costSummaryLoading = true;
-
-    try {
-      const paymentGroups = await withBoundedConcurrency(
-        workerPubkeys.map((worker) => async () => {
-          try {
-            return {
-              payments: normalizePaymentHistory(
-                await requestPaymentHistoryRecords({ worker, limit: COST_HISTORY_LIMIT_PER_WORKER })
-              ),
-              error: null
-            };
-          } catch (err) {
-            return { payments: [], error: err };
-          }
-        }),
-        4
-      );
-
-      if (sequence !== costSummaryLoadSequence) return;
-
-      const failedWorkers = paymentGroups.filter((group) => group.error).length;
-      costSummaryPartialFailures = failedWorkers;
-      costSummary = summarizeRecentSpend(paymentGroups.flatMap((group) => group.payments), { workerCount: workerPubkeys.length });
-      if (failedWorkers === workerPubkeys.length) {
-        costSummaryError = 'Failed to load payment history';
-      }
-    } catch (err) {
-      if (sequence !== costSummaryLoadSequence) return;
-      console.error('Failed to load dashboard cost summary:', err);
-      costSummaryError = err.message || 'Failed to load payment history';
-      costSummary = emptyCostSummary(workerPubkeys.length);
-    } finally {
-      if (sequence === costSummaryLoadSequence) {
-        costSummaryLoading = false;
-      }
-    }
+  function loadDashboardCostSummary(workerPubkeys) {
+    const { rows, unreadable } = paymentRecordsSnapshot();
+    const workers = new Set(workerPubkeys);
+    costSummary = summarizeRecentSpend(rows.filter((record) => workers.has(record.worker_pubkey)),
+      { workerCount: workerPubkeys.length });
+    costSummaryUnreadable = unreadable > 0;
   }
 
   async function loadPendingDeployments() {
@@ -539,13 +467,11 @@
 
   $effect(() => {
     const workerPubkeys = Array.from(new Set(workers.map(dashboardWorkerPubkey).filter(Boolean))).sort();
-    const workerKey = workerPubkeys.join('|');
-
-    queueMicrotask(() => {
-      if (workerKey === lastCostSummaryWorkerKey) return;
-      lastCostSummaryWorkerKey = workerKey;
-      void loadDashboardCostSummary(workerPubkeys);
-    });
+    const refresh = () => loadDashboardCostSummary(workerPubkeys);
+    queueMicrotask(refresh);
+    const unsubscribeStore = onStoreRefresh(refresh);
+    const unsubscribeKeys = onContentKeyChange(refresh);
+    return () => { unsubscribeStore(); unsubscribeKeys(); };
   });
 
   let stateColumns = $derived([
@@ -610,19 +536,13 @@
       : dashboardSyncing
         ? 'Streaming approvals'
         : 'All clear');
-  let costSummaryValue = $derived(costSummaryLoading ? '...' : formatDashboardSats(costSummary.totalSats));
-  let costSummarySubtitle = $derived(costSummaryError
-    ? 'Unable to load payment history'
-    : costSummaryLoading
-      ? 'Loading payment history'
-      : costSummary.paymentCount > 0
-        ? `${costSummary.paymentCount} recent ${pluralize(costSummary.paymentCount, 'payment')}${costSummaryPartialFailures > 0 ? `; ${costSummaryPartialFailures} ${pluralize(costSummaryPartialFailures, 'worker')} unavailable` : ''}`
-        : workers.length === 0
-          ? 'No workers yet'
-          : costSummaryPartialFailures > 0
-            ? `${costSummaryPartialFailures} ${pluralize(costSummaryPartialFailures, 'worker')} unavailable`
-            : 'No recent spend');
-  let costSummaryStatus = $derived(costSummaryError ? 'error' : costSummary.paymentCount > 0 ? 'warning' : 'success');
+  let costSummaryValue = $derived(formatDashboardSats(costSummary.totalSats));
+  let costSummarySubtitle = $derived(costSummaryUnreadable && costSummary.paymentCount === 0
+    ? 'Payment records not readable with this key'
+    : costSummary.paymentCount > 0
+      ? `${costSummary.paymentCount} recent ${pluralize(costSummary.paymentCount, 'payment')}`
+      : workers.length === 0 ? 'No workers yet' : 'No recent spend');
+  let costSummaryStatus = $derived(costSummary.paymentCount > 0 ? 'warning' : 'success');
   let dashboardOperations = $derived(operations.filter((operation) =>
     ['deployment', 'service', 'environment', 'action', 'observation', 'remediation', 'hive-ci'].includes(operation.domain)
   ));

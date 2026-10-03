@@ -45,7 +45,6 @@
 
   let findings = $derived(securityState.findings);
   let severity = $derived(computeSeverityCounts(findings));
-  let loading = $derived(securityState.findingsLoading);
   let error = $derived(securityState.findingsError);
 
   // Derive target info from first finding
@@ -170,7 +169,7 @@
   </div>
 
   <!-- Severity Summary -->
-  {#if !loading && findings.length > 0}
+  {#if findings.length > 0}
     <div class="severity-summary">
       <div class="severity-card critical">
         <span class="severity-count">{severity.critical}</span>
@@ -197,14 +196,14 @@
   {/if}
 
   <!-- Findings Table -->
-  {#if loading}
-    <p class="loading">Loading scan run findings...</p>
-  {:else if error}
+  {#if error}
     <EmptyState
       iconComponent={ErrorIcon}
       title="Error loading findings"
       message={error}
     />
+  {:else if securityState.unreadable && findings.length === 0}
+    <EmptyState iconComponent={SecurityIcon} title="Findings not readable with this key" message="A fleet operator key is required to read encrypted findings." />
   {:else if findings.length === 0}
     <EmptyState
       iconComponent={SecurityIcon}
@@ -248,11 +247,6 @@
     color: var(--text-muted);
     font-size: 0.8rem;
     font-family: monospace;
-  }
-  .loading {
-    color: var(--text-muted);
-    padding: 2rem;
-    text-align: center;
   }
 
   /* Severity Summary */

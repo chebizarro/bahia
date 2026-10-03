@@ -344,8 +344,8 @@ describe('controlplane store', () => {
     }));
     store.flushCollectionRefresh();
 
-    expect(store.events).toHaveLength(1);
-    expect(store.events[0]).toMatchObject({ id: 'audit-1', type: 'llm.status', entity_id: 'route-1' });
+    // The legacy router no longer applies activity; the event-store query owns it.
+    expect(store.events).toHaveLength(0);
   });
 
   it('ignores canonical Bahia events not authored by the advertised service pubkey', async () => {

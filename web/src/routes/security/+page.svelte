@@ -47,7 +47,6 @@
   let findings = $derived(securityState.findings);
   let schedules = $derived(securityState.schedules);
   let severity = $derived(computeSeverityCounts(findings));
-  let loading = $derived(securityState.findingsLoading || securityState.schedulesLoading);
 
   // Active tab
   let activeTab = $state('findings');
@@ -285,7 +284,7 @@
   </div>
 
   <!-- Severity Summary Cards -->
-  {#if !loading && findings.length > 0}
+  {#if findings.length > 0}
     <div class="severity-summary">
       <div class="severity-card critical">
         <span class="severity-count">{severity.critical}</span>
@@ -312,6 +311,10 @@
     </div>
   {/if}
 
+  {#if securityState.unreadable}
+    <p role="status">Security records not readable with this key. Sign in as a fleet operator to decrypt them.</p>
+  {/if}
+
   <!-- Tabs -->
   <div class="tabs">
     <button
@@ -332,9 +335,7 @@
 
   <!-- Findings Tab -->
   {#if activeTab === 'findings'}
-    {#if securityState.schedulesLoading}
-      <p class="loading">Loading scan scopes...</p>
-    {:else if securityState.schedulesError}
+    {#if securityState.schedulesError}
       <EmptyState
         iconComponent={ErrorIcon}
         title="Error loading scan scopes"
@@ -365,9 +366,7 @@
         {/if}
       </section>
 
-      {#if securityState.findingsLoading}
-        <p class="loading">Loading security findings...</p>
-      {:else if securityState.findingsError}
+      {#if securityState.findingsError}
         <EmptyState
           iconComponent={ErrorIcon}
           title="Error loading findings"
@@ -406,9 +405,7 @@
 
   <!-- Schedules Tab -->
   {#if activeTab === 'schedules'}
-    {#if securityState.schedulesLoading}
-      <p class="loading">Loading scan schedules...</p>
-    {:else if securityState.schedulesError}
+    {#if securityState.schedulesError}
       <EmptyState
         iconComponent={ErrorIcon}
         title="Error loading schedules"
@@ -446,11 +443,6 @@
   .count {
     color: var(--text-muted);
     font-size: 0.875rem;
-  }
-  .loading {
-    color: var(--text-muted);
-    padding: 2rem;
-    text-align: center;
   }
 
   /* Severity Summary */

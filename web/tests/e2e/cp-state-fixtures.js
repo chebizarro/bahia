@@ -151,6 +151,21 @@ export function cpStateFixture({ pubkey = E2E_SERVICE_PUBKEY, ...options }) {
   return buildCpStateEvent(CP_STATE_FIXTURE_CONTRACT, { ...options, pubkey });
 }
 
+/** OCK-encrypted cp-state families have no plaintext content schema. */
+export function confidentialCpStateFixture({ d, topic, legacyKind, content, createdAt, pubkey = E2E_SERVICE_PUBKEY }) {
+  return {
+    id: `cp-state-${topic}-${d}`,
+    kind: CASCADIA_CONTROLPLANE_STATE,
+    pubkey,
+    created_at: createdAt ?? Math.floor(Date.now() / 1000),
+    tags: [
+      ['d', d], ['domain', topic.split('-')[0]], ['schema', BAHIA_CP_STATE_SCHEMA],
+      ['legacy_kind', String(legacyKind)], ['deleted', 'false'], ['t', topic]
+    ],
+    content
+  };
+}
+
 /** One audit fact authored by the e2e service identity, with the producer's sha256 fact id. */
 export function cpAuditFixture({ pubkey = E2E_SERVICE_PUBKEY, fact, ...options }) {
   const { type, entityId = '', data = {} } = options;

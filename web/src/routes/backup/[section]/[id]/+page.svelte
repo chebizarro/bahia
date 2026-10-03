@@ -14,8 +14,7 @@
     backupVerifications,
     backupRestores,
     backupRetentionRuns,
-    backupRuntimeObservations,
-    loadBackupControlplane
+    backupRuntimeObservations
   } from '$lib/stores';
   import {
     approveBackupRestore,
@@ -41,8 +40,6 @@
     titleize
   } from '$lib/backup/model.js';
 
-  let loading = $state(true);
-  let error = $state(null);
   let notice = $state(null);
   let pending = $state('');
 
@@ -55,23 +52,6 @@
   const fields = $derived(config ? detailFields(section) : []);
   const health = $derived(section === 'repositories' && record ? repositoryHealth(record, backupRuntimeObservations) : null);
   const capabilities = $derived(record ? capabilityEntries(record) : []);
-
-  $effect(() => {
-    const current = `${section}:${id}`;
-    if (current) void loadBackup();
-  });
-
-  async function loadBackup() {
-    loading = true;
-    error = null;
-    try {
-      await loadBackupControlplane();
-    } catch (err) {
-      error = err?.message || 'Failed to load backup read models';
-    } finally {
-      loading = false;
-    }
-  }
 
   async function runProbe() {
     if (!record) return;
@@ -157,10 +137,6 @@
 <BackupShell title={record ? `${config?.singular}: ${record.name || record.id || record.backup_run_id}` : config?.singular || 'Backup detail'} subtitle={config?.description || ''}>
   {#if !config}
     <EmptyState iconComponent={WarningIcon} title="Unknown backup section" message={`No backup detail page is registered for ${section}.`} />
-  {:else if loading}
-    <p class="loading">Loading backup detail...</p>
-  {:else if error}
-    <EmptyState iconComponent={WarningIcon} title="Unable to load backup detail" message={error} />
   {:else if !record}
     <EmptyState iconComponent={RepositoryIcon} title={`${config.singular} not found`} message="The read model may not have been projected yet or may have been deleted." />
   {:else}
@@ -289,7 +265,7 @@
 </BackupShell>
 
 <style>
-  .loading, .muted { color: var(--text-muted); padding: 1rem 0; }
+  .muted { color: var(--text-muted); padding: 1rem 0; }
   .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
   .actions a, button { border: 1px solid var(--border-color); border-radius: 0.45rem; background: var(--card-bg); color: var(--text-primary); cursor: pointer; padding: 0.45rem 0.7rem; text-decoration: none; }
   .actions a:hover, button:hover:not(:disabled) { border-color: var(--primary); }
