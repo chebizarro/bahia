@@ -1,42 +1,3 @@
-import { services, upsertServiceProjection } from './services.svelte.js';
-import { environments } from './environments.svelte.js';
-import {
-  states,
-  llmRoutes,
-  llmRouteStates,
-  artifacts,
-  builds,
-  deploymentIntents,
-  deploymentRuns,
-  policies,
-  packageRepositories,
-  packageArtifacts,
-  packagePromotions
-} from './deployments.svelte.js';
-import {
-  workers,
-  workerAssignments,
-  workerDrainStatuses,
-  workerEligibilityPreviews,
-  workerCleanupExecutions,
-  workerJobs
-} from './workers.svelte.js';
-import { operations } from './operations.svelte.js';
-import {
-  backupRepositories,
-  backupPolicies,
-  backupRecipes,
-  backupDefinitions,
-  backupRuns,
-  backupVerifications,
-  backupRestores,
-  backupRetentionRuns,
-  backupRuntimeObservations,
-  backupAttestations
-} from './backup.svelte.js';
-import { mlModels, mlModelVersions, mlEndpoints, mlEndpointStates } from './ml.svelte.js';
-import { events } from './activity.svelte.js';
-import { sbomRefs, sbomAvailability, sbomRefsByArtifact, getSBOMRefsForArtifact, hasSBOMForArtifact, sbomArtifactIds } from './sbom.svelte.js';
 import { browser } from '$app/environment';
 import { createIndexedDBCollectionCacheAdapter } from './indexeddb-cache.js';
 import { replaceableKey, shouldAcceptReplaceableEvent } from '../../nostr/client.js';
@@ -92,11 +53,11 @@ export { mlModels, mlModelVersions, mlEndpoints, mlEndpointStates } from './ml.s
 export { events } from './activity.svelte.js';
 export { sbomRefs, sbomAvailability, sbomRefsByArtifact, getSBOMRefsForArtifact, hasSBOMForArtifact, sbomArtifactIds } from './sbom.svelte.js';
 
-import { resetServices, refreshServices } from './services.svelte.js';
-import { resetEnvironments, refreshEnvironments } from './environments.svelte.js';
+import { resetServices } from './services.svelte.js';
+import { resetEnvironments } from './environments.svelte.js';
 import { resetDeployments, refreshDeployments } from './deployments.svelte.js';
-import { resetWorkers, refreshWorkers } from './workers.svelte.js';
-import { resetOperations, refreshOperations } from './operations.svelte.js';
+import { resetWorkers } from './workers.svelte.js';
+import { resetOperations } from './operations.svelte.js';
 
 export const LEGACY_CONTROLPLANE_SNAPSHOT_KEY = 'bahia_controlplane_snapshot_v1';
 // v3 persists the winning raw relay events of each stable collection instead of
@@ -109,42 +70,12 @@ export const CONTROLPLANE_COLLECTION_CACHE_SCHEMA = 'bahia_controlplane_event_ca
 export const CONTROLPLANE_CACHE_TTL_MS = 15 * 60 * 1000;
 const PERSISTED_COLLECTION_DEFAULT_CAP = 250;
 const PERSISTED_COLLECTION_MIN_CAP = 10;
-const PERSISTED_COLLECTION_CAPS = Object.freeze({
-  states: 150,
-  artifacts: 200,
-  deploymentIntents: 150,
-  packageArtifacts: 200,
-  // Worker rows are merged from an advertisement and a worker-state event.
-  workers: 500,
-  workerAssignments: 150,
-  workerDrainStatuses: 150,
-  sbomRefs: 200,
-  mlModelVersions: 200
-});
+const PERSISTED_COLLECTION_CAPS = Object.freeze({ artifacts: 200, deploymentIntents: 150 });
 
 export const PERSISTED_CONTROLPLANE_COLLECTIONS = Object.freeze([
   'llmRoutes',
   'artifacts',
   'deploymentIntents',
-]);
-
-export const SKIPPED_CONTROLPLANE_COLLECTIONS = Object.freeze([
-  'events',
-  'builds',
-  'deploymentRuns',
-  'packagePromotions',
-  'llmRouteStates',
-  'workerEligibilityPreviews',
-  'workerCleanupExecutions',
-  'workerJobs',
-  'operations',
-  'backupRuns',
-  'backupVerifications',
-  'backupRestores',
-  'backupRetentionRuns',
-  'backupRuntimeObservations',
-  'backupAttestations',
-  'mlEndpointStates'
 ]);
 
 // Relay events arrive one per WebSocket task, so a microtask batch would still
@@ -156,32 +87,6 @@ let refreshTimer = null;
 let collectionCacheStorage = createIndexedDBCollectionCacheAdapter();
 // collection name -> Map<replaceable coordinate, newest raw event>
 const persistedEvents = new Map();
-
-// A loading flag means "nothing to render yet": it is cleared as soon as its
-// collection holds data (from cache or relay). EOSE drives the connection
-// status (syncing -> live), not rendering.
-export const loading = $state({
-  services: false,
-  environments: false,
-  states: false,
-  artifacts: false,
-  builds: false,
-  deploymentIntents: false,
-  deploymentRuns: false,
-  policies: false
-});
-
-export function setAllLoading(value) {
-  loading.services = value;
-  loading.environments = value;
-  loading.states = value;
-}
-
-export function clearLoadingForPopulatedCollections() {
-  for (const key of Object.keys(loading)) {
-    if (loading[key] && COLLECTION_TARGETS[key]?.length > 0) loading[key] = false;
-  }
-}
 
 function cancelScheduledRefresh() {
   if (!refreshTimer) return;
@@ -197,17 +102,11 @@ export function resetCollections() {
   resetDeployments();
   resetWorkers();
   resetOperations();
-  setAllLoading(false);
 }
 
 export function refreshCollections() {
   cancelScheduledRefresh();
-  refreshServices();
-  refreshEnvironments();
   refreshDeployments();
-  refreshWorkers();
-  refreshOperations();
-  clearLoadingForPopulatedCollections();
 }
 
 export function scheduleRefreshCollections(delayMs = REFRESH_BATCH_MS) {
@@ -238,52 +137,6 @@ function createNoopCollectionCacheAdapter() {
     async putMany() { return false; },
     async delete() { return false; }
   };
-}
-
-const COLLECTION_TARGETS = Object.freeze({
-  services,
-  environments,
-  states,
-  llmRoutes,
-  llmRouteStates,
-  artifacts,
-  builds,
-  deploymentIntents,
-  deploymentRuns,
-  policies,
-  packageRepositories,
-  packageArtifacts,
-  packagePromotions,
-  workers,
-  workerAssignments,
-  workerDrainStatuses,
-  workerEligibilityPreviews,
-  workerCleanupExecutions,
-  workerJobs,
-  operations,
-  events,
-  sbomRefs,
-  sbomAvailability,
-  backupRepositories,
-  backupPolicies,
-  backupRecipes,
-  backupDefinitions,
-  backupRuns,
-  backupVerifications,
-  backupRestores,
-  backupRetentionRuns,
-  backupRuntimeObservations,
-  backupAttestations,
-  mlModels,
-  mlModelVersions,
-  mlEndpoints,
-  mlEndpointStates
-});
-
-function collectionEntries() {
-  return Object.fromEntries(
-    Object.entries(COLLECTION_TARGETS).map(([collectionName, values]) => [collectionName, Array.from(values)])
-  );
 }
 
 function isReplaceableOrAddressableKind(kind) {
@@ -370,22 +223,6 @@ export function persistedControlplaneCollections(scale = 1) {
       capPersistedCollection(collectionName, Array.from(persistedEvents.get(collectionName)?.values() || []), scale)
     ])
   );
-}
-
-export function persistedControlplaneSnapshot(scale = 1) {
-  return {
-    schema: CONTROLPLANE_COLLECTION_CACHE_SCHEMA,
-    cachedAt: Date.now(),
-    collections: persistedControlplaneCollections(scale)
-  };
-}
-
-export function controlplaneSnapshot() {
-  return {
-    schema: CONTROLPLANE_COLLECTION_CACHE_SCHEMA,
-    cachedAt: Date.now(),
-    collections: collectionEntries()
-  };
 }
 
 function clearLegacyControlplaneSnapshot() {

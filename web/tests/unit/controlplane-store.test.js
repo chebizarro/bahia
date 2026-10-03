@@ -230,7 +230,7 @@ describe('controlplane store', () => {
     expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ kinds: expect.arrayContaining([CAS_STATE_KIND]), authors: ['b'.repeat(64)], limit: 1000 }),
-        expect.objectContaining({ kinds: expect.arrayContaining([30315, 4903, 30078]), authors: ['b'.repeat(64)], limit: 100 })
+        expect.objectContaining({ kinds: expect.arrayContaining([30078]), authors: ['b'.repeat(64)], limit: 1000 })
       ]),
       expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onHealth: expect.any(Function), onClosed: expect.any(Function) })
     );

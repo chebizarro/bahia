@@ -12,6 +12,7 @@ import {
   teardownOperationStoreBinding
 } from '../../src/lib/stores/collections/operations.svelte.js';
 import { backupAttestations, resetBackup } from '../../src/lib/stores/collections/backup.svelte.js';
+import { initStoreFirstSubscriptions, teardownStoreFirstSubscriptions } from '../../src/lib/stores/collections/store-first-subscriptions.js';
 import {
   DEPLOYMENT_RESULT,
   DEPLOYMENT_STATUS,
@@ -167,12 +168,14 @@ beforeEach(() => {
   bridge.pool.subscribe.mockClear();
   resetOperations();
   initOperationStoreBinding();
+  initStoreFirstSubscriptions();
   resetBackup();
   controlplaneConnection.servicePubkey = SERVICE_PUBKEY;
 });
 
 afterEach(() => {
   teardownOperationStoreBinding();
+  teardownStoreFirstSubscriptions();
   controlplaneConnection.servicePubkey = '';
 });
 
@@ -252,6 +255,7 @@ describe('ML and backup live operations', () => {
       content: { artifact_id: 'artifact-1' }
     }))).toBe(false);
 
+    refreshOperations();
     expect(operationsForDomain(operations, 'backup')).toEqual([
       expect.objectContaining({ request_event_id: requestId, run_id: 'backup-run-1', status: 'succeeded', result_event_kind: 38410 })
     ]);

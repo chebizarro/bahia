@@ -19,6 +19,7 @@
   import { initBackupStoreBinding, teardownBackupStoreBinding } from '$lib/stores/collections/backup.svelte.js';
   import { initMLStoreBinding, teardownMLStoreBinding } from '$lib/stores/collections/ml.svelte.js';
   import { initSBOMStoreBinding, teardownSBOMStoreBinding } from '$lib/stores/collections/sbom.svelte.js';
+  import { initStoreFirstSubscriptions, teardownStoreFirstSubscriptions } from '$lib/stores/collections/store-first-subscriptions.js';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
   import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
   import { theme } from '$lib/stores/theme.js';
@@ -74,6 +75,7 @@
         initBackupStoreBinding();
         initMLStoreBinding();
         initSBOMStoreBinding();
+        initStoreFirstSubscriptions();
       } catch (err) {
         console.warn('[layout] boot() failed:', err);
       }
@@ -101,6 +103,7 @@
       teardownBackupStoreBinding();
       teardownMLStoreBinding();
       teardownSBOMStoreBinding();
+      teardownStoreFirstSubscriptions();
       stopRoleDerivation();
       unsubscribeFromEvents();
       disconnectAssistant();
