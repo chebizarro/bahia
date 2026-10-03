@@ -468,6 +468,7 @@ func (c *Client) ImportAdoption(ctx context.Context, req AdoptionImportRequest) 
 // --- Services ---
 
 // ListServices returns all registered services.
+// Deprecated: Use NostrClient for service reads. Removed in Phase 5 F2.
 func (c *Client) ListServices(ctx context.Context) ([]domain.Service, error) {
 	var services []domain.Service
 	if err := c.do(ctx, http.MethodGet, "/api/v1/services", nil, &services); err != nil {
@@ -477,6 +478,7 @@ func (c *Client) ListServices(ctx context.Context) ([]domain.Service, error) {
 }
 
 // GetService returns a service by ID.
+// Deprecated: Use NostrClient for service reads. Removed in Phase 5 F2.
 func (c *Client) GetService(ctx context.Context, id string) (*domain.Service, error) {
 	var svc domain.Service
 	if err := c.do(ctx, http.MethodGet, "/api/v1/services/"+id, nil, &svc); err != nil {
@@ -518,6 +520,7 @@ type EnvironmentDetails struct {
 }
 
 // ListEnvironments returns all environments.
+// Deprecated: Use NostrClient for environment reads. Removed in Phase 5 F2.
 func (c *Client) ListEnvironments(ctx context.Context) ([]domain.Environment, error) {
 	var envs []domain.Environment
 	if err := c.do(ctx, http.MethodGet, "/api/v1/environments", nil, &envs); err != nil {
@@ -527,6 +530,7 @@ func (c *Client) ListEnvironments(ctx context.Context) ([]domain.Environment, er
 }
 
 // GetEnvironment returns an environment by ID.
+// Deprecated: Use NostrClient for environment reads. Removed in Phase 5 F2.
 func (c *Client) GetEnvironment(ctx context.Context, id string) (*domain.Environment, error) {
 	details, err := c.GetEnvironmentDetails(ctx, id)
 	if err != nil {
@@ -536,6 +540,7 @@ func (c *Client) GetEnvironment(ctx context.Context, id string) (*domain.Environ
 }
 
 // GetEnvironmentDetails returns an environment with explicit or resolved implicit deployment units.
+// Deprecated: Use NostrClient for environment reads. Removed in Phase 5 F2.
 func (c *Client) GetEnvironmentDetails(ctx context.Context, id string) (*EnvironmentDetails, error) {
 	var env EnvironmentDetails
 	if err := c.do(ctx, http.MethodGet, "/api/v1/environments/"+id, nil, &env); err != nil {

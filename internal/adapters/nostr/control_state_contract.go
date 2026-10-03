@@ -75,6 +75,9 @@ func serviceRegistryRecord(svc *domain.Service, deleted bool) (gonostr.Tags, str
 		content["artifact_repo"] = svc.ArtifactRepo
 		content["default_branch"] = svc.DefaultBranch
 		content["runtime_type"] = string(svc.RuntimeType)
+		if svc.RuntimeConfig != nil {
+			content["runtime_config"] = svc.RuntimeConfig
+		}
 		putRecordTime(content, "created_at", svc.CreatedAt)
 		tags = append(tags,
 			gonostr.Tag{"name", svc.Name},
@@ -128,8 +131,8 @@ func environmentRegistryRecord(env *domain.Environment, units []domain.Deploymen
 // record: each explicit unit's id and declared fields, sorted by key, or the
 // implicit default unit when there are none. Unit ids are minted by the
 // registry before the relay-first record is signed (and kept by the
-// repository), so both writers know them; timestamps are left out because
-// the relay-first record is signed before the repository stamps them.
+// repository), so both writers know them. Timestamps are stamped before the
+// relay-first record is signed and retained by the repository.
 func recordDeploymentUnits(defaultKey string, units []domain.DeploymentUnit) []map[string]any {
 	if len(units) == 0 {
 		return []map[string]any{{"key": defaultKey, "implicit": true}}
@@ -146,6 +149,8 @@ func recordDeploymentUnits(defaultKey string, units []domain.DeploymentUnit) []m
 			"reconcile_mode": string(unit.ReconcileMode),
 			"ownership_mode": string(unit.OwnershipMode),
 		}
+		putRecordTime(record, "created_at", unit.CreatedAt)
+		putRecordTime(record, "updated_at", unit.UpdatedAt)
 		if unit.ID != uuid.Nil {
 			record["id"] = unit.ID.String()
 		}

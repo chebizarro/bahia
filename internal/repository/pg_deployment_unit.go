@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -36,9 +35,7 @@ func (r *PgDeploymentUnitRepository) Create(ctx context.Context, unit *domain.De
 	if err := domain.ValidateDeploymentUnit(unit); err != nil {
 		return err
 	}
-	now := time.Now().UTC()
-	unit.CreatedAt = now
-	unit.UpdatedAt = now
+	domain.StampCreateRevision(&unit.CreatedAt, &unit.UpdatedAt)
 	unit.Implicit = false
 
 	runtimeConfigJSON, err := marshalJSON(unit.RuntimeConfig, "deployment unit runtime config")
@@ -152,7 +149,7 @@ func (r *PgDeploymentUnitRepository) Update(ctx context.Context, unit *domain.De
 	if err := domain.ValidateDeploymentUnit(unit); err != nil {
 		return err
 	}
-	unit.UpdatedAt = time.Now().UTC()
+	unit.UpdatedAt = domain.NewRevisionTime()
 
 	runtimeConfigJSON, err := marshalJSON(unit.RuntimeConfig, "deployment unit runtime config")
 	if err != nil {

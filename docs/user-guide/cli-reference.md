@@ -150,6 +150,8 @@ Bahia does **not** currently register top-level `llm`, `payments`, or `notificat
 
 ### Services
 
+`services list` and `services get` read canonical service events from the configured relays by default. Pass `--service-pubkey` (or set `BAHIA_NOSTR_SERVICE_PUBKEY`) and configure a relay with `--relay` or `BAHIA_NOSTR_RELAYS`. Reads reuse a local cursor under `$BAHIA_DATA_DIR/store/<service-pubkey>/` or `$XDG_DATA_HOME/bahia/store/<service-pubkey>/`. `--http-fallback` explicitly uses the legacy REST read path until Phase 5 cleanup.
+
 ```bash
 # List services
 bahia services list
@@ -172,7 +174,7 @@ bahia services actions stop --service svc-123 --environment env-456
 
 ### Environments
 
-Environment mutations publish signed ContextVM `environment/create` or `environment/update` requests. Deployment-unit helpers obtain the environment read model through signed `environment/get-details` and publish the complete explicit unit set; they do not call REST for reads or mutations, and do not silently fall back to HTTP.
+`environments list` and `environments get` read canonical environment events from relays by default; `get` includes the deployment-unit read model. `--http-fallback` explicitly uses the legacy REST path. Environment mutations still publish signed ContextVM `environment/create` or `environment/update` requests. Deployment-unit helpers obtain the environment read model through signed `environment/get-details` and publish the complete explicit unit set; they do not silently fall back to HTTP.
 
 ```bash
 # Read environments (GET responses include deployment_units)
@@ -594,7 +596,8 @@ bahia services get svc-123 -o yaml
 | `--bootstrap-relay` | Specify bootstrap relay seed for trusted operator discovery (repeatable) |
 | `--service-pubkey` | Specify Bahia service pubkey for routing and single-service discovery trust |
 | `--trusted-service-pubkey` | Specify trusted Bahia service pubkey for bootstrap discovery (repeatable) |
-| `--http-fallback` | Allow explicit HTTP compatibility fallback before any relay accepts the request |
+| `--http-fallback` | Use legacy HTTP for service/environment reads; also allow explicit operator compatibility fallback |
+| `--eose-timeout` | Maximum wait for relay EOSE on Nostr reads (default `5s`; env `BAHIA_EOSE_TIMEOUT`). If no relay reaches EOSE, cached data is printed with a stale warning on stderr and the read exits 0 |
 | `--encrypted` | Use NIP-59/NIP-44 encrypted operator requests and replies; requires `--service-pubkey` |
 | `--result-timeout` | Maximum wait for a ContextVM result per publish attempt (default `30s`) |
 | `--result-retries` | Idempotent re-publishes after a result timeout (default `2`) |

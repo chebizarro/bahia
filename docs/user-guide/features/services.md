@@ -77,6 +77,8 @@ Click a service to see:
 
 ### CLI
 
+Service reads use canonical Nostr events by default. Configure `--service-pubkey` and `--relay` (or their environment variables); `--http-fallback` explicitly selects the legacy REST path. If EOSE does not arrive before `--eose-timeout`, the CLI prints cached data and warns on stderr.
+
 ```bash
 # List all services
 bahia services list

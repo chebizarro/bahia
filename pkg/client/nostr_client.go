@@ -178,6 +178,10 @@ func (c *NostrClient) Sync(ctx context.Context, domain string) (*SyncResult, err
 	if !ok {
 		return nil, fmt.Errorf("unknown cp-state domain %q", domain)
 	}
+	return c.syncTopics(ctx, domain, topics)
+}
+
+func (c *NostrClient) syncTopics(ctx context.Context, domain string, topics []string) (*SyncResult, error) {
 	filter := c.buildFilter(topics)
 
 	// Load per-(relay, filter) cursor.
@@ -213,8 +217,7 @@ func (c *NostrClient) Sync(ctx context.Context, domain string) (*SyncResult, err
 				continue
 			}
 			if _, saveErr := c.store.SaveEvent(*ev); saveErr != nil {
-				// Log-worthy but not fatal; continue draining.
-				continue
+				return nil, fmt.Errorf("store %s event %s: %w", domain, ev.GetID(), saveErr)
 			}
 			if ev.CreatedAt > maxCreatedAt {
 				maxCreatedAt = ev.CreatedAt
@@ -233,7 +236,13 @@ func (c *NostrClient) Sync(ctx context.Context, domain string) (*SyncResult, err
 
 done:
 	// Drain remaining events after EOSE/timeout (non-blocking).
-	c.drainEventsSub(sub)
+	drainedMax, err := c.drainEventsSub(sub)
+	if err != nil {
+		return nil, fmt.Errorf("drain %s events: %w", domain, err)
+	}
+	if drainedMax > maxCreatedAt {
+		maxCreatedAt = drainedMax
+	}
 
 	// Advance cursor.
 	if maxCreatedAt > 0 {
@@ -254,6 +263,10 @@ func (c *NostrClient) QueryDomain(domain string) ([]nostr.Event, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown cp-state domain %q", domain)
 	}
+	return c.queryTopics(topics)
+}
+
+func (c *NostrClient) queryTopics(topics []string) ([]nostr.Event, error) {
 	filter := c.buildFilter(topics)
 	var events []nostr.Event
 	for ev := range c.store.QueryEvents(filter) {
@@ -276,6 +289,25 @@ func (c *NostrClient) SyncAndQuery(ctx context.Context, domain string) ([]nostr.
 	return events, result, nil
 }
 
+// SyncAndQueryFamily reads only one canonical state family. A service or
+// environment read must not subscribe to unrelated families in its domain.
+func (c *NostrClient) SyncAndQueryFamily(ctx context.Context, legacyKind int) ([]nostr.Event, *SyncResult, error) {
+	family := lookupFamily(legacyKind)
+	if family.Topic == "" {
+		return nil, nil, fmt.Errorf("unknown cp-state family %d", legacyKind)
+	}
+	topics := []string{family.Topic}
+	result, err := c.syncTopics(ctx, family.Domain, topics)
+	if err != nil {
+		return nil, nil, err
+	}
+	events, err := c.queryTopics(topics)
+	if err != nil {
+		return nil, nil, err
+	}
+	return events, result, nil
+}
+
 // buildFilter constructs a nostr.Filter for the given topics scoped to the
 // service pubkey. Uses #t (single-letter) instead of #domain/#schema per the
 // multi-letter-filter archtest ban.
@@ -289,18 +321,24 @@ func (c *NostrClient) buildFilter(topics []string) nostr.Filter {
 
 // drainEventsSub reads and stores remaining events from a subscription
 // non-blockingly until the event channel closes or drains.
-func (c *NostrClient) drainEventsSub(sub Subscription) {
+func (c *NostrClient) drainEventsSub(sub Subscription) (nostr.Timestamp, error) {
+	var maxCreatedAt nostr.Timestamp
 	for {
 		select {
 		case ev, ok := <-sub.Events():
 			if !ok {
-				return
+				return maxCreatedAt, nil
 			}
 			if ev != nil {
-				_, _ = c.store.SaveEvent(*ev)
+				if _, err := c.store.SaveEvent(*ev); err != nil {
+					return 0, fmt.Errorf("store event %s: %w", ev.GetID(), err)
+				}
+				if ev.CreatedAt > maxCreatedAt {
+					maxCreatedAt = ev.CreatedAt
+				}
 			}
 		default:
-			return
+			return maxCreatedAt, nil
 		}
 	}
 }

@@ -134,6 +134,8 @@ Authorized signers can create or edit an explicit Compose unit from the **Deploy
 
 ### CLI
 
+Environment list/get reads use canonical Nostr events by default, including deployment units in `get`. Configure `--service-pubkey` and `--relay` (or their environment variables); `--http-fallback` explicitly selects the legacy REST path. If EOSE does not arrive before `--eose-timeout`, the CLI prints cached data and warns on stderr.
+
 ```bash
 # List environments
 bahia environments list
