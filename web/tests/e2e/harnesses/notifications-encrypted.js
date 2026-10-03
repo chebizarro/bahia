@@ -313,7 +313,6 @@ export async function installEncryptedNotificationHarness(
               ? { status: 'error', error: result.error }
               : { status: 'ok', payload: result.payload }
           ),
-          sig: '0'.repeat(128)
         };
 
         window.__BAHIA_E2E_ENCRYPTED_RESULTS.push({

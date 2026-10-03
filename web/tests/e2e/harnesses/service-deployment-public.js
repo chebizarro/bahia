@@ -203,7 +203,6 @@ export async function installPublicServiceDeploymentHarness(
         created_at,
         tags,
         content: typeof content === 'string' ? content : JSON.stringify(content),
-        sig: '0'.repeat(128)
       };
     }
 
@@ -1091,6 +1090,7 @@ export async function installPublicServiceDeploymentHarness(
           sent: true, accepted: true, message: '' });
         persistPublicTrace();
         const sent = originalSend.call(this, data);
+        window.dispatchEvent(new CustomEvent('__bahia_e2e_public_request', { detail: requestEvent }));
         if (!window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS.has(requestEvent.id)) {
           window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS.add(requestEvent.id);
           window.__BAHIA_E2E_PENDING_INTENTS.set(requestEvent.id, requestEvent);

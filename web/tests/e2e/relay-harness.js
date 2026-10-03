@@ -1,20 +1,13 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { finalizeEvent, getPublicKey, nip44 } from 'nostr-tools';
+import { RELAY_OPERATOR_PUBKEY } from './e2e-keyring.js';
+import { installTestSigner } from './test-signer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '../../..');
 const defaultAddr = process.env.BAHIA_TEST_RELAY_ADDR || '127.0.0.1:0';
-const OPERATOR_SECRET_HEX = '3333333333333333333333333333333333333333333333333333333333333333';
-const operatorSecretKey = hexToBytes(OPERATOR_SECRET_HEX);
-export const RELAY_OPERATOR_PUBKEY = getPublicKey(operatorSecretKey);
-
-function hexToBytes(hex) {
-  const normalized = String(hex || '').trim();
-  if (!/^[0-9a-f]{64}$/i.test(normalized)) throw new Error('Expected 32-byte hex secret key');
-  return Uint8Array.from(normalized.match(/.{1,2}/g).map((byte) => Number.parseInt(byte, 16)));
-}
+export { RELAY_OPERATOR_PUBKEY };
 
 const activeRelayProcesses = new Map();
 let cleanupHooksInstalled = false;
@@ -170,18 +163,10 @@ async function readRelayHealth(url) {
   }
 }
 
-export async function installRelayBackedBrowserContext(page, relay, { authenticated = true } = {}) {
-  await page.exposeFunction('__bahiaE2ESignEvent', async (event) => finalizeEvent(event, operatorSecretKey));
-  await page.exposeFunction('__bahiaE2EEncryptNip44', async (recipientPubkey, plaintext) => {
-    const conversationKey = nip44.v2.utils.getConversationKey(operatorSecretKey, recipientPubkey);
-    return nip44.v2.encrypt(String(plaintext || ''), conversationKey);
-  });
-  await page.exposeFunction('__bahiaE2EDecryptNip44', async (senderPubkey, ciphertext) => {
-    const conversationKey = nip44.v2.utils.getConversationKey(operatorSecretKey, senderPubkey);
-    return nip44.v2.decrypt(String(ciphertext || ''), conversationKey);
-  });
+export async function installRelayBackedBrowserContext(page, relay, { authenticated = true, roleOverride = true } = {}) {
+  if (authenticated) await installTestSigner(page, { pubkey: RELAY_OPERATOR_PUBKEY, relays: [relay.wsUrl] });
 
-  await page.addInitScript(({ relayUrl, servicePubkey, authenticated, pubkey }) => {
+  await page.addInitScript(({ relayUrl, servicePubkey, authenticated, pubkey, roleOverride }) => {
     localStorage.clear();
     sessionStorage.clear();
     window.__BAHIA_BOOTSTRAP__ = {
@@ -197,23 +182,14 @@ export async function installRelayBackedBrowserContext(page, relay, { authentica
         relays: { [relayUrl]: { read: true, write: true } },
         lastAuthenticatedAt: new Date().toISOString()
       }));
-      // E2E role override for hasAnyRole() (dev-only, auth-roles.svelte.js)
-      window.__BAHIA_E2E_USER_ROLES = ['owner'];
-      window.nostr = {
-        getPublicKey: async () => pubkey,
-        getRelays: async () => ({ [relayUrl]: { read: true, write: true } }),
-        signEvent: async (event) => window.__bahiaE2ESignEvent(event),
-        nip44: {
-          encrypt: async (recipient, plaintext) => window.__bahiaE2EEncryptNip44(recipient, plaintext),
-          decrypt: async (sender, ciphertext) => window.__bahiaE2EDecryptNip44(sender, ciphertext)
-        }
-      };
+      if (roleOverride) window.__BAHIA_E2E_USER_ROLES = ['owner'];
+      else delete window.__BAHIA_E2E_USER_ROLES;
     } else {
       localStorage.removeItem('bahia_auth_session');
       delete window.nostr;
       delete window.__BAHIA_E2E_USER_ROLES;
     }
-  }, { relayUrl: relay.wsUrl, servicePubkey: relay.servicePubkey, authenticated, pubkey: RELAY_OPERATOR_PUBKEY });
+  }, { relayUrl: relay.wsUrl, servicePubkey: relay.servicePubkey, authenticated, pubkey: RELAY_OPERATOR_PUBKEY, roleOverride });
 }
 
 export async function installEmptyRestFallbacks(page) {

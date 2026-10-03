@@ -14,7 +14,6 @@ function nostrEvent({ id, kind, pubkey = SERVICE_PUBKEY, created_at = now, tags 
     created_at,
     tags,
     content: JSON.stringify(content),
-    sig: '0'.repeat(128)
   };
 }
 

@@ -26,7 +26,6 @@ function relaySettingsStateEvent({ browserRelays = [], contextVMRelays = [], ser
       contextvm_relays: contextVMRelays,
       service_relays: serviceRelays
     }),
-    sig: '0'.repeat(128)
   };
 }
 

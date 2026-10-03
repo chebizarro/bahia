@@ -38,7 +38,6 @@ function runtimeCapabilityEvent() {
       methods: ['soulfactory.provision'],
       relay_hints: { control: [BROWSER_RELAY] }
     }),
-    sig: '0'.repeat(128)
   };
 }
 
