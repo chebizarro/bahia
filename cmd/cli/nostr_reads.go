@@ -49,7 +49,7 @@ func isDefaultStatePolicyRead(cmd *cobra.Command) bool {
 		return false
 	}
 	switch cmd.Parent().Name() + "/" + cmd.Name() {
-	case "state/list", "state/drifted", "policies/list", "policies/get":
+	case "state/list", "state/drifted", "policies/list", "policies/get", "orgs/list", "orgs/get", "members/list", "secrets/list", "channels/list", "channels/get":
 		return true
 	default:
 		return false

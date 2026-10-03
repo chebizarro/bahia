@@ -26,7 +26,12 @@ The Organizations web route is protected by signer-first authentication and curr
 
 ```bash
 bahia orgs create acme-corp --display-name "ACME Corporation"
+bahia orgs list --service-pubkey <bahia-service-pubkey> --relay wss://<relay>
+bahia orgs get acme-corp --service-pubkey <bahia-service-pubkey> --relay wss://<relay>
+bahia orgs members list <org-uuid> --service-pubkey <bahia-service-pubkey> --relay wss://<relay>
 ```
+
+CLI reads use the operator's NIP-44 signer to unwrap the org content key from signed relay key envelopes. Configure `--nostr-key-file` or a NIP-46 bunker signer. A key without membership cannot decrypt the org record and receives `not readable with this key` without a command error. `--http-fallback` is the explicit compatibility REST read path.
 
 ### Encrypted request/result flow
 
