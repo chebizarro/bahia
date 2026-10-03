@@ -186,5 +186,5 @@ func checkWorkerRevision(intent *Intent, worker *domain.Worker) error {
 	if intent.ExpectedUpdatedAt == nil {
 		return nil
 	}
-	return checkMLRevision(intent, worker.PubKey, true, worker.UpdatedAt)
+	return checkIntentRevision(intent, worker.PubKey, true, worker.UpdatedAt)
 }

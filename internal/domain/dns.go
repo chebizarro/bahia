@@ -78,6 +78,7 @@ type DNSEndpoint struct {
 	Source         string            `json:"source"`
 	Metadata       map[string]any    `json:"metadata,omitempty"`
 	MaterializedAt time.Time         `json:"materialized_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
 // DNSZone defines a managed DNS zone and its backend binding.
@@ -88,6 +89,7 @@ type DNSZone struct {
 	TTL                     int            `json:"ttl"`
 	Authoritative           bool           `json:"authoritative"`
 	AllowEmptyAuthoritative bool           `json:"allow_empty_authoritative"`
+	UpdatedAt               time.Time      `json:"updated_at"`
 }
 
 // DNSBackendState is a materialized DNS backend read model for Nostr projection.

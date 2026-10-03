@@ -78,6 +78,8 @@ type DNSProjector struct {
 	mlSource             MLDNSProjectionSource
 	workers              WorkerDNSProjectionSource
 	policySource         DNSPolicySource
+	manualEndpoints      repository.DNSEndpointRepository
+	zoneSource           repository.DNSZoneRepository
 	continuityStatus     ContinuityStatusReader
 	cfg                  config.DNSConfig
 	logger               *zap.Logger
@@ -103,6 +105,14 @@ func (p *DNSProjector) SetContinuityStatusReader(reader ContinuityStatusReader) 
 
 func (p *DNSProjector) SetPolicySource(source DNSPolicySource) {
 	p.policySource = source
+}
+
+func (p *DNSProjector) SetManualEndpointSource(source repository.DNSEndpointRepository) {
+	p.manualEndpoints = source
+}
+
+func (p *DNSProjector) SetZoneSource(source repository.DNSZoneRepository) {
+	p.zoneSource = source
 }
 
 func (p *DNSProjector) ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error) {
@@ -152,6 +162,40 @@ func (p *DNSProjector) ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoi
 		}
 		endpoints = append(endpoints, meshEndpoints...)
 	}
+	if p.manualEndpoints != nil {
+		manual, err := p.manualEndpoints.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		byCoordinate := make(map[string]domain.DNSEndpoint, len(endpoints)+len(manual))
+		for _, endpoint := range endpoints {
+			byCoordinate[endpoint.Coordinate] = endpoint
+		}
+		for _, endpoint := range manual {
+			byCoordinate[endpoint.Coordinate] = endpoint
+		}
+		endpoints = endpoints[:0]
+		for _, endpoint := range byCoordinate {
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+	if p.zoneSource != nil {
+		zones, err := p.zoneSource.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		active := make(map[string]struct{}, len(zones))
+		for _, zone := range zones {
+			active[zone.Name] = struct{}{}
+		}
+		filtered := endpoints[:0]
+		for _, endpoint := range endpoints {
+			if _, ok := active[endpoint.Zone]; ok {
+				filtered = append(filtered, endpoint)
+			}
+		}
+		endpoints = filtered
+	}
 	return finalizeDNSEndpoints(endpoints)
 }
 
@@ -164,8 +208,16 @@ func (p *DNSProjector) ProjectZoneRecords(ctx context.Context) (map[string][]dom
 	if err != nil {
 		return nil, err
 	}
-	ttls := p.zoneTTLs()
-	zoneVisibilities := p.zoneVisibilities()
+	zones, err := p.zoneDefinitions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ttls := make(map[string]int, len(zones))
+	zoneVisibilities := make(map[string]domain.ZoneVisibility, len(zones))
+	for _, zone := range zones {
+		ttls[zone.Name] = zone.TTL
+		zoneVisibilities[zone.Name] = zone.Visibility
+	}
 	recordsByZone := make(map[string][]domain.DNSRecord)
 	aliasCandidatesByZone := make(map[string]map[string]capabilityAliasCandidate)
 	warnedUnresolvableZone := make(map[string]bool)
@@ -702,24 +754,15 @@ func (p *DNSProjector) zoneForEnvironment(environment string) (string, bool) {
 	return zone, zone != ""
 }
 
-func (p *DNSProjector) zoneTTLs() map[string]int {
-	out := make(map[string]int, len(p.cfg.Zones))
-	for _, zone := range p.cfg.Zones {
-		out[strings.TrimSpace(zone.Name)] = zone.TTL
+func (p *DNSProjector) zoneDefinitions(ctx context.Context) ([]domain.DNSZone, error) {
+	if p.zoneSource != nil {
+		return p.zoneSource.List(ctx)
 	}
-	return out
-}
-
-func (p *DNSProjector) zoneVisibilities() map[string]domain.ZoneVisibility {
-	out := make(map[string]domain.ZoneVisibility, len(p.cfg.Zones))
+	zones := make([]domain.DNSZone, 0, len(p.cfg.Zones))
 	for _, zone := range p.cfg.Zones {
-		name := strings.TrimSpace(zone.Name)
-		if name == "" {
-			continue
-		}
-		out[name] = domain.ZoneVisibility(strings.TrimSpace(zone.Visibility))
+		zones = append(zones, domain.DNSZone{Name: strings.TrimSpace(zone.Name), Visibility: domain.ZoneVisibility(strings.TrimSpace(zone.Visibility)), BackendRef: zone.Backend, TTL: zone.TTL})
 	}
-	return out
+	return zones, nil
 }
 
 func (p *DNSProjector) applyPolicies(ctx context.Context, endpoints []domain.DNSEndpoint) ([]domain.DNSEndpoint, error) {

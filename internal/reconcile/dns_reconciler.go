@@ -109,6 +109,20 @@ func (r *DNSReconciler) SetCanonicalPublisher(pub DNSCanonicalPublisher) {
 	r.canonicalPublisher = pub
 }
 
+// RetireZone clears the backend's active record set before desired state is
+// removed, so deletion cannot leave a previously served zone behind.
+func (r *DNSReconciler) RetireZone(ctx context.Context, zone domain.DNSZone) error {
+	r.runMu.Lock()
+	defer r.runMu.Unlock()
+	backend, ok := r.resolver.Resolve(zone.BackendRef)
+	if !ok {
+		return fmt.Errorf("DNS backend %q not found", zone.BackendRef)
+	}
+	zone.Authoritative = false
+	zone.AllowEmptyAuthoritative = true
+	return backend.SyncZone(ctx, zone, nil)
+}
+
 // SetupSubscriptions reacts to authoritative service convergence events instead
 // of waiting for the periodic safety reconcile.
 func (r *DNSReconciler) SetupSubscriptions(publisher events.Publisher) {
@@ -311,15 +325,16 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 
 func (r *DNSReconciler) reconcileZones(ctx context.Context) ([]domain.DNSZone, error) {
 	zonesByName := make(map[string]domain.DNSZone, len(r.zones))
-	for _, zone := range r.zones {
-		zonesByName[domain.NormalizeDNSZoneName(zone.Name)] = zone
-	}
 	if r.zoneSource != nil {
 		persisted, err := r.zoneSource.List(ctx)
 		if err != nil {
 			return nil, err
 		}
 		for _, zone := range persisted {
+			zonesByName[domain.NormalizeDNSZoneName(zone.Name)] = zone
+		}
+	} else {
+		for _, zone := range r.zones {
 			zonesByName[domain.NormalizeDNSZoneName(zone.Name)] = zone
 		}
 	}

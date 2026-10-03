@@ -116,13 +116,12 @@ func TestD70DNSIntentRejectsUnsupportedRevision(t *testing.T) {
 	require.Zero(t, canonical.zones)
 }
 
-func TestD70DNSIntentUnsupportedCRUDRejected(t *testing.T) {
+func TestD70DNSIntentWithoutMutationServiceRejectsCRUD(t *testing.T) {
 	p, statuses := d70Processor(t, "dns", testPubkey, NewDNSIntentHandler(&recordingDNSOperator{}, &d70DNSCanonical{}))
 	for _, op := range []string{"zone-update", "zone-delete", "endpoint-create", "endpoint-update", "endpoint-delete", "backend-create", "backend-update", "backend-delete", "policy-update", "policy-delete"} {
 		intent := d70Intent("dns", op, "dns-gap:"+op, testPubkey, map[string]interface{}{"id": uuid.NewString()})
-		require.ErrorContains(t, p.ProcessInProcess(context.Background(), intent), "unsupported op: dns "+op)
+		require.ErrorContains(t, p.ProcessInProcess(context.Background(), intent), "DNS mutation service is not configured")
 		require.Equal(t, "rejected", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
-		require.Contains(t, statuses.events[len(statuses.events)-1].Content, "no durable mutation path")
 	}
 }
 
@@ -166,10 +165,35 @@ func (r *d70MLRepo) UpsertInferenceEndpoint(_ context.Context, v *domain.MLInfer
 func (r *d70MLRepo) GetInferenceEndpoint(_ context.Context, id uuid.UUID) (*domain.MLInferenceEndpoint, error) {
 	return r.endpoints[id], nil
 }
+func (r *d70MLRepo) DeleteModel(_ context.Context, id uuid.UUID) error {
+	delete(r.models, id)
+	r.writes++
+	return nil
+}
+func (r *d70MLRepo) DeleteModelVersion(_ context.Context, id uuid.UUID) error {
+	delete(r.versions, id)
+	r.writes++
+	return nil
+}
+func (r *d70MLRepo) DeleteInferenceEndpoint(_ context.Context, id uuid.UUID) error {
+	delete(r.endpoints, id)
+	r.writes++
+	return nil
+}
+func (r *d70MLRepo) ListModelVersions(_ context.Context, modelID uuid.UUID, _, _ int) ([]domain.MLModelVersion, error) {
+	var versions []domain.MLModelVersion
+	for _, version := range r.versions {
+		if version.ModelID == modelID {
+			versions = append(versions, *version)
+		}
+	}
+	return versions, nil
+}
 
 type d70MLCanonical struct {
-	models, versions, endpoints int
-	fail                        error
+	models, versions, endpoints                            int
+	modelTombstones, versionTombstones, endpointTombstones int
+	fail                                                   error
 }
 
 func (p *d70MLCanonical) PublishModel(context.Context, *domain.MLModel) error {
@@ -182,6 +206,18 @@ func (p *d70MLCanonical) PublishModelVersion(context.Context, *domain.MLModelVer
 }
 func (p *d70MLCanonical) PublishEndpoint(context.Context, *domain.MLInferenceEndpoint) error {
 	p.endpoints++
+	return p.fail
+}
+func (p *d70MLCanonical) PublishModelTombstone(context.Context, *domain.MLModel) error {
+	p.modelTombstones++
+	return p.fail
+}
+func (p *d70MLCanonical) PublishModelVersionTombstone(context.Context, *domain.MLModelVersion, string) error {
+	p.versionTombstones++
+	return p.fail
+}
+func (p *d70MLCanonical) PublishEndpointTombstone(context.Context, *domain.MLInferenceEndpoint) error {
+	p.endpointTombstones++
 	return p.fail
 }
 func (p *d70MLCanonical) PublishEndpointState(context.Context, *domain.MLInferenceState) error {
@@ -237,16 +273,11 @@ func TestD70MLIntentSupportedUpserts(t *testing.T) {
 	}
 }
 
-func TestD70MLIntentUnsupportedDeletesAndConflict(t *testing.T) {
+func TestD70MLIntentConflict(t *testing.T) {
 	repo, canonical := newD70MLRepo(), &d70MLCanonical{}
 	registry := service.NewMLRegistryService(repo, nil, zap.NewNop())
 	registry.SetMLCPStatePublisher(canonical)
 	p, statuses := d70Processor(t, "ml", testPubkey, NewMLIntentHandler(registry))
-	for _, op := range []string{"model-delete", "version-delete", "endpoint-delete"} {
-		intent := d70Intent("ml", op, "ml-gap:"+op, testPubkey, map[string]interface{}{"id": uuid.NewString()})
-		require.ErrorContains(t, p.ProcessInProcess(context.Background(), intent), "unsupported op: ml "+op)
-		require.Equal(t, "rejected", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
-	}
 	id := uuid.New()
 	repo.models[id] = &domain.MLModel{ID: id, Slug: "sample", Name: "old", UpdatedAt: time.Now().UTC()}
 	stale := time.Now().Add(-time.Hour).UTC()

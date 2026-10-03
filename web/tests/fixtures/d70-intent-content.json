@@ -57,6 +57,128 @@
     },
     {
       "content": {
+        "authoritative": true,
+        "backend_ref": "primary",
+        "expected_updated_at": "2026-10-03T00:00:00Z",
+        "name": "example.test",
+        "ttl": 120,
+        "visibility": "internal"
+      },
+      "coordinate": "zone:example.test",
+      "domain": "dns",
+      "op": "zone-update"
+    },
+    {
+      "content": {
+        "expected_updated_at": "2026-10-03T00:00:00Z",
+        "name": "example.test"
+      },
+      "coordinate": "zone:example.test",
+      "domain": "dns",
+      "op": "zone-delete"
+    },
+    {
+      "content": {
+        "address": "192.0.2.10",
+        "coordinate": "endpoint:service:api:prod",
+        "environment": "prod",
+        "family": "service",
+        "fqdn": "api.example.test",
+        "name": "api",
+        "source": "operator",
+        "zone": "example.test"
+      },
+      "coordinate": "endpoint:service:api:prod",
+      "domain": "dns",
+      "op": "endpoint-create"
+    },
+    {
+      "content": {
+        "address": "192.0.2.11",
+        "coordinate": "endpoint:service:api:prod",
+        "environment": "prod",
+        "expected_updated_at": "2026-10-03T00:00:00Z",
+        "family": "service",
+        "fqdn": "api.example.test",
+        "name": "api",
+        "source": "operator",
+        "zone": "example.test"
+      },
+      "coordinate": "endpoint:service:api:prod",
+      "domain": "dns",
+      "op": "endpoint-update"
+    },
+    {
+      "content": {
+        "coordinate": "endpoint:service:api:prod",
+        "expected_updated_at": "2026-10-03T00:00:00Z"
+      },
+      "coordinate": "endpoint:service:api:prod",
+      "domain": "dns",
+      "op": "endpoint-delete"
+    },
+    {
+      "content": {
+        "health": "healthy",
+        "ref": "secondary",
+        "type": "coredns"
+      },
+      "coordinate": "dnsbackend:secondary",
+      "domain": "dns",
+      "op": "backend-create"
+    },
+    {
+      "content": {
+        "expected_updated_at": "2026-10-03T00:00:00Z",
+        "health": "unhealthy",
+        "ref": "secondary",
+        "type": "coredns"
+      },
+      "coordinate": "dnsbackend:secondary",
+      "domain": "dns",
+      "op": "backend-update"
+    },
+    {
+      "content": {
+        "expected_updated_at": "2026-10-03T00:00:00Z",
+        "ref": "secondary"
+      },
+      "coordinate": "dnsbackend:secondary",
+      "domain": "dns",
+      "op": "backend-delete"
+    },
+    {
+      "content": {
+        "enabled": true,
+        "expected_updated_at": "2026-10-03T00:00:00Z",
+        "id": "00000000-0000-4000-8000-000000000001",
+        "name": "prod-ttl",
+        "rules": [
+          {
+            "action": {
+              "ttl_override": 120
+            },
+            "match": {
+              "environment": "prod"
+            }
+          }
+        ]
+      },
+      "coordinate": "dnspolicy:00000000-0000-4000-8000-000000000001",
+      "domain": "dns",
+      "op": "policy-update"
+    },
+    {
+      "content": {
+        "expected_updated_at": "2026-10-03T00:00:00Z",
+        "id": "00000000-0000-4000-8000-000000000001"
+      },
+      "coordinate": "dnspolicy:00000000-0000-4000-8000-000000000001",
+      "domain": "dns",
+      "op": "policy-delete"
+    },
+    {
+      "content": {
         "id": "00000000-0000-4000-8000-000000000003",
         "name": "Sample",
         "slug": "sample"
@@ -70,9 +192,9 @@
         "expected_updated_at": "2026-10-03T00:00:00Z",
         "id": "00000000-0000-4000-8000-000000000003",
         "name": "Sample updated",
-        "slug": "sample"
+        "slug": "sample-renamed"
       },
-      "coordinate": "model:sample",
+      "coordinate": "model:sample-renamed",
       "domain": "ml",
       "op": "model-update"
     },
@@ -91,12 +213,13 @@
     },
     {
       "content": {
+        "expected_updated_at": "2026-10-03T00:00:00Z",
         "id": "00000000-0000-4000-8000-000000000004",
         "model_id": "00000000-0000-4000-8000-000000000003",
         "source": {
           "uri": "s3://models/sample-v1"
         },
-        "version": "v1"
+        "version": "v2"
       },
       "coordinate": "model-version:00000000-0000-4000-8000-000000000004",
       "domain": "ml",
@@ -117,12 +240,39 @@
         "environment_id": "00000000-0000-4000-8000-000000000006",
         "expected_updated_at": "2026-10-03T00:00:00Z",
         "id": "00000000-0000-4000-8000-000000000005",
-        "name": "inference",
+        "name": "inference-renamed",
         "protocol": "http"
       },
       "coordinate": "endpoint:00000000-0000-4000-8000-000000000005",
       "domain": "ml",
       "op": "endpoint-update"
+    },
+    {
+      "content": {
+        "expected_updated_at": "2026-10-03T00:00:00Z",
+        "id": "00000000-0000-4000-8000-000000000003"
+      },
+      "coordinate": "model:sample",
+      "domain": "ml",
+      "op": "model-delete"
+    },
+    {
+      "content": {
+        "expected_updated_at": "2026-10-03T00:00:00Z",
+        "id": "00000000-0000-4000-8000-000000000004"
+      },
+      "coordinate": "model-version:00000000-0000-4000-8000-000000000004",
+      "domain": "ml",
+      "op": "version-delete"
+    },
+    {
+      "content": {
+        "expected_updated_at": "2026-10-03T00:00:00Z",
+        "id": "00000000-0000-4000-8000-000000000005"
+      },
+      "coordinate": "endpoint:00000000-0000-4000-8000-000000000005",
+      "domain": "ml",
+      "op": "endpoint-delete"
     },
     {
       "content": {
@@ -216,5 +366,5 @@
       "op": "cleanup"
     }
   ],
-  "schema": "bahia.intent-fixtures.d70.v1"
+  "schema": "bahia.intent-fixtures.d72.v1"
 }

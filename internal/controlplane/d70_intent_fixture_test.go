@@ -31,8 +31,8 @@ func TestD70CrossLanguageIntentContentFixtures(t *testing.T) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	require.NoError(t, decoder.Decode(&fixture))
-	require.Equal(t, "bahia.intent-fixtures.d70.v1", fixture.Schema)
-	require.Len(t, fixture.Intents, 18)
+	require.Equal(t, "bahia.intent-fixtures.d72.v1", fixture.Schema)
+	require.Len(t, fixture.Intents, 31)
 	seen := map[string]bool{}
 	for _, item := range fixture.Intents {
 		key := item.Domain + "/" + item.Op
@@ -54,6 +54,18 @@ func TestD70CrossLanguageIntentContentFixtures(t *testing.T) {
 			require.True(t, validWorkerIntentState(domain.WorkerSchedulingState(item.Content["scheduling_state"].(string))))
 			_, err := workerIntentLabels(parsed.Content)
 			require.NoError(t, err)
+		}
+		if item.Domain == "dns" && (item.Op == "endpoint-create" || item.Op == "endpoint-update") {
+			var endpoint domain.DNSEndpoint
+			require.NoError(t, json.Unmarshal(content, &endpoint))
+			require.NoError(t, domain.ValidateDNSEndpoint(&endpoint))
+			require.Equal(t, item.Coordinate, endpoint.Coordinate)
+		}
+		if item.Domain == "dns" && (item.Op == "backend-create" || item.Op == "backend-update") {
+			var backend domain.DNSBackendState
+			require.NoError(t, json.Unmarshal(content, &backend))
+			require.True(t, backend.Type.IsValid())
+			require.Equal(t, "dnsbackend:"+backend.Ref, item.Coordinate)
 		}
 	}
 }

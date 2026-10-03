@@ -99,6 +99,36 @@ func TestMLCanonicalPublisher_OneEventPerMaterialChange(t *testing.T) {
 	}
 }
 
+func TestMLCanonicalPublisherD72TombstonesOldCoordinates(t *testing.T) {
+	ctx := context.Background()
+	source := newFakeProjectionSource()
+	envID := uuid.New()
+	source.envs[envID] = domain.Environment{ID: envID, Name: "prod"}
+	sink := &captureProjectionPublisher{}
+	p := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop(), WithMLProjectionSource(source))
+	pub := NewMLCanonicalPublisher(p, zap.NewNop())
+	model := &domain.MLModel{ID: uuid.New(), Slug: "old", Name: "Old"}
+	version := &domain.MLModelVersion{ID: uuid.New(), ModelID: model.ID, Version: "v1"}
+	endpoint := &domain.MLInferenceEndpoint{ID: uuid.New(), Name: "old", EnvironmentID: envID}
+	if err := pub.PublishModelTombstone(ctx, model); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.PublishModelVersionTombstone(ctx, version, model.Slug); err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.PublishEndpointTombstone(ctx, endpoint); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []int{KindMLModelRegistry, KindMLModelVersionRegistry, KindMLInferenceEndpointRegistry} {
+		events := sink.byKind(kind)
+		if len(events) != 1 {
+			t.Fatalf("kind %d tombstones=%d", kind, len(events))
+		}
+		assertTag(t, events[0], "deleted", "true")
+		assertJSONField(t, events[0].Content, "deleted", true)
+	}
+}
+
 func TestMLCanonicalPublisher_ZeroEventsForUnchangedRepeats(t *testing.T) {
 	ctx := context.Background()
 

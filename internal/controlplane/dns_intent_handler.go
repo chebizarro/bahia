@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/service"
 )
 
 type DNSIntentCanonicalPublisher interface {
@@ -15,25 +17,28 @@ type DNSIntentCanonicalPublisher interface {
 	PublishPolicy(context.Context, domain.DNSPolicy) error
 }
 
-// DNSIntentHandler reconciles only DNS mutations backed by the existing
-// ContextVM persistence boundary. Endpoint and backend records are derived
-// from infrastructure/configuration and have no durable mutation API.
+// DNSIntentHandler routes signed desired state to the durable DNS mutation
+// service; older ContextVM-backed operations retain their legacy path.
 type DNSIntentHandler struct {
 	operator  DNSControlPlaneOperator
 	canonical DNSIntentCanonicalPublisher
+	mutations *service.DNSMutationService
 }
 
-func NewDNSIntentHandler(operator DNSControlPlaneOperator, canonical DNSIntentCanonicalPublisher) *DNSIntentHandler {
-	return &DNSIntentHandler{operator: operator, canonical: canonical}
+func NewDNSIntentHandler(operator DNSControlPlaneOperator, canonical DNSIntentCanonicalPublisher, mutations ...*service.DNSMutationService) *DNSIntentHandler {
+	h := &DNSIntentHandler{operator: operator, canonical: canonical}
+	if len(mutations) > 0 {
+		h.mutations = mutations[0]
+	}
+	return h
 }
 
 func (*DNSIntentHandler) PermissionFor(string) domain.Permission { return domain.PermWriteServices }
 func (*DNSIntentHandler) IsFleetScoped() bool                    { return true }
 
 func (h *DNSIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
-	// Supported DNS operations create or retire resources; none is a revisioned
-	// update of an existing canonical record. Do not silently ignore a token.
-	if intent.ExpectedUpdatedAt != nil {
+	// Create and legacy override operations do not consume revision tokens.
+	if intent.ExpectedUpdatedAt != nil && (intent.Op == "zone-create" || intent.Op == "policy-apply" || intent.Op == "record-set" || intent.Op == "override-retire") {
 		return fmt.Errorf("expected_updated_at is not supported for DNS %s", intent.Op)
 	}
 	if h.operator == nil {
@@ -45,16 +50,220 @@ func (h *DNSIntentHandler) HandleIntent(ctx context.Context, intent *Intent) err
 	}
 	var result *dnsOpResult
 	switch intent.Op {
-	case "zone-create":
-		if _, ok := h.operator.(DNSPersistenceOperator); !ok {
-			return unsupportedDNSIntent(intent.Op)
+	case "zone-update":
+		if h.mutations == nil {
+			return fmt.Errorf("DNS mutation service is not configured")
 		}
+		var zone domain.DNSZone
+		if err := json.Unmarshal(content, &zone); err != nil {
+			return err
+		}
+		if err := domain.ValidateDNSZone(&zone); err != nil {
+			return err
+		}
+		if intent.Coordinate != "zone:"+zone.Name {
+			return fmt.Errorf("DNS zone coordinate does not match name")
+		}
+		existing, err := h.mutations.GetZone(ctx, zone.Name)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return fmt.Errorf("DNS zone %q not found", zone.Name)
+		}
+		if err := checkIntentRevision(intent, zone.Name, true, existing.UpdatedAt); err != nil {
+			return err
+		}
+		return h.mutations.UpdateZone(ctx, &zone)
+	case "zone-delete":
+		if h.mutations == nil {
+			return fmt.Errorf("DNS mutation service is not configured")
+		}
+		var payload struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(content, &payload); err != nil {
+			return err
+		}
+		name := domain.NormalizeDNSZoneName(payload.Name)
+		if name == "" || intent.Coordinate != "zone:"+name {
+			return fmt.Errorf("DNS zone coordinate does not match name")
+		}
+		existing, err := h.mutations.GetZone(ctx, name)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return fmt.Errorf("DNS zone %q not found", name)
+		}
+		if err := checkIntentRevision(intent, name, true, existing.UpdatedAt); err != nil {
+			return err
+		}
+		return h.mutations.DeleteZone(ctx, name)
+	case "policy-update":
+		if h.mutations == nil {
+			return fmt.Errorf("DNS mutation service is not configured")
+		}
+		var policy domain.DNSPolicy
+		if err := json.Unmarshal(content, &policy); err != nil {
+			return err
+		}
+		if policy.ID == uuid.Nil || intent.Coordinate != "dnspolicy:"+policy.ID.String() {
+			return fmt.Errorf("DNS policy coordinate does not match id")
+		}
+		existing, err := h.mutations.GetPolicy(ctx, policy.ID)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return fmt.Errorf("DNS policy %s not found", policy.ID)
+		}
+		if err := checkIntentRevision(intent, policy.ID.String(), true, existing.UpdatedAt); err != nil {
+			return err
+		}
+		return h.mutations.UpdatePolicy(ctx, &policy)
+	case "policy-delete":
+		if h.mutations == nil {
+			return fmt.Errorf("DNS mutation service is not configured")
+		}
+		var payload struct {
+			ID uuid.UUID `json:"id"`
+		}
+		if err := json.Unmarshal(content, &payload); err != nil {
+			return err
+		}
+		if payload.ID == uuid.Nil || intent.Coordinate != "dnspolicy:"+payload.ID.String() {
+			return fmt.Errorf("DNS policy coordinate does not match id")
+		}
+		existing, err := h.mutations.GetPolicy(ctx, payload.ID)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return fmt.Errorf("DNS policy %s not found", payload.ID)
+		}
+		if err := checkIntentRevision(intent, payload.ID.String(), true, existing.UpdatedAt); err != nil {
+			return err
+		}
+		return h.mutations.DeletePolicy(ctx, payload.ID)
+	case "endpoint-create", "endpoint-update":
+		if h.mutations == nil {
+			return fmt.Errorf("DNS mutation service is not configured")
+		}
+		var endpoint domain.DNSEndpoint
+		if err := json.Unmarshal(content, &endpoint); err != nil {
+			return err
+		}
+		if err := domain.ValidateDNSEndpoint(&endpoint); err != nil {
+			return err
+		}
+		if intent.Coordinate != endpoint.Coordinate {
+			return fmt.Errorf("DNS endpoint coordinate does not match content")
+		}
+		existing, err := h.mutations.GetEndpoint(ctx, endpoint.Coordinate)
+		if err != nil {
+			return err
+		}
+		if intent.Op == "endpoint-update" && existing == nil {
+			return fmt.Errorf("DNS endpoint %q not found", endpoint.Coordinate)
+		}
+		if err := checkIntentRevision(intent, endpoint.Coordinate, existing != nil, func() time.Time {
+			if existing == nil {
+				return time.Time{}
+			}
+			return existing.UpdatedAt
+		}()); err != nil {
+			return err
+		}
+		return h.mutations.UpsertEndpoint(ctx, &endpoint)
+	case "endpoint-delete":
+		if h.mutations == nil {
+			return fmt.Errorf("DNS mutation service is not configured")
+		}
+		var payload struct {
+			Coordinate string `json:"coordinate"`
+		}
+		if err := json.Unmarshal(content, &payload); err != nil {
+			return err
+		}
+		if payload.Coordinate == "" || intent.Coordinate != payload.Coordinate {
+			return fmt.Errorf("DNS endpoint coordinate does not match content")
+		}
+		existing, err := h.mutations.GetEndpoint(ctx, payload.Coordinate)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return fmt.Errorf("DNS endpoint %q not found", payload.Coordinate)
+		}
+		if err := checkIntentRevision(intent, payload.Coordinate, true, existing.UpdatedAt); err != nil {
+			return err
+		}
+		return h.mutations.DeleteEndpoint(ctx, payload.Coordinate)
+	case "backend-create", "backend-update":
+		if h.mutations == nil {
+			return fmt.Errorf("DNS mutation service is not configured")
+		}
+		var backend domain.DNSBackendState
+		if err := json.Unmarshal(content, &backend); err != nil {
+			return err
+		}
+		if backend.Ref == "" || intent.Coordinate != "dnsbackend:"+strings.TrimSpace(backend.Ref) {
+			return fmt.Errorf("DNS backend coordinate does not match ref")
+		}
+		existing, err := h.mutations.GetBackend(ctx, backend.Ref)
+		if err != nil {
+			return err
+		}
+		if intent.Op == "backend-update" && existing == nil {
+			return fmt.Errorf("DNS backend %q not found", backend.Ref)
+		}
+		if err := checkIntentRevision(intent, backend.Ref, existing != nil, func() time.Time {
+			if existing == nil {
+				return time.Time{}
+			}
+			return existing.UpdatedAt
+		}()); err != nil {
+			return err
+		}
+		return h.mutations.UpsertBackend(ctx, &backend)
+	case "backend-delete":
+		if h.mutations == nil {
+			return fmt.Errorf("DNS mutation service is not configured")
+		}
+		var payload struct {
+			Ref string `json:"ref"`
+		}
+		if err := json.Unmarshal(content, &payload); err != nil {
+			return err
+		}
+		if payload.Ref == "" || intent.Coordinate != "dnsbackend:"+payload.Ref {
+			return fmt.Errorf("DNS backend coordinate does not match ref")
+		}
+		existing, err := h.mutations.GetBackend(ctx, payload.Ref)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return fmt.Errorf("DNS backend %q not found", payload.Ref)
+		}
+		if err := checkIntentRevision(intent, payload.Ref, true, existing.UpdatedAt); err != nil {
+			return err
+		}
+		return h.mutations.DeleteBackend(ctx, payload.Ref)
+	case "zone-create":
 		var zone domain.DNSZone
 		if err := json.Unmarshal(content, &zone); err != nil {
 			return err
 		}
 		if intent.Coordinate != "zone:"+strings.TrimSpace(zone.Name) {
 			return fmt.Errorf("DNS zone coordinate does not match name")
+		}
+		if h.mutations != nil {
+			return h.mutations.CreateZone(ctx, &zone)
+		}
+		if _, ok := h.operator.(DNSPersistenceOperator); !ok {
+			return unsupportedDNSIntent(intent.Op)
 		}
 		result = dnsZoneCreateOp(ctx, h.operator, content, nil)
 		if result.Status != "succeeded" {
@@ -65,10 +274,6 @@ func (h *DNSIntentHandler) HandleIntent(ctx context.Context, intent *Intent) err
 		}
 		return h.canonical.PublishZone(ctx, zone)
 	case "policy-apply":
-		provider, ok := h.operator.(DNSPolicyRepositoryProvider)
-		if !ok || provider.DNSPolicyRepository() == nil {
-			return unsupportedDNSIntent(intent.Op)
-		}
 		var policy domain.DNSPolicy
 		if err := json.Unmarshal(content, &policy); err != nil {
 			return err
@@ -78,6 +283,13 @@ func (h *DNSIntentHandler) HandleIntent(ctx context.Context, intent *Intent) err
 		}
 		if intent.Coordinate != "dnspolicy:"+policy.ID.String() {
 			return fmt.Errorf("DNS policy coordinate does not match id")
+		}
+		if h.mutations != nil {
+			return h.mutations.CreatePolicy(ctx, &policy)
+		}
+		provider, ok := h.operator.(DNSPolicyRepositoryProvider)
+		if !ok || provider.DNSPolicyRepository() == nil {
+			return unsupportedDNSIntent(intent.Op)
 		}
 		result = dnsPolicyApplyOp(ctx, h.operator, content)
 		if result.Status != "succeeded" {
