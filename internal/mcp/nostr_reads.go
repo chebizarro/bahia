@@ -11,6 +11,7 @@ import (
 	"fiatjaf.com/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/pkg/client"
 )
@@ -148,4 +149,52 @@ func recordTime(fields map[string]any, key string) (time.Time, bool) {
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	return parsed, err == nil
+}
+
+// stateWorkerRepository adapts the canonical worker family to the existing
+// pure worker/ML ranking services. Mutation methods reject writes: this is
+// strictly a local-store read view, not another persistence path.
+type stateWorkerRepository struct{ server *Server }
+
+func (r stateWorkerRepository) List(ctx context.Context, status string, limit int) ([]domain.Worker, error) {
+	records, err := r.server.readStateFamily(ctx, nostrpool.KindWorkerState)
+	if err != nil {
+		return nil, err
+	}
+	workers := make([]domain.Worker, 0, len(records))
+	for _, record := range records {
+		var worker domain.Worker
+		if err := json.Unmarshal(record.Content, &worker); err != nil {
+			return nil, err
+		}
+		if status != "" && string(worker.Status) != status {
+			continue
+		}
+		workers = append(workers, worker)
+	}
+	sort.SliceStable(workers, func(i, j int) bool { return workers[i].LastAdvertisementAt.After(workers[j].LastAdvertisementAt) })
+	if limit > 0 && len(workers) > limit {
+		workers = workers[:limit]
+	}
+	return workers, nil
+}
+
+func (r stateWorkerRepository) GetByPubKey(ctx context.Context, pubkey string) (*domain.Worker, error) {
+	record, err := r.server.readStateOne(ctx, nostrpool.KindWorkerState, "pubkey", pubkey)
+	if err != nil || record == nil {
+		return nil, err
+	}
+	var worker domain.Worker
+	if err := json.Unmarshal(record.Content, &worker); err != nil {
+		return nil, err
+	}
+	return &worker, nil
+}
+
+func (stateWorkerRepository) Upsert(context.Context, *domain.Worker) error {
+	return fmt.Errorf("MCP canonical worker view is read-only")
+}
+
+func (stateWorkerRepository) UpdateStatus(context.Context, string, domain.WorkerStatus) error {
+	return fmt.Errorf("MCP canonical worker view is read-only")
 }

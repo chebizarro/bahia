@@ -2804,6 +2804,7 @@ func (s *Server) handleLLMListRoutes(ctx context.Context, args map[string]interf
 	return jsonResult(map[string]interface{}{"routes": out, "total": len(out), "registry_kind": controlplane.KindLLMRouteRegistry})
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs LLMReleaseRegistry.
 func (s *Server) handleLLMListReleases(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	registry, errResult := s.requireLLMRegistry()
 	if errResult != nil {
@@ -3012,6 +3013,7 @@ func (s *Server) handleRegisterArtifact(ctx context.Context, args map[string]int
 	return jsonResult(artifactCommandReceiptToMap(receipt))
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Signature reads need ArtifactSignatureRegistry.
 func (s *Server) handleListSignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.signatures == nil {
 		return errorResult("signature tools are not configured"), nil
@@ -3034,6 +3036,7 @@ func (s *Server) handleListSignatures(ctx context.Context, args map[string]inter
 	})
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ArtifactSignatureRegistry.
 func (s *Server) handleListVerifiedSignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.signatures == nil {
 		return errorResult("signature tools are not configured"), nil
@@ -3056,6 +3059,7 @@ func (s *Server) handleListVerifiedSignatures(ctx context.Context, args map[stri
 	})
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ArtifactSignatureRegistry.
 func (s *Server) handleHasVerifiedSignature(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.signatures == nil {
 		return errorResult("signature tools are not configured"), nil
@@ -3077,6 +3081,7 @@ func (s *Server) handleHasVerifiedSignature(ctx context.Context, args map[string
 	})
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ArtifactSignatureRegistry.
 func (s *Server) handleGetSignature(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.signatures == nil {
 		return errorResult("signature tools are not configured"), nil
@@ -3151,6 +3156,7 @@ func (s *Server) handleVerifySignatures(ctx context.Context, args map[string]int
 	})
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. SBOM reads need ArtifactSBOMRegistry and SBOMPackageRegistry.
 func (s *Server) handleGetSBOM(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.sboms == nil {
 		return errorResult("SBOM tools are not configured"), nil
@@ -3172,6 +3178,7 @@ func (s *Server) handleGetSBOM(ctx context.Context, args map[string]interface{})
 	return jsonResult(sbomToMap(sbom))
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ArtifactSBOMRegistry and SBOMPackageRegistry.
 func (s *Server) handleGetSBOMPackages(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.sboms == nil {
 		return errorResult("SBOM tools are not configured"), nil
@@ -3204,6 +3211,7 @@ func (s *Server) handleGetSBOMPackages(ctx context.Context, args map[string]inte
 	return jsonResult(result)
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs SBOMPackageRegistry.
 func (s *Server) handleSearchSBOMPackages(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.sboms == nil {
 		return errorResult("SBOM tools are not configured"), nil
@@ -3486,6 +3494,7 @@ func (s *Server) handleListDrifted(ctx context.Context, args map[string]interfac
 	return jsonResult(result)
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs RuntimeObservationState.
 func (s *Server) handleGetObservation(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	serviceIDStr, _ := args["service_id"].(string)
 	envIDStr, _ := args["environment_id"].(string)
@@ -4224,6 +4233,7 @@ func (s *Server) handleToolProvisionRequest(ctx context.Context, args map[string
 	})
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ToolProvisionIntentState.
 func (s *Server) handleToolProvisionStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.toolProvisioning == nil {
 		return errorResult("tool provisioning tools are not configured"), nil
@@ -4301,6 +4311,7 @@ func (s *Server) handleToolDenylistRemove(ctx context.Context, args map[string]i
 	return jsonResult(map[string]interface{}{"status": "removed"})
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ToolDenylistState.
 func (s *Server) handleToolDenylistList(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.toolProvisioning == nil {
 		return errorResult("tool provisioning tools are not configured"), nil
@@ -4312,6 +4323,7 @@ func (s *Server) handleToolDenylistList(ctx context.Context, args map[string]int
 	return jsonResult(map[string]interface{}{"entries": toolDenylistEntriesToMaps(entries), "total": len(entries)})
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ToolProfileState.
 func (s *Server) handleToolProfileGet(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.toolProvisioning == nil {
 		return errorResult("tool provisioning tools are not configured"), nil
@@ -5553,6 +5565,7 @@ func (s *Server) handleTestNotificationChannel(ctx context.Context, args map[str
 	return jsonResult(result)
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Notification-log reads need NotificationLogState.
 func (s *Server) handleListNotifications(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.notificationRepo == nil {
 		return errorResult("notification tools are not configured"), nil
@@ -5599,6 +5612,7 @@ func (s *Server) handleListNotifications(ctx context.Context, args map[string]in
 	return jsonResult(result)
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs NotificationLogState.
 func (s *Server) handleGetNotification(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.notificationRepo == nil {
 		return errorResult("notification tools are not configured"), nil

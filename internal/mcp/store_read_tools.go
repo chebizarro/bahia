@@ -12,6 +12,7 @@ import (
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/pkg/client"
 )
 
@@ -38,6 +39,7 @@ func (s *Server) callStoreReadTool(ctx context.Context, name string, args map[st
 				}
 			}
 			if err == nil {
+				sort.Slice(services, func(i, j int) bool { return services[i].Name < services[j].Name })
 				result, err = jsonResult(map[string]any{"services": servicesToMaps(services), "total": len(services)})
 			}
 		}
@@ -82,6 +84,7 @@ func (s *Server) callStoreReadTool(ctx context.Context, name string, args map[st
 				}
 			}
 			if err == nil {
+				sort.Slice(environments, func(i, j int) bool { return environments[i].Name < environments[j].Name })
 				result, err = jsonResult(map[string]any{"environments": environmentsToMaps(environments), "total": len(environments)})
 			}
 		}
@@ -165,6 +168,8 @@ func (s *Server) callStoreReadTool(ctx context.Context, name string, args map[st
 		result, err = s.storeMLRead(ctx, name, args)
 	case "bahia_llm_list_routes":
 		result, err = s.storeLLMRoutes(ctx, args)
+	case "bahia_estimate_cost", "bahia_get_run_cost", "bahia_get_payment_history":
+		result, err = s.storePaymentRead(ctx, name, args)
 	case "bahia_worker_get_assignments", "bahia_worker_list_assignments", "bahia_worker_get_drain_status", "bahia_worker_list_drain_status":
 		result, err = s.storeWorkerModelRead(ctx, name, args)
 	case "bahia_package_list", "bahia_package_get":
@@ -189,6 +194,107 @@ func (s *Server) callStoreReadTool(ctx context.Context, name string, args map[st
 	return result, true
 }
 
+func (s *Server) storePaymentRead(ctx context.Context, name string, args map[string]any) (*ToolResult, error) {
+	if name == "bahia_estimate_cost" {
+		runID, err := parseRequiredUUIDArg(args, "run_id")
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		run, err := s.readStateOne(ctx, nostrpool.KindDeploymentRunRegistry, "id", runID.String())
+		if err != nil {
+			return nil, err
+		}
+		if run == nil {
+			return errorResult("run not found"), nil
+		}
+		workerPubkey := stringFromRecord(run.Fields, "worker_pubkey")
+		if workerPubkey == "" {
+			return errorResult("deployment run has no assigned worker"), nil
+		}
+		workerRecord, err := s.readStateOne(ctx, nostrpool.KindWorkerState, "pubkey", workerPubkey)
+		if err != nil {
+			return nil, err
+		}
+		if workerRecord == nil {
+			return errorResult("worker not found"), nil
+		}
+		var worker domain.Worker
+		if err := json.Unmarshal(workerRecord.Content, &worker); err != nil {
+			return nil, err
+		}
+		if len(worker.Pricing) == 0 {
+			return errorResult("worker " + worker.PubKey + " has no pricing information"), nil
+		}
+		duration := optionalIntArg(args, "estimated_duration_secs", 0)
+		if duration <= 0 {
+			duration = worker.MaxDurationSecs
+		}
+		if duration <= 0 {
+			duration = 300
+		}
+		estimate := domain.EstimateCost(worker.Pricing[0], duration)
+		estimate.WorkerPubkey, estimate.WorkerName = worker.PubKey, worker.Name
+		return jsonResult(costEstimateToMap(&estimate))
+	}
+	records, err := s.readStateFamily(ctx, nostrpool.KindPaymentRecord)
+	if err != nil {
+		return nil, err
+	}
+	if name == "bahia_get_run_cost" {
+		runID, err := parseRequiredUUIDArg(args, "run_id")
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		payments := make([]domain.PaymentRecord, 0)
+		summary := &service.CostSummary{}
+		for _, record := range records {
+			if record.Fields["deployment_run_id"] != runID.String() {
+				continue
+			}
+			var payment domain.PaymentRecord
+			if err := json.Unmarshal(record.Content, &payment); err != nil {
+				return nil, err
+			}
+			payments = append(payments, payment)
+			switch payment.Direction {
+			case domain.PaymentDirectionPayment:
+				summary.TotalPaid += payment.AmountSats
+				summary.PaymentCount++
+			case domain.PaymentDirectionChange:
+				summary.TotalChange += payment.AmountSats
+				summary.ChangeCount++
+			}
+		}
+		sort.SliceStable(payments, func(i, j int) bool { return payments[i].CreatedAt.Before(payments[j].CreatedAt) })
+		summary.NetCost = summary.TotalPaid - summary.TotalChange
+		return jsonResult(map[string]any{"run_id": runID.String(), "summary": costSummaryToMap(summary), "payments": paymentRecordsToMaps(payments)})
+	}
+	worker := firstNonEmpty(stringArg(args, "worker_pubkey"), stringArg(args, "worker"))
+	if worker == "" {
+		return errorResult("worker_pubkey is required"), nil
+	}
+	limit := optionalIntArg(args, "limit", 50)
+	if limit <= 0 {
+		limit = 50
+	}
+	payments := make([]domain.PaymentRecord, 0)
+	for _, record := range records {
+		if record.Fields["worker_pubkey"] != worker {
+			continue
+		}
+		var payment domain.PaymentRecord
+		if err := json.Unmarshal(record.Content, &payment); err != nil {
+			return nil, err
+		}
+		payments = append(payments, payment)
+	}
+	sort.SliceStable(payments, func(i, j int) bool { return payments[i].CreatedAt.After(payments[j].CreatedAt) })
+	if len(payments) > limit {
+		payments = payments[:limit]
+	}
+	return jsonResult(map[string]any{"worker_pubkey": worker, "payments": paymentRecordsToMaps(payments), "total": len(payments), "limit": limit})
+}
+
 func (s *Server) storeLLMRoutes(ctx context.Context, args map[string]any) (*ToolResult, error) {
 	records, err := s.readStateFamily(ctx, nostrpool.KindLLMRouteRegistry)
 	if err != nil {
@@ -202,6 +308,7 @@ func (s *Server) storeLLMRoutes(ctx context.Context, args map[string]any) (*Tool
 		}
 		routes = append(routes, llmRouteToMap(&route))
 	}
+	sort.Slice(routes, func(i, j int) bool { return routes[i]["name"].(string) < routes[j]["name"].(string) })
 	limit, offset := limitOffsetArgs(args, 100)
 	if offset > len(routes) {
 		offset = len(routes)
@@ -271,6 +378,7 @@ func (s *Server) storeNotificationChannelRead(ctx context.Context, name string, 
 		}
 		items = append(items, channel)
 	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	return jsonResult(map[string]any{"channels": notificationChannelsToMaps(items), "total": len(items)})
 }
 
@@ -286,8 +394,12 @@ func (s *Server) storePackageRead(ctx context.Context, name string, args map[str
 			if err := json.Unmarshal(rec.Content, &item); err != nil {
 				return nil, err
 			}
+			if item.Deleted && !boolArg(args, "include_deleted") {
+				continue
+			}
 			items = append(items, item)
 		}
+		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 		return jsonResult(map[string]any{"repositories": items})
 	}
 	var repository *domain.PackageRepository
@@ -323,9 +435,24 @@ func (s *Server) storePackageRead(ctx context.Context, name string, args map[str
 				if err := json.Unmarshal(rec.Content, &item); err != nil {
 					return nil, err
 				}
+				if item.Format == "" {
+					item.Format = repository.Format
+				}
+				if item.Deleted {
+					continue
+				}
 				items = append(items, item)
 			}
 		}
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].PackageName != items[j].PackageName {
+				return items[i].PackageName < items[j].PackageName
+			}
+			if items[i].Version != items[j].Version {
+				return items[i].Version < items[j].Version
+			}
+			return items[i].Filename < items[j].Filename
+		})
 		limit, offset := limitOffsetArgs(args, 100)
 		if offset > len(items) {
 			offset = len(items)
@@ -348,6 +475,9 @@ func (s *Server) storePackageRead(ctx context.Context, name string, args map[str
 		if err := json.Unmarshal(rec.Content, &item); err != nil {
 			return nil, err
 		}
+		if item.Format == "" {
+			item.Format = repository.Format
+		}
 		return jsonResult(item)
 	}
 	return errorResult("package artifact not found"), nil
@@ -357,6 +487,25 @@ func storeBackupItems[T any](s *Server, ctx context.Context, family int, args ma
 	records, err := s.readStateFamily(ctx, family)
 	if err != nil {
 		return nil, err
+	}
+	if list {
+		sort.SliceStable(records, func(i, j int) bool {
+			left, right := records[i].Fields, records[j].Fields
+			switch itemKey {
+			case "run", "restore", "retention_run":
+				if left["created_at"] != right["created_at"] {
+					return stringFromRecord(left, "created_at") > stringFromRecord(right, "created_at")
+				}
+				return stringFromRecord(left, "id") > stringFromRecord(right, "id")
+			case "recipe":
+				if left["name"] != right["name"] {
+					return stringFromRecord(left, "name") < stringFromRecord(right, "name")
+				}
+				return stringFromRecord(left, "version") < stringFromRecord(right, "version")
+			default:
+				return stringFromRecord(left, "name") < stringFromRecord(right, "name")
+			}
+		})
 	}
 	if !list {
 		id := stringArg(args, idArg)
@@ -384,9 +533,6 @@ func storeBackupItems[T any](s *Server, ctx context.Context, family int, args ma
 				return nil, err
 			}
 			out := map[string]any{itemKey: item}
-			if itemKey == "run" && rec.Fields["verification"] != nil {
-				out["verification"] = rec.Fields["verification"]
-			}
 			return jsonResult(out)
 		}
 		return errorResult("backup " + strings.ReplaceAll(itemKey, "_", " ") + " not found"), nil
@@ -424,7 +570,40 @@ func (s *Server) storeBackupRead(ctx context.Context, name string, args map[stri
 		return storeBackupItems[domain.BackupRecipe](s, ctx, nostrpool.KindBackupRecipeRegistry, args, list, "recipes", "recipe", "recipe_id", "recipe")
 	case "list_backup_definitions", "inspect_backup_definition":
 		return storeBackupItems[domain.BackupDefinition](s, ctx, nostrpool.KindBackupDefinitionRegistry, args, list, "definitions", "definition", "definition_id", "name")
-	case "list_backup_runs", "inspect_backup_run":
+	case "inspect_backup_run":
+		id, err := parseRequiredUUIDArg(args, "run_id")
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		runRecord, err := s.readStateOne(ctx, nostrpool.KindBackupRunState, "id", id.String())
+		if err != nil {
+			return nil, err
+		}
+		if runRecord == nil {
+			return errorResult("backup run not found"), nil
+		}
+		var run domain.BackupRun
+		if err := json.Unmarshal(runRecord.Content, &run); err != nil {
+			return nil, err
+		}
+		out := map[string]any{"run": run}
+		verifications, err := s.readStateFamily(ctx, nostrpool.KindBackupVerificationState)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range verifications {
+			if record.Fields["backup_run_id"] != id.String() {
+				continue
+			}
+			var verification domain.BackupVerificationRecord
+			if err := json.Unmarshal(record.Content, &verification); err != nil {
+				return nil, err
+			}
+			out["verification"] = verification
+			break
+		}
+		return jsonResult(out)
+	case "list_backup_runs":
 		return storeBackupItems[domain.BackupRun](s, ctx, nostrpool.KindBackupRunState, args, list, "runs", "run", "run_id", "name")
 	case "list_backup_restores", "inspect_backup_restore":
 		return storeBackupItems[domain.BackupRestoreRun](s, ctx, nostrpool.KindBackupRestoreState, args, list, "restores", "restore", "restore_id", "name")
@@ -499,6 +678,7 @@ func (s *Server) storeArtifactRead(ctx context.Context, name string, args map[st
 			items = append(items, out)
 		}
 	}
+	sort.SliceStable(items, func(i, j int) bool { return fmt.Sprint(items[i]["created_at"]) > fmt.Sprint(items[j]["created_at"]) })
 	limit := optionalIntArg(args, "limit", 20)
 	if limit >= 0 && len(items) > limit {
 		items = items[:limit]
@@ -550,6 +730,7 @@ func (s *Server) storeBuildRead(ctx context.Context, name string, args map[strin
 			items = append(items, out)
 		}
 	}
+	sort.SliceStable(items, func(i, j int) bool { return fmt.Sprint(items[i]["created_at"]) > fmt.Sprint(items[j]["created_at"]) })
 	limit := optionalIntArg(args, "limit", 20)
 	if limit >= 0 && len(items) > limit {
 		items = items[:limit]
@@ -592,6 +773,7 @@ func (s *Server) storeDeploymentRead(ctx context.Context, name string, args map[
 				items = append(items, intentResultFields(rec.Fields))
 			}
 		}
+		sort.SliceStable(items, func(i, j int) bool { return fmt.Sprint(items[i]["created_at"]) > fmt.Sprint(items[j]["created_at"]) })
 		limit := optionalIntArg(args, "limit", 20)
 		if limit >= 0 && len(items) > limit {
 			items = items[:limit]
@@ -624,6 +806,7 @@ func (s *Server) storeDeploymentRead(ctx context.Context, name string, args map[
 			items = append(items, runResultFields(rec.Fields))
 		}
 	}
+	sort.SliceStable(items, func(i, j int) bool { return fmt.Sprint(items[i]["created_at"]) > fmt.Sprint(items[j]["created_at"]) })
 	return jsonResult(map[string]any{"runs": items, "total": len(items)})
 }
 
@@ -660,6 +843,7 @@ func (s *Server) storeWorkerRead(ctx context.Context, name string, args map[stri
 		}
 		workers = append(workers, worker)
 	}
+	sort.SliceStable(workers, func(i, j int) bool { return workers[i].LastAdvertisementAt.After(workers[j].LastAdvertisementAt) })
 	if name == "bahia_get_worker" || name == "bahia_get_worker_pricing" {
 		pubkey := stringArg(args, "pubkey")
 		if pubkey == "" {
@@ -705,6 +889,7 @@ func (s *Server) storePolicyRead(ctx context.Context, name string, args map[stri
 		}
 		policies = append(policies, policy)
 	}
+	sort.Slice(policies, func(i, j int) bool { return policies[i].Name < policies[j].Name })
 	if name == "bahia_get_policy" {
 		id := stringArg(args, "policy_id")
 		if id == "" {

@@ -33,7 +33,12 @@ daemon decrypts confidential secret metadata and notification channels with
 its service-wrapped organization key; channel responses still redact sensitive
 configuration fields. Service/environment, build/artifact, deployment state,
 worker state, policy, DNS endpoint, ML state, package, backup, secret metadata,
-and notification-channel tools use this path when the local store is configured.
+notification-channel, LLM-route, and payment/cost tools use this path when the
+local store is configured. Worker eligibility previews rank workers from the
+same canonical worker records. Signature, SBOM, runtime-observation, LLM-release,
+package-intent, tool-provisioning, and notification-log reads still require
+non-canonical read models until corresponding 30900 producers exist.
+
 The relay subscriptions that populate the daemon store determine freshness;
 MCP does not issue a one-shot relay request for each tool call.
 

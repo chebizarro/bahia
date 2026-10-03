@@ -184,6 +184,7 @@ func (s *Server) handlePackageGet(ctx context.Context, args map[string]interface
 	return jsonResult(artifact)
 }
 
+// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs PackageIntentState.
 func (s *Server) handlePackageStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.packageProjection == nil {
 		return errorResult("package projection repository is not configured"), nil

@@ -2,10 +2,12 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -183,7 +185,12 @@ func (s *Server) handleWorkerListDrainStatus(ctx context.Context, args map[strin
 }
 
 func (s *Server) handleWorkerPreviewEligibility(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.workerReadModels == nil {
+	models := s.workerReadModels
+	if s.stateStore != nil {
+		workers := stateWorkerRepository{server: s}
+		models = service.NewWorkerReadModelService(workers, nil, nil, service.NewWorkerPolicyService(workers, s.logger), service.NewMLPlacementService(workers, s.logger), s.logger)
+	}
+	if models == nil {
 		return errorResult("worker read model service is not configured"), nil
 	}
 	previewID := strings.TrimSpace(stringArg(args, "preview_id"))
@@ -194,14 +201,14 @@ func (s *Server) handleWorkerPreviewEligibility(ctx context.Context, args map[st
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}
-		preview, err := s.workerReadModels.PreviewWorkerPolicyEligibility(ctx, previewID, env, policy)
+		preview, err := models.PreviewWorkerPolicyEligibility(ctx, previewID, env, policy)
 		if err != nil {
 			return errorResult(fmt.Sprintf("failed to preview worker eligibility: %v", err)), nil
 		}
 		return jsonResult(map[string]interface{}{"eligibility_preview": preview, "read_model_kind": controlplane.KindCASControlState, "read_model_topic": kinds.WorkerEligibilityTopic})
 	}
 	req := mlPlacementRequestFromArgs(args)
-	preview, err := s.workerReadModels.PreviewMLEligibility(ctx, previewID, req, policy)
+	preview, err := models.PreviewMLEligibility(ctx, previewID, req, policy)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to preview ML worker eligibility: %v", err)), nil
 	}
@@ -210,14 +217,28 @@ func (s *Server) handleWorkerPreviewEligibility(ctx context.Context, args map[st
 
 func (s *Server) environmentForWorkerPreview(ctx context.Context, args map[string]interface{}, policy map[string]any) (*domain.Environment, error) {
 	if envIDRaw := strings.TrimSpace(stringArg(args, "environment_id")); envIDRaw != "" {
-		if s.registry == nil {
+		if s.registry == nil && s.stateStore == nil {
 			return nil, fmt.Errorf("registry is not configured")
 		}
 		envID, err := uuid.Parse(envIDRaw)
 		if err != nil {
 			return nil, fmt.Errorf("invalid environment_id: %w", err)
 		}
-		env, err := s.registry.GetEnvironment(ctx, envID)
+		var env *domain.Environment
+		if s.stateStore != nil {
+			record, readErr := s.readStateOne(ctx, nostrpool.KindEnvironmentRegistry, "id", envID.String())
+			if readErr != nil {
+				return nil, readErr
+			}
+			if record != nil {
+				env = &domain.Environment{}
+				if err := json.Unmarshal(record.Content, env); err != nil {
+					return nil, err
+				}
+			}
+		} else {
+			env, err = s.registry.GetEnvironment(ctx, envID)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to get environment: %w", err)
 		}
