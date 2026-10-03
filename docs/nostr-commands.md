@@ -2,7 +2,7 @@
 
 ## Deployment-family intents
 
-For enabled `intent_domains`, publish client-signed kind `30900` with `schema=bahia.intent.<domain>.v1`, `domain` and `op` tags, and JSON content containing stable `intent_id`. Supported ops: `deployment/create|approve|reject|rollback`, `runtime/deploy|restart|stop`, `llm/deploy|rollback|approve|reject`, and `backup/restore-approval`. The [wire fixtures](../web/tests/fixtures/deployment-intents.json) specify content fields. Watch kind `30315` status and daemon-authored state, not the submission receipt, for outcomes. Disabled domains continue to use legacy ContextVM handlers.
+For enabled `intent_domains`, publish client-signed kind `30900` with `schema=bahia.intent.<domain>.v1`, `domain` and `op` tags, and JSON content containing stable `intent_id`. When used, `expected_updated_at` must be copied as an RFC3339 string from canonical `updated_at`, never encoded as a numeric epoch. Supported ops: `deployment/create|approve|reject|rollback`, `runtime/deploy|restart|stop`, `llm/deploy|rollback|approve|reject`, and `backup/restore-approval`. The [wire fixtures](../web/tests/fixtures/deployment-intents.json) specify content fields. Watch kind `30315` status and daemon-authored state, not the submission receipt, for outcomes. Disabled domains continue to use legacy ContextVM handlers.
 
 ## Artifact, policy, and approval commands
 

@@ -11,18 +11,20 @@ describe('intent signer', () => {
   it('builds Go-compatible ordered tags and sorted JSON without mutating content', () => {
     const content = { name: 'api', id: 'record-1', config: { z: 1, a: 2 } };
     const event = buildIntentEvent({ domain: 'service', op: 'update', coordinate: 'service:record-1',
-      orgId, intentId, content, currentRecord: { content: '{"updated_at":42}' }, createdAt: 123, pubkey });
+      orgId, intentId, content, currentRecord: { content: '{"updated_at":"2026-10-03T09:12:13.123456Z"}' }, createdAt: 123, pubkey });
     expect(event.tags).toEqual([
       ['d', 'service:record-1'], ['domain', 'service'], ['schema', 'bahia.intent.service.v1'],
       ['t', 'bahia-intent'], ['t', 'service'], ['op', 'update'], ['org', orgId], ['intent_id', intentId]
     ]);
-    expect(event.content).toBe('{"config":{"a":2,"z":1},"expected_updated_at":42,"id":"record-1","name":"api"}');
+    expect(event.content).toBe('{"config":{"a":2,"z":1},"expected_updated_at":"2026-10-03T09:12:13.123456Z","id":"record-1","name":"api"}');
     expect(content).not.toHaveProperty('expected_updated_at');
   });
 
   it('requires a current revision for updates', () => {
     expect(() => buildIntentEvent({ domain: 'service', coordinate: 'service:record-1', orgId }))
       .toThrow(/canonical updated_at/);
+    expect(() => buildIntentEvent({ domain: 'service', coordinate: 'service:record-1', orgId,
+      currentRecord: { updated_at: 42 } })).toThrow(/RFC3339/);
   });
 
   it('accepts daemon handler operations but rejects unknown ones', () => {

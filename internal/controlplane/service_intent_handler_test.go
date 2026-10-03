@@ -190,7 +190,6 @@ func newSvcIntentFixture(t *testing.T) *svcIntentFixture {
 	}
 }
 
-
 func makeTestServiceIntent(t *testing.T, op string, svc *domain.Service, intentID, pubkeyHex string) *nostr.Event {
 	t.Helper()
 
@@ -357,7 +356,7 @@ func TestServiceIntentHandler_StaleRevision_Conflict(t *testing.T) {
 
 	// Stale timestamp (1 hour before the entity's actual UpdatedAt).
 	staleTime := svc.UpdatedAt.Add(-1 * time.Hour)
-	staleEpoch := staleTime.UnixNano()
+	staleEpoch := staleTime
 
 	intent := &Intent{
 		Domain:            "service",
@@ -389,6 +388,18 @@ func TestServiceIntentHandler_StaleRevision_Conflict(t *testing.T) {
 	stored, _ := f.repo.GetByID(ctx, svc.ID)
 	if stored.Name != "api" {
 		t.Errorf("expected name to remain 'api', got %q", stored.Name)
+	}
+	matching := *intent
+	matching.IntentID = uuid.New().String()
+	matchingRevision := stored.UpdatedAt
+	matching.ExpectedUpdatedAt = &matchingRevision
+	matching.Content = map[string]interface{}{}
+	for key, value := range intent.Content {
+		matching.Content[key] = value
+	}
+	matching.Content["expected_updated_at"] = matchingRevision.Format(time.RFC3339Nano)
+	if err := f.processor.ProcessInProcess(ctx, &matching); err != nil {
+		t.Fatalf("canonical revision should be accepted: %v", err)
 	}
 }
 

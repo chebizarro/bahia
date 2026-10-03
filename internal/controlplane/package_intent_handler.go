@@ -78,6 +78,9 @@ func NewPackageIntentHandler(cfg PackageIntentHandlerConfig) *PackageIntentHandl
 // HandleIntent processes a single package intent. The processor has already
 // deduplicated, validated, and authorized the intent.
 func (h *PackageIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
+	if intent.ExpectedUpdatedAt != nil && intent.Op != "repository-apply" && intent.Op != "repository-delete" {
+		return fmt.Errorf("expected_updated_at is not supported for package %s", intent.Op)
+	}
 	switch intent.Op {
 	case "repository-apply":
 		return h.handleRepositoryApply(ctx, intent)
@@ -123,6 +126,16 @@ func (h *PackageIntentHandler) handleRepositoryApply(ctx context.Context, intent
 			existing, _ = h.projection.GetRepositoryByName(ctx, repo.Name)
 		}
 	}
+	if intent.ExpectedUpdatedAt != nil {
+		if existing == nil || !intent.RevisionMatches(existing.UpdatedAt) {
+			actual := time.Time{}
+			entityID := repo.ID
+			if existing != nil {
+				actual, entityID = existing.UpdatedAt, existing.ID
+			}
+			return &revisionConflictError{entityType: "package repository", entityID: entityID, expected: *intent.ExpectedUpdatedAt, actual: actual}
+		}
+	}
 
 	out, err := h.packageService.EnsureRepository(ctx, repo, existing)
 	if err != nil {
@@ -162,6 +175,9 @@ func (h *PackageIntentHandler) handleRepositoryDelete(ctx context.Context, inten
 	repo, err := h.lookupRepository(ctx, repoID, repoName)
 	if err != nil {
 		return fmt.Errorf("lookup repository for delete: %w", err)
+	}
+	if intent.ExpectedUpdatedAt != nil && !intent.RevisionMatches(repo.UpdatedAt) {
+		return &revisionConflictError{entityType: "package repository", entityID: repo.ID, expected: *intent.ExpectedUpdatedAt, actual: repo.UpdatedAt}
 	}
 
 	out, err := h.packageService.DeleteRepository(ctx, repo, force)

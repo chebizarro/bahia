@@ -85,13 +85,22 @@ func TestLLMDeploymentIntentOperations(t *testing.T) {
 			require.Equal(t, 1, reg.creates+reg.rollbacks+reg.approvals+reg.rejections)
 			{
 				stale := makeIntent("llm-stale-" + tc.op)
-				revision := time.Unix(1790985500, 0).UnixNano()
+				revision := time.Unix(1790985500, 0).UTC()
 				stale.ExpectedUpdatedAt = &revision
 				require.Error(t, proc.ProcessInProcess(ctx, stale))
 				require.Len(t, statuses.events, 3)
 				require.Equal(t, "conflict", tagValueNostr(statuses.events[2].Tags, "status"))
 				require.Equal(t, 1, reg.creates+reg.rollbacks+reg.approvals+reg.rejections)
 			}
+			matching := makeIntent("llm-matching-" + tc.op)
+			matching.Content = make(map[string]any, len(tc.content)+1)
+			for key, value := range tc.content {
+				matching.Content[key] = value
+			}
+			matching.Content["expected_updated_at"] = time.Unix(1790985600, 0).UTC().Format(time.RFC3339Nano)
+			require.NoError(t, proc.ProcessInProcess(ctx, matching))
+			require.Equal(t, "accepted", tagValueNostr(statuses.events[3].Tags, "status"))
+			require.Equal(t, 2, reg.creates+reg.rollbacks+reg.approvals+reg.rejections)
 		})
 	}
 }
@@ -152,11 +161,18 @@ func TestRuntimeIntentOperations(t *testing.T) {
 			require.Equal(t, "rejected", tagValueNostr(statuses.events[1].Tags, "status"))
 			stale := *intent
 			stale.IntentID = "stale-runtime-" + op
-			revision := time.Unix(1790985500, 0).UnixNano()
+			revision := time.Unix(1790985500, 0).UTC()
 			stale.ExpectedUpdatedAt = &revision
 			require.Error(t, proc.ProcessInProcess(ctx, &stale))
 			require.Equal(t, 1, lifecycle.deploys+lifecycle.restarts+lifecycle.stops)
 			require.Equal(t, "conflict", tagValueNostr(statuses.events[2].Tags, "status"))
+			matching := *intent
+			matching.IntentID = "matching-runtime-" + op
+			matching.Content = map[string]any{"service_id": serviceID.String(), "environment_id": environmentID.String(),
+				"expected_updated_at": time.Unix(1790985600, 0).UTC().Format(time.RFC3339Nano)}
+			require.NoError(t, proc.ProcessInProcess(ctx, &matching))
+			require.Equal(t, "accepted", tagValueNostr(statuses.events[3].Tags, "status"))
+			require.Equal(t, 2, lifecycle.deploys+lifecycle.restarts+lifecycle.stops)
 		})
 	}
 }
@@ -221,7 +237,7 @@ func TestDeploymentDecisionIntentPublishesCanonicalOnce(t *testing.T) {
 			proc := NewIntentProcessor(NewTrustSet(nil, zap.NewNop(), WithBootstrapOwners(map[string]string{svc.OrgID.String(): actor})), openTestStore(t), NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()), IntentProcessorConfig{EnabledDomains: map[string]bool{"deployment": true}}, zap.NewNop())
 			proc.RegisterHandler("deployment", &DeploymentIntentHandler{service: fixture.handlers, resources: fixture.handlers.registry})
 			intent := &Intent{Domain: "deployment", Op: op, OrgID: svc.OrgID, Actor: actor, Event: signedEvent, IntentID: "decision-" + op, Coordinate: targetID.String(), Content: map[string]any{"deployment_intent_id": targetID.String(), "expected_updated_at": revision.Format(time.RFC3339Nano)}}
-			expected := revision.UnixNano()
+			expected := revision
 			intent.ExpectedUpdatedAt = &expected
 			require.NoError(t, proc.ProcessInProcess(ctx, intent))
 			require.Equal(t, 1, canonical.intents)
@@ -231,7 +247,7 @@ func TestDeploymentDecisionIntentPublishesCanonicalOnce(t *testing.T) {
 			require.Equal(t, 1, canonical.intents)
 			stale := *intent
 			stale.IntentID = "stale-decision-" + op
-			staleRevision := revision.Add(-time.Second).UnixNano()
+			staleRevision := revision.Add(-time.Second)
 			stale.ExpectedUpdatedAt = &staleRevision
 			stale.Content = map[string]any{"deployment_intent_id": targetID.String(), "expected_updated_at": revision.Add(-time.Second).Format(time.RFC3339Nano)}
 			require.Error(t, proc.ProcessInProcess(ctx, &stale))
@@ -337,7 +353,7 @@ func TestDeploymentRollbackIntentFromPriorRunPublishesCanonicalOnce(t *testing.T
 	require.Equal(t, 1, fixture.canonical.intents)
 	stale := *intent
 	stale.IntentID = "stale-deployment-rollback"
-	revision := time.Unix(1790985500, 0).UnixNano()
+	revision := time.Unix(1790985500, 0).UTC()
 	stale.ExpectedUpdatedAt = &revision
 	require.Error(t, fixture.processor.ProcessInProcess(ctx, &stale))
 	require.Equal(t, 1, fixture.canonical.intents)

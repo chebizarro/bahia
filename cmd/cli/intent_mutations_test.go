@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -269,14 +268,14 @@ func TestCLIServiceEnvironmentIntentPipeline(t *testing.T) {
 	if registry.services[uuid.MustParse(serviceID)].Name != "api" {
 		t.Fatal("service handler did not apply CLI payload")
 	}
-	serviceRevision := registry.services[uuid.MustParse(serviceID)].UpdatedAt.UnixNano()
+	serviceRevision := registry.services[uuid.MustParse(serviceID)].UpdatedAt
 	if err := executeIntentCommand(t, "environments", "create", "--id", environmentID, "--org", org, "--name", "prod"); err != nil {
 		t.Fatal(err)
 	}
 	if len(registry.canonical) != 2 || registry.environments[uuid.MustParse(environmentID)].Name != "prod" {
 		t.Fatal("environment handler did not publish canonical state")
 	}
-	environmentRevision := registry.environments[uuid.MustParse(environmentID)].UpdatedAt.UnixMicro()
+	environmentRevision := registry.environments[uuid.MustParse(environmentID)].UpdatedAt
 	if err := executeIntentCommand(t, "services", "update", "--service", serviceID, "--name", "api-v2"); err != nil {
 		t.Fatal(err)
 	}
@@ -289,18 +288,17 @@ func TestCLIServiceEnvironmentIntentPipeline(t *testing.T) {
 	if registry.environments[uuid.MustParse(environmentID)].Name != "prod-v2" {
 		t.Fatal("environment update not applied")
 	}
-	for index, revision := range map[int]int64{2: serviceRevision, 3: environmentRevision} {
+	for index, revision := range map[int]time.Time{2: serviceRevision, 3: environmentRevision} {
 		var content map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(transport.published[index].Content), &content); err != nil {
 			t.Fatal(err)
 		}
-		var got json.Number
+		var got string
 		if err := json.Unmarshal(content["expected_updated_at"], &got); err != nil {
 			t.Fatal(err)
 		}
-		parsed, err := strconv.ParseInt(got.String(), 10, 64)
-		if err != nil || parsed != revision {
-			t.Fatalf("intent %d revision = %s, want %d (%v)", index, got, revision, err)
+		if got != revision.Format(time.RFC3339Nano) {
+			t.Fatalf("intent %d revision = %s, want %s", index, got, revision.Format(time.RFC3339Nano))
 		}
 	}
 	for _, ev := range transport.published {

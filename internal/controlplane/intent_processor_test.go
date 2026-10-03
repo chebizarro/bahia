@@ -242,7 +242,79 @@ func TestParseIntent_StringCanonicalRevision(t *testing.T) {
 	intent, err := ParseIntent(ev)
 	require.NoError(t, err)
 	require.NotNil(t, intent.ExpectedUpdatedAt)
-	assert.Equal(t, time.Date(2026, 10, 3, 9, 12, 13, 123456000, time.UTC).UnixMicro(), *intent.ExpectedUpdatedAt)
+	assert.Equal(t, time.Date(2026, 10, 3, 9, 12, 13, 123456000, time.UTC), *intent.ExpectedUpdatedAt)
+}
+
+func TestParseIntent_RejectsInvalidRevision(t *testing.T) {
+	for _, raw := range []string{`42`, `42.5`, `null`, `"2026-10-03"`, `"not-a-time"`} {
+		t.Run(raw, func(t *testing.T) {
+			ev := makeIntentEvent(t, "update", "svc-123", "intent-invalid-revision")
+			ev.Content = `{"expected_updated_at":` + raw + `}`
+			_, err := ParseIntent(ev)
+			require.ErrorContains(t, err, "invalid expected_updated_at")
+		})
+	}
+}
+
+func TestIntentProcessor_InvalidRevisionPublishesBoundedRejection(t *testing.T) {
+	statuses := &statusCollector{}
+	_, ownerPub := testNostrKeypair()
+	trust := NewTrustSet(nil, zap.NewNop(), WithBootstrapOwners(map[string]string{testOrgID().String(): ownerPub}))
+	processor := NewIntentProcessor(trust, openTestStore(t), NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()),
+		IntentProcessorConfig{EnabledDomains: map[string]bool{"test": true}}, zap.NewNop())
+	processor.RegisterHandler("test", &testDomainHandler{})
+	event := makeIntentEvent(t, "update", "svc-123", "intent-invalid-revision-status")
+	event.PubKey = testNostrPubKeyFromHex(t, ownerPub)
+	event.Content = `{"id":"svc-123","expected_updated_at":42}`
+	event.ID = event.GetID()
+	require.ErrorContains(t, processor.ProcessRelayIntent(context.Background(), event), "invalid expected_updated_at")
+	require.Len(t, statuses.events, 1)
+	assert.Equal(t, "rejected", tagValueNostr(statuses.events[0].Tags, "status"))
+	assert.Equal(t, "intent-status:"+ownerPub+":svc-123", extractDTag(statuses.events[0]))
+}
+
+func TestSignedUnwrappedIntent_InvalidRevisionPublishesBoundedRejection(t *testing.T) {
+	privateKey, actor := testNostrKeypair()
+	statuses := &statusCollector{}
+	processor := NewIntentProcessor(NewTrustSet([]string{actor}, zap.NewNop()), openTestStore(t),
+		NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()),
+		IntentProcessorConfig{EnabledDomains: map[string]bool{"secret": true}}, zap.NewNop())
+	ingress := NewIntentGiftWrapIngress(IntentGiftWrapIngressConfig{Processor: processor, SensitiveDomains: []string{"secret"}, Logger: zap.NewNop()})
+	event := buildSignedIntentEvent(t, privateKey, testOrgID(), "invalid-secret-revision", "secret", "update",
+		"bahia.intent.secret.v1", `{"id":"`+testOrgID().String()+`","expected_updated_at":42}`)
+	require.ErrorContains(t, ingress.ProcessUnwrappedIntent(context.Background(), event), "invalid expected_updated_at")
+	require.Len(t, statuses.events, 1)
+	assert.Equal(t, "rejected", tagValueNostr(statuses.events[0].Tags, "status"))
+	assert.Equal(t, "intent-status:"+actor+":"+testOrgID().String(), extractDTag(statuses.events[0]))
+}
+
+func TestIntentRevisionMatchesCanonicalPrecision(t *testing.T) {
+	record := time.Date(2026, 10, 3, 9, 12, 13, 123456789, time.UTC)
+	expected := time.Date(2026, 10, 3, 9, 12, 13, 123456000, time.UTC)
+	intent := &Intent{ExpectedUpdatedAt: &expected}
+	assert.True(t, intent.RevisionMatches(record))
+	older := expected.Add(-time.Microsecond)
+	intent.ExpectedUpdatedAt = &older
+	assert.False(t, intent.RevisionMatches(record))
+}
+
+func TestRegisteredDomainIntentRevisionWireContract(t *testing.T) {
+	canonical := time.Date(2026, 10, 3, 9, 12, 13, 123456000, time.UTC)
+	for _, name := range []string{"backup", "deployment", "dns", "environment", "llm", "ml", "notification", "org", "package", "policy", "runtime", "secret", "service", "worker"} {
+		t.Run(name, func(t *testing.T) {
+			event := makeIntentEvent(t, "update", "entity-1", "revision-"+name)
+			event.Tags[1][1] = name
+			event.Tags[2][1] = "bahia.intent." + name + ".v1"
+			event.Content = `{"expected_updated_at":"` + canonical.Format(time.RFC3339Nano) + `"}`
+			intent, err := ParseIntent(event)
+			require.NoError(t, err)
+			assert.True(t, intent.RevisionMatches(canonical), "canonical record revision must match")
+			event.Content = `{"expected_updated_at":"` + canonical.Add(-time.Second).Format(time.RFC3339Nano) + `"}`
+			stale, err := ParseIntent(event)
+			require.NoError(t, err)
+			assert.False(t, stale.RevisionMatches(canonical), "older canonical revision must conflict")
+		})
+	}
 }
 
 func TestParseIntent_MissingBahiaIntentTag(t *testing.T) {

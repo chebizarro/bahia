@@ -130,15 +130,8 @@ func checkMLRevision(intent *Intent, entity string, exists bool, actual time.Tim
 	if intent.ExpectedUpdatedAt == nil {
 		return nil
 	}
-	expected := time.Unix(*intent.ExpectedUpdatedAt, 0).UTC()
-	if raw, ok := intent.Content["expected_updated_at"].(string); ok {
-		parsed, err := time.Parse(time.RFC3339Nano, raw)
-		if err != nil {
-			return fmt.Errorf("invalid expected_updated_at: %w", err)
-		}
-		expected = parsed
-	}
-	if !exists || !actual.UTC().Equal(expected) {
+	expected := *intent.ExpectedUpdatedAt
+	if !exists || !intent.RevisionMatches(actual) {
 		return &intentRevisionConflictError{entity: entity, expected: expected, actual: actual}
 	}
 	return nil

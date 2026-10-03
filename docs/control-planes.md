@@ -2,7 +2,7 @@
 
 ## Deployment-family intent admission
 
-The `deployment`, `runtime`, `llm`, and `backup` intent domains admit client-signed kind `30900` desires when individually enabled. The processor verifies TrustSet permissions, deduplicates by `content.intent_id`, invokes the existing service paths, and emits bounded `30315` admission status; those services alone publish canonical state. Existing ContextVM mutations use in-process intent dispatch only for enabled domains and keep the legacy path otherwise. See the [domain operation table](designs/phase3-authority-inversion.md) and [wire fixtures](../web/tests/fixtures/deployment-intents.json).
+The `deployment`, `runtime`, `llm`, and `backup` intent domains admit client-signed kind `30900` desires when individually enabled. Revisioned intents copy the canonical record's RFC3339 `updated_at` string into `content.expected_updated_at`; numeric epochs are invalid. The processor verifies TrustSet permissions, deduplicates by `content.intent_id`, invokes the existing service paths, and emits bounded `30315` admission status; those services alone publish canonical state. Existing ContextVM mutations use in-process intent dispatch only for enabled domains and keep the legacy path otherwise. See the [domain operation table](designs/phase3-authority-inversion.md) and [wire fixtures](../web/tests/fixtures/deployment-intents.json).
 
 ## Publisher and discovery boundaries
 

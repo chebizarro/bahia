@@ -10,7 +10,7 @@ const intentId = '018f1fae-7b91-7bea-81d6-0669758de945';
 describe('Go/web intent fixture', () => {
   it('pins byte-identical unsigned tags and content on both sides', () => {
     const event = buildIntentEvent({ domain: 'service', op: 'update', coordinate: 'service:record-1',
-      orgId, intentId, createdAt: 1727740800, currentRecord: { content: '{"updated_at":42}' },
+      orgId, intentId, createdAt: 1727740800, currentRecord: { content: '{"updated_at":"2026-10-03T09:12:13.123456Z"}' },
       content: { id: 'record-1', name: 'api', org_id: orgId, config: { a: 2, z: 1 } } });
     const go = JSON.parse(readFileSync(join(fixtureDir, 'intent-go.json'), 'utf8'));
     expect(event).toEqual(go);

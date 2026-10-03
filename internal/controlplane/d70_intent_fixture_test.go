@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -27,7 +28,9 @@ func TestD70CrossLanguageIntentContentFixtures(t *testing.T) {
 			Content    map[string]interface{} `json:"content"`
 		} `json:"intents"`
 	}
-	require.NoError(t, json.Unmarshal(data, &fixture))
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	require.NoError(t, decoder.Decode(&fixture))
 	require.Equal(t, "bahia.intent-fixtures.d70.v1", fixture.Schema)
 	require.Len(t, fixture.Intents, 18)
 	seen := map[string]bool{}

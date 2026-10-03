@@ -31,6 +31,11 @@ func (*DNSIntentHandler) PermissionFor(string) domain.Permission { return domain
 func (*DNSIntentHandler) IsFleetScoped() bool                    { return true }
 
 func (h *DNSIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
+	// Supported DNS operations create or retire resources; none is a revisioned
+	// update of an existing canonical record. Do not silently ignore a token.
+	if intent.ExpectedUpdatedAt != nil {
+		return fmt.Errorf("expected_updated_at is not supported for DNS %s", intent.Op)
+	}
 	if h.operator == nil {
 		return fmt.Errorf("DNS operator is not configured")
 	}

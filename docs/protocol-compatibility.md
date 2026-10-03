@@ -2,7 +2,7 @@
 
 ## Deployment-family intent compatibility
 
-`deployment`, `runtime`, `llm`, and `backup` are opt-in `intent_domains` using existing client-signed kind `30900` and bounded kind `30315` status; no numeric kind is allocated. Enabled ContextVM mutations share the same in-process processor, while disabled domains preserve existing ContextVM behavior and canonical state publication. Stable `content.intent_id` makes relay replay non-duplicating; revision-guarded operations may return conflict. The [fixtures](../web/tests/fixtures/deployment-intents.json) are the cross-client wire contract.
+`deployment`, `runtime`, `llm`, and `backup` are opt-in `intent_domains` using existing client-signed kind `30900` and bounded kind `30315` status; no numeric kind is allocated. Enabled ContextVM mutations share the same in-process processor, while disabled domains preserve existing ContextVM behavior and canonical state publication. Stable `content.intent_id` makes relay replay non-duplicating; revision-guarded operations may return conflict. Their `expected_updated_at` wire value is the canonical record's RFC3339 `updated_at` string; numeric epochs are rejected. The [fixtures](../web/tests/fixtures/deployment-intents.json) are the cross-client wire contract.
 
 ## Publisher migration and discovery
 

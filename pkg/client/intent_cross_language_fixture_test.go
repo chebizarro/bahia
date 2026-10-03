@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
@@ -16,7 +17,7 @@ import (
 func TestIntentCrossLanguageFixture(t *testing.T) {
 	const orgID = "3b45458b-2724-4dda-9fc6-66f12249660d"
 	const intentID = "018f1fae-7b91-7bea-81d6-0669758de945"
-	revision := int64(42)
+	revision := time.Date(2026, 10, 3, 9, 12, 13, 123456000, time.UTC)
 	publisher := &IntentPublisher{}
 	event, err := publisher.BuildIntentEvent(PublishIntentRequest{
 		Domain: "service", Op: "update", Coordinate: "service:record-1",
@@ -68,7 +69,7 @@ func TestIntentCrossLanguageFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("daemon rejected web-built intent: %v", err)
 	}
-	if parsed.IntentID != intentID || parsed.Domain != "service" || parsed.ExpectedUpdatedAt == nil || *parsed.ExpectedUpdatedAt != revision {
+	if parsed.IntentID != intentID || parsed.Domain != "service" || parsed.ExpectedUpdatedAt == nil || !parsed.ExpectedUpdatedAt.Equal(revision) {
 		t.Fatalf("daemon parsed wrong web intent: %#v", parsed)
 	}
 }

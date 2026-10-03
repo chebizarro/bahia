@@ -123,13 +123,8 @@ func (h *LLMRouteIntentHandler) checkDeploymentRouteRevision(ctx context.Context
 	if route == nil {
 		return fmt.Errorf("LLM route %s not found", routeID)
 	}
-	expected := time.Unix(0, *intent.ExpectedUpdatedAt)
-	if raw, ok := intent.Content["expected_updated_at"].(string); ok {
-		if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-			expected = parsed
-		}
-	}
-	if !domain.SameRevision(route.UpdatedAt, expected) {
+	expected := *intent.ExpectedUpdatedAt
+	if !intent.RevisionMatches(route.UpdatedAt) {
 		return &revisionConflictError{entityID: routeID, expected: expected, actual: route.UpdatedAt}
 	}
 	return nil
@@ -185,13 +180,8 @@ func (h *LLMRouteIntentHandler) handleDeploymentDecision(ctx context.Context, in
 		return fmt.Errorf("LLM deployment intent %s not found", id)
 	}
 	if intent.ExpectedUpdatedAt != nil {
-		expected := time.Unix(0, *intent.ExpectedUpdatedAt)
-		if raw, ok := intent.Content["expected_updated_at"].(string); ok {
-			if parsed, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
-				expected = parsed
-			}
-		}
-		if !domain.SameRevision(current.UpdatedAt, expected) {
+		expected := *intent.ExpectedUpdatedAt
+		if !intent.RevisionMatches(current.UpdatedAt) {
 			return &revisionConflictError{entityID: id, expected: expected, actual: current.UpdatedAt}
 		}
 	}
@@ -363,15 +353,8 @@ func (h *LLMRouteIntentHandler) updateWithRevision(ctx context.Context, route *d
 	}
 
 	// Check revision.
-	expectedTime := time.Unix(0, *intent.ExpectedUpdatedAt)
-	if raw, ok := intent.Content["expected_updated_at"]; ok {
-		if v, ok := raw.(string); ok {
-			if parsed, parseErr := time.Parse(time.RFC3339Nano, v); parseErr == nil {
-				expectedTime = parsed
-			}
-		}
-	}
-	if !domain.SameRevision(existing.UpdatedAt, expectedTime) {
+	expectedTime := *intent.ExpectedUpdatedAt
+	if !intent.RevisionMatches(existing.UpdatedAt) {
 		if h.status != nil {
 			h.status.PublishConflict(ctx, intent)
 		}

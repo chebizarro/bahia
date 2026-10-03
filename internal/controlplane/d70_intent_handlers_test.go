@@ -103,6 +103,19 @@ func TestD70DNSIntentSupportedMutations(t *testing.T) {
 	})
 }
 
+func TestD70DNSIntentRejectsUnsupportedRevision(t *testing.T) {
+	operator := &recordingDNSPersistentOperator{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{}, backends: map[string]bool{"primary": true}}}
+	canonical := &d70DNSCanonical{}
+	processor, statuses := d70Processor(t, "dns", testPubkey, NewDNSIntentHandler(operator, canonical))
+	intent := d70Intent("dns", "zone-create", "zone:new.example", testPubkey,
+		map[string]interface{}{"name": "new.example", "visibility": "internal", "backend_ref": "primary", "ttl": 60,
+			"expected_updated_at": "2026-10-03T09:12:13Z"})
+	require.ErrorContains(t, processor.ProcessInProcess(context.Background(), intent), "expected_updated_at is not supported")
+	require.Equal(t, "rejected", tagValueNostr(statuses.events[0].Tags, "status"))
+	require.Empty(t, operator.zonesCreated)
+	require.Zero(t, canonical.zones)
+}
+
 func TestD70DNSIntentUnsupportedCRUDRejected(t *testing.T) {
 	p, statuses := d70Processor(t, "dns", testPubkey, NewDNSIntentHandler(&recordingDNSOperator{}, &d70DNSCanonical{}))
 	for _, op := range []string{"zone-update", "zone-delete", "endpoint-create", "endpoint-update", "endpoint-delete", "backend-create", "backend-update", "backend-delete", "policy-update", "policy-delete"} {
@@ -236,12 +249,17 @@ func TestD70MLIntentUnsupportedDeletesAndConflict(t *testing.T) {
 	}
 	id := uuid.New()
 	repo.models[id] = &domain.MLModel{ID: id, Slug: "sample", Name: "old", UpdatedAt: time.Now().UTC()}
-	stale := time.Now().Add(-time.Hour).Unix()
+	stale := time.Now().Add(-time.Hour).UTC()
 	intent := d70Intent("ml", "model-update", "model:sample", testPubkey, map[string]interface{}{"id": id.String(), "slug": "sample", "name": "new"})
 	intent.ExpectedUpdatedAt = &stale
 	require.Error(t, p.ProcessInProcess(context.Background(), intent))
 	require.Equal(t, "conflict", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
 	require.Equal(t, 0, repo.writes)
+	matchingModel := d70Intent("ml", "model-update", "model:sample", testPubkey,
+		map[string]interface{}{"id": id.String(), "slug": "sample", "name": "new", "expected_updated_at": repo.models[id].UpdatedAt.Format(time.RFC3339Nano)})
+	require.NoError(t, p.ProcessInProcess(context.Background(), matchingModel))
+	require.Equal(t, "accepted", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
+	require.Equal(t, 1, repo.writes)
 	endpointID, envID := uuid.New(), uuid.New()
 	repo.endpoints[endpointID] = &domain.MLInferenceEndpoint{ID: endpointID, Name: "inference", EnvironmentID: envID, UpdatedAt: time.Now().UTC()}
 	endpoint := d70Intent("ml", "endpoint-update", "endpoint:"+endpointID.String(), testPubkey,
@@ -249,7 +267,13 @@ func TestD70MLIntentUnsupportedDeletesAndConflict(t *testing.T) {
 	endpoint.ExpectedUpdatedAt = &stale
 	require.Error(t, p.ProcessInProcess(context.Background(), endpoint))
 	require.Equal(t, "conflict", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
-	require.Equal(t, 0, repo.writes)
+	require.Equal(t, 1, repo.writes)
+	matchingEndpoint := d70Intent("ml", "endpoint-update", "endpoint:"+endpointID.String(), testPubkey,
+		map[string]interface{}{"id": endpointID.String(), "name": "inference", "environment_id": envID.String(),
+			"expected_updated_at": repo.endpoints[endpointID].UpdatedAt.Format(time.RFC3339Nano)})
+	require.NoError(t, p.ProcessInProcess(context.Background(), matchingEndpoint))
+	require.Equal(t, "accepted", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
+	require.Equal(t, 2, repo.writes)
 }
 
 func TestD70MLCanonicalFailureRejectsIntent(t *testing.T) {
@@ -345,7 +369,7 @@ func TestD70WorkerIntentConflictAndUnsupported(t *testing.T) {
 	capture := &captureNostrPublisher{published: 1}
 	repo := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey, Name: "worker", SchedulingState: domain.WorkerSchedulingActive, UpdatedAt: time.Now().UTC()})
 	p, statuses := d70Processor(t, "worker", actor, NewWorkerIntentHandler(newWorkerHandlerTestReactor(t, actor, capture, repo)))
-	stale := time.Now().Add(-time.Hour).Unix()
+	stale := time.Now().Add(-time.Hour).UTC()
 	intent := d70Intent("worker", "cordon", "worker:"+workerPubkey, actor, map[string]interface{}{"worker_pubkey": workerPubkey, "scheduling_state": "cordoned", "labels": map[string]interface{}{}})
 	intent.ExpectedUpdatedAt = &stale
 	require.Error(t, p.ProcessInProcess(context.Background(), intent))
@@ -354,6 +378,14 @@ func TestD70WorkerIntentConflictAndUnsupported(t *testing.T) {
 	unsupported := d70Intent("worker", "disable", "worker:"+workerPubkey, actor, map[string]interface{}{"worker_pubkey": workerPubkey})
 	require.ErrorContains(t, p.ProcessInProcess(context.Background(), unsupported), "unsupported op: worker disable")
 	require.Equal(t, "rejected", tagValueNostr(statuses.events[1].Tags, "status"))
+	worker, err := repo.GetByPubKey(context.Background(), workerPubkey)
+	require.NoError(t, err)
+	matching := d70Intent("worker", "cordon", "worker:"+workerPubkey, actor,
+		map[string]interface{}{"worker_pubkey": workerPubkey, "scheduling_state": "cordoned", "labels": map[string]interface{}{},
+			"expected_updated_at": worker.UpdatedAt.Format(time.RFC3339Nano)})
+	require.NoError(t, p.ProcessInProcess(context.Background(), matching))
+	require.Equal(t, "accepted", tagValueNostr(statuses.events[2].Tags, "status"))
+	require.Len(t, capture.events, 1)
 }
 
 func TestD70IntentContentRoundTrip(t *testing.T) {

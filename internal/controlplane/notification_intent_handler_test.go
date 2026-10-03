@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -250,6 +251,8 @@ func TestNotificationIntentHandler_CreateViaRelayIntent(t *testing.T) {
 func TestNotificationIntentHandler_UpdateViaInProcess(t *testing.T) {
 	f := newNotificationIntentFixture(t)
 	ctx := context.Background()
+	statuses := &statusCollector{}
+	f.processor.status = NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop())
 
 	channelID := domain.NewEntityID()
 	// Create via relay.
@@ -264,21 +267,25 @@ func TestNotificationIntentHandler_UpdateViaInProcess(t *testing.T) {
 	if err := f.processor.ProcessRelayIntent(ctx, ev); err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
+	current, _ := f.repo.GetChannelByID(ctx, channelID)
+	revision := current.UpdatedAt
 
 	// Update via in-process (dual dispatch).
 	intent := &Intent{
-		Domain:     "notification",
-		Op:         "update",
-		OrgID:      testOrgID(),
-		IntentID:   uuid.New().String(),
-		Coordinate: channelID.String(),
-		Actor:      f.ownerPub,
+		Domain:            "notification",
+		Op:                "update",
+		OrgID:             testOrgID(),
+		IntentID:          uuid.New().String(),
+		Coordinate:        channelID.String(),
+		Actor:             f.ownerPub,
+		ExpectedUpdatedAt: &revision,
 		Content: map[string]interface{}{
-			"id":           channelID.String(),
-			"name":         "Slack Hook v2",
-			"channel_type": "webhook",
-			"config":       map[string]any{"url": "https://hooks.slack.com/bbb"},
-			"enabled":      false,
+			"id":                  channelID.String(),
+			"name":                "Slack Hook v2",
+			"channel_type":        "webhook",
+			"config":              map[string]any{"url": "https://hooks.slack.com/bbb"},
+			"enabled":             false,
+			"expected_updated_at": revision.Format(time.RFC3339Nano),
 		},
 	}
 
@@ -300,6 +307,14 @@ func TestNotificationIntentHandler_UpdateViaInProcess(t *testing.T) {
 	// 2 publishes (create + update).
 	if len(f.publisher.published) != 2 {
 		t.Fatalf("expected 2 publish calls, got %d", len(f.publisher.published))
+	}
+	stale := *intent
+	stale.IntentID = uuid.New().String()
+	if err := f.processor.ProcessInProcess(ctx, &stale); !IsRevisionConflict(err) {
+		t.Fatalf("stale revision must conflict: %v", err)
+	}
+	if len(f.publisher.published) != 2 || len(statuses.events) != 3 || tagValueNostr(statuses.events[2].Tags, "status") != "conflict" {
+		t.Fatal("stale notification update mutated state or missed conflict status")
 	}
 }
 

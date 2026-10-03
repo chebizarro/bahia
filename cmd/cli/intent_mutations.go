@@ -351,7 +351,7 @@ func runServiceUpdateIntent(cmd *cobra.Command, req client.UpdateServiceNostrReq
 	if err != nil {
 		return nil, err
 	}
-	revision := svc.UpdatedAt.UnixNano()
+	revision := svc.UpdatedAt
 	if err := publishCLIIntent(cmd, client.PublishIntentRequest{Domain: "service", Op: "update", Coordinate: req.ID, OrgID: org, IntentID: intentID, Content: content, ExpectedUpdatedAt: &revision}); err != nil {
 		return nil, err
 	}
@@ -454,7 +454,7 @@ func runEnvironmentUpdateIntent(cmd *cobra.Command, req client.UpdateEnvironment
 	if err != nil {
 		return nil, err
 	}
-	revision := current.UpdatedAt.UnixMicro()
+	revision := current.UpdatedAt
 	if err := publishCLIIntent(cmd, client.PublishIntentRequest{Domain: "environment", Op: "update", Coordinate: req.ID, OrgID: org, IntentID: intentID, Content: content, ExpectedUpdatedAt: &revision}); err != nil {
 		return nil, err
 	}

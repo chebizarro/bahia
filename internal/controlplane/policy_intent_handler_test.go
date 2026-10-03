@@ -301,7 +301,7 @@ func TestPolicyIntentHandler_RevisionConflict(t *testing.T) {
 	})
 
 	// Stale expected_updated_at.
-	staleTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano()
+	staleTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	intent := policyIntent("update", policyID, map[string]interface{}{
 		"id":   policyID.String(),
 		"name": "should-fail",
@@ -315,6 +315,12 @@ func TestPolicyIntentHandler_RevisionConflict(t *testing.T) {
 	// Policy should be unchanged.
 	p := repo.get(policyID)
 	assert.Equal(t, "existing", p.Name)
+	matching := *intent
+	matchingRevision := p.UpdatedAt
+	matching.ExpectedUpdatedAt = &matchingRevision
+	matching.Content = map[string]interface{}{"id": policyID.String(), "name": "updated", "expected_updated_at": matchingRevision.Format(time.RFC3339Nano)}
+	require.NoError(t, handler.HandleIntent(context.Background(), &matching))
+	assert.Equal(t, "updated", repo.get(policyID).Name)
 }
 
 // TestPolicyIntentHandler_Delete verifies that a delete intent removes the

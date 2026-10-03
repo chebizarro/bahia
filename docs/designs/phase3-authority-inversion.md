@@ -91,6 +91,8 @@ The ContextVM create/update/delete handlers (`internal/controlplane/encrypted_ro
 
 **The newest intent by `(created_at, lowest event id)` across all trusted authors for a coordinate wins**, subject to the `expected_updated_at` revision check.
 
+`expected_updated_at` is the canonical record's `updated_at` RFC3339/RFC3339Nano string, not a numeric Unix epoch. Clients copy that string into the intent content; the daemon rejects malformed or numeric values and compares revisions at the canonical record's microsecond precision.
+
 When multiple trusted operators publish intents for the same coordinate:
 1. The relay keeps only the newest per `(kind, pubkey, d)` — one per author.
 2. The daemon's subscription delivers intents from all trusted authors. For each coordinate, the daemon selects the **newest** by `(created_at, lowest hex id)` across authors. This is the winning intent.

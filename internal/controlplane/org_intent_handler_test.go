@@ -587,7 +587,7 @@ func TestOrgIntentHandler_StaleRevisionConflict(t *testing.T) {
 		ID: orgID, Name: "test-org", DisplayName: "Test", UpdatedAt: now,
 	})
 
-	staleTime := now.Add(-time.Hour).UnixNano()
+	staleTime := now.Add(-time.Hour)
 	intent := &Intent{
 		Domain: "org", Op: "update", Schema: "bahia.intent.org.v1",
 		OrgID: orgID, IntentID: uuid.New().String(), Coordinate: orgID.String(),
@@ -602,6 +602,18 @@ func TestOrgIntentHandler_StaleRevisionConflict(t *testing.T) {
 	}
 	if !IsRevisionConflict(err) {
 		t.Errorf("expected revision conflict, got: %v", err)
+	}
+	matching := *intent
+	matching.IntentID = uuid.New().String()
+	current, getErr := orgs.GetByID(ctx, orgID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	matchingRevision := current.UpdatedAt
+	matching.ExpectedUpdatedAt = &matchingRevision
+	matching.Content = map[string]interface{}{"id": orgID.String(), "display_name": "Updated", "expected_updated_at": matchingRevision.Format(time.RFC3339Nano)}
+	if err := handler.HandleIntent(ctx, &matching); err != nil {
+		t.Fatalf("canonical revision should be accepted: %v", err)
 	}
 }
 

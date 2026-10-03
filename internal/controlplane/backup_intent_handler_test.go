@@ -329,15 +329,22 @@ func TestBackupIntentHandler_RestoreApproval(t *testing.T) {
 	require.Equal(t, 1, registry.restoreApprovals)
 	stale := *intent
 	stale.IntentID = "restore-approval-stale"
-	revision := time.Unix(1790985500, 0).UnixNano()
+	revision := time.Unix(1790985500, 0).UTC()
 	stale.ExpectedUpdatedAt = &revision
 	require.Error(t, proc.ProcessInProcess(ctx, &stale))
 	require.Equal(t, "conflict", tagValueNostr(statuses.events[1].Tags, "status"))
 	require.Equal(t, 1, registry.restoreApprovals)
+	matching := *intent
+	matching.IntentID = "restore-approval-matching"
+	matching.Content = map[string]any{"restore_id": id.String(), "decision": "approve",
+		"expected_updated_at": registry.restores[id].UpdatedAt.Format(time.RFC3339Nano)}
+	require.NoError(t, proc.ProcessInProcess(ctx, &matching))
+	require.Equal(t, "accepted", tagValueNostr(statuses.events[2].Tags, "status"))
+	require.Equal(t, 2, registry.restoreApprovals)
 	denied := *intent
 	denied.IntentID = "restore-approval-denied"
 	denied.Actor = "0000000000000000000000000000000000000000000000000000000000000001"
 	require.Error(t, proc.ProcessInProcess(ctx, &denied))
-	require.Equal(t, "rejected", tagValueNostr(statuses.events[2].Tags, "status"))
-	require.Equal(t, 1, registry.restoreApprovals)
+	require.Equal(t, "rejected", tagValueNostr(statuses.events[3].Tags, "status"))
+	require.Equal(t, 2, registry.restoreApprovals)
 }

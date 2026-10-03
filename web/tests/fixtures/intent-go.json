@@ -1,5 +1,5 @@
 {
-  "content": "{\"config\":{\"a\":2,\"z\":1},\"expected_updated_at\":42,\"id\":\"record-1\",\"name\":\"api\",\"org_id\":\"3b45458b-2724-4dda-9fc6-66f12249660d\"}",
+  "content": "{\"config\":{\"a\":2,\"z\":1},\"expected_updated_at\":\"2026-10-03T09:12:13.123456Z\",\"id\":\"record-1\",\"name\":\"api\",\"org_id\":\"3b45458b-2724-4dda-9fc6-66f12249660d\"}",
   "created_at": 1727740800,
   "kind": 30900,
   "tags": [

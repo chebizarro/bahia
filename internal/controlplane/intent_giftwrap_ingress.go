@@ -123,25 +123,7 @@ func (ig *IntentGiftWrapIngress) ProcessGiftWrappedIntent(ctx context.Context, o
 		return nil
 	}
 
-	// Parse and hand off to the processor.
-	intent, err := ParseIntent(inner)
-	if err != nil {
-		ig.logger.Debug("failed to parse gift-wrapped inner intent",
-			zap.String("outer_id", outer.ID.Hex()),
-			zap.Error(err),
-		)
-		return nil
-	}
-	intent.Actor = inner.PubKey.Hex()
-
-	// Verify domain is sensitive.
-	if !ig.sensitiveDomains[intent.Domain] {
-		ig.logger.Debug("gift-wrapped intent for non-sensitive domain, processing normally",
-			zap.String("domain", intent.Domain),
-		)
-	}
-
-	return ig.processor.process(ctx, intent)
+	return ig.processVerifiedRumor(ctx, inner)
 }
 
 // RejectPlaintextSensitiveIntent checks if a plaintext 30900 intent is for a
@@ -199,6 +181,13 @@ func (ig *IntentGiftWrapIngress) processVerifiedRumor(ctx context.Context, inner
 	// Parse and hand off to the processor.
 	intent, err := ParseIntent(inner)
 	if err != nil {
+		if intent != nil && ig.processor.trustSet.IsKnownPrincipal(inner.PubKey.Hex()) {
+			intent.Actor = inner.PubKey.Hex()
+			if ig.processor.status != nil {
+				ig.processor.status.PublishRejection(ctx, intent, err.Error())
+			}
+			return err
+		}
 		ig.logger.Debug("failed to parse unwrapped inner intent",
 			zap.String("inner_id", inner.ID.Hex()),
 			zap.Error(err),

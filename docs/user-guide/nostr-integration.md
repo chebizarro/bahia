@@ -5,8 +5,8 @@
 The web app signs service, environment, and policy create/update/delete requests as
 kind `30900` `t=bahia-intent` events. Package promote/yank actions use the same
 intent transport. Select the owning organization when creating a service or
-policy. Updates include the current canonical `updated_at` as
-`expected_updated_at`; the daemon must have the corresponding domain enabled in
+policy. Updates copy the current canonical RFC3339 `updated_at` string as
+`expected_updated_at` (numeric epochs are rejected); the daemon must have the corresponding domain enabled in
 `nostr.intent_domains` to process relay intents.
 
 After submission, the browser shows a local **pending** badge and its age. This

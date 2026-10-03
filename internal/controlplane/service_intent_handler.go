@@ -87,16 +87,7 @@ func (h *ServiceIntentHandler) handleCreateOrUpdate(ctx context.Context, intent 
 
 	// Check expected_updated_at revision if present.
 	if intent.ExpectedUpdatedAt != nil {
-		expectedTime := time.Unix(0, *intent.ExpectedUpdatedAt)
-		// Try parsing as RFC3339Nano from content first (higher precision).
-		if raw, ok := intent.Content["expected_updated_at"]; ok {
-			if v, ok := raw.(string); ok {
-				if parsed, parseErr := time.Parse(time.RFC3339Nano, v); parseErr == nil {
-					expectedTime = parsed
-				}
-			}
-		}
-		return h.updateWithRevision(ctx, svc, expectedTime, intent)
+		return h.updateWithRevision(ctx, svc, *intent.ExpectedUpdatedAt, intent)
 	}
 
 	// Level-triggered: try to load existing, create or update accordingly.
@@ -177,6 +168,10 @@ func (h *ServiceIntentHandler) updateWithRevision(ctx context.Context, svc *doma
 	}
 	if existing.OrgID != intent.OrgID {
 		return fmt.Errorf("service %s belongs to a different organization", svc.ID)
+	}
+
+	if !intent.RevisionMatches(existing.UpdatedAt) {
+		return &revisionConflictError{entityType: "service", entityID: svc.ID, expected: expectedUpdatedAt, actual: existing.UpdatedAt}
 	}
 
 	mergeServiceOntoExisting(existing, svc)

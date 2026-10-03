@@ -182,7 +182,7 @@ type PublishIntentRequest struct {
 	// IntentID is the idempotency key (UUIDv7). Reuse for retries.
 	IntentID string
 	// ExpectedUpdatedAt is the optional revision-check timestamp for updates.
-	ExpectedUpdatedAt *int64
+	ExpectedUpdatedAt *time.Time
 }
 
 // PreparedIntent is a signed (and optionally gift-wrapped) intent ready for
@@ -247,7 +247,16 @@ func (p *IntentPublisher) BuildIntentEvent(req PublishIntentRequest) (nostr.Even
 		content = map[string]interface{}{}
 	}
 	if req.ExpectedUpdatedAt != nil {
-		content["expected_updated_at"] = *req.ExpectedUpdatedAt
+		content["expected_updated_at"] = req.ExpectedUpdatedAt.Format(time.RFC3339Nano)
+	}
+	if raw, ok := content["expected_updated_at"]; ok {
+		revision, ok := raw.(string)
+		if !ok {
+			return nostr.Event{}, fmt.Errorf("invalid expected_updated_at: must be an RFC3339 timestamp string")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, revision); err != nil {
+			return nostr.Event{}, fmt.Errorf("invalid expected_updated_at: %w", err)
+		}
 	}
 	contentJSON, err := json.Marshal(content)
 	if err != nil {

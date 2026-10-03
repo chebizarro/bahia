@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -85,13 +84,8 @@ func (h *DeploymentIntentHandler) handleDeployment(ctx context.Context, intent *
 			if superseded == nil {
 				return fmt.Errorf("superseded deployment intent %s not found", supersedesID)
 			}
-			expected := time.Unix(0, *intent.ExpectedUpdatedAt)
-			if raw, ok := content["expected_updated_at"].(string); ok {
-				if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-					expected = parsed
-				}
-			}
-			if !domain.SameRevision(superseded.UpdatedAt, expected) {
+			expected := *intent.ExpectedUpdatedAt
+			if !intent.RevisionMatches(superseded.UpdatedAt) {
 				return &revisionConflictError{entityID: supersedesID, expected: expected, actual: superseded.UpdatedAt}
 			}
 		}
@@ -141,13 +135,8 @@ func (h *DeploymentIntentHandler) handleDeployment(ctx context.Context, intent *
 			return fmt.Errorf("deployment intent %s not found", id)
 		}
 		if intent.ExpectedUpdatedAt != nil {
-			expected := time.Unix(0, *intent.ExpectedUpdatedAt)
-			if raw, ok := content["expected_updated_at"].(string); ok {
-				if parsed, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
-					expected = parsed
-				}
-			}
-			if !domain.SameRevision(current.UpdatedAt, expected) {
+			expected := *intent.ExpectedUpdatedAt
+			if !intent.RevisionMatches(current.UpdatedAt) {
 				return &revisionConflictError{entityID: id, expected: expected, actual: current.UpdatedAt}
 			}
 		}
@@ -209,13 +198,8 @@ func (h *DeploymentIntentHandler) handleRuntime(ctx context.Context, intent *Int
 		return fmt.Errorf("runtime service and environment must belong to the authorized organization")
 	}
 	if intent.ExpectedUpdatedAt != nil {
-		expected := time.Unix(0, *intent.ExpectedUpdatedAt)
-		if raw, ok := intent.Content["expected_updated_at"].(string); ok {
-			if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-				expected = parsed
-			}
-		}
-		if !domain.SameRevision(svc.UpdatedAt, expected) {
+		expected := *intent.ExpectedUpdatedAt
+		if !intent.RevisionMatches(svc.UpdatedAt) {
 			return &revisionConflictError{entityID: serviceID, expected: expected, actual: svc.UpdatedAt}
 		}
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -392,13 +391,8 @@ func (h *BackupIntentHandler) handleRestoreApproval(ctx context.Context, intent 
 		if current == nil {
 			return fmt.Errorf("backup restore %s not found", restoreID)
 		}
-		expected := time.Unix(0, *intent.ExpectedUpdatedAt)
-		if raw, ok := intent.Content["expected_updated_at"].(string); ok {
-			if parsed, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
-				expected = parsed
-			}
-		}
-		if !domain.SameRevision(current.UpdatedAt, expected) {
+		expected := *intent.ExpectedUpdatedAt
+		if !intent.RevisionMatches(current.UpdatedAt) {
 			return &revisionConflictError{entityID: restoreID, expected: expected, actual: current.UpdatedAt}
 		}
 	}

@@ -113,17 +113,11 @@ func (h *EnvironmentIntentHandler) handleUpdate(ctx context.Context, intent *Int
 
 	// Check expected_updated_at revision if provided.
 	if intent.ExpectedUpdatedAt != nil {
-		expectedTime := time.UnixMicro(*intent.ExpectedUpdatedAt)
-		if raw, ok := intent.Content["expected_updated_at"].(string); ok {
-			if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-				expectedTime = parsed
-			}
-		}
-		if !domain.SameRevision(existing.UpdatedAt, expectedTime) {
+		if !intent.RevisionMatches(existing.UpdatedAt) {
 			// Revision conflict — publish conflict status and return error.
 			return &revisionConflictError{
 				entityID: env.ID,
-				expected: expectedTime,
+				expected: *intent.ExpectedUpdatedAt,
 				actual:   existing.UpdatedAt,
 			}
 		}
@@ -132,7 +126,7 @@ func (h *EnvironmentIntentHandler) handleUpdate(ctx context.Context, intent *Int
 	if units != nil {
 		expectedUpdatedAt := existing.UpdatedAt
 		if intent.ExpectedUpdatedAt != nil {
-			expectedUpdatedAt = time.UnixMicro(*intent.ExpectedUpdatedAt)
+			expectedUpdatedAt = *intent.ExpectedUpdatedAt
 		}
 		if err := h.registry.UpdateEnvironmentWithDeploymentUnits(ctx, env, units, expectedUpdatedAt); err != nil {
 			return fmt.Errorf("updating environment with deployment units: %w", err)

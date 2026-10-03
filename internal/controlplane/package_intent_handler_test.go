@@ -276,6 +276,19 @@ func TestPackageIntentHandler_RepositoryApplyViaIntent(t *testing.T) {
 	if repoEvents[0].ID != repo.ID {
 		t.Errorf("unexpected repo ID %s, want %s", repoEvents[0].ID, repo.ID)
 	}
+	matching := f.makeRepoApplyIntent(t, "myrepo", "test", "npm")
+	matching.Content["expected_updated_at"] = repo.UpdatedAt.Format(time.RFC3339Nano)
+	if err := f.processor.ProcessInProcess(ctx, matching); err != nil {
+		t.Fatalf("canonical repository revision should be accepted: %v", err)
+	}
+	stale := f.makeRepoApplyIntent(t, "myrepo", "test", "npm")
+	stale.Content["expected_updated_at"] = repo.UpdatedAt.Add(-time.Second).Format(time.RFC3339Nano)
+	if err := f.processor.ProcessInProcess(ctx, stale); !IsRevisionConflict(err) {
+		t.Fatalf("older repository revision should conflict: %v", err)
+	}
+	if len(f.capture.repos) != 2 {
+		t.Fatalf("stale repository intent published state: %d events", len(f.capture.repos))
+	}
 }
 
 // TestPackageIntentHandler_IntentAndContextVMProduceIdenticalState verifies

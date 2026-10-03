@@ -37,6 +37,11 @@ export function buildIntentEvent({ domain, op = 'update', coordinate, orgId, con
   if (!content || typeof content !== 'object' || Array.isArray(content)) throw new Error('Intent content must be an object');
   const revision = expectedUpdatedAt ?? updatedAt(currentRecord);
   if (op === 'update' && revision === undefined) throw new Error('Update requires current canonical updated_at');
+  if (op === 'update' && (typeof revision !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(revision) ||
+      Number.isNaN(Date.parse(revision)))) {
+    throw new Error('Update requires an RFC3339 canonical updated_at string');
+  }
   const desired = { ...content };
   delete desired.expected_updated_at;
   if (op === 'update') desired.expected_updated_at = revision;

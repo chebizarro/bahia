@@ -184,7 +184,7 @@ Phase 3 §1 defines intents as kind `30900` addressable replaceable events signe
 - Correlation: the client matches the `intent_id` in the daemon's `30315` intent-status event to know the outcome.
 - Outbox retry: the client's pending-intent store tracks `intent_id` to avoid duplicate publishes.
 
-**`expected_updated_at`:** For updates (not creates), the client includes `expected_updated_at` in the content, set to the `updated_at` value from the current canonical `30900` state it is modifying. The daemon compares this against its local state and publishes a `30315` status with `status=conflict` on mismatch (Phase 3 §1.5). The client shows a "conflict" indicator and prompts the user to re-read and re-submit.
+**`expected_updated_at`:** For updates (not creates), the client copies the RFC3339/RFC3339Nano `updated_at` string from the current canonical `30900` state into `expected_updated_at`. Numeric Unix epochs are invalid. The daemon compares at canonical microsecond precision and publishes a `30315` status with `status=conflict` on mismatch (Phase 3 §1.5). The client shows a "conflict" indicator and prompts the user to re-read and re-submit.
 
 **`op`:** Advisory (`create`, `update`, `delete`). The daemon uses level-triggered reconciliation (Phase 3 §1.2): it reconciles toward the full desired state regardless of `op`. The client uses `op` to choose the right UI path (form vs confirmation dialog).
 
@@ -869,4 +869,3 @@ All questions from the initial draft are now decided. This section records the r
 | bahia-irsry.13 (Phase 5: CLI/pkg/client/MCP) | **Parallel.** Phase 5 is the CLI equivalent of Phase 4. They share the daemon's intent pipeline but have no web-side dependency. §3.5 ContextVM error handling aligns with Phase 5 §3.4 |
 | bahia-irsry.14 (audit coverage gaps) | **Informs.** Phase 4 deletions close many of the web-tier audit findings; the coverage-gap audit may find new ones |
 | bahia-irsry.48 (ContextVM progressToken) | **Consumes.** Phase 4 relies on bahia-irsry.48 item 2 for the ContextVM idempotency key pattern (§3.5, §14 #11) |
-

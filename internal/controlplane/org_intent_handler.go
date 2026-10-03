@@ -346,16 +346,8 @@ func (h *OrgIntentHandler) updateOrgWithRevision(ctx context.Context, org *domai
 	}
 
 	// Check revision.
-	expectedNanos := *intent.ExpectedUpdatedAt
-	expectedTime := time.Unix(0, expectedNanos)
-	if raw, ok := intent.Content["expected_updated_at"]; ok {
-		if v, ok := raw.(string); ok {
-			if parsed, parseErr := time.Parse(time.RFC3339Nano, v); parseErr == nil {
-				expectedTime = parsed
-			}
-		}
-	}
-	if !existing.UpdatedAt.Equal(expectedTime) {
+	expectedTime := *intent.ExpectedUpdatedAt
+	if !intent.RevisionMatches(existing.UpdatedAt) {
 		if h.status != nil {
 			h.status.PublishConflict(ctx, intent)
 		}
