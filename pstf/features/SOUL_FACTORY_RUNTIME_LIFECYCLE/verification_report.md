@@ -125,3 +125,11 @@ Observed Metiq evidence includes:
 No blockers remain for `bahia-i0rk.3`.
 
 Residual non-blocking hardening: promote runtime-control examples into reusable cross-runtime fixture files to reduce future schema drift.
+
+## Reconnect cursor verification — bahia-irsry.66 — 2026-10-03
+
+The reported `TestReactorReconnectDeliversResultPublishedWhileDisconnected` flake was a test ordering error, not a late cursor write: the fake relay disconnected immediately after queuing EOSE, before the pool had necessarily consumed it. A resumable REQ must retain the original `since` if that generation did not reach EOSE. The test now waits for the reactor's backfill-complete signal before dropping the connection; it still asserts the exact `since` decoded from the resumed REQ and completes only after a correlated result EVENT.
+
+The shared pool observes results and commits EOSE under the cursor mutex, computes the resumed filter before `sendWorkerREQ`, and sends that filter unchanged. `TestRelayClientResumableSubscriptionResumesFromCursorAfterEOSE` also covers the uncommitted-generation case. Sibling review found no analogous cursor race in Hive-CI (full backfill) or continuity definitions (`since=1`), but found and fixed a no-events reconnect gap in the control-plane reactor: it now retains the previous `since` instead of replacing it with the new current time. `TestReactorReconnectRetainsSinceUntilAnEventAdvancesCursor` covers both empty and advanced cursor selection.
+
+Observed verification: pre-fix 50-run repro failed at `-cpu=1` (49 cases) and `-cpu=2` (2 cases); post-fix `CGO_ENABLED=0 go test -count=200 -cpu=1,2,8 -run TestReactorReconnectDeliversResultPublishedWhileDisconnected ./internal/soulfactory/` passed all 600 executions. The control-plane regression passed 100 runs at each CPU setting. `CGO_ENABLED=0 go build ./...`, `go vet ./...`, `go test ./...`, `go test ./internal/archtest -count=1 -v -run TestNoNew` (zero new violations), gofmt, and `git diff --check` passed. The `-race` gate was unavailable because of the Xcode license constraint.

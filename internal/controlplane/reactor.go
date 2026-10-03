@@ -562,7 +562,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 				case <-time.After(delay):
 				}
 				r.caughtUp.Store(false)
-				filters = r.buildRequestSubscriptionFiltersForCurrentCursor(ctx)
+				filters = r.buildRequestSubscriptionFiltersForReconnect(filters)
 				r.pool.RecordRelayReREQ()
 				merged, err = keepSubscriptionOnResubscribeFailure(merged, func() (*nostrpool.MergedSubscription, error) {
 					return r.pool.SubscribeAllWithEOSE(ctx, filters)
@@ -1525,6 +1525,17 @@ func isAcceptedWorkerReadModelKind(kind int) bool {
 
 func (r *Reactor) buildRequestSubscriptionFiltersForCurrentCursor(ctx context.Context) []nostr.Filter {
 	return r.buildRequestSubscriptionFilters(r.requestSubscriptionSince(ctx))
+}
+
+// A connection with no delivered events has no newer replay cursor. Retain
+// its previous since so events published during the disconnect remain in the
+// next REQ's backfill instead of starting at the new current time.
+func (r *Reactor) buildRequestSubscriptionFiltersForReconnect(previous []nostr.Filter) []nostr.Filter {
+	since := previous[0].Since
+	if lastSeen := r.latestLastSeen(requestSubscriptionKinds()); lastSeen != nil {
+		since = replayCursorWithOverlap(*lastSeen)
+	}
+	return r.buildRequestSubscriptionFilters(since)
 }
 
 func (r *Reactor) requestSubscriptionSince(_ context.Context) nostr.Timestamp {
