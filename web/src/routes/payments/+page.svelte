@@ -8,7 +8,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import Input from '$lib/components/Input.svelte';
   import Select from '$lib/components/Select.svelte';
-  import { workers, loading, loadWorkers } from '$lib/stores';
+  import { workers, loading } from '$lib/stores';
   import {
     loadPaymentHistory as loadPrivatePaymentHistory,
     paymentHistoryState,
@@ -53,10 +53,6 @@
     const text = String(value || '50');
     return limitOptions.some((option) => option.value === text) ? text : '50';
   }
-
-  $effect(() => {
-    void loadWorkers();
-  });
 
   onMount(() => {
     let disposed = false;
@@ -251,9 +247,6 @@
     <span>{formatSats(totalSats)} shown</span>
     {#if loadedWorker}
       <span>Worker <a href="/workers/{encodeURIComponent(loadedWorker)}"><code>{truncateMiddle(loadedWorker)}</code></a></span>
-    {/if}
-    {#if loading.workers}
-      <span>Loading worker catalog...</span>
     {/if}
   </div>
 

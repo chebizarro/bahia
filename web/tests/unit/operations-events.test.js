@@ -1,17 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  applyControlplaneEvent,
-  readModelFilters,
-  resetEventRouting
-} from '../../src/lib/stores/controlplane/events.svelte.js';
+import { applyControlplaneEvent, readModelFilters } from '../../src/lib/stores/controlplane/events.svelte.js';
 import { controlplaneConnection } from '../../src/lib/stores/controlplane/connection.svelte.js';
 import {
   operations,
   operationsForDomain,
   operationsForEntity,
   refreshOperations,
-  resetOperations
+  resetOperations,
+  initOperationStoreBinding,
+  teardownOperationStoreBinding
 } from '../../src/lib/stores/collections/operations.svelte.js';
 import { backupAttestations, resetBackup } from '../../src/lib/stores/collections/backup.svelte.js';
 import {
@@ -20,6 +18,36 @@ import {
   HIVE_CI_WORKFLOW_RESULT,
   HIVE_CI_WORKFLOW_RUN
 } from '../../src/lib/nostr/kinds.gen.js';
+
+
+const bridge = vi.hoisted(() => {
+  const listeners = [];
+  const pool = { subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })) };
+  const store = {
+    query: vi.fn(() => []),
+    subscribe: vi.fn((filter, cb) => {
+      const listener = { filter, cb };
+      listeners.push(listener);
+      return () => listeners.splice(listeners.indexOf(listener), 1);
+    })
+  };
+  return { listeners, pool, store };
+});
+vi.mock('../../src/lib/nostr/boot.js', () => ({
+  getEventStore: () => bridge.store,
+  getPool: () => bridge.pool,
+  getRelayUrls: () => ['wss://relay.example'],
+  getServicePubkey: () => 'b'.repeat(64)
+}));
+
+function emit(event) {
+  let accepted = false;
+  for (const { filter, cb } of bridge.listeners) {
+    if (!filter.kinds.includes(event.kind)) continue;
+    accepted = cb(event) || accepted;
+  }
+  return accepted;
+}
 
 const SERVICE_PUBKEY = 'b'.repeat(64);
 const OTHER_PUBKEY = 'c'.repeat(64);
@@ -136,19 +164,21 @@ const deploymentResult = relayEvent({
 });
 
 beforeEach(() => {
-  resetEventRouting();
+  bridge.pool.subscribe.mockClear();
   resetOperations();
+  initOperationStoreBinding();
   resetBackup();
   controlplaneConnection.servicePubkey = SERVICE_PUBKEY;
 });
 
 afterEach(() => {
+  teardownOperationStoreBinding();
   controlplaneConnection.servicePubkey = '';
 });
 
 describe('operational event subscriptions', () => {
   it('subscribes to every specified 69xx, 79xx, and Hive-CI kind', () => {
-    const filters = readModelFilters();
+    const filters = [...bridge.pool.subscribe.mock.calls.flatMap(([options]) => options.filters), ...readModelFilters()];
     const subscribedKinds = new Set(filters.flatMap((filter) => filter.kinds || []));
 
     for (const kind of [...STATUS_KINDS, ...RESULT_KINDS, ...ML_OPERATION_KINDS, ...BACKUP_RESULT_KINDS, ...BACKUP_ATTESTATION_KINDS, HIVE_CI_WORKFLOW_RUN, HIVE_CI_WORKFLOW_RESULT]) {
@@ -157,14 +187,14 @@ describe('operational event subscriptions', () => {
   });
 
   it('uses canonical-author filtering for Bahia operations but not external Hive-CI events', () => {
-    const filters = readModelFilters();
+    const filters = bridge.pool.subscribe.mock.calls.flatMap(([options]) => options.filters);
     const deploymentFilter = filters.find((filter) => filter.kinds?.includes(DEPLOYMENT_STATUS));
     const hiveFilter = filters.find((filter) => filter.kinds?.includes(HIVE_CI_WORKFLOW_RUN));
 
     expect(deploymentFilter).toMatchObject({ authors: [SERVICE_PUBKEY] });
     expect(hiveFilter?.authors).toBeUndefined();
 
-    expect(applyControlplaneEvent(relayEvent({
+    expect(emit(relayEvent({
       ...deploymentStatus,
       id: '4'.repeat(64),
       pubkey: OTHER_PUBKEY
@@ -190,8 +220,9 @@ describe('ML and backup live operations', () => {
       content: { status: 'succeeded', message: 'endpoint deployed' }
     });
 
-    expect(applyControlplaneEvent(request)).toBe(true);
-    expect(applyControlplaneEvent(result)).toBe(true);
+    expect(emit(request)).toBe(true);
+    expect(emit(result)).toBe(true);
+    refreshOperations();
     expect(operationsForDomain(operations, 'ml')).toEqual([
       expect.objectContaining({ request_event_id: request.id, result_event_id: result.id, endpoint_id: 'endpoint-1', status: 'succeeded', terminal: true })
     ]);
@@ -199,14 +230,14 @@ describe('ML and backup live operations', () => {
 
   it('streams backup statuses, terminal results, and attestations', () => {
     const requestId = 'c'.repeat(64);
-    expect(applyControlplaneEvent(relayEvent({
+    expect(emit(relayEvent({
       id: 'd'.repeat(64),
       kind: 6981,
       created_at: 1770000200,
       tags: [['e', requestId, '', 'reply'], ['run', 'backup-run-1'], ['status', 'running']],
       content: { message: 'snapshotting' }
     }))).toBe(true);
-    expect(applyControlplaneEvent(relayEvent({
+    expect(emit(relayEvent({
       id: 'e'.repeat(64),
       kind: 38410,
       created_at: 1770000210,
@@ -232,8 +263,8 @@ describe('ML and backup live operations', () => {
 
 describe('generic operations projection', () => {
   it('merges a realistic status -> result sequence by request e-tag and domain entity', () => {
-    expect(applyControlplaneEvent(deploymentStatus)).toBe(true);
-    expect(applyControlplaneEvent(deploymentResult)).toBe(true);
+    expect(emit(deploymentStatus)).toBe(true);
+    expect(emit(deploymentResult)).toBe(true);
     refreshOperations();
 
     expect(operations).toHaveLength(1);
@@ -264,8 +295,8 @@ describe('generic operations projection', () => {
   });
 
   it('does not let a late non-terminal status regress a terminal result', () => {
-    expect(applyControlplaneEvent(deploymentResult)).toBe(true);
-    expect(applyControlplaneEvent(deploymentStatus)).toBe(true);
+    expect(emit(deploymentResult)).toBe(true);
+    expect(emit(deploymentStatus)).toBe(true);
     refreshOperations();
 
     expect(operations).toHaveLength(1);
@@ -308,8 +339,8 @@ describe('generic operations projection', () => {
       ]
     });
 
-    expect(applyControlplaneEvent(hiveResult)).toBe(true);
-    expect(applyControlplaneEvent(hiveRun)).toBe(true);
+    expect(emit(hiveResult)).toBe(true);
+    expect(emit(hiveRun)).toBe(true);
     refreshOperations();
 
     expect(operations).toHaveLength(1);
@@ -355,9 +386,9 @@ describe('generic operations projection', () => {
       }
     });
 
-    expect(applyControlplaneEvent(deploymentResult)).toBe(true);
-    expect(applyControlplaneEvent(olderFailedStatus)).toBe(true);
-    expect(applyControlplaneEvent(olderFailedResult)).toBe(true);
+    expect(emit(deploymentResult)).toBe(true);
+    expect(emit(olderFailedStatus)).toBe(true);
+    expect(emit(olderFailedResult)).toBe(true);
     refreshOperations();
 
     expect(operations[0].status).toBe('success');
@@ -387,8 +418,8 @@ describe('generic operations projection', () => {
       }
     });
 
-    expect(applyControlplaneEvent(deploymentResult)).toBe(true);
-    expect(applyControlplaneEvent(externalCollision)).toBe(true);
+    expect(emit(deploymentResult)).toBe(true);
+    expect(emit(externalCollision)).toBe(true);
     refreshOperations();
 
     expect(operations).toHaveLength(1);
@@ -408,7 +439,7 @@ describe('generic operations projection', () => {
       tags: [['status', 'running']]
     });
 
-    expect(applyControlplaneEvent(uncorrelated)).toBe(false);
+    expect(emit(uncorrelated)).toBe(false);
     refreshOperations();
     expect(operations).toHaveLength(0);
   });

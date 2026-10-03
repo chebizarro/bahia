@@ -1,3 +1,24 @@
+export const MAX_SEEN_EVENT_IDS = 4096;
+
+export function createBoundedEventIdSet(capacity = MAX_SEEN_EVENT_IDS) {
+  if (!Number.isInteger(capacity) || capacity < 1) throw new RangeError('capacity must be positive');
+  const ids = new Map();
+  return {
+    has(id) {
+      if (!ids.has(id)) return false;
+      ids.delete(id);
+      ids.set(id, true);
+      return true;
+    },
+    add(id) {
+      ids.delete(id);
+      ids.set(id, true);
+      if (ids.size > capacity) ids.delete(ids.keys().next().value);
+    },
+    get size() { return ids.size; }
+  };
+}
+
 /**
  * @typedef {Object} PoolReadModelMetadata
  * @property {boolean} complete True only when every expected/observed relay reached EOSE.
@@ -50,7 +71,7 @@ function normalizeRelayForState(relay) {
  */
 export function createReadModelMetadataTracker({ relays = [], partialEventCount = null } = {}) {
   const relayStates = new Map();
-  const seenEvents = new Set();
+  const seenEvents = createBoundedEventIdSet();
   let observedEventCount = 0;
 
   for (const relay of uniqueRelays(relays)) {

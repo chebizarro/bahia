@@ -105,7 +105,8 @@ describe('controlplane collection cold-start cache', () => {
   });
 
   it('maps every persisted collection to at least one relay route', () => {
-    expect([...routing.persistedRouteCollections].sort()).toEqual([...collections.PERSISTED_CONTROLPLANE_COLLECTIONS].sort());
+    const legacyCollections = collections.PERSISTED_CONTROLPLANE_COLLECTIONS.filter((name) => !['workers', 'workerAssignments', 'workerDrainStatuses'].includes(name));
+    expect([...routing.persistedRouteCollections].sort()).toEqual([...legacyCollections].sort());
   });
 
   it('persists winning raw events per stable collection and skips high-churn streams', async () => {

@@ -89,7 +89,6 @@ const inFlight = {
 export async function loadServices() { return bootstrapControlplane(); }
 export async function loadEnvironments() { return bootstrapControlplane(); }
 export async function loadStates() { return bootstrapControlplane(); }
-export async function loadWorkers() { return bootstrapControlplane(); }
 export async function loadArtifacts() { return bootstrapControlplane(); }
 export async function loadBuilds() { return bootstrapControlplane(); }
 export async function loadDeploymentIntents() { return bootstrapControlplane(); }

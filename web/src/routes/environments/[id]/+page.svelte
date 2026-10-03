@@ -23,7 +23,6 @@
     loadEnvironments,
     loadStates,
     loadDeploymentIntents,
-    loadWorkers
   } from '$lib/stores';
   import { updateEnvironment, deleteEnvironment, publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
@@ -141,7 +140,7 @@
     deploymentHistory = [];
 
     try {
-      await Promise.all([loadEnvironments(), loadStates(), loadDeploymentIntents(), loadWorkers()]);
+      await Promise.all([loadEnvironments(), loadStates(), loadDeploymentIntents()]);
       environment = environments.find((candidate) => candidate.id === id) || null;
       if (!environment) {
         throw new Error('Environment not found');

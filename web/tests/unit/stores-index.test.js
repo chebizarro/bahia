@@ -65,9 +65,8 @@ describe('Global Stores (index.js)', () => {
     await storesModule.loadServices();
     await storesModule.loadEnvironments();
     await storesModule.loadStates();
-    await storesModule.loadWorkers();
 
-    expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(4);
+    expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(3);
   });
 
   it('does not let REST refreshes overwrite authoritative relay-backed state', async () => {

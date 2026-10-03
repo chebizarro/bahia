@@ -24,7 +24,6 @@
     loadBuilds,
     loadArtifacts,
     loadEnvironments,
-    loadWorkers
   } from '$lib/stores';
   import { operations, operationsForEntity } from '$lib/stores';
   import {
@@ -452,7 +451,6 @@
     deployCostEstimateError = null;
 
     try {
-      await loadWorkers();
       if (sequence !== deployCostEstimateSequence) return;
       deployCostEstimateWorkers = Array.isArray(workerStore) ? [...workerStore] : [];
     } catch (err) {

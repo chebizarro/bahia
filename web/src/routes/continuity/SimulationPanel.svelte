@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { workers, loadWorkers } from '$lib/stores';
+  import { workers } from '$lib/stores';
   import { simulateWorkerFailureFromEvents } from '$lib/nostr/continuity';
 import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
   import type { ContinuityNostrEvent } from '$lib/nostr/continuity';
@@ -23,12 +22,6 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
   let simulatedWorker = $state('');
   let simulationRan = $state(false);
   let hasDefaultedWorker = $state(false);
-
-  onMount(() => {
-    loadWorkers().catch((caught) => {
-      console.warn('Unable to load workers for continuity simulation:', caught);
-    });
-  });
 
   const workerOptions = $derived(uniqueWorkers(statuses, workers));
   const baselineByService = $derived(new Map(baseline.map((assessment) => [assessment.service_key, assessment])));

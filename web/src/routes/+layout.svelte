@@ -11,6 +11,8 @@
   import { boot, shutdown } from '$lib/nostr/boot.js';
   import { initServiceStoreBinding, teardownServiceStoreBinding } from '$lib/stores/collections/services.svelte.js';
   import { initEnvironmentStoreBinding, teardownEnvironmentStoreBinding } from '$lib/stores/collections/environments.svelte.js';
+  import { initWorkerStoreBinding, teardownWorkerStoreBinding } from '$lib/stores/collections/workers.svelte.js';
+  import { initOperationStoreBinding, teardownOperationStoreBinding } from '$lib/stores/collections/operations.svelte.js';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
   import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
   import { theme } from '$lib/stores/theme.js';
@@ -57,6 +59,8 @@
         await boot();
         initServiceStoreBinding();
         initEnvironmentStoreBinding();
+        initWorkerStoreBinding();
+        initOperationStoreBinding();
       } catch (err) {
         console.warn('[layout] boot() failed:', err);
       }
@@ -77,6 +81,8 @@
       active = false;
       teardownServiceStoreBinding();
       teardownEnvironmentStoreBinding();
+      teardownWorkerStoreBinding();
+      teardownOperationStoreBinding();
       unsubscribeFromEvents();
       disconnectAssistant();
     };
