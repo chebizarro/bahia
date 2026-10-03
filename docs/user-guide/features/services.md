@@ -1,5 +1,8 @@
 # Services
 
+The web service list and detail views read the local verified event store by the `service-registry` topic. Cached services render immediately, including when relays are offline; live canonical `30900` updates and kind-5 deletions update the same view without a page-level reload. Mutation transport remains unchanged in this phase.
+
+
 A **Service** represents an application you deploy with Bahia — a web API, background worker, scheduled job, or any containerized workload.
 
 ## Overview

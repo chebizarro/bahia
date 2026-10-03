@@ -15,7 +15,7 @@
     UnknownIcon,
     WarningIcon
   } from '$lib/icons/domain-icons.js';
-  import { services, environments, deploymentIntents, artifacts as allArtifacts, loadServices, loadEnvironments, loadDeploymentIntents, loadArtifacts, operations, operationsForDomain } from '$lib/stores';
+  import { services, environments, deploymentIntents, artifacts as allArtifacts, loadDeploymentIntents, loadArtifacts, operations, operationsForDomain } from '$lib/stores';
   import { rollbackDeployment } from '$lib/stores/public-controlplane.svelte.js';
   import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
 
@@ -235,7 +235,7 @@
     error = null;
 
     try {
-      await Promise.all([loadServices(), loadEnvironments(), loadDeploymentIntents()]);
+      await Promise.all([loadDeploymentIntents()]);
     } catch (err) {
       error = err.message || 'Failed to load deployment history';
       console.error('Error loading deployment history:', err);

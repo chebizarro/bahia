@@ -1,5 +1,6 @@
 <script>
   import { page } from '$app/state';
+  import { untrack } from 'svelte';
   import { goto } from '$app/navigation';
   import Card from '$lib/components/Card.svelte';
   import OperationalActivity from '../../OperationalActivity.svelte';
@@ -19,11 +20,7 @@
     states as allStates,
     services,
     workers,
-    deploymentIntents,
-    loadEnvironments,
-    loadStates,
-    loadDeploymentIntents,
-    loadWorkers
+    deploymentIntents
   } from '$lib/stores';
   import { updateEnvironment, deleteEnvironment, publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
@@ -44,7 +41,6 @@
   let environment = $state(null);
   let states = $state([]);
   let deploymentHistory = $state([]);
-  let loading = $state(true);
   let error = $state(null);
 
   // Open route outage count for the section heading (Route Outages); scoped
@@ -119,29 +115,35 @@
   $effect(() => {
     const id = environmentId;
     if (!id) return;
-    void loadEnvironment(id);
+    void untrack(() => loadEnvironment(id));
   });
 
   $effect(() => {
     const id = environmentId;
     const latest = environments.find((candidate) => candidate.id === id);
-    if (!latest || !environment) return;
+    if (!latest) return;
     const latestRevision = latest.updated_at || latest.updatedAt || '';
-    const currentRevision = environment.updated_at || environment.updatedAt || '';
-    if (latest !== environment && (latestRevision !== currentRevision || latest.deployment_units !== environment.deployment_units)) {
+    const currentRevision = environment?.updated_at || environment?.updatedAt || '';
+    if (!environment || (latest !== environment && (latestRevision !== currentRevision || latest.deployment_units !== environment.deployment_units))) {
       environment = latest;
+      error = null;
     }
   });
 
+  $effect(() => {
+    const id = environmentId;
+    states = allStates.filter((state) => state.environment_id === id);
+    deploymentHistory = deploymentIntents.filter((intent) => intent.environment_id === id)
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  });
+
   async function loadEnvironment(id) {
-    loading = true;
     error = null;
     environment = null;
     states = [];
     deploymentHistory = [];
 
     try {
-      await Promise.all([loadEnvironments(), loadStates(), loadDeploymentIntents(), loadWorkers()]);
       environment = environments.find((candidate) => candidate.id === id) || null;
       if (!environment) {
         throw new Error('Environment not found');
@@ -157,8 +159,6 @@
         });
     } catch (err) {
       error = err.message;
-    } finally {
-      loading = false;
     }
   }
 
@@ -426,9 +426,7 @@
 <div class="page">
   <a href="/environments" class="back">← Environments</a>
 
-  {#if loading}
-    <p class="loading">Loading...</p>
-  {:else if error}
+  {#if error}
     <p class="error">Error: {error}</p>
   {:else if environment}
     <div class="header">
@@ -822,7 +820,7 @@
     border: 1px solid var(--border-color);
   }
 
-  .loading, .error {
+  .error {
     color: var(--text-muted);
     padding: 2rem;
     text-align: center;

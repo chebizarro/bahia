@@ -192,26 +192,6 @@ describe('controlplane store', () => {
     expect(store.controlplaneConnection.servicePubkey).toBe('b'.repeat(64));
   });
 
-  it('applies canonical replaceable latest-wins dedupe and tombstones by schema', () => {
-    const serviceTags = (extra = []) => canonicalTags('service', BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, [['d', 'svc-1'], ...extra]);
-    const older = event({ id: 'svc-old', kind: CAS_STATE_KIND, created_at: 100, tags: serviceTags([['deleted', 'false']]), content: { id: 'svc-1', name: 'Old Service', deleted: false } });
-    const stale = event({ id: 'svc-stale', kind: CAS_STATE_KIND, created_at: 90, tags: serviceTags([['deleted', 'false']]), content: { id: 'svc-1', name: 'Stale Service', deleted: false } });
-    const newer = event({ id: 'svc-new', kind: CAS_STATE_KIND, created_at: 120, tags: serviceTags([['deleted', 'false']]), content: { id: 'svc-1', name: 'New Service', deleted: false } });
-    const tombstone = event({ id: 'svc-delete', kind: CAS_STATE_KIND, created_at: 130, tags: serviceTags([['deleted', 'true']]), content: { id: 'svc-1', deleted: true } });
-    const lateOlderReplay = event({ id: 'svc-late-replay', kind: CAS_STATE_KIND, created_at: 120, tags: serviceTags([['deleted', 'false']]), content: { id: 'svc-1', name: 'Late Replay', deleted: false } });
-
-    expect(store.applyControlplaneEvent(older)).toBe(true);
-    expect(store.services[0].name).toBe('Old Service');
-    expect(store.applyControlplaneEvent(stale)).toBe(false);
-    expect(store.services[0].name).toBe('Old Service');
-    expect(store.applyControlplaneEvent(newer)).toBe(true);
-    expect(store.services[0].name).toBe('New Service');
-    expect(store.applyControlplaneEvent(tombstone)).toBe(true);
-    expect(store.services).toEqual([]);
-    expect(store.applyControlplaneEvent(lateOlderReplay)).toBe(false);
-    expect(store.services).toEqual([]);
-  });
-
   it('streams bootstrap events immediately and marks live only after EOSE', async () => {
     const bootstrapEvents = [
       event({
@@ -261,9 +241,10 @@ describe('controlplane store', () => {
 
     expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
     expect(store.controlplaneConnection.status).toBe('syncing');
-    expect(store.services).toHaveLength(1);
-    expect(store.environments).toHaveLength(1);
-    expect(store.states).toHaveLength(1);
+    // Core domains are owned by BahiaEventStore subscriptions, not this router.
+    expect(store.services).toHaveLength(0);
+    expect(store.environments).toHaveLength(0);
+    expect(store.states).toHaveLength(0);
     expect(store.workers).toHaveLength(1);
 
     subscriptionHandlers[0].onHealth({
@@ -282,173 +263,6 @@ describe('controlplane store', () => {
     });
     expect(store.controlplaneConnection.bootstrapComplete).toBe(true);
     expect(store.controlplaneConnection.status).toBe('live');
-  });
-
-  it('renders cached collections before EOSE and merges relay events into them', async () => {
-    const collections = await import('../../src/lib/stores/collections/index.svelte.js');
-    const cachedService = event({
-      id: 'svc-cached-event',
-      kind: CAS_STATE_KIND,
-      pubkey: 'b'.repeat(64),
-      created_at: 200,
-      tags: canonicalTags('service', BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, [['d', 'svc-cached'], ['deleted', 'false']]),
-      content: { id: 'svc-cached', name: 'Cached API', deleted: false }
-    });
-    const records = new Map([['services', {
-      name: 'services',
-      schema: collections.CONTROLPLANE_COLLECTION_CACHE_SCHEMA,
-      cachedAt: Date.now(),
-      items: [cachedService]
-    }]]);
-    collections.setControlplaneCacheStorageAdapter({
-      async getAll() { return structuredClone(Array.from(records.values())); },
-      async putMany() { return true; },
-      async delete(name) { records.delete(name); return true; }
-    });
-
-    let releaseConnect;
-    let resolveConnectCalled;
-    const connectCalled = new Promise((resolve) => { resolveConnectCalled = resolve; });
-    nostrMock.connect.mockImplementationOnce((relays = []) => {
-      resolveConnectCalled();
-      return new Promise((resolve) => {
-        releaseConnect = () => {
-          nostrMock.connected.set(true);
-          resolve({ total: relays.length, connected: relays.length, failed: 0, connecting: 0, relays: relays.map((url) => ({ url, status: 'connected' })) });
-        };
-      });
-    });
-
-    const bootstrap = store.bootstrapControlplane();
-    await connectCalled;
-
-    // Hydrated and rendered before any relay has connected, let alone EOSEd.
-    expect(store.controlplaneConnection.status).toBe('connecting');
-    expect(store.services).toEqual([expect.objectContaining({ id: 'svc-cached', name: 'Cached API' })]);
-    expect(store.loading.services).toBe(false);
-    expect(store.loading.environments).toBe(true);
-
-    releaseConnect();
-    await subscriptionRegistered;
-    expect(store.controlplaneConnection.status).toBe('syncing');
-    expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
-    expect(store.loading.services).toBe(false);
-
-    // First relay event is for a different entity: the cached one survives.
-    subscriptionHandlers[0].onEvent(event({
-      id: 'env-live-event',
-      kind: CAS_STATE_KIND,
-      pubkey: 'b'.repeat(64),
-      created_at: 300,
-      tags: canonicalTags('environment', BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY, [['d', 'env-live'], ['deleted', 'false']]),
-      content: { id: 'env-live', name: 'Live Prod', deleted: false }
-    }));
-    subscriptionHandlers[0].onEvent(event({
-      id: 'svc-live-event',
-      kind: CAS_STATE_KIND,
-      pubkey: 'b'.repeat(64),
-      created_at: 300,
-      tags: canonicalTags('service', BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, [['d', 'svc-live'], ['deleted', 'false']]),
-      content: { id: 'svc-live', name: 'Live API', deleted: false }
-    }));
-    store.flushCollectionRefresh();
-
-    expect(store.services.map((service) => service.id).sort()).toEqual(['svc-cached', 'svc-live']);
-    expect(store.environments.map((environment) => environment.id)).toEqual(['env-live']);
-    expect(store.loading.environments).toBe(false);
-    expect(store.controlplaneConnection.bootstrapComplete).toBe(false);
-
-    completeBootstrapEose();
-    await expect(bootstrap).resolves.toEqual({ ok: true });
-    expect(store.controlplaneConnection.status).toBe('live');
-    expect(store.services.map((service) => service.id).sort()).toEqual(['svc-cached', 'svc-live']);
-  });
-
-  it('coalesces streamed relay events into one batched collection rebuild', async () => {
-    await startBootstrapAndWaitForSubscription();
-    vi.useFakeTimers();
-    try {
-      for (let index = 0; index < 50; index += 1) {
-        subscriptionHandlers[0].onEvent(event({
-          id: `svc-batch-${index}`,
-          kind: CAS_STATE_KIND,
-          pubkey: 'b'.repeat(64),
-          tags: canonicalTags('service', BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, [['d', `svc-${index}`], ['deleted', 'false']]),
-          content: { id: `svc-${index}`, name: `Service ${index}`, deleted: false }
-        }));
-      }
-      // No per-event rebuild: the rendered array is untouched until the batch fires.
-      expect(store.services).toHaveLength(0);
-
-      vi.advanceTimersByTime(16);
-      expect(store.services).toHaveLength(50);
-      expect(store.loading.services).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('flushes batched relay events when EOSE completes the bootstrap', async () => {
-    const { bootstrap } = await startBootstrapAndWaitForSubscription();
-    subscriptionHandlers[0].onEvent(event({
-      id: 'svc-before-eose',
-      kind: CAS_STATE_KIND,
-      pubkey: 'b'.repeat(64),
-      tags: canonicalTags('service', BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, [['d', 'svc-eose'], ['deleted', 'false']]),
-      content: { id: 'svc-eose', name: 'EOSE API', deleted: false }
-    }));
-
-    completeBootstrapEose();
-    await bootstrap;
-    expect(store.services).toEqual([expect.objectContaining({ id: 'svc-eose' })]);
-  });
-
-  it('routes legacy-kind canonical controlplane snapshots into core collections', async () => {
-    await bootstrapWithEose();
-    const cpStateTags = (domain, legacyKind, d, extra = []) => canonicalTags(domain, 'bahia.cp-state.v1', [
-      ['legacy_kind', legacyKind],
-      ['d', d],
-      ['deleted', 'false'],
-      ...extra
-    ]);
-
-    expect(store.applyControlplaneEvent(event({
-      id: 'legacy-service-registry',
-      kind: CAS_STATE_KIND,
-      pubkey: 'b'.repeat(64),
-      tags: cpStateTags('service', '31962', 'svc-legacy'),
-      content: { id: 'svc-legacy', name: 'Legacy Service', deleted: false }
-    }))).toBe(true);
-    expect(store.applyControlplaneEvent(event({
-      id: 'legacy-environment-registry',
-      kind: CAS_STATE_KIND,
-      pubkey: 'b'.repeat(64),
-      tags: cpStateTags('environment', '31963', 'env-legacy'),
-      content: { id: 'env-legacy', name: 'Legacy Environment', deleted: false }
-    }))).toBe(true);
-    expect(store.applyControlplaneEvent(event({
-      id: 'legacy-service-state',
-      kind: CAS_STATE_KIND,
-      pubkey: 'b'.repeat(64),
-      tags: cpStateTags('service', '31961', 'svc-legacy:env-legacy', [
-        ['service', 'svc-legacy'],
-        ['environment', 'env-legacy']
-      ]),
-      content: {
-        service_id: 'svc-legacy',
-        environment_id: 'env-legacy',
-        drift_status: 'in_sync',
-        deleted: false
-      }
-    }))).toBe(true);
-
-    expect(store.services).toEqual([expect.objectContaining({ id: 'svc-legacy', name: 'Legacy Service' })]);
-    expect(store.environments).toEqual([expect.objectContaining({ id: 'env-legacy', name: 'Legacy Environment' })]);
-    expect(store.states).toEqual([expect.objectContaining({
-      service_id: 'svc-legacy',
-      environment_id: 'env-legacy',
-      drift_status: 'in_sync'
-    })]);
   });
 
   it('requires EOSE from every connected bootstrap relay before marking live', async () => {

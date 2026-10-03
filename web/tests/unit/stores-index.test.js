@@ -61,22 +61,10 @@ describe('Global Stores (index.js)', () => {
     expect(storesModule.serviceCount()).toBe(1);
   });
 
-  it('public loaders bootstrap relay read models without REST fallback', async () => {
-    await storesModule.loadServices();
-    await storesModule.loadEnvironments();
-    await storesModule.loadStates();
-    await storesModule.loadWorkers();
-
-    expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(4);
-  });
-
-  it('does not let REST refreshes overwrite authoritative relay-backed state', async () => {
-    controlplaneMock.controlplaneConnection.ready = true;
-    controlplaneMock.services.push({ id: 'svc-relay', name: 'Relay Service' });
-
-    await storesModule.loadServices();
-
-    expect(storesModule.services).toEqual([{ id: 'svc-relay', name: 'Relay Service' }]);
+  it('core collections expose no navigation-time load aliases', () => {
+    for (const name of ['loadServices', 'loadEnvironments', 'loadStates', 'loadPolicies', 'loadPackageRepositories', 'loadPackageArtifacts', 'loadPackagePromotions']) {
+      expect(storesModule[name]).toBeUndefined();
+    }
   });
 
   it('loadAll bootstraps the relay-backed controlplane without REST fallback', async () => {

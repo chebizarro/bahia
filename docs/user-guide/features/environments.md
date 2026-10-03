@@ -1,5 +1,8 @@
 # Environments
 
+The web environment list and detail views read the local verified event store by the `environment-registry` topic. Runtime state uses the `service-state` topic. Cached data renders without waiting for relay EOSE, and live updates or kind-5 deletions update the view in place. Mutation transport remains unchanged in this phase.
+
+
 ## Typed VM resources
 
 An environment's legacy `vm-qemu`/`vm-firecracker` service adapter is not an

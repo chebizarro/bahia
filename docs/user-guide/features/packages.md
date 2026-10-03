@@ -1,5 +1,8 @@
 # Packages
 
+The web package repository, artifact, and promotion views read the local verified event store by the `package-repository`, `package-artifact`, and `package-promotion` topics. Cached data renders without a network loading gate; live canonical `30900` updates and kind-5 deletions update the views in place. Package mutation transport remains unchanged in this phase.
+
+
 **Packages** in Bahia provide package repository management for distributing software artifacts beyond container images.
 
 ## Overview

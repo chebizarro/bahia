@@ -51,10 +51,16 @@
                       <CellIcon size={16} strokeWidth={1.75} />
                     </span>
                   {/if}
-                  <span>{resolveColumnText(col, row)}</span>
+                  {#if col.href}
+                    <a href={col.href(row)}>{resolveColumnText(col, row)}</a>
+                  {:else}
+                    <span>{resolveColumnText(col, row)}</span>
+                  {/if}
                 </span>
               {:else if col.render}
                 {@html col.render(row)}
+              {:else if col.href}
+                <a href={col.href(row)}>{resolveColumnText(col, row)}</a>
               {:else}
                 {resolveColumnText(col, row)}
               {/if}
