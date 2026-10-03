@@ -95,7 +95,7 @@ func intentUUID(raw string) (string, error) {
 func requireIntentOrg(raw string) (string, error) {
 	id, err := uuid.Parse(strings.TrimSpace(raw))
 	if err != nil || id == uuid.Nil {
-		return "", fmt.Errorf("--org must be a non-nil organization UUID for service/environment intents")
+		return "", fmt.Errorf("--org must be a non-nil organization UUID for intents")
 	}
 	return id.String(), nil
 }

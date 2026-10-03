@@ -230,10 +230,7 @@ The referenced credential may be a raw API token or a JSON secret containing `ap
 
 ## Service Actions
 
-Deploy, restart, and stop are signer-first Nostr control-plane operations.
-
-- Deploy by publishing a ContextVM `service/deploy` intent and subscribing for canonical deployment status, audit, and state events. For Compose/Docker desired-state deploys, status events include the shared step progression and state/result observables may include sanitized desired-state metadata.
-- Restart or stop an adopted direct-runtime workload with ContextVM `service/restart` or `service/stop`.
+Deploy, restart, and stop are signer-first Nostr control-plane operations. The CLI commands `bahia services deploy|restart|stop` (also available under `services actions`) require `--org`, `--service`, and `--environment` UUIDs. Deploy may also include `--artifact`. They publish signed kind `30900` `runtime` intents, wait for kind `30315` status, and keep the event in the CLI outbox if no status arrives. `--http-fallback` has no effect for these commands. Remaining legacy clients may still use ContextVM service actions during migration.
 
 Legacy Bahia request/status/result kinds and legacy REST-backed service action endpoints are migration-only and are not live service control-plane guidance.
 

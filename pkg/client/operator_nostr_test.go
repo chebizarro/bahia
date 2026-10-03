@@ -373,242 +373,6 @@ func TestOperatorGetEnvironmentDetailsNostrRequestAndDecode(t *testing.T) {
 	assertTagValue(t, published.Tags, "environment", envID)
 }
 
-func TestOperatorDeploymentIntentUsesExplicitIdempotencyKey(t *testing.T) {
-	requestKey := nostr.Generate().Hex()
-	replyKey := nostr.Generate().Hex()
-	transport := newFakeOperatorTransport()
-	client := newTestOperatorClient(t, requestKey, transport)
-	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"intent_id": "intent-1", "status": "submitted"})
-		return 1, nil
-	}
-
-	result, err := client.CreateDeploymentIntentWithRequestNostr(context.Background(), DeploymentIntentNostrRequest{
-		ServiceID: "svc-1", EnvironmentID: "env-1", DeploymentUnitID: "unit-1", ArtifactID: "artifact-1",
-		ExpectedDesiredStateHash: "sha256:reviewed", RequestedBy: "ignored", IdempotencyKey: "deploy-retry-1",
-	}, nil)
-	if err != nil {
-		t.Fatalf("CreateDeploymentIntentNostr() error = %v", err)
-	}
-	if result.IntentID != "intent-1" || result.Status != "submitted" || result.DeploymentUnitID != "unit-1" {
-		t.Fatalf("unexpected result: %#v", result)
-	}
-	published := transport.onlyPublished(t)
-	rpc := decodePublishedContextVMRequest(t, published)
-	if rpc.Method != controlplane.ContextVMMethodServiceDeploy {
-		t.Fatalf("method = %q, want %q", rpc.Method, controlplane.ContextVMMethodServiceDeploy)
-	}
-	if got := firstTagValue(published.Tags, "d"); got != "deploy-retry-1" {
-		t.Fatalf("d tag = %q, want deploy-retry-1", got)
-	}
-	if got, _ := rpc.Params["idempotency_key"].(string); got != "deploy-retry-1" {
-		t.Fatalf("idempotency_key = %q, want deploy-retry-1", got)
-	}
-	if got, _ := rpc.Params["deployment_unit_id"].(string); got != "unit-1" {
-		t.Fatalf("deployment_unit_id = %q, want unit-1", got)
-	}
-	if got, _ := rpc.Params["expected_desired_state_hash"].(string); got != "sha256:reviewed" {
-		t.Fatalf("expected_desired_state_hash = %q, want sha256:reviewed", got)
-	}
-	if got := firstTagValue(published.Tags, "deployment-unit"); got != "unit-1" {
-		t.Fatalf("deployment-unit tag = %q, want unit-1", got)
-	}
-	if got := firstTagValue(published.Tags, "desired-hash"); got != "sha256:reviewed" {
-		t.Fatalf("desired-hash tag = %q, want sha256:reviewed", got)
-	}
-	if meta, _ := rpc.Params["_meta"].(map[string]any); meta == nil || meta["progressToken"] != "deploy-retry-1" {
-		t.Fatalf("progress token = %#v, want deploy-retry-1", rpc.Params["_meta"])
-	}
-}
-
-func TestOperatorRuntimeDeploySubscribesBeforePublishAndHandlesContextVMProgressResultDedup(t *testing.T) {
-	requestKey := nostr.Generate().Hex()
-	replyKey := nostr.Generate().Hex()
-	transport := newFakeOperatorTransport()
-	client := newTestOperatorClient(t, requestKey, transport)
-	artifactID := "artifact-1"
-
-	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		progress := signedContextVMResult(t, replyKey, ev, map[string]any{"status": "processing", "step": "started", "action": "deploy", "message": "Direct runtime action started"})
-		transport.events <- progress
-		transport.events <- progress // duplicate delivery from another relay must be ignored
-		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"action": "deploy", "service_id": "svc-1", "environment_id": "env-1"})
-		return 1, nil
-	}
-
-	var statuses []OperatorStatusEvent
-	result, err := client.DeployServiceRuntimeNostr(context.Background(), "svc-1", "env-1", &artifactID, func(status OperatorStatusEvent) {
-		statuses = append(statuses, status)
-	})
-	if err != nil {
-		t.Fatalf("DeployServiceRuntimeNostr() error = %v", err)
-	}
-	if result.Action != "deploy" || result.ServiceID != "svc-1" || result.EnvironmentID != "env-1" {
-		t.Fatalf("unexpected result: %#v", result)
-	}
-	if len(statuses) != 1 {
-		t.Fatalf("status callback count = %d, want 1", len(statuses))
-	}
-	if statuses[0].Status != "processing" || statuses[0].Step != "started" || !strings.Contains(statuses[0].Message, "Direct runtime action started") {
-		t.Fatalf("unexpected status event: %#v", statuses[0])
-	}
-	if got := transport.calls; len(got) != 2 || got[0] != "subscribe" || got[1] != "publish" {
-		t.Fatalf("calls = %#v, want subscribe before publish", got)
-	}
-	published := transport.onlyPublished(t)
-	assertSignedEvent(t, published)
-	if published.Kind != controlplane.KindContextVMMessage {
-		t.Fatalf("request kind = %d, want %d", published.Kind, controlplane.KindContextVMMessage)
-	}
-	rpc := decodePublishedContextVMRequest(t, published)
-	if rpc.JSONRPC != "2.0" || rpc.Method != "service/action" || rpc.ID == "" {
-		t.Fatalf("unexpected ContextVM request: %#v", rpc)
-	}
-	for key, want := range map[string]string{"action": "deploy", "service_id": "svc-1", "environment_id": "env-1", "artifact_id": artifactID} {
-		if got, _ := rpc.Params[key].(string); got != want {
-			t.Fatalf("params[%s] = %q, want %q (params=%#v)", key, got, want, rpc.Params)
-		}
-	}
-	if meta, _ := rpc.Params["_meta"].(map[string]any); meta == nil || meta["progressToken"] != rpc.ID {
-		t.Fatalf("missing progress token in ContextVM params: %#v", rpc.Params["_meta"])
-	}
-	assertTagValue(t, published.Tags, "action", "deploy")
-	assertTagValue(t, published.Tags, "service", "svc-1")
-	assertTagValue(t, published.Tags, "environment", "env-1")
-	assertTagValue(t, published.Tags, "artifact", artifactID)
-	assertTagValue(t, published.Tags, "method", "service/action")
-	assertTagValue(t, published.Tags, controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion)
-	filter := transport.onlyFilter(t)
-	if got := filter.Kinds; len(got) != 1 || got[0] != nostr.Kind(controlplane.KindContextVMMessage) {
-		t.Fatalf("filter kinds = %#v, want ContextVM kind", got)
-	}
-	if got := filter.Tags["e"]; len(got) != 1 || got[0] != published.ID.Hex() {
-		t.Fatalf("filter #e = %#v, want request id %s", got, published.ID)
-	}
-	if got := filter.Tags["p"]; len(got) != 1 || got[0] != published.PubKey.Hex() {
-		t.Fatalf("filter #p = %#v, want requester pubkey %s", got, published.PubKey)
-	}
-}
-
-func TestOperatorRuntimeRestartStopRequestConstruction(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		run  func(context.Context, *OperatorControlPlaneClient) (*RuntimeActionResult, error)
-	}{
-		{name: "restart", run: func(ctx context.Context, c *OperatorControlPlaneClient) (*RuntimeActionResult, error) {
-			return c.RestartServiceRuntimeNostr(ctx, "svc-1", "env-1", nil)
-		}},
-		{name: "stop", run: func(ctx context.Context, c *OperatorControlPlaneClient) (*RuntimeActionResult, error) {
-			return c.StopServiceRuntimeNostr(ctx, "svc-1", "env-1", nil)
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			requestKey := nostr.Generate().Hex()
-			replyKey := nostr.Generate().Hex()
-			transport := newFakeOperatorTransport()
-			client := newTestOperatorClient(t, requestKey, transport)
-			transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-				transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"action": tc.name, "service_id": "svc-1", "environment_id": "env-1"})
-				return 1, nil
-			}
-			result, err := tc.run(context.Background(), client)
-			if err != nil {
-				t.Fatalf("runtime action error = %v", err)
-			}
-			if result.Action != tc.name {
-				t.Fatalf("result action = %q, want %q", result.Action, tc.name)
-			}
-			published := transport.onlyPublished(t)
-			rpc := decodePublishedContextVMRequest(t, published)
-			if rpc.Method != "service/action" {
-				t.Fatalf("method = %q, want service/action", rpc.Method)
-			}
-			if got, _ := rpc.Params["action"].(string); got != tc.name {
-				t.Fatalf("action = %q, want %q", got, tc.name)
-			}
-			if _, exists := rpc.Params["artifact_id"]; exists {
-				t.Fatalf("non-deploy request included artifact_id: %#v", rpc.Params)
-			}
-		})
-	}
-}
-
-func TestOperatorRuntimeActionUsesExplicitProgressToken(t *testing.T) {
-	transport := newFakeOperatorTransport()
-	client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
-	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		transport.events <- signedContextVMResult(t, nostr.Generate().Hex(), ev, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
-		return 1, nil
-	}
-	if _, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil, "runtime-retry-1"); err != nil {
-		t.Fatal(err)
-	}
-	event := transport.onlyPublished(t)
-	rpc := decodePublishedContextVMRequest(t, event)
-	if got := firstTagValue(event.Tags, "d"); got != "runtime-retry-1" {
-		t.Fatalf("d tag = %q", got)
-	}
-	if rpc.ID != "runtime-retry-1" {
-		t.Fatalf("rpc ID = %q", rpc.ID)
-	}
-	if meta, _ := rpc.Params["_meta"].(map[string]any); meta == nil || meta["progressToken"] != "runtime-retry-1" {
-		t.Fatalf("progress token = %#v", rpc.Params["_meta"])
-	}
-}
-
-func TestOperatorRollbackUsesIdempotencyTagOnly(t *testing.T) {
-	requestKey := nostr.Generate().Hex()
-	replyKey := nostr.Generate().Hex()
-	transport := newFakeOperatorTransport()
-	client := newTestOperatorClient(t, requestKey, transport)
-	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{
-			"status":         "submitted",
-			"intent_id":      "rollback-intent",
-			"service_id":     "svc-1",
-			"environment_id": "env-1",
-			"artifact_id":    "artifact-good",
-		})
-		return 1, nil
-	}
-
-	result, err := client.RollbackDeploymentNostr(context.Background(), RollbackDeploymentNostrRequest{
-		ServiceID:          "svc-1",
-		EnvironmentID:      "env-1",
-		DeploymentUnitID:   "unit-1",
-		TargetArtifactID:   "artifact-good",
-		SupersedesIntentID: "intent-bad",
-		IdempotencyKey:     "rollback:test",
-	}, nil)
-	if err != nil {
-		t.Fatalf("RollbackDeploymentNostr() error = %v", err)
-	}
-	if result.IntentID != "rollback-intent" || result.ArtifactID != "artifact-good" {
-		t.Fatalf("unexpected rollback result: %#v", result)
-	}
-	published := transport.onlyPublished(t)
-	rpc := decodePublishedContextVMRequest(t, published)
-	if rpc.Method != "service/rollback" {
-		t.Fatalf("method = %q, want service/rollback", rpc.Method)
-	}
-	if _, exists := rpc.Params["idempotency_key"]; exists {
-		t.Fatalf("idempotency_key leaked into strict ContextVM params: %#v", rpc.Params)
-	}
-	for key, want := range map[string]string{
-		"service_id":           "svc-1",
-		"environment_id":       "env-1",
-		"deployment_unit_id":   "unit-1",
-		"target_artifact_id":   "artifact-good",
-		"supersedes_intent_id": "intent-bad",
-	} {
-		if got, _ := rpc.Params[key].(string); got != want {
-			t.Fatalf("params[%s] = %q, want %q (params=%#v)", key, got, want, rpc.Params)
-		}
-	}
-	assertTagValue(t, published.Tags, "d", "rollback:test")
-	assertTagValue(t, published.Tags, "deployment_unit", "unit-1")
-}
-
 func TestOperatorRoutesToConfiguredServicePubkey(t *testing.T) {
 	requestKey := nostr.Generate().Hex()
 	replyKey := nostr.Generate().Hex()
@@ -621,7 +385,7 @@ func TestOperatorRoutesToConfiguredServicePubkey(t *testing.T) {
 		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
 		return 1, nil
 	}
-	if _, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil); err != nil {
+	if _, err := testContextVMTransportRequest(client, context.Background()); err != nil {
 		t.Fatalf("RestartServiceRuntimeNostr() error = %v", err)
 	}
 	published := transport.onlyPublished(t)
@@ -653,27 +417,12 @@ func TestOperatorIgnoresInvalidUncorrelatedAndDuplicateContextVMReplies(t *testi
 		transport.events <- good
 		return 1, nil
 	}
-	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	result, err := testContextVMTransportRequest(client, context.Background())
 	if err != nil {
 		t.Fatalf("RestartServiceRuntimeNostr() error = %v", err)
 	}
 	if result.Action != "restart" {
 		t.Fatalf("result action = %q, want restart", result.Action)
-	}
-}
-
-func TestOperatorRuntimeTerminalFailure(t *testing.T) {
-	requestKey := nostr.Generate().Hex()
-	replyKey := nostr.Generate().Hex()
-	transport := newFakeOperatorTransport()
-	client := newTestOperatorClient(t, requestKey, transport)
-	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		transport.events <- signedContextVMResult(t, replyKey, ev, map[string]any{"status": "failed", "error": "runtime denied"})
-		return 1, nil
-	}
-	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
-	if err == nil || !strings.Contains(err.Error(), "runtime denied") {
-		t.Fatalf("error = %v, want runtime denied", err)
 	}
 }
 
@@ -765,28 +514,10 @@ func TestOperatorContextVMErrorIsPostAcceptanceFailure(t *testing.T) {
 		transport.events <- signedContextVMError(t, replyKey, ev, "method denied")
 		return 1, nil
 	}
-	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	_, err := testContextVMTransportRequest(client, context.Background())
 	var reqErr *ControlPlaneRequestError
 	if !errors.As(err, &reqErr) || !reqErr.RequestAccepted || !strings.Contains(err.Error(), "method denied") {
 		t.Fatalf("error = %T %v, want accepted ContextVM error", err, err)
-	}
-}
-
-func TestOperatorInterruptedDeploymentExplainsRetryKey(t *testing.T) {
-	transport := newFakeOperatorTransport()
-	client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
-	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
-		transport.events <- signedContextVMErrorCode(t, nostr.Generate().Hex(), ev,
-			controlplane.ContextVMDuplicateRequestErrorCode, "request outcome unknown")
-		return 1, nil
-	}
-	_, err := client.CreateDeploymentIntentWithRequestNostr(context.Background(), DeploymentIntentNostrRequest{
-		ServiceID: "svc", EnvironmentID: "env", ArtifactID: "art", IdempotencyKey: "deploy-retry-1",
-	}, nil)
-	var remote *ContextVMRemoteError
-	if !errors.As(err, &remote) || remote.Code != controlplane.ContextVMDuplicateRequestErrorCode ||
-		!strings.Contains(err.Error(), "--idempotency-key deploy-retry-1") {
-		t.Fatalf("error = %T %v, want -32011 with retry guidance", err, err)
 	}
 }
 
@@ -800,7 +531,7 @@ func TestOperatorContextCancelAfterPublishIsPostAcceptanceAbort(t *testing.T) {
 		return 1, nil
 	}
 
-	_, err := client.RestartServiceRuntimeNostr(ctx, "svc-1", "env-1", nil)
+	_, err := testContextVMTransportRequest(client, ctx)
 	var reqErr *ControlPlaneRequestError
 	if !errors.As(err, &reqErr) {
 		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
@@ -808,7 +539,7 @@ func TestOperatorContextCancelAfterPublishIsPostAcceptanceAbort(t *testing.T) {
 	if !reqErr.RequestAccepted || reqErr.PublishedRelays != 1 {
 		t.Fatalf("RequestAccepted=%v PublishedRelays=%d, want accepted abort", reqErr.RequestAccepted, reqErr.PublishedRelays)
 	}
-	if reqErr.RequestEventID == "" || reqErr.RequestDTag == "" || reqErr.RequestMethod != "service/action" {
+	if reqErr.RequestEventID == "" || reqErr.RequestDTag == "" || reqErr.RequestMethod != controlplane.ContextVMMethodEnvironmentGetDetails {
 		t.Fatalf("missing post-publish diagnostics: event=%q d=%q method=%q", reqErr.RequestEventID, reqErr.RequestDTag, reqErr.RequestMethod)
 	}
 	if !strings.Contains(reqErr.Error(), "request_event_id="+reqErr.RequestEventID) || !strings.Contains(reqErr.Error(), "d="+reqErr.RequestDTag) {
@@ -820,7 +551,7 @@ func TestOperatorContextCancelAfterPublishIsPostAcceptanceAbort(t *testing.T) {
 	published := transport.onlyPublished(t)
 	if reqErr.RequestEventID != published.ID.Hex() ||
 		reqErr.RequestDTag == "" ||
-		reqErr.RequestMethod != "service/action" {
+		reqErr.RequestMethod != controlplane.ContextVMMethodEnvironmentGetDetails {
 		t.Fatalf("diagnostics = event %q d %q method %q, want published request metadata", reqErr.RequestEventID, reqErr.RequestDTag, reqErr.RequestMethod)
 	}
 	if len(reqErr.PublishResults) != 1 ||
@@ -844,7 +575,7 @@ func TestOperatorReplySubscriptionClosedAfterPublishIsPostAcceptanceFailure(t *t
 		return 1, nil
 	}
 
-	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	_, err := testContextVMTransportRequest(client, context.Background())
 	var reqErr *ControlPlaneRequestError
 	if !errors.As(err, &reqErr) {
 		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
@@ -864,7 +595,7 @@ func TestOperatorPublishNoRelayAcceptedIsPreAcceptanceFailure(t *testing.T) {
 	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
 		return 0, errors.New("all relays rejected")
 	}
-	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	_, err := testContextVMTransportRequest(client, context.Background())
 	var reqErr *ControlPlaneRequestError
 	if !errors.As(err, &reqErr) {
 		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
@@ -889,7 +620,7 @@ func TestOperatorPublishOKFalseAuthRequiredPreservesPreAcceptanceReason(t *testi
 		return []nostrpool.PublishResult{{RelayURL: "wss://auth.example", Accepted: false, Reason: "auth-required: sign in"}}, errors.New("failed to publish to any relay: wss://auth.example rejected event: auth-required: sign in")
 	}
 
-	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	_, err := testContextVMTransportRequest(client, context.Background())
 	var reqErr *ControlPlaneRequestError
 	if !errors.As(err, &reqErr) {
 		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
@@ -919,7 +650,7 @@ func TestOperatorReplyAuthClosedExcludesRelayAndWaitsForRemainingResult(t *testi
 		return 1, nil
 	}
 
-	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	result, err := testContextVMTransportRequest(client, context.Background())
 	if err != nil {
 		t.Fatalf("RestartServiceRuntimeNostr() error = %v", err)
 	}
@@ -940,7 +671,7 @@ func TestOperatorReplyClosedAllRelaysAfterPublishIsPostAcceptanceFailure(t *test
 		return 1, nil
 	}
 
-	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	_, err := testContextVMTransportRequest(client, context.Background())
 	var reqErr *ControlPlaneRequestError
 	if !errors.As(err, &reqErr) {
 		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
@@ -958,7 +689,7 @@ func TestOperatorSubscribeFailureIsPreAcceptanceFailure(t *testing.T) {
 	transport := newFakeOperatorTransport()
 	transport.subscribeErr = errors.New("subscription unavailable")
 	client := newTestOperatorClient(t, requestKey, transport)
-	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	_, err := testContextVMTransportRequest(client, context.Background())
 	var reqErr *ControlPlaneRequestError
 	if !errors.As(err, &reqErr) || reqErr.RequestAccepted {
 		t.Fatalf("error = %T %#v, want pre-acceptance ControlPlaneRequestError", err, reqErr)
@@ -1001,7 +732,7 @@ func TestOperatorPublishWaitsForSubscriptionEOSE(t *testing.T) {
 	}
 	resultCh := make(chan outcome, 1)
 	go func() {
-		result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+		result, err := testContextVMTransportRequest(client, context.Background())
 		resultCh <- outcome{result: result, err: err}
 	}()
 	<-transport.subscribeNotify
@@ -1031,7 +762,7 @@ func TestOperatorPublishProceedsAfterActivationTimeoutWithActiveRelay(t *testing
 		return 1, nil
 	}
 
-	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	result, err := testContextVMTransportRequest(client, context.Background())
 	if err != nil || result == nil || result.Action != "restart" {
 		t.Fatalf("result=%#v error=%v, want request success after bounded activation wait", result, err)
 	}
@@ -1053,7 +784,7 @@ func TestOperatorActivationFailsWhenAllRelaysCloseBeforeEOSE(t *testing.T) {
 	transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://one.example", Reason: "closed: maintenance"}
 	transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://two.example", Reason: "closed: unavailable"}
 
-	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	_, err := testContextVMTransportRequest(client, context.Background())
 	var requestErr *ControlPlaneRequestError
 	if !errors.As(err, &requestErr) {
 		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
@@ -1072,7 +803,7 @@ func TestOperatorZeroSubscribedRelaysFailsBeforePublish(t *testing.T) {
 	transport := newFakeOperatorTransport()
 	transport.relayURLs = nil
 	client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
-	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	_, err := testContextVMTransportRequest(client, context.Background())
 	var requestErr *ControlPlaneRequestError
 	if !errors.As(err, &requestErr) {
 		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
@@ -1096,7 +827,7 @@ func TestOperatorPendingRelaysUsesEstablishedSubscriptions(t *testing.T) {
 		transport.closedEvents <- nostrpool.RelayClosed{RelayURL: "wss://subscribed.example", Reason: "closed: maintenance"}
 		return 1, nil
 	}
-	_, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	_, err := testContextVMTransportRequest(client, context.Background())
 	var requestErr *ControlPlaneRequestError
 	if !errors.As(err, &requestErr) {
 		t.Fatalf("error = %T %v, want ControlPlaneRequestError", err, err)
@@ -1126,7 +857,7 @@ func TestOperatorResultTimeoutRepublishesSameRequest(t *testing.T) {
 		}
 		return 1, nil
 	}
-	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	result, err := testContextVMTransportRequest(client, context.Background())
 	if err != nil || result == nil || calls != 2 {
 		t.Fatalf("result=%#v error=%v publish_calls=%d, want replay success on second attempt", result, err, calls)
 	}
@@ -1167,7 +898,7 @@ func TestOperatorEncryptedRetryAcceptsReplyCorrelatedToFirstWrapper(t *testing.T
 		return 1, nil
 	}
 
-	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	result, err := testContextVMTransportRequest(client, context.Background())
 	if err != nil || result == nil || result.Action != "restart" || publishCalls != 2 {
 		t.Fatalf("result=%#v error=%v publish_calls=%d, want first-wrapper reply during second await", result, err, publishCalls)
 	}
@@ -1224,7 +955,7 @@ func TestOperatorEncryptedRoundTripLocalAndRemoteSigner(t *testing.T) {
 				transport.events <- wrappedContextVMResult(t, operatorSecret.Public(), outer, *inner, serviceSecret, false, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
 				return 1, nil
 			}
-			result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+			result, err := testContextVMTransportRequest(client, context.Background())
 			if err != nil || result == nil || result.Action != "restart" {
 				t.Fatalf("result=%#v error=%v", result, err)
 			}
@@ -1264,7 +995,7 @@ func TestOperatorEncryptedReplyRejectsWrongOuterCorrelationAndInvalidInnerProven
 		transport.events <- wrappedContextVMResult(t, operatorSecret.Public(), outer, *inner, serviceSecret, false, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
 		return 1, nil
 	}
-	result, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil)
+	result, err := testContextVMTransportRequest(client, context.Background())
 	if err != nil || result == nil || result.Action != "restart" {
 		t.Fatalf("result=%#v error=%v", result, err)
 	}
@@ -1549,4 +1280,21 @@ func assertTagValue(t *testing.T, tags nostr.Tags, name, value string) {
 		}
 	}
 	t.Fatalf("missing tag %s=%s in %#v", name, value, tags)
+}
+
+// testContextVMTransportRequest exercises the shared transport using a remaining
+// interactive method, without restoring removed deployment/runtime CRUD.
+func testContextVMTransportRequest(c *OperatorControlPlaneClient, ctx context.Context) (*RuntimeActionResult, error) {
+	event, err := c.publishAndAwait(ctx, operatorRequest{
+		Method:  controlplane.ContextVMMethodEnvironmentGetDetails,
+		Payload: map[string]any{"id": "env-1"},
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	var result RuntimeActionResult
+	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
