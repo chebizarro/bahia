@@ -146,8 +146,6 @@ const (
 	ledgerNone deliveryLedger = iota
 	// ledgerLocal: the local outbox, with every relay's state.
 	ledgerLocal
-	// ledgerPostgres: a PostgreSQL nostr_events outbox row.
-	ledgerPostgres
 	// ledgerAudit: a PostgreSQL audit row with no publish state.
 	ledgerAudit
 )
@@ -202,13 +200,12 @@ func (p *Publisher) newDelivery(ev nostr.Event, rounds int) *outboxDelivery {
 }
 
 // defaultLedger is where events this publisher admits are persisted (see
-// Publisher.admit).
+// Publisher.admit). Since bahia-irsry.62 the local outbox is required for
+// redelivery-enabled publishers, so ledgerLocal is the normal case.
 func (p *Publisher) defaultLedger() deliveryLedger {
 	switch {
 	case p.localOutbox != nil:
 		return ledgerLocal
-	case p.outboxRepo != nil:
-		return ledgerPostgres
 	case p.eventRepo != nil:
 		return ledgerAudit
 	default:
@@ -507,21 +504,6 @@ func (p *Publisher) persistRound(ctx context.Context, d *outboxDelivery, deliver
 		if settled {
 			p.mirrorSettled(ctx, eventID, delivered, detail, now)
 		}
-	case ledgerPostgres:
-		switch {
-		case settled && delivered:
-			if err := p.outboxRepo.MarkPublished(ctx, eventID, now); err != nil {
-				return fmt.Errorf("persist publish acceptance: %w", err)
-			}
-		case settled:
-			if err := p.outboxRepo.AbandonPublish(ctx, eventID, detail); err != nil {
-				return fmt.Errorf("persist publish abandonment: %w", err)
-			}
-		default:
-			if err := p.outboxRepo.RecordPublishFailure(ctx, eventID, detail); err != nil {
-				return fmt.Errorf("persist publish failure: %w", err)
-			}
-		}
 	}
 	return nil
 }
@@ -675,21 +657,15 @@ func (p *Publisher) redeliverDue(ctx context.Context) (rateLimited bool) {
 }
 
 // discoverPending reads one keyset page of this publisher's target's pending
-// entries and starts delivery for those it is not already tracking (left
-// pending by a previous process or an inactive runner). It reports whether
-// the page was full, meaning more follow its cursor.
+// entries from the local outbox and starts delivery for those it is not
+// already tracking (left pending by a previous process or an inactive runner).
+// It reports whether the page was full, meaning more follow its cursor.
 //
-// Since bahia-irsry.62 the local outbox is the primary discovery source. The
-// PostgreSQL outbox is used as a fallback only when no local outbox is
-// configured (the production wiring always sets one). Pre-upgrade pending
-// PostgreSQL rows are moved to the local outbox at startup by
-// MigratePendingPostgresRows; after migration only the local outbox is
-// polled.
+// Since bahia-irsry.62 the local outbox is a required dependency; this is
+// the only discovery path. Pre-upgrade pending PostgreSQL rows are moved to
+// the local outbox at startup by MigratePendingPostgresRows.
 func (p *Publisher) discoverPending(ctx context.Context) (bool, error) {
-	if p.localOutbox != nil {
-		return p.discoverLocal(ctx)
-	}
-	return p.discoverPostgres(ctx)
+	return p.discoverLocal(ctx)
 }
 
 func (p *Publisher) discoverLocal(ctx context.Context) (bool, error) {
@@ -729,56 +705,6 @@ func (p *Publisher) discoverLocal(ctx context.Context) (bool, error) {
 		}
 	}
 	return len(entries) == p.pageSize, nil
-}
-
-// discoverPostgres is the PostgreSQL-outbox fallback for discoverPending when
-// no local outbox is configured. In production the local outbox is always set,
-// so this method does not run; it remains for publishers that are wired without
-// a local outbox (test doubles, unconfigured daemons).
-func (p *Publisher) discoverPostgres(ctx context.Context) (more bool, err error) {
-	if p.outboxRepo == nil {
-		return false, nil
-	}
-	records, err := p.outboxRepo.ListUnpublishedAfter(ctx, p.target, p.outboxCursor, p.pageSize)
-	if err != nil {
-		return false, err
-	}
-	if len(records) < p.pageSize {
-		p.outboxCursor = nil // wrap to the oldest pending row on the next pass
-	} else {
-		last := records[len(records)-1]
-		p.outboxCursor = &repository.NostrOutboxCursor{ReceivedAt: last.ReceivedAt, ID: last.ID}
-	}
-	for _, rec := range records {
-		if ctx.Err() != nil {
-			return false, nil
-		}
-		if p.isTracked(rec.ID) {
-			continue
-		}
-		if p.trackedCount() >= maxDiscoveredDeliveries {
-			return false, nil
-		}
-		ev, decodeErr := eventFromNostrRecord(rec)
-		if decodeErr != nil {
-			if abandonErr := p.outboxRepo.AbandonPublish(ctx, rec.ID, "abandoned: undecodable outbox row: "+decodeErr.Error()); abandonErr != nil {
-				p.logger.Warn("failed to abandon undecodable outbox row", zap.String("event_id", rec.ID), zap.Error(abandonErr))
-			}
-			continue
-		}
-		d, created := p.trackDelivery(ev, rec.PublishAttempts)
-		if !created || !d.mu.TryLock() {
-			continue
-		}
-		d.ledger = ledgerPostgres
-		p.deliverRound(ctx, d)
-		settled := d.settled
-		d.mu.Unlock()
-		if settled {
-			p.forgetDelivery(d)
-		}
-	}
-	return len(records) == p.pageSize, nil
 }
 
 // MigratePendingPostgresRows is a one-shot startup migration (bahia-irsry.62)

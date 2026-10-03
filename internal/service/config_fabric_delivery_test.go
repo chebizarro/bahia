@@ -220,3 +220,116 @@ func setPublishState(t *testing.T, repo *repositorytest.InMemoryNostrEventReposi
 	rec.PublishState = state
 	repo.Replace(id, *rec)
 }
+
+// TestConfigFabricListDriftWithoutPostgres verifies that a daemon with no
+// Postgres connection computes ListDrift correctly from the delivery query
+// alone (bahia-irsry.61). The local event store does not preserve PublishState
+// on read-back, so isDesiredAbandoned falls through to the delivery query.
+// This uses a statelessPublishRepo wrapper that strips PublishState, matching
+// the production LocalEventRepository behaviour.
+func TestConfigFabricListDriftWithoutPostgres(t *testing.T) {
+	ctx := context.Background()
+	inner := repositorytest.NewInMemoryNostrEventRepository()
+	repo := &statelessPublishRepo{inner}
+
+	publisher := &configTestPublisher{}
+	signer := newConfigTestSigner(t)
+	delivery := &fakeDeliveryQuery{outcomes: map[string]nostrutil.DeliveryOutcome{}}
+
+	svc := NewConfigFabricService(repo, publisher, signer, WithDeliveryQuery(delivery))
+	svc.now = func() time.Time { return time.Unix(1787625660, 0) }
+
+	// Publish version 1 (accepted inline).
+	r1, err := svc.Publish(ctx, validPolicyRequest(1))
+	if err != nil {
+		t.Fatalf("Publish v1 error = %v", err)
+	}
+	// Publish version 2 (accepted inline).
+	r2, err := svc.Publish(ctx, validPolicyRequest(2))
+	if err != nil {
+		t.Fatalf("Publish v2 error = %v", err)
+	}
+
+	// Verify the repo strips PublishState on reads (like LocalEventRepository).
+	rec, err := repo.GetByID(ctx, r2.EventID)
+	if err != nil || rec == nil {
+		t.Fatalf("record %q not found: %v", r2.EventID, err)
+	}
+	if rec.PublishState != "" {
+		t.Fatalf("expected empty PublishState from stateless repo, got %q", rec.PublishState)
+	}
+
+	// Without delivery query answers, both versions are kept (conservative).
+	drift, err := svc.ListDrift(ctx)
+	if err != nil {
+		t.Fatalf("ListDrift() error = %v", err)
+	}
+	if len(drift) != 1 {
+		t.Fatalf("expected 1 drift entry, got %d", len(drift))
+	}
+	if drift[0].DesiredVersion != 2 {
+		t.Fatalf("desired version = %d, want 2", drift[0].DesiredVersion)
+	}
+
+	// The delivery query reports version 2 was abandoned.
+	delivery.outcomes[r2.EventID] = nostrutil.DeliveryAbandoned
+	delivery.outcomes[r1.EventID] = nostrutil.DeliveryDelivered
+
+	drift, err = svc.ListDrift(ctx)
+	if err != nil {
+		t.Fatalf("ListDrift() after abandonment error = %v", err)
+	}
+	if len(drift) != 1 {
+		t.Fatalf("expected 1 drift entry after abandonment, got %d", len(drift))
+	}
+	if drift[0].DesiredVersion != 1 {
+		t.Fatalf("desired version after v2 abandoned = %d, want 1 (fallback to delivered v1)", drift[0].DesiredVersion)
+	}
+	if drift[0].DesiredEventID != r1.EventID {
+		t.Fatalf("desired event = %q, want v1 event %q", drift[0].DesiredEventID, r1.EventID)
+	}
+
+	// Both abandoned: no drift entries (no relay holds any version).
+	delivery.outcomes[r1.EventID] = nostrutil.DeliveryAbandoned
+	drift, err = svc.ListDrift(ctx)
+	if err != nil {
+		t.Fatalf("ListDrift() both abandoned error = %v", err)
+	}
+	if len(drift) != 0 {
+		t.Fatalf("expected 0 drift entries when all versions abandoned, got %d", len(drift))
+	}
+}
+
+// statelessPublishRepo wraps InMemoryNostrEventRepository to strip PublishState
+// and PublishTarget on reads, matching the behaviour of LocalEventRepository
+// which stores only the signed event (no PostgreSQL publish metadata).
+type statelessPublishRepo struct {
+	*repositorytest.InMemoryNostrEventRepository
+}
+
+func (r *statelessPublishRepo) GetByID(ctx context.Context, id string) (*repository.NostrEventRecord, error) {
+	rec, err := r.InMemoryNostrEventRepository.GetByID(ctx, id)
+	if rec != nil {
+		rec.PublishState = ""
+		rec.PublishTarget = ""
+	}
+	return rec, err
+}
+
+func (r *statelessPublishRepo) ListByKind(ctx context.Context, kind int, limit int) ([]repository.NostrEventRecord, error) {
+	recs, err := r.InMemoryNostrEventRepository.ListByKind(ctx, kind, limit)
+	for i := range recs {
+		recs[i].PublishState = ""
+		recs[i].PublishTarget = ""
+	}
+	return recs, err
+}
+
+func (r *statelessPublishRepo) ListByKinds(ctx context.Context, kinds []int, limit int) ([]repository.NostrEventRecord, error) {
+	recs, err := r.InMemoryNostrEventRepository.ListByKinds(ctx, kinds, limit)
+	for i := range recs {
+		recs[i].PublishState = ""
+		recs[i].PublishTarget = ""
+	}
+	return recs, err
+}

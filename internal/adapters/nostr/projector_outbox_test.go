@@ -91,8 +91,9 @@ func (s *relayScript) totalCalls() int {
 // outbox Publisher, wired like app.go (abandon hook included).
 func newOutboxProjector(t *testing.T, repo *repositorytest.InMemoryNostrEventRepository, script *relayScript, source *fakeProjectionSource, opts ...ProjectorOption) (*Projector, *Publisher) {
 	t.Helper()
+	outbox := openDeliveryTestOutbox(t)
 	publisher := NewPublisher(projectorTestConfig(), NewRelayPool(nil, zap.NewNop()), repo, zap.NewNop(),
-		WithPublishTarget(repository.NostrPublishTargetControlPlane))
+		WithPublishTarget(repository.NostrPublishTargetControlPlane), WithLocalOutbox(outbox, nil))
 	publisher.publishFn = script.publish
 	publisher.relayURLs = func() []string { return []string{cpRelayA, cpRelayB} }
 	publisher.newBackoff = func() *Backoff {
@@ -124,11 +125,11 @@ func TestProjectorPublishRetriesDownControlPlaneRelayViaOutbox(t *testing.T) {
 
 	runCtx, cancel := context.WithCancel(ctx)
 	runDone := make(chan error, 1)
-	discovered := signalRunnerDiscovery(publisher)
 	go func() { runDone <- publisher.Run(runCtx) }()
 	// Only an active runner keeps a partially delivered event in memory, so
 	// publish once it is running rather than racing its start.
-	receive(t, discovered, "first outbox discovery pass")
+	require.Eventually(t, func() bool { return publisher.running.Load() },
+		5*time.Second, time.Millisecond, "publisher runner did not start")
 	defer func() {
 		cancel()
 		<-runDone
@@ -141,7 +142,7 @@ func TestProjectorPublishRetriesDownControlPlaneRelayViaOutbox(t *testing.T) {
 	rows := outboxRows(t, repo, KindCASControlState)
 	require.Len(t, rows, 1)
 	row := rows[0]
-	require.Equal(t, repository.NostrPublishTargetControlPlane, row.PublishTarget)
+	require.Equal(t, repository.LocalOutboxArchiveTarget(repository.NostrPublishTargetControlPlane), row.PublishTarget)
 	require.Equal(t, repository.NostrPublishStatePending, row.PublishState, "relay B has not accepted yet")
 	require.NotNil(t, row.EntityID, "the projected entity is recorded on the outbox row")
 	require.Equal(t, int64(1), projector.ProjectionMetrics()["service/state"].Accepted)
