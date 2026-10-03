@@ -220,3 +220,66 @@ func (m *mockOrgMemberLookup) ListByPubkey(_ context.Context, pubkey string) ([]
 	}
 	return result, nil
 }
+
+func TestTrustSetMemberSource_FleetScopeReturnsFleetOps(t *testing.T) {
+	fleetPK := "aaaa000000000000000000000000000000000000000000000000000000000001"
+	ownerPK := "bbbb000000000000000000000000000000000000000000000000000000000002"
+	orgID := uuid.New()
+
+	ts := NewTrustSet([]string{fleetPK}, zap.NewNop(),
+		WithBootstrapOwners(map[string]string{orgID.String(): ownerPK}),
+	)
+
+	source := NewTrustSetMemberSource(ts, nil)
+	ctx := context.Background()
+
+	pubkeys, err := source.OrgMemberPubkeys(ctx, "fleet")
+	require.NoError(t, err)
+	require.Contains(t, pubkeys, fleetPK, "fleet-ops pubkey should be included")
+	require.Contains(t, pubkeys, ownerPK, "bootstrap owner should be included")
+}
+
+func TestTrustSetMemberSource_FleetScopeExcludesRandomPubkey(t *testing.T) {
+	fleetPK := "cccc000000000000000000000000000000000000000000000000000000000003"
+	randomPK := "dddd000000000000000000000000000000000000000000000000000000000004"
+
+	ts := NewTrustSet([]string{fleetPK}, zap.NewNop())
+
+	source := NewTrustSetMemberSource(ts, nil)
+	ctx := context.Background()
+
+	pubkeys, err := source.OrgMemberPubkeys(ctx, "fleet")
+	require.NoError(t, err)
+	require.Contains(t, pubkeys, fleetPK)
+	require.NotContains(t, pubkeys, randomPK, "random pubkey should not be in fleet OCK set")
+}
+
+func TestTrustSetMemberSource_FleetScopeEmptyWhenNoOps(t *testing.T) {
+	ts := NewTrustSet(nil, zap.NewNop())
+	source := NewTrustSetMemberSource(ts, nil)
+	ctx := context.Background()
+
+	pubkeys, err := source.OrgMemberPubkeys(ctx, "fleet")
+	require.NoError(t, err)
+	require.Empty(t, pubkeys, "no fleet ops configured → empty set")
+}
+
+func TestTrustSetMemberSource_OrgScopeStillWorks(t *testing.T) {
+	orgID := uuid.New()
+	memberPK := "eeee000000000000000000000000000000000000000000000000000000000005"
+	fleetPK := "ffff000000000000000000000000000000000000000000000000000000000006"
+
+	ts := NewTrustSet([]string{fleetPK}, zap.NewNop())
+	ts.SetRelayMembers(orgID.String(), map[string]domain.Role{
+		memberPK: domain.RoleAdmin,
+	})
+
+	source := NewTrustSetMemberSource(ts, nil)
+	ctx := context.Background()
+
+	// Org scope should return org members, not fleet ops.
+	pubkeys, err := source.OrgMemberPubkeys(ctx, orgID.String())
+	require.NoError(t, err)
+	require.Contains(t, pubkeys, memberPK)
+	require.NotContains(t, pubkeys, fleetPK, "fleet ops should not be in org member set")
+}

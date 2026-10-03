@@ -9,6 +9,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -250,7 +251,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 		return fmt.Errorf("open FIPS bridge event store: %w", err)
 	}
 	defer store.Close()
-	filter := b.subscriptionFilter()
+	filter := b.endpointFilter()
 	b.logger.Info("restored endpoints from the local event store", "store", storePath, "events", b.hydrate(ctx, store, filter))
 	b.fetchRelayMetadata(ctx)
 	b.pool.Connect(ctx)
@@ -274,7 +275,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 			}
 		},
 	}
-	return syncer.Run(ctx, []nostr.Filter{filter})
+	return syncer.Run(ctx, b.subscriptionFilters())
 }
 
 // hydrate rebuilds routes from the endpoint events already in the store (the
@@ -301,13 +302,36 @@ func (b *Bridge) fetchRelayMetadata(ctx context.Context) {
 	}
 }
 
-func (b *Bridge) subscriptionFilter() nostr.Filter {
+func (b *Bridge) subscriptionFilters() []nostr.Filter {
 	authors := []nostr.PubKey(nil)
 	if pubkey, err := nostrutil.PubKeyFromHex(b.cfg.BahiaPubkey); err == nil {
 		authors = []nostr.PubKey{pubkey}
 	}
 	// #t is a single-letter tag, so NIP-01 relays index it; the envelope's
 	// domain/schema/legacy_kind tags are multi-letter and are checked locally.
+	endpointFilter := nostr.Filter{
+		Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
+		Authors: authors,
+		Tags:    nostr.TagMap{"t": []string{kinds.DNSEndpointTopic}},
+	}
+	// NIP-09 kind-5 deletions that target DNS endpoint state (kind 30900).
+	// The #k tag scopes to endpoint state; #t does not apply because kind-5
+	// events carry e/a tags, not the target's topic tags. The local store's
+	// SaveEvent already handles the mechanics. (bahia-irsry.48 item 6)
+	deletionFilter := nostr.Filter{
+		Kinds:   []nostr.Kind{nostr.KindDeletion},
+		Authors: authors,
+		Tags:    nostr.TagMap{"k": []string{strconv.Itoa(kinds.CASControlState)}},
+	}
+	return []nostr.Filter{endpointFilter, deletionFilter}
+}
+
+// endpointFilter returns just the endpoint filter for store queries (hydrate).
+func (b *Bridge) endpointFilter() nostr.Filter {
+	authors := []nostr.PubKey(nil)
+	if pubkey, err := nostrutil.PubKeyFromHex(b.cfg.BahiaPubkey); err == nil {
+		authors = []nostr.PubKey{pubkey}
+	}
 	return nostr.Filter{
 		Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
 		Authors: authors,
@@ -353,6 +377,11 @@ func (b *Bridge) HandleEvent(ctx context.Context, ev *nostr.Event) error {
 		}
 	}
 
+	// NIP-09 kind-5: remove every coordinate targeted by "a" tags.
+	if ev.Kind == nostr.KindDeletion {
+		return b.handleDeletion(ctx, ev)
+	}
+
 	endpoint, err := ParseEndpointEvent(ev)
 	if err != nil {
 		return err
@@ -377,9 +406,53 @@ func (b *Bridge) HandleEvent(ctx context.Context, ev *nostr.Event) error {
 	return nil
 }
 
-// validateEndpointEnvelope accepts only the projector's canonical DNS
-// endpoint envelope; relays that ignore #t may hand back other 30900 state.
+// handleDeletion processes a NIP-09 kind-5 event: every "a" tag that names a
+// kind-30900 coordinate whose current record was created before the deletion
+// is removed from the routing table.
+func (b *Bridge) handleDeletion(ctx context.Context, ev *nostr.Event) error {
+	delID := nostrutil.EventIDHex(ev)
+	anyChanged := false
+	for _, tag := range ev.Tags {
+		if len(tag) < 2 || tag[0] != "a" {
+			continue
+		}
+		parts := strings.SplitN(tag[1], ":", 3)
+		if len(parts) < 3 || parts[2] == "" {
+			continue
+		}
+		coordinate := tag[1]
+		cursor, ok := b.latest[coordinate]
+		if ok && cursor.CreatedAt <= ev.CreatedAt {
+			b.latest[coordinate] = replaceableCursor{CreatedAt: ev.CreatedAt, EventID: delID}
+			delete(b.routes, coordinate)
+			anyChanged = true
+		} else if !ok {
+			// Mark it so a late live event from another relay doesn't
+			// resurrect a deleted endpoint.
+			b.latest[coordinate] = replaceableCursor{CreatedAt: ev.CreatedAt, EventID: delID}
+		}
+	}
+	if !anyChanged {
+		return nil
+	}
+	changed := b.rebuildEntries()
+	if !b.caughtUp {
+		b.pendingFlush = true
+		return nil
+	}
+	if changed {
+		return b.writer.Write(ctx, b.entries)
+	}
+	return nil
+}
+
+// validateEndpointEnvelope accepts the projector's canonical DNS endpoint
+// envelope and NIP-09 kind-5 deletion events targeting kind 30900; relays
+// that ignore #t may hand back other 30900 state.
 func validateEndpointEnvelope(ev *nostr.Event) error {
+	if ev.Kind == nostr.KindDeletion {
+		return validateDeletionEnvelope(ev)
+	}
 	if int(ev.Kind) != kinds.CASControlState {
 		return fmt.Errorf("unexpected kind %d", ev.Kind)
 	}
@@ -396,6 +469,16 @@ func validateEndpointEnvelope(ev *nostr.Event) error {
 		return fmt.Errorf("missing d tag")
 	}
 	return nil
+}
+
+// validateDeletionEnvelope checks that a kind-5 event targets endpoint state.
+func validateDeletionEnvelope(ev *nostr.Event) error {
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "k" && tag[1] == strconv.Itoa(kinds.CASControlState) {
+			return nil
+		}
+	}
+	return fmt.Errorf("kind-5 does not target kind %d", kinds.CASControlState)
 }
 
 func (b *Bridge) routable(endpoint Endpoint) bool {

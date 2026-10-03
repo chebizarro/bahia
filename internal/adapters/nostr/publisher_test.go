@@ -9,6 +9,7 @@ import (
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
@@ -90,6 +91,7 @@ func TestPublisherSignedEventUsesDurableOutboxPath(t *testing.T) {
 		NewRelayPool(nil, zap.NewNop()),
 		repo,
 		zap.NewNop(),
+		WithLocalOutbox(openDeliveryTestOutbox(t), nil),
 	)
 	publisher.publishFn = fakePool.PublishWithResults
 	publisher.relayURLs = func() []string { return []string{"wss://relay.example"} }
@@ -137,11 +139,13 @@ func TestPublisherPersistsFailedPublishAndBackgroundRetriesRateLimit(t *testing.
 	}
 
 	privateKey := gonostr.Generate().Hex()
+	outbox := openDeliveryTestOutbox(t)
 	publisher := NewPublisher(
 		config.NostrConfig{PrivateKey: privateKey, PublishEnabled: true},
 		NewRelayPool(nil, zap.NewNop()),
 		repo,
 		zap.NewNop(),
+		WithLocalOutbox(outbox, nil),
 	)
 	publisher.publishFn = fakePool.PublishWithResults
 	publisher.relayURLs = func() []string { return []string{"wss://relay.example"} }
@@ -150,20 +154,21 @@ func TestPublisherPersistsFailedPublishAndBackgroundRetriesRateLimit(t *testing.
 	}
 	publisher.idleInterval = time.Millisecond
 
-	_, err := publisher.PublishSignedEventWithResults(ctx, &gonostr.Event{
+	ev := &gonostr.Event{
 		Kind:      gonostr.Kind(KindCASAudit),
 		CreatedAt: gonostr.Now(),
 		Tags:      gonostr.Tags{{"t", "build.registered"}, {"d", "build-1"}},
 		Content:   `{"status":"registered"}`,
-	})
+	}
+	_, err := publisher.PublishSignedEventWithResults(ctx, ev)
 	require.ErrorIs(t, err, ErrPublishIncomplete, "a failed first round leaves the event queued")
 
-	pending, err := repo.ListUnpublished(ctx, 10)
+	entry, found, err := publisher.localOutbox.Get(ev.ID)
 	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	require.Equal(t, repository.NostrPublishStatePending, pending[0].PublishState)
-	require.Equal(t, 1, pending[0].PublishAttempts)
-	require.Contains(t, pending[0].LastPublishError, "relay unavailable")
+	require.True(t, found)
+	require.Equal(t, localstore.OutboxPending, entry.State)
+	require.Equal(t, 1, entry.Rounds)
+	require.Contains(t, entry.LastError, "relay unavailable")
 	require.Equal(t, 1, fakePool.callCount())
 
 	runCtx, cancel := context.WithCancel(context.Background())
@@ -176,10 +181,9 @@ func TestPublisherPersistsFailedPublishAndBackgroundRetriesRateLimit(t *testing.
 		t.Fatal("timed out waiting for rate-limited outbox attempt")
 	}
 	require.Equal(t, 2, fakePool.callCount())
-	var rec *repository.NostrEventRecord
 	require.Eventually(t, func() bool {
-		rec, err = repo.GetByID(ctx, pending[0].ID)
-		return err == nil && rec != nil && strings.Contains(rec.LastPublishError, "rate-limited: slow down")
+		e, ok, err := publisher.localOutbox.Get(ev.ID)
+		return err == nil && ok && strings.Contains(e.LastError, "rate-limited: slow down")
 	}, time.Second, time.Millisecond, "rate-limited result was not persisted")
 
 	select {
@@ -191,21 +195,16 @@ func TestPublisherPersistsFailedPublishAndBackgroundRetriesRateLimit(t *testing.
 	require.NoError(t, <-runDone)
 
 	require.Equal(t, 3, fakePool.callCount())
-	pending, err = repo.ListUnpublished(ctx, 10)
-	require.NoError(t, err)
-	require.Empty(t, pending)
 
 	fakePool.mu.Lock()
-	eventID := fakePool.calls[0].ID.Hex()
 	require.Equal(t, fakePool.calls[0].ID, fakePool.calls[1].ID)
 	require.Equal(t, fakePool.calls[0].ID, fakePool.calls[2].ID)
 	fakePool.mu.Unlock()
 
-	rec, err = repo.GetByID(ctx, eventID)
+	entry, found, err = publisher.localOutbox.Get(ev.ID)
 	require.NoError(t, err)
-	require.NotNil(t, rec)
-	require.Equal(t, repository.NostrPublishStatePublished, rec.PublishState)
-	require.Equal(t, 3, rec.PublishAttempts)
-	require.Empty(t, rec.LastPublishError)
-	require.NotNil(t, rec.PublishedAt)
+	require.True(t, found)
+	require.Equal(t, localstore.OutboxPublished, entry.State)
+	require.Equal(t, 3, entry.Rounds)
+	require.Empty(t, entry.LastError)
 }

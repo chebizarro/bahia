@@ -13,6 +13,12 @@ func TestNostrLocalStoreDefaultsValidate(t *testing.T) {
 	if store.Path != DefaultNostrLocalStorePath || store.ResumeOverlap != 10*time.Minute || store.RegularLookback != 24*time.Hour || store.NegentropyUpload {
 		t.Fatalf("unexpected defaults: %+v", store)
 	}
+	if store.RequestMaxAge != DefaultNostrLocalStoreRequestMaxAge {
+		t.Fatalf("RequestMaxAge default = %v, want %v", store.RequestMaxAge, DefaultNostrLocalStoreRequestMaxAge)
+	}
+	if store.WrapBackdateOverlap != DefaultNostrLocalStoreWrapBackdateOverlap {
+		t.Fatalf("WrapBackdateOverlap default = %v, want %v", store.WrapBackdateOverlap, DefaultNostrLocalStoreWrapBackdateOverlap)
+	}
 	if got, want := store.ResolvedOutboxPath(), filepath.Join(filepath.Dir(DefaultNostrLocalStorePath), "outbox.bolt"); got != want {
 		t.Fatalf("default outbox path = %q, want %q next to the event store", got, want)
 	}
@@ -54,6 +60,18 @@ func TestNostrLocalStoreValidation(t *testing.T) {
 			c.Nostr.Sidecar.DataDir = sidecarDir
 			c.Nostr.LocalStore.Path = filepath.Join(sidecarDir, "events.bolt")
 		}, "relay sidecar's event store"},
+		"request_max_age too small": {func(c *Config) {
+			c.Nostr.LocalStore.RequestMaxAge = time.Minute
+		}, "nostr.local_store.request_max_age"},
+		"request_max_age too large": {func(c *Config) {
+			c.Nostr.LocalStore.RequestMaxAge = 60 * 24 * time.Hour
+		}, "nostr.local_store.request_max_age"},
+		"wrap_backdate_overlap too small": {func(c *Config) {
+			c.Nostr.LocalStore.WrapBackdateOverlap = time.Minute
+		}, "nostr.local_store.wrap_backdate_overlap"},
+		"wrap_backdate_overlap too large": {func(c *Config) {
+			c.Nostr.LocalStore.WrapBackdateOverlap = 100 * time.Hour
+		}, "nostr.local_store.wrap_backdate_overlap"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg := Defaults()
@@ -70,7 +88,7 @@ func TestNostrLocalStoreLoadsFromYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bahia.yaml")
 	storePath := filepath.Join(t.TempDir(), "cache.bolt")
 	outboxPath := filepath.Join(t.TempDir(), "outbox.bolt")
-	yaml := "nostr:\n  local_store:\n    path: " + storePath + "\n    outbox_path: " + outboxPath + "\n    resume_overlap: 2m\n    regular_lookback: 0s\n    negentropy_upload: true\n"
+	yaml := "nostr:\n  local_store:\n    path: " + storePath + "\n    outbox_path: " + outboxPath + "\n    resume_overlap: 2m\n    regular_lookback: 0s\n    negentropy_upload: true\n    request_max_age: 48h\n    wrap_backdate_overlap: 50h\n"
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +99,12 @@ func TestNostrLocalStoreLoadsFromYAML(t *testing.T) {
 	store := cfg.Nostr.LocalStore
 	if store.Path != storePath || store.ResumeOverlap != 2*time.Minute || store.RegularLookback != 0 || !store.NegentropyUpload || store.ResolvedOutboxPath() != outboxPath {
 		t.Fatalf("loaded %+v", store)
+	}
+	if store.RequestMaxAge != 48*time.Hour {
+		t.Fatalf("RequestMaxAge = %v, want 48h", store.RequestMaxAge)
+	}
+	if store.WrapBackdateOverlap != 50*time.Hour {
+		t.Fatalf("WrapBackdateOverlap = %v, want 50h", store.WrapBackdateOverlap)
 	}
 }
 

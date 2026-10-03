@@ -146,8 +146,6 @@ const (
 	ledgerNone deliveryLedger = iota
 	// ledgerLocal: the local outbox, with every relay's state.
 	ledgerLocal
-	// ledgerPostgres: a PostgreSQL nostr_events outbox row.
-	ledgerPostgres
 	// ledgerAudit: a PostgreSQL audit row with no publish state.
 	ledgerAudit
 )
@@ -202,13 +200,12 @@ func (p *Publisher) newDelivery(ev nostr.Event, rounds int) *outboxDelivery {
 }
 
 // defaultLedger is where events this publisher admits are persisted (see
-// Publisher.admit).
+// Publisher.admit). Since bahia-irsry.62 the local outbox is required for
+// redelivery-enabled publishers, so ledgerLocal is the normal case.
 func (p *Publisher) defaultLedger() deliveryLedger {
 	switch {
 	case p.localOutbox != nil:
 		return ledgerLocal
-	case p.outboxRepo != nil:
-		return ledgerPostgres
 	case p.eventRepo != nil:
 		return ledgerAudit
 	default:
@@ -507,21 +504,6 @@ func (p *Publisher) persistRound(ctx context.Context, d *outboxDelivery, deliver
 		if settled {
 			p.mirrorSettled(ctx, eventID, delivered, detail, now)
 		}
-	case ledgerPostgres:
-		switch {
-		case settled && delivered:
-			if err := p.outboxRepo.MarkPublished(ctx, eventID, now); err != nil {
-				return fmt.Errorf("persist publish acceptance: %w", err)
-			}
-		case settled:
-			if err := p.outboxRepo.AbandonPublish(ctx, eventID, detail); err != nil {
-				return fmt.Errorf("persist publish abandonment: %w", err)
-			}
-		default:
-			if err := p.outboxRepo.RecordPublishFailure(ctx, eventID, detail); err != nil {
-				return fmt.Errorf("persist publish failure: %w", err)
-			}
-		}
 	}
 	return nil
 }
@@ -675,17 +657,15 @@ func (p *Publisher) redeliverDue(ctx context.Context) (rateLimited bool) {
 }
 
 // discoverPending reads one keyset page of this publisher's target's pending
-// entries from the local outbox and one from the PostgreSQL outbox, and starts
-// delivery for those it is not already tracking (left pending by a previous
-// process or an inactive runner, or recorded by a transactional producer). It
-// reports whether either page was full, meaning more follow its cursor.
+// entries from the local outbox and starts delivery for those it is not
+// already tracking (left pending by a previous process or an inactive runner).
+// It reports whether the page was full, meaning more follow its cursor.
+//
+// Since bahia-irsry.62 the local outbox is a required dependency; this is
+// the only discovery path. Pre-upgrade pending PostgreSQL rows are moved to
+// the local outbox at startup by MigratePendingPostgresRows.
 func (p *Publisher) discoverPending(ctx context.Context) (bool, error) {
-	localMore, err := p.discoverLocal(ctx)
-	if err != nil {
-		return false, err
-	}
-	pgMore, err := p.discoverPostgres(ctx)
-	return localMore || pgMore, err
+	return p.discoverLocal(ctx)
 }
 
 func (p *Publisher) discoverLocal(ctx context.Context) (bool, error) {
@@ -727,50 +707,69 @@ func (p *Publisher) discoverLocal(ctx context.Context) (bool, error) {
 	return len(entries) == p.pageSize, nil
 }
 
-func (p *Publisher) discoverPostgres(ctx context.Context) (more bool, err error) {
-	if p.outboxRepo == nil {
-		return false, nil
+// MigratePendingPostgresRows is a one-shot startup migration (bahia-irsry.62)
+// that moves any pending PostgreSQL outbox rows for this publisher's target
+// into the local outbox. Each row is enqueued idempotently by event ID. On
+// success the PostgreSQL row is re-targeted as a "local:" archive row so it
+// leaves the pending set and metrics count the local outbox instead. The
+// method returns how many rows were migrated. Calling it twice is safe: rows
+// already re-targeted or already in the local outbox are skipped.
+func (p *Publisher) MigratePendingPostgresRows(ctx context.Context) (int, error) {
+	if p.outboxRepo == nil || p.localOutbox == nil {
+		return 0, nil
 	}
-	records, err := p.outboxRepo.ListUnpublishedAfter(ctx, p.target, p.outboxCursor, p.pageSize)
-	if err != nil {
-		return false, err
+	migrator, ok := p.outboxRepo.(interface {
+		MigrateToLocalOutbox(ctx context.Context, id string) error
+	})
+	if !ok {
+		return 0, nil
 	}
-	if len(records) < p.pageSize {
-		p.outboxCursor = nil // wrap to the oldest pending row on the next pass
-	} else {
-		last := records[len(records)-1]
-		p.outboxCursor = &repository.NostrOutboxCursor{ReceivedAt: last.ReceivedAt, ID: last.ID}
-	}
-	for _, rec := range records {
-		if ctx.Err() != nil {
-			return false, nil
+	migrated := 0
+	var cursor *repository.NostrOutboxCursor
+	for {
+		records, err := p.outboxRepo.ListUnpublishedAfter(ctx, p.target, cursor, p.pageSize)
+		if err != nil {
+			return migrated, fmt.Errorf("read pending PostgreSQL outbox rows for migration: %w", err)
 		}
-		if p.isTracked(rec.ID) {
-			continue
-		}
-		if p.trackedCount() >= maxDiscoveredDeliveries {
-			return false, nil
-		}
-		ev, decodeErr := eventFromNostrRecord(rec)
-		if decodeErr != nil {
-			if abandonErr := p.outboxRepo.AbandonPublish(ctx, rec.ID, "abandoned: undecodable outbox row: "+decodeErr.Error()); abandonErr != nil {
-				p.logger.Warn("failed to abandon undecodable outbox row", zap.String("event_id", rec.ID), zap.Error(abandonErr))
+		for _, rec := range records {
+			if ctx.Err() != nil {
+				return migrated, ctx.Err()
 			}
-			continue
+			ev, decodeErr := eventFromNostrRecord(rec)
+			if decodeErr != nil {
+				if abandonErr := p.outboxRepo.AbandonPublish(ctx, rec.ID, "migration: undecodable outbox row: "+decodeErr.Error()); abandonErr != nil {
+					p.logger.Warn("failed to abandon undecodable outbox row during migration", zap.String("event_id", rec.ID), zap.Error(abandonErr))
+				}
+				continue
+			}
+			entry := localstore.OutboxEntry{
+				Event:      ev,
+				Target:     rec.PublishTarget,
+				EntityType: rec.EntityType,
+				EnqueuedAt: rec.ReceivedAt,
+			}
+			if rec.EntityID != nil {
+				entry.EntityID = rec.EntityID.String()
+			}
+			if _, err := p.localOutbox.Enqueue(entry); err != nil {
+				return migrated, fmt.Errorf("enqueue migrated event %s: %w", rec.ID, err)
+			}
+			if err := migrator.MigrateToLocalOutbox(ctx, rec.ID); err != nil {
+				p.logger.Warn("failed to re-target migrated outbox row", zap.String("event_id", rec.ID), zap.Error(err))
+			}
+			migrated++
 		}
-		d, created := p.trackDelivery(ev, rec.PublishAttempts)
-		if !created || !d.mu.TryLock() {
-			continue
+		if len(records) == 0 || len(records) < p.pageSize {
+			break
 		}
-		d.ledger = ledgerPostgres
-		p.deliverRound(ctx, d)
-		settled := d.settled
-		d.mu.Unlock()
-		if settled {
-			p.forgetDelivery(d)
-		}
+		last := records[len(records)-1]
+		cursor = &repository.NostrOutboxCursor{ReceivedAt: last.ReceivedAt, ID: last.ID}
 	}
-	return len(records) == p.pageSize, nil
+	if migrated > 0 {
+		p.logger.Info("migrated pending PostgreSQL outbox rows to local outbox",
+			zap.String("target", p.target), zap.Int("migrated", migrated))
+	}
+	return migrated, nil
 }
 
 func maxTime(a, b time.Time) time.Time {

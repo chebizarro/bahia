@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	gonostr "fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
@@ -81,7 +82,6 @@ func TestControlPlaneRowRetriedToItsDownRelayNotToInteropRelays(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
 			repo := repositorytest.NewInMemoryNostrEventRepository()
 			cpOutbox := sharedOutbox(repo)
 			interopOutbox := sharedOutbox(repo)
@@ -115,18 +115,19 @@ func TestControlPlaneRowRetriedToItsDownRelayNotToInteropRelays(t *testing.T) {
 				return cpRelays.publish(ctx, ev, urls)
 			}
 
-			startRunner(t, interop, interopOutbox)
-			startRunner(t, controlPlane, cpOutbox)
+			startRunner(t, interop)
+			startRunner(t, controlPlane)
 
 			eventID := tc.publish(t, controlPlane, repo)
 			require.ElementsMatch(t, []string{relayA, relayB}, cpRelays.nextCall(t), "inline round contacts every control-plane relay")
 
-			rec, err := repo.GetByID(ctx, eventID)
+			// The event is pending in the control-plane publisher's local outbox.
+			entry, found, err := controlPlane.localOutbox.Get(gonostr.MustIDFromHex(eventID))
 			require.NoError(t, err)
-			require.Equal(t, repository.NostrPublishStatePending, rec.PublishState, "relay B has not accepted yet")
-			require.Equal(t, repository.NostrPublishTargetControlPlane, rec.PublishTarget)
+			require.True(t, found)
+			require.Equal(t, localstore.OutboxPending, entry.State, "relay B has not accepted yet")
 
-			discoveryPass(t, interop, interopOutbox)
+			// The interop runner cannot see CP events (separate local outbox files).
 			interopRelays.requireNoPendingCalls(t)
 			require.False(t, interop.isTracked(eventID), "the interop runner must not adopt a control-plane row")
 
@@ -135,58 +136,53 @@ func TestControlPlaneRowRetriedToItsDownRelayNotToInteropRelays(t *testing.T) {
 			require.Equal(t, []string{relayB}, cpRelays.nextCall(t))
 			require.Equal(t, eventID, receive(t, cpOutbox.published, "row published once relay B accepted"))
 
-			rec, err = repo.GetByID(ctx, eventID)
+			entry, found, err = controlPlane.localOutbox.Get(gonostr.MustIDFromHex(eventID))
 			require.NoError(t, err)
-			require.Equal(t, repository.NostrPublishStatePublished, rec.PublishState)
-			discoveryPass(t, interop, interopOutbox)
+			require.True(t, found)
+			require.Equal(t, localstore.OutboxPublished, entry.State)
 			interopRelays.requireNoPendingCalls(t)
 			cpRelays.requireNoPendingCalls(t)
 		})
 	}
 }
 
-// Each runner drains only its own target: a row left pending for the interop
-// pool by a previous process is not delivered to control-plane relays, and
-// vice versa.
+// Each runner discovers only entries from its own local outbox. With the local
+// outbox, isolation is architectural (separate bbolt files per publisher), so a
+// control-plane entry is never delivered by the interop runner and vice versa.
 func TestPublisherRunnerOnlyDiscoversItsOwnTarget(t *testing.T) {
-	ctx := context.Background()
-	repo := repositorytest.NewInMemoryNostrEventRepository()
 	privateKey := gonostr.Generate()
-
-	record := func(content, target string) string {
-		ev := testSignedEvent(content)
-		require.NoError(t, ev.Sign(privateKey))
-		rec := nostrEventRecordFromEvent(*ev, "delivery.test", nil)
-		rec.PublishState = repository.NostrPublishStatePending
-		rec.PublishTarget = target
-		_, err := repo.Record(ctx, rec)
-		require.NoError(t, err)
-		return ev.ID.Hex()
-	}
-	interopID := record("left-for-interop", repository.NostrPublishTargetDefault)
-	cpID := record("left-for-control-plane", repository.NostrPublishTargetControlPlane)
+	repo := repositorytest.NewInMemoryNostrEventRepository()
 
 	cpOutbox := sharedOutbox(repo)
 	cpRelays := newScriptedRelays(map[string][]PublishResult{relayA: {{Accepted: true}}})
 	controlPlane := newDeliveryTestPublisher(t, cpOutbox, cpRelays, 0, relayA)
 	WithPublishTarget(repository.NostrPublishTargetControlPlane)(controlPlane)
-	startRunner(t, controlPlane, cpOutbox)
-
-	require.Equal(t, []string{relayA}, cpRelays.nextCall(t))
-	require.Equal(t, cpID, receive(t, cpOutbox.published, "control-plane row delivered by its runner"))
-	discoveryPass(t, controlPlane, cpOutbox)
-	cpRelays.requireNoPendingCalls(t)
-
-	rec, err := repo.GetByID(ctx, interopID)
-	require.NoError(t, err)
-	require.Equal(t, repository.NostrPublishStatePending, rec.PublishState, "the interop row waits for the interop runner")
 
 	interopOutbox := sharedOutbox(repo)
 	interopRelays := newScriptedRelays(map[string][]PublishResult{relayC: {{Accepted: true}}})
 	interop := newDeliveryTestPublisher(t, interopOutbox, interopRelays, 0, relayC)
-	startRunner(t, interop, interopOutbox)
+
+	// Enqueue one event into each publisher's local outbox.
+	cpEv := testSignedEvent("left-for-control-plane")
+	require.NoError(t, cpEv.Sign(privateKey))
+	_, err := controlPlane.localOutbox.Enqueue(localstore.OutboxEntry{Event: *cpEv, Target: repository.NostrPublishTargetControlPlane, EnqueuedAt: controlPlane.now()})
+	require.NoError(t, err)
+
+	interopEv := testSignedEvent("left-for-interop")
+	require.NoError(t, interopEv.Sign(privateKey))
+	_, err = interop.localOutbox.Enqueue(localstore.OutboxEntry{Event: *interopEv, Target: repository.NostrPublishTargetDefault, EnqueuedAt: interop.now()})
+	require.NoError(t, err)
+
+	// Start the CP runner - it delivers only the CP event.
+	startRunner(t, controlPlane)
+	require.Equal(t, []string{relayA}, cpRelays.nextCall(t))
+	require.Equal(t, cpEv.ID.Hex(), receive(t, cpOutbox.published, "control-plane row delivered by its runner"))
+	cpRelays.requireNoPendingCalls(t)
+
+	// Start the interop runner - it delivers only the interop event.
+	startRunner(t, interop)
 	require.Equal(t, []string{relayC}, interopRelays.nextCall(t))
-	require.Equal(t, interopID, receive(t, interopOutbox.published, "interop row delivered by its runner"))
+	require.Equal(t, interopEv.ID.Hex(), receive(t, interopOutbox.published, "interop row delivered by its runner"))
 }
 
 // A dedicated-target runner redelivers even with nostr.publish_enabled off; the

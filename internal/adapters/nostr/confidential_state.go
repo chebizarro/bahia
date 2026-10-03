@@ -26,9 +26,14 @@ import (
 // - selfDecryptNIP44Legacy is retained for future relay recovery tooling and
 //   warm-start re-publication of N1 records under the OCK scheme.
 //
-// TODO(C1 follow-up): warm-start re-publication: on daemon startup, scan
-// history for records with the old encryption schema (NIP-44 or O1 AEAD),
-// decrypt, and re-publish under the new OCK scheme. File as a separate issue.
+// DEPRECATED(bahia-irsry.64): This decrypt-only path is retained for one
+// release so that the LegacyOCKMigrator (legacy_ock_migration.go) can
+// re-publish N1-era records under the OCK scheme at startup. Once all
+// deployments have run the warm-start migration (bahia-irsry.64), remove
+// this function and the selfDecryptNIP44Legacy call sites. Condition for
+// deletion: no legacy-format (N1 NIP-44 self-encrypted) records remain
+// in any deployment's local event store or relay history.
+// Follow-up issue: bahia-irsry.65 (file after soak).
 
 // selfDecryptNIP44Legacy decrypts content that was NIP-44 self-encrypted
 // to the service's own pubkey using the raw private key. Legacy read-only path.

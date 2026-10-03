@@ -24,7 +24,7 @@ const (
 	configListKind         = nostr.Kind(kinds.ConfigACLList)
 	configPolicyKind       = nostr.Kind(kinds.ConfigPolicy)
 	configStatusKind       = nostr.Kind(kinds.CASControlState)
-	configStatusSchema     = "cascadia.config.status.v2"
+	configStatusSchema     = "cascadia.config.status.v3"
 	configMembershipSchema = "cascadia.config.membership.v1"
 	configRelaySchema      = "cascadia.config.relay-sidecar.v1"
 )
@@ -678,14 +678,27 @@ func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigPro
 	if err != nil {
 		return err
 	}
-	// Each phase is a durable fact about one signed desired event. Sharing an
-	// address across phases or target versions lets NIP-01 replacement erase
-	// applied truth, regardless of publication order or timestamp precision.
+	// C-22: stable d coordinate per (service, policy, scope) so addressable
+	// events collapse by NIP-01 replacement instead of growing unbounded.
+	// Status, version and desired-event-id live in tags and content, not in
+	// the d-tag. A 7-day NIP-40 expiration lets the retention sweep clean
+	// obsolete status events.
+	now := c.now()
+	createdAt := nostr.Timestamp(now.Unix())
+	// Terminal statuses (applied, withdrawn) get created_at + 1 so they
+	// always win NIP-01 replacement over intermediate statuses (accepted,
+	// rejected) that share the same stable d-tag.
+	if status == "applied" || status == "withdrawn" {
+		createdAt++
+	}
+	// NIP-40 expiry uses wall-clock time so the sweep can clean old status
+	// events even when the consumer's now() is overridden for testing.
+	expiry := nostr.Timestamp(time.Now().Add(7 * 24 * time.Hour).Unix())
 	event := nostr.Event{
 		Kind:      configStatusKind,
-		CreatedAt: nostr.Timestamp(c.now().Unix()),
+		CreatedAt: createdAt,
 		Tags: nostr.Tags{
-			{"d", "config-status:" + projection.ServiceID + ":" + projection.PolicyName + ":" + projection.Scope + ":" + desiredEventID + ":" + status},
+			{"d", "config-status:" + projection.ServiceID + ":" + projection.PolicyName + ":" + projection.Scope},
 			{"domain", "config-status"},
 			{"schema", configStatusSchema},
 			{"status", status},
@@ -693,6 +706,7 @@ func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigPro
 			{"scope", projection.Scope},
 			{"version", strconv.Itoa(projection.Version)},
 			{"e", desiredEventID},
+			{"expiration", strconv.FormatInt(int64(expiry), 10)},
 		},
 		Content: string(raw),
 	}

@@ -7,9 +7,11 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // abandonedRecorder is an OnDeliveryAbandoned handler that reports each
@@ -53,7 +55,7 @@ func TestPublishEntryPointsReportFirstRoundAbandonment(t *testing.T) {
 			publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
 			abandoned := make(chan string, 4)
 			publisher.OnDeliveryAbandoned(abandonedRecorder(abandoned))
-			startRunner(t, publisher, outbox)
+			startRunner(t, publisher)
 
 			event := testSignedEvent("abandoned-" + name)
 			err := publish(ctx, publisher, event)
@@ -94,7 +96,7 @@ func TestPublisherRunnerAbandonmentNotifiesEveryHandler(t *testing.T) {
 	publisher.OnDeliveryAbandoned(abandonedRecorder(first))
 	publisher.OnDeliveryAbandoned(nil) // ignored, does not clear
 	publisher.OnDeliveryAbandoned(abandonedRecorder(second))
-	startRunner(t, publisher, outbox)
+	startRunner(t, publisher)
 
 	event := testSignedEvent("later-abandoned")
 	_, err := publisher.PublishSignedEventWithResults(ctx, event)
@@ -122,6 +124,11 @@ func TestSettledAbandonedDeliveryReportsAbandonedToLateCaller(t *testing.T) {
 	event := testSignedEvent("settled")
 	require.NoError(t, event.Sign(gonostr.Generate()))
 
+	// The event must be in the local outbox before deliverRound can persist
+	// its outcome (bahia-irsry.62: local outbox is the required ledger).
+	_, err := publisher.localOutbox.Enqueue(localstore.OutboxEntry{Event: *event, Target: publisher.target, EnqueuedAt: publisher.now()})
+	require.NoError(t, err)
+
 	d, _ := publisher.trackDelivery(*event, 0)
 	d.mu.Lock()
 	first := publisher.deliverRound(context.Background(), d)
@@ -131,31 +138,6 @@ func TestSettledAbandonedDeliveryReportsAbandonedToLateCaller(t *testing.T) {
 	require.ErrorIs(t, late.err, ErrPublishAbandoned)
 	require.True(t, late.settled)
 	require.False(t, late.delivered)
-}
-
-// discoverySignalOutbox reports every runner discovery pass (after Run has
-// marked the publisher running) on listed.
-type discoverySignalOutbox struct {
-	repository.NostrEventOutboxRepository
-	listed chan struct{}
-}
-
-func (o *discoverySignalOutbox) ListUnpublishedAfter(ctx context.Context, target string, after *repository.NostrOutboxCursor, limit int) ([]repository.NostrEventRecord, error) {
-	records, err := o.NostrEventOutboxRepository.ListUnpublishedAfter(ctx, target, after, limit)
-	select {
-	case o.listed <- struct{}{}:
-	default:
-	}
-	return records, err
-}
-
-// signalRunnerDiscovery wraps publisher's outbox so a test can wait for the
-// runner's first discovery pass instead of racing Run's start. Call it before
-// starting Run.
-func signalRunnerDiscovery(publisher *Publisher) <-chan struct{} {
-	listed := make(chan struct{}, 1)
-	publisher.outboxRepo = &discoverySignalOutbox{NostrEventOutboxRepository: publisher.outboxRepo, listed: listed}
-	return listed
 }
 
 // A runner discovery pass that lists a freshly recorded row while its first
@@ -181,6 +163,7 @@ func TestEnqueueTracksDeliveryBeforeRowIsDiscoverable(t *testing.T) {
 	}}
 	publisher.eventRepo = recorder
 	publisher.outboxRepo = recorder
+	publisher.archive = newPostgresArchive(recorder, zap.NewNop())
 
 	attempt, err := publisher.enqueueAndDeliver(ctx, *event, "delivery.test", nil)
 	require.NoError(t, err)
@@ -204,17 +187,14 @@ func (o *recordHookOutbox) Record(ctx context.Context, rec *repository.NostrEven
 	return inserted, err
 }
 
-// Pins the mechanism behind the old TestProjectorPublishRetriesDownControlPlaneRelayViaOutbox
-// flake: an event published before Run is active is not kept in memory, so the
-// runner's first discovery pass resends it to every relay, including the one
-// that already accepted it (answered as a duplicate). The test must therefore
-// publish only once the runner is active to assert "accepted relays are not
-// retried".
-func TestPublishBeforeRunnerActiveIsResentToEveryRelayByDiscovery(t *testing.T) {
+// With a local outbox, per-relay state is durable: an event published before
+// Run is active has relay A marked accepted in the outbox entry, so the
+// runner's discovery pass restores that state and retries only relay B.
+func TestPublishBeforeRunnerActiveIsRetriedOnlyForFailedRelays(t *testing.T) {
 	ctx := context.Background()
 	outbox := newSignalingOutbox()
 	relays := newScriptedRelays(map[string][]PublishResult{
-		relayA: {{Accepted: true}, {Reason: "duplicate: already have this event"}},
+		relayA: {{Accepted: true}},
 		relayB: {{Error: errors.New("connection refused")}, {Accepted: true}},
 	})
 	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
@@ -225,8 +205,8 @@ func TestPublishBeforeRunnerActiveIsResentToEveryRelayByDiscovery(t *testing.T) 
 	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
 	require.False(t, publisher.isTracked(event.ID.Hex()), "no active runner: the durable row carries the retry")
 
-	startRunner(t, publisher, outbox)
-	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t), "discovery resends to every relay")
+	startRunner(t, publisher)
+	require.Equal(t, []string{relayB}, relays.nextCall(t), "discovery retries only relay B (relay A already accepted, state is durable)")
 	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "row published"))
 	relays.requireNoPendingCalls(t)
 }

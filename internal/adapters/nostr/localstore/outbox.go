@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,9 @@ import (
 	"fiatjaf.com/nostr"
 	"go.etcd.io/bbolt"
 )
+
+// ErrReadOnly is returned when a write operation is attempted on a read-only outbox.
+var ErrReadOnly = errors.New("outbox is open read-only")
 
 // The daemon's durable publish outbox (bahia-irsry.10.4, audit B-13): signed
 // events waiting for relay acceptance, with each relay's delivery state.
@@ -108,6 +112,7 @@ type sharedOutbox struct {
 	path      string
 	db        *bbolt.DB
 	refs      int
+	readOnly  bool
 	movedFrom string
 }
 
@@ -155,6 +160,30 @@ func OpenOutbox(path string) (*Outbox, error) {
 	return &Outbox{shared: shared}, nil
 }
 
+// OpenOutboxReadOnly opens the outbox at path in read-only mode with a
+// timeout. It never creates the file or acquires a write lock, making it safe
+// for concurrent reads against another process's outbox (e.g. the CLI
+// inspecting the daemon's outbox via --daemon). Write operations on a
+// read-only outbox return ErrReadOnly.
+func OpenOutboxReadOnly(path string) (*Outbox, error) {
+	if path == "" {
+		return nil, errors.New("local outbox path is required")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve local outbox path: %w", err)
+	}
+	db, err := bbolt.Open(abs, 0o600, &bbolt.Options{
+		ReadOnly: true,
+		Timeout:  openTimeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open outbox read-only at %s: %w", abs, err)
+	}
+	shared := &sharedOutbox{path: abs, db: db, refs: 1, readOnly: true}
+	return &Outbox{shared: shared}, nil
+}
+
 func openOutboxDB(path string) (*bbolt.DB, error) {
 	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: openTimeout})
 	if err != nil {
@@ -179,6 +208,9 @@ func openOutboxDB(path string) (*bbolt.DB, error) {
 // process opened the outbox, or "".
 func (o *Outbox) MovedAside() string { return o.shared.movedFrom }
 
+// IsReadOnly reports whether this outbox handle is read-only.
+func (o *Outbox) IsReadOnly() bool { return o.shared.readOnly }
+
 // Close releases this handle. Closing a handle twice is a no-op.
 func (o *Outbox) Close() error {
 	o.closeOnce.Do(func() {
@@ -198,6 +230,9 @@ func (o *Outbox) Close() error {
 // whose event id is already held, in any state, is left untouched: the same
 // signed event is never queued twice.
 func (o *Outbox) Enqueue(entry OutboxEntry) (bool, error) {
+	if o.shared.readOnly {
+		return false, ErrReadOnly
+	}
 	if entry.Event.ID == nostr.ZeroID {
 		return false, errors.New("outbox event id is required")
 	}
@@ -322,12 +357,54 @@ func (o *Outbox) ListFailed(limit int) ([]OutboxEntry, error) {
 	return out, nil
 }
 
+// ListEntries returns up to limit entries, optionally filtered by one or more
+// states. An empty states slice returns all entries. Results are sorted by
+// enqueued time (oldest first).
+func (o *Outbox) ListEntries(states []string, limit int) ([]OutboxEntry, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	stateSet := make(map[string]bool, len(states))
+	for _, s := range states {
+		stateSet[s] = true
+	}
+	var out []OutboxEntry
+	err := o.shared.db.View(func(tx *bbolt.Tx) error {
+		entries := tx.Bucket(outboxEntriesBucket)
+		cursor := entries.Cursor()
+		for key, raw := cursor.First(); key != nil; key, raw = cursor.Next() {
+			var entry OutboxEntry
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return fmt.Errorf("decode outbox entry %x: %w", key, err)
+			}
+			if len(stateSet) > 0 && !stateSet[entry.State] {
+				continue
+			}
+			out = append(out, entry)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list outbox entries: %w", err)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].EnqueuedAt.Before(out[j].EnqueuedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // CommitRound records a delivery round for id and returns the stored entry.
 // Several deliveries of one entry may overlap (an inline publish and a
 // runner, or the outgoing and incoming App during a reload), so the commit
 // merges instead of overwriting: a relay that accepted or rejected stays so,
 // the round count never decreases, and a settled entry is never reopened.
 func (o *Outbox) CommitRound(id nostr.ID, round OutboxRound) (OutboxEntry, error) {
+	if o.shared.readOnly {
+		return OutboxEntry{}, ErrReadOnly
+	}
 	var stored OutboxEntry
 	err := o.shared.db.Update(func(tx *bbolt.Tx) error {
 		entries := tx.Bucket(outboxEntriesBucket)
@@ -426,6 +503,9 @@ func (o *Outbox) Counts() (OutboxCounts, error) {
 // entries settled before failedBefore, and returns how many it removed.
 // Pending entries are never pruned.
 func (o *Outbox) Prune(publishedBefore, failedBefore time.Time) (int, error) {
+	if o.shared.readOnly {
+		return 0, ErrReadOnly
+	}
 	removed := 0
 	err := o.shared.db.Update(func(tx *bbolt.Tx) error {
 		entries := tx.Bucket(outboxEntriesBucket)
@@ -453,6 +533,109 @@ func (o *Outbox) Prune(publishedBefore, failedBefore time.Time) (int, error) {
 		return 0, fmt.Errorf("prune settled outbox entries: %w", err)
 	}
 	return removed, nil
+}
+
+// Retry resets a failed entry back to pending for re-delivery, clearing its
+// relay state and round count so the outbox worker treats it as fresh.
+// Returns the reset entry.
+func (o *Outbox) Retry(id nostr.ID) (OutboxEntry, error) {
+	if o.shared.readOnly {
+		return OutboxEntry{}, ErrReadOnly
+	}
+	var entry OutboxEntry
+	err := o.shared.db.Update(func(tx *bbolt.Tx) error {
+		entries := tx.Bucket(outboxEntriesBucket)
+		raw := entries.Get(id[:])
+		if raw == nil {
+			return fmt.Errorf("outbox entry %s not found", id.Hex())
+		}
+		if err := json.Unmarshal(raw, &entry); err != nil {
+			return fmt.Errorf("decode outbox entry %s: %w", id.Hex(), err)
+		}
+		if entry.State != OutboxFailed {
+			return fmt.Errorf("outbox entry %s is %s, not failed", id.Hex(), entry.State)
+		}
+		// Remove from failed index.
+		if err := tx.Bucket(outboxFailedBucket).Delete(settledKey(entry.SettledAt, id)); err != nil {
+			return err
+		}
+		// Reset to pending.
+		entry.State = OutboxPending
+		entry.SettledAt = time.Time{}
+		entry.LastError = ""
+		entry.Rounds = 0
+		entry.Delivered = false
+		entry.Relays = nil
+		encoded, err := json.Marshal(entry)
+		if err != nil {
+			return fmt.Errorf("encode outbox entry %s: %w", id.Hex(), err)
+		}
+		if err := entries.Put(id[:], encoded); err != nil {
+			return err
+		}
+		return tx.Bucket(outboxPendingBucket).Put(pendingKey(entry.Target, entry.EnqueuedAt, id), nil)
+	})
+	if err != nil {
+		return OutboxEntry{}, fmt.Errorf("retry outbox entry %s: %w", id.Hex(), err)
+	}
+	return entry, nil
+}
+
+// RetryAllFailed resets every failed entry back to pending. Returns the count.
+func (o *Outbox) RetryAllFailed() (int, error) {
+	if o.shared.readOnly {
+		return 0, ErrReadOnly
+	}
+	retried := 0
+	err := o.shared.db.Update(func(tx *bbolt.Tx) error {
+		entries := tx.Bucket(outboxEntriesBucket)
+		failedIdx := tx.Bucket(outboxFailedBucket)
+		pendingIdx := tx.Bucket(outboxPendingBucket)
+		// Collect keys first to avoid mutating during iteration.
+		var failedKeys [][]byte
+		cursor := failedIdx.Cursor()
+		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
+			failedKeys = append(failedKeys, bytes.Clone(key))
+		}
+		for _, key := range failedKeys {
+			id := key[8:] // settledKey = 8-byte timestamp + id
+			raw := entries.Get(id)
+			if raw == nil {
+				continue
+			}
+			var entry OutboxEntry
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return fmt.Errorf("decode outbox entry %x: %w", id, err)
+			}
+			if err := failedIdx.Delete(key); err != nil {
+				return err
+			}
+			entry.State = OutboxPending
+			entry.SettledAt = time.Time{}
+			entry.LastError = ""
+			entry.Rounds = 0
+			entry.Delivered = false
+			entry.Relays = nil
+			encoded, err := json.Marshal(entry)
+			if err != nil {
+				return fmt.Errorf("encode outbox entry %x: %w", id, err)
+			}
+			if err := entries.Put(id, encoded); err != nil {
+				return err
+			}
+			var eid nostr.ID
+			copy(eid[:], id)
+			if err := pendingIdx.Put(pendingKey(entry.Target, entry.EnqueuedAt, eid), nil); err != nil {
+				return err
+			}
+			retried++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("retry all failed outbox entries: %w", err)
+	}
+	return retried, nil
 }
 
 func settledBucket(state string) []byte {

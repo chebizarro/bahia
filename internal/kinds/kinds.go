@@ -474,3 +474,19 @@ const (
 	OrgMemberRegistry = 32006
 	OrgInviteRegistry = 32007
 )
+
+// =============================================================================
+// Payment & Security CP-State Kinds (32011-32013) — bahia-irsry.60
+// =============================================================================
+//
+// These are "legacy kinds" used as keys in cpStateFamilies; the wire kind
+// is always 30900 (CASControlState). Content is OCK-encrypted (confidential)
+// because payment records contain financial data (amounts, mint URLs, token
+// hashes) and security findings contain per-org vulnerability data.
+
+const (
+	PaymentRecord               = 32011
+	SecurityFindingRecord       = 32012
+	SecurityScheduleRecord      = 32013
+	SecurityFindingDetailRecord = 32014
+)

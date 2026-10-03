@@ -3,11 +3,13 @@ package nostr
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
@@ -126,11 +128,13 @@ func receive[T any](t *testing.T, ch <-chan T, what string) T {
 
 func newDeliveryTestPublisher(t *testing.T, repo repository.NostrEventRepository, relays *scriptedRelays, quorum int, urls ...string) *Publisher {
 	t.Helper()
+	outbox := openDeliveryTestOutbox(t)
 	publisher := NewPublisher(
 		config.NostrConfig{PrivateKey: gonostr.Generate().Hex(), PublishEnabled: true, PublishQuorum: quorum},
 		NewRelayPool(nil, zap.NewNop()),
 		repo,
 		zap.NewNop(),
+		WithLocalOutbox(outbox, nil),
 	)
 	publisher.publishFn = relays.publish
 	publisher.relayURLs = func() []string { return urls }
@@ -145,9 +149,17 @@ func newDeliveryTestPublisher(t *testing.T, repo repository.NostrEventRepository
 	return publisher
 }
 
-// startRunner starts Run and waits for its first outbox pass, after which the
-// publisher keeps partially delivered events in memory for retry.
-func startRunner(t *testing.T, publisher *Publisher, outbox *signalingOutbox) {
+func openDeliveryTestOutbox(t *testing.T) *localstore.Outbox {
+	t.Helper()
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = outbox.Close() })
+	return outbox
+}
+
+// startRunner starts Run and waits for its runner to be active, after which
+// the publisher keeps partially delivered events in memory for retry.
+func startRunner(t *testing.T, publisher *Publisher) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -156,7 +168,8 @@ func startRunner(t *testing.T, publisher *Publisher, outbox *signalingOutbox) {
 		cancel()
 		require.NoError(t, <-done)
 	})
-	receive(t, outbox.listed, "first outbox discovery pass")
+	require.Eventually(t, func() bool { return publisher.running.Load() },
+		5*time.Second, time.Millisecond, "publisher runner did not start")
 }
 
 func testSignedEvent(content string) *gonostr.Event {
@@ -180,7 +193,7 @@ func TestPublisherDefaultQuorumRelayBDownSucceedsKeepsRowPendingAndRetriesB(t *t
 		},
 	})
 	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
-	startRunner(t, publisher, outbox)
+	startRunner(t, publisher)
 
 	event := testSignedEvent("a-ok-b-down")
 	results, err := publisher.PublishSignedEventWithResults(ctx, event)
@@ -188,21 +201,23 @@ func TestPublisherDefaultQuorumRelayBDownSucceedsKeepsRowPendingAndRetriesB(t *t
 	require.Len(t, results, 2)
 	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
 
-	rec, err := outbox.GetByID(ctx, event.ID.Hex())
+	entry, found, err := publisher.localOutbox.Get(event.ID)
 	require.NoError(t, err)
-	require.Equal(t, repository.NostrPublishStatePending, rec.PublishState, "one relay OK must not complete delivery")
-	require.Contains(t, rec.LastPublishError, relayB)
+	require.True(t, found)
+	require.Equal(t, localstore.OutboxPending, entry.State, "one relay OK must not complete delivery")
+	require.Contains(t, entry.LastError, relayB)
 
 	// Relay B is retried (and relay A is not re-sent) until B accepts.
 	require.Equal(t, []string{relayB}, relays.nextCall(t))
 	require.Equal(t, []string{relayB}, relays.nextCall(t))
 	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "event marked published after relay B accepted"))
 
-	rec, err = outbox.GetByID(ctx, event.ID.Hex())
+	entry, found, err = publisher.localOutbox.Get(event.ID)
 	require.NoError(t, err)
-	require.Equal(t, repository.NostrPublishStatePublished, rec.PublishState)
-	require.Equal(t, 3, rec.PublishAttempts)
-	require.Empty(t, rec.LastPublishError)
+	require.True(t, found)
+	require.Equal(t, localstore.OutboxPublished, entry.State)
+	require.Equal(t, 3, entry.Rounds)
+	require.Empty(t, entry.LastError)
 	require.False(t, publisher.isTracked(event.ID.Hex()), "fully delivered events are no longer tracked")
 	relays.requireNoPendingCalls(t)
 }
@@ -215,7 +230,7 @@ func TestPublisherExplicitQuorumTwoWithRelayDownIsIncomplete(t *testing.T) {
 		relayB: {{Error: errors.New("connection refused")}, {Accepted: true}},
 	})
 	publisher := newDeliveryTestPublisher(t, outbox, relays, 2, relayA, relayB)
-	startRunner(t, publisher, outbox)
+	startRunner(t, publisher)
 
 	event := testSignedEvent("quorum-two")
 	_, err := publisher.PublishSignedEventWithResults(ctx, event)
@@ -226,9 +241,10 @@ func TestPublisherExplicitQuorumTwoWithRelayDownIsIncomplete(t *testing.T) {
 	require.Equal(t, 2, incomplete.Required)
 	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
 
-	rec, err := outbox.GetByID(ctx, event.ID.Hex())
+	entry, found, err := publisher.localOutbox.Get(event.ID)
 	require.NoError(t, err)
-	require.Equal(t, repository.NostrPublishStatePending, rec.PublishState, "the event stays queued below quorum")
+	require.True(t, found)
+	require.Equal(t, localstore.OutboxPending, entry.State, "the event stays queued below quorum")
 
 	require.Equal(t, []string{relayB}, relays.nextCall(t))
 	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "event published once relay B accepted"))
@@ -243,7 +259,7 @@ func TestPublisherDefaultQuorumPermanentRejectionCompletesWithoutRetry(t *testin
 		relayB: {{Reason: "pow: difficulty 8 is less than 20"}},
 	})
 	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
-	startRunner(t, publisher, outbox)
+	startRunner(t, publisher)
 
 	event := testSignedEvent("pow-reject")
 	_, err := publisher.PublishSignedEventWithResults(ctx, event)
@@ -263,7 +279,7 @@ func TestPublisherPermanentRejectionStopsRetriesForThatRelayOnly(t *testing.T) {
 		relayC: {{Error: errors.New("timeout")}, {Accepted: true}},
 	})
 	publisher := newDeliveryTestPublisher(t, outbox, relays, 2, relayA, relayB, relayC)
-	startRunner(t, publisher, outbox)
+	startRunner(t, publisher)
 
 	event := testSignedEvent("permanent-reject")
 	_, err := publisher.PublishSignedEventWithResults(ctx, event)
@@ -275,9 +291,10 @@ func TestPublisherPermanentRejectionStopsRetriesForThatRelayOnly(t *testing.T) {
 	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "event published once quorum reached and every relay settled"))
 	relays.requireNoPendingCalls(t)
 
-	rec, err := outbox.GetByID(ctx, event.ID.Hex())
+	entry, found, err := publisher.localOutbox.Get(event.ID)
 	require.NoError(t, err)
-	require.Equal(t, repository.NostrPublishStatePublished, rec.PublishState)
+	require.True(t, found)
+	require.Equal(t, localstore.OutboxPublished, entry.State)
 }
 
 func TestPublisherPermanentRejectionMakingQuorumUnreachableAbandonsWithoutRetry(t *testing.T) {
@@ -288,7 +305,7 @@ func TestPublisherPermanentRejectionMakingQuorumUnreachableAbandonsWithoutRetry(
 		relayB: {{Reason: "blocked: pubkey not allowed"}},
 	})
 	publisher := newDeliveryTestPublisher(t, outbox, relays, config.PublishQuorumAllRelays, relayA, relayB)
-	startRunner(t, publisher, outbox)
+	startRunner(t, publisher)
 
 	event := testSignedEvent("blocked")
 	_, err := publisher.PublishSignedEventWithResults(ctx, event)
@@ -297,11 +314,12 @@ func TestPublisherPermanentRejectionMakingQuorumUnreachableAbandonsWithoutRetry(
 	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
 	require.Equal(t, event.ID.Hex(), receive(t, outbox.abandoned, "event abandoned"))
 
-	rec, err := outbox.GetByID(ctx, event.ID.Hex())
+	entry, found, err := publisher.localOutbox.Get(event.ID)
 	require.NoError(t, err)
-	require.Equal(t, repository.NostrPublishStateFailed, rec.PublishState, "abandoned rows leave the outbox as failed")
-	require.Contains(t, rec.LastPublishError, "abandoned")
-	require.Contains(t, rec.LastPublishError, "blocked: pubkey not allowed")
+	require.True(t, found)
+	require.Equal(t, localstore.OutboxFailed, entry.State, "abandoned rows leave the outbox as failed")
+	require.Contains(t, entry.LastError, "abandoned")
+	require.Contains(t, entry.LastError, "blocked: pubkey not allowed")
 	depth, err := outbox.CountUnpublished(ctx)
 	require.NoError(t, err)
 	require.Zero(t, depth)
@@ -317,7 +335,7 @@ func TestPublisherQuorumMetReturnsDeliveredAndStillRetriesRemainder(t *testing.T
 		relayB: {{Error: errors.New("connection reset")}, {Accepted: true}},
 	})
 	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
-	startRunner(t, publisher, outbox)
+	startRunner(t, publisher)
 
 	event := testSignedEvent("quorum")
 	_, err := publisher.PublishSignedEventWithResults(ctx, event)
@@ -338,7 +356,7 @@ func TestPublisherAbandonsAfterAttemptBudgetWhenQuorumNeverMet(t *testing.T) {
 	})
 	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
 	publisher.maxAttempts = 3
-	startRunner(t, publisher, outbox)
+	startRunner(t, publisher)
 
 	event := testSignedEvent("budget")
 	_, err := publisher.PublishSignedEventWithResults(ctx, event)
@@ -348,11 +366,12 @@ func TestPublisherAbandonsAfterAttemptBudgetWhenQuorumNeverMet(t *testing.T) {
 	}
 	require.Equal(t, event.ID.Hex(), receive(t, outbox.abandoned, "event abandoned after budget"))
 
-	rec, err := outbox.GetByID(ctx, event.ID.Hex())
+	entry, found, err := publisher.localOutbox.Get(event.ID)
 	require.NoError(t, err)
-	require.Equal(t, repository.NostrPublishStateFailed, rec.PublishState)
-	require.Contains(t, rec.LastPublishError, "abandoned after 3 publish attempts")
-	require.Equal(t, 3, rec.PublishAttempts)
+	require.True(t, found)
+	require.Equal(t, localstore.OutboxFailed, entry.State)
+	require.Contains(t, entry.LastError, "abandoned after 3 publish attempts")
+	require.Equal(t, 3, entry.Rounds)
 	relays.requireNoPendingCalls(t)
 }
 
@@ -365,7 +384,7 @@ func TestPublisherBudgetExhaustedAfterQuorumPublishesRow(t *testing.T) {
 	})
 	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
 	publisher.maxAttempts = 3
-	startRunner(t, publisher, outbox)
+	startRunner(t, publisher)
 
 	event := testSignedEvent("budget-after-quorum")
 	_, err := publisher.PublishSignedEventWithResults(ctx, event)
@@ -395,7 +414,6 @@ func TestPublisherRequiredAcceptances(t *testing.T) {
 }
 
 func TestPublisherRunnerDiscoversPendingRowsPastABlockedPage(t *testing.T) {
-	ctx := context.Background()
 	outbox := newSignalingOutbox()
 	stuck := testSignedEvent("stuck")
 	fresh := testSignedEvent("fresh")
@@ -405,17 +423,18 @@ func TestPublisherRunnerDiscoversPendingRowsPastABlockedPage(t *testing.T) {
 	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA)
 	publisher.pageSize = 1
 
-	// Two rows recorded pending by another producer (no inline publish).
+	// Two entries enqueued pending by another producer (no inline publish).
 	for i, ev := range []*gonostr.Event{stuck, fresh} {
 		require.NoError(t, signEventWithPrivateKeyHex(ev, publisher.privateKey))
-		rec := nostrEventRecordFromEvent(*ev, "delivery.test", nil)
-		rec.PublishState = repository.NostrPublishStatePending
-		rec.ReceivedAt = time.Unix(int64(1000+i), 0).UTC()
-		_, err := outbox.Record(ctx, rec)
+		_, err := publisher.localOutbox.Enqueue(localstore.OutboxEntry{
+			Event:      *ev,
+			Target:     publisher.target,
+			EnqueuedAt: time.Unix(int64(1000+i), 0).UTC(),
+		})
 		require.NoError(t, err)
 	}
 
-	startRunner(t, publisher, outbox)
+	startRunner(t, publisher)
 	published := map[string]bool{}
 	published[receive(t, outbox.published, "first discovered row published")] = true
 	published[receive(t, outbox.published, "second discovered row published")] = true
@@ -479,7 +498,7 @@ func TestPublisherFailFastBackoffRoundsDoNotConsumeAttemptBudget(t *testing.T) {
 	})
 	publisher := newDeliveryTestPublisher(t, outbox, relays, 0, relayA, relayB)
 	publisher.maxAttempts = 3
-	startRunner(t, publisher, outbox)
+	startRunner(t, publisher)
 
 	event := testSignedEvent("fail-fast-budget")
 	_, err := publisher.PublishSignedEventWithResults(ctx, event)
@@ -490,10 +509,11 @@ func TestPublisherFailFastBackoffRoundsDoNotConsumeAttemptBudget(t *testing.T) {
 	}
 	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "relay B accepted within the budget"))
 
-	rec, err := outbox.GetByID(ctx, event.ID.Hex())
+	entry, found, err := publisher.localOutbox.Get(event.ID)
 	require.NoError(t, err)
-	require.Equal(t, repository.NostrPublishStatePublished, rec.PublishState)
-	require.Empty(t, rec.LastPublishError, "relay B accepted: nothing was given up on")
-	require.Equal(t, 3, rec.PublishAttempts, "only rounds that contacted a relay or saw a fresh dial failure count")
+	require.True(t, found)
+	require.Equal(t, localstore.OutboxPublished, entry.State)
+	require.Empty(t, entry.LastError, "relay B accepted: nothing was given up on")
+	require.Equal(t, 3, entry.Rounds, "only rounds that contacted a relay or saw a fresh dial failure count")
 	relays.requireNoPendingCalls(t)
 }

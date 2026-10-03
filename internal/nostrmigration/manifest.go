@@ -311,6 +311,10 @@ var constantJustifications = map[string]KindJustification{
 	"SecretRegistry":                 omitted("SecretRegistry", kinds.SecretRegistry, "canonical-target", "canonical cp-state secret registry output; Phase 3 N1 produces secrets as NIP-44-encrypted 30900 records with this legacy_kind discriminator"),
 	"NotificationChannelRegistry":    omitted("NotificationChannelRegistry", kinds.NotificationChannelRegistry, "canonical-target", "canonical cp-state notification channel registry output; Phase 3 N1 produces channels as NIP-44-encrypted 30900 records with this legacy_kind discriminator"),
 	"OrgKeyEnvelope":                 omitted("OrgKeyEnvelope", kinds.OrgKeyEnvelope, "cp-state-family", "canonical cp-state output for per-org content key envelopes (Phase 3 C1); NIP-44-encrypted OCK wraps distributed to org members via the shared signing/outbox pipeline"),
+	"PaymentRecord":                  omitted("PaymentRecord", kinds.PaymentRecord, "cp-state-family", "canonical cp-state output for payment records (bahia-irsry.60); OCK-encrypted 30900 records published from PaymentService mutation sites"),
+	"SecurityFindingRecord":          omitted("SecurityFindingRecord", kinds.SecurityFindingRecord, "cp-state-family", "canonical cp-state output for individual security findings (bahia-irsry.60); OCK-encrypted 30900 records published from SecurityScanner mutation sites"),
+	"SecurityScheduleRecord":         omitted("SecurityScheduleRecord", kinds.SecurityScheduleRecord, "cp-state-family", "canonical cp-state output for security scan schedules (bahia-irsry.60); OCK-encrypted 30900 records published from PolicyService schedule derivation"),
+	"SecurityFindingDetailRecord":    omitted("SecurityFindingDetailRecord", kinds.SecurityFindingDetailRecord, "cp-state-family", "canonical cp-state output for security finding details (bahia-irsry.60); OCK-encrypted 30900 records, one per finding, with full detail text"),
 }
 
 func omitted(name string, kind int, category, reason string) KindJustification {

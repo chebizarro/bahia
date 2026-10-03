@@ -309,7 +309,30 @@ The following views depend on state the daemon does not yet publish as relay eve
 | **Security findings** (`stores/security.svelte.js`) | ContextVM `findingsList` | Daemon publishes findings as `30900` with `t=security-finding` |
 | **Security schedules** (`stores/security.svelte.js`) | ContextVM `schedulesList` | Daemon publishes schedules as `30900` with `t=security-schedule` |
 
+
 **Prerequisite gate for W4:** the ContextVM encrypted transport files (`encrypted-controlplane.js`, `encrypted-controlplane-transport.js`) cannot be fully deleted until the daemon publishes relay events for all three views above. W4-S1 deletes the CRUD methods and pool machinery but retains the read-only encrypted transport for these interim reads and the three permanent patterns.
+
+#### 4.2.1 Daemon cp-state families for interim reads (bahia-irsry.60)
+
+The daemon now publishes payment and security state through the shared `cpStateFamilies` → `controlStateEnvelope` → `publishControlState` pipeline as OCK-encrypted `30900` replaceable events. Each family is registered in `cpStateFamilies` (projector.go) and covered by warm-start via `CPStateDomains()`.
+
+| Family | Kind (legacy\_kind) | Domain | Entity | Topic (t tag) | d-tag pattern | Encryption | Publisher |
+|--------|----------------------|--------|--------|---------------|---------------|------------|----------|
+| Payment Record | 32011 | payment | record | `payment-record` | `payment:<id>` | OCK "fleet" scope | `PaymentCanonicalPublisher` |
+| Security Finding | 32012 | security | finding | `security-finding` | `security:finding:<hash>` | OCK "fleet" scope | `SecurityCanonicalPublisher` |
+| Security Schedule | 32013 | security | schedule | `security-schedule` | `security:schedule:<id>` | OCK "fleet" scope | `SecurityCanonicalPublisher` |
+| Security Finding Detail | 32014 | security | finding-detail | `security-finding-detail` | `security:finding-detail:<hash>` (or `:part:<n>` when chunked) | OCK "fleet" scope | `SecurityCanonicalPublisher` |
+
+**Mutation sites (publish-on-mutation):**
+- Payment: `PaymentService.RecordPayment`, `PaymentService.RecordChange`, `PaymentService.MarkPaymentSent`
+- Security findings: `SecurityScanner.executeRun` after `UpsertSecurityFindings` (one finding record + one detail record per finding)
+- Security schedules: `PolicyService.syncSecuritySchedulesForPolicy` after `UpsertSecurityScanSchedule`
+
+**Size limits (bahia-irsry.39 item 1):** Each finding summary is published as one record (family 32012). Finding details are published as a separate addressable record (family 32014, d=`security:finding-detail:<hash>`). If a single detail exceeds the 60,000-byte chunk threshold (within NIP-44's 65,535-byte plaintext limit), it is split into numbered parts (`security:finding-detail:<hash>:part:<n>`) with `total_parts` metadata so consumers can reassemble. Empty details publish a tombstone. The relay copy is the source of truth — no ContextVM fallback is needed for detail text.
+
+**Fleet OCK scope:** All four families encrypt under the "fleet" OCK scope (`kinds.FleetOCKScope`). The fleet OCK is wrapped to fleet operators (`authorized_pubkeys`) and bootstrap owners via `TrustSetMemberSource.fleetOpsPubkeys()`, so web dashboard users can decrypt. Neither payments nor security entities carry per-org IDs, so fleet scope is the correct granularity.
+
+**Legacy path:** The scanner's existing chunked `publishFindings` path (kind 30078) continues to publish alongside the new per-finding cp-state records.
 
 Everything else — service/environment/policy/DNS/backup/ML/LLM/package/worker/SBOM CRUD, org membership, notification channel config, relay settings — becomes relay subscriptions (reads) and signed intents (writes).
 
