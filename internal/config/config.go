@@ -1432,7 +1432,7 @@ func Defaults() *Config {
 				SubscriberQueueSize:   DefaultRelaySidecarSubscriberQueueSize,
 				RequestRetentionKinds: DefaultRelaySidecarRequestRetentionKinds(),
 				NegentropyMaxEvents:   DefaultRelaySidecarNegentropyMaxEvents,
-				ReadAuthMode:          ReadAuthModeEnforce,
+				ReadAuthMode:          ReadAuthModeWarn,
 			},
 			LocalStore: DefaultNostrLocalStoreConfig(),
 		},
@@ -2258,7 +2258,7 @@ func (c RelaySidecarConfig) NormalizedReadAuthMode() string {
 	case ReadAuthModeEnforce, ReadAuthModeWarn, ReadAuthModeOff:
 		return mode
 	default:
-		return ReadAuthModeEnforce
+		return ReadAuthModeWarn
 	}
 }
 

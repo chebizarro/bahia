@@ -11,6 +11,7 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/khatru"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -63,18 +64,64 @@ func TestFilterNeedsAuth(t *testing.T) {
 			needsAuth: false,
 		},
 		{
-			name:      "mixed public and protected",
-			filter:    nostr.Filter{Kinds: []nostr.Kind{nostr.KindProfileMetadata, 30900}},
+			name:      "mixed public and protected non-30900 kinds",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{nostr.KindProfileMetadata, 30078}},
 			needsAuth: true,
 		},
 		{
 			name:      "only protected kinds",
-			filter:    nostr.Filter{Kinds: []nostr.Kind{30900, 30078}},
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30078}},
 			needsAuth: true,
 		},
 		{
 			name:      "NIP-34 kinds are public",
 			filter:    nostr.Filter{Kinds: []nostr.Kind{nostr.KindPatch, nostr.KindIssue, nostr.KindReply}},
+			needsAuth: false,
+		},
+		// Kind 30900 topic-based classification (C-21).
+		{
+			name:      "30900 with no #t requires auth (could return any family)",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}},
+			needsAuth: true,
+		},
+		{
+			name:      "30900 with public topic is open",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.DNSEndpointTopic}}},
+			needsAuth: false,
+		},
+		{
+			name:      "30900 with protected topic requires auth",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.SecurityFindingsTopic}}},
+			needsAuth: true,
+		},
+		{
+			name:      "30900 with mixed public and protected topics requires auth",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.DNSEndpointTopic, kinds.SecurityFindingsTopic}}},
+			needsAuth: true,
+		},
+		{
+			name:      "30900 with all public topics is open",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicServiceState, kinds.WorkerStateTopic}}},
+			needsAuth: false,
+		},
+		{
+			name:      "mixed 30900-public-topic and public kind is open",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{nostr.KindProfileMetadata, 30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicServiceState}}},
+			needsAuth: false,
+		},
+		{
+			name:      "mixed 30900-protected-topic and public kind requires auth",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{nostr.KindProfileMetadata, 30900}, Tags: nostr.TagMap{"t": []string{kinds.AssistantTranscriptTopic}}},
+			needsAuth: true,
+		},
+		{
+			name:      "OCK-encrypted org topics are public (content is ciphertext)",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicOrgRegistry, kinds.CPStateTopicSecretRegistry}}},
+			needsAuth: false,
+		},
+		{
+			name:      "web bootstrap topics (service, worker, backup, ml) are public",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicServiceState, kinds.WorkerAssignmentTopic, kinds.CPStateTopicBackupRun, kinds.CPStateTopicMLEndpoint}}},
 			needsAuth: false,
 		},
 	}
@@ -348,6 +395,86 @@ func TestConfigStatusEvent_HasExpiration(t *testing.T) {
 	now := time.Now()
 	expectedExpiry := now.Add(7 * 24 * time.Hour)
 	_ = expectedExpiry
+}
+
+// TestReadAuth_30900_PublicTopic_ServedAnonymously verifies that an anonymous
+// REQ for a public 30900 topic is served even in enforce mode (C-21).
+func TestReadAuth_30900_PublicTopic_ServedAnonymously(t *testing.T) {
+	server, _, _ := testSidecarForReadAuth(t, config.ReadAuthModeEnforce)
+	defer closeSidecarTest(t, server)
+
+	filter := nostr.Filter{
+		Kinds: []nostr.Kind{30900},
+		Tags:  nostr.TagMap{"t": []string{kinds.CPStateTopicServiceState}},
+	}
+	reject, _ := server.readAuth.checkReadAuth(context.Background(), filter)
+	assert.False(t, reject, "anonymous REQ for public 30900 topic must be served in enforce mode")
+}
+
+// TestReadAuth_30900_ProtectedTopic_ClosedUnderEnforce verifies that an
+// anonymous REQ for a protected 30900 topic is CLOSED auth-required in enforce
+// mode (C-21).
+func TestReadAuth_30900_ProtectedTopic_ClosedUnderEnforce(t *testing.T) {
+	server, _, _ := testSidecarForReadAuth(t, config.ReadAuthModeEnforce)
+	defer closeSidecarTest(t, server)
+
+	filter := nostr.Filter{
+		Kinds: []nostr.Kind{30900},
+		Tags:  nostr.TagMap{"t": []string{kinds.SecurityFindingsTopic}},
+	}
+	reject, reason := server.readAuth.checkReadAuth(context.Background(), filter)
+	assert.True(t, reject, "anonymous REQ for protected 30900 topic must be rejected in enforce mode")
+	assert.Contains(t, reason, "auth-required")
+}
+
+// TestReadAuth_30900_ProtectedTopic_ServedUnderWarn verifies that an anonymous
+// REQ for a protected 30900 topic is served (with log) in warn mode (C-21).
+func TestReadAuth_30900_ProtectedTopic_ServedUnderWarn(t *testing.T) {
+	server, _, _ := testSidecarForReadAuth(t, config.ReadAuthModeWarn)
+	defer closeSidecarTest(t, server)
+
+	filter := nostr.Filter{
+		Kinds: []nostr.Kind{30900},
+		Tags:  nostr.TagMap{"t": []string{kinds.SecurityFindingsTopic}},
+	}
+	reject, _ := server.readAuth.checkReadAuth(context.Background(), filter)
+	assert.False(t, reject, "warn mode should serve protected topic with log, not reject")
+}
+
+// TestReadAuth_30900_MixedTopics_RejectsUnderEnforce verifies that a filter
+// mixing public and protected 30900 topics is rejected as a whole under enforce
+// mode. This is the safest stance: a filter that might return a protected record
+// must be gated. Callers wanting anonymous access to public families should use
+// separate filters scoped by #t (C-21).
+func TestReadAuth_30900_MixedTopics_RejectsUnderEnforce(t *testing.T) {
+	server, _, _ := testSidecarForReadAuth(t, config.ReadAuthModeEnforce)
+	defer closeSidecarTest(t, server)
+
+	filter := nostr.Filter{
+		Kinds: []nostr.Kind{30900},
+		Tags: nostr.TagMap{"t": []string{
+			kinds.CPStateTopicServiceState, // public
+			kinds.SecurityFindingsTopic,    // protected
+		}},
+	}
+	reject, reason := server.readAuth.checkReadAuth(context.Background(), filter)
+	assert.True(t, reject, "mixed public+protected topics must reject the whole REQ under enforce")
+	assert.Contains(t, reason, "auth-required")
+}
+
+// TestReadAuth_30900_AuthenticatedAllowed_ProtectedTopic verifies that an
+// authenticated allowed pubkey can read a protected 30900 topic (C-21).
+func TestReadAuth_30900_AuthenticatedAllowed_ProtectedTopic(t *testing.T) {
+	server, adminKey, _ := testSidecarForReadAuth(t, config.ReadAuthModeEnforce)
+	defer closeSidecarTest(t, server)
+
+	ctx := khatru.ForceSetAuthed(context.Background(), adminKey.Public())
+	filter := nostr.Filter{
+		Kinds: []nostr.Kind{30900},
+		Tags:  nostr.TagMap{"t": []string{kinds.SecurityFindingsTopic}},
+	}
+	reject, _ := server.readAuth.checkReadAuth(ctx, filter)
+	assert.False(t, reject, "authenticated admin should read protected 30900 topics")
 }
 
 type configStatusPublisher func(ctx context.Context, ev nostr.Event) (int, error)
