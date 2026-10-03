@@ -70,26 +70,6 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
   const relayReadyListeners = new Set();
   const socketListeners = new Map();
 
-  /** Outbox delivery is driven by socket readiness, never by a polling timer. */
-  function getConnectedRelays(relays) {
-    return relays.filter(url => pool.has(url) && pool.get(url).status === SocketStatus.Open);
-  }
-
-  function onRelayReady(callback, relays = []) {
-    const removers = [];
-    const attach = socket => {
-      const status = value => { if (value === SocketStatus.Open) callback({ relay: socket.url, auth: false }); };
-      const auth = value => { if (value === 'ok') callback({ relay: socket.url, auth: true }); };
-      socket.on('status', status);
-      socket.auth.on('status', auth);
-      removers.push(() => { socket.off('status', status); socket.auth.off('status', auth); });
-      if (socket.status === SocketStatus.Open) callback({ relay: socket.url, auth: false });
-    };
-    const unsubscribe = pool.subscribe(attach);
-    for (const relay of relays) if (pool.has(relay)) attach(pool.get(relay));
-    return () => { unsubscribe(); removers.forEach(remove => remove()); };
-  }
-
   /** @type {((event: any) => Promise<any>) | null} */
   let signFn = sign;
 
@@ -105,12 +85,13 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
 
   // Wire NIP-42 AUTH handling: when a socket requests auth, sign and respond
   pool.subscribe((socket) => {
-    const onStatus = (status) => {
-      if (status === 'open') for (const listener of relayReadyListeners) listener({ relay: socket.url, auth: false });
+    const emitReady = (auth) => {
+      for (const { listener, relays } of relayReadyListeners) {
+        if (!relays.size || relays.has(socket.url)) listener({ relay: socket.url, auth });
+      }
     };
-    const onAuthStatus = (status) => {
-      if (status === 'ok') for (const listener of relayReadyListeners) listener({ relay: socket.url, auth: true });
-    };
+    const onStatus = (status) => { if (status === SocketStatus.Open) emitReady(false); };
+    const onAuthStatus = (status) => { if (status === 'ok') emitReady(true); };
     socket.on('status', onStatus);
     socket.auth?.on('status', onAuthStatus);
     socketListeners.set(socket, () => {
@@ -136,12 +117,18 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
   }
 
   function getConnectedRelays(relays) {
-    return relays.filter(url => pool.has(url) && pool.get(url).status === 'open');
+    return relays.filter(url => pool.has(url) && pool.get(url).status === SocketStatus.Open);
   }
 
-  function onRelayReady(listener) {
-    relayReadyListeners.add(listener);
-    return () => relayReadyListeners.delete(listener);
+  function onRelayReady(listener, relays = []) {
+    const registration = { listener, relays: new Set(relays) };
+    relayReadyListeners.add(registration);
+    for (const relay of relays) {
+      if (pool.has(relay) && pool.get(relay).status === SocketStatus.Open) {
+        listener({ relay, auth: false });
+      }
+    }
+    return () => relayReadyListeners.delete(registration);
   }
 
   /**
@@ -314,8 +301,6 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
     getConnectedRelays,
     onRelayReady,
     setSign,
-    getConnectedRelays,
-    onRelayReady,
     getPool,
     destroy,
     PublishStatus,

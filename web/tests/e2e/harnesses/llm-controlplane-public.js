@@ -722,12 +722,8 @@ export async function installPublicLLMControlplaneHarness(
         window.__BAHIA_E2E_LLM_SEEN_REQUEST_IDS.add(requestEvent.id);
         const { projections, events } = op === 'create'
           ? routeCreateResult(requestEvent, payload) : releaseRegisterResult(requestEvent, payload);
-        const status = nostrEvent({
-          id: `intent-status-${intentId}`, kind: KIND_STATUS,
-          tags: [['d', `intent-status:${requestEvent.pubkey}:${coordinate}`], ['p', requestEvent.pubkey],
-            ['intent_id', intentId], ['status', 'accepted']],
-          content: { status: 'accepted', intent_id: intentId }
-        });
+        const status = window.__BAHIA_E2E_MAKE_INTENT_STATUS(requestEvent,
+          { id: `intent-status-${intentId}` });
         window.__BAHIA_E2E_LLM_PENDING_INTENT_STATUSES.push({ projections, events, status });
         if (window.__BAHIA_E2E_LLM_ACCEPT_WHEN_READY) {
           const resolve = window.__BAHIA_E2E_LLM_ACCEPT_WHEN_READY;

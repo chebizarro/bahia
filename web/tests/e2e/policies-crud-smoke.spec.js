@@ -224,14 +224,8 @@ async function installPolicyCrudHarness(page, { initialPolicies = defaultPolicie
       emitRelayEvent(projection);
       window.__BAHIA_E2E_PUBLIC_PROJECTIONS.push({ eventId: projection.id, kind: projection.kind, requestEventId: requestEvent.id, tags: projection.tags });
       if (signedIntent) {
-        const coordinate = requestEvent.tags.find((tag) => tag[0] === 'd')?.[1];
-        const intentId = requestEvent.tags.find((tag) => tag[0] === 'intent_id')?.[1];
-        const status = {
-          kind: 30315, pubkey: servicePubkey, created_at: Math.max(Math.floor(Date.now() / 1000), requestEvent.created_at),
-          tags: [['d', `intent-status:${requestEvent.pubkey}:${coordinate}`], ['t', 'intent-status'],
-            ['p', requestEvent.pubkey], ['intent_id', intentId], ['status', 'accepted']],
-          content: JSON.stringify({ intent_id: intentId, coordinate, reason: '' })
-        };
+        const status = window.__BAHIA_E2E_MAKE_INTENT_STATUS(requestEvent,
+          { id: `status-${requestEvent.id}` });
         window.__BAHIA_E2E_PUBLIC_RESULTS.push({ eventId: `status-${requestEvent.id}`, kind: 30315, requestEventId: requestEvent.id, tags: status.tags });
         persistPublicTrace();
         emitRelayEvent(status);

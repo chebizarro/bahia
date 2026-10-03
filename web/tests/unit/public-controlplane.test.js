@@ -3,7 +3,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const requestEncryptedResultMock = vi.hoisted(() => vi.fn());
 const publishEncryptedRequestMock = vi.hoisted(() => vi.fn());
 const bootstrapMock = vi.hoisted(() => vi.fn());
-const publishDomainIntentMock = vi.hoisted(() => vi.fn());
 const gotoMock = vi.hoisted(() => vi.fn());
 const publishIntentMock = vi.hoisted(() => vi.fn());
 const canonicalIntentRecordMock = vi.hoisted(() => vi.fn());
@@ -26,10 +25,8 @@ vi.mock('../../src/lib/stores/controlplane.svelte.js', () => ({
 
 vi.mock('$lib/nostr/intent-client.svelte.js', () => ({
   publishIntent: publishIntentMock,
-  canonicalIntentRecord: canonicalIntentRecordMock
-}));
-vi.mock('../../src/lib/stores/domain-intents.svelte.js', () => ({
-  publishDomainIntent: publishDomainIntentMock
+  canonicalIntentRecord: canonicalIntentRecordMock,
+  resolveIntentOrgId: (domain, explicit) => explicit || (domain === 'backup' || domain === 'package' ? 'f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7' : '3b45458b-2724-4dda-9fc6-66f12249660d')
 }));
 
 describe('public controlplane command helpers', () => {
@@ -52,7 +49,7 @@ describe('public controlplane command helpers', () => {
       requestEventId: 'req-1',
       result: { status: 'ok' }
     });
-    publishDomainIntentMock.mockImplementation(async request => ({ pending: true, desiredState: request.content,
+    publishIntentMock.mockImplementation(async request => ({ pending: true, desiredState: request.content,
       intentId: 'intent-1', coordinate: request.coordinate }));
     api = await import('../../src/lib/stores/public-controlplane.svelte.js');
   });
@@ -97,11 +94,11 @@ describe('public controlplane command helpers', () => {
     await api.createLLMRoute({ id, name: 'chat' });
 
     const policyCalls = publishIntentMock.mock.calls.map(([request]) => request);
-    expect(policyCalls.map(call => call.domain)).toEqual(['policy', 'policy']);
+    expect(policyCalls.map(call => call.domain)).toEqual(['policy', 'policy', 'llm', 'llm']);
     expect(policyCalls[0].content.id).toMatch(UUID_V7);
     expect(policyCalls[1].content.id).toBe(id);
-    expect(publishDomainIntentMock.mock.calls[0][0].content.id).toMatch(UUID_V7);
-    expect(publishDomainIntentMock.mock.calls[1][0].content.id).toBe(id);
+    expect(publishIntentMock.mock.calls[2][0].content.id).toMatch(UUID_V7);
+    expect(publishIntentMock.mock.calls[3][0].content.id).toBe(id);
     await expect(api.createPolicy({ id: 'Not-A-UUID', name: 'x', rules: [] })).rejects.toThrow(/Invalid entity id/);
   });
 
@@ -273,7 +270,7 @@ describe('public controlplane command helpers', () => {
       }
     };
     await api.createLLMRoute(routePayload);
-    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
       domain: 'llm', op: 'create', coordinate: expect.stringMatching(UUID_V7),
       content: { ...routePayload, id: expect.stringMatching(UUID_V7) }
     }));
@@ -285,7 +282,7 @@ describe('public controlplane command helpers', () => {
       model_source: 'huggingface'
     };
     await api.registerLLMRelease(releasePayload);
-    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
       domain: 'llm', op: 'release-register', coordinate: expect.stringMatching(/^llm-release:/),
       content: { ...releasePayload, id: expect.stringMatching(UUID_V7) }
     }));
@@ -500,32 +497,32 @@ describe('public controlplane command helpers', () => {
 
   it('publishes backup mutations and operations as handler-compatible intents', async () => {
     await api.registerBackupRepository({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive', idempotency_key: 'repo-1' });
-    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
       domain: 'backup', op: 'repository-register', coordinate: expect.stringMatching(/^backup-repository:/),
       content: expect.objectContaining({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive' })
     }));
 
     await api.applyBackupPolicy({ name: 'verified', require_verification: true, verification_mode: 'kopia_snapshot_verify', idempotency_key: 'policy-1' });
-    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'policy-apply' }));
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'policy-apply' }));
 
     await api.applyBackupRecipe({ name: 'daily', version: 'v1', backend: 'kopia', repository_id: 'repo-id', target_ref: 'fs:/srv/app', idempotency_key: 'recipe-1' });
-    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'recipe-apply' }));
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'recipe-apply' }));
 
     await api.applyBackupDefinition({ name: 'daily-app', repository_id: 'repo-id', policy_id: 'policy-id', recipe_id: 'recipe-id', idempotency_key: 'definition-1' });
-    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'definition-apply' }));
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'definition-apply' }));
 
     await api.requestBackupRun({ id: 'recipe-id', repository_id: 'repo-id', backend: 'kopia', target_ref: 'fs:/srv/app' });
-    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'run',
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'run',
       content: expect.objectContaining({ recipe_id: 'recipe-id', repository_id: 'repo-id', backend: 'kopia', target_ref: 'fs:/srv/app' }) }));
 
     await api.requestBackupVerification({ id: 'run-id', verification_mode: 'kopia_snapshot_verify' });
-    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'verification' }));
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'verification' }));
 
     await api.requestBackupRestore({ id: 'run-id' }, 'fs:/restore');
-    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'restore' }));
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'restore' }));
 
     await api.requestBackupRetention({ repository_id: 'repo-id', policy_id: 'policy-id', backend: 'kopia', dry_run: true });
-    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'retention',
+    expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'retention',
       content: expect.objectContaining({ repository_id: 'repo-id', backend: 'kopia', dry_run: true }) }));
     expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });

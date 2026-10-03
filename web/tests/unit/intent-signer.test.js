@@ -25,6 +25,15 @@ describe('intent signer', () => {
       .toThrow(/canonical updated_at/);
   });
 
+  it('accepts daemon handler operations but rejects unknown ones', () => {
+    for (const op of ['release-register', 'recipe-apply', 'repository-register', 'verification', 'promote']) {
+      expect(() => buildIntentEvent({ domain: 'backup', op, coordinate: 'record-1', orgId,
+        content: {}, createdAt: 123 })).not.toThrow();
+    }
+    expect(() => buildIntentEvent({ domain: 'backup', op: 'arbitrary-command', coordinate: 'record-1',
+      orgId, content: {}, createdAt: 123 })).toThrow(/Invalid intent operation/);
+  });
+
   it('mints UUIDv7 intent ids and matches Go JSON HTML escaping', () => {
     const event = buildIntentEvent({ domain: 'service', op: 'create', coordinate: 'record-2', orgId,
       content: { name: '<api>&' }, createdAt: 123 });

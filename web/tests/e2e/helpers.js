@@ -126,6 +126,19 @@ export async function installE2EMocks(
     window.__BAHIA_E2E_SIGNED_INTENTS = [];
     window.__BAHIA_E2E_INTENT_WRAPS = [];
     window.__BAHIA_E2E_INTENT_STATUS_EVENTS = [];
+    // All harnesses derive the same scoped daemon status shape from a signed intent.
+    window.__BAHIA_E2E_MAKE_INTENT_STATUS = (intent, { status = 'accepted', reason = '', id,
+      created_at = Math.max(Math.floor(Date.now() / 1000), intent.created_at || 0) } = {}) => {
+      const tag = name => intent.tags?.find(item => item[0] === name)?.[1] || '';
+      const coordinate = tag('d');
+      const intentId = tag('intent_id');
+      return { id: id || `intent-status-${intent.id || intentId}`, kind: 30315, pubkey: servicePubkey,
+        created_at,
+        tags: [['d', `intent-status:${intent.pubkey}:${coordinate}`], ['domain', 'intent'],
+          ['status', status], ['t', 'intent-status'], ['p', intent.pubkey], ['intent_id', intentId],
+          ...(reason ? [['reason', reason]] : [])],
+        content: JSON.stringify({ status, intent_id: intentId, coordinate, reason }) };
+    };
 
     if (authenticated) {
       localStorage.removeItem('bahia_token');
@@ -382,12 +395,8 @@ export async function installE2EMocks(
         writeMockServiceSecrets(state);
       }
       window.__BAHIA_E2E_INTENT_WRAPS.push({ outer, inner });
-      const coordinate = tag('d');
-      const status = { kind: 30315, pubkey: servicePubkey, created_at: Math.floor(Date.now() / 1000),
-        tags: [['d', `intent-status:${pubkey}:${coordinate}`], ['p', pubkey], ['t', 'intent-status'],
-          ['status', statusOverride ? 'rejected' : 'accepted'], ['intent_id', tag('intent_id')],
-          ...(statusOverride ? [['reason', statusOverride]] : [])],
-        content: JSON.stringify({ intent_id: tag('intent_id'), coordinate, result: statusOverride ? 'rejected' : 'accepted', reason: statusOverride || '' }) };
+      const status = window.__BAHIA_E2E_MAKE_INTENT_STATUS(inner,
+        { status: statusOverride ? 'rejected' : 'accepted', reason: statusOverride || '' });
       window.__BAHIA_E2E_INTENT_STATUS_EVENTS.push(status);
       publishMockNostrEvent(status);
     }

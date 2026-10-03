@@ -1019,14 +1019,9 @@ export async function installPublicServiceDeploymentHarness(
         const resultBody = result?.resultEvent ? JSON.parse(result.resultEvent(requestEvent).content || '{}') : {};
         if (resultBody.status === 'failed') outcome = String(resultBody.error?.message || resultBody.error || '').includes('revision conflict') ? 'conflict' : 'rejected';
       }
-      const coordinate = tag('d');
-      const intentId = tag('intent_id');
       const reason = outcome === 'conflict' ? 'revision_conflict' : outcome === 'rejected' ? 'intent rejected' : '';
-      const status = nostrEvent({ id: `intent-status-${eventId}`, kind: 30315,
-        created_at: Math.max(Math.floor(Date.now() / 1000), requestEvent.created_at),
-        tags: [['d', `intent-status:${requestEvent.pubkey}:${coordinate}`], ['domain', 'intent'],
-          ['status', outcome], ['t', 'intent-status'], ['p', requestEvent.pubkey], ['intent_id', intentId]],
-        content: { intent_id: intentId, coordinate, reason } });
+      const status = window.__BAHIA_E2E_MAKE_INTENT_STATUS(requestEvent,
+        { status: outcome, reason, id: `intent-status-${eventId}` });
       queueRelayEvent(status, { traceAs: 'result', traceRequestEventId: eventId });
       if (outcome === 'accepted') {
         for (const projection of result?.projections || []) {

@@ -1,8 +1,8 @@
 <script>
-  import { domainIntentState } from '$lib/stores/domain-intents.svelte.js';
+  import { pendingIntentRows } from '$lib/nostr/intent-client.svelte.js';
 
   let { domain } = $props();
-  let rows = $derived(domainIntentState.rows.filter(row => row.domain === domain));
+  let rows = $derived(pendingIntentRows.filter(row => row.domain === domain));
 </script>
 
 {#if rows.length}

@@ -49,9 +49,9 @@ func TestWebDomainIntentFixtures(t *testing.T) {
 			{Name: "run", Request: webIntentFixtureRequest{Domain: "backup", Op: "run", Coordinate: "backup-run:018f1fae-7b91-7bea-81d6-0669758de946", OrgID: fleetOrgID, IntentID: "018f1fae-7b91-7bea-81d6-0669758de953", CreatedAt: 1720000000, Pubkey: pubkey,
 				Content: map[string]any{"id": "018f1fae-7b91-7bea-81d6-0669758de946", "recipe_id": recipeID, "repository_id": repoID, "backend": "kopia", "target_ref": "fs:/srv/app", "verification_mode": "none", "metadata": map[string]any{"source": "web.backup.run"}}}}},
 		"package": {
-			{Name: "promote", Request: webIntentFixtureRequest{Domain: "package", Op: "promote", Coordinate: "package-promote:018f1fae-7b91-7bea-81d6-0669758de947", OrgID: fleetOrgID, IntentID: "018f1fae-7b91-7bea-81d6-0669758de954", CreatedAt: 1720000000, Pubkey: pubkey,
+			{Name: "promote", Request: webIntentFixtureRequest{Domain: "package", Op: "promote", Coordinate: "package:" + targetRepoID + ":acme:api:v1:api.tgz", OrgID: fleetOrgID, IntentID: "018f1fae-7b91-7bea-81d6-0669758de954", CreatedAt: 1720000000, Pubkey: pubkey,
 				Content: map[string]any{"source_repository_id": repoID, "target_repository_id": targetRepoID, "namespace": "acme", "package_name": "api", "version": "v1", "filename": "api.tgz"}}},
-			{Name: "yank", Request: webIntentFixtureRequest{Domain: "package", Op: "yank", Coordinate: "package-yank:018f1fae-7b91-7bea-81d6-0669758de948", OrgID: fleetOrgID, IntentID: "018f1fae-7b91-7bea-81d6-0669758de955", CreatedAt: 1720000000, Pubkey: pubkey,
+			{Name: "yank", Request: webIntentFixtureRequest{Domain: "package", Op: "yank", Coordinate: "package:" + repoID + ":acme:api:v1:api.tgz", OrgID: fleetOrgID, IntentID: "018f1fae-7b91-7bea-81d6-0669758de955", CreatedAt: 1720000000, Pubkey: pubkey,
 				Content: map[string]any{"repository_id": repoID, "namespace": "acme", "package_name": "api", "version": "v1", "filename": "api.tgz", "reason": "superseded", "deprecated": true}}}},
 	}
 
@@ -119,6 +119,9 @@ func TestWebDomainIntentFixtures(t *testing.T) {
 				if cmd.SourceRepositoryID.String() != repoID || cmd.TargetRepositoryID.String() != targetRepoID {
 					t.Fatalf("promote repository IDs lost")
 				}
+				if intent.Coordinate != "package:"+cmd.TargetRepositoryID.String()+":"+cmd.Namespace+":"+cmd.PackageName+":"+cmd.Version+":"+cmd.Filename {
+					t.Fatalf("promote d-tag must address the target artifact: %q", intent.Coordinate)
+				}
 			case "yank":
 				cmd, err := packageYankCmdFromContent(intent.Content)
 				if err != nil {
@@ -126,6 +129,9 @@ func TestWebDomainIntentFixtures(t *testing.T) {
 				}
 				if cmd.RepositoryID.String() != repoID || !cmd.Deprecated {
 					t.Fatalf("yank repository or deprecation lost")
+				}
+				if intent.Coordinate != "package:"+cmd.RepositoryID.String()+":"+cmd.Namespace+":"+cmd.PackageName+":"+cmd.Version+":"+cmd.Filename {
+					t.Fatalf("yank d-tag must address the artifact: %q", intent.Coordinate)
 				}
 			}
 			cases[i].Event = map[string]any{"kind": 30900, "created_at": request.CreatedAt, "pubkey": pubkey, "tags": tags, "content": string(content)}

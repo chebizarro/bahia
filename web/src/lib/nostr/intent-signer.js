@@ -27,7 +27,10 @@ function updatedAt(record) {
 export function buildIntentEvent({ domain, op = 'update', coordinate, orgId, content = {}, intentId = mintEntityId(),
   currentRecord, expectedUpdatedAt, createdAt = Math.floor(Date.now() / 1000), pubkey, schema } = {}) {
   if (!domain || !coordinate || !orgId || !intentId) throw new Error('Intent requires domain, coordinate, orgId and intentId');
-  if (!['create', 'update', 'delete', 'repository-apply', 'repository-delete', 'publish', 'promote', 'yank', 'drift-detect'].includes(op)) {
+  if (!['create', 'update', 'delete', 'repository-apply', 'repository-delete', 'publish', 'promote', 'yank', 'drift-detect',
+    'release-register', 'recipe-apply', 'policy-apply', 'repository-register',
+    'definition-apply', 'run', 'restore', 'restore-approval', 'verification',
+    'retention', 'repository-probe'].includes(op)) {
     throw new Error(`Invalid intent operation: ${op}`);
   }
   if (!Number.isInteger(createdAt) || createdAt < 0) throw new Error('Invalid intent created_at');

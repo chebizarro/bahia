@@ -7,6 +7,20 @@ import { authState, resolveActiveSigner, signWithAuth } from '../stores/auth.sve
 
 export const pendingIntentRows = $state([]);
 
+// ParseIntent requires an org UUID even when FleetScopedHandler authorizes by
+// fleet operator pubkey rather than per-org membership.
+export const FLEET_INTENT_ORG_ID = 'f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function resolveIntentOrgId(domain, explicit, candidates = []) {
+  if (UUID.test(String(explicit || ''))) return explicit;
+  if (domain === 'backup' || domain === 'package') return FLEET_INTENT_ORG_ID;
+  const available = [...new Set(candidates.filter(value => UUID.test(String(value || ''))))];
+  if (available.length === 1) return available[0];
+  if (available.length > 1) throw new Error('Select an organization before submitting this intent');
+  throw new Error('Select an organization before submitting this intent');
+}
+
 function tag(event, name) { return event?.tags?.find(item => item[0] === name)?.[1]; }
 
 export function createIntentClient({ store, pool, servicePubkey, requesterPubkey, relays, signer,
@@ -26,13 +40,14 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
   } });
 
   function retainStatus(coordinate) {
-    const existing = subscriptions.get(coordinate);
-    if (existing) { existing.refs++; return; }
+    if (subscriptions.has(coordinate)) return;
     const filter = { kinds: [30315], authors: [servicePubkey], '#d': [`intent-status:${requesterPubkey}:${coordinate}`],
       '#p': [requesterPubkey], '#t': ['intent-status'] };
-    const handle = pool.subscribe({ relays, filters: [filter] });
-    subscriptions.set(coordinate, { refs: 1, handle });
-    for (const event of store.query(filter)) void pending.handleStatus(event);
+    const canonicalFilter = { kinds: [30900], authors: [servicePubkey], '#d': [coordinate], limit: 1 };
+    const handle = pool.subscribe({ relays, filters: [{ ...filter, limit: 1 }, canonicalFilter] });
+    subscriptions.set(coordinate, { handle });
+    for (const event of store.query(filter)) void pending.handleStatus(event).then(() => releaseResolved(coordinate));
+    for (const event of store.query(canonicalFilter)) void pending.handleCanonical(event).then(() => releaseResolved(coordinate));
   }
 
   function releaseResolved(coordinate) {
@@ -72,7 +87,7 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
       await pending.add({ event: signed.event, domain, op, desiredState: content });
       store.ingest(signed.event);
       await outbox.enqueue(signed.event);
-      return { ...signed, pending: true };
+      return { ...signed, pending: true, desiredState: content };
     }
   };
 }

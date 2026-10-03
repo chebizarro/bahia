@@ -5,7 +5,7 @@
       "request": {
         "domain": "package",
         "op": "promote",
-        "coordinate": "package-promote:018f1fae-7b91-7bea-81d6-0669758de947",
+        "coordinate": "package:018f1fae-7b91-7bea-81d6-0669758de945:acme:api:v1:api.tgz",
         "orgId": "f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7",
         "intentId": "018f1fae-7b91-7bea-81d6-0669758de954",
         "createdAt": 1720000000,
@@ -27,7 +27,7 @@
         "tags": [
           [
             "d",
-            "package-promote:018f1fae-7b91-7bea-81d6-0669758de947"
+            "package:018f1fae-7b91-7bea-81d6-0669758de945:acme:api:v1:api.tgz"
           ],
           [
             "domain",
@@ -65,7 +65,7 @@
       "request": {
         "domain": "package",
         "op": "yank",
-        "coordinate": "package-yank:018f1fae-7b91-7bea-81d6-0669758de948",
+        "coordinate": "package:018f1fae-7b91-7bea-81d6-0669758de943:acme:api:v1:api.tgz",
         "orgId": "f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7",
         "intentId": "018f1fae-7b91-7bea-81d6-0669758de955",
         "createdAt": 1720000000,
@@ -88,7 +88,7 @@
         "tags": [
           [
             "d",
-            "package-yank:018f1fae-7b91-7bea-81d6-0669758de948"
+            "package:018f1fae-7b91-7bea-81d6-0669758de943:acme:api:v1:api.tgz"
           ],
           [
             "domain",

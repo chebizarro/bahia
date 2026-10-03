@@ -97,14 +97,16 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
       kinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS]
     }));
 
-    const canonicalRequests = transportTrace.requests.filter((request) => request.kind === 25910);
+    const contextRequests = transportTrace.requests.filter((request) => request.kind === 25910);
     expect(transportTrace.relays.length).toBeGreaterThanOrEqual(4);
-    expect(transportTrace.requests.map((request) => request.operation)).toEqual(expect.arrayContaining(['service/create', 'service/deploy-preview', 'service/update', 'service/deploy', 'approval/approve']));
+    expect(transportTrace.requests.map((request) => request.operation)).toEqual(expect.arrayContaining(['service/create', 'service/deploy-preview', 'service/deploy', 'approval/approve']));
+    expect(transportTrace.requests.filter((request) => request.operation === 'service/create').every((request) => request.kind === 30900)).toBe(true);
+    expect(transportTrace.requests).not.toEqual(expect.arrayContaining([expect.objectContaining({ operation: 'service/update', kind: 25910 })]));
     expect(transportTrace.kinds).toEqual(expect.arrayContaining([25910, 30900]));
     expect(transportTrace.kinds).not.toContain(5980);
-    expect(canonicalRequests.length).toBeGreaterThanOrEqual(3);
+    expect(contextRequests.length).toBeGreaterThanOrEqual(3);
 
-    for (const request of canonicalRequests) {
+    for (const request of contextRequests) {
       expect(transportTrace.oks).toEqual(expect.arrayContaining([
         expect.objectContaining({ eventId: request.eventId, kind: request.kind, accepted: true })
       ]));

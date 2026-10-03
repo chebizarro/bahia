@@ -58,6 +58,8 @@ describe('intent client wiring', () => {
     expect(client.pending.query()[0].status).toBe('pending');
     expect(poolSubscriptions).toHaveLength(1);
     expect(poolSubscriptions[0].filters[0]['#d']).toEqual([`intent-status:${requesterPubkey}:service-one`]);
+    expect(poolSubscriptions[0].filters[1]).toMatchObject({ kinds: [30900], authors: [servicePubkey],
+      '#d': ['service-one'], limit: 1 });
     const resolved = untilPending(client, rows => rows.every(row => row.coordinate !== 'service-one'));
     store.ingest(status(intent, 'accepted'));
     await resolved;

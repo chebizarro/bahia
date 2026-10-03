@@ -35,14 +35,9 @@ test('backup repository intent stays pending until a scoped 30315 acceptance', a
     ['org', 'f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7']
   ]));
   expect(JSON.parse(intent.content)).toMatchObject({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive' });
-  const coordinate = intent.tags.find(tag => tag[0] === 'd')[1];
-  const intentId = intent.tags.find(tag => tag[0] === 'intent_id')[1];
-  await page.evaluate(({ servicePubkey, requesterPubkey, coordinate, intentId }) => {
-    window.__bahiaPushNostrEvent({ id: `accepted-${intentId}`, kind: 30315, pubkey: servicePubkey,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [['d', `intent-status:${requesterPubkey}:${coordinate}`], ['p', requesterPubkey],
-        ['intent_id', intentId], ['status', 'accepted']],
-      content: JSON.stringify({ status: 'accepted', intent_id: intentId }) });
-  }, { servicePubkey: E2E_SERVICE_PUBKEY, requesterPubkey: intent.pubkey, coordinate, intentId });
+  await page.evaluate((intent) => {
+    window.__bahiaPushNostrEvent(window.__BAHIA_E2E_MAKE_INTENT_STATUS(intent,
+      { id: `accepted-${intent.tags.find(tag => tag[0] === 'intent_id')[1]}` }));
+  }, intent);
   await expect(page.getByTestId('backup-pending-intents')).toHaveCount(0);
 });

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildIntentEvent } from '../../src/lib/nostr/intent-signer.js';
 import { createPendingIntents } from '../../src/lib/stores/pending-intents.svelte.js';
-import { FLEET_INTENT_ORG_ID, resolveIntentOrgId } from '../../src/lib/stores/domain-intents.svelte.js';
+import { FLEET_INTENT_ORG_ID, resolveIntentOrgId } from '../../src/lib/nostr/intent-client.svelte.js';
 
 const servicePubkey = 'b'.repeat(64);
 const families = ['llm', 'backup', 'package'];
@@ -17,8 +17,8 @@ describe('Go-generated domain intent fixtures', () => {
   it('provides a valid fleet org tag without requiring operator org membership', () => {
     expect(resolveIntentOrgId('backup')).toBe(FLEET_INTENT_ORG_ID);
     expect(resolveIntentOrgId('package')).toBe(FLEET_INTENT_ORG_ID);
-    expect(resolveIntentOrgId('llm')).toBe('');
-    expect(resolveIntentOrgId('backup', 'real-org')).toBe('real-org');
+    expect(() => resolveIntentOrgId('llm')).toThrow(/organization/);
+    expect(resolveIntentOrgId('backup', '3b45458b-2724-4dda-9fc6-66f12249660d')).toBe('3b45458b-2724-4dda-9fc6-66f12249660d');
   });
 
   for (const fixture of fixtures) {

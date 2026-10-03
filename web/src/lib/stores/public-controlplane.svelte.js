@@ -3,23 +3,20 @@ import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
 import { CONTEXTVM_MESSAGE_KIND, publishEncryptedRequest, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
 import { mintEntityId, withEntityId } from '$lib/entity-id.js';
-import { publishIntent, canonicalIntentRecord } from '$lib/nostr/intent-client.svelte.js';
-import { publishDomainIntent } from './domain-intents.svelte.js';
+import { publishIntent, canonicalIntentRecord, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
 import { orgRoles } from './auth-roles.svelte.js';
 import { orgsState } from './orgs.svelte.js';
+import { currentSystemInfo } from './system.svelte.js';
 import { backupRecipes, backupRepositories, backupPolicies, backupDefinitions } from './collections/backup.svelte.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function intentOrgId(payload, current) {
+function intentOrgId(payload, current, domain) {
   const explicit = [payload?.org_id, current?.org_id,
     payload?.environment_id ? canonicalIntentRecord(payload.environment_id)?.content?.org_id : null]
     .find(value => UUID.test(String(value || '')));
-  if (explicit) return explicit;
-  const available = [...new Set([...Object.keys(orgRoles),
-    ...orgsState.orgs.map(org => org.id || org.org_id)].filter(value => UUID.test(String(value || ''))))];
-  if (available.length !== 1) throw new Error('Select an organization before submitting this intent');
-  return available[0];
+  return resolveIntentOrgId(domain, explicit, [...Object.keys(orgRoles),
+    ...orgsState.orgs.map(org => org.id || org.org_id), currentSystemInfo()?.organization_id]);
 }
 
 async function mutateIntent(domain, op, payload, id = payload?.id) {
@@ -29,7 +26,7 @@ async function mutateIntent(domain, op, payload, id = payload?.id) {
   if (op === 'update' && !current?.content?.updated_at) {
     throw new Error('Current canonical revision is unavailable; re-read and resubmit');
   }
-  const orgId = intentOrgId(payload, current?.content);
+  const orgId = intentOrgId(payload, current?.content, domain);
   const content = op === 'delete'
     ? { id: coordinate, org_id: orgId, deleted: true, ...(payload?.force ? { force: true } : {}) }
     : { ...(current?.content || {}), ...payload, id: coordinate, org_id: orgId };
@@ -241,12 +238,14 @@ export function rejectDeploymentIntent(id) {
 // retry; one is minted when absent.
 export async function createLLMRoute(payload) {
   const content = withEntityId(payload);
-  return publishDomainIntent({ domain: 'llm', op: 'create', coordinate: content.id, content });
+  return publishIntent({ domain: 'llm', op: 'create', coordinate: content.id,
+    orgId: intentOrgId(content, canonicalIntentRecord(content.id)?.content, 'llm'), content });
 }
 
 export function registerLLMRelease(payload) {
   const content = withEntityId(payload);
-  return publishDomainIntent({ domain: 'llm', op: 'release-register', coordinate: `llm-release:${content.id}`, content });
+  return publishIntent({ domain: 'llm', op: 'release-register', coordinate: `llm-release:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`llm-release:${content.id}`)?.content, 'llm'), content });
 }
 
 async function requestLLMAsyncLifecycle(operation, payload, tags) {
@@ -481,14 +480,14 @@ export function promotePackage(payload) {
   const coordinate = ['package', payload.target_repository_id, payload.namespace,
     payload.package_name, payload.version, payload.filename].map(encodeURIComponent).join(':');
   return publishIntent({ domain: 'package', op: 'promote', coordinate,
-    orgId: intentOrgId(payload), content: payload });
+    orgId: intentOrgId(payload, null, 'package'), content: payload });
 }
 
 export function yankPackage(payload) {
   const coordinate = ['package', payload.repository_id, payload.namespace,
     payload.package_name, payload.version, payload.filename].map(encodeURIComponent).join(':');
   return publishIntent({ domain: 'package', op: 'yank', coordinate,
-    orgId: intentOrgId(payload), content: payload });
+    orgId: intentOrgId(payload, null, 'package'), content: payload });
 }
 
 // The policy id is client-minted (bahia-irsry.42): pass the same payload.id to
@@ -556,7 +555,8 @@ export function registerBackupRepository(payload) {
     repository_uri: repositoryUri,
     metadata: backupMetadata('web.backup.repositories.register', payload?.metadata)
   };
-  return publishDomainIntent({ domain: 'backup', op: 'repository-register', coordinate: `backup-repository:${content.id}`, content });
+  return publishIntent({ domain: 'backup', op: 'repository-register', coordinate: `backup-repository:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-repository:${content.id}`)?.content, 'backup'), content });
 }
 
 export function applyBackupPolicy(payload) {
@@ -570,7 +570,8 @@ export function applyBackupPolicy(payload) {
     verification_mode: verificationMode,
     metadata: backupMetadata('web.backup.policies.apply', payload?.metadata)
   };
-  return publishDomainIntent({ domain: 'backup', op: 'policy-apply', coordinate: `backup-policy:${content.id}`, content });
+  return publishIntent({ domain: 'backup', op: 'policy-apply', coordinate: `backup-policy:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-policy:${content.id}`)?.content, 'backup'), content });
 }
 
 export function applyBackupRecipe(payload) {
@@ -590,7 +591,8 @@ export function applyBackupRecipe(payload) {
     verification_mode: String(payload?.verification_mode || 'none').trim() || 'none',
     metadata: backupMetadata('web.backup.recipes.apply', payload?.metadata)
   };
-  return publishDomainIntent({ domain: 'backup', op: 'recipe-apply', coordinate: `backup-recipe:${content.id}`, content });
+  return publishIntent({ domain: 'backup', op: 'recipe-apply', coordinate: `backup-recipe:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-recipe:${content.id}`)?.content, 'backup'), content });
 }
 
 export function applyBackupDefinition(payload) {
@@ -609,7 +611,8 @@ export function applyBackupDefinition(payload) {
     requires_approval: Boolean(payload?.requires_approval),
     metadata: backupMetadata('web.backup.definitions.apply', payload?.metadata)
   };
-  return publishDomainIntent({ domain: 'backup', op: 'definition-apply', coordinate: `backup-definition:${content.id}`, content });
+  return publishIntent({ domain: 'backup', op: 'definition-apply', coordinate: `backup-definition:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-definition:${content.id}`)?.content, 'backup'), content });
 }
 
 export function requestBackupRun(recipeOrDefinition) {
@@ -624,7 +627,8 @@ export function requestBackupRun(recipeOrDefinition) {
     verification_mode: recipe.verification_mode || 'none',
     metadata: { source: 'web.backup.run' }
   };
-  return publishDomainIntent({ domain: 'backup', op: 'run', coordinate: `backup-run:${content.id}`, content });
+  return publishIntent({ domain: 'backup', op: 'run', coordinate: `backup-run:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-run:${content.id}`)?.content, 'backup'), content });
 }
 
 export function requestBackupVerification(run, mode = '') {
@@ -632,7 +636,8 @@ export function requestBackupVerification(run, mode = '') {
   const verificationMode = String(mode || run?.verification_mode || 'kopia_snapshot_verify').trim() || 'kopia_snapshot_verify';
   const content = { id: mintEntityId(), backup_run_id: backupRunId, mode: verificationMode,
     status: 'pending', verified: false };
-  return publishDomainIntent({ domain: 'backup', op: 'verification', coordinate: `backup-verification:${content.id}`, content });
+  return publishIntent({ domain: 'backup', op: 'verification', coordinate: `backup-verification:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-verification:${content.id}`)?.content, 'backup'), content });
 }
 
 export function requestBackupRestore(run, restoreTargetRef) {
@@ -640,7 +645,8 @@ export function requestBackupRestore(run, restoreTargetRef) {
   const target = backupRequired(restoreTargetRef || run?.restore_target_ref || run?.target_ref, 'restore target');
   const content = { id: mintEntityId(), backup_run_id: backupRunId,
     restore_target_ref: target, metadata: { source: 'web.backup.restore' } };
-  return publishDomainIntent({ domain: 'backup', op: 'restore', coordinate: `backup-restore:${content.id}`, content });
+  return publishIntent({ domain: 'backup', op: 'restore', coordinate: `backup-restore:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-restore:${content.id}`)?.content, 'backup'), content });
 }
 
 export function requestBackupRetention(input) {
@@ -652,7 +658,8 @@ export function requestBackupRetention(input) {
     ...(policyId ? { policy_id: policyId } : {}),
     backend: backupRequired(repository.backend, 'repository backend'), dry_run: dryRun,
     metadata: { source: 'web.backup.retention' } };
-  return publishDomainIntent({ domain: 'backup', op: 'retention', coordinate: `backup-retention:${content.id}`, content });
+  return publishIntent({ domain: 'backup', op: 'retention', coordinate: `backup-retention:${content.id}`,
+    orgId: intentOrgId(content, canonicalIntentRecord(`backup-retention:${content.id}`)?.content, 'backup'), content });
 }
 
 export function probeBackupRepository(repository) {
@@ -660,8 +667,8 @@ export function probeBackupRepository(repository) {
   if (!repositoryId) throw new Error('repository id is required');
   const content = { repository_id: repositoryId, repository: repository?.name || '',
     metadata: { source: 'web.backup.repositories' } };
-  return publishDomainIntent({ domain: 'backup', op: 'repository-probe',
-    coordinate: `backup-repository-probe:${mintEntityId()}`, content });
+  return publishIntent({ domain: 'backup', op: 'repository-probe',
+    coordinate: `backup-repository-probe:${mintEntityId()}`, orgId: intentOrgId(content, null, 'backup'), content });
 }
 
 export function decideBackupRestore(restore, approved, message = '') {
