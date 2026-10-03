@@ -12,6 +12,13 @@ LLM Routes provide:
 - **Deployment workflow** — Deploy with approvals
 - **State tracking** — Monitor active deployments
 
+The web console signs kind-`30900` intents for route creation and release
+registration. A pending badge remains until the service publishes a matching
+`30315` intent status or newer canonical route state; relay acceptance alone
+does not mean the mutation succeeded. Deployment, rollback, and approval
+actions still use ContextVM because the daemon has no corresponding intent
+handler for those operations.
+
 ## Gateway administration credentials
 
 Production gateway-manager credentials should be mounted as files rather than

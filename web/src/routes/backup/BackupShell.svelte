@@ -3,6 +3,7 @@
   import { BACKUP_SECTIONS } from '$lib/backup/model.js';
   import { backupAttestations, operations } from '$lib/stores';
   import { RepositoryIcon } from '$lib/icons/domain-icons.js';
+  import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
 
   let { title = 'Backup', subtitle = '', children } = $props();
   const pathname = $derived(page.url.pathname);
@@ -11,6 +12,7 @@
 </script>
 
 <div class="backup-shell">
+  <PendingDomainIntents domain="backup" />
   <div class="backup-heading">
     <div>
       <p class="eyebrow">Fleet backup control plane</p>

@@ -350,6 +350,13 @@ func llmReleaseFromIntentContent(intent *Intent) (*domain.LLMRelease, error) {
 	}
 
 	release := &domain.LLMRelease{}
+	if idStr, ok := content["id"].(string); ok && idStr != "" {
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid release id %q: %w", idStr, err)
+		}
+		release.ID = id
+	}
 
 	// RouteID is required.
 	routeIDStr, _ := content["route_id"].(string)

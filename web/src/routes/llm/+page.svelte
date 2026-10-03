@@ -1,4 +1,5 @@
 <script>
+  import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
   import { bootstrapControlplane, controlplaneConnection, environments, events, llmRouteStates, llmRoutes, operations } from '$lib/stores';
   import {
     approveLLMDeploymentIntent,
@@ -151,10 +152,10 @@
       const result = await createLLMRoute({ id: routeEntityId, ...buildCreateRoutePayload(routeForm) });
       routeEntityId = mintEntityId();
       const content = resultContent(result);
-      if (!releaseForm.route_id && content.route_id) releaseForm.route_id = content.route_id;
-      if (!deployForm.route_id && content.route_id) deployForm.route_id = content.route_id;
+      if (!releaseForm.route_id) releaseForm.route_id = content.route_id || content.id;
+      if (!deployForm.route_id) deployForm.route_id = content.route_id || content.id;
       routeForm = { name: '', description: '', public_model: '', path: '', authorization_secret_ref: '' };
-      setSuccess(`Created LLM route ${content.name || content.route_id}`);
+      setSuccess(`LLM route ${content.name || content.id} pending daemon acceptance`);
     } catch (err) {
       if (isEntityIdConflict(err)) {
         // An earlier attempt already created this id with other settings.
@@ -176,7 +177,7 @@
       const result = await registerLLMRelease(buildReleasePayload(releaseForm));
       const content = resultContent(result);
       deployForm.route_id = content.route_id || deployForm.route_id;
-      deployForm.release_id = content.release_id || deployForm.release_id;
+      deployForm.release_id = content.release_id || content.id || deployForm.release_id;
       releaseForm = {
         ...releaseForm,
         version: '',
@@ -186,7 +187,7 @@
         health_authorization_secret_ref: '',
         litellm_model: ''
       };
-      setSuccess(`Registered release ${content.version || content.release_id}`);
+      setSuccess(`LLM release ${content.version || content.id} pending daemon acceptance`);
     } catch (err) {
       setFailure(err.message || 'Failed to register LLM release');
     } finally {
@@ -245,6 +246,7 @@
 </script>
 
 <div class="page">
+  <PendingDomainIntents domain="llm" />
   <div class="page-header">
     <div>
       <h1><LlmIcon size={24} strokeWidth={1.75} ariaHidden="true" /> LLM Control Plane</h1>

@@ -32,12 +32,13 @@ import {
   extractContextVMResult,
   hasTagValue,
   isContextVMProgressNotification,
-  randomId,
   servicePubkeyFromSystemInfo,
   signalAbortError,
   throwIfSignalAborted
 } from './encrypted-controlplane-utils.js';
 import { ensureHexPubkey } from './nostr-hex.js';
+import { requestWithIdempotency } from './contextvm-idempotency.js';
+import { mintEntityId } from '../entity-id.js';
 
 // ---------------------------------------------------------------------------
 // Shared encrypted controlplane — one persistent subscription for all results
@@ -268,7 +269,11 @@ export async function awaitEncryptedResult(options) {
   });
 }
 
-export async function requestEncryptedResult(options = {}) {
+export function requestEncryptedResult(options = {}) {
+  return requestWithIdempotency(options, requestEncryptedResultOnce);
+}
+
+async function requestEncryptedResultOnce(options = {}) {
   const {
     resultKinds = [ENCRYPTED_RESULT_KIND],
     signal,
@@ -288,7 +293,7 @@ export async function requestEncryptedResult(options = {}) {
 
   throwIfSignalAborted(signal, 'ContextVM request aborted before publish');
 
-  const contextVMRequestId = request.requestId || randomId();
+  const contextVMRequestId = request.requestId || mintEntityId();
   const event = await transport.buildEncryptedRequestEvent({ ...request, requestId: contextVMRequestId });
 
   throwIfSignalAborted(signal, 'ContextVM request aborted before publish');

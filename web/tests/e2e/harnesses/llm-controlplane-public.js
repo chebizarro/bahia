@@ -5,6 +5,7 @@ export const LLM_PUBLIC_RELAY = 'ws://relay.test.local';
 
 export function createLLMSystemInfo({ publicRelay = LLM_PUBLIC_RELAY, servicePubkey = LLM_SERVICE_PUBKEY } = {}) {
   return {
+    organization_id: '3b45458b-2724-4dda-9fc6-66f12249660d',
     nostr: {
       browser_relays: [publicRelay],
       service_pubkey: servicePubkey
@@ -98,6 +99,20 @@ export async function installPublicLLMControlplaneHarness(
     window.__BAHIA_E2E_LLM_SEEN_REQUEST_IDS = new Set();
     window.__BAHIA_E2E_LLM_SOCKETS = new Set();
     window.__BAHIA_E2E_LLM_DEPLOY_REQUEST_EVENT_IDS = {};
+    window.__BAHIA_E2E_LLM_PENDING_INTENT_STATUSES = [];
+    function acceptIntents() {
+      if (!window.__BAHIA_E2E_LLM_PENDING_INTENT_STATUSES.length) return false;
+      for (const pending of window.__BAHIA_E2E_LLM_PENDING_INTENT_STATUSES.splice(0)) {
+        for (const projection of pending.projections) queueRelayEvent(projection);
+        for (const event of pending.events) queueRelayEvent(event);
+        queueRelayEvent(pending.status);
+      }
+      return true;
+    }
+    window.__BAHIA_E2E_LLM_ACCEPT_INTENTS = () => new Promise(resolve => {
+      if (acceptIntents()) resolve();
+      else window.__BAHIA_E2E_LLM_ACCEPT_WHEN_READY = resolve;
+    });
 
     const KIND_CONTEXTVM = 25910;
     const KIND_CONTROL_STATE = 30900;
@@ -298,8 +313,8 @@ export async function installPublicLLMControlplaneHarness(
     function routeCreateResult(requestEvent, payload) {
       const state = window.__BAHIA_E2E_LLM_STATE;
       const route = {
-        id: `llm-route-${state.nextRouteId++}`,
-        route_id: `llm-route-${state.nextRouteId - 1}`,
+        id: payload.id || `llm-route-${state.nextRouteId++}`,
+        route_id: payload.id || `llm-route-${state.nextRouteId - 1}`,
         name: payload.name,
         description: payload.description || '',
         gateway_config: payload.gateway_config || {},
@@ -328,7 +343,7 @@ export async function installPublicLLMControlplaneHarness(
     function releaseRegisterResult(requestEvent, payload) {
       const state = window.__BAHIA_E2E_LLM_STATE;
       const release = {
-        id: `llm-release-${state.nextReleaseId++}`,
+        id: payload.id || `llm-release-${state.nextReleaseId++}`,
         route_id: payload.route_id,
         version: payload.version,
         model_ref: payload.model_ref,
@@ -688,6 +703,39 @@ export async function installPublicLLMControlplaneHarness(
       if (Array.isArray(message) && message[0] === 'CLOSE') {
         this.__bahiaSubs?.delete(message[1]);
         return originalSend.call(this, data);
+      }
+      if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === KIND_CONTROL_STATE
+        && message[1]?.tags?.some((tag) => tag[0] === 't' && tag[1] === 'bahia-intent')
+        && message[1]?.tags?.some((tag) => tag[0] === 'domain' && tag[1] === 'llm')) {
+        const requestEvent = message[1];
+        const op = requestEvent.tags.find((tag) => tag[0] === 'op')?.[1];
+        const coordinate = requestEvent.tags.find((tag) => tag[0] === 'd')?.[1];
+        const intentId = requestEvent.tags.find((tag) => tag[0] === 'intent_id')?.[1];
+        const payload = JSON.parse(requestEvent.content || '{}');
+        window.__BAHIA_E2E_LLM_REQUESTS.push({ relay: this.url, kind: requestEvent.kind,
+          operation: op === 'create' ? 'llm/route-create' : `llm/${op}`, eventId: requestEvent.id,
+          tags: requestEvent.tags || [], content: requestEvent.content || '' });
+        window.__BAHIA_E2E_LLM_REQUEST_KINDS.push(requestEvent.kind);
+        persistTrace();
+        originalSend.call(this, data);
+        if (window.__BAHIA_E2E_LLM_SEEN_REQUEST_IDS.has(requestEvent.id)) return;
+        window.__BAHIA_E2E_LLM_SEEN_REQUEST_IDS.add(requestEvent.id);
+        const { projections, events } = op === 'create'
+          ? routeCreateResult(requestEvent, payload) : releaseRegisterResult(requestEvent, payload);
+        const status = nostrEvent({
+          id: `intent-status-${intentId}`, kind: KIND_STATUS,
+          tags: [['d', `intent-status:${requestEvent.pubkey}:${coordinate}`], ['p', requestEvent.pubkey],
+            ['intent_id', intentId], ['status', 'accepted']],
+          content: { status: 'accepted', intent_id: intentId }
+        });
+        window.__BAHIA_E2E_LLM_PENDING_INTENT_STATUSES.push({ projections, events, status });
+        if (window.__BAHIA_E2E_LLM_ACCEPT_WHEN_READY) {
+          const resolve = window.__BAHIA_E2E_LLM_ACCEPT_WHEN_READY;
+          window.__BAHIA_E2E_LLM_ACCEPT_WHEN_READY = null;
+          acceptIntents();
+          resolve();
+        }
+        return;
       }
       if (Array.isArray(message) && message[0] === 'EVENT' && message[1]?.kind === KIND_CONTEXTVM) {
         const requestEvent = message[1];

@@ -73,7 +73,7 @@ export function createIntentOutbox({ namespace, pool, relays, onStateChange = ()
     async open() {
       db = await openDatabase(namespace);
       for (const entry of await transaction(db, 'readonly', store => store.getAll())) entries.set(entry.id, entry);
-      unsubscribe = pool.onRelayReady?.(({ relay, auth }) => retry(relay, auth)) || (() => {});
+      unsubscribe = pool.onRelayReady?.(({ relay, auth }) => retry(relay, auth), relays) || (() => {});
       for (const relay of relays) if (connected(relay)) retry(relay);
     },
     close() { unsubscribe(); db?.close(); db = null; },

@@ -7,6 +7,7 @@
   import Textarea from '$lib/components/Textarea.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
+  import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
   import { ArtifactIcon, WarningIcon, UnknownIcon } from '$lib/icons/domain-icons.js';
   import {
     packageRepositories,
@@ -185,6 +186,7 @@ import { formatBytes } from '../../instance-health/page-model.js';
 </script>
 
 <div class="page">
+  <PendingDomainIntents domain="package" />
   <a href="/packages" class="back">← Packages</a>
 
   {#if repository}

@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const requestEncryptedResultMock = vi.hoisted(() => vi.fn());
 const publishEncryptedRequestMock = vi.hoisted(() => vi.fn());
 const bootstrapMock = vi.hoisted(() => vi.fn());
+const publishDomainIntentMock = vi.hoisted(() => vi.fn());
 const gotoMock = vi.hoisted(() => vi.fn());
 const publishIntentMock = vi.hoisted(() => vi.fn());
 const canonicalIntentRecordMock = vi.hoisted(() => vi.fn());
@@ -27,6 +28,9 @@ vi.mock('$lib/nostr/intent-client.svelte.js', () => ({
   publishIntent: publishIntentMock,
   canonicalIntentRecord: canonicalIntentRecordMock
 }));
+vi.mock('../../src/lib/stores/domain-intents.svelte.js', () => ({
+  publishDomainIntent: publishDomainIntentMock
+}));
 
 describe('public controlplane command helpers', () => {
   let api;
@@ -48,6 +52,8 @@ describe('public controlplane command helpers', () => {
       requestEventId: 'req-1',
       result: { status: 'ok' }
     });
+    publishDomainIntentMock.mockImplementation(async request => ({ pending: true, desiredState: request.content,
+      intentId: 'intent-1', coordinate: request.coordinate }));
     api = await import('../../src/lib/stores/public-controlplane.svelte.js');
   });
 
@@ -91,13 +97,11 @@ describe('public controlplane command helpers', () => {
     await api.createLLMRoute({ id, name: 'chat' });
 
     const policyCalls = publishIntentMock.mock.calls.map(([request]) => request);
-    const llmCalls = requestEncryptedResultMock.mock.calls.map(([request]) => request);
     expect(policyCalls.map(call => call.domain)).toEqual(['policy', 'policy']);
     expect(policyCalls[0].content.id).toMatch(UUID_V7);
     expect(policyCalls[1].content.id).toBe(id);
-    expect(llmCalls.map(call => call.operation)).toEqual(['llm/route-create', 'llm/route-create']);
-    expect(llmCalls[0].payload.id).toMatch(UUID_V7);
-    expect(llmCalls[1].payload.id).toBe(id);
+    expect(publishDomainIntentMock.mock.calls[0][0].content.id).toMatch(UUID_V7);
+    expect(publishDomainIntentMock.mock.calls[1][0].content.id).toBe(id);
     await expect(api.createPolicy({ id: 'Not-A-UUID', name: 'x', rules: [] })).rejects.toThrow(/Invalid entity id/);
   });
 
@@ -259,7 +263,7 @@ describe('public controlplane command helpers', () => {
     });
   });
 
-  it('creates LLM routes and releases through canonical ContextVM operations', async () => {
+  it('creates LLM routes and releases through signed intents', async () => {
     const routePayload = {
       name: 'chat-prod',
       description: 'Public chat completions route',
@@ -269,32 +273,23 @@ describe('public controlplane command helpers', () => {
       }
     };
     await api.createLLMRoute(routePayload);
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
-      operation: 'llm/route-create',
-      tags: [],
-      payload: { ...routePayload, id: expect.stringMatching(UUID_V7) },
-      kind: 25910,
-      resultKinds: [25910],
-      signal: undefined,
-      timeoutMs: undefined
-    });
+    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      domain: 'llm', op: 'create', coordinate: expect.stringMatching(UUID_V7),
+      content: { ...routePayload, id: expect.stringMatching(UUID_V7) }
+    }));
 
     const releasePayload = {
-      route_id: 'llm-route-1',
+      route_id: '01920d4e-7b3a-7c3d-9f2e-0123456789ab',
       version: 'v1',
       model_ref: 'hf://meta-llama/Llama-3',
       model_source: 'huggingface'
     };
     await api.registerLLMRelease(releasePayload);
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
-      operation: 'llm/release-register',
-      tags: [['route', 'llm-route-1']],
-      payload: releasePayload,
-      kind: 25910,
-      resultKinds: [25910],
-      signal: undefined,
-      timeoutMs: undefined
-    });
+    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      domain: 'llm', op: 'release-register', coordinate: expect.stringMatching(/^llm-release:/),
+      content: { ...releasePayload, id: expect.stringMatching(UUID_V7) }
+    }));
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
   it('requests LLM deploys and rollbacks through canonical ContextVM lifecycle methods', async () => {
@@ -503,34 +498,36 @@ describe('public controlplane command helpers', () => {
     }));
   });
 
-  it('publishes backup mutation and operation helpers through registered ContextVM methods', async () => {
+  it('publishes backup mutations and operations as handler-compatible intents', async () => {
     await api.registerBackupRepository({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive', idempotency_key: 'repo-1' });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({
-      operation: 'backup/repository-register',
-      tags: expect.arrayContaining([['d', 'repo-1'], ['repository', 'archive']]),
-      payload: expect.objectContaining({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive', idempotency_key: 'repo-1' })
+    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      domain: 'backup', op: 'repository-register', coordinate: expect.stringMatching(/^backup-repository:/),
+      content: expect.objectContaining({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive' })
     }));
 
     await api.applyBackupPolicy({ name: 'verified', require_verification: true, verification_mode: 'kopia_snapshot_verify', idempotency_key: 'policy-1' });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/policy-apply' }));
+    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'policy-apply' }));
 
     await api.applyBackupRecipe({ name: 'daily', version: 'v1', backend: 'kopia', repository_id: 'repo-id', target_ref: 'fs:/srv/app', idempotency_key: 'recipe-1' });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/recipe-apply' }));
+    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'recipe-apply' }));
 
     await api.applyBackupDefinition({ name: 'daily-app', repository_id: 'repo-id', policy_id: 'policy-id', recipe_id: 'recipe-id', idempotency_key: 'definition-1' });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/definition-apply' }));
+    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'definition-apply' }));
 
-    await api.requestBackupRun({ id: 'recipe-id', name: 'daily', version: 'v1' });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/run' }));
+    await api.requestBackupRun({ id: 'recipe-id', repository_id: 'repo-id', backend: 'kopia', target_ref: 'fs:/srv/app' });
+    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'run',
+      content: expect.objectContaining({ recipe_id: 'recipe-id', repository_id: 'repo-id', backend: 'kopia', target_ref: 'fs:/srv/app' }) }));
 
     await api.requestBackupVerification({ id: 'run-id', verification_mode: 'kopia_snapshot_verify' });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/verification' }));
+    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'verification' }));
 
     await api.requestBackupRestore({ id: 'run-id' }, 'fs:/restore');
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/restore' }));
+    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'restore' }));
 
-    await api.requestBackupRetention({ repository_id: 'repo-id', policy_id: 'policy-id', dry_run: true });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({ operation: 'backup/retention' }));
+    await api.requestBackupRetention({ repository_id: 'repo-id', policy_id: 'policy-id', backend: 'kopia', dry_run: true });
+    expect(publishDomainIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'retention',
+      content: expect.objectContaining({ repository_id: 'repo-id', backend: 'kopia', dry_run: true }) }));
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
   it('evaluates deployment policy through ContextVM and unwraps successful payload envelopes', async () => {
