@@ -58,11 +58,12 @@ type ConfigProjection struct {
 }
 
 type configProjectionState struct {
-	Version int                          `json:"version"`
-	Desired map[string]desiredCoordinate `json:"desired"`
-	Applied map[string]appliedCoordinate `json:"applied"`
-	Pending []pendingActivation          `json:"pending"`
-	Last    *persistedConfigProjection   `json:"last,omitempty"`
+	Version    int                          `json:"version"`
+	Desired    map[string]desiredCoordinate `json:"desired"`
+	Applied    map[string]appliedCoordinate `json:"applied"`
+	Pending    []pendingActivation          `json:"pending"`
+	StatusBase map[string]int64             `json:"status_base,omitempty"`
+	Last       *persistedConfigProjection   `json:"last,omitempty"`
 }
 
 // desiredCoordinate is the desired event currently in force for one
@@ -72,9 +73,10 @@ type configProjectionState struct {
 // accepted again, while a newer version can.
 type desiredCoordinate struct {
 	appliedCoordinate
-	CreatedAt int64 `json:"created_at,omitempty"`
-	ExpiresAt int64 `json:"expires_at,omitempty"`
-	Withdrawn bool  `json:"withdrawn,omitempty"`
+	CreatedAt  int64 `json:"created_at,omitempty"`
+	ExpiresAt  int64 `json:"expires_at,omitempty"`
+	StatusBase int64 `json:"status_base,omitempty"`
+	Withdrawn  bool  `json:"withdrawn,omitempty"`
 }
 
 func (d desiredCoordinate) version() nostrutil.Version {
@@ -150,7 +152,7 @@ func NewConfigConsumer(cfg ConfigConsumerConfig) (*ConfigConsumer, error) {
 		publisher:  cfg.Publisher,
 		now:        cfg.Now,
 		apply:      cfg.Apply,
-		state:      configProjectionState{Version: 2, Desired: map[string]desiredCoordinate{}, Applied: map[string]appliedCoordinate{}, Pending: nil},
+		state:      configProjectionState{Version: 2, Desired: map[string]desiredCoordinate{}, Applied: map[string]appliedCoordinate{}, Pending: nil, StatusBase: map[string]int64{}},
 		activateCh: make(chan struct{}, 1),
 	}
 	if consumer.now == nil {
@@ -204,6 +206,9 @@ func NewConfigConsumer(cfg ConfigConsumerConfig) (*ConfigConsumer, error) {
 		if consumer.state.Pending == nil {
 			consumer.state.Pending = nil
 		}
+		if consumer.state.StatusBase == nil {
+			consumer.state.StatusBase = map[string]int64{}
+		}
 		consumer.state.Last = nil
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read config-fabric projection %s: %w", consumer.path, err)
@@ -234,10 +239,27 @@ func (c *ConfigConsumer) Handle(ctx context.Context, event nostr.Event) error {
 	}
 	next := c.state
 	next.Desired = cloneDesired(c.state.Desired)
+	next.StatusBase = make(map[string]int64, len(c.state.StatusBase)+1)
+	for key, value := range c.state.StatusBase {
+		next.StatusBase[key] = value
+	}
+	// v3 status events share one addressable d per target. Reserve ordered
+	// timestamps for accepted, applied and withdrawn before either concurrent
+	// publication starts; a newer desired version must outrank all three even
+	// when multiple versions arrive in the same wall-clock second.
+	statusKey := projection.ServiceID + "\x00" + projection.PolicyName + "\x00" + projection.Scope
+	// The two-second offset also outranks a pre-upgrade v3 applied status
+	// emitted in this same second, before status_base was persisted.
+	statusBase := c.now().Unix() + 2
+	if statusBase <= c.state.StatusBase[statusKey]+2 {
+		statusBase = c.state.StatusBase[statusKey] + 3
+	}
+	next.StatusBase[statusKey] = statusBase
 	next.Desired[coordinate] = desiredCoordinate{
 		appliedCoordinate: appliedCoordinate{Author: projection.Author, EventID: projection.EventID, Version: projection.Version},
 		CreatedAt:         int64(event.CreatedAt),
 		ExpiresAt:         int64(nostrutil.ExpiresAt(&event)),
+		StatusBase:        statusBase,
 	}
 	next.Pending = append(append([]pendingActivation(nil), c.state.Pending...), pendingActivation{
 		Coordinate: coordinate,
@@ -668,28 +690,46 @@ func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigPro
 		"config_event_id": desiredEventID,
 		"status":          status,
 	}
-	if status == "applied" {
-		content["effective_version"] = projection.Version
-		content["last_applied_event_id"] = desiredEventID
-	} else {
+	if status != "applied" {
 		content["reason"] = strings.TrimSpace(reason)
-	}
-	raw, err := json.Marshal(content)
-	if err != nil {
-		return err
 	}
 	// C-22: stable d coordinate per (service, policy, scope) so addressable
 	// events collapse by NIP-01 replacement instead of growing unbounded.
 	// Status, version and desired-event-id live in tags and content, not in
 	// the d-tag. A 7-day NIP-40 expiration lets the retention sweep clean
 	// obsolete status events.
-	now := c.now()
-	createdAt := nostr.Timestamp(now.Unix())
-	// Terminal statuses (applied, withdrawn) get created_at + 1 so they
-	// always win NIP-01 replacement over intermediate statuses (accepted,
-	// rejected) that share the same stable d-tag.
-	if status == "applied" || status == "withdrawn" {
+	createdAt := nostr.Timestamp(c.now().Unix())
+	coordinate := projection.Author + "\x00" + projection.ServiceID + "\x00" + projection.Scope + "\x00" + projection.PolicyName
+	c.mu.Lock()
+	if desired := c.state.Desired[coordinate]; desired.EventID == desiredEventID && desired.StatusBase > 0 {
+		createdAt = nostr.Timestamp(desired.StatusBase)
+	}
+	// A v3 status replaces the prior status at this d. Carry the effective
+	// state forward on accepted/rejected/withdrawn records so a relay-only
+	// drift reader does not lose the last applied version during activation.
+	suffix := "\x00" + projection.ServiceID + "\x00" + projection.Scope + "\x00" + projection.PolicyName
+	var effective appliedCoordinate
+	for key, applied := range c.state.Applied {
+		if strings.HasSuffix(key, suffix) && applied.Version > effective.Version {
+			effective = applied
+		}
+	}
+	c.mu.Unlock()
+	if status == "applied" {
+		content["effective_version"] = projection.Version
+		content["last_applied_event_id"] = desiredEventID
+	} else if effective.Version > 0 && effective.EventID != "" {
+		content["effective_version"] = effective.Version
+		content["last_applied_event_id"] = effective.EventID
+	}
+	raw, err := json.Marshal(content)
+	if err != nil {
+		return err
+	}
+	if status == "applied" {
 		createdAt++
+	} else if status == "withdrawn" {
+		createdAt += 2
 	}
 	// NIP-40 expiry uses wall-clock time so the sweep can clean old status
 	// events even when the consumer's now() is overridden for testing.

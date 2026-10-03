@@ -282,6 +282,100 @@ func (c *NostrClient) QueryDomain(domain string) ([]nostr.Event, error) {
 	return c.queryTopics(topics)
 }
 
+// SyncConfigFabric catches up the canonical NIP-51/NIP-78 desired documents
+// and this service's config-status records. Relays keep only the current
+// addressable event; older versions published by this CLI remain in its
+// durable outbox for rollback.
+func (c *NostrClient) SyncConfigFabric(ctx context.Context) (*SyncResult, error) {
+	filters := []nostr.Filter{
+		{Kinds: []nostr.Kind{nostr.Kind(kinds.ConfigACLList), nostr.Kind(kinds.ConfigPolicy)}},
+		{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Authors: []nostr.PubKey{c.servicePub}},
+	}
+	sub, err := c.pool.SubscribeAllWithEOSE(ctx, filters)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return &SyncResult{Fresh: false, StaleSince: time.Now()}, nil
+	}
+	defer sub.Close()
+	timeoutCtx, cancel := context.WithTimeout(ctx, c.eoseTimeout)
+	defer cancel()
+	eose := sub.EndOfStoredEvents()
+	relayEOSE := sub.RelayEOSE()
+	fresh := false
+	for {
+		select {
+		case event, ok := <-sub.Events():
+			if !ok {
+				goto doneConfigSync
+			}
+			if event != nil && event.CheckID() && event.VerifySignature() {
+				if _, err := c.store.SaveEvent(*event); err != nil {
+					return nil, fmt.Errorf("store config event %s: %w", event.ID.Hex(), err)
+				}
+			}
+		case <-eose:
+			fresh = true
+			goto doneConfigSync
+		case _, ok := <-relayEOSE:
+			if !ok {
+				relayEOSE = nil
+			}
+		case <-timeoutCtx.Done():
+			goto doneConfigSync
+		}
+	}
+doneConfigSync:
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for {
+		select {
+		case event, ok := <-sub.Events():
+			if !ok {
+				goto configDrained
+			}
+			if event != nil && event.CheckID() && event.VerifySignature() {
+				if _, err := c.store.SaveEvent(*event); err != nil {
+					return nil, fmt.Errorf("store config event %s: %w", event.ID.Hex(), err)
+				}
+			}
+		default:
+			goto configDrained
+		}
+	}
+configDrained:
+	if fresh {
+		return &SyncResult{Fresh: true}, nil
+	}
+	return &SyncResult{Fresh: false, StaleSince: time.Now()}, nil
+}
+
+// QueryConfigFabric returns locally held desired and config-status events.
+func (c *NostrClient) QueryConfigFabric() []nostr.Event {
+	var events []nostr.Event
+	for event := range c.store.QueryEvents(nostr.Filter{Kinds: []nostr.Kind{
+		nostr.Kind(kinds.ConfigACLList), nostr.Kind(kinds.ConfigPolicy), nostr.Kind(kinds.CASControlState),
+	}}) {
+		if event.Kind == nostr.Kind(kinds.CASControlState) && event.PubKey != c.servicePub {
+			continue
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+// ConfigEventByID looks up a retained desired event in the local store.
+func (c *NostrClient) ConfigEventByID(id nostr.ID) (nostr.Event, bool) {
+	for event := range c.store.QueryEvents(nostr.Filter{IDs: []nostr.ID{id}}) {
+		if event.Kind == nostr.Kind(kinds.ConfigACLList) || event.Kind == nostr.Kind(kinds.ConfigPolicy) {
+			return event, true
+		}
+	}
+	return nostr.Event{}, false
+}
+
 func (c *NostrClient) queryTopics(topics []string) ([]nostr.Event, error) {
 	filter := c.buildFilter(topics)
 	var events []nostr.Event

@@ -447,13 +447,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true, domain.PermWriteServices)).Post("/builds", buildH.Register)
 			r.With(dbGate, coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true, domain.PermWriteServices)).Patch("/builds/{id}/status", buildH.UpdateStatus)
 
-			// Config fabric desired-state publisher and rollback
-			if deps.ConfigFabric != nil {
-				configFabricH := handlers.NewConfigFabricHandler(deps.ConfigFabric)
-				r.With(dbGate, platformAdminGate).Post("/config-fabric/events", configFabricH.Publish)
-				r.With(dbGate, platformAdminGate).Post("/config-fabric/rollback", configFabricH.Rollback)
-			}
-
 			// ML control plane (write compatibility actions publish Nostr commands)
 			if mlH != nil {
 				r.With(dbGate, platformAdminGate).Post("/ml/imports", mlH.ImportModel)

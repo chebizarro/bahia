@@ -745,6 +745,7 @@ type ConfigDrift struct {
 	WithdrawnReason string `json:"withdrawn_reason,omitempty"`
 }
 
+// Deprecated: config desired state is signed by the CLI and published directly to relays.
 func (c *Client) PublishConfig(ctx context.Context, request ConfigPublishRequest) (*ConfigPublishReceipt, error) {
 	var receipt ConfigPublishReceipt
 	if err := c.do(ctx, http.MethodPost, "/api/v1/config-fabric/events", request, &receipt); err != nil {
@@ -753,6 +754,7 @@ func (c *Client) PublishConfig(ctx context.Context, request ConfigPublishRequest
 	return &receipt, nil
 }
 
+// Deprecated: use NostrClient config events and local drift projection.
 func (c *Client) ListConfigDrift(ctx context.Context) ([]ConfigDrift, error) {
 	var drift []ConfigDrift
 	if err := c.do(ctx, http.MethodGet, "/api/v1/config-fabric/drift", nil, &drift); err != nil {
@@ -761,6 +763,7 @@ func (c *Client) ListConfigDrift(ctx context.Context) ([]ConfigDrift, error) {
 	return drift, nil
 }
 
+// Deprecated: rollback republishes a locally retained desired event with the operator signer.
 func (c *Client) RollbackConfig(ctx context.Context, eventID string) (*ConfigPublishReceipt, error) {
 	var receipt ConfigPublishReceipt
 	if err := c.do(ctx, http.MethodPost, "/api/v1/config-fabric/rollback", map[string]string{"event_id": eventID}, &receipt); err != nil {
