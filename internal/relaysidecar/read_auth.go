@@ -231,6 +231,13 @@ var publicCPStateTopics = map[string]bool{
 	kinds.CPStateTopicSecretRegistry:              true,
 	kinds.CPStateTopicNotificationChannelRegistry: true,
 
+	// B2 families (bahia-irsry.60): payment records and security findings/
+	// schedules/finding-details are OCK-encrypted (fleet scope); ciphertext only.
+	kinds.CPStateTopicPaymentRecord:         true,
+	kinds.CPStateTopicSecurityFinding:       true,
+	kinds.CPStateTopicSecuritySchedule:      true,
+	kinds.CPStateTopicSecurityFindingDetail: true,
+
 	// Protected topics (NOT in this map):
 	//   security-findings, security-audit — detailed vulnerability data
 	//   assistant-transcript — private conversation content
