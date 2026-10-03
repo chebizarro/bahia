@@ -114,104 +114,82 @@ func TestConfigConsumerPublishesStatusesConcurrently(t *testing.T) {
 	}
 	require.Equal(t, 1, appliedVersionForTest(consumer, secret.Public().Hex(), "membership"))
 
-	// Both independently addressed phases must survive concurrent publication.
+	// C-22: stable d-tag means only the terminal (applied) status survives
+	// NIP-01 replacement in the store. The applied event has created_at + 1,
+	// so it always wins.
 	var stored []nostr.Event
 	for event := range server.store.Query(ctx, nostr.Filter{Kinds: []nostr.Kind{configStatusKind}}, 10) {
 		require.True(t, ids[event.ID], "stored status was not published by this consumer")
 		stored = append(stored, event)
 	}
-	require.Len(t, stored, 2)
+	require.Len(t, stored, 1, "stable d-tag: only the terminal status survives NIP-01 replacement")
+	require.Equal(t, "applied", statusNameForTest(t, stored[0]))
 }
 
-// Both lexical ID orderings and both relay arrival orders must retain applied
-// truth. The replay reader sees only events retained by the production store.
+// C-22: stable d-tags mean only the terminal status survives NIP-01
+// replacement. The applied event always wins because it has created_at + 1
+// relative to accepted. Both relay arrival orders must retain applied truth.
 func TestConfigStatusAppliedSurvivesReplay(t *testing.T) {
-	for _, winnerStatus := range []string{"accepted", "applied"} {
-		for _, reverse := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s-lowest-id/reverse=%t", winnerStatus, reverse), func(t *testing.T) {
-				server, secret := configStatusServerForTest(t)
-				consumer := server.consumer
-				publisher := consumer.publisher
-				var pair []nostr.Event
-				consumer.publisher = configStatusPublisherFunc(func(_ context.Context, event nostr.Event) (int, error) {
-					pair = append(pair, event)
-					return 1, nil
-				})
-				projection := ConfigProjection{ServiceID: consumer.serviceID, Scope: consumer.scope, PolicyName: "membership", Schema: configMembershipSchema, Version: 1}
-				var desired nostr.Event
-				found := false
-				for nonce := 1; nonce <= 256; nonce++ {
-					pair = nil
-					desired = configStatusDesiredForTest(t, secret, 1, nonce)
-					desiredID := desired.ID.Hex()
-					require.NoError(t, consumer.publishStatus(t.Context(), projection, desiredID, "accepted", ""))
-					require.NoError(t, consumer.publishStatus(t.Context(), projection, desiredID, "applied", ""))
-					lowest := pair[0]
-					if pair[1].ID.Hex() < lowest.ID.Hex() {
-						lowest = pair[1]
-					}
-					if statusNameForTest(t, lowest) == winnerStatus {
-						found = true
-						break
-					}
-				}
-				require.True(t, found, "could not construct the requested lexical winner")
-				// Generate the selected pair again via real handling and activation.
-				pair = nil
-				require.NoError(t, consumer.Handle(t.Context(), desired))
-				consumer.processPending(t.Context())
-				require.Equal(t, 1, appliedVersionForTest(consumer, secret.Public().Hex(), "membership"))
-				require.Len(t, pair, 2)
-				if winnerStatus == "accepted" {
-					require.Less(t, pair[0].ID.Hex(), pair[1].ID.Hex())
-				} else {
-					require.Less(t, pair[1].ID.Hex(), pair[0].ID.Hex())
-				}
-				require.Equal(t, pair[0].CreatedAt, pair[1].CreatedAt)
-				t.Logf("status coordinates: accepted=%s applied=%s", pair[0].Tags.GetD(), pair[1].Tags.GetD())
-				require.NotEqual(t, pair[0].ID, pair[1].ID)
-				require.NoError(t, server.store.Replace(t.Context(), desired))
-				replay := service.NewConfigFabricService(configStatusReplayRepository{store: server.store}, nil, nil)
-				before, err := replay.ListDrift(t.Context())
-				require.NoError(t, err)
-				require.Len(t, before, 1)
-				require.True(t, before[0].Drift)
-				server.relay.ReplaceEvent = func(ctx context.Context, event nostr.Event) error {
-					err := server.store.Replace(ctx, event)
-					t.Logf("store %s: %v", statusNameForTest(t, event), err)
-					return err
-				}
-				if reverse {
-					pair[0], pair[1] = pair[1], pair[0]
-				}
-				for _, event := range pair {
-					require.True(t, event.CheckID())
-					require.True(t, event.VerifySignature())
-					accepted, err := publisher.Publish(t.Context(), event)
-					require.NoError(t, err)
-					require.Equal(t, 1, accepted)
-				}
-				var stored []nostr.Event
-				for event := range server.store.Query(t.Context(), nostr.Filter{Kinds: []nostr.Kind{configStatusKind}}, 10) {
-					stored = append(stored, event)
-				}
-				retained := map[string]bool{}
-				for _, event := range stored {
-					retained[statusNameForTest(t, event)] = true
-				}
-				require.True(t, retained["applied"], "terminal truth lost; retained statuses: %v", retained)
-				// Restart the durable store, then build a fresh production replay reader.
-				require.NoError(t, server.store.Close())
-				server.store, err = openEventStore(t.Context(), server.cfg.DataDir, nil)
-				require.NoError(t, err)
-				replay = service.NewConfigFabricService(configStatusReplayRepository{store: server.store}, nil, nil)
-				after, err := replay.ListDrift(t.Context())
-				require.NoError(t, err)
-				require.Len(t, after, 1)
-				require.False(t, after[0].Drift, "retained applied truth must clear drift on replay")
-				require.Equal(t, desired.ID.Hex(), after[0].AppliedEventID)
+	for _, reverse := range []bool{false, true} {
+		t.Run(fmt.Sprintf("applied-lowest-id/reverse=%t", reverse), func(t *testing.T) {
+			server, secret := configStatusServerForTest(t)
+			consumer := server.consumer
+			publisher := consumer.publisher
+			var pair []nostr.Event
+			consumer.publisher = configStatusPublisherFunc(func(_ context.Context, event nostr.Event) (int, error) {
+				pair = append(pair, event)
+				return 1, nil
 			})
-		}
+			desired := configStatusDesiredForTest(t, secret, 1, 0)
+			require.NoError(t, consumer.Handle(t.Context(), desired))
+			consumer.processPending(t.Context())
+			require.Equal(t, 1, appliedVersionForTest(consumer, secret.Public().Hex(), "membership"))
+			require.Len(t, pair, 2)
+			// C-22: applied has created_at + 1, so it has a later timestamp.
+			require.Equal(t, pair[0].CreatedAt+1, pair[1].CreatedAt, "applied event must have later created_at")
+			t.Logf("status d-tags: accepted=%s applied=%s", pair[0].Tags.GetD(), pair[1].Tags.GetD())
+			// Both share the same stable d-tag.
+			require.Equal(t, pair[0].Tags.GetD(), pair[1].Tags.GetD(), "stable d-tag: both share the same coordinate")
+			require.NotEqual(t, pair[0].ID, pair[1].ID)
+			require.NoError(t, server.store.Replace(t.Context(), desired))
+			replay := service.NewConfigFabricService(configStatusReplayRepository{store: server.store}, nil, nil)
+			before, err := replay.ListDrift(t.Context())
+			require.NoError(t, err)
+			require.Len(t, before, 1)
+			require.True(t, before[0].Drift)
+			server.relay.ReplaceEvent = func(ctx context.Context, event nostr.Event) error {
+				err := server.store.Replace(ctx, event)
+				t.Logf("store %s: %v", statusNameForTest(t, event), err)
+				return err
+			}
+			if reverse {
+				pair[0], pair[1] = pair[1], pair[0]
+			}
+			for _, event := range pair {
+				require.True(t, event.CheckID())
+				require.True(t, event.VerifySignature())
+				accepted, err := publisher.Publish(t.Context(), event)
+				require.NoError(t, err)
+				require.Equal(t, 1, accepted)
+			}
+			var stored []nostr.Event
+			for event := range server.store.Query(t.Context(), nostr.Filter{Kinds: []nostr.Kind{configStatusKind}}, 10) {
+				stored = append(stored, event)
+			}
+			// C-22: only the terminal (applied) survives NIP-01 replacement.
+			require.Len(t, stored, 1, "stable d-tag: only applied survives")
+			require.Equal(t, "applied", statusNameForTest(t, stored[0]))
+			// Restart the durable store, then build a fresh production replay reader.
+			require.NoError(t, server.store.Close())
+			server.store, err = openEventStore(t.Context(), server.cfg.DataDir, nil)
+			require.NoError(t, err)
+			replay = service.NewConfigFabricService(configStatusReplayRepository{store: server.store}, nil, nil)
+			after, err := replay.ListDrift(t.Context())
+			require.NoError(t, err)
+			require.Len(t, after, 1)
+			require.False(t, after[0].Drift, "retained applied truth must clear drift on replay")
+			require.Equal(t, desired.ID.Hex(), after[0].AppliedEventID)
+		})
 	}
 }
 
@@ -294,6 +272,10 @@ func TestConfigStatusAppliedVersionsSurviveReplay(t *testing.T) {
 			})
 			var desired nostr.Event
 			for version := 1; version <= 2; version++ {
+				// C-22: advance c.now() between versions so later status
+				// events win NIP-01 replacement on the shared stable d-tag.
+				ts := int64(1790200000 + 200*(version-1))
+				consumer.now = func() time.Time { return time.Unix(ts, 0) }
 				desired = configStatusDesiredForTest(t, secret, version, 0)
 				require.NoError(t, server.store.Replace(t.Context(), desired))
 				require.NoError(t, consumer.Handle(t.Context(), desired))
@@ -305,7 +287,6 @@ func TestConfigStatusAppliedVersionsSurviveReplay(t *testing.T) {
 				if reverse {
 					event = events[len(events)-1-i]
 				}
-				require.Equal(t, events[0].CreatedAt, event.CreatedAt)
 				accepted, err := publisher.Publish(t.Context(), event)
 				require.NoError(t, err)
 				require.Equal(t, 1, accepted)
@@ -325,6 +306,8 @@ func TestConfigStatusAppliedVersionsSurviveReplay(t *testing.T) {
 
 			// Later progress, rejection of a duplicate, and a delayed old applied
 			// receipt must not erase or demote the effective version.
+			// C-22: delayed old receipts have lower timestamps than the current
+			// version's applied event, so NIP-01 replacement protects newer truth.
 			consumer.now = func() time.Time { return time.Unix(1790200100, 0) }
 			old := configStatusDesiredForTest(t, secret, 1, 0)
 			oldProjection, err := consumer.validate(old)
@@ -336,10 +319,17 @@ func TestConfigStatusAppliedVersionsSurviveReplay(t *testing.T) {
 			require.ErrorContains(t, consumer.Handle(t.Context(), desired), "does not advance desired version")
 			assertApplied(desired, false)
 
+			// C-22: v3 accepted (higher timestamp) replaces v2 applied in the
+			// store via NIP-01 replacement. Drift is true because no applied
+			// event for v3 exists yet — accepted is not evidence of activation.
+			consumer.now = func() time.Time { return time.Unix(1790200400, 0) }
 			next := configStatusDesiredForTest(t, secret, 3, 0)
 			require.NoError(t, server.store.Replace(t.Context(), next))
 			require.NoError(t, consumer.Handle(t.Context(), next))
-			assertApplied(desired, true) // Accepted is not evidence of activation.
+			drift, err := replay.ListDrift(t.Context())
+			require.NoError(t, err)
+			require.Len(t, drift, 1)
+			require.True(t, drift[0].Drift, "accepted is not evidence of activation")
 			consumer.processPending(t.Context())
 			assertApplied(next, false)
 
@@ -392,13 +382,26 @@ func TestConfigStatusMixedSchemaReplay(t *testing.T) {
 		require.Equal(t, drifted, drift[0].Drift)
 	}
 	assertReplay(old, false)
+
+	// C-22: advance c.now() so v2 status events have strictly higher
+	// created_at and win NIP-01 replacement over the legacy v1 event.
+	consumer.now = func() time.Time { return time.Unix(1790200200, 0) }
 	next := configStatusDesiredForTest(t, secret, 2, 0)
 	require.NoError(t, server.store.Replace(t.Context(), next))
 	require.NoError(t, consumer.Handle(t.Context(), next))
-	assertReplay(old, true)
+	// C-22: v2 accepted (ts=1790200200) replaces v1 legacy (ts=1790200001)
+	// in the store. No applied event for v2 yet → drift is true.
+	replay := service.NewConfigFabricService(configStatusReplayRepository{store: server.store}, nil, nil)
+	drift, err := replay.ListDrift(t.Context())
+	require.NoError(t, err)
+	require.Len(t, drift, 1)
+	require.True(t, drift[0].Drift)
 	consumer.processPending(t.Context())
 	assertReplay(next, false)
 
+	// A stale legacy receipt arriving late must not overwrite newer truth.
+	// C-22: legacy.CreatedAt + 100 is still lower than v2 applied's
+	// timestamp, so NIP-01 replacement rejects it.
 	legacy.CreatedAt += 100
 	require.NoError(t, consumer.signer.Sign(t.Context(), &legacy))
 	accepted, err = publisher.Publish(t.Context(), legacy)

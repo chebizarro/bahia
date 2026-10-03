@@ -27,6 +27,7 @@ const (
 )
 
 const (
+	configStatusSchemaV3     = "cascadia.config.status.v3"
 	configStatusSchema       = "cascadia.config.status.v2"
 	legacyConfigStatusSchema = "cascadia.config.status.v1"
 	configEntityType         = "config-fabric.desired"
@@ -690,7 +691,7 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 		return status, err
 	}
 	schema, err := exactlyOneTag(tags, "schema")
-	if err != nil || (schema != configStatusSchema && schema != legacyConfigStatusSchema) {
+	if err != nil || (schema != configStatusSchemaV3 && schema != configStatusSchema && schema != legacyConfigStatusSchema) {
 		return status, fmt.Errorf("invalid status schema tag")
 	}
 	if domain, err := exactlyOneTag(tags, "domain"); err != nil || domain != "config-status" {
@@ -720,9 +721,16 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 	}
 	status.PolicyName = schemaMatch[1]
 	dTag, err := exactlyOneTag(tags, "d")
-	expectedDTag := "config-status:" + status.ServiceID + ":" + status.PolicyName + ":" + status.Scope
-	if schema == configStatusSchema {
-		expectedDTag += ":" + status.ConfigEventID + ":" + status.Status
+	stableDTag := "config-status:" + status.ServiceID + ":" + status.PolicyName + ":" + status.Scope
+	// v3 uses a stable d per (service, policy, scope); v2 embeds eventID+status.
+	var expectedDTag string
+	switch schema {
+	case configStatusSchemaV3:
+		expectedDTag = stableDTag
+	case configStatusSchema:
+		expectedDTag = stableDTag + ":" + status.ConfigEventID + ":" + status.Status
+	default:
+		expectedDTag = stableDTag
 	}
 	if err != nil || dTag != expectedDTag {
 		return status, fmt.Errorf("invalid config status d tag")
@@ -731,12 +739,12 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 		if status.EffectiveVersion < 1 || !isHex(status.LastAppliedEventID, 32) {
 			return status, fmt.Errorf("invalid applied status content")
 		}
-		if schema == configStatusSchema && (status.EffectiveVersion != status.Version || status.LastAppliedEventID != status.ConfigEventID) {
+		if (schema == configStatusSchema || schema == configStatusSchemaV3) && (status.EffectiveVersion != status.Version || status.LastAppliedEventID != status.ConfigEventID) {
 			return status, fmt.Errorf("applied status target mismatch")
 		}
 	} else if status.Status == "rejected" || status.Status == "withdrawn" {
-		if status.Status == "withdrawn" && schema != configStatusSchema {
-			return status, fmt.Errorf("withdrawn status requires %s", configStatusSchema)
+		if status.Status == "withdrawn" && schema == legacyConfigStatusSchema {
+			return status, fmt.Errorf("withdrawn status requires %s or later", configStatusSchema)
 		}
 		if strings.TrimSpace(status.Reason) == "" || looksLikeSecretValue(status.Reason) {
 			return status, fmt.Errorf("invalid %s status reason", status.Status)
