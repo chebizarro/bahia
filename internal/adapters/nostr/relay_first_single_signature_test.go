@@ -153,7 +153,7 @@ func TestRelayFirstEnvironmentCreateAndUpdatesAreSignedOnceWithExplicitUnits(t *
 	assertSignedOnce(t, h, events.EventEnvironmentCreated, KindEnvironmentRegistry, env.ID, 1)
 
 	// The record's explicit units round-trip: the stored units' ids and
-	// declared fields, sorted by key, without the repository's timestamps.
+	// declared fields and timestamps, sorted by key.
 	record := decodeRegistryRecord(t, latestOn(t, h.relayFirst, KindEnvironmentRegistry, env.ID))
 	storedUnits, err := h.source.ListEnvironmentDeploymentUnits(ctx, env.ID)
 	if err != nil {
@@ -245,11 +245,11 @@ func assertRecordUnits(t *testing.T, got, stored []domain.DeploymentUnit, wantKe
 		if unit.Key != key || unit.Implicit {
 			t.Fatalf("record unit %d = %+v, want explicit %q (sorted by key)", i, unit, key)
 		}
-		if !unit.CreatedAt.IsZero() || !unit.UpdatedAt.IsZero() || unit.EnvironmentID != uuid.Nil {
-			t.Fatalf("record unit %q carries repository fields: %+v", key, unit)
+		if unit.EnvironmentID != uuid.Nil {
+			t.Fatalf("record unit %q carries environment_id: %+v", key, unit)
 		}
 		want := unitByKey(stored, key)
-		want.EnvironmentID, want.CreatedAt, want.UpdatedAt = uuid.Nil, time.Time{}, time.Time{}
+		want.EnvironmentID = uuid.Nil
 		gotJSON, _ := json.Marshal(unit)
 		wantJSON, _ := json.Marshal(want)
 		if string(gotJSON) != string(wantJSON) {
@@ -301,7 +301,8 @@ func (r *relayFirstTestUnitRepo) Create(_ context.Context, unit *domain.Deployme
 		unit.ID = domain.NewEntityID()
 	}
 	domain.NormalizeDeploymentUnitTargeting(unit)
-	unit.CreatedAt, unit.UpdatedAt, unit.Implicit = time.Now().UTC(), time.Now().UTC(), false
+	domain.StampCreateRevision(&unit.CreatedAt, &unit.UpdatedAt)
+	unit.Implicit = false
 	r.rows[unit.ID] = *unit
 	return nil
 }
@@ -313,7 +314,7 @@ func (r *relayFirstTestUnitRepo) Update(_ context.Context, unit *domain.Deployme
 		return repository.ErrNotFound
 	}
 	domain.NormalizeDeploymentUnitTargeting(unit)
-	unit.UpdatedAt, unit.Implicit = time.Now().UTC(), false
+	unit.UpdatedAt, unit.Implicit = domain.NewRevisionTime(), false
 	r.rows[unit.ID] = *unit
 	return nil
 }

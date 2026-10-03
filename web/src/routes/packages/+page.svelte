@@ -6,30 +6,9 @@
   import {
     packageRepositories,
     packageArtifacts,
-    operations,
-    loadPackageRepositories,
-    loadPackageArtifacts
+    operations
   } from '$lib/stores';
   import { latestPackageOperation, packageOperationLabel } from './page-model.js';
-
-  let loading = $state(true);
-  let error = $state(null);
-
-  $effect(() => {
-    void loadPackages();
-  });
-
-  async function loadPackages() {
-    loading = true;
-    error = null;
-    try {
-      await Promise.all([loadPackageRepositories(), loadPackageArtifacts()]);
-    } catch (err) {
-      error = err.message || 'Failed to load package repositories';
-    } finally {
-      loading = false;
-    }
-  }
 
   function artifactCount(repository) {
     return packageArtifacts.filter((artifact) => artifact.repository_id === repository.id && !artifact.deleted).length;
@@ -64,11 +43,7 @@
     </div>
   </div>
 
-  {#if loading}
-    <p class="loading">Loading package repositories...</p>
-  {:else if error}
-    <EmptyState iconComponent={WarningIcon} title="Error loading packages" message={error} />
-  {:else if rows.length === 0}
+  {#if rows.length === 0}
     <EmptyState
       iconComponent={ArtifactIcon}
       title="No package repositories yet"
@@ -104,9 +79,4 @@
     font-size: 0.875rem;
   }
 
-  .loading {
-    color: var(--text-muted);
-    padding: 2rem;
-    text-align: center;
-  }
 </style>

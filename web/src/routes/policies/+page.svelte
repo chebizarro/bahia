@@ -9,14 +9,12 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import PolicyRuleBuilder from '$lib/components/PolicyRuleBuilder.svelte';
-  import { policies, environments, loadPolicies, loadEnvironments } from '$lib/stores';
+  import { policies, environments } from '$lib/stores';
   import { createPolicy as createPolicyCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { isEntityIdConflict, mintEntityId } from '$lib/entity-id.js';
   import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
   import { CloseIcon, EnvironmentIcon, PolicyIcon, SuccessIcon } from '$lib/icons/domain-icons.js';
 
-  let loading = $state(true);
-  let error = $state(null);
   let enforcementFilter = $state('all');
   let enabledFilter = $state('all');
 
@@ -42,21 +40,6 @@
     { value: 'warn', label: 'Warn' },
     { value: 'block', label: 'Block' }
   ];
-
-  $effect(() => {
-    void loadPolicyList();
-  });
-
-  async function loadPolicyList() {
-    try {
-      await Promise.all([loadPolicies(), loadEnvironments()]);
-    } catch (err) {
-      console.error('Failed to load data:', err);
-      error = err.message;
-    } finally {
-      loading = false;
-    }
-  }
 
   let filterEnforcementOptions = [
     { value: 'all', label: 'All enforcement levels' },
@@ -100,7 +83,7 @@
   );
 
   let columns = $derived([
-    { key: 'name', label: 'Name', icon: PolicyIcon, text: (r) => r.name || '-' },
+    { key: 'name', label: 'Name', icon: PolicyIcon, text: (r) => r.name || '-', href: (r) => `/policies/${encodeURIComponent(r.id)}` },
     {
       key: 'environment_id',
       label: 'Scope',
@@ -201,7 +184,6 @@
       await createPolicyCommand(payload);
       
       closeCreateModal();
-      await loadPolicies();
     } catch (err) {
       createError = isEntityIdConflict(err)
         ? 'This policy was already created with different settings. Close the dialog and start again to create another policy.'
@@ -223,17 +205,11 @@
     </LoadingButton>
   </div>
 
-  {#if loading}
-    <p class="loading">Loading...</p>
-  {:else if error}
-    <p class="error">Error: {error}</p>
-  {:else if policies.length === 0}
+  {#if policies.length === 0}
     <EmptyState
       iconComponent={PolicyIcon}
       title="No policies yet"
       message="Create your first deployment policy to enforce rules and controls"
-      actionLabel="Create Policy"
-      onAction={openCreateModal}
     />
   {:else}
     <div class="filters" aria-label="Policy filters">
@@ -255,7 +231,7 @@
       </div>
     </div>
 
-    <Table {columns} data={filteredPolicies} onRowClick={(row) => goto(`/policies/${row.id}`)} />
+    <Table {columns} data={filteredPolicies} rowClickable={true} onRowClick={(row) => goto(`/policies/${row.id}`)} />
   {/if}
 </div>
 
@@ -387,15 +363,6 @@
     color: var(--text-muted);
     font-size: 0.875rem;
   }
-  .loading, .error {
-    color: var(--text-muted);
-    padding: 2rem;
-    text-align: center;
-  }
-  .error {
-    color: var(--error);
-  }
-
   .filters {
     display: flex;
     gap: 1rem;

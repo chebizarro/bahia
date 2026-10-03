@@ -639,13 +639,13 @@ test.describe('Dashboard Smoke Test', () => {
     await expect(pendingLink.first()).toHaveAttribute('href', '/deployments/pending');
   });
 
-  test('should display recent spend cost summary card', async ({ page }) => {
+  test('should display an empty store-first spend summary without relay payment records', async ({ page }) => {
     await page.goto('/');
 
     const spendCard = page.locator('main a[href="/payments"] .card:has-text("Recent Spend")');
     await expect(spendCard).toBeVisible();
-    await expect(spendCard.locator('.card-value')).toHaveText('2,000 sats');
-    await expect(spendCard.locator('.card-subtitle')).toHaveText('2 recent payments');
+    await expect(spendCard.locator('.card-value')).toHaveText('0 sats');
+    await expect(spendCard.locator('.card-subtitle')).toHaveText('No recent spend');
 
     await expect.poll(() => page.evaluate(() => {
       const trace = window.__BAHIA_E2E_DASHBOARD_ENCRYPTED_PAYMENT_TRACE || [];
@@ -653,9 +653,9 @@ test.describe('Dashboard Smoke Test', () => {
       const relays = Array.from(new Set(trace.map((entry) => String(entry.relay || '').replace(/\/$/, ''))));
       return { workers, relays, operations: Array.from(new Set(trace.map((entry) => entry.operation))) };
     })).toEqual({
-      workers: ['npub1worker1abc', 'npub1worker2def', 'npub1worker3ghi'],
-      relays: [ENCRYPTED_RELAY],
-      operations: ['payments.history']
+      workers: [],
+      relays: [],
+      operations: []
     });
   });
 
@@ -676,7 +676,7 @@ test.describe('Dashboard Smoke Test', () => {
     await expect(spendCard.locator('.card-subtitle')).toHaveText('No recent spend');
   });
 
-  test('should keep recent spend totals when one worker history request fails', async ({ page }) => {
+  test('should ignore obsolete ContextVM worker history failures', async ({ page }) => {
     await seedEncryptedDashboardPayments(page, {
       paymentErrorsByWorker: {
         npub1worker2def: 'worker history unavailable'
@@ -687,8 +687,8 @@ test.describe('Dashboard Smoke Test', () => {
 
     const spendCard = page.locator('main a[href="/payments"] .card:has-text("Recent Spend")');
     await expect(spendCard).toBeVisible();
-    await expect(spendCard.locator('.card-value')).toHaveText('1,200 sats');
-    await expect(spendCard.locator('.card-subtitle')).toHaveText('1 recent payment; 1 worker unavailable');
+    await expect(spendCard.locator('.card-value')).toHaveText('0 sats');
+    await expect(spendCard.locator('.card-subtitle')).toHaveText('No recent spend');
   });
   
   test('should display quick actions section', async ({ page }) => {

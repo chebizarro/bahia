@@ -1,6 +1,5 @@
 <script>
-  import { untrack } from 'svelte';
-  import { workers, workerCleanupExecutions, workerJobs, operations, loading, loadWorkers } from '$lib/stores';
+  import { workers, workerCleanupExecutions, workerJobs, operations } from '$lib/stores';
   import { goto } from '$app/navigation';
   import { StandardIcon } from '$lib/icons/domain-icons.js';
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
@@ -103,14 +102,6 @@
   let notice = $state(null);
   let cleanupDialogOpen = $state(false);
   let cleanupWorker = $state(null);
-  let workersPageInitialized = $state(false);
-
-  $effect(() => {
-    if (workersPageInitialized) return;
-    workersPageInitialized = true;
-    void untrack(() => loadWorkers());
-  });
-
   const capabilityOptions = $derived(collectWorkerValues(workers, workerCapabilityValues));
   const runtimeOptions = $derived(collectWorkerValues(workers, workerRuntimeValues));
   const formatOptions = $derived(collectWorkerValues(workers, workerFormatValues));
@@ -683,9 +674,6 @@
   </div>
   {/if}
 
-  {#if loading.workers}
-    <p class="loading">Loading...</p>
-  {:else}
     <div class="table-container">
       <table>
         <thead>
@@ -796,7 +784,6 @@
         </tbody>
       </table>
     </div>
-  {/if}
 </div>
 
 <CleanupRequestDialog

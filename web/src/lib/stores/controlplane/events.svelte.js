@@ -1,54 +1,15 @@
 import {
-  BAHIA_AUDIT_KINDS,
   BAHIA_CP_STATE_SCHEMA,
   BAHIA_READ_MODEL_KINDS,
-  BAHIA_SBOM_KINDS,
   BAHIA_STATE_SCHEMAS,
-  BAHIA_STATUS_KINDS,
   CASCADIA_CONTROLPLANE_STATE,
   CP_STATE_TOPIC_BY_SCHEMA,
-  LOOM_WORKER_ADVERTISEMENT,
-  LOOM_JOB_REQUEST,
-  LOOM_JOB_STATUS_UPDATE,
-  LOOM_JOB_RESULT,
-  SBOM_AVAILABILITY_LIST,
-  SBOM_REFERENCE,
   parseJsonContent
 } from '../../nostr/client.js';
 import { CP_STATE_SCHEMA_BY_LEGACY_KIND } from '../../nostr/cp-state.js';
+import { KEY_ENVELOPE_TOPIC, ORG_MEMBER_TOPIC } from '../../nostr/confidential.js';
 import { controlplaneConnection } from './connection.svelte.js';
-import { applyServiceEvent } from '../collections/services.svelte.js';
-import { applyEnvironmentEvent } from '../collections/environments.svelte.js';
 import { deploymentApplicators } from '../collections/deployments.svelte.js';
-import {
-  applyWorkerEvent,
-  applyWorkerStateEvent,
-  applyLoomJobRequestEvent,
-  applyLoomJobStatusEvent,
-  applyLoomJobResultEvent,
-  workerApplicators
-} from '../collections/workers.svelte.js';
-import {
-  BACKUP_ATTESTATION_KINDS,
-  applyBackupAttestationEvent,
-  backupApplicators
-} from '../collections/backup.svelte.js';
-import { mlApplicators } from '../collections/ml.svelte.js';
-import { applyActivityEvent } from '../collections/activity.svelte.js';
-import {
-  CANONICAL_OPERATION_KINDS,
-  EXTERNAL_OPERATION_KINDS,
-  HIVE_CI_OPERATION_KINDS,
-  OPERATION_REQUEST_KINDS,
-  OPERATION_RESULT_KINDS,
-  OPERATION_STATUS_KINDS,
-  applyHiveCIWorkflowResultEvent,
-  applyHiveCIWorkflowRunEvent,
-  applyOperationRequestEvent,
-  applyOperationResultEvent,
-  applyOperationStatusEvent
-} from '../collections/operations.svelte.js';
-import { applySBOMReferenceEvent, applySBOMAvailabilityEvent } from '../collections/sbom.svelte.js';
 import {
   readCachedControlplaneEvents,
   recordPersistedEvent,
@@ -57,17 +18,9 @@ import {
   schedulePersistCachedCollections
 } from '../collections/index.svelte.js';
 
-const ACTIVITY_BACKFILL_LIMIT = 100;
 const READ_MODEL_LIMIT = 1000;
-const ACTIVITY_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
-const LOOM_JOB_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
-const LOOM_JOB_LIMIT = 500;
-const OPERATION_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
-const OPERATION_LIMIT = 1000;
-const LOOM_JOB_KINDS = [LOOM_JOB_REQUEST, LOOM_JOB_STATUS_UPDATE, LOOM_JOB_RESULT];
 const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS;
 const NON_STATE_READ_MODEL_KINDS = CANONICAL_READ_MODEL_KINDS.filter((kind) => kind !== CASCADIA_CONTROLPLANE_STATE);
-const ACTIVITY_KINDS = [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS, ...BAHIA_SBOM_KINDS];
 
 const replaceableEvents = new Map();
 const seenEventIds = new Set();
@@ -87,6 +40,8 @@ export function controlplaneStateTopics() {
     const topic = CP_STATE_TOPIC_BY_SCHEMA[route];
     if (topic) topics.add(topic);
   }
+  topics.add(KEY_ENVELOPE_TOPIC);
+  topics.add(ORG_MEMBER_TOPIC);
   return [...topics].sort();
 }
 
@@ -94,44 +49,12 @@ export function readModelFilters() {
   const authorFilter = canonicalAuthorFilter();
   return [
     { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': controlplaneStateTopics(), limit: READ_MODEL_LIMIT, ...authorFilter },
-    { kinds: NON_STATE_READ_MODEL_KINDS, limit: READ_MODEL_LIMIT, ...authorFilter },
-    { kinds: [LOOM_WORKER_ADVERTISEMENT], limit: READ_MODEL_LIMIT },
-    {
-      kinds: LOOM_JOB_KINDS,
-      since: Math.floor(Date.now() / 1000) - LOOM_JOB_BACKFILL_SECONDS,
-      limit: LOOM_JOB_LIMIT
-    },
-    {
-      kinds: CANONICAL_OPERATION_KINDS,
-      since: Math.floor(Date.now() / 1000) - OPERATION_BACKFILL_SECONDS,
-      limit: OPERATION_LIMIT,
-      ...authorFilter
-    },
-    {
-      kinds: BACKUP_ATTESTATION_KINDS,
-      since: Math.floor(Date.now() / 1000) - OPERATION_BACKFILL_SECONDS,
-      limit: OPERATION_LIMIT,
-      ...authorFilter
-    },
-    {
-      kinds: EXTERNAL_OPERATION_KINDS,
-      since: Math.floor(Date.now() / 1000) - OPERATION_BACKFILL_SECONDS,
-      limit: OPERATION_LIMIT
-    },
-    {
-      kinds: ACTIVITY_KINDS,
-      since: Math.floor(Date.now() / 1000) - ACTIVITY_BACKFILL_SECONDS,
-      limit: ACTIVITY_BACKFILL_LIMIT,
-      ...authorFilter
-    }
+    { kinds: NON_STATE_READ_MODEL_KINDS, limit: READ_MODEL_LIMIT, ...authorFilter }
   ];
 }
 
 function isCanonicalBahiaKind(kind) {
-  return CANONICAL_READ_MODEL_KINDS.includes(kind)
-    || ACTIVITY_KINDS.includes(kind)
-    || CANONICAL_OPERATION_KINDS.includes(kind)
-    || BACKUP_ATTESTATION_KINDS.includes(kind);
+  return CANONICAL_READ_MODEL_KINDS.includes(kind);
 }
 
 function shouldAcceptControlplaneEvent(event) {
@@ -180,84 +103,20 @@ export function resetEventRouting() {
 }
 
 const handlers = new Map([
-  [BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, applyServiceEvent],
-  [BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY, applyEnvironmentEvent],
-  [BAHIA_STATE_SCHEMAS.SERVICE_STATE, deploymentApplicators.serviceState],
   [BAHIA_STATE_SCHEMAS.LLM_ROUTE_REGISTRY, deploymentApplicators.llmRoute],
   [BAHIA_STATE_SCHEMAS.LLM_ROUTE_STATE, deploymentApplicators.llmRouteState],
   [BAHIA_STATE_SCHEMAS.ARTIFACT_REGISTRY, deploymentApplicators.artifact],
   [BAHIA_STATE_SCHEMAS.BUILD_REGISTRY, deploymentApplicators.build],
   [BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY, deploymentApplicators.intent],
   [BAHIA_STATE_SCHEMAS.DEPLOYMENT_RUN_REGISTRY, deploymentApplicators.run],
-  [BAHIA_STATE_SCHEMAS.POLICY_REGISTRY, deploymentApplicators.policy],
-  [BAHIA_STATE_SCHEMAS.PACKAGE_REPOSITORY_REGISTRY, deploymentApplicators.packageRepository],
-  [BAHIA_STATE_SCHEMAS.PACKAGE_ARTIFACT_REGISTRY, deploymentApplicators.packageArtifact],
-  [BAHIA_STATE_SCHEMAS.PACKAGE_PROMOTION_REGISTRY, deploymentApplicators.packagePromotion],
-  [LOOM_WORKER_ADVERTISEMENT, applyWorkerEvent],
-  [LOOM_JOB_REQUEST, applyLoomJobRequestEvent],
-  [LOOM_JOB_STATUS_UPDATE, applyLoomJobStatusEvent],
-  [LOOM_JOB_RESULT, applyLoomJobResultEvent],
-  ...OPERATION_REQUEST_KINDS.map((kind) => [kind, applyOperationRequestEvent]),
-  ...OPERATION_STATUS_KINDS.map((kind) => [kind, applyOperationStatusEvent]),
-  ...OPERATION_RESULT_KINDS.map((kind) => [kind, applyOperationResultEvent]),
-  [HIVE_CI_OPERATION_KINDS[0], applyHiveCIWorkflowRunEvent],
-  [HIVE_CI_OPERATION_KINDS[1], applyHiveCIWorkflowResultEvent],
-  [BAHIA_STATE_SCHEMAS.WORKER_STATE, applyWorkerStateEvent],
-  [BAHIA_STATE_SCHEMAS.WORKER_ASSIGNMENT_STATE, workerApplicators.assignment],
-  [BAHIA_STATE_SCHEMAS.WORKER_DRAIN_STATUS, workerApplicators.drainStatus],
-  [BAHIA_STATE_SCHEMAS.WORKER_ELIGIBILITY_PREVIEW, workerApplicators.eligibilityPreview],
-  [BAHIA_STATE_SCHEMAS.WORKER_CLEANUP_EXECUTION, workerApplicators.cleanupExecution],
-  [BAHIA_STATE_SCHEMAS.BACKUP_DEFINITION_REGISTRY, backupApplicators.definition],
-  [BAHIA_STATE_SCHEMAS.BACKUP_POLICY_REGISTRY, backupApplicators.policy],
-  [BAHIA_STATE_SCHEMAS.BACKUP_REPOSITORY_REGISTRY, backupApplicators.repository],
-  [BAHIA_STATE_SCHEMAS.BACKUP_RETENTION_REGISTRY, backupApplicators.retention],
-  [BAHIA_STATE_SCHEMAS.BACKUP_RECIPE_REGISTRY, backupApplicators.recipe],
-  [BAHIA_STATE_SCHEMAS.BACKUP_RUN_STATE, backupApplicators.run],
-  [BAHIA_STATE_SCHEMAS.BACKUP_VERIFICATION_STATE, backupApplicators.verification],
-  [BAHIA_STATE_SCHEMAS.BACKUP_RESTORE_STATE, backupApplicators.restore],
-  [BAHIA_STATE_SCHEMAS.BACKUP_RUNTIME_OBSERVATION_STATE, backupApplicators.runtimeObservation],
-  ...BACKUP_ATTESTATION_KINDS.map((kind) => [kind, applyBackupAttestationEvent]),
-  [BAHIA_STATE_SCHEMAS.ML_MODEL_REGISTRY, mlApplicators.model],
-  [BAHIA_STATE_SCHEMAS.ML_MODEL_VERSION_REGISTRY, mlApplicators.modelVersion],
-  [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_REGISTRY, mlApplicators.endpoint],
-  [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_STATE, mlApplicators.endpointState],
-  [30078, (event, replaceableEvents) => {
-    const sbomChanged = applySBOMReferenceEvent(event);
-    const activityChanged = applyActivityEvent(event);
-    return sbomChanged || activityChanged;
-  }],
-  [30004, (event, replaceableEvents) => {
-    const sbomChanged = applySBOMAvailabilityEvent(event);
-    const activityChanged = applyActivityEvent(event);
-    return sbomChanged || activityChanged;
-  }]
 ]);
 
 // Routes whose events feed a persisted (cached) collection. The cache stores
 // these raw events so hydration can replay them through applyControlplaneEvent.
 const PERSISTED_ROUTE_COLLECTIONS = new Map([
-  [BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY, 'services'],
-  [BAHIA_STATE_SCHEMAS.ENVIRONMENT_REGISTRY, 'environments'],
-  [BAHIA_STATE_SCHEMAS.SERVICE_STATE, 'states'],
   [BAHIA_STATE_SCHEMAS.LLM_ROUTE_REGISTRY, 'llmRoutes'],
   [BAHIA_STATE_SCHEMAS.ARTIFACT_REGISTRY, 'artifacts'],
   [BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY, 'deploymentIntents'],
-  [BAHIA_STATE_SCHEMAS.POLICY_REGISTRY, 'policies'],
-  [BAHIA_STATE_SCHEMAS.PACKAGE_REPOSITORY_REGISTRY, 'packageRepositories'],
-  [BAHIA_STATE_SCHEMAS.PACKAGE_ARTIFACT_REGISTRY, 'packageArtifacts'],
-  [LOOM_WORKER_ADVERTISEMENT, 'workers'],
-  [BAHIA_STATE_SCHEMAS.WORKER_STATE, 'workers'],
-  [BAHIA_STATE_SCHEMAS.WORKER_ASSIGNMENT_STATE, 'workerAssignments'],
-  [BAHIA_STATE_SCHEMAS.WORKER_DRAIN_STATUS, 'workerDrainStatuses'],
-  [BAHIA_STATE_SCHEMAS.BACKUP_REPOSITORY_REGISTRY, 'backupRepositories'],
-  [BAHIA_STATE_SCHEMAS.BACKUP_POLICY_REGISTRY, 'backupPolicies'],
-  [BAHIA_STATE_SCHEMAS.BACKUP_RECIPE_REGISTRY, 'backupRecipes'],
-  [BAHIA_STATE_SCHEMAS.BACKUP_DEFINITION_REGISTRY, 'backupDefinitions'],
-  [BAHIA_STATE_SCHEMAS.ML_MODEL_REGISTRY, 'mlModels'],
-  [BAHIA_STATE_SCHEMAS.ML_MODEL_VERSION_REGISTRY, 'mlModelVersions'],
-  [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_REGISTRY, 'mlEndpoints'],
-  [SBOM_REFERENCE, 'sbomRefs'],
-  [SBOM_AVAILABILITY_LIST, 'sbomAvailability']
 ]);
 
 export const persistedRouteCollections = Object.freeze(Array.from(new Set(PERSISTED_ROUTE_COLLECTIONS.values())));
@@ -283,7 +142,7 @@ export function applyControlplaneEvent(event, { deferRefresh = false, fromCache 
   const handler = handlers.get(route);
   const changed = handler
     ? handler(event, replaceableEvents)
-    : (ACTIVITY_KINDS.includes(event.kind) ? applyActivityEvent(event) : false);
+    : false;
 
   if (changed && !fromCache) {
     controlplaneConnection.lastEventAt = new Date().toISOString();

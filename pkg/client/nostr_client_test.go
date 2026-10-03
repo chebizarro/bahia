@@ -92,6 +92,7 @@ func makeServiceEvent(t *testing.T, sk nostr.SecretKey, svcID uuid.UUID, name st
 		"artifact_repo":  "ghcr.io/test/" + name,
 		"default_branch": "main",
 		"runtime_type":   "docker-compose",
+		"runtime_config": map[string]any{"adopted": map[string]any{"target_name": name, "source_runtime": "compose", "host_alias": "node-1"}},
 		"created_at":     time.Now().UTC().Format(time.RFC3339),
 		"updated_at":     time.Now().UTC().Format(time.RFC3339),
 	}
@@ -315,6 +316,9 @@ func TestDecodeServiceRoundTrip(t *testing.T) {
 	assert.Equal(t, "test-svc", svc.Name)
 	assert.Equal(t, "ghcr.io/test/test-svc", svc.ArtifactRepo)
 	assert.Equal(t, "main", svc.DefaultBranch)
+	require.NotNil(t, svc.RuntimeConfig)
+	require.NotNil(t, svc.RuntimeConfig.Adopted)
+	assert.Equal(t, "test-svc", svc.RuntimeConfig.Adopted.TargetName)
 }
 
 func TestDecodeEnvironmentRoundTrip(t *testing.T) {
@@ -327,6 +331,58 @@ func TestDecodeEnvironmentRoundTrip(t *testing.T) {
 	require.NotNil(t, env)
 	assert.Equal(t, envID, env.ID)
 	assert.Equal(t, "production", env.Name)
+}
+
+func TestDecodeEnvironmentDetailsRoundTrip(t *testing.T) {
+	sk := nostr.Generate()
+	envID, unitID := uuid.New(), uuid.New()
+	created := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	_, tags := nostrpool.ControlStateEnvelope(kinds.EnvironmentRegistry, envID.String(), false)
+	content, err := json.Marshal(map[string]any{
+		"id": envID.String(), "name": "production", "protected": true,
+		"loom_worker_selector": map[string]any{"region": "west"},
+		"runtime_config":       map[string]any{"type": "compose"},
+		"targeting":            map[string]any{"default_unit_key": "api", "default_reconcile_mode": "auto_apply"},
+		"deploy_strategy":      "canary", "created_at": created.Format(time.RFC3339Nano),
+		"updated_at": created.Format(time.RFC3339Nano),
+		"deployment_units": []map[string]any{{
+			"id": unitID.String(), "key": "api", "runtime_type": "compose", "endpoint_ref": "node-1",
+			"reconcile_mode": "auto_apply", "ownership_mode": "bahia_managed", "implicit": false,
+			"runtime_config": map[string]any{"image": "ghcr.io/acme/api:1"},
+		}},
+	})
+	require.NoError(t, err)
+	ev := nostr.Event{Kind: nostr.Kind(kinds.CASControlState), CreatedAt: nostr.Timestamp(time.Now().Unix()), Tags: tags, Content: string(content)}
+	require.NoError(t, ev.Sign(sk))
+	details, err := DecodeEnvironmentDetails(ev)
+	require.NoError(t, err)
+	require.NotNil(t, details)
+	assert.Equal(t, envID, details.ID)
+	assert.Equal(t, map[string]any{"region": "west"}, details.LoomWorkerSelector)
+	assert.Equal(t, map[string]any{"type": "compose"}, details.RuntimeConfig)
+	assert.Equal(t, "api", details.Targeting.DefaultUnitKey)
+	assert.Equal(t, created, details.CreatedAt)
+	require.Len(t, details.DeploymentUnits, 1)
+	assert.Equal(t, unitID, details.DeploymentUnits[0].ID)
+	assert.Equal(t, envID, details.DeploymentUnits[0].EnvironmentID)
+	assert.Equal(t, "node-1", details.DeploymentUnits[0].EndpointRef)
+	assert.Equal(t, map[string]any{"image": "ghcr.io/acme/api:1"}, details.DeploymentUnits[0].RuntimeConfig)
+	assert.False(t, details.DeploymentUnits[0].Implicit)
+
+	implicitContent, err := json.Marshal(map[string]any{
+		"id": envID.String(), "name": "empty", "runtime_config": map[string]any{"type": "compose"},
+		"targeting":        map[string]any{"default_unit_key": "main"},
+		"deployment_units": []map[string]any{{"key": "main", "implicit": true}},
+	})
+	require.NoError(t, err)
+	ev.Content = string(implicitContent)
+	require.NoError(t, ev.Sign(sk))
+	implicit, err := DecodeEnvironmentDetails(ev)
+	require.NoError(t, err)
+	require.Len(t, implicit.DeploymentUnits, 1)
+	assert.Equal(t, "main", implicit.DeploymentUnits[0].Key)
+	assert.Equal(t, envID, implicit.DeploymentUnits[0].EnvironmentID)
+	assert.True(t, implicit.DeploymentUnits[0].Implicit)
 }
 
 func TestDecodeTombstoneReturnsNil(t *testing.T) {
@@ -419,7 +475,11 @@ func TestBuildDomainTopicsCoversAllFamilies(t *testing.T) {
 	// All families from the projector's table must appear.
 	families := nostrpool.CPStateFamilyTopics()
 	for _, fam := range families {
-		topicList, ok := topics[fam.Domain]
+		domain := fam.Domain
+		if fam.Domain == "service" && fam.Entity == "state" {
+			domain = "state"
+		}
+		topicList, ok := topics[domain]
 		if !assert.True(t, ok, "domain %q missing from topics map", fam.Domain) {
 			continue
 		}

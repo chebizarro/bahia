@@ -1,5 +1,6 @@
 <script>
   import { page } from '$app/state';
+  import { untrack } from 'svelte';
   import { goto } from '$app/navigation';
   import Card from '$lib/components/Card.svelte';
   import Modal from '$lib/components/Modal.svelte';
@@ -12,9 +13,7 @@
   import {
     policies as policyStore,
     environments as environmentStore,
-    operations,
-    loadPolicies,
-    loadEnvironments
+    operations
   } from '$lib/stores';
   import { updatePolicy, deletePolicy, evaluatePolicy } from '$lib/stores/public-controlplane.svelte.js';
   import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
@@ -23,7 +22,6 @@
 
   let policy = $state(null);
   let environments = $state([]);
-  let loading = $state(true);
   let error = $state(null);
 
   let policyId = $derived(page.params.id);
@@ -74,16 +72,20 @@
   $effect(() => {
     const id = policyId;
     if (!id) return;
-    void loadPolicy(id);
+    void untrack(() => loadPolicy(id));
+  });
+
+  $effect(() => {
+    const latest = policyStore.find((candidate) => candidate.id === policyId);
+    if (latest) { policy = latest; error = null; }
+    environments = [...environmentStore];
   });
 
   async function loadPolicy(id) {
-    loading = true;
     error = null;
     policy = null;
 
     try {
-      await Promise.all([loadPolicies(), loadEnvironments()]);
       policy = policyStore.find((candidate) => candidate.id === id) || null;
       if (!policy) {
         throw new Error('Policy not found');
@@ -91,8 +93,6 @@
       environments = [...environmentStore];
     } catch (err) {
       error = err.message;
-    } finally {
-      loading = false;
     }
   }
 
@@ -289,9 +289,7 @@
 <div class="page">
   <a href="/policies" class="back">Policies</a>
 
-  {#if loading}
-    <p class="loading">Loading...</p>
-  {:else if error}
+  {#if error}
     <p class="error">Error: {error}</p>
   {:else if policy}
     <div class="header">
@@ -642,7 +640,7 @@
     color: var(--text-primary);
   }
 
-  .loading, .error {
+  .error {
     color: var(--text-muted);
     padding: 2rem;
     text-align: center;

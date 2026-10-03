@@ -44,17 +44,14 @@ func newEnvironmentsCommand() *cobra.Command {
 		Use:   "list",
 		Short: "List all environments",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			envs, err := apiClient.ListEnvironments(cmd.Context())
-			if err != nil {
-				return err
-			}
-			return output(envs, []string{"ID", "NAME", "STRATEGY", "PROTECTED"}, func(e domain.Environment) []string {
-				protected := ""
-				if e.Protected {
-					protected = "yes"
+			if operatorHTTPFallback {
+				envs, err := apiClient.ListEnvironments(cmd.Context())
+				if err != nil {
+					return err
 				}
-				return []string{e.ID.String(), e.Name, string(e.DeployStrategy), protected}
-			})
+				return renderEnvironments(envs)
+			}
+			return runEnvironmentsListNostr(cmd)
 		},
 	}
 
@@ -63,11 +60,14 @@ func newEnvironmentsCommand() *cobra.Command {
 		Short: "Get an environment by ID",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, err := apiClient.GetEnvironmentDetails(cmd.Context(), args[0])
-			if err != nil {
-				return err
+			if operatorHTTPFallback {
+				env, err := apiClient.GetEnvironmentDetails(cmd.Context(), args[0])
+				if err != nil {
+					return err
+				}
+				return outputSingle(env)
 			}
-			return outputSingle(env)
+			return runEnvironmentGetNostr(cmd, args[0])
 		},
 	}
 

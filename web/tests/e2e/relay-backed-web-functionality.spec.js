@@ -35,7 +35,7 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
 
     await expect(page.locator('.card:has-text("Services") .card-value')).toHaveText('1');
     await expect(page.locator('.card:has-text("Environments") .card-value')).toHaveText('1');
-    await expect(page.locator('.card:has-text("Workers") .card-value')).toHaveText('1');
+    await expect(page.locator('a[href="/workers"] .card-value')).toHaveText('1');
     await expect(page.locator('.card:has-text("Drifted") .card-value')).toHaveText('1');
     await expect(page.getByText('service.created')).toBeVisible();
     await assertNoRuntimeErrors();

@@ -5,7 +5,7 @@
     services,
     builds,
     artifacts,
-    loadServices,
+
     loadBuilds,
     loadArtifacts,
     operations
@@ -76,7 +76,7 @@
   });
 
   async function initialize() {
-    await Promise.allSettled([loadServices(), loadBuilds(), loadArtifacts()]);
+    await Promise.allSettled([loadBuilds(), loadArtifacts()]);
     loaded = true;
   }
 

@@ -8,7 +8,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import Input from '$lib/components/Input.svelte';
   import Select from '$lib/components/Select.svelte';
-  import { workers, loading, loadWorkers } from '$lib/stores';
+  import { workers } from '$lib/stores';
   import {
     loadPaymentHistory as loadPrivatePaymentHistory,
     paymentHistoryState,
@@ -37,7 +37,6 @@
   let directionFilter = $state('all');
   let searchQuery = $state('');
   let payments = $derived(normalizePayments(paymentHistoryState.records));
-  let paymentsLoading = $derived(paymentHistoryState.loading);
   let error = $derived(paymentHistoryState.error);
   let loadedWorker = $derived(paymentHistoryState.loadedWorker);
   let lastQueryKey = '';
@@ -53,10 +52,6 @@
     const text = String(value || '50');
     return limitOptions.some((option) => option.value === text) ? text : '50';
   }
-
-  $effect(() => {
-    void loadWorkers();
-  });
 
   onMount(() => {
     let disposed = false;
@@ -216,7 +211,7 @@
       </div>
 
       <div class="filter-actions">
-        <LoadingButton type="submit" loading={paymentsLoading} disabled={!workerFilter.trim()}>
+        <LoadingButton type="submit" loading={false} disabled={!workerFilter.trim()}>
           Load history
         </LoadingButton>
       </div>
@@ -252,21 +247,18 @@
     {#if loadedWorker}
       <span>Worker <a href="/workers/{encodeURIComponent(loadedWorker)}"><code>{truncateMiddle(loadedWorker)}</code></a></span>
     {/if}
-    {#if loading.workers}
-      <span>Loading worker catalog...</span>
-    {/if}
   </div>
 
-  {#if paymentsLoading}
-    <p class="loading">Loading payment history...</p>
-  {:else if error}
+  {#if error}
     <ErrorState message={error} resetLabel="Try again" onReset={() => loadPaymentHistory(workerFilter.trim(), limit)} />
   {:else if !loadedWorker}
     <EmptyState
       title="Select a worker"
-      message="Payment history is currently served by worker. Paste or select a worker pubkey, then load history."
+      message="Paste or select a worker pubkey to filter payment records from the relay."
       iconComponent={PaymentIcon}
     />
+  {:else if paymentHistoryState.unreadable && payments.length === 0}
+    <EmptyState title="Payment records not readable with this key" message="A fleet operator key is required to read encrypted payment records." iconComponent={PaymentIcon} />
   {:else}
     <Table columns={columns} data={filteredPayments} />
   {/if}
@@ -377,11 +369,6 @@
     padding-right: 0.75rem;
   }
 
-  .loading {
-    color: var(--text-muted);
-    padding: 2rem;
-    text-align: center;
-  }
 
   :global(.payment-status) {
     display: inline-flex;

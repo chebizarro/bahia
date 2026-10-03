@@ -1,5 +1,8 @@
 # Environments
 
+The web environment list and detail views read the local verified event store by the `environment-registry` topic. Runtime state uses the `service-state` topic. Cached data renders without waiting for relay EOSE, and live updates or kind-5 deletions update the view in place. Mutation transport remains unchanged in this phase.
+
+
 ## Typed VM resources
 
 An environment's legacy `vm-qemu`/`vm-firecracker` service adapter is not an
@@ -133,6 +136,8 @@ Click an environment to see:
 Authorized signers can create or edit an explicit Compose unit from the **Deployment Units** section. The browser publishes one revision-guarded `environment/update` containing the complete explicit set; it does not call a deployment-unit CRUD endpoint. Protected environments require a confirmation step and do not permit `auto_apply` from this editor. Endpoint references are aliases only—Docker hosts, TLS files, and credentials are never resolved or displayed in the browser.
 
 ### CLI
+
+Environment list/get reads use canonical Nostr events by default, including deployment units in `get`. Configure `--service-pubkey` and `--relay` (or their environment variables); `--http-fallback` explicitly selects the legacy REST path. If EOSE does not arrive before `--eose-timeout`, the CLI prints cached data and warns on stderr.
 
 ```bash
 # List environments

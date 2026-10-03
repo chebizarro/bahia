@@ -38,7 +38,6 @@ import {
   mlModelVersions,
   mlEndpoints,
   mlEndpointStates,
-  loading,
   controlplaneConnection,
   bootstrapControlplane,
   manualRetry,
@@ -57,7 +56,7 @@ export { systemInfo, loadSystemInfo, currentSystemInfo };
 
 // Nostr-backed dashboard/read-model state
 export { operationsForEntity, operationsForDomain } from './collections/index.svelte.js';
-export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, packageRepositories, packageArtifacts, packagePromotions, workers, workerAssignments, workerDrainStatuses, workerEligibilityPreviews, workerCleanupExecutions, workerJobs, operations, events, backupRepositories, backupPolicies, backupRecipes, backupDefinitions, backupRuns, backupVerifications, backupRestores, backupRetentionRuns, backupRuntimeObservations, backupAttestations, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, loading, controlplaneConnection, bootstrapControlplane, manualRetry, upsertServiceProjection };
+export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, packageRepositories, packageArtifacts, packagePromotions, workers, workerAssignments, workerDrainStatuses, workerEligibilityPreviews, workerCleanupExecutions, workerJobs, operations, events, backupRepositories, backupPolicies, backupRecipes, backupDefinitions, backupRuns, backupVerifications, backupRestores, backupRetentionRuns, backupRuntimeObservations, backupAttestations, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, controlplaneConnection, bootstrapControlplane, manualRetry, upsertServiceProjection };
 
 // Derived state helpers
 export function driftedStates() {
@@ -86,19 +85,10 @@ const inFlight = {
   events: null
 };
 
-export async function loadServices() { return bootstrapControlplane(); }
-export async function loadEnvironments() { return bootstrapControlplane(); }
-export async function loadStates() { return bootstrapControlplane(); }
-export async function loadWorkers() { return bootstrapControlplane(); }
 export async function loadArtifacts() { return bootstrapControlplane(); }
 export async function loadBuilds() { return bootstrapControlplane(); }
 export async function loadDeploymentIntents() { return bootstrapControlplane(); }
 export async function loadDeploymentRuns() { return bootstrapControlplane(); }
-export async function loadPolicies() { return bootstrapControlplane(); }
-export async function loadPackageRepositories() { return bootstrapControlplane(); }
-export async function loadPackageArtifacts() { return bootstrapControlplane(); }
-export async function loadPackagePromotions() { return bootstrapControlplane(); }
-export async function loadBackupControlplane() { return bootstrapControlplane(); }
 
 export async function loadAll() {
   if (inFlight.all) return inFlight.all;

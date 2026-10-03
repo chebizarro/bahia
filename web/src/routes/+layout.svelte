@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { page } from '$app/state';
   import Nav from '$lib/components/Nav.svelte';
   import ErrorBoundary from '$lib/components/ErrorBoundary.svelte';
@@ -8,13 +8,22 @@
   import AssistantChat from '$lib/components/assistant/AssistantChat.svelte';
   import { currentRouteDocsRef } from '$lib/components/nav-model.js';
   import { loadAll, unsubscribeFromEvents } from '$lib/stores';
-  import { boot, shutdown } from '$lib/nostr/boot.js';
+  import { boot, getEventStore, getServicePubkey, shutdown } from '$lib/nostr/boot.js';
+  import { startRoleDerivation, stopRoleDerivation } from '$lib/stores/auth-roles.svelte.js';
   import { initServiceStoreBinding, teardownServiceStoreBinding } from '$lib/stores/collections/services.svelte.js';
   import { initEnvironmentStoreBinding, teardownEnvironmentStoreBinding } from '$lib/stores/collections/environments.svelte.js';
+  import { initCoreDeploymentStoreBindings, teardownCoreDeploymentStoreBindings } from '$lib/stores/collections/deployments.svelte.js';
+  import { initWorkerStoreBinding, teardownWorkerStoreBinding } from '$lib/stores/collections/workers.svelte.js';
+  import { initOperationStoreBinding, teardownOperationStoreBinding } from '$lib/stores/collections/operations.svelte.js';
+  import { initActivityStoreBinding, teardownActivityStoreBinding } from '$lib/stores/collections/activity.svelte.js';
+  import { initBackupStoreBinding, teardownBackupStoreBinding } from '$lib/stores/collections/backup.svelte.js';
+  import { initMLStoreBinding, teardownMLStoreBinding } from '$lib/stores/collections/ml.svelte.js';
+  import { initSBOMStoreBinding, teardownSBOMStoreBinding } from '$lib/stores/collections/sbom.svelte.js';
+  import { initStoreFirstSubscriptions, teardownStoreFirstSubscriptions } from '$lib/stores/collections/store-first-subscriptions.js';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
   import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
   import { theme } from '$lib/stores/theme.js';
-  import { authState, initializeAuth, isAuthenticated } from '$lib/stores/auth.js';
+  import { authState, initializeAuth, isAuthenticated, resolveActiveSigner } from '$lib/stores/auth.js';
   import { canAccessRoute } from '$lib/auth/route-access.js';
   import { createVersionReloadWatcher } from '$lib/version-reload.js';
   /**
@@ -42,6 +51,7 @@
     currentRouteDocsRef(page.url.pathname) ? [currentRouteDocsRef(page.url.pathname)] : []
   );
   let assistantBootstrappedForPubkey = $state('');
+  let eventStoreReady = $state(false);
 
   onMount(() => createVersionReloadWatcher().start());
 
@@ -55,8 +65,17 @@
       // render from persisted data immediately (before network).
       try {
         await boot();
+        eventStoreReady = Boolean(getEventStore());
         initServiceStoreBinding();
         initEnvironmentStoreBinding();
+        initCoreDeploymentStoreBindings();
+        initWorkerStoreBinding();
+        initOperationStoreBinding();
+        initActivityStoreBinding();
+        initBackupStoreBinding();
+        initMLStoreBinding();
+        initSBOMStoreBinding();
+        initStoreFirstSubscriptions();
       } catch (err) {
         console.warn('[layout] boot() failed:', err);
       }
@@ -77,9 +96,38 @@
       active = false;
       teardownServiceStoreBinding();
       teardownEnvironmentStoreBinding();
+      teardownCoreDeploymentStoreBindings();
+      teardownWorkerStoreBinding();
+      teardownOperationStoreBinding();
+      teardownActivityStoreBinding();
+      teardownBackupStoreBinding();
+      teardownMLStoreBinding();
+      teardownSBOMStoreBinding();
+      teardownStoreFirstSubscriptions();
+      stopRoleDerivation();
       unsubscribeFromEvents();
       disconnectAssistant();
     };
+  });
+
+  $effect(() => {
+    const pubkey = authState.status === 'authenticated' ? authState.pubkey : '';
+    if (!eventStoreReady || !pubkey) return;
+    const signerAvailable = authState.authMethod === 'nip46' ? authState.nip46Available : authState.extensionAvailable;
+    if (!signerAvailable) return;
+    const store = getEventStore();
+    const servicePubkey = getServicePubkey();
+    if (!store || !servicePubkey) return;
+    untrack(() => {
+      let signer;
+      try { signer = resolveActiveSigner(); }
+      catch (error) {
+        console.warn('[layout] role derivation awaits an available signer:', error);
+        return;
+      }
+      void startRoleDerivation({ store, userPubkey: pubkey, servicePubkey, signer });
+    });
+    return () => untrack(stopRoleDerivation);
   });
 
   $effect(() => {

@@ -14,7 +14,7 @@ import { nostr } from '../../nostr/client.js';
 import { boot, getEventStore, shutdown } from '../../nostr/boot.js';
 import { getBootstrapSeed } from '../discovery.svelte.js';
 import { loadSystemInfo } from '../system.svelte.js';
-import { clearLoadingForPopulatedCollections, resetCollections, refreshCollections, schedulePersistCachedCollections, setAllLoading } from '../collections/index.svelte.js';
+import { resetCollections, refreshCollections, schedulePersistCachedCollections } from '../collections/index.svelte.js';
 import { applyControlplaneEvent, hydrateCachedControlplane, readModelFilters, resetEventRouting } from './events.svelte.js';
 import { bootstrapRetryLimited, connectedRelaysFromSummary, controlplaneConnection, markBootstrapComplete, markBootstrapFailedAt, registerBootstrapControlplaneForRetry, resetConnectionState, setBootstrapError } from './connection.svelte.js';
 import {
@@ -69,7 +69,6 @@ function completeBootstrapIfCurrent(generation) {
   if (generation !== bootstrapSubscriptionGeneration) return;
   refreshCollections();
   markBootstrapComplete();
-  setAllLoading(false);
   syncStatus.phase = 'live';
 }
 
@@ -160,7 +159,6 @@ export async function bootstrapControlplane({ force = false } = {}) {
   bootstrapPromise = (async () => {
     controlplaneConnection.status = 'discovering';
     controlplaneConnection.lastError = null;
-    setAllLoading(true);
 
     // Step 1: Open BahiaEventStore via boot.js so derived stores can render
     // from persisted data immediately, before any network connection.
@@ -177,15 +175,13 @@ export async function bootstrapControlplane({ force = false } = {}) {
     controlplaneConnection.relays = relays;
     controlplaneConnection.servicePubkey = seed?.service_pubkeys?.[0] || '';
 
-    // Step 2: Render cached state immediately. Hydration replays cached
-    // events into the backing Maps. Loading flags stay set only for
-    // collections that are still empty. EOSE only moves the connection
-    // status from syncing to live — it never gates rendering.
+    // Step 2: Render cached legacy state immediately. Hydration replays cached
+    // events into the backing Maps. EOSE only moves the connection status
+    // from syncing to live — it never gates rendering.
     const hydratedFromCache = await hydrateCachedControlplane();
     if (hydratedFromCache) {
       controlplaneConnection.lastEventAt = controlplaneConnection.lastEventAt || new Date().toISOString();
     }
-    clearLoadingForPopulatedCollections();
 
     try {
       if (relays.length === 0) throw new Error('No browser Nostr relays configured by deployment bootstrap');
@@ -220,7 +216,6 @@ export async function bootstrapControlplane({ force = false } = {}) {
       markError(err?.message || String(err));
       return { ok: false, reason: controlplaneConnection.lastError };
     } finally {
-      setAllLoading(false);
       bootstrapPromise = null;
     }
   })();

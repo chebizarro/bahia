@@ -20,11 +20,7 @@
     environments as environmentStore,
     workers as workerStore,
     deploymentIntents as deploymentIntentStore,
-    loadServices,
-    loadBuilds,
     loadArtifacts,
-    loadEnvironments,
-    loadWorkers
   } from '$lib/stores';
   import { operations, operationsForEntity } from '$lib/stores';
   import {
@@ -93,7 +89,6 @@
   let secretsLoading = $state(false);
   let secretsError = $state(null);
   let repositoriesLoading = $state(false);
-  let loading = $state(true);
   let error = $state(null);
   let serviceId = $derived(page.params.id);
   let liveServiceOperations = $derived(operationsForEntity(operations, 'service', serviceId));
@@ -293,7 +288,6 @@
     if (sequence !== loadSequence || id !== serviceId) return;
     service = loadedService;
     error = null;
-    loading = false;
 
     if (hydratedRelatedForServiceId !== id) {
       hydratedRelatedForServiceId = id;
@@ -304,7 +298,6 @@
 
   async function loadServiceDetail(id) {
     const sequence = ++loadSequence;
-    loading = true;
     error = null;
     service = null;
     builds = [];
@@ -319,7 +312,6 @@
     routeCanaryCount = 0;
 
     try {
-      await Promise.all([loadServices(), loadBuilds(), loadArtifacts(), loadEnvironments()]);
       if (sequence !== loadSequence || id !== serviceId) return;
 
       const loadedService = serviceStore.find((candidate) => candidate.id === id) || null;
@@ -330,7 +322,6 @@
     } catch (err) {
       if (sequence !== loadSequence || id !== serviceId) return;
       error = err.message;
-      loading = false;
     }
   }
 
@@ -452,7 +443,6 @@
     deployCostEstimateError = null;
 
     try {
-      await loadWorkers();
       if (sequence !== deployCostEstimateSequence) return;
       deployCostEstimateWorkers = Array.isArray(workerStore) ? [...workerStore] : [];
     } catch (err) {
@@ -1103,9 +1093,7 @@
 <div class="page">
   <a href="/services" class="back">← Services</a>
 
-  {#if loading}
-    <p class="loading">Loading...</p>
-  {:else if error}
+  {#if error}
     <p class="error">Error: {error}</p>
   {:else if service}
     <div class="header">

@@ -1,15 +1,18 @@
 import {
   applyProjectedEntity,
+  selectProjectedEvent,
   contentWithEventMeta,
   getDTag,
   getTagValue,
   isReplaceableTombstone,
-  selectProjectedEvent,
   replaceArray,
   sortByNameOrId,
   sortByNewestField
 } from './utils.js';
 import { upsertReplaceableEvent } from '../../nostr/client.js';
+import { getEventStore, getServicePubkey } from '../../nostr/boot.js';
+import { CP_STATE_TOPICS } from '../../nostr/kinds.gen.js';
+import { createCoreQuery, contentId, scopedStateId, stateProjection } from './core-query.js';
 
 export const states = $state([]);
 export const llmRoutes = $state([]);
@@ -23,43 +26,48 @@ export const packageRepositories = $state([]);
 export const packageArtifacts = $state([]);
 export const packagePromotions = $state([]);
 
-const stateMap = new Map();
 const llmRouteMap = new Map();
 const llmRouteStateMap = new Map();
 const artifactMap = new Map();
 const buildMap = new Map();
 const deploymentIntentMap = new Map();
 const deploymentRunMap = new Map();
-const stateWatermarks = new Map();
 const deploymentIntentWatermarks = new Map();
 const deploymentRunWatermarks = new Map();
-const policyMap = new Map();
-const packageRepositoryMap = new Map();
-const packageArtifactMap = new Map();
-const packagePromotionMap = new Map();
+
+const coreQueries = [
+  createCoreQuery({ topic: CP_STATE_TOPICS.SERVICE_STATE, target: states, identity: scopedStateId, project: stateProjection }),
+  createCoreQuery({ topic: CP_STATE_TOPICS.POLICY_REGISTRY, target: policies, identity: event => contentId(event, 'id', 'policy_id') }),
+  createCoreQuery({ topic: CP_STATE_TOPICS.PACKAGE_REPOSITORY, target: packageRepositories, identity: event => contentId(event, 'id', 'repository_id') }),
+  createCoreQuery({ topic: CP_STATE_TOPICS.PACKAGE_ARTIFACT, target: packageArtifacts, identity: event => contentId(event, 'id', 'artifact_id'), sort: sortByNewestField(['created_at']) }),
+  createCoreQuery({ topic: CP_STATE_TOPICS.PACKAGE_PROMOTION, target: packagePromotions, identity: event => contentId(event, 'id', 'promotion_id'), sort: sortByNewestField(['promoted_at', 'published_at', 'created_at']) })
+];
+
+export function initCoreDeploymentStoreBindings() {
+  const store = getEventStore();
+  const servicePubkey = getServicePubkey();
+  for (const query of coreQueries) query.bind(store, servicePubkey);
+}
+export function teardownCoreDeploymentStoreBindings() {
+  for (const query of coreQueries) query.unbind();
+}
 
 export function resetDeployments() {
-  [stateMap, llmRouteMap, llmRouteStateMap, artifactMap, buildMap, deploymentIntentMap,
-    deploymentRunMap, policyMap, packageRepositoryMap, packageArtifactMap, packagePromotionMap]
+  [llmRouteMap, llmRouteStateMap, artifactMap, buildMap, deploymentIntentMap, deploymentRunMap]
     .forEach((map) => map.clear());
-  [stateWatermarks, deploymentIntentWatermarks, deploymentRunWatermarks].forEach((map) => map.clear());
-  [states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns,
-    policies, packageRepositories, packageArtifacts, packagePromotions]
+  [deploymentIntentWatermarks, deploymentRunWatermarks].forEach((map) => map.clear());
+  [llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns]
     .forEach((array) => { array.length = 0; });
+  for (const query of coreQueries) query.reset();
 }
 
 export function refreshDeployments() {
-  replaceArray(states, Array.from(stateMap.values()).sort(sortByNameOrId));
   replaceArray(llmRoutes, Array.from(llmRouteMap.values()).sort(sortByNameOrId));
   replaceArray(llmRouteStates, Array.from(llmRouteStateMap.values()).sort(sortByNameOrId));
   replaceArray(artifacts, Array.from(artifactMap.values()).sort(sortByNewestField(['created_at'])));
   replaceArray(builds, Array.from(buildMap.values()).sort(sortByNewestField(['created_at'])));
   replaceArray(deploymentIntents, Array.from(deploymentIntentMap.values()).sort(sortByNewestField(['created_at'])));
   replaceArray(deploymentRuns, Array.from(deploymentRunMap.values()).sort(sortByNewestField(['created_at'])));
-  replaceArray(policies, Array.from(policyMap.values()).sort(sortByNameOrId));
-  replaceArray(packageRepositories, Array.from(packageRepositoryMap.values()).sort(sortByNameOrId));
-  replaceArray(packageArtifacts, Array.from(packageArtifactMap.values()).sort(sortByNewestField(['created_at'])));
-  replaceArray(packagePromotions, Array.from(packagePromotionMap.values()).sort(sortByNewestField(['promoted_at', 'published_at', 'created_at'])));
 }
 
 function applyScopedState(event, targetMap, replaceableEvents, scopeTags, watermarks = null) {
@@ -102,15 +110,10 @@ function applyLLMRouteEvent(event, replaceableEvents) {
 }
 
 export const deploymentApplicators = {
-  serviceState: (event, replaceableEvents) => applyScopedState(event, stateMap, replaceableEvents, [['service_id', 'service'], ['environment_id', 'environment']], stateWatermarks),
   llmRoute: applyLLMRouteEvent,
   llmRouteState: (event, replaceableEvents) => applyScopedState(event, llmRouteStateMap, replaceableEvents, [['route_id', 'route'], ['environment_id', 'environment']]),
   artifact: (event, replaceableEvents) => applyProjectedEntity(event, artifactMap, replaceableEvents, ['id', 'artifact_id']),
   build: (event, replaceableEvents) => applyProjectedEntity(event, buildMap, replaceableEvents, ['id', 'build_id']),
   intent: (event, replaceableEvents) => applyProjectedEntity(event, deploymentIntentMap, replaceableEvents, ['id', 'intent_id'], deploymentIntentWatermarks),
-  run: (event, replaceableEvents) => applyProjectedEntity(event, deploymentRunMap, replaceableEvents, ['id', 'run_id'], deploymentRunWatermarks),
-  policy: (event, replaceableEvents) => applyProjectedEntity(event, policyMap, replaceableEvents, ['id', 'policy_id']),
-  packageRepository: (event, replaceableEvents) => applyProjectedEntity(event, packageRepositoryMap, replaceableEvents, ['id', 'repository_id']),
-  packageArtifact: (event, replaceableEvents) => applyProjectedEntity(event, packageArtifactMap, replaceableEvents, ['id', 'artifact_id']),
-  packagePromotion: (event, replaceableEvents) => applyProjectedEntity(event, packagePromotionMap, replaceableEvents, ['id', 'promotion_id'])
+  run: (event, replaceableEvents) => applyProjectedEntity(event, deploymentRunMap, replaceableEvents, ['id', 'run_id'], deploymentRunWatermarks)
 };

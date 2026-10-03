@@ -150,6 +150,8 @@ Bahia does **not** currently register top-level `llm`, `payments`, or `notificat
 
 ### Services
 
+`services list` and `services get` read canonical service events from the configured relays by default. Pass `--service-pubkey` (or set `BAHIA_NOSTR_SERVICE_PUBKEY`) and configure a relay with `--relay` or `BAHIA_NOSTR_RELAYS`. Reads reuse a local cursor under `$BAHIA_DATA_DIR/store/<service-pubkey>/` or `$XDG_DATA_HOME/bahia/store/<service-pubkey>/`. `--http-fallback` explicitly uses the legacy REST read path until Phase 5 cleanup.
+
 ```bash
 # List services
 bahia services list
@@ -172,7 +174,7 @@ bahia services actions stop --service svc-123 --environment env-456
 
 ### Environments
 
-Environment mutations publish signed ContextVM `environment/create` or `environment/update` requests. Deployment-unit helpers obtain the environment read model through signed `environment/get-details` and publish the complete explicit unit set; they do not call REST for reads or mutations, and do not silently fall back to HTTP.
+`environments list` and `environments get` read canonical environment events from relays by default; `get` includes the deployment-unit read model. `--http-fallback` explicitly uses the legacy REST path. Environment mutations still publish signed ContextVM `environment/create` or `environment/update` requests. Deployment-unit helpers obtain the environment read model through signed `environment/get-details` and publish the complete explicit unit set; they do not silently fall back to HTTP.
 
 ```bash
 # Read environments (GET responses include deployment_units)
@@ -272,13 +274,13 @@ bahia deployments rollback --service svc-123 --environment env-456 --deployment-
 ```bash
 # List desired/observed state
 bahia state list
-bahia state list --environment production
-bahia state list --service payment-api
+bahia state list --output json
 
 # Show drifted services
 bahia state drifted
-bahia state drifted --environment production
 ```
+
+These reads use the Bahia service's signed `30900` service-state records by default. Set `--service-pubkey` and `--relay` (or their environment equivalents). `drifted` selects records whose `drift_status` is exactly `drifted`. A missing EOSE prints a stale-data warning to stderr and still exits 0 with the local-store result. Use `--http-fallback` to explicitly read the legacy REST endpoint until Wave 6.
 
 ### DNS
 
@@ -358,7 +360,7 @@ bahia logs live svc-123 env-456
 ```bash
 # Read policies
 bahia policies list
-bahia policies get require-sbom
+bahia policies get <policy-uuid>
 
 # Create a signer-first policy
 bahia policies create \
@@ -367,6 +369,8 @@ bahia policies create \
   --enforcement block \
   --idempotency-key policy-create-require-sbom
 ```
+
+Policy reads use signed `30900` policy-registry records by default; `--http-fallback` explicitly selects the legacy REST endpoint. `get` requires a policy UUID and returns an error when that UUID is absent. The same stale-data warning and successful exit behavior applies when no relay reaches EOSE.
 
 ### Config fabric
 
@@ -594,7 +598,8 @@ bahia services get svc-123 -o yaml
 | `--bootstrap-relay` | Specify bootstrap relay seed for trusted operator discovery (repeatable) |
 | `--service-pubkey` | Specify Bahia service pubkey for routing and single-service discovery trust |
 | `--trusted-service-pubkey` | Specify trusted Bahia service pubkey for bootstrap discovery (repeatable) |
-| `--http-fallback` | Allow explicit HTTP compatibility fallback before any relay accepts the request |
+| `--http-fallback` | Use legacy HTTP for service, environment, state and policy reads; also allows explicit operator compatibility fallback |
+| `--eose-timeout` | Maximum wait for relay EOSE on Nostr reads (default `5s`; env `BAHIA_EOSE_TIMEOUT`). If no relay reaches EOSE, cached data is printed with a stale warning on stderr and the read exits 0 |
 | `--encrypted` | Use NIP-59/NIP-44 encrypted operator requests and replies; requires `--service-pubkey` |
 | `--result-timeout` | Maximum wait for a ContextVM result per publish attempt (default `30s`) |
 | `--result-retries` | Idempotent re-publishes after a result timeout (default `2`) |

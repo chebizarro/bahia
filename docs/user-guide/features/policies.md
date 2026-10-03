@@ -1,5 +1,8 @@
 # Policies
 
+The web policy list and detail views read the local verified event store by the `policy-registry` topic. Cached policies render without a network loading gate; live canonical `30900` updates and kind-5 deletions update the view in place. Policy mutation transport remains unchanged in this phase.
+
+
 **Policies** in Bahia define rules for deployment approval, SBOM requirements, and operational governance.
 
 ## Overview
@@ -129,7 +132,7 @@ Each request requires `target_ref`, `service_id`, `scope`, and `policy_coordinat
 
 Policy creation is signer-first. CLI and MCP mutation surfaces publish a signed public `PolicyCreate` event (`kind: 5986`), verify relay `OK` acceptance, and return correlation metadata. Durable truth comes from following the returned `request_event_id` in ContextVM reply events (`kind: 25910`) and policy read-model projections (`kind: 30900`). Direct REST/repository mutation fallback is not used for policy creation.
 
-Read-only paths are distinct: listing and getting policies may read durable read models or server projections because they do not change policy semantics.
+Read-only CLI paths are distinct: `bahia policies list` and `bahia policies get <policy-uuid>` sync the signed `30900` policy-registry records into a per-service local store and read them there. `--http-fallback` explicitly selects the legacy REST read route until Phase 5 Wave 6. If no relay reaches EOSE within `--eose-timeout`, the CLI warns on stderr, renders its stale local snapshot, and exits successfully; a missing policy UUID remains an error.
 
 ### Nostr (`PolicyCreate` 5986)
 

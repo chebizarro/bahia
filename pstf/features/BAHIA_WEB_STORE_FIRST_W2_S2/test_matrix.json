@@ -1,0 +1,8 @@
+{
+  "feature_id": "BAHIA_WEB_STORE_FIRST_W2_S2",
+  "tests": [
+    { "criteria": ["W2-S2-1", "W2-S2-2"], "path": "web/tests/unit/store-first-workers-operations.test.js", "evidence": "Signed store ingestion, hydration, latest-wins, tombstones, Loom and operation timelines." },
+    { "criteria": ["W2-S2-3"], "path": "web/tests/unit/store-first-workers-operations.test.js", "evidence": "Welshman MockAdapter counts one open-author advertisement REQ for twelve workers; LRU capacity is asserted." },
+    { "criteria": ["W2-S2-1", "W2-S2-2", "W2-S2-4"], "path": "web/tests/e2e/store-first-workers.spec.js", "evidence": "Worker navigation without REST/spinner and live worker/operation updates." }
+  ]
+}

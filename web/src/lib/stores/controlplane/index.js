@@ -56,7 +56,6 @@ export {
   mlModelVersions,
   mlEndpoints,
   mlEndpointStates,
-  loading,
   flushCollectionRefresh,
   upsertServiceProjection
 } from '../collections/index.svelte.js';

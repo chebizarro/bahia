@@ -15,10 +15,7 @@
     states,
     loadArtifacts,
     loadDeploymentIntents,
-    loadDeploymentRuns,
-    loadEnvironments,
-    loadServices,
-    loadStates
+    loadDeploymentRuns
   } from '$lib/stores';
   import { operations } from '$lib/stores';
   import {
@@ -100,10 +97,7 @@
       await Promise.all([
         loadDeploymentIntents(),
         loadDeploymentRuns(),
-        loadServices(),
-        loadEnvironments(),
-        loadArtifacts(),
-        loadStates()
+        loadArtifacts()
       ]);
       if (!deploymentIntents.some((item) => item.id === id)) {
         throw new Error('Deployment intent not found');

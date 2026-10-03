@@ -14,7 +14,7 @@
     WarningIcon,
     blossomContentTypeIcon
   } from '$lib/icons/domain-icons.js';
-  import { artifacts as registryArtifacts, services, loadArtifacts, loadServices, operations } from '$lib/stores';
+  import { artifacts as registryArtifacts, services, loadArtifacts, operations } from '$lib/stores';
   import { sbomArtifactIds } from '$lib/stores/controlplane/index.js';
   import { api } from '$lib/api/client.js';
   import { authState } from '$lib/stores/auth.js';
@@ -71,7 +71,7 @@
 
   async function loadRegistryArtifacts() {
     try {
-      await Promise.allSettled([loadServices(), loadArtifacts()]);
+      await Promise.allSettled([loadArtifacts()]);
       applyRegistryProjection();
     } catch (err) {
       console.error('Failed to load artifacts:', err);

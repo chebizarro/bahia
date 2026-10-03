@@ -10,7 +10,7 @@ Security scans are triggered in three ways:
 2. **Scheduled rescans** — policies can configure recurring scans on a cadence (e.g., every 24 hours) to catch newly disclosed vulnerabilities.
 3. **Manual scans** — operators can trigger a rescan of any target directly from the Security dashboard.
 
-All scan operations use encrypted ContextVM methods (`security/scan`, `security/rescan`, `security/findings-list`, `security/schedules-list`) over Nostr. There are no REST endpoints for security data — all communication is end-to-end encrypted.
+Scan and rescan submissions still use the existing encrypted ContextVM mutations (`security/scan`, `security/rescan`). Findings, schedules, and finding details are read from service-authored kind `30900` relay events, encrypted with the fleet operator content key; the browser does not issue ContextVM or REST list requests.
 
 ## Dashboard
 
@@ -74,18 +74,7 @@ Security scan breaches (findings that violate policy thresholds) are routed thro
 
 ## Authentication and route access
 
-Browser authentication is fail-closed:
-
-- a restored NIP-07 session is kept only when the extension still returns the stored pubkey;
-- a restored NIP-46 session must reconnect successfully and return the stored remote-signer pubkey;
-- failed reconnects and failed logins clear stale session state;
-- NIP-46 does not fall back to `window.nostr`.
-
-NIP-98 backend readiness is established only after a signed `GET /orgs` succeeds with a 2xx response; capability advertisement alone is provisional.
-
-The browser route guard currently covers `/souls`, `/services`, `/deployments`, `/policies`, `/environments`, `/workers`, `/fleet-health`, `/llm`, `/artifacts`, `/payments`, `/notifications`, `/events`, `/orgs`, and `/settings`. It checks authentication only. Backend handlers, organization membership, signed-event validation, and encrypted-operation authorization remain authoritative. Production-only auth overrides are not compiled into production builds.
-
-The `/security` route itself is not in that prefix list, but its encrypted ContextVM operations still require a valid signer and backend authorization. Route visibility never grants mutation authority.
+A persisted NIP-07 or NIP-46 signer session can render relay state immediately; signer verification and fleet key discovery continue in the background. Only a fleet operator who can unwrap the fleet content key can read encrypted findings and schedules. Other users see **not readable with this key**, not a failed read request. Route visibility never grants mutation authority; scan and rescan still require backend authorization.
 
 ## Nostr Event Semantics
 
@@ -93,6 +82,6 @@ Security scan operations follow Bahia's Nostr-native architecture:
 
 - **Mutations**: ContextVM kind `25910` wrapped in NIP-59 gift-wrap (`1059`/`21059`)
 - **Scan status**: NIP-38 kind `30315` status events with `schema=bahia.status.security-scan.v1`
-- **State projections**: Kind `30900` with security-specific schemas
+- **Encrypted state projections**: Kind `30900` topics `security-finding` (legacy kind `32012`), `security-schedule` (`32013`), and `security-finding-detail` (`32014`). Large detail records are published as `:part:<n>` chunks with `total_parts` and reassembled only when all parts are present.
 
 The ContextVM acknowledgment (`security/scan` returning `accepted` with a `run_id`) is not completion — subscribe to the corresponding NIP-38 status events to track scan progress to terminal state.

@@ -12,8 +12,7 @@
     backupVerifications,
     backupRestores,
     backupRetentionRuns,
-    backupRuntimeObservations,
-    loadBackupControlplane
+    backupRuntimeObservations
   } from '$lib/stores';
   import {
     BACKUP_SECTIONS,
@@ -25,24 +24,9 @@
     terminalReason
   } from '$lib/backup/model.js';
 
-  let loading = $state(true);
-  let error = $state(null);
 
-  $effect(() => {
-    void loadBackup();
-  });
 
-  async function loadBackup() {
-    loading = true;
-    error = null;
-    try {
-      await loadBackupControlplane();
-    } catch (err) {
-      error = err?.message || 'Failed to load backup read models';
-    } finally {
-      loading = false;
-    }
-  }
+
 
   const unhealthyRepositories = $derived(
     backupRepositories.filter((repository) => ['unhealthy', 'failed', 'error'].includes(repositoryHealth(repository, backupRuntimeObservations).status))
@@ -61,11 +45,7 @@
 </script>
 
 <BackupShell title="Backup Dashboard" subtitle="Fleet backup posture from Nostr read models: registry, health, recent work, restore eligibility, approvals, and evidence.">
-  {#if loading}
-    <p class="loading">Loading backup posture...</p>
-  {:else if error}
-    <EmptyState iconComponent={WarningIcon} title="Backup read models unavailable" message={error} />
-  {:else if backupRepositories.length + backupPolicies.length + backupRecipes.length + backupDefinitions.length + backupRuns.length === 0}
+  {#if backupRepositories.length + backupPolicies.length + backupRecipes.length + backupDefinitions.length + backupRuns.length === 0}
     <EmptyState iconComponent={RepositoryIcon} title="No backup read models yet" message="Backup repositories, policies, recipes, definitions, and runs will appear after the control plane projects them." />
   {:else}
     <section class="cards" aria-label="Backup posture summary">
@@ -173,7 +153,7 @@
 </BackupShell>
 
 <style>
-  .loading, .muted { color: var(--text-muted); padding: 1rem 0; }
+  .muted { color: var(--text-muted); padding: 1rem 0; }
   .cards { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
   .card, .panel, .section-links a { border: 1px solid var(--border-color); border-radius: 0.75rem; background: var(--card-bg); }
   .card { display: flex; flex-direction: column; gap: 0.2rem; padding: 1rem; }

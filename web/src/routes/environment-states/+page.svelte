@@ -1,5 +1,4 @@
 <script>
-  import { untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Select from '$lib/components/Select.svelte';
@@ -9,9 +8,8 @@
     states,
     services,
     environments,
-    loadStates,
-    loadServices,
-    loadEnvironments,
+
+
     operations
   } from '$lib/stores';
   import {
@@ -21,33 +19,12 @@
     WarningIcon
   } from '$lib/icons/domain-icons.js';
 
-  let initialized = $state(false);
-  let loading = $state(true);
-  let error = $state(null);
   let driftFilter = $state('all');
   let selectedState = $state(null);
   let driftDialogOpen = $state(false);
   let reconciliationOperations = $derived(operations.filter((operation) =>
     ['environment', 'observation', 'remediation', 'deployment'].includes(operation.domain)
   ));
-
-  $effect(() => {
-    if (initialized) return;
-    initialized = true;
-    void untrack(() => bootstrap());
-  });
-
-  async function bootstrap() {
-    loading = true;
-    error = null;
-    try {
-      await Promise.all([loadStates(), loadServices(), loadEnvironments()]);
-    } catch (err) {
-      error = err?.message || 'Failed to load environment states';
-    } finally {
-      loading = false;
-    }
-  }
 
   function escapeHtml(text) {
     return String(text ?? '')
@@ -170,15 +147,11 @@
   <div class="filters">
     <div class="filter-field">
       <label for="drift-filter">Drift status</label>
-      <Select id="drift-filter" bind:value={driftFilter} options={driftFilterOptions} disabled={loading} />
+      <Select id="drift-filter" bind:value={driftFilter} options={driftFilterOptions}  />
     </div>
   </div>
 
-  {#if loading}
-    <p class="loading">Loading environment states…</p>
-  {:else if error}
-    <EmptyState iconComponent={WarningIcon} title="Unable to load environment states" message={error} />
-  {:else if states.length === 0}
+  {#if states.length === 0}
     <EmptyState
       iconComponent={EnvironmentIcon}
       title="No environment states yet"

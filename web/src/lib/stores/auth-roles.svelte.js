@@ -40,6 +40,20 @@ import {
 
 /** @type {Map<string, import('$lib/nostr/confidential.js').OrgContentKey>} orgID → current OCK */
 const ockCache = new Map();
+const contentKeyListeners = new Set();
+
+export function contentKeyFor(orgID, version) {
+  return ockCache.get(`${orgID}:${version}`) || null;
+}
+
+export function onContentKeyChange(callback) {
+  contentKeyListeners.add(callback);
+  return () => contentKeyListeners.delete(callback);
+}
+
+function notifyContentKeyChange() {
+  for (const callback of contentKeyListeners) callback();
+}
 
 /**
  * Per-org role map: orgID → role string.
@@ -107,17 +121,20 @@ export function roleForOrg(orgID) {
 
 /** @type {Array<() => void>} */
 let activeUnsubscribes = [];
+let derivationGeneration = 0;
 
 /**
  * Stop all active store subscriptions and clear cached state.
  * Called on logout or signer change.
  */
 export function stopRoleDerivation() {
+  derivationGeneration++;
   for (const unsub of activeUnsubscribes) {
     try { unsub(); } catch { /* ignore */ }
   }
   activeUnsubscribes = [];
   ockCache.clear();
+  notifyContentKeyChange();
   for (const key of Object.keys(orgRoles)) {
     delete orgRoles[key];
   }
@@ -142,6 +159,7 @@ export function stopRoleDerivation() {
  */
 export async function startRoleDerivation({ store, userPubkey, servicePubkey, signer }) {
   stopRoleDerivation();
+  const generation = derivationGeneration;
   roleDerivationActive.value = true;
   roleDerivationError.value = null;
 
@@ -158,18 +176,21 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
 
   try {
     // 2. Load existing key-envelope events from the store and process them
-    await processKeyEnvelopes(store, userPubkey, servicePubkey, signer);
+    await processKeyEnvelopes(store, userPubkey, servicePubkey, signer, generation);
+    if (generation !== derivationGeneration) return;
 
     // 3. Load existing member records and decrypt with discovered OCKs
     await processMemberRecords(store, servicePubkey);
+    if (generation !== derivationGeneration) return;
 
     // 4. Subscribe to live updates for both key envelopes and member records
     const envelopeUnsub = store.subscribe(
       { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': [KEY_ENVELOPE_TOPIC] },
       () => {
+        if (generation !== derivationGeneration) return;
         // Re-process on any key envelope change
-        processKeyEnvelopes(store, userPubkey, servicePubkey, signer)
-          .then(() => processMemberRecords(store, servicePubkey))
+        processKeyEnvelopes(store, userPubkey, servicePubkey, signer, generation)
+          .then(() => generation === derivationGeneration && processMemberRecords(store, servicePubkey))
           .catch(err => console.warn('[auth-roles] live key envelope processing error:', err));
       }
     );
@@ -178,6 +199,7 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
     const memberUnsub = store.subscribe(
       { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': [ORG_MEMBER_TOPIC] },
       () => {
+        if (generation !== derivationGeneration) return;
         // Re-process member records when new ones arrive
         processMemberRecords(store, servicePubkey)
           .catch(err => console.warn('[auth-roles] live member record processing error:', err));
@@ -187,6 +209,7 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
 
     roleDerivationActive.value = false;
   } catch (err) {
+    if (generation !== derivationGeneration) return;
     roleDerivationActive.value = false;
     roleDerivationError.value = err?.message || String(err);
     console.error('[auth-roles] role derivation failed:', err);
@@ -200,7 +223,7 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
 /**
  * Process all key-envelope events in the store to discover the user's OCKs.
  */
-async function processKeyEnvelopes(store, userPubkey, servicePubkey, signer) {
+async function processKeyEnvelopes(store, userPubkey, servicePubkey, signer, generation) {
   const envelopeEvents = store.query({
     kinds: [CASCADIA_CONTROLPLANE_STATE],
     '#t': [KEY_ENVELOPE_TOPIC]
@@ -223,12 +246,14 @@ async function processKeyEnvelopes(store, userPubkey, servicePubkey, signer) {
     // Trial-decrypt: try to unwrap the NIP-44 content with our signer
     try {
       const plaintext = await signer.decryptNip44(servicePubkey, event.content);
+      if (generation !== derivationGeneration) return;
       const { key, recipientPubkey } = unmarshalOCKWrap(plaintext);
       if (recipientPubkey !== userPubkey) continue;
       if (key.orgID !== parsed.orgID) continue;
 
       // Found our envelope — cache the OCK in memory only
       ockCache.set(cacheKey, key);
+      notifyContentKeyChange();
 
       // Also set as current if it's the highest version for this org
       const currentKey = `${parsed.orgID}:current`;

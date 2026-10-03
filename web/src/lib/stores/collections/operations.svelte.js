@@ -61,6 +61,8 @@ import {
   parseJsonContent
 } from '../../nostr/client.js';
 import { replaceArray, sortByNewestField } from './utils.js';
+import { getEventStore, getPool, getRelayUrls, getServicePubkey } from '../../nostr/boot.js';
+import { toWebSocketUrl } from '../../nostr/pool-utils.js';
 
 export const OPERATION_STATUS_KINDS = Object.freeze([
   DNS_OPERATION_STATUS,
@@ -155,6 +157,13 @@ export const operations = $state([]);
 
 const operationMap = new Map();
 const pendingHiveResultMap = new Map();
+const operationEvents = new Map();
+const eventOperation = new Map();
+const coordinateEvents = new Map();
+let boundStore = null;
+let unsubscribers = [];
+let relayHandles = [];
+let renderQueued = false;
 
 const KIND_DOMAINS = new Map([
   [DNS_OPERATION_STATUS, 'dns'],
@@ -285,16 +294,29 @@ export function isTerminalOperationStatus(status) {
 export function resetOperations() {
   operationMap.clear();
   pendingHiveResultMap.clear();
+  operationEvents.clear();
+  eventOperation.clear();
+  coordinateEvents.clear();
+  renderQueued = false;
   operations.length = 0;
 }
 
 export function refreshOperations() {
+  if (!renderQueued) return;
+  renderQueued = false;
   replaceArray(
     operations,
     Array.from(operationMap.values()).sort(
       sortByNewestField(['updated_at', 'completed_at', 'status_at', 'requested_at'])
     )
   );
+}
+
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(refreshOperations);
+  else queueMicrotask(refreshOperations);
 }
 
 function eventIso(event) {
@@ -389,7 +411,7 @@ function compareEventVersion(event, snapshot) {
   if (createdAt !== previousCreatedAt) return createdAt > previousCreatedAt ? 1 : -1;
   const eventId = String(event?.id || '');
   const previousId = String(snapshot.id || '');
-  return eventId === previousId ? 0 : (eventId > previousId ? 1 : -1);
+  return eventId === previousId ? 0 : (eventId < previousId ? 1 : -1);
 }
 
 function removeFields(target, fields) {
@@ -489,7 +511,7 @@ function commonPatch(event, content) {
 }
 
 /** Addressable ML request: keyed by its signed request event id for result correlation. */
-export function applyOperationRequestEvent(event) {
+function projectOperationRequest(event) {
   if (!event?.id) return false;
 
   const content = contentObject(event);
@@ -508,7 +530,7 @@ export function applyOperationRequestEvent(event) {
 }
 
 /** Operational 69xx status: correlated by the request event id in the `e` tag. */
-export function applyOperationStatusEvent(event) {
+function projectOperationStatus(event) {
   const requestEventId = getTagValue(event, 'e');
   if (!requestEventId) return false;
 
@@ -531,7 +553,7 @@ export function applyOperationStatusEvent(event) {
 }
 
 /** Operational 79xx result: terminal and correlated by the request `e` tag. */
-export function applyOperationResultEvent(event) {
+function projectOperationResult(event) {
   const requestEventId = getTagValue(event, 'e');
   if (!requestEventId) return false;
 
@@ -564,7 +586,7 @@ export function applyOperationResultEvent(event) {
 }
 
 /** Hive-CI 5401 run: it is the request-side event and is keyed by its own id. */
-export function applyHiveCIWorkflowRunEvent(event) {
+function projectHiveCIWorkflowRun(event) {
   const requestEventId = event?.id;
   const publisherPubkey = getTagValue(event, 'publisher');
   if (!requestEventId || !publisherPubkey) return false;
@@ -586,13 +608,13 @@ export function applyHiveCIWorkflowRunEvent(event) {
   const pendingResult = pendingHiveResultMap.get(requestEventId);
   if (pendingResult) {
     pendingHiveResultMap.delete(requestEventId);
-    if (pendingResult.pubkey === publisherPubkey) applyHiveCIWorkflowResultEvent(pendingResult);
+    if (pendingResult.pubkey === publisherPubkey) projectHiveCIWorkflowResult(pendingResult);
   }
   return changed;
 }
 
 /** Hive-CI 5402 result: terminal and correlated to its 5401 run by `e`. */
-export function applyHiveCIWorkflowResultEvent(event) {
+function projectHiveCIWorkflowResult(event) {
   const requestEventId = getTagValue(event, 'e');
   if (!requestEventId) return false;
 
@@ -603,7 +625,122 @@ export function applyHiveCIWorkflowResultEvent(event) {
     return true;
   }
   if (event.pubkey !== existing.publisher_pubkey) return false;
-  return applyOperationResultEvent(event);
+  return projectOperationResult(event);
+}
+
+const allOperationKinds = Object.freeze([...new Set([...CANONICAL_OPERATION_KINDS, ...EXTERNAL_OPERATION_KINDS])]);
+
+function isTrustedOperation(event, servicePubkey) {
+  return EXTERNAL_OPERATION_KINDS.includes(event.kind) || event.pubkey === servicePubkey;
+}
+
+function operationIdFor(event) {
+  if (OPERATION_REQUEST_KINDS.includes(event.kind) || event.kind === HIVE_CI_WORKFLOW_RUN) return event.id;
+  return getTagValue(event, 'e');
+}
+
+function operationCoordinate(event) {
+  const d = getTagValue(event, 'd');
+  return d && event.kind >= 30000 && event.kind < 40000 ? `${event.kind}:${event.pubkey}:${d}` : '';
+}
+
+function projectOperation(event) {
+  if (OPERATION_REQUEST_KINDS.includes(event.kind)) return projectOperationRequest(event);
+  if (OPERATION_STATUS_KINDS.includes(event.kind)) return projectOperationStatus(event);
+  if (OPERATION_RESULT_KINDS.includes(event.kind)) return projectOperationResult(event);
+  if (event.kind === HIVE_CI_WORKFLOW_RUN) return projectHiveCIWorkflowRun(event);
+  if (event.kind === HIVE_CI_WORKFLOW_RESULT) return projectHiveCIWorkflowResult(event);
+  return false;
+}
+
+function replayOperation(key) {
+  operationMap.delete(key);
+  pendingHiveResultMap.delete(key.split(':').slice(1).join(':'));
+  const events = [...(operationEvents.get(key)?.values() || [])].sort((a, b) => a.created_at - b.created_at || b.id.localeCompare(a.id));
+  for (const event of events) projectOperation(event);
+}
+
+function ingestOperationEvent(event, servicePubkey, initial = false) {
+  if (event.kind === 5) {
+    let changed = false;
+    for (const [name, target] of event.tags || []) {
+      const id = name === 'e' ? target : (name === 'a' ? coordinateEvents.get(target) : null);
+      const indexed = id && eventOperation.get(id);
+      if (!indexed || indexed.event.pubkey !== event.pubkey || indexed.event.created_at > event.created_at) continue;
+      eventOperation.delete(id);
+      if (indexed.coordinate) coordinateEvents.delete(indexed.coordinate);
+      operationEvents.get(indexed.key)?.delete(id);
+      replayOperation(indexed.key);
+      changed = true;
+    }
+    if (changed && !initial) scheduleRender();
+    return changed;
+  }
+  if (!allOperationKinds.includes(event.kind) || !isTrustedOperation(event, servicePubkey)) return false;
+  const operationId = operationIdFor(event);
+  if (!operationId) return false;
+  const key = operationKey(operationSource(event.kind), operationId);
+  const coordinate = operationCoordinate(event);
+  const priorId = coordinate && coordinateEvents.get(coordinate);
+  let replaced = false;
+  if (priorId && priorId !== event.id) {
+    const prior = eventOperation.get(priorId);
+    if (prior && compareEventVersion(event, prior.event) <= 0) return false;
+    eventOperation.delete(priorId);
+    if (prior) {
+      operationEvents.get(prior.key)?.delete(priorId);
+      replayOperation(prior.key);
+      replaced = true;
+    }
+  }
+  if (eventOperation.has(event.id)) return false;
+  eventOperation.set(event.id, { event, key, coordinate });
+  if (coordinate) coordinateEvents.set(coordinate, event.id);
+  if (!operationEvents.has(key)) operationEvents.set(key, new Map());
+  operationEvents.get(key).set(event.id, event);
+  const changed = projectOperation(event) || replaced;
+  if (changed && !initial) scheduleRender();
+  return changed;
+}
+
+export function rebuildOperationsFromStore() {
+  const store = getEventStore();
+  const servicePubkey = getServicePubkey();
+  if (!store || !servicePubkey) return;
+  resetOperations();
+  const events = store.query({ kinds: allOperationKinds })
+    .sort((a, b) => a.created_at - b.created_at || b.id.localeCompare(a.id));
+  for (const event of events) ingestOperationEvent(event, servicePubkey, true);
+  renderQueued = true;
+  refreshOperations();
+}
+
+export function initOperationStoreBinding() {
+  if (boundStore) return;
+  const store = getEventStore();
+  const servicePubkey = getServicePubkey();
+  if (!store || !servicePubkey) return;
+  boundStore = store;
+  rebuildOperationsFromStore();
+  unsubscribers = [
+    store.subscribe({ kinds: allOperationKinds }, (event) => ingestOperationEvent(event, servicePubkey)),
+    store.subscribe({ kinds: [5] }, (event) => ingestOperationEvent(event, servicePubkey))
+  ];
+  const pool = getPool();
+  const relays = [...new Set(getRelayUrls().map(toWebSocketUrl).filter(Boolean))];
+  if (pool && relays.length) relayHandles = [
+    pool.subscribe({ relays, filters: [{ kinds: CANONICAL_OPERATION_KINDS, authors: [servicePubkey], since: Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60, limit: 1000 }], filterKey: 'operations-canonical' }),
+    pool.subscribe({ relays, filters: [{ kinds: EXTERNAL_OPERATION_KINDS, since: Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60, limit: 1000 }], filterKey: 'operations-external' })
+  ];
+}
+
+export function teardownOperationStoreBinding() {
+  for (const unsubscribe of unsubscribers) unsubscribe();
+  unsubscribers = [];
+  for (const handle of relayHandles) handle.unsubscribe();
+  relayHandles = [];
+  boundStore = null;
+  renderQueued = false;
 }
 
 export function operationsForDomain(items, domain) {

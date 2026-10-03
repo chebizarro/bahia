@@ -25,7 +25,6 @@
     workerDisplayName
   } from './page-model.js';
 
-  let loading = $state(true);
   let error = $state(null);
   let notice = $state(null);
 
@@ -67,19 +66,6 @@
     WORKLOAD_PIN: 'worker.workload.pin.request'
   };
 
-  $effect(() => {
-    void loadPage();
-  });
-
-  async function loadPage() {
-    loading = true;
-    error = null;
-    const result = await bootstrapControlplane();
-    if (!result?.ok) {
-      error = result?.reason || 'Failed to bootstrap relay-backed control plane';
-    }
-    loading = false;
-  }
 
   function setSuccess(message) { notice = { type: 'success', message }; }
   function setFailure(message) { notice = { type: 'error', message }; }
@@ -241,9 +227,7 @@
     <div class:success={notice.type === 'success'} class:error={notice.type === 'error'} class="notice" data-testid="ml-notice">{notice.message}</div>
   {/if}
 
-  {#if loading}
-    <p class="loading">Bootstrapping inference control plane…</p>
-  {:else if error}
+  {#if error}
     <div class="error-state"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{error}</span></div>
   {:else}
     <!-- Summary Cards -->
@@ -888,7 +872,7 @@
     align-items: center;
     gap: 0.5rem;
   }
-  .loading, .empty {
+  .empty {
     color: var(--text-muted);
   }
 
