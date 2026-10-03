@@ -319,7 +319,7 @@ func TestRelayPoolSubscribeAllWithEOSEAuthRequiredFailureRecordsMergedMetadata(t
 
 func TestNewPublisherConfiguresPrivateKeyForRelayAuth(t *testing.T) {
 	privateKey := gonostr.Generate().Hex()
-	publisher := NewPublisher(config.NostrConfig{PrivateKey: privateKey, PublishEnabled: true}, nil, nil, zap.NewNop())
+	publisher := NewPublisher(config.NostrConfig{PrivateKey: privateKey, PublishEnabled: true}, nil, nil, zap.NewNop(), WithLocalOutbox(openDeliveryTestOutbox(t), nil))
 	require.NotNil(t, publisher)
 	require.NotNil(t, publisher.Pool())
 

@@ -145,16 +145,41 @@ type ConfigDrift struct {
 	StatusHistory   []ConfigFabricStatus  `json:"status_history"`
 }
 
+// ConfigFabricDeliveryQuery reports the publish-outbox state of a desired
+// config-fabric event. Without Postgres the NostrEventRecord carries no
+// PublishState; this query lets ListDrift determine whether a version was
+// abandoned by asking the local outbox directly (bahia-irsry.61).
+type ConfigFabricDeliveryQuery interface {
+	DeliveryOutcome(ctx context.Context, id string) (nostrutil.DeliveryOutcome, error)
+}
+
 type ConfigFabricService struct {
 	repo      repository.NostrEventRepository
 	publisher ConfigFabricPublisher
 	signer    ConfigFabricSigner
+	delivery  ConfigFabricDeliveryQuery
 	now       func() time.Time
 	mu        sync.Mutex
 }
 
-func NewConfigFabricService(repo repository.NostrEventRepository, publisher ConfigFabricPublisher, signer ConfigFabricSigner) *ConfigFabricService {
-	return &ConfigFabricService{repo: repo, publisher: publisher, signer: signer, now: func() time.Time { return time.Now().UTC() }}
+// ConfigFabricServiceOption configures a ConfigFabricService.
+type ConfigFabricServiceOption func(*ConfigFabricService)
+
+// WithDeliveryQuery sets the delivery-state query used by ListDrift to
+// determine whether a desired version was abandoned when the event record
+// carries no PublishState (non-Postgres mode, bahia-irsry.61).
+func WithDeliveryQuery(q ConfigFabricDeliveryQuery) ConfigFabricServiceOption {
+	return func(s *ConfigFabricService) { s.delivery = q }
+}
+
+func NewConfigFabricService(repo repository.NostrEventRepository, publisher ConfigFabricPublisher, signer ConfigFabricSigner, opts ...ConfigFabricServiceOption) *ConfigFabricService {
+	s := &ConfigFabricService{repo: repo, publisher: publisher, signer: signer, now: func() time.Time { return time.Now().UTC() }}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 func (s *ConfigFabricService) Publish(ctx context.Context, request ConfigPublishRequest) (*ConfigPublishReceipt, error) {
@@ -461,6 +486,26 @@ func (s *ConfigFabricService) maxVersion(ctx context.Context, pubkey string, req
 	return maxVersion, nil
 }
 
+// isDesiredAbandoned reports whether a desired-state event's publish was
+// abandoned. With PostgreSQL the record carries the publish state directly;
+// without it, the delivery query (local outbox) is asked (bahia-irsry.61).
+func (s *ConfigFabricService) isDesiredAbandoned(ctx context.Context, record repository.NostrEventRecord) bool {
+	if record.PublishState == repository.NostrPublishStateFailed {
+		return true
+	}
+	// The local event store does not track publish state, so records read
+	// back from it have an empty PublishState. Fall through to the delivery
+	// query when one is configured.
+	if record.PublishState != "" || s.delivery == nil {
+		return false
+	}
+	outcome, err := s.delivery.DeliveryOutcome(ctx, record.ID)
+	if err != nil {
+		return false
+	}
+	return outcome == nostrutil.DeliveryAbandoned
+}
+
 func (s *ConfigFabricService) persistDesired(ctx context.Context, event nostr.Event) error {
 	tags, err := json.Marshal(event.Tags)
 	if err != nil {
@@ -527,7 +572,7 @@ func (s *ConfigFabricService) ListDrift(ctx context.Context) ([]ConfigDrift, err
 	for _, record := range records {
 		switch record.Kind {
 		case ConfigFabricListKind, ConfigFabricPolicyKind:
-			if record.PublishState == repository.NostrPublishStateFailed {
+			if s.isDesiredAbandoned(ctx, record) {
 				// The outbox abandoned this version (at publish time or
 				// later in its runner): no relay holds it, so it is not
 				// desired state. Versions stay monotonic past it.

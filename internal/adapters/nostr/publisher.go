@@ -116,18 +116,15 @@ const (
 // each event is also archived to nostr_events with its outcome mirrored, best
 // effort, for the PostgreSQL-backed readers.
 //
-// PostgreSQL outbox rows are drained in place by the same runner: rows that
-// producers write inside a PostgreSQL transaction with the domain change they
-// audit (a local outbox cannot join that transaction), and rows left pending
-// by a daemon that predates the local outbox. Their per-relay acceptance is
-// kept in memory only, so after a restart those rows are resent to every
-// write relay and relays that already accepted answer OK "duplicate:". The
-// same applies to a row published before this publisher's Run is active.
+// Since bahia-irsry.62 the local outbox is a required dependency: the
+// constructor panics when a publisher that can run (redelivery-enabled)
+// is built without one. Pre-upgrade pending PostgreSQL rows are moved
+// to the local outbox by MigratePendingPostgresRows at startup.
 //
 // Every outbox entry a Publisher writes carries its publish target (see
-// WithPublishTarget), and its Run only drains entries and rows for that
-// target, so each event is retried to the relays of the pool it was written
-// for. Run one registered Publisher per target.
+// WithPublishTarget), and its Run only discovers entries for that target, so
+// each event is retried to the relays of the pool it was written for. Run
+// one registered Publisher per target.
 type Publisher struct {
 	pool       *RelayPool
 	privateKey string
@@ -136,11 +133,12 @@ type Publisher struct {
 	// eventRepo is the optional PostgreSQL nostr_events table. Without a local
 	// outbox it is the outbox itself; with one it is a best-effort archive.
 	eventRepo repository.NostrEventRepository
-	// outboxRepo is eventRepo's publish-state extension: the PostgreSQL rows
-	// this publisher drains (see the type comment).
+	// outboxRepo is eventRepo's publish-state extension. It is no longer
+	// drained at runtime (bahia-irsry.62): MigratePendingPostgresRows moves
+	// any pre-upgrade pending rows to the local outbox at startup.
 	outboxRepo repository.NostrEventOutboxRepository
-	// localOutbox, when set, owns the delivery of every event this publisher
-	// is asked to publish.
+	// localOutbox owns the delivery of every event this publisher is asked
+	// to publish. Required for redelivery-enabled publishers (bahia-irsry.62).
 	localOutbox *localstore.Outbox
 	// ownEvents is the daemon's local event store. Each published event is
 	// kept there as the daemon's latest output, and removed again if its
@@ -168,12 +166,11 @@ type Publisher struct {
 	running atomic.Bool
 	// wake nudges Run to recompute its next retry time.
 	wake chan struct{}
-	// outboxCursor and localCursor are the runner's keyset positions in the
-	// PostgreSQL and local pending outboxes; lastPrune is when it last pruned
-	// settled local entries. Only the Run goroutine touches them.
-	outboxCursor *repository.NostrOutboxCursor
-	localCursor  *localstore.OutboxCursor
-	lastPrune    time.Time
+	// localCursor is the runner's keyset position in the local pending
+	// outbox; lastPrune is when it last pruned settled local entries. Only
+	// the Run goroutine touches them.
+	localCursor *localstore.OutboxCursor
+	lastPrune   time.Time
 	// handlersMu guards the delivery outcome handlers (see OnDelivered and
 	// OnDeliveryAbandoned).
 	handlersMu        sync.RWMutex
@@ -196,8 +193,8 @@ type PublisherOption func(*Publisher)
 // WithLocalOutbox delivers every event this publisher is asked to publish
 // from the local outbox, and keeps the daemon's own outputs in its local
 // event store (both may be shared by several publishers). The PostgreSQL
-// repository given to NewPublisher, if any, becomes a best-effort archive,
-// and its pending rows are still drained (see the Publisher comment).
+// repository given to NewPublisher, if any, becomes a best-effort archive.
+// Required for redelivery-enabled publishers since bahia-irsry.62.
 func WithLocalOutbox(outbox *localstore.Outbox, ownEvents *localstore.Store) PublisherOption {
 	return func(p *Publisher) {
 		p.localOutbox = outbox
@@ -257,6 +254,8 @@ func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.
 	}
 	if publisher.localOutbox != nil {
 		publisher.archive = newPostgresArchive(eventRepo, logger)
+	} else if publisher.redeliveryEnabled() {
+		panic("nostr.Publisher: a redelivery-enabled publisher requires a local outbox (WithLocalOutbox); this is a wiring bug")
 	}
 	return publisher
 }
@@ -623,14 +622,13 @@ func (p *Publisher) Enqueue(ctx context.Context, ev nostr.Event, entityType stri
 	return nil
 }
 
-// admit makes ev durable in the outbox that delivers it: the local outbox
-// when configured (then also the daemon's own event store and the PostgreSQL
-// archive, both best effort), else the PostgreSQL outbox, else the
-// PostgreSQL audit table. prior, when non-nil, is a delivery round that ran
-// before admission (see PublishBeforeCommit): the local outbox entry starts
-// from its per-relay state, round count and delivered flag, so no relay that
-// accepted is contacted again. A PostgreSQL row keeps per-relay state in
-// memory only (see the Publisher comment).
+// admit makes ev durable in this publisher's outbox: the local outbox for
+// redelivery-enabled publishers (required since bahia-irsry.62), else the
+// PostgreSQL audit table for non-redelivery publishers that only record.
+// prior, when non-nil, is a delivery round that ran before admission (see
+// PublishBeforeCommit): the local outbox entry starts from its per-relay
+// state, round count and delivered flag, so no relay that accepted is
+// contacted again.
 func (p *Publisher) admit(ctx context.Context, ev nostr.Event, entityType string, entityID *uuid.UUID, prior *outboxDelivery) error {
 	switch {
 	case p.localOutbox != nil:
