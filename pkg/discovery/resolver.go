@@ -554,7 +554,7 @@ func limitationWarnings(limitations RelayAdvisoryLimitations) []string {
 // "auth-required:" or transient CLOSED or a dropped connection, so a CLOSED
 // here needs no handling beyond the log.
 func (r *Resolver) subscribeUntilClosed(ctx context.Context, pool relayPool) error {
-	merged, err := pool.SubscribeAllWithEOSE(ctx, []nostr.Filter{r.subscriptionFilter()})
+	merged, err := pool.SubscribeAllWithEOSE(ctx, []nostr.Filter{r.subscriptionFilter(), r.deletionFilter()})
 	if err != nil {
 		return err
 	}
@@ -657,7 +657,7 @@ func (r *Resolver) syncStore(ctx context.Context, pool *nostradapter.RelayPool, 
 			r.markSynced(0)
 		},
 	}
-	if err := syncer.Run(ctx, []nostr.Filter{r.endpointFilter()}); err != nil && ctx.Err() == nil {
+	if err := syncer.Run(ctx, []nostr.Filter{r.endpointFilter(), r.deletionFilter()}); err != nil && ctx.Err() == nil {
 		r.logger.Error("discovery resolver sync stopped", zap.Error(err))
 	}
 }
@@ -682,17 +682,35 @@ func (r *Resolver) applyLogged(ev *nostr.Event) bool {
 // the envelope's domain/schema/legacy_kind tags are multi-letter and are
 // checked locally.
 func (r *Resolver) endpointFilter() nostr.Filter {
+	return nostr.Filter{
+		Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
+		Authors: r.authorPubKeys(),
+		Tags:    nostr.TagMap{"t": []string{kinds.DNSEndpointTopic}},
+	}
+}
+
+// deletionFilter subscribes to NIP-09 kind-5 deletion events that target
+// DNS endpoint events (kind 30900). The #k tag scopes the deletion to
+// endpoint state only; #t does not apply because kind-5 events carry e/a
+// tags, not the target's topic tags. The local store's SaveEvent already
+// handles the mechanics (indexing the deletion, removing targeted events),
+// so receiving the event is sufficient. (bahia-irsry.48 item 6)
+func (r *Resolver) deletionFilter() nostr.Filter {
+	return nostr.Filter{
+		Kinds:   []nostr.Kind{nostr.KindDeletion},
+		Authors: r.authorPubKeys(),
+		Tags:    nostr.TagMap{"k": []string{strconv.Itoa(kinds.CASControlState)}},
+	}
+}
+
+func (r *Resolver) authorPubKeys() []nostr.PubKey {
 	authors := make([]nostr.PubKey, 0, len(r.authors))
 	for _, author := range r.authors {
 		if pubkey, err := nostrutil.PubKeyFromHex(author); err == nil {
 			authors = append(authors, pubkey)
 		}
 	}
-	return nostr.Filter{
-		Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
-		Authors: authors,
-		Tags:    nostr.TagMap{"t": []string{kinds.DNSEndpointTopic}},
-	}
+	return authors
 }
 
 // subscriptionFilter is the in-memory resolver's REQ: endpointFilter and,
@@ -709,14 +727,19 @@ func (r *Resolver) subscriptionFilter() nostr.Filter {
 	return filter
 }
 
-// applyEvent folds one DNS endpoint record into the cache. Per d coordinate
-// (shared by every trusted service key, see WithServiceKeys) the newest
-// created_at wins and equal created_at is broken by the lowest event id
-// (NIP-01), so the result does not depend on arrival order. A tombstone is
-// kept as a deleted record so older live events cannot resurrect it.
+// applyEvent folds one DNS endpoint record or NIP-09 kind-5 deletion into
+// the cache. Per d coordinate (shared by every trusted service key, see
+// WithServiceKeys) the newest created_at wins and equal created_at is broken
+// by the lowest event id (NIP-01), so the result does not depend on arrival
+// order. A tombstone or deletion is kept as a deleted record so older live
+// events cannot resurrect it.
 func (r *Resolver) applyEvent(event *nostr.Event) error {
 	if err := r.validateEnvelope(event); err != nil {
 		return err
+	}
+	// NIP-09 kind-5: remove every coordinate targeted by "a" tags.
+	if event.Kind == nostr.KindDeletion {
+		return r.applyDeletion(event)
 	}
 	coordinate := event.Tags.GetD()
 	id := nostrutil.EventIDHex(event)
@@ -747,6 +770,55 @@ func (r *Resolver) applyEvent(event *nostr.Event) error {
 	return nil
 }
 
+// applyDeletion processes a NIP-09 kind-5 event: every "a" tag that names a
+// kind-30900 coordinate whose current record was created before the deletion
+// is marked deleted.
+//
+// Addressable re-sync note: since=cursor is NOT correct for addressable
+// events (kind 30900), because the latest version's created_at is
+// independent of when it was published to the relay. A replaceable event
+// created at T1 may be published at T2 >> T1, and a subscription with
+// since=T2 would never see it. NIP-77 negentropy reconciliation is the
+// correct tool; full re-paging is the fallback. The store-backed path
+// already uses ProcessSync with NIP-77; the in-memory path resubscribes
+// with since=synced-overlap, which is safe because overlap is short and
+// synced is based on created_at, not publication time.
+func (r *Resolver) applyDeletion(event *nostr.Event) error {
+	id := nostrutil.EventIDHex(event)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, tag := range event.Tags {
+		if len(tag) < 2 || tag[0] != "a" {
+			continue
+		}
+		coordinate := coordinateD(tag[1])
+		if coordinate == "" {
+			continue
+		}
+		current, ok := r.records[coordinate]
+		if !ok {
+			// Record we haven't seen — mark it deleted so a late arrival
+			// from another relay doesn't resurrect it.
+			r.records[coordinate] = endpointRecord{createdAt: event.CreatedAt, eventID: id, deleted: true}
+			continue
+		}
+		if current.createdAt <= event.CreatedAt {
+			r.records[coordinate] = endpointRecord{createdAt: event.CreatedAt, eventID: id, deleted: true}
+		}
+	}
+	return nil
+}
+
+// coordinateD extracts the d-tag value from an "a" tag coordinate
+// (kind:pubkey:d). Returns "" for coordinates that don't have one.
+func coordinateD(coordinate string) string {
+	parts := strings.SplitN(coordinate, ":", 3)
+	if len(parts) < 3 || parts[2] == "" {
+		return ""
+	}
+	return parts[2]
+}
+
 func (r *Resolver) trustsAuthor(pubkey string) bool {
 	_, ok := r.authorSet[strings.ToLower(pubkey)]
 	return ok
@@ -759,9 +831,10 @@ func supersedes(createdAt nostr.Timestamp, id string, current endpointRecord) bo
 	return id < current.eventID
 }
 
-// validateEnvelope accepts only signed canonical DNS endpoint records from the
-// trusted Bahia service keys; relays that ignore #t may return other 30900
-// state, and relays do not enforce authors on our behalf.
+// validateEnvelope accepts signed canonical DNS endpoint records and NIP-09
+// kind-5 deletion events (targeting kind 30900) from the trusted Bahia service
+// keys. Relays that ignore #t may return other 30900 state, and relays do not
+// enforce authors on our behalf.
 func (r *Resolver) validateEnvelope(event *nostr.Event) error {
 	if event == nil {
 		return errors.New("nil event")
@@ -769,11 +842,14 @@ func (r *Resolver) validateEnvelope(event *nostr.Event) error {
 	if err := nostradapter.ValidateInboundEvent(event, time.Now().UTC(), nostradapter.InboundEventMaxFutureSkew); err != nil {
 		return err
 	}
-	if int(event.Kind) != kinds.CASControlState {
-		return fmt.Errorf("unexpected kind %d", event.Kind)
-	}
 	if pubkey := nostrutil.EventPubKeyHex(event); !r.trustsAuthor(pubkey) {
 		return fmt.Errorf("unexpected author %s", pubkey)
+	}
+	if event.Kind == nostr.KindDeletion {
+		return r.validateDeletion(event)
+	}
+	if int(event.Kind) != kinds.CASControlState {
+		return fmt.Errorf("unexpected kind %d", event.Kind)
 	}
 	if domain := firstTagValue(event.Tags, kinds.CASControlStateTagDomain); domain != kinds.DNSDomain {
 		return fmt.Errorf("%w: domain %q", errNotDNSEndpoint, domain)
@@ -788,6 +864,17 @@ func (r *Resolver) validateEnvelope(event *nostr.Event) error {
 		return errors.New("missing d tag coordinate")
 	}
 	return nil
+}
+
+// validateDeletion checks that a kind-5 event targets endpoint state.
+func (r *Resolver) validateDeletion(event *nostr.Event) error {
+	// Accept only kind-5 events that declare they target kind 30900.
+	for _, tag := range event.Tags {
+		if len(tag) >= 2 && tag[0] == "k" && tag[1] == strconv.Itoa(kinds.CASControlState) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: kind-5 does not target kind %d", errNotDNSEndpoint, kinds.CASControlState)
 }
 
 // endpointFromEvent parses the projector's DNS endpoint record: dnsEndpointTags

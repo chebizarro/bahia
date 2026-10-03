@@ -30,6 +30,15 @@ type NostrLocalStoreConfig struct {
 	// (repairing a relay from its peers). Off by default: the daemon is a
 	// consumer of these subscriptions, not their publisher.
 	NegentropyUpload bool `koanf:"negentropy_upload" yaml:"negentropy_upload" secret:"false"`
+	// RequestMaxAge is how old a ContextVM request's created_at may be and
+	// still run. Requests older than this are dropped unexecuted. Also
+	// controls how long ledger entries are kept.
+	RequestMaxAge time.Duration `koanf:"request_max_age" yaml:"request_max_age" secret:"false"`
+	// WrapBackdateOverlap is how far before a cursor a resumed ContextVM
+	// subscription starts, to cover NIP-59's outer created_at backdating
+	// (up to 48h) plus clock skew. A wrap published at time T has an outer
+	// created_at of at least T minus this overlap.
+	WrapBackdateOverlap time.Duration `koanf:"wrap_backdate_overlap" yaml:"wrap_backdate_overlap" secret:"false"`
 	// OutboxPath is the bbolt file of the daemon's publish outbox: signed
 	// events waiting for relay acceptance, with each relay's delivery state
 	// (bahia-irsry.10.4). Unlike Path it is not a cache, so it is a separate
@@ -50,10 +59,16 @@ func (c NostrLocalStoreConfig) ResolvedOutboxPath() string {
 const (
 	// DefaultNostrLocalStorePath is relative to the daemon's working
 	// directory, next to the relay sidecar's default ./data/relay-sidecar.
-	DefaultNostrLocalStorePath            = "./data/nostr-cache/daemon.bolt"
-	DefaultNostrLocalStoreResumeOverlap   = 10 * time.Minute
-	DefaultNostrLocalStoreRegularLookback = 24 * time.Hour
-	MaxNostrLocalStoreResumeOverlap       = 24 * time.Hour
+	DefaultNostrLocalStorePath                = "./data/nostr-cache/daemon.bolt"
+	DefaultNostrLocalStoreResumeOverlap       = 10 * time.Minute
+	DefaultNostrLocalStoreRegularLookback     = 24 * time.Hour
+	MaxNostrLocalStoreResumeOverlap           = 24 * time.Hour
+	DefaultNostrLocalStoreRequestMaxAge       = 7 * 24 * time.Hour
+	DefaultNostrLocalStoreWrapBackdateOverlap = 49 * time.Hour
+	MinNostrLocalStoreRequestMaxAge           = time.Hour
+	MaxNostrLocalStoreRequestMaxAge           = 30 * 24 * time.Hour
+	MinNostrLocalStoreWrapBackdateOverlap     = time.Hour
+	MaxNostrLocalStoreWrapBackdateOverlap     = 72 * time.Hour
 	// relaySidecarEventStoreFile is internal/relaysidecar's store file name
 	// under nostr.sidecar.data_dir.
 	relaySidecarEventStoreFile = "events.bolt"
@@ -64,9 +79,11 @@ const (
 // DefaultNostrLocalStoreConfig returns the local event store defaults.
 func DefaultNostrLocalStoreConfig() NostrLocalStoreConfig {
 	return NostrLocalStoreConfig{
-		Path:            DefaultNostrLocalStorePath,
-		ResumeOverlap:   DefaultNostrLocalStoreResumeOverlap,
-		RegularLookback: DefaultNostrLocalStoreRegularLookback,
+		Path:                DefaultNostrLocalStorePath,
+		ResumeOverlap:       DefaultNostrLocalStoreResumeOverlap,
+		RegularLookback:     DefaultNostrLocalStoreRegularLookback,
+		RequestMaxAge:       DefaultNostrLocalStoreRequestMaxAge,
+		WrapBackdateOverlap: DefaultNostrLocalStoreWrapBackdateOverlap,
 	}
 }
 
@@ -104,6 +121,12 @@ func (c *Config) validateNostrLocalStore() error {
 	}
 	if store.RegularLookback < 0 || (store.RegularLookback > 0 && store.RegularLookback < time.Second) {
 		return fmt.Errorf("config validation failed: nostr.local_store.regular_lookback must be 0 (whole history) or at least 1s (a bare number is nanoseconds)")
+	}
+	if store.RequestMaxAge < MinNostrLocalStoreRequestMaxAge || store.RequestMaxAge > MaxNostrLocalStoreRequestMaxAge {
+		return fmt.Errorf("config validation failed: nostr.local_store.request_max_age must be between %s and %s", MinNostrLocalStoreRequestMaxAge, MaxNostrLocalStoreRequestMaxAge)
+	}
+	if store.WrapBackdateOverlap < MinNostrLocalStoreWrapBackdateOverlap || store.WrapBackdateOverlap > MaxNostrLocalStoreWrapBackdateOverlap {
+		return fmt.Errorf("config validation failed: nostr.local_store.wrap_backdate_overlap must be between %s and %s", MinNostrLocalStoreWrapBackdateOverlap, MaxNostrLocalStoreWrapBackdateOverlap)
 	}
 	return nil
 }

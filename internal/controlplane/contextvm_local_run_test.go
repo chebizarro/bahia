@@ -401,10 +401,9 @@ func contextVMReceive[T any](t *testing.T, ch <-chan T) T {
 // startScriptedContextVMTransport runs a transport over pool whose response
 // handler reports each delivered response's id: a stand-in for any event
 // the subscription carries.
-func startScriptedContextVMTransport(t *testing.T, store *localstore.Store, pool *contextVMScriptedPool, reanchorAge time.Duration) (<-chan string, <-chan nostr.Timestamp) {
+func startScriptedContextVMTransport(t *testing.T, store *localstore.Store, pool *contextVMScriptedPool) (<-chan string, <-chan nostr.Timestamp) {
 	t.Helper()
 	transport := NewEncryptedRequestTransport(pool, newResponder(t, &mockEncryptedPublisher{}), nil, zap.NewNop(), WithContextVMLocalStore(store))
-	transport.contextVMLocal.reanchorAge = reanchorAge
 	processed := make(chan string, 16)
 	commits := make(chan nostr.Timestamp, 16)
 	transport.RegisterContextVMResponseHandler(func(_ context.Context, envelope ContextVMResponseEnvelope) { processed <- envelope.Event.ID.Hex() })
@@ -456,7 +455,7 @@ func TestContextVMResumeSinceUsesEachRelaysCursorBoundedByTheAgeFloor(t *testing
 		"wss://cold.example":   ago(floor + overlap), // no cursor yet
 	}
 	pool := newContextVMScriptedPool("wss://recent.example", "wss://older.example", "wss://stale.example", "wss://cold.example")
-	startScriptedContextVMTransport(t, store, pool, 0)
+	startScriptedContextVMTransport(t, store, pool)
 	for range want {
 		sub := pool.nextSub(t)
 		if len(sub.filters) != 1 || len(sub.opts.Relays) != 1 || !sub.opts.AwaitUnavailableRelays || sub.opts.ResumeOverlap != overlap {
@@ -481,7 +480,7 @@ func TestContextVMCursorCommitsOnlyAtItsOwnREQsEOSE(t *testing.T) {
 	service := contextVMServicePubkey(t).Hex()
 	pool := newContextVMScriptedPool("wss://relay.example")
 	before := nostr.Now()
-	processed, commits := startScriptedContextVMTransport(t, store, pool, 0)
+	processed, commits := startScriptedContextVMTransport(t, store, pool)
 	sub := pool.nextSub(t)
 
 	stored := contextVMTestResponseEvent(t, "stored")
@@ -523,34 +522,46 @@ func TestContextVMCursorCommitsOnlyAtItsOwnREQsEOSE(t *testing.T) {
 	}
 }
 
-func TestContextVMLiveEventReanchorsWithoutAGap(t *testing.T) {
+func TestContextVMReissuedEOSECommitsCursor(t *testing.T) {
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "contextvm.bolt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	pool := newContextVMScriptedPool("wss://relay.example")
-	// Any cursor is stale: the first live event after EOSE re-anchors.
-	processed, commits := startScriptedContextVMTransport(t, store, pool, time.Nanosecond)
-	first := pool.nextSub(t)
-	contextVMSend(t, first.eose, nostrpool.RelayEOSE{RelayURL: "wss://relay.example"})
-	anchor := contextVMReceive(t, commits)
-	contextVMSend(t, first.events, contextVMTestResponseEvent(t, "live-1"))
+	processed, commits := startScriptedContextVMTransport(t, store, pool)
+	sub := pool.nextSub(t)
+
+	// Initial EOSE commits the original anchor.
+	contextVMSend(t, sub.eose, nostrpool.RelayEOSE{RelayURL: "wss://relay.example"})
+	initialAnchor := contextVMReceive(t, commits)
+
+	// A live event is delivered normally.
+	contextVMSend(t, sub.events, contextVMTestResponseEvent(t, "live-1"))
 	contextVMReceive(t, processed)
-	second := pool.nextSub(t)
-	if want := anchor - nostr.Timestamp((49*time.Hour)/time.Second); second.filters[0].Since < want-2 || second.filters[0].Since > want+2 {
-		t.Fatalf("re-anchor since = %v, want about %v", second.filters[0].Since.Time(), want.Time())
+
+	// A reissued EOSE (pool reconnected and replayed) advances the cursor.
+	// Use initialAnchor+10 to guarantee it is strictly after the original,
+	// even when both would round to the same second.
+	reissueTime := initialAnchor + 10
+	contextVMSend(t, sub.eose, nostrpool.RelayEOSE{
+		RelayURL:   "wss://relay.example",
+		Reissued:   true,
+		ReissuedAt: reissueTime,
+	})
+	reissuedAnchor := contextVMReceive(t, commits)
+	if reissuedAnchor != reissueTime {
+		t.Fatalf("reissued cursor = %d, want reissueTime %d", reissuedAnchor, reissueTime)
+	}
+	if reissuedAnchor <= initialAnchor {
+		t.Fatalf("reissued cursor %d <= initial %d", reissuedAnchor, initialAnchor)
 	}
 
-	// Until the new REQ reaches EOSE, the old one still delivers.
-	gap := contextVMTestResponseEvent(t, "during-reanchor")
-	contextVMSend(t, first.events, gap)
-	if got := contextVMReceive(t, processed); got != gap.ID.Hex() {
-		t.Fatalf("processed %s", got)
-	}
-	contextVMSend(t, second.eose, nostrpool.RelayEOSE{RelayURL: "wss://relay.example"})
-	if next := contextVMReceive(t, commits); next < anchor {
-		t.Fatalf("re-anchored cursor %d < %d", next, anchor)
+	// No second subscription should have been opened (no re-anchor loop).
+	select {
+	case <-pool.subs:
+		t.Fatal("unexpected second subscription: re-anchor loop should be gone")
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

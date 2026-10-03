@@ -916,6 +916,14 @@ func (e publishAggregateError) Unwrap() []error {
 type RelayEOSE struct {
 	RelayURL       string
 	SubscriptionID string
+	// Reissued is true when this EOSE comes from a REQ the pool reissued
+	// after a dropped connection or a retryable CLOSED, not the subscription's
+	// initial REQ. Consumers that track cursors can commit a fresh anchor at
+	// a reissued EOSE without a periodic re-anchor REQ (bahia-irsry.48 item 4).
+	Reissued bool
+	// ReissuedAt, when Reissued, is the wall-clock time taken just before
+	// the reissued REQ was opened: the cursor anchor for the reissue.
+	ReissuedAt nostr.Timestamp
 }
 
 // RelayClosed identifies a relay subscription CLOSED message and its relay-provided reason.
@@ -1670,8 +1678,12 @@ func (s *activeMergedSubscription) runWorker(worker *relayFilterWorker, group *a
 	budget := s.pool.newClosedRetryBudget()
 	// Only a worker's first EOSE and first CLOSED block on the consumer.
 	eoseEmitted, closedEmitted := false, false
+	var reissueAnchor nostr.Timestamp
 	for {
 		if sub == nil {
+			if eoseEmitted {
+				reissueAnchor = nostr.Now()
+			}
 			sub, release = s.resubscribe(ctx, worker, backoff, immediate)
 			if sub == nil {
 				return
@@ -1682,7 +1694,12 @@ func (s *activeMergedSubscription) runWorker(worker *relayFilterWorker, group *a
 		subID := subscriptionID(sub)
 		end := s.consume(ctx, worker, sub, func() {
 			settle(RelayStoredEOSE, "")
-			s.emitRelayEOSE(ctx, RelayEOSE{RelayURL: relayURL, SubscriptionID: subID}, !eoseEmitted)
+			eose := RelayEOSE{RelayURL: relayURL, SubscriptionID: subID}
+			if eoseEmitted {
+				eose.Reissued = true
+				eose.ReissuedAt = reissueAnchor
+			}
+			s.emitRelayEOSE(ctx, eose, !eoseEmitted)
 			eoseEmitted = true
 		})
 		relay := sub.Relay

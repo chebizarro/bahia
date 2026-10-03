@@ -444,6 +444,30 @@ func WithContextVMLocalStore(store *localstore.Store) EncryptedRequestTransportO
 	return func(transport *EncryptedRequestTransport) { transport.contextVMLocal.store = store }
 }
 
+// ContextVMLocalConfig tunes the request ledger's timing parameters.
+// Zero values use the defaults in contextvm_local_run.go.
+type ContextVMLocalConfig struct {
+	// RequestMaxAge is the maximum age of a request that will be executed.
+	// Older requests are dropped silently. Also controls ledger pruning.
+	RequestMaxAge time.Duration
+	// WrapBackdateOverlap is the NIP-59 backdating window applied when
+	// computing the since parameter for relay subscriptions.
+	WrapBackdateOverlap time.Duration
+}
+
+// WithContextVMLocalStoreConfig applies timing configuration to the ContextVM
+// local request ledger. Must be used together with WithContextVMLocalStore.
+func WithContextVMLocalStoreConfig(cfg ContextVMLocalConfig) EncryptedRequestTransportOption {
+	return func(transport *EncryptedRequestTransport) {
+		if cfg.RequestMaxAge > 0 {
+			transport.contextVMLocal.requestMaxAge = cfg.RequestMaxAge
+		}
+		if cfg.WrapBackdateOverlap > 0 {
+			transport.contextVMLocal.wrapBackdateOverlap = cfg.WrapBackdateOverlap
+		}
+	}
+}
+
 // SetGiftWrapIntentIngress sets the ingress handler for gift-wrapped 30900
 // intents received through the existing 1059 ContextVM subscription. When set,
 // unwrapped inner events that are kind 30900 with t=bahia-intent are routed to

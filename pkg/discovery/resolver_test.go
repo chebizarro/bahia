@@ -122,6 +122,68 @@ func TestResolverTombstoneRemovesEndpointAndStaleLiveCannotResurrect(t *testing.
 	require.Equal(t, "10.0.0.12", endpoint.Address)
 }
 
+func TestResolverNIP09DeletionRemovesEndpoint(t *testing.T) {
+	secretKey, pubkey := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+	base := resolverTestBase()
+	api := apiEndpoint("10.0.0.10")
+
+	require.NoError(t, resolver.applyEvent(liveEndpointEvent(t, secretKey, api, base)))
+	_, ok := resolver.ResolveByFQDN(api.FQDN)
+	require.True(t, ok, "endpoint should exist before deletion")
+
+	// A kind-5 deletion targeting the coordinate via "a" tag.
+	deletion := makeKind5Deletion(t, secretKey, api.Coordinate, pubkey, base+10)
+	require.NoError(t, resolver.applyEvent(deletion))
+	_, ok = resolver.ResolveByFQDN(api.FQDN)
+	require.False(t, ok, "endpoint should be removed after NIP-09 deletion")
+
+	// A stale live record replayed from another relay must not resurrect it.
+	require.NoError(t, resolver.applyEvent(liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.11"), base+5)))
+	_, ok = resolver.ResolveByFQDN(api.FQDN)
+	require.False(t, ok, "stale live event must not resurrect a deleted endpoint")
+
+	// A genuinely newer live record re-creates the endpoint.
+	require.NoError(t, resolver.applyEvent(liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.13"), base+20)))
+	ep, ok := resolver.ResolveByFQDN(api.FQDN)
+	require.True(t, ok)
+	require.Equal(t, "10.0.0.13", ep.Address)
+}
+
+func TestResolverNIP09DeletionIgnoredForWrongKind(t *testing.T) {
+	secretKey, pubkey := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+	base := resolverTestBase()
+	api := apiEndpoint("10.0.0.10")
+
+	require.NoError(t, resolver.applyEvent(liveEndpointEvent(t, secretKey, api, base)))
+
+	// A kind-5 deletion that targets a different kind should be rejected.
+	deletion := &nostr.Event{
+		CreatedAt: base + 10,
+		Kind:      nostr.KindDeletion,
+		Tags: nostr.Tags{
+			{"k", "31976"}, // wrong kind
+			{"a", strconv.Itoa(kinds.CASControlState) + ":" + pubkey + ":" + api.Coordinate},
+		},
+	}
+	signResolverEvent(t, deletion, secretKey)
+	err := resolver.applyEvent(deletion)
+	require.Error(t, err, "kind-5 targeting wrong kind should be rejected")
+
+	_, ok := resolver.ResolveByFQDN(api.FQDN)
+	require.True(t, ok, "endpoint should still exist")
+}
+
+func TestResolverDeletionFilterIncludesKind5(t *testing.T) {
+	_, pubkey := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+
+	filter := resolver.deletionFilter()
+	require.Equal(t, []nostr.Kind{nostr.KindDeletion}, filter.Kinds)
+	require.Equal(t, nostr.TagMap{"k": []string{strconv.Itoa(kinds.CASControlState)}}, filter.Tags)
+}
+
 func TestResolverIgnoresStaleEvents(t *testing.T) {
 	secretKey, pubkey := generatedResolverKeyPair(t)
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)
@@ -370,6 +432,22 @@ func apiEndpoint(address string) domain.DNSEndpoint {
 		Family: domain.DNSEndpointFamilyService, Name: "api", Environment: "prod", Zone: "svc.example.com",
 		FQDN: "api.svc.example.com", Coordinate: "service:api:prod", Address: address, Health: domain.HealthStatusHealthy,
 	}
+}
+
+// makeKind5Deletion creates a signed NIP-09 kind-5 deletion event targeting
+// a kind-30900 coordinate via an "a" tag.
+func makeKind5Deletion(t *testing.T, secretKey, coordinate, pubkey string, createdAt nostr.Timestamp) *nostr.Event {
+	t.Helper()
+	event := &nostr.Event{
+		CreatedAt: createdAt,
+		Kind:      nostr.KindDeletion,
+		Tags: nostr.Tags{
+			{"k", strconv.Itoa(kinds.CASControlState)},
+			{"a", strconv.Itoa(kinds.CASControlState) + ":" + pubkey + ":" + coordinate},
+		},
+	}
+	signResolverEvent(t, event, secretKey)
+	return event
 }
 
 func generatedResolverKeyPair(t *testing.T) (string, string) {

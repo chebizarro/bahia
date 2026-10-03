@@ -17,9 +17,9 @@ package controlplane
 // REQ transparently after a dropped connection, and the transport cannot tell
 // that reissue's backfill from live delivery, so "now" could skip a backfill
 // that a crash interrupted. Instead, a live event that finds the cursor older
-// than contextVMCursorReanchorAge opens a fresh REQ, and that REQ's EOSE
-// commits a new anchor. The old REQ keeps delivering until then, so there is
-// no gap for ephemeral requests.
+// than a configurable age. When the pool reissues the REQ after a reconnect,
+// the reissued REQ's EOSE carries a ReissuedAt timestamp that is committed as
+// a cursor, keeping it fresh without a separate re-anchor loop.
 //
 // Backdating. NIP-59 lets a sender randomize a wrap's outer created_at up to
 // two days into the past, so the outer timestamp says almost nothing about
@@ -88,22 +88,18 @@ const (
 	// execution never completed.
 	ContextVMDuplicateRequestErrorCode = -32011
 
-	// contextVMWrapBackdateOverlap: NIP-59's two-day outer backdating plus
-	// an hour for clock skew (InboundEventMaxFutureSkew is 10 minutes) and
-	// second rounding.
-	contextVMWrapBackdateOverlap = 49 * time.Hour
-	// contextVMRequestMaxAge is how old a request may be and still run, and
-	// so how long the ledger remembers one.
-	contextVMRequestMaxAge = 7 * 24 * time.Hour
+	// contextVMDefaultWrapBackdateOverlap: NIP-59's two-day outer backdating
+	// plus an hour for clock skew (InboundEventMaxFutureSkew is 10 minutes)
+	// and second rounding. Overridden by ContextVMLocalConfig.WrapBackdateOverlap.
+	contextVMDefaultWrapBackdateOverlap = 49 * time.Hour
+	// contextVMDefaultRequestMaxAge is how old a request may be and still
+	// run, and so how long the ledger remembers one. Overridden by
+	// ContextVMLocalConfig.RequestMaxAge.
+	contextVMDefaultRequestMaxAge = 7 * 24 * time.Hour
 	// contextVMColdLedgerGrace lets a new ledger accept requests created
 	// this long before it, matching the replay window of the transport it
 	// replaces.
 	contextVMColdLedgerGrace = encryptedRequestReplayLookback
-	// contextVMCursorReanchorAge is how stale a cursor may get during live
-	// delivery before a fresh REQ re-anchors it. A cursor this old only
-	// lengthens the next restart's replay, by at most this much over the
-	// 49h overlap.
-	contextVMCursorReanchorAge = 12 * time.Hour
 	// contextVMLedgerPruneInterval spaces ledger pruning, which runs at
 	// start and after EOSE commits.
 	contextVMLedgerPruneInterval = 6 * time.Hour
@@ -130,22 +126,31 @@ type contextVMLocalState struct {
 	// checked, claimed, handled and marked before the next one starts.
 	processMu sync.Mutex
 	lastPrune time.Time // guarded by processMu
-	// reanchorAge overrides contextVMCursorReanchorAge (tests).
-	reanchorAge time.Duration
+	// requestMaxAge overrides contextVMDefaultRequestMaxAge.
+	requestMaxAge time.Duration
+	// wrapBackdateOverlap overrides contextVMDefaultWrapBackdateOverlap.
+	wrapBackdateOverlap time.Duration
 	// onCaughtUp, when set, observes each EOSE cursor commit (tests).
 	onCaughtUp func(relayURL string, cursor nostr.Timestamp)
 }
 
-func (l *contextVMLocalState) reanchorAfter() time.Duration {
-	if l.reanchorAge > 0 {
-		return l.reanchorAge
+func (l *contextVMLocalState) maxAge() time.Duration {
+	if l.requestMaxAge > 0 {
+		return l.requestMaxAge
 	}
-	return contextVMCursorReanchorAge
+	return contextVMDefaultRequestMaxAge
+}
+
+func (l *contextVMLocalState) backdateOverlap() time.Duration {
+	if l.wrapBackdateOverlap > 0 {
+		return l.wrapBackdateOverlap
+	}
+	return contextVMDefaultWrapBackdateOverlap
 }
 
 // innerFloor is the oldest request created_at that may still run.
 func (l *contextVMLocalState) innerFloor(now time.Time) nostr.Timestamp {
-	floor := now.Add(-contextVMRequestMaxAge)
+	floor := now.Add(-l.maxAge())
 	if cold := l.epoch.Add(-contextVMColdLedgerGrace); cold.After(floor) {
 		floor = cold
 	}
@@ -159,7 +164,7 @@ func (l *contextVMLocalState) pruneLocked(now time.Time, logger *zap.Logger) {
 		return
 	}
 	l.lastPrune = now
-	cutoff := now.Add(-(contextVMRequestMaxAge + contextVMWrapBackdateOverlap + time.Hour))
+	cutoff := now.Add(-(l.maxAge() + l.backdateOverlap() + time.Hour))
 	removed, err := l.store.PruneContextVMLedger(cutoff)
 	if err != nil {
 		logger.Warn("prune ContextVM request ledger failed", zap.Error(err))
@@ -450,21 +455,13 @@ type contextVMRelayFollower struct {
 }
 
 func (f *contextVMRelayFollower) run(ctx context.Context) error {
-	var retiring *nostrpool.MergedSubscription
-	for {
-		anchor := nostr.Now()
-		sub, err := f.subscribe(ctx, anchor)
-		if err != nil {
-			retiring.Close()
-			return err
-		}
-		if err := f.follow(ctx, sub, anchor, retiring); err != nil {
-			sub.Close()
-			return err
-		}
-		// Re-anchor: sub keeps delivering until its replacement reaches EOSE.
-		retiring = sub
+	anchor := nostr.Now()
+	sub, err := f.subscribe(ctx, anchor)
+	if err != nil {
+		return err
 	}
+	defer sub.Close()
+	return f.follow(ctx, sub, anchor)
 }
 
 func (f *contextVMRelayFollower) subscribe(ctx context.Context, anchor nostr.Timestamp) (*nostrpool.MergedSubscription, error) {
@@ -477,7 +474,7 @@ func (f *contextVMRelayFollower) subscribe(ctx context.Context, anchor nostr.Tim
 	if floor := local.innerFloor(anchor.Time()); floor > from {
 		from = floor
 	}
-	since := from - nostr.Timestamp(contextVMWrapBackdateOverlap/time.Second)
+	since := from - nostr.Timestamp(local.backdateOverlap()/time.Second)
 	f.t.logger.Info("subscribing to ContextVM requests",
 		zap.String("relay", f.relayURL),
 		zap.Int64("cursor", int64(cursor)),
@@ -488,7 +485,7 @@ func (f *contextVMRelayFollower) subscribe(ctx context.Context, anchor nostr.Tim
 		AwaitUnavailableRelays: true,
 		// The pool's own resume after a reconnect uses the newest delivered
 		// created_at, so it needs the same backdating overlap.
-		ResumeOverlap: contextVMWrapBackdateOverlap,
+		ResumeOverlap: local.backdateOverlap(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("subscribe to ContextVM requests on %s: %w", f.relayURL, err)
@@ -496,16 +493,12 @@ func (f *contextVMRelayFollower) subscribe(ctx context.Context, anchor nostr.Tim
 	return sub, nil
 }
 
-// follow consumes sub, the REQ opened at anchor, and commits anchor at its
-// first EOSE. Until then retiring, the REQ it replaces, keeps delivering, and
-// it is closed at that EOSE. follow returns nil when sub is due to be
-// replaced by a fresher anchor.
-func (f *contextVMRelayFollower) follow(ctx context.Context, sub *nostrpool.MergedSubscription, anchor nostr.Timestamp, retiring *nostrpool.MergedSubscription) error {
-	defer func() { retiring.Close() }()
-	var retiringEvents <-chan *nostr.Event
-	if retiring != nil {
-		retiringEvents = retiring.Events
-	}
+// follow consumes sub (the REQ opened at anchor) and commits anchor at its
+// first EOSE. The pool transparently reissues the REQ after a dropped
+// connection or a retryable CLOSED; those reissued REQs' EOSEs carry a
+// Reissued flag and a fresh anchor that is committed as a cursor, keeping
+// it up to date without a periodic re-anchor REQ (bahia-irsry.48 item 4).
+func (f *contextVMRelayFollower) follow(ctx context.Context, sub *nostrpool.MergedSubscription, anchor nostr.Timestamp) error {
 	events, eoses, closes := sub.Events, sub.RelayEOSE, sub.Closed
 	local := &f.t.contextVMLocal
 	caughtUp := false
@@ -513,14 +506,6 @@ func (f *contextVMRelayFollower) follow(ctx context.Context, sub *nostrpool.Merg
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case ev, ok := <-retiringEvents:
-			if !ok {
-				retiringEvents = nil
-				continue
-			}
-			if err := f.t.processContextVMDelivery(ctx, ev); err != nil {
-				return err
-			}
 		case ev, ok := <-events:
 			if !ok {
 				return errContextVMRelayEnded
@@ -528,18 +513,32 @@ func (f *contextVMRelayFollower) follow(ctx context.Context, sub *nostrpool.Merg
 			if err := f.t.processContextVMDelivery(ctx, ev); err != nil {
 				return err
 			}
-			if caughtUp && time.Since(anchor.Time()) >= local.reanchorAfter() {
-				return nil
-			}
-		case _, ok := <-eoses:
+		case eose, ok := <-eoses:
 			if !ok {
 				eoses = nil
 				continue
 			}
 			if caughtUp {
-				// A REQ the pool reissued after a reconnect caught up. Its
-				// start time is unknown here, so it commits nothing.
-				f.t.logger.Debug("reissued ContextVM request subscription caught up", zap.String("relay", f.relayURL))
+				// A REQ the pool reissued after a reconnect caught up.
+				// If it carries a reissue anchor, commit it so the cursor
+				// stays fresh across reconnects.
+				if eose.Reissued && eose.ReissuedAt > 0 {
+					if err := local.store.AdvanceContextVMCursor(f.relayURL, f.servicePubkey, eose.ReissuedAt); err != nil {
+						return fmt.Errorf("%w: %w", errContextVMLedger, err)
+					}
+					f.t.logger.Info("reissued ContextVM subscription caught up; cursor advanced",
+						zap.String("relay", f.relayURL),
+						zap.Time("cursor", eose.ReissuedAt.Time()),
+					)
+					local.processMu.Lock()
+					local.pruneLocked(time.Now(), f.t.logger)
+					local.processMu.Unlock()
+					if local.onCaughtUp != nil {
+						local.onCaughtUp(f.relayURL, eose.ReissuedAt)
+					}
+				} else {
+					f.t.logger.Debug("reissued ContextVM request subscription caught up", zap.String("relay", f.relayURL))
+				}
 				continue
 			}
 			// The pool queues a relay's stored events before its EOSE, on
@@ -561,8 +560,6 @@ func (f *contextVMRelayFollower) follow(ctx context.Context, sub *nostrpool.Merg
 				return fmt.Errorf("%w: %w", errContextVMLedger, err)
 			}
 			caughtUp = true
-			retiring.Close()
-			retiring, retiringEvents = nil, nil
 			f.t.logger.Info("ContextVM requests caught up", zap.String("relay", f.relayURL), zap.Time("cursor", anchor.Time()))
 			local.processMu.Lock()
 			local.pruneLocked(time.Now(), f.t.logger)
