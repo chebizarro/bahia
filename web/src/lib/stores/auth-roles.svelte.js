@@ -5,7 +5,7 @@
  *   1. Discovering key-envelope records (kind 30900, t=org-key-envelope)
  *   2. Trial-decrypting each with the signer's NIP-44 to find the user's OCK
  *   3. Decrypting org-member records using the OCK
- *   4. Extracting the role field
+ *   4. Extracting only the signed-in member's role
  *
  * The OCK is cached in memory only — never persisted to IndexedDB or
  * localStorage (C1-R5).
@@ -180,7 +180,7 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
     if (generation !== derivationGeneration) return;
 
     // 3. Load existing member records and decrypt with discovered OCKs
-    await processMemberRecords(store, servicePubkey);
+    processMemberRecords(store, servicePubkey, userPubkey);
     if (generation !== derivationGeneration) return;
 
     // 4. Subscribe to live updates for both key envelopes and member records
@@ -190,7 +190,7 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
         if (generation !== derivationGeneration) return;
         // Re-process on any key envelope change
         processKeyEnvelopes(store, userPubkey, servicePubkey, signer, generation)
-          .then(() => generation === derivationGeneration && processMemberRecords(store, servicePubkey))
+          .then(() => generation === derivationGeneration && processMemberRecords(store, servicePubkey, userPubkey))
           .catch(err => console.warn('[auth-roles] live key envelope processing error:', err));
       }
     );
@@ -201,8 +201,7 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
       () => {
         if (generation !== derivationGeneration) return;
         // Re-process member records when new ones arrive
-        processMemberRecords(store, servicePubkey)
-          .catch(err => console.warn('[auth-roles] live member record processing error:', err));
+        processMemberRecords(store, servicePubkey, userPubkey);
       }
     );
     activeUnsubscribes.push(memberUnsub);
@@ -275,15 +274,21 @@ async function processKeyEnvelopes(store, userPubkey, servicePubkey, signer, gen
 /**
  * Process encrypted org-member records to extract roles.
  */
-async function processMemberRecords(store, servicePubkey) {
+function processMemberRecords(store, servicePubkey, userPubkey) {
   const memberEvents = store.query({
     kinds: [CASCADIA_CONTROLPLANE_STATE],
     '#t': [ORG_MEMBER_TOPIC]
   });
+  const latestByOrg = new Map();
 
   for (const event of memberEvents) {
     // Only process events from the service pubkey
     if (event.pubkey !== servicePubkey) continue;
+
+    // The coordinate identifies the member without decrypting other members'
+    // records. Check the decrypted identity too; either one alone is insufficient.
+    const dTag = getTagValue(event, 'd') || '';
+    if (!dTag.startsWith('org:member:') || !dTag.endsWith(`:${userPubkey}`)) continue;
 
     // Check if this is a confidential envelope
     if (!isConfidentialEnvelope(event.content)) continue;
@@ -296,6 +301,7 @@ async function processMemberRecords(store, servicePubkey) {
       const orgID = parsed.key_org;
       const versionStr = parsed.key_version;
       if (!orgID || !versionStr) continue;
+      if (dTag !== `org:member:${orgID}:${userPubkey}`) continue;
 
       const version = parseInt(versionStr.substring(1), 10);
       if (isNaN(version)) continue;
@@ -306,7 +312,6 @@ async function processMemberRecords(store, servicePubkey) {
       if (!ock) continue;
 
       // Get record context from the verified event tags
-      const dTag = getTagValue(event, 'd') || '';
       const topic = getTagValue(event, 't') || '';
       const legacyKindTag = getTagValue(event, 'legacy_kind');
       const legacyKind = legacyKindTag ? parseInt(legacyKindTag, 10) : ORG_MEMBER_LEGACY_KIND;
@@ -319,14 +324,31 @@ async function processMemberRecords(store, servicePubkey) {
       });
 
       const memberData = JSON.parse(plaintext);
-      if (memberData.org_id && memberData.role) {
-        orgRoles[memberData.org_id] = memberData.role;
-      }
+      if (memberData.org_id !== orgID || memberData.pubkey !== userPubkey) continue;
+      const existing = latestByOrg.get(orgID);
+      if (existing && (event.created_at < existing.created_at ||
+        (event.created_at === existing.created_at && event.id >= existing.id))) continue;
+      latestByOrg.set(orgID, {
+        created_at: event.created_at,
+        id: event.id,
+        role: memberData.deleted === true || getTagValue(event, 'deleted') === 'true'
+          ? null
+          : memberData.role
+      });
     } catch (err) {
       // Can't decrypt — wrong key version, not our org, or corrupted
       // Skip silently; we'll retry when new key envelopes arrive
       continue;
     }
+  }
+
+  // A replacement, deletion, or disappearance must revoke a previously derived
+  // role; never leave stale entries from an earlier store query.
+  for (const orgID of Object.keys(orgRoles)) {
+    if (!latestByOrg.get(orgID)?.role) delete orgRoles[orgID];
+  }
+  for (const [orgID, { role }] of latestByOrg) {
+    if (role) orgRoles[orgID] = role;
   }
 }
 

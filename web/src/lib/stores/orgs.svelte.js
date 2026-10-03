@@ -14,11 +14,16 @@ export const orgsState = $state({
 
 export const orgDetailState = $state({
   org: null,
-  members: [],
   invites: [],
-  myRole: null,
   loading: false,
   error: null
+});
+
+// Full org member list for the detail page. Unlike auth-roles.orgRoles, this
+// intentionally includes other members and must never grant UI permissions.
+export const orgMemberListState = $state({
+  orgID: '',
+  members: []
 });
 
 const ORG_ENCRYPTED_DOMAIN_TAG = ['domain', 'orgs'];
@@ -68,9 +73,9 @@ export function resetOrgsState() {
 
 export function resetOrgDetailState() {
   orgDetailState.org = null;
-  orgDetailState.members = [];
+  orgMemberListState.orgID = '';
+  orgMemberListState.members = [];
   orgDetailState.invites = [];
-  orgDetailState.myRole = null;
   orgDetailState.loading = false;
   orgDetailState.error = null;
 }
@@ -157,9 +162,9 @@ export async function loadOrgDetail(id) {
   try {
     const detail = await encryptedOrgRequest('orgs.detail', { id: orgId });
     orgDetailState.org = detail?.org ?? null;
-    orgDetailState.members = Array.isArray(detail?.members) ? detail.members : [];
+    orgMemberListState.orgID = orgId;
+    orgMemberListState.members = Array.isArray(detail?.members) ? detail.members : [];
     orgDetailState.invites = Array.isArray(detail?.invites) ? detail.invites : [];
-    orgDetailState.myRole = detail?.my_role || null;
     return detail;
   } catch (error) {
     orgDetailState.error = error?.message || 'Failed to load organization';

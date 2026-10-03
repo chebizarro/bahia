@@ -3,11 +3,13 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { authState } from '$lib/stores/auth.js';
+  import { roleForOrg } from '$lib/stores/auth-roles.svelte.js';
   import {
     createOrgInvite,
     deleteOrg as deletePrivateOrg,
     loadOrgDetail,
     orgDetailState,
+    orgMemberListState,
     removeOrgMember,
     revokeOrgInvite,
     subscribeToOrgsUpdates,
@@ -27,11 +29,12 @@
   import { sensitiveMutationBlocker } from '$lib/stores/sensitive-intents.svelte.js';
 
   let org = $derived(orgDetailState.org);
-  let members = $derived(orgDetailState.members);
+  let members = $derived(orgMemberListState.orgID === page.params.id ? orgMemberListState.members : []);
   let invites = $derived(orgDetailState.invites);
   let loading = $derived(orgDetailState.loading);
   let error = $derived(orgDetailState.error);
-  let myRole = $derived(orgDetailState.myRole);
+  let orgId = $derived(page.params.id);
+  let myRole = $derived(roleForOrg(orgId));
 
   // Invite modal state
   let showInviteModal = $state(false);
@@ -49,7 +52,6 @@
     { value: 'admin', label: 'Admin' }
   ];
 
-  let orgId = $derived(page.params.id);
   let canManageMembers = $derived(myRole === 'owner' || myRole === 'admin');
   let canDelete = $derived(myRole === 'owner');
 

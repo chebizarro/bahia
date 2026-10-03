@@ -136,5 +136,6 @@ describe('encrypted payments/orgs stores', () => {
       content: { pubkey: 'bob', role: 'admin' } }));
     expect(intentMock).toHaveBeenCalledWith(expect.objectContaining({ schema: 'bahia.intent.org-invite.v1',
       content: expect.objectContaining({ pubkey: 'carol', role: 'viewer', expires_in: 168 }) }));
+    expect(orgsStore.orgMemberListState).toEqual({ orgID: 'org-1', members: [{ pubkey: 'alice', role: 'owner' }] });
   });
 });

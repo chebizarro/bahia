@@ -49,6 +49,10 @@ owner > admin > deployer > viewer
 
 Higher roles inherit all lower role permissions.
 
+The web derives role-gated access only from the signed-in pubkey's current
+org-member record. A member's role change or removal updates those affordances;
+other members' roles shown in the organization member list never grant access.
+
 ## Managing Members
 
 ### Adding Members
