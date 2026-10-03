@@ -93,20 +93,13 @@ test.describe('Service detail signer-first public actions', () => {
     await rollbackDialog.getByRole('button', { name: 'Create Rollback Intent' }).click();
 
     await expect(page).toHaveURL(/\/deployments$/);
-    await expect.poll(() => page.evaluate(() => ({
-      requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
-      intents: window.__BAHIA_E2E_PUBLIC_STATE.deploymentIntents
-    }))).toMatchObject({
-      requestKinds: expect.arrayContaining([25910]),
-      intents: expect.arrayContaining([
-        expect.objectContaining({
-          service_id: 'svc-existing-1',
-          environment_id: 'env-prod',
-          artifact_id: 'artifact-previous-1',
-          source_kind: 'rollback'
-        })
-      ])
-    });
+    await expect(page.getByTestId('deployment-pending-intents')).toContainText('Pending');
+    const rollback = await page.evaluate(() => window.__BAHIA_E2E_SIGNED_INTENTS.find(event =>
+      event.tags.some(tag => tag[0] === 'domain' && tag[1] === 'deployment')
+        && event.tags.some(tag => tag[0] === 'op' && tag[1] === 'rollback')));
+    expect(rollback.kind).toBe(30900);
+    expect(JSON.parse(rollback.content)).toMatchObject({ service_id: 'svc-existing-1', environment_id: 'env-prod',
+      target_artifact_id: 'artifact-previous-1' });
   });
 
   test('deletes a service through a public signer-first command', async ({ page }) => {

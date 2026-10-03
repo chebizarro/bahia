@@ -2,6 +2,9 @@ import { browser } from '$app/environment';
 import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
 import { loadSystemInfo } from './system.svelte.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
+import { mintEntityId } from '$lib/entity-id.js';
+import { publishIntent, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
+import { dnsIntentRequest } from '$lib/nostr/domain-intents.js';
 import {
   DNS_COMMANDS,
   dnsResultIsFailure,
@@ -908,6 +911,7 @@ function commandErrorMessage(error) {
 }
 
 export async function startDNSCommandRun(command, payload = {}, { tags = [], signal } = {}) {
+  if (command !== DNS_COMMANDS.DRIFT_REMEDIATE) throw new Error(`DNS ${command} uses signed intents`);
   const run = pushCommandRun({
     id: nextCommandRunId(command),
     command,
@@ -968,16 +972,20 @@ export async function startDNSCommandRun(command, payload = {}, { tags = [], sig
   }
 }
 
-export function createDNSZone(payload, options = {}) {
-  return startDNSCommandRun(DNS_COMMANDS.ZONE_CREATE, payload, options);
+export function createDNSZone(payload) {
+  return publishIntent(dnsIntentRequest('zone-create', payload, resolveIntentOrgId('dns')));
 }
 
-export function applyDNSPolicy(payload, options = {}) {
-  return startDNSCommandRun(DNS_COMMANDS.POLICY_APPLY, payload, options);
+export function applyDNSPolicy(payload) {
+  return publishIntent(dnsIntentRequest('policy-apply', payload, resolveIntentOrgId('dns')));
 }
 
-export function overrideDNSRecord(payload, options = {}) {
-  return startDNSCommandRun(DNS_COMMANDS.RECORD_OVERRIDE, payload, options);
+export function overrideDNSRecord(payload) {
+  return publishIntent(dnsIntentRequest('record-set', { ...payload, id: payload.id || mintEntityId() }, resolveIntentOrgId('dns')));
+}
+
+export function retireDNSOverride(payload) {
+  return publishIntent(dnsIntentRequest('override-retire', payload, resolveIntentOrgId('dns')));
 }
 
 export function remediateDNSDrift(payload = {}, options = {}) {

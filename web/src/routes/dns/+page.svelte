@@ -9,9 +9,11 @@
     disconnect,
     dnsState,
     overrideDNSRecord,
+    retireDNSOverride,
     remediateDNSDrift
   } from '$lib/stores/dns.svelte.js';
   import { DNS_COMMANDS } from '$lib/nostr/dns-controlplane.js';
+  import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
   import {
     DNS_CONTROL_FORMS,
     buildDNSCommandPayload,
@@ -136,6 +138,7 @@
     [DNS_COMMANDS.ZONE_CREATE]: createDNSZone,
     [DNS_COMMANDS.POLICY_APPLY]: applyDNSPolicy,
     [DNS_COMMANDS.RECORD_OVERRIDE]: overrideDNSRecord,
+    [DNS_COMMANDS.OVERRIDE_RETIRE]: retireDNSOverride,
     [DNS_COMMANDS.DRIFT_REMEDIATE]: remediateDNSDrift
   };
 
@@ -164,6 +167,7 @@
 </script>
 
 <div class="page">
+  <PendingDomainIntents domain="dns" />
   <div class="header">
     <div>
       <p class="eyebrow">DNS fabric</p>
@@ -193,7 +197,7 @@
     <div class="panel-header">
       <div>
         <h2>Signed DNS control-plane commands</h2>
-        <p>Operator actions are signed Nostr events and complete only after explicit Bahia result events.</p>
+        <p>Supported changes are signed intents. Pending rows resolve from scoped daemon intent statuses; drift remediation remains a ContextVM command.</p>
       </div>
       <span class={`badge ${operatorReady ? 'healthy' : 'critical'}`}>{operatorReady ? 'operator ready' : 'auth required'}</span>
     </div>
@@ -215,8 +219,8 @@
         <label>Zone<input bind:value={commandForms[DNS_COMMANDS.ZONE_CREATE].zone} autocomplete="off" /></label>
         <label>Backend<input bind:value={commandForms[DNS_COMMANDS.ZONE_CREATE].backend} autocomplete="off" /></label>
         <label>Visibility<select bind:value={commandForms[DNS_COMMANDS.ZONE_CREATE].visibility}><option value="public">Public</option><option value="private">Private</option><option value="internal">Internal</option></select></label>
-        <label class="inline"><input type="checkbox" bind:checked={commandForms[DNS_COMMANDS.ZONE_CREATE].reconcile} /> Reconcile existing zone state</label>
-        <label>Idempotency key<input bind:value={commandForms[DNS_COMMANDS.ZONE_CREATE].idempotencyKey} autocomplete="off" /></label>
+        <label>TTL<input inputmode="numeric" bind:value={commandForms[DNS_COMMANDS.ZONE_CREATE].ttl} /></label>
+        <label class="inline"><input type="checkbox" bind:checked={commandForms[DNS_COMMANDS.ZONE_CREATE].authoritative} /> Authoritative</label>
         {#if commandFormErrors[DNS_COMMANDS.ZONE_CREATE]?.length}<ul class="form-errors">{#each commandFormErrors[DNS_COMMANDS.ZONE_CREATE] as error}<li>{error}</li>{/each}</ul>{/if}
         <button type="submit" disabled={!operatorReady || submittingCommand === DNS_COMMANDS.ZONE_CREATE}>{submittingCommand === DNS_COMMANDS.ZONE_CREATE ? 'Signing…' : DNS_CONTROL_FORMS[DNS_COMMANDS.ZONE_CREATE].submitLabel}</button>
       </form>
@@ -224,10 +228,12 @@
       <form class="command-card" onsubmit={(event) => { event.preventDefault(); submitDNSCommand(DNS_COMMANDS.POLICY_APPLY); }}>
         <h3>{DNS_CONTROL_FORMS[DNS_COMMANDS.POLICY_APPLY].title}</h3>
         <p>{DNS_CONTROL_FORMS[DNS_COMMANDS.POLICY_APPLY].description}</p>
-        <label>Policy id<input bind:value={commandForms[DNS_COMMANDS.POLICY_APPLY].policyId} autocomplete="off" /></label>
-        <label>Zone scope<input bind:value={commandForms[DNS_COMMANDS.POLICY_APPLY].zone} autocomplete="off" /></label>
+        <label>Policy id (UUID)<input bind:value={commandForms[DNS_COMMANDS.POLICY_APPLY].policyId} autocomplete="off" /></label>
+        <label>Policy name<input bind:value={commandForms[DNS_COMMANDS.POLICY_APPLY].name} autocomplete="off" /></label>
+        <label>Rules (JSON array)<textarea bind:value={commandForms[DNS_COMMANDS.POLICY_APPLY].rules}></textarea></label>
+        <label class="inline"><input type="checkbox" bind:checked={commandForms[DNS_COMMANDS.POLICY_APPLY].enabled} /> Enabled</label>
+        <label>Zone scope UUID<input bind:value={commandForms[DNS_COMMANDS.POLICY_APPLY].zone} autocomplete="off" /></label>
         <label>Environment<input bind:value={commandForms[DNS_COMMANDS.POLICY_APPLY].environment} autocomplete="off" /></label>
-        <label>Idempotency key<input bind:value={commandForms[DNS_COMMANDS.POLICY_APPLY].idempotencyKey} autocomplete="off" /></label>
         {#if commandFormErrors[DNS_COMMANDS.POLICY_APPLY]?.length}<ul class="form-errors">{#each commandFormErrors[DNS_COMMANDS.POLICY_APPLY] as error}<li>{error}</li>{/each}</ul>{/if}
         <button type="submit" disabled={!operatorReady || submittingCommand === DNS_COMMANDS.POLICY_APPLY}>{submittingCommand === DNS_COMMANDS.POLICY_APPLY ? 'Signing…' : DNS_CONTROL_FORMS[DNS_COMMANDS.POLICY_APPLY].submitLabel}</button>
       </form>
@@ -241,9 +247,17 @@
         <label>Value<input bind:value={commandForms[DNS_COMMANDS.RECORD_OVERRIDE].value} autocomplete="off" /></label>
         <label>TTL<input inputmode="numeric" bind:value={commandForms[DNS_COMMANDS.RECORD_OVERRIDE].ttl} autocomplete="off" /></label>
         <label>Reason<textarea bind:value={commandForms[DNS_COMMANDS.RECORD_OVERRIDE].reason}></textarea></label>
-        <label>Idempotency key<input bind:value={commandForms[DNS_COMMANDS.RECORD_OVERRIDE].idempotencyKey} autocomplete="off" /></label>
         {#if commandFormErrors[DNS_COMMANDS.RECORD_OVERRIDE]?.length}<ul class="form-errors">{#each commandFormErrors[DNS_COMMANDS.RECORD_OVERRIDE] as error}<li>{error}</li>{/each}</ul>{/if}
         <button type="submit" disabled={!operatorReady || submittingCommand === DNS_COMMANDS.RECORD_OVERRIDE}>{submittingCommand === DNS_COMMANDS.RECORD_OVERRIDE ? 'Signing…' : DNS_CONTROL_FORMS[DNS_COMMANDS.RECORD_OVERRIDE].submitLabel}</button>
+      </form>
+
+      <form class="command-card" onsubmit={(event) => { event.preventDefault(); submitDNSCommand(DNS_COMMANDS.OVERRIDE_RETIRE); }}>
+        <h3>{DNS_CONTROL_FORMS[DNS_COMMANDS.OVERRIDE_RETIRE].title}</h3>
+        <p>{DNS_CONTROL_FORMS[DNS_COMMANDS.OVERRIDE_RETIRE].description}</p>
+        <label>Override id<input bind:value={commandForms[DNS_COMMANDS.OVERRIDE_RETIRE].overrideId} autocomplete="off" /></label>
+        <label>Reason<textarea bind:value={commandForms[DNS_COMMANDS.OVERRIDE_RETIRE].reason}></textarea></label>
+        {#if commandFormErrors[DNS_COMMANDS.OVERRIDE_RETIRE]?.length}<ul class="form-errors">{#each commandFormErrors[DNS_COMMANDS.OVERRIDE_RETIRE] as error}<li>{error}</li>{/each}</ul>{/if}
+        <button type="submit" disabled={!operatorReady || submittingCommand === DNS_COMMANDS.OVERRIDE_RETIRE}>{submittingCommand === DNS_COMMANDS.OVERRIDE_RETIRE ? 'Signing…' : DNS_CONTROL_FORMS[DNS_COMMANDS.OVERRIDE_RETIRE].submitLabel}</button>
       </form>
 
       <form class="command-card" onsubmit={(event) => { event.preventDefault(); submitDNSCommand(DNS_COMMANDS.DRIFT_REMEDIATE); }}>

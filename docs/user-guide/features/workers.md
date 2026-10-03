@@ -222,7 +222,7 @@ Workers publish capability announcements:
 
 ### Nostr events
 
-Worker mutations use signed ContextVM requests and canonical `30900`, `30315`, and `4903` observables. Historical `5976`/`6976`/`7976` tool-provision events are migration inputs, not the current production transport.
+The web worker actions—cordon/uncordon, drain/undrain, maintenance enter/exit, labels update, and cleanup—publish signed kind-`30900` worker intents. They remain pending until scoped `30315` status or newer canonical state arrives. Historical `5976`/`6976`/`7976` tool-provision events are migration inputs, not the current production transport.
 
 ## Read Models
 

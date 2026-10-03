@@ -1,4 +1,5 @@
 <script>
+  import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import Card from '$lib/components/Card.svelte';
@@ -170,6 +171,7 @@
 </script>
 
 <div class="page">
+  <PendingDomainIntents domain="deployment" />
   {#if loading}
     <p class="loading">Loading signed deployment history…</p>
   {:else if error}
