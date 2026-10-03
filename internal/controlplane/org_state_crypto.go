@@ -156,8 +156,10 @@ func decryptOrgState(key OrgStateKey, content string) ([]byte, error) {
 	return plaintext, nil
 }
 
-// OrgStateEncryptorImpl adapts the OrgStateKeyProvider to the nostr
-// OrgStateEncryptor interface used by OrgCanonicalPublisher.
+// OrgStateEncryptorImpl adapts the OrgStateKeyProvider for legacy O1
+// decryption during migration. It satisfies the LegacyOrgStateDecryptor
+// interface (DecryptOrgState only). The EncryptOrgState method is retained
+// for migration tests but is not part of any production interface.
 type OrgStateEncryptorImpl struct {
 	keyProvider OrgStateKeyProvider
 }
@@ -165,15 +167,6 @@ type OrgStateEncryptorImpl struct {
 // NewOrgStateEncryptor creates an encryptor backed by the given key provider.
 func NewOrgStateEncryptor(keyProvider OrgStateKeyProvider) *OrgStateEncryptorImpl {
 	return &OrgStateEncryptorImpl{keyProvider: keyProvider}
-}
-
-// EncryptOrgState encrypts plaintext content using the active org state key.
-func (e *OrgStateEncryptorImpl) EncryptOrgState(ctx context.Context, plaintext []byte, dTag, topic string) (string, error) {
-	key, err := e.keyProvider.ActiveOrgStateKey(ctx)
-	if err != nil {
-		return "", fmt.Errorf("resolve org state key: %w", err)
-	}
-	return encryptOrgState(ctx, key, plaintext, dTag, topic)
 }
 
 // DecryptOrgState decrypts an encrypted org state envelope.

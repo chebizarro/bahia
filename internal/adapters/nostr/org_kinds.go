@@ -8,4 +8,5 @@ const (
 	KindOrgRegistry       = kinds.OrgRegistry
 	KindOrgMemberRegistry = kinds.OrgMemberRegistry
 	KindOrgInviteRegistry = kinds.OrgInviteRegistry
+	KindOrgKeyEnvelope    = kinds.OrgKeyEnvelope
 )

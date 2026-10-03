@@ -1,49 +1,57 @@
+/**
+ * Route access tests — updated for Phase 4 §6.3.
+ *
+ * No backendAuthenticated, no REST compatibility flags.
+ * Roles come from auth-roles.svelte.js (hasAnyRole).
+ */
+
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+vi.mock('../../src/lib/stores/auth-roles.svelte.js', () => ({
+  hasAnyRole: vi.fn(() => false)
+}));
+
 import { canAccessRoute, getRouteAccess, routeAccessConfig } from '../../src/lib/auth/route-access.js';
+import { hasAnyRole } from '../../src/lib/stores/auth-roles.svelte.js';
 
 describe('route access', () => {
   beforeEach(() => {
     delete window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS;
-    delete window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS;
+    hasAnyRole.mockReturnValue(false);
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it('marks signer-first protected routes and REST compatibility contracts', () => {
+  it('marks signer-first protected routes and role requirements', () => {
     expect(routeAccessConfig.protectedPrefixes).toContain('/souls');
     expect(routeAccessConfig.protectedPrefixes).toContain('/llm');
     expect(routeAccessConfig.protectedPrefixes).toContain('/fleet-health');
     expect(routeAccessConfig.protectedPrefixes).toContain('/config-fabric');
     expect(routeAccessConfig.protectedPrefixes).toContain('/settings');
-    expect(routeAccessConfig.compatibilityRequirements).toMatchObject({ '/orgs': true });
     expect(Object.keys(routeAccessConfig.roleRequirements).sort()).toEqual(
       [...routeAccessConfig.protectedPrefixes].sort()
     );
     expect(getRouteAccess('/souls')).toMatchObject({
       pathname: '/souls',
       protectedRoute: true,
-      requiredRoles: ['admin', 'owner'],
-      requiresRestCompatibility: false
+      requiredRoles: ['admin', 'owner']
     });
     expect(getRouteAccess('/llm')).toMatchObject({
       pathname: '/llm',
       protectedRoute: true,
-      requiredRoles: ['admin', 'owner'],
-      requiresRestCompatibility: false
+      requiredRoles: ['admin', 'owner']
     });
     expect(getRouteAccess('/settings')).toMatchObject({
       pathname: '/settings',
       protectedRoute: true,
-      requiredRoles: ['owner'],
-      requiresRestCompatibility: false
+      requiredRoles: ['owner']
     });
     expect(getRouteAccess('/orgs')).toMatchObject({
       pathname: '/orgs',
       protectedRoute: true,
-      requiredRoles: [],
-      requiresRestCompatibility: true
+      requiredRoles: []
     });
   });
 
@@ -59,45 +67,53 @@ describe('route access', () => {
       expect(getRouteAccess(pathname)).toMatchObject({
         pathname,
         protectedRoute: true,
-        requiredRoles: [],
-        requiresRestCompatibility: false
+        requiredRoles: []
       });
       expect(canAccessRoute({ pathname, authState: {}, isAuthenticated: false })).toMatchObject({
         protectedRoute: true,
         authorized: false,
-        roleAuthorized: false,
-        compatibilityAuthorized: false
+        roleAuthorized: false
       });
-      expect(canAccessRoute({ pathname, authState: { backendAuthenticated: true }, isAuthenticated: true })).toMatchObject({
+
+      // Authenticated with no role requirements = authorized
+      expect(canAccessRoute({ pathname, authState: {}, isAuthenticated: true })).toMatchObject({
         protectedRoute: true,
         authorized: true,
-        roleAuthorized: true,
-        compatibilityAuthorized: true
+        roleAuthorized: true
       });
     }
   });
 
   it('requires explicit elevated roles for global control-plane pages', () => {
     for (const pathname of ['/souls', '/backup', '/continuity', '/dns', '/security', '/ml', '/llm']) {
+      // viewer role: hasAnyRole returns false for admin/owner check
+      hasAnyRole.mockReturnValue(false);
       expect(canAccessRoute({
         pathname,
-        authState: { backendAuthenticated: true, roles: ['viewer'] },
+        authState: {},
         isAuthenticated: true
       })).toMatchObject({ authorized: false, roleAuthorized: false });
+
+      // admin role: hasAnyRole returns true
+      hasAnyRole.mockReturnValue(true);
       expect(canAccessRoute({
         pathname,
-        authState: { backendAuthenticated: true, roles: ['admin'] },
+        authState: {},
         isAuthenticated: true
       })).toMatchObject({ authorized: true, roleAuthorized: true });
     }
+    // settings requires owner
+    hasAnyRole.mockReturnValue(false);
     expect(canAccessRoute({
       pathname: '/settings',
-      authState: { backendAuthenticated: true, roles: ['admin'] },
+      authState: {},
       isAuthenticated: true
     })).toMatchObject({ authorized: false, roleAuthorized: false });
+
+    hasAnyRole.mockReturnValue(true);
     expect(canAccessRoute({
       pathname: '/settings',
-      authState: { backendAuthenticated: true, roles: ['owner'] },
+      authState: {},
       isAuthenticated: true
     })).toMatchObject({ authorized: true, roleAuthorized: true });
   });
@@ -106,115 +122,71 @@ describe('route access', () => {
     expect(canAccessRoute({ pathname: '/souls', authState: {}, isAuthenticated: false })).toMatchObject({
       protectedRoute: true,
       authorized: false,
-      roleAuthorized: false,
-      compatibilityAuthorized: false
+      roleAuthorized: false
     });
 
     expect(canAccessRoute({ pathname: '/llm', authState: {}, isAuthenticated: false })).toMatchObject({
       protectedRoute: true,
       authorized: false,
-      roleAuthorized: false,
-      compatibilityAuthorized: false
+      roleAuthorized: false
     });
 
     expect(canAccessRoute({ pathname: '/settings', authState: {}, isAuthenticated: false })).toMatchObject({
       pathname: '/settings',
       protectedRoute: true,
       authorized: false,
-      roleAuthorized: false,
-      compatibilityAuthorized: false
-    });
-
-    expect(canAccessRoute({
-      pathname: '/orgs',
-      authState: { compatibility: { restNip98Ready: false }, directNip98Ready: false },
-      isAuthenticated: true
-    })).toMatchObject({
-      protectedRoute: true,
-      authorized: false,
-      roleAuthorized: false,
-      compatibilityAuthorized: false,
-      requiresRestCompatibility: true
+      roleAuthorized: false
     });
 
     expect(canAccessRoute({ pathname: 'plain-path', authState: {}, isAuthenticated: false })).toMatchObject({
       pathname: '/plain-path',
       protectedRoute: false,
       authorized: true,
-      roleAuthorized: true,
-      compatibilityAuthorized: true
-    });
-  });
-
-  it('denies a valid browser signer when Bahia rejects platform membership', () => {
-    expect(canAccessRoute({
-      pathname: '/services',
-      authState: { backendAuthenticated: false },
-      isAuthenticated: true
-    })).toMatchObject({
-      protectedRoute: true,
-      authorized: false,
-      roleAuthorized: false,
-      compatibilityAuthorized: false
+      roleAuthorized: true
     });
   });
 
   it('ignores mutable E2E authorization globals outside development builds', () => {
     vi.stubEnv('DEV', false);
     window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS = { '/settings': ['admin'] };
-    window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS = { '/settings': true };
 
     expect(getRouteAccess('/settings')).toMatchObject({
-      requiredRoles: ['owner'],
-      requiresRestCompatibility: false
+      requiredRoles: ['owner']
     });
+
+    hasAnyRole.mockReturnValue(true);
     expect(canAccessRoute({
       pathname: '/settings',
-      authState: { backendAuthenticated: true, roles: ['owner'] },
+      authState: {},
       isAuthenticated: true
-    })).toMatchObject({ authorized: true, roleAuthorized: true, compatibilityAuthorized: true });
+    })).toMatchObject({ authorized: true, roleAuthorized: true });
   });
 
-  it('applies route role and compatibility overrides in development tests', () => {
+  it('applies route role overrides in development tests', () => {
     window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS = {
       '/llm/admin': ['operator']
     };
-    window.__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS = {
-      '/llm/admin': true
-    };
 
+    hasAnyRole.mockReturnValue(false);
     expect(canAccessRoute({
       pathname: '/llm/admin',
-      authState: {
-        backendAuthenticated: true,
-        roles: ['viewer'],
-        compatibility: { restNip98Ready: false },
-        directNip98Ready: false
-      },
+      authState: {},
       isAuthenticated: true
     })).toMatchObject({
       authorized: false,
       roleAuthorized: false,
-      compatibilityAuthorized: false,
-      requiredRoles: ['operator'],
-      requiresRestCompatibility: true
+      requiredRoles: ['operator']
     });
 
+    hasAnyRole.mockReturnValue(true);
     expect(canAccessRoute({
       pathname: '/llm/admin',
-      authState: {
-        backendAuthenticated: true,
-        capabilities: { roles: ['operator'] },
-        compatibility: { restNip98Ready: true },
-        directNip98Ready: false
-      },
+      authState: {},
       isAuthenticated: true
     })).toMatchObject({
       authorized: true,
       roleAuthorized: true,
-      compatibilityAuthorized: true,
-      requiredRoles: ['operator'],
-      requiresRestCompatibility: true
+      requiredRoles: ['operator']
     });
   });
 });

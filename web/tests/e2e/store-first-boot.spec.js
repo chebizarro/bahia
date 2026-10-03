@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks, E2E_SERVICE_PUBKEY } from './helpers.js';
+import { cpStateFixture } from './cp-state-fixtures.js';
 
 /**
  * Phase 4 W1-S2: Store-first boot — services render from IndexedDB
@@ -10,22 +11,14 @@ import { installE2EMocks, E2E_SERVICE_PUBKEY } from './helpers.js';
 const SERVICE_PUBKEY_PREFIX = E2E_SERVICE_PUBKEY.slice(0, 8);
 const DB_NAME = `bahia-events-${SERVICE_PUBKEY_PREFIX}`;
 
-function makeServiceEvent({ id, name, pubkey = E2E_SERVICE_PUBKEY, created_at = 100 }) {
-  return {
+function makeServiceEvent({ id, name, createdAt = 100 }) {
+  return cpStateFixture({
+    schema: 'bahia.registry.service.v1',
+    d: id,
+    content: { id, name, deleted: false },
     id: `evt-${id}`,
-    kind: 30900,
-    pubkey,
-    created_at,
-    tags: [
-      ['d', id],
-      ['domain', 'service'],
-      ['schema', 'bahia.registry.service.v1'],
-      ['t', 'service-registry'],
-      ['deleted', 'false'],
-    ],
-    content: JSON.stringify({ id, name, deleted: false }),
-    sig: 'a'.repeat(128),
-  };
+    createdAt,
+  });
 }
 
 /**

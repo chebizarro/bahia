@@ -1,0 +1,208 @@
+package controlplane
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"testing"
+
+	gonostr "fiatjaf.com/nostr"
+	"golang.org/x/crypto/chacha20poly1305"
+)
+
+// TestCrossLanguageFixture generates (and verifies) a deterministic fixture
+// that the JS test suite decrypts, proving both implementations agree on:
+//   - AEAD associated-data serialisation order (Go encoding/json = sorted keys)
+//   - XChaCha20-Poly1305 encrypt/decrypt
+//   - Base64 raw-standard encoding
+//   - OCK wrap payload serialisation
+//   - Key-envelope d-tag format
+//
+// By default the test asserts the committed fixture file matches.
+// Set BAHIA_REGEN_FIXTURE=1 to regenerate the file.
+//
+// The NIP-44 layer (key-envelope encryption) is tested as a round-trip in this
+// test but excluded from the fixture file because NIP-44 ciphertexts are
+// non-deterministic (random padding). The AEAD layer uses a fixed nonce so the
+// fixture is fully deterministic.
+func TestCrossLanguageFixture(t *testing.T) {
+	ctx := context.Background()
+
+	// ---- deterministic inputs ----
+	const (
+		memberKeyHex = memberAKeyHex // 0…02
+		svcKeyHex    = serviceKeyHex // 0…01
+	)
+	memberPubkey := pubkeyFromHex(t, memberKeyHex)
+	servicePubkey := pubkeyFromHex(t, svcKeyHex)
+
+	// Deterministic OCK (32 bytes, fixed).
+	var ockBytes [32]byte
+	for i := range ockBytes {
+		ockBytes[i] = byte(0xAA)
+	}
+	ock := OrgContentKey{OrgID: "org-fixture", Version: 1, Key: ockBytes}
+
+	// Deterministic nonce (24 bytes for XChaCha20).
+	nonce := make([]byte, chacha20poly1305.NonceSizeX)
+	for i := range nonce {
+		nonce[i] = byte(i + 1) // 01 02 03 … 18
+	}
+
+	// Member record to encrypt.
+	memberRecord := map[string]interface{}{
+		"org_id": "org-fixture",
+		"pubkey": memberPubkey,
+		"role":   "admin",
+		"status": "active",
+	}
+	plaintext, err := json.Marshal(memberRecord)
+	if err != nil {
+		t.Fatalf("marshal member record: %v", err)
+	}
+
+	recordCtx := ConfidentialRecordContext{
+		LegacyKind: 32006,
+		DTag:       "member:" + memberPubkey,
+		Topic:      "org-member",
+	}
+
+	// ---- build the AEAD envelope (same logic as EncryptConfidentialContent, deterministic nonce) ----
+	aead, err := chacha20poly1305.NewX(ock.Key[:])
+	if err != nil {
+		t.Fatalf("create AEAD: %v", err)
+	}
+	ad := confidentialAssociatedData(ock, recordCtx)
+	adBytes, err := json.Marshal(ad)
+	if err != nil {
+		t.Fatalf("marshal AD: %v", err)
+	}
+	ciphertext := aead.Seal(nil, nonce, plaintext, adBytes)
+
+	envelope := ConfidentialEnvelope{
+		Schema:         ConfidentialSchema,
+		Algorithm:      ConfidentialAlgorithm,
+		KeyOrg:         ock.OrgID,
+		KeyRef:         ock.KeyRef(),
+		KeyVersion:     ock.KeyVersion(),
+		Nonce:          base64.RawStdEncoding.EncodeToString(nonce),
+		Ciphertext:     base64.RawStdEncoding.EncodeToString(ciphertext),
+		AssociatedData: ad,
+	}
+	envelopeJSON, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+
+	// ---- verify the Go side can round-trip decrypt ----
+	decrypted, err := DecryptConfidentialContent(ock, string(envelopeJSON), recordCtx)
+	if err != nil {
+		t.Fatalf("Go decrypt failed: %v", err)
+	}
+	if string(decrypted) != string(plaintext) {
+		t.Fatalf("Go round-trip mismatch: got %q, want %q", decrypted, plaintext)
+	}
+
+	// ---- build the OCK wrap payload ----
+	ockWrapJSON, err := MarshalOCKWrap(ock, memberPubkey)
+	if err != nil {
+		t.Fatalf("marshal OCK wrap: %v", err)
+	}
+
+	// Verify Go round-trip.
+	recoveredOCK, recoveredRecipient, err := UnmarshalOCKWrap(ockWrapJSON)
+	if err != nil {
+		t.Fatalf("unmarshal OCK wrap: %v", err)
+	}
+	if recoveredRecipient != memberPubkey {
+		t.Fatalf("recipient mismatch: got %q, want %q", recoveredRecipient, memberPubkey)
+	}
+	if recoveredOCK.OrgID != ock.OrgID || recoveredOCK.Version != ock.Version || recoveredOCK.Key != ock.Key {
+		t.Fatal("recovered OCK mismatch")
+	}
+
+	// ---- verify NIP-44 round-trip (not in fixture — non-deterministic) ----
+	svcSigner := newTestKeySigner(t, svcKeyHex)
+	memberSigner := newTestKeySigner(t, memberKeyHex)
+
+	recipientPK, err := gonostr.PubKeyFromHex(memberPubkey)
+	if err != nil {
+		t.Fatalf("parse member pubkey: %v", err)
+	}
+	nip44Ciphertext, err := svcSigner.Encrypt(ctx, string(ockWrapJSON), recipientPK)
+	if err != nil {
+		t.Fatalf("NIP-44 encrypt: %v", err)
+	}
+	svcPK, err := gonostr.PubKeyFromHex(servicePubkey)
+	if err != nil {
+		t.Fatalf("parse service pubkey: %v", err)
+	}
+	decryptedWrap, err := memberSigner.Decrypt(ctx, nip44Ciphertext, svcPK)
+	if err != nil {
+		t.Fatalf("NIP-44 decrypt: %v", err)
+	}
+	if decryptedWrap != string(ockWrapJSON) {
+		t.Fatalf("NIP-44 round-trip mismatch")
+	}
+
+	// ---- key envelope d-tag ----
+	envelopeDTag := ockEnvelopeDTag(ock.OrgID, ock.Version, "fixture-handle")
+
+	// ---- assemble the fixture (all deterministic fields) ----
+	fixture := map[string]interface{}{
+		"_comment":              "Cross-language crypto fixture generated by Go. Do not edit — regenerate with BAHIA_REGEN_FIXTURE=1 go test.",
+		"member_secret_key_hex": memberKeyHex,
+		"member_pubkey":         memberPubkey,
+		"service_pubkey":        servicePubkey,
+		"ock": map[string]interface{}{
+			"org_id":  ock.OrgID,
+			"version": ock.Version,
+			"key_b64": base64.RawStdEncoding.EncodeToString(ock.Key[:]),
+		},
+		"key_envelope": map[string]interface{}{
+			"d_tag":         envelopeDTag,
+			"ock_wrap_json": string(ockWrapJSON),
+		},
+		"member_record": map[string]interface{}{
+			"encrypted_content": string(envelopeJSON),
+			"plaintext":         string(plaintext),
+			"legacy_kind":       recordCtx.LegacyKind,
+			"d_tag":             recordCtx.DTag,
+			"topic":             recordCtx.Topic,
+			"legacy_kind_str":   strconv.Itoa(recordCtx.LegacyKind),
+		},
+		"associated_data_json": string(adBytes),
+	}
+
+	fixtureJSON, err := json.MarshalIndent(fixture, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+
+	_, thisFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	fixturePath := filepath.Join(repoRoot, "web", "tests", "fixtures", "cross-language-crypto.json")
+
+	if os.Getenv("BAHIA_REGEN_FIXTURE") == "1" {
+		if err := os.MkdirAll(filepath.Dir(fixturePath), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(fixturePath, append(fixtureJSON, '\n'), 0o644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+		t.Logf("Regenerated fixture at %s", fixturePath)
+		return
+	}
+
+	committed, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read committed fixture (run with BAHIA_REGEN_FIXTURE=1 to generate): %v", err)
+	}
+	if string(committed) != string(append(fixtureJSON, '\n')) {
+		t.Fatalf("committed fixture does not match generated output — regenerate with:\n  BAHIA_REGEN_FIXTURE=1 go test -run TestCrossLanguageFixture ./internal/controlplane/")
+	}
+}

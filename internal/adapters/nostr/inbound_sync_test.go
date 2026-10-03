@@ -362,6 +362,22 @@ func TestInboundSyncPagesPastAFullPageWithUntil(t *testing.T) {
 	}
 	require.GreaterOrEqual(t, pages, 3, "12 events at 5 per page need at least three pages")
 	require.Equal(t, pages-1, bounded, "every page after the first is bounded with until")
+
+	// After paging, a widened-overlap REQ rechecks for backdated events
+	// that may have been published during the paging window (.56 item 4).
+	// Unlimited (Limit==0) regular-kind REQs with a recent Since: 1 is the
+	// live subscription, the other is the paging overlap. Before .56 only
+	// the live subscription existed.
+	var unlimitedRecent []gonostr.Timestamp
+	for _, req := range relay.recorded() {
+		if isKindReq(req, syncTestRegularKind) && req.filter.Limit == 0 && req.filter.Since > gonostr.Timestamp(base+1800) {
+			unlimitedRecent = append(unlimitedRecent, req.filter.Since)
+		}
+	}
+	require.Len(t, unlimitedRecent, 2, "one overlap REQ + one live subscription (both unlimited with recent Since)")
+	// The overlap Since (~now-120) is earlier than the live Since (~now-60).
+	slices.Sort(unlimitedRecent)
+	require.Less(t, unlimitedRecent[0], unlimitedRecent[1], "the overlap Since precedes the live subscription Since")
 }
 
 // NIP-77 reconciles in both directions: the relay's missing events are
@@ -410,6 +426,49 @@ func TestInboundSyncNegentropyFillsGapsInBothDirections(t *testing.T) {
 	waitEvent(t, ctx, run.handled, missed.ID, "the state stored while disconnected")
 	require.True(t, slices.ContainsFunc(relay.recorded(), func(req recordedReq) bool { return req.negentropy }),
 		"the reconnect reconciles with NIP-77 again")
+}
+
+// NegentropyUploadFilter scopes uploads to service relays: a relay allowed by
+// the filter uploads, one denied does not (.50 item G4).
+func TestInboundSyncNegentropyUploadFilterScopesRelays(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+
+	serviceRelay := startSyncTestRelay(t, syncTestRelayOptions{negentropy: true})
+	interopRelay := startSyncTestRelay(t, syncTestRelayOptions{negentropy: true})
+
+	sk := gonostr.Generate()
+	now := gonostr.Now()
+
+	// Both relays hold the same common event; the local store has one extra.
+	common := syncTestEvent(t, sk, syncTestStateKind, now-500, gonostr.Tags{{"d", "common"}}, "")
+	localOnly := syncTestEvent(t, sk, syncTestStateKind, now-300, gonostr.Tags{{"d", "local-only"}}, "")
+	serviceRelay.add(t, common)
+	interopRelay.add(t, common)
+
+	store := openTestLocalStore(t, "")
+	for _, ev := range []gonostr.Event{common, localOnly} {
+		_, err := store.SaveEvent(ev)
+		require.NoError(t, err)
+	}
+
+	cfg := syncTestConfig()
+	cfg.NegentropyUpload = true
+	cfg.NegentropyUploadFilter = func(relayURL string) bool {
+		return relayURL == serviceRelay.url
+	}
+
+	pool := newSyncTestPool(serviceRelay, interopRelay)
+	run := startSyncRun(t, pool, store, nil, cfg)
+	run.waitCaughtUp(t, ctx, serviceRelay.url, 1)
+	run.waitCaughtUp(t, ctx, interopRelay.url, 1)
+
+	// The service relay receives the local-only event via upload.
+	require.True(t, serviceRelay.has(localOnly.ID),
+		"the service relay receives the upload")
+	// The interop relay must NOT receive the upload.
+	require.False(t, interopRelay.has(localOnly.ID),
+		"the interop relay is excluded by NegentropyUploadFilter")
 }
 
 // A relay that refuses the NIP-77 session (NEG-ERR, e.g. a set larger than it

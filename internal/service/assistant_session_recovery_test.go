@@ -8,6 +8,7 @@ import (
 	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 func publishAssistantSessionEvent(t *testing.T, relay *assistantTestRelay, signer nostr.Signer, schema, sessionID string, content any, created nostr.Timestamp) {
@@ -16,7 +17,7 @@ func publishAssistantSessionEvent(t *testing.T, relay *assistantTestRelay, signe
 	if err != nil {
 		t.Fatal(err)
 	}
-	ev := nostr.Event{Kind: nostr.Kind(domain.KindAssistantSessionState), CreatedAt: created, Tags: nostr.Tags{{"d", schema + ":" + sessionID}, {domain.AssistantSessionTagSchema, schema}, {"session", sessionID}}, Content: string(raw)}
+	ev := nostr.Event{Kind: nostr.Kind(domain.KindAssistantSessionState), CreatedAt: created, Tags: nostr.Tags{{"d", schema + ":" + sessionID}, {domain.AssistantSessionTagSchema, schema}, {"t", kinds.AssistantSessionTopic}, {"session", sessionID}}, Content: string(raw)}
 	if err := signer.SignEvent(context.Background(), &ev); err != nil {
 		t.Fatal(err)
 	}

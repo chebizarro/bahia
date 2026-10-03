@@ -202,7 +202,7 @@ type Reactor struct {
 	backupRepositoryProbeExecutor BackupRepositoryProbeControlPlaneExecutor
 	eventBus                      events.Publisher
 	workerStatePublisher          *WorkerStatePublisher
-	workerReadModelPublisher     *WorkerReadModelPublisher
+	workerReadModelPublisher      *WorkerReadModelPublisher
 
 	mu   sync.Mutex
 	runs map[string]*DeploymentRun // requestEventID -> run
@@ -508,7 +508,6 @@ func (r *Reactor) Run(ctx context.Context) error {
 
 	r.logger.Info("subscribed to control plane events")
 	go r.recoverPackageIntents(ctx)
-	authAttempted := make(map[string]struct{})
 
 	for {
 		select {
@@ -525,21 +524,15 @@ func (r *Reactor) Run(ctx context.Context) error {
 			}
 		case closed, ok := <-merged.Closed:
 			if ok {
-				if r.handleRelayClosed(ctx, closed, authAttempted) {
-					merged.Close()
-					r.caughtUp.Store(false)
-					authAttempted = make(map[string]struct{})
-					filters = r.buildRequestSubscriptionFiltersForCurrentCursor(ctx)
-					r.pool.RecordRelayReREQ()
-					merged, err = keepSubscriptionOnResubscribeFailure(merged, func() (*nostrpool.MergedSubscription, error) {
-						return r.pool.SubscribeAllWithEOSE(ctx, filters)
-					})
-					if err != nil {
-						r.logger.Error("resubscribe after relay auth failed", "error", err)
-						continue
-					}
-					r.backoff.Reset()
-				}
+				// NIP-42 AUTH and resubscription are handled by the relay pool
+				// internally (closedRetryBudget + authenticateLiveRelay). The
+				// consumer only needs to log terminal closures for diagnostics.
+				r.pool.RecordRelayClosed(closed.RelayURL, closed.Reason)
+				r.logger.Warn("relay closed control-plane subscription",
+					"relay", closed.RelayURL,
+					"subscription_id", closed.SubscriptionID,
+					"reason", closed.Reason,
+				)
 			} else {
 				merged.Closed = nil
 			}
@@ -548,6 +541,17 @@ func (r *Reactor) Run(ctx context.Context) error {
 			merged.EndOfStoredEvents = nil
 		case ev, ok := <-merged.Events:
 			if !ok {
+				// GaveUp means every relay permanently refused the subscription.
+				// This is recoverable when the topology changes (relay added,
+				// reconnect, reconfigured AUTH), so wait event-driven instead
+				// of killing the consumer.
+				if gaveUp := merged.GaveUp(); gaveUp != nil {
+					r.logger.Error("control-plane subscription gave up — waiting for topology change", "error", gaveUp)
+					if err := r.pool.WaitForTopologyChange(ctx); err != nil {
+						r.pool.Close()
+						return err
+					}
+				}
 				delay := r.backoff.Next()
 				r.logger.Warn("subscription closed, reconnecting...", "delay", delay)
 				select {
@@ -558,7 +562,6 @@ func (r *Reactor) Run(ctx context.Context) error {
 				case <-time.After(delay):
 				}
 				r.caughtUp.Store(false)
-				authAttempted = make(map[string]struct{})
 				filters = r.buildRequestSubscriptionFiltersForCurrentCursor(ctx)
 				r.pool.RecordRelayReREQ()
 				merged, err = keepSubscriptionOnResubscribeFailure(merged, func() (*nostrpool.MergedSubscription, error) {
@@ -599,29 +602,6 @@ func (r *Reactor) handleEOSE() {
 	if r.caughtUp.CompareAndSwap(false, true) {
 		r.logger.Info("control-plane EOSE received: caught up with stored events")
 	}
-}
-
-func (r *Reactor) handleRelayClosed(ctx context.Context, closed nostrpool.RelayClosed, authAttempted map[string]struct{}) bool {
-	if r.pool != nil {
-		r.pool.RecordRelayClosed(closed.RelayURL, closed.Reason)
-	}
-	r.logger.Warn("relay closed control-plane subscription",
-		"relay", closed.RelayURL,
-		"subscription_id", closed.SubscriptionID,
-		"reason", closed.Reason,
-	)
-	if !nostrpool.IsAuthRequiredReason(closed.Reason) || closed.RelayURL == "" || r.pool == nil {
-		return false
-	}
-	if _, ok := authAttempted[closed.RelayURL]; ok {
-		return false
-	}
-	authAttempted[closed.RelayURL] = struct{}{}
-	if err := r.pool.AuthenticateRelay(ctx, closed.RelayURL); err != nil {
-		r.logger.Warn("relay control-plane subscription auth failed", "relay", closed.RelayURL, "reason", closed.Reason, "error", err)
-		return false
-	}
-	return true
 }
 
 func (r *Reactor) auditInboundEvent(ctx context.Context, event *nostr.Event) bool {
@@ -2319,8 +2299,6 @@ type ObservationRequest struct {
 	HealthStatus        string    `json:"health_status"`
 	Source              string    `json:"source"`
 }
-
-
 
 // PublishServiceRegistry publishes canonical CAS service registry state.
 func (r *Reactor) PublishServiceRegistry(ctx context.Context, svc *domain.Service) error {

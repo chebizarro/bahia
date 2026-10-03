@@ -1,5 +1,17 @@
-// Auth/session store for NIP-07 extension + NIP-46 Nostr Connect authentication
-// UI identity/session state only - does NOT manage bahia_token as first-party auth state
+/**
+ * Auth/session store for NIP-07 extension + NIP-46 Nostr Connect authentication.
+ *
+ * Phase 4 §6.2: A persisted, signer-verified session counts as authenticated
+ * immediately. No REST probe, no discovery gate, no backendAuthenticated flag.
+ *
+ * Background signer verification is non-blocking. On first authenticated boot,
+ * calls requestPersistentStorage() for durable IndexedDB storage.
+ *
+ * Roles come from relay membership events in auth-roles.svelte.js, not from
+ * a REST /orgs probe.
+ *
+ * @module lib/stores/auth
+ */
 
 import { browser } from '$app/environment';
 import { toast, removeToast } from '$lib/components/toast.js';
@@ -20,16 +32,12 @@ import {
   getNip46Signer,
   getCapabilities as getNip46Capabilities
 } from '$lib/nostr/nip46.js';
-import { KINDS } from '$lib/nostr/kinds.js';
-import { PoolBackedClient } from '$lib/nostr/pool-client.js';
 import { normalizeRelayUrl, uniqueRelays } from '$lib/nostr/pool-utils.js';
-import { supportsDirectNip98Auth } from '$lib/auth/capabilities.js';
-import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
-import { resolveBrowserRelays } from './controlplane/connection.svelte.js';
+import { requestPersistentStorage } from '$lib/nostr/store-interface.js';
+import { stopRoleDerivation } from './auth-roles.svelte.js';
 
 const SESSION_KEY = 'bahia_auth_session';
-const AUTH_QUERY_TIMEOUT_MS = 5000;
-const LEGACY_BAHIA_RELAY = normalizeRelayUrl('wss://bahia.sharegap.net/relay');
+const SIGNER_VERIFY_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 const initialState = {
   status: 'unknown',
@@ -39,17 +47,10 @@ const initialState = {
   pubkey: null,
   relays: {},
   capabilities: {},
-  roles: [],
   error: null,
   profile: null,
   lastAuthenticatedAt: null,
-  compatibility: {
-    restNip98Advertised: false,
-    restNip98Ready: false,
-    restNip98LastError: null
-  },
-  backendAuthenticated: false,
-  directNip98Ready: false,
+  signerVerifiedAt: null,
   nip46: null
 };
 
@@ -92,7 +93,6 @@ function transitionToAuthError(error) {
     extensionAvailable,
     nip46Available,
     capabilities: resolveAvailabilityCapabilities(extensionAvailable, nip46Available),
-    ...compatibilityPatch(),
     error: error?.message || String(error)
   });
   resetEncryptedSignerProbe();
@@ -110,18 +110,6 @@ function resetEncryptedSignerProbe() {
 
 function isValidHexPubkey(pubkey) {
   return typeof pubkey === 'string' && /^[0-9a-fA-F]{64}$/.test(pubkey);
-}
-
-function compatibilityPatch({ restNip98Advertised = false, restNip98Ready = false, restNip98LastError = null } = {}) {
-  return {
-    compatibility: {
-      restNip98Advertised,
-      restNip98Ready,
-      restNip98LastError
-    },
-    backendAuthenticated: restNip98Ready,
-    directNip98Ready: restNip98Ready
-  };
 }
 
 function nip44BridgeFailure(error) {
@@ -160,7 +148,7 @@ function markEncryptedSignerAvailable() {
   updateAuthState({ capabilities: nextCapabilities });
 }
 
-function resolveActiveSigner() {
+export function resolveActiveSigner() {
   if (authState.authMethod === 'nip46') {
     return getNip46Signer();
   }
@@ -180,6 +168,7 @@ function loadPersistedSession() {
       authMethod: session.authMethod || 'nip07',
       nip46: session.nip46 || null,
       lastAuthenticatedAt: session.lastAuthenticatedAt,
+      signerVerifiedAt: session.signerVerifiedAt || null,
       profile: session.profile || null
     };
   } catch (error) {
@@ -188,12 +177,12 @@ function loadPersistedSession() {
   }
 }
 
-function persistSession({ pubkey, relays, authMethod = 'nip07', nip46 = null, profile = null, lastAuthenticatedAt = new Date().toISOString() }) {
+function persistSession({ pubkey, relays, authMethod = 'nip07', nip46 = null, profile = null, lastAuthenticatedAt = new Date().toISOString(), signerVerifiedAt = null }) {
   if (!browser) return;
   try {
     localStorage.setItem(
       SESSION_KEY,
-      JSON.stringify({ pubkey, relays: normalizeRelayMap(relays), authMethod, nip46, profile, lastAuthenticatedAt })
+      JSON.stringify({ pubkey, relays: normalizeRelayMap(relays), authMethod, nip46, profile, lastAuthenticatedAt, signerVerifiedAt })
     );
   } catch (error) {
     console.error('Failed to persist auth session:', error);
@@ -234,16 +223,7 @@ function normalizeProfileMetadata(metadata = {}) {
 
   if (!displayName && !name && !nip05 && !picture && !about && !banner && !website && !lud16) return null;
 
-  return {
-    displayName,
-    name,
-    nip05,
-    picture,
-    about,
-    banner,
-    website,
-    lud16
-  };
+  return { displayName, name, nip05, picture, about, banner, website, lud16 };
 }
 
 function normalizeRelayMap(relays = {}) {
@@ -252,255 +232,41 @@ function normalizeRelayMap(relays = {}) {
       .filter((relay) => /^wss?:\/\//i.test(relay))
       .map((relay) => [normalizeRelayUrl(relay), { read: true, write: true }]));
   }
-
   return Object.fromEntries(
     Object.entries(relays || {})
       .filter(([url]) => /^wss?:\/\//i.test(url))
       .map(([url, config]) => [
         normalizeRelayUrl(url),
-        {
-          read: config?.read !== false,
-          write: config?.write !== false
-        }
+        { read: config?.read !== false, write: config?.write !== false }
       ])
   );
 }
 
-function normalizeRelayUrls(relays = {}) {
-  return Object.entries(normalizeRelayMap(relays))
-    .filter(([, config]) => config?.read !== false)
-    .map(([url]) => url);
-}
-
-function mergeRelayMaps(...relayMaps) {
-  const merged = {};
-  for (const candidate of relayMaps) {
-    const normalized = normalizeRelayMap(candidate);
-    for (const [url, config] of Object.entries(normalized)) {
-      if (!merged[url]) {
-        merged[url] = { read: false, write: false };
-      }
-      merged[url] = {
-        read: merged[url].read || config.read !== false,
-        write: merged[url].write || config.write !== false
-      };
+function resolveAvailabilityCapabilities(extensionAvailable, nip46Available) {
+  if (authState.status === 'authenticated') {
+    if (authState.authMethod === 'nip46') {
+      return nip46Available ? getNip46Capabilities() : {};
+    }
+    if (authState.authMethod === 'nip07') {
+      return extensionAvailable ? getNip07Capabilities() : {};
     }
   }
-  return merged;
+  if (extensionAvailable) return getNip07Capabilities();
+  if (nip46Available) return getNip46Capabilities();
+  return {};
 }
 
-function sameRelayMap(left = {}, right = {}) {
-  const leftEntries = Object.entries(normalizeRelayMap(left)).sort(([a], [b]) => a.localeCompare(b));
-  const rightEntries = Object.entries(normalizeRelayMap(right)).sort(([a], [b]) => a.localeCompare(b));
-  return JSON.stringify(leftEntries) === JSON.stringify(rightEntries);
-}
-
-function collectBootstrapRelayCandidates(userRelays = {}) {
-  const runtimeRelays = resolveBrowserRelays(currentSystemInfo());
-  const signerRelays = normalizeRelayUrls(userRelays);
-  const allRelays = uniqueRelays([...runtimeRelays, ...signerRelays]);
-
-  if (allRelays.length === 0) {
-    throw new Error('No approved relays available from runtime system info or signer configuration');
-  }
-
-  return allRelays
-    .filter((relay) => normalizeRelayUrl(relay) !== LEGACY_BAHIA_RELAY)
-    .slice(0, 10);
-}
-
-function cleanupAuthMetadataClient() {
-  if (authMetadataUnsubscribe) authMetadataUnsubscribe();
-  authMetadataUnsubscribe = null;
-  if (authMetadataClient) authMetadataClient.disconnect();
-  authMetadataClient = null;
-}
-
-async function queryAuthEventsOnRelays(pubkey, relays = [], kinds = [], limit = 5) {
-  if (!isValidHexPubkey(pubkey) || !Array.isArray(kinds) || kinds.length === 0) return [];
-  if (relays.length === 0) return [];
-
-  cleanupAuthMetadataClient();
-  authMetadataClient = new PoolBackedClient({
-    relays,
-    saveRelayConfig: () => {}
-  });
-
-  try {
-    const summary = await authMetadataClient.connect(relays, { force: true });
-    if (!summary?.connected) {
-      cleanupAuthMetadataClient();
-      return [];
-    }
-
-    // Intentional bounded bootstrap read: these pre-auth relays are temporary discovery inputs
-    // used before the app relay set is known, so keeping a persistent subscription is incorrect.
-    return await new Promise((resolve, reject) => {
-      const events = [];
-      const seenIds = new Set();
-      const timer = setTimeout(() => {
-        resolve(events);
-      }, AUTH_QUERY_TIMEOUT_MS);
-
-      authMetadataUnsubscribe = authMetadataClient.subscribe([
-        { kinds, authors: [pubkey], limit }
-      ], {
-        onEvent: (event) => {
-          if (event?.id && seenIds.has(event.id)) return;
-          if (event?.id) seenIds.add(event.id);
-          events.push(event);
-        },
-        onEose: () => {
-          clearTimeout(timer);
-          resolve(events);
-        },
-        onClosed: () => {
-          clearTimeout(timer);
-          resolve(events);
-        }
-      });
-    });
-  } catch (error) {
-    console.warn('Failed auth metadata relay query:', error);
-    cleanupAuthMetadataClient();
-    return [];
-  }
-}
-
-async function queryAuthEvents(pubkey, userRelays = {}, kinds = [], limit = 5) {
-  const relayCandidates = collectBootstrapRelayCandidates(userRelays);
-  return queryAuthEventsOnRelays(pubkey, relayCandidates, kinds, limit);
-}
-
-function latestAuthEvent(events, kind, pubkey) {
-  return (events || [])
-    .filter((event) => event?.kind === kind && event?.pubkey === pubkey)
-    .sort((a, b) => Number(b?.created_at || 0) - Number(a?.created_at || 0))[0] || null;
-}
-
-function parseNip65RelayList(event) {
-  const relays = {};
-  for (const tag of Array.isArray(event?.tags) ? event.tags : []) {
-    if (tag[0] !== 'r' || typeof tag[1] !== 'string' || !/^wss?:\/\//i.test(tag[1])) continue;
-    const marker = String(tag[2] || '').toLowerCase();
-    relays[normalizeRelayUrl(tag[1])] = {
-      read: marker !== 'write',
-      write: marker !== 'read'
-    };
-  }
-  return relays;
-}
-
-async function fetchRelayList(pubkey, userRelays = {}) {
-  const relayListKind = KINDS.NIP65_RELAY_LIST || 10002;
-  const events = await queryAuthEvents(pubkey, userRelays, [relayListKind], 5);
-  const latest = latestAuthEvent(events, relayListKind, pubkey);
-  if (!latest) return {};
-  return parseNip65RelayList(latest);
-}
-
-async function fetchProfile(pubkey, userRelays = {}) {
-  if (!isValidHexPubkey(pubkey)) return null;
-
-  try {
-    const events = await queryAuthEvents(pubkey, userRelays, [0], 5);
-    const latest = latestAuthEvent(events, 0, pubkey);
-    if (!latest?.content) return null;
-    return normalizeProfileMetadata(JSON.parse(latest.content));
-  } catch (error) {
-    console.warn('Failed to load Nostr kind-0 profile:', error);
-    return null;
-  }
-}
-
-async function hydrateAuthMetadata({ pubkey, relays = {}, authMethod = 'nip07', nip46 = null, lastAuthenticatedAt = new Date().toISOString() }) {
-  const mergedRelays = mergeRelayMaps(relays, await fetchRelayList(pubkey, relays));
-  if (!sameRelayMap(relays, mergedRelays)) {
-    updateAuthState({ relays: mergedRelays });
-  }
-
-  const profile = await fetchProfile(pubkey, relays);
-  if (profile) {
-    updateAuthState({ profile });
-  }
-
-  persistSession({
-    pubkey,
-    relays: mergedRelays,
-    authMethod,
-    nip46,
-    profile,
-    lastAuthenticatedAt
-  });
-
-  return { relays: mergedRelays, profile };
-}
-
-function installDirectNip98Provider(api) {
-  api.setAuthProvider({ getAuthorizationHeader: ({ method, url }) => signHttpRequest({ method, url }) });
-  if (browser) localStorage.removeItem('bahia_token');
-}
-
-async function configureBackendAuth(pubkey, { requireBackend = false } = {}) {
-  if (!browser) throw new Error('Backend auth requires browser environment');
-  const { api } = await import('$lib/api/client.js');
-  if (!api) throw new Error('API client not available');
-
-  const systemInfo = currentSystemInfo() || await loadSystemInfo().catch(() => null);
-  if (supportsDirectNip98Auth(systemInfo)) {
-    installDirectNip98Provider(api);
-    updateAuthState({
-      ...compatibilityPatch({ restNip98Advertised: true, restNip98Ready: false }),
-      error: null
-    });
-    try {
-      const organizations = await api.fetch('/orgs', { method: 'GET', retries: 0 });
-      const roles = Array.isArray(organizations)
-        ? [...new Set(organizations.map((organization) => organization?.role).filter(Boolean))]
-        : [];
-      updateAuthState({ roles });
-    } catch (error) {
-      updateAuthState(compatibilityPatch({
-        restNip98Advertised: true,
-        restNip98Ready: false,
-        restNip98LastError: error?.message || 'Backend rejected the NIP-98 authentication probe'
-      }));
-      if (requireBackend) throw error;
-      return null;
-    }
-    updateAuthState({
-      ...compatibilityPatch({ restNip98Advertised: true, restNip98Ready: true }),
-      roles: authState.roles,
-      error: null
-    });
-    return { method: 'nip98', pubkey };
-  }
-
-  api.setAuthProvider(null);
-  if (browser) localStorage.removeItem('bahia_token');
-
-  const compatibilityError = 'Backend direct NIP-98 auth is not enabled';
-  updateAuthState(compatibilityPatch({
-    restNip98Advertised: false,
-    restNip98Ready: false,
-    restNip98LastError: compatibilityError
-  }));
-
-  if (requireBackend) throw new Error(compatibilityError);
-  return null;
-}
-
-async function authenticateBackendInternal(pubkey) {
-  return configureBackendAuth(pubkey);
-}
+// ---------------------------------------------------------------------------
+// Signer availability watcher
+// ---------------------------------------------------------------------------
 
 let initializeInProgress = null;
 let loginInProgress = null;
 let missingSignerToastId = null;
 let stopWatchingNip07Availability = null;
 let signerLifecycleWatcherInstalled = false;
-let authMetadataClient = null;
-let authMetadataUnsubscribe = null;
+/** Track whether we've already requested persistent storage this session. */
+let persistentStorageRequested = false;
 
 function dismissMissingSignerToast() {
   if (missingSignerToastId == null) return;
@@ -515,28 +281,12 @@ function showMissingSignerToast() {
   );
 }
 
-function resolveAvailabilityCapabilities(extensionAvailable, nip46Available) {
-  if (authState.status === 'authenticated') {
-    if (authState.authMethod === 'nip46') {
-      return nip46Available ? getNip46Capabilities() : {};
-    }
-    if (authState.authMethod === 'nip07') {
-      return extensionAvailable ? getNip07Capabilities() : {};
-    }
-  }
-
-  if (extensionAvailable) return getNip07Capabilities();
-  if (nip46Available) return getNip46Capabilities();
-  return {};
-}
-
 function syncSignerAvailability({ extensionAvailable, nip46Available }) {
   updateAuthState({
     extensionAvailable,
     nip46Available,
     capabilities: resolveAvailabilityCapabilities(extensionAvailable, nip46Available)
   });
-
   if (extensionAvailable || nip46Available) {
     dismissMissingSignerToast();
   }
@@ -559,92 +309,133 @@ function ensureSignerAvailabilityWatcher() {
       const { available: nip46Available } = detectNip46();
       syncSignerAvailability({ extensionAvailable, nip46Available });
     };
-
     window.addEventListener?.('focus', refreshFromRuntime);
     window.addEventListener?.('pageshow', refreshFromRuntime);
     document?.addEventListener?.('visibilitychange', refreshFromRuntime);
   }
 }
 
+// ---------------------------------------------------------------------------
+// Background signer verification (non-blocking)
+// ---------------------------------------------------------------------------
+
+/**
+ * Verify the signer still matches the persisted session in the background.
+ * Non-blocking — does not prevent rendering.
+ */
+async function backgroundSignerVerify(persisted) {
+  try {
+    if (persisted.authMethod === 'nip46' && persisted.nip46?.uri) {
+      const connected = await connectNip46(persisted.nip46);
+      if (connected.pubkey.toLowerCase() !== persisted.pubkey.toLowerCase()) {
+        console.warn('[auth] NIP-46 signer pubkey mismatch — clearing session');
+        clearPersistedSession();
+        stopRoleDerivation();
+        updateAuthState({ status: 'unauthenticated', error: null });
+        return;
+      }
+      // Update relays/nip46 session info
+      updateAuthState({
+        relays: connected.relays,
+        nip46: connected,
+        signerVerifiedAt: new Date().toISOString()
+      });
+      persistSession({
+        pubkey: persisted.pubkey,
+        relays: connected.relays,
+        authMethod: 'nip46',
+        nip46: connected,
+        profile: authState.profile,
+        lastAuthenticatedAt: authState.lastAuthenticatedAt,
+        signerVerifiedAt: new Date().toISOString()
+      });
+    } else {
+      const signerPubkey = await getNip07PublicKey();
+      if (signerPubkey.toLowerCase() !== persisted.pubkey.toLowerCase()) {
+        console.warn('[auth] NIP-07 signer pubkey mismatch — clearing session');
+        clearPersistedSession();
+        stopRoleDerivation();
+        updateAuthState({ status: 'unauthenticated', error: null });
+        return;
+      }
+      updateAuthState({ signerVerifiedAt: new Date().toISOString() });
+      persistSession({
+        ...persisted,
+        signerVerifiedAt: new Date().toISOString()
+      });
+    }
+  } catch (err) {
+    console.warn('[auth] Background signer verification failed:', err.message);
+    // Don't clear session — signer may be temporarily unavailable.
+    // User stays authenticated with cached session.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// initializeAuth — §6.2 new auth bootstrap
+// ---------------------------------------------------------------------------
+
 export async function initializeAuth() {
   if (initializeInProgress) return initializeInProgress;
   initializeInProgress = (async () => {
     updateAuthState({ status: 'checking' });
     ensureSignerAvailabilityWatcher();
+
     try {
+      // 1. Detect signers (non-blocking for the render path)
       const [{ available: extensionAvailable }, { available: nip46Available }] = await Promise.all([
         waitForNip07({ timeoutMs: 1500 }),
         Promise.resolve(detectNip46())
       ]);
       syncSignerAvailability({ extensionAvailable, nip46Available });
+
+      // 2. Check persisted session
       const persisted = loadPersistedSession();
-      if (browser) localStorage.removeItem('bahia_token');
+      if (browser) localStorage.removeItem('bahia_token'); // clean up legacy token
 
       if (persisted) {
-        const supportsMethod =
-          (persisted.authMethod === 'nip46' && nip46Available) ||
-          (persisted.authMethod !== 'nip46' && extensionAvailable);
+        // §6.2 step 1: persisted session = AUTHENTICATED IMMEDIATELY
+        // No REST probe, no discovery gate.
+        const capabilities = persisted.authMethod === 'nip46' ? getNip46Capabilities() : getNip07Capabilities();
 
-        if (supportsMethod) {
-          if (persisted.authMethod === 'nip46' && persisted.nip46?.uri) {
-            try {
-              const connected = await connectNip46(persisted.nip46);
-              if (connected.pubkey.toLowerCase() !== persisted.pubkey.toLowerCase()) {
-                throw new Error('Persisted NIP-46 identity does not match the connected signer');
-              }
-              persisted.pubkey = connected.pubkey;
-              persisted.relays = connected.relays;
-              persisted.nip46 = connected;
-            } catch (error) {
-              console.warn('Failed to reconnect NIP-46 session:', error);
-              clearPersistedSession();
-              updateAuthState({ status: 'unauthenticated', ...compatibilityPatch(), error: null });
-              return;
-            }
-          } else {
-            try {
-              const signerPubkey = await getNip07PublicKey();
-              if (signerPubkey.toLowerCase() !== persisted.pubkey.toLowerCase()) {
-                throw new Error('Persisted NIP-07 identity does not match the connected signer');
-              }
-            } catch (error) {
-              console.warn('Failed to verify persisted NIP-07 session:', error);
-              clearPersistedSession();
-              updateAuthState({ status: 'unauthenticated', ...compatibilityPatch(), error: null });
-              return;
-            }
-          }
+        updateAuthState({
+          status: 'authenticated',
+          pubkey: persisted.pubkey,
+          relays: persisted.relays,
+          capabilities,
+          authMethod: persisted.authMethod,
+          nip46: persisted.nip46,
+          lastAuthenticatedAt: persisted.lastAuthenticatedAt,
+          signerVerifiedAt: persisted.signerVerifiedAt,
+          profile: persisted.profile || null,
+          error: null
+        });
 
-          const capabilities = persisted.authMethod === 'nip46' ? getNip46Capabilities() : getNip07Capabilities();
-          updateAuthState({
-            status: 'authenticated',
-            pubkey: persisted.pubkey,
-            relays: persisted.relays,
-            capabilities,
-            authMethod: persisted.authMethod,
-            nip46: persisted.nip46,
-            lastAuthenticatedAt: persisted.lastAuthenticatedAt,
-            profile: persisted.profile || null,
-            ...compatibilityPatch(),
-            error: null
-          });
-          try {
-            await configureBackendAuth(persisted.pubkey);
-          } catch (backendError) {
-            console.warn('Backend auth provider initialization failed:', backendError.message);
-          }
-          await hydrateAuthMetadata({
-            pubkey: persisted.pubkey,
-            relays: persisted.relays,
-            authMethod: persisted.authMethod,
-            nip46: persisted.nip46,
-            lastAuthenticatedAt: persisted.lastAuthenticatedAt
-          });
-          return;
+        // Request persistent storage on first authenticated boot (§14 decision 14)
+        if (!persistentStorageRequested) {
+          persistentStorageRequested = true;
+          requestPersistentStorage().catch(err =>
+            console.warn('[auth] requestPersistentStorage failed:', err)
+          );
         }
+
+        // §6.2 step 2: Background signer verification (non-blocking)
+        const needsVerification = !persisted.signerVerifiedAt ||
+          (Date.now() - new Date(persisted.signerVerifiedAt).getTime()) > SIGNER_VERIFY_EXPIRY_MS;
+
+        if (needsVerification) {
+          // Fire-and-forget — does not block rendering
+          backgroundSignerVerify(persisted);
+        }
+
+        // Wire NIP-98 for any remaining interim REST calls (Wave 2/3)
+        await wireNip98IfAvailable();
+
+        return;
       }
 
-      updateAuthState({ status: 'unauthenticated', ...compatibilityPatch(), error: null });
+      // 3. No persisted session
+      updateAuthState({ status: 'unauthenticated', error: null });
       if (!extensionAvailable && !nip46Available) {
         showMissingSignerToast();
       }
@@ -656,6 +447,30 @@ export async function initializeAuth() {
     }
   })();
   return initializeInProgress;
+}
+
+// ---------------------------------------------------------------------------
+// NIP-98 REST auth — kept minimal for interim Wave 2/3 reads
+// ---------------------------------------------------------------------------
+
+/**
+ * Wire NIP-98 auth provider for any remaining REST API calls.
+ * This is a minimal interim piece kept until Wave 2/3 migrates all reads
+ * to the store. Only the direct NIP-98 signing is needed, not the full
+ * configureBackendAuth flow with discovery + /orgs probe.
+ */
+async function wireNip98IfAvailable() {
+  try {
+    const { api } = await import('$lib/api/client.js');
+    if (api) {
+      api.setAuthProvider({
+        getAuthorizationHeader: ({ method, url }) => signHttpRequest({ method, url })
+      });
+      if (browser) localStorage.removeItem('bahia_token');
+    }
+  } catch {
+    // API client not available — fine, not all routes need it
+  }
 }
 
 export async function refreshExtensionStatus() {
@@ -679,6 +494,7 @@ export async function login() {
         getNip07Relays().catch(() => ({})),
         Promise.resolve(getNip07Capabilities())
       ]);
+      const now = new Date().toISOString();
       updateAuthState({
         status: 'authenticated',
         extensionAvailable: true,
@@ -687,23 +503,33 @@ export async function login() {
         relays,
         capabilities,
         nip46: null,
-        lastAuthenticatedAt: new Date().toISOString(),
+        lastAuthenticatedAt: now,
+        signerVerifiedAt: now,
         profile: null,
         error: null
       });
       dismissMissingSignerToast();
-      try {
-        await authenticateBackendInternal(pubkey);
-      } catch (backendError) {
-        console.warn('Backend authentication failed:', backendError.message);
-      }
-      await hydrateAuthMetadata({
+
+      persistSession({
         pubkey,
         relays,
         authMethod: 'nip07',
         nip46: null,
-        lastAuthenticatedAt: authState.lastAuthenticatedAt
+        lastAuthenticatedAt: now,
+        signerVerifiedAt: now
       });
+
+      // Request persistent storage on first authenticated boot
+      if (!persistentStorageRequested) {
+        persistentStorageRequested = true;
+        requestPersistentStorage().catch(err =>
+          console.warn('[auth] requestPersistentStorage failed:', err)
+        );
+      }
+
+      // Wire NIP-98 for interim REST calls
+      await wireNip98IfAvailable();
+
       toast.success('Signed in successfully');
     } catch (error) {
       console.error('Login failed:', error);
@@ -725,6 +551,7 @@ export async function loginWithNostrConnect(uri) {
       const session = parseNostrConnectUri(uri);
       const connected = await connectNip46(session);
       const capabilities = getNip46Capabilities();
+      const now = new Date().toISOString();
 
       updateAuthState({
         status: 'authenticated',
@@ -734,24 +561,31 @@ export async function loginWithNostrConnect(uri) {
         relays: connected.relays,
         capabilities,
         nip46: connected,
-        lastAuthenticatedAt: new Date().toISOString(),
+        lastAuthenticatedAt: now,
+        signerVerifiedAt: now,
         profile: null,
         error: null
       });
       dismissMissingSignerToast();
 
-      try {
-        await authenticateBackendInternal(connected.pubkey);
-      } catch (backendError) {
-        console.warn('Backend authentication failed:', backendError.message);
-      }
-      await hydrateAuthMetadata({
+      persistSession({
         pubkey: connected.pubkey,
         relays: connected.relays,
         authMethod: 'nip46',
         nip46: connected,
-        lastAuthenticatedAt: authState.lastAuthenticatedAt
+        lastAuthenticatedAt: now,
+        signerVerifiedAt: now
       });
+
+      if (!persistentStorageRequested) {
+        persistentStorageRequested = true;
+        requestPersistentStorage().catch(err =>
+          console.warn('[auth] requestPersistentStorage failed:', err)
+        );
+      }
+
+      await wireNip98IfAvailable();
+
       toast.success('Connected signer successfully');
     } catch (error) {
       console.error('Nostr Connect login failed:', error);
@@ -765,7 +599,6 @@ export async function loginWithNostrConnect(uri) {
       loginInProgress = null;
     }
   })();
-
   return loginInProgress;
 }
 
@@ -788,7 +621,7 @@ export async function connectNostrConnectSessionFromStorage() {
 }
 
 export function logout() {
-  cleanupAuthMetadataClient();
+  stopRoleDerivation();
   import('$lib/nostr/encrypted-controlplane.js').then(({ disconnectEncryptedControlplane }) => {
     disconnectEncryptedControlplane();
   }).catch(() => {});
@@ -807,8 +640,7 @@ export function logout() {
     status: 'unauthenticated',
     extensionAvailable: authState.extensionAvailable,
     nip46Available: authState.nip46Available,
-    capabilities: authState.extensionAvailable ? getNip07Capabilities() : authState.nip46Available ? getNip46Capabilities() : {},
-    ...compatibilityPatch()
+    capabilities: authState.extensionAvailable ? getNip07Capabilities() : authState.nip46Available ? getNip46Capabilities() : {}
   });
   resetEncryptedSignerProbe();
 }
@@ -825,10 +657,15 @@ export function updateAuthProfile(profile) {
     authMethod: authState.authMethod || 'nip07',
     nip46: authState.nip46 || null,
     profile: normalizedProfile,
-    lastAuthenticatedAt: authState.lastAuthenticatedAt || new Date().toISOString()
+    lastAuthenticatedAt: authState.lastAuthenticatedAt || new Date().toISOString(),
+    signerVerifiedAt: authState.signerVerifiedAt
   });
   return normalizedProfile;
 }
+
+// ---------------------------------------------------------------------------
+// Signing and encryption (unchanged API surface)
+// ---------------------------------------------------------------------------
 
 export async function signWithAuth(event) {
   if (authState.status !== 'authenticated') throw new Error('Not authenticated - please login first');
@@ -960,6 +797,10 @@ export async function signHttpRequest({ method = 'GET', url }) {
   return `Nostr ${base64Encode(JSON.stringify(signedEvent))}`;
 }
 
+/**
+ * For interim REST calls that still need backend auth (Wave 2/3).
+ * This just wires NIP-98 signing — no /orgs probe.
+ */
 export async function authenticateBackend() {
   if (!browser) throw new Error('authenticateBackend() can only be called in the browser');
   if (authState.status !== 'authenticated' || !authState.pubkey) {
@@ -968,10 +809,6 @@ export async function authenticateBackend() {
       throw new Error('Nostr authentication required before backend auth');
     }
   }
-  try {
-    return await configureBackendAuth(authState.pubkey, { requireBackend: true });
-  } catch (error) {
-    console.error('Backend authentication failed:', error);
-    throw error;
-  }
+  await wireNip98IfAvailable();
+  return { method: 'nip98', pubkey: authState.pubkey };
 }

@@ -67,9 +67,17 @@ func (r *FleetConfigReconciler) Reconcile(ctx context.Context, snapshot *FleetCo
 		return fmt.Errorf("fleet config revision is required")
 	}
 
+	// The fleet lock serializes revision admission: the latest-check, the
+	// latest-update, and the soul listing are atomic. The lock is released
+	// before per-soul fan-out so the fleet lock is not held across runtime
+	// calls and deferred lifecycle work that the soul gate runs inline after
+	// a fleet operation finishes (bahia-irsry.57). Per-soul ordering is
+	// already guaranteed by soulOperationGate; revision ordering is preserved
+	// because the re-drive reads latestRevision() and a newer revision's
+	// per-soul work is deferred behind an older one's by the gate.
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if latest := r.latestRevision(); latest != nil && fleetSnapshotBefore(snapshot, latest) {
+		r.mu.Unlock()
 		return nil
 	}
 	r.latestMu.Lock()
@@ -78,6 +86,7 @@ func (r *FleetConfigReconciler) Reconcile(ctx context.Context, snapshot *FleetCo
 
 	souls, err := r.reactor.listFleetReconcileSouls(ctx)
 	if err != nil {
+		r.mu.Unlock()
 		return fmt.Errorf("list fleet reconcile souls: %w", err)
 	}
 	eligible := make([]*domain.AgentSoul, 0, len(souls))
@@ -88,9 +97,12 @@ func (r *FleetConfigReconciler) Reconcile(ctx context.Context, snapshot *FleetCo
 	}
 	sort.Slice(eligible, func(i, j int) bool { return eligible[i].AgentID < eligible[j].AgentID })
 	if len(eligible) == 0 {
+		r.mu.Unlock()
 		return nil
 	}
+	r.mu.Unlock()
 
+	// Per-soul work fans out below without holding the fleet lock.
 	workers := min(r.concurrency, len(eligible))
 	jobs := make(chan *domain.AgentSoul)
 	errs := make(chan error, len(eligible))
@@ -306,8 +318,10 @@ func (r *FleetConfigReconciler) awaitApply(
 		return false, nil
 	}
 	late, observed := r.reactor.resultWaiters().park(pending, parkedOperation{
-		shardKey:  soul.AgentID,
-		holdsSoul: hold != nil,
+		shardKey:      soul.AgentID,
+		holdsSoul:     hold != nil,
+		actionEventID: action.EventID,
+		requestKind:   domain.KindSoulFleetConfig,
 		resume: func(ctx context.Context, late *RuntimeControlResultEnvelope) {
 			r.resumeApply(ctx, hold, adapter, action, soul, next, previous, changed, late)
 		},

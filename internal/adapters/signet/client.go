@@ -74,15 +74,16 @@ const (
 //     the provisioner through that bunker, the identity the gift-wrapped
 //     replies are addressed to.
 type Client struct {
-	bunkerURI        string
-	relays           []string
-	pool             *nostr.Pool // NIP-46 only; see above
-	managementRelays []string
-	logger           *slog.Logger
-	clientSecretKey  string // Ephemeral key for NIP-46 session
-	requireReal      bool   // Fail closed unless a real Signet bunker is configured and reachable
-	allowMock        bool   // Explicit test/dev-only mock signing mode
-	connectTimeout   time.Duration
+	bunkerURI         string
+	relays            []string
+	pool              *nostr.Pool // NIP-46 only; see above
+	managementRelays  []string
+	closedRetryBudget int
+	logger            *slog.Logger
+	clientSecretKey   string // Ephemeral key for NIP-46 session
+	requireReal       bool   // Fail closed unless a real Signet bunker is configured and reachable
+	allowMock         bool   // Explicit test/dev-only mock signing mode
+	connectTimeout    time.Duration
 
 	connectMu            sync.Mutex
 	mu                   sync.Mutex
@@ -111,13 +112,14 @@ type AgentIdentity struct {
 
 // Config holds Signet client configuration.
 type Config struct {
-	BunkerURI       string        // bunker://<pubkey>?relay=...&secret=...
-	Relays          []string      // Backup relays if not in URI
-	ClientSecretKey string        // Optional: persistent client key (generated if empty)
-	RequireReal     bool          // When true, missing/unreachable bunker is a hard error
-	AllowMock       bool          // Legacy explicit test/dev-only mock mode; production callers should prefer RequireReal=true
-	ConnectTimeout  time.Duration // Bounds each connection attempt without becoming the successful connection lifetime
-	SignTimeout     time.Duration // Deprecated: caller context controls signing lifetime
+	BunkerURI         string        // bunker://<pubkey>?relay=...&secret=...
+	Relays            []string      // Backup relays if not in URI
+	ClientSecretKey   string        // Optional: persistent client key (generated if empty)
+	RequireReal       bool          // When true, missing/unreachable bunker is a hard error
+	AllowMock         bool          // Legacy explicit test/dev-only mock mode; production callers should prefer RequireReal=true
+	ConnectTimeout    time.Duration // Bounds each connection attempt without becoming the successful connection lifetime
+	SignTimeout       time.Duration // Deprecated: caller context controls signing lifetime
+	ClosedRetryBudget int           // nostr.closed_retry_budget for the management pool; 0 keeps the pool default
 }
 
 // NewClient creates a new Signet client.
@@ -133,17 +135,18 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 	}
 
 	c := &Client{
-		bunkerURI:        config.BunkerURI,
-		relays:           config.Relays,
-		pool:             nostr.NewPool(),
-		managementRelays: signetManagementRelays(config),
-		logger:           logger.With("component", "signet"),
-		clientSecretKey:  clientSK,
-		requireReal:      config.RequireReal,
-		allowMock:        config.AllowMock,
-		connectTimeout:   config.ConnectTimeout,
-		agents:           make(map[string]*AgentIdentity),
-		stateChanged:     make(chan struct{}),
+		bunkerURI:         config.BunkerURI,
+		relays:            config.Relays,
+		pool:              nostr.NewPool(),
+		managementRelays:  signetManagementRelays(config),
+		closedRetryBudget: config.ClosedRetryBudget,
+		logger:            logger.With("component", "signet"),
+		clientSecretKey:   clientSK,
+		requireReal:       config.RequireReal,
+		allowMock:         config.AllowMock,
+		connectTimeout:    config.ConnectTimeout,
+		agents:            make(map[string]*AgentIdentity),
+		stateChanged:      make(chan struct{}),
 	}
 
 	return c, nil
@@ -313,7 +316,11 @@ func (c *Client) newManagementPool(bunker *nip46.BunkerClient) *nostrpool.RelayP
 		return nil
 	}
 	logger := nostrpool.NewSlogZapLogger(c.logger.With("relay_pool", "signet-management"))
-	return nostrpool.NewRelayPool(c.managementRelays, logger, nostrpool.WithAuthSignFunc(bunker.SignEvent))
+	opts := []nostrpool.RelayPoolOption{nostrpool.WithAuthSignFunc(bunker.SignEvent)}
+	if c.closedRetryBudget > 0 {
+		opts = append(opts, nostrpool.WithRetryableClosedBudget(c.closedRetryBudget))
+	}
+	return nostrpool.NewRelayPool(c.managementRelays, logger, opts...)
 }
 
 // replaceManagementPool installs the active connection's management pool and

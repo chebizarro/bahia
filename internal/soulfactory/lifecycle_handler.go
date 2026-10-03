@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -100,6 +101,13 @@ func (h *LifecycleHandler) HandleAction(ctx context.Context, event *nostr.Event)
 		_, err := h.runAction(ctx, event, action, nil)
 		return err
 	}
+	// Abandon bypasses the soul gate: it acts on the stuck operation that
+	// currently holds the soul, so going through the gate would defer it
+	// behind the very operation it intends to release.
+	if action.Action == domain.SoulActionAbandon {
+		return h.handleAbandon(ctx, event, action, agentID)
+	}
+
 	var runErr error
 	now := soulOperation{key: lifecycleOperationKey(action.EventID), run: func(ctx context.Context, hold *soulHold) bool {
 		parked, err := h.runAction(ctx, event, action, hold)
@@ -128,6 +136,136 @@ func (h *LifecycleHandler) deferredAction(event *nostr.Event, action *domain.Sou
 		}
 		return parked
 	}}
+}
+
+// handleAbandon processes an operator abandon action for a soul stuck in
+// awaiting_terminal. It does not go through the soul gate: the stuck operation
+// holds the soul, and the abandon releases it. The sequence is:
+//
+//  1. Authorize the abandon.
+//  2. Look up the soul and confirm it is held.
+//  3. Replace the parked operation's resume with a record-only callback: a
+//     late result is logged and published as progress but NOT applied.
+//  4. Force-release the soul's hold, so deferred work proceeds.
+//  5. Publish the abandoned terminal result.
+//
+// Event contract (kind:1950):
+//
+//	tags: ["soul", "<parameterized coordinate>"], ["action", "abandon"]
+//	      optional: ["reason", "<operator reason>"]
+//	authorization: the signing pubkey must be in Config.AuthorizedPubkeys.
+func (h *LifecycleHandler) handleAbandon(ctx context.Context, event *nostr.Event, action *domain.SoulAction, agentID string) error {
+	logger := h.logger.With("event_id", event.ID, "action", action.Action, "agent_id", agentID)
+
+	soul, err := h.reactor.GetSoul(ctx, action.SoulRef)
+	if err != nil {
+		return fmt.Errorf("abandon: lookup soul: %w", err)
+	}
+	if soul == nil {
+		err := fmt.Errorf("abandon: soul not found: %s", action.SoulRef)
+		_ = h.publishActionResult(ctx, action, "error", map[string]interface{}{"error": err.Error()}, "")
+		return err
+	}
+	if !h.isAuthorized(event.PubKey.Hex(), soul) {
+		err := fmt.Errorf("unauthorized: %s cannot abandon soul %s", event.PubKey.Hex(), soul.AgentID)
+		_ = h.publishActionResult(ctx, action, "error", map[string]interface{}{"error": err.Error()}, soul.AgentID)
+		return err
+	}
+
+	held, _ := h.reactor.soulOperations().held(agentID)
+	if !held {
+		err := fmt.Errorf("abandon: soul %s is not held by a stuck operation", soul.AgentID)
+		_ = h.publishActionResult(ctx, action, "error", map[string]interface{}{"error": err.Error()}, soul.AgentID)
+		return err
+	}
+
+	// Replace the parked continuation with a record-only callback. The
+	// callback reads the request ID from the late result directly (not from
+	// a captured variable set after abandon returns) to avoid a data race
+	// between the assignment and a concurrent deliver call.
+	abandoned := h.reactor.resultWaiters().abandon(agentID, func(ctx context.Context, late *RuntimeControlResultEnvelope) {
+		status, requestID := "unknown", "unknown"
+		if late != nil {
+			status = late.Status
+			requestID = late.RequestEvent
+		}
+		logger.Info("late runtime result for abandoned operation recorded (not applied)",
+			"abandoned_request", requestID, "late_status", status)
+		message := fmt.Sprintf("late runtime result for abandoned operation: status=%s (not applied)", status)
+		_ = h.publishActionProgressTags(ctx, action, "abandoned_late_result", message, soul.AgentID, nostr.Tags{
+			{tagEvent, action.EventID},
+		})
+	})
+	if abandoned == nil {
+		// The soul is held (by soulOperationGate) but no awaiting_terminal
+		// operation is parked. The run func is still executing; forcing the
+		// release would allow a second operation to run concurrently on the
+		// same soul.
+		err := fmt.Errorf("abandon: soul %s is held but its operation is still executing; abandon applies only to operations awaiting a runtime terminal result", soul.AgentID)
+		_ = h.publishActionResult(ctx, action, "error", map[string]interface{}{"error": err.Error()}, soul.AgentID)
+		return err
+	}
+
+	if err := h.publishActionProgress(ctx, action, "processing", "abandoning stuck operation", soul.AgentID); err != nil {
+		logger.Warn("failed to publish abandon progress", "error", err)
+	}
+
+	// Publish a terminal result for the abandoned request so the restart
+	// rebuild (rebuildParkedOperations -> withoutTerminalResults) sees it as
+	// finished and does not re-hold the soul or re-drive the operation.
+	if err := h.publishAbandonedRequestResult(ctx, abandoned, action, soul.AgentID); err != nil {
+		logger.Warn("failed to publish abandoned-request terminal result", "error", err)
+	}
+
+	// Release the soul's hold; deferred work (e.g. a rollback action or a
+	// newer fleet revision) proceeds.
+	h.reactor.soulOperations().forceRelease(ctx, agentID)
+
+	data := map[string]interface{}{
+		"agent_id":          soul.AgentID,
+		"abandoned_request": abandoned.actionEventID,
+		"reason":            action.Reason,
+	}
+	if err := h.publishActionResult(ctx, action, "completed", data, soul.AgentID); err != nil {
+		return fmt.Errorf("abandon: publish result: %w", err)
+	}
+	logger.Info("soul operation abandoned; serialization lock released",
+		"abandoned_runtime_request", abandoned.runtimeRequestID,
+		"abandoned_action", abandoned.actionEventID)
+	return nil
+}
+
+// publishAbandonedRequestResult publishes a kind:7950 terminal result for the
+// abandoned request, so the restart rebuild (rebuildParkedOperations ->
+// withoutTerminalResults) sees it as finished and does not re-drive it. The
+// event's tags match the outstandingOperation key structure used by the rebuild:
+// tagEvent is the originating action or fleet-revision event ID, tagRequestKind
+// and tagAgentID match the awaiting_terminal progress.
+func (h *LifecycleHandler) publishAbandonedRequestResult(ctx context.Context, abandoned *abandonedEntry, abandonAction *domain.SoulAction, agentID string) error {
+	// Build a synthetic action for the abandoned request to reuse
+	// BuildActionResultEvent, which owns the canonical result kind.
+	syntheticAction := &domain.SoulAction{
+		EventID:   abandoned.actionEventID,
+		SoulRef:   abandonAction.SoulRef,
+		Action:    domain.SoulActionType("abandoned"),
+		Initiator: abandonAction.Initiator,
+	}
+	data := map[string]interface{}{
+		"abandoned_by": abandonAction.EventID,
+		"operator":     abandonAction.Initiator,
+		"reason":       abandonAction.Reason,
+	}
+	event, err := BuildActionResultEvent(syntheticAction, "abandoned", data, ActionResultCanonical, agentID)
+	if err != nil {
+		return fmt.Errorf("build abandoned result: %w", err)
+	}
+	// Override the request-kind: the abandoned request was a lifecycle action
+	// or fleet revision, not the synthetic action.
+	setTagValue(&event.Tags, tagRequestKind, strconv.Itoa(abandoned.requestKind))
+	if err := h.reactor.signer.Sign(ctx, event); err != nil {
+		return fmt.Errorf("sign abandoned result: %w", err)
+	}
+	return h.reactor.publish(ctx, event, h.lifecycleRelays())
 }
 
 // runAction executes a parsed lifecycle action. hold is the action's hold on
@@ -268,8 +406,10 @@ func (h *LifecycleHandler) finishAction(ctx context.Context, run lifecycleRun, r
 			return false, nil
 		}
 		late, observed := h.reactor.resultWaiters().park(awaiting.pending, parkedOperation{
-			shardKey:  run.shardKey,
-			holdsSoul: run.hold != nil,
+			shardKey:      run.shardKey,
+			holdsSoul:     run.hold != nil,
+			actionEventID: run.action.EventID,
+			requestKind:   domain.KindSoulAction,
 			resume: func(ctx context.Context, late *RuntimeControlResultEnvelope) {
 				result, err := awaiting.resume(ctx, late)
 				parked, err := h.finishAction(ctx, run, result, err)
@@ -1400,7 +1540,8 @@ func isSupportedLifecycleAction(action domain.SoulActionType) bool {
 		domain.SoulActionRedeploy,
 		domain.SoulActionUpdate,
 		domain.SoulActionHotReload,
-		domain.SoulActionRollback:
+		domain.SoulActionRollback,
+		domain.SoulActionAbandon:
 		return true
 	default:
 		return false

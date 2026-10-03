@@ -44,7 +44,7 @@ test.describe('Service create visibility with preserved list state', () => {
     });
 
     await page.goto('/services');
-    await expect(page.getByRole('heading', { name: 'Services' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Services', exact: true })).toBeVisible();
 
     await page.locator('#service-search').fill('existing');
     await page.locator('#runtime-filter').selectOption('docker');
@@ -72,7 +72,7 @@ test.describe('Service create visibility with preserved list state', () => {
     });
 
     await page.goto('/services');
-    await expect(page.getByRole('heading', { name: 'Services' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Services', exact: true })).toBeVisible();
 
     await page.locator('#service-search').fill('created-match');
     await expect(page.getByText('No services match current filters')).toBeVisible();
@@ -96,7 +96,7 @@ test.describe('Service create visibility with preserved list state', () => {
     });
 
     await page.goto('/services');
-    await expect(page.getByRole('heading', { name: 'Services' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Services', exact: true })).toBeVisible();
 
     await page.locator('#page-size').selectOption('10');
     await expect(page.getByText('Page 1 of 3')).toBeVisible();

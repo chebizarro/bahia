@@ -63,7 +63,7 @@ export async function installE2EMocks(
   await page.route('**/api/v1/orgs', (route) => route.fulfill({
     json: { data: [{ id: 'org-e2e', name: 'E2E organization', role: backendRole }] }
   }));
-  await page.addInitScript(({ authenticated, extension, pubkey, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations, defaultServicePubkey }) => {
+  await page.addInitScript(({ authenticated, extension, pubkey, backendRole, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations, defaultServicePubkey }) => {
     const existingSseEvents = localStorage.getItem('__bahia_e2e_sse_events');
     if (!existingSseEvents || (Array.isArray(sseEvents) && sseEvents.length > 0)) {
       localStorage.setItem('__bahia_e2e_sse_events', JSON.stringify(sseEvents || []));
@@ -112,6 +112,12 @@ export async function installE2EMocks(
       window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS = routeRoleRequirements;
     } else {
       delete window.__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS;
+    }
+    // Inject user roles for hasAnyRole() in auth-roles.svelte.js (dev-only E2E override)
+    if (authenticated && backendRole) {
+      window.__BAHIA_E2E_USER_ROLES = [backendRole];
+    } else {
+      delete window.__BAHIA_E2E_USER_ROLES;
     }
     sessionStorage.removeItem('bahia_dashboard_pending_deployments');
     window.__BAHIA_E2E_CONTEXTVM_OPERATIONS = (contextVMOperations || []).map((entry) => ({ ...entry }));
@@ -395,7 +401,7 @@ export async function installE2EMocks(
           kind: 30078,
           pubkey: servicePubkey,
           created_at: now,
-          tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.ref.v1'], ['type', 'sbom.ref'], ['op', 'sbom.ref'], ['d', referenceDTag], ['artifact', artifactId], ['subject', digest], ['subject_type', 'artifact'], ['format', format], ['storage', 'blossom'], ['location', locationUri], ['x', payloadSha], ['generator', generator]],
+          tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.ref.v1'], ['t', 'sbom-reference'], ['type', 'sbom.ref'], ['op', 'sbom.ref'], ['d', referenceDTag], ['artifact', artifactId], ['subject', digest], ['subject_type', 'artifact'], ['format', format], ['storage', 'blossom'], ['location', locationUri], ['x', payloadSha], ['generator', generator]],
           content: JSON.stringify({ schema: 'bahia.sbom.ref.v1', domain: 'sbom', event_type: 'sbom.ref', artifact_id: artifactId, subject: { type: 'artifact', id: artifactId, digest }, format, storage: { type: 'blossom', uri: locationUri }, payload_sha256: payloadSha, generator, packages: [{ name: `${format}-package`, version: '1.0.0', ecosystem: 'npm', license: 'MIT' }] }),
           };
         referenceEventIds.push(referenceEvent.id);
@@ -407,7 +413,7 @@ export async function installE2EMocks(
         kind: 30004,
         pubkey: servicePubkey,
         created_at: now,
-        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.available-list.v1'], ['type', 'sbom.available-list'], ['op', 'sbom.available-list'], ['d', `sbom:available:artifact:${artifactId}`], ['artifact', artifactId], ['subject', digest], ['subject_type', 'artifact']],
+        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.available-list.v1'], ['t', 'sbom-availability'], ['type', 'sbom.available-list'], ['op', 'sbom.available-list'], ['d', `sbom:available:artifact:${artifactId}`], ['artifact', artifactId], ['subject', digest], ['subject_type', 'artifact']],
         content: JSON.stringify({ schema: 'bahia.sbom.available-list.v1', domain: 'sbom', event_type: 'sbom.available-list', artifact_id: artifactId, subject_digest: digest, entries: formats.map((format) => ({ format, storageType: 'blossom', locationUri: `blossom://${sourcePath}/${artifactId}.${format}.json`, payloadSha256: payloadSha, generatorId: generator, referenceEventId: referenceEventIds[formats.indexOf(format)] })) }),
       };
       publishMockNostrEvent(availabilityEvent);
@@ -633,6 +639,7 @@ export async function installE2EMocks(
     authenticated,
     extension,
     pubkey: TEST_PUBKEY,
+    backendRole,
     sseEvents,
     nostrEvents,
     systemInfo: effectiveSystemInfo,
