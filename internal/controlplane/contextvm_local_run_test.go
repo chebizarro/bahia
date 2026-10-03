@@ -565,6 +565,59 @@ func TestContextVMReissuedEOSECommitsCursor(t *testing.T) {
 	}
 }
 
+func TestContextVMPruneLockedEvictsOldGiftWraps(t *testing.T) {
+	store, err := localstore.Open(filepath.Join(t.TempDir(), "contextvm.bolt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Now()
+	if _, err := store.ContextVMLedgerEpoch(now.Add(-30 * 24 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Store two gift-wrap events: one old (beyond the cutoff) and one recent.
+	oldTime := now.Add(-10 * 24 * time.Hour) // 10 days ago
+	recentTime := now.Add(-1 * time.Hour)    // 1 hour ago
+
+	makeWrap := func(t *testing.T, createdAt time.Time) nostr.Event {
+		t.Helper()
+		rumor := contextVMRumor(t, `{"jsonrpc":"2.0","id":"prune-`+createdAt.String()+`","result":{}}`)
+		wrap := giftWrapContextVMRumor(t, rumor, KindContextVMGiftWrap, nostr.Timestamp(createdAt.Unix()))
+		return wrap
+	}
+
+	oldWrap := makeWrap(t, oldTime)
+	recentWrap := makeWrap(t, recentTime)
+	if _, err := store.SaveEvent(oldWrap); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveEvent(recentWrap); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify both are stored.
+	countEvents := func() int {
+		n := 0
+		for range store.QueryEvents(nostr.Filter{Kinds: []nostr.Kind{KindContextVMGiftWrap}}) {
+			n++
+		}
+		return n
+	}
+	if n := countEvents(); n != 2 {
+		t.Fatalf("before prune: expected 2 events, got %d", n)
+	}
+
+	local := &contextVMLocalState{store: store}
+	local.pruneLocked(now, zap.NewNop())
+
+	// The old event should be pruned; the recent one stays.
+	if n := countEvents(); n != 1 {
+		t.Fatalf("after prune: expected 1 event, got %d", n)
+	}
+}
+
 func TestContextVMLedgerWithoutRelays(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "contextvm.bolt")
 	authorized := contextVMTestAuthorizedPubkeys(t)

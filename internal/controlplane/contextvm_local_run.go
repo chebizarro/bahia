@@ -157,8 +157,11 @@ func (l *contextVMLocalState) innerFloor(now time.Time) nostr.Timestamp {
 	return nostr.Timestamp(floor.Unix())
 }
 
-// pruneLocked drops ledger entries older than anything the floor accepts or a
-// resume can fetch. The caller holds processMu.
+// pruneLocked drops ledger entries and regular events (gift wraps) older than
+// anything the floor accepts or a resume can fetch. The caller holds
+// processMu. This bounds the DNS agent's gift-wrap store growth on long
+// uptimes (bahia-irsry.48 item 6): entries older than the age floor are
+// evicted event-driven at EOSE commits, not on a ticker.
 func (l *contextVMLocalState) pruneLocked(now time.Time, logger *zap.Logger) {
 	if !l.lastPrune.IsZero() && now.Sub(l.lastPrune) < contextVMLedgerPruneInterval {
 		return
@@ -172,6 +175,18 @@ func (l *contextVMLocalState) pruneLocked(now time.Time, logger *zap.Logger) {
 	}
 	if removed > 0 {
 		logger.Info("pruned ContextVM request ledger", zap.Int("removed", removed), zap.Time("cutoff", cutoff))
+	}
+	// Prune regular events (gift wraps) from the event store so a
+	// long-running agent's store stays bounded. The cutoff matches the
+	// ledger's: anything older than the age floor plus the backdating
+	// overlap cannot be redelivered by a cursor-based resume.
+	evicted, err := l.store.PruneRegularEvents(cutoff)
+	if err != nil {
+		logger.Warn("prune regular events failed", zap.Error(err))
+		return
+	}
+	if evicted > 0 {
+		logger.Info("pruned regular events from the event store", zap.Int("evicted", evicted), zap.Time("cutoff", cutoff))
 	}
 }
 

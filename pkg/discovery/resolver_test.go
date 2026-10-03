@@ -175,6 +175,29 @@ func TestResolverNIP09DeletionIgnoredForWrongKind(t *testing.T) {
 	require.True(t, ok, "endpoint should still exist")
 }
 
+func TestResolverNIP09DeletionIgnoredFromUntrustedAuthor(t *testing.T) {
+	secretKey, pubkey := generatedResolverKeyPair(t)
+	forgerKey, _ := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+	base := resolverTestBase()
+	api := apiEndpoint("10.0.0.10")
+
+	require.NoError(t, resolver.applyEvent(liveEndpointEvent(t, secretKey, api, base)))
+	_, ok := resolver.ResolveByFQDN(api.FQDN)
+	require.True(t, ok, "endpoint should exist before deletion attempt")
+
+	// A kind-5 deletion from a different author must be rejected even if it
+	// targets the right coordinate and kind — NIP-09 only honours deletions
+	// from the event's own author.
+	deletion := makeKind5Deletion(t, forgerKey, api.Coordinate, pubkey, base+10)
+	err := resolver.applyEvent(deletion)
+	require.Error(t, err, "kind-5 from untrusted author must be rejected")
+	require.Contains(t, err.Error(), "unexpected author")
+
+	_, ok = resolver.ResolveByFQDN(api.FQDN)
+	require.True(t, ok, "endpoint must survive a forged deletion")
+}
+
 func TestResolverDeletionFilterIncludesKind5(t *testing.T) {
 	_, pubkey := generatedResolverKeyPair(t)
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)

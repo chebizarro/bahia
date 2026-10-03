@@ -160,6 +160,38 @@ func TestBridgeNIP09DeletionIgnoredForWrongKind(t *testing.T) {
 	require.Equal(t, npubOf(t, workerA), bridge.entries["drydock"], "endpoint should still exist")
 }
 
+func TestBridgeNIP09DeletionIgnoredFromUntrustedAuthor(t *testing.T) {
+	pubkey, _ := testIdentity(t)
+	bridge, _ := newTestBridge(t, pubkey, func(cfg *Config) { cfg.HealthFilter = false })
+	now := nostr.Now()
+
+	record := endpointRecord{D: "endpoint:service:drydock:prod", Service: "drydock", FQDN: "drydock.prod.cascadia", Health: "healthy", Worker: workerA}
+	require.NoError(t, bridge.HandleEvent(context.Background(), liveEndpoint(t, pubkey, record, now)))
+	require.Equal(t, npubOf(t, workerA), bridge.entries["drydock"])
+
+	// A kind-5 from a different author must be rejected — NIP-09 only
+	// honours deletions from the event's own author.
+	forgerKey := nostr.Generate()
+	forgerPub := forgerKey.Public().Hex()
+	coordinate := strconv.Itoa(kinds.CASControlState) + ":" + pubkey + ":" + record.D
+	forgerPubValue, _ := nostrutil.PubKeyFromHex(forgerPub)
+	forgedDeletion := &nostr.Event{
+		PubKey:    forgerPubValue,
+		CreatedAt: now + 10,
+		Kind:      nostr.KindDeletion,
+		Tags: nostr.Tags{
+			{"k", strconv.Itoa(kinds.CASControlState)},
+			{"a", coordinate},
+		},
+	}
+	require.NoError(t, nostrutil.SignEventWithHexKey(forgedDeletion, forgerKey.Hex()))
+	err := bridge.HandleEvent(context.Background(), forgedDeletion)
+	require.Error(t, err, "kind-5 from untrusted author must be rejected")
+	require.Contains(t, err.Error(), "unexpected author")
+
+	require.Equal(t, npubOf(t, workerA), bridge.entries["drydock"], "endpoint must survive a forged deletion")
+}
+
 func TestBridgeSubscriptionFiltersIncludeKind5(t *testing.T) {
 	pubkey, _ := testIdentity(t)
 	bridge := newBridgeWithPool(Config{
