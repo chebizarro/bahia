@@ -8,6 +8,7 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
 
@@ -65,7 +66,7 @@ func (p *PaymentCanonicalPublisher) publishConfidential(ctx context.Context, leg
 	// Payments are fleet-scoped (no per-org dimension in the payment model).
 	// Use "fleet" as the OCK org scope, consistent with fleet-scoped
 	// notification channels.
-	encrypted, err := p.encryptor.EncryptConfidential(ctx, "fleet", []byte(content), legacyKind, dTag, topic, nil)
+	encrypted, err := p.encryptor.EncryptConfidential(ctx, kinds.FleetOCKScope, []byte(content), legacyKind, dTag, topic, nil)
 	if err != nil {
 		return fmt.Errorf("encrypt payment state: %w", err)
 	}

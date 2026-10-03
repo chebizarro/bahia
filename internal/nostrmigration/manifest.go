@@ -314,6 +314,7 @@ var constantJustifications = map[string]KindJustification{
 	"PaymentRecord":                  omitted("PaymentRecord", kinds.PaymentRecord, "cp-state-family", "canonical cp-state output for payment records (bahia-irsry.60); OCK-encrypted 30900 records published from PaymentService mutation sites"),
 	"SecurityFindingRecord":          omitted("SecurityFindingRecord", kinds.SecurityFindingRecord, "cp-state-family", "canonical cp-state output for individual security findings (bahia-irsry.60); OCK-encrypted 30900 records published from SecurityScanner mutation sites"),
 	"SecurityScheduleRecord":         omitted("SecurityScheduleRecord", kinds.SecurityScheduleRecord, "cp-state-family", "canonical cp-state output for security scan schedules (bahia-irsry.60); OCK-encrypted 30900 records published from PolicyService schedule derivation"),
+	"SecurityFindingDetailRecord":    omitted("SecurityFindingDetailRecord", kinds.SecurityFindingDetailRecord, "cp-state-family", "canonical cp-state output for security finding details (bahia-irsry.60); OCK-encrypted 30900 records, one per finding, with full detail text"),
 }
 
 func omitted(name string, kind int, category, reason string) KindJustification {

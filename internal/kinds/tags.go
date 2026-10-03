@@ -168,7 +168,8 @@ const (
 // published through controlStateEnvelope as confidential cp-state (OCK-
 // encrypted) so only org members and the daemon can decrypt them.
 const (
-	CPStateTopicPaymentRecord    = "payment-record"
-	CPStateTopicSecurityFinding  = "security-finding"
-	CPStateTopicSecuritySchedule = "security-schedule"
+	CPStateTopicPaymentRecord         = "payment-record"
+	CPStateTopicSecurityFinding       = "security-finding"
+	CPStateTopicSecuritySchedule      = "security-schedule"
+	CPStateTopicSecurityFindingDetail = "security-finding-detail"
 )

@@ -616,3 +616,212 @@ func TestCPStateDomainsIncludesPaymentAndSecurity(t *testing.T) {
 func tagValueFromEvent(ev gonostr.Event, key string) string {
 	return tagValue(ev.Tags, key)
 }
+
+// --- Security Finding Detail tests ---
+
+func TestSecurityFindingDetailPublisher_SingleRecord(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	p := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
+	enc := &mockConfidentialEncryptor{}
+	pub := NewSecurityCanonicalPublisher(p, enc, zap.NewNop())
+
+	finding := domain.SecurityOSVFinding{
+		ID:             uuid.New(),
+		FindingKeyHash: "detail_hash_1",
+		OSVID:          "GHSA-detail-test",
+		Details:        "This is a moderate-length detail about the vulnerability.",
+		Severity:       domain.SecuritySeverityHigh,
+	}
+
+	if err := pub.PublishFindingDetail(ctx, finding); err != nil {
+		t.Fatalf("PublishFindingDetail: %v", err)
+	}
+
+	records := sink.byKind(KindCASControlState)
+	// Should have 1 detail record
+	var detailRecords []gonostr.Event
+	for _, ev := range records {
+		if hasTag(ev.Tags, "legacy_kind", strconv.Itoa(KindSecurityFindingDetailRecord)) {
+			detailRecords = append(detailRecords, ev)
+		}
+	}
+	if len(detailRecords) != 1 {
+		t.Fatalf("expected 1 detail record, got %d", len(detailRecords))
+	}
+
+	ev := detailRecords[0]
+	wantD := "security:finding-detail:detail_hash_1"
+	if !hasTag(ev.Tags, "d", wantD) {
+		t.Errorf("wrong d-tag: %v, want d=%s", ev.Tags, wantD)
+	}
+	if !hasTag(ev.Tags, "t", kinds.CPStateTopicSecurityFindingDetail) {
+		t.Errorf("missing t topic: %v", ev.Tags)
+	}
+}
+
+func TestSecurityFindingDetailPublisher_EmptyDetailsTombstone(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	p := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
+	enc := &mockConfidentialEncryptor{}
+	pub := NewSecurityCanonicalPublisher(p, enc, zap.NewNop())
+
+	finding := domain.SecurityOSVFinding{
+		ID:             uuid.New(),
+		FindingKeyHash: "empty_detail_hash",
+		OSVID:          "GHSA-empty",
+		Details:        "", // empty
+		Severity:       domain.SecuritySeverityLow,
+	}
+
+	if err := pub.PublishFindingDetail(ctx, finding); err != nil {
+		t.Fatalf("PublishFindingDetail: %v", err)
+	}
+
+	records := sink.byKind(KindCASControlState)
+	var detailRecords []gonostr.Event
+	for _, ev := range records {
+		if hasTag(ev.Tags, "legacy_kind", strconv.Itoa(KindSecurityFindingDetailRecord)) {
+			detailRecords = append(detailRecords, ev)
+		}
+	}
+	if len(detailRecords) != 1 {
+		t.Fatalf("expected 1 tombstone record, got %d", len(detailRecords))
+	}
+	if !hasTag(detailRecords[0].Tags, "deleted", "true") {
+		t.Error("empty details should produce a tombstone (deleted=true)")
+	}
+}
+
+func TestSecurityFindingDetailPublisher_LargeDetailsChunked(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	p := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
+	enc := &mockConfidentialEncryptor{}
+	pub := NewSecurityCanonicalPublisher(p, enc, zap.NewNop())
+
+	// Create a finding with details > 60,000 bytes (the chunk threshold)
+	largeDetails := strings.Repeat("x", 70000)
+	finding := domain.SecurityOSVFinding{
+		ID:             uuid.New(),
+		FindingKeyHash: "large_detail_hash",
+		OSVID:          "GHSA-large",
+		Details:        largeDetails,
+		Severity:       domain.SecuritySeverityCritical,
+	}
+
+	if err := pub.PublishFindingDetail(ctx, finding); err != nil {
+		t.Fatalf("PublishFindingDetail: %v", err)
+	}
+
+	records := sink.byKind(KindCASControlState)
+	var detailRecords []gonostr.Event
+	for _, ev := range records {
+		if hasTag(ev.Tags, "legacy_kind", strconv.Itoa(KindSecurityFindingDetailRecord)) {
+			detailRecords = append(detailRecords, ev)
+		}
+	}
+	// 70,000 bytes / 60,000 chunk size = 2 parts
+	if len(detailRecords) != 2 {
+		t.Fatalf("expected 2 chunked detail records, got %d", len(detailRecords))
+	}
+
+	// Each part should have the part tag
+	for _, ev := range detailRecords {
+		if !hasTag(ev.Tags, "finding_key_hash", "large_detail_hash") {
+			t.Errorf("missing finding_key_hash tag: %v", ev.Tags)
+		}
+		if !hasTag(ev.Tags, "total_parts", "2") {
+			t.Errorf("missing total_parts=2 tag: %v", ev.Tags)
+		}
+	}
+
+	// d-tags should be ":part:0" and ":part:1"
+	dtags := make(map[string]bool)
+	for _, ev := range detailRecords {
+		dtags[tagValue(ev.Tags, "d")] = true
+	}
+	if !dtags["security:finding-detail:large_detail_hash:part:0"] {
+		t.Error("missing part 0 d-tag")
+	}
+	if !dtags["security:finding-detail:large_detail_hash:part:1"] {
+		t.Error("missing part 1 d-tag")
+	}
+}
+
+func TestSecurityFindingDetailPublisher_VeryLargeExceedingNIP44(t *testing.T) {
+	// Verify that even with a detail >65,535 bytes, each individual chunk's
+	// content stays within NIP-44 limits.
+	largeDetails := strings.Repeat("A", 200000) // 200KB
+	chunks := chunkString(largeDetails, detailChunkSize)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks for 200KB, got %d", len(chunks))
+	}
+	for i, chunk := range chunks {
+		_, content := SecurityFindingDetailContent("hash", "GHSA-test", chunk, i, len(chunks))
+		if len(content) >= nip44MaxPlaintext {
+			t.Errorf("chunk %d content size %d exceeds NIP-44 limit %d", i, len(content), nip44MaxPlaintext)
+		}
+	}
+}
+
+func TestSecurityFindingDetailContent_SizeBound(t *testing.T) {
+	// Even a maximally-padded single detail stays under the limit.
+	detail := strings.Repeat("d", detailChunkSize)
+	_, content := SecurityFindingDetailContent(
+		strings.Repeat("h", 64),
+		"GHSA-"+strings.Repeat("x", 100),
+		detail, 0, 1,
+	)
+	if len(content) >= nip44MaxPlaintext {
+		t.Errorf("detail content size %d exceeds NIP-44 limit %d", len(content), nip44MaxPlaintext)
+	}
+}
+
+func TestSecurityFindingDetailDTag(t *testing.T) {
+	got := SecurityFindingDetailDTag("abc123")
+	want := "security:finding-detail:abc123"
+	if got != want {
+		t.Errorf("SecurityFindingDetailDTag = %q, want %q", got, want)
+	}
+}
+
+func TestSecurityFindingDetailPartDTag(t *testing.T) {
+	got := SecurityFindingDetailPartDTag("abc123", 2)
+	want := "security:finding-detail:abc123:part:2"
+	if got != want {
+		t.Errorf("SecurityFindingDetailPartDTag = %q, want %q", got, want)
+	}
+}
+
+func TestChunkString(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		maxLen  int
+		wantLen int
+	}{
+		{"empty", "", 100, 1},
+		{"under limit", "hello", 100, 1},
+		{"exact limit", strings.Repeat("a", 100), 100, 1},
+		{"over limit", strings.Repeat("a", 250), 100, 3},
+		{"way over", strings.Repeat("a", 1000), 100, 10},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			chunks := chunkString(tc.input, tc.maxLen)
+			if len(chunks) != tc.wantLen {
+				t.Errorf("chunkString(%d bytes, %d) = %d chunks, want %d", len(tc.input), tc.maxLen, len(chunks), tc.wantLen)
+			}
+			// Reassemble and verify
+			reassembled := strings.Join(chunks, "")
+			if reassembled != tc.input {
+				t.Error("reassembled chunks do not match original")
+			}
+		})
+	}
+}

@@ -485,7 +485,8 @@ const (
 // hashes) and security findings contain per-org vulnerability data.
 
 const (
-	PaymentRecord          = 32011
-	SecurityFindingRecord  = 32012
-	SecurityScheduleRecord = 32013
+	PaymentRecord               = 32011
+	SecurityFindingRecord       = 32012
+	SecurityScheduleRecord      = 32013
+	SecurityFindingDetailRecord = 32014
 )

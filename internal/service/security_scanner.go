@@ -50,6 +50,7 @@ const (
 // mutations succeed without cp-state publication.
 type SecurityCPStatePublisher interface {
 	PublishFinding(ctx context.Context, finding domain.SecurityOSVFinding) error
+	PublishFindingDetail(ctx context.Context, finding domain.SecurityOSVFinding) error
 	PublishSchedule(ctx context.Context, schedule *domain.SecurityScanSchedule) error
 }
 
@@ -886,6 +887,13 @@ func (s *SecurityScanner) publishFindingsCPState(ctx context.Context, findings [
 	for _, finding := range findings {
 		if err := s.cpPublisher.PublishFinding(ctx, finding); err != nil {
 			s.logger.Warn("security finding cp-state publish failed",
+				zap.String("finding_id", finding.ID.String()),
+				zap.String("osv_id", finding.OSVID),
+				zap.Error(err),
+			)
+		}
+		if err := s.cpPublisher.PublishFindingDetail(ctx, finding); err != nil {
+			s.logger.Warn("security finding detail cp-state publish failed",
 				zap.String("finding_id", finding.ID.String()),
 				zap.String("osv_id", finding.OSVID),
 				zap.Error(err),

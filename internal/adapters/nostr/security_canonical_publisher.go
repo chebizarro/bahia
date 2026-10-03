@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
 
@@ -70,6 +72,50 @@ func (p *SecurityCanonicalPublisher) PublishSchedule(ctx context.Context, schedu
 	return p.publishConfidential(ctx, KindSecurityScheduleRecord, dTag, false, tags, content, "security_schedule.projection", &schedule.ID)
 }
 
+// nip44MaxPlaintext is the maximum plaintext size for a single NIP-44
+// encrypted event. Chunks must stay below this after JSON envelope overhead.
+const nip44MaxPlaintext = 65535
+
+// detailChunkSize is the maximum detail text per chunk, leaving room for
+// the JSON envelope (finding_key_hash, chunk index, total, etc.).
+const detailChunkSize = 60000
+
+// PublishFindingDetail publishes the Details field of a finding as one or
+// more separate 30900 records (family 32014, d="security:finding-detail:<hash>"
+// or "security:finding-detail:<hash>:part:<n>"). If the detail fits in a
+// single record it is published as-is. If it exceeds detailChunkSize it is
+// split into numbered parts with a "total_parts" field so consumers can
+// reassemble. Empty details publish a tombstone (deleted=true) so any
+// prior detail record is superseded.
+func (p *SecurityCanonicalPublisher) PublishFindingDetail(ctx context.Context, finding domain.SecurityOSVFinding) error {
+	if p.projector == nil || !p.projector.Enabled() {
+		return nil
+	}
+	if finding.Details == "" {
+		// Tombstone: no details to publish.
+		dTag := SecurityFindingDetailDTag(finding.FindingKeyHash)
+		return p.publishConfidential(ctx, KindSecurityFindingDetailRecord, dTag, true, nil, "{}", "security_finding_detail.projection", &finding.ID)
+	}
+
+	chunks := chunkString(finding.Details, detailChunkSize)
+	if len(chunks) == 1 {
+		// Single record — no chunking needed.
+		dTag := SecurityFindingDetailDTag(finding.FindingKeyHash)
+		tags, content := SecurityFindingDetailContent(finding.FindingKeyHash, finding.OSVID, finding.Details, 0, 1)
+		return p.publishConfidential(ctx, KindSecurityFindingDetailRecord, dTag, false, tags, content, "security_finding_detail.projection", &finding.ID)
+	}
+
+	// Multi-part: publish each chunk as a separate addressable record.
+	for i, chunk := range chunks {
+		dTag := SecurityFindingDetailPartDTag(finding.FindingKeyHash, i)
+		tags, content := SecurityFindingDetailContent(finding.FindingKeyHash, finding.OSVID, chunk, i, len(chunks))
+		if err := p.publishConfidential(ctx, KindSecurityFindingDetailRecord, dTag, false, tags, content, "security_finding_detail.projection", &finding.ID); err != nil {
+			return fmt.Errorf("publish finding detail part %d/%d: %w", i+1, len(chunks), err)
+		}
+	}
+	return nil
+}
+
 func (p *SecurityCanonicalPublisher) publishConfidential(ctx context.Context, legacyKind int, dTag string, deleted bool, extraTags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
 	topic := ""
 	if fam, ok := cpStateFamilies[legacyKind]; ok {
@@ -81,12 +127,68 @@ func (p *SecurityCanonicalPublisher) publishConfidential(ctx context.Context, le
 	}
 
 	// Security state is fleet-scoped (findings and schedules are operator-wide).
-	encrypted, err := p.encryptor.EncryptConfidential(ctx, "fleet", []byte(content), legacyKind, dTag, topic, nil)
+	encrypted, err := p.encryptor.EncryptConfidential(ctx, kinds.FleetOCKScope, []byte(content), legacyKind, dTag, topic, nil)
 	if err != nil {
 		return fmt.Errorf("encrypt security state: %w", err)
 	}
 
 	return p.projector.publishControlState(ctx, legacyKind, dTag, deleted, extraTags, encrypted, entityType, entityID)
+}
+
+// SecurityFindingDetailDTag returns the d-tag for a finding's detail record.
+func SecurityFindingDetailDTag(findingKeyHash string) string {
+	return "security:finding-detail:" + findingKeyHash
+}
+
+// SecurityFindingDetailPartDTag returns the d-tag for a chunked finding
+// detail part: "security:finding-detail:<hash>:part:<n>".
+func SecurityFindingDetailPartDTag(findingKeyHash string, partIndex int) string {
+	return "security:finding-detail:" + findingKeyHash + ":part:" + strconv.Itoa(partIndex)
+}
+
+// SecurityFindingDetailContent builds the tags and JSON content for a
+// security finding detail cp-state record. partIndex and totalParts are
+// used for chunked details; for single-record details pass 0 and 1.
+func SecurityFindingDetailContent(findingKeyHash, osvID, detail string, partIndex, totalParts int) (gonostr.Tags, string) {
+	tags := gonostr.Tags{
+		{"finding_key_hash", findingKeyHash},
+	}
+	if osvID != "" {
+		tags = append(tags, gonostr.Tag{"osv_id", osvID})
+	}
+	if totalParts > 1 {
+		tags = append(tags, gonostr.Tag{"part", strconv.Itoa(partIndex)})
+		tags = append(tags, gonostr.Tag{"total_parts", strconv.Itoa(totalParts)})
+	}
+
+	payload := map[string]any{
+		"finding_key_hash": findingKeyHash,
+		"details":          detail,
+	}
+	if totalParts > 1 {
+		payload["part_index"] = partIndex
+		payload["total_parts"] = totalParts
+	}
+
+	contentJSON, _ := json.Marshal(payload)
+	return tags, string(contentJSON)
+}
+
+// chunkString splits s into chunks of at most maxLen bytes.
+func chunkString(s string, maxLen int) []string {
+	if len(s) <= maxLen {
+		return []string{s}
+	}
+	var chunks []string
+	for len(s) > 0 {
+		end := maxLen
+		if end > len(s) {
+			end = len(s)
+		}
+		chunks = append(chunks, s[:end])
+		s = s[end:]
+	}
+	return chunks
 }
 
 // SecurityFindingDTag returns the d-tag for a security finding:
@@ -141,9 +243,9 @@ func SecurityFindingRecordContent(finding *domain.SecurityOSVFinding) (gonostr.T
 	if len(finding.References) > 0 {
 		payload["references"] = finding.References
 	}
-	// Details is intentionally omitted from the cp-state record to keep
-	// individual events well within NIP-44 limits. The full details are
-	// available through the ContextVM findings-list read.
+	// Details is published as a separate finding-detail record so that the
+	// main finding record stays small and the relay copy is the source of
+	// truth. See PublishFindingDetail.
 
 	contentJSON, _ := json.Marshal(payload)
 	return tags, string(contentJSON)
