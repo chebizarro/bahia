@@ -116,18 +116,14 @@ const (
 // each event is also archived to nostr_events with its outcome mirrored, best
 // effort, for the PostgreSQL-backed readers.
 //
-// PostgreSQL outbox rows are drained in place by the same runner: rows that
-// producers write inside a PostgreSQL transaction with the domain change they
-// audit (a local outbox cannot join that transaction), and rows left pending
-// by a daemon that predates the local outbox. Their per-relay acceptance is
-// kept in memory only, so after a restart those rows are resent to every
-// write relay and relays that already accepted answer OK "duplicate:". The
-// same applies to a row published before this publisher's Run is active.
+// Since bahia-irsry.62 no PostgreSQL outbox rows are drained at runtime:
+// any pre-upgrade pending rows are moved to the local outbox by
+// MigratePendingPostgresRows at startup, then delivered by the local runner.
 //
 // Every outbox entry a Publisher writes carries its publish target (see
-// WithPublishTarget), and its Run only drains entries and rows for that
-// target, so each event is retried to the relays of the pool it was written
-// for. Run one registered Publisher per target.
+// WithPublishTarget), and its Run only discovers entries for that target, so
+// each event is retried to the relays of the pool it was written for. Run
+// one registered Publisher per target.
 type Publisher struct {
 	pool       *RelayPool
 	privateKey string
@@ -136,8 +132,9 @@ type Publisher struct {
 	// eventRepo is the optional PostgreSQL nostr_events table. Without a local
 	// outbox it is the outbox itself; with one it is a best-effort archive.
 	eventRepo repository.NostrEventRepository
-	// outboxRepo is eventRepo's publish-state extension: the PostgreSQL rows
-	// this publisher drains (see the type comment).
+	// outboxRepo is eventRepo's publish-state extension. It is no longer
+	// drained at runtime (bahia-irsry.62): MigratePendingPostgresRows moves
+	// any pre-upgrade pending rows to the local outbox at startup.
 	outboxRepo repository.NostrEventOutboxRepository
 	// localOutbox, when set, owns the delivery of every event this publisher
 	// is asked to publish.
@@ -171,6 +168,9 @@ type Publisher struct {
 	// outboxCursor and localCursor are the runner's keyset positions in the
 	// PostgreSQL and local pending outboxes; lastPrune is when it last pruned
 	// settled local entries. Only the Run goroutine touches them.
+	// outboxCursor is only used as a fallback when no local outbox is
+	// configured; in production the local outbox is always set since
+	// bahia-irsry.62.
 	outboxCursor *repository.NostrOutboxCursor
 	localCursor  *localstore.OutboxCursor
 	lastPrune    time.Time

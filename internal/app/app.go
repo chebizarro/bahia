@@ -368,23 +368,29 @@ func New(cfg *config.Config) (*App, error) {
 	controlPlanePub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, pgNostrEventRepo, logger,
 		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane),
 		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore))
-	// nostr_events for its readers and audit writers: PostgreSQL when
-	// available, else the local event store, which replaced the unbounded
-	// in-memory fallback (B-12). An event a producer records there as pending
+	// nostr_events for its readers: PostgreSQL when available, else the
+	// local event store (B-12). An event a producer records there as pending
 	// delivery goes to the outbox of its publish target.
+	localOutboxAdmit := func(ctx context.Context, ev nostr.Event, target, entityType string, entityID *uuid.UUID) error {
+		switch target {
+		case repository.NostrPublishTargetDefault:
+			return nostrPub.Enqueue(ctx, ev, entityType, entityID)
+		case repository.NostrPublishTargetControlPlane:
+			return controlPlanePub.Enqueue(ctx, ev, entityType, entityID)
+		default:
+			return fmt.Errorf("unknown publish target %q", target)
+		}
+	}
 	nostrEventRepo := pgNostrEventRepo
 	if nostrEventRepo == nil {
-		nostrEventRepo = nostrAdapter.NewLocalEventRepository(localEventStore, func(ctx context.Context, ev nostr.Event, target, entityType string, entityID *uuid.UUID) error {
-			switch target {
-			case repository.NostrPublishTargetDefault:
-				return nostrPub.Enqueue(ctx, ev, entityType, entityID)
-			case repository.NostrPublishTargetControlPlane:
-				return controlPlanePub.Enqueue(ctx, ev, entityType, entityID)
-			default:
-				return fmt.Errorf("unknown publish target %q", target)
-			}
-		})
+		nostrEventRepo = nostrAdapter.NewLocalEventRepository(localEventStore, localOutboxAdmit)
 	}
+	// Audit writers always use the local event store backed by the local
+	// outbox, even when PostgreSQL is available (bahia-irsry.62). This
+	// decouples audit publishing from PostgreSQL and makes the drain loop
+	// unnecessary; the publisher archives the outcome to PostgreSQL for
+	// its readers, best effort.
+	auditEventRepo := nostrAdapter.NewLocalEventRepository(localEventStore, localOutboxAdmit)
 
 	controlPlaneSigner, err := controlplane.NewPrivateKeySigner(cfg.Nostr.PrivateKey)
 	if err != nil {
@@ -597,6 +603,20 @@ func New(cfg *config.Config) (*App, error) {
 	}, logger)
 	if dbAvailable {
 		telemetryProvider.SetFleetHealthSources(workerRepo, stateRepo)
+	}
+
+	// One-shot migration: move any pre-upgrade pending PostgreSQL outbox rows
+	// into the local outbox so they are delivered by the local runner. After
+	// this, no PostgreSQL drain loop runs (bahia-irsry.62).
+	if pool != nil {
+		for _, pub := range []*nostrAdapter.Publisher{nostrPub, controlPlanePub} {
+			if n, err := pub.MigratePendingPostgresRows(ctx); err != nil {
+				logger.Error("migrate pending PostgreSQL outbox rows", zap.String("target", pub.Target()), zap.Error(err))
+			} else if n > 0 {
+				logger.Info("migrated pending PostgreSQL outbox rows to local outbox",
+					zap.String("target", pub.Target()), zap.Int("count", n))
+			}
+		}
 	}
 
 	// Background runner manager and startup health provider.
@@ -1701,7 +1721,7 @@ func New(cfg *config.Config) (*App, error) {
 			if controlPlaneSigner == nil {
 				return nil, fmt.Errorf("Hive-CI release registration requires a control-plane audit signer")
 			}
-			releaseAudit := hiveciAdapter.NewRegistrationAudit(controlPlaneSigner, nostrEventRepo)
+			releaseAudit := hiveciAdapter.NewRegistrationAudit(controlPlaneSigner, auditEventRepo)
 			releaseEvidence := hiveciAdapter.NewRepositoryReleaseEvidence(
 				nostrEventRepo, hiveRepo, workerRepo, hiveciAdapter.NewOCIReleaseObjectResolver(ociSvc, pipelineRegistryInspector),
 			)
@@ -2093,7 +2113,8 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("operator assistant executor initialized", logFields...)
 	}
 
-	configFabricSvc := service.NewConfigFabricService(nostrEventRepo, configFabricPublishAdapter{publisher: controlPlanePub}, configFabricSigner)
+	configFabricSvc := service.NewConfigFabricService(nostrEventRepo, configFabricPublishAdapter{publisher: controlPlanePub}, configFabricSigner,
+		service.WithDeliveryQuery(controlPlanePub))
 
 	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
 	nostrSub := nostrAdapter.NewSubscriber(relayPool, pgNostrEventRepo, logger,
@@ -2319,7 +2340,7 @@ func New(cfg *config.Config) (*App, error) {
 			FleetOperatorGate: fleetOperatorGate,
 		})
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator, fleetOperatorGate)
-		releasePromotionAudit := controlplane.NewSignedReleasePromotionAudit(controlPlaneSigner, nostrEventRepo)
+		releasePromotionAudit := controlplane.NewSignedReleasePromotionAudit(controlPlaneSigner, auditEventRepo)
 		releasePromotionAuthorizer := controlplane.NewReleasePromotionAuthorizer(registry, releasePromotionAudit)
 		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, controlplane.EncryptedServiceHandlersConfig{
 			Registry:          registry,

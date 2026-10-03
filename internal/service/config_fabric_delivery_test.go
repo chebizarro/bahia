@@ -87,3 +87,136 @@ func TestConfigFabricPublishAcceptedReceipt(t *testing.T) {
 		t.Fatalf("receipt delivery = %q, want %q", receipt.Delivery, ConfigDeliveryAccepted)
 	}
 }
+
+// TestConfigFabricListDriftWithDeliveryQuery verifies that ListDrift consults
+// the delivery query when the NostrEventRecord carries no PublishState
+// (non-Postgres mode, bahia-irsry.61). An abandoned version is excluded from
+// desired state; a pending version is kept.
+func TestConfigFabricListDriftWithDeliveryQuery(t *testing.T) {
+	ctx := context.Background()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	publisher := &configTestPublisher{}
+	signer := newConfigTestSigner(t)
+	delivery := &fakeDeliveryQuery{outcomes: map[string]nostrutil.DeliveryOutcome{}}
+
+	svc := NewConfigFabricService(repo, publisher, signer, WithDeliveryQuery(delivery))
+	svc.now = func() time.Time { return time.Unix(1787625660, 0) }
+
+	// Publish version 1 (accepted) and version 2 (accepted).
+	r1, err := svc.Publish(ctx, validPolicyRequest(1))
+	if err != nil {
+		t.Fatalf("Publish v1 error = %v", err)
+	}
+	r2, err := svc.Publish(ctx, validPolicyRequest(2))
+	if err != nil {
+		t.Fatalf("Publish v2 error = %v", err)
+	}
+
+	// Simulate non-Postgres mode: clear PublishState on the stored records.
+	clearPublishState(t, repo, r1.EventID)
+	clearPublishState(t, repo, r2.EventID)
+
+	// Without delivery query answers, both versions are kept (conservative).
+	drift, err := svc.ListDrift(ctx)
+	if err != nil {
+		t.Fatalf("ListDrift() error = %v", err)
+	}
+	if len(drift) != 1 {
+		t.Fatalf("expected 1 drift entry, got %d", len(drift))
+	}
+	if drift[0].DesiredVersion != 2 {
+		t.Fatalf("desired version = %d, want 2", drift[0].DesiredVersion)
+	}
+
+	// Mark version 2 as abandoned; version 1 should become the desired.
+	delivery.outcomes[r2.EventID] = nostrutil.DeliveryAbandoned
+	delivery.outcomes[r1.EventID] = nostrutil.DeliveryDelivered
+
+	drift, err = svc.ListDrift(ctx)
+	if err != nil {
+		t.Fatalf("ListDrift() after abandonment error = %v", err)
+	}
+	if len(drift) != 1 {
+		t.Fatalf("expected 1 drift entry after abandonment, got %d", len(drift))
+	}
+	if drift[0].DesiredVersion != 1 {
+		t.Fatalf("desired version after v2 abandoned = %d, want 1 (fallback to delivered v1)", drift[0].DesiredVersion)
+	}
+	if drift[0].DesiredEventID != r1.EventID {
+		t.Fatalf("desired event = %q, want v1 event %q", drift[0].DesiredEventID, r1.EventID)
+	}
+
+	// Mark both as abandoned: no drift entries.
+	delivery.outcomes[r1.EventID] = nostrutil.DeliveryAbandoned
+	drift, err = svc.ListDrift(ctx)
+	if err != nil {
+		t.Fatalf("ListDrift() both abandoned error = %v", err)
+	}
+	if len(drift) != 0 {
+		t.Fatalf("expected 0 drift entries when all versions abandoned, got %d", len(drift))
+	}
+}
+
+// TestConfigFabricPublishStateFromPgRecord verifies that when the record
+// carries PublishState (Postgres mode), the delivery query is not consulted.
+func TestConfigFabricPublishStateFromPgRecord(t *testing.T) {
+	ctx := context.Background()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	publisher := &configTestPublisher{}
+	signer := newConfigTestSigner(t)
+	delivery := &fakeDeliveryQuery{outcomes: map[string]nostrutil.DeliveryOutcome{}}
+
+	svc := NewConfigFabricService(repo, publisher, signer, WithDeliveryQuery(delivery))
+	svc.now = func() time.Time { return time.Unix(1787625660, 0) }
+
+	r1, err := svc.Publish(ctx, validPolicyRequest(1))
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+
+	// Simulate Postgres mode: the record carries PublishState = failed.
+	setPublishState(t, repo, r1.EventID, repository.NostrPublishStateFailed)
+
+	// Even though the delivery query says delivered, the record's own
+	// PublishState takes precedence.
+	delivery.outcomes[r1.EventID] = nostrutil.DeliveryDelivered
+
+	drift, err := svc.ListDrift(ctx)
+	if err != nil {
+		t.Fatalf("ListDrift() error = %v", err)
+	}
+	if len(drift) != 0 {
+		t.Fatalf("expected 0 drift entries (PG state says failed), got %d", len(drift))
+	}
+}
+
+type fakeDeliveryQuery struct {
+	outcomes map[string]nostrutil.DeliveryOutcome
+}
+
+func (f *fakeDeliveryQuery) DeliveryOutcome(_ context.Context, id string) (nostrutil.DeliveryOutcome, error) {
+	if outcome, ok := f.outcomes[id]; ok {
+		return outcome, nil
+	}
+	return nostrutil.DeliveryUnknown, nil
+}
+
+func clearPublishState(t *testing.T, repo *repositorytest.InMemoryNostrEventRepository, id string) {
+	t.Helper()
+	rec, err := repo.GetByID(context.Background(), id)
+	if err != nil || rec == nil {
+		t.Fatalf("clearPublishState: record %q not found: %v", id, err)
+	}
+	rec.PublishState = ""
+	repo.Replace(id, *rec)
+}
+
+func setPublishState(t *testing.T, repo *repositorytest.InMemoryNostrEventRepository, id, state string) {
+	t.Helper()
+	rec, err := repo.GetByID(context.Background(), id)
+	if err != nil || rec == nil {
+		t.Fatalf("setPublishState: record %q not found: %v", id, err)
+	}
+	rec.PublishState = state
+	repo.Replace(id, *rec)
+}

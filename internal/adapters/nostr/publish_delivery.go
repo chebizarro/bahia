@@ -675,17 +675,21 @@ func (p *Publisher) redeliverDue(ctx context.Context) (rateLimited bool) {
 }
 
 // discoverPending reads one keyset page of this publisher's target's pending
-// entries from the local outbox and one from the PostgreSQL outbox, and starts
-// delivery for those it is not already tracking (left pending by a previous
-// process or an inactive runner, or recorded by a transactional producer). It
-// reports whether either page was full, meaning more follow its cursor.
+// entries and starts delivery for those it is not already tracking (left
+// pending by a previous process or an inactive runner). It reports whether
+// the page was full, meaning more follow its cursor.
+//
+// Since bahia-irsry.62 the local outbox is the primary discovery source. The
+// PostgreSQL outbox is used as a fallback only when no local outbox is
+// configured (the production wiring always sets one). Pre-upgrade pending
+// PostgreSQL rows are moved to the local outbox at startup by
+// MigratePendingPostgresRows; after migration only the local outbox is
+// polled.
 func (p *Publisher) discoverPending(ctx context.Context) (bool, error) {
-	localMore, err := p.discoverLocal(ctx)
-	if err != nil {
-		return false, err
+	if p.localOutbox != nil {
+		return p.discoverLocal(ctx)
 	}
-	pgMore, err := p.discoverPostgres(ctx)
-	return localMore || pgMore, err
+	return p.discoverPostgres(ctx)
 }
 
 func (p *Publisher) discoverLocal(ctx context.Context) (bool, error) {
@@ -727,6 +731,10 @@ func (p *Publisher) discoverLocal(ctx context.Context) (bool, error) {
 	return len(entries) == p.pageSize, nil
 }
 
+// discoverPostgres is the PostgreSQL-outbox fallback for discoverPending when
+// no local outbox is configured. In production the local outbox is always set,
+// so this method does not run; it remains for publishers that are wired without
+// a local outbox (test doubles, unconfigured daemons).
 func (p *Publisher) discoverPostgres(ctx context.Context) (more bool, err error) {
 	if p.outboxRepo == nil {
 		return false, nil
@@ -771,6 +779,71 @@ func (p *Publisher) discoverPostgres(ctx context.Context) (more bool, err error)
 		}
 	}
 	return len(records) == p.pageSize, nil
+}
+
+// MigratePendingPostgresRows is a one-shot startup migration (bahia-irsry.62)
+// that moves any pending PostgreSQL outbox rows for this publisher's target
+// into the local outbox. Each row is enqueued idempotently by event ID. On
+// success the PostgreSQL row is re-targeted as a "local:" archive row so it
+// leaves the pending set and metrics count the local outbox instead. The
+// method returns how many rows were migrated. Calling it twice is safe: rows
+// already re-targeted or already in the local outbox are skipped.
+func (p *Publisher) MigratePendingPostgresRows(ctx context.Context) (int, error) {
+	if p.outboxRepo == nil || p.localOutbox == nil {
+		return 0, nil
+	}
+	migrator, ok := p.outboxRepo.(interface {
+		MigrateToLocalOutbox(ctx context.Context, id string) error
+	})
+	if !ok {
+		return 0, nil
+	}
+	migrated := 0
+	var cursor *repository.NostrOutboxCursor
+	for {
+		records, err := p.outboxRepo.ListUnpublishedAfter(ctx, p.target, cursor, p.pageSize)
+		if err != nil {
+			return migrated, fmt.Errorf("read pending PostgreSQL outbox rows for migration: %w", err)
+		}
+		for _, rec := range records {
+			if ctx.Err() != nil {
+				return migrated, ctx.Err()
+			}
+			ev, decodeErr := eventFromNostrRecord(rec)
+			if decodeErr != nil {
+				if abandonErr := p.outboxRepo.AbandonPublish(ctx, rec.ID, "migration: undecodable outbox row: "+decodeErr.Error()); abandonErr != nil {
+					p.logger.Warn("failed to abandon undecodable outbox row during migration", zap.String("event_id", rec.ID), zap.Error(abandonErr))
+				}
+				continue
+			}
+			entry := localstore.OutboxEntry{
+				Event:      ev,
+				Target:     rec.PublishTarget,
+				EntityType: rec.EntityType,
+				EnqueuedAt: rec.ReceivedAt,
+			}
+			if rec.EntityID != nil {
+				entry.EntityID = rec.EntityID.String()
+			}
+			if _, err := p.localOutbox.Enqueue(entry); err != nil {
+				return migrated, fmt.Errorf("enqueue migrated event %s: %w", rec.ID, err)
+			}
+			if err := migrator.MigrateToLocalOutbox(ctx, rec.ID); err != nil {
+				p.logger.Warn("failed to re-target migrated outbox row", zap.String("event_id", rec.ID), zap.Error(err))
+			}
+			migrated++
+		}
+		if len(records) == 0 || len(records) < p.pageSize {
+			break
+		}
+		last := records[len(records)-1]
+		cursor = &repository.NostrOutboxCursor{ReceivedAt: last.ReceivedAt, ID: last.ID}
+	}
+	if migrated > 0 {
+		p.logger.Info("migrated pending PostgreSQL outbox rows to local outbox",
+			zap.String("target", p.target), zap.Int("migrated", migrated))
+	}
+	return migrated, nil
 }
 
 func maxTime(a, b time.Time) time.Time {
