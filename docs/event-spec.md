@@ -153,10 +153,11 @@ Existing rows keep their v4 ids. No migration rewrites keys.
 | LLM routes | client `id` accepted (`llm/route-create` content, web, MCP; registry replay/conflict, repository) | done for the registry and every producer (bahia-irsry.42). The control plane has no live consumer of `llm/route-create` (no ContextVM handler is registered; the reactor's legacy handler only runs in tests), so the path is complete only once that consumer exists. |
 | Backup repositories, policies, recipes, definitions | apply/register verbs: upserts by id or name | supplied ids validated as client ids (canonical UUIDv7/v4) at the ContextVM entry; new ids daemon-minted UUIDv7. Replay-or-conflict does not apply to an upsert. The ContextVM alias republishes a legacy request kind no production consumer reads, so client minting waits for the backup Phase 3 slice. |
 | Package publications, intents, approvals | daemon-authored | daemon mints UUIDv7 in code (bahia-irsry.42). Package repository apply is a legacy, unconsumed request kind; deferred with the package slice. |
-| ML models, versions, artifacts, recipes, runs, endpoints | no user create path (model import is disabled; recipe runs are daemon-authored) | repositories and services mint UUIDv7 (bahia-irsry.42); client minting when a create intent exists |
+| ML models, versions, endpoints | client-minted `id` in signed create intents or fleet-gated ContextVM registry methods | local registry persists model/version/endpoint desired state and publishes 30900 cp-state; recipe runs remain daemon-authored |
+| ML artifacts, recipes, runs | no general user create path (recipe runs are daemon-authored) | repositories and services mint UUIDv7 (bahia-irsry.42) |
 | Deployment intents, secrets, notification channels | handler/repository `uuid.New()` | client-minted, same pattern, with their Phase 3 slice |
 | DNS zones/backends | natural key (`zone:<name>`, `dnsbackend:<ref>`) | keep; ownership conflict by org |
-| DNS policies, endpoints | DB/handler UUID | client-minted with the DNS slice |
+| DNS policies, endpoints | client-minted policy `id`; endpoint coordinate is deterministic | local DNS registry persists desired state and publishes 30900 cp-state |
 | Backup retention, ML datasets | handler/repository UUID | client-minted with their Phase 3 slice |
 | Runs, observations, verification/restore results, runtime releases | daemon-authored | daemon mints UUIDv7 in code (drop reliance on `DEFAULT gen_random_uuid()`) |
 | Orgs, memberships, invites | REST + Postgres | client-minted with the membership-events slice (B-27) |

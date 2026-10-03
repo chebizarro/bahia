@@ -56,18 +56,18 @@ func TestPgDNSZoneRepositoryReadsAuthoritativeAndAllowEmpty(t *testing.T) {
 	require.NoError(t, err)
 	defer mock.Close()
 	repo := newPgDNSZoneRepositoryWithDB(mock)
-	columns := []string{"name", "visibility", "backend_ref", "ttl", "authoritative", "allow_empty_authoritative"}
+	columns := []string{"name", "visibility", "backend_ref", "ttl", "authoritative", "allow_empty_authoritative", "updated_at"}
 
-	mock.ExpectQuery("SELECT name, visibility, backend_ref, ttl, authoritative, allow_empty_authoritative FROM dns_zones WHERE name").WithArgs("prod.example").WillReturnRows(
-		pgxmock.NewRows(columns).AddRow("prod.example", domain.ZoneVisibilityInternal, "primary", 120, true, true),
+	mock.ExpectQuery("SELECT name, visibility, backend_ref, ttl, authoritative, allow_empty_authoritative, updated_at FROM dns_zones WHERE name").WithArgs("prod.example").WillReturnRows(
+		pgxmock.NewRows(columns).AddRow("prod.example", domain.ZoneVisibilityInternal, "primary", 120, true, true, time.Now().UTC()),
 	)
 	zone, err := repo.Get(ctx, "prod.example")
 	require.NoError(t, err)
 	require.True(t, zone.Authoritative)
 	require.True(t, zone.AllowEmptyAuthoritative)
 
-	mock.ExpectQuery("SELECT name, visibility, backend_ref, ttl, authoritative, allow_empty_authoritative FROM dns_zones ORDER BY name").WillReturnRows(
-		pgxmock.NewRows(columns).AddRow("prod.example", domain.ZoneVisibilityInternal, "primary", 120, true, true),
+	mock.ExpectQuery("SELECT name, visibility, backend_ref, ttl, authoritative, allow_empty_authoritative, updated_at FROM dns_zones ORDER BY name").WillReturnRows(
+		pgxmock.NewRows(columns).AddRow("prod.example", domain.ZoneVisibilityInternal, "primary", 120, true, true, time.Now().UTC()),
 	)
 	zones, err := repo.List(ctx)
 	require.NoError(t, err)

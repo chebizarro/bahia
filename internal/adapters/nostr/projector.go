@@ -94,7 +94,8 @@ type DNSPolicyProjectionSource interface {
 }
 
 type dnsPublishedEndpoint struct {
-	FQDN string
+	FQDN    string
+	Payload string
 }
 
 type dnsPublishedZone struct {
@@ -1009,9 +1010,8 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 	if dnsEnabled {
 		capabilities = append(capabilities, "dns_endpoint_catalog")
 	}
-	// No ml/* ContextVM method has a bahia-server handler; AI/ML discovery
-	// advertises read models only until a consumer exists.
-	aiMLMethods := []string{}
+	// ML registry methods are registered on the encrypted request transport.
+	aiMLMethods := []string{"ml/model-create", "ml/model-update", "ml/model-delete", "ml/version-create", "ml/version-update", "ml/version-delete", "ml/endpoint-create", "ml/endpoint-update", "ml/endpoint-delete"}
 	transportKinds := map[string]int{
 		"contextvm_message":        kinds.ContextVMMessage,
 		"contextvm_gift_wrap":      kinds.ContextVMGiftWrap,

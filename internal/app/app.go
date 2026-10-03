@@ -207,6 +207,8 @@ func New(cfg *config.Config) (*App, error) {
 	var dnsZoneRepo repository.DNSZoneRepository
 	var dnsPolicyRepo repository.DNSPolicyRepository
 	var dnsRecordOverrideRepo repository.DNSRecordOverrideRepository
+	var dnsEndpointRepo repository.DNSEndpointRepository
+	var dnsBackendRepo repository.DNSBackendRepository
 	var contextVMResponseStore repository.ContextVMResponseStore
 	var managedInstanceHealthRepo repository.ManagedInstanceHealthRepository
 	var agentRuntimeReleaseRepo repository.AgentRuntimeReleaseRepository
@@ -268,6 +270,19 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Error("local Nostr publish outbox was unreadable and was moved aside; events still pending in it were not delivered",
 			zap.String("moved_to", aside))
 	}
+	if err := repository.BootstrapLocalDNS(ctx, localOutbox, dnsZoneRepo, dnsPolicyRepo, dnsRecordOverrideRepo); err != nil {
+		_ = localOutbox.Close()
+		_ = localEventStore.Close()
+		return nil, fmt.Errorf("bootstrapping local DNS registry: %w", err)
+	}
+	// DNS and ML desired registry records live in the durable local store. The
+	// optional PostgreSQL repositories only seed pre-migration data; they are
+	// not a write prerequisite for these mutations.
+	dnsZoneRepo = repository.NewLocalDNSZoneRepository(localOutbox)
+	dnsPolicyRepo = repository.NewLocalDNSPolicyRepository(localOutbox)
+	dnsRecordOverrideRepo = repository.NewLocalDNSRecordOverrideRepository(localOutbox)
+	dnsEndpointRepo = repository.NewLocalDNSEndpointRepository(localOutbox)
+	dnsBackendRepo = repository.NewLocalDNSBackendRepository(localOutbox)
 	localNostrReleased := false
 	defer func() {
 		if !localNostrReleased {
@@ -914,7 +929,14 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Generic AI/ML registry foundation. Bucket-B keeps this additive and keeps
 	// long-running orchestration on the existing LLM path until dedicated buckets.
-	mlRegistryRepo := repository.NewPgMLRegistryRepository(pool)
+	var pgMLRegistryRepo repository.MLRegistryRepository
+	if dbAvailable {
+		pgMLRegistryRepo = repository.NewPgMLRegistryRepository(pool)
+	}
+	if err := repository.BootstrapLocalML(ctx, localOutbox, pgMLRegistryRepo); err != nil {
+		return nil, fmt.Errorf("bootstrapping local ML registry: %w", err)
+	}
+	mlRegistryRepo := repository.NewLocalMLRegistryRepository(localOutbox, pgMLRegistryRepo)
 	mlRegistry := service.NewMLRegistryService(mlRegistryRepo, publisher, logger, service.WithMLEnvironmentRepository(envRepo))
 	workerReadModelSvc := service.NewWorkerReadModelService(workerRepo, registry, mlRegistry, workerPolicySvc, service.NewMLPlacementService(workerRepo, logger, service.WithMLPlacementPressureThresholds(pressureThresholds)), logger)
 	workerCleanupOrchestrator := service.NewWorkerCleanupOrchestrator(workerRepo, workerReadModelSvc, loomCleanupClient{client: loomClient}, publisher, service.WorkerCleanupConfig{Mode: cfg.WorkerCleanup.Mode, Cooldown: cfg.WorkerCleanup.Cooldown, TargetFreeGB: cfg.WorkerCleanup.TargetFreeGB, PaymentToken: cfg.WorkerCleanup.PaymentToken, RequiredSoftware: cfg.WorkerCleanup.RequiredSoftware, PressureThresholds: pressureThresholds}, logger)
@@ -986,7 +1008,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		if dnsZoneRepo != nil {
 			for i := range dnsZones {
-				if err := dnsZoneRepo.Create(ctx, &dnsZones[i]); err != nil {
+				if err := dnsZoneRepo.(*repository.LocalDNSZoneRepository).SeedConfigured(ctx, &dnsZones[i]); err != nil {
 					return nil, fmt.Errorf("persisting configured DNS zone %q: %w", dnsZones[i].Name, err)
 				}
 			}
@@ -997,6 +1019,8 @@ func New(cfg *config.Config) (*App, error) {
 			dnsZones = persistedZones
 		}
 		dnsProjector = reconcile.NewDNSProjector(serviceRepo, envRepo, stateRepo, obsRepo, llmRegistry, mlRegistry, workerRepo, cfg.DNS, logger)
+		dnsProjector.SetManualEndpointSource(dnsEndpointRepo)
+		dnsProjector.SetZoneSource(dnsZoneRepo)
 		dnsProjector.SetContinuityStatusReader(continuityDNSStatusReader{reader: continuityStatusStore})
 		if policySource, ok := dnsPolicyRepo.(reconcile.DNSPolicySource); ok {
 			dnsProjector.SetPolicySource(policySource)
@@ -1010,6 +1034,12 @@ func New(cfg *config.Config) (*App, error) {
 			dnsPersistence = dnsRepositoryPersistenceAdapter{zones: dnsZoneRepo, overrides: dnsRecordOverrideRepo}
 		}
 		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones, dnsResolver.Refs(), dnsPersistence, dnsPolicyRepo)
+		configuredBackends := (configDNSBackendProjectionSource{backends: cfg.DNS.Backends, zones: dnsZones, resolver: dnsResolver}).ListDNSBackendStates(ctx)
+		for i := range configuredBackends {
+			if err := dnsBackendRepo.(*repository.LocalDNSBackendRepository).SeedConfigured(ctx, &configuredBackends[i]); err != nil {
+				return nil, fmt.Errorf("persisting configured DNS backend %q: %w", configuredBackends[i].Ref, err)
+			}
+		}
 		bgManager.RegisterWithOptions(dnsReconciler)
 
 		// Phase 3 D1: subscribe to NIP-38 agent health events so the daemon
@@ -1067,7 +1097,7 @@ func New(cfg *config.Config) (*App, error) {
 		projectorOpts = append(projectorOpts,
 			nostrAdapter.WithDNSProjectionSource(dnsProjector),
 			nostrAdapter.WithDNSZoneProjectionSource(staticDNSZoneProjectionSource{zones: dnsZones}),
-			nostrAdapter.WithDNSBackendProjectionSource(configDNSBackendProjectionSource{backends: cfg.DNS.Backends, zones: dnsZones, resolver: dnsResolver}),
+			nostrAdapter.WithDNSBackendProjectionSource(localDNSBackendProjectionSource{repo: dnsBackendRepo, logger: logger}),
 		)
 	}
 	if dnsPolicyRepo != nil {
@@ -1214,7 +1244,8 @@ func New(cfg *config.Config) (*App, error) {
 
 	// --- D70 DNS intent registration (kept separate from D69 app wiring) ---
 	if enabledDomains["dns"] && nostrProjector.Enabled() && dnsOperator != nil && dnsCanonicalPub != nil {
-		intentProcessor.RegisterHandler("dns", controlplane.NewDNSIntentHandler(dnsOperator, dnsCanonicalPub))
+		mutations := &service.DNSMutationService{Zones: dnsZoneRepo, Policies: dnsPolicyRepo, Endpoints: dnsEndpointRepo, Backends: dnsBackendRepo, Canonical: dnsCanonicalPub, Reconciler: dnsOperator.(service.DNSMutationReconciler)}
+		intentProcessor.RegisterHandler("dns", controlplane.NewDNSIntentHandler(dnsOperator, dnsCanonicalPub, mutations))
 	}
 	// --- end D70 DNS intent registration ---
 
@@ -2399,6 +2430,7 @@ func New(cfg *config.Config) (*App, error) {
 		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC, fleetOperatorGate, intentProcessor)
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient, cfg.Loom.AuthorizedPubkeys, fleetOperatorGate)
 		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled, fleetOperatorGate, intentProcessor)
+		controlplane.RegisterMLRegistryContextVMHandlers(encryptedRequestTransport, mlRegistry, fleetOperatorGate, intentProcessor)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher, tenantRBAC)
 		relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
 		controlplane.RegisterRelaySettingsContextVMHandlers(encryptedRequestTransport, controlplane.RelaySettingsHandlerConfig{
@@ -3517,6 +3549,20 @@ type configDNSBackendProjectionSource struct {
 	resolver dnsAdapter.Resolver
 }
 
+type localDNSBackendProjectionSource struct {
+	repo   repository.DNSBackendRepository
+	logger *zap.Logger
+}
+
+func (s localDNSBackendProjectionSource) ListDNSBackendStates(ctx context.Context) []domain.DNSBackendState {
+	states, err := s.repo.List(ctx)
+	if err != nil {
+		s.logger.Warn("loading durable DNS backend states failed", zap.Error(err))
+		return nil
+	}
+	return states
+}
+
 func (s configDNSBackendProjectionSource) ListDNSBackendStates(ctx context.Context) []domain.DNSBackendState {
 	refs := make([]string, 0, len(s.backends))
 	for ref := range s.backends {
@@ -3604,6 +3650,13 @@ func (o *dnsControlPlaneOperator) ReconcileAll(ctx context.Context) error {
 	return o.reconciler.ReconcileOnce(ctx)
 }
 
+func (o *dnsControlPlaneOperator) RetireZone(ctx context.Context, zone domain.DNSZone) error {
+	if o.reconciler == nil {
+		return fmt.Errorf("DNS reconciler is not configured")
+	}
+	return o.reconciler.RetireZone(ctx, zone)
+}
+
 func (o *dnsControlPlaneOperator) ReconcileZone(ctx context.Context, zoneName string) error {
 	zoneName = strings.TrimSpace(zoneName)
 	if zoneName == "" {
@@ -3620,6 +3673,16 @@ func (o *dnsControlPlaneOperator) HasZone(zoneName string) bool {
 	defer o.zonesMu.RUnlock()
 	_, ok := o.zones[strings.TrimSpace(zoneName)]
 	return ok
+}
+
+func (o *dnsControlPlaneOperator) SetZoneActive(zoneName string, active bool) {
+	o.zonesMu.Lock()
+	defer o.zonesMu.Unlock()
+	if active {
+		o.zones[zoneName] = struct{}{}
+	} else {
+		delete(o.zones, zoneName)
+	}
 }
 
 func (o *dnsControlPlaneOperator) HasBackend(ref string) bool {

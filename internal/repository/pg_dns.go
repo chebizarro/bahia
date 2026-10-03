@@ -178,9 +178,22 @@ func (r *PgDNSZoneRepository) Create(ctx context.Context, zone *domain.DNSZone) 
 	return nil
 }
 
+func (r *PgDNSZoneRepository) Update(ctx context.Context, zone *domain.DNSZone) error {
+	cmd, err := r.pool.Exec(ctx, `UPDATE dns_zones SET visibility=$2, backend_ref=$3, ttl=$4, authoritative=$5, allow_empty_authoritative=$6, updated_at=now() WHERE name=$1`,
+		zone.Name, zone.Visibility, zone.BackendRef, zone.TTL, zone.Authoritative, zone.AllowEmptyAuthoritative)
+	if err != nil {
+		return fmt.Errorf("updating DNS zone: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("updating DNS zone %q: %w", zone.Name, ErrNotFound)
+	}
+	zone.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
 func (r *PgDNSZoneRepository) Get(ctx context.Context, name string) (*domain.DNSZone, error) {
 	zone := &domain.DNSZone{}
-	err := r.pool.QueryRow(ctx, `SELECT name, visibility, backend_ref, ttl, authoritative, allow_empty_authoritative FROM dns_zones WHERE name = $1`, name).Scan(&zone.Name, &zone.Visibility, &zone.BackendRef, &zone.TTL, &zone.Authoritative, &zone.AllowEmptyAuthoritative)
+	err := r.pool.QueryRow(ctx, `SELECT name, visibility, backend_ref, ttl, authoritative, allow_empty_authoritative, updated_at FROM dns_zones WHERE name = $1`, name).Scan(&zone.Name, &zone.Visibility, &zone.BackendRef, &zone.TTL, &zone.Authoritative, &zone.AllowEmptyAuthoritative, &zone.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -191,7 +204,7 @@ func (r *PgDNSZoneRepository) Get(ctx context.Context, name string) (*domain.DNS
 }
 
 func (r *PgDNSZoneRepository) List(ctx context.Context) ([]domain.DNSZone, error) {
-	rows, err := r.pool.Query(ctx, `SELECT name, visibility, backend_ref, ttl, authoritative, allow_empty_authoritative FROM dns_zones ORDER BY name`)
+	rows, err := r.pool.Query(ctx, `SELECT name, visibility, backend_ref, ttl, authoritative, allow_empty_authoritative, updated_at FROM dns_zones ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("listing DNS zones: %w", err)
 	}
@@ -199,7 +212,7 @@ func (r *PgDNSZoneRepository) List(ctx context.Context) ([]domain.DNSZone, error
 	zones := []domain.DNSZone{}
 	for rows.Next() {
 		var zone domain.DNSZone
-		if err := rows.Scan(&zone.Name, &zone.Visibility, &zone.BackendRef, &zone.TTL, &zone.Authoritative, &zone.AllowEmptyAuthoritative); err != nil {
+		if err := rows.Scan(&zone.Name, &zone.Visibility, &zone.BackendRef, &zone.TTL, &zone.Authoritative, &zone.AllowEmptyAuthoritative, &zone.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scanning DNS zone: %w", err)
 		}
 		zones = append(zones, zone)

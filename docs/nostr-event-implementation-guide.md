@@ -15,9 +15,10 @@ relay acceptance. Methods are `artifact/register`, `policy/create`, `policy/upda
 `approval/llm-approve` or `approval/llm-reject`, selected by the validated decision.
 
 Publisher support does not imply a registered server consumer. Discovery's
-`control_plane.methods` contains only registered methods; unsupported LLM, ML,
-package, policy and tool methods are not advertised. AI/ML discovery describes
-read models, not callable ML mutation handlers. DNS advertises `dns/record-set`
+`control_plane.methods` contains only registered methods; unsupported LLM,
+package, policy and tool methods are not advertised. ML registry discovery
+advertises `ml/model-*`, `ml/version-*`, and `ml/endpoint-*` create, update,
+and delete methods, gated to fleet operators. DNS advertises `dns/record-set`
 and retains `dns/override-retire`, not the unregistered `dns/record-override` or
 `dns/backend-register`. Receipts acknowledge submission, never durable completion.
 
@@ -170,6 +171,9 @@ Examples:
 | Roll back service | `service/rollback` |
 | Create DNS zone | `dns/zone-create` |
 | Apply DNS policy | `dns/policy-apply` |
+| Create, update, or delete ML registry models | `ml/model-create`, `ml/model-update`, `ml/model-delete` |
+| Create, update, or delete ML model versions | `ml/version-create`, `ml/version-update`, `ml/version-delete` |
+| Create, update, or delete ML inference endpoints | `ml/endpoint-create`, `ml/endpoint-update`, `ml/endpoint-delete` |
 | Apply relay settings policy | `settings/relay-policy.apply` |
 | Call managed relay administration method | `settings/relay-admin.call` |
 | Run backup | `backup/run` |
@@ -224,6 +228,13 @@ Use canonical state.
 - Strongly recommended tags: `entity`, `status`, resource tags.
 - The projector's cp-state envelope stamps `t=<domain>-<entity>` on every live record and tombstone, for example `service-registry`, `deployment-run`, `backup-run` or `dns-zone` (`internal/kinds/tags.go` `CPStateTopic*` and `DNS*Topic`; `CP_STATE_TOPICS` in `kinds.gen.js`). NIP-01 relays index only single-letter tags, so consumers scope 30900 REQs with `#t`, never `#domain` or `#schema`. The web control-plane read model subscribes to `{kinds:[30900], authors:[service], "#t":[...]}` for exactly the families it routes. Other producers of a routed family (for example the package handlers and the worker-state publisher) must stamp the same topic.
 - Content must be a complete current-state snapshot, not a patch.
+- DNS zone, policy, endpoint, and backend mutations and ML model, version, and
+  endpoint mutations publish through this same envelope. Deletes and old
+  coordinates retired by ML identity changes carry `deleted=true` on the
+  exact live `(kind, pubkey, d)` coordinate; create/update records carry the
+  complete current state and `updated_at` revision. DNS and ML desired state
+  is persisted in the daemon's local outbox store; PostgreSQL is an optional
+  one-time seed, not the mutation source of truth.
 - Two families published by one author must never share a `d`. A relay keeps one event per `(kind, pubkey, d)`, so families that share a coordinate replace each other.
 - One family with two writers must have one record shape. The service-registry and environment-registry records are written both by the projector and, before the cache write, by the relay-first registry. Both build them with the projector's builders (`internal/adapters/nostr/control_state_contract.go`) and sign under the projector's per-coordinate `created_at` floor and dedupe memory, through `RelayFirstStatePublisher`. So a projection of the state a relay-first record already carries is not signed again, and the next event on the coordinate is always newer. The relay-first record is delivered with `Publisher.PublishBeforeCommit`. One synchronous round goes to every control-plane relay. Below the publish quorum nothing is enqueued and the cache write is skipped. At the quorum the record is admitted to the control-plane outbox with that round's per-relay results, and the outbox retries only the relays that have not accepted. Their `updated_at` is the entity revision clients send back as `expected_updated_at`. It is written at full precision (RFC 3339 with fractional seconds) and is part of the dedupe fingerprint for these two families, while other families treat it as bookkeeping (`bahia-irsry.41`).
 

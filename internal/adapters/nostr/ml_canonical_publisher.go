@@ -2,7 +2,9 @@ package nostr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -59,6 +61,18 @@ func (p *MLCanonicalPublisher) PublishModel(ctx context.Context, model *domain.M
 	return p.projector.publishReplaceableJSON(ctx, KindMLModelRegistry, dTag, tags, model, "ml_model.projection", &model.ID)
 }
 
+func (p *MLCanonicalPublisher) PublishModelTombstone(ctx context.Context, model *domain.MLModel) error {
+	if p.projector == nil || !p.projector.Enabled() {
+		return nil
+	}
+	if model == nil || model.Slug == "" {
+		return fmt.Errorf("ML model tombstone requires a slug")
+	}
+	dTag := "model:" + model.Slug
+	return p.projector.publishReplaceableTombstone(ctx, KindMLModelRegistry, dTag,
+		gonostr.Tags{{"model", dTag}}, map[string]any{"deleted": true, "id": model.ID.String(), "slug": model.Slug, "updated_at": time.Now().UTC().Format(time.RFC3339Nano)}, "ml_model.projection", &model.ID)
+}
+
 // PublishModelVersion publishes a canonical ML model version registry record.
 func (p *MLCanonicalPublisher) PublishModelVersion(ctx context.Context, version *domain.MLModelVersion) error {
 	if p.projector == nil || !p.projector.Enabled() || version == nil {
@@ -85,6 +99,19 @@ func (p *MLCanonicalPublisher) PublishModelVersion(ctx context.Context, version 
 	return p.projector.publishReplaceableJSON(ctx, KindMLModelVersionRegistry, dTag, tags, version, "ml_model_version.projection", &version.ID)
 }
 
+func (p *MLCanonicalPublisher) PublishModelVersionTombstone(ctx context.Context, version *domain.MLModelVersion, modelSlug string) error {
+	if p.projector == nil || !p.projector.Enabled() {
+		return nil
+	}
+	if version == nil || modelSlug == "" || version.Version == "" {
+		return fmt.Errorf("ML model version tombstone requires model slug and version")
+	}
+	dTag := fmt.Sprintf("model-version:%s:%s", modelSlug, version.Version)
+	return p.projector.publishReplaceableTombstone(ctx, KindMLModelVersionRegistry, dTag,
+		gonostr.Tags{{"model", "model:" + modelSlug}, {"model_version", dTag}},
+		map[string]any{"deleted": true, "id": version.ID.String(), "model_id": version.ModelID.String(), "version": version.Version, "updated_at": time.Now().UTC().Format(time.RFC3339Nano)}, "ml_model_version.projection", &version.ID)
+}
+
 // PublishEndpoint publishes a canonical ML inference endpoint registry record.
 func (p *MLCanonicalPublisher) PublishEndpoint(ctx context.Context, endpoint *domain.MLInferenceEndpoint) error {
 	if p.projector == nil || !p.projector.Enabled() || endpoint == nil {
@@ -103,6 +130,26 @@ func (p *MLCanonicalPublisher) PublishEndpoint(ctx context.Context, endpoint *do
 		tags = append(tags, gonostr.Tag{"protocol", endpoint.Protocol})
 	}
 	return p.projector.publishReplaceableJSON(ctx, KindMLInferenceEndpointRegistry, dTag, tags, endpoint, "ml_endpoint.projection", &endpoint.ID)
+}
+
+func (p *MLCanonicalPublisher) PublishEndpointTombstone(ctx context.Context, endpoint *domain.MLInferenceEndpoint) error {
+	if p.projector == nil || !p.projector.Enabled() {
+		return nil
+	}
+	if endpoint == nil {
+		return fmt.Errorf("ML endpoint tombstone requires an endpoint")
+	}
+	envName, ok, err := p.environmentName(ctx, endpoint.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("ML endpoint environment %s not found", endpoint.EnvironmentID)
+	}
+	dTag := fmt.Sprintf("endpoint:%s:%s", endpoint.Name, envName)
+	return p.projector.publishReplaceableTombstone(ctx, KindMLInferenceEndpointRegistry, dTag,
+		gonostr.Tags{{"endpoint", dTag}, {"endpoint_id", endpoint.ID.String()}, {"environment", envName}, {"environment_id", endpoint.EnvironmentID.String()}},
+		map[string]any{"deleted": true, "id": endpoint.ID.String(), "name": endpoint.Name, "environment_id": endpoint.EnvironmentID.String(), "updated_at": time.Now().UTC().Format(time.RFC3339Nano)}, "ml_endpoint.projection", &endpoint.ID)
 }
 
 // PublishEndpointState publishes a canonical ML inference endpoint state record.
@@ -213,14 +260,55 @@ func (p *MLCanonicalPublisher) PublishCapabilityProfile(ctx context.Context, wor
 }
 
 func (p *MLCanonicalPublisher) environmentName(ctx context.Context, envID uuid.UUID) (string, bool, error) {
-	if p.projector.source == nil || envID == uuid.Nil {
+	if envID == uuid.Nil {
 		return "", false, nil
 	}
-	env, err := p.projector.source.GetEnvironment(ctx, envID)
-	if err != nil || env == nil || env.Name == "" {
-		return "", false, err
+	if p.projector.source != nil {
+		env, err := p.projector.source.GetEnvironment(ctx, envID)
+		if err != nil {
+			return "", false, err
+		}
+		if env != nil && env.Name != "" {
+			return env.Name, true, nil
+		}
 	}
-	return env.Name, true, nil
+	if p.projector.history != nil {
+		records, err := p.projector.history.FindByTag(ctx, "d", envID.String(), []int{KindCASControlState}, 32)
+		if err != nil {
+			return "", false, err
+		}
+		for _, record := range records {
+			var tags gonostr.Tags
+			if err := json.Unmarshal(record.Tags, &tags); err != nil {
+				return "", false, err
+			}
+			var isEnvironment, deleted bool
+			for _, tag := range tags {
+				if len(tag) < 2 {
+					continue
+				}
+				if tag[0] == "domain" && tag[1] == "environment" {
+					isEnvironment = true
+				}
+				if tag[0] == "deleted" && tag[1] == "true" {
+					deleted = true
+				}
+			}
+			if !isEnvironment || deleted {
+				continue
+			}
+			var content struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal([]byte(record.Content), &content); err != nil {
+				return "", false, err
+			}
+			if content.Name != "" {
+				return content.Name, true, nil
+			}
+		}
+	}
+	return "", false, fmt.Errorf("ML endpoint environment %s has no canonical registry record", envID)
 }
 
 // Ensure MLCanonicalPublisher satisfies the service-level interface at

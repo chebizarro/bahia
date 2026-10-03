@@ -177,6 +177,48 @@ func TestDNSCanonicalPublisherTombstonesZone(t *testing.T) {
 	assertJSONField(t, events[1].Content, "deleted", true)
 }
 
+func TestDNSCanonicalPublisherD72TombstonesAndEndpointDedup(t *testing.T) {
+	ctx := context.Background()
+	pub, sink := newTestPublisher(t, WithDNSProjectionSource(&fakeDNSProjectionSource{}))
+	endpoint := testEndpoint("manual")
+	if err := pub.PublishEndpoint(ctx, endpoint); err != nil {
+		t.Fatal(err)
+	}
+	if published, _, err := pub.PublishEndpoints(ctx, []domain.DNSEndpoint{endpoint}); err != nil || published != 0 {
+		t.Fatalf("reconcile duplicated manual endpoint: published=%d err=%v", published, err)
+	}
+	if err := pub.PublishEndpointTombstone(ctx, endpoint); err != nil {
+		t.Fatal(err)
+	}
+	endpointEvents := sink.byKind(KindDNSEndpointState)
+	if len(endpointEvents) != 2 {
+		t.Fatalf("endpoint events=%d, want live and tombstone", len(endpointEvents))
+	}
+	assertTag(t, endpointEvents[1], "deleted", "true")
+	assertJSONField(t, endpointEvents[1].Content, "deleted", true)
+
+	policyID := uuid.New()
+	if err := pub.PublishPolicyTombstone(ctx, policyID); err != nil {
+		t.Fatal(err)
+	}
+	policyEvents := sink.byKind(KindDNSPolicyState)
+	if len(policyEvents) != 1 {
+		t.Fatalf("policy tombstones=%d", len(policyEvents))
+	}
+	assertTag(t, policyEvents[0], "deleted", "true")
+	assertJSONField(t, policyEvents[0].Content, "deleted", true)
+
+	if err := pub.PublishBackendTombstone(ctx, "secondary"); err != nil {
+		t.Fatal(err)
+	}
+	backendEvents := sink.byKind(KindDNSBackendState)
+	if len(backendEvents) != 1 {
+		t.Fatalf("backend tombstones=%d", len(backendEvents))
+	}
+	assertTag(t, backendEvents[0], "deleted", "true")
+	assertJSONField(t, backendEvents[0].Content, "deleted", true)
+}
+
 // --- backend publish ---
 
 func TestDNSCanonicalPublisherPublishesBackend(t *testing.T) {

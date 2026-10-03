@@ -21,9 +21,24 @@ type DNSPolicyRepository interface {
 // DNSZoneRepository manages persisted DNS zone records.
 type DNSZoneRepository interface {
 	Create(ctx context.Context, zone *domain.DNSZone) error
+	Update(ctx context.Context, zone *domain.DNSZone) error
 	Get(ctx context.Context, name string) (*domain.DNSZone, error)
 	List(ctx context.Context) ([]domain.DNSZone, error)
 	Delete(ctx context.Context, name string) error
+}
+
+type DNSEndpointRepository interface {
+	Upsert(context.Context, *domain.DNSEndpoint) error
+	Get(context.Context, string) (*domain.DNSEndpoint, error)
+	List(context.Context) ([]domain.DNSEndpoint, error)
+	Delete(context.Context, string) error
+}
+
+type DNSBackendRepository interface {
+	Upsert(context.Context, *domain.DNSBackendState) error
+	Get(context.Context, string) (*domain.DNSBackendState, error)
+	List(context.Context) ([]domain.DNSBackendState, error)
+	Delete(context.Context, string) error
 }
 
 // DNSRecordOverrideRepository manages manual DNS record pins.
