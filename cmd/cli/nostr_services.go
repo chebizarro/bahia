@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
