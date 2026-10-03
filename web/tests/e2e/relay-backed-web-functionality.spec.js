@@ -125,8 +125,12 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
         requestEncryptedResult
       } = await import('/src/lib/nostr/encrypted-controlplane.js');
       const { initializeAuth } = await import('/src/lib/stores/auth.js');
+      const { eagerRelayConnect } = await import('/src/lib/stores/system.svelte.js');
 
       await initializeAuth();
+      // §6.2 auth no longer triggers system discovery — await it explicitly
+      // so assertEncryptedRequestsAvailable() sees features.encrypted_nostr_requests.
+      await eagerRelayConnect();
 
       const result = await requestEncryptedResult({
         operation: 'services.secrets.list',
