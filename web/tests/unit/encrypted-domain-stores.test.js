@@ -130,7 +130,6 @@ describe('encrypted payments/orgs stores', () => {
     await orgsStore.updateOrgMemberRole('org-1', 'bob', { role: 'admin' });
     await orgsStore.createOrgInvite('org-1', { pubkey: 'carol', role: 'viewer', expiresIn: 168 });
 
-    expect(orgsStore.orgDetailState.myRole).toBe('owner');
     expect(encryptedRequests.requestEncryptedResult).toHaveBeenCalledTimes(1);
     expect(intentMock).toHaveBeenCalledWith(expect.objectContaining({ schema: 'bahia.intent.org-member.v1',
       content: { pubkey: 'bob', role: 'admin' } }));

@@ -425,7 +425,7 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 	if intent.IntentID == "" {
 		return nil, fmt.Errorf("missing intent_id tag")
 	}
-	if intent.OrgID == uuid.Nil {
+	if intent.OrgID == uuid.Nil && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" {
 		return nil, fmt.Errorf("missing or invalid org tag")
 	}
 
@@ -455,10 +455,14 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 					intent.ExpectedUpdatedAt = &ts
 				}
 			case string:
-				if parsed, err := time.Parse(time.RFC3339Nano, v); err == nil {
-					ts := parsed.UnixMicro()
-					intent.ExpectedUpdatedAt = &ts
+				parsed, err := time.Parse(time.RFC3339Nano, v)
+				if err != nil {
+					return nil, fmt.Errorf("invalid expected_updated_at: %w", err)
 				}
+				// Unix microseconds: the unit the environment handler and the web
+				// fixtures use. Unifying every handler on one unit is bahia-irsry.73.
+				ts := parsed.UnixMicro()
+				intent.ExpectedUpdatedAt = &ts
 			}
 		}
 	}

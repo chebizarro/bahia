@@ -59,7 +59,7 @@ The relay keeps only the latest `(kind, pubkey, d)` for each author. An offline 
 - `schema` = `bahia.intent.<domain>.v1`. Distinct from the daemon's state schema `bahia.cp-state.v1`.
 - `t` = `bahia-intent` (enables `#t` filtering for all intents) plus the domain topic tag (e.g. `service-registry`).
 - `op` = `create`, `update`, or `delete` — advisory, not load-bearing (§1.2).
-- `org` = the org UUID the entity belongs to (enables `#org` filtering for trust-scoped subscriptions).
+- `org` = the org UUID the entity belongs to (enables `#org` filtering for trust-scoped subscriptions). Fleet-only DNS, ML, and worker intents may omit `org`; these handlers authorize against configured fleet operators and do not derive an org from the entity.
 - `intent_id` = a UUIDv7 minted by the client per intent attempt, carried in both tags and content. Used for **idempotency and correlation only** — the intent_id does not determine processing order or conflict resolution.
 
 ### 1.4 Relationship to today's cp-state 30900 records
@@ -517,6 +517,14 @@ When a domain is listed in `intent_domains`:
 
 When a domain is _not_ in `intent_domains`:
 - The existing handler processes it as today, unchanged.
+
+D70's handler coverage in this window is deliberately bounded by existing durable mutation boundaries. Fleet-scoped authorizations use configured operator pubkeys rather than org RBAC; each accepted intent receives bounded kind-30315 status from `IntentProcessor`.
+
+| Domain | 30900 intent ops admitted | ContextVM dual dispatch | Unsupported until a durable mutation path exists |
+|--------|---------------------------|-------------------------|--------------------------------------------------|
+| `dns` | `zone-create`, `policy-apply`, `record-set`, `override-retire` | `dns/zone-create`, `dns/policy-apply`, `dns/record-set`, `dns/override-retire`; drift remediation stays legacy | Zone update/delete; endpoint create/update/delete (derived); backend create/update/delete (static config); policy update/delete. Unsupported intent ops receive bounded 30315 rejection. |
+| `ml` | `model-create/update`, `version-create/update`, `endpoint-create/update` | No ContextVM registry CRUD methods exist; existing ML command handlers remain legacy | Model/version/endpoint delete; identity-changing updates (old canonical coordinate cannot be tombstoned). Unsupported intent ops receive bounded 30315 rejection. |
+| `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter/exit`, `labels-update`, `cleanup`; every content carries desired `scheduling_state` and full `labels` | All eight corresponding worker ContextVM methods | Other worker actions remain outside this domain handler. |
 
 This dual-path window closes per domain when:
 1. The web (Phase 4) and CLI (Phase 5) sign intents directly.

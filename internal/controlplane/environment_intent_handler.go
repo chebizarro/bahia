@@ -353,6 +353,9 @@ func (e *revisionConflictError) Error() string {
 
 // IsRevisionConflict reports whether err is a revision conflict.
 func IsRevisionConflict(err error) bool {
-	_, ok := err.(*revisionConflictError)
+	if _, ok := err.(*revisionConflictError); ok {
+		return true
+	}
+	_, ok := err.(*intentRevisionConflictError)
 	return ok
 }

@@ -1,0 +1,220 @@
+{
+  "intents": [
+    {
+      "content": {
+        "authoritative": true,
+        "backend_ref": "primary",
+        "name": "example.test",
+        "ttl": 60,
+        "visibility": "internal"
+      },
+      "coordinate": "zone:example.test",
+      "domain": "dns",
+      "op": "zone-create"
+    },
+    {
+      "content": {
+        "enabled": true,
+        "id": "00000000-0000-4000-8000-000000000001",
+        "name": "prod-ttl",
+        "rules": [
+          {
+            "action": {
+              "ttl_override": 60
+            },
+            "match": {
+              "environment": "prod"
+            }
+          }
+        ]
+      },
+      "coordinate": "dnspolicy:00000000-0000-4000-8000-000000000001",
+      "domain": "dns",
+      "op": "policy-apply"
+    },
+    {
+      "content": {
+        "id": "00000000-0000-4000-8000-000000000002",
+        "reason": "operator pin",
+        "record_name": "api",
+        "record_type": "A",
+        "ttl": 60,
+        "value": "192.0.2.10",
+        "zone_name": "example.test"
+      },
+      "coordinate": "dns-override:00000000-0000-4000-8000-000000000002",
+      "domain": "dns",
+      "op": "record-set"
+    },
+    {
+      "content": {
+        "override_id": "00000000-0000-4000-8000-000000000002",
+        "reason": "pin no longer needed"
+      },
+      "coordinate": "dns-override:00000000-0000-4000-8000-000000000002",
+      "domain": "dns",
+      "op": "override-retire"
+    },
+    {
+      "content": {
+        "id": "00000000-0000-4000-8000-000000000003",
+        "name": "Sample",
+        "slug": "sample"
+      },
+      "coordinate": "model:sample",
+      "domain": "ml",
+      "op": "model-create"
+    },
+    {
+      "content": {
+        "expected_updated_at": "2026-10-03T00:00:00Z",
+        "id": "00000000-0000-4000-8000-000000000003",
+        "name": "Sample updated",
+        "slug": "sample"
+      },
+      "coordinate": "model:sample",
+      "domain": "ml",
+      "op": "model-update"
+    },
+    {
+      "content": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "model_id": "00000000-0000-4000-8000-000000000003",
+        "source": {
+          "uri": "s3://models/sample-v1"
+        },
+        "version": "v1"
+      },
+      "coordinate": "model-version:00000000-0000-4000-8000-000000000004",
+      "domain": "ml",
+      "op": "version-create"
+    },
+    {
+      "content": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "model_id": "00000000-0000-4000-8000-000000000003",
+        "source": {
+          "uri": "s3://models/sample-v1"
+        },
+        "version": "v1"
+      },
+      "coordinate": "model-version:00000000-0000-4000-8000-000000000004",
+      "domain": "ml",
+      "op": "version-update"
+    },
+    {
+      "content": {
+        "environment_id": "00000000-0000-4000-8000-000000000006",
+        "id": "00000000-0000-4000-8000-000000000005",
+        "name": "inference"
+      },
+      "coordinate": "endpoint:00000000-0000-4000-8000-000000000005",
+      "domain": "ml",
+      "op": "endpoint-create"
+    },
+    {
+      "content": {
+        "environment_id": "00000000-0000-4000-8000-000000000006",
+        "expected_updated_at": "2026-10-03T00:00:00Z",
+        "id": "00000000-0000-4000-8000-000000000005",
+        "name": "inference",
+        "protocol": "http"
+      },
+      "coordinate": "endpoint:00000000-0000-4000-8000-000000000005",
+      "domain": "ml",
+      "op": "endpoint-update"
+    },
+    {
+      "content": {
+        "labels": {},
+        "reason": "operator request",
+        "scheduling_state": "cordoned",
+        "worker_pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "coordinate": "worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "domain": "worker",
+      "op": "cordon"
+    },
+    {
+      "content": {
+        "labels": {},
+        "reason": "operator request",
+        "scheduling_state": "active",
+        "worker_pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "coordinate": "worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "domain": "worker",
+      "op": "uncordon"
+    },
+    {
+      "content": {
+        "labels": {},
+        "reason": "operator request",
+        "scheduling_state": "draining",
+        "worker_pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "coordinate": "worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "domain": "worker",
+      "op": "drain"
+    },
+    {
+      "content": {
+        "labels": {},
+        "reason": "operator request",
+        "scheduling_state": "active",
+        "worker_pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "coordinate": "worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "domain": "worker",
+      "op": "undrain"
+    },
+    {
+      "content": {
+        "labels": {},
+        "reason": "operator request",
+        "scheduling_state": "maintenance",
+        "worker_pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "coordinate": "worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "domain": "worker",
+      "op": "maintenance-enter"
+    },
+    {
+      "content": {
+        "labels": {},
+        "reason": "operator request",
+        "scheduling_state": "active",
+        "worker_pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "coordinate": "worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "domain": "worker",
+      "op": "maintenance-exit"
+    },
+    {
+      "content": {
+        "labels": {
+          "region": "west",
+          "role": "inference"
+        },
+        "scheduling_state": "active",
+        "worker_pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "coordinate": "worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "domain": "worker",
+      "op": "labels-update"
+    },
+    {
+      "content": {
+        "cleanup_mode": "reclaimable_only",
+        "labels": {},
+        "reason": "free disk",
+        "scheduling_state": "active",
+        "worker_pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "coordinate": "worker:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "domain": "worker",
+      "op": "cleanup"
+    }
+  ],
+  "schema": "bahia.intent-fixtures.d70.v1"
+}

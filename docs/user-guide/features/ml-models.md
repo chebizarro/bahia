@@ -289,3 +289,7 @@ Supported inference runtimes:
 - [LLM Routes](llm-routes.md) — LLM-specific routing
 - [Workers](workers.md) — ML execution hosts
 - [Artifacts](artifacts.md) — Container artifacts
+
+## Signed ML registry intents
+
+Fleet operators can publish `bahia.intent.ml.v1` kind-30900 intents for model, model-version, and inference-endpoint create/update. The daemon calls the ML registry service, which publishes canonical records through `MLCanonicalPublisher`, and emits bounded kind-30315 status. Delete intents are rejected because the registry has no durable delete method; identity-changing updates are also rejected because old canonical coordinates cannot currently be tombstoned. Existing ML command handlers remain on their legacy transport.
