@@ -2031,6 +2031,9 @@ func New(cfg *config.Config) (*App, error) {
 		}
 	}
 	mcpDeps := mcp.ServerDeps{
+		StateStore:               localEventStore,
+		ServicePubkey:            servicePubkey,
+		ConfidentialReader:       confidentialEncryptor,
 		LogService:               runLogService,
 		Payments:                 paymentSvc,
 		SBOMs:                    sbomRepo,

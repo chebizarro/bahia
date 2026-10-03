@@ -55,11 +55,17 @@ func (s *Server) GetResources(ctx context.Context) ([]Resource, error) {
 }
 
 func (s *Server) listDNSResources(ctx context.Context) ([]Resource, error) {
-	if s.dnsEndpoints == nil {
+	if s.dnsEndpoints == nil && s.stateStore == nil {
 		return nil, nil
 	}
 
-	endpoints, err := s.dnsEndpoints.ListDNSEndpoints(ctx)
+	var endpoints []domain.DNSEndpoint
+	var err error
+	if s.stateStore != nil {
+		endpoints, err = s.readDNSEndpoints(ctx)
+	} else {
+		endpoints, err = s.dnsEndpoints.ListDNSEndpoints(ctx)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list DNS endpoints for MCP resources: %w", err)
 	}

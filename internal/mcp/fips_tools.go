@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -89,8 +91,13 @@ func (s *Server) listFIPSMeshNodes(ctx context.Context) ([]fipsMeshNode, error) 
 	seen := map[string]struct{}{}
 	nodes := []fipsMeshNode{}
 
-	if s.dnsEndpoints != nil {
-		endpoints, err := s.dnsEndpoints.ListDNSEndpoints(ctx)
+	if s.dnsEndpoints != nil || s.stateStore != nil {
+		var endpoints []domain.DNSEndpoint
+		if s.stateStore != nil {
+			endpoints, err = s.readDNSEndpoints(ctx)
+		} else {
+			endpoints, err = s.dnsEndpoints.ListDNSEndpoints(ctx)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("list DNS endpoints for FIPS mesh MCP tools: %w", err)
 		}
@@ -131,6 +138,22 @@ func (s *Server) listFIPSMeshNodes(ctx context.Context) ([]fipsMeshNode, error) 
 
 func (s *Server) fipsWorkersByPubkey(ctx context.Context) (map[string]domain.Worker, error) {
 	workersByPubkey := map[string]domain.Worker{}
+	if s.stateStore != nil {
+		records, err := s.readStateFamily(ctx, nostrpool.KindWorkerState)
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range records {
+			var worker domain.Worker
+			if err := json.Unmarshal(record.Content, &worker); err != nil {
+				return nil, err
+			}
+			if pubkey := strings.TrimSpace(worker.PubKey); pubkey != "" {
+				workersByPubkey[pubkey] = worker
+			}
+		}
+		return workersByPubkey, nil
+	}
 	if s.workers == nil {
 		return workersByPubkey, nil
 	}

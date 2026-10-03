@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	adapterSBOM "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
@@ -23,12 +24,16 @@ import (
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
+	"github.com/openagentsinc/bahia/pkg/client"
 	"go.uber.org/zap"
 )
 
 // Server provides an MCP-compatible interface for Bahia operations.
 // It exposes deployment registry functionality as MCP tools.
 type Server struct {
+	stateStore           StateEventStore
+	servicePubkey        string
+	confidentialReader   ConfidentialStateReader
 	registry             *service.RegistryService
 	mlRegistry           *service.MLRegistryService
 	llmRegistry          *service.LLMRegistryService
@@ -72,6 +77,9 @@ type Config struct {
 
 // ServerDeps holds optional dependencies for the MCP server.
 type ServerDeps struct {
+	StateStore                   StateEventStore
+	ServicePubkey                string
+	ConfidentialReader           ConfidentialStateReader
 	SecretsRepo                  repository.SecretRepository
 	Encryptor                    *secrets.Encryptor
 	Policies                     *service.PolicyService
@@ -186,6 +194,9 @@ func NewServerWithDeps(registry *service.RegistryService, logger *zap.Logger, se
 // This is the canonical constructor; other constructors delegate to this.
 func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger, deps ServerDeps) *Server {
 	return &Server{
+		stateStore:           deps.StateStore,
+		servicePubkey:        deps.ServicePubkey,
+		confidentialReader:   deps.ConfidentialReader,
 		registry:             registry,
 		mlRegistry:           deps.MLRegistry,
 		llmRegistry:          deps.LLMRegistry,
@@ -1896,11 +1907,21 @@ func (s *Server) authorizeServicePermission(ctx context.Context, serviceID uuid.
 	if principal == nil || !principal.IsAuthenticated() {
 		return errorResult("authentication required")
 	}
-	if s.registry == nil || s.rbac == nil {
+	if (s.registry == nil && s.stateStore == nil) || s.rbac == nil {
 		return errorResult(fmt.Sprintf("%s authorization is not configured", resource))
 	}
 
-	svc, err := s.registry.GetService(ctx, serviceID)
+	var svc *domain.Service
+	var err error
+	if s.stateStore != nil {
+		var record *stateRecord
+		record, err = s.readStateOne(ctx, nostrAdapter.KindServiceRegistry, "id", serviceID.String())
+		if err == nil && record != nil {
+			svc, err = client.DecodeService(record.Event)
+		}
+	} else {
+		svc, err = s.registry.GetService(ctx, serviceID)
+	}
 	if err != nil || svc == nil || svc.OrgID == uuid.Nil {
 		if resource == "secret" {
 			return errorResult("secret owner not found")
@@ -1954,6 +1975,11 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	s.logger.Info("tool call", zap.String("tool", name))
 	if denied := s.authorizeToolCall(ctx, name); denied != nil {
 		return denied, nil
+	}
+	if s.stateStore != nil {
+		if result, handled := s.callStoreReadTool(ctx, name, arguments); handled {
+			return result, nil
+		}
 	}
 
 	if isBackupToolName(name) {
@@ -3607,14 +3633,33 @@ func (s *Server) handleGetRunLogs(ctx context.Context, args map[string]interface
 	if err != nil {
 		return errorResult(fmt.Sprintf("invalid run_id: %v", err)), nil
 	}
-	if s.registry == nil {
+	if s.registry == nil && s.stateStore == nil {
 		return errorResult("deployment registry is not configured"), nil
 	}
 	if s.logService == nil {
 		return errorResult("run log tools are not configured"), nil
 	}
 
-	run, err := s.registry.GetDeploymentRun(ctx, runID)
+	var run *domain.DeploymentRun
+	if s.stateStore != nil {
+		var record *stateRecord
+		record, err = s.readStateOne(ctx, nostrAdapter.KindDeploymentRunRegistry, "id", runID.String())
+		if err == nil && record != nil {
+			run = &domain.DeploymentRun{ID: runID, Status: domain.DeploymentRunStatus(fmt.Sprint(record.Fields["status"])), StdoutRef: stringFromRecord(record.Fields, "stdout_ref"), StderrRef: stringFromRecord(record.Fields, "stderr_ref")}
+			if exit, ok := record.Fields["exit_code"].(float64); ok {
+				code := int(exit)
+				run.ExitCode = &code
+			}
+			if started, ok := recordTime(record.Fields, "started_at"); ok {
+				run.StartedAt = &started
+			}
+			if finished, ok := recordTime(record.Fields, "finished_at"); ok {
+				run.FinishedAt = &finished
+			}
+		}
+	} else {
+		run, err = s.registry.GetDeploymentRun(ctx, runID)
+	}
 	if err != nil {
 		if err == repository.ErrNotFound {
 			return errorResult("run not found"), nil

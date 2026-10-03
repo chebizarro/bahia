@@ -26,6 +26,17 @@ credentials into arguments; only authorized SecretRefs are valid bootstrap input
 
 Bahia exposes Model Context Protocol (MCP) over `/mcp` and `/api/v1/mcp`. Use JSON-RPC discovery at runtime: `tools/list` is the authority for the exact tools enabled by the running server.
 
+For canonical-state families, the in-daemon MCP server reads its local Nostr
+event store rather than querying the PostgreSQL projection. These reads are
+scoped to the daemon's own signed `30900` records and ignore tombstones. The
+daemon decrypts confidential secret metadata and notification channels with
+its service-wrapped organization key; channel responses still redact sensitive
+configuration fields. Service/environment, build/artifact, deployment state,
+worker state, policy, DNS endpoint, ML state, package, backup, secret metadata,
+and notification-channel tools use this path when the local store is configured.
+The relay subscriptions that populate the daemon store determine freshness;
+MCP does not issue a one-shot relay request for each tool call.
+
 ## Connect and discover
 
 ```json
