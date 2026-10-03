@@ -47,6 +47,7 @@ type Server struct {
 	swept       sweepCounters
 	policy      *adminPolicy
 	admission   *policy // event admission policy (wraps adminPolicy + intent authors)
+	readAuth    *readAuthPolicy
 	httpServer  *http.Server
 	logger      *zap.Logger
 	consumer    *ConfigConsumer
@@ -91,6 +92,8 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		return nil, err
 	}
 	pol.admin = admin
+	readAuth := newReadAuthPolicy(nostrCfg.Sidecar, pol, logger)
+
 	store, err := openEventStore(context.Background(), nostrCfg.Sidecar.DataDir, logger)
 	if err != nil {
 		return nil, err
@@ -120,6 +123,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	relay.OverwriteRelayInformation = func(_ context.Context, _ *http.Request, info nip11.RelayInformationDocument) nip11.RelayInformationDocument {
 		limitation := *info.Limitation
 		limitation.RestrictedWrites = admin.restrictsWrites()
+		limitation.AuthRequired = readAuth.mode == config.ReadAuthModeEnforce
 		info.Limitation = &limitation
 		return info
 	}
@@ -147,13 +151,21 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		if reject, msg := pol.acceptFilter(ctx, filter); reject {
 			return reject, msg
 		}
+		if reject, msg := readAuth.checkReadAuth(ctx, filter); reject {
+			return reject, msg
+		}
 		if khatru.IsNegentropySession(ctx) {
 			return negentropyTooLarge(ctx, store, filter, nostrCfg.Sidecar.NegentropyMaxEvents)
 		}
 		fanout.beginRequest(ctx, filter)
 		return false, ""
 	}
-	relay.OnCount = pol.acceptFilter
+	relay.OnCount = func(ctx context.Context, filter nostr.Filter) (bool, string) {
+		if reject, msg := pol.acceptFilter(ctx, filter); reject {
+			return reject, msg
+		}
+		return readAuth.checkReadAuth(ctx, filter)
+	}
 	relay.StoreEvent = store.Save
 	relay.ReplaceEvent = store.Replace
 	// DeleteEvent stays nil: the store applies kind-5 requests itself when it
@@ -233,6 +245,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		retention:   retention,
 		policy:      admin,
 		admission:   pol,
+		readAuth:    readAuth,
 		logger:      logger,
 		consumer:    consumer,
 		fanout:      fanout,
