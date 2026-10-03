@@ -1539,6 +1539,18 @@ func New(cfg *config.Config) (*App, error) {
 		mlRegistry.SetMLCPStatePublisher(mlCanonicalPub)
 		logger.Info("ML canonical cp-state publisher wired into registry service")
 	}
+
+	// Phase 3 §1.7: Legacy OCK migration — re-publish legacy-format
+	// confidential records under the per-org content key scheme at startup.
+	// The migrator runs as a post-warm-start hook on the projector so that
+	// history is up to date from all relays before scanning.
+	if nostrProjector != nil && confidentialEncryptor != nil {
+		ockMigrator := nostrAdapter.NewLegacyOCKMigrator(
+			nostrProjector, confidentialEncryptor, legacyO1Encryptor, logger,
+		)
+		nostrProjector.AddPostWarmStartHook(ockMigrator.Run)
+		logger.Info("legacy OCK migrator registered as post-warm-start hook")
+	}
 	if nostrProjector.Enabled() {
 		bgManager.RegisterWithOptions(nostrProjector)
 		logger.Info("nostr read-model projector registered")

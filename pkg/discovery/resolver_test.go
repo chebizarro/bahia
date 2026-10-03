@@ -518,3 +518,62 @@ func (p *fakeRelayPool) FetchAllRelayInfo(context.Context) map[string]*nip11.Rel
 func (p *fakeRelayPool) Close() {
 	p.calls = append(p.calls, "close")
 }
+
+// TestResolverEventStreamCloseDoesNotMarkReady proves that when the event
+// stream closes (relay disconnect / timeout) without an EndOfStoredEvents
+// signal, the resolver does NOT mark itself as ready. This verifies the
+// fix from .30: only a real EOSE counts as completion, not channel close
+// or context timeout. (.40 item 4, .63 verification)
+func TestResolverEventStreamCloseDoesNotMarkReady(t *testing.T) {
+	secretKey, pubkey := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+
+	events := make(chan *nostr.Event, 1)
+	events <- liveEndpointEvent(t, secretKey, apiEndpoint("10.0.0.20"), resolverTestBase()+5)
+	close(events) // simulate relay disconnect — no EOSE
+
+	err := resolver.consume(context.Background(), &nostradapter.MergedSubscription{
+		Events:            events,
+		EndOfStoredEvents: make(chan struct{}), // never closed
+	})
+
+	require.ErrorContains(t, err, "subscription event stream closed")
+
+	// The resolver must NOT be ready: EOSE never fired.
+	select {
+	case <-resolver.Ready():
+		t.Fatal("resolver reported ready on event stream close without EOSE — " +
+			"only EndOfStoredEvents must trigger readiness")
+	default:
+		// correct: not ready
+	}
+
+	// The resume cursor must not have advanced (a partial backfill is redone
+	// in full on the next subscription cycle).
+	require.Zero(t, resolver.subscriptionFilter().Since,
+		"cursor advanced without EOSE — partial backfill must be redoable")
+}
+
+// TestResolverContextCancelDoesNotMarkReady proves that cancelling the
+// context during a backfill (before EOSE) does not mark the resolver ready.
+func TestResolverContextCancelDoesNotMarkReady(t *testing.T) {
+	_, pubkey := generatedResolverKeyPair(t)
+	resolver := New([]string{"wss://relay.example.test"}, pubkey)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // immediate cancel — no events, no EOSE
+
+	err := resolver.consume(ctx, &nostradapter.MergedSubscription{
+		Events:            make(chan *nostr.Event),
+		EndOfStoredEvents: make(chan struct{}),
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+
+	select {
+	case <-resolver.Ready():
+		t.Fatal("resolver reported ready after context cancellation without EOSE")
+	default:
+		// correct: not ready
+	}
+}
