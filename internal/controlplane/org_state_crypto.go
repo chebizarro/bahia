@@ -160,6 +160,17 @@ func decryptOrgState(key OrgStateKey, content string) ([]byte, error) {
 // decryption during migration. It satisfies the LegacyOrgStateDecryptor
 // interface (DecryptOrgState only). The EncryptOrgState method is retained
 // for migration tests but is not part of any production interface.
+//
+// DEPRECATED(bahia-irsry.64): This type and the DecryptOrgState method are
+// retained for one release so that the LegacyOCKMigrator can re-publish
+// O1-era records under the OCK scheme at startup. Once all deployments
+// have run the warm-start migration, remove OrgStateEncryptorImpl,
+// OrgStateKeyProvider, StaticOrgStateKeyProvider, OrgStateCryptoSchema,
+// the encryptOrgState/decryptOrgState functions, and the
+// LegacyOrgStateDecryptor interface in confidential_state.go. Condition
+// for deletion: no legacy-format (O1 sha256-derived AEAD) records remain
+// in any deployment's local event store or relay history.
+// Follow-up issue: bahia-irsry.65 (file after soak).
 type OrgStateEncryptorImpl struct {
 	keyProvider OrgStateKeyProvider
 }

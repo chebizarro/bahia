@@ -172,6 +172,9 @@ type Projector struct {
 	// untouched.
 	projInitOnce sync.Once
 	proj         *projectionState
+
+	// Post-warm-start hooks run after warmStartMigratedDomains completes in Run.
+	postWarmStartHooks []func(context.Context)
 }
 
 // ProjectorOption configures a projector.
@@ -248,6 +251,15 @@ func (p *Projector) Enabled() bool { return p != nil && p.enabled }
 // Name implements app.BackgroundRunner.
 func (p *Projector) Name() string { return "nostr-projector" }
 
+// AddPostWarmStartHook registers a function to run after warm-start completes
+// in Projector.Run. Used by the LegacyOCKMigrator to re-publish legacy-format
+// confidential records after EOSE ensures history is up to date.
+func (p *Projector) AddPostWarmStartHook(fn func(context.Context)) {
+	if fn != nil {
+		p.postWarmStartHooks = append(p.postWarmStartHooks, fn)
+	}
+}
+
 // SetupSubscriptions registers projection handlers on the in-process event bus.
 func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 	if !p.Enabled() {
@@ -311,6 +323,14 @@ func (p *Projector) Run(ctx context.Context) error {
 	p.warmStartMigratedDomains(ctx)
 	if ctx.Err() != nil {
 		return nil
+	}
+	// Run post-warm-start hooks (e.g. legacy OCK migration) now that
+	// history is up to date from all relays.
+	for _, hook := range p.postWarmStartHooks {
+		if ctx.Err() != nil {
+			return nil
+		}
+		hook(ctx)
 	}
 	// Publish system config records (DM relay lists, system discovery) if the
 	// relay copy is missing or stale. The dedupe pipeline skips unchanged
@@ -476,6 +496,11 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindNotificationChannelRegistry: {"notification", "channel", kinds.CPStateTopicNotificationChannelRegistry},
 	// Org key-envelope family (Phase 3 C1: per-org content key distribution).
 	KindOrgKeyEnvelope: {"org", "key-envelope", kinds.CPStateTopicOrgKeyEnvelope},
+	// Payment and security cp-state families (bahia-irsry.60).
+	KindPaymentRecord:               {"payment", "record", kinds.CPStateTopicPaymentRecord},
+	KindSecurityFindingRecord:       {"security", "finding", kinds.CPStateTopicSecurityFinding},
+	KindSecurityScheduleRecord:      {"security", "schedule", kinds.CPStateTopicSecuritySchedule},
+	KindSecurityFindingDetailRecord: {"security", "finding-detail", kinds.CPStateTopicSecurityFindingDetail},
 }
 
 // CPStateDomains returns all unique cp-state domain names from the

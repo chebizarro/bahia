@@ -451,3 +451,12 @@ func limitNostrEventRecords(records []repository.NostrEventRecord, limit int) []
 	}
 	return records[:limit]
 }
+
+// Replace overwrites the stored record for the given ID. It is provided for
+// tests that need to simulate post-insert state changes (e.g. clearing
+// PublishState to emulate the non-Postgres LocalEventRepository code path).
+func (r *InMemoryNostrEventRepository) Replace(id string, rec repository.NostrEventRecord) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records[id] = rec
+}

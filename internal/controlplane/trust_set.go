@@ -236,6 +236,23 @@ func (ts *TrustSet) FleetOps() []string {
 	return append([]string(nil), ts.fleetOps...)
 }
 
+// BootstrapOwnerPubkeys returns the deduplicated set of bootstrap owner
+// pubkeys from config. Used by the fleet OCK scope to include all
+// configured operators in the key wrapping set.
+func (ts *TrustSet) BootstrapOwnerPubkeys() []string {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	pubkeys := make([]string, 0, len(ts.bootstrapOwners))
+	seen := make(map[string]bool)
+	for _, pk := range ts.bootstrapOwners {
+		if pk != "" && !seen[pk] {
+			seen[pk] = true
+			pubkeys = append(pubkeys, pk)
+		}
+	}
+	return pubkeys
+}
+
 // RelayMembersFor returns a copy of the relay-sourced membership map for an org,
 // or nil if no relay members exist. Used by RelayMemberEventHandler for
 // single-event merging when no Postgres is configured.

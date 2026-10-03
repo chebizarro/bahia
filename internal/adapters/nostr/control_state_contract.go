@@ -805,3 +805,28 @@ func (r *RelayFirstStatePublisher) PublishStateTombstone(ctx context.Context, se
 	tags, content := RuntimeStateTombstoneRecord(serviceID, envID)
 	return r.publish(ctx, KindServiceState, serviceID, true, tags, content, "state.projection")
 }
+
+// CPStateFamilyInfo describes one projected cp-state family for external
+// consumers that need to build filters without duplicating the topic table.
+type CPStateFamilyInfo struct {
+	LegacyKind int
+	Domain     string
+	Entity     string
+	Topic      string
+}
+
+// CPStateFamilyTopics returns every family in the projector's cp-state table
+// as a flat list, keyed by legacy kind. pkg/client uses this to build REQ
+// filters by domain without duplicating the topic table (Phase 5 N1).
+func CPStateFamilyTopics() []CPStateFamilyInfo {
+	out := make([]CPStateFamilyInfo, 0, len(cpStateFamilies))
+	for legacyKind, f := range cpStateFamilies {
+		out = append(out, CPStateFamilyInfo{
+			LegacyKind: legacyKind,
+			Domain:     f.domain,
+			Entity:     f.entity,
+			Topic:      f.topic,
+		})
+	}
+	return out
+}

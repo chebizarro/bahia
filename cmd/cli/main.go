@@ -141,10 +141,14 @@ func authCommands() *cobra.Command {
 func servicesCommands() *cobra.Command {
 	cmd := &cobra.Command{Use: "services", Short: "Manage services", Aliases: []string{"svc"}}
 
+	var useNostr bool
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all services",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if useNostr {
+				return runServicesListNostr(cmd)
+			}
 			services, err := apiClient.ListServices(cmd.Context())
 			if err != nil {
 				return err
@@ -154,6 +158,7 @@ func servicesCommands() *cobra.Command {
 			})
 		},
 	}
+	listCmd.Flags().BoolVar(&useNostr, "nostr", false, "Read service state from Nostr relays instead of the HTTP API")
 
 	getCmd := &cobra.Command{
 		Use:   "get [id]",

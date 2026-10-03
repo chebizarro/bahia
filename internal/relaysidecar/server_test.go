@@ -26,6 +26,9 @@ func sidecarTestConfig(t *testing.T) config.NostrConfig {
 	t.Helper()
 	cfg := config.Defaults().Nostr
 	cfg.Sidecar.DataDir = t.TempDir()
+	// Existing tests don't authenticate; default to off so they pass.
+	// Tests that exercise read auth set their own mode.
+	cfg.Sidecar.ReadAuthMode = config.ReadAuthModeOff
 	return cfg
 }
 

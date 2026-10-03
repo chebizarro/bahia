@@ -81,7 +81,7 @@ func TestBridgeSubscriptionFilterScopesToAuthorAndDNSEndpointTopic(t *testing.T)
 		EnvironmentFilter: []string{"prod"},
 	}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
-	filter := bridge.subscriptionFilter()
+	filter := bridge.endpointFilter()
 	require.Equal(t, []nostr.Kind{nostr.Kind(kinds.CASControlState)}, filter.Kinds, "must read canonical 30900, not legacy 31976")
 	require.Len(t, filter.Authors, 1)
 	require.Equal(t, pubkey, filter.Authors[0].Hex())
@@ -112,6 +112,97 @@ func TestBridgeRejectsNonEndpointControlState(t *testing.T) {
 
 	require.Empty(t, bridge.entries)
 	require.Empty(t, bridge.latest)
+}
+
+func TestBridgeNIP09DeletionRemovesEndpoint(t *testing.T) {
+	pubkey, _ := testIdentity(t)
+	bridge, _ := newTestBridge(t, pubkey, func(cfg *Config) { cfg.HealthFilter = false })
+	now := nostr.Now()
+
+	record := endpointRecord{D: "endpoint:service:drydock:prod", Service: "drydock", Route: "review", Environment: "prod", FQDN: "drydock-review.prod.cascadia", Health: "healthy", Worker: workerA}
+	require.NoError(t, bridge.HandleEvent(context.Background(), liveEndpoint(t, pubkey, record, now)))
+	require.Equal(t, npubOf(t, workerA), bridge.entries["drydock-review"])
+
+	// Kind-5 deletion targeting the coordinate.
+	coordinate := strconv.Itoa(kinds.CASControlState) + ":" + pubkey + ":" + record.D
+	deletion := makeKind5DeletionEvent(t, pubkey, coordinate, now+10)
+	require.NoError(t, bridge.HandleEvent(context.Background(), deletion))
+	require.NotContains(t, bridge.entries, "drydock-review", "deletion should remove the endpoint")
+
+	// Stale live record from another relay must not resurrect.
+	stale := liveEndpoint(t, pubkey, record, now+5)
+	require.NoError(t, bridge.HandleEvent(context.Background(), stale))
+	require.NotContains(t, bridge.entries, "drydock-review", "stale event must not resurrect deleted endpoint")
+}
+
+func TestBridgeNIP09DeletionIgnoredForWrongKind(t *testing.T) {
+	pubkey, _ := testIdentity(t)
+	bridge, _ := newTestBridge(t, pubkey, func(cfg *Config) { cfg.HealthFilter = false })
+	now := nostr.Now()
+
+	record := endpointRecord{D: "endpoint:service:drydock:prod", Service: "drydock", FQDN: "drydock.prod.cascadia", Health: "healthy", Worker: workerA}
+	require.NoError(t, bridge.HandleEvent(context.Background(), liveEndpoint(t, pubkey, record, now)))
+	require.Equal(t, npubOf(t, workerA), bridge.entries["drydock"])
+
+	// Kind-5 with wrong k tag should be rejected.
+	ev := &nostr.Event{
+		CreatedAt: now + 10,
+		Kind:      nostr.KindDeletion,
+		Tags: nostr.Tags{
+			{"k", "31976"},
+			{"a", "31976:" + pubkey + ":" + record.D},
+		},
+	}
+	pubkeyValue, _ := nostrutil.PubKeyFromHex(pubkey)
+	ev.PubKey = pubkeyValue
+	require.NoError(t, nostrutil.SignEventWithHexKey(ev, testPrivateKey))
+	require.ErrorContains(t, bridge.HandleEvent(context.Background(), ev), "does not target kind")
+	require.Equal(t, npubOf(t, workerA), bridge.entries["drydock"], "endpoint should still exist")
+}
+
+func TestBridgeNIP09DeletionIgnoredFromUntrustedAuthor(t *testing.T) {
+	pubkey, _ := testIdentity(t)
+	bridge, _ := newTestBridge(t, pubkey, func(cfg *Config) { cfg.HealthFilter = false })
+	now := nostr.Now()
+
+	record := endpointRecord{D: "endpoint:service:drydock:prod", Service: "drydock", FQDN: "drydock.prod.cascadia", Health: "healthy", Worker: workerA}
+	require.NoError(t, bridge.HandleEvent(context.Background(), liveEndpoint(t, pubkey, record, now)))
+	require.Equal(t, npubOf(t, workerA), bridge.entries["drydock"])
+
+	// A kind-5 from a different author must be rejected — NIP-09 only
+	// honours deletions from the event's own author.
+	forgerKey := nostr.Generate()
+	forgerPub := forgerKey.Public().Hex()
+	coordinate := strconv.Itoa(kinds.CASControlState) + ":" + pubkey + ":" + record.D
+	forgerPubValue, _ := nostrutil.PubKeyFromHex(forgerPub)
+	forgedDeletion := &nostr.Event{
+		PubKey:    forgerPubValue,
+		CreatedAt: now + 10,
+		Kind:      nostr.KindDeletion,
+		Tags: nostr.Tags{
+			{"k", strconv.Itoa(kinds.CASControlState)},
+			{"a", coordinate},
+		},
+	}
+	require.NoError(t, nostrutil.SignEventWithHexKey(forgedDeletion, forgerKey.Hex()))
+	err := bridge.HandleEvent(context.Background(), forgedDeletion)
+	require.Error(t, err, "kind-5 from untrusted author must be rejected")
+	require.Contains(t, err.Error(), "unexpected author")
+
+	require.Equal(t, npubOf(t, workerA), bridge.entries["drydock"], "endpoint must survive a forged deletion")
+}
+
+func TestBridgeSubscriptionFiltersIncludeKind5(t *testing.T) {
+	pubkey, _ := testIdentity(t)
+	bridge := newBridgeWithPool(Config{
+		BahiaPubkey: pubkey,
+		RelayURLs:   []string{"wss://relay.example.test"},
+	}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+	filters := bridge.subscriptionFilters()
+	require.Len(t, filters, 2, "should have endpoint + deletion filters")
+	require.Equal(t, []nostr.Kind{nostr.KindDeletion}, filters[1].Kinds)
+	require.Equal(t, nostr.TagMap{"k": []string{strconv.Itoa(kinds.CASControlState)}}, filters[1].Tags)
 }
 
 func TestBridgeFiltersByCapabilityAndEnvironment(t *testing.T) {
@@ -312,6 +403,23 @@ func npubOf(t *testing.T, hex string) string {
 	npub, err := nostrutil.EncodeNpubFromHex(hex)
 	require.NoError(t, err)
 	return npub
+}
+
+func makeKind5DeletionEvent(t *testing.T, pubkey, coordinate string, createdAt nostr.Timestamp) *nostr.Event {
+	t.Helper()
+	pubkeyValue, err := nostrutil.PubKeyFromHex(pubkey)
+	require.NoError(t, err)
+	ev := &nostr.Event{
+		PubKey:    pubkeyValue,
+		CreatedAt: createdAt,
+		Kind:      nostr.KindDeletion,
+		Tags: nostr.Tags{
+			{"k", strconv.Itoa(kinds.CASControlState)},
+			{"a", coordinate},
+		},
+	}
+	require.NoError(t, nostrutil.SignEventWithHexKey(ev, testPrivateKey))
+	return ev
 }
 
 func testIdentity(t *testing.T) (string, string) {

@@ -27,6 +27,7 @@ const (
 )
 
 const (
+	configStatusSchemaV3     = "cascadia.config.status.v3"
 	configStatusSchema       = "cascadia.config.status.v2"
 	legacyConfigStatusSchema = "cascadia.config.status.v1"
 	configEntityType         = "config-fabric.desired"
@@ -144,16 +145,41 @@ type ConfigDrift struct {
 	StatusHistory   []ConfigFabricStatus  `json:"status_history"`
 }
 
+// ConfigFabricDeliveryQuery reports the publish-outbox state of a desired
+// config-fabric event. Without Postgres the NostrEventRecord carries no
+// PublishState; this query lets ListDrift determine whether a version was
+// abandoned by asking the local outbox directly (bahia-irsry.61).
+type ConfigFabricDeliveryQuery interface {
+	DeliveryOutcome(ctx context.Context, id string) (nostrutil.DeliveryOutcome, error)
+}
+
 type ConfigFabricService struct {
 	repo      repository.NostrEventRepository
 	publisher ConfigFabricPublisher
 	signer    ConfigFabricSigner
+	delivery  ConfigFabricDeliveryQuery
 	now       func() time.Time
 	mu        sync.Mutex
 }
 
-func NewConfigFabricService(repo repository.NostrEventRepository, publisher ConfigFabricPublisher, signer ConfigFabricSigner) *ConfigFabricService {
-	return &ConfigFabricService{repo: repo, publisher: publisher, signer: signer, now: func() time.Time { return time.Now().UTC() }}
+// ConfigFabricServiceOption configures a ConfigFabricService.
+type ConfigFabricServiceOption func(*ConfigFabricService)
+
+// WithDeliveryQuery sets the delivery-state query used by ListDrift to
+// determine whether a desired version was abandoned when the event record
+// carries no PublishState (non-Postgres mode, bahia-irsry.61).
+func WithDeliveryQuery(q ConfigFabricDeliveryQuery) ConfigFabricServiceOption {
+	return func(s *ConfigFabricService) { s.delivery = q }
+}
+
+func NewConfigFabricService(repo repository.NostrEventRepository, publisher ConfigFabricPublisher, signer ConfigFabricSigner, opts ...ConfigFabricServiceOption) *ConfigFabricService {
+	s := &ConfigFabricService{repo: repo, publisher: publisher, signer: signer, now: func() time.Time { return time.Now().UTC() }}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 func (s *ConfigFabricService) Publish(ctx context.Context, request ConfigPublishRequest) (*ConfigPublishReceipt, error) {
@@ -460,6 +486,26 @@ func (s *ConfigFabricService) maxVersion(ctx context.Context, pubkey string, req
 	return maxVersion, nil
 }
 
+// isDesiredAbandoned reports whether a desired-state event's publish was
+// abandoned. With PostgreSQL the record carries the publish state directly;
+// without it, the delivery query (local outbox) is asked (bahia-irsry.61).
+func (s *ConfigFabricService) isDesiredAbandoned(ctx context.Context, record repository.NostrEventRecord) bool {
+	if record.PublishState == repository.NostrPublishStateFailed {
+		return true
+	}
+	// The local event store does not track publish state, so records read
+	// back from it have an empty PublishState. Fall through to the delivery
+	// query when one is configured.
+	if record.PublishState != "" || s.delivery == nil {
+		return false
+	}
+	outcome, err := s.delivery.DeliveryOutcome(ctx, record.ID)
+	if err != nil {
+		return false
+	}
+	return outcome == nostrutil.DeliveryAbandoned
+}
+
 func (s *ConfigFabricService) persistDesired(ctx context.Context, event nostr.Event) error {
 	tags, err := json.Marshal(event.Tags)
 	if err != nil {
@@ -526,7 +572,7 @@ func (s *ConfigFabricService) ListDrift(ctx context.Context) ([]ConfigDrift, err
 	for _, record := range records {
 		switch record.Kind {
 		case ConfigFabricListKind, ConfigFabricPolicyKind:
-			if record.PublishState == repository.NostrPublishStateFailed {
+			if s.isDesiredAbandoned(ctx, record) {
 				// The outbox abandoned this version (at publish time or
 				// later in its runner): no relay holds it, so it is not
 				// desired state. Versions stay monotonic past it.
@@ -690,7 +736,7 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 		return status, err
 	}
 	schema, err := exactlyOneTag(tags, "schema")
-	if err != nil || (schema != configStatusSchema && schema != legacyConfigStatusSchema) {
+	if err != nil || (schema != configStatusSchemaV3 && schema != configStatusSchema && schema != legacyConfigStatusSchema) {
 		return status, fmt.Errorf("invalid status schema tag")
 	}
 	if domain, err := exactlyOneTag(tags, "domain"); err != nil || domain != "config-status" {
@@ -720,9 +766,16 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 	}
 	status.PolicyName = schemaMatch[1]
 	dTag, err := exactlyOneTag(tags, "d")
-	expectedDTag := "config-status:" + status.ServiceID + ":" + status.PolicyName + ":" + status.Scope
-	if schema == configStatusSchema {
-		expectedDTag += ":" + status.ConfigEventID + ":" + status.Status
+	stableDTag := "config-status:" + status.ServiceID + ":" + status.PolicyName + ":" + status.Scope
+	// v3 uses a stable d per (service, policy, scope); v2 embeds eventID+status.
+	var expectedDTag string
+	switch schema {
+	case configStatusSchemaV3:
+		expectedDTag = stableDTag
+	case configStatusSchema:
+		expectedDTag = stableDTag + ":" + status.ConfigEventID + ":" + status.Status
+	default:
+		expectedDTag = stableDTag
 	}
 	if err != nil || dTag != expectedDTag {
 		return status, fmt.Errorf("invalid config status d tag")
@@ -731,12 +784,12 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 		if status.EffectiveVersion < 1 || !isHex(status.LastAppliedEventID, 32) {
 			return status, fmt.Errorf("invalid applied status content")
 		}
-		if schema == configStatusSchema && (status.EffectiveVersion != status.Version || status.LastAppliedEventID != status.ConfigEventID) {
+		if (schema == configStatusSchema || schema == configStatusSchemaV3) && (status.EffectiveVersion != status.Version || status.LastAppliedEventID != status.ConfigEventID) {
 			return status, fmt.Errorf("applied status target mismatch")
 		}
 	} else if status.Status == "rejected" || status.Status == "withdrawn" {
-		if status.Status == "withdrawn" && schema != configStatusSchema {
-			return status, fmt.Errorf("withdrawn status requires %s", configStatusSchema)
+		if status.Status == "withdrawn" && schema == legacyConfigStatusSchema {
+			return status, fmt.Errorf("withdrawn status requires %s or later", configStatusSchema)
 		}
 		if strings.TrimSpace(status.Reason) == "" || looksLikeSecretValue(status.Reason) {
 			return status, fmt.Errorf("invalid %s status reason", status.Status)
