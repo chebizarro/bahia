@@ -184,15 +184,13 @@ export const loading = $state({
   builds: false,
   deploymentIntents: false,
   deploymentRuns: false,
-  policies: false,
-  workers: false
+  policies: false
 });
 
 export function setAllLoading(value) {
   loading.services = value;
   loading.environments = value;
   loading.states = value;
-  loading.workers = value;
 }
 
 export function clearLoadingForPopulatedCollections() {

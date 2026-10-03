@@ -215,7 +215,6 @@ describe('controlplane store', () => {
         tags: canonicalTags('service', BAHIA_STATE_SCHEMAS.SERVICE_STATE, [['d', 'svc-1:env-1'], ['service', 'svc-1'], ['environment', 'env-1'], ['deleted', 'false']]),
         content: { service_id: 'svc-1', environment_id: 'env-1', drift_status: 'in_sync', deleted: false }
       }),
-      event({ id: 'worker-1-event', kind: KINDS.LOOM_WORKER_AD, pubkey: 'c'.repeat(64), content: { name: 'Worker 1', description: 'test worker' } })
     ];
 
     const { bootstrap: resultPromise } = await startBootstrapAndWaitForSubscription();
@@ -231,7 +230,6 @@ describe('controlplane store', () => {
     expect(nostrMock.subscribeWithRecovery).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ kinds: expect.arrayContaining([CAS_STATE_KIND]), authors: ['b'.repeat(64)], limit: 1000 }),
-        expect.objectContaining({ kinds: [10100], limit: 1000 }),
         expect.objectContaining({ kinds: expect.arrayContaining([30315, 4903, 30078]), authors: ['b'.repeat(64)], limit: 100 })
       ]),
       expect.objectContaining({ onEvent: expect.any(Function), onEose: expect.any(Function), onHealth: expect.any(Function), onClosed: expect.any(Function) })
@@ -245,7 +243,6 @@ describe('controlplane store', () => {
     expect(store.services).toHaveLength(0);
     expect(store.environments).toHaveLength(0);
     expect(store.states).toHaveLength(0);
-    expect(store.workers).toHaveLength(1);
 
     subscriptionHandlers[0].onHealth({
       lastEoseAt: '2026-07-30T12:00:00.000Z',
@@ -300,10 +297,8 @@ describe('controlplane store', () => {
     expect(nostrMock.subscribeWithRecovery).not.toHaveBeenCalled();
   });
 
-  it('applies LLM route, route-state, worker state, and eligibility read models from schema-routed relay events', async () => {
+  it('applies remaining LLM route and route-state read models from schema-routed relay events', async () => {
     await bootstrapWithEose();
-    const workerPubkey = 'c'.repeat(64);
-
     expect(store.applyControlplaneEvent(event({
       id: 'llm-route-1-event',
       kind: CAS_STATE_KIND,
@@ -318,61 +313,15 @@ describe('controlplane store', () => {
       tags: canonicalTags('llm', BAHIA_STATE_SCHEMAS.LLM_ROUTE_STATE, [['d', 'route-1:env-1'], ['route', 'route-1'], ['environment', 'env-1'], ['deleted', 'false']]),
       content: { route_id: 'route-1', environment_id: 'env-1', gateway_status: 'synced', deleted: false }
     }))).toBe(true);
-    expect(store.applyControlplaneEvent(event({
-      id: 'worker-state-1-event',
-      kind: CAS_STATE_KIND,
-      pubkey: 'b'.repeat(64),
-      tags: canonicalTags('worker', BAHIA_STATE_SCHEMAS.WORKER_STATE, [['d', workerPubkey], ['worker', workerPubkey], ['deleted', 'false']]),
-      content: { worker_pubkey: workerPubkey, name: 'Worker 1', scheduling_state: 'cordoned', labels: { role: 'inference' }, deleted: false }
-    }))).toBe(true);
-    expect(store.applyControlplaneEvent(event({
-      id: 'worker-preview-1-event',
-      kind: CAS_STATE_KIND,
-      pubkey: 'b'.repeat(64),
-      tags: canonicalTags('worker', BAHIA_STATE_SCHEMAS.WORKER_ELIGIBILITY_PREVIEW, [['d', 'preview-1'], ['deleted', 'false']]),
-      content: { preview_id: 'preview-1', workload_type: 'ml_inference', eligible_workers: [{ worker_pubkey: workerPubkey }], rejected_workers: [] }
-    }))).toBe(true);
 
     expect(store.llmRoutes[0]).toMatchObject({ id: 'route-1', route_id: 'route-1', name: 'chat' });
     expect(store.llmRouteStates[0]).toMatchObject({ id: 'route-1:env-1', route_id: 'route-1', environment_id: 'env-1', gateway_status: 'synced' });
-    expect(store.workers[0]).toMatchObject({ pubkey: workerPubkey, scheduling_state: 'cordoned', labels: { role: 'inference' } });
-    expect(store.workerEligibilityPreviews[0]).toMatchObject({ preview_id: 'preview-1', workload_type: 'ml_inference' });
   });
 
-  it('keeps producer-shaped worker assignment and drain for one worker on their own coordinates', async () => {
-    const service = 'b'.repeat(64);
-    const workerPubkey = 'e'.repeat(64);
-    // Envelope as the projector stamps it (controlStateEnvelope, bahia-irsry.36).
-    const workerRecord = ({ id, catalogKind, topic, dPrefix, d = `${dPrefix}${workerPubkey}`, createdAt, content }) => event({
-      id,
-      kind: CAS_STATE_KIND,
-      pubkey: service,
-      created_at: createdAt,
-      tags: [['d', d], ['domain', 'worker'], ['schema', BAHIA_CP_STATE_SCHEMA], ['legacy_kind', String(catalogKind)], ['deleted', 'false'], ['t', topic], ['worker', workerPubkey]],
-      content: { ...content, deleted: false }
-    });
-    const assignment = workerRecord({ id: 'assignment-1', catalogKind: WORKER_ASSIGNMENT_STATE_CATALOG_KIND, topic: WORKER_ASSIGNMENT_STATE_TOPIC, dPrefix: WORKER_ASSIGNMENT_STATE_D_PREFIX, createdAt: 100,
-      content: { worker_pubkey: workerPubkey, active_assignments: [{ workload_id: 'svc-1' }] } });
-    const drain = workerRecord({ id: 'drain-1', catalogKind: WORKER_DRAIN_STATUS_CATALOG_KIND, topic: WORKER_DRAIN_STATUS_TOPIC, dPrefix: WORKER_DRAIN_STATUS_D_PREFIX, createdAt: 200,
-      content: { worker_pubkey: workerPubkey, scheduling_state: 'draining', remaining_assignments: [] } });
-
-    const stateFilter = store.readModelFilters().find((filter) => filter.kinds.includes(CAS_STATE_KIND) && filter['#t']);
-    expect(matchFilter(stateFilter, assignment)).toBe(true);
-    expect(matchFilter(stateFilter, drain)).toBe(true);
-
-    // The newer drain does not displace the older assignment: distinct d.
-    expect(store.applyControlplaneEvent(drain)).toBe(true);
-    expect(store.applyControlplaneEvent(assignment)).toBe(true);
-    expect(store.workerAssignments).toHaveLength(1);
-    expect(store.workerAssignments[0]).toMatchObject({ worker_pubkey: workerPubkey, active_assignments: [{ workload_id: 'svc-1' }] });
-    expect(store.workerDrainStatuses).toHaveLength(1);
-    expect(store.workerDrainStatuses[0]).toMatchObject({ worker_pubkey: workerPubkey, scheduling_state: 'draining' });
-
-    // A record on the pre-irsry.36 shared bare-pubkey d is ignored, even when newer.
-    const legacy = workerRecord({ id: 'assignment-legacy', catalogKind: WORKER_ASSIGNMENT_STATE_CATALOG_KIND, topic: WORKER_ASSIGNMENT_STATE_TOPIC, d: workerPubkey, createdAt: 300,
-      content: { worker_pubkey: workerPubkey, active_assignments: [] } });
-    expect(store.applyControlplaneEvent(legacy)).toBe(false);
-    expect(store.workerAssignments[0].active_assignments).toEqual([{ workload_id: 'svc-1' }]);
+  it('does not route store-first worker families through the legacy event applicator', () => {
+    const topics = store.readModelFilters().find((filter) => filter.kinds.includes(CAS_STATE_KIND))['#t'];
+    expect(topics).not.toContain(WORKER_ASSIGNMENT_STATE_TOPIC);
+    expect(topics).not.toContain(WORKER_DRAIN_STATUS_TOPIC);
   });
 
   it('bridges canonical status events into relay-backed activity state', async () => {

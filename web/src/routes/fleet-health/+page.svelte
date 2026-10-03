@@ -1,7 +1,6 @@
 <script>
-  import { untrack } from 'svelte';
   import { StandardIcon } from '$lib/icons/domain-icons.js';
-  import { workers, workerAssignments, workerCleanupExecutions, workerJobs, operations, loading, loadWorkers } from '$lib/stores';
+  import { workers, workerAssignments, workerCleanupExecutions, workerJobs, operations } from '$lib/stores';
   import CleanupRequestDialog from '../workers/CleanupRequestDialog.svelte';
   import FleetWeatherMap from './FleetWeatherMap.svelte';
   import {
@@ -13,16 +12,9 @@
     sortCleanupExecutions
   } from './page-model.js';
 
-  let initialized = $state(false);
   let selectedWorker = $state(null);
   let cleanupDialogOpen = $state(false);
   let statusFilter = $state('');
-
-  $effect(() => {
-    if (initialized) return;
-    initialized = true;
-    void untrack(() => loadWorkers());
-  });
 
   let summary = $derived(buildFleetHealthSummary(workers, workerCleanupExecutions, workerAssignments, workerJobs, operations));
   let weatherNodes = $derived(buildFleetWeatherNodes(workers, workerCleanupExecutions, workerAssignments, workerJobs, operations));
@@ -79,11 +71,7 @@
         <p>Workers are grouped by admission posture so pressure hotspots are visible before deployment.</p>
       </div>
     </div>
-    {#if loading.workers && weatherNodes.length === 0}
-      <p class="muted">Loading fleet read models from Nostr…</p>
-    {:else}
-      <FleetWeatherMap nodes={weatherNodes} onCleanup={openCleanup} />
-    {/if}
+    <FleetWeatherMap nodes={weatherNodes} onCleanup={openCleanup} />
   </section>
 
   <section class="panel">

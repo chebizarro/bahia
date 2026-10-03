@@ -10,7 +10,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import OperationalActivity from '../OperationalActivity.svelte';
   import { EnvironmentIcon, ProtectedIcon } from '$lib/icons/domain-icons.js';
-  import { environments, workers, loadWorkers, operations, operationsForDomain } from '$lib/stores';
+  import { environments, workers, operations, operationsForDomain } from '$lib/stores';
   import { syncStatus } from '$lib/stores/sync-status.svelte.js';
   import { createEnvironment as createEnvironmentCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { isEntityIdConflict, mintEntityId } from '$lib/entity-id.js';
@@ -26,10 +26,6 @@
     deploymentUnitWriteShape,
     validateDeploymentUnitForm
   } from '$lib/deployment-units.js';
-
-  $effect(() => {
-    void loadWorkers();
-  });
 
   // Create modal state
   let createOpen = $state(false);

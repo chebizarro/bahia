@@ -75,6 +75,12 @@ Navigate to **Workers** in the sidebar:
 - Check current tasks
 - Request local cleanup through the cleanup mode dialog
 
+The worker list and Loom job timeline render immediately from the local verified
+Nostr event store, including when relays are temporarily unavailable. Relay
+updates change the view live; the sync indicator reports catch-up separately
+instead of blocking the list. Worker advertisements are authored by the workers
+themselves, while Bahia worker-state and scheduling records are service-authored.
+
 Navigate to **Fleet Health** for the dedicated resource-pressure view:
 - See the fleet weather map grouped by capacity class
 - Review cleanup history and active cleanup status

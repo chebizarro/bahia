@@ -64,15 +64,15 @@ describe('controlplane read-model filters on single-letter topics', () => {
     expect(stateFilters[0]['#t']).toEqual(controlplaneStateTopics());
   });
 
-  it('covers every family the store routes, including worker state, and not DNS', () => {
+  it('routes only remaining legacy families, not store-first workers or DNS', () => {
     const topics = new Set(controlplaneStateTopics());
     for (const topic of [CP_STATE_TOPICS.SERVICE_REGISTRY, CP_STATE_TOPICS.SERVICE_STATE, CP_STATE_TOPICS.POLICY_REGISTRY,
-      CP_STATE_TOPICS.PACKAGE_REPOSITORY, CP_STATE_TOPICS.BACKUP_RUN, CP_STATE_TOPICS.ML_MODEL,
-      'worker-state', 'worker-assignment', 'worker-drain', 'worker-eligibility', 'worker-cleanup']) {
+      CP_STATE_TOPICS.PACKAGE_REPOSITORY, CP_STATE_TOPICS.BACKUP_RUN, CP_STATE_TOPICS.ML_MODEL]) {
       expect(topics.has(topic), topic).toBe(true);
     }
     // /dns state is owned by the DNS store's own #t subscription.
     expect(topics.has('dns-zone')).toBe(false);
+    expect(topics.has('worker-state')).toBe(false);
     expect(new Set(Object.values(CP_STATE_TOPIC_BY_SCHEMA)).size).toBe(Object.keys(CP_STATE_TOPIC_BY_SCHEMA).length);
   });
 

@@ -142,7 +142,7 @@ test.describe('Environments CRUD Smoke Test', () => {
   test('should open Create Environment modal', async ({ page }) => {
     await page.goto('/environments');
 
-    await page.getByRole('button', { name: 'Create Environment' }).click();
+    await page.locator('.header').getByRole('button', { name: 'Create Environment' }).click();
 
     await expect(page.getByRole('dialog', { name: 'Create Environment' })).toBeVisible();
     await expect(page.getByLabel('Organization *')).toBeVisible();
@@ -164,7 +164,7 @@ test.describe('Environments CRUD Smoke Test', () => {
   test('should create environment through ContextVM and canonical 30900 projection', async ({ page }) => {
     await page.goto('/environments');
 
-    await page.getByRole('button', { name: 'Create Environment' }).click();
+    await page.locator('.header').getByRole('button', { name: 'Create Environment' }).click();
     const dialog = page.getByRole('dialog', { name: 'Create Environment' });
     await expect(dialog).toBeVisible();
 
@@ -212,7 +212,7 @@ test.describe('Environments CRUD Smoke Test', () => {
 
   test('should create a max-like Compose target entirely in the environment UI', async ({ page }) => {
     await page.goto('/environments');
-    await page.getByRole('button', { name: 'Create Environment' }).click();
+    await page.locator('.header').getByRole('button', { name: 'Create Environment' }).click();
     const dialog = page.getByRole('dialog', { name: 'Create Environment' });
 
     await page.getByLabel('Organization *').selectOption(ORG_ID);

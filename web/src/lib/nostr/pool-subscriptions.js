@@ -1,4 +1,4 @@
-import { uniqueRelays, messageFromError } from './pool-utils.js';
+import { uniqueRelays, messageFromError, createBoundedEventIdSet } from './pool-utils.js';
 
 const DEFAULT_RECOVERY_OPTIONS = Object.freeze({
   initialDelayMs: 500,
@@ -12,7 +12,7 @@ export function subscribeOnRelays(client, relays, filters, { onEvent, onEose, on
   const subId = `sub_${++client.subIdCounter}`;
   const subscriptions = new Map();
   const queues = new Map();
-  const seenEvents = new Set();
+  const seenEvents = createBoundedEventIdSet();
   let active = true;
 
   const closeSubscription = (subscription) => {
@@ -152,7 +152,7 @@ export function subscribeWithRecoveryOnRelays(
     generation: 0,
     authPromise: Promise.resolve()
   }]));
-  const seenEvents = new Set();
+  const seenEvents = createBoundedEventIdSet();
   const health = {
     lastEoseAt: null,
     resubscribeAttempts: 0,

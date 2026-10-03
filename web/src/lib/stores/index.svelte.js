@@ -86,7 +86,6 @@ const inFlight = {
   events: null
 };
 
-export async function loadWorkers() { return bootstrapControlplane(); }
 export async function loadArtifacts() { return bootstrapControlplane(); }
 export async function loadBuilds() { return bootstrapControlplane(); }
 export async function loadDeploymentIntents() { return bootstrapControlplane(); }

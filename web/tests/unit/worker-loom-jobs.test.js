@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 /**
  * Acceptance test for the per-worker Loom job projection.
@@ -10,19 +10,51 @@ import { describe, it, expect, beforeEach } from 'vitest';
  * status -> result with exit code 1) and assert that both the subscription
  * filters and the projection surface the job.
  */
-import { readModelFilters, applyControlplaneEvent, resetEventRouting } from '../../src/lib/stores/controlplane/events.svelte.js';
 import {
   workerJobs,
   workerJobsForPubkey,
   isTerminalLoomJobStatus,
   resetWorkers,
-  refreshWorkers
+  refreshWorkers,
+  initWorkerStoreBinding,
+  teardownWorkerStoreBinding
 } from '../../src/lib/stores/collections/workers.svelte.js';
 import {
   LOOM_JOB_REQUEST,
   LOOM_JOB_STATUS_UPDATE,
   LOOM_JOB_RESULT
 } from '../../src/lib/nostr/kinds.gen.js';
+
+
+const bridge = vi.hoisted(() => {
+  const listeners = [];
+  const pool = { subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })) };
+  const store = {
+    query: vi.fn(() => []),
+    subscribe: vi.fn((filter, cb) => {
+      const listener = { filter, cb };
+      listeners.push(listener);
+      return () => listeners.splice(listeners.indexOf(listener), 1);
+    })
+  };
+  return { listeners, pool, store };
+});
+vi.mock('../../src/lib/nostr/boot.js', () => ({
+  getEventStore: () => bridge.store,
+  getPool: () => bridge.pool,
+  getRelayUrls: () => ['wss://relay.example'],
+  getServicePubkey: () => 'b'.repeat(64)
+}));
+
+function emit(event) {
+  let accepted = false;
+  for (const { filter, cb } of bridge.listeners) {
+    if (!filter.kinds.includes(event.kind)) continue;
+    if (filter.authors && !filter.authors.includes(event.pubkey)) continue;
+    accepted = cb(event) || accepted;
+  }
+  return accepted;
+}
 
 const WORKER_PUBKEY = 'b'.repeat(64);
 const CLIENT_PUBKEY = 'c'.repeat(64);
@@ -78,13 +110,16 @@ const jobResultEvent = relayEvent({
 });
 
 beforeEach(() => {
-  resetEventRouting();
+  bridge.pool.subscribe.mockClear();
   resetWorkers();
+  initWorkerStoreBinding();
 });
+
+afterEach(() => teardownWorkerStoreBinding());
 
 describe('Loom job subscription filters', () => {
   it('subscribes to job requests, status updates, and results', () => {
-    const filters = readModelFilters();
+    const filters = bridge.pool.subscribe.mock.calls.flatMap(([options]) => options.filters);
     const subscribedKinds = new Set(filters.flatMap((filter) => filter.kinds || []));
     expect(subscribedKinds.has(LOOM_JOB_REQUEST)).toBe(true);
     expect(subscribedKinds.has(LOOM_JOB_STATUS_UPDATE)).toBe(true);
@@ -94,20 +129,20 @@ describe('Loom job subscription filters', () => {
 
 describe('per-worker Loom job projection', () => {
   it('projects a full request -> failed status -> result sequence onto the worker', () => {
-    expect(applyControlplaneEvent(jobRequestEvent)).toBe(true);
+    expect(emit(jobRequestEvent)).toBe(true);
     refreshWorkers();
     let jobs = workerJobsForPubkey(workerJobs, WORKER_PUBKEY);
     expect(jobs).toHaveLength(1);
     expect(jobs[0].status).toBe('queued');
     expect(jobs[0].client_pubkey).toBe(CLIENT_PUBKEY);
 
-    expect(applyControlplaneEvent(jobStatusEvent)).toBe(true);
+    expect(emit(jobStatusEvent)).toBe(true);
     refreshWorkers();
     jobs = workerJobsForPubkey(workerJobs, WORKER_PUBKEY);
     expect(jobs[0].status).toBe('failed');
     expect(jobs[0].message).toBe('job process exited with an error');
 
-    expect(applyControlplaneEvent(jobResultEvent)).toBe(true);
+    expect(emit(jobResultEvent)).toBe(true);
     refreshWorkers();
     jobs = workerJobsForPubkey(workerJobs, WORKER_PUBKEY);
     expect(jobs).toHaveLength(1);
@@ -124,8 +159,8 @@ describe('per-worker Loom job projection', () => {
   });
 
   it('projects out-of-order events (status before request) onto the same job', () => {
-    expect(applyControlplaneEvent(jobStatusEvent)).toBe(true);
-    expect(applyControlplaneEvent(jobRequestEvent)).toBe(true);
+    expect(emit(jobStatusEvent)).toBe(true);
+    expect(emit(jobRequestEvent)).toBe(true);
     refreshWorkers();
     const jobs = workerJobsForPubkey(workerJobs, WORKER_PUBKEY);
     expect(jobs).toHaveLength(1);
@@ -134,8 +169,8 @@ describe('per-worker Loom job projection', () => {
   });
 
   it('does not let a late status update regress a terminal result', () => {
-    expect(applyControlplaneEvent(jobRequestEvent)).toBe(true);
-    expect(applyControlplaneEvent(jobResultEvent)).toBe(true);
+    expect(emit(jobRequestEvent)).toBe(true);
+    expect(emit(jobResultEvent)).toBe(true);
     const lateRunning = relayEvent({
       id: 'd'.repeat(64),
       kind: LOOM_JOB_STATUS_UPDATE,
@@ -148,7 +183,7 @@ describe('per-worker Loom job projection', () => {
         ['status', 'running']
       ]
     });
-    applyControlplaneEvent(lateRunning);
+    emit(lateRunning);
     refreshWorkers();
     const jobs = workerJobsForPubkey(workerJobs, WORKER_PUBKEY);
     expect(jobs[0].status).toBe('failed');
@@ -156,8 +191,8 @@ describe('per-worker Loom job projection', () => {
   });
 
   it('ignores job events for other workers when filtering by pubkey', () => {
-    applyControlplaneEvent(jobRequestEvent);
-    applyControlplaneEvent(jobResultEvent);
+    emit(jobRequestEvent);
+    emit(jobResultEvent);
     refreshWorkers();
     expect(workerJobsForPubkey(workerJobs, 'f'.repeat(64))).toHaveLength(0);
   });

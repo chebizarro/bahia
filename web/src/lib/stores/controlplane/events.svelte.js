@@ -7,10 +7,6 @@ import {
   BAHIA_STATUS_KINDS,
   CASCADIA_CONTROLPLANE_STATE,
   CP_STATE_TOPIC_BY_SCHEMA,
-  LOOM_WORKER_ADVERTISEMENT,
-  LOOM_JOB_REQUEST,
-  LOOM_JOB_STATUS_UPDATE,
-  LOOM_JOB_RESULT,
   SBOM_AVAILABILITY_LIST,
   SBOM_REFERENCE,
   parseJsonContent
@@ -18,14 +14,6 @@ import {
 import { CP_STATE_SCHEMA_BY_LEGACY_KIND } from '../../nostr/cp-state.js';
 import { controlplaneConnection } from './connection.svelte.js';
 import { deploymentApplicators } from '../collections/deployments.svelte.js';
-import {
-  applyWorkerEvent,
-  applyWorkerStateEvent,
-  applyLoomJobRequestEvent,
-  applyLoomJobStatusEvent,
-  applyLoomJobResultEvent,
-  workerApplicators
-} from '../collections/workers.svelte.js';
 import {
   BACKUP_ATTESTATION_KINDS,
   applyBackupAttestationEvent,
@@ -35,16 +23,6 @@ import { mlApplicators } from '../collections/ml.svelte.js';
 import { applyActivityEvent } from '../collections/activity.svelte.js';
 import {
   CANONICAL_OPERATION_KINDS,
-  EXTERNAL_OPERATION_KINDS,
-  HIVE_CI_OPERATION_KINDS,
-  OPERATION_REQUEST_KINDS,
-  OPERATION_RESULT_KINDS,
-  OPERATION_STATUS_KINDS,
-  applyHiveCIWorkflowResultEvent,
-  applyHiveCIWorkflowRunEvent,
-  applyOperationRequestEvent,
-  applyOperationResultEvent,
-  applyOperationStatusEvent
 } from '../collections/operations.svelte.js';
 import { applySBOMReferenceEvent, applySBOMAvailabilityEvent } from '../collections/sbom.svelte.js';
 import {
@@ -58,11 +36,8 @@ import {
 const ACTIVITY_BACKFILL_LIMIT = 100;
 const READ_MODEL_LIMIT = 1000;
 const ACTIVITY_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
-const LOOM_JOB_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
-const LOOM_JOB_LIMIT = 500;
 const OPERATION_BACKFILL_SECONDS = 7 * 24 * 60 * 60;
 const OPERATION_LIMIT = 1000;
-const LOOM_JOB_KINDS = [LOOM_JOB_REQUEST, LOOM_JOB_STATUS_UPDATE, LOOM_JOB_RESULT];
 const CANONICAL_READ_MODEL_KINDS = BAHIA_READ_MODEL_KINDS;
 const NON_STATE_READ_MODEL_KINDS = CANONICAL_READ_MODEL_KINDS.filter((kind) => kind !== CASCADIA_CONTROLPLANE_STATE);
 const ACTIVITY_KINDS = [...BAHIA_AUDIT_KINDS, ...BAHIA_STATUS_KINDS, ...BAHIA_SBOM_KINDS];
@@ -102,29 +77,11 @@ export function readModelFilters() {
   return [
     { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': controlplaneStateTopics(), limit: READ_MODEL_LIMIT, ...authorFilter },
     { kinds: NON_STATE_READ_MODEL_KINDS, limit: READ_MODEL_LIMIT, ...authorFilter },
-    { kinds: [5], limit: READ_MODEL_LIMIT, ...authorFilter },
-    { kinds: [LOOM_WORKER_ADVERTISEMENT], limit: READ_MODEL_LIMIT },
-    {
-      kinds: LOOM_JOB_KINDS,
-      since: Math.floor(Date.now() / 1000) - LOOM_JOB_BACKFILL_SECONDS,
-      limit: LOOM_JOB_LIMIT
-    },
-    {
-      kinds: CANONICAL_OPERATION_KINDS,
-      since: Math.floor(Date.now() / 1000) - OPERATION_BACKFILL_SECONDS,
-      limit: OPERATION_LIMIT,
-      ...authorFilter
-    },
     {
       kinds: BACKUP_ATTESTATION_KINDS,
       since: Math.floor(Date.now() / 1000) - OPERATION_BACKFILL_SECONDS,
       limit: OPERATION_LIMIT,
       ...authorFilter
-    },
-    {
-      kinds: EXTERNAL_OPERATION_KINDS,
-      since: Math.floor(Date.now() / 1000) - OPERATION_BACKFILL_SECONDS,
-      limit: OPERATION_LIMIT
     },
     {
       kinds: ACTIVITY_KINDS,
@@ -194,20 +151,6 @@ const handlers = new Map([
   [BAHIA_STATE_SCHEMAS.BUILD_REGISTRY, deploymentApplicators.build],
   [BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY, deploymentApplicators.intent],
   [BAHIA_STATE_SCHEMAS.DEPLOYMENT_RUN_REGISTRY, deploymentApplicators.run],
-  [LOOM_WORKER_ADVERTISEMENT, applyWorkerEvent],
-  [LOOM_JOB_REQUEST, applyLoomJobRequestEvent],
-  [LOOM_JOB_STATUS_UPDATE, applyLoomJobStatusEvent],
-  [LOOM_JOB_RESULT, applyLoomJobResultEvent],
-  ...OPERATION_REQUEST_KINDS.map((kind) => [kind, applyOperationRequestEvent]),
-  ...OPERATION_STATUS_KINDS.map((kind) => [kind, applyOperationStatusEvent]),
-  ...OPERATION_RESULT_KINDS.map((kind) => [kind, applyOperationResultEvent]),
-  [HIVE_CI_OPERATION_KINDS[0], applyHiveCIWorkflowRunEvent],
-  [HIVE_CI_OPERATION_KINDS[1], applyHiveCIWorkflowResultEvent],
-  [BAHIA_STATE_SCHEMAS.WORKER_STATE, applyWorkerStateEvent],
-  [BAHIA_STATE_SCHEMAS.WORKER_ASSIGNMENT_STATE, workerApplicators.assignment],
-  [BAHIA_STATE_SCHEMAS.WORKER_DRAIN_STATUS, workerApplicators.drainStatus],
-  [BAHIA_STATE_SCHEMAS.WORKER_ELIGIBILITY_PREVIEW, workerApplicators.eligibilityPreview],
-  [BAHIA_STATE_SCHEMAS.WORKER_CLEANUP_EXECUTION, workerApplicators.cleanupExecution],
   [BAHIA_STATE_SCHEMAS.BACKUP_DEFINITION_REGISTRY, backupApplicators.definition],
   [BAHIA_STATE_SCHEMAS.BACKUP_POLICY_REGISTRY, backupApplicators.policy],
   [BAHIA_STATE_SCHEMAS.BACKUP_REPOSITORY_REGISTRY, backupApplicators.repository],
@@ -240,10 +183,6 @@ const PERSISTED_ROUTE_COLLECTIONS = new Map([
   [BAHIA_STATE_SCHEMAS.LLM_ROUTE_REGISTRY, 'llmRoutes'],
   [BAHIA_STATE_SCHEMAS.ARTIFACT_REGISTRY, 'artifacts'],
   [BAHIA_STATE_SCHEMAS.DEPLOYMENT_INTENT_REGISTRY, 'deploymentIntents'],
-  [LOOM_WORKER_ADVERTISEMENT, 'workers'],
-  [BAHIA_STATE_SCHEMAS.WORKER_STATE, 'workers'],
-  [BAHIA_STATE_SCHEMAS.WORKER_ASSIGNMENT_STATE, 'workerAssignments'],
-  [BAHIA_STATE_SCHEMAS.WORKER_DRAIN_STATUS, 'workerDrainStatuses'],
   [BAHIA_STATE_SCHEMAS.BACKUP_REPOSITORY_REGISTRY, 'backupRepositories'],
   [BAHIA_STATE_SCHEMAS.BACKUP_POLICY_REGISTRY, 'backupPolicies'],
   [BAHIA_STATE_SCHEMAS.BACKUP_RECIPE_REGISTRY, 'backupRecipes'],

@@ -1,10 +1,10 @@
 <script>
+  import ErrorState from '$lib/components/ErrorState.svelte';
   import { page } from '$app/state';
   import Table from '$lib/components/Table.svelte';
-  import ErrorState from '$lib/components/ErrorState.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import { StandardIcon } from '$lib/icons/domain-icons.js';
-  import { workers, workerCleanupExecutions, workerJobs, loadWorkers } from '$lib/stores';
+  import { workers, workerCleanupExecutions, workerJobs } from '$lib/stores';
   import { workerJobsForPubkey, isTerminalLoomJobStatus } from '$lib/stores/collections/workers.svelte.js';
   import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
   import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
@@ -66,58 +66,12 @@
   const LABEL_ACTION = WORKER_ACTIONS.find((action) => action.labels);
   const QUICK_ACTIONS = WORKER_ACTIONS.filter((action) => !action.labels);
 
-  let worker = $state(null);
-  let loading = $state(true);
-  let error = $state(null);
   let notice = $state(null);
   let cleanupDialogOpen = $state(false);
   let pendingCommands = $state({});
-  let loadSequence = 0;
 
   let pubkey = $derived(page.params.pubkey);
-
-  $effect(() => {
-    const key = pubkey;
-    if (!key) return;
-    void loadWorker(key);
-  });
-
-  async function loadWorker(key) {
-    const sequence = ++loadSequence;
-    loading = true;
-    error = null;
-    worker = null;
-
-    let decodedPubkey;
-    try {
-      decodedPubkey = decodeURIComponent(key);
-    } catch (err) {
-      if (isCurrentLoad(sequence)) {
-        error = err.message || 'Failed to load worker';
-        loading = false;
-      }
-      return;
-    }
-
-    try {
-      await loadWorkers();
-      if (!isCurrentLoad(sequence)) return;
-      const loadedWorker = workers.find((candidate) => candidate.pubkey === decodedPubkey);
-      if (!loadedWorker) throw new Error('Worker not found');
-      worker = loadedWorker;
-    } catch (err) {
-      if (!isCurrentLoad(sequence)) return;
-      error = err.message || 'Failed to load worker';
-    } finally {
-      if (isCurrentLoad(sequence)) {
-        loading = false;
-      }
-    }
-  }
-
-  function isCurrentLoad(sequence) {
-    return sequence === loadSequence;
-  }
+  let worker = $derived(workers.find((candidate) => candidate.pubkey === pubkey) || null);
 
   function normalizeList(value) {
     if (!Array.isArray(value)) return [];
@@ -629,11 +583,7 @@
 <div class="page">
   <a href="/workers" class="back">← Workers</a>
 
-  {#if loading}
-    <p class="loading">Loading...</p>
-  {:else if error}
-    <ErrorState message={error} />
-  {:else if worker}
+  {#if worker}
     <div class="summary-header">
       <div class="summary-main">
         <h1>
