@@ -23,6 +23,8 @@ type OperatorContextVMHandlersConfig struct {
 	RuntimeLifecycle               RuntimeLifecycleOperatorService
 	AdoptionAuthorizedPubkeys      []string
 	DirectRuntimeAuthorizedPubkeys []string
+	IntentProcessor                *IntentProcessor
+	Resources                      DeploymentIntentResourceReader
 }
 
 type OperatorContextVMHandlers struct {
@@ -30,6 +32,8 @@ type OperatorContextVMHandlers struct {
 	runtimeLifecycle               RuntimeLifecycleOperatorService
 	adoptionAuthorizedPubkeys      []string
 	directRuntimeAuthorizedPubkeys []string
+	intentProcessor                *IntentProcessor
+	resources                      DeploymentIntentResourceReader
 }
 
 func NewOperatorContextVMHandlers(cfg OperatorContextVMHandlersConfig) *OperatorContextVMHandlers {
@@ -38,6 +42,8 @@ func NewOperatorContextVMHandlers(cfg OperatorContextVMHandlersConfig) *Operator
 		runtimeLifecycle:               cfg.RuntimeLifecycle,
 		adoptionAuthorizedPubkeys:      append([]string(nil), cfg.AdoptionAuthorizedPubkeys...),
 		directRuntimeAuthorizedPubkeys: append([]string(nil), cfg.DirectRuntimeAuthorizedPubkeys...),
+		intentProcessor:                cfg.IntentProcessor,
+		resources:                      cfg.Resources,
 	}
 }
 
@@ -64,6 +70,28 @@ func (h *OperatorContextVMHandlers) ServiceAction(ctx context.Context, request C
 	req, err := parseDirectRuntimeActionPayload(raw)
 	if err != nil {
 		return nil, err
+	}
+	if h.intentProcessor != nil && h.intentProcessor.Handler("runtime") != nil {
+		if h.resources == nil {
+			return nil, fmt.Errorf("runtime resource registry is not configured")
+		}
+		svc, err := h.resources.GetService(ctx, req.ServiceID)
+		if err != nil {
+			return nil, err
+		}
+		if svc == nil {
+			return nil, fmt.Errorf("service not found")
+		}
+		content := map[string]any{"service_id": req.ServiceID.String(), "environment_id": req.EnvironmentID.String()}
+		if req.ArtifactID != nil {
+			content["artifact_id"] = req.ArtifactID.String()
+		}
+		intentID := effectiveIdempotencyKey(request, request.Event.ID.Hex())
+		intent := &Intent{Event: request.Event, Domain: "runtime", Op: req.Action, OrgID: svc.OrgID, IntentID: intentID, Coordinate: req.ServiceID.String() + ":" + req.EnvironmentID.String(), Content: content, Actor: request.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "accepted", "intent_id": intentID}, nil
 	}
 	var obs *domain.RuntimeObservation
 	switch req.Action {

@@ -14,9 +14,11 @@ Backup features include:
 The web console signs kind-`30900` intents for repository, policy, recipe,
 and definition changes and for run, restore, verification, retention, and
 repository-probe requests. These show as pending until a scoped `30315`
-status or newer canonical state arrives. Restore approval and rejection remain
-on ContextVM: the daemon's `restore-approval` intent branch currently rejects
-them.
+status or newer canonical state arrives. Restore approval and rejection are signed intents too (below).
+
+## Signed restore approval
+
+With `backup` enabled in `nostr.intent_domains`, a fleet operator may publish a kind `30900` intent with `domain=backup`, `op=restore-approval`, and content containing `restore_id` and `decision` (`approve` or `reject`). An `expected_updated_at` revision may guard against stale decisions. Bahia applies the same restore-registry transition used by the legacy approval command, then emits bounded kind `30315` intent status. When disabled, the existing ContextVM approval path remains available.
 
 ## Key Concepts
 

@@ -1,5 +1,9 @@
 # Bahia Nostr Event Specification
 
+## Deployment-family intent wire contract
+
+Enabled `deployment`, `runtime`, `llm`, and `backup` domains use client-signed kind `30900` with `schema=bahia.intent.<domain>.v1`, `domain`, `op`, `org`, and `t=bahia-intent` tags. JSON `content.intent_id` is the replay key; `expected_updated_at` guards mutable targets when present. The daemon emits bounded kind `30315` status and publishes canonical state through the existing service publishers, never by countersigning the client intent. [Parseable fixtures](../web/tests/fixtures/deployment-intents.json) cover each operation. Disabled domains retain their legacy ContextVM transport.
+
 ## Canonical command envelopes
 
 Artifact, deployment-policy, and tool-approval publishers serialize JSON-RPC

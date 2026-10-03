@@ -18,6 +18,10 @@ intent. Relay `OK` only confirms delivery. If relays are unavailable, the
 browser keeps the intent pending and retries delivery on reconnect or AUTH,
 without a timeout that turns it into a failure.
 
+## Deployment-family signed intents
+
+With `deployment`, `runtime`, `llm`, or `backup` enabled in `intent_domains`, sign a kind `30900` `bahia.intent.<domain>.v1` event for the supported deployment, runtime, LLM deployment/approval, or backup restore-approval operation. Reuse `content.intent_id` for retries and subscribe to bounded kind `30315` status plus the daemon-authored canonical state; a ContextVM receipt is not durable completion. Disabled domains retain the existing ContextVM mutation path. The [wire fixtures](../../web/tests/fixtures/deployment-intents.json) show every content shape.
+
 ## Command availability
 
 Artifact, policy, and tool-approval requests use signed ContextVM messages.

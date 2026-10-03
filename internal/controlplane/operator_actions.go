@@ -133,6 +133,22 @@ func (r *Reactor) handleDirectRuntimeActionRequest(ctx context.Context, event *n
 		r.logPublishError(r.publishActionResult(ctx, event, req.Action, "failed", fmt.Errorf("requester not in authorized direct-runtime list")))
 		return
 	}
+	if r.intentProcessor != nil && r.intentProcessor.Handler("runtime") != nil {
+		svc, err := r.registry.GetService(ctx, req.ServiceID)
+		if err != nil || svc == nil {
+			r.logPublishError(r.publishActionResult(ctx, event, req.Action, "failed", fmt.Errorf("service not found: %v", err)))
+			return
+		}
+		content := map[string]any{"service_id": req.ServiceID.String(), "environment_id": req.EnvironmentID.String()}
+		if req.ArtifactID != nil {
+			content["artifact_id"] = req.ArtifactID.String()
+		}
+		intent := &Intent{Event: event, Domain: "runtime", Op: req.Action, OrgID: svc.OrgID, IntentID: event.ID.Hex(), Coordinate: req.ServiceID.String() + ":" + req.EnvironmentID.String(), Content: content, Actor: event.PubKey.Hex()}
+		if err := r.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			r.logPublishError(r.publishActionResult(ctx, event, req.Action, "failed", err))
+		}
+		return
+	}
 	if r.runtimeLifecycle == nil {
 		r.logPublishError(r.publishActionResult(ctx, event, req.Action, "failed", fmt.Errorf("runtime lifecycle service is not configured")))
 		return

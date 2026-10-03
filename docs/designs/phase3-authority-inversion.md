@@ -55,12 +55,27 @@ The relay keeps only the latest `(kind, pubkey, d)` for each author. An offline 
 
 **Tag grammar:**
 - `d` = entity coordinate, per existing `docs/event-spec.md` grammar (e.g. `<service-id>` for services, `<environment-id>` for environments, `service:<sid>:environment:<eid>` for state).
-- `domain` = the domain family (`service`, `environment`, `policy`, `llm`, `dns`, `backup`, `ml`, `package`, `org`, `secret`, `notification`).
+- `domain` = the domain family (`service`, `environment`, `policy`, `deployment`, `runtime`, `llm`, `dns`, `backup`, `ml`, `package`, `org`, `secret`, `notification`).
 - `schema` = `bahia.intent.<domain>.v1`. Distinct from the daemon's state schema `bahia.cp-state.v1`.
 - `t` = `bahia-intent` (enables `#t` filtering for all intents) plus the domain topic tag (e.g. `service-registry`).
 - `op` = `create`, `update`, or `delete` — advisory, not load-bearing (§1.2).
 - `org` = the org UUID the entity belongs to (enables `#org` filtering for trust-scoped subscriptions). Fleet-only DNS, ML, and worker intents may omit `org`; these handlers authorize against configured fleet operators and do not derive an org from the entity.
 - `intent_id` = a UUIDv7 minted by the client per intent attempt, carried in both tags and content. Used for **idempotency and correlation only** — the intent_id does not determine processing order or conflict resolution.
+
+**Deployment-operation domain table** (see `web/tests/fixtures/deployment-intents.json` for parseable wire examples):
+
+| Domain | `op` | Required content | Permission |
+|---|---|---|---|
+| `deployment` | `create` | `service_id`, `environment_id`, `artifact_id` | `deployments:write` |
+| `deployment` | `rollback` | `service_id`, `environment_id`, `target_artifact_id` or `target_run_id`, `supersedes_intent_id` | `deployments:write` |
+| `deployment` | `approve`, `reject` | `deployment_intent_id`; optional `expected_updated_at` | `deployments:approve` |
+| `runtime` | `deploy`, `restart`, `stop` | `service_id`, `environment_id`; optional `artifact_id` for deploy only | `deployments:write` |
+| `llm` | `deploy` | `route_id`, `environment_id`, `release_id` | fleet operator |
+| `llm` | `rollback` | `route_id`, `environment_id` | fleet operator |
+| `llm` | `approve`, `reject` | `deployment_intent_id`; optional `expected_updated_at` | fleet operator |
+| `backup` | `restore-approval` | `restore_id`, `decision` (`approve` or `reject`); optional `expected_updated_at` | fleet operator |
+
+All update decisions compare `expected_updated_at` to the canonical entity revision when present. The operation tag selects the legacy-equivalent side-effect path; durable progress is the bounded `30315` status and daemon-authored canonical state, not the ContextVM acknowledgment.
 
 ### 1.4 Relationship to today's cp-state 30900 records
 
@@ -506,6 +521,10 @@ nostr:
   intent_domains:
     - service     # accepts intent events for services
     - environment # accepts intent events for environments
+    - deployment  # deployment create/approval/rollback
+    - runtime     # direct runtime actions
+    - llm         # LLM registry and deployment lifecycle
+    - backup      # backup lifecycle, including restore approval
 ```
 
 When a domain is listed in `intent_domains`:
@@ -826,6 +845,10 @@ intentProcessor.RegisterHandler("service", &controlplane.ServiceIntentHandler{
 nostr:
   intent_domains:
     - service
+    - deployment
+    - runtime
+    - llm
+    - backup
 ```
 
 ### 10.4 Wire dual dispatch

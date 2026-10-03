@@ -13,6 +13,12 @@ See [Virtual machines](virtual-machines.md) for safe public connections and scop
 
 **Deployments** in Bahia follow an intent-based workflow: you declare what you want deployed, policies are evaluated, and workers execute the deployment.
 
+## Signed deployment intents
+
+When `nostr.intent_domains` includes `deployment`, operators publish a signed kind `30900` intent with `domain=deployment`, schema `bahia.intent.deployment.v1`, an org tag, and a UUIDv7 `intent_id`. `create` supplies `service_id`, `environment_id`, and `artifact_id`; `rollback` supplies those service/environment IDs plus `target_artifact_id` (or `target_run_id`) and `supersedes_intent_id`. `approve` and `reject` supply `deployment_intent_id` and should include the canonical intent's `expected_updated_at` revision. Create/rollback require `deployments:write`; decisions require `deployments:approve`.
+
+`runtime` intents use `deploy`, `restart`, or `stop` with `service_id` and `environment_id`; only deploy may include `artifact_id`. They require `deployments:write`. Follow the bounded kind `30315` intent status and daemon-authored deployment/run/state records. When the domain is disabled, the existing ContextVM action remains in effect.
+
 ## Deployment Workflow
 
 ```
