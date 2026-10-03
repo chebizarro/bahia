@@ -33,6 +33,7 @@ function relaySettingsStateEvent({ browserRelays = [], contextVMRelays = [], ser
 const systemInfo = {
   nostr: {
     browser_relays: [BROWSER_RELAY],
+    contextvm_relays: [BROWSER_RELAY],
     service_relays: SERVICE_RELAYS,
     service_pubkey: SERVICE_PUBKEY,
     service_npub: 'npub1serviceexample',
@@ -121,7 +122,7 @@ test.describe('Settings relay visibility', () => {
     };
     await installE2EMocks(page, {
       systemInfo,
-      contextVMOperations: [relayPolicyGetOperation(response)]
+      contextVMOperations: [relayPolicyGetOperation(response), relayPolicyGetOperation(response)]
     });
 
     await page.goto('/settings/relays');
