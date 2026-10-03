@@ -29,6 +29,20 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestConfigFabricWriteRoutesRemoved(t *testing.T) {
+	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
+		ConfigFabric: service.NewConfigFabricService(nil, nil, nil),
+	})
+	for _, path := range []string{"/api/v1/config-fabric/events", "/api/v1/config-fabric/rollback"} {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{}`))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		if response.Code != http.StatusNotFound {
+			t.Errorf("POST %s status = %d, want 404", path, response.Code)
+		}
+	}
+}
+
 // --- In-memory mock repositories for HTTP integration tests ---
 
 type mockServiceRepo struct{ services map[uuid.UUID]*domain.Service }

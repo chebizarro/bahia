@@ -93,7 +93,7 @@ func TestRootCommandRegistersConfigGroup(t *testing.T) {
 	}
 }
 
-func TestConfigDriftCommandCallsConfigFabricEndpoint(t *testing.T) {
+func TestConfigDriftCommandDoesNotCallConfigFabricEndpoint(t *testing.T) {
 	resetNostrKeyGlobals(t)
 	t.Setenv("BAHIA_NOSTR_KEY_FILE", "")
 	t.Setenv("BAHIA_NOSTR_NSEC", "")
@@ -109,11 +109,11 @@ func TestConfigDriftCommandCallsConfigFabricEndpoint(t *testing.T) {
 
 	root := newRootCommand()
 	root.SetArgs([]string{"--server", server.URL, "--output", "json", "config", "drift"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("bahia config drift: %v", err)
+	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "no operator relays configured") {
+		t.Fatalf("bahia config drift error = %v, want missing-relay error", err)
 	}
-	if gotMethod != http.MethodGet || gotPath != "/api/v1/config-fabric/drift" {
-		t.Fatalf("bahia config drift called %s %s, want GET /api/v1/config-fabric/drift", gotMethod, gotPath)
+	if gotMethod != "" || gotPath != "" {
+		t.Fatalf("bahia config drift made an HTTP request: %s %s", gotMethod, gotPath)
 	}
 }
 

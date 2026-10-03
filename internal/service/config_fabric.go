@@ -308,6 +308,12 @@ func composeConfigEvent(request ConfigPublishRequest, createdAt time.Time) (*nos
 	return &nostr.Event{Kind: nostr.Kind(request.Kind), CreatedAt: nostr.Timestamp(createdAt.Unix()), Tags: tags, Content: string(encoded)}, nil
 }
 
+// ComposeConfigEvent builds the canonical NIP-51/NIP-78 desired event consumed
+// by the relay sidecar. The caller signs and publishes the returned event.
+func ComposeConfigEvent(request ConfigPublishRequest, createdAt time.Time) (*nostr.Event, error) {
+	return composeConfigEvent(request, createdAt)
+}
+
 func validateConfigRequest(request ConfigPublishRequest) error {
 	if request.Kind != ConfigFabricListKind && request.Kind != ConfigFabricPolicyKind {
 		return fmt.Errorf("kind must be %d (NIP-51 list) or %d (NIP-78 policy)", ConfigFabricListKind, ConfigFabricPolicyKind)
@@ -566,6 +572,30 @@ func (s *ConfigFabricService) ListDrift(ctx context.Context) ([]ConfigDrift, err
 		}
 		records = append(records, kindRecords...)
 	}
+	return s.projectDrift(ctx, records), nil
+}
+
+// ConfigDriftFromEvents computes the same projection as the REST read path
+// from verified events in the operator's local Nostr store.
+func ConfigDriftFromEvents(events []nostr.Event) ([]ConfigDrift, error) {
+	records := make([]repository.NostrEventRecord, 0, len(events))
+	for _, event := range events {
+		if !event.CheckID() || !event.VerifySignature() {
+			continue
+		}
+		tags, err := json.Marshal(event.Tags)
+		if err != nil {
+			return nil, fmt.Errorf("encode config event tags: %w", err)
+		}
+		records = append(records, repository.NostrEventRecord{
+			ID: event.ID.Hex(), Kind: int(event.Kind), PubKey: event.PubKey.Hex(),
+			Content: event.Content, Tags: tags, CreatedAt: time.Unix(int64(event.CreatedAt), 0),
+		})
+	}
+	return (&ConfigFabricService{}).projectDrift(context.Background(), records), nil
+}
+
+func (s *ConfigFabricService) projectDrift(ctx context.Context, records []repository.NostrEventRecord) []ConfigDrift {
 	desired := map[string]desiredConfig{}
 	desiredHistory := map[string][]desiredConfig{}
 	statuses := map[string][]statusConfig{}
@@ -632,7 +662,7 @@ func (s *ConfigFabricService) ListDrift(ctx context.Context) ([]ConfigDrift, err
 			// Status coordinates preserve per-target facts, not one wall-clock
 			// snapshot. Versions are monotonic; a delayed older receipt must
 			// not roll the effective configuration backwards.
-			if status.Status == "applied" && status.EffectiveVersion > view.AppliedVersion {
+			if status.EffectiveVersion > view.AppliedVersion && isHex(status.LastAppliedEventID, 32) {
 				view.AppliedEventID = status.LastAppliedEventID
 				view.AppliedVersion = status.EffectiveVersion
 			}
@@ -665,7 +695,7 @@ func (s *ConfigFabricService) ListDrift(ctx context.Context) ([]ConfigDrift, err
 		}
 		return result[i].Scope < result[j].Scope
 	})
-	return result, nil
+	return result
 }
 
 func desiredFromRecord(record repository.NostrEventRecord) (desiredConfig, error) {
@@ -780,6 +810,10 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 	if err != nil || dTag != expectedDTag {
 		return status, fmt.Errorf("invalid config status d tag")
 	}
+	if status.EffectiveVersion < 0 || (status.EffectiveVersion == 0 && status.LastAppliedEventID != "") ||
+		(status.EffectiveVersion > 0 && !isHex(status.LastAppliedEventID, 32)) {
+		return status, fmt.Errorf("invalid effective config reference")
+	}
 	if status.Status == "applied" {
 		if status.EffectiveVersion < 1 || !isHex(status.LastAppliedEventID, 32) {
 			return status, fmt.Errorf("invalid applied status content")
@@ -837,6 +871,22 @@ func publishRequestFromRecord(record repository.NostrEventRecord) (ConfigPublish
 		}
 	}
 	return request, nil
+}
+
+// ConfigRequestFromEvent validates a locally stored desired event and returns
+// its publish payload for rollback at a new version.
+func ConfigRequestFromEvent(event nostr.Event) (ConfigPublishRequest, error) {
+	if !event.CheckID() || !event.VerifySignature() {
+		return ConfigPublishRequest{}, fmt.Errorf("desired event id or signature is invalid")
+	}
+	tags, err := json.Marshal(event.Tags)
+	if err != nil {
+		return ConfigPublishRequest{}, err
+	}
+	return publishRequestFromRecord(repository.NostrEventRecord{
+		ID: event.ID.Hex(), Kind: int(event.Kind), PubKey: event.PubKey.Hex(),
+		Content: event.Content, Tags: tags, CreatedAt: time.Unix(int64(event.CreatedAt), 0),
+	})
 }
 
 func decodeTags(raw json.RawMessage) (nostr.Tags, error) {

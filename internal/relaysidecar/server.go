@@ -182,7 +182,10 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	}
 	relay.Count = store.Count
 	var consumer *ConfigConsumer
-	if len(nostrCfg.Sidecar.ConfigTrustedPubkeys) > 0 {
+	// Fleet operators authorized by the daemon's TrustSet are also allowed to
+	// author desired config. Explicit sidecar authors remain supported.
+	configAuthors := append(append([]string(nil), nostrCfg.Sidecar.ConfigTrustedPubkeys...), nostrCfg.AuthorizedPubkeys...)
+	if len(configAuthors) > 0 && nostrCfg.Sidecar.ConfigProjectionPath != "" {
 		secret, ok, err := parseFiatjafSecret(nostrCfg.PrivateKey)
 		if err != nil {
 			_ = store.Close()
@@ -195,7 +198,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		consumer, err = NewConfigConsumer(ConfigConsumerConfig{
 			ServiceID: nostrCfg.Sidecar.ServiceID, Scope: nostrCfg.Sidecar.Scope,
 			ProjectionPath: nostrCfg.Sidecar.ConfigProjectionPath,
-			TrustedAuthors: nostrCfg.Sidecar.ConfigTrustedPubkeys,
+			TrustedAuthors: configAuthors,
 			Signer:         relayConfigSigner{secret: secret}, Publisher: relayConfigPublisher{relay: relay},
 			Apply: func(projection ConfigProjection) error {
 				if err := admin.applyConfigProjection(projection); err != nil {
@@ -211,6 +214,10 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		if err != nil {
 			_ = store.Close()
 			return nil, err
+		}
+		pol.configAuthors = make(map[string]bool, len(configAuthors))
+		for _, author := range configAuthors {
+			pol.configAuthors[author] = true
 		}
 	}
 	var configDirty *configDirtySet

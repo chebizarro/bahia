@@ -285,31 +285,36 @@ Everything else becomes local-store read + intent-processor write.
 
 **Decision: the CLI signs and publishes config-fabric desired-state events directly, using the operator's key.**
 
-The config-fabric desired-state event is a `30900` addressable replaceable event:
+The implemented config-fabric consumer uses NIP-51 kind `30000` for membership
+lists and NIP-78 kind `30078` for policy documents (not a `30900` intent).
+Both are addressable desired-state events signed by the operator:
 ```json
 {
-  "kind": 30900,
+  "kind": 30078,
   "pubkey": "<operator-pubkey>",
   "tags": [
-    ["d", "config:<service-id>:<policy-name>:<scope>"],
-    ["domain", "config-fabric"],
-    ["schema", "bahia.intent.config-fabric.v1"],
-    ["t", "bahia-intent"],
-    ["t", "config-fabric"],
-    ["op", "publish"],
-    ["org", "<org-id>"],
-    ["intent_id", "<uuidv7>"],
+    ["d", "service:<service-id>:<policy-name>"],
+    ["service", "<service-id>"],
+    ["scope", "<scope>"],
+    ["schema", "cascadia.config.<policy-name>.v1"],
     ["version", "3"]
   ],
-  "content": "{\"kind\":...,\"service_id\":...,\"policy_name\":...,\"scope\":...,\"version\":3,\"schema\":...,\"policy\":{...}}"
+  "content": "{\"service_id\":...,\"scope\":...,\"version\":3,\"schema\":...,\"policy\":{...}}"
 }
 ```
 
-The daemon's config-fabric consumer already watches for desired-state events on the relay. When it sees the operator's event, it applies the config and publishes an applied-state event. The CLI can verify application by watching for the applied-state event or the `30315` intent-status.
+The relay-sidecar config consumer watches these desired-state events and emits
+schema-v3 config-status `30900` records at the stable
+`config-status:<service>:<policy>:<scope>` coordinate. They are not `30315`
+intent-status records. The daemon's configured fleet-ops pubkeys and explicit
+sidecar config-trusted pubkeys authorize these two config kinds only.
 
 ### 4.3 Config rollback
 
-`bahia config rollback <event-id>` reads the prior desired-state event from the local store by event ID, increments the version, and publishes a new desired-state event with the old content. No REST call needed.
+`bahia config rollback <event-id>` reads the prior desired-state event from the
+local store or CLI outbox by event ID, requires the same operator author,
+increments the version for the operator's `(service, policy, scope)` coordinate,
+and publishes a new desired-state event with the old content. No REST call needed.
 
 ### 4.4 Config drift
 

@@ -375,17 +375,33 @@ Policy reads use signed `30900` policy-registry records by default; `--http-fall
 ### Config fabric
 
 ```bash
-# Publish a validated desired-state request; Bahia signs through operator Signet
-bahia config publish --file config-request.json
+# Sign a validated NIP-51/NIP-78 desired-state request with an operator nsec
+# or NIP-46 bunker and publish directly to relays (per-relay OKs in CLI outbox).
+bahia --relay wss://relay.example --service-pubkey <daemon-pubkey> \
+  config publish --file config-request.json
 
 # Compare desired events with applied/rejected/withdrawn status
 # (WITHDRAWN: the desired event was deleted or expired; the last applied
 # config stays live until a newer version is published)
-bahia config drift
+bahia --relay wss://relay.example --service-pubkey <daemon-pubkey> config drift
 
 # Republish a prior desired event at the next version
-bahia config rollback <desired-event-id>
+bahia --relay wss://relay.example --service-pubkey <daemon-pubkey> \
+  config rollback <desired-event-id>
 ```
+
+`publish` and `rollback` require `--nostr-key-file`/`BAHIA_NOSTR_NSEC` or a
+NIP-46 bunker signer. The signer must be a configured fleet operator or a
+trusted config author on the relay sidecar. Rollback requires a desired event
+by the same operator retained in the local store or CLI outbox; it copies the
+old policy/list payload and assigns the next version for that operator and
+`(service, policy, scope)` coordinate. Drift reads local desired events and
+the daemon's stable `config-status:<service>:<policy>:<scope>` v3 records;
+`GET /config-fabric/drift` remains available for compatibility. Publish and
+rollback require EOSE from every configured relay before choosing a version;
+drift can still show stale local data with a warning when relays are unavailable.
+The latest v3 status carries the last effective event even while a newer
+desired version is merely accepted, so local drift retains the applied version.
 
 ### Secrets
 

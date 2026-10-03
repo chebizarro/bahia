@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,6 +22,71 @@ func (stubConfigSigner) Sign(context.Context, *nostr.Event) error { return nil }
 type stubConfigPublisher struct{}
 
 func (stubConfigPublisher) Publish(context.Context, nostr.Event) (int, error) { return 1, nil }
+
+func TestFleetOperatorConfigAuthorPassesRelayGateAndConsumer(t *testing.T) {
+	serviceKey := nostr.Generate()
+	operator := nostr.Generate()
+	stranger := nostr.Generate()
+	cfg := sidecarTestConfig(t)
+	cfg.PrivateKey = serviceKey.Hex()
+	cfg.AuthorizedPubkeys = []string{operator.Public().Hex()}
+	cfg.Sidecar.ServiceID = "relay-sidecar-test"
+	cfg.Sidecar.Scope = "prod"
+	cfg.Sidecar.ConfigProjectionPath = filepath.Join(t.TempDir(), "projection.json")
+	server, err := New(cfg, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	require.NotNil(t, server.consumer)
+
+	request := service.ConfigPublishRequest{
+		Kind: service.ConfigFabricListKind, ServiceID: "relay-sidecar-test", PolicyName: "membership",
+		Scope: "prod", Version: 1, Schema: "cascadia.config.membership.v1",
+		Items: []service.ConfigListItem{{Tag: "p", Value: operator.Public().Hex()}},
+	}
+	event, err := service.ComposeConfigEvent(request, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, event.Sign(operator))
+	rejected, reason := server.admission.acceptEvent(t.Context(), *event)
+	require.False(t, rejected, reason)
+	_, err = server.Relay().AddEvent(t.Context(), *event)
+	require.NoError(t, err)
+	require.NoError(t, server.consumer.Handle(t.Context(), *event))
+	server.consumer.processPending(t.Context())
+	require.Equal(t, 1, appliedVersionForTest(server.consumer, operator.Public().Hex(), "membership"))
+
+	untrusted, err := service.ComposeConfigEvent(request, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, untrusted.Sign(stranger))
+	rejected, _ = server.admission.acceptEvent(t.Context(), *untrusted)
+	require.True(t, rejected)
+}
+
+func TestConfigStatusTimestampOrdersDifferentTrustedOperators(t *testing.T) {
+	first, second, serviceKey := nostr.Generate(), nostr.Generate(), nostr.Generate()
+	var statuses []nostr.Event
+	consumer, err := NewConfigConsumer(ConfigConsumerConfig{
+		ServiceID: "relay-sidecar-test", Scope: "prod", ProjectionPath: filepath.Join(t.TempDir(), "projection.json"),
+		TrustedAuthors: []string{first.Public().Hex(), second.Public().Hex()},
+		Signer:         relayConfigSigner{secret: serviceKey},
+		Publisher: configStatusPublisherFunc(func(_ context.Context, event nostr.Event) (int, error) {
+			statuses = append(statuses, event)
+			return 1, nil
+		}),
+		Now:   func() time.Time { return time.Unix(1790200000, 0) },
+		Apply: func(ConfigProjection) error { return nil },
+	})
+	require.NoError(t, err)
+	for _, author := range []nostr.SecretKey{first, second} {
+		event := desiredWithTags(t, author, 1, 1790200000)
+		require.NoError(t, consumer.Handle(t.Context(), event))
+		consumer.processPending(t.Context())
+	}
+	require.Len(t, statuses, 4)
+	require.Equal(t, "applied", statuses[1].Tags.Find("status")[1])
+	require.Equal(t, "accepted", statuses[2].Tags.Find("status")[1])
+	require.Greater(t, statuses[2].CreatedAt, statuses[1].CreatedAt,
+		"different desired authors still share the service-signed status address")
+}
 
 // membershipEvent builds a signed NIP-51 membership list carrying the supplied
 // p tags verbatim, so tests can exercise tag shapes a publisher may legitimately
