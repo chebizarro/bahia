@@ -1827,6 +1827,11 @@ func New(cfg *config.Config) (*App, error) {
 
 	var securityScanner *service.SecurityScanner
 	if securityRepo != nil && sbomStorageResolver != nil && nostrPub != nil && relayPool != nil {
+		// bahia-irsry.60: confidential cp-state for security findings.
+		var securityCPPub *nostrAdapter.SecurityCanonicalPublisher
+		if nostrProjector != nil && confidentialEncryptor != nil {
+			securityCPPub = nostrAdapter.NewSecurityCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
+		}
 		securityScanner = service.NewSecurityScanner(service.SecurityScannerConfig{
 			Repo:       securityRepo,
 			SBOMs:      sbomManifestRepo,
@@ -1845,6 +1850,10 @@ func New(cfg *config.Config) (*App, error) {
 		nostrPub.OnDelivered(securityScanner.HandlePublishDelivered)
 		bgManager.RegisterWithOptions(securityScanner)
 		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{Repo: securityRepo, Scanner: securityScanner, Deriver: policySvc, Logger: logger}))
+		// bahia-irsry.60: wire schedule cp-state publisher to policy service.
+		if securityCPPub != nil {
+			policySvc.SetSecurityScheduleCPPublisher(securityCPPub)
+		}
 		logger.Info("security OSV scanner and scheduler registered")
 	}
 
@@ -1852,6 +1861,12 @@ func New(cfg *config.Config) (*App, error) {
 	// It does not create or redeem Cashu tokens; cashu.enabled live wallet mode
 	// remains fail-closed until mint-backed proof flows are implemented.
 	paymentSvc := service.NewPaymentService(paymentRepo, workerRepo, runRepo, logger)
+	// bahia-irsry.60: confidential cp-state for payment records.
+	if nostrProjector != nil && confidentialEncryptor != nil {
+		paymentCanonical := nostrAdapter.NewPaymentCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
+		paymentSvc.SetCPStatePublisher(paymentCanonical)
+		logger.Info("payment cp-state publisher wired")
+	}
 	if cfg.Cashu.Enabled {
 		return nil, fmt.Errorf("cashu.enabled=true is unsupported because mint-backed token flows are not implemented; disable cashu.enabled")
 	}

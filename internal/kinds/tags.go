@@ -163,3 +163,13 @@ const (
 	SBOMReferenceTopic      = "sbom-reference"
 	SBOMAvailabilityTopic   = "sbom-availability"
 )
+
+// Payment and security cp-state topics (bahia-irsry.60). These records are
+// published through controlStateEnvelope as confidential cp-state (OCK-
+// encrypted) so only org members and the daemon can decrypt them.
+const (
+	CPStateTopicPaymentRecord         = "payment-record"
+	CPStateTopicSecurityFinding       = "security-finding"
+	CPStateTopicSecuritySchedule      = "security-schedule"
+	CPStateTopicSecurityFindingDetail = "security-finding-detail"
+)

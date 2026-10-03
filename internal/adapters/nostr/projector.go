@@ -496,6 +496,11 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindNotificationChannelRegistry: {"notification", "channel", kinds.CPStateTopicNotificationChannelRegistry},
 	// Org key-envelope family (Phase 3 C1: per-org content key distribution).
 	KindOrgKeyEnvelope: {"org", "key-envelope", kinds.CPStateTopicOrgKeyEnvelope},
+	// Payment and security cp-state families (bahia-irsry.60).
+	KindPaymentRecord:               {"payment", "record", kinds.CPStateTopicPaymentRecord},
+	KindSecurityFindingRecord:       {"security", "finding", kinds.CPStateTopicSecurityFinding},
+	KindSecurityScheduleRecord:      {"security", "schedule", kinds.CPStateTopicSecuritySchedule},
+	KindSecurityFindingDetailRecord: {"security", "finding-detail", kinds.CPStateTopicSecurityFindingDetail},
 }
 
 // CPStateDomains returns all unique cp-state domain names from the

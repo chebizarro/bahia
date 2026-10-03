@@ -80,3 +80,19 @@ func (f CPStateFamily) LegacyKind() int { return int(f) }
 
 // TagValue returns the legacy_kind tag value consumers match on.
 func (f CPStateFamily) TagValue() string { return strconv.Itoa(int(f)) }
+
+// Payment and security cp-state families (bahia-irsry.60). These records are
+// confidential (OCK-encrypted) and published through the shared cp-state
+// envelope with the controlStateEnvelope/publishControlState pipeline.
+const (
+	CPStateFamilyPaymentRecord         CPStateFamily = PaymentRecord
+	CPStateFamilySecurityFinding       CPStateFamily = SecurityFindingRecord
+	CPStateFamilySecuritySchedule      CPStateFamily = SecurityScheduleRecord
+	CPStateFamilySecurityFindingDetail CPStateFamily = SecurityFindingDetailRecord
+)
+
+// FleetOCKScope is the well-known orgID value used for fleet-wide
+// confidential cp-state (payments, security findings/schedules). The OCK
+// for this scope is wrapped to all fleet operators (config authorized_pubkeys
+// plus bootstrap_owners) so they can decrypt in the web dashboard.
+const FleetOCKScope = "fleet"

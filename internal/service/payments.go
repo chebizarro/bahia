@@ -13,12 +13,20 @@ import (
 	"go.uber.org/zap"
 )
 
+// PaymentCPStatePublisher publishes payment records as confidential cp-state
+// (bahia-irsry.60). Optional: if nil, payment mutations succeed without
+// relay publication.
+type PaymentCPStatePublisher interface {
+	PublishPaymentRecord(ctx context.Context, rec *domain.PaymentRecord) error
+}
+
 // PaymentService manages Cashu payment lifecycle for deployment runs.
 type PaymentService struct {
-	payments repository.PaymentRecordRepository
-	workers  repository.WorkerRepository
-	runs     repository.DeploymentRunRepository
-	logger   *zap.Logger
+	payments    repository.PaymentRecordRepository
+	workers     repository.WorkerRepository
+	runs        repository.DeploymentRunRepository
+	cpPublisher PaymentCPStatePublisher
+	logger      *zap.Logger
 }
 
 // NewPaymentService creates a new payment service.
@@ -34,6 +42,12 @@ func NewPaymentService(
 		runs:     runs,
 		logger:   logger,
 	}
+}
+
+// SetCPStatePublisher configures the optional cp-state publisher for payment
+// records. Must be called before any mutations.
+func (s *PaymentService) SetCPStatePublisher(pub PaymentCPStatePublisher) {
+	s.cpPublisher = pub
 }
 
 // EstimateCost calculates the cost estimate for a deployment run based on
@@ -108,12 +122,19 @@ func (s *PaymentService) RecordPayment(ctx context.Context, runID uuid.UUID, wor
 		zap.String("run_id", runID.String()),
 		zap.Int64("amount_sats", amountSats),
 	)
+	s.publishCPState(ctx, rec)
 	return rec, nil
 }
 
 // MarkPaymentSent updates a payment record to sent status.
 func (s *PaymentService) MarkPaymentSent(ctx context.Context, paymentID uuid.UUID) error {
-	return s.payments.UpdateStatus(ctx, paymentID, domain.PaymentStatusSent, "")
+	if err := s.payments.UpdateStatus(ctx, paymentID, domain.PaymentStatusSent, ""); err != nil {
+		return err
+	}
+	if rec, err := s.payments.GetByID(ctx, paymentID); err == nil && rec != nil {
+		s.publishCPState(ctx, rec)
+	}
+	return nil
 }
 
 // RecordChange records a change (refund) token received from a worker.
@@ -136,6 +157,7 @@ func (s *PaymentService) RecordChange(ctx context.Context, runID uuid.UUID, work
 		zap.String("run_id", runID.String()),
 		zap.Int64("change_sats", amountSats),
 	)
+	s.publishCPState(ctx, rec)
 	return rec, nil
 }
 
@@ -178,6 +200,21 @@ type CostSummary struct {
 	NetCost      int64 `json:"net_cost_sats"`
 	PaymentCount int   `json:"payment_count"`
 	ChangeCount  int   `json:"change_count"`
+}
+
+// publishCPState publishes a payment record as confidential cp-state.
+// Errors are logged but do not fail the mutation — the database is the
+// source of truth, and the relay record is a projection.
+func (s *PaymentService) publishCPState(ctx context.Context, rec *domain.PaymentRecord) {
+	if s.cpPublisher == nil || rec == nil {
+		return
+	}
+	if err := s.cpPublisher.PublishPaymentRecord(ctx, rec); err != nil {
+		s.logger.Warn("payment cp-state publish failed",
+			zap.String("payment_id", rec.ID.String()),
+			zap.Error(err),
+		)
+	}
 }
 
 // hashToken creates a SHA-256 hash of a Cashu token for storage.

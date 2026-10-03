@@ -45,6 +45,15 @@ const (
 	maxSecurityBackoff                = 30 * time.Second
 )
 
+// SecurityCPStatePublisher publishes individual security findings and schedules
+// as confidential cp-state records (bahia-irsry.60). Optional: if nil, security
+// mutations succeed without cp-state publication.
+type SecurityCPStatePublisher interface {
+	PublishFinding(ctx context.Context, finding domain.SecurityOSVFinding) error
+	PublishFindingDetail(ctx context.Context, finding domain.SecurityOSVFinding) error
+	PublishSchedule(ctx context.Context, schedule *domain.SecurityScanSchedule) error
+}
+
 // SecurityVerifiedPublisher signs and publishes Security observables through
 // the durable outbox publisher. Its error contract is the outbox's: nil means
 // the publish quorum accepted the event; an error wrapping
@@ -109,6 +118,7 @@ type SecurityScannerConfig struct {
 	OSV                SecurityOSVClient
 	Publisher          SecurityVerifiedPublisher
 	Subscriber         SecurityRelaySubscriber
+	CPPublisher        SecurityCPStatePublisher
 	Pubkey             string
 	Logger             *zap.Logger
 	RecoveryLimit      int
@@ -117,16 +127,17 @@ type SecurityScannerConfig struct {
 }
 
 type SecurityScanner struct {
-	repo       repository.SecurityRepository
-	sboms      repository.SBOMManifestRepository
-	policies   SecurityPolicyProvider
-	events     events.Publisher
-	storage    *sbomadapter.StorageResolver
-	osv        SecurityOSVClient
-	publisher  SecurityVerifiedPublisher
-	subscriber SecurityRelaySubscriber
-	pubkey     string
-	logger     *zap.Logger
+	repo        repository.SecurityRepository
+	sboms       repository.SBOMManifestRepository
+	policies    SecurityPolicyProvider
+	events      events.Publisher
+	storage     *sbomadapter.StorageResolver
+	osv         SecurityOSVClient
+	publisher   SecurityVerifiedPublisher
+	subscriber  SecurityRelaySubscriber
+	cpPublisher SecurityCPStatePublisher
+	pubkey      string
+	logger      *zap.Logger
 
 	recoveryLimit      int
 	findingChunkSize   int
@@ -266,6 +277,7 @@ func NewSecurityScanner(cfg SecurityScannerConfig) *SecurityScanner {
 		osv:                cfg.OSV,
 		publisher:          cfg.Publisher,
 		subscriber:         cfg.Subscriber,
+		cpPublisher:        cfg.CPPublisher,
 		pubkey:             strings.TrimSpace(cfg.Pubkey),
 		logger:             logger.Named("security-scanner"),
 		recoveryLimit:      recoveryLimit,
@@ -461,6 +473,7 @@ func (s *SecurityScanner) executeRun(ctx context.Context, runID uuid.UUID) error
 	if err := s.repo.UpsertSecurityFindings(ctx, outcome.findings); err != nil {
 		return s.failRun(ctx, run, target, err)
 	}
+	s.publishFindingsCPState(ctx, outcome.findings)
 	finished := time.Now().UTC()
 	run.Status = domain.SecurityScanCompleted
 	run.OSVQueryCount = len(outcome.queries)
@@ -861,6 +874,32 @@ func findingFromVulnerability(runID uuid.UUID, targetHash string, coordinate sca
 	key := strings.Join([]string{targetHash, coordinate.key, vuln.ID}, ":")
 	severity := normalizeSecuritySeverity(vuln.Severity)
 	return domain.SecurityOSVFinding{ID: uuid.New(), RunID: runID, TargetKeyHash: targetHash, FindingKey: key, FindingKeyHash: domain.CanonicalTargetHash(key), OSVID: vuln.ID, CVE: vuln.CVE, Summary: vuln.Summary, Details: vuln.Details, Severity: severity, Package: coordinate.pkg, Aliases: append([]string(nil), vuln.Aliases...), References: append([]string(nil), vuln.References...), WithdrawnAt: parseOptionalTime(vuln.Withdrawn), RawModified: vuln.Modified, Metadata: map[string]any{"coordinate_key": coordinate.key}}
+}
+
+// publishFindingsCPState publishes each finding as an individual confidential
+// cp-state record (bahia-irsry.60). Errors are logged but do not fail the scan
+// — the database is the source of truth, and the cp-state records are
+// projections. One record per finding ensures no event exceeds NIP-44 limits.
+func (s *SecurityScanner) publishFindingsCPState(ctx context.Context, findings []domain.SecurityOSVFinding) {
+	if s.cpPublisher == nil || len(findings) == 0 {
+		return
+	}
+	for _, finding := range findings {
+		if err := s.cpPublisher.PublishFinding(ctx, finding); err != nil {
+			s.logger.Warn("security finding cp-state publish failed",
+				zap.String("finding_id", finding.ID.String()),
+				zap.String("osv_id", finding.OSVID),
+				zap.Error(err),
+			)
+		}
+		if err := s.cpPublisher.PublishFindingDetail(ctx, finding); err != nil {
+			s.logger.Warn("security finding detail cp-state publish failed",
+				zap.String("finding_id", finding.ID.String()),
+				zap.String("osv_id", finding.OSVID),
+				zap.Error(err),
+			)
+		}
+	}
 }
 
 func (s *SecurityScanner) publishCompletionObservables(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget, findings []domain.SecurityOSVFinding) error {

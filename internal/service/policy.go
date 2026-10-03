@@ -23,14 +23,22 @@ type SBOMAttestationProvider interface {
 }
 
 // PolicyService evaluates deployment policies against artifacts.
+// SecurityScheduleCPPublisher publishes security scan schedules as confidential
+// cp-state records (bahia-irsry.60). Optional: if nil, schedule mutations
+// succeed without relay publication.
+type SecurityScheduleCPPublisher interface {
+	PublishSchedule(ctx context.Context, schedule *domain.SecurityScanSchedule) error
+}
+
 type PolicyService struct {
-	policies     repository.DeploymentPolicyRepository
-	signatures   repository.ArtifactSignatureRepository
-	sboms        repository.SBOMRepository
-	security     repository.SecurityRepository
-	attestations SBOMAttestationProvider
-	trustedGens  map[string]bool // map of trusted generator IDs
-	logger       *zap.Logger
+	policies            repository.DeploymentPolicyRepository
+	signatures          repository.ArtifactSignatureRepository
+	sboms               repository.SBOMRepository
+	security            repository.SecurityRepository
+	attestations        SBOMAttestationProvider
+	scheduleCPPublisher SecurityScheduleCPPublisher
+	trustedGens         map[string]bool // map of trusted generator IDs
+	logger              *zap.Logger
 }
 
 // PolicyServiceOption configures the PolicyService.
@@ -44,6 +52,12 @@ func WithAttestationProvider(provider SBOMAttestationProvider) PolicyServiceOpti
 // WithSecurityRepository sets the Security repository used for latest-scan gates and policy-derived schedules.
 func WithSecurityRepository(repo repository.SecurityRepository) PolicyServiceOption {
 	return func(s *PolicyService) { s.security = repo }
+}
+
+// WithSecurityScheduleCPPublisher sets the cp-state publisher for security
+// scan schedules (bahia-irsry.60).
+func WithSecurityScheduleCPPublisher(pub SecurityScheduleCPPublisher) PolicyServiceOption {
+	return func(s *PolicyService) { s.scheduleCPPublisher = pub }
 }
 
 // WithTrustedGenerators sets the list of trusted SBOM generator IDs.
@@ -75,6 +89,13 @@ func NewPolicyService(
 		opt(s)
 	}
 	return s
+}
+
+// SetSecurityScheduleCPPublisher sets the cp-state publisher for security
+// scan schedules. Called after construction when the publisher's dependencies
+// (projector, encryptor) are available.
+func (s *PolicyService) SetSecurityScheduleCPPublisher(pub SecurityScheduleCPPublisher) {
+	s.scheduleCPPublisher = pub
 }
 
 // Evaluate runs all applicable policies against an artifact for the given environment.
@@ -814,9 +835,24 @@ func (s *PolicyService) syncSecuritySchedulesForPolicy(ctx context.Context, p *d
 			if err := s.security.UpsertSecurityScanSchedule(ctx, schedule); err != nil {
 				return err
 			}
+			s.publishScheduleCPState(ctx, schedule)
 		}
 	}
 	return nil
+}
+
+// publishScheduleCPState publishes a schedule as confidential cp-state.
+// Errors are logged, not propagated — the database is the source of truth.
+func (s *PolicyService) publishScheduleCPState(ctx context.Context, schedule *domain.SecurityScanSchedule) {
+	if s.scheduleCPPublisher == nil || schedule == nil {
+		return
+	}
+	if err := s.scheduleCPPublisher.PublishSchedule(ctx, schedule); err != nil {
+		s.logger.Warn("security schedule cp-state publish failed",
+			zap.String("schedule_id", schedule.ID.String()),
+			zap.Error(err),
+		)
+	}
 }
 
 func (s *PolicyService) securityTargetsForScheduleRule(ctx context.Context, rule domain.PolicyRule) ([]domain.SecurityTarget, error) {
