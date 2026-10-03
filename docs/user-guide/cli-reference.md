@@ -269,6 +269,19 @@ bahia deployments route-attach --service svc-123 --environment env-456 \
 bahia deployments rollback --service svc-123 --environment env-456 --deployment-unit unit-789 --target-artifact artifact-prev --supersedes-intent intent-current
 ```
 
+Deployment creation, rollback, approval, and `services actions deploy/restart/stop`
+currently use signed ContextVM requests. The daemon does not yet register a
+`deployment` 30900 intent handler, and the direct runtime action reactor does
+not implement a 30900 `runtime` intent handler. These commands cannot use
+direct intent publication until those handlers reconcile the corresponding
+canonical state.
+Each invocation prints a UUIDv7 idempotency key and sends it as
+`_meta.progressToken`. If a response is interrupted, retry the same operation
+with `--idempotency-key <printed-key>`; a new key requests a new execution.
+`-32011` means the daemon cannot replay the outcome, not that the deployment
+failed. `--http-fallback` still controls the legacy compatibility path for
+these unmigrated commands.
+
 ### State
 
 ```bash

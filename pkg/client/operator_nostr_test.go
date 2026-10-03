@@ -659,6 +659,29 @@ func TestOperatorRuntimeRestartStopRequestConstruction(t *testing.T) {
 	}
 }
 
+func TestOperatorRuntimeActionUsesExplicitProgressToken(t *testing.T) {
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		transport.events <- signedContextVMResult(t, nostr.Generate().Hex(), ev, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
+		return 1, nil
+	}
+	if _, err := client.RestartServiceRuntimeNostr(context.Background(), "svc-1", "env-1", nil, "runtime-retry-1"); err != nil {
+		t.Fatal(err)
+	}
+	event := transport.onlyPublished(t)
+	rpc := decodePublishedContextVMRequest(t, event)
+	if got := firstTagValue(event.Tags, "d"); got != "runtime-retry-1" {
+		t.Fatalf("d tag = %q", got)
+	}
+	if rpc.ID != "runtime-retry-1" {
+		t.Fatalf("rpc ID = %q", rpc.ID)
+	}
+	if meta, _ := rpc.Params["_meta"].(map[string]any); meta == nil || meta["progressToken"] != "runtime-retry-1" {
+		t.Fatalf("progress token = %#v", rpc.Params["_meta"])
+	}
+}
+
 func TestOperatorRollbackUsesIdempotencyTagOnly(t *testing.T) {
 	requestKey := nostr.Generate().Hex()
 	replyKey := nostr.Generate().Hex()
@@ -872,6 +895,24 @@ func TestOperatorContextVMErrorIsPostAcceptanceFailure(t *testing.T) {
 	var reqErr *ControlPlaneRequestError
 	if !errors.As(err, &reqErr) || !reqErr.RequestAccepted || !strings.Contains(err.Error(), "method denied") {
 		t.Fatalf("error = %T %v, want accepted ContextVM error", err, err)
+	}
+}
+
+func TestOperatorInterruptedDeploymentExplainsRetryKey(t *testing.T) {
+	transport := newFakeOperatorTransport()
+	client := newTestOperatorClient(t, nostr.Generate().Hex(), transport)
+	transport.publishFn = func(ctx context.Context, ev nostr.Event) (int, error) {
+		transport.events <- signedContextVMErrorCode(t, nostr.Generate().Hex(), ev,
+			controlplane.ContextVMDuplicateRequestErrorCode, "request outcome unknown")
+		return 1, nil
+	}
+	_, err := client.CreateDeploymentIntentWithRequestNostr(context.Background(), DeploymentIntentNostrRequest{
+		ServiceID: "svc", EnvironmentID: "env", ArtifactID: "art", IdempotencyKey: "deploy-retry-1",
+	}, nil)
+	var remote *ContextVMRemoteError
+	if !errors.As(err, &remote) || remote.Code != controlplane.ContextVMDuplicateRequestErrorCode ||
+		!strings.Contains(err.Error(), "--idempotency-key deploy-retry-1") {
+		t.Fatalf("error = %T %v, want -32011 with retry guidance", err, err)
 	}
 }
 
