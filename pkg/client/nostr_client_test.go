@@ -456,17 +456,6 @@ func TestDecodeGenericFamilies(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Confidential records
-// ---------------------------------------------------------------------------
-
-func TestErrNotDecryptable(t *testing.T) {
-	err := &ErrNotDecryptable{Domain: "secret", EventID: "abc123"}
-	assert.Contains(t, err.Error(), "secret")
-	assert.Contains(t, err.Error(), "abc123")
-	assert.Contains(t, err.Error(), "cannot be decrypted")
-}
-
-// ---------------------------------------------------------------------------
 // Domain topics and filter building
 // ---------------------------------------------------------------------------
 

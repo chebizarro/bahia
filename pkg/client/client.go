@@ -815,6 +815,7 @@ type SecretRef struct {
 }
 
 // ListSecrets returns secrets for a service.
+// Deprecated: use the NostrClient confidential secret read path.
 func (c *Client) ListSecrets(ctx context.Context, serviceID string) ([]SecretRef, error) {
 	var secrets []SecretRef
 	if err := c.do(ctx, http.MethodGet, "/api/v1/services/"+serviceID+"/secrets", nil, &secrets); err != nil {
@@ -847,6 +848,7 @@ func (c *Client) DeleteSecret(ctx context.Context, serviceID, secretID string) e
 // --- Organizations ---
 
 // ListOrgs returns organizations the current user is a member of.
+// Deprecated: use the NostrClient confidential organization read path.
 func (c *Client) ListOrgs(ctx context.Context) ([]domain.Organization, error) {
 	var orgs []domain.Organization
 	if err := c.do(ctx, http.MethodGet, "/api/v1/orgs", nil, &orgs); err != nil {
@@ -856,6 +858,7 @@ func (c *Client) ListOrgs(ctx context.Context) ([]domain.Organization, error) {
 }
 
 // GetOrg returns an organization by ID or name.
+// Deprecated: use the NostrClient confidential organization read path.
 func (c *Client) GetOrg(ctx context.Context, idOrName string) (*domain.Organization, error) {
 	var org domain.Organization
 	if err := c.do(ctx, http.MethodGet, "/api/v1/orgs/"+idOrName, nil, &org); err != nil {
@@ -878,6 +881,7 @@ func (c *Client) CreateOrg(ctx context.Context, name, displayName string) (*doma
 }
 
 // ListOrgMembers returns members of an organization.
+// Deprecated: use the NostrClient confidential member read path.
 func (c *Client) ListOrgMembers(ctx context.Context, orgID string) ([]domain.OrgMember, error) {
 	var members []domain.OrgMember
 	if err := c.do(ctx, http.MethodGet, "/api/v1/orgs/"+orgID+"/members", nil, &members); err != nil {

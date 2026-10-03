@@ -14,17 +14,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
-// ErrNotDecryptable is returned when a 30900 event's content is encrypted
-// and the NostrClient has no signer capable of decrypting it.
-type ErrNotDecryptable struct {
-	Domain  string
-	EventID string
-}
-
-func (e *ErrNotDecryptable) Error() string {
-	return fmt.Sprintf("event %s in domain %q is encrypted and cannot be decrypted without a signer", e.EventID, e.Domain)
-}
-
 // DecodedEvent wraps a 30900 event with its decoded domain, family, and
 // parsed content.
 type DecodedEvent struct {

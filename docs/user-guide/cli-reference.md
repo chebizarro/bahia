@@ -144,10 +144,11 @@ The current top-level CLI command groups are:
 - `config`
 - `secrets`
 - `orgs`
+- `notifications`
 - `package`
 - `souls`
 
-Bahia does **not** currently register top-level `llm`, `payments`, or `notifications` CLI commands.
+Bahia does **not** currently register top-level `llm` or `payments` CLI commands.
 
 ## Commands
 
@@ -420,6 +421,8 @@ desired version is merely accepted, so local drift retains the applied version.
 
 ### Secrets
 
+`secrets list` reads OCK-encrypted `30900` secret references from relays by default. It returns metadata only; secret values are never included and remain available only through the authorized ContextVM reveal flow. A NIP-44-capable signer (`--nostr-key-file`/`BAHIA_NOSTR_NSEC`, or a NIP-46 bunker) and the Bahia service pubkey are required. Use `--http-fallback` only for the legacy REST read.
+
 ```bash
 # List secrets for a service
 bahia secrets list svc-123
@@ -432,6 +435,8 @@ bahia secrets delete svc-123 secret-456
 ```
 
 ### Organizations
+
+`orgs list`, `orgs get`, and `orgs members list` read the service's signed `30900` records and unwrap the matching `32010` OCK envelope through the CLI signer. A non-member receives `not readable with this key` with exit code 0, not decrypted org data. The local event-store cursor is reused across reads; missing relay EOSE prints a stale warning while returning cached state. `--http-fallback` explicitly selects the legacy REST reads.
 
 ```bash
 # List organizations
@@ -451,6 +456,15 @@ bahia orgs members add org-123 npub1member... --role deployer
 
 # Remove a member
 bahia orgs members remove org-123 npub1member...
+```
+
+### Notification channels
+
+`notifications channels list` and `notifications channels get <channel-uuid>` read OCK-encrypted channel metadata from relays. Their output omits service-only webhook URLs and credentials, including for fleet-scoped channels. The signer, relay, service pubkey, stale-cache, and explicit `--http-fallback` rules are the same as for organization reads.
+
+```bash
+bahia notifications channels list -o json
+bahia notifications channels get <channel-uuid>
 ```
 
 ### Encrypted operator requests with a remote signer
@@ -629,7 +643,7 @@ bahia services get svc-123 -o yaml
 | `--bootstrap-relay` | Specify bootstrap relay seed for trusted operator discovery (repeatable) |
 | `--service-pubkey` | Specify Bahia service pubkey for routing and single-service discovery trust |
 | `--trusted-service-pubkey` | Specify trusted Bahia service pubkey for bootstrap discovery (repeatable) |
-| `--http-fallback` | Use legacy HTTP for service, environment, state, policy, worker, build, and artifact reads; also allows explicit operator compatibility fallback |
+| `--http-fallback` | Use legacy HTTP for service, environment, state, policy, worker, build, artifact, organization, secret and notification reads; also allows explicit operator compatibility fallback |
 | `--eose-timeout` | Maximum wait for relay EOSE on Nostr reads (default `5s`; env `BAHIA_EOSE_TIMEOUT`). If no relay reaches EOSE, cached data is printed with a stale warning on stderr and the read exits 0 |
 | `--encrypted` | Use NIP-59/NIP-44 encrypted operator requests and replies; requires `--service-pubkey` |
 | `--result-timeout` | Maximum wait for a 30315 status on service/environment intents, or a ContextVM result for remaining commands (default `30s`; intents also support `BAHIA_RESULT_TIMEOUT`) |

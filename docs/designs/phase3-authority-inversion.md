@@ -191,9 +191,9 @@ All key lifecycle operations are triggered from `OrgCanonicalPublisher.PublishMe
 
 **Fleet-scoped resources:**
 - Notification channels with no org (`OrgID == uuid.Nil`) are fleet-scoped.
-- Fleet-scoped channels use a synthetic `"fleet"` org key scope. `TrustSetMemberSource` for `"fleet"` returns no members (not a valid UUID, no relay members), so only the service pubkey receives an OCK envelope. The `"fleet"` string is never `uuid.Parse`d — it flows through the OCK code as a plain string key without triggering Postgres errors.
-- Fleet-scoped channels are service-only until a fleet-ops key set is defined. Org-visible metadata is minimal (name, type, enabled, `fleet_scoped: true`); the full config is in service_inner.
-- Fleet ops manage these channels through the daemon API, not relay discovery.
+- Fleet-scoped channels use a synthetic `"fleet"` org key scope. `TrustSetMemberSource` wraps that OCK to configured fleet operators, bootstrap owners, and the service pubkey; it does not parse `"fleet"` as a UUID. Recipients discover their envelope by the same trial-decrypt path as org members.
+- The OCK-visible channel metadata is minimal (name, type, enabled, `fleet_scoped: true`); the full config remains in `service_inner` and is readable only by the service.
+- Fleet operators can read this metadata from signed relay state, including through the CLI. Mutations remain subject to the fleet operator gate.
 
 **Migration:**
 - Dual-read: new-format records are tried first, then legacy O1 format.

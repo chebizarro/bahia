@@ -78,7 +78,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringArrayVar(&operatorBootstrapRelays, "bootstrap-relay", nil, "Bootstrap relay URL for trusted operator relay discovery when --relay/BAHIA_NOSTR_RELAYS are absent (repeatable; env BAHIA_NOSTR_BOOTSTRAP_RELAYS)")
 	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "Trusted Bahia service pubkey for operator bootstrap discovery (repeatable; env BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS)")
-	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Use the legacy HTTP read path for state reads; also permits explicit operator compatibility fallback")
+	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Use the legacy HTTP read path for service, environment, state, policy, worker, build, artifact, organization, secret and notification reads; also permits explicit operator compatibility fallback")
 	rootCmd.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "Encrypt operator ContextVM requests and responses with NIP-59/NIP-44 (requires --service-pubkey)")
 	rootCmd.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "Maximum time to await a 30315 intent status or legacy ContextVM result (BAHIA_RESULT_TIMEOUT for intents)")
 	rootCmd.PersistentFlags().IntVar(&operatorResultRetries, "result-retries", client.DefaultOperatorResultRetries, "Number of idempotent ContextVM re-publish attempts after result timeout")
@@ -101,6 +101,7 @@ func newRootCommand() *cobra.Command {
 		configCommands(),
 		secretsCommands(),
 		orgsCommands(),
+		notificationCommands(),
 		packageCommands(),
 		soulFactoryCommands(),
 		appCommands(),
@@ -1228,26 +1229,7 @@ func secretsCommands() *cobra.Command {
 		Use:   "list [service-id]",
 		Short: "List secrets for a service",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
-			closeSigner, err := configureNIP46HTTPClientAuth(cmd, apiClient)
-			if err != nil {
-				return err
-			}
-			if closeSigner != nil {
-				defer func() { retErr = errors.Join(retErr, closeSigner()) }()
-			}
-			secrets, err := apiClient.ListSecrets(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			return output(secrets, []string{"ID", "NAME", "ENV", "ENCRYPTION", "VERSION"}, func(s client.SecretRef) []string {
-				env := s.EnvironmentID
-				if env == "" {
-					env = "(all)"
-				}
-				return []string{s.ID, s.Name, env, s.EncryptionMethod, fmt.Sprintf("%d", s.Version)}
-			})
-		},
+		RunE:  func(cmd *cobra.Command, args []string) error { return listCLISecrets(cmd, args[0]) },
 	}
 
 	var valueFile string
@@ -1351,28 +1333,14 @@ func orgsCommands() *cobra.Command {
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List your organizations",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			orgs, err := apiClient.ListOrgs(cmd.Context())
-			if err != nil {
-				return err
-			}
-			return output(orgs, []string{"ID", "NAME", "DISPLAY_NAME"}, func(o domain.Organization) []string {
-				return []string{o.ID.String(), o.Name, o.DisplayName}
-			})
-		},
+		RunE:  func(cmd *cobra.Command, _ []string) error { return listCLIOrgs(cmd) },
 	}
 
 	getCmd := &cobra.Command{
 		Use:   "get [id-or-name]",
 		Short: "Get an organization",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			org, err := apiClient.GetOrg(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			return outputSingle(org)
-		},
+		RunE:  func(cmd *cobra.Command, args []string) error { return getCLIOrg(cmd, args[0]) },
 	}
 
 	createCmd := &cobra.Command{
@@ -1401,15 +1369,7 @@ func orgsCommands() *cobra.Command {
 		Use:   "list [org-id]",
 		Short: "List organization members",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			members, err := apiClient.ListOrgMembers(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			return output(members, []string{"PUBKEY", "ROLE", "NIP05", "JOINED"}, func(m domain.OrgMember) []string {
-				return []string{truncate(m.Pubkey, 16), string(m.Role), m.NIP05, m.JoinedAt.Format(time.RFC3339)}
-			})
-		},
+		RunE:  func(cmd *cobra.Command, args []string) error { return listCLIOrgMembers(cmd, args[0]) },
 	}
 
 	membersAddCmd := &cobra.Command{
