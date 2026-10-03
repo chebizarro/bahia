@@ -25,7 +25,7 @@ function updatedAt(record) {
 
 /** Build the unsigned event produced by Go's IntentPublisher.BuildIntentEvent. */
 export function buildIntentEvent({ domain, op = 'update', coordinate, orgId, content = {}, intentId = mintEntityId(),
-  currentRecord, expectedUpdatedAt, createdAt = Math.floor(Date.now() / 1000), pubkey } = {}) {
+  currentRecord, expectedUpdatedAt, createdAt = Math.floor(Date.now() / 1000), pubkey, schema } = {}) {
   if (!domain || !coordinate || !orgId || !intentId) throw new Error('Intent requires domain, coordinate, orgId and intentId');
   if (!['create', 'update', 'delete', 'repository-apply', 'repository-delete', 'publish', 'promote', 'yank', 'drift-detect'].includes(op)) {
     throw new Error(`Invalid intent operation: ${op}`);
@@ -41,7 +41,7 @@ export function buildIntentEvent({ domain, op = 'update', coordinate, orgId, con
     kind: 30900,
     created_at: createdAt,
     tags: [
-      ['d', coordinate], ['domain', domain], ['schema', `bahia.intent.${domain}.v1`],
+      ['d', coordinate], ['domain', domain], ['schema', schema || `bahia.intent.${domain}.v1`],
       ['t', 'bahia-intent'], ['t', domain.replaceAll('_', '-')], ['op', op],
       ['org', orgId], ['intent_id', intentId]
     ],

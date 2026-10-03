@@ -721,6 +721,46 @@ func TestSelfAuthorizingHandler_MemberAddByOrgOwnerAccepted(t *testing.T) {
 	}
 }
 
+func TestSelfAuthorizingHandler_InviteeCanOnlyAcceptMatchingInvite(t *testing.T) {
+	handler, _, members, invites, publisher, _ := newTestOrgHandler(t)
+	ctx := context.Background()
+	orgID := uuid.New()
+	invite := &domain.OrgInvite{ID: uuid.New(), OrgID: orgID, Pubkey: "invitee", Role: domain.RoleViewer, ExpiresAt: time.Now().Add(time.Hour)}
+	if err := invites.Create(ctx, invite); err != nil {
+		t.Fatal(err)
+	}
+	intent := memberAddIntent(orgID, "invitee", domain.RoleViewer, "invitee")
+	intent.Content["invite_id"] = invite.ID.String()
+	trustSet := NewTrustSet(nil, zap.NewNop())
+	if err := handler.AuthorizeIntent(ctx, trustSet, intent); err != nil {
+		t.Fatalf("valid acceptance rejected: %v", err)
+	}
+	if err := handler.HandleIntent(ctx, intent); err != nil {
+		t.Fatalf("acceptance failed: %v", err)
+	}
+	if member, err := members.GetMember(ctx, orgID, "invitee"); err != nil || member.Role != domain.RoleViewer {
+		t.Fatalf("membership missing: %v, %v", member, err)
+	}
+	if _, err := invites.GetByID(ctx, orgID, invite.ID); err != repository.ErrNotFound {
+		t.Fatalf("accepted invite was not consumed: %v", err)
+	}
+	if len(publisher.publishedInvites) != 1 || !publisher.publishedInvites[0].Deleted {
+		t.Fatal("accepted invite tombstone not published")
+	}
+	if err := handler.AuthorizeIntent(ctx, trustSet, intent); err == nil {
+		t.Fatal("reused invite accepted")
+	}
+
+	bad := &domain.OrgInvite{ID: uuid.New(), OrgID: orgID, Pubkey: "other", Role: domain.RoleViewer, ExpiresAt: time.Now().Add(time.Hour)}
+	if err := invites.Create(ctx, bad); err != nil {
+		t.Fatal(err)
+	}
+	intent.Content["invite_id"] = bad.ID.String()
+	if err := handler.AuthorizeIntent(ctx, trustSet, intent); err == nil {
+		t.Fatal("different invitee accepted")
+	}
+}
+
 func TestSelfAuthorizingHandler_DefaultDenyForUnknownOp(t *testing.T) {
 	handler, _, _, _, _, _ := newTestOrgHandler(t)
 	ctx := context.Background()

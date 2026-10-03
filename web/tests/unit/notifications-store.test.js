@@ -5,6 +5,11 @@ const encryptedRequestsMock = vi.hoisted(() => ({
   encryptedRequestsAvailable: vi.fn(() => true),
   servicePubkeyFromSystemInfo: vi.fn(() => 'b'.repeat(64))
 }));
+const intentMock = vi.hoisted(() => vi.fn(async request => ({ id: request.coordinate, pending: true })));
+vi.mock('../../src/lib/stores/sensitive-intents.svelte.js', () => ({
+  orgIdFor: record => record?.org_id || '0199c749-9300-7444-8444-444444444444',
+  submitSensitiveIntent: intentMock
+}));
 
 const systemMock = vi.hoisted(() => ({
   currentSystemInfo: vi.fn(() => ({
@@ -29,6 +34,7 @@ describe('notifications encrypted store', () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    encryptedRequestsMock.requestEncryptedResult.mockReset();
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(true);
     systemMock.currentSystemInfo.mockReturnValue({
       nostr: { service_pubkey: 'b'.repeat(64), browser_relays: ['wss://requests.example'] }
@@ -52,23 +58,15 @@ describe('notifications encrypted store', () => {
     expect(store.notificationState.channelsError).toBeNull();
   });
 
-  it('creates, updates, deletes, and tests channels through encrypted operations', async () => {
-    encryptedRequestsMock.requestEncryptedResult
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: { channel: { id: 'ch-1', name: 'Ops' } } } })
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: { channel: { id: 'ch-1', name: 'Ops updated' } } } })
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: { status: 'test sent' } } })
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: { status: 'deleted', id: 'ch-1' } } });
-
-    await store.createNotificationChannel({ name: 'Ops' });
-    await store.updateNotificationChannel('ch-1', { enabled: false });
-    await store.testNotificationChannel('ch-1');
-    await store.deleteNotificationChannel('ch-1');
-
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(1, { operation: 'notifications.channels.create', payload: { name: 'Ops' } });
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(2, { operation: 'notifications.channels.update', payload: { id: 'ch-1', enabled: false } });
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(3, { operation: 'notifications.channels.test', payload: { id: 'ch-1' } });
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(4, { operation: 'notifications.channels.delete', payload: { id: 'ch-1' } });
-    expect(store.notificationState.channels).toEqual([]);
+  it('submits channel CRUD as intents while keeping test-channel interactive', async () => {
+    encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({ result: { status: 'ok', payload: { status: 'test sent' } } });
+    const created = await store.createNotificationChannel({ name: 'Ops', org_id: '0199c749-9300-7444-8444-444444444444' });
+    await store.updateNotificationChannel(created.id, { enabled: false });
+    await store.testNotificationChannel(created.id);
+    await store.deleteNotificationChannel(created.id);
+    expect(intentMock.mock.calls.map(([request]) => request.op)).toEqual(['create', 'update', 'delete']);
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledTimes(1);
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith({ operation: 'notifications.channels.test', payload: { id: created.id } });
   });
 
   it('loads delivery logs only through encrypted result operations', async () => {

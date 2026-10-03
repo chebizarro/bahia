@@ -17,6 +17,7 @@ const systemInfo = createEncryptedNotificationsSystemInfo();
 const initialChannels = [
   {
     id: 'ch-1',
+    org_id: '0199c749-9300-7444-8444-444444444444',
     name: 'Ops Webhook',
     channel_type: 'webhook',
     config: { url: 'https://hooks.example.com/ops' },
@@ -33,7 +34,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe('Notifications encrypted transport smoke', () => {
-  test('browser notifications flow uses encrypted request/result transport end-to-end', async ({ page }) => {
+  test('channel create uses a 1059 intent; reads and test-channel stay interactive', async ({ page }) => {
     await page.goto('/notifications');
 
     await expect(page.getByRole('heading', { name: 'Notifications' })).toBeVisible();
@@ -53,6 +54,12 @@ test.describe('Notifications encrypted transport smoke', () => {
     await expect(row).toBeVisible();
     await expect(page.getByText('PagerDuty Webhook created')).toBeVisible();
 
+    // The post-create list refresh must finish before another ContextVM request
+    // is signed; this harness associates encrypted wraps with signed requests.
+    await expect.poll(() => page.evaluate(() =>
+      window.__BAHIA_E2E_ENCRYPTED_OPERATIONS.filter(op => op === 'notifications.channels.list').length
+    )).toBe(3);
+
     await row.getByRole('button', { name: 'Test' }).click();
     await expect(page.getByText('Test notification sent to PagerDuty Webhook')).toBeVisible();
 
@@ -62,18 +69,25 @@ test.describe('Notifications encrypted transport smoke', () => {
       requests: window.__BAHIA_E2E_ENCRYPTED_REQUESTS,
       oks: window.__BAHIA_E2E_ENCRYPTED_OKS,
       results: window.__BAHIA_E2E_ENCRYPTED_RESULTS,
-      operations: [...window.__BAHIA_E2E_ENCRYPTED_OPERATIONS]
+      operations: [...window.__BAHIA_E2E_ENCRYPTED_OPERATIONS],
+      intentWraps: window.__BAHIA_E2E_INTENT_WRAPS,
+      statuses: window.__BAHIA_E2E_INTENT_STATUS_EVENTS
     }));
 
     const normalizedRelays = transportTrace.relays.map(normalizeRelay);
-    expect(normalizedRelays.length).toBeGreaterThanOrEqual(3);
+    expect(normalizedRelays.length).toBeGreaterThanOrEqual(2);
     expect(normalizedRelays.every((relay) => relay === ENCRYPTED_RELAY)).toBe(true);
     expect(normalizedRelays.some((relay) => relay === PUBLIC_RELAY)).toBe(false);
     expect(transportTrace.operations).toEqual(expect.arrayContaining([
       'notifications.channels.list',
-      'notifications.channels.create',
+      'notification.intent.create',
       'notifications.channels.test'
     ]));
+    expect(transportTrace.intentWraps).toHaveLength(1);
+    expect(transportTrace.intentWraps[0].outer.kind).toBe(KIND_GIFT_WRAP);
+    expect(transportTrace.intentWraps[0].inner.kind).toBe(30900);
+    expect(transportTrace.intentWraps[0].inner.tags).toContainEqual(['domain', 'notification']);
+    expect(transportTrace.statuses[0].tags).toContainEqual(['status', 'accepted']);
 
     for (const request of transportTrace.requests) {
       expect(request.kind).toBe(KIND_GIFT_WRAP);
