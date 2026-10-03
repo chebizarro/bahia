@@ -32,7 +32,8 @@ make build
 | `BAHIA_NOSTR_BOOTSTRAP_RELAYS` | Comma-separated bootstrap relay seeds used only when final relay sources are absent | unset |
 | `BAHIA_NOSTR_SERVICE_PUBKEY` | Bahia service pubkey for signer-first routing and single-service discovery trust | unset |
 | `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS` | Comma-separated trusted Bahia service pubkeys for bootstrap discovery | unset |
-| `BAHIA_OPERATOR_HTTP_FALLBACK` | Allow explicit HTTP compatibility fallback before any relay accepts the request | `false` |
+| `BAHIA_OPERATOR_HTTP_FALLBACK` | Allow explicit legacy HTTP compatibility fallback for reads and unmigrated commands; service/environment writes never use HTTP | `false` |
+| `BAHIA_RESULT_TIMEOUT` | Maximum wait for a service/environment intent status (30315) | `30s` |
 
 ## Database migrations (operator command)
 
@@ -106,9 +107,11 @@ For NIP-46 remote signing, use `--nostr-bunker-file` (or `BAHIA_NOSTR_BUNKER_FIL
 
 ## Nostr-native transport
 
-Signer-first CLI mutations use ContextVM JSON-RPC methods over Nostr kind `25910`. Plain transport remains the default. Pass `--encrypted` to wrap the signed inner request in a NIP-59 kind `1059` gift wrap; encrypted mode requires `--service-pubkey` and works with either a local key or a NIP-46 signer that supports NIP-44. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
+Service/environment create and update publish signed kind `30900` intents directly, subscribe for kind `30315` status, and read the resulting canonical `30900` state. Other signer-first CLI mutations still use ContextVM JSON-RPC over kind `25910`. Plain transport remains the default for those commands. Pass `--encrypted` to wrap the signed inner request in a NIP-59 kind `1059` gift wrap; encrypted mode requires `--service-pubkey` and works with either a local key or a NIP-46 signer that supports NIP-44. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
 
-Before publishing, the CLI waits for the reply subscription to reach EOSE on its established relays. Each publish attempt waits up to `--result-timeout` (default `30s`). On timeout it re-subscribes and republishes the same logical request up to `--result-retries` times (default `2`); the stable `d` tag lets Bahia replay its cached idempotent response. Bahia keeps completed idempotent responses in memory and in PostgreSQL for 24 hours, so duplicate requests replay the terminal response without re-running the handler.
+For service/environment writes, the CLI enqueues the signed intent in its local outbox, subscribes before publishing, requires at least one relay OK, and waits up to `--result-timeout` (default `30s`, or `BAHIA_RESULT_TIMEOUT`) for status. Exit codes are 0 accepted, 1 rejected/conflict/superseded, 2 published without status, and 3 no relay accepted. Exit 2 prints `intent_id` and `event_id`; inspect the pending event with `bahia outbox list`. `--http-fallback` does not redirect these writes to HTTP.
+
+For remaining ContextVM commands, before publishing, the CLI waits for the reply subscription to reach EOSE on its established relays. Each publish attempt waits up to `--result-timeout` (default `30s`). On timeout it re-subscribes and republishes the same logical request up to `--result-retries` times (default `2`); the stable `d` tag lets Bahia replay its cached idempotent response. Bahia keeps completed idempotent responses in memory and in PostgreSQL for 24 hours, so duplicate requests replay the terminal response without re-running the handler.
 
 ### Troubleshooting: CLI times out but server logs handler completed
 
@@ -161,10 +164,11 @@ bahia services list -o json
 bahia services get svc-123
 bahia services get svc-123 -o yaml
 
-# Transitional create command (deprecated; signer-first mutations are the canonical path)
-bahia services create \
+# Publish a signed service intent (organization UUID required)
+bahia services create --org "$ORG_UUID" \
   --name "payment-api" \
   --artifact-repo "ghcr.io/company/payment-api"
+bahia services update --service <service-uuid> --name "payment-api-v2"
 
 # Direct runtime lifecycle actions
 bahia services actions deploy --service svc-123 --environment env-456 --artifact art-789
@@ -174,7 +178,7 @@ bahia services actions stop --service svc-123 --environment env-456
 
 ### Environments
 
-`environments list` and `environments get` read canonical environment events from relays by default; `get` includes the deployment-unit read model. `--http-fallback` explicitly uses the legacy REST path. Environment mutations still publish signed ContextVM `environment/create` or `environment/update` requests. Deployment-unit helpers obtain the environment read model through signed `environment/get-details` and publish the complete explicit unit set; they do not silently fall back to HTTP.
+`environments list` and `environments get` read canonical environment events from relays by default; `get` includes the deployment-unit read model. `--http-fallback` explicitly uses the legacy REST path. Environment create/update publish signed `30900` intents and wait for `30315` status. Updates read the current canonical `30900` record, merge flags into the complete desired state, and include its `updated_at` revision. Deployment-unit helpers use the same canonical read and intent write path; there is no automatic HTTP fallback.
 
 ```bash
 # Read environments (GET responses include deployment_units)
@@ -182,7 +186,7 @@ bahia environments list
 bahia environments get <environment-id>
 
 # Create or update an environment from a complete unit-set file
-bahia environments create --name production --units-file units.json
+bahia environments create --org "$ORG_UUID" --name production --units-file units.json
 bahia environments update <environment-id> --units-file units.json
 
 # List explicit units or the marked implicit default
@@ -193,7 +197,7 @@ bahia environments units create <environment-id> --file unit.json --default-unit
 bahia environments units update <environment-id> max --file unit.json --default-unit-key max
 ```
 
-Omitting `--units-file` leaves the unit set unchanged on update. Supplying a file replaces the complete explicit set; use a JSON `[]` to return to the implicit default. Complete-set updates carry the environment's `updated_at` revision. On conflict, the CLI rereads through `environment/get-details` and deliberately remerges at most three signed attempts before surfacing the conflict. `--default-unit-key` on unit create/update changes targeting in the same transaction; use it when the first explicit unit has a non-`default` key. Unit JSON follows `schemas/deployment_unit.json`.
+Omitting `--units-file` leaves the unit set unchanged on update. Supplying a file replaces the complete explicit set; use a JSON `[]` to return to the implicit default. Complete-set updates carry the environment's `updated_at` revision. On conflict, the CLI reports the stale revision; re-read and retry deliberately rather than silently rebasing a complete-set mutation. `--default-unit-key` on unit create/update changes targeting in the same transaction; use it when the first explicit unit has a non-`default` key. Unit JSON follows `schemas/deployment_unit.json`.
 
 ### Builds
 
@@ -630,7 +634,7 @@ bahia services get svc-123 -o yaml
 | `--http-fallback` | Use legacy HTTP for service, environment, state and policy reads; also allows explicit operator compatibility fallback |
 | `--eose-timeout` | Maximum wait for relay EOSE on Nostr reads (default `5s`; env `BAHIA_EOSE_TIMEOUT`). If no relay reaches EOSE, cached data is printed with a stale warning on stderr and the read exits 0 |
 | `--encrypted` | Use NIP-59/NIP-44 encrypted operator requests and replies; requires `--service-pubkey` |
-| `--result-timeout` | Maximum wait for a ContextVM result per publish attempt (default `30s`) |
+| `--result-timeout` | Maximum wait for a 30315 status on service/environment intents, or a ContextVM result for remaining commands (default `30s`; intents also support `BAHIA_RESULT_TIMEOUT`) |
 | `--result-retries` | Idempotent re-publishes after a result timeout (default `2`) |
 | `-o, --output` | Output format (`table`, `json`, `yaml`) |
 | `--help` | Show help |

@@ -146,8 +146,8 @@ bahia environments list
 # Get environment details, including explicit units or the marked implicit default
 bahia environments get <environment-id>
 
-# Create or update through signed ContextVM mutations
-bahia environments create --name production --units-file units.json
+# Create or update through signed 30900 intents
+bahia environments create --org "$ORG_UUID" --name production --units-file units.json
 bahia environments update <environment-id> --units-file units.json
 
 # Manage one unit through signed read-merge, complete-set signed updates
@@ -206,7 +206,7 @@ These are available to all services in the environment.
 
 ## Updating Environments
 
-Environment updates are signer-first ContextVM intents. REST `PUT /api/v1/environments/{id}` is no longer accepted.
+The CLI publishes signer-first kind `30900` environment intents and waits for kind `30315` status. REST `PUT /api/v1/environments/{id}` is no longer accepted. On update, the CLI merges flags into the latest canonical `30900` read model and includes `expected_updated_at`; a conflict requires an explicit re-read and retry. A status timeout exits 2 and leaves the event in `bahia outbox list`; no relay acceptance exits 3.
 
 ### Web UI
 
@@ -219,7 +219,7 @@ If the canonical environment revision changes while a target draft is open, Bahi
 
 ### Nostr
 
-Publish a ContextVM `environment/update` request with `id` and only the fields to change. If `deployment_units` is present, it is the complete desired explicit set, not a patch, and `expected_updated_at` is required. The `environments units` CLI commands obtain the environment, targeting, `updated_at`, and resolved units through the authorized signed `environment/get-details` method; no REST authorization is required and there is no automatic HTTP fallback. The CLI retries a stale complete-set write by rereading through that signed method and remerging up to three attempts; it then reports the conflict.
+Publish a ContextVM `environment/update` request with `id` and only the fields to change. If `deployment_units` is present, it is the complete desired explicit set, not a patch, and `expected_updated_at` is required. The `environments units` CLI commands obtain environment, targeting, `updated_at`, and resolved units from canonical `30900` state, then publish a full desired-state intent. There is no automatic HTTP fallback or silent retry of a stale complete-set write.
 
 ## Deleting Environments
 

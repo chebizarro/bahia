@@ -46,6 +46,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if err := rootCmd.ExecuteContext(ctx); err != nil {
+		var intentErr *IntentExitError
+		if errors.As(err, &intentErr) {
+			os.Exit(intentErr.Code)
+		}
 		os.Exit(1)
 	}
 }
@@ -76,7 +80,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "Trusted Bahia service pubkey for operator bootstrap discovery (repeatable; env BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS)")
 	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Use the legacy HTTP read path for service, environment, state and policy reads; also permits explicit operator compatibility fallback")
 	rootCmd.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "Encrypt operator ContextVM requests and responses with NIP-59/NIP-44 (requires --service-pubkey)")
-	rootCmd.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "Maximum time to await a ContextVM result per publish attempt")
+	rootCmd.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "Maximum time to await a 30315 intent status or legacy ContextVM result (BAHIA_RESULT_TIMEOUT for intents)")
 	rootCmd.PersistentFlags().IntVar(&operatorResultRetries, "result-retries", client.DefaultOperatorResultRetries, "Number of idempotent ContextVM re-publish attempts after result timeout")
 	registerNostrReadFlags(rootCmd)
 
@@ -178,7 +182,7 @@ func servicesCommands() *cobra.Command {
 
 	createCmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create a new service through signer-first Nostr control plane",
+		Short: "Create a new service through a signed 30900 intent",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, _ := cmd.Flags().GetString("name")
@@ -216,7 +220,7 @@ func servicesCommands() *cobra.Command {
 					repository.CI = &client.ServiceCIConfigRequest{Provider: ciProvider, WorkflowPath: ciWorkflow}
 				}
 			}
-			result, err := runServiceCreateNostr(cmd, client.CreateServiceNostrRequest{
+			result, err := runServiceCreateIntent(cmd, client.CreateServiceNostrRequest{
 				ID: id, OrgID: orgID, Name: name, RepoURL: repoURL, Repository: repository, ArtifactRepo: artifactRepo,
 				DefaultBranch: defaultBranch, RuntimeType: runtimeType, ManagedRuntimeConfig: managed, IdempotencyKey: idempotencyKey,
 			})
@@ -227,7 +231,7 @@ func servicesCommands() *cobra.Command {
 		},
 	}
 	createCmd.Flags().String("name", "", "Service name")
-	createCmd.Flags().String("org", "", "Organization ID (optional)")
+	createCmd.Flags().String("org", "", "Organization UUID (required for intents)")
 	createCmd.Flags().String("repo-url", "", "Repository clone URL")
 	createCmd.Flags().String("repo-source", "", "Repository source, for example gitea or github")
 	createCmd.Flags().String("repo-coordinate", "", "Repository coordinate for build routing, for example owner/repo")
@@ -239,14 +243,15 @@ func servicesCommands() *cobra.Command {
 	createCmd.Flags().String("default-branch", "main", "Default branch")
 	createCmd.Flags().String("runtime-type", string(domain.RuntimeTypeCompose), "Runtime type: docker, compose, kubernetes")
 	createCmd.Flags().String("managed-runtime-config-file", "", "Read managed_runtime_config JSON object from this file")
-	createCmd.Flags().String("idempotency-key", "", "Explicit idempotency key for the signed request")
+	createCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying the same signed intent")
 	createCmd.Flags().String("id", "", cliCreateEntityIDUsage("service"))
 	_ = createCmd.MarkFlagRequired("name")
 	_ = createCmd.MarkFlagRequired("artifact-repo")
+	_ = createCmd.MarkFlagRequired("org")
 
 	updateCmd := &cobra.Command{
 		Use:   "update",
-		Short: "Update a service through signer-first Nostr control plane",
+		Short: "Update a service through a signed 30900 intent",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			serviceID, _ := cmd.Flags().GetString("service")
@@ -280,7 +285,7 @@ func servicesCommands() *cobra.Command {
 					repository.CI = &client.ServiceCIConfigRequest{Provider: ciProvider, WorkflowPath: ciWorkflow}
 				}
 			}
-			result, err := runServiceUpdateNostr(cmd, client.UpdateServiceNostrRequest{
+			result, err := runServiceUpdateIntent(cmd, client.UpdateServiceNostrRequest{
 				ID: serviceID, OrgID: orgID, Name: name, RepoURL: repoURL, Repository: repository, ArtifactRepo: artifactRepo,
 				DefaultBranch: defaultBranch, RuntimeType: runtimeType, ManagedRuntimeConfig: managed, IdempotencyKey: idempotencyKey,
 			})
@@ -304,7 +309,7 @@ func servicesCommands() *cobra.Command {
 	updateCmd.Flags().String("default-branch", "", "Default branch")
 	updateCmd.Flags().String("runtime-type", "", "Runtime type: docker, compose, kubernetes")
 	updateCmd.Flags().String("managed-runtime-config-file", "", "Read managed_runtime_config JSON object from this file")
-	updateCmd.Flags().String("idempotency-key", "", "Explicit idempotency key for the signed request")
+	updateCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying the same signed intent")
 	_ = updateCmd.MarkFlagRequired("service")
 
 	actionsCmd := serviceActionsCommands()

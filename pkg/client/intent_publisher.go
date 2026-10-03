@@ -351,10 +351,9 @@ func (p *IntentPublisher) PublishAndWait(ctx context.Context, prepared *Prepared
 		},
 	}
 
-	statusCtx, statusCancel := context.WithTimeout(ctx, p.resultTimeout)
-	defer statusCancel()
-
-	sub, err := p.transport.SubscribeOperator(statusCtx, []nostr.Filter{statusFilter})
+	subCtx, subCancel := context.WithCancel(ctx)
+	defer subCancel()
+	sub, err := p.transport.SubscribeOperator(subCtx, []nostr.Filter{statusFilter})
 	if err != nil {
 		return nil, fmt.Errorf("subscribe for intent status: %w", err)
 	}
@@ -395,6 +394,8 @@ func (p *IntentPublisher) PublishAndWait(ctx context.Context, prepared *Prepared
 			PublishResults: opResults,
 		}, nil
 	}
+	statusCtx, statusCancel := context.WithTimeout(ctx, p.resultTimeout)
+	defer statusCancel()
 
 	// Wait for 30315 status.
 	for {

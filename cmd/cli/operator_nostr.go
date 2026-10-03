@@ -21,8 +21,6 @@ import (
 
 type cliOperatorClient interface {
 	Close()
-	CreateServiceNostr(context.Context, client.CreateServiceNostrRequest, func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error)
-	UpdateServiceNostr(context.Context, client.UpdateServiceNostrRequest, func(client.OperatorStatusEvent)) (*client.ServiceCommandResult, error)
 	BuildRequestNostr(context.Context, client.BuildRequestNostrRequest, func(client.OperatorStatusEvent)) (*client.BuildCommandResult, error)
 	GetBuildNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.BuildDetailsResult, error)
 	ListBuildsNostr(context.Context, client.BuildListNostrRequest, func(client.OperatorStatusEvent)) (*client.BuildListResult, error)
@@ -34,9 +32,7 @@ type cliOperatorClient interface {
 	DNSRecordSet(context.Context, client.DNSRecordSetRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
 	DNSDriftRemediate(context.Context, client.DNSDriftRemediateRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
 	DNSOverrideRetire(context.Context, client.DNSOverrideRetireRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
-	CreateEnvironmentNostr(context.Context, client.CreateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	GetEnvironmentDetailsNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.EnvironmentDetails, error)
-	UpdateEnvironmentNostr(context.Context, client.UpdateEnvironmentNostrRequest, func(client.OperatorStatusEvent)) (*client.EnvironmentCommandResult, error)
 	DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent), ...string) (*client.RuntimeActionResult, error)
 	PreviewDeploymentNostr(context.Context, client.DeploymentPreviewNostrRequest, func(client.OperatorStatusEvent)) (map[string]any, error)
 	CreateDeploymentIntentWithRequestNostr(context.Context, client.DeploymentIntentNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
@@ -130,24 +126,6 @@ var newCLINIP46Signer = func(ctx context.Context, bunkerURI, clientKey string) (
 		return nil, "", nil, err
 	}
 	return &cliNIP46Signer{client: signetClient, pubkey: pubkey}, pubkey, signetClient.Close, nil
-}
-
-func runServiceCreateNostr(cmd *cobra.Command, req client.CreateServiceNostrRequest) (*client.ServiceCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.CreateServiceNostr(cmd.Context(), req, operatorStatusCallback(cmd, "service create"))
-}
-
-func runServiceUpdateNostr(cmd *cobra.Command, req client.UpdateServiceNostrRequest) (*client.ServiceCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.UpdateServiceNostr(cmd.Context(), req, operatorStatusCallback(cmd, "service update"))
 }
 
 func runBuildRequestNostr(cmd *cobra.Command, req client.BuildRequestNostrRequest) (*client.BuildCommandResult, error) {
@@ -249,15 +227,6 @@ func runDNSOverrideRetire(cmd *cobra.Command, req client.DNSOverrideRetireReques
 	return op.DNSOverrideRetire(cmd.Context(), req, operatorStatusCallback(cmd, "dns override-retire"))
 }
 
-func runEnvironmentCreateNostr(cmd *cobra.Command, req client.CreateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.CreateEnvironmentNostr(cmd.Context(), req, operatorStatusCallback(cmd, "environment create"))
-}
-
 func runEnvironmentGetDetailsNostr(cmd *cobra.Command, environmentID string) (*client.EnvironmentDetails, error) {
 	op, err := buildCLIOperatorClient(cmd)
 	if err != nil {
@@ -269,19 +238,6 @@ func runEnvironmentGetDetailsNostr(cmd *cobra.Command, environmentID string) (*c
 
 func runEnvironmentGetDetailsNostrWithClient(cmd *cobra.Command, op cliOperatorClient, environmentID string) (*client.EnvironmentDetails, error) {
 	return op.GetEnvironmentDetailsNostr(cmd.Context(), environmentID, operatorStatusCallback(cmd, "environment get-details"))
-}
-
-func runEnvironmentUpdateNostr(cmd *cobra.Command, req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return runEnvironmentUpdateNostrWithClient(cmd, op, req)
-}
-
-func runEnvironmentUpdateNostrWithClient(cmd *cobra.Command, op cliOperatorClient, req client.UpdateEnvironmentNostrRequest) (*client.EnvironmentCommandResult, error) {
-	return op.UpdateEnvironmentNostr(cmd.Context(), req, operatorStatusCallback(cmd, "environment update"))
 }
 
 func runDeploymentIntentNostr(cmd *cobra.Command, req client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error) {
