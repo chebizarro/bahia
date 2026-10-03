@@ -530,6 +530,8 @@ Projection decoders must reject canonical events with an empty or missing family
 
 Desired-state runtime metadata is additive on existing service/deployment observables. Bahia may include `desired_hash`, `renderer`, `target`, environment or unit revision metadata, runtime target metadata, apply metadata summaries, and `observation_id` when available. Decoders must ignore unknown fields and tags. Secret plaintext, raw Docker hosts, Docker TLS material, and generated Compose env-file contents must not appear in public Nostr content or tags; only redacted secret refs or key-presence metadata may be projected.
 
+The service-state `30900` content also carries REST-compatible typed fields when present: `desired_runtime_state` (non-secret snapshot), `reconcile_backoff_until`, and `reconcile_consecutive_failures`. An absent deployment unit omits `deployment_unit_id` rather than encoding an empty UUID. Free-form `reconcile_failure_metadata` is not projected because its diagnostic message can contain private runtime details; CLI reads use `drift_status` exactly as published.
+
 ### Audit fact
 
 ```json

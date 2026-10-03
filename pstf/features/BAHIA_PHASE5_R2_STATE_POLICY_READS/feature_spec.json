@@ -1,0 +1,7 @@
+{
+  "id": "BAHIA_PHASE5_R2_STATE_POLICY_READS",
+  "issue": "bahia-irsry.13.5",
+  "intent": "Read CLI state and deployment policies from service-signed canonical Nostr state by default, preserving explicit REST compatibility until Wave 6.",
+  "source_of_truth": "kind 30900 service-state and policy-registry addressable records",
+  "safety": "Stale local reads warn without claiming relay freshness; free-form runtime failure diagnostics are not projected to public relays."
+}

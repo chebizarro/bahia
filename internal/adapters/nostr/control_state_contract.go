@@ -695,12 +695,23 @@ func (r *RelayFirstStatePublisher) publishAuthoritativeProjection(ctx context.Co
 // state has no linked observation yet.
 func RuntimeStateRecord(state *domain.EnvironmentServiceState, observation *domain.RuntimeObservation) (gonostr.Tags, string) {
 	content := map[string]any{
-		"deleted":            false,
-		"service_id":         state.ServiceID.String(),
-		"environment_id":     state.EnvironmentID.String(),
-		"deployment_unit_id": uuidStringPtr(state.DeploymentUnitID),
-		"drift_status":       string(state.DriftStatus),
-		"updated_at":         formatTime(state.UpdatedAt),
+		"deleted":        false,
+		"service_id":     state.ServiceID.String(),
+		"environment_id": state.EnvironmentID.String(),
+		"drift_status":   string(state.DriftStatus),
+	}
+	putRecordTime(content, "updated_at", state.UpdatedAt)
+	if state.DeploymentUnitID != nil {
+		content["deployment_unit_id"] = state.DeploymentUnitID.String()
+	}
+	if state.DesiredRuntimeState != nil {
+		content["desired_runtime_state"] = state.DesiredRuntimeState
+	}
+	if state.ReconcileBackoffUntil != nil {
+		content["reconcile_backoff_until"] = state.ReconcileBackoffUntil.UTC().Format(time.RFC3339Nano)
+	}
+	if state.ReconcileConsecutiveFailures != 0 {
+		content["reconcile_consecutive_failures"] = state.ReconcileConsecutiveFailures
 	}
 	if state.DesiredArtifactID != nil {
 		content["desired_artifact_id"] = state.DesiredArtifactID.String()
@@ -715,7 +726,7 @@ func RuntimeStateRecord(state *domain.EnvironmentServiceState, observation *doma
 		content["current_observation_id"] = state.CurrentObservationID.String()
 	}
 	if state.LastReconciledAt != nil {
-		content["last_reconciled_at"] = formatTime(*state.LastReconciledAt)
+		content["last_reconciled_at"] = state.LastReconciledAt.UTC().Format(time.RFC3339Nano)
 	}
 	if state.DesiredHash != "" {
 		content["desired_hash"] = state.DesiredHash

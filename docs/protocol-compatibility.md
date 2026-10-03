@@ -108,6 +108,8 @@ The `environment/update` complete-set unit contract uses optimistic concurrency:
 
 Desired-state runtime metadata is an additive observable contract, not a new protocol family. Compose/Docker deploys may add `step`, `desired_hash`, `renderer`, `target`, revision, apply-summary, and `observation_id` metadata to existing ContextVM responses, `30315` statuses, and `30900`/`30078` projections. Legacy custom result/read-model numbers remain migration inventory even when historical fixtures contain similar fields.
 
+Service-state `30900` content may additionally include the non-secret desired runtime snapshot, reconciliation backoff time and failure count. Absent deployment-unit UUIDs are omitted rather than encoded as empty strings. Free-form failure metadata is not projected to public relays; older readers ignore the additive typed fields.
+
 | Kind(s) | Purpose |
 |---------|---------|
 | `30900` | Canonical control-plane state projection |

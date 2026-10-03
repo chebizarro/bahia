@@ -444,6 +444,8 @@ Use tags for relay-side filtering and MCP follow-up subscriptions. Service flows
 
 Clients should wait for EOSE on bootstrap queries, then keep subscriptions open for live updates. Deduplicate by event id; for replaceable events, latest `created_at` wins for `(kind, pubkey, d-tag)`. Use NIP-09 kind `5` deletions where relay-level Nostr deletion semantics apply; domain projections that require durable tombstone state may also publish canonical tombstone replacements with `deleted=true`.
 
+Service-state `30900` records expose typed, non-secret desired runtime state and reconciliation backoff/count fields for local-store readers; absent deployment units omit their UUID field. Free-form reconciliation failure metadata remains off the public relay because runtime error text may be sensitive.
+
 ---
 
 ## REST API: Read-Only Surface

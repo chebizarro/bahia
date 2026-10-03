@@ -1,0 +1,9 @@
+{
+  "criteria": [
+    {"id": "R2-1", "requirement": "State list and drifted use service-state Nostr records by default; drifted means drift_status exactly drifted.", "test": "TestStatePolicyReadsMatchRESTGolden"},
+    {"id": "R2-2", "requirement": "Policy list and get use policy-registry Nostr records by default and report absent IDs.", "test": "TestStatePolicyReadsMatchRESTGolden, TestPolicyGetMissingReturnsError"},
+    {"id": "R2-3", "requirement": "Table and JSON output match REST for public state and policy fields; explicit --http-fallback calls REST.", "test": "TestStatePolicyReadsMatchRESTGolden"},
+    {"id": "R2-4", "requirement": "Cursor is reused and stale local reads warn with successful exit.", "test": "TestStatePolicyReadsMatchRESTGolden, TestStateReadStaleStoreWarnsAndSucceeds"},
+    {"id": "R2-5", "requirement": "Producer state and policy records decode; tampered events cannot enter the local store.", "test": "TestDecodeStateProducerRoundTrip, TestDecodePolicyProducerRoundTrip, TestStateSyncRejectsTamperedEvent"}
+  ]
+}

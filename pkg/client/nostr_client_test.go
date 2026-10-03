@@ -475,7 +475,11 @@ func TestBuildDomainTopicsCoversAllFamilies(t *testing.T) {
 	// All families from the projector's table must appear.
 	families := nostrpool.CPStateFamilyTopics()
 	for _, fam := range families {
-		topicList, ok := topics[fam.Domain]
+		domain := fam.Domain
+		if fam.Domain == "service" && fam.Entity == "state" {
+			domain = "state"
+		}
+		topicList, ok := topics[domain]
 		if !assert.True(t, ok, "domain %q missing from topics map", fam.Domain) {
 			continue
 		}

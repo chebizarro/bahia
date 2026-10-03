@@ -19,8 +19,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var cliEOSETimeout time.Duration
-
 var newCLIReadPool = func(ctx context.Context, relays []string) (client.SubscriptionPool, func(), error) {
 	pool := nostrpool.NewRelayPool(relays, zap.NewNop())
 	pool.Connect(ctx)
@@ -39,7 +37,7 @@ func readNostrEvents(cmd *cobra.Command, domainName string, legacyKind int) ([]n
 	if err != nil {
 		return nil, err
 	}
-	timeout, err := resolveCLIEOSETimeout(cmd)
+	timeout, err := readEOSETimeout(cmd)
 	if err != nil {
 		return nil, err
 	}
@@ -63,23 +61,6 @@ func readNostrEvents(cmd *cobra.Command, domainName string, legacyKind int) ([]n
 		fmt.Fprintln(cmd.ErrOrStderr(), "warning: relay data may be stale (no EOSE within timeout)")
 	}
 	return events, nil
-}
-
-func resolveCLIEOSETimeout(cmd *cobra.Command) (time.Duration, error) {
-	timeout := cliEOSETimeout
-	if !cmd.Root().PersistentFlags().Changed("eose-timeout") {
-		if raw := strings.TrimSpace(os.Getenv("BAHIA_EOSE_TIMEOUT")); raw != "" {
-			var err error
-			timeout, err = time.ParseDuration(raw)
-			if err != nil {
-				return 0, fmt.Errorf("invalid BAHIA_EOSE_TIMEOUT: %w", err)
-			}
-		}
-	}
-	if timeout <= 0 {
-		return 0, fmt.Errorf("--eose-timeout must be positive")
-	}
-	return timeout, nil
 }
 
 func runServicesListNostr(cmd *cobra.Command) error {
@@ -129,22 +110,24 @@ func renderServices(services []domain.Service) error {
 	})
 }
 
+// nostrServiceStorePath returns the local store path for a given service
+// pubkey. A full pubkey namespace prevents cross-service cache contamination.
 func nostrServiceStorePath(servicePubkey string) (string, error) {
 	pubkey, err := nostr.PubKeyFromHex(servicePubkey)
 	if err != nil {
 		return "", fmt.Errorf("invalid service pubkey: %w", err)
 	}
-	base := strings.TrimSpace(os.Getenv("BAHIA_DATA_DIR"))
+	base := os.Getenv("BAHIA_DATA_DIR")
 	if base == "" {
-		base = strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
-		if base == "" {
+		if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+			base = filepath.Join(xdg, "bahia")
+		} else {
 			home, err := os.UserHomeDir()
 			if err != nil {
 				return "", fmt.Errorf("determine home directory: %w", err)
 			}
-			base = filepath.Join(home, ".local", "share")
+			base = filepath.Join(home, ".local", "share", "bahia")
 		}
-		base = filepath.Join(base, "bahia")
 	}
 	dir := filepath.Join(base, "store", pubkey.Hex())
 	if err := os.MkdirAll(dir, 0o700); err != nil {

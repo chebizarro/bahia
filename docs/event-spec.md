@@ -270,6 +270,8 @@ Kind `30900` is addressable. The `d` tag identifies the entity coordinate, and `
 
 For `(kind, pubkey, d)`, latest replacement wins. Clients query historical state, wait for `EOSE`, and keep the subscription open for realtime updates.
 
+The service-state content carries typed `service_id`, `environment_id`, and `drift_status`, plus an optional non-secret `desired_runtime_state` snapshot, reconciliation backoff time and failure count. An absent deployment unit omits `deployment_unit_id`; free-form failure diagnostics are not public relay content. Deployment policies use the `policy-registry` family topic and a policy UUID coordinate.
+
 **Service and environment registry records** (bahia-irsry.41, .53). The relay-first registry and the projector build these records with one builder (`internal/adapters/nostr/control_state_contract.go`), so one state is one signed event:
 - The registry mints a create's `created_at`/`updated_at`, and an update's `updated_at`, before the relay-first publish, and the repository stores them. The projection of the stored row is the record already signed, so it is deduplicated rather than signed again.
 - `updated_at` is the revision token clients send back as `expected_updated_at`. It is minted, compared and published at microsecond precision, the precision Postgres stores, so the token read from a relay matches the database. A repository update keeps a newer pre-minted revision verbatim and otherwise advances it, so tokens never repeat.

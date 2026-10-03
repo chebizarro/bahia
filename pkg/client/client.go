@@ -558,6 +558,7 @@ func (c *Client) CreateEnvironment(ctx context.Context, name string, strategy do
 // --- State ---
 
 // ListStates returns all environment service states.
+// Deprecated: use NostrClient state reads; REST compatibility is removed in Wave 6.
 func (c *Client) ListStates(ctx context.Context) ([]domain.EnvironmentServiceState, error) {
 	var states []domain.EnvironmentServiceState
 	if err := c.do(ctx, http.MethodGet, "/api/v1/state", nil, &states); err != nil {
@@ -567,6 +568,7 @@ func (c *Client) ListStates(ctx context.Context) ([]domain.EnvironmentServiceSta
 }
 
 // ListDriftedStates returns all drifted states.
+// Deprecated: use NostrClient state reads; REST compatibility is removed in Wave 6.
 func (c *Client) ListDriftedStates(ctx context.Context) ([]domain.EnvironmentServiceState, error) {
 	var states []domain.EnvironmentServiceState
 	if err := c.do(ctx, http.MethodGet, "/api/v1/state/drifted", nil, &states); err != nil {
@@ -770,6 +772,7 @@ func (c *Client) RollbackConfig(ctx context.Context, eventID string) (*ConfigPub
 // --- Policies ---
 
 // ListPolicies returns all deployment policies.
+// Deprecated: use NostrClient policy reads; REST compatibility is removed in Wave 6.
 func (c *Client) ListPolicies(ctx context.Context) ([]domain.DeploymentPolicy, error) {
 	var policies []domain.DeploymentPolicy
 	if err := c.do(ctx, http.MethodGet, "/api/v1/policies", nil, &policies); err != nil {
@@ -779,6 +782,7 @@ func (c *Client) ListPolicies(ctx context.Context) ([]domain.DeploymentPolicy, e
 }
 
 // GetPolicy returns a policy by ID.
+// Deprecated: use NostrClient policy reads; REST compatibility is removed in Wave 6.
 func (c *Client) GetPolicy(ctx context.Context, id string) (*domain.DeploymentPolicy, error) {
 	var policy domain.DeploymentPolicy
 	if err := c.do(ctx, http.MethodGet, "/api/v1/policies/"+id, nil, &policy); err != nil {
