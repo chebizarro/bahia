@@ -217,6 +217,8 @@ bahia builds request \
 # succeeded or failed; Bahia does not currently project an intermediate running state.
 bahia builds list --service <service-uuid>
 bahia builds get --build <build-uuid>
+bahia artifacts list --service <service-uuid>
+bahia artifacts get --artifact <artifact-uuid>
 
 # After the build succeeds, register only its verified HiveCI artifact result.
 # Use the succeeded build ID shown by builds list; if CI correlation created a
@@ -238,6 +240,8 @@ bahia deployments deploy \
 First-time mirror creation and ref resolution can exceed the default 30-second per-attempt result timeout, so `--result-timeout 120s` is recommended for the first request. Reusing the same `--idempotency-key` replays the first completed ContextVM result from Bahia's durable response store instead of starting another CI run or registering another build. An idempotency key identifies one logical request: do not reuse it with different request fields.
 
 `--build-arg KEY=VALUE` is repeatable and values may contain `=`, but the fleet-local tag-only kind-5401 dispatch contract has no build-argument field. The private-mirror Hive-CI initiator therefore rejects non-empty build arguments before any secret resolution, mirror operation, event publication, or queued-build registration. Omit `--build-arg` for this workflow.
+
+`builds get/list` and `artifacts get/list` read signed `30900` build-registry and artifact-registry records from relays by default, using the same local cursor and stale-EOSE warning policy as service reads. `--http-fallback` explicitly uses the legacy REST read endpoints. Build and artifact mutations remain signer-first and are not redirected by that flag.
 
 If the queued ID returned by `builds request` remains `queued` while `builds list --service` shows a newer `succeeded` row, use that succeeded row's ID with `register-result`; this is the recovery path when CI result correlation lands on a separate build row.
 
@@ -359,7 +363,7 @@ bahia dns drift-remediate
 bahia workers list
 
 # Show worker detail
-bahia workers show npub1worker...
+bahia workers show <64-character-worker-hex-pubkey>
 ```
 
 ### Logs
@@ -631,7 +635,7 @@ bahia services get svc-123 -o yaml
 | `--bootstrap-relay` | Specify bootstrap relay seed for trusted operator discovery (repeatable) |
 | `--service-pubkey` | Specify Bahia service pubkey for routing and single-service discovery trust |
 | `--trusted-service-pubkey` | Specify trusted Bahia service pubkey for bootstrap discovery (repeatable) |
-| `--http-fallback` | Use legacy HTTP for service, environment, state and policy reads; also allows explicit operator compatibility fallback |
+| `--http-fallback` | Use legacy HTTP for service, environment, state, policy, worker, build, and artifact reads; also allows explicit operator compatibility fallback |
 | `--eose-timeout` | Maximum wait for relay EOSE on Nostr reads (default `5s`; env `BAHIA_EOSE_TIMEOUT`). If no relay reaches EOSE, cached data is printed with a stale warning on stderr and the read exits 0 |
 | `--encrypted` | Use NIP-59/NIP-44 encrypted operator requests and replies; requires `--service-pubkey` |
 | `--result-timeout` | Maximum wait for a 30315 status on service/environment intents, or a ContextVM result for remaining commands (default `30s`; intents also support `BAHIA_RESULT_TIMEOUT`) |

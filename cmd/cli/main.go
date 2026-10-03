@@ -60,7 +60,7 @@ func newRootCommand() *cobra.Command {
 		Short: "Bahia Deployment Registry CLI",
 		Long:  "Command-line interface for the Bahia Nostr-Native Deployment Registry Service",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if isDefaultStatePolicyRead(cmd) {
+			if isDefaultStatePolicyRead(cmd) || isDefaultWorkerBuildArtifactRead(cmd) {
 				return nil
 			}
 			apiClient = client.New(serverURL)
@@ -78,7 +78,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringArrayVar(&operatorBootstrapRelays, "bootstrap-relay", nil, "Bootstrap relay URL for trusted operator relay discovery when --relay/BAHIA_NOSTR_RELAYS are absent (repeatable; env BAHIA_NOSTR_BOOTSTRAP_RELAYS)")
 	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "Trusted Bahia service pubkey for operator bootstrap discovery (repeatable; env BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS)")
-	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Use the legacy HTTP read path for service, environment, state and policy reads; also permits explicit operator compatibility fallback")
+	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Use the legacy HTTP read path for state reads; also permits explicit operator compatibility fallback")
 	rootCmd.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "Encrypt operator ContextVM requests and responses with NIP-59/NIP-44 (requires --service-pubkey)")
 	rootCmd.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "Maximum time to await a 30315 intent status or legacy ContextVM result (BAHIA_RESULT_TIMEOUT for intents)")
 	rootCmd.PersistentFlags().IntVar(&operatorResultRetries, "result-retries", client.DefaultOperatorResultRetries, "Number of idempotent ContextVM re-publish attempts after result timeout")
@@ -991,17 +991,12 @@ func workersCommands() *cobra.Command {
 		Use:   "list",
 		Short: "List discovered workers",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			workers, err := apiClient.ListWorkers(cmd.Context())
+			workers, err := listCLIWorkers(cmd)
 			if err != nil {
 				return err
 			}
-			return output(workers, []string{"PUBKEY", "NAME", "PRICE/SEC", "CAPABILITIES"}, func(w client.Worker) []string {
-				caps := strings.Join(w.Capabilities, ", ")
-				if len(caps) > 30 {
-					caps = caps[:27] + "..."
-				}
-				return []string{truncate(w.Pubkey, 16), w.Name, fmt.Sprintf("%d sats", w.PricePerSec), caps}
-			})
+			return renderWorkers(workers)
+
 		},
 	}
 
@@ -1010,11 +1005,12 @@ func workersCommands() *cobra.Command {
 		Short: "Show worker details",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			worker, err := apiClient.GetWorker(cmd.Context(), args[0])
+			worker, err := getCLIWorker(cmd, args[0])
 			if err != nil {
 				return err
 			}
 			return outputSingle(worker)
+
 		},
 	}
 

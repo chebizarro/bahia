@@ -1,0 +1,9 @@
+{
+  "criteria": [
+    {"id":"R3-1","requirement":"Workers list/show read canonical worker families and worker-authored adverts through scoped subscriptions by default.","test":"TestR3ReadRESTNostrGolden, TestR3WorkerAdvertisementUsesWorkerAuthorAndCursor"},
+    {"id":"R3-2","requirement":"Build get/list and artifact get/list read canonical registry events; missing or malformed IDs fail explicitly.","test":"TestR3ReadRESTNostrGolden, TestR3ReadMissingAndInvalidIDs"},
+    {"id":"R3-3","requirement":"Table and JSON output match explicit REST fallback for worker, build, and artifact reads.","test":"TestR3ReadRESTNostrGolden"},
+    {"id":"R3-4","requirement":"Reads reuse the persisted cursor; stale local reads warn and exit 0.","test":"TestR3BuildCursorAndStaleExit, TestR3ReadRESTNostrGolden"},
+    {"id":"R3-5","requirement":"Build, artifact, worker-family, and worker-advertisement decoders preserve typed content and honor tombstones.","test":"TestR3RegistryDecodersRoundTrip, TestR3WorkerAdvertisementUsesWorkerAuthorAndCursor"}
+  ]
+}
