@@ -215,25 +215,21 @@ func run(args []string) error {
 }
 
 // newRequestTransport wires the agent's ContextVM request transport to the
-// relays through the local event store (bahia-irsry.10.5). Request wraps are
-// synced into the store per relay, NIP-59 gift wraps reconciled by id because
-// their created_at is backdated, so a restart or reconnect hands the transport
-// only wraps it has not seen, and a relay that was down catches up on its own.
-// The transport still validates, routes and expires requests (its replay
-// window rejects stale ones) and the agent still orders applies by serial.
+// relays using the ContextVM request ledger (bahia-irsry.48 item 1). The
+// ledger keeps per-relay cursors and request claims in bbolt, so restart
+// idempotency and downtime recovery do not need Postgres. Events are
+// subscribed through the raw relay pool, not StoreBackedSubscriber, because
+// the ledger provides its own dedup and the runLocalContextVM guard rejects
+// double-layered stores.
 func newRequestTransport(pool *nostradapter.RelayPool, store *localstore.Store, privateKey, authorizedPubkey string, logger *zap.Logger) (*controlplane.EncryptedRequestTransport, error) {
 	signer, err := controlplane.NewPrivateKeySigner(privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("create DNS agent signer: %w", err)
 	}
 	responder := controlplane.NewEncryptedResponder(pool, signer, privateKey, logger)
-	subscriber := &nostradapter.StoreBackedSubscriber{
-		Pool:           pool,
-		Store:          store,
-		Logger:         logger,
-		ReconcileKinds: []nostr.Kind{controlplane.KindContextVMGiftWrap},
-	}
-	return controlplane.NewEncryptedRequestTransport(subscriber, responder, []string{authorizedPubkey}, logger), nil
+	return controlplane.NewEncryptedRequestTransport(pool, responder, []string{authorizedPubkey}, logger,
+		controlplane.WithContextVMLocalStore(store),
+	), nil
 }
 
 func startHealthServer(ctx context.Context, addr string, service *dnsagent.Agent, stop context.CancelFunc) (*http.Server, <-chan error) {

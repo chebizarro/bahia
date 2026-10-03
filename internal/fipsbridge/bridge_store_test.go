@@ -195,7 +195,7 @@ func TestBridgeRestartFetchesOnlyNewEventsAndTombstonesSurvive(t *testing.T) {
 	store, err := localstore.Open(storePath)
 	require.NoError(t, err)
 	defer store.Close()
-	require.Equal(t, 3, bridge.hydrate(t.Context(), store, bridge.subscriptionFilter()))
+	require.Equal(t, 3, bridge.hydrate(t.Context(), store, bridge.endpointFilter()))
 	require.Equal(t, map[string]string{"web": npubOf(t, workerB), "db": npubOf(t, workerC)}, bridge.entries)
 }
 

@@ -2219,7 +2219,13 @@ func New(cfg *config.Config) (*App, error) {
 	// Encrypted request/result event runtime for sensitive browser route migrations.
 	if len(contextVMRequestRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
 		responder := controlplane.NewEncryptedResponder(contextVMResponsePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
-		transportOptions := []controlplane.EncryptedRequestTransportOption{controlplane.WithContextVMLocalStore(localEventStore)}
+		transportOptions := []controlplane.EncryptedRequestTransportOption{
+			controlplane.WithContextVMLocalStore(localEventStore),
+			controlplane.WithContextVMLocalStoreConfig(controlplane.ContextVMLocalConfig{
+				RequestMaxAge:       cfg.Nostr.LocalStore.RequestMaxAge,
+				WrapBackdateOverlap: cfg.Nostr.LocalStore.WrapBackdateOverlap,
+			}),
+		}
 		if contextVMResponseStore != nil {
 			transportOptions = append(transportOptions, controlplane.WithContextVMResponseStore(contextVMResponseStore, defaultContextVMResponseRetention))
 		}
