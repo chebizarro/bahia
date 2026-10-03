@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -430,8 +431,14 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 	// Parse content.
 	if ev.Content != "" {
 		var content map[string]interface{}
-		if err := json.Unmarshal([]byte(ev.Content), &content); err != nil {
+		decoder := json.NewDecoder(strings.NewReader(ev.Content))
+		decoder.UseNumber()
+		if err := decoder.Decode(&content); err != nil {
 			return nil, fmt.Errorf("invalid content JSON: %w", err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			return nil, fmt.Errorf("invalid content JSON: trailing data")
 		}
 		intent.Content = content
 

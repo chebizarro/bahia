@@ -80,6 +80,8 @@ Click a service to see:
 
 ### CLI
 
+For `bahia services create/update`, the CLI publishes a signed kind `30900` service intent directly, waits for kind `30315` status, and reads the canonical service record. Create requires `--org`; update reads the current canonical `updated_at` and sends a full desired state with an exact revision precondition. A published intent without status exits 2 and remains visible in `bahia outbox list`; no relay acceptance exits 3. `--http-fallback` does not change this write path.
+
 Service reads use canonical Nostr events by default. Configure `--service-pubkey` and `--relay` (or their environment variables); `--http-fallback` explicitly selects the legacy REST path. If EOSE does not arrive before `--eose-timeout`, the CLI prints cached data and warns on stderr.
 
 ```bash

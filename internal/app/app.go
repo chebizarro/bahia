@@ -1223,7 +1223,6 @@ func New(cfg *config.Config) (*App, error) {
 			controlplane.ServiceIntentHandlerConfig{
 				Registry: serviceMutationBackend,
 				Reader:   serviceRepo,
-				Status:   intentStatus,
 				Logger:   logger,
 			},
 		))

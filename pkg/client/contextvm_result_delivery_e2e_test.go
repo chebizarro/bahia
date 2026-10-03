@@ -15,26 +15,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestContextVMResultDeliveryE2EPlainRoundTrip(t *testing.T) {
-	client, server, _ := newContextVMResultDeliveryHarness(t, false, false, []contextVME2ERelay{
-		{url: "ws://127.0.0.1:7777", subscribes: true, acceptsRequests: true, publishesResponses: true},
-	})
-	server.RegisterContextVMHandler(controlplane.ContextVMMethodServiceUpdate, func(context.Context, controlplane.ContextVMRequest) (any, error) {
-		return map[string]any{"status": "updated", "service_id": "service-1"}, nil
-	})
-
-	result, err := client.UpdateServiceNostr(context.Background(), UpdateServiceNostrRequest{
-		ID:             "service-1",
-		IdempotencyKey: "plain-round-trip-1",
-	}, nil)
-	if err != nil {
-		t.Fatalf("UpdateServiceNostr() error = %v", err)
-	}
-	if result.Status != "updated" || result.ServiceID != "service-1" {
-		t.Fatalf("result = %#v", result)
-	}
-}
-
 func TestContextVMResultDeliveryE2ERetryReplaysCachedDesiredStateHash(t *testing.T) {
 	client, server, relay := newContextVMResultDeliveryHarness(t, false, true, []contextVME2ERelay{
 		{url: "ws://127.0.0.1:7777", subscribes: true, acceptsRequests: true, publishesResponses: true},

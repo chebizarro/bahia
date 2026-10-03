@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -86,7 +85,7 @@ func newEnvironmentCreateCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "create",
-		Short: "Create an environment through a signed ContextVM mutation",
+		Short: "Create an environment through a signed 30900 intent",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := cliCreateEntityID(cmd, "environment", rawID)
@@ -109,7 +108,7 @@ func newEnvironmentCreateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := runEnvironmentCreateNostr(cmd, client.CreateEnvironmentNostrRequest{
+			result, err := runEnvironmentCreateIntent(cmd, client.CreateEnvironmentNostrRequest{
 				ID:                 id,
 				OrgID:              strings.TrimSpace(orgID),
 				Name:               strings.TrimSpace(name),
@@ -139,6 +138,7 @@ func newEnvironmentCreateCommand() *cobra.Command {
 	targeting.bind(cmd)
 	unit.bind(cmd)
 	_ = cmd.MarkFlagRequired("name")
+	_ = cmd.MarkFlagRequired("org")
 	return cmd
 }
 
@@ -151,7 +151,7 @@ func newEnvironmentUpdateCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "update [id]",
-		Short: "Update an environment through a signed ContextVM mutation",
+		Short: "Update an environment through a signed 30900 intent",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := client.UpdateEnvironmentNostrRequest{ID: strings.TrimSpace(args[0])}
@@ -197,13 +197,17 @@ func newEnvironmentUpdateCommand() *cobra.Command {
 				req.DeploymentUnits = units
 				req.ExpectedUpdatedAt = &revision
 				if targetingChanged {
-					targetingRequest, targetingErr := targeting.request(cmd, nil)
+					current, loadErr := canonicalEnvironment(cmd, args[0])
+					if loadErr != nil {
+						return loadErr
+					}
+					targetingRequest, targetingErr := targeting.request(cmd, &current.Targeting)
 					if targetingErr != nil {
 						return targetingErr
 					}
 					req.Targeting = targetingRequest
 				}
-				result, updateErr := runEnvironmentUpdateNostr(cmd, req)
+				result, updateErr := runEnvironmentUpdateIntent(cmd, req)
 				if updateErr != nil {
 					return updateErr
 				}
@@ -211,12 +215,7 @@ func newEnvironmentUpdateCommand() *cobra.Command {
 			}
 			if units == nil {
 				if targetingChanged {
-					op, buildErr := buildCLIOperatorClient(cmd)
-					if buildErr != nil {
-						return buildErr
-					}
-					defer op.Close()
-					details, loadErr := runEnvironmentGetDetailsNostrWithClient(cmd, op, args[0])
+					details, loadErr := canonicalEnvironment(cmd, args[0])
 					if loadErr != nil {
 						return loadErr
 					}
@@ -224,20 +223,15 @@ func newEnvironmentUpdateCommand() *cobra.Command {
 					if err != nil {
 						return err
 					}
-					result, updateErr := runEnvironmentUpdateNostrWithClient(cmd, op, req)
-					if updateErr != nil {
-						return updateErr
-					}
-					return outputSingle(result)
 				}
-				result, updateErr := runEnvironmentUpdateNostr(cmd, req)
+				result, updateErr := runEnvironmentUpdateIntent(cmd, req)
 				if updateErr != nil {
 					return updateErr
 				}
 				return outputSingle(result)
 			}
 
-			result, err := runEnvironmentCompleteSetUpdateWithRetry(cmd, args[0], func(details *client.EnvironmentDetails) (client.UpdateEnvironmentNostrRequest, error) {
+			result, err := runEnvironmentCompleteSetIntentUpdate(cmd, args[0], func(details *client.EnvironmentDetails) (client.UpdateEnvironmentNostrRequest, error) {
 				attempt := req
 				if targetingChanged {
 					var targetingErr error
@@ -336,7 +330,7 @@ func newEnvironmentUnitCreateCommand() *cobra.Command {
 			if strings.TrimSpace(request.Key) == "" {
 				return fmt.Errorf("unit key is required via --key or --file")
 			}
-			result, err := runEnvironmentCompleteSetUpdateWithRetry(cmd, args[0], func(details *client.EnvironmentDetails) (client.UpdateEnvironmentNostrRequest, error) {
+			result, err := runEnvironmentCompleteSetIntentUpdate(cmd, args[0], func(details *client.EnvironmentDetails) (client.UpdateEnvironmentNostrRequest, error) {
 				units := explicitUnitRequests(details.DeploymentUnits)
 				for _, existing := range units {
 					if existing.Key == request.Key {
@@ -387,7 +381,7 @@ func newEnvironmentUnitUpdateCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := strings.TrimSpace(args[1])
-			result, err := runEnvironmentCompleteSetUpdateWithRetry(cmd, args[0], func(details *client.EnvironmentDetails) (client.UpdateEnvironmentNostrRequest, error) {
+			result, err := runEnvironmentCompleteSetIntentUpdate(cmd, args[0], func(details *client.EnvironmentDetails) (client.UpdateEnvironmentNostrRequest, error) {
 				current, found := findDeploymentUnit(details.DeploymentUnits, key)
 				if !found {
 					return client.UpdateEnvironmentNostrRequest{}, fmt.Errorf("deployment unit %q not found", key)
@@ -438,50 +432,26 @@ func newEnvironmentUnitUpdateCommand() *cobra.Command {
 	return cmd
 }
 
-const environmentCompleteSetUpdateMaxAttempts = 3
-
-func runEnvironmentCompleteSetUpdateWithRetry(
+func runEnvironmentCompleteSetIntentUpdate(
 	cmd *cobra.Command,
 	environmentID string,
 	build func(*client.EnvironmentDetails) (client.UpdateEnvironmentNostrRequest, error),
 ) (*client.EnvironmentCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
+	details, err := canonicalEnvironment(cmd, environmentID)
 	if err != nil {
 		return nil, err
 	}
-	defer op.Close()
-	for attempt := 1; attempt <= environmentCompleteSetUpdateMaxAttempts; attempt++ {
-		details, err := runEnvironmentGetDetailsNostrWithClient(cmd, op, environmentID)
-		if err != nil {
-			return nil, err
-		}
-		if details == nil || details.UpdatedAt.IsZero() {
-			return nil, fmt.Errorf("environment %s read response is missing updated_at", environmentID)
-		}
-		req, err := build(details)
-		if err != nil {
-			return nil, err
-		}
-		revision := details.UpdatedAt
-		req.ID = environmentID
-		req.ExpectedUpdatedAt = &revision
-		result, err := runEnvironmentUpdateNostrWithClient(cmd, op, req)
-		if err == nil {
-			return result, nil
-		}
-		if !errors.Is(err, client.ErrEnvironmentRevisionConflict) {
-			return nil, err
-		}
-		if attempt == environmentCompleteSetUpdateMaxAttempts {
-			return nil, fmt.Errorf(
-				"environment %s changed during complete-set update after %d attempts: %w",
-				environmentID,
-				environmentCompleteSetUpdateMaxAttempts,
-				client.ErrEnvironmentRevisionConflict,
-			)
-		}
+	if details.UpdatedAt.IsZero() {
+		return nil, fmt.Errorf("environment %s canonical record is missing updated_at", environmentID)
 	}
-	return nil, fmt.Errorf("environment %s complete-set update failed", environmentID)
+	req, err := build(details)
+	if err != nil {
+		return nil, err
+	}
+	req.ID = environmentID
+	revision := details.UpdatedAt
+	req.ExpectedUpdatedAt = &revision
+	return runEnvironmentUpdateIntent(cmd, req)
 }
 
 func environmentTargetingRequestFromDomain(targeting domain.EnvironmentTargeting) *client.EnvironmentTargetingRequest {

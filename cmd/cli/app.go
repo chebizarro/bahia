@@ -36,8 +36,8 @@ func appCommands() *cobra.Command {
 - Environment with a default deployment unit
 - Pipeline policy for deployment gating
 
-Partial failure reports which steps completed. Re-running with the same
-idempotency key is safe and will not duplicate entities.`,
+Partial failure reports which steps completed. Inspect the CLI outbox and
+created entity IDs before retrying a partially completed workflow.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, _ := cmd.Flags().GetString("name")
@@ -82,8 +82,8 @@ idempotency key is safe and will not duplicate entities.`,
 					repository.CI = &client.ServiceCIConfigRequest{Provider: ciProvider, WorkflowPath: ciWorkflow}
 				}
 			}
-			stepKey := idempotencyKey + ":service"
-			svcResult, err := runServiceCreateNostr(cmd, client.CreateServiceNostrRequest{
+			stepKey := idempotencyKey
+			svcResult, err := runServiceCreateIntent(cmd, client.CreateServiceNostrRequest{
 				OrgID:          orgID,
 				Name:           name,
 				RepoURL:        repoURL,
@@ -107,7 +107,7 @@ idempotency key is safe and will not duplicate entities.`,
 			report.CompletedSteps = append(report.CompletedSteps, OnboardStepService)
 
 			// Step 2: Create environment with default deployment unit.
-			envResult, err := runEnvironmentCreateNostr(cmd, client.CreateEnvironmentNostrRequest{
+			envResult, err := runEnvironmentCreateIntent(cmd, client.CreateEnvironmentNostrRequest{
 				OrgID:          orgID,
 				Name:           envName,
 				DeployStrategy: strings.TrimSpace(strategy),
@@ -164,11 +164,12 @@ idempotency key is safe and will not duplicate entities.`,
 	onboardCmd.Flags().String("environment", "", "Environment name")
 	onboardCmd.Flags().String("strategy", string(domain.DeployStrategyReplace), "Deploy strategy")
 	onboardCmd.Flags().String("policy", "", "Pipeline policy name (optional)")
-	onboardCmd.Flags().String("idempotency-key", "", "Global idempotency key for resumable workflow")
+	onboardCmd.Flags().String("idempotency-key", "", "Optional UUIDv7 service intent ID; inspect partial results before retrying the workflow")
 
 	_ = onboardCmd.MarkFlagRequired("name")
 	_ = onboardCmd.MarkFlagRequired("artifact-repo")
 	_ = onboardCmd.MarkFlagRequired("environment")
+	_ = onboardCmd.MarkFlagRequired("org")
 
 	appCmd := &cobra.Command{Use: "app", Short: "Manage applications"}
 	appCmd.AddCommand(onboardCmd)
