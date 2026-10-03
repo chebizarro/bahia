@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -423,7 +424,7 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 	if intent.IntentID == "" {
 		return nil, fmt.Errorf("missing intent_id tag")
 	}
-	if intent.OrgID == uuid.Nil {
+	if intent.OrgID == uuid.Nil && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" {
 		return nil, fmt.Errorf("missing or invalid org tag")
 	}
 
@@ -446,6 +447,13 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 				if err == nil {
 					intent.ExpectedUpdatedAt = &ts
 				}
+			case string:
+				parsed, err := time.Parse(time.RFC3339Nano, v)
+				if err != nil {
+					return nil, fmt.Errorf("invalid expected_updated_at: %w", err)
+				}
+				ts := parsed.Unix()
+				intent.ExpectedUpdatedAt = &ts
 			}
 		}
 	}

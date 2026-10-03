@@ -304,3 +304,7 @@ event was accepted by at least one relay. The transport returns one correlated
 result and handles encrypted replies and replay. Publication failure after a
 storage update is an error, not a successful acknowledgment. Other worker
 forwarding handlers were not converted by this adjudication.
+
+## Signed worker operator intents
+
+Fleet operators can publish `bahia.intent.worker.v1` kind-30900 intents at `d=worker:<pubkey>` for cordon/uncordon, drain/undrain, maintenance enter/exit, labels update, and cleanup. Every worker intent carries `worker_pubkey`, the target `scheduling_state`, and the full desired `labels` map, so the newest retained intent is sufficient after an offline catch-up. Cleanup intents additionally carry `cleanup_mode`. The daemon applies the existing operator action path and emits canonical worker state/read models plus bounded kind-30315 status. ContextVM methods dual-dispatch to this path while the domain is enabled.
