@@ -821,6 +821,7 @@ func (c *OperatorControlPlaneClient) BuildRequestNostr(ctx context.Context, req 
 }
 
 // GetBuildNostr reads one tenant-authorized build over ContextVM.
+// Deprecated: use NostrClient build-registry subscriptions for reads.
 func (c *OperatorControlPlaneClient) GetBuildNostr(ctx context.Context, buildID string, onStatus func(OperatorStatusEvent)) (*BuildDetailsResult, error) {
 	buildID = strings.TrimSpace(buildID)
 	if _, err := uuid.Parse(buildID); err != nil {
@@ -841,6 +842,7 @@ func (c *OperatorControlPlaneClient) GetBuildNostr(ctx context.Context, buildID 
 }
 
 // ListBuildsNostr reads one tenant-authorized page of build history over ContextVM.
+// Deprecated: use NostrClient build-registry subscriptions for reads.
 func (c *OperatorControlPlaneClient) ListBuildsNostr(ctx context.Context, req BuildListNostrRequest, onStatus func(OperatorStatusEvent)) (*BuildListResult, error) {
 	req.ServiceID = strings.TrimSpace(req.ServiceID)
 	if _, err := uuid.Parse(req.ServiceID); err != nil {

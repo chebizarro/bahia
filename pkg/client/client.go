@@ -614,6 +614,7 @@ type Worker struct {
 }
 
 // ListWorkers returns all discovered workers.
+// Deprecated: use NostrClient worker-state subscriptions by default.
 func (c *Client) ListWorkers(ctx context.Context) ([]Worker, error) {
 	var workers []Worker
 	if err := c.do(ctx, http.MethodGet, "/api/v1/workers", nil, &workers); err != nil {
@@ -623,6 +624,7 @@ func (c *Client) ListWorkers(ctx context.Context) ([]Worker, error) {
 }
 
 // GetWorker returns a worker by pubkey.
+// Deprecated: use NostrClient worker-state subscriptions by default.
 func (c *Client) GetWorker(ctx context.Context, pubkey string) (*Worker, error) {
 	var worker Worker
 	if err := c.do(ctx, http.MethodGet, "/api/v1/workers/"+pubkey, nil, &worker); err != nil {

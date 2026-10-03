@@ -62,7 +62,16 @@ Or from a service:
 
 ### CLI
 
-The current CLI does not register `bahia artifacts` or `bahia builds` commands. Use the web UI or signer-first Nostr flows. The MCP tools below are usable only in an embedding that explicitly configures external MCP authorization.
+The CLI reads build and artifact registry records from signed, service-authored `30900` events by default. Configure `--service-pubkey` and `--relay` (or their environment equivalents). Reads resume from a local cursor; if no relay reaches EOSE, cached results are returned with a stale-data warning and exit status 0. The legacy REST read path is available only with `--http-fallback`.
+
+```bash
+bahia builds list --service <service-uuid>
+bahia builds get --build <build-uuid>
+bahia artifacts list --service <service-uuid>
+bahia artifacts get --artifact <artifact-uuid>
+```
+
+The MCP tools below are usable only in an embedding that explicitly configures external MCP authorization.
 
 ### MCP Tool
 

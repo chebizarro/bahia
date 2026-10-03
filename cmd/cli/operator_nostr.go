@@ -22,8 +22,6 @@ import (
 type cliOperatorClient interface {
 	Close()
 	BuildRequestNostr(context.Context, client.BuildRequestNostrRequest, func(client.OperatorStatusEvent)) (*client.BuildCommandResult, error)
-	GetBuildNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.BuildDetailsResult, error)
-	ListBuildsNostr(context.Context, client.BuildListNostrRequest, func(client.OperatorStatusEvent)) (*client.BuildListResult, error)
 	RegisterBuildResultNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error)
 	RegisterArtifactNostr(context.Context, client.RegisterArtifactNostrRequest, func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error)
 	ImportObservedArtifactNostr(context.Context, client.ImportObservedArtifactNostrRequest, func(client.OperatorStatusEvent)) (*client.ImportObservedArtifactResult, error)
@@ -135,24 +133,6 @@ func runBuildRequestNostr(cmd *cobra.Command, req client.BuildRequestNostrReques
 	}
 	defer op.Close()
 	return op.BuildRequestNostr(cmd.Context(), req, operatorStatusCallback(cmd, "builds request"))
-}
-
-func runBuildGetNostr(cmd *cobra.Command, buildID string) (*client.BuildDetailsResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.GetBuildNostr(cmd.Context(), buildID, operatorStatusCallback(cmd, "builds get"))
-}
-
-func runBuildListNostr(cmd *cobra.Command, req client.BuildListNostrRequest) (*client.BuildListResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.ListBuildsNostr(cmd.Context(), req, operatorStatusCallback(cmd, "builds list"))
 }
 
 func runBuildRegisterResultNostr(cmd *cobra.Command, buildID string) (*client.ArtifactCommandResult, error) {

@@ -812,51 +812,30 @@ func TestBuildsRequestCommandRejectsMalformedBuildArgBeforeClientConstruction(t 
 	}
 }
 
-func TestBuildsReadAndRegisterCommandsUseSignerFirstClient(t *testing.T) {
+func TestBuildRegisterResultCommandUsesSignerFirstClient(t *testing.T) {
 	resetOperatorGlobals(t)
 	outputFormat = "json"
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
-	serviceID := uuid.New().String()
 	buildID := uuid.New().String()
-	var gotBuildID, registeredBuildID string
-	var gotList client.BuildListNostrRequest
+	var registeredBuildID string
 	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{
-			buildGet: func(id string) (*client.BuildDetailsResult, error) {
-				gotBuildID = id
-				return &client.BuildDetailsResult{Build: &domain.Build{ID: uuid.MustParse(id), ServiceID: uuid.MustParse(serviceID), Status: domain.BuildStatusQueued}}, nil
-			},
-			buildList: func(req client.BuildListNostrRequest) (*client.BuildListResult, error) {
-				gotList = req
-				return &client.BuildListResult{Builds: []domain.Build{}, Limit: req.Limit, Offset: req.Offset}, nil
-			},
-			buildRegisterResult: func(id string) (*client.ArtifactCommandResult, error) {
-				registeredBuildID = id
-				return &client.ArtifactCommandResult{Status: "registered", BuildID: id}, nil
-			},
-		}, nil
+		return fakeCLIOperatorClient{buildRegisterResult: func(id string) (*client.ArtifactCommandResult, error) {
+			registeredBuildID = id
+			return &client.ArtifactCommandResult{Status: "registered", BuildID: id}, nil
+		}}, nil
 	})
 	defer restoreFactory()
 	root := newOperatorFlagTestCommand(t).Root()
 	root.AddCommand(buildsCommands())
 	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
-		t.Fatalf("set relay: %v", err)
+		t.Fatal(err)
 	}
-	for _, args := range [][]string{
-		{"builds", "get", "--build", buildID},
-		{"builds", "list", "--service", serviceID, "--limit", "25", "--offset", "5"},
-		{"builds", "register-result", "--build", buildID},
-	} {
-		root.SetArgs(args)
-		if err := root.ExecuteContext(context.Background()); err != nil {
-			t.Fatalf("execute %v: %v", args, err)
-		}
+	root.SetArgs([]string{"builds", "register-result", "--build", buildID})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if gotBuildID != buildID || registeredBuildID != buildID {
-		t.Fatalf("get build = %q register build = %q", gotBuildID, registeredBuildID)
-	}
-	if gotList.ServiceID != serviceID || gotList.Limit != 25 || gotList.Offset != 5 {
-		t.Fatalf("list request = %#v", gotList)
+	if registeredBuildID != buildID {
+		t.Fatalf("registered build = %q", registeredBuildID)
 	}
 }
 
@@ -884,8 +863,6 @@ type fakeCLIOperatorClient struct {
 	restartErr             error
 	policyCreate           func(controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
 	buildRequest           func(client.BuildRequestNostrRequest) (*client.BuildCommandResult, error)
-	buildGet               func(string) (*client.BuildDetailsResult, error)
-	buildList              func(client.BuildListNostrRequest) (*client.BuildListResult, error)
 	buildRegisterResult    func(string) (*client.ArtifactCommandResult, error)
 	artifactRegister       func(client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error)
 	dnsZoneCreate          func(client.DNSZoneCreateRequest) (*client.DNSCommandResult, error)
@@ -909,18 +886,6 @@ func (f fakeCLIOperatorClient) Close() {
 func (f fakeCLIOperatorClient) BuildRequestNostr(_ context.Context, req client.BuildRequestNostrRequest, _ func(client.OperatorStatusEvent)) (*client.BuildCommandResult, error) {
 	if f.buildRequest != nil {
 		return f.buildRequest(req)
-	}
-	return nil, errors.New("not implemented")
-}
-func (f fakeCLIOperatorClient) GetBuildNostr(_ context.Context, buildID string, _ func(client.OperatorStatusEvent)) (*client.BuildDetailsResult, error) {
-	if f.buildGet != nil {
-		return f.buildGet(buildID)
-	}
-	return nil, errors.New("not implemented")
-}
-func (f fakeCLIOperatorClient) ListBuildsNostr(_ context.Context, req client.BuildListNostrRequest, _ func(client.OperatorStatusEvent)) (*client.BuildListResult, error) {
-	if f.buildList != nil {
-		return f.buildList(req)
 	}
 	return nil, errors.New("not implemented")
 }

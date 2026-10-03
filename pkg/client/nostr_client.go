@@ -182,8 +182,10 @@ func (c *NostrClient) Sync(ctx context.Context, domain string) (*SyncResult, err
 }
 
 func (c *NostrClient) syncTopics(ctx context.Context, domain string, topics []string) (*SyncResult, error) {
-	filter := c.buildFilter(topics)
+	return c.syncFilter(ctx, domain, c.buildFilter(topics), func(ev nostr.Event) bool { return c.validStateEvent(ev, topics) })
+}
 
+func (c *NostrClient) syncFilter(ctx context.Context, domain string, filter nostr.Filter, valid func(nostr.Event) bool) (*SyncResult, error) {
 	// Load per-(relay, filter) cursor.
 	filterHash := hashFilter(filter)
 	cursor, err := c.store.Cursor("_pool", filterHash)
@@ -220,7 +222,7 @@ func (c *NostrClient) syncTopics(ctx context.Context, domain string, topics []st
 			if ev == nil {
 				continue
 			}
-			if !c.validStateEvent(*ev, topics) {
+			if !valid(*ev) {
 				continue
 			}
 			if _, saveErr := c.store.SaveEvent(*ev); saveErr != nil {
@@ -252,7 +254,7 @@ done:
 		return nil, err
 	}
 	// Drain remaining events after EOSE/timeout (non-blocking).
-	drainedMax, err := c.drainEventsSub(sub, topics)
+	drainedMax, err := c.drainEventsSub(sub, valid)
 	if err != nil {
 		return nil, fmt.Errorf("drain %s events: %w", domain, err)
 	}
@@ -424,16 +426,12 @@ func (c *NostrClient) SyncAndQueryFamily(ctx context.Context, legacyKind int) ([
 // service pubkey. Uses #t (single-letter) instead of #domain/#schema per the
 // multi-letter-filter archtest ban.
 func (c *NostrClient) buildFilter(topics []string) nostr.Filter {
-	return nostr.Filter{
-		Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
-		Authors: []nostr.PubKey{c.servicePub},
-		Tags:    nostr.TagMap{"t": topics},
-	}
+	return buildAuthorFilter(kinds.CASControlState, []nostr.PubKey{c.servicePub}, topics)
 }
 
 // drainEventsSub reads and stores remaining events from a subscription
 // non-blockingly until the event channel closes or drains.
-func (c *NostrClient) drainEventsSub(sub Subscription, topics []string) (nostr.Timestamp, error) {
+func (c *NostrClient) drainEventsSub(sub Subscription, valid func(nostr.Event) bool) (nostr.Timestamp, error) {
 	var maxCreatedAt nostr.Timestamp
 	for {
 		select {
@@ -441,7 +439,7 @@ func (c *NostrClient) drainEventsSub(sub Subscription, topics []string) (nostr.T
 			if !ok {
 				return maxCreatedAt, nil
 			}
-			if ev != nil && c.validStateEvent(*ev, topics) {
+			if ev != nil && valid(*ev) {
 				if _, err := c.store.SaveEvent(*ev); err != nil {
 					return 0, fmt.Errorf("store event %s: %w", ev.GetID(), err)
 				}

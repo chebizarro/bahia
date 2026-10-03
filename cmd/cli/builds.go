@@ -63,7 +63,7 @@ func buildsCommands() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			buildID, _ := cmd.Flags().GetString("build")
-			result, err := runBuildGetNostr(cmd, buildID)
+			result, err := getCLIBuild(cmd, buildID)
 			if err != nil {
 				return err
 			}
@@ -81,7 +81,7 @@ func buildsCommands() *cobra.Command {
 			serviceID, _ := cmd.Flags().GetString("service")
 			limit, _ := cmd.Flags().GetInt("limit")
 			offset, _ := cmd.Flags().GetInt("offset")
-			result, err := runBuildListNostr(cmd, client.BuildListNostrRequest{ServiceID: serviceID, Limit: limit, Offset: offset})
+			result, err := listCLIBuilds(cmd, serviceID, limit, offset)
 			if err != nil {
 				return err
 			}
