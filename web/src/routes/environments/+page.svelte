@@ -10,7 +10,8 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import OperationalActivity from '../OperationalActivity.svelte';
   import { EnvironmentIcon, ProtectedIcon } from '$lib/icons/domain-icons.js';
-  import { environments, workers, loading, loadEnvironments, loadWorkers, operations, operationsForDomain } from '$lib/stores';
+  import { environments, workers, loadWorkers, operations, operationsForDomain } from '$lib/stores';
+  import { syncStatus } from '$lib/stores/sync-status.svelte.js';
   import { createEnvironment as createEnvironmentCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { isEntityIdConflict, mintEntityId } from '$lib/entity-id.js';
   import { orgsState } from '$lib/stores/orgs.svelte.js';
@@ -27,7 +28,7 @@
   } from '$lib/deployment-units.js';
 
   $effect(() => {
-    void Promise.all([loadEnvironments(), loadWorkers()]);
+    void loadWorkers();
   });
 
   // Create modal state
@@ -187,7 +188,6 @@
       });
       
       closeCreateModal();
-      await loadEnvironments();
     } catch (err) {
       createError = isEntityIdConflict(err)
         ? 'This environment was already created with different settings. Close the dialog and start again to create another environment.'
@@ -221,6 +221,11 @@
         Environments
       </h1>
       <span class="count">{environments.length} environments</span>
+      {#if syncStatus.phase === 'syncing'}
+        <span class="sync-badge syncing" title="Syncing with relays…">syncing…</span>
+      {:else if syncStatus.phase === 'live'}
+        <span class="sync-badge live" title="Live — all relays caught up">live</span>
+      {/if}
     </div>
     <LoadingButton variant="primary" onclick={openCreateModal}>
       Create Environment
@@ -229,9 +234,7 @@
 
   <OperationalActivity items={liveEnvironmentOperations} title="Live environment activity" />
 
-  {#if loading.environments}
-    <p class="loading">Loading...</p>
-  {:else if environments.length === 0}
+  {#if environments.length === 0}
     <EmptyState
       iconComponent={EnvironmentIcon}
       title="No environments yet"
@@ -481,10 +484,19 @@
     color: var(--text-muted);
     font-size: 0.875rem;
   }
-  .loading {
-    color: var(--text-muted);
-    padding: 2rem;
-    text-align: center;
+  .sync-badge {
+    font-size: 0.75rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+    font-weight: 500;
+  }
+  .sync-badge.syncing {
+    background: var(--warning);
+    color: #000;
+  }
+  .sync-badge.live {
+    background: var(--success);
+    color: #fff;
   }
 
   .create-form {

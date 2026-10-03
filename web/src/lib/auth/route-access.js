@@ -1,3 +1,13 @@
+/**
+ * Route access control — Phase 4 §6.3.
+ *
+ * No longer depends on backendAuthenticated or REST compatibility flags.
+ * Roles come from relay membership events (auth-roles.svelte.js).
+ * Authentication is a persisted signer-verified session.
+ */
+
+import { hasAnyRole } from '$lib/stores/auth-roles.svelte.js';
+
 const PROTECTED_PREFIXES = [
   '/souls',
   '/services',
@@ -25,8 +35,6 @@ const PROTECTED_PREFIXES = [
   '/settings'
 ];
 
-// The backend remains authoritative, but the browser must not render protected
-// routes for a signer that failed Bahia's membership probe.
 const ADMIN_ROLES = ['admin', 'owner'];
 const DEPLOYER_ROLES = ['deployer', 'admin', 'owner'];
 const ROUTE_ROLE_REQUIREMENTS = {
@@ -47,11 +55,6 @@ const ROUTE_ROLE_REQUIREMENTS = {
   '/settings': ['owner']
 };
 
-// Routes that still require REST compatibility in the signer-first migration.
-const ROUTE_COMPATIBILITY_REQUIREMENTS = {
-  '/orgs': true
-};
-
 function developmentOverride(name) {
   if (!import.meta.env.DEV || typeof window === 'undefined') return null;
   const override = window[name];
@@ -61,17 +64,6 @@ function developmentOverride(name) {
 function getRoleRequirements() {
   const overrides = developmentOverride('__BAHIA_E2E_ROUTE_ROLE_REQUIREMENTS');
   return overrides ? { ...ROUTE_ROLE_REQUIREMENTS, ...overrides } : ROUTE_ROLE_REQUIREMENTS;
-}
-
-function getCompatibilityRequirements() {
-  const overrides = developmentOverride('__BAHIA_E2E_ROUTE_COMPAT_REQUIREMENTS');
-  return overrides ? { ...ROUTE_COMPATIBILITY_REQUIREMENTS, ...overrides } : ROUTE_COMPATIBILITY_REQUIREMENTS;
-}
-
-function toRoleSet(authState = {}) {
-  const explicitRoles = Array.isArray(authState.roles) ? authState.roles : [];
-  const capabilityRoles = Array.isArray(authState?.capabilities?.roles) ? authState.capabilities.roles : [];
-  return new Set([...explicitRoles, ...capabilityRoles].filter(Boolean));
 }
 
 function normalizePathname(pathname) {
@@ -90,59 +82,46 @@ function getRequiredRoles(pathname) {
   return roleRequirements[match] ?? [];
 }
 
-function requiresRestCompatibility(pathname) {
-  const normalized = normalizePathname(pathname);
-  const compatibilityRequirements = getCompatibilityRequirements();
-  return Object.keys(compatibilityRequirements)
-    .sort((a, b) => b.length - a.length)
-    .some((prefix) => normalized.startsWith(prefix) && compatibilityRequirements[prefix]);
-}
-
 export function getRouteAccess(pathname) {
   const normalized = normalizePathname(pathname);
   const protectedRoute = PROTECTED_PREFIXES.some((prefix) => normalized.startsWith(prefix));
   const requiredRoles = protectedRoute ? getRequiredRoles(normalized) : [];
-  const compatibilityRequired = protectedRoute ? requiresRestCompatibility(normalized) : false;
   return {
     pathname: normalized,
     protectedRoute,
-    requiredRoles,
-    requiresRestCompatibility: compatibilityRequired
+    requiredRoles
   };
 }
 
+/**
+ * Check if a user can access a route.
+ * §6.2: authenticated = persisted signer-verified session (no backendAuthenticated).
+ * Roles come from relay membership events.
+ */
 export function canAccessRoute({ pathname, authState, isAuthenticated }) {
   const access = getRouteAccess(pathname);
   if (!access.protectedRoute) {
-    return { ...access, authorized: true, roleAuthorized: true, compatibilityAuthorized: true };
+    return { ...access, authorized: true, roleAuthorized: true };
   }
 
-  const authenticated = Boolean(isAuthenticated) && Boolean(authState?.backendAuthenticated);
-  if (!authenticated) {
-    return { ...access, authorized: false, roleAuthorized: false, compatibilityAuthorized: false };
+  if (!isAuthenticated) {
+    return { ...access, authorized: false, roleAuthorized: false };
   }
-
-  const compatibilityAuthorized =
-    !access.requiresRestCompatibility ||
-    Boolean(authState?.compatibility?.restNip98Ready || authState?.directNip98Ready);
 
   if (access.requiredRoles.length === 0) {
-    return { ...access, authorized: compatibilityAuthorized, roleAuthorized: true, compatibilityAuthorized };
+    return { ...access, authorized: true, roleAuthorized: true };
   }
 
-  const roles = toRoleSet(authState);
-  const roleAuthorized = access.requiredRoles.some((role) => roles.has(role));
+  const roleAuthorized = hasAnyRole(access.requiredRoles);
 
   return {
     ...access,
-    authorized: roleAuthorized && compatibilityAuthorized,
-    roleAuthorized,
-    compatibilityAuthorized
+    authorized: roleAuthorized,
+    roleAuthorized
   };
 }
 
 export const routeAccessConfig = {
   protectedPrefixes: PROTECTED_PREFIXES,
-  roleRequirements: ROUTE_ROLE_REQUIREMENTS,
-  compatibilityRequirements: ROUTE_COMPATIBILITY_REQUIREMENTS
+  roleRequirements: ROUTE_ROLE_REQUIREMENTS
 };

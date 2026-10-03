@@ -161,14 +161,14 @@ describe('nav model helpers', () => {
     expect(authPresentation({
       status: 'idle',
       pubkey,
-      backendAuthenticated: false,
+
       error: 'backend unavailable'
     }, true)).toMatchObject({
       mode: 'authenticated',
       pubkey,
       truncatedPubkey: 'ffffffff...ffff',
-      backendAuthenticated: false,
-      showWarning: true,
+
+      showWarning: Boolean("backend unavailable"),
       warning: 'backend unavailable',
       profile: null,
       displayLabel: 'ffffffff...ffff',

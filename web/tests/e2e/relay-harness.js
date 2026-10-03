@@ -197,6 +197,8 @@ export async function installRelayBackedBrowserContext(page, relay, { authentica
         relays: { [relayUrl]: { read: true, write: true } },
         lastAuthenticatedAt: new Date().toISOString()
       }));
+      // E2E role override for hasAnyRole() (dev-only, auth-roles.svelte.js)
+      window.__BAHIA_E2E_USER_ROLES = ['owner'];
       window.nostr = {
         getPublicKey: async () => pubkey,
         getRelays: async () => ({ [relayUrl]: { read: true, write: true } }),
@@ -209,6 +211,7 @@ export async function installRelayBackedBrowserContext(page, relay, { authentica
     } else {
       localStorage.removeItem('bahia_auth_session');
       delete window.nostr;
+      delete window.__BAHIA_E2E_USER_ROLES;
     }
   }, { relayUrl: relay.wsUrl, servicePubkey: relay.servicePubkey, authenticated, pubkey: RELAY_OPERATOR_PUBKEY });
 }

@@ -12,6 +12,7 @@
     getRelayPolicy,
     liveRelayPolicyTruth,
     normalizeRelayPolicyProjectionResponse,
+    createProjectionHydrationGuard,
     subscribeRelayPolicyReadModel
   } from '$lib/nostr/relay-settings-controlplane.js';
   import { systemInfo as sharedSystemInfo, loadSystemInfo as loadSharedSystemInfo } from '$lib/stores';
@@ -49,7 +50,7 @@
   let operatorPolicyProvenance = $state(emptyRelayPolicyProvenance());
   let operatorPolicyCandidate = $state(null);
   let operatorPolicyProjectionKey = $state('');
-  let operatorPolicyProjectionRequestInFlight = $state('');
+  const projectionHydrationGuard = createProjectionHydrationGuard();
   let operatorPolicyDirty = $state(false);
   let pendingCanonicalRelayPolicyState = $state(null);
   let pendingCanonicalRelayPolicyReceivedAt = $state('');
@@ -228,7 +229,7 @@
     operatorPolicyObservedLive = false;
     operatorPolicyCandidate = null;
     operatorPolicyProvenance = emptyRelayPolicyProvenance();
-    operatorPolicyProjectionRequestInFlight = '';
+    projectionHydrationGuard.reset();
     operatorPolicyHydrationStatus = 'Trusted service identity changed; reloading signed truth';
     operatorPolicyHydrationError = '';
     operatorPolicyHydratedAt = '';
@@ -241,8 +242,7 @@
   }
 
   async function hydrateProjectedRelayPolicy({ requestKey = operatorPolicyProjectionKey } = {}) {
-    if (!requestKey || operatorPolicyProjectionRequestInFlight === requestKey) return;
-    operatorPolicyProjectionRequestInFlight = requestKey;
+    if (!projectionHydrationGuard.acquire(requestKey)) return;
     try {
       const response = await getRelayPolicy();
       if (requestKey !== operatorPolicyProjectionKey) return;
@@ -306,12 +306,9 @@
         operatorPolicyHydratedAt = '';
       }
     } catch (error) {
+      projectionHydrationGuard.release(requestKey);
       if (requestKey === operatorPolicyProjectionKey) {
         setRelayPolicyUnavailable(error?.message || 'Signer-first projection hydration failed.');
-      }
-    } finally {
-      if (operatorPolicyProjectionRequestInFlight === requestKey) {
-        operatorPolicyProjectionRequestInFlight = '';
       }
     }
   }
