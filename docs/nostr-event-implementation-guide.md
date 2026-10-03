@@ -1,5 +1,9 @@
 # Bahia Nostr Event Implementation Guide
 
+## Deployment, runtime, LLM, and backup intents
+
+When the corresponding `intent_domains` entry is enabled, clients sign kind `30900` events with `schema=bahia.intent.<domain>.v1`, `domain=deployment|runtime|llm|backup`, `op`, and a stable `content.intent_id`. Deployment operations are `create`, `approve`, `reject`, and `rollback`; runtime operations are `deploy`, `restart`, and `stop`; LLM adds `deploy`, `rollback`, `approve`, and `reject`; backup adds `restore-approval`. See the [wire fixtures](../web/tests/fixtures/deployment-intents.json) and [operation table](designs/phase3-authority-inversion.md#13-intent-event-structure). The daemon emits bounded `30315` status and its existing canonical state publishers remain the sole state writers. ContextVM mutation handlers dispatch in-process through the same intent processor only for enabled domains; disabled domains retain their legacy execution path.
+
 ## Artifact, policy, and approval publishers
 
 Artifact registration, policy create/update/delete/evaluate, and tool approval

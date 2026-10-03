@@ -81,10 +81,18 @@ func (h backupContextVMHandlers) backupIntentEnabled() bool {
 // backupDualDispatch routes a backup mutation through the intent processor
 // for dual dispatch when the backup domain is enabled.
 func (h backupContextVMHandlers) backupDualDispatch(ctx context.Context, request ContextVMRequest, op string, entityID string, content map[string]any) error {
+	compatibilityKey := backupStringParam(content, "idempotency_key")
+	if compatibilityKey == "" && request.Event != nil {
+		compatibilityKey = request.Event.ID.Hex()
+	}
+	if compatibilityKey == "" {
+		compatibilityKey = entityID
+	}
 	intent := &Intent{
 		Domain:     "backup",
+		Event:      request.Event,
 		Op:         op,
-		IntentID:   effectiveIdempotencyKey(request, entityID),
+		IntentID:   effectiveIdempotencyKey(request, compatibilityKey),
 		Coordinate: entityID,
 		Content:    content,
 		Actor:      request.Event.PubKey.Hex(),
@@ -458,14 +466,21 @@ func (h backupContextVMHandlers) restoreApproval(ctx context.Context, request Co
 		return nil, err
 	}
 	content := map[string]any{
-		"restore_id":  restoreID.String(),
-		"approved":    approved,
-		"decision":    decision,
-		"message":     payload.Message,
-		"reason_code": payload.ReasonCode,
-		"reason":      payload.Reason,
-		"tenant_id":   firstNonEmpty(payload.TenantID, payload.OrgID),
-		"metadata":    payload.Metadata,
+		"restore_id":      restoreID.String(),
+		"approved":        approved,
+		"decision":        decision,
+		"message":         payload.Message,
+		"reason_code":     payload.ReasonCode,
+		"reason":          payload.Reason,
+		"tenant_id":       firstNonEmpty(payload.TenantID, payload.OrgID),
+		"metadata":        payload.Metadata,
+		"idempotency_key": payload.IdempotencyKey,
+	}
+	if h.backupIntentEnabled() {
+		if err := h.backupDualDispatch(ctx, request, "restore-approval", restoreID.String(), content); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "accepted", "restore_id": restoreID.String(), "decision": decision}, nil
 	}
 	receipt, err := h.publish(ctx, request, backupPublishSpecLocal{
 		kind:       KindBackupRestoreApproval,

@@ -2236,6 +2236,30 @@ func New(cfg *config.Config) (*App, error) {
 		)
 	}
 
+	releasePromotionAudit := controlplane.NewSignedReleasePromotionAudit(controlPlaneSigner, auditEventRepo)
+	releasePromotionAuthorizer := controlplane.NewReleasePromotionAuthorizer(registry, releasePromotionAudit)
+	serviceDeploymentConfig := controlplane.EncryptedServiceHandlersConfig{
+		Registry:          registry,
+		RuntimeLifecycle:  runtimeLifecycleSvc,
+		Policy:            policySvc,
+		PublicRoutes:      publicRoutePlanner,
+		Services:          serviceRepo,
+		DeploymentUnits:   deploymentUnitRepo,
+		RBAC:              tenantRBAC,
+		ReleasePromotions: releasePromotionAuthorizer,
+		Logger:            logger,
+		IntentProcessor:   intentProcessor,
+	}
+	if enabledDomains["deployment"] || enabledDomains["runtime"] {
+		deploymentHandler := controlplane.NewDeploymentIntentHandler(serviceDeploymentConfig, runtimeLifecycleSvc)
+		if enabledDomains["deployment"] {
+			intentProcessor.RegisterHandler("deployment", deploymentHandler)
+		}
+		if enabledDomains["runtime"] {
+			intentProcessor.RegisterHandler("runtime", deploymentHandler)
+		}
+	}
+
 	var encryptedRequestTransport *controlplane.EncryptedRequestTransport
 	// Encrypted request/result event runtime for sensitive browser route migrations.
 	if len(contextVMRequestRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
@@ -2355,6 +2379,8 @@ func New(cfg *config.Config) (*App, error) {
 			RuntimeLifecycle:               runtimeLifecycleSvc,
 			AdoptionAuthorizedPubkeys:      cfg.Adoption.AllowedPubkeys,
 			DirectRuntimeAuthorizedPubkeys: cfg.DirectRuntime.AllowedPubkeys,
+			IntentProcessor:                intentProcessor,
+			Resources:                      registry,
 		}).Register(encryptedRequestTransport)
 		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport, fleetOperatorGate)
 		bgManager.RegisterWithOptions(controlplane.RegisterContinuityContextVMHandlers(encryptedRequestTransport, fleetOperatorGate, controlPlanePool, continuityDefinitionStore, continuityRecipeExecutor, logger))
@@ -2373,19 +2399,7 @@ func New(cfg *config.Config) (*App, error) {
 			FleetOperatorGate: fleetOperatorGate,
 		})
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator, fleetOperatorGate)
-		releasePromotionAudit := controlplane.NewSignedReleasePromotionAudit(controlPlaneSigner, auditEventRepo)
-		releasePromotionAuthorizer := controlplane.NewReleasePromotionAuthorizer(registry, releasePromotionAudit)
-		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, controlplane.EncryptedServiceHandlersConfig{
-			Registry:          registry,
-			RuntimeLifecycle:  runtimeLifecycleSvc,
-			Policy:            policySvc,
-			PublicRoutes:      publicRoutePlanner,
-			Services:          serviceRepo,
-			DeploymentUnits:   deploymentUnitRepo,
-			RBAC:              tenantRBAC,
-			ReleasePromotions: releasePromotionAuthorizer,
-			Logger:            logger,
-		})
+		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, serviceDeploymentConfig)
 		if sbomOrchestrator != nil {
 			sbomAsyncRunner := service.NewSBOMAsyncRunner(sbomOrchestrator)
 			controlplane.RegisterSBOMContextVMHandlers(encryptedRequestTransport, sbomAsyncRunner, fleetOperatorGate)

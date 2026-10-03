@@ -20,6 +20,11 @@ type LLMRouteCRUD interface {
 	GetRoute(ctx context.Context, id uuid.UUID) (*domain.LLMRoute, error)
 	UpdateRoute(ctx context.Context, route *domain.LLMRoute) error
 	CreateRelease(ctx context.Context, release *domain.LLMRelease) error
+	CreateDeploymentIntent(ctx context.Context, intent *domain.LLMDeploymentIntent) error
+	GetDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentIntent, error)
+	ApproveDeploymentIntent(ctx context.Context, id uuid.UUID) error
+	RejectDeploymentIntent(ctx context.Context, id uuid.UUID) error
+	RollbackWithMetadata(ctx context.Context, routeID, envID uuid.UUID, requestedBy string, metadata map[string]any) (*domain.LLMDeploymentIntent, error)
 }
 
 // LLMRouteStatePublisher signs and publishes a canonical kind-30900 cp-state
@@ -35,9 +40,10 @@ type LLMRouteStatePublisher func(ctx context.Context, route *domain.LLMRoute, de
 // Registered at startup when "llm" is in nostr.intent_domains via
 // IntentProcessor.RegisterHandler("llm", handler).
 //
-// LLM routes are org-scoped (NOT fleet-scoped). The handler does NOT implement
-// FleetScopedHandler, so the intent processor authorizes via per-org
-// membership rather than FleetOperatorGate.
+// LLM deployment operations retain the Reactor fleet-operator gate. Route
+// registry operations accept org membership and the legacy ContextVM fleet
+// operator gate during the dual-dispatch window. The handler implements
+// SelfAuthorizingHandler to preserve both authorities.
 //
 // Revision decision: latest-wins. LLMRoute carries UpdatedAt but has
 // no concurrent multi-operator editing in practice. When expected_updated_at
@@ -78,6 +84,12 @@ func NewLLMRouteIntentHandler(cfg LLMRouteIntentHandlerConfig) *LLMRouteIntentHa
 // deduplicated, validated, and authorized the intent.
 func (h *LLMRouteIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
 	switch intent.Op {
+	case "deploy":
+		return h.handleDeploymentCreate(ctx, intent)
+	case "rollback":
+		return h.handleDeploymentRollback(ctx, intent)
+	case "approve", "reject":
+		return h.handleDeploymentDecision(ctx, intent)
 	case "release-register":
 		return h.handleReleaseRegister(ctx, intent)
 	case "delete":
@@ -89,8 +101,130 @@ func (h *LLMRouteIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 }
 
 // PermissionFor returns the permission required for LLM operations.
-func (h *LLMRouteIntentHandler) PermissionFor(_ string) domain.Permission {
-	return domain.PermWriteServices
+func (h *LLMRouteIntentHandler) PermissionFor(op string) domain.Permission {
+	switch op {
+	case "deploy", "rollback":
+		return domain.PermWriteDeployments
+	case "approve", "reject":
+		return domain.PermApproveDeployments
+	default:
+		return domain.PermWriteServices
+	}
+}
+
+func (h *LLMRouteIntentHandler) checkDeploymentRouteRevision(ctx context.Context, intent *Intent, routeID uuid.UUID) error {
+	if intent.ExpectedUpdatedAt == nil {
+		return nil
+	}
+	route, err := h.routes.GetRoute(ctx, routeID)
+	if err != nil {
+		return err
+	}
+	if route == nil {
+		return fmt.Errorf("LLM route %s not found", routeID)
+	}
+	expected := time.Unix(0, *intent.ExpectedUpdatedAt)
+	if raw, ok := intent.Content["expected_updated_at"].(string); ok {
+		if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+			expected = parsed
+		}
+	}
+	if !domain.SameRevision(route.UpdatedAt, expected) {
+		return &revisionConflictError{entityID: routeID, expected: expected, actual: route.UpdatedAt}
+	}
+	return nil
+}
+
+func (h *LLMRouteIntentHandler) handleDeploymentCreate(ctx context.Context, intent *Intent) error {
+	routeID, err := uuid.Parse(firstIntentString(intent.Content, "route_id"))
+	if err != nil || routeID == uuid.Nil {
+		return fmt.Errorf("route_id must be a UUID")
+	}
+	if err := h.checkDeploymentRouteRevision(ctx, intent, routeID); err != nil {
+		return err
+	}
+	envID, err := uuid.Parse(firstIntentString(intent.Content, "environment_id"))
+	if err != nil || envID == uuid.Nil {
+		return fmt.Errorf("environment_id must be a UUID")
+	}
+	releaseID, err := uuid.Parse(firstIntentString(intent.Content, "release_id"))
+	if err != nil || releaseID == uuid.Nil {
+		return fmt.Errorf("release_id must be a UUID")
+	}
+	metadata, _ := intent.Content["metadata"].(map[string]any)
+	return h.routes.CreateDeploymentIntent(ctx, &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID, RequestedBy: intent.Actor, SourceKind: domain.SourceKindEventTriggered, Metadata: metadata})
+}
+
+func (h *LLMRouteIntentHandler) handleDeploymentRollback(ctx context.Context, intent *Intent) error {
+	routeID, err := uuid.Parse(firstIntentString(intent.Content, "route_id"))
+	if err != nil || routeID == uuid.Nil {
+		return fmt.Errorf("route_id must be a UUID")
+	}
+	if err := h.checkDeploymentRouteRevision(ctx, intent, routeID); err != nil {
+		return err
+	}
+	envID, err := uuid.Parse(firstIntentString(intent.Content, "environment_id"))
+	if err != nil || envID == uuid.Nil {
+		return fmt.Errorf("environment_id must be a UUID")
+	}
+	metadata, _ := intent.Content["metadata"].(map[string]any)
+	_, err = h.routes.RollbackWithMetadata(ctx, routeID, envID, intent.Actor, metadata)
+	return err
+}
+
+func (h *LLMRouteIntentHandler) handleDeploymentDecision(ctx context.Context, intent *Intent) error {
+	id, err := uuid.Parse(firstIntentString(intent.Content, "deployment_intent_id", "target_intent_id"))
+	if err != nil || id == uuid.Nil {
+		return fmt.Errorf("deployment_intent_id must be a UUID")
+	}
+	current, err := h.routes.GetDeploymentIntent(ctx, id)
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		return fmt.Errorf("LLM deployment intent %s not found", id)
+	}
+	if intent.ExpectedUpdatedAt != nil {
+		expected := time.Unix(0, *intent.ExpectedUpdatedAt)
+		if raw, ok := intent.Content["expected_updated_at"].(string); ok {
+			if parsed, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
+				expected = parsed
+			}
+		}
+		if !domain.SameRevision(current.UpdatedAt, expected) {
+			return &revisionConflictError{entityID: id, expected: expected, actual: current.UpdatedAt}
+		}
+	}
+	if intent.Op == "approve" {
+		return h.routes.ApproveDeploymentIntent(ctx, id)
+	}
+	return h.routes.RejectDeploymentIntent(ctx, id)
+}
+
+// Deployment operations retain the fleet-operator authority used by the
+// existing Reactor; route registry mutations also accept org RBAC.
+func (h *LLMRouteIntentHandler) AuthorizeIntent(ctx context.Context, trustSet *TrustSet, intent *Intent) error {
+	switch intent.Op {
+	case "deploy", "rollback", "approve", "reject":
+		for _, pubkey := range trustSet.FleetOps() {
+			if pubkey == intent.Actor {
+				return nil
+			}
+		}
+		return fmt.Errorf("fleet operator permission required for LLM %s", intent.Op)
+	default:
+		// The legacy LLM ContextVM surface is fleet-gated; accept that same
+		// principal during dual dispatch while relay authors may use org RBAC.
+		for _, pubkey := range trustSet.FleetOps() {
+			if pubkey == intent.Actor {
+				return nil
+			}
+		}
+		if trustSet.HasPermission(ctx, intent.OrgID, intent.Actor, h.PermissionFor(intent.Op)) {
+			return nil
+		}
+		return fmt.Errorf("insufficient permission: %s", h.PermissionFor(intent.Op))
+	}
 }
 
 // handleCreateOrUpdate reconciles an LLM route toward the intent's desired state.

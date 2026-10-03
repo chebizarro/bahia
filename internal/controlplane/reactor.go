@@ -1180,6 +1180,17 @@ func (r *Reactor) handleLLMReleaseRegister(ctx context.Context, event *nostr.Eve
 	r.logPublishError(r.publishLLMReleaseRegisterResult(ctx, event, release))
 }
 
+func (r *Reactor) llmDeploymentDualDispatch(ctx context.Context, event *nostr.Event, op, coordinate string, content map[string]any, environmentID uuid.UUID) error {
+	env, err := r.registry.GetEnvironment(ctx, environmentID)
+	if err != nil {
+		return err
+	}
+	if env == nil {
+		return fmt.Errorf("LLM environment %s not found", environmentID)
+	}
+	return r.intentProcessor.ProcessInProcess(ctx, &Intent{Event: event, Domain: "llm", Op: op, OrgID: env.OrgID, IntentID: event.ID.Hex(), Coordinate: coordinate, Content: content, Actor: event.PubKey.Hex()})
+}
+
 // handleLLMDeployRequest processes a legacy LLM deployment request in direct tests.
 func (r *Reactor) handleLLMDeployRequest(ctx context.Context, event *nostr.Event) {
 	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
@@ -1239,6 +1250,13 @@ func (r *Reactor) handleLLMDeployRequest(ctx context.Context, event *nostr.Event
 		metadata["request_authority"] = delegation
 	}
 	intent := &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID, RequestedBy: event.PubKey.Hex(), SourceKind: domain.SourceKindEventTriggered, Metadata: metadata}
+	if r.intentProcessor != nil && r.intentProcessor.Handler("llm") != nil {
+		content := map[string]any{"route_id": routeID.String(), "environment_id": envID.String(), "release_id": releaseID.String(), "metadata": metadata}
+		if err := r.llmDeploymentDualDispatch(ctx, event, "deploy", routeID.String()+":"+envID.String(), content, envID); err != nil {
+			r.logPublishError(r.publishLLMError(ctx, event, "intent_error", err.Error()))
+		}
+		return
+	}
 	if err := r.llmRegistry.CreateDeploymentIntent(ctx, intent); err != nil {
 		logger.Error("failed to create LLM deployment intent", "error", err)
 		r.logPublishError(r.publishLLMError(ctx, event, "intent_error", err.Error()))
@@ -1272,6 +1290,18 @@ func (r *Reactor) handleLLMDeploymentApproval(ctx context.Context, event *nostr.
 	intentID, err := uuid.Parse(content.IntentID)
 	if err != nil {
 		r.logPublishError(r.publishLLMError(ctx, event, "validation_error", fmt.Sprintf("invalid intent_id: %v", err)))
+		return
+	}
+	if r.intentProcessor != nil && r.intentProcessor.Handler("llm") != nil {
+		target, getErr := r.llmRegistry.GetDeploymentIntent(ctx, intentID)
+		if getErr != nil || target == nil {
+			r.logPublishError(r.publishLLMError(ctx, event, "approval_error", "LLM deployment intent not found"))
+			return
+		}
+		body := map[string]any{"deployment_intent_id": intentID.String()}
+		if err := r.llmDeploymentDualDispatch(ctx, event, content.Decision, intentID.String(), body, target.EnvironmentID); err != nil {
+			r.logPublishError(r.publishLLMError(ctx, event, "approval_error", err.Error()))
+		}
 		return
 	}
 	if content.Decision == "approve" {
@@ -1335,6 +1365,13 @@ func (r *Reactor) handleLLMRollbackRequest(ctx context.Context, event *nostr.Eve
 	}
 	if delegation != nil {
 		metadata["request_authority"] = delegation
+	}
+	if r.intentProcessor != nil && r.intentProcessor.Handler("llm") != nil {
+		body := map[string]any{"route_id": routeID.String(), "environment_id": envID.String(), "metadata": metadata}
+		if err := r.llmDeploymentDualDispatch(ctx, event, "rollback", routeID.String()+":"+envID.String(), body, envID); err != nil {
+			r.logPublishError(r.publishLLMError(ctx, event, "rollback_error", err.Error()))
+		}
+		return
 	}
 	intent, err := r.llmRegistry.RollbackWithMetadata(ctx, routeID, envID, event.PubKey.Hex(), metadata)
 	if err != nil {

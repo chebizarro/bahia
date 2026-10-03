@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -441,6 +442,13 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 			case float64:
 				ts := int64(v)
 				intent.ExpectedUpdatedAt = &ts
+			case string:
+				if parsed, err := time.Parse(time.RFC3339Nano, v); err == nil {
+					ts := parsed.UnixNano()
+					intent.ExpectedUpdatedAt = &ts
+				} else {
+					return nil, fmt.Errorf("invalid expected_updated_at: %w", err)
+				}
 			case json.Number:
 				ts, err := v.Int64()
 				if err == nil {

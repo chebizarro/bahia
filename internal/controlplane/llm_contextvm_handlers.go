@@ -211,10 +211,18 @@ func (h *llmContextVMHandlers) releaseRegister(ctx context.Context, request Cont
 // llmDualDispatch routes an LLM mutation through the intent processor for
 // dual dispatch when the llm domain is enabled.
 func (h *llmContextVMHandlers) llmDualDispatch(ctx context.Context, request ContextVMRequest, op string, entityID uuid.UUID, content map[string]interface{}) error {
+	compatibilityKey := ""
+	if request.Event != nil {
+		compatibilityKey = request.Event.ID.Hex()
+	}
+	if compatibilityKey == "" {
+		compatibilityKey = entityID.String()
+	}
 	intent := &Intent{
+		Event:      request.Event,
 		Domain:     "llm",
 		Op:         op,
-		IntentID:   effectiveIdempotencyKey(request, entityID.String()),
+		IntentID:   effectiveIdempotencyKey(request, compatibilityKey),
 		Coordinate: entityID.String(),
 		Content:    content,
 		Actor:      request.Event.PubKey.Hex(),

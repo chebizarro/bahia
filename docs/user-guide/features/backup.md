@@ -11,6 +11,10 @@ Backup features include:
 - **Verification** — Ensure backups are restorable
 - **Restore orchestration** — Managed recovery process
 
+## Signed restore approval
+
+With `backup` enabled in `nostr.intent_domains`, a fleet operator may publish a kind `30900` intent with `domain=backup`, `op=restore-approval`, and content containing `restore_id` and `decision` (`approve` or `reject`). An `expected_updated_at` revision may guard against stale decisions. Bahia applies the same restore-registry transition used by the legacy approval command, then emits bounded kind `30315` intent status. When disabled, the existing ContextVM approval path remains available.
+
 ## Key Concepts
 
 ### Backup Definition

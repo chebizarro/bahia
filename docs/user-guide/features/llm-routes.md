@@ -34,6 +34,10 @@ trims surrounding whitespace, and fails startup if the file is missing or
 empty. `auth_token` remains available for compatibility, but the two settings
 are mutually exclusive.
 
+## Signed deployment operations
+
+With `llm` enabled in `nostr.intent_domains`, fleet operators can publish kind `30900` LLM intents: `deploy` (`route_id`, `environment_id`, `release_id`), `rollback` (`route_id`, `environment_id`), and `approve`/`reject` (`deployment_intent_id`, preferably with `expected_updated_at`). Bahia uses the same LLM registry transitions as the legacy operator path and reports admission through bounded kind `30315` intent status. The legacy path remains active when the domain is disabled.
+
 ## Key Concepts
 
 ### Route
