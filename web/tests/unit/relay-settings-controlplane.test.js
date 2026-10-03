@@ -345,6 +345,33 @@ describe('relay settings control-plane helpers', () => {
     unsubscribe();
     expect(unsubscribed).toBe(true);
   });
+
+  it('deduplicates concurrent getRelayPolicy calls at module level', async () => {
+    let resolveFirst;
+    const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
+    requestEncryptedResultMock.mockReturnValueOnce(firstPromise);
+
+    const call1 = relaySettings.getRelayPolicy();
+    const call2 = relaySettings.getRelayPolicy();
+
+    // Both calls should return the same promise — only one requestEncryptedResult call
+    expect(requestEncryptedResultMock).toHaveBeenCalledTimes(1);
+
+    resolveFirst({ requestEventId: 'dedup-1', result: { status: 'ok' } });
+    const [result1, result2] = await Promise.all([call1, call2]);
+    expect(result1).toBe(result2);
+  });
+
+  it('allows a fresh getRelayPolicy after the in-flight one settles', async () => {
+    requestEncryptedResultMock.mockResolvedValueOnce({ requestEventId: 'first', result: { status: 'ok' } });
+    await relaySettings.getRelayPolicy();
+
+    requestEncryptedResultMock.mockResolvedValueOnce({ requestEventId: 'second', result: { status: 'ok' } });
+    const result = await relaySettings.getRelayPolicy();
+    expect(result.requestEventId).toBe('second');
+    expect(requestEncryptedResultMock).toHaveBeenCalledTimes(2);
+  });
+
 });
 
 function relaySettingsStateEvent({ id, servicePubkey, createdAt, browserRelays, content }) {
@@ -362,3 +389,60 @@ function relaySettingsStateEvent({ id, servicePubkey, createdAt, browserRelays, 
     })
   };
 }
+
+describe('createProjectionHydrationGuard', () => {
+  let guard;
+
+  beforeEach(async () => {
+    const mod = await import('../../src/lib/nostr/relay-settings-controlplane.js');
+    guard = mod.createProjectionHydrationGuard();
+  });
+
+  it('allows the first acquire for a key', () => {
+    expect(guard.acquire('key-A')).toBe(true);
+    expect(guard.currentKey).toBe('key-A');
+  });
+
+  it('blocks duplicate acquire for the same key (two triggers, one request)', () => {
+    expect(guard.acquire('key-A')).toBe(true);
+    expect(guard.acquire('key-A')).toBe(false);
+  });
+
+  it('allows a new key after reset (key change triggers new request)', () => {
+    expect(guard.acquire('key-A')).toBe(true);
+    guard.reset();
+    expect(guard.currentKey).toBe('');
+    expect(guard.acquire('key-B')).toBe(true);
+    expect(guard.currentKey).toBe('key-B');
+  });
+
+  it('allows retry after release (error recovery)', () => {
+    expect(guard.acquire('key-A')).toBe(true);
+    guard.release('key-A');
+    expect(guard.acquire('key-A')).toBe(true);
+  });
+
+  it('ignores release with a mismatched key', () => {
+    expect(guard.acquire('key-A')).toBe(true);
+    guard.release('key-B');
+    expect(guard.acquire('key-A')).toBe(false);
+    expect(guard.currentKey).toBe('key-A');
+  });
+
+  it('rejects empty or falsy keys', () => {
+    expect(guard.acquire('')).toBe(false);
+    expect(guard.acquire(null)).toBe(false);
+    expect(guard.acquire(undefined)).toBe(false);
+    expect(guard.currentKey).toBe('');
+  });
+
+  it('allows a different key without reset (supersedes previous)', () => {
+    expect(guard.acquire('key-A')).toBe(true);
+    expect(guard.acquire('key-B')).toBe(true);
+    expect(guard.currentKey).toBe('key-B');
+    // key-A is no longer guarded; key-B is
+    expect(guard.acquire('key-B')).toBe(false);
+    expect(guard.acquire('key-A')).toBe(true);
+    expect(guard.currentKey).toBe('key-A');
+  });
+});

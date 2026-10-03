@@ -122,7 +122,7 @@ test.describe('Settings relay visibility', () => {
     };
     await installE2EMocks(page, {
       systemInfo,
-      contextVMOperations: [relayPolicyGetOperation(response), relayPolicyGetOperation(response)]
+      contextVMOperations: [relayPolicyGetOperation(response)]
     });
 
     await page.goto('/settings/relays');
