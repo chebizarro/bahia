@@ -97,10 +97,6 @@ import { resetEnvironments, refreshEnvironments } from './environments.svelte.js
 import { resetDeployments, refreshDeployments } from './deployments.svelte.js';
 import { resetWorkers, refreshWorkers } from './workers.svelte.js';
 import { resetOperations, refreshOperations } from './operations.svelte.js';
-import { resetBackup, refreshBackup } from './backup.svelte.js';
-import { resetML, refreshML } from './ml.svelte.js';
-import { resetActivity, refreshActivity } from './activity.svelte.js';
-import { resetSBOM, refreshSBOM } from './sbom.svelte.js';
 
 export const LEGACY_CONTROLPLANE_SNAPSHOT_KEY = 'bahia_controlplane_snapshot_v1';
 // v3 persists the winning raw relay events of each stable collection instead of
@@ -139,15 +135,6 @@ export const PERSISTED_CONTROLPLANE_COLLECTIONS = Object.freeze([
   'workers',
   'workerAssignments',
   'workerDrainStatuses',
-  'backupRepositories',
-  'backupPolicies',
-  'backupRecipes',
-  'backupDefinitions',
-  'mlModels',
-  'mlModelVersions',
-  'mlEndpoints',
-  'sbomRefs',
-  'sbomAvailability'
 ]);
 
 export const SKIPPED_CONTROLPLANE_COLLECTIONS = Object.freeze([
@@ -221,10 +208,6 @@ export function resetCollections() {
   resetDeployments();
   resetWorkers();
   resetOperations();
-  resetBackup();
-  resetML();
-  resetActivity();
-  resetSBOM();
   setAllLoading(false);
 }
 
@@ -235,10 +218,6 @@ export function refreshCollections() {
   refreshDeployments();
   refreshWorkers();
   refreshOperations();
-  refreshBackup();
-  refreshML();
-  refreshActivity();
-  refreshSBOM();
   clearLoadingForPopulatedCollections();
 }
 

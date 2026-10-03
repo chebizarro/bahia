@@ -9,7 +9,7 @@ import {
 } from '../../src/lib/stores/controlplane/events.svelte.js';
 import { controlplaneConnection } from '../../src/lib/stores/controlplane/connection.svelte.js';
 import { resetServices, serviceMap } from '../../src/lib/stores/collections/services.svelte.js';
-import { applyActivityEvent, events as activity, refreshActivity, resetActivity } from '../../src/lib/stores/collections/activity.svelte.js';
+import { events as activity, resetActivity } from '../../src/lib/stores/collections/activity.svelte.js';
 import { CP_AUDIT_TOPIC, CP_STATE_TOPICS, CP_STATE_TOPIC_BY_SCHEMA } from '../../src/lib/nostr/kinds.gen.js';
 
 const SERVICE_PUBKEY = 'b'.repeat(64);
@@ -102,11 +102,11 @@ describe('activity feed audit facts', () => {
     const republished = auditFact({ id: '3'.repeat(64), fact: 'f'.repeat(64), createdAt: NOW });
 
     for (const ev of [first, second, republished]) expect(matchFilter(activityFilter, ev)).toBe(true);
-    expect(applyActivityEvent(first)).toBe(true);
-    expect(applyActivityEvent(second)).toBe(true);
-    expect(applyActivityEvent(republished)).toBe(false);
-    refreshActivity();
-    expect(activity.map((item) => item.id)).toEqual([second.id, first.id]);
-    expect(activity.every((item) => item.entity_id === SERVICE_ID && item.type === 'drift.detected')).toBe(true);
+    // Activity is no longer projected by this legacy router. The BahiaEventStore
+    // query path is covered by rest-store-first.test.js.
+    expect(applyControlplaneEvent(first)).toBe(false);
+    expect(applyControlplaneEvent(second)).toBe(false);
+    expect(applyControlplaneEvent(republished)).toBe(false);
+    expect(activity).toEqual([]);
   });
 });

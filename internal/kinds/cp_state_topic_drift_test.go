@@ -45,6 +45,10 @@ var goCPStateTopics = map[string]string{
 	"SECRET_REGISTRY":            CPStateTopicSecretRegistry,
 	"NOTIFICATION_CHANNEL":       CPStateTopicNotificationChannelRegistry,
 	"ORG_KEY_ENVELOPE":           CPStateTopicOrgKeyEnvelope,
+	"PAYMENT_RECORD":             CPStateTopicPaymentRecord,
+	"SECURITY_FINDING":           CPStateTopicSecurityFinding,
+	"SECURITY_SCHEDULE":          CPStateTopicSecuritySchedule,
+	"SECURITY_FINDING_DETAIL":    CPStateTopicSecurityFindingDetail,
 }
 
 func readGeneratedKindsJS(t *testing.T) string {

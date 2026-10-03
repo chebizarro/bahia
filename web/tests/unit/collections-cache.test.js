@@ -127,7 +127,7 @@ describe('controlplane collection cold-start cache', () => {
       content: JSON.stringify({ status: 'processing', route_id: 'route-1' })
     });
     expect(collections.deploymentRuns).toHaveLength(1);
-    expect(collections.events).toHaveLength(1);
+    expect(collections.events).toHaveLength(0);
 
     await expect(collections.persistCachedCollections()).resolves.toBe(true);
 

@@ -467,6 +467,10 @@ export const CP_STATE_TOPICS = Object.freeze({
   SECRET_REGISTRY: 'secret-registry',
   NOTIFICATION_CHANNEL: 'notification-channel',
   ORG_KEY_ENVELOPE: 'org-key-envelope',
+  PAYMENT_RECORD: 'payment-record',
+  SECURITY_FINDING: 'security-finding',
+  SECURITY_SCHEDULE: 'security-schedule',
+  SECURITY_FINDING_DETAIL: 'security-finding-detail',
 });
 
 // Family schema -> t topic for the cp-state families the web routes. The

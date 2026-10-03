@@ -197,7 +197,7 @@ describe('ML and backup live operations', () => {
     ]);
   });
 
-  it('streams backup statuses, terminal results, and attestations', () => {
+  it('streams backup statuses and terminal results; attestation is store-owned', () => {
     const requestId = 'c'.repeat(64);
     expect(applyControlplaneEvent(relayEvent({
       id: 'd'.repeat(64),
@@ -219,14 +219,12 @@ describe('ML and backup live operations', () => {
       created_at: 1770000220,
       tags: [['run', 'backup-run-1'], ['status', 'verified']],
       content: { artifact_id: 'artifact-1' }
-    }))).toBe(true);
+    }))).toBe(false);
 
     expect(operationsForDomain(operations, 'backup')).toEqual([
       expect.objectContaining({ request_event_id: requestId, run_id: 'backup-run-1', status: 'succeeded', result_event_kind: 38410 })
     ]);
-    expect(backupAttestations).toEqual([
-      expect.objectContaining({ kind: 31310, backup_run_id: 'backup-run-1', status: 'verified', artifact_id: 'artifact-1' })
-    ]);
+    expect(backupAttestations).toEqual([]);
   });
 });
 

@@ -440,7 +440,7 @@ test.describe('SBOM workflow', () => {
         id: 'sbom-attestation-event',
         kind: KINDS.SBOM_REFERENCE,
         created_at: now,
-        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.ref.v1'], ['type', 'sbom.ref'], ['op', 'sbom.ref'], ['d', `sbom:ref:${ARTIFACT_ID}:spdx:abc123`], ['artifact', ARTIFACT_ID]],
+        tags: [['t', 'sbom-reference'], ['domain', 'sbom'], ['schema', 'bahia.sbom.ref.v1'], ['type', 'sbom.ref'], ['op', 'sbom.ref'], ['d', `sbom:ref:${ARTIFACT_ID}:spdx:abc123`], ['artifact', ARTIFACT_ID]],
         content: {
           schema: 'bahia.sbom.ref.v1',
           domain: 'sbom',
@@ -454,7 +454,7 @@ test.describe('SBOM workflow', () => {
         id: 'sbom-index-event',
         kind: KINDS.SBOM_AVAILABILITY_LIST,
         created_at: now - 1,
-        tags: [['domain', 'sbom'], ['schema', 'bahia.sbom.available-list.v1'], ['type', 'sbom.available-list'], ['op', 'sbom.available-list'], ['d', `sbom:available:artifact:${ARTIFACT_ID}`], ['artifact', ARTIFACT_ID]],
+        tags: [['t', 'sbom-availability'], ['domain', 'sbom'], ['schema', 'bahia.sbom.available-list.v1'], ['type', 'sbom.available-list'], ['op', 'sbom.available-list'], ['d', `sbom:available:artifact:${ARTIFACT_ID}`], ['artifact', ARTIFACT_ID]],
         content: {
           schema: 'bahia.sbom.available-list.v1',
           domain: 'sbom',

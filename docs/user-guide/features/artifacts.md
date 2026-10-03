@@ -142,7 +142,7 @@ Use `bahia_get_sbom` for the compatibility projection, `bahia_get_sbom_packages`
 1. Go to **Artifacts → Registry**.
 2. Use the per-row **Generate SBOM** or **Regenerate SBOM** action to open the artifact directly on its SBOM tab.
 3. On artifact detail, the same **Generate SBOM** or **Regenerate SBOM** action is also visible in the page header and on the SBOM tab.
-4. The browser opens the SBOM tab, subscribes to artifact-scoped `30078` SBOM reference events and the subject `30004` availability list, then publishes a signer-backed encrypted ContextVM `sbom/generate` request. It does not call a REST generation endpoint.
+4. The browser opens the SBOM tab, reads artifact-scoped `30078` SBOM references and `30004` availability lists from its event store (routed by kind and `t` topic), then publishes a signer-backed encrypted ContextVM `sbom/generate` request. It does not call a REST generation endpoint.
 5. Bahia only uses explicit image refs or configured artifact repositories plus immutable digests as generation sources. The ContextVM reply only acknowledges request handling; durable completion is shown when canonical SBOM reference or availability events arrive.
 6. View attestation details, Blossom location, hashes, NTIA status, and package list directly from the canonical SBOM events and compatibility projection data.
 

@@ -7,6 +7,7 @@ import {
   BAHIA_STATUS_KINDS,
   CASCADIA_CONTROLPLANE_STATE,
   CP_STATE_TOPIC_BY_SCHEMA,
+  CP_STATE_TOPICS,
   LOOM_WORKER_ADVERTISEMENT,
   LOOM_JOB_REQUEST,
   LOOM_JOB_STATUS_UPDATE,
@@ -16,6 +17,7 @@ import {
   parseJsonContent
 } from '../../nostr/client.js';
 import { CP_STATE_SCHEMA_BY_LEGACY_KIND } from '../../nostr/cp-state.js';
+import { KEY_ENVELOPE_TOPIC, ORG_MEMBER_TOPIC } from '../../nostr/confidential.js';
 import { controlplaneConnection } from './connection.svelte.js';
 import { applyServiceEvent } from '../collections/services.svelte.js';
 import { applyEnvironmentEvent } from '../collections/environments.svelte.js';
@@ -28,13 +30,7 @@ import {
   applyLoomJobResultEvent,
   workerApplicators
 } from '../collections/workers.svelte.js';
-import {
-  BACKUP_ATTESTATION_KINDS,
-  applyBackupAttestationEvent,
-  backupApplicators
-} from '../collections/backup.svelte.js';
-import { mlApplicators } from '../collections/ml.svelte.js';
-import { applyActivityEvent } from '../collections/activity.svelte.js';
+import { BACKUP_ATTESTATION_KINDS } from '../collections/backup.svelte.js';
 import {
   CANONICAL_OPERATION_KINDS,
   EXTERNAL_OPERATION_KINDS,
@@ -48,7 +44,6 @@ import {
   applyOperationResultEvent,
   applyOperationStatusEvent
 } from '../collections/operations.svelte.js';
-import { applySBOMReferenceEvent, applySBOMAvailabilityEvent } from '../collections/sbom.svelte.js';
 import {
   readCachedControlplaneEvents,
   recordPersistedEvent,
@@ -87,6 +82,16 @@ export function controlplaneStateTopics() {
     const topic = CP_STATE_TOPIC_BY_SCHEMA[route];
     if (topic) topics.add(topic);
   }
+  for (const topic of [
+    CP_STATE_TOPICS.BACKUP_REPOSITORY, CP_STATE_TOPICS.BACKUP_POLICY, CP_STATE_TOPICS.BACKUP_RECIPE,
+    CP_STATE_TOPICS.BACKUP_DEFINITION, CP_STATE_TOPICS.BACKUP_RUN, CP_STATE_TOPICS.BACKUP_VERIFICATION,
+    CP_STATE_TOPICS.BACKUP_RESTORE, CP_STATE_TOPICS.BACKUP_RETENTION, CP_STATE_TOPICS.BACKUP_RUNTIME_OBSERVATION,
+    CP_STATE_TOPICS.ML_MODEL, CP_STATE_TOPICS.ML_MODEL_VERSION, CP_STATE_TOPICS.ML_ENDPOINT, CP_STATE_TOPICS.ML_ENDPOINT_STATE,
+    CP_STATE_TOPICS.PAYMENT_RECORD, CP_STATE_TOPICS.SECURITY_FINDING, CP_STATE_TOPICS.SECURITY_SCHEDULE,
+    CP_STATE_TOPICS.SECURITY_FINDING_DETAIL
+  ]) topics.add(topic);
+  topics.add(KEY_ENVELOPE_TOPIC);
+  topics.add(ORG_MEMBER_TOPIC);
   return [...topics].sort();
 }
 
@@ -207,30 +212,7 @@ const handlers = new Map([
   [BAHIA_STATE_SCHEMAS.WORKER_DRAIN_STATUS, workerApplicators.drainStatus],
   [BAHIA_STATE_SCHEMAS.WORKER_ELIGIBILITY_PREVIEW, workerApplicators.eligibilityPreview],
   [BAHIA_STATE_SCHEMAS.WORKER_CLEANUP_EXECUTION, workerApplicators.cleanupExecution],
-  [BAHIA_STATE_SCHEMAS.BACKUP_DEFINITION_REGISTRY, backupApplicators.definition],
-  [BAHIA_STATE_SCHEMAS.BACKUP_POLICY_REGISTRY, backupApplicators.policy],
-  [BAHIA_STATE_SCHEMAS.BACKUP_REPOSITORY_REGISTRY, backupApplicators.repository],
-  [BAHIA_STATE_SCHEMAS.BACKUP_RETENTION_REGISTRY, backupApplicators.retention],
-  [BAHIA_STATE_SCHEMAS.BACKUP_RECIPE_REGISTRY, backupApplicators.recipe],
-  [BAHIA_STATE_SCHEMAS.BACKUP_RUN_STATE, backupApplicators.run],
-  [BAHIA_STATE_SCHEMAS.BACKUP_VERIFICATION_STATE, backupApplicators.verification],
-  [BAHIA_STATE_SCHEMAS.BACKUP_RESTORE_STATE, backupApplicators.restore],
-  [BAHIA_STATE_SCHEMAS.BACKUP_RUNTIME_OBSERVATION_STATE, backupApplicators.runtimeObservation],
-  ...BACKUP_ATTESTATION_KINDS.map((kind) => [kind, applyBackupAttestationEvent]),
-  [BAHIA_STATE_SCHEMAS.ML_MODEL_REGISTRY, mlApplicators.model],
-  [BAHIA_STATE_SCHEMAS.ML_MODEL_VERSION_REGISTRY, mlApplicators.modelVersion],
-  [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_REGISTRY, mlApplicators.endpoint],
-  [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_STATE, mlApplicators.endpointState],
-  [30078, (event, replaceableEvents) => {
-    const sbomChanged = applySBOMReferenceEvent(event);
-    const activityChanged = applyActivityEvent(event);
-    return sbomChanged || activityChanged;
-  }],
-  [30004, (event, replaceableEvents) => {
-    const sbomChanged = applySBOMAvailabilityEvent(event);
-    const activityChanged = applyActivityEvent(event);
-    return sbomChanged || activityChanged;
-  }]
+
 ]);
 
 // Routes whose events feed a persisted (cached) collection. The cache stores
@@ -249,15 +231,6 @@ const PERSISTED_ROUTE_COLLECTIONS = new Map([
   [BAHIA_STATE_SCHEMAS.WORKER_STATE, 'workers'],
   [BAHIA_STATE_SCHEMAS.WORKER_ASSIGNMENT_STATE, 'workerAssignments'],
   [BAHIA_STATE_SCHEMAS.WORKER_DRAIN_STATUS, 'workerDrainStatuses'],
-  [BAHIA_STATE_SCHEMAS.BACKUP_REPOSITORY_REGISTRY, 'backupRepositories'],
-  [BAHIA_STATE_SCHEMAS.BACKUP_POLICY_REGISTRY, 'backupPolicies'],
-  [BAHIA_STATE_SCHEMAS.BACKUP_RECIPE_REGISTRY, 'backupRecipes'],
-  [BAHIA_STATE_SCHEMAS.BACKUP_DEFINITION_REGISTRY, 'backupDefinitions'],
-  [BAHIA_STATE_SCHEMAS.ML_MODEL_REGISTRY, 'mlModels'],
-  [BAHIA_STATE_SCHEMAS.ML_MODEL_VERSION_REGISTRY, 'mlModelVersions'],
-  [BAHIA_STATE_SCHEMAS.ML_INFERENCE_ENDPOINT_REGISTRY, 'mlEndpoints'],
-  [SBOM_REFERENCE, 'sbomRefs'],
-  [SBOM_AVAILABILITY_LIST, 'sbomAvailability']
 ]);
 
 export const persistedRouteCollections = Object.freeze(Array.from(new Set(PERSISTED_ROUTE_COLLECTIONS.values())));
@@ -283,7 +256,7 @@ export function applyControlplaneEvent(event, { deferRefresh = false, fromCache 
   const handler = handlers.get(route);
   const changed = handler
     ? handler(event, replaceableEvents)
-    : (ACTIVITY_KINDS.includes(event.kind) ? applyActivityEvent(event) : false);
+    : false;
 
   if (changed && !fromCache) {
     controlplaneConnection.lastEventAt = new Date().toISOString();

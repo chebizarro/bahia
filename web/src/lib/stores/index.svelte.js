@@ -98,7 +98,6 @@ export async function loadPolicies() { return bootstrapControlplane(); }
 export async function loadPackageRepositories() { return bootstrapControlplane(); }
 export async function loadPackageArtifacts() { return bootstrapControlplane(); }
 export async function loadPackagePromotions() { return bootstrapControlplane(); }
-export async function loadBackupControlplane() { return bootstrapControlplane(); }
 
 export async function loadAll() {
   if (inFlight.all) return inFlight.all;

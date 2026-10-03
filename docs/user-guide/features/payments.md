@@ -119,7 +119,7 @@ Navigate to **Payments** in the sidebar:
 
 ### Web transport and MCP tool
 
-The browser requires encrypted-operation capability and uses the encrypted `payments.history` operation (the backend also accepts the `payments/history` alias). The server caps the requested limit at 250.
+The browser reads fleet payment records from service-authored, addressable kind `30900` events tagged `t=payment-record` (legacy kind `32011`). Records are encrypted with the fleet operator content key. The browser discovers its wrapped key through the signer, decrypts records in memory, and shows **not readable with this key** when the signer has no fleet key. The worker filter and row limit apply locally; browsing history does not call ContextVM or REST.
 
 The MCP tool is a separate authenticated per-tool call; MCP transport does not make this tool an encrypted ContextVM request:
 
@@ -204,10 +204,9 @@ Bahia primarily uses **sats** (satoshis):
 ## Encrypted Operations
 
 Payment data is sensitive:
-- History is accessed via encrypted Nostr (`5980` requests / `7980` terminal results)
-- Requires a NIP-44 capable signer
-- Requires Bahia discovery to advertise `features.encrypted_nostr_requests` so browser-safe relays and the backend encrypted transport are available
-- Not published to public relays
+- The daemon publishes OCK-encrypted `30900` payment records; plaintext history is not published to relays.
+- Fleet operators need a NIP-44-capable signer to unwrap the fleet content key. Non-operators may see ciphertext but cannot read payment details.
+- The web event store caches encrypted events only; the unwrapped key remains in memory for the signer session.
 
 ## Best Practices
 
