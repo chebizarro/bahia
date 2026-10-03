@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"slices"
 	"sync"
@@ -171,6 +172,29 @@ type lateLifecycleFixture struct {
 	soul          *domain.AgentSoul
 	currentDraft  *domain.SoulDraft
 	proposedDraft *domain.SoulDraft
+}
+
+type backfillSignalHandler struct {
+	slog.Handler
+	complete chan<- struct{}
+}
+
+func (h *backfillSignalHandler) Handle(ctx context.Context, record slog.Record) error {
+	if record.Message == "soul factory request backfill complete; processing realtime events" {
+		select {
+		case h.complete <- struct{}{}:
+		default:
+		}
+	}
+	return h.Handler.Handle(ctx, record)
+}
+
+func (h *backfillSignalHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &backfillSignalHandler{Handler: h.Handler.WithAttrs(attrs), complete: h.complete}
+}
+
+func (h *backfillSignalHandler) WithGroup(name string) slog.Handler {
+	return &backfillSignalHandler{Handler: h.Handler.WithGroup(name), complete: h.complete}
 }
 
 // newLateLifecycleFixture wires a lifecycle handler whose soul changes voice,
@@ -579,6 +603,11 @@ func TestRelayClientResumableSubscriptionResumesFromCursorAfterEOSE(t *testing.T
 // action.
 func TestReactorReconnectDeliversResultPublishedWhileDisconnected(t *testing.T) {
 	f := newLateLifecycleFixture(t, "timeout")
+	backfillComplete := make(chan struct{}, 1)
+	f.reactor.logger = slog.New(&backfillSignalHandler{
+		Handler:  slog.NewTextHandler(io.Discard, nil),
+		complete: backfillComplete,
+	})
 	completed := make(chan struct{}, 1)
 	f.reactor.publishFn = func(ctx context.Context, event *nostr.Event, relays []string) error {
 		if err := f.capture.publish(ctx, event, relays); err != nil {
@@ -627,6 +656,11 @@ func TestReactorReconnectDeliversResultPublishedWhileDisconnected(t *testing.T) 
 	}, 99)
 	first.events <- lateRuntimeResultEvent(t, f.runtime.runtime, other, "error", base)
 	close(first.eose)
+	select {
+	case <-backfillComplete:
+	case <-time.After(10 * time.Second):
+		t.Fatal("initial result backfill did not reach EOSE")
+	}
 
 	if err := f.handler.HandleAction(t.Context(), f.action(t, "reconnect-hot-reload", domain.SoulActionHotReload)); err != nil {
 		t.Fatalf("HandleAction() error = %v", err)
