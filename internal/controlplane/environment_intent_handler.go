@@ -114,6 +114,11 @@ func (h *EnvironmentIntentHandler) handleUpdate(ctx context.Context, intent *Int
 	// Check expected_updated_at revision if provided.
 	if intent.ExpectedUpdatedAt != nil {
 		expectedTime := time.UnixMicro(*intent.ExpectedUpdatedAt)
+		if raw, ok := intent.Content["expected_updated_at"].(string); ok {
+			if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+				expectedTime = parsed
+			}
+		}
 		if !domain.SameRevision(existing.UpdatedAt, expectedTime) {
 			// Revision conflict — publish conflict status and return error.
 			return &revisionConflictError{

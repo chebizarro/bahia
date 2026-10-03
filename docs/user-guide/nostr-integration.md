@@ -1,5 +1,23 @@
 # Nostr Integration
 
+## Web registry changes
+
+The web app signs service, environment, and policy create/update/delete requests as
+kind `30900` `t=bahia-intent` events. Package promote/yank actions use the same
+intent transport. Select the owning organization when creating a service or
+policy. Updates include the current canonical `updated_at` as
+`expected_updated_at`; the daemon must have the corresponding domain enabled in
+`nostr.intent_domains` to process relay intents.
+
+After submission, the browser shows a local **pending** badge and its age. This
+is not a canonical record or a completed operation. The badge clears only after
+the service publishes a matching kind `30315` intent status or a newer canonical
+kind `30900` record for the same coordinate. A conflict or rejection stays
+visible with its reason; re-read canonical state and submit a freshly signed
+intent. Relay `OK` only confirms delivery. If relays are unavailable, the
+browser keeps the intent pending and retries delivery on reconnect or AUTH,
+without a timeout that turns it into a failure.
+
 ## Command availability
 
 Artifact, policy, and tool-approval requests use signed ContextVM messages.

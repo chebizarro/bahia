@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -451,6 +452,11 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 			case json.Number:
 				ts, err := v.Int64()
 				if err == nil {
+					intent.ExpectedUpdatedAt = &ts
+				}
+			case string:
+				if parsed, err := time.Parse(time.RFC3339Nano, v); err == nil {
+					ts := parsed.UnixMicro()
 					intent.ExpectedUpdatedAt = &ts
 				}
 			}

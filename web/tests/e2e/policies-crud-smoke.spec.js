@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
-import { SERVICE_PUBKEY, createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
+import { SERVICE_PUBKEY, TEST_ORG_ID, createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
 
 const systemInfo = createPublicSystemInfo();
 const mockEnvironments = [
@@ -65,7 +65,7 @@ const defaultPolicies = [
 ];
 
 async function installPolicyCrudHarness(page, { initialPolicies = defaultPolicies, servicePubkey = SERVICE_PUBKEY } = {}) {
-  await page.addInitScript(({ initialPolicies, servicePubkey }) => {
+  await page.addInitScript(({ initialPolicies, servicePubkey, orgId }) => {
     const KIND_CONTEXTVM = 25910;
     const KIND_CONTROL_STATE = 30900;
     const POLICY_SCHEMA = 'bahia.registry.policy.v1';
@@ -123,7 +123,7 @@ async function installPolicyCrudHarness(page, { initialPolicies = defaultPolicie
         d: policy.id,
         deleted: Boolean(policy.deleted),
         tags: [['policy', policy.id], ['name', policy.name || '']],
-        content: { ...policy }
+        content: { org_id: orgId, updated_at: policy.updated_at || policy.created_at || new Date().toISOString(), ...policy }
       });
     }
 
@@ -174,12 +174,13 @@ async function installPolicyCrudHarness(page, { initialPolicies = defaultPolicie
       }
     }
 
-    function handlePolicyOperation(requestEvent, envelope, operation, payload) {
+    function handlePolicyOperation(requestEvent, envelope, operation, payload, signedIntent = false) {
       const state = window.__BAHIA_E2E_POLICY_STATE;
       let policy;
       if (operation === 'policy/create') {
         policy = {
-          id: `policy-created-${state.nextPolicyId++}`,
+          id: payload.id || `policy-created-${state.nextPolicyId++}`,
+          org_id: payload.org_id || orgId,
           name: payload.name,
           environment_id: payload.environment_id || null,
           enforcement: payload.enforcement || 'warn',
@@ -222,10 +223,24 @@ async function installPolicyCrudHarness(page, { initialPolicies = defaultPolicie
       const projection = policyEvent(policy, `${operation.replace('/', '-')}-projection`);
       emitRelayEvent(projection);
       window.__BAHIA_E2E_PUBLIC_PROJECTIONS.push({ eventId: projection.id, kind: projection.kind, requestEventId: requestEvent.id, tags: projection.tags });
-      const response = resultEvent(requestEvent, envelope, { status: 'ok', policy_id: policy.id, policy, deleted: Boolean(policy.deleted) });
-      window.__BAHIA_E2E_PUBLIC_RESULTS.push({ eventId: response.id, kind: response.kind, requestEventId: requestEvent.id, tags: response.tags });
-      persistPublicTrace();
-      emitRelayEvent(response);
+      if (signedIntent) {
+        const coordinate = requestEvent.tags.find((tag) => tag[0] === 'd')?.[1];
+        const intentId = requestEvent.tags.find((tag) => tag[0] === 'intent_id')?.[1];
+        const status = {
+          kind: 30315, pubkey: servicePubkey, created_at: Math.max(Math.floor(Date.now() / 1000), requestEvent.created_at),
+          tags: [['d', `intent-status:${requestEvent.pubkey}:${coordinate}`], ['t', 'intent-status'],
+            ['p', requestEvent.pubkey], ['intent_id', intentId], ['status', 'accepted']],
+          content: JSON.stringify({ intent_id: intentId, coordinate, reason: '' })
+        };
+        window.__BAHIA_E2E_PUBLIC_RESULTS.push({ eventId: `status-${requestEvent.id}`, kind: 30315, requestEventId: requestEvent.id, tags: status.tags });
+        persistPublicTrace();
+        emitRelayEvent(status);
+      } else {
+        const response = resultEvent(requestEvent, envelope, { status: 'ok', policy_id: policy.id, policy, deleted: Boolean(policy.deleted) });
+        window.__BAHIA_E2E_PUBLIC_RESULTS.push({ eventId: response.id, kind: response.kind, requestEventId: requestEvent.id, tags: response.tags });
+        persistPublicTrace();
+        emitRelayEvent(response);
+      }
     }
 
     window.__BAHIA_E2E_ENABLE_POLICY_CRUD_HARNESS = () => {
@@ -241,11 +256,29 @@ async function installPolicyCrudHarness(page, { initialPolicies = defaultPolicie
           return previousSend.call(this, data);
         }
 
-        if (!Array.isArray(message) || message[0] !== 'EVENT' || message[1]?.kind !== KIND_CONTEXTVM) {
+        if (!Array.isArray(message) || message[0] !== 'EVENT' ||
+          ![KIND_CONTEXTVM, KIND_CONTROL_STATE].includes(message[1]?.kind)) {
           return previousSend.call(this, data);
         }
 
         const requestEvent = message[1];
+        if (requestEvent.kind === KIND_CONTROL_STATE) {
+          const domain = requestEvent.tags?.find(tag => tag[0] === 'domain')?.[1];
+          const op = requestEvent.tags?.find(tag => tag[0] === 'op')?.[1];
+          if (domain !== 'policy' || !['create', 'update', 'delete'].includes(op)) return previousSend.call(this, data);
+          const operation = `policy/${op}`;
+          const payload = JSON.parse(requestEvent.content || '{}');
+          window.__BAHIA_E2E_PUBLIC_PUBLISHES.push({ relay: this.url, eventId: requestEvent.id, kind: requestEvent.kind });
+          window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS.push(requestEvent.kind);
+          window.__BAHIA_E2E_PUBLIC_REQUESTS.push({ relay: this.url, kind: requestEvent.kind, operation,
+            eventId: requestEvent.id, tags: requestEvent.tags || [], content: requestEvent.content || '' });
+          window.__BAHIA_E2E_PUBLIC_OKS.push({ relay: this.url, eventId: requestEvent.id, kind: requestEvent.kind,
+            sent: true, accepted: true, message: '' });
+          persistPublicTrace();
+          const sent = previousSend.call(this, data);
+          handlePolicyOperation(requestEvent, {}, operation, payload, true);
+          return sent;
+        }
         let decoded;
         try {
           decoded = parseContextVMRequest(requestEvent);
@@ -270,7 +303,7 @@ async function installPolicyCrudHarness(page, { initialPolicies = defaultPolicie
     };
 
     refreshPersistedPolicyEvents();
-  }, { initialPolicies, servicePubkey });
+  }, { initialPolicies, servicePubkey, orgId: TEST_ORG_ID });
 }
 
 async function setupPolicies(page, { initialPolicies = defaultPolicies } = {}) {
@@ -319,7 +352,21 @@ async function expectContextVMOperation(page, operation) {
   return request;
 }
 
+async function expectIntentOperation(page, operation) {
+  await expect.poll(() => policyTrace(page)).toMatchObject({
+    requests: expect.arrayContaining([expect.objectContaining({ kind: 30900, operation })]),
+    oks: expect.arrayContaining([expect.objectContaining({ kind: 30900, accepted: true })]),
+    results: expect.arrayContaining([expect.objectContaining({ kind: 30315 })]),
+    projections: expect.arrayContaining([expect.objectContaining({ kind: 30900 })])
+  });
+  const trace = await policyTrace(page);
+  const request = trace.requests.filter(entry => entry.operation === operation).at(-1);
+  expect(trace.results).toEqual(expect.arrayContaining([expect.objectContaining({ requestEventId: request.eventId })]));
+  return request;
+}
+
 function decodeRequestParams(request) {
+  if (request.kind === 30900) return JSON.parse(request.content);
   const content = String(request.content || '');
   const envelope = JSON.parse(content.startsWith('mock-nip44:')
     ? decodeURIComponent(escape(Buffer.from(content.replace(/^mock-nip44:/, ''), 'base64').toString('binary')))
@@ -352,7 +399,7 @@ test.describe('Policies CRUD Smoke Test', () => {
     await expect(page.getByRole('cell', { name: 'Global', exact: true }).first()).toBeVisible();
   });
 
-  test('creates a global policy through visual builder, ContextVM, and canonical projection', async ({ page }) => {
+  test('creates a global policy through visual builder, signed intent, and canonical projection', async ({ page }) => {
     await setupPolicies(page, { initialPolicies: [] });
     await gotoPolicies(page);
 
@@ -360,6 +407,7 @@ test.describe('Policies CRUD Smoke Test', () => {
     const dialog = page.getByRole('dialog', { name: 'Create Policy' });
     await expect(dialog).toBeVisible();
 
+    await dialog.locator('#policy-org-id').fill(TEST_ORG_ID);
     await dialog.locator('#policy-name').fill('require-sbom-policy');
     await dialog.locator('#enforcement').selectOption('block');
     await addVisualRule(page, { category: 'SBOM Requirements', ruleName: 'Require SBOM' });
@@ -370,11 +418,12 @@ test.describe('Policies CRUD Smoke Test', () => {
     await expect(dialog).not.toBeVisible();
     await expect(page.getByRole('cell', { name: 'require-sbom-policy', exact: true })).toBeVisible();
 
-    const request = await expectContextVMOperation(page, 'policy/create');
+    const request = await expectIntentOperation(page, 'policy/create');
     expect(request.tags).toEqual(expect.arrayContaining([
-      ['p', SERVICE_PUBKEY],
-      ['encrypted', 'contextvm-jsonrpc-v1'],
-      ['method', 'policy/create']
+      ['t', 'bahia-intent'],
+      ['domain', 'policy'],
+      ['op', 'create'],
+      ['org', TEST_ORG_ID]
     ]));
     const params = decodeRequestParams(request);
     expect(params).toMatchObject({
@@ -394,6 +443,7 @@ test.describe('Policies CRUD Smoke Test', () => {
     const dialog = page.getByRole('dialog', { name: 'Create Policy' });
     await expect(dialog).toBeVisible();
 
+    await dialog.locator('#policy-org-id').fill(TEST_ORG_ID);
     await dialog.locator('#policy-name').fill('prod-policy');
     await dialog.locator('#environment-id').selectOption('env-1');
     await dialog.locator('#enforcement').selectOption('warn');
@@ -404,12 +454,12 @@ test.describe('Policies CRUD Smoke Test', () => {
     await expect(page.getByRole('cell', { name: 'prod-policy', exact: true })).toBeVisible();
     await expect(page.getByRole('cell', { name: 'production', exact: true })).toBeVisible();
 
-    const request = await expectContextVMOperation(page, 'policy/create');
+    const request = await expectIntentOperation(page, 'policy/create');
     expect(request.tags).toEqual(expect.arrayContaining([
-      ['environment', 'env-1'],
-      ['p', SERVICE_PUBKEY],
-      ['encrypted', 'contextvm-jsonrpc-v1'],
-      ['method', 'policy/create']
+      ['t', 'bahia-intent'],
+      ['domain', 'policy'],
+      ['op', 'create'],
+      ['org', TEST_ORG_ID]
     ]));
     expect(decodeRequestParams(request)).toMatchObject({
       name: 'prod-policy',
@@ -428,6 +478,7 @@ test.describe('Policies CRUD Smoke Test', () => {
     const dialog = page.getByRole('dialog', { name: 'Create Policy' });
     await expect(dialog).toBeVisible();
 
+    await dialog.locator('#policy-org-id').fill(TEST_ORG_ID);
     await dialog.locator('#policy-name').fill('test-policy');
     await dialog.getByRole('button', { name: 'Create' }).click();
     await expect(dialog.getByText('Please add at least one rule')).toBeVisible();
@@ -480,7 +531,7 @@ test.describe('Policies CRUD Smoke Test', () => {
     await expect(page.locator('tbody tr td.empty')).toHaveCount(1);
   });
 
-  test('evaluates and updates a policy on the detail page through ContextVM', async ({ page }) => {
+  test('evaluates and updates a policy on the detail page through signed intent', async ({ page }) => {
     await setupPolicies(page);
     await gotoPolicies(page);
 
@@ -489,12 +540,12 @@ test.describe('Policies CRUD Smoke Test', () => {
     await expect(page.getByRole('heading', { name: 'detail-policy' })).toBeVisible();
 
     await page.getByRole('button', { name: 'Disable' }).click();
-    let request = await expectContextVMOperation(page, 'policy/update');
+    let request = await expectIntentOperation(page, 'policy/update');
     expect(request.tags).toEqual(expect.arrayContaining([
-      ['policy', 'policy-signatures'],
-      ['p', SERVICE_PUBKEY],
-      ['encrypted', 'contextvm-jsonrpc-v1'],
-      ['method', 'policy/update']
+      ['d', 'policy-signatures'],
+      ['domain', 'policy'],
+      ['op', 'update'],
+      ['org', TEST_ORG_ID]
     ]));
     expect(decodeRequestParams(request)).toMatchObject({ id: 'policy-signatures', enabled: false });
 
@@ -517,14 +568,13 @@ test.describe('Policies CRUD Smoke Test', () => {
     await editDialog.getByRole('button', { name: 'Save' }).click();
 
     await expect(editDialog).not.toBeVisible();
-    request = await expectContextVMOperation(page, 'policy/update');
-    expect(decodeRequestParams(request).rules).toEqual([
+    await expect.poll(async () => decodeRequestParams(await expectIntentOperation(page, 'policy/update')).rules).toEqual([
       { type: 'require_signature' },
       { type: 'max_critical_vulns', params: { max: 1 } }
     ]);
   });
 
-  test('deletes a policy through ContextVM and canonical tombstone projection', async ({ page }) => {
+  test('deletes a policy through signed intent and canonical tombstone projection', async ({ page }) => {
     await setupPolicies(page);
     await gotoPolicies(page);
 
@@ -538,12 +588,12 @@ test.describe('Policies CRUD Smoke Test', () => {
     await deleteDialog.getByRole('button', { name: 'Delete' }).click();
 
     await expect(page).toHaveURL(/\/policies$/);
-    const request = await expectContextVMOperation(page, 'policy/delete');
+    const request = await expectIntentOperation(page, 'policy/delete');
     expect(request.tags).toEqual(expect.arrayContaining([
-      ['policy', 'policy-delete'],
-      ['p', SERVICE_PUBKEY],
-      ['encrypted', 'contextvm-jsonrpc-v1'],
-      ['method', 'policy/delete']
+      ['d', 'policy-delete'],
+      ['domain', 'policy'],
+      ['op', 'delete'],
+      ['org', TEST_ORG_ID]
     ]));
     expect(decodeRequestParams(request)).toMatchObject({ id: 'policy-delete' });
     await expect(page.getByRole('cell', { name: 'delete-policy', exact: true })).toHaveCount(0);

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -233,6 +234,15 @@ func TestParseIntent_Valid(t *testing.T) {
 	assert.Equal(t, "svc-123", intent.Coordinate)
 	assert.Equal(t, "intent-001", intent.IntentID)
 	assert.NotEqual(t, uuid.Nil, intent.OrgID)
+}
+
+func TestParseIntent_StringCanonicalRevision(t *testing.T) {
+	ev := makeIntentEvent(t, "update", "svc-123", "intent-string-revision")
+	ev.Content = `{"id":"svc-123","expected_updated_at":"2026-10-03T09:12:13.123456Z"}`
+	intent, err := ParseIntent(ev)
+	require.NoError(t, err)
+	require.NotNil(t, intent.ExpectedUpdatedAt)
+	assert.Equal(t, time.Date(2026, 10, 3, 9, 12, 13, 123456000, time.UTC).UnixMicro(), *intent.ExpectedUpdatedAt)
 }
 
 func TestParseIntent_MissingBahiaIntentTag(t *testing.T) {

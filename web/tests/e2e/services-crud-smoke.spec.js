@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
-import { SERVICE_PUBKEY, createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
+import { TEST_ORG_ID, createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
 
 const systemInfo = createPublicSystemInfo();
 
@@ -20,13 +20,13 @@ async function serviceTrace(page) {
   }));
 }
 
-async function expectContextVMOperation(page, operation) {
+async function expectIntentOperation(page, operation) {
   await expect.poll(() => serviceTrace(page)).toMatchObject({
-    requests: expect.arrayContaining([expect.objectContaining({ kind: 25910, operation })]),
-    oks: expect.arrayContaining([expect.objectContaining({ kind: 25910, accepted: true })]),
-    results: expect.arrayContaining([expect.objectContaining({ kind: 25910 })]),
+    requests: expect.arrayContaining([expect.objectContaining({ kind: 30900, operation })]),
+    oks: expect.arrayContaining([expect.objectContaining({ kind: 30900, accepted: true })]),
+    results: expect.arrayContaining([expect.objectContaining({ kind: 30315 })]),
     projections: expect.arrayContaining([expect.objectContaining({ kind: 30900 })]),
-    kinds: expect.arrayContaining([25910])
+    kinds: expect.arrayContaining([30900])
   });
 
   const trace = await serviceTrace(page);
@@ -64,7 +64,7 @@ test.describe('Services CRUD Smoke Test', () => {
     await expect(page.getByText('1 services')).toBeVisible();
   });
 
-  test('creates a service through ContextVM and canonical 30900 projection', async ({ page }) => {
+  test('creates a service through a signed intent and canonical 30900 projection', async ({ page }) => {
     await setupServices(page);
 
     await page.goto('/services');
@@ -73,6 +73,7 @@ test.describe('Services CRUD Smoke Test', () => {
     const dialog = page.getByRole('dialog', { name: 'Create Service' });
     await expect(dialog).toBeVisible();
 
+    await dialog.locator('#service-org-id').fill(TEST_ORG_ID);
     await dialog.locator('#service-name').fill('test-service');
     await dialog.locator('#artifact-repo-path').fill('ghcr.io/test/test-service');
     await dialog.locator('#runtime-type').selectOption('docker');
@@ -85,13 +86,14 @@ test.describe('Services CRUD Smoke Test', () => {
     await expect(page.getByRole('cell', { name: 'test-service', exact: true })).toBeVisible();
     await expect(page.getByText('2 services')).toBeVisible();
 
-    const request = await expectContextVMOperation(page, 'service/create');
+    const request = await expectIntentOperation(page, 'service/create');
     expect(request.tags).toEqual(expect.arrayContaining([
-      ['p', SERVICE_PUBKEY],
-      ['encrypted', 'contextvm-jsonrpc-v1'],
-      ['method', 'service/create']
+      ['t', 'bahia-intent'],
+      ['domain', 'service'],
+      ['op', 'create'],
+      ['org', TEST_ORG_ID]
     ]));
-    expect(JSON.parse(request.content).params).toMatchObject({
+    expect(JSON.parse(request.content)).toMatchObject({
       name: 'test-service',
       repo_url: '',
       artifact_repo: 'ghcr.io/test/test-service',
@@ -108,6 +110,7 @@ test.describe('Services CRUD Smoke Test', () => {
 
     const dialog = page.getByRole('dialog', { name: 'Create Service' });
     await expect(dialog).toBeVisible();
+    await dialog.locator('#service-org-id').fill(TEST_ORG_ID);
     await dialog.locator('#artifact-repo-path').fill('ghcr.io/test/test-service');
     await dialog.getByRole('button', { name: 'Create' }).click();
 
@@ -124,6 +127,7 @@ test.describe('Services CRUD Smoke Test', () => {
 
     const dialog = page.getByRole('dialog', { name: 'Create Service' });
     await expect(dialog).toBeVisible();
+    await dialog.locator('#service-org-id').fill(TEST_ORG_ID);
     await dialog.locator('#service-name').fill('test-service');
     await dialog.getByRole('button', { name: 'Create' }).click();
 

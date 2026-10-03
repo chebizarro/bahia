@@ -23,6 +23,7 @@
     loadArtifacts,
   } from '$lib/stores';
   import { operations, operationsForEntity } from '$lib/stores';
+  import { pendingIntentRows } from '$lib/nostr/intent-client.svelte.js';
   import {
     updateService,
     deleteService,
@@ -91,6 +92,7 @@
   let repositoriesLoading = $state(false);
   let error = $state(null);
   let serviceId = $derived(page.params.id);
+  let intentFeedback = $derived(pendingIntentRows.find(row => row.coordinate === serviceId && row.status !== 'pending'));
   let liveServiceOperations = $derived(operationsForEntity(operations, 'service', serviceId));
   let loadSequence = 0;
   let lastServiceRequestId = null;
@@ -505,7 +507,6 @@
         default_branch: editForm.default_branch.trim() || 'main'
       };
       await updateService(serviceId, payload);
-      service = { ...service, ...payload };
       closeEditModal();
     } catch (err) {
       editError = err.message || 'Failed to update service';
@@ -1091,6 +1092,11 @@
 </script>
 
 <div class="page">
+  {#if intentFeedback}
+    <p role="alert" class="error">{intentFeedback.status === 'conflict' ? 'Revision conflict — re-read and resubmit.' : `Intent ${intentFeedback.status}.`} {intentFeedback.reason}
+      <button type="button" onclick={() => window.location.reload()}>Re-read canonical state</button>
+    </p>
+  {/if}
   <a href="/services" class="back">← Services</a>
 
   {#if error}

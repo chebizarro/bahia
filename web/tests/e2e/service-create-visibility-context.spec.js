@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
-import { createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
+import { TEST_ORG_ID, createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness } from './harnesses/service-deployment-public.js';
 
 const systemInfo = createPublicSystemInfo();
 
@@ -11,6 +11,7 @@ async function openCreateDialog(page) {
 }
 
 async function submitCreate(dialog, { name, artifactRepo, runtimeType = 'docker' }) {
+  await dialog.locator('#service-org-id').fill(TEST_ORG_ID);
   await dialog.locator('#service-name').fill(name);
   await dialog.locator('#artifact-repo-path').fill(artifactRepo);
   await dialog.locator('#runtime-type').selectOption(runtimeType);
@@ -39,8 +40,7 @@ test.describe('Service create visibility with preserved list state', () => {
     initialState.services[0].runtime_type = 'docker';
     await installE2EMocks(page, { systemInfo });
     await installPublicServiceDeploymentHarness(page, {
-      initialState,
-      emitCreateServiceProjection: false
+      initialState
     });
 
     await page.goto('/services');
@@ -67,8 +67,7 @@ test.describe('Service create visibility with preserved list state', () => {
   test('shows the created service immediately when it already matches the active search view', async ({ page }) => {
     await installE2EMocks(page, { systemInfo });
     await installPublicServiceDeploymentHarness(page, {
-      initialState: createPublicState(),
-      emitCreateServiceProjection: false
+      initialState: createPublicState()
     });
 
     await page.goto('/services');
@@ -91,8 +90,7 @@ test.describe('Service create visibility with preserved list state', () => {
   test('preserves the current page instead of resetting pagination after create', async ({ page }) => {
     await installE2EMocks(page, { systemInfo });
     await installPublicServiceDeploymentHarness(page, {
-      initialState: pagedServicesState(),
-      emitCreateServiceProjection: false
+      initialState: pagedServicesState()
     });
 
     await page.goto('/services');

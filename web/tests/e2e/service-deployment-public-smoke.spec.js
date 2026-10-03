@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { installE2EMocks } from './helpers.js';
-import { createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness, reachDesiredStateReview } from './harnesses/service-deployment-public.js';
+import { TEST_ORG_ID, createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness, reachDesiredStateReview } from './harnesses/service-deployment-public.js';
 
 const systemInfo = createPublicSystemInfo();
 const initialState = createPublicState();
@@ -21,6 +21,7 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
 
     await page.getByRole('button', { name: 'Create Service' }).first().click();
     await expect(page.getByRole('dialog', { name: 'Create Service' })).toBeVisible();
+    await page.locator('#service-org-id').fill(TEST_ORG_ID);
     await page.locator('#service-name').fill('created-service');
     await page.locator('#artifact-repo-path').fill('ghcr.io/example/created-service');
     await page.getByRole('dialog', { name: 'Create Service' }).getByRole('button', { name: 'Create' }).click();
@@ -99,9 +100,9 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
     const canonicalRequests = transportTrace.requests.filter((request) => request.kind === 25910);
     expect(transportTrace.relays.length).toBeGreaterThanOrEqual(4);
     expect(transportTrace.requests.map((request) => request.operation)).toEqual(expect.arrayContaining(['service/create', 'service/deploy-preview', 'service/update', 'service/deploy', 'approval/approve']));
-    expect(transportTrace.kinds).toEqual(expect.arrayContaining([25910]));
+    expect(transportTrace.kinds).toEqual(expect.arrayContaining([25910, 30900]));
     expect(transportTrace.kinds).not.toContain(5980);
-    expect(canonicalRequests.length).toBeGreaterThanOrEqual(4);
+    expect(canonicalRequests.length).toBeGreaterThanOrEqual(3);
 
     for (const request of canonicalRequests) {
       expect(transportTrace.oks).toEqual(expect.arrayContaining([

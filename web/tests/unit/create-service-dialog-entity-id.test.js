@@ -42,6 +42,7 @@ vi.mock('$lib/components/toast.js', () => ({
 const { default: CreateServiceDialog } = await import('../../src/routes/services/CreateServiceDialog.svelte');
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const ORG_ID = '3b45458b-2724-4dda-9fc6-66f12249660d';
 
 async function settle() {
   for (let i = 0; i < 5; i += 1) {
@@ -77,10 +78,11 @@ describe('CreateServiceDialog client-minted entity id (bahia-irsry.35)', () => {
   it('mints a UUIDv7, sends it in service/create, and reuses it when the create is retried', async () => {
     const target = renderComponent(CreateServiceDialog, { open: true });
     await settle();
+    await fill(target, '#service-org-id', ORG_ID);
     await fill(target, '#service-name', 'payments-api');
     await fill(target, '#artifact-repo-path', 'ghcr.io/acme/payments');
 
-    createServiceMock.mockRejectedValueOnce(new Error('timed out waiting for ContextVM result'));
+    createServiceMock.mockRejectedValueOnce(new Error('signer unavailable'));
     await submit(target);
     expect(createServiceMock).toHaveBeenCalledTimes(1);
     const firstPayload = createServiceMock.mock.calls[0][0];
@@ -91,7 +93,7 @@ describe('CreateServiceDialog client-minted entity id (bahia-irsry.35)', () => {
     await submit(target);
     expect(createServiceMock).toHaveBeenCalledTimes(2);
     expect(createServiceMock.mock.calls[1][0].id).toBe(firstPayload.id);
-    expect(upsertServiceProjectionMock).toHaveBeenCalledWith(expect.objectContaining({ id: firstPayload.id }));
+    expect(upsertServiceProjectionMock).not.toHaveBeenCalled();
   });
 
   it('mints a fresh id for the next service once a successful create resets the form', async () => {
@@ -100,6 +102,7 @@ describe('CreateServiceDialog client-minted entity id (bahia-irsry.35)', () => {
     await settle();
     createServiceMock.mockImplementation(async (payload) => resultEvent(payload.id));
 
+    await fill(target, '#service-org-id', ORG_ID);
     await fill(target, '#service-name', 'payments-api');
     await fill(target, '#artifact-repo-path', 'ghcr.io/acme/payments');
     await submit(target);
@@ -110,6 +113,7 @@ describe('CreateServiceDialog client-minted entity id (bahia-irsry.35)', () => {
     // The same dialog instance is reopened by its host after closing on success.
     props.open = true;
     await settle();
+    await fill(target, '#service-org-id', ORG_ID);
     await fill(target, '#service-name', 'billing-api');
     await fill(target, '#artifact-repo-path', 'ghcr.io/acme/billing');
     await submit(target);

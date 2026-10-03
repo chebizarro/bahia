@@ -109,13 +109,13 @@ async function environmentTrace(page) {
   }));
 }
 
-async function expectContextVMOperation(page, operation) {
+async function expectIntentOperation(page, operation) {
   await expect.poll(() => environmentTrace(page)).toMatchObject({
-    requests: expect.arrayContaining([expect.objectContaining({ kind: 25910, operation })]),
-    oks: expect.arrayContaining([expect.objectContaining({ kind: 25910, accepted: true })]),
-    results: expect.arrayContaining([expect.objectContaining({ kind: 25910 })]),
+    requests: expect.arrayContaining([expect.objectContaining({ kind: 30900, operation })]),
+    oks: expect.arrayContaining([expect.objectContaining({ kind: 30900, accepted: true })]),
+    results: expect.arrayContaining([expect.objectContaining({ kind: 30315 })]),
     projections: expect.arrayContaining([expect.objectContaining({ kind: 30900 })]),
-    kinds: expect.arrayContaining([25910])
+    kinds: expect.arrayContaining([30900])
   });
   const trace = await environmentTrace(page);
   expect(trace.kinds).not.toContain(5980);
@@ -161,7 +161,7 @@ test.describe('Environments CRUD Smoke Test', () => {
     await expect(strategySelect).toHaveValue('canary');
   });
 
-  test('should create environment through ContextVM and canonical 30900 projection', async ({ page }) => {
+  test('should create environment through a signed intent and canonical 30900 projection', async ({ page }) => {
     await page.goto('/environments');
 
     await page.getByRole('button', { name: 'Create Environment' }).first().click();
@@ -179,11 +179,9 @@ test.describe('Environments CRUD Smoke Test', () => {
     await expect(dialog).not.toBeVisible();
     await expect(page.getByRole('cell', { name: 'development', exact: true })).toBeVisible();
 
-    const request = await expectContextVMOperation(page, 'environment/create');
+    const request = await expectIntentOperation(page, 'environment/create');
     expect(request.tags).toEqual(expect.arrayContaining([
-      ['p', SERVICE_PUBKEY],
-      ['encrypted', 'contextvm-jsonrpc-v1'],
-      ['method', 'environment/create']
+      ['t', 'bahia-intent'], ['domain', 'environment'], ['op', 'create'], ['org', ORG_ID]
     ]));
   });
 
@@ -228,7 +226,7 @@ test.describe('Environments CRUD Smoke Test', () => {
 
     await expect(dialog).not.toBeVisible();
     await expect(page.getByRole('cell', { name: 'max-production', exact: true })).toBeVisible();
-    const request = await expectContextVMOperation(page, 'environment/create');
+    const request = await expectIntentOperation(page, 'environment/create');
     expect(request.payload).toMatchObject({
       org_id: ORG_ID,
       targeting: {
@@ -266,7 +264,7 @@ test.describe('Environments CRUD Smoke Test', () => {
     await confirm.getByRole('button', { name: 'Sign Target Update' }).click();
 
     await expect(editor).not.toBeVisible();
-    const request = await expectContextVMOperation(page, 'environment/update');
+    const request = await expectIntentOperation(page, 'environment/update');
     expect(request.payload.expected_updated_at).toBe('2026-05-03T10:02:30.000Z');
     expect(request.payload.deployment_units).toHaveLength(1);
     expect(request.payload.deployment_units[0]).toMatchObject({
@@ -289,7 +287,7 @@ test.describe('Environments CRUD Smoke Test', () => {
     expect(operations).not.toContain('environment/update');
   });
 
-  test('should update environment through ContextVM and canonical 30900 projection', async ({ page }) => {
+  test('should update environment through a signed intent and canonical 30900 projection', async ({ page }) => {
     await page.goto('/environments/env-1');
 
     await page.getByRole('button', { name: 'Edit', exact: true }).click();
@@ -299,12 +297,9 @@ test.describe('Environments CRUD Smoke Test', () => {
     await dialog.getByRole('button', { name: /Save|Update/ }).click();
 
     await expect(dialog).not.toBeVisible();
-    const request = await expectContextVMOperation(page, 'environment/update');
+    const request = await expectIntentOperation(page, 'environment/update');
     expect(request.tags).toEqual(expect.arrayContaining([
-      ['environment', 'env-1'],
-      ['p', SERVICE_PUBKEY],
-      ['encrypted', 'contextvm-jsonrpc-v1'],
-      ['method', 'environment/update']
+      ['d', 'env-1'], ['domain', 'environment'], ['op', 'update'], ['org', ORG_ID]
     ]));
   });
 
@@ -316,19 +311,16 @@ test.describe('Environments CRUD Smoke Test', () => {
     await expect(page.getByRole('dialog', { name: 'Delete Environment' })).toBeVisible();
   });
 
-  test('should delete environment through ContextVM and canonical tombstone projection', async ({ page }) => {
+  test('should delete environment through a signed intent and canonical tombstone projection', async ({ page }) => {
     await page.goto('/environments/env-2');
 
     await page.getByRole('button', { name: 'Delete' }).click();
     await page.getByRole('dialog', { name: 'Delete Environment' }).getByRole('button', { name: 'Delete' }).click();
 
     await expect(page).toHaveURL(/\/environments$/);
-    const request = await expectContextVMOperation(page, 'environment/delete');
+    const request = await expectIntentOperation(page, 'environment/delete');
     expect(request.tags).toEqual(expect.arrayContaining([
-      ['environment', 'env-2'],
-      ['p', SERVICE_PUBKEY],
-      ['encrypted', 'contextvm-jsonrpc-v1'],
-      ['method', 'environment/delete']
+      ['d', 'env-2'], ['domain', 'environment'], ['op', 'delete'], ['org', ORG_ID]
     ]));
   });
 
