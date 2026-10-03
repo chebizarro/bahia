@@ -23,9 +23,9 @@ import (
 //
 // See design §7 Wave 1 F3.
 type EnvironmentIntentHandler struct {
-	registry      service.EnvironmentIntentRegistry
+	registry       service.EnvironmentIntentRegistry
 	statePublisher service.RelayFirstStatePublisher
-	logger        *zap.Logger
+	logger         *zap.Logger
 }
 
 // NewEnvironmentIntentHandler constructs the handler. registry is the
@@ -111,12 +111,17 @@ func (h *EnvironmentIntentHandler) handleUpdate(ctx context.Context, intent *Int
 	// Check expected_updated_at revision if provided.
 	if intent.ExpectedUpdatedAt != nil {
 		expectedTime := time.UnixMicro(*intent.ExpectedUpdatedAt)
+		if raw, ok := intent.Content["expected_updated_at"].(string); ok {
+			if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+				expectedTime = parsed
+			}
+		}
 		if !domain.SameRevision(existing.UpdatedAt, expectedTime) {
 			// Revision conflict — publish conflict status and return error.
 			return &revisionConflictError{
-				entityID:    env.ID,
-				expected:    expectedTime,
-				actual:      existing.UpdatedAt,
+				entityID: env.ID,
+				expected: expectedTime,
+				actual:   existing.UpdatedAt,
 			}
 		}
 	}
@@ -282,15 +287,15 @@ func environmentIDFromIntentContent(intent *Intent) (uuid.UUID, error) {
 // environmentIntentPayload is the JSON shape of an environment intent's
 // content field. It mirrors the ContextVM payload structure.
 type environmentIntentPayload struct {
-	ID                 string                        `json:"id"`
-	Name               string                        `json:"name"`
-	LoomWorkerSelector map[string]any                `json:"loom_worker_selector,omitempty"`
-	RuntimeConfig      map[string]any                `json:"runtime_config,omitempty"`
-	Targeting          *environmentIntentTargeting    `json:"targeting,omitempty"`
-	DeploymentUnits    []environmentIntentUnit        `json:"deployment_units,omitempty"`
-	ReconcileMode      string                        `json:"reconcile_mode,omitempty"`
-	DeployStrategy     string                        `json:"deploy_strategy,omitempty"`
-	Protected          bool                          `json:"protected,omitempty"`
+	ID                 string                      `json:"id"`
+	Name               string                      `json:"name"`
+	LoomWorkerSelector map[string]any              `json:"loom_worker_selector,omitempty"`
+	RuntimeConfig      map[string]any              `json:"runtime_config,omitempty"`
+	Targeting          *environmentIntentTargeting `json:"targeting,omitempty"`
+	DeploymentUnits    []environmentIntentUnit     `json:"deployment_units,omitempty"`
+	ReconcileMode      string                      `json:"reconcile_mode,omitempty"`
+	DeployStrategy     string                      `json:"deploy_strategy,omitempty"`
+	Protected          bool                        `json:"protected,omitempty"`
 }
 
 type environmentIntentTargeting struct {
@@ -301,17 +306,17 @@ type environmentIntentTargeting struct {
 }
 
 type environmentIntentUnit struct {
-	Key            string            `json:"key"`
-	DisplayName    string            `json:"display_name,omitempty"`
-	RuntimeType    string            `json:"runtime_type,omitempty"`
-	EndpointRef    string            `json:"endpoint_ref,omitempty"`
-	ComposeDir     string            `json:"compose_dir,omitempty"`
-	Namespace      string            `json:"namespace,omitempty"`
-	NetworkProfile map[string]string `json:"network_profile,omitempty"`
+	Key            string                      `json:"key"`
+	DisplayName    string                      `json:"display_name,omitempty"`
+	RuntimeType    string                      `json:"runtime_type,omitempty"`
+	EndpointRef    string                      `json:"endpoint_ref,omitempty"`
+	ComposeDir     string                      `json:"compose_dir,omitempty"`
+	Namespace      string                      `json:"namespace,omitempty"`
+	NetworkProfile map[string]string           `json:"network_profile,omitempty"`
 	GitSource      *environmentIntentGitSource `json:"git_source,omitempty"`
-	ReconcileMode  string            `json:"reconcile_mode,omitempty"`
-	OwnershipMode  string            `json:"ownership_mode,omitempty"`
-	RuntimeConfig  map[string]any    `json:"runtime_config,omitempty"`
+	ReconcileMode  string                      `json:"reconcile_mode,omitempty"`
+	OwnershipMode  string                      `json:"ownership_mode,omitempty"`
+	RuntimeConfig  map[string]any              `json:"runtime_config,omitempty"`
 }
 
 type environmentIntentGitSource struct {

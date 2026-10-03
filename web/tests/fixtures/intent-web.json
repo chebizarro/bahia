@@ -1,0 +1,39 @@
+{
+  "kind": 30900,
+  "created_at": 1727740800,
+  "tags": [
+    [
+      "d",
+      "service:record-1"
+    ],
+    [
+      "domain",
+      "service"
+    ],
+    [
+      "schema",
+      "bahia.intent.service.v1"
+    ],
+    [
+      "t",
+      "bahia-intent"
+    ],
+    [
+      "t",
+      "service"
+    ],
+    [
+      "op",
+      "update"
+    ],
+    [
+      "org",
+      "3b45458b-2724-4dda-9fc6-66f12249660d"
+    ],
+    [
+      "intent_id",
+      "018f1fae-7b91-7bea-81d6-0669758de945"
+    ]
+  ],
+  "content": "{\"config\":{\"a\":2,\"z\":1},\"expected_updated_at\":42,\"id\":\"record-1\",\"name\":\"api\",\"org_id\":\"3b45458b-2724-4dda-9fc6-66f12249660d\"}"
+}

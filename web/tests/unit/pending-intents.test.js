@@ -15,8 +15,10 @@ const status = (name, reason = '') => ({ kind: 30315, pubkey: service,
 describe('pending intent overlay', () => {
   it('persists pending state and age without timeout failure', async () => {
     const store = makeStore(); await store.open();
-    const row = await store.add({ event: intent, domain: 'service', op: 'create', desiredState: { name: 'one' } });
+    const desiredState = new Proxy({ name: 'one' }, {}); // Svelte state proxies are not structured-cloneable.
+    const row = await store.add({ event: intent, domain: 'service', op: 'create', desiredState });
     expect(store.age(row)).toBe(900_000);
+    expect(store.query()[0].desiredState).toEqual({ name: 'one' });
     expect(store.query()[0].status).toBe('pending');
     await store.handleCanonical({ kind: 30900, pubkey: service, created_at: 99, tags: [['d', 'service:one']] });
     expect(store.query()[0].status).toBe('pending');

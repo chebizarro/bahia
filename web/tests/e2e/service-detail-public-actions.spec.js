@@ -82,7 +82,7 @@ test.describe('Service detail signer-first public actions', () => {
       requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
       service: window.__BAHIA_E2E_PUBLIC_STATE.services.find((item) => item.id === 'svc-existing-1')
     }))).toMatchObject({
-      requestKinds: expect.arrayContaining([25910]),
+      requestKinds: expect.arrayContaining([30900]),
       service: expect.objectContaining({ name: 'existing-service-renamed' })
     });
 
@@ -124,7 +124,7 @@ test.describe('Service detail signer-first public actions', () => {
       requestKinds: [...window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS],
       service: window.__BAHIA_E2E_PUBLIC_STATE.services.find((item) => item.id === 'svc-existing-1')
     }))).toMatchObject({
-      requestKinds: expect.arrayContaining([25910]),
+      requestKinds: expect.arrayContaining([30900]),
       service: expect.objectContaining({ deleted: true })
     });
 

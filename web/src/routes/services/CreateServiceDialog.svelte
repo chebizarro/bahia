@@ -5,10 +5,12 @@
   import Select from '$lib/components/Select.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import RepositoryPicker from '$lib/components/repositories/RepositoryPicker.svelte';
-  import { systemInfo, loadSystemInfo, upsertServiceProjection } from '$lib/stores';
+  import { systemInfo, loadSystemInfo } from '$lib/stores';
+  import { orgsState } from '$lib/stores/orgs.svelte.js';
+  import { orgRoles } from '$lib/stores/auth-roles.svelte.js';
   import { createManualRepositorySelection } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
-  import { createService as createServiceCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
+  import { createService as createServiceCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { toast } from '$lib/components/toast.js';
   import { isEntityIdConflict, mintEntityId } from '$lib/entity-id.js';
   import { buildArtifactRepo, validateCreateServiceForm, buildCreateServicePayload } from './create-service-form.js';
@@ -35,6 +37,7 @@
   let creating = $state(false);
   let createError = $state(null);
   let createForm = $state({
+    org_id: '',
     name: '',
     repositorySelection: createManualRepositorySelection(''),
     artifact_repo: '',
@@ -113,6 +116,7 @@
   function resetForm() {
     createEntityId = mintEntityId();
     createForm = {
+      org_id: '',
       name: '',
       repositorySelection: createManualRepositorySelection(''),
       artifact_repo: '',
@@ -148,23 +152,10 @@
     createError = null;
 
     try {
-      const payload = buildCreateServicePayload(createForm, { id: createEntityId });
-      const resultEvent = await createServiceCommand(payload);
-      const result = resultContent(resultEvent);
-      const serviceId = result?.service?.id || result?.service_id || result?.id;
-      let createdService = null;
-      if (serviceId) {
-        createdService = {
-          ...payload,
-          ...(result?.service || {}),
-          id: serviceId,
-          deleted: false
-        };
-        upsertServiceProjection(createdService);
-      }
-
-      toast.success(`Service "${payload.name}" created`);
-      onCreated?.(createdService, payload);
+      const payload = { ...buildCreateServicePayload(createForm, { id: createEntityId }), org_id: createForm.org_id.trim() };
+      await createServiceCommand(payload);
+      toast.success(`Service "${payload.name}" submitted`);
+      onCreated?.(null, payload);
       closeDialog();
     } catch (err) {
       const message = err?.message || 'Failed to create service';
@@ -196,6 +187,14 @@
     { value: 'custom', label: 'Custom Registry' }
   ]);
 
+  let organizationOptions = $derived([...new Set([
+    ...orgsState.orgs.map(org => org.id || org.org_id), ...Object.keys(orgRoles)
+  ].filter(Boolean))].map(id => ({ value: id, label: orgsState.orgs.find(org => (org.id || org.org_id) === id)?.name || id })));
+
+  $effect(() => {
+    if (!createForm.org_id && organizationOptions.length === 1) createForm.org_id = organizationOptions[0].value;
+  });
+
   // Watch for repository selection changes and fetch branches
   $effect(() => {
     if (createForm.repositorySelection) {
@@ -211,6 +210,14 @@
 
 <Modal bind:open title="Create Service" onClose={closeDialog}>
   <form onsubmit={(event) => { event.preventDefault(); handleCreate(); }} class="create-form">
+    <div class="form-field">
+      <label for="service-org-id">Organization ID *</label>
+      {#if organizationOptions.length}
+        <Select id="service-org-id" bind:value={createForm.org_id} options={organizationOptions} required disabled={creating} />
+      {:else}
+        <Input id="service-org-id" bind:value={createForm.org_id} placeholder="Organization UUID" required disabled={creating} />
+      {/if}
+    </div>
     <div class="form-field">
       <label for="service-name">Name *</label>
       <Input

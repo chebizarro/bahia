@@ -3,6 +3,37 @@ import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
 import { CONTEXTVM_MESSAGE_KIND, publishEncryptedRequest, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
 import { withEntityId } from '$lib/entity-id.js';
+import { publishIntent, canonicalIntentRecord } from '$lib/nostr/intent-client.svelte.js';
+import { orgRoles } from './auth-roles.svelte.js';
+import { orgsState } from './orgs.svelte.js';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function intentOrgId(payload, current) {
+  const explicit = [payload?.org_id, current?.org_id,
+    payload?.environment_id ? canonicalIntentRecord(payload.environment_id)?.content?.org_id : null]
+    .find(value => UUID.test(String(value || '')));
+  if (explicit) return explicit;
+  const available = [...new Set([...Object.keys(orgRoles),
+    ...orgsState.orgs.map(org => org.id || org.org_id)].filter(value => UUID.test(String(value || ''))))];
+  if (available.length !== 1) throw new Error('Select an organization before submitting this intent');
+  return available[0];
+}
+
+async function mutateIntent(domain, op, payload, id = payload?.id) {
+  const coordinate = String(id || '').trim();
+  if (!coordinate) throw new Error(`${domain} intent requires an entity id`);
+  const current = op === 'create' ? null : canonicalIntentRecord(coordinate);
+  if (op === 'update' && !current?.content?.updated_at) {
+    throw new Error('Current canonical revision is unavailable; re-read and resubmit');
+  }
+  const orgId = intentOrgId(payload, current?.content);
+  const content = op === 'delete'
+    ? { id: coordinate, org_id: orgId, deleted: true, ...(payload?.force ? { force: true } : {}) }
+    : { ...(current?.content || {}), ...payload, id: coordinate, org_id: orgId };
+  delete content.expected_updated_at;
+  return publishIntent({ domain, op, coordinate, orgId, content, currentRecord: current?.content });
+}
 
 function operationResultEvent({ requestEventId, resultEvent, result }) {
   if (result !== undefined) {
@@ -105,33 +136,27 @@ export async function publishCommandOnly({ operation, tags = [], content = {}, p
 // Create intents carry a client-minted entity id (bahia-irsry.35). Callers that
 // may retry should mint it once and pass it in; otherwise one is minted here.
 export async function createService(payload) {
-  return publishCommand({ operation: 'service/create', content: withEntityId(payload) });
+  return mutateIntent('service', 'create', withEntityId(payload));
 }
 
 export function updateService(id, payload) {
-  const content = { ...payload, id };
-  return publishCommand({
-    operation: 'service/update',
-    tags: [['service', id]],
-    content,
-    ...(content.idempotency_key ? { requestId: content.idempotency_key } : {})
-  });
+  return mutateIntent('service', 'update', payload, id);
 }
 
 export function deleteService(id, force = false) {
-  return publishCommand({ operation: 'service/delete', tags: [['service', id]], content: { id, force } });
+  return mutateIntent('service', 'delete', { id, force }, id);
 }
 
 export async function createEnvironment(payload) {
-  return publishCommand({ operation: 'environment/create', content: withEntityId(payload) });
+  return mutateIntent('environment', 'create', withEntityId(payload));
 }
 
 export function updateEnvironment(id, payload) {
-  return publishCommand({ operation: 'environment/update', tags: [['environment', id]], content: { ...payload, id } });
+  return mutateIntent('environment', 'update', payload, id);
 }
 
 export function deleteEnvironment(id, force = false) {
-  return publishCommand({ operation: 'environment/delete', tags: [['environment', id]], content: { id, force } });
+  return mutateIntent('environment', 'delete', { id, force }, id);
 }
 
 export async function previewServiceDeployment(payload) {
@@ -452,51 +477,31 @@ export function importArtifactSBOM(artifact, { format = 'spdx', payloadBase64 = 
 }
 
 export function promotePackage(payload) {
-  return publishCommand({
-    operation: 'package/promote',
-    tags: [
-      ['operation', 'promote'],
-      ['repository', payload.source_repository_id],
-      ['repository_name', payload.source_repository_name],
-      ['target_repository', payload.target_repository_id],
-      ['target_repository_name', payload.target_repository_name],
-      ['namespace', payload.namespace],
-      ['package', payload.package_name],
-      ['version', payload.version],
-      ['filename', payload.filename]
-    ].filter((tag) => tag[1]),
-    content: payload
-  });
+  const coordinate = ['package', payload.target_repository_id, payload.namespace,
+    payload.package_name, payload.version, payload.filename].map(encodeURIComponent).join(':');
+  return publishIntent({ domain: 'package', op: 'promote', coordinate,
+    orgId: intentOrgId(payload), content: payload });
 }
 
 export function yankPackage(payload) {
-  return publishCommand({
-    operation: 'package/yank',
-    tags: [
-      ['operation', payload.deprecated ? 'deprecate' : 'yank'],
-      ['repository', payload.repository_id],
-      ['repository_name', payload.repository_name],
-      ['namespace', payload.namespace],
-      ['package', payload.package_name],
-      ['version', payload.version],
-      ['filename', payload.filename]
-    ].filter((tag) => tag[1]),
-    content: payload
-  });
+  const coordinate = ['package', payload.repository_id, payload.namespace,
+    payload.package_name, payload.version, payload.filename].map(encodeURIComponent).join(':');
+  return publishIntent({ domain: 'package', op: 'yank', coordinate,
+    orgId: intentOrgId(payload), content: payload });
 }
 
 // The policy id is client-minted (bahia-irsry.42): pass the same payload.id to
 // retry; one is minted when absent.
 export async function createPolicy(payload) {
-  return publishCommand({ operation: 'policy/create', tags: payload.environment_id ? [['environment', payload.environment_id]] : [], content: withEntityId(payload) });
+  return mutateIntent('policy', 'create', withEntityId(payload));
 }
 
 export function updatePolicy(id, payload) {
-  return publishCommand({ operation: 'policy/update', tags: [['policy', id]], content: { ...payload, id } });
+  return mutateIntent('policy', 'update', payload, id);
 }
 
 export function deletePolicy(id) {
-  return publishCommand({ operation: 'policy/delete', tags: [['policy', id]], content: { id } });
+  return mutateIntent('policy', 'delete', { id }, id);
 }
 
 export async function evaluatePolicy(payload) {

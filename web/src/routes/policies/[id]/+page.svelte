@@ -16,6 +16,7 @@
     operations
   } from '$lib/stores';
   import { updatePolicy, deletePolicy, evaluatePolicy } from '$lib/stores/public-controlplane.svelte.js';
+  import { pendingIntentRows } from '$lib/nostr/intent-client.svelte.js';
   import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
   import { policyEvaluationHistory, policyEvaluationLabel } from '../page-model.js';
   import { CheckIcon, CloseIcon, EnvironmentIcon, InfoIcon, PolicyIcon, WarningIcon } from '$lib/icons/domain-icons.js';
@@ -25,6 +26,7 @@
   let error = $state(null);
 
   let policyId = $derived(page.params.id);
+  let intentFeedback = $derived(pendingIntentRows.find(row => row.coordinate === policyId && row.status !== 'pending'));
 
   // Edit modal state
   let editOpen = $state(false);
@@ -203,7 +205,6 @@
       };
 
       await updatePolicy(policyId, payload);
-      policy = { ...policy, ...payload };
       closeEditModal();
     } catch (err) {
       editError = err.message || 'Failed to update policy';
@@ -260,7 +261,6 @@
         enabled: nextEnabled,
         environment_id: policy.environment_id || null
       });
-      policy = { ...policy, enabled: nextEnabled };
     } catch (err) {
       error = err.message || 'Failed to update policy status';
     }
@@ -287,6 +287,11 @@
 </script>
 
 <div class="page">
+  {#if intentFeedback}
+    <p role="alert" class="error">{intentFeedback.status === 'conflict' ? 'Revision conflict — re-read and resubmit.' : `Intent ${intentFeedback.status}.`} {intentFeedback.reason}
+      <button type="button" onclick={() => window.location.reload()}>Re-read canonical state</button>
+    </p>
+  {/if}
   <a href="/policies" class="back">Policies</a>
 
   {#if error}

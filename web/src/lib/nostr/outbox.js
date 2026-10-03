@@ -1,3 +1,5 @@
+import { normalizeRelayUrl } from './pool-utils.js';
+
 const STORE = 'events';
 const PERMANENT = /^(blocked|restricted|invalid):/i;
 const AUTH_REQUIRED = /^auth-required:/i;
@@ -51,11 +53,16 @@ export function createIntentOutbox({ namespace, pool, relays, onStateChange = ()
       else if (relays.every(url => entry.relays[url]?.state === 'permanent')) entry.state = 'failed';
       await save(entry);
       onStateChange(entry);
+    } catch (error) {
+      entry.relays[relay] = { state: 'unknown', message: String(error?.message || error) };
+      await save(entry);
+      onStateChange(entry);
     } finally { inFlight.delete(flight); }
   }
 
   function retry(relay, auth = false) {
-    if (!relays.includes(relay)) return;
+    relay = relays.find(url => normalizeRelayUrl(url) === normalizeRelayUrl(relay));
+    if (!relay) return;
     for (const entry of entries.values()) {
       if (auth && entry.relays[relay]?.state === 'auth-required') entry.relays[relay] = { state: 'unknown', message: '' };
       if (auth || entry.relays[relay]?.state !== 'auth-required') void send(entry, relay);

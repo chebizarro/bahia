@@ -3,6 +3,19 @@ const STORE = 'pending_intents';
 function tag(event, name) { return event?.tags?.find(t => t[0] === name)?.[1]; }
 function key(coordinate, intentId) { return `${coordinate}\u0000${intentId}`; }
 
+/** Merge UI-only desired state beside canonical rows without changing the store. */
+export function mergeWithPending(canonical, pending, domain) {
+  const rows = new Map(canonical.map(row => [String(row.id), row]));
+  for (const intent of pending) {
+    if (intent.domain !== domain || !['pending', 'conflict', 'rejected', 'failed'].includes(intent.status)) continue;
+    const id = intent.coordinate;
+    const existing = rows.get(id);
+    rows.set(id, { ...(existing || intent.desiredState || {}), id, intentStatus: intent.status,
+      intentReason: intent.reason, intentCreatedAt: intent.createdAt, intentId: intent.intentId });
+  }
+  return [...rows.values()];
+}
+
 function database(namespace) {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(`bahia-pending-${namespace}`, 1);
@@ -50,7 +63,8 @@ export function createPendingIntents({ namespace, servicePubkey, requesterPubkey
       const intentId = tag(event, 'intent_id');
       if (!coordinate || !intentId || event.kind !== 30900) throw new Error('Invalid signed intent');
       const row = { key: key(coordinate, intentId), coordinate, intentId, domain, op,
-        desiredState, eventId: event.id, createdAt: event.created_at, status: 'pending', reason: '' };
+        desiredState: desiredState === undefined ? null : JSON.parse(JSON.stringify(desiredState)), eventId: event.id,
+        createdAt: event.created_at, status: 'pending', reason: '' };
       rows.set(row.key, row);
       await persist(row);
       emit();

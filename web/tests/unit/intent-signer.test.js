@@ -25,6 +25,13 @@ describe('intent signer', () => {
       .toThrow(/canonical updated_at/);
   });
 
+  it('mints UUIDv7 intent ids and matches Go JSON HTML escaping', () => {
+    const event = buildIntentEvent({ domain: 'service', op: 'create', coordinate: 'record-2', orgId,
+      content: { name: '<api>&' }, createdAt: 123 });
+    expect(event.tags[7][1]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(event.content).toBe('{"name":"\\u003capi\\u003e\\u0026"}');
+  });
+
   it('signs with the same abstraction used by NIP-07, NIP-46 and e2e', async () => {
     const signer = { getPublicKey: async () => pubkey, signEvent: async event => finalizeEvent(event, secret) };
     const { event } = await signIntent({ domain: 'service', op: 'create', coordinate: 'service:new',

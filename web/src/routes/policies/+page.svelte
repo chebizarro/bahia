@@ -12,10 +12,18 @@
   import { policies, environments } from '$lib/stores';
   import { createPolicy as createPolicyCommand } from '$lib/stores/public-controlplane.svelte.js';
   import { isEntityIdConflict, mintEntityId } from '$lib/entity-id.js';
+  import { pendingIntentRows } from '$lib/nostr/intent-client.svelte.js';
+  import { mergeWithPending } from '$lib/stores/pending-intents.svelte.js';
   import { policyFormSchema, validateForm } from '$lib/validation/forms.js';
   import { CloseIcon, EnvironmentIcon, PolicyIcon, SuccessIcon } from '$lib/icons/domain-icons.js';
 
   let enforcementFilter = $state('all');
+  let nowSeconds = $state(Math.floor(Date.now() / 1000));
+  $effect(() => {
+    const timer = setInterval(() => { nowSeconds = Math.floor(Date.now() / 1000); }, 1000);
+    return () => clearInterval(timer);
+  });
+  let visiblePolicies = $derived(mergeWithPending(policies, pendingIntentRows, 'policy'));
   let enabledFilter = $state('all');
 
   // Create modal state
@@ -29,6 +37,7 @@
   let visualRules = $state([]); // Rules from visual builder
 
   let createForm = $state({
+    org_id: '',
     name: '',
     environment_id: '',
     rules: '[]',
@@ -65,7 +74,7 @@
   }
 
   let filteredPolicies = $derived(
-    policies.filter((policy) => {
+    visiblePolicies.filter((policy) => {
       if (enforcementFilter !== 'all' && policy.enforcement !== enforcementFilter) {
         return false;
       }
@@ -95,6 +104,10 @@
       }
     },
     { key: 'enforcement', label: 'Enforcement' },
+    { key: 'intentStatus', label: 'Intent', text: (r) => r.intentStatus === 'pending'
+      ? `pending ${Math.max(0, nowSeconds - r.intentCreatedAt)} s`
+      : r.intentStatus === 'conflict' ? `conflict — re-read and resubmit: ${r.intentReason}`
+        : r.intentStatus ? `${r.intentStatus}: ${r.intentReason || ''}` : 'confirmed' },
     {
       key: 'enabled',
       label: 'Status',
@@ -133,6 +146,7 @@
     useVisualBuilder = true;
     // Reset form
     createForm = {
+      org_id: '',
       name: '',
       environment_id: '',
       rules: '[]',
@@ -170,6 +184,7 @@
     try {
       const payload = {
         id: createEntityId,
+        org_id: createForm.org_id.trim(),
         name: createForm.name.trim(),
         rules: parsedRules,
         enforcement: createForm.enforcement,
@@ -198,14 +213,14 @@
   <div class="header">
     <div class="title-row">
       <h1>Policies</h1>
-      <span class="count">{filteredPolicies.length} of {policies.length} policies</span>
+      <span class="count">{filteredPolicies.length} of {visiblePolicies.length} policies</span>
     </div>
     <LoadingButton variant="primary" onclick={openCreateModal}>
       Create Policy
     </LoadingButton>
   </div>
 
-  {#if policies.length === 0}
+  {#if visiblePolicies.length === 0}
     <EmptyState
       iconComponent={PolicyIcon}
       title="No policies yet"
@@ -237,6 +252,10 @@
 
 <Modal bind:open={createOpen} title="Create Policy" titleIcon={PolicyIcon} onClose={closeCreateModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleCreate(); }} class="create-form">
+    <div class="form-field">
+      <label for="policy-org-id">Organization ID *</label>
+      <Input id="policy-org-id" bind:value={createForm.org_id} placeholder="Organization UUID" required disabled={creating} />
+    </div>
     <div class="form-field">
       <label for="policy-name">Name *</label>
       <Input
