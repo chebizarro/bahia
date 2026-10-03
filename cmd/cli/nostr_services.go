@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"fiatjaf.com/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
@@ -74,17 +75,25 @@ func runServicesListNostr(cmd *cobra.Command) error {
 }
 
 // nostrServiceStorePath returns the local store path for a given service
-// pubkey, using os.UserCacheDir as a platform-appropriate base.
+// pubkey. A full pubkey namespace prevents cross-service cache contamination.
 func nostrServiceStorePath(servicePubkey string) (string, error) {
-	cacheDir, err := os.UserCacheDir()
+	pubkey, err := nostr.PubKeyFromHex(servicePubkey)
 	if err != nil {
-		return "", fmt.Errorf("determine cache directory: %w", err)
+		return "", fmt.Errorf("invalid service pubkey: %w", err)
 	}
-	prefix := servicePubkey
-	if len(prefix) > 12 {
-		prefix = prefix[:12]
+	base := os.Getenv("BAHIA_DATA_DIR")
+	if base == "" {
+		if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+			base = filepath.Join(xdg, "bahia")
+		} else {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("determine home directory: %w", err)
+			}
+			base = filepath.Join(home, ".local", "share", "bahia")
+		}
 	}
-	dir := filepath.Join(cacheDir, "bahia", "store", prefix)
+	dir := filepath.Join(base, "store", pubkey.Hex())
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create store directory: %w", err)
 	}

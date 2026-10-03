@@ -322,7 +322,7 @@ func PolicyRegistryRecord(policy *domain.DeploymentPolicy, deleted bool) (nostr.
 	content := map[string]any{
 		"deleted":    deleted,
 		"id":         policy.ID.String(),
-		"updated_at": policy.UpdatedAt.UTC().Format(time.RFC3339),
+		"updated_at": policy.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
 	tags := nostr.Tags{{"policy", policy.ID.String()}}
 	if !deleted {
@@ -336,7 +336,7 @@ func PolicyRegistryRecord(policy *domain.DeploymentPolicy, deleted bool) (nostr.
 		content["rule_count"] = len(policy.Rules)
 		content["enforcement"] = string(policy.Enforcement)
 		content["enabled"] = policy.Enabled
-		content["created_at"] = policy.CreatedAt.UTC().Format(time.RFC3339)
+		content["created_at"] = policy.CreatedAt.UTC().Format(time.RFC3339Nano)
 		tags = append(tags,
 			nostr.Tag{"name", policy.Name},
 			nostr.Tag{"enabled", fmt.Sprintf("%t", policy.Enabled)},

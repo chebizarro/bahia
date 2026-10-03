@@ -192,10 +192,14 @@ func (c *NostrClient) Sync(ctx context.Context, domain string) (*SyncResult, err
 
 	sub, err := c.pool.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		// No relays available — serve stale.
 		return &SyncResult{Fresh: false, StaleSince: time.Now()}, nil
 	}
 	defer sub.Close()
+	relayEOSE := sub.RelayEOSE()
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, c.eoseTimeout)
 	defer cancel()
@@ -212,6 +216,9 @@ func (c *NostrClient) Sync(ctx context.Context, domain string) (*SyncResult, err
 			if ev == nil {
 				continue
 			}
+			if !c.validStateEvent(*ev, topics) {
+				continue
+			}
 			if _, saveErr := c.store.SaveEvent(*ev); saveErr != nil {
 				// Log-worthy but not fatal; continue draining.
 				continue
@@ -222,18 +229,29 @@ func (c *NostrClient) Sync(ctx context.Context, domain string) (*SyncResult, err
 		case <-sub.EndOfStoredEvents():
 			gotEOSE = true
 			goto done
-		case <-sub.RelayEOSE():
-			// At least one relay sent EOSE — we are fresh.
-			gotEOSE = true
-			goto done
+		case info, ok := <-relayEOSE:
+			if !ok {
+				relayEOSE = nil
+				continue
+			}
+			if info.RelayURL != "" {
+				// At least one relay sent EOSE — we are fresh.
+				gotEOSE = true
+				goto done
+			}
 		case <-timeoutCtx.Done():
 			goto done
 		}
 	}
 
 done:
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	// Drain remaining events after EOSE/timeout (non-blocking).
-	c.drainEventsSub(sub)
+	if drainedMax := c.drainEventsSub(sub, topics); drainedMax > maxCreatedAt {
+		maxCreatedAt = drainedMax
+	}
 
 	// Advance cursor.
 	if maxCreatedAt > 0 {
@@ -257,7 +275,9 @@ func (c *NostrClient) QueryDomain(domain string) ([]nostr.Event, error) {
 	filter := c.buildFilter(topics)
 	var events []nostr.Event
 	for ev := range c.store.QueryEvents(filter) {
-		events = append(events, ev)
+		if c.validStateEvent(ev, topics) {
+			events = append(events, ev)
+		}
 	}
 	return events, nil
 }
@@ -289,20 +309,35 @@ func (c *NostrClient) buildFilter(topics []string) nostr.Filter {
 
 // drainEventsSub reads and stores remaining events from a subscription
 // non-blockingly until the event channel closes or drains.
-func (c *NostrClient) drainEventsSub(sub Subscription) {
+func (c *NostrClient) drainEventsSub(sub Subscription, topics []string) nostr.Timestamp {
+	var maxCreatedAt nostr.Timestamp
 	for {
 		select {
 		case ev, ok := <-sub.Events():
 			if !ok {
-				return
+				return maxCreatedAt
 			}
-			if ev != nil {
-				_, _ = c.store.SaveEvent(*ev)
+			if ev != nil && c.validStateEvent(*ev, topics) {
+				if _, err := c.store.SaveEvent(*ev); err == nil && ev.CreatedAt > maxCreatedAt {
+					maxCreatedAt = ev.CreatedAt
+				}
 			}
 		default:
-			return
+			return maxCreatedAt
 		}
 	}
+}
+
+func (c *NostrClient) validStateEvent(ev nostr.Event, topics []string) bool {
+	if ev.Kind != nostr.Kind(kinds.CASControlState) || ev.PubKey != c.servicePub || !ev.CheckID() || !ev.VerifySignature() {
+		return false
+	}
+	for _, topic := range topics {
+		if tagValue(ev.Tags, "t") == topic {
+			return true
+		}
+	}
+	return false
 }
 
 // hashFilter produces a deterministic hash of a filter for cursor keying.
@@ -338,6 +373,10 @@ func buildDomainTopics() map[string][]string {
 	families := nostrpool.CPStateFamilyTopics()
 	m := map[string][]string{}
 	for _, f := range families {
+		if f.Domain == "service" && f.Entity == "state" {
+			m["state"] = appendUnique(m["state"], f.Topic)
+			continue
+		}
 		m[f.Domain] = appendUnique(m[f.Domain], f.Topic)
 	}
 	// Sort topics within each domain for deterministic filter hashing.

@@ -56,6 +56,9 @@ func newRootCommand() *cobra.Command {
 		Short: "Bahia Deployment Registry CLI",
 		Long:  "Command-line interface for the Bahia Nostr-Native Deployment Registry Service",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if isDefaultStatePolicyRead(cmd) {
+				return nil
+			}
 			apiClient = client.New(serverURL)
 			return configureClientAuth(cmd, apiClient)
 		},
@@ -71,10 +74,11 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringArrayVar(&operatorBootstrapRelays, "bootstrap-relay", nil, "Bootstrap relay URL for trusted operator relay discovery when --relay/BAHIA_NOSTR_RELAYS are absent (repeatable; env BAHIA_NOSTR_BOOTSTRAP_RELAYS)")
 	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "Trusted Bahia service pubkey for operator bootstrap discovery (repeatable; env BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS)")
-	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Allow explicit HTTP compatibility fallback only before any relay accepts a signer-first operator request")
+	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Explicitly use legacy REST for state/policy reads; allow pre-acceptance operator compatibility fallback")
 	rootCmd.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "Encrypt operator ContextVM requests and responses with NIP-59/NIP-44 (requires --service-pubkey)")
 	rootCmd.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "Maximum time to await a ContextVM result per publish attempt")
 	rootCmd.PersistentFlags().IntVar(&operatorResultRetries, "result-retries", client.DefaultOperatorResultRetries, "Number of idempotent ContextVM re-publish attempts after result timeout")
+	registerNostrReadFlags(rootCmd)
 
 	// Add all command groups
 	rootCmd.AddCommand(
@@ -416,7 +420,7 @@ func stateCommands() *cobra.Command {
 		Use:   "list",
 		Short: "List all environment service states",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			states, err := apiClient.ListStates(cmd.Context())
+			states, err := listCLIStates(cmd, false)
 			if err != nil {
 				return err
 			}
@@ -430,7 +434,7 @@ func stateCommands() *cobra.Command {
 		Use:   "drifted",
 		Short: "List drifted deployments",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			states, err := apiClient.ListDriftedStates(cmd.Context())
+			states, err := listCLIStates(cmd, true)
 			if err != nil {
 				return err
 			}
@@ -1094,7 +1098,7 @@ func policiesCommands() *cobra.Command {
 		Use:   "list",
 		Short: "List all policies",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			policies, err := apiClient.ListPolicies(cmd.Context())
+			policies, err := listCLIPolicies(cmd)
 			if err != nil {
 				return err
 			}
@@ -1113,7 +1117,7 @@ func policiesCommands() *cobra.Command {
 		Short: "Get a policy by ID",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			policy, err := apiClient.GetPolicy(cmd.Context(), args[0])
+			policy, err := getCLIPolicy(cmd, args[0])
 			if err != nil {
 				return err
 			}

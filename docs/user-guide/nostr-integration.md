@@ -164,6 +164,8 @@ For `(kind, pubkey, d-tag)`, the **latest event wins**.
 
 Desired-state runtime deploys add metadata to existing ContextVM responses and canonical observables instead of adding new kinds. Compose/Docker status events may include the steps `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, and `projecting`; result/state projections may include `desired_hash`, `renderer`, `target`, revision/apply summaries, and `observation_id`. These fields are optional and backward-compatible. Public relay content is sanitized: secret values, generated Compose env-file contents, raw Docker endpoint URLs, Docker TLS material, bearer credentials, and NIP-98 credentials are not projected.
 
+The service-state projection carries the non-secret `desired_runtime_state` snapshot, optional deployment-unit UUID, reconciliation backoff time and failure count. It does not publish free-form reconciliation failure messages. CLI state and policy reads sync their `30900` families into a per-service local store, wait for EOSE, and warn while serving stale local data if EOSE is unavailable.
+
 Worker resource-pressure and cleanup projections use the same canonical state layer:
 
 | Schema | Domain | Purpose |
