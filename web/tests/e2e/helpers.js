@@ -1,5 +1,7 @@
 import { E2E_SERVICE_PUBKEY, TEST_PUBKEY, signE2EEvent } from './e2e-keyring.js';
 import { cpStateFixtureBrowserScript } from './cp-state-fixtures.js';
+import { exposeTestSigner } from './test-signer.js';
+import { buildDaemonIntentStatus } from './intent-helpers.js';
 
 export { E2E_SERVICE_PUBKEY, TEST_PUBKEY, e2eTestPubkey, e2eTestSecretKey, signE2EEvent } from './e2e-keyring.js';
 
@@ -41,7 +43,8 @@ export async function installE2EMocks(
     systemInfo = null,
     routeRoleRequirements = null,
     contextVMOperations = [],
-    nip44 = true
+    nip44 = true,
+    realNip44 = false
   } = {}
 ) {
   const discoveryInfo = systemInfo || {
@@ -58,13 +61,17 @@ export async function installE2EMocks(
     features: { direct_nostr_http_auth: true, ...discoveryInfo.features }
   };
   await exposeE2ESigner(page);
+  await exposeTestSigner(page);
+  const statusServicePubkey = effectiveSystemInfo.nostr?.service_pubkey || E2E_SERVICE_PUBKEY;
+  await page.addInitScript(`window.__BAHIA_E2E_MAKE_INTENT_STATUS = (intent, options) =>
+    (${buildDaemonIntentStatus.toString()})(intent, { servicePubkey: ${JSON.stringify(statusServicePubkey)}, ...options });`);
   // Producer-shaped cp-state/audit builders for in-page harnesses
   // (window.__bahiaE2EFixtures, cp-state-fixtures.js).
   await page.addInitScript(cpStateFixtureBrowserScript());
   await page.route('**/api/v1/orgs', (route) => route.fulfill({
     json: { data: [{ id: 'org-e2e', name: 'E2E organization', role: backendRole }] }
   }));
-  await page.addInitScript(({ authenticated, extension, nip44, pubkey, backendRole, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations, defaultServicePubkey }) => {
+  await page.addInitScript(({ authenticated, extension, nip44, realNip44, pubkey, backendRole, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations, defaultServicePubkey }) => {
     const existingSseEvents = localStorage.getItem('__bahia_e2e_sse_events');
     if (!existingSseEvents || (Array.isArray(sseEvents) && sseEvents.length > 0)) {
       localStorage.setItem('__bahia_e2e_sse_events', JSON.stringify(sseEvents || []));
@@ -126,20 +133,6 @@ export async function installE2EMocks(
     window.__BAHIA_E2E_SIGNED_INTENTS = [];
     window.__BAHIA_E2E_INTENT_WRAPS = [];
     window.__BAHIA_E2E_INTENT_STATUS_EVENTS = [];
-    // All harnesses derive the same scoped daemon status shape from a signed intent.
-    window.__BAHIA_E2E_MAKE_INTENT_STATUS = (intent, { status = 'accepted', reason = '', id,
-      created_at = Math.max(Math.floor(Date.now() / 1000), intent.created_at || 0) } = {}) => {
-      const tag = name => intent.tags?.find(item => item[0] === name)?.[1] || '';
-      const coordinate = tag('d');
-      const intentId = tag('intent_id');
-      return { id: id || `intent-status-${intent.id || intentId}`, kind: 30315, pubkey: servicePubkey,
-        created_at,
-        tags: [['d', `intent-status:${intent.pubkey}:${coordinate}`], ['domain', 'intent'],
-          ['status', status], ['t', 'intent-status'], ['p', intent.pubkey], ['intent_id', intentId],
-          ...(reason ? [['reason', reason]] : [])],
-        content: JSON.stringify({ status, intent_id: intentId, coordinate, reason }) };
-    };
-
     if (authenticated) {
       localStorage.removeItem('bahia_token');
       localStorage.setItem('bahia_auth_session', JSON.stringify({
@@ -155,12 +148,12 @@ export async function installE2EMocks(
     }
 
     if (extension) {
-      const encodeMockCiphertext = (plaintext) => `mock-nip44:${btoa(unescape(encodeURIComponent(plaintext)))}`;
-      const decodeMockCiphertext = (ciphertext) => decodeURIComponent(escape(atob(String(ciphertext).replace(/^mock-nip44:/, ''))));
+      const encodeMockCiphertext = plaintext => `mock-nip44:${btoa(unescape(encodeURIComponent(plaintext)))}`;
+      const decodeMockCiphertext = ciphertext => decodeURIComponent(escape(atob(String(ciphertext).replace(/^mock-nip44:/, ''))));
       window.nostr = {
         getPublicKey: async () => pubkey,
         signEvent: async (event) => {
-          const signed = await window.__bahiaE2ESignMockEvent({ ...event, pubkey }, pubkey);
+          const signed = await window.__bahiaE2ESignEvent(event, pubkey);
           if (signed.kind === 30900 && signed.tags?.some(tag => tag[0] === 't' && tag[1] === 'bahia-intent')) {
             window.__BAHIA_E2E_SIGNED_INTENTS.push(signed);
           }
@@ -170,8 +163,10 @@ export async function installE2EMocks(
           'wss://relay.example.com': { read: true, write: true }
         }),
         ...(nip44 ? { nip44: {
-          encrypt: async (_recipient, plaintext) => encodeMockCiphertext(plaintext),
-          decrypt: async (_sender, ciphertext) => decodeMockCiphertext(ciphertext)
+          encrypt: async (recipient, plaintext) => realNip44
+            ? window.__bahiaE2EEncryptNip44(pubkey, recipient, plaintext) : encodeMockCiphertext(plaintext),
+          decrypt: async (sender, ciphertext) => String(ciphertext).startsWith('mock-nip44:')
+            ? decodeMockCiphertext(ciphertext) : window.__bahiaE2EDecryptNip44(pubkey, sender, ciphertext)
         } } : {})
       };
     } else {
@@ -586,19 +581,29 @@ export async function installE2EMocks(
           this.subscriptions.delete(message[1]);
         } else if (Array.isArray(message) && message[0] === 'EVENT') {
           const event = message[1];
-          persistMockNostrEvent(event);
-          const signedIntent = event?.kind === 1059 ? window.__BAHIA_E2E_SIGNED_INTENTS.shift() : null;
-          if (signedIntent) processMockIntent(signedIntent, event);
-          const encryptedResult = signedIntent ? null : handleEncryptedServiceSecretRequest(event)
-            || handleEncryptedSBOMRequest(event)
-            || handleQueuedContextVMRequest(event);
-          if (encryptedResult) {
-            persistMockNostrEvent(encryptedResult);
-            setTimeout(() => this.emitEvent(encryptedResult), 0);
-          }
-          setTimeout(() => {
+          void (async () => {
+            const validOuter = await window.__bahiaE2EVerifyEvent(event);
+            const validInner = event?.kind !== 1059 || await window.__bahiaE2EVerifyGiftWrap(event, servicePubkey);
+            if (!validOuter || !validInner) {
+              this.emitMessage(JSON.stringify(['OK', event?.id, false, 'invalid: signature']));
+              return;
+            }
+            persistMockNostrEvent(event);
+            const signedIntent = event?.kind === 1059 ? window.__BAHIA_E2E_SIGNED_INTENTS.shift() : null;
+            if (signedIntent && !await window.__bahiaE2EVerifyEvent(signedIntent)) {
+              this.emitMessage(JSON.stringify(['OK', event?.id, false, 'invalid: inner signature']));
+              return;
+            }
+            if (signedIntent) processMockIntent(signedIntent, event);
+            const encryptedResult = signedIntent ? null : handleEncryptedServiceSecretRequest(event)
+              || handleEncryptedSBOMRequest(event)
+              || handleQueuedContextVMRequest(event);
+            if (encryptedResult) {
+              persistMockNostrEvent(encryptedResult);
+              setTimeout(() => this.emitEvent(encryptedResult), 0);
+            }
             this.emitMessage(JSON.stringify(['OK', event?.id, true, '']));
-          }, 0);
+          })();
         }
       }
 
@@ -691,6 +696,7 @@ export async function installE2EMocks(
     authenticated,
     extension,
     nip44,
+    realNip44,
     pubkey: TEST_PUBKEY,
     backendRole,
     sseEvents,

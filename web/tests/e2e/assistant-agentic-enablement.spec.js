@@ -131,7 +131,6 @@ async function installAssistantAgenticHarness(page, { discovery = systemInfo } =
           ...tags
         ],
         content: JSON.stringify(content),
-        sig: '0'.repeat(128)
       };
     }
 
@@ -233,7 +232,6 @@ async function installAssistantAgenticHarness(page, { discovery = systemInfo } =
         created_at: Math.floor(Date.now() / 1000),
         tags: [['e', requestEvent.id], ['p', operatorPubkey], ['encrypted', 'contextvm-jsonrpc-v1'], ['method', envelope.method || '']],
         content: encodeResponse(requestEvent, envelope, result),
-        sig: '0'.repeat(128)
       });
     }
 

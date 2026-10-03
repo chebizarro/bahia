@@ -51,7 +51,6 @@ const contextVMRelaySet = {
   created_at: 1,
   tags: [['d', 'bahia-contextvm-v1'], ['relay', ENCRYPTED_RELAY]],
   content: '',
-  sig: '0'.repeat(128)
 };
 
 test.describe('Mixed public plus encrypted browser session transport', () => {

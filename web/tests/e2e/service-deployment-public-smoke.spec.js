@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { verifyEvent } from 'nostr-tools';
 import { installE2EMocks } from './helpers.js';
 import { TEST_ORG_ID, createPublicState, createPublicSystemInfo, installPublicServiceDeploymentHarness, reachDesiredStateReview } from './harnesses/service-deployment-public.js';
 
@@ -24,9 +25,22 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
     await page.locator('#service-org-id').fill(TEST_ORG_ID);
     await page.locator('#service-name').fill('created-service');
     await page.locator('#artifact-repo-path').fill('ghcr.io/example/created-service');
+    await page.evaluate(() => {
+      window.__bahiaCreatePublished = new Promise(resolve => {
+        const onRequest = ({ detail }) => {
+          if (detail?.tags?.some(tag => tag[0] === 'domain' && tag[1] === 'service') &&
+            detail?.tags?.some(tag => tag[0] === 'op' && tag[1] === 'create')) {
+            window.removeEventListener('__bahia_e2e_public_request', onRequest);
+            resolve(detail);
+          }
+        };
+        window.addEventListener('__bahia_e2e_public_request', onRequest);
+      });
+    });
     await page.getByRole('dialog', { name: 'Create Service' }).getByRole('button', { name: 'Create' }).click();
 
     await expect(page.getByRole('dialog', { name: 'Create Service' })).not.toBeVisible();
+    expect(verifyEvent(await page.evaluate(() => window.__bahiaCreatePublished))).toBe(true);
     await expect(page.getByRole('cell', { name: 'created-service', exact: true })).toBeVisible();
     await expect(page.getByText('2 services')).toBeVisible();
 
