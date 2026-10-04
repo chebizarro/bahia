@@ -1,16 +1,10 @@
 <script>
-  import api from '$lib/api/client.js';
+  import { boot, onStoreRefresh } from '$lib/nostr/boot.js';
+  import { routeCanaryRows, routeCanaryEvents } from '$lib/stores/operational-views.js';
   import {
-    routeCanaryKey,
-    classificationLabel,
-    classificationClass,
-    transitionLabel,
-    transitionClass,
-    buildRouteCanarySummary,
-    formatRouteTimestamp,
-    instanceStatusLabel,
-    instanceStatusClass,
-    isNotFoundError
+    routeCanaryKey, classificationLabel, classificationClass, transitionLabel,
+    transitionClass, buildRouteCanarySummary, formatRouteTimestamp,
+    instanceStatusLabel, instanceStatusClass
   } from '$lib/route-canaries.js';
 
   let rows = $state([]);
@@ -37,52 +31,36 @@
     });
   });
 
-  $effect(() => { void loadRows(); });
+  $effect(() => {
+    const stop = onStoreRefresh(refreshRows);
+    void loadRows();
+    return stop;
+  });
+
+  function refreshRows() {
+    rows = routeCanaryRows();
+    if (selected) {
+      selected = rows.find((row) => routeCanaryKey(row) === routeCanaryKey(selected)) || null;
+      if (selected) selectRoute(selected);
+      else { detail = null; events = []; }
+    }
+  }
 
   async function loadRows() {
     loading = true;
     error = '';
-    unavailable = false;
-    try {
-      rows = await api.listRouteCanaries();
-      if (selected) {
-        selected = rows.find((row) => routeCanaryKey(row) === routeCanaryKey(selected)) || null;
-      }
-    } catch (err) {
-      rows = [];
-      if (isNotFoundError(err)) {
-        // Tier-2 gated: the route canary endpoints are not registered at all
-        // when the feature is disabled, so treat that as "nothing to show"
-        // rather than an error wall.
-        unavailable = true;
-      } else {
-        error = err?.message || 'Failed to load route canary state';
-      }
-    } finally {
-      loading = false;
-    }
+    try { await boot(); refreshRows(); }
+    catch (err) { error = err?.message || 'Failed to load route canary state'; }
+    finally { loading = false; }
   }
 
-  async function selectRoute(row) {
+  function selectRoute(row) {
     selected = row;
-    detail = null;
-    events = [];
     detailLoading = true;
     detailError = '';
-    const key = routeCanaryKey(row);
-    try {
-      const [nextDetail, nextEvents] = await Promise.all([
-        api.getRouteCanary(row.service_id, row.environment_id, row.hostname, row.deployment_unit_id),
-        api.listRouteCanaryEvents(row.service_id, row.environment_id, row.hostname, undefined, row.deployment_unit_id)
-      ]);
-      if (!selected || routeCanaryKey(selected) !== key) return;
-      detail = nextDetail;
-      events = nextEvents;
-    } catch (err) {
-      if (selected && routeCanaryKey(selected) === key) detailError = err?.message || 'Failed to load route canary detail';
-    } finally {
-      if (selected && routeCanaryKey(selected) === key) detailLoading = false;
-    }
+    detail = row;
+    events = routeCanaryEvents(row);
+    detailLoading = false;
   }
 </script>
 

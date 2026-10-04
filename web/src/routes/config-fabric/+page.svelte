@@ -5,7 +5,8 @@
   import ConfigFabricDriftTable from '$lib/config-fabric/ConfigFabricDriftTable.svelte';
   import ConfigPublishForm from '$lib/config-fabric/ConfigPublishForm.svelte';
   import { initialConfigPublishForm } from '$lib/config-fabric/model.js';
-  import api from '$lib/api/client.js';
+  import { boot, onStoreRefresh } from '$lib/nostr/boot.js';
+  import { configFabricDrift } from '$lib/config-fabric/store.js';
   import { ConfiguredIcon, WarningIcon } from '$lib/icons/domain-icons.js';
 
   let rows = $state([]);
@@ -17,14 +18,17 @@
   let driftCount = $derived(rows.filter((row) => row.drift && !row.withdrawn).length);
 
   $effect(() => {
+    const stop = onStoreRefresh(() => { rows = configFabricDrift(); });
     void loadDrift();
+    return stop;
   });
 
   async function loadDrift() {
     loading = true;
     error = '';
     try {
-      rows = await api.listConfigFabricDrift();
+      await boot();
+      rows = configFabricDrift();
     } catch (err) {
       error = err?.message || 'Failed to load Config Fabric drift';
     } finally {

@@ -189,13 +189,15 @@ func TestGateRecoveryClearsSupervisorOutageInNostrProjection(t *testing.T) {
 	require.Contains(t, body, `bahia_fleet_health_nostr_entities{domain="route",status="unhealthy"} 0`)
 	require.Contains(t, body, `bahia_fleet_health_nostr_entities{domain="route",status="healthy"} 1`)
 
-	// 3. Later sweeps see a closed route_ok and report no transition; the
-	// projection is already correct, so nothing further is published.
+	// 3. Later sweeps refresh current state without inventing a transition
+	// history fact. The fresh observation keeps staleness visible in the UI.
 	supervisor.now = fixedClock(t0.Add(2 * time.Minute))
 	published := len(h.bus.published)
 	supervisor.EvaluateOnce(ctx)
-	require.Len(t, h.bus.published, published, "a steady healthy route announces nothing")
-	require.Empty(t, h.observe())
+	require.Len(t, h.bus.published, published+1)
+	require.Equal(t, events.EventRouteCanaryObserved, h.bus.published[published].Type)
+	observation := h.observe()
+	require.Len(t, observation, 2, "30315 and 30900 state refresh; no audit fact")
 	require.Contains(t, h.metrics(), `bahia_fleet_health_nostr_entities{domain="route",status="healthy"} 1`)
 }
 
@@ -237,13 +239,15 @@ func TestGateOpenedOutageIsPublishedProjectedAndRolledBack(t *testing.T) {
 	}
 	require.Contains(t, h.metrics(), `bahia_fleet_health_nostr_entities{domain="route",status="unhealthy"} 1`)
 
-	// The supervisor then sees the same failure on an already-open outage and
-	// reports no transition; the projection must already show the outage.
+	// The supervisor sees the same failure on an already-open outage. It
+	// refreshes current state but does not emit a transition history fact.
 	supervisor := newTestSupervisor(t, prober, repo, health, h.bus)
 	supervisor.now = fixedClock(t0.Add(time.Minute))
 	published := len(h.bus.published)
 	supervisor.EvaluateOnce(ctx)
-	require.Len(t, h.bus.published, published)
+	require.Len(t, h.bus.published, published+1)
+	require.Equal(t, events.EventRouteCanaryObserved, h.bus.published[published].Type)
+	require.Len(t, h.observe(), 2)
 	require.Contains(t, h.metrics(), `bahia_fleet_health_nostr_entities{domain="route",status="unhealthy"} 1`)
 }
 

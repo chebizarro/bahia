@@ -243,6 +243,12 @@ var publicCPStateTopics = map[string]bool{
 	kinds.CPStateTopicArtifactSignature: true,
 	kinds.CPStateTopicArtifactSBOM:      true,
 	kinds.CPStateTopicSBOMPackage:       true,
+	// Runtime observables are sanitized before publication.
+	kinds.CPStateTopicManagedInstanceHealth: true,
+	kinds.CPStateTopicRouteCanary:           true,
+	// Blossom records are OCK ciphertext; relay-level auth is redundant.
+	kinds.CPStateTopicBlossomAdmin: true,
+	kinds.CPStateTopicBlossomBlob:  true,
 
 	// Protected topics (NOT in this map):
 	//   security-findings, security-audit — detailed vulnerability data

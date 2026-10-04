@@ -89,6 +89,11 @@ const (
 	CPStateFamilySecurityFinding       CPStateFamily = SecurityFindingRecord
 	CPStateFamilySecuritySchedule      CPStateFamily = SecurityScheduleRecord
 	CPStateFamilySecurityFindingDetail CPStateFamily = SecurityFindingDetailRecord
+	CPStateFamilyManagedInstanceHealth CPStateFamily = ManagedInstanceHealthRecord
+	CPStateFamilyRouteCanary           CPStateFamily = RouteCanaryRecord
+	CPStateFamilySoulRuntimePolicy     CPStateFamily = SoulRuntimePolicyRecord
+	CPStateFamilyBlossomAdmin          CPStateFamily = BlossomAdminRecord
+	CPStateFamilyBlossomBlob           CPStateFamily = BlossomBlobRecord
 )
 
 // FleetOCKScope is the well-known orgID value used for fleet-wide

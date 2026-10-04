@@ -360,3 +360,22 @@ func TestRouteCanaryOutageIsCountedByFleetHealthGauge(t *testing.T) {
 	require.Contains(t, body, `bahia_fleet_health_nostr_entities{domain="route",status="unhealthy"} 0`)
 	require.Contains(t, body, `bahia_fleet_health_nostr_entities{domain="route",status="healthy"} 1`)
 }
+
+func TestRouteCanaryProjectorPublishesObservationStateWithoutHistoryFact(t *testing.T) {
+	bus := &syncRouteBus{}
+	rec := &routeProjectorRecorder{}
+	_, err := NewRouteCanaryProjector(bus, rec, zap.NewNop())
+	require.NoError(t, err)
+	now := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
+	payload := routeProjectorPayload(domain.RouteCanaryTransitionNone, false, domain.RouteCanaryClassificationRouteOK, 0, domain.InstanceHealthStatusHealthy, now)
+	require.NoError(t, bus.deliver(context.Background(), events.Event{Type: events.EventRouteCanaryObserved, Data: payload}))
+	require.Len(t, rec.events, 2)
+	require.Equal(t, gonostr.Kind(kinds.NIP38Status), rec.events[0].Kind)
+	require.Equal(t, gonostr.Kind(kinds.CASControlState), rec.events[1].Kind)
+	var content routeCanaryProjection
+	require.NoError(t, json.Unmarshal([]byte(rec.events[1].Content), &content))
+	require.Equal(t, payload.State.Hostname, content.RouteCanary.Hostname)
+	require.Equal(t, domain.InstanceHealthStatusHealthy, content.ObservedInstanceStatus)
+	require.NoError(t, bus.deliver(context.Background(), events.Event{Type: events.EventRouteCanaryObserved, Data: payload}))
+	require.Len(t, rec.events, 2)
+}

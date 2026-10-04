@@ -3,7 +3,7 @@
   import Select from '$lib/components/Select.svelte';
   import Textarea from '$lib/components/Textarea.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
-  import api from '$lib/api/client.js';
+  import { authorizedWrite } from '$lib/api/write.js';
   import {
     CONFIG_ACL_LIST,
     CONFIG_POLICY,
@@ -58,7 +58,7 @@
 
     submitting = true;
     try {
-      receipt = await api.publishConfigFabricEvent(validation.payload);
+      receipt = await authorizedWrite('/config-fabric/events', 'POST', validation.payload);
       await onPublished(receipt);
     } catch (err) {
       error = err?.message || 'Failed to publish config';

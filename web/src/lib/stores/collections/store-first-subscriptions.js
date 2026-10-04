@@ -7,6 +7,8 @@ import {
   BACKUP_RUN_ATTESTATION,
   BACKUP_VERIFICATION_ATTESTATION,
   CAS_CONTROL_STATE,
+  CONFIG_ACL_LIST,
+  CONFIG_POLICY,
   CP_AUDIT_TOPIC,
   CP_STATE_TOPICS,
   SBOM_AVAILABILITY_LIST,
@@ -46,6 +48,8 @@ const STATE_TOPICS = Object.freeze([
   CP_STATE_TOPICS.SECURITY_FINDING,
   CP_STATE_TOPICS.SECURITY_SCHEDULE,
   CP_STATE_TOPICS.SECURITY_FINDING_DETAIL,
+  CP_STATE_TOPICS.BLOSSOM_ADMIN,
+  CP_STATE_TOPICS.BLOSSOM_BLOB,
   CP_STATE_TOPICS.SECRET_REGISTRY,
   ORG_TOPIC,
   ORG_MEMBER_TOPIC,
@@ -67,7 +71,13 @@ export function initStoreFirstSubscriptions(handlers = {}) {
     relays,
     filters: [
       { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': STATE_TOPICS, limit: 1000 },
-      { kinds: BAHIA_AUDIT_KINDS, authors: [servicePubkey], '#t': [CP_AUDIT_TOPIC], since: recent, limit: 100 },
+      { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': [
+        CP_STATE_TOPICS.MANAGED_INSTANCE_HEALTH, CP_STATE_TOPICS.ROUTE_CANARY,
+        CP_STATE_TOPICS.SOUL_RUNTIME_POLICY
+      ], limit: 500 },
+      { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': ['config-status'], limit: 500 },
+      { kinds: [CONFIG_ACL_LIST, CONFIG_POLICY], '#t': ['config-fabric'], limit: 500 },
+      { kinds: BAHIA_AUDIT_KINDS, authors: [servicePubkey], '#t': [CP_AUDIT_TOPIC, CP_STATE_TOPICS.MANAGED_INSTANCE_HEALTH, CP_STATE_TOPICS.ROUTE_CANARY], since: recent, limit: 500 },
       { kinds: BAHIA_STATUS_KINDS, authors: [servicePubkey], since: recent, limit: 100 },
       { kinds: [SBOM_REFERENCE], authors: [servicePubkey], '#t': [SBOM_REFERENCE_TOPIC], limit: 200 },
       { kinds: [SBOM_AVAILABILITY_LIST], authors: [servicePubkey], '#t': [SBOM_AVAILABILITY_TOPIC], limit: 200 },

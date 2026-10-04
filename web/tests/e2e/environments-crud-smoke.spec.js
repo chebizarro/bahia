@@ -168,7 +168,13 @@ test.describe('Environments CRUD Smoke Test', () => {
     const dialog = page.getByRole('dialog', { name: 'Create Environment' });
     await expect(dialog).toBeVisible();
 
-    await page.getByLabel('Organization *').fill(ORG_ID);
+    const organization = page.getByLabel('Organization *');
+    if (await organization.evaluate((element) => element.tagName === 'SELECT')) {
+      await organization.selectOption(ORG_ID);
+    } else {
+      await organization.fill(ORG_ID);
+    }
+    await expect(organization).toHaveValue(ORG_ID);
     await page.getByLabel('Name *').fill('development');
     await page.getByLabel('Loom Worker Selector').fill('role=dev');
     await page.getByLabel('Runtime Config (JSON)').fill('{"cpu_limit":"1","memory_limit":"1Gi"}');
@@ -213,7 +219,13 @@ test.describe('Environments CRUD Smoke Test', () => {
     await page.getByRole('button', { name: 'Create Environment' }).first().click();
     const dialog = page.getByRole('dialog', { name: 'Create Environment' });
 
-    await page.getByLabel('Organization *').fill(ORG_ID);
+    const organization = page.getByLabel('Organization *');
+    if (await organization.evaluate((element) => element.tagName === 'SELECT')) {
+      await organization.selectOption(ORG_ID);
+    } else {
+      await organization.fill(ORG_ID);
+    }
+    await expect(organization).toHaveValue(ORG_ID);
     await page.getByLabel('Name *').fill('max-production');
     await page.getByLabel('Create an explicit Bahia-managed Compose deployment unit').check();
     await page.getByLabel('Unit key *').fill('max');

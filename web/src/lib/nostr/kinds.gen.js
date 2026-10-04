@@ -224,6 +224,11 @@ export const ARTIFACT_SIGNATURE_REGISTRY = 32016;
 export const ARTIFACT_SBOM_REGISTRY = 32017;
 export const SBOM_PACKAGE_REGISTRY = 32018;
 export const RUNTIME_OBSERVATION_STATE = 32019;
+export const MANAGED_INSTANCE_HEALTH_RECORD = 32040;
+export const ROUTE_CANARY_RECORD = 32041;
+export const SOUL_RUNTIME_POLICY_RECORD = 32042;
+export const BLOSSOM_ADMIN_RECORD = 32043;
+export const BLOSSOM_BLOB_RECORD = 32044;
 export const LEGACY_WORKER_STATE = 31974;
 export const LEGACY_WORKER_ASSIGNMENT_STATE = 31991;
 export const LEGACY_WORKER_DRAIN_STATUS = 31992;
@@ -343,6 +348,11 @@ export const BAHIA_STATE_SCHEMAS = Object.freeze({
   ARTIFACT_SBOM_REGISTRY: 'bahia.registry.artifact-sbom.v1',
   SBOM_PACKAGE_REGISTRY: 'bahia.registry.sbom-package.v1',
   RUNTIME_OBSERVATION_STATE: 'bahia.state.runtime-observation.v1',
+  MANAGED_INSTANCE_HEALTH_RECORD: 'bahia.state.managed-instance-health.v1',
+  ROUTE_CANARY_RECORD: 'bahia.state.route-canary.v1',
+  SOUL_RUNTIME_POLICY_RECORD: 'bahia.state.soul-factory-runtime-policy.v1',
+  BLOSSOM_ADMIN_RECORD: 'bahia.state.blossom-admin.v1',
+  BLOSSOM_BLOB_RECORD: 'bahia.state.blossom-blob.v1',
   WORKER_STATE: 'bahia.state.worker.v1',
   WORKER_ASSIGNMENT_STATE: 'bahia.state.worker-assignment.v1',
   WORKER_DRAIN_STATUS: 'bahia.state.worker-drain.v1',
@@ -486,6 +496,11 @@ export const CP_STATE_TOPICS = Object.freeze({
   ARTIFACT_SBOM: 'artifact-sbom',
   SBOM_PACKAGE: 'artifact-sbom-package',
   RUNTIME_OBSERVATION: 'runtime-observation',
+  MANAGED_INSTANCE_HEALTH: 'runtime-instance-health',
+  ROUTE_CANARY: 'route-canary',
+  SOUL_RUNTIME_POLICY: 'soul-factory-runtime-policy',
+  BLOSSOM_ADMIN: 'blossom-admin',
+  BLOSSOM_BLOB: 'blossom-blob',
 });
 
 // Family schema -> t topic for the cp-state families the web routes. The
@@ -532,6 +547,11 @@ export const CP_STATE_TOPIC_BY_SCHEMA = Object.freeze({
   [BAHIA_STATE_SCHEMAS.ARTIFACT_SBOM_REGISTRY]: CP_STATE_TOPICS.ARTIFACT_SBOM,
   [BAHIA_STATE_SCHEMAS.SBOM_PACKAGE_REGISTRY]: CP_STATE_TOPICS.SBOM_PACKAGE,
   [BAHIA_STATE_SCHEMAS.RUNTIME_OBSERVATION_STATE]: CP_STATE_TOPICS.RUNTIME_OBSERVATION,
+  [BAHIA_STATE_SCHEMAS.MANAGED_INSTANCE_HEALTH_RECORD]: CP_STATE_TOPICS.MANAGED_INSTANCE_HEALTH,
+  [BAHIA_STATE_SCHEMAS.ROUTE_CANARY_RECORD]: CP_STATE_TOPICS.ROUTE_CANARY,
+  [BAHIA_STATE_SCHEMAS.SOUL_RUNTIME_POLICY_RECORD]: CP_STATE_TOPICS.SOUL_RUNTIME_POLICY,
+  [BAHIA_STATE_SCHEMAS.BLOSSOM_ADMIN_RECORD]: CP_STATE_TOPICS.BLOSSOM_ADMIN,
+  [BAHIA_STATE_SCHEMAS.BLOSSOM_BLOB_RECORD]: CP_STATE_TOPICS.BLOSSOM_BLOB,
   [BAHIA_STATE_SCHEMAS.WORKER_STATE]: 'worker-state',
   [BAHIA_STATE_SCHEMAS.WORKER_ASSIGNMENT_STATE]: 'worker-assignment',
   [BAHIA_STATE_SCHEMAS.WORKER_DRAIN_STATUS]: 'worker-drain',

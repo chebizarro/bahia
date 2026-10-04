@@ -14,8 +14,8 @@ import {
   SOUL_RUNTIME_METHODS
 } from '$lib/nostr/client.js';
 import { authState, login, signWithAuth } from '$lib/stores/auth.js';
-import { ensureRelayConnection } from '$lib/nostr/boot.js';
-import api from '$lib/api/client.js';
+import { ensureRelayConnection, boot, onStoreRefresh } from '$lib/nostr/boot.js';
+import { soulRuntimePolicy } from '$lib/stores/operational-views.js';
 import { createReadModelMetadataTracker } from '$lib/nostr/read-model-metadata.js';
 
 /** @typedef {import('$lib/types/customization').SoulAvatarSpec} SoulAvatarSpec */
@@ -42,11 +42,11 @@ export const drafts = $state([]);
 export const runtimeCapabilities = $state([]);
 
 // Server policy: administratively enabled SoulFactory agent runtimes reported
-// by the Bahia API (non-secret). Empty means unknown (older server or
+// by the signed Bahia runtime-policy state (non-secret). Empty means unknown (older server or
 // SoulFactory disabled), in which case discovery falls back to capability-only.
 export const serverAgentRuntimes = $state([]);
 
-// serverPolicyKnown becomes true only after a successful policy fetch. Unknown
+// serverPolicyKnown becomes true only after a verified policy event is available. Unknown
 // policy must fail closed: never present a target the server has not enabled.
 export const serverPolicy = $state({ known: false });
 
@@ -214,15 +214,18 @@ function serverPolicyAllows(runtime) {
   return serverPolicy.known && serverAgentRuntimes.includes(runtime);
 }
 
-// Fetches the administratively enabled agent runtime list from the Bahia API.
-// On failure the policy stays unknown and target discovery fails closed rather
-// than exposing runtimes the server has not enabled.
+// Relay-canonical runtime policy is operator-only. Unknown fails closed.
+let stopPolicyRefresh = null;
+function applyServerAgentRuntimes() {
+  const runtimes = soulRuntimePolicy();
+  replaceStateArray(serverAgentRuntimes, runtimes || []);
+  serverPolicy.known = Array.isArray(runtimes);
+}
 export async function refreshServerAgentRuntimes() {
-  if (!api) return;
   try {
-    const data = await api.fetch('/soulfactory/runtimes');
-    replaceStateArray(serverAgentRuntimes, Array.isArray(data?.agent_runtimes) ? data.agent_runtimes : []);
-    serverPolicy.known = true;
+    await boot();
+    applyServerAgentRuntimes();
+    if (!stopPolicyRefresh) stopPolicyRefresh = onStoreRefresh(applyServerAgentRuntimes);
   } catch {
     serverPolicy.known = false;
   }
@@ -560,6 +563,8 @@ export async function subscribeToSoulFactoryUpdates(options = null) {
 }
 
 export function unsubscribeFromSoulUpdates() {
+  stopPolicyRefresh?.();
+  stopPolicyRefresh = null;
   if (soulFactorySubscription) {
     soulFactorySubscription();
     soulFactorySubscription = null;

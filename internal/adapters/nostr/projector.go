@@ -503,11 +503,16 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindSecurityScheduleRecord:      {"security", "schedule", kinds.CPStateTopicSecuritySchedule},
 	KindSecurityFindingDetailRecord: {"security", "finding-detail", kinds.CPStateTopicSecurityFindingDetail},
 	// F74a: independent coordinates for release, signature, SBOM and runtime state.
-	KindLLMReleaseRegistry:        {"llm", "release", kinds.CPStateTopicLLMRelease},
-	KindArtifactSignatureRegistry: {"artifact", "signature", kinds.CPStateTopicArtifactSignature},
-	KindArtifactSBOMRegistry:      {"artifact", "sbom", kinds.CPStateTopicArtifactSBOM},
-	KindSBOMPackageRegistry:       {"artifact", "sbom-package", kinds.CPStateTopicSBOMPackage},
-	KindRuntimeObservationState:   {"runtime", "observation", kinds.CPStateTopicRuntimeObservation},
+	KindLLMReleaseRegistry:            {"llm", "release", kinds.CPStateTopicLLMRelease},
+	KindArtifactSignatureRegistry:     {"artifact", "signature", kinds.CPStateTopicArtifactSignature},
+	KindArtifactSBOMRegistry:          {"artifact", "sbom", kinds.CPStateTopicArtifactSBOM},
+	KindSBOMPackageRegistry:           {"artifact", "sbom-package", kinds.CPStateTopicSBOMPackage},
+	KindRuntimeObservationState:       {"runtime", "observation", kinds.CPStateTopicRuntimeObservation},
+	kinds.ManagedInstanceHealthRecord: {"runtime", "instance-health", kinds.CPStateTopicManagedInstanceHealth},
+	kinds.RouteCanaryRecord:           {"route", "canary", kinds.CPStateTopicRouteCanary},
+	kinds.SoulRuntimePolicyRecord:     {"soul-factory", "runtime-policy", kinds.CPStateTopicSoulRuntimePolicy},
+	kinds.BlossomAdminRecord:          {"blossom", "admin", kinds.CPStateTopicBlossomAdmin},
+	kinds.BlossomBlobRecord:           {"blossom", "blob", kinds.CPStateTopicBlossomBlob},
 }
 
 // CPStateDomains returns all unique cp-state domain names from the

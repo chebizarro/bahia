@@ -740,6 +740,7 @@ func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigPro
 		Tags: nostr.Tags{
 			{"d", "config-status:" + projection.ServiceID + ":" + projection.PolicyName + ":" + projection.Scope},
 			{"domain", "config-status"},
+			{"t", "config-status"},
 			{"schema", configStatusSchema},
 			{"status", status},
 			{"service", projection.ServiceID},

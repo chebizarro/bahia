@@ -315,6 +315,11 @@ var constantJustifications = map[string]KindJustification{
 	"SecurityFindingRecord":          omitted("SecurityFindingRecord", kinds.SecurityFindingRecord, "cp-state-family", "canonical cp-state output for individual security findings (bahia-irsry.60); OCK-encrypted 30900 records published from SecurityScanner mutation sites"),
 	"SecurityScheduleRecord":         omitted("SecurityScheduleRecord", kinds.SecurityScheduleRecord, "cp-state-family", "canonical cp-state output for security scan schedules (bahia-irsry.60); OCK-encrypted 30900 records published from PolicyService schedule derivation"),
 	"SecurityFindingDetailRecord":    omitted("SecurityFindingDetailRecord", kinds.SecurityFindingDetailRecord, "cp-state-family", "canonical cp-state output for security finding details (bahia-irsry.60); OCK-encrypted 30900 records, one per finding, with full detail text"),
+	"ManagedInstanceHealthRecord":    omitted("ManagedInstanceHealthRecord", kinds.ManagedInstanceHealthRecord, "cp-state-family", "canonical managed instance health state on 30900"),
+	"RouteCanaryRecord":              omitted("RouteCanaryRecord", kinds.RouteCanaryRecord, "cp-state-family", "canonical route canary state on 30900"),
+	"SoulRuntimePolicyRecord":        omitted("SoulRuntimePolicyRecord", kinds.SoulRuntimePolicyRecord, "cp-state-family", "canonical enabled Soul Factory runtime policy on 30900"),
+	"BlossomAdminRecord":             omitted("BlossomAdminRecord", kinds.BlossomAdminRecord, "cp-state-family", "canonical confidential Blossom server administration on 30900"),
+	"BlossomBlobRecord":              omitted("BlossomBlobRecord", kinds.BlossomBlobRecord, "cp-state-family", "canonical confidential Blossom blob metadata on 30900"),
 }
 
 func omitted(name string, kind int, category, reason string) KindJustification {

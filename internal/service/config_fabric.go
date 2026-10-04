@@ -297,6 +297,7 @@ func composeConfigEvent(request ConfigPublishRequest, createdAt time.Time) (*nos
 	}
 	tags := nostr.Tags{
 		{"d", configDTag(request.ServiceID, request.PolicyName)},
+		{"t", "config-fabric"},
 		{"service", request.ServiceID},
 		{"scope", request.Scope},
 		{"version", strconv.Itoa(request.Version)},

@@ -131,6 +131,21 @@ func TestFilterNeedsAuth(t *testing.T) {
 			needsAuth: false,
 		},
 		{
+			name:      "F75 Soul runtime policy requires member auth",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicSoulRuntimePolicy}}},
+			needsAuth: true,
+		},
+		{
+			name:      "F75 encrypted Blossom metadata is public ciphertext",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicBlossomAdmin, kinds.CPStateTopicBlossomBlob}}},
+			needsAuth: false,
+		},
+		{
+			name:      "F75 sanitized operational state is public",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicManagedInstanceHealth, kinds.CPStateTopicRouteCanary}}},
+			needsAuth: false,
+		},
+		{
 			name:      "web bootstrap topics (service, worker, backup, ml) are public",
 			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicServiceState, kinds.WorkerAssignmentTopic, kinds.CPStateTopicBackupRun, kinds.CPStateTopicMLEndpoint}}},
 			needsAuth: false,

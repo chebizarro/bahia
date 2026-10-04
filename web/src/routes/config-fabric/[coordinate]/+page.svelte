@@ -15,7 +15,9 @@
     initialConfigPublishForm,
     shortEventId
   } from '$lib/config-fabric/model.js';
-  import api from '$lib/api/client.js';
+  import { boot, onStoreRefresh } from '$lib/nostr/boot.js';
+  import { configFabricDrift } from '$lib/config-fabric/store.js';
+  import { authorizedWrite } from '$lib/api/write.js';
   import { ConfiguredIcon, RollbackIcon } from '$lib/icons/domain-icons.js';
 
   let rows = $state([]);
@@ -32,14 +34,17 @@
 
   $effect(() => {
     const coordinate = page.params.coordinate;
+    const stop = onStoreRefresh(() => { if (coordinate) void loadDetail(coordinate); });
     if (coordinate) void loadDetail(coordinate);
+    return stop;
   });
 
   async function loadDetail(coordinate = page.params.coordinate) {
     loading = true;
     error = '';
     try {
-      rows = await api.listConfigFabricDrift();
+      await boot();
+      rows = configFabricDrift();
       record = findConfigCoordinate(rows, coordinate);
       if (!record) throw new Error('Config Fabric coordinate not found');
     } catch (err) {
@@ -60,7 +65,12 @@
     rollingBack = true;
     rollbackError = '';
     try {
-      await api.rollbackConfigFabricEvent(rollbackTarget.event_id);
+      const source = rollbackTarget;
+      const version = Math.max(...record.versions.map(item => Number(item.version) || 0)) + 1;
+      const payload = { kind: source.kind, service_id: record.service_id, policy_name: record.policy_name,
+        scope: record.scope, version, schema: source.schema,
+        ...(source.kind === 30000 ? { items: source.items } : { policy: source.policy, secret_refs: source.secret_refs }) };
+      await authorizedWrite('/config-fabric/events', 'POST', payload);
       rollbackTarget = null;
       await loadDetail();
     } catch (err) {
@@ -130,6 +140,7 @@
 
     <section class="panel">
       <h2>Versions</h2>
+      <p class="muted">Showing versions retained by the relay; older replaceable events may be unavailable after a cold start.</p>
       <div class="table-container">
         <table aria-label="Config Fabric versions">
           <thead><tr><th>Version</th><th>Event</th><th>Kind</th><th>Created</th><th>Status</th><th>Action</th></tr></thead>
@@ -169,6 +180,7 @@
 
     <section class="panel">
       <h2>Status and audit history</h2>
+      <p class="muted">This is the retained relay history, not a complete status archive.</p>
       {#if (record.status_history || []).length === 0}
         <p class="muted">No accepted, applied, rejected, or withdrawn status events have been received.</p>
       {:else}

@@ -497,3 +497,12 @@ const (
 	SBOMPackageRegistry       = 32018
 	RuntimeObservationState   = 32019
 )
+
+// F75 read-model family discriminators. All publish on wire kind 30900.
+const (
+	ManagedInstanceHealthRecord = 32040
+	RouteCanaryRecord           = 32041
+	SoulRuntimePolicyRecord     = 32042
+	BlossomAdminRecord          = 32043
+	BlossomBlobRecord           = 32044
+)
