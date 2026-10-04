@@ -98,6 +98,8 @@ Each `30078` reference contains a DSSE envelope over the exact in-toto statement
 
 The browser publishes signed kind-`30900` `sbom/generate` or `sbom/import` request intents. The content follows the [D80 fixture](../../../web/tests/fixtures/d80-intent-content.json); the signed `intent_id` is also the `idempotencyKey`. For example, generation content is:
 
+On an artifact's SBOM tab, choose an SPDX or CycloneDX JSON file to import. Files above the inline limit are uploaded to a configured Blossom server using a signer-authorized BUD-11 upload, then imported by location. The browser checks the returned URL, SHA-256, and size before publishing the signed import intent. You can also use **Import from Blossom location** with a URL ending in its 64-character SHA-256 hash; the optional SHA-256 field must match that URL. The intent uses `location: { type: "blossom", uri: "https://…/<sha256>" }` (and optional `mediaType`), not a separate hash field. The daemon verifies fetched bytes against the URL hash. Inline size follows the connected relay's NIP-11 `limitation.max_message_length` when advertised, with the existing 360 KiB ceiling as fallback.
+
 ```json
 {
   "intent_id": "<intent-uuid>",

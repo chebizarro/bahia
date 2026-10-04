@@ -17,6 +17,8 @@
 import { browser } from '$app/environment';
 import { createBahiaEventStore } from './store.js';
 import { createBahiaPool } from './pool-welshman.js';
+import { toWebSocketUrl } from './pool-utils.js';
+import { relayLimits } from './relay-nip11.js';
 import { getBootstrapSeed } from '../stores/discovery.svelte.js';
 
 // ---------------------------------------------------------------------------
@@ -34,6 +36,8 @@ let _servicePubkey = '';
 
 /** Relay URLs from the deploy seed. */
 let _relayUrls = /** @type {string[]} */ ([]);
+
+let _relayLimitsPrefetched = false;
 
 // ---------------------------------------------------------------------------
 // Animation-frame batched collection refresh (§7 step 7)
@@ -98,6 +102,15 @@ export function getPool() { return _pool; }
 
 export function getServicePubkey() { return _servicePubkey; }
 export function getRelayUrls() { return [..._relayUrls]; }
+
+/** Start the one-shot NIP-11 lookup after an authenticated session is available. */
+export function prefetchRelayLimits() {
+  if (!_pool || _relayLimitsPrefetched) return;
+  const relays = _relayUrls.map(toWebSocketUrl).filter(Boolean);
+  if (relays.length === 0) return;
+  _relayLimitsPrefetched = true;
+  void relayLimits.resolve(relays);
+}
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -180,6 +193,7 @@ export async function shutdown() {
 
   _servicePubkey = '';
   _relayUrls = [];
+  _relayLimitsPrefetched = false;
   _bootPromise = null;
 }
 

@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { BAHIA_STATE_SCHEMAS, cpAuditFixture, cpStateFixture } from './cp-state-fixtures.js';
 import { installE2EMocks } from './helpers.js';
+import { createHash } from 'node:crypto';
 
 const SERVICE_PUBKEY = '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
 const ARTIFACT_ID = 'artifact-sbom-1';
@@ -333,6 +334,52 @@ test.describe('SBOM workflow', () => {
     await expect(page.getByText('web-import')).toBeVisible();
     await expect(page.getByText(`blossom://mock-import/${NO_SBOM_ARTIFACT_ID}.spdx.json`)).toBeVisible();
     await expect(page.getByText('bbbbbbbbbbbbbbbb...bbbbbbbb')).toBeVisible();
+  });
+
+  test('oversized SBOM uploads to Blossom with signer auth before location import', async ({ page }) => {
+    const bytes = Buffer.alloc(360 * 1024 + 1, 0x61);
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    const blossomURL = `https://blossom.example.test/${hash}`;
+    const info = { ...relaySystemInfo, blossom: { servers: ['https://blossom.example.test'] } };
+    let uploaded = false;
+    await page.route('https://blossom.example.test/upload', async route => {
+      if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'PUT', 'Access-Control-Allow-Headers': 'authorization,content-type,x-sha-256' } });
+      expect(route.request().method()).toBe('PUT');
+      expect(route.request().headers()['x-sha-256']).toBe(hash);
+      expect(route.request().postDataBuffer()).toEqual(bytes);
+      const auth = route.request().headers().authorization;
+      expect(auth).toMatch(/^Nostr /);
+      const event = JSON.parse(Buffer.from(auth.slice(6), 'base64url').toString());
+      expect(event).toMatchObject({ kind: 24242, tags: expect.arrayContaining([['t', 'upload'], ['x', hash]]) });
+      expect(event.sig).toBeTruthy();
+      uploaded = true;
+      await route.fulfill({ json: { url: blossomURL, sha256: hash, size: bytes.length }, headers: { 'Access-Control-Allow-Origin': '*' } });
+    });
+    await installE2EMocks(page, { authenticated: true, extension: true, systemInfo: info,
+      nostrEvents: [serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })] });
+    await page.goto(`/artifacts/${NO_SBOM_ARTIFACT_ID}?tab=sbom`);
+    await page.getByLabel('SBOM file').setInputFiles({ name: 'large.spdx.json', mimeType: 'application/json', buffer: bytes });
+    await page.getByRole('button', { name: 'Import SBOM', exact: true }).click();
+    await expect(page.getByText('SBOM imported successfully.')).toBeVisible();
+    expect(uploaded).toBe(true);
+    const content = await page.evaluate(() => JSON.parse(window.__BAHIA_E2E_SIGNED_INTENTS.find(event => event.tags.some(tag => tag[0] === 'domain' && tag[1] === 'sbom') && event.tags.some(tag => tag[0] === 'op' && tag[1] === 'import')).content));
+    expect(content.location).toEqual({ type: 'blossom', uri: blossomURL, mediaType: 'application/json' });
+    expect(content.payloadBase64).toBeUndefined();
+  });
+
+  test('imports a Blossom URL and matching optional SHA-256 without uploading', async ({ page }) => {
+    const hash = 'c'.repeat(64);
+    const blossomURL = `https://blossom.example.test/${hash}`;
+    await installE2EMocks(page, { authenticated: true, extension: true, systemInfo: relaySystemInfo,
+      nostrEvents: [serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })] });
+    await page.goto(`/artifacts/${NO_SBOM_ARTIFACT_ID}?tab=sbom`);
+    await page.getByLabel('Blossom URL').fill(blossomURL);
+    await page.getByLabel('SHA-256 (optional)').fill(hash);
+    await page.getByRole('button', { name: 'Import from location' }).click();
+    await expect(page.getByText('SBOM imported successfully.')).toBeVisible();
+    const content = await page.evaluate(() => JSON.parse(window.__BAHIA_E2E_SIGNED_INTENTS.find(event => event.tags.some(tag => tag[0] === 'domain' && tag[1] === 'sbom') && event.tags.some(tag => tag[0] === 'op' && tag[1] === 'import')).content));
+    expect(content.location).toEqual({ type: 'blossom', uri: blossomURL });
+    expect(content.payloadBase64).toBeUndefined();
   });
 
   test('artifact registry row opens detail page and SBOM tab exposes generation action', async ({ page }) => {

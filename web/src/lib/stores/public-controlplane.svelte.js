@@ -8,6 +8,8 @@ import { adoptionScanIntent, sbomIntent } from '$lib/nostr/final-ops-intents.js'
 import { orgRoles } from './auth-roles.svelte.js';
 import { orgsState } from './orgs.svelte.js';
 import { currentSystemInfo } from './system.svelte.js';
+import { inlineSBOMLimitBytes, relayLimits } from '$lib/nostr/relay-nip11.js';
+import { nostr } from '$lib/nostr/subscriptions.js';
 import { backupRecipes, backupRepositories, backupPolicies, backupDefinitions } from './collections/backup.svelte.js';
 import { services } from './collections/services.svelte.js';
 import { deploymentIntents, llmRoutes, llmRouteStates } from './collections/deployments.svelte.js';
@@ -258,8 +260,21 @@ function decodedBase64Length(payloadBase64) {
   return Math.floor((normalized.length * 3) / 4) - padding;
 }
 
-export function inlineSBOMLimitMessage() {
-  return `Inline SBOM imports are limited to ${MAX_INLINE_SBOM_BYTES} bytes (360 KiB); upload larger SBOM files to Blossom and import them by location.`;
+function sbomRelays() {
+  const connected = nostr.getConnectedRelays();
+  return connected.length > 0 ? connected : currentSystemInfo()?.nostr?.browser_relays || [];
+}
+
+export function currentInlineSBOMLimitBytes() {
+  return inlineSBOMLimitBytes(relayLimits.cached(sbomRelays()));
+}
+
+export async function resolveInlineSBOMLimitBytes() {
+  return inlineSBOMLimitBytes(await relayLimits.resolve(sbomRelays()));
+}
+
+export function inlineSBOMLimitMessage(limit = currentInlineSBOMLimitBytes()) {
+  return `Inline SBOM imports are limited to ${limit} bytes (${Math.floor(limit / 1024)} KiB); upload larger SBOM files to Blossom and import them by location.`;
 }
 
 export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx'], generator = 'syft' } = {}) {
@@ -289,7 +304,7 @@ export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx']
     }, intentOrgId(artifact, null, 'sbom')));
 }
 
-export function importArtifactSBOM(artifact, { format = 'spdx', payloadBase64 = '', location = null, storage = '', generator = { id: 'import' } } = {}) {
+export async function importArtifactSBOM(artifact, { format = 'spdx', payloadBase64 = '', location = null, storage = '', generator = { id: 'import' } } = {}) {
   const artifactId = String(artifact?.id || '').trim();
   if (!artifactId) throw new Error('artifact id is required');
   const digest = artifactDigest(artifact);
@@ -307,8 +322,9 @@ export function importArtifactSBOM(artifact, { format = 'spdx', payloadBase64 = 
   const hasLocation = Boolean(normalizedLocation?.uri);
   if (hasInlinePayload && hasLocation) throw new Error('provide either inline payloadBase64 or location, not both');
   if (!hasInlinePayload && !hasLocation) throw new Error('SBOM import requires an inline payload or a Blossom/REST compatibility import reference');
-  if (hasInlinePayload && decodedBase64Length(inlinePayload) > MAX_INLINE_SBOM_BYTES) {
-    throw new Error(inlineSBOMLimitMessage());
+  if (hasInlinePayload) {
+    const limit = await resolveInlineSBOMLimitBytes();
+    if (decodedBase64Length(inlinePayload) > limit) throw new Error(inlineSBOMLimitMessage(limit));
   }
   const generatorInfo = normalizeSBOMGenerator(generator, 'import');
   const storageType = String(storage || normalizedLocation?.type || 'blossom').trim() || 'blossom';

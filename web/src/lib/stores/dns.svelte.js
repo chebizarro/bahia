@@ -1,5 +1,6 @@
 import { browser } from '$app/environment';
 import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
+import { fetchRelayMetadata, relayMetadataUrl } from '$lib/nostr/relay-nip11.js';
 import { loadSystemInfo } from './system.svelte.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
 import { mintEntityId } from '$lib/entity-id.js';
@@ -217,12 +218,6 @@ function normalizeRelayList(value) {
   return Array.from(new Set(values.map(toWebSocketUrl).filter(Boolean)));
 }
 
-function relayMetadataUrl(relayUrl) {
-  if (!relayUrl || typeof relayUrl !== 'string') return '';
-  if (relayUrl.startsWith('wss://')) return `https://${relayUrl.slice('wss://'.length)}`;
-  if (relayUrl.startsWith('ws://')) return `http://${relayUrl.slice('ws://'.length)}`;
-  return relayUrl;
-}
 
 function normalizeSupportedNips(value) {
   if (!Array.isArray(value)) return { supported_nips: [], warnings: ['supported_nips missing or not an array'] };
@@ -284,17 +279,10 @@ async function queryRelayMetadata(relays) {
     if (!url || typeof fetch !== 'function') {
       return [relay, { ok: false, status: 'metadata-unavailable', error: 'NIP-11 metadata fetch unavailable in this runtime' }];
     }
-
-    try {
-      const response = await fetch(url, { headers: { Accept: 'application/nostr+json' } });
-      if (!response.ok) {
-        return [relay, { ok: false, status: 'metadata-unavailable', error: `NIP-11 metadata HTTP ${response.status}` }];
-      }
-      const metadata = await response.json();
-      return [relay, normalizeNIP11Metadata(metadata)];
-    } catch (error) {
-      return [relay, { ok: false, status: 'metadata-unavailable', error: error?.message || String(error) }];
-    }
+    const result = await fetchRelayMetadata(relay);
+    return [relay, result.error
+      ? { ok: false, status: 'metadata-unavailable', error: result.error }
+      : normalizeNIP11Metadata(result.metadata)];
   }));
 
   const health = {};
