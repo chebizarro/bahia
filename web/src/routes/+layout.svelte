@@ -7,7 +7,7 @@
   import ToastContainer from '$lib/components/ToastContainer.svelte';
   import AssistantChat from '$lib/components/assistant/AssistantChat.svelte';
   import { currentRouteDocsRef } from '$lib/components/nav-model.js';
-  import { loadAll, unsubscribeFromEvents } from '$lib/stores';
+  import { bootstrapControlplane, disconnectControlplane } from '$lib/stores';
   import { boot, getEventStore, getServicePubkey, shutdown } from '$lib/nostr/boot.js';
   import { resumeIntentClient, stopIntentClient } from '$lib/nostr/intent-client.svelte.js';
   import { startRoleDerivation, stopRoleDerivation } from '$lib/stores/auth-roles.svelte.js';
@@ -20,7 +20,6 @@
   import { initBackupStoreBinding, teardownBackupStoreBinding } from '$lib/stores/collections/backup.svelte.js';
   import { initMLStoreBinding, teardownMLStoreBinding } from '$lib/stores/collections/ml.svelte.js';
   import { initSBOMStoreBinding, teardownSBOMStoreBinding } from '$lib/stores/collections/sbom.svelte.js';
-  import { initStoreFirstSubscriptions, teardownStoreFirstSubscriptions } from '$lib/stores/collections/store-first-subscriptions.js';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
   import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
   import { theme } from '$lib/stores/theme.js';
@@ -76,13 +75,14 @@
         initBackupStoreBinding();
         initMLStoreBinding();
         initSBOMStoreBinding();
-        initStoreFirstSubscriptions();
       } catch (err) {
         console.warn('[layout] boot() failed:', err);
       }
 
-      // Then proceed with the legacy bootstrap (connects relays, subscribes).
-      loadAll();
+      // Connect the single pool in the background; EOSE only updates the badge.
+      void bootstrapControlplane().then((result) => {
+        if (!result.ok) console.error('Nostr controlplane bootstrap failed:', result.reason);
+      });
 
       initializeAuth().catch((error) => {
         console.error('Auth bootstrap failed before controlplane load:', error);
@@ -104,9 +104,8 @@
       teardownBackupStoreBinding();
       teardownMLStoreBinding();
       teardownSBOMStoreBinding();
-      teardownStoreFirstSubscriptions();
       stopRoleDerivation();
-      unsubscribeFromEvents();
+      disconnectControlplane();
       disconnectAssistant();
     };
   });

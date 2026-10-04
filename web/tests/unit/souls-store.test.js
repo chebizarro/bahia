@@ -3,10 +3,9 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 // Mock browser environment
 global.window = global;
 
-// Mock connection guard (shared relay connection utility)
-vi.mock('../../src/lib/nostr/connection-guard.js', () => ({
-  ensureRelayConnection: vi.fn(async () => {})
-}));
+const bootMock = vi.hoisted(() => ({ ensureRelayConnection: vi.fn(async () => {}) }));
+vi.mock('../../src/lib/nostr/boot.js', () => bootMock);
+vi.mock('$lib/nostr/boot.js', () => bootMock);
 
 // Mock the nostr client module
 const nostrClientMockFactory = vi.hoisted(() => () => {
@@ -106,6 +105,7 @@ const nostrClientMockFactory = vi.hoisted(() => () => {
 
 vi.mock('../../src/lib/nostr/client.js', nostrClientMockFactory);
 vi.mock('$lib/nostr/client.js', nostrClientMockFactory);
+const KINDS = nostrClientMockFactory().KINDS;
 
 const authStoreMock = vi.hoisted(() => () => ({
   authState: { status: 'authenticated', pubkey: 'author-pubkey' },
@@ -199,7 +199,7 @@ describe('Souls Store', () => {
     }
   });
 
-  async function startSoulFactorySubscription(authorPubkey = null, entrypoint = 'subscribeToSoulUpdates') {
+  async function startSoulFactorySubscription(authorPubkey = null, entrypoint = 'subscribeToSoulFactoryUpdates') {
     const cleanup = vi.fn();
     mockNostr.subscribe.mockReturnValue(cleanup);
 
@@ -275,7 +275,7 @@ describe('Souls Store', () => {
     it('applies the author filter to replaceable soul/template/draft events only', async () => {
       const authorPubkey = 'author-all-789';
 
-      const { filters } = await startSoulFactorySubscription(authorPubkey, 'loadAll');
+      const { filters } = await startSoulFactorySubscription(authorPubkey);
 
       expect(filters).toEqual([
         { kinds: [31951, 31950, 31952], authors: [authorPubkey] },
@@ -444,10 +444,9 @@ describe('Souls Store', () => {
 
     it('records relay connection failures without opening a subscription', async () => {
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const nostrModule = await import('$lib/nostr/client.js');
-      nostrModule.ensureRelayConnection.mockRejectedValueOnce(new Error('Relay connection failed'));
+      bootMock.ensureRelayConnection.mockRejectedValueOnce(new Error('Relay connection failed'));
 
-      await soulsModule.loadSouls();
+      await soulsModule.subscribeToSoulFactoryUpdates();
 
       expect(consoleError).toHaveBeenCalledWith('[souls] Failed to connect:', expect.any(Error));
       expect(mockNostr.subscribe).not.toHaveBeenCalled();
@@ -464,13 +463,12 @@ describe('Souls Store', () => {
 
     it('clears a previous connection error on a successful subscription', async () => {
       const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      const nostrModule = await import('$lib/nostr/client.js');
-      nostrModule.ensureRelayConnection.mockRejectedValueOnce(new Error('Network error'));
+      bootMock.ensureRelayConnection.mockRejectedValueOnce(new Error('Network error'));
 
-      await soulsModule.loadSouls();
+      await soulsModule.subscribeToSoulFactoryUpdates();
       expect(soulsModule.error.value).toBe('Network error');
 
-      await soulsModule.loadSouls();
+      await soulsModule.subscribeToSoulFactoryUpdates();
 
       expect(soulsModule.error.value).toBeNull();
       expect(mockNostr.subscribe).toHaveBeenCalledTimes(1);
@@ -482,8 +480,8 @@ describe('Souls Store', () => {
       const cleanup = vi.fn();
       mockNostr.subscribe.mockReturnValue(cleanup);
 
-      await soulsModule.subscribeToSoulUpdates();
-      await soulsModule.subscribeToSoulUpdates();
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      await soulsModule.subscribeToSoulFactoryUpdates();
 
       expect(mockNostr.subscribe).toHaveBeenCalledTimes(1);
       expect(cleanup).not.toHaveBeenCalled();
@@ -495,7 +493,7 @@ describe('Souls Store', () => {
       const cleanup = vi.fn();
       mockNostr.subscribe.mockReturnValue(cleanup);
 
-      await soulsModule.subscribeToSoulUpdates();
+      await soulsModule.subscribeToSoulFactoryUpdates();
       soulsModule.unsubscribeFromSoulUpdates();
 
       expect(cleanup).toHaveBeenCalledTimes(1);
@@ -526,7 +524,6 @@ describe('Souls Store', () => {
 
     it('should subscribe to status and result events', () => {
       const requestEventId = 'req-event-456';
-      const { KINDS } = require('../../src/lib/nostr/client.js');
 
       soulsModule.trackProvisioningRun(requestEventId, {});
 
@@ -555,7 +552,6 @@ describe('Souls Store', () => {
       const onProgress = vi.fn();
       soulsModule.trackProvisioningRun(requestEventId, { onProgress });
 
-      const { KINDS } = require('../../src/lib/nostr/client.js');
       
       const statusEvent = {
         id: 'status-1',
@@ -600,7 +596,6 @@ describe('Souls Store', () => {
       const onComplete = vi.fn();
       soulsModule.trackProvisioningRun(requestEventId, { onComplete });
 
-      const { KINDS } = require('../../src/lib/nostr/client.js');
       
       const resultEvent = {
         id: 'result-success-1',
@@ -641,7 +636,6 @@ describe('Souls Store', () => {
       const onError = vi.fn();
       soulsModule.trackProvisioningRun(requestEventId, { onError });
 
-      const { KINDS } = require('../../src/lib/nostr/client.js');
       
       const resultEvent = {
         id: 'result-error-1',
@@ -729,7 +723,6 @@ describe('Souls Store', () => {
 	  mockNostr.subscribe.mockImplementation((_filters, incoming) => { handlers = incoming; return vi.fn(); });
 	  soulsModule.trackProvisioningRun(requestEventId, { expectedAuthor: 'factory', onProgress });
 
-	  const { KINDS } = require('../../src/lib/nostr/client.js');
 	  const valid = { id: 'status-valid', pubkey: 'factory', kind: KINDS.PROVISIONING_STATUS, content: 'Checking signer', tags: [['e', requestEventId], ['run-id', 'run-a'], ['step', 'nip46_signer'], ['progress', '3', '14']] };
 	  handlers.onEvent(valid);
 	  handlers.onEvent(valid);
@@ -748,7 +741,6 @@ describe('Souls Store', () => {
 	  let handlers;
 	  mockNostr.subscribe.mockImplementation((_filters, incoming) => { handlers = incoming; return vi.fn(); });
 	  soulsModule.trackProvisioningRun(requestEventId, {});
-	  const { KINDS } = require('../../src/lib/nostr/client.js');
 	  handlers.onEvent({ id: 'progress', created_at: 90, kind: KINDS.PROVISIONING_STATUS, content: 'DM probe', tags: [['e', requestEventId], ['run-id', 'run-a'], ['progress', '13', '14']] });
 	  handlers.onEvent({ id: 'failure', created_at: 100, kind: KINDS.PROVISIONING_RESULT, content: 'relay timeout', tags: [['e', requestEventId], ['run-id', 'run-a'], ['status', 'error']] });
 	  expect(soulsModule.provisioningRuns.get(requestEventId).status).toBe('failed');
@@ -764,7 +756,6 @@ describe('Souls Store', () => {
 	  let handlers;
 	  mockNostr.subscribe.mockImplementation((_filters, incoming) => { handlers = incoming; return vi.fn(); });
 	  soulsModule.trackProvisioningRun(requestEventId, { reconciliationTimeoutMs: 5000 });
-	  const { KINDS } = require('../../src/lib/nostr/client.js');
 	  handlers.onEvent({ id: 'status-100', kind: KINDS.PROVISIONING_STATUS, content: 'All gates complete', tags: [['e', requestEventId], ['run-id', 'run-a'], ['progress', '14', '14']] });
 	  expect(soulsModule.provisioningRuns.get(requestEventId).status).toBe('reconciling');
 	  vi.advanceTimersByTime(5000);

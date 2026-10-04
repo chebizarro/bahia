@@ -5,9 +5,6 @@
  * cursors committed on EOSE/live events, NIP-42 AUTH, and per-relay OK
  * tracking for publishes.
  *
- * Does NOT delete or rewire the existing pools (that's W4).  This module
- * adds the new pool layer in parallel.
- *
  * Design reference: phase4-web-store-first.md §7 step 5, §12 W1-S1.
  *
  * @module lib/nostr/pool-welshman
@@ -19,7 +16,9 @@ import {
   request as welshmanRequest,
   publish as welshmanPublish,
   PublishStatus,
+  isTerminalReason,
 } from '@welshman/net';
+import { isExpired, validateForIngestion } from './ingestion.js';
 
 // ---------------------------------------------------------------------------
 // Subscription ref-counting
@@ -32,7 +31,8 @@ import {
  * @property {import('./store-interface.js').Filter[]} filters - Filters
  * @property {number} refCount - Number of active consumers
  * @property {AbortController} controller - Abort controller for the subscription
- * @property {((url: string) => void) | null} onEose
+ * @property {Set<object>} handlers - Per-consumer callbacks
+ * @property {string} key - Canonical REQ identity
  */
 
 let subIdCounter = 0;
@@ -67,8 +67,12 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
 
   /** @type {Map<string, ManagedSubscription>} */
   const subs = new Map();
+  const subsByKey = new Map();
   const relayReadyListeners = new Set();
   const socketListeners = new Map();
+  const connectionListeners = new Set();
+  const relayStatuses = new Map();
+  let configuredRelays = [];
 
   /** @type {((event: any) => Promise<any>) | null} */
   let signFn = sign;
@@ -90,7 +94,11 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
         if (!relays.size || relays.has(socket.url)) listener({ relay: socket.url, auth });
       }
     };
-    const onStatus = (status) => { if (status === SocketStatus.Open) emitReady(false); };
+    const onStatus = (status) => {
+      relayStatuses.set(socket.url, status);
+      for (const listener of connectionListeners) listener(socket.url, status);
+      if (status === SocketStatus.Open) emitReady(false);
+    };
     const onAuthStatus = (status) => { if (status === 'ok') emitReady(true); };
     socket.on('status', onStatus);
     socket.auth?.on('status', onAuthStatus);
@@ -99,13 +107,21 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
       socket.auth?.off('status', onAuthStatus);
     });
     if (!socket.auth) return;
-    socket.auth.on('status', (status) => {
+    const onAuthRequest = (status) => {
       if (status === 'requested' && signFn) {
         socket.auth.attemptAuth(signFn).catch(err => {
           console.warn('[BahiaPool] AUTH failed for', socket.url, err);
         });
       }
-    });
+      if (status === 'requested') {
+        for (const sub of subs.values()) {
+          if (sub.relays.includes(socket.url)) for (const handler of sub.handlers) handler.onAuth?.(socket.auth?.challenge, socket.url);
+        }
+      }
+    };
+    socket.auth.on('status', onAuthRequest);
+    const previousCleanup = socketListeners.get(socket);
+    socketListeners.set(socket, () => { previousCleanup(); socket.auth.off('status', onAuthRequest); });
   });
 
   /**
@@ -116,8 +132,40 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
     signFn = fn;
   }
 
-  function getConnectedRelays(relays) {
+  function getConnectedRelays(relays = configuredRelays) {
     return relays.filter(url => pool.has(url) && pool.get(url).status === SocketStatus.Open);
+  }
+
+  function setRelays(relays) {
+    configuredRelays = [...new Set(relays.filter(Boolean))];
+  }
+
+  function getRelays() { return [...configuredRelays]; }
+
+  function onConnectionStatus(listener) {
+    connectionListeners.add(listener);
+    for (const [url, status] of relayStatuses) listener(url, status);
+    return () => connectionListeners.delete(listener);
+  }
+
+  async function connect(relays = configuredRelays) {
+    setRelays(relays);
+    await Promise.all(configuredRelays.map((url) => new Promise((resolve) => {
+      const socket = pool.get(url);
+      if (socket.status === SocketStatus.Open) return resolve();
+      const onStatus = (status) => {
+        if (status !== SocketStatus.Open && status !== SocketStatus.Error && status !== SocketStatus.Closed) return;
+        socket.off('status', onStatus);
+        resolve();
+      };
+      socket.on('status', onStatus);
+      socket.attemptToOpen();
+    })));
+    return {
+      total: configuredRelays.length,
+      connected: getConnectedRelays().length,
+      relays: configuredRelays.map((url) => ({ url, status: pool.get(url).status === SocketStatus.Open ? 'connected' : 'error' }))
+    };
   }
 
   function onRelayReady(listener, relays = []) {
@@ -145,7 +193,15 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
    * @param {(url: string) => void} [opts.onEose]
    * @returns {{ unsubscribe: () => void, id: string }}
    */
-  function subscribe({ relays, filters, filterKey, onEose }) {
+  function subscribe({ relays, filters, filterKey, onEvent, onEose, onClosed, onAuth, onHealth }) {
+    const key = JSON.stringify([[...relays].sort(), filters, filterKey || '']);
+    const handler = { onEvent, onEose, onClosed, onAuth, onHealth };
+    const existing = subsByKey.get(key);
+    if (existing) {
+      existing.refCount++;
+      existing.handlers.add(handler);
+      return reference(existing, handler);
+    }
     const id = `bahia-sub-${++subIdCounter}`;
     const controller = new AbortController();
 
@@ -156,10 +212,12 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
       filters,
       refCount: 1,
       controller,
-      onEose: onEose || null,
+      handlers: new Set([handler]),
+      key,
     };
 
     subs.set(id, sub);
+    subsByKey.set(key, sub);
 
     // Apply cursor: if filterKey is set and we have a stored cursor,
     // inject `since` into filters
@@ -182,7 +240,9 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
       autoClose: false,
       context: buildContext(),
       onEvent: (event, url) => {
-        // Ingest into the store (signature verification happens there)
+        // A rejected signature must never reach compatibility subscribers,
+        // even when they consume the callback without querying the store.
+        if (!validateForIngestion(event).valid || isExpired(event)) return;
         const accepted = store.ingest(event);
         if (accepted && filterKey) {
           // Update cursor to the latest event timestamp
@@ -191,11 +251,10 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
             store.setCursor(url, filterKey, event.created_at);
           }
         }
+        for (const listener of sub.handlers) listener.onEvent?.(event, url);
       },
       onEose: (url) => {
-        if (sub.onEose) {
-          sub.onEose(url);
-        }
+        for (const listener of sub.handlers) listener.onEose?.(url);
         // Commit cursor on EOSE
         if (filterKey) {
           const cursor = store.getCursor(url, filterKey);
@@ -204,24 +263,48 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
           }
         }
       },
+      onClosed: (reason, url) => {
+        const terminal = isTerminalReason(reason);
+        const authRequired = /^auth-required:/i.test(reason || '');
+        for (const listener of sub.handlers) listener.onClosed?.(reason, url, { terminal, authRequired });
+      },
+      onDisconnect: (url) => {
+        for (const listener of sub.handlers) {
+          listener.onClosed?.('relay disconnected', url, { disconnected: true });
+          listener.onHealth?.({ status: 'disconnected', lastClosedReason: 'relay disconnected' });
+        }
+      },
+      resubscribeAttempts: 3,
     }).catch(err => {
       if (err?.name !== 'AbortError') {
         console.error('[BahiaPool] subscription error:', err);
       }
     });
 
+    return reference(sub, handler);
+  }
+
+  function reference(sub, handler = null) {
+    let released = false;
     return {
-      id,
+      id: sub.id,
       unsubscribe() {
-        const s = subs.get(id);
-        if (!s) return;
-        s.refCount--;
-        if (s.refCount <= 0) {
-          s.controller.abort();
-          subs.delete(id);
-        }
-      },
+        if (released) return;
+        released = true;
+        release(sub, handler);
+      }
     };
+  }
+
+  function release(sub, handler) {
+    if (!subs.has(sub.id)) return;
+    if (handler) sub.handlers.delete(handler);
+    sub.refCount--;
+    if (sub.refCount <= 0) {
+      sub.controller.abort();
+      subs.delete(sub.id);
+      subsByKey.delete(sub.key);
+    }
   }
 
   /**
@@ -240,15 +323,7 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
     const sub = subs.get(id);
     if (!sub) return null;
     sub.refCount++;
-    return {
-      unsubscribe() {
-        sub.refCount--;
-        if (sub.refCount <= 0) {
-          sub.controller.abort();
-          subs.delete(id);
-        }
-      },
-    };
+    return reference(sub);
   }
 
   /**
@@ -261,6 +336,7 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
    * @returns {Promise<Record<string, import('@welshman/net').PublishResult>>}
    */
   async function publishEvent({ event, relays, timeout = 10000 }) {
+    if (!event?.id || !event?.sig) throw new Error('Cannot publish an unsigned Nostr event');
     const results = await welshmanPublish({
       event,
       relays,
@@ -288,9 +364,12 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
       sub.controller.abort();
     }
     subs.clear();
+    subsByKey.clear();
     for (const cleanup of socketListeners.values()) cleanup();
     socketListeners.clear();
     relayReadyListeners.clear();
+    connectionListeners.clear();
+    relayStatuses.clear();
     pool.clear();
   }
 
@@ -299,6 +378,10 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
     addRef,
     publishEvent,
     getConnectedRelays,
+    getRelays,
+    setRelays,
+    connect,
+    onConnectionStatus,
     onRelayReady,
     setSign,
     getPool,

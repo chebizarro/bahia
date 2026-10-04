@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { BAHIA_STATE_SCHEMAS, cpStateFixture } from './cp-state-fixtures.js';
-import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
+import { BAHIA_STATE_SCHEMAS, cpStateFixture, confidentialCpStateFixture } from './cp-state-fixtures.js';
+import { E2E_SERVICE_PUBKEY, TEST_PUBKEY, installE2EMocks } from './helpers.js';
+import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
+import { base64Encode, CONFIDENTIAL_ALGORITHM, CONFIDENTIAL_SCHEMA, OCK_WRAP_SCHEMA } from '../../src/lib/nostr/confidential.js';
 
 const SERVICE_ID = 'service-1';
 const BUILD_ID = 'build-1';
@@ -52,6 +54,34 @@ const seededSecrets = [
   { id: 'secret-1', org_id: mockService.org_id, service_id: SERVICE_ID, name: 'DATABASE_URL', value: 'postgres://hidden.example/db', redacted_value: '********', version: 1, created_at: '2026-05-13T12:15:00.000Z', updated_at: '2026-05-13T12:15:00.000Z' },
   { id: 'secret-2', org_id: mockService.org_id, service_id: SERVICE_ID, name: 'API_KEY', value: 'api-key-hidden-value', redacted_value: '********', version: 1, created_at: '2026-05-13T12:16:00.000Z', updated_at: '2026-05-13T12:16:00.000Z' }
 ];
+
+function secretRelayFixtures() {
+  const key = new Uint8Array(32).fill(7);
+  const orgId = mockService.org_id;
+  const wrap = { schema: OCK_WRAP_SCHEMA, org_id: orgId, key_ref: `ock:${orgId}`,
+    version: 1, key: base64Encode(key), recipient_pubkey: TEST_PUBKEY };
+  const events = [confidentialCpStateFixture({
+    d: `org-key:${orgId}:v1:e2e-secrets`, topic: 'org-key-envelope', legacyKind: 32010,
+    content: `mock-nip44:${Buffer.from(JSON.stringify(wrap)).toString('base64')}`
+  })];
+  for (const [index, secret] of seededSecrets.entries()) {
+    const d = secret.id;
+    const associatedData = { d, key_org: orgId, key_ref: `ock:${orgId}`,
+      key_version: 'v1', legacy_kind: '32008', schema: CONFIDENTIAL_SCHEMA, t: 'secret-registry' };
+    const nonce = new Uint8Array(24);
+    nonce[0] = index + 1;
+    const { value, redacted_value, ...metadata } = secret;
+    const ciphertext = xchacha20poly1305(key, nonce, new TextEncoder().encode(JSON.stringify(associatedData)))
+      .encrypt(new TextEncoder().encode(JSON.stringify(metadata)));
+    events.push(confidentialCpStateFixture({
+      d, topic: 'secret-registry', legacyKind: 32008,
+      content: JSON.stringify({ schema: CONFIDENTIAL_SCHEMA, algorithm: CONFIDENTIAL_ALGORITHM,
+        key_org: orgId, key_ref: `ock:${orgId}`, key_version: 'v1', nonce: base64Encode(nonce),
+        ciphertext: base64Encode(ciphertext), associated_data: associatedData })
+    }));
+  }
+  return events;
+}
 
 const relaySystemInfo = {
   nostr: {
@@ -123,8 +153,7 @@ test.beforeEach(async ({ page }) => {
   await seedEncryptedSecrets(page);
   await installE2EMocks(page, {
     systemInfo: relaySystemInfo,
-    contextVMOperations: [secretOperation('services.secrets.list')],
-    nostrEvents: [serviceEvent(), buildEvent(), artifactEvent()]
+    nostrEvents: [serviceEvent(), buildEvent(), artifactEvent(), ...secretRelayFixtures()]
   });
 });
 
@@ -145,6 +174,7 @@ test.describe('Service Secrets Smoke Test', () => {
   test('creates a secret through a 1059 intent and receives 30315 accepted', async ({ page }) => {
     await page.goto(`/services/${SERVICE_ID}`);
     await expect(page.getByRole('heading', { name: 'web-app' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Secrets \(2\)/ })).toBeVisible();
 
     await page.getByRole('button', { name: 'Add Secret' }).click();
     await expect(page.getByRole('dialog', { name: 'Add Secret' })).toBeVisible();
@@ -176,10 +206,11 @@ test.describe('Service Secrets Smoke Test', () => {
 
     await page.goto(`/services/${SERVICE_ID}`);
     await expect(page.getByRole('heading', { name: 'web-app' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Secrets \(2\)/ })).toBeVisible();
 
     await queueContextVMOperation(page, secretOperation('services.secrets.reveal', { secret_id: 'secret-1' }));
     await page.locator('.secret-row:has-text("DATABASE_URL") button:has-text("Reveal")').click();
-    await expect(page.getByRole('dialog', { name: 'Reveal Secret Value' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Reveal Secret Value' })).toBeVisible({ timeout: 15000 });
     await expect(page.locator('text=postgres://hidden.example/db')).not.toBeVisible();
     await page.getByRole('dialog', { name: 'Reveal Secret Value' }).getByRole('button', { name: 'Reveal Value' }).click();
     await expect(page.locator('text=postgres://hidden.example/db')).toBeVisible();

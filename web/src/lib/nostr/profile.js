@@ -1,5 +1,5 @@
 import { authState, signWithAuth, updateAuthProfile } from '$lib/stores/auth.js';
-import { createNostrPoolClient } from './pool.js';
+import { nostr } from './subscriptions.js';
 import { normalizeRelayUrl, uniqueRelays } from './pool-utils.js';
 
 export const NOSTR_PROFILE_KIND = 0;
@@ -165,14 +165,14 @@ export async function publishProfileMetadata(input = {}, options = {}) {
   const event = await signWithAuth(unsignedEvent);
   if (!event?.id) throw new Error('Cannot publish unsigned Nostr profile event');
 
-  const client = (options.clientFactory || createNostrPoolClient)({ relays, saveRelayConfig: () => {} });
+  const client = options.clientFactory?.({ relays, saveRelayConfig: () => {} }) || null;
   try {
-    const summary = await client.connect(relays, { force: true });
-    if (!summary?.connected) {
-      throw new Error('No writable Nostr relay connection was established for profile publishing');
+    if (client) {
+      const summary = await client.connect(relays, { force: true });
+      if (!summary?.connected) throw new Error('No writable Nostr relay connection was established for profile publishing');
     }
 
-    const ok = await client.publish(event);
+    const ok = client ? await client.publish(event) : await nostr.publish(event, { relays });
     const acceptedRelays = ok.filter(publishAccepted);
     const rejectedRelays = ok.filter((result) => !publishAccepted(result));
 
@@ -190,6 +190,6 @@ export async function publishProfileMetadata(input = {}, options = {}) {
       profile
     };
   } finally {
-    client.disconnect?.();
+    client?.disconnect?.();
   }
 }

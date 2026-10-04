@@ -41,6 +41,9 @@ export const KEY_ENVELOPE_TOPIC = 'org-key-envelope';
 // Kind and topic for org-member records (encrypted).
 export const ORG_MEMBER_LEGACY_KIND = 32006;
 export const ORG_MEMBER_TOPIC = 'org-member';
+export const ORG_TOPIC = 'org';
+export const ORG_INVITE_TOPIC = 'org-invite';
+export const NOTIFICATION_CHANNEL_TOPIC = 'notification-channel';
 
 // ---------------------------------------------------------------------------
 // Base64 helpers (raw standard encoding, no padding — matches Go

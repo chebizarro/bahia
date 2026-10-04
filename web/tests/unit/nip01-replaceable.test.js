@@ -1,7 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { expect, it } from 'vitest';
 import { replaceableKey, shouldAcceptReplaceableEvent, upsertReplaceableEvent } from '../../src/lib/nostr/replaceable.js';
 import { compareProjectionVersions } from '../../src/lib/stores/collections/utils.js';
-import { deploymentApplicators, deploymentIntents, states, resetDeployments, refreshDeployments } from '../../src/lib/stores/collections/deployments.svelte.js';
 
 const low = '1'.repeat(64);
 const high = 'f'.repeat(64);
@@ -43,15 +42,4 @@ it.each([false, true])('retains the lowest-ID tombstone or live event in either 
     expect([...map.values()]).toEqual([winner]);
     expect(upsertReplaceableEvent(map, loser).accepted).toBe(false);
   }
-});
-
-describe('deployment intent legacy projection', () => {
-  beforeEach(resetDeployments);
-  it('keeps the lowest id on a timestamp tie', () => {
-    const map = new Map();
-    deploymentApplicators.intent(event(high), map);
-    deploymentApplicators.intent(event(low), map);
-    refreshDeployments();
-    expect(deploymentIntents.map(row => row.nostr_event_id)).toEqual([low]);
-  });
 });

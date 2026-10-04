@@ -1,4 +1,5 @@
 <script>
+  import { boot } from '$lib/nostr/boot.js';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import Card from '$lib/components/Card.svelte';
@@ -12,10 +13,7 @@
     deploymentRuns,
     environments,
     services,
-    states,
-    loadArtifacts,
-    loadDeploymentIntents,
-    loadDeploymentRuns
+    states
   } from '$lib/stores';
   import { operations } from '$lib/stores';
   import {
@@ -94,11 +92,7 @@
     loading = true;
     error = null;
     try {
-      await Promise.all([
-        loadDeploymentIntents(),
-        loadDeploymentRuns(),
-        loadArtifacts()
-      ]);
+      await boot();
       if (!deploymentIntents.some((item) => item.id === id)) {
         throw new Error('Deployment intent not found');
       }

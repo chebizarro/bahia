@@ -126,7 +126,7 @@ test.describe('SBOM workflow', () => {
 
     await page.goto('/artifacts');
 
-    await expect(page.getByRole('heading', { name: 'Artifacts' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Artifacts', exact: true })).toBeVisible();
     const row = page.locator('tbody tr', { hasText: 'registry.example.com/bahia/sbom-demo' }).first();
     await expect(row.locator('td').nth(0)).toContainText('registry.example.com/bahia/sbom-demo');
     await expect(row.locator('td').nth(1)).toContainText('sbom-service');

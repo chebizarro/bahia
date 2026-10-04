@@ -1,5 +1,5 @@
 import { currentSystemInfo } from '$lib/stores/system.svelte.js';
-import { getTagValues } from './client.js';
+import { getTagValues } from './tags.js';
 import { isValidHexPubkey } from './nostr-hex.js';
 
 export const CONTEXTVM_PROGRESS_ACK_CAPABILITY = 'encrypted_controlplane.progress_ack';

@@ -61,15 +61,10 @@ async function installAssistantAgenticHarness(page, { discovery = systemInfo } =
     }
 
     function latestAssistantSessionId() {
-      for (const [key, value] of Object.entries(localStorage)) {
-        if (!key.startsWith('bahia_assistant_transcript:')) continue;
-        try {
-          const cached = JSON.parse(value || '{}');
-          if (cached?.activeSessionId) return cached.activeSessionId;
-          const sessionId = cached?.sessions?.[0]?.sessionId;
-          if (sessionId) return sessionId;
-        } catch {}
-      }
+      try {
+        const ui = JSON.parse(localStorage.getItem('bahia_assistant_sidebar') || '{}');
+        if (ui.activeSessionId) return ui.activeSessionId;
+      } catch {}
       return `assistant-e2e-${Date.now()}`;
     }
 

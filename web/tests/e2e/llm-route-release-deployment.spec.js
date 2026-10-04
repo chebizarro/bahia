@@ -18,6 +18,9 @@ test('dedicated LLM browser workflow uses signer-first requests for route, relea
 
   await page.goto('/llm');
   await expect(page.getByRole('heading', { name: 'LLM Control Plane' })).toBeVisible();
+  await expect.poll(() => page.evaluate(async () =>
+    (await import('/src/lib/stores/system.svelte.js')).currentSystemInfo()?.organization_id
+  )).toBe('3b45458b-2724-4dda-9fc6-66f12249660d');
 
   await page.locator('input[name="route-name"]').fill('chat-prod');
   await page.locator('input[name="public-model"]').fill('bahia/chat');

@@ -3,6 +3,11 @@ import { encryptWithAuth } from './auth.svelte.js';
 import { mintEntityId } from '$lib/entity-id.js';
 import { orgIdFor, submitSensitiveIntent } from './sensitive-intents.svelte.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
+import { onStoreRefresh } from '$lib/nostr/boot.js';
+import { CP_STATE_TOPICS, SECRET_REGISTRY } from '$lib/nostr/kinds.gen.js';
+import { onContentKeyChange } from './auth-roles.svelte.js';
+import { readConfidentialTopic } from './collections/confidential-records.js';
+import { versionFromEnvelope } from '$lib/nostr/confidential.js';
 
 export const serviceSecretsState = $state({
   secretsByService: {},
@@ -12,9 +17,12 @@ export const serviceSecretsState = $state({
 });
 
 export const SERVICE_SECRET_ENCRYPTED_OPERATIONS = {
-  list: 'services.secrets.list',
   reveal: 'services.secrets.reveal'
 };
+
+const loadedServices = new Set();
+let stopRefresh = null;
+let stopKeys = null;
 
 async function ensureEncryptedSecrets() {
   let info = currentSystemInfo();
@@ -31,70 +39,6 @@ function unwrapEncryptedResult(response, fallback = {}) {
     throw new Error(envelope?.error?.message || 'Encrypted service secret request failed');
   }
   return envelope?.payload ?? envelope ?? fallback;
-}
-
-function normalizeSecretsPayload(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.secrets)) return payload.secrets;
-  if (Array.isArray(payload?.data)) return payload.data;
-  return [];
-}
-
-/**
- * Every secret ref returned by `services.secrets.list` carries a secret linkage
- * (a secret id and/or a redacted/encrypted value); the endpoint omits plaintext.
- * A genuine secret therefore always exposes one of these markers, so their
- * presence is treated as an authoritative "this is a secret" signal that blocks
- * any reclassification to a plain env var.
- */
-function hasSecretLinkage(entry) {
-  return Boolean(
-    entry.secret_id ?? entry.secretId ?? entry.SecretID ??
-    entry.redacted_value ?? entry.redactedValue ?? entry.RedactedValue ??
-    entry.ciphertext ?? entry.encrypted_value ?? entry.encryptedValue
-  );
-}
-
-/**
- * Detect entries that are plain (non-sensitive) environment variables rather
- * than encrypted secrets. Real secrets are never reclassified: an entry is only
- * treated as a plain env var when it explicitly declares itself non-secret (via a
- * type/kind marker, a secret/is_secret/sensitive/encrypted flag set to false, or a
- * non-encrypted encryption method), OR — as a conservative structural fallback —
- * when it carries a plaintext `value` and has no secret linkage whatsoever
- * (secret id / redacted / encrypted value). Since every genuine secret ref from
- * services.secrets.list carries such a linkage and never a plaintext value, that
- * fallback can only ever match a real configuration env var. This keeps the
- * Secrets section limited to actual secrets even when the backend returns a
- * combined list.
- */
-function isPlainEnvVar(entry) {
-  if (!entry || typeof entry !== 'object') return false;
-  const kind = String(entry.type ?? entry.kind ?? entry.category ?? '').trim().toLowerCase();
-  if (['env', 'env_var', 'environment', 'environment_variable', 'plain', 'plaintext', 'config', 'variable'].includes(kind)) {
-    return true;
-  }
-  if (entry.secret === false || entry.is_secret === false || entry.sensitive === false || entry.encrypted === false) {
-    return true;
-  }
-  const method = String(entry.encryption_method ?? '').trim().toLowerCase();
-  if (['none', 'plain', 'plaintext', 'cleartext'].includes(method)) return true;
-  // Conservative structural discriminator: a plaintext value with no secret
-  // linkage marks a plain config env var. Never fires for a genuine secret,
-  // which always carries a secret id / redacted value and omits plaintext.
-  const hasPlaintextValue = typeof entry.value === 'string' && entry.value.length > 0;
-  if (hasPlaintextValue && !hasSecretLinkage(entry)) return true;
-  return false;
-}
-
-function partitionSecretEntries(entries) {
-  const secrets = [];
-  const envVars = [];
-  for (const entry of Array.isArray(entries) ? entries : []) {
-    if (isPlainEnvVar(entry)) envVars.push(entry);
-    else secrets.push(entry);
-  }
-  return { secrets, envVars };
 }
 
 function setServiceSecrets(serviceId, secrets) {
@@ -143,11 +87,6 @@ export function getServiceSecrets(serviceId) {
   return serviceSecretsState.secretsByService[serviceId] || [];
 }
 
-/**
- * Plain (non-secret) environment variables separated out of the combined list
- * returned by services.secrets.list. Kept distinct so the Secrets UI does not
- * present configuration env vars as encrypted secrets.
- */
 export function getServiceEnvVars(serviceId) {
   return serviceSecretsState.envVarsByService[serviceId] || [];
 }
@@ -155,13 +94,31 @@ export function getServiceEnvVars(serviceId) {
 export async function listServiceSecrets(serviceId) {
   const id = String(serviceId || '').trim();
   if (!id) return [];
+  loadedServices.add(id);
+  if (!stopRefresh) stopRefresh = onStoreRefresh(() => {
+    for (const service of loadedServices) void listServiceSecrets(service);
+  });
+  if (!stopKeys) stopKeys = onContentKeyChange(() => {
+    for (const service of loadedServices) void listServiceSecrets(service);
+  });
   setServiceLoading(id, true);
   setServiceError(id, null);
   try {
-    const payload = await encryptedSecretRequest(SERVICE_SECRET_ENCRYPTED_OPERATIONS.list, { service_id: id });
-    const { secrets, envVars } = partitionSecretEntries(normalizeSecretsPayload(payload));
+    const { rows, tombstones, unreadable } = readConfidentialTopic(CP_STATE_TOPICS.SECRET_REGISTRY, SECRET_REGISTRY);
+    const previous = getServiceSecrets(id);
+    const deleting = new Set(previous.filter((secret) => secret.pendingDelete).map((secret) => secret.id));
+    const canonical = rows.filter((secret) => secret.service_id === id && !deleting.has(secret.id))
+      .map(({ event, ...secret }) => {
+        const orgId = event ? versionFromEnvelope(event.content).orgID : null;
+        return { ...secret, ...(orgId && !secret.org_id ? { org_id: orgId } : {}) };
+      });
+    const canonicalIds = new Set(canonical.map((secret) => secret.id));
+    const deletedIds = new Set(tombstones.map((tombstone) => tombstone.dTag));
+    const pending = previous.filter((secret) => secret.pending && !canonicalIds.has(secret.id) && !deletedIds.has(secret.id));
+    const secrets = [...pending, ...canonical];
     setServiceSecrets(id, secrets);
-    setServiceEnvVars(id, envVars);
+    setServiceEnvVars(id, []);
+    if (unreadable) setServiceError(id, 'Some secret references are not readable with the current organization key');
     return secrets;
   } catch (error) {
     setServiceSecrets(id, []);
@@ -222,6 +179,11 @@ export async function revealServiceSecret(serviceId, secretId) {
 
 export function resetServiceSecrets(serviceId = null) {
   if (!serviceId) {
+    stopRefresh?.();
+    stopKeys?.();
+    stopRefresh = null;
+    stopKeys = null;
+    loadedServices.clear();
     serviceSecretsState.secretsByService = {};
     serviceSecretsState.envVarsByService = {};
     serviceSecretsState.loadingByService = {};
@@ -229,6 +191,7 @@ export function resetServiceSecrets(serviceId = null) {
     return;
   }
   const id = String(serviceId);
+  loadedServices.delete(id);
   setServiceSecrets(id, []);
   setServiceEnvVars(id, []);
   setServiceLoading(id, false);

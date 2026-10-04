@@ -1,4 +1,5 @@
 <script>
+  import { boot } from '$lib/nostr/boot.js';
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
@@ -15,7 +16,7 @@
     UnknownIcon,
     WarningIcon
   } from '$lib/icons/domain-icons.js';
-  import { services, environments, deploymentIntents, artifacts as allArtifacts, loadDeploymentIntents, loadArtifacts, operations, operationsForDomain } from '$lib/stores';
+  import { services, environments, deploymentIntents, artifacts as allArtifacts,   operations, operationsForDomain } from '$lib/stores';
   import { rollbackDeployment } from '$lib/stores/public-controlplane.svelte.js';
   import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
 
@@ -235,7 +236,7 @@
     error = null;
 
     try {
-      await Promise.all([loadDeploymentIntents()]);
+      await boot();
     } catch (err) {
       error = err.message || 'Failed to load deployment history';
       console.error('Error loading deployment history:', err);
@@ -252,7 +253,7 @@
     rollbackArtifacts = [];
 
     try {
-      await loadArtifacts();
+      await boot();
       rollbackArtifacts = allArtifacts.filter((artifact) => artifact.service_id === intent.service_id);
     } catch (err) {
       rollbackError = err.message || 'Failed to load artifacts';

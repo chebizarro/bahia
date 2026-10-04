@@ -1,4 +1,5 @@
 <script>
+  import { boot } from '$lib/nostr/boot.js';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
@@ -19,8 +20,7 @@
     artifacts as artifactStore,
     environments as environmentStore,
     workers as workerStore,
-    deploymentIntents as deploymentIntentStore,
-    loadArtifacts,
+    deploymentIntents as deploymentIntentStore
   } from '$lib/stores';
   import { operations, operationsForEntity } from '$lib/stores';
   import { pendingIntentRows } from '$lib/nostr/intent-client.svelte.js';
@@ -65,6 +65,7 @@
     deleteServiceSecret,
     listServiceSecrets,
     revealServiceSecret,
+    serviceSecretsState,
     updateServiceSecret
   } from '$lib/stores/service-secrets.svelte.js';
   import { sensitiveMutationBlocker, sensitivePendingState } from '$lib/stores/sensitive-intents.svelte.js';
@@ -89,6 +90,10 @@
   let artifactsLoadError = $state(null);
   let environmentsLoadError = $state(null);
   let secrets = $state([]);
+  $effect(() => {
+    const id = service?.id;
+    if (id) secrets = (serviceSecretsState.secretsByService[id] || []).filter((secret) => !secret.pendingDelete);
+  });
   $effect(() => {
     const rows = sensitivePendingState.rows;
     if (!secrets.some(secret => secret.pendingIntentId)) return;
@@ -277,8 +282,8 @@
     } catch (secretErr) {
       if (sequence !== loadSequence || id !== serviceId) return;
       secrets = [];
-      secretsError = 'Secrets unavailable — control plane unreachable. Check service-pubkey discovery and relay auth.';
-      console.info('Service secrets unavailable through protected control plane:', secretErr?.message || secretErr);
+      secretsError = 'Secrets unavailable from relay state. Check the organization key and relay connection.';
+      console.info('Service secret references unavailable from relay state:', secretErr?.message || secretErr);
     } finally {
       if (sequence === loadSequence && id === serviceId) {
         secretsLoading = false;
@@ -891,12 +896,11 @@
     secretCreateError = null;
 
     try {
-      const pendingSecret = await createServiceSecret(serviceId, {
+      await createServiceSecret(serviceId, {
         name: secretForm.name.trim(),
         value: secretForm.value,
         org_id: service?.org_id
       });
-      secrets = [pendingSecret, ...secrets];
       secretForm.value = '';
       closeSecretCreateModal();
     } catch (err) {
@@ -920,8 +924,7 @@
     secretUpdateError = null;
 
     try {
-      const pendingSecret = await updateServiceSecret(serviceId, secretToUpdate.id, { value: secretUpdateValue, org_id: service?.org_id });
-      secrets = secrets.map(secret => secret.id === pendingSecret.id ? pendingSecret : secret);
+      await updateServiceSecret(serviceId, secretToUpdate.id, { value: secretUpdateValue, org_id: service?.org_id });
       secretValueCache = { ...secretValueCache, [secretToUpdate.id]: undefined };
       closeSecretUpdateModal();
     } catch (err) {
@@ -950,8 +953,7 @@
     secretDeleteError = null;
 
     try {
-      const result = await deleteServiceSecret(serviceId, secretToDelete.id, service?.org_id);
-      secrets = secrets.map(secret => secret.id === result.id ? { ...secret, ...result, pendingDelete: true } : secret);
+      await deleteServiceSecret(serviceId, secretToDelete.id, service?.org_id);
       const { [secretToDelete.id]: _removed, ...remainingCache } = secretValueCache;
       secretValueCache = remainingCache;
       closeSecretDeleteModal();
@@ -964,7 +966,7 @@
 
   async function reloadArtifacts() {
     try {
-      await loadArtifacts();
+      await boot();
       artifacts = artifactStore.filter((artifact) => artifact.service_id === serviceId);
     } catch (err) {
       console.error('Failed to reload artifacts:', err);

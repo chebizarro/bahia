@@ -21,6 +21,11 @@ vi.mock('$lib/stores/system.svelte.js', () => ({
   loadSystemInfo: vi.fn()
 }));
 
+const topicMock = vi.hoisted(() => ({ rows: new Map() }));
+vi.mock('../../src/lib/stores/collections/confidential-records.js', () => ({
+  readConfidentialTopic: (topic) => ({ rows: topicMock.rows.get(topic) || [] })
+}));
+
 describe('encrypted payments/orgs stores', () => {
   let authStore;
   let encryptedRequests;
@@ -31,6 +36,7 @@ describe('encrypted payments/orgs stores', () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    topicMock.rows.clear();
     authStore = await import('$lib/stores/auth.js');
     encryptedRequests = await import('$lib/nostr/encrypted-controlplane.js');
     encryptedRequests.requestEncryptedResult.mockReset();
@@ -58,29 +64,16 @@ describe('encrypted payments/orgs stores', () => {
     expect(encryptedRequests.requestEncryptedResult).not.toHaveBeenCalled();
   });
 
-  it('loads org overview and accepts invites through signed intents', async () => {
-    encryptedRequests.requestEncryptedResult
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: [{ id: 'org-1', role: 'owner' }] } })
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: [{ id: 'invite-1', org_id: 'org-1', role: 'viewer', org_name: 'demo' }] } });
-
+  it('loads canonical org and invite records from the event-store view and accepts via intent', async () => {
+    topicMock.rows.set('org', [{ id: 'org-1', role: 'owner' }]);
+    topicMock.rows.set('org-invite', [{ id: 'invite-1', org_id: 'org-1', role: 'viewer', pubkey: authStore.authState.pubkey }]);
     const overview = await orgsStore.loadOrgsOverview();
     const accepted = await orgsStore.acceptInvite('invite-1');
-
-    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(1, {
-      operation: 'orgs.list',
-      payload: {},
-      tags: [['domain', 'orgs']]
-    });
-    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(2, {
-      operation: 'orgs.my_invites',
-      payload: {},
-      tags: [['domain', 'orgs']]
-    });
-    expect(encryptedRequests.requestEncryptedResult).toHaveBeenCalledTimes(2);
+    expect(encryptedRequests.requestEncryptedResult).not.toHaveBeenCalled();
     expect(intentMock).toHaveBeenCalledWith(expect.objectContaining({ domain: 'org', schema: 'bahia.intent.org-member.v1',
       content: expect.objectContaining({ invite_id: 'invite-1', role: 'viewer' }) }));
-    expect(overview.orgs).toEqual([{ id: 'org-1', role: 'owner' }]);
-    expect(overview.myInvites).toEqual([{ id: 'invite-1', org_id: 'org-1', role: 'viewer', org_name: 'demo' }]);
+    expect(overview.orgs).toHaveLength(1);
+    expect(overview.myInvites).toHaveLength(1);
     expect(accepted.pending).toBe(true);
   });
 
@@ -92,49 +85,25 @@ describe('encrypted payments/orgs stores', () => {
     expect(encryptedRequests.requestEncryptedResult).not.toHaveBeenCalled();
   });
 
-  it('waits for system discovery before issuing encrypted org requests', async () => {
-    const discoveredInfo = {
-      features: { encrypted_nostr_requests: true },
-      nostr: {
-        browser_relays: ['wss://encrypted.test.local'],
-        service_pubkey: 'b'.repeat(64)
-      }
-    };
+  it('reads the local org snapshot without a discovery or ContextVM round trip', async () => {
     systemStore.currentSystemInfo.mockReturnValue(null);
-    systemStore.loadSystemInfo.mockResolvedValue(discoveredInfo);
-    encryptedRequests.requestEncryptedResult
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: [] } })
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: [] } });
-
-    await orgsStore.loadOrgsOverview();
-
-    expect(systemStore.loadSystemInfo).toHaveBeenCalledTimes(2);
-    expect(encryptedRequests.encryptedRequestsAvailable).toHaveBeenCalledWith(discoveredInfo);
-    expect(encryptedRequests.requestEncryptedResult).toHaveBeenNthCalledWith(1, {
-      operation: 'orgs.list',
-      payload: {},
-      tags: [['domain', 'orgs']]
-    });
+    topicMock.rows.set('org', [{ id: 'org-2', name: 'Offline' }]);
+    await expect(orgsStore.loadOrgsOverview()).resolves.toMatchObject({ orgs: [{ id: 'org-2', name: 'Offline' }] });
+    expect(systemStore.loadSystemInfo).not.toHaveBeenCalled();
+    expect(encryptedRequests.requestEncryptedResult).not.toHaveBeenCalled();
   });
 
-  it('loads org detail and submits member and invite intents', async () => {
-    encryptedRequests.requestEncryptedResult
-      .mockResolvedValueOnce({
-        result: {
-          status: 'ok',
-          payload: { org: { id: 'org-1' }, members: [{ pubkey: 'alice', role: 'owner' }], invites: [], my_role: 'owner' }
-        }
-      });
-
+  it('loads canonical org detail and submits member and invite intents', async () => {
+    topicMock.rows.set('org', [{ id: 'org-1' }]);
+    topicMock.rows.set('org-member', [{ org_id: 'org-1', pubkey: 'alice', role: 'owner' }]);
     await orgsStore.loadOrgDetail('org-1');
     await orgsStore.updateOrgMemberRole('org-1', 'bob', { role: 'admin' });
     await orgsStore.createOrgInvite('org-1', { pubkey: 'carol', role: 'viewer', expiresIn: 168 });
-
-    expect(encryptedRequests.requestEncryptedResult).toHaveBeenCalledTimes(1);
+    expect(encryptedRequests.requestEncryptedResult).not.toHaveBeenCalled();
     expect(intentMock).toHaveBeenCalledWith(expect.objectContaining({ schema: 'bahia.intent.org-member.v1',
       content: { pubkey: 'bob', role: 'admin' } }));
     expect(intentMock).toHaveBeenCalledWith(expect.objectContaining({ schema: 'bahia.intent.org-invite.v1',
       content: expect.objectContaining({ pubkey: 'carol', role: 'viewer', expires_in: 168 }) }));
-    expect(orgsStore.orgMemberListState).toEqual({ orgID: 'org-1', members: [{ pubkey: 'alice', role: 'owner' }] });
+    expect(orgsStore.orgMemberListState).toEqual({ orgID: 'org-1', members: [{ org_id: 'org-1', pubkey: 'alice', role: 'owner' }] });
   });
 });

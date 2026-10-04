@@ -21,6 +21,7 @@ vi.mock('../../src/lib/stores/auth.svelte.js', () => ({
 }));
 
 const bootstrapMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const secretReadMock = vi.hoisted(() => vi.fn(() => ({ rows: [], tombstones: [], unreadable: 0 })));
 
 const systemMock = vi.hoisted(() => ({
   currentSystemInfo: vi.fn(() => ({ nostr: { service_pubkey: 'b'.repeat(64), browser_relays: ['wss://requests.example'] } })),
@@ -29,6 +30,9 @@ const systemMock = vi.hoisted(() => ({
 
 vi.mock('$lib/nostr/encrypted-controlplane.js', () => encryptedRequestsMock);
 vi.mock('$lib/stores/system.svelte.js', () => systemMock);
+vi.mock('$lib/nostr/boot.js', () => ({ onStoreRefresh: () => () => {} }));
+vi.mock('../../src/lib/stores/auth-roles.svelte.js', () => ({ onContentKeyChange: () => () => {} }));
+vi.mock('../../src/lib/stores/collections/confidential-records.js', () => ({ readConfidentialTopic: secretReadMock }));
 vi.mock('$lib/nostr/nip07-crypto.js', () => nip07Mock);
 vi.mock('$lib/stores/controlplane.svelte.js', () => ({ bootstrapControlplane: bootstrapMock }));
 vi.mock('../../src/lib/stores/controlplane.svelte.js', () => ({ bootstrapControlplane: bootstrapMock }));
@@ -39,16 +43,16 @@ describe('encrypted route stores', () => {
     vi.resetModules();
     vi.clearAllMocks();
     encryptedRequestsMock.requestEncryptedResult.mockReset();
+    secretReadMock.mockReset().mockReturnValue({ rows: [], tombstones: [], unreadable: 0 });
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(true);
     systemMock.currentSystemInfo.mockReturnValue({ nostr: { service_pubkey: 'b'.repeat(64), browser_relays: ['wss://requests.example'] } });
   });
 
-  it('lists and reveals through ContextVM while create/delete submit intents', async () => {
+  it('lists secret references from relay state, reveals through ContextVM, and submits intents', async () => {
     const serviceId = 'svc-123';
     const secretId = 'secret-1';
-    encryptedRequestsMock.requestEncryptedResult
-      .mockResolvedValueOnce({ result: { secrets: [{ id: secretId, name: 'TOKEN', version: 1 }] } })
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: { value: 'plaintext' } } });
+    secretReadMock.mockReturnValue({ rows: [{ id: secretId, service_id: serviceId, name: 'TOKEN', version: 1 }], tombstones: [], unreadable: 0 });
+    encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({ result: { status: 'ok', payload: { value: 'plaintext' } } });
 
     const store = await import('../../src/lib/stores/service-secrets.svelte.js');
 
@@ -58,23 +62,36 @@ describe('encrypted route stores', () => {
     await expect(store.revealServiceSecret(serviceId, secretId)).resolves.toBe('plaintext');
     await expect(store.deleteServiceSecret(serviceId, secretId)).resolves.toMatchObject({ pending: true });
 
-    // List still uses ContextVM encrypted request
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(1, expect.objectContaining({ operation: 'services.secrets.list', payload: { service_id: serviceId } }));
+    expect(secretReadMock).toHaveBeenCalledWith('secret-registry', 32008);
     expect(intentMock).toHaveBeenCalledWith(expect.objectContaining({ domain: 'secret', op: 'create',
       content: expect.objectContaining({ encrypted_value: 'encrypted:super-secret' }) }));
     // Reveal still uses ContextVM
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(2, expect.objectContaining({ operation: 'services.secrets.reveal', payload: { service_id: serviceId, secret_id: secretId } }));
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledTimes(1);
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith(expect.objectContaining({ operation: 'services.secrets.reveal', payload: { service_id: serviceId, secret_id: secretId } }));
     expect(intentMock).toHaveBeenCalledWith(expect.objectContaining({ domain: 'secret', op: 'delete' }));
   });
 
-  it('unwraps legacy encrypted route payload envelopes for service secrets', async () => {
+  it('filters confidential secret references by service and never exposes values', async () => {
     const serviceId = 'svc-123';
-    encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({
-      result: { status: 'ok', payload: { secrets: [{ id: 'secret-legacy', name: 'TOKEN', version: 1 }] } }
-    });
+    secretReadMock.mockReturnValue({ rows: [
+      { id: 'secret-legacy', service_id: serviceId, name: 'TOKEN', version: 1 },
+      { id: 'other-secret', service_id: 'svc-other', name: 'OTHER', version: 1 }
+    ], tombstones: [], unreadable: 0 });
     const store = await import('../../src/lib/stores/service-secrets.svelte.js');
 
-    await expect(store.listServiceSecrets(serviceId)).resolves.toEqual([{ id: 'secret-legacy', name: 'TOKEN', version: 1 }]);
+    await expect(store.listServiceSecrets(serviceId)).resolves.toEqual([{ id: 'secret-legacy', service_id: serviceId, name: 'TOKEN', version: 1 }]);
+    expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
+  });
+
+  it('derives the secret organization from its encrypted relay envelope', async () => {
+    const orgId = '0199c749-9300-7444-8444-444444444444';
+    secretReadMock.mockReturnValue({ rows: [{ id: 'secret-1', service_id: 'svc-123', name: 'TOKEN',
+      event: { content: JSON.stringify({ schema: 'bahia.confidential.aead.v1', key_org: orgId, key_version: 'v1' }) } }],
+    tombstones: [], unreadable: 0 });
+    const store = await import('../../src/lib/stores/service-secrets.svelte.js');
+    await expect(store.listServiceSecrets('svc-123')).resolves.toEqual([
+      { id: 'secret-1', service_id: 'svc-123', name: 'TOKEN', org_id: orgId }
+    ]);
   });
 
   it('surfaces encrypted result errors for deployment run logs', async () => {
@@ -105,11 +122,12 @@ describe('encrypted route stores', () => {
     }));
   });
 
-  it('blocks ContextVM route stores when ContextVM requests are not configured for secrets', async () => {
+  it('reads relay secret references without ContextVM but blocks reveal when ContextVM is unavailable', async () => {
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(false);
     const store = await import('../../src/lib/stores/service-secrets.svelte.js');
 
-    await expect(store.listServiceSecrets('svc-1')).rejects.toThrow(
+    await expect(store.listServiceSecrets('svc-1')).resolves.toEqual([]);
+    await expect(store.revealServiceSecret('svc-1', 'secret-1')).rejects.toThrow(
       'ContextVM requests are not available for service secret management'
     );
     expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();

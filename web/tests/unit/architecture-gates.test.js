@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = join(here, '..', '..');
+const libDir = join(webRoot, 'src', 'lib');
 const storesDir = join(webRoot, 'src', 'lib', 'stores');
 const baselinePath = join(here, 'architecture-gates.baseline.json');
 const updateBaseline = process.env.ARCHTEST_UPDATE_BASELINE === '1';
@@ -58,6 +59,14 @@ function readBaseline() {
 }
 
 describe('web architecture gates (bahia-irsry.8)', () => {
+  it('W4-S1 keeps SimplePool and PoolBackedClient out of application library code', () => {
+    const offenders = sourceFiles(libDir)
+      .filter((file) => !file.endsWith('/nostr/pool-welshman.js'))
+      .filter((file) => /\b(?:SimplePool|PoolBackedClient)\b/.test(stripComments(readFileSync(file, 'utf8'))))
+      .map((file) => relative(webRoot, file));
+    expect(offenders).toEqual([]);
+  });
+
   it('stores gain no new setInterval polling or $lib/api/client.js imports', () => {
     const current = scanStores();
     if (updateBaseline) {
