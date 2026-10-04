@@ -109,7 +109,7 @@ export function mlIntentRequest(op, payload, orgId, current = null) {
     : op.startsWith('version-') ? `model-version:${id}` : `endpoint:${id}`;
   const content = { ...payload };
   delete content.expected_updated_at;
-  if (isUpdate && !op.startsWith('version-')) content.expected_updated_at = revision(current.updated_at);
+  if (isUpdate) content.expected_updated_at = revision(current.updated_at);
   return request('ml', op, coordinate, orgId, content);
 }
 

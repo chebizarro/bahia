@@ -29,7 +29,9 @@ export async function exposeTestSigner(page) {
       if (!verifyEvent(seal) || seal.kind !== 13) return false;
       const plaintext = seal.content.startsWith('mock-nip44:')
         ? Buffer.from(seal.content.slice('mock-nip44:'.length), 'base64').toString('utf8')
-        : nip44.v2.decrypt(seal.content, conversationKey(servicePubkey, seal.pubkey));
+        : seal.content.startsWith('enc44:')
+          ? seal.content.slice('enc44:'.length)
+          : nip44.v2.decrypt(seal.content, conversationKey(servicePubkey, seal.pubkey));
       const rumor = JSON.parse(plaintext);
       return getEventHash(rumor) === rumor.id && rumor.pubkey === seal.pubkey;
     } catch {

@@ -163,7 +163,7 @@ export async function installEncryptedNotificationHarness(
     function deliverEncryptedResult(candidate, subId, event) {
       void normalizeEncryptedEventForDelivery(event).then((normalized) => {
         if (candidate.readyState !== OriginalWebSocket.OPEN) return;
-        candidate.onmessage?.({ data: JSON.stringify(['EVENT', subId, normalized]) });
+        candidate.emitMessage(JSON.stringify(['EVENT', subId, normalized]));
       });
     }
 

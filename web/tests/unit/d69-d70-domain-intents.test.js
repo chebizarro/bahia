@@ -49,7 +49,29 @@ describe('D69 deployment, runtime, LLM and backup wire fixtures', () => {
 });
 
 describe('D70 DNS, ML and worker handler content fixtures', () => {
-  for (const expected of d70) {
+  const knownUnmigrated = [
+    'dns/backend-create', 'dns/backend-delete', 'dns/backend-update',
+    'dns/endpoint-create', 'dns/endpoint-delete', 'dns/endpoint-update',
+    'dns/policy-delete', 'dns/policy-update', 'dns/zone-delete', 'dns/zone-update',
+    'ml/endpoint-delete', 'ml/model-delete', 'ml/version-delete'
+  ];
+  const implemented = d70.filter(expected => {
+    try {
+      fromD70(expected);
+      return true;
+    } catch (error) {
+      if (/^Unsupported (DNS|ML|worker) intent op: /.test(error.message)) return false;
+      throw error;
+    }
+  });
+
+  it('tracks the exact daemon fixture operations not yet implemented by web intent builders', () => {
+    const implementedOps = new Set(implemented.map(({ domain, op }) => `${domain}/${op}`));
+    expect(d70.filter(({ domain, op }) => !implementedOps.has(`${domain}/${op}`))
+      .map(({ domain, op }) => `${domain}/${op}`).sort()).toEqual(knownUnmigrated);
+  });
+
+  for (const expected of implemented) {
     it(`${expected.domain}/${expected.op}: signed request equals Go fixture`, () => {
       const request = fromD70(expected);
       const actual = buildIntentEvent({ ...request, createdAt: 1790985600 });
