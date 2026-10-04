@@ -44,6 +44,9 @@ func (c *Client) Upload(ctx context.Context, data []byte, contentType string) (*
 			"sha256", hash,
 			"size", len(data),
 		)
+		if err := c.observe(ctx, bd); err != nil {
+			return nil, fmt.Errorf("publish Blossom upload observation: %w", err)
+		}
 		return bd, nil
 	}
 
@@ -78,11 +81,15 @@ func (c *Client) UploadWithRedundancy(ctx context.Context, data []byte, contentT
 		)
 	}
 
+	if len(results) > 0 {
+		if err := c.observe(ctx, results[0]); err != nil {
+			return results, fmt.Errorf("publish Blossom upload observation: %w", err)
+		}
+	}
 	if len(results) < minServers {
 		return results, fmt.Errorf("uploaded to %d servers, minimum required: %d. Errors: %v",
 			len(results), minServers, errors)
 	}
-
 	return results, nil
 }
 

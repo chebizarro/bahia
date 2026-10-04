@@ -47,6 +47,7 @@ const (
 // routeCanaryProjectedEventTypes are the supervisor transitions the projector
 // consumes, mapped to the route transition each one announces.
 var routeCanaryProjectedEventTypes = map[events.EventType]domain.RouteCanaryTransition{
+	events.EventRouteCanaryObserved:              domain.RouteCanaryTransitionNone,
 	events.EventRouteCanaryOutageOpened:          domain.RouteCanaryTransitionOpened,
 	events.EventRouteCanaryRecovered:             domain.RouteCanaryTransitionRecovered,
 	events.EventRouteCanaryClassificationChanged: domain.RouteCanaryTransitionClassificationChanged,
@@ -284,6 +285,7 @@ func (o routeCanaryObservation) outbound() ([]routeCanaryOutbound, error) {
 	auditTags := append(gonostr.Tags{
 		{"domain", RouteCanaryNostrDomain},
 		{"schema", routeCanaryAuditSchema},
+		{"t", kinds.CPStateTopicRouteCanary},
 		{"type", string(o.eventType)},
 		{"transition", string(o.transition)},
 		// The state tag names the 30900 coordinate this fact is about.
@@ -298,7 +300,14 @@ func (o routeCanaryObservation) outbound() ([]routeCanaryOutbound, error) {
 	}{
 		{kinds.NIP38Status, routeCanaryAddressTags(o.state.RouteCanaryKey, routeCanaryStatusSchema), status, true},
 		{kinds.CASControlState, routeCanaryAddressTags(o.state.RouteCanaryKey, routeCanaryStateSchema), state, true},
-		{kinds.CASAudit, auditTags, audit, false},
+	}
+	if o.transition != domain.RouteCanaryTransitionNone {
+		specs = append(specs, struct {
+			kind        int
+			tags        gonostr.Tags
+			content     routeCanaryProjection
+			replaceable bool
+		}{kinds.CASAudit, auditTags, audit, false})
 	}
 	out := make([]routeCanaryOutbound, 0, len(specs))
 	for _, spec := range specs {
@@ -349,6 +358,8 @@ func routeCanaryAddressTags(key domain.RouteCanaryKey, schema string) gonostr.Ta
 		{"domain", RouteCanaryNostrDomain},
 		{"schema", schema},
 		{"entity", routeCanaryNostrEntity},
+		{"t", kinds.CPStateTopicRouteCanary},
+		{"legacy_kind", strconv.Itoa(kinds.RouteCanaryRecord)},
 	}, routeCanaryResourceTags(key)...)
 }
 

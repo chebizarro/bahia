@@ -1,5 +1,7 @@
 <script>
-  import { boot } from '$lib/nostr/boot.js';
+  import { boot, onStoreRefresh } from '$lib/nostr/boot.js';
+  import { blossomAdminSnapshot } from '$lib/stores/operational-views.js';
+  import { onContentKeyChange } from '$lib/stores/auth-roles.svelte.js';
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
@@ -17,7 +19,6 @@
   } from '$lib/icons/domain-icons.js';
   import { artifacts as registryArtifacts, services,  operations } from '$lib/stores';
   import { sbomArtifactIds } from '$lib/stores/collections/index.svelte.js';
-  import { api } from '$lib/api/client.js';
   import { authState } from '$lib/stores/auth.js';
 
   // Tab state
@@ -81,47 +82,27 @@
     }
   }
 
+  $effect(() => {
+    const refresh = () => { if (activeTab === 'blossom') void loadBlossomBlobs(); };
+    const stopStore = onStoreRefresh(refresh);
+    const stopKeys = onContentKeyChange(refresh);
+    return () => { stopStore(); stopKeys(); };
+  });
+
   async function loadBlossomBlobs() {
-    if (!api) {
-      blossomError = 'API client not available';
-      return;
-    }
     blossomLoading = true;
     blossomError = null;
-
     try {
-      // Use allSettled so one failing endpoint doesn't abort the others
-      const [serversResult, healthResult, blobsResult] = await Promise.allSettled([
-        api.getBlossomServers(),
-        api.checkBlossomHealth(),
-        api.listBlossomBlobs(pubkeyFilter.trim() || null)
-      ]);
-
-      blossomServers = serversResult.status === 'fulfilled' && Array.isArray(serversResult.value)
-        ? serversResult.value : [];
-      blossomHealth = healthResult.status === 'fulfilled' && healthResult.value && typeof healthResult.value === 'object'
-        ? healthResult.value : {};
-      blossomBlobs = blobsResult.status === 'fulfilled' && Array.isArray(blobsResult.value)
-        ? blobsResult.value : [];
-
-      // Surface a friendly error if all three failed (likely not configured)
-      const allFailed = [serversResult, healthResult, blobsResult].every(r => r.status === 'rejected');
-      if (allFailed) {
-        const firstErr = serversResult.reason?.message || '';
-        if (firstErr.includes('500') || firstErr.includes('Internal Server Error')) {
-          blossomError = 'Blossom storage is not configured on this server. Enable and configure Blossom in your Bahia server settings.';
-        } else {
-          blossomError = firstErr || 'Failed to contact Blossom storage endpoints';
-        }
-      } else if (blobsResult.status === 'rejected') {
-        const err = blobsResult.reason?.message || '';
-        blossomError = err.includes('500')
-          ? 'Blossom blob listing failed — storage may not be configured for this pubkey'
-          : err || 'Failed to list Blossom blobs';
+      await boot();
+      const snapshot = blossomAdminSnapshot();
+      blossomServers = Array.isArray(snapshot.admin?.servers) ? snapshot.admin.servers : [];
+      blossomHealth = snapshot.admin?.health || {};
+      blossomBlobs = snapshot.blobs.filter(blob => !pubkeyFilter.trim() || blob.pubkey === pubkeyFilter.trim().toLowerCase());
+      if (snapshot.unreadable > 0 && !snapshot.admin) {
+        blossomError = 'Blossom administration is not readable with this operator key.';
       }
     } catch (err) {
-      console.error('Failed to load Blossom blobs:', err);
-      blossomError = err.message || 'Failed to load Blossom blobs';
+      blossomError = err?.message || 'Failed to load Blossom observations';
     } finally {
       blossomLoading = false;
     }
@@ -389,10 +370,10 @@
       </div>
     {/if}
 
-    <!-- Filters -->
+    <!-- Filters over daemon-published Blossom metadata. -->
     <div class="filters">
       <div class="filter-group">
-        <label for="pubkey-filter">Owner Pubkey:</label>
+        <label for="pubkey-filter">Published Owner Pubkey:</label>
         <input
           type="text"
           id="pubkey-filter"
@@ -434,7 +415,7 @@
       <EmptyState
         iconComponent={BlossomIcon}
         title="No blobs found"
-        message={pubkeyFilter ? "No blobs found for this pubkey" : "No blobs stored on Blossom servers yet"}
+        message={pubkeyFilter ? "No published blob metadata for this owner" : "No published blob metadata yet"}
       />
     {:else}
       <Table columns={blossomColumns} data={filteredBlobs} />

@@ -71,13 +71,17 @@ func (c *Client) UploadFile(ctx context.Context, path, contentType, expectedHash
 		if contentType == "" {
 			contentType = "application/octet-stream"
 		}
-		return &BlobDescriptor{
+		bd := &BlobDescriptor{
 			URL:      server + "/" + hash,
 			SHA256:   hash,
 			Size:     size,
 			Type:     contentType,
 			Uploaded: BlossomTimestamp{Time: time.Now()},
-		}, nil
+		}
+		if err := c.observe(ctx, bd); err != nil {
+			return nil, fmt.Errorf("publish Blossom upload observation: %w", err)
+		}
+		return bd, nil
 	}
 
 	var lastErr error
@@ -90,6 +94,9 @@ func (c *Client) UploadFile(ctx context.Context, path, contentType, expectedHash
 			continue
 		}
 		c.recordUpload(server, true)
+		if err := c.observe(ctx, bd); err != nil {
+			return nil, fmt.Errorf("publish Blossom upload observation: %w", err)
+		}
 		return bd, nil
 	}
 

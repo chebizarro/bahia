@@ -42,10 +42,6 @@ vi.mock('../../src/lib/nostr/nip46.js', () => ({
   getCapabilities: vi.fn()
 }));
 
-vi.mock('$lib/api/client.js', () => ({
-  api: { setAuthProvider: vi.fn(), fetch: vi.fn() }
-}));
-
 vi.mock('../../src/lib/nostr/encrypted-controlplane.js', () => ({
   disconnectEncryptedControlplane: vi.fn()
 }));

@@ -490,3 +490,12 @@ const (
 	SecurityScheduleRecord      = 32013
 	SecurityFindingDetailRecord = 32014
 )
+
+// F75 read-model family discriminators. All publish on wire kind 30900.
+const (
+	ManagedInstanceHealthRecord = 32040
+	RouteCanaryRecord           = 32041
+	SoulRuntimePolicyRecord     = 32042
+	BlossomAdminRecord          = 32043
+	BlossomBlobRecord           = 32044
+)

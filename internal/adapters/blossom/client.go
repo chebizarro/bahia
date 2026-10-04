@@ -27,12 +27,13 @@ type Config struct {
 
 // Client is a Blossom media server client with multi-server redundancy.
 type Client struct {
-	servers    []string
-	maxRetries int
-	retryDelay time.Duration
-	httpClient *http.Client
-	privateKey string
-	logger     *slog.Logger
+	servers       []string
+	maxRetries    int
+	retryDelay    time.Duration
+	httpClient    *http.Client
+	privateKey    string
+	observeUpload func(context.Context, BlobDescriptor) error
+	logger        *slog.Logger
 
 	mu    sync.RWMutex
 	stats map[string]*serverStats // server URL -> stats
@@ -110,6 +111,20 @@ func NewClient(cfg Config, logger *slog.Logger) *Client {
 		logger:     logger,
 		stats:      make(map[string]*serverStats),
 	}
+}
+
+// SetUploadObserver wires canonical metadata publication after each successful
+// upload. A publication failure is returned to the caller; the blob itself is
+// already stored, and retrying the same SHA-256 upload is idempotent.
+func (c *Client) SetUploadObserver(observer func(context.Context, BlobDescriptor) error) {
+	c.observeUpload = observer
+}
+
+func (c *Client) observe(ctx context.Context, blob *BlobDescriptor) error {
+	if blob == nil || c.observeUpload == nil {
+		return nil
+	}
+	return c.observeUpload(ctx, *blob)
 }
 
 // Servers returns the list of configured server URLs.

@@ -1,76 +1,39 @@
 <script>
-  // RouteCanaryOutages is the one place a nostr_native detail page is allowed
-  // to read the route canary REST compatibility surface. It owns the REST
-  // read itself so that services/[id] and environments/[id] never import
-  // $lib/api/client.js directly — see
-  // pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json,
-  // control_files on the route-canaries-rest-compatibility entry.
-  //
-  // Read-only: this component never publishes a Nostr event or a REST
-  // mutation. It filters route_canaries.List by service_id or
-  // environment_id, exactly like the standalone /route-canaries page.
-  import api from '$lib/api/client.js';
+  import { boot, onStoreRefresh } from '$lib/nostr/boot.js';
+  import { routeCanaryRows } from '$lib/stores/operational-views.js';
   import {
-    routeCanaryKey,
-    classificationLabel,
-    classificationClass,
-    formatRouteTimestamp,
-    instanceStatusLabel,
-    instanceStatusClass,
-    isNotFoundError
+    routeCanaryKey, classificationLabel, classificationClass, formatRouteTimestamp,
+    instanceStatusLabel, instanceStatusClass
   } from '$lib/route-canaries.js';
   import EmptyState from './EmptyState.svelte';
   import { WarningIcon } from '$lib/icons/domain-icons.js';
 
   let {
-    serviceId = null,
-    environmentId = null,
-    open = null,
-    showServiceNames = false,
-    resolveServiceName = null,
-    emptyTitle = 'No route canaries configured',
-    emptyMessage = 'No managed routes are currently being probed.',
-    onCount = null
+    serviceId = null, environmentId = null, open = null, showServiceNames = false,
+    resolveServiceName = null, emptyTitle = 'No route canaries configured',
+    emptyMessage = 'No managed routes are currently being probed.', onCount = null
   } = $props();
-
   let rows = $state([]);
   let loading = $state(true);
   let error = $state('');
   let unavailable = $state(false);
 
   $effect(() => {
-    // Re-read whenever the scoping id (or the open filter) changes (e.g.
-    // navigating between service or environment detail pages re-uses the
-    // same component instance in some routers; explicit dependency keeps
-    // this correct either way).
-    void load(serviceId, environmentId, open);
+    const scopedService = serviceId, scopedEnvironment = environmentId, scopedOpen = open;
+    const refresh = () => load(scopedService, scopedEnvironment, scopedOpen);
+    const stop = onStoreRefresh(refresh);
+    void boot().then(refresh).catch(err => { error = err?.message || 'Route canary state unavailable'; loading = false; });
+    return stop;
   });
 
-  async function load(scopedServiceId, scopedEnvironmentId, scopedOpen) {
-    loading = true;
+  function load(scopedServiceId, scopedEnvironmentId, scopedOpen) {
+    rows = routeCanaryRows().filter(row =>
+      (!scopedServiceId || row.service_id === scopedServiceId) &&
+      (!scopedEnvironmentId || row.environment_id === scopedEnvironmentId) &&
+      (scopedOpen === null || scopedOpen === undefined || !scopedOpen || row.open));
+    onCount?.(rows.length);
+    loading = false;
     error = '';
-    unavailable = false;
-    try {
-      const params = {};
-      if (scopedServiceId) params.service_id = scopedServiceId;
-      if (scopedEnvironmentId) params.environment_id = scopedEnvironmentId;
-      if (scopedOpen !== null && scopedOpen !== undefined) params.open = scopedOpen;
-      rows = await api.listRouteCanaries(params);
-      onCount?.(rows.length);
-    } catch (err) {
-      rows = [];
-      onCount?.(0);
-      if (isNotFoundError(err)) {
-        // Route canaries are tier-2 gated and are not registered at all when
-        // the feature is disabled, so treat that as "nothing to show" rather
-        // than an error wall.
-        unavailable = true;
-      } else {
-        error = err?.message || 'Route canary state unavailable';
-      }
-    } finally {
-      loading = false;
-    }
   }
 </script>
 

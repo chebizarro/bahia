@@ -49,6 +49,11 @@ var goCPStateTopics = map[string]string{
 	"SECURITY_FINDING":           CPStateTopicSecurityFinding,
 	"SECURITY_SCHEDULE":          CPStateTopicSecuritySchedule,
 	"SECURITY_FINDING_DETAIL":    CPStateTopicSecurityFindingDetail,
+	"MANAGED_INSTANCE_HEALTH":    CPStateTopicManagedInstanceHealth,
+	"ROUTE_CANARY":               CPStateTopicRouteCanary,
+	"SOUL_RUNTIME_POLICY":        CPStateTopicSoulRuntimePolicy,
+	"BLOSSOM_ADMIN":              CPStateTopicBlossomAdmin,
+	"BLOSSOM_BLOB":               CPStateTopicBlossomBlob,
 }
 
 func readGeneratedKindsJS(t *testing.T) string {

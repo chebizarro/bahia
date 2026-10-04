@@ -8,34 +8,16 @@
   "signer_first_classes": ["nostr_native", "nostr_request_result_facade"],
   "route_file_rest_import_allowlist": [
     {
-      "file": "web/src/routes/artifacts/+page.svelte",
-      "permitted_transport_classes": ["http_native"],
-      "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "Blossom server health/list/blob HTTP surfaces only; registry artifacts remain Nostr read-model backed."
-    },
-    {
-      "file": "web/src/routes/config-fabric/+page.svelte",
-      "permitted_transport_classes": ["rest_to_nostr_bridge"],
-      "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "Config Fabric API retains validated desired/status Nostr events and server-signs desired-state publication with the operator Signet identity."
-    },
-    {
       "file": "web/src/routes/config-fabric/[coordinate]/+page.svelte",
       "permitted_transport_classes": ["rest_to_nostr_bridge"],
-      "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "Config Fabric detail reads retained Nostr audit state and invokes the server Signet-backed publish/rollback bridge."
+      "allowed_imports": ["$lib/api/write.js"],
+      "allowed_usage": "NIP-98-signed REST publish mutation only; Config Fabric reads derive from verified store events."
     },
     {
       "file": "web/src/routes/instance-health/+page.svelte",
       "permitted_transport_classes": ["rest_compatibility"],
-      "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "Managed-instance supervision is an explicitly non-signer-first REST compatibility surface: the browser reads the server-owned watchdog projection and authenticated maintenance controls invoke the local supervisor rather than claiming browser-signed Nostr command ingress."
-    },
-    {
-      "file": "web/src/routes/route-canaries/+page.svelte",
-      "permitted_transport_classes": ["rest_compatibility"],
-      "allowed_imports": ["$lib/api/client.js"],
-      "allowed_usage": "Route canary state is also projected to signed Nostr observables (NIP-38 status, 30900 state, 4903 audit; see bahia-dblkq), so this is not a REST-only signal, the same as managed instance health. The Nostr projection does carry observed_instance_status and service_healthy_route_broken, in both status/state event content and tags, and it publishes 4903 audit history too. The REST surface is justified on different grounds: it is read-only and server-owned, it serves bounded history and lineage queries plus a per-route detail read model, and it involves no browser-signed command ingress. The page reads it directly over the bounded Tier 2 REST surface rather than claiming browser-signed Nostr command ingress; it is read-only."
+      "allowed_imports": ["$lib/api/write.js"],
+      "allowed_usage": "NIP-98-signed maintenance mutation only; health reads derive from verified store events."
     }
   ],
   "entries": [

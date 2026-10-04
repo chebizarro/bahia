@@ -215,7 +215,7 @@
   });
   // Route canary count for the section heading; RouteCanaryOutages owns the
   // REST read itself (see $lib/components/RouteCanaryOutages.svelte) so this
-  // page stays nostr_native and never imports $lib/api/client.js.
+  // page stays nostr_native and never imports the legacy REST client.
   let routeCanaryCount = $state(0);
   // Secret create modal state
   let secretCreateOpen = $state(false);

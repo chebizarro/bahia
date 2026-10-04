@@ -85,11 +85,13 @@ func (p *ManagedInstanceHealthProjector) projectHealth(ctx context.Context, payl
 		newManagedEvent(kinds.NIP38Status, payload.OccurredAt.Unix(), append(base, gonostr.Tag{"status", string(h.Status)}), statusContent),
 		newManagedEvent(kinds.CASControlState, payload.OccurredAt.Unix(), managedInstanceTags(h, managedHealthStateSchema), stateContent),
 	}
+	auditType := "health_observation"
 	if payload.PreviousStatus != h.Status {
-		audit := map[string]any{"schema": managedHealthAuditSchema, "event_id": payload.EventID, "type": "health_transition", "previous_status": payload.PreviousStatus, "status": h.Status, "reason": domain.SanitizeEvidence(payload.Reason), "observed_at": h.LastObservedAt}
-		tags := append(managedInstanceResourceTags(h), gonostr.Tag{"domain", "runtime"}, gonostr.Tag{"schema", managedHealthAuditSchema}, gonostr.Tag{"type", "health_transition"})
-		eventsToPublish = append(eventsToPublish, newManagedEvent(kinds.CASAudit, payload.OccurredAt.Unix(), tags, audit))
+		auditType = "health_transition"
 	}
+	audit := map[string]any{"schema": managedHealthAuditSchema, "event_id": payload.EventID, "type": auditType, "previous_status": payload.PreviousStatus, "status": h.Status, "reason": domain.SanitizeEvidence(payload.Reason), "observed_at": h.LastObservedAt}
+	tags := append(managedInstanceResourceTags(h), gonostr.Tag{"domain", "runtime"}, gonostr.Tag{"schema", managedHealthAuditSchema}, gonostr.Tag{"t", kinds.CPStateTopicManagedInstanceHealth}, gonostr.Tag{"type", auditType})
+	eventsToPublish = append(eventsToPublish, newManagedEvent(kinds.CASAudit, payload.OccurredAt.Unix(), tags, audit))
 	return p.publishAll(ctx, eventsToPublish)
 }
 
@@ -97,7 +99,7 @@ func (p *ManagedInstanceHealthProjector) projectRecovery(ctx context.Context, ty
 	h := sanitizeProjectedHealth(payload.Health)
 	action := strings.TrimPrefix(string(typ), "runtime.")
 	content := map[string]any{"schema": managedHealthAuditSchema, "event_id": payload.EventID, "type": action, "decision": payload.Decision, "attempt": sanitizeAttempt(payload.Attempt), "status": h.Status, "occurred_at": payload.OccurredAt}
-	tags := append(managedInstanceResourceTags(h), gonostr.Tag{"domain", "runtime"}, gonostr.Tag{"schema", managedHealthAuditSchema}, gonostr.Tag{"type", action}, gonostr.Tag{"correlation", payload.Attempt.CorrelationID})
+	tags := append(managedInstanceResourceTags(h), gonostr.Tag{"domain", "runtime"}, gonostr.Tag{"schema", managedHealthAuditSchema}, gonostr.Tag{"t", kinds.CPStateTopicManagedInstanceHealth}, gonostr.Tag{"type", action}, gonostr.Tag{"correlation", payload.Attempt.CorrelationID})
 	statusTags := append(managedInstanceTags(h, managedHealthStatusSchema), gonostr.Tag{"status", action})
 	return p.publishAll(ctx, []gonostr.Event{newManagedEvent(kinds.NIP38Status, payload.OccurredAt.Unix(), statusTags, content), newManagedEvent(kinds.CASAudit, payload.OccurredAt.Unix(), tags, content)})
 }
@@ -124,7 +126,7 @@ func (p *ManagedInstanceHealthProjector) projectMaintenance(ctx context.Context,
 		}
 		return nil
 	}()})
-	audit := newManagedEvent(kinds.CASAudit, payload.OccurredAt.Unix(), append(managedInstanceResourceTags(h), gonostr.Tag{"domain", "runtime"}, gonostr.Tag{"schema", managedHealthAuditSchema}, gonostr.Tag{"type", action}), content)
+	audit := newManagedEvent(kinds.CASAudit, payload.OccurredAt.Unix(), append(managedInstanceResourceTags(h), gonostr.Tag{"domain", "runtime"}, gonostr.Tag{"schema", managedHealthAuditSchema}, gonostr.Tag{"t", kinds.CPStateTopicManagedInstanceHealth}, gonostr.Tag{"type", action}), content)
 	return p.publishAll(ctx, []gonostr.Event{status, state, audit})
 }
 
@@ -158,7 +160,7 @@ func newManagedEvent(kind int, createdAt int64, tags gonostr.Tags, content any) 
 }
 
 func managedInstanceTags(h domain.ManagedInstanceHealth, schema string) gonostr.Tags {
-	return append(gonostr.Tags{{"d", managedInstanceDTag(h.ManagedInstanceKey)}, {"domain", "runtime"}, {"schema", schema}, {"entity", "managed-instance-health"}}, managedInstanceResourceTags(h)...)
+	return append(gonostr.Tags{{"d", managedInstanceDTag(h.ManagedInstanceKey)}, {"domain", "runtime"}, {"schema", schema}, {"entity", "managed-instance-health"}, {"t", kinds.CPStateTopicManagedInstanceHealth}, {"legacy_kind", fmt.Sprint(kinds.ManagedInstanceHealthRecord)}}, managedInstanceResourceTags(h)...)
 }
 func managedInstanceResourceTags(h domain.ManagedInstanceHealth) gonostr.Tags {
 	return gonostr.Tags{{"service", h.ServiceID.String()}, {"environment", h.EnvironmentID.String()}, {"deployment_unit", h.DeploymentUnitID.String()}, {"target", strings.TrimSpace(h.RuntimeTargetName)}, {"supervisor", string(h.SupervisorType)}}

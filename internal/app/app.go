@@ -1675,6 +1675,28 @@ func New(cfg *config.Config) (*App, error) {
 		blossomClient = blossom.NewClient(blossomCfg, slog.Default())
 		logger.Info("blossom client enabled", zap.Strings("servers", blossomCfg.Servers))
 	}
+	// F75 operational view publications: Soul runtime policy and one bounded
+	// Blossom startup observation; daemon-owned uploads publish at their site.
+	if nostrProjector != nil && nostrProjector.Enabled() {
+		viewPublisher := nostrAdapter.NewOperationalViewPublisher(nostrProjector, confidentialEncryptor)
+		owners := append([]string{blossomOwnerKey(cfg.Blossom.PrivateKey)}, cfg.Nostr.AuthorizedPubkeys...)
+		for _, owner := range cfg.Nostr.BootstrapOwners {
+			owners = append(owners, owner)
+		}
+		if blossomClient != nil && confidentialEncryptor != nil {
+			owner := blossomOwnerKey(cfg.Blossom.PrivateKey)
+			if owner != "" {
+				blossomClient.SetUploadObserver(func(ctx context.Context, descriptor blossom.BlobDescriptor) error {
+					return viewPublisher.PublishBlossomBlob(ctx, owner, descriptor)
+				})
+			}
+		}
+		bgManager.RegisterWithOptions(&operationalViewsRunner{
+			publisher: viewPublisher, blossom: blossomClient,
+			runtimes: append([]string{}, cfg.SoulFactory.AgentRuntimes...),
+			owners:   owners, logger: logger,
+		}, RunnerRequired(false))
+	}
 	var runLogService *runtime.LogService
 	var sbomOrchestrator *service.SBOMOrchestrator
 	var sbomStorageResolver *sbomAdapter.StorageResolver

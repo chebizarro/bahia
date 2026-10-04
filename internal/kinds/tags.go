@@ -114,6 +114,11 @@ const (
 	CPStateTopicBackupVerification       = "backup-verification"
 	CPStateTopicBackupRestore            = "backup-restore"
 	CPStateTopicBackupRuntimeObservation = "backup-runtime"
+	CPStateTopicManagedInstanceHealth    = "runtime-instance-health"
+	CPStateTopicRouteCanary              = "route-canary"
+	CPStateTopicSoulRuntimePolicy        = "soul-factory-runtime-policy"
+	CPStateTopicBlossomAdmin             = "blossom-admin"
+	CPStateTopicBlossomBlob              = "blossom-blob"
 
 	// Secret and notification channel state topics (Phase 3 N1).
 	CPStateTopicSecretRegistry              = "secret-registry"

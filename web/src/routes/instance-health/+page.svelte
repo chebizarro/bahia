@@ -1,12 +1,10 @@
 <script>
-  import api from '$lib/api/client.js';
+  import { boot, onStoreRefresh } from '$lib/nostr/boot.js';
+  import { instanceHealthRows, instanceHealthDetail } from '$lib/stores/operational-views.js';
+  import { authorizedWrite } from '$lib/api/write.js';
   import {
-    buildInstanceHealthSummary,
-    formatBytes,
-    formatInstanceTimestamp,
-    managedInstanceKey,
-    memoryPercent,
-    statusClass
+    buildInstanceHealthSummary, formatBytes, formatInstanceTimestamp,
+    managedInstanceKey, memoryPercent, statusClass
   } from './page-model.js';
 
   let rows = $state([]);
@@ -36,47 +34,44 @@
     });
   });
 
-  $effect(() => { void loadRows(); });
+  $effect(() => {
+    const stop = onStoreRefresh(() => { refreshRows(); });
+    void loadRows();
+    return stop;
+  });
+
+  function refreshRows() {
+    rows = instanceHealthRows();
+    if (selected) {
+      selected = rows.find((row) => managedInstanceKey(row) === managedInstanceKey(selected)) || null;
+      if (selected) selectInstance(selected);
+      else { detail = null; events = []; attempts = []; }
+    }
+  }
 
   async function loadRows() {
     loading = true;
     error = '';
-    try {
-      rows = await api.listInstanceHealth();
-      if (selected) {
-        selected = rows.find((row) => managedInstanceKey(row) === managedInstanceKey(selected)) || null;
-      }
-    } catch (err) {
-      error = err?.message || 'Failed to load managed instance health';
-    } finally {
-      loading = false;
-    }
+    try { await boot(); refreshRows(); }
+    catch (err) { error = err?.message || 'Failed to load managed instance health'; }
+    finally { loading = false; }
   }
 
-  async function selectInstance(row) {
+  function selectInstance(row) {
     selected = row;
-    detail = null;
-    events = [];
-    attempts = [];
     detailLoading = true;
     detailError = '';
     mutationMessage = '';
-    const key = managedInstanceKey(row);
-    try {
-      const [nextDetail, nextEvents, nextAttempts] = await Promise.all([
-        api.getInstanceHealth(row),
-        api.listInstanceHealthEvents(row),
-        api.listInstanceRecoveryAttempts(row)
-      ]);
-      if (!selected || managedInstanceKey(selected) !== key) return;
-      detail = nextDetail;
-      events = nextEvents;
-      attempts = nextAttempts;
-    } catch (err) {
-      if (selected && managedInstanceKey(selected) === key) detailError = err?.message || 'Failed to load instance history';
-    } finally {
-      if (selected && managedInstanceKey(selected) === key) detailLoading = false;
-    }
+    const result = instanceHealthDetail(row);
+    detail = result.detail;
+    events = result.events;
+    attempts = result.attempts;
+    detailLoading = false;
+  }
+
+  function maintenancePath(row) {
+    const path = [row.service_id, row.environment_id, row.deployment_unit_id].map(encodeURIComponent);
+    return `/services/${path[0]}/environments/${path[1]}/managed-instances/${path[2]}/maintenance?runtime_target_name=${encodeURIComponent(row.runtime_target_name)}`;
   }
 
   async function setMaintenance() {
@@ -84,20 +79,15 @@
     mutating = true;
     mutationMessage = '';
     try {
-      await api.setInstanceMaintenance(selected, {
+      await authorizedWrite(maintenancePath(selected), 'POST', {
         reason: maintenanceReason.trim(),
         expires_at: maintenanceExpiresAt ? new Date(maintenanceExpiresAt).toISOString() : null
       });
       maintenanceReason = '';
       maintenanceExpiresAt = '';
       mutationMessage = 'Maintenance override enabled.';
-      await loadRows();
-      if (selected) await selectInstance(selected);
-    } catch (err) {
-      mutationMessage = err?.message || 'Failed to set maintenance override';
-    } finally {
-      mutating = false;
-    }
+    } catch (err) { mutationMessage = err?.message || 'Failed to set maintenance override'; }
+    finally { mutating = false; }
   }
 
   async function clearMaintenance() {
@@ -105,15 +95,10 @@
     mutating = true;
     mutationMessage = '';
     try {
-      await api.clearInstanceMaintenance(selected);
+      await authorizedWrite(maintenancePath(selected), 'DELETE');
       mutationMessage = 'Maintenance override cleared.';
-      await loadRows();
-      if (selected) await selectInstance(selected);
-    } catch (err) {
-      mutationMessage = err?.message || 'Failed to clear maintenance override';
-    } finally {
-      mutating = false;
-    }
+    } catch (err) { mutationMessage = err?.message || 'Failed to clear maintenance override'; }
+    finally { mutating = false; }
   }
 </script>
 

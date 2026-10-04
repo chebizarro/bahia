@@ -498,10 +498,15 @@ var cpStateFamilies = map[int]cpStateFamily{
 	// Org key-envelope family (Phase 3 C1: per-org content key distribution).
 	KindOrgKeyEnvelope: {"org", "key-envelope", kinds.CPStateTopicOrgKeyEnvelope},
 	// Payment and security cp-state families (bahia-irsry.60).
-	KindPaymentRecord:               {"payment", "record", kinds.CPStateTopicPaymentRecord},
-	KindSecurityFindingRecord:       {"security", "finding", kinds.CPStateTopicSecurityFinding},
-	KindSecurityScheduleRecord:      {"security", "schedule", kinds.CPStateTopicSecuritySchedule},
-	KindSecurityFindingDetailRecord: {"security", "finding-detail", kinds.CPStateTopicSecurityFindingDetail},
+	KindPaymentRecord:                 {"payment", "record", kinds.CPStateTopicPaymentRecord},
+	KindSecurityFindingRecord:         {"security", "finding", kinds.CPStateTopicSecurityFinding},
+	KindSecurityScheduleRecord:        {"security", "schedule", kinds.CPStateTopicSecuritySchedule},
+	KindSecurityFindingDetailRecord:   {"security", "finding-detail", kinds.CPStateTopicSecurityFindingDetail},
+	kinds.ManagedInstanceHealthRecord: {"runtime", "instance-health", kinds.CPStateTopicManagedInstanceHealth},
+	kinds.RouteCanaryRecord:           {"route", "canary", kinds.CPStateTopicRouteCanary},
+	kinds.SoulRuntimePolicyRecord:     {"soul-factory", "runtime-policy", kinds.CPStateTopicSoulRuntimePolicy},
+	kinds.BlossomAdminRecord:          {"blossom", "admin", kinds.CPStateTopicBlossomAdmin},
+	kinds.BlossomBlobRecord:           {"blossom", "blob", kinds.CPStateTopicBlossomBlob},
 }
 
 // CPStateDomains returns all unique cp-state domain names from the
