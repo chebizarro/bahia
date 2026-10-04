@@ -2,8 +2,11 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // RegisterWorkerContextVMHandlers registers encrypted ContextVM worker command
@@ -23,6 +26,81 @@ func RegisterWorkerContextVMHandlers(transport *EncryptedRequestTransport, gate 
 	transport.RegisterContextVMHandler(ContextVMMethodWorkerDrain, gate.wrap(h.drain))
 	transport.RegisterContextVMHandler(ContextVMMethodWorkerMaintenanceExit, gate.wrap(h.maintenanceExit))
 	transport.RegisterContextVMHandler(ContextVMMethodWorkerLabelsUpdate, gate.wrap(h.labelsUpdate))
+	transport.RegisterContextVMHandler("worker/policy-apply", gate.wrap(h.policyApply))
+	transport.RegisterContextVMHandler("worker/workload-pin", gate.wrap(h.workloadPin))
+}
+
+func (h workerContextVMHandlers) policyApply(ctx context.Context, request ContextVMRequest) (any, error) {
+	var payload WorkerPolicyApplyCommand
+	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, err
+	}
+	id, err := uuid.Parse(strings.TrimSpace(payload.EnvironmentID))
+	if err != nil || id == uuid.Nil || payload.Policy == nil {
+		return nil, fmt.Errorf("environment_id and policy are required")
+	}
+	if h.intentProcessor != nil && h.intentProcessor.Handler("environment") != nil {
+		if request.Event == nil {
+			return nil, fmt.Errorf("worker policy requires an authenticated requester")
+		}
+		handler, ok := h.intentProcessor.Handler("environment").(*EnvironmentIntentHandler)
+		if !ok || handler.registry == nil {
+			return nil, fmt.Errorf("environment intent handler is not configured")
+		}
+		env, err := handler.registry.GetEnvironment(ctx, id)
+		if err != nil || env == nil {
+			return nil, fmt.Errorf("environment not found")
+		}
+		var content map[string]interface{}
+		if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
+			return nil, err
+		}
+		intentID := intentIDFromContextVM(request, payload.IdempotencyKey)
+		if intentID == "" {
+			intentID = request.Event.ID.Hex()
+		}
+		intent := &Intent{Event: request.Event, Domain: "environment", Op: "worker-policy-apply", OrgID: env.OrgID,
+			Coordinate: id.String(), IntentID: intentID,
+			Content: content, Actor: request.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result, nil
+	}
+	receipt, err := h.publisher.PublishWorkerPolicyApplyRequest(ctx, payload)
+	return workerCommandAck(receipt), err
+}
+
+func (h workerContextVMHandlers) workloadPin(ctx context.Context, request ContextVMRequest) (any, error) {
+	var payload WorkloadPinCommand
+	if err := decodeContextVMParams(request.RPC.Params, &payload); err != nil {
+		return nil, err
+	}
+	if payload.WorkloadKind == "ml_inference" && h.intentProcessor != nil && h.intentProcessor.Handler("ml") != nil {
+		if request.Event == nil {
+			return nil, fmt.Errorf("ML pin requires an authenticated requester")
+		}
+		id, err := uuid.Parse(strings.TrimSpace(payload.WorkloadID))
+		if err != nil || id == uuid.Nil {
+			return nil, fmt.Errorf("ML pin requires a valid workload_id")
+		}
+		var content map[string]interface{}
+		if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
+			return nil, err
+		}
+		intentID := intentIDFromContextVM(request, payload.IdempotencyKey)
+		if intentID == "" {
+			intentID = request.Event.ID.Hex()
+		}
+		intent := &Intent{Event: request.Event, Domain: "ml", Op: "pin", Coordinate: "endpoint:" + id.String(),
+			IntentID: intentID, Content: content, Actor: request.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result, nil
+	}
+	receipt, err := h.publisher.PublishWorkloadPinRequest(ctx, payload)
+	return workerCommandAck(receipt), err
 }
 
 type workerContextVMHandlers struct {

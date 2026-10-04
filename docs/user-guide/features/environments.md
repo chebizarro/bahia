@@ -1,5 +1,7 @@
 # Environments
 
+`environment/worker-policy-apply` is a fleet-operator desired-state intent on the environment coordinate. It updates the full `runtime_config.worker_policy` in the canonical environment record; use that record's `updated_at` as `expected_updated_at` to detect conflicts. See the [D80 fixture](../../../web/tests/fixtures/d80-intent-content.json).
+
 The web environment list and detail views read the local verified event store by the `environment-registry` topic. Runtime state uses the `service-state` topic. Cached data renders without waiting for relay EOSE, and live updates or kind-5 deletions update the view in place. Mutation transport remains unchanged in this phase.
 
 

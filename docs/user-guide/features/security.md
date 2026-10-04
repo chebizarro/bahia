@@ -1,5 +1,7 @@
 # Security
 
+Manual `security/scan-run` is a client-signed request intent. Its bounded `30315` acceptance identifies the run and target hash; follow the existing security scan status, summary, findings, and audit records for progress and completion. See the [D80 wire fixture](../../../web/tests/fixtures/d80-intent-content.json).
+
 The Security dashboard provides visibility into vulnerability scanning powered by the [OSV](https://osv.dev) database. Bahia scans SBOMs, packages, PURLs, and Git commits for known vulnerabilities and surfaces the results in a unified view.
 
 ## How Scanning Works

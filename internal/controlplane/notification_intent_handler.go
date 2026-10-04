@@ -36,25 +36,31 @@ type NotificationChannelChangeNotifier interface {
 	OnChannelChanged(ch *domain.NotificationChannel, deleted bool)
 }
 
+type NotificationTestDispatcher interface {
+	DispatchToChannel(ctx context.Context, ch *domain.NotificationChannel, eventType string, payload map[string]any) error
+}
+
 // NotificationIntentHandler processes kind-30900 intents for the "notification"
 // domain. It handles channel create/update/delete.
 //
 // See design §7 Wave 5 N1.
 type NotificationIntentHandler struct {
-	registry  NotificationIntentCRUD
-	publisher NotificationIntentPublisher
-	notifier  NotificationChannelChangeNotifier
-	status    *IntentStatusPublisher
-	logger    *zap.Logger
+	registry       NotificationIntentCRUD
+	publisher      NotificationIntentPublisher
+	notifier       NotificationChannelChangeNotifier
+	testDispatcher NotificationTestDispatcher
+	status         *IntentStatusPublisher
+	logger         *zap.Logger
 }
 
 // NotificationIntentHandlerConfig configures the notification intent handler.
 type NotificationIntentHandlerConfig struct {
-	Registry  NotificationIntentCRUD
-	Publisher NotificationIntentPublisher
-	Notifier  NotificationChannelChangeNotifier
-	Status    *IntentStatusPublisher
-	Logger    *zap.Logger
+	Registry       NotificationIntentCRUD
+	Publisher      NotificationIntentPublisher
+	Notifier       NotificationChannelChangeNotifier
+	TestDispatcher NotificationTestDispatcher
+	Status         *IntentStatusPublisher
+	Logger         *zap.Logger
 }
 
 // NewNotificationIntentHandler constructs the handler.
@@ -64,22 +70,53 @@ func NewNotificationIntentHandler(cfg NotificationIntentHandlerConfig) *Notifica
 		logger = zap.NewNop()
 	}
 	return &NotificationIntentHandler{
-		registry:  cfg.Registry,
-		publisher: cfg.Publisher,
-		notifier:  cfg.Notifier,
-		status:    cfg.Status,
-		logger:    logger.Named("notification-intent"),
+		registry:       cfg.Registry,
+		publisher:      cfg.Publisher,
+		notifier:       cfg.Notifier,
+		testDispatcher: cfg.TestDispatcher,
+		status:         cfg.Status,
+		logger:         logger.Named("notification-intent"),
 	}
 }
 
 // HandleIntent processes a single notification intent.
 func (h *NotificationIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
 	switch intent.Op {
+	case "channel-test":
+		return h.handleChannelTest(ctx, intent)
 	case "delete":
 		return h.handleDelete(ctx, intent)
 	default:
 		return h.handleCreateOrUpdate(ctx, intent)
 	}
+}
+
+func (h *NotificationIntentHandler) handleChannelTest(ctx context.Context, intent *Intent) error {
+	id, err := uuid.Parse(firstIntentString(intent.Content, "id"))
+	if err != nil || id == uuid.Nil || intent.Coordinate != id.String() {
+		return fmt.Errorf("notification channel-test requires matching id and coordinate")
+	}
+	if intent.ExpectedUpdatedAt != nil {
+		return fmt.Errorf("notification channel-test does not support expected_updated_at")
+	}
+	if h.registry == nil || h.testDispatcher == nil {
+		return fmt.Errorf("notification channel test is not configured")
+	}
+	ch, err := h.registry.GetChannelByID(ctx, id)
+	if err != nil {
+		return err
+	}
+	if ch == nil || ch.OrgID != intent.OrgID {
+		return fmt.Errorf("notification channel must belong to the authorized organization")
+	}
+	if err := h.testDispatcher.DispatchToChannel(ctx, ch, "test", map[string]any{
+		"message": "This is a test notification from Bahia", "channel_id": ch.ID.String(),
+	}); err != nil {
+		return fmt.Errorf("failed to send test notification: %w", err)
+	}
+	intent.Result = map[string]any{"status": "test sent", "id": id.String()}
+	intent.StatusData = intent.Result
+	return nil
 }
 
 // PermissionFor returns domain.PermManageSettings for all notification ops.

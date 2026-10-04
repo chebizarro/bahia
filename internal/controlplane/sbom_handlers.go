@@ -29,14 +29,18 @@ type sbomRequestRunner interface {
 }
 
 type sbomContextVMHandler struct {
-	runner sbomRequestRunner
+	runner    sbomRequestRunner
+	processor *IntentProcessor
 }
 
-func RegisterSBOMContextVMHandlers(transport *EncryptedRequestTransport, runner sbomRequestRunner, gate *FleetOperatorGate) {
+func RegisterSBOMContextVMHandlers(transport *EncryptedRequestTransport, runner sbomRequestRunner, gate *FleetOperatorGate, processors ...*IntentProcessor) {
 	if transport == nil || runner == nil {
 		return
 	}
 	h := sbomContextVMHandler{runner: runner}
+	if len(processors) > 0 {
+		h.processor = processors[0]
+	}
 	transport.RegisterContextVMHandler(ContextVMMethodSBOMGenerate, gate.wrap(h.generate))
 	transport.RegisterContextVMHandler(ContextVMMethodSBOMImport, gate.wrap(h.importSBOM))
 }
@@ -45,6 +49,25 @@ func (h sbomContextVMHandler) generate(ctx context.Context, req ContextVMRequest
 	var payload service.SBOMGenerateRequest
 	if err := json.Unmarshal(req.RPC.Params, &payload); err != nil {
 		return nil, fmt.Errorf("decode sbom/generate params: %w", err)
+	}
+	if h.processor != nil && h.processor.Handler("sbom") != nil {
+		if req.Event == nil {
+			return nil, fmt.Errorf("sbom generate requires an authenticated requester")
+		}
+		var content map[string]interface{}
+		if err := json.Unmarshal(req.RPC.Params, &content); err != nil {
+			return nil, err
+		}
+		id := intentIDFromContextVM(req, payload.IDempotencyKey)
+		if id == "" {
+			id = req.Event.ID.Hex()
+		}
+		intent := &Intent{Event: req.Event, Domain: "sbom", Op: "generate", Coordinate: "sbom-generate:" + id,
+			IntentID: id, Content: content, Actor: req.Event.PubKey.Hex()}
+		if err := h.processor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result, nil
 	}
 	return h.runner.EnqueueGenerate(ctx, payload)
 }
@@ -75,6 +98,25 @@ func (h sbomContextVMHandler) importSBOM(ctx context.Context, req ContextVMReque
 			return nil, fmt.Errorf("sbom/import inline payload is %d bytes, over the %d-byte ContextVM limit; upload the SBOM to Blossom and import it by location", len(decoded), maxContextVMInlineSBOMBytes)
 		}
 		bytes = decoded
+	}
+	if h.processor != nil && h.processor.Handler("sbom") != nil {
+		if req.Event == nil {
+			return nil, fmt.Errorf("sbom import requires an authenticated requester")
+		}
+		var content map[string]interface{}
+		if err := json.Unmarshal(req.RPC.Params, &content); err != nil {
+			return nil, err
+		}
+		id := intentIDFromContextVM(req, payload.IDempotencyKey)
+		if id == "" {
+			id = req.Event.ID.Hex()
+		}
+		intent := &Intent{Event: req.Event, Domain: "sbom", Op: "import", Coordinate: "sbom-import:" + id,
+			IntentID: id, Content: content, Actor: req.Event.PubKey.Hex()}
+		if err := h.processor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result, nil
 	}
 	return h.runner.EnqueueImport(ctx, service.SBOMImportRequest{IDempotencyKey: payload.IDempotencyKey, Subject: payload.Subject, SubjectLocator: payload.SubjectLocator, Format: payload.Format, Payload: bytes, Location: payload.Location, Storage: payload.Storage, Generator: payload.Generator})
 }

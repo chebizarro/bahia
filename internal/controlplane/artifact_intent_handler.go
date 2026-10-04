@@ -16,12 +16,26 @@ import (
 // the same registry methods as the encrypted transport. Those methods own
 // canonical build/artifact publication; this handler must not publish again.
 type ArtifactIntentHandler struct {
-	registry RegistryMutationBackend
-	services ServiceReader
+	registry        RegistryMutationBackend
+	services        ServiceReader
+	signatureRoutes *EncryptedRouteHandlers
+	builds          BuildResultLoader
+	buildRegistrar  BuildResultArtifactRegistrar
 }
 
 func NewArtifactIntentHandler(registry RegistryMutationBackend, services ServiceReader) *ArtifactIntentHandler {
 	return &ArtifactIntentHandler{registry: registry, services: services}
+}
+
+// ConfigureSignatureVerification shares the encrypted route's verifier and
+// canonical signature repository after F74a wraps the repository in app.New.
+func (h *ArtifactIntentHandler) ConfigureSignatureVerification(routes *EncryptedRouteHandlers) {
+	h.signatureRoutes = routes
+}
+
+func (h *ArtifactIntentHandler) ConfigureBuildResultRegistration(builds BuildResultLoader, registrar BuildResultArtifactRegistrar) {
+	h.builds = builds
+	h.buildRegistrar = registrar
 }
 
 func (*ArtifactIntentHandler) PermissionFor(string) domain.Permission {
@@ -37,6 +51,69 @@ func (h *ArtifactIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 		return err
 	}
 	switch intent.Op {
+	case "register-build-result":
+		if h.builds == nil || h.buildRegistrar == nil {
+			return fmt.Errorf("build-result artifact registration is not configured")
+		}
+		if intent.ExpectedUpdatedAt != nil {
+			return fmt.Errorf("register-build-result does not support expected_updated_at")
+		}
+		buildID, err := uuid.Parse(firstIntentString(intent.Content, "build_id"))
+		if err != nil || buildID == uuid.Nil || intent.Coordinate != "build-result:"+buildID.String() {
+			return fmt.Errorf("register-build-result requires matching build_id and coordinate")
+		}
+		build, err := h.builds.GetByID(ctx, buildID)
+		if err != nil {
+			return err
+		}
+		if build == nil {
+			return fmt.Errorf("build %s not found", buildID)
+		}
+		if err := h.checkServiceOrg(ctx, build.ServiceID, intent.OrgID); err != nil {
+			return err
+		}
+		if build.Status != domain.BuildStatusSucceeded {
+			return fmt.Errorf("only a successful build result can register an artifact")
+		}
+		artifact, err := h.buildRegistrar.RegisterBuildResult(ctx, buildID)
+		if err != nil {
+			return err
+		}
+		if artifact == nil || artifact.BuildID != buildID || artifact.ServiceID != build.ServiceID {
+			return fmt.Errorf("build result did not produce a verified artifact for the authorized service")
+		}
+		intent.Result = map[string]any{"artifact_id": artifact.ID.String(), "build_id": buildID.String(), "service_id": build.ServiceID.String(), "manifest_digest": artifact.ImageDigest}
+		intent.StatusData = intent.Result
+		return nil
+	case "signature-verify":
+		if h.signatureRoutes == nil || h.signatureRoutes.artifacts == nil || h.signatureRoutes.signatures == nil || h.signatureRoutes.signVerifier == nil {
+			return fmt.Errorf("artifact signature verification is not configured")
+		}
+		if intent.ExpectedUpdatedAt != nil {
+			return fmt.Errorf("artifact signature-verify does not support expected_updated_at")
+		}
+		id, err := uuid.Parse(firstIntentString(intent.Content, "artifact_id"))
+		if err != nil || id == uuid.Nil || intent.Coordinate != "artifact:"+id.String() {
+			return fmt.Errorf("artifact signature-verify requires matching artifact_id and coordinate")
+		}
+		artifact, err := h.signatureRoutes.artifacts.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if artifact == nil {
+			return fmt.Errorf("artifact not found")
+		}
+		if err := h.checkServiceOrg(ctx, artifact.ServiceID, intent.OrgID); err != nil {
+			return err
+		}
+		result, err := h.signatureRoutes.verifyArtifactSignaturesDirect(ctx, artifact)
+		if err != nil {
+			return err
+		}
+		delete(result, "signatures")
+		intent.Result = result
+		intent.StatusData = result
+		return nil
 	case "register":
 		var payload dto.RegisterArtifactRequest
 		if err := json.Unmarshal(raw, &payload); err != nil {

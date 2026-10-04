@@ -1174,6 +1174,7 @@ func New(cfg *config.Config) (*App, error) {
 			envRegistry,
 			nil, // statePublisher: the relay-first registry handles publishing
 			logger,
+			workerRepo,
 		)
 		intentProcessor.RegisterHandler("environment", envHandler)
 		logger.Info("environment intent handler registered")
@@ -1282,8 +1283,10 @@ func New(cfg *config.Config) (*App, error) {
 	// --- D76 artifact intent registration (separate from D77 build handlers) ---
 	// RegistryService owns build/artifact cp-state publication. Do not pass its
 	// relay-first wrapper here: that would invoke the same publisher twice.
+	var artifactIntentHandler *controlplane.ArtifactIntentHandler
 	if enabledDomains["artifact"] {
-		intentProcessor.RegisterHandler("artifact", controlplane.NewArtifactIntentHandler(registry, serviceRepo))
+		artifactIntentHandler = controlplane.NewArtifactIntentHandler(registry, serviceRepo)
+		intentProcessor.RegisterHandler("artifact", artifactIntentHandler)
 	}
 	if enabledDomains["adoption"] && adoptionSvc != nil {
 		intentProcessor.RegisterHandler("adoption", controlplane.NewAdoptionIntentHandler(adoptionSvc, cfg.Adoption.AllowedPubkeys))
@@ -1532,7 +1535,7 @@ func New(cfg *config.Config) (*App, error) {
 		giftWrapIngress = controlplane.NewIntentGiftWrapIngress(controlplane.IntentGiftWrapIngressConfig{
 			Signer:           controlPlaneSigner,
 			Processor:        intentProcessor,
-			SensitiveDomains: []string{"org", "secret", "notification"},
+			SensitiveDomains: []string{"org", "secret", "notification", "relay"},
 			Logger:           logger,
 		})
 		intentProcessor.SetGiftWrapIngress(giftWrapIngress)
@@ -1658,7 +1661,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// --- D70 ML intent registration (kept separate from D69 app wiring) ---
 	if enabledDomains["ml"] && nostrProjector.Enabled() && mlRegistry != nil {
-		intentProcessor.RegisterHandler("ml", controlplane.NewMLIntentHandler(mlRegistry))
+		intentProcessor.RegisterHandler("ml", controlplane.NewMLIntentHandler(mlRegistry, workerRepo))
 	}
 	// --- end D70 ML intent registration ---
 
@@ -1791,6 +1794,11 @@ func New(cfg *config.Config) (*App, error) {
 		// and failed if it abandons it.
 		controlPlanePub.OnDeliveryAbandoned(sbomOrchestrator.HandlePublishAbandoned)
 		controlPlanePub.OnDelivered(sbomOrchestrator.HandlePublishDelivered)
+	}
+	var sbomAsyncRunner *service.SBOMAsyncRunner
+	if sbomOrchestrator != nil {
+		sbomAsyncRunner = service.NewSBOMAsyncRunner(sbomOrchestrator)
+		bgManager.RegisterWithOptions(sbomAsyncRunner)
 	}
 
 	// OCI Registry wiring.
@@ -2060,11 +2068,12 @@ func New(cfg *config.Config) (*App, error) {
 	if enabledDomains["notification"] && notifRepo != nil {
 		intentProcessor.RegisterHandler("notification", controlplane.NewNotificationIntentHandler(
 			controlplane.NotificationIntentHandlerConfig{
-				Registry:  notifRepo,
-				Publisher: notifCanonical,
-				Notifier:  notifDispatcher,
-				Status:    intentStatus,
-				Logger:    logger,
+				Registry:       notifRepo,
+				Publisher:      notifCanonical,
+				Notifier:       notifDispatcher,
+				TestDispatcher: notifDispatcher,
+				Status:         intentStatus,
+				Logger:         logger,
 			},
 		))
 		logger.Info("notification intent handler registered")
@@ -2364,6 +2373,32 @@ func New(cfg *config.Config) (*App, error) {
 		}
 	}
 
+	// --- D80 request operations and relay-policy desired state ---
+	if artifactIntentHandler != nil {
+		artifactIntentHandler.ConfigureBuildResultRegistration(buildRepo, buildResultRegistrar)
+		artifactIntentHandler.ConfigureSignatureVerification(controlplane.NewEncryptedRouteHandlers(controlplane.EncryptedRouteHandlersConfig{
+			Artifacts: artifactRepo, Signatures: sigRepo, SignVerifier: signVerifier,
+			Services: serviceRepo, Logger: logger,
+		}))
+	}
+	if enabledDomains["security"] && securityScanner != nil {
+		intentProcessor.RegisterHandler("security", controlplane.NewSecurityScanIntentHandler(securityScanner))
+	}
+	if enabledDomains["sbom"] && sbomAsyncRunner != nil {
+		intentProcessor.RegisterHandler("sbom", controlplane.NewSBOMIntentHandler(sbomAsyncRunner))
+	}
+	relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
+	relaySettingsHandlers := controlplane.NewRelaySettingsHandlers(controlplane.RelaySettingsHandlerConfig{
+		Config: cfg, AdminClient: relayAdminClient, ProjectionStore: relayPolicyProjectionRepo,
+		ServicePubkey: servicePubkey, Logger: logger, ConfigFabric: configFabricSvc,
+		FleetOperatorGate: controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys),
+	})
+	relaySettingsHandlers.SetPublisher(contextVMResponsePool, controlPlaneSigner)
+	if enabledDomains["relay"] && controlPlaneSigner != nil && relayPolicyProjectionRepo != nil {
+		intentProcessor.RegisterHandler("relay", controlplane.NewRelayPolicyIntentHandler(relaySettingsHandlers))
+	}
+	// --- end D80 registrations ---
+
 	var encryptedRequestTransport *controlplane.EncryptedRequestTransport
 	// Encrypted request/result event runtime for sensitive browser route migrations.
 	if len(contextVMRequestRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
@@ -2406,7 +2441,7 @@ func New(cfg *config.Config) (*App, error) {
 		if relayFirstRegistry != nil {
 			registryMutations = relayFirstRegistry
 		}
-		controlplane.NewEncryptedRouteHandlers(controlplane.EncryptedRouteHandlersConfig{
+		encryptedRouteHandlers := controlplane.NewEncryptedRouteHandlers(controlplane.EncryptedRouteHandlersConfig{
 			IntentProcessor: intentProcessor,
 			Secrets:         secretRepo,
 			Encryptor:       secretEncryptor,
@@ -2425,7 +2460,13 @@ func New(cfg *config.Config) (*App, error) {
 			DeploymentUnits: deploymentUnitRepo,
 			RBAC:            tenantRBAC,
 			Logger:          logger,
-		}).Register(encryptedRequestTransport)
+		})
+		// D80: the artifact request op uses the same F74a-wrapped signature
+		// repository as the retained encrypted route, so it publishes once.
+		if artifactIntentHandler != nil {
+			artifactIntentHandler.ConfigureSignatureVerification(encryptedRouteHandlers)
+		}
+		encryptedRouteHandlers.Register(encryptedRequestTransport)
 		// The build request contract is registered even while the fleet Gitea
 		// mirror initiator is unavailable, so browsers receive a signed,
 		// fail-closed error instead of falling back to credential-bearing flows.
@@ -2470,6 +2511,7 @@ func New(cfg *config.Config) (*App, error) {
 			)
 		}
 		controlplane.NewEncryptedBuildHandlers(controlplane.EncryptedBuildHandlersConfig{
+			IntentProcessor:   intentProcessor,
 			Starter:           hiveCIBuildStarter,
 			Registry:          registry,
 			Builds:            buildRepo,
@@ -2492,25 +2534,18 @@ func New(cfg *config.Config) (*App, error) {
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient, cfg.Loom.AuthorizedPubkeys, fleetOperatorGate)
 		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled, fleetOperatorGate, intentProcessor)
 		controlplane.RegisterMLRegistryContextVMHandlers(encryptedRequestTransport, mlRegistry, fleetOperatorGate, intentProcessor)
-		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher, tenantRBAC)
-		relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
+		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher, tenantRBAC, intentProcessor)
 		controlplane.RegisterRelaySettingsContextVMHandlers(encryptedRequestTransport, controlplane.RelaySettingsHandlerConfig{
-			Config:            cfg,
-			AdminClient:       relayAdminClient,
-			ProjectionStore:   relayPolicyProjectionRepo,
-			ServicePubkey:     servicePubkey,
-			Logger:            logger,
-			ConfigFabric:      configFabricSvc,
+			Config: cfg, AdminClient: relayAdminClient, ProjectionStore: relayPolicyProjectionRepo,
+			ServicePubkey: servicePubkey, Logger: logger, ConfigFabric: configFabricSvc,
 			FleetOperatorGate: fleetOperatorGate,
-		})
+		}, intentProcessor)
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator, fleetOperatorGate)
 		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, serviceDeploymentConfig)
-		if sbomOrchestrator != nil {
-			sbomAsyncRunner := service.NewSBOMAsyncRunner(sbomOrchestrator)
-			controlplane.RegisterSBOMContextVMHandlers(encryptedRequestTransport, sbomAsyncRunner, fleetOperatorGate)
-			bgManager.RegisterWithOptions(sbomAsyncRunner)
+		if sbomAsyncRunner != nil {
+			controlplane.RegisterSBOMContextVMHandlers(encryptedRequestTransport, sbomAsyncRunner, fleetOperatorGate, intentProcessor)
 		}
-		controlplane.RegisterSecurityContextVMHandlers(encryptedRequestTransport, securityScanner, fleetOperatorGate)
+		controlplane.RegisterSecurityContextVMHandlers(encryptedRequestTransport, securityScanner, fleetOperatorGate, intentProcessor)
 		soulfactory.RegisterContextVMHandlers(encryptedRequestTransport, soulFactoryReactorFromRuntime(soulFactoryRuntime))
 		soulfactory.RegisterSagaContextVMHandlers(encryptedRequestTransport, soulFactoryReactorFromRuntime(soulFactoryRuntime), fleetOperatorGate)
 		// ContextVM carries the canonical mutation plane, so it must remain

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -24,6 +25,7 @@ import (
 // See design §7 Wave 1 F3.
 type EnvironmentIntentHandler struct {
 	registry       service.EnvironmentIntentRegistry
+	workers        repository.WorkerRepository
 	statePublisher service.RelayFirstStatePublisher
 	logger         *zap.Logger
 }
@@ -35,15 +37,20 @@ func NewEnvironmentIntentHandler(
 	registry service.EnvironmentIntentRegistry,
 	statePublisher service.RelayFirstStatePublisher,
 	logger *zap.Logger,
+	workers ...repository.WorkerRepository,
 ) *EnvironmentIntentHandler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &EnvironmentIntentHandler{
+	h := &EnvironmentIntentHandler{
 		registry:       registry,
 		statePublisher: statePublisher,
 		logger:         logger.Named("env-intent-handler"),
 	}
+	if len(workers) > 0 {
+		h.workers = workers[0]
+	}
+	return h
 }
 
 // HandleIntent processes a single environment intent. The processor has
@@ -56,10 +63,64 @@ func (h *EnvironmentIntentHandler) HandleIntent(ctx context.Context, intent *Int
 		return h.handleUpdate(ctx, intent)
 	case "delete":
 		return h.handleDelete(ctx, intent)
+	case "worker-policy-apply":
+		return h.handleWorkerPolicyApply(ctx, intent)
 	default:
 		// Level-triggered: unknown op defaults to upsert.
 		return h.handleUpdate(ctx, intent)
 	}
+}
+
+func (h *EnvironmentIntentHandler) handleWorkerPolicyApply(ctx context.Context, intent *Intent) error {
+	var payload struct {
+		EnvironmentID string         `json:"environment_id"`
+		Policy        map[string]any `json:"policy"`
+	}
+	if err := decodeIntentContent(intent.Content, &payload); err != nil {
+		return err
+	}
+	id, err := uuid.Parse(strings.TrimSpace(payload.EnvironmentID))
+	if err != nil || id == uuid.Nil || intent.Coordinate != id.String() || payload.Policy == nil {
+		return fmt.Errorf("worker-policy-apply requires matching environment_id, coordinate, and policy")
+	}
+	env, err := h.registry.GetEnvironment(ctx, id)
+	if err != nil {
+		return err
+	}
+	if env == nil || env.OrgID != intent.OrgID {
+		return fmt.Errorf("environment must belong to the authorized organization")
+	}
+	if err := checkIntentRevision(intent, id.String(), true, env.UpdatedAt); err != nil {
+		return err
+	}
+	policy := sanitizeWorkerPolicy(payload.Policy)
+	if pinned := pinnedWorkerFromPolicy(policy); pinned != "" {
+		if !isHexNostrPubKey(pinned) {
+			return fmt.Errorf("pinned_worker must be a 32-byte lowercase hex Nostr public key")
+		}
+		if h.workers == nil {
+			return fmt.Errorf("worker repository is not configured")
+		}
+		worker, err := h.workers.GetByPubKey(ctx, pinned)
+		if err != nil {
+			return err
+		}
+		if worker == nil {
+			return fmt.Errorf("pinned worker not found")
+		}
+	}
+	updated := *env
+	updated.RuntimeConfig = make(map[string]any, len(env.RuntimeConfig)+1)
+	for key, value := range env.RuntimeConfig {
+		updated.RuntimeConfig[key] = value
+	}
+	updated.RuntimeConfig["worker_policy"] = policy
+	if err := h.registry.UpdateEnvironment(ctx, &updated); err != nil {
+		return fmt.Errorf("update environment worker policy: %w", err)
+	}
+	intent.Result = map[string]any{"environment_id": id.String(), "status": "applied"}
+	intent.StatusData = intent.Result
+	return nil
 }
 
 // PermissionFor returns the permission required for the given operation.
@@ -70,6 +131,10 @@ func (h *EnvironmentIntentHandler) PermissionFor(op string) domain.Permission {
 	default:
 		return domain.PermWriteEnvironments
 	}
+}
+
+func (*EnvironmentIntentHandler) IsFleetScopedOperation(op string) bool {
+	return op == "worker-policy-apply"
 }
 
 func (h *EnvironmentIntentHandler) handleCreate(ctx context.Context, intent *Intent) error {
@@ -347,6 +412,9 @@ func (e *revisionConflictError) Error() string {
 
 // IsRevisionConflict reports whether err is a revision conflict.
 func IsRevisionConflict(err error) bool {
+	if _, ok := err.(*relayPolicyConflictError); ok {
+		return true
+	}
 	if _, ok := err.(*revisionConflictError); ok {
 		return true
 	}

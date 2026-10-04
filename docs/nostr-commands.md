@@ -1,5 +1,11 @@
 # Bahia Nostr Control-Plane Events
 
+## D80 request operations and desired state
+
+The [Go-generated D80 wire fixtures](../web/tests/fixtures/d80-intent-content.json) define client-signed kind `30900` content and coordinates for `security/scan-run`, `sbom/generate|import`, `artifact/signature-verify|register-build-result`, `relay/policy-set`, `notification/channel-test`, `environment/worker-policy-apply`, and `ml/pin`. The scan, SBOM, artifact, and channel-test ops are requests; relay policy, worker policy, and ML pin are desired state. Keep `intent_id` stable on retries and follow bounded `30315` status by requester and coordinate. Relay policy and notification test are sensitive-domain intents and must be gift-wrapped.
+
+Scan completion is in security scan status/findings; SBOM completion is in `30078`/`30004` and `32017`/`32018`; verified signatures are `32016`; build-result registration is build/artifact cp-state. Relay policy is the protected `relay-settings:operator` cp-state record (full `bahia.relay-settings.v1` content); subscribe to that record to read it rather than calling ContextVM. Worker policy is the environment record's `runtime_config.worker_policy`; ML pin is the inference endpoint's `placement_policy.pinned_worker`. Notification test delivery result is only the bounded status `data`. Fleet operators admit security, SBOM, relay policy, worker policy, and ML pin; artifact requests require `services:write`, and channel test requires `settings:manage`. A disabled domain retains its ContextVM path during migration.
+
 ## Deployment-family intents
 
 For registered intent domains (enabled by default unless in `nostr.intent_domains_disabled`), publish client-signed kind `30900` with `schema=bahia.intent.<domain>.v1`, `domain` and `op` tags, and JSON content containing stable `intent_id`. When used, `expected_updated_at` must be copied as an RFC3339 string from canonical `updated_at`, never encoded as a numeric epoch. Supported ops: `deployment/create|approve|reject|rollback`, `runtime/deploy|restart|stop`, `llm/deploy|rollback|approve|reject`, and `backup/restore-approval`. The [wire fixtures](../web/tests/fixtures/deployment-intents.json) specify content fields. Watch kind `30315` status and daemon-authored state, not the submission receipt, for outcomes. Disabled domains continue to use legacy ContextVM handlers.

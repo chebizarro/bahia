@@ -1,5 +1,7 @@
 # Nostr Integration
 
+The daemon supports the nine D80 intent operations listed in the [D80 wire fixtures](../../web/tests/fixtures/d80-intent-content.json). Sign the exact content with a stable `intent_id`; use a NIP-59 gift wrap for `notification/channel-test` and `relay/policy-set`. A relay `OK` is delivery, while bounded `30315` data is admission or (for channel test) delivery result. Subscribe to the operation's existing canonical outcome family for durable state. Relay settings can already be read by scoped subscription to the service-authored protected `relay-settings:operator` cp-state record, including its full policy content. See [D80 commands](../nostr-commands.md#d80-request-operations-and-desired-state).
+
 ## Web registry changes
 
 The web app signs service, environment, and policy create/update/delete requests as

@@ -411,3 +411,22 @@ Verification: `CGO_ENABLED=0 go test -count=50 -run
 TestIntentAuthorsSyncerMembershipMutationReachesSidecar ./internal/controlplane/`
 passed 50/50; `-count=10 -cpu=1,2,8` passed 10/10 at each CPU setting.
 `CGO_ENABLED=0 go build ./...`, `go vet ./...`, and `go test ./...` passed.
+
+## D80 request operations and desired-state migration — bahia-irsry.80 — 2026-10-04
+
+Signed intents now handle `security/scan-run`, `sbom/generate`, `sbom/import`,
+`artifact/signature-verify`, `artifact/register-build-result`,
+`notification/channel-test`, `relay/policy-set`,
+`environment/worker-policy-apply`, and `ml/pin`. Existing service boundaries
+perform the mutation once and retain their canonical outcome publishers;
+`30315` contains a bounded acknowledgement or delivery result. The protected
+relay policy remains NIP-59 wrapped and is readable from the complete
+`relay-settings` cp-state family. ContextVM handlers dual-dispatch when the
+intent domain is enabled and retain their legacy path otherwise. D80 does not
+change the D79 ML deploy, tool approval, build request, or adoption operations.
+
+Verification: D80 accepted/rejected/replay/conflict and dual-dispatch tests,
+generated web intent-content fixtures, and
+`TestIntentDomainRegistryCoversAppHandlers` passed. Full Go build, vet, and
+test gate passed. Web unit tests, lint, build, and Playwright gate passed
+(234 passed, four skipped, one flaky retry). No remote push was requested.

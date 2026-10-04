@@ -111,6 +111,7 @@ type BuildCredentialReferenceLoader interface {
 }
 
 type EncryptedBuildHandlersConfig struct {
+	IntentProcessor   *IntentProcessor
 	Starter           HiveCIBuildStarter
 	Registry          BuildRegistry
 	Builds            BuildResultLoader
@@ -121,6 +122,7 @@ type EncryptedBuildHandlersConfig struct {
 }
 
 type EncryptedBuildHandlers struct {
+	intentProcessor   *IntentProcessor
 	starter           HiveCIBuildStarter
 	registry          BuildRegistry
 	builds            BuildResultLoader
@@ -132,7 +134,8 @@ type EncryptedBuildHandlers struct {
 
 func NewEncryptedBuildHandlers(cfg EncryptedBuildHandlersConfig) *EncryptedBuildHandlers {
 	return &EncryptedBuildHandlers{
-		starter: cfg.Starter, registry: cfg.Registry, builds: cfg.Builds,
+		intentProcessor: cfg.IntentProcessor,
+		starter:         cfg.Starter, registry: cfg.Registry, builds: cfg.Builds,
 		artifactRegistrar: cfg.ArtifactRegistrar, services: cfg.Services,
 		secrets: cfg.Secrets, rbac: cfg.RBAC,
 	}
@@ -400,11 +403,25 @@ func (h *EncryptedBuildHandlers) RegisterBuildResult(ctx context.Context, reques
 		return nil, fmt.Errorf("build %s not found", payload.BuildID)
 	}
 	authorizer := encryptedTenantAuthorizer{services: h.services, rbac: h.rbac}
-	if _, err := authorizer.authorizeService(ctx, request.Event, build.ServiceID, domain.PermWriteServices); err != nil {
+	svc, err := authorizer.authorizeService(ctx, request.Event, build.ServiceID, domain.PermWriteServices)
+	if err != nil {
 		return nil, err
 	}
 	if build.Status != domain.BuildStatusSucceeded {
 		return nil, fmt.Errorf("only a successful build result can register an artifact")
+	}
+	if h.intentProcessor != nil && h.intentProcessor.Handler("artifact") != nil {
+		if request.Event == nil {
+			return nil, fmt.Errorf("build-result registration requires an authenticated requester")
+		}
+		intent := &Intent{Event: request.Event, Domain: "artifact", Op: "register-build-result",
+			OrgID: svc.OrgID, IntentID: intentIDFromContextVM(request, request.Event.ID.Hex()),
+			Coordinate: "build-result:" + build.ID.String(), Content: map[string]interface{}{"build_id": build.ID.String()},
+			Actor: request.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result, nil
 	}
 	artifact, err := h.artifactRegistrar.RegisterBuildResult(ctx, build.ID)
 	if err != nil {
