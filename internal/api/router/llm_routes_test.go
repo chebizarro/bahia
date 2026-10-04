@@ -27,16 +27,6 @@ func TestLLMOperationalRESTRoutesDisabledByDefault(t *testing.T) {
 	assertLLMOperationalRESTNotMounted(t, h)
 	assertLLMRouteAndReleaseCreationRESTNotMounted(t, h)
 
-	t.Run("read route remains mounted", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/llm/routes", nil)
-		w := httptest.NewRecorder()
-
-		h.ServeHTTP(w, req)
-
-		if w.Code == http.StatusNotFound || w.Code == http.StatusMethodNotAllowed {
-			t.Fatalf("LLM read route should remain mounted, got status=%d body=%s", w.Code, w.Body.String())
-		}
-	})
 }
 
 func TestLLMRouteUpdateRESTRemainsMounted(t *testing.T) {

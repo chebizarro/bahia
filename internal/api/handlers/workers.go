@@ -47,23 +47,3 @@ func (h *WorkerHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	writeData(w, http.StatusOK, worker)
 }
-
-// Pricing returns just the pricing info for a worker.
-func (h *WorkerHandler) Pricing(w http.ResponseWriter, r *http.Request) {
-	pubkey := chi.URLParam(r, "pubkey")
-	if pubkey == "" {
-		writeError(w, http.StatusBadRequest, "pubkey is required")
-		return
-	}
-
-	worker, err := h.repo.GetByPubKey(r.Context(), pubkey)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if worker == nil {
-		writeError(w, http.StatusNotFound, "worker not found")
-		return
-	}
-	writeData(w, http.StatusOK, worker.Pricing)
-}

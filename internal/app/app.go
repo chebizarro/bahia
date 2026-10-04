@@ -2618,7 +2618,6 @@ func New(cfg *config.Config) (*App, error) {
 			OrgMembers:                orgMemberRepo,
 			OrgInvites:                orgInviteRepo,
 			RBAC:                      tenantRBAC,
-			MLRegistry:                mlRegistry,
 			MLCommands:                mlCommandPublisher,
 			LLMRegistry:               llmRegistry,
 			ConfigFabric:              configFabricSvc,
