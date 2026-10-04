@@ -233,7 +233,7 @@ type assistantToolMetadata struct {
 }
 
 func assistantToolDescriptorMetadata() map[string]assistantToolMetadata {
-	return map[string]assistantToolMetadata{
+	metadata := map[string]assistantToolMetadata{
 		// Service read-model tools.
 		"bahia_list_services":              syncRead(domain.AssistantToolRiskLow, true, []string{"service"}, nil),
 		"bahia_get_service":                syncRead(domain.AssistantToolRiskLow, true, []string{"service"}, []string{"service_id", "name"}),
@@ -280,6 +280,18 @@ func assistantToolDescriptorMetadata() map[string]assistantToolMetadata {
 		"bahia_assistant_ml_approve_deployment": asyncMutation(domain.AssistantToolRiskHigh, true, []string{"ml_endpoint", "deployment"}, []string{"intent_id"}),
 		"bahia_assistant_ml_rollback":           asyncMutation(domain.AssistantToolRiskHigh, true, []string{"ml_endpoint", "environment", "deployment"}, []string{"endpoint", "endpoint_id"}),
 	}
+	for _, tool := range registryIntentToolDefinitions() {
+		if strings.HasPrefix(tool.Name, "bahia_assistant_dns_") {
+			risk := domain.AssistantToolRiskHigh
+			if strings.HasSuffix(tool.Name, "_delete") || strings.HasSuffix(tool.Name, "_retire") {
+				risk = domain.AssistantToolRiskDestructive
+			}
+			metadata[tool.Name] = syncMutation(risk, true, []string{"dns"}, []string{"content"})
+		} else {
+			metadata[tool.Name] = syncMutation(domain.AssistantToolRiskHigh, false, []string{"ml_model", "ml_endpoint"}, []string{"content"})
+		}
+	}
+	return metadata
 }
 
 func syncRead(risk domain.AssistantToolRisk, agentSafe bool, resourceTypes, resourceIDFields []string) assistantToolMetadata {

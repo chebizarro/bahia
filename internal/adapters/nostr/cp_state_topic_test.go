@@ -30,6 +30,11 @@ var cpStateTopicsByFamily = map[int]string{
 	KindPackageRepositoryRegistry:       kinds.CPStateTopicPackageRepository,
 	KindPackageArtifactRegistry:         kinds.CPStateTopicPackageArtifact,
 	KindPackagePromotionRegistry:        kinds.CPStateTopicPackagePromotion,
+	KindPackageIntentState:              kinds.CPStateTopicPackageIntent,
+	KindToolProvisionIntentState:        kinds.CPStateTopicToolProvisionIntent,
+	KindToolDenylistState:               kinds.CPStateTopicToolDenylist,
+	KindToolProfileState:                kinds.CPStateTopicToolProfile,
+	KindNotificationLogState:            kinds.CPStateTopicNotificationLog,
 	KindWorkerState:                     "worker-state",
 	KindWorkerAssignmentState:           "worker-assignment",
 	KindWorkerDrainStatus:               "worker-drain",
@@ -67,6 +72,16 @@ var cpStateTopicsByFamily = map[int]string{
 	KindSecurityFindingRecord:           kinds.CPStateTopicSecurityFinding,
 	KindSecurityScheduleRecord:          kinds.CPStateTopicSecuritySchedule,
 	KindSecurityFindingDetailRecord:     kinds.CPStateTopicSecurityFindingDetail,
+	KindLLMReleaseRegistry:              kinds.CPStateTopicLLMRelease,
+	KindArtifactSignatureRegistry:       kinds.CPStateTopicArtifactSignature,
+	KindArtifactSBOMRegistry:            kinds.CPStateTopicArtifactSBOM,
+	KindSBOMPackageRegistry:             kinds.CPStateTopicSBOMPackage,
+	KindRuntimeObservationState:         kinds.CPStateTopicRuntimeObservation,
+	kinds.ManagedInstanceHealthRecord:   kinds.CPStateTopicManagedInstanceHealth,
+	kinds.RouteCanaryRecord:             kinds.CPStateTopicRouteCanary,
+	kinds.SoulRuntimePolicyRecord:       kinds.CPStateTopicSoulRuntimePolicy,
+	kinds.BlossomAdminRecord:            kinds.CPStateTopicBlossomAdmin,
+	kinds.BlossomBlobRecord:             kinds.CPStateTopicBlossomBlob,
 }
 
 func topicValues(tags gonostr.Tags) []string {

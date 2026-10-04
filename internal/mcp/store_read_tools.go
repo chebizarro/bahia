@@ -168,12 +168,24 @@ func (s *Server) callStoreReadTool(ctx context.Context, name string, args map[st
 		result, err = s.storeMLRead(ctx, name, args)
 	case "bahia_llm_list_routes":
 		result, err = s.storeLLMRoutes(ctx, args)
+	case "bahia_llm_list_releases", "bahia_list_signatures", "bahia_list_verified_signatures", "bahia_has_verified_signature", "bahia_get_signature", "bahia_get_sbom", "bahia_get_sbom_packages", "bahia_search_sbom_packages", "bahia_get_observation":
+		result, err = s.storeF74aRead(ctx, name, args)
 	case "bahia_estimate_cost", "bahia_get_run_cost", "bahia_get_payment_history":
 		result, err = s.storePaymentRead(ctx, name, args)
 	case "bahia_worker_get_assignments", "bahia_worker_list_assignments", "bahia_worker_get_drain_status", "bahia_worker_list_drain_status":
 		result, err = s.storeWorkerModelRead(ctx, name, args)
 	case "bahia_package_list", "bahia_package_get":
 		result, err = s.storePackageRead(ctx, name, args)
+	case "bahia_package_status":
+		result, err = s.storePackageStatus(ctx, args)
+	case "bahia_tool_provision_status":
+		result, err = s.storeToolProvisionStatus(ctx, args)
+	case "bahia_tool_denylist_list":
+		result, err = s.storeToolDenylist(ctx)
+	case "bahia_tool_profile_get":
+		result, err = s.storeToolProfile(ctx, args)
+	case "bahia_list_notifications", "bahia_get_notification":
+		result, err = s.storeNotifications(ctx, name, args)
 	case "bahia_list_secrets":
 		result, err = s.storeSecretRead(ctx, args)
 	case "bahia_list_notification_channels", "bahia_get_notification_channel":

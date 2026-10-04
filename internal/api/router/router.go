@@ -75,7 +75,6 @@ type RouterDeps struct {
 	OrgInvites                repository.OrgInviteRepository
 	RBAC                      *auth.RBAC
 	LLMRegistry               *service.LLMRegistryService
-	MLRegistry                *service.MLRegistryService
 	MLCommands                handlers.MLCommandPublisher
 	ConfigFabric              *service.ConfigFabricService
 	HealthProvider            any
@@ -194,8 +193,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		llmH = handlers.NewLLMHandler(deps.LLMRegistry)
 	}
 	var mlH *handlers.MLHandler
-	if deps.MLRegistry != nil || deps.MLCommands != nil {
-		mlH = handlers.NewMLHandler(deps.MLRegistry, deps.MLCommands)
+	if deps.MLCommands != nil {
+		mlH = handlers.NewMLHandler(deps.MLCommands)
 	}
 	var logsH *handlers.LogHandler
 	if deps.Runs != nil && deps.Services != nil && deps.Environments != nil {
@@ -228,6 +227,14 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		r.Use(middleware.ContentType)
 		r.Use(auth.MiddlewareFromConfig(authMiddleware))
 		r.Use(platformRBAC(deps, authMiddleware))
+		// A removed GET must be absent even when a write route still owns the same path.
+		r.MethodNotAllowed(func(w http.ResponseWriter, req *http.Request) {
+			if req.Method == http.MethodGet {
+				http.NotFound(w, req)
+				return
+			}
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		})
 
 		// Read routes: GET/list endpoints with read rate limit.
 		r.Group(func(r chi.Router) {
@@ -243,6 +250,13 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(dbGate).Get("/me/invites", tenantH.MyInvites)
 			}
 
+			// Phase 5 D1: retained for --http-fallback until Wave 6 F-slices.
+			// Routes: GET /services, /services/{id}, /environments, /environments/{id},
+			// /builds/{id}, /services/{serviceId}/builds, /artifacts/{id},
+			// /services/{serviceId}/artifacts, /state, /state/drifted,
+			// /workers, /workers/{pubkey}, /policies, /policies/{id},
+			// /orgs, /orgs/{id}, /orgs/{id}/members, /services/{id}/secrets,
+			// /notifications/channels, /notifications/channels/{id}.
 			// Services (read)
 			r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/services", svcH.List)
 			r.With(dbGate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}", svcH.Get)
@@ -265,13 +279,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(dbGate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/runtime-releases/rollback", agentRuntimeReleaseH.GetRollbackRelease)
 			}
 
-			// Deployment Intents (read)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/intents/{id}", deployH.GetIntent)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)).Get("/services/{serviceId}/environments/{envId}/intents", deployH.ListIntents)
-
-			// Deployment Runs (read)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/runs/{id}", deployH.GetRun)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, intentOrgResolver(registry, deps.Services, "intentId"), true)).Get("/deployments/intents/{intentId}/runs", deployH.ListRuns)
+			// Deployment run logs remain HTTP-native.
 			if logsH != nil && deps.Blossom != nil {
 				r.With(dbGate, coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/runs/{id}/logs", logsH.GetRunLogs)
 			}
@@ -281,11 +289,9 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(dbGate, coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "id", "envId"), true)).Get("/services/{id}/environments/{envId}/logs", logsH.StreamLiveLogs)
 			}
 
-			// State (read)
+			// State (CLI HTTP fallback)
 			r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/state", stateH.ListAll)
 			r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/state/drifted", stateH.ListDrifted)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "envId"), true)).Get("/environments/{envId}/state", stateH.ListByEnvironment)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)).Get("/services/{serviceId}/environments/{envId}/state", stateH.GetState)
 
 			// Managed instance health (read)
 			if instanceHealthH != nil {
@@ -307,44 +313,14 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Repository CI lookup (read)
 			r.With(dbGate, platformAdminGate).Post("/repositories/ci/lookup", repoCIHandler.Lookup)
 
-			// ML control plane (read)
-			if mlH != nil {
-				r.With(dbGate, platformAdminGate).Get("/ml/models", mlH.ListModels)
-				r.With(dbGate, platformAdminGate).Get("/ml/models/{id}", mlH.GetModel)
-				r.With(dbGate, platformAdminGate).Get("/ml/models/{modelId}/versions", mlH.ListModelVersions)
-				r.With(dbGate, platformAdminGate).Get("/ml/model-versions/{id}", mlH.GetModelVersion)
-				r.With(dbGate, platformAdminGate).Get("/ml/endpoints", mlH.ListEndpoints)
-				r.With(dbGate, platformAdminGate).Get("/ml/endpoints/{id}", mlH.GetEndpoint)
-				r.With(dbGate, platformAdminGate).Get("/ml/state", mlH.ListState)
-				r.With(dbGate, platformAdminGate).Get("/ml/endpoints/{endpointId}/environments/{envId}/state", mlH.GetState)
-				r.With(dbGate, platformAdminGate).Get("/ml/artifacts/{artifactId}/provenance", mlH.GetArtifactProvenance)
-			}
-
-			// LLM control plane (read)
-			if llmH != nil {
-				r.With(dbGate, platformAdminGate).Get("/llm/routes", llmH.ListRoutes)
-				r.With(dbGate, platformAdminGate).Get("/llm/routes/{id}", llmH.GetRoute)
-				r.With(dbGate, platformAdminGate).Get("/llm/routes/{routeId}/releases", llmH.ListReleases)
-				r.With(dbGate, platformAdminGate).Get("/llm/releases/{id}", llmH.GetRelease)
-				r.With(dbGate, platformAdminGate).Get("/llm/intents/{id}", llmH.GetIntent)
-				r.With(dbGate, platformAdminGate).Get("/llm/routes/{routeId}/environments/{envId}/intents", llmH.ListIntents)
-				r.With(dbGate, platformAdminGate).Get("/llm/runs/{id}", llmH.GetRun)
-				r.With(dbGate, platformAdminGate).Get("/llm/intents/{intentId}/runs", llmH.ListRuns)
-				r.With(dbGate, platformAdminGate).Get("/llm/state", llmH.ListAllState)
-				r.With(dbGate, platformAdminGate).Get("/llm/state/drifted", llmH.ListDriftedState)
-				r.With(dbGate, platformAdminGate).Get("/llm/environments/{envId}/state", llmH.ListEnvironmentState)
-				r.With(dbGate, platformAdminGate).Get("/llm/routes/{routeId}/environments/{envId}/state", llmH.GetState)
-			}
-
-			// Workers (read)
+			// Workers (CLI HTTP fallback)
 			if deps.Workers != nil {
 				workerH := handlers.NewWorkerHandler(deps.Workers)
 				r.With(dbGate).Get("/workers", workerH.List)
 				r.With(dbGate).Get("/workers/{pubkey}", workerH.Get)
-				r.With(dbGate).Get("/workers/{pubkey}/pricing", workerH.Pricing)
 			}
 
-			// Payments (read)
+			// Payment records are retained for non-event MCP reads.
 			if deps.Payments != nil {
 				payH := handlers.NewPaymentHandler(deps.Payments)
 				r.With(dbGate).Get("/deployments/runs/{id}/cost", payH.GetRunCost)
@@ -434,7 +410,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Tenant orgs (write) — Phase 3 O1 (B-26): REST mutation routes
 			// deleted. Org/member/invite mutations now go through the
 			// encrypted ContextVM path (dual dispatch to intent processor).
-			// Read routes in the Tenant orgs (read) block above are retained.
+			// Read routes needed by the explicit CLI HTTP fallback remain above.
 
 			// Managed instance maintenance (write)
 			if instanceHealthH != nil {

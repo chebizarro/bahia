@@ -183,7 +183,7 @@ func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Even
 		return fmt.Errorf("plaintext intent rejected for sensitive domain %q", intent.Domain)
 	}
 
-	return p.process(ctx, intent)
+	return p.process(ctx, intent, false)
 }
 
 // ProcessInProcess handles an intent from the dual-dispatch path (ContextVM/
@@ -204,12 +204,15 @@ func (p *IntentProcessor) ProcessInProcess(ctx context.Context, intent *Intent) 
 		}
 		intent.ExpectedUpdatedAt = revision
 	}
-	return p.process(ctx, intent)
+	return p.process(ctx, intent, true)
 }
 
-func (p *IntentProcessor) process(ctx context.Context, intent *Intent) error {
+func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess bool) error {
 	// Step 0: Check domain is enabled.
 	if !p.config.EnabledDomains[intent.Domain] {
+		if inProcess {
+			return fmt.Errorf("intent domain %q is disabled", intent.Domain)
+		}
 		p.logger.Debug("intent for disabled domain, ignoring",
 			zap.String("domain", intent.Domain),
 			zap.String("intent_id", intent.IntentID),
@@ -231,6 +234,9 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent) error {
 	handler := p.handlers[intent.Domain]
 	p.mu.RUnlock()
 	if handler == nil {
+		if inProcess {
+			return fmt.Errorf("intent domain %q has no handler", intent.Domain)
+		}
 		p.logger.Debug("no handler registered for domain, ignoring",
 			zap.String("domain", intent.Domain),
 			zap.String("intent_id", intent.IntentID),
@@ -278,7 +284,11 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent) error {
 				}
 				return fmt.Errorf("insufficient permission: %s", perm)
 			}
-			// Unknown author → silent drop (§2.3).
+			// Unknown relay author → silent drop (§2.3). An in-process
+			// caller already has a transport identity and must get a refusal.
+			if inProcess {
+				return fmt.Errorf("untrusted intent actor %q", intent.Actor)
+			}
 			p.logger.Debug("dropping intent from untrusted author",
 				zap.String("actor", intent.Actor),
 				zap.String("intent_id", intent.IntentID),
@@ -308,7 +318,7 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent) error {
 	}
 
 	// Step 6: Mark processed (idempotency).
-	p.markProcessed(intent.IntentID)
+	p.markProcessed(intent)
 
 	// Step 7: Publish canonical state is done by the domain handler.
 	// Publish acceptance status.
@@ -322,6 +332,40 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent) error {
 		zap.String("intent_id", intent.IntentID),
 		zap.String("coordinate", intent.Coordinate),
 	)
+	return nil
+}
+
+// IsProcessed reports whether an intent_id has completed the shared pipeline.
+// MCP uses this only to distinguish an idempotent replay from a fresh write
+// whose previously visible canonical record has not yet advanced.
+func (p *IntentProcessor) IsProcessed(intentID string) bool {
+	return p.isProcessed(intentID)
+}
+
+// ProcessedIntentRecord is the local correlation retained for a completed
+// intent. It lets in-process retry transports return the original event ID
+// even after a canonical entity has been tombstoned.
+type ProcessedIntentRecord struct {
+	Actor      string `json:"actor"`
+	OrgID      string `json:"org_id"`
+	Domain     string `json:"domain"`
+	Op         string `json:"op"`
+	Coordinate string `json:"coordinate"`
+	EventID    string `json:"event_id"`
+}
+
+// ProcessedIntent returns the durable idempotency marker for an intent ID.
+func (p *IntentProcessor) ProcessedIntent(intentID string) *ProcessedIntentRecord {
+	if p.store == nil || intentID == "" {
+		return nil
+	}
+	filter := nostr.Filter{Kinds: []nostr.Kind{30078}, Tags: nostr.TagMap{"d": {"intent-processed:" + intentID}}, Limit: 1}
+	for marker := range p.store.QueryEvents(filter) {
+		var record ProcessedIntentRecord
+		if err := json.Unmarshal([]byte(marker.Content), &record); err == nil {
+			return &record
+		}
+	}
 	return nil
 }
 
@@ -357,10 +401,16 @@ func (p *IntentProcessor) isProcessed(intentID string) bool {
 }
 
 // markProcessed durably records that an intent_id has been processed.
-func (p *IntentProcessor) markProcessed(intentID string) {
-	if p.store == nil || intentID == "" {
+func (p *IntentProcessor) markProcessed(intent *Intent) {
+	if p.store == nil || intent == nil || intent.IntentID == "" {
 		return
 	}
+	intentID := intent.IntentID
+	record := ProcessedIntentRecord{Actor: intent.Actor, OrgID: intent.OrgID.String(), Domain: intent.Domain, Op: intent.Op, Coordinate: intent.Coordinate}
+	if intent.Event != nil {
+		record.EventID = intent.Event.ID.Hex()
+	}
+	content, _ := json.Marshal(record)
 	// Store a kind 30078 marker event in the local store.
 	marker := nostr.Event{
 		Kind:      30078,
@@ -369,7 +419,7 @@ func (p *IntentProcessor) markProcessed(intentID string) {
 			{"d", "intent-processed:" + intentID},
 			{"intent_id", intentID},
 		},
-		Content: `{"processed":true}`,
+		Content: string(content),
 	}
 	// The marker doesn't need a real signature; it's local-only.
 	// Set a deterministic ID to make it addressable.

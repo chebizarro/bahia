@@ -85,3 +85,16 @@ func managedTagValue(tags gonostr.Tags, key string) string {
 	}
 	return ""
 }
+
+func TestManagedInstanceHealthProjectorPublishesMaterialObservationHistory(t *testing.T) {
+	now := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
+	rec := &managedNostrRecorder{}
+	p := NewManagedInstanceHealthProjector(nil, rec, zap.NewNop())
+	payload := ManagedInstanceHealthChanged{EventID: "material-1", Health: domain.ManagedInstanceHealth{
+		ManagedInstanceKey: testKey(), Status: domain.InstanceHealthStatusHealthy, LastObservedAt: now,
+	}, PreviousStatus: domain.InstanceHealthStatusHealthy, OccurredAt: now}
+	require.NoError(t, p.handle(context.Background(), events.Event{Type: events.EventRuntimeInstanceHealthChanged, Data: payload}))
+	require.Len(t, rec.events, 3)
+	require.Equal(t, gonostr.Kind(kinds.CASAudit), rec.events[2].Kind)
+	require.Equal(t, "health_observation", managedTagValue(rec.events[2].Tags, "type"))
+}

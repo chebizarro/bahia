@@ -119,7 +119,6 @@ const (
 	KindServiceState              = nostrpool.KindServiceState              // Replaceable service state (d=service:env)
 	KindServiceRegistry           = nostrpool.KindServiceRegistry           // Replaceable service registry entry (d=service_id)
 	KindEnvironmentRegistry       = nostrpool.KindEnvironmentRegistry       // Replaceable environment registry entry (d=env_id)
-	KindLLMRouteRegistry          = nostrpool.KindLLMRouteRegistry          // Replaceable LLM route registry entry (d=route_id)
 	KindLLMRouteState             = nostrpool.KindLLMRouteState             // Replaceable LLM route state (d=route:env)
 	KindArtifactRegistry          = nostrpool.KindArtifactRegistry          // Replaceable artifact registry entry (d=artifact_id)
 	KindDeploymentIntentRegistry  = nostrpool.KindDeploymentIntentRegistry  // Replaceable deployment intent entry (d=intent_id)

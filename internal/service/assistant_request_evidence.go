@@ -14,13 +14,12 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
-// AssistantContextVMRequestEvidenceResolver proves that one operator-named
-// ContextVM request event is the submission of an uncertain work item. It
-// fetches exactly that event (ID, kind and author scoped) through EOSE and
-// requires: a valid ID and signature from the command-signing identity, the
-// executor-issued idempotency key as its d tag, a JSON-RPC method the tool
-// publishes, and params equal to every effective work argument. Missing or
-// mismatched evidence is an error; absence never proves non-submission.
+// AssistantContextVMRequestEvidenceResolver proves submission of an uncertain
+// work item. Intent-backed tools use a durable processor marker; kept
+// ContextVM tools fetch the exact request event through EOSE and verify its
+// signature, author, idempotency key, method, and effective arguments.
+// Missing or mismatched evidence is an error; absence never proves
+// non-submission.
 type AssistantContextVMRequestEvidenceResolver struct {
 	Subscriber AssistantRelaySubscriber
 	// RequestAuthor is the hex pubkey that signs assistant ContextVM commands.
@@ -28,6 +27,8 @@ type AssistantContextVMRequestEvidenceResolver struct {
 	// Methods maps tool names to accepted JSON-RPC methods; production wiring
 	// uses mcp.AssistantAsyncToolRequestMethods.
 	Methods map[string][]string
+	// IntentEvidence verifies a processed in-process assistant intent marker.
+	IntentEvidence func(name, actor, key, eventID string) (*domain.AsyncToolReceipt, error)
 }
 
 var _ AssistantRequestEvidenceResolver = (*AssistantContextVMRequestEvidenceResolver)(nil)
@@ -36,8 +37,14 @@ var _ AssistantRequestEvidenceResolver = (*AssistantContextVMRequestEvidenceReso
 var assistantEvidenceNonParamArgs = map[string]bool{"idempotency_key": true, "request_id": true, "d": true, "tags": true}
 
 func (r *AssistantContextVMRequestEvidenceResolver) ResolveAssistantRequestEvidence(ctx context.Context, requestEventID string, x domain.AssistantExecution, w domain.AssistantWorkItem) (*domain.AsyncToolReceipt, error) {
-	if r == nil || r.Subscriber == nil || strings.TrimSpace(r.RequestAuthor) == "" {
+	if r == nil || (r.Subscriber == nil && r.IntentEvidence == nil) {
 		return nil, errors.New("request evidence resolver is not configured")
+	}
+	if r.IntentEvidence != nil && len(r.Methods[w.ToolName]) == 0 {
+		return r.IntentEvidence(w.ToolName, x.OperatorPubkey, assistantExpectedIdempotencyKey(x, w), requestEventID)
+	}
+	if r.Subscriber == nil || strings.TrimSpace(r.RequestAuthor) == "" {
+		return nil, errors.New("ContextVM request evidence resolver is not configured")
 	}
 	methods := r.Methods[w.ToolName]
 	if len(methods) == 0 {

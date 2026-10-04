@@ -123,7 +123,7 @@ func TestIntentProcessor_InProcessSharesIdempotency(t *testing.T) {
 }
 
 // --- F1 acceptance test (d): author-scoped subscription and silent drop ---
-func TestIntentProcessor_SilentDropUntrustedAuthor(t *testing.T) {
+func TestIntentProcessor_InProcessRejectsUntrustedAuthor(t *testing.T) {
 	store := openTestStore(t)
 	handler := &testDomainHandler{}
 
@@ -147,7 +147,7 @@ func TestIntentProcessor_SilentDropUntrustedAuthor(t *testing.T) {
 	intent.Actor = "unknown_pubkey_aaaa000000000000000000000000000000000000000000000000"
 
 	err := proc.ProcessInProcess(context.Background(), intent)
-	require.NoError(t, err) // silent drop, no error
+	require.ErrorContains(t, err, "untrusted intent actor")
 
 	// Handler should not have been called.
 	assert.Empty(t, handler.handled)
@@ -189,7 +189,7 @@ func TestIntentProcessor_KnownPrincipalInsufficientPermission(t *testing.T) {
 	assert.Contains(t, published.events[0].Content, "rejected")
 }
 
-func TestIntentProcessor_DisabledDomainIgnored(t *testing.T) {
+func TestIntentProcessor_InProcessRejectsDisabledDomain(t *testing.T) {
 	store := openTestStore(t)
 	handler := &testDomainHandler{}
 	ts := NewTrustSet(nil, zap.NewNop(),
@@ -204,7 +204,7 @@ func TestIntentProcessor_DisabledDomainIgnored(t *testing.T) {
 
 	intent := testIntent(t, "create", "entity-disabled")
 	err := proc.ProcessInProcess(context.Background(), intent)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "disabled")
 	assert.Empty(t, handler.handled)
 }
 
@@ -222,7 +222,7 @@ func TestIntentProcessor_NoHandlerRegistered(t *testing.T) {
 
 	intent := testIntent(t, "create", "entity-nohandler")
 	err := proc.ProcessInProcess(context.Background(), intent)
-	require.NoError(t, err) // silently ignored
+	require.ErrorContains(t, err, "has no handler")
 }
 
 func TestParseIntent_Valid(t *testing.T) {

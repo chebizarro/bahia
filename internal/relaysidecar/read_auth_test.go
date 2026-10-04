@@ -47,6 +47,17 @@ func TestIsPublicKind(t *testing.T) {
 	}
 }
 
+func TestF74aReadAuthClassification(t *testing.T) {
+	for _, topic := range []string{kinds.CPStateTopicLLMRelease, kinds.CPStateTopicArtifactSignature, kinds.CPStateTopicArtifactSBOM, kinds.CPStateTopicSBOMPackage} {
+		if filterNeedsAuth(nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": {topic}}}) {
+			t.Fatalf("%s must be public", topic)
+		}
+	}
+	if !filterNeedsAuth(nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": {kinds.CPStateTopicRuntimeObservation}}}) {
+		t.Fatal("runtime observations require read auth")
+	}
+}
+
 func TestFilterNeedsAuth(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -115,8 +126,31 @@ func TestFilterNeedsAuth(t *testing.T) {
 			needsAuth: true,
 		},
 		{
+			name: "F74b fleet OCK topics are public ciphertext",
+			filter: nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{
+				kinds.CPStateTopicPackageIntent, kinds.CPStateTopicToolProvisionIntent,
+				kinds.CPStateTopicToolDenylist, kinds.CPStateTopicToolProfile, kinds.CPStateTopicNotificationLog,
+			}}},
+			needsAuth: false,
+		},
+		{
 			name:      "OCK-encrypted org topics are public (content is ciphertext)",
 			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicOrgRegistry, kinds.CPStateTopicSecretRegistry}}},
+			needsAuth: false,
+		},
+		{
+			name:      "F75 Soul runtime policy requires member auth",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicSoulRuntimePolicy}}},
+			needsAuth: true,
+		},
+		{
+			name:      "F75 encrypted Blossom metadata is public ciphertext",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicBlossomAdmin, kinds.CPStateTopicBlossomBlob}}},
+			needsAuth: false,
+		},
+		{
+			name:      "F75 sanitized operational state is public",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicManagedInstanceHealth, kinds.CPStateTopicRouteCanary}}},
 			needsAuth: false,
 		},
 		{

@@ -15,7 +15,8 @@ import (
 )
 
 type testPolicyRepo struct {
-	policies map[uuid.UUID]*domain.DeploymentPolicy
+	mutations int
+	policies  map[uuid.UUID]*domain.DeploymentPolicy
 }
 
 func newTestPolicyRepo() *testPolicyRepo {
@@ -23,6 +24,7 @@ func newTestPolicyRepo() *testPolicyRepo {
 }
 
 func (m *testPolicyRepo) Create(_ context.Context, p *domain.DeploymentPolicy) error {
+	m.mutations++
 	if p.ID == uuid.Nil {
 		p.ID = uuid.New()
 	}
@@ -79,11 +81,13 @@ func (m *testPolicyRepo) ListGlobal(_ context.Context) ([]domain.DeploymentPolic
 }
 
 func (m *testPolicyRepo) Update(_ context.Context, p *domain.DeploymentPolicy) error {
+	m.mutations++
 	m.policies[p.ID] = p
 	return nil
 }
 
 func (m *testPolicyRepo) Delete(_ context.Context, id uuid.UUID) error {
+	m.mutations++
 	delete(m.policies, id)
 	return nil
 }
@@ -129,37 +133,6 @@ func newTestMCPPolicyServer() (*Server, *testPolicyRepo) {
 	policySvc := service.NewPolicyService(policyRepo, &testSigRepo{hasSig: true}, &testSBOMRepo{}, zap.NewNop())
 	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{Policies: policySvc})
 	return server, policyRepo
-}
-
-type capturePolicyCommandPublisher struct {
-	create   *controlplane.PolicyMutationCommand
-	update   *controlplane.PolicyMutationCommand
-	delete   *controlplane.PolicyMutationCommand
-	evaluate *controlplane.PolicyMutationCommand
-}
-
-func (p *capturePolicyCommandPublisher) PublishPolicyCreateRequest(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
-	p.create = &cmd
-	return testPolicyReceipt(controlplane.KindContextVMMessage, cmd.IdempotencyKey), nil
-}
-func (p *capturePolicyCommandPublisher) PublishPolicyUpdateRequest(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
-	p.update = &cmd
-	return testPolicyReceipt(controlplane.KindContextVMMessage, cmd.IdempotencyKey), nil
-}
-func (p *capturePolicyCommandPublisher) PublishPolicyDeleteRequest(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
-	p.delete = &cmd
-	return testPolicyReceipt(controlplane.KindContextVMMessage, cmd.IdempotencyKey), nil
-}
-func (p *capturePolicyCommandPublisher) PublishPolicyEvaluateRequest(_ context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
-	p.evaluate = &cmd
-	return testPolicyReceipt(controlplane.KindContextVMMessage, cmd.IdempotencyKey), nil
-}
-
-func testPolicyReceipt(kind int, key string) *controlplane.PolicyCommandReceipt {
-	if key == "" {
-		key = "generated-key"
-	}
-	return &controlplane.PolicyCommandReceipt{RequestEventID: "policy-event", RequestPubkey: "operator-pubkey", RequestKind: kind, ResultKind: controlplane.KindContextVMMessage, ReadModelKinds: map[string]int{"policy_registry": controlplane.KindCASControlState}, DTag: key, IdempotencyKey: key, Status: "submitted", PublishedRelays: 1}
 }
 
 type captureToolApprovalCommandPublisher struct {
@@ -234,59 +207,6 @@ func TestCallTool_PolicyReadToolsUseDurableReadModels(t *testing.T) {
 	listPayload := decodeResultMap(t, listRes)
 	if int(listPayload["total"].(float64)) != 1 {
 		t.Fatalf("expected 1 policy, got %v", listPayload["total"])
-	}
-}
-
-func TestCallTool_PolicyMutationsPublishSignerFirstRequests(t *testing.T) {
-	ctx := authorizedMCPContext()
-	publisher := &capturePolicyCommandPublisher{}
-	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{PolicyCommandPublisher: publisher})
-	envID := uuid.New()
-	policyID := uuid.New()
-	artifactID := uuid.New()
-	serviceID := uuid.New()
-
-	createRes, err := server.CallTool(ctx, "bahia_create_policy", map[string]interface{}{
-		"name":            "require-signature",
-		"environment_id":  envID.String(),
-		"rules":           []interface{}{map[string]interface{}{"type": "require_signature"}},
-		"enforcement":     "block",
-		"enabled":         true,
-		"idempotency_key": "policy:create:test",
-	})
-	if err != nil || createRes.IsError {
-		t.Fatalf("create result=%#v err=%v", createRes, err)
-	}
-	createPayload := decodeResultMap(t, createRes)
-	if int(createPayload["request_kind"].(float64)) != controlplane.KindContextVMMessage {
-		t.Fatalf("create request_kind = %v", createPayload["request_kind"])
-	}
-	if publisher.create == nil || publisher.create.Name != "require-signature" || publisher.create.EnvironmentID == nil || *publisher.create.EnvironmentID != envID || publisher.create.IdempotencyKey != "policy:create:test" {
-		t.Fatalf("create command not captured correctly: %#v", publisher.create)
-	}
-
-	updateRes, err := server.CallTool(ctx, "bahia_update_policy", map[string]interface{}{"policy_id": policyID.String(), "name": "require-signature-v2", "enforcement": "warn", "idempotency_key": "policy:update:test"})
-	if err != nil || updateRes.IsError {
-		t.Fatalf("update result=%#v err=%v", updateRes, err)
-	}
-	if publisher.update == nil || publisher.update.ID != policyID || publisher.update.Name != "require-signature-v2" || publisher.update.Enforcement != "warn" {
-		t.Fatalf("update command not captured correctly: %#v", publisher.update)
-	}
-
-	evalRes, err := server.CallTool(ctx, "bahia_evaluate_policy", map[string]interface{}{"artifact_id": artifactID.String(), "environment_id": envID.String(), "service_id": serviceID.String(), "idempotency_key": "policy:evaluate:test"})
-	if err != nil || evalRes.IsError {
-		t.Fatalf("evaluate result=%#v err=%v", evalRes, err)
-	}
-	if publisher.evaluate == nil || publisher.evaluate.ArtifactID != artifactID || publisher.evaluate.EnvironmentID == nil || *publisher.evaluate.EnvironmentID != envID || publisher.evaluate.ServiceID == nil || *publisher.evaluate.ServiceID != serviceID {
-		t.Fatalf("evaluate command not captured correctly: %#v", publisher.evaluate)
-	}
-
-	deleteRes, err := server.CallTool(ctx, "bahia_delete_policy", map[string]interface{}{"policy_id": policyID.String(), "idempotency_key": "policy:delete:test"})
-	if err != nil || deleteRes.IsError {
-		t.Fatalf("delete result=%#v err=%v", deleteRes, err)
-	}
-	if publisher.delete == nil || publisher.delete.ID != policyID || publisher.delete.IdempotencyKey != "policy:delete:test" {
-		t.Fatalf("delete command not captured correctly: %#v", publisher.delete)
 	}
 }
 

@@ -739,7 +739,7 @@ The managed-instance health projector subscribes to internal runtime health, rec
 
 ### Route canary observables
 
-The route canary projector subscribes to the in-process route canary transitions the route canary supervisor publishes (`route.canary_outage_opened`, `route.canary_recovered`, `route.canary_classification_changed`) and projects each one to existing canonical kinds. No new event kind is introduced.
+The route canary projector subscribes to in-process route observations (`route.canary_observed`) and transitions (`route.canary_outage_opened`, `route.canary_recovered`, `route.canary_classification_changed`). Each observation refreshes `30315` and `30900`; only transitions add an immutable `4903` fact. No new Nostr wire kind is introduced.
 
 | Kind | Schema | Addressing | Purpose |
 |------|--------|------------|---------|
@@ -813,3 +813,64 @@ Cascadia `NIP-CAS-0001`'s required 4903 tags and regular append-only class.
 Checkpoint retention, accepted OK and archive recovery must be proved before
 activation; public 30900 projections alone are not a dispatch journal. See
 [the assistant design](designs/assistant-unified-execution.md).
+
+## F74a MCP read families (30900)
+
+The legacy-kind discriminator is a catalog key, not the wire kind. Each record
+uses the shared `bahia.cp-state.v1` envelope, `t` topic, daemon author, and a
+stable `d`; a delete publishes `deleted=true` on the same coordinate.
+
+| Family | Legacy kind | `t` | `d` | Content / read auth |
+|---|---:|---|---|---|
+| LLM release | 32015 | `llm-release` | `llm:release:<id>` | Fleet-OCK encrypted; public ciphertext |
+| Artifact signature | 32016 | `artifact-signature` | `artifact:signature:<id>` | Plaintext supply-chain record; public |
+| Artifact SBOM | 32017 | `artifact-sbom` | `artifact:sbom:<id>` | Plaintext manifest details; public |
+| SBOM package | 32018 | `artifact-sbom-package` | `artifact:sbom-package:<id>` | One package per indexed record; public |
+| Latest runtime observation | 32019 | `runtime-observation` | `runtime:observation:<service-id>:<environment-id>` | Minimal non-secret snapshot; classified protected (NIP-42 enforced in `read_auth_mode=enforce`) |
+
+SBOM references and availability remain their existing `30078` and `30004`
+interop records; these 30900 families add the parsed manifest and package index
+needed by MCP. Publishers use the shared cp-state signing/outbox path and reject
+oversized records; an SBOM package list is never emitted as one event.
+A durable outbox control marker drives one-time startup backfill of pre-existing
+repository records. A failed post-commit projection marks the family dirty so
+the next startup retries the backfill before MCP serves these reads.
+
+### Wave F75 operator views (bahia-irsry.75)
+
+The web reads managed-instance health, route canaries, Blossom administration, and Soul Factory runtime policy from verified BahiaEventStore events. The first two retain their existing `30315`/`30900` current-state projections and `4903` audit facts, now indexed by `t=runtime-instance-health` and `t=route-canary`. Every material health observation has one immutable audit fact; each route probe refreshes current state and only transitions create audit facts. Both streams are bounded in the browser with a seven-day audit backfill and at most 500 audit events per subscription.
+
+| Family discriminator | Topic | 30900 coordinate | Content | Read authorization |
+|---|---|---|---|---|
+| 32040 managed-instance health | `runtime-instance-health` | `runtime:instance:<service>:<environment>:<unit>:<target-sha256>` | sanitized `health` | public sanitized operational signal |
+| 32041 route canary | `route-canary` | `route:<service>:<environment>:<unit-or-none>:<hostname>` | full sanitized `route_canary`, observed instance status, contradiction flag | public sanitized operational signal |
+| 32042 Soul runtime policy | `soul-factory-runtime-policy` | `soul-factory:runtime-policy` | `agent_runtimes` from validated daemon config | member-authenticated |
+| 32043 Blossom administration | `blossom-admin` | `blossom:admin` | OCK-encrypted configured servers and observed health | ciphertext public, fleet OCK required |
+| 32044 Blossom blob | `blossom-blob` | `blossom:blob:<owner-pubkey>:<sha256>` | OCK-encrypted BUD-02 descriptor and owner | ciphertext public, fleet OCK required |
+
+Blossom metadata is published once after a successful daemon-owned upload and once per configured owner at startup. Raw blob retrieval remains HTTP as required by Blossom. The UI's owner filter applies to already-published metadata; it does not issue a new server-side listing for arbitrary pubkeys. Soul policy is published at daemon startup and replaced only when a new daemon config is started.
+
+Config Fabric does not add a family: the browser computes current desired/applied drift from signed kind `30000`/`30078` desired events tagged `config-fabric` and service-authored `30900` status tagged `config-status`, mirroring `ConfigDriftFromEvents`. NIP-01 addressable replacement means a cold relay provides only current desired and status events, not historical versions or receipts; the web cannot reconstruct the REST archive's full version/status history after a cold start.
+
+## F74b canonical fleet-private state (bahia-irsry.74)
+
+Five logical families share wire kind `30900`, `schema=bahia.cp-state.v1`, and
+a `#t` topic; their `legacy_kind` discriminators are not emitted as wire kinds.
+
+| Legacy discriminator | `#t` | Addressable `d` |
+|---|---|---|
+| `32030` package intent/claim/approval | `package-intent` | `package:intent:<request event ID>`, `package:claim:<request event ID>`, `package:approval:<UUID>`, or `package:signed-intent:<SHA-256(intent ID)>` |
+| `32031` tool provisioning intent | `tool-provision-intent` | `tool:intent:<UUID>` |
+| `32032` tool denylist policy | `tool-denylist` | `tool:denylist:<SHA-256(manager\0package)>` |
+| `32033` tool profile | `tool-profile` | `tool:profile:<service UUID>:<environment UUID>` |
+| `32034` notification delivery log window | `notification-log` | `notification:log:<channel UUID>` |
+
+All content is fleet-OCK encrypted because requests may contain private source
+URLs, tool entries encode operator policy, and delivery logs may contain
+recipient details. Relay read auth classifies the topics as public **ciphertext**;
+MCP decrypts with the daemon service key. Deletion uses the same coordinate with
+`deleted=true`. The notification event is one bounded replaceable window per
+channel (at most 50 attempts, 512 JSON bytes per payload, 256 error characters,
+60 KiB plaintext), never one addressable event per append-only log line.
+Mutation-bound repository decorators publish after successful persistence via
+`publishControlState`; the legacy mutation path is not duplicated.

@@ -423,9 +423,17 @@ func (s *RouteCanarySupervisor) EvaluatePlan(ctx context.Context, plan *domain.D
 	next.RouteCanaryKey = key
 
 	if transition == domain.RouteCanaryTransitionNone {
-		// Nothing operator-visible changed; still record the fresh observation
-		// so staleness is visible and recovery streaks accumulate.
-		return s.repo.UpsertState(ctx, &next)
+		// Keep the Nostr state as fresh as the persisted REST read model.
+		if err := s.repo.UpsertState(ctx, &next); err != nil {
+			return err
+		}
+		if s.publisher != nil {
+			s.publisher.Publish(ctx, events.Event{Type: events.EventRouteCanaryObserved, EntityID: next.Coordinate(), Data: RouteCanaryChanged{
+				State: next, ObservedInstanceStatus: s.instanceStatus(ctx, key),
+				Reason: next.FailureReason, OccurredAt: now,
+			}})
+		}
+		return nil
 	}
 
 	instanceStatus := s.instanceStatus(ctx, key)

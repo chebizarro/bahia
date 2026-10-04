@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/openagentsinc/bahia/internal/controlplane"
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
@@ -127,20 +127,17 @@ created entity IDs before retrying a partially completed workflow.`,
 
 			// Step 3: Create pipeline policy.
 			if policyName != "" {
-				stepKey = idempotencyKey + ":policy"
-				enabled := true
-				policyResult, err := runPolicyCreateNostrFirst(cmd, controlplane.PolicyMutationCommand{
-					Name:           policyName,
-					EnvironmentID:  nil,
-					Rules:          []domain.PolicyRule{},
-					Enforcement:    "warn",
-					Enabled:        &enabled,
-					IdempotencyKey: stepKey,
+				policyID, err := uuid.NewV7()
+				if err != nil {
+					return err
+				}
+				_, err = publishMutationIntentForOrg(cmd, "policy", "create", policyID.String(), "", "", orgID, map[string]interface{}{
+					"id": policyID.String(), "name": policyName, "rules": []domain.PolicyRule{}, "enforcement": "warn", "enabled": true,
 				})
 				if err != nil {
 					return fmt.Errorf("onboard policy step failed: %w (completed steps: %v)", err, report.CompletedSteps)
 				}
-				report.PolicyID = policyResult.RequestEventID
+				report.PolicyID = policyID.String()
 				report.CompletedSteps = append(report.CompletedSteps, OnboardStepPolicy)
 			}
 

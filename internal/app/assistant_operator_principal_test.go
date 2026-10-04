@@ -14,7 +14,6 @@ import (
 
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
-	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/mcp"
@@ -25,25 +24,6 @@ var (
 	allowedOperator = strings.Repeat("a1", 32)
 	strangerPubkey  = strings.Repeat("b2", 32)
 )
-
-// principalRecorder captures the principal each real MCP handler dependency
-// was called with.
-type principalRecorder struct {
-	mu   sync.Mutex
-	seen []*auth.Principal
-}
-
-func (r *principalRecorder) record(ctx context.Context) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.seen = append(r.seen, auth.GetPrincipal(ctx))
-}
-
-func (r *principalRecorder) all() []*auth.Principal {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]*auth.Principal(nil), r.seen...)
-}
 
 type recordingMCPStateStore struct {
 	mu    sync.Mutex
@@ -63,45 +43,19 @@ func (s *recordingMCPStateStore) readCount() int {
 	return s.reads
 }
 
-type recordingServiceCommands struct{ *principalRecorder }
-
-func (p recordingServiceCommands) receipt(ctx context.Context, key string) *controlplane.ServiceCommandReceipt {
-	p.record(ctx)
-	return &controlplane.ServiceCommandReceipt{RequestEventID: strings.Repeat("cd", 32), RequestKind: 25910, ResultKind: 7961, IdempotencyKey: key}
-}
-func (p recordingServiceCommands) PublishServiceCreateRequest(ctx context.Context, cmd controlplane.ServiceCreateCommand) (*controlplane.ServiceCommandReceipt, error) {
-	return p.receipt(ctx, cmd.IdempotencyKey), nil
-}
-func (p recordingServiceCommands) PublishEnvironmentCreateRequest(ctx context.Context, cmd controlplane.EnvironmentCreateCommand) (*controlplane.ServiceCommandReceipt, error) {
-	return p.receipt(ctx, cmd.IdempotencyKey), nil
-}
-func (p recordingServiceCommands) PublishServiceUpdateRequest(ctx context.Context, cmd controlplane.ServiceUpdateCommand) (*controlplane.ServiceCommandReceipt, error) {
-	return p.receipt(ctx, cmd.IdempotencyKey), nil
-}
-func (p recordingServiceCommands) PublishDeployRequest(ctx context.Context, cmd controlplane.ServiceDeployCommand) (*controlplane.ServiceCommandReceipt, error) {
-	return p.receipt(ctx, cmd.IdempotencyKey), nil
-}
-func (p recordingServiceCommands) PublishRollbackRequest(ctx context.Context, cmd controlplane.ServiceRollbackCommand) (*controlplane.ServiceCommandReceipt, error) {
-	return p.receipt(ctx, cmd.IdempotencyKey), nil
-}
-func (p recordingServiceCommands) PublishDeploymentApprovalRequest(ctx context.Context, cmd controlplane.ServiceApprovalCommand) (*controlplane.ServiceCommandReceipt, error) {
-	return p.receipt(ctx, cmd.IdempotencyKey), nil
-}
-
 type principalFixture struct {
-	server   *mcp.Server
-	adapter  assistantMCPRuntimeAdapter
-	runtime  *service.AssistantToolRuntime
-	state    *recordingMCPStateStore
-	commands *principalRecorder
+	server  *mcp.Server
+	adapter assistantMCPRuntimeAdapter
+	runtime *service.AssistantToolRuntime
+	state   *recordingMCPStateStore
 }
 
 // newPrincipalFixture builds a real mcp.Server with the production operator
 // allowlist and the production adapter/registry wiring.
 func newPrincipalFixture(t *testing.T) principalFixture {
 	t.Helper()
-	f := principalFixture{state: &recordingMCPStateStore{}, commands: &principalRecorder{}}
-	f.server = newAppTestMCPServer(nil, zap.NewNop(), mcp.ServerDeps{StateStore: f.state, ServicePubkey: nostr.Generate().Public().Hex(), ServiceCommandPublisher: recordingServiceCommands{f.commands}, AuthorizedPubkeys: []string{allowedOperator}})
+	f := principalFixture{state: &recordingMCPStateStore{}}
+	f.server = newAppTestMCPServer(nil, zap.NewNop(), mcp.ServerDeps{StateStore: f.state, ServicePubkey: nostr.Generate().Public().Hex(), AuthorizedPubkeys: []string{allowedOperator}})
 	f.adapter = assistantMCPRuntimeAdapter{server: f.server}
 	registry, err := mcp.NewAssistantToolRegistryForServerWithExternal(f.server, nil)
 	if err != nil {
@@ -134,13 +88,6 @@ func (f principalFixture) dispatch(t *testing.T, ctx context.Context, x domain.A
 	return f.runtime.DispatchPreparedWork(ctx, prepared)
 }
 
-func assertOperatorPrincipal(t *testing.T, p *auth.Principal, pubkey string) {
-	t.Helper()
-	if p == nil || p.Method != auth.MethodNIP98 || p.PubKey != pubkey || p.Subject != pubkey || len(p.Roles) != 0 || p.HasRole(string(domain.RoleAdmin)) {
-		t.Fatalf("tool ran as %+v, want the roleless nostr operator principal %s", p, pubkey)
-	}
-}
-
 func deployArgs() map[string]any {
 	return map[string]any{"service_id": "00000000-0000-0000-0000-000000000001", "environment_id": "00000000-0000-0000-0000-000000000002", "artifact_id": "00000000-0000-0000-0000-000000000003"}
 }
@@ -161,33 +108,11 @@ func TestAssistantMCPAdapterRejectsUnauthenticatedCalls(t *testing.T) {
 	if err != nil || receipt != nil || obs == nil || obs.Status != domain.AssistantToolObservationFailed {
 		t.Fatalf("operator-less dispatch obs=%+v err=%v", obs, err)
 	}
-	if f.state.readCount() != 0 || len(f.commands.all()) != 0 {
+	if f.state.readCount() != 0 {
 		t.Fatal("an unauthenticated call reached a handler dependency")
 	}
 }
 
-func TestAssistantDispatchActsAsAllowlistedOperator(t *testing.T) {
-	f := newPrincipalFixture(t)
-	obs, _, err := f.dispatch(t, context.Background(), principalExecution(allowedOperator), principalWork(t, "bahia_dns_list_endpoints", map[string]any{}))
-	if err != nil || obs == nil || obs.Status != domain.AssistantToolObservationSucceeded {
-		t.Fatalf("allowlisted sync dispatch obs=%+v err=%v", obs, err)
-	}
-	obs, receipt, err := f.dispatch(t, context.Background(), principalExecution(allowedOperator), principalWork(t, "bahia_assistant_service_deploy", deployArgs()))
-	if err != nil || obs != nil || receipt == nil || receipt.RequestEventID == "" {
-		t.Fatalf("allowlisted async dispatch obs=%+v receipt=%+v err=%v", obs, receipt, err)
-	}
-	for _, p := range f.commands.all() {
-		assertOperatorPrincipal(t, p, allowedOperator)
-	}
-	if f.state.readCount() != 1 || len(f.commands.all()) != 1 {
-		t.Fatalf("handler calls state=%d commands=%d", f.state.readCount(), len(f.commands.all()))
-	}
-}
-
-// A non-allowlisted operator is refused exactly as their direct request
-// would be, and the refusal is a definite failed observation: never a crash
-// and never an uncertain (possibly submitted) effect. An ambient system
-// principal in the caller's context cannot lift the refusal.
 func TestAssistantDispatchRefusesNonAllowlistedOperatorAsToolFailure(t *testing.T) {
 	f := newPrincipalFixture(t)
 	system := auth.ContextWithPrincipal(context.Background(), auth.SystemPrincipal("ambient"))
@@ -199,7 +124,7 @@ func TestAssistantDispatchRefusesNonAllowlistedOperatorAsToolFailure(t *testing.
 	if err != nil || receipt != nil || obs == nil || obs.Status != domain.AssistantToolObservationFailed || !strings.Contains(obs.Error, "access denied") {
 		t.Fatalf("stranger async dispatch obs=%+v receipt=%+v err=%v", obs, receipt, err)
 	}
-	if f.state.readCount() != 0 || len(f.commands.all()) != 0 {
+	if f.state.readCount() != 0 {
 		t.Fatal("a refused operator's call reached a handler dependency")
 	}
 }

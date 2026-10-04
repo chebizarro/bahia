@@ -262,3 +262,17 @@ type PackageIntent struct {
 	LastStatusEventID string              `json:"last_status_event_id,omitempty"`
 	LastResultEventID string              `json:"last_result_event_id,omitempty"`
 }
+
+// PackageIntentState is the relay read model for the signed package intent
+// handler. The single-use claim/approval store remains authoritative for
+// admission; this state is for status readers only.
+type PackageIntentState struct {
+	RecordType      string    `json:"record_type"`
+	ID              string    `json:"id"`
+	RequestEventID  string    `json:"request_event_id,omitempty"`
+	Operation       string    `json:"operation"`
+	RequesterPubkey string    `json:"requester_pubkey"`
+	Status          string    `json:"status"`
+	ErrorMessage    string    `json:"error_message,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}

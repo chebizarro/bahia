@@ -114,6 +114,11 @@ const (
 	CPStateTopicBackupVerification       = "backup-verification"
 	CPStateTopicBackupRestore            = "backup-restore"
 	CPStateTopicBackupRuntimeObservation = "backup-runtime"
+	CPStateTopicManagedInstanceHealth    = "runtime-instance-health"
+	CPStateTopicRouteCanary              = "route-canary"
+	CPStateTopicSoulRuntimePolicy        = "soul-factory-runtime-policy"
+	CPStateTopicBlossomAdmin             = "blossom-admin"
+	CPStateTopicBlossomBlob              = "blossom-blob"
 
 	// Secret and notification channel state topics (Phase 3 N1).
 	CPStateTopicSecretRegistry              = "secret-registry"
@@ -172,4 +177,19 @@ const (
 	CPStateTopicSecurityFinding       = "security-finding"
 	CPStateTopicSecuritySchedule      = "security-schedule"
 	CPStateTopicSecurityFindingDetail = "security-finding-detail"
+
+	CPStateTopicLLMRelease         = "llm-release"
+	CPStateTopicArtifactSignature  = "artifact-signature"
+	CPStateTopicArtifactSBOM       = "artifact-sbom"
+	CPStateTopicSBOMPackage        = "artifact-sbom-package"
+	CPStateTopicRuntimeObservation = "runtime-observation"
+)
+
+// F74b confidential fleet cp-state topics.
+const (
+	CPStateTopicPackageIntent       = "package-intent"
+	CPStateTopicToolProvisionIntent = "tool-provision-intent"
+	CPStateTopicToolDenylist        = "tool-denylist"
+	CPStateTopicToolProfile         = "tool-profile"
+	CPStateTopicNotificationLog     = "notification-log"
 )

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
@@ -60,5 +59,5 @@ func (s *Server) handleMLGetProvenance(ctx context.Context, args map[string]inte
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to list ML provenance: %v", err)), nil
 	}
-	return jsonResult(map[string]interface{}{"artifact": artifact, "edges": edges, "read_model_kind": controlplane.KindMLArtifactProvenanceGraph})
+	return jsonResult(map[string]interface{}{"artifact": artifact, "edges": edges, "read_model_kind": kinds.MLArtifactProvenanceGraph})
 }

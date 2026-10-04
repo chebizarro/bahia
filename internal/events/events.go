@@ -46,6 +46,7 @@ const (
 	EventRuntimeRecoveryFailed            EventType = "runtime.recovery_failed"
 	EventRuntimeRecoveryBudgetExhausted   EventType = "runtime.recovery_budget_exhausted"
 	EventRuntimeMaintenanceChanged        EventType = "runtime.maintenance_changed"
+	EventRouteCanaryObserved              EventType = "route.canary_observed"
 	EventRouteCanaryOutageOpened          EventType = "route.canary_outage_opened"
 	EventRouteCanaryRecovered             EventType = "route.canary_recovered"
 	EventRouteCanaryClassificationChanged EventType = "route.canary_classification_changed"

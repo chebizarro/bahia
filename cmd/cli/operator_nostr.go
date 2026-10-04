@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,35 +11,11 @@ import (
 
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/signet"
-	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
-
-type cliOperatorClient interface {
-	Close()
-	BuildRequestNostr(context.Context, client.BuildRequestNostrRequest, func(client.OperatorStatusEvent)) (*client.BuildCommandResult, error)
-	RegisterBuildResultNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error)
-	RegisterArtifactNostr(context.Context, client.RegisterArtifactNostrRequest, func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error)
-	ImportObservedArtifactNostr(context.Context, client.ImportObservedArtifactNostrRequest, func(client.OperatorStatusEvent)) (*client.ImportObservedArtifactResult, error)
-	DNSZoneCreate(context.Context, client.DNSZoneCreateRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
-	DNSPolicyApply(context.Context, client.DNSPolicyApplyRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
-	DNSRecordSet(context.Context, client.DNSRecordSetRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
-	DNSDriftRemediate(context.Context, client.DNSDriftRemediateRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
-	DNSOverrideRetire(context.Context, client.DNSOverrideRetireRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
-	GetEnvironmentDetailsNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.EnvironmentDetails, error)
-	PreviewDeploymentNostr(context.Context, client.DeploymentPreviewNostrRequest, func(client.OperatorStatusEvent)) (map[string]any, error)
-	RouteAttach(context.Context, client.RouteAttachRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
-	ScanAdoptionNostr(context.Context, client.AdoptionScanRequest, func(client.OperatorStatusEvent)) ([]client.AdoptionPreview, error)
-	ImportAdoptionNostr(context.Context, client.AdoptionImportRequest, func(client.OperatorStatusEvent)) ([]client.AdoptionImportResult, error)
-	PublishPolicyCreateNostr(context.Context, controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
-}
-
-var newCLIOperatorClient = func(cfg client.OperatorControlPlaneConfig, options ...client.OperatorControlPlaneOption) (cliOperatorClient, error) {
-	return client.NewOperatorControlPlaneClient(cfg, options...)
-}
 
 var discoverOperatorRelaysForCLI = func(ctx context.Context, cfg client.OperatorRelayDiscoveryConfig) ([]string, error) {
 	return client.DiscoverOperatorRelays(ctx, cfg)
@@ -118,222 +93,6 @@ var newCLINIP46Signer = func(ctx context.Context, bunkerURI, clientKey string) (
 		return nil, "", nil, err
 	}
 	return &cliNIP46Signer{client: signetClient, pubkey: pubkey}, pubkey, signetClient.Close, nil
-}
-
-func runBuildRequestNostr(cmd *cobra.Command, req client.BuildRequestNostrRequest) (*client.BuildCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.BuildRequestNostr(cmd.Context(), req, operatorStatusCallback(cmd, "builds request"))
-}
-
-func runBuildRegisterResultNostr(cmd *cobra.Command, buildID string) (*client.ArtifactCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.RegisterBuildResultNostr(cmd.Context(), buildID, operatorStatusCallback(cmd, "builds register-result"))
-}
-
-func runArtifactImportObservedNostr(cmd *cobra.Command, req client.ImportObservedArtifactNostrRequest) (*client.ImportObservedArtifactResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.ImportObservedArtifactNostr(cmd.Context(), req, operatorStatusCallback(cmd, "artifact import-observed"))
-}
-
-func runArtifactRegisterNostr(cmd *cobra.Command, req client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.RegisterArtifactNostr(cmd.Context(), req, operatorStatusCallback(cmd, "artifact register"))
-}
-
-func runDNSZoneCreate(cmd *cobra.Command, req client.DNSZoneCreateRequest) (*client.DNSCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.DNSZoneCreate(cmd.Context(), req, operatorStatusCallback(cmd, "dns zone-create"))
-}
-
-func runDNSPolicyApply(cmd *cobra.Command, req client.DNSPolicyApplyRequest) (*client.DNSCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.DNSPolicyApply(cmd.Context(), req, operatorStatusCallback(cmd, "dns policy-apply"))
-}
-
-func runDNSRecordSet(cmd *cobra.Command, req client.DNSRecordSetRequest) (*client.DNSCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.DNSRecordSet(cmd.Context(), req, operatorStatusCallback(cmd, "dns record-set"))
-}
-
-func runDNSDriftRemediate(cmd *cobra.Command, req client.DNSDriftRemediateRequest) (*client.DNSCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.DNSDriftRemediate(cmd.Context(), req, operatorStatusCallback(cmd, "dns drift-remediate"))
-}
-
-func runDNSOverrideRetire(cmd *cobra.Command, req client.DNSOverrideRetireRequest) (*client.DNSCommandResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.DNSOverrideRetire(cmd.Context(), req, operatorStatusCallback(cmd, "dns override-retire"))
-}
-
-func runEnvironmentGetDetailsNostr(cmd *cobra.Command, environmentID string) (*client.EnvironmentDetails, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return runEnvironmentGetDetailsNostrWithClient(cmd, op, environmentID)
-}
-
-func runEnvironmentGetDetailsNostrWithClient(cmd *cobra.Command, op cliOperatorClient, environmentID string) (*client.EnvironmentDetails, error) {
-	return op.GetEnvironmentDetailsNostr(cmd.Context(), environmentID, operatorStatusCallback(cmd, "environment get-details"))
-}
-
-func runDeploymentPreviewNostr(cmd *cobra.Command, req client.DeploymentPreviewNostrRequest) (map[string]any, error) {
-	key, err := deploymentRequestKey(cmd, req.IdempotencyKey)
-	if err != nil {
-		return nil, err
-	}
-	req.IdempotencyKey = key
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.PreviewDeploymentNostr(cmd.Context(), req, operatorStatusCallback(cmd, "deploy preview"))
-}
-
-func runRouteAttachNostr(cmd *cobra.Command, req client.RouteAttachRequest) (*client.DeploymentCommandResult, error) {
-	key, err := deploymentRequestKey(cmd, req.IdempotencyKey)
-	if err != nil {
-		return nil, err
-	}
-	req.IdempotencyKey = key
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.RouteAttach(cmd.Context(), req, operatorStatusCallback(cmd, "route attach"))
-}
-
-func runAdoptionScanNostrFirst(cmd *cobra.Command, req client.AdoptionScanRequest, rawTargetUsed bool, fallback func(context.Context) ([]client.AdoptionPreview, error)) ([]client.AdoptionPreview, error) {
-	if rawTargetUsed {
-		if !operatorHTTPFallback {
-			return nil, rawTargetRequiresFallbackError()
-		}
-		return fallback(cmd.Context())
-	}
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return fallbackOrError(cmd, err, fallback)
-	}
-	defer op.Close()
-	result, err := op.ScanAdoptionNostr(cmd.Context(), req, operatorStatusCallback(cmd, "adoption scan"))
-	if err != nil {
-		return fallbackOrError(cmd, err, fallback)
-	}
-	return result, nil
-}
-
-func runPolicyCreateNostrFirst(cmd *cobra.Command, req controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.PublishPolicyCreateNostr(cmd.Context(), req)
-}
-
-func runAdoptionImportNostrFirst(cmd *cobra.Command, req client.AdoptionImportRequest, rawTargetUsed bool, fallback func(context.Context) ([]client.AdoptionImportResult, error)) ([]client.AdoptionImportResult, error) {
-	if rawTargetUsed {
-		if !operatorHTTPFallback {
-			return nil, rawTargetRequiresFallbackError()
-		}
-		return fallback(cmd.Context())
-	}
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return fallbackOrError(cmd, err, fallback)
-	}
-	defer op.Close()
-	result, err := op.ImportAdoptionNostr(cmd.Context(), req, operatorStatusCallback(cmd, "adoption import"))
-	if err != nil {
-		return fallbackOrError(cmd, err, fallback)
-	}
-	return result, nil
-}
-
-func buildCLIOperatorClient(cmd *cobra.Command) (cliOperatorClient, error) {
-	key, err := resolveNostrPrivateKeyInput(cmd)
-	if err != nil {
-		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: err}
-	}
-	bunkerURI, clientKey, err := resolveNIP46OperatorInput(cmd)
-	if err != nil {
-		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: err}
-	}
-	if strings.TrimSpace(key) != "" && bunkerURI != "" {
-		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: fmt.Errorf("configure either a NIP-46 bunker signer or a local private key, not both")}
-	}
-	if strings.TrimSpace(key) == "" && bunkerURI == "" {
-		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator signer", RequestAccepted: false, Cause: fmt.Errorf("provide --nostr-bunker-file with --nostr-client-key-file (or BAHIA_NOSTR_BUNKER_FILE/BAHIA_NOSTR_BUNKER_URI with BAHIA_NOSTR_CLIENT_KEY_FILE/BAHIA_NOSTR_CLIENT_PRIVATE_KEY); local-key inputs remain compatibility-only")}
-	}
-	relays, err := resolveOperatorRelays(cmd)
-	if err != nil {
-		return nil, &client.ControlPlaneRequestError{Phase: "resolve operator relays", RequestAccepted: false, Cause: err}
-	}
-	cfg := client.OperatorControlPlaneConfig{
-		Relays:        relays,
-		ServicePubkey: resolveOperatorServicePubkey(cmd),
-		Encrypted:     operatorEncrypted,
-		ResultTimeout: operatorResultTimeout,
-		ResultRetries: &operatorResultRetries,
-	}
-	if bunkerURI != "" {
-		signer, pubkey, closeSigner, signerErr := newCLINIP46Signer(cmd.Context(), bunkerURI, clientKey)
-		if signerErr != nil {
-			return nil, &client.ControlPlaneRequestError{Phase: "connect operator NIP-46 signer", RequestAccepted: false, Cause: signerErr}
-		}
-		cfg.Signer = signer
-		cfg.Pubkey = pubkey
-		cfg.CloseSigner = closeSigner
-	} else {
-		cfg.PrivateKey = key
-	}
-	op, err := newCLIOperatorClient(cfg, client.WithOperatorLogger(newCLIOperatorLogger(cmd.ErrOrStderr())))
-	if err != nil {
-		if cfg.CloseSigner != nil {
-			_ = cfg.CloseSigner()
-		}
-		return nil, &client.ControlPlaneRequestError{Phase: "configure operator Nostr client", RequestAccepted: false, Cause: err}
-	}
-	return op, nil
 }
 
 func configureNIP46HTTPClientAuth(cmd *cobra.Command, c *client.Client) (func() error, error) {
@@ -545,22 +304,6 @@ func normalizeRelayList(values []string) []string {
 	return out
 }
 
-func fallbackOrError[T any](cmd *cobra.Command, err error, fallback func(context.Context) (T, error)) (T, error) {
-	var zero T
-	if !operatorHTTPFallback || fallback == nil || !isPreAcceptanceOperatorFailure(err) {
-		return zero, err
-	}
-	if outputFormat == "table" && cmd != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "→ signer-first operator request unavailable before relay acceptance; using explicit HTTP fallback: %v\n", err)
-	}
-	return fallback(cmd.Context())
-}
-
-func isPreAcceptanceOperatorFailure(err error) bool {
-	var reqErr *client.ControlPlaneRequestError
-	return errors.As(err, &reqErr) && !reqErr.RequestAccepted
-}
-
 func operatorStatusCallback(cmd *cobra.Command, label string) func(client.OperatorStatusEvent) {
 	if outputFormat != "table" {
 		return nil
@@ -575,10 +318,6 @@ func operatorStatusCallback(cmd *cobra.Command, label string) func(client.Operat
 		}
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "→ %s: %s\n", label, message)
 	}
-}
-
-func rawTargetRequiresFallbackError() error {
-	return fmt.Errorf("--raw-target is compatibility-only and requires explicit --http-fallback; use --target endpoint refs for signer-first adoption")
 }
 
 func getEnvBool(key string) bool {

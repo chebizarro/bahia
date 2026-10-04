@@ -63,10 +63,10 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
 
     await page.goto('/dns');
     await expect(page.getByRole('heading', { name: 'DNS management' })).toBeVisible();
-    await expect(page.getByText('prod.example.com')).toBeVisible();
+    await expect(page.getByRole('region', { name: 'DNS zones' }).getByText('prod.example.com', { exact: true })).toBeVisible();
 
     await page.getByRole('button', { name: 'Endpoints' }).click();
-    await expect(page.getByText('checkout.prod.example.com')).toBeVisible();
+    await expect(page.getByRole('region', { name: 'DNS endpoints' }).getByText('checkout.prod.example.com', { exact: true })).toBeVisible();
 
     await page.getByRole('button', { name: 'FIPS/Mesh' }).click();
     await expect(page.getByRole('heading', { name: 'FIPS mesh' })).toBeVisible();

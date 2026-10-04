@@ -3,7 +3,6 @@
   import Table from './Table.svelte';
   import LoadingButton from './LoadingButton.svelte';
   import EmptyState from './EmptyState.svelte';
-  import { api } from '$lib/api/client.js';
   import {
     ArtifactIcon,
     BlossomIcon,
@@ -138,9 +137,10 @@
     // Prefer the same-origin Blossom proxy (/blossom/blob/<hash>): it avoids
     // browser mixed-content blocks when the SBOM lives on an http:// Blossom
     // server while the dashboard is served over https, and sidesteps CORS.
-    if (hash && api?.fetchBlossomBlob) {
+    if (hash) {
       try {
-        const resp = await api.fetchBlossomBlob(hash);
+        const resp = await fetch(`/api/v1/blossom/blob/${encodeURIComponent(hash)}`);
+        if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
         return await resp.text();
       } catch (proxyErr) {
         // If a direct fetch would be blocked as mixed content, surface the

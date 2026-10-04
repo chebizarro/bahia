@@ -155,38 +155,3 @@ func (r *identityPolicyRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.D
 	}
 	return &p, nil
 }
-
-// PublishEnvironmentCreateRequest sends exactly the params environment/create
-// decodes (strictly), including the client-minted id.
-func TestEnvironmentCreateCommandParamsDecodeStrictly(t *testing.T) {
-	publisher := &mockEncryptedPublisher{}
-	commands := NewServiceCommandPublisher(publisher, newResponder(t, publisher).signer)
-	id, orgID := domain.NewEntityID(), uuid.New()
-	receipt, err := commands.PublishEnvironmentCreateRequest(context.Background(), EnvironmentCreateCommand{
-		ID: id, OrgID: orgID, Name: "prod", LoomWorkerSelector: map[string]any{"region": "eu"},
-		ReconcileMode: "observe_only", DeployStrategy: "replace", Protected: true, IdempotencyKey: "environment-create:prod",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if receipt.EnvironmentID != id.String() || receipt.IdempotencyKey != "environment-create:prod" {
-		t.Fatalf("receipt = %+v", receipt)
-	}
-	if len(publisher.events) != 1 {
-		t.Fatalf("published %d events", len(publisher.events))
-	}
-	var rpc ContextVMJSONRPCRequest
-	if err := json.Unmarshal([]byte(publisher.events[0].Content), &rpc); err != nil {
-		t.Fatal(err)
-	}
-	if rpc.Method != ContextVMMethodEnvironmentCreate {
-		t.Fatalf("method = %q", rpc.Method)
-	}
-	var payload encryptedEnvironmentCreatePayload
-	if err := decodeStrictContextVMParams(rpc.Params, &payload); err != nil {
-		t.Fatalf("environment/create rejects the command's params: %v (%s)", err, rpc.Params)
-	}
-	if payload.ID != id.String() || payload.OrgID != orgID || payload.Name != "prod" || !payload.Protected || payload.ReconcileMode != "observe_only" {
-		t.Fatalf("decoded payload = %+v", payload)
-	}
-}

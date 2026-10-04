@@ -62,10 +62,6 @@ vi.mock('$lib/components/toast.js', () => ({
   removeToast: vi.fn()
 }));
 
-vi.mock('$lib/api/client.js', () => ({
-  api: { setAuthProvider: vi.fn(), fetch: vi.fn() }
-}));
-
 vi.mock('$lib/nostr/encrypted-controlplane.js', () => ({
   disconnectEncryptedControlplane: vi.fn()
 }));

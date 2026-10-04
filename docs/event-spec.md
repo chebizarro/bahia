@@ -520,7 +520,7 @@ Stage 3 uses existing canonical observable kinds only: `30315` managed-instance 
 
 ### Route canary projection
 
-Route canary transitions use existing canonical observable kinds only, under `domain=route`: `30315` route status (`bahia.status.route-canary.v1`) and `30900` route state (`bahia.state.route-canary.v1`), both addressed by `d=route:<service>:<environment>:<deployment-unit or none>:<hostname>`, plus `4903` transition audit facts (`bahia.audit.route-canary.v1`, `state=<route coordinate>`). Every event carries the bounded fleet-health `status`, `outage=open|closed`, `classification`, `hostname`, `instance_status` when observed, and `service_healthy_route_broken`. An open outage is `unhealthy`, a warning or pre-threshold failure is `degraded`, and `route_ok` is `healthy`. Projection reacts to internal route canary subscriptions and publishes through the verified signed outbox path. It adds no mutation command or polling transport. See `docs/nostr-event-implementation-guide.md` for the full shape.
+Route canary transitions use existing canonical observable kinds only, under `domain=route`: `30315` route status (`bahia.status.route-canary.v1`) and `30900` route state (`bahia.state.route-canary.v1`), both addressed by `d=route:<service>:<environment>:<deployment-unit or none>:<hostname>`, plus `4903` transition audit facts (`bahia.audit.route-canary.v1`, `state=<route coordinate>`). Every event carries the bounded fleet-health `status`, `outage=open|closed`, `classification`, `hostname`, `instance_status` when observed, and `service_healthy_route_broken`. An open outage is `unhealthy`, a warning or pre-threshold failure is `degraded`, and `route_ok` is `healthy`. Projection reacts to every persisted route observation: `30315`/`30900` refresh current state, while only transitions add `4903` audit history. It publishes through the verified signed outbox path and adds no mutation command or polling transport. See `docs/nostr-event-implementation-guide.md` for the full shape.
 
 ### `bahia.agent-runtime-release.v1` control state
 
@@ -563,3 +563,26 @@ and replay. See the migration verification report for capabilities still unwired
 The 4903 checkpoint is append-only and encrypted; public tags contain no tool
 arguments. It is not a 30900 replacement event. See
 [the assistant protocol](operator-assistant-protocol.md).
+
+## MCP read-state families (F74a)
+
+Daemon-authored kind `30900` now carries LLM releases (32015), artifact
+signatures (32016), parsed artifact SBOMs (32017), one package per indexed
+record (32018), and latest runtime observations (32019). These are
+`legacy_kind` discriminators, not wire kinds. Release content is Fleet-OCK
+encrypted; signature/SBOM data is public; runtime observations omit arbitrary
+metadata and are classified protected (NIP-42 enforced in `read_auth_mode=enforce`). Live records and tombstones share their
+addressable coordinates. See the
+[family table](nostr-event-implementation-guide.md#f74a-mcp-read-families-30900).
+
+Wave F75 operator-view state and its bounded history contract are specified in [Wave F75 operator views](nostr-event-implementation-guide.md#wave-f75-operator-views-bahia-irsry75).
+
+## F74b fleet-private cp-state families
+
+Package intent/approval (`32030`), tool provisioning intent (`32031`), tool
+denylist (`32032`), tool profile (`32033`), and notification delivery log
+(`32034`) are `30900` addressable state with `#t` topics and fleet-OCK encrypted
+content. The log is one latest-50-per-channel replaceable window, not a growing
+per-line relay history; delete publishes a same-coordinate tombstone. See
+[the event implementation guide](nostr-event-implementation-guide.md#f74b-canonical-fleet-private-state-bahia-irsry74)
+for coordinates, size bounds, and confidentiality.

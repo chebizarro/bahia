@@ -442,10 +442,10 @@ func TestPolicyIntentHandler_UnauthorizedKnownPrincipalRejected(t *testing.T) {
 	assert.Equal(t, 0, repo.count())
 }
 
-// TestPolicyIntentHandler_UntrustedAuthorDropped verifies that an intent
-// from a pubkey that is neither a fleet operator nor a known org member
-// is silently dropped.
-func TestPolicyIntentHandler_UntrustedAuthorDropped(t *testing.T) {
+// TestPolicyIntentHandler_UntrustedInProcessAuthorRejected verifies that an
+// in-process caller without a trusted actor is refused rather than silently
+// treated as a successful write.
+func TestPolicyIntentHandler_UntrustedInProcessAuthorRejected(t *testing.T) {
 	store := openTestStore(t)
 	repo := newMemPolicyRepo()
 	handler := testPolicyHandler(repo, nil)
@@ -470,8 +470,8 @@ func TestPolicyIntentHandler_UntrustedAuthorDropped(t *testing.T) {
 	intent.Actor = "unknown_pubkey_aaaa000000000000000000000000000000000000000000000001"
 
 	err := proc.ProcessInProcess(context.Background(), intent)
-	require.NoError(t, err, "silent drop produces no error")
-	assert.Equal(t, 0, repo.count(), "untrusted author's intent should be silently dropped")
+	require.ErrorContains(t, err, "untrusted intent actor")
+	assert.Equal(t, 0, repo.count(), "untrusted author's intent must not be applied")
 }
 
 // TestPolicyIntentHandler_NoDBOperation verifies the handler works without

@@ -276,8 +276,6 @@ func TestSensitiveRoutesRejectCrossTenantRequests(t *testing.T) {
 		body   string
 		orgID  uuid.UUID
 	}{
-		{name: "service environment state", method: http.MethodGet, path: "/api/v1/services/" + fixture.serviceB.String() + "/environments/" + fixture.environmentB.String() + "/state"},
-		{name: "environment state", method: http.MethodGet, path: "/api/v1/environments/" + fixture.environmentB.String() + "/state"},
 		{name: "deployment run logs", method: http.MethodGet, path: "/api/v1/deployments/runs/" + fixture.runB.String() + "/logs"},
 		{name: "live logs", method: http.MethodGet, path: "/api/v1/services/" + fixture.serviceB.String() + "/environments/" + fixture.environmentB.String() + "/logs"},
 		{name: "read SBOM", method: http.MethodGet, path: "/api/v1/artifacts/" + fixture.artifactB.String() + "/sbom"},

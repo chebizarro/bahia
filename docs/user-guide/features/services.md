@@ -342,3 +342,7 @@ Tenant-scoped read endpoints are:
 - `GET /api/v1/services/{serviceId}/runtime-releases/rollback?agent_id={agentId}&release_channel={channel}`
 
 Release registration and binding are backend interfaces for signer-first promotion workflows; these endpoints do not create deployment intent or mutate a runtime host.
+
+## Canonical MCP reads
+
+`bahia_get_observation` reads the latest daemon-authored `30900` runtime-observation record. Its protected-class relay topic carries the fields needed by the tool, not arbitrary observation metadata or secrets.

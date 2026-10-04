@@ -33,20 +33,15 @@ import (
 // It exposes deployment registry functionality as MCP tools.
 type Server struct {
 	stateStore           StateEventStore
+	intentProc           *controlplane.IntentProcessor
 	servicePubkey        string
 	confidentialReader   ConfidentialStateReader
 	registry             *service.RegistryService
 	llmRegistry          *service.LLMRegistryService
 	mlCommands           MLCommandPublisher
-	llmCommands          LLMCommandPublisher
-	serviceCommands      ServiceCommandPublisher
 	artifactCommands     ArtifactCommandPublisher
-	packageCommands      PackageCommandPublisher
 	policyCommands       PolicyCommandPublisher
 	toolApprovalCommands ToolApprovalCommandPublisher
-	workerCommands       WorkerCommandPublisher
-	backupCommands       BackupCommandPublisher
-	packageProjection    repository.PackageControlPlaneRepository
 	logger               *zap.Logger
 	secretsRepo          repository.SecretRepository       // optional: for secret management tools
 	encryptor            *secrets.Encryptor                // optional: for secret encryption/decryption
@@ -71,29 +66,28 @@ type Config struct {
 
 // ServerDeps holds MCP dependencies. StateStore and ServicePubkey are required.
 type ServerDeps struct {
-	StateStore                   StateEventStore
-	ServicePubkey                string
-	ConfidentialReader           ConfidentialStateReader
-	SecretsRepo                  repository.SecretRepository
-	Encryptor                    *secrets.Encryptor
-	NotificationRepo             repository.NotificationRepository
-	NotificationDispatcher       *notifications.Dispatcher
-	LogService                   *adapterruntime.LogService
-	SBOMs                        repository.SBOMRepository
-	Signatures                   repository.ArtifactSignatureRepository
-	SignVerifier                 SignatureVerifier
-	ToolProvisioning             repository.ToolProvisioningRepository
-	MLCommandPublisher           MLCommandPublisher
-	LLMRegistry                  *service.LLMRegistryService
-	LLMCommandPublisher          LLMCommandPublisher
-	ServiceCommandPublisher      ServiceCommandPublisher
-	ArtifactCommandPublisher     ArtifactCommandPublisher
-	PackageCommandPublisher      PackageCommandPublisher
-	PolicyCommandPublisher       PolicyCommandPublisher
+	StateStore             StateEventStore
+	IntentProcessor        *controlplane.IntentProcessor
+	ServicePubkey          string
+	ConfidentialReader     ConfidentialStateReader
+	SecretsRepo            repository.SecretRepository
+	Encryptor              *secrets.Encryptor
+	NotificationRepo       repository.NotificationRepository
+	NotificationDispatcher *notifications.Dispatcher
+	LogService             *adapterruntime.LogService
+	SBOMs                  repository.SBOMRepository
+	Signatures             repository.ArtifactSignatureRepository
+	SignVerifier           SignatureVerifier
+	ToolProvisioning       repository.ToolProvisioningRepository
+	// Phase 5 P2: kept — ML import, recipe and inference operations lack intent handlers, bahia-irsry.76
+	MLCommandPublisher MLCommandPublisher
+	LLMRegistry        *service.LLMRegistryService
+	// Phase 5 P2: kept — artifact registration lacks an intent handler, bahia-irsry.76
+	ArtifactCommandPublisher ArtifactCommandPublisher
+	// Phase 5 P2: kept — no policy-evaluate intent op, bahia-irsry.77
+	PolicyCommandPublisher PolicyCommandPublisher
+	// Phase 5 P2: kept — tool provisioning approval lacks an intent handler, bahia-irsry.76
 	ToolApprovalCommandPublisher ToolApprovalCommandPublisher
-	WorkerCommandPublisher       WorkerCommandPublisher
-	BackupCommandPublisher       BackupCommandPublisher
-	PackageProjection            repository.PackageControlPlaneRepository
 	// AuthorizedPubkeys is the explicit operator allowlist for external MCP callers.
 	// An empty allowlist denies all non-system callers.
 	AuthorizedPubkeys []string
@@ -108,57 +102,26 @@ type SignatureVerifier interface {
 	VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error)
 }
 
-// MLCommandPublisher emits canonical Nostr request events for signer-first ML MCP tools.
+// Phase 5 P2: kept — ML import, recipe, and inference deploy/rollback lack intent ops, bahia-irsry.76
 type MLCommandPublisher interface {
 	PublishMLModelImportRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
 	PublishMLRecipeRunRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
 	PublishMLInferenceDeployRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
+	PublishMLInferenceApprovalRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
 	PublishMLInferenceRollbackRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
 }
 
-// ServiceCommandPublisher emits canonical Nostr request events for assistant-safe service tools.
-type ServiceCommandPublisher interface {
-	PublishServiceCreateRequest(ctx context.Context, cmd controlplane.ServiceCreateCommand) (*controlplane.ServiceCommandReceipt, error)
-	PublishEnvironmentCreateRequest(ctx context.Context, cmd controlplane.EnvironmentCreateCommand) (*controlplane.ServiceCommandReceipt, error)
-	PublishServiceUpdateRequest(ctx context.Context, cmd controlplane.ServiceUpdateCommand) (*controlplane.ServiceCommandReceipt, error)
-	PublishDeployRequest(ctx context.Context, cmd controlplane.ServiceDeployCommand) (*controlplane.ServiceCommandReceipt, error)
-	PublishRollbackRequest(ctx context.Context, cmd controlplane.ServiceRollbackCommand) (*controlplane.ServiceCommandReceipt, error)
-	PublishDeploymentApprovalRequest(ctx context.Context, cmd controlplane.ServiceApprovalCommand) (*controlplane.ServiceCommandReceipt, error)
-}
-
-// ArtifactCommandPublisher emits signer-first artifact registration events.
+// Phase 5 P2: kept — artifact registration lacks an intent op, bahia-irsry.76
 type ArtifactCommandPublisher interface {
 	PublishArtifactRegisterRequest(ctx context.Context, cmd controlplane.ArtifactRegisterCommand) (*controlplane.ArtifactCommandReceipt, error)
 }
 
-// LLMCommandPublisher emits canonical Nostr request events for signer-first LLM MCP tools.
-type LLMCommandPublisher interface {
-	PublishLLMRouteCreateRequest(ctx context.Context, cmd controlplane.LLMRouteCreateCommand) (*controlplane.LLMCommandReceipt, error)
-	PublishLLMReleaseRegisterRequest(ctx context.Context, cmd controlplane.LLMReleaseRegisterCommand) (*controlplane.LLMCommandReceipt, error)
-	PublishLLMDeployRequest(ctx context.Context, cmd controlplane.LLMDeployCommand) (*controlplane.LLMCommandReceipt, error)
-	PublishLLMApprovalRequest(ctx context.Context, cmd controlplane.LLMApprovalCommand) (*controlplane.LLMCommandReceipt, error)
-	PublishLLMRollbackRequest(ctx context.Context, cmd controlplane.LLMRollbackCommand) (*controlplane.LLMCommandReceipt, error)
-}
-
-// PackageCommandPublisher emits canonical Nostr request events for signer-first package MCP tools.
-type PackageCommandPublisher interface {
-	PublishPackageRepositoryApplyRequest(ctx context.Context, cmd controlplane.PackageRepositoryApplyCommand) (*controlplane.PackageCommandReceipt, error)
-	PublishPackageRepositoryDeleteRequest(ctx context.Context, cmd controlplane.PackageRepositoryDeleteCommand) (*controlplane.PackageCommandReceipt, error)
-	PublishPackagePublishRequest(ctx context.Context, cmd controlplane.PackagePublishCommand) (*controlplane.PackageCommandReceipt, error)
-	PublishPackagePromotionRequest(ctx context.Context, cmd controlplane.PackagePromotionCommand) (*controlplane.PackageCommandReceipt, error)
-	PublishPackageYankRequest(ctx context.Context, cmd controlplane.PackageYankCommand) (*controlplane.PackageCommandReceipt, error)
-	PublishPackageDriftDetectRequest(ctx context.Context, cmd controlplane.PackageDriftDetectCommand) (*controlplane.PackageCommandReceipt, error)
-}
-
-// PolicyCommandPublisher emits canonical public Nostr policy request events for signer-first MCP tools.
+// Phase 5 P2: kept — no policy-evaluate intent op; bahia-irsry.77
 type PolicyCommandPublisher interface {
-	PublishPolicyCreateRequest(ctx context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
-	PublishPolicyUpdateRequest(ctx context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
-	PublishPolicyDeleteRequest(ctx context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
 	PublishPolicyEvaluateRequest(ctx context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
 }
 
-// ToolApprovalCommandPublisher emits canonical public Nostr tool approval response events.
+// Phase 5 P2: kept — tool provisioning approval lacks an intent op, bahia-irsry.76
 type ToolApprovalCommandPublisher interface {
 	PublishToolApprovalResponse(ctx context.Context, cmd controlplane.ToolApprovalCommand) (*controlplane.ToolApprovalCommandReceipt, error)
 }
@@ -173,20 +136,15 @@ func NewServerWithOptionsChecked(registry *service.RegistryService, logger *zap.
 	}
 	return &Server{
 		stateStore:           deps.StateStore,
+		intentProc:           deps.IntentProcessor,
 		servicePubkey:        deps.ServicePubkey,
 		confidentialReader:   deps.ConfidentialReader,
 		registry:             registry,
 		llmRegistry:          deps.LLMRegistry,
 		mlCommands:           deps.MLCommandPublisher,
-		llmCommands:          deps.LLMCommandPublisher,
-		serviceCommands:      deps.ServiceCommandPublisher,
 		artifactCommands:     deps.ArtifactCommandPublisher,
-		packageCommands:      deps.PackageCommandPublisher,
 		policyCommands:       deps.PolicyCommandPublisher,
 		toolApprovalCommands: deps.ToolApprovalCommandPublisher,
-		workerCommands:       deps.WorkerCommandPublisher,
-		backupCommands:       deps.BackupCommandPublisher,
-		packageProjection:    deps.PackageProjection,
 		logger:               logger,
 		secretsRepo:          deps.SecretsRepo,
 		encryptor:            deps.Encryptor,
@@ -798,6 +756,7 @@ func (s *Server) GetTools() []Tool {
 						"type":        "object",
 						"description": "Arbitrary artifact metadata (optional)",
 					},
+					"idempotency_key": map[string]interface{}{"type": "string", "description": "Stable retry key; defaults to _meta.progressToken or immutable build/digest identity"},
 				},
 				"required": []string{"build_id", "service_id", "image_repo", "image_tag", "image_digest"},
 			},
@@ -1782,7 +1741,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_get_notification",
-			Description: "Get a single notification by ID (not currently supported)",
+			Description: "Get a recent notification by ID from canonical state",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1824,6 +1783,7 @@ func (s *Server) GetTools() []Tool {
 		},
 	}
 	tools = append(tools, mlToolDefinitions()...)
+	tools = append(tools, registryIntentToolDefinitions()...)
 	tools = append(tools, assistantAsyncToolDefinitions()...)
 	tools = append(tools, dnsToolDefinitions()...)
 	tools = append(tools, fipsToolDefinitions()...)
@@ -1831,7 +1791,7 @@ func (s *Server) GetTools() []Tool {
 	tools = append(tools, packageToolDefinitions()...)
 	tools = append(tools, backupToolDefinitions()...)
 	tools = append(tools, docsToolDefinitions()...)
-	return append(tools, outboxToolDefinitions()...)
+	return describeIntentWriteTools(append(tools, outboxToolDefinitions()...))
 }
 
 // CallTool handles an MCP tool call.
@@ -1955,13 +1915,22 @@ func (s *Server) authorizeBuildPermission(ctx context.Context, buildID uuid.UUID
 
 func (s *Server) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
 	s.logger.Info("tool call", zap.String("tool", name))
+	if isRegistryIntentTool(name) && s.intentProc == nil {
+		return intentWriteError("error", "", "", "intent processor is not configured"), nil
+	}
+	// Intent-backed writes authenticate their Nostr actor and authorize against
+	// TrustSet inside ProcessInProcess. The legacy MCP operator allowlist must
+	// not deny an otherwise authorized org member before that check runs.
+	if s.intentProc != nil && isIntentWriteTool(name) {
+		result, _ := s.callIntentWrite(ctx, name, arguments)
+		return result, nil
+	}
 	if denied := s.authorizeToolCall(ctx, name); denied != nil {
 		return denied, nil
 	}
 	if result, handled := s.callStoreReadTool(ctx, name, arguments); handled {
 		return result, nil
 	}
-
 	if isBackupToolName(name) {
 		return s.handleBackupTool(ctx, name, arguments)
 	}
@@ -2009,8 +1978,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleLLMUpdateRoute(ctx, arguments)
 	case "bahia_llm_register_release":
 		return s.handleLLMRegisterRelease(ctx, arguments)
-	case "bahia_llm_list_releases":
-		return s.handleLLMListReleases(ctx, arguments)
 	// Async LLM Nostr command operations
 	case "bahia_llm_deploy":
 		return s.handleLLMDeploy(ctx, arguments)
@@ -2028,23 +1995,9 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	case "bahia_register_artifact":
 		return s.handleRegisterArtifact(ctx, arguments)
 	// Signature operations
-	case "bahia_list_signatures":
-		return s.handleListSignatures(ctx, arguments)
-	case "bahia_list_verified_signatures":
-		return s.handleListVerifiedSignatures(ctx, arguments)
-	case "bahia_has_verified_signature":
-		return s.handleHasVerifiedSignature(ctx, arguments)
-	case "bahia_get_signature":
-		return s.handleGetSignature(ctx, arguments)
 	case "bahia_verify_signatures":
 		return s.handleVerifySignatures(ctx, arguments)
 	// SBOM operations
-	case "bahia_get_sbom":
-		return s.handleGetSBOM(ctx, arguments)
-	case "bahia_get_sbom_packages":
-		return s.handleGetSBOMPackages(ctx, arguments)
-	case "bahia_search_sbom_packages":
-		return s.handleSearchSBOMPackages(ctx, arguments)
 	case "bahia_ingest_sbom":
 		return s.handleIngestSBOM(ctx, arguments)
 	// Build operations
@@ -2053,8 +2006,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	case "bahia_update_build_status":
 		return s.handleUpdateBuildStatus(ctx, arguments)
 	// Observability operations
-	case "bahia_get_observation":
-		return s.handleGetObservation(ctx, arguments)
 	case "bahia_create_run":
 		return s.handleCreateRun(ctx, arguments)
 	case "bahia_get_run_logs":
@@ -2095,8 +2046,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	// Tool provisioning operations
 	case "bahia_tool_provision_request":
 		return s.handleToolProvisionRequest(ctx, arguments)
-	case "bahia_tool_provision_status":
-		return s.handleToolProvisionStatus(ctx, arguments)
 	case "bahia_tool_provision_approve":
 		return s.handleToolProvisionApprove(ctx, arguments)
 	case "bahia_tool_provision_reject":
@@ -2105,10 +2054,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleToolDenylistAdd(ctx, arguments)
 	case "bahia_tool_denylist_remove":
 		return s.handleToolDenylistRemove(ctx, arguments)
-	case "bahia_tool_denylist_list":
-		return s.handleToolDenylistList(ctx, arguments)
-	case "bahia_tool_profile_get":
-		return s.handleToolProfileGet(ctx, arguments)
 	// Package control-plane operations
 	case "bahia_package_repository_apply":
 		return s.handlePackageRepositoryApply(ctx, arguments)
@@ -2122,8 +2067,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handlePackageYank(ctx, arguments)
 	case "bahia_package_drift_detect":
 		return s.handlePackageDriftDetect(ctx, arguments)
-	case "bahia_package_status":
-		return s.handlePackageStatus(ctx, arguments)
 	// Notification channel operations
 	case "bahia_create_notification_channel":
 		return s.handleCreateNotificationChannel(ctx, arguments)
@@ -2134,10 +2077,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	case "bahia_test_notification_channel":
 		return s.handleTestNotificationChannel(ctx, arguments)
 	// Notification log operations
-	case "bahia_list_notifications":
-		return s.handleListNotifications(ctx, arguments)
-	case "bahia_get_notification":
-		return s.handleGetNotification(ctx, arguments)
 	case "bahia_mark_notification_read":
 		return s.handleMarkNotificationRead(ctx, arguments)
 	case "bahia_dismiss_notification":
@@ -2157,89 +2096,13 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 // --- Tool Handlers ---
 
 func (s *Server) handleCreateService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	name, _ := args["name"].(string)
-	artifactRepo, _ := args["artifact_repo"].(string)
-	repoURL, _ := args["repo_url"].(string)
-	runtimeType, _ := args["runtime_type"].(string)
-	defaultBranch, _ := args["default_branch"].(string)
-	agentID, _ := args["agent_id"].(string)
-	var orgID uuid.UUID
-	if org, _ := args["org_id"].(string); strings.TrimSpace(org) != "" {
-		parsed, err := uuid.Parse(org)
-		if err != nil {
-			return errorResult(fmt.Sprintf("invalid org_id: %v", err)), nil
-		}
-		orgID = parsed
-	}
-	var managed *domain.ManagedRuntimeConfig
-	if raw, ok := args["managed_runtime_config"]; ok && raw != nil {
-		encoded, err := json.Marshal(raw)
-		if err != nil {
-			return errorResult(fmt.Sprintf("invalid managed_runtime_config: %v", err)), nil
-		}
-		var decoded domain.ManagedRuntimeConfig
-		if err := json.Unmarshal(encoded, &decoded); err != nil {
-			return errorResult(fmt.Sprintf("invalid managed_runtime_config: %v", err)), nil
-		}
-		managed = &decoded
-	}
-	repository := args["repository"]
-	if s.serviceCommands == nil {
-		return signerFirstMCPMutationUnavailable("bahia_create_service", "service/create"), nil
-	}
-	id, errResult := mcpCreateEntityID(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	receipt, err := s.serviceCommands.PublishServiceCreateRequest(ctx, controlplane.ServiceCreateCommand{
-		ID: id, Name: name, OrgID: orgID, RepoURL: repoURL, Repository: repository, ArtifactRepo: artifactRepo,
-		DefaultBranch: defaultBranch, RuntimeType: runtimeType, ManagedRuntimeConfig: managed,
-		IdempotencyKey: mcpIdempotencyKey(args, "service-create", name, artifactRepo, id.String()), AgentID: agentID,
-	})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish service create request: %v", err)), nil
-	}
-	return jsonResult(serviceCommandReceiptToMap(receipt))
+	return s.invokeIntentWrite(ctx, "bahia_create_service", args)
 }
 
 // handleCreateEnvironment publishes a signer-first environment/create request
 // under a client-minted environment id (bahia-irsry.42).
 func (s *Server) handleCreateEnvironment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.serviceCommands == nil {
-		return signerFirstMCPMutationUnavailable("bahia_create_environment", "environment/create"), nil
-	}
-	name := strings.TrimSpace(stringArg(args, "name"))
-	if name == "" {
-		return errorResult("name is required"), nil
-	}
-	orgID, err := uuid.Parse(strings.TrimSpace(stringArg(args, "org_id")))
-	if err != nil || orgID == uuid.Nil {
-		return errorResult("org_id is required and must be a UUID"), nil
-	}
-	id, errResult := mcpCreateEntityID(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	cmd := controlplane.EnvironmentCreateCommand{
-		ID: id, OrgID: orgID, Name: name,
-		ReconcileMode: stringArg(args, "reconcile_mode"), DeployStrategy: stringArg(args, "deploy_strategy"),
-		IdempotencyKey: mcpIdempotencyKey(args, "environment-create", orgID.String(), name, id.String()),
-		AgentID:        stringArg(args, "agent_id"),
-	}
-	if protected, ok := args["protected"].(bool); ok {
-		cmd.Protected = protected
-	}
-	if selector, ok := args["loom_worker_selector"].(map[string]interface{}); ok {
-		cmd.LoomWorkerSelector = selector
-	}
-	if runtimeConfig, ok := args["runtime_config"].(map[string]interface{}); ok {
-		cmd.RuntimeConfig = runtimeConfig
-	}
-	receipt, err := s.serviceCommands.PublishEnvironmentCreateRequest(ctx, cmd)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish environment create request: %v", err)), nil
-	}
-	return jsonResult(serviceCommandReceiptToMap(receipt))
+	return s.invokeIntentWrite(ctx, "bahia_create_environment", args)
 }
 
 // mcpCreateEntityIDSchema is the input schema of a create tool's optional
@@ -2268,153 +2131,27 @@ func mcpCreateEntityID(args map[string]interface{}) (uuid.UUID, *ToolResult) {
 }
 
 func (s *Server) handleUpdateService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceID, err := parseRequiredUUIDArg(args, "service_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	var orgID *uuid.UUID
-	if raw, ok := args["org_id"]; ok && raw != nil {
-		parsed, err := parseRequiredUUIDArg(args, "org_id")
-		if err != nil {
-			return errorResult(err.Error()), nil
-		}
-		orgID = &parsed
-	}
-	name := optionalStringPointerArg(args, "name")
-	repoURL := optionalStringPointerArg(args, "repo_url")
-	artifactRepo := optionalStringPointerArg(args, "artifact_repo")
-	defaultBranch := optionalStringPointerArg(args, "default_branch")
-	runtimeType := optionalStringPointerArg(args, "runtime_type")
-	agentID, _ := args["agent_id"].(string)
-	var managed *domain.ManagedRuntimeConfig
-	if raw, ok := args["managed_runtime_config"]; ok && raw != nil {
-		encoded, err := json.Marshal(raw)
-		if err != nil {
-			return errorResult(fmt.Sprintf("invalid managed_runtime_config: %v", err)), nil
-		}
-		var decoded domain.ManagedRuntimeConfig
-		if err := json.Unmarshal(encoded, &decoded); err != nil {
-			return errorResult(fmt.Sprintf("invalid managed_runtime_config: %v", err)), nil
-		}
-		managed = &decoded
-	}
-	if s.serviceCommands == nil {
-		return signerFirstMCPMutationUnavailable("bahia_update_service", "service/update"), nil
-	}
-	receipt, err := s.serviceCommands.PublishServiceUpdateRequest(ctx, controlplane.ServiceUpdateCommand{
-		ID: serviceID, OrgID: orgID, Name: name, RepoURL: repoURL, Repository: args["repository"], ArtifactRepo: artifactRepo,
-		DefaultBranch: defaultBranch, RuntimeType: runtimeType, ManagedRuntimeConfig: managed,
-		IdempotencyKey: mcpIdempotencyKey(args, "service-update", serviceID.String()), AgentID: agentID,
-	})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish service update request: %v", err)), nil
-	}
-	return jsonResult(serviceCommandReceiptToMap(receipt))
+	return s.invokeIntentWrite(ctx, "bahia_update_service", args)
 }
 
 func (s *Server) handleUpdateEnvironment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	return signerFirstMCPMutationUnavailable("bahia_update_environment", "environment/update"), nil
+	return s.invokeIntentWrite(ctx, "bahia_update_environment", args)
 }
 
 func (s *Server) handleDeploy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceIDStr, _ := args["service_id"].(string)
-	envIDStr, _ := args["environment_id"].(string)
-	artifactIDStr, _ := args["artifact_id"].(string)
-	requestedBy, _ := args["requested_by"].(string)
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-
-	envID, err := uuid.Parse(envIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
-	}
-
-	artifactID, err := uuid.Parse(artifactIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid artifact_id: %v", err)), nil
-	}
-
-	if requestedBy == "" {
-		requestedBy = "mcp-agent"
-	}
-
-	if s.serviceCommands == nil {
-		return signerFirstMCPMutationUnavailable("bahia_deploy", "service/deploy"), nil
-	}
-	receipt, err := s.serviceCommands.PublishDeployRequest(ctx, controlplane.ServiceDeployCommand{ServiceID: serviceID, EnvironmentID: envID, ArtifactID: artifactID, RequestedBy: requestedBy, IdempotencyKey: mcpIdempotencyKey(args, "service-deploy", serviceID.String(), envID.String(), artifactID.String()), AgentID: requestedBy})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish deployment request: %v", err)), nil
-	}
-	return jsonResult(serviceCommandReceiptToMap(receipt))
+	return s.invokeIntentWrite(ctx, "bahia_deploy", args)
 }
 
 func (s *Server) handleRollback(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceIDStr, _ := args["service_id"].(string)
-	envIDStr, _ := args["environment_id"].(string)
-	requestedBy, _ := args["requested_by"].(string)
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-
-	envID, err := uuid.Parse(envIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
-	}
-
-	if requestedBy == "" {
-		requestedBy = "mcp-agent"
-	}
-
-	if s.serviceCommands == nil {
-		return signerFirstMCPMutationUnavailable("bahia_rollback", "service/rollback"), nil
-	}
-	receipt, err := s.serviceCommands.PublishRollbackRequest(ctx, controlplane.ServiceRollbackCommand{ServiceID: serviceID, EnvironmentID: envID, IdempotencyKey: mcpIdempotencyKey(args, "service-rollback", serviceID.String(), envID.String()), AgentID: requestedBy})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish rollback request: %v", err)), nil
-	}
-	return jsonResult(serviceCommandReceiptToMap(receipt))
+	return s.invokeIntentWrite(ctx, "bahia_rollback", args)
 }
 
 func (s *Server) handleApproveDeployment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	intentIDStr, _ := args["intent_id"].(string)
-
-	intentID, err := uuid.Parse(intentIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid intent_id: %v", err)), nil
-	}
-
-	return s.publishDeploymentApprovalDecision(ctx, args, intentID, "approve")
+	return s.invokeIntentWrite(ctx, "bahia_approve_deployment", args)
 }
 
 func (s *Server) handleRejectDeployment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	intentIDStr, _ := args["intent_id"].(string)
-
-	intentID, err := uuid.Parse(intentIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid intent_id: %v", err)), nil
-	}
-
-	return s.publishDeploymentApprovalDecision(ctx, args, intentID, "reject")
-}
-
-func (s *Server) publishDeploymentApprovalDecision(ctx context.Context, args map[string]interface{}, intentID uuid.UUID, decision string) (*ToolResult, error) {
-	if s.serviceCommands == nil {
-		return signerFirstMCPMutationUnavailable("bahia_"+decision+"_deployment", "approval/"+decision), nil
-	}
-	agentID, _ := args["requested_by"].(string)
-	if agentID == "" {
-		agentID = "mcp-agent"
-	}
-	receipt, err := s.serviceCommands.PublishDeploymentApprovalRequest(ctx, controlplane.ServiceApprovalCommand{IntentID: intentID, Decision: decision, IdempotencyKey: mcpIdempotencyKey(args, "deployment-approval", intentID.String(), decision), AgentID: agentID})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish deployment %s request: %v", decision, err)), nil
-	}
-	return jsonResult(serviceCommandReceiptToMap(receipt))
+	return s.invokeIntentWrite(ctx, "bahia_reject_deployment", args)
 }
 
 func (s *Server) requireLLMRegistry() (*service.LLMRegistryService, *ToolResult) {
@@ -2424,256 +2161,44 @@ func (s *Server) requireLLMRegistry() (*service.LLMRegistryService, *ToolResult)
 	return s.llmRegistry, nil
 }
 
-func (s *Server) requireLLMCommands() (LLMCommandPublisher, *ToolResult) {
-	if s.llmCommands == nil {
-		return nil, errorResult("LLM command publisher is not configured")
-	}
-	return s.llmCommands, nil
-}
-
 func (s *Server) handleLLMCreateRoute(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireLLMCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	var req struct {
-		ID                     string                         `json:"id,omitempty"`
-		Name                   string                         `json:"name"`
-		Description            string                         `json:"description,omitempty"`
-		GatewayConfig          *domain.LLMGatewayRouteConfig  `json:"gateway_config,omitempty"`
-		DefaultPlacementPolicy *domain.LLMPlacementPolicy     `json:"default_placement_policy,omitempty"`
-		DefaultPromotionGate   *domain.LLMPromotionGateConfig `json:"default_promotion_gate,omitempty"`
-		Metadata               map[string]any                 `json:"metadata,omitempty"`
-	}
-	if err := decodeToolArgs(args, &req); err != nil {
-		return errorResult(fmt.Sprintf("invalid LLM route request: %v", err)), nil
-	}
-	id, errResult := mcpCreateEntityID(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	receipt, err := publisher.PublishLLMRouteCreateRequest(ctx, controlplane.LLMRouteCreateCommand{
-		ID:                     id,
-		Name:                   req.Name,
-		Description:            req.Description,
-		GatewayConfig:          req.GatewayConfig,
-		DefaultPlacementPolicy: req.DefaultPlacementPolicy,
-		DefaultPromotionGate:   req.DefaultPromotionGate,
-		Metadata:               req.Metadata,
-	})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish LLM route create request: %v", err)), nil
-	}
-	return jsonResult(llmCommandReceiptToMap("submitted", receipt))
+	return s.invokeIntentWrite(ctx, "bahia_llm_create_route", args)
 }
 
 func (s *Server) handleLLMUpdateRoute(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	registry, errResult := s.requireLLMRegistry()
-	if errResult != nil {
-		return errResult, nil
-	}
-	routeID, err := parseUUIDArg(args, "route_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	route, err := registry.GetRoute(ctx, routeID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get LLM route: %v", err)), nil
-	}
-	if route == nil {
-		return errorResult("LLM route not found"), nil
-	}
-	var req struct {
-		Description            string                         `json:"description,omitempty"`
-		GatewayConfig          *domain.LLMGatewayRouteConfig  `json:"gateway_config,omitempty"`
-		DefaultPlacementPolicy *domain.LLMPlacementPolicy     `json:"default_placement_policy,omitempty"`
-		DefaultPromotionGate   *domain.LLMPromotionGateConfig `json:"default_promotion_gate,omitempty"`
-		Metadata               map[string]any                 `json:"metadata,omitempty"`
-	}
-	if err := decodeToolArgs(args, &req); err != nil {
-		return errorResult(fmt.Sprintf("invalid LLM route update: %v", err)), nil
-	}
-	if _, ok := args["description"]; ok {
-		route.Description = req.Description
-	}
-	if req.GatewayConfig != nil {
-		route.GatewayConfig = req.GatewayConfig
-	}
-	if req.DefaultPlacementPolicy != nil {
-		route.DefaultPlacementPolicy = req.DefaultPlacementPolicy
-	}
-	if req.DefaultPromotionGate != nil {
-		route.DefaultPromotionGate = req.DefaultPromotionGate
-	}
-	if req.Metadata != nil {
-		route.Metadata = req.Metadata
-	}
-	if err := registry.UpdateRoute(ctx, route); err != nil {
-		return errorResult(fmt.Sprintf("failed to update LLM route: %v", err)), nil
-	}
-	return jsonResult(map[string]interface{}{
-		"status":        "updated",
-		"route_id":      route.ID.String(),
-		"registry_kind": controlplane.KindLLMRouteRegistry,
-		"state_kind":    controlplane.KindLLMRouteState,
-		"route":         llmRouteToMap(route),
-	})
+	return s.invokeIntentWrite(ctx, "bahia_llm_update_route", args)
 }
 
 func (s *Server) handleLLMRegisterRelease(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireLLMCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	var req struct {
-		RouteID            string                                 `json:"route_id"`
-		Version            string                                 `json:"version"`
-		ModelRef           string                                 `json:"model_ref"`
-		ModelSource        string                                 `json:"model_source"`
-		ModelRevision      string                                 `json:"model_revision,omitempty"`
-		EstimatedVRAMGB    int                                    `json:"estimated_vram_gb,omitempty"`
-		BackendPreferences []domain.LLMBackendKind                `json:"backend_preferences,omitempty"`
-		RuntimeBackend     *domain.LLMRuntimeManagedBackendConfig `json:"runtime_backend,omitempty"`
-		ExternalBackend    *domain.LLMExternalBackendConfig       `json:"external_backend,omitempty"`
-		PlacementPolicy    *domain.LLMPlacementPolicy             `json:"placement_policy,omitempty"`
-		PromotionGate      *domain.LLMPromotionGateConfig         `json:"promotion_gate,omitempty"`
-		Metadata           map[string]any                         `json:"metadata,omitempty"`
-	}
-	if err := decodeToolArgs(args, &req); err != nil {
-		return errorResult(fmt.Sprintf("invalid LLM release request: %v", err)), nil
-	}
-	routeID, err := uuid.Parse(req.RouteID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid route_id: %v", err)), nil
-	}
-	receipt, err := publisher.PublishLLMReleaseRegisterRequest(ctx, controlplane.LLMReleaseRegisterCommand{
-		RouteID:            routeID,
-		Version:            req.Version,
-		ModelRef:           req.ModelRef,
-		ModelSource:        req.ModelSource,
-		ModelRevision:      req.ModelRevision,
-		EstimatedVRAMGB:    req.EstimatedVRAMGB,
-		BackendPreferences: req.BackendPreferences,
-		RuntimeBackend:     req.RuntimeBackend,
-		ExternalBackend:    req.ExternalBackend,
-		PlacementPolicy:    req.PlacementPolicy,
-		PromotionGate:      req.PromotionGate,
-		Metadata:           req.Metadata,
-	})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish LLM release register request: %v", err)), nil
-	}
-	return jsonResult(llmCommandReceiptToMap("submitted", receipt))
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs LLMReleaseRegistry.
-func (s *Server) handleLLMListReleases(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	registry, errResult := s.requireLLMRegistry()
-	if errResult != nil {
-		return errResult, nil
-	}
-	routeID, err := parseUUIDArg(args, "route_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	limit, offset := limitOffsetArgs(args, 100)
-	releases, err := registry.ListReleases(ctx, routeID, limit, offset)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list LLM releases: %v", err)), nil
-	}
-	out := make([]map[string]interface{}, 0, len(releases))
-	for i := range releases {
-		out = append(out, llmReleaseToMap(&releases[i]))
-	}
-	return jsonResult(map[string]interface{}{"route_id": routeID.String(), "releases": out, "total": len(out), "registry_kind": controlplane.KindLLMRouteRegistry})
+	return s.invokeIntentWrite(ctx, "bahia_llm_register_release", args)
 }
 
 func (s *Server) handleLLMDeploy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireLLMCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	routeID, err := parseUUIDArg(args, "route_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	envID, err := parseUUIDArg(args, "environment_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	releaseID, err := parseUUIDArg(args, "release_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	requestedBy, _ := args["requested_by"].(string)
-	if requestedBy == "" {
-		requestedBy = "mcp-agent"
-	}
-	metadata, _ := args["metadata"].(map[string]interface{})
-	receipt, err := publisher.PublishLLMDeployRequest(ctx, controlplane.LLMDeployCommand{RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID, RequestedBy: requestedBy, Metadata: metadata})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish LLM deploy request: %v", err)), nil
-	}
-	return jsonResult(llmCommandReceiptToMap("submitted", receipt))
+	return s.invokeIntentWrite(ctx, "bahia_llm_deploy", args)
 }
 
 func (s *Server) handleLLMApproveDeployment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	return s.handleLLMApprovalDecision(ctx, args, "approve")
+	return s.invokeIntentWrite(ctx, "bahia_llm_approve_deployment", args)
 }
 
 func (s *Server) handleLLMRejectDeployment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	return s.handleLLMApprovalDecision(ctx, args, "reject")
-}
-
-func (s *Server) handleLLMApprovalDecision(ctx context.Context, args map[string]interface{}, decision string) (*ToolResult, error) {
-	publisher, errResult := s.requireLLMCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	intentID, err := parseUUIDArg(args, "intent_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishLLMApprovalRequest(ctx, controlplane.LLMApprovalCommand{IntentID: intentID, Decision: decision})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish LLM approval request: %v", err)), nil
-	}
-	return jsonResult(llmCommandReceiptToMap("submitted", receipt))
+	return s.invokeIntentWrite(ctx, "bahia_llm_reject_deployment", args)
 }
 
 func (s *Server) handleLLMRollback(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireLLMCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	routeID, err := parseUUIDArg(args, "route_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	envID, err := parseUUIDArg(args, "environment_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	requestedBy, _ := args["requested_by"].(string)
-	if requestedBy == "" {
-		requestedBy = "mcp-agent"
-	}
-	receipt, err := publisher.PublishLLMRollbackRequest(ctx, controlplane.LLMRollbackCommand{RouteID: routeID, EnvironmentID: envID, RequestedBy: requestedBy})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish LLM rollback request: %v", err)), nil
-	}
-	return jsonResult(llmCommandReceiptToMap("submitted", receipt))
+	return s.invokeIntentWrite(ctx, "bahia_llm_rollback", args)
 }
 
 func (s *Server) handleDeleteService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	return signerFirstMCPMutationUnavailable("bahia_delete_service", "service/delete"), nil
+	return s.invokeIntentWrite(ctx, "bahia_delete_service", args)
 }
 
 func (s *Server) handleDeleteEnvironment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	return signerFirstMCPMutationUnavailable("bahia_delete_environment", "environment/delete"), nil
+	return s.invokeIntentWrite(ctx, "bahia_delete_environment", args)
 }
 
 func (s *Server) handleRegisterArtifact(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	// Phase 5 P2: no intent handler yet — bahia-irsry.76
 	buildIDStr, _ := args["build_id"].(string)
 	serviceIDStr, _ := args["service_id"].(string)
 	imageRepo, _ := args["image_repo"].(string)
@@ -2715,101 +2240,31 @@ func (s *Server) handleRegisterArtifact(ctx context.Context, args map[string]int
 	if s.artifactCommands == nil {
 		return signerFirstMCPMutationUnavailable("bahia_register_artifact", "artifact/register"), nil
 	}
-	receipt, err := s.artifactCommands.PublishArtifactRegisterRequest(ctx, controlplane.ArtifactRegisterCommand{BuildID: buildID, ServiceID: serviceID, ImageRepo: imageRepo, ImageTag: imageTag, ImageDigest: imageDigest, ManifestMediaType: manifestMediaType, SizeBytes: sizeBytes, SBOMURL: sbomURL, SignatureRef: signatureRef, ScanStatus: domain.ScanStatus(scanStatus), Metadata: metadata})
+	key := strings.TrimSpace(stringArg(args, "idempotency_key"))
+	if key == "" {
+		if meta, ok := args["_meta"].(map[string]any); ok {
+			key = strings.TrimSpace(fmt.Sprint(meta["progressToken"]))
+			if key == "<nil>" {
+				key = ""
+			}
+		}
+	}
+	if key == "" {
+		key = "artifact:" + buildID.String() + ":" + imageDigest
+	}
+	actor := ""
+	if principal := auth.GetPrincipal(ctx); principal != nil {
+		actor = strings.ToLower(strings.TrimSpace(principal.PubKey))
+	}
+	commandID, err := mcpIntentID("bahia_register_artifact", actor, map[string]interface{}{"idempotency_key": key})
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	receipt, err := s.artifactCommands.PublishArtifactRegisterRequest(ctx, controlplane.ArtifactRegisterCommand{BuildID: buildID, ServiceID: serviceID, ImageRepo: imageRepo, ImageTag: imageTag, ImageDigest: imageDigest, ManifestMediaType: manifestMediaType, SizeBytes: sizeBytes, SBOMURL: sbomURL, SignatureRef: signatureRef, ScanStatus: domain.ScanStatus(scanStatus), Metadata: metadata, IdempotencyKey: commandID})
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to publish artifact register request: %v", err)), nil
 	}
 	return jsonResult(artifactCommandReceiptToMap(receipt))
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Signature reads need ArtifactSignatureRegistry.
-func (s *Server) handleListSignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.signatures == nil {
-		return errorResult("signature tools are not configured"), nil
-	}
-
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	signatures, err := s.signatures.ListByArtifact(ctx, artifactID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list signatures: %v", err)), nil
-	}
-
-	return jsonResult(map[string]interface{}{
-		"artifact_id": artifactID.String(),
-		"signatures":  signaturesToMaps(signatures),
-		"total":       len(signatures),
-	})
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ArtifactSignatureRegistry.
-func (s *Server) handleListVerifiedSignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.signatures == nil {
-		return errorResult("signature tools are not configured"), nil
-	}
-
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	signatures, err := s.signatures.ListVerifiedByArtifact(ctx, artifactID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list verified signatures: %v", err)), nil
-	}
-
-	return jsonResult(map[string]interface{}{
-		"artifact_id": artifactID.String(),
-		"signatures":  signaturesToMaps(signatures),
-		"total":       len(signatures),
-	})
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ArtifactSignatureRegistry.
-func (s *Server) handleHasVerifiedSignature(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.signatures == nil {
-		return errorResult("signature tools are not configured"), nil
-	}
-
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	hasVerified, err := s.signatures.HasVerifiedSignature(ctx, artifactID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to check signature status: %v", err)), nil
-	}
-
-	return jsonResult(map[string]interface{}{
-		"artifact_id":            artifactID.String(),
-		"has_verified_signature": hasVerified,
-	})
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ArtifactSignatureRegistry.
-func (s *Server) handleGetSignature(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.signatures == nil {
-		return errorResult("signature tools are not configured"), nil
-	}
-
-	signatureID, err := parseRequiredUUIDArg(args, "signature_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	signature, err := s.signatures.GetByID(ctx, signatureID)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			return errorResult("signature not found"), nil
-		}
-		return errorResult(fmt.Sprintf("failed to get signature: %v", err)), nil
-	}
-
-	return jsonResult(signatureToMap(signature))
 }
 
 func (s *Server) handleVerifySignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -2863,90 +2318,6 @@ func (s *Server) handleVerifySignatures(ctx context.Context, args map[string]int
 		"stored":      stored,
 		"signatures":  signaturesToMaps(signatures),
 	})
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. SBOM reads need ArtifactSBOMRegistry and SBOMPackageRegistry.
-func (s *Server) handleGetSBOM(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.sboms == nil {
-		return errorResult("SBOM tools are not configured"), nil
-	}
-
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	sbom, err := s.sboms.GetSBOMByArtifact(ctx, artifactID)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			return errorResult("SBOM not found for artifact"), nil
-		}
-		return errorResult(fmt.Sprintf("failed to get SBOM: %v", err)), nil
-	}
-
-	return jsonResult(sbomToMap(sbom))
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ArtifactSBOMRegistry and SBOMPackageRegistry.
-func (s *Server) handleGetSBOMPackages(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.sboms == nil {
-		return errorResult("SBOM tools are not configured"), nil
-	}
-
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	sbom, err := s.sboms.GetSBOMByArtifact(ctx, artifactID)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			return errorResult("SBOM not found for artifact"), nil
-		}
-		return errorResult(fmt.Sprintf("failed to get SBOM: %v", err)), nil
-	}
-
-	packages, err := s.sboms.ListPackagesBySBOM(ctx, sbom.ID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list SBOM packages: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"artifact_id": artifactID.String(),
-		"sbom_id":     sbom.ID.String(),
-		"packages":    sbomPackagesToMaps(packages),
-		"total":       len(packages),
-	}
-	return jsonResult(result)
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs SBOMPackageRegistry.
-func (s *Server) handleSearchSBOMPackages(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.sboms == nil {
-		return errorResult("SBOM tools are not configured"), nil
-	}
-
-	query, _ := args["query"].(string)
-	if query == "" {
-		query, _ = args["package"].(string)
-	}
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return errorResult("query is required"), nil
-	}
-	limit := optionalIntArg(args, "limit", 100)
-
-	packages, err := s.sboms.SearchPackagesByName(ctx, query, limit)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to search SBOM packages: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"query":    query,
-		"packages": sbomPackagesToMaps(packages),
-		"total":    len(packages),
-	}
-	return jsonResult(result)
 }
 
 func (s *Server) handleIngestSBOM(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -3009,6 +2380,7 @@ func (s *Server) handleIngestSBOM(ctx context.Context, args map[string]interface
 	return jsonResult(result)
 }
 
+// Phase 5 P2: kept — no intent op for build registration/status; bahia-irsry.77
 func (s *Server) handleRegisterBuild(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	serviceIDStr, _ := args["service_id"].(string)
 	gitSHA, _ := args["git_sha"].(string)
@@ -3078,6 +2450,7 @@ func (s *Server) handleRegisterBuild(ctx context.Context, args map[string]interf
 	return jsonResult(result)
 }
 
+// Phase 5 P2: kept — no intent op for build registration/status; bahia-irsry.77
 func (s *Server) handleUpdateBuildStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	buildIDStr, _ := args["build_id"].(string)
 	statusStr, _ := args["status"].(string)
@@ -3106,41 +2479,6 @@ func (s *Server) handleUpdateBuildStatus(ctx context.Context, args map[string]in
 			"id":     buildID.String(),
 			"status": string(status),
 		},
-	}
-	return jsonResult(result)
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs RuntimeObservationState.
-func (s *Server) handleGetObservation(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceIDStr, _ := args["service_id"].(string)
-	envIDStr, _ := args["environment_id"].(string)
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-
-	envID, err := uuid.Parse(envIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
-	}
-
-	obs, err := s.registry.GetLatestObservation(ctx, serviceID, envID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get observation: %v", err)), nil
-	}
-	if obs == nil {
-		return errorResult("no observation found"), nil
-	}
-
-	result := map[string]interface{}{
-		"id":             obs.ID.String(),
-		"service_id":     obs.ServiceID.String(),
-		"environment_id": obs.EnvironmentID.String(),
-		"image_digest":   obs.ObservedImageDigest,
-		"container_id":   obs.ObservedContainerID,
-		"health_status":  obs.HealthStatus,
-		"observed_at":    obs.ObservedAt.Format("2006-01-02T15:04:05Z"),
 	}
 	return jsonResult(result)
 }
@@ -3556,25 +2894,6 @@ func (s *Server) handleToolProvisionRequest(ctx context.Context, args map[string
 	})
 }
 
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ToolProvisionIntentState.
-func (s *Server) handleToolProvisionStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.toolProvisioning == nil {
-		return errorResult("tool provisioning tools are not configured"), nil
-	}
-	intentID, err := parseRequiredUUIDArg(args, "intent_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	intent, err := s.toolProvisioning.GetIntent(ctx, intentID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get tool provisioning intent: %v", err)), nil
-	}
-	if intent == nil {
-		return errorResult("intent not found"), nil
-	}
-	return jsonResult(toolProvisionIntentToMap(intent))
-}
-
 func (s *Server) handleToolProvisionApprove(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	return s.handleToolProvisionApprovalResponse(ctx, args, "approve")
 }
@@ -3632,41 +2951,6 @@ func (s *Server) handleToolDenylistRemove(ctx context.Context, args map[string]i
 		return errorResult(fmt.Sprintf("failed to remove denylist entry: %v", err)), nil
 	}
 	return jsonResult(map[string]interface{}{"status": "removed"})
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ToolDenylistState.
-func (s *Server) handleToolDenylistList(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.toolProvisioning == nil {
-		return errorResult("tool provisioning tools are not configured"), nil
-	}
-	entries, err := s.toolProvisioning.ListDenylist(ctx)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list denylist entries: %v", err)), nil
-	}
-	return jsonResult(map[string]interface{}{"entries": toolDenylistEntriesToMaps(entries), "total": len(entries)})
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ToolProfileState.
-func (s *Server) handleToolProfileGet(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.toolProvisioning == nil {
-		return errorResult("tool provisioning tools are not configured"), nil
-	}
-	serviceID, err := parseRequiredUUIDArg(args, "service_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	environmentID, err := parseRequiredUUIDArg(args, "environment_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	state, err := s.toolProvisioning.GetProfileState(ctx, serviceID, environmentID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get tool profile: %v", err)), nil
-	}
-	if state == nil {
-		return jsonResult(map[string]interface{}{"state": nil})
-	}
-	return jsonResult(map[string]interface{}{"state": toolProfileStateToMap(state)})
 }
 
 // --- Helper Functions ---
@@ -3736,45 +3020,6 @@ func llmReleaseToMap(release *domain.LLMRelease) map[string]interface{} {
 	}
 }
 
-func serviceCommandReceiptToMap(receipt *controlplane.ServiceCommandReceipt) map[string]interface{} {
-	result := map[string]interface{}{"status": "submitted", "timeout_seconds": 30}
-	if receipt == nil {
-		return result
-	}
-	if receipt.Status != "" {
-		result["status"] = receipt.Status
-	}
-	result["request_event_id"] = receipt.RequestEventID
-	result["request_pubkey"] = receipt.RequestPubkey
-	result["request_kind"] = receipt.RequestKind
-	result["status_kind"] = receipt.StatusKind
-	result["result_kind"] = receipt.ResultKind
-	result["idempotency_key"] = receipt.IdempotencyKey
-	result["published_relays"] = receipt.PublishedRelays
-	if receipt.Error != "" {
-		result["error"] = receipt.Error
-	}
-	if receipt.RetryHint != "" {
-		result["retry_hint"] = receipt.RetryHint
-	}
-	if receipt.ServiceID != "" {
-		result["service_id"] = receipt.ServiceID
-	}
-	if receipt.EnvironmentID != "" {
-		result["environment_id"] = receipt.EnvironmentID
-	}
-	if receipt.ArtifactID != "" {
-		result["artifact_id"] = receipt.ArtifactID
-	}
-	if receipt.IntentID != "" {
-		result["intent_id"] = receipt.IntentID
-	}
-	if receipt.Decision != "" {
-		result["decision"] = receipt.Decision
-	}
-	return result
-}
-
 func artifactCommandReceiptToMap(receipt *controlplane.ArtifactCommandReceipt) map[string]interface{} {
 	result := map[string]interface{}{"status": "submitted"}
 	if receipt == nil {
@@ -3807,68 +3052,12 @@ func artifactCommandReceiptToMap(receipt *controlplane.ArtifactCommandReceipt) m
 	return result
 }
 
-func mcpIdempotencyKey(args map[string]interface{}, prefix string, parts ...string) string {
-	if explicit, _ := args["idempotency_key"].(string); strings.TrimSpace(explicit) != "" {
-		return strings.TrimSpace(explicit)
-	}
-	h := sha256.New()
-	_, _ = h.Write([]byte(prefix))
-	for _, part := range parts {
-		_, _ = h.Write([]byte{0})
-		_, _ = h.Write([]byte(part))
-	}
-	return prefix + ":" + hex.EncodeToString(h.Sum(nil))[:24]
-}
-
 func optionalStringPointerArg(args map[string]interface{}, name string) *string {
 	value, ok := args[name].(string)
 	if !ok {
 		return nil
 	}
 	return &value
-}
-
-func llmCommandReceiptToMap(status string, receipt *controlplane.LLMCommandReceipt) map[string]interface{} {
-	result := map[string]interface{}{"status": status, "timeout_seconds": 30}
-	if receipt == nil {
-		return result
-	}
-	result["request_event_id"] = receipt.RequestEventID
-	result["request_pubkey"] = receipt.RequestPubkey
-	result["request_kind"] = receipt.RequestKind
-	if receipt.StatusKind > 0 {
-		result["status_kind"] = receipt.StatusKind
-	}
-	result["result_kind"] = receipt.ResultKind
-	result["registry_kind"] = receipt.RegistryKind
-	result["state_kind"] = receipt.StateKind
-	result["idempotency_key"] = receipt.IdempotencyKey
-	result["published_relays"] = receipt.PublishedRelays
-	if receipt.Status != "" {
-		result["status"] = receipt.Status
-	}
-	if receipt.Error != "" {
-		result["error"] = receipt.Error
-	}
-	if receipt.RetryHint != "" {
-		result["retry_hint"] = receipt.RetryHint
-	}
-	if receipt.RouteID != "" {
-		result["route_id"] = receipt.RouteID
-	}
-	if receipt.EnvironmentID != "" {
-		result["environment_id"] = receipt.EnvironmentID
-	}
-	if receipt.ReleaseID != "" {
-		result["release_id"] = receipt.ReleaseID
-	}
-	if receipt.IntentID != "" {
-		result["intent_id"] = receipt.IntentID
-	}
-	if receipt.Decision != "" {
-		result["decision"] = receipt.Decision
-	}
-	return result
 }
 
 func jsonResult(data interface{}) (*ToolResult, error) {
@@ -4404,103 +3593,18 @@ func secretsToMaps(secrets []domain.ServiceSecret) []map[string]interface{} {
 // --- Policy Handlers ---
 
 func (s *Server) handleCreatePolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.policyCommands == nil {
-		return errorResult("policy command publisher is not configured"), nil
-	}
-
-	name := strings.TrimSpace(stringArg(args, "name"))
-	enforcementStr := strings.TrimSpace(stringArg(args, "enforcement"))
-	if name == "" {
-		return errorResult("name is required"), nil
-	}
-	if enforcementStr == "" {
-		return errorResult("enforcement is required"), nil
-	}
-	enforcement := domain.PolicyEnforcement(enforcementStr)
-	if enforcement != domain.PolicyEnforcementWarn && enforcement != domain.PolicyEnforcementBlock {
-		return errorResult(fmt.Sprintf("invalid enforcement: %s (must be 'warn' or 'block')", enforcementStr)), nil
-	}
-	envID, errResult := optionalPolicyUUIDArg(args, "environment_id")
-	if errResult != nil {
-		return errResult, nil
-	}
-	rules, errResult := policyRulesArg(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	enabled := true
-	if enabledVal, ok := args["enabled"].(bool); ok {
-		enabled = enabledVal
-	}
-	id, errResult := mcpCreateEntityID(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	receipt, err := s.policyCommands.PublishPolicyCreateRequest(ctx, controlplane.PolicyMutationCommand{ID: id, Name: name, EnvironmentID: envID, Rules: rules, Enforcement: enforcementStr, Enabled: &enabled, IdempotencyKey: stringArg(args, "idempotency_key")})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish PolicyCreate request: %v", err)), nil
-	}
-	return jsonResult(receipt)
+	return s.invokeIntentWrite(ctx, "bahia_create_policy", args)
 }
 
 func (s *Server) handleUpdatePolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.policyCommands == nil {
-		return errorResult("policy command publisher is not configured"), nil
-	}
-	policyID, err := parseRequiredUUIDArg(args, "policy_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	cmd := controlplane.PolicyMutationCommand{ID: policyID, IdempotencyKey: stringArg(args, "idempotency_key")}
-	if name := strings.TrimSpace(stringArg(args, "name")); name != "" {
-		cmd.Name = name
-	}
-	if enforcementStr := strings.TrimSpace(stringArg(args, "enforcement")); enforcementStr != "" {
-		enforcement := domain.PolicyEnforcement(enforcementStr)
-		if enforcement != domain.PolicyEnforcementWarn && enforcement != domain.PolicyEnforcementBlock {
-			return errorResult(fmt.Sprintf("invalid enforcement: %s (must be 'warn' or 'block')", enforcementStr)), nil
-		}
-		cmd.Enforcement = enforcementStr
-	}
-	if _, ok := args["environment_id"]; ok {
-		envID, errResult := optionalPolicyUUIDArg(args, "environment_id")
-		if errResult != nil {
-			return errResult, nil
-		}
-		cmd.EnvironmentID = envID
-	}
-	if _, ok := args["rules"]; ok {
-		rules, errResult := policyRulesArg(args)
-		if errResult != nil {
-			return errResult, nil
-		}
-		cmd.Rules = rules
-	}
-	if enabled, ok := args["enabled"].(bool); ok {
-		cmd.Enabled = &enabled
-	}
-	receipt, err := s.policyCommands.PublishPolicyUpdateRequest(ctx, cmd)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish PolicyUpdate request: %v", err)), nil
-	}
-	return jsonResult(receipt)
+	return s.invokeIntentWrite(ctx, "bahia_update_policy", args)
 }
 
 func (s *Server) handleDeletePolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.policyCommands == nil {
-		return errorResult("policy command publisher is not configured"), nil
-	}
-	policyID, err := parseRequiredUUIDArg(args, "policy_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := s.policyCommands.PublishPolicyDeleteRequest(ctx, controlplane.PolicyMutationCommand{ID: policyID, IdempotencyKey: stringArg(args, "idempotency_key")})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish PolicyDelete request: %v", err)), nil
-	}
-	return jsonResult(receipt)
+	return s.invokeIntentWrite(ctx, "bahia_delete_policy", args)
 }
 
+// Phase 5 P2: kept — no policy-evaluate intent op; bahia-irsry.77
 func (s *Server) handleEvaluatePolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.policyCommands == nil {
 		return errorResult("policy command publisher is not configured"), nil
@@ -4766,62 +3870,6 @@ func (s *Server) handleTestNotificationChannel(ctx context.Context, args map[str
 		"channel_id": ch.ID.String(),
 	}
 	return jsonResult(result)
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Notification-log reads need NotificationLogState.
-func (s *Server) handleListNotifications(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.notificationRepo == nil {
-		return errorResult("notification tools are not configured"), nil
-	}
-
-	status, _ := args["status"].(string)
-	eventType, _ := args["event_type"].(string)
-	limit, _ := args["limit"].(float64)
-	if limit == 0 {
-		limit = 50
-	}
-
-	// List recent notifications
-	logs, err := s.notificationRepo.ListRecentLogs(ctx, int(limit))
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list notifications: %v", err)), nil
-	}
-
-	// Apply filters
-	var filtered []domain.NotificationLog
-	for _, log := range logs {
-		// Filter by status (read = sent, unread = pending/retrying)
-		if status != "" {
-			if status == "read" && log.Status != domain.NotificationStatusSent {
-				continue
-			}
-			if status == "unread" && log.Status != domain.NotificationStatusPending && log.Status != domain.NotificationStatusRetrying {
-				continue
-			}
-		}
-
-		// Filter by event type
-		if eventType != "" && log.EventType != eventType {
-			continue
-		}
-
-		filtered = append(filtered, log)
-	}
-
-	result := map[string]interface{}{
-		"notifications": notificationLogsToMaps(filtered),
-		"total":         len(filtered),
-	}
-	return jsonResult(result)
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs NotificationLogState.
-func (s *Server) handleGetNotification(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.notificationRepo == nil {
-		return errorResult("notification tools are not configured"), nil
-	}
-
-	return errorResult("get notification by ID is not currently supported - repository method not available. Use list_notifications instead."), nil
 }
 
 func (s *Server) handleMarkNotificationRead(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {

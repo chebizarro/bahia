@@ -237,6 +237,23 @@ var publicCPStateTopics = map[string]bool{
 	kinds.CPStateTopicSecurityFinding:       true,
 	kinds.CPStateTopicSecuritySchedule:      true,
 	kinds.CPStateTopicSecurityFindingDetail: true,
+	// Supply-chain records are public to external verifiers; release payloads
+	// are OCK ciphertext. Runtime observations remain protected fleet state.
+	kinds.CPStateTopicLLMRelease:        true,
+	kinds.CPStateTopicArtifactSignature: true,
+	kinds.CPStateTopicArtifactSBOM:      true,
+	kinds.CPStateTopicSBOMPackage:       true,
+	// Runtime observables are sanitized before publication.
+	kinds.CPStateTopicManagedInstanceHealth: true,
+	kinds.CPStateTopicRouteCanary:           true,
+	// Blossom records are OCK ciphertext; relay-level auth is redundant.
+	kinds.CPStateTopicBlossomAdmin:        true,
+	kinds.CPStateTopicBlossomBlob:         true,
+	kinds.CPStateTopicPackageIntent:       true,
+	kinds.CPStateTopicToolProvisionIntent: true,
+	kinds.CPStateTopicToolDenylist:        true,
+	kinds.CPStateTopicToolProfile:         true,
+	kinds.CPStateTopicNotificationLog:     true,
 
 	// Protected topics (NOT in this map):
 	//   security-findings, security-audit — detailed vulnerability data

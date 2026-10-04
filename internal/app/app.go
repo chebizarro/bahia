@@ -193,6 +193,7 @@ func New(cfg *config.Config) (*App, error) {
 	var workerRepo repository.WorkerRepository
 	var paymentRepo repository.PaymentRecordRepository
 	var sbomRepo repository.SBOMRepository
+	var f74aSBOMBackfill service.F74aSBOMBackfillSource
 	var sbomManifestRepo repository.SBOMManifestRepository
 	var securityRepo repository.SecurityRepository
 	var sigRepo repository.ArtifactSignatureRepository
@@ -230,6 +231,7 @@ func New(cfg *config.Config) (*App, error) {
 		paymentRepo = repository.NewPgPaymentRecordRepository(pool)
 		pgSBOMRepo := repository.NewPgSBOMRepository(pool)
 		sbomRepo = pgSBOMRepo
+		f74aSBOMBackfill = pgSBOMRepo
 		sbomManifestRepo = pgSBOMRepo
 		securityRepo = repository.NewPgSecurityRepository(pool)
 		sigRepo = repository.NewPgArtifactSignatureRepository(pool)
@@ -1125,6 +1127,20 @@ func New(cfg *config.Config) (*App, error) {
 	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePub, projectionHistory, logger, projectorOpts...)
 	controlPlanePub.OnDeliveryAbandoned(nostrProjector.ForgetAbandonedProjection)
 
+	// F74b: mutation-bound publishers for package intent/approval and tool
+	// provisioning. OCK is installed below before any ingress starts.
+	f74bCanonical := nostrAdapter.NewF74bCanonicalPublisher(nostrProjector, nil)
+	if packageProjection != nil {
+		packageAuth, ok := packageProjection.(repository.PackageAuthorizationStore)
+		if !ok {
+			return nil, fmt.Errorf("package projection lacks authorization store")
+		}
+		packageProjection = nostrAdapter.NewCanonicalPackageRepository(packageProjection, packageAuth, f74bCanonical)
+	}
+	if toolProvisionRepo != nil {
+		toolProvisionRepo = nostrAdapter.NewCanonicalToolRepository(toolProvisionRepo, f74bCanonical)
+	}
+
 	// Relay-first write path: when mode is not "full" OR when explicitly enabled,
 	// wrap registry mutations so relay publish must succeed before local DB writes.
 	// In full mode, this defaults off for backward compatibility with existing
@@ -1406,6 +1422,7 @@ func New(cfg *config.Config) (*App, error) {
 				Projection:     packageProjection,
 				Store:          packageAuthStore,
 				Writer:         packageWriter,
+				StatePublisher: f74bCanonical,
 				Status:         intentStatus,
 				Gate:           controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys),
 				Logger:         logger,
@@ -1446,6 +1463,7 @@ func New(cfg *config.Config) (*App, error) {
 			Logger:        logger,
 		})
 		confidentialEncryptor = controlplane.NewConfidentialEncryptor(ockManager, logger)
+		f74bCanonical.SetEncryptor(confidentialEncryptor)
 	} else if enabledDomains["org"] {
 		logger.Error("org domain requires control-plane signer for confidential state; " +
 			"disabling org domain to prevent plaintext state publication")
@@ -1589,6 +1607,38 @@ func New(cfg *config.Config) (*App, error) {
 			}
 		})
 	}
+	// F74a: separate wiring block for release, signature, artifact-SBOM and
+	// latest runtime-observation families. Each writer keeps its existing DB path.
+	if nostrProjector != nil && nostrProjector.Enabled() {
+		f74aCanonical := nostrAdapter.NewF74aCanonicalPublisher(nostrProjector, confidentialEncryptor, localOutbox)
+		if llmRegistry != nil {
+			llmRegistry.SetReleaseCPStatePublisher(f74aCanonical)
+		}
+		registry.SetObservationCPStatePublisher(f74aCanonical)
+		if sigRepo != nil {
+			sigRepo = service.NewCanonicalSignatureRepository(sigRepo, f74aCanonical, logger)
+		}
+		if sbomRepo != nil {
+			sbomRepo = service.NewCanonicalSBOMRepository(sbomRepo, f74aCanonical, logger)
+		}
+		if sbomManifestRepo != nil && sbomRepo != nil {
+			sbomManifestRepo = service.NewCanonicalSBOMManifestRepository(sbomManifestRepo, sbomRepo, f74aCanonical, logger)
+		}
+		if dbAvailable && pool != nil {
+			var llmBackfill service.F74aReleaseLister
+			if llmRegistry != nil {
+				llmBackfill = llmRegistry
+			}
+			if err := service.BootstrapF74aCanonical(ctx, service.F74aBackfillConfig{
+				Marker: localOutbox, Publisher: f74aCanonical, LLM: llmBackfill,
+				Services: serviceRepo, Artifacts: artifactRepo, Signatures: sigRepo,
+				SBOMs: f74aSBOMBackfill, Observations: obsRepo, States: stateRepo,
+			}); err != nil {
+				return nil, fmt.Errorf("backfill F74a canonical state: %w", err)
+			}
+		}
+	}
+
 	// Phase 3 M1: wire ML cp-state publisher into registry service so state
 	// mutations publish canonical records directly instead of through the projector.
 	if nostrProjector.Enabled() && mlRegistry != nil {
@@ -1674,6 +1724,28 @@ func New(cfg *config.Config) (*App, error) {
 	if len(blossomCfg.Servers) > 0 {
 		blossomClient = blossom.NewClient(blossomCfg, slog.Default())
 		logger.Info("blossom client enabled", zap.Strings("servers", blossomCfg.Servers))
+	}
+	// F75 operational view publications: Soul runtime policy and one bounded
+	// Blossom startup observation; daemon-owned uploads publish at their site.
+	if nostrProjector != nil && nostrProjector.Enabled() {
+		viewPublisher := nostrAdapter.NewOperationalViewPublisher(nostrProjector, confidentialEncryptor)
+		owners := append([]string{blossomOwnerKey(cfg.Blossom.PrivateKey)}, cfg.Nostr.AuthorizedPubkeys...)
+		for _, owner := range cfg.Nostr.BootstrapOwners {
+			owners = append(owners, owner)
+		}
+		if blossomClient != nil && confidentialEncryptor != nil {
+			owner := blossomOwnerKey(cfg.Blossom.PrivateKey)
+			if owner != "" {
+				blossomClient.SetUploadObserver(func(ctx context.Context, descriptor blossom.BlobDescriptor) error {
+					return viewPublisher.PublishBlossomBlob(ctx, owner, descriptor)
+				})
+			}
+		}
+		bgManager.RegisterWithOptions(&operationalViewsRunner{
+			publisher: viewPublisher, blossom: blossomClient,
+			runtimes: append([]string{}, cfg.SoulFactory.AgentRuntimes...),
+			owners:   owners, logger: logger,
+		}, RunnerRequired(false))
 	}
 	var runLogService *runtime.LogService
 	var sbomOrchestrator *service.SBOMOrchestrator
@@ -1935,7 +2007,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Notification system.
-	notifRepo := repository.NewPgNotificationRepository(pool)
+	notifRepo := nostrAdapter.NewCanonicalNotificationRepository(repository.NewPgNotificationRepository(pool), f74bCanonical)
 	notifDispatcher := notifications.NewDispatcher(notifRepo, logger)
 	notifDispatcher.RegisterSender(domain.ChannelTypeWebhook, notifications.NewWebhookSender())
 	if cfg.Nostr.PrivateKey != "" {
@@ -2019,25 +2091,9 @@ func New(cfg *config.Config) (*App, error) {
 	if mlRegistry != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		mlCommandPublisher = controlplane.NewMLCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
-	var llmCommandPublisher mcp.LLMCommandPublisher
-	if llmRegistry != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
-		llmCommandPublisher = controlplane.NewLLMCommandPublisher(controlPlanePool, controlPlaneSigner)
-	}
-	var serviceCommandPublisher *controlplane.ServiceCommandPublisher
-	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
-		serviceCommandPublisher = controlplane.NewServiceCommandPublisher(controlPlanePool, controlPlaneSigner)
-	}
 	var artifactCommandPublisher *controlplane.ArtifactCommandPublisher
 	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		artifactCommandPublisher = controlplane.NewArtifactCommandPublisher(controlPlanePool, controlPlaneSigner)
-	}
-	var packageCommandPublisher mcp.PackageCommandPublisher
-	if packageRegistrySvc != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
-		packageCommandPublisher = controlplane.NewPackageCommandPublisher(controlPlanePool, controlPlaneSigner)
-	}
-	var workerCommandPublisher mcp.WorkerCommandPublisher
-	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
-		workerCommandPublisher = controlplane.NewWorkerCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
 
 	// Fleet hygiene (Swabbie, fp-jan): periodic dry-run scans + Tier-1
@@ -2062,6 +2118,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 	}
 	mcpDeps := mcp.ServerDeps{
+		IntentProcessor:          intentProcessor,
 		StateStore:               localEventStore,
 		ServicePubkey:            servicePubkey,
 		ConfidentialReader:       confidentialEncryptor,
@@ -2071,15 +2128,9 @@ func New(cfg *config.Config) (*App, error) {
 		SignVerifier:             signVerifier,
 		MLCommandPublisher:       mlCommandPublisher,
 		LLMRegistry:              llmRegistry,
-		LLMCommandPublisher:      llmCommandPublisher,
-		ServiceCommandPublisher:  serviceCommandPublisher,
 		ArtifactCommandPublisher: artifactCommandPublisher,
-		PackageCommandPublisher:  packageCommandPublisher,
-		WorkerCommandPublisher:   workerCommandPublisher,
-		PackageProjection:        packageProjection,
 	}
 	configurePolicyToolMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
-	configureBackupMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	configureAuthorizationMCPDeps(&mcpDeps, cfg, tenantRBAC)
 	mcpServer, err := mcp.NewServerWithOptionsChecked(registry, logger, mcpDeps)
 	if err != nil {
@@ -2618,7 +2669,6 @@ func New(cfg *config.Config) (*App, error) {
 			OrgMembers:                orgMemberRepo,
 			OrgInvites:                orgInviteRepo,
 			RBAC:                      tenantRBAC,
-			MLRegistry:                mlRegistry,
 			MLCommands:                mlCommandPublisher,
 			LLMRegistry:               llmRegistry,
 			ConfigFabric:              configFabricSvc,
@@ -4385,15 +4435,6 @@ func configurePolicyToolMCPDeps(deps *mcp.ServerDeps, publisher controlplane.Nos
 	deps.PolicyCommandPublisher = policyPublisher
 	deps.ToolApprovalCommandPublisher = controlplane.NewToolApprovalCommandPublisher(publisher, signer)
 	return policyPublisher
-}
-
-func configureBackupMCPDeps(deps *mcp.ServerDeps, publisher controlplane.NostrEventPublisher, signer nostr.Signer, relays []string) {
-	if deps == nil {
-		return
-	}
-	if publisher != nil && signer != nil && len(relays) > 0 {
-		deps.BackupCommandPublisher = mcp.NewBackupCommandPublisher(publisher, signer)
-	}
 }
 
 // newTenantRBAC leaves tenant authorization unconfigured when no durable

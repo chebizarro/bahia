@@ -35,9 +35,17 @@ configuration fields. Service/environment, build/artifact, deployment state,
 worker state, policy, DNS endpoint, ML state, package, backup, secret metadata,
 notification-channel, LLM-route, and payment/cost tools use this path when the
 local store is configured. Worker eligibility previews rank workers from the
-same canonical worker records. Signature, SBOM, runtime-observation, LLM-release,
-package-intent, tool-provisioning, and notification-log reads still require
-non-canonical read models until corresponding 30900 producers exist.
+same canonical worker records. Signature, parsed SBOM/package, latest runtime-observation, and LLM-release
+reads now use canonical `30900` families as well. LLM releases are decrypted
+with the daemon key; runtime observations omit arbitrary metadata. Existing rows are
+backfilled into signed state at startup before these MCP reads are served. Package-intent,
+tool-provisioning, and notification-log reads still require separate read models.
+
+same canonical worker records. Package-intent/approval, tool-provisioning
+intent/denylist/profile, and notification-log reads also use the encrypted
+canonical `30900` store; no repository is consulted by those MCP reads.
+Signature, SBOM, runtime-observation, and LLM-release reads remain separate
+until their canonical producers are integrated.
 
 The relay subscriptions that populate the daemon store determine freshness;
 MCP does not issue a one-shot relay request for each tool call.
@@ -100,9 +108,11 @@ The names below are verified against the current `internal/mcp` registries. Some
 - Environments: `bahia_list_environments`, `bahia_get_environment`, `bahia_create_environment`, `bahia_update_environment`, `bahia_delete_environment`
 - State: `bahia_list_states`, `bahia_list_drifted`, `bahia_get_observation`
 
-Signer-first mutations can return transport/correlation metadata rather than a completed domain object. Follow the canonical Nostr observables named in the result.
+Intent-backed MCP writes currently cover service/environment CRUD, deployment and approval, policy CRUD, worker control, LLM route/release/deployment actions, secret CRUD, notification-channel CRUD, package mutations, backup mutations, ML model/version/endpoint registry CRUD, and DNS zone/endpoint/backend/policy mutations plus record overrides. They require an authenticated Nostr operator pubkey; the intent processor applies the domain TrustSet policy. Supply `org_id` when the owning organization cannot be derived from signed canonical state. A conflicting `org_id` on an existing entity is rejected. ML/DNS registry tools accept the daemon handler's full desired-state JSON in `content`; see `web/tests/fixtures/d70-intent-content.json` for the exact shapes. DNS override operations may return `pending` until an endpoint projection is visible.
 
-Create tools (`bahia_create_service`, `bahia_create_environment`, `bahia_create_policy`, `bahia_llm_create_route`) take an optional `id`, a client-minted UUIDv7 (or v4), and mint one when it is omitted; the result echoes it. To retry a create, pass the returned id with the same arguments: the control plane replays it, and the same id with different content is rejected (JSON-RPC `-32010`).
+Supply `idempotency_key` in tool arguments or `_meta.progressToken` in the MCP `tools/call` params. The server derives a stable actor-and-tool-scoped intent ID so retries do not apply twice; without either key, it mints a new UUIDv7 per call. For creates, an omitted entity `id` is derived from that intent ID. The JSON tool result includes `intent_id` and `event_id`: `status:"accepted"` includes canonical `state` (or a verified deletion tombstone), `status:"rejected"`/`"conflict"` is a structured tool error, and `status:"pending"` is a successful result when canonical state has not become visible. Do not interpret pending as failure or a ContextVM `-32011` error. Notification-channel state in write results redacts sensitive config just like read results.
+
+Other registered mutations, including ML import/recipe/inference commands, build/artifact/SBOM writes, tool provisioning, policy evaluation, and notification-log actions, are not yet intent-backed and retain their existing behavior. Artifact registration uses a stable keyed ContextVM request; build registration remains a direct registry write pending a corresponding handler.
 
 ### Deployments and runs
 
@@ -132,13 +142,15 @@ Use `bahia_assistant_service_deploy` and `bahia_assistant_service_rollback` for 
 - Channels: `bahia_list_notification_channels`, `bahia_get_notification_channel`, `bahia_create_notification_channel`, `bahia_update_notification_channel`, `bahia_delete_notification_channel`, `bahia_test_notification_channel`
 - Logs: `bahia_list_notifications`, `bahia_get_notification`, `bahia_mark_notification_read`, `bahia_dismiss_notification`
 
-`bahia_get_notification` and `bahia_dismiss_notification` are registered compatibility tools but currently return unsupported. `bahia_mark_notification_read` searches recent logs and overwrites delivery status to `sent`; its read/unread behavior is a compatibility mapping, not a separate receipt model.
+`bahia_get_notification` resolves an ID within the bounded canonical latest-50-per-channel window; older IDs return not found. `bahia_list_notifications` sorts those windows globally and limits results to 50 (filters apply after the limit, matching the earlier repository read). `bahia_dismiss_notification` remains unsupported. `bahia_mark_notification_read` searches recent logs and overwrites delivery status to `sent`; its read/unread behavior is a compatibility mapping, not a separate receipt model.
 
 ### LLM and ML
 
 - LLM: `bahia_llm_list_routes`, `bahia_llm_create_route`, `bahia_llm_update_route`, `bahia_llm_register_release`, `bahia_llm_list_releases`, `bahia_llm_deploy`, `bahia_llm_approve_deployment`, `bahia_llm_reject_deployment`, `bahia_llm_rollback`
 - Assistant LLM: `bahia_assistant_llm_deploy`, `bahia_assistant_llm_approve_deployment`, `bahia_assistant_llm_rollback`
-- ML: `bahia_ml_import_model`, `bahia_ml_run_recipe`, `bahia_ml_deploy`, `bahia_ml_rollback`, `bahia_ml_list_state`, `bahia_ml_get_state`, `bahia_ml_get_provenance`
+- ML commands: `bahia_ml_import_model`, `bahia_ml_run_recipe`, `bahia_ml_deploy`, `bahia_ml_rollback`
+- ML registry intents: `bahia_ml_model_create|update|delete`, `bahia_ml_version_create|update|delete`, `bahia_ml_endpoint_create|update|delete`
+- ML reads: `bahia_ml_list_state`, `bahia_ml_get_state`, `bahia_ml_get_provenance`
 - Assistant ML: `bahia_assistant_ml_deploy`, `bahia_assistant_ml_approve_deployment`, `bahia_assistant_ml_rollback`
 
 Use the names above exactly; the older model-import and recipe-run spellings are not registered.
@@ -150,7 +162,8 @@ Use the names above exactly; the older model-import and recipe-run spellings are
 ### DNS and FIPS
 
 - DNS reads: `bahia_dns_list_endpoints`, `bahia_dns_list_drift`
-- DNS assistant operations: `bahia_assistant_dns_zone_create`, `bahia_assistant_dns_policy_apply`, `bahia_assistant_dns_record_override`, `bahia_assistant_dns_drift_remediate`, `bahia_assistant_dns_list_endpoints`, `bahia_assistant_dns_list_drift`
+- DNS assistant intents: `bahia_assistant_dns_zone_create|update|delete`, `bahia_assistant_dns_endpoint_create|update|delete`, `bahia_assistant_dns_backend_create|update|delete`, `bahia_assistant_dns_policy_create|update|delete` (plus `policy_apply` alias), `bahia_assistant_dns_record_set` (plus `record_override` alias), `bahia_assistant_dns_override_retire`
+- DNS assistant reads: `bahia_assistant_dns_list_endpoints`, `bahia_assistant_dns_list_drift`. Drift remediation has no MCP tool until its tracked handler is available.
 - FIPS: `bahia_fips_list_mesh_nodes`, `bahia_fips_mesh_status`
 
 ### Tool provisioning and policy

@@ -2,188 +2,173 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
+	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/pkg/client"
+	"go.uber.org/zap"
 )
 
-func TestDNSSubcommandsBuildTypedRequests(t *testing.T) {
-	setupDNSCLIEnv(t)
-	policyPath := writeDNSPolicyFile(t, `{"name":"edge-routing","rules":[{"match":{"environment":"prod"},"action":{"visibility":"edge"}}],"enabled":true}`)
-	expiresAt := "2026-09-04T12:00:00Z"
+type cliDNSOperator struct{}
 
-	var zoneRequest client.DNSZoneCreateRequest
-	var policyRequest client.DNSPolicyApplyRequest
-	var recordRequest client.DNSRecordSetRequest
-	fake := fakeCLIOperatorClient{
-		dnsZoneCreate: func(req client.DNSZoneCreateRequest) (*client.DNSCommandResult, error) {
-			zoneRequest = req
-			return &client.DNSCommandResult{Status: "success"}, nil
-		},
-		dnsPolicyApply: func(req client.DNSPolicyApplyRequest) (*client.DNSCommandResult, error) {
-			policyRequest = req
-			return &client.DNSCommandResult{Status: "success"}, nil
-		},
-		dnsRecordSet: func(req client.DNSRecordSetRequest) (*client.DNSCommandResult, error) {
-			recordRequest = req
-			return &client.DNSCommandResult{Status: "success"}, nil
-		},
-	}
-	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) { return fake, nil })
-	defer restoreFactory()
+func (cliDNSOperator) ReconcileAll(context.Context) error               { return nil }
+func (cliDNSOperator) ReconcileZone(context.Context, string) error      { return nil }
+func (cliDNSOperator) RetireZone(context.Context, domain.DNSZone) error { return nil }
+func (cliDNSOperator) HasZone(string) bool                              { return true }
+func (cliDNSOperator) HasBackend(ref string) bool                       { return ref == "primary" }
 
-	executeDNSCommand(t, "zone-create", "--name", "prod.example", "--visibility", "external", "--backend-ref", "powerdns-prod", "--ttl", "300", "--authoritative")
-	executeDNSCommand(t, "policy-apply", "--file", policyPath)
-	executeDNSCommand(t, "record-set", "--zone", "prod.example", "--name", "api", "--type", "A", "--value", "192.0.2.10", "--ttl", "60", "--reason", "incident pin", "--expires-at", expiresAt)
+type cliDNSCanonical struct{ zones []domain.DNSZone }
 
-	if zoneRequest.Name != "prod.example" || zoneRequest.Visibility != domain.ZoneVisibilityExternal || zoneRequest.BackendRef != "powerdns-prod" || zoneRequest.TTL != 300 || !zoneRequest.Authoritative {
-		t.Fatalf("zone request = %#v", zoneRequest)
+func (p *cliDNSCanonical) PublishZone(_ context.Context, zone domain.DNSZone) error {
+	p.zones = append(p.zones, zone)
+	return nil
+}
+func (*cliDNSCanonical) PublishZoneTombstone(context.Context, string) error        { return nil }
+func (*cliDNSCanonical) PublishPolicy(context.Context, domain.DNSPolicy) error     { return nil }
+func (*cliDNSCanonical) PublishPolicyTombstone(context.Context, uuid.UUID) error   { return nil }
+func (*cliDNSCanonical) PublishEndpoint(context.Context, domain.DNSEndpoint) error { return nil }
+func (*cliDNSCanonical) PublishEndpointTombstone(context.Context, domain.DNSEndpoint) error {
+	return nil
+}
+func (*cliDNSCanonical) PublishBackend(context.Context, domain.DNSBackendState) error { return nil }
+func (*cliDNSCanonical) PublishBackendTombstone(context.Context, string) error        { return nil }
+
+func setupDNSIntentPipeline(t *testing.T) (*cliIntentTransport, *cliDNSCanonical, string) {
+	t.Helper()
+	resetOperatorGlobals(t)
+	outputFormat = "json"
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	operator, daemon := nostr.Generate(), nostr.Generate()
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", operator.Hex())
+	t.Setenv("BAHIA_NOSTR_SERVICE_PUBKEY", daemon.Public().Hex())
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "dns.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if policyRequest.Name != "edge-routing" || !policyRequest.Enabled || len(policyRequest.Rules) != 1 || policyRequest.Rules[0].Action.Visibility != domain.ZoneVisibilityEdge {
-		t.Fatalf("policy request = %#v", policyRequest)
+	t.Cleanup(func() { _ = outbox.Close() })
+	events, err := localstore.Open(filepath.Join(t.TempDir(), "intents.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	wantExpiry, _ := time.Parse(time.RFC3339, expiresAt)
-	if recordRequest.ZoneName != "prod.example" || recordRequest.RecordName != "api" || recordRequest.RecordType != domain.DNSRecordTypeA || recordRequest.Value != "192.0.2.10" || recordRequest.TTL != 60 || recordRequest.Reason != "incident pin" || recordRequest.ExpiresAt == nil || !recordRequest.ExpiresAt.Equal(wantExpiry) {
-		t.Fatalf("record request = %#v", recordRequest)
+	t.Cleanup(func() { _ = events.Close() })
+	canonical := &cliDNSCanonical{}
+	mutations := &service.DNSMutationService{Zones: repository.NewLocalDNSZoneRepository(outbox), Policies: repository.NewLocalDNSPolicyRepository(outbox), Endpoints: repository.NewLocalDNSEndpointRepository(outbox), Backends: repository.NewLocalDNSBackendRepository(outbox), Canonical: canonical, Reconciler: cliDNSOperator{}}
+	if err := mutations.Backends.Upsert(context.Background(), &domain.DNSBackendState{Ref: "primary", Type: domain.DNSBackendTypeCoreDNS}); err != nil {
+		t.Fatal(err)
+	}
+	transport := &cliIntentTransport{events: make(chan *nostr.Event, 8)}
+	signer := keyer.NewPlainKeySigner(daemon)
+	status := controlplane.NewIntentStatusPublisher(func(_ context.Context, event nostr.Event) error { transport.events <- &event; return nil }, signer, zap.NewNop())
+	org := uuid.NewString()
+	trust := controlplane.NewTrustSet([]string{operator.Public().Hex()}, zap.NewNop())
+	processor := controlplane.NewIntentProcessor(trust, events, status, controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{"dns": true}}, zap.NewNop())
+	processor.RegisterHandler("dns", controlplane.NewDNSIntentHandler(cliDNSOperator{}, canonical, mutations))
+	transport.process = func(event nostr.Event) {
+		intent, err := controlplane.ParseIntent(&event)
+		if err != nil {
+			t.Errorf("parse CLI DNS intent: %v", err)
+			return
+		}
+		intent.Actor = event.PubKey.Hex()
+		_ = processor.ProcessInProcess(context.Background(), intent)
+	}
+	previous := newCLIIntentPublisher
+	newCLIIntentPublisher = func(cfg client.IntentPublisherConfig) (*client.IntentPublisher, error) {
+		cfg.Transport = transport
+		return client.NewIntentPublisher(cfg)
+	}
+	t.Cleanup(func() { newCLIIntentPublisher = previous })
+	return transport, canonical, org
+}
+
+func TestDNSCLIIntentAcceptedRejectedPendingAndFixture(t *testing.T) {
+	transport, canonical, org := setupDNSIntentPipeline(t)
+	args := []string{"--org", org, "dns", "zone-create", "--name", "example.test", "--visibility", "internal", "--backend-ref", "primary", "--ttl", "60", "--authoritative"}
+	if err := executeIntentCommand(t, args...); err != nil {
+		t.Fatal(err)
+	}
+	if len(canonical.zones) != 1 || canonical.zones[0].Name != "example.test" {
+		t.Fatalf("canonical zones = %#v", canonical.zones)
+	}
+	var fixture struct {
+		Intents []struct {
+			Domain, Op, Coordinate string
+			Content                map[string]interface{}
+		} `json:"intents"`
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "web", "tests", "fixtures", "d70-intent-content.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	intent, err := controlplane.ParseIntent(&transport.published[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fixture.Intents[0]
+	if intent.Domain != want.Domain || intent.Op != want.Op || intent.Coordinate != want.Coordinate {
+		t.Fatalf("intent envelope = %#v, want %#v", intent, want)
+	}
+	gotJSON, _ := json.Marshal(intent.Content)
+	wantJSON, _ := json.Marshal(want.Content)
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatalf("content = %s, want %s", gotJSON, wantJSON)
+	}
+
+	rejected := []string{"--org", org, "dns", "zone-create", "--name", "other.test", "--visibility", "internal", "--backend-ref", "missing", "--ttl", "60"}
+	var exit *IntentExitError
+	if err := executeIntentCommand(t, rejected...); !errors.As(err, &exit) || exit.Code != 1 {
+		t.Fatalf("rejection = %v", err)
+	}
+	transport.process = nil
+	pending := []string{"--org", org, "dns", "zone-create", "--name", "pending.test", "--visibility", "internal", "--backend-ref", "primary", "--ttl", "60"}
+	if err := executeIntentCommandWithTimeout(t, "15ms", pending...); !errors.As(err, &exit) || exit.Code != 2 {
+		t.Fatalf("pending = %v", err)
 	}
 }
 
-func TestDNSDriftRemediateWithAndWithoutZone(t *testing.T) {
-	setupDNSCLIEnv(t)
-	var requests []client.DNSDriftRemediateRequest
-	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{dnsDriftRemediate: func(req client.DNSDriftRemediateRequest) (*client.DNSCommandResult, error) {
-			requests = append(requests, req)
-			return &client.DNSCommandResult{Status: "success"}, nil
-		}}, nil
-	})
-	defer restoreFactory()
-
-	executeDNSCommand(t, "drift-remediate", "--zone", "prod.example")
-	executeDNSCommand(t, "drift-remediate")
-	if len(requests) != 2 || requests[0].Zone != "prod.example" || requests[1].Zone != "" {
-		t.Fatalf("drift requests = %#v", requests)
+func TestDNSD72CommandsAndRevisionValidation(t *testing.T) {
+	for _, name := range []string{"zone-update", "zone-delete", "endpoint-create", "endpoint-update", "endpoint-delete", "backend-create", "backend-update", "backend-delete", "policy-update", "policy-delete"} {
+		found := false
+		for _, cmd := range dnsCommands().Commands() {
+			if cmd.Name() == name {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing DNS %s command", name)
+		}
 	}
-}
-
-func TestDNSOverrideRetireCommandBuildsTypedRequest(t *testing.T) {
-	setupDNSCLIEnv(t)
-	var retireRequest client.DNSOverrideRetireRequest
-	fake := fakeCLIOperatorClient{
-		dnsOverrideRetire: func(req client.DNSOverrideRetireRequest) (*client.DNSCommandResult, error) {
-			retireRequest = req
-			return &client.DNSCommandResult{Status: "success"}, nil
-		},
-	}
-	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) { return fake, nil })
-	defer restoreFactory()
-
-	overrideID := "1273e277-dfa7-4459-a452-89598eeca4a2"
-	executeDNSCommand(t, "override-retire", "--override-id", overrideID, "--reason", "acceptance complete")
-	if retireRequest.OverrideID != overrideID || retireRequest.Reason != "acceptance complete" {
-		t.Fatalf("retire request = %#v", retireRequest)
-	}
-}
-
-func TestDNSOverrideRetireCommandReturnsNonZeroForFailureStatusError(t *testing.T) {
-	setupDNSCLIEnv(t)
-	want := errors.New(`dns/override-retire failed with status "error": override not found`)
-	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{dnsOverrideRetire: func(client.DNSOverrideRetireRequest) (*client.DNSCommandResult, error) {
-			return nil, want
-		}}, nil
-	})
-	defer restoreFactory()
-
-	root := newOperatorFlagTestCommand(t).Root()
-	root.AddCommand(dnsCommands())
-	root.SetArgs([]string{"dns", "override-retire", "--override-id", "1273e277-dfa7-4459-a452-89598eeca4a2", "--reason", "test"})
-	if err := root.ExecuteContext(context.Background()); !errors.Is(err, want) {
-		t.Fatalf("error = %v, want %v", err, want)
-	}
-}
-
-func TestDNSCommandReturnsNonZeroForFailureStatusError(t *testing.T) {
-	setupDNSCLIEnv(t)
-	want := errors.New(`dns/record-set failed with status "error": unknown DNS zone prod.example`)
-	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{dnsRecordSet: func(client.DNSRecordSetRequest) (*client.DNSCommandResult, error) {
-			return nil, want
-		}}, nil
-	})
-	defer restoreFactory()
-
-	root := newOperatorFlagTestCommand(t).Root()
-	root.AddCommand(dnsCommands())
-	root.SetArgs([]string{"dns", "record-set", "--zone", "prod.example", "--name", "api", "--type", "A", "--value", "192.0.2.10", "--ttl", "60", "--reason", "incident pin"})
-	if err := root.ExecuteContext(context.Background()); !errors.Is(err, want) {
-		t.Fatalf("error = %v, want %v", err, want)
+	for _, content := range []map[string]interface{}{{}, {"expected_updated_at": 3}, {"expected_updated_at": "bad"}} {
+		if _, err := dnsRevision(content); err == nil {
+			t.Errorf("accepted invalid revision %#v", content)
+		}
 	}
 }
 
 func TestDNSPolicyApplyRejectsInvalidJSONAndPolicy(t *testing.T) {
-	setupDNSCLIEnv(t)
-	called := false
-	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		called = true
-		return fakeCLIOperatorClient{}, nil
-	})
-	defer restoreFactory()
-
-	for _, test := range []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{name: "invalid JSON", content: `{"name":`, want: "read DNS policy"},
-		{name: "invalid policy", content: `{"name":"no-rules","rules":[],"enabled":true}`, want: "rules must not be empty"},
-		{name: "unknown field", content: `{"name":"policy","rules":[],"secret":"not-allowed"}`, want: "unknown field"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			root := newOperatorFlagTestCommand(t).Root()
-			root.AddCommand(dnsCommands())
-			root.SetArgs([]string{"dns", "policy-apply", "--file", writeDNSPolicyFile(t, test.content)})
-			err := root.ExecuteContext(context.Background())
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("error = %v, want containing %q", err, test.want)
-			}
-		})
+	for _, tc := range []struct{ content, want string }{{`{"name":`, "read DNS policy"}, {`{"name":"no-rules","rules":[]}`, "rules must not be empty"}, {`{"name":"policy","rules":[],"secret":"not-allowed"}`, "unknown field"}} {
+		path := filepath.Join(t.TempDir(), "policy.json")
+		if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := readDNSPolicyFile(path)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("error = %v, want %q", err, tc.want)
+		}
 	}
-	if called {
-		t.Fatal("operator client was built for an invalid policy file")
-	}
-}
-
-func setupDNSCLIEnv(t *testing.T) {
-	t.Helper()
-	outputFormat = "json"
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
-	t.Setenv("BAHIA_NOSTR_RELAYS", "wss://relay.example")
-	t.Cleanup(func() { outputFormat = "table" })
-}
-
-func executeDNSCommand(t *testing.T, args ...string) {
-	t.Helper()
-	root := newOperatorFlagTestCommand(t).Root()
-	root.AddCommand(dnsCommands())
-	root.SetArgs(append([]string{"dns"}, args...))
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("execute dns %s: %v", strings.Join(args, " "), err)
-	}
-}
-
-func writeDNSPolicyFile(t *testing.T, content string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "dns-policy.json")
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write DNS policy file: %v", err)
-	}
-	return path
 }

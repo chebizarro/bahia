@@ -462,6 +462,11 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindPackageRepositoryRegistry:     {"package", "repository", kinds.CPStateTopicPackageRepository},
 	KindPackageArtifactRegistry:       {"package", "artifact", kinds.CPStateTopicPackageArtifact},
 	KindPackagePromotionRegistry:      {"package", "promotion", kinds.CPStateTopicPackagePromotion},
+	KindPackageIntentState:            {"package", "intent", kinds.CPStateTopicPackageIntent},
+	KindToolProvisionIntentState:      {"tool", "provision-intent", kinds.CPStateTopicToolProvisionIntent},
+	KindToolDenylistState:             {"tool", "denylist", kinds.CPStateTopicToolDenylist},
+	KindToolProfileState:              {"tool", "profile", kinds.CPStateTopicToolProfile},
+	KindNotificationLogState:          {"notification", "log", kinds.CPStateTopicNotificationLog},
 	KindWorkerState:                   {kinds.WorkerDomain, "state", kinds.WorkerStateTopic},
 	KindWorkerAssignmentState:         {kinds.WorkerDomain, "assignment", kinds.WorkerAssignmentTopic},
 	KindWorkerDrainStatus:             {kinds.WorkerDomain, "drain", kinds.WorkerDrainTopic},
@@ -502,6 +507,17 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindSecurityFindingRecord:       {"security", "finding", kinds.CPStateTopicSecurityFinding},
 	KindSecurityScheduleRecord:      {"security", "schedule", kinds.CPStateTopicSecuritySchedule},
 	KindSecurityFindingDetailRecord: {"security", "finding-detail", kinds.CPStateTopicSecurityFindingDetail},
+	// F74a: independent coordinates for release, signature, SBOM and runtime state.
+	KindLLMReleaseRegistry:            {"llm", "release", kinds.CPStateTopicLLMRelease},
+	KindArtifactSignatureRegistry:     {"artifact", "signature", kinds.CPStateTopicArtifactSignature},
+	KindArtifactSBOMRegistry:          {"artifact", "sbom", kinds.CPStateTopicArtifactSBOM},
+	KindSBOMPackageRegistry:           {"artifact", "sbom-package", kinds.CPStateTopicSBOMPackage},
+	KindRuntimeObservationState:       {"runtime", "observation", kinds.CPStateTopicRuntimeObservation},
+	kinds.ManagedInstanceHealthRecord: {"runtime", "instance-health", kinds.CPStateTopicManagedInstanceHealth},
+	kinds.RouteCanaryRecord:           {"route", "canary", kinds.CPStateTopicRouteCanary},
+	kinds.SoulRuntimePolicyRecord:     {"soul-factory", "runtime-policy", kinds.CPStateTopicSoulRuntimePolicy},
+	kinds.BlossomAdminRecord:          {"blossom", "admin", kinds.CPStateTopicBlossomAdmin},
+	kinds.BlossomBlobRecord:           {"blossom", "blob", kinds.CPStateTopicBlossomBlob},
 }
 
 // CPStateDomains returns all unique cp-state domain names from the

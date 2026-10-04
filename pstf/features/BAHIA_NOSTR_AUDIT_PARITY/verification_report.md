@@ -154,3 +154,23 @@ Continuity heartbeat observations are production-readable NIP-38 status events o
 ### Remaining issue scope
 
 No remaining work is known for Bead `bahia-eqku`. A separate discovered heartbeat constant mismatch is tracked by Bead `bahia-i89o`.
+
+## Bead bahia-irsry.75 — F75 event-backed operator views (2026-10-03)
+
+### Observed implementation
+
+- Added cp-state family discriminators 32040–32044 and matching Go/JS topics, migration manifest entries, and read-auth classifications. Soul Factory publishes validated runtime policy at daemon startup. Blossom publishes fleet-OCK-encrypted server/health metadata at startup and descriptor metadata after daemon-owned uploads; raw blob bytes remain HTTP.
+- Indexed managed-instance health and route canary current state/audits by family topic. Material health observations now append one 4903 history fact; each persisted route probe refreshes 30315/30900, while only transitions append 4903.
+- Replaced the four browser REST reads with BahiaEventStore-derived projections, moved still-required NIP-98 mutations to `web/src/lib/api/write.js`, deleted the legacy client and its unit tests, and added a static acceptance-16 guard.
+- Config Fabric current desired/applied drift derives locally from tagged desired events and service-authored status events. The relay's latest-wins semantics do not preserve the REST archive's older versions or status receipts after a cold start; that history remains a parity gap rather than a claimed migration success. Blossom owner search now filters configured-owner metadata already published by the daemon, not arbitrary pubkeys.
+
+### Verification
+
+- `CGO_ENABLED=0 go build ./... && CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./...` — passed; `CGO_ENABLED=0 go test ./internal/archtest -run TestNoNew -count=1` — passed with zero new violations.
+- `pnpm run test:unit` — 1044 passed, 1 skipped; `pnpm run lint` — 0 errors/0 warnings; `pnpm run build` — passed.
+- `CGO_ENABLED=0 CI=1 BAHIA_E2E_PORT=43181 pnpm exec playwright test --workers=2` — 230 passed, 4 skipped, 0 failed (234 discovered). The four F75 view tests use keyring-signed relay fixtures; the Blossom case verifies fleet-OCK decryption.
+- `grep -R 'lib/api/client' web/src/` — empty; the vitest acceptance guard enforces this.
+
+### REST route handoff to D1
+
+No router or handler was changed here. These read routes have no remaining browser consumer: `GET /instance-health`, `GET /services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health` plus `/events` and `/recovery-attempts`; `GET /route-canaries`, `GET /services/{serviceId}/environments/{envId}/routes/{hostname}/canary` plus `/events`; `GET /soulfactory/runtimes`; `POST /blossom/list`; `GET /blossom/servers`, `/blossom/health`, `/blossom/stats`. `GET /config-fabric/drift` and `POST /config-fabric/rollback` remain used by `pkg/client/client.go` and must not be deleted by D1 solely on browser evidence. `GET /blossom/blob/{hash}` remains HTTP-native.

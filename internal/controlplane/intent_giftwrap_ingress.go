@@ -202,7 +202,7 @@ func (ig *IntentGiftWrapIngress) processVerifiedRumor(ctx context.Context, inner
 		)
 	}
 
-	return ig.processor.process(ctx, intent)
+	return ig.processor.process(ctx, intent, false)
 }
 
 // IsIntentEvent checks whether a Nostr event is a kind 30900 event tagged with

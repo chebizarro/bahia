@@ -48,7 +48,7 @@ func TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing(t *testing.T) {
 		KindMLInferenceEndpointRegistry,
 		kinds.MLInferenceEndpointState,
 		KindMLEvaluationExperimentState,
-		KindMLArtifactProvenanceGraph,
+		kinds.MLArtifactProvenanceGraph,
 		KindMLRuntimeCapabilityProfile,
 	}
 	for i, kind := range legacyReadModelKinds {

@@ -429,7 +429,7 @@ export async function initializeAuth() {
         }
 
         // Wire NIP-98 for any remaining interim REST calls (Wave 2/3)
-        await wireNip98IfAvailable();
+        if (browser) localStorage.removeItem('bahia_token');
 
         return;
       }
@@ -447,30 +447,6 @@ export async function initializeAuth() {
     }
   })();
   return initializeInProgress;
-}
-
-// ---------------------------------------------------------------------------
-// NIP-98 REST auth — kept minimal for interim Wave 2/3 reads
-// ---------------------------------------------------------------------------
-
-/**
- * Wire NIP-98 auth provider for any remaining REST API calls.
- * This is a minimal interim piece kept until Wave 2/3 migrates all reads
- * to the store. Only the direct NIP-98 signing is needed, not the full
- * configureBackendAuth flow with discovery + /orgs probe.
- */
-async function wireNip98IfAvailable() {
-  try {
-    const { api } = await import('$lib/api/client.js');
-    if (api) {
-      api.setAuthProvider({
-        getAuthorizationHeader: ({ method, url }) => signHttpRequest({ method, url })
-      });
-      if (browser) localStorage.removeItem('bahia_token');
-    }
-  } catch {
-    // API client not available — fine, not all routes need it
-  }
 }
 
 export async function refreshExtensionStatus() {
@@ -528,7 +504,7 @@ export async function login() {
       }
 
       // Wire NIP-98 for interim REST calls
-      await wireNip98IfAvailable();
+      if (browser) localStorage.removeItem('bahia_token');
 
       toast.success('Signed in successfully');
     } catch (error) {
@@ -584,7 +560,7 @@ export async function loginWithNostrConnect(uri) {
         );
       }
 
-      await wireNip98IfAvailable();
+      if (browser) localStorage.removeItem('bahia_token');
 
       toast.success('Connected signer successfully');
     } catch (error) {
@@ -627,14 +603,7 @@ export function logout() {
   }).catch(() => {});
   clearPersistedSession();
   void disconnectNip46().catch((err) => console.warn('Failed to disconnect NIP-46 session:', err));
-  if (browser) {
-    import('$lib/api/client.js').then(({ api }) => {
-      if (api) {
-        api.setAuthProvider(null);
-        if (browser) localStorage.removeItem('bahia_token');
-      }
-    }).catch(err => console.error('Failed to clear API token:', err));
-  }
+  if (browser) localStorage.removeItem('bahia_token');
   Object.assign(authState, {
     ...initialState,
     status: 'unauthenticated',
@@ -809,6 +778,6 @@ export async function authenticateBackend() {
       throw new Error('Nostr authentication required before backend auth');
     }
   }
-  await wireNip98IfAvailable();
+  if (browser) localStorage.removeItem('bahia_token');
   return { method: 'nip98', pubkey: authState.pubkey };
 }

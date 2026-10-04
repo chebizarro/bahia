@@ -65,7 +65,26 @@ export function backupRestoreApprovalIntentRequest(restoreId, decision, message,
     { restore_id: coordinate, decision, message: String(message || ''), intent_id: intentId }, intentId);
 }
 
-export function dnsIntentRequest(op, payload, orgId) {
+export function dnsIntentRequest(op, payload, orgId, current = null) {
+  const identities = {
+    'zone-update': ['zone:', 'name'], 'zone-delete': ['zone:', 'name'],
+    'endpoint-create': ['', 'coordinate'], 'endpoint-update': ['', 'coordinate'], 'endpoint-delete': ['', 'coordinate'],
+    'backend-create': ['dnsbackend:', 'ref'], 'backend-update': ['dnsbackend:', 'ref'], 'backend-delete': ['dnsbackend:', 'ref'],
+    'policy-update': ['dnspolicy:', 'id'], 'policy-delete': ['dnspolicy:', 'id']
+  };
+  if (identities[op]) {
+    const [prefix, field] = identities[op];
+    const identity = required(payload[field], `${field} for DNS ${op}`);
+    const coordinate = `${prefix}${identity}`;
+    const isDelete = op.endsWith('-delete');
+    const content = isDelete ? { [field]: identity } : { ...payload, [field]: identity };
+    delete content.expected_updated_at;
+    if (op.endsWith('-update') || isDelete) {
+      if (!current) throw new Error(`Current DNS record is required for ${op}`);
+      content.expected_updated_at = revision(current.updated_at);
+    }
+    return request('dns', op, coordinate, orgId, content);
+  }
   switch (op) {
     case 'zone-create': {
       const name = required(payload.name || payload.zone, 'Zone name');
@@ -92,24 +111,19 @@ export function dnsIntentRequest(op, payload, orgId) {
 }
 
 export function mlIntentRequest(op, payload, orgId, current = null) {
-  if (!['model-create', 'model-update', 'version-create', 'version-update', 'endpoint-create', 'endpoint-update'].includes(op)) {
+  if (!['model-create', 'model-update', 'model-delete', 'version-create', 'version-update', 'version-delete',
+    'endpoint-create', 'endpoint-update', 'endpoint-delete'].includes(op)) {
     throw new Error(`Unsupported ML intent op: ${op}`);
   }
-  const id = required(payload.id, 'ML entity id');
+  const id = required(payload.id || current?.id, 'ML entity id');
   const isUpdate = op.endsWith('-update');
-  if (isUpdate && !current) throw new Error('Current ML record is required for an update');
-  if (op.startsWith('model-') && isUpdate && payload.slug !== current.slug) throw new Error('Changing a model slug is not supported');
-  if (op.startsWith('version-') && isUpdate && (payload.model_id !== current.model_id || payload.version !== current.version)) {
-    throw new Error('Changing model version identity is not supported');
-  }
-  if (op.startsWith('endpoint-') && isUpdate && (payload.name !== current.name || payload.environment_id !== current.environment_id)) {
-    throw new Error('Changing endpoint identity is not supported');
-  }
-  const coordinate = op.startsWith('model-') ? `model:${required(payload.slug, 'Model slug')}`
+  const isDelete = op.endsWith('-delete');
+  if ((isUpdate || isDelete) && !current) throw new Error(`Current ML record is required for ${op}`);
+  const coordinate = op.startsWith('model-') ? `model:${required(isDelete ? current.slug : payload.slug, 'Model slug')}`
     : op.startsWith('version-') ? `model-version:${id}` : `endpoint:${id}`;
-  const content = { ...payload };
+  const content = isDelete ? { id } : { ...payload, id };
   delete content.expected_updated_at;
-  if (isUpdate) content.expected_updated_at = revision(current.updated_at);
+  if (isUpdate || isDelete) content.expected_updated_at = revision(current.updated_at);
   return request('ml', op, coordinate, orgId, content);
 }
 

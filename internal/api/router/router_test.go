@@ -1265,8 +1265,8 @@ func TestDeploymentFlow(t *testing.T) {
 	intentID := seedTestIntent(t, registry, svcID, envID, artID, "test-user")
 
 	resp, _ := doJSON(t, "GET", srv.URL+"/api/v1/deployments/intents/"+intentID, nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("get intent: expected 200, got %d", resp.StatusCode)
+	if resp.StatusCode != 404 {
+		t.Fatalf("get intent: expected 404, got %d", resp.StatusCode)
 	}
 
 	// Create deployment run.
@@ -1281,8 +1281,8 @@ func TestDeploymentFlow(t *testing.T) {
 
 	// Get the run.
 	resp, _ = doJSON(t, "GET", srv.URL+"/api/v1/deployments/runs/"+runID, nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("get run: expected 200, got %d", resp.StatusCode)
+	if resp.StatusCode != 404 {
+		t.Fatalf("get run: expected 404, got %d", resp.StatusCode)
 	}
 
 	// Complete the run.
@@ -1295,14 +1295,14 @@ func TestDeploymentFlow(t *testing.T) {
 
 	// List intents by service+env.
 	resp, _ = doJSON(t, "GET", fmt.Sprintf("%s/api/v1/services/%s/environments/%s/intents", srv.URL, svcID, envID), nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("list intents: expected 200, got %d", resp.StatusCode)
+	if resp.StatusCode != 404 {
+		t.Fatalf("list intents: expected 404, got %d", resp.StatusCode)
 	}
 
 	// List runs by intent.
 	resp, _ = doJSON(t, "GET", fmt.Sprintf("%s/api/v1/deployments/intents/%s/runs", srv.URL, intentID), nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("list runs: expected 200, got %d", resp.StatusCode)
+	if resp.StatusCode != 404 {
+		t.Fatalf("list runs: expected 404, got %d", resp.StatusCode)
 	}
 }
 
@@ -1318,12 +1318,8 @@ func TestApprovalRoutesAreRemoved(t *testing.T) {
 	intentID := seedTestIntent(t, registry, svcID, envID, artID, "deployer")
 
 	resp, body := doJSON(t, "GET", srv.URL+"/api/v1/deployments/intents/"+intentID, nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("get seeded protected intent: expected 200, got %d: %v", resp.StatusCode, body)
-	}
-	intentData := body["data"].(map[string]any)
-	if intentData["approval_status"] != string(domain.ApprovalStatusPending) {
-		t.Errorf("expected pending approval, got %v", intentData["approval_status"])
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("deleted intent read status = %d, want 404: %v", resp.StatusCode, body)
 	}
 
 	path := "/api/v1/deployments/intents/" + intentID + "/approve"
@@ -1377,7 +1373,7 @@ func TestStateEndpoints(t *testing.T) {
 
 // --- Observation State ---
 
-func TestObservationStateReadRemainsAndDeprecatedRecordRouteIsRemoved(t *testing.T) {
+func TestObservationStateReadRemovedAndDeprecatedRecordRouteIsRemoved(t *testing.T) {
 	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
 	svcID := seedTestService(t, registry, "obs-svc", "harbor/obs")
@@ -1385,8 +1381,8 @@ func TestObservationStateReadRemainsAndDeprecatedRecordRouteIsRemoved(t *testing
 	seedTestObservation(t, registry, svcID, envID, "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 
 	resp, body := doJSON(t, "GET", fmt.Sprintf("%s/api/v1/services/%s/environments/%s/state", srv.URL, svcID, envID), nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("get state: expected 200, got %d: %v", resp.StatusCode, body)
+	if resp.StatusCode != 404 {
+		t.Fatalf("get state: expected 404, got %d: %v", resp.StatusCode, body)
 	}
 
 	resp, body = doJSON(t, http.MethodPost, srv.URL+"/api/v1/observations", map[string]any{

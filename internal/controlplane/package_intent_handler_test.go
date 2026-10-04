@@ -756,3 +756,30 @@ func makeTestPackageIntent(t *testing.T, intent *Intent, pubkeyHex string) *nost
 	ev.ID = ev.GetID()
 	return ev
 }
+
+type capturePackageIntentStates struct{ states []domain.PackageIntentState }
+
+func (c *capturePackageIntentStates) PublishSignedPackageIntent(_ context.Context, state *domain.PackageIntentState) error {
+	c.states = append(c.states, *state)
+	return nil
+}
+
+func TestPackageIntentHandlerPublishesSignedTerminalStateOnce(t *testing.T) {
+	fixture := newPkgIntentFixture(t)
+	capture := &capturePackageIntentStates{}
+	fixture.handler.statePublisher = capture
+	intent := fixture.makeRepoApplyIntent(t, "signed-state", "test", "npm")
+	if err := fixture.processor.ProcessInProcess(t.Context(), intent); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.states) != 1 || capture.states[0].ID != intent.IntentID || capture.states[0].Status != string(domain.PackageIntentStatusSucceeded) {
+		t.Fatalf("signed success state %#v", capture.states)
+	}
+	bad := &Intent{Domain: "package", Op: "unknown", IntentID: uuid.New().String(), Actor: fixture.fleetPub, Coordinate: "unknown", Content: map[string]any{}}
+	if err := fixture.processor.ProcessInProcess(t.Context(), bad); err == nil {
+		t.Fatal("unsupported operation accepted")
+	}
+	if len(capture.states) != 2 || capture.states[1].Status != string(domain.PackageIntentStatusFailed) || capture.states[1].ErrorMessage == "" {
+		t.Fatalf("signed failure state %#v", capture.states)
+	}
+}

@@ -36,7 +36,7 @@ func buildsCommands() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := runBuildRequestNostr(cmd, client.BuildRequestNostrRequest{
+			result, err := runBuildRequestContextVM(cmd, client.BuildRequestNostrRequest{
 				ServiceID: serviceID, GitRef: gitRef, RepositoryCredentialRef: credentialRef,
 				ArtifactRepo: artifactRepo, BuildArgs: buildArgs, IdempotencyKey: idempotencyKey,
 			})
@@ -105,7 +105,7 @@ func buildsCommands() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			buildID, _ := cmd.Flags().GetString("build")
-			result, err := runBuildRegisterResultNostr(cmd, buildID)
+			result, err := runBuildRegisterResultContextVM(cmd, buildID)
 			if err != nil {
 				return err
 			}

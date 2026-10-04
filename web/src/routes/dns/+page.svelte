@@ -14,6 +14,7 @@
   } from '$lib/stores/dns.svelte.js';
   import { DNS_COMMANDS } from '$lib/nostr/dns-controlplane.js';
   import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
+  import DNSRegistryMutations from './DNSRegistryMutations.svelte';
   import {
     DNS_CONTROL_FORMS,
     buildDNSCommandPayload,
@@ -297,6 +298,8 @@
       {/if}
     </div>
   </section>
+
+  <DNSRegistryMutations {zones} {endpoints} {backends} {policies} disabled={!operatorReady} />
 
   <nav class="tabs" aria-label="DNS views">
     <button type="button" class:active={activeTab === 'zones'} onclick={() => (activeTab = 'zones')}>Zones</button>

@@ -23,10 +23,13 @@ function fromD69(domain, op, content, orgId, intentId) {
   throw new Error(`Unexpected D69 domain ${domain}`);
 }
 
-function fromD70({ domain, op, content }) {
-  if (domain === 'dns') return dnsIntentRequest(op, content, FLEET_INTENT_ORG_ID);
+function fromD70({ domain, op, content, coordinate }) {
+  const current = op.endsWith('-update') || op.endsWith('-delete')
+    ? { ...content, updated_at: content.expected_updated_at,
+      ...(domain === 'ml' && op === 'model-delete' ? { slug: coordinate.slice('model:'.length) } : {}) } : null;
+  if (domain === 'dns') return dnsIntentRequest(op, content, FLEET_INTENT_ORG_ID, current);
   if (domain === 'ml') return mlIntentRequest(op, content, FLEET_INTENT_ORG_ID,
-    op.endsWith('-update') ? { ...content, updated_at: content.expected_updated_at } : null);
+    current);
   if (domain === 'worker') return workerIntentRequest(op, worker(content), FLEET_INTENT_ORG_ID,
     { reason: content.reason, labels: content.labels, cleanupMode: content.cleanup_mode });
   throw new Error(`Unexpected D70 domain ${domain}`);
@@ -49,12 +52,7 @@ describe('D69 deployment, runtime, LLM and backup wire fixtures', () => {
 });
 
 describe('D70 DNS, ML and worker handler content fixtures', () => {
-  const knownUnmigrated = [
-    'dns/backend-create', 'dns/backend-delete', 'dns/backend-update',
-    'dns/endpoint-create', 'dns/endpoint-delete', 'dns/endpoint-update',
-    'dns/policy-delete', 'dns/policy-update', 'dns/zone-delete', 'dns/zone-update',
-    'ml/endpoint-delete', 'ml/model-delete', 'ml/version-delete'
-  ];
+  const knownUnmigrated = [];
   const implemented = d70.filter(expected => {
     try {
       fromD70(expected);
@@ -76,6 +74,7 @@ describe('D70 DNS, ML and worker handler content fixtures', () => {
       const request = fromD70(expected);
       const actual = buildIntentEvent({ ...request, createdAt: 1790985600 });
       expect(request.coordinate).toBe(expected.coordinate);
+      expect(actual.content).toBe(JSON.stringify(expected.content));
       expect(JSON.parse(actual.content)).toEqual(expected.content);
       expect(actual.tags).toContainEqual(['domain', expected.domain]);
       expect(actual.tags).toContainEqual(['op', expected.op]);
@@ -84,11 +83,11 @@ describe('D70 DNS, ML and worker handler content fixtures', () => {
     });
   }
 
-  it('rejects identity-changing ML updates rather than publishing an untombstonable coordinate', () => {
+  it('allows identity-changing ML updates and uses the old model identity for deletes', () => {
     const current = { id: '00000000-0000-4000-8000-000000000003', slug: 'sample', updated_at: '2026-10-03T00:00:00Z' };
-    expect(() => mlIntentRequest('model-update', { ...current, slug: 'different' }, FLEET_INTENT_ORG_ID, current))
-      .toThrow(/slug/);
-    expect(() => mlIntentRequest('model-delete', current, FLEET_INTENT_ORG_ID, current))
-      .toThrow(/Unsupported/);
+    expect(mlIntentRequest('model-update', { ...current, slug: 'different' }, FLEET_INTENT_ORG_ID, current).coordinate)
+      .toBe('model:different');
+    expect(mlIntentRequest('model-delete', { id: current.id }, FLEET_INTENT_ORG_ID, current))
+      .toMatchObject({ coordinate: 'model:sample', content: { id: current.id, expected_updated_at: current.updated_at } });
   });
 });

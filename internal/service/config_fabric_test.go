@@ -203,7 +203,7 @@ func TestComposeConfigEventRequiredTagShape(t *testing.T) {
 	}
 	want := map[string]string{
 		"d": "service:khatru-relay:rate-limits", "service": "khatru-relay", "scope": "prod",
-		"version": "7", "schema": "cascadia.config.rate-limits.v1",
+		"version": "7", "schema": "cascadia.config.rate-limits.v1", "t": "config-fabric",
 	}
 	for name, value := range want {
 		got, err := exactlyOneTag(event.Tags, name)
@@ -212,7 +212,7 @@ func TestComposeConfigEventRequiredTagShape(t *testing.T) {
 		}
 	}
 	if len(event.Tags) != len(want) {
-		t.Fatalf("tags = %#v, want exactly five required tags", event.Tags)
+		t.Fatalf("tags = %#v, want exactly six required tags", event.Tags)
 	}
 }
 

@@ -12,7 +12,7 @@ import { initStoreFirstSubscriptions, teardownStoreFirstSubscriptions } from '..
 afterEach(() => { teardownStoreFirstSubscriptions(); bridge.subscribe.mockClear(); });
 
 describe('store-first relay subscriptions', () => {
-  it('subscribes once to all migrated state topics and event families with trusted authors', () => {
+  it('subscribes once to state topics and operator-authored config desired events', () => {
     initStoreFirstSubscriptions();
     initStoreFirstSubscriptions();
     expect(bridge.subscribe).toHaveBeenCalledTimes(1);
@@ -26,6 +26,9 @@ describe('store-first relay subscriptions', () => {
     for (const kind of [BACKUP_RUN_ATTESTATION, BACKUP_VERIFICATION_ATTESTATION, SBOM_REFERENCE, SBOM_AVAILABILITY_LIST, 4903, 30315, 5]) {
       expect(filters.some((filter) => filter.kinds.includes(kind)), `missing kind ${kind}`).toBe(true);
     }
-    for (const filter of filters) expect(filter.authors).toEqual(['b'.repeat(64)]);
+    for (const filter of filters) {
+      if (filter['#t']?.includes('config-fabric')) expect(filter.authors).toBeUndefined();
+      else expect(filter.authors).toEqual(['b'.repeat(64)]);
+    }
   });
 });

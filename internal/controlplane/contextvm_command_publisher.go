@@ -14,6 +14,11 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
+// NostrEventPublisher publishes signed events to the control-plane relays.
+type NostrEventPublisher interface {
+	Publish(ctx context.Context, ev nostr.Event) (int, error)
+}
+
 func publishContextVMCommand(ctx context.Context, publisher NostrEventPublisher, signer nostr.Signer, method, dTag, agentID string, tags nostr.Tags, params map[string]any, label string) (_ *nostr.Event, _ int, _ string, retErr error) {
 	ctx, span := telemetry.StartOperation(ctx, "bahia.contextvm.dispatch",
 		attribute.Int("nostr.kind", int(KindContextVMMessage)), attribute.String("rpc.method", method))

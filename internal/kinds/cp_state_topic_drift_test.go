@@ -23,6 +23,11 @@ var goCPStateTopics = map[string]string{
 	"PACKAGE_REPOSITORY":         CPStateTopicPackageRepository,
 	"PACKAGE_ARTIFACT":           CPStateTopicPackageArtifact,
 	"PACKAGE_PROMOTION":          CPStateTopicPackagePromotion,
+	"PACKAGE_INTENT":             CPStateTopicPackageIntent,
+	"TOOL_PROVISION_INTENT":      CPStateTopicToolProvisionIntent,
+	"TOOL_DENYLIST":              CPStateTopicToolDenylist,
+	"TOOL_PROFILE":               CPStateTopicToolProfile,
+	"NOTIFICATION_LOG":           CPStateTopicNotificationLog,
 	"ML_MODEL":                   CPStateTopicMLModel,
 	"ML_MODEL_VERSION":           CPStateTopicMLModelVersion,
 	"ML_DATASET":                 CPStateTopicMLDataset,
@@ -49,6 +54,16 @@ var goCPStateTopics = map[string]string{
 	"SECURITY_FINDING":           CPStateTopicSecurityFinding,
 	"SECURITY_SCHEDULE":          CPStateTopicSecuritySchedule,
 	"SECURITY_FINDING_DETAIL":    CPStateTopicSecurityFindingDetail,
+	"LLM_RELEASE":                CPStateTopicLLMRelease,
+	"ARTIFACT_SIGNATURE":         CPStateTopicArtifactSignature,
+	"ARTIFACT_SBOM":              CPStateTopicArtifactSBOM,
+	"SBOM_PACKAGE":               CPStateTopicSBOMPackage,
+	"RUNTIME_OBSERVATION":        CPStateTopicRuntimeObservation,
+	"MANAGED_INSTANCE_HEALTH":    CPStateTopicManagedInstanceHealth,
+	"ROUTE_CANARY":               CPStateTopicRouteCanary,
+	"SOUL_RUNTIME_POLICY":        CPStateTopicSoulRuntimePolicy,
+	"BLOSSOM_ADMIN":              CPStateTopicBlossomAdmin,
+	"BLOSSOM_BLOB":               CPStateTopicBlossomBlob,
 }
 
 func readGeneratedKindsJS(t *testing.T) string {

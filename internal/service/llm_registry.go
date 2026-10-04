@@ -18,17 +18,18 @@ import (
 
 // LLMRegistryService owns canonical DB-first lifecycle state for LLM routes.
 type LLMRegistryService struct {
-	routes       repository.LLMRouteRepository
-	releases     repository.LLMReleaseRepository
-	environments repository.EnvironmentRepository
-	intents      repository.LLMDeploymentIntentRepository
-	runs         repository.LLMDeploymentRunRepository
-	observations repository.LLMRouteObservationRepository
-	state        repository.LLMRouteStateRepository
-	ml           *MLRegistryService
-	cpState      func(ctx context.Context, state *domain.LLMRouteState)
-	publisher    events.Publisher
-	logger       *zap.Logger
+	routes         repository.LLMRouteRepository
+	releases       repository.LLMReleaseRepository
+	environments   repository.EnvironmentRepository
+	intents        repository.LLMDeploymentIntentRepository
+	runs           repository.LLMDeploymentRunRepository
+	observations   repository.LLMRouteObservationRepository
+	state          repository.LLMRouteStateRepository
+	ml             *MLRegistryService
+	cpState        func(ctx context.Context, state *domain.LLMRouteState)
+	releaseCPState LLMReleaseStatePublisher
+	publisher      events.Publisher
+	logger         *zap.Logger
 }
 
 func NewLLMRegistryService(
@@ -71,6 +72,23 @@ func (s *LLMRegistryService) WithMLRegistry(ml *MLRegistryService) *LLMRegistryS
 // the projector's reactive handleEvent LLM state leg.
 func (s *LLMRegistryService) SetLLMCPStatePublisher(fn func(ctx context.Context, state *domain.LLMRouteState)) {
 	s.cpState = fn
+}
+
+type LLMReleaseStatePublisher interface {
+	PublishLLMRelease(context.Context, *domain.LLMRelease) error
+}
+
+func (s *LLMRegistryService) SetReleaseCPStatePublisher(pub LLMReleaseStatePublisher) {
+	s.releaseCPState = pub
+}
+
+func (s *LLMRegistryService) publishReleaseCPState(ctx context.Context, release *domain.LLMRelease) {
+	if s.releaseCPState == nil {
+		return
+	}
+	if err := s.releaseCPState.PublishLLMRelease(ctx, release); err != nil {
+		s.logger.Warn("publish LLM release cp-state failed", zap.Error(err))
+	}
 }
 
 func (s *LLMRegistryService) mlBacked() bool {
@@ -237,6 +255,8 @@ func (s *LLMRegistryService) CreateRelease(ctx context.Context, release *domain.
 			return err
 		}
 		release.ID = version.ID
+		release.CreatedAt = version.CreatedAt
+		s.publishReleaseCPState(ctx, release)
 		return nil
 	}
 	if release == nil {
@@ -255,6 +275,7 @@ func (s *LLMRegistryService) CreateRelease(ctx context.Context, release *domain.
 	if err := s.releases.Create(ctx, release); err != nil {
 		return err
 	}
+	s.publishReleaseCPState(ctx, release)
 	s.publish(ctx, events.EventLLMReleaseRegistered, release.ID.String(), events.ResourceData{RouteID: release.RouteID.String(), ReleaseID: release.ID.String()})
 	return nil
 }
@@ -770,29 +791,6 @@ func (s *LLMRegistryService) GetRouteState(ctx context.Context, routeID, envID u
 	return s.state.Get(ctx, routeID, envID)
 }
 
-func (s *LLMRegistryService) ListEnvironmentRouteStates(ctx context.Context, envID uuid.UUID) ([]domain.LLMRouteState, error) {
-	if s == nil {
-		return nil, nil
-	}
-	if s.mlBacked() {
-		states, err := s.ListAllRouteStates(ctx)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]domain.LLMRouteState, 0, len(states))
-		for i := range states {
-			if states[i].EnvironmentID == envID {
-				out = append(out, states[i])
-			}
-		}
-		return out, nil
-	}
-	if s.state == nil {
-		return nil, nil
-	}
-	return s.state.ListByEnvironment(ctx, envID)
-}
-
 func (s *LLMRegistryService) ListRouteStates(ctx context.Context, routeID uuid.UUID) ([]domain.LLMRouteState, error) {
 	if s == nil {
 		return nil, nil
@@ -835,29 +833,6 @@ func (s *LLMRegistryService) ListAllRouteStates(ctx context.Context) ([]domain.L
 		return nil, nil
 	}
 	return s.state.ListAll(ctx)
-}
-
-func (s *LLMRegistryService) ListDriftedRouteStates(ctx context.Context) ([]domain.LLMRouteState, error) {
-	if s == nil {
-		return nil, nil
-	}
-	if s.mlBacked() {
-		states, err := s.ListAllRouteStates(ctx)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]domain.LLMRouteState, 0, len(states))
-		for i := range states {
-			if states[i].DriftStatus == domain.DriftStatusDrifted {
-				out = append(out, states[i])
-			}
-		}
-		return out, nil
-	}
-	if s.state == nil {
-		return nil, nil
-	}
-	return s.state.ListDrifted(ctx)
 }
 
 // LLM projector source aliases keep projection wiring explicit without changing the HTTP-facing service API.

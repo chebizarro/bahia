@@ -489,4 +489,30 @@ const (
 	SecurityFindingRecord       = 32012
 	SecurityScheduleRecord      = 32013
 	SecurityFindingDetailRecord = 32014
+
+	// F74a canonical read families; all use wire kind 30900.
+	LLMReleaseRegistry        = 32015
+	ArtifactSignatureRegistry = 32016
+	ArtifactSBOMRegistry      = 32017
+	SBOMPackageRegistry       = 32018
+	RuntimeObservationState   = 32019
+)
+
+// F75 read-model family discriminators. All publish on wire kind 30900.
+const (
+	ManagedInstanceHealthRecord = 32040
+	RouteCanaryRecord           = 32041
+	SoulRuntimePolicyRecord     = 32042
+	BlossomAdminRecord          = 32043
+	BlossomBlobRecord           = 32044
+)
+
+// F74b cp-state discriminators (wire kind 30900). This block is reserved for
+// package intent/approval, tool provisioning policy, and notification history.
+const (
+	PackageIntentState       = 32030
+	ToolProvisionIntentState = 32031
+	ToolDenylistState        = 32032
+	ToolProfileState         = 32033
+	NotificationLogState     = 32034
 )

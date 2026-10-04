@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -478,6 +479,13 @@ func TestCallTool_RuntimeStateAndObservationHandlers(t *testing.T) {
 		ObservedAt:          now,
 	})
 	fixture := attachCanonicalMCPFixture(t, server)
+	latestObs, err := observationRepo.GetLatest(ctx, serviceID, envID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := nostrpool.NewF74aCanonicalPublisher(fixture.projector, nil).PublishRuntimeObservation(ctx, latestObs); err != nil {
+		t.Fatal(err)
+	}
 	for _, state := range stateRepo.states {
 		fixture.publishState(t, state)
 	}

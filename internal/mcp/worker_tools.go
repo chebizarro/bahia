@@ -14,17 +14,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
-// WorkerCommandPublisher emits signer-first worker-management Nostr requests.
-type WorkerCommandPublisher interface {
-	PublishWorkerCordonRequest(ctx context.Context, cmd controlplane.WorkerLifecycleCommand) (*controlplane.WorkerCommandReceipt, error)
-	PublishWorkerUncordonRequest(ctx context.Context, cmd controlplane.WorkerLifecycleCommand) (*controlplane.WorkerCommandReceipt, error)
-	PublishWorkerDrainRequest(ctx context.Context, cmd controlplane.WorkerLifecycleCommand) (*controlplane.WorkerCommandReceipt, error)
-	PublishWorkerUndrainRequest(ctx context.Context, cmd controlplane.WorkerLifecycleCommand) (*controlplane.WorkerCommandReceipt, error)
-	PublishWorkerMaintenanceEnterRequest(ctx context.Context, cmd controlplane.WorkerLifecycleCommand) (*controlplane.WorkerCommandReceipt, error)
-	PublishWorkerMaintenanceExitRequest(ctx context.Context, cmd controlplane.WorkerLifecycleCommand) (*controlplane.WorkerCommandReceipt, error)
-	PublishWorkerLabelsUpdateRequest(ctx context.Context, cmd controlplane.WorkerLabelsUpdateCommand) (*controlplane.WorkerCommandReceipt, error)
-}
-
 func workerToolDefinitions() []Tool {
 	object := func(props map[string]interface{}, required ...string) map[string]interface{} {
 		schema := map[string]interface{}{"type": "object", "properties": props}
@@ -81,57 +70,12 @@ func workerToolDefinitions() []Tool {
 	}
 }
 
-func (s *Server) requireWorkerCommands() (WorkerCommandPublisher, *ToolResult) {
-	if s.workerCommands == nil {
-		return nil, errorResult("worker command publisher is not configured")
-	}
-	return s.workerCommands, nil
-}
-
 func (s *Server) handleWorkerLifecycleCommand(ctx context.Context, name string, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireWorkerCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	cmd := workerLifecycleCommandFromArgs(args)
-	var receipt *controlplane.WorkerCommandReceipt
-	var err error
-	switch name {
-	case "bahia_worker_cordon":
-		receipt, err = publisher.PublishWorkerCordonRequest(ctx, cmd)
-	case "bahia_worker_uncordon":
-		receipt, err = publisher.PublishWorkerUncordonRequest(ctx, cmd)
-	case "bahia_worker_drain":
-		receipt, err = publisher.PublishWorkerDrainRequest(ctx, cmd)
-	case "bahia_worker_undrain":
-		receipt, err = publisher.PublishWorkerUndrainRequest(ctx, cmd)
-	case "bahia_worker_maintenance_enter":
-		receipt, err = publisher.PublishWorkerMaintenanceEnterRequest(ctx, cmd)
-	case "bahia_worker_maintenance_exit":
-		receipt, err = publisher.PublishWorkerMaintenanceExitRequest(ctx, cmd)
-	default:
-		return errorResult(fmt.Sprintf("unknown worker lifecycle tool: %s", name)), nil
-	}
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish worker request: %v", err)), nil
-	}
-	return jsonResult(workerCommandReceiptToMap("submitted", receipt))
+	return s.invokeIntentWrite(ctx, name, args)
 }
 
 func (s *Server) handleWorkerLabelsUpdate(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireWorkerCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	labels := stringMapFromArg(args["labels"])
-	if labels == nil {
-		return errorResult("labels are required"), nil
-	}
-	receipt, err := publisher.PublishWorkerLabelsUpdateRequest(ctx, controlplane.WorkerLabelsUpdateCommand{WorkerPubKey: strings.TrimSpace(stringArg(args, "worker_pubkey")), Labels: labels, Reason: strings.TrimSpace(stringArg(args, "reason")), OperatorMetadata: anyMapFromArg(args["operator_metadata"]), IdempotencyKey: strings.TrimSpace(stringArg(args, "idempotency_key")), AgentID: strings.TrimSpace(stringArg(args, "agent_id"))})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish worker labels update request: %v", err)), nil
-	}
-	return jsonResult(workerCommandReceiptToMap("submitted", receipt))
+	return s.invokeIntentWrite(ctx, "bahia_worker_labels_update", args)
 }
 
 func (s *Server) handleWorkerPreviewEligibility(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -182,31 +126,6 @@ func (s *Server) environmentForWorkerPreview(ctx context.Context, args map[strin
 		return env, nil
 	}
 	return &domain.Environment{ID: uuid.New(), RuntimeConfig: map[string]any{"worker_policy": policy}, LoomWorkerSelector: anyMapFromArg(args["worker_selector"])}, nil
-}
-
-func workerLifecycleCommandFromArgs(args map[string]interface{}) controlplane.WorkerLifecycleCommand {
-	return controlplane.WorkerLifecycleCommand{WorkerPubKey: strings.TrimSpace(stringArg(args, "worker_pubkey")), Reason: strings.TrimSpace(stringArg(args, "reason")), OperatorMetadata: anyMapFromArg(args["operator_metadata"]), IdempotencyKey: strings.TrimSpace(stringArg(args, "idempotency_key")), AgentID: strings.TrimSpace(stringArg(args, "agent_id"))}
-}
-
-func workerCommandReceiptToMap(status string, receipt *controlplane.WorkerCommandReceipt) map[string]interface{} {
-	result := map[string]interface{}{"status": status}
-	if receipt == nil {
-		return result
-	}
-	readModels := []int{controlplane.KindCASControlState}
-	result["request_event_id"] = receipt.RequestEventID
-	result["request_pubkey"] = receipt.RequestPubkey
-	result["request_kind"] = receipt.RequestKind
-	result["result_kind"] = receipt.ResultKind
-	result["status_kinds"] = []int{receipt.StatusKind}
-	result["result_kinds"] = []int{receipt.ResultKind}
-	result["read_model_kinds"] = readModels
-	result["d_tag"] = receipt.DTag
-	result["published_relays"] = receipt.PublishedRelays
-	result["worker_pubkey"] = receipt.WorkerPubKey
-	result["command"] = receipt.Command
-	result["correlation_tags"] = map[string]string{"d": receipt.DTag, "worker": receipt.WorkerPubKey, "command": receipt.Command, "request_event_id": receipt.RequestEventID}
-	return result
 }
 
 func mlPlacementRequestFromArgs(args map[string]interface{}) service.MLPlacementRequest {

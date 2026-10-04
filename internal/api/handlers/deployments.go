@@ -32,55 +32,6 @@ func resolveActor(r *http.Request, clientSupplied string) string {
 	return clientSupplied
 }
 
-// --- Deployment Intents ---
-
-func (h *DeploymentHandler) GetIntent(w http.ResponseWriter, r *http.Request) {
-	if !requireMember(w, r) {
-		return
-	}
-	id, err := uuidParam(r, "id")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid intent id")
-		return
-	}
-
-	di, err := h.registry.GetDeploymentIntent(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if di == nil {
-		writeError(w, http.StatusNotFound, "deployment intent not found")
-		return
-	}
-	writeData(w, http.StatusOK, di)
-}
-
-func (h *DeploymentHandler) ListIntents(w http.ResponseWriter, r *http.Request) {
-	if !requireMember(w, r) {
-		return
-	}
-	serviceID, err := uuidParam(r, "serviceId")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid service id")
-		return
-	}
-	envID, err := uuidParam(r, "envId")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid environment id")
-		return
-	}
-	limit := queryInt(r, "limit", 50)
-	offset := queryInt(r, "offset", 0)
-
-	intents, err := h.registry.ListDeploymentIntents(r.Context(), serviceID, envID, limit, offset)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, dto.ListResponse{Data: intents, Limit: limit, Offset: offset})
-}
-
 func (h *DeploymentHandler) validateServiceInOrg(w http.ResponseWriter, r *http.Request, serviceID uuid.UUID) bool {
 	if authzOrgID(r) == uuid.Nil {
 		return true
@@ -140,46 +91,6 @@ func (h *DeploymentHandler) CreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusCreated, dr)
-}
-
-func (h *DeploymentHandler) GetRun(w http.ResponseWriter, r *http.Request) {
-	if !requireMember(w, r) {
-		return
-	}
-	id, err := uuidParam(r, "id")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid run id")
-		return
-	}
-
-	dr, err := h.registry.GetDeploymentRun(r.Context(), id)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if dr == nil {
-		writeError(w, http.StatusNotFound, "deployment run not found")
-		return
-	}
-	writeData(w, http.StatusOK, dr)
-}
-
-func (h *DeploymentHandler) ListRuns(w http.ResponseWriter, r *http.Request) {
-	if !requireMember(w, r) {
-		return
-	}
-	intentID, err := uuidParam(r, "intentId")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid intent id")
-		return
-	}
-
-	runs, err := h.registry.ListDeploymentRuns(r.Context(), intentID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeData(w, http.StatusOK, runs)
 }
 
 func (h *DeploymentHandler) CompleteRun(w http.ResponseWriter, r *http.Request) {

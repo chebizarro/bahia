@@ -48,7 +48,7 @@
   // with open={true} so the count matches what the heading claims.
   // RouteCanaryOutages owns the REST read itself (see
   // $lib/components/RouteCanaryOutages.svelte) so this page stays
-  // nostr_native and never imports $lib/api/client.js.
+  // nostr_native and never imports the legacy REST client.
   let routeCanaryCount = $state(0);
 
   // Service detail dialog

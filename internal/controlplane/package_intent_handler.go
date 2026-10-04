@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ type PackageIntentHandler struct {
 	projection     repository.PackageControlPlaneRepository
 	store          repository.PackageAuthorizationStore
 	writer         PackageCPStateWriter
+	statePublisher PackageIntentStatePublisher
 	status         *IntentStatusPublisher
 	gate           *FleetOperatorGate
 	logger         *zap.Logger
@@ -47,12 +49,19 @@ type PackageCPStateWriter interface {
 	PublishPackagePromotionRegistry(ctx context.Context, publication *domain.PackagePublication, deleted bool) error
 }
 
+// PackageIntentStatePublisher emits the fleet-private terminal read model for
+// signed package intents. The handler does not persist PackageIntent rows.
+type PackageIntentStatePublisher interface {
+	PublishSignedPackageIntent(context.Context, *domain.PackageIntentState) error
+}
+
 // PackageIntentHandlerConfig configures the package intent handler.
 type PackageIntentHandlerConfig struct {
 	PackageService *service.PackageRegistryService
 	Projection     repository.PackageControlPlaneRepository
 	Store          repository.PackageAuthorizationStore
 	Writer         PackageCPStateWriter
+	StatePublisher PackageIntentStatePublisher
 	Status         *IntentStatusPublisher
 	Gate           *FleetOperatorGate
 	Logger         *zap.Logger
@@ -69,6 +78,7 @@ func NewPackageIntentHandler(cfg PackageIntentHandlerConfig) *PackageIntentHandl
 		projection:     cfg.Projection,
 		store:          cfg.Store,
 		writer:         cfg.Writer,
+		statePublisher: cfg.StatePublisher,
 		status:         cfg.Status,
 		gate:           cfg.Gate,
 		logger:         logger.Named("package-intent"),
@@ -77,7 +87,25 @@ func NewPackageIntentHandler(cfg PackageIntentHandlerConfig) *PackageIntentHandl
 
 // HandleIntent processes a single package intent. The processor has already
 // deduplicated, validated, and authorized the intent.
-func (h *PackageIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
+func (h *PackageIntentHandler) HandleIntent(ctx context.Context, intent *Intent) (err error) {
+	if intent == nil {
+		return fmt.Errorf("package intent is nil")
+	}
+	defer func() {
+		if h.statePublisher == nil {
+			return
+		}
+		status, reason := string(domain.PackageIntentStatusSucceeded), ""
+		if err != nil {
+			status, reason = string(domain.PackageIntentStatusFailed), err.Error()
+		}
+		requestEventID := ""
+		if intent.Event != nil {
+			requestEventID = intent.Event.ID.Hex()
+		}
+		state := &domain.PackageIntentState{RecordType: "signed-intent", ID: intent.IntentID, RequestEventID: requestEventID, Operation: intent.Op, RequesterPubkey: intent.Actor, Status: status, ErrorMessage: reason, UpdatedAt: time.Now().UTC()}
+		err = errors.Join(err, h.statePublisher.PublishSignedPackageIntent(ctx, state))
+	}()
 	if intent.ExpectedUpdatedAt != nil && intent.Op != "repository-apply" && intent.Op != "repository-delete" {
 		return fmt.Errorf("expected_updated_at is not supported for package %s", intent.Op)
 	}

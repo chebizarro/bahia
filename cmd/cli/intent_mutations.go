@@ -114,6 +114,34 @@ func jsonObject(v any) (map[string]interface{}, error) {
 	return out, nil
 }
 
+// publishMutationIntent validates the shared command envelope before it reaches
+// the outbox. Existing command-local --org flags override the root setting.
+func publishMutationIntent(cmd *cobra.Command, domain, op, coordinate, schema, retryKey string, content map[string]interface{}) (string, error) {
+	org := strings.TrimSpace(operatorIntentOrg)
+	if flag := cmd.Flag("org"); flag != nil {
+		org = strings.TrimSpace(flag.Value.String())
+	}
+	return publishMutationIntentForOrg(cmd, domain, op, coordinate, schema, retryKey, org, content)
+}
+
+func publishMutationIntentForOrg(cmd *cobra.Command, domain, op, coordinate, schema, retryKey, org string, content map[string]interface{}) (string, error) {
+	org, err := requireIntentOrg(org)
+	if err != nil {
+		return "", err
+	}
+	intentID, err := intentUUID(retryKey)
+	if err != nil {
+		return "", err
+	}
+	if operatorHTTPFallback {
+		fmt.Fprintln(cmd.ErrOrStderr(), "--http-fallback has no effect for this command; publishing a signed intent")
+	}
+	if err := publishCLIIntent(cmd, client.PublishIntentRequest{Domain: domain, Op: op, Coordinate: coordinate, Schema: schema, OrgID: org, IntentID: intentID, Content: content}); err != nil {
+		return "", err
+	}
+	return intentID, nil
+}
+
 func publishCLIIntent(cmd *cobra.Command, request client.PublishIntentRequest) error {
 	publisher, relays, err := buildCLIIntentPublisher(cmd)
 	if err != nil {
