@@ -1805,6 +1805,24 @@ func (h *EncryptedRouteHandlers) VerifyArtifactSignatures(ctx context.Context, r
 	if err := h.authorizeServicePermission(ctx, request, artifact.ServiceID, domain.PermWriteServices); err != nil {
 		return nil, err
 	}
+	if h.intentProcessor != nil && h.intentProcessor.Handler("artifact") != nil {
+		service, err := h.services.GetByID(ctx, artifact.ServiceID)
+		if err != nil || service == nil {
+			return nil, fmt.Errorf("artifact service is unavailable")
+		}
+		intent := &Intent{Event: request.Event, Domain: "artifact", Op: "signature-verify",
+			OrgID: service.OrgID, IntentID: request.Event.ID.Hex(), Coordinate: "artifact:" + artifactID.String(),
+			Content: map[string]interface{}{"artifact_id": artifactID.String()}, Actor: request.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result, nil
+	}
+	return h.verifyArtifactSignaturesDirect(ctx, artifact)
+}
+
+func (h *EncryptedRouteHandlers) verifyArtifactSignaturesDirect(ctx context.Context, artifact *domain.Artifact) (map[string]any, error) {
+	artifactID := artifact.ID
 	sigs, err := h.signVerifier.VerifySignatures(ctx, artifact)
 	if err != nil {
 		return nil, fmt.Errorf("verifying signatures: %w", err)

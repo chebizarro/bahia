@@ -1,5 +1,7 @@
 # Notifications
 
+`notification/channel-test` is a gift-wrapped signed request intent. It requires `settings:manage`, and its delivery result appears in bounded `30315` `data`; no channel record is changed by a test. The [D80 fixture](../../../web/tests/fixtures/d80-intent-content.json) shows the wire content.
+
 **Notifications** alert an organization about operational events and retain delivery results for investigation.
 
 ## Supported channels

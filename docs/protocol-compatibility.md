@@ -1,5 +1,7 @@
 # Bahia Protocol Compatibility Matrix
 
+D80 adds `security/scan-run`, `sbom/generate|import`, `artifact/signature-verify|register-build-result`, `relay/policy-set`, `notification/channel-test`, `environment/worker-policy-apply`, and `ml/pin` to existing kind-`30900` intent processing. The [fixtures](../web/tests/fixtures/d80-intent-content.json) are the cross-client content contract. Enabled ContextVM methods dual-dispatch through the same idempotency marker; disabled domains retain the legacy method. No new numeric kind is introduced. The protected relay-settings cp-state content is sufficient for the web's scoped read and replaces its ContextVM GET.
+
 ## Deployment-family intent compatibility
 
 `deployment`, `runtime`, `llm`, and `backup` are default-on intent domains using existing client-signed kind `30900` and bounded kind `30315` status; no numeric kind is allocated. Enabled ContextVM mutations share the same in-process processor, while disabled domains preserve existing ContextVM behavior and canonical state publication. Stable `content.intent_id` makes relay replay non-duplicating; revision-guarded operations may return conflict. Their `expected_updated_at` wire value is the canonical record's RFC3339 `updated_at` string; numeric epochs are rejected. The [fixtures](../web/tests/fixtures/deployment-intents.json) are the cross-client wire contract.

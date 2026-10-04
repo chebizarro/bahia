@@ -501,3 +501,22 @@ The `ml` intent handler now accepts model import and recipe definition as desire
 Evidence: `TestD79MLOperationsAcceptedRejectedReplayConflict`, `TestD79ModelImportPublishesCanonicalOnce`, `TestD79StatusPublishFailureReplaysWithoutSecondMutation`, `TestD79MLContextVMOperationsDualAndLegacyDispatch`, `TestD79BuildRequestIntentAndLegacyDispatch`, `TestD79AdoptionScanStatusBoundedAndReplay`, `TestD79AdoptionScanContextVMDualAndLegacyDispatch`, `TestD79AdoptionScanOversizedFindingAdvancesBoundedPage`, `TestD79ToolApprovalIntentAcceptedReplayConflictAndLegacy`, `TestD79ToolApprovalRejectIntent`, `TestD79IntentContentFixtures`, and `TestIntentDomainRegistryCoversAppHandlers`.
 
 Verification in the D79 worktree: `CGO_ENABLED=0 go build ./...`, `go vet ./...`, and `go test ./...` passed; Go `TestNoNew` architecture tests passed with zero added violations. `make lint-arch`, web unit tests (1067 passed, 1 skipped), web lint (0 errors/warnings), and web build passed after installing the lockfile dependencies. Playwright completed with 234 passed, 4 skipped, and one DNS pending-overlay load flake that passed on retry; that single test passed again on a standalone rerun. No relay-side executor/provisioner is introduced here: ML recipe-run and inference-deploy acceptance records the queued canonical work that the existing ML services author; processing those records remains governed by the separately configured ML execution subsystem.
+
+## D80 request operations and desired-state migration — bahia-irsry.80 — 2026-10-04
+
+Signed intents now handle `security/scan-run`, `sbom/generate`, `sbom/import`,
+`artifact/signature-verify`, `artifact/register-build-result`,
+`notification/channel-test`, `relay/policy-set`,
+`environment/worker-policy-apply`, and `ml/pin`. Existing service boundaries
+perform the mutation once and retain their canonical outcome publishers;
+`30315` contains a bounded acknowledgement or delivery result. The protected
+relay policy remains NIP-59 wrapped and is readable from the complete
+`relay-settings` cp-state family. ContextVM handlers dual-dispatch when the
+intent domain is enabled and retain their legacy path otherwise. D80 does not
+change the D79 ML deploy, tool approval, build request, or adoption operations.
+
+Verification: D80 accepted/rejected/replay/conflict and dual-dispatch tests,
+generated web intent-content fixtures, and
+`TestIntentDomainRegistryCoversAppHandlers` passed. Full Go build, vet, and
+test gate passed. Web unit tests, lint, build, and Playwright gate passed
+(234 passed, four skipped, one flaky retry). No remote push was requested.

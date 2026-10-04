@@ -27,14 +27,18 @@ type SecurityScannerControlPlane interface {
 }
 
 type securityContextVMHandler struct {
-	scanner SecurityScannerControlPlane
+	scanner   SecurityScannerControlPlane
+	processor *IntentProcessor
 }
 
-func RegisterSecurityContextVMHandlers(transport *EncryptedRequestTransport, scanner SecurityScannerControlPlane, gate *FleetOperatorGate) {
+func RegisterSecurityContextVMHandlers(transport *EncryptedRequestTransport, scanner SecurityScannerControlPlane, gate *FleetOperatorGate, processors ...*IntentProcessor) {
 	if transport == nil || scanner == nil {
 		return
 	}
 	h := securityContextVMHandler{scanner: scanner}
+	if len(processors) > 0 {
+		h.processor = processors[0]
+	}
 	transport.RegisterContextVMHandler(ContextVMMethodSecurityScan, gate.wrap(h.scan))
 	transport.RegisterContextVMHandler(ContextVMMethodSecurityRescan, gate.wrap(h.rescan))
 	transport.RegisterContextVMHandler(ContextVMMethodSecurityFindingsList, gate.wrap(h.findingsList))
@@ -53,6 +57,22 @@ func (h securityContextVMHandler) scan(ctx context.Context, req ContextVMRequest
 	}
 	if err := validateSecurityTargetInput(payload.Target); err != nil {
 		return nil, err
+	}
+	if h.processor != nil && h.processor.Handler("security") != nil {
+		if req.Event == nil {
+			return nil, fmt.Errorf("security scan requires an authenticated requester")
+		}
+		var content map[string]interface{}
+		if err := json.Unmarshal(req.RPC.Params, &content); err != nil {
+			return nil, err
+		}
+		id := intentIDFromContextVM(req, req.Event.ID.Hex())
+		intent := &Intent{Event: req.Event, Domain: "security", Op: "scan-run", Coordinate: "security-scan:" + id,
+			IntentID: id, Content: content, Actor: req.Event.PubKey.Hex()}
+		if err := h.processor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result, nil
 	}
 	return h.scanner.SubmitScan(ctx, service.SecurityScanRequest{Target: payload.Target, Trigger: domain.SecurityTriggerManual, RequestedBy: req.Event.PubKey.Hex(), RequestEventID: eventIDHex(req.OuterEvent, req.Event), RequestDTag: requestDTag(req), Force: payload.Force})
 }

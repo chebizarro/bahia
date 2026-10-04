@@ -52,6 +52,7 @@ type RelaySettingsHandlerConfig struct {
 }
 
 type RelaySettingsHandlers struct {
+	intentProcessor   *IntentProcessor
 	cfg               *config.Config
 	admin             RelayAdminCaller
 	projectionStore   repository.RelayPolicyProjectionRepository
@@ -180,8 +181,16 @@ func NewRelaySettingsHandlers(cfg RelaySettingsHandlerConfig) *RelaySettingsHand
 	}
 }
 
-func RegisterRelaySettingsContextVMHandlers(transport *EncryptedRequestTransport, cfg RelaySettingsHandlerConfig) {
+func (h *RelaySettingsHandlers) SetPublisher(publisher NostrEventPublisher, signer nostr.Signer) {
+	h.publisher = publisher
+	h.signer = signer
+}
+
+func RegisterRelaySettingsContextVMHandlers(transport *EncryptedRequestTransport, cfg RelaySettingsHandlerConfig, processors ...*IntentProcessor) {
 	h := NewRelaySettingsHandlers(cfg)
+	if len(processors) > 0 {
+		h.intentProcessor = processors[0]
+	}
 	h.Register(transport)
 }
 
@@ -285,6 +294,25 @@ func (h *RelaySettingsHandlers) projectionView(projection repository.RelayPolicy
 }
 
 func (h *RelaySettingsHandlers) ApplyPolicy(ctx context.Context, req ContextVMRequest) (any, error) {
+	if h.intentProcessor != nil && h.intentProcessor.Handler("relay") != nil {
+		if req.Event == nil {
+			return nil, fmt.Errorf("relay policy requires an authenticated requester")
+		}
+		var content map[string]interface{}
+		if err := json.Unmarshal(req.RPC.Params, &content); err != nil {
+			return nil, fmt.Errorf("decode relay policy settings: %w", err)
+		}
+		intent := &Intent{Event: req.Event, Domain: "relay", Op: "policy-set", Coordinate: RelaySettingsDTag,
+			IntentID: intentIDFromContextVM(req, req.Event.ID.Hex()), Content: content, Actor: req.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result, nil
+	}
+	return h.applyPolicyDirect(ctx, req)
+}
+
+func (h *RelaySettingsHandlers) applyPolicyDirect(ctx context.Context, req ContextVMRequest) (any, error) {
 	if h.projectionStore == nil {
 		return nil, fmt.Errorf("durable relay policy projection is unavailable")
 	}
@@ -693,7 +721,7 @@ func (h *RelaySettingsHandlers) authorizePolicyReplacement(ctx context.Context, 
 			return fmt.Errorf("replacement confirmation claimed unavailable truth, but relay policy is confirmed never-configured")
 		}
 		if expected != nil && expected.Availability != "" && expected.Availability != "never-configured" {
-			return fmt.Errorf("relay policy projection changed: expected %s, found never-configured", expected.Availability)
+			return &relayPolicyConflictError{reason: fmt.Sprintf("relay policy projection changed: expected %s, found never-configured", expected.Availability)}
 		}
 		return nil
 	}
@@ -704,10 +732,10 @@ func (h *RelaySettingsHandlers) authorizePolicyReplacement(ctx context.Context, 
 		return fmt.Errorf("expected_projection.event_id is required when canonical relay policy exists")
 	}
 	if !strings.EqualFold(strings.TrimSpace(expected.EventID), projection.EventID) {
-		return fmt.Errorf("relay policy projection changed: expected event %s", strings.TrimSpace(expected.EventID))
+		return &relayPolicyConflictError{reason: fmt.Sprintf("relay policy projection changed: expected event %s", strings.TrimSpace(expected.EventID))}
 	}
 	if hash := strings.TrimSpace(expected.Hash); hash != "" && !strings.EqualFold(hash, projection.PayloadHash) {
-		return fmt.Errorf("relay policy projection changed: expected hash %s", hash)
+		return &relayPolicyConflictError{reason: fmt.Sprintf("relay policy projection changed: expected hash %s", hash)}
 	}
 	return nil
 }

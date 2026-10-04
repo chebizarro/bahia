@@ -230,8 +230,6 @@
 1	internal/controlplane.WithEventPublisher
 1	internal/controlplane.WithKindCatalog
 1	internal/controlplane.WithMLInferenceExecutor
-1	internal/controlplane.WorkerCommandPublisher.PublishWorkerPolicyApplyRequest
-1	internal/controlplane.WorkerCommandPublisher.PublishWorkloadPinRequest
 1	internal/dnsagent/engine.ParseZoneFile
 1	internal/docs.Service.ReadWithLinks
 1	internal/docs.Service.ResolveMarkdownLink

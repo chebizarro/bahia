@@ -1,5 +1,7 @@
 # Artifacts
 
+`sbom/generate|import` and `artifact/signature-verify|register-build-result` are signed request intents with the [D80 content shapes](../../../web/tests/fixtures/d80-intent-content.json). Their `30315` data is a bounded acknowledgement or count, not the SBOM, signature evidence, or artifact record. Read those from the existing canonical families.
+
 An **Artifact** is an immutable container image registered with Bahia — the unit of deployment.
 
 ## Overview

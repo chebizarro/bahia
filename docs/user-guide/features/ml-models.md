@@ -1,5 +1,7 @@
 # ML Models
 
+`ml/pin` is fleet-operator desired state on `endpoint:<endpoint_id>`. It sets `placement_policy.pinned_worker` on the canonical inference endpoint, guarded by the endpoint's `expected_updated_at` revision. See the [D80 fixture](../../../web/tests/fixtures/d80-intent-content.json).
+
 **ML Models** in Bahia provide a generic AI/ML fabric for model registry, recipes, and inference deployment.
 
 ## Overview

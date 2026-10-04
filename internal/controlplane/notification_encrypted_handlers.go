@@ -25,6 +25,7 @@ type notificationEncryptedHandler struct {
 	repo       tenantNotificationRepository
 	dispatcher *notifications.Dispatcher
 	authorizer encryptedTenantAuthorizer
+	processor  *IntentProcessor
 }
 
 type notificationChannelPayload struct {
@@ -55,7 +56,7 @@ type tenantNotificationRepository interface {
 // onto the ContextVM encrypted control-plane runtime. Notification configs and
 // delivery logs are never projected to the public sidecar; result payloads are
 // returned through ContextVM responses.
-func RegisterNotificationEncryptedHandlers(transport *EncryptedRequestTransport, repo tenantNotificationRepository, dispatcher *notifications.Dispatcher, rbac *auth.RBAC) {
+func RegisterNotificationEncryptedHandlers(transport *EncryptedRequestTransport, repo tenantNotificationRepository, dispatcher *notifications.Dispatcher, rbac *auth.RBAC, processors ...*IntentProcessor) {
 	if transport == nil || repo == nil {
 		return
 	}
@@ -63,6 +64,9 @@ func RegisterNotificationEncryptedHandlers(transport *EncryptedRequestTransport,
 		repo:       repo,
 		dispatcher: dispatcher,
 		authorizer: encryptedTenantAuthorizer{rbac: rbac},
+	}
+	if len(processors) > 0 {
+		h.processor = processors[0]
 	}
 	h.register(transport, EncryptedOperationNotificationChannelsList, h.listChannels, "notifications/channels-list")
 	h.register(transport, EncryptedOperationNotificationChannelsGet, h.getChannel, "notifications/channels-get")
@@ -164,6 +168,18 @@ func (h *notificationEncryptedHandler) testChannel(ctx context.Context, request 
 	}
 	if h.dispatcher == nil {
 		return nil, fmt.Errorf("notification dispatcher is not configured")
+	}
+	if h.processor != nil && h.processor.Handler("notification") != nil {
+		if request.Event == nil {
+			return nil, fmt.Errorf("notification test requires an authenticated requester")
+		}
+		intent := &Intent{Event: request.Event, Domain: "notification", Op: "channel-test", OrgID: ch.OrgID,
+			Coordinate: id.String(), IntentID: request.Event.ID.Hex(),
+			Content: map[string]interface{}{"id": id.String()}, Actor: request.Event.PubKey.Hex()}
+		if err := h.processor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result, nil
 	}
 	if err := h.dispatcher.DispatchToChannel(ctx, ch, "test", map[string]any{
 		"message":    "This is a test notification from Bahia",

@@ -59,6 +59,12 @@ type FleetScopedHandler interface {
 	IsFleetScoped() bool
 }
 
+// FleetScopedOperationHandler allows a single operation on an otherwise
+// organization-scoped domain to retain its fleet-operator permission gate.
+type FleetScopedOperationHandler interface {
+	IsFleetScopedOperation(op string) bool
+}
+
 // SelfAuthorizingHandler is an optional interface that DomainHandler
 // implementations may satisfy when the default per-org RBAC or fleet-scoped
 // authorization is insufficient. The org domain needs this because org-create
@@ -293,7 +299,9 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	} else {
 		perm := handler.PermissionFor(intent.Op)
 		authorized := false
-		if fs, ok := handler.(FleetScopedHandler); ok && fs.IsFleetScoped() {
+		if fs, ok := handler.(FleetScopedOperationHandler); ok && fs.IsFleetScopedOperation(intent.Op) {
+			authorized = p.isFleetOperator(intent.Actor)
+		} else if fs, ok := handler.(FleetScopedHandler); ok && fs.IsFleetScoped() {
 			// Fleet-scoped domain: check fleet operator identity instead of
 			// per-org RBAC. Fleet operators are NOT org members (§2.2).
 			authorized = p.isFleetOperator(intent.Actor)
@@ -583,7 +591,7 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 		return nil, fmt.Errorf("missing intent_id tag")
 	}
 	if intent.OrgID == uuid.Nil && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" &&
-		intent.Domain != "adoption" && intent.Domain != "tool" {
+		intent.Domain != "adoption" && intent.Domain != "tool" && intent.Domain != "security" && intent.Domain != "sbom" && intent.Domain != "relay" {
 		return nil, fmt.Errorf("missing or invalid org tag")
 	}
 
@@ -656,6 +664,7 @@ var RegisteredIntentDomains = []string{
 	"dns", "worker", "deployment", "runtime", "org", "secret", "notification",
 	"artifact", "adoption", // D76 (bahia-irsry.76)
 	"build", "tool", // D79 (bahia-irsry.79)
+	"security", "sbom", "relay", // D80 (bahia-irsry.80)
 }
 
 // BuildEnabledDomains enables every registered domain except explicit opt-outs.
