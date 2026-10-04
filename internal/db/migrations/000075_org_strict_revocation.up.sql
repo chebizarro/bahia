@@ -1,0 +1,1 @@
+ALTER TABLE organizations ADD COLUMN strict_revocation BOOLEAN NOT NULL DEFAULT FALSE;

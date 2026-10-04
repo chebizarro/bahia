@@ -67,11 +67,11 @@ func normalizeTenantPubkey(pubkey string) string {
 	return strings.ToLower(strings.TrimSpace(pubkey))
 }
 
-const organizationColumns = `id, name, display_name, owner_pubkey, created_at, updated_at`
+const organizationColumns = `id, name, display_name, owner_pubkey, strict_revocation, created_at, updated_at`
 
 func scanOrganization(row scanner) (*domain.Organization, error) {
 	var org domain.Organization
-	if err := row.Scan(&org.ID, &org.Name, &org.DisplayName, &org.OwnerPubkey, &org.CreatedAt, &org.UpdatedAt); err != nil {
+	if err := row.Scan(&org.ID, &org.Name, &org.DisplayName, &org.OwnerPubkey, &org.StrictRevocation, &org.CreatedAt, &org.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -91,9 +91,9 @@ func (r *PgOrganizationRepository) Create(ctx context.Context, org *domain.Organ
 	org.OwnerPubkey = normalizeTenantPubkey(org.OwnerPubkey)
 
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO organizations (id, name, display_name, owner_pubkey, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, org.ID, org.Name, org.DisplayName, org.OwnerPubkey, org.CreatedAt, org.UpdatedAt)
+		INSERT INTO organizations (id, name, display_name, owner_pubkey, strict_revocation, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, org.ID, org.Name, org.DisplayName, org.OwnerPubkey, org.StrictRevocation, org.CreatedAt, org.UpdatedAt)
 	return err
 }
 
@@ -140,9 +140,9 @@ func (r *PgOrganizationRepository) Update(ctx context.Context, org *domain.Organ
 	org.OwnerPubkey = normalizeTenantPubkey(org.OwnerPubkey)
 	org.UpdatedAt = time.Now().UTC()
 	tag, err := r.pool.Exec(ctx, `
-		UPDATE organizations SET display_name = $2, owner_pubkey = $3, updated_at = $4
+		UPDATE organizations SET display_name = $2, owner_pubkey = $3, updated_at = $4, strict_revocation = $5
 		WHERE id = $1
-	`, org.ID, org.DisplayName, org.OwnerPubkey, org.UpdatedAt)
+	`, org.ID, org.DisplayName, org.OwnerPubkey, org.UpdatedAt, org.StrictRevocation)
 	if err != nil {
 		return err
 	}

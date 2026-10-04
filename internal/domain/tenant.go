@@ -50,12 +50,13 @@ func HasAtLeastRole(have, need Role) bool {
 
 // Organization represents a multi-tenant organization.
 type Organization struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`         // Unique slug (lowercase, no spaces)
-	DisplayName string    `json:"display_name"` // Human-readable name
-	OwnerPubkey string    `json:"owner_pubkey"` // Canonical lowercase hex Nostr pubkey of the owner
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID               uuid.UUID `json:"id"`
+	Name             string    `json:"name"`         // Unique slug (lowercase, no spaces)
+	DisplayName      string    `json:"display_name"` // Human-readable name
+	OwnerPubkey      string    `json:"owner_pubkey"` // Canonical lowercase hex Nostr pubkey of the owner
+	StrictRevocation bool      `json:"strict_revocation"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // OrgMember represents a user's membership in an organization.
