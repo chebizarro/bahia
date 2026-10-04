@@ -27,6 +27,10 @@ vi.mock('$lib/nostr/retained-domain-subscription.js', () => ({
   subscribeToDomainRefresh: vi.fn(async () => vi.fn())
 }));
 vi.mock('../../src/lib/stores/system.svelte.js', () => systemMock);
+const topicMock = vi.hoisted(() => ({ rows: [] }));
+vi.mock('../../src/lib/stores/collections/confidential-records.js', () => ({
+  readConfidentialTopic: () => ({ rows: topicMock.rows })
+}));
 
 describe('notifications encrypted store', () => {
   let store;
@@ -34,6 +38,7 @@ describe('notifications encrypted store', () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    topicMock.rows = [];
     encryptedRequestsMock.requestEncryptedResult.mockReset();
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(true);
     systemMock.currentSystemInfo.mockReturnValue({
@@ -43,17 +48,10 @@ describe('notifications encrypted store', () => {
     store.resetNotificationStore();
   });
 
-  it('loads channels through ContextVM request operations', async () => {
-    encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({
-      result: { status: 'ok', payload: { channels: [{ id: 'ch-1', name: 'Ops', config: { url: 'https://hook' } }] } }
-    });
-
-    await expect(store.listNotificationChannels()).resolves.toEqual([{ id: 'ch-1', name: 'Ops', config: { url: 'https://hook' } }]);
-
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith({
-      operation: 'notifications.channels.list',
-      payload: {}
-    });
+  it('loads channels from the canonical confidential event-store view', async () => {
+    topicMock.rows = [{ id: 'ch-1', name: 'Ops', config: { url: 'https://hook' } }];
+    await expect(store.listNotificationChannels()).resolves.toEqual(topicMock.rows);
+    expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
     expect(store.notificationState.channels).toHaveLength(1);
     expect(store.notificationState.channelsError).toBeNull();
   });
@@ -108,20 +106,17 @@ describe('notifications encrypted store', () => {
     expect(store.notificationState.logsLoading).toBe(false);
   });
 
-  it('fails before publishing when ContextVM requests are not advertised', async () => {
+  it('requires ContextVM only for an interactive test-channel request', async () => {
     encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(false);
-
-    await expect(store.listNotificationChannels()).rejects.toThrow('ContextVM requests are not available');
-
+    await expect(store.listNotificationChannels()).resolves.toEqual([]);
+    await expect(store.testNotificationChannel('ch-1')).rejects.toThrow('ContextVM requests are not available');
     expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
-    expect(store.notificationState.channelsError).toContain('ContextVM requests are not available');
   });
 
-  it('surfaces encrypted terminal errors from result events', async () => {
+  it('surfaces encrypted terminal errors from interactive test results', async () => {
     encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({
       result: { status: 'error', error: { code: 'handler_failed', message: 'notification channel not found' } }
     });
-
-    await expect(store.listNotificationChannels()).rejects.toThrow('notification channel not found');
+    await expect(store.testNotificationChannel('ch-1')).rejects.toThrow('notification channel not found');
   });
 });

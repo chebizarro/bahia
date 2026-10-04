@@ -112,6 +112,33 @@ describe('pool-welshman', () => {
   // ── Ref-counted REQs ──────────────────────────────────────────────
 
   describe('ref-counted subscriptions', () => {
+    it('coalesces two identical subscribe calls into one REQ until both consumers release', async () => {
+      const received = [vi.fn(), vi.fn()];
+      const first = ctx.pool.subscribe({ relays: [RELAY_URL], filters: [{ kinds: [1] }], onEvent: received[0] });
+      const second = ctx.pool.subscribe({ relays: [RELAY_URL], filters: [{ kinds: [1] }], onEvent: received[1] });
+      expect(first.id).toBe(second.id);
+      await vi.waitFor(() => expect(ctx.sentMessages.filter((message) => message[0] === 'REQ')).toHaveLength(1));
+      const subscriptionId = ctx.sentMessages.find((message) => message[0] === 'REQ')[1];
+      ctx.adapter.receive(['EVENT', subscriptionId, signedEvent(alice.sk, { kind: 1, content: 'shared' })]);
+      await vi.waitFor(() => expect(received[1]).toHaveBeenCalledOnce());
+      expect(received[0]).toHaveBeenCalledOnce();
+      first.unsubscribe();
+      expect(ctx.sentMessages.filter((message) => message[0] === 'CLOSE')).toHaveLength(0);
+      second.unsubscribe();
+      await vi.waitFor(() => expect(ctx.sentMessages.filter((message) => message[0] === 'CLOSE')).toHaveLength(1));
+    });
+
+    it('does not release another consumer when one handle unsubscribes twice', async () => {
+      const first = ctx.pool.subscribe({ relays: [RELAY_URL], filters: [{ kinds: [1] }] });
+      const second = ctx.pool.subscribe({ relays: [RELAY_URL], filters: [{ kinds: [1] }] });
+      await vi.waitFor(() => expect(ctx.sentMessages.filter((message) => message[0] === 'REQ')).toHaveLength(1));
+      first.unsubscribe();
+      first.unsubscribe();
+      expect(ctx.sentMessages.filter((message) => message[0] === 'CLOSE')).toHaveLength(0);
+      second.unsubscribe();
+      await vi.waitFor(() => expect(ctx.sentMessages.filter((message) => message[0] === 'CLOSE')).toHaveLength(1));
+    });
+
     it('creates a subscription and sends a REQ; unsubscribe sends CLOSE', async () => {
       const handle = ctx.pool.subscribe({
         relays: [RELAY_URL],

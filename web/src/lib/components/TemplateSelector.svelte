@@ -1,5 +1,5 @@
 <script>
-  import { templates, templatesByTier, loading, loadTemplates } from '$lib/stores/souls.js';
+  import { templates, templatesByTier, loading, subscribeToSoulFactoryUpdates } from '$lib/stores/souls.js';
   import {
     HeavyIcon,
     LightweightIcon,
@@ -35,7 +35,7 @@
 
   $effect(() => {
     if (templates.length === 0) {
-      loadTemplates();
+      subscribeToSoulFactoryUpdates();
     }
   });
 

@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { getEventStore } from '../nostr/boot.js';
 import { authState } from './auth.js';
 import { controlplaneConnection, bootstrapControlplane } from './controlplane.svelte.js';
 import { requestEncryptedResult } from '../nostr/encrypted-controlplane.js';
@@ -32,9 +33,6 @@ import { ASSISTANT_SESSION_TOPIC, ASSISTANT_STATUS_TOPIC } from '../nostr/kinds.
 const { STALE, INVALID, REJECTED } = ASSISTANT_REQUEST_ERROR_KINDS;
 
 const SIDEBAR_STORAGE_KEY = 'bahia_assistant_sidebar';
-const TRANSCRIPT_STORAGE_SCHEMA = 'bahia_assistant_transcript_v2';
-const LEGACY_TRANSCRIPT_STORAGE_SCHEMA = 'bahia_assistant_transcript_v1';
-const TRANSCRIPT_STORAGE_PREFIX = 'bahia_assistant_transcript';
 const RECENT_TRANSCRIPT_SECONDS = 14 * 24 * 60 * 60;
 const TRANSCRIPT_LIMIT = 300;
 const SESSION_LIMIT = 100;
@@ -95,7 +93,6 @@ let bootstrapPromise = null;
 let liveUnsubscribe = null;
 let connectedUnsubscribe = null;
 let lastConnected = false;
-let restoredTranscriptCacheKey = '';
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -109,111 +106,6 @@ function replaceArray(target, values) {
 function syncPendingRequests() {
   for (const key of Object.keys(pendingAssistantRequests)) delete pendingAssistantRequests[key];
   for (const [key, value] of pendingMap.entries()) pendingAssistantRequests[key] = value;
-}
-
-function assistantTranscriptStorageKey(operatorPubkey = assistantConnection.operatorPubkey, servicePubkey = assistantConnection.servicePubkey, schema = TRANSCRIPT_STORAGE_SCHEMA) {
-  const operator = String(operatorPubkey || '').trim();
-  const service = String(servicePubkey || '').trim();
-  if (!browser || !operator) return '';
-  return `${TRANSCRIPT_STORAGE_PREFIX}:${schema}:${operator}:${service || 'unknown-service'}`;
-}
-
-function cacheableTranscriptItems() {
-  return sortTranscript(Array.from(eventMap.values()).filter((item) => !item?.pending)).slice(-TRANSCRIPT_LIMIT)
-    .map(({ event: _event, content: _content, ...displayItem }) => displayItem);
-}
-
-function serializableSession(session) {
-  const { sessionId, state, operatorPubkey, participants, assistantId, assistantPubkey,
-    currentTurnId, currentRequestId, transcriptSummary, lastResultId, updatedAt,
-    executionVersion, workflow, currentRunId, executionRevision, phase, scope,
-    proposal, pendingApprovals, submittedEffects, uncertainEffects, checkpointEventId,
-    closed, closedAt, sessionEvent } = session;
-  return { sessionId, state, operatorPubkey, participants, assistantId, assistantPubkey,
-    currentTurnId, currentRequestId, transcriptSummary, lastResultId, updatedAt,
-    executionVersion, workflow, currentRunId, executionRevision, phase, scope,
-    proposal, pendingApprovals, submittedEffects, uncertainEffects, checkpointEventId,
-    closed: Boolean(closed), closedAt: closedAt || '', sessionEvent: sessionEvent ? { id: sessionEvent.id, createdAt: sessionEvent.createdAt,
-      event: { id: sessionEvent.id, created_at: sessionEvent.createdAt } } : null };
-}
-
-// Session projections are deliberately not remembered here: a cached projection
-// is display-only, and the relay re-delivering it is what restores authority.
-function rememberSeenTranscriptIds(item) {
-  if (item?.id) seenEventIds.add(item.id);
-  if (item?.event?.id) seenEventIds.add(item.event.id);
-}
-
-function persistAssistantTranscriptCache() {
-  const key = assistantTranscriptStorageKey();
-  if (!key) return false;
-  try {
-    const payload = {
-      schema: TRANSCRIPT_STORAGE_SCHEMA,
-      cachedAt: Date.now(),
-      operatorPubkey: assistantConnection.operatorPubkey,
-      servicePubkey: assistantConnection.servicePubkey,
-      activeSessionId: assistantUi.activeSessionId || '',
-      sessions: Array.from(sessionMap.values()).map(serializableSession),
-      transcript: cacheableTranscriptItems()
-    };
-    localStorage.setItem(key, JSON.stringify(payload));
-    return true;
-  } catch (err) {
-    console.warn('Unable to persist assistant transcript cache:', err);
-    return false;
-  }
-}
-
-function restoreAssistantTranscriptCache(operatorPubkey, servicePubkey) {
-  const key = assistantTranscriptStorageKey(operatorPubkey, servicePubkey);
-  if (!key || restoredTranscriptCacheKey === key) return false;
-  restoredTranscriptCacheKey = key;
-
-  try {
-    const current = JSON.parse(localStorage.getItem(key) || 'null');
-    const legacyKey = assistantTranscriptStorageKey(operatorPubkey, servicePubkey, LEGACY_TRANSCRIPT_STORAGE_SCHEMA);
-    const cached = current || JSON.parse(localStorage.getItem(legacyKey) || 'null');
-    if (!cached || ![TRANSCRIPT_STORAGE_SCHEMA, LEGACY_TRANSCRIPT_STORAGE_SCHEMA].includes(cached.schema)) return false;
-    const fromLegacy = cached.schema === LEGACY_TRANSCRIPT_STORAGE_SCHEMA;
-    if (cached.operatorPubkey && cached.operatorPubkey !== operatorPubkey) return false;
-    if (cached.servicePubkey && servicePubkey && cached.servicePubkey !== servicePubkey) return false;
-
-    let restored = false;
-    for (const cachedSession of Array.isArray(cached.sessions) ? cached.sessions : []) {
-      const sessionId = String(cachedSession?.sessionId || '').trim();
-      if (!sessionId) continue;
-      const session = ensureSession(sessionId);
-      Object.assign(session, { ...session, ...serializableSession(cachedSession), authoritative: false, transcript: [], pendingActions: [] });
-      if (fromLegacy) {
-        Object.assign(session, { executionVersion: 1, workflow: '', currentRunId: '', proposal: null, pendingApprovals: [], scope: null });
-      }
-      restored = true;
-    }
-
-    for (const item of Array.isArray(cached.transcript) ? cached.transcript : []) {
-      const sessionId = String(item?.sessionId || '').trim();
-      const itemId = String(item?.id || '').trim();
-      if (!sessionId || !itemId || item?.pending) continue;
-      const session = ensureSession(sessionId);
-      const { event: _rawEvent, content: _rawContent, ...displayItem } = item;
-      if (!claimTranscriptCoordinate(displayItem)) continue;
-      eventMap.set(itemId, withoutPrivateCommandScope(displayItem));
-      session.updatedAt = Math.max(session.updatedAt || 0, item.createdAt || item.event?.created_at || 0);
-      rememberSeenTranscriptIds(item);
-      restored = true;
-    }
-
-    if (typeof cached.activeSessionId === 'string') assistantUi.activeSessionId = cached.activeSessionId;
-    if (restored) refreshSessions();
-    // Migration: once the history is re-written under the v2 key, drop the v1
-    // entry so it can never be re-imported with different semantics.
-    if (fromLegacy && persistAssistantTranscriptCache()) localStorage.removeItem(legacyKey);
-    return restored;
-  } catch (err) {
-    console.warn('Unable to restore assistant transcript cache:', err);
-    return false;
-  }
 }
 
 function loadAssistantUiState() {
@@ -349,7 +241,6 @@ function refreshSessions() {
 
   if (!assistantUi.activeSessionId && values[0]?.sessionId) assistantUi.activeSessionId = values[0].sessionId;
   persistAssistantUiState();
-  persistAssistantTranscriptCache();
 }
 
 
@@ -600,6 +491,25 @@ function subscriptionFilters(operatorPubkey, servicePubkey) {
   ];
 }
 
+function restoreAssistantTranscriptFromStore(operatorPubkey, servicePubkey) {
+  const store = getEventStore();
+  if (!store) return;
+  const events = new Map();
+  for (const filter of subscriptionFilters(operatorPubkey, servicePubkey)) {
+    for (const event of store.query(filter)) events.set(event.id, event);
+  }
+  for (const event of [...events.values()].sort((left, right) => left.created_at - right.created_at || left.id.localeCompare(right.id))) {
+    applyAssistantEvent(event, { allowStreaming: false });
+  }
+}
+
+function clearLegacyAssistantCaches(operatorPubkey, servicePubkey) {
+  if (!browser) return;
+  for (const version of ['v1', 'v2']) {
+    globalThis.localStorage?.removeItem(`bahia_assistant_transcript:bahia_assistant_transcript_${version}:${operatorPubkey}:${servicePubkey}`);
+  }
+}
+
 function subscribeToConnectionState() {
   if (connectedUnsubscribe) return;
   connectedUnsubscribe = nostr.connected.subscribe((connected) => {
@@ -637,7 +547,6 @@ export function resetAssistantStore() {
   connectedUnsubscribe = null;
   bootstrapPromise = null;
   lastConnected = false;
-  restoredTranscriptCacheKey = '';
   sessionMap.clear();
   eventMap.clear();
   transcriptCoordinates.clear();
@@ -687,7 +596,8 @@ export async function bootstrapAssistant({ force = false } = {}) {
       assistantConnection.operatorPubkey = operatorPubkey;
       assistantConnection.servicePubkey = servicePubkey;
       subscribeToConnectionState();
-      restoreAssistantTranscriptCache(operatorPubkey, servicePubkey);
+      clearLegacyAssistantCaches(operatorPubkey, servicePubkey);
+      restoreAssistantTranscriptFromStore(operatorPubkey, servicePubkey);
 
       startSubscription(operatorPubkey, servicePubkey);
       return { ok: true };
@@ -737,7 +647,6 @@ export function closeAssistantPanel() {
 export function setActiveAssistantSession(sessionId) {
   assistantUi.activeSessionId = sessionId || '';
   persistAssistantUiState();
-  persistAssistantTranscriptCache();
 }
 
 export function createAssistantSessionId() {

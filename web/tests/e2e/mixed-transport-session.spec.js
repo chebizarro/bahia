@@ -10,7 +10,8 @@ import {
   ENCRYPTED_RELAY,
   KIND_CONTEXTVM,
   KIND_GIFT_WRAP,
-  installEncryptedNotificationHarness
+  installEncryptedNotificationHarness,
+  notificationRelayFixtures
 } from './harnesses/notifications-encrypted.js';
 
 const PUBLIC_RELAY = 'ws://relay.test.local';
@@ -55,7 +56,7 @@ const contextVMRelaySet = {
 
 test.describe('Mixed public plus encrypted browser session transport', () => {
   test('keeps public signer-first and encrypted notification journeys on the shared Bahia relay set', async ({ page }) => {
-    await installE2EMocks(page, { systemInfo, nostrEvents: [contextVMRelaySet] });
+    await installE2EMocks(page, { systemInfo, nostrEvents: [contextVMRelaySet, ...notificationRelayFixtures(initialChannels)] });
     await installPublicServiceDeploymentHarness(page, {
       publicRelay: PUBLIC_RELAY,
       initialState: createPublicState(),
@@ -122,11 +123,8 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
       ]));
     }
 
-    expect(trace.encryptedOperations).toEqual(expect.arrayContaining([
-      'notifications.channels.list',
-      'notifications.channels.test'
-    ]));
-    expect(trace.encryptedRequests.length).toBeGreaterThanOrEqual(2);
+    expect(trace.encryptedOperations).toEqual(['notifications.channels.test']);
+    expect(trace.encryptedRequests).toHaveLength(1);
     expect(trace.encryptedRequests.every((request) => request.kind === KIND_GIFT_WRAP)).toBe(true);
     expect(new Set(trace.encryptedWirePublishes.map((request) => normalizeRelay(request.relay))))
       .toEqual(new Set([ENCRYPTED_RELAY, PUBLIC_RELAY]));

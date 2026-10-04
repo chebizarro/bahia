@@ -115,7 +115,7 @@ test.describe('Services CRUD Smoke Test', () => {
     await dialog.getByRole('button', { name: 'Create' }).click();
 
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator('#service-name')).toBeFocused();
+    await expect(dialog.locator('#service-name:invalid')).toBeVisible();
     await expect.poll(() => serviceTrace(page)).toMatchObject({ requests: [] });
   });
 
@@ -132,7 +132,7 @@ test.describe('Services CRUD Smoke Test', () => {
     await dialog.getByRole('button', { name: 'Create' }).click();
 
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator('#artifact-repo-path')).toBeFocused();
+    await expect(dialog.locator('#artifact-repo-path:invalid')).toBeVisible();
     await expect.poll(() => serviceTrace(page)).toMatchObject({ requests: [] });
   });
 

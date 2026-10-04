@@ -1,90 +1,36 @@
 /**
- * Nostr-based documentation fetching with browser caching and link resolution.
+ * Nostr-based documentation fetching from the BahiaEventStore with link resolution.
  *
  * Reads documentation topics from the relay as NIP-23 long-form content
- * (kind 30023) events tagged with "bahia-docs". Caches events in localStorage
- * and resolves cross-document markdown links client-side.
+ * (kind 30023) events tagged with "bahia-docs". Persisted event-store
+ * history renders offline; EOSE marks relay catch-up.
  */
-import { browser } from '$app/environment';
+import { boot, getEventStore } from '$lib/nostr/boot.js';
 import { KINDS } from '$lib/nostr/kinds.js';
 import { nostr } from '$lib/nostr/subscriptions.js';
 import { dedupeReplaceableEvents } from '$lib/nostr/replaceable.js';
 import { getDTag, getTagValue, getTagValues } from '$lib/nostr/tags.js';
-import { createReadModelMetadataTracker } from '$lib/nostr/pool-utils.js';
-
-// --- Cache configuration ---
-
-const DOCS_CACHE_KEY = 'bahia_docs_cache';
-const DOCS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+import { createReadModelMetadataTracker } from '$lib/nostr/read-model-metadata.js';
 
 /**
- * Read cached docs events from localStorage.
- * @returns {{ events: Array, cachedAt: number } | null}
- */
-function readCache() {
-  if (!browser || typeof localStorage?.getItem !== 'function') return null;
-  try {
-    const raw = localStorage.getItem(DOCS_CACHE_KEY);
-    if (!raw) return null;
-    const snapshot = JSON.parse(raw);
-    const age = Date.now() - Number(snapshot?.cachedAt || 0);
-    if (age > DOCS_CACHE_TTL_MS) return null;
-    if (!Array.isArray(snapshot?.events) || snapshot.events.length === 0) return null;
-    return snapshot;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Write docs events to localStorage cache.
- * @param {Array} events - Raw nostr event objects
- */
-function writeCache(events) {
-  if (!browser || typeof localStorage?.setItem !== 'function') return;
-  if (!Array.isArray(events) || events.length === 0) return;
-  try {
-    localStorage.setItem(DOCS_CACHE_KEY, JSON.stringify({
-      cachedAt: Date.now(),
-      events: events.map((e) => ({
-        id: e.id,
-        kind: e.kind,
-        pubkey: e.pubkey,
-        created_at: e.created_at,
-        content: e.content,
-        tags: e.tags,
-        sig: e.sig
-      }))
-    }));
-  } catch {
-    // Storage full or unavailable — ignore.
-  }
-}
-
-/**
- * Fetch all docs events, using cache when fresh.
+ * Fetch docs from the event store, then subscribe for historical catch-up.
  * @param {Object} [options]
  * @param {string} [options.servicePubkey]
- * @param {number} [options.timeoutMs=10000]
- * @param {boolean} [options.bypassCache=false]
+ * @param {boolean} [options.bypassCache=false] Wait for relay EOSE even if the event store has a snapshot.
  * @returns {Promise<{events: Array, complete: boolean, degraded: Object|null, relaySummary: Array}>} Deduplicated events with EOSE metadata.
  */
-async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypassCache = false } = {}) {
-  if (!bypassCache) {
-    const cached = readCache();
-    if (cached) return { events: cached.events, complete: true, degraded: null, relaySummary: [] };
-  }
-
-  const filter = {
-    kinds: [KINDS.LONG_FORM_CONTENT],
-    '#t': ['bahia-docs']
-  };
-  if (servicePubkey) {
-    filter.authors = [servicePubkey];
+async function fetchDocsEvents({ servicePubkey = null, bypassCache = false } = {}) {
+  await boot();
+  const filter = { kinds: [KINDS.LONG_FORM_CONTENT], '#t': ['bahia-docs'] };
+  if (servicePubkey) filter.authors = [servicePubkey];
+  const stored = getEventStore()?.query(filter) || [];
+  if (stored.length && !bypassCache) {
+    return { events: dedupeReplaceableEvents(stored), complete: false,
+      degraded: { incomplete: true, reason: 'local-event-store', partialEventCount: stored.length }, relaySummary: [] };
   }
 
   const result = await new Promise((resolve) => {
-    const collected = [];
+    const collected = [...stored];
     const expectedRelays = typeof nostr.getConnectedRelays === 'function'
       ? nostr.getConnectedRelays()
       : (typeof nostr.getRelays === 'function' ? nostr.getRelays() : []);
@@ -92,28 +38,18 @@ async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypass
       relays: expectedRelays,
       partialEventCount: () => collected.length
     });
-    let timer = null;
     let settled = false;
+    let stop = null;
 
     const settle = (metadataOptions = {}) => {
       if (settled) return;
       settled = true;
-      if (timer) clearTimeout(timer);
+      stop?.();
       const deduped = dedupeReplaceableEvents(collected);
       resolve({ events: deduped, ...tracker.metadata(metadataOptions) });
     };
 
-    if (timeoutMs > 0) {
-      timer = setTimeout(() => {
-        settle({
-          forceIncomplete: true,
-          reason: 'timeout-before-eose',
-          message: 'Timed out before every expected relay reached EOSE; returning degraded docs history.'
-        });
-      }, timeoutMs);
-    }
-
-    nostr.subscribeWithRecovery([filter], {
+    stop = nostr.subscribeWithRecovery([filter], {
       onEvent: (event, relay) => {
         tracker.markEvent(event, relay);
         collected.push(event);
@@ -130,9 +66,10 @@ async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypass
         tracker.markAuth(challenge, relay);
       }
     });
+    // Some injected clients report EOSE synchronously while subscribing.
+    if (settled) stop?.();
   });
 
-  if (result.complete) writeCache(result.events);
   return result;
 }
 
@@ -144,12 +81,11 @@ async function fetchDocsEvents({ servicePubkey = null, timeoutMs = 10000, bypass
  *
  * @param {Object} [options]
  * @param {string} [options.servicePubkey] - Filter by service pubkey (optional)
- * @param {number} [options.timeoutMs=10000] - Query timeout
- * @param {boolean} [options.bypassCache=false] - Skip localStorage cache
+ * @param {boolean} [options.bypassCache=false] - Require relay EOSE rather than local history
  * @returns {Promise<{topics: Array, groups: Array, count: number}>}
  */
-export async function fetchDocsCatalog({ servicePubkey = null, timeoutMs = 10000, bypassCache = false } = {}) {
-  const result = await fetchDocsEvents({ servicePubkey, timeoutMs, bypassCache });
+export async function fetchDocsCatalog({ servicePubkey = null, bypassCache = false } = {}) {
+  const result = await fetchDocsEvents({ servicePubkey, bypassCache });
   const topics = result.events.map(parseDocTopic).filter(Boolean);
 
   // Sort deterministically by topic slug.
@@ -174,13 +110,12 @@ export async function fetchDocsCatalog({ servicePubkey = null, timeoutMs = 10000
  * @param {string} topic - Topic slug (d-tag value)
  * @param {Object} [options]
  * @param {string} [options.servicePubkey] - Filter by service pubkey (optional)
- * @param {number} [options.timeoutMs=10000] - Query timeout
- * @param {boolean} [options.bypassCache=false] - Skip localStorage cache
+ * @param {boolean} [options.bypassCache=false] - Require relay EOSE rather than local history
  * @returns {Promise<{metadata: Object, markdown: string, links: Array}|null>}
  */
-export async function fetchDoc(topic, { servicePubkey = null, timeoutMs = 10000, bypassCache = false } = {}) {
+export async function fetchDoc(topic, { servicePubkey = null, bypassCache = false } = {}) {
   // Fetch all docs events (leverages cache) so we have the catalog for link resolution.
-  const result = await fetchDocsEvents({ servicePubkey, timeoutMs, bypassCache });
+  const result = await fetchDocsEvents({ servicePubkey, bypassCache });
   const allEvents = result.events;
 
   const event = allEvents.find((e) => getDTag(e) === topic);

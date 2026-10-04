@@ -365,7 +365,8 @@ export async function installPublicServiceDeploymentHarness(
       let discoveryEvents = [];
       try {
         discoveryEvents = JSON.parse(localStorage.getItem('__bahia_e2e_nostr_events') || '[]')
-          .filter((event) => [11316, 30002].includes(event?.kind));
+          .filter((event) => [11316, 30002].includes(event?.kind) ||
+            event?.tags?.some((tag) => tag[0] === 't' && ['org-key-envelope', 'notification-channel'].includes(tag[1])));
       } catch {}
       localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify([...discoveryEvents, ...currentReadModelEvents()]));
     }

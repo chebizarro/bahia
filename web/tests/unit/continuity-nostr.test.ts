@@ -44,7 +44,7 @@ describe('continuity Nostr read models', () => {
     const stop = vi.fn();
     const client = {
       getConnectedRelays: () => ['wss://continuity.example'],
-      subscribeWithRecovery: vi.fn((_filters, nextHandlers) => {
+      subscribe: vi.fn((_filters, nextHandlers) => {
         handlers = nextHandlers;
         return stop;
       })

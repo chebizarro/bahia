@@ -14,9 +14,9 @@ import {
   SOUL_RUNTIME_METHODS
 } from '$lib/nostr/client.js';
 import { authState, login, signWithAuth } from '$lib/stores/auth.js';
-import { ensureRelayConnection } from '$lib/nostr/client.js';
+import { ensureRelayConnection } from '$lib/nostr/boot.js';
 import api from '$lib/api/client.js';
-import { createReadModelMetadataTracker } from '$lib/nostr/pool-utils.js';
+import { createReadModelMetadataTracker } from '$lib/nostr/read-model-metadata.js';
 
 /** @typedef {import('$lib/types/customization').SoulAvatarSpec} SoulAvatarSpec */
 /** @typedef {import('$lib/types/customization').SoulDraftContentV2} SoulDraftContentV2 */
@@ -495,7 +495,7 @@ export async function subscribeToSoulFactoryUpdates(options = null) {
   if (soulFactorySubscription) return;
 
   // Accept either a bare author pubkey string or an options object. Callers such as
-  // loadRuntimeCapabilities({ method }) pass an options object; only a real pubkey
+  // Some callers pass an options object; only a real pubkey
   // string may ever reach the relay `authors` filter, which must be an array of
   // strings (a non-string here triggers a relay "parse error ... of authors").
   const authorPubkey = typeof options === 'string'
@@ -558,14 +558,6 @@ export async function subscribeToSoulFactoryUpdates(options = null) {
     }
   });
 }
-
-// Backward-compatible aliases
-export const loadSouls = subscribeToSoulFactoryUpdates;
-export const loadTemplates = subscribeToSoulFactoryUpdates;
-export const loadDrafts = subscribeToSoulFactoryUpdates;
-export const loadRuntimeCapabilities = subscribeToSoulFactoryUpdates;
-export const loadAll = subscribeToSoulFactoryUpdates;
-export const subscribeToSoulUpdates = subscribeToSoulFactoryUpdates;
 
 export function unsubscribeFromSoulUpdates() {
   if (soulFactorySubscription) {

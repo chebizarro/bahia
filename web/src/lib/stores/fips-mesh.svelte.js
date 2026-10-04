@@ -1,6 +1,6 @@
 import { loadSystemInfo } from './system.svelte.js';
 import { toWebSocketUrl } from '../nostr/pool-utils.js';
-import { resolveBrowserRelays } from './controlplane/connection.svelte.js';
+import { resolveBrowserRelays } from './discovery.svelte.js';
 import {
   nostr,
   BAHIA_STATE_SCHEMAS,

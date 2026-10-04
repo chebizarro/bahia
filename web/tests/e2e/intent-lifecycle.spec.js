@@ -65,6 +65,7 @@ test('acceptance 9: stale expected_updated_at yields a visible conflict and re-r
 
 test('acceptance 12: disconnected relay keeps intent pending; reconnect resends without a timer', async ({ page }) => {
   await setup(page);
+  await expect.poll(() => page.evaluate(async () => Boolean((await import('/src/lib/nostr/boot.js')).getPool()))).toBe(true);
   await page.evaluate(async () => {
     const { getPool } = await import('/src/lib/nostr/boot.js');
     const { stopIntentClient } = await import('/src/lib/nostr/intent-client.svelte.js');

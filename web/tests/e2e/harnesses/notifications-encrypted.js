@@ -1,10 +1,42 @@
 import { E2E_SERVICE_PUBKEY, TEST_PUBKEY } from '../helpers.js';
+import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
+import { base64Encode, CONFIDENTIAL_ALGORITHM, CONFIDENTIAL_SCHEMA, OCK_WRAP_SCHEMA } from '../../../src/lib/nostr/confidential.js';
+import { confidentialCpStateFixture } from '../cp-state-fixtures.js';
 
 export const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
 export const PUBLIC_RELAY = 'ws://public.test.local';
 export const ENCRYPTED_RELAY = 'ws://encrypted.test.local';
 export const KIND_CONTEXTVM = 25910;
 export const KIND_GIFT_WRAP = 1059;
+export const NOTIFICATION_TEST_ORG_ID = '0199c749-9300-7444-8444-444444444444';
+
+export function notificationRelayFixtures(channels = []) {
+  if (!channels.length) return [];
+  const key = new Uint8Array(32).fill(7);
+  const orgId = channels[0].org_id || NOTIFICATION_TEST_ORG_ID;
+  const wrap = { schema: OCK_WRAP_SCHEMA, org_id: orgId, key_ref: `ock:${orgId}`,
+    version: 1, key: base64Encode(key), recipient_pubkey: TEST_PUBKEY };
+  const events = [confidentialCpStateFixture({
+    d: `org-key:${orgId}:v1:e2e-notification`, topic: 'org-key-envelope', legacyKind: 32010,
+    content: `enc44:${JSON.stringify(wrap)}`
+  })];
+  for (const [index, channel] of channels.entries()) {
+    const d = `notification:channel:${channel.id}`;
+    const associatedData = { d, key_org: orgId, key_ref: `ock:${orgId}`,
+      key_version: 'v1', legacy_kind: '32009', schema: CONFIDENTIAL_SCHEMA, t: 'notification-channel' };
+    const nonce = new Uint8Array(24);
+    nonce[0] = index + 1;
+    const ciphertext = xchacha20poly1305(key, nonce, new TextEncoder().encode(JSON.stringify(associatedData)))
+      .encrypt(new TextEncoder().encode(JSON.stringify({ ...channel, org_id: orgId })));
+    events.push(confidentialCpStateFixture({
+      d, topic: 'notification-channel', legacyKind: 32009,
+      content: JSON.stringify({ schema: CONFIDENTIAL_SCHEMA, algorithm: CONFIDENTIAL_ALGORITHM,
+        key_org: orgId, key_ref: `ock:${orgId}`, key_version: 'v1', nonce: base64Encode(nonce),
+        ciphertext: base64Encode(ciphertext), associated_data: associatedData })
+    }));
+  }
+  return events;
+}
 
 export function createEncryptedNotificationsSystemInfo({
   publicRelay = PUBLIC_RELAY,
@@ -38,6 +70,7 @@ export async function installEncryptedNotificationHarness(
     operationErrors = {}
   } = {}
 ) {
+  await page.exposeFunction('__bahiaE2EChannelProjection', (channel) => notificationRelayFixtures([channel]).at(-1));
   await page.addInitScript(({ servicePubkey, encryptedRelay, publicRelay, initialChannels, initialLogs, operationErrors, operatorPubkey }) => {
     window.__BAHIA_E2E_ENCRYPTED_PUBLISHES = [];
     window.__BAHIA_E2E_ENCRYPTED_WIRE_PUBLISHES = [];
@@ -266,6 +299,7 @@ export async function installEncryptedNotificationHarness(
           const current = state.channels.find(channel => channel.id === content.id);
           const channel = { ...current, ...content, id: content.id, updated_at: new Date().toISOString() };
           state.channels = [channel, ...state.channels.filter(candidate => candidate.id !== channel.id)];
+          void window.__bahiaE2EChannelProjection(channel).then((event) => window.__bahiaPushNostrEvent(event));
         }
         window.__BAHIA_E2E_ENCRYPTED_OPERATIONS.push(`notification.intent.${op}`);
         return originalSend.call(this, data);

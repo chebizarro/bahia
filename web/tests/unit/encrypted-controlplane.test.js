@@ -13,10 +13,12 @@ const authMock = vi.hoisted(() => ({
 
 const nostrClientMock = vi.hoisted(() => ({
   activeClient: null,
-  createNostrPoolClient: vi.fn(() => nostrClientMock.activeClient),
-  getTagValues: (event, name) => (event?.tags || [])
-    .filter((tag) => Array.isArray(tag) && tag[0] === name)
-    .map((tag) => tag[1])
+  nostr: {
+    connect: (...args) => nostrClientMock.activeClient.connect(...args),
+    getConnectedRelays: (...args) => nostrClientMock.activeClient.getConnectedRelays(...args),
+    subscribeOnRelays: (_relays, filters, handlers) => nostrClientMock.activeClient.subscribe(filters, handlers),
+    publish: (event) => nostrClientMock.activeClient.publish(event)
+  }
 }));
 
 // ContextVM results are really signed with a throwaway service key; inbound
@@ -43,7 +45,7 @@ const systemMock = vi.hoisted(() => ({
 
 vi.mock('$lib/stores/auth.js', () => authMock);
 vi.mock('$lib/stores/system.svelte.js', () => systemMock);
-vi.mock('../../src/lib/nostr/client.js', () => nostrClientMock);
+vi.mock('../../src/lib/nostr/subscriptions.js', () => nostrClientMock);
 
 function progressAckDiscovery() {
   return {
@@ -370,7 +372,7 @@ describe('encrypted controlplane transport', () => {
     const event = { id: 'request-id', kind: module.ENCRYPTED_REQUEST_KIND, tags: [], content: 'cipher' };
 
     await expect(transport.publishEncryptedRequest(event)).resolves.toMatchObject({ requestEventId: 'request-id' });
-    expect(client.connect).not.toHaveBeenCalled();
+    expect(client.connect).toHaveBeenCalledWith(['wss://requests.example']);
     expect(client.publish).toHaveBeenCalledWith(event);
 
     client.publish.mockResolvedValueOnce([{ relay: 'wss://requests.example', sent: true, accepted: false, message: 'blocked: no' }]);
@@ -405,7 +407,7 @@ describe('encrypted controlplane transport', () => {
     const second = module.requestEncryptedResult({ operation: 'orgs.list', payload: {}, workTimeoutMs: 10 });
     await flushAsync();
 
-    expect(nostrClientMock.createNostrPoolClient).toHaveBeenCalledTimes(1);
+    expect(nostrClientMock.activeClient).toBe(client);
     expect(client.connect).toHaveBeenCalledTimes(2);
 
     releaseConnect();

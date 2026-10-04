@@ -1,7 +1,7 @@
 import { browser } from '$app/environment';
 import { KINDS, getDTag, getTagValues, parseJsonContent, upsertReplaceableEvent } from '../nostr/client.js';
-import { PoolBackedClient } from '../nostr/pool-client.js';
-import { createReadModelMetadataTracker, toWebSocketUrl } from '../nostr/pool-utils.js';
+import { boot, getEventStore, getPool } from '../nostr/boot.js';
+import { toWebSocketUrl } from '../nostr/pool-utils.js';
 
 export const BOOTSTRAP_SCHEMA = 'bahia.bootstrap.v1';
 export const DISCOVERY_SCHEMA = 'bahia.system-discovery.v1';
@@ -9,9 +9,6 @@ export const SYSTEM_DISCOVERY_DTAG = 'bahia-system-v1';
 export const BROWSER_RELAY_SET_DTAG = 'bahia-browser-v1';
 export const CONTEXTVM_RELAY_SET_DTAG = 'bahia-contextvm-v1';
 export const SERVICE_RELAY_SET_DTAG = 'bahia-service-v1';
-const DISCOVERY_CACHE_KEY = 'bahia_system_discovery_cache_v1';
-const DISCOVERY_CACHE_TTL_MS = 15 * 60 * 1000;
-const DISCOVERY_DEADLINE_MS = 10_000;
 
 export const discoveryState = $state({
   seed: null,
@@ -24,7 +21,6 @@ export const discoveryState = $state({
 });
 
 let discoveryPromise = null;
-let bootstrapClient = null;
 let discoveryUnsubscribe = null;
 const discoverySubscribers = new Set();
 
@@ -41,7 +37,6 @@ function publishDiscoveryInfo(seed, normalized, events) {
   discoveryState.relaySets = normalized._discovery?.relay_sets || {};
   discoveryState.loadedAt = new Date().toISOString();
   discoveryState.error = null;
-  persistDiscoveryCache(seed, normalized, events);
   for (const subscriber of discoverySubscribers) subscriber(normalized);
 }
 
@@ -75,6 +70,15 @@ export function getBootstrapSeed() {
     relay_urls,
     service_pubkeys
   };
+}
+
+export function resolveBrowserRelays(systemInfo) {
+  const nostrInfo = systemInfo?.nostr || {};
+  const relays = [
+    ...(Array.isArray(nostrInfo.browser_relays) ? nostrInfo.browser_relays : []),
+    nostrInfo.sidecar_url
+  ];
+  return [...new Set(relays.map(toWebSocketUrl).filter(Boolean))];
 }
 
 function latestByReplaceableKey(events) {
@@ -163,8 +167,6 @@ export function normalizeDiscoveryEvents(events, trustedPubkeys) {
 export function resetDiscoveryStore() {
   if (discoveryUnsubscribe) discoveryUnsubscribe();
   discoveryUnsubscribe = null;
-  if (bootstrapClient) bootstrapClient.disconnect();
-  bootstrapClient = null;
   discoveryPromise = null;
   discoveryState.seed = null;
   discoveryState.info = null;
@@ -175,49 +177,6 @@ export function resetDiscoveryStore() {
   discoveryState.loadedAt = null;
 }
 
-function loadCachedDiscovery(seed) {
-  if (!browser || typeof localStorage?.getItem !== 'function') return null;
-
-  try {
-    const raw = localStorage.getItem(DISCOVERY_CACHE_KEY);
-    if (!raw) return null;
-
-    const cached = JSON.parse(raw);
-    const age = Date.now() - Number(cached?.cachedAt || 0);
-    const trustedPubkeys = Array.isArray(seed?.service_pubkeys) ? seed.service_pubkeys : [];
-    const cachedPubkey = cached?.normalized?.nostr?.service_pubkey;
-    if (cached?.schema !== DISCOVERY_CACHE_KEY || age > DISCOVERY_CACHE_TTL_MS) return null;
-    if (trustedPubkeys.length > 0 && cachedPubkey && !trustedPubkeys.includes(cachedPubkey)) return null;
-    if (!cached?.normalized?.nostr?.browser_relays?.length) return null;
-    if (!Array.isArray(cached?.normalized?.nostr?.contextvm_relays)) return null;
-    if (!cached?.normalized?.nostr?.contextvm_relay_metadata) return null;
-
-    return cached;
-  } catch (error) {
-    console.warn('Failed to load cached system discovery:', error);
-    return null;
-  }
-}
-
-function persistDiscoveryCache(seed, normalized, events) {
-  if (!browser || typeof localStorage?.setItem !== 'function') return;
-
-  try {
-    localStorage.setItem(
-      DISCOVERY_CACHE_KEY,
-      JSON.stringify({
-        schema: DISCOVERY_CACHE_KEY,
-        cachedAt: Date.now(),
-        seed,
-        normalized,
-        events
-      })
-    );
-  } catch (error) {
-    console.warn('Failed to persist system discovery cache:', error);
-  }
-}
-
 export async function discoverSystemInfo({ force = false } = {}) {
   if (!browser) return null;
   if (discoveryState.info && !force) return discoveryState.info;
@@ -225,120 +184,75 @@ export async function discoverSystemInfo({ force = false } = {}) {
 
   discoveryState.loading = true;
   discoveryState.error = null;
-
   discoveryPromise = (async () => {
-    try {
-      const seed = getBootstrapSeed();
-      if (!seed?.relay_urls?.length) throw new Error('No relay URLs configured. Set PUBLIC_BAHIA_BOOTSTRAP_RELAYS or inject window.__BAHIA_BOOTSTRAP__ before deploying.');
-      if (!seed?.service_pubkeys?.length) throw new Error('No trusted service pubkeys configured. Set PUBLIC_BAHIA_SERVICE_PUBKEYS before deploying.');
-
-      discoveryState.seed = seed;
-      const cached = !force ? loadCachedDiscovery(seed) : null;
-      if (cached?.normalized) {
-        discoveryState.info = cached.normalized;
-        discoveryState.events = Array.isArray(cached.events) ? cached.events : [];
-        discoveryState.relaySets = cached.normalized?._discovery?.relay_sets || {};
-        discoveryState.loadedAt = new Date(cached.cachedAt).toISOString();
-        return cached.normalized;
-      }
-
-      const relays = Array.from(new Set(seed.relay_urls.map(toWebSocketUrl).filter(Boolean)));
-      if (discoveryUnsubscribe) discoveryUnsubscribe();
-      discoveryUnsubscribe = null;
-      if (bootstrapClient) bootstrapClient.disconnect();
-      bootstrapClient = new PoolBackedClient({
-        relays,
-        saveRelayConfig: () => {}
-      });
-
-      const summary = await bootstrapClient.connect(relays, { force: true });
-      if (summary.connected === 0) {
-        bootstrapClient.disconnect();
-        bootstrapClient = null;
-        throw new Error('Unable to connect to any bootstrap relay');
-      }
-
-      const collectedEvents = [];
-      const normalized = await new Promise((resolve, reject) => {
-        const tracker = createReadModelMetadataTracker({ relays });
-        const eoseRelays = new Set();
-        let settled = false;
-        let lastCloseReason = '';
-
-        const settle = ({ deadline = false } = {}) => {
-          if (settled) return;
-          if (deadline) {
-            for (const [relay, state] of tracker.relayStates) {
-              if (!state.terminal) tracker.markClosed('discovery deadline exceeded', relay, { terminal: true, source: 'deadline' });
-            }
-          } else if (!tracker.isTerminal()) {
-            return;
-          }
-
-          settled = true;
-          clearTimeout(deadlineTimer);
-          if (eoseRelays.size === 0) {
-            reject(new Error(deadline
-              ? 'Discovery subscription timed out before any relay reached EOSE'
-              : `Discovery subscription closed: ${lastCloseReason || 'all relays closed before EOSE'}`));
-            return;
-          }
-
-          try {
-            resolve(normalizeDiscoveryEvents(collectedEvents, seed.service_pubkeys));
-          } catch (err) {
-            reject(err);
-          }
-        };
-
-        const deadlineTimer = setTimeout(() => settle({ deadline: true }), DISCOVERY_DEADLINE_MS);
-        discoveryUnsubscribe = bootstrapClient.subscribe([
-          {
-            kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET],
-            authors: seed.service_pubkeys,
-            '#d': [SYSTEM_DISCOVERY_DTAG, BROWSER_RELAY_SET_DTAG, CONTEXTVM_RELAY_SET_DTAG, SERVICE_RELAY_SET_DTAG]
-          }
-        ], {
-          onEvent: (event, relay) => {
-            tracker.markEvent(event, toWebSocketUrl(relay));
-            collectedEvents.push(event);
-            if (settled) {
-              try {
-                publishDiscoveryInfo(seed, normalizeDiscoveryEvents(collectedEvents, seed.service_pubkeys), collectedEvents);
-              } catch (error) {
-                discoveryState.error = error?.message || String(error);
-              }
-            }
-          },
-          onEose: (relay) => {
-            const normalizedRelay = toWebSocketUrl(relay);
-            eoseRelays.add(normalizedRelay);
-            tracker.markEose(normalizedRelay);
-            settle();
-          },
-          onClosed: (reason = '', relay = '', meta = {}) => {
-            lastCloseReason = String(reason || lastCloseReason);
-            tracker.markClosed(reason, toWebSocketUrl(relay), meta);
-            settle();
-          }
-        });
-      });
-
-      publishDiscoveryInfo(seed, normalized, collectedEvents);
-      if (!normalized) discoveryState.loadedAt = new Date().toISOString();
-      return normalized;
-    } catch (error) {
-      discoveryState.error = error?.message || String(error);
-      if (force) {
-        discoveryState.events = [];
-        discoveryState.loadedAt = null;
-      }
-      throw error;
-    } finally {
-      discoveryState.loading = false;
-      discoveryPromise = null;
+    const seed = getBootstrapSeed();
+    if (!seed?.relay_urls?.length || !seed?.service_pubkeys?.length) {
+      throw new Error('Bahia discovery requires deployment bootstrap relay URLs and trusted service pubkeys');
     }
+    discoveryState.seed = seed;
+    await boot();
+    const store = getEventStore();
+    const pool = getPool();
+    if (!store || !pool) throw new Error('Bahia event store is unavailable for discovery');
+    const relays = [...new Set(seed.relay_urls.map(toWebSocketUrl).filter(Boolean))];
+    const filter = {
+      kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET],
+      authors: seed.service_pubkeys,
+      '#d': [SYSTEM_DISCOVERY_DTAG, BROWSER_RELAY_SET_DTAG, CONTEXTVM_RELAY_SET_DTAG, SERVICE_RELAY_SET_DTAG]
+    };
+    const snapshot = () => store.query(filter);
+    const publishSnapshot = () => {
+      const events = snapshot();
+      const normalized = normalizeDiscoveryEvents(events, seed.service_pubkeys);
+      if (normalized) publishDiscoveryInfo(seed, normalized, events);
+      return normalized;
+    };
+
+    if (discoveryUnsubscribe) discoveryUnsubscribe();
+    const cached = publishSnapshot();
+    const eose = new Set();
+    const closed = new Set();
+    let settle;
+    const caughtUp = new Promise((resolve, reject) => { settle = { resolve, reject }; });
+    // A valid persisted discovery snapshot is usable even if relays close
+    // before EOSE; consume the catch-up promise so its rejection is handled.
+    if (cached) void caughtUp.catch(() => {});
+    const handle = pool.subscribe({
+      relays,
+      filters: [filter],
+      onEvent: () => {
+        try { publishSnapshot(); }
+        catch (error) { discoveryState.error = error?.message || String(error); }
+      },
+      onEose: (relay) => {
+        eose.add(toWebSocketUrl(relay));
+        if (eose.size + closed.size >= relays.length) settle.resolve(publishSnapshot());
+      },
+      onClosed: (reason, relay) => {
+        closed.add(toWebSocketUrl(relay));
+        if (eose.size + closed.size >= relays.length) {
+          if (eose.size) settle.resolve(publishSnapshot());
+          else settle.reject(new Error(`Discovery relays closed before EOSE: ${reason || 'no relay served history'}`));
+        }
+      }
+    });
+    discoveryUnsubscribe = () => handle.unsubscribe();
+    // Persisted, signature-checked events render immediately. EOSE is only
+    // required when there is no local discovery state to display.
+    return cached || caughtUp;
   })();
 
-  return discoveryPromise;
+  try {
+    return await discoveryPromise;
+  } catch (error) {
+    discoveryState.error = error?.message || String(error);
+    if (force) {
+      discoveryState.events = [];
+      discoveryState.loadedAt = null;
+    }
+    throw error;
+  } finally {
+    discoveryState.loading = false;
+    discoveryPromise = null;
+  }
 }

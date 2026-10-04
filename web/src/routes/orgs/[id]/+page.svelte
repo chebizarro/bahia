@@ -1,6 +1,6 @@
 <script>
   import { page } from '$app/state';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { goto } from '$app/navigation';
   import { authState } from '$lib/stores/auth.js';
   import { roleForOrg } from '$lib/stores/auth-roles.svelte.js';
@@ -58,7 +58,7 @@
   $effect(() => {
     const id = orgId;
     if (!id) return;
-    void loadData(id);
+    untrack(() => { void loadData(id); });
   });
 
   onMount(() => {

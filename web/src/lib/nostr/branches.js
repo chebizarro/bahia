@@ -4,7 +4,8 @@
  */
 
 import { KINDS, nostr } from './client.js';
-import { createReadModelMetadataTracker, uniqueRelays } from './pool-utils.js';
+import { createReadModelMetadataTracker } from './read-model-metadata.js';
+import { uniqueRelays } from './pool-utils.js';
 
 const REPO_STATE_KIND = KINDS.REPOSITORY_STATE;
 

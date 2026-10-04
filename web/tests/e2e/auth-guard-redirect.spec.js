@@ -40,6 +40,24 @@ function encryptedMemberRecord(pubkey, role, nonceByte) {
   });
 }
 
+function encryptedOrgRecord() {
+  const d = `org:${ORG_ID}`;
+  const associatedData = {
+    d, key_org: ORG_ID, key_ref: `ock:${ORG_ID}`, key_version: 'v1',
+    legacy_kind: '32005', schema: CONFIDENTIAL_SCHEMA, t: 'org'
+  };
+  const nonce = new Uint8Array(24);
+  nonce[0] = 3;
+  const ciphertext = xchacha20poly1305(OCK, nonce, new TextEncoder().encode(JSON.stringify(associatedData)))
+    .encrypt(new TextEncoder().encode(JSON.stringify({ id: ORG_ID, name: 'Test org' })));
+  return confidentialCpStateFixture({
+    d, topic: 'org', legacyKind: 32005,
+    content: JSON.stringify({ schema: CONFIDENTIAL_SCHEMA, algorithm: CONFIDENTIAL_ALGORITHM,
+      key_org: ORG_ID, key_ref: `ock:${ORG_ID}`, key_version: 'v1', nonce: base64Encode(nonce),
+      ciphertext: base64Encode(ciphertext), associated_data: associatedData })
+  });
+}
+
 function roleFixtureEvents() {
   const wrap = {
     schema: OCK_WRAP_SCHEMA,
@@ -54,6 +72,7 @@ function roleFixtureEvents() {
       d: `org-key:${ORG_ID}:v1:e2e`, topic: 'org-key-envelope', legacyKind: 32010,
       content: `mock-nip44:${Buffer.from(JSON.stringify(wrap)).toString('base64')}`
     }),
+    encryptedOrgRecord(),
     encryptedMemberRecord(TEST_PUBKEY, 'viewer', 1),
     encryptedMemberRecord(OTHER_MEMBER, 'owner', 2)
   ];

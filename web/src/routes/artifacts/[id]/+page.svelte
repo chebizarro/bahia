@@ -1,4 +1,5 @@
 <script>
+  import { boot } from '$lib/nostr/boot.js';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { onDestroy, tick, untrack } from 'svelte';
@@ -10,7 +11,7 @@ import Table from '$lib/components/Table.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
   import SBOMDetails from '$lib/components/SBOMDetails.svelte';
-  import { artifacts, services, loadArtifacts, operations, operationsForEntity } from '$lib/stores';
+  import { artifacts, services,  operations, operationsForEntity } from '$lib/stores';
   import { sbomRefs, sbomAvailability } from '$lib/stores/collections/sbom.svelte.js';
   import { onStoreRefresh } from '$lib/nostr/boot.js';
   import { toast } from '$lib/components/toast.js';
@@ -139,16 +140,14 @@ import Table from '$lib/components/Table.svelte';
     error = null;
 
     try {
-      await Promise.allSettled([loadArtifacts()]);
+      await boot();
       await tick();
       const loadedArtifact = artifacts.find((candidate) => candidate.id === id) || null;
 
-      if (!loadedArtifact) {
-        throw new Error('Artifact not found');
-      }
       if (sequence !== loadSequence) return;
-
-      applyLoadedArtifact(loadedArtifact);
+      // An empty local snapshot is not a not-found verdict: the relay may still
+      // be replaying history, and the store-derived effect applies it on arrival.
+      if (loadedArtifact) applyLoadedArtifact(loadedArtifact);
     } catch (err) {
       if (sequence !== loadSequence) return;
       error = err.message || 'Failed to load artifact';

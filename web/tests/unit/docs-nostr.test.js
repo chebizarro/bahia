@@ -4,9 +4,11 @@ const subscriptionsMock = vi.hoisted(() => ({
   relayEvents: [],
   closedRelays: [],
   emitEose: true,
+  handlers: null,
   unsubscribe: vi.fn(),
   nostr: {
     subscribeWithRecovery: vi.fn((_filters, handlers = {}) => {
+      subscriptionsMock.handlers = handlers;
       for (const event of subscriptionsMock.relayEvents) handlers.onEvent?.(event, 'wss://docs.example');
       for (const closure of subscriptionsMock.closedRelays) handlers.onClosed?.(closure.reason, closure.relay, closure.meta);
       if (subscriptionsMock.emitEose) handlers.onEose?.('wss://docs.example');
@@ -50,6 +52,7 @@ describe('Nostr documentation client', () => {
     subscriptionsMock.relayEvents = [];
     subscriptionsMock.closedRelays = [];
     subscriptionsMock.emitEose = true;
+    subscriptionsMock.handlers = null;
     subscriptionsMock.unsubscribe.mockClear();
     subscriptionsMock.nostr.subscribeWithRecovery.mockClear();
   });
@@ -74,7 +77,7 @@ describe('Nostr documentation client', () => {
       onEose: expect.any(Function),
       onClosed: expect.any(Function)
     }));
-    expect(subscriptionsMock.unsubscribe).not.toHaveBeenCalled();
+    expect(subscriptionsMock.unsubscribe).toHaveBeenCalledOnce();
     expect(catalog.count).toBe(1);
     expect(catalog.complete).toBe(true);
     expect(catalog.degraded).toBeNull();
@@ -132,22 +135,17 @@ describe('Nostr documentation client', () => {
     });
   });
 
-  it('uses the timeout only as a fallback deadline and keeps recovery active', async () => {
-    vi.useFakeTimers();
+  it('keeps the historical REQ open until EOSE instead of treating a deadline as completion', async () => {
     subscriptionsMock.emitEose = false;
-
-    const catalogPromise = fetchDocsCatalog({ bypassCache: true, timeoutMs: 100 });
+    const pending = fetchDocsCatalog({ bypassCache: true, timeoutMs: 1 });
     let settled = false;
-    catalogPromise.then(() => { settled = true; });
-
-    await vi.advanceTimersByTimeAsync(99);
+    void pending.then(() => { settled = true; });
+    await vi.waitFor(() => expect(subscriptionsMock.handlers).not.toBeNull());
+    await Promise.resolve();
     expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-
-    const catalog = await catalogPromise;
-    expect(catalog.complete).toBe(false);
-    expect(catalog.degraded).toMatchObject({ reason: 'timeout-before-eose' });
-    expect(subscriptionsMock.unsubscribe).not.toHaveBeenCalled();
+    subscriptionsMock.handlers.onEose('wss://docs.example');
+    await expect(pending).resolves.toMatchObject({ complete: true });
+    expect(subscriptionsMock.unsubscribe).toHaveBeenCalledOnce();
   });
 
   it('resolves a single topic from the relay event catalog', async () => {

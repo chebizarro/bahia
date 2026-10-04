@@ -15,8 +15,7 @@
     createDefaultMemorySpec,
     createDefaultPersonaSpec,
     createDefaultVoiceSpec,
-    loadRuntimeCapabilities,
-    loadSouls,
+    subscribeToSoulFactoryUpdates,
     publishProvisioningRequest,
     publishSoulDraft,
     provisioningRuns,
@@ -537,10 +536,7 @@
       // All soul-factory read models (souls, templates, drafts, capabilities) share a
       // single subscription, so call without arguments — passing an options object here
       // previously leaked into the relay `authors` filter and was rejected as malformed.
-      await Promise.all([
-        loadRuntimeCapabilities(),
-        loadSouls()
-      ]);
+      await subscribeToSoulFactoryUpdates();
 	  const resume = resumedProvisioningRequest();
 	  if (resume?.requestId && !requestEventId) {
 		requestEventId = resume.requestId;

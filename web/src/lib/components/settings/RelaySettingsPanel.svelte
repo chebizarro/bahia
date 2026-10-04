@@ -2,7 +2,7 @@
   import Input from '$lib/components/Input.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import { RelayIcon } from '$lib/icons/domain-icons.js';
-  import { nostr, saveRelayConfig, getDefaultRelays, getConfiguredRelays, hasSavedRelayConfig } from '$lib/nostr/client.js';
+  import { nostr } from '$lib/nostr/client.js';
   import {
     RELAY_POLICY_TRUTH_STATES,
     applyRelayPolicy,
@@ -26,8 +26,8 @@
   let connectionStatus = $state({});
   let relaySummary = $derived(relayConnectionSummary(relays, connectionStatus));
   let reconnectOutcome = $state('');
-  let browserRelayFallbackApplied = $state(hasSavedRelayConfig());
-  let localRelayConfigTouched = $state(hasSavedRelayConfig());
+  let browserRelayFallbackApplied = $state(false);
+  let localRelayConfigTouched = $state(false);
 
   let operatorPolicyInitialized = $state(false);
   let operatorPolicySaving = $state(false);
@@ -77,7 +77,7 @@
       connectionStatus = status;
     });
 
-    relays = hasSavedRelayConfig() ? getConfiguredRelays() : nostr.getRelays();
+    relays = nostr.getRelays();
     void loadSharedSystemInfo().catch(() => {});
 
     return () => {
@@ -543,25 +543,24 @@
     localRelayConfigTouched = true;
     relaysSaving = true;
     try {
-      saveRelayConfig(relays);
-      nostr.setRelays(relays, true);
+      nostr.setRelays(relays);
       const summary = await nostr.connect(relays, { force: true });
       if (summary.total === 0) {
-        reconnectOutcome = 'Relay configuration saved with no local browser relays configured.';
-        toast.warning('Relay configuration saved with no relays configured');
+        reconnectOutcome = 'No relays selected for this browser session.';
+        toast.warning('No relays selected');
       } else if (summary.connected === summary.total) {
         reconnectOutcome = `Reconnect succeeded: connected to ${summary.connected}/${summary.total} local browser relays.`;
-        toast.success(`Relay configuration saved — connected to ${summary.connected}/${summary.total} relays`);
+        toast.success(`Browser session reconnected — connected to ${summary.connected}/${summary.total} relays`);
       } else if (summary.connected > 0) {
         reconnectOutcome = `Reconnect partially succeeded: connected to ${summary.connected}/${summary.total} local browser relays.`;
-        toast.warning(`Relay configuration saved — connected to ${summary.connected}/${summary.total} relays`);
+        toast.warning(`Browser session reconnected — connected to ${summary.connected}/${summary.total} relays`);
       } else {
         reconnectOutcome = `Reconnect failed: connected to ${summary.connected}/${summary.total} local browser relays.`;
-        toast.error(`Relay configuration saved, but no relays connected (${summary.connected}/${summary.total})`);
+        toast.error(`Browser session reconnect attempted, but no relays connected (${summary.connected}/${summary.total})`);
       }
     } catch (err) {
       reconnectOutcome = `Reconnect failed: ${err?.message || 'relay client rejected the configuration'}.`;
-      toast.error('Failed to save relay configuration');
+      toast.error('Failed to reconnect browser relays');
     } finally {
       relaysSaving = false;
     }
@@ -569,7 +568,7 @@
 
   async function resetToDefaults() {
     localRelayConfigTouched = true;
-    relays = getDefaultRelays();
+    relays = [...(systemInfo?.nostr?.browser_relays || [])];
     await saveRelays();
   }
 
@@ -716,7 +715,7 @@
 <section id="relays" class="settings-section">
   <h2><RelayIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Browser Session Relays</h2>
   <p class="section-description">
-    <strong>LOCAL / NONCANONICAL emergency override.</strong> It persists only in this browser profile and never changes service-signed Bahia relay policy. Use Operator Relay Policy above for canonical settings.
+    <strong>LOCAL / NONCANONICAL emergency override.</strong> It applies only to this browser session and never changes service-signed Bahia relay policy. Use Operator Relay Policy above for canonical settings.
   </p>
 
   <div class="relay-list">
@@ -740,7 +739,7 @@
   </div>
 
   <div class="relay-actions">
-    <LoadingButton variant="secondary" loading={relaysSaving} onclick={resetToDefaults}>Reset Local Defaults & Reconnect</LoadingButton>
+    <LoadingButton variant="secondary" loading={relaysSaving} onclick={resetToDefaults}>Reset Advertised Relays & Reconnect</LoadingButton>
     <LoadingButton variant="primary" loading={relaysSaving} onclick={saveRelays}>Reconnect Locally Now</LoadingButton>
   </div>
 
