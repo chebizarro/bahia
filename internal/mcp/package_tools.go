@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -62,92 +61,28 @@ func packageSchema(required []string) map[string]interface{} {
 	return schema
 }
 
-func (s *Server) requirePackageCommands() (PackageCommandPublisher, *ToolResult) {
-	if s.packageCommands == nil {
-		return nil, errorResult("package command publisher is not configured")
-	}
-	return s.packageCommands, nil
-}
-
 func (s *Server) handlePackageRepositoryApply(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requirePackageCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	policy, err := packagePolicyArg(args)
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	metadata, err := optionalMapArg(args, "metadata")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishPackageRepositoryApplyRequest(ctx, controlplane.PackageRepositoryApplyCommand{RepositoryID: optionalUUIDArg(args, "repository_id"), Name: stringArg(args, "name"), Format: domain.PackageRepositoryFormat(stringArg(args, "format")), BackendRef: stringArg(args, "backend_ref"), BackendType: domain.PackageBackendType(stringArg(args, "backend_type")), ExternalRepositoryName: stringArg(args, "external_repository_name"), Description: stringArg(args, "description"), NamespacePrefix: stringArg(args, "namespace_prefix"), Policy: policy, Metadata: metadata})
-	return packageReceiptResult(receipt, err)
+	return s.invokeIntentWrite(ctx, "bahia_package_repository_apply", args)
 }
 
 func (s *Server) handlePackageRepositoryDelete(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requirePackageCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	receipt, err := publisher.PublishPackageRepositoryDeleteRequest(ctx, controlplane.PackageRepositoryDeleteCommand{RepositoryID: optionalUUIDArg(args, "repository_id"), RepositoryName: stringArg(args, "repository_name"), Force: boolArg(args, "force"), Reason: stringArg(args, "reason")})
-	return packageReceiptResult(receipt, err)
+	return s.invokeIntentWrite(ctx, "bahia_package_repository_delete", args)
 }
 
 func (s *Server) handlePackageUpload(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requirePackageCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	metadata, err := optionalMapArg(args, "metadata")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishPackagePublishRequest(ctx, controlplane.PackagePublishCommand{RepositoryID: optionalUUIDArg(args, "repository_id"), RepositoryName: stringArg(args, "repository_name"), Namespace: stringArg(args, "namespace"), PackageName: stringArg(args, "package_name"), Version: stringArg(args, "version"), Filename: stringArg(args, "filename"), SourceURL: stringArg(args, "source_url"), SHA256: stringArg(args, "sha256"), SizeBytes: int64Arg(args, "size_bytes"), ContentType: stringArg(args, "content_type"), ApprovedBy: stringArg(args, "approved_by"), PolicyRef: stringArg(args, "policy_ref"), Metadata: metadata})
-	return packageReceiptResult(receipt, err)
+	return s.invokeIntentWrite(ctx, "bahia_package_upload", args)
 }
 
 func (s *Server) handlePackagePromote(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requirePackageCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	metadata, err := optionalMapArg(args, "metadata")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishPackagePromotionRequest(ctx, controlplane.PackagePromotionCommand{SourceRepositoryID: optionalUUIDArg(args, "source_repository_id"), SourceRepositoryName: firstNonEmpty(stringArg(args, "source_repository_name"), stringArg(args, "repository_name")), TargetRepositoryID: optionalUUIDArg(args, "target_repository_id"), TargetRepositoryName: stringArg(args, "target_repository_name"), Namespace: stringArg(args, "namespace"), PackageName: stringArg(args, "package_name"), Version: stringArg(args, "version"), Filename: stringArg(args, "filename"), Environment: stringArg(args, "environment"), Channel: stringArg(args, "channel"), ApprovedBy: stringArg(args, "approved_by"), PolicyRef: stringArg(args, "policy_ref"), Metadata: metadata})
-	return packageReceiptResult(receipt, err)
+	return s.invokeIntentWrite(ctx, "bahia_package_promote", args)
 }
 
 func (s *Server) handlePackageYank(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requirePackageCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	metadata, err := optionalMapArg(args, "metadata")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishPackageYankRequest(ctx, controlplane.PackageYankCommand{RepositoryID: optionalUUIDArg(args, "repository_id"), RepositoryName: stringArg(args, "repository_name"), Namespace: stringArg(args, "namespace"), PackageName: stringArg(args, "package_name"), Version: stringArg(args, "version"), Filename: stringArg(args, "filename"), Reason: stringArg(args, "reason"), Deprecated: boolArg(args, "deprecated"), Metadata: metadata})
-	return packageReceiptResult(receipt, err)
+	return s.invokeIntentWrite(ctx, "bahia_package_yank", args)
 }
 
 func (s *Server) handlePackageDriftDetect(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requirePackageCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	receipt, err := publisher.PublishPackageDriftDetectRequest(ctx, controlplane.PackageDriftDetectCommand{RepositoryID: optionalUUIDArg(args, "repository_id"), RepositoryName: stringArg(args, "repository_name"), IncludeArtifacts: boolArg(args, "include_artifacts")})
-	return packageReceiptResult(receipt, err)
-}
-
-func packageReceiptResult(receipt *controlplane.PackageCommandReceipt, err error) (*ToolResult, error) {
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	return jsonResult(map[string]any{"status": "submitted", "request_event_id": receipt.RequestEventID, "request_pubkey": receipt.RequestPubkey, "request_kind": receipt.RequestKind, "status_kind": receipt.StatusKind, "result_kind": receipt.ResultKind, "repository_registry_kind": receipt.RepositoryRegistryKind, "artifact_registry_kind": receipt.ArtifactRegistryKind, "promotion_registry_kind": receipt.PromotionRegistryKind, "drift_event_kind": receipt.DriftEventKind, "published_relays": receipt.PublishedRelays, "repository_id": receipt.RepositoryID, "repository_name": receipt.RepositoryName, "package_name": receipt.PackageName, "version": receipt.Version, "filename": receipt.Filename})
+	return s.invokeIntentWrite(ctx, "bahia_package_drift_detect", args)
 }
 
 func packagePolicyArg(args map[string]interface{}) (domain.PackageRepositoryPolicy, error) {

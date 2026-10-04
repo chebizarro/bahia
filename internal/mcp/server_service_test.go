@@ -15,7 +15,8 @@ import (
 )
 
 type testServiceRepo struct {
-	services map[uuid.UUID]*domain.Service
+	mutations int
+	services  map[uuid.UUID]*domain.Service
 }
 
 type testStateRepo struct{}
@@ -53,6 +54,7 @@ func newTestServiceRepo() *testServiceRepo {
 }
 
 func (m *testServiceRepo) Create(_ context.Context, svc *domain.Service) error {
+	m.mutations++
 	if svc.ID == uuid.Nil {
 		svc.ID = uuid.New()
 	}
@@ -95,11 +97,13 @@ func (m *testServiceRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]domai
 }
 
 func (m *testServiceRepo) Update(_ context.Context, svc *domain.Service) error {
+	m.mutations++
 	m.services[svc.ID] = svc
 	return nil
 }
 
 func (m *testServiceRepo) Delete(_ context.Context, id uuid.UUID) error {
+	m.mutations++
 	delete(m.services, id)
 	return nil
 }
@@ -123,7 +127,7 @@ func newTestMCPServiceServer() (*Server, *testServiceRepo) {
 	return server, svcRepo
 }
 
-func TestCallTool_ServiceListGetAndMutationsDeprecated(t *testing.T) {
+func TestCallTool_ServiceListGetFromCanonicalState(t *testing.T) {
 	ctx := authorizedMCPContext()
 	server, svcRepo := newTestMCPServiceServer()
 	serviceID := uuid.New()
@@ -181,59 +185,6 @@ func TestCallTool_ServiceListGetAndMutationsDeprecated(t *testing.T) {
 		t.Fatalf("expected 1 service, got %v", listPayload["total"])
 	}
 
-	commands := &captureServiceCommandPublisher{}
-	server.serviceCommands = commands
-	createRes, err := server.CallTool(ctx, "bahia_create_service", map[string]interface{}{
-		"name":          "new-api",
-		"artifact_repo": "registry.example.com/new-api",
-		"repo_url":      "https://git.example/new-api.git",
-		"repository": map[string]interface{}{
-			"source":          "gitea",
-			"repo_coordinate": "example/new-api",
-			"clone_url":       "https://git.example/new-api.git",
-		},
-		"runtime_type":   "compose",
-		"default_branch": "main",
-		"managed_runtime_config": map[string]interface{}{
-			"schema_version": "1",
-			"service_name":   "new-api",
-			"ports":          []interface{}{"127.0.0.1:18080:8080"},
-			"restart_policy": "unless-stopped",
-			"pull_policy":    "if-not-present",
-		},
-		"idempotency_key": "service:create:new-api",
-	})
-	if err != nil {
-		t.Fatalf("create service call err: %v", err)
-	}
-	if createRes.IsError {
-		t.Fatalf("create service returned error: %s", createRes.Content[0].Text)
-	}
-	if commands.create == nil || commands.create.Name != "new-api" || commands.create.Repository == nil || commands.create.ManagedRuntimeConfig == nil || commands.create.ManagedRuntimeConfig.ServiceName != "new-api" || commands.create.IdempotencyKey != "service:create:new-api" {
-		t.Fatalf("captured create command = %#v", commands.create)
-	}
-	updateRes, err := server.CallTool(ctx, "bahia_update_service", map[string]interface{}{
-		"service_id":      serviceID.String(),
-		"name":            "api-v2",
-		"idempotency_key": "service:update:api",
-	})
-	if err != nil {
-		t.Fatalf("update service call err: %v", err)
-	}
-	if updateRes.IsError {
-		t.Fatalf("update service returned error: %s", updateRes.Content[0].Text)
-	}
-	if commands.update == nil || commands.update.ID != serviceID || commands.update.Name == nil || *commands.update.Name != "api-v2" || commands.update.IdempotencyKey != "service:update:api" {
-		t.Fatalf("captured update command = %#v", commands.update)
-	}
-	assertSignerFirstMutationError(t, server, "bahia_delete_service", map[string]interface{}{"service_id": serviceID.String()})
-
-	if len(svcRepo.services) != 1 {
-		t.Fatalf("published mutations must not change repository state directly, got %d services", len(svcRepo.services))
-	}
-	if svcRepo.services[serviceID].Name != "api" {
-		t.Fatalf("published update mutated service name to %q", svcRepo.services[serviceID].Name)
-	}
 }
 
 func assertSignerFirstMutationError(t *testing.T, server *Server, tool string, args map[string]interface{}) {

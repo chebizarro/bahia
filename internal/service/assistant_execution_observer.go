@@ -228,9 +228,9 @@ func terminalStatus(ev *nostr.Event) string {
 		status = strings.ToLower(strings.TrimSpace(stringFromMap(content, "status")))
 	}
 	switch status {
-	case "success", "succeeded", "completed", "complete", "ok", "approved":
+	case "success", "succeeded", "completed", "complete", "ok", "approved", "accepted":
 		return "completed"
-	case "failed", "failure", "error", "rejected", "cancelled", "canceled":
+	case "failed", "failure", "error", "rejected", "conflict", "cancelled", "canceled":
 		return "failed"
 	default:
 		return ""

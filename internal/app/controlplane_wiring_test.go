@@ -146,25 +146,6 @@ func TestConfigurePolicyToolMCPDepsFailsClosedWhenPublishingDepsMissing(t *testi
 	}
 }
 
-func TestConfigureBackupMCPDepsProvidesPublisherWithoutReadModels(t *testing.T) {
-
-	signer, err := controlplane.NewPrivateKeySigner(nostr.Generate().Hex())
-	require.NoError(t, err)
-	deps := mcp.ServerDeps{}
-
-	configureBackupMCPDeps(&deps, appWiringBackupMCPPublisher{}, signer, []string{"ws://relay.test"})
-
-	require.NotNil(t, deps.BackupCommandPublisher)
-	server := newAppTestMCPServer(nil, zap.NewNop(), deps)
-	ctx := auth.ContextWithPrincipal(context.Background(), auth.SystemPrincipal("controlplane-wiring-test"))
-	result, err := server.CallTool(ctx, "request_backup_run", map[string]interface{}{
-		"recipe":          "recipe:postgres:v1",
-		"idempotency_key": "backup-run:test",
-	})
-	require.NoError(t, err)
-	require.False(t, result.IsError, "configured backup MCP mutating tool should not return dependency errors: %#v", result)
-}
-
 func TestControlPlaneReactorAuditOptionIndependentOfPackageFeature(t *testing.T) {
 	repo := &appWiringNostrEventRepo{}
 	tests := []struct {

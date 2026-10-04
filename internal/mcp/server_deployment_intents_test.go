@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -175,64 +174,6 @@ func (m *testDeploymentStateRepo) ListAll(_ context.Context) ([]domain.Environme
 	return out, nil
 }
 
-type captureServiceCommandPublisher struct {
-	create    *controlplane.ServiceCreateCommand
-	envCreate *controlplane.EnvironmentCreateCommand
-	update    *controlplane.ServiceUpdateCommand
-	deploy    *controlplane.ServiceDeployCommand
-	rollback  *controlplane.ServiceRollbackCommand
-	approval  *controlplane.ServiceApprovalCommand
-	err       error
-}
-
-func (p *captureServiceCommandPublisher) PublishServiceCreateRequest(_ context.Context, cmd controlplane.ServiceCreateCommand) (*controlplane.ServiceCommandReceipt, error) {
-	p.create = &cmd
-	if p.err != nil {
-		return nil, p.err
-	}
-	return &controlplane.ServiceCommandReceipt{RequestEventID: "service-create-event", RequestPubkey: "operator", RequestKind: controlplane.KindContextVMMessage, StatusKind: controlplane.KindNIP38Status, ResultKind: controlplane.KindContextVMMessage, RegistryKind: controlplane.KindCASControlState, StateKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, ServiceName: cmd.Name}, nil
-}
-
-func (p *captureServiceCommandPublisher) PublishEnvironmentCreateRequest(_ context.Context, cmd controlplane.EnvironmentCreateCommand) (*controlplane.ServiceCommandReceipt, error) {
-	p.envCreate = &cmd
-	if p.err != nil {
-		return nil, p.err
-	}
-	return &controlplane.ServiceCommandReceipt{RequestEventID: "environment-create-event", RequestKind: controlplane.KindContextVMMessage, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, EnvironmentID: cmd.ID.String()}, nil
-}
-
-func (p *captureServiceCommandPublisher) PublishServiceUpdateRequest(_ context.Context, cmd controlplane.ServiceUpdateCommand) (*controlplane.ServiceCommandReceipt, error) {
-	p.update = &cmd
-	if p.err != nil {
-		return nil, p.err
-	}
-	return &controlplane.ServiceCommandReceipt{RequestEventID: "service-update-event", RequestPubkey: "operator", RequestKind: controlplane.KindContextVMMessage, StatusKind: controlplane.KindNIP38Status, ResultKind: controlplane.KindContextVMMessage, RegistryKind: controlplane.KindCASControlState, StateKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, ServiceID: cmd.ID.String()}, nil
-}
-
-func (p *captureServiceCommandPublisher) PublishDeployRequest(_ context.Context, cmd controlplane.ServiceDeployCommand) (*controlplane.ServiceCommandReceipt, error) {
-	p.deploy = &cmd
-	if p.err != nil {
-		return nil, p.err
-	}
-	return &controlplane.ServiceCommandReceipt{RequestEventID: "deploy-event", RequestPubkey: "operator", RequestKind: controlplane.KindContextVMMessage, StatusKind: controlplane.KindNIP38Status, ResultKind: controlplane.KindContextVMMessage, RegistryKind: controlplane.KindDeploymentIntentRegistry, StateKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, ServiceID: cmd.ServiceID.String(), EnvironmentID: cmd.EnvironmentID.String(), ArtifactID: cmd.ArtifactID.String()}, nil
-}
-
-func (p *captureServiceCommandPublisher) PublishRollbackRequest(_ context.Context, cmd controlplane.ServiceRollbackCommand) (*controlplane.ServiceCommandReceipt, error) {
-	p.rollback = &cmd
-	if p.err != nil {
-		return nil, p.err
-	}
-	return &controlplane.ServiceCommandReceipt{RequestEventID: "rollback-event", RequestPubkey: "operator", RequestKind: controlplane.KindContextVMMessage, StatusKind: controlplane.KindNIP38Status, ResultKind: controlplane.KindContextVMMessage, RegistryKind: controlplane.KindDeploymentIntentRegistry, StateKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, ServiceID: cmd.ServiceID.String(), EnvironmentID: cmd.EnvironmentID.String()}, nil
-}
-
-func (p *captureServiceCommandPublisher) PublishDeploymentApprovalRequest(_ context.Context, cmd controlplane.ServiceApprovalCommand) (*controlplane.ServiceCommandReceipt, error) {
-	p.approval = &cmd
-	if p.err != nil {
-		return nil, p.err
-	}
-	return &controlplane.ServiceCommandReceipt{RequestEventID: "approval-event", RequestPubkey: "operator", RequestKind: controlplane.KindContextVMMessage, StatusKind: controlplane.KindNIP38Status, ResultKind: controlplane.KindContextVMMessage, RegistryKind: controlplane.KindDeploymentIntentRegistry, StateKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, IntentID: cmd.IntentID.String(), Decision: cmd.Decision}, nil
-}
-
 type deploymentTestFixture struct {
 	server    *Server
 	services  *testServiceRepo
@@ -240,7 +181,6 @@ type deploymentTestFixture struct {
 	artifacts *testArtifactRepo
 	intents   *testDeploymentIntentRepo
 	state     *testDeploymentStateRepo
-	commands  *captureServiceCommandPublisher
 	serviceID uuid.UUID
 	envID     uuid.UUID
 }
@@ -283,15 +223,13 @@ func newTestMCPDeploymentServer(t *testing.T, protected bool) *deploymentTestFix
 		DeployStrategy: domain.DeployStrategyReplace,
 	}
 
-	commands := &captureServiceCommandPublisher{}
 	return &deploymentTestFixture{
-		server:    newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{ServiceCommandPublisher: commands}),
+		server:    newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{}),
 		services:  svcRepo,
 		envs:      envRepo,
 		artifacts: artifactRepo,
 		intents:   intentRepo,
 		state:     stateRepo,
-		commands:  commands,
 		serviceID: serviceID,
 		envID:     envID,
 	}
@@ -337,111 +275,6 @@ func TestGetTools_IncludesDeploymentWorkflowTools(t *testing.T) {
 		if !present {
 			t.Fatalf("missing deployment workflow tool %s", name)
 		}
-	}
-}
-
-func TestCallTool_DeployAndCreateIntent_CreateDeploymentIntent(t *testing.T) {
-	ctx := authorizedMCPContext()
-
-	for _, toolName := range []string{"bahia_deploy", "bahia_create_intent"} {
-		t.Run(toolName, func(t *testing.T) {
-			fixture := newTestMCPDeploymentServer(t, false)
-			artifactID := fixture.addArtifact(uuid.Nil, "sha256:new")
-
-			result, err := fixture.server.CallTool(ctx, toolName, map[string]interface{}{
-				"service_id":     fixture.serviceID.String(),
-				"environment_id": fixture.envID.String(),
-				"artifact_id":    artifactID.String(),
-				"requested_by":   "alice",
-			})
-			if err != nil {
-				t.Fatalf("call err: %v", err)
-			}
-			if result.IsError {
-				t.Fatalf("%s returned error: %s", toolName, result.Content[0].Text)
-			}
-
-			payload := decodeResultMap(t, result)
-			if payload["status"] != "submitted" || payload["request_event_id"] != "deploy-event" || payload["request_kind"].(float64) != float64(controlplane.KindContextVMMessage) {
-				t.Fatalf("unexpected signer-first deploy receipt: %#v", payload)
-			}
-			if payload["service_id"] != fixture.serviceID.String() || payload["environment_id"] != fixture.envID.String() || payload["artifact_id"] != artifactID.String() {
-				t.Fatalf("unexpected deploy payload: %#v", payload)
-			}
-			if fixture.commands.deploy == nil {
-				t.Fatalf("expected deploy command to be published")
-			}
-			if fixture.commands.deploy.RequestedBy != "alice" || fixture.commands.deploy.ServiceID != fixture.serviceID || fixture.commands.deploy.EnvironmentID != fixture.envID || fixture.commands.deploy.ArtifactID != artifactID {
-				t.Fatalf("unexpected captured deploy command: %#v", fixture.commands.deploy)
-			}
-			if len(fixture.intents.intents) != 0 {
-				t.Fatalf("direct registry fallback persisted intents: %#v", fixture.intents.intents)
-			}
-		})
-	}
-}
-
-func TestCallTool_ApprovalAndRejectionFlows(t *testing.T) {
-	ctx := authorizedMCPContext()
-
-	for _, tc := range []struct {
-		name     string
-		tool     string
-		decision string
-	}{
-		{name: "approve deployment tool", tool: "bahia_approve_deployment", decision: "approve"},
-		{name: "approve intent alias", tool: "bahia_approve_intent", decision: "approve"},
-		{name: "reject deployment tool", tool: "bahia_reject_deployment", decision: "reject"},
-		{name: "reject intent alias", tool: "bahia_reject_intent", decision: "reject"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			fixture := newTestMCPDeploymentServer(t, true)
-			intentID := uuid.New()
-			res, err := fixture.server.CallTool(ctx, tc.tool, map[string]interface{}{"intent_id": intentID.String(), "requested_by": "approver"})
-			if err != nil {
-				t.Fatalf("call err: %v", err)
-			}
-			if res.IsError {
-				t.Fatalf("%s returned error: %s", tc.tool, res.Content[0].Text)
-			}
-			payload := decodeResultMap(t, res)
-			if payload["status"] != "submitted" || payload["request_event_id"] != "approval-event" || payload["intent_id"] != intentID.String() || payload["decision"] != tc.decision {
-				t.Fatalf("unexpected approval receipt: %#v", payload)
-			}
-			if fixture.commands.approval == nil || fixture.commands.approval.IntentID != intentID || fixture.commands.approval.Decision != tc.decision || fixture.commands.approval.AgentID != "approver" {
-				t.Fatalf("unexpected captured approval command: %#v", fixture.commands.approval)
-			}
-			if len(fixture.intents.intents) != 0 {
-				t.Fatalf("direct registry fallback persisted intents: %#v", fixture.intents.intents)
-			}
-		})
-	}
-}
-
-func TestCallTool_Rollback_CreatesRollbackIntent(t *testing.T) {
-	ctx := authorizedMCPContext()
-	fixture := newTestMCPDeploymentServer(t, false)
-
-	result, err := fixture.server.CallTool(ctx, "bahia_rollback", map[string]interface{}{
-		"service_id":     fixture.serviceID.String(),
-		"environment_id": fixture.envID.String(),
-		"requested_by":   "operator",
-	})
-	if err != nil {
-		t.Fatalf("rollback call err: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("rollback returned error: %s", result.Content[0].Text)
-	}
-	payload := decodeResultMap(t, result)
-	if payload["status"] != "submitted" || payload["request_event_id"] != "rollback-event" || payload["service_id"] != fixture.serviceID.String() || payload["environment_id"] != fixture.envID.String() {
-		t.Fatalf("unexpected rollback receipt: %#v", payload)
-	}
-	if fixture.commands.rollback == nil || fixture.commands.rollback.ServiceID != fixture.serviceID || fixture.commands.rollback.EnvironmentID != fixture.envID || fixture.commands.rollback.AgentID != "operator" {
-		t.Fatalf("unexpected captured rollback command: %#v", fixture.commands.rollback)
-	}
-	if len(fixture.intents.intents) != 0 {
-		t.Fatalf("direct registry fallback persisted intents: %#v", fixture.intents.intents)
 	}
 }
 

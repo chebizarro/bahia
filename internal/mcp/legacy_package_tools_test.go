@@ -10,18 +10,22 @@ import (
 	"github.com/openagentsinc/bahia/internal/repository"
 )
 
+// legacyPackageProjection is the repository-side parity oracle for package tools.
+// Production MCP reads come from the local store (F74b); this is test-only.
+var legacyPackageProjection repository.PackageControlPlaneRepository
+
 func (s *Server) handlePackageList(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.packageProjection == nil {
+	if legacyPackageProjection == nil {
 		return errorResult("package projection repository is not configured"), nil
 	}
 	if repoID := optionalUUIDArg(args, "repository_id"); repoID != uuid.Nil {
-		artifacts, err := s.packageProjection.ListArtifacts(ctx, repoID, optionalIntArg(args, "limit", 100), optionalIntArg(args, "offset", 0))
+		artifacts, err := legacyPackageProjection.ListArtifacts(ctx, repoID, optionalIntArg(args, "limit", 100), optionalIntArg(args, "offset", 0))
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}
 		return jsonResult(map[string]any{"artifacts": artifacts})
 	}
-	repos, err := s.packageProjection.ListRepositories(ctx, boolArg(args, "include_deleted"))
+	repos, err := legacyPackageProjection.ListRepositories(ctx, boolArg(args, "include_deleted"))
 	if err != nil {
 		return errorResult(err.Error()), nil
 	}
@@ -29,17 +33,17 @@ func (s *Server) handlePackageList(ctx context.Context, args map[string]interfac
 }
 
 func (s *Server) handlePackageGet(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.packageProjection == nil {
+	if legacyPackageProjection == nil {
 		return errorResult("package projection repository is not configured"), nil
 	}
-	repo, err := lookupPackageProjectionRepository(ctx, s.packageProjection, optionalUUIDArg(args, "repository_id"), firstNonEmpty(stringArg(args, "repository_name"), stringArg(args, "name")))
+	repo, err := lookupPackageProjectionRepository(ctx, legacyPackageProjection, optionalUUIDArg(args, "repository_id"), firstNonEmpty(stringArg(args, "repository_name"), stringArg(args, "name")))
 	if err != nil {
 		return errorResult(err.Error()), nil
 	}
 	if stringArg(args, "package_name") == "" {
 		return jsonResult(repo)
 	}
-	artifact, err := s.packageProjection.GetArtifact(ctx, repo.ID, stringArg(args, "namespace"), stringArg(args, "package_name"), stringArg(args, "version"), stringArg(args, "filename"))
+	artifact, err := legacyPackageProjection.GetArtifact(ctx, repo.ID, stringArg(args, "namespace"), stringArg(args, "package_name"), stringArg(args, "version"), stringArg(args, "filename"))
 	if err != nil {
 		return errorResult(err.Error()), nil
 	}

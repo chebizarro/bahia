@@ -1,0 +1,9 @@
+{
+  "criteria": [
+    {"id": "P2-1", "statement": "An MCP write uses BuildIntentEvent and ProcessInProcess with the NIP-98 principal pubkey as actor and TrustSet authorization.", "status": "partial"},
+    {"id": "P2-2", "statement": "A stable progressToken or idempotency key deduplicates a retry and preserves the original event correlation.", "status": "verified_for_service_package_worker"},
+    {"id": "P2-3", "statement": "Accepted writes return signed canonical state, rejected writes return structured errors, and unavailable state returns a successful pending correlation.", "status": "verified_for_service_package_worker_notification"},
+    {"id": "P2-4", "statement": "Every registered MCP write tool uses the intent processor and obsolete ContextVM publisher dependencies and async publish functions are removed.", "status": "not_met"},
+    {"id": "P2-5", "statement": "Every migrated tool has accepted, rejected, replay and pending pipeline tests.", "status": "not_met"}
+  ]
+}

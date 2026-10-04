@@ -7,131 +7,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
-
-// BackupCommandPublisher emits canonical backup control-plane request events.
-type BackupCommandPublisher interface {
-	PublishBackupRepositoryRegisterRequest(ctx context.Context, cmd BackupRepositoryApplyCommand) (*BackupCommandReceipt, error)
-	PublishBackupPolicyApplyRequest(ctx context.Context, cmd BackupPolicyApplyCommand) (*BackupCommandReceipt, error)
-	PublishBackupRecipeApplyRequest(ctx context.Context, cmd BackupRecipeApplyCommand) (*BackupCommandReceipt, error)
-	PublishBackupDefinitionApplyRequest(ctx context.Context, cmd BackupDefinitionApplyCommand) (*BackupCommandReceipt, error)
-	PublishBackupRepositoryProbeRequest(ctx context.Context, cmd BackupRepositoryProbeCommand) (*BackupCommandReceipt, error)
-	PublishBackupRunRequest(ctx context.Context, cmd BackupRunCommand) (*BackupCommandReceipt, error)
-	PublishBackupVerificationRequest(ctx context.Context, cmd BackupVerificationCommand) (*BackupCommandReceipt, error)
-	PublishBackupRestoreRequest(ctx context.Context, cmd BackupRestoreCommand) (*BackupCommandReceipt, error)
-	PublishBackupRestoreApprovalRequest(ctx context.Context, cmd BackupRestoreApprovalCommand) (*BackupCommandReceipt, error)
-	PublishBackupRetentionRequest(ctx context.Context, cmd BackupRetentionCommand) (*BackupCommandReceipt, error)
-}
-
-type BackupCommandOptions struct {
-	IdempotencyKey string         `json:"idempotency_key,omitempty"`
-	AgentID        string         `json:"agent_id,omitempty"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
-}
-
-type BackupRepositoryApplyCommand struct {
-	Repository     domain.BackupRepository `json:"repository"`
-	IdempotencyKey string                  `json:"idempotency_key,omitempty"`
-	AgentID        string                  `json:"agent_id,omitempty"`
-}
-
-type BackupPolicyApplyCommand struct {
-	Policy         domain.BackupPolicy `json:"policy"`
-	IdempotencyKey string              `json:"idempotency_key,omitempty"`
-	AgentID        string              `json:"agent_id,omitempty"`
-}
-
-type BackupRecipeApplyCommand struct {
-	Recipe         domain.BackupRecipe `json:"recipe"`
-	IdempotencyKey string              `json:"idempotency_key,omitempty"`
-	AgentID        string              `json:"agent_id,omitempty"`
-}
-
-type BackupDefinitionApplyCommand struct {
-	Definition     domain.BackupDefinition `json:"definition"`
-	IdempotencyKey string                  `json:"idempotency_key,omitempty"`
-	AgentID        string                  `json:"agent_id,omitempty"`
-}
-
-type BackupRepositoryProbeCommand struct {
-	RepositoryID   uuid.UUID      `json:"repository_id,omitempty"`
-	Repository     string         `json:"repository,omitempty"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
-	IdempotencyKey string         `json:"idempotency_key,omitempty"`
-	AgentID        string         `json:"agent_id,omitempty"`
-}
-
-type BackupRunCommand struct {
-	RecipeID       uuid.UUID      `json:"recipe_id,omitempty"`
-	Recipe         string         `json:"recipe,omitempty"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
-	IdempotencyKey string         `json:"idempotency_key,omitempty"`
-	AgentID        string         `json:"agent_id,omitempty"`
-}
-
-type BackupVerificationCommand struct {
-	BackupRunID    uuid.UUID                     `json:"backup_run_id"`
-	Mode           domain.BackupVerificationMode `json:"mode,omitempty"`
-	Metadata       map[string]any                `json:"metadata,omitempty"`
-	IdempotencyKey string                        `json:"idempotency_key,omitempty"`
-	AgentID        string                        `json:"agent_id,omitempty"`
-}
-
-type BackupRestoreCommand struct {
-	BackupRunID      uuid.UUID      `json:"backup_run_id"`
-	RestoreTargetRef string         `json:"restore_target_ref"`
-	Metadata         map[string]any `json:"metadata,omitempty"`
-	IdempotencyKey   string         `json:"idempotency_key,omitempty"`
-	AgentID          string         `json:"agent_id,omitempty"`
-}
-
-type BackupRestoreApprovalCommand struct {
-	RestoreID      uuid.UUID      `json:"restore_id"`
-	Approved       bool           `json:"approved"`
-	Message        string         `json:"message,omitempty"`
-	ReasonCode     string         `json:"reason_code,omitempty"`
-	Reason         map[string]any `json:"reason,omitempty"`
-	IdempotencyKey string         `json:"idempotency_key,omitempty"`
-	AgentID        string         `json:"agent_id,omitempty"`
-}
-
-type BackupRetentionCommand struct {
-	RepositoryID   uuid.UUID      `json:"repository_id"`
-	PolicyID       uuid.UUID      `json:"policy_id"`
-	DryRun         bool           `json:"dry_run,omitempty"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
-	IdempotencyKey string         `json:"idempotency_key,omitempty"`
-	AgentID        string         `json:"agent_id,omitempty"`
-}
-
-type BackupCommandReceipt struct {
-	RequestEventID      string   `json:"request_event_id"`
-	RequestPubkey       string   `json:"request_pubkey"`
-	RequestKind         int      `json:"request_kind"`
-	StatusKind          int      `json:"status_kind,omitempty"`
-	ResultKind          int      `json:"result_kind"`
-	ReadModelKinds      []int    `json:"read_model_kinds,omitempty"`
-	DTag                string   `json:"d_tag,omitempty"`
-	PublishedRelays     int      `json:"published_relays"`
-	Action              string   `json:"action,omitempty"`
-	RepositoryID        string   `json:"repository_id,omitempty"`
-	RepositoryName      string   `json:"repository_name,omitempty"`
-	PolicyID            string   `json:"policy_id,omitempty"`
-	PolicyName          string   `json:"policy_name,omitempty"`
-	RecipeID            string   `json:"recipe_id,omitempty"`
-	RecipeName          string   `json:"recipe_name,omitempty"`
-	RecipeVersion       string   `json:"recipe_version,omitempty"`
-	DefinitionID        string   `json:"definition_id,omitempty"`
-	DefinitionName      string   `json:"definition_name,omitempty"`
-	BackupRunID         string   `json:"backup_run_id,omitempty"`
-	VerificationID      string   `json:"verification_id,omitempty"`
-	RestoreID           string   `json:"restore_id,omitempty"`
-	RetentionRunID      string   `json:"retention_run_id,omitempty"`
-	Decision            string   `json:"decision,omitempty"`
-	PublishedRelayNames []string `json:"published_relay_names,omitempty"`
-}
 
 var backupBaseToolNames = []string{
 	"apply_backup_repository",
@@ -393,264 +270,48 @@ func (s *Server) handleBackupTool(ctx context.Context, name string, args map[str
 	}
 }
 
-func (s *Server) requireBackupCommands() (BackupCommandPublisher, *ToolResult) {
-	if s.backupCommands == nil {
-		return nil, errorResult("backup command publisher is not configured")
-	}
-	return s.backupCommands, nil
-}
-
 func (s *Server) handleApplyBackupRepository(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireBackupCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	idempotencyKey, agentID, errResult := backupCommandIdentity(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	repo, err := backupRepositoryFromArgs(args)
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishBackupRepositoryRegisterRequest(ctx, BackupRepositoryApplyCommand{Repository: repo, IdempotencyKey: idempotencyKey, AgentID: agentID})
-	return backupReceiptResult("submitted", receipt, err)
+	return s.invokeIntentWrite(ctx, "apply_backup_repository", args)
 }
 
 func (s *Server) handleApplyBackupPolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireBackupCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	idempotencyKey, agentID, errResult := backupCommandIdentity(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	policy, err := backupPolicyFromArgs(args)
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishBackupPolicyApplyRequest(ctx, BackupPolicyApplyCommand{Policy: policy, IdempotencyKey: idempotencyKey, AgentID: agentID})
-	return backupReceiptResult("submitted", receipt, err)
+	return s.invokeIntentWrite(ctx, "apply_backup_policy", args)
 }
 
 func (s *Server) handleApplyBackupRecipe(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireBackupCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	idempotencyKey, agentID, errResult := backupCommandIdentity(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	recipe, err := backupRecipeFromArgs(args)
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishBackupRecipeApplyRequest(ctx, BackupRecipeApplyCommand{Recipe: recipe, IdempotencyKey: idempotencyKey, AgentID: agentID})
-	return backupReceiptResult("submitted", receipt, err)
+	return s.invokeIntentWrite(ctx, "apply_backup_recipe", args)
 }
 
 func (s *Server) handleApplyBackupDefinition(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireBackupCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	idempotencyKey, agentID, errResult := backupCommandIdentity(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	definition, err := backupDefinitionFromArgs(args)
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishBackupDefinitionApplyRequest(ctx, BackupDefinitionApplyCommand{Definition: definition, IdempotencyKey: idempotencyKey, AgentID: agentID})
-	return backupReceiptResult("submitted", receipt, err)
+	return s.invokeIntentWrite(ctx, "apply_backup_definition", args)
 }
 
 func (s *Server) handleProbeBackupRepository(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireBackupCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	idempotencyKey, agentID, errResult := backupCommandIdentity(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	repoID, err := optionalUUIDArgStrict(args, "repository_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	metadata, err := optionalMapArg(args, "metadata")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishBackupRepositoryProbeRequest(ctx, BackupRepositoryProbeCommand{RepositoryID: repoID, Repository: firstNonEmpty(stringArg(args, "repository"), stringArg(args, "name")), Metadata: metadata, IdempotencyKey: idempotencyKey, AgentID: agentID})
-	return backupReceiptResult("submitted", receipt, err)
+	return s.invokeIntentWrite(ctx, "probe_backup_repository", args)
 }
 
 func (s *Server) handleRequestBackupRun(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireBackupCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	idempotencyKey, agentID, errResult := backupCommandIdentity(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	recipeID, err := optionalUUIDArgStrict(args, "recipe_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	metadata, err := optionalMapArg(args, "metadata")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishBackupRunRequest(ctx, BackupRunCommand{RecipeID: recipeID, Recipe: stringArg(args, "recipe"), Metadata: metadata, IdempotencyKey: idempotencyKey, AgentID: agentID})
-	return backupReceiptResult("submitted", receipt, err)
+	return s.invokeIntentWrite(ctx, "request_backup_run", args)
 }
 
 func (s *Server) handleRequestBackupVerification(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireBackupCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	idempotencyKey, agentID, errResult := backupCommandIdentity(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	runID, err := parseRequiredUUIDArg(args, "backup_run_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	metadata, err := optionalMapArg(args, "metadata")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishBackupVerificationRequest(ctx, BackupVerificationCommand{BackupRunID: runID, Mode: domain.BackupVerificationMode(stringArg(args, "mode")), Metadata: metadata, IdempotencyKey: idempotencyKey, AgentID: agentID})
-	return backupReceiptResult("submitted", receipt, err)
+	return s.invokeIntentWrite(ctx, "request_backup_verification", args)
 }
 
 func (s *Server) handleRequestBackupRestore(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireBackupCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	idempotencyKey, agentID, errResult := backupCommandIdentity(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	runID, err := parseRequiredUUIDArg(args, "backup_run_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	target := strings.TrimSpace(stringArg(args, "restore_target_ref"))
-	if target == "" {
-		return errorResult("restore_target_ref is required"), nil
-	}
-	metadata, err := optionalMapArg(args, "metadata")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishBackupRestoreRequest(ctx, BackupRestoreCommand{BackupRunID: runID, RestoreTargetRef: target, Metadata: metadata, IdempotencyKey: idempotencyKey, AgentID: agentID})
-	return backupReceiptResult("submitted", receipt, err)
+	return s.invokeIntentWrite(ctx, "request_backup_restore", args)
 }
 
 func (s *Server) handleBackupRestoreApproval(ctx context.Context, args map[string]interface{}, approved bool) (*ToolResult, error) {
-	publisher, errResult := s.requireBackupCommands()
-	if errResult != nil {
-		return errResult, nil
+	name := "reject_backup_restore"
+	if approved {
+		name = "approve_backup_restore"
 	}
-	idempotencyKey, agentID, errResult := backupCommandIdentity(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	restoreID, err := parseRequiredUUIDArg(args, "restore_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	reason, err := optionalMapArg(args, "reason")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishBackupRestoreApprovalRequest(ctx, BackupRestoreApprovalCommand{RestoreID: restoreID, Approved: approved, Message: stringArg(args, "message"), ReasonCode: stringArg(args, "reason_code"), Reason: reason, IdempotencyKey: idempotencyKey, AgentID: agentID})
-	return backupReceiptResult("submitted", receipt, err)
+	return s.invokeIntentWrite(ctx, name, args)
 }
 
 func (s *Server) handleRequestBackupRetention(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireBackupCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	idempotencyKey, agentID, errResult := backupCommandIdentity(args)
-	if errResult != nil {
-		return errResult, nil
-	}
-	repositoryID, err := parseRequiredUUIDArg(args, "repository_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	policyID, err := parseRequiredUUIDArg(args, "policy_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	metadata, err := optionalMapArg(args, "metadata")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := publisher.PublishBackupRetentionRequest(ctx, BackupRetentionCommand{RepositoryID: repositoryID, PolicyID: policyID, DryRun: boolArg(args, "dry_run"), Metadata: metadata, IdempotencyKey: idempotencyKey, AgentID: agentID})
-	return backupReceiptResult("submitted", receipt, err)
-}
-
-func backupReceiptResult(status string, receipt *BackupCommandReceipt, err error) (*ToolResult, error) {
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	return jsonResult(backupReceiptToMap(status, receipt))
-}
-
-func backupCommandIdentity(args map[string]interface{}) (string, string, *ToolResult) {
-	idempotencyKey := strings.TrimSpace(stringArg(args, "idempotency_key"))
-	if idempotencyKey == "" {
-		return "", "", errorResult("idempotency_key is required for addressable backup command events")
-	}
-	return idempotencyKey, strings.TrimSpace(stringArg(args, "agent_id")), nil
-}
-
-func backupReceiptToMap(status string, receipt *BackupCommandReceipt) map[string]any {
-	result := map[string]any{"status": status}
-	if receipt == nil {
-		return result
-	}
-	result["request_event_id"] = receipt.RequestEventID
-	result["request_pubkey"] = receipt.RequestPubkey
-	result["request_kind"] = receipt.RequestKind
-	if receipt.StatusKind > 0 {
-		result["status_kind"] = receipt.StatusKind
-		result["status_kinds"] = []int{receipt.StatusKind}
-	}
-	result["result_kind"] = receipt.ResultKind
-	result["result_kinds"] = []int{receipt.ResultKind}
-	if len(receipt.ReadModelKinds) > 0 {
-		result["read_model_kinds"] = receipt.ReadModelKinds
-	}
-	result["d_tag"] = receipt.DTag
-	result["published_relays"] = receipt.PublishedRelays
-	if len(receipt.PublishedRelayNames) > 0 {
-		result["published_relay_names"] = receipt.PublishedRelayNames
-	}
-	for key, value := range map[string]string{
-		"action": receipt.Action, "repository_id": receipt.RepositoryID, "repository_name": receipt.RepositoryName,
-		"policy_id": receipt.PolicyID, "policy_name": receipt.PolicyName, "recipe_id": receipt.RecipeID,
-		"recipe_name": receipt.RecipeName, "recipe_version": receipt.RecipeVersion, "definition_id": receipt.DefinitionID,
-		"definition_name": receipt.DefinitionName, "backup_run_id": receipt.BackupRunID, "verification_id": receipt.VerificationID,
-		"restore_id": receipt.RestoreID, "retention_run_id": receipt.RetentionRunID, "decision": receipt.Decision,
-	} {
-		if strings.TrimSpace(value) != "" {
-			result[key] = value
-		}
-	}
-	return result
+	return s.invokeIntentWrite(ctx, "request_backup_retention", args)
 }
 
 func backupRepositoryFromArgs(args map[string]interface{}) (domain.BackupRepository, error) {
@@ -749,8 +410,4 @@ func backupRunStatusArg(args map[string]interface{}) (domain.DeploymentRunStatus
 		return "", err
 	}
 	return status, nil
-}
-
-func backupReadModelKinds() []int {
-	return []int{controlplane.KindBackupRunStatus, controlplane.KindBackupRestoreStatus, controlplane.KindBackupVerificationStatus, controlplane.KindBackupObservation}
 }

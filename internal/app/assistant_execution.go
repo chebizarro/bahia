@@ -179,7 +179,7 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 		Iterative:                  iterative,
 		Transcript:                 deps.Transcript,
 		ScopeResolver:              proposalContext,
-		Evidence:                   &service.AssistantContextVMRequestEvidenceResolver{Subscriber: deps.Subscriber, RequestAuthor: deps.ServicePubkey, Methods: mcp.AssistantAsyncToolRequestMethods()},
+		Evidence:                   &service.AssistantContextVMRequestEvidenceResolver{Subscriber: deps.Subscriber, RequestAuthor: deps.ServicePubkey, Methods: mcp.AssistantAsyncToolRequestMethods(), IntentEvidence: deps.MCPServer.ResolveAssistantIntentReceipt},
 		Publisher:                  deps.Publisher,
 		Signer:                     deps.Signer,
 		Subscriber:                 deps.Subscriber,

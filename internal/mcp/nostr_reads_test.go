@@ -645,7 +645,9 @@ func TestMCPPackageStoreReadsMatchRepositoryFixture(t *testing.T) {
 	require.NoError(t, publisher.PublishPackageRepositoryRegistry(ctx, &repo, false))
 	require.NoError(t, publisher.PublishPackageArtifactRegistry(ctx, &artifact, false))
 	fixture := &mcpPackageFixtureRepo{repo: repo, artifact: artifact}
-	repositoryServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{PackageProjection: fixture})
+	legacyPackageProjection = fixture
+	t.Cleanup(func() { legacyPackageProjection = nil })
+	repositoryServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 	for _, tc := range []struct {
 		name string

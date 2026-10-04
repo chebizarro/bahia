@@ -27,6 +27,9 @@ func (p *captureMLCommandPublisher) PublishMLInferenceDeployRequest(_ context.Co
 	p.deployCmd = &cmd
 	return mlTestReceipt(controlplane.KindContextVMMessage, controlplane.KindCASControlState, cmd, map[string]int{"endpoint_state": controlplane.KindCASControlState}), nil
 }
+func (p *captureMLCommandPublisher) PublishMLInferenceApprovalRequest(_ context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error) {
+	return mlTestReceipt(controlplane.KindContextVMMessage, controlplane.KindCASControlState, cmd, map[string]int{"endpoint_state": controlplane.KindCASControlState}), nil
+}
 func (p *captureMLCommandPublisher) PublishMLInferenceRollbackRequest(_ context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error) {
 	p.rollbackCmd = &cmd
 	return mlTestReceipt(controlplane.KindContextVMMessage, controlplane.KindCASControlState, cmd, map[string]int{"endpoint_state": controlplane.KindCASControlState}), nil

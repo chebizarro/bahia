@@ -1,0 +1,7 @@
+# Bahia Phase 5 MCP writes — verification
+
+Slice `bahia-irsry.13.12` remains **partial**. The in-process adapter is wired in the daemon and tested for service, package, worker and notification paths. This continuation adds 25 ML/DNS registry tool variants for the operations covered by the registered handlers, plus a per-tool processor/state-store matrix for accepted/rejected/replay/pending results. It authenticates the NIP-98 pubkey, delegates authorization to `IntentProcessor`, derives replay-safe intent IDs from `idempotency_key` or MCP `_meta.progressToken`, reads signed canonical state, and returns structured rejection/conflict or successful pending correlation. Artifact registration now uses a stable ContextVM key.
+
+The exact coverage and unresolved defects are in `acceptance_criteria.json`, `test_matrix.json`, and `defects.json`. No claim of full P2 completion or removal of legacy ContextVM publisher dependencies is made.
+
+The final Go gate after the last code edit passed: `CGO_ENABLED=0 go build ./...`, `CGO_ENABLED=0 go vet ./...`, `CGO_ENABLED=0 go test ./...`, `CGO_ENABLED=0 go test ./internal/archtest -run '^TestNoNew' -count=1`, `git diff --check`, and a gofmt check of changed Go files. The Oracle review could not inspect this external worktree, so it supplied no code findings. Beads claim/update could not be performed because the configured Dolt server had no `beads_bahia` database; no `.beads` files were changed.
