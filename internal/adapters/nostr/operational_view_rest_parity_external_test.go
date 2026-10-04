@@ -39,6 +39,7 @@ func (parityEncryptor) DecryptConfidential(_ context.Context, content string, _ 
 }
 func (parityEncryptor) DecryptServiceInner(context.Context, string) ([]byte, error) { return nil, nil }
 func (parityEncryptor) RotateKey(context.Context, string) error                     { return nil }
+func (parityEncryptor) RotateKeyExcluding(context.Context, string, string) error    { return nil }
 func (parityEncryptor) WrapKeyForMember(context.Context, string, string) error      { return nil }
 
 func TestOperationalViewProjectionMatchesSource(t *testing.T) {

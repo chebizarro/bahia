@@ -21,7 +21,22 @@ func (p *OrgCanonicalPublisher) Rekey(ctx context.Context, orgID string) (versio
 	}
 	p.rekeyMu.Lock()
 	defer p.rekeyMu.Unlock()
+	if err := p.encryptor.RotateKey(ctx, orgID); err != nil {
+		return "", 0, fmt.Errorf("rotate OCK for %s: %w", orgID, err)
+	}
+	return p.refoundCurrent(ctx, orgID)
+}
 
+// refoundCurrent republishes under the already-rotated key. Membership
+// revocation rotates and refounds before committing its canonical event.
+// The caller holds rekeyMu across the complete operation.
+func (p *OrgCanonicalPublisher) refoundCurrent(ctx context.Context, orgID string) (version string, republished int, err error) {
+	if p == nil || p.projector == nil || !p.projector.Enabled() || p.projector.history == nil || p.encryptor == nil {
+		return "", 0, fmt.Errorf("refounding requires projector, history, and confidential encryptor")
+	}
+	if orgID == "" {
+		return "", 0, fmt.Errorf("refounding requires an org key scope")
+	}
 	versions, ok := p.encryptor.(interface {
 		CurrentKeyVersion(context.Context, string) (string, error)
 	})
@@ -31,9 +46,6 @@ func (p *OrgCanonicalPublisher) Rekey(ctx context.Context, orgID string) (versio
 	servicePubkey, err := publicKeyHexFromPrivateKeyHex(p.projector.privateKey)
 	if err != nil {
 		return "", 0, fmt.Errorf("resolve service publisher: %w", err)
-	}
-	if err := p.encryptor.RotateKey(ctx, orgID); err != nil {
-		return "", 0, fmt.Errorf("rotate OCK for %s: %w", orgID, err)
 	}
 	version, err = versions.CurrentKeyVersion(ctx, orgID)
 	if err != nil {

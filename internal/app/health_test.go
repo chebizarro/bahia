@@ -206,3 +206,26 @@ func requireCheckStatus(t *testing.T, checks []HealthCheck, name string, status 
 	require.Failf(t, "missing health check", "check %q not found", name)
 	return HealthCheck{}
 }
+
+func TestOCKRotationDegradesReadinessUntilRecovery(t *testing.T) {
+	tracker := controlplane.NewReadinessTracker()
+	tracker.RegisterFilter("intent")
+	provider := NewHealthProvider(tracker, nil)
+	pending := []string{"org-a", "org-b"}
+	registerOCKRotationHealthCheck(provider, func() []string { return pending })
+	require.False(t, provider.Readiness().Ready, "rotation must not bypass EOSE readiness")
+	tracker.MarkFilterReady("intent")
+	snapshot := provider.Readiness()
+	require.True(t, snapshot.Ready, "operator intents must remain available to retry")
+	require.Equal(t, SnapshotStatusDegraded, snapshot.Status)
+	requireCheckStatus(t, snapshot.Checks, "ock_rotation", HealthStatusWarn)
+	for _, check := range snapshot.Checks {
+		if check.Name == "ock_rotation" {
+			require.Equal(t, "org org-a: confidential publishes withheld pending key rotation; org org-b: confidential publishes withheld pending key rotation", check.Message)
+			require.Equal(t, "org-a,org-b", check.Details["orgs"])
+		}
+	}
+	pending = nil
+	require.Equal(t, SnapshotStatusHealthy, provider.Readiness().Status)
+	requireCheckStatus(t, provider.Readiness().Checks, "ock_rotation", HealthStatusPass)
+}

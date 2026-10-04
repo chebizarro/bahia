@@ -508,16 +508,17 @@ func (h *OrgIntentHandler) addOrUpdateMember(ctx context.Context, intent *Intent
 			return nil
 		}
 		oldRole := existing.Role
-		if err := h.members.UpdateRole(ctx, intent.OrgID, pubkey, role); err != nil {
-			return fmt.Errorf("update member role: %w", err)
-		}
-		existing.Role = role
+		updated := *existing
+		updated.Role = role
 		if h.publisher != nil {
-			// Pass oldRole so the publisher can detect downgrade and rotate.
-			if err := h.publisher.PublishMember(ctx, existing, false, oldRole); err != nil {
-				h.notifyMemberChange(intent.OrgID)
+			// The relay projection is authoritative. A failed rotation must not
+			// mutate even the derived repository role.
+			if err := h.publisher.PublishMember(ctx, &updated, false, oldRole); err != nil {
 				return fmt.Errorf("publish member role state: %w", err)
 			}
+		}
+		if err := h.members.UpdateRole(ctx, intent.OrgID, pubkey, role); err != nil {
+			return fmt.Errorf("update member role: %w", err)
 		}
 		h.notifyMemberChange(intent.OrgID)
 		h.logger.Info("member role updated via intent",
@@ -605,15 +606,13 @@ func (h *OrgIntentHandler) removeMember(ctx context.Context, intent *Intent) err
 		}
 	}
 
-	if err := h.members.Remove(ctx, intent.OrgID, pubkey); err != nil {
-		return fmt.Errorf("remove member: %w", err)
-	}
-
 	if h.publisher != nil {
 		if err := h.publisher.PublishMember(ctx, existing, true); err != nil {
-			h.notifyMemberChange(intent.OrgID)
 			return fmt.Errorf("publish member tombstone: %w", err)
 		}
+	}
+	if err := h.members.Remove(ctx, intent.OrgID, pubkey); err != nil {
+		return fmt.Errorf("remove member: %w", err)
 	}
 	h.notifyMemberChange(intent.OrgID)
 
@@ -841,8 +840,8 @@ func NewRelayMemberEventHandler(
 
 // HandleEncryptedMemberEvent decrypts an encrypted member event content string,
 // then updates TrustSet relay members for the org. If Postgres is configured,
-// it reads the full member list from the repo; if not, it merges the single
-// event into the existing relay state. Supports both the new confidential
+// it seeds the member list from the repo before applying the committed event;
+// otherwise it merges the event into existing relay state. Supports both the new confidential
 // format and the legacy O1 format (dual-read during migration).
 //
 // legacyKind, dTag, and topic are the record's coordinate identity from the
@@ -863,24 +862,22 @@ func (h *RelayMemberEventHandler) HandleEncryptedMemberEvent(ctx context.Context
 		return fmt.Errorf("invalid org_id in member event: %w", err)
 	}
 
-	// If we have a member repo, rebuild from authoritative source.
+	// Publication precedes the derived repository update. Always apply this
+	// committed event, even when the repository still contains the old role.
+	existing := h.trustSet.RelayMembersFor(orgID)
 	if h.members != nil {
 		members, err := h.members.ListByOrg(ctx, orgUUID)
 		if err == nil {
-			roleMap := make(map[string]domain.Role, len(members))
+			existing = make(map[string]domain.Role, len(members))
 			for _, m := range members {
-				roleMap[m.Pubkey] = m.Role
+				existing[m.Pubkey] = m.Role
 			}
-			h.trustSet.SetRelayMembers(orgID, roleMap)
-			return nil
+		} else {
+			h.logger.Debug("member repo unavailable, using single-event relay update",
+				zap.String("org_id", orgID), zap.Error(err))
 		}
-		h.logger.Debug("member repo unavailable, using single-event relay update",
-			zap.String("org_id", orgID), zap.Error(err))
 	}
 
-	// No member repo: merge single event into relay state.
-	// Read existing relay members, apply change, write back.
-	existing := h.trustSet.RelayMembersFor(orgID)
 	if existing == nil {
 		existing = make(map[string]domain.Role)
 	}

@@ -1470,6 +1470,7 @@ func New(cfg *config.Config) (*App, error) {
 			Members:       ockMemberSource,
 			Logger:        logger,
 		})
+		registerOCKRotationHealthCheck(healthProvider, ockManager.PendingRotations)
 		confidentialEncryptor = controlplane.NewConfidentialEncryptor(ockManager, logger)
 		f74bCanonical.SetEncryptor(confidentialEncryptor)
 	} else if enabledDomains["org"] {

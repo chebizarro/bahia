@@ -67,6 +67,10 @@ func (m *mockConfidentialEncryptor) RotateKey(_ context.Context, _ string) error
 	return nil
 }
 
+func (m *mockConfidentialEncryptor) RotateKeyExcluding(_ context.Context, _, _ string) error {
+	return nil
+}
+
 func (m *mockConfidentialEncryptor) WrapKeyForMember(_ context.Context, _, _ string) error {
 	return nil
 }

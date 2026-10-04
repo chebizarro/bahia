@@ -66,6 +66,12 @@ An owner or admin can request the signed `org/rekey` intent (`bahia.intent.org.v
 
 Organization state includes `strict_revocation`, default `false`. Setting it to `true` makes member removal or role downgrade automatically run the same republish after key rotation. Otherwise those changes only rotate the key, and historical records stay on older versions. Fleet operators may request the same operation for `org_id="fleet"` to refound fleet-scoped confidential state.
 
+Removal and role downgrade rotate the key **before** publishing the membership change. If rotation fails, the intent is rejected and the member/role is unchanged; retry the intent after recovery. Other confidential writes for that org return `OCKRotationPendingError` while rotation is pending. Readiness reports a degraded `ock_rotation` check with `org <id>: confidential publishes withheld pending key rotation`; liveness and the ability to submit repair intents remain available.
+
+Later confidential publish requests retry a pending rotation after an exponential cooldown (1 second up to 1 minute), without background polling. An explicit membership/rekey retry attempts rotation immediately. Recovery clears the write guard but does not replay the rejected membership intent. Failed add-member wraps use the same event-driven cooldown without blocking other writes, and re-check current membership before delivery.
+
+The guard is process-local. Existing key-envelope history has opaque recipient handles and no service-readable recipient roster, so restart recovery cannot reliably compare the old epoch's recipients to current membership. This change does not retrofit that history format or claim to detect pre-existing stale epochs. For strict revocation, refounding also finishes before the membership event is committed. A failed refounding leaves membership unchanged; retry the intent to finish records still on their previous epoch.
+
 ### Adding Members
 
 **Via Web UI:**

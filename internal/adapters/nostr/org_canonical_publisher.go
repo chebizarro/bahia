@@ -25,6 +25,7 @@ type ConfidentialStateEncryptor interface {
 	DecryptConfidential(ctx context.Context, content string, legacyKind int, dTag, topic string) ([]byte, error)
 	DecryptServiceInner(ctx context.Context, content string) ([]byte, error)
 	RotateKey(ctx context.Context, orgID string) error
+	RotateKeyExcluding(ctx context.Context, orgID, removedPubkey string) error
 	WrapKeyForMember(ctx context.Context, orgID string, pubkey string) error
 }
 
@@ -97,8 +98,8 @@ func (p *OrgCanonicalPublisher) PublishOrg(ctx context.Context, org *domain.Orga
 	return err
 }
 
-// PublishMember publishes a canonical org member record. After publishing, it
-// drives the OCK key lifecycle:
+// PublishMember publishes a canonical org member record. Required OCK rotation
+// precedes the canonical record, so a failed rekey cannot commit a revocation:
 //   - Deleted member → RotateKey so the removed member cannot decrypt future records.
 //   - Added/updated member → WrapKeyForMember so they can read existing records.
 //   - Role downgrade (prevRole provided and higher than current) → RotateKey.
@@ -107,6 +108,39 @@ func (p *OrgCanonicalPublisher) PublishOrg(ctx context.Context, org *domain.Orga
 // OrgIntentHandler and EncryptedDomainHandlers) so the publisher can detect
 // downgrades. When omitted, no downgrade check is performed.
 func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domain.OrgMember, deleted bool, prevRole ...domain.Role) error {
+	// Do not interleave another membership change or manual rekey between
+	// exclusion, canonical publication, and strict refounding.
+	p.rekeyMu.Lock()
+	defer p.rekeyMu.Unlock()
+	if p.encryptor == nil {
+		return fmt.Errorf("confidential encryptor not configured; refusing member publish")
+	}
+	orgID := member.OrgID.String()
+	downgrade := !deleted && len(prevRole) > 0 && prevRole[0] != "" && domain.RoleWeight(member.Role) < domain.RoleWeight(prevRole[0])
+	strict := false
+	if (deleted || downgrade) && p.strictRevocation != nil {
+		var err error
+		strict, err = p.strictRevocation(ctx, member.OrgID)
+		if err != nil {
+			return fmt.Errorf("load strict revocation for org %s: %w", member.OrgID, err)
+		}
+	}
+	if deleted {
+		if err := p.encryptor.RotateKeyExcluding(ctx, orgID, member.Pubkey); err != nil {
+			return fmt.Errorf("rotate OCK before member removal for org %s: %w", orgID, err)
+		}
+	} else if downgrade {
+		if err := p.encryptor.RotateKey(ctx, orgID); err != nil {
+			return fmt.Errorf("rotate OCK before role downgrade for org %s: %w", orgID, err)
+		}
+	}
+	if strict && (deleted || downgrade) {
+		// Finish strict refounding before committing membership too. An error
+		// must not leave a canonical removal paired with the old repository role.
+		if _, _, err := p.refoundCurrent(ctx, orgID); err != nil {
+			return err
+		}
+	}
 	dTag := orgMemberDTag(member.OrgID, member.Pubkey)
 	content := map[string]any{
 		"deleted": deleted,
@@ -127,59 +161,17 @@ func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domai
 		topic = fam.topic
 	}
 	encryptedContent, err := p.publishEncrypted(ctx, legacyKind, dTag, deleted, nil, content, "org_member.projection", &entityID, member.OrgID.String())
-	if err == nil && p.onMemberPublished != nil && encryptedContent != "" {
-		p.onMemberPublished(ctx, encryptedContent, legacyKind, dTag, topic)
-	}
 	if err != nil {
 		return err
 	}
-	strict := false
-	if p.strictRevocation != nil {
-		strict, err = p.strictRevocation(ctx, member.OrgID)
-		if err != nil {
-			return fmt.Errorf("load strict revocation for org %s: %w", member.OrgID, err)
-		}
+	if p.onMemberPublished != nil && encryptedContent != "" {
+		p.onMemberPublished(ctx, encryptedContent, legacyKind, dTag, topic)
 	}
-
-	// Key lifecycle (Phase 3 C1). Errors are logged but do not fail the
-	// publish — the member record is already committed.
-	orgID := member.OrgID.String()
-	if deleted {
-		// (a) Member removed → rotate so they can't decrypt future records.
-		if strict {
-			_, _, err := p.Rekey(ctx, orgID)
-			return err
-		}
-		if rotErr := p.encryptor.RotateKey(ctx, orgID); rotErr != nil {
-			p.logger.Warn("OCK rotation after member removal failed",
-				zap.String("org_id", orgID), zap.Error(rotErr))
-		} else {
-			p.logger.Info("OCK rotated after member removal",
-				zap.String("org_id", orgID))
-		}
-	} else {
-		// (b) Member added or updated → wrap current OCK so they can read.
+	if !deleted && !downgrade {
+		// Add/update only: a failed wrap withholds access, not secrecy.
 		if wrapErr := p.encryptor.WrapKeyForMember(ctx, orgID, member.Pubkey); wrapErr != nil {
 			p.logger.Warn("OCK wrap for new member failed",
 				zap.String("org_id", orgID), zap.Error(wrapErr))
-		}
-		// (a) Role downgrade → rotate (re-key even though the member still
-		// gets the new key; semantically correct for future role-filtered
-		// wrapping and provides an audit boundary).
-		if len(prevRole) > 0 && prevRole[0] != "" {
-			if domain.RoleWeight(member.Role) < domain.RoleWeight(prevRole[0]) {
-				if strict {
-					_, _, err := p.Rekey(ctx, orgID)
-					return err
-				}
-				if rotErr := p.encryptor.RotateKey(ctx, orgID); rotErr != nil {
-					p.logger.Warn("OCK rotation after role downgrade failed",
-						zap.String("org_id", orgID), zap.Error(rotErr))
-				} else {
-					p.logger.Info("OCK rotated after role downgrade",
-						zap.String("org_id", orgID))
-				}
-			}
 		}
 	}
 	return nil

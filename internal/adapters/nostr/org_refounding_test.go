@@ -3,9 +3,11 @@ package nostr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -14,14 +16,115 @@ import (
 )
 
 type refoundingEncryptor struct {
-	version   int
-	rotations int
+	version     int
+	rotations   int
+	rotationErr error
+	excluded    string
 }
 
 func (e *refoundingEncryptor) RotateKey(context.Context, string) error {
+	if e.rotationErr != nil {
+		return e.rotationErr
+	}
 	e.version++
 	e.rotations++
 	return nil
+}
+func (e *refoundingEncryptor) RotateKeyExcluding(ctx context.Context, orgID, removed string) error {
+	e.excluded = removed
+	return e.RotateKey(ctx, orgID)
+}
+
+func TestPublishMemberRotationFailurePreventsCanonicalRecord(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		for _, removed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("strict=%t/removed=%t", strict, removed), func(t *testing.T) {
+				ctx := t.Context()
+				org := uuid.New()
+				sink := &captureProjectionPublisher{}
+				projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+				pubkey, err := publicKeyHexFromPrivateKeyHex(projector.privateKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				projector.history = &fakeProjectionHistory{records: map[string][]repository.NostrEventRecord{
+					"t:" + kinds.CPStateTopicOrgRegistry: {refoundingRecord(t, pubkey, org.String(), "v1", org.String(), kinds.CPStateTopicOrgRegistry, "")},
+				}}
+				rotationFailure := errors.New("service envelope refused")
+				encryptor := &refoundingEncryptor{version: 1, rotationErr: rotationFailure}
+				publisher := NewOrgCanonicalPublisher(projector, encryptor, zap.NewNop())
+				publisher.SetStrictRevocationLookup(func(context.Context, uuid.UUID) (bool, error) { return strict, nil })
+				member := &domain.OrgMember{OrgID: org, Pubkey: "removed-member", Role: domain.RoleViewer}
+				if err := publisher.PublishMember(ctx, member, removed, domain.RoleAdmin); !errors.Is(err, rotationFailure) {
+					t.Fatalf("rotation error = %v", err)
+				}
+				if got := len(sink.snapshot()); got != 0 {
+					t.Fatalf("published %d records after failed rotation", got)
+				}
+				if removed && encryptor.excluded != member.Pubkey {
+					t.Fatalf("excluded = %q", encryptor.excluded)
+				}
+				encryptor.rotationErr = nil
+				if err := publisher.PublishMember(ctx, member, removed, domain.RoleAdmin); err != nil {
+					t.Fatal(err)
+				}
+				if encryptor.rotations != 1 {
+					t.Fatalf("retry rotated %d times; strict refounding must reuse the new epoch", encryptor.rotations)
+				}
+				var envelope struct {
+					KeyVersion string `json:"key_version"`
+				}
+				published := sink.snapshot()
+				if err := json.Unmarshal([]byte(published[len(published)-1].Content), &envelope); err != nil || envelope.KeyVersion != "v2" {
+					t.Fatalf("member record was not encrypted under the rotated epoch: version=%q err=%v", envelope.KeyVersion, err)
+				}
+				want := 1
+				if strict {
+					want++
+				}
+				if got := len(sink.snapshot()); got != want {
+					t.Fatalf("published %d records after retry, want %d", got, want)
+				}
+			})
+		}
+	}
+}
+
+type rekeyTestPublisher func(context.Context, gonostr.Event) (int, error)
+
+func (f rekeyTestPublisher) Publish(ctx context.Context, event gonostr.Event) (int, error) {
+	return f(ctx, event)
+}
+
+func TestPublishMemberStrictRefoundingFailurePreservesMembership(t *testing.T) {
+	ctx := t.Context()
+	org := uuid.New()
+	sink := &captureProjectionPublisher{}
+	refoundErr := errors.New("refounding refused")
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), rekeyTestPublisher(func(ctx context.Context, event gonostr.Event) (int, error) {
+		if eventDTag(event) == org.String() {
+			return 0, refoundErr
+		}
+		return sink.Publish(ctx, event)
+	}), nil, zap.NewNop())
+	pubkey, err := publicKeyHexFromPrivateKeyHex(projector.privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.history = &fakeProjectionHistory{records: map[string][]repository.NostrEventRecord{
+		"t:" + kinds.CPStateTopicOrgRegistry: {refoundingRecord(t, pubkey, org.String(), "v1", org.String(), kinds.CPStateTopicOrgRegistry, "")},
+	}}
+	publisher := NewOrgCanonicalPublisher(projector, &refoundingEncryptor{version: 1}, zap.NewNop())
+	publisher.SetStrictRevocationLookup(func(context.Context, uuid.UUID) (bool, error) { return true, nil })
+	publishedMembers := 0
+	publisher.SetOnMemberPublished(func(context.Context, string, int, string, string) { publishedMembers++ })
+	member := &domain.OrgMember{OrgID: org, Pubkey: "removed-member", Role: domain.RoleViewer}
+	if err := publisher.PublishMember(ctx, member, true); !errors.Is(err, refoundErr) {
+		t.Fatalf("refounding error = %v", err)
+	}
+	if publishedMembers != 0 || len(sink.snapshot()) != 0 {
+		t.Fatal("refounding failure committed membership")
+	}
 }
 func (e *refoundingEncryptor) CurrentKeyVersion(context.Context, string) (string, error) {
 	return fmt.Sprintf("v%d", e.version), nil
