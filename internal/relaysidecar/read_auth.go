@@ -237,6 +237,11 @@ var publicCPStateTopics = map[string]bool{
 	kinds.CPStateTopicSecurityFinding:       true,
 	kinds.CPStateTopicSecuritySchedule:      true,
 	kinds.CPStateTopicSecurityFindingDetail: true,
+	kinds.CPStateTopicPackageIntent:         true,
+	kinds.CPStateTopicToolProvisionIntent:   true,
+	kinds.CPStateTopicToolDenylist:          true,
+	kinds.CPStateTopicToolProfile:           true,
+	kinds.CPStateTopicNotificationLog:       true,
 
 	// Protected topics (NOT in this map):
 	//   security-findings, security-audit — detailed vulnerability data

@@ -941,3 +941,14 @@ is not evidence that a submitted tool completed. Follow the scoped state and
 audit subscriptions; do not infer failure from EOSE or missing events. The v2
 contract is additive until the unified executor is wired. See
 [Operator Assistant](features/operator-assistant.md).
+
+## Package, tool, and notification canonical reads
+
+The daemon publishes fleet-OCK-encrypted `30900` state for package intent and
+approval lifecycle (`package-intent`), tool provisioning/policy/profile
+(`tool-provision-intent`, `tool-denylist`, `tool-profile`), and the bounded
+notification delivery log (`notification-log`). Subscribe by `#t` and the
+daemon author; decrypt with an authorized fleet OCK, validate the signature,
+and honor same-coordinate tombstones. The log retains at most the latest 50
+attempts per channel in one replaceable record. See the
+[event guide](../nostr-event-implementation-guide.md#f74b-canonical-fleet-private-state-bahia-irsry74).

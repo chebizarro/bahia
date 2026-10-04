@@ -91,6 +91,15 @@ Security OSV notifications are breach-only: a new or materially changed breach f
 
 The dispatcher creates an organization-scoped log record for each attempted notification and then calls the selected sender. Send and log-update failures are returned to the caller rather than converted into success.
 
+Each successful create/update publishes one fleet-OCK-encrypted `30900`
+`notification-log` record at `d=notification:log:<channel UUID>`. It replaces the
+channel's latest 50 attempts, not an ever-growing event per log line. Payloads
+over 512 JSON bytes and errors over 256 characters are truncated in the relay
+read model; the optional database retains the full delivery audit. The oldest
+entries are dropped if the 60 KiB plaintext budget is reached. Channel deletion
+publishes a tombstone on the same coordinate. Direct MCP list/get reads come
+from this bounded signed state; older IDs are not addressable there.
+
 For Nostr DMs, zero relay acceptances count as a delivery failure. For webhooks, connection, TLS, authentication, and non-success response failures remain visible in the log's status and error fields.
 
 Use the Notifications log view or these MCP tools:
@@ -98,7 +107,7 @@ Use the Notifications log view or these MCP tools:
 | Tool | Purpose |
 |---|---|
 | `bahia_list_notifications` | List recent logs; supports status and event-type filters |
-| `bahia_get_notification` | Registered compatibility operation; direct get-by-ID is unsupported, so use list |
+| `bahia_get_notification` | Read a log by ID while it remains in the bounded canonical window |
 | `bahia_mark_notification_read` | Compatibility mutation that finds a recent log and overwrites its status to `sent` |
 | `bahia_dismiss_notification` | Registered compatibility operation; dismissal is unsupported |
 

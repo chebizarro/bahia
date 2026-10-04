@@ -1,0 +1,11 @@
+{
+  "unit": [
+    "CGO_ENABLED=0 go test ./internal/adapters/nostr -run TestF74b -count=1",
+    "CGO_ENABLED=0 go test ./internal/controlplane -run TestPackageIntentHandlerPublishesSignedTerminalStateOnce -count=1",
+    "CGO_ENABLED=0 go test ./internal/mcp -run TestF74bMCPStoreReadParityWithoutDatabase -count=1",
+    "CGO_ENABLED=0 go test ./internal/kinds ./internal/relaysidecar ./internal/nostrmigration ./internal/archtest"
+  ],
+  "full_go_gate": "CGO_ENABLED=0 go build ./... && go vet ./... && go test ./...",
+  "web_gate": "pnpm run test:unit && pnpm run lint && pnpm run build",
+  "browser_gate": "CGO_ENABLED=0 CI=1 npx playwright test"
+}

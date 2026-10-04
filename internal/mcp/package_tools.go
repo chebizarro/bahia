@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/openagentsinc/bahia/internal/repository"
 )
 
 func packageToolDefinitions() []Tool {
@@ -145,34 +143,6 @@ func (s *Server) handlePackageDriftDetect(ctx context.Context, args map[string]i
 	return packageReceiptResult(receipt, err)
 }
 
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs PackageIntentState.
-func (s *Server) handlePackageStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.packageProjection == nil {
-		return errorResult("package projection repository is not configured"), nil
-	}
-	if id := optionalUUIDArg(args, "intent_id"); id != uuid.Nil {
-		intent, err := s.packageProjection.GetIntent(ctx, id)
-		if err != nil {
-			return errorResult(err.Error()), nil
-		}
-		if intent == nil {
-			return errorResult("package intent not found"), nil
-		}
-		return jsonResult(intent)
-	}
-	if requestID := stringArg(args, "request_event_id"); requestID != "" {
-		intent, err := s.packageProjection.GetIntentByRequestEventID(ctx, requestID)
-		if err != nil {
-			return errorResult(err.Error()), nil
-		}
-		if intent == nil {
-			return errorResult("package intent not found"), nil
-		}
-		return jsonResult(intent)
-	}
-	return errorResult("intent_id or request_event_id is required"), nil
-}
-
 func packageReceiptResult(receipt *controlplane.PackageCommandReceipt, err error) (*ToolResult, error) {
 	if err != nil {
 		return errorResult(err.Error()), nil
@@ -194,26 +164,4 @@ func packagePolicyArg(args map[string]interface{}) (domain.PackageRepositoryPoli
 		return policy, fmt.Errorf("policy must match package repository policy schema: %w", err)
 	}
 	return policy, nil
-}
-
-func lookupPackageProjectionRepository(ctx context.Context, repo repository.PackageControlPlaneRepository, id uuid.UUID, name string) (*domain.PackageRepository, error) {
-	if id != uuid.Nil {
-		out, err := repo.GetRepository(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		if out != nil {
-			return out, nil
-		}
-	}
-	if name != "" {
-		out, err := repo.GetRepositoryByName(ctx, name)
-		if err != nil {
-			return nil, err
-		}
-		if out != nil {
-			return out, nil
-		}
-	}
-	return nil, fmt.Errorf("package repository not found")
 }

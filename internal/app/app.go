@@ -1125,6 +1125,20 @@ func New(cfg *config.Config) (*App, error) {
 	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePub, projectionHistory, logger, projectorOpts...)
 	controlPlanePub.OnDeliveryAbandoned(nostrProjector.ForgetAbandonedProjection)
 
+	// F74b: mutation-bound publishers for package intent/approval and tool
+	// provisioning. OCK is installed below before any ingress starts.
+	f74bCanonical := nostrAdapter.NewF74bCanonicalPublisher(nostrProjector, nil)
+	if packageProjection != nil {
+		packageAuth, ok := packageProjection.(repository.PackageAuthorizationStore)
+		if !ok {
+			return nil, fmt.Errorf("package projection lacks authorization store")
+		}
+		packageProjection = nostrAdapter.NewCanonicalPackageRepository(packageProjection, packageAuth, f74bCanonical)
+	}
+	if toolProvisionRepo != nil {
+		toolProvisionRepo = nostrAdapter.NewCanonicalToolRepository(toolProvisionRepo, f74bCanonical)
+	}
+
 	// Relay-first write path: when mode is not "full" OR when explicitly enabled,
 	// wrap registry mutations so relay publish must succeed before local DB writes.
 	// In full mode, this defaults off for backward compatibility with existing
@@ -1406,6 +1420,7 @@ func New(cfg *config.Config) (*App, error) {
 				Projection:     packageProjection,
 				Store:          packageAuthStore,
 				Writer:         packageWriter,
+				StatePublisher: f74bCanonical,
 				Status:         intentStatus,
 				Gate:           controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys),
 				Logger:         logger,
@@ -1446,6 +1461,7 @@ func New(cfg *config.Config) (*App, error) {
 			Logger:        logger,
 		})
 		confidentialEncryptor = controlplane.NewConfidentialEncryptor(ockManager, logger)
+		f74bCanonical.SetEncryptor(confidentialEncryptor)
 	} else if enabledDomains["org"] {
 		logger.Error("org domain requires control-plane signer for confidential state; " +
 			"disabling org domain to prevent plaintext state publication")
@@ -1935,7 +1951,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Notification system.
-	notifRepo := repository.NewPgNotificationRepository(pool)
+	notifRepo := nostrAdapter.NewCanonicalNotificationRepository(repository.NewPgNotificationRepository(pool), f74bCanonical)
 	notifDispatcher := notifications.NewDispatcher(notifRepo, logger)
 	notifDispatcher.RegisterSender(domain.ChannelTypeWebhook, notifications.NewWebhookSender())
 	if cfg.Nostr.PrivateKey != "" {
@@ -2076,7 +2092,6 @@ func New(cfg *config.Config) (*App, error) {
 		ArtifactCommandPublisher: artifactCommandPublisher,
 		PackageCommandPublisher:  packageCommandPublisher,
 		WorkerCommandPublisher:   workerCommandPublisher,
-		PackageProjection:        packageProjection,
 	}
 	configurePolicyToolMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	configureBackupMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)

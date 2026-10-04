@@ -285,3 +285,13 @@ edited `ModifiedPlan` approval requires a v2 client refresh. Old writers must
 be stopped before v2 mutation activation; rollback disables mutations rather
 than converting v2 work to executable v1 steps. Contract and vectors:
 [assistant design](designs/assistant-unified-execution.md).
+
+## F74b fleet-private cp-state families
+
+Package intent/approval (`32030`), tool provisioning intent (`32031`), tool
+denylist (`32032`), tool profile (`32033`), and notification delivery log
+(`32034`) are `30900` addressable state with `#t` topics and fleet-OCK encrypted
+content. The log is one latest-50-per-channel replaceable window, not a growing
+per-line relay history; delete publishes a same-coordinate tombstone. See
+[the event implementation guide](nostr-event-implementation-guide.md#f74b-canonical-fleet-private-state-bahia-irsry74)
+for coordinates, size bounds, and confidentiality.

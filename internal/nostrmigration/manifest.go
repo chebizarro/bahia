@@ -315,6 +315,11 @@ var constantJustifications = map[string]KindJustification{
 	"SecurityFindingRecord":          omitted("SecurityFindingRecord", kinds.SecurityFindingRecord, "cp-state-family", "canonical cp-state output for individual security findings (bahia-irsry.60); OCK-encrypted 30900 records published from SecurityScanner mutation sites"),
 	"SecurityScheduleRecord":         omitted("SecurityScheduleRecord", kinds.SecurityScheduleRecord, "cp-state-family", "canonical cp-state output for security scan schedules (bahia-irsry.60); OCK-encrypted 30900 records published from PolicyService schedule derivation"),
 	"SecurityFindingDetailRecord":    omitted("SecurityFindingDetailRecord", kinds.SecurityFindingDetailRecord, "cp-state-family", "canonical cp-state output for security finding details (bahia-irsry.60); OCK-encrypted 30900 records, one per finding, with full detail text"),
+	"PackageIntentState":             omitted("PackageIntentState", kinds.PackageIntentState, "cp-state-family", "fleet-OCK encrypted package intent and approval lifecycle state on 30900"),
+	"ToolProvisionIntentState":       omitted("ToolProvisionIntentState", kinds.ToolProvisionIntentState, "cp-state-family", "fleet-OCK encrypted tool provisioning intent state on 30900"),
+	"ToolDenylistState":              omitted("ToolDenylistState", kinds.ToolDenylistState, "cp-state-family", "fleet-OCK encrypted operator denylist policy on 30900"),
+	"ToolProfileState":               omitted("ToolProfileState", kinds.ToolProfileState, "cp-state-family", "fleet-OCK encrypted tool profile state on 30900"),
+	"NotificationLogState":           omitted("NotificationLogState", kinds.NotificationLogState, "cp-state-family", "fleet-OCK encrypted bounded per-channel notification log index on 30900"),
 }
 
 func omitted(name string, kind int, category, reason string) KindJustification {

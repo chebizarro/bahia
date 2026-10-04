@@ -559,3 +559,13 @@ run. The public 30900 `bahia.assistant-session.v2` projection is not the
 execution journal; kind 4903 encrypted immutable checkpoints are. Batch
 continuation never invokes the model. This is a frozen contract, not current
 production wiring; see [design](designs/assistant-unified-execution.md).
+
+## F74b fleet-private cp-state families
+
+Package intent/approval (`32030`), tool provisioning intent (`32031`), tool
+denylist (`32032`), tool profile (`32033`), and notification delivery log
+(`32034`) are `30900` addressable state with `#t` topics and fleet-OCK encrypted
+content. The log is one latest-50-per-channel replaceable window, not a growing
+per-line relay history; delete publishes a same-coordinate tombstone. See
+[the event implementation guide](nostr-event-implementation-guide.md#f74b-canonical-fleet-private-state-bahia-irsry74)
+for coordinates, size bounds, and confidentiality.

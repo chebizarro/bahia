@@ -813,3 +813,26 @@ Cascadia `NIP-CAS-0001`'s required 4903 tags and regular append-only class.
 Checkpoint retention, accepted OK and archive recovery must be proved before
 activation; public 30900 projections alone are not a dispatch journal. See
 [the assistant design](designs/assistant-unified-execution.md).
+
+## F74b canonical fleet-private state (bahia-irsry.74)
+
+Five logical families share wire kind `30900`, `schema=bahia.cp-state.v1`, and
+a `#t` topic; their `legacy_kind` discriminators are not emitted as wire kinds.
+
+| Legacy discriminator | `#t` | Addressable `d` |
+|---|---|---|
+| `32030` package intent/claim/approval | `package-intent` | `package:intent:<request event ID>`, `package:claim:<request event ID>`, `package:approval:<UUID>`, or `package:signed-intent:<SHA-256(intent ID)>` |
+| `32031` tool provisioning intent | `tool-provision-intent` | `tool:intent:<UUID>` |
+| `32032` tool denylist policy | `tool-denylist` | `tool:denylist:<SHA-256(manager\0package)>` |
+| `32033` tool profile | `tool-profile` | `tool:profile:<service UUID>:<environment UUID>` |
+| `32034` notification delivery log window | `notification-log` | `notification:log:<channel UUID>` |
+
+All content is fleet-OCK encrypted because requests may contain private source
+URLs, tool entries encode operator policy, and delivery logs may contain
+recipient details. Relay read auth classifies the topics as public **ciphertext**;
+MCP decrypts with the daemon service key. Deletion uses the same coordinate with
+`deleted=true`. The notification event is one bounded replaceable window per
+channel (at most 50 attempts, 512 JSON bytes per payload, 256 error characters,
+60 KiB plaintext), never one addressable event per append-only log line.
+Mutation-bound repository decorators publish after successful persistence via
+`publishControlState`; the legacy mutation path is not duplicated.

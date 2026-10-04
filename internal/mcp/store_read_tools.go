@@ -174,6 +174,16 @@ func (s *Server) callStoreReadTool(ctx context.Context, name string, args map[st
 		result, err = s.storeWorkerModelRead(ctx, name, args)
 	case "bahia_package_list", "bahia_package_get":
 		result, err = s.storePackageRead(ctx, name, args)
+	case "bahia_package_status":
+		result, err = s.storePackageStatus(ctx, args)
+	case "bahia_tool_provision_status":
+		result, err = s.storeToolProvisionStatus(ctx, args)
+	case "bahia_tool_denylist_list":
+		result, err = s.storeToolDenylist(ctx)
+	case "bahia_tool_profile_get":
+		result, err = s.storeToolProfile(ctx, args)
+	case "bahia_list_notifications", "bahia_get_notification":
+		result, err = s.storeNotifications(ctx, name, args)
 	case "bahia_list_secrets":
 		result, err = s.storeSecretRead(ctx, args)
 	case "bahia_list_notification_channels", "bahia_get_notification_channel":

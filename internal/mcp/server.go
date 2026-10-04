@@ -1782,7 +1782,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_get_notification",
-			Description: "Get a single notification by ID (not currently supported)",
+			Description: "Get a recent notification by ID from canonical state",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -2095,8 +2095,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	// Tool provisioning operations
 	case "bahia_tool_provision_request":
 		return s.handleToolProvisionRequest(ctx, arguments)
-	case "bahia_tool_provision_status":
-		return s.handleToolProvisionStatus(ctx, arguments)
 	case "bahia_tool_provision_approve":
 		return s.handleToolProvisionApprove(ctx, arguments)
 	case "bahia_tool_provision_reject":
@@ -2105,10 +2103,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleToolDenylistAdd(ctx, arguments)
 	case "bahia_tool_denylist_remove":
 		return s.handleToolDenylistRemove(ctx, arguments)
-	case "bahia_tool_denylist_list":
-		return s.handleToolDenylistList(ctx, arguments)
-	case "bahia_tool_profile_get":
-		return s.handleToolProfileGet(ctx, arguments)
 	// Package control-plane operations
 	case "bahia_package_repository_apply":
 		return s.handlePackageRepositoryApply(ctx, arguments)
@@ -2122,8 +2116,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handlePackageYank(ctx, arguments)
 	case "bahia_package_drift_detect":
 		return s.handlePackageDriftDetect(ctx, arguments)
-	case "bahia_package_status":
-		return s.handlePackageStatus(ctx, arguments)
 	// Notification channel operations
 	case "bahia_create_notification_channel":
 		return s.handleCreateNotificationChannel(ctx, arguments)
@@ -2134,10 +2126,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	case "bahia_test_notification_channel":
 		return s.handleTestNotificationChannel(ctx, arguments)
 	// Notification log operations
-	case "bahia_list_notifications":
-		return s.handleListNotifications(ctx, arguments)
-	case "bahia_get_notification":
-		return s.handleGetNotification(ctx, arguments)
 	case "bahia_mark_notification_read":
 		return s.handleMarkNotificationRead(ctx, arguments)
 	case "bahia_dismiss_notification":
@@ -3556,25 +3544,6 @@ func (s *Server) handleToolProvisionRequest(ctx context.Context, args map[string
 	})
 }
 
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ToolProvisionIntentState.
-func (s *Server) handleToolProvisionStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.toolProvisioning == nil {
-		return errorResult("tool provisioning tools are not configured"), nil
-	}
-	intentID, err := parseRequiredUUIDArg(args, "intent_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	intent, err := s.toolProvisioning.GetIntent(ctx, intentID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get tool provisioning intent: %v", err)), nil
-	}
-	if intent == nil {
-		return errorResult("intent not found"), nil
-	}
-	return jsonResult(toolProvisionIntentToMap(intent))
-}
-
 func (s *Server) handleToolProvisionApprove(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	return s.handleToolProvisionApprovalResponse(ctx, args, "approve")
 }
@@ -3632,41 +3601,6 @@ func (s *Server) handleToolDenylistRemove(ctx context.Context, args map[string]i
 		return errorResult(fmt.Sprintf("failed to remove denylist entry: %v", err)), nil
 	}
 	return jsonResult(map[string]interface{}{"status": "removed"})
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ToolDenylistState.
-func (s *Server) handleToolDenylistList(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.toolProvisioning == nil {
-		return errorResult("tool provisioning tools are not configured"), nil
-	}
-	entries, err := s.toolProvisioning.ListDenylist(ctx)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list denylist entries: %v", err)), nil
-	}
-	return jsonResult(map[string]interface{}{"entries": toolDenylistEntriesToMaps(entries), "total": len(entries)})
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ToolProfileState.
-func (s *Server) handleToolProfileGet(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.toolProvisioning == nil {
-		return errorResult("tool provisioning tools are not configured"), nil
-	}
-	serviceID, err := parseRequiredUUIDArg(args, "service_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	environmentID, err := parseRequiredUUIDArg(args, "environment_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	state, err := s.toolProvisioning.GetProfileState(ctx, serviceID, environmentID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get tool profile: %v", err)), nil
-	}
-	if state == nil {
-		return jsonResult(map[string]interface{}{"state": nil})
-	}
-	return jsonResult(map[string]interface{}{"state": toolProfileStateToMap(state)})
 }
 
 // --- Helper Functions ---
@@ -4766,62 +4700,6 @@ func (s *Server) handleTestNotificationChannel(ctx context.Context, args map[str
 		"channel_id": ch.ID.String(),
 	}
 	return jsonResult(result)
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Notification-log reads need NotificationLogState.
-func (s *Server) handleListNotifications(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.notificationRepo == nil {
-		return errorResult("notification tools are not configured"), nil
-	}
-
-	status, _ := args["status"].(string)
-	eventType, _ := args["event_type"].(string)
-	limit, _ := args["limit"].(float64)
-	if limit == 0 {
-		limit = 50
-	}
-
-	// List recent notifications
-	logs, err := s.notificationRepo.ListRecentLogs(ctx, int(limit))
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list notifications: %v", err)), nil
-	}
-
-	// Apply filters
-	var filtered []domain.NotificationLog
-	for _, log := range logs {
-		// Filter by status (read = sent, unread = pending/retrying)
-		if status != "" {
-			if status == "read" && log.Status != domain.NotificationStatusSent {
-				continue
-			}
-			if status == "unread" && log.Status != domain.NotificationStatusPending && log.Status != domain.NotificationStatusRetrying {
-				continue
-			}
-		}
-
-		// Filter by event type
-		if eventType != "" && log.EventType != eventType {
-			continue
-		}
-
-		filtered = append(filtered, log)
-	}
-
-	result := map[string]interface{}{
-		"notifications": notificationLogsToMaps(filtered),
-		"total":         len(filtered),
-	}
-	return jsonResult(result)
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs NotificationLogState.
-func (s *Server) handleGetNotification(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.notificationRepo == nil {
-		return errorResult("notification tools are not configured"), nil
-	}
-
-	return errorResult("get notification by ID is not currently supported - repository method not available. Use list_notifications instead."), nil
 }
 
 func (s *Server) handleMarkNotificationRead(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {

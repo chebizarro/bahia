@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"go.uber.org/zap"
@@ -356,6 +357,9 @@ func TestGetTools_IncludesNotificationLogHandlers(t *testing.T) {
 func TestCallTool_NotificationLogListAndMarkRead(t *testing.T) {
 	ctx := authorizedMCPContext()
 	server, repo, _ := newTestMCPNotificationServer()
+	fixture := attachCanonicalMCPFixture(t, server)
+	server.notificationRepo = nostrpool.NewCanonicalNotificationRepository(repo,
+		nostrpool.NewF74bCanonicalPublisher(fixture.projector, fixture.confidentialEncryptor(t, server)))
 	channelID := uuid.New()
 	pendingDeployID := uuid.New()
 	pendingBillingID := uuid.New()
@@ -396,7 +400,7 @@ func TestCallTool_NotificationLogListAndMarkRead(t *testing.T) {
 		},
 	}
 	for i := range logs {
-		if err := repo.CreateLog(ctx, &logs[i]); err != nil {
+		if err := server.notificationRepo.CreateLog(ctx, &logs[i]); err != nil {
 			t.Fatalf("create log: %v", err)
 		}
 	}
@@ -475,13 +479,14 @@ func TestCallTool_NotificationLogListAndMarkRead(t *testing.T) {
 func TestCallTool_NotificationLogUnsupportedAndValidation(t *testing.T) {
 	ctx := authorizedMCPContext()
 	server, _, _ := newTestMCPNotificationServer()
+	attachCanonicalMCPFixture(t, server)
 
 	result, err := server.CallTool(ctx, "bahia_get_notification", map[string]interface{}{"notification_id": uuid.New().String()})
 	if err != nil {
 		t.Fatalf("get call err: %v", err)
 	}
-	if !result.IsError || !strings.Contains(result.Content[0].Text, "not currently supported") {
-		t.Fatalf("expected unsupported get error, got %#v", result)
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "notification not found") {
+		t.Fatalf("expected missing get error, got %#v", result)
 	}
 
 	result, err = server.CallTool(ctx, "bahia_dismiss_notification", map[string]interface{}{"notification_id": uuid.New().String()})
@@ -521,7 +526,7 @@ func TestCallTool_NotificationLogUnsupportedAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unconfigured call err: %v", err)
 	}
-	if !result.IsError || !strings.Contains(result.Content[0].Text, "not configured") {
-		t.Fatalf("expected configuration error, got %#v", result)
+	if result.IsError || !strings.Contains(result.Content[0].Text, `"notifications": []`) {
+		t.Fatalf("expected empty canonical log result, got %#v", result)
 	}
 }
