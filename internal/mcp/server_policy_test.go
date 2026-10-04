@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fiatjaf.com/nostr"
+	"reflect"
 	"testing"
 	"time"
 
@@ -273,5 +275,77 @@ func TestPolicyToMap_StableTimestamps(t *testing.T) {
 	got := policyToMap(policy)
 	if got["created_at"] == "" || got["updated_at"] == "" {
 		t.Fatalf("expected timestamps in map")
+	}
+}
+
+func TestCallTool_EvaluatePolicyUsesIntentAndPublishesDecision(t *testing.T) {
+	f := newRealMCPIntentFixture(t, "policy", false)
+	environmentID, artifactID := uuid.New(), uuid.New()
+	f.canonical.publishEnvironment(t, &domain.Environment{ID: environmentID, OrgID: f.orgID, Name: "prod"})
+	policyID := uuid.New()
+	f.policies.policies[policyID] = &domain.DeploymentPolicy{
+		ID: policyID, Name: "require signature", EnvironmentID: &environmentID,
+		Rules:       []domain.PolicyRule{{Type: domain.RuleRequireSignature}},
+		Enforcement: domain.PolicyEnforcementBlock, Enabled: true,
+	}
+	policySvc := service.NewPolicyService(f.policies, &testSigRepo{hasSig: false}, &testSBOMRepo{}, zap.NewNop())
+	var statuses []nostr.Event
+	signer, err := controlplane.NewPrivateKeySigner(nostr.Generate().Hex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := controlplane.NewIntentStatusPublisher(func(_ context.Context, ev nostr.Event) error {
+		statuses = append(statuses, ev)
+		return nil
+	}, signer, zap.NewNop())
+	processor := controlplane.NewIntentProcessor(controlplane.NewTrustSet([]string{f.actor}, zap.NewNop()), f.canonical.store, status,
+		controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{"policy": true}}, zap.NewNop())
+	processor.RegisterHandler("policy", controlplane.NewPolicyIntentHandler(controlplane.PolicyIntentHandlerConfig{Policies: policySvc, Evaluator: policySvc, Logger: zap.NewNop()}))
+	f.server.intentProc = processor
+	args := map[string]interface{}{"artifact_id": artifactID.String(), "environment_id": environmentID.String(), "idempotency_key": "eval-1"}
+	result, err := f.server.CallTool(f.ctx, "bahia_evaluate_policy", args)
+	if err != nil || result.IsError {
+		t.Fatalf("evaluate: %#v %v", result, err)
+	}
+	body := decodeResultMap(t, result)
+	if body["status"] != "accepted" || int(body["status_kind"].(float64)) != controlplane.KindNIP38Status {
+		t.Fatalf("receipt: %#v", body)
+	}
+	if len(statuses) != 1 {
+		t.Fatalf("statuses = %d", len(statuses))
+	}
+	var payload struct {
+		Evaluation domain.PolicyEvaluation `json:"evaluation"`
+	}
+	if err := json.Unmarshal([]byte(statuses[0].Content), &payload); err != nil {
+		t.Fatal(err)
+	}
+	want, err := policySvc.Evaluate(context.Background(), artifactID, environmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(payload.Evaluation, *want) {
+		t.Fatalf("decision mismatch: got %#v want %#v", payload.Evaluation, *want)
+	}
+	if payload.Evaluation.Allowed || payload.Evaluation.Blockers != 1 {
+		t.Fatalf("wrong decision: %#v", payload.Evaluation)
+	}
+	if body["status_coordinate"] != "intent-status:"+f.actor+":evaluation:"+artifactID.String()+":"+environmentID.String() {
+		t.Fatalf("status coordinate: %#v", body)
+	}
+
+	result, err = f.server.CallTool(f.ctx, "bahia_evaluate_policy", args)
+	if err != nil || result.IsError || len(statuses) != 1 {
+		t.Fatalf("retry should deduplicate: %#v %v statuses=%d", result, err, len(statuses))
+	}
+	result, err = f.server.CallTool(f.strangerCtx, "bahia_evaluate_policy", args)
+	if err != nil || !result.IsError || len(statuses) != 1 {
+		t.Fatalf("non-operator should be rejected: %#v %v statuses=%d", result, err, len(statuses))
+	}
+	args["service_id"] = "" // Legacy optional context field was allowed to be empty.
+	args["idempotency_key"] = "eval-empty-service"
+	result, err = f.server.CallTool(f.ctx, "bahia_evaluate_policy", args)
+	if err != nil || result.IsError || len(statuses) != 2 {
+		t.Fatalf("empty optional service_id should not change evaluation: %#v %v statuses=%d", result, err, len(statuses))
 	}
 }

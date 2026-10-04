@@ -62,7 +62,7 @@ Or from a service:
 
 ### CLI
 
-The CLI reads build and artifact registry records from signed, service-authored `30900` events by default. Configure `--service-pubkey` and `--relay` (or their environment equivalents). Reads resume from a local cursor; if no relay reaches EOSE, cached results are returned with a stale-data warning and exit status 0. The legacy REST read path is available only with `--http-fallback`.
+The CLI reads build and artifact registry records from signed, service-authored `30900` events by default. Configure `--service-pubkey` and `--relay` (or their environment equivalents). Reads resume from a local cursor; if no relay reaches EOSE, cached results are returned with a stale-data warning and exit status 0. The legacy REST registry reads are no longer mounted.
 
 ```bash
 bahia builds list --service <service-uuid>
@@ -200,7 +200,7 @@ Build (CI run) → produces → Artifact (container image)
 
 ### Registering Builds
 
-Builds are typically registered by CI integration with the `bahia_register_build` MCP tool or the canonical signed build-registration event. The current CLI does not register a build command.
+Build rows and status are authored by Bahia from trusted Hive-CI workflow events and build requests. Operators cannot hand-register a build through MCP or REST; the CLI has no manual build registration command. A successful verified result can still be used to register its artifact.
 
 ### Linking to Artifacts
 

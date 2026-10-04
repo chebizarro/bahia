@@ -15,7 +15,7 @@ Current Bahia behavior is:
 - many control-plane writes are published as signed Nostr request events
 - sensitive browser domains use encrypted Nostr request/result events
 - REST remains a narrowed compatibility/query/log surface
-- MCP at `/mcp` and `/api/v1/mcp` is a first-class tooling surface
+- MCP at `/mcp` is a first-class tooling surface
 
 For the full control-plane contract, see:
 - `docs/control-planes.md`
@@ -59,7 +59,6 @@ The `control_plane` payload is a compatibility discovery subset. Production comm
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/mcp` | Native MCP JSON-RPC endpoint |
-| POST | `/api/v1/mcp` | Alternate native MCP JSON-RPC endpoint |
 
 MCP tool responses for long-running writes return the same receipt fields as REST Nostr-backed writes: `request_event_id`, `request_kind`, `status_kind`, `result_kind`, `d_tag`, `idempotency_key`, `status`, `published_relays`, and `timeout_seconds`.
 
@@ -90,7 +89,7 @@ Idempotency keys are represented as the Nostr `d` tag. Clients may provide `idem
 
 For canonical ContextVM-backed writes, `request_kind` is `25910`, `status_kind` is normally `30315`, and `result_kind` is the correlated ContextVM response kind `25910`; state/audit convergence uses `30900` and `4903` (plus domain-specific standard NIPs). Some receipt fields remain for compatibility, but clients must not substitute historical `69xx`/`79xx` kinds.
 
-Compatibility note: representative transitional REST mutation routes for services, deployment intents, LLM route creation, policy writes, and ML writes are Nostr-backed `202` receipt routes. They publish signed ContextVM/Nostr commands, verify relay `OK` acceptance through publisher receipts, and return command metadata. Durable completion still comes from scoped Nostr subscriptions to the receipt's canonical response/status/state/audit coordinates. Legacy synchronous REST consumers outside those documented routes remain compatibility responses until explicitly migrated.
+Compatibility note: retained HTTP-native boundaries are distinct from signed Nostr intents. Deprecated API-v1 write routes, including build, ML, and LLM route updates, return 404. Former transitional REST mutation routes were Nostr-backed `202` receipt routes. They publish signed ContextVM/Nostr commands, verify relay `OK` acceptance through publisher receipts, and return command metadata. Durable completion still comes from scoped Nostr subscriptions to the receipt's canonical response/status/state/audit coordinates. Legacy synchronous REST consumers outside those documented routes remain compatibility responses until explicitly migrated.
 
 ## Core registry routes
 
@@ -118,9 +117,7 @@ Compatibility note: representative transitional REST mutation routes for service
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/builds` | Register a build |
 | GET | `/api/v1/builds/{id}` | Get a build |
-| PATCH | `/api/v1/builds/{id}/status` | Update build status |
 | GET | `/api/v1/services/{serviceId}/builds` | List builds by service |
 
 ### Artifacts
@@ -147,9 +144,7 @@ Compatibility note: representative transitional REST mutation routes for service
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/deployments/runs` | Create deployment run |
 | GET | `/api/v1/deployments/runs/{id}` | Get deployment run |
-| POST | `/api/v1/deployments/runs/{id}/complete` | Complete a deployment run |
 | GET | `/api/v1/deployments/intents/{intentId}/runs` | List runs by intent |
 | GET | `/api/v1/deployments/runs/{id}/logs` | Stored run logs |
 
@@ -171,12 +166,6 @@ Compatibility note: representative transitional REST mutation routes for service
 | GET | `/api/v1/services/{id}/environments/{envId}/logs?follow=true` | Live log stream |
 
 ## Repository / worker / policy / payment routes
-
-### Repository CI lookup
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/repositories/ci/lookup` | Lookup CI/provider metadata for repositories |
 
 ### Workers
 
@@ -201,7 +190,6 @@ Compatibility note: representative transitional REST mutation routes for service
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/payments/estimate` | Estimate run cost |
 | GET | `/api/v1/deployments/runs/{id}/cost` | Get run cost |
 | GET | `/api/v1/payments/history` | Get payment history |
 
@@ -224,7 +212,6 @@ Compatibility note: representative transitional REST mutation routes for service
 | GET | `/api/v1/artifacts/{id}/signatures/verified` | List verified signatures |
 | GET | `/api/v1/artifacts/{id}/signatures/check` | Check whether verified signatures exist |
 | GET | `/api/v1/signatures/{id}` | Get signature record |
-| POST | `/api/v1/artifacts/{id}/signatures/verify` | Verify signatures |
 
 ### Secrets
 
@@ -244,7 +231,6 @@ Compatibility note: representative transitional REST mutation routes for service
 | POST | `/api/v1/notifications/channels` | Create channel |
 | PUT | `/api/v1/notifications/channels/{id}` | Update channel |
 | DELETE | `/api/v1/notifications/channels/{id}` | Delete channel |
-| POST | `/api/v1/notifications/channels/{id}/test` | Send test notification |
 | GET | `/api/v1/notifications/log` | List notification logs |
 
 ## Organization routes
@@ -272,7 +258,6 @@ Compatibility note: representative transitional REST mutation routes for service
 | GET | `/api/v1/llm/routes` | List LLM routes |
 | GET | `/api/v1/llm/routes/{id}` | Get route |
 | POST | `/api/v1/llm/routes` | Publish `llm/route-create` ContextVM command and return `202` command receipt |
-| PUT | `/api/v1/llm/routes/{id}` | Update route |
 | GET | `/api/v1/llm/routes/{routeId}/releases` | List releases |
 | GET | `/api/v1/llm/releases/{id}` | Get release |
 | GET | `/api/v1/llm/intents/{id}` | Get intent |
@@ -284,7 +269,7 @@ Compatibility note: representative transitional REST mutation routes for service
 | GET | `/api/v1/llm/environments/{envId}/state` | List LLM state by environment |
 | GET | `/api/v1/llm/routes/{routeId}/environments/{envId}/state` | Get LLM route state |
 
-Most deprecated LLM REST mutation endpoints (`POST /api/v1/llm/routes/{routeId}/releases`, `POST /api/v1/llm/intents`, approve/reject, rollback, hosts, and observations) are not mounted. `POST /api/v1/llm/routes` remains as a transitional compatibility route when the control-plane command publisher is configured: it publishes `llm/route-create` and returns a command receipt. Prefer signer-first Nostr LLM control-plane requests and subscribe to canonical observables for completion.
+Deprecated LLM REST mutation endpoints (`POST /api/v1/llm/routes/{routeId}/releases`, `POST /api/v1/llm/intents`, approve/reject, rollback, hosts, and observations) are not mounted. Prefer signer-first Nostr LLM control-plane requests and subscribe to canonical observables for completion.
 
 ## Adoption / import (operator only)
 

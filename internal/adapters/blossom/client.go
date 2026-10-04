@@ -163,22 +163,6 @@ func (c *Client) checkServer(ctx context.Context, server string) error {
 	return nil
 }
 
-// GetStats returns upload/download statistics for all servers.
-func (c *Client) GetStats() map[string]map[string]int64 {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	result := make(map[string]map[string]int64)
-	for server, stats := range c.stats {
-		result[server] = map[string]int64{
-			"uploads":   stats.uploads,
-			"downloads": stats.downloads,
-			"failures":  stats.failures,
-		}
-	}
-	return result
-}
-
 func (c *Client) applyAuthHeader(ctx context.Context, req *http.Request, method, payloadHash string) error {
 	if c.privateKey == "" {
 		return nil

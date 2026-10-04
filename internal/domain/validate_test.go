@@ -6,21 +6,6 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestValidateBuildStatus(t *testing.T) {
-	valid := []BuildStatus{BuildStatusQueued, BuildStatusRunning, BuildStatusSucceeded, BuildStatusFailed, BuildStatusCancelled, ""}
-	for _, s := range valid {
-		if err := ValidateBuildStatus(s); err != nil {
-			t.Errorf("ValidateBuildStatus(%q) unexpected error: %v", s, err)
-		}
-	}
-	invalid := []BuildStatus{"bogus", "QUEUED", "success", "done"}
-	for _, s := range invalid {
-		if err := ValidateBuildStatus(s); err == nil {
-			t.Errorf("ValidateBuildStatus(%q) expected error, got nil", s)
-		}
-	}
-}
-
 func TestValidateScanStatus(t *testing.T) {
 	valid := []ScanStatus{ScanStatusUnknown, ScanStatusPending, ScanStatusClean, ScanStatusWarning, ScanStatusFailed, ""}
 	for _, s := range valid {
@@ -54,21 +39,6 @@ func TestValidateDeploymentRunStatus(t *testing.T) {
 	}
 	if err := ValidateDeploymentRunStatus("completed"); err == nil {
 		t.Error("expected error for 'completed' (not a valid status)")
-	}
-}
-
-func TestValidateHealthStatus(t *testing.T) {
-	valid := []HealthStatus{HealthStatusUnknown, HealthStatusStarting, HealthStatusHealthy, HealthStatusUnhealthy, HealthStatusStopped}
-	for _, s := range valid {
-		if err := ValidateHealthStatus(s); err != nil {
-			t.Errorf("ValidateHealthStatus(%q) unexpected error: %v", s, err)
-		}
-	}
-	invalid := []HealthStatus{"", "ok", "running", "dead"}
-	for _, s := range invalid {
-		if err := ValidateHealthStatus(s); err == nil {
-			t.Errorf("ValidateHealthStatus(%q) expected error, got nil", s)
-		}
 	}
 }
 
@@ -117,35 +87,6 @@ func TestValidateImageDigest(t *testing.T) {
 	for _, d := range invalid {
 		if err := ValidateImageDigest(d); err == nil {
 			t.Errorf("ValidateImageDigest(%q) expected error, got nil", d)
-		}
-	}
-}
-
-func TestValidateGitSHA(t *testing.T) {
-	valid := []string{
-		"abc1234", // 7 chars (short SHA)
-		"a3ed95caeb02ffe68cdd9fd84406680ae93d633c", // 40 chars (full SHA)
-		"abcdef1", // 7 chars
-	}
-	for _, s := range valid {
-		if err := ValidateGitSHA(s); err != nil {
-			t.Errorf("ValidateGitSHA(%q) unexpected error: %v", s, err)
-		}
-	}
-	// Uppercase hex should be valid since we lowercase before matching.
-	if err := ValidateGitSHA("ABC1234"); err != nil {
-		t.Errorf("ValidateGitSHA(ABC1234) unexpected error: %v", err)
-	}
-
-	reallyInvalid := []string{
-		"",        // empty
-		"abc123",  // 6 chars - too short
-		"xyz1234", // non-hex chars (x, y, z are not valid at position 0 and 1)
-		"ghijklm", // definitely not hex
-	}
-	for _, s := range reallyInvalid {
-		if err := ValidateGitSHA(s); err == nil {
-			t.Errorf("ValidateGitSHA(%q) expected error, got nil", s)
 		}
 	}
 }

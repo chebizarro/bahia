@@ -133,8 +133,6 @@
 1	internal/adapters/telemetry.Metrics.SetWorkersTotal
 1	internal/adapters/telemetry.Provider.LoggerProvider
 1	internal/adapters/telemetry.VirtualizationEvidence
-1	internal/api/handlers.NewLogHandler
-1	internal/api/handlers.TenantHandler.AcceptInvite
 1	internal/api/middleware.ParseStatusBucket
 1	internal/api/middleware.RequireOperator
 1	internal/api/middleware.RequireRole
@@ -197,7 +195,6 @@
 1	internal/controlplane.KindPackageYankRequest
 1	internal/controlplane.KindPolicyCreate
 1	internal/controlplane.KindPolicyDelete
-1	internal/controlplane.KindPolicyEvaluate
 1	internal/controlplane.KindPolicyUpdate
 1	internal/controlplane.KindRemediationResult
 1	internal/controlplane.KindServiceAction

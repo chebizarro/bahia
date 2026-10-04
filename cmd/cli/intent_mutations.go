@@ -133,9 +133,6 @@ func publishMutationIntentForOrg(cmd *cobra.Command, domain, op, coordinate, sch
 	if err != nil {
 		return "", err
 	}
-	if operatorHTTPFallback {
-		fmt.Fprintln(cmd.ErrOrStderr(), "--http-fallback has no effect for this command; publishing a signed intent")
-	}
 	if err := publishCLIIntent(cmd, client.PublishIntentRequest{Domain: domain, Op: op, Coordinate: coordinate, Schema: schema, OrgID: org, IntentID: intentID, Content: content}); err != nil {
 		return "", err
 	}

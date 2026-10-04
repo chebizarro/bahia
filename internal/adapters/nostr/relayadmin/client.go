@@ -3,6 +3,7 @@ package relayadmin
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -310,6 +311,10 @@ func (c *Client) TargetRefs() []string {
 
 func (c *Client) createAuthHeader(relayURL string, body []byte) (string, error) {
 	payloadHash := sha256.Sum256(body)
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("generating nip-98 request nonce: %w", err)
+	}
 	pubkey, err := nostr.PubKeyFromHex(c.pubkey)
 	if err != nil {
 		return "", fmt.Errorf("decoding relay administrator pubkey: %w", err)
@@ -322,6 +327,7 @@ func (c *Client) createAuthHeader(relayURL string, body []byte) (string, error) 
 			{"u", relayURL},
 			{"method", http.MethodPost},
 			{"payload", hex.EncodeToString(payloadHash[:])},
+			{"nonce", hex.EncodeToString(nonce[:])},
 		},
 		Content: "",
 	}

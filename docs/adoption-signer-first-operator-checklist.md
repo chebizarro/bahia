@@ -178,7 +178,7 @@ Use one section per SF row. Fill every field.
   ```
 - Checks:
   - signer-first path rejects raw-host usage
-  - compatibility explicit relay configuration requires explicit `--http-fallback`
+  - raw-host usage requires the daemon compatibility gate; no CLI HTTP fallback exists
   - no unmanaged runtime call occurs when raw-host mode is disabled
 - Evidence paths: `<fill>`
 - Notes: `<fill>`

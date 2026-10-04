@@ -51,7 +51,7 @@ The build row shows the immutable `repository@sha256:digest` reference, manifest
 
 ## Status and logs
 
-Queued, running, succeeded, and failed states come from signed canonical build projections. Evidence supplied by HiveCI (log URL and request/run/result event IDs) appears with each build.
+Queued, running, succeeded, and failed states come from signed canonical build projections. Bahia records build requests and trusted Hive-CI workflow results, not operator-supplied build rows or status changes. Evidence supplied by HiveCI (log URL and request/run/result event IDs) appears with each build.
 
 ## Unavailable fleet boundary
 

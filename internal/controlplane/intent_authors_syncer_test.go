@@ -3,9 +3,11 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +26,70 @@ type sidecarTestHarness struct {
 	sidecar     *relaysidecar.Server
 	adminClient *relayadmin.Client
 	wsURL       string
+}
+
+type observedIntentAuthorsAdmin struct {
+	inner   IntentAuthorsAdmin
+	applied chan []string
+}
+
+type scriptedIntentAuthorsCall struct {
+	pubkeys []string
+	reply   chan error
+}
+
+type scriptedIntentAuthorsAdmin struct {
+	calls chan scriptedIntentAuthorsCall
+}
+
+func (a *scriptedIntentAuthorsAdmin) SetIntentAuthors(ctx context.Context, _ string, pubkeys []string) error {
+	call := scriptedIntentAuthorsCall{pubkeys: append([]string(nil), pubkeys...), reply: make(chan error, 1)}
+	select {
+	case a.calls <- call:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-call.reply:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func awaitIntentAuthorsCall(t *testing.T, ctx context.Context, calls <-chan scriptedIntentAuthorsCall, want []string) scriptedIntentAuthorsCall {
+	t.Helper()
+	select {
+	case call := <-calls:
+		require.Equal(t, want, call.pubkeys)
+		return call
+	case <-ctx.Done():
+		t.Fatal("intent author sync call did not arrive", ctx.Err())
+		return scriptedIntentAuthorsCall{}
+	}
+}
+
+func (a *observedIntentAuthorsAdmin) SetIntentAuthors(ctx context.Context, ref string, pubkeys []string) error {
+	if err := a.inner.SetIntentAuthors(ctx, ref, pubkeys); err != nil {
+		return err
+	}
+	copyOfPubkeys := append([]string(nil), pubkeys...)
+	select {
+	case a.applied <- copyOfPubkeys:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func awaitAppliedIntentAuthors(t *testing.T, ctx context.Context, applied <-chan []string, want []string) {
+	t.Helper()
+	select {
+	case got := <-applied:
+		require.Equal(t, want, got)
+	case <-ctx.Done():
+		t.Fatal("intent author sync did not complete", ctx.Err())
+	}
 }
 
 func startSidecarTestHarness(t *testing.T, adminKey nostr.SecretKey) sidecarTestHarness {
@@ -117,10 +183,11 @@ func TestIntentAuthorsSyncerPushesToSidecar(t *testing.T) {
 	trustSet := NewTrustSet(nil, zap.NewNop(), WithBootstrapOwners(map[string]string{
 		orgID: memberKey.Public().Hex(),
 	}))
+	admin := &observedIntentAuthorsAdmin{inner: h.adminClient, applied: make(chan []string, 1)}
 
 	syncer := NewIntentAuthorsSyncer(IntentAuthorsSyncerConfig{
 		TrustSet:   trustSet,
-		Admin:      h.adminClient,
+		Admin:      admin,
 		TargetRefs: []string{"test-sidecar"},
 		Logger:     zap.NewNop(),
 	})
@@ -131,7 +198,7 @@ func TestIntentAuthorsSyncerPushesToSidecar(t *testing.T) {
 		defer close(done)
 		_ = syncer.Run(syncCtx)
 	}()
-	time.Sleep(200 * time.Millisecond)
+	awaitAppliedIntentAuthors(t, ctx, admin.applied, []string{memberKey.Public().Hex()})
 
 	relay, err := nostr.RelayConnect(ctx, h.wsURL, nostr.RelayOptions{})
 	require.NoError(t, err)
@@ -145,6 +212,63 @@ func TestIntentAuthorsSyncerPushesToSidecar(t *testing.T) {
 
 	syncCancel()
 	<-done
+}
+
+func TestIntentAuthorsSyncerInitialEmptySetClearsSidecar(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	adminKey := nostr.Generate()
+	staleAuthor := nostr.Generate()
+	h := startSidecarTestHarness(t, adminKey)
+	require.NoError(t, h.adminClient.SetIntentAuthors(ctx, "test-sidecar", []string{staleAuthor.Public().Hex()}))
+
+	relay, err := nostr.RelayConnect(ctx, h.wsURL, nostr.RelayOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = relay.Close() })
+	orgID := "00000000-0000-0000-0000-000000000001"
+	require.NoError(t, relay.Publish(ctx, signedIntentForTest(t, staleAuthor, orgID)))
+
+	syncer := NewIntentAuthorsSyncer(IntentAuthorsSyncerConfig{
+		TrustSet: NewTrustSet(nil, zap.NewNop()), Admin: h.adminClient,
+		TargetRefs: []string{"test-sidecar"}, Logger: zap.NewNop(),
+	})
+	syncer.push(ctx)
+	require.False(t, syncer.SyncStatus().OutOfSync)
+	afterClear := signedIntentForTest(t, staleAuthor, orgID)
+	afterClear.Tags = append(afterClear.Tags, nostr.Tag{"nonce", "after-clear"})
+	require.NoError(t, afterClear.Sign(staleAuthor))
+	require.ErrorContains(t, relay.Publish(ctx, afterClear), "blocked")
+}
+
+func TestIntentAuthorsSyncerRevocationSupersedesFailedAddition(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	admin := &scriptedIntentAuthorsAdmin{calls: make(chan scriptedIntentAuthorsCall)}
+	syncer := NewIntentAuthorsSyncer(IntentAuthorsSyncerConfig{
+		TrustSet: NewTrustSet(nil, zap.NewNop()), Admin: admin,
+		TargetRefs: []string{"test-sidecar"}, Logger: zap.NewNop(),
+	})
+	done := make(chan error, 1)
+	go func() { done <- syncer.Run(ctx) }()
+	initial := awaitIntentAuthorsCall(t, ctx, admin.calls, nil)
+	initial.reply <- nil
+
+	firstMember := nostr.Generate().Public().Hex()
+	secondMember := nostr.Generate().Public().Hex()
+	syncer.TrackPubkey(firstMember)
+	initialAddition := awaitIntentAuthorsCall(t, ctx, admin.calls, []string{firstMember})
+	initialAddition.reply <- nil
+	syncer.TrackPubkey(secondMember)
+	both := []string{firstMember, secondMember}
+	sort.Strings(both)
+	failedAddition := awaitIntentAuthorsCall(t, ctx, admin.calls, both)
+	failedAddition.reply <- errors.New("transient relay administration failure")
+	syncer.UntrackPubkey(firstMember)
+	revocation := awaitIntentAuthorsCall(t, ctx, admin.calls, []string{secondMember})
+	revocation.reply <- nil
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 // TestIntentAuthorsSyncerMembershipMutationReachesSidecar verifies that a
@@ -162,10 +286,11 @@ func TestIntentAuthorsSyncerMembershipMutationReachesSidecar(t *testing.T) {
 
 	orgID := "00000000-0000-0000-0000-000000000001"
 	trustSet := NewTrustSet(nil, zap.NewNop())
+	admin := &observedIntentAuthorsAdmin{inner: h.adminClient, applied: make(chan []string, 4)}
 
 	syncer := NewIntentAuthorsSyncer(IntentAuthorsSyncerConfig{
 		TrustSet:   trustSet,
-		Admin:      h.adminClient,
+		Admin:      admin,
 		TargetRefs: []string{"test-sidecar"},
 		Logger:     zap.NewNop(),
 	})
@@ -176,7 +301,7 @@ func TestIntentAuthorsSyncerMembershipMutationReachesSidecar(t *testing.T) {
 		defer close(done)
 		_ = syncer.Run(syncCtx)
 	}()
-	time.Sleep(200 * time.Millisecond)
+	awaitAppliedIntentAuthors(t, ctx, admin.applied, nil)
 
 	// Before tracking: new member's intent is blocked.
 	relay, err := nostr.RelayConnect(ctx, h.wsURL, nostr.RelayOptions{})
@@ -188,22 +313,25 @@ func TestIntentAuthorsSyncerMembershipMutationReachesSidecar(t *testing.T) {
 
 	// Simulate Postgres Add via TrackPubkey (what NotifyingOrgMemberRepository does).
 	syncer.TrackPubkey(newMemberKey.Public().Hex())
-	time.Sleep(200 * time.Millisecond)
+	awaitAppliedIntentAuthors(t, ctx, admin.applied, []string{newMemberKey.Public().Hex()})
 
 	// After tracking: new member's intent is accepted.
-	err = relay.Publish(ctx, signedIntentForTest(t, newMemberKey, orgID))
+	afterAdd := signedIntentForTest(t, newMemberKey, orgID)
+	afterAdd.Tags = append(afterAdd.Tags, nostr.Tag{"nonce", "after-add"})
+	require.NoError(t, afterAdd.Sign(newMemberKey))
+	err = relay.Publish(ctx, afterAdd)
 	require.NoError(t, err, "should be accepted after membership is added")
 
 	// Simulate Postgres Remove via UntrackPubkey.
 	syncer.UntrackPubkey(newMemberKey.Public().Hex())
-	time.Sleep(200 * time.Millisecond)
+	awaitAppliedIntentAuthors(t, ctx, admin.applied, nil)
 
 	// After removal: intent is blocked again.
-	err = relay.Publish(ctx, signedIntentForTest(t, newMemberKey, orgID))
+	afterRemoval := signedIntentForTest(t, newMemberKey, orgID)
+	afterRemoval.Tags = append(afterRemoval.Tags, nostr.Tag{"nonce", "after-removal"})
+	require.NoError(t, afterRemoval.Sign(newMemberKey))
+	err = relay.Publish(ctx, afterRemoval)
 	require.Error(t, err, "should be blocked after membership is removed")
-
-	// Health status should be in sync.
-	require.False(t, syncer.SyncStatus().OutOfSync)
 
 	syncCancel()
 	<-done

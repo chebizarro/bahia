@@ -81,7 +81,7 @@ func TestUnaffiliatedOnboardingRoutesAreExact(t *testing.T) {
 		path   string
 		want   bool
 	}{
-		{method: http.MethodGet, path: "/api/v1/me/invites", want: true},
+		{method: http.MethodGet, path: "/api/v1/me/invites", want: false},
 		{method: http.MethodPost, path: "/api/v1/invites/123/accept", want: true},
 		{method: http.MethodGet, path: "/api/v1/orgs", want: false},
 		{method: http.MethodPost, path: "/api/v1/orgs", want: false},

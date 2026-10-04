@@ -110,19 +110,15 @@ type appWiringBackupMCPPublisher struct{}
 
 func (appWiringBackupMCPPublisher) Publish(context.Context, nostr.Event) (int, error) { return 1, nil }
 
-func TestConfigurePolicyToolMCPDepsWiresSignerFirstPublishers(t *testing.T) {
+func TestConfigureToolApprovalMCPDepsWiresPublisher(t *testing.T) {
 	signer, err := controlplane.NewPrivateKeySigner(nostr.Generate().Hex())
 	require.NoError(t, err)
 	deps := mcp.ServerDeps{}
-
-	policyPublisher := configurePolicyToolMCPDeps(&deps, appWiringBackupMCPPublisher{}, signer, []string{"ws://relay.test"})
-
-	require.NotNil(t, policyPublisher)
-	require.Same(t, policyPublisher, deps.PolicyCommandPublisher)
+	configureToolApprovalMCPDeps(&deps, appWiringBackupMCPPublisher{}, signer, []string{"ws://relay.test"})
 	require.NotNil(t, deps.ToolApprovalCommandPublisher)
 }
 
-func TestConfigurePolicyToolMCPDepsFailsClosedWhenPublishingDepsMissing(t *testing.T) {
+func TestConfigureToolApprovalMCPDepsFailsClosedWhenPublishingDepsMissing(t *testing.T) {
 	signer, err := controlplane.NewPrivateKeySigner(nostr.Generate().Hex())
 	require.NoError(t, err)
 
@@ -138,9 +134,7 @@ func TestConfigurePolicyToolMCPDepsFailsClosedWhenPublishingDepsMissing(t *testi
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			deps := mcp.ServerDeps{}
-			policyPublisher := configurePolicyToolMCPDeps(&deps, tt.publisher, tt.signer, tt.relays)
-			require.Nil(t, policyPublisher)
-			require.Nil(t, deps.PolicyCommandPublisher)
+			configureToolApprovalMCPDeps(&deps, tt.publisher, tt.signer, tt.relays)
 			require.Nil(t, deps.ToolApprovalCommandPublisher)
 		})
 	}
@@ -286,10 +280,8 @@ func TestConfigureAuthorizationMCPDepsWiresTenantRBACFailClosed(t *testing.T) {
 		})
 
 		for tool, arguments := range map[string]map[string]interface{}{
-			"bahia_list_builds":         {"service_id": uuid.New().String()},
-			"bahia_get_build":           {"build_id": uuid.New().String()},
-			"bahia_register_build":      {"service_id": uuid.New().String()},
-			"bahia_update_build_status": {"build_id": uuid.New().String(), "status": string(domain.BuildStatusRunning)},
+			"bahia_list_builds": {"service_id": uuid.New().String()},
+			"bahia_get_build":   {"build_id": uuid.New().String()},
 		} {
 			t.Run(tool, func(t *testing.T) {
 				result, err := server.CallTool(ctx, tool, arguments)

@@ -59,6 +59,15 @@ make run-dev
 
 Bahia is configured via environment variables or a config file.
 
+All registered kind-30900 intent domains are enabled by default. To temporarily
+keep a domain on its legacy mutation path, list it under
+`nostr.intent_domains_disabled` (for example, `[service, policy]`). Only those
+domains are disabled. A non-empty legacy `nostr.intent_domains` list still acts
+as an allowlist for one release; an empty list now enables all domains. Both
+keys are deprecated and removed with the ContextVM mutation-path cleanup
+(bahia-irsry.11.19). Relay `OK` does not prove intent execution, including for
+an opted-out domain; follow kind-30315 status and canonical state.
+
 ### Essential Environment Variables
 
 | Variable | Description | Default |
@@ -152,7 +161,7 @@ assistant:
 2. Click **Sign In**
 3. Connect with your Nostr signer (NIP-07 extension or NIP-46 bunker)
 
-Protected routes, including Settings, fail closed until a signer-first session and backend membership are verified. NIP-98 backend readiness is established only after a signed `GET /orgs` succeeds with a 2xx response; a capability advertisement alone is provisional. During session restoration, protected routes display “Checking authentication...” until that probe finishes. A rejected or unavailable probe returns you to the dashboard; successful membership is still subject to the route's role requirements.
+A persisted, signer-verified session authenticates immediately. Protected-route roles come from relay membership events, not a REST `/orgs` probe. A route may still require an appropriate role for its actions.
 
 After sign-in, open the user menu and choose **Edit Profile**, or go directly to `/settings/profile`, to edit your Nostr kind-0 metadata. The profile editor validates fields locally, signs the kind-0 event with the active NIP-07 or NIP-46 signer, publishes to writable Nostr relays from the signer/NIP-65 relay list, and shows the relay OK acceptance/rejection outcomes.
 

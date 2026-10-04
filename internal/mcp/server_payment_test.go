@@ -153,7 +153,7 @@ func newTestMCPPaymentServer(t *testing.T) (*Server, *testPaymentRepo, uuid.UUID
 	}
 
 	paymentRepo := newTestPaymentRepo()
-	paymentSvc := service.NewPaymentService(paymentRepo, workerRepo, runRepo, zap.NewNop())
+	paymentSvc := service.NewPaymentService(paymentRepo, zap.NewNop())
 	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{Payments: paymentSvc})
 	return server, paymentRepo, runID, workerPubkey
 }

@@ -79,9 +79,6 @@ func runSecretSetIntent(cmd *cobra.Command, serviceID, name, value, environmentI
 	if err != nil {
 		return err
 	}
-	if operatorHTTPFallback {
-		fmt.Fprintln(cmd.ErrOrStderr(), "--http-fallback has no effect for this command; publishing a signed intent")
-	}
 	if err := publishCLIIntent(cmd, client.PublishIntentRequest{Domain: "secret", Op: op, Coordinate: secretID.String(), OrgID: svc.OrgID.String(), IntentID: intentID, Content: content, PlaintextSecretValue: value}); err != nil {
 		return err
 	}

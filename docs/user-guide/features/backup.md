@@ -18,7 +18,7 @@ status or newer canonical state arrives. Restore approval and rejection are sign
 
 ## Signed restore approval
 
-With `backup` enabled in `nostr.intent_domains`, the web console publishes kind `30900` intents with `domain=backup`, `op=restore-approval`, and content containing `restore_id` and `decision` (`approve` or `reject`). Bahia applies the same restore-registry transition used by the legacy approval command, then emits bounded kind `30315` intent status. The web console does not silently fall back to ContextVM if the domain is disabled.
+With `backup` enabled by default (unless in `nostr.intent_domains_disabled`), the web console publishes kind `30900` intents with `domain=backup`, `op=restore-approval`, and content containing `restore_id` and `decision` (`approve` or `reject`). Bahia applies the same restore-registry transition used by the legacy approval command, then emits bounded kind `30315` intent status. The web console does not silently fall back to ContextVM if the domain is disabled.
 
 ## Key Concepts
 

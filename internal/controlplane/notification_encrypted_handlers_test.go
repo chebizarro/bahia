@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -404,7 +405,7 @@ func TestNotificationEncryptedHandlers_CrossTenantAccessIsDenied(t *testing.T) {
 			foreignOrgID := repo.channels[foreignChannelID].OrgID
 			payload := tt.payload(foreignOrgID, foreignChannelID)
 			_, err := tt.call(h, context.Background(), makeNotificationEncryptedRequest(t, tt.operation, payload))
-			if err == nil || !auth.IsAccessDenied(err) {
+			if err == nil || !errors.As(err, new(*auth.AccessDeniedError)) {
 				t.Fatalf("%s cross-tenant error = %v, want access denied", tt.name, err)
 			}
 			if tt.assert != nil {
@@ -452,7 +453,7 @@ func TestNotificationEncryptedHandlers_ListUsesRequesterMembershipUnion(t *testi
 	}
 
 	_, err = h.listChannels(context.Background(), makeNotificationEncryptedRequest(t, EncryptedOperationNotificationChannelsList, map[string]any{"org_id": orgB.String()}))
-	if err == nil || !auth.IsAccessDenied(err) {
+	if err == nil || !errors.As(err, new(*auth.AccessDeniedError)) {
 		t.Fatalf("listChannels(foreign org) error = %v, want access denied", err)
 	}
 }

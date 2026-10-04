@@ -18,13 +18,6 @@ func TestPaymentHandlerFailsClosedWithoutService(t *testing.T) {
 		call   func(http.ResponseWriter, *http.Request)
 	}{
 		{
-			name:   "estimate",
-			method: http.MethodPost,
-			path:   "/payments/estimate",
-			body:   `{"run_id":"00000000-0000-0000-0000-000000000001","estimated_duration_secs":60}`,
-			call:   h.EstimateCost,
-		},
-		{
 			name:   "run cost",
 			method: http.MethodGet,
 			path:   "/deployments/runs/00000000-0000-0000-0000-000000000001/cost",

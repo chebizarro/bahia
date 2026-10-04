@@ -201,7 +201,7 @@ func TestEncryptedDomainHandlers_PaymentHistoryUsesEncryptedOperationPayload(t *
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	paymentRepo := &encryptedPaymentRepo{records: []domain.PaymentRecord{{WorkerPubkey: "worker-a", AmountSats: 21}}}
 	handlers := NewEncryptedDomainHandlers(EncryptedDomainHandlersConfig{
-		Payments: service.NewPaymentService(paymentRepo, nil, nil, zap.NewNop()),
+		Payments: service.NewPaymentService(paymentRepo, zap.NewNop()),
 		Logger:   zap.NewNop(),
 	})
 
@@ -220,7 +220,7 @@ func TestEncryptedDomainHandlers_PaymentHistoryUsesEncryptedOperationPayload(t *
 func TestEncryptedDomainHandlers_RegisterContextVMPaymentHistoryAlias(t *testing.T) {
 	paymentRepo := &encryptedPaymentRepo{records: []domain.PaymentRecord{{WorkerPubkey: "worker-a", AmountSats: 21}}}
 	handlers := NewEncryptedDomainHandlers(EncryptedDomainHandlersConfig{
-		Payments: service.NewPaymentService(paymentRepo, nil, nil, zap.NewNop()),
+		Payments: service.NewPaymentService(paymentRepo, zap.NewNop()),
 		Logger:   zap.NewNop(),
 	})
 	publisher := &mockEncryptedPublisher{}

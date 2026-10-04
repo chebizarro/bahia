@@ -1,0 +1,10 @@
+{
+  "feature_id": "BAHIA_PHASE5_F1_REST_WRITE_REMOVAL",
+  "tests": [
+    {"criterion": "F1-1", "test": "internal/api/router.TestPhase5F1DeletedWriteRoutesReturn404"},
+    {"criterion": "F1-2", "test": "internal/api/router.TestPhase5F1RetainedWriteBoundariesStayMounted"},
+    {"criterion": "F1-2", "test": "internal/api/router.TestRouter_NativeMCPRemovesLegacyAgentHTTP"},
+    {"criterion": "F1-3", "test": "internal/archtest.TestNoNewTestOnlyExports"},
+    {"criterion": "F1-4", "test": "CGO_ENABLED=0 go build ./... && CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test ./..."}
+  ]
+}

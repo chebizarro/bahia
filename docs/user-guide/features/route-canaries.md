@@ -83,7 +83,7 @@ point, but it is disruptive, so stage it.
 
 ### Service healthy, route broken
 
-Route canary state is keyed by the same service/environment/deployment-unit coordinate as managed instance health. The API reports both together and sets `service_healthy_route_broken` when a route outage is open while the containers behind it are healthy or running.
+Route canary state is keyed by the same service/environment/deployment-unit coordinate as managed instance health. The route observable pairs both statuses and sets `service_healthy_route_broken` when a route outage is open while the containers behind it are healthy or running.
 
 That flag is the exact condition that had no signal before: it means the problem is in the routing layer, not the application.
 
@@ -244,44 +244,9 @@ fails at test time rather than in production. When adding a classification, add
 a new versioned migration widening the constraint — never edit an applied
 migration in place.
 
-## API
+## Reading route state
 
-All endpoints are tier-2 gated.
-
-| Method | Path | Returns |
-|---|---|---|
-| `GET` | `/api/v1/route-canaries` | All route canary state. Filters: `service_id`, `environment_id`, `open`. |
-| `GET` | `/api/v1/services/{serviceId}/environments/{envId}/routes/{hostname}/canary` | State for one route. |
-| `GET` | `/api/v1/services/{serviceId}/environments/{envId}/routes/{hostname}/canary/events` | Append-only failure lineage, newest first. `limit` up to 500. |
-
-`deployment_unit_id` is optional. When it is omitted, the server resolves the single route for that service/environment/hostname; if more than one deployment unit has a route at that hostname, it responds with a conflict listing the ambiguous units instead of guessing. Pass `?deployment_unit_id=<uuid>` to disambiguate in that case.
-
-Example:
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  "https://bahia.example/api/v1/route-canaries?open=true"
-```
-
-```json
-{
-  "data": [
-    {
-      "service_id": "...",
-      "environment_id": "...",
-      "hostname": "git.sharegap.net",
-      "open": true,
-      "classification": "upstream_error",
-      "perspective": "internal_lan",
-      "consecutive_failures": 3,
-      "failure_reason": "internal_lan GET https://git.sharegap.net/healthz: route published and edge reachable but upstream returned HTTP 502; origin is stale or unreachable",
-      "opened_at": "2026-09-07T01:12:44Z",
-      "observed_instance_status": "healthy",
-      "service_healthy_route_broken": true
-    }
-  ]
-}
-```
+Subscribe to the service-authored `30900` route state, scoped by the route coordinate `route:<service>:<environment>:<deployment-unit or none>:<hostname>`. The `30315` status and `4903` audit events carry outage transitions and sanitized evidence. The Route Canaries page renders those relay observables; the former REST list, detail, and event-history reads are no longer mounted.
 
 ## Events and alerting
 
@@ -293,7 +258,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 Payloads carry the container-level status observed at the same moment, so a notification about a broken route also tells you whether the service behind it was fine.
 
-Each of these transitions is also projected to Nostr under `domain=route`, so Nostr-native consumers and dashboards see route outages without the REST API:
+These transitions are projected to Nostr under `domain=route`:
 
 - `30315` status and `30900` state, addressed by the route coordinate `route:<service>:<environment>:<deployment-unit or none>:<hostname>`. Both carry `status` (`unhealthy` while an outage is open, `degraded` for a warning or a failure below the outage threshold, `healthy` for `route_ok`), `outage=open|closed`, `classification`, `hostname`, the observed `instance_status`, and `service_healthy_route_broken`.
 - `4903` audit facts recording the transition, with sanitized probe evidence.

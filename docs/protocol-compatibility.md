@@ -2,7 +2,7 @@
 
 ## Deployment-family intent compatibility
 
-`deployment`, `runtime`, `llm`, and `backup` are opt-in `intent_domains` using existing client-signed kind `30900` and bounded kind `30315` status; no numeric kind is allocated. Enabled ContextVM mutations share the same in-process processor, while disabled domains preserve existing ContextVM behavior and canonical state publication. Stable `content.intent_id` makes relay replay non-duplicating; revision-guarded operations may return conflict. Their `expected_updated_at` wire value is the canonical record's RFC3339 `updated_at` string; numeric epochs are rejected. The [fixtures](../web/tests/fixtures/deployment-intents.json) are the cross-client wire contract.
+`deployment`, `runtime`, `llm`, and `backup` are default-on intent domains using existing client-signed kind `30900` and bounded kind `30315` status; no numeric kind is allocated. Enabled ContextVM mutations share the same in-process processor, while disabled domains preserve existing ContextVM behavior and canonical state publication. Stable `content.intent_id` makes relay replay non-duplicating; revision-guarded operations may return conflict. Their `expected_updated_at` wire value is the canonical record's RFC3339 `updated_at` string; numeric epochs are rejected. The [fixtures](../web/tests/fixtures/deployment-intents.json) are the cross-client wire contract.
 
 ## Publisher migration and discovery
 
@@ -149,7 +149,7 @@ The relay sidecar persists accepted history in a bbolt `fiatjaf.com/nostr/events
 
 ### 5. REST and HTTP MCP
 
-- HTTP MCP (`/mcp`, `/api/v1/mcp`) exposes the same tool surface and must return Nostr correlation metadata for long-running work.
+- HTTP MCP (`/mcp`) exposes the same tool surface and must return Nostr correlation metadata for long-running work.
 - REST remains for narrowed CRUD/query/log/registry compatibility.
 - HTTP responses must not claim long-running completion when the durable truth is relay-delivered canonical observables.
 - Fallback to REST after a signed ContextVM event has been accepted by any relay is unsafe and must be avoided.
@@ -308,3 +308,20 @@ content. The log is one latest-50-per-channel replaceable window, not a growing
 per-line relay history; delete publishes a same-coordinate tombstone. See
 [the event implementation guide](nostr-event-implementation-guide.md#f74b-canonical-fleet-private-state-bahia-irsry74)
 for coordinates, size bounds, and confidentiality.
+
+## Policy evaluation intent and build ownership (bahia-irsry.77)
+
+For MCP evaluation, use a client-signed `30900` `domain=policy`, `op=evaluate`
+intent with `d=evaluation:<artifact-uuid>:<environment-uuid>` and JSON content
+`{"artifact_id":"<uuid>","environment_id":"<uuid>"}`. The daemon evaluates
+its signature, SBOM, scan, and attestation repositories with the same
+`PolicyService.Evaluate` semantics as the legacy ContextVM method. It emits a
+requester-scoped, replaceable `30315` status at
+`d=intent-status:<requester-pubkey>:<evaluation-coordinate>`; an accepted
+status has `result=evaluated` and an `evaluation` object. The status payload
+is capped at 16 KiB. A rejected evaluation is not an allow decision.
+
+Build registration and status are daemon-authored from `build/request` and
+trusted Hive-CI `5401`/`5402` evidence. MCP manual build writes are removed;
+F1 removes the compatibility REST writes `POST /builds` and
+`PATCH /builds/{id}/status`.

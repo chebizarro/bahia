@@ -5,10 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -141,9 +140,8 @@ func runReadCLI(t *testing.T, args ...string) (string, string, error) {
 	return string(out), stderr.String(), runErr
 }
 
-func TestCLIReadRESTNostrGolden(t *testing.T) {
+func TestCLIReadNostrGolden(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
-	t.Setenv("BAHIA_OPERATOR_HTTP_FALLBACK", "")
 	t.Setenv("BAHIA_NOSTR_NSEC", "")
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
 	sk := nostr.Generate()
@@ -160,41 +158,48 @@ func TestCLIReadRESTNostrGolden(t *testing.T) {
 		makeCLIReadEvent(t, sk, nostrpool.KindEnvironmentRegistry, env.ID, details, nostr.Timestamp(time.Now().Unix())),
 	}}
 	installCLIReadPool(t, pool)
-	httpCalls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		httpCalls++
-		var data any
-		switch r.URL.Path {
-		case "/api/v1/services":
-			data = []domain.Service{service, secondService}
-		case "/api/v1/services/" + service.ID.String():
-			data = service
-		case "/api/v1/environments":
-			data = []domain.Environment{env}
-		case "/api/v1/environments/" + env.ID.String():
-			data = details
-		default:
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
-	}))
-	defer server.Close()
 	for _, command := range [][]string{{"services", "list"}, {"services", "get", service.ID.String()}, {"environments", "list"}, {"environments", "get", env.ID.String()}} {
 		for _, format := range []string{"table", "json"} {
 			t.Run(strings.Join(command, "-")+"-"+format, func(t *testing.T) {
-				base := []string{"--server", server.URL, "--service-pubkey", pub, "--relay", "wss://fixture.invalid", "--output", format}
-				rest, _, err := runReadCLI(t, append(append([]string{}, base...), append([]string{"--http-fallback"}, command...)...)...)
-				if err != nil {
-					t.Fatalf("REST command: %v", err)
-				}
+				base := []string{"--service-pubkey", pub, "--relay", "wss://fixture.invalid", "--output", format}
 				nostrOutput, stderr, err := runReadCLI(t, append(append([]string{}, base...), command...)...)
 				if err != nil {
 					t.Fatalf("Nostr command: %v", err)
 				}
-				if rest != nostrOutput {
-					t.Fatalf("REST/Nostr output diff:\nREST:\n%s\nNostr:\n%s", rest, nostrOutput)
+				if format == "json" {
+					var want any
+					switch command[0] + "/" + command[1] {
+					case "services/list":
+						want = []domain.Service{service, secondService}
+					case "services/get":
+						want = service
+					case "environments/list":
+						want = []domain.Environment{env}
+					case "environments/get":
+						want = details
+					}
+					encoded, err := json.Marshal(want)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var gotJSON, wantJSON any
+					if err := json.Unmarshal([]byte(nostrOutput), &gotJSON); err != nil {
+						t.Fatal(err)
+					}
+					if err := json.Unmarshal(encoded, &wantJSON); err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(gotJSON, wantJSON) {
+						t.Fatalf("golden JSON mismatch\n got %s\nwant %s", nostrOutput, encoded)
+					}
+				} else {
+					wantID := service.ID.String()
+					if command[0] == "environments" {
+						wantID = env.ID.String()
+					}
+					if !strings.Contains(nostrOutput, wantID) {
+						t.Fatalf("table missing fixture ID %s: %s", wantID, nostrOutput)
+					}
 				}
 				if stderr != "" {
 					t.Fatalf("fresh read stderr = %q", stderr)
@@ -203,10 +208,7 @@ func TestCLIReadRESTNostrGolden(t *testing.T) {
 		}
 	}
 	if len(pool.filters) != 8 {
-		t.Fatalf("Nostr subscriptions = %d, want 8; HTTP fallback must not subscribe", len(pool.filters))
-	}
-	if httpCalls != 8 {
-		t.Fatalf("HTTP requests = %d, want 8 fallback-only reads", httpCalls)
+		t.Fatalf("Nostr subscriptions = %d, want 8", len(pool.filters))
 	}
 	for _, filter := range pool.filters {
 		if len(filter.Tags["t"]) != 1 {
@@ -220,7 +222,6 @@ func TestCLIReadRESTNostrGolden(t *testing.T) {
 
 func TestCLIReadCursorReuseAndStaleExit(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
-	t.Setenv("BAHIA_OPERATOR_HTTP_FALLBACK", "")
 	sk := nostr.Generate()
 	pub := nostr.GetPublicKey(sk).Hex()
 	service := domain.Service{ID: uuid.New(), Name: "cached", ArtifactRepo: "repo", RuntimeType: domain.RuntimeTypeCompose}
@@ -271,30 +272,17 @@ func TestNostrServiceStorePathRejectsInvalidPubkey(t *testing.T) {
 	}
 }
 
-func TestCLIEmptyServiceListMatchesREST(t *testing.T) {
+func TestCLIEmptyServiceListNostr(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
-	t.Setenv("BAHIA_OPERATOR_HTTP_FALLBACK", "")
 	sk := nostr.Generate()
 	pub := nostr.GetPublicKey(sk).Hex()
 	installCLIReadPool(t, &cliReadPool{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/services" {
-			http.NotFound(w, r)
-			return
-		}
-		_, _ = w.Write([]byte(`{"data":null}`))
-	}))
-	defer server.Close()
-	base := []string{"--server", server.URL, "--service-pubkey", pub, "--relay", "wss://fixture.invalid", "--output", "json"}
-	rest, _, err := runReadCLI(t, append(append([]string{}, base...), "--http-fallback", "services", "list")...)
+	base := []string{"--service-pubkey", pub, "--relay", "wss://fixture.invalid", "--output", "json"}
+	output, _, err := runReadCLI(t, append(base, "services", "list")...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	nostrOutput, _, err := runReadCLI(t, append(append([]string{}, base...), "services", "list")...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rest != nostrOutput {
-		t.Fatalf("empty REST/Nostr output diff: REST=%q Nostr=%q", rest, nostrOutput)
+	if output != "null\n" {
+		t.Fatalf("empty service JSON = %q, want null", output)
 	}
 }

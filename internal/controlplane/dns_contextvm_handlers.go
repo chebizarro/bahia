@@ -316,6 +316,25 @@ func (h dnsContextVMHandlers) overrideRetire(ctx context.Context, request Contex
 }
 
 func (h dnsContextVMHandlers) driftRemediate(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.intentEnabled() {
+		zone, err := dnsZoneFromParams(request.RPC.Params)
+		if err != nil {
+			return nil, err
+		}
+		coordinate := "dns-remediate:all"
+		if zone != "" {
+			coordinate = "dns-remediate:" + zone
+		}
+		content := map[string]any{"zone": zone}
+		raw, err := json.Marshal(content)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.dualDispatch(ctx, request, "drift-remediate", coordinate, raw); err != nil {
+			return nil, err
+		}
+		return dnsResult(dnsActionDriftRemediate, "succeeded", "completed", "DNS reconcile completed", map[string]any{"zone": zone}), nil
+	}
 	return dnsDriftRemediateOp(ctx, h.operator, request.RPC.Params, nil).toMap(), nil
 }
 

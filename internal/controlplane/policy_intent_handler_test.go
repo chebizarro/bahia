@@ -2,12 +2,16 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fiatjaf.com/nostr"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -615,4 +619,88 @@ func TestPolicyIntentHandler_PermissionFor(t *testing.T) {
 	assert.Equal(t, domain.PermWritePolicies, handler.PermissionFor("create"))
 	assert.Equal(t, domain.PermWritePolicies, handler.PermissionFor("update"))
 	assert.Equal(t, domain.PermWritePolicies, handler.PermissionFor("delete"))
+}
+
+func TestPolicyEvaluateIntentMatchesContextVMDecision(t *testing.T) {
+	ctx := context.Background()
+	artifactID, environmentID := uuid.New(), uuid.New()
+	repo := &testPolicyRepo{envPolicies: []domain.DeploymentPolicy{{
+		ID: uuid.New(), Name: "signed artifact", Enabled: true,
+		Enforcement: domain.PolicyEnforcementBlock,
+		Rules:       []domain.PolicyRule{{Type: domain.RuleRequireSignature}},
+	}}}
+	policyService := service.NewPolicyService(repo, &testSignatureRepo{hasVerifiedSignature: false}, &testSBOMRepo{}, zap.NewNop())
+	params, err := json.Marshal(map[string]string{"artifact_id": artifactID.String(), "environment_id": environmentID.String()})
+	require.NoError(t, err)
+	reactor := NewReactor(Config{}, nil, nil, nil, zap.NewNop(), WithPolicyService(policyService))
+	legacy, err := reactor.handlePolicyEvaluate(ctx, ContextVMRequest{RPC: ContextVMJSONRPCRequest{Params: params}})
+	require.NoError(t, err)
+
+	published := &statusCollector{}
+	status := NewIntentStatusPublisher(published.publish, &testSigner{}, zap.NewNop())
+	processor := NewIntentProcessor(NewTrustSet([]string{testPubkey}, zap.NewNop()), openTestStore(t), status,
+		IntentProcessorConfig{EnabledDomains: map[string]bool{"policy": true}}, zap.NewNop())
+	processor.RegisterHandler("policy", NewPolicyIntentHandler(PolicyIntentHandlerConfig{Evaluator: policyService, Logger: zap.NewNop()}))
+	intent := &Intent{Domain: "policy", Op: "evaluate", Coordinate: "evaluation:" + artifactID.String() + ":" + environmentID.String(),
+		IntentID: uuid.NewString(), Actor: testPubkey, Content: map[string]any{"artifact_id": artifactID.String(), "environment_id": environmentID.String()}}
+	require.NoError(t, processor.ProcessInProcess(ctx, intent))
+	require.Len(t, published.events, 1)
+	ev := published.events[0]
+	require.Equal(t, 30315, int(ev.Kind))
+	require.Equal(t, "accepted", extractTag(ev, "status"))
+	require.Equal(t, "intent-status:"+testPubkey+":"+intent.Coordinate, extractDTag(ev))
+	var payload struct {
+		Result     string                  `json:"result"`
+		Evaluation domain.PolicyEvaluation `json:"evaluation"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(ev.Content), &payload))
+	require.Equal(t, "evaluated", payload.Result)
+	require.Equal(t, *legacy.(*domain.PolicyEvaluation), payload.Evaluation)
+	require.False(t, payload.Evaluation.Allowed)
+	require.Equal(t, 1, payload.Evaluation.Blockers)
+
+	// A retry with the same intent ID is deduplicated, while a new evaluation
+	// replaces the same requester/coordinate status rather than growing state.
+	require.NoError(t, processor.ProcessInProcess(ctx, intent))
+	require.Len(t, published.events, 1)
+	intent.IntentID = uuid.NewString()
+	require.NoError(t, processor.ProcessInProcess(ctx, intent))
+	require.Len(t, published.events, 2)
+	require.Equal(t, extractDTag(published.events[0]), extractDTag(published.events[1]))
+}
+
+func TestPolicyEvaluateIntentRejectsInvalidCoordinate(t *testing.T) {
+	handler := NewPolicyIntentHandler(PolicyIntentHandlerConfig{Evaluator: &policyEvaluationStub{}, Logger: zap.NewNop()})
+	intent := &Intent{Op: "evaluate", Coordinate: "wrong", Content: map[string]any{"artifact_id": uuid.NewString(), "environment_id": uuid.NewString()}}
+	require.ErrorContains(t, handler.HandleIntent(context.Background(), intent), "coordinate")
+}
+
+type policyEvaluationStub struct{}
+
+func (*policyEvaluationStub) Evaluate(context.Context, uuid.UUID, uuid.UUID) (*domain.PolicyEvaluation, error) {
+	return &domain.PolicyEvaluation{Allowed: true}, nil
+}
+
+func TestPolicyEvaluateIntentRetriesWhenStatusPublishFails(t *testing.T) {
+	artifactID, environmentID := uuid.New(), uuid.New()
+	calls := 0
+	var published []nostr.Event
+	status := NewIntentStatusPublisher(func(_ context.Context, ev nostr.Event) error {
+		calls++
+		if calls == 1 {
+			return errors.New("relay rejected status")
+		}
+		published = append(published, ev)
+		return nil
+	}, &testSigner{}, zap.NewNop())
+	processor := NewIntentProcessor(NewTrustSet([]string{testPubkey}, zap.NewNop()), openTestStore(t), status,
+		IntentProcessorConfig{EnabledDomains: map[string]bool{"policy": true}}, zap.NewNop())
+	processor.RegisterHandler("policy", NewPolicyIntentHandler(PolicyIntentHandlerConfig{Evaluator: &policyEvaluationStub{}, Logger: zap.NewNop()}))
+	intent := &Intent{Domain: "policy", Op: "evaluate", Coordinate: "evaluation:" + artifactID.String() + ":" + environmentID.String(),
+		IntentID: uuid.NewString(), Actor: testPubkey, Content: map[string]any{"artifact_id": artifactID.String(), "environment_id": environmentID.String()}}
+	require.ErrorContains(t, processor.ProcessInProcess(context.Background(), intent), "relay rejected status")
+	require.False(t, processor.IsProcessed(intent.IntentID))
+	require.NoError(t, processor.ProcessInProcess(context.Background(), intent))
+	require.True(t, processor.IsProcessed(intent.IntentID))
+	require.Len(t, published, 1)
 }

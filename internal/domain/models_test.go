@@ -5,10 +5,8 @@ import "testing"
 func TestBuildStatusValues(t *testing.T) {
 	statuses := []BuildStatus{
 		BuildStatusQueued,
-		BuildStatusRunning,
 		BuildStatusSucceeded,
 		BuildStatusFailed,
-		BuildStatusCancelled,
 	}
 
 	for _, s := range statuses {

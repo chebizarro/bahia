@@ -321,3 +321,93 @@ under concurrent worktree load; the complete one-worker rerun passed with
 unchanged test and hook deadlines. The initial Go rerun caught a test-only
 use of an existing exported ML helper; the fixture was corrected without
 adding a baseline entry, and the final full Go gate passed.
+
+## Bahia-irsry.13.19, Phase 5 F4: default-on intent domains (2026-10-03)
+
+The daemon now enables every `intentProcessor.RegisterHandler` domain by
+default. `nostr.intent_domains_disabled` opts out specific domains; the
+deprecated non-empty `nostr.intent_domains` allowlist retains its Phase 3
+meaning for one release, and R1 removes both keys. The computed enabled set
+controls handler registration, the shared processor, subscriber/readiness,
+sidecar intent-author sync, and the all-disabled warm-start sentinel.
+Warm-start still covers all cp-state domains independently of intent opt-outs.
+
+`TestDefaultIntentDomainsProcessEveryRegisteredHandler` constructs a daemon
+without domain config and dispatches one intent per registered domain through
+the production processor with recording handlers. An AST guard compares the
+registry against every app-level `RegisterHandler` call. Opt-out tests prove
+only listed domains stop processing; the old no-subscriber test now disables
+all domains explicitly. An empty sidecar relay delivers EOSE and makes the
+author-scoped subscriber ready. Default-sensitive-domain ingress rejects
+plaintext org, secret, and notification intents. Sidecar sync now sends the
+initial empty author set rather than mistaking it for an already-synced set;
+the regression test verifies stale author revocation.
+
+Final F4 gate after the last Go edit: `CGO_ENABLED=0 go build ./...`,
+`CGO_ENABLED=0 go vet ./...`, and `CGO_ENABLED=0 go test ./...` all PASS.
+`TestNoNewTestOnlyExports` and `git diff --check` PASS. An initial full-gate
+run caught a test-only call to an existing unused export; that assertion was
+removed. A later full run failed in `internal/controlplane` under concurrent
+worktree load; the package rerun and final complete Go gate both passed.
+
+## Bahia issue bahia-irsry.77 — build authority and policy evaluation (2026-10-03)
+
+Observed build authority: `EncryptedBuildHandlers.RequestBuild` creates queued
+builds from accepted `build/request`; `pipeline.Bridge` creates or updates a
+build only after trusted Hive-CI run/result correlation. Web and CLI expose
+build request/read and verified artifact registration, not manual build-row
+registration. The MCP `bahia_register_build` and `bahia_update_build_status`
+tools were therefore removed rather than adding an operator-authored build
+intent. F1 owns deletion of the still-present compatibility REST writes
+`POST /builds` and `PATCH /builds/{id}/status`; this slice did not edit the
+router. Existing DB-less build-request, subscriber, and bridge tests remain
+the daemon path evidence, and MCP tests assert the manual tools are absent.
+
+Policy evaluation depends on daemon-private signature, SBOM, security-scan,
+and attestation repositories. MCP now dispatches `policy/evaluate` through the
+in-process intent processor, preserving `PolicyService.Evaluate` semantics.
+The accepted requester/coordinate-bounded kind-30315 status carries the
+actual `evaluation`, with a 16 KiB payload limit; failed publication leaves
+the intent retryable. The legacy ContextVM handler remains for existing web
+callers until their separate migration. `PublishPolicyEvaluateRequest` and its
+unused publisher were deleted; the `unwired_exports` baseline shrank by one
+obsolete policy-evaluate kind alias.
+
+DB-less tests: `TestPolicyEvaluateIntentMatchesContextVMDecision`,
+`TestPolicyEvaluateIntentRetriesWhenStatusPublishFails`,
+`TestPolicyEvaluateIntentRejectsInvalidCoordinate`,
+`TestCallTool_EvaluatePolicyUsesIntentAndPublishesDecision`,
+`TestIntentStatusPublisher_OutcomeSizeBound`, and
+`TestGetTools_ExcludesManualBuildWrites`. The earlier full Go gate passed,
+and the final gate after the last code/test edit passed:
+
+| Gate | Outcome |
+|---|---|
+| `CGO_ENABLED=0 go build ./...` | PASS |
+| `CGO_ENABLED=0 go vet ./...` | PASS |
+| `CGO_ENABLED=0 go test ./...` | PASS |
+| `CGO_ENABLED=0 go test ./internal/archtest -run TestNoNewTestOnlyExports -count=1` | PASS; baseline shrank by one |
+| `gofmt` / `git diff --check` | PASS |
+
+### F4 regression: intent-author revocation propagation
+
+Repeated `TestIntentAuthorsSyncerMembershipMutationReachesSidecar` failed on
+the F4 branch because the initial empty `setintentauthors` push and the later
+revocation sent identical NIP-86 bodies within one Nostr timestamp second.
+The relay-admin client generated identical NIP-98 authorization event IDs;
+the sidecar correctly rejected the second as replay (HTTP 401), leaving the
+author admitted during the retry backoff. The 200 ms test sleeps observed the
+old allowlist rather than a completed revocation. A retry also consumed a
+membership notification while continuing to send the obsolete snapshot.
+
+The admin client now signs each request with a fresh cryptographic nonce tag,
+including identical bodies in the same second. The syncer immediately
+re-snapshots authors when a change supersedes an in-flight retry. Tests wait
+for successful sidecar admin RPCs instead of sleeping and publish distinct
+signed intents for before/after admission. A scripted retry test proves a
+revocation supersedes a failed addition without a timer-driven completion.
+
+Verification: `CGO_ENABLED=0 go test -count=50 -run
+TestIntentAuthorsSyncerMembershipMutationReachesSidecar ./internal/controlplane/`
+passed 50/50; `-count=10 -cpu=1,2,8` passed 10/10 at each CPU setting.
+`CGO_ENABLED=0 go build ./...`, `go vet ./...`, and `go test ./...` passed.

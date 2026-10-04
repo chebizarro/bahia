@@ -1,6 +1,8 @@
 dev_mode: true
 
 nostr:
+  # All registered intent domains are enabled unless explicitly listed here.
+  intent_domains_disabled: []
   contextvm_relays:
     - "ws://relay:3334/relay"
   sidecar:

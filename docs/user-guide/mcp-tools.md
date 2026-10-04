@@ -24,7 +24,7 @@ credentials into arguments; only authorized SecretRefs are valid bootstrap input
 [Parameters, acknowledgments and query examples](features/virtual-machines.md).
 
 
-Bahia exposes Model Context Protocol (MCP) over `/mcp` and `/api/v1/mcp`. Use JSON-RPC discovery at runtime: `tools/list` is the authority for the exact tools enabled by the running server.
+Bahia exposes Model Context Protocol (MCP) over `/mcp`. Use JSON-RPC discovery at runtime: `tools/list` is the authority for the exact tools enabled by the running server.
 
 For canonical-state families, the in-daemon MCP server reads its local Nostr
 event store rather than querying the PostgreSQL projection. These reads are
@@ -112,7 +112,7 @@ Intent-backed MCP writes currently cover service/environment CRUD, deployment an
 
 Supply `idempotency_key` in tool arguments or `_meta.progressToken` in the MCP `tools/call` params. The server derives a stable actor-and-tool-scoped intent ID so retries do not apply twice; without either key, it mints a new UUIDv7 per call. For creates, an omitted entity `id` is derived from that intent ID. The JSON tool result includes `intent_id` and `event_id`: `status:"accepted"` includes canonical `state` (or a verified deletion tombstone), `status:"rejected"`/`"conflict"` is a structured tool error, and `status:"pending"` is a successful result when canonical state has not become visible. Do not interpret pending as failure or a ContextVM `-32011` error. Notification-channel state in write results redacts sensitive config just like read results.
 
-Other registered mutations, including ML import/recipe/inference commands, build/artifact/SBOM writes, tool provisioning, policy evaluation, and notification-log actions, are not yet intent-backed and retain their existing behavior. Artifact registration uses a stable keyed ContextVM request; build registration remains a direct registry write pending a corresponding handler.
+Other registered mutations, including ML import/recipe/inference commands, artifact/SBOM writes, tool provisioning, and notification-log actions, retain their existing behavior. Artifact registration uses a stable keyed ContextVM request. Build rows and status are daemon-authored from trusted CI events; MCP has no manual build write tools. `bahia_evaluate_policy` uses the policy intent processor and returns the coordinate of a bounded kind-30315 status containing the actual evaluation.
 
 ### Deployments and runs
 
@@ -124,7 +124,7 @@ Use `bahia_assistant_service_deploy` and `bahia_assistant_service_rollback` for 
 
 ### Builds, artifacts, SBOMs, and signatures
 
-- Builds: `bahia_list_builds`, `bahia_get_build`, `bahia_register_build`, `bahia_update_build_status`
+- Builds: `bahia_list_builds`, `bahia_get_build` (read-only; CI owns registration and status)
 - Artifacts: `bahia_list_artifacts`, `bahia_get_artifact`, `bahia_register_artifact`
 - SBOM: `bahia_get_sbom`, `bahia_get_sbom_packages`, `bahia_search_sbom_packages`, `bahia_ingest_sbom`
 - Signatures: `bahia_list_signatures`, `bahia_get_signature`, `bahia_list_verified_signatures`, `bahia_has_verified_signature`, `bahia_verify_signatures`

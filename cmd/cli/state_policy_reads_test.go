@@ -110,12 +110,11 @@ func runStatePolicyCLI(t *testing.T, args ...string) (string, string, error) {
 	return string(output), stderr.String(), execErr
 }
 
-func TestStatePolicyReadsMatchRESTGolden(t *testing.T) {
+func TestStatePolicyReadsNostrGolden(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
 	t.Setenv("BAHIA_NOSTR_NSEC", "")
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
 	t.Setenv("BAHIA_NOSTR_KEY_FILE", "")
-	t.Setenv("BAHIA_OPERATOR_HTTP_FALLBACK", "true")
 	sk := nostr.Generate()
 	pubkey := nostr.GetPublicKey(sk).Hex()
 	now := time.Date(2026, 10, 3, 10, 0, 0, 123456000, time.UTC)
@@ -134,51 +133,34 @@ func TestStatePolicyReadsMatchRESTGolden(t *testing.T) {
 	relay.events = append(relay.events, makeCLIStatePolicyEvent(t, sk, kinds.PolicyRegistry, policy.ID.String(), policyTags, policyContent, base+2))
 	relayServer := httptest.NewServer(http.HandlerFunc(relay.serve))
 	defer relayServer.Close()
-	var httpPaths []string
-	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		httpPaths = append(httpPaths, r.URL.Path)
-		w.Header().Set("Content-Type", "application/json")
-		var data any
-		switch r.URL.Path {
-		case "/api/v1/state":
-			data = []domain.EnvironmentServiceState{state, stable}
-		case "/api/v1/state/drifted":
-			data = []domain.EnvironmentServiceState{state}
-		case "/api/v1/policies":
-			data = []domain.DeploymentPolicy{policy}
-		case "/api/v1/policies/" + policy.ID.String():
-			data = policy
-		default:
-			http.Error(w, "unexpected REST path", http.StatusNotFound)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
-	}))
-	defer apiServer.Close()
 	relayURL := "ws" + strings.TrimPrefix(relayServer.URL, "http")
-	common := []string{"--server", apiServer.URL, "--relay", relayURL, "--service-pubkey", pubkey, "--eose-timeout", "2s"}
+	common := []string{"--relay", relayURL, "--service-pubkey", pubkey, "--eose-timeout", "2s"}
 	cases := []struct {
-		name, path string
-		command    []string
+		name    string
+		command []string
 	}{
-		{"state list", "/api/v1/state", []string{"state", "list"}},
-		{"state drifted", "/api/v1/state/drifted", []string{"state", "drifted"}},
-		{"policies list", "/api/v1/policies", []string{"policies", "list"}},
-		{"policies get", "/api/v1/policies/" + policy.ID.String(), []string{"policies", "get", policy.ID.String()}},
+		{"state list", []string{"state", "list"}},
+		{"state drifted", []string{"state", "drifted"}},
+		{"policies list", []string{"policies", "list"}},
+		{"policies get", []string{"policies", "get", policy.ID.String()}},
 	}
 	for _, tc := range cases {
 		for _, format := range []string{"table", "json"} {
 			t.Run(tc.name+"/"+format, func(t *testing.T) {
 				args := append(append([]string(nil), common...), "--output", format)
-				beforeHTTP := len(httpPaths)
-				nostrOutput, stderr, err := runStatePolicyCLI(t, append(args, tc.command...)...)
+				output, stderr, err := runStatePolicyCLI(t, append(args, tc.command...)...)
 				require.NoError(t, err)
 				require.Empty(t, stderr)
-				require.Len(t, httpPaths, beforeHTTP, "default read must not call REST")
-				restOutput, _, err := runStatePolicyCLI(t, append(append(args, "--http-fallback"), tc.command...)...)
-				require.NoError(t, err)
-				require.Equal(t, tc.path, httpPaths[len(httpPaths)-1])
-				require.Equal(t, restOutput, nostrOutput)
+				require.NotEmpty(t, output)
+				if strings.HasPrefix(tc.name, "policies") {
+					require.Contains(t, output, policy.ID.String())
+				} else {
+					require.Contains(t, output, state.ServiceID.String())
+				}
+				if format == "json" {
+					require.True(t, json.Valid([]byte(output)), "invalid JSON: %s", output)
+				}
+
 			})
 		}
 	}
@@ -226,23 +208,4 @@ func TestPolicyGetMissingReturnsError(t *testing.T) {
 func TestStateReadRejectsInvalidEOSETimeout(t *testing.T) {
 	_, _, err := runStatePolicyCLI(t, "--relay", "ws://127.0.0.1:1", "--service-pubkey", nostr.GetPublicKey(nostr.Generate()).Hex(), "--eose-timeout", "0s", "state", "list")
 	require.ErrorContains(t, err, "must be positive")
-}
-
-func TestStateHTTPFallbackNeedsNoRelayConfiguration(t *testing.T) {
-	t.Setenv("BAHIA_NOSTR_RELAYS", "")
-	t.Setenv("BAHIA_NOSTR_SERVICE_PUBKEY", "")
-	t.Setenv("BAHIA_NOSTR_NSEC", "")
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
-	t.Setenv("BAHIA_NOSTR_KEY_FILE", "")
-	var path string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[]}`))
-	}))
-	defer server.Close()
-	output, _, err := runStatePolicyCLI(t, "--server", server.URL, "--http-fallback", "--output", "json", "state", "list")
-	require.NoError(t, err)
-	require.Equal(t, "/api/v1/state", path)
-	require.JSONEq(t, `[]`, output)
 }

@@ -132,7 +132,7 @@ Each request requires `target_ref`, `service_id`, `scope`, and `policy_coordinat
 
 Policy creation is signer-first. CLI and MCP mutation surfaces publish a signed public `PolicyCreate` event (`kind: 5986`), verify relay `OK` acceptance, and return correlation metadata. Durable truth comes from following the returned `request_event_id` in ContextVM reply events (`kind: 25910`) and policy read-model projections (`kind: 30900`). Direct REST/repository mutation fallback is not used for policy creation.
 
-Read-only CLI paths are distinct: `bahia policies list` and `bahia policies get <policy-uuid>` sync the signed `30900` policy-registry records into a per-service local store and read them there. `--http-fallback` explicitly selects the legacy REST read route until Phase 5 Wave 6. If no relay reaches EOSE within `--eose-timeout`, the CLI warns on stderr, renders its stale local snapshot, and exits successfully; a missing policy UUID remains an error.
+Read-only CLI paths are distinct: `bahia policies list` and `bahia policies get <policy-uuid>` sync the signed `30900` policy-registry records into a per-service local store and read them there. The legacy REST read route is no longer mounted. If no relay reaches EOSE within `--eose-timeout`, the CLI warns on stderr, renders its stale local snapshot, and exits successfully; a missing policy UUID remains an error.
 
 ### Nostr (`PolicyCreate` 5986)
 
@@ -411,7 +411,7 @@ Use JSON-RPC `params`, not legacy event content. Supply an `idempotency_key` (or
 update validate names, enforcement (`warn` or `block`), environment UUIDs and
 implemented rule types. Unknown/unimplemented rule types are rejected.
 
-CRUD results include `policy_id`; evaluation returns the actual policy decision.
+CRUD results include `policy_id`; legacy ContextVM evaluation returns the actual policy decision. MCP `bahia_evaluate_policy` instead dispatches a `policy` intent with `op=evaluate`, `artifact_id`, and `environment_id`. Its response contains a `status_coordinate`; follow that requester-scoped kind-30315 status for `evaluation` (the same decision produced by the daemon policy service). The status is bounded by requester and artifact/environment pair, and evaluation failure is reported as a rejection rather than as an allow decision.
 CRUD also publishes signed `30900` state with `domain=policy`,
 `schema=bahia.cp-state.v1`, and `d=<policy-id>`, including delete tombstones. A
 registry publication failure is reported as an error even if storage has already

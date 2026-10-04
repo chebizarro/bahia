@@ -20,25 +20,10 @@ var (
 // digestRegex matches OCI content-addressable digests: algorithm:hex
 var digestRegex = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
-// gitSHARegex matches full or short git SHA hashes (7-40 hex chars).
-var gitSHARegex = regexp.MustCompile(`^[a-f0-9]{7,40}$`)
-
 // llmRouteNameRegex matches DNS/route-safe LLM route names.
 var llmRouteNameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // ValidateBuildStatus checks that a BuildStatus is a known value.
-func ValidateBuildStatus(s BuildStatus) error {
-	switch s {
-	case BuildStatusQueued, BuildStatusRunning, BuildStatusSucceeded, BuildStatusFailed, BuildStatusCancelled:
-		return nil
-	case "":
-		return nil // empty is allowed — defaults are applied by service layer
-	default:
-		return fmt.Errorf("%w: build status %q is not valid (allowed: queued, running, succeeded, failed, cancelled)", ErrInvalidValue, s)
-	}
-}
-
-// ValidateScanStatus checks that a ScanStatus is a known value.
 func ValidateScanStatus(s ScanStatus) error {
 	switch s {
 	case ScanStatusUnknown, ScanStatusPending, ScanStatusClean, ScanStatusWarning, ScanStatusFailed:
@@ -71,16 +56,6 @@ func ValidateDeploymentRunStatus(s DeploymentRunStatus) error {
 		return nil
 	default:
 		return fmt.Errorf("%w: deployment run status %q is not valid (allowed: queued, running, succeeded, failed, cancelled, timeout)", ErrInvalidValue, s)
-	}
-}
-
-// ValidateHealthStatus checks that a HealthStatus is a known value.
-func ValidateHealthStatus(s HealthStatus) error {
-	switch s {
-	case HealthStatusUnknown, HealthStatusStarting, HealthStatusHealthy, HealthStatusUnhealthy, HealthStatusStopped:
-		return nil
-	default:
-		return fmt.Errorf("%w: health status %q is not valid (allowed: unknown, starting, healthy, unhealthy, stopped)", ErrInvalidValue, s)
 	}
 }
 
@@ -287,18 +262,6 @@ func ValidateImageDigest(digest string) error {
 }
 
 // ValidateGitSHA checks that a git SHA is a valid hex hash (7-40 chars).
-func ValidateGitSHA(sha string) error {
-	if sha == "" {
-		return fmt.Errorf("%w: git SHA must not be empty", ErrEmptyField)
-	}
-	lower := strings.ToLower(sha)
-	if !gitSHARegex.MatchString(lower) {
-		return fmt.Errorf("%w: git SHA must be 7-40 hex characters, got %q", ErrInvalidFormat, sha)
-	}
-	return nil
-}
-
-// ValidateRequiredUUID checks that a UUID is not the nil/zero value.
 func ValidateRequiredUUID(id uuid.UUID, fieldName string) error {
 	if id == uuid.Nil {
 		return fmt.Errorf("%w: %s must not be empty/nil", ErrNilUUID, fieldName)

@@ -159,78 +159,43 @@ func newTestMCPBuildArtifactServer() *Server {
 	return newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{ArtifactCommandPublisher: &captureArtifactCommandPublisher{}})
 }
 
-func TestGetTools_IncludesBuildArtifactRegister(t *testing.T) {
+func TestGetTools_ExcludesManualBuildWrites(t *testing.T) {
 	server := newTestMCPBuildArtifactServer()
-	tools := server.GetTools()
-	foundBuild := false
-	foundUpdateBuildStatus := false
 	foundArtifact := false
-	for _, tool := range tools {
-		if tool.Name == "bahia_register_build" {
-			foundBuild = true
-		}
-		if tool.Name == "bahia_update_build_status" {
-			foundUpdateBuildStatus = true
+	for _, tool := range server.GetTools() {
+		if tool.Name == "bahia_register_build" || tool.Name == "bahia_update_build_status" {
+			t.Fatalf("manual build write tool remains exposed: %s", tool.Name)
 		}
 		if tool.Name == "bahia_register_artifact" {
 			foundArtifact = true
 		}
 	}
-	if !foundBuild {
-		t.Fatalf("missing bahia_register_build tool")
-	}
-	if !foundUpdateBuildStatus {
-		t.Fatalf("missing bahia_update_build_status tool")
-	}
 	if !foundArtifact {
-		t.Fatalf("missing bahia_register_artifact tool")
+		t.Fatal("missing artifact registration tool")
+	}
+	for _, name := range []string{"bahia_register_build", "bahia_update_build_status"} {
+		result, err := server.CallTool(authorizedMCPContext(), name, map[string]interface{}{})
+		if err != nil || !result.IsError {
+			t.Fatalf("%s must be rejected: %#v %v", name, result, err)
+		}
 	}
 }
 
-func TestCallTool_RegisterBuild_AndRegisterArtifact(t *testing.T) {
-	ctx := authorizedMCPContext()
+func TestCallTool_RegisterArtifact(t *testing.T) {
 	server := newTestMCPBuildArtifactServer()
-	serviceID := uuid.New().String()
-
-	buildRes, err := server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
-		"service_id": serviceID,
-		"git_sha":    "abc1234",
-		"git_ref":    "refs/heads/main",
-		"ci_run_id":  "run-1",
-	})
-	if err != nil {
-		t.Fatalf("register build err: %v", err)
-	}
-	if buildRes.IsError {
-		t.Fatalf("register build returned error: %s", buildRes.Content[0].Text)
-	}
-	buildPayload := decodeResultMap(t, buildRes)
-	buildID := buildPayload["build_id"].(string)
-	build := buildPayload["build"].(map[string]interface{})
-	if build["ci_system"] != "hive-ci" {
-		t.Fatalf("expected default ci_system hive-ci, got %v", build["ci_system"])
-	}
-
-	artifactRes, err := server.CallTool(ctx, "bahia_register_artifact", map[string]interface{}{
-		"build_id":     buildID,
-		"service_id":   serviceID,
-		"image_repo":   "registry.example.com/api",
-		"image_tag":    "v1.2.3",
+	buildID, serviceID := uuid.NewString(), uuid.NewString()
+	artifactRes, err := server.CallTool(authorizedMCPContext(), "bahia_register_artifact", map[string]interface{}{
+		"build_id": buildID, "service_id": serviceID,
+		"image_repo": "registry.example.com/api", "image_tag": "v1.2.3",
 		"image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"scan_status":  "clean",
 	})
-	if err != nil {
-		t.Fatalf("register artifact err: %v", err)
+	if err != nil || artifactRes.IsError {
+		t.Fatalf("register artifact: %v %#v", err, artifactRes)
 	}
-	if artifactRes.IsError {
-		t.Fatalf("register artifact returned error: %s", artifactRes.Content[0].Text)
-	}
-	artifactPayload := decodeResultMap(t, artifactRes)
-	if artifactPayload["request_event_id"] != "artifact-event" || artifactPayload["request_kind"].(float64) != float64(controlplane.KindContextVMMessage) {
-		t.Fatalf("unexpected artifact register receipt: %#v", artifactPayload)
-	}
-	if artifactPayload["build_id"] != buildID || artifactPayload["service_id"] != serviceID || artifactPayload["image_digest"] != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
-		t.Fatalf("unexpected artifact register payload: %#v", artifactPayload)
+	payload := decodeResultMap(t, artifactRes)
+	if payload["request_event_id"] != "artifact-event" || payload["build_id"] != buildID || payload["service_id"] != serviceID {
+		t.Fatalf("unexpected receipt: %#v", payload)
 	}
 }
 
@@ -261,108 +226,13 @@ func TestArtifactRegisterUsesStableContextVMKey(t *testing.T) {
 	}
 }
 
-func TestCallTool_RegisterBuildAndArtifact_ValidationErrors(t *testing.T) {
-	ctx := authorizedMCPContext()
+func TestCallTool_RegisterArtifact_ValidationErrors(t *testing.T) {
 	server := newTestMCPBuildArtifactServer()
-
-	buildRes, err := server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
-		"service_id": uuid.New().String(),
-		"git_sha":    "not-hex",
-		"git_ref":    "refs/heads/main",
-		"ci_run_id":  "run-1",
+	result, err := server.CallTool(authorizedMCPContext(), "bahia_register_artifact", map[string]interface{}{
+		"build_id": uuid.NewString(), "service_id": uuid.NewString(),
+		"image_repo": "registry.example.com/api", "image_tag": "v1.2.3", "image_digest": "bad-digest",
 	})
-	if err != nil {
-		t.Fatalf("register build err: %v", err)
-	}
-	if !buildRes.IsError {
-		t.Fatalf("expected register build to fail validation")
-	}
-
-	artifactRes, err := server.CallTool(ctx, "bahia_register_artifact", map[string]interface{}{
-		"build_id":     uuid.New().String(),
-		"service_id":   uuid.New().String(),
-		"image_repo":   "registry.example.com/api",
-		"image_tag":    "v1.2.3",
-		"image_digest": "bad-digest",
-	})
-	if err != nil {
-		t.Fatalf("register artifact err: %v", err)
-	}
-	if !artifactRes.IsError {
-		t.Fatalf("expected register artifact to fail validation")
-	}
-}
-
-func TestCallTool_UpdateBuildStatus(t *testing.T) {
-	ctx := authorizedMCPContext()
-	server := newTestMCPBuildArtifactServer()
-	serviceID := uuid.New().String()
-
-	buildRes, err := server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
-		"service_id": serviceID,
-		"git_sha":    "abc1234",
-		"git_ref":    "refs/heads/main",
-		"ci_run_id":  "run-2",
-	})
-	if err != nil {
-		t.Fatalf("register build err: %v", err)
-	}
-	if buildRes.IsError {
-		t.Fatalf("register build returned error: %s", buildRes.Content[0].Text)
-	}
-	buildID := decodeResultMap(t, buildRes)["build_id"].(string)
-
-	updateRes, err := server.CallTool(ctx, "bahia_update_build_status", map[string]interface{}{
-		"build_id": buildID,
-		"status":   "running",
-	})
-	if err != nil {
-		t.Fatalf("update build status err: %v", err)
-	}
-	if updateRes.IsError {
-		t.Fatalf("update build status returned error: %s", updateRes.Content[0].Text)
-	}
-	payload := decodeResultMap(t, updateRes)
-	build := payload["build"].(map[string]interface{})
-	if build["status"] != "running" {
-		t.Fatalf("expected status running, got %v", build["status"])
-	}
-}
-
-func TestCallTool_UpdateBuildStatus_ValidationErrors(t *testing.T) {
-	ctx := authorizedMCPContext()
-	server := newTestMCPBuildArtifactServer()
-
-	res, err := server.CallTool(ctx, "bahia_update_build_status", map[string]interface{}{
-		"build_id": "not-a-uuid",
-		"status":   "running",
-	})
-	if err != nil {
-		t.Fatalf("update build status err: %v", err)
-	}
-	if !res.IsError {
-		t.Fatalf("expected update build status to fail for invalid build_id")
-	}
-
-	res, err = server.CallTool(ctx, "bahia_update_build_status", map[string]interface{}{
-		"build_id": uuid.New().String(),
-		"status":   "bogus",
-	})
-	if err != nil {
-		t.Fatalf("update build status err: %v", err)
-	}
-	if !res.IsError {
-		t.Fatalf("expected update build status to fail for invalid status")
-	}
-
-	res, err = server.CallTool(ctx, "bahia_update_build_status", map[string]interface{}{
-		"build_id": uuid.New().String(),
-		"status":   "running",
-	})
-	if err != nil {
-		t.Fatalf("update build status err: %v", err)
-	}
-	if !res.IsError {
-		t.Fatalf("expected update build status to fail for missing build")
+	if err != nil || !result.IsError {
+		t.Fatalf("invalid artifact must be rejected: %#v %v", result, err)
 	}
 }

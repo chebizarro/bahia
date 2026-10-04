@@ -227,11 +227,26 @@ func (h *EncryptedRouteHandlers) ImportObservedArtifact(ctx context.Context, req
 	authorizer := encryptedTenantAuthorizer{services: h.services, environments: h.registry, rbac: h.rbac}
 	// Authorize the environment too: the payload names one, and every other
 	// service+environment mutation proves the operator owns both.
-	if _, _, err := authorizer.authorizeServiceEnvironment(
+	svc, _, err := authorizer.authorizeServiceEnvironment(
 		ctx, request.Event, payload.ServiceID, payload.EnvironmentID,
 		domain.PermWriteServices, domain.PermWriteServices,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, err
+	}
+	if h.intentProcessor != nil && h.intentProcessor.Handler("artifact") != nil {
+		var content map[string]any
+		if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
+			return nil, err
+		}
+		intent := &Intent{Event: request.Event, Domain: "artifact", Op: "import-observed",
+			OrgID: svc.OrgID, IntentID: intentIDFromContextVM(request, payload.IdempotencyKey),
+			Coordinate: artifactImportCoordinate(payload.ServiceID, payload.EnvironmentID, payload.ImageDigest),
+			Content:    content, Actor: request.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "accepted", "intent_id": intent.IntentID, "result": intent.Result}, nil
 	}
 	requestedBy := ""
 	if request.Event != nil {
@@ -286,8 +301,24 @@ func (h *EncryptedRouteHandlers) RegisterArtifact(ctx context.Context, request C
 		return nil, fmt.Errorf("image_repo, image_tag, and image_digest are required")
 	}
 	authorizer := encryptedTenantAuthorizer{services: h.services, environments: h.registry, rbac: h.rbac}
-	if _, err := authorizer.authorizeService(ctx, request.Event, payload.ServiceID, domain.PermWriteServices); err != nil {
+	svc, err := authorizer.authorizeService(ctx, request.Event, payload.ServiceID, domain.PermWriteServices)
+	if err != nil {
 		return nil, err
+	}
+	if h.intentProcessor != nil && h.intentProcessor.Handler("artifact") != nil {
+		var content map[string]any
+		if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
+			return nil, err
+		}
+		id := domain.NewEntityID()
+		content["id"] = id.String()
+		intent := &Intent{Event: request.Event, Domain: "artifact", Op: "register",
+			OrgID: svc.OrgID, IntentID: effectiveIdempotencyKey(request, request.Event.ID.Hex()),
+			Coordinate: "artifact:" + id.String(), Content: content, Actor: request.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return map[string]any{"status": "registered", "artifact": intent.Result["artifact"], "artifact_id": intent.Result["artifact_id"]}, nil
 	}
 	scanStatus := domain.ScanStatus(strings.TrimSpace(payload.ScanStatus))
 	if scanStatus == "" {
@@ -742,6 +773,16 @@ func effectiveIdempotencyKey(request ContextVMRequest, compatibilityKey string) 
 		return token
 	}
 	return strings.TrimSpace(compatibilityKey)
+}
+
+func intentIDFromContextVM(request ContextVMRequest, compatibilityKey string) string {
+	if id := effectiveIdempotencyKey(request, compatibilityKey); id != "" {
+		return id
+	}
+	if request.Event != nil {
+		return request.Event.ID.Hex()
+	}
+	return ""
 }
 
 // environmentDualDispatch routes an environment mutation through the intent

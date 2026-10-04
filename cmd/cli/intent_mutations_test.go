@@ -259,7 +259,7 @@ func executeIntentCommandWithTimeout(t *testing.T, timeout string, args ...strin
 func TestCLIServiceEnvironmentIntentPipeline(t *testing.T) {
 	registry, transport, org, _ := setupCLIIntentPipeline(t)
 	serviceID, environmentID := uuid.NewString(), uuid.NewString()
-	if err := executeIntentCommand(t, "--http-fallback", "services", "create", "--id", serviceID, "--org", org, "--name", "api", "--artifact-repo", "registry/api"); err != nil {
+	if err := executeIntentCommand(t, "services", "create", "--id", serviceID, "--org", org, "--name", "api", "--artifact-repo", "registry/api"); err != nil {
 		t.Fatal(err)
 	}
 	if len(registry.canonical) != 1 || registry.canonical[0].Kind != 30900 || len(transport.published) != 1 || transport.published[0].Kind != 30900 {

@@ -423,7 +423,7 @@ func TestClient_ExistsReturnsIndeterminateOnServerFailure(t *testing.T) {
 	}
 }
 
-func TestClient_GetStats(t *testing.T) {
+func TestClientTracksStats(t *testing.T) {
 	data := []byte("stats test")
 	hash := sha256.Sum256(data)
 	hashStr := hex.EncodeToString(hash[:])
@@ -455,12 +455,12 @@ func TestClient_GetStats(t *testing.T) {
 		t.Errorf("test operation failed: %v", err)
 	}
 
-	stats := client.GetStats()
-	if stats[server.URL]["uploads"] != 1 {
-		t.Errorf("uploads = %d, want 1", stats[server.URL]["uploads"])
+	stats := client.stats[server.URL]
+	if stats.uploads != 1 {
+		t.Errorf("uploads = %d, want 1", stats.uploads)
 	}
-	if stats[server.URL]["downloads"] != 1 {
-		t.Errorf("downloads = %d, want 1", stats[server.URL]["downloads"])
+	if stats.downloads != 1 {
+		t.Errorf("downloads = %d, want 1", stats.downloads)
 	}
 }
 

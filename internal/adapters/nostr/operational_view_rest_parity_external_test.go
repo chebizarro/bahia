@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
-	"github.com/openagentsinc/bahia/internal/api/handlers"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/stretchr/testify/require"
@@ -42,18 +41,9 @@ func (parityEncryptor) DecryptServiceInner(context.Context, string) ([]byte, err
 func (parityEncryptor) RotateKey(context.Context, string) error                     { return nil }
 func (parityEncryptor) WrapKeyForMember(context.Context, string, string) error      { return nil }
 
-func TestOperationalViewRESTPayloadParity(t *testing.T) {
+func TestOperationalViewProjectionMatchesSource(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.SoulFactory.AgentRuntimes = []string{"openclaw", "metiq"}
-	soulResponse := httptest.NewRecorder()
-	handlers.NewSoulFactoryHandler(cfg).GetRuntimes(soulResponse, httptest.NewRequest(http.MethodGet, "/soulfactory/runtimes", nil))
-	require.Equal(t, http.StatusOK, soulResponse.Code)
-	var soulEnvelope struct {
-		Data struct {
-			AgentRuntimes []string `json:"agent_runtimes"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(soulResponse.Body.Bytes(), &soulEnvelope))
 
 	sink := &paritySink{}
 	projector := nostradapter.NewProjector(config.NostrConfig{PrivateKey: strings.Repeat("1", 64), PublishEnabled: true}, &paritySource{}, sink, nil, zap.NewNop())
@@ -66,7 +56,7 @@ func TestOperationalViewRESTPayloadParity(t *testing.T) {
 		AgentRuntimes []string `json:"agent_runtimes"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(sink.events[0].Content), &soulState))
-	require.Equal(t, soulEnvelope.Data.AgentRuntimes, soulState.AgentRuntimes)
+	require.Equal(t, cfg.SoulFactory.AgentRuntimes, soulState.AgentRuntimes)
 
 	owner, hash := strings.Repeat("a", 64), strings.Repeat("b", 64)
 	var server *httptest.Server
@@ -85,22 +75,17 @@ func TestOperationalViewRESTPayloadParity(t *testing.T) {
 	}))
 	defer server.Close()
 	client := blossom.NewClient(blossom.Config{Servers: []string{server.URL}, MaxRetries: 1}, slog.Default())
-	handler := handlers.NewBlossomHandler(client)
-	serversResponse := httptest.NewRecorder()
-	handler.GetServers(serversResponse, httptest.NewRequest(http.MethodGet, "/blossom/servers", nil))
-	require.Equal(t, http.StatusOK, serversResponse.Code)
-	var serversEnvelope struct {
-		Data []string `json:"data"`
+	servers := client.Servers()
+	healthResults := client.HealthCheck(context.Background())
+	health := make(map[string]string, len(healthResults))
+	for server, err := range healthResults {
+		if err != nil {
+			health[server] = err.Error()
+		} else {
+			health[server] = "ok"
+		}
 	}
-	require.NoError(t, json.Unmarshal(serversResponse.Body.Bytes(), &serversEnvelope))
-	healthResponse := httptest.NewRecorder()
-	handler.HealthCheck(healthResponse, httptest.NewRequest(http.MethodGet, "/blossom/health", nil))
-	require.Equal(t, http.StatusOK, healthResponse.Code)
-	var healthEnvelope struct {
-		Data map[string]string `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(healthResponse.Body.Bytes(), &healthEnvelope))
-	require.NoError(t, publisher.PublishBlossomAdmin(context.Background(), serversEnvelope.Data, healthEnvelope.Data))
+	require.NoError(t, publisher.PublishBlossomAdmin(context.Background(), servers, health))
 	require.Len(t, sink.events, 2)
 	plaintext, err := (parityEncryptor{}).DecryptConfidential(context.Background(), sink.events[1].Content, 0, "", "")
 	require.NoError(t, err)
@@ -109,18 +94,13 @@ func TestOperationalViewRESTPayloadParity(t *testing.T) {
 		Health  map[string]string `json:"health"`
 	}
 	require.NoError(t, json.Unmarshal(plaintext, &adminState))
-	require.Equal(t, serversEnvelope.Data, adminState.Servers)
-	require.Equal(t, healthEnvelope.Data, adminState.Health)
+	require.Equal(t, servers, adminState.Servers)
+	require.Equal(t, health, adminState.Health)
 
-	listResponse := httptest.NewRecorder()
-	handler.ListBlobs(listResponse, httptest.NewRequest(http.MethodPost, "/blossom/list", strings.NewReader(`{"pubkey":"`+owner+`"}`)))
-	require.Equal(t, http.StatusOK, listResponse.Code)
-	var listEnvelope struct {
-		Data []blossom.BlobDescriptor `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(listResponse.Body.Bytes(), &listEnvelope))
-	require.Len(t, listEnvelope.Data, 1)
-	require.NoError(t, publisher.PublishBlossomBlob(context.Background(), owner, listEnvelope.Data[0]))
+	blobs, err := client.ListByPubkey(context.Background(), owner)
+	require.NoError(t, err)
+	require.Len(t, blobs, 1)
+	require.NoError(t, publisher.PublishBlossomBlob(context.Background(), owner, blobs[0]))
 	require.Len(t, sink.events, 3)
 	plaintext, err = (parityEncryptor{}).DecryptConfidential(context.Background(), sink.events[2].Content, 0, "", "")
 	require.NoError(t, err)
@@ -130,5 +110,5 @@ func TestOperationalViewRESTPayloadParity(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(plaintext, &blobState))
 	require.Equal(t, owner, blobState.Pubkey)
-	require.Equal(t, listEnvelope.Data[0], blobState.BlobDescriptor)
+	require.Equal(t, blobs[0], blobState.BlobDescriptor)
 }

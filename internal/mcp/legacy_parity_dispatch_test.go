@@ -55,8 +55,6 @@ func (s *Server) legacyCallTool(ctx context.Context, name string, args map[strin
 		return s.handleGetWorker(ctx, args)
 	case "bahia_get_worker_pricing":
 		return s.handleGetWorkerPricing(ctx, args)
-	case "bahia_estimate_cost":
-		return s.handleEstimateCost(ctx, args)
 	case "bahia_get_run_cost":
 		return s.handleGetRunCost(ctx, args)
 	case "bahia_get_payment_history":

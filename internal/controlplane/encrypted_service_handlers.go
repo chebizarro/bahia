@@ -80,6 +80,37 @@ func newEncryptedServiceHandlers(cfg EncryptedServiceHandlersConfig) *encryptedS
 }
 
 func (h *encryptedServiceHandlers) previewDeploy(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.deploymentIntentEnabled() {
+		var params dto.ServiceDeployPreviewRequest
+		if err := decodeStrictContextVMParams(request.RPC.Params, &params); err != nil {
+			return nil, err
+		}
+		svc, _, err := h.authorizer.authorizeServiceEnvironment(ctx, request.Event, params.ServiceID, params.EnvironmentID, domain.PermWriteDeployments, domain.PermWriteDeployments)
+		if err != nil {
+			return nil, err
+		}
+		content := map[string]any{}
+		if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
+			return nil, err
+		}
+		intent := &Intent{Event: request.Event, Domain: "deployment", Op: "preview", OrgID: svc.OrgID,
+			IntentID:   intentIDFromContextVM(request, params.IdempotencyKey),
+			Coordinate: "deployment-preview:" + params.ServiceID.String() + ":" + params.EnvironmentID.String(),
+			Content:    content, Actor: request.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		if intent.Result == nil {
+			// Preview is read-only. On replay compute a fresh plan rather than
+			// persisting the full (possibly sensitive) plan in a local marker.
+			return h.previewDeployLegacy(ctx, request)
+		}
+		return intent.Result, nil
+	}
+	return h.previewDeployLegacy(ctx, request)
+}
+
+func (h *encryptedServiceHandlers) previewDeployLegacy(ctx context.Context, request ContextVMRequest) (any, error) {
 	if h.registry == nil || h.runtimeLifecycle == nil || h.policy == nil {
 		return nil, fmt.Errorf("service deployment control plane is not configured")
 	}
@@ -93,12 +124,11 @@ func (h *encryptedServiceHandlers) previewDeploy(ctx context.Context, request Co
 	if params.DeploymentUnitID != nil && *params.DeploymentUnitID == uuid.Nil {
 		return nil, fmt.Errorf("deployment_unit_id must not be nil")
 	}
-	svc, env, err := h.authorizer.authorizeServiceEnvironment(
+	svc, env, err := h.authorizeDeploymentServiceEnvironment(
 		ctx,
-		request.Event,
+		request,
 		params.ServiceID,
 		params.EnvironmentID,
-		domain.PermWriteDeployments,
 		domain.PermWriteDeployments,
 	)
 	if err != nil {
@@ -521,6 +551,32 @@ func (h *encryptedServiceHandlers) deployLegacy(ctx context.Context, request Con
 }
 
 func (h *encryptedServiceHandlers) routeAttach(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h.deploymentIntentEnabled() {
+		var params dto.ServiceRouteAttachRequest
+		if err := decodeStrictContextVMParams(request.RPC.Params, &params); err != nil {
+			return nil, err
+		}
+		svc, _, err := h.authorizer.authorizeServiceEnvironment(ctx, request.Event, params.ServiceID, params.EnvironmentID, domain.PermWriteDeployments, domain.PermWriteDeployments)
+		if err != nil {
+			return nil, err
+		}
+		content := map[string]any{}
+		if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
+			return nil, err
+		}
+		intent := &Intent{Event: request.Event, Domain: "deployment", Op: "route-attach", OrgID: svc.OrgID,
+			IntentID:   intentIDFromContextVM(request, params.IdempotencyKey),
+			Coordinate: "deployment-route:" + params.ServiceID.String() + ":" + params.EnvironmentID.String(),
+			Content:    content, Actor: request.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result, nil
+	}
+	return h.routeAttachLegacy(ctx, request)
+}
+
+func (h *encryptedServiceHandlers) routeAttachLegacy(ctx context.Context, request ContextVMRequest) (any, error) {
 	if h.registry == nil || h.policy == nil || h.publicRoutes == nil {
 		return nil, fmt.Errorf("service deployment control plane is not configured")
 	}
@@ -534,12 +590,11 @@ func (h *encryptedServiceHandlers) routeAttach(ctx context.Context, request Cont
 	if params.DeploymentUnitID != nil && *params.DeploymentUnitID == uuid.Nil {
 		return nil, fmt.Errorf("deployment_unit_id must not be nil")
 	}
-	svc, env, err := h.authorizer.authorizeServiceEnvironment(
+	svc, env, err := h.authorizeDeploymentServiceEnvironment(
 		ctx,
-		request.Event,
+		request,
 		params.ServiceID,
 		params.EnvironmentID,
-		domain.PermWriteDeployments,
 		domain.PermWriteDeployments,
 	)
 	if err != nil {

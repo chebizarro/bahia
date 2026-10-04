@@ -159,17 +159,24 @@ func (s *IntentSubscriber) buildFilter() nostr.Filter {
 	// to check permissions.
 	if !s.trustSet.HasPostgres() {
 		pubkeys := s.trustSet.AuthorPubkeys()
-		if len(pubkeys) > 0 {
-			authors := make([]nostr.PubKey, 0, len(pubkeys))
-			for _, pk := range pubkeys {
-				if parsed, err := nostr.PubKeyFromHex(pk); err == nil {
-					authors = append(authors, parsed)
-				}
-			}
-			if len(authors) > 0 {
-				filter.Authors = authors
+		authors := make([]nostr.PubKey, 0, len(pubkeys))
+		for _, pk := range pubkeys {
+			if parsed, err := nostr.PubKeyFromHex(pk); err == nil {
+				authors = append(authors, parsed)
 			}
 		}
+		if len(authors) == 0 {
+			// An empty Authors list means every author in NIP-01. Scope the
+			// cold-start REQ to our own key instead: it yields EOSE (and
+			// readiness) without downloading unrelated operators' intents.
+			if self, err := nostr.PubKeyFromHex(s.selfPubkey); err == nil {
+				authors = append(authors, self)
+			}
+		}
+		if len(authors) == 0 {
+			filter.Kinds = nil // never issue an unscoped REQ
+		}
+		filter.Authors = authors
 	}
 
 	return filter

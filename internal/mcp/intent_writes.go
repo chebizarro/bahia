@@ -121,6 +121,11 @@ func (s *Server) callIntentWrite(ctx context.Context, name string, args map[stri
 		return intentWriteError(status, intentID, eventID, err.Error()), true
 	}
 	result := map[string]any{"status": "pending", "intent_id": intentID, "event_id": eventID}
+	if name == "bahia_evaluate_policy" {
+		result["status"] = "accepted"
+		result["status_kind"] = controlplane.KindNIP38Status
+		result["status_coordinate"] = "intent-status:" + actor + ":" + write.coordinate
+	}
 	if write.deleted {
 		coordinate := write.deleteCoordinate
 		if coordinate == "" {
@@ -293,7 +298,7 @@ func isIntentWriteTool(name string) bool {
 		"bahia_create_environment", "bahia_update_environment", "bahia_delete_environment",
 		"bahia_deploy", "bahia_create_intent", "bahia_rollback",
 		"bahia_approve_deployment", "bahia_approve_intent", "bahia_reject_deployment", "bahia_reject_intent",
-		"bahia_create_policy", "bahia_update_policy", "bahia_delete_policy",
+		"bahia_create_policy", "bahia_update_policy", "bahia_delete_policy", "bahia_evaluate_policy",
 		"bahia_worker_cordon", "bahia_worker_uncordon", "bahia_worker_drain", "bahia_worker_undrain",
 		"bahia_worker_maintenance_enter", "bahia_worker_maintenance_exit", "bahia_worker_labels_update",
 		"bahia_llm_create_route", "bahia_llm_update_route", "bahia_llm_register_release",
@@ -664,6 +669,27 @@ func (s *Server) intentWriteForTool(ctx context.Context, name string, args map[s
 					w.content[key] = value
 				}
 			}
+		}
+	case "bahia_evaluate_policy":
+		artifactID, e := parseRequiredUUIDArg(args, "artifact_id")
+		if e != nil {
+			return w, e
+		}
+		environmentID, e := parseRequiredUUIDArg(args, "environment_id")
+		if e != nil {
+			return w, e
+		}
+		w = intentWrite{domain: "policy", op: "evaluate", coordinate: "evaluation:" + artifactID.String() + ":" + environmentID.String(), content: map[string]any{"artifact_id": artifactID.String(), "environment_id": environmentID.String()}}
+		w.orgID, err = s.intentOrgFromState(ctx, args, nostrpool.KindEnvironmentRegistry, "id", environmentID.String())
+		if err != nil {
+			return w, err
+		}
+		if serviceIDRaw := strings.TrimSpace(stringArg(args, "service_id")); serviceIDRaw != "" {
+			serviceID, e := uuid.Parse(serviceIDRaw)
+			if e != nil || serviceID == uuid.Nil {
+				return w, fmt.Errorf("invalid service_id")
+			}
+			w.content["service_id"] = serviceID.String()
 		}
 	case "bahia_llm_create_route":
 		id, e := mcpIntentEntityID(args, intentID)

@@ -482,25 +482,6 @@ func (s *Server) handleGetWorkerPricing(ctx context.Context, args map[string]int
 	return jsonResult(result)
 }
 
-func (s *Server) handleEstimateCost(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if legacyFor(s).Payments == nil {
-		return errorResult("payment tools are not configured"), nil
-	}
-
-	runID, err := parseRequiredUUIDArg(args, "run_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	estimatedDurationSecs := optionalIntArg(args, "estimated_duration_secs", 0)
-	estimate, err := legacyFor(s).Payments.EstimateCost(ctx, runID, estimatedDurationSecs)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to estimate cost: %v", err)), nil
-	}
-
-	return jsonResult(costEstimateToMap(estimate))
-}
-
 func (s *Server) handleGetRunCost(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if legacyFor(s).Payments == nil {
 		return errorResult("payment tools are not configured"), nil

@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -26,7 +24,7 @@ type confidentialFixture struct {
 	memberKey  nostr.SecretKey
 	org        domain.Organization
 	member     domain.OrgMember
-	secret     client.SecretRef
+	secret     cliSecretRef
 	channel    domain.NotificationChannel
 	fleet      domain.NotificationChannel
 	events     []nostr.Event
@@ -102,7 +100,7 @@ func newConfidentialFixture(t *testing.T) confidentialFixture {
 	stamp := nostr.Timestamp(now.Unix())
 	org := domain.Organization{ID: orgID, Name: "acme", DisplayName: "Acme", OwnerPubkey: pubkey, CreatedAt: now, UpdatedAt: now}
 	member := domain.OrgMember{OrgID: orgID, Pubkey: pubkey, Role: domain.RoleOwner, NIP05: "owner@acme.test", JoinedAt: now, UpdatedAt: now}
-	secret := client.SecretRef{ID: secretID.String(), ServiceID: serviceID.String(), Name: "API_KEY", EncryptionMethod: "nip44", Version: 2}
+	secret := cliSecretRef{ID: secretID.String(), ServiceID: serviceID.String(), Name: "API_KEY", EncryptionMethod: "nip44", Version: 2}
 	channel := domain.NotificationChannel{ID: channelID, OrgID: orgID, Name: "operations", ChannelType: domain.ChannelTypeWebhook, Config: map[string]any{"url": "https://private.invalid/hook", "secret": "do-not-reveal", "label": "ops"}, EventFilter: map[string]any{"type": "deploy"}, Enabled: true, CreatedAt: now, UpdatedAt: now}
 	fleet := domain.NotificationChannel{ID: fleetID, Name: "fleet-alerts", ChannelType: domain.ChannelTypeWebhook, Config: map[string]any{"url": "https://private.invalid/fleet"}, Enabled: true}
 	var orgKey [32]byte
@@ -148,40 +146,13 @@ func confidentialArgs(f confidentialFixture) []string {
 	return []string{"--service-pubkey", nostr.GetPublicKey(f.serviceKey).Hex(), "--relay", "wss://fixture.invalid", "--output", "json"}
 }
 
-func TestCLIConfidentialRESTNostrGolden(t *testing.T) {
+func TestCLIConfidentialNostrGolden(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
 	t.Setenv("BAHIA_NOSTR_NSEC", "")
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
 	f := newConfidentialFixture(t)
 	pool := &cliReadPool{events: f.events}
 	installConfidentialPool(t, pool)
-	serverCalls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serverCalls++
-		var data any
-		switch r.URL.Path {
-		case "/api/v1/orgs":
-			data = []domain.Organization{f.org}
-		case "/api/v1/orgs/" + f.org.ID.String(), "/api/v1/orgs/" + f.org.Name:
-			data = f.org
-		case "/api/v1/orgs/" + f.org.ID.String() + "/members":
-			data = []domain.OrgMember{f.member}
-		case "/api/v1/services/" + f.secret.ServiceID + "/secrets":
-			data = []client.SecretRef{f.secret}
-		case "/api/v1/notifications/channels":
-			data = []domain.NotificationChannel{f.channel, f.fleet}
-		case "/api/v1/notifications/channels/" + f.channel.ID.String():
-			data = f.channel
-		case "/api/v1/notifications/channels/" + f.fleet.ID.String():
-			data = f.fleet
-		default:
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
-	}))
-	defer server.Close()
 	commands := [][]string{
 		{"orgs", "list"}, {"orgs", "get", f.org.ID.String()}, {"orgs", "get", f.org.Name},
 		{"orgs", "members", "list", f.org.ID.String()}, {"secrets", "list", f.secret.ServiceID},
@@ -195,19 +166,32 @@ func TestCLIConfidentialRESTNostrGolden(t *testing.T) {
 				if err := os.WriteFile(keyFile, []byte(f.memberKey.Hex()), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				base := []string{"--server", server.URL, "--nostr-key-file", keyFile}
+				base := []string{"--nostr-key-file", keyFile}
 				base = append(base, confidentialArgs(f)...)
 				base = append(base, "--output", format)
-				rest, _, err := runReadCLI(t, append(append([]string{}, base...), append([]string{"--http-fallback"}, command...)...)...)
-				if err != nil {
-					t.Fatalf("REST: %v", err)
-				}
 				nostrOut, stderr, err := runReadCLI(t, append(append([]string{}, base...), command...)...)
 				if err != nil {
 					t.Fatalf("Nostr: %v", err)
 				}
-				if rest != nostrOut {
-					t.Fatalf("REST/Nostr mismatch:\nREST %s\nNostr %s", rest, nostrOut)
+				if nostrOut == "" {
+					t.Fatal("empty Nostr output")
+				}
+				switch command[0] {
+				case "orgs":
+					if !strings.Contains(nostrOut, f.org.Name) && !strings.Contains(nostrOut, f.member.Pubkey[:16]) {
+						t.Fatalf("org golden missing fixture: %s", nostrOut)
+					}
+				case "secrets":
+					if !strings.Contains(nostrOut, f.secret.Name) {
+						t.Fatalf("secret golden missing fixture: %s", nostrOut)
+					}
+				case "notifications":
+					if !strings.Contains(nostrOut, f.channel.Name) && !strings.Contains(nostrOut, f.fleet.Name) {
+						t.Fatalf("channel golden missing fixture: %s", nostrOut)
+					}
+				}
+				if format == "json" && !json.Valid([]byte(nostrOut)) {
+					t.Fatalf("invalid JSON: %s", nostrOut)
 				}
 				if strings.Contains(nostrOut, "do-not-reveal") || strings.Contains(nostrOut, "private.invalid") {
 					t.Fatalf("confidential channel credential leaked in output: %s", nostrOut)
@@ -217,9 +201,6 @@ func TestCLIConfidentialRESTNostrGolden(t *testing.T) {
 				}
 			})
 		}
-	}
-	if serverCalls != 2*len(commands) {
-		t.Fatalf("HTTP calls = %d, want %d", serverCalls, 2*len(commands))
 	}
 	if len(pool.filters) != 4*len(commands) {
 		t.Fatalf("Nostr subscriptions = %d", len(pool.filters))

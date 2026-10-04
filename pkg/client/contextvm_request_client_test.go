@@ -295,14 +295,18 @@ func assertTagValue(t *testing.T, tags nostr.Tags, name, value string) {
 	t.Fatalf("missing tag %s=%s in %#v", name, value, tags)
 }
 
-// testContextVMTransportRequest exercises the shared transport using a remaining
-// interactive method, without restoring removed deployment/runtime CRUD.
-func testContextVMTransportRequest(c *ContextVMRequestClient, ctx context.Context) (*RuntimeActionResult, error) {
-	event, err := c.Request(ctx, controlplane.ContextVMMethodEnvironmentGetDetails, map[string]any{"id": "env-1"}, nil, nil)
+// testContextVMTransportRequest exercises the retained log-fetch request.
+type testLogFetchResult struct {
+	RunID  string `json:"run_id"`
+	Stdout string `json:"stdout"`
+}
+
+func testContextVMTransportRequest(c *ContextVMRequestClient, ctx context.Context) (*testLogFetchResult, error) {
+	event, err := c.Request(ctx, controlplane.ContextVMMethodDeploymentRunLogsGet, map[string]any{"run_id": "run-1"}, nil, nil)
 	if err != nil {
 		return nil, err
 	}
-	var result RuntimeActionResult
+	var result testLogFetchResult
 	if err := json.Unmarshal([]byte(event.Content), &result); err != nil {
 		return nil, err
 	}

@@ -6,8 +6,7 @@ The web app signs service, environment, and policy create/update/delete requests
 kind `30900` `t=bahia-intent` events. Package promote/yank actions use the same
 intent transport. Select the owning organization when creating a service or
 policy. Updates copy the current canonical RFC3339 `updated_at` string as
-`expected_updated_at` (numeric epochs are rejected); the daemon must have the corresponding domain enabled in
-`nostr.intent_domains` to process relay intents.
+`expected_updated_at` (numeric epochs are rejected). The daemon processes all registered intent domains by default; `nostr.intent_domains_disabled` is a temporary explicit opt-out list.
 
 After submission, the browser shows a local **pending** badge and its age. This
 is not a canonical record or a completed operation. The badge clears only after
@@ -20,7 +19,7 @@ without a timeout that turns it into a failure.
 
 ## Deployment-family signed intents
 
-With `deployment`, `runtime`, `llm`, or `backup` enabled in `intent_domains`, sign a kind `30900` `bahia.intent.<domain>.v1` event for the supported deployment, runtime, LLM deployment/approval, or backup restore-approval operation. Reuse `content.intent_id` for retries and subscribe to bounded kind `30315` status plus the daemon-authored canonical state; a ContextVM receipt is not durable completion. Disabled domains retain the existing ContextVM mutation path. The [wire fixtures](../../web/tests/fixtures/deployment-intents.json) show every content shape.
+With `deployment`, `runtime`, `llm`, and `backup` enabled by default, sign a kind `30900` `bahia.intent.<domain>.v1` event for the supported deployment, runtime, LLM deployment/approval, or backup restore-approval operation. Reuse `content.intent_id` for retries and subscribe to bounded kind `30315` status plus the daemon-authored canonical state; a ContextVM receipt or relay `OK` is not durable completion. Disabled domains retain the existing ContextVM mutation path. The [wire fixtures](../../web/tests/fixtures/deployment-intents.json) show every content shape.
 
 ## Command availability
 
@@ -792,14 +791,14 @@ const signed = await bunker.signEvent(event);
 
 ### NIP-98 (HTTP Auth)
 
-For REST endpoints that remain HTTP-compatible, such as read-model queries:
+For HTTP-native endpoints that still require NIP-98 authentication, such as run-log fetch:
 
 ```javascript
 const authEvent = {
   kind: 27235,
   content: "",
   tags: [
-    ["u", "https://bahia.example.com/api/v1/services"],
+    ["u", "https://bahia.example.com/api/v1/deployments/runs/<run-id>/logs"],
     ["method", "GET"]
   ]
 };
@@ -963,3 +962,20 @@ daemon author; decrypt with an authorized fleet OCK, validate the signature,
 and honor same-coordinate tombstones. The log retains at most the latest 50
 attempts per channel in one replaceable record. See the
 [event guide](../nostr-event-implementation-guide.md#f74b-canonical-fleet-private-state-bahia-irsry74).
+
+## Policy evaluation intent and build ownership (bahia-irsry.77)
+
+For MCP evaluation, use a client-signed `30900` `domain=policy`, `op=evaluate`
+intent with `d=evaluation:<artifact-uuid>:<environment-uuid>` and JSON content
+`{"artifact_id":"<uuid>","environment_id":"<uuid>"}`. The daemon evaluates
+its signature, SBOM, scan, and attestation repositories with the same
+`PolicyService.Evaluate` semantics as the legacy ContextVM method. It emits a
+requester-scoped, replaceable `30315` status at
+`d=intent-status:<requester-pubkey>:<evaluation-coordinate>`; an accepted
+status has `result=evaluated` and an `evaluation` object. The status payload
+is capped at 16 KiB. A rejected evaluation is not an allow decision.
+
+Build registration and status are daemon-authored from `build/request` and
+trusted Hive-CI `5401`/`5402` evidence. MCP manual build writes are removed;
+F1 removes the compatibility REST writes `POST /builds` and
+`PATCH /builds/{id}/status`.

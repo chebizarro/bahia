@@ -516,13 +516,10 @@ func New(cfg *config.Config) (*App, error) {
 	// verified end to end and watched continuously.
 	var routeCanarySupervisor *service.RouteCanarySupervisor
 	var routeCanaryStore service.RouteCanaryRepository
-	var routeCanaryReader handlers.RouteCanaryReader
-	var routeCanaryHealthReader handlers.RouteInstanceHealthReader
 	if publicRoutePlanner != nil && cfg.RouteCanaries.Enabled {
 		if dbAvailable && pool != nil {
 			pgRouteCanaries := repository.NewPgRouteCanaryRepository(pool)
 			routeCanaryStore = pgRouteCanaries
-			routeCanaryReader = pgRouteCanaries
 		}
 		routeCanaryEvaluator, evalErr := service.NewRouteCanaryEvaluator(runtime.RouteProber{}, cfg.RouteCanaries.Policy())
 		if evalErr != nil {
@@ -532,7 +529,6 @@ func New(cfg *config.Config) (*App, error) {
 		if managedInstanceHealthRepo != nil {
 			healthSource := service.NewManagedInstanceRouteHealthSource(managedInstanceHealthRepo)
 			routeHealthSource = healthSource
-			routeCanaryHealthReader = healthSource
 		}
 		canaryCfg := cfg.RouteCanaries.Normalized()
 
@@ -769,7 +765,7 @@ func New(cfg *config.Config) (*App, error) {
 	})
 	// Phase 3 intent framework (F1): TrustSet, IntentProcessor, ReadinessTracker.
 	// These are wired unconditionally; domain handlers register at startup when
-	// their domain is listed in nostr.intent_domains.
+	// their domain is not listed in nostr.intent_domains_disabled.
 	trustSetOpts := []controlplane.TrustSetOption{
 		controlplane.WithBootstrapOwners(cfg.Nostr.BootstrapOwners),
 	}
@@ -779,7 +775,7 @@ func New(cfg *config.Config) (*App, error) {
 	trustSet := controlplane.NewTrustSet(cfg.Nostr.AuthorizedPubkeys, logger, trustSetOpts...)
 	intentReadiness := controlplane.NewReadinessTracker()
 	healthProvider.SetReadinessTracker(intentReadiness)
-	enabledDomains := controlplane.BuildEnabledDomains(cfg.Nostr.IntentDomains)
+	enabledDomains := controlplane.BuildEnabledDomains(cfg.Nostr.IntentDomainsDisabled, cfg.Nostr.IntentDomains)
 	if len(enabledDomains) > 0 {
 		intentReadiness.RegisterFilter("intent-30900")
 	}
@@ -1164,7 +1160,7 @@ func New(cfg *config.Config) (*App, error) {
 			zap.String("mode", "full"))
 	}
 	// Phase 3 F3: register environment intent handler when "environment" is
-	// in intent_domains. Uses the relay-first registry (which publishes the
+	// enabled by the computed domain set. Uses the relay-first registry (which publishes the
 	// canonical 30900 via PublishBeforeCommit) or falls back to the plain
 	// registry when relay-first is not configured.
 	if enabledDomains["environment"] {
@@ -1273,14 +1269,26 @@ func New(cfg *config.Config) (*App, error) {
 		if relayFirstRegistry != nil {
 			serviceMutationBackend = relayFirstRegistry
 		}
-		intentProcessor.RegisterHandler("service", controlplane.NewServiceIntentHandler(
+		serviceIntentHandler := controlplane.NewServiceIntentHandler(
 			controlplane.ServiceIntentHandlerConfig{
 				Registry: serviceMutationBackend,
 				Reader:   serviceRepo,
 				Logger:   logger,
 			},
-		))
+		)
+		intentProcessor.RegisterHandler("service", serviceIntentHandler)
 	}
+
+	// --- D76 artifact intent registration (separate from D77 build handlers) ---
+	// RegistryService owns build/artifact cp-state publication. Do not pass its
+	// relay-first wrapper here: that would invoke the same publisher twice.
+	if enabledDomains["artifact"] {
+		intentProcessor.RegisterHandler("artifact", controlplane.NewArtifactIntentHandler(registry, serviceRepo))
+	}
+	if enabledDomains["adoption"] && adoptionSvc != nil {
+		intentProcessor.RegisterHandler("adoption", controlplane.NewAdoptionIntentHandler(adoptionSvc, cfg.Adoption.AllowedPubkeys))
+	}
+	// --- end D76 artifact intent registration ---
 
 	// Phase 3 S3: PolicyStatePublisher for canonical 30900 via PublishBeforeCommit.
 	// Created unconditionally so both the legacy (non-intent) ContextVM path and
@@ -1339,10 +1347,11 @@ func New(cfg *config.Config) (*App, error) {
 	if enabledDomains["policy"] && policySvc != nil {
 		intentProcessor.RegisterHandler("policy", controlplane.NewPolicyIntentHandler(
 			controlplane.PolicyIntentHandlerConfig{
-				Policies: policySvc,
-				Publish:  policyPublisher,
-				Status:   intentStatus,
-				Logger:   logger,
+				Policies:  policySvc,
+				Evaluator: policySvc,
+				Publish:   policyPublisher,
+				Status:    intentStatus,
+				Logger:    logger,
 			},
 		))
 		logger.Info("policy intent handler registered")
@@ -1476,7 +1485,7 @@ func New(cfg *config.Config) (*App, error) {
 		orgCanonicalPub = nostrAdapter.NewOrgCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
 	}
 
-	// Phase 3 O1: register org intent handler when "org" is in intent_domains.
+	// Phase 3 O1: register org intent handler when "org" is enabled.
 	// The handler processes org/member/invite intents and publishes canonical
 	// cp-state through the OrgCanonicalPublisher with encrypted content (§1.7).
 	if enabledDomains["org"] && orgRepo != nil && orgMemberRepo != nil && orgInviteRepo != nil {
@@ -1992,10 +2001,10 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("security OSV scanner and scheduler registered")
 	}
 
-	// Payment service exposes payment record/history and cost-estimate APIs.
+	// Payment service exposes payment records and history; estimates use relay-backed worker pricing.
 	// It does not create or redeem Cashu tokens; cashu.enabled live wallet mode
 	// remains fail-closed until mint-backed proof flows are implemented.
-	paymentSvc := service.NewPaymentService(paymentRepo, workerRepo, runRepo, logger)
+	paymentSvc := service.NewPaymentService(paymentRepo, logger)
 	// bahia-irsry.60: confidential cp-state for payment records.
 	if nostrProjector != nil && confidentialEncryptor != nil {
 		paymentCanonical := nostrAdapter.NewPaymentCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
@@ -2130,7 +2139,7 @@ func New(cfg *config.Config) (*App, error) {
 		LLMRegistry:              llmRegistry,
 		ArtifactCommandPublisher: artifactCommandPublisher,
 	}
-	configurePolicyToolMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
+	configureToolApprovalMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	configureAuthorizationMCPDeps(&mcpDeps, cfg, tenantRBAC)
 	mcpServer, err := mcp.NewServerWithOptionsChecked(registry, logger, mcpDeps)
 	if err != nil {
@@ -2637,40 +2646,26 @@ func New(cfg *config.Config) (*App, error) {
 			Virtualization:            virtualizationRepo,
 			Config:                    cfg,
 			AuthMiddleware:            authMiddleware,
-			Workers:                   workerRepo,
 			Builds:                    buildRepo,
 			Runs:                      runRepo,
 			Services:                  serviceRepo,
 			Environments:              envRepo,
-			DeploymentUnits:           deploymentUnitRepo,
 			EnvStates:                 stateRepo,
-			InstanceHealth:            managedInstanceHealthRepo,
-			RouteCanaries:             routeCanaryReader,
-			RouteHealth:               routeCanaryHealthReader,
 			InstanceOperator:          managedInstanceSupervisor,
 			RuntimeResolver:           runtimeResolver,
 			Payments:                  paymentSvc,
 			SBOMs:                     sbomRepo,
 			SBOMImporter:              sbomOrchestrator,
 			Artifacts:                 artifactRepo,
-			Policies:                  policySvc,
 			Adoption:                  adoptionSvc,
 			RuntimeLifecycle:          runtimeLifecycleSvc,
-			AgentRuntimeReleases:      agentRuntimeReleaseSvc,
 			LegacyAgentReconciliation: legacyAgentReconciler,
-			Secrets:                   secretRepo,
-			Encryptor:                 secretEncryptor,
 			Notifications:             notifRepo,
 			Dispatcher:                notifDispatcher,
 			MCP:                       mcpHandler,
 			Blossom:                   blossomClient,
 			OCI:                       ociHandler,
-			Orgs:                      orgRepo,
-			OrgMembers:                orgMemberRepo,
-			OrgInvites:                orgInviteRepo,
 			RBAC:                      tenantRBAC,
-			MLCommands:                mlCommandPublisher,
-			LLMRegistry:               llmRegistry,
 			ConfigFabric:              configFabricSvc,
 
 			HealthProvider: healthProvider,
@@ -4427,14 +4422,11 @@ func appendControlPlaneAuditOption(opts []controlplane.ReactorOption, repo repos
 	return append(opts, controlplane.WithNostrEventRepository(repo))
 }
 
-func configurePolicyToolMCPDeps(deps *mcp.ServerDeps, publisher controlplane.NostrEventPublisher, signer nostr.Signer, relays []string) *controlplane.PolicyCommandPublisher {
+func configureToolApprovalMCPDeps(deps *mcp.ServerDeps, publisher controlplane.NostrEventPublisher, signer nostr.Signer, relays []string) {
 	if deps == nil || publisher == nil || signer == nil || len(relays) == 0 {
-		return nil
+		return
 	}
-	policyPublisher := controlplane.NewPolicyCommandPublisher(publisher, signer)
-	deps.PolicyCommandPublisher = policyPublisher
 	deps.ToolApprovalCommandPublisher = controlplane.NewToolApprovalCommandPublisher(publisher, signer)
-	return policyPublisher
 }
 
 // newTenantRBAC leaves tenant authorization unconfigured when no durable

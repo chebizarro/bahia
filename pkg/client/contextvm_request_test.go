@@ -36,10 +36,10 @@ func TestContextVMRequestClientPlainRoundTripSerializesMethodAndParams(t *testin
 			t.Fatalf("request kind = %d, want %d", event.Kind, controlplane.KindContextVMMessage)
 		}
 		rpc := decodePublishedContextVMRequest(t, event)
-		if rpc.JSONRPC != "2.0" || rpc.Method != "dns/resolve" {
+		if rpc.JSONRPC != "2.0" || rpc.Method != controlplane.ContextVMMethodDeploymentRunLogsGet {
 			t.Fatalf("RPC envelope = %#v", rpc)
 		}
-		if rpc.Params["hostname"] != "api.example.com" || rpc.Params["ttl"] != float64(60) {
+		if rpc.Params["run_id"] != "run-1" || rpc.Params["tail"] != float64(60) {
 			t.Fatalf("RPC params = %#v", rpc.Params)
 		}
 		meta, ok := rpc.Params["_meta"].(map[string]any)
@@ -47,13 +47,13 @@ func TestContextVMRequestClientPlainRoundTripSerializesMethodAndParams(t *testin
 			t.Fatalf("RPC _meta = %#v, request ID = %q", rpc.Params["_meta"], rpc.ID)
 		}
 		assertTagValue(t, event.Tags, "d", rpc.ID)
-		assertTagValue(t, event.Tags, "method", "dns/resolve")
+		assertTagValue(t, event.Tags, "method", controlplane.ContextVMMethodDeploymentRunLogsGet)
 		assertTagValue(t, event.Tags, "p", recipientSecret.Public().Hex())
-		transport.events <- signedContextVMResult(t, recipientSecret.Hex(), event, map[string]any{"address": "192.0.2.1"})
+		transport.events <- signedContextVMResult(t, recipientSecret.Hex(), event, map[string]any{"stdout": "started"})
 		return 1, nil
 	}
 
-	result, err := client.Request(context.Background(), "dns/resolve", map[string]any{"hostname": "api.example.com", "ttl": 60}, nostr.Tags{{"scope", "prod"}}, nil)
+	result, err := client.Request(context.Background(), controlplane.ContextVMMethodDeploymentRunLogsGet, map[string]any{"run_id": "run-1", "tail": 60}, nostr.Tags{{"scope", "prod"}}, nil)
 	if err != nil {
 		t.Fatalf("Request() error = %v", err)
 	}
@@ -61,7 +61,7 @@ func TestContextVMRequestClientPlainRoundTripSerializesMethodAndParams(t *testin
 	if err := json.Unmarshal([]byte(result.Content), &payload); err != nil {
 		t.Fatalf("decode result: %v", err)
 	}
-	if payload["address"] != "192.0.2.1" {
+	if payload["stdout"] != "started" {
 		t.Fatalf("result = %#v", payload)
 	}
 }
@@ -154,7 +154,7 @@ func TestContextVMRequestClientPreservesLargeIntegersEndToEnd(t *testing.T) {
 		return 1, nil
 	}
 
-	result, err := client.Request(context.Background(), "dns/sync", map[string]any{
+	result, err := client.Request(context.Background(), controlplane.ContextVMMethodDeploymentRunLogsGet, map[string]any{
 		"serial": serial,
 		"nested": map[string]any{"values": []int64{serial}},
 	}, nil, nil)
@@ -208,18 +208,18 @@ func TestContextVMRequestClientEncryptedLocalKeyRoundTrip(t *testing.T) {
 			t.Fatalf("unwrap encrypted request: %v", err)
 		}
 		rpc := decodePublishedContextVMRequest(t, *inner)
-		if rpc.Method != "dns/reload" || rpc.Params["zone"] != "example.com" {
+		if rpc.Method != controlplane.ContextVMMethodServiceSecretsReveal || rpc.Params["secret_id"] != "secret-1" {
 			t.Fatalf("RPC envelope = %#v", rpc)
 		}
-		transport.events <- wrappedContextVMResult(t, senderSecret.Public(), outer, *inner, recipientSecret, false, map[string]any{"reloaded": true})
+		transport.events <- wrappedContextVMResult(t, senderSecret.Public(), outer, *inner, recipientSecret, false, map[string]any{"value": "revealed"})
 		return 1, nil
 	}
 
-	result, err := client.Request(context.Background(), "dns/reload", map[string]any{"zone": "example.com"}, nil, nil)
+	result, err := client.Request(context.Background(), controlplane.ContextVMMethodServiceSecretsReveal, map[string]any{"secret_id": "secret-1"}, nil, nil)
 	if err != nil {
 		t.Fatalf("Request() error = %v", err)
 	}
-	if result.PubKey.Hex() != recipientSecret.Public().Hex() || result.Content != `{"reloaded":true}` {
+	if result.PubKey.Hex() != recipientSecret.Public().Hex() || result.Content != `{"value":"revealed"}` {
 		t.Fatalf("result author/content = %s %s", result.PubKey.Hex(), result.Content)
 	}
 	filter := transport.onlyFilter(t)

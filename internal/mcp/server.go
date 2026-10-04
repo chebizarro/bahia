@@ -40,7 +40,6 @@ type Server struct {
 	llmRegistry          *service.LLMRegistryService
 	mlCommands           MLCommandPublisher
 	artifactCommands     ArtifactCommandPublisher
-	policyCommands       PolicyCommandPublisher
 	toolApprovalCommands ToolApprovalCommandPublisher
 	logger               *zap.Logger
 	secretsRepo          repository.SecretRepository       // optional: for secret management tools
@@ -84,8 +83,6 @@ type ServerDeps struct {
 	LLMRegistry        *service.LLMRegistryService
 	// Phase 5 P2: kept — artifact registration lacks an intent handler, bahia-irsry.76
 	ArtifactCommandPublisher ArtifactCommandPublisher
-	// Phase 5 P2: kept — no policy-evaluate intent op, bahia-irsry.77
-	PolicyCommandPublisher PolicyCommandPublisher
 	// Phase 5 P2: kept — tool provisioning approval lacks an intent handler, bahia-irsry.76
 	ToolApprovalCommandPublisher ToolApprovalCommandPublisher
 	// AuthorizedPubkeys is the explicit operator allowlist for external MCP callers.
@@ -116,11 +113,6 @@ type ArtifactCommandPublisher interface {
 	PublishArtifactRegisterRequest(ctx context.Context, cmd controlplane.ArtifactRegisterCommand) (*controlplane.ArtifactCommandReceipt, error)
 }
 
-// Phase 5 P2: kept — no policy-evaluate intent op; bahia-irsry.77
-type PolicyCommandPublisher interface {
-	PublishPolicyEvaluateRequest(ctx context.Context, cmd controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
-}
-
 // Phase 5 P2: kept — tool provisioning approval lacks an intent op, bahia-irsry.76
 type ToolApprovalCommandPublisher interface {
 	PublishToolApprovalResponse(ctx context.Context, cmd controlplane.ToolApprovalCommand) (*controlplane.ToolApprovalCommandReceipt, error)
@@ -143,7 +135,6 @@ func NewServerWithOptionsChecked(registry *service.RegistryService, logger *zap.
 		llmRegistry:          deps.LLMRegistry,
 		mlCommands:           deps.MLCommandPublisher,
 		artifactCommands:     deps.ArtifactCommandPublisher,
-		policyCommands:       deps.PolicyCommandPublisher,
 		toolApprovalCommands: deps.ToolApprovalCommandPublisher,
 		logger:               logger,
 		secretsRepo:          deps.SecretsRepo,
@@ -939,72 +930,6 @@ func (s *Server) GetTools() []Tool {
 				"required": []string{"build_id"},
 			},
 		},
-		{
-			Name:        "bahia_register_build",
-			Description: "Register a new build",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"service_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Service UUID",
-					},
-					"git_sha": map[string]interface{}{
-						"type":        "string",
-						"description": "Git commit SHA",
-					},
-					"git_ref": map[string]interface{}{
-						"type":        "string",
-						"description": "Git reference (branch/tag)",
-					},
-					"ci_system": map[string]interface{}{
-						"type":        "string",
-						"description": "CI system name (optional, default hive-ci)",
-					},
-					"ci_run_id": map[string]interface{}{
-						"type":        "string",
-						"description": "CI run identifier",
-					},
-					"loom_job_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Associated Loom job identifier (optional)",
-					},
-					"status": map[string]interface{}{
-						"type":        "string",
-						"description": "Build status (optional)",
-						"enum":        []string{"queued", "running", "succeeded", "failed", "cancelled"},
-					},
-					"source_event_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Source event identifier (optional)",
-					},
-					"metadata": map[string]interface{}{
-						"type":        "object",
-						"description": "Arbitrary build metadata (optional)",
-					},
-				},
-				"required": []string{"service_id", "git_sha", "git_ref", "ci_run_id"},
-			},
-		},
-		{
-			Name:        "bahia_update_build_status",
-			Description: "Update the status of an existing build",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"build_id": map[string]interface{}{
-						"type":        "string",
-						"description": "Build UUID",
-					},
-					"status": map[string]interface{}{
-						"type":        "string",
-						"description": "Build status",
-						"enum":        []string{"queued", "running", "succeeded", "failed", "cancelled"},
-					},
-				},
-				"required": []string{"build_id", "status"},
-			},
-		},
 		// Observability operations
 		{
 			Name:        "bahia_list_states",
@@ -1359,7 +1284,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_evaluate_policy",
-			Description: "Publish a signed ContextVM policy/evaluate (kind 25910) request and return relay/follow correlation metadata",
+			Description: "Evaluate deployment policies via an intent; follow the bounded kind-30315 status for the decision",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -2000,11 +1925,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	// SBOM operations
 	case "bahia_ingest_sbom":
 		return s.handleIngestSBOM(ctx, arguments)
-	// Build operations
-	case "bahia_register_build":
-		return s.handleRegisterBuild(ctx, arguments)
-	case "bahia_update_build_status":
-		return s.handleUpdateBuildStatus(ctx, arguments)
 	// Observability operations
 	case "bahia_create_run":
 		return s.handleCreateRun(ctx, arguments)
@@ -2376,109 +2296,6 @@ func (s *Server) handleIngestSBOM(ctx context.Context, args map[string]interface
 		"sbom_id":       parsed.SBOM.ID.String(),
 		"package_count": len(parsed.Packages),
 		"sbom":          sbomToMap(&parsed.SBOM),
-	}
-	return jsonResult(result)
-}
-
-// Phase 5 P2: kept — no intent op for build registration/status; bahia-irsry.77
-func (s *Server) handleRegisterBuild(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceIDStr, _ := args["service_id"].(string)
-	gitSHA, _ := args["git_sha"].(string)
-	gitRef, _ := args["git_ref"].(string)
-	ciSystem, _ := args["ci_system"].(string)
-	ciRunID, _ := args["ci_run_id"].(string)
-	loomJobID, _ := args["loom_job_id"].(string)
-	status, _ := args["status"].(string)
-	sourceEventID, _ := args["source_event_id"].(string)
-	metadata, _ := args["metadata"].(map[string]interface{})
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-	if denied := s.authorizeServicePermission(ctx, serviceID, domain.PermWriteServices, "service"); denied != nil {
-		return denied, nil
-	}
-	if err := domain.ValidateGitSHA(gitSHA); err != nil {
-		return errorResult(err.Error()), nil
-	}
-	if err := domain.ValidateRequiredString(gitRef, "git_ref"); err != nil {
-		return errorResult(err.Error()), nil
-	}
-	if err := domain.ValidateRequiredString(ciRunID, "ci_run_id"); err != nil {
-		return errorResult(err.Error()), nil
-	}
-	if err := domain.ValidateBuildStatus(domain.BuildStatus(status)); err != nil {
-		return errorResult(err.Error()), nil
-	}
-	if ciSystem == "" {
-		ciSystem = "hive-ci"
-	}
-
-	build := &domain.Build{
-		ID:            uuid.New(),
-		ServiceID:     serviceID,
-		GitSHA:        gitSHA,
-		GitRef:        gitRef,
-		CISystem:      ciSystem,
-		CIRunID:       ciRunID,
-		LoomJobID:     loomJobID,
-		Status:        domain.BuildStatus(status),
-		SourceEventID: sourceEventID,
-		Metadata:      metadata,
-	}
-
-	if err := s.registry.RegisterBuild(ctx, build); err != nil {
-		return errorResult(fmt.Sprintf("failed to register build: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"status":   "created",
-		"build_id": build.ID.String(),
-		"build": map[string]interface{}{
-			"id":              build.ID.String(),
-			"service_id":      build.ServiceID.String(),
-			"git_sha":         build.GitSHA,
-			"git_ref":         build.GitRef,
-			"ci_system":       build.CISystem,
-			"ci_run_id":       build.CIRunID,
-			"status":          string(build.Status),
-			"loom_job_id":     build.LoomJobID,
-			"source_event_id": build.SourceEventID,
-		},
-	}
-	return jsonResult(result)
-}
-
-// Phase 5 P2: kept — no intent op for build registration/status; bahia-irsry.77
-func (s *Server) handleUpdateBuildStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	buildIDStr, _ := args["build_id"].(string)
-	statusStr, _ := args["status"].(string)
-
-	buildID, err := uuid.Parse(buildIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid build_id: %v", err)), nil
-	}
-
-	status := domain.BuildStatus(statusStr)
-	if err := domain.ValidateBuildStatus(status); err != nil {
-		return errorResult(err.Error()), nil
-	}
-	if _, denied := s.authorizeBuildPermission(ctx, buildID, domain.PermWriteServices); denied != nil {
-		return denied, nil
-	}
-
-	if err := s.registry.UpdateBuildStatus(ctx, buildID, status); err != nil {
-		return errorResult(fmt.Sprintf("failed to update build status: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"status":   "updated",
-		"build_id": buildID.String(),
-		"build": map[string]interface{}{
-			"id":     buildID.String(),
-			"status": string(status),
-		},
 	}
 	return jsonResult(result)
 }
@@ -3604,32 +3421,8 @@ func (s *Server) handleDeletePolicy(ctx context.Context, args map[string]interfa
 	return s.invokeIntentWrite(ctx, "bahia_delete_policy", args)
 }
 
-// Phase 5 P2: kept — no policy-evaluate intent op; bahia-irsry.77
 func (s *Server) handleEvaluatePolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.policyCommands == nil {
-		return errorResult("policy command publisher is not configured"), nil
-	}
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	environmentID, err := parseRequiredUUIDArg(args, "environment_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	cmd := controlplane.PolicyMutationCommand{ArtifactID: artifactID, EnvironmentID: &environmentID, IdempotencyKey: stringArg(args, "idempotency_key")}
-	if _, ok := args["service_id"]; ok {
-		serviceID, errResult := optionalPolicyUUIDArg(args, "service_id")
-		if errResult != nil {
-			return errResult, nil
-		}
-		cmd.ServiceID = serviceID
-	}
-	receipt, err := s.policyCommands.PublishPolicyEvaluateRequest(ctx, cmd)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish PolicyEvaluate request: %v", err)), nil
-	}
-	return jsonResult(receipt)
+	return s.invokeIntentWrite(ctx, "bahia_evaluate_policy", args)
 }
 
 func optionalPolicyUUIDArg(args map[string]interface{}, key string) (*uuid.UUID, *ToolResult) {

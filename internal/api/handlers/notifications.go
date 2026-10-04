@@ -15,12 +15,7 @@ import (
 // the authenticated HTTP API. The base repository methods remain available to
 // the system dispatcher, which processes events across all organizations.
 type tenantNotificationRepository interface {
-	repository.NotificationRepository
 	GetChannelByIDForOrg(ctx context.Context, id, orgID uuid.UUID) (*domain.NotificationChannel, error)
-	ListChannelsByOrg(ctx context.Context, orgID uuid.UUID, enabledOnly bool) ([]domain.NotificationChannel, error)
-	UpdateChannelForOrg(ctx context.Context, ch *domain.NotificationChannel, orgID uuid.UUID) error
-	DeleteChannelForOrg(ctx context.Context, id, orgID uuid.UUID) error
-	ListRecentLogsByOrg(ctx context.Context, orgID uuid.UUID, limit int) ([]domain.NotificationLog, error)
 }
 
 // NotificationHandler provides HTTP handlers for notification management.
@@ -42,58 +37,6 @@ func (h *NotificationHandler) tenantRepo(w http.ResponseWriter) (tenantNotificat
 		writeError(w, http.StatusInternalServerError, "tenant notification repository is not configured")
 	}
 	return repo, ok
-}
-
-// ListChannels handles GET /notifications/channels.
-func (h *NotificationHandler) ListChannels(w http.ResponseWriter, r *http.Request) {
-	if !requireMember(w, r) {
-		return
-	}
-	orgID := authzOrgID(r)
-	var channels []domain.NotificationChannel
-	var err error
-	if orgID == uuid.Nil {
-		channels, err = h.repo.ListChannels(r.Context(), false)
-	} else if repo, ok := h.tenantRepo(w); ok {
-		channels, err = repo.ListChannelsByOrg(r.Context(), orgID, false)
-	} else {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list channels")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": channels})
-}
-
-// GetChannel handles GET /notifications/channels/{id}.
-func (h *NotificationHandler) GetChannel(w http.ResponseWriter, r *http.Request) {
-	if !requireMember(w, r) {
-		return
-	}
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid channel ID")
-		return
-	}
-
-	var ch *domain.NotificationChannel
-	if orgID := authzOrgID(r); orgID == uuid.Nil {
-		ch, err = h.repo.GetChannelByID(r.Context(), id)
-	} else if repo, ok := h.tenantRepo(w); ok {
-		ch, err = repo.GetChannelByIDForOrg(r.Context(), id, orgID)
-	} else {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get channel")
-		return
-	}
-	if ch == nil {
-		writeError(w, http.StatusNotFound, "channel not found")
-		return
-	}
-	writeJSON(w, http.StatusOK, ch)
 }
 
 // CreateChannel: deleted in Phase 3 N1 — channel mutations go through intent publishing.
@@ -135,26 +78,4 @@ func (h *NotificationHandler) TestChannel(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "test sent"})
-}
-
-// ListLogs handles GET /notifications/log.
-func (h *NotificationHandler) ListLogs(w http.ResponseWriter, r *http.Request) {
-	if !requireMember(w, r) {
-		return
-	}
-	orgID := authzOrgID(r)
-	var logs []domain.NotificationLog
-	var err error
-	if orgID == uuid.Nil {
-		logs, err = h.repo.ListRecentLogs(r.Context(), 50)
-	} else if repo, ok := h.tenantRepo(w); ok {
-		logs, err = repo.ListRecentLogsByOrg(r.Context(), orgID, 50)
-	} else {
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list logs")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": logs})
 }

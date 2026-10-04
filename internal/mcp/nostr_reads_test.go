@@ -492,7 +492,6 @@ func TestMCPPaymentStoreReadsMatchRepositoryFixture(t *testing.T) {
 		name string
 		args map[string]any
 	}{
-		{"bahia_estimate_cost", map[string]any{"run_id": runID.String(), "estimated_duration_secs": float64(12)}},
 		{"bahia_get_run_cost", map[string]any{"run_id": runID.String()}},
 		{"bahia_get_payment_history", map[string]any{"worker_pubkey": workerPubkey}},
 	} {

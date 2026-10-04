@@ -1,10 +1,16 @@
 package router_test
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/openagentsinc/bahia/internal/adapters/blossom"
+	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -12,16 +18,58 @@ import (
 	"go.uber.org/zap"
 )
 
-// The deleted reads must stay absent even if write-only ML/LLM handlers exist.
-type d1WorkerRepo struct{ repository.WorkerRepository }
-
+// All reads retired by D1b remain absent with the merged router dependencies.
 func TestPhase5D1DeletedReadsReturn404(t *testing.T) {
-	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
-		LLMRegistry: &service.LLMRegistryService{},
-		Workers:     d1WorkerRepo{},
-		MLCommands:  &captureMLRESTPublisher{},
-	})
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{})
 	paths := []string{
+		"/api/v1/services",
+		"/api/v1/services/00000000-0000-0000-0000-000000000001",
+		"/api/v1/environments",
+		"/api/v1/environments/00000000-0000-0000-0000-000000000001",
+		"/api/v1/builds/00000000-0000-0000-0000-000000000001",
+		"/api/v1/services/00000000-0000-0000-0000-000000000001/builds",
+		"/api/v1/artifacts/00000000-0000-0000-0000-000000000001",
+		"/api/v1/services/00000000-0000-0000-0000-000000000001/artifacts",
+		"/api/v1/services/00000000-0000-0000-0000-000000000001/runtime-releases",
+		"/api/v1/services/00000000-0000-0000-0000-000000000001/runtime-releases/rollback",
+		"/api/v1/state",
+		"/api/v1/state/drifted",
+		"/api/v1/instance-health",
+		"/api/v1/services/00000000-0000-0000-0000-000000000001/environments/00000000-0000-0000-0000-000000000001/managed-instances/00000000-0000-0000-0000-000000000001/health",
+		"/api/v1/services/00000000-0000-0000-0000-000000000001/environments/00000000-0000-0000-0000-000000000001/managed-instances/00000000-0000-0000-0000-000000000001/health/events",
+		"/api/v1/services/00000000-0000-0000-0000-000000000001/environments/00000000-0000-0000-0000-000000000001/managed-instances/00000000-0000-0000-0000-000000000001/health/recovery-attempts",
+		"/api/v1/route-canaries",
+		"/api/v1/services/00000000-0000-0000-0000-000000000001/environments/00000000-0000-0000-0000-000000000001/routes/example.com/canary",
+		"/api/v1/services/00000000-0000-0000-0000-000000000001/environments/00000000-0000-0000-0000-000000000001/routes/example.com/canary/events",
+		"/api/v1/workers",
+		"/api/v1/workers/worker-pubkey",
+		"/api/v1/policies",
+		"/api/v1/policies/00000000-0000-0000-0000-000000000001",
+		"/api/v1/artifacts/00000000-0000-0000-0000-000000000001/sbom",
+		"/api/v1/artifacts/00000000-0000-0000-0000-000000000001/sbom/packages",
+		"/api/v1/sbom/search",
+		"/api/v1/artifacts/00000000-0000-0000-0000-000000000001/signatures",
+		"/api/v1/artifacts/00000000-0000-0000-0000-000000000001/signatures/verified",
+		"/api/v1/artifacts/00000000-0000-0000-0000-000000000001/signatures/check",
+		"/api/v1/signatures/00000000-0000-0000-0000-000000000001",
+		"/api/v1/services/00000000-0000-0000-0000-000000000001/secrets",
+		"/api/v1/notifications/channels",
+		"/api/v1/notifications/channels/00000000-0000-0000-0000-000000000001",
+		"/api/v1/notifications/log",
+		"/api/v1/tools/pending",
+		"/api/v1/tools/00000000-0000-0000-0000-000000000001",
+		"/api/v1/tools/denylist",
+		"/api/v1/services/00000000-0000-0000-0000-000000000001/tools",
+		"/api/v1/soulfactory/runtimes",
+		"/api/v1/blossom/servers",
+		"/api/v1/blossom/health",
+		"/api/v1/blossom/stats",
+		"/api/v1/orgs",
+		"/api/v1/orgs/00000000-0000-0000-0000-000000000001",
+		"/api/v1/orgs/00000000-0000-0000-0000-000000000001/members",
+		"/api/v1/orgs/00000000-0000-0000-0000-000000000001/invites",
+		"/api/v1/me/invites",
+
 		"/api/v1/deployments/intents/00000000-0000-0000-0000-000000000001",
 		"/api/v1/services/00000000-0000-0000-0000-000000000001/environments/00000000-0000-0000-0000-000000000002/intents",
 		"/api/v1/deployments/runs/00000000-0000-0000-0000-000000000001",
@@ -73,18 +121,61 @@ func TestPhase5D1RouterConstructsWithoutDeletedDomainDeps(t *testing.T) {
 	}
 }
 
-func TestPhase5D1RetainedHTTPFallbackReadsReturn200(t *testing.T) {
-	server := newTestServer()
-	defer server.Close()
-	for _, path := range []string{
-		"/api/v1/services",
-		"/api/v1/environments",
-		"/api/v1/state",
-		"/api/v1/state/drifted",
-	} {
-		resp, _ := doJSON(t, http.MethodGet, server.URL+path, nil)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("GET %s = %d, want 200", path, resp.StatusCode)
+func TestPhase5D1bBlossomBlobFetchRemains200(t *testing.T) {
+	content := []byte("retained blossom blob")
+	digest := sha256.Sum256(content)
+	hash := hex.EncodeToString(digest[:])
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/"+hash {
+			http.NotFound(w, r)
+			return
 		}
+		_, _ = w.Write(content)
+	}))
+	defer upstream.Close()
+	client := blossom.NewClient(blossom.Config{Servers: []string{upstream.URL}, MaxRetries: 1}, slog.Default())
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{Blossom: client})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/blossom/blob/"+hash, nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != string(content) {
+		t.Fatalf("blob fetch = %d %q, want 200 and exact content", rec.Code, rec.Body.String())
+	}
+}
+
+type emptyConfigFabricEvents struct {
+	repository.NostrEventRepository
+}
+
+func (emptyConfigFabricEvents) ListByKind(context.Context, int, int) ([]repository.NostrEventRecord, error) {
+	return nil, nil
+}
+
+func TestRetainedMetricsPaymentsAndConfigFabricReads(t *testing.T) {
+	provider := telemetry.Setup(telemetry.Config{}, zap.NewNop())
+	defer func() {
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, provider, router.RouterDeps{
+		Payments:     &service.PaymentService{},
+		ConfigFabric: service.NewConfigFabricService(emptyConfigFabricEvents{}, nil, nil),
+	})
+	for _, tt := range []struct {
+		path string
+		want int
+	}{
+		{path: "/metrics", want: http.StatusOK},
+		{path: "/api/v1/payments/history", want: http.StatusBadRequest},
+		{path: "/api/v1/deployments/runs/not-a-uuid/cost", want: http.StatusBadRequest},
+		{path: "/api/v1/config-fabric/drift", want: http.StatusOK},
+	} {
+		t.Run(tt.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.path, nil))
+			if rec.Code != tt.want {
+				t.Fatalf("GET %s = %d, want %d: %s", tt.path, rec.Code, tt.want, rec.Body.String())
+			}
+		})
 	}
 }

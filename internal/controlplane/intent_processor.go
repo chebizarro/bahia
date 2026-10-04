@@ -23,7 +23,7 @@ import (
 //
 // 1. Implement DomainHandler for your domain (e.g. ServiceIntentHandler).
 // 2. Call IntentProcessor.RegisterHandler("service", handler) at startup.
-// 3. Add your domain string to config nostr.intent_domains.
+// 3. Add your domain string to RegisteredIntentDomains below.
 // 4. The processor routes matching intents to your handler automatically.
 //
 // The handler receives a validated, authorized, deduplicated intent with the
@@ -89,6 +89,14 @@ type Intent struct {
 	Coordinate string
 	// Content is the parsed JSON content.
 	Content map[string]interface{}
+	// Evaluation is the daemon-computed policy decision for an evaluate intent.
+	Evaluation *domain.PolicyEvaluation
+	// Result is daemon-authored output for request operations. It is carried
+	// only in the bounded acceptance status, never in an operator intent.
+	Result map[string]any
+	// StatusData may be a compact projection of Result when the in-process
+	// response is too large for a bounded relay status (deployment previews).
+	StatusData map[string]any
 	// ExpectedUpdatedAt is the canonical record's updated_at revision.
 	ExpectedUpdatedAt *time.Time
 	// Actor is the pubkey that originated the intent. For relay-path intents
@@ -222,6 +230,11 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 
 	// Step 1: Deduplicate by intent_id.
 	if p.isProcessed(intent.IntentID) {
+		if inProcess {
+			if record := p.ProcessedIntent(intent.IntentID); record != nil {
+				intent.Result = record.Result
+			}
+		}
 		p.logger.Debug("skipping already-processed intent",
 			zap.String("intent_id", intent.IntentID),
 		)
@@ -317,12 +330,22 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		return err
 	}
 
+	// A compute intent has no registry record: its result must be published
+	// before deduplication marks it complete, so a failed publication can retry.
+	if intent.Evaluation != nil {
+		if p.status == nil {
+			return fmt.Errorf("intent outcome status publisher is not configured")
+		}
+		if err := p.status.PublishAcceptedEvaluation(ctx, intent); err != nil {
+			return err
+		}
+	}
+
 	// Step 6: Mark processed (idempotency).
 	p.markProcessed(intent)
 
 	// Step 7: Publish canonical state is done by the domain handler.
-	// Publish acceptance status.
-	if p.status != nil {
+	if p.status != nil && intent.Evaluation == nil {
 		p.status.PublishAccepted(ctx, intent)
 	}
 
@@ -346,12 +369,13 @@ func (p *IntentProcessor) IsProcessed(intentID string) bool {
 // intent. It lets in-process retry transports return the original event ID
 // even after a canonical entity has been tombstoned.
 type ProcessedIntentRecord struct {
-	Actor      string `json:"actor"`
-	OrgID      string `json:"org_id"`
-	Domain     string `json:"domain"`
-	Op         string `json:"op"`
-	Coordinate string `json:"coordinate"`
-	EventID    string `json:"event_id"`
+	Actor      string         `json:"actor"`
+	OrgID      string         `json:"org_id"`
+	Domain     string         `json:"domain"`
+	Op         string         `json:"op"`
+	Coordinate string         `json:"coordinate"`
+	EventID    string         `json:"event_id"`
+	Result     map[string]any `json:"result,omitempty"`
 }
 
 // ProcessedIntent returns the durable idempotency marker for an intent ID.
@@ -406,7 +430,13 @@ func (p *IntentProcessor) markProcessed(intent *Intent) {
 		return
 	}
 	intentID := intent.IntentID
-	record := ProcessedIntentRecord{Actor: intent.Actor, OrgID: intent.OrgID.String(), Domain: intent.Domain, Op: intent.Op, Coordinate: intent.Coordinate}
+	result := intent.Result
+	if intent.Domain == "deployment" && intent.Op == "preview" {
+		// A full preview can contain runtime environment values. The marker is
+		// plaintext local state, so never persist that response in it.
+		result = nil
+	}
+	record := ProcessedIntentRecord{Actor: intent.Actor, OrgID: intent.OrgID.String(), Domain: intent.Domain, Op: intent.Op, Coordinate: intent.Coordinate, Result: result}
 	if intent.Event != nil {
 		record.EventID = intent.Event.ID.Hex()
 	}
@@ -490,7 +520,8 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 	if intent.IntentID == "" {
 		return nil, fmt.Errorf("missing intent_id tag")
 	}
-	if intent.OrgID == uuid.Nil && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" {
+	if intent.OrgID == uuid.Nil && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" &&
+		intent.Domain != "adoption" {
 		return nil, fmt.Errorf("missing or invalid org tag")
 	}
 
@@ -556,11 +587,29 @@ func IntentDomainEnabled(enabledDomains []string, domain string) bool {
 	return false
 }
 
-// BuildEnabledDomains creates the domain set from config.
-func BuildEnabledDomains(domains []string) map[string]bool {
-	m := make(map[string]bool, len(domains))
-	for _, d := range domains {
-		m[strings.ToLower(d)] = true
+// RegisteredIntentDomains is the set of intent handlers wired in app.New.
+// Keep this list in sync with every RegisterHandler call in internal/app/app.go.
+var RegisteredIntentDomains = []string{
+	"service", "environment", "policy", "package", "backup", "llm", "ml",
+	"dns", "worker", "deployment", "runtime", "org", "secret", "notification",
+	"artifact", "adoption", // D76 (bahia-irsry.76)
+}
+
+// BuildEnabledDomains enables every registered domain except explicit opt-outs.
+// A non-empty deprecated allowlist retains the Phase 3 selection semantics.
+func BuildEnabledDomains(disabled, legacyAllowlist []string) map[string]bool {
+	m := make(map[string]bool, len(RegisteredIntentDomains))
+	allowed := make(map[string]bool, len(legacyAllowlist))
+	for _, domain := range legacyAllowlist {
+		allowed[strings.ToLower(strings.TrimSpace(domain))] = true
+	}
+	for _, domain := range RegisteredIntentDomains {
+		if len(legacyAllowlist) == 0 || allowed[domain] {
+			m[domain] = true
+		}
+	}
+	for _, domain := range disabled {
+		delete(m, strings.ToLower(strings.TrimSpace(domain)))
 	}
 	return m
 }
