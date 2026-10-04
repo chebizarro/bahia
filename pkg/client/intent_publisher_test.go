@@ -249,17 +249,18 @@ func TestIntentPublisher_GiftWrapRoundTrip_DaemonProcessor(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, nostr.KindGiftWrap, prepared.Event.Kind)
 
-	// Step 1: Unwrap the gift-wrap using the service key (as the daemon would).
-	rumor, err := nip59.GiftUnwrap(prepared.Event, func(sender nostr.PubKey, ciphertext string) (string, error) {
-		return serviceSigner.Decrypt(context.Background(), ciphertext, sender)
+	// Step 1: Unwrap at the daemon's production ingress boundary.
+	ingress := controlplane.NewIntentGiftWrapIngress(controlplane.IntentGiftWrapIngressConfig{
+		Signer: serviceSigner, SensitiveDomains: []string{"org", "secret", "notification"}, Logger: zap.NewNop(),
 	})
+	rumor, err := ingress.UnwrapIntent(context.Background(), &prepared.Event)
 	require.NoError(t, err)
-	assert.Equal(t, operatorKey.Public().Hex(), rumor.PubKey.Hex(),
-		"unwrapped rumor pubkey must be the operator")
+	require.NotNil(t, rumor)
+	assert.Equal(t, operatorKey.Public().Hex(), rumor.PubKey.Hex())
 
 	// Step 2: Parse through daemon's ParseIntent.
 	rumor.ID = rumor.GetID()
-	intent, err := controlplane.ParseIntent(&rumor)
+	intent, err := controlplane.ParseIntent(rumor)
 	require.NoError(t, err)
 	intent.Actor = rumor.PubKey.Hex() // as the transport sets it
 

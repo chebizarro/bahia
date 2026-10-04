@@ -28,7 +28,7 @@ func artifactsCommands() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := runArtifactRegisterNostr(cmd, client.RegisterArtifactNostrRequest{
+			result, err := runArtifactRegisterContextVM(cmd, client.RegisterArtifactNostrRequest{
 				BuildID: buildID, ServiceID: serviceID, ImageRepo: imageRepo, ImageTag: imageTag,
 				ImageDigest: imageDigest, ManifestMediaType: manifestMediaType, SBOMURL: sbomURL,
 				SignatureRef: signatureRef, ScanStatus: scanStatus, Metadata: metadata, IdempotencyKey: idempotencyKey,
@@ -78,7 +78,7 @@ func artifactsCommands() *cobra.Command {
 			gitSHA, _ := cmd.Flags().GetString("git-sha")
 			gitRef, _ := cmd.Flags().GetString("git-ref")
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
-			result, err := runArtifactImportObservedNostr(cmd, client.ImportObservedArtifactNostrRequest{
+			result, err := runArtifactImportObservedContextVM(cmd, client.ImportObservedArtifactNostrRequest{
 				ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: deploymentUnitID,
 				ImageRepo: imageRepo, ImageTag: imageTag, ImageDigest: imageDigest,
 				GitSHA: gitSHA, GitRef: gitRef, IdempotencyKey: idempotencyKey,

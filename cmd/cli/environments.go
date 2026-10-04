@@ -300,7 +300,7 @@ func newEnvironmentUnitsListCommand() *cobra.Command {
 		Short: "List explicit deployment units or the resolved implicit default",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, err := runEnvironmentGetDetailsNostr(cmd, args[0])
+			env, err := canonicalEnvironment(cmd, args[0])
 			if err != nil {
 				return err
 			}

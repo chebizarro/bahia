@@ -15,8 +15,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
@@ -34,6 +34,7 @@ var (
 	operatorRelays                []string
 	operatorBootstrapRelays       []string
 	operatorServicePubkey         string
+	operatorIntentOrg             string
 	operatorTrustedServicePubkeys []string
 	operatorHTTPFallback          bool
 	operatorEncrypted             bool
@@ -76,6 +77,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringVar(&nostrClientKeyFile, "nostr-client-key-file", "", "Read the persistent NIP-46 client key from this file (env BAHIA_NOSTR_CLIENT_KEY_FILE or BAHIA_NOSTR_CLIENT_PRIVATE_KEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorRelays, "relay", nil, "Nostr relay URL for signer-first operator requests (repeatable; env BAHIA_NOSTR_RELAYS)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorBootstrapRelays, "bootstrap-relay", nil, "Bootstrap relay URL for trusted operator relay discovery when --relay/BAHIA_NOSTR_RELAYS are absent (repeatable; env BAHIA_NOSTR_BOOTSTRAP_RELAYS)")
+	rootCmd.PersistentFlags().StringVar(&operatorIntentOrg, "org", getEnvOrDefault("BAHIA_ORG_ID", ""), "Organization UUID for signed mutation intents (env BAHIA_ORG_ID)")
 	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "Trusted Bahia service pubkey for operator bootstrap discovery (repeatable; env BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS)")
 	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Use the legacy HTTP read path for service, environment, state, policy, worker, build, artifact, organization, secret and notification reads; also permits explicit operator compatibility fallback")
@@ -492,7 +494,7 @@ func deployCommands() *cobra.Command {
 				return err
 			}
 			compact, _ := cmd.Flags().GetBool("compact")
-			result, err := runDeploymentPreviewNostr(cmd, client.DeploymentPreviewNostrRequest{
+			result, err := runDeploymentPreviewContextVM(cmd, client.DeploymentPreviewNostrRequest{
 				ServiceID:            serviceID,
 				EnvironmentID:        envID,
 				DeploymentUnitID:     deploymentUnitID,
@@ -623,7 +625,7 @@ func deployCommands() *cobra.Command {
 				internalOverride = &internal
 			}
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
-			result, err := runRouteAttachNostr(cmd, client.RouteAttachRequest{
+			result, err := runRouteAttachContextVM(cmd, client.RouteAttachRequest{
 				ServiceID:        serviceID,
 				EnvironmentID:    envID,
 				DeploymentUnitID: unitID,
@@ -778,9 +780,7 @@ func adoptCommands() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			previews, err := runAdoptionScanNostrFirst(cmd, client.AdoptionScanRequest{Targets: targets}, len(scanRawTargets) > 0, func(ctx context.Context) ([]client.AdoptionPreview, error) {
-				return apiClient.ScanAdoption(ctx, client.AdoptionScanRequest{Targets: targets})
-			})
+			previews, err := runAdoptionScanContextVM(cmd, client.AdoptionScanRequest{Targets: targets})
 			if err != nil {
 				return err
 			}
@@ -819,9 +819,7 @@ func adoptCommands() *cobra.Command {
 				return fmt.Errorf("specify --all or at least one --select alias/containerID")
 			}
 			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll, OrgID: strings.TrimSpace(importOrgID)}
-			results, err := runAdoptionImportNostrFirst(cmd, req, len(importRawTargets) > 0, func(ctx context.Context) ([]client.AdoptionImportResult, error) {
-				return apiClient.ImportAdoption(ctx, req)
-			})
+			results, err := runAdoptionImportContextVM(cmd, req)
 			if err != nil {
 				return err
 			}
@@ -1039,6 +1037,7 @@ func workersCommands() *cobra.Command {
 	}
 
 	cmd.AddCommand(listCmd, showCmd, workersCleanupOrphansCommand())
+	cmd.AddCommand(workerIntentCommands()...)
 	return cmd
 }
 
@@ -1174,17 +1173,19 @@ func policiesCommands() *cobra.Command {
 				}
 				envID = &parsed
 			}
-			enabled := true
-			receipt, err := runPolicyCreateNostrFirst(cmd, controlplane.PolicyMutationCommand{Name: name, EnvironmentID: envID, Rules: rules, Enforcement: enforcement, Enabled: &enabled, IdempotencyKey: idempotencyKey})
+			policyID, err := uuid.NewV7()
 			if err != nil {
 				return err
 			}
-			if outputFormat == "json" || outputFormat == "yaml" {
-				return outputSingle(receipt)
+			content := map[string]interface{}{"id": policyID.String(), "name": name, "rules": rules, "enforcement": enforcement, "enabled": true}
+			if envID != nil {
+				content["environment_id"] = envID.String()
 			}
-			fmt.Printf("✓ PolicyCreate accepted by %d relay(s): %s\n", receipt.PublishedRelays, receipt.RequestEventID)
-			fmt.Printf("Follow result kind %d with #e=%s and policy read model kind %d.\n", receipt.ResultKind, receipt.RequestEventID, receipt.ReadModelKinds["policy_registry"])
-			return nil
+			intentID, err := publishMutationIntent(cmd, "policy", "create", policyID.String(), "", idempotencyKey, content)
+			if err != nil {
+				return err
+			}
+			return outputSingle(map[string]string{"intent_id": intentID, "policy_id": policyID.String()})
 		},
 	}
 	createCmd.Flags().String("name", "", "Policy name")
@@ -1237,14 +1238,7 @@ func secretsCommands() *cobra.Command {
 		Use:   "set [service-id] [name] [value]",
 		Short: "Set a secret",
 		Args:  cobra.RangeArgs(2, 3),
-		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
-			closeSigner, err := configureNIP46HTTPClientAuth(cmd, apiClient)
-			if err != nil {
-				return err
-			}
-			if closeSigner != nil {
-				defer func() { retErr = errors.Join(retErr, closeSigner()) }()
-			}
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if valueFile != "" && len(args) == 3 {
 				return fmt.Errorf("provide either [value] or --value-file, not both")
 			}
@@ -1261,12 +1255,7 @@ func secretsCommands() *cobra.Command {
 				return fmt.Errorf("secret value or --value-file is required")
 			}
 			envID, _ := cmd.Flags().GetString("environment")
-			secret, err := apiClient.SetSecret(cmd.Context(), args[0], args[1], value, envID)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("✓ Secret set: %s (version %d)\n", secret.Name, secret.Version)
-			return nil
+			return runSecretSetIntent(cmd, args[0], args[1], value, envID)
 		},
 	}
 	setCmd.Flags().String("environment", "", "Environment ID (optional, for env-specific secret)")
@@ -1276,19 +1265,8 @@ func secretsCommands() *cobra.Command {
 		Use:   "delete [service-id] [secret-id]",
 		Short: "Delete a secret",
 		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
-			closeSigner, err := configureNIP46HTTPClientAuth(cmd, apiClient)
-			if err != nil {
-				return err
-			}
-			if closeSigner != nil {
-				defer func() { retErr = errors.Join(retErr, closeSigner()) }()
-			}
-			if err := apiClient.DeleteSecret(cmd.Context(), args[0], args[1]); err != nil {
-				return err
-			}
-			fmt.Println("✓ Secret deleted")
-			return nil
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSecretDeleteIntent(cmd, args[0], args[1])
 		},
 	}
 
@@ -1352,12 +1330,17 @@ func orgsCommands() *cobra.Command {
 			if displayName == "" {
 				displayName = args[0]
 			}
-			org, err := apiClient.CreateOrg(cmd.Context(), args[0], displayName)
+			orgID, err := uuid.NewV7()
 			if err != nil {
 				return err
 			}
-			fmt.Printf("✓ Organization created: %s (%s)\n", org.Name, org.ID)
-			return nil
+			intentID, err := publishMutationIntentForOrg(cmd, "org", "create", orgID.String(), "", "", orgID.String(), map[string]interface{}{
+				"id": orgID.String(), "name": args[0], "display_name": displayName,
+			})
+			if err != nil {
+				return err
+			}
+			return outputSingle(map[string]string{"intent_id": intentID, "org_id": orgID.String()})
 		},
 	}
 	createCmd.Flags().String("display-name", "", "Display name")
@@ -1378,12 +1361,23 @@ func orgsCommands() *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			role, _ := cmd.Flags().GetString("role")
-			member, err := apiClient.AddOrgMember(cmd.Context(), args[0], args[1], domain.Role(role))
+			if _, err := uuid.Parse(args[0]); err != nil {
+				return fmt.Errorf("invalid org ID: %w", err)
+			}
+			if _, err := nostr.PubKeyFromHex(args[1]); err != nil {
+				return fmt.Errorf("invalid member pubkey: %w", err)
+			}
+			if !validCLIOrgRole(domain.Role(role)) {
+				return fmt.Errorf("invalid member role %q", role)
+			}
+			coordinate := "org:member:" + args[0] + ":" + args[1]
+			intentID, err := publishMutationIntentForOrg(cmd, "org", "create", coordinate, "bahia.intent.org-member.v1", "", args[0], map[string]interface{}{
+				"pubkey": args[1], "role": role,
+			})
 			if err != nil {
 				return err
 			}
-			fmt.Printf("✓ Member added: %s (%s)\n", truncate(member.Pubkey, 16), member.Role)
-			return nil
+			return outputSingle(map[string]string{"intent_id": intentID, "coordinate": coordinate})
 		},
 	}
 	membersAddCmd.Flags().String("role", "viewer", "Role: viewer, deployer, admin, owner")
@@ -1393,16 +1387,79 @@ func orgsCommands() *cobra.Command {
 		Short: "Remove a member from an organization",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := apiClient.RemoveOrgMember(cmd.Context(), args[0], args[1]); err != nil {
+			if _, err := uuid.Parse(args[0]); err != nil {
+				return fmt.Errorf("invalid org ID: %w", err)
+			}
+			if _, err := nostr.PubKeyFromHex(args[1]); err != nil {
+				return fmt.Errorf("invalid member pubkey: %w", err)
+			}
+			coordinate := "org:member:" + args[0] + ":" + args[1]
+			intentID, err := publishMutationIntentForOrg(cmd, "org", "delete", coordinate, "bahia.intent.org-member.v1", "", args[0], map[string]interface{}{"pubkey": args[1]})
+			if err != nil {
 				return err
 			}
-			fmt.Println("✓ Member removed")
-			return nil
+			return outputSingle(map[string]string{"intent_id": intentID, "coordinate": coordinate})
 		},
 	}
 
 	membersCmd.AddCommand(membersListCmd, membersAddCmd, membersRemoveCmd)
-	cmd.AddCommand(listCmd, getCmd, createCmd, membersCmd)
+	deleteCmd := &cobra.Command{Use: "delete [org-id]", Short: "Delete an organization", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		id, err := uuid.Parse(args[0])
+		if err != nil || id == uuid.Nil {
+			return fmt.Errorf("org ID must be a non-nil UUID")
+		}
+		intentID, err := publishMutationIntentForOrg(cmd, "org", "delete", id.String(), "", "", id.String(), map[string]interface{}{"id": id.String()})
+		if err != nil {
+			return err
+		}
+		return outputSingle(map[string]string{"intent_id": intentID, "org_id": id.String()})
+	}}
+	invitesCmd := &cobra.Command{Use: "invites", Short: "Manage organization invitations"}
+	inviteCreateCmd := &cobra.Command{Use: "create [org-id] [pubkey]", Short: "Invite a member", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		orgID, err := uuid.Parse(args[0])
+		if err != nil || orgID == uuid.Nil {
+			return fmt.Errorf("org ID must be a non-nil UUID")
+		}
+		if _, err := nostr.PubKeyFromHex(args[1]); err != nil {
+			return fmt.Errorf("invalid invitee pubkey: %w", err)
+		}
+		role, _ := cmd.Flags().GetString("role")
+		if !validCLIOrgRole(domain.Role(role)) {
+			return fmt.Errorf("invalid invite role %q", role)
+		}
+		expiresIn, _ := cmd.Flags().GetInt("expires-in")
+		if expiresIn <= 0 {
+			return fmt.Errorf("expires-in must be positive")
+		}
+		inviteID, err := uuid.NewV7()
+		if err != nil {
+			return err
+		}
+		intentID, err := publishMutationIntentForOrg(cmd, "org", "create", inviteID.String(), "bahia.intent.org-invite.v1", "", orgID.String(), map[string]interface{}{"id": inviteID.String(), "pubkey": args[1], "role": role, "expires_in": expiresIn})
+		if err != nil {
+			return err
+		}
+		return outputSingle(map[string]string{"intent_id": intentID, "invite_id": inviteID.String()})
+	}}
+	inviteCreateCmd.Flags().String("role", "viewer", "Invite role")
+	inviteCreateCmd.Flags().Int("expires-in", 72, "Invite expiry in hours")
+	inviteDeleteCmd := &cobra.Command{Use: "delete [org-id] [invite-id]", Short: "Revoke an invitation", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
+		orgID, err := uuid.Parse(args[0])
+		if err != nil || orgID == uuid.Nil {
+			return fmt.Errorf("org ID must be a non-nil UUID")
+		}
+		inviteID, err := uuid.Parse(args[1])
+		if err != nil || inviteID == uuid.Nil {
+			return fmt.Errorf("invite ID must be a non-nil UUID")
+		}
+		intentID, err := publishMutationIntentForOrg(cmd, "org", "delete", inviteID.String(), "bahia.intent.org-invite.v1", "", orgID.String(), map[string]interface{}{"id": inviteID.String()})
+		if err != nil {
+			return err
+		}
+		return outputSingle(map[string]string{"intent_id": intentID, "invite_id": inviteID.String()})
+	}}
+	invitesCmd.AddCommand(inviteCreateCmd, inviteDeleteCmd)
+	cmd.AddCommand(listCmd, getCmd, createCmd, deleteCmd, membersCmd, invitesCmd)
 	return cmd
 }
 

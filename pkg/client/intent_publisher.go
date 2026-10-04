@@ -183,6 +183,9 @@ type PublishIntentRequest struct {
 	IntentID string
 	// ExpectedUpdatedAt is the optional revision-check timestamp for updates.
 	ExpectedUpdatedAt *time.Time
+	// PlaintextSecretValue exists only in memory while preparing a secret intent.
+	// PrepareIntent NIP-44 encrypts it to ServicePubkey before signing or queuing.
+	PlaintextSecretValue string
 }
 
 // PreparedIntent is a signed (and optionally gift-wrapped) intent ready for
@@ -292,6 +295,31 @@ func (p *IntentPublisher) BuildIntentEvent(req PublishIntentRequest) (nostr.Even
 // The returned PreparedIntent can be passed to PublishAndWait, and reused
 // for idempotent retries.
 func (p *IntentPublisher) PrepareIntent(ctx context.Context, req PublishIntentRequest) (*PreparedIntent, error) {
+	if req.PlaintextSecretValue != "" {
+		if req.Domain != "secret" || p.cipher == nil {
+			return nil, fmt.Errorf("secret value encryption requires the secret domain and a NIP-44 signer")
+		}
+		if _, exists := req.Content["encrypted_value"]; exists {
+			return nil, fmt.Errorf("secret value was supplied twice")
+		}
+		if _, exists := req.Content["value"]; exists {
+			return nil, fmt.Errorf("plaintext secret content is forbidden")
+		}
+		recipient, err := nostr.PubKeyFromHex(p.servicePubkey)
+		if err != nil {
+			return nil, fmt.Errorf("parse service pubkey for secret value: %w", err)
+		}
+		ciphertext, err := p.cipher.Encrypt(ctx, req.PlaintextSecretValue, recipient)
+		if err != nil {
+			return nil, fmt.Errorf("NIP-44 encrypt secret value: %w", err)
+		}
+		content := make(map[string]interface{}, len(req.Content)+1)
+		for key, value := range req.Content {
+			content[key] = value
+		}
+		content["encrypted_value"] = ciphertext
+		req.Content = content
+	}
 	ev, err := p.BuildIntentEvent(req)
 	if err != nil {
 		return nil, err
