@@ -268,11 +268,11 @@ describe('public controlplane command helpers', () => {
     expect(publishEncryptedRequestMock).not.toHaveBeenCalled();
   });
 
-  it('rejects oversized inline artifact SBOM imports before publishing', () => {
+  it('rejects oversized inline artifact SBOM imports before publishing', async () => {
     expect(api.MAX_INLINE_SBOM_BYTES).toBe(360 * 1024);
     const oversized = Buffer.alloc(api.MAX_INLINE_SBOM_BYTES + 1).toString('base64');
-    expect(() => api.importArtifactSBOM({ id: 'artifact-1', digest: 'sha256:abc123' }, { format: 'spdx', payloadBase64: oversized }))
-      .toThrow('Inline SBOM imports are limited to 368640 bytes (360 KiB); upload larger SBOM files to Blossom and import them by location.');
+    await expect(api.importArtifactSBOM({ id: 'artifact-1', digest: 'sha256:abc123' }, { format: 'spdx', payloadBase64: oversized }))
+      .rejects.toThrow('Inline SBOM imports are limited to 368640 bytes (360 KiB); upload larger SBOM files to Blossom and import them by location.');
     expect(publishIntentMock).not.toHaveBeenCalled();
   });
 

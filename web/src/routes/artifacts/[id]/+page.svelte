@@ -16,7 +16,8 @@ import Table from '$lib/components/Table.svelte';
   import { onStoreRefresh } from '$lib/nostr/boot.js';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
-  import { generateArtifactSBOM, importArtifactSBOM, inlineSBOMLimitMessage, MAX_INLINE_SBOM_BYTES } from '$lib/stores/public-controlplane.svelte.js';
+  import { generateArtifactSBOM, importArtifactSBOM, resolveInlineSBOMLimitBytes, MAX_INLINE_SBOM_BYTES } from '$lib/stores/public-controlplane.svelte.js';
+  import { blossomLocation, uploadSBOMToBlossom } from '$lib/nostr/blossom-upload.js';
   import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
   import { BAHIA_SBOM_AVAILABLE_LIST_SCHEMA, BAHIA_SBOM_REFERENCE_SCHEMA, SBOM_AVAILABILITY_LIST, SBOM_REFERENCE, SBOM_REFERENCE_TOPIC, SBOM_AVAILABILITY_TOPIC } from '$lib/nostr/kinds.gen.js';
   import {
@@ -44,6 +45,10 @@ import Table from '$lib/components/Table.svelte';
   let sbomGenerateError = $state(null);
   let sbomImportError = $state(null);
   let sbomImportFile = $state(null);
+  let sbomLocationURL = $state('');
+  let sbomLocationHash = $state('');
+  let sbomInlineLimit = $state(MAX_INLINE_SBOM_BYTES);
+  let sbomUploading = $state(false);
   let sbomImportFormat = $state('spdx');
   let sbomRequestEventId = $state(null);
   let sbomGenerationStatus = $state('idle');
@@ -72,11 +77,11 @@ import Table from '$lib/components/Table.svelte';
   let displayName = $derived(artifact?.name || artifact?.image_repo || artifact?.image_tag || 'Artifact Details');
   let displayVersion = $derived(artifactVersionLabel(artifact));
   let canGenerateSBOM = $derived(Boolean(artifactSBOMDigest(artifact) && artifactImageLocator(artifact)));
-  let canImportSBOM = $derived(Boolean(artifactSBOMDigest(artifact) && sbomImportFile && !isSBOMImportFileOversized(sbomImportFile)));
+  let canImportSBOM = $derived(Boolean(artifactSBOMDigest(artifact) && sbomImportFile));
   let sbomActionLabel = $derived(sbomData || sbomAttestation || sbomPackages.length > 0 ? 'Regenerate SBOM' : 'Generate SBOM');
   let sbomCompletedMessage = $derived(sbomOperation === 'import' ? 'SBOM imported successfully.' : 'SBOM generated successfully.');
   let sbomPendingMessage = $derived(sbomOperation === 'import' ? 'SBOM import in progress. Results will appear here automatically.' : 'SBOM generation in progress. Results will appear here automatically.');
-  let sbomPublishingMessage = $derived(sbomOperation === 'import' ? 'Importing SBOM… this may take a moment.' : 'Generating SBOM… this may take a moment.');
+  let sbomPublishingMessage = $derived(sbomUploading ? 'Uploading SBOM to Blossom…' : sbomOperation === 'import' ? 'Importing SBOM… this may take a moment.' : 'Generating SBOM… this may take a moment.');
 
   // SBOM table columns
   let sbomColumns = $derived([
@@ -141,6 +146,7 @@ import Table from '$lib/components/Table.svelte';
 
     try {
       await boot();
+      void resolveInlineSBOMLimitBytes().then(limit => { sbomInlineLimit = limit; });
       await tick();
       const loadedArtifact = artifacts.find((candidate) => candidate.id === id) || null;
 
@@ -297,7 +303,7 @@ import Table from '$lib/components/Table.svelte';
   }
 
   function isSBOMImportFileOversized(file) {
-    return Number(file?.size || 0) > MAX_INLINE_SBOM_BYTES;
+    return Number(file?.size || 0) > sbomInlineLimit;
   }
 
   function detectSBOMImportFormat(file) {
@@ -313,9 +319,6 @@ import Table from '$lib/components/Table.svelte';
     sbomImportError = null;
     if (!file) return;
     sbomImportFormat = detectSBOMImportFormat(file);
-    if (isSBOMImportFileOversized(file)) {
-      sbomImportError = inlineSBOMLimitMessage();
-    }
   }
 
   async function fileToBase64(file) {
@@ -328,7 +331,7 @@ import Table from '$lib/components/Table.svelte';
     return btoa(binary);
   }
 
-  async function handleImportSBOM() {
+  async function handleImportSBOM(fromLocation = false) {
     if (!artifact || sbomImporting) return;
     sbomOperation = 'import';
     sbomImportError = null;
@@ -337,12 +340,12 @@ import Table from '$lib/components/Table.svelte';
       sbomImportError = 'This artifact needs an immutable digest before Bahia can import an SBOM.';
       return;
     }
-    if (!sbomImportFile) {
+    if (!fromLocation && !sbomImportFile) {
       sbomImportError = 'Choose an SPDX or CycloneDX JSON file to import.';
       return;
     }
-    if (isSBOMImportFileOversized(sbomImportFile)) {
-      sbomImportError = inlineSBOMLimitMessage();
+    if (fromLocation && !sbomLocationURL.trim()) {
+      sbomImportError = 'Enter a Blossom URL to import.';
       return;
     }
 
@@ -355,19 +358,27 @@ import Table from '$lib/components/Table.svelte';
     clearSBOMEventCache();
     subscribeGeneratedSBOMReferences();
     try {
-      const payloadBase64 = await fileToBase64(sbomImportFile);
-      const event = await importArtifactSBOM(artifact, {
-        format: sbomImportFormat,
-        payloadBase64,
-        generator: { id: 'web-import' }
-      });
+      sbomInlineLimit = await resolveInlineSBOMLimitBytes();
+      let source;
+      if (fromLocation) source = { location: blossomLocation(sbomLocationURL, sbomLocationHash) };
+      else if (isSBOMImportFileOversized(sbomImportFile)) {
+        sbomUploading = true;
+        source = { location: await uploadSBOMToBlossom(sbomImportFile) };
+        sbomUploading = false;
+      } else source = { payloadBase64: await fileToBase64(sbomImportFile) };
+      const event = await importArtifactSBOM(artifact, { format: sbomImportFormat, ...source, generator: { id: 'web-import' } });
       sbomRequestEventId = event?.event?.id || null;
       if (sbomGenerationStatus !== 'completed') sbomGenerationStatus = 'waiting';
       toast.success('SBOM import started');
       void observeGeneratedSBOMReferences();
     } catch (err) {
       sbomImportError = userFacingSBOMError(err);
+      if (!sbomRequestEventId) {
+        sbomGenerationStatus = 'idle';
+        closeSBOMReferenceSubscription();
+      }
     } finally {
+      sbomUploading = false;
       sbomImporting = false;
     }
   }
@@ -702,7 +713,7 @@ import Table from '$lib/components/Table.svelte';
           <form class="sbom-import-panel" onsubmit={(event) => { event.preventDefault(); void handleImportSBOM(); }}>
             <div>
               <h3 class="import-title">Import SBOM</h3>
-              <p class="section-subtitle">Inline imports accept SPDX or CycloneDX JSON up to 512 KiB. Larger files should be imported by Blossom or REST compatibility reference.</p>
+              <p class="section-subtitle">Files up to {Math.floor(sbomInlineLimit / 1024)} KiB are sent inline. Larger files are uploaded to the configured Blossom server before the signed import intent is published.</p>
             </div>
             <div class="import-controls">
               <label class="import-field">
@@ -729,6 +740,15 @@ import Table from '$lib/components/Table.svelte';
               >
                 Import SBOM
               </LoadingButton>
+            </div>
+          </form>
+
+          <form class="sbom-import-panel" onsubmit={(event) => { event.preventDefault(); void handleImportSBOM(true); }}>
+            <h3 class="import-title">Import from Blossom location</h3>
+            <div class="import-controls">
+              <label class="import-field"><span>Blossom URL</span><input type="url" bind:value={sbomLocationURL} placeholder="https://blossom.example/SHA-256" disabled={sbomImporting} /></label>
+              <label class="import-field"><span>SHA-256 (optional)</span><input type="text" bind:value={sbomLocationHash} placeholder="Must match URL hash" disabled={sbomImporting} /></label>
+              <LoadingButton variant="secondary" loading={sbomImporting} disabled={!artifactSBOMDigest(artifact) || !sbomLocationURL.trim() || sbomGenerating} type="submit">Import from location</LoadingButton>
             </div>
           </form>
 
