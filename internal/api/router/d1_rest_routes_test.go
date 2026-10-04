@@ -8,7 +8,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/repository"
-	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -17,9 +16,7 @@ type d1WorkerRepo struct{ repository.WorkerRepository }
 
 func TestPhase5D1DeletedReadsReturn404(t *testing.T) {
 	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
-		LLMRegistry: &service.LLMRegistryService{},
-		Workers:     d1WorkerRepo{},
-		MLCommands:  &captureMLRESTPublisher{},
+		Workers: d1WorkerRepo{},
 	})
 	paths := []string{
 		"/api/v1/deployments/intents/00000000-0000-0000-0000-000000000001",

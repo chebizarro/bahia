@@ -74,16 +74,6 @@ func ValidateDeploymentRunStatus(s DeploymentRunStatus) error {
 	}
 }
 
-// ValidateHealthStatus checks that a HealthStatus is a known value.
-func ValidateHealthStatus(s HealthStatus) error {
-	switch s {
-	case HealthStatusUnknown, HealthStatusStarting, HealthStatusHealthy, HealthStatusUnhealthy, HealthStatusStopped:
-		return nil
-	default:
-		return fmt.Errorf("%w: health status %q is not valid (allowed: unknown, starting, healthy, unhealthy, stopped)", ErrInvalidValue, s)
-	}
-}
-
 // ValidateRuntimeType checks that a RuntimeType is a known value.
 func ValidateRuntimeType(s RuntimeType) error {
 	switch s {

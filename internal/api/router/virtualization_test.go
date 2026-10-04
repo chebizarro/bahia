@@ -31,7 +31,7 @@ func TestVirtualizationRoutesRegisteredReadOnlyAndFailClosed(t *testing.T) {
 		}
 		w = httptest.NewRecorder()
 		handler.ServeHTTP(w, httptest.NewRequest("POST", target, nil))
-		if w.Code != 405 {
+		if w.Code != 404 {
 			t.Fatalf("REST mutation registered: %s %d", path, w.Code)
 		}
 	}

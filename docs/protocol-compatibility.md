@@ -149,7 +149,7 @@ The relay sidecar persists accepted history in a bbolt `fiatjaf.com/nostr/events
 
 ### 5. REST and HTTP MCP
 
-- HTTP MCP (`/mcp`, `/api/v1/mcp`) exposes the same tool surface and must return Nostr correlation metadata for long-running work.
+- HTTP MCP (`/mcp`) exposes the same tool surface and must return Nostr correlation metadata for long-running work.
 - REST remains for narrowed CRUD/query/log/registry compatibility.
 - HTTP responses must not claim long-running completion when the durable truth is relay-delivered canonical observables.
 - Fallback to REST after a signed ContextVM event has been accepted by any relay is unsafe and must be avoided.

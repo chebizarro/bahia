@@ -1,0 +1,6 @@
+{
+  "feature_id": "BAHIA_PHASE5_F1_REST_WRITE_REMOVAL",
+  "bead": "bahia-irsry.13.16",
+  "intent": "Retire uncalled API-v1 REST mutation routes while preserving HTTP-native boundaries and documented operations without an intent replacement.",
+  "source": "docs/designs/phase5-cli-client.md, Wave 6 F1"
+}

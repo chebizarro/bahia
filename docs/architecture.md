@@ -99,7 +99,7 @@ Legacy Bahia request/status/result/read-model/encrypted kinds are migration inve
 Sensitive browser-facing domains use encrypted ContextVM events (`25910` inside `1059`/`21059` where supported) on configured encrypted-request relays. Under the charter this plane carries interactive RPC only (secret reveal, log fetch, assistant); sensitive *state* belongs in encrypted events readable by REQ. Today several encrypted domains (notifications, payments, org/member flows) still read and write through it, which is part of the RC-4 gap above.
 
 ### 4. Native MCP transport
-Bahia exposes JSON-RPC tools over HTTP at `/mcp` and `/api/v1/mcp`. Tool responses include correlation metadata so clients can follow async truth on relays.
+Bahia exposes JSON-RPC tools over HTTP at `/mcp`. Tool responses include correlation metadata so clients can follow async truth on relays.
 
 ### 5. REST API compatibility surface
 REST remains for narrowed CRUD, query, logs, registry, and operational compatibility routes. It is no longer the best single description of overall product behavior.

@@ -283,7 +283,6 @@ func TestSensitiveRoutesRejectCrossTenantRequests(t *testing.T) {
 		{name: "ingest SBOM", method: http.MethodPost, path: "/api/v1/artifacts/" + fixture.artifactB.String() + "/sbom", body: `{}`},
 		{name: "list channels for foreign org", method: http.MethodGet, path: "/api/v1/notifications/channels", orgID: fixture.orgB},
 		{name: "get foreign channel", method: http.MethodGet, path: "/api/v1/notifications/channels/" + fixture.channelB.String(), orgID: fixture.orgA},
-		{name: "test foreign channel", method: http.MethodPost, path: "/api/v1/notifications/channels/" + fixture.channelB.String() + "/test", orgID: fixture.orgA},
 		{name: "list logs for foreign org", method: http.MethodGet, path: "/api/v1/notifications/log", orgID: fixture.orgB},
 	}
 

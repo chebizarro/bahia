@@ -769,8 +769,8 @@ func closeResponseBody(t *testing.T, body io.Closer) {
 
 func assertDeprecatedMutationRouteRemoved(t *testing.T, method, path string, resp *http.Response, body map[string]any) {
 	t.Helper()
-	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("%s %s: expected removed route to return 404 or 405, got %d: %v", method, path, resp.StatusCode, body)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("%s %s: expected removed route to return 404, got %d: %v", method, path, resp.StatusCode, body)
 	}
 }
 
@@ -838,7 +838,7 @@ func TestRouter_NativeMCPRemovesLegacyAgentHTTP(t *testing.T) {
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	for _, path := range []string{"/mcp", "/api/v1/mcp"} {
+	for _, path := range []string{"/mcp"} {
 		resp, body := doJSON(t, "POST", srv.URL+path, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
 		if resp.StatusCode != http.StatusOK || body["error"] != nil || body["result"] == nil {
 			t.Fatalf("%s expected native MCP JSON-RPC success, status=%d body=%#v", path, resp.StatusCode, body)
@@ -867,7 +867,7 @@ func TestRouter_ConfiguredNIP98AuthRejectsBearerOnProtectedRoutes(t *testing.T) 
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	url := srv.URL + "/api/v1/mcp"
+	url := srv.URL + "/mcp"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
@@ -898,7 +898,7 @@ func TestRouter_ConfiguredNIP98AuthAllowsProtectedRoutesWithoutJWT(t *testing.T)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	url := srv.URL + "/api/v1/mcp"
+	url := srv.URL + "/mcp"
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -1116,8 +1116,8 @@ func TestServiceReadRoutesRemainAndDeprecatedMutationsAreRemoved(t *testing.T) {
 	}
 	for _, route := range removedRoutes {
 		resp, body := doJSON(t, route.method, route.url, route.body)
-		if resp.StatusCode != http.StatusMethodNotAllowed {
-			t.Fatalf("%s %s: expected 405 after REST deprecation, got %d: %v", route.method, route.url, resp.StatusCode, body)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s %s: expected 404 after REST deprecation, got %d: %v", route.method, route.url, resp.StatusCode, body)
 		}
 	}
 }
@@ -1171,53 +1171,26 @@ func TestEnvironmentReadRoutesRemainAndDeprecatedMutationsAreRemoved(t *testing.
 	}
 	for _, route := range removedRoutes {
 		resp, body := doJSON(t, route.method, route.url, route.body)
-		if resp.StatusCode != http.StatusMethodNotAllowed {
-			t.Fatalf("%s %s: expected 405 after REST deprecation, got %d: %v", route.method, route.url, resp.StatusCode, body)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s %s: expected 404 after REST deprecation, got %d: %v", route.method, route.url, resp.StatusCode, body)
 		}
 	}
 }
 
 // --- Build Registration ---
 
-func TestBuildLifecycle(t *testing.T) {
+func TestBuildReadRoutesRemainAfterWriteRemoval(t *testing.T) {
 	srv, registry := newTestServerWithRegistry()
 	defer srv.Close()
 	svcID := seedTestService(t, registry, "build-svc", "harbor/build-svc")
-
-	// Register a build.
-	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
-		"service_id": svcID,
-		"git_sha":    "abc1234",
-		"git_ref":    "refs/heads/main",
-		"ci_run_id":  "run-123",
-		"status":     "running",
-	})
-	if resp.StatusCode != 201 {
-		t.Fatalf("build register: expected 201, got %d: %v", resp.StatusCode, body)
+	buildID := seedTestBuild(t, registry, svcID, "abc1234")
+	resp, body := doJSON(t, http.MethodGet, srv.URL+"/api/v1/builds/"+buildID, nil)
+	if resp.StatusCode != http.StatusOK || body["data"].(map[string]any)["git_sha"] != "abc1234" {
+		t.Fatalf("retained build GET: status=%d body=%v", resp.StatusCode, body)
 	}
-	buildID := body["data"].(map[string]any)["id"].(string)
-
-	// Get the build.
-	resp, body = doJSON(t, "GET", srv.URL+"/api/v1/builds/"+buildID, nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("build get: expected 200, got %d", resp.StatusCode)
-	}
-	if body["data"].(map[string]any)["git_sha"] != "abc1234" {
-		t.Error("expected git_sha abc1234")
-	}
-
-	// Update build status.
-	resp, _ = doJSON(t, "PATCH", srv.URL+"/api/v1/builds/"+buildID+"/status", map[string]any{
-		"status": "succeeded",
-	})
-	if resp.StatusCode != 200 {
-		t.Fatalf("build status update: expected 200, got %d", resp.StatusCode)
-	}
-
-	// List builds by service.
-	resp, _ = doJSON(t, "GET", fmt.Sprintf("%s/api/v1/services/%s/builds", srv.URL, svcID), nil)
-	if resp.StatusCode != 200 {
-		t.Fatalf("list builds: expected 200, got %d", resp.StatusCode)
+	resp, _ = doJSON(t, http.MethodGet, fmt.Sprintf("%s/api/v1/services/%s/builds", srv.URL, svcID), nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("retained build list: status=%d", resp.StatusCode)
 	}
 }
 
@@ -1255,54 +1228,17 @@ func TestArtifactReadRoutesRemainAndDeprecatedRegisterIsRemoved(t *testing.T) {
 
 // --- Deployment Intent & Run Full Flow ---
 
-func TestDeploymentFlow(t *testing.T) {
-	srv, registry := newTestServerWithRegistry()
+func TestDeploymentRunRESTWritesRemoved(t *testing.T) {
+	srv := newTestServer()
 	defer srv.Close()
-	svcID := seedTestService(t, registry, "deploy-svc", "harbor/deploy")
-	envID := seedTestEnvironment(t, registry, "staging", domain.DeployStrategyReplace, false)
-	buildID := seedTestBuild(t, registry, svcID, "aaa1111a")
-	artID := seedTestArtifact(t, registry, svcID, buildID, "harbor/deploy", "v2.0", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	intentID := seedTestIntent(t, registry, svcID, envID, artID, "test-user")
-
-	resp, _ := doJSON(t, "GET", srv.URL+"/api/v1/deployments/intents/"+intentID, nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("get intent: expected 404, got %d", resp.StatusCode)
-	}
-
-	// Create deployment run.
-	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/deployments/runs", map[string]any{
-		"deployment_intent_id": intentID,
-		"loom_job_id":          "loom-123",
-	})
-	if resp.StatusCode != 201 {
-		t.Fatalf("create run: expected 201, got %d: %v", resp.StatusCode, body)
-	}
-	runID := body["data"].(map[string]any)["id"].(string)
-
-	// Get the run.
-	resp, _ = doJSON(t, "GET", srv.URL+"/api/v1/deployments/runs/"+runID, nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("get run: expected 404, got %d", resp.StatusCode)
-	}
-
-	// Complete the run.
-	resp, body = doJSON(t, "POST", srv.URL+"/api/v1/deployments/runs/"+runID+"/complete", map[string]any{
-		"status": "succeeded",
-	})
-	if resp.StatusCode != 200 {
-		t.Fatalf("complete run: expected 200, got %d: %v", resp.StatusCode, body)
-	}
-
-	// List intents by service+env.
-	resp, _ = doJSON(t, "GET", fmt.Sprintf("%s/api/v1/services/%s/environments/%s/intents", srv.URL, svcID, envID), nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("list intents: expected 404, got %d", resp.StatusCode)
-	}
-
-	// List runs by intent.
-	resp, _ = doJSON(t, "GET", fmt.Sprintf("%s/api/v1/deployments/intents/%s/runs", srv.URL, intentID), nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("list runs: expected 404, got %d", resp.StatusCode)
+	for _, tt := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/deployments/runs"},
+		{http.MethodPost, "/api/v1/deployments/runs/00000000-0000-0000-0000-000000000001/complete"},
+	} {
+		resp, body := doJSON(t, tt.method, srv.URL+tt.path, nil)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s %s: status=%d body=%v", tt.method, tt.path, resp.StatusCode, body)
+		}
 	}
 }
 
@@ -1347,8 +1283,8 @@ func TestRejectFlow(t *testing.T) {
 	resp, _ = doJSON(t, "POST", srv.URL+"/api/v1/deployments/runs", map[string]any{
 		"deployment_intent_id": intentID,
 	})
-	if resp.StatusCode != 500 {
-		t.Fatalf("run on rejected intent: expected 500, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("retired run route: expected 404, got %d", resp.StatusCode)
 	}
 }
 
@@ -1465,53 +1401,23 @@ func TestPolicyReadRoutesRemainAndDeprecatedMutationsAreRemoved(t *testing.T) {
 	}
 }
 
-func TestToolDenylistRoutesRemainAndDeprecatedApprovalRoutesAreRemoved(t *testing.T) {
+func TestToolDenylistReadRemainsAndWritesAreRemoved(t *testing.T) {
 	toolRepo := newMockToolProvisioningRepo()
-	intentID := uuid.New()
-	if err := toolRepo.CreateIntent(context.Background(), &domain.ToolProvisionIntent{
-		ID:             intentID,
-		ServiceID:      uuid.New(),
-		EnvironmentID:  uuid.New(),
-		RequestedTools: []domain.ToolRequest{{Name: "curl", Version: "8"}},
-		Status:         domain.ToolProvisionStatusAwaitingApproval,
-	}); err != nil {
-		t.Fatalf("seed tool intent: %v", err)
-	}
-
 	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{ToolProvisioning: toolRepo})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
-
-	resp, body := doJSON(t, http.MethodGet, srv.URL+"/api/v1/tools/pending", nil)
+	resp, body := doJSON(t, http.MethodGet, srv.URL+"/api/v1/tools/denylist", nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list pending tools: expected 200, got %d: %v", resp.StatusCode, body)
+		t.Fatalf("list denylist: status=%d body=%v", resp.StatusCode, body)
 	}
-
-	resp, body = doJSON(t, http.MethodGet, srv.URL+"/api/v1/tools/denylist", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list tool denylist: expected 200, got %d: %v", resp.StatusCode, body)
-	}
-
-	resp, body = doJSON(t, http.MethodPost, srv.URL+"/api/v1/tools/denylist", map[string]any{
-		"package": "left-pad",
-		"manager": "npm",
-		"reason":  "blocked by policy",
-	})
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("add tool denylist: expected 201, got %d: %v", resp.StatusCode, body)
-	}
-
-	resp, body = doJSON(t, http.MethodDelete, srv.URL+"/api/v1/tools/denylist/left-pad/npm", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("remove tool denylist: expected 200, got %d: %v", resp.StatusCode, body)
-	}
-
-	for _, path := range []string{
-		"/api/v1/tools/" + intentID.String() + "/approve",
-		"/api/v1/tools/" + intentID.String() + "/reject",
+	for _, tt := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/tools/denylist"},
+		{http.MethodDelete, "/api/v1/tools/denylist/left-pad/npm"},
 	} {
-		resp, body := doJSON(t, http.MethodPost, srv.URL+path, map[string]any{"reason": "reviewed"})
-		assertDeprecatedMutationRouteRemoved(t, http.MethodPost, path, resp, body)
+		resp, body = doJSON(t, tt.method, srv.URL+tt.path, nil)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s %s: status=%d body=%v", tt.method, tt.path, resp.StatusCode, body)
+		}
 	}
 }
 
@@ -1601,8 +1507,8 @@ func TestDeprecatedServiceAndEnvironmentMutationRoutesAreRemoved(t *testing.T) {
 	}
 	for _, tt := range tests {
 		resp, body := doJSON(t, tt.method, srv.URL+tt.path, tt.body)
-		if resp.StatusCode != http.StatusMethodNotAllowed {
-			t.Fatalf("%s %s: expected 405 after REST deprecation, got %d: %v", tt.method, tt.path, resp.StatusCode, body)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s %s: expected 404 after REST deprecation, got %d: %v", tt.method, tt.path, resp.StatusCode, body)
 		}
 	}
 }

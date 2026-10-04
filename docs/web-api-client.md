@@ -70,7 +70,7 @@ const response = await api.fetchBlossomBlob(sha256);
 const blob = await response.blob();
 ```
 
-`listBlossomBlobs` uses `POST /api/v1/blossom/list` and normalizes empty data to `[]`. Server/health/stats methods normalize empty data to `[]` or `{}`.
+The retired `POST /api/v1/blossom/list` compatibility proxy is no longer available. Blossom inventory comes from the relay-backed operational view or directly from Blossom servers; server/health/stats reads remain HTTP routes.
 
 `fetchBlossomBlob` calls global `fetch` and returns the raw `Response` so callers choose `text()`, `json()`, or `blob()`.
 

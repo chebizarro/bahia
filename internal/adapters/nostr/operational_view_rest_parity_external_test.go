@@ -112,15 +112,10 @@ func TestOperationalViewRESTPayloadParity(t *testing.T) {
 	require.Equal(t, serversEnvelope.Data, adminState.Servers)
 	require.Equal(t, healthEnvelope.Data, adminState.Health)
 
-	listResponse := httptest.NewRecorder()
-	handler.ListBlobs(listResponse, httptest.NewRequest(http.MethodPost, "/blossom/list", strings.NewReader(`{"pubkey":"`+owner+`"}`)))
-	require.Equal(t, http.StatusOK, listResponse.Code)
-	var listEnvelope struct {
-		Data []blossom.BlobDescriptor `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(listResponse.Body.Bytes(), &listEnvelope))
-	require.Len(t, listEnvelope.Data, 1)
-	require.NoError(t, publisher.PublishBlossomBlob(context.Background(), owner, listEnvelope.Data[0]))
+	blobs, err := client.ListByPubkey(context.Background(), owner)
+	require.NoError(t, err)
+	require.Len(t, blobs, 1)
+	require.NoError(t, publisher.PublishBlossomBlob(context.Background(), owner, blobs[0]))
 	require.Len(t, sink.events, 3)
 	plaintext, err = (parityEncryptor{}).DecryptConfidential(context.Background(), sink.events[2].Content, 0, "", "")
 	require.NoError(t, err)
@@ -130,5 +125,5 @@ func TestOperationalViewRESTPayloadParity(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(plaintext, &blobState))
 	require.Equal(t, owner, blobState.Pubkey)
-	require.Equal(t, listEnvelope.Data[0], blobState.BlobDescriptor)
+	require.Equal(t, blobs[0], blobState.BlobDescriptor)
 }

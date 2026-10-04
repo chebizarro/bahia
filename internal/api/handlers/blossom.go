@@ -1,12 +1,10 @@
 package handlers
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
-	"github.com/openagentsinc/bahia/internal/api/dto"
 )
 
 // BlossomHandler handles HTTP requests for Blossom blob operations.
@@ -19,59 +17,7 @@ func NewBlossomHandler(client *blossom.Client) *BlossomHandler {
 	return &BlossomHandler{client: client}
 }
 
-// ListBlobs lists blobs from configured Blossom servers.
-// POST /blossom/list
-//
-// Request body:
-//
-//	{
-//	  "pubkey": "optional-hex-pubkey"  // If empty, lists own blobs (requires server identity)
-//	}
-//
-// Response:
-//
-//	{
-//	  "data": [
-//	    {
-//	      "url": "https://blossom.example.com/abc123...",
-//	      "sha256": "abc123...",
-//	      "size": 12345,
-//	      "type": "image/png",
-//	      "uploaded": "2024-01-15T10:30:00Z"
-//	    }
-//	  ]
-//	}
-func (h *BlossomHandler) ListBlobs(w http.ResponseWriter, r *http.Request) {
-	var req dto.ListBlossomBlobsRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	var blobs []blossom.BlobDescriptor
-	var err error
-
-	if req.Pubkey != "" {
-		// List blobs for specified pubkey
-		blobs, err = h.client.ListByPubkey(r.Context(), req.Pubkey)
-	} else {
-		// List own blobs (requires private key)
-		blobs, err = h.client.List(r.Context())
-	}
-
-	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, blossom.ErrAuthHeader) || strings.Contains(err.Error(), "private key required") || strings.Contains(err.Error(), "deriving public key") {
-			status = http.StatusServiceUnavailable
-		}
-		writeError(w, status, err.Error())
-		return
-	}
-
-	writeData(w, http.StatusOK, blobs)
-}
-
-// GetServers returns the list of configured Blossom server URLs.
+// GetServers returns the configured Blossom server URLs.
 // GET /blossom/servers
 func (h *BlossomHandler) GetServers(w http.ResponseWriter, r *http.Request) {
 	servers := h.client.Servers()

@@ -57,21 +57,6 @@ func TestValidateDeploymentRunStatus(t *testing.T) {
 	}
 }
 
-func TestValidateHealthStatus(t *testing.T) {
-	valid := []HealthStatus{HealthStatusUnknown, HealthStatusStarting, HealthStatusHealthy, HealthStatusUnhealthy, HealthStatusStopped}
-	for _, s := range valid {
-		if err := ValidateHealthStatus(s); err != nil {
-			t.Errorf("ValidateHealthStatus(%q) unexpected error: %v", s, err)
-		}
-	}
-	invalid := []HealthStatus{"", "ok", "running", "dead"}
-	for _, s := range invalid {
-		if err := ValidateHealthStatus(s); err == nil {
-			t.Errorf("ValidateHealthStatus(%q) expected error, got nil", s)
-		}
-	}
-}
-
 func TestValidateRuntimeType(t *testing.T) {
 	valid := []RuntimeType{RuntimeTypeDocker, RuntimeTypeCompose, RuntimeTypeK8s, RuntimeTypePodman, RuntimeTypeVMFirecracker, RuntimeTypeVMQEMU, ""}
 	for _, s := range valid {

@@ -23,8 +23,6 @@ type PaymentCPStatePublisher interface {
 // PaymentService manages Cashu payment lifecycle for deployment runs.
 type PaymentService struct {
 	payments    repository.PaymentRecordRepository
-	workers     repository.WorkerRepository
-	runs        repository.DeploymentRunRepository
 	cpPublisher PaymentCPStatePublisher
 	logger      *zap.Logger
 }
@@ -32,14 +30,10 @@ type PaymentService struct {
 // NewPaymentService creates a new payment service.
 func NewPaymentService(
 	payments repository.PaymentRecordRepository,
-	workers repository.WorkerRepository,
-	runs repository.DeploymentRunRepository,
 	logger *zap.Logger,
 ) *PaymentService {
 	return &PaymentService{
 		payments: payments,
-		workers:  workers,
-		runs:     runs,
 		logger:   logger,
 	}
 }
@@ -48,45 +42,6 @@ func NewPaymentService(
 // records. Must be called before any mutations.
 func (s *PaymentService) SetCPStatePublisher(pub PaymentCPStatePublisher) {
 	s.cpPublisher = pub
-}
-
-// EstimateCost calculates the cost estimate for a deployment run based on
-// the assigned worker's pricing and estimated duration.
-func (s *PaymentService) EstimateCost(ctx context.Context, runID uuid.UUID, estimatedDurationSecs int) (*domain.CostEstimate, error) {
-	run, err := s.runs.GetByID(ctx, runID)
-	if err != nil {
-		return nil, fmt.Errorf("getting deployment run: %w", err)
-	}
-
-	if run.WorkerPubkey == "" {
-		return nil, fmt.Errorf("deployment run has no assigned worker")
-	}
-
-	worker, err := s.workers.GetByPubKey(ctx, run.WorkerPubkey)
-	if err != nil {
-		return nil, fmt.Errorf("getting worker: %w", err)
-	}
-
-	if len(worker.Pricing) == 0 {
-		return nil, fmt.Errorf("worker %s has no pricing information", worker.PubKey)
-	}
-
-	// Use the first pricing entry (most common mint).
-	pricing := worker.Pricing[0]
-
-	// Default duration estimate from worker's max if not specified.
-	if estimatedDurationSecs <= 0 {
-		estimatedDurationSecs = worker.MaxDurationSecs
-		if estimatedDurationSecs <= 0 {
-			estimatedDurationSecs = 300 // 5 minute default
-		}
-	}
-
-	estimate := domain.EstimateCost(pricing, estimatedDurationSecs)
-	estimate.WorkerPubkey = worker.PubKey
-	estimate.WorkerName = worker.Name
-
-	return &estimate, nil
 }
 
 // RecordPayment creates a payment record for a deployment run.
