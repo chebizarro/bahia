@@ -1,6 +1,6 @@
 # CLI Reference
 
-The `bahia` CLI provides command-line access to Bahia’s current HTTP-compatible read surfaces plus signer-first operator commands.
+The `bahia` CLI provides relay-backed canonical reads and signer-first operator commands.
 
 ## Installation
 
@@ -105,7 +105,7 @@ For NIP-46 remote signing, use `--nostr-bunker-file` (or `BAHIA_NOSTR_BUNKER_FIL
 
 ## Nostr-native transport
 
-Service/environment create and update publish signed kind `30900` intents directly, subscribe for kind `30315` status, and read the resulting canonical `30900` state. Other signer-first CLI mutations still use ContextVM JSON-RPC over kind `25910`. Plain transport remains the default for those commands. Pass `--encrypted` to wrap the signed inner request in a NIP-59 kind `1059` gift wrap; encrypted mode requires `--service-pubkey` and works with either a local key or a NIP-46 signer that supports NIP-44. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
+CLI mutations with registered daemon intent handlers publish signed kind `30900` intents directly, subscribe for kind `30315` status, and read canonical `30900` state where applicable. The remaining `builds request` and `adopt scan` commands have no intent handlers and still use ContextVM JSON-RPC over kind `25910`. Plain transport remains the default for those commands. Pass `--encrypted` to wrap the signed inner request in a NIP-59 kind `1059` gift wrap; encrypted mode requires `--service-pubkey` and works with either a local key or a NIP-46 signer that supports NIP-44. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
 
 For service/environment/deployment/runtime writes, the CLI enqueues the signed intent in its local outbox, subscribes before publishing, requires at least one relay OK, and waits up to `--result-timeout` (default `30s`, or `BAHIA_RESULT_TIMEOUT`) for status. Exit codes are 0 accepted, 1 rejected/conflict/superseded, 2 published without status, and 3 no relay accepted. Exit 2 prints `intent_id` and `event_id`; inspect the pending event with `bahia outbox list`. These writes do not use HTTP.
 
@@ -201,7 +201,7 @@ Omitting `--units-file` leaves the unit set unchanged on update. Supplying a fil
 
 ### Builds
 
-The `builds` group provides the signer-first request → follow → register-artifact path without SQL or ad hoc image injection. The service must have a repository coordinate, matching artifact repository, and an opaque repository-credential secret owned by that service. The server-side fleet mirror initiator must be enabled with `hiveci.initiator.enabled`; otherwise `builds request` returns `Gitea mirror and HiveCI build initiation are not configured`.
+The `builds` group provides the signer-first request → follow path without SQL or ad hoc image injection. The service must have a repository coordinate, matching artifact repository, and an opaque repository-credential secret owned by that service. The server-side fleet mirror initiator must be enabled with `hiveci.initiator.enabled`; otherwise `builds request` returns `Gitea mirror and HiveCI build initiation are not configured`.
 
 ```bash
 # Queue the exact Astillero commit through the governed HiveCI path.
@@ -220,10 +220,8 @@ bahia builds get --build <build-uuid>
 bahia artifacts list --service <service-uuid>
 bahia artifacts get --artifact <artifact-uuid>
 
-# After the build succeeds, register only its verified HiveCI artifact result.
-# Use the succeeded build ID shown by builds list; if CI correlation created a
-# separate terminal row, it can differ from the queued ID returned by request.
-bahia builds register-result --build <succeeded-build-uuid>
+# The daemon registers an artifact from verified HiveCI evidence after success.
+# Follow builds/artifacts get/list until that lineage appears.
 
 # Use the returned artifact ID in the normal reviewed deployment flow.
 bahia deployments preview \
@@ -241,11 +239,12 @@ First-time mirror creation and ref resolution can exceed the default 30-second p
 
 `--build-arg KEY=VALUE` is repeatable and values may contain `=`, but the fleet-local tag-only kind-5401 dispatch contract has no build-argument field. The private-mirror Hive-CI initiator therefore rejects non-empty build arguments before any secret resolution, mirror operation, event publication, or queued-build registration. Omit `--build-arg` for this workflow.
 
-`builds get/list` and `artifacts get/list` read signed `30900` build-registry and artifact-registry records from relays by default, using the same local cursor and stale-EOSE warning policy as service reads. The legacy REST read endpoints are no longer mounted. Build and artifact mutations remain signer-first.
+`builds get/list` and `artifacts get/list` read signed `30900` build-registry and artifact-registry records from relays by default, using the same local cursor and stale-EOSE warning policy as service reads. The legacy REST read endpoints are no longer mounted. Operator artifact registration/import publish `30900` intents. Build-result registration is daemon-owned.
 
-If the queued ID returned by `builds request` remains `queued` while `builds list --service` shows a newer `succeeded` row, use that succeeded row's ID with `register-result`; this is the recovery path when CI result correlation lands on a separate build row.
-
-`builds register-result` accepts only a successful build. It resolves the immutable artifact from accepted HiveCI evidence and the configured registry; it does not permit an operator-supplied image override. Requesting or registering a build does not deploy it.
+Build-result artifact registration is daemon-owned. The CLI intentionally has no
+`builds register-result` command; operator-supplied artifacts instead use
+`artifacts register --id <artifact-uuid> --build <build-uuid> ...` with a
+signed artifact intent. A successful build request alone does not deploy.
 
 ### Deployments
 
@@ -281,7 +280,7 @@ bahia deployments approve --org "$ORG_UUID" --intent "$INTENT_UUID" --expected-u
 bahia deployments reject --org "$ORG_UUID" --intent "$INTENT_UUID" --expected-updated-at "$UPDATED_AT"
 ```
 
-Deployment creation, rollback, approval/rejection, and `services actions deploy/restart/stop` publish signed `30900` intents, not ContextVM requests. They require `--org` and UUID entity IDs; `--idempotency-key` accepts a UUIDv7 for retrying one logical intent. The CLI persists the signed event in its outbox before relay publication, then waits for `30315` status. Exit codes are 0 accepted, 1 rejected/conflict, 2 published without status (inspect `bahia outbox list`), and 3 no relay accepted. These writes do not use HTTP. Configure the daemon's `deployment` and `runtime` intent domains before using them. Deployment preview and route-attach remain ContextVM calls and retain their retry keys.
+Deployment creation, rollback, approval/rejection, and `services actions deploy/restart/stop` publish signed `30900` intents, not ContextVM requests. They require `--org` and UUID entity IDs; `--idempotency-key` accepts a UUIDv7 for retrying one logical intent. The CLI persists the signed event in its outbox before relay publication, then waits for `30315` status. Exit codes are 0 accepted, 1 rejected/conflict, 2 published without status (inspect `bahia outbox list`), and 3 no relay accepted. These writes do not use HTTP. Configure the daemon's `deployment` and `runtime` intent domains before using them. Deployment preview and route-attach also publish signed `30900` intents. Preview renders the bounded plan and review hash from accepted `30315` status `data`; route-attach may take `--expected-updated-at` for compare-and-set. Both retain UUIDv7 retry keys.
 
 ### State
 
@@ -298,7 +297,7 @@ These reads use the Bahia service's signed `30900` service-state records by defa
 
 ### DNS
 
-DNS mutations publish signed ContextVM kind `25910` requests and await their correlated acknowledgments. Configure an operator signer and relay using the global Nostr options described above.
+DNS mutations, including drift remediation, publish signed kind-`30900` intents and await scoped kind-`30315` statuses. Configure an operator signer, organization UUID, and relay using the global Nostr options described above.
 
 ```bash
 # Create and reconcile a managed zone
@@ -478,7 +477,7 @@ bahia --nostr-bunker-file /etc/bahia/signer-bunker-url \
   --image-repo ... --image-tag ... --image-digest sha256:...
 ```
 
-Bahia's ContextVM transport never uses NIP-04, so a signer that implements only
+Bahia's NIP-59 intent transport never uses NIP-04, so a signer that implements only
 the modern cipher is fully supported. Private key material is never required,
 printed, or passed in argv: the bunker URI is read from a file.
 
@@ -601,7 +600,7 @@ bahia adopt scan --target prod=prod-docker
 bahia adopt import --target prod=prod-docker --all --org 11111111-1111-1111-1111-111111111111
 ```
 
-`--org` is part of the signed import request. Use the destination organization UUID; it is not client-only display metadata.
+`--org` is part of the signed import intent. Use the destination organization UUID; it is not client-only display metadata. The accepted status returns an intent ID and candidate count; inspect canonical imported services for the resulting records.
 
 ### Legacy agent Soul adoption report
 

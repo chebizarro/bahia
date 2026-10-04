@@ -170,7 +170,8 @@ func dnsDriftRemediateCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			zone, _ := cmd.Flags().GetString("zone")
-			result, err := runDNSDriftRemediateContextVM(cmd, client.DNSDriftRemediateRequest{Zone: zone})
+			retryKey, _ := cmd.Flags().GetString("idempotency-key")
+			result, err := runDNSDriftRemediateIntent(cmd, client.DNSDriftRemediateRequest{Zone: zone, IdempotencyKey: retryKey})
 			if err != nil {
 				return err
 			}
@@ -178,6 +179,7 @@ func dnsDriftRemediateCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().String("zone", "", "Reconcile only this DNS zone; omit to reconcile all zones")
+	cmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this remediation")
 	return cmd
 }
 

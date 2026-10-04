@@ -411,3 +411,38 @@ Verification: `CGO_ENABLED=0 go test -count=50 -run
 TestIntentAuthorsSyncerMembershipMutationReachesSidecar ./internal/controlplane/`
 passed 50/50; `-count=10 -cpu=1,2,8` passed 10/10 at each CPU setting.
 `CGO_ENABLED=0 go build ./...`, `go vet ./...`, and `go test ./...` passed.
+
+## Bahia-irsry.13.20, Phase 5 M4: last CLI handler migrations (2026-10-03)
+
+The CLI now publishes signed, outbox-backed kind-30900 intents for
+`artifact/register`, `artifact/import-observed`, `adoption/import`,
+`dns/drift-remediate`, `deployment/preview`, and `deployment/route-attach`.
+Accepted 30315 `data` supplies the bounded preview plan and hash. The
+`builds register-result` operator command was removed because verified HiveCI
+artifact registration is daemon-owned. No CLI ContextVM request function for
+any of the six migrated operations remains.
+
+`TestCLILastOpsThroughD76Handlers` publishes actual CLI events through
+`IntentProcessor.ProcessInProcess` and D76 artifact, adoption, and DNS
+handlers. `TestCLILastOpsD76FixtureContent` checks the signed CLI events
+against all six D76 fixture entries (exact content for five; route-attach
+adds required, normalized route fields beyond the fixture's hostname-only
+example). D76 control-plane handler tests independently exercise deployment
+preview and route-attach through the same processor. The intent publisher
+status-data unit test verifies the bounded preview projection reaches clients.
+
+The generic `pkg/client.ContextVMRequestClient.Request` is still used by the
+CLI's `builds request`, `adopt scan`, and `logs run` commands. The first two
+have no intent handlers and were retained rather than silently deleting
+operator functionality. `internal/adapters/dns/dnsmasq_agent.go` also uses this
+client for a separate daemon-to-agent RPC. Thus the requested three-purpose
+ContextVM surface has **not** been reached; a handler or explicit removal
+decision is needed for the two commands, and the DNS agent dependency must
+be treated separately. The Beads Dolt database was unavailable in this
+worktree, so the issue status could not be updated without modifying the
+prohibited `.beads/` directory.
+
+Final verification: `CGO_ENABLED=0 go build ./...`, `CGO_ENABLED=0 go vet
+./...`, and `CGO_ENABLED=0 go test ./...` passed; the archtest ratchets,
+including `unwired_exports`, passed without baseline growth. `gofmt` and
+`git diff --check` passed.

@@ -215,6 +215,8 @@ type PublishIntentResult struct {
 	Status string
 	// Reason is the rejection/conflict reason (empty on success or timeout).
 	Reason string
+	// Data is the bounded, non-secret projection in an accepted 30315 status.
+	Data map[string]any
 	// ExitCode maps the status to a CLI exit code.
 	ExitCode int
 	// PublishResults are the per-relay publish outcomes.
@@ -485,6 +487,9 @@ func (p *IntentPublisher) parseStatusEvent(ev *nostr.Event, prepared *PreparedIn
 	if ev.Content != "" {
 		var content map[string]interface{}
 		if err := json.Unmarshal([]byte(ev.Content), &content); err == nil {
+			if data, ok := content["data"].(map[string]any); ok {
+				result.Data = data
+			}
 			if reason, ok := content["reason"].(string); ok {
 				result.Reason = reason
 			}

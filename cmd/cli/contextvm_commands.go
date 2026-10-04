@@ -4,17 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"io"
 	"strings"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/controlplane"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // requestCLIContextVM is only for operations with no registered daemon intent
@@ -82,101 +81,6 @@ func runBuildRequestContextVM(cmd *cobra.Command, req client.BuildRequestNostrRe
 	return result, err
 }
 
-func runBuildRegisterResultContextVM(cmd *cobra.Command, buildID string) (*client.ArtifactCommandResult, error) {
-	if err := requireContextVMUUID("build_id", buildID); err != nil {
-		return nil, err
-	}
-	result := &client.ArtifactCommandResult{}
-	err := requestCLIContextVM(cmd, controlplane.ContextVMMethodArtifactRegisterBuildResult, map[string]string{"build_id": buildID}, nostr.Tags{{"build", buildID}}, "", "builds register-result", result)
-	return result, err
-}
-
-func runArtifactRegisterContextVM(cmd *cobra.Command, req client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error) {
-	if err := requireContextVMUUID("build_id", req.BuildID); err != nil {
-		return nil, err
-	}
-	if err := requireContextVMUUID("service_id", req.ServiceID); err != nil {
-		return nil, err
-	}
-	if req.ImageRepo == "" || req.ImageTag == "" || req.ImageDigest == "" {
-		return nil, fmt.Errorf("image_repo, image_tag, and image_digest are required")
-	}
-	result := &client.ArtifactCommandResult{}
-	err := requestCLIContextVM(cmd, controlplane.ContextVMMethodArtifactRegister, req, nostr.Tags{{"service", req.ServiceID}, {"build", req.BuildID}, {"digest", req.ImageDigest}}, req.IdempotencyKey, "artifact register", result)
-	return result, err
-}
-
-func runArtifactImportObservedContextVM(cmd *cobra.Command, req client.ImportObservedArtifactNostrRequest) (*client.ImportObservedArtifactResult, error) {
-	if err := requireContextVMUUID("service_id", req.ServiceID); err != nil {
-		return nil, err
-	}
-	if err := requireContextVMUUID("environment_id", req.EnvironmentID); err != nil {
-		return nil, err
-	}
-	if req.ImageRepo == "" || req.ImageTag == "" || req.ImageDigest == "" {
-		return nil, fmt.Errorf("image_repo, image_tag, and image_digest are required")
-	}
-	result := &client.ImportObservedArtifactResult{}
-	err := requestCLIContextVM(cmd, controlplane.ContextVMMethodArtifactImportObserved, req, nostr.Tags{{"service", req.ServiceID}, {"environment", req.EnvironmentID}, {"digest", req.ImageDigest}}, req.IdempotencyKey, "artifact import-observed", result)
-	return result, err
-}
-
-func runDNSDriftRemediateContextVM(cmd *cobra.Command, req client.DNSDriftRemediateRequest) (*client.DNSCommandResult, error) {
-	tags := nostr.Tags{}
-	if req.Zone != "" {
-		tags = append(tags, nostr.Tag{"zone", req.Zone})
-	}
-	result := &client.DNSCommandResult{}
-	err := requestCLIContextVM(cmd, controlplane.ContextVMMethodDNSDriftRemediate, req, tags, "", "dns drift-remediate", result)
-	return result, err
-}
-
-func runDeploymentPreviewContextVM(cmd *cobra.Command, req client.DeploymentPreviewNostrRequest) (map[string]any, error) {
-	if err := requireContextVMUUID("service_id", req.ServiceID); err != nil {
-		return nil, err
-	}
-	if err := requireContextVMUUID("environment_id", req.EnvironmentID); err != nil {
-		return nil, err
-	}
-	if err := requireContextVMUUID("artifact_id", req.ArtifactID); err != nil {
-		return nil, err
-	}
-	if len(req.ManagedRuntimeConfig) == 0 {
-		return nil, fmt.Errorf("managed_runtime_config is required")
-	}
-	payload := map[string]any{"service_id": req.ServiceID, "environment_id": req.EnvironmentID, "artifact_id": req.ArtifactID, "managed_runtime_config": req.ManagedRuntimeConfig}
-	if req.DeploymentUnitID != "" {
-		payload["deployment_unit_id"] = req.DeploymentUnitID
-	}
-	if req.Compact {
-		payload["compact"] = true
-	}
-	if req.IdempotencyKey != "" {
-		payload["idempotency_key"] = req.IdempotencyKey
-	}
-	tags := nostr.Tags{{"service", req.ServiceID}, {"environment", req.EnvironmentID}, {"artifact", req.ArtifactID}}
-	result := map[string]any{}
-	err := requestCLIContextVM(cmd, controlplane.ContextVMMethodServiceDeployPreview, payload, tags, req.IdempotencyKey, "deploy preview", &result)
-	return result, err
-}
-
-func runRouteAttachContextVM(cmd *cobra.Command, req client.RouteAttachRequest) (*client.DeploymentCommandResult, error) {
-	if err := requireContextVMUUID("service_id", req.ServiceID); err != nil {
-		return nil, err
-	}
-	if err := requireContextVMUUID("environment_id", req.EnvironmentID); err != nil {
-		return nil, err
-	}
-	normalized, err := domain.NormalizePublicRouteRequest(req.PublicRoute)
-	if err != nil {
-		return nil, err
-	}
-	req.PublicRoute = normalized
-	result := &client.DeploymentCommandResult{}
-	err = requestCLIContextVM(cmd, controlplane.ContextVMMethodServiceRouteAttach, req, nostr.Tags{{"service", req.ServiceID}, {"environment", req.EnvironmentID}, {"hostname", req.PublicRoute.Hostname}}, req.IdempotencyKey, "route attach", result)
-	return result, err
-}
-
 func adoptionPayloadTargets(targets []client.AdoptionTarget) ([]map[string]string, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("at least one target is required")
@@ -205,20 +109,6 @@ func runAdoptionScanContextVM(cmd *cobra.Command, req client.AdoptionScanRequest
 	}
 	result := []client.AdoptionPreview{}
 	err = requestCLIContextVM(cmd, "adoption/scan", map[string]any{"targets": targets}, nil, "", "adoption scan", &result)
-	return result, err
-}
-
-func runAdoptionImportContextVM(cmd *cobra.Command, req client.AdoptionImportRequest) ([]client.AdoptionImportResult, error) {
-	targets, err := adoptionPayloadTargets(req.Targets)
-	if err != nil {
-		return nil, err
-	}
-	if !req.ImportAll && len(req.Selections) == 0 {
-		return nil, fmt.Errorf("import requires --all or at least one selection")
-	}
-	result := []client.AdoptionImportResult{}
-	payload := map[string]any{"targets": targets, "selections": req.Selections, "import_all": req.ImportAll, "org_id": req.OrgID}
-	err = requestCLIContextVM(cmd, "adoption/import", payload, nil, "", "adoption import", &result)
 	return result, err
 }
 

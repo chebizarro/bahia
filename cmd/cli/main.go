@@ -462,7 +462,7 @@ func deployCommands() *cobra.Command {
 				return err
 			}
 			compact, _ := cmd.Flags().GetBool("compact")
-			result, err := runDeploymentPreviewContextVM(cmd, client.DeploymentPreviewNostrRequest{
+			result, err := runDeploymentPreviewIntent(cmd, client.DeploymentPreviewNostrRequest{
 				ServiceID:            serviceID,
 				EnvironmentID:        envID,
 				DeploymentUnitID:     deploymentUnitID,
@@ -483,36 +483,26 @@ func deployCommands() *cobra.Command {
 			} else {
 				fmt.Println("✓ Deployment preview ready")
 			}
-			if isCompact, _ := result["compact"].(bool); isCompact {
-				if summaryRaw, ok := result["desired_state_summary"]; ok && summaryRaw != nil {
-					summary := summaryRaw.(map[string]any)
-					fmt.Printf("  Image:        %v\n", summary["image_ref"])
-					fmt.Printf("  Ports:        %v\n", summary["ports"])
-					fmt.Printf("  Volumes:      %v\n", summary["volumes"])
-					if hc, ok := summary["healthcheck"].(map[string]any); ok && hc != nil {
-						if enabled, _ := hc["enabled"].(bool); enabled {
-							fmt.Printf("  Healthcheck:  %v (port %v)\n", hc["path"], hc["port"])
-						}
-					}
-					if route, ok := summary["public_route"].(map[string]any); ok && route != nil {
-						fmt.Printf("  Public Route: %v\n", route["hostname"])
-					}
-					if internal, ok := summary["internal_https"].(map[string]any); ok && internal != nil {
-						if enabled, _ := internal["enabled"].(bool); enabled {
-							fmt.Printf("  Internal HTTPS: %v\n", internal["hostname"])
-						}
-					}
-					fmt.Printf("  Env Keys:     %v\n", summary["env_key_count"])
-					if policyRaw, ok := result["policy"]; ok && policyRaw != nil {
-						policy := policyRaw.(map[string]any)
-						if allowed, _ := policy["allowed"].(bool); allowed {
-							fmt.Printf("  Policy:       allowed\n")
-						} else {
-							fmt.Printf("  Policy:       blocked (%v warnings, %v blockers)\n", policy["warnings"], policy["blockers"])
-						}
-					}
+			if summary, ok := result["desired_state_summary"].(map[string]any); ok {
+				fmt.Printf("  Image:       %v\n", summary["image_ref"])
+				fmt.Printf("  Ports:       %v\n", summary["ports_count"])
+				fmt.Printf("  Volumes:     %v\n", summary["volumes_count"])
+				fmt.Printf("  Env Keys:    %v\n", summary["env_key_count"])
+				if hostname, ok := summary["public_route_hostname"].(string); ok {
+					fmt.Printf("  Public Route: %s\n", hostname)
 				}
 			}
+			if policy, ok := result["policy"].(map[string]any); ok {
+				if allowed, _ := policy["allowed"].(bool); allowed {
+					fmt.Println("  Policy:      allowed")
+				} else {
+					fmt.Printf("  Policy:      blocked (%v warnings, %v blockers)\n", policy["warnings"], policy["blockers"])
+				}
+			}
+			if truncated, _ := result["plan_truncated"].(bool); truncated {
+				fmt.Println("  Plan:        bounded public summary; use hash to approve the full state")
+			}
+
 			return nil
 		},
 	}
@@ -593,7 +583,8 @@ func deployCommands() *cobra.Command {
 				internalOverride = &internal
 			}
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
-			result, err := runRouteAttachContextVM(cmd, client.RouteAttachRequest{
+			expectedUpdatedAt, _ := cmd.Flags().GetString("expected-updated-at")
+			result, err := runRouteAttachIntent(cmd, client.RouteAttachRequest{
 				ServiceID:        serviceID,
 				EnvironmentID:    envID,
 				DeploymentUnitID: unitID,
@@ -601,8 +592,9 @@ func deployCommands() *cobra.Command {
 					Hostname: hostname, UpstreamScheme: upstreamScheme, UpstreamPort: upstreamPort,
 					HealthPath: healthPath, TLS: tlsMode,
 				},
-				Internal:       internalOverride,
-				IdempotencyKey: idempotencyKey,
+				Internal:          internalOverride,
+				ExpectedUpdatedAt: expectedUpdatedAt,
+				IdempotencyKey:    idempotencyKey,
 			})
 			if err != nil {
 				return err
@@ -623,6 +615,7 @@ func deployCommands() *cobra.Command {
 	routeAttachCmd.Flags().String("health-path", "", "HTTPS verification health path")
 	routeAttachCmd.Flags().String("tls", "managed", "TLS mode (managed)")
 	routeAttachCmd.Flags().Bool("internal", true, "Automatically attach configured internal HTTPS routing; set --internal=false to opt out")
+	routeAttachCmd.Flags().String("expected-updated-at", "", "Optional current deployment revision (RFC3339) for compare-and-set")
 	routeAttachCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
 	for _, flag := range []string{"service", "environment", "deployment-unit", "hostname", "upstream-port", "health-path"} {
 		_ = routeAttachCmd.MarkFlagRequired(flag)
@@ -786,14 +779,13 @@ func adoptCommands() *cobra.Command {
 			if !importAll && len(selections) == 0 {
 				return fmt.Errorf("specify --all or at least one --select alias/containerID")
 			}
-			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll, OrgID: strings.TrimSpace(importOrgID)}
-			results, err := runAdoptionImportContextVM(cmd, req)
+			retryKey, _ := cmd.Flags().GetString("idempotency-key")
+			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll, OrgID: strings.TrimSpace(importOrgID), IdempotencyKey: retryKey}
+			result, err := runAdoptionImportIntent(cmd, req)
 			if err != nil {
 				return err
 			}
-			return output(results, []string{"TARGET", "CONTAINER", "SERVICE", "STATUS", "ERROR"}, func(row client.AdoptionImportResult) []string {
-				return []string{row.TargetName, firstNonEmpty(row.ContainerName, row.ContainerID), row.ServiceName, row.Status, row.Error}
-			})
+			return outputSingle(result)
 		},
 	}
 	importCmd.Flags().StringArrayVar(&importTargets, "target", nil, "Server-managed endpoint target as endpointRef or alias=endpointRef (repeatable)")
@@ -802,6 +794,7 @@ func adoptCommands() *cobra.Command {
 	importCmd.Flags().StringArrayVar(&importSelections, "select", nil, "Container selection as alias/containerID[=serviceName] (repeatable)")
 	importCmd.Flags().BoolVar(&importAll, "all", false, "Import all adoptable containers from the scanned targets")
 	importCmd.Flags().StringVar(&importOrgID, "org", "", "Organization UUID for imported services and environments")
+	importCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this import")
 
 	cmd.AddCommand(scanCmd, importCmd)
 	return cmd

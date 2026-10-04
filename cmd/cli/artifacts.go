@@ -28,7 +28,8 @@ func artifactsCommands() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := runArtifactRegisterContextVM(cmd, client.RegisterArtifactNostrRequest{
+			artifactID, _ := cmd.Flags().GetString("id")
+			result, err := runArtifactRegisterIntent(cmd, artifactID, client.RegisterArtifactNostrRequest{
 				BuildID: buildID, ServiceID: serviceID, ImageRepo: imageRepo, ImageTag: imageTag,
 				ImageDigest: imageDigest, ManifestMediaType: manifestMediaType, SBOMURL: sbomURL,
 				SignatureRef: signatureRef, ScanStatus: scanStatus, Metadata: metadata, IdempotencyKey: idempotencyKey,
@@ -39,6 +40,7 @@ func artifactsCommands() *cobra.Command {
 			return outputSingle(result)
 		},
 	}
+	registerCmd.Flags().String("id", "", cliCreateEntityIDUsage("artifact"))
 	registerCmd.Flags().String("build", "", "Build ID")
 	registerCmd.Flags().String("service", "", "Service ID")
 	registerCmd.Flags().String("image-repo", "", "Image repository")
@@ -47,7 +49,7 @@ func artifactsCommands() *cobra.Command {
 	registerCmd.Flags().String("manifest-media-type", "", "Manifest media type")
 	registerCmd.Flags().String("sbom-url", "", "SBOM URL")
 	registerCmd.Flags().String("signature-ref", "", "Signature reference")
-	registerCmd.Flags().String("scan-status", "unknown", "Scan status")
+	registerCmd.Flags().String("scan-status", "", "Scan status")
 	registerCmd.Flags().String("metadata-file", "", "Read metadata JSON object from this file")
 	registerCmd.Flags().String("idempotency-key", "", "Explicit idempotency key for the signed request")
 	_ = registerCmd.MarkFlagRequired("build")
@@ -78,7 +80,7 @@ func artifactsCommands() *cobra.Command {
 			gitSHA, _ := cmd.Flags().GetString("git-sha")
 			gitRef, _ := cmd.Flags().GetString("git-ref")
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
-			result, err := runArtifactImportObservedContextVM(cmd, client.ImportObservedArtifactNostrRequest{
+			result, err := runArtifactImportObservedIntent(cmd, client.ImportObservedArtifactNostrRequest{
 				ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: deploymentUnitID,
 				ImageRepo: imageRepo, ImageTag: imageTag, ImageDigest: imageDigest,
 				GitSHA: gitSHA, GitRef: gitRef, IdempotencyKey: idempotencyKey,

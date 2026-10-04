@@ -182,6 +182,11 @@ func (t *cliIntentTransport) SubscribeOperator(_ context.Context, filters []nost
 func (t *cliIntentTransport) Close() {}
 
 func setupCLIIntentPipeline(t *testing.T) (*cliIntentRegistry, *cliIntentTransport, string, string) {
+	registry, transport, org, daemon, _, _ := setupCLIIntentPipelineWithProcessor(t)
+	return registry, transport, org, daemon
+}
+
+func setupCLIIntentPipelineWithProcessor(t *testing.T) (*cliIntentRegistry, *cliIntentTransport, string, string, *controlplane.IntentProcessor, string) {
 	t.Helper()
 	resetOperatorGlobals(t)
 	outputFormat = "json"
@@ -203,8 +208,8 @@ func setupCLIIntentPipeline(t *testing.T) (*cliIntentRegistry, *cliIntentTranspo
 		transport.events <- &ev
 		return nil
 	}, signer, zap.NewNop())
-	trust := controlplane.NewTrustSet(nil, zap.NewNop(), controlplane.WithBootstrapOwners(map[string]string{orgID: operatorKey.Public().Hex()}))
-	processor := controlplane.NewIntentProcessor(trust, store, status, controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{"service": true, "environment": true}}, zap.NewNop())
+	trust := controlplane.NewTrustSet([]string{operatorKey.Public().Hex()}, zap.NewNop(), controlplane.WithBootstrapOwners(map[string]string{orgID: operatorKey.Public().Hex()}))
+	processor := controlplane.NewIntentProcessor(trust, store, status, controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{"service": true, "environment": true, "artifact": true, "adoption": true, "dns": true, "deployment": true}}, zap.NewNop())
 	processor.RegisterHandler("service", controlplane.NewServiceIntentHandler(controlplane.ServiceIntentHandlerConfig{Registry: registry, Reader: registry, Logger: zap.NewNop()}))
 	processor.RegisterHandler("environment", controlplane.NewEnvironmentIntentHandler(registry, nil, zap.NewNop()))
 	transport.process = func(ev nostr.Event) {
@@ -240,7 +245,7 @@ func setupCLIIntentPipeline(t *testing.T) (*cliIntentRegistry, *cliIntentTranspo
 		return out, nil
 	}
 	t.Cleanup(func() { readIntentCanonicalEvents = oldReader })
-	return registry, transport, orgID, daemonKey.Public().Hex()
+	return registry, transport, orgID, daemonKey.Public().Hex(), processor, operatorKey.Public().Hex()
 }
 
 func executeIntentCommand(t *testing.T, args ...string) error {

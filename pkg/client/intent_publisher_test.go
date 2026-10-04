@@ -946,3 +946,15 @@ func openIntentTestStore(t *testing.T) *localstore.Store {
 	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
+
+func TestIntentPublisherAcceptedStatusIncludesBoundedPreviewData(t *testing.T) {
+	publisher := &IntentPublisher{}
+	event := &nostr.Event{Kind: 30315, Tags: nostr.Tags{{"status", "accepted"}}, Content: `{"intent_id":"018f6a60-0000-7000-8000-000000000010","data":{"desired_state_hash":"sha256:reviewed","plan_truncated":true,"desired_state_summary":{"image_ref":"registry.example/api@sha256:abc","ports_count":1}}}`}
+	result := publisher.parseStatusEvent(event, &PreparedIntent{IntentID: "018f6a60-0000-7000-8000-000000000010"}, nil)
+	if result.ExitCode != ExitCodeAccepted || result.Data["desired_state_hash"] != "sha256:reviewed" {
+		t.Fatalf("accepted preview status = %#v", result)
+	}
+	if summary, ok := result.Data["desired_state_summary"].(map[string]any); !ok || summary["ports_count"] != float64(1) {
+		t.Fatalf("bounded preview plan = %#v", result.Data)
+	}
+}
