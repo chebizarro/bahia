@@ -42,6 +42,8 @@ Verified HiveCI build-result artifact registration is daemon-owned; there is no 
 
 The legacy `POST /api/v1/artifacts` mutation has been removed. Signed kind `5985`/`bahia_register_artifact` registration is an advanced recovery path and is rejected unless `hiveci.allow_manual_artifact_registration: true` is explicitly configured.
 
+The web control-plane API can submit an operator-supplied artifact registration as a signed kind-30900 `artifact/register` intent at `artifact:<client-minted-id>`. It carries the build and service IDs, repository, tag, and immutable digest; the daemon publishes the canonical registry record and a bounded acceptance status. Observed-artifact import uses `artifact/import-observed` at `artifact-import:<service-id>:<environment-id>:<digest>`. The separate Builds-page recovery action still delegates verification of a trusted HiveCI result to the daemon using only its build ID; it does not substitute operator-supplied metadata for that verification.
+
 Even when enabled, the server requires an existing service/build binding, the service's exact artifact repository, a non-empty tag, and a full `sha256:` manifest digest. It resolves the tag in the configured registry and refuses missing, mutable-only, unverifiable, or tag/digest-mismatched references. Manual registration cannot bypass canonical deduplication or verification.
 
 ## Viewing Artifacts

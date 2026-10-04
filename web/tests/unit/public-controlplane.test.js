@@ -5,6 +5,7 @@ const publishEncryptedRequestMock = vi.hoisted(() => vi.fn());
 const bootstrapMock = vi.hoisted(() => vi.fn());
 const gotoMock = vi.hoisted(() => vi.fn());
 const publishIntentMock = vi.hoisted(() => vi.fn());
+const publishIntentForStatusMock = vi.hoisted(() => vi.fn());
 const canonicalIntentRecordMock = vi.hoisted(() => vi.fn());
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ORG_ID = '3b45458b-2724-4dda-9fc6-66f12249660d';
@@ -25,6 +26,7 @@ vi.mock('../../src/lib/stores/controlplane.svelte.js', () => ({
 
 vi.mock('$lib/nostr/intent-client.svelte.js', () => ({
   publishIntent: publishIntentMock,
+  publishIntentForStatus: publishIntentForStatusMock,
   canonicalIntentRecord: canonicalIntentRecordMock,
   resolveIntentOrgId: (domain, explicit) => explicit || (domain === 'backup' || domain === 'package' ? 'f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7' : '3b45458b-2724-4dda-9fc6-66f12249660d')
 }));
@@ -51,6 +53,8 @@ describe('public controlplane command helpers', () => {
     });
     publishIntentMock.mockImplementation(async request => ({ pending: true, desiredState: request.content,
       intentId: 'intent-1', coordinate: request.coordinate }));
+    publishIntentForStatusMock.mockResolvedValue({ data: { desired_state_hash: `sha256:${'a'.repeat(64)}` },
+      evaluation: { allowed: true, warnings: 0, blockers: 0 } });
     api = await import('../../src/lib/stores/public-controlplane.svelte.js');
   });
 
@@ -127,12 +131,8 @@ describe('public controlplane command helpers', () => {
     }));
   });
 
-  it('previews proposed managed desired state through the configured signer', async () => {
+  it('previews proposed managed desired state from accepted 30315 data', async () => {
     const managed = { schema_version: '1', service_name: 'web', restart_policy: 'unless-stopped', pull_policy: 'always' };
-    requestEncryptedResultMock.mockResolvedValueOnce({
-      requestEventId: 'preview-1',
-      result: { status: 'ok', payload: { desired_state_hash: `sha256:${'a'.repeat(64)}` } }
-    });
 
     const result = await api.previewServiceDeployment({
       service_id: 'svc-1',
@@ -143,21 +143,13 @@ describe('public controlplane command helpers', () => {
     });
 
     expect(result.desired_state_hash).toBe(`sha256:${'a'.repeat(64)}`);
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
-      operation: 'service/deploy-preview',
-      tags: [['service', 'svc-1'], ['environment', 'env-1'], ['unit', 'unit-1'], ['artifact', 'artifact-1']],
-      payload: {
-        service_id: 'svc-1',
-        environment_id: 'env-1',
-        deployment_unit_id: 'unit-1',
-        artifact_id: 'artifact-1',
-        managed_runtime_config: managed
-      },
-      kind: 25910,
-      resultKinds: [25910],
-      signal: undefined,
-      timeoutMs: undefined
-    });
+    expect(publishIntentForStatusMock).toHaveBeenCalledWith(expect.objectContaining({
+      domain: 'deployment', op: 'preview', coordinate: 'deployment-preview:svc-1:env-1',
+      content: expect.objectContaining({ artifact_id: 'artifact-1', deployment_unit_id: 'unit-1',
+        managed_runtime_config: managed, compact: true, intent_id: expect.any(String) })
+    }));
+    expect(publishIntentMock).not.toHaveBeenCalled();
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
   it('preserves the reviewed desired-state hash in the signed intent', async () => {
@@ -424,31 +416,17 @@ describe('public controlplane command helpers', () => {
     expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
-  it('evaluates deployment policy through ContextVM and unwraps successful payload envelopes', async () => {
-    requestEncryptedResultMock.mockResolvedValueOnce({
-      requestEventId: 'req-1',
-      result: {
-        status: 'success',
-        payload: {
-          allowed: true,
-          warnings: 0,
-          blockers: 0,
-          results: [{ policy_id: 'sig-required', passed: true }]
-        }
-      }
-    });
+  it('evaluates deployment policy from accepted 30315 evaluation', async () => {
+    publishIntentForStatusMock.mockResolvedValueOnce({ evaluation: { allowed: true, warnings: 0, blockers: 0,
+      results: [{ policy_id: 'sig-required', passed: true }] } });
 
     const result = await api.evaluatePolicy({ artifact_id: 'artifact-1', environment_id: 'env-1' });
 
-    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
-      operation: 'policy/evaluate',
-      tags: [['environment', 'env-1'], ['artifact', 'artifact-1']],
-      payload: { artifact_id: 'artifact-1', environment_id: 'env-1' },
-      kind: 25910,
-      resultKinds: [25910],
-      signal: undefined,
-      timeoutMs: undefined
-    });
+    expect(publishIntentForStatusMock).toHaveBeenCalledWith(expect.objectContaining({
+      domain: 'policy', op: 'evaluate', coordinate: 'evaluation:artifact-1:env-1',
+      content: { artifact_id: 'artifact-1', environment_id: 'env-1', intent_id: expect.any(String) }
+    }));
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       allowed: true,
       warnings: 0,
@@ -478,14 +456,13 @@ describe('public controlplane command helpers', () => {
     expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
-  it('keeps preview errors on ContextVM but not deployment mutation errors', async () => {
-    requestEncryptedResultMock.mockResolvedValueOnce({ requestEventId: 'req-1',
-      resultEvent: { id: 'result-error', kind: 25910, tags: [['status', 'failed'], ['error', 'policy blocked']],
-        content: JSON.stringify({ status: 'failed', error: 'policy blocked' }) } });
+  it('surfaces rejected preview status without a ContextVM request', async () => {
+    publishIntentForStatusMock.mockRejectedValueOnce(new Error('policy blocked'));
     await expect(api.previewServiceDeployment({ service_id: 'svc-1', environment_id: 'env-1', artifact_id: 'artifact-1' }))
       .rejects.toThrow('policy blocked');
     await api.createDeploymentIntent('svc-1', 'env-1', 'artifact-1');
     expect(publishIntentMock).toHaveBeenCalled();
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
 });

@@ -446,3 +446,50 @@ Final verification: `CGO_ENABLED=0 go build ./...`, `CGO_ENABLED=0 go vet
 ./...`, and `CGO_ENABLED=0 go test ./...` passed; the archtest ratchets,
 including `unwired_exports`, passed without baseline growth. `gofmt` and
 `git diff --check` passed.
+
+## Wave H web last-operations pass — bahia-irsry.12.14
+
+The web now signs D76 `artifact/register`, `artifact/import-observed`,
+`adoption/import`, `dns/drift-remediate`, `deployment/preview`, and
+`deployment/route-attach` intents plus D77 `policy/evaluate`. Preview renders
+the accepted requester/coordinate-correlated kind-30315 `data`; policy
+evaluation renders its `evaluation`. The request-status subscription is active
+before publication, remains active if canonical state arrives first, and
+terminates on accepted/rejected status, caller cancellation, client shutdown,
+or relay publication failure. DNS remediation and artifact registration use
+the shared pending-intent overlay. Go-generated D76 fixtures and the D77
+evaluation coordinate are asserted by unit tests; four browser tests exercise
+pending-to-accepted status transitions with bounded results.
+
+The requested strict web ContextVM allowlist is **not yet satisfied**. The
+static unit test inventories all remaining direct call-site files and rejects
+reintroduction of the migrated operations. Beyond assistant, secret-value
+reveal, run-log fetch, and their transport, web still invokes ContextVM for
+relay policy/admin, notification test/logs, security scan/rescan, artifact
+signature verification, SBOM generation/import, build request and verified
+build-result recovery, environment worker policy application, and ML model
+import/inference deploy/workload pin. These live operations have no matching
+registered intent handler in this branch; converting them to unhandled intents
+or deleting their UI would not complete the migration. Wave H's D79 handler
+work is a dependency for some of them. The legacy-call-site inventory is not
+an assertion that these extra operations are part of the approved final
+allowlist.
+
+Verification for this branch:
+
+| Gate | Outcome |
+|---|---|
+| `pnpm run test:unit` | PASS: 1,079 passed, 1 skipped |
+| `pnpm run lint` | PASS: 0 errors, 0 warnings |
+| `pnpm run build` | PASS |
+| `CGO_ENABLED=0 CI=1 npx playwright test` | PASS: 239 passed, 4 skipped, 0 failures or retries |
+| DNS zone-create hydration regression, repeated 10 times | PASS: 10/10 |
+| `CGO_ENABLED=0 go build ./...` | PASS |
+| `CGO_ENABLED=0 go vet ./...` | PASS |
+| `CGO_ENABLED=0 go test ./...` | PASS |
+| `git diff --check` | PASS |
+
+The first full browser run had one DNS zone-create retry: Playwright entered
+the form before the signer-ready hydration transition and its Zone value was
+reset. Waiting for operator readiness before filling stabilized that existing
+test; the subsequent full run had no retries.

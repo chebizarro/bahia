@@ -3,7 +3,9 @@ import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
 import { CONTEXTVM_MESSAGE_KIND, publishEncryptedRequest, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
 import { bootstrapControlplane } from './controlplane.svelte.js';
 import { mintEntityId, withEntityId } from '$lib/entity-id.js';
-import { publishIntent, canonicalIntentRecord, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
+import { publishIntent, publishIntentForStatus, canonicalIntentRecord, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
+import { artifactRegisterIntent, observedArtifactImportIntent, adoptionImportIntent,
+  deploymentPreviewIntent, deploymentRouteAttachIntent, policyEvaluateIntent } from '$lib/nostr/last-ops-intents.js';
 import { orgRoles } from './auth-roles.svelte.js';
 import { orgsState } from './orgs.svelte.js';
 import { currentSystemInfo } from './system.svelte.js';
@@ -163,21 +165,10 @@ export function deleteEnvironment(id, force = false) {
 }
 
 export async function previewServiceDeployment(payload) {
-  const unitId = String(payload?.deployment_unit_id || '').trim();
-  const event = await publishCommand({
-    operation: 'service/deploy-preview',
-    tags: [
-      ['service', payload?.service_id],
-      ['environment', payload?.environment_id],
-      ...(unitId ? [['unit', unitId]] : []),
-      ['artifact', payload?.artifact_id]
-    ].filter((tag) => tag[1]),
-    content: {
-      ...payload,
-      ...(unitId ? { deployment_unit_id: unitId } : {})
-    }
-  });
-  return resultContent(event);
+  const status = await publishIntentForStatus(deploymentPreviewIntent(payload,
+    intentOrgId({ ...payload, org_id: payload.org_id || serviceOrgId(payload.service_id) }, null, 'deployment')));
+  if (!status?.data) throw new Error('Accepted deployment preview has no plan data');
+  return status.data;
 }
 
 function serviceOrgId(serviceId) {
@@ -264,7 +255,23 @@ export function approveLLMDeploymentIntent(id) { return decideLLMDeployment(id, 
 export function rejectLLMDeploymentIntent(id) { return decideLLMDeployment(id, 'reject'); }
 
 export function registerArtifact(payload) {
-  return publishCommand({ operation: 'artifact/register', tags: [['service', payload.service_id], ['build', payload.build_id]].filter((tag) => tag[1]), content: payload });
+  return publishIntent(artifactRegisterIntent(payload,
+    intentOrgId({ ...payload, org_id: payload.org_id || serviceOrgId(payload.service_id) }, null, 'artifact')));
+}
+
+export function importObservedArtifact(payload) {
+  return publishIntent(observedArtifactImportIntent(payload,
+    intentOrgId({ ...payload, org_id: payload.org_id || serviceOrgId(payload.service_id) }, null, 'artifact')));
+}
+
+export function importAdoption(payload) {
+  const orgId = intentOrgId(payload, null, 'adoption');
+  return publishIntent(adoptionImportIntent(payload, orgId));
+}
+
+export function attachDeploymentRoute(payload) {
+  return publishIntent(deploymentRouteAttachIntent(payload,
+    intentOrgId({ ...payload, org_id: payload.org_id || serviceOrgId(payload.service_id) }, null, 'deployment')));
 }
 
 function artifactDigest(artifact) {
@@ -468,17 +475,9 @@ export function deletePolicy(id) {
 }
 
 export async function evaluatePolicy(payload) {
-  const event = await publishCommand({
-    operation: 'policy/evaluate',
-    tags: [
-      ['service', payload.service_id],
-      ['environment', payload.environment_id],
-      ['unit', payload.deployment_unit_id],
-      ['artifact', payload.artifact_id]
-    ].filter((tag) => tag[1]),
-    content: payload
-  });
-  return resultContent(event);
+  const status = await publishIntentForStatus(policyEvaluateIntent(payload, intentOrgId(payload, null, 'policy')));
+  if (!status?.evaluation) throw new Error('Accepted policy evaluation has no evaluation data');
+  return status.evaluation;
 }
 
 function backupMetadata(source, metadata = {}) {

@@ -1,6 +1,6 @@
 # Policies
 
-The web policy list and detail views read the local verified event store by the `policy-registry` topic. Cached policies render without a network loading gate; live canonical `30900` updates and kind-5 deletions update the view in place. Policy mutation transport remains unchanged in this phase.
+The web policy list and detail views read the local verified event store by the `policy-registry` topic. Cached policies render without a network loading gate; live canonical `30900` updates and kind-5 deletions update the view in place. Policy create/update/delete and evaluation use signed kind-30900 intents. The detail page signs `policy/evaluate` at `evaluation:<artifact-id>:<environment-id>` and renders the daemon's `evaluation` field only after the correlated kind-30315 status is accepted. Relay publication alone does not provide a policy decision.
 
 
 **Policies** in Bahia define rules for deployment approval, SBOM requirements, and operational governance.

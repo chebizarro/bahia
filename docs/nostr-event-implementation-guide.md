@@ -6,11 +6,18 @@ With registered intent domains enabled by default, clients sign kind `30900` eve
 
 ## Artifact, policy, and approval publishers
 
-Artifact registration and tool approval still publish signed ContextVM JSON-RPC
-kind `25910` requests. Legacy web callers also use `policy/create`,
-`policy/update`, `policy/delete`, and `policy/evaluate` while their migration is
-pending. MCP policy CRUD already dispatches kind-30900 intents; MCP evaluation
-now uses the `policy/evaluate` intent operation described below. No outbound
+The web signs `artifact/register`, `artifact/import-observed`, `adoption/import`,
+`dns/drift-remediate`, `deployment/preview`, `deployment/route-attach`, and
+`policy/evaluate` as kind-30900 intents. Request-like preview and evaluation
+results arrive in the correlated, bounded kind-30315 status: `data` for the
+preview plan and `evaluation` for the policy decision. The web never treats
+relay `OK` as daemon acceptance. The Go-generated D76 content fixtures are in
+`web/tests/fixtures/d76-intent-content.json`.
+
+Tool approval still publishes signed ContextVM JSON-RPC kind `25910` requests.
+Web policy CRUD and evaluation now publish kind-30900 intents. MCP policy CRUD
+already dispatches kind-30900 intents; MCP evaluation uses the same
+`policy/evaluate` intent operation. No outbound
 `PolicyCommandPublisher` remains. Never publish retired numeric request kinds
 `5985`–`5989` or `7977`. LLM approval uses `approval/llm-approve` or
 `approval/llm-reject`, selected by the validated decision.

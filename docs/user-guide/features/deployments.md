@@ -112,8 +112,8 @@ For a Compose service:
 4. In **Service**, enter the Compose service name, port mappings, command arguments, and literal non-secret environment values.
 5. In **Configuration**, select service secrets by opaque reference and choose the environment variable name for each. Secret values are never placed in the signed payload or desired-state preview.
 6. In **Reliability**, configure the HTTP `GET` healthcheck, restart policy, volumes, and CPU/memory limits.
-7. In **Review & sign**, review the backend-canonical non-secret desired-state diff, exact JSON, SHA-256 hash, policy result, and cost estimate.
-8. Click **Sign & submit idempotently**. Submission is enabled only on this final step after successful preview without policy blockers. The browser signer first persists the reviewed managed configuration with `service/update`, then signs `service/deploy` with that exact displayed hash as `expected_desired_state_hash` and its idempotency key.
+7. In **Review & sign**, review the accepted bounded plan summary, SHA-256 desired-state hash, policy summary, and cost estimate. The full desired-state diff is not published in the public status.
+8. Click **Sign & submit idempotently**. Submission is enabled only on this final step after successful preview without policy blockers. The browser signer first persists the reviewed managed configuration with `service/update`, then signs a `deployment/create` intent with that exact displayed hash as `expected_desired_state_hash`.
 
 For an Arcana-ready deployment, operators can enter a `8080:8080` port mapping and enable `GET /healthz` on port `8080`; these are operator-entered values, not product-specific defaults in the generic wizard.
 
@@ -126,28 +126,9 @@ For a single explicit unit, the wizard selects its durable ID automatically. For
 
 Deployment intent creation is signer-first. The CLI and the web console publish signed kind-`30900` deployment intents, wait for scoped kind `30315` status and canonical observables for durable progress; the CLI keeps the signed event in its outbox for inspection or retry. CLI preview and route-attach also publish `deployment/preview` and `deployment/route-attach` intents. Preview displays only the bounded, non-secret plan and review hash from accepted `30315` status `data`; it cannot retrieve the full desired state from status. Route-attach supports an optional `--expected-updated-at` compare-and-set revision. MCP and agent flows may still use ContextVM JSON-RPC methods over Nostr kind `25910` (or encrypted `1059`/`21059` wrappers) during migration. Transitional REST `POST /api/v1/deployments/intents` is available when a control-plane command publisher is configured; it publishes the same signed `service/deploy` command, requires relay `OK` acceptance through the publisher receipt, and returns `202` command metadata instead of a synchronous deployment-intent domain object.
 
-### Nostr (ContextVM)
+### Nostr intent preview
 
-The browser obtains its authoritative review through signed `service/deploy-preview`. That method accepts the selected IDs plus `managed_runtime_config` and returns the exact sanitized `current_desired_state`, proposed `desired_state`, `desired_state_hash`, and policy evaluation. It does not persist or apply runtime state.
-
-After signed `service/update` persists the same normalized managed configuration, publish a ContextVM `service/deploy` request as kind `25910` or inside an encrypted `1059`/`21059` wrapper:
-
-```json
-{
-  "kind": 25910,
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"deploy-svc-123-env-456\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"svc-123\",\"environment_id\":\"env-456\",\"deployment_unit_id\":\"unit-max\",\"artifact_id\":\"art-789\",\"_meta\":{\"progressToken\":\"deploy-svc-123-env-456\"}}}",
-  "tags": [
-    ["p", "<bahia-service-pubkey>"],
-    ["method", "service/deploy"],
-    ["service", "svc-123"],
-    ["environment", "env-456"],
-    ["unit", "unit-max"],
-    ["artifact", "art-789"]
-  ]
-}
-```
-
-Require relay `OK` with `accepted=true`. Treat the ContextVM response as receipt only; deployment completion comes from canonical observables.
+The browser signs `deployment/preview` at `deployment-preview:<service-id>:<environment-id>` with the selected IDs, managed runtime configuration, `compact=true`, and a fresh `intent_id`. It waits for the correlated, service-authored kind-30315 accepted status. The bounded `data` contains `desired_state_hash`, non-secret `desired_state_summary`, route approval flag, and policy summary; it does not contain a full desired-state snapshot or secret values. A rejected status displays its reason. The browser then signs the service update and deployment create intent with the reviewed hash. Relay `OK` confirms publication, not preview acceptance or deployment completion.
 
 ## Monitoring Deployments
 

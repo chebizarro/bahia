@@ -545,7 +545,7 @@ test.describe('Policies CRUD Smoke Test', () => {
     await page.locator('#eval-environment').selectOption('env-1');
     await page.locator('#eval-artifact').fill('artifact-for-policy');
     await page.getByRole('button', { name: 'Run Evaluation' }).click();
-    request = await expectContextVMOperation(page, 'policy/evaluate');
+    request = await expectIntentOperation(page, 'policy/evaluate');
     expect(decodeRequestParams(request)).toMatchObject({
       environment_id: 'env-1',
       artifact_id: 'artifact-for-policy'
