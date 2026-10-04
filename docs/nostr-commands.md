@@ -4,9 +4,13 @@
 
 For registered intent domains (enabled by default unless in `nostr.intent_domains_disabled`), publish client-signed kind `30900` with `schema=bahia.intent.<domain>.v1`, `domain` and `op` tags, and JSON content containing stable `intent_id`. When used, `expected_updated_at` must be copied as an RFC3339 string from canonical `updated_at`, never encoded as a numeric epoch. Supported ops: `deployment/create|approve|reject|rollback`, `runtime/deploy|restart|stop`, `llm/deploy|rollback|approve|reject`, and `backup/restore-approval`. The [wire fixtures](../web/tests/fixtures/deployment-intents.json) specify content fields. Watch kind `30315` status and daemon-authored state, not the submission receipt, for outcomes. Disabled domains continue to use legacy ContextVM handlers.
 
-## Artifact, policy, and approval commands
+## D79 operator requests
 
-Use ContextVM `artifact/register` and `tool/approval-response`, not retired
+`ml/model-import`, `ml/recipe-apply`, `ml/recipe-run`, `ml/inference-deploy`, `ml/inference-approval`, `ml/inference-rollback`, `tool/approval-response`, `build/request`, and `adoption/scan` now have signed `30900` intent handlers. Use `intent_id` as a tag-level idempotency key; `content.intent_id` in an approval response instead names the pending deployment or provisioning intent. The [D79 fixtures](../web/tests/fixtures/d79-intent-content.json) define coordinates, permissions, modelling and content. Request results appear in requester-scoped `30315` `data`; adoption findings are redacted and paged. The registered ContextVM methods retain dual dispatch during caller migration.
+
+## Legacy command publisher compatibility
+
+Use ContextVM `artifact/register` and `tool/approval-response` only for unmigrated callers, not retired
 numeric request kinds. Legacy web policy methods remain until caller migration;
 MCP policy CRUD and evaluation use kind-30900 intents. LLM approvals use
 `approval/llm-approve` / `approval/llm-reject`; DNS record changes

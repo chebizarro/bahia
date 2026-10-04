@@ -25,10 +25,21 @@ type MLIntentRegistry interface {
 	DeleteInferenceEndpoint(context.Context, uuid.UUID) error
 }
 
-type MLIntentHandler struct{ registry MLIntentRegistry }
+type MLIntentHandler struct {
+	registry     MLIntentRegistry
+	environments interface {
+		GetEnvironmentByName(context.Context, string) (*domain.Environment, error)
+	}
+}
 
-func NewMLIntentHandler(registry MLIntentRegistry) *MLIntentHandler {
-	return &MLIntentHandler{registry: registry}
+func NewMLIntentHandler(registry MLIntentRegistry, environments ...interface {
+	GetEnvironmentByName(context.Context, string) (*domain.Environment, error)
+}) *MLIntentHandler {
+	h := &MLIntentHandler{registry: registry}
+	if len(environments) > 0 {
+		h.environments = environments[0]
+	}
+	return h
 }
 func (*MLIntentHandler) PermissionFor(string) domain.Permission { return domain.PermWriteServices }
 func (*MLIntentHandler) IsFleetScoped() bool                    { return true }
@@ -42,6 +53,8 @@ func (h *MLIntentHandler) HandleIntent(ctx context.Context, intent *Intent) erro
 		return fmt.Errorf("marshal ML intent: %w", err)
 	}
 	switch intent.Op {
+	case "model-import", "recipe-apply", "recipe-run", "inference-deploy", "inference-approval", "inference-rollback":
+		return h.handleMLOperation(ctx, intent, content)
 	case "model-create", "model-update":
 		var model domain.MLModel
 		if err := json.Unmarshal(content, &model); err != nil {

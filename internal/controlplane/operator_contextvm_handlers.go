@@ -124,6 +124,17 @@ func (h *OperatorContextVMHandlers) AdoptionScan(ctx context.Context, request Co
 	if err != nil {
 		return nil, err
 	}
+	if h.intentProcessor != nil && h.intentProcessor.Handler("adoption") != nil {
+		content := map[string]any{}
+		if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
+			return nil, err
+		}
+		intent := &Intent{Event: request.Event, Domain: "adoption", Op: "scan", IntentID: effectiveIdempotencyKey(request, request.Event.ID.Hex()), Coordinate: "adoption:fleet", Content: content, Actor: request.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result, nil
+	}
 	previews, err := h.adoption.Scan(ctx, service.AdoptionScanRequest{Targets: targets})
 	if err != nil {
 		return nil, err

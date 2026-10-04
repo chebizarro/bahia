@@ -1,0 +1,152 @@
+{
+  "schema": "bahia.intent-fixtures.d79.v1",
+  "intents": [
+    {
+      "domain": "ml",
+      "op": "model-import",
+      "coordinate": "model:weather",
+      "permission": "fleet-operator",
+      "modelling": "desired-state",
+      "idempotency_key": "018f6a60-0000-7000-8000-000000000020",
+      "content": {
+        "model": "model:weather",
+        "revision": "v1",
+        "source": "huggingface",
+        "source_uri": "hf://weather/model"
+      }
+    },
+    {
+      "domain": "ml",
+      "op": "recipe-apply",
+      "coordinate": "recipe:train:1",
+      "permission": "fleet-operator",
+      "modelling": "desired-state",
+      "idempotency_key": "018f6a60-0000-7000-8000-000000000021",
+      "content": {
+        "name": "train",
+        "version": "1",
+        "yaml": "name: train\nversion: '1'\ninputs: {}\nsteps:\n  - action: fetch_source\n    outputs:\n      source: artifact_ref\noutputs: {}\n"
+      }
+    },
+    {
+      "domain": "ml",
+      "op": "recipe-run",
+      "coordinate": "recipe-run:018f6a60-0000-7000-8000-000000000006",
+      "permission": "fleet-operator",
+      "modelling": "request",
+      "idempotency_key": "018f6a60-0000-7000-8000-000000000022",
+      "content": {
+        "inputs": {
+          "dataset": "weather"
+        },
+        "recipe_id": "018f6a60-0000-7000-8000-000000000006"
+      }
+    },
+    {
+      "domain": "ml",
+      "op": "inference-deploy",
+      "coordinate": "inference-deploy:018f6a60-0000-7000-8000-000000000003",
+      "permission": "fleet-operator",
+      "modelling": "request",
+      "idempotency_key": "018f6a60-0000-7000-8000-000000000023",
+      "content": {
+        "endpoint_id": "018f6a60-0000-7000-8000-000000000003",
+        "model_version_id": "018f6a60-0000-7000-8000-000000000004"
+      }
+    },
+    {
+      "domain": "ml",
+      "op": "inference-approval",
+      "coordinate": "inference-approval:018f6a60-0000-7000-8000-000000000005",
+      "permission": "fleet-operator",
+      "modelling": "request",
+      "idempotency_key": "018f6a60-0000-7000-8000-000000000024",
+      "content": {
+        "decision": "approve",
+        "intent_id": "018f6a60-0000-7000-8000-000000000005"
+      }
+    },
+    {
+      "domain": "ml",
+      "op": "inference-approval",
+      "coordinate": "inference-approval:018f6a60-0000-7000-8000-000000000005",
+      "permission": "fleet-operator",
+      "modelling": "request",
+      "idempotency_key": "018f6a60-0000-7000-8000-000000000025",
+      "content": {
+        "decision": "reject",
+        "intent_id": "018f6a60-0000-7000-8000-000000000005"
+      }
+    },
+    {
+      "domain": "ml",
+      "op": "inference-rollback",
+      "coordinate": "inference-rollback:018f6a60-0000-7000-8000-000000000003",
+      "permission": "fleet-operator",
+      "modelling": "request",
+      "idempotency_key": "018f6a60-0000-7000-8000-000000000026",
+      "content": {
+        "endpoint_id": "018f6a60-0000-7000-8000-000000000003"
+      }
+    },
+    {
+      "domain": "tool",
+      "op": "approval-response",
+      "coordinate": "tool-approval:018f6a60-0000-7000-8000-000000000005",
+      "permission": "fleet-operator",
+      "modelling": "request",
+      "idempotency_key": "018f6a60-0000-7000-8000-000000000027",
+      "content": {
+        "action": "approve",
+        "intent_id": "018f6a60-0000-7000-8000-000000000005",
+        "reason": "operator reviewed"
+      }
+    },
+    {
+      "domain": "tool",
+      "op": "approval-response",
+      "coordinate": "tool-approval:018f6a60-0000-7000-8000-000000000005",
+      "permission": "fleet-operator",
+      "modelling": "request",
+      "idempotency_key": "018f6a60-0000-7000-8000-000000000028",
+      "content": {
+        "action": "reject",
+        "intent_id": "018f6a60-0000-7000-8000-000000000005",
+        "reason": "operator reviewed"
+      }
+    },
+    {
+      "domain": "build",
+      "op": "request",
+      "coordinate": "build-request:018f6a60-0000-7000-8000-000000000002",
+      "permission": "services:write",
+      "modelling": "request",
+      "idempotency_key": "018f6a60-0000-7000-8000-000000000029",
+      "content": {
+        "artifact_repo": "registry.example/api",
+        "build_args": {},
+        "git_ref": "refs/heads/main",
+        "repository_credential_ref": "018f6a60-0000-7000-8000-000000000007",
+        "service_id": "018f6a60-0000-7000-8000-000000000002"
+      }
+    },
+    {
+      "domain": "adoption",
+      "op": "scan",
+      "coordinate": "adoption:018f6a60-0000-7000-8000-000000000001",
+      "permission": "adoption-operator",
+      "modelling": "request",
+      "idempotency_key": "018f6a60-0000-7000-8000-000000000030",
+      "content": {
+        "limit": 20,
+        "offset": 0,
+        "targets": [
+          {
+            "endpoint_ref": "docker-prod",
+            "name": "production"
+          }
+        ]
+      }
+    }
+  ]
+}

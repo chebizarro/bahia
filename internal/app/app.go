@@ -1658,7 +1658,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// --- D70 ML intent registration (kept separate from D69 app wiring) ---
 	if enabledDomains["ml"] && nostrProjector.Enabled() && mlRegistry != nil {
-		intentProcessor.RegisterHandler("ml", controlplane.NewMLIntentHandler(mlRegistry))
+		intentProcessor.RegisterHandler("ml", controlplane.NewMLIntentHandler(mlRegistry, registry))
 	}
 	// --- end D70 ML intent registration ---
 
@@ -2469,7 +2469,7 @@ func New(cfg *config.Config) (*App, error) {
 				zap.String("source_provider", cfg.HiveCI.Initiator.SourceProvider),
 			)
 		}
-		controlplane.NewEncryptedBuildHandlers(controlplane.EncryptedBuildHandlersConfig{
+		buildHandlers := controlplane.NewEncryptedBuildHandlers(controlplane.EncryptedBuildHandlersConfig{
 			Starter:           hiveCIBuildStarter,
 			Registry:          registry,
 			Builds:            buildRepo,
@@ -2477,7 +2477,12 @@ func New(cfg *config.Config) (*App, error) {
 			Services:          serviceRepo,
 			Secrets:           secretRepo,
 			RBAC:              tenantRBAC,
-		}).Register(encryptedRequestTransport)
+			IntentProcessor:   intentProcessor,
+		})
+		if enabledDomains["build"] {
+			intentProcessor.RegisterHandler("build", controlplane.NewBuildIntentHandler(buildHandlers))
+		}
+		buildHandlers.Register(encryptedRequestTransport)
 		controlplane.NewOperatorContextVMHandlers(controlplane.OperatorContextVMHandlersConfig{
 			Adoption:                       adoptionSvc,
 			RuntimeLifecycle:               runtimeLifecycleSvc,
@@ -2491,7 +2496,7 @@ func New(cfg *config.Config) (*App, error) {
 		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC, fleetOperatorGate, intentProcessor)
 		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient, cfg.Loom.AuthorizedPubkeys, fleetOperatorGate)
 		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled, fleetOperatorGate, intentProcessor)
-		controlplane.RegisterMLRegistryContextVMHandlers(encryptedRequestTransport, mlRegistry, fleetOperatorGate, intentProcessor)
+		controlplane.RegisterMLRegistryContextVMHandlers(encryptedRequestTransport, mlRegistry, fleetOperatorGate, intentProcessor, registry)
 		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher, tenantRBAC)
 		relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
 		controlplane.RegisterRelaySettingsContextVMHandlers(encryptedRequestTransport, controlplane.RelaySettingsHandlerConfig{
@@ -2595,6 +2600,9 @@ func New(cfg *config.Config) (*App, error) {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRouteStatePublisher(llmRoutePublisher))
 		}
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
+		if enabledDomains["tool"] {
+			intentProcessor.RegisterHandler("tool", controlplane.NewToolIntentHandler(reactor))
+		}
 		if enabledDomains["worker"] && workerRepo != nil {
 			intentProcessor.RegisterHandler("worker", controlplane.NewWorkerIntentHandler(reactor))
 		}

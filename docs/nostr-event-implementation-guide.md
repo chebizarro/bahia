@@ -4,7 +4,11 @@
 
 With registered intent domains enabled by default, clients sign kind `30900` events with `schema=bahia.intent.<domain>.v1`, `domain=deployment|runtime|llm|backup`, `op`, and a stable `content.intent_id`. Deployment operations are `create`, `approve`, `reject`, and `rollback`; runtime operations are `deploy`, `restart`, and `stop`; LLM adds `deploy`, `rollback`, `approve`, and `reject`; backup adds `restore-approval`. If present, `content.expected_updated_at` is the canonical record's RFC3339 `updated_at` string, not a numeric epoch. See the [wire fixtures](../web/tests/fixtures/deployment-intents.json) and [operation table](designs/phase3-authority-inversion.md#13-intent-event-structure). The daemon emits bounded `30315` status and its existing canonical state publishers remain the sole state writers. ContextVM mutation handlers dispatch in-process through the same intent processor only for enabled domains; disabled domains retain their legacy execution path.
 
-## Artifact, policy, and approval publishers
+## D79 operator intent families
+
+No new kind is introduced. Signed `30900` intents with `schema=bahia.intent.<domain>.v1` now accept ML model import, recipe definition/run, inference deploy/approval/rollback, tool provisioning approval, HiveCI build request, and adoption scan. The tag-level `intent_id` is the replay key even when approval content also has an `intent_id` target. The daemon invokes its existing registry, approval, build-initiation and adoption service methods once and reports the daemon-authored result through requester-scoped `30315` status. `adoption/scan` status data contains a redacted, byte-bounded page of findings. Coordinates, payloads and permissions are in the [D79 fixtures](../web/tests/fixtures/d79-intent-content.json). Unmigrated ContextVM methods use in-process dual dispatch; their legacy service path remains available until the caller migration closes.
+
+## Legacy artifact, policy, and approval publishers
 
 Artifact registration and tool approval still publish signed ContextVM JSON-RPC
 kind `25910` requests. Legacy web callers also use `policy/create`,

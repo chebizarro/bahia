@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -118,6 +119,7 @@ type EncryptedBuildHandlersConfig struct {
 	Services          encryptedServiceLoader
 	Secrets           BuildCredentialReferenceLoader
 	RBAC              *auth.RBAC
+	IntentProcessor   *IntentProcessor
 }
 
 type EncryptedBuildHandlers struct {
@@ -128,13 +130,14 @@ type EncryptedBuildHandlers struct {
 	services          encryptedServiceLoader
 	secrets           BuildCredentialReferenceLoader
 	rbac              *auth.RBAC
+	intentProcessor   *IntentProcessor
 }
 
 func NewEncryptedBuildHandlers(cfg EncryptedBuildHandlersConfig) *EncryptedBuildHandlers {
 	return &EncryptedBuildHandlers{
 		starter: cfg.Starter, registry: cfg.Registry, builds: cfg.Builds,
 		artifactRegistrar: cfg.ArtifactRegistrar, services: cfg.Services,
-		secrets: cfg.Secrets, rbac: cfg.RBAC,
+		secrets: cfg.Secrets, rbac: cfg.RBAC, intentProcessor: cfg.IntentProcessor,
 	}
 }
 
@@ -149,6 +152,52 @@ func (h *EncryptedBuildHandlers) Register(transport *EncryptedRequestTransport) 
 }
 
 func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request ContextVMRequest) (any, error) {
+	if h != nil && h.intentProcessor != nil && h.intentProcessor.Handler("build") != nil {
+		if request.Event == nil {
+			return nil, fmt.Errorf("build/request requires an authenticated requester")
+		}
+		var payload ArcanaBuildRequest
+		if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
+			return nil, err
+		}
+		if err := validateBuildRequest(payload); err != nil {
+			return nil, err
+		}
+		content := map[string]any{}
+		if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
+			return nil, err
+		}
+		intentID := effectiveIdempotencyKey(request, request.Event.ID.Hex())
+		coordinate := "build-request:" + payload.ServiceID.String()
+		var orgID uuid.UUID
+		if recorded := h.intentProcessor.ProcessedIntent(intentID); recorded != nil {
+			coordinate = recorded.Coordinate
+			orgID, _ = uuid.Parse(recorded.OrgID)
+		} else {
+			if h.services == nil {
+				return nil, fmt.Errorf("build service repository is not configured")
+			}
+			svc, err := h.services.GetByID(ctx, payload.ServiceID)
+			if err != nil {
+				return nil, err
+			}
+			if svc == nil {
+				return nil, fmt.Errorf("service not found")
+			}
+			orgID = svc.OrgID
+		}
+		intent := &Intent{Event: request.Event, Domain: "build", Op: "request", OrgID: orgID,
+			IntentID: intentID, Coordinate: coordinate,
+			Content: content, Actor: request.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result, nil
+	}
+	return h.requestBuildLegacy(ctx, request)
+}
+
+func (h *EncryptedBuildHandlers) requestBuildLegacy(ctx context.Context, request ContextVMRequest) (any, error) {
 	var payload ArcanaBuildRequest
 	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
 		return nil, fmt.Errorf("decode build/request params: %w", err)
@@ -281,7 +330,7 @@ func validateCanonicalBuildIdentity(existing *domain.Build, buildID, serviceID u
 	if existing == nil || existing.ID != buildID || existing.ServiceID != serviceID ||
 		existing.CISystem != domain.CISystemHiveCI || strings.TrimSpace(existing.CIRunID) == "" ||
 		existing.SourceEventID != sourceEventID {
-		return fmt.Errorf("canonical build %s conflicts with replayed build request", buildID)
+		return &intentStateConflictError{message: fmt.Sprintf("canonical build %s conflicts with replayed build request", buildID)}
 	}
 	return nil
 }
@@ -296,7 +345,7 @@ func validateCanonicalBuild(existing, requested *domain.Build) error {
 		strings.TrimSpace(existing.GitRef) != strings.TrimSpace(requested.GitRef) ||
 		existing.CISystem != requested.CISystem || existing.CIRunID != requested.CIRunID ||
 		existing.SourceEventID != requested.SourceEventID {
-		return fmt.Errorf("canonical build %s conflicts with replayed build request", requested.ID)
+		return &intentStateConflictError{message: fmt.Sprintf("canonical build %s conflicts with replayed build request", requested.ID)}
 	}
 	return nil
 }
