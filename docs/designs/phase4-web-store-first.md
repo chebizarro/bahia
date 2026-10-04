@@ -385,8 +385,8 @@ These requirements are to be verified against C1's merged scheme in W3-S2:
 |---|-------------|-----|
 | C1-R1 | The content key must be **NIP-44 wrapped to each member pubkey** and discoverable via a tag or a published key-distribution event | The web signer (NIP-07 or NIP-46 bunker) must be able to unwrap it using standard `nip44.decrypt` |
 | C1-R2 | The key-reference mechanism must work with **NIP-46 bunker signers**, not just local keys | `nip44.decrypt` via the bunker relay transport must be sufficient; no raw privkey access required |
-| C1-R3 | Membership events must be individually decryptable by each member | Each member receives their own gift-wrapped copy (already specified in Phase 3 §2.2) |
-| C1-R4 | When a member is added or removed, the content key is **rotated** and re-wrapped to the current member set | The web re-fetches key-distribution events on membership change; stale keys are replaced in memory |
+| C1-R3 | Membership records must be decryptable by every current member | **Satisfied (2026-10-04)** by the shared OCK: one ciphertext per record, readable by every holder of the current key version; per-member copies are not required (see `org-membership-group-standards.md`) |
+| C1-R4 | On removal/downgrade the content key is **rotated**; add only wraps the current key. Historical records stay under their version until an explicit `org/rekey` *refounding* re-publishes them under the newest version | The web re-fetches kind-32010 envelopes on membership change and drops a superseded version once no cached record references it (see `org-membership-group-standards.md` §Recommendation 3) |
 | C1-R5 | The content key must never be persisted to IndexedDB or localStorage | It lives only in the in-memory signer session; loss = re-derive on next login |
 
 ### 5.5 Role-gated UI
