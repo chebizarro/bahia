@@ -54,6 +54,7 @@ test('deployment approval stays pending until scoped acceptance', async ({ page 
 test('DNS zone create stays pending until scoped acceptance', async ({ page }) => {
   await installE2EMocks(page, { systemInfo });
   await page.goto('/dns');
+  await expect(page.getByRole('region', { name: 'DNS Nostr command controls' })).toContainText('operator ready');
   const form = page.locator('.command-card').first();
   await form.getByLabel('Zone').fill('example.test');
   await form.getByLabel('Backend').fill('primary');

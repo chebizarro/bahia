@@ -1,25 +1,28 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-const requestEncryptedResultMock = vi.hoisted(() => vi.fn());
-vi.mock('../../src/lib/nostr/encrypted-controlplane.js', () => ({ requestEncryptedResult: requestEncryptedResultMock }));
+const publishIntentForStatusMock = vi.hoisted(() => vi.fn());
+vi.mock('../../src/lib/nostr/intent-client.svelte.js', () => ({
+  publishIntentForStatus: publishIntentForStatusMock,
+  resolveIntentOrgId: () => 'f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7'
+}));
 
-describe('DNS ContextVM boundary', () => {
+describe('DNS remediation intent boundary', () => {
   let dns;
   beforeEach(async () => {
     vi.resetModules();
-    requestEncryptedResultMock.mockReset();
-    requestEncryptedResultMock.mockResolvedValue({ requestEventId: 'req-1', result: { status: 'success', message: 'done' } });
+    publishIntentForStatusMock.mockReset();
+    publishIntentForStatusMock.mockResolvedValue({ data: { status: 'succeeded', message: 'done' } });
     dns = await import('../../src/lib/nostr/dns-controlplane.js');
   });
-  it('keeps only unsupported drift remediation on ContextVM', async () => {
-    for (const command of [dns.DNS_COMMANDS.ZONE_CREATE, dns.DNS_COMMANDS.POLICY_APPLY,
-      dns.DNS_COMMANDS.RECORD_OVERRIDE, dns.DNS_COMMANDS.OVERRIDE_RETIRE]) {
-      expect(() => dns.buildDNSCommandRequest({ command })).toThrow(/Unknown DNS command/);
-    }
+  it('publishes drift remediation as a pending signed intent and resolves from accepted status data', async () => {
+    const onStatus = vi.fn();
     const tracker = await dns.startDNSCommand({ command: dns.DNS_COMMANDS.DRIFT_REMEDIATE,
-      payload: { zone: 'prod.example', idempotency_key: 'drift-1' } });
-    expect(requestEncryptedResultMock).toHaveBeenCalledWith({ operation: 'dns/drift-remediate',
-      payload: { zone: 'prod.example', idempotency_key: 'drift-1' },
-      tags: [['zone', 'prod.example'], ['action', 'dns_drift_remediate'], ['idempotency-key', 'drift-1']], signal: undefined });
-    await expect(tracker.result).resolves.toMatchObject({ status: 'success', requestEventId: 'req-1' });
+      payload: { zone: 'prod.example', idempotency_key: 'obsolete' }, onStatus });
+    expect(publishIntentForStatusMock).toHaveBeenCalledWith(expect.objectContaining({ domain: 'dns', op: 'drift-remediate',
+      coordinate: 'dns-remediate:prod.example', content: { zone: 'prod.example', intent_id: expect.any(String) } }),
+    { signal: undefined });
+    expect(tracker.intentId).toMatch(/^[0-9a-f-]{36}$/);
+    await expect(tracker.result).resolves.toMatchObject({ status: 'succeeded', message: 'done', intentId: tracker.intentId });
+    expect(onStatus).toHaveBeenCalledWith({ data: { status: 'succeeded', message: 'done' } });
+    await expect(dns.startDNSCommand({ command: dns.DNS_COMMANDS.ZONE_CREATE })).rejects.toThrow(/signed intents/);
   });
 });

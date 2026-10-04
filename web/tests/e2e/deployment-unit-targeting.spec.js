@@ -108,7 +108,7 @@ test.describe('Explicit deployment-unit targeting', () => {
 
     await dialog.getByLabel('Artifact from recent builds *').selectOption('artifact-arcana');
     await reachDesiredStateReview(dialog, { ports: '8080:8080', healthPath: '/healthz', healthPort: 8080 });
-    await expect(dialog.getByText('Exact signed desired state')).toBeVisible();
+    await expect(dialog.getByText('Accepted deployment plan')).toBeVisible();
     await expect(dialog.getByText(`sha256:${'d'.repeat(64)}`, { exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: 'Sign & submit idempotently' }).click();
 
@@ -117,7 +117,7 @@ test.describe('Explicit deployment-unit targeting', () => {
       requests: window.__BAHIA_E2E_PUBLIC_REQUESTS,
       intent: window.__BAHIA_E2E_PUBLIC_STATE.deploymentIntents[0]
     }));
-    const preview = trace.requests.find((request) => request.operation === 'service/deploy-preview');
+    const preview = trace.requests.find((request) => request.operation === 'deployment/preview');
     await expect(page.getByTestId('deployment-pending-intents')).toContainText('Pending');
     const deploy = await page.evaluate(() => window.__BAHIA_E2E_SIGNED_INTENTS.find(event =>
       event.tags.some(tag => tag[0] === 'domain' && tag[1] === 'deployment')
@@ -160,7 +160,7 @@ test.describe('Explicit deployment-unit targeting', () => {
     await expect(dialog.getByText('Compose deployment units must use Bahia-managed ownership.', { exact: true }).last()).toBeVisible();
 
     const operations = await page.evaluate(() => window.__BAHIA_E2E_PUBLIC_REQUESTS.map((request) => request.operation));
-    expect(operations).not.toContain('service/deploy-preview');
+    expect(operations).not.toContain('deployment/preview');
     expect(operations).not.toContain('service/deploy');
   });
 });

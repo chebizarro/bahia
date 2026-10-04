@@ -53,7 +53,7 @@ describe('DNS command page model', () => {
       reason: ''
     }).errors).toEqual(['TTL must be a positive integer.', 'Reason is required for operator overrides.']);
 
-    expect(validateDNSCommandForm(DNS_COMMANDS.DRIFT_REMEDIATE, { zone: 'prod.example.com', fqdn: 'api.prod.example.com' })).toEqual({ valid: true, errors: [] });
+    expect(validateDNSCommandForm(DNS_COMMANDS.DRIFT_REMEDIATE, { zone: 'prod.example.com' })).toEqual({ valid: true, errors: [] });
   });
 
   it('normalizes operator form fields into Nostr command payloads used by the DNS store', () => {
@@ -92,6 +92,8 @@ describe('DNS command page model', () => {
       ttl: 120,
       reason: 'operator approved failover'
     });
+    expect(buildDNSCommandPayload(DNS_COMMANDS.DRIFT_REMEDIATE, { zone: 'prod.example.com' }))
+      .toEqual({ zone: 'prod.example.com' });
   });
 
   it('summarizes publish OK acceptance and event-driven result rendering data', () => {

@@ -198,7 +198,7 @@
     <div class="panel-header">
       <div>
         <h2>Signed DNS control-plane commands</h2>
-        <p>Supported changes are signed intents. Pending rows resolve from scoped daemon intent statuses; drift remediation remains a ContextVM command.</p>
+        <p>Changes are signed intents. Pending rows resolve from scoped daemon intent statuses.</p>
       </div>
       <span class={`badge ${operatorReady ? 'healthy' : 'critical'}`}>{operatorReady ? 'operator ready' : 'auth required'}</span>
     </div>
@@ -265,9 +265,6 @@
         <h3>{DNS_CONTROL_FORMS[DNS_COMMANDS.DRIFT_REMEDIATE].title}</h3>
         <p>{DNS_CONTROL_FORMS[DNS_COMMANDS.DRIFT_REMEDIATE].description}</p>
         <label>Zone<input bind:value={commandForms[DNS_COMMANDS.DRIFT_REMEDIATE].zone} autocomplete="off" /></label>
-        <label>FQDN<input bind:value={commandForms[DNS_COMMANDS.DRIFT_REMEDIATE].fqdn} autocomplete="off" /></label>
-        <label>Reason<textarea bind:value={commandForms[DNS_COMMANDS.DRIFT_REMEDIATE].reason}></textarea></label>
-        <label>Idempotency key<input bind:value={commandForms[DNS_COMMANDS.DRIFT_REMEDIATE].idempotencyKey} autocomplete="off" /></label>
         {#if commandFormErrors[DNS_COMMANDS.DRIFT_REMEDIATE]?.length}<ul class="form-errors">{#each commandFormErrors[DNS_COMMANDS.DRIFT_REMEDIATE] as error}<li>{error}</li>{/each}</ul>{/if}
         <button type="submit" disabled={!operatorReady || submittingCommand === DNS_COMMANDS.DRIFT_REMEDIATE}>{submittingCommand === DNS_COMMANDS.DRIFT_REMEDIATE ? 'Signing…' : DNS_CONTROL_FORMS[DNS_COMMANDS.DRIFT_REMEDIATE].submitLabel}</button>
       </form>
@@ -284,8 +281,8 @@
             <li class="run-card">
               <header><strong>{view.command}</strong><span class={`badge ${view.error ? 'critical' : view.phase === 'completed' ? 'healthy' : view.phase === 'failed' || view.phase === 'rejected' || view.phase === 'error' ? 'critical' : 'unknown'}`}>{view.phase}</span></header>
               <dl>
-                <div><dt>Request event id</dt><dd><code>{view.requestEventId || 'Pending signed event'}</code></dd></div>
-                <div><dt>Relay OK</dt><dd>{view.okSummary}</dd></div>
+                <div><dt>Intent ID</dt><dd><code>{view.intentId || view.requestEventId || 'Signing'}</code></dd></div>
+                <div><dt>Publication</dt><dd>{view.okSummary}</dd></div>
               </dl>
               {#if view.statusLines.length}
                 <div class="run-section"><strong>Status progress</strong><ul>{#each view.statusLines as line}<li>{line}</li>{/each}</ul></div>

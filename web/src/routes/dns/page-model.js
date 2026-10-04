@@ -62,7 +62,7 @@ export function initialDNSCommandForms() {
     [DNS_COMMANDS.POLICY_APPLY]: { policyId: '', name: '', zone: '', environment: '', rules: '', enabled: true },
     [DNS_COMMANDS.RECORD_OVERRIDE]: { zone: '', recordName: '', recordType: 'A', value: '', ttl: '', reason: '' },
     [DNS_COMMANDS.OVERRIDE_RETIRE]: { overrideId: '', reason: '' },
-    [DNS_COMMANDS.DRIFT_REMEDIATE]: { zone: '', fqdn: '', reason: '', idempotencyKey: '' }
+    [DNS_COMMANDS.DRIFT_REMEDIATE]: { zone: '' }
   };
 }
 
@@ -81,12 +81,6 @@ function positiveInteger(value) {
   if (!/^\d+$/.test(normalized)) return null;
   const parsed = Number.parseInt(normalized, 10);
   return parsed > 0 ? parsed : null;
-}
-
-function appendIdempotency(payload, form) {
-  const idempotencyKey = text(form.idempotencyKey);
-  if (idempotencyKey) payload.idempotency_key = idempotencyKey;
-  return payload;
 }
 
 export function validateDNSCommandForm(command, form = {}) {
@@ -120,7 +114,6 @@ export function validateDNSCommandForm(command, form = {}) {
       break;
     case DNS_COMMANDS.DRIFT_REMEDIATE:
       if (!isDnsName(form.zone)) errors.push('Zone must be a DNS name.');
-      if (text(form.fqdn) && !isDnsName(form.fqdn)) errors.push('FQDN must be a DNS name when provided.');
       break;
     default:
       errors.push('Unknown DNS command.');
@@ -155,10 +148,7 @@ export function buildDNSCommandPayload(command, form = {}) {
     case DNS_COMMANDS.OVERRIDE_RETIRE:
       return { override_id: text(form.overrideId), reason: text(form.reason) };
     case DNS_COMMANDS.DRIFT_REMEDIATE:
-      payload.zone = text(form.zone);
-      if (text(form.fqdn)) payload.fqdn = text(form.fqdn);
-      if (text(form.reason)) payload.reason = text(form.reason);
-      return appendIdempotency(payload, form);
+      return { zone: text(form.zone) };
     default:
       throw new Error(`Unknown DNS command: ${command}`);
   }
@@ -179,7 +169,8 @@ export function commandRunView(run) {
     command: run.command,
     phase: run.phase,
     requestEventId: run.requestEventId || '',
-    okSummary: summarizePublishOk(run.publishOk),
+    intentId: run.intentId || '',
+    okSummary: run.intentId ? 'Tracked by signed intent outbox' : summarizePublishOk(run.publishOk),
     statusLines: Array.isArray(run.statusEvents)
       ? run.statusEvents.map((event) => [event.status, event.step, event.message].filter(Boolean).join(' · '))
       : [],

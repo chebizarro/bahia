@@ -54,7 +54,6 @@
   import {
     buildManagedRuntimeConfig,
     createManagedRuntimeForm,
-    desiredStateChanges,
     isRegisteredImmutableArtifact
   } from '$lib/deployment-desired-state.js';
   import {
@@ -191,8 +190,6 @@
   let deployRuntimeForm = $state(createManagedRuntimeForm());
   let deployManagedConfigPreview = $state(null);
   let deployDesiredStatePreview = $state(null);
-  let deployCurrentDesiredState = $state(null);
-  let deployRoutePreview = $state(null);
   let deployRouteApprovalRequired = $state(false);
   let deployForm = $state({
     environment_id: '',
@@ -559,8 +556,6 @@
     deployPolicyPreviewLoading = false;
     deployManagedConfigPreview = null;
     deployDesiredStatePreview = null;
-    deployCurrentDesiredState = null;
-    deployRoutePreview = null;
     deployRouteApprovalRequired = false;
   }
 
@@ -621,9 +616,8 @@
       });
       if (deployPolicyPreviewRequestToken === requestToken) {
         deployManagedConfigPreview = managedRuntimeConfig;
-        deployDesiredStatePreview = preview?.desired_state || null;
-        deployCurrentDesiredState = preview?.current_desired_state || null;
-        deployRoutePreview = preview?.route_preview || null;
+        deployDesiredStatePreview = preview?.desired_state_hash
+          ? { desired_hash: preview.desired_state_hash, ...preview.desired_state_summary } : null;
         deployRouteApprovalRequired = Boolean(preview?.route_approval_required);
         deployPolicyPreview = preview?.policy || null;
       }
@@ -725,8 +719,7 @@
       }
       await updateService(serviceId, {
         expected_updated_at: service.updated_at,
-        managed_runtime_config: deployManagedConfigPreview,
-        idempotency_key: desiredHash
+        managed_runtime_config: deployManagedConfigPreview
       });
       await createDeploymentIntent(
         serviceId,
@@ -1083,7 +1076,6 @@
     return '';
   });
   let deployCreateDisabled = $derived(deployStep !== 6 || !deployDesiredStatePreview?.desired_hash || Boolean(deployTargetError) || Boolean(deployPolicyGateError));
-  let deployDesiredStateDiff = $derived(desiredStateChanges(deployCurrentDesiredState, deployDesiredStatePreview));
   let deployDurationError = $derived(isValidEstimatedDurationSecs(deployEstimatedDurationSecs) ? '' : 'Enter a positive whole number of seconds to preview cost.');
   let deploymentCostEstimate = $derived(summarizeDeploymentCostEstimates(deployCostEstimateWorkers, deployEstimatedDurationSecs));
   let selectedDeployArtifactBuild = $derived.by(() => {
@@ -1682,47 +1674,17 @@
     {:else if deployStep === 6}
       <section class="desired-state-review">
         <div class="preview-card-header">
-          <h3 class="subsection-title">Exact signed desired state</h3>
-          <span class="status-pill success">Canonical</span>
+          <h3 class="subsection-title">Accepted deployment plan</h3>
+          <span class="status-pill success">Bounded status</span>
         </div>
         <p class="desired-state-hash"><strong>SHA-256</strong> <code>{deployDesiredStatePreview?.desired_hash}</code></p>
-        <p class="preview-muted">This hash is included in the signed deploy request and re-built by Bahia before policy or runtime mutation.</p>
-        <details open>
-          <summary>Non-secret desired-state diff ({deployDesiredStateDiff.length} changes)</summary>
-          {#if deployDesiredStateDiff.length > 0}
-            <ul class="desired-state-diff">
-              {#each deployDesiredStateDiff as change}
-                <li><code>{change.path}</code><span>{JSON.stringify(change.before) ?? 'absent'} → {JSON.stringify(change.after) ?? 'absent'}</span></li>
-              {/each}
-            </ul>
-          {:else}
-            <p class="preview-muted">No change from the currently persisted desired state.</p>
-          {/if}
-        </details>
-        {#if deployRoutePreview}
-          <section class="route-plan-review">
-            <div class="preview-card-header">
-              <h3 class="subsection-title">Managed public route</h3>
-              <span class="status-pill success">HTTPS</span>
-            </div>
-            <dl>
-              <div><dt>Hostname</dt><dd><code>{deployRoutePreview.hostname}</code></dd></div>
-              <div><dt>Zone</dt><dd>{deployRoutePreview.zone}</dd></div>
-              <div><dt>DNS</dt><dd>{deployRoutePreview.dns?.type} {deployRoutePreview.dns?.name} → {deployRoutePreview.dns?.value} · TTL {deployRoutePreview.dns?.ttl} · proxied</dd></div>
-              <div><dt>Tunnel</dt><dd><code>{deployRoutePreview.tunnel?.tunnel_ref}</code> · {deployRoutePreview.tunnel?.origin_url}</dd></div>
-              <div><dt>Proxy</dt><dd>{deployRoutePreview.proxy?.host_match} → {deployRoutePreview.proxy?.upstream_scheme}://{deployRoutePreview.proxy?.upstream_host}:{deployRoutePreview.proxy?.upstream_port}{deployRoutePreview.proxy?.health_path}</dd></div>
-              <div><dt>TLS</dt><dd>{deployRoutePreview.tls?.mode} by {deployRoutePreview.tls?.provider}</dd></div>
-              <div><dt>Provider config</dt><dd><code>{deployRoutePreview.provider_config_hash}</code></dd></div>
-            </dl>
-            {#if deployRouteApprovalRequired}<p class="preview-warning">This protected zone requires deployment approval before application or edge mutation.</p>{/if}
-            <h4>Apply order</h4>
-            <ol>{#each deployRoutePreview.operations || [] as operation}<li>{operation.resource}: {operation.summary}</li>{/each}</ol>
-            <h4>Failure compensation</h4>
-            <ol>{#each deployRoutePreview.rollback || [] as operation}<li>{operation.resource}: {operation.summary}</li>{/each}</ol>
-          </section>
+        <p class="preview-muted">This hash comes from the accepted 30315 status and is re-built by Bahia before runtime mutation. The status contains a bounded, non-secret summary rather than the full desired-state diff.</p>
+        {#if deployDesiredStatePreview?.public_route_hostname}
+          <p>Managed HTTPS hostname: <code>{deployDesiredStatePreview.public_route_hostname}</code></p>
         {/if}
+        {#if deployRouteApprovalRequired}<p class="preview-warning">This protected zone requires deployment approval before application or edge mutation.</p>{/if}
         <details>
-          <summary>Exact canonical non-secret JSON</summary>
+          <summary>Bounded plan summary</summary>
           <pre>{JSON.stringify(deployDesiredStatePreview, null, 2)}</pre>
         </details>
       </section>
@@ -2375,8 +2337,6 @@
   .desired-state-review details { margin-top: 1rem; }
   .desired-state-review summary { cursor: pointer; color: var(--text-primary); font-weight: 600; }
   .desired-state-review pre { max-height: 22rem; overflow: auto; padding: 0.75rem; background: var(--bg); border: 1px solid var(--border-color); border-radius: 4px; font-size: 0.72rem; }
-  .desired-state-diff { display: flex; flex-direction: column; gap: 0.65rem; list-style: none; padding: 0; }
-  .desired-state-diff li { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.78rem; word-break: break-word; }
   .wizard-actions { position: sticky; bottom: 0; padding-top: 0.75rem; background: var(--card-bg); }
   .preview-grid {
     display: grid;
