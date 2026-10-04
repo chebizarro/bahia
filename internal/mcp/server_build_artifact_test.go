@@ -234,6 +234,33 @@ func TestCallTool_RegisterBuild_AndRegisterArtifact(t *testing.T) {
 	}
 }
 
+func TestArtifactRegisterUsesStableContextVMKey(t *testing.T) {
+	server := newTestMCPBuildArtifactServer()
+	publisher := server.artifactCommands.(*captureArtifactCommandPublisher)
+	args := map[string]interface{}{
+		"build_id": uuid.NewString(), "service_id": uuid.NewString(),
+		"image_repo": "registry.example/api", "image_tag": "v1",
+		"image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"scan_status":  "clean", "_meta": map[string]any{"progressToken": "artifact-call-1"},
+	}
+	var expectedKey string
+	for i := 0; i < 2; i++ {
+		result, err := server.CallTool(authorizedMCPContext(), "bahia_register_artifact", args)
+		if err != nil || result.IsError {
+			t.Fatalf("register artifact attempt %d: %v, %#v", i, err, result)
+		}
+		if publisher.register == nil || publisher.register.IdempotencyKey == "" {
+			t.Fatal("missing ContextVM key")
+		}
+		if i == 0 {
+			expectedKey = publisher.register.IdempotencyKey
+		}
+		if publisher.register.IdempotencyKey != expectedKey {
+			t.Fatal("retry changed ContextVM key")
+		}
+	}
+}
+
 func TestCallTool_RegisterBuildAndArtifact_ValidationErrors(t *testing.T) {
 	ctx := authorizedMCPContext()
 	server := newTestMCPBuildArtifactServer()

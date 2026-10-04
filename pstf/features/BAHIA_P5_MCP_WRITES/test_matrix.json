@@ -6,6 +6,7 @@
     {"criteria": ["P2-2", "P2-3"], "test": "TestMCPPackageIntentReturnsCanonicalRepositoryAndArtifact", "result": "pass"},
     {"criteria": ["P2-2", "P2-3"], "test": "TestMCPWorkerIntentPreservesCanonicalLabels", "result": "pass"},
     {"criteria": ["P2-3"], "test": "TestMCPNotificationIntentRedactsCanonicalCredentials", "result": "pass"},
-    {"criteria": ["P2-2"], "test": "TestMCPIntentKeysAreScopedToActorAndTool", "result": "pass"}
+    {"criteria": ["P2-2"], "test": "TestMCPIntentKeysAreScopedToActorAndTool", "result": "pass"},
+    {"criteria": ["P2-1", "P2-2", "P2-3"], "test": "TestRegistryIntentToolsPipeline (25 ML/DNS tool variants; synthetic handler and in-memory canonical state store)", "result": "pass"}
   ]
 }

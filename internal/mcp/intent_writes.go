@@ -28,6 +28,7 @@ type intentWrite struct {
 	stateKey, stateValue   string
 	stateMatch             map[string]string
 	deleted                bool
+	deleteCoordinate       string
 }
 
 // callIntentWrite is the only MCP transport for intent-backed mutations. The
@@ -112,7 +113,11 @@ func (s *Server) callIntentWrite(ctx context.Context, name string, args map[stri
 	}
 	result := map[string]any{"status": "pending", "intent_id": intentID, "event_id": eventID}
 	if write.deleted {
-		deleted, readErr := s.hasCanonicalTombstone(ctx, write.family, write.stateValue)
+		coordinate := write.deleteCoordinate
+		if coordinate == "" {
+			coordinate = write.stateValue
+		}
+		deleted, readErr := s.hasCanonicalTombstone(ctx, write.family, coordinate)
 		if readErr != nil {
 			return intentWriteError("error", intentID, eventID, "read canonical tombstone: "+readErr.Error()), true
 		}
@@ -191,6 +196,9 @@ func (s *Server) replayedDeleteIntent(ctx context.Context, name string, args map
 	case "bahia_delete_notification_channel":
 		arg, domain, family = "channel_id", "notification", nostrpool.KindNotificationChannelRegistry
 	default:
+		if isRegistryIntentTool(name) && strings.HasSuffix(name, "_delete") {
+			return s.replayedRegistryDelete(ctx, name, args, intentID, replay)
+		}
 		return nil, false
 	}
 	id, err := parseRequiredUUIDArg(args, arg)
@@ -265,6 +273,9 @@ func intentWriteError(status, intentID, eventID, reason string) *ToolResult {
 
 func isIntentWriteTool(name string) bool {
 	if backupToolPublishesCommand(backupToolBaseName(name)) {
+		return true
+	}
+	if isRegistryIntentTool(name) {
 		return true
 	}
 	switch name {
@@ -450,6 +461,9 @@ func canonicalRecordNewer(a, b *stateRecord) bool {
 }
 
 func (s *Server) intentWriteForTool(ctx context.Context, name string, args map[string]interface{}, intentID string) (intentWrite, error) {
+	if isRegistryIntentTool(name) {
+		return s.registryIntentWrite(ctx, name, args, intentID)
+	}
 	if backupToolPublishesCommand(backupToolBaseName(name)) {
 		return s.backupIntentWrite(ctx, backupToolBaseName(name), args, intentID)
 	}

@@ -801,6 +801,7 @@ func (s *Server) GetTools() []Tool {
 						"type":        "object",
 						"description": "Arbitrary artifact metadata (optional)",
 					},
+					"idempotency_key": map[string]interface{}{"type": "string", "description": "Stable retry key; defaults to _meta.progressToken or immutable build/digest identity"},
 				},
 				"required": []string{"build_id", "service_id", "image_repo", "image_tag", "image_digest"},
 			},
@@ -1827,6 +1828,7 @@ func (s *Server) GetTools() []Tool {
 		},
 	}
 	tools = append(tools, mlToolDefinitions()...)
+	tools = append(tools, registryIntentToolDefinitions()...)
 	tools = append(tools, assistantAsyncToolDefinitions()...)
 	tools = append(tools, dnsToolDefinitions()...)
 	tools = append(tools, fipsToolDefinitions()...)
@@ -1958,6 +1960,9 @@ func (s *Server) authorizeBuildPermission(ctx context.Context, buildID uuid.UUID
 
 func (s *Server) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
 	s.logger.Info("tool call", zap.String("tool", name))
+	if isRegistryIntentTool(name) && s.intentProc == nil {
+		return intentWriteError("error", "", "", "intent processor is not configured"), nil
+	}
 	// Intent-backed writes authenticate their Nostr actor and authorize against
 	// TrustSet inside ProcessInProcess. The legacy MCP operator allowlist must
 	// not deny an otherwise authorized org member before that check runs.
@@ -2683,6 +2688,7 @@ func (s *Server) handleDeleteEnvironment(ctx context.Context, args map[string]in
 }
 
 func (s *Server) handleRegisterArtifact(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
+	// Phase 5 P2: no intent handler yet — bahia-irsry.76
 	buildIDStr, _ := args["build_id"].(string)
 	serviceIDStr, _ := args["service_id"].(string)
 	imageRepo, _ := args["image_repo"].(string)
@@ -2724,7 +2730,27 @@ func (s *Server) handleRegisterArtifact(ctx context.Context, args map[string]int
 	if s.artifactCommands == nil {
 		return signerFirstMCPMutationUnavailable("bahia_register_artifact", "artifact/register"), nil
 	}
-	receipt, err := s.artifactCommands.PublishArtifactRegisterRequest(ctx, controlplane.ArtifactRegisterCommand{BuildID: buildID, ServiceID: serviceID, ImageRepo: imageRepo, ImageTag: imageTag, ImageDigest: imageDigest, ManifestMediaType: manifestMediaType, SizeBytes: sizeBytes, SBOMURL: sbomURL, SignatureRef: signatureRef, ScanStatus: domain.ScanStatus(scanStatus), Metadata: metadata})
+	key := strings.TrimSpace(stringArg(args, "idempotency_key"))
+	if key == "" {
+		if meta, ok := args["_meta"].(map[string]any); ok {
+			key = strings.TrimSpace(fmt.Sprint(meta["progressToken"]))
+			if key == "<nil>" {
+				key = ""
+			}
+		}
+	}
+	if key == "" {
+		key = "artifact:" + buildID.String() + ":" + imageDigest
+	}
+	actor := ""
+	if principal := auth.GetPrincipal(ctx); principal != nil {
+		actor = strings.ToLower(strings.TrimSpace(principal.PubKey))
+	}
+	commandID, err := mcpIntentID("bahia_register_artifact", actor, map[string]interface{}{"idempotency_key": key})
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
+	receipt, err := s.artifactCommands.PublishArtifactRegisterRequest(ctx, controlplane.ArtifactRegisterCommand{BuildID: buildID, ServiceID: serviceID, ImageRepo: imageRepo, ImageTag: imageTag, ImageDigest: imageDigest, ManifestMediaType: manifestMediaType, SizeBytes: sizeBytes, SBOMURL: sbomURL, SignatureRef: signatureRef, ScanStatus: domain.ScanStatus(scanStatus), Metadata: metadata, IdempotencyKey: commandID})
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to publish artifact register request: %v", err)), nil
 	}

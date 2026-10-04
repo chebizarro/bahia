@@ -164,6 +164,7 @@ func (s *Server) invokeAssistantLLMApproval(ctx context.Context, name string, ar
 }
 
 func (s *Server) invokeAssistantML(ctx context.Context, name string, args map[string]interface{}, key string) (*domain.AsyncToolReceipt, error) {
+	// Phase 5 P2: no intent handler yet — bahia-irsry.76
 	if s.mlCommands == nil {
 		return nil, fmt.Errorf("ML command publisher is not configured")
 	}
