@@ -7,7 +7,8 @@ import {
   KIND_CONTEXTVM,
   KIND_GIFT_WRAP,
   createEncryptedNotificationsSystemInfo,
-  installEncryptedNotificationHarness
+  installEncryptedNotificationHarness,
+  notificationRelayFixtures
 } from './harnesses/notifications-encrypted.js';
 
 const now = new Date().toISOString();
@@ -29,7 +30,7 @@ const initialChannels = [
 ];
 
 test.beforeEach(async ({ page }) => {
-  await installE2EMocks(page, { systemInfo });
+  await installE2EMocks(page, { systemInfo, nostrEvents: notificationRelayFixtures(initialChannels) });
   await installEncryptedNotificationHarness(page, { initialChannels, initialLogs: [] });
 });
 
@@ -54,12 +55,6 @@ test.describe('Notifications encrypted transport smoke', () => {
     await expect(row).toBeVisible();
     await expect(page.getByText('PagerDuty Webhook created')).toBeVisible();
 
-    // The post-create list refresh must finish before another ContextVM request
-    // is signed; this harness associates encrypted wraps with signed requests.
-    await expect.poll(() => page.evaluate(() =>
-      window.__BAHIA_E2E_ENCRYPTED_OPERATIONS.filter(op => op === 'notifications.channels.list').length
-    )).toBe(3);
-
     await row.getByRole('button', { name: 'Test' }).click();
     await expect(page.getByText('Test notification sent to PagerDuty Webhook')).toBeVisible();
 
@@ -75,11 +70,10 @@ test.describe('Notifications encrypted transport smoke', () => {
     }));
 
     const normalizedRelays = transportTrace.relays.map(normalizeRelay);
-    expect(normalizedRelays.length).toBeGreaterThanOrEqual(2);
+    expect(normalizedRelays).toHaveLength(1);
     expect(normalizedRelays.every((relay) => relay === ENCRYPTED_RELAY)).toBe(true);
     expect(normalizedRelays.some((relay) => relay === PUBLIC_RELAY)).toBe(false);
     expect(transportTrace.operations).toEqual(expect.arrayContaining([
-      'notifications.channels.list',
       'notification.intent.create',
       'notifications.channels.test'
     ]));

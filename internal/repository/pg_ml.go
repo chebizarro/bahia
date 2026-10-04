@@ -76,6 +76,17 @@ func (r *PgMLRegistryRepository) UpsertModel(ctx context.Context, model *domain.
 	return nil
 }
 
+func (r *PgMLRegistryRepository) DeleteModel(ctx context.Context, id uuid.UUID) error {
+	cmd, err := r.pool.Exec(ctx, `DELETE FROM ml_models WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("deleting ML model: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("deleting ML model %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
 func (r *PgMLRegistryRepository) scanModel(row pgx.Row) (*domain.MLModel, error) {
 	model := &domain.MLModel{}
 	var modalitiesJSON, tasksJSON, capabilitiesJSON, sourceJSON, cardJSON, metadataJSON []byte
@@ -151,15 +162,17 @@ func (r *PgMLRegistryRepository) ListModels(ctx context.Context, taskKind domain
 	return models, rows.Err()
 }
 
-const mlModelVersionColumns = `id, model_id, version, source, runtime_requirements, aliases, artifact_ids, metadata, created_at`
+const mlModelVersionColumns = `id, model_id, version, source, runtime_requirements, aliases, artifact_ids, metadata, created_at, updated_at`
 
 func (r *PgMLRegistryRepository) UpsertModelVersion(ctx context.Context, version *domain.MLModelVersion) error {
 	if version.ID == uuid.Nil {
 		version.ID = domain.NewEntityID()
 	}
+	now := time.Now().UTC()
 	if version.CreatedAt.IsZero() {
-		version.CreatedAt = time.Now().UTC()
+		version.CreatedAt = now
 	}
+	version.UpdatedAt = now
 	source, err := marshalJSON(version.Source, "ML model version source")
 	if err != nil {
 		return err
@@ -182,14 +195,26 @@ func (r *PgMLRegistryRepository) UpsertModelVersion(ctx context.Context, version
 	}
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO ml_model_versions (`+mlModelVersionColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		ON CONFLICT (id) DO UPDATE SET
 			model_id = EXCLUDED.model_id, version = EXCLUDED.version, source = EXCLUDED.source,
 			runtime_requirements = EXCLUDED.runtime_requirements, aliases = EXCLUDED.aliases,
-			artifact_ids = EXCLUDED.artifact_ids, metadata = EXCLUDED.metadata
-	`, version.ID, version.ModelID, version.Version, source, req, aliases, artifacts, metadata, version.CreatedAt)
+			artifact_ids = EXCLUDED.artifact_ids, metadata = EXCLUDED.metadata,
+			updated_at = EXCLUDED.updated_at
+	`, version.ID, version.ModelID, version.Version, source, req, aliases, artifacts, metadata, version.CreatedAt, version.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upserting ML model version: %w", err)
+	}
+	return nil
+}
+
+func (r *PgMLRegistryRepository) DeleteModelVersion(ctx context.Context, id uuid.UUID) error {
+	cmd, err := r.pool.Exec(ctx, `DELETE FROM ml_model_versions WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("deleting ML model version: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("deleting ML model version %s: %w", id, ErrNotFound)
 	}
 	return nil
 }
@@ -197,7 +222,7 @@ func (r *PgMLRegistryRepository) UpsertModelVersion(ctx context.Context, version
 func (r *PgMLRegistryRepository) scanModelVersion(row pgx.Row) (*domain.MLModelVersion, error) {
 	version := &domain.MLModelVersion{}
 	var sourceJSON, reqJSON, aliasesJSON, artifactsJSON, metadataJSON []byte
-	if err := row.Scan(&version.ID, &version.ModelID, &version.Version, &sourceJSON, &reqJSON, &aliasesJSON, &artifactsJSON, &metadataJSON, &version.CreatedAt); err != nil {
+	if err := row.Scan(&version.ID, &version.ModelID, &version.Version, &sourceJSON, &reqJSON, &aliasesJSON, &artifactsJSON, &metadataJSON, &version.CreatedAt, &version.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if err := unmarshalJSON(sourceJSON, &version.Source, "ML model version source"); err != nil {
@@ -614,6 +639,17 @@ func (r *PgMLRegistryRepository) UpsertInferenceEndpoint(ctx context.Context, en
 	_, err = r.pool.Exec(ctx, `INSERT INTO ml_inference_endpoints (`+mlEndpointColumns+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, environment_id=EXCLUDED.environment_id, task_kinds=EXCLUDED.task_kinds, protocol=EXCLUDED.protocol, gateway=EXCLUDED.gateway, placement_policy=EXCLUDED.placement_policy, metadata=EXCLUDED.metadata, updated_at=EXCLUDED.updated_at`, endpoint.ID, endpoint.Name, endpoint.EnvironmentID, tasks, endpoint.Protocol, gateway, placement, metadata, endpoint.CreatedAt, endpoint.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("upserting ML inference endpoint: %w", err)
+	}
+	return nil
+}
+
+func (r *PgMLRegistryRepository) DeleteInferenceEndpoint(ctx context.Context, id uuid.UUID) error {
+	cmd, err := r.pool.Exec(ctx, `DELETE FROM ml_inference_endpoints WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("deleting ML inference endpoint: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return fmt.Errorf("deleting ML inference endpoint %s: %w", id, ErrNotFound)
 	}
 	return nil
 }

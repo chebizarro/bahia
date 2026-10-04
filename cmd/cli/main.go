@@ -60,7 +60,7 @@ func newRootCommand() *cobra.Command {
 		Short: "Bahia Deployment Registry CLI",
 		Long:  "Command-line interface for the Bahia Nostr-Native Deployment Registry Service",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if isDefaultStatePolicyRead(cmd) {
+			if isDefaultStatePolicyRead(cmd) || isDefaultWorkerBuildArtifactRead(cmd) {
 				return nil
 			}
 			apiClient = client.New(serverURL)
@@ -78,7 +78,7 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringArrayVar(&operatorBootstrapRelays, "bootstrap-relay", nil, "Bootstrap relay URL for trusted operator relay discovery when --relay/BAHIA_NOSTR_RELAYS are absent (repeatable; env BAHIA_NOSTR_BOOTSTRAP_RELAYS)")
 	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "Trusted Bahia service pubkey for operator bootstrap discovery (repeatable; env BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS)")
-	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Use the legacy HTTP read path for service, environment, state and policy reads; also permits explicit operator compatibility fallback")
+	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Use the legacy HTTP read path for service, environment, state, policy, worker, build, artifact, organization, secret and notification reads; also permits explicit operator compatibility fallback")
 	rootCmd.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "Encrypt operator ContextVM requests and responses with NIP-59/NIP-44 (requires --service-pubkey)")
 	rootCmd.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "Maximum time to await a 30315 intent status or legacy ContextVM result (BAHIA_RESULT_TIMEOUT for intents)")
 	rootCmd.PersistentFlags().IntVar(&operatorResultRetries, "result-retries", client.DefaultOperatorResultRetries, "Number of idempotent ContextVM re-publish attempts after result timeout")
@@ -101,11 +101,19 @@ func newRootCommand() *cobra.Command {
 		configCommands(),
 		secretsCommands(),
 		orgsCommands(),
+		notificationCommands(),
 		packageCommands(),
 		soulFactoryCommands(),
 		appCommands(),
 		outboxCommands(),
 	)
+	deploymentAliases := deployCommands()
+	for _, alias := range append([]*cobra.Command(nil), deploymentAliases.Commands()...) {
+		if alias.Name() == "deploy" || alias.Name() == "rollback" {
+			deploymentAliases.RemoveCommand(alias)
+			rootCmd.AddCommand(alias)
+		}
+	}
 
 	return rootCmd
 }
@@ -315,6 +323,11 @@ func servicesCommands() *cobra.Command {
 	actionsCmd := serviceActionsCommands()
 
 	cmd.AddCommand(listCmd, getCmd, createCmd, updateCmd, actionsCmd)
+	directActions := serviceActionsCommands()
+	for _, action := range append([]*cobra.Command(nil), directActions.Commands()...) {
+		directActions.RemoveCommand(action)
+		cmd.AddCommand(action)
+	}
 	return cmd
 }
 
@@ -344,23 +357,21 @@ func serviceActionsCommands() *cobra.Command {
 			serviceID, _ := cmd.Flags().GetString("service")
 			envID, _ := cmd.Flags().GetString("environment")
 			artifactID, _ := cmd.Flags().GetString("artifact")
-			var artifact *string
-			if artifactID != "" {
-				artifact = &artifactID
-			}
-			result, err := runRuntimeActionNostrFirst(cmd, "deploy", serviceID, envID, artifact, func(ctx context.Context) (*client.RuntimeActionResult, error) {
-				return apiClient.DeployServiceRuntime(ctx, serviceID, envID, artifact)
-			})
+			org, _ := cmd.Flags().GetString("org")
+			key, _ := cmd.Flags().GetString("idempotency-key")
+			result, err := runRuntimeIntent(cmd, org, "deploy", serviceID, envID, artifactID, key)
 			if err != nil {
 				return err
 			}
 			return outputSingle(result)
 		},
 	}
+	deployCmd.Flags().String("org", "", "Organization ID")
 	deployCmd.Flags().String("service", "", "Service ID")
 	deployCmd.Flags().String("environment", "", "Environment ID")
 	deployCmd.Flags().String("artifact", "", "Artifact ID (optional; defaults to desired artifact)")
-	deployCmd.Flags().String("idempotency-key", "", "Retry key for this ContextVM runtime action")
+	deployCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this action")
+	_ = deployCmd.MarkFlagRequired("org")
 	_ = deployCmd.MarkFlagRequired("service")
 	_ = deployCmd.MarkFlagRequired("environment")
 
@@ -371,18 +382,20 @@ func serviceActionsCommands() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			serviceID, _ := cmd.Flags().GetString("service")
 			envID, _ := cmd.Flags().GetString("environment")
-			result, err := runRuntimeActionNostrFirst(cmd, "restart", serviceID, envID, nil, func(ctx context.Context) (*client.RuntimeActionResult, error) {
-				return apiClient.RestartServiceRuntime(ctx, serviceID, envID)
-			})
+			org, _ := cmd.Flags().GetString("org")
+			key, _ := cmd.Flags().GetString("idempotency-key")
+			result, err := runRuntimeIntent(cmd, org, "restart", serviceID, envID, "", key)
 			if err != nil {
 				return err
 			}
 			return outputSingle(result)
 		},
 	}
+	restartCmd.Flags().String("org", "", "Organization ID")
 	restartCmd.Flags().String("service", "", "Service ID")
 	restartCmd.Flags().String("environment", "", "Environment ID")
-	restartCmd.Flags().String("idempotency-key", "", "Retry key for this ContextVM runtime action")
+	restartCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this action")
+	_ = restartCmd.MarkFlagRequired("org")
 	_ = restartCmd.MarkFlagRequired("service")
 	_ = restartCmd.MarkFlagRequired("environment")
 
@@ -393,18 +406,20 @@ func serviceActionsCommands() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			serviceID, _ := cmd.Flags().GetString("service")
 			envID, _ := cmd.Flags().GetString("environment")
-			result, err := runRuntimeActionNostrFirst(cmd, "stop", serviceID, envID, nil, func(ctx context.Context) (*client.RuntimeActionResult, error) {
-				return apiClient.StopServiceRuntime(ctx, serviceID, envID)
-			})
+			org, _ := cmd.Flags().GetString("org")
+			key, _ := cmd.Flags().GetString("idempotency-key")
+			result, err := runRuntimeIntent(cmd, org, "stop", serviceID, envID, "", key)
 			if err != nil {
 				return err
 			}
 			return outputSingle(result)
 		},
 	}
+	stopCmd.Flags().String("org", "", "Organization ID")
 	stopCmd.Flags().String("service", "", "Service ID")
 	stopCmd.Flags().String("environment", "", "Environment ID")
-	stopCmd.Flags().String("idempotency-key", "", "Retry key for this ContextVM runtime action")
+	stopCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this action")
+	_ = stopCmd.MarkFlagRequired("org")
 	_ = stopCmd.MarkFlagRequired("service")
 	_ = stopCmd.MarkFlagRequired("environment")
 
@@ -552,16 +567,15 @@ func deployCommands() *cobra.Command {
 			deploymentUnitID, _ := cmd.Flags().GetString("deployment-unit")
 			artifactID, _ := cmd.Flags().GetString("artifact")
 			expectedDesiredStateHash, _ := cmd.Flags().GetString("expected-desired-state-hash")
-			requestedBy, _ := cmd.Flags().GetString("requested-by")
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
-			result, err := runDeploymentIntentNostr(cmd, client.DeploymentIntentNostrRequest{
+			org, _ := cmd.Flags().GetString("org")
+			result, err := runDeploymentCreateIntent(cmd, org, client.DeploymentIntentNostrRequest{
 				ServiceID:                serviceID,
 				EnvironmentID:            envID,
 				DeploymentUnitID:         deploymentUnitID,
 				ArtifactID:               artifactID,
 				ExpectedDesiredStateHash: expectedDesiredStateHash,
-				RequestedBy:              requestedBy,
 				IdempotencyKey:           idempotencyKey,
 			})
 			if err != nil {
@@ -578,13 +592,14 @@ func deployCommands() *cobra.Command {
 			return nil
 		},
 	}
+	deployCmd.Flags().String("org", "", "Organization ID")
 	deployCmd.Flags().String("service", "", "Service ID")
 	deployCmd.Flags().String("environment", "", "Environment ID")
 	deployCmd.Flags().String("deployment-unit", "", "Deployment unit ID for explicit-unit deployments")
 	deployCmd.Flags().String("artifact", "", "Artifact ID")
 	deployCmd.Flags().String("expected-desired-state-hash", "", "Expected managed desired-state hash from a reviewed deploy preview")
-	deployCmd.Flags().String("requested-by", "", "Who requested the deployment")
-	deployCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
+	deployCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this deployment")
+	_ = deployCmd.MarkFlagRequired("org")
 	_ = deployCmd.MarkFlagRequired("service")
 	_ = deployCmd.MarkFlagRequired("environment")
 	_ = deployCmd.MarkFlagRequired("artifact")
@@ -654,7 +669,8 @@ func deployCommands() *cobra.Command {
 			supersedesIntentID, _ := cmd.Flags().GetString("supersedes-intent")
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
-			result, err := runRollbackIntentNostr(cmd, client.RollbackDeploymentNostrRequest{
+			org, _ := cmd.Flags().GetString("org")
+			result, err := runDeploymentRollbackIntent(cmd, org, client.RollbackDeploymentNostrRequest{
 				ServiceID:          serviceID,
 				EnvironmentID:      envID,
 				DeploymentUnitID:   unitID,
@@ -676,12 +692,14 @@ func deployCommands() *cobra.Command {
 			return nil
 		},
 	}
+	rollbackCmd.Flags().String("org", "", "Organization ID")
 	rollbackCmd.Flags().String("service", "", "Service ID")
 	rollbackCmd.Flags().String("environment", "", "Environment ID")
 	rollbackCmd.Flags().String("deployment-unit", "", "Deployment unit ID (required for explicit-unit intents)")
 	rollbackCmd.Flags().String("target-artifact", "", "Previously healthy artifact ID to restore")
 	rollbackCmd.Flags().String("supersedes-intent", "", "Current deployed intent ID being superseded")
-	rollbackCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
+	rollbackCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this rollback")
+	_ = rollbackCmd.MarkFlagRequired("org")
 	_ = rollbackCmd.MarkFlagRequired("service")
 	_ = rollbackCmd.MarkFlagRequired("environment")
 	_ = rollbackCmd.MarkFlagRequired("target-artifact")
@@ -695,11 +713,13 @@ func deployCommands() *cobra.Command {
 				intentID, _ := cmd.Flags().GetString("intent")
 				idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
 
-				result, err := runDeploymentApprovalNostr(cmd, client.DeploymentApprovalNostrRequest{
+				org, _ := cmd.Flags().GetString("org")
+				revision, _ := cmd.Flags().GetString("expected-updated-at")
+				result, err := runDeploymentDecisionIntent(cmd, org, client.DeploymentApprovalNostrRequest{
 					IntentID:       intentID,
 					Decision:       decision,
 					IdempotencyKey: idempotencyKey,
-				})
+				}, revision)
 				if err != nil {
 					return err
 				}
@@ -714,9 +734,13 @@ func deployCommands() *cobra.Command {
 				return nil
 			},
 		}
+		cmd.Flags().String("org", "", "Organization ID")
 		cmd.Flags().String("intent", "", "Deployment intent ID")
-		cmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
+		cmd.Flags().String("expected-updated-at", "", "Expected canonical deployment revision (RFC3339)")
+		cmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this decision")
+		_ = cmd.MarkFlagRequired("org")
 		_ = cmd.MarkFlagRequired("intent")
+		_ = cmd.MarkFlagRequired("expected-updated-at")
 		return cmd
 	}
 
@@ -991,17 +1015,12 @@ func workersCommands() *cobra.Command {
 		Use:   "list",
 		Short: "List discovered workers",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			workers, err := apiClient.ListWorkers(cmd.Context())
+			workers, err := listCLIWorkers(cmd)
 			if err != nil {
 				return err
 			}
-			return output(workers, []string{"PUBKEY", "NAME", "PRICE/SEC", "CAPABILITIES"}, func(w client.Worker) []string {
-				caps := strings.Join(w.Capabilities, ", ")
-				if len(caps) > 30 {
-					caps = caps[:27] + "..."
-				}
-				return []string{truncate(w.Pubkey, 16), w.Name, fmt.Sprintf("%d sats", w.PricePerSec), caps}
-			})
+			return renderWorkers(workers)
+
 		},
 	}
 
@@ -1010,11 +1029,12 @@ func workersCommands() *cobra.Command {
 		Short: "Show worker details",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			worker, err := apiClient.GetWorker(cmd.Context(), args[0])
+			worker, err := getCLIWorker(cmd, args[0])
 			if err != nil {
 				return err
 			}
 			return outputSingle(worker)
+
 		},
 	}
 
@@ -1209,26 +1229,7 @@ func secretsCommands() *cobra.Command {
 		Use:   "list [service-id]",
 		Short: "List secrets for a service",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) (retErr error) {
-			closeSigner, err := configureNIP46HTTPClientAuth(cmd, apiClient)
-			if err != nil {
-				return err
-			}
-			if closeSigner != nil {
-				defer func() { retErr = errors.Join(retErr, closeSigner()) }()
-			}
-			secrets, err := apiClient.ListSecrets(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			return output(secrets, []string{"ID", "NAME", "ENV", "ENCRYPTION", "VERSION"}, func(s client.SecretRef) []string {
-				env := s.EnvironmentID
-				if env == "" {
-					env = "(all)"
-				}
-				return []string{s.ID, s.Name, env, s.EncryptionMethod, fmt.Sprintf("%d", s.Version)}
-			})
-		},
+		RunE:  func(cmd *cobra.Command, args []string) error { return listCLISecrets(cmd, args[0]) },
 	}
 
 	var valueFile string
@@ -1332,28 +1333,14 @@ func orgsCommands() *cobra.Command {
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List your organizations",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			orgs, err := apiClient.ListOrgs(cmd.Context())
-			if err != nil {
-				return err
-			}
-			return output(orgs, []string{"ID", "NAME", "DISPLAY_NAME"}, func(o domain.Organization) []string {
-				return []string{o.ID.String(), o.Name, o.DisplayName}
-			})
-		},
+		RunE:  func(cmd *cobra.Command, _ []string) error { return listCLIOrgs(cmd) },
 	}
 
 	getCmd := &cobra.Command{
 		Use:   "get [id-or-name]",
 		Short: "Get an organization",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			org, err := apiClient.GetOrg(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			return outputSingle(org)
-		},
+		RunE:  func(cmd *cobra.Command, args []string) error { return getCLIOrg(cmd, args[0]) },
 	}
 
 	createCmd := &cobra.Command{
@@ -1382,15 +1369,7 @@ func orgsCommands() *cobra.Command {
 		Use:   "list [org-id]",
 		Short: "List organization members",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			members, err := apiClient.ListOrgMembers(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			return output(members, []string{"PUBKEY", "ROLE", "NIP05", "JOINED"}, func(m domain.OrgMember) []string {
-				return []string{truncate(m.Pubkey, 16), string(m.Role), m.NIP05, m.JoinedAt.Format(time.RFC3339)}
-			})
-		},
+		RunE:  func(cmd *cobra.Command, args []string) error { return listCLIOrgMembers(cmd, args[0]) },
 	}
 
 	membersAddCmd := &cobra.Command{

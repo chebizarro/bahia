@@ -104,6 +104,30 @@ func artifactsCommands() *cobra.Command {
 	_ = importCmd.MarkFlagRequired("image-tag")
 	_ = importCmd.MarkFlagRequired("image-digest")
 
-	cmd.AddCommand(registerCmd, importCmd)
+	getCmd := &cobra.Command{Use: "get", Short: "Get one governed artifact", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		id, _ := cmd.Flags().GetString("artifact")
+		artifact, err := getCLIArtifact(cmd, id)
+		if err != nil {
+			return err
+		}
+		return outputSingle(artifact)
+	}}
+	getCmd.Flags().String("artifact", "", "Artifact ID")
+	_ = getCmd.MarkFlagRequired("artifact")
+	listCmd := &cobra.Command{Use: "list", Short: "List governed artifacts for a service", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		serviceID, _ := cmd.Flags().GetString("service")
+		limit, _ := cmd.Flags().GetInt("limit")
+		offset, _ := cmd.Flags().GetInt("offset")
+		artifacts, err := listCLIArtifacts(cmd, serviceID, limit, offset)
+		if err != nil {
+			return err
+		}
+		return renderArtifacts(artifacts)
+	}}
+	listCmd.Flags().String("service", "", "Service ID")
+	listCmd.Flags().Int("limit", 50, "Maximum artifacts to return")
+	listCmd.Flags().Int("offset", 0, "Number of artifacts to skip")
+	_ = listCmd.MarkFlagRequired("service")
+	cmd.AddCommand(registerCmd, importCmd, getCmd, listCmd)
 	return cmd
 }

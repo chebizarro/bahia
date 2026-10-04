@@ -1,13 +1,11 @@
 <script>
+  import { boot } from '$lib/nostr/boot.js';
   import { untrack } from 'svelte';
   import OperationalActivity from '../OperationalActivity.svelte';
   import {
     services,
     builds,
     artifacts,
-
-    loadBuilds,
-    loadArtifacts,
     operations
   } from '$lib/stores';
   import {
@@ -76,7 +74,7 @@
   });
 
   async function initialize() {
-    await Promise.allSettled([loadBuilds(), loadArtifacts()]);
+    await boot();
     loaded = true;
   }
 

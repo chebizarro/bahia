@@ -209,7 +209,7 @@ func buildTestAssistantExecutionWith(t *testing.T, cfg *config.Config, relay *me
 	transcript := service.NewAssistantTranscriptStore(service.AssistantTranscriptStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, Identity: identity, KeyProvider: keys, ServicePubkey: secret.Public().Hex()})
 	deps := assistantExecutionDeps{
 		Config:         cfg,
-		MCPServer:      mcp.NewServerWithOptions(nil, zap.NewNop(), mcp.ServerDeps{}),
+		MCPServer:      newAppTestMCPServer(nil, zap.NewNop(), mcp.ServerDeps{}),
 		ContextBuilder: service.NewAssistantContextBuilder(nil, nil, nil, nil, nil, nil, service.AssistantContextBuilderConfig{TranscriptHistory: transcript}),
 		ChatClient:     wiringPlanner{},
 		ModelClient:    wiringAgent{},
@@ -337,7 +337,7 @@ func TestAssistantExecutionWiringRejectsBatchDefaultWithoutModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	transcript := service.NewAssistantTranscriptStore(service.AssistantTranscriptStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, KeyProvider: keys})
-	_, err = buildAssistantExecution(assistantExecutionDeps{Config: cfg, MCPServer: mcp.NewServerWithOptions(nil, zap.NewNop(), mcp.ServerDeps{}), ModelClient: wiringAgent{}, Publisher: relay, Subscriber: relay, Signer: signer, Transcript: transcript, KeyProvider: keys})
+	_, err = buildAssistantExecution(assistantExecutionDeps{Config: cfg, MCPServer: newAppTestMCPServer(nil, zap.NewNop(), mcp.ServerDeps{}), ModelClient: wiringAgent{}, Publisher: relay, Subscriber: relay, Signer: signer, Transcript: transcript, KeyProvider: keys})
 	if err == nil || !strings.Contains(err.Error(), "assistant.llm_model") {
 		t.Fatalf("build error = %v, want batch default rejected", err)
 	}

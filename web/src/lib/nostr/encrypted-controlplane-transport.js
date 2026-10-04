@@ -1,6 +1,6 @@
 import { finalizeEvent, generateSecretKey, getPublicKey, nip44 } from 'nostr-tools';
 import { authState, ensureEncryptedSignerReady, signWithAuth } from '$lib/stores/auth.js';
-import { createNostrPoolClient } from './client.js';
+import { nostr } from './subscriptions.js';
 import {
   CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND,
   CONTEXTVM_GIFT_WRAP_KIND,
@@ -34,8 +34,12 @@ export class EncryptedControlplaneTransport {
   constructor({ relays = encryptedRelayUrlsFromSystemInfo(), servicePubkey = servicePubkeyFromSystemInfo(), client = null } = {}) {
     this.relays = normalizeRelays(relays);
     this.servicePubkey = servicePubkey || '';
-    this.client = client || createNostrPoolClient({ relays: this.relays });
-    this.ownClient = !client;
+    this.client = client || {
+      connect: (relays) => nostr.connect(relays),
+      getConnectedRelays: () => nostr.getConnectedRelays(this.relays),
+      subscribe: (filters, handlers) => nostr.subscribeOnRelays(this.relays, filters, handlers),
+      publish: (event) => nostr.publish(event, { relays: this.relays })
+    };
     this.connected = false;
   }
 
@@ -47,7 +51,7 @@ export class EncryptedControlplaneTransport {
     // skips the "[nostr] Connected to N/N relays" log) when the relay set is already
     // fully connected, and re-establishes any dropped relay otherwise. This avoids a
     // per-request reconnect without risking a stale connection being reused.
-    if (this.ownClient) {
+    if (typeof this.client.connect === 'function') {
       const summary = await this.client.connect(this.relays);
       if (summary?.connected === 0) {
         this.connected = false;
@@ -60,7 +64,7 @@ export class EncryptedControlplaneTransport {
   }
 
   disconnect() {
-    if (this.ownClient) this.client.disconnect();
+    // The shared pool stays alive for other subscriptions.
     this.connected = false;
   }
 

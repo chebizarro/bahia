@@ -1,5 +1,8 @@
-import { requestEncryptedResult, encryptedRequestsAvailable, servicePubkeyFromSystemInfo } from '$lib/nostr/encrypted-controlplane.js';
-import { subscribeToDomainRefresh } from '$lib/nostr/retained-domain-subscription.js';
+import { requestEncryptedResult, encryptedRequestsAvailable } from '$lib/nostr/encrypted-controlplane.js';
+import { onStoreRefresh } from '$lib/nostr/boot.js';
+import { NOTIFICATION_CHANNEL_REGISTRY } from '$lib/nostr/kinds.gen.js';
+import { onContentKeyChange } from './auth-roles.svelte.js';
+import { readConfidentialTopic } from './collections/confidential-records.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 import { mintEntityId } from '$lib/entity-id.js';
 import { orgIdFor, submitSensitiveIntent } from './sensitive-intents.svelte.js';
@@ -14,12 +17,10 @@ export const notificationState = $state({
 });
 
 let notificationSubscription = null;
-let notificationSubscriptionGeneration = 0;
+let keySubscription = null;
 let subscribedLogParams = null;
 
 export const NOTIFICATION_ENCRYPTED_OPERATIONS = {
-  listChannels: 'notifications.channels.list',
-  getChannel: 'notifications.channels.get',
   testChannel: 'notifications.channels.test',
   listLogs: 'notifications.logs.list'
 };
@@ -43,13 +44,6 @@ function extractEncryptedPayload(response, fallback = {}) {
   return envelope?.payload ?? fallback;
 }
 
-function normalizeChannelsPayload(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.channels)) return payload.channels;
-  if (Array.isArray(payload?.data)) return payload.data;
-  return [];
-}
-
 function normalizeLogsPayload(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.logs)) return payload.logs;
@@ -71,9 +65,7 @@ export async function listNotificationChannels() {
   notificationState.channelsLoading = true;
   notificationState.channelsError = null;
   try {
-    await ensureEncryptedNotifications();
-    const response = await requestEncryptedResult({ operation: NOTIFICATION_ENCRYPTED_OPERATIONS.listChannels, payload: {} });
-    const channels = normalizeChannelsPayload(extractEncryptedPayload(response));
+    const channels = readConfidentialTopic('notification-channel', NOTIFICATION_CHANNEL_REGISTRY).rows;
     notificationState.channels = channels;
     return channels;
   } catch (error) {
@@ -86,11 +78,8 @@ export async function listNotificationChannels() {
 }
 
 export async function getNotificationChannel(id) {
-  await ensureEncryptedNotifications();
-  const response = await requestEncryptedResult({ operation: NOTIFICATION_ENCRYPTED_OPERATIONS.getChannel, payload: { id } });
-  const channel = extractEncryptedPayload(response)?.channel ?? null;
-  if (channel) upsertChannel(channel);
-  return channel;
+  await listNotificationChannels();
+  return notificationState.channels.find((channel) => channel.id === id) || null;
 }
 
 export async function createNotificationChannel(payload) {
@@ -146,9 +135,10 @@ export async function listNotificationLogs(params = {}) {
 }
 
 export function unsubscribeFromNotificationUpdates() {
-  notificationSubscriptionGeneration += 1;
   notificationSubscription?.();
+  keySubscription?.();
   notificationSubscription = null;
+  keySubscription = null;
   subscribedLogParams = null;
 }
 
@@ -161,34 +151,10 @@ export async function refreshNotificationStore({ logParams = subscribedLogParams
 
 export async function subscribeToNotificationUpdates({ logParams = null } = {}) {
   subscribedLogParams = logParams ? { ...logParams } : null;
-  if (notificationSubscription) {
-    const ownedSubscription = notificationSubscription;
-    return () => {
-      if (notificationSubscription === ownedSubscription) unsubscribeFromNotificationUpdates();
-    };
-  }
-
-  const generation = ++notificationSubscriptionGeneration;
-  const info = await ensureEncryptedNotifications();
-  const unsubscribe = await subscribeToDomainRefresh({
-    domain: 'notifications',
-    servicePubkey: servicePubkeyFromSystemInfo(info),
-    refresh: () => refreshNotificationStore(),
-    onError: (error) => {
-      const message = error?.message || 'Notification live updates failed';
-      notificationState.channelsError = message;
-      if (subscribedLogParams) notificationState.logsError = message;
-    }
-  });
-
-  if (generation !== notificationSubscriptionGeneration) {
-    unsubscribe();
-    return () => {};
-  }
-  notificationSubscription = unsubscribe;
-  return () => {
-    if (notificationSubscription === unsubscribe) unsubscribeFromNotificationUpdates();
-  };
+  if (!notificationSubscription) notificationSubscription = onStoreRefresh(() => { void listNotificationChannels(); });
+  if (!keySubscription) keySubscription = onContentKeyChange(() => { void listNotificationChannels(); });
+  await refreshNotificationStore();
+  return unsubscribeFromNotificationUpdates;
 }
 
 export function resetNotificationStore() {

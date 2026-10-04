@@ -33,8 +33,15 @@ export function e2eTestPubkey(label) {
 // The service identity is secret key 1 (pubkey = secp256k1 G.x), and the
 // relay-backed harness operator is 0x33..33 (relay-harness.js).
 export const E2E_SERVICE_PUBKEY = rememberSecretKey(secretKeyFromHex(`${'0'.repeat(63)}1`));
-rememberSecretKey(secretKeyFromHex('3'.repeat(64)));
+export const RELAY_SERVICE_PUBKEY = rememberSecretKey(secretKeyFromHex('1'.repeat(64)));
+export const RELAY_OPERATOR_PUBKEY = rememberSecretKey(secretKeyFromHex('3'.repeat(64)));
 export const TEST_PUBKEY = e2eTestPubkey('operator');
+
+export function e2eSecretKeyForPubkey(pubkey) {
+  const key = e2eKeyring.get(pubkey);
+  if (!key) throw new Error(`No E2E secret key for ${pubkey}`);
+  return key;
+}
 
 /**
  * Sign an event template as its (test-keyring) author. Events without a hex

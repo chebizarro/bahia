@@ -267,7 +267,6 @@
 1	internal/mcp.AssistantToolRegistry.AgentMCPTools
 1	internal/mcp.AssistantToolRegistry.All
 1	internal/mcp.DocsResourceCatalog
-1	internal/mcp.NewServer
 1	internal/mcp.Server.AssistantToolRegistry
 1	internal/nostrmigration.ConstantJustification
 1	internal/notifications.Dispatcher.RetryFailed

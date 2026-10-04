@@ -39,7 +39,7 @@ test.describe('W2-S3 store-first views', () => {
     await expect(page.getByText('Backup North')).toBeVisible();
     await expect(page.getByText('Loading backup posture...')).toHaveCount(0);
     await page.goto('/ml');
-    await expect(page.getByText('Model North')).toBeVisible();
+    await expect(page.getByTestId('ml-model-catalog').getByText('Model North')).toBeVisible();
     await expect(page.getByText('Bootstrapping inference control plane…')).toHaveCount(0);
     await page.goto(`/artifacts/${artifactId}?tab=sbom`);
     await expect(page.getByText('package-north')).toBeVisible();

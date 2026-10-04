@@ -1,4 +1,5 @@
 <script>
+  import { boot } from '$lib/nostr/boot.js';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
@@ -19,17 +20,18 @@
     artifacts as artifactStore,
     environments as environmentStore,
     workers as workerStore,
-    deploymentIntents as deploymentIntentStore,
-    loadArtifacts,
+    deploymentIntents as deploymentIntentStore
   } from '$lib/stores';
   import { operations, operationsForEntity } from '$lib/stores';
   import { pendingIntentRows } from '$lib/nostr/intent-client.svelte.js';
+  import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
   import {
     updateService,
     deleteService,
     previewServiceDeployment,
     createDeploymentIntent,
-    rollbackDeployment
+    rollbackDeployment,
+    requestRuntimeAction
   } from '$lib/stores/public-controlplane.svelte.js';
   import {
     DEFAULT_DEPLOY_ESTIMATED_DURATION_SECS,
@@ -65,6 +67,7 @@
     deleteServiceSecret,
     listServiceSecrets,
     revealServiceSecret,
+    serviceSecretsState,
     updateServiceSecret
   } from '$lib/stores/service-secrets.svelte.js';
   import { sensitiveMutationBlocker, sensitivePendingState } from '$lib/stores/sensitive-intents.svelte.js';
@@ -83,12 +86,21 @@
   } from '$lib/icons/domain-icons.js';
 
   let service = $state(null);
+  let runtimeEnvironmentId = $state('');
+  let runtimeArtifactId = $state('');
+  let runtimeSubmitting = $state('');
+  let runtimeNotice = $state('');
+  let runtimeError = $state('');
   let builds = $state([]);
   let artifacts = $state([]);
   let environments = $state([]);
   let artifactsLoadError = $state(null);
   let environmentsLoadError = $state(null);
   let secrets = $state([]);
+  $effect(() => {
+    const id = service?.id;
+    if (id) secrets = (serviceSecretsState.secretsByService[id] || []).filter((secret) => !secret.pendingDelete);
+  });
   $effect(() => {
     const rows = sensitivePendingState.rows;
     if (!secrets.some(secret => secret.pendingIntentId)) return;
@@ -277,8 +289,8 @@
     } catch (secretErr) {
       if (sequence !== loadSequence || id !== serviceId) return;
       secrets = [];
-      secretsError = 'Secrets unavailable — control plane unreachable. Check service-pubkey discovery and relay auth.';
-      console.info('Service secrets unavailable through protected control plane:', secretErr?.message || secretErr);
+      secretsError = 'Secrets unavailable from relay state. Check the organization key and relay connection.';
+      console.info('Service secret references unavailable from relay state:', secretErr?.message || secretErr);
     } finally {
       if (sequence === loadSequence && id === serviceId) {
         secretsLoading = false;
@@ -733,6 +745,22 @@
     }
   }
 
+  async function handleRuntimeAction(op) {
+    runtimeError = '';
+    runtimeNotice = '';
+    if (!runtimeEnvironmentId) return void (runtimeError = 'Select an environment');
+    runtimeSubmitting = op;
+    try {
+      await requestRuntimeAction(op, { service_id: serviceId, environment_id: runtimeEnvironmentId,
+        ...(op === 'deploy' && runtimeArtifactId ? { artifact_id: runtimeArtifactId } : {}) });
+      runtimeNotice = `Runtime ${op} intent pending daemon acceptance`;
+    } catch (err) {
+      runtimeError = err?.message || `Failed to sign runtime ${op} intent`;
+    } finally {
+      runtimeSubmitting = '';
+    }
+  }
+
   function openRollbackModal() {
     rollbackForm = {
       environment_id: '',
@@ -891,12 +919,11 @@
     secretCreateError = null;
 
     try {
-      const pendingSecret = await createServiceSecret(serviceId, {
+      await createServiceSecret(serviceId, {
         name: secretForm.name.trim(),
         value: secretForm.value,
         org_id: service?.org_id
       });
-      secrets = [pendingSecret, ...secrets];
       secretForm.value = '';
       closeSecretCreateModal();
     } catch (err) {
@@ -920,8 +947,7 @@
     secretUpdateError = null;
 
     try {
-      const pendingSecret = await updateServiceSecret(serviceId, secretToUpdate.id, { value: secretUpdateValue, org_id: service?.org_id });
-      secrets = secrets.map(secret => secret.id === pendingSecret.id ? pendingSecret : secret);
+      await updateServiceSecret(serviceId, secretToUpdate.id, { value: secretUpdateValue, org_id: service?.org_id });
       secretValueCache = { ...secretValueCache, [secretToUpdate.id]: undefined };
       closeSecretUpdateModal();
     } catch (err) {
@@ -950,8 +976,7 @@
     secretDeleteError = null;
 
     try {
-      const result = await deleteServiceSecret(serviceId, secretToDelete.id, service?.org_id);
-      secrets = secrets.map(secret => secret.id === result.id ? { ...secret, ...result, pendingDelete: true } : secret);
+      await deleteServiceSecret(serviceId, secretToDelete.id, service?.org_id);
       const { [secretToDelete.id]: _removed, ...remainingCache } = secretValueCache;
       secretValueCache = remainingCache;
       closeSecretDeleteModal();
@@ -964,7 +989,7 @@
 
   async function reloadArtifacts() {
     try {
-      await loadArtifacts();
+      await boot();
       artifacts = artifactStore.filter((artifact) => artifact.service_id === serviceId);
     } catch (err) {
       console.error('Failed to reload artifacts:', err);
@@ -1106,6 +1131,8 @@
 </script>
 
 <div class="page">
+  <PendingDomainIntents domain="deployment" />
+  <PendingDomainIntents domain="runtime" />
   {#if intentFeedback}
     <p role="alert" class="error">{intentFeedback.status === 'conflict' ? 'Revision conflict — re-read and resubmit.' : `Intent ${intentFeedback.status}.`} {intentFeedback.reason}
       <button type="button" onclick={() => window.location.reload()}>Re-read canonical state</button>
@@ -1141,6 +1168,29 @@
       <Card title="Runtime" titleIcon={ServiceIcon} value={service.runtime_type || 'docker'} />
       <Card title="Default Branch" titleIcon={BranchIcon} value={service.default_branch || 'main'} />
     </div>
+
+    <section aria-label="Runtime actions">
+      <h2 class="section-title">Runtime actions</h2>
+      <label>Environment
+        <select bind:value={runtimeEnvironmentId} disabled={Boolean(runtimeSubmitting)}>
+          <option value="">Select environment</option>
+          {#each environments as environment (environment.id)}<option value={environment.id}>{environmentDisplayName(environment)}</option>{/each}
+        </select>
+      </label>
+      <label>Artifact for runtime deploy (optional)
+        <select bind:value={runtimeArtifactId} disabled={Boolean(runtimeSubmitting)}>
+          <option value="">Current artifact</option>
+          {#each artifacts as artifact (artifact.id)}<option value={artifact.id}>{artifactDisplayName(artifact)}</option>{/each}
+        </select>
+      </label>
+      <div class="actions">
+        <button type="button" disabled={!runtimeEnvironmentId || Boolean(runtimeSubmitting)} onclick={() => handleRuntimeAction('deploy')}>Runtime deploy</button>
+        <button type="button" disabled={!runtimeEnvironmentId || Boolean(runtimeSubmitting)} onclick={() => handleRuntimeAction('restart')}>Restart runtime</button>
+        <button type="button" disabled={!runtimeEnvironmentId || Boolean(runtimeSubmitting)} onclick={() => handleRuntimeAction('stop')}>Stop runtime</button>
+      </div>
+      {#if runtimeNotice}<p role="status">{runtimeNotice}</p>{/if}
+      {#if runtimeError}<p role="alert" class="error">{runtimeError}</p>{/if}
+    </section>
 
     <section>
       <h2 class="section-title"><DeploymentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Recent Builds ({builds.length})</span></h2>

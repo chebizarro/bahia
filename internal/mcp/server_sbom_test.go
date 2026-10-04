@@ -125,7 +125,7 @@ func newTestMCPSBOMServer() (*Server, *testMCPSBOMRepo, uuid.UUID) {
 		zap.NewNop(),
 	)
 	sbomRepo := newTestMCPSBOMRepo()
-	server := NewServerWithOptions(registry, zap.NewNop(), ServerDeps{SBOMs: sbomRepo})
+	server := newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{SBOMs: sbomRepo})
 	return server, sbomRepo, artifactID
 }
 
@@ -276,7 +276,7 @@ func TestCallTool_SBOMValidationAndConfigurationErrors(t *testing.T) {
 		t.Fatalf("expected missing artifact to fail")
 	}
 
-	unconfigured := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	unconfigured := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	res, err := unconfigured.CallTool(ctx, "bahia_get_sbom", map[string]interface{}{"artifact_id": artifactID.String()})
 	if err != nil {
 		t.Fatalf("unconfigured get err: %v", err)

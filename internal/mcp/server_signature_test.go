@@ -117,7 +117,7 @@ func newTestMCPSignatureServer(t *testing.T, verifier SignatureVerifier) (*Serve
 		zap.NewNop(),
 	)
 	sigRepo := newTestMCPSignatureRepo()
-	server := NewServerWithOptions(registry, zap.NewNop(), ServerDeps{
+	server := newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{
 		Signatures:   sigRepo,
 		SignVerifier: verifier,
 	})
@@ -263,7 +263,7 @@ func TestCallTool_VerifySignaturesStoresDiscoveredRecords(t *testing.T) {
 func TestCallTool_SignatureValidationAndConfigurationErrors(t *testing.T) {
 	ctx := authorizedMCPContext()
 
-	server := NewServer(nil, zap.NewNop())
+	server := newTestServer(nil, zap.NewNop())
 	res, err := server.CallTool(ctx, "bahia_list_signatures", map[string]interface{}{"artifact_id": uuid.New().String()})
 	if err != nil {
 		t.Fatalf("list signatures without repo: %v", err)

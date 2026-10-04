@@ -82,10 +82,37 @@ func (s *MLRegistryService) CreateOrUpdateModel(ctx context.Context, model *doma
 	}
 	model.Slug = strings.TrimSpace(model.Slug)
 	model.Name = strings.TrimSpace(model.Name)
+	previous, err := s.repo.GetModel(ctx, model.ID)
+	if err != nil {
+		return err
+	}
+	var versions []domain.MLModelVersion
+	if previous != nil && previous.Slug != model.Slug {
+		versions, err = s.allModelVersions(ctx, model.ID)
+		if err != nil {
+			return err
+		}
+		if err := s.requireMLTombstones(); err != nil {
+			return err
+		}
+	}
 	if err := s.repo.UpsertModel(ctx, model); err != nil {
 		return err
 	}
 	s.publish(ctx, EventMLModelChanged, model.ID.String(), map[string]any{"model_id": model.ID.String(), "slug": model.Slug})
+	if previous != nil && previous.Slug != model.Slug {
+		if err := s.publishMLModelTombstone(ctx, previous); err != nil {
+			return err
+		}
+		for i := range versions {
+			if err := s.publishMLVersionTombstone(ctx, &versions[i], previous.Slug); err != nil {
+				return err
+			}
+			if err := s.publishCPStateModelVersion(ctx, &versions[i]); err != nil {
+				return err
+			}
+		}
+	}
 	if err := s.publishCPStateModel(ctx, model); err != nil {
 		return err
 	}
@@ -121,10 +148,33 @@ func (s *MLRegistryService) CreateOrUpdateModelVersion(ctx context.Context, vers
 	if model == nil {
 		return fmt.Errorf("ML model %s not found: %w", version.ModelID, repository.ErrNotFound)
 	}
+	previous, err := s.repo.GetModelVersion(ctx, version.ID)
+	if err != nil {
+		return err
+	}
+	var previousSlug string
+	if previous != nil && (previous.ModelID != version.ModelID || previous.Version != version.Version) {
+		oldModel, err := s.repo.GetModel(ctx, previous.ModelID)
+		if err != nil {
+			return err
+		}
+		if oldModel == nil {
+			return fmt.Errorf("ML model %s not found: %w", previous.ModelID, repository.ErrNotFound)
+		}
+		previousSlug = oldModel.Slug
+		if err := s.requireMLTombstones(); err != nil {
+			return err
+		}
+	}
 	if err := s.repo.UpsertModelVersion(ctx, version); err != nil {
 		return err
 	}
 	s.publish(ctx, EventMLVersionChanged, version.ID.String(), map[string]any{"model_id": version.ModelID.String(), "model_version_id": version.ID.String(), "version": version.Version})
+	if previousSlug != "" {
+		if err := s.publishMLVersionTombstone(ctx, previous, previousSlug); err != nil {
+			return err
+		}
+	}
 	if err := s.publishCPStateModelVersion(ctx, version); err != nil {
 		return err
 	}
@@ -252,10 +302,24 @@ func (s *MLRegistryService) CreateOrUpdateInferenceEndpoint(ctx context.Context,
 			return fmt.Errorf("%w: ML task kind %q is not valid", domain.ErrInvalidValue, task)
 		}
 	}
+	previous, err := s.repo.GetInferenceEndpoint(ctx, endpoint.ID)
+	if err != nil {
+		return err
+	}
+	if previous != nil && (previous.Name != endpoint.Name || previous.EnvironmentID != endpoint.EnvironmentID) {
+		if err := s.requireMLTombstones(); err != nil {
+			return err
+		}
+	}
 	if err := s.repo.UpsertInferenceEndpoint(ctx, endpoint); err != nil {
 		return err
 	}
 	s.publish(ctx, EventMLEndpointChanged, endpoint.ID.String(), map[string]any{"endpoint_id": endpoint.ID.String(), "environment_id": endpoint.EnvironmentID.String()})
+	if previous != nil && (previous.Name != endpoint.Name || previous.EnvironmentID != endpoint.EnvironmentID) {
+		if err := s.publishMLEndpointTombstone(ctx, previous); err != nil {
+			return err
+		}
+	}
 	if err := s.publishCPStateEndpoint(ctx, endpoint); err != nil {
 		return err
 	}

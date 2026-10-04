@@ -18,7 +18,7 @@ status or newer canonical state arrives. Restore approval and rejection are sign
 
 ## Signed restore approval
 
-With `backup` enabled in `nostr.intent_domains`, a fleet operator may publish a kind `30900` intent with `domain=backup`, `op=restore-approval`, and content containing `restore_id` and `decision` (`approve` or `reject`). An `expected_updated_at` revision may guard against stale decisions. Bahia applies the same restore-registry transition used by the legacy approval command, then emits bounded kind `30315` intent status. When disabled, the existing ContextVM approval path remains available.
+With `backup` enabled in `nostr.intent_domains`, the web console publishes kind `30900` intents with `domain=backup`, `op=restore-approval`, and content containing `restore_id` and `decision` (`approve` or `reject`). Bahia applies the same restore-registry transition used by the legacy approval command, then emits bounded kind `30315` intent status. The web console does not silently fall back to ContextVM if the domain is disabled.
 
 ## Key Concepts
 
@@ -82,7 +82,7 @@ Operational controls are available on list and detail pages:
 - **Request restore** on backup runs publishes `backup/restore` and prompts for a restore target.
 - **Enforce retention** on definitions publishes `backup/retention` using the definition repository and policy.
 - **Probe repository** publishes `backup/repository-probe`.
-- **Approve/Reject restore** publishes `approval/backup-restore-approve`.
+- **Approve/Reject restore** publishes a signed `backup/restore-approval` intent.
 
 ### Request authority
 

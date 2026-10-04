@@ -4,10 +4,10 @@
  * 1. Read deploy seed (service_pubkeys, relay_urls).
  * 2. Open the IndexedDB event store for this service pubkey namespace.
  * 3. Views can render from the store IMMEDIATELY — no network needed.
- * 4. The existing controlplane bootstrap then connects the pool in background.
+ * 4. The store-first subscription connects the pool in background.
  * 5. EOSE transitions sync-status from "syncing" to "live" (badge, not gate).
  * 6. Events ingested by the pool go into the BahiaEventStore; derived stores
- *    and the existing event-routing adapter both consume from there.
+ *    consume only that store.
  *
  * Design reference: phase4-web-store-first.md §7, §12 W1-S2.
  *
@@ -110,7 +110,7 @@ let _bootPromise = null;
  * Open the event store so views can render immediately from persisted data.
  * Idempotent — subsequent calls return the same promise.
  *
- * Does NOT connect to relays or start subscriptions. The existing
+ * Does NOT connect to relays or start subscriptions. The store-first
  * `bootstrapControlplane()` handles that, using getEventStore()/getPool().
  *
  * @param {object} [options]
@@ -181,4 +181,12 @@ export async function shutdown() {
   _servicePubkey = '';
   _relayUrls = [];
   _bootPromise = null;
+}
+
+export async function ensureRelayConnection() {
+  await boot();
+  if (!_pool || _relayUrls.length === 0) throw new Error('No browser relays configured by deployment bootstrap');
+  const summary = await _pool.connect(_relayUrls);
+  if (summary.connected === 0) throw new Error('Unable to connect to any configured browser relay');
+  return summary;
 }

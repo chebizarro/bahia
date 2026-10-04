@@ -61,15 +61,10 @@ async function installAssistantAgenticHarness(page, { discovery = systemInfo } =
     }
 
     function latestAssistantSessionId() {
-      for (const [key, value] of Object.entries(localStorage)) {
-        if (!key.startsWith('bahia_assistant_transcript:')) continue;
-        try {
-          const cached = JSON.parse(value || '{}');
-          if (cached?.activeSessionId) return cached.activeSessionId;
-          const sessionId = cached?.sessions?.[0]?.sessionId;
-          if (sessionId) return sessionId;
-        } catch {}
-      }
+      try {
+        const ui = JSON.parse(localStorage.getItem('bahia_assistant_sidebar') || '{}');
+        if (ui.activeSessionId) return ui.activeSessionId;
+      } catch {}
       return `assistant-e2e-${Date.now()}`;
     }
 
@@ -131,7 +126,6 @@ async function installAssistantAgenticHarness(page, { discovery = systemInfo } =
           ...tags
         ],
         content: JSON.stringify(content),
-        sig: '0'.repeat(128)
       };
     }
 
@@ -233,7 +227,6 @@ async function installAssistantAgenticHarness(page, { discovery = systemInfo } =
         created_at: Math.floor(Date.now() / 1000),
         tags: [['e', requestEvent.id], ['p', operatorPubkey], ['encrypted', 'contextvm-jsonrpc-v1'], ['method', envelope.method || '']],
         content: encodeResponse(requestEvent, envelope, result),
-        sig: '0'.repeat(128)
       });
     }
 

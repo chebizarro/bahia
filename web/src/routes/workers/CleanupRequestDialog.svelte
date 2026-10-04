@@ -1,14 +1,13 @@
 <script>
-  import { WORKER_COMMANDS, workerCommandPublishPayload } from './actions.js';
-  import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
-  import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
+  import { WORKER_COMMANDS, workerOperation } from './actions.js';
+  import { workerIntentRequest } from '$lib/nostr/domain-intents.js';
+  import { publishIntent, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
 
   let {
     open = false,
     worker = null,
     activeCleanup = null,
     defaultMode = 'reclaimable_only',
-    source = 'web.workers.cleanup-dialog',
     onClose = () => {},
     onSubmitted = () => {}
   } = $props();
@@ -49,21 +48,6 @@
   let selectedMode = $derived(MODES.find((candidate) => candidate.value === mode) || MODES[0]);
   let submitDisabled = $derived(Boolean(pending || !worker?.pubkey || activeCleanup || (mode === 'aggressive' && !aggressiveConfirmed)));
 
-  function randomId() {
-    const cryptoApi = globalThis.crypto;
-    if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
-    if (cryptoApi?.getRandomValues) {
-      const bytes = new Uint8Array(16);
-      cryptoApi.getRandomValues(bytes);
-      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-    }
-    throw new Error('Browser cryptographic random ID generation is unavailable');
-  }
-
-  function idempotencyKey() {
-    return `${WORKER_COMMANDS.CLEANUP_REQUEST}:${worker.pubkey}:${randomId()}`;
-  }
-
   function cleanupReason() {
     const parts = [];
     const trimmedReason = reason.trim();
@@ -79,17 +63,10 @@
     error = '';
     success = '';
     try {
-      const result = await publishCommand(workerCommandPublishPayload({
-        action: CLEANUP_ACTION,
-        worker,
-        key: idempotencyKey(),
-        reason: cleanupReason(),
-        requesterPubkey: currentRequesterPubkey() || '',
-        cleanupMode: mode,
-        source
-      }));
-      const content = resultContent(result);
-      success = content.message || `Cleanup request accepted for ${worker.name || worker.pubkey}`;
+      const result = await publishIntent(workerIntentRequest(workerOperation(CLEANUP_ACTION), worker,
+        resolveIntentOrgId('worker'), { reason: cleanupReason(), cleanupMode: mode }));
+      const content = result.desiredState;
+      success = `Cleanup intent pending daemon acceptance for ${worker.name || worker.pubkey}`;
       onSubmitted({ worker, mode, content });
     } catch (err) {
       error = err?.message || 'Failed to publish cleanup request';

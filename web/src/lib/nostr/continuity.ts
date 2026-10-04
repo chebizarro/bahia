@@ -19,7 +19,7 @@ import {
   parseJsonContent
 } from '$lib/nostr/client.js';
 import { controlStateSchema, workerRecordId } from '$lib/nostr/cp-state.js';
-import { subscribeToRetainedEvents } from '$lib/nostr/retained-domain-subscription.js';
+import { nostr } from '$lib/nostr/subscriptions.js';
 import type { ContinuityAssessmentDTO, ContinuityRunDTO, ContinuityServiceStatusDTO } from '$lib/types/continuity';
 
 const CONTINUITY_EVENT_LIMIT = 1000;
@@ -193,30 +193,27 @@ export async function subscribeToContinuityDashboard({
   };
 
   publish();
-  const subscriptionOptions: any = {
-    filters: continuityNostrFilters(),
-    client,
-    connect,
+  if (connect) await connect();
+  const target = client || nostr;
+  const unsubscribe = target.subscribe(continuityNostrFilters(), {
     onEvent: (event: ContinuityNostrEvent) => {
       if (!event?.id || eventsById.has(event.id)) return;
       eventsById.set(event.id, event);
       publish();
     },
-    onReady: () => {
+    onEose: () => {
       ready = true;
       publish();
     },
-    onClosed: (reason: string, relay: string, metadata: any, meta: any) => {
-      if (metadata?.complete || !meta?.terminal) return;
+    onClosed: (reason: string, relay: string, meta: any) => {
+      if (ready || !meta?.terminal) return;
       const error = new Error(`Continuity subscription closed before EOSE at ${relay}: ${reason}`);
       onError?.(error);
       publish(error.message);
     }
-  };
-  return subscribeToRetainedEvents(subscriptionOptions);
+  });
+  return typeof unsubscribe === 'function' ? unsubscribe : () => unsubscribe?.unsubscribe();
 }
-
-export const loadContinuityDashboardFromNostr = subscribeToContinuityDashboard;
 
 export function continuityStatusesFromEvents(events: ContinuityNostrEvent[] = []): ContinuityServiceStatusDTO[] {
   const statusEvents = dedupeReplaceableEvents(

@@ -1,4 +1,5 @@
 <script>
+  import { boot } from '$lib/nostr/boot.js';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
@@ -7,7 +8,7 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import OperationalActivity from '../../../OperationalActivity.svelte';
   import { projectLiveDeploymentRun } from '../../../operational-activity.js';
-  import { deploymentRuns, loadDeploymentRuns, operations } from '$lib/stores';
+  import { deploymentRuns,  operations } from '$lib/stores';
   import { loadDeploymentRunLogs } from '$lib/stores/deployment-run-logs.svelte.js';
   import { DeploymentIcon, UnknownIcon, WarningIcon } from '$lib/icons/domain-icons.js';
 
@@ -56,7 +57,7 @@
     logsError = null;
 
     try {
-      await loadDeploymentRuns();
+      await boot();
       if (sequence !== loadSequence || id !== runId) return;
       const loadedRun = deploymentRuns.find((candidate) => candidate.id === id) || null;
       if (!loadedRun) {

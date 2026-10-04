@@ -67,36 +67,10 @@ describe('Global Stores (index.js)', () => {
     }
   });
 
-  it('loadAll bootstraps the relay-backed controlplane without REST fallback', async () => {
-    await storesModule.loadAll();
-
-    expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(1);
-  });
-
-  it('loadAll logs relay bootstrap failures without falling back to REST', async () => {
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    controlplaneMock.bootstrapControlplane.mockResolvedValueOnce({ ok: false, reason: 'no relay' });
-
-    await storesModule.loadAll();
-
-    expect(consoleSpy).toHaveBeenCalledWith('Nostr controlplane bootstrap failed:', 'no relay');
-    consoleSpy.mockRestore();
-  });
-
-  it('subscribeToEvents starts Nostr bootstrap without SSE fallback', async () => {
-    storesModule.subscribeToEvents();
-    await Promise.resolve();
-
-    expect(controlplaneMock.bootstrapControlplane).toHaveBeenCalledTimes(1);
-  });
-
-  it('unsubscribe tears down the live relay subscription', async () => {
-    storesModule.subscribeToEvents();
-    await Promise.resolve();
-
-    storesModule.unsubscribeFromEvents();
-
-    expect(controlplaneMock.disconnectControlplane).toHaveBeenCalled();
+  it('does not export the retired loadAll or SSE-style subscription aliases', () => {
+    expect(storesModule.loadAll).toBeUndefined();
+    expect(storesModule.subscribeToEvents).toBeUndefined();
+    expect(storesModule.unsubscribeFromEvents).toBeUndefined();
   });
 
   it('filters drifted states from relay-backed state', () => {

@@ -164,7 +164,6 @@ async function installPolicyCrudHarness(page, { initialPolicies = defaultPolicie
         created_at: Math.floor(Date.now() / 1000),
         tags: [['e', requestEvent.id], ['p', requestEvent.pubkey], ['encrypted', 'contextvm-jsonrpc-v1'], ['method', envelope.method || '']],
         content: JSON.stringify({ jsonrpc: '2.0', id: envelope.id || requestEvent.id, result }),
-        sig: '0'.repeat(128)
       };
     }
 

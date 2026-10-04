@@ -146,6 +146,7 @@ type MLModelVersion struct {
 	ArtifactIDs         []uuid.UUID           `json:"artifact_ids,omitempty"`
 	Metadata            map[string]any        `json:"metadata,omitempty"`
 	CreatedAt           time.Time             `json:"created_at"`
+	UpdatedAt           time.Time             `json:"updated_at"`
 }
 
 // MLArtifactRef is a digest-addressed artifact reference.

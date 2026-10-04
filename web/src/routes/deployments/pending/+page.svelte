@@ -1,4 +1,6 @@
 <script>
+  import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
+  import { boot } from '$lib/nostr/boot.js';
   import { goto } from '$app/navigation';
   import Table from '$lib/components/Table.svelte';
   import EmptyState from '$lib/components/EmptyState.svelte';
@@ -10,7 +12,6 @@
     deploymentIntents,
     services,
     environments,
-    loadDeploymentIntents,
     operations
   } from '$lib/stores';
   import { approveDeploymentIntent, rejectDeploymentIntent } from '$lib/stores/public-controlplane.svelte.js';
@@ -85,7 +86,7 @@
     error = null;
 
     try {
-      await Promise.all([loadDeploymentIntents()]);
+      await boot();
     } catch (err) {
       error = err.message || 'Failed to load pending approvals';
       console.error('Error loading pending approvals:', err);
@@ -163,6 +164,7 @@
 <svelte:body onclick={handleTableClick} />
 
 <div class="page">
+  <PendingDomainIntents domain="deployment" />
   <div class="header">
     <div class="title-row">
       <h1>

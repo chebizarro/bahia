@@ -203,7 +203,6 @@ export async function installPublicServiceDeploymentHarness(
         created_at,
         tags,
         content: typeof content === 'string' ? content : JSON.stringify(content),
-        sig: '0'.repeat(128)
       };
     }
 
@@ -366,7 +365,8 @@ export async function installPublicServiceDeploymentHarness(
       let discoveryEvents = [];
       try {
         discoveryEvents = JSON.parse(localStorage.getItem('__bahia_e2e_nostr_events') || '[]')
-          .filter((event) => [11316, 30002].includes(event?.kind));
+          .filter((event) => [11316, 30002].includes(event?.kind) ||
+            event?.tags?.some((tag) => tag[0] === 't' && ['org-key-envelope', 'notification-channel'].includes(tag[1])));
       } catch {}
       localStorage.setItem('__bahia_e2e_nostr_events', JSON.stringify([...discoveryEvents, ...currentReadModelEvents()]));
     }
@@ -1091,6 +1091,7 @@ export async function installPublicServiceDeploymentHarness(
           sent: true, accepted: true, message: '' });
         persistPublicTrace();
         const sent = originalSend.call(this, data);
+        window.dispatchEvent(new CustomEvent('__bahia_e2e_public_request', { detail: requestEvent }));
         if (!window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS.has(requestEvent.id)) {
           window.__BAHIA_E2E_PUBLIC_SEEN_REQUEST_IDS.add(requestEvent.id);
           window.__BAHIA_E2E_PENDING_INTENTS.set(requestEvent.id, requestEvent);

@@ -16,10 +16,13 @@ import (
 type MLIntentRegistry interface {
 	CreateOrUpdateModel(context.Context, *domain.MLModel) error
 	GetModel(context.Context, uuid.UUID) (*domain.MLModel, error)
+	DeleteModel(context.Context, uuid.UUID) error
 	CreateOrUpdateModelVersion(context.Context, *domain.MLModelVersion) error
 	GetModelVersion(context.Context, uuid.UUID) (*domain.MLModelVersion, error)
+	DeleteModelVersion(context.Context, uuid.UUID) error
 	CreateOrUpdateInferenceEndpoint(context.Context, *domain.MLInferenceEndpoint) error
 	GetInferenceEndpoint(context.Context, uuid.UUID) (*domain.MLInferenceEndpoint, error)
+	DeleteInferenceEndpoint(context.Context, uuid.UUID) error
 }
 
 type MLIntentHandler struct{ registry MLIntentRegistry }
@@ -51,7 +54,7 @@ func (h *MLIntentHandler) HandleIntent(ctx context.Context, intent *Intent) erro
 		if err != nil {
 			return err
 		}
-		if err := checkMLRevision(intent, model.ID.String(), existing != nil, func() time.Time {
+		if err := checkIntentRevision(intent, model.ID.String(), existing != nil, func() time.Time {
 			if existing == nil {
 				return time.Time{}
 			}
@@ -60,9 +63,6 @@ func (h *MLIntentHandler) HandleIntent(ctx context.Context, intent *Intent) erro
 			return err
 		}
 		if existing != nil {
-			if existing.Slug != model.Slug {
-				return fmt.Errorf("unsupported op: ml model slug change — canonical coordinate cannot be tombstoned")
-			}
 			if model.CreatedAt.IsZero() {
 				model.CreatedAt = existing.CreatedAt
 			}
@@ -76,17 +76,19 @@ func (h *MLIntentHandler) HandleIntent(ctx context.Context, intent *Intent) erro
 		if version.ID == uuid.Nil || intent.Coordinate != "model-version:"+version.ID.String() {
 			return fmt.Errorf("ML model version id and coordinate must match")
 		}
-		if intent.ExpectedUpdatedAt != nil {
-			return fmt.Errorf("ML model versions have no updated_at revision")
-		}
 		existing, err := h.registry.GetModelVersion(ctx, version.ID)
 		if err != nil {
 			return err
 		}
-		if existing != nil {
-			if existing.ModelID != version.ModelID || existing.Version != version.Version {
-				return fmt.Errorf("unsupported op: ml model version identity change — canonical coordinate cannot be tombstoned")
+		if err := checkIntentRevision(intent, version.ID.String(), existing != nil, func() time.Time {
+			if existing == nil {
+				return time.Time{}
 			}
+			return existing.UpdatedAt
+		}()); err != nil {
+			return err
+		}
+		if existing != nil {
 			if version.CreatedAt.IsZero() {
 				version.CreatedAt = existing.CreatedAt
 			}
@@ -104,7 +106,7 @@ func (h *MLIntentHandler) HandleIntent(ctx context.Context, intent *Intent) erro
 		if err != nil {
 			return err
 		}
-		if err := checkMLRevision(intent, endpoint.ID.String(), existing != nil, func() time.Time {
+		if err := checkIntentRevision(intent, endpoint.ID.String(), existing != nil, func() time.Time {
 			if existing == nil {
 				return time.Time{}
 			}
@@ -113,20 +115,74 @@ func (h *MLIntentHandler) HandleIntent(ctx context.Context, intent *Intent) erro
 			return err
 		}
 		if existing != nil {
-			if existing.Name != endpoint.Name || existing.EnvironmentID != endpoint.EnvironmentID {
-				return fmt.Errorf("unsupported op: ml endpoint identity change — canonical coordinate cannot be tombstoned")
-			}
 			if endpoint.CreatedAt.IsZero() {
 				endpoint.CreatedAt = existing.CreatedAt
 			}
 		}
 		return h.registry.CreateOrUpdateInferenceEndpoint(ctx, &endpoint)
+	case "model-delete", "version-delete", "endpoint-delete":
+		var payload struct {
+			ID uuid.UUID `json:"id"`
+		}
+		if err := json.Unmarshal(content, &payload); err != nil {
+			return err
+		}
+		if payload.ID == uuid.Nil {
+			return fmt.Errorf("ML %s requires an id", intent.Op)
+		}
+		switch intent.Op {
+		case "model-delete":
+			model, err := h.registry.GetModel(ctx, payload.ID)
+			if err != nil {
+				return err
+			}
+			if model == nil {
+				return fmt.Errorf("ML model %s not found", payload.ID)
+			}
+			if intent.Coordinate != "model:"+model.Slug {
+				return fmt.Errorf("ML model coordinate does not match slug")
+			}
+			if err := checkIntentRevision(intent, payload.ID.String(), true, model.UpdatedAt); err != nil {
+				return err
+			}
+			return h.registry.DeleteModel(ctx, payload.ID)
+		case "version-delete":
+			version, err := h.registry.GetModelVersion(ctx, payload.ID)
+			if err != nil {
+				return err
+			}
+			if version == nil {
+				return fmt.Errorf("ML model version %s not found", payload.ID)
+			}
+			if intent.Coordinate != "model-version:"+payload.ID.String() {
+				return fmt.Errorf("ML model version coordinate does not match id")
+			}
+			if err := checkIntentRevision(intent, payload.ID.String(), true, version.UpdatedAt); err != nil {
+				return err
+			}
+			return h.registry.DeleteModelVersion(ctx, payload.ID)
+		default:
+			endpoint, err := h.registry.GetInferenceEndpoint(ctx, payload.ID)
+			if err != nil {
+				return err
+			}
+			if endpoint == nil {
+				return fmt.Errorf("ML endpoint %s not found", payload.ID)
+			}
+			if intent.Coordinate != "endpoint:"+payload.ID.String() {
+				return fmt.Errorf("ML endpoint coordinate does not match id")
+			}
+			if err := checkIntentRevision(intent, payload.ID.String(), true, endpoint.UpdatedAt); err != nil {
+				return err
+			}
+			return h.registry.DeleteInferenceEndpoint(ctx, payload.ID)
+		}
 	default:
 		return fmt.Errorf("unsupported op: ml %s — no durable mutation path", intent.Op)
 	}
 }
 
-func checkMLRevision(intent *Intent, entity string, exists bool, actual time.Time) error {
+func checkIntentRevision(intent *Intent, entity string, exists bool, actual time.Time) error {
 	if intent.ExpectedUpdatedAt == nil {
 		return nil
 	}

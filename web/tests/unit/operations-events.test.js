@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { applyControlplaneEvent, readModelFilters } from '../../src/lib/stores/controlplane/events.svelte.js';
-import { controlplaneConnection } from '../../src/lib/stores/controlplane/connection.svelte.js';
 import {
   operations,
   operationsForDomain,
@@ -170,18 +168,16 @@ beforeEach(() => {
   initOperationStoreBinding();
   initStoreFirstSubscriptions();
   resetBackup();
-  controlplaneConnection.servicePubkey = SERVICE_PUBKEY;
 });
 
 afterEach(() => {
   teardownOperationStoreBinding();
   teardownStoreFirstSubscriptions();
-  controlplaneConnection.servicePubkey = '';
 });
 
 describe('operational event subscriptions', () => {
   it('subscribes to every specified 69xx, 79xx, and Hive-CI kind', () => {
-    const filters = [...bridge.pool.subscribe.mock.calls.flatMap(([options]) => options.filters), ...readModelFilters()];
+    const filters = bridge.pool.subscribe.mock.calls.flatMap(([options]) => options.filters);
     const subscribedKinds = new Set(filters.flatMap((filter) => filter.kinds || []));
 
     for (const kind of [...STATUS_KINDS, ...RESULT_KINDS, ...ML_OPERATION_KINDS, ...BACKUP_RESULT_KINDS, ...BACKUP_ATTESTATION_KINDS, HIVE_CI_WORKFLOW_RUN, HIVE_CI_WORKFLOW_RESULT]) {
@@ -247,7 +243,7 @@ describe('ML and backup live operations', () => {
       tags: [['e', requestId, '', 'reply'], ['run', 'backup-run-1'], ['status', 'succeeded']],
       content: { status: 'succeeded', message: 'backup complete' }
     }))).toBe(true);
-    expect(applyControlplaneEvent(relayEvent({
+    expect(emit(relayEvent({
       id: 'f'.repeat(64),
       kind: 31310,
       created_at: 1770000220,

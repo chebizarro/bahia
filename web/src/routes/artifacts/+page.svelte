@@ -1,4 +1,5 @@
 <script>
+  import { boot } from '$lib/nostr/boot.js';
   import { goto } from '$app/navigation';
   import { untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
@@ -14,8 +15,8 @@
     WarningIcon,
     blossomContentTypeIcon
   } from '$lib/icons/domain-icons.js';
-  import { artifacts as registryArtifacts, services, loadArtifacts, operations } from '$lib/stores';
-  import { sbomArtifactIds } from '$lib/stores/controlplane/index.js';
+  import { artifacts as registryArtifacts, services,  operations } from '$lib/stores';
+  import { sbomArtifactIds } from '$lib/stores/collections/index.svelte.js';
   import { api } from '$lib/api/client.js';
   import { authState } from '$lib/stores/auth.js';
 
@@ -71,7 +72,7 @@
 
   async function loadRegistryArtifacts() {
     try {
-      await Promise.allSettled([loadArtifacts()]);
+      await boot();
       applyRegistryProjection();
     } catch (err) {
       console.error('Failed to load artifacts:', err);

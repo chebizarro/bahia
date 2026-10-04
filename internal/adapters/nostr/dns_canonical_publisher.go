@@ -9,7 +9,9 @@ import (
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 
 	"go.uber.org/zap"
 )
@@ -83,13 +85,18 @@ func (p *DNSCanonicalPublisher) PublishEndpoints(ctx context.Context, endpoints 
 			continue
 		}
 		desired[endpoint.Coordinate] = struct{}{}
+		payload := dnsEndpointPayload(endpoint)
+		if previous, ok := p.published[endpoint.Coordinate]; ok && previous.Payload == payload {
+			current[endpoint.Coordinate] = previous
+			continue
+		}
 		tags := dnsEndpointTags(endpoint)
-		if err := p.projector.publishReplaceableJSON(ctx, KindDNSEndpointState, endpoint.Coordinate, tags, endpoint, "dns_endpoint.projection", &endpoint.ID); err != nil {
+		if err := p.projector.publishReplaceableJSON(ctx, int(kinds.CPStateFamilyDNSEndpoint), endpoint.Coordinate, tags, endpoint, "dns_endpoint.projection", &endpoint.ID); err != nil {
 			failures = append(failures, fmt.Sprintf("publish %s: %v", endpoint.Coordinate, err))
 			p.logger.Warn("publish DNS endpoint failed", zap.String("coordinate", endpoint.Coordinate), zap.Error(err))
 			continue
 		}
-		current[endpoint.Coordinate] = dnsPublishedEndpoint{FQDN: endpoint.FQDN}
+		current[endpoint.Coordinate] = dnsPublishedEndpoint{FQDN: endpoint.FQDN, Payload: payload}
 		published++
 	}
 
@@ -115,7 +122,7 @@ func (p *DNSCanonicalPublisher) PublishEndpoints(ctx context.Context, endpoints 
 		if fqdn := strings.TrimSpace(previous.FQDN); fqdn != "" {
 			tags = append(tags, gonostr.Tag{"dns", fqdn})
 		}
-		if err := p.projector.publishReplaceableTombstone(ctx, KindDNSEndpointState, coordinate, tags, content, "dns_endpoint.projection", nil); err != nil {
+		if err := p.projector.publishReplaceableTombstone(ctx, int(kinds.CPStateFamilyDNSEndpoint), coordinate, tags, content, "dns_endpoint.projection", nil); err != nil {
 			failures = append(failures, fmt.Sprintf("tombstone %s: %v", coordinate, err))
 			p.logger.Warn("publish DNS endpoint tombstone failed", zap.String("coordinate", coordinate), zap.Error(err))
 			nextPublished[coordinate] = previous
@@ -131,19 +138,60 @@ func (p *DNSCanonicalPublisher) PublishEndpoints(ctx context.Context, endpoints 
 	return published, tombstones, nil
 }
 
+func dnsEndpointPayload(endpoint domain.DNSEndpoint) string {
+	endpoint.MaterializedAt = time.Time{}
+	data, _ := json.Marshal(endpoint)
+	return string(data)
+}
+
+func (p *DNSCanonicalPublisher) PublishEndpoint(ctx context.Context, endpoint domain.DNSEndpoint) error {
+	if p.projector == nil || !p.projector.Enabled() {
+		return nil
+	}
+	if err := domain.ValidateDNSEndpoint(&endpoint); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.projector.publishReplaceableJSON(ctx, int(kinds.CPStateFamilyDNSEndpoint), endpoint.Coordinate, dnsEndpointTags(endpoint), endpoint, "dns_endpoint.projection", &endpoint.ID); err != nil {
+		return err
+	}
+	p.published[endpoint.Coordinate] = dnsPublishedEndpoint{FQDN: endpoint.FQDN, Payload: dnsEndpointPayload(endpoint)}
+	return nil
+}
+
+func (p *DNSCanonicalPublisher) PublishEndpointTombstone(ctx context.Context, endpoint domain.DNSEndpoint) error {
+	if p.projector == nil || !p.projector.Enabled() {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	content := map[string]any{"deleted": true, "coordinate": endpoint.Coordinate, "fqdn": endpoint.FQDN, "updated_at": formatTime(time.Now().UTC())}
+	if err := p.projector.publishReplaceableTombstone(ctx, int(kinds.CPStateFamilyDNSEndpoint), endpoint.Coordinate,
+		gonostr.Tags{{"dns", endpoint.FQDN}, {"t", "bahia"}}, content, "dns_endpoint.projection", &endpoint.ID); err != nil {
+		return err
+	}
+	delete(p.published, endpoint.Coordinate)
+	return nil
+}
+
 // PublishZone publishes a canonical DNS zone state record.
 func (p *DNSCanonicalPublisher) PublishZone(ctx context.Context, zone domain.DNSZone) error {
 	if p.projector == nil || !p.projector.Enabled() {
 		return nil
 	}
+	if zone.UpdatedAt.IsZero() {
+		zone.UpdatedAt = time.Now().UTC()
+	}
 	content := map[string]any{
-		"deleted":       false,
-		"name":          zone.Name,
-		"visibility":    string(zone.Visibility),
-		"backend_ref":   zone.BackendRef,
-		"ttl":           zone.TTL,
-		"authoritative": zone.Authoritative,
-		"updated_at":    formatTime(time.Now().UTC()),
+		"deleted":                   false,
+		"name":                      zone.Name,
+		"visibility":                string(zone.Visibility),
+		"backend_ref":               zone.BackendRef,
+		"ttl":                       zone.TTL,
+		"authoritative":             zone.Authoritative,
+		"allow_empty_authoritative": zone.AllowEmptyAuthoritative,
+		"updated_at":                formatTime(zone.UpdatedAt),
 	}
 	tags := gonostr.Tags{
 		{"zone", zone.Name},
@@ -151,7 +199,7 @@ func (p *DNSCanonicalPublisher) PublishZone(ctx context.Context, zone domain.DNS
 		{"visibility", string(zone.Visibility)},
 		{"t", "bahia"},
 	}
-	return p.projector.publishReplaceableJSON(ctx, KindDNSZoneState, dnsZoneDTag(zone.Name), tags, content, "dns_zone.projection", nil)
+	return p.projector.publishReplaceableJSON(ctx, int(kinds.CPStateFamilyDNSZone), dnsZoneDTag(zone.Name), tags, content, "dns_zone.projection", nil)
 }
 
 // PublishZoneTombstone marks a zone as deleted.
@@ -161,13 +209,16 @@ func (p *DNSCanonicalPublisher) PublishZoneTombstone(ctx context.Context, zoneNa
 	}
 	content := map[string]any{"deleted": true, "name": zoneName, "updated_at": formatTime(time.Now().UTC())}
 	tags := gonostr.Tags{{"zone", zoneName}, {"t", "bahia"}}
-	return p.projector.publishReplaceableTombstone(ctx, KindDNSZoneState, dnsZoneDTag(zoneName), tags, content, "dns_zone.projection", nil)
+	return p.projector.publishReplaceableTombstone(ctx, int(kinds.CPStateFamilyDNSZone), dnsZoneDTag(zoneName), tags, content, "dns_zone.projection", nil)
 }
 
 // PublishBackend publishes a canonical DNS backend state record.
 func (p *DNSCanonicalPublisher) PublishBackend(ctx context.Context, backend domain.DNSBackendState) error {
 	if p.projector == nil || !p.projector.Enabled() {
 		return nil
+	}
+	if backend.UpdatedAt.IsZero() {
+		backend.UpdatedAt = time.Now().UTC()
 	}
 	tags := gonostr.Tags{
 		{"backend", backend.Ref},
@@ -176,11 +227,13 @@ func (p *DNSCanonicalPublisher) PublishBackend(ctx context.Context, backend doma
 		{"t", "bahia"},
 	}
 	content := map[string]any{
-		"deleted":    false,
-		"ref":        backend.Ref,
-		"type":       string(backend.Type),
-		"health":     string(backend.Health),
-		"updated_at": formatTime(time.Now().UTC()),
+		"deleted":      false,
+		"ref":          backend.Ref,
+		"type":         string(backend.Type),
+		"health":       string(backend.Health),
+		"metadata":     backend.Metadata,
+		"last_sync_at": backend.LastSyncAt,
+		"updated_at":   formatTime(backend.UpdatedAt),
 	}
 	if len(backend.ZoneRefs) > 0 {
 		zoneNames := make([]string, len(backend.ZoneRefs))
@@ -189,13 +242,25 @@ func (p *DNSCanonicalPublisher) PublishBackend(ctx context.Context, backend doma
 		}
 		content["zones"] = zoneNames
 	}
-	return p.projector.publishReplaceableJSON(ctx, KindDNSBackendState, dnsBackendDTag(backend.Ref), tags, content, "dns_backend.projection", nil)
+	return p.projector.publishReplaceableJSON(ctx, int(kinds.CPStateFamilyDNSBackend), dnsBackendDTag(backend.Ref), tags, content, "dns_backend.projection", nil)
+}
+
+func (p *DNSCanonicalPublisher) PublishBackendTombstone(ctx context.Context, ref string) error {
+	if p.projector == nil || !p.projector.Enabled() {
+		return nil
+	}
+	return p.projector.publishReplaceableTombstone(ctx, int(kinds.CPStateFamilyDNSBackend), dnsBackendDTag(ref),
+		gonostr.Tags{{"backend", ref}, {"t", "bahia"}},
+		map[string]any{"deleted": true, "ref": ref, "updated_at": formatTime(time.Now().UTC())}, "dns_backend.projection", nil)
 }
 
 // PublishPolicy publishes a canonical DNS policy state record.
 func (p *DNSCanonicalPublisher) PublishPolicy(ctx context.Context, policy domain.DNSPolicy) error {
 	if p.projector == nil || !p.projector.Enabled() {
 		return nil
+	}
+	if policy.UpdatedAt.IsZero() {
+		policy.UpdatedAt = time.Now().UTC()
 	}
 	tags := gonostr.Tags{
 		{"policy", policy.ID.String()},
@@ -206,14 +271,27 @@ func (p *DNSCanonicalPublisher) PublishPolicy(ctx context.Context, policy domain
 	}
 	rulesJSON, _ := json.Marshal(policy.Rules)
 	content := map[string]any{
-		"deleted":    false,
-		"id":         policy.ID.String(),
-		"name":       policy.Name,
-		"enabled":    policy.Enabled,
-		"rules":      json.RawMessage(rulesJSON),
-		"updated_at": formatTime(time.Now().UTC()),
+		"deleted":        false,
+		"id":             policy.ID.String(),
+		"name":           policy.Name,
+		"enabled":        policy.Enabled,
+		"zone_id":        policy.ZoneID,
+		"environment_id": policy.EnvironmentID,
+		"metadata":       policy.Metadata,
+		"created_at":     formatTime(policy.CreatedAt),
+		"rules":          json.RawMessage(rulesJSON),
+		"updated_at":     formatTime(policy.UpdatedAt),
 	}
-	return p.projector.publishReplaceableJSON(ctx, KindDNSPolicyState, dnsPolicyDTag(policy.ID), tags, content, "dns_policy.projection", &policy.ID)
+	return p.projector.publishReplaceableJSON(ctx, int(kinds.CPStateFamilyDNSPolicy), dnsPolicyDTag(policy.ID), tags, content, "dns_policy.projection", &policy.ID)
+}
+
+func (p *DNSCanonicalPublisher) PublishPolicyTombstone(ctx context.Context, id uuid.UUID) error {
+	if p.projector == nil || !p.projector.Enabled() {
+		return nil
+	}
+	return p.projector.publishReplaceableTombstone(ctx, int(kinds.CPStateFamilyDNSPolicy), dnsPolicyDTag(id),
+		gonostr.Tags{{"policy", id.String()}, {"t", "bahia"}},
+		map[string]any{"deleted": true, "id": id.String(), "updated_at": formatTime(time.Now().UTC())}, "dns_policy.projection", &id)
 }
 
 // HydrateFromStore loads previously-published DNS endpoint coordinates from
@@ -232,7 +310,7 @@ func (p *DNSCanonicalPublisher) HydrateFromStore(ctx context.Context) error {
 			return fmt.Errorf("derive service pubkey for DNS hydration: %w", err)
 		}
 	}
-	records, err := p.projector.liveRetainedControlState(ctx, KindDNSEndpointState, servicePubkey)
+	records, err := p.projector.liveRetainedControlState(ctx, int(kinds.CPStateFamilyDNSEndpoint), servicePubkey)
 	if err != nil {
 		return fmt.Errorf("hydrate DNS endpoint cache: %w", err)
 	}
@@ -268,5 +346,5 @@ func (p *DNSCanonicalPublisher) PublishZoneSync(ctx context.Context, zone domain
 		tags = append(tags, gonostr.Tag{"backend", zone.BackendRef})
 	}
 	dTag := "zone-sync:" + zone.Name
-	return p.projector.publishReplaceableJSON(ctx, KindDNSZoneState, dTag, tags, content, "dns_zone_sync.projection", nil)
+	return p.projector.publishReplaceableJSON(ctx, int(kinds.CPStateFamilyDNSZone), dTag, tags, content, "dns_zone_sync.projection", nil)
 }

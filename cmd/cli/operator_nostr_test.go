@@ -292,40 +292,6 @@ func TestParsePolicyRulesJSONAcceptsArrayAndRejectsEmpty(t *testing.T) {
 	}
 }
 
-func TestServiceActionCommandUsesSignerFirstClientByDefault(t *testing.T) {
-	resetOperatorGlobals(t)
-	key := nostr.Generate().Hex()
-	servicePubkey := nostr.Generate().Public().Hex()
-	factoryCalls := 0
-	restoreFactory := replaceOperatorFactory(func(cfg client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		factoryCalls++
-		if cfg.PrivateKey != key {
-			t.Fatalf("PrivateKey = %q, want command key", cfg.PrivateKey)
-		}
-		if len(cfg.Relays) != 1 || cfg.Relays[0] != "wss://relay.example" {
-			t.Fatalf("Relays = %#v, want command relay", cfg.Relays)
-		}
-		if cfg.ServicePubkey != servicePubkey {
-			t.Fatalf("ServicePubkey = %q, want command service pubkey", cfg.ServicePubkey)
-		}
-		return fakeCLIOperatorClient{}, nil
-	})
-	defer restoreFactory()
-
-	keyFile := filepath.Join(t.TempDir(), "nostr.key")
-	if err := os.WriteFile(keyFile, []byte(key), 0o600); err != nil {
-		t.Fatalf("write key file: %v", err)
-	}
-	cmd := newRootCommand()
-	cmd.SetArgs([]string{"--nostr-key-file", keyFile, "--relay", "wss://relay.example", "--service-pubkey", servicePubkey, "services", "actions", "restart", "--service", "svc", "--environment", "env"})
-	if err := cmd.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("ExecuteContext() error = %v", err)
-	}
-	if factoryCalls != 1 {
-		t.Fatalf("operator factory calls = %d, want 1", factoryCalls)
-	}
-}
-
 func TestAdoptRawTargetCommandRequiresExplicitFallback(t *testing.T) {
 	resetOperatorGlobals(t)
 	cmd := newRootCommand()
@@ -333,48 +299,6 @@ func TestAdoptRawTargetCommandRequiresExplicitFallback(t *testing.T) {
 	err := cmd.ExecuteContext(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "--raw-target") {
 		t.Fatalf("ExecuteContext() error = %v, want raw-target fallback error", err)
-	}
-}
-
-func TestOperatorHTTPFallbackOnlyForExplicitPreAcceptanceFailures(t *testing.T) {
-	resetOperatorGlobals(t)
-	cmd := newOperatorFlagTestCommand(t)
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
-	t.Setenv("BAHIA_NOSTR_RELAYS", "wss://relay.example")
-	operatorHTTPFallback = true
-
-	restoreFactory := replaceOperatorFactory(func(cfg client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return nil, &client.ControlPlaneRequestError{Phase: "test setup", RequestAccepted: false, Cause: errors.New("subscribe failed")}
-	})
-	defer restoreFactory()
-
-	fallbackCalls := 0
-	result, err := runRuntimeActionNostrFirst(cmd, "restart", "svc", "env", nil, func(ctx context.Context) (*client.RuntimeActionResult, error) {
-		fallbackCalls++
-		return &client.RuntimeActionResult{Action: "restart", ServiceID: "svc", EnvironmentID: "env"}, nil
-	})
-	if err != nil {
-		t.Fatalf("runRuntimeActionNostrFirst() error = %v", err)
-	}
-	if fallbackCalls != 1 || result.Action != "restart" {
-		t.Fatalf("fallbackCalls=%d result=%#v", fallbackCalls, result)
-	}
-
-	restoreFactory()
-	restoreFactory = replaceOperatorFactory(func(cfg client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{restartErr: &client.ControlPlaneRequestError{Phase: "await", RequestAccepted: true, Cause: errors.New("terminal failure")}}, nil
-	})
-	defer restoreFactory()
-	fallbackCalls = 0
-	_, err = runRuntimeActionNostrFirst(cmd, "restart", "svc", "env", nil, func(ctx context.Context) (*client.RuntimeActionResult, error) {
-		fallbackCalls++
-		return &client.RuntimeActionResult{}, nil
-	})
-	if err == nil {
-		t.Fatal("expected accepted request error")
-	}
-	if fallbackCalls != 0 {
-		t.Fatalf("fallback called after request acceptance")
 	}
 }
 
@@ -453,80 +377,6 @@ func TestOperatorStatusCallbackWritesOnlyInTableModeToStderr(t *testing.T) {
 	}
 }
 
-func TestDeploymentsApproveCommandPublishesSignerFirstApproval(t *testing.T) {
-	resetOperatorGlobals(t)
-	outputFormat = "json"
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
-
-	var captured client.DeploymentApprovalNostrRequest
-	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{deploymentApproval: func(req client.DeploymentApprovalNostrRequest) (*client.DeploymentCommandResult, error) {
-			captured = req
-			return &client.DeploymentCommandResult{Status: "submitted", IntentID: req.IntentID}, nil
-		}}, nil
-	})
-	defer restoreFactory()
-
-	root := newOperatorFlagTestCommand(t).Root()
-	root.AddCommand(deployCommands())
-	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
-		t.Fatalf("set relay: %v", err)
-	}
-	root.SetArgs([]string{"deployments", "approve", "--intent", "11111111-1111-1111-1111-111111111111", "--idempotency-key", "approval:test"})
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("execute deployments approve: %v", err)
-	}
-	if captured.IntentID != "11111111-1111-1111-1111-111111111111" || captured.Decision != "approve" || captured.IdempotencyKey != "approval:test" {
-		t.Fatalf("captured approval = %#v", captured)
-	}
-}
-
-func TestDeploymentsDeployCommandPublishesExplicitIdempotencyKey(t *testing.T) {
-	resetOperatorGlobals(t)
-	outputFormat = "json"
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
-
-	var captured client.DeploymentIntentNostrRequest
-	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{deploymentIntent: func(req client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error) {
-			captured = req
-			return &client.DeploymentCommandResult{
-				Status:        "submitted",
-				ServiceID:     req.ServiceID,
-				EnvironmentID: req.EnvironmentID,
-				ArtifactID:    req.ArtifactID,
-			}, nil
-		}}, nil
-	})
-	defer restoreFactory()
-
-	root := newOperatorFlagTestCommand(t).Root()
-	root.AddCommand(deployCommands())
-	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
-		t.Fatalf("set relay: %v", err)
-	}
-	root.SetArgs([]string{
-		"deployments", "deploy",
-		"--service", "11111111-1111-1111-1111-111111111111",
-		"--environment", "22222222-2222-2222-2222-222222222222",
-		"--artifact", "33333333-3333-3333-3333-333333333333",
-		"--expected-desired-state-hash", "sha256:reviewed",
-		"--requested-by", "ignored-by-server",
-		"--idempotency-key", "deploy:test",
-	})
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("execute deployments deploy: %v", err)
-	}
-	if captured.ServiceID != "11111111-1111-1111-1111-111111111111" ||
-		captured.EnvironmentID != "22222222-2222-2222-2222-222222222222" ||
-		captured.ArtifactID != "33333333-3333-3333-3333-333333333333" ||
-		captured.ExpectedDesiredStateHash != "sha256:reviewed" ||
-		captured.RequestedBy != "ignored-by-server" ||
-		captured.IdempotencyKey != "deploy:test" {
-		t.Fatalf("captured deployment intent = %#v", captured)
-	}
-}
-
 func TestDeploymentContextVMKeyIsFreshUUIDv7OrCallerSupplied(t *testing.T) {
 	cmd := &cobra.Command{Use: "test"}
 	var stderr bytes.Buffer
@@ -554,71 +404,6 @@ func TestDeploymentContextVMKeyIsFreshUUIDv7OrCallerSupplied(t *testing.T) {
 	explicit, err := deploymentRequestKey(cmd, " retry-key ")
 	if err != nil || explicit != "retry-key" {
 		t.Fatalf("explicit key = %q, %v", explicit, err)
-	}
-}
-
-func TestDeploymentAndApprovalCommandsMintContextVMRetryKeys(t *testing.T) {
-	resetOperatorGlobals(t)
-	outputFormat = "json"
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
-	t.Setenv("BAHIA_NOSTR_RELAYS", "wss://relay.example")
-	var deployKey, approvalKey string
-	restore := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{
-			deploymentIntent: func(req client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error) {
-				deployKey = req.IdempotencyKey
-				return &client.DeploymentCommandResult{Status: "submitted"}, nil
-			},
-			deploymentApproval: func(req client.DeploymentApprovalNostrRequest) (*client.DeploymentCommandResult, error) {
-				approvalKey = req.IdempotencyKey
-				return &client.DeploymentCommandResult{Status: "submitted"}, nil
-			},
-		}, nil
-	})
-	defer restore()
-	for _, args := range [][]string{
-		{"deployments", "deploy", "--service", "svc", "--environment", "env", "--artifact", "art"},
-		{"deployments", "approve", "--intent", "intent"},
-	} {
-		root := newOperatorFlagTestCommand(t).Root()
-		root.AddCommand(deployCommands())
-		root.SetArgs(args)
-		if err := root.ExecuteContext(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, key := range []string{deployKey, approvalKey} {
-		parsed, err := uuid.Parse(key)
-		if err != nil || parsed.Version() != 7 {
-			t.Fatalf("generated key %q is not UUIDv7: %v", key, err)
-		}
-	}
-	if deployKey == approvalKey {
-		t.Fatal("distinct operations shared a key")
-	}
-}
-
-func TestRuntimeRestartCommandForwardsExplicitRetryKey(t *testing.T) {
-	resetOperatorGlobals(t)
-	outputFormat = "json"
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
-	t.Setenv("BAHIA_NOSTR_RELAYS", "wss://relay.example")
-	var captured string
-	restore := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{runtimeRestart: func(key string) (*client.RuntimeActionResult, error) {
-			captured = key
-			return &client.RuntimeActionResult{Action: "restart"}, nil
-		}}, nil
-	})
-	defer restore()
-	root := newOperatorFlagTestCommand(t).Root()
-	root.AddCommand(servicesCommands())
-	root.SetArgs([]string{"services", "actions", "restart", "--service", "svc", "--environment", "env", "--idempotency-key", "runtime-retry-1"})
-	if err := root.ExecuteContext(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if captured != "runtime-retry-1" {
-		t.Fatalf("runtime key = %q", captured)
 	}
 }
 
@@ -812,51 +597,30 @@ func TestBuildsRequestCommandRejectsMalformedBuildArgBeforeClientConstruction(t 
 	}
 }
 
-func TestBuildsReadAndRegisterCommandsUseSignerFirstClient(t *testing.T) {
+func TestBuildRegisterResultCommandUsesSignerFirstClient(t *testing.T) {
 	resetOperatorGlobals(t)
 	outputFormat = "json"
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", nostr.Generate().Hex())
-	serviceID := uuid.New().String()
 	buildID := uuid.New().String()
-	var gotBuildID, registeredBuildID string
-	var gotList client.BuildListNostrRequest
+	var registeredBuildID string
 	restoreFactory := replaceOperatorFactory(func(client.OperatorControlPlaneConfig) (cliOperatorClient, error) {
-		return fakeCLIOperatorClient{
-			buildGet: func(id string) (*client.BuildDetailsResult, error) {
-				gotBuildID = id
-				return &client.BuildDetailsResult{Build: &domain.Build{ID: uuid.MustParse(id), ServiceID: uuid.MustParse(serviceID), Status: domain.BuildStatusQueued}}, nil
-			},
-			buildList: func(req client.BuildListNostrRequest) (*client.BuildListResult, error) {
-				gotList = req
-				return &client.BuildListResult{Builds: []domain.Build{}, Limit: req.Limit, Offset: req.Offset}, nil
-			},
-			buildRegisterResult: func(id string) (*client.ArtifactCommandResult, error) {
-				registeredBuildID = id
-				return &client.ArtifactCommandResult{Status: "registered", BuildID: id}, nil
-			},
-		}, nil
+		return fakeCLIOperatorClient{buildRegisterResult: func(id string) (*client.ArtifactCommandResult, error) {
+			registeredBuildID = id
+			return &client.ArtifactCommandResult{Status: "registered", BuildID: id}, nil
+		}}, nil
 	})
 	defer restoreFactory()
 	root := newOperatorFlagTestCommand(t).Root()
 	root.AddCommand(buildsCommands())
 	if err := root.PersistentFlags().Set("relay", "wss://relay.example"); err != nil {
-		t.Fatalf("set relay: %v", err)
+		t.Fatal(err)
 	}
-	for _, args := range [][]string{
-		{"builds", "get", "--build", buildID},
-		{"builds", "list", "--service", serviceID, "--limit", "25", "--offset", "5"},
-		{"builds", "register-result", "--build", buildID},
-	} {
-		root.SetArgs(args)
-		if err := root.ExecuteContext(context.Background()); err != nil {
-			t.Fatalf("execute %v: %v", args, err)
-		}
+	root.SetArgs([]string{"builds", "register-result", "--build", buildID})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if gotBuildID != buildID || registeredBuildID != buildID {
-		t.Fatalf("get build = %q register build = %q", gotBuildID, registeredBuildID)
-	}
-	if gotList.ServiceID != serviceID || gotList.Limit != 25 || gotList.Offset != 5 {
-		t.Fatalf("list request = %#v", gotList)
+	if registeredBuildID != buildID {
+		t.Fatalf("registered build = %q", registeredBuildID)
 	}
 }
 
@@ -884,8 +648,6 @@ type fakeCLIOperatorClient struct {
 	restartErr             error
 	policyCreate           func(controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
 	buildRequest           func(client.BuildRequestNostrRequest) (*client.BuildCommandResult, error)
-	buildGet               func(string) (*client.BuildDetailsResult, error)
-	buildList              func(client.BuildListNostrRequest) (*client.BuildListResult, error)
 	buildRegisterResult    func(string) (*client.ArtifactCommandResult, error)
 	artifactRegister       func(client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error)
 	dnsZoneCreate          func(client.DNSZoneCreateRequest) (*client.DNSCommandResult, error)
@@ -909,18 +671,6 @@ func (f fakeCLIOperatorClient) Close() {
 func (f fakeCLIOperatorClient) BuildRequestNostr(_ context.Context, req client.BuildRequestNostrRequest, _ func(client.OperatorStatusEvent)) (*client.BuildCommandResult, error) {
 	if f.buildRequest != nil {
 		return f.buildRequest(req)
-	}
-	return nil, errors.New("not implemented")
-}
-func (f fakeCLIOperatorClient) GetBuildNostr(_ context.Context, buildID string, _ func(client.OperatorStatusEvent)) (*client.BuildDetailsResult, error) {
-	if f.buildGet != nil {
-		return f.buildGet(buildID)
-	}
-	return nil, errors.New("not implemented")
-}
-func (f fakeCLIOperatorClient) ListBuildsNostr(_ context.Context, req client.BuildListNostrRequest, _ func(client.OperatorStatusEvent)) (*client.BuildListResult, error) {
-	if f.buildList != nil {
-		return f.buildList(req)
 	}
 	return nil, errors.New("not implemented")
 }

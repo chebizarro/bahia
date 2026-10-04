@@ -6,8 +6,9 @@
   import { StandardIcon } from '$lib/icons/domain-icons.js';
   import { workers, workerCleanupExecutions, workerJobs } from '$lib/stores';
   import { workerJobsForPubkey, isTerminalLoomJobStatus } from '$lib/stores/collections/workers.svelte.js';
-  import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
-  import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
+  import { publishIntent, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
+  import { workerIntentRequest } from '$lib/nostr/domain-intents.js';
+  import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
   import { SCHEDULING_STATES, WORKER_COMMANDS, workerOperation } from '../actions.js';
   import { inferWorkerStatus } from '../list-utils.js';
   import CleanupRequestDialog from '../CleanupRequestDialog.svelte';
@@ -18,7 +19,7 @@
       label: 'Request cleanup',
       command: WORKER_COMMANDS.CLEANUP_REQUEST,
       cleanup: true,
-      allowedFrom: SCHEDULING_STATES
+      allowedFrom: SCHEDULING_STATES.filter(state => state !== 'disabled')
     },
     {
       label: 'Cordon',
@@ -60,7 +61,7 @@
       label: 'Edit labels',
       command: WORKER_COMMANDS.LABELS_UPDATE,
       labels: true,
-      allowedFrom: SCHEDULING_STATES
+      allowedFrom: SCHEDULING_STATES.filter(state => state !== 'disabled')
     }
   ];
   const LABEL_ACTION = WORKER_ACTIONS.find((action) => action.labels);
@@ -238,43 +239,6 @@
     return labels;
   }
 
-  function randomId() {
-    const cryptoApi = globalThis.crypto;
-    if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
-    if (cryptoApi?.getRandomValues) {
-      const bytes = new Uint8Array(16);
-      cryptoApi.getRandomValues(bytes);
-      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-    }
-    throw new Error('Browser cryptographic random ID generation is unavailable');
-  }
-
-  function idempotencyKey(action, sourceWorker) {
-    return `${action.command}:${sourceWorker.pubkey}:${randomId()}`;
-  }
-
-  function commandTags(action, sourceWorker, key) {
-    return [
-      ['d', key],
-      ['worker', sourceWorker.pubkey],
-      ['command', action.command]
-    ];
-  }
-
-  function commandContent(action, sourceWorker, key, reason, labels = null) {
-    const requestedBy = currentRequesterPubkey();
-    const operatorMetadata = { source: 'web.workers.detail' };
-    if (requestedBy) operatorMetadata.requested_by = requestedBy;
-    const content = {
-      worker_pubkey: sourceWorker.pubkey,
-      reason: reason || '',
-      idempotency_key: key,
-      operator_metadata: operatorMetadata
-    };
-    if (labels) content.labels = labels;
-    return content;
-  }
-
   function actionPendingKey(sourceWorker, action) {
     return `${sourceWorker.pubkey}:${action.command}`;
   }
@@ -308,13 +272,9 @@
 
   async function publishWorkerAction(sourceWorker, action, reason, labels = null) {
     if (!sourceWorker?.pubkey) throw new Error('Worker pubkey is required');
-    const key = idempotencyKey(action, sourceWorker);
-    const result = await publishCommand({
-      operation: workerOperation(action),
-      tags: commandTags(action, sourceWorker, key),
-      content: commandContent(action, sourceWorker, key, reason, labels)
-    });
-    return resultContent(result);
+    const result = await publishIntent(workerIntentRequest(workerOperation(action), sourceWorker,
+      resolveIntentOrgId('worker'), { reason, labels }));
+    return { ...result.desiredState, message: 'Signed worker intent pending daemon acceptance' };
   }
 
   async function handleWorkerAction(action) {
@@ -581,6 +541,7 @@
 </script>
 
 <div class="page">
+  <PendingDomainIntents domain="worker" />
   <a href="/workers" class="back">← Workers</a>
 
   {#if worker}
@@ -848,7 +809,6 @@
   open={cleanupDialogOpen}
   worker={worker}
   activeCleanup={selectedActiveCleanup}
-  source="web.workers.detail"
   onClose={closeCleanupDialog}
   onSubmitted={handleCleanupSubmitted}
 />

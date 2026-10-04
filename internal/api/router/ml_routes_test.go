@@ -12,6 +12,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
 
@@ -38,7 +39,7 @@ func (p *captureMLRESTPublisher) PublishMLInferenceRollbackRequest(_ context.Con
 }
 
 func mlRESTReceipt(requestKind, resultKind int, cmd controlplane.MLCommandPayload) *controlplane.MLCommandReceipt {
-	return &controlplane.MLCommandReceipt{RequestEventID: "rest-ml-event", RequestPubkey: "rest-pubkey", RequestKind: requestKind, ResultKind: resultKind, DTag: cmd.IdempotencyKey, ReadModelKinds: map[string]int{"endpoint_state": controlplane.KindMLInferenceEndpointState}, Status: "submitted", PublishedRelays: 1}
+	return &controlplane.MLCommandReceipt{RequestEventID: "rest-ml-event", RequestPubkey: "rest-pubkey", RequestKind: requestKind, ResultKind: resultKind, DTag: cmd.IdempotencyKey, ReadModelKinds: map[string]int{"endpoint_state": kinds.MLInferenceEndpointState}, Status: "submitted", PublishedRelays: 1}
 }
 
 type failingMLRESTPublisher struct {

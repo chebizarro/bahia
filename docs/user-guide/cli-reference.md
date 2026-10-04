@@ -109,7 +109,7 @@ For NIP-46 remote signing, use `--nostr-bunker-file` (or `BAHIA_NOSTR_BUNKER_FIL
 
 Service/environment create and update publish signed kind `30900` intents directly, subscribe for kind `30315` status, and read the resulting canonical `30900` state. Other signer-first CLI mutations still use ContextVM JSON-RPC over kind `25910`. Plain transport remains the default for those commands. Pass `--encrypted` to wrap the signed inner request in a NIP-59 kind `1059` gift wrap; encrypted mode requires `--service-pubkey` and works with either a local key or a NIP-46 signer that supports NIP-44. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
 
-For service/environment writes, the CLI enqueues the signed intent in its local outbox, subscribes before publishing, requires at least one relay OK, and waits up to `--result-timeout` (default `30s`, or `BAHIA_RESULT_TIMEOUT`) for status. Exit codes are 0 accepted, 1 rejected/conflict/superseded, 2 published without status, and 3 no relay accepted. Exit 2 prints `intent_id` and `event_id`; inspect the pending event with `bahia outbox list`. `--http-fallback` does not redirect these writes to HTTP.
+For service/environment/deployment/runtime writes, the CLI enqueues the signed intent in its local outbox, subscribes before publishing, requires at least one relay OK, and waits up to `--result-timeout` (default `30s`, or `BAHIA_RESULT_TIMEOUT`) for status. Exit codes are 0 accepted, 1 rejected/conflict/superseded, 2 published without status, and 3 no relay accepted. Exit 2 prints `intent_id` and `event_id`; inspect the pending event with `bahia outbox list`. `--http-fallback` does not redirect these writes to HTTP.
 
 For remaining ContextVM commands, before publishing, the CLI waits for the reply subscription to reach EOSE on its established relays. Each publish attempt waits up to `--result-timeout` (default `30s`). On timeout it re-subscribes and republishes the same logical request up to `--result-retries` times (default `2`); the stable `d` tag lets Bahia replay its cached idempotent response. Bahia keeps completed idempotent responses in memory and in PostgreSQL for 24 hours, so duplicate requests replay the terminal response without re-running the handler.
 
@@ -144,10 +144,11 @@ The current top-level CLI command groups are:
 - `config`
 - `secrets`
 - `orgs`
+- `notifications`
 - `package`
 - `souls`
 
-Bahia does **not** currently register top-level `llm`, `payments`, or `notifications` CLI commands.
+Bahia does **not** currently register top-level `llm` or `payments` CLI commands.
 
 ## Commands
 
@@ -170,10 +171,11 @@ bahia services create --org "$ORG_UUID" \
   --artifact-repo "ghcr.io/company/payment-api"
 bahia services update --service <service-uuid> --name "payment-api-v2"
 
-# Direct runtime lifecycle actions
-bahia services actions deploy --service svc-123 --environment env-456 --artifact art-789
-bahia services actions restart --service svc-123 --environment env-456
-bahia services actions stop --service svc-123 --environment env-456
+# Direct runtime lifecycle actions (UUIDs and organization required)
+# The same commands are also available under `services actions`.
+bahia services deploy --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID" --artifact "$ARTIFACT_UUID"
+bahia services restart --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID"
+bahia services stop --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID"
 ```
 
 ### Environments
@@ -217,6 +219,8 @@ bahia builds request \
 # succeeded or failed; Bahia does not currently project an intermediate running state.
 bahia builds list --service <service-uuid>
 bahia builds get --build <build-uuid>
+bahia artifacts list --service <service-uuid>
+bahia artifacts get --artifact <artifact-uuid>
 
 # After the build succeeds, register only its verified HiveCI artifact result.
 # Use the succeeded build ID shown by builds list; if CI correlation created a
@@ -239,6 +243,8 @@ First-time mirror creation and ref resolution can exceed the default 30-second p
 
 `--build-arg KEY=VALUE` is repeatable and values may contain `=`, but the fleet-local tag-only kind-5401 dispatch contract has no build-argument field. The private-mirror Hive-CI initiator therefore rejects non-empty build arguments before any secret resolution, mirror operation, event publication, or queued-build registration. Omit `--build-arg` for this workflow.
 
+`builds get/list` and `artifacts get/list` read signed `30900` build-registry and artifact-registry records from relays by default, using the same local cursor and stale-EOSE warning policy as service reads. `--http-fallback` explicitly uses the legacy REST read endpoints. Build and artifact mutations remain signer-first and are not redirected by that flag.
+
 If the queued ID returned by `builds request` remains `queued` while `builds list --service` shows a newer `succeeded` row, use that succeeded row's ID with `register-result`; this is the recovery path when CI result correlation lands on a separate build row.
 
 `builds register-result` accepts only a successful build. It resolves the immutable artifact from accepted HiveCI evidence and the configured registry; it does not permit an operator-supplied image override. Requesting or registering a build does not deploy it.
@@ -258,7 +264,7 @@ bahia deployments preview --service svc-123 --environment env-456 --artifact art
   --managed-runtime-config-file runtime.json --compact
 
 # Submit signer-first deployment intent
-bahia deployments deploy --service svc-123 --environment env-456 --artifact art-789
+bahia deploy --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID" --artifact "$ARTIFACT_UUID"
 
 # Attach managed HTTPS/DNS routing to the current deployed artifact without redeploying it
 bahia deployments route-attach --service svc-123 --environment env-456 \
@@ -270,21 +276,14 @@ bahia deployments route-attach --service svc-123 --environment env-456 \
   --upstream-port 8080 --health-path /healthz --internal=false
 
 # Submit signer-first rollback intent
-bahia deployments rollback --service svc-123 --environment env-456 --deployment-unit unit-789 --target-artifact artifact-prev --supersedes-intent intent-current
+bahia rollback --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID" --deployment-unit "$UNIT_UUID" --target-artifact "$PRIOR_ARTIFACT_UUID" --supersedes-intent "$CURRENT_INTENT_UUID"
+
+# Approve or reject a pending deployment using its canonical revision
+bahia deployments approve --org "$ORG_UUID" --intent "$INTENT_UUID" --expected-updated-at "$UPDATED_AT"
+bahia deployments reject --org "$ORG_UUID" --intent "$INTENT_UUID" --expected-updated-at "$UPDATED_AT"
 ```
 
-Deployment creation, rollback, approval, and `services actions deploy/restart/stop`
-currently use signed ContextVM requests. The daemon does not yet register a
-`deployment` 30900 intent handler, and the direct runtime action reactor does
-not implement a 30900 `runtime` intent handler. These commands cannot use
-direct intent publication until those handlers reconcile the corresponding
-canonical state.
-Each invocation prints a UUIDv7 idempotency key and sends it as
-`_meta.progressToken`. If a response is interrupted, retry the same operation
-with `--idempotency-key <printed-key>`; a new key requests a new execution.
-`-32011` means the daemon cannot replay the outcome, not that the deployment
-failed. `--http-fallback` still controls the legacy compatibility path for
-these unmigrated commands.
+Deployment creation, rollback, approval/rejection, and `services actions deploy/restart/stop` publish signed `30900` intents, not ContextVM requests. They require `--org` and UUID entity IDs; `--idempotency-key` accepts a UUIDv7 for retrying one logical intent. The CLI persists the signed event in its outbox before relay publication, then waits for `30315` status. Exit codes are 0 accepted, 1 rejected/conflict, 2 published without status (inspect `bahia outbox list`), and 3 no relay accepted. `--http-fallback` prints a no-op notice for these writes and never changes their transport. Configure the daemon's `deployment` and `runtime` intent domains before using them. Deployment preview and route-attach remain ContextVM calls and retain their retry keys.
 
 ### State
 
@@ -359,7 +358,7 @@ bahia dns drift-remediate
 bahia workers list
 
 # Show worker detail
-bahia workers show npub1worker...
+bahia workers show <64-character-worker-hex-pubkey>
 ```
 
 ### Logs
@@ -422,6 +421,8 @@ desired version is merely accepted, so local drift retains the applied version.
 
 ### Secrets
 
+`secrets list` reads OCK-encrypted `30900` secret references from relays by default. It returns metadata only; secret values are never included and remain available only through the authorized ContextVM reveal flow. A NIP-44-capable signer (`--nostr-key-file`/`BAHIA_NOSTR_NSEC`, or a NIP-46 bunker) and the Bahia service pubkey are required. Use `--http-fallback` only for the legacy REST read.
+
 ```bash
 # List secrets for a service
 bahia secrets list svc-123
@@ -434,6 +435,8 @@ bahia secrets delete svc-123 secret-456
 ```
 
 ### Organizations
+
+`orgs list`, `orgs get`, and `orgs members list` read the service's signed `30900` records and unwrap the matching `32010` OCK envelope through the CLI signer. A non-member receives `not readable with this key` with exit code 0, not decrypted org data. The local event-store cursor is reused across reads; missing relay EOSE prints a stale warning while returning cached state. `--http-fallback` explicitly selects the legacy REST reads.
 
 ```bash
 # List organizations
@@ -453,6 +456,15 @@ bahia orgs members add org-123 npub1member... --role deployer
 
 # Remove a member
 bahia orgs members remove org-123 npub1member...
+```
+
+### Notification channels
+
+`notifications channels list` and `notifications channels get <channel-uuid>` read OCK-encrypted channel metadata from relays. Their output omits service-only webhook URLs and credentials, including for fleet-scoped channels. The signer, relay, service pubkey, stale-cache, and explicit `--http-fallback` rules are the same as for organization reads.
+
+```bash
+bahia notifications channels list -o json
+bahia notifications channels get <channel-uuid>
 ```
 
 ### Encrypted operator requests with a remote signer
@@ -631,7 +643,7 @@ bahia services get svc-123 -o yaml
 | `--bootstrap-relay` | Specify bootstrap relay seed for trusted operator discovery (repeatable) |
 | `--service-pubkey` | Specify Bahia service pubkey for routing and single-service discovery trust |
 | `--trusted-service-pubkey` | Specify trusted Bahia service pubkey for bootstrap discovery (repeatable) |
-| `--http-fallback` | Use legacy HTTP for service, environment, state and policy reads; also allows explicit operator compatibility fallback |
+| `--http-fallback` | Use legacy HTTP for service, environment, state, policy, worker, build, artifact, organization, secret and notification reads; also allows explicit operator compatibility fallback |
 | `--eose-timeout` | Maximum wait for relay EOSE on Nostr reads (default `5s`; env `BAHIA_EOSE_TIMEOUT`). If no relay reaches EOSE, cached data is printed with a stale warning on stderr and the read exits 0 |
 | `--encrypted` | Use NIP-59/NIP-44 encrypted operator requests and replies; requires `--service-pubkey` |
 | `--result-timeout` | Maximum wait for a 30315 status on service/environment intents, or a ContextVM result for remaining commands (default `30s`; intents also support `BAHIA_RESULT_TIMEOUT`) |

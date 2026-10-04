@@ -3,7 +3,7 @@ import {
   DASHBOARD_WIDGET_KIND,
   FLEET_RELAY_URLS
 } from 'wheelhouse';
-import { createNostrPoolClient } from '$lib/nostr/subscriptions.js';
+import { nostr } from '$lib/nostr/subscriptions.js';
 
 const HEX_PUBKEY = /^[0-9a-f]{64}$/i;
 
@@ -24,10 +24,10 @@ export const OPS_WIDGET_ALLOWED_PUBKEYS = parseOpsWidgetPublisherAllowlist(
 
 export function createOpsWidgetWall({
   allowedPubkeys = OPS_WIDGET_ALLOWED_PUBKEYS,
-  clientFactory = createNostrPoolClient
+  clientFactory = null
 } = {}) {
   const store = createWidgetStore({ allowedPubkeys });
-  const client = clientFactory({
+  const client = clientFactory?.({
     relays: [...OPS_WIDGET_RELAYS],
     saveRelayConfig: () => {}
   });
@@ -35,7 +35,10 @@ export function createOpsWidgetWall({
 
   function start({ onEose, onClosed, onRejected, onHealth } = {}) {
     unsubscribe?.();
-    unsubscribe = client.subscribeWithRecovery(
+    const subscribe = client
+      ? (filters, handlers) => client.subscribeWithRecovery(filters, handlers)
+      : (filters, handlers) => nostr.subscribeWithRecoveryOnRelays(OPS_WIDGET_RELAYS, filters, handlers);
+    unsubscribe = subscribe(
       [{ kinds: [DASHBOARD_WIDGET_KIND] }],
       {
         onEvent: (event, relay) => {
@@ -59,8 +62,8 @@ export function createOpsWidgetWall({
   function destroy() {
     stop();
     store.clear();
-    client.disconnect();
+    client?.disconnect?.();
   }
 
-  return { store, start, stop, destroy, client };
+  return { store, start, stop, destroy, client: client || nostr };
 }

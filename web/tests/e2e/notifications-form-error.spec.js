@@ -3,7 +3,8 @@ import { installE2EMocks } from './helpers.js';
 import {
   KIND_GIFT_WRAP,
   createEncryptedNotificationsSystemInfo,
-  installEncryptedNotificationHarness
+  installEncryptedNotificationHarness,
+  notificationRelayFixtures
 } from './harnesses/notifications-encrypted.js';
 
 const systemInfo = createEncryptedNotificationsSystemInfo();
@@ -28,7 +29,7 @@ const existingChannel = {
 };
 
 async function installFailureHarness(page, { initialChannels = [], operationErrors = {} } = {}) {
-  await installE2EMocks(page, { systemInfo });
+  await installE2EMocks(page, { systemInfo, nostrEvents: notificationRelayFixtures(initialChannels) });
   await installEncryptedNotificationHarness(page, {
     initialChannels,
     initialLogs: [],

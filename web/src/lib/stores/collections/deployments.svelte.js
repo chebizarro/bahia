@@ -1,18 +1,7 @@
-import {
-  applyProjectedEntity,
-  selectProjectedEvent,
-  contentWithEventMeta,
-  getDTag,
-  getTagValue,
-  isReplaceableTombstone,
-  replaceArray,
-  sortByNameOrId,
-  sortByNewestField
-} from './utils.js';
-import { upsertReplaceableEvent } from '../../nostr/client.js';
 import { getEventStore, getServicePubkey } from '../../nostr/boot.js';
 import { CP_STATE_TOPICS } from '../../nostr/kinds.gen.js';
 import { createCoreQuery, contentId, scopedStateId, stateProjection } from './core-query.js';
+import { compareProjectionVersions, contentWithEventMeta, getTagValue, projectionVersion, sortByNewestField } from './utils.js';
 
 export const states = $state([]);
 export const llmRoutes = $state([]);
@@ -26,17 +15,38 @@ export const packageRepositories = $state([]);
 export const packageArtifacts = $state([]);
 export const packagePromotions = $state([]);
 
-const llmRouteMap = new Map();
-const llmRouteStateMap = new Map();
-const artifactMap = new Map();
-const buildMap = new Map();
-const deploymentIntentMap = new Map();
-const deploymentRunMap = new Map();
-const deploymentIntentWatermarks = new Map();
-const deploymentRunWatermarks = new Map();
+function scopedRouteStateId(event) {
+  const content = contentWithEventMeta(event);
+  const route = content.route_id || getTagValue(event, 'route');
+  const environment = content.environment_id || getTagValue(event, 'environment');
+  return route && environment ? `${route}:${environment}` : contentId(event, 'id');
+}
 
-const coreQueries = [
+function routeStateProjection(event, id) {
+  const content = contentWithEventMeta(event);
+  return {
+    ...content,
+    route_id: content.route_id || getTagValue(event, 'route'),
+    environment_id: content.environment_id || getTagValue(event, 'environment'),
+    id
+  };
+}
+
+function logicalNewer(left, right) {
+  return !right || compareProjectionVersions(
+    projectionVersion(contentWithEventMeta(left), left),
+    projectionVersion(contentWithEventMeta(right), right)
+  ) > 0;
+}
+
+const queries = [
   createCoreQuery({ topic: CP_STATE_TOPICS.SERVICE_STATE, target: states, identity: scopedStateId, project: stateProjection }),
+  createCoreQuery({ topic: CP_STATE_TOPICS.LLM_ROUTE, target: llmRoutes, identity: event => contentId(event, 'id', 'route_id'), project: (event, id) => ({ ...contentWithEventMeta(event), id, route_id: id }) }),
+  createCoreQuery({ topic: CP_STATE_TOPICS.LLM_STATE, target: llmRouteStates, identity: scopedRouteStateId, project: routeStateProjection }),
+  createCoreQuery({ topic: CP_STATE_TOPICS.ARTIFACT_REGISTRY, target: artifacts, identity: event => contentId(event, 'id', 'artifact_id'), sort: sortByNewestField(['created_at']) }),
+  createCoreQuery({ topic: CP_STATE_TOPICS.BUILD_REGISTRY, target: builds, identity: event => contentId(event, 'id', 'build_id'), sort: sortByNewestField(['created_at']) }),
+  createCoreQuery({ topic: CP_STATE_TOPICS.DEPLOYMENT_INTENT, target: deploymentIntents, identity: event => contentId(event, 'id', 'intent_id'), sort: sortByNewestField(['created_at']), logicalNewer }),
+  createCoreQuery({ topic: CP_STATE_TOPICS.DEPLOYMENT_RUN, target: deploymentRuns, identity: event => contentId(event, 'id', 'run_id'), sort: sortByNewestField(['created_at']), logicalNewer }),
   createCoreQuery({ topic: CP_STATE_TOPICS.POLICY_REGISTRY, target: policies, identity: event => contentId(event, 'id', 'policy_id') }),
   createCoreQuery({ topic: CP_STATE_TOPICS.PACKAGE_REPOSITORY, target: packageRepositories, identity: event => contentId(event, 'id', 'repository_id') }),
   createCoreQuery({ topic: CP_STATE_TOPICS.PACKAGE_ARTIFACT, target: packageArtifacts, identity: event => contentId(event, 'id', 'artifact_id'), sort: sortByNewestField(['created_at']) }),
@@ -46,74 +56,11 @@ const coreQueries = [
 export function initCoreDeploymentStoreBindings() {
   const store = getEventStore();
   const servicePubkey = getServicePubkey();
-  for (const query of coreQueries) query.bind(store, servicePubkey);
+  for (const query of queries) query.bind(store, servicePubkey);
 }
 export function teardownCoreDeploymentStoreBindings() {
-  for (const query of coreQueries) query.unbind();
+  for (const query of queries) query.unbind();
 }
-
 export function resetDeployments() {
-  [llmRouteMap, llmRouteStateMap, artifactMap, buildMap, deploymentIntentMap, deploymentRunMap]
-    .forEach((map) => map.clear());
-  [deploymentIntentWatermarks, deploymentRunWatermarks].forEach((map) => map.clear());
-  [llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns]
-    .forEach((array) => { array.length = 0; });
-  for (const query of coreQueries) query.reset();
+  for (const query of queries) query.reset();
 }
-
-export function refreshDeployments() {
-  replaceArray(llmRoutes, Array.from(llmRouteMap.values()).sort(sortByNameOrId));
-  replaceArray(llmRouteStates, Array.from(llmRouteStateMap.values()).sort(sortByNameOrId));
-  replaceArray(artifacts, Array.from(artifactMap.values()).sort(sortByNewestField(['created_at'])));
-  replaceArray(builds, Array.from(buildMap.values()).sort(sortByNewestField(['created_at'])));
-  replaceArray(deploymentIntents, Array.from(deploymentIntentMap.values()).sort(sortByNewestField(['created_at'])));
-  replaceArray(deploymentRuns, Array.from(deploymentRunMap.values()).sort(sortByNewestField(['created_at'])));
-}
-
-function applyScopedState(event, targetMap, replaceableEvents, scopeTags, watermarks = null) {
-  const content = contentWithEventMeta(event);
-  const dTag = getDTag(event);
-  const values = Object.fromEntries(scopeTags.map(([field, tag]) => [field, content[field] || getTagValue(event, tag)]));
-  const composed = Object.values(values).every(Boolean) ? Object.values(values).join(':') : '';
-  // Logical scope wins over relay d-tags so legacy and corrected coordinates
-  // deterministically converge on one row after reconnect.
-  const id = composed || content.id || dTag;
-  if (!id) return false;
-
-  const winner = selectProjectedEvent(event, replaceableEvents, id, watermarks);
-  if (!winner) return false;
-  event = winner;
-  const winnerContent = contentWithEventMeta(winner);
-  const winnerValues = Object.fromEntries(scopeTags.map(([field, tag]) => [field, winnerContent[field] || getTagValue(winner, tag)]));
-  if (isReplaceableTombstone(event)) {
-    targetMap.delete(id);
-  } else {
-    targetMap.set(id, { ...winnerContent, ...winnerValues, id });
-  }
-  return true;
-}
-
-function applyLLMRouteEvent(event, replaceableEvents) {
-  const { accepted } = upsertReplaceableEvent(replaceableEvents, event);
-  if (!accepted) return false;
-
-  const content = contentWithEventMeta(event);
-  const id = content.id || content.route_id || getTagValue(event, 'route') || getDTag(event);
-  if (!id) return false;
-
-  if (isReplaceableTombstone(event)) {
-    llmRouteMap.delete(id);
-  } else {
-    llmRouteMap.set(id, { ...content, id, route_id: id });
-  }
-  return true;
-}
-
-export const deploymentApplicators = {
-  llmRoute: applyLLMRouteEvent,
-  llmRouteState: (event, replaceableEvents) => applyScopedState(event, llmRouteStateMap, replaceableEvents, [['route_id', 'route'], ['environment_id', 'environment']]),
-  artifact: (event, replaceableEvents) => applyProjectedEntity(event, artifactMap, replaceableEvents, ['id', 'artifact_id']),
-  build: (event, replaceableEvents) => applyProjectedEntity(event, buildMap, replaceableEvents, ['id', 'build_id']),
-  intent: (event, replaceableEvents) => applyProjectedEntity(event, deploymentIntentMap, replaceableEvents, ['id', 'intent_id'], deploymentIntentWatermarks),
-  run: (event, replaceableEvents) => applyProjectedEntity(event, deploymentRunMap, replaceableEvents, ['id', 'run_id'], deploymentRunWatermarks)
-};

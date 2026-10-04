@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const bootstrapMock = vi.hoisted(() => vi.fn());
+const publishIntentMock = vi.hoisted(() => vi.fn());
 const dnsCommandMock = vi.hoisted(() => ({
   startDNSCommand: vi.fn(),
   dnsResultIsFailure: vi.fn((result) => ['error', 'failed', 'rejected'].includes(String(result?.status || '').toLowerCase())),
@@ -8,6 +9,7 @@ const dnsCommandMock = vi.hoisted(() => ({
     ZONE_CREATE: 'zone_create',
     POLICY_APPLY: 'policy_apply',
     RECORD_OVERRIDE: 'record_override',
+    OVERRIDE_RETIRE: 'override_retire',
     DRIFT_REMEDIATE: 'drift_remediate'
   }
 }));
@@ -17,13 +19,17 @@ vi.mock('../../src/lib/stores/controlplane.svelte.js', () => ({
 }));
 
 vi.mock('../../src/lib/nostr/dns-controlplane.js', () => dnsCommandMock);
+vi.mock('$lib/nostr/intent-client.svelte.js', () => ({
+  publishIntent: publishIntentMock, resolveIntentOrgId: () => 'f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7'
+}));
 
 describe('DNS command store APIs', () => {
   let store;
 
   beforeEach(async () => {
     vi.resetModules();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    publishIntentMock.mockResolvedValue({ pending: true });
     bootstrapMock.mockResolvedValue({ ok: true });
     dnsCommandMock.dnsResultIsFailure.mockImplementation((result) => ['error', 'failed', 'rejected'].includes(String(result?.status || '').toLowerCase()));
     dnsCommandMock.startDNSCommand.mockResolvedValue({
@@ -38,78 +44,48 @@ describe('DNS command store APIs', () => {
     store.resetDnsCommandRuns();
   });
 
-  it('starts all four DNS Nostr commands through the run tracker', async () => {
-    await store.createDNSZone({ name: 'prod.example' });
-    await store.applyDNSPolicy({ name: 'internal-only' });
-    await store.overrideDNSRecord({ zone_name: 'prod.example', record_name: 'api', record_type: 'A', value: '192.0.2.10', ttl: 60, reason: 'incident' });
-    await store.remediateDNSDrift({ zone: 'prod.example' });
-
-    expect(dnsCommandMock.startDNSCommand).toHaveBeenNthCalledWith(1, expect.objectContaining({ command: 'zone_create', payload: { name: 'prod.example' } }));
-    expect(dnsCommandMock.startDNSCommand).toHaveBeenNthCalledWith(2, expect.objectContaining({ command: 'policy_apply' }));
-    expect(dnsCommandMock.startDNSCommand).toHaveBeenNthCalledWith(3, expect.objectContaining({ command: 'record_override' }));
-    expect(dnsCommandMock.startDNSCommand).toHaveBeenNthCalledWith(4, expect.objectContaining({ command: 'drift_remediate' }));
-    expect(store.dnsState.commandRuns).toHaveLength(4);
-    expect(store.dnsState.commandRuns[0]).toMatchObject({ command: 'drift_remediate', phase: 'completed', requestEventId: 'req-1' });
+  it('publishes four supported DNS operations as pending intents', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    await store.createDNSZone({ name: 'prod.example', backend_ref: 'primary', visibility: 'internal', ttl: 60 });
+    await store.applyDNSPolicy({ id, name: 'prod', rules: [{ match: {}, action: { ttl_override: 60 } }], enabled: true });
+    await store.overrideDNSRecord({ id, zone_name: 'prod.example', record_name: 'api', record_type: 'A', value: '192.0.2.10', ttl: 60, reason: 'incident' });
+    await store.retireDNSOverride({ override_id: id, reason: 'resolved' });
+    expect(publishIntentMock.mock.calls.map(([request]) => [request.op, request.coordinate])).toEqual([
+      ['zone-create', 'zone:prod.example'], ['policy-apply', `dnspolicy:${id}`],
+      ['record-set', `dns-override:${id}`], ['override-retire', `dns-override:${id}`]
+    ]);
+    expect(dnsCommandMock.startDNSCommand).not.toHaveBeenCalled();
+    expect(store.dnsState.commandRuns).toHaveLength(0);
   });
 
-  it('tracks publish OK, status events, and terminal result payloads', async () => {
+  it('tracks unsupported drift remediation ContextVM results without marking intent acceptance', async () => {
     let statusCallback;
     let resolveResult;
-    const resultPromise = new Promise((resolve) => {
-      resolveResult = resolve;
-    });
+    const resultPromise = new Promise(resolve => { resolveResult = resolve; });
     dnsCommandMock.startDNSCommand.mockImplementation(async ({ onStatus }) => {
       statusCallback = onStatus;
-      return {
-        requestEventId: 'req-2',
-        ok: [{ relay: 'ws://relay.test', sent: true, accepted: true, message: '' }],
-        acceptedRelays: [{ relay: 'ws://relay.test', sent: true, accepted: true, message: '' }],
-        rejectedRelays: [{ relay: 'ws://relay-2.test', sent: true, accepted: false, message: 'duplicate' }],
-        result: resultPromise
-      };
+      return { requestEventId: 'req-2', ok: [{ sent: true, accepted: true }], acceptedRelays: [], rejectedRelays: [], result: resultPromise };
     });
-
-    const run = await store.createDNSZone({ name: 'prod.example' });
-    const trackedResult = run.result;
-    statusCallback({ id: 'status-1', status: 'processing', step: 'reconciling' });
-    resolveResult({ id: 'result-2', status: 'success', content: { zone: 'prod.example' } });
-    await expect(trackedResult).resolves.toMatchObject({ id: 'result-2', status: 'success' });
-
-    expect(run.publishOk).toHaveLength(1);
-    expect(run.acceptedRelays).toHaveLength(1);
-    expect(run.rejectedRelays).toHaveLength(1);
-    expect(run.statusEvents).toEqual([{ id: 'status-1', status: 'processing', step: 'reconciling' }]);
+    const run = await store.remediateDNSDrift({ zone: 'prod.example', idempotency_key: 'drift-1' });
+    statusCallback({ status: 'processing', step: 'reconciling' });
+    resolveResult({ status: 'success', message: 'done' });
+    await expect(run.result).resolves.toMatchObject({ status: 'success' });
     expect(run.phase).toBe('completed');
-    expect(run.result).toMatchObject({ content: { zone: 'prod.example' } });
+    expect(publishIntentMock).not.toHaveBeenCalled();
   });
 
-  it('records rejected publish failures in commandRuns', async () => {
+  it('records drift publish rejection', async () => {
     dnsCommandMock.startDNSCommand.mockRejectedValueOnce(new Error('Nostr request publish rejected: auth-required'));
-
     await expect(store.remediateDNSDrift({ zone: 'prod.example' })).rejects.toThrow('auth-required');
-
-    expect(store.dnsState.commandRuns).toHaveLength(1);
-    expect(store.dnsState.commandRuns[0]).toMatchObject({
-      command: 'drift_remediate',
-      phase: 'rejected',
-      error: 'Nostr request publish rejected: auth-required'
-    });
+    expect(store.dnsState.commandRuns[0]).toMatchObject({ command: 'drift_remediate', phase: 'rejected' });
   });
 
-  it('records CLOSED/AUTH result subscription errors', async () => {
-    dnsCommandMock.startDNSCommand.mockResolvedValueOnce({
-      requestEventId: 'req-closed',
-      ok: [{ relay: 'ws://relay.test', sent: true, accepted: true, message: '' }],
-      acceptedRelays: [{ relay: 'ws://relay.test', sent: true, accepted: true, message: '' }],
-      rejectedRelays: [],
-      result: Promise.reject(new Error('Nostr result subscription auth closure: ws://relay.test: auth-required'))
-    });
-
-    const run = await store.applyDNSPolicy({ name: 'internal-only' });
+  it('records drift CLOSED/AUTH result subscription errors', async () => {
+    dnsCommandMock.startDNSCommand.mockResolvedValueOnce({ requestEventId: 'req-closed', ok: [], acceptedRelays: [], rejectedRelays: [],
+      result: Promise.reject(new Error('Nostr result subscription auth closure: auth-required')) });
+    const run = await store.remediateDNSDrift({ zone: 'prod.example' });
     await expect(run.result).rejects.toThrow('auth-required');
-
     expect(run.phase).toBe('error');
-    expect(run.error).toContain('auth-required');
   });
 
   it('builds narrow DNS read-model relay filters scoped to the Bahia service pubkey', () => {

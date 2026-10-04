@@ -34,7 +34,7 @@ describe('public controlplane command helpers', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     publishIntentMock.mockResolvedValue({ pending: true });
     canonicalIntentRecordMock.mockReturnValue(null);
     bootstrapMock.mockResolvedValue({ ok: true });
@@ -111,41 +111,20 @@ describe('public controlplane command helpers', () => {
     await expect(api.createEnvironment({ id: 'Not-A-UUID', name: 'prod' })).rejects.toThrow(/Invalid entity id/);
   });
 
-  it('creates deployment intents with service/environment/artifact routing tags', async () => {
+  it('creates deployment intents as pending signed events, not ContextVM', async () => {
     await api.createDeploymentIntent('svc-1', 'env-1', 'artifact-1');
-
-    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
-      operation: 'service/deploy',
-      tags: [['service', 'svc-1'], ['environment', 'env-1'], ['artifact', 'artifact-1']],
-      payload: {
-        service_id: 'svc-1',
-        environment_id: 'env-1',
-        artifact_id: 'artifact-1'
-      },
-      kind: 25910,
-      resultKinds: [25910],
-      signal: undefined,
-      timeoutMs: undefined
-    });
+    expect(publishIntentMock).toHaveBeenCalledWith(expect.objectContaining({
+      domain: 'deployment', op: 'create', coordinate: 'svc-1:env-1',
+      content: expect.objectContaining({ service_id: 'svc-1', environment_id: 'env-1', artifact_id: 'artifact-1', intent_id: expect.any(String) })
+    }));
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
-  it('targets deployment intents at an explicit deployment unit', async () => {
+  it('preserves an explicit deployment unit in the signed intent', async () => {
     await api.createDeploymentIntent('svc-1', 'env-1', 'artifact-1', 'unit-max');
-
-    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
-      operation: 'service/deploy',
-      tags: [['service', 'svc-1'], ['environment', 'env-1'], ['unit', 'unit-max'], ['artifact', 'artifact-1']],
-      payload: {
-        service_id: 'svc-1',
-        environment_id: 'env-1',
-        deployment_unit_id: 'unit-max',
-        artifact_id: 'artifact-1'
-      },
-      kind: 25910,
-      resultKinds: [25910],
-      signal: undefined,
-      timeoutMs: undefined
-    });
+    expect(publishIntentMock).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.objectContaining({ deployment_unit_id: 'unit-max' })
+    }));
   });
 
   it('previews proposed managed desired state through the configured signer', async () => {
@@ -181,49 +160,21 @@ describe('public controlplane command helpers', () => {
     });
   });
 
-  it('signs the displayed desired-state hash into an idempotent deploy request', async () => {
+  it('preserves the reviewed desired-state hash in the signed intent', async () => {
     const hash = `sha256:${'b'.repeat(64)}`;
     await api.createDeploymentIntent('svc-1', 'env-1', 'artifact-1', 'unit-1', hash);
-
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
-      operation: 'service/deploy',
-      tags: [['service', 'svc-1'], ['environment', 'env-1'], ['unit', 'unit-1'], ['artifact', 'artifact-1']],
-      payload: {
-        service_id: 'svc-1',
-        environment_id: 'env-1',
-        deployment_unit_id: 'unit-1',
-        artifact_id: 'artifact-1',
-        expected_desired_state_hash: hash,
-        idempotency_key: hash
-      },
-      kind: 25910,
-      resultKinds: [25910],
-      signal: undefined,
-      timeoutMs: undefined,
-      requestId: hash
-    });
+    expect(publishIntentMock).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.objectContaining({ expected_desired_state_hash: hash, idempotency_key: hash, deployment_unit_id: 'unit-1' })
+    }));
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
-  it('submits the reviewed public route in the signed idempotent deploy request', async () => {
-    const hash = `sha256:${'d'.repeat(64)}`;
-    const publicRoute = {
-      hostname: 'arcana.example.com',
-      upstream_scheme: 'http',
-      upstream_port: 8080,
-      health_path: '/healthz',
-      tls: 'managed'
-    };
-
-    await api.createDeploymentIntent('svc-1', 'env-1', 'artifact-1', 'unit-1', hash, publicRoute);
-
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith(expect.objectContaining({
-      operation: 'service/deploy',
-      payload: expect.objectContaining({
-        expected_desired_state_hash: hash,
-        idempotency_key: hash,
-        public_route: publicRoute
-      }),
-      requestId: hash
+  it('preserves the reviewed public route in the signed intent', async () => {
+    const publicRoute = { hostname: 'arcana.example.com', upstream_scheme: 'http', upstream_port: 8080,
+      health_path: '/healthz', tls: 'managed' };
+    await api.createDeploymentIntent('svc-1', 'env-1', 'artifact-1', 'unit-1', 'sha256:hash', publicRoute);
+    expect(publishIntentMock).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.objectContaining({ public_route: publicRoute })
     }));
   });
 
@@ -246,18 +197,15 @@ describe('public controlplane command helpers', () => {
     expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
-  it('approves deployment intents through canonical ContextVM approval requests', async () => {
+  it('approves deployment intents with the canonical revision', async () => {
+    const { deploymentIntents } = await import('../../src/lib/stores/collections/deployments.svelte.js');
+    deploymentIntents.push({ id: 'intent-1', updated_at: '2026-10-03T00:00:00Z', org_id: ORG_ID });
     await api.approveDeploymentIntent('intent-1');
-
-    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
-      operation: 'approval/approve',
-      tags: [['intent', 'intent-1'], ['decision', 'approve']],
-      payload: { intent_id: 'intent-1', decision: 'approve' },
-      kind: 25910,
-      resultKinds: [25910],
-      signal: undefined,
-      timeoutMs: undefined
-    });
+    expect(publishIntentMock).toHaveBeenCalledWith(expect.objectContaining({
+      domain: 'deployment', op: 'approve', coordinate: 'intent-1',
+      content: expect.objectContaining({ deployment_intent_id: 'intent-1', expected_updated_at: '2026-10-03T00:00:00Z' })
+    }));
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
   it('creates LLM routes and releases through signed intents', async () => {
@@ -289,68 +237,17 @@ describe('public controlplane command helpers', () => {
     expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
-  it('requests LLM deploys and rollbacks through canonical ContextVM lifecycle methods', async () => {
-    requestEncryptedResultMock.mockResolvedValueOnce({
-      requestEventId: 'req-1',
-      resultEvent: {
-        id: 'result-llm-deploy',
-        kind: 25910,
-        tags: [['e', 'req-1'], ['status', 'success'], ['step', 'completed']],
-        content: JSON.stringify({ status: 'success', step: 'completed', message: 'completed' })
-      }
-    });
-
-    const deployResult = await api.requestLLMDeploy({
-      route_id: 'llm-route-1',
-      environment_id: 'env-prod',
-      release_id: 'llm-release-1',
-      requested_by: 'f'.repeat(64)
-    });
-
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
-      operation: 'llm/deploy',
-      tags: [['route', 'llm-route-1'], ['environment', 'env-prod'], ['release', 'llm-release-1']],
-      payload: {
-        route_id: 'llm-route-1',
-        environment_id: 'env-prod',
-        release_id: 'llm-release-1',
-        requested_by: 'f'.repeat(64)
-      },
-      kind: 25910,
-      resultKinds: [25910]
-    });
-    expect(deployResult).toMatchObject({
-      requestEventId: 'req-1',
-      event: { id: 'result-llm-deploy', kind: 25910 }
-    });
-
-    requestEncryptedResultMock.mockResolvedValueOnce({
-      requestEventId: 'req-2',
-      resultEvent: {
-        id: 'result-llm-rollback',
-        kind: 25910,
-        tags: [['e', 'req-2'], ['status', 'success'], ['step', 'completed']],
-        content: JSON.stringify({ status: 'success', step: 'completed', message: 'rollback completed' })
-      }
-    });
-
-    const rollbackResult = await api.requestLLMRollback({
-      route_id: 'llm-route-1',
-      environment_id: 'env-prod',
-      requested_by: 'f'.repeat(64)
-    });
-    expect(requestEncryptedResultMock).toHaveBeenLastCalledWith({
-      operation: 'llm/rollback',
-      tags: [['route', 'llm-route-1'], ['environment', 'env-prod']],
-      payload: {
-        route_id: 'llm-route-1',
-        environment_id: 'env-prod',
-        requested_by: 'f'.repeat(64)
-      },
-      kind: 25910,
-      resultKinds: [25910]
-    });
-    expect(rollbackResult).toMatchObject({ requestEventId: 'req-2', event: { id: 'result-llm-rollback', kind: 25910 } });
+  it('publishes LLM deploys and rollbacks as pending intents', async () => {
+    await api.requestLLMDeploy({ route_id: 'llm-route-1', environment_id: 'env-prod',
+      release_id: 'llm-release-1', requested_by: 'f'.repeat(64) });
+    await api.requestLLMRollback({ route_id: 'llm-route-1', environment_id: 'env-prod' });
+    expect(publishIntentMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      domain: 'llm', op: 'deploy', coordinate: 'llm-route-1:env-prod',
+      content: expect.objectContaining({ release_id: 'llm-release-1' })
+    }));
+    expect(publishIntentMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      domain: 'llm', op: 'rollback', coordinate: 'llm-route-1:env-prod' }));
+    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
   it('generates artifact SBOMs through canonical ContextVM encrypted requests', async () => {
@@ -581,17 +478,14 @@ describe('public controlplane command helpers', () => {
     expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
-  it('surfaces terminal error results from ContextVM command replies', async () => {
-    requestEncryptedResultMock.mockResolvedValueOnce({
-      requestEventId: 'req-1',
-      resultEvent: {
-        id: 'result-error',
-        kind: 25910,
-        tags: [['e', 'req-1'], ['status', 'failed'], ['error', 'policy blocked']],
-        content: JSON.stringify({ status: 'failed', error: 'policy blocked' })
-      }
-    });
-
-    await expect(api.createDeploymentIntent('svc-1', 'env-1', 'artifact-1')).rejects.toThrow('policy blocked');
+  it('keeps preview errors on ContextVM but not deployment mutation errors', async () => {
+    requestEncryptedResultMock.mockResolvedValueOnce({ requestEventId: 'req-1',
+      resultEvent: { id: 'result-error', kind: 25910, tags: [['status', 'failed'], ['error', 'policy blocked']],
+        content: JSON.stringify({ status: 'failed', error: 'policy blocked' }) } });
+    await expect(api.previewServiceDeployment({ service_id: 'svc-1', environment_id: 'env-1', artifact_id: 'artifact-1' }))
+      .rejects.toThrow('policy blocked');
+    await api.createDeploymentIntent('svc-1', 'env-1', 'artifact-1');
+    expect(publishIntentMock).toHaveBeenCalled();
   });
+
 });

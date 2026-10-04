@@ -22,8 +22,6 @@ import (
 type cliOperatorClient interface {
 	Close()
 	BuildRequestNostr(context.Context, client.BuildRequestNostrRequest, func(client.OperatorStatusEvent)) (*client.BuildCommandResult, error)
-	GetBuildNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.BuildDetailsResult, error)
-	ListBuildsNostr(context.Context, client.BuildListNostrRequest, func(client.OperatorStatusEvent)) (*client.BuildListResult, error)
 	RegisterBuildResultNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error)
 	RegisterArtifactNostr(context.Context, client.RegisterArtifactNostrRequest, func(client.OperatorStatusEvent)) (*client.ArtifactCommandResult, error)
 	ImportObservedArtifactNostr(context.Context, client.ImportObservedArtifactNostrRequest, func(client.OperatorStatusEvent)) (*client.ImportObservedArtifactResult, error)
@@ -33,14 +31,8 @@ type cliOperatorClient interface {
 	DNSDriftRemediate(context.Context, client.DNSDriftRemediateRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
 	DNSOverrideRetire(context.Context, client.DNSOverrideRetireRequest, func(client.OperatorStatusEvent)) (*client.DNSCommandResult, error)
 	GetEnvironmentDetailsNostr(context.Context, string, func(client.OperatorStatusEvent)) (*client.EnvironmentDetails, error)
-	DeployServiceRuntimeNostr(context.Context, string, string, *string, func(client.OperatorStatusEvent), ...string) (*client.RuntimeActionResult, error)
 	PreviewDeploymentNostr(context.Context, client.DeploymentPreviewNostrRequest, func(client.OperatorStatusEvent)) (map[string]any, error)
-	CreateDeploymentIntentWithRequestNostr(context.Context, client.DeploymentIntentNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
 	RouteAttach(context.Context, client.RouteAttachRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
-	RollbackDeploymentNostr(context.Context, client.RollbackDeploymentNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
-	ApproveDeploymentNostr(context.Context, client.DeploymentApprovalNostrRequest, func(client.OperatorStatusEvent)) (*client.DeploymentCommandResult, error)
-	RestartServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent), ...string) (*client.RuntimeActionResult, error)
-	StopServiceRuntimeNostr(context.Context, string, string, func(client.OperatorStatusEvent), ...string) (*client.RuntimeActionResult, error)
 	ScanAdoptionNostr(context.Context, client.AdoptionScanRequest, func(client.OperatorStatusEvent)) ([]client.AdoptionPreview, error)
 	ImportAdoptionNostr(context.Context, client.AdoptionImportRequest, func(client.OperatorStatusEvent)) ([]client.AdoptionImportResult, error)
 	PublishPolicyCreateNostr(context.Context, controlplane.PolicyMutationCommand) (*controlplane.PolicyCommandReceipt, error)
@@ -137,24 +129,6 @@ func runBuildRequestNostr(cmd *cobra.Command, req client.BuildRequestNostrReques
 	return op.BuildRequestNostr(cmd.Context(), req, operatorStatusCallback(cmd, "builds request"))
 }
 
-func runBuildGetNostr(cmd *cobra.Command, buildID string) (*client.BuildDetailsResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.GetBuildNostr(cmd.Context(), buildID, operatorStatusCallback(cmd, "builds get"))
-}
-
-func runBuildListNostr(cmd *cobra.Command, req client.BuildListNostrRequest) (*client.BuildListResult, error) {
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.ListBuildsNostr(cmd.Context(), req, operatorStatusCallback(cmd, "builds list"))
-}
-
 func runBuildRegisterResultNostr(cmd *cobra.Command, buildID string) (*client.ArtifactCommandResult, error) {
 	op, err := buildCLIOperatorClient(cmd)
 	if err != nil {
@@ -240,21 +214,12 @@ func runEnvironmentGetDetailsNostrWithClient(cmd *cobra.Command, op cliOperatorC
 	return op.GetEnvironmentDetailsNostr(cmd.Context(), environmentID, operatorStatusCallback(cmd, "environment get-details"))
 }
 
-func runDeploymentIntentNostr(cmd *cobra.Command, req client.DeploymentIntentNostrRequest) (*client.DeploymentCommandResult, error) {
+func runDeploymentPreviewNostr(cmd *cobra.Command, req client.DeploymentPreviewNostrRequest) (map[string]any, error) {
 	key, err := deploymentRequestKey(cmd, req.IdempotencyKey)
 	if err != nil {
 		return nil, err
 	}
 	req.IdempotencyKey = key
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.CreateDeploymentIntentWithRequestNostr(cmd.Context(), req, operatorStatusCallback(cmd, "deploy"))
-}
-
-func runDeploymentPreviewNostr(cmd *cobra.Command, req client.DeploymentPreviewNostrRequest) (map[string]any, error) {
 	op, err := buildCLIOperatorClient(cmd)
 	if err != nil {
 		return nil, err
@@ -264,70 +229,17 @@ func runDeploymentPreviewNostr(cmd *cobra.Command, req client.DeploymentPreviewN
 }
 
 func runRouteAttachNostr(cmd *cobra.Command, req client.RouteAttachRequest) (*client.DeploymentCommandResult, error) {
+	key, err := deploymentRequestKey(cmd, req.IdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	req.IdempotencyKey = key
 	op, err := buildCLIOperatorClient(cmd)
 	if err != nil {
 		return nil, err
 	}
 	defer op.Close()
 	return op.RouteAttach(cmd.Context(), req, operatorStatusCallback(cmd, "route attach"))
-}
-
-func runRollbackIntentNostr(cmd *cobra.Command, req client.RollbackDeploymentNostrRequest) (*client.DeploymentCommandResult, error) {
-	key, err := deploymentRequestKey(cmd, req.IdempotencyKey)
-	if err != nil {
-		return nil, err
-	}
-	req.IdempotencyKey = key
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.RollbackDeploymentNostr(cmd.Context(), req, operatorStatusCallback(cmd, "rollback"))
-}
-
-func runDeploymentApprovalNostr(cmd *cobra.Command, req client.DeploymentApprovalNostrRequest) (*client.DeploymentCommandResult, error) {
-	key, err := deploymentRequestKey(cmd, req.IdempotencyKey)
-	if err != nil {
-		return nil, err
-	}
-	req.IdempotencyKey = key
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return nil, err
-	}
-	defer op.Close()
-	return op.ApproveDeploymentNostr(cmd.Context(), req, operatorStatusCallback(cmd, "deployment approval"))
-}
-
-func runRuntimeActionNostrFirst(cmd *cobra.Command, action, serviceID, envID string, artifactID *string, fallback func(context.Context) (*client.RuntimeActionResult, error)) (*client.RuntimeActionResult, error) {
-	supplied, _ := cmd.Flags().GetString("idempotency-key")
-	key, err := deploymentRequestKey(cmd, supplied)
-	if err != nil {
-		return nil, err
-	}
-	op, err := buildCLIOperatorClient(cmd)
-	if err != nil {
-		return fallbackOrError(cmd, err, fallback)
-	}
-	defer op.Close()
-
-	statusCallback := operatorStatusCallback(cmd, action)
-	var result *client.RuntimeActionResult
-	switch action {
-	case "deploy":
-		result, err = op.DeployServiceRuntimeNostr(cmd.Context(), serviceID, envID, artifactID, statusCallback, key)
-	case "restart":
-		result, err = op.RestartServiceRuntimeNostr(cmd.Context(), serviceID, envID, statusCallback, key)
-	case "stop":
-		result, err = op.StopServiceRuntimeNostr(cmd.Context(), serviceID, envID, statusCallback, key)
-	default:
-		err = &client.ControlPlaneRequestError{Phase: "validate runtime action", RequestAccepted: false, Cause: fmt.Errorf("unsupported runtime action %q", action)}
-	}
-	if err != nil {
-		return fallbackOrError(cmd, err, fallback)
-	}
-	return result, nil
 }
 
 func runAdoptionScanNostrFirst(cmd *cobra.Command, req client.AdoptionScanRequest, rawTargetUsed bool, fallback func(context.Context) ([]client.AdoptionPreview, error)) ([]client.AdoptionPreview, error) {

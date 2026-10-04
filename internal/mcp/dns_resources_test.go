@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
@@ -18,7 +19,7 @@ func (f dnsEndpointListerFunc) ListDNSEndpoints(ctx context.Context) ([]domain.D
 
 func TestDNSResourcesListHealthyEndpoints(t *testing.T) {
 	port := 443
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{
+	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{
 		DNSEndpoints: dnsEndpointListerFunc(func(ctx context.Context) ([]domain.DNSEndpoint, error) {
 			return []domain.DNSEndpoint{
 				{
@@ -43,6 +44,15 @@ func TestDNSResourcesListHealthyEndpoints(t *testing.T) {
 			}, nil
 		}),
 	})
+	endpoints, err := legacyFor(server).DNSEndpoints.ListDNSEndpoints(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range endpoints {
+		endpoints[i].ID = uuid.New()
+		endpoints[i].Family = domain.DNSEndpointFamilyService
+	}
+	attachCanonicalMCPFixture(t, server).publishDNS(t, endpoints...)
 
 	resources, err := server.GetResources(context.Background())
 	if err != nil {
@@ -81,7 +91,7 @@ func TestDNSResourcesListHealthyEndpoints(t *testing.T) {
 }
 
 func TestDNSResourcesNoListerReturnsEmpty(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{})
 
 	resources, err := server.GetResources(context.Background())
 	if err != nil {
@@ -92,16 +102,16 @@ func TestDNSResourcesNoListerReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestDNSResourcesPropagatesListerError(t *testing.T) {
+func TestDNSResourcesDoNotUseLegacyLister(t *testing.T) {
 	expectedErr := errors.New("projection unavailable")
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{
+	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{
 		DNSEndpoints: dnsEndpointListerFunc(func(ctx context.Context) ([]domain.DNSEndpoint, error) {
 			return nil, expectedErr
 		}),
 	})
 
 	_, err := server.GetResources(context.Background())
-	if !errors.Is(err, expectedErr) {
-		t.Fatalf("expected wrapped lister error, got %v", err)
+	if err != nil {
+		t.Fatalf("store-backed resources used legacy lister: %v", err)
 	}
 }

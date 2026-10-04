@@ -38,7 +38,6 @@ function runtimeCapabilityEvent() {
       methods: ['soulfactory.provision'],
       relay_hints: { control: [BROWSER_RELAY] }
     }),
-    sig: '0'.repeat(128)
   };
 }
 
@@ -165,6 +164,9 @@ test.describe('Soul Signing Smoke Test', () => {
 
     await page.goto('/souls/new');
 
+    await expect(page.getByRole('heading', { name: 'Create New Soul' })).toBeVisible();
+    await expect(page.locator('.wizard-progress .progress-step[aria-current="step"]:has-text("Customize")')).toBeVisible();
+    await expect(page.locator('.auth-status:has-text("Authenticated")')).toBeVisible();
     await fillRequiredIdentity(page, { name: 'Reject Agent', agentId: 'reject-agent', brief: 'Should fail due to relay rejection' });
     await openPreview(page);
 

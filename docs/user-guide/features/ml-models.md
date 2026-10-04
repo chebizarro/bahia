@@ -12,7 +12,7 @@ The ML fabric supports:
 
 ## Transport Semantics
 
-The ML web import and deploy forms publish signed Nostr ContextVM commands directly through the browser control-plane transport. Import uses `ml/model-import`; deployment uses `ml/inference-deploy`. Submission is not terminal workflow completion: operators should monitor correlated ContextVM result events, legacy ML result projections where present, and the ML read models listed below.
+The ML registry forms publish signed kind-`30900` intents for model, version, and endpoint create/update. They remain pending until scoped `30315` acceptance or a newer canonical state arrives. Identity-changing updates and deletes are not supported by the daemon and remain on their existing ContextVM path with an idempotency key. The distinct import and inference-deploy forms still publish signed Nostr ContextVM commands (`ml/model-import` and `ml/inference-deploy`). Submission is not terminal workflow completion: follow the relevant status and canonical ML read models below.
 
 Browser pinning for an existing endpoint is also signer-first Nostr ingress for the worker placement command. External clients that still require compatibility HTTP can use backend compatibility endpoints, but the Bahia web route no longer depends on them.
 
@@ -292,4 +292,4 @@ Supported inference runtimes:
 
 ## Signed ML registry intents
 
-Fleet operators can publish `bahia.intent.ml.v1` kind-30900 intents for model, model-version, and inference-endpoint create/update. The daemon calls the ML registry service, which publishes canonical records through `MLCanonicalPublisher`, and emits bounded kind-30315 status. Delete intents are rejected because the registry has no durable delete method; identity-changing updates are also rejected because old canonical coordinates cannot currently be tombstoned. Existing ML command handlers remain on their legacy transport.
+Fleet operators can publish `bahia.intent.ml.v1` kind-30900 intents for model, model-version, and inference-endpoint create/update/delete. The daemon writes the durable local registry, publishes canonical records through `MLCanonicalPublisher`, and emits bounded kind-30315 status. Deletes publish `deleted=true` tombstones. A slug, version identity, or endpoint name/environment change tombstones the old canonical coordinate before publishing the replacement. Model-version records now include `updated_at`; update/delete intents may provide the canonical RFC3339 `expected_updated_at` revision. The encrypted `ml/model-*`, `ml/version-*`, and `ml/endpoint-*` ContextVM methods use the same intent processor when ML intents are enabled; their legacy path still calls the registry service once. Existing ML import, deploy, and recipe commands remain on their prior transport.

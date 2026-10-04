@@ -16,7 +16,7 @@ import (
 )
 
 func TestCallToolRejectsUnauthenticatedCaller(t *testing.T) {
-	server := NewServer(nil, zap.NewNop())
+	server := newTestServer(nil, zap.NewNop())
 
 	result, err := server.CallTool(context.Background(), "bahia_delete_service", map[string]interface{}{
 		"service_id": uuid.New().String(),
@@ -30,7 +30,7 @@ func TestCallToolRejectsUnauthenticatedCaller(t *testing.T) {
 }
 
 func TestCallToolRejectsAuthenticatedCallerOutsideOperatorAllowlist(t *testing.T) {
-	server := NewServer(nil, zap.NewNop())
+	server := newTestServer(nil, zap.NewNop())
 	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
 		Subject: "npub-unknown",
 		PubKey:  "unknown-pubkey",
@@ -212,6 +212,13 @@ func TestCallToolBuildToolsEnforceTenantRBAC(t *testing.T) {
 				t.Run(tool, func(t *testing.T) {
 					orgID := uuid.New()
 					fixture := newMCPBuildAuthorizationFixture(orgID, tc.allowlist, tc.lookup(orgID))
+					canonical := attachCanonicalMCPFixture(t, fixture.server)
+					service, err := fixture.server.registry.GetService(context.Background(), fixture.serviceID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					canonical.publishService(t, service)
+					canonical.publishBuild(t, fixture.builds.builds[fixture.buildID])
 					beforeBuildCount := len(fixture.builds.builds)
 					beforeStatus := fixture.builds.builds[fixture.buildID].Status
 					ctx := auth.ContextWithPrincipal(context.Background(), tc.principal)
@@ -266,7 +273,7 @@ func TestCallToolRejectsCrossTenantSecretMutation(t *testing.T) {
 
 			const callerPubkey = "caller-pubkey"
 			registry := newMCPAuthorizationRegistry(serviceRepo, nil)
-			server := NewServerWithOptions(registry, zap.NewNop(), ServerDeps{
+			server := newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{
 				SecretsRepo:       secretRepo,
 				Encryptor:         encryptor,
 				AuthorizedPubkeys: []string{callerPubkey},
@@ -351,7 +358,7 @@ func newMCPBuildAuthorizationFixture(serviceOrgID uuid.UUID, allowlist []string,
 	}
 	registry := newMCPAuthorizationRegistry(serviceRepo, buildRepo)
 	return mcpBuildAuthorizationFixture{
-		server: NewServerWithOptions(registry, zap.NewNop(), ServerDeps{
+		server: newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{
 			AuthorizedPubkeys: allowlist,
 			RBAC:              rbac,
 		}),

@@ -56,7 +56,7 @@ export { systemInfo, loadSystemInfo, currentSystemInfo };
 
 // Nostr-backed dashboard/read-model state
 export { operationsForEntity, operationsForDomain } from './collections/index.svelte.js';
-export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, packageRepositories, packageArtifacts, packagePromotions, workers, workerAssignments, workerDrainStatuses, workerEligibilityPreviews, workerCleanupExecutions, workerJobs, operations, events, backupRepositories, backupPolicies, backupRecipes, backupDefinitions, backupRuns, backupVerifications, backupRestores, backupRetentionRuns, backupRuntimeObservations, backupAttestations, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, controlplaneConnection, bootstrapControlplane, manualRetry, upsertServiceProjection };
+export { services, environments, states, llmRoutes, llmRouteStates, artifacts, builds, deploymentIntents, deploymentRuns, policies, packageRepositories, packageArtifacts, packagePromotions, workers, workerAssignments, workerDrainStatuses, workerEligibilityPreviews, workerCleanupExecutions, workerJobs, operations, events, backupRepositories, backupPolicies, backupRecipes, backupDefinitions, backupRuns, backupVerifications, backupRestores, backupRetentionRuns, backupRuntimeObservations, backupAttestations, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, controlplaneConnection, bootstrapControlplane, manualRetry, disconnectControlplane, upsertServiceProjection };
 
 // Derived state helpers
 export function driftedStates() {
@@ -77,46 +77,4 @@ export function driftCount() {
 
 export function workerCount() {
   return workers.length;
-}
-
-// In-flight request deduplication for public relay bootstrap paths.
-const inFlight = {
-  all: null,
-  events: null
-};
-
-export async function loadArtifacts() { return bootstrapControlplane(); }
-export async function loadBuilds() { return bootstrapControlplane(); }
-export async function loadDeploymentIntents() { return bootstrapControlplane(); }
-export async function loadDeploymentRuns() { return bootstrapControlplane(); }
-
-export async function loadAll() {
-  if (inFlight.all) return inFlight.all;
-
-  inFlight.all = (async () => {
-    const result = await bootstrapControlplane();
-    if (!result.ok) {
-      console.error('Nostr controlplane bootstrap failed:', result.reason);
-    }
-  })();
-
-  try {
-    await inFlight.all;
-  } finally {
-    inFlight.all = null;
-  }
-}
-
-export function subscribeToEvents() {
-  unsubscribeFromEvents();
-
-  inFlight.events = bootstrapControlplane().then((result) => {
-    if (result.ok) return;
-    console.error('Nostr controlplane bootstrap failed:', result.reason);
-  });
-}
-
-export function unsubscribeFromEvents() {
-  disconnectControlplane();
-  inFlight.events = null;
 }

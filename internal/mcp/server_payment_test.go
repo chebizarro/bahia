@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
@@ -153,8 +154,26 @@ func newTestMCPPaymentServer(t *testing.T) (*Server, *testPaymentRepo, uuid.UUID
 
 	paymentRepo := newTestPaymentRepo()
 	paymentSvc := service.NewPaymentService(paymentRepo, workerRepo, runRepo, zap.NewNop())
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{Payments: paymentSvc})
+	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{Payments: paymentSvc})
 	return server, paymentRepo, runID, workerPubkey
+}
+
+func seedPaymentStore(t *testing.T, server *Server, paymentRepo *testPaymentRepo, runID uuid.UUID, workerPubkey string) {
+	t.Helper()
+	fixture := attachCanonicalMCPFixture(t, server)
+	created := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+	fixture.publishRun(t, &domain.DeploymentRun{ID: runID, DeploymentIntentID: uuid.New(), WorkerPubkey: workerPubkey, Status: domain.RunStatusRunning, CreatedAt: created, UpdatedAt: created})
+	fixture.publishWorker(t, &domain.Worker{PubKey: workerPubkey, Name: "payment-worker", MaxDurationSecs: 300, Pricing: []domain.WorkerPricing{{MintURL: "https://mint.example", PricePerSecond: 4, Unit: "sat"}}, Status: domain.WorkerStatusOnline})
+	if len(paymentRepo.records) > 0 {
+		publisher := nostrpool.NewPaymentCanonicalPublisher(fixture.projector, fixture.confidentialEncryptor(t, server), zap.NewNop())
+		for i, payment := range paymentRepo.records {
+			payment.CreatedAt = created.Add(time.Duration(len(paymentRepo.records)-i) * time.Minute)
+			payment.UpdatedAt = payment.CreatedAt
+			if err := publisher.PublishPaymentRecord(context.Background(), payment); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 }
 
 func TestGetTools_IncludesPaymentTools(t *testing.T) {
@@ -182,7 +201,8 @@ func TestGetTools_IncludesPaymentTools(t *testing.T) {
 }
 
 func TestCallTool_EstimateCost(t *testing.T) {
-	server, _, runID, workerPubkey := newTestMCPPaymentServer(t)
+	server, repo, runID, workerPubkey := newTestMCPPaymentServer(t)
+	seedPaymentStore(t, server, repo, runID, workerPubkey)
 
 	result, err := server.CallTool(authorizedMCPContext(), "bahia_estimate_cost", map[string]interface{}{
 		"run_id":                  runID.String(),
@@ -233,6 +253,7 @@ func TestCallTool_GetRunCostAndPaymentHistory(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create change: %v", err)
 	}
+	seedPaymentStore(t, server, paymentRepo, runID, workerPubkey)
 
 	runCost, err := server.CallTool(ctx, "bahia_get_run_cost", map[string]interface{}{
 		"run_id": runID.String(),
@@ -303,14 +324,14 @@ func TestCallTool_PaymentsValidationAndConfiguration(t *testing.T) {
 		t.Fatalf("expected worker_pubkey error, got %#v", missingWorker)
 	}
 
-	unconfigured := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	unconfigured := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	missingService, err := unconfigured.CallTool(authorizedMCPContext(), "bahia_get_run_cost", map[string]interface{}{
 		"run_id": runID.String(),
 	})
 	if err != nil {
 		t.Fatalf("unconfigured call err: %v", err)
 	}
-	if !missingService.IsError || !strings.Contains(missingService.Content[0].Text, "payment tools are not configured") {
-		t.Fatalf("expected unconfigured payment service error, got %#v", missingService)
+	if missingService.IsError || int(decodeResultMap(t, missingService)["summary"].(map[string]interface{})["total_paid_sats"].(float64)) != 0 {
+		t.Fatalf("expected empty store-backed cost, got %#v", missingService)
 	}
 }

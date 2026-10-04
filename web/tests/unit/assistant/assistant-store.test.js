@@ -40,6 +40,11 @@ const nostrMock = vi.hoisted(() => {
 
 vi.mock('../../../src/lib/stores/auth.js', () => authMock);
 vi.mock('../../../src/lib/stores/controlplane.svelte.js', () => controlplaneMock);
+const eventStoreMock = vi.hoisted(() => ({ events: [] }));
+vi.mock('../../../src/lib/nostr/boot.js', () => ({
+  getEventStore: () => ({ query: (filter) => eventStoreMock.events.filter((entry) => matchFilter(filter, entry)) }),
+  boot: vi.fn(async () => undefined), getPool: () => null, getRelayUrls: () => [], getServicePubkey: () => 'b'.repeat(64)
+}));
 vi.mock('../../../src/lib/nostr/encrypted-controlplane.js', () => encryptedControlplaneMock);
 vi.mock('../../../src/lib/nostr/client.js', async () => {
   const actual = await vi.importActual('../../../src/lib/nostr/client.js');
@@ -76,6 +81,7 @@ describe('assistant store', () => {
     vi.resetModules();
     vi.clearAllMocks();
     liveHandlers = null;
+    eventStoreMock.events = [];
     authMock.authState.status = 'authenticated';
     authMock.authState.pubkey = 'a'.repeat(64);
     controlplaneMock.controlplaneConnection.servicePubkey = 'b'.repeat(64);
@@ -228,55 +234,19 @@ describe('assistant store', () => {
     expect(store.assistantSessions.find((entry) => entry.sessionId === 'order-1').phase).toBe('executing');
   });
 
-  it('imports v1 cache only as history and does not cache private metadata', async () => {
+  it('ignores legacy localStorage transcripts and restores the trusted event-store snapshot', async () => {
     const operator = authMock.authState.pubkey;
     const service = controlplaneMock.controlplaneConnection.servicePubkey;
     const legacyKey = `bahia_assistant_transcript:bahia_assistant_transcript_v1:${operator}:${service}`;
-    localStorage.setItem(legacyKey, JSON.stringify({ schema: 'bahia_assistant_transcript_v1',
-      operatorPubkey: operator, servicePubkey: service, activeSessionId: 'old',
-      sessions: [{ sessionId: 'old', state: 'awaiting_approval', lastPlanHash: 'legacy',
-        metadata: { command_scope: { arguments: { secret: 'DO-NOT-CACHE' } } } }], transcript: [] }));
+    localStorage.setItem(legacyKey, JSON.stringify({ sessions: [{ sessionId: 'fake', metadata: { secret: 'DO-NOT-CACHE' } }] }));
+    const stored = v2Event({ sessionId: 'stored-1', phase: 'awaiting_approval', pendingApprovals: ['proposal-1'] });
+    stored.tags.push(['t', 'assistant-session']);
+    eventStoreMock.events = [stored];
     await store.bootstrapAssistant({ force: true });
-    const session = store.assistantSessions[0];
-    expect(session).toMatchObject({ sessionId: 'old', executionVersion: 1, authoritative: false, pendingActions: [] });
-    await expect(store.publishAssistantApproval({ sessionId: 'old', decision: 'approve' })).rejects.toThrow('Current v2 run required');
-    await expect(store.publishAssistantPrompt({ prompt: 'continue', sessionId: 'old' })).rejects.toThrow('read-only');
-    const newKey = `bahia_assistant_transcript:bahia_assistant_transcript_v2:${operator}:${service}`;
-    expect(localStorage.getItem(newKey)).not.toContain('DO-NOT-CACHE');
-    expect(JSON.parse(localStorage.getItem(newKey)).sessions[0]).toMatchObject({ sessionId: 'old', executionVersion: 1 });
+    expect(sessionById('stored-1')).toMatchObject({ executionVersion: 2, authoritative: true, pendingApprovals: ['proposal-1'] });
+    expect(sessionById('fake')).toBeUndefined();
     expect(localStorage.getItem(legacyKey)).toBeNull();
-
-    // A v2 projection of the same session overrides the imported v1 view.
-    await emitV2({ sessionId: 'old', workflow: 'iterative', phase: 'executing', pendingApprovals: [] });
-    expect(sessionById('old')).toMatchObject({ executionVersion: 2, authoritative: true, workflow: 'iterative', phase: 'executing' });
-  });
-
-  it('keeps a restored v2 cache display-only until the relay re-delivers the projection', async () => {
-    const { base } = await batchFixture('cached-1', [
-      { step_id: 's1', title: 'First', description: '', tool_name: 'tool.alpha', tool_args: { a: 1 } }]);
-    const projection = v2Event({ sessionId: 'cached-1', proposal: sessionById('cached-1').proposal,
-      pendingApprovals: ['proposal-1'], scope: sessionById('cached-1').scope });
-    expect(sessionById('cached-1').authoritative).toBe(true);
-
-    store.resetAssistantStore();
-    let handlers = null;
-    nostrMock.subscribeWithRecovery.mockImplementationOnce((_filters, h) => { handlers = h; return vi.fn(); });
-    await store.bootstrapAssistant({ force: true });
-    const cached = sessionById('cached-1');
-    expect(cached).toMatchObject({ executionVersion: 2, authoritative: false, currentRunId: 'run-1', pendingApprovals: ['proposal-1'] });
-    await expect(store.publishAssistantApproval({ sessionId: 'cached-1', runId: 'run-1', proposalId: 'proposal-1',
-      baseRevision: 1, basePlanHash: base.hash, decision: 'approve' })).rejects.toThrow('Current v2 run required');
-    await expect(store.publishAssistantCancellation({ sessionId: 'cached-1', runId: 'run-1' })).rejects.toThrow('Current v2 run required');
-
-    // An older projection for the coordinate cannot displace the cached newer one (NIP-01).
-    expect(handlers.onEvent(v2Event({ sessionId: 'cached-1', id: 'older', createdAt: 50, phase: 'proposing' }))).toBe(false);
-    expect(sessionById('cached-1').authoritative).toBe(false);
-    // The same event re-delivered by the relay restores authority.
-    expect(handlers.onEvent(projection)).toBe(true);
-    expect(sessionById('cached-1')).toMatchObject({ authoritative: true, phase: 'awaiting_approval' });
-    await store.publishAssistantApproval({ sessionId: 'cached-1', runId: 'run-1', proposalId: 'proposal-1',
-      baseRevision: 1, basePlanHash: base.hash, decision: 'approve' });
-    expect(encryptedControlplaneMock.requestEncryptedResult.mock.calls.at(-1)[0].operation).toBe('assistant/approval');
+    expect(localStorage.getItem(`bahia_assistant_transcript:bahia_assistant_transcript_v2:${operator}:${service}`)).toBeNull();
   });
 
   it('derives pending actions from the current run projection, whatever order details arrive in', async () => {
@@ -416,7 +386,7 @@ describe('assistant store', () => {
     expect(JSON.stringify(item)).not.toContain('SECRET-ARG');
     expect(item.metadata.scope).toEqual({ allowed_tools: null });
     const cacheKey = `bahia_assistant_transcript:bahia_assistant_transcript_v2:${authMock.authState.pubkey}:${service}`;
-    expect(localStorage.getItem(cacheKey)).not.toContain('SECRET-ARG');
+    expect(localStorage.getItem(cacheKey)).toBeNull();
   });
 
   it('REQs assistant status by its single-letter topic and matches producer-shaped status', async () => {
@@ -791,64 +761,26 @@ describe('assistant store', () => {
     }));
   });
 
-  it('restores cached assistant sessions and transcript across reloads', async () => {
+  it('restores assistant sessions and transcript from BahiaEventStore across reloads', async () => {
     const operator = authMock.authState.pubkey;
     const service = controlplaneMock.controlplaneConnection.servicePubkey;
-    const sessionId = 'assistant-cached-session';
-
-    nostrMock.subscribeWithRecovery.mockImplementationOnce((_filters, handlers) => {
-      liveHandlers = handlers;
-      Promise.resolve().then(() => {
-        handlers?.onEvent?.(event({
-          id: 'session-cached',
-          kind: ASSISTANT_KINDS.SESSION,
-          pubkey: service,
-          created_at: 100,
-          tags: [['d', `bahia.assistant-session.v1:${sessionId}`], ['schema', 'bahia.assistant-session.v1'], ['session', sessionId], ['p', operator, '', 'operator'], ['status', 'executing']],
-          content: { state: 'executing', operator_pubkey: operator, transcript_summary: 'Cached session' }
-        }));
-        handlers?.onEvent?.(event({
-          id: 'status-cached',
-          kind: ASSISTANT_KINDS.STATUS,
-          pubkey: service,
-          created_at: 110,
-          tags: [['d', `bahia.assistant-status.v1:${sessionId}:executing`], ['schema', 'bahia.assistant-status.v1'], ['session', sessionId], ['status', 'executing']],
-          content: { session_id: sessionId, status: 'executing', message: 'Cached transcript survives reload' }
-        }));
-        handlers?.onEose?.();
-      });
-      return vi.fn();
-    });
-
+    const sessionId = 'assistant-stored-session';
+    const session = event({ id: 'session-stored', kind: ASSISTANT_KINDS.SESSION, pubkey: service, created_at: 100,
+      tags: [['d', `bahia.assistant-session.v1:${sessionId}`], ['schema', 'bahia.assistant-session.v1'],
+        ['session', sessionId], ['p', operator, '', 'operator'], ['status', 'executing'], ['t', 'assistant-session']],
+      content: { state: 'executing', operator_pubkey: operator, transcript_summary: 'Stored session' } });
+    const status = event({ id: 'status-stored', kind: ASSISTANT_KINDS.STATUS, pubkey: service, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', `bahia.assistant-status.v1:${sessionId}:executing`], ['schema', 'bahia.assistant-status.v1'],
+        ['session', sessionId], ['status', 'executing'], ['t', ASSISTANT_STATUS_TOPIC]],
+      content: { session_id: sessionId, status: 'executing', message: 'Stored transcript survives reload' } });
+    eventStoreMock.events = [session, status];
     await store.bootstrapAssistant({ force: true });
-    expect(store.assistantSessions[0].transcript).toHaveLength(1);
-
-    const cacheKey = `bahia_assistant_transcript:bahia_assistant_transcript_v2:${operator}:${service}`;
-    expect(globalThis.localStorage.getItem(cacheKey)).toContain('Cached transcript survives reload');
-
+    expect(sessionById(sessionId).transcript).toHaveLength(1);
     store.resetAssistantStore();
-    nostrMock.subscribeWithRecovery.mockImplementationOnce((_filters, handlers) => {
-      liveHandlers = handlers;
-      Promise.resolve().then(() => handlers?.onEose?.());
-      return vi.fn();
-    });
-
     await store.bootstrapAssistant({ force: true });
-
-    expect(store.assistantUi.activeSessionId).toBe(sessionId);
-    expect(store.assistantSessions).toHaveLength(1);
-    expect(store.assistantSessions[0]).toMatchObject({
-      sessionId,
-      state: 'executing',
-      transcriptSummary: 'Cached session'
-    });
-    expect(store.assistantSessions[0].transcript).toHaveLength(1);
-    expect(store.assistantSessions[0].transcript[0]).toMatchObject({
-      id: 'status-cached',
-      type: 'status',
-      status: 'executing',
-      message: 'Cached transcript survives reload'
-    });
+    expect(sessionById(sessionId)).toMatchObject({ sessionId, state: 'executing', transcriptSummary: 'Stored session' });
+    expect(sessionById(sessionId).transcript).toEqual([expect.objectContaining({ id: 'status-stored', message: 'Stored transcript survives reload' })]);
+    expect(localStorage.getItem(`bahia_assistant_transcript:bahia_assistant_transcript_v2:${operator}:${service}`)).toBeNull();
   });
 
   it('does not replay historical streaming chunks during bootstrap', async () => {

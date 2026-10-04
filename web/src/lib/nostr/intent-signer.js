@@ -30,21 +30,25 @@ export function buildIntentEvent({ domain, op = 'update', coordinate, orgId, con
   if (!['create', 'update', 'delete', 'repository-apply', 'repository-delete', 'publish', 'promote', 'yank', 'drift-detect',
     'release-register', 'recipe-apply', 'policy-apply', 'repository-register',
     'definition-apply', 'run', 'restore', 'restore-approval', 'verification',
-    'retention', 'repository-probe'].includes(op)) {
+    'retention', 'repository-probe', 'approve', 'reject', 'rollback', 'deploy', 'restart', 'stop',
+    'zone-create', 'record-set', 'override-retire', 'model-create', 'model-update',
+    'version-create', 'version-update', 'endpoint-create', 'endpoint-update',
+    'cordon', 'uncordon', 'drain', 'undrain', 'maintenance-enter', 'maintenance-exit',
+    'labels-update', 'cleanup'].includes(op)) {
     throw new Error(`Invalid intent operation: ${op}`);
   }
   if (!Number.isInteger(createdAt) || createdAt < 0) throw new Error('Invalid intent created_at');
   if (!content || typeof content !== 'object' || Array.isArray(content)) throw new Error('Intent content must be an object');
-  const revision = expectedUpdatedAt ?? updatedAt(currentRecord);
+  const revision = expectedUpdatedAt ?? (op === 'update' ? updatedAt(currentRecord) : content.expected_updated_at);
   if (op === 'update' && revision === undefined) throw new Error('Update requires current canonical updated_at');
-  if (op === 'update' && (typeof revision !== 'string' ||
+  if (revision !== undefined && (typeof revision !== 'string' ||
       !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/.test(revision) ||
       Number.isNaN(Date.parse(revision)))) {
-    throw new Error('Update requires an RFC3339 canonical updated_at string');
+    throw new Error('Intent revision requires an RFC3339 canonical updated_at string');
   }
   const desired = { ...content };
   delete desired.expected_updated_at;
-  if (op === 'update') desired.expected_updated_at = revision;
+  if (revision !== undefined) desired.expected_updated_at = revision;
   const event = {
     kind: 30900,
     created_at: createdAt,

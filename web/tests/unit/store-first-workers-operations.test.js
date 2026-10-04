@@ -15,7 +15,7 @@ import {
   ML_RECIPE_RUN_REQUEST,
   WORKER_STATE_TOPIC
 } from '../../src/lib/nostr/kinds.gen.js';
-import { createBoundedEventIdSet } from '../../src/lib/nostr/pool-utils.js';
+import { createBoundedEventIdSet } from '../../src/lib/nostr/read-model-metadata.js';
 
 const context = vi.hoisted(() => ({ store: null, pool: null, servicePubkey: '', relays: ['wss://workers.test'] }));
 vi.mock('../../src/lib/nostr/boot.js', () => ({

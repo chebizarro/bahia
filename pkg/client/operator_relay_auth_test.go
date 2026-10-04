@@ -69,7 +69,7 @@ func TestOperatorRelayAuthIsThePools(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		result, err := client.RestartServiceRuntimeNostr(ctx, "svc-1", "env-1", nil)
+		result, err := testContextVMTransportRequest(client, ctx)
 		done <- outcome{result, err}
 	}()
 

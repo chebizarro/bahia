@@ -87,7 +87,7 @@ func newTestMCPEnvironmentServer() (*Server, *testEnvironmentRepo) {
 		events.NewInProcessPublisher(zap.NewNop()),
 		zap.NewNop(),
 	)
-	server := NewServer(registry, zap.NewNop())
+	server := newTestServer(registry, zap.NewNop())
 	return server, envRepo
 }
 
@@ -103,6 +103,7 @@ func TestCallTool_EnvironmentListGetAndMutationsDeprecated(t *testing.T) {
 		DeployStrategy:     domain.DeployStrategyBlueGreen,
 		Protected:          true,
 	}
+	attachCanonicalMCPFixture(t, server).publishEnvironment(t, envRepo.environments[envID])
 
 	getByIDRes, err := server.CallTool(ctx, "bahia_get_environment", map[string]interface{}{"environment_id": envID.String()})
 	if err != nil {

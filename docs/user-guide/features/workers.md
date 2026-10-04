@@ -99,8 +99,10 @@ Click a worker to see:
 bahia workers list
 
 # Show worker details
-bahia workers show npub1worker...
+bahia workers show <64-character-worker-hex-pubkey>
 ```
+
+The CLI reads canonical service-authored worker state, assignment, drain, and eligibility families from `30900` events. It also subscribes to worker-authored advertisements using the known worker pubkeys as the author filter. Configure `--service-pubkey` and `--relay` (or their environment equivalents). Reads use a local cursor; without relay EOSE, cached results carry a warning and exit 0. `--http-fallback` explicitly selects the legacy REST read path.
 
 ### MCP Tool
 
@@ -220,7 +222,7 @@ Workers publish capability announcements:
 
 ### Nostr events
 
-Worker mutations use signed ContextVM requests and canonical `30900`, `30315`, and `4903` observables. Historical `5976`/`6976`/`7976` tool-provision events are migration inputs, not the current production transport.
+The web worker actions—cordon/uncordon, drain/undrain, maintenance enter/exit, labels update, and cleanup—publish signed kind-`30900` worker intents. They remain pending until scoped `30315` status or newer canonical state arrives. Historical `5976`/`6976`/`7976` tool-provision events are migration inputs, not the current production transport.
 
 ## Read Models
 

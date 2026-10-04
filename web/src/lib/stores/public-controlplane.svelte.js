@@ -8,6 +8,9 @@ import { orgRoles } from './auth-roles.svelte.js';
 import { orgsState } from './orgs.svelte.js';
 import { currentSystemInfo } from './system.svelte.js';
 import { backupRecipes, backupRepositories, backupPolicies, backupDefinitions } from './collections/backup.svelte.js';
+import { services } from './collections/services.svelte.js';
+import { deploymentIntents, llmRoutes, llmRouteStates } from './collections/deployments.svelte.js';
+import { deploymentIntentRequest, runtimeIntentRequest, llmLifecycleIntentRequest, backupRestoreApprovalIntentRequest } from '$lib/nostr/domain-intents.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -177,6 +180,10 @@ export async function previewServiceDeployment(payload) {
   return resultContent(event);
 }
 
+function serviceOrgId(serviceId) {
+  return services.find(service => service.id === serviceId)?.org_id;
+}
+
 export function createDeploymentIntent(serviceId, environmentId, artifactId, deploymentUnitId = '', expectedDesiredStateHash = '', publicRoute = null) {
   const unitId = String(deploymentUnitId || '').trim();
   const expectedHash = String(expectedDesiredStateHash || '').trim();
@@ -188,50 +195,32 @@ export function createDeploymentIntent(serviceId, environmentId, artifactId, dep
     ...(publicRoute ? { public_route: publicRoute } : {}),
     ...(expectedHash ? { expected_desired_state_hash: expectedHash, idempotency_key: expectedHash } : {})
   };
-  return publishCommand({
-    operation: 'service/deploy',
-    tags: [
-      ['service', serviceId],
-      ['environment', environmentId],
-      ...(unitId ? [['unit', unitId]] : []),
-      ['artifact', artifactId]
-    ],
-    content,
-    ...(expectedHash ? { requestId: expectedHash } : {})
-  });
+  return publishIntent(deploymentIntentRequest('create', content,
+    intentOrgId({ ...content, org_id: serviceOrgId(serviceId) }, null, 'deployment')));
 }
 
 export function rollbackDeployment(payload) {
-  if (!payload || typeof payload !== 'object') {
+  if (!payload?.target_artifact_id) {
     return Promise.reject(new Error('Rollback requires an explicit artifact target from deployment history.'));
   }
-  const serviceId = payload.service_id;
-  const environmentId = payload.environment_id;
-  const unitId = payload.deployment_unit_id;
-  const artifactId = payload.target_artifact_id;
-  const supersedesIntentId = payload.supersedes_intent_id;
-  if (!artifactId) {
-    return Promise.reject(new Error('Rollback requires an explicit artifact target from deployment history.'));
-  }
-  return publishCommand({
-    operation: 'service/rollback',
-    tags: [
-      ['service', serviceId],
-      ['environment', environmentId],
-      ['unit', unitId],
-      ['artifact', artifactId],
-      ['intent', supersedesIntentId]
-    ].filter((tag) => tag[1]),
-    content: payload
-  });
+  return publishIntent(deploymentIntentRequest('rollback', payload,
+    intentOrgId({ ...payload, org_id: serviceOrgId(payload.service_id) }, null, 'deployment')));
 }
 
-export function approveDeploymentIntent(id) {
-  return publishCommand({ operation: 'approval/approve', tags: [['intent', id], ['decision', 'approve']], content: { intent_id: id, decision: 'approve' } });
+function deploymentDecision(id, op) {
+  const current = deploymentIntents.find(intent => intent.id === id);
+  if (!current?.updated_at) throw new Error('Current deployment revision is unavailable; re-read and resubmit');
+  return publishIntent(deploymentIntentRequest(op,
+    { deployment_intent_id: id, expected_updated_at: current.updated_at },
+    intentOrgId({ ...current, org_id: current.org_id || serviceOrgId(current.service_id) }, null, 'deployment')));
 }
 
-export function rejectDeploymentIntent(id) {
-  return publishCommand({ operation: 'approval/reject', tags: [['intent', id], ['decision', 'reject']], content: { intent_id: id, decision: 'reject' } });
+export function approveDeploymentIntent(id) { return deploymentDecision(id, 'approve'); }
+export function rejectDeploymentIntent(id) { return deploymentDecision(id, 'reject'); }
+
+export function requestRuntimeAction(op, payload) {
+  return publishIntent(runtimeIntentRequest(op, payload,
+    intentOrgId({ ...payload, org_id: serviceOrgId(payload.service_id) }, null, 'runtime')));
 }
 
 // The route id is client-minted (bahia-irsry.42): pass the same payload.id to
@@ -248,57 +237,31 @@ export function registerLLMRelease(payload) {
     orgId: intentOrgId(content, canonicalIntentRecord(`llm-release:${content.id}`)?.content, 'llm'), content });
 }
 
-async function requestLLMAsyncLifecycle(operation, payload, tags) {
-  await bootstrapControlplane();
-  const response = await requestEncryptedResult({
-    operation,
-    payload,
-    tags,
-    kind: CONTEXTVM_MESSAGE_KIND,
-    resultKinds: [CONTEXTVM_MESSAGE_KIND]
-  });
-  const event = throwIfErrorResult(operationResultEvent(response));
-  return { requestEventId: response.requestEventId, event };
+function llmOrgId(routeId) {
+  return llmRoutes.find(route => route.id === routeId || route.route_id === routeId)?.org_id;
 }
 
 export function requestLLMDeploy(payload) {
-  return requestLLMAsyncLifecycle(
-    'llm/deploy',
-    payload,
-    [
-      ['route', payload.route_id],
-      ['environment', payload.environment_id],
-      ['release', payload.release_id]
-    ].filter((tag) => tag[1])
-  );
+  return publishIntent(llmLifecycleIntentRequest('deploy', payload,
+    intentOrgId({ ...payload, org_id: llmOrgId(payload.route_id) }, null, 'llm')));
 }
 
 export function requestLLMRollback(payload) {
-  return requestLLMAsyncLifecycle(
-    'llm/rollback',
-    payload,
-    [
-      ['route', payload.route_id],
-      ['environment', payload.environment_id]
-    ].filter((tag) => tag[1])
-  );
+  return publishIntent(llmLifecycleIntentRequest('rollback', payload,
+    intentOrgId({ ...payload, org_id: llmOrgId(payload.route_id) }, null, 'llm')));
 }
 
-export function approveLLMDeploymentIntent(id) {
-  return publishCommand({
-    operation: 'approval/llm-approve',
-    tags: [['intent', id], ['decision', 'approve']],
-    content: { intent_id: id, decision: 'approve' }
-  });
+function decideLLMDeployment(id, op) {
+  const state = llmRouteStates.find(row => row.desired_intent_id === id);
+  const current = canonicalIntentRecord(id)?.content;
+  const updatedAt = current?.updated_at || state?.desired_intent_updated_at;
+  return publishIntent(llmLifecycleIntentRequest(op,
+    { deployment_intent_id: id, ...(updatedAt ? { expected_updated_at: updatedAt } : {}) },
+    intentOrgId({ org_id: llmOrgId(state?.route_id) }, current, 'llm')));
 }
 
-export function rejectLLMDeploymentIntent(id) {
-  return publishCommand({
-    operation: 'approval/llm-reject',
-    tags: [['intent', id], ['decision', 'reject']],
-    content: { intent_id: id, decision: 'reject' }
-  });
-}
+export function approveLLMDeploymentIntent(id) { return decideLLMDeployment(id, 'approve'); }
+export function rejectLLMDeploymentIntent(id) { return decideLLMDeployment(id, 'reject'); }
 
 export function registerArtifact(payload) {
   return publishCommand({ operation: 'artifact/register', tags: [['service', payload.service_id], ['build', payload.build_id]].filter((tag) => tag[1]), content: payload });
@@ -518,21 +481,6 @@ export async function evaluatePolicy(payload) {
   return resultContent(event);
 }
 
-function randomId() {
-  const cryptoApi = globalThis.crypto;
-  if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
-  if (cryptoApi?.getRandomValues) {
-    const bytes = new Uint8Array(16);
-    cryptoApi.getRandomValues(bytes);
-    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-  }
-  throw new Error('Browser cryptographic random ID generation is unavailable');
-}
-
-function backupIdempotencyKey(prefix, id) {
-  return `web.backup.${prefix}:${id || 'fleet'}:${randomId()}`;
-}
-
 function backupMetadata(source, metadata = {}) {
   return { ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}), source };
 }
@@ -674,26 +622,8 @@ export function probeBackupRepository(repository) {
 export function decideBackupRestore(restore, approved, message = '') {
   const restoreId = restore?.id || restore?.restore_id || '';
   if (!restoreId) throw new Error('restore id is required');
-  const decision = approved ? 'approve' : 'reject';
-  const idempotencyKey = backupIdempotencyKey(`restore_${decision}`, restoreId);
-  return publishCommand({
-    operation: 'approval/backup-restore-approve',
-    tags: [
-      ['d', idempotencyKey],
-      ['restore_id', restoreId],
-      ['restore', restoreId],
-      ['decision', decision]
-    ],
-    content: {
-      restore_id: restoreId,
-      approved,
-      decision,
-      message,
-      reason_code: approved ? 'operator_approved' : 'operator_rejected',
-      reason: { source: 'web.backup.restores' },
-      idempotency_key: idempotencyKey
-    }
-  });
+  return publishIntent(backupRestoreApprovalIntentRequest(restoreId, approved ? 'approve' : 'reject', message,
+    intentOrgId(restore, null, 'backup')));
 }
 
 export function approveBackupRestore(restore, message = '') {

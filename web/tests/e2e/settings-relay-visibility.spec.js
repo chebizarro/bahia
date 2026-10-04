@@ -26,7 +26,6 @@ function relaySettingsStateEvent({ browserRelays = [], contextVMRelays = [], ser
       contextvm_relays: contextVMRelays,
       service_relays: serviceRelays
     }),
-    sig: '0'.repeat(128)
   };
 }
 
@@ -327,30 +326,26 @@ test.describe('Settings relay visibility', () => {
     await expect(browserRelays.getByText(/Reconnect succeeded: connected to \d+\/\d+ local browser relays\./)).toBeVisible();
   });
 
-  test('removing the final local browser relay is not overwritten by discovery fallback', async ({ page }) => {
+  test('ignores stale persisted relay overrides and restores bootstrap relays on reload', async ({ page }) => {
     await page.addInitScript(() => {
-      if (sessionStorage.getItem('__bahia_single_local_relay_seeded') !== 'true') {
-        localStorage.setItem('bahia_nostr_relays', JSON.stringify(['ws://single-local-relay.test.local']));
-        sessionStorage.setItem('__bahia_single_local_relay_seeded', 'true');
-      }
+      localStorage.setItem('bahia_nostr_relays', JSON.stringify(['ws://single-local-relay.test.local']));
     });
     await installE2EMocks(page, { systemInfo });
 
     await page.goto('/settings/relays');
 
     const browserRelays = page.locator('section', { hasText: 'Browser Session Relays' });
-    await expect(browserRelays.getByText('ws://single-local-relay.test.local')).toBeVisible();
-    await browserRelays.locator('.relay-item', { hasText: 'ws://single-local-relay.test.local' }).getByTitle('Remove and reconnect').click();
-
     await expect(browserRelays.getByText('ws://single-local-relay.test.local')).toHaveCount(0);
+    await expect(browserRelays.getByText(BROWSER_RELAY)).toBeVisible();
+    await browserRelays.locator('.relay-item', { hasText: BROWSER_RELAY }).getByTitle('Remove and reconnect').click();
+
     await expect(browserRelays.getByText(BROWSER_RELAY)).toHaveCount(0);
-    await expect(browserRelays.getByText('Relay configuration saved with no local browser relays configured.')).toBeVisible();
+    await expect(browserRelays.getByText('No relays selected for this browser session.')).toBeVisible();
     await expect(browserRelays.getByText('No local browser relays configured.', { exact: true })).toBeVisible();
 
     await page.reload();
     const reloadedBrowserRelays = page.locator('section', { hasText: 'Browser Session Relays' });
     await expect(reloadedBrowserRelays.getByText('ws://single-local-relay.test.local')).toHaveCount(0);
-    await expect(reloadedBrowserRelays.getByText(BROWSER_RELAY)).toHaveCount(0);
-    await expect(reloadedBrowserRelays.getByText('No local browser relays configured.', { exact: true })).toBeVisible();
+    await expect(reloadedBrowserRelays.getByText(BROWSER_RELAY)).toBeVisible();
   });
 });

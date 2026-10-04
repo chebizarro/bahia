@@ -14,7 +14,7 @@ func TestCallTool_CreateToolsSendClientMintedIDs(t *testing.T) {
 	ctx := authorizedMCPContext()
 	commands := &captureServiceCommandPublisher{}
 	policies := &capturePolicyCommandPublisher{}
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{ServiceCommandPublisher: commands, PolicyCommandPublisher: policies})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{ServiceCommandPublisher: commands, PolicyCommandPublisher: policies})
 	orgID := uuid.NewString()
 	supplied := "0190f3b2-6a4e-7c1d-8e9f-0123456789ab"
 

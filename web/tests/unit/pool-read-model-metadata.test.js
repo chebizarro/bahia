@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createReadModelMetadataTracker } from '../../src/lib/nostr/pool-utils.js';
+import { createReadModelMetadataTracker } from '../../src/lib/nostr/read-model-metadata.js';
 
 describe('pool read-model metadata contract', () => {
   it('marks partial events followed by incomplete relay closure as degraded', () => {
@@ -89,6 +89,16 @@ describe('pool read-model metadata contract', () => {
       complete: true,
       degraded: null,
       relaySummary: [expect.objectContaining({ relay: 'wss://auth.example', status: 'eose', authRequired: false })]
+    });
+  });
+
+  it('matches a welshman callback URL with a trailing slash to the configured relay', () => {
+    const tracker = createReadModelMetadataTracker({ relays: ['wss://relay.example'] });
+    tracker.markEvent({ id: 'event-1' }, 'wss://relay.example/');
+    tracker.markEose('wss://relay.example/');
+    expect(tracker.metadata()).toMatchObject({
+      complete: true,
+      relaySummary: [expect.objectContaining({ relay: 'wss://relay.example', eose: true })]
     });
   });
 });

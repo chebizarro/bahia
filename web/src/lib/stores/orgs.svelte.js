@@ -1,68 +1,22 @@
-import { authState, initializeAuth } from '$lib/stores/auth.js';
-import { encryptedRequestsAvailable, requestEncryptedResult, servicePubkeyFromSystemInfo } from '$lib/nostr/encrypted-controlplane.js';
-import { subscribeToDomainRefresh } from '$lib/nostr/retained-domain-subscription.js';
-import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
+import { authState } from '$lib/stores/auth.js';
+import { onStoreRefresh } from '$lib/nostr/boot.js';
+import { ORG_REGISTRY, ORG_MEMBER_REGISTRY, ORG_INVITE_REGISTRY } from '$lib/nostr/kinds.gen.js';
+import { onContentKeyChange } from './auth-roles.svelte.js';
+import { readConfidentialTopic } from './collections/confidential-records.js';
 import { mintEntityId } from '$lib/entity-id.js';
 import { submitSensitiveIntent } from './sensitive-intents.svelte.js';
 
-export const orgsState = $state({
-  orgs: [],
-  myInvites: [],
-  loading: false,
-  error: null
-});
+export const orgsState = $state({ orgs: [], myInvites: [], loading: false, error: null });
+export const orgDetailState = $state({ org: null, invites: [], loading: false, error: null });
+export const orgMemberListState = $state({ orgID: '', members: [] });
 
-export const orgDetailState = $state({
-  org: null,
-  invites: [],
-  loading: false,
-  error: null
-});
-
-// Full org member list for the detail page. Unlike auth-roles.orgRoles, this
-// intentionally includes other members and must never grant UI permissions.
-export const orgMemberListState = $state({
-  orgID: '',
-  members: []
-});
-
-const ORG_ENCRYPTED_DOMAIN_TAG = ['domain', 'orgs'];
-let orgsSubscription = null;
-let orgsSubscriptionGeneration = 0;
+let stopRefresh = null;
+let stopKeys = null;
 let subscribedDetailId = '';
 
-function unwrapEncryptedResult(response, fallback = null) {
-  const envelope = response?.result ?? response;
-  if (envelope?.status === 'error') {
-    throw new Error(envelope?.error?.message || 'Encrypted org request failed');
-  }
-  return envelope?.payload ?? envelope ?? fallback;
-}
-
-async function ensureEncryptedOrgs() {
-  if (authState.status === 'unknown' || authState.status === 'checking') {
-    await initializeAuth();
-  }
-  if (authState.status !== 'authenticated') {
-    throw new Error('Not authenticated - please login first');
-  }
-  let info = currentSystemInfo();
-  if (!info) info = await loadSystemInfo();
-  if (!encryptedRequestsAvailable(info)) {
-    throw new Error('ContextVM requests are not available for organizations. Configure Bahia service pubkey discovery and standard Bahia relays before managing organizations.');
-  }
-  return info;
-}
-
-async function encryptedOrgRequest(operation, payload = {}) {
-  await ensureEncryptedOrgs();
-  const response = await requestEncryptedResult({
-    operation,
-    payload,
-    tags: [ORG_ENCRYPTED_DOMAIN_TAG]
-  });
-  return unwrapEncryptedResult(response);
-}
+const organizations = () => readConfidentialTopic('org', ORG_REGISTRY).rows;
+const members = () => readConfidentialTopic('org-member', ORG_MEMBER_REGISTRY).rows;
+const invites = () => readConfidentialTopic('org-invite', ORG_INVITE_REGISTRY).rows;
 
 export function resetOrgsState() {
   orgsState.orgs = [];
@@ -81,9 +35,10 @@ export function resetOrgDetailState() {
 }
 
 export function unsubscribeFromOrgsUpdates() {
-  orgsSubscriptionGeneration += 1;
-  orgsSubscription?.();
-  orgsSubscription = null;
+  stopRefresh?.();
+  stopKeys?.();
+  stopRefresh = null;
+  stopKeys = null;
   subscribedDetailId = '';
 }
 
@@ -94,84 +49,35 @@ export function resetOrgsStore() {
 }
 
 export async function loadOrgsOverview() {
-  orgsState.loading = true;
+  orgsState.orgs = organizations();
+  orgsState.myInvites = invites().filter((invite) => invite.pubkey === authState.pubkey);
   orgsState.error = null;
-  try {
-    const orgs = await encryptedOrgRequest('orgs.list');
-    const myInvites = await encryptedOrgRequest('orgs.my_invites');
-    orgsState.orgs = Array.isArray(orgs) ? orgs : [];
-    orgsState.myInvites = Array.isArray(myInvites) ? myInvites : [];
-    return { orgs: orgsState.orgs, myInvites: orgsState.myInvites };
-  } catch (error) {
-    orgsState.error = error?.message || 'Failed to load organizations';
-    throw error;
-  } finally {
-    orgsState.loading = false;
-  }
-}
-
-export async function refreshOrgsState({ detailId = subscribedDetailId } = {}) {
-  const normalizedDetailId = String(detailId || '').trim();
-  const requests = [loadOrgsOverview()];
-  if (normalizedDetailId) requests.push(loadOrgDetail(normalizedDetailId));
-  await Promise.all(requests);
-  return { overview: orgsState, detail: orgDetailState };
-}
-
-export async function subscribeToOrgsUpdates({ detailId = '' } = {}) {
-  const normalizedDetailId = String(detailId || '').trim();
-  subscribedDetailId = normalizedDetailId;
-  if (orgsSubscription) {
-    const ownedSubscription = orgsSubscription;
-    return () => {
-      if (orgsSubscription === ownedSubscription) unsubscribeFromOrgsUpdates();
-    };
-  }
-
-  const generation = ++orgsSubscriptionGeneration;
-  const info = await ensureEncryptedOrgs();
-  const unsubscribe = await subscribeToDomainRefresh({
-    domain: 'orgs',
-    servicePubkey: servicePubkeyFromSystemInfo(info),
-    refresh: () => refreshOrgsState(),
-    onError: (error) => {
-      orgsState.error = error?.message || 'Organization live updates failed';
-      if (subscribedDetailId) orgDetailState.error = orgsState.error;
-    }
-  });
-
-  if (generation !== orgsSubscriptionGeneration) {
-    unsubscribe();
-    return () => {};
-  }
-  orgsSubscription = unsubscribe;
-  return () => {
-    if (orgsSubscription === unsubscribe) unsubscribeFromOrgsUpdates();
-  };
+  return { orgs: orgsState.orgs, myInvites: orgsState.myInvites };
 }
 
 export async function loadOrgDetail(id) {
   const orgId = String(id || '').trim();
-  if (!orgId) {
-    resetOrgDetailState();
-    return null;
-  }
-
-  orgDetailState.loading = true;
+  if (!orgId) { resetOrgDetailState(); return null; }
+  orgDetailState.org = organizations().find((org) => org.id === orgId) || null;
+  orgMemberListState.orgID = orgId;
+  orgMemberListState.members = members().filter((member) => member.org_id === orgId);
+  orgDetailState.invites = invites().filter((invite) => invite.org_id === orgId);
   orgDetailState.error = null;
-  try {
-    const detail = await encryptedOrgRequest('orgs.detail', { id: orgId });
-    orgDetailState.org = detail?.org ?? null;
-    orgMemberListState.orgID = orgId;
-    orgMemberListState.members = Array.isArray(detail?.members) ? detail.members : [];
-    orgDetailState.invites = Array.isArray(detail?.invites) ? detail.invites : [];
-    return detail;
-  } catch (error) {
-    orgDetailState.error = error?.message || 'Failed to load organization';
-    throw error;
-  } finally {
-    orgDetailState.loading = false;
-  }
+  return { org: orgDetailState.org, members: orgMemberListState.members, invites: orgDetailState.invites };
+}
+
+export async function refreshOrgsState({ detailId = subscribedDetailId } = {}) {
+  await loadOrgsOverview();
+  if (detailId) await loadOrgDetail(detailId);
+  return { overview: orgsState, detail: orgDetailState };
+}
+
+export async function subscribeToOrgsUpdates({ detailId = '' } = {}) {
+  subscribedDetailId = String(detailId || '').trim();
+  if (!stopRefresh) stopRefresh = onStoreRefresh(() => { void refreshOrgsState(); });
+  if (!stopKeys) stopKeys = onContentKeyChange(() => { void refreshOrgsState(); });
+  await refreshOrgsState();
+  return unsubscribeFromOrgsUpdates;
 }
 
 export async function createOrg({ name, displayName }) {

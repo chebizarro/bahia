@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"fiatjaf.com/nostr"
 	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -36,7 +38,11 @@ func TestBatchPlanUsesExactlyThreeReadOnlyBackendTools(t *testing.T) {
 	if len(plan.Steps) != 3 {
 		t.Fatalf("batch plan has %d steps, the joined spec requires exactly 3", len(plan.Steps))
 	}
-	registry := mcp.NewAssistantToolRegistryForServer(mcp.NewServerWithOptions(nil, zap.NewNop(), mcp.ServerDeps{}))
+	server, err := mcp.NewServerWithOptionsChecked(nil, zap.NewNop(), mcp.ServerDeps{StateStore: emptyE2EMCPStore{}, ServicePubkey: nostr.Generate().Public().Hex()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := mcp.NewAssistantToolRegistryForServer(server)
 	for _, step := range plan.Steps {
 		descriptor, ok := registry.Get(step.ToolName)
 		if !ok {
@@ -50,6 +56,12 @@ func TestBatchPlanUsesExactlyThreeReadOnlyBackendTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(EditedFirstStepArgs), &edited); err != nil || len(edited) == 0 {
 		t.Fatalf("edited args are not a JSON object: %v", err)
 	}
+}
+
+type emptyE2EMCPStore struct{}
+
+func (emptyE2EMCPStore) QueryEvents(nostr.Filter) iter.Seq[nostr.Event] {
+	return func(func(nostr.Event) bool) {}
 }
 
 func TestBatchPromptReturnsThePlan(t *testing.T) {

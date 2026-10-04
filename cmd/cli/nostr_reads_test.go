@@ -57,6 +57,29 @@ func (p *cliReadPool) SubscribeAllWithEOSE(_ context.Context, filters []nostr.Fi
 }
 
 func filterHasTopic(filter nostr.Filter, ev *nostr.Event) bool {
+	kindOK := false
+	for _, kind := range filter.Kinds {
+		if kind == ev.Kind {
+			kindOK = true
+		}
+	}
+	if !kindOK {
+		return false
+	}
+	if len(filter.Authors) > 0 {
+		authorOK := false
+		for _, author := range filter.Authors {
+			if author == ev.PubKey {
+				authorOK = true
+			}
+		}
+		if !authorOK {
+			return false
+		}
+	}
+	if len(filter.Tags["t"]) == 0 {
+		return true
+	}
 	for _, tag := range ev.Tags {
 		if len(tag) < 2 || tag[0] != "t" {
 			continue

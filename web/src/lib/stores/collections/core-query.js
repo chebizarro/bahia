@@ -7,7 +7,7 @@ function newer(left, right) {
 }
 
 /** A topic-scoped, coordinate-indexed projection of the BahiaEventStore. */
-export function createCoreQuery({ topic, target, identity, project = (event, id) => ({ ...contentWithEventMeta(event), id }), sort = sortByNameOrId }) {
+export function createCoreQuery({ topic, target, identity, project = (event, id) => ({ ...contentWithEventMeta(event), id }), sort = sortByNameOrId, logicalNewer = newer }) {
   const coordinates = new Map();
   const eventCoordinates = new Map();
   const deletedCoordinates = new Map();
@@ -40,7 +40,7 @@ export function createCoreQuery({ topic, target, identity, project = (event, id)
     const group = candidates.get(id);
     let winner = null;
     if (group) for (const [coordinate, event] of group) {
-      if (newer(event, winner?.event)) winner = { coordinate, event };
+      if (logicalNewer(event, winner?.event)) winner = { coordinate, event };
     }
     if (winner) winners.set(id, winner);
     else winners.delete(id);
@@ -96,7 +96,7 @@ export function createCoreQuery({ topic, target, identity, project = (event, id)
     if (!group) { group = new Map(); candidates.set(id, group); }
     group.set(coordinate, event);
     const winner = winners.get(id);
-    if (!winner || winner.coordinate === coordinate || newer(event, winner.event)) {
+    if (!winner || winner.coordinate === coordinate || logicalNewer(event, winner.event)) {
       winners.set(id, { coordinate, event });
       render(id, winners.get(id));
     }
