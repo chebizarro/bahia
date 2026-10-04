@@ -502,6 +502,8 @@ func intentContentHash(content map[string]any) string {
 
 func requiresStrictIntentReplay(intent *Intent) bool {
 	switch intent.Domain {
+	case "org":
+		return intent.Op == "rekey"
 	case "build":
 		return intent.Op == "request"
 	case "tool":
@@ -585,7 +587,7 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 	if intent.IntentID == "" {
 		return nil, fmt.Errorf("missing intent_id tag")
 	}
-	if intent.OrgID == uuid.Nil && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" &&
+	if intent.OrgID == uuid.Nil && !(intent.Domain == "org" && intent.Op == "rekey") && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" &&
 		intent.Domain != "adoption" && intent.Domain != "tool" && intent.Domain != "security" && intent.Domain != "sbom" && intent.Domain != "relay" {
 		return nil, fmt.Errorf("missing or invalid org tag")
 	}

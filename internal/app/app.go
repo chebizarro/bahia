@@ -1482,6 +1482,15 @@ func New(cfg *config.Config) (*App, error) {
 	var orgCanonicalPub *nostrAdapter.OrgCanonicalPublisher
 	if nostrProjector != nil && confidentialEncryptor != nil {
 		orgCanonicalPub = nostrAdapter.NewOrgCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
+		if orgRepo != nil {
+			orgCanonicalPub.SetStrictRevocationLookup(func(ctx context.Context, orgID uuid.UUID) (bool, error) {
+				org, err := orgRepo.GetByID(ctx, orgID)
+				if err != nil {
+					return false, err
+				}
+				return org.StrictRevocation, nil
+			})
+		}
 	}
 
 	// Phase 3 O1: register org intent handler when "org" is enabled.

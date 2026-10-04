@@ -114,6 +114,15 @@ func (e *ConfidentialEncryptor) RotateKey(ctx context.Context, orgID string) err
 	return err
 }
 
+// CurrentKeyVersion reports the version activated by the last rotation.
+func (e *ConfidentialEncryptor) CurrentKeyVersion(ctx context.Context, orgID string) (string, error) {
+	key, err := e.ockManager.GetKey(ctx, orgID)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("v%d", key.Version), nil
+}
+
 // WrapKeyForMember wraps the current OCK for the org to a specific member
 // pubkey so they can immediately read existing records. Called when a new
 // member is added. If no OCK exists yet, this is a no-op (the next encrypt
