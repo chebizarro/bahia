@@ -130,7 +130,7 @@ The MCP status filter maps `read` to sent records and `unread` to pending or ret
 
 The CLI can list or get channel metadata with `bahia notifications channels list` and `bahia notifications channels get <channel-uuid>`. These reads use the signed relay state and the operator's NIP-44 signer to unwrap an org or fleet OCK envelope. They never show the service-only `service_inner` credentials. The legacy REST channel reads are no longer mounted.
 
-Channel URLs, headers, and recipient details are sensitive. Browser channel CRUD uses encrypted request/result events and requires a NIP-44-capable signer. Do not publish channel configuration in public Nostr events or logs.
+Channel URLs, headers, and recipient details are sensitive. Browser channel CRUD and channel tests use signed kind-`30900` intents inside NIP-59 gift wraps and require a NIP-44-capable signer. Channel-test results arrive as requester-scoped kind-`30315` status data; delivery history reads bounded fleet-OCK-encrypted notification-log state. Do not publish channel configuration in public Nostr events or logs.
 
 ## Troubleshooting
 

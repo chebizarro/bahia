@@ -11,6 +11,7 @@ import { hasAnyRole } from '$lib/stores/auth-roles.svelte.js';
 const PROTECTED_PREFIXES = [
   '/souls',
   '/services',
+  '/adoption',
   '/builds',
   '/artifacts',
   '/packages',
@@ -40,6 +41,7 @@ const DEPLOYER_ROLES = ['deployer', 'admin', 'owner'];
 const ROUTE_ROLE_REQUIREMENTS = {
   ...Object.fromEntries(PROTECTED_PREFIXES.map((prefix) => [prefix, []])),
   '/souls': ADMIN_ROLES,
+  '/adoption': ADMIN_ROLES,
   '/policies': ADMIN_ROLES,
   '/config-fabric': ADMIN_ROLES,
   '/workers': ADMIN_ROLES,

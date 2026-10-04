@@ -201,7 +201,7 @@ test.describe('SBOM workflow', () => {
     await expect(page.getByRole('cell', { name: 'svelte', exact: true })).toBeVisible();
   });
 
-  test('artifact SBOM tab publishes signer-backed ContextVM generation request', async ({ page }) => {
+  test('artifact SBOM tab publishes signed generation intent', async ({ page }) => {
     await installE2EMocks(page, {
       authenticated: true,
       extension: true,
@@ -214,16 +214,6 @@ test.describe('SBOM workflow', () => {
     await expect(page.getByRole('heading', { name: 'registry.example.com/bahia/no-sbom' })).toBeVisible();
     await page.getByRole('button', { name: /^SBOM/ }).click();
     await expect(page.getByRole('button', { name: 'Generate SBOM' }).first()).toBeVisible();
-    await page.evaluate(({ artifactId, digest }) => {
-      window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION = {
-        operation: 'sbom/generate',
-        payload: {
-          subject: { type: 'artifact', id: artifactId, digest },
-          formats: ['spdx', 'cyclonedx'],
-          generator: 'syft'
-        }
-      };
-    }, { artifactId: NO_SBOM_ARTIFACT_ID, digest: artifactPayload({ id: NO_SBOM_ARTIFACT_ID }).digest });
     let resolveGenerated;
     const generated = new Promise((resolve) => { resolveGenerated = resolve; });
     await page.exposeFunction('__bahiaResolveGeneratedSBOM', (detail) => resolveGenerated(detail));
@@ -238,7 +228,7 @@ test.describe('SBOM workflow', () => {
       const events = JSON.parse(localStorage.getItem('__bahia_e2e_nostr_events') || '[]');
       const hasTag = (event, name, value) => Array.isArray(event.tags) && event.tags.some((tag) => Array.isArray(tag) && tag[0] === name && (value === undefined || tag[1] === value));
       return {
-        request: events.find((event) => event.kind === 25910 && hasTag(event, 'operation', 'sbom/generate') && !hasTag(event, 'e')) || null,
+        request: events.find((event) => event.kind === 30900 && hasTag(event, 'domain', 'sbom') && hasTag(event, 'op', 'generate')) || null,
         status: events.find((event) => event.kind === 30315 && hasTag(event, 'artifact', artifactId)) || null,
         references: events.filter((event) => event.kind === 30078 && hasTag(event, 'artifact', artifactId)).map((event) => ({ tags: event.tags, content: JSON.parse(event.content || '{}') })),
         availability: events.find((event) => event.kind === 30004 && hasTag(event, 'artifact', artifactId)) || null,
@@ -262,7 +252,7 @@ test.describe('SBOM workflow', () => {
     await expect(page.getByText('aaaaaaaaaaaaaaaa...aaaaaaaa')).toBeVisible();
   });
 
-  test('artifact SBOM tab publishes signer-backed ContextVM import request and completes from canonical SBOM events', async ({ page }) => {
+  test('artifact SBOM tab publishes signed import intent and completes from canonical SBOM events', async ({ page }) => {
     const digest = artifactPayload({ id: NO_SBOM_ARTIFACT_ID }).digest;
     await installE2EMocks(page, {
       authenticated: true,
@@ -277,20 +267,6 @@ test.describe('SBOM workflow', () => {
     await expect(page.getByRole('heading', { name: 'Import SBOM' })).toBeVisible();
 
     const sbomPayload = JSON.stringify({ spdxVersion: 'SPDX-2.3', packages: [{ name: 'imported-package', versionInfo: '1.0.0' }] });
-    await page.evaluate(({ artifactId, digest, payloadBase64 }) => {
-      window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION = {
-        operation: 'sbom/import',
-        payload: {
-          idempotencyKey: `web.sbom.import.e2e:${artifactId}`,
-          subject: { type: 'artifact', id: artifactId, digest },
-          format: 'spdx',
-          payloadBase64,
-          storage: 'blossom',
-          generator: { id: 'web-import' }
-        }
-      };
-    }, { artifactId: NO_SBOM_ARTIFACT_ID, digest, payloadBase64: Buffer.from(sbomPayload).toString('base64') });
-
     let resolveImported;
     const imported = new Promise((resolve) => { resolveImported = resolve; });
     await page.exposeFunction('__bahiaResolveImportedSBOM', (detail) => resolveImported(detail));
@@ -312,8 +288,8 @@ test.describe('SBOM workflow', () => {
       const parseContent = (event) => {
         try { return JSON.parse(event?.content || '{}'); } catch { return {}; }
       };
-      const ackEvent = events.find((event) => event.kind === 25910 && hasTag(event, 'operation', 'sbom/import') && parseContent(event).payload?.accepted === true) || null;
-      const ackPayload = parseContent(ackEvent).payload || {};
+      const ackEvent = events.find((event) => event.kind === 30315 && hasTag(event, 't', 'intent-status') && String(parseContent(event).coordinate || '').startsWith('sbom-import:')) || null;
+      const ackPayload = parseContent(ackEvent);
       const compatibilityProjection = events
         .filter((event) => event.kind === 30900 && hasTag(event, 'artifact', artifactId))
         .map((event) => ({ event, content: parseContent(event) }))
@@ -321,7 +297,7 @@ test.describe('SBOM workflow', () => {
       const reference = events.find((event) => event.kind === 30078 && hasTag(event, 'artifact', artifactId) && hasTag(event, 'format', 'spdx')) || null;
       const availability = events.find((event) => event.kind === 30004 && hasTag(event, 'artifact', artifactId)) || null;
       return {
-        request: events.find((event) => event.kind === 25910 && hasTag(event, 'operation', 'sbom/import') && !hasTag(event, 'e')) || null,
+        request: events.find((event) => event.kind === 30900 && hasTag(event, 'domain', 'sbom') && hasTag(event, 'op', 'import')) || null,
         ackPayload,
         status: events.find((event) => event.kind === 30315 && hasTag(event, 'artifact', artifactId) && hasTag(event, 'd', statusDTag)) || null,
         reference: reference ? { tags: reference.tags, content: parseContent(reference) } : null,
@@ -333,7 +309,7 @@ test.describe('SBOM workflow', () => {
 
     expect(importedEvents.request).toBeTruthy();
     expect(importedEvents.request.id).toBe(importedDetail.requestEventId);
-    expect(importedEvents.ackPayload).toMatchObject({ accepted: true, status: 'accepted', observable_kinds: [30315, 4903, 30078, 30004] });
+    expect(importedEvents.ackPayload).toMatchObject({ status: 'accepted' });
     expect(importedEvents.ackPayload.reference_event_ids).toBeUndefined();
     expect(importedEvents.ackPayload.availability_event_id).toBeUndefined();
     expect(importedEvents.status).toBeTruthy();

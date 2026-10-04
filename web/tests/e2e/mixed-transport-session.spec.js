@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks, TEST_PUBKEY } from './helpers.js';
+import { installE2EMocks } from './helpers.js';
 import {
   SERVICE_PUBKEY,
   TEST_ORG_ID,
@@ -8,7 +8,6 @@ import {
 } from './harnesses/service-deployment-public.js';
 import {
   ENCRYPTED_RELAY,
-  KIND_CONTEXTVM,
   KIND_GIFT_WRAP,
   installEncryptedNotificationHarness,
   notificationRelayFixtures
@@ -100,7 +99,9 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
       encryptedWirePublishes: window.__BAHIA_E2E_ENCRYPTED_WIRE_PUBLISHES,
       encryptedOks: window.__BAHIA_E2E_ENCRYPTED_OKS,
       encryptedResults: window.__BAHIA_E2E_ENCRYPTED_RESULTS,
-      encryptedOperations: window.__BAHIA_E2E_ENCRYPTED_OPERATIONS
+      encryptedOperations: window.__BAHIA_E2E_ENCRYPTED_OPERATIONS,
+      intentWraps: window.__BAHIA_E2E_INTENT_WRAPS,
+      intentStatuses: window.__BAHIA_E2E_INTENT_STATUS_EVENTS
     }));
     trace.publicRequests = publicTrace.requests;
     trace.publicOks = publicTrace.oks;
@@ -123,34 +124,15 @@ test.describe('Mixed public plus encrypted browser session transport', () => {
       ]));
     }
 
-    expect(trace.encryptedOperations).toEqual(['notifications.channels.test']);
-    expect(trace.encryptedRequests).toHaveLength(1);
-    expect(trace.encryptedRequests.every((request) => request.kind === KIND_GIFT_WRAP)).toBe(true);
+    expect(trace.encryptedOperations).toEqual(['notification.intent.channel-test']);
+    expect(trace.encryptedRequests).toHaveLength(0);
     expect(new Set(trace.encryptedWirePublishes.map((request) => normalizeRelay(request.relay))))
-      .toEqual(new Set([ENCRYPTED_RELAY, PUBLIC_RELAY]));
-    // The fixture service answers on its ContextVM relay; wire publication above
-    // must still reach the complete discovered relay set.
-    expect(trace.encryptedRequests.every((request) => normalizeRelay(request.relay) === ENCRYPTED_RELAY)).toBe(true);
-    for (const request of trace.encryptedRequests) {
-      expect(request.innerKind).toBe(KIND_CONTEXTVM);
-      expect(request.requesterPubkey).toBe(TEST_PUBKEY);
-      expect(request.wrapperPubkey).toMatch(/^[0-9a-f]{64}$/);
-      expect(request.tags).toEqual(expect.arrayContaining([['p', SERVICE_PUBKEY]]));
-      expect(trace.encryptedOks).toEqual(expect.arrayContaining([
-        expect.objectContaining({ eventId: request.eventId, kind: KIND_GIFT_WRAP, accepted: true })
-      ]));
-      expect(trace.encryptedResults).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          requestEventId: request.eventId,
-          kind: KIND_GIFT_WRAP,
-          requesterPubkey: TEST_PUBKEY,
-          tags: expect.arrayContaining([
-            ['e', request.eventId],
-            ['p', TEST_PUBKEY],
-            ['encrypted', 'contextvm-jsonrpc-v1']
-          ])
-        })
-      ]));
-    }
+      .toEqual(new Set([PUBLIC_RELAY]));
+    expect(trace.intentWraps).toHaveLength(1);
+    expect(trace.intentWraps[0].outer.kind).toBe(KIND_GIFT_WRAP);
+    expect(trace.intentWraps[0].inner.kind).toBe(30900);
+    expect(trace.intentWraps[0].inner.tags).toContainEqual(['domain', 'notification']);
+    expect(trace.intentWraps[0].inner.tags).toContainEqual(['op', 'channel-test']);
+    expect(trace.intentStatuses[0].tags).toContainEqual(['status', 'accepted']);
   });
 });

@@ -14,9 +14,9 @@ The ML fabric supports:
 
 ## Transport Semantics
 
-The ML registry forms publish signed kind-`30900` intents for model, version, and endpoint create, update, and delete. Updates can change identity fields; the daemon tombstones the old canonical coordinate before publishing the replacement. Deletes and updates carry the selected record's canonical `updated_at` revision. The pending overlay clears only after a scoped `30315` acceptance or a newer canonical event. The distinct import and inference-deploy forms still publish signed Nostr ContextVM commands (`ml/model-import` and `ml/inference-deploy`). Submission is not terminal workflow completion: follow the relevant status and canonical ML read models below.
+The ML registry forms publish signed kind-`30900` intents for model, version, and endpoint create, update, and delete. Updates can change identity fields; the daemon tombstones the old canonical coordinate before publishing the replacement. Deletes and updates carry the selected record's canonical `updated_at` revision. The pending overlay clears only after a scoped `30315` acceptance or a newer canonical event. Import, recipe apply/run, inference deploy/approval/rollback, and worker pinning also publish signed `30900` intents. Submission is not terminal workflow completion: follow the requester-scoped `30315` status and canonical ML read models below.
 
-Browser pinning for an existing endpoint is also signer-first Nostr ingress for the worker placement command. External clients that still require compatibility HTTP can use backend compatibility endpoints, but the Bahia web route no longer depends on them.
+Browser pinning for an existing endpoint updates desired worker placement through `ml/pin` with the endpoint's canonical revision. External clients that still require compatibility HTTP can use backend compatibility endpoints, but the Bahia web route no longer depends on them.
 
 ## Key Concepts
 

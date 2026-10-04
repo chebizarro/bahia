@@ -94,17 +94,17 @@ export async function initializeSensitiveIntents() {
   await ensureSession();
 }
 
-export async function submitSensitiveIntent({ domain, op, coordinate, orgId, content, currentRecord, expectedUpdatedAt, schema }) {
+export async function submitSensitiveIntent({ domain, op, coordinate, orgId, content, currentRecord, expectedUpdatedAt, schema, intentId }) {
   const blocker = sensitiveMutationBlocker();
   if (blocker) throw new Error(blocker);
   const { pending, outbox } = await ensureSession();
   const signer = activeSigner();
-  const { event: inner, intentId } = await signIntent({ domain, op, coordinate, orgId, content, currentRecord, expectedUpdatedAt, schema }, signer);
+  const { event: inner, intentId: signedIntentId } = await signIntent({ domain, op, coordinate, orgId, content, currentRecord, expectedUpdatedAt, schema, intentId }, signer);
   const wrap = await giftWrapIntent(inner, getServicePubkey(), signer);
   // Never persist plaintext sensitive desired state or the signed inner event.
   const row = await pending.add({ event: inner, domain, op, desiredState: null });
   row.wrapEventId = wrap.id;
   await outbox.enqueue(wrap);
   for (const relay of getRelayUrls()) outbox.onReconnect(relay);
-  return { id: coordinate, intentId, pending: true };
+  return { id: coordinate, intentId: signedIntentId, pending: true };
 }

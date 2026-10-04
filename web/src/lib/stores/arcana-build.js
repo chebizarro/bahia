@@ -1,4 +1,8 @@
-import { publishCommand } from './public-controlplane.svelte.js';
+import { publishIntent } from '../nostr/intent-client.svelte.js';
+import { buildRequestIntent, artifactBuildResultIntent } from '../nostr/final-ops-intents.js';
+import { orgsState } from './orgs.svelte.js';
+import { services } from './collections/services.svelte.js';
+import { builds } from './collections/deployments.svelte.js';
 
 export const ARCANA_REPOSITORY_URL = 'https://github.com/chebizarro/living-library-forge';
 export const ARCANA_REPOSITORY_COORDINATE = 'chebizarro/living-library-forge';
@@ -58,28 +62,19 @@ export function arcanaBuildPayload({ service, gitRef, credentialRef, buildArgs }
 }
 
 export function requestArcanaBuild(payload) {
-  return publishCommand({
-    operation: 'build/request',
-    tags: [
-      ['service', payload?.service_id],
-      ['repository', ARCANA_REPOSITORY_COORDINATE],
-      ['git-ref', payload?.git_ref]
-    ].filter((tag) => tag[1]),
-    content: payload
-  });
+  const service = services.find(row => row.id === payload?.service_id);
+  const orgId = service?.org_id || (orgsState.orgs.length === 1 ? orgsState.orgs[0].id : null);
+  if (!orgId) throw new Error('Select an organization before requesting a build');
+  return publishIntent(buildRequestIntent(payload, orgId));
 }
 
 export function registerBuildResult(buildId) {
   const id = String(buildId || '').trim();
   if (!id) throw new Error('Build ID is required');
-  return publishCommand({
-    operation: 'artifact/register-build-result',
-    tags: [['build', id]],
-    content: {
-      build_id: id,
-      _meta: { progressToken: globalThis.crypto?.randomUUID?.() || `artifact-build-${Date.now()}` }
-    }
-  });
+  const build = builds.find(row => row.id === id);
+  const orgId = services.find(row => row.id === build?.service_id)?.org_id;
+  if (!orgId) throw new Error('Load the build and its service before registering the result');
+  return publishIntent(artifactBuildResultIntent(id, orgId));
 }
 
 export function artifactCandidateForBuild(build, artifacts = []) {

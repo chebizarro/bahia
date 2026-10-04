@@ -23,8 +23,9 @@
     workers,
     deploymentIntents
   } from '$lib/stores';
-  import { updateEnvironment, deleteEnvironment, publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
-  import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
+  import { updateEnvironment, deleteEnvironment } from '$lib/stores/public-controlplane.svelte.js';
+  import { publishIntent, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
+  import { environmentWorkerPolicyIntent } from '$lib/nostr/final-ops-intents.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
   import { keyValueLines, parseKeyValueLines } from '../../ml/page-model.js';
   import RouteCanaryOutages from '$lib/components/RouteCanaryOutages.svelte';
@@ -103,10 +104,6 @@
   let deleteOpen = $state(false);
   let deleting = $state(false);
   let deleteError = $state(null);
-
-  const WORKER_PLACEMENT_COMMANDS = {
-    POLICY_APPLY: 'worker.policy.apply.request'
-  };
 
   const deployStrategyOptions = [
     { value: 'replace', label: 'Replace' },
@@ -263,17 +260,6 @@
     editError = null;
   }
 
-  function randomId() {
-    const cryptoApi = globalThis.crypto;
-    if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
-    if (cryptoApi?.getRandomValues) {
-      const bytes = new Uint8Array(16);
-      cryptoApi.getRandomValues(bytes);
-      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-    }
-    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  }
-
   function countWorkersMatchingPolicy(sourceWorkers, policy) {
     const pinned = String(policy?.pinned_worker || '').trim();
     const selector = policy?.label_selector && typeof policy.label_selector === 'object' ? policy.label_selector : {};
@@ -333,32 +319,12 @@
     placementNotice = null;
     try {
       const policy = buildPlacementPolicyFromForm(placementForm);
-      const key = `${WORKER_PLACEMENT_COMMANDS.POLICY_APPLY}:${environmentId}:${randomId()}`;
-      const tags = [
-        ['d', key],
-        ['command', WORKER_PLACEMENT_COMMANDS.POLICY_APPLY],
-        ['environment', environmentId]
-      ];
-      if (policy.pinned_worker) tags.push(['worker', policy.pinned_worker]);
-      const result = await publishCommand({
-        operation: 'worker/policy-apply',
-        tags,
-        content: {
-          environment_id: environmentId,
-          policy,
-          reason: 'Operator placement policy update from Environment page',
-          idempotency_key: key,
-          operator_metadata: {
-            source: 'web.environments.detail',
-            requested_by: currentRequesterPubkey() || ''
-          }
-        }
-      });
-      placementNotice = resultContent(result)?.message || 'Worker placement policy command accepted';
-      await loadEnvironment(environmentId);
+      await publishIntent(environmentWorkerPolicyIntent(environmentId, policy,
+        environment?.updated_at, resolveIntentOrgId('environment', environment?.org_id)));
+      placementNotice = 'Signed worker placement policy pending canonical confirmation';
       closePlacementModal();
     } catch (err) {
-      placementError = err.message || 'Failed to publish worker placement policy command';
+      placementError = err.message || 'Failed to publish worker placement policy intent';
     } finally {
       placementSaving = false;
     }
@@ -467,7 +433,7 @@
         <div><span>Label selector</span><code>{keyValueLines(workerPolicy.label_selector) || 'No label selector'}</code></div>
         <div><span>Rollout</span><code>{workerPolicy.rollout ? JSON.stringify(workerPolicy.rollout) : 'No rollout labels'}</code></div>
       </div>
-      <p class="hint">Changes publish <code>worker-policy.apply.request</code> and wait for a Nostr result before the environment read model refreshes.</p>
+      <p class="hint">Changes publish a signed <code>environment/worker-policy-apply</code> intent. The canonical environment record confirms the policy after daemon acceptance.</p>
     </section>
 
     <DeploymentUnitsSection
@@ -608,7 +574,7 @@
 
     <div class="form-actions">
       <LoadingButton type="button" variant="secondary" onclick={closePlacementModal} disabled={placementSaving}>Cancel</LoadingButton>
-      <LoadingButton type="submit" variant="primary" loading={placementSaving}>Publish Policy Command</LoadingButton>
+      <LoadingButton type="submit" variant="primary" loading={placementSaving}>Publish signed policy intent</LoadingButton>
     </div>
   </form>
 </Modal>

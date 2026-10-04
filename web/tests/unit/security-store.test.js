@@ -1,30 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const encrypted = vi.hoisted(() => ({
-  requestEncryptedResult: vi.fn(), encryptedRequestsAvailable: vi.fn(() => true)
+const publishMock = vi.hoisted(() => vi.fn(async () => ({ data: { run_id: 'run-a', target_key_hash: 'hash-a' } })));
+vi.mock('../../src/lib/nostr/intent-client.svelte.js', () => ({
+  publishIntentForStatus: publishMock,
+  resolveIntentOrgId: () => 'f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7'
 }));
-const system = vi.hoisted(() => ({
-  currentSystemInfo: vi.fn(() => ({ nostr: { service_pubkey: 'b'.repeat(64), browser_relays: ['wss://example'] } })),
-  loadSystemInfo: vi.fn()
-}));
-vi.mock('$lib/nostr/encrypted-controlplane.js', () => encrypted);
-vi.mock('../../src/lib/nostr/encrypted-controlplane.js', () => encrypted);
-vi.mock('../../src/lib/stores/system.svelte.js', () => system);
 
-describe('security store mutations and read boundary', () => {
+describe('security scan intents and canonical findings', () => {
   let store;
   beforeEach(async () => {
-    vi.resetModules();
-    encrypted.requestEncryptedResult.mockReset();
-    encrypted.encryptedRequestsAvailable.mockReturnValue(true);
+    vi.resetModules(); vi.clearAllMocks();
     store = await import('../../src/lib/stores/security.svelte.js');
     store.resetSecurityStore();
   });
 
-  it('reads findings and schedules without ContextVM', () => {
+  it('reads findings and schedules without a request', () => {
     expect(store.listSecurityFindings({ run_id: 'run-a' })).toEqual([]);
     expect(store.listSecuritySchedules()).toEqual([]);
-    expect(encrypted.requestEncryptedResult).not.toHaveBeenCalled();
+    expect(publishMock).not.toHaveBeenCalled();
   });
 
   it('computes severity counts', () => {
@@ -32,25 +25,20 @@ describe('security store mutations and read boundary', () => {
       .toEqual({ critical: 1, high: 1, moderate: 0, low: 0, unknown: 1, total: 3 });
   });
 
-  it('keeps scan and rescan ContextVM mutations unchanged', async () => {
-    encrypted.requestEncryptedResult
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: { run_id: 'run-a' } } })
-      .mockResolvedValueOnce({ result: { status: 'ok', payload: { run_id: 'run-b' } } });
-    const target = { type: 'package', package: { ecosystem: 'npm', name: 'lodash' } };
-    expect(await store.submitSecurityScan(target)).toEqual({ run_id: 'run-a' });
-    expect(await store.rescanSecurityTarget('hash-a')).toEqual({ run_id: 'run-b' });
-    expect(encrypted.requestEncryptedResult).toHaveBeenNthCalledWith(1, {
-      operation: 'security/scan', payload: { target, force: false }
-    });
-    expect(encrypted.requestEncryptedResult).toHaveBeenNthCalledWith(2, {
-      operation: 'security/rescan', payload: { target_key_hash: 'hash-a' }
-    });
+  it('submits scan-run with fixture coordinate and consumes bounded status data', async () => {
+    const target = { type: 'package', package: { ecosystem: 'npm', name: 'left-pad' } };
+    await expect(store.submitSecurityScan(target)).resolves.toMatchObject({ run_id: 'run-a' });
+    const request = publishMock.mock.calls[0][0];
+    expect(request).toMatchObject({ domain: 'security', op: 'scan-run',
+      coordinate: `security-scan:${request.intentId}`,
+      content: { target, intent_id: request.intentId } });
   });
 
-  it('sets scan error when the mutation request fails', async () => {
-    encrypted.requestEncryptedResult.mockRejectedValueOnce(new Error('network timeout'));
-    await expect(store.submitSecurityScan({ type: 'package' })).rejects.toThrow('network timeout');
-    expect(store.securityState.scanError).toBe('network timeout');
+  it('refuses a hash-only rescan without a canonical target and surfaces publish failure', async () => {
+    await expect(store.rescanSecurityTarget('hash-a')).rejects.toThrow('canonical schedule does not contain a scan target');
+    publishMock.mockRejectedValueOnce(new Error('relay rejected'));
+    await expect(store.submitSecurityScan({ type: 'package' })).rejects.toThrow('relay rejected');
+    expect(store.securityState.scanError).toBe('relay rejected');
     expect(store.securityState.scanSubmitting).toBe(false);
   });
 });

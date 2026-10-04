@@ -1,122 +1,76 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const encryptedRequestsMock = vi.hoisted(() => ({
-  requestEncryptedResult: vi.fn(),
-  encryptedRequestsAvailable: vi.fn(() => true),
-  servicePubkeyFromSystemInfo: vi.fn(() => 'b'.repeat(64))
-}));
-const intentMock = vi.hoisted(() => vi.fn(async request => ({ id: request.coordinate, pending: true })));
+const intentMock = vi.hoisted(() => vi.fn(async request => ({ id: request.coordinate, intentId: request.intentId, pending: true })));
+const acceptedMock = vi.hoisted(() => vi.fn(async () => ({ data: { status: 'test sent' } })));
+const topicMock = vi.hoisted(() => ({ channels: [], logs: [], error: null }));
 vi.mock('../../src/lib/stores/sensitive-intents.svelte.js', () => ({
   orgIdFor: record => record?.org_id || '0199c749-9300-7444-8444-444444444444',
   submitSensitiveIntent: intentMock
 }));
-
-const systemMock = vi.hoisted(() => ({
-  currentSystemInfo: vi.fn(() => ({
-    nostr: { service_pubkey: 'b'.repeat(64), browser_relays: ['wss://requests.example'] }
-  })),
-  loadSystemInfo: vi.fn(async () => ({
-    nostr: { service_pubkey: 'b'.repeat(64), browser_relays: ['wss://requests.example'] }
-  }))
-}));
-
-vi.mock('$lib/nostr/encrypted-controlplane.js', () => encryptedRequestsMock);
-vi.mock('../../src/lib/nostr/encrypted-controlplane.js', () => encryptedRequestsMock);
-vi.mock('$lib/stores/system.svelte.js', () => systemMock);
-vi.mock('$lib/nostr/retained-domain-subscription.js', () => ({
-  subscribeToDomainRefresh: vi.fn(async () => vi.fn())
-}));
-vi.mock('../../src/lib/stores/system.svelte.js', () => systemMock);
-const topicMock = vi.hoisted(() => ({ rows: [] }));
+vi.mock('../../src/lib/nostr/intent-client.svelte.js', () => ({ acceptedIntentStatus: acceptedMock }));
 vi.mock('../../src/lib/stores/collections/confidential-records.js', () => ({
-  readConfidentialTopic: () => ({ rows: topicMock.rows })
+  readConfidentialTopic: topic => {
+    if (topicMock.error) throw topicMock.error;
+    return { rows: topic === 'notification-log' ? topicMock.logs : topicMock.channels };
+  }
 }));
+vi.mock('../../src/lib/nostr/boot.js', () => ({ onStoreRefresh: () => () => {} }));
+vi.mock('../../src/lib/stores/auth-roles.svelte.js', () => ({ onContentKeyChange: () => () => {} }));
 
-describe('notifications encrypted store', () => {
+const ORG_ID = '0199c749-9300-7444-8444-444444444444';
+
+describe('notification canonical read model and signed intents', () => {
   let store;
-
   beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
-    topicMock.rows = [];
-    encryptedRequestsMock.requestEncryptedResult.mockReset();
-    encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(true);
-    systemMock.currentSystemInfo.mockReturnValue({
-      nostr: { service_pubkey: 'b'.repeat(64), browser_relays: ['wss://requests.example'] }
-    });
+    vi.resetModules(); vi.clearAllMocks();
+    topicMock.channels = []; topicMock.logs = []; topicMock.error = null;
     store = await import('../../src/lib/stores/notifications.svelte.js');
     store.resetNotificationStore();
   });
 
-  it('loads channels from the canonical confidential event-store view', async () => {
-    topicMock.rows = [{ id: 'ch-1', name: 'Ops', config: { url: 'https://hook' } }];
-    await expect(store.listNotificationChannels()).resolves.toEqual(topicMock.rows);
-    expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
-    expect(store.notificationState.channels).toHaveLength(1);
+  it('loads channels from the confidential event-store view', async () => {
+    topicMock.channels = [{ id: 'ch-1', name: 'Ops', org_id: ORG_ID }];
+    await expect(store.listNotificationChannels()).resolves.toEqual(topicMock.channels);
     expect(store.notificationState.channelsError).toBeNull();
   });
 
-  it('submits channel CRUD as intents while keeping test-channel interactive', async () => {
-    encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({ result: { status: 'ok', payload: { status: 'test sent' } } });
-    const created = await store.createNotificationChannel({ name: 'Ops', org_id: '0199c749-9300-7444-8444-444444444444' });
+  it('submits channel CRUD as gift-wrapped intents', async () => {
+    const created = await store.createNotificationChannel({ name: 'Ops', org_id: ORG_ID });
     await store.updateNotificationChannel(created.id, { enabled: false });
-    await store.testNotificationChannel(created.id);
     await store.deleteNotificationChannel(created.id);
     expect(intentMock.mock.calls.map(([request]) => request.op)).toEqual(['create', 'update', 'delete']);
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledTimes(1);
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith({ operation: 'notifications.channels.test', payload: { id: created.id } });
   });
 
-  it('loads delivery logs only through encrypted result operations', async () => {
-    encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({
-      result: { status: 'ok', payload: { logs: [{ id: 'log-1', payload: { detail: 'private' } }] } }
-    });
+  it('tests a loaded channel with a gift-wrapped intent and scoped status data', async () => {
+    topicMock.channels = [{ id: 'ch-1', org_id: ORG_ID }];
+    await store.listNotificationChannels();
+    await expect(store.testNotificationChannel('ch-1')).resolves.toEqual({ status: 'test sent' });
+    const request = intentMock.mock.calls[0][0];
+    expect(request).toMatchObject({ domain: 'notification', op: 'channel-test', coordinate: 'ch-1', orgId: ORG_ID,
+      content: { id: 'ch-1', intent_id: request.intentId } });
+    expect(acceptedMock).toHaveBeenCalledWith({ coordinate: 'ch-1', intentId: request.intentId });
+  });
 
-    await expect(store.listNotificationLogs({ limit: 50 })).resolves.toEqual([{ id: 'log-1', payload: { detail: 'private' } }]);
+  it('does not test a channel absent from the canonical view', async () => {
+    await expect(store.testNotificationChannel('missing')).rejects.toThrow('Load the canonical notification channel');
+    expect(intentMock).not.toHaveBeenCalled();
+  });
 
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith({
-      operation: 'notifications.logs.list',
-      payload: { limit: 50 }
-    });
-    expect(store.notificationState.logs).toHaveLength(1);
-    expect(store.notificationState.logsError).toBeNull();
+  it('reads delivery logs from confidential cp-state, sorted and bounded', async () => {
+    topicMock.logs = [{ channel_id: 'ch-1', logs: [
+      { id: 'old', channel_id: 'ch-1', created_at: '2026-01-01' },
+      { id: 'new', channel_id: 'ch-1', created_at: '2026-02-01' }
+    ] }, { channel_id: 'ch-2', logs: [{ id: 'other', channel_id: 'ch-2', created_at: '2026-03-01' }] }];
+    await expect(store.listNotificationLogs({ channel_id: 'ch-1', limit: 1 })).resolves.toMatchObject([{ id: 'new' }]);
     expect(store.notificationState.logsLoading).toBe(false);
   });
 
-  it('clears stale log entries and sets logsError when encrypted log retrieval fails', async () => {
-    encryptedRequestsMock.requestEncryptedResult
-      .mockResolvedValueOnce({
-        result: { status: 'ok', payload: { logs: [{ id: 'log-1', payload: { detail: 'private' } }] } }
-      })
-      .mockResolvedValueOnce({
-        result: { status: 'error', error: { code: 'handler_failed', message: 'failed to list notification logs' } }
-      });
-
-    await expect(store.listNotificationLogs({ limit: 50 })).resolves.toHaveLength(1);
-    expect(store.notificationState.logs).toHaveLength(1);
-
-    await expect(store.listNotificationLogs({ limit: 25 })).rejects.toThrow('failed to list notification logs');
-
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenNthCalledWith(2, {
-      operation: 'notifications.logs.list',
-      payload: { limit: 25 }
-    });
+  it('clears stale logs and exposes confidential read failures', async () => {
+    topicMock.logs = [{ channel_id: 'ch-1', logs: [{ id: 'log-1' }] }];
+    await store.listNotificationLogs();
+    topicMock.error = new Error('unreadable log projection');
+    await expect(store.listNotificationLogs()).rejects.toThrow('unreadable log projection');
     expect(store.notificationState.logs).toEqual([]);
-    expect(store.notificationState.logsError).toBe('failed to list notification logs');
-    expect(store.notificationState.logsLoading).toBe(false);
-  });
-
-  it('requires ContextVM only for an interactive test-channel request', async () => {
-    encryptedRequestsMock.encryptedRequestsAvailable.mockReturnValue(false);
-    await expect(store.listNotificationChannels()).resolves.toEqual([]);
-    await expect(store.testNotificationChannel('ch-1')).rejects.toThrow('ContextVM requests are not available');
-    expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
-  });
-
-  it('surfaces encrypted terminal errors from interactive test results', async () => {
-    encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({
-      result: { status: 'error', error: { code: 'handler_failed', message: 'notification channel not found' } }
-    });
-    await expect(store.testNotificationChannel('ch-1')).rejects.toThrow('notification channel not found');
+    expect(store.notificationState.logsError).toBe('unreadable log projection');
   });
 });

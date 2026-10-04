@@ -1,4 +1,7 @@
-import { requestEncryptedResult } from './encrypted-controlplane.js';
+import { getEventStore, getServicePubkey } from './boot.js';
+import { FLEET_INTENT_ORG_ID } from './intent-client.svelte.js';
+import { relayPolicyIntent } from './final-ops-intents.js';
+import { submitSensitiveIntent } from '../stores/sensitive-intents.svelte.js';
 import { CASCADIA_CONTROLPLANE_STATE } from './kinds.gen.js';
 import { parseJsonContent } from './content.js';
 import { getDTag, getTagValue } from './tags.js';
@@ -7,12 +10,6 @@ import { nostr as defaultNostr } from './subscriptions.js';
 export const RELAY_SETTINGS_SCHEMA = 'bahia.relay-settings.v1';
 export const RELAY_SETTINGS_DOMAIN = 'relay-settings';
 export const RELAY_SETTINGS_DTAG = 'relay-settings:operator';
-
-export const RELAY_SETTINGS_OPERATIONS = {
-  GET: 'settings/relay-policy.get',
-  APPLY: 'settings/relay-policy.apply',
-  ADMIN_CALL: 'settings/relay-admin.call'
-};
 
 export const RELAY_POLICY_TRUTH_STATES = Object.freeze({
   LOADING: 'loading',
@@ -109,12 +106,7 @@ function safeProvenanceRelay(value) {
 }
 
 export function normalizeRelayPolicyProjectionResponse(response = {}) {
-  let payload = response?.result && typeof response.result === 'object' ? response.result : response;
-  // Accept both JSON-RPC v2 results and the correlated legacy ContextVM
-  // response envelope used during wire-version migration.
-  if (payload?.payload && typeof payload.payload === 'object') {
-    payload = payload.payload;
-  }
+  const payload = response;
   const projection = payload?.server_projection && typeof payload.server_projection === 'object'
     ? payload.server_projection
     : {};
@@ -123,7 +115,9 @@ export function normalizeRelayPolicyProjectionResponse(response = {}) {
   const advertisedTruth = String(payload?.truth_state || '').trim();
 
   let truthState = RELAY_POLICY_TRUTH_STATES.UNAVAILABLE;
-  if (advertisedTruth === RELAY_POLICY_TRUTH_STATES.NEVER_CONFIGURED || status === 'never-configured') {
+  if (advertisedTruth === RELAY_POLICY_TRUTH_STATES.LOADING) {
+    truthState = RELAY_POLICY_TRUTH_STATES.LOADING;
+  } else if (advertisedTruth === RELAY_POLICY_TRUTH_STATES.NEVER_CONFIGURED || status === 'never-configured') {
     truthState = RELAY_POLICY_TRUTH_STATES.NEVER_CONFIGURED;
   } else if (policy) {
     if (isRelayPolicyIntentionallyEmpty(policy)) {
@@ -270,26 +264,18 @@ export function subscribeRelayPolicyReadModel({
   });
 }
 
-// Module-level dedup: a single in-flight getRelayPolicy request is shared
-// across callers. This prevents duplicate encrypted requests when the
-// component re-mounts (e.g. AuthGuard auth-state transition) while a
-// request is already in flight.
-let inflightRelayPolicyGet = null;
-
-export async function getRelayPolicy({ signal } = {}) {
-  if (inflightRelayPolicyGet) return inflightRelayPolicyGet;
-  inflightRelayPolicyGet = requestEncryptedResult({
-    operation: RELAY_SETTINGS_OPERATIONS.GET,
-    payload: {},
-    tags: [['domain', 'relay-settings'], ['action', 'relay_policy_get']],
-    signal
-  }).finally(() => {
-    inflightRelayPolicyGet = null;
-  });
-  return inflightRelayPolicyGet;
+export async function getRelayPolicy() {
+  const servicePubkey = getServicePubkey();
+  const event = getEventStore()?.query(relayPolicyReadModelFilter({ servicePubkey, limit: 1 }))?.[0];
+  const policy = parseRelayPolicyStateEvent(event, { servicePubkey });
+  if (!policy) return { truth_state: 'loading', canonical_policy: null };
+  return { truth_state: 'loaded-cached', canonical_policy: policy, server_projection: {
+    event_id: event.id, event_created_at: new Date(event.created_at * 1000).toISOString(),
+    freshness: 'cached', source: 'canonical_event_store'
+  } };
 }
 
-export async function applyRelayPolicy({ policy, expectedProjection = null, replacementConfirmation = null, signal } = {}) {
+export async function applyRelayPolicy({ policy, expectedProjection = null, replacementConfirmation = null } = {}) {
   const payload = buildRelayPolicyPayload(policy);
   if (expectedProjection) {
     payload.expected_projection = {
@@ -306,25 +292,7 @@ export async function applyRelayPolicy({ policy, expectedProjection = null, repl
       change_reference: String(replacementConfirmation.change_reference || '').trim()
     };
   }
-  return requestEncryptedResult({
-    operation: RELAY_SETTINGS_OPERATIONS.APPLY,
-    payload,
-    tags: [['domain', 'relay-settings'], ['action', 'relay_policy_apply']],
-    signal
-  });
-}
-
-export async function callRelayAdmin({ targetRef, method, params = [], signal } = {}) {
-  return requestEncryptedResult({
-    operation: RELAY_SETTINGS_OPERATIONS.ADMIN_CALL,
-    payload: {
-      target_ref: String(targetRef || '').trim(),
-      method: String(method || '').trim(),
-      params: Array.isArray(params) ? params : []
-    },
-    tags: [['domain', 'relay-settings'], ['action', 'relay_admin_call'], ['target', String(targetRef || '').trim()]],
-    signal
-  });
+  return submitSensitiveIntent(relayPolicyIntent(payload, null, null, FLEET_INTENT_ORG_ID));
 }
 
 /**
