@@ -12,10 +12,32 @@
     listSecurityFindings,
     listSecuritySchedules,
     computeSeverityCounts,
+    submitSecurityScan,
     subscribeToSecurityUpdates
   } from '$lib/stores/security.svelte.js';
 
   let loadStarted = false;
+  let manualTargetJson = $state('');
+  let manualScanSubmitting = $state(false);
+  let manualScanNotice = $state('');
+  let manualScanError = $state('');
+
+  async function handleManualScan(event) {
+    event.preventDefault();
+    manualScanSubmitting = true;
+    manualScanNotice = '';
+    manualScanError = '';
+    try {
+      const target = JSON.parse(manualTargetJson);
+      if (!target || typeof target !== 'object' || Array.isArray(target)) throw new Error('Scan target must be a JSON object');
+      const status = await submitSecurityScan(target);
+      manualScanNotice = `Scan accepted (run ${status.run_id}). Follow the signed scan status for completion.`;
+    } catch (error) {
+      manualScanError = error?.message || 'Security scan request failed';
+    } finally {
+      manualScanSubmitting = false;
+    }
+  }
 
   onMount(() => {
     let disposed = false;
@@ -283,6 +305,18 @@
     </div>
   </div>
 
+  <section class="manual-scan" aria-labelledby="manual-scan-heading">
+    <h2 id="manual-scan-heading">Run a manual scan</h2>
+    <p>Provide the complete package, PURL, commit, or SBOM target. A target hash alone is not sufficient for a signed scan.</p>
+    <form onsubmit={handleManualScan} data-testid="security-scan-form">
+      <label for="security-scan-target">Scan target JSON</label>
+      <textarea id="security-scan-target" bind:value={manualTargetJson} rows="5" required></textarea>
+      <button type="submit" disabled={manualScanSubmitting}>{manualScanSubmitting ? 'Submitting…' : 'Run signed scan'}</button>
+    </form>
+    {#if manualScanError}<p role="alert">{manualScanError}</p>{/if}
+    {#if manualScanNotice}<p role="status">{manualScanNotice}</p>{/if}
+  </section>
+
   <!-- Severity Summary Cards -->
   {#if findings.length > 0}
     <div class="severity-summary">
@@ -424,6 +458,10 @@
 </div>
 
 <style>
+  .manual-scan { display: grid; gap: 0.5rem; margin-bottom: 1.5rem; }
+  .manual-scan form { display: grid; gap: 0.5rem; max-width: 48rem; }
+  .manual-scan textarea { width: 100%; font-family: monospace; }
+  .manual-scan button { justify-self: start; }
   .header {
     display: flex;
     align-items: center;

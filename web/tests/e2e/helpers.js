@@ -375,6 +375,7 @@ export async function installE2EMocks(
       const content = JSON.parse(inner.content || '{}');
       const domain = tag('domain');
       const statusOverride = window.__BAHIA_E2E_INTENT_STATUS_OVERRIDE?.[`${domain}.${tag('op')}`];
+      const statusData = window.__BAHIA_E2E_INTENT_STATUS_DATA?.[`${domain}.${tag('op')}`];
       if (domain === 'secret') {
         const state = readMockServiceSecrets();
         const serviceId = content.service_id;
@@ -390,28 +391,19 @@ export async function installE2EMocks(
         writeMockServiceSecrets(state);
       }
       window.__BAHIA_E2E_INTENT_WRAPS.push({ outer, inner });
+      window.__BAHIA_E2E_INTENT_STATUS_SEQUENCE = (window.__BAHIA_E2E_INTENT_STATUS_SEQUENCE || 0) + 1;
       const status = window.__BAHIA_E2E_MAKE_INTENT_STATUS(inner,
-        { status: statusOverride ? 'rejected' : 'accepted', reason: statusOverride || '' });
+        { status: statusOverride ? 'rejected' : 'accepted', reason: statusOverride || '', data: statusData,
+          createdAt: Math.floor(Date.now() / 1000) + window.__BAHIA_E2E_INTENT_STATUS_SEQUENCE });
       window.__BAHIA_E2E_INTENT_STATUS_EVENTS.push(status);
       publishMockNostrEvent(status);
     }
 
-    function handleEncryptedSBOMRequest(event) {
-      let envelope = decodeEncryptedContextVMEnvelope(event);
-      const nextOperation = window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION;
-      if (!envelope && event?.kind === 1059 && (nextOperation?.operation === 'sbom/generate' || nextOperation?.operation === 'sbom/import')) {
-        envelope = {
-          id: event.id,
-          method: nextOperation.operation,
-          params: nextOperation.payload || {}
-        };
-        delete window.__BAHIA_E2E_NEXT_CONTEXTVM_OPERATION;
-      }
-      if (!envelope) return null;
-      const operation = String(envelope.method || envelope.operation || '');
+    function handleSBOMIntent(event) {
+      if (event?.kind !== 30900 || !event.tags?.some(tag => tag[0] === 'domain' && tag[1] === 'sbom')) return;
+      const operation = `sbom/${event.tags.find(tag => tag[0] === 'op')?.[1] || ''}`;
       if (operation !== 'sbom/generate' && operation !== 'sbom/import') return null;
-      const params = { ...(envelope.params || envelope.payload || {}) };
-      delete params._meta;
+      const params = JSON.parse(event.content || '{}');
       const subject = params.subject || {};
       const artifactId = String(subject.id || 'artifact-sbom-e2e');
       const digest = String(subject.digest || 'sha256:mock-sbom-digest');
@@ -492,14 +484,6 @@ export async function installE2EMocks(
         detail: { artifactId, formats, format: formats[0], generator, requestEventId: event.id, statusDTag }
       }));
 
-      return encryptedContextVMResponse(event, envelope, {
-        accepted: true,
-        status: 'accepted',
-        run_id: runId,
-        status_d_tag: statusDTag,
-        idempotencyKey: params.idempotencyKey || runId,
-        observable_kinds: [30315, 4903, 30078, 30004]
-      }, [['domain', 'sbom'], ['operation', operation]]);
     }
 
     class MockWebSocket {
@@ -589,14 +573,23 @@ export async function installE2EMocks(
               return;
             }
             persistMockNostrEvent(event);
-            const signedIntent = event?.kind === 1059 ? window.__BAHIA_E2E_SIGNED_INTENTS.shift() : null;
+            const signedIntent = event?.kind === 1059 ? window.__BAHIA_E2E_SIGNED_INTENTS.shift()
+              : event?.kind === 30900 && event.tags?.some(tag => tag[0] === 't' && tag[1] === 'bahia-intent') ? event : null;
             if (signedIntent && !await window.__bahiaE2EVerifyEvent(signedIntent)) {
               this.emitMessage(JSON.stringify(['OK', event?.id, false, 'invalid: inner signature']));
               return;
             }
-            if (signedIntent) processMockIntent(signedIntent, event);
+            const intentDomain = signedIntent?.tags?.find(tag => tag[0] === 'domain')?.[1];
+            const intentOp = signedIntent?.tags?.find(tag => tag[0] === 'op')?.[1];
+            const finalOps = new Set(['adoption.scan', 'artifact.register-build-result', 'artifact.signature-verify',
+              'build.request', 'environment.worker-policy-apply', 'ml.model-import', 'ml.recipe-apply',
+              'ml.recipe-run', 'ml.inference-deploy', 'ml.inference-approval', 'ml.inference-rollback',
+              'ml.pin', 'sbom.generate', 'sbom.import', 'security.scan-run', 'tool.approval-response']);
+            if (signedIntent && (event.kind === 1059 || finalOps.has(`${intentDomain}.${intentOp}`))) {
+              processMockIntent(signedIntent, event);
+            }
+            if (signedIntent?.kind === 30900) handleSBOMIntent(signedIntent);
             const encryptedResult = signedIntent ? null : handleEncryptedServiceSecretRequest(event)
-              || handleEncryptedSBOMRequest(event)
               || handleQueuedContextVMRequest(event);
             if (encryptedResult) {
               persistMockNostrEvent(encryptedResult);

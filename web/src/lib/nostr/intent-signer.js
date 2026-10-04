@@ -37,7 +37,10 @@ export function buildIntentEvent({ domain, op = 'update', coordinate, orgId, con
     'version-create', 'version-update', 'version-delete', 'endpoint-create', 'endpoint-update', 'endpoint-delete',
     'cordon', 'uncordon', 'drain', 'undrain', 'maintenance-enter', 'maintenance-exit',
     'labels-update', 'cleanup', 'register', 'import-observed', 'import',
-    'drift-remediate', 'preview', 'route-attach', 'evaluate'].includes(op)) {
+    'drift-remediate', 'preview', 'route-attach', 'evaluate',
+    'model-import', 'recipe-run', 'inference-deploy', 'inference-approval', 'inference-rollback',
+    'approval-response', 'request', 'scan', 'scan-run', 'generate', 'signature-verify',
+    'register-build-result', 'policy-set', 'channel-test', 'worker-policy-apply', 'pin'].includes(op)) {
     throw new Error(`Invalid intent operation: ${op}`);
   }
   if (!Number.isInteger(createdAt) || createdAt < 0) throw new Error('Invalid intent created_at');

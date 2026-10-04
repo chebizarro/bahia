@@ -242,100 +242,45 @@ describe('public controlplane command helpers', () => {
     expect(requestEncryptedResultMock).not.toHaveBeenCalled();
   });
 
-  it('generates artifact SBOMs through canonical ContextVM encrypted requests', async () => {
+  it('generates and imports artifact SBOMs as signed intents with matching idempotency keys', async () => {
     await api.generateArtifactSBOM({
-      id: 'artifact-1',
-      name: 'registry.example.com/acme/api',
-      image_repo: 'registry.example.com/acme/api',
-      image_tag: '1.2.3',
-      digest: 'sha256:abc123'
+      id: 'artifact-1', name: 'registry.example.com/acme/api',
+      image_repo: 'registry.example.com/acme/api', digest: 'sha256:abc123'
     });
+    const generate = publishIntentMock.mock.calls[0][0];
+    expect(generate).toMatchObject({ domain: 'sbom', op: 'generate',
+      coordinate: `sbom-generate:${generate.intentId}`,
+      content: { intent_id: generate.intentId, idempotencyKey: generate.intentId,
+        subject: { type: 'artifact', id: 'artifact-1', display_name: 'registry.example.com/acme/api', digest: 'sha256:abc123' },
+        source: { kind: 'oci-image', locator: 'registry.example.com/acme/api@sha256:abc123' },
+        formats: ['spdx', 'cyclonedx'], generator: 'syft', storage: 'blossom' } });
 
-    expect(publishEncryptedRequestMock).toHaveBeenCalledWith({
-      operation: 'sbom/generate',
-      tags: [
-        ['domain', 'sbom'],
-        ['operation', 'sbom/generate'],
-        ['subject_type', 'artifact'],
-        ['artifact', 'artifact-1'],
-        ['subject', 'sha256:abc123'],
-        ['generator', 'syft']
-      ],
-      payload: {
-        idempotencyKey: 'web.sbom.generate:artifact:artifact-1:sha256:abc123:spdx,cyclonedx:syft',
-        subject: {
-          type: 'artifact',
-          id: 'artifact-1',
-          display_name: 'registry.example.com/acme/api',
-          digest: 'sha256:abc123'
-        },
-        source: {
-          kind: 'oci-image',
-          locator: 'registry.example.com/acme/api@sha256:abc123'
-        },
-        formats: ['spdx', 'cyclonedx'],
-        generator: 'syft',
-        storage: 'blossom'
-      },
-      kind: 25910,
-      signal: undefined
-    });
-  });
-
-  it('imports artifact SBOMs through publish-only ContextVM encrypted requests', async () => {
-    await api.importArtifactSBOM({
-      id: 'artifact-1',
-      name: 'registry.example.com/acme/api',
-      digest: 'sha256:abc123'
-    }, {
-      format: 'cyclonedx',
-      payloadBase64: 'eyJib21Gb3JtYXQiOiAiQ3ljbG9uZURYIn0=',
+    await api.importArtifactSBOM({ id: 'artifact-1', digest: 'sha256:abc123' }, {
+      format: 'cyclonedx', payloadBase64: 'eyJib21Gb3JtYXQiOiAiQ3ljbG9uZURYIn0=',
       generator: { id: 'external-tool', version: '1.0.0' }
     });
-
-    expect(publishEncryptedRequestMock).toHaveBeenCalledWith({
-      operation: 'sbom/import',
-      tags: [
-        ['domain', 'sbom'],
-        ['operation', 'sbom/import'],
-        ['subject_type', 'artifact'],
-        ['artifact', 'artifact-1'],
-        ['subject', 'sha256:abc123'],
-        ['format', 'cyclonedx'],
-        ['generator', 'external-tool']
-      ],
-      payload: {
-        idempotencyKey: 'web.sbom.import:artifact:artifact-1:sha256:abc123:cyclonedx:inline:26:eyJib21Gb3JtYXQiOiAiQ3lj:YXQiOiAiQ3ljbG9uZURYIn0=:external-tool',
-        subject: {
-          type: 'artifact',
-          id: 'artifact-1',
-          display_name: 'registry.example.com/acme/api',
-          digest: 'sha256:abc123'
-        },
-        format: 'cyclonedx',
-        payloadBase64: 'eyJib21Gb3JtYXQiOiAiQ3ljbG9uZURYIn0=',
-        storage: 'blossom',
-        generator: { id: 'external-tool', version: '1.0.0' }
-      },
-      kind: 25910,
-      signal: undefined
-    });
-    expect(requestEncryptedResultMock).not.toHaveBeenCalled();
-  });
-
-  it('rejects oversized inline artifact SBOM imports before publishing', () => {
-    expect(api.MAX_CONTEXTVM_INLINE_SBOM_BYTES).toBe(360 * 1024);
-    const oversized = Buffer.alloc(api.MAX_CONTEXTVM_INLINE_SBOM_BYTES + 1).toString('base64');
-    expect(() => api.importArtifactSBOM({ id: 'artifact-1', digest: 'sha256:abc123' }, { format: 'spdx', payloadBase64: oversized }))
-      .toThrow('Inline SBOM imports are limited to 368640 bytes (360 KiB); upload larger SBOM files to Blossom and import them by location.');
+    const imported = publishIntentMock.mock.calls[1][0];
+    expect(imported).toMatchObject({ domain: 'sbom', op: 'import',
+      coordinate: `sbom-import:${imported.intentId}`,
+      content: { intent_id: imported.intentId, idempotencyKey: imported.intentId,
+        format: 'cyclonedx', payloadBase64: 'eyJib21Gb3JtYXQiOiAiQ3ljbG9uZURYIn0=',
+        generator: { id: 'external-tool', version: '1.0.0' } } });
     expect(publishEncryptedRequestMock).not.toHaveBeenCalled();
   });
 
+  it('rejects oversized inline artifact SBOM imports before publishing', () => {
+    expect(api.MAX_INLINE_SBOM_BYTES).toBe(360 * 1024);
+    const oversized = Buffer.alloc(api.MAX_INLINE_SBOM_BYTES + 1).toString('base64');
+    expect(() => api.importArtifactSBOM({ id: 'artifact-1', digest: 'sha256:abc123' }, { format: 'spdx', payloadBase64: oversized }))
+      .toThrow('Inline SBOM imports are limited to 368640 bytes (360 KiB); upload larger SBOM files to Blossom and import them by location.');
+    expect(publishIntentMock).not.toHaveBeenCalled();
+  });
+
   it('publishes an inline artifact SBOM of exactly the inline limit', async () => {
-    const atLimit = Buffer.alloc(api.MAX_CONTEXTVM_INLINE_SBOM_BYTES).toString('base64');
+    const atLimit = Buffer.alloc(api.MAX_INLINE_SBOM_BYTES).toString('base64');
     await api.importArtifactSBOM({ id: 'artifact-1', digest: 'sha256:abc123' }, { format: 'spdx', payloadBase64: atLimit });
-    expect(publishEncryptedRequestMock).toHaveBeenCalledTimes(1);
-    expect(publishEncryptedRequestMock.mock.calls[0][0].payload.payloadBase64).toBe(atLimit);
+    expect(publishIntentMock).toHaveBeenCalledTimes(1);
+    expect(publishIntentMock.mock.calls[0][0].content.payloadBase64).toBe(atLimit);
   });
 
   it('imports artifact SBOMs of any size by Blossom location', async () => {
@@ -344,13 +289,12 @@ describe('public controlplane command helpers', () => {
       format: 'spdx',
       location: { type: 'blossom', uri, mediaType: 'application/spdx+json' }
     });
-    expect(publishEncryptedRequestMock).toHaveBeenCalledTimes(1);
-    const request = publishEncryptedRequestMock.mock.calls[0][0];
-    expect(request.operation).toBe('sbom/import');
-    expect(request.kind).toBe(25910);
-    expect(request.payload.location).toEqual({ type: 'blossom', uri, mediaType: 'application/spdx+json' });
-    expect(request.payload).not.toHaveProperty('payloadBase64');
-    expect(request.payload.idempotencyKey).toContain(`location:blossom:${uri}`);
+    expect(publishIntentMock).toHaveBeenCalledTimes(1);
+    const request = publishIntentMock.mock.calls[0][0];
+    expect(request.op).toBe('import');
+    expect(request.content.location).toEqual({ type: 'blossom', uri, mediaType: 'application/spdx+json' });
+    expect(request.content).not.toHaveProperty('payloadBase64');
+    expect(request.content.idempotencyKey).toBe(request.intentId);
   });
 
   it('rejects artifact SBOM generation without an immutable digest', () => {
@@ -376,9 +320,8 @@ describe('public controlplane command helpers', () => {
       digest: 'sha256:abc123'
     });
 
-    expect(publishEncryptedRequestMock).toHaveBeenCalledWith(expect.objectContaining({
-      operation: 'sbom/generate',
-      payload: expect.objectContaining({
+    expect(publishIntentMock).toHaveBeenCalledWith(expect.objectContaining({
+      domain: 'sbom', op: 'generate', content: expect.objectContaining({
         source: { kind: 'oci-image', locator: 'ghcr.io/example/nostrodomo@sha256:abc123' }
       })
     }));

@@ -2,10 +2,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { matchFilter } from 'nostr-tools/filter';
 import { RELAY_SETTINGS_TOPIC } from '../../src/lib/nostr/kinds.gen.js';
 
-const requestEncryptedResultMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../src/lib/nostr/encrypted-controlplane.js', () => ({
-  requestEncryptedResult: requestEncryptedResultMock
+const submitSensitiveIntentMock = vi.hoisted(() => vi.fn(async request => ({ intentId: request.intentId, pending: true })));
+const queryMock = vi.hoisted(() => vi.fn(() => []));
+vi.mock('../../src/lib/stores/sensitive-intents.svelte.js', () => ({ submitSensitiveIntent: submitSensitiveIntentMock }));
+vi.mock('../../src/lib/nostr/boot.js', () => ({
+  getEventStore: () => ({ query: queryMock }), getServicePubkey: () => 'b'.repeat(64)
 }));
 
 describe('relay settings control-plane helpers', () => {
@@ -14,7 +15,7 @@ describe('relay settings control-plane helpers', () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    requestEncryptedResultMock.mockResolvedValue({ requestEventId: 'req-1', acceptedRelays: [], rejectedRelays: [], result: { status: 'accepted' } });
+    queryMock.mockReturnValue([]);
     relaySettings = await import('../../src/lib/nostr/relay-settings-controlplane.js');
   });
 
@@ -39,93 +40,34 @@ describe('relay settings control-plane helpers', () => {
     });
   });
 
-  it('sends policy changes through encrypted ContextVM', async () => {
-    await relaySettings.applyRelayPolicy({ policy: { browser_relays: ['wss://browser.example'] } });
-    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
-      operation: 'settings/relay-policy.apply',
-      payload: expect.objectContaining({ browser_relays: ['wss://browser.example'] }),
-      tags: [['domain', 'relay-settings'], ['action', 'relay_policy_apply']],
-      signal: undefined
-    });
-  });
-
-  it('includes explicit unavailable-state replacement confirmation in the encrypted request', async () => {
+  it('submits a NIP-59-protected relay policy intent with audited preconditions', async () => {
     await relaySettings.applyRelayPolicy({
       policy: { browser_relays: ['wss://replacement.example'] },
-      replacementConfirmation: {
-        confirmed: true,
-        previous_truth_state: 'unavailable',
-        reason_code: 'relay_hydration_unavailable',
-        change_reference: 'INC-42'
-      }
+      expectedProjection: { availability: 'available', event_id: 'a'.repeat(64), hash: 'b'.repeat(64) },
+      replacementConfirmation: { confirmed: true, previous_truth_state: 'unavailable',
+        reason_code: 'relay_hydration_unavailable', change_reference: 'INC-42' }
     });
-    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
-      operation: 'settings/relay-policy.apply',
-      payload: expect.objectContaining({
-        browser_relays: ['wss://replacement.example'],
-        replacement_confirmation: {
-          confirmed: true,
-          previous_truth_state: 'unavailable',
-          reason_code: 'relay_hydration_unavailable',
-          change_reference: 'INC-42'
-        }
-      }),
-      tags: [['domain', 'relay-settings'], ['action', 'relay_policy_apply']],
-      signal: undefined
-    });
-  });
-
-  it('includes the expected durable head in ordinary policy updates', async () => {
-    await relaySettings.applyRelayPolicy({
-      policy: { browser_relays: ['wss://replacement.example'] },
-      expectedProjection: {
-        availability: 'available',
-        event_id: 'a'.repeat(64),
-        hash: 'b'.repeat(64)
-      }
-    });
-    expect(requestEncryptedResultMock).toHaveBeenCalledWith(expect.objectContaining({
-      payload: expect.objectContaining({
-        expected_projection: {
-          availability: 'available',
-          event_id: 'a'.repeat(64),
-          hash: 'b'.repeat(64)
-        }
-      })
-    }));
-  });
-
-  it('sends NIP-86 admin calls through the relay-admin ContextVM method', async () => {
-    await relaySettings.callRelayAdmin({ targetRef: 'sidecar', method: 'supportedmethods' });
-    expect(requestEncryptedResultMock).toHaveBeenCalledWith({
-      operation: 'settings/relay-admin.call',
-      payload: { target_ref: 'sidecar', method: 'supportedmethods', params: [] },
-      tags: [['domain', 'relay-settings'], ['action', 'relay_admin_call'], ['target', 'sidecar']],
-      signal: undefined
-    });
+    const request = submitSensitiveIntentMock.mock.calls[0][0];
+    expect(request).toMatchObject({ domain: 'relay', op: 'policy-set', coordinate: 'relay-settings:operator',
+      content: { schema: 'bahia.relay-settings.v1', browser_relays: ['wss://replacement.example'],
+        intent_id: request.intentId,
+        expected_projection: { availability: 'available', event_id: 'a'.repeat(64), hash: 'b'.repeat(64) },
+        replacement_confirmation: { confirmed: true, change_reference: 'INC-42' } } });
   });
 
   it('normalizes projection truth states without collapsing absence into empty policy', () => {
     expect(relaySettings.normalizeRelayPolicyProjectionResponse({
-      result: {
-        status: 'unavailable',
-        truth_state: 'unavailable',
-        canonical_policy: null,
-        server_projection: { availability: 'unavailable', freshness: 'unavailable' }
-      }
+      status: 'unavailable',
+      truth_state: 'unavailable',
+      canonical_policy: null,
+      server_projection: { availability: 'unavailable', freshness: 'unavailable' }
     })).toMatchObject({ truthState: 'unavailable', policy: null });
 
     expect(relaySettings.normalizeRelayPolicyProjectionResponse({
-      result: {
-        request_event_id: 'request-1',
-        status: 'success',
-        payload: {
-          status: 'never-configured',
-          truth_state: 'never-configured',
-          canonical_policy: null,
-          server_projection: { availability: 'never-configured', freshness: 'not-applicable' }
-        }
-      }
+      status: 'never-configured',
+      truth_state: 'never-configured',
+      canonical_policy: null,
+      server_projection: { availability: 'never-configured', freshness: 'not-applicable' }
     })).toMatchObject({ truthState: 'never-configured', policy: null });
 
     expect(relaySettings.normalizeRelayPolicyProjectionResponse({
@@ -346,30 +288,19 @@ describe('relay settings control-plane helpers', () => {
     expect(unsubscribed).toBe(true);
   });
 
-  it('deduplicates concurrent getRelayPolicy calls at module level', async () => {
-    let resolveFirst;
-    const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
-    requestEncryptedResultMock.mockReturnValueOnce(firstPromise);
-
-    const call1 = relaySettings.getRelayPolicy();
-    const call2 = relaySettings.getRelayPolicy();
-
-    // Both calls should return the same promise — only one requestEncryptedResult call
-    expect(requestEncryptedResultMock).toHaveBeenCalledTimes(1);
-
-    resolveFirst({ requestEventId: 'dedup-1', result: { status: 'ok' } });
-    const [result1, result2] = await Promise.all([call1, call2]);
-    expect(result1).toBe(result2);
-  });
-
-  it('allows a fresh getRelayPolicy after the in-flight one settles', async () => {
-    requestEncryptedResultMock.mockResolvedValueOnce({ requestEventId: 'first', result: { status: 'ok' } });
-    await relaySettings.getRelayPolicy();
-
-    requestEncryptedResultMock.mockResolvedValueOnce({ requestEventId: 'second', result: { status: 'ok' } });
-    const result = await relaySettings.getRelayPolicy();
-    expect(result.requestEventId).toBe('second');
-    expect(requestEncryptedResultMock).toHaveBeenCalledTimes(2);
+  it('hydrates policy only from the trusted relay-settings cp-state family in the store', async () => {
+    const event = relaySettingsStateEvent({ id: 'event-a', servicePubkey: 'b'.repeat(64),
+      createdAt: 100, browserRelays: ['wss://new.example'] });
+    queryMock.mockReturnValue([event]);
+    expect(await relaySettings.getRelayPolicy()).toMatchObject({
+      truth_state: 'loaded-cached', canonical_policy: { browser_relays: ['wss://new.example'] },
+      server_projection: { event_id: 'event-a' }
+    });
+    expect(queryMock).toHaveBeenCalledWith(expect.objectContaining({
+      kinds: [30900], authors: ['b'.repeat(64)], '#d': ['relay-settings:operator']
+    }));
+    queryMock.mockReturnValue([]);
+    expect(await relaySettings.getRelayPolicy()).toMatchObject({ truth_state: 'loading', canonical_policy: null });
   });
 
 });

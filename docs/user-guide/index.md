@@ -46,6 +46,7 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 | Feature | Description |
 |---------|-------------|
 | [Services](features/services.md) | Create and manage deployable applications |
+| [Adoption](features/adoption.md) | Scan existing runtime targets before importing services |
 | [Environments](features/environments.md) | Configure deployment targets (staging, production) |
 | [Deployments](features/deployments.md) | Deploy artifacts with intents, approvals, and runs |
 | [Operator Assistant](features/operator-assistant.md) | Batch plan review/editing and iterative assistant workflows (unified execution contract) |

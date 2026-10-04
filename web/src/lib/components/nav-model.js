@@ -6,6 +6,7 @@ const WORKSPACE_LINKS = [
 
 const DELIVERY_LINKS = [
   { href: '/services', label: 'Services', docTopic: 'features-services' },
+  { href: '/adoption', label: 'Adoption', docTopic: 'features-adoption' },
   { href: '/builds', label: 'Builds', docTopic: 'features-builds' },
   { href: '/artifacts', label: 'Artifacts', docTopic: 'features-artifacts' },
   { href: '/packages', label: 'Packages', docTopic: 'features-packages' },

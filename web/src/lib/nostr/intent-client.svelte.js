@@ -14,7 +14,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12
 
 export function resolveIntentOrgId(domain, explicit, candidates = []) {
   if (UUID.test(String(explicit || ''))) return explicit;
-  if (['backup', 'package', 'worker', 'dns', 'ml'].includes(domain)) return FLEET_INTENT_ORG_ID;
+  if (['backup', 'package', 'worker', 'dns', 'ml', 'security', 'sbom', 'relay'].includes(domain)) return FLEET_INTENT_ORG_ID;
   const available = [...new Set(candidates.filter(value => UUID.test(String(value || ''))))];
   if (available.length === 1) return available[0];
   if (available.length > 1) throw new Error('Select an organization before submitting this intent');

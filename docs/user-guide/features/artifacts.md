@@ -96,21 +96,17 @@ Each `30078` reference contains a DSSE envelope over the exact in-toto statement
 
 ### Generating or importing SBOMs
 
-Signer-first generation and import use ContextVM methods over kind `25910`:
+The browser publishes signed kind-`30900` `sbom/generate` or `sbom/import` request intents. The content follows the [D80 fixture](../../../web/tests/fixtures/d80-intent-content.json); the signed `intent_id` is also the `idempotencyKey`. For example, generation content is:
 
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": "sbom-art-456-spdx",
-  "method": "sbom/generate",
-  "params": {
-    "idempotencyKey": "sbom-art-456-spdx",
-    "subject": { "type": "artifact", "id": "art-456", "digest": "sha256:<artifact-digest>" },
-    "source": { "kind": "oci-image", "locator": "registry.example.com/my-api@sha256:<artifact-digest>" },
-    "formats": ["spdx", "cyclonedx"],
-    "generator": "syft",
-    "storage": "blossom"
-  }
+  "intent_id": "<intent-uuid>",
+  "idempotencyKey": "<intent-uuid>",
+  "subject": { "type": "artifact", "id": "art-456", "digest": "sha256:<artifact-digest>" },
+  "source": { "kind": "oci-image", "locator": "registry.example.com/my-api@sha256:<artifact-digest>" },
+  "formats": ["spdx", "cyclonedx"],
+  "generator": "syft",
+  "storage": "blossom"
 }
 ```
 
@@ -155,8 +151,8 @@ Use `bahia_get_sbom` for the compatibility projection, `bahia_get_sbom_packages`
 1. Go to **Artifacts → Registry**.
 2. Use the per-row **Generate SBOM** or **Regenerate SBOM** action to open the artifact directly on its SBOM tab.
 3. On artifact detail, the same **Generate SBOM** or **Regenerate SBOM** action is also visible in the page header and on the SBOM tab.
-4. The browser opens the SBOM tab, reads artifact-scoped `30078` SBOM references and `30004` availability lists from its event store (routed by kind and `t` topic), then publishes a signer-backed encrypted ContextVM `sbom/generate` request. It does not call a REST generation endpoint.
-5. Bahia only uses explicit image refs or configured artifact repositories plus immutable digests as generation sources. The ContextVM reply only acknowledges request handling; durable completion is shown when canonical SBOM reference or availability events arrive.
+4. The browser opens the SBOM tab, reads artifact-scoped `30078` SBOM references and `30004` availability lists from its event store (routed by kind and `t` topic), then publishes a signed `sbom/generate` intent. It does not call a REST generation endpoint.
+5. Bahia only uses explicit image refs or configured artifact repositories plus immutable digests as generation sources. The requester-scoped `30315` status acknowledges handling; durable completion is shown when canonical SBOM reference or availability events arrive.
 6. View attestation details, Blossom location, hashes, NTIA status, and package list directly from the canonical SBOM events and compatibility projection data.
 
 ## Signatures

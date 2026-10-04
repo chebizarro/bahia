@@ -159,7 +159,7 @@ describe('BAHIA_NOSTR_AUDIT_PARITY route transport matrix', () => {
     const mlPin = matrix.entries.find((entry) => entry.id === 'ml-existing-endpoint-pin-signer-first');
     expect(mlPin.transport_class).toBe('nostr_native');
     expect(mlPin.route_files).toEqual(['web/src/routes/ml/+page.svelte']);
-    expect(mlPin.evidence.join(' ')).toMatch(/publishCommand\(\).*workload\.pin\.request/);
+    expect(mlPin.evidence.join(' ')).toMatch(/ml\/pin signed intent.*canonical endpoint revision/);
 
     const orgDocs = readFileSync(resolve(repoRoot, 'docs/user-guide/features/organizations.md'), 'utf8');
     expect(orgDocs).toContain('encrypted request/result facade');

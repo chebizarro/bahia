@@ -175,12 +175,23 @@
       "resolved_by_beads": ["bahia-l9fmb"]
     },
     {
+      "id": "adoption-scan-signed-intent",
+      "surface": "`/adoption` runtime target scan and bounded status findings",
+      "transport_class": "nostr_native",
+      "route_files": ["web/src/routes/adoption/+page.svelte"],
+      "control_files": ["web/src/lib/stores/public-controlplane.svelte.js", "web/src/lib/nostr/final-ops-intents.js"],
+      "evidence": ["Adoption scan publishes adoption/scan as a signed 30900 intent and renders findings from the matching 30315 status data; no ContextVM or REST request is issued."],
+      "rest_import_policy": "forbidden_for_browser_command_ingress",
+      "pstf_status": "verified_by_bahia-irsry.12.14",
+      "resolved_by_beads": ["bahia-irsry.12.14"]
+    },
+    {
       "id": "ml-nostr-controlplane",
       "surface": "`/ml` import and deployment browser submissions",
       "transport_class": "nostr_native",
       "route_files": ["web/src/routes/ml/+page.svelte"],
-      "control_files": ["web/src/routes/ml/+page.svelte", "web/src/lib/stores/public-controlplane.svelte.js", "internal/controlplane/ml_handlers.go", "internal/controlplane/ml_command_publisher.go"],
-      "evidence": ["ML page publishes import/deploy operations through publishCommand() using ml/model-import and ml/inference-deploy ContextVM Nostr commands.", "Backend reactor handles those ContextVM operations as ML Nostr requests and returns correlated ContextVM result events while ML registry projections update read models.", "web/src/lib/api/client.js no longer exposes ML REST bridge methods or ML REST read-model facades."],
+      "control_files": ["web/src/routes/ml/+page.svelte", "web/src/lib/nostr/final-ops-intents.js", "internal/controlplane/ml_operation_intent_handler.go"],
+      "evidence": ["ML page publishes ml/model-import, ml/recipe-apply, ml/recipe-run, ml/inference-deploy, ml/inference-approval, ml/inference-rollback, and ml/pin as signed 30900 intents through publishIntent().", "Daemon status 30315 and canonical ML projections reconcile accepted work; no ML ContextVM request remains.", "web/src/lib/api/client.js no longer exposes ML REST bridge methods or ML REST read-model facades."],
       "rest_import_policy": "forbidden_for_browser_command_ingress",
       "pstf_status": "resolved_by_bahia-gkg7",
       "resolved_by_beads": ["bahia-jxm3", "bahia-gkg7"]
@@ -190,8 +201,8 @@
       "surface": "`/ml` existing endpoint worker pin command",
       "transport_class": "nostr_native",
       "route_files": ["web/src/routes/ml/+page.svelte"],
-      "control_files": ["web/src/routes/ml/+page.svelte", "web/src/lib/stores/public-controlplane.svelte.js", "web/src/lib/nostr/controlplane-requests.js"],
-      "evidence": ["Existing endpoint pinning in web/src/routes/ml/+page.svelte calls publishCommand() with workload.pin.request before deployment submission when a pinned worker targets an existing endpoint.", "The pin command follows signer-first browser Nostr request/result lifecycle semantics and shares the ML page's Nostr-native command ingress."],
+      "control_files": ["web/src/routes/ml/+page.svelte", "web/src/lib/nostr/final-ops-intents.js"],
+      "evidence": ["Existing endpoint pinning publishes an ml/pin signed intent with canonical endpoint revision before deployment submission.", "The daemon updates the endpoint canonical placement policy; the browser does not issue a ContextVM pin command."],
       "rest_import_policy": "forbidden_for_pin_command_ingress",
       "pstf_status": "resolved_by_bahia-gkg7",
       "resolved_by_beads": ["bahia-jxm3", "bahia-gkg7"]

@@ -1,9 +1,9 @@
-import { requestEncryptedResult, encryptedRequestsAvailable } from '$lib/nostr/encrypted-controlplane.js';
 import { onStoreRefresh } from '$lib/nostr/boot.js';
-import { NOTIFICATION_CHANNEL_REGISTRY } from '$lib/nostr/kinds.gen.js';
+import { NOTIFICATION_CHANNEL_REGISTRY, NOTIFICATION_LOG_STATE, CP_STATE_TOPICS } from '$lib/nostr/kinds.gen.js';
+import { acceptedIntentStatus } from '$lib/nostr/intent-client.svelte.js';
+import { notificationChannelTestIntent } from '$lib/nostr/final-ops-intents.js';
 import { onContentKeyChange } from './auth-roles.svelte.js';
 import { readConfidentialTopic } from './collections/confidential-records.js';
-import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 import { mintEntityId } from '$lib/entity-id.js';
 import { orgIdFor, submitSensitiveIntent } from './sensitive-intents.svelte.js';
 
@@ -19,37 +19,6 @@ export const notificationState = $state({
 let notificationSubscription = null;
 let keySubscription = null;
 let subscribedLogParams = null;
-
-export const NOTIFICATION_ENCRYPTED_OPERATIONS = {
-  testChannel: 'notifications.channels.test',
-  listLogs: 'notifications.logs.list'
-};
-
-async function ensureEncryptedNotifications() {
-  let info = currentSystemInfo();
-  if (!info) {
-    info = await loadSystemInfo();
-  }
-  if (!encryptedRequestsAvailable(info)) {
-    throw new Error('ContextVM requests are not available. Ensure Bahia discovery advertises standard relay URLs and a Bahia service pubkey before using notification settings.');
-  }
-  return info;
-}
-
-function extractEncryptedPayload(response, fallback = {}) {
-  const envelope = response?.result ?? response;
-  if (envelope?.status === 'error') {
-    throw new Error(envelope?.error?.message || 'Encrypted notification operation failed');
-  }
-  return envelope?.payload ?? fallback;
-}
-
-function normalizeLogsPayload(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.logs)) return payload.logs;
-  if (Array.isArray(payload?.data)) return payload.data;
-  return [];
-}
 
 function upsertChannel(channel) {
   if (!channel?.id) return;
@@ -111,18 +80,22 @@ export async function deleteNotificationChannel(id) {
 }
 
 export async function testNotificationChannel(id) {
-  await ensureEncryptedNotifications();
-  const response = await requestEncryptedResult({ operation: NOTIFICATION_ENCRYPTED_OPERATIONS.testChannel, payload: { id } });
-  return extractEncryptedPayload(response);
+  const channel = notificationState.channels.find(row => row.id === id);
+  if (!channel) throw new Error('Load the canonical notification channel before testing it');
+  const submitted = await submitSensitiveIntent(notificationChannelTestIntent(id, orgIdFor(channel)));
+  const status = await acceptedIntentStatus({ coordinate: id, intentId: submitted.intentId });
+  return status.data || { status: 'accepted' };
 }
 
 export async function listNotificationLogs(params = {}) {
   notificationState.logsLoading = true;
   notificationState.logsError = null;
   try {
-    await ensureEncryptedNotifications();
-    const response = await requestEncryptedResult({ operation: NOTIFICATION_ENCRYPTED_OPERATIONS.listLogs, payload: params });
-    const logs = normalizeLogsPayload(extractEncryptedPayload(response));
+    const logs = readConfidentialTopic(CP_STATE_TOPICS.NOTIFICATION_LOG, NOTIFICATION_LOG_STATE).rows
+      .filter(window => !params.channel_id || window.channel_id === params.channel_id)
+      .flatMap(window => Array.isArray(window.logs) ? window.logs : [])
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+      .slice(0, Math.min(Math.max(Number(params.limit) || 50, 1), 500));
     notificationState.logs = logs;
     return logs;
   } catch (error) {

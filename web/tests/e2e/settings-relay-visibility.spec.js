@@ -6,13 +6,6 @@ const BROWSER_RELAY = 'ws://browser-bootstrap.test.local';
 const ENCRYPTED_RELAY = 'ws://encrypted-requests.test.local';
 const SERVICE_RELAYS = ['ws://service-read.test.local', 'wss://service-write.example'];
 
-function relayPolicyGetOperation(response) {
-  return {
-    operation: 'settings/relay-policy.get',
-    response
-  };
-}
-
 function relaySettingsStateEvent({ browserRelays = [], contextVMRelays = [], serviceRelays = [], createdAt = 10 } = {}) {
   return {
     id: `relay-settings-${createdAt}`,
@@ -99,96 +92,45 @@ test.describe('Settings relay visibility', () => {
     await expect.poll(async () => page.evaluate(() => (window.__BAHIA_E2E_WS_CONNECTIONS || []).map((socket) => socket.url))).toContain('ws://service-read.test.local/');
   });
 
-  test('reloads a cached stale projection with provenance instead of rendering blank truth', async ({ page }) => {
-    const response = {
-      status: 'ok',
-      truth_state: 'loaded-stale',
-      canonical_policy: {
-        schema: 'bahia.relay-settings.v1',
-        browser_relays: ['wss://cached-browser.example'],
-        contextvm_relays: ['wss://cached-contextvm.example'],
-        service_relays: ['wss://cached-service.example']
-      },
-      server_projection: {
-        availability: 'available',
-        source: 'postgres_projection',
-        event_id: 'a'.repeat(64),
-        hash: 'b'.repeat(64),
-        source_relay: 'wss://secondary.example/path',
-        last_sync_at: '2026-08-03T01:02:03Z',
-        freshness: 'stale'
-      }
-    };
-    await installE2EMocks(page, {
-      systemInfo,
-      contextVMOperations: [relayPolicyGetOperation(response)]
-    });
-
+  test('reloads canonical relay policy from the signed event store', async ({ page }) => {
+    await installE2EMocks(page, { systemInfo, nostrEvents: [relaySettingsStateEvent({
+      browserRelays: ['wss://canonical-browser.example'], createdAt: Math.floor(Date.now() / 1000) - 1
+    })] });
     await page.goto('/settings/relays');
-    let operatorPolicy = page.locator('section', { hasText: 'Operator Relay Policy' });
-    await expect(operatorPolicy.getByText('Loaded — cached/stale')).toBeVisible();
-    await expect(operatorPolicy.locator('label', { hasText: 'Browser/bootstrap relays' }).locator('textarea')).toHaveValue('wss://cached-browser.example');
-    await expect(operatorPolicy.getByText('a'.repeat(64))).toBeVisible();
-    await expect(operatorPolicy.getByText('b'.repeat(64))).toBeVisible();
-    await expect(operatorPolicy.getByText('wss://secondary.example/path')).toBeVisible();
-    await expect(operatorPolicy.getByText('2026-08-03T01:02:03Z', { exact: true })).toBeVisible();
-
+    const operatorPolicy = page.locator('section', { hasText: 'Operator Relay Policy' });
+    await expect(operatorPolicy.getByText('Loaded — live')).toBeVisible();
+    await expect(operatorPolicy.locator('label', { hasText: 'Browser/bootstrap relays' }).locator('textarea'))
+      .toHaveValue('wss://canonical-browser.example');
     await page.reload();
-    operatorPolicy = page.locator('section', { hasText: 'Operator Relay Policy' });
-    await expect(operatorPolicy.getByText('Loaded — cached/stale')).toBeVisible();
-    await expect(operatorPolicy.locator('label', { hasText: 'Browser/bootstrap relays' }).locator('textarea')).toHaveValue('wss://cached-browser.example');
+    await expect(operatorPolicy.getByText('Loaded — live')).toBeVisible();
+    await expect(operatorPolicy.locator('label', { hasText: 'Browser/bootstrap relays' }).locator('textarea'))
+      .toHaveValue('wss://canonical-browser.example');
   });
 
-  test('does not let an older live replay downgrade a newer cached projection', async ({ page }) => {
-    await installE2EMocks(page, {
-      systemInfo,
-      contextVMOperations: [relayPolicyGetOperation({
-        status: 'ok',
-        truth_state: 'loaded-cached',
-        canonical_policy: {
-          schema: 'bahia.relay-settings.v1',
-          browser_relays: ['wss://newer-cached.example'],
-          contextvm_relays: [],
-          service_relays: ['wss://cached-service.example']
-        },
-        server_projection: {
-          availability: 'available',
-          source: 'postgres_projection',
-          event_id: 'e'.repeat(64),
-          event_created_at: '2026-08-03T04:05:06Z',
-          hash: 'f'.repeat(64),
-          source_relay: 'wss://secondary.example',
-          last_sync_at: '2026-08-03T04:06:00Z',
-          freshness: 'fresh'
-        }
-      })]
-    });
+  test('does not let an older relay replay downgrade newer canonical state', async ({ page }) => {
+    const now = Math.floor(Date.now() / 1000);
+    await installE2EMocks(page, { systemInfo, nostrEvents: [relaySettingsStateEvent({
+      browserRelays: ['wss://newer.example'], createdAt: now
+    })] });
 
     await page.goto('/settings/relays');
     const operatorPolicy = page.locator('#operator-relay-policy');
-    await expect(operatorPolicy.getByText('Loaded — cached')).toBeVisible();
-    await expect(operatorPolicy.locator('label', { hasText: 'Browser/bootstrap relays' }).locator('textarea')).toHaveValue('wss://newer-cached.example');
+    await expect(operatorPolicy.getByText('Loaded — live')).toBeVisible();
+    await expect(operatorPolicy.locator('label', { hasText: 'Browser/bootstrap relays' }).locator('textarea')).toHaveValue('wss://newer.example');
 
     await page.evaluate((event) => window.__bahiaPushNostrEvent(event), relaySettingsStateEvent({
       browserRelays: ['wss://older-live.example'],
-      createdAt: Math.floor(Date.parse('2026-08-03T04:00:00Z') / 1000)
+      createdAt: now - 1
     }));
 
-    await expect(operatorPolicy.getByText('Loaded — cached')).toBeVisible();
-    await expect(operatorPolicy.locator('label', { hasText: 'Browser/bootstrap relays' }).locator('textarea')).toHaveValue('wss://newer-cached.example');
+    await expect(operatorPolicy.getByText('Loaded — live')).toBeVisible();
+    await expect(operatorPolicy.locator('label', { hasText: 'Browser/bootstrap relays' }).locator('textarea')).toHaveValue('wss://newer.example');
     await expect(operatorPolicy.getByText('wss://older-live.example')).toHaveCount(0);
   });
 
   test('distinguishes unavailable truth and gates Apply behind audited replacement confirmation', async ({ page }) => {
-    await installE2EMocks(page, {
-      systemInfo,
-      contextVMOperations: [relayPolicyGetOperation({
-        status: 'unavailable',
-        truth_state: 'unavailable',
-        canonical_policy: null,
-        server_projection: { availability: 'unavailable', freshness: 'unavailable' }
-      })]
-    });
+    await installE2EMocks(page, { systemInfo: { ...systemInfo,
+      nostr: { ...systemInfo.nostr, contextvm_relays: [], service_relays: [] } } });
 
     await page.goto('/settings/relays');
     const operatorPolicy = page.locator('section', { hasText: 'Operator Relay Policy' });
@@ -204,15 +146,7 @@ test.describe('Settings relay visibility', () => {
   });
 
   test('distinguishes never-configured truth without requiring replacement confirmation', async ({ page }) => {
-    await installE2EMocks(page, {
-      systemInfo,
-      contextVMOperations: [relayPolicyGetOperation({
-        status: 'never-configured',
-        truth_state: 'never-configured',
-        canonical_policy: null,
-        server_projection: { availability: 'never-configured', freshness: 'not-applicable' }
-      })]
-    });
+    await installE2EMocks(page, { systemInfo });
 
     await page.goto('/settings/relays');
     const operatorPolicy = page.locator('section', { hasText: 'Operator Relay Policy' });
@@ -221,33 +155,12 @@ test.describe('Settings relay visibility', () => {
   });
 
   test('distinguishes an explicitly signed empty policy from unavailable', async ({ page }) => {
-    await installE2EMocks(page, {
-      systemInfo,
-      contextVMOperations: [relayPolicyGetOperation({
-        status: 'ok',
-        truth_state: 'intentionally-empty',
-        canonical_policy: {
-          schema: 'bahia.relay-settings.v1',
-          browser_relays: [],
-          contextvm_relays: [],
-          service_relays: []
-        },
-        server_projection: {
-          availability: 'available',
-          source: 'postgres_projection',
-          event_id: 'c'.repeat(64),
-          hash: 'd'.repeat(64),
-          source_relay: 'wss://empty-policy.example',
-          last_sync_at: '2026-08-03T03:04:05Z',
-          freshness: 'fresh'
-        }
-      })]
-    });
+    await installE2EMocks(page, { systemInfo, nostrEvents: [relaySettingsStateEvent({ createdAt: Math.floor(Date.now() / 1000) })] });
 
     await page.goto('/settings/relays');
     const operatorPolicy = page.locator('section', { hasText: 'Operator Relay Policy' });
     await expect(operatorPolicy.getByText('Intentionally empty — explicitly signed', { exact: true })).toBeVisible();
-    await expect(operatorPolicy.getByText('this is not missing data')).toBeVisible();
+    await expect(operatorPolicy.getByText('explicitly defines an empty policy')).toBeVisible();
     await expect(operatorPolicy.locator('label', { hasText: 'Browser/bootstrap relays' }).locator('textarea')).toHaveValue('');
     await expect(operatorPolicy.getByRole('button', { name: 'Publish Relay Policy Update' })).toBeEnabled();
   });

@@ -1,32 +1,13 @@
-import { requestEncryptedResult, encryptedRequestsAvailable } from '$lib/nostr/encrypted-controlplane.js';
-import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
+import { publishIntentForStatus } from '$lib/nostr/intent-client.svelte.js';
+import { artifactSignatureVerifyIntent } from '$lib/nostr/final-ops-intents.js';
+import { artifacts } from './collections/deployments.svelte.js';
+import { services } from './collections/services.svelte.js';
 
 export const artifactSignatureState = $state({
   verifyingByArtifact: {},
   errorByArtifact: {},
   lastResultByArtifact: {}
 });
-
-export const ARTIFACT_SIGNATURE_ENCRYPTED_OPERATIONS = {
-  verify: 'artifacts.signatures.verify'
-};
-
-async function ensureEncryptedSignatureRequests() {
-  let info = currentSystemInfo();
-  if (!info) info = await loadSystemInfo();
-  if (!encryptedRequestsAvailable(info)) {
-    throw new Error('ContextVM requests are not available. Ensure Bahia discovery advertises standard relay URLs and a Bahia service pubkey before verifying artifact signatures.');
-  }
-  return info;
-}
-
-function unwrapEncryptedResult(response, fallback = {}) {
-  const envelope = response?.result ?? response;
-  if (envelope?.status === 'error') {
-    throw new Error(envelope?.error?.message || 'Encrypted artifact signature request failed');
-  }
-  return envelope?.payload ?? fallback;
-}
 
 function setArtifactState(mapName, artifactId, value) {
   artifactSignatureState[mapName] = { ...artifactSignatureState[mapName], [artifactId]: value };
@@ -38,13 +19,11 @@ export async function verifyArtifactSignatures(artifactId) {
   setArtifactState('verifyingByArtifact', id, true);
   setArtifactState('errorByArtifact', id, null);
   try {
-    await ensureEncryptedSignatureRequests();
-    const response = await requestEncryptedResult({
-      operation: ARTIFACT_SIGNATURE_ENCRYPTED_OPERATIONS.verify,
-      payload: { artifact_id: id },
-      tags: [['domain', 'artifact-signatures']]
-    });
-    const payload = unwrapEncryptedResult(response);
+    const artifact = artifacts.find(row => row.id === id);
+    const orgId = artifact?.org_id || services.find(row => row.id === artifact?.service_id)?.org_id;
+    if (!orgId) throw new Error('Load the artifact and its service before verifying signatures');
+    const status = await publishIntentForStatus(artifactSignatureVerifyIntent(id, orgId));
+    const payload = status.data || {};
     setArtifactState('lastResultByArtifact', id, payload);
     return payload;
   } catch (error) {

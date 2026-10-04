@@ -1,6 +1,6 @@
 import { finalizeEvent, generateSecretKey, getPublicKey, nip44 } from 'nostr-tools';
 
-export const SENSITIVE_INTENT_DOMAINS = new Set(['org', 'secret', 'notification']);
+export const SENSITIVE_INTENT_DOMAINS = new Set(['org', 'secret', 'notification', 'relay']);
 
 export function sensitiveIntentBlocker(capabilities) {
   if (capabilities?.nip44 === true) return null;
