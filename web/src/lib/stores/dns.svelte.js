@@ -389,6 +389,7 @@ function normalizeEndpointEvent(event, content) {
   return {
     ...eventMeta(event, content),
     id: coordinate,
+    registry_id: content.id || '',
     coordinate,
     service,
     service_id: content.service_id || service,
@@ -975,6 +976,21 @@ export async function startDNSCommandRun(command, payload = {}, { tags = [], sig
 export function createDNSZone(payload) {
   return publishIntent(dnsIntentRequest('zone-create', payload, resolveIntentOrgId('dns')));
 }
+
+function publishDNSMutation(op, payload, current = null) {
+  return publishIntent(dnsIntentRequest(op, payload, resolveIntentOrgId('dns'), current));
+}
+
+export function updateDNSZone(current, payload) { return publishDNSMutation('zone-update', payload, current); }
+export function deleteDNSZone(current) { return publishDNSMutation('zone-delete', { name: current.name }, current); }
+export function createDNSEndpoint(payload) { return publishDNSMutation('endpoint-create', payload); }
+export function updateDNSEndpoint(current, payload) { return publishDNSMutation('endpoint-update', payload, current); }
+export function deleteDNSEndpoint(current) { return publishDNSMutation('endpoint-delete', { coordinate: current.coordinate }, current); }
+export function createDNSBackend(payload) { return publishDNSMutation('backend-create', payload); }
+export function updateDNSBackend(current, payload) { return publishDNSMutation('backend-update', payload, current); }
+export function deleteDNSBackend(current) { return publishDNSMutation('backend-delete', { ref: current.ref }, current); }
+export function updateDNSPolicy(current, payload) { return publishDNSMutation('policy-update', payload, current); }
+export function deleteDNSPolicy(current) { return publishDNSMutation('policy-delete', { id: current.id }, current); }
 
 export function applyDNSPolicy(payload) {
   return publishIntent(dnsIntentRequest('policy-apply', payload, resolveIntentOrgId('dns')));

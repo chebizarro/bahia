@@ -64,6 +64,8 @@ Navigate to **DNS** in the sidebar:
 - **Policies**: Routing policies
 - **FIPS Mesh**: Federated identity endpoints
 
+The web DNS registry controls publish signed kind-`30900` intents for zone update/delete, endpoint create/update/delete, backend create/update/delete, and policy update/delete. Existing rows supply their canonical `updated_at` revision for edits and deletes. The pending overlay remains visible until a scoped kind-`30315` acceptance or newer canonical state arrives; a rejected or conflicting intent displays its reason. Zone creation, policy application, record overrides, and override retirement also use signed intents in the web view. Drift remediation remains an interactive ContextVM command.
+
 ### CLI and MCP
 
 The signer-first `bahia dns` group provides zone creation, policy application, record overrides, and drift remediation. These commands use the configured operator signer to publish ContextVM kind `25910` requests and await correlated acknowledgments. The corresponding `dns/zone-create`, `dns/policy-apply`, `dns/record-set`, and `dns/drift-remediate` ContextVM methods are always registered. When DNS orchestration is disabled or has no configured runtime, they return JSON-RPC `-32000` with the exact message `DNS orchestration is not enabled; set dns.enabled and configure a backend` instead of method-not-found.

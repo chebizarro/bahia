@@ -31,8 +31,10 @@ export function buildIntentEvent({ domain, op = 'update', coordinate, orgId, con
     'release-register', 'recipe-apply', 'policy-apply', 'repository-register',
     'definition-apply', 'run', 'restore', 'restore-approval', 'verification',
     'retention', 'repository-probe', 'approve', 'reject', 'rollback', 'deploy', 'restart', 'stop',
-    'zone-create', 'record-set', 'override-retire', 'model-create', 'model-update',
-    'version-create', 'version-update', 'endpoint-create', 'endpoint-update',
+    'zone-create', 'zone-update', 'zone-delete', 'record-set', 'override-retire',
+    'policy-update', 'policy-delete', 'backend-create', 'backend-update', 'backend-delete',
+    'model-create', 'model-update', 'model-delete',
+    'version-create', 'version-update', 'version-delete', 'endpoint-create', 'endpoint-update', 'endpoint-delete',
     'cordon', 'uncordon', 'drain', 'undrain', 'maintenance-enter', 'maintenance-exit',
     'labels-update', 'cleanup'].includes(op)) {
     throw new Error(`Invalid intent operation: ${op}`);
