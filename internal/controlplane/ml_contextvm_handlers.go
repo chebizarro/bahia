@@ -12,11 +12,16 @@ import (
 
 // RegisterMLRegistryContextVMHandlers preserves the encrypted legacy registry
 // methods while routing them through the signed-intent processor when enabled.
-func RegisterMLRegistryContextVMHandlers(transport *EncryptedRequestTransport, registry MLIntentRegistry, gate *FleetOperatorGate, processor *IntentProcessor) {
+func RegisterMLRegistryContextVMHandlers(transport *EncryptedRequestTransport, registry MLIntentRegistry, gate *FleetOperatorGate, processor *IntentProcessor, environments ...interface {
+	GetEnvironmentByName(context.Context, string) (*domain.Environment, error)
+}) {
 	if transport == nil || registry == nil {
 		return
 	}
 	h := mlRegistryContextVMHandlers{registry: registry, processor: processor}
+	if len(environments) > 0 {
+		h.environments = environments[0]
+	}
 	for _, method := range []string{
 		ContextVMMethodMLModelCreate, ContextVMMethodMLModelUpdate, ContextVMMethodMLModelDelete,
 		ContextVMMethodMLVersionCreate, ContextVMMethodMLVersionUpdate, ContextVMMethodMLVersionDelete,
@@ -27,11 +32,66 @@ func RegisterMLRegistryContextVMHandlers(transport *EncryptedRequestTransport, r
 			return h.mutate(ctx, request, op)
 		}))
 	}
+	for _, method := range []string{"ml/model-import", ContextVMMethodMLRecipeRun, "ml/inference-deploy", "ml/inference-approval", "ml/inference-rollback"} {
+		op := strings.TrimPrefix(method, "ml/")
+		transport.RegisterContextVMHandler(method, gate.wrap(func(ctx context.Context, request ContextVMRequest) (any, error) {
+			return h.operation(ctx, request, op)
+		}))
+	}
 }
 
 type mlRegistryContextVMHandlers struct {
-	registry  MLIntentRegistry
-	processor *IntentProcessor
+	registry     MLIntentRegistry
+	processor    *IntentProcessor
+	environments interface {
+		GetEnvironmentByName(context.Context, string) (*domain.Environment, error)
+	}
+}
+
+func (h mlRegistryContextVMHandlers) operation(ctx context.Context, request ContextVMRequest, op string) (any, error) {
+	if request.Event == nil {
+		return nil, fmt.Errorf("ML operation requires an authenticated requester")
+	}
+	content := map[string]any{}
+	if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
+		return nil, err
+	}
+	handler := NewMLIntentHandler(h.registry, h.environments)
+	intentID := effectiveIdempotencyKey(request, request.Event.ID.Hex())
+	coordinate := ""
+	if h.processor != nil && h.processor.Handler("ml") != nil {
+		if recorded := h.processor.ProcessedIntent(intentID); recorded != nil {
+			coordinate = recorded.Coordinate
+		}
+	}
+	if coordinate == "" {
+		var err error
+		coordinate, err = handler.operationCoordinate(ctx, op, content)
+		if err != nil {
+			return nil, err
+		}
+	}
+	intent := &Intent{Event: request.Event, Domain: "ml", Op: op, Coordinate: coordinate,
+		IntentID: intentID, Content: content, Actor: request.Event.PubKey.Hex()}
+	var err error
+	if h.processor != nil && h.processor.Handler("ml") != nil {
+		err = h.processor.ProcessInProcess(ctx, intent)
+	} else {
+		if rawRevision, ok := content["expected_updated_at"]; ok {
+			intent.ExpectedUpdatedAt, err = parseIntentRevision(rawRevision)
+			if err != nil {
+				return nil, err
+			}
+		}
+		err = handler.HandleIntent(ctx, intent)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if intent.Result != nil {
+		return intent.Result, nil
+	}
+	return map[string]any{"status": "accepted", "coordinate": coordinate}, nil
 }
 
 func (h mlRegistryContextVMHandlers) mutate(ctx context.Context, request ContextVMRequest, op string) (any, error) {

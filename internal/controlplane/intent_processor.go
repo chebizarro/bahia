@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -227,13 +228,28 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		)
 		return nil
 	}
+	if requiresStrictIntentReplay(intent) && (p.status == nil || p.status.publish == nil || p.status.signer == nil) {
+		return fmt.Errorf("intent outcome status publisher is not configured")
+	}
 
 	// Step 1: Deduplicate by intent_id.
 	if p.isProcessed(intent.IntentID) {
+		record := p.ProcessedIntent(intent.IntentID)
+		if requiresStrictIntentReplay(intent) && record != nil && (record.Actor != intent.Actor || record.Domain != intent.Domain || record.Op != intent.Op || record.Coordinate != intent.Coordinate || (record.ContentHash != "" && record.ContentHash != intentContentHash(intent.Content))) {
+			err := &intentReplayConflictError{intentID: intent.IntentID}
+			if p.status != nil {
+				p.status.PublishConflictReason(ctx, intent, err.Error())
+			}
+			return err
+		}
 		if inProcess {
-			if record := p.ProcessedIntent(intent.IntentID); record != nil {
+			if record != nil {
 				intent.Result = record.Result
 			}
+		}
+		if requiresStrictIntentReplay(intent) && record != nil {
+			intent.StatusData = record.Result
+			return p.status.PublishAcceptedChecked(ctx, intent)
 		}
 		p.logger.Debug("skipping already-processed intent",
 			zap.String("intent_id", intent.IntentID),
@@ -322,7 +338,11 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		)
 		if p.status != nil {
 			if IsRevisionConflict(err) {
-				p.status.PublishConflict(ctx, intent)
+				if _, stateConflict := err.(*intentStateConflictError); stateConflict {
+					p.status.PublishConflictReason(ctx, intent, err.Error())
+				} else {
+					p.status.PublishConflict(ctx, intent)
+				}
 			} else {
 				p.status.PublishRejection(ctx, intent, err.Error())
 			}
@@ -343,6 +363,9 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 
 	// Step 6: Mark processed (idempotency).
 	p.markProcessed(intent)
+	if requiresStrictIntentReplay(intent) {
+		return p.status.PublishAcceptedChecked(ctx, intent)
+	}
 
 	// Step 7: Publish canonical state is done by the domain handler.
 	if p.status != nil && intent.Evaluation == nil {
@@ -369,13 +392,14 @@ func (p *IntentProcessor) IsProcessed(intentID string) bool {
 // intent. It lets in-process retry transports return the original event ID
 // even after a canonical entity has been tombstoned.
 type ProcessedIntentRecord struct {
-	Actor      string         `json:"actor"`
-	OrgID      string         `json:"org_id"`
-	Domain     string         `json:"domain"`
-	Op         string         `json:"op"`
-	Coordinate string         `json:"coordinate"`
-	EventID    string         `json:"event_id"`
-	Result     map[string]any `json:"result,omitempty"`
+	Actor       string         `json:"actor"`
+	OrgID       string         `json:"org_id"`
+	Domain      string         `json:"domain"`
+	Op          string         `json:"op"`
+	Coordinate  string         `json:"coordinate"`
+	EventID     string         `json:"event_id"`
+	ContentHash string         `json:"content_hash,omitempty"`
+	Result      map[string]any `json:"result,omitempty"`
 }
 
 // ProcessedIntent returns the durable idempotency marker for an intent ID.
@@ -437,6 +461,9 @@ func (p *IntentProcessor) markProcessed(intent *Intent) {
 		result = nil
 	}
 	record := ProcessedIntentRecord{Actor: intent.Actor, OrgID: intent.OrgID.String(), Domain: intent.Domain, Op: intent.Op, Coordinate: intent.Coordinate, Result: result}
+	if requiresStrictIntentReplay(intent) {
+		record.ContentHash = intentContentHash(intent.Content)
+	}
 	if intent.Event != nil {
 		record.EventID = intent.Event.ID.Hex()
 	}
@@ -461,6 +488,41 @@ func (p *IntentProcessor) markProcessed(intent *Intent) {
 		)
 	}
 }
+
+func intentContentHash(content map[string]any) string {
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
+}
+
+func requiresStrictIntentReplay(intent *Intent) bool {
+	switch intent.Domain {
+	case "build":
+		return intent.Op == "request"
+	case "tool":
+		return intent.Op == "approval-response"
+	case "adoption":
+		return intent.Op == "scan"
+	case "ml":
+		switch intent.Op {
+		case "model-import", "recipe-apply", "recipe-run", "inference-deploy", "inference-approval", "inference-rollback":
+			return true
+		}
+	}
+	return false
+}
+
+type intentReplayConflictError struct{ intentID string }
+
+func (e *intentReplayConflictError) Error() string {
+	return "intent_id " + e.intentID + " conflicts with previously accepted content"
+}
+
+type intentStateConflictError struct{ message string }
+
+func (e *intentStateConflictError) Error() string { return e.message }
 
 // ParseIntent extracts a validated Intent from a kind 30900 event.
 func ParseIntent(ev *nostr.Event) (*Intent, error) {
@@ -521,7 +583,7 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 		return nil, fmt.Errorf("missing intent_id tag")
 	}
 	if intent.OrgID == uuid.Nil && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" &&
-		intent.Domain != "adoption" {
+		intent.Domain != "adoption" && intent.Domain != "tool" {
 		return nil, fmt.Errorf("missing or invalid org tag")
 	}
 
@@ -593,6 +655,7 @@ var RegisteredIntentDomains = []string{
 	"service", "environment", "policy", "package", "backup", "llm", "ml",
 	"dns", "worker", "deployment", "runtime", "org", "secret", "notification",
 	"artifact", "adoption", // D76 (bahia-irsry.76)
+	"build", "tool", // D79 (bahia-irsry.79)
 }
 
 // BuildEnabledDomains enables every registered domain except explicit opt-outs.

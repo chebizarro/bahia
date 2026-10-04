@@ -4,7 +4,11 @@
 
 Enabled `deployment`, `runtime`, `llm`, and `backup` domains use client-signed kind `30900` with `schema=bahia.intent.<domain>.v1`, `domain`, `op`, `org`, and `t=bahia-intent` tags. JSON `content.intent_id` is the replay key; `expected_updated_at` guards mutable targets when present and is the canonical record's RFC3339 `updated_at` string, never a numeric epoch. The daemon emits bounded kind `30315` status and publishes canonical state through the existing service publishers, never by countersigning the client intent. [Parseable fixtures](../web/tests/fixtures/deployment-intents.json) cover each operation. Disabled domains retain their legacy ContextVM transport.
 
-## Canonical command envelopes
+## D79 intent payloads
+
+The new `ml`, `tool`, `build`, and `adoption` operations reuse kind `30900` (`t=bahia-intent`, `schema=bahia.intent.<domain>.v1`, `domain`, `op`, `d`, `intent_id` tags) and requester-scoped kind `30315` status. The `intent_id` tag is the replay key; approval payload `intent_id` is the target deployment/provisioning record, not the replay key. Model import and recipe definition are desired state; run/deploy/approval/rollback, build request, tool approval, and adoption scan are requests whose output is daemon-authored. Scan `data.findings` is redacted and bounded with `offset`, `limit`, `next_offset`, and `truncated`. See the [D79 fixtures](../web/tests/fixtures/d79-intent-content.json).
+
+## Legacy command envelopes
 
 Artifact, deployment-policy, and tool-approval publishers serialize JSON-RPC
 requests in ContextVM kind `25910`, with the request ID and `_meta.progressToken`

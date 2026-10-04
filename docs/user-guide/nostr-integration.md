@@ -907,6 +907,12 @@ Stage 3 uses existing canonical observable kinds only: `30315` managed-instance 
 Bahia projects shared verified runtime releases as kind `30315` control state using schema `bahia.agent-runtime-release.v1`. Filter narrowly by `domain=agent-runtime-release` plus `org`/`digest`, or by `domain=agent-service-release` plus `org`/`agent`/`service`. Binding events retain `release_channel`, source event, and previous-binding correlation for exact rollback lookup. They do not represent deployment intent.
 
 
+## D79 operator intents
+
+The daemon accepts signed kind-30900 `build/request`, `adoption/scan`, `tool/approval-response`, and the ML operations listed in [ML Models](features/ml-models.md). Use the domain-specific schema `bahia.intent.<domain>.v1`, a stable `intent_id` tag, and the coordinate/content shapes in the [D79 fixtures](../../web/tests/fixtures/d79-intent-content.json). Build requests require `services:write`; adoption scans require the adoption operator pubkey allowlist; ML and tool decisions require the fleet-operator allowlist. A reused `intent_id` with different content, actor, operation, or coordinate produces a conflict rather than another mutation.
+
+`adoption/scan` is a request, not canonical adoption state. Its requester-scoped kind-30315 acceptance `data` contains redacted findings, `total_findings`, `offset`, `limit`, `next_offset`, and `truncated`. Each page is capped below the status size budget; request the next offset to read more findings. The daemon alone authors queued builds, ML run/deployment records, and approval decisions. ContextVM methods dual-dispatch to the same handlers while those legacy methods remain available.
+
 ## Config Fabric status durability
 
 Config Fabric status uses kind `30900`, `domain=config-status`, and

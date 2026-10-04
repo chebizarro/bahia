@@ -4,12 +4,16 @@
 
 The `deployment`, `runtime`, `llm`, and `backup` intent domains admit client-signed kind `30900` desires when individually enabled. Revisioned intents copy the canonical record's RFC3339 `updated_at` string into `content.expected_updated_at`; numeric epochs are invalid. The processor verifies TrustSet permissions, deduplicates by `content.intent_id`, invokes the existing service paths, and emits bounded `30315` admission status; those services alone publish canonical state. Existing ContextVM mutations use in-process intent dispatch only for enabled domains and keep the legacy path otherwise. See the [domain operation table](designs/phase3-authority-inversion.md) and [wire fixtures](../web/tests/fixtures/deployment-intents.json).
 
-## Publisher and discovery boundaries
+## D79 operator request boundary
+
+The `ml`, `tool`, `build`, and `adoption` intent domains add the [D79 operation set](../web/tests/fixtures/d79-intent-content.json). The client signs the desired content or request and a stable tag-level `intent_id`; the daemon creates the queued build/ML records, applies approvals, or scans and emits bounded requester-scoped `30315` status. Adoption scan results are redacted, paged, and never treated as canonical adoption state. Fleet-operator or adoption-operator allowlists and tenant `services:write` remain as on the corresponding ContextVM methods. Those methods dual-dispatch through the intent processor until removed.
+
+## Legacy publisher and discovery boundaries
 
 Artifact and tool-approval publishers use canonical ContextVM envelopes. MCP policy evaluation uses a `policy` kind-30900 intent (`op=evaluate`) whose bounded kind-30315 status carries the decision. LLM approval selects `approval/llm-approve` or `approval/llm-reject`. Discovery
 advertises registered server methods only, so outbound publisher support is not
 proof that the server can execute the request. AI/ML discovery remains read-model
-only until mutation consumers exist. See the [implementation guide](nostr-event-implementation-guide.md#artifact-policy-and-approval-publishers).
+only; mutation consumers are the ML intent handlers. See the [implementation guide](nostr-event-implementation-guide.md#artifact-policy-and-approval-publishers).
 
 ## Virtualization control boundary
 

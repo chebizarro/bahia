@@ -49,6 +49,8 @@ type parsedDirectRuntimeActionRequest struct {
 
 type adoptionScanEventRequest struct {
 	Targets []adoptionEventTarget `json:"targets"`
+	Offset  int                   `json:"offset,omitempty"`
+	Limit   int                   `json:"limit,omitempty"`
 }
 
 type adoptionImportEventRequest struct {

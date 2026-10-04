@@ -347,6 +347,12 @@ func (e *revisionConflictError) Error() string {
 
 // IsRevisionConflict reports whether err is a revision conflict.
 func IsRevisionConflict(err error) bool {
+	if _, ok := err.(*intentReplayConflictError); ok {
+		return true
+	}
+	if _, ok := err.(*intentStateConflictError); ok {
+		return true
+	}
 	if _, ok := err.(*revisionConflictError); ok {
 		return true
 	}
