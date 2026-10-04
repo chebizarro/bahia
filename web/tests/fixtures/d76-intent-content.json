@@ -1,0 +1,103 @@
+{
+  "schema": "bahia.intent-fixtures.d76.v1",
+  "intents": [
+    {
+      "domain": "artifact",
+      "op": "register",
+      "coordinate": "artifact:018f6a60-0000-7000-8000-000000000005",
+      "permission": "services:write",
+      "modelling": "desired-state",
+      "content": {
+        "build_id": "018f6a60-0000-7000-8000-000000000004",
+        "id": "018f6a60-0000-7000-8000-000000000005",
+        "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "image_repo": "registry.example/api",
+        "image_tag": "v1",
+        "intent_id": "018f6a60-0000-7000-8000-000000000006",
+        "service_id": "018f6a60-0000-7000-8000-000000000002"
+      }
+    },
+    {
+      "domain": "artifact",
+      "op": "import-observed",
+      "coordinate": "artifact-import:018f6a60-0000-7000-8000-000000000002:018f6a60-0000-7000-8000-000000000003:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "permission": "services:write",
+      "modelling": "desired-state",
+      "content": {
+        "environment_id": "018f6a60-0000-7000-8000-000000000003",
+        "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "image_repo": "registry.example/api",
+        "image_tag": "v1",
+        "intent_id": "018f6a60-0000-7000-8000-000000000007",
+        "service_id": "018f6a60-0000-7000-8000-000000000002"
+      }
+    },
+    {
+      "domain": "adoption",
+      "op": "import",
+      "coordinate": "adoption:018f6a60-0000-7000-8000-000000000001",
+      "permission": "adoption-operator",
+      "modelling": "desired-state",
+      "content": {
+        "intent_id": "018f6a60-0000-7000-8000-000000000008",
+        "org_id": "018f6a60-0000-7000-8000-000000000001",
+        "selections": [
+          {
+            "container_id": "container-123",
+            "target_name": "production"
+          }
+        ],
+        "targets": [
+          {
+            "endpoint_ref": "docker-prod",
+            "name": "production"
+          }
+        ]
+      }
+    },
+    {
+      "domain": "dns",
+      "op": "drift-remediate",
+      "coordinate": "dns-remediate:example.com",
+      "permission": "fleet-operator",
+      "modelling": "request",
+      "content": {
+        "intent_id": "018f6a60-0000-7000-8000-000000000009",
+        "zone": "example.com"
+      }
+    },
+    {
+      "domain": "deployment",
+      "op": "preview",
+      "coordinate": "deployment-preview:018f6a60-0000-7000-8000-000000000002:018f6a60-0000-7000-8000-000000000003",
+      "permission": "deployments:write",
+      "modelling": "request",
+      "content": {
+        "artifact_id": "018f6a60-0000-7000-8000-000000000005",
+        "compact": true,
+        "environment_id": "018f6a60-0000-7000-8000-000000000003",
+        "intent_id": "018f6a60-0000-7000-8000-000000000010",
+        "managed_runtime_config": {
+          "replicas": 2
+        },
+        "service_id": "018f6a60-0000-7000-8000-000000000002"
+      }
+    },
+    {
+      "domain": "deployment",
+      "op": "route-attach",
+      "coordinate": "deployment-route:018f6a60-0000-7000-8000-000000000002:018f6a60-0000-7000-8000-000000000003",
+      "permission": "deployments:write",
+      "modelling": "desired-state",
+      "content": {
+        "environment_id": "018f6a60-0000-7000-8000-000000000003",
+        "expected_updated_at": "2026-10-03T12:00:00Z",
+        "intent_id": "018f6a60-0000-7000-8000-000000000011",
+        "public_route": {
+          "hostname": "api.example.com"
+        },
+        "service_id": "018f6a60-0000-7000-8000-000000000002"
+      }
+    }
+  ]
+}

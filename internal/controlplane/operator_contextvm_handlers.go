@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -158,6 +159,23 @@ func (h *OperatorContextVMHandlers) AdoptionImport(ctx context.Context, request 
 		if err != nil {
 			return nil, fmt.Errorf("invalid org_id: %w", err)
 		}
+	}
+	if h.intentProcessor != nil && h.intentProcessor.Handler("adoption") != nil {
+		content := map[string]any{}
+		if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
+			return nil, err
+		}
+		coordinate := "adoption:fleet"
+		if orgID != uuid.Nil {
+			coordinate = "adoption:" + orgID.String()
+		}
+		intent := &Intent{Event: request.Event, Domain: "adoption", Op: "import", OrgID: orgID,
+			IntentID: effectiveIdempotencyKey(request, request.Event.ID.Hex()), Coordinate: coordinate,
+			Content: content, Actor: request.Event.PubKey.Hex()}
+		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
+			return nil, err
+		}
+		return intent.Result["imports"], nil
 	}
 	results, err := h.adoption.Import(ctx, service.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: raw.ImportAll, OrgID: orgID})
 	if err != nil {

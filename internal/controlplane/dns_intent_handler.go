@@ -38,7 +38,7 @@ func (*DNSIntentHandler) IsFleetScoped() bool                    { return true }
 
 func (h *DNSIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
 	// Create and legacy override operations do not consume revision tokens.
-	if intent.ExpectedUpdatedAt != nil && (intent.Op == "zone-create" || intent.Op == "policy-apply" || intent.Op == "record-set" || intent.Op == "override-retire") {
+	if intent.ExpectedUpdatedAt != nil && (intent.Op == "zone-create" || intent.Op == "policy-apply" || intent.Op == "record-set" || intent.Op == "override-retire" || intent.Op == "drift-remediate") {
 		return fmt.Errorf("expected_updated_at is not supported for DNS %s", intent.Op)
 	}
 	if h.operator == nil {
@@ -50,6 +50,24 @@ func (h *DNSIntentHandler) HandleIntent(ctx context.Context, intent *Intent) err
 	}
 	var result *dnsOpResult
 	switch intent.Op {
+	case "drift-remediate":
+		zone, err := dnsZoneFromParams(content)
+		if err != nil {
+			return err
+		}
+		coordinate := "dns-remediate:all"
+		if zone != "" {
+			coordinate = "dns-remediate:" + zone
+		}
+		if intent.Coordinate != coordinate {
+			return fmt.Errorf("DNS remediation coordinate does not match zone")
+		}
+		result = dnsDriftRemediateOp(ctx, h.operator, content, nil)
+		if result.Status != "succeeded" {
+			return fmt.Errorf("DNS drift remediation: %s", result.Message)
+		}
+		intent.Result = result.toMap()
+		return nil
 	case "zone-update":
 		if h.mutations == nil {
 			return fmt.Errorf("DNS mutation service is not configured")

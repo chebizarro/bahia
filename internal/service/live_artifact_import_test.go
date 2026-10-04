@@ -27,6 +27,23 @@ type liveImportFixture struct {
 	input    ImportObservedArtifactInput
 }
 
+type liveImportCanonicalCounter struct{ builds, artifacts int }
+
+func (c *liveImportCanonicalCounter) PublishBuildRegistry(context.Context, *domain.Build, bool) error {
+	c.builds++
+	return nil
+}
+func (c *liveImportCanonicalCounter) PublishArtifactRegistry(context.Context, *domain.Artifact, bool) error {
+	c.artifacts++
+	return nil
+}
+func (*liveImportCanonicalCounter) PublishDeploymentIntentRegistry(context.Context, *domain.DeploymentIntent, bool) error {
+	return nil
+}
+func (*liveImportCanonicalCounter) PublishDeploymentRunRegistry(context.Context, *domain.DeploymentRun, bool) error {
+	return nil
+}
+
 func newLiveImportFixture(t *testing.T, allow bool, labels map[string]string) *liveImportFixture {
 	t.Helper()
 	registry, svcRepo, envRepo, buildRepo, artRepo, _, _, obsRepo, stateRepo := newTestRegistryAll()
@@ -130,6 +147,8 @@ func TestImportObservedArtifactCreatesGovernedLineage(t *testing.T) {
 func TestImportObservedArtifactIsIdempotent(t *testing.T) {
 	f := newLiveImportFixture(t, true, nil)
 	ctx := context.Background()
+	canonical := &liveImportCanonicalCounter{}
+	f.registry.SetCPStatePublisher(canonical)
 
 	first, err := f.registry.ImportObservedArtifact(ctx, f.input)
 	if err != nil {
@@ -147,6 +166,9 @@ func TestImportObservedArtifactIsIdempotent(t *testing.T) {
 	}
 	if len(f.builds.builds) != 1 || len(f.arts.artifacts) != 1 {
 		t.Fatalf("replay duplicated lineage: %d builds, %d artifacts", len(f.builds.builds), len(f.arts.artifacts))
+	}
+	if canonical.builds != 1 || canonical.artifacts != 1 {
+		t.Fatalf("canonical lineage publishes = %d builds/%d artifacts, want once each", canonical.builds, canonical.artifacts)
 	}
 }
 

@@ -55,7 +55,7 @@ The relay keeps only the latest `(kind, pubkey, d)` for each author. An offline 
 
 **Tag grammar:**
 - `d` = entity coordinate, per existing `docs/event-spec.md` grammar (e.g. `<service-id>` for services, `<environment-id>` for environments, `service:<sid>:environment:<eid>` for state).
-- `domain` = the domain family (`service`, `environment`, `policy`, `deployment`, `runtime`, `llm`, `dns`, `backup`, `ml`, `package`, `org`, `secret`, `notification`).
+- `domain` = the domain family (`service`, `environment`, `artifact`, `adoption`, `policy`, `deployment`, `runtime`, `llm`, `dns`, `backup`, `ml`, `package`, `org`, `secret`, `notification`).
 - `schema` = `bahia.intent.<domain>.v1`. Distinct from the daemon's state schema `bahia.cp-state.v1`.
 - `t` = `bahia-intent` (enables `#t` filtering for all intents) plus the domain topic tag (e.g. `service-registry`).
 - `op` = `create`, `update`, or `delete` — advisory, not load-bearing (§1.2).
@@ -74,8 +74,28 @@ The relay keeps only the latest `(kind, pubkey, d)` for each author. An offline 
 | `llm` | `rollback` | `route_id`, `environment_id` | fleet operator |
 | `llm` | `approve`, `reject` | `deployment_intent_id`; optional `expected_updated_at` | fleet operator |
 | `backup` | `restore-approval` | `restore_id`, `decision` (`approve` or `reject`); optional `expected_updated_at` | fleet operator |
+| `artifact` | `register` | Complete immutable artifact registration (`id`, `build_id`, `service_id`, image repository/tag/digest and optional scan metadata); `d=artifact:<id>` | `services:write` on the owning service |
+| `artifact` | `import-observed` | Complete observed-image selector (`service_id`, `environment_id`, image repository/tag/digest and optional unit/git refs); `d=artifact-import:<service>:<environment>:<digest>` | `services:write` on both service and environment |
+| `adoption` | `import` | Complete desired service target/selection set or `import_all`, optional `org_id`; `d=adoption:<org>` or `adoption:fleet` | configured adoption operator allowlist |
+| `dns` | `drift-remediate` | Optional `zone`; `d=dns-remediate:<zone>` or `dns-remediate:all` | fleet operator |
+| `deployment` | `preview` | Complete deployment-preview request, including managed runtime config; `d=deployment-preview:<service>:<environment>` | `deployments:write` on both service and environment |
+| `deployment` | `route-attach` | Complete public-route request, service and environment IDs; `d=deployment-route:<service>:<environment>`; optional `expected_updated_at` of the deployed intent | `deployments:write` on both service and environment |
 
 All update decisions compare `expected_updated_at` to the canonical entity revision when present. The operation tag selects the legacy-equivalent side-effect path; durable progress is the bounded `30315` status and daemon-authored canonical state, not the ContextVM acknowledgment.
+
+Artifact registration and observed import are level-triggered immutable lineage
+desires: the registry converges by image digest and publishes canonical
+build/artifact state. Adoption import is a level-triggered desired target and
+selection set: the adoption service discovers/imports idempotently and signs
+the resulting service/environment records. Neither flow treats a ContextVM
+acknowledgment as authority. DNS drift-remediate and deployment preview are
+request actions, not entity state: the former reconciles a zone and reports its
+outcome; the latter returns a daemon-computed plan in a bounded `30315` status
+(compact summary, hash, and policy rather than unbounded full desired state).
+`route-attach` refers to the existing **service public-route** attachment
+method, not an LLM registry route. It reconciles the deployment's desired
+public route through the current policy-checked service method, which creates
+and publishes the resulting deployment intent exactly once.
 
 ### 1.4 Relationship to today's cp-state 30900 records
 
@@ -542,7 +562,10 @@ D70's handler coverage in this window is deliberately bounded by existing durabl
 
 | Domain | 30900 intent ops admitted | ContextVM dual dispatch | Unsupported until a durable mutation path exists |
 |--------|---------------------------|-------------------------|--------------------------------------------------|
-| `dns` | `zone-create`, `policy-apply`, `record-set`, `override-retire` | `dns/zone-create`, `dns/policy-apply`, `dns/record-set`, `dns/override-retire`; drift remediation stays legacy | Zone update/delete; endpoint create/update/delete (derived); backend create/update/delete (static config); policy update/delete. Unsupported intent ops receive bounded 30315 rejection. |
+| `dns` | `zone-create`, `policy-apply`, `record-set`, `override-retire`, `drift-remediate` | `dns/zone-create`, `dns/policy-apply`, `dns/record-set`, `dns/override-retire`, `dns/drift-remediate` | Unsupported intent ops receive bounded 30315 rejection. |
+| `artifact` | `register`, `import-observed` | `artifact/register`, `artifact/import-observed` | Build registration/status belong to D77. |
+| `adoption` | `import` | `adoption/import` | Adoption scan is a read/request preview, not an import desire. |
+| `deployment` | `preview`, `route-attach` alongside existing deployment operations | `service/deploy-preview`, `service/route-attach` | Preview publishes only a bounded plan/status; route attach publishes the resulting deployment-intent state. |
 | `ml` | `model-create/update`, `version-create/update`, `endpoint-create/update` | No ContextVM registry CRUD methods exist; existing ML command handlers remain legacy | Model/version/endpoint delete; identity-changing updates (old canonical coordinate cannot be tombstoned). Unsupported intent ops receive bounded 30315 rejection. |
 | `worker` | `cordon`, `uncordon`, `drain`, `undrain`, `maintenance-enter/exit`, `labels-update`, `cleanup`; every content carries desired `scheduling_state` and full `labels` | All eight corresponding worker ContextVM methods | Other worker actions remain outside this domain handler. |
 
