@@ -55,7 +55,6 @@ const (
 	KindPolicyCreate             = nostrpool.KindControlPlanePolicyCreate             // Create a deployment policy
 	KindPolicyUpdate             = nostrpool.KindControlPlanePolicyUpdate             // Update a deployment policy
 	KindPolicyDelete             = nostrpool.KindControlPlanePolicyDelete             // Delete a deployment policy
-	KindPolicyEvaluate           = nostrpool.KindControlPlanePolicyEvaluate           // Evaluate deployment policies
 	KindPackageRepositoryApply   = nostrpool.KindControlPlanePackageRepositoryApply   // Create/update a package repository
 	KindPackageRepositoryDelete  = nostrpool.KindControlPlanePackageRepositoryDelete  // Delete a package repository
 	KindPackagePublishIntent     = nostrpool.KindControlPlanePackagePublishIntent     // Request package artifact publication/upload from source_url

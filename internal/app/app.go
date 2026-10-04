@@ -1335,10 +1335,11 @@ func New(cfg *config.Config) (*App, error) {
 	if enabledDomains["policy"] && policySvc != nil {
 		intentProcessor.RegisterHandler("policy", controlplane.NewPolicyIntentHandler(
 			controlplane.PolicyIntentHandlerConfig{
-				Policies: policySvc,
-				Publish:  policyPublisher,
-				Status:   intentStatus,
-				Logger:   logger,
+				Policies:  policySvc,
+				Evaluator: policySvc,
+				Publish:   policyPublisher,
+				Status:    intentStatus,
+				Logger:    logger,
 			},
 		))
 		logger.Info("policy intent handler registered")
@@ -2126,7 +2127,7 @@ func New(cfg *config.Config) (*App, error) {
 		LLMRegistry:              llmRegistry,
 		ArtifactCommandPublisher: artifactCommandPublisher,
 	}
-	configurePolicyToolMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
+	configureToolApprovalMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	configureAuthorizationMCPDeps(&mcpDeps, cfg, tenantRBAC)
 	mcpServer, err := mcp.NewServerWithOptionsChecked(registry, logger, mcpDeps)
 	if err != nil {
@@ -4411,14 +4412,11 @@ func appendControlPlaneAuditOption(opts []controlplane.ReactorOption, repo repos
 	return append(opts, controlplane.WithNostrEventRepository(repo))
 }
 
-func configurePolicyToolMCPDeps(deps *mcp.ServerDeps, publisher controlplane.NostrEventPublisher, signer nostr.Signer, relays []string) *controlplane.PolicyCommandPublisher {
+func configureToolApprovalMCPDeps(deps *mcp.ServerDeps, publisher controlplane.NostrEventPublisher, signer nostr.Signer, relays []string) {
 	if deps == nil || publisher == nil || signer == nil || len(relays) == 0 {
-		return nil
+		return
 	}
-	policyPublisher := controlplane.NewPolicyCommandPublisher(publisher, signer)
-	deps.PolicyCommandPublisher = policyPublisher
 	deps.ToolApprovalCommandPublisher = controlplane.NewToolApprovalCommandPublisher(publisher, signer)
-	return policyPublisher
 }
 
 // newTenantRBAC leaves tenant authorization unconfigured when no durable

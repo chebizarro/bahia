@@ -586,3 +586,20 @@ content. The log is one latest-50-per-channel replaceable window, not a growing
 per-line relay history; delete publishes a same-coordinate tombstone. See
 [the event implementation guide](nostr-event-implementation-guide.md#f74b-canonical-fleet-private-state-bahia-irsry74)
 for coordinates, size bounds, and confidentiality.
+
+## Policy evaluation intent and build ownership (bahia-irsry.77)
+
+For MCP evaluation, use a client-signed `30900` `domain=policy`, `op=evaluate`
+intent with `d=evaluation:<artifact-uuid>:<environment-uuid>` and JSON content
+`{"artifact_id":"<uuid>","environment_id":"<uuid>"}`. The daemon evaluates
+its signature, SBOM, scan, and attestation repositories with the same
+`PolicyService.Evaluate` semantics as the legacy ContextVM method. It emits a
+requester-scoped, replaceable `30315` status at
+`d=intent-status:<requester-pubkey>:<evaluation-coordinate>`; an accepted
+status has `result=evaluated` and an `evaluation` object. The status payload
+is capped at 16 KiB. A rejected evaluation is not an allow decision.
+
+Build registration and status are daemon-authored from `build/request` and
+trusted Hive-CI `5401`/`5402` evidence. MCP manual build writes are removed;
+F1 removes the compatibility REST writes `POST /builds` and
+`PATCH /builds/{id}/status`.

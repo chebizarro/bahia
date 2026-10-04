@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
 
@@ -41,23 +42,35 @@ func NewIntentStatusPublisher(
 
 // PublishAccepted publishes an "accepted" status for a processed intent.
 func (p *IntentStatusPublisher) PublishAccepted(ctx context.Context, intent *Intent) {
-	p.publishStatus(ctx, intent, "accepted", "applied", "")
+	_ = p.publishStatus(ctx, intent, "accepted", "applied", "", nil)
 }
 
 // PublishRejection publishes a "rejected" status for an intent that failed
 // authorization or validation. Only for known principals (§2.3).
 func (p *IntentStatusPublisher) PublishRejection(ctx context.Context, intent *Intent, reason string) {
-	p.publishStatus(ctx, intent, "rejected", "rejected", reason)
+	_ = p.publishStatus(ctx, intent, "rejected", "rejected", reason, nil)
 }
 
 // PublishConflict publishes a "conflict" status for a stale expected_updated_at.
 func (p *IntentStatusPublisher) PublishConflict(ctx context.Context, intent *Intent) {
-	p.publishStatus(ctx, intent, "conflict", "revision_conflict", "stale expected_updated_at")
+	_ = p.publishStatus(ctx, intent, "conflict", "revision_conflict", "stale expected_updated_at", nil)
 }
 
-func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Intent, status, result, reason string) {
+// PublishAcceptedEvaluation carries a computed decision in the same bounded
+// requester/coordinate status used for ordinary intent acknowledgments.
+func (p *IntentStatusPublisher) PublishAcceptedEvaluation(ctx context.Context, intent *Intent) error {
+	if intent == nil || intent.Evaluation == nil {
+		return fmt.Errorf("intent outcome is required")
+	}
+	if p == nil || p.publish == nil || p.signer == nil {
+		return fmt.Errorf("intent outcome status publisher is not configured")
+	}
+	return p.publishStatus(ctx, intent, "accepted", "evaluated", "", intent.Evaluation)
+}
+
+func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Intent, status, result, reason string, evaluation *domain.PolicyEvaluation) error {
 	if p.publish == nil || p.signer == nil || intent == nil {
-		return
+		return nil
 	}
 
 	// Build d-tag: intent-status:<requester-pubkey>:<entity-coordinate>
@@ -74,10 +87,17 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 	if reason != "" {
 		content["reason"] = reason
 	}
+	if evaluation != nil {
+		content["evaluation"] = evaluation
+	}
 	contentJSON, err := json.Marshal(content)
 	if err != nil {
 		p.logger.Warn("failed to marshal intent status content", zap.Error(err))
-		return
+		return err
+	}
+
+	if evaluation != nil && len(contentJSON) > 16*1024 {
+		return fmt.Errorf("intent evaluation exceeds 16 KiB status limit")
 	}
 
 	ev := nostr.Event{
@@ -105,7 +125,7 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 			zap.String("intent_id", intent.IntentID),
 			zap.Error(err),
 		)
-		return
+		return err
 	}
 
 	if err := p.publish(ctx, ev); err != nil {
@@ -113,5 +133,7 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 			zap.String("intent_id", intent.IntentID),
 			zap.Error(err),
 		)
+		return err
 	}
+	return nil
 }

@@ -196,7 +196,6 @@
 1	internal/controlplane.KindPackageYankRequest
 1	internal/controlplane.KindPolicyCreate
 1	internal/controlplane.KindPolicyDelete
-1	internal/controlplane.KindPolicyEvaluate
 1	internal/controlplane.KindPolicyUpdate
 1	internal/controlplane.KindRemediationResult
 1	internal/controlplane.KindServiceAction

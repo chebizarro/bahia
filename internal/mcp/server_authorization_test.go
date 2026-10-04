@@ -48,102 +48,9 @@ func TestCallToolRejectsAuthenticatedCallerOutsideOperatorAllowlist(t *testing.T
 	}
 }
 
-func TestCallToolAllowsAuthorizedPubkey(t *testing.T) {
-	const authorizedPubkey = "cdee943cdeadbeef000000000000000000000000000000000000000000000000"
-	orgID := uuid.New()
-	fixture := newMCPBuildAuthorizationFixture(orgID, []string{authorizedPubkey}, &mcpAuthMemberLookup{member: &domain.OrgMember{
-		OrgID:  orgID,
-		Pubkey: authorizedPubkey,
-		Role:   domain.RoleOwner,
-	}})
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
-		Subject: "npub-authorized",
-		PubKey:  authorizedPubkey,
-		Method:  auth.MethodNIP98,
-	})
-
-	result, err := fixture.server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
-		"service_id": fixture.serviceID.String(),
-		"git_sha":    "a1b2c3d4e5f6789012345678abcdef1234567890",
-		"git_ref":    "main",
-		"ci_run_id":  "ci-run-1",
-	})
-	if err != nil {
-		t.Fatalf("CallTool() error = %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("CallTool() result = %#v, want success for authorized pubkey", result)
-	}
-}
-
-func TestCallToolDeniesUnauthorizedPubkey(t *testing.T) {
-	const authorizedPubkey = "cdee943cdeadbeef000000000000000000000000000000000000000000000000"
-	const unauthorizedPubkey = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-	fixture := newMCPBuildAuthorizationFixture(uuid.New(), []string{authorizedPubkey}, nil)
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
-		Subject: "npub-unauthorized",
-		PubKey:  unauthorizedPubkey,
-		Method:  auth.MethodNIP98,
-	})
-
-	result, err := fixture.server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
-		"service_id": fixture.serviceID.String(),
-		"git_sha":    "a1b2c3d4e5f6789012345678abcdef1234567890",
-		"git_ref":    "main",
-		"ci_run_id":  "ci-run-1",
-	})
-	if err != nil {
-		t.Fatalf("CallTool() error = %v", err)
-	}
-	if result == nil || !result.IsError || !strings.Contains(result.Content[0].Text, "access denied") {
-		t.Fatalf("CallTool() result = %#v, want access denied", result)
-	}
-}
-
-func TestCallToolEmptyAllowlistDeniesAllExternalCallers(t *testing.T) {
-	const somePubkey = "cdee943cdeadbeef000000000000000000000000000000000000000000000000"
-	fixture := newMCPBuildAuthorizationFixture(uuid.New(), nil, nil)
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
-		Subject: "npub-someone",
-		PubKey:  somePubkey,
-		Method:  auth.MethodNIP98,
-	})
-
-	result, err := fixture.server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
-		"service_id": fixture.serviceID.String(),
-		"git_sha":    "a1b2c3d4e5f6789012345678abcdef1234567890",
-		"git_ref":    "main",
-		"ci_run_id":  "ci-run-1",
-	})
-	if err != nil {
-		t.Fatalf("CallTool() error = %v", err)
-	}
-	if result == nil || !result.IsError || !strings.Contains(result.Content[0].Text, "access denied") {
-		t.Fatalf("CallTool() result = %#v, want access denied (fail-closed)", result)
-	}
-}
-
-func TestCallToolAllowsSystemAdminPrincipal(t *testing.T) {
-	fixture := newMCPBuildAuthorizationFixture(uuid.New(), nil, nil)
-	ctx := auth.ContextWithPrincipal(context.Background(), auth.SystemPrincipal("admin-test"))
-
-	result, err := fixture.server.CallTool(ctx, "bahia_register_build", map[string]interface{}{
-		"service_id": fixture.serviceID.String(),
-		"git_sha":    "a1b2c3d4e5f6789012345678abcdef1234567890",
-		"git_ref":    "main",
-		"ci_run_id":  "ci-run-1",
-	})
-	if err != nil {
-		t.Fatalf("CallTool() error = %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("CallTool() result = %#v, want success for system admin principal", result)
-	}
-}
-
 func TestCallToolBuildToolsEnforceTenantRBAC(t *testing.T) {
 	const callerPubkey = "caller-pubkey"
-	tools := []string{"bahia_list_builds", "bahia_get_build", "bahia_register_build", "bahia_update_build_status"}
+	tools := []string{"bahia_list_builds", "bahia_get_build"}
 	tests := []struct {
 		name      string
 		allowlist []string
@@ -167,12 +74,7 @@ func TestCallToolBuildToolsEnforceTenantRBAC(t *testing.T) {
 			lookup: func(orgID uuid.UUID) auth.OrgMemberLookup {
 				return &mcpAuthMemberLookup{member: &domain.OrgMember{OrgID: orgID, Pubkey: callerPubkey, Role: domain.RoleViewer}}
 			},
-			wantError: func(tool string) string {
-				if tool == "bahia_register_build" || tool == "bahia_update_build_status" {
-					return "access denied"
-				}
-				return ""
-			},
+			wantError: func(string) string { return "" },
 		},
 		{
 			name:      "cross tenant owner",
@@ -219,8 +121,6 @@ func TestCallToolBuildToolsEnforceTenantRBAC(t *testing.T) {
 					}
 					canonical.publishService(t, service)
 					canonical.publishBuild(t, fixture.builds.builds[fixture.buildID])
-					beforeBuildCount := len(fixture.builds.builds)
-					beforeStatus := fixture.builds.builds[fixture.buildID].Status
 					ctx := auth.ContextWithPrincipal(context.Background(), tc.principal)
 
 					result, err := callMCPBuildAuthorizationTool(ctx, fixture, tool)
@@ -237,12 +137,7 @@ func TestCallToolBuildToolsEnforceTenantRBAC(t *testing.T) {
 					if result == nil || !result.IsError || !strings.Contains(result.Content[0].Text, wantError) {
 						t.Fatalf("CallTool(%s) result = %#v, want error containing %q", tool, result, wantError)
 					}
-					if tool == "bahia_register_build" && len(fixture.builds.builds) != beforeBuildCount {
-						t.Fatalf("denied register mutated build count: got %d want %d", len(fixture.builds.builds), beforeBuildCount)
-					}
-					if tool == "bahia_update_build_status" && fixture.builds.builds[fixture.buildID].Status != beforeStatus {
-						t.Fatalf("denied update mutated status: got %q want %q", fixture.builds.builds[fixture.buildID].Status, beforeStatus)
-					}
+
 				})
 			}
 		})
@@ -390,19 +285,6 @@ func callMCPBuildAuthorizationTool(ctx context.Context, fixture mcpBuildAuthoriz
 		return fixture.server.CallTool(ctx, tool, map[string]interface{}{"service_id": fixture.serviceID.String()})
 	case "bahia_get_build":
 		return fixture.server.CallTool(ctx, tool, map[string]interface{}{"build_id": fixture.buildID.String()})
-	case "bahia_register_build":
-		return fixture.server.CallTool(ctx, tool, map[string]interface{}{
-			"service_id": fixture.serviceID.String(),
-			"git_sha":    "b1b2c3d4e5f6789012345678abcdef1234567890",
-			"git_ref":    "main",
-			"ci_run_id":  "new-run",
-			"status":     string(domain.BuildStatusQueued),
-		})
-	case "bahia_update_build_status":
-		return fixture.server.CallTool(ctx, tool, map[string]interface{}{
-			"build_id": fixture.buildID.String(),
-			"status":   string(domain.BuildStatusRunning),
-		})
 	default:
 		return nil, errors.New("unsupported build authorization test tool")
 	}

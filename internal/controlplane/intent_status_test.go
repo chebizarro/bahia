@@ -3,11 +3,13 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
+	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"fiatjaf.com/nostr"
 	"go.uber.org/zap"
 )
 
@@ -139,4 +141,14 @@ func extractTag(ev nostr.Event, key string) string {
 		}
 	}
 	return ""
+}
+
+func TestIntentStatusPublisher_OutcomeSizeBound(t *testing.T) {
+	published := &statusCollector{}
+	pub := NewIntentStatusPublisher(published.publish, &testSigner{}, zap.NewNop())
+	intent := testIntent(t, "evaluate", "evaluation:artifact:environment")
+	intent.Evaluation = &domain.PolicyEvaluation{Results: []domain.PolicyResult{{PolicyName: strings.Repeat("x", 17*1024)}}}
+	err := pub.PublishAcceptedEvaluation(context.Background(), intent)
+	require.ErrorContains(t, err, "16 KiB")
+	require.Empty(t, published.events)
 }

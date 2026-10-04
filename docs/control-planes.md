@@ -6,8 +6,7 @@ The `deployment`, `runtime`, `llm`, and `backup` intent domains admit client-sig
 
 ## Publisher and discovery boundaries
 
-Artifact, policy, and tool-approval publishers use canonical ContextVM envelopes;
-LLM approval selects `approval/llm-approve` or `approval/llm-reject`. Discovery
+Artifact and tool-approval publishers use canonical ContextVM envelopes. MCP policy evaluation uses a `policy` kind-30900 intent (`op=evaluate`) whose bounded kind-30315 status carries the decision. LLM approval selects `approval/llm-approve` or `approval/llm-reject`. Discovery
 advertises registered server methods only, so outbound publisher support is not
 proof that the server can execute the request. AI/ML discovery remains read-model
 only until mutation consumers exist. See the [implementation guide](nostr-event-implementation-guide.md#artifact-policy-and-approval-publishers).

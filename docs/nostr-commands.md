@@ -6,9 +6,10 @@ For registered intent domains (enabled by default unless in `nostr.intent_domain
 
 ## Artifact, policy, and approval commands
 
-Use ContextVM `artifact/register`, `policy/create`, `policy/update`, `policy/delete`,
-`policy/evaluate`, and `tool/approval-response`, not retired numeric request kinds.
-LLM approvals use `approval/llm-approve` / `approval/llm-reject`; DNS record changes
+Use ContextVM `artifact/register` and `tool/approval-response`, not retired
+numeric request kinds. Legacy web policy methods remain until caller migration;
+MCP policy CRUD and evaluation use kind-30900 intents. LLM approvals use
+`approval/llm-approve` / `approval/llm-reject`; DNS record changes
 use `dns/record-set`. Check the advertised method list before assuming a server
 consumer exists. See the [publisher contract](nostr-event-implementation-guide.md#artifact-policy-and-approval-publishers).
 
@@ -291,11 +292,12 @@ Each domain's mutations flow through MCP tools backed by signer-first controlpla
 
 ### Policies
 
-| MCP tool | ContextVM method | Publisher |
-|----------|-----------------|-----------|
-| `bahia_policy_create` | `policy/create` | `PolicyCommandPublisher.PublishPolicyCreate` |
-| `bahia_policy_update` | `policy/update` | `PolicyCommandPublisher.PublishPolicyUpdate` |
-| `bahia_policy_delete` | `policy/delete` | `PolicyCommandPublisher.PublishPolicyDelete` |
+| MCP tool | Kind-30900 policy op | Result |
+|----------|----------------------|--------|
+| `bahia_create_policy` | `create` | canonical policy state |
+| `bahia_update_policy` | `update` | canonical policy state |
+| `bahia_delete_policy` | `delete` | canonical policy tombstone |
+| `bahia_evaluate_policy` | `evaluate` | bounded kind-30315 decision status |
 
 **Read models (REST GET only)**:
 - `GET /api/v1/policies` — list policies
@@ -434,3 +436,20 @@ content. The log is one latest-50-per-channel replaceable window, not a growing
 per-line relay history; delete publishes a same-coordinate tombstone. See
 [the event implementation guide](nostr-event-implementation-guide.md#f74b-canonical-fleet-private-state-bahia-irsry74)
 for coordinates, size bounds, and confidentiality.
+
+## Policy evaluation intent and build ownership (bahia-irsry.77)
+
+For MCP evaluation, use a client-signed `30900` `domain=policy`, `op=evaluate`
+intent with `d=evaluation:<artifact-uuid>:<environment-uuid>` and JSON content
+`{"artifact_id":"<uuid>","environment_id":"<uuid>"}`. The daemon evaluates
+its signature, SBOM, scan, and attestation repositories with the same
+`PolicyService.Evaluate` semantics as the legacy ContextVM method. It emits a
+requester-scoped, replaceable `30315` status at
+`d=intent-status:<requester-pubkey>:<evaluation-coordinate>`; an accepted
+status has `result=evaluated` and an `evaluation` object. The status payload
+is capped at 16 KiB. A rejected evaluation is not an allow decision.
+
+Build registration and status are daemon-authored from `build/request` and
+trusted Hive-CI `5401`/`5402` evidence. MCP manual build writes are removed;
+F1 removes the compatibility REST writes `POST /builds` and
+`PATCH /builds/{id}/status`.
