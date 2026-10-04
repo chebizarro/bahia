@@ -42,6 +42,7 @@ func (h *MCPHandler) ListTools(w http.ResponseWriter, r *http.Request) {
 type CallToolRequest struct {
 	Name      string                 `json:"name"`
 	Arguments map[string]interface{} `json:"arguments"`
+	Meta      map[string]interface{} `json:"_meta,omitempty"`
 }
 
 // CallToolResponse is the response for a tool call.
@@ -60,6 +61,12 @@ func (h *MCPHandler) CallTool(w http.ResponseWriter, r *http.Request) {
 	if req.Name == "" {
 		writeError(w, http.StatusBadRequest, "tool name is required")
 		return
+	}
+	if len(req.Meta) != 0 {
+		if req.Arguments == nil {
+			req.Arguments = make(map[string]interface{})
+		}
+		req.Arguments["_meta"] = req.Meta
 	}
 	result, err := h.server.CallTool(r.Context(), req.Name, req.Arguments)
 	if err != nil {
@@ -148,6 +155,12 @@ func (h *MCPHandler) handleJSONRPCToolCall(w http.ResponseWriter, r *http.Reques
 		writeJSONRPC(w, jsonRPCResponse{JSONRPC: "2.0", ID: req.ID, Error: &jsonRPCError{Code: -32602, Message: "tool name is required"}})
 		return
 	}
+	if len(params.Meta) != 0 {
+		if params.Arguments == nil {
+			params.Arguments = make(map[string]interface{})
+		}
+		params.Arguments["_meta"] = params.Meta
+	}
 	result, err := h.server.CallTool(r.Context(), params.Name, params.Arguments)
 	if err != nil {
 		h.logger.Error("mcp json-rpc tool call failed", zap.String("tool", params.Name), zap.Error(err))
@@ -165,6 +178,11 @@ func (h *MCPHandler) nostrCorrelationMetadata(toolName string, args map[string]i
 		"correlation_tags": []string{"e", "service", "environment", "intent", "run"},
 		"transport_kinds":  []int{kinds.ContextVMMessage, kinds.ContextVMGiftWrap, kinds.ContextVMEphemeralGiftWrap},
 		"observable_kinds": []int{kinds.CASControlState, kinds.CASAudit, kinds.NIP38Status},
+	}
+	if eventID, ok := stringFromMap(payload, "event_id"); ok {
+		meta["request_event_id"] = eventID
+		meta["transport_kinds"] = []int{kinds.CASControlState}
+		meta["observable_kinds"] = []int{kinds.CASControlState, kinds.NIP38Status}
 	}
 	for _, key := range []string{"request_event_id", "service_id", "environment_id", "intent_id", "run_id"} {
 		if v, ok := stringFromMap(payload, key); ok {

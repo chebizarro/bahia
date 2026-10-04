@@ -1,0 +1,6 @@
+{
+  "issue": "bahia-irsry.13.12",
+  "source": "docs/designs/phase5-cli-client.md#35-which-tools-stay-contextvm",
+  "intent": "MCP mutations use the daemon IntentProcessor with the authenticated Nostr caller, return canonical state when visible, and return a successful pending correlation otherwise.",
+  "scope": "Phase 5 Wave 5 P2 MCP write transport"
+}

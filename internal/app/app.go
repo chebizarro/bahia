@@ -2062,6 +2062,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 	}
 	mcpDeps := mcp.ServerDeps{
+		IntentProcessor:          intentProcessor,
 		StateStore:               localEventStore,
 		ServicePubkey:            servicePubkey,
 		ConfidentialReader:       confidentialEncryptor,

@@ -33,6 +33,7 @@ import (
 // It exposes deployment registry functionality as MCP tools.
 type Server struct {
 	stateStore           StateEventStore
+	intentProc           *controlplane.IntentProcessor
 	servicePubkey        string
 	confidentialReader   ConfidentialStateReader
 	registry             *service.RegistryService
@@ -72,6 +73,7 @@ type Config struct {
 // ServerDeps holds MCP dependencies. StateStore and ServicePubkey are required.
 type ServerDeps struct {
 	StateStore                   StateEventStore
+	IntentProcessor              *controlplane.IntentProcessor
 	ServicePubkey                string
 	ConfidentialReader           ConfidentialStateReader
 	SecretsRepo                  repository.SecretRepository
@@ -173,6 +175,7 @@ func NewServerWithOptionsChecked(registry *service.RegistryService, logger *zap.
 	}
 	return &Server{
 		stateStore:           deps.StateStore,
+		intentProc:           deps.IntentProcessor,
 		servicePubkey:        deps.ServicePubkey,
 		confidentialReader:   deps.ConfidentialReader,
 		registry:             registry,
@@ -1831,7 +1834,7 @@ func (s *Server) GetTools() []Tool {
 	tools = append(tools, packageToolDefinitions()...)
 	tools = append(tools, backupToolDefinitions()...)
 	tools = append(tools, docsToolDefinitions()...)
-	return append(tools, outboxToolDefinitions()...)
+	return describeIntentWriteTools(append(tools, outboxToolDefinitions()...))
 }
 
 // CallTool handles an MCP tool call.
@@ -1955,13 +1958,19 @@ func (s *Server) authorizeBuildPermission(ctx context.Context, buildID uuid.UUID
 
 func (s *Server) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (*ToolResult, error) {
 	s.logger.Info("tool call", zap.String("tool", name))
+	// Intent-backed writes authenticate their Nostr actor and authorize against
+	// TrustSet inside ProcessInProcess. The legacy MCP operator allowlist must
+	// not deny an otherwise authorized org member before that check runs.
+	if s.intentProc != nil && isIntentWriteTool(name) {
+		result, _ := s.callIntentWrite(ctx, name, arguments)
+		return result, nil
+	}
 	if denied := s.authorizeToolCall(ctx, name); denied != nil {
 		return denied, nil
 	}
 	if result, handled := s.callStoreReadTool(ctx, name, arguments); handled {
 		return result, nil
 	}
-
 	if isBackupToolName(name) {
 		return s.handleBackupTool(ctx, name, arguments)
 	}

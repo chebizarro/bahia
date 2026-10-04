@@ -100,9 +100,11 @@ The names below are verified against the current `internal/mcp` registries. Some
 - Environments: `bahia_list_environments`, `bahia_get_environment`, `bahia_create_environment`, `bahia_update_environment`, `bahia_delete_environment`
 - State: `bahia_list_states`, `bahia_list_drifted`, `bahia_get_observation`
 
-Signer-first mutations can return transport/correlation metadata rather than a completed domain object. Follow the canonical Nostr observables named in the result.
+Intent-backed MCP writes currently cover service/environment CRUD, deployment and approval, policy CRUD, worker control, LLM route/release/deployment actions, secret CRUD, notification-channel CRUD, package mutations, and backup mutations. They require an authenticated Nostr operator pubkey; the intent processor applies the domain TrustSet policy. Supply `org_id` when the owning organization cannot be derived from signed canonical state. A conflicting `org_id` on an existing entity is rejected.
 
-Create tools (`bahia_create_service`, `bahia_create_environment`, `bahia_create_policy`, `bahia_llm_create_route`) take an optional `id`, a client-minted UUIDv7 (or v4), and mint one when it is omitted; the result echoes it. To retry a create, pass the returned id with the same arguments: the control plane replays it, and the same id with different content is rejected (JSON-RPC `-32010`).
+Supply `idempotency_key` in tool arguments or `_meta.progressToken` in the MCP `tools/call` params. The server derives a stable actor-and-tool-scoped intent ID so retries do not apply twice; without either key, it mints a new UUIDv7 per call. For creates, an omitted entity `id` is derived from that intent ID. The JSON tool result includes `intent_id` and `event_id`: `status:"accepted"` includes canonical `state` (or a verified deletion tombstone), `status:"rejected"`/`"conflict"` is a structured tool error, and `status:"pending"` is a successful result when canonical state has not become visible. Do not interpret pending as failure or a ContextVM `-32011` error. Notification-channel state in write results redacts sensitive config just like read results.
+
+Other registered mutations, including generic ML commands, build/artifact/SBOM writes, tool provisioning, policy evaluation, and notification-log actions, are not yet intent-backed and retain their existing behavior.
 
 ### Deployments and runs
 

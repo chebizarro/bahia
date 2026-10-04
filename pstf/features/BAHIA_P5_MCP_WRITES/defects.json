@@ -1,0 +1,9 @@
+{
+  "tracking_note": "The worktree's bd client could not connect to the configured Dolt database; the user prohibited .beads writes. These must be filed or reconciled in Beads by the integration owner.",
+  "defects": [
+    {"id": "P2-D1", "severity": "high", "observed": "Generic ML, build/artifact/SBOM, tool-provisioning, policy-evaluate and notification-log mutation tools still use legacy paths; some have no registered intent-handler operation.", "required": "Add valid domain intent contracts and migrate each tool with canonical pipeline tests."},
+    {"id": "P2-D2", "severity": "high", "observed": "ContextVM publisher interfaces remain in MCP ServerDeps and agent_async_tools.go; direct assistant execution bypasses the in-process adapter.", "required": "Migrate assistant observation/evidence to intent status, then delete publisher functions and dependencies."},
+    {"id": "P2-D3", "severity": "medium", "observed": "Only service, package, worker and notification pipeline paths have explicit accepted/replay/pending/rejection tests; other mapped tool families are under-tested.", "required": "Add per-tool in-memory end-to-end pipeline coverage."},
+    {"id": "P2-D4", "severity": "medium", "observed": "LLM deployment and some backup operations have no immediately readable canonical family in this branch, so their successful calls return pending.", "required": "Use newly published canonical families after integration or report accepted status through a durable intent-status read."}
+  ]
+}
