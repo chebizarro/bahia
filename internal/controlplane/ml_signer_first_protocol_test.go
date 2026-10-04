@@ -145,7 +145,7 @@ func TestMLBrowserRouteAvoidsHTTPPollingForCompletion(t *testing.T) {
 		t.Fatalf("read ML route: %v", err)
 	}
 	src := string(page)
-	for _, forbidden := range []string{"fetch('/api/v1/ml", "fetch(\"/api/v1/ml", "setTimeout(", "setInterval(", "sleep("} {
+	for _, forbidden := range []string{"fetch('/api/v1/ml", "fetch(\"/api/v1/ml", "setTimeout(", "setInterval(", "sleep(", "publishCommand(", "requestEncryptedResult("} {
 		if strings.Contains(src, forbidden) {
 			t.Fatalf("ML route contains forbidden HTTP polling/completion primitive %q", forbidden)
 		}
@@ -156,7 +156,8 @@ func TestMLBrowserRouteAvoidsHTTPPollingForCompletion(t *testing.T) {
 	}{
 		{"model import command", `publishMLCommand\(\s*['"]ml/model-import['"]\s*,`},
 		{"inference deploy command", `publishMLCommand\(\s*['"]ml/inference-deploy['"]\s*,`},
-		{"Nostr publish bridge", `async\s+function\s+publishMLCommand\s*\([^)]*\)\s*\{[^}]*publishCommand\s*\(`},
+		// Phase 4 W3e: the bridge publishes a signed 30900 intent, never a ContextVM command.
+		{"signed-intent bridge", `async\s+function\s+publishMLCommand\s*\([^)]*\)\s*\{[^}]*publishIntent\s*\(`},
 	} {
 		matched, err := regexp.MatchString(required.pattern, src)
 		if err != nil {
