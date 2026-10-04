@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -9,6 +10,8 @@ import (
 
 	"go.uber.org/zap"
 )
+
+var errIntentAuthorsChanged = errors.New("intent authors changed during push")
 
 // IntentAuthorsSyncer keeps Bahia sidecar relays informed of which pubkeys may
 // write intent events (kind 30900 + t=bahia-intent). On startup and whenever
@@ -130,18 +133,23 @@ type IntentAuthorsSyncStatus struct {
 // Run performs the initial push, then blocks listening for change notifications
 // until ctx is cancelled.
 func (s *IntentAuthorsSyncer) Run(ctx context.Context) error {
-	s.push(ctx)
 	for {
+		if s.push(ctx) {
+			// A change superseded an in-flight retry. Rebuild the author set
+			// immediately; the notification was consumed by pushWithRetry.
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-s.notifyCh:
-			s.push(ctx)
+			// Re-snapshot the current set on the next iteration.
 		}
 	}
 }
 
-func (s *IntentAuthorsSyncer) push(ctx context.Context) {
+// push returns true when a newer author set superseded this snapshot.
+func (s *IntentAuthorsSyncer) push(ctx context.Context) bool {
 	pubkeys := s.trustSet.AuthorPubkeys()
 
 	// Merge in Postgres-sourced pubkeys.
@@ -159,7 +167,7 @@ func (s *IntentAuthorsSyncer) push(ctx context.Context) {
 	anyFailed := false
 	for _, ref := range s.targetRefs {
 		if ctx.Err() != nil {
-			return
+			return false
 		}
 		s.mu.Lock()
 		last, previouslyPushed := s.lastPush[ref]
@@ -170,6 +178,9 @@ func (s *IntentAuthorsSyncer) push(ctx context.Context) {
 		}
 
 		if err := s.pushWithRetry(ctx, ref, pubkeys); err != nil {
+			if errors.Is(err, errIntentAuthorsChanged) {
+				return true
+			}
 			s.logger.Warn("failed to push intent authors to sidecar",
 				zap.String("target", ref),
 				zap.Error(err),
@@ -191,6 +202,7 @@ func (s *IntentAuthorsSyncer) push(ctx context.Context) {
 	s.mu.Lock()
 	s.outOfSync = anyFailed
 	s.mu.Unlock()
+	return false
 }
 
 func (s *IntentAuthorsSyncer) pushWithRetry(ctx context.Context, targetRef string, pubkeys []string) error {
@@ -219,10 +231,9 @@ func (s *IntentAuthorsSyncer) pushWithRetry(ctx context.Context, targetRef strin
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-s.notifyCh:
-			// A new notification arrived while retrying. We're already in a push
-			// for this target, so absorb the notification and continue retrying.
-			// The next push() call (from Run's select loop) will pick up any new
-			// fingerprint changes.
+			// Do not retry an obsolete set or swallow the only notification
+			// carrying a revocation. Run will snapshot and push the new set.
+			return errIntentAuthorsChanged
 		case <-time.After(backoff):
 		}
 

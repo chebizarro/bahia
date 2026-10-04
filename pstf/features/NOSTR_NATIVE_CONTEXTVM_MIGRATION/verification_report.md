@@ -388,3 +388,26 @@ and the final gate after the last code/test edit passed:
 | `CGO_ENABLED=0 go test ./...` | PASS |
 | `CGO_ENABLED=0 go test ./internal/archtest -run TestNoNewTestOnlyExports -count=1` | PASS; baseline shrank by one |
 | `gofmt` / `git diff --check` | PASS |
+
+### F4 regression: intent-author revocation propagation
+
+Repeated `TestIntentAuthorsSyncerMembershipMutationReachesSidecar` failed on
+the F4 branch because the initial empty `setintentauthors` push and the later
+revocation sent identical NIP-86 bodies within one Nostr timestamp second.
+The relay-admin client generated identical NIP-98 authorization event IDs;
+the sidecar correctly rejected the second as replay (HTTP 401), leaving the
+author admitted during the retry backoff. The 200 ms test sleeps observed the
+old allowlist rather than a completed revocation. A retry also consumed a
+membership notification while continuing to send the obsolete snapshot.
+
+The admin client now signs each request with a fresh cryptographic nonce tag,
+including identical bodies in the same second. The syncer immediately
+re-snapshots authors when a change supersedes an in-flight retry. Tests wait
+for successful sidecar admin RPCs instead of sleeping and publish distinct
+signed intents for before/after admission. A scripted retry test proves a
+revocation supersedes a failed addition without a timer-driven completion.
+
+Verification: `CGO_ENABLED=0 go test -count=50 -run
+TestIntentAuthorsSyncerMembershipMutationReachesSidecar ./internal/controlplane/`
+passed 50/50; `-count=10 -cpu=1,2,8` passed 10/10 at each CPU setting.
+`CGO_ENABLED=0 go build ./...`, `go vet ./...`, and `go test ./...` passed.

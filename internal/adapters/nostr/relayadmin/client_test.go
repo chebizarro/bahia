@@ -211,6 +211,37 @@ func TestCallSignsPayloadBoundNIP98Authorization(t *testing.T) {
 	}
 }
 
+func TestIdenticalAdminRequestsGetDistinctNIP98Authorizations(t *testing.T) {
+	secret := nostr.Generate()
+	client := &Client{
+		privateKey: secret.Hex(), pubkey: secret.Public().Hex(),
+		now: func() time.Time { return time.Unix(1_700_000_000, 0) },
+	}
+	body := []byte(`{"method":"setintentauthors","params":[]}`)
+	first, err := client.createAuthHeader("wss://relay.example.com", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.createAuthHeader("wss://relay.example.com", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEvent := decodeAuthEvent(t, first)
+	secondEvent := decodeAuthEvent(t, second)
+	if firstEvent.ID == secondEvent.ID {
+		t.Fatal("identical requests in one second reused a NIP-98 authorization event")
+	}
+	for _, event := range []nostr.Event{firstEvent, secondEvent} {
+		if !event.VerifySignature() || event.CreatedAt != nostr.Timestamp(1_700_000_000) {
+			t.Fatal("NIP-98 authorization signature or timestamp is invalid")
+		}
+		assertTag(t, event, "u", "wss://relay.example.com")
+		assertTag(t, event, "method", http.MethodPost)
+		hash := sha256.Sum256(body)
+		assertTag(t, event, "payload", hex.EncodeToString(hash[:]))
+	}
+}
+
 func TestClientRejectsExternalPlaintextAdministrationEndpoints(t *testing.T) {
 	secret := nostr.Generate()
 	privateKey := secret.Hex()
