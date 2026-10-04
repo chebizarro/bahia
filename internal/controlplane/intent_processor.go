@@ -592,6 +592,7 @@ func IntentDomainEnabled(enabledDomains []string, domain string) bool {
 var RegisteredIntentDomains = []string{
 	"service", "environment", "policy", "package", "backup", "llm", "ml",
 	"dns", "worker", "deployment", "runtime", "org", "secret", "notification",
+	"artifact", "adoption", // D76 (bahia-irsry.76)
 }
 
 // BuildEnabledDomains enables every registered domain except explicit opt-outs.
