@@ -126,6 +126,7 @@ Use `bahia_assistant_service_deploy` and `bahia_assistant_service_rollback` for 
 
 - Builds: `bahia_list_builds`, `bahia_get_build` (read-only; CI owns registration and status)
 - Artifacts: `bahia_list_artifacts`, `bahia_get_artifact`, `bahia_register_artifact`
+  `bahia_register_artifact` submits an `artifact/register` intent and returns accepted, pending, or rejected status with `intent_id` and `event_id`. Supply `idempotency_key` (or an MCP progress token) to make retries replay-safe; manual registration must be enabled by the daemon policy.
 - SBOM: `bahia_get_sbom`, `bahia_get_sbom_packages`, `bahia_search_sbom_packages`, `bahia_ingest_sbom`
 - Signatures: `bahia_list_signatures`, `bahia_get_signature`, `bahia_list_verified_signatures`, `bahia_has_verified_signature`, `bahia_verify_signatures`
 

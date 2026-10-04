@@ -61,9 +61,8 @@ func mlToolDefinitions() []Tool {
 }
 
 func (s *Server) requireMLCommands() (MLCommandPublisher, *ToolResult) {
-	// Phase 5 P2: kept — ML import, recipe and inference operations lack intent handlers, bahia-irsry.76
-	// Import, recipe execution, inference deployment, approval and rollback
-	// are command operations, not ML registry CRUD.
+	// No handlers for ml/model-import, ml/recipe-run, ml/inference-deploy,
+	// ml/inference-approval, or ml/inference-rollback; ML registry CRUD is distinct.
 	if s.mlCommands == nil {
 		return nil, errorResult("ML command publisher is not configured")
 	}

@@ -39,7 +39,6 @@ type Server struct {
 	registry             *service.RegistryService
 	llmRegistry          *service.LLMRegistryService
 	mlCommands           MLCommandPublisher
-	artifactCommands     ArtifactCommandPublisher
 	toolApprovalCommands ToolApprovalCommandPublisher
 	logger               *zap.Logger
 	secretsRepo          repository.SecretRepository       // optional: for secret management tools
@@ -78,12 +77,10 @@ type ServerDeps struct {
 	Signatures             repository.ArtifactSignatureRepository
 	SignVerifier           SignatureVerifier
 	ToolProvisioning       repository.ToolProvisioningRepository
-	// Phase 5 P2: kept — ML import, recipe and inference operations lack intent handlers, bahia-irsry.76
+	// No handlers for ml/model-import, ml/recipe-run, ml/inference-deploy, ml/inference-approval, or ml/inference-rollback.
 	MLCommandPublisher MLCommandPublisher
 	LLMRegistry        *service.LLMRegistryService
-	// Phase 5 P2: kept — artifact registration lacks an intent handler, bahia-irsry.76
-	ArtifactCommandPublisher ArtifactCommandPublisher
-	// Phase 5 P2: kept — tool provisioning approval lacks an intent handler, bahia-irsry.76
+	// No handler for tool/approval-response (the package intent handler is unrelated).
 	ToolApprovalCommandPublisher ToolApprovalCommandPublisher
 	// AuthorizedPubkeys is the explicit operator allowlist for external MCP callers.
 	// An empty allowlist denies all non-system callers.
@@ -99,7 +96,7 @@ type SignatureVerifier interface {
 	VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error)
 }
 
-// Phase 5 P2: kept — ML import, recipe, and inference deploy/rollback lack intent ops, bahia-irsry.76
+// No handlers for ml/model-import, ml/recipe-run, ml/inference-deploy, ml/inference-approval, or ml/inference-rollback.
 type MLCommandPublisher interface {
 	PublishMLModelImportRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
 	PublishMLRecipeRunRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
@@ -108,12 +105,7 @@ type MLCommandPublisher interface {
 	PublishMLInferenceRollbackRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
 }
 
-// Phase 5 P2: kept — artifact registration lacks an intent op, bahia-irsry.76
-type ArtifactCommandPublisher interface {
-	PublishArtifactRegisterRequest(ctx context.Context, cmd controlplane.ArtifactRegisterCommand) (*controlplane.ArtifactCommandReceipt, error)
-}
-
-// Phase 5 P2: kept — tool provisioning approval lacks an intent op, bahia-irsry.76
+// No handler for tool/approval-response.
 type ToolApprovalCommandPublisher interface {
 	PublishToolApprovalResponse(ctx context.Context, cmd controlplane.ToolApprovalCommand) (*controlplane.ToolApprovalCommandReceipt, error)
 }
@@ -134,7 +126,6 @@ func NewServerWithOptionsChecked(registry *service.RegistryService, logger *zap.
 		registry:             registry,
 		llmRegistry:          deps.LLMRegistry,
 		mlCommands:           deps.MLCommandPublisher,
-		artifactCommands:     deps.ArtifactCommandPublisher,
 		toolApprovalCommands: deps.ToolApprovalCommandPublisher,
 		logger:               logger,
 		secretsRepo:          deps.SecretsRepo,
@@ -698,7 +689,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_register_artifact",
-			Description: "Register a new artifact",
+			Description: "Register an artifact through the in-process artifact/register intent pipeline",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -747,7 +738,7 @@ func (s *Server) GetTools() []Tool {
 						"type":        "object",
 						"description": "Arbitrary artifact metadata (optional)",
 					},
-					"idempotency_key": map[string]interface{}{"type": "string", "description": "Stable retry key; defaults to _meta.progressToken or immutable build/digest identity"},
+					"idempotency_key": map[string]interface{}{"type": "string", "description": "Stable retry key; defaults to _meta.progressToken"},
 				},
 				"required": []string{"build_id", "service_id", "image_repo", "image_tag", "image_digest"},
 			},
@@ -2118,73 +2109,7 @@ func (s *Server) handleDeleteEnvironment(ctx context.Context, args map[string]in
 }
 
 func (s *Server) handleRegisterArtifact(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	// Phase 5 P2: no intent handler yet — bahia-irsry.76
-	buildIDStr, _ := args["build_id"].(string)
-	serviceIDStr, _ := args["service_id"].(string)
-	imageRepo, _ := args["image_repo"].(string)
-	imageTag, _ := args["image_tag"].(string)
-	imageDigest, _ := args["image_digest"].(string)
-	manifestMediaType, _ := args["manifest_media_type"].(string)
-	sbomURL, _ := args["sbom_url"].(string)
-	signatureRef, _ := args["signature_ref"].(string)
-	scanStatus, _ := args["scan_status"].(string)
-	metadata, _ := args["metadata"].(map[string]interface{})
-
-	buildID, err := uuid.Parse(buildIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid build_id: %v", err)), nil
-	}
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-	if err := domain.ValidateRequiredString(imageRepo, "image_repo"); err != nil {
-		return errorResult(err.Error()), nil
-	}
-	if err := domain.ValidateRequiredString(imageTag, "image_tag"); err != nil {
-		return errorResult(err.Error()), nil
-	}
-	if err := domain.ValidateImageDigest(imageDigest); err != nil {
-		return errorResult(err.Error()), nil
-	}
-	if err := domain.ValidateScanStatus(domain.ScanStatus(scanStatus)); err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	var sizeBytes *int64
-	if size, ok := args["size_bytes"].(float64); ok {
-		sizeInt := int64(size)
-		sizeBytes = &sizeInt
-	}
-
-	if s.artifactCommands == nil {
-		return signerFirstMCPMutationUnavailable("bahia_register_artifact", "artifact/register"), nil
-	}
-	key := strings.TrimSpace(stringArg(args, "idempotency_key"))
-	if key == "" {
-		if meta, ok := args["_meta"].(map[string]any); ok {
-			key = strings.TrimSpace(fmt.Sprint(meta["progressToken"]))
-			if key == "<nil>" {
-				key = ""
-			}
-		}
-	}
-	if key == "" {
-		key = "artifact:" + buildID.String() + ":" + imageDigest
-	}
-	actor := ""
-	if principal := auth.GetPrincipal(ctx); principal != nil {
-		actor = strings.ToLower(strings.TrimSpace(principal.PubKey))
-	}
-	commandID, err := mcpIntentID("bahia_register_artifact", actor, map[string]interface{}{"idempotency_key": key})
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	receipt, err := s.artifactCommands.PublishArtifactRegisterRequest(ctx, controlplane.ArtifactRegisterCommand{BuildID: buildID, ServiceID: serviceID, ImageRepo: imageRepo, ImageTag: imageTag, ImageDigest: imageDigest, ManifestMediaType: manifestMediaType, SizeBytes: sizeBytes, SBOMURL: sbomURL, SignatureRef: signatureRef, ScanStatus: domain.ScanStatus(scanStatus), Metadata: metadata, IdempotencyKey: commandID})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish artifact register request: %v", err)), nil
-	}
-	return jsonResult(artifactCommandReceiptToMap(receipt))
+	return s.invokeIntentWrite(ctx, "bahia_register_artifact", args)
 }
 
 func (s *Server) handleVerifySignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -2835,38 +2760,6 @@ func llmReleaseToMap(release *domain.LLMRelease) map[string]interface{} {
 		"metadata":            release.Metadata,
 		"created_at":          release.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	}
-}
-
-func artifactCommandReceiptToMap(receipt *controlplane.ArtifactCommandReceipt) map[string]interface{} {
-	result := map[string]interface{}{"status": "submitted"}
-	if receipt == nil {
-		return result
-	}
-	result["request_event_id"] = receipt.RequestEventID
-	result["request_pubkey"] = receipt.RequestPubkey
-	result["request_kind"] = receipt.RequestKind
-	result["result_kind"] = receipt.ResultKind
-	result["registry_kind"] = receipt.RegistryKind
-	result["published_relays"] = receipt.PublishedRelays
-	if receipt.Status != "" {
-		result["status"] = receipt.Status
-	}
-	if receipt.Error != "" {
-		result["error"] = receipt.Error
-	}
-	if receipt.BuildID != "" {
-		result["build_id"] = receipt.BuildID
-	}
-	if receipt.ServiceID != "" {
-		result["service_id"] = receipt.ServiceID
-	}
-	if receipt.ImageDigest != "" {
-		result["image_digest"] = receipt.ImageDigest
-	}
-	if len(receipt.RelayOutcomes) > 0 {
-		result["relay_outcomes"] = receipt.RelayOutcomes
-	}
-	return result
 }
 
 func optionalStringPointerArg(args map[string]interface{}, name string) *string {
