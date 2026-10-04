@@ -76,7 +76,7 @@ function legacyDiscovery() {
 }
 
 async function flushAsync() {
-  for (let i = 0; i < 8; i += 1) await Promise.resolve();
+  for (let i = 0; i < 24; i += 1) await Promise.resolve();
 }
 
 function resultEvent(module, requestEventId, payload) {
@@ -112,6 +112,7 @@ describe('encrypted controlplane transport', () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ limitation: { max_message_length: 512000, max_content_length: 65535 } }) }));
     authMock.authState.status = 'authenticated';
     authMock.authState.pubkey = 'a'.repeat(64);
     authMock.ensureEncryptedSignerReady.mockResolvedValue(true);
@@ -125,6 +126,7 @@ describe('encrypted controlplane transport', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.useRealTimers();
     module?.disconnectEncryptedControlplane?.();
     nostrClientMock.activeClient = null;
@@ -335,6 +337,17 @@ describe('encrypted controlplane transport', () => {
     expect(client.publish).not.toHaveBeenCalled();
     await expect(transport.publishEncryptedRequest(atLimit)).resolves.toMatchObject({ requestEventId: atLimit.id });
     expect(client.publish).toHaveBeenCalledWith(atLimit);
+  });
+
+  it('uses connected relay NIP-11 message and stored-content limits', async () => {
+    global.fetch.mockResolvedValue({ ok: true, json: async () => ({ limitation: { max_message_length: 1000, max_content_length: 100 } }) });
+    client.getConnectedRelays.mockReturnValue(['wss://limited.example']);
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://limited.example'], servicePubkey: SERVICE_PUBKEY });
+    await transport.connect();
+    const event = await transport.buildEncryptedRequestEvent({ operation: 'secrets.set', payload: { value: 'abc' } });
+    expect(event.kind).toBe(module.CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND);
+    await expect(transport.publishEncryptedRequest(event)).rejects.toThrow('1000-byte relay message limit');
+    expect(client.publish).not.toHaveBeenCalled();
   });
 
   it('publishes an sbom/import at the inline limit as one relay message', async () => {

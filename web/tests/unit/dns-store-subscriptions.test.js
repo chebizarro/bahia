@@ -109,7 +109,7 @@ describe('DNS dashboard Nostr subscription store', () => {
     const result = await store.connect('http://localhost:10547/relay', 'b'.repeat(64));
 
     expect(result.ok).toBe(true);
-    expect(global.fetch).toHaveBeenCalledWith('http://localhost:10547/relay', { headers: { Accept: 'application/nostr+json' } });
+    expect(global.fetch).toHaveBeenCalledWith('http://localhost:10547/relay', expect.objectContaining({ headers: { Accept: 'application/nostr+json' } }));
     expect(global.fetch).not.toHaveBeenCalledWith(expect.stringContaining('/api/v1/dns'), expect.anything());
     expect(nostrMock.setRelays).toHaveBeenCalledWith(['ws://localhost:10547/relay'], false);
     expect(nostrMock.connect).toHaveBeenCalledWith(['ws://localhost:10547/relay'], { force: true });

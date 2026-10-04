@@ -4,14 +4,12 @@ import { nostr } from './subscriptions.js';
 import {
   CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND,
   CONTEXTVM_GIFT_WRAP_KIND,
-  CONTEXTVM_MAX_RELAY_MESSAGE_BYTES,
   CONTEXTVM_MESSAGE_KIND,
   ENCRYPTED_REQUEST_KIND,
   ENCRYPTED_REQUEST_ROUTING_TAG,
   ENCRYPTED_REQUEST_WIRE_VERSION,
   ENCRYPTED_RESULT_KIND,
   NIP44_MAX_PLAINTEXT_BYTES,
-  STORED_EVENT_MAX_CONTENT_BYTES
 } from './encrypted-controlplane-constants.js';
 import { awaitEncryptedResultForTransport } from './encrypted-controlplane-result.js';
 import {
@@ -29,6 +27,7 @@ import {
 } from './encrypted-controlplane-utils.js';
 import { ensureHexPubkey } from './nostr-hex.js';
 import { mintEntityId } from '../entity-id.js';
+import { relayLimits } from './relay-nip11.js';
 
 export class EncryptedControlplaneTransport {
   constructor({ relays = encryptedRelayUrlsFromSystemInfo(), servicePubkey = servicePubkeyFromSystemInfo(), client = null } = {}) {
@@ -41,6 +40,7 @@ export class EncryptedControlplaneTransport {
       publish: (event) => nostr.publish(event, { relays: this.relays })
     };
     this.connected = false;
+    this.connectedRelays = [];
   }
 
   async connect() {
@@ -59,6 +59,8 @@ export class EncryptedControlplaneTransport {
       }
     }
     assertConnectedBahiaRelays(this.client);
+    this.connectedRelays = this.client.getConnectedRelays?.() || this.relays;
+    await relayLimits.resolve(this.connectedRelays);
     this.connected = true;
     return this;
   }
@@ -103,14 +105,14 @@ export class EncryptedControlplaneTransport {
     // Bahia's relay stores at most STORED_EVENT_MAX_CONTENT_BYTES of content,
     // so a wrap too large to store is sent as an ephemeral 21059: relayed live
     // to the daemon (which answers in kind), never stored.
-    const wrapKind = ciphertext.length > STORED_EVENT_MAX_CONTENT_BYTES ? CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND : kind;
+    const wrapKind = ciphertext.length > relayLimits.cached(this.connectedRelays).maxContentBytes ? CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND : kind;
     return finalizeEvent({ kind: wrapKind, pubkey: wrapperPubkey, created_at, tags: [['p', this.servicePubkey]], content: ciphertext }, wrapperSecretKey);
   }
 
   async publishEncryptedRequest(event) {
     if (!event?.id) throw new Error('Cannot publish unsigned ContextVM request event');
-    assertRelayMessageFits(event, CONTEXTVM_MAX_RELAY_MESSAGE_BYTES);
     await this.connect();
+    assertRelayMessageFits(event, relayLimits.cached(this.connectedRelays).maxMessageBytes);
     assertConnectedBahiaRelays(this.client);
     const results = await this.client.publish(event);
     const acceptedRelays = results.filter(publishAccepted);
