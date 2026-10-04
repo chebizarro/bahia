@@ -502,6 +502,12 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindSecurityFindingRecord:       {"security", "finding", kinds.CPStateTopicSecurityFinding},
 	KindSecurityScheduleRecord:      {"security", "schedule", kinds.CPStateTopicSecuritySchedule},
 	KindSecurityFindingDetailRecord: {"security", "finding-detail", kinds.CPStateTopicSecurityFindingDetail},
+	// F74a: independent coordinates for release, signature, SBOM and runtime state.
+	KindLLMReleaseRegistry:        {"llm", "release", kinds.CPStateTopicLLMRelease},
+	KindArtifactSignatureRegistry: {"artifact", "signature", kinds.CPStateTopicArtifactSignature},
+	KindArtifactSBOMRegistry:      {"artifact", "sbom", kinds.CPStateTopicArtifactSBOM},
+	KindSBOMPackageRegistry:       {"artifact", "sbom-package", kinds.CPStateTopicSBOMPackage},
+	KindRuntimeObservationState:   {"runtime", "observation", kinds.CPStateTopicRuntimeObservation},
 }
 
 // CPStateDomains returns all unique cp-state domain names from the

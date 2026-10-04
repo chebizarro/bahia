@@ -270,3 +270,54 @@ The full lint count is **15**, all deliberately retained `unused` findings above
 `make lint` remains nonzero. This is partial migration completion, not a zero-lint
 claim or live relay/provider acceptance. The user owns issue state for the open
 findings; no `bd` operations were performed.
+
+## Bahia-irsry.74, F74a: canonical MCP read families (2026-10-03)
+
+The five new `30900` state discriminators are `32015` LLM release,
+`32016` artifact signature, `32017` artifact SBOM, `32018` SBOM package,
+and `32019` latest runtime observation. `cpStateFamilies`, the migration
+manifest, generated web kind map and sidecar read-auth policy agree on their
+topics. LLM release content is fleet-OCK encrypted; signatures and SBOM
+details are public supply-chain data. Runtime observations use a protected
+topic and project only the MCP-facing fields, not arbitrary metadata. The
+sidecar's default `read_auth_mode=warn` is not a confidentiality guarantee;
+operators need `enforce` for NIP-42 protection.
+
+The live release, signature, SBOM and latest-observation mutation boundaries
+call the shared canonical publisher. The SBOM manifest compatibility path
+also publishes newly inserted packages, without re-emitting old package rows
+on reprojection. A durable outbox marker backs the one-time historical-row
+backfill and retries a post-commit publication failure on restart. Package
+records have individual addressable coordinates rather than one unbounded
+SBOM package-list frame. Existing repository interfaces have no delete
+operations for these families; the publisher supports same-coordinate
+tombstones for future delete writers, and store tests prove tombstone
+invisibility.
+
+`internal/mcp/f74a_store_reads_test.go` exercises all nine migrated read
+tools against signed local state without a database, including real fleet-OCK
+decrypt and a tombstone. `internal/adapters/nostr/f74a_canonical_publisher_test.go`
+covers envelopes, content size limits, package indexing, tombstones and
+metadata exclusion. `internal/service/f74a_publish_test.go` covers
+publish-on-mutation and compatibility reprojection; `f74a_backfill_test.go`
+covers marker idempotency and retry. These are deterministic DB-less tests;
+they do not assert live external-relay acceptance.
+
+Final F74a verification after the last code change:
+
+| Gate | Outcome |
+|---|---|
+| `CGO_ENABLED=0 go build ./...` | PASS |
+| `CGO_ENABLED=0 go vet ./...` | PASS |
+| `CGO_ENABLED=0 go test ./...` | PASS |
+| `CGO_ENABLED=0 go test ./internal/archtest -run TestNoNew -count=1` | PASS, zero new violations |
+| `pnpm exec vitest run --config vitest.config.js --maxWorkers=1` | PASS, 1,069 passed / one skipped; throttled to avoid concurrent-worktree load timeouts |
+| `pnpm run lint` / `pnpm run build` | PASS; zero Svelte errors or warnings |
+| `BAHIA_E2E_PORT=4175 CGO_ENABLED=0 CI=1 npx playwright test --reporter=line` | PASS, 225 passed / four skipped; port 4173 was occupied by another worktree |
+| `gofmt` / `git diff --check` | PASS |
+
+The initially parallel web-unit attempt timed out in unrelated test hooks
+under concurrent worktree load; the complete one-worker rerun passed with
+unchanged test and hook deadlines. The initial Go rerun caught a test-only
+use of an existing exported ML helper; the fixture was corrected without
+adding a baseline entry, and the final full Go gate passed.

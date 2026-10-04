@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -181,6 +182,13 @@ func TestCallTool_SignatureListingStatusAndGet(t *testing.T) {
 		}
 	}
 
+	fixture := attachCanonicalMCPFixture(t, server)
+	canonical := nostrpool.NewF74aCanonicalPublisher(fixture.projector, nil)
+	for _, sig := range sigRepo.signatures {
+		if err := canonical.PublishArtifactSignature(ctx, sig); err != nil {
+			t.Fatal(err)
+		}
+	}
 	listRes, err := server.CallTool(ctx, "bahia_list_signatures", map[string]interface{}{"artifact_id": artifactID.String()})
 	if err != nil {
 		t.Fatalf("list signatures: %v", err)
@@ -268,8 +276,8 @@ func TestCallTool_SignatureValidationAndConfigurationErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list signatures without repo: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected error when signature tools are not configured")
+	if res.IsError || decodeResultMap(t, res)["total"] != float64(0) {
+		t.Fatalf("expected empty canonical signature family without repository")
 	}
 
 	server, _, artifactID := newTestMCPSignatureServer(t, nil)

@@ -2009,8 +2009,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleLLMUpdateRoute(ctx, arguments)
 	case "bahia_llm_register_release":
 		return s.handleLLMRegisterRelease(ctx, arguments)
-	case "bahia_llm_list_releases":
-		return s.handleLLMListReleases(ctx, arguments)
 	// Async LLM Nostr command operations
 	case "bahia_llm_deploy":
 		return s.handleLLMDeploy(ctx, arguments)
@@ -2028,23 +2026,9 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	case "bahia_register_artifact":
 		return s.handleRegisterArtifact(ctx, arguments)
 	// Signature operations
-	case "bahia_list_signatures":
-		return s.handleListSignatures(ctx, arguments)
-	case "bahia_list_verified_signatures":
-		return s.handleListVerifiedSignatures(ctx, arguments)
-	case "bahia_has_verified_signature":
-		return s.handleHasVerifiedSignature(ctx, arguments)
-	case "bahia_get_signature":
-		return s.handleGetSignature(ctx, arguments)
 	case "bahia_verify_signatures":
 		return s.handleVerifySignatures(ctx, arguments)
 	// SBOM operations
-	case "bahia_get_sbom":
-		return s.handleGetSBOM(ctx, arguments)
-	case "bahia_get_sbom_packages":
-		return s.handleGetSBOMPackages(ctx, arguments)
-	case "bahia_search_sbom_packages":
-		return s.handleSearchSBOMPackages(ctx, arguments)
 	case "bahia_ingest_sbom":
 		return s.handleIngestSBOM(ctx, arguments)
 	// Build operations
@@ -2053,8 +2037,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	case "bahia_update_build_status":
 		return s.handleUpdateBuildStatus(ctx, arguments)
 	// Observability operations
-	case "bahia_get_observation":
-		return s.handleGetObservation(ctx, arguments)
 	case "bahia_create_run":
 		return s.handleCreateRun(ctx, arguments)
 	case "bahia_get_run_logs":
@@ -2566,28 +2548,6 @@ func (s *Server) handleLLMRegisterRelease(ctx context.Context, args map[string]i
 	return jsonResult(llmCommandReceiptToMap("submitted", receipt))
 }
 
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs LLMReleaseRegistry.
-func (s *Server) handleLLMListReleases(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	registry, errResult := s.requireLLMRegistry()
-	if errResult != nil {
-		return errResult, nil
-	}
-	routeID, err := parseUUIDArg(args, "route_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	limit, offset := limitOffsetArgs(args, 100)
-	releases, err := registry.ListReleases(ctx, routeID, limit, offset)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list LLM releases: %v", err)), nil
-	}
-	out := make([]map[string]interface{}, 0, len(releases))
-	for i := range releases {
-		out = append(out, llmReleaseToMap(&releases[i]))
-	}
-	return jsonResult(map[string]interface{}{"route_id": routeID.String(), "releases": out, "total": len(out), "registry_kind": controlplane.KindLLMRouteRegistry})
-}
-
 func (s *Server) handleLLMDeploy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	publisher, errResult := s.requireLLMCommands()
 	if errResult != nil {
@@ -2722,96 +2682,6 @@ func (s *Server) handleRegisterArtifact(ctx context.Context, args map[string]int
 	return jsonResult(artifactCommandReceiptToMap(receipt))
 }
 
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Signature reads need ArtifactSignatureRegistry.
-func (s *Server) handleListSignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.signatures == nil {
-		return errorResult("signature tools are not configured"), nil
-	}
-
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	signatures, err := s.signatures.ListByArtifact(ctx, artifactID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list signatures: %v", err)), nil
-	}
-
-	return jsonResult(map[string]interface{}{
-		"artifact_id": artifactID.String(),
-		"signatures":  signaturesToMaps(signatures),
-		"total":       len(signatures),
-	})
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ArtifactSignatureRegistry.
-func (s *Server) handleListVerifiedSignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.signatures == nil {
-		return errorResult("signature tools are not configured"), nil
-	}
-
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	signatures, err := s.signatures.ListVerifiedByArtifact(ctx, artifactID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list verified signatures: %v", err)), nil
-	}
-
-	return jsonResult(map[string]interface{}{
-		"artifact_id": artifactID.String(),
-		"signatures":  signaturesToMaps(signatures),
-		"total":       len(signatures),
-	})
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ArtifactSignatureRegistry.
-func (s *Server) handleHasVerifiedSignature(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.signatures == nil {
-		return errorResult("signature tools are not configured"), nil
-	}
-
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	hasVerified, err := s.signatures.HasVerifiedSignature(ctx, artifactID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to check signature status: %v", err)), nil
-	}
-
-	return jsonResult(map[string]interface{}{
-		"artifact_id":            artifactID.String(),
-		"has_verified_signature": hasVerified,
-	})
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ArtifactSignatureRegistry.
-func (s *Server) handleGetSignature(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.signatures == nil {
-		return errorResult("signature tools are not configured"), nil
-	}
-
-	signatureID, err := parseRequiredUUIDArg(args, "signature_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	signature, err := s.signatures.GetByID(ctx, signatureID)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			return errorResult("signature not found"), nil
-		}
-		return errorResult(fmt.Sprintf("failed to get signature: %v", err)), nil
-	}
-
-	return jsonResult(signatureToMap(signature))
-}
-
 func (s *Server) handleVerifySignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.signatures == nil {
 		return errorResult("signature tools are not configured"), nil
@@ -2863,90 +2733,6 @@ func (s *Server) handleVerifySignatures(ctx context.Context, args map[string]int
 		"stored":      stored,
 		"signatures":  signaturesToMaps(signatures),
 	})
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. SBOM reads need ArtifactSBOMRegistry and SBOMPackageRegistry.
-func (s *Server) handleGetSBOM(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.sboms == nil {
-		return errorResult("SBOM tools are not configured"), nil
-	}
-
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	sbom, err := s.sboms.GetSBOMByArtifact(ctx, artifactID)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			return errorResult("SBOM not found for artifact"), nil
-		}
-		return errorResult(fmt.Sprintf("failed to get SBOM: %v", err)), nil
-	}
-
-	return jsonResult(sbomToMap(sbom))
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs ArtifactSBOMRegistry and SBOMPackageRegistry.
-func (s *Server) handleGetSBOMPackages(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.sboms == nil {
-		return errorResult("SBOM tools are not configured"), nil
-	}
-
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	sbom, err := s.sboms.GetSBOMByArtifact(ctx, artifactID)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			return errorResult("SBOM not found for artifact"), nil
-		}
-		return errorResult(fmt.Sprintf("failed to get SBOM: %v", err)), nil
-	}
-
-	packages, err := s.sboms.ListPackagesBySBOM(ctx, sbom.ID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list SBOM packages: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"artifact_id": artifactID.String(),
-		"sbom_id":     sbom.ID.String(),
-		"packages":    sbomPackagesToMaps(packages),
-		"total":       len(packages),
-	}
-	return jsonResult(result)
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs SBOMPackageRegistry.
-func (s *Server) handleSearchSBOMPackages(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.sboms == nil {
-		return errorResult("SBOM tools are not configured"), nil
-	}
-
-	query, _ := args["query"].(string)
-	if query == "" {
-		query, _ = args["package"].(string)
-	}
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return errorResult("query is required"), nil
-	}
-	limit := optionalIntArg(args, "limit", 100)
-
-	packages, err := s.sboms.SearchPackagesByName(ctx, query, limit)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to search SBOM packages: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"query":    query,
-		"packages": sbomPackagesToMaps(packages),
-		"total":    len(packages),
-	}
-	return jsonResult(result)
 }
 
 func (s *Server) handleIngestSBOM(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -3106,41 +2892,6 @@ func (s *Server) handleUpdateBuildStatus(ctx context.Context, args map[string]in
 			"id":     buildID.String(),
 			"status": string(status),
 		},
-	}
-	return jsonResult(result)
-}
-
-// Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs RuntimeObservationState.
-func (s *Server) handleGetObservation(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceIDStr, _ := args["service_id"].(string)
-	envIDStr, _ := args["environment_id"].(string)
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-
-	envID, err := uuid.Parse(envIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
-	}
-
-	obs, err := s.registry.GetLatestObservation(ctx, serviceID, envID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get observation: %v", err)), nil
-	}
-	if obs == nil {
-		return errorResult("no observation found"), nil
-	}
-
-	result := map[string]interface{}{
-		"id":             obs.ID.String(),
-		"service_id":     obs.ServiceID.String(),
-		"environment_id": obs.EnvironmentID.String(),
-		"image_digest":   obs.ObservedImageDigest,
-		"container_id":   obs.ObservedContainerID,
-		"health_status":  obs.HealthStatus,
-		"observed_at":    obs.ObservedAt.Format("2006-01-02T15:04:05Z"),
 	}
 	return jsonResult(result)
 }

@@ -813,3 +813,25 @@ Cascadia `NIP-CAS-0001`'s required 4903 tags and regular append-only class.
 Checkpoint retention, accepted OK and archive recovery must be proved before
 activation; public 30900 projections alone are not a dispatch journal. See
 [the assistant design](designs/assistant-unified-execution.md).
+
+## F74a MCP read families (30900)
+
+The legacy-kind discriminator is a catalog key, not the wire kind. Each record
+uses the shared `bahia.cp-state.v1` envelope, `t` topic, daemon author, and a
+stable `d`; a delete publishes `deleted=true` on the same coordinate.
+
+| Family | Legacy kind | `t` | `d` | Content / read auth |
+|---|---:|---|---|---|
+| LLM release | 32015 | `llm-release` | `llm:release:<id>` | Fleet-OCK encrypted; public ciphertext |
+| Artifact signature | 32016 | `artifact-signature` | `artifact:signature:<id>` | Plaintext supply-chain record; public |
+| Artifact SBOM | 32017 | `artifact-sbom` | `artifact:sbom:<id>` | Plaintext manifest details; public |
+| SBOM package | 32018 | `artifact-sbom-package` | `artifact:sbom-package:<id>` | One package per indexed record; public |
+| Latest runtime observation | 32019 | `runtime-observation` | `runtime:observation:<service-id>:<environment-id>` | Minimal non-secret snapshot; classified protected (NIP-42 enforced in `read_auth_mode=enforce`) |
+
+SBOM references and availability remain their existing `30078` and `30004`
+interop records; these 30900 families add the parsed manifest and package index
+needed by MCP. Publishers use the shared cp-state signing/outbox path and reject
+oversized records; an SBOM package list is never emitted as one event.
+A durable outbox control marker drives one-time startup backfill of pre-existing
+repository records. A failed post-commit projection marks the family dirty so
+the next startup retries the backfill before MCP serves these reads.

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -152,6 +153,8 @@ func TestGetTools_IncludesSBOMTools(t *testing.T) {
 func TestCallTool_IngestGetListAndSearchSBOM(t *testing.T) {
 	ctx := authorizedMCPContext()
 	server, repo, artifactID := newTestMCPSBOMServer()
+	fixture := attachCanonicalMCPFixture(t, server)
+	server.sboms = service.NewCanonicalSBOMRepository(repo, nostrpool.NewF74aCanonicalPublisher(fixture.projector, nil), zap.NewNop())
 	sbomData := `{
 		"bomFormat": "CycloneDX",
 		"specVersion": "1.5",

@@ -172,4 +172,10 @@ const (
 	CPStateTopicSecurityFinding       = "security-finding"
 	CPStateTopicSecuritySchedule      = "security-schedule"
 	CPStateTopicSecurityFindingDetail = "security-finding-detail"
+
+	CPStateTopicLLMRelease         = "llm-release"
+	CPStateTopicArtifactSignature  = "artifact-signature"
+	CPStateTopicArtifactSBOM       = "artifact-sbom"
+	CPStateTopicSBOMPackage        = "artifact-sbom-package"
+	CPStateTopicRuntimeObservation = "runtime-observation"
 )

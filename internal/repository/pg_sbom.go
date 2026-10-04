@@ -725,3 +725,32 @@ func (r *PgSBOMRepository) scanManifestPackages(rows pgx.Rows) ([]domain.SBOMMan
 	}
 	return pkgs, rows.Err()
 }
+
+// ListAllSBOMs pages the compatibility records for the one-time F74a
+// canonical-state backfill. New writes publish at their mutation boundary.
+func (r *PgSBOMRepository) ListAllSBOMs(ctx context.Context, limit, offset int) ([]domain.ArtifactSBOM, error) {
+	rows, err := r.pool.Query(ctx, fmt.Sprintf("SELECT %s FROM artifact_sboms ORDER BY id LIMIT $1 OFFSET $2", sbomColumns), limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("listing artifact SBOMs for backfill: %w", err)
+	}
+	defer rows.Close()
+	out := make([]domain.ArtifactSBOM, 0)
+	for rows.Next() {
+		sbom, err := r.scanSBOM(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *sbom)
+	}
+	return out, rows.Err()
+}
+
+// ListAllPackages pages the package index for the one-time F74a backfill.
+func (r *PgSBOMRepository) ListAllPackages(ctx context.Context, limit, offset int) ([]domain.SBOMPackage, error) {
+	rows, err := r.pool.Query(ctx, fmt.Sprintf("SELECT %s FROM sbom_packages ORDER BY id LIMIT $1 OFFSET $2", pkgColumns), limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("listing SBOM packages for backfill: %w", err)
+	}
+	defer rows.Close()
+	return r.scanPackages(rows)
+}

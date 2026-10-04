@@ -193,6 +193,7 @@ func New(cfg *config.Config) (*App, error) {
 	var workerRepo repository.WorkerRepository
 	var paymentRepo repository.PaymentRecordRepository
 	var sbomRepo repository.SBOMRepository
+	var f74aSBOMBackfill service.F74aSBOMBackfillSource
 	var sbomManifestRepo repository.SBOMManifestRepository
 	var securityRepo repository.SecurityRepository
 	var sigRepo repository.ArtifactSignatureRepository
@@ -230,6 +231,7 @@ func New(cfg *config.Config) (*App, error) {
 		paymentRepo = repository.NewPgPaymentRecordRepository(pool)
 		pgSBOMRepo := repository.NewPgSBOMRepository(pool)
 		sbomRepo = pgSBOMRepo
+		f74aSBOMBackfill = pgSBOMRepo
 		sbomManifestRepo = pgSBOMRepo
 		securityRepo = repository.NewPgSecurityRepository(pool)
 		sigRepo = repository.NewPgArtifactSignatureRepository(pool)
@@ -1589,6 +1591,38 @@ func New(cfg *config.Config) (*App, error) {
 			}
 		})
 	}
+	// F74a: separate wiring block for release, signature, artifact-SBOM and
+	// latest runtime-observation families. Each writer keeps its existing DB path.
+	if nostrProjector != nil && nostrProjector.Enabled() {
+		f74aCanonical := nostrAdapter.NewF74aCanonicalPublisher(nostrProjector, confidentialEncryptor, localOutbox)
+		if llmRegistry != nil {
+			llmRegistry.SetReleaseCPStatePublisher(f74aCanonical)
+		}
+		registry.SetObservationCPStatePublisher(f74aCanonical)
+		if sigRepo != nil {
+			sigRepo = service.NewCanonicalSignatureRepository(sigRepo, f74aCanonical, logger)
+		}
+		if sbomRepo != nil {
+			sbomRepo = service.NewCanonicalSBOMRepository(sbomRepo, f74aCanonical, logger)
+		}
+		if sbomManifestRepo != nil && sbomRepo != nil {
+			sbomManifestRepo = service.NewCanonicalSBOMManifestRepository(sbomManifestRepo, sbomRepo, f74aCanonical, logger)
+		}
+		if dbAvailable && pool != nil {
+			var llmBackfill service.F74aReleaseLister
+			if llmRegistry != nil {
+				llmBackfill = llmRegistry
+			}
+			if err := service.BootstrapF74aCanonical(ctx, service.F74aBackfillConfig{
+				Marker: localOutbox, Publisher: f74aCanonical, LLM: llmBackfill,
+				Services: serviceRepo, Artifacts: artifactRepo, Signatures: sigRepo,
+				SBOMs: f74aSBOMBackfill, Observations: obsRepo, States: stateRepo,
+			}); err != nil {
+				return nil, fmt.Errorf("backfill F74a canonical state: %w", err)
+			}
+		}
+	}
+
 	// Phase 3 M1: wire ML cp-state publisher into registry service so state
 	// mutations publish canonical records directly instead of through the projector.
 	if nostrProjector.Enabled() && mlRegistry != nil {

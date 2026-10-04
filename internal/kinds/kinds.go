@@ -489,4 +489,11 @@ const (
 	SecurityFindingRecord       = 32012
 	SecurityScheduleRecord      = 32013
 	SecurityFindingDetailRecord = 32014
+
+	// F74a canonical read families; all use wire kind 30900.
+	LLMReleaseRegistry        = 32015
+	ArtifactSignatureRegistry = 32016
+	ArtifactSBOMRegistry      = 32017
+	SBOMPackageRegistry       = 32018
+	RuntimeObservationState   = 32019
 )

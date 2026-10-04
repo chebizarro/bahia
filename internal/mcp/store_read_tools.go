@@ -168,6 +168,8 @@ func (s *Server) callStoreReadTool(ctx context.Context, name string, args map[st
 		result, err = s.storeMLRead(ctx, name, args)
 	case "bahia_llm_list_routes":
 		result, err = s.storeLLMRoutes(ctx, args)
+	case "bahia_llm_list_releases", "bahia_list_signatures", "bahia_list_verified_signatures", "bahia_has_verified_signature", "bahia_get_signature", "bahia_get_sbom", "bahia_get_sbom_packages", "bahia_search_sbom_packages", "bahia_get_observation":
+		result, err = s.storeF74aRead(ctx, name, args)
 	case "bahia_estimate_cost", "bahia_get_run_cost", "bahia_get_payment_history":
 		result, err = s.storePaymentRead(ctx, name, args)
 	case "bahia_worker_get_assignments", "bahia_worker_list_assignments", "bahia_worker_get_drain_status", "bahia_worker_list_drain_status":
