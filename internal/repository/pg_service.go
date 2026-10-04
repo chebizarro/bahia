@@ -55,7 +55,7 @@ func (r *PgServiceRepository) Create(ctx context.Context, svc *domain.Service) e
 
 // scanService reads a service row. repo_url has been nullable since 000001
 // (rows written by migrations, fixtures or older code may hold NULL), so the
-// SELECTs read it as COALESCE(repo_url, ''); one NULL must not break
+// SELECTs read it as COALESCE(repo_url, ”); one NULL must not break
 // ListServices and with it the projector's snapshot.
 func (r *PgServiceRepository) scanService(row pgx.Row) (*domain.Service, error) {
 	svc := &domain.Service{}

@@ -359,7 +359,7 @@ func TestFragmentApply_NoBaselineFallsToFullProject(t *testing.T) {
 		// Inject eligible hooks — but without a baseline the fragment path must
 		// still fall through before even checking eligibility.
 		fragmentEligibilityFn: alwaysEligibleFn(),
-		fragmentRendererFn: testFragmentRendererFn("web-frontend", "nginx:1.25"),
+		fragmentRendererFn:    testFragmentRendererFn("web-frontend", "nginx:1.25"),
 	}
 
 	plan := testEnvironmentPlan()

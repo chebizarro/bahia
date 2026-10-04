@@ -593,7 +593,6 @@ func assertRecordChange(t *testing.T, events []events.Event, operation, fqdn, ol
 	t.Fatalf("missing record change operation=%s fqdn=%s in %#v", operation, fqdn, events)
 }
 
-
 // TestRule3LegacyPathPublishesCanonicalEndpoints verifies that, with no intent
 // domains enabled (the default), a service or environment state change still
 // produces canonical DNS endpoint records through the DNSCanonicalPublisher.
@@ -686,7 +685,7 @@ func (p *fakeCanonicalPublisher) PublishEndpoints(_ context.Context, endpoints [
 	return len(endpoints), 0, nil
 }
 
-func (p *fakeCanonicalPublisher) PublishZone(context.Context, domain.DNSZone) error { return nil }
+func (p *fakeCanonicalPublisher) PublishZone(context.Context, domain.DNSZone) error  { return nil }
 func (p *fakeCanonicalPublisher) PublishZoneTombstone(context.Context, string) error { return nil }
 func (p *fakeCanonicalPublisher) PublishBackend(context.Context, domain.DNSBackendState) error {
 	return nil

@@ -173,9 +173,9 @@ func TestComposeRuntime_ValidateOwnership_NoWritesOnFailure(t *testing.T) {
 // and event payloads.
 func TestComposeOwnershipError_MachineReadable(t *testing.T) {
 	cases := []struct {
-		name       string
-		reason     ComposeOwnershipReason
-		wantCode   string
+		name     string
+		reason   ComposeOwnershipReason
+		wantCode string
 	}{
 		{"not_owned", OwnershipNotOwned, "not_owned"},
 		{"missing_dir", OwnershipMissingDir, "missing_dir"},

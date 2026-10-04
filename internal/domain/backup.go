@@ -12,9 +12,9 @@ import (
 type BackupBackendKind string
 
 const (
-	BackupBackendKopia         BackupBackendKind = "kopia"
-	BackupBackendVelero        BackupBackendKind = "velero"
-	BackupBackendPgDump        BackupBackendKind = "pgdump"
+	BackupBackendKopia          BackupBackendKind = "kopia"
+	BackupBackendVelero         BackupBackendKind = "velero"
+	BackupBackendPgDump         BackupBackendKind = "pgdump"
 	BackupBackendQdrantSnapshot BackupBackendKind = "qdrant-snapshot"
 )
 
@@ -22,9 +22,9 @@ const (
 type BackupVerificationMode string
 
 const (
-	BackupVerificationNone                BackupVerificationMode = "none"
-	BackupVerificationKopiaSnapshotVerify BackupVerificationMode = "kopia_snapshot_verify"
-	BackupVerificationPgDumpVerify        BackupVerificationMode = "pg_dump_verify"
+	BackupVerificationNone                 BackupVerificationMode = "none"
+	BackupVerificationKopiaSnapshotVerify  BackupVerificationMode = "kopia_snapshot_verify"
+	BackupVerificationPgDumpVerify         BackupVerificationMode = "pg_dump_verify"
 	BackupVerificationQdrantSnapshotVerify BackupVerificationMode = "qdrant_snapshot_verify"
 )
 

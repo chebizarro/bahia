@@ -63,8 +63,8 @@ func (b *EventPublishDNSBackend) SyncZone(ctx context.Context, zone domain.DNSZo
 // the canonical publisher exists (the publisher requires the nostr projector
 // which is created after buildDNSRuntime).
 type DeferredZoneSyncPublisher struct {
-	mu        sync.Mutex
-	delegate  ZoneSyncPublisher
+	mu       sync.Mutex
+	delegate ZoneSyncPublisher
 }
 
 // SetDelegate sets the real publisher. Must be called before any SyncZone.

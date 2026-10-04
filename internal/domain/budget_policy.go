@@ -36,9 +36,9 @@ type BudgetPolicy struct {
 }
 
 type BudgetPolicyResolution struct {
-	Policy    BudgetPolicy `json:"policy"`
+	Policy    BudgetPolicy  `json:"policy"`
 	Limits    []BudgetLimit `json:"limits"`
-	MatchType string       `json:"match_type"`
+	MatchType string        `json:"match_type"`
 }
 
 type BurnDetail struct {
@@ -68,7 +68,7 @@ type BudgetEvaluation struct {
 	Resolution  BudgetPolicyResolution `json:"resolution"`
 	Burn        []BurnDetail           `json:"burn"`
 	Remaining   []RemainingDetail      `json:"remaining"`
-	Forecast    []BudgetForecastDetail  `json:"forecast"`
+	Forecast    []BudgetForecastDetail `json:"forecast"`
 	EvaluatedAt time.Time              `json:"evaluated_at"`
 	Valid       bool                   `json:"valid"`
 	Errors      []string               `json:"errors,omitempty"`

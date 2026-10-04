@@ -18,25 +18,25 @@ const KindUserStatus = nostr.Kind(30315)
 // kind 30315 events with NIP-40 expiration. The daemon can subscribe to these
 // instead of polling via ContextVM Health() RPC.
 type HealthPublisher struct {
-	agent      *Agent
-	signer     nostr.Signer
-	publish    func(ctx context.Context, ev nostr.Event) error
-	interval   time.Duration
-	expiry     time.Duration
-	logger     *zap.Logger
+	agent    *Agent
+	signer   nostr.Signer
+	publish  func(ctx context.Context, ev nostr.Event) error
+	interval time.Duration
+	expiry   time.Duration
+	logger   *zap.Logger
 }
 
 // HealthPublisherConfig configures the health status publisher.
 type HealthPublisherConfig struct {
-	Agent    *Agent
-	Signer   nostr.Signer
+	Agent  *Agent
+	Signer nostr.Signer
 	// Publish sends a signed event to relays. Typically wraps pool.Publish.
-	Publish  func(ctx context.Context, ev nostr.Event) error
+	Publish func(ctx context.Context, ev nostr.Event) error
 	// Interval between health publishes (default: 30s).
 	Interval time.Duration
 	// Expiry is the NIP-40 expiration window (default: 2× interval).
-	Expiry   time.Duration
-	Logger   *zap.Logger
+	Expiry time.Duration
+	Logger *zap.Logger
 }
 
 // NewHealthPublisher creates a health status publisher.

@@ -50,10 +50,10 @@ func DefaultRemediationConfig() RemediationConfig {
 
 // remediationState tracks per-service remediation attempts.
 type remediationState struct {
-	attempts                int
-	lastAction              time.Time
-	inProgress              bool
-	rollbackSuppressedAt    *time.Time
+	attempts                 int
+	lastAction               time.Time
+	inProgress               bool
+	rollbackSuppressedAt     *time.Time
 	rollbackSuppressedReason string
 }
 
@@ -416,9 +416,9 @@ func (r *Remediator) rollbackAttributable(ctx context.Context, serviceID, envID 
 
 	r.mu.Lock()
 	r.states[key] = &remediationState{
-		attempts:    state.attempts,
-		lastAction:  state.lastAction,
-		inProgress:  state.inProgress,
+		attempts:   state.attempts,
+		lastAction: state.lastAction,
+		inProgress: state.inProgress,
 	}
 	r.mu.Unlock()
 

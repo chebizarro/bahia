@@ -47,8 +47,8 @@ type Reconciler struct {
 	deployer     AutoRemediationDeployer
 	// startingTimeout bounds how long a unit may report "starting" before
 	// reconcile stops treating it as progress. Zero selects the default.
-	startingTimeout  time.Duration
-	statePublisher   RuntimeStatePublisher
+	startingTimeout time.Duration
+	statePublisher  RuntimeStatePublisher
 }
 
 // WithStartingTimeout bounds how long a deploying unit may report "starting"

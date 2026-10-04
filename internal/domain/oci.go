@@ -27,17 +27,17 @@ type OCIRepository struct {
 
 // OCIManifest stores a content-addressed OCI manifest.
 type OCIManifest struct {
-	ID             string            `json:"id"`
-	RepositoryID   string            `json:"repository_id"`
-	Digest         string            `json:"digest"`
-	MediaType      string            `json:"media_type"`
-	ArtifactType   string            `json:"artifact_type,omitempty"`
-	SubjectDigest  string            `json:"subject_digest,omitempty"`
-	Content        []byte            `json:"content"`
-	SizeBytes      int64             `json:"size_bytes"`
-	Annotations    map[string]string `json:"annotations,omitempty"`
-	CreatedAt      time.Time         `json:"created_at"`
-	UpdatedAt      time.Time         `json:"updated_at"`
+	ID            string            `json:"id"`
+	RepositoryID  string            `json:"repository_id"`
+	Digest        string            `json:"digest"`
+	MediaType     string            `json:"media_type"`
+	ArtifactType  string            `json:"artifact_type,omitempty"`
+	SubjectDigest string            `json:"subject_digest,omitempty"`
+	Content       []byte            `json:"content"`
+	SizeBytes     int64             `json:"size_bytes"`
+	Annotations   map[string]string `json:"annotations,omitempty"`
+	CreatedAt     time.Time         `json:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
 }
 
 // OCIBlob stores blob metadata.

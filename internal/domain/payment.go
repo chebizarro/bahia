@@ -18,11 +18,11 @@ const (
 type PaymentStatus string
 
 const (
-	PaymentStatusPending   PaymentStatus = "pending"
-	PaymentStatusSent      PaymentStatus = "sent"
-	PaymentStatusRedeemed  PaymentStatus = "redeemed"
-	PaymentStatusFailed    PaymentStatus = "failed"
-	PaymentStatusRefunded  PaymentStatus = "refunded"
+	PaymentStatusPending  PaymentStatus = "pending"
+	PaymentStatusSent     PaymentStatus = "sent"
+	PaymentStatusRedeemed PaymentStatus = "redeemed"
+	PaymentStatusFailed   PaymentStatus = "failed"
+	PaymentStatusRefunded PaymentStatus = "refunded"
 )
 
 // PaymentRecord stores a single Cashu payment or change event.
@@ -32,7 +32,7 @@ type PaymentRecord struct {
 	WorkerPubkey    string           `json:"worker_pubkey"`
 	MintURL         string           `json:"mint_url"`
 	AmountSats      int64            `json:"amount_sats"`
-	TokenHash       string           `json:"token_hash,omitempty"`  // hash of the Cashu token for idempotency
+	TokenHash       string           `json:"token_hash,omitempty"` // hash of the Cashu token for idempotency
 	Direction       PaymentDirection `json:"direction"`
 	Status          PaymentStatus    `json:"status"`
 	ErrorMessage    string           `json:"error_message,omitempty"`
@@ -43,13 +43,13 @@ type PaymentRecord struct {
 
 // CostEstimate holds a cost estimate for a deployment run.
 type CostEstimate struct {
-	WorkerPubkey    string `json:"worker_pubkey"`
-	WorkerName      string `json:"worker_name,omitempty"`
-	MintURL         string `json:"mint_url"`
-	PricePerSecond  int    `json:"price_per_second"`
-	EstimatedSecs   int    `json:"estimated_secs"`
-	EstimatedCost   int64  `json:"estimated_cost_sats"`
-	Unit            string `json:"unit"`
+	WorkerPubkey   string `json:"worker_pubkey"`
+	WorkerName     string `json:"worker_name,omitempty"`
+	MintURL        string `json:"mint_url"`
+	PricePerSecond int    `json:"price_per_second"`
+	EstimatedSecs  int    `json:"estimated_secs"`
+	EstimatedCost  int64  `json:"estimated_cost_sats"`
+	Unit           string `json:"unit"`
 }
 
 // EstimateCost calculates the total cost from worker pricing and estimated duration.

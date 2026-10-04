@@ -34,11 +34,11 @@ func TestMockDockerAPIDirect(t *testing.T) {
 	defer srv.Close()
 
 	r := &ComposeRuntime{dockerHost: srv.URL, logger: zap.NewNop()}
-	
+
 	imageID, configuredImage, desiredHash, ok := r.inspectComposeContainerImage(context.Background(), r.logger, "running-id")
 	t.Logf("inspectComposeContainerImage: imageID=%q configuredImage=%q desiredHash=%q ok=%v", imageID, configuredImage, desiredHash, ok)
 	t.Logf("requests: %v", requests)
-	
+
 	repo, digest := r.inspectDockerImage(context.Background(), r.logger, "sha256:runningimage", "registry.example/app:v2")
 	t.Logf("inspectDockerImage: repo=%q digest=%q", repo, digest)
 	t.Logf("requests: %v", requests)

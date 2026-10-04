@@ -15,4 +15,3 @@ func nullStringDefault(v sql.NullString, fallback string) string {
 	}
 	return fallback
 }
-

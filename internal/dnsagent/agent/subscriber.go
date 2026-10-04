@@ -1,9 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -20,7 +20,7 @@ import (
 // published by the daemon. The agent subscribes to these instead of receiving
 // ContextVM RPC pushes (C-34).
 type ZoneSyncEvent struct {
-	Zone    domain.DNSZone    `json:"zone"`
+	Zone    domain.DNSZone     `json:"zone"`
 	Records []domain.DNSRecord `json:"records"`
 }
 
@@ -174,5 +174,3 @@ func (a *Agent) ApplyZoneSync(ctx context.Context, zone domain.DNSZone, records 
 	a.state = next
 	return nil
 }
-
-

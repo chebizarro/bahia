@@ -10,8 +10,8 @@ import (
 type EncryptionMethod string
 
 const (
-	EncryptionNIP44    EncryptionMethod = "nip44"
-	EncryptionAES256   EncryptionMethod = "aes256gcm"
+	EncryptionNIP44  EncryptionMethod = "nip44"
+	EncryptionAES256 EncryptionMethod = "aes256gcm"
 )
 
 // ServiceSecret represents an encrypted secret bound to a service (and optionally an environment).

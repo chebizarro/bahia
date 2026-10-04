@@ -594,7 +594,7 @@ func buildK8sService(name, namespace, serviceKey, serviceType string, ports []ma
 type k8sDeploymentInfo struct {
 	Name        string
 	Namespace   string
-	DesiredHash string            // from annotations["bahia.desired_hash"]
+	DesiredHash string // from annotations["bahia.desired_hash"]
 	Labels      map[string]string
 	Replicas    int32
 }
