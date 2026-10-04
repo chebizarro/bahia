@@ -110,7 +110,7 @@ func TestMaintenanceCommandPublisherPublishesIntentsWithCorrelation(t *testing.T
 		t.Fatalf("expected one event, got %d", len(capture.events))
 	}
 	outer := capture.events[0]
-	inner, _ := unwrapMaintenanceCommand(t, workerSigner, outer, ContextVMMethodMaintenanceScan)
+	inner, _ := unwrapMaintenanceCommand(t, workerSigner, outer, MaintenanceWorkerRPCMethodScan)
 	if receipt.RequestEventID != inner.ID.Hex() || receipt.RequestPubkey != inner.PubKey.Hex() {
 		t.Fatalf("receipt does not identify the correlated NIP-59 rumor: receipt=%+v rumor=%+v", receipt, inner)
 	}
@@ -158,7 +158,7 @@ func TestMaintenanceCommandPublisherQuarantineCarriesPaths(t *testing.T) {
 	if strings.Contains(string(wire), secretPath) {
 		t.Fatalf("absolute path appeared in plaintext request wire event: %s", wire)
 	}
-	_, params := unwrapMaintenanceCommand(t, workerSigner, capture.events[0], ContextVMMethodMaintenanceQuarantine)
+	_, params := unwrapMaintenanceCommand(t, workerSigner, capture.events[0], MaintenanceWorkerRPCMethodQuarantine)
 	paths, ok := params["paths"].([]any)
 	if !ok || len(paths) != 1 || paths[0] != secretPath {
 		t.Fatalf("params = %#v", params)
@@ -202,7 +202,7 @@ func TestMaintenanceCommandPublisherRegistersExactCorrelationBeforePublish(t *te
 		t.Fatalf("publish/observer state: calls=%d correlations=%+v cancelled=%d", probe.calls, observer.correlations, observer.cancelled)
 	}
 	correlation := observer.correlations[0]
-	if correlation.Method != ContextVMMethodMaintenanceScan || correlation.WorkerPubKey != workerKey || correlation.RequestEventID != receipt.RequestEventID || correlation.RequestPubKey != receipt.RequestPubkey || correlation.DTag != receipt.DTag {
+	if correlation.Method != MaintenanceWorkerRPCMethodScan || correlation.WorkerPubKey != workerKey || correlation.RequestEventID != receipt.RequestEventID || correlation.RequestPubKey != receipt.RequestPubkey || correlation.DTag != receipt.DTag {
 		t.Fatalf("correlation and receipt diverged: correlation=%+v receipt=%+v", correlation, receipt)
 	}
 }

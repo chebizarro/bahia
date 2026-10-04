@@ -31,10 +31,10 @@ func TestContextVMResponseTooLargeToStoreUsesEphemeralWrap(t *testing.T) {
 			publisher := &mockEncryptedPublisher{}
 			transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
 			logs := strings.Repeat("l", tc.payload)
-			transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+			transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 				return map[string]any{"logs": logs}, nil
 			})
-			inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"logs","method":"backup/run","params":{"_meta":{"progressToken":"logs-1"}}}`)
+			inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"logs","method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"logs-1"}}}`)
 			outer := wrapContextVMEvent(t, inner, KindContextVMGiftWrap)
 
 			transport.HandleEvent(context.Background(), outer)
@@ -73,7 +73,7 @@ func TestContextVMTransportAnswersNIP59EphemeralWrapRequests(t *testing.T) {
 	responder := newResponder(t, publisher)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
 	var got ContextVMRequest
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(_ context.Context, request ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(_ context.Context, request ContextVMRequest) (any, error) {
 		got = request
 		return map[string]any{"accepted": true}, nil
 	})
@@ -81,8 +81,8 @@ func TestContextVMTransportAnswersNIP59EphemeralWrapRequests(t *testing.T) {
 	inner := &nostr.Event{
 		Kind:      KindContextVMMessage,
 		CreatedAt: nostr.Now(),
-		Tags:      nostr.Tags{{"p", responder.ServicePubkey()}, {"method", ContextVMMethodBackupRun}},
-		Content:   `{"jsonrpc":"2.0","id":"big","method":"backup/run","params":{"note":"` + strings.Repeat("n", 40_000) + `"}}`,
+		Tags:      nostr.Tags{{"p", responder.ServicePubkey()}, {"method", ContextVMMethodDeploymentRunLogsGet}},
+		Content:   `{"jsonrpc":"2.0","id":"big","method":"deployments/run-logs-get","params":{"note":"` + strings.Repeat("n", 40_000) + `"}}`,
 	}
 	outer, rumor, err := cascontextvm.WrapEventNIP59(ctx, requester, responder.ServicePubkey(), inner, cascontextvm.EphemeralGiftWrap)
 	if err != nil {

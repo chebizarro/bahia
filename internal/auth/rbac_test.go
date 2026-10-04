@@ -196,56 +196,6 @@ func TestRBAC_LoadAuthzContext(t *testing.T) {
 	})
 }
 
-func TestRBAC_CheckOrgAccess(t *testing.T) {
-	orgID := uuid.New()
-	pubkey := "abc123"
-
-	t.Run("has access", func(t *testing.T) {
-		member := &domain.OrgMember{
-			OrgID:  orgID,
-			Pubkey: pubkey,
-			Role:   domain.RoleAdmin,
-		}
-		lookup := &mockMemberLookup{member: member}
-		rbac := NewRBAC(lookup)
-
-		principal := &Principal{
-			Subject: "test",
-			Method:  MethodNIP98,
-			PubKey:  pubkey,
-		}
-
-		err := rbac.CheckOrgAccess(context.Background(), principal, orgID, domain.RoleDeployer)
-		if err != nil {
-			t.Errorf("CheckOrgAccess() error = %v, want nil", err)
-		}
-	})
-
-	t.Run("lacks access", func(t *testing.T) {
-		member := &domain.OrgMember{
-			OrgID:  orgID,
-			Pubkey: pubkey,
-			Role:   domain.RoleViewer,
-		}
-		lookup := &mockMemberLookup{member: member}
-		rbac := NewRBAC(lookup)
-
-		principal := &Principal{
-			Subject: "test",
-			Method:  MethodNIP98,
-			PubKey:  pubkey,
-		}
-
-		err := rbac.CheckOrgAccess(context.Background(), principal, orgID, domain.RoleAdmin)
-		if err == nil {
-			t.Error("CheckOrgAccess() should return error")
-		}
-		if !errors.As(err, new(*AccessDeniedError)) {
-			t.Errorf("CheckOrgAccess() should return AccessDeniedError, got %T", err)
-		}
-	})
-}
-
 func TestAccessDeniedError(t *testing.T) {
 	orgID := uuid.New()
 	err := &AccessDeniedError{

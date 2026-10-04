@@ -69,7 +69,7 @@ describe('encrypted route stores', () => {
       content: expect.objectContaining({ encrypted_value: 'encrypted:super-secret' }) }));
     // Reveal still uses ContextVM
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledTimes(1);
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith(expect.objectContaining({ operation: 'services.secrets.reveal', payload: { service_id: serviceId, secret_id: secretId } }));
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith(expect.objectContaining({ operation: 'services/secrets-reveal', payload: { service_id: serviceId, secret_id: secretId } }));
     expect(intentMock).toHaveBeenCalledWith(expect.objectContaining({ domain: 'secret', op: 'delete' }));
   });
 

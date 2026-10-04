@@ -39,7 +39,7 @@ describe('remaining ContextVM call sites', () => {
     ]);
     expect(readFileSync(join(sourceRoot, 'lib/nostr/assistant.js'), 'utf8')).toMatch(/await request\(\{ \.\.\.built, signal, timeoutMs \}\)/);
     const secrets = readFileSync(join(sourceRoot, 'lib/stores/service-secrets.svelte.js'), 'utf8');
-    expect(secrets).toMatch(/reveal:\s*['"]services\.secrets\.reveal['"]/);
+    expect(secrets).toMatch(/reveal:\s*['"]services\/secrets-reveal['"]/);
     expect([...secrets.matchAll(/encryptedSecretRequest\(/g)]).toHaveLength(2);
   });
 

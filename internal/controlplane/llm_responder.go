@@ -34,11 +34,11 @@ func NewLLMResponder(pool *nostrpool.RelayPool, signer nostr.Signer, logger *zap
 }
 
 func (r *LLMResponder) PublishStatus(ctx context.Context, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, step, message string) error {
-	return r.publish(ctx, true, intent, run, "processing", step, message, nil)
+	return r.publish(ctx, intent, run, "processing", step, message, nil)
 }
 
 func (r *LLMResponder) PublishResult(ctx context.Context, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, status, message string) error {
-	return r.publish(ctx, false, intent, run, status, "completed", message, nil)
+	return r.publish(ctx, intent, run, status, "completed", message, nil)
 }
 
 func (r *LLMResponder) PublishError(ctx context.Context, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, step string, cause error) error {
@@ -46,10 +46,10 @@ func (r *LLMResponder) PublishError(ctx context.Context, intent *domain.LLMDeplo
 	if cause != nil {
 		msg = cause.Error()
 	}
-	return r.publish(ctx, false, intent, run, "error", step, msg, cause)
+	return r.publish(ctx, intent, run, "error", step, msg, cause)
 }
 
-func (r *LLMResponder) publish(ctx context.Context, progress bool, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, status, step, message string, cause error) error {
+func (r *LLMResponder) publish(ctx context.Context, intent *domain.LLMDeploymentIntent, run *domain.LLMDeploymentRun, status, step, message string, cause error) error {
 	if r == nil || r.pool == nil {
 		return fmt.Errorf("LLM responder: %w", ErrResponderNotConfigured)
 	}
@@ -94,20 +94,10 @@ func (r *LLMResponder) publish(ctx context.Context, progress bool, intent *domai
 	if cause != nil {
 		tags = append(tags, nostr.Tag{"error", cause.Error()})
 	}
-	kind := KindContextVMMessage
-	bodyPayload := any(ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: llmContextVMReplyID(intent, requestEventID), Result: content})
-	if progress {
-		kind = KindNIP38Status
-		bodyPayload = content
-		tags = append(nostr.Tags{{"d", "llm-status:" + requestEventID + ":" + step}}, tags...)
-	} else {
-		tags = append(tags, nostr.Tag{ContextVMRoutingTag, ContextVMWireVersion})
-		if cause != nil {
-			bodyPayload = ContextVMJSONRPCResponse{JSONRPC: "2.0", ID: llmContextVMReplyID(intent, requestEventID), Error: &JSONRPCError{Code: -32000, Message: cause.Error()}}
-		}
-	}
-	body, _ := json.Marshal(bodyPayload)
-	ev := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
+	// Both progress and terminal outcomes use bounded NIP-38 status.
+	tags = append(nostr.Tags{{"d", "llm-provision:" + requestEventID}}, tags...)
+	body, _ := json.Marshal(content)
+	ev := &nostr.Event{Kind: KindNIP38Status, CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
 	if err := r.sign(ctx, ev); err != nil {
 		return err
 	}
@@ -138,17 +128,6 @@ func (r *LLMResponder) record(ctx context.Context, ev *nostr.Event, intent *doma
 
 func (r *LLMResponder) sign(ctx context.Context, ev *nostr.Event) error {
 	return SignGoNostrEvent(ctx, r.signer, ev)
-}
-
-func llmContextVMReplyID(intent *domain.LLMDeploymentIntent, fallback string) json.RawMessage {
-	if intent != nil && intent.Metadata != nil {
-		if dTag, ok := intent.Metadata["nostr_d_tag"].(string); ok && dTag != "" {
-			body, _ := json.Marshal(dTag)
-			return body
-		}
-	}
-	body, _ := json.Marshal(fallback)
-	return body
 }
 
 func llmNostrCorrelation(intent *domain.LLMDeploymentIntent) (eventID, pubkey string) {

@@ -9,10 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openagentsinc/bahia/internal/backends/packagebackend"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/openagentsinc/bahia/internal/service"
 )
 
 const checksumRepoHref = "/pulp/api/v3/repositories/file/file/11111111-1111-4111-8111-111111111111/"
@@ -129,16 +127,12 @@ func TestChecksumEvidenceFlowsThroughPackageDriftComparison(t *testing.T) {
 				if !backend.Capabilities().CanObserveDrift {
 					t.Fatal("supported API did not advertise checksums")
 				}
-				svc, err := service.NewPackageRegistryService(config.PackageControlplaneConfig{}, packagebackend.Registry{"primary": backend}, nil, nil, nil)
-				if err != nil {
-					t.Fatal(err)
-				}
 				repo := domain.PackageRepository{Name: "repo", BackendRef: "primary"}
 				artifact := domain.PackageArtifact{BackendPath: "pkg.tgz", SHA256: expected, Status: domain.PackageArtifactStatusAvailable}
-				obs, err := svc.ObserveArtifactDrift(context.Background(), &repo, &artifact)
+				obs, err := backend.ObserveArtifact(context.Background(), repo, artifact)
 				wantError := scenario != "matching" && scenario != "mismatching" && scenario != "absent"
 				if wantError {
-					if err == nil || obs != nil {
+					if err == nil {
 						t.Fatalf("malformed/unsupported response produced observation=%+v error=%v", obs, err)
 					}
 					return
@@ -146,17 +140,10 @@ func TestChecksumEvidenceFlowsThroughPackageDriftComparison(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if obs.Drifted != (scenario != "matching") {
-					t.Fatalf("wrong drift result: %+v", obs)
+				if obs.Exists != (scenario != "absent") || (obs.Exists && obs.SHA256 != strings.ToLower(digest)) {
+					t.Fatalf("wrong backend checksum observation: %+v", obs)
 				}
-				if scenario == "mismatching" && (!strings.Contains(obs.Reason, "expected="+expected) || !strings.Contains(obs.Reason, "observed="+strings.ToLower(digest))) {
-					t.Fatalf("missing verified digest evidence: %+v", obs)
-				}
-				backendObs, err := backend.ObserveArtifact(context.Background(), repo, artifact)
-				if err != nil {
-					t.Fatal(err)
-				}
-				encoded, err := json.Marshal(backendObs)
+				encoded, err := json.Marshal(obs)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -184,16 +171,12 @@ func TestDriftAPIVersionGatesAndExpectedDigestValidation(t *testing.T) {
 				if backend.Capabilities().CanObserveDrift != wantCapability {
 					t.Fatal("incorrect checksum capability")
 				}
-				svc, err := service.NewPackageRegistryService(config.PackageControlplaneConfig{}, packagebackend.Registry{"primary": backend}, nil, nil, nil)
-				if err != nil {
-					t.Fatal(err)
-				}
 				artifact := domain.PackageArtifact{BackendPath: "pkg.tgz", SHA256: strings.Repeat("a", 64), Status: domain.PackageArtifactStatusAvailable}
 				if wantCapability {
 					artifact.SHA256 = ""
 				}
-				obs, err := svc.ObserveArtifactDrift(context.Background(), &domain.PackageRepository{Name: "repo", BackendRef: "primary"}, &artifact)
-				if err == nil || obs != nil {
+				obs, err := backend.ObserveArtifact(context.Background(), domain.PackageRepository{Name: "repo", BackendRef: "primary"}, artifact)
+				if err == nil {
 					t.Fatalf("unverifiable state reported no drift: %+v %v", obs, err)
 				}
 			})

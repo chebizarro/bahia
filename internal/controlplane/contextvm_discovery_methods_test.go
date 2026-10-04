@@ -1,27 +1,28 @@
 package controlplane
 
 import (
+	"reflect"
 	"testing"
 
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"go.uber.org/zap"
 )
 
-// TestDiscoveryAdvertisesOnlyRegisteredContextVMMethods guards bahia-ubg10:
-// every method in discovery control_plane.methods must resolve to a handler on
-// the encrypted ContextVM transport, using the same registration groups that
-// internal/app wires in production.
-func TestDiscoveryAdvertisesOnlyRegisteredContextVMMethods(t *testing.T) {
-	transport := NewEncryptedRequestTransport(nil, newResponder(t, &mockEncryptedPublisher{}), nil, zap.NewNop())
-	RegisterWorkerContextVMHandlers(transport, nil)
-	(&Reactor{}).RegisterMutationContextVMHandlers(transport, nil)
-	RegisterDNSContextVMHandlers(transport, nil, true, nil)
-	RegisterServiceContextVMHandlers(transport, EncryptedServiceHandlersConfig{})
-	RegisterSBOMContextVMHandlers(transport, &fakeSBOMRequestRunner{}, nil)
-
-	for _, method := range nostrpool.DiscoveryContextVMMethods(true) {
-		if transport.contextVMHandlers[method] == nil {
-			t.Errorf("discovery advertises %q but no ContextVM handler is registered", method)
+func TestDiscoveryAdvertisesOnlyInteractiveContextVMMethods(t *testing.T) {
+	want := []string{"assistant/prompt", "assistant/approval", "assistant/cancel", "assistant/reconcile", ContextVMMethodServiceSecretsReveal, ContextVMMethodDeploymentRunLogsGet}
+	for _, dnsEnabled := range []bool{false, true} {
+		if got := nostrpool.DiscoveryContextVMMethods(dnsEnabled); !reflect.DeepEqual(got, want) {
+			t.Fatalf("discovery methods = %v, want %v", got, want)
 		}
+	}
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, &mockEncryptedPublisher{}), nil, zap.NewNop())
+	NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{}).Register(transport)
+	for _, method := range want[4:] {
+		if transport.contextVMHandlers[method] == nil {
+			t.Errorf("retained method %q has no handler", method)
+		}
+	}
+	if len(transport.contextVMHandlers) != 2 {
+		t.Fatalf("non-interactive ContextVM handlers registered: %v", transport.contextVMHandlers)
 	}
 }

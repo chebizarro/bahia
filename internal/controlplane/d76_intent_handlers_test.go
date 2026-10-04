@@ -137,18 +137,7 @@ func TestD76RouteAttachIntentDualDispatchReplayConflictUnauthorized(t *testing.T
 		NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()),
 		IntentProcessorConfig{EnabledDomains: map[string]bool{"deployment": true}}, zap.NewNop())
 	p.RegisterHandler("deployment", handler)
-	f.handlers.intentProcessor = p
 	before := len(f.intentRepo.intents)
-	initialResult, err := f.handlers.routeAttach(context.Background(), request)
-	require.NoError(t, err)
-	require.NotEmpty(t, initialResult.(map[string]any)["intent_id"])
-	require.Len(t, f.intentRepo.intents, before+1)
-	require.Equal(t, "accepted", tagValueNostr(statuses.events[0].Tags, "status"))
-	replayResult, err := f.handlers.routeAttach(context.Background(), request)
-	require.NoError(t, err)
-	require.Equal(t, initialResult.(map[string]any)["intent_id"], replayResult.(map[string]any)["intent_id"])
-	require.Len(t, f.intentRepo.intents, before+1)
-
 	content := map[string]any{}
 	require.NoError(t, json.Unmarshal(request.RPC.Params, &content))
 	makeIntent := func(actor string) *Intent {
@@ -158,7 +147,7 @@ func TestD76RouteAttachIntentDualDispatchReplayConflictUnauthorized(t *testing.T
 	}
 	denied := makeIntent("known-denied")
 	require.ErrorContains(t, p.ProcessInProcess(context.Background(), denied), "insufficient permission")
-	require.Len(t, f.intentRepo.intents, before+1)
+	require.Len(t, f.intentRepo.intents, before)
 	stale := makeIntent(actor)
 	stale.Content = map[string]any{}
 	for key, value := range content {
@@ -167,7 +156,7 @@ func TestD76RouteAttachIntentDualDispatchReplayConflictUnauthorized(t *testing.T
 	stale.Content["expected_updated_at"] = "2020-01-01T00:00:00Z"
 	require.Error(t, p.ProcessInProcess(context.Background(), stale))
 	require.Equal(t, "conflict", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
-	require.Len(t, f.intentRepo.intents, before+1)
+	require.Len(t, f.intentRepo.intents, before)
 	currentRevision := f.current.UpdatedAt.UTC().Format(time.RFC3339Nano)
 	accepted := makeIntent(actor)
 	accepted.Content = map[string]any{}
@@ -177,7 +166,7 @@ func TestD76RouteAttachIntentDualDispatchReplayConflictUnauthorized(t *testing.T
 	accepted.Content["expected_updated_at"] = currentRevision
 	accepted.Content["intent_id"] = accepted.IntentID
 	require.NoError(t, p.ProcessInProcess(context.Background(), accepted))
-	require.Len(t, f.intentRepo.intents, before+2)
+	require.Len(t, f.intentRepo.intents, before+1)
 }
 
 func TestD76DeploymentPreviewIntentPublishesBoundedPlanAndReplays(t *testing.T) {
@@ -223,17 +212,19 @@ func TestD76DeploymentPreviewIntentPublishesBoundedPlanAndReplays(t *testing.T) 
 	requestEvent := makeContextVMEvent(t, testRequesterKey, "{}")
 	actor := requestEvent.PubKey.Hex()
 	p, statuses := d76Processor(t, "deployment", actor, NewDeploymentIntentHandler(cfg, nil))
-	cfg.IntentProcessor = p
-	handlers := newEncryptedServiceHandlers(cfg)
 	params, err := json.Marshal(dto.ServiceDeployPreviewRequest{
 		ServiceID: serviceID, EnvironmentID: environmentID, DeploymentUnitID: &unitID,
 		ArtifactID: artifactID, ManagedRuntimeConfig: managed,
 	})
 	require.NoError(t, err)
-	request := ContextVMRequest{Event: requestEvent, RPC: ContextVMJSONRPCRequest{Params: params}}
-	result, err := handlers.previewDeploy(context.Background(), request)
-	require.NoError(t, err)
-	require.NotEmpty(t, result.(map[string]any)["desired_state_hash"])
+	content := map[string]any{}
+	require.NoError(t, json.Unmarshal(params, &content))
+	preview := &Intent{Event: requestEvent, Domain: "deployment", Op: "preview", OrgID: orgID,
+		IntentID: requestEvent.ID.Hex(), Coordinate: "deployment-preview:" + serviceID.String() + ":" + environmentID.String(),
+		Content: content, Actor: actor}
+	require.NoError(t, p.ProcessInProcess(context.Background(), preview))
+	result := preview.Result
+	require.NotEmpty(t, result["desired_state_hash"])
 	require.Empty(t, intentRepo.intents, "preview must not create a deployment")
 	require.Len(t, statuses.events, 1)
 	var status map[string]any
@@ -244,12 +235,8 @@ func TestD76DeploymentPreviewIntentPublishesBoundedPlanAndReplays(t *testing.T) 
 	require.NotContains(t, statuses.events[0].Content, strings.Repeat("x", 100))
 	require.NotContains(t, status["data"].(map[string]any), "desired_state")
 	require.Nil(t, p.ProcessedIntent(requestEvent.ID.Hex()).Result, "full preview must not be persisted in the plaintext marker")
-	replayResult, err := handlers.previewDeploy(context.Background(), request)
-	require.NoError(t, err)
-	require.Equal(t, result.(map[string]any)["desired_state_hash"], replayResult.(map[string]any)["desired_state_hash"])
+	require.NoError(t, p.ProcessInProcess(context.Background(), preview))
 	require.Len(t, statuses.events, 1)
-	content := map[string]any{}
-	require.NoError(t, json.Unmarshal(params, &content))
 	denied := &Intent{Domain: "deployment", Op: "preview", OrgID: orgID,
 		IntentID: uuid.NewString(), Coordinate: "deployment-preview:" + serviceID.String() + ":" + environmentID.String(),
 		Content: content, Actor: "known-denied"}
@@ -266,77 +253,4 @@ func TestD76DeploymentPreviewIntentPublishesBoundedPlanAndReplays(t *testing.T) 
 	require.NoError(t, p.ProcessInProcess(context.Background(), relay))
 	require.NotEmpty(t, relay.Result["desired_state_hash"])
 	require.Empty(t, intentRepo.intents)
-}
-
-func TestD76ArtifactContextVMDualDispatch(t *testing.T) {
-	orgID, serviceID, environmentID, buildID := testOrgID(), uuid.New(), uuid.New(), uuid.New()
-	event := makeContextVMEvent(t, testRequesterKey, "{}")
-	registry := &fakeEncryptedRegistryMutations{environments: map[uuid.UUID]*domain.Environment{
-		environmentID: {ID: environmentID, OrgID: orgID},
-	}}
-	services := &fakeEncryptedServiceRepo{services: map[uuid.UUID]*domain.Service{
-		serviceID: {ID: serviceID, OrgID: orgID},
-	}}
-	p, statuses := d76Processor(t, "artifact", event.PubKey.Hex(), NewArtifactIntentHandler(registry, services))
-	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{
-		IntentProcessor: p, Services: services, Registry: registry, RBAC: encryptedAdminRBAC(t, orgID),
-	})
-	register, err := json.Marshal(dto.RegisterArtifactRequest{
-		BuildID: buildID, ServiceID: serviceID, ImageRepo: "registry.example/api",
-		ImageTag: "v1", ImageDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-	})
-	require.NoError(t, err)
-	registerReq := ContextVMRequest{Event: event, RPC: ContextVMJSONRPCRequest{Params: register}}
-	_, err = h.RegisterArtifact(context.Background(), registerReq)
-	require.NoError(t, err)
-	require.Len(t, registry.artifacts, 1)
-	require.Len(t, statuses.events, 1)
-	_, err = h.RegisterArtifact(context.Background(), registerReq)
-	require.NoError(t, err)
-	require.Len(t, registry.artifacts, 1)
-
-	importRaw, err := json.Marshal(dto.ImportObservedArtifactRequest{
-		ServiceID: serviceID, EnvironmentID: environmentID, ImageRepo: "registry.example/api",
-		ImageTag: "v2", ImageDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-	})
-	require.NoError(t, err)
-	importReq := ContextVMRequest{Event: makeContextVMEvent(t, testRequesterKey, "{\"import\":true}"), RPC: ContextVMJSONRPCRequest{Params: importRaw}}
-	_, err = h.ImportObservedArtifact(context.Background(), importReq)
-	require.NoError(t, err)
-	require.Len(t, registry.importCalls, 1)
-	require.Len(t, statuses.events, 2)
-	_, err = h.ImportObservedArtifact(context.Background(), importReq)
-	require.NoError(t, err)
-	require.Len(t, registry.importCalls, 1)
-}
-
-func TestD76OperatorContextVMDualDispatch(t *testing.T) {
-	event := makeContextVMEvent(t, testRequesterKey, "{}")
-	actor := event.PubKey.Hex()
-	adoption := &stubAdoptionOperatorService{}
-	p, statuses := d76Processor(t, "adoption", actor, NewAdoptionIntentHandler(adoption, []string{actor}))
-	h := NewOperatorContextVMHandlers(OperatorContextVMHandlersConfig{
-		Adoption: adoption, AdoptionAuthorizedPubkeys: []string{actor}, IntentProcessor: p,
-	})
-	request := ContextVMRequest{Event: event, RPC: ContextVMJSONRPCRequest{Params: json.RawMessage("{\"targets\":[{\"name\":\"prod\",\"endpoint_ref\":\"docker-prod\"}],\"import_all\":true}")}}
-	_, err := h.AdoptionImport(context.Background(), request)
-	require.NoError(t, err)
-	require.True(t, adoption.importCalled)
-	require.Len(t, statuses.events, 1)
-	adoption.importCalled = false
-	_, err = h.AdoptionImport(context.Background(), request)
-	require.NoError(t, err)
-	require.False(t, adoption.importCalled)
-
-	dns := &recordingDNSOperator{}
-	dnsProcessor, dnsStatuses := d70Processor(t, "dns", actor, NewDNSIntentHandler(dns, nil))
-	dnsHandler := dnsContextVMHandlers{operator: dns, enabled: true, intentProcessor: dnsProcessor}
-	dnsRequest := ContextVMRequest{Event: event, RPC: ContextVMJSONRPCRequest{Params: json.RawMessage("{\"zone\":\"prod.example\"}")}}
-	_, err = dnsHandler.driftRemediate(context.Background(), dnsRequest)
-	require.NoError(t, err)
-	require.Equal(t, []string{"prod.example"}, dns.reconciled)
-	require.Len(t, dnsStatuses.events, 1)
-	_, err = dnsHandler.driftRemediate(context.Background(), dnsRequest)
-	require.NoError(t, err)
-	require.Len(t, dns.reconciled, 1)
 }

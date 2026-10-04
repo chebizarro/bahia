@@ -107,8 +107,7 @@ type Intent struct {
 	// ExpectedUpdatedAt is the canonical record's updated_at revision.
 	ExpectedUpdatedAt *time.Time
 	// Actor is the pubkey that originated the intent. For relay-path intents
-	// this is Event.PubKey; for in-process dispatch it is the ContextVM/REST
-	// caller's pubkey.
+	// this is Event.PubKey; for in-process MCP dispatch it is the caller's pubkey.
 	Actor string
 }
 
@@ -119,7 +118,7 @@ type IntentProcessorConfig struct {
 	EnabledDomains map[string]bool
 }
 
-// IntentProcessor is the shared pipeline for relay and in-process intents.
+// IntentProcessor is the pipeline for signed relay and in-process MCP intents.
 // See design §3.2 for the seven processing steps.
 type IntentProcessor struct {
 	mu       sync.RWMutex
@@ -201,13 +200,9 @@ func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Even
 	return p.process(ctx, intent, false)
 }
 
-// ProcessInProcess handles an intent from the dual-dispatch path (ContextVM/
-// REST/MCP). The caller has already authorized the request through the
-// existing encryptedTenantAuthorizer or REST auth middleware. The actor is the
-// original requester's pubkey, not the daemon's.
-//
-// This path shares the same pipeline and idempotency store as the relay path,
-// preventing double application (§4.1).
+// ProcessInProcess handles MCP-originated intents through the same pipeline
+// and idempotency store as signed relay intents. The caller must already be
+// authenticated and authorized; Actor identifies that caller, not the daemon.
 func (p *IntentProcessor) ProcessInProcess(ctx context.Context, intent *Intent) error {
 	if raw, ok := intent.Content["expected_updated_at"]; ok {
 		revision, err := parseIntentRevision(raw)
@@ -668,17 +663,10 @@ var RegisteredIntentDomains = []string{
 }
 
 // BuildEnabledDomains enables every registered domain except explicit opt-outs.
-// A non-empty deprecated allowlist retains the Phase 3 selection semantics.
-func BuildEnabledDomains(disabled, legacyAllowlist []string) map[string]bool {
+func BuildEnabledDomains(disabled []string) map[string]bool {
 	m := make(map[string]bool, len(RegisteredIntentDomains))
-	allowed := make(map[string]bool, len(legacyAllowlist))
-	for _, domain := range legacyAllowlist {
-		allowed[strings.ToLower(strings.TrimSpace(domain))] = true
-	}
 	for _, domain := range RegisteredIntentDomains {
-		if len(legacyAllowlist) == 0 || allowed[domain] {
-			m[domain] = true
-		}
+		m[domain] = true
 	}
 	for _, domain := range disabled {
 		delete(m, strings.ToLower(strings.TrimSpace(domain)))

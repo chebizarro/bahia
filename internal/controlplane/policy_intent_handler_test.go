@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fiatjaf.com/nostr"
 	"sync"
 	"testing"
 	"time"
+
+	"fiatjaf.com/nostr"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -192,9 +193,9 @@ func TestPolicyIntentHandler_CreateViaIntent(t *testing.T) {
 	assert.Equal(t, policyID, rec.policy.ID)
 }
 
-// TestPolicyIntentHandler_UpdateViaContextVM simulates the dual-dispatch
-// path where a ContextVM update routes through the intent processor.
-func TestPolicyIntentHandler_UpdateViaContextVM(t *testing.T) {
+// TestPolicyIntentHandler_UpdatePublishesOnce verifies the intent handler's
+// canonical publication for an update.
+func TestPolicyIntentHandler_UpdatePublishesOnce(t *testing.T) {
 	repo := newMemPolicyRepo()
 	pub := &capturePublisher{}
 	handler := testPolicyHandler(repo, pub)
@@ -621,7 +622,7 @@ func TestPolicyIntentHandler_PermissionFor(t *testing.T) {
 	assert.Equal(t, domain.PermWritePolicies, handler.PermissionFor("delete"))
 }
 
-func TestPolicyEvaluateIntentMatchesContextVMDecision(t *testing.T) {
+func TestPolicyEvaluateIntentPublishesDecision(t *testing.T) {
 	ctx := context.Background()
 	artifactID, environmentID := uuid.New(), uuid.New()
 	repo := &testPolicyRepo{envPolicies: []domain.DeploymentPolicy{{
@@ -630,12 +631,6 @@ func TestPolicyEvaluateIntentMatchesContextVMDecision(t *testing.T) {
 		Rules:       []domain.PolicyRule{{Type: domain.RuleRequireSignature}},
 	}}}
 	policyService := service.NewPolicyService(repo, &testSignatureRepo{hasVerifiedSignature: false}, &testSBOMRepo{}, zap.NewNop())
-	params, err := json.Marshal(map[string]string{"artifact_id": artifactID.String(), "environment_id": environmentID.String()})
-	require.NoError(t, err)
-	reactor := NewReactor(Config{}, nil, nil, nil, zap.NewNop(), WithPolicyService(policyService))
-	legacy, err := reactor.handlePolicyEvaluate(ctx, ContextVMRequest{RPC: ContextVMJSONRPCRequest{Params: params}})
-	require.NoError(t, err)
-
 	published := &statusCollector{}
 	status := NewIntentStatusPublisher(published.publish, &testSigner{}, zap.NewNop())
 	processor := NewIntentProcessor(NewTrustSet([]string{testPubkey}, zap.NewNop()), openTestStore(t), status,
@@ -655,7 +650,6 @@ func TestPolicyEvaluateIntentMatchesContextVMDecision(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(ev.Content), &payload))
 	require.Equal(t, "evaluated", payload.Result)
-	require.Equal(t, *legacy.(*domain.PolicyEvaluation), payload.Evaluation)
 	require.False(t, payload.Evaluation.Allowed)
 	require.Equal(t, 1, payload.Evaluation.Blockers)
 

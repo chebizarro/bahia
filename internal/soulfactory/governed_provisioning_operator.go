@@ -102,10 +102,10 @@ func (p *ProductionGovernedProvisioner) governedForState(state *productionProvis
 	}, port, productionProjectionPort{steps: port})
 }
 
-// ExecuteProvisioningCommand reconstructs the production drivers from durable
+// executeProvisioningCommand reconstructs the production drivers from durable
 // inputs. Callers must authorize the operator; they cannot supply a replacement
 // spec, runtime, run identity, or credentials through this surface.
-func (p *ProductionGovernedProvisioner) ExecuteProvisioningCommand(ctx context.Context, command saga.Command) (*saga.Report, error) {
+func (p *ProductionGovernedProvisioner) executeProvisioningCommand(ctx context.Context, command saga.Command) (*saga.Report, error) {
 	command.RequestID = strings.TrimSpace(command.RequestID)
 	if command.RequestID == "" {
 		return nil, errors.New("request id is required")

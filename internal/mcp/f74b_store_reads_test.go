@@ -21,7 +21,7 @@ func TestF74bMCPStoreReadParityWithoutDatabase(t *testing.T) {
 	fixture := attachCanonicalMCPFixture(t, server)
 	pub := nostrpool.NewF74bCanonicalPublisher(fixture.projector, fixture.confidentialEncryptor(t, server))
 	created := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
-	packageIntent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: "request-event-1", Operation: domain.PackageOperationRepositoryApply, RepositoryName: "libs", RequesterPubkey: "operator", Status: domain.PackageIntentStatusSucceeded, CreatedAt: created, UpdatedAt: created, ResultPayload: map[string]any{"status": "succeeded"}}
+	packageIntent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: "request-event-1", Operation: domain.PackageOperation("repository_apply"), RepositoryName: "libs", RequesterPubkey: "operator", Status: domain.PackageIntentStatusSucceeded, CreatedAt: created, UpdatedAt: created, ResultPayload: map[string]any{"status": "succeeded"}}
 	require.NoError(t, pub.PublishPackageIntent(ctx, packageIntent))
 	signedIntent := &domain.PackageIntentState{RecordType: "signed-intent", ID: uuid.New().String(), Operation: "repository-apply", RequesterPubkey: "operator", Status: "succeeded", UpdatedAt: created}
 	require.NoError(t, pub.PublishSignedPackageIntent(ctx, signedIntent))

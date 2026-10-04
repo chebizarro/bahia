@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -11,7 +10,6 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
-	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/stretchr/testify/require"
@@ -235,70 +233,6 @@ func TestD79StatusPublishFailureReplaysWithoutSecondMutation(t *testing.T) {
 	require.Equal(t, "accepted", tagValueNostr(statuses.events[0].Tags, "status"))
 }
 
-func TestD79MLContextVMOperationsDualAndLegacyDispatch(t *testing.T) {
-	actor := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	registry := &d79MLRegistry{}
-	p, statuses := d70Processor(t, "ml", actor, NewMLIntentHandler(registry))
-	transport := NewEncryptedRequestTransport(nil, nil, []string{actor}, zap.NewNop())
-	RegisterMLRegistryContextVMHandlers(transport, registry, NewFleetOperatorGate([]string{actor}), p)
-	for _, method := range []string{"ml/model-import", ContextVMMethodMLRecipeRun, "ml/inference-deploy", "ml/inference-approval", "ml/inference-rollback"} {
-		require.Contains(t, transport.contextVMHandlers, method)
-	}
-	event := makeContextVMEvent(t, testRequesterKey, "{}")
-	params := json.RawMessage(`{"model":"model:weather","source":"huggingface","source_uri":"hf://weather/model"}`)
-	request := ContextVMRequest{Event: event, RPC: ContextVMJSONRPCRequest{Params: params}}
-	result, err := transport.contextVMHandlers["ml/model-import"](t.Context(), request)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, 1, registry.writes)
-	require.Equal(t, "accepted", tagValueNostr(statuses.events[0].Tags, "status"))
-	_, err = transport.contextVMHandlers["ml/model-import"](t.Context(), request)
-	require.NoError(t, err)
-	require.Equal(t, 1, registry.writes)
-	legacy := mlRegistryContextVMHandlers{registry: registry}
-	legacyRequest := ContextVMRequest{Event: makeContextVMEvent(t, testRequesterKey, "{\"id\":2}"), RPC: ContextVMJSONRPCRequest{Params: json.RawMessage(`{"model":"model:climate","source":"huggingface","source_uri":"hf://climate/model"}`)}}
-	_, err = legacy.operation(t.Context(), legacyRequest, "model-import")
-	require.NoError(t, err)
-	require.Equal(t, 2, registry.writes)
-}
-
-func TestD79BuildRequestIntentAndLegacyDispatch(t *testing.T) {
-	actor := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	payload := validArcanaBuildRequest()
-	secret := &domain.ServiceSecret{ID: payload.RepositoryCredentialRef, ServiceID: payload.ServiceID}
-	starter, builds := &buildTestStarter{}, &buildTestRegistry{}
-	serviceRepo := buildTestServices{service: &domain.Service{ID: payload.ServiceID, OrgID: testOrgID(), ArtifactRepo: payload.ArtifactRepo, Repository: &domain.RepositoryRef{RepoCoordinate: ArcanaRepositoryCoordinate}}}
-	h := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{Starter: starter, Registry: builds, Builds: builds, Services: serviceRepo, Secrets: buildTestCredentials{secret: secret}, RBAC: auth.NewRBAC(buildTestMembers{})})
-	p, statuses := d76Processor(t, "build", actor, NewBuildIntentHandler(h))
-	h.intentProcessor = p
-	pubkey, err := nostr.PubKeyFromHex(actor)
-	require.NoError(t, err)
-	params, err := json.Marshal(payload)
-	require.NoError(t, err)
-	request := ContextVMRequest{Event: &nostr.Event{ID: nostr.ID{1}, PubKey: pubkey}, RPC: ContextVMJSONRPCRequest{Params: params}}
-	result, err := h.RequestBuild(t.Context(), request)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, 1, starter.calls)
-	require.Equal(t, 1, builds.calls)
-	require.Equal(t, "accepted", tagValueNostr(statuses.events[0].Tags, "status"))
-	_, err = h.RequestBuild(t.Context(), request)
-	require.NoError(t, err)
-	require.Equal(t, 1, starter.calls)
-	intent := &Intent{Event: request.Event, Domain: "build", Op: "request", OrgID: testOrgID(), IntentID: request.Event.ID.Hex(), Coordinate: "build-request:" + payload.ServiceID.String(), Actor: actor, Content: map[string]any{"service_id": payload.ServiceID.String(), "git_ref": "different"}}
-	require.Error(t, p.ProcessInProcess(t.Context(), intent))
-	require.Equal(t, "conflict", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
-	denied := *intent
-	denied.IntentID = uuid.NewString()
-	denied.Actor = "known-denied"
-	require.ErrorContains(t, p.ProcessInProcess(t.Context(), &denied), "insufficient permission")
-	require.Equal(t, "rejected", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
-	h.intentProcessor = nil
-	_, err = h.RequestBuild(t.Context(), request)
-	require.NoError(t, err)
-	require.Equal(t, 1, starter.calls)
-}
-
 func TestD79AdoptionScanStatusBoundedAndReplay(t *testing.T) {
 	adoption := &stubAdoptionOperatorService{scanResp: []service.AdoptionPreview{{Target: service.AdoptionTarget{Name: "prod", EndpointRef: "docker-prod"}, Containers: []service.AdoptionPreviewContainer{{Discovered: runtime.DiscoveredContainer{ContainerID: "container-1", ContainerName: "api", Environment: map[string]string{"SECRET": "hidden"}}, SafeEnvironment: map[string]string{"APP": "prod"}, RedactedEnvironmentKeys: []string{"SECRET"}, Adoptable: true}}}}}
 	p, statuses := d76Processor(t, "adoption", testPubkey, NewAdoptionIntentHandler(adoption, []string{testPubkey}))
@@ -320,30 +254,6 @@ func TestD79AdoptionScanStatusBoundedAndReplay(t *testing.T) {
 	denied.Actor = "known-denied"
 	require.ErrorContains(t, p.ProcessInProcess(t.Context(), &denied), "authorized adoption list")
 	require.Equal(t, "rejected", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
-}
-
-func TestD79AdoptionScanContextVMDualAndLegacyDispatch(t *testing.T) {
-	actor := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	adoption := &stubAdoptionOperatorService{scanResp: []service.AdoptionPreview{{
-		Target:     service.AdoptionTarget{Name: "prod", EndpointRef: "docker-prod"},
-		Containers: []service.AdoptionPreviewContainer{{Discovered: runtime.DiscoveredContainer{ContainerID: "container-1"}}},
-	}}}
-	p, statuses := d76Processor(t, "adoption", actor, NewAdoptionIntentHandler(adoption, []string{actor}))
-	dual := NewOperatorContextVMHandlers(OperatorContextVMHandlersConfig{Adoption: adoption, AdoptionAuthorizedPubkeys: []string{actor}, IntentProcessor: p})
-	request := ContextVMRequest{Event: makeContextVMEvent(t, testRequesterKey, "{}"), RPC: ContextVMJSONRPCRequest{Params: json.RawMessage(`{"targets":[{"name":"prod","endpoint_ref":"docker-prod"}],"limit":1}`)}}
-	result, err := dual.AdoptionScan(t.Context(), request)
-	require.NoError(t, err)
-	require.Contains(t, result.(map[string]any), "findings")
-	require.Equal(t, "accepted", tagValueNostr(statuses.events[0].Tags, "status"))
-	adoption.scanCalled = false
-	_, err = dual.AdoptionScan(t.Context(), request)
-	require.NoError(t, err)
-	require.False(t, adoption.scanCalled)
-	legacy := NewOperatorContextVMHandlers(OperatorContextVMHandlersConfig{Adoption: adoption, AdoptionAuthorizedPubkeys: []string{actor}})
-	legacyResult, err := legacy.AdoptionScan(t.Context(), request)
-	require.NoError(t, err)
-	require.NotNil(t, legacyResult)
-	require.True(t, adoption.scanCalled)
 }
 
 func TestD79AdoptionScanOversizedFindingAdvancesBoundedPage(t *testing.T) {
@@ -370,45 +280,6 @@ func TestD79AdoptionScanOversizedFindingAdvancesBoundedPage(t *testing.T) {
 	require.NoError(t, p.ProcessInProcess(t.Context(), second))
 	require.Equal(t, 2, second.Result["next_offset"])
 	require.Equal(t, false, second.Result["truncated"])
-}
-
-func TestD79ToolApprovalIntentAcceptedReplayConflictAndLegacy(t *testing.T) {
-	actor := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	provisionID := uuid.New()
-	repo := newAtomicToolApprovalRepo(provisionID, domain.ToolProvisionStatusAwaitingApproval)
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{actor}}, nil, nil, nil, zap.NewNop(), WithToolProvisioningRepository(repo))
-	p, statuses := d70Processor(t, "tool", actor, NewToolIntentHandler(reactor))
-	reactor.intentProcessor = p
-	event := toolApprovalEvent(t, testRequesterKey, "d79", provisionID, "approve")
-	request := toolApprovalContextVMRequest(t, event)
-	_, err := reactor.handleToolApprovalContextVM(t.Context(), request)
-	require.NoError(t, err)
-	_, applied, logs, _ := repo.counts()
-	require.Equal(t, 1, applied)
-	require.Equal(t, 1, logs)
-	require.Equal(t, "accepted", tagValueNostr(statuses.events[0].Tags, "status"))
-	_, err = reactor.handleToolApprovalContextVM(t.Context(), request)
-	require.NoError(t, err)
-	_, applied, _, _ = repo.counts()
-	require.Equal(t, 1, applied)
-	conflict := d70Intent("tool", "approval-response", "tool-approval:"+provisionID.String(), actor, map[string]any{"intent_id": provisionID.String(), "action": "reject"})
-	conflict.IntentID = event.ID.Hex()
-	require.Error(t, p.ProcessInProcess(t.Context(), conflict))
-	require.Equal(t, "conflict", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
-	denied := *conflict
-	denied.IntentID = uuid.NewString()
-	denied.Actor = "known-non-fleet-principal"
-	require.ErrorContains(t, p.ProcessInProcess(t.Context(), &denied), "insufficient permission")
-	require.Equal(t, "rejected", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
-	competing := *conflict
-	competing.IntentID = uuid.NewString()
-	competing.Event = event
-	require.ErrorContains(t, p.ProcessInProcess(t.Context(), &competing), "conflicts with current provisioning state")
-	require.Equal(t, "conflict", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
-	legacyRepo := newAtomicToolApprovalRepo(uuid.New(), domain.ToolProvisionStatusAwaitingApproval)
-	legacy := NewReactor(Config{AuthorizedPubkeys: []string{actor}}, nil, nil, nil, zap.NewNop(), WithToolProvisioningRepository(legacyRepo))
-	_, err = legacy.handleToolApprovalContextVM(t.Context(), toolApprovalContextVMRequest(t, toolApprovalEvent(t, testRequesterKey, "legacy", legacyRepo.intent.ID, "reject")))
-	require.NoError(t, err)
 }
 
 func TestD79ToolApprovalRejectIntent(t *testing.T) {

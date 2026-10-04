@@ -291,10 +291,9 @@ func TestPackageIntentHandler_RepositoryApplyViaIntent(t *testing.T) {
 	}
 }
 
-// TestPackageIntentHandler_IntentAndContextVMProduceIdenticalState verifies
-// that the same mutation routed via relay intent and via in-process ContextVM
-// dual dispatch produces the same final repository state.
-func TestPackageIntentHandler_IntentAndContextVMProduceIdenticalState(t *testing.T) {
+// TestPackageIntentHandler_RelayAndInProcessProduceIdenticalState verifies
+// that relay and MCP in-process intents reconcile to the same state.
+func TestPackageIntentHandler_RelayAndInProcessProduceIdenticalState(t *testing.T) {
 	f := newPkgIntentFixture(t)
 	ctx := t.Context()
 
@@ -311,7 +310,7 @@ func TestPackageIntentHandler_IntentAndContextVMProduceIdenticalState(t *testing
 		t.Fatal("repo not created via relay intent")
 	}
 
-	// Update via in-process dispatch (dual dispatch path from ContextVM).
+	// Update via the MCP in-process intent path.
 	intent2 := &Intent{
 		Domain:     "package",
 		Op:         "repository-apply",
@@ -342,60 +341,6 @@ func TestPackageIntentHandler_IntentAndContextVMProduceIdenticalState(t *testing
 	}
 	if repo1.Name != repo2.Name || repo2.Name != "shared-repo" {
 		t.Errorf("names differ: relay=%q, inproc=%q", repo1.Name, repo2.Name)
-	}
-}
-
-// TestPackageIntentHandler_LegacyPathPublish verifies that when the package
-// intent domain is NOT enabled, the legacy ContextVM path still works.
-// This tests Rule 3: "legacy path must still publish with intents disabled."
-func TestPackageIntentHandler_LegacyPathPublish(t *testing.T) {
-	logger := zap.NewNop()
-
-	_, fleetPub := testNostrKeypair()
-
-	store := newPkgIntentStore()
-	backend, _ := filesystem_mock.New(filesystem_mock.Config{RootDir: t.TempDir()})
-	pkgSvc, _ := service.NewPackageRegistryService(
-		config.PackageControlplaneConfig{AllowFileSource: true},
-		packagebackend.Registry{"test": backend},
-		store, nil, logger,
-	)
-
-	// Create an intent processor with the package domain DISABLED.
-	trustSet := NewTrustSet([]string{fleetPub}, logger)
-	processor := NewIntentProcessor(
-		trustSet, nil, nil,
-		IntentProcessorConfig{EnabledDomains: map[string]bool{}}, // package NOT enabled
-		logger,
-	)
-	// The handler is NOT registered with the processor.
-
-	// Verify packageIntentEnabled returns false.
-	if processor.Handler("package") != nil {
-		t.Fatal("expected no package handler registered")
-	}
-
-	// Legacy path: directly call the service, which still works.
-	ctx := t.Context()
-	repo, err := pkgSvc.EnsureRepository(ctx, &domain.PackageRepository{
-		Name:                   "legacy-repo",
-		Format:                 domain.PackageRepositoryFormatNPM,
-		BackendRef:             "test",
-		BackendType:            domain.PackageBackendFilesystemMock,
-		ExternalRepositoryName: "legacy-repo",
-	}, nil)
-	if err != nil {
-		t.Fatalf("legacy EnsureRepository failed: %v", err)
-	}
-	if repo.Status != domain.PackageRepositoryStatusReady {
-		t.Errorf("legacy repo not ready: %v", repo.Status)
-	}
-
-	// In legacy mode the service returns the repo but doesn't persist to the
-	// projection (the projector would handle that via cp-state events). Verify
-	// the service itself returned a valid repo.
-	if repo.ID == uuid.Nil {
-		t.Fatal("legacy repo should have an assigned ID")
 	}
 }
 

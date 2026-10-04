@@ -81,7 +81,7 @@ func (s *ContextVMHygieneObservationSource) RegisterMaintenanceRequest(c control
 		return nil, fmt.Errorf("hygiene observation source is not configured")
 	}
 	c.Method = strings.TrimSpace(c.Method)
-	if c.Method != controlplane.ContextVMMethodMaintenanceScan && c.Method != controlplane.ContextVMMethodMaintenancePressure {
+	if c.Method != controlplane.MaintenanceWorkerRPCMethodScan && c.Method != controlplane.MaintenanceWorkerRPCMethodPressure {
 		return nil, fmt.Errorf("unsupported hygiene observation method %q", c.Method)
 	}
 	c.WorkerPubKey = strings.ToLower(strings.TrimSpace(c.WorkerPubKey))
@@ -195,9 +195,9 @@ func (s *ContextVMHygieneObservationSource) HandleContextVMResponse(_ context.Co
 	}
 
 	switch pending.correlation.Method {
-	case controlplane.ContextVMMethodMaintenanceScan:
+	case controlplane.MaintenanceWorkerRPCMethodScan:
 		s.consumeScan(pending, response.Result, receivedAt)
-	case controlplane.ContextVMMethodMaintenancePressure:
+	case controlplane.MaintenanceWorkerRPCMethodPressure:
 		s.consumePressure(pending, response.Result, receivedAt)
 	}
 }

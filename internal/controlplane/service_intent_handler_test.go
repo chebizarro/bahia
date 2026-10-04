@@ -257,7 +257,7 @@ func TestServiceIntentHandler_CreateViaRelayIntent(t *testing.T) {
 	}
 }
 
-func TestServiceIntentHandler_UpdateViaContextVM_ProducesIdenticalState(t *testing.T) {
+func TestServiceIntentHandler_RelayAndInProcessProduceIdenticalState(t *testing.T) {
 	f := newSvcIntentFixture(t)
 	ctx := context.Background()
 
@@ -276,7 +276,7 @@ func TestServiceIntentHandler_UpdateViaContextVM_ProducesIdenticalState(t *testi
 		t.Fatalf("create via relay failed: %v", err)
 	}
 
-	// Update via in-process dispatch (simulating ContextVM dual dispatch).
+	// Update via the MCP in-process intent path.
 	intent := &Intent{
 		Domain:     "service",
 		Op:         "update",
@@ -304,7 +304,7 @@ func TestServiceIntentHandler_UpdateViaContextVM_ProducesIdenticalState(t *testi
 		t.Fatal("service not found after update")
 	}
 	if stored.Name != "api-v2" {
-		t.Errorf("expected name 'api-v2' after ContextVM update, got %q", stored.Name)
+		t.Errorf("expected name 'api-v2' after in-process update, got %q", stored.Name)
 	}
 }
 
@@ -649,6 +649,6 @@ func TestServiceIntentHandler_DualDispatch_LevelTriggeredReconciliation(t *testi
 	// State should be unchanged.
 	stored, _ = f.repo.GetByID(ctx, svc.ID)
 	if stored == nil || stored.Name != "api" {
-		t.Error("service state changed unexpectedly after dual dispatch")
+		t.Error("service state changed unexpectedly after relay reconciliation")
 	}
 }

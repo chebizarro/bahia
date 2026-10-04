@@ -1,7 +1,6 @@
 package dto
 
 import (
-	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -82,17 +81,6 @@ func RuntimeObservationResponseFromDomain(obs *domain.RuntimeObservation) *Runti
 		Source:              obs.Source,
 		Metadata:            metadata,
 		ObservedAt:          obs.ObservedAt,
-	}
-}
-
-// RuntimeActionResponseFromDomain builds the public direct runtime action
-// response from route/action context plus an optional runtime observation.
-func RuntimeActionResponseFromDomain(action string, serviceID, environmentID uuid.UUID, obs *domain.RuntimeObservation) RuntimeActionResponse {
-	return RuntimeActionResponse{
-		Action:        action,
-		ServiceID:     serviceID,
-		EnvironmentID: environmentID,
-		Observation:   RuntimeObservationResponseFromDomain(obs),
 	}
 }
 

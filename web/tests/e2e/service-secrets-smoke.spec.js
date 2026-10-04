@@ -208,7 +208,7 @@ test.describe('Service Secrets Smoke Test', () => {
     await expect(page.getByRole('heading', { name: 'web-app' })).toBeVisible();
     await expect(page.getByRole('heading', { name: /Secrets \(2\)/ })).toBeVisible();
 
-    await queueContextVMOperation(page, secretOperation('services.secrets.reveal', { secret_id: 'secret-1' }));
+    await queueContextVMOperation(page, secretOperation('services/secrets-reveal', { secret_id: 'secret-1' }));
     await page.locator('.secret-row:has-text("DATABASE_URL") button:has-text("Reveal")').click();
     await expect(page.getByRole('dialog', { name: 'Reveal Secret Value' })).toBeVisible({ timeout: 15000 });
     await expect(page.locator('text=postgres://hidden.example/db')).not.toBeVisible();

@@ -17,8 +17,7 @@ type DNSIntentCanonicalPublisher interface {
 	PublishPolicy(context.Context, domain.DNSPolicy) error
 }
 
-// DNSIntentHandler routes signed desired state to the durable DNS mutation
-// service; older ContextVM-backed operations retain their legacy path.
+// DNSIntentHandler routes signed desired state to the durable DNS mutation service.
 type DNSIntentHandler struct {
 	operator  DNSControlPlaneOperator
 	canonical DNSIntentCanonicalPublisher

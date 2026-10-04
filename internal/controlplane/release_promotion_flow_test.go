@@ -520,7 +520,7 @@ func TestAcceptedReleaseContextVMPromotionCreatesDigestOnlyCanary(t *testing.T) 
 	}
 
 	rpcPayload := map[string]any{
-		"jsonrpc": "2.0", "id": "promote-1", "method": ContextVMMethodServiceDeploy,
+		"jsonrpc": "2.0", "id": "promote-1", "method": "services/deploy",
 		"params": map[string]any{
 			"service_id": serviceID, "environment_id": environmentID,
 			"deployment_unit_id": unit.ID, "artifact_id": artifact.ID,

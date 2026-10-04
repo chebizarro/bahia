@@ -12,14 +12,14 @@ import (
 // Canonical ContextVM methods served by the per-host maintenance driver
 // (cascadia-nips schema cascadia.maintenance.v1, epic fp-jan).
 const (
-	ContextVMMethodMaintenanceScan       = "maintenance/scan"
-	ContextVMMethodMaintenanceReport     = "maintenance/report"
-	ContextVMMethodMaintenanceQuarantine = "maintenance/quarantine"
-	ContextVMMethodMaintenanceRestore    = "maintenance/restore"
-	ContextVMMethodMaintenanceRelocate   = "maintenance/relocate"
-	ContextVMMethodMaintenancePurge      = "maintenance/purge"
-	ContextVMMethodMaintenanceGC         = "maintenance/gc"
-	ContextVMMethodMaintenancePressure   = "maintenance/pressure"
+	MaintenanceWorkerRPCMethodScan       = "maintenance/scan"
+	MaintenanceWorkerRPCMethodReport     = "maintenance/report"
+	MaintenanceWorkerRPCMethodQuarantine = "maintenance/quarantine"
+	MaintenanceWorkerRPCMethodRestore    = "maintenance/restore"
+	MaintenanceWorkerRPCMethodRelocate   = "maintenance/relocate"
+	MaintenanceWorkerRPCMethodPurge      = "maintenance/purge"
+	MaintenanceWorkerRPCMethodGC         = "maintenance/gc"
+	MaintenanceWorkerRPCMethodPressure   = "maintenance/pressure"
 
 	MaintenanceCommandScan       = "maintenance.scan.request"
 	MaintenanceCommandReport     = "maintenance.report.request"
@@ -77,32 +77,32 @@ type MaintenanceCommand struct {
 }
 
 func (p *MaintenanceCommandPublisher) PublishScan(ctx context.Context, cmd MaintenanceCommand) (*WorkerCommandReceipt, error) {
-	return p.publish(ctx, ContextVMMethodMaintenanceScan, MaintenanceCommandScan, "maintenance-scan", cmd)
+	return p.publish(ctx, MaintenanceWorkerRPCMethodScan, MaintenanceCommandScan, "maintenance-scan", cmd)
 }
 
 func (p *MaintenanceCommandPublisher) PublishReport(ctx context.Context, cmd MaintenanceCommand) (*WorkerCommandReceipt, error) {
-	return p.publish(ctx, ContextVMMethodMaintenanceReport, MaintenanceCommandReport, "maintenance-report", cmd)
+	return p.publish(ctx, MaintenanceWorkerRPCMethodReport, MaintenanceCommandReport, "maintenance-report", cmd)
 }
 
 func (p *MaintenanceCommandPublisher) PublishQuarantine(ctx context.Context, cmd MaintenanceCommand) (*WorkerCommandReceipt, error) {
 	if len(cmd.Paths) == 0 {
 		return nil, fmt.Errorf("maintenance/quarantine requires paths")
 	}
-	return p.publish(ctx, ContextVMMethodMaintenanceQuarantine, MaintenanceCommandQuarantine, "maintenance-quarantine", cmd)
+	return p.publish(ctx, MaintenanceWorkerRPCMethodQuarantine, MaintenanceCommandQuarantine, "maintenance-quarantine", cmd)
 }
 
 func (p *MaintenanceCommandPublisher) PublishRestore(ctx context.Context, cmd MaintenanceCommand) (*WorkerCommandReceipt, error) {
 	if len(cmd.Paths) == 0 {
 		return nil, fmt.Errorf("maintenance/restore requires paths")
 	}
-	return p.publish(ctx, ContextVMMethodMaintenanceRestore, MaintenanceCommandRestore, "maintenance-restore", cmd)
+	return p.publish(ctx, MaintenanceWorkerRPCMethodRestore, MaintenanceCommandRestore, "maintenance-restore", cmd)
 }
 
 func (p *MaintenanceCommandPublisher) PublishRelocate(ctx context.Context, cmd MaintenanceCommand) (*WorkerCommandReceipt, error) {
 	if len(cmd.Paths) == 0 {
 		return nil, fmt.Errorf("maintenance/relocate requires paths")
 	}
-	return p.publish(ctx, ContextVMMethodMaintenanceRelocate, MaintenanceCommandRelocate, "maintenance-relocate", cmd)
+	return p.publish(ctx, MaintenanceWorkerRPCMethodRelocate, MaintenanceCommandRelocate, "maintenance-relocate", cmd)
 }
 
 // PublishPurge is a Tier-2 action: the driver additionally demands
@@ -111,15 +111,15 @@ func (p *MaintenanceCommandPublisher) PublishPurge(ctx context.Context, cmd Main
 	if !cmd.Confirm {
 		return nil, fmt.Errorf("maintenance/purge requires explicit confirm")
 	}
-	return p.publish(ctx, ContextVMMethodMaintenancePurge, MaintenanceCommandPurge, "maintenance-purge", cmd)
+	return p.publish(ctx, MaintenanceWorkerRPCMethodPurge, MaintenanceCommandPurge, "maintenance-purge", cmd)
 }
 
 func (p *MaintenanceCommandPublisher) PublishGC(ctx context.Context, cmd MaintenanceCommand) (*WorkerCommandReceipt, error) {
-	return p.publish(ctx, ContextVMMethodMaintenanceGC, MaintenanceCommandGC, "maintenance-gc", cmd)
+	return p.publish(ctx, MaintenanceWorkerRPCMethodGC, MaintenanceCommandGC, "maintenance-gc", cmd)
 }
 
 func (p *MaintenanceCommandPublisher) PublishPressure(ctx context.Context, cmd MaintenanceCommand) (*WorkerCommandReceipt, error) {
-	return p.publish(ctx, ContextVMMethodMaintenancePressure, MaintenanceCommandPressure, "maintenance-pressure", cmd)
+	return p.publish(ctx, MaintenanceWorkerRPCMethodPressure, MaintenanceCommandPressure, "maintenance-pressure", cmd)
 }
 
 func (p *MaintenanceCommandPublisher) publish(ctx context.Context, method, command, defaultPrefix string, cmd MaintenanceCommand) (*WorkerCommandReceipt, error) {
@@ -148,7 +148,7 @@ func (p *MaintenanceCommandPublisher) publish(ctx context.Context, method, comma
 	// path payloads, including when a caller supplies a predictable idempotency key.
 	tags := nostr.Tags{{"command", command}, {"worker", workerPubKey}, {"p", workerPubKey}, {"privacy-nonce", uuid.NewString()}}
 	var beforePublish func(*nostr.Event, string) (func(), error)
-	if p.observer != nil && (method == ContextVMMethodMaintenanceScan || method == ContextVMMethodMaintenancePressure) {
+	if p.observer != nil && (method == MaintenanceWorkerRPCMethodScan || method == MaintenanceWorkerRPCMethodPressure) {
 		beforePublish = func(event *nostr.Event, finalizedDTag string) (func(), error) {
 			return p.observer.RegisterMaintenanceRequest(MaintenanceRequestCorrelation{
 				Method:         method,
