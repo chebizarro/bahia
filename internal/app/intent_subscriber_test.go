@@ -91,7 +91,7 @@ func TestIntentSubscriberWiredWhenDomainsEnabled(t *testing.T) {
 	}
 	require.NoError(t, intentEvent.Sign(actorKey))
 
-	// Send through the in-process path (dual dispatch), which shares the
+	// Send through the in-process MCP path, which shares the
 	// same pipeline and idempotency store as the relay path.
 	intent, err := controlplane.ParseIntent(&intentEvent)
 	require.NoError(t, err)

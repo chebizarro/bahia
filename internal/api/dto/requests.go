@@ -36,23 +36,6 @@ type GitSourceRequest struct {
 	CommitSHA     string `json:"commit_sha,omitempty"`
 }
 
-// CreateServiceRequest represents a request to register a new service.
-type CreateServiceRequest struct {
-	// ID is the optional client-minted entity id (canonical UUIDv7, or v4).
-	// It fixes the service's addressable coordinate; when absent Bahia mints
-	// one. See docs/event-spec.md "Entity identity and coordinates".
-	ID                   string                       `json:"id,omitempty"`
-	OrgID                uuid.UUID                    `json:"org_id"`
-	Name                 string                       `json:"name"`
-	RepoURL              string                       `json:"repo_url,omitempty"`
-	Repository           *RepositoryRefRequest        `json:"repository,omitempty"`
-	ArtifactRepo         string                       `json:"artifact_repo"`
-	DefaultBranch        string                       `json:"default_branch,omitempty"`
-	RuntimeType          string                       `json:"runtime_type,omitempty"`
-	ManagedRuntimeConfig *domain.ManagedRuntimeConfig `json:"managed_runtime_config,omitempty"`
-	IdempotencyKey       string                       `json:"idempotency_key,omitempty"`
-}
-
 // UpdateServiceRequest represents a request to update a service.
 type UpdateServiceRequest struct {
 	ID                       uuid.UUID                    `json:"id"`

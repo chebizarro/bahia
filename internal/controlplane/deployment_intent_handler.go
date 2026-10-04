@@ -101,19 +101,19 @@ func (h *DeploymentIntentHandler) handleDeployment(ctx context.Context, intent *
 					return &revisionConflictError{entityID: serviceID, expected: *intent.ExpectedUpdatedAt}
 				}
 			}
-			method = h.service.routeAttachLegacy
+			method = h.service.routeAttach
 		} else {
 			if intent.ExpectedUpdatedAt != nil {
 				return fmt.Errorf("expected_updated_at is not supported for deployment preview")
 			}
-			method = h.service.previewDeployLegacy
+			method = h.service.previewDeploy
 		}
 		delete(content, "intent_id")
 		delete(content, "expected_updated_at")
 	case "create":
 		delete(content, "intent_id")
 		delete(content, "expected_updated_at")
-		method = h.service.deployLegacy
+		method = h.service.deploy
 	case "rollback":
 		if intent.ExpectedUpdatedAt != nil {
 			supersedesID, parseErr := uuid.Parse(firstIntentString(content, "supersedes_intent_id"))
@@ -164,7 +164,7 @@ func (h *DeploymentIntentHandler) handleDeployment(ctx context.Context, intent *
 		delete(content, "target_run_id")
 		delete(content, "intent_id")
 		delete(content, "expected_updated_at")
-		method = h.service.rollbackLegacy
+		method = h.service.rollback
 	case "approve", "reject":
 		id, err := uuid.Parse(firstIntentString(content, "deployment_intent_id", "target_intent_id", "intent_id"))
 		if err != nil || id == uuid.Nil {
@@ -189,13 +189,13 @@ func (h *DeploymentIntentHandler) handleDeployment(ctx context.Context, intent *
 		content["intent_id"] = id.String()
 		content["decision"] = intent.Op
 		method = func(ctx context.Context, request ContextVMRequest) (any, error) {
-			return h.service.decideLegacy(ctx, request, intent.Op)
+			return h.service.decide(ctx, request, intent.Op)
 		}
 	default:
 		return fmt.Errorf("unknown deployment operation %q", intent.Op)
 	}
-	// The legacy methods retain validation, policy checks, promotion audit and
-	// canonical publication. This request is never signed or emitted as an intent.
+	// The shared deployment methods retain validation, policy checks, promotion audit and
+	// canonical publication. This internal request is not published.
 	params, err := json.Marshal(content)
 	if err != nil {
 		return fmt.Errorf("encode deployment content: %w", err)

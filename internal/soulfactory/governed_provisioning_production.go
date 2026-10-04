@@ -1153,7 +1153,7 @@ func productionRequestEvent(run *domain.ProvisioningRun, method string) (*nostr.
 		return nil, err
 	}
 	event := &nostr.Event{ID: id, PubKey: pubkey, Kind: nostr.Kind(kinds.SoulFactoryProvisioningRequest)}
-	if method == ContextVMMethodProvision {
+	if method == soulFactoryLegacyProvisionMethod {
 		event.Tags = nostr.Tags{{"method", method}}
 	}
 	return event, nil

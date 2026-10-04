@@ -9,8 +9,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/controlplane"
-	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 )
 
 // MaintenanceIntentPublisher is the slice of the maintenance command
@@ -97,14 +97,14 @@ type HygieneReconcileResult struct {
 type HygieneReconciler struct {
 	eventPublisher  events.Publisher
 	publishedAlerts map[string]bool
-	policy    domain.HygienePolicy
-	workers   []string
-	publisher MaintenanceIntentPublisher
-	source    HygieneObservationSource
-	metrics   HygieneMetrics
-	interval  time.Duration
-	now       func() time.Time
-	logger    *zap.Logger
+	policy          domain.HygienePolicy
+	workers         []string
+	publisher       MaintenanceIntentPublisher
+	source          HygieneObservationSource
+	metrics         HygieneMetrics
+	interval        time.Duration
+	now             func() time.Time
+	logger          *zap.Logger
 }
 
 func NewHygieneReconciler(
@@ -152,6 +152,7 @@ func (r *HygieneReconciler) Name() string { return "hygiene-reconciler" }
 
 // Run implements app.BackgroundRunner.
 func (r *HygieneReconciler) Run(ctx context.Context) error {
+	//nostr:allow-poll Hygiene scans are scheduled maintenance, not relay-state polling.
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 	for {
@@ -195,7 +196,7 @@ func (r *HygieneReconciler) ReconcileOnce(ctx context.Context) (HygieneReconcile
 		if len(freshAlerts) > 0 {
 			gcRequested := false
 			for _, a := range result.Actions {
-				if a.Method == controlplane.ContextVMMethodMaintenanceGC && a.Deferred == "" {
+				if a.Method == controlplane.MaintenanceWorkerRPCMethodGC && a.Deferred == "" {
 					gcRequested = true
 					break
 				}
@@ -305,22 +306,22 @@ func (r *HygieneReconciler) convergeCandidates(ctx context.Context, worker strin
 	}
 	if len(quarantine) > 0 {
 		if r.policy.AutoQuarantine {
-			action := HygieneAction{WorkerPubKey: worker, Method: controlplane.ContextVMMethodMaintenanceQuarantine, Paths: quarantine, Tier: 1}
+			action := HygieneAction{WorkerPubKey: worker, Method: controlplane.MaintenanceWorkerRPCMethodQuarantine, Paths: quarantine, Tier: 1}
 			if _, err := r.publisher.PublishQuarantine(ctx, controlplane.MaintenanceCommand{WorkerPubKey: worker, Paths: quarantine, Reason: "hygiene reconcile: Tier-1 quarantine of confirmed cruft/dup candidates"}); err != nil {
 				action.Deferred = "publish failed: " + err.Error()
-				r.recordAction(controlplane.ContextVMMethodMaintenanceQuarantine, "failed")
+				r.recordAction(controlplane.MaintenanceWorkerRPCMethodQuarantine, "failed")
 			} else {
-				r.recordAction(controlplane.ContextVMMethodMaintenanceQuarantine, "issued")
+				r.recordAction(controlplane.MaintenanceWorkerRPCMethodQuarantine, "issued")
 			}
 			result.Actions = append(result.Actions, action)
 		} else {
-			result.PendingTier2 = append(result.PendingTier2, HygieneAction{WorkerPubKey: worker, Method: controlplane.ContextVMMethodMaintenanceQuarantine, Paths: quarantine, Tier: 1, Deferred: "auto_quarantine disabled by policy"})
+			result.PendingTier2 = append(result.PendingTier2, HygieneAction{WorkerPubKey: worker, Method: controlplane.MaintenanceWorkerRPCMethodQuarantine, Paths: quarantine, Tier: 1, Deferred: "auto_quarantine disabled by policy"})
 		}
 	}
 	if len(relocate) > 0 {
 		// Tier-2: surfaced for Majordomo approval, never auto-issued.
-		result.PendingTier2 = append(result.PendingTier2, HygieneAction{WorkerPubKey: worker, Method: controlplane.ContextVMMethodMaintenanceRelocate, Paths: relocate, Tier: 2, Deferred: "tier-2: requires Majordomo approval"})
-		r.recordAction(controlplane.ContextVMMethodMaintenanceRelocate, "pending")
+		result.PendingTier2 = append(result.PendingTier2, HygieneAction{WorkerPubKey: worker, Method: controlplane.MaintenanceWorkerRPCMethodRelocate, Paths: relocate, Tier: 2, Deferred: "tier-2: requires Majordomo approval"})
+		r.recordAction(controlplane.MaintenanceWorkerRPCMethodRelocate, "pending")
 	}
 }
 
@@ -343,17 +344,17 @@ func (r *HygieneReconciler) convergePressure(ctx context.Context, worker string,
 		r.metrics.RecordHygienePressureBreach()
 	}
 	if !r.policy.AutoGC {
-		result.PendingTier2 = append(result.PendingTier2, HygieneAction{WorkerPubKey: worker, Method: controlplane.ContextVMMethodMaintenanceGC, Tier: 1, Deferred: "auto_gc disabled by policy"})
+		result.PendingTier2 = append(result.PendingTier2, HygieneAction{WorkerPubKey: worker, Method: controlplane.MaintenanceWorkerRPCMethodGC, Tier: 1, Deferred: "auto_gc disabled by policy"})
 		return
 	}
 	// Tier 1: doctrine already permits pruning docker/build caches on the
 	// worker's own node.
-	action := HygieneAction{WorkerPubKey: worker, Method: controlplane.ContextVMMethodMaintenanceGC, Tier: 1}
+	action := HygieneAction{WorkerPubKey: worker, Method: controlplane.MaintenanceWorkerRPCMethodGC, Tier: 1}
 	if _, err := r.publisher.PublishGC(ctx, controlplane.MaintenanceCommand{WorkerPubKey: worker, Reason: "hygiene reconcile: pressure threshold breached, Tier-1 gc"}); err != nil {
 		action.Deferred = "publish failed: " + err.Error()
-		r.recordAction(controlplane.ContextVMMethodMaintenanceGC, "failed")
+		r.recordAction(controlplane.MaintenanceWorkerRPCMethodGC, "failed")
 	} else {
-		r.recordAction(controlplane.ContextVMMethodMaintenanceGC, "issued")
+		r.recordAction(controlplane.MaintenanceWorkerRPCMethodGC, "issued")
 	}
 	result.Actions = append(result.Actions, action)
 }

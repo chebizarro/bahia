@@ -723,13 +723,7 @@ type NostrConfig struct {
 
 	// IntentDomainsDisabled explicitly opts domain families out of kind-30900
 	// intent processing. All registered intent domains are enabled by default.
-	// This migration switch is deprecated and will be removed with the legacy
-	// ContextVM mutation paths (bahia-irsry.11.19).
 	IntentDomainsDisabled []string `koanf:"intent_domains_disabled" yaml:"intent_domains_disabled" secret:"false"`
-	// IntentDomains is the deprecated Phase 3 allowlist. An empty list now
-	// enables every registered domain; a non-empty list retains its former
-	// allowlist meaning for one release. R1 removes this compatibility key.
-	IntentDomains []string `koanf:"intent_domains" yaml:"intent_domains" secret:"false"`
 
 	// BootstrapOwners maps org UUIDs to the hex pubkey of their bootstrap
 	// owner. Used only when no relay membership events (O1) or Postgres

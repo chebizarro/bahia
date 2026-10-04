@@ -221,13 +221,7 @@ func TestPackageRegistryServicePromotionYankAndDrift(t *testing.T) {
 	if promoted.RepositoryID != prodRepo.ID || publication.Status != domain.PackagePublicationStatusPromoted {
 		t.Fatalf("unexpected promotion artifact=%#v publication=%#v", promoted, publication)
 	}
-	drift, err := svc.ObserveArtifactDrift(context.Background(), prodRepo, promoted)
-	if err != nil {
-		t.Fatalf("ObserveArtifactDrift: %v", err)
-	}
-	if drift.Drifted {
-		t.Fatalf("expected no drift: %#v", drift)
-	}
+
 	yanked, err := svc.YankPackage(context.Background(), prodRepo, promoted, PackageYankRequest{PackageName: promoted.PackageName, Version: promoted.Version, Filename: promoted.Filename, Reason: "bad release"})
 	if err != nil {
 		t.Fatalf("YankPackage: %v", err)

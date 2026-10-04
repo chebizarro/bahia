@@ -775,7 +775,7 @@ func New(cfg *config.Config) (*App, error) {
 	trustSet := controlplane.NewTrustSet(cfg.Nostr.AuthorizedPubkeys, logger, trustSetOpts...)
 	intentReadiness := controlplane.NewReadinessTracker()
 	healthProvider.SetReadinessTracker(intentReadiness)
-	enabledDomains := controlplane.BuildEnabledDomains(cfg.Nostr.IntentDomainsDisabled, cfg.Nostr.IntentDomains)
+	enabledDomains := controlplane.BuildEnabledDomains(cfg.Nostr.IntentDomainsDisabled)
 	if len(enabledDomains) > 0 {
 		intentReadiness.RegisterFilter("intent-30900")
 	}
@@ -1293,12 +1293,8 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	// --- end D76 artifact intent registration ---
 
-	// Phase 3 S3: PolicyStatePublisher for canonical 30900 via PublishBeforeCommit.
-	// Created unconditionally so both the legacy (non-intent) ContextVM path and
-	// the intent handler path use the same sign-and-publish closure. Fingerprint
-	// dedupe prevents double-signing if both paths ever fire for the same entity
-	// in a single process lifetime (belt-and-suspenders; the dual-dispatch guard
-	// makes this unreachable in normal operation).
+	// PolicyStatePublisher emits canonical 30900 records via PublishBeforeCommit.
+	// Fingerprint dedupe prevents duplicate publishes for the same entity revision.
 	var policyPublisher controlplane.PolicyStatePublisher
 	if nostrPub != nil && controlPlaneSigner != nil {
 		var policyPubMu sync.Mutex
@@ -2347,7 +2343,6 @@ func New(cfg *config.Config) (*App, error) {
 		RBAC:              tenantRBAC,
 		ReleasePromotions: releasePromotionAuthorizer,
 		Logger:            logger,
-		IntentProcessor:   intentProcessor,
 	}
 	if enabledDomains["deployment"] || enabledDomains["runtime"] {
 		deploymentHandler := controlplane.NewDeploymentIntentHandler(serviceDeploymentConfig, runtimeLifecycleSvc)
@@ -2400,22 +2395,10 @@ func New(cfg *config.Config) (*App, error) {
 			transportOptions = append(transportOptions, controlplane.WithContextVMResponseStore(contextVMResponseStore, defaultContextVMResponseRetention))
 		}
 		encryptedRequestTransport = controlplane.NewEncryptedRequestTransport(contextVMRequestPool, responder, cfg.Nostr.AuthorizedPubkeys, logger, transportOptions...)
-		virtualization.Handlers.Register(encryptedRequestTransport)
 		fleetOperatorGate := controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys)
 		if hygieneObservationSource != nil {
 			encryptedRequestTransport.RegisterContextVMResponseHandler(hygieneObservationSource.HandleContextVMResponse)
 		}
-		controlplane.NewEncryptedDomainHandlers(controlplane.EncryptedDomainHandlersConfig{
-			Payments:              paymentSvc,
-			Orgs:                  orgRepo,
-			Members:               orgMemberRepo,
-			Invites:               orgInviteRepo,
-			RBAC:                  tenantRBAC,
-			IntentProcessor:       intentProcessor,
-			OrgPublisher:          orgCanonicalPub,
-			BootstrapOwnerPubkeys: cfg.Auth.BootstrapOwnerPubkeys,
-			Logger:                logger,
-		}).Register(encryptedRequestTransport)
 		// Phase 3 O1: wire gift-wrap intent ingress to the existing 1059
 		// subscription. When an unwrapped inner event is kind 30900 with
 		// t=bahia-intent, it is routed to the ingress instead of ContextVM.
@@ -2423,29 +2406,18 @@ func New(cfg *config.Config) (*App, error) {
 			encryptedRequestTransport.SetGiftWrapIntentIngress(giftWrapIngress)
 			logger.Info("gift-wrap intent ingress wired to ContextVM transport")
 		}
-		registryMutations := controlplane.RegistryMutationBackend(registry)
-		if relayFirstRegistry != nil {
-			registryMutations = relayFirstRegistry
-		}
 		encryptedRouteHandlers := controlplane.NewEncryptedRouteHandlers(controlplane.EncryptedRouteHandlersConfig{
-			IntentProcessor: intentProcessor,
-			Secrets:         secretRepo,
-			Encryptor:       secretEncryptor,
-			SecretPublisher: secretCanonical,
-			NotifRepo:       notifRepo,
-			NotifPublisher:  notifCanonical,
-			NotifNotifier:   notifDispatcher,
-			Runs:            runRepo,
-			RunLogs:         runLogService,
-			Artifacts:       artifactRepo,
-			Signatures:      sigRepo,
-			SignVerifier:    signVerifier,
-			Services:        serviceRepo,
-			Intents:         intentRepo,
-			Registry:        registryMutations,
-			DeploymentUnits: deploymentUnitRepo,
-			RBAC:            tenantRBAC,
-			Logger:          logger,
+			Secrets:      secretRepo,
+			Encryptor:    secretEncryptor,
+			Runs:         runRepo,
+			RunLogs:      runLogService,
+			Artifacts:    artifactRepo,
+			Signatures:   sigRepo,
+			SignVerifier: signVerifier,
+			Services:     serviceRepo,
+			Intents:      intentRepo,
+			RBAC:         tenantRBAC,
+			Logger:       logger,
 		})
 		// D80: the artifact request op uses the same F74a-wrapped signature
 		// repository as the retained encrypted route, so it publishes once.
@@ -2497,50 +2469,19 @@ func New(cfg *config.Config) (*App, error) {
 			)
 		}
 		buildHandlers := controlplane.NewEncryptedBuildHandlers(controlplane.EncryptedBuildHandlersConfig{
-			IntentProcessor:   intentProcessor,
-			Starter:           hiveCIBuildStarter,
-			Registry:          registry,
-			Builds:            buildRepo,
-			ArtifactRegistrar: buildResultRegistrar,
-			Services:          serviceRepo,
-			Secrets:           secretRepo,
-			RBAC:              tenantRBAC,
+			Starter:  hiveCIBuildStarter,
+			Registry: registry,
+			Builds:   buildRepo,
+			Services: serviceRepo,
+			Secrets:  secretRepo,
+			RBAC:     tenantRBAC,
 		})
 		if enabledDomains["build"] {
 			intentProcessor.RegisterHandler("build", controlplane.NewBuildIntentHandler(buildHandlers))
 		}
-		buildHandlers.Register(encryptedRequestTransport)
-		controlplane.NewOperatorContextVMHandlers(controlplane.OperatorContextVMHandlersConfig{
-			Adoption:                       adoptionSvc,
-			RuntimeLifecycle:               runtimeLifecycleSvc,
-			AdoptionAuthorizedPubkeys:      cfg.Adoption.AllowedPubkeys,
-			DirectRuntimeAuthorizedPubkeys: cfg.DirectRuntime.AllowedPubkeys,
-			IntentProcessor:                intentProcessor,
-			Resources:                      registry,
-		}).Register(encryptedRequestTransport)
-		controlplane.RegisterWorkerContextVMHandlers(encryptedRequestTransport, fleetOperatorGate, intentProcessor)
-		bgManager.RegisterWithOptions(controlplane.RegisterContinuityContextVMHandlers(encryptedRequestTransport, fleetOperatorGate, controlPlanePool, continuityDefinitionStore, continuityRecipeExecutor, logger))
-		controlplane.RegisterBackupAliasContextVMHandlers(encryptedRequestTransport, tenantRBAC, fleetOperatorGate, intentProcessor)
-		controlplane.RegisterLoomContextVMHandlers(encryptedRequestTransport, loomClient, cfg.Loom.AuthorizedPubkeys, fleetOperatorGate)
-		controlplane.RegisterDNSContextVMHandlers(encryptedRequestTransport, dnsOperator, cfg.DNS.Enabled, fleetOperatorGate, intentProcessor)
-		controlplane.RegisterMLRegistryContextVMHandlers(encryptedRequestTransport, mlRegistry, fleetOperatorGate, intentProcessor, registry)
-		controlplane.RegisterNotificationEncryptedHandlers(encryptedRequestTransport, notifRepo, notifDispatcher, tenantRBAC, intentProcessor)
-		relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
-		controlplane.RegisterRelaySettingsContextVMHandlers(encryptedRequestTransport, controlplane.RelaySettingsHandlerConfig{
-			Config: cfg, AdminClient: relayAdminClient, ProjectionStore: relayPolicyProjectionRepo,
-			ServicePubkey: servicePubkey, Logger: logger, ConfigFabric: configFabricSvc,
-			FleetOperatorGate: fleetOperatorGate,
-		}, intentProcessor)
+		bgManager.RegisterWithOptions(controlplane.NewContinuityRuntime(fleetOperatorGate, controlPlanePool, continuityDefinitionStore, continuityRecipeExecutor, logger))
 		controlplane.RegisterAssistantContextVMHandlers(encryptedRequestTransport, assistantOrchestrator, fleetOperatorGate)
-		controlplane.RegisterServiceContextVMHandlers(encryptedRequestTransport, serviceDeploymentConfig)
-		if sbomAsyncRunner != nil {
-			controlplane.RegisterSBOMContextVMHandlers(encryptedRequestTransport, sbomAsyncRunner, fleetOperatorGate, intentProcessor)
-		}
-		controlplane.RegisterSecurityContextVMHandlers(encryptedRequestTransport, securityScanner, fleetOperatorGate, intentProcessor)
-		soulfactory.RegisterContextVMHandlers(encryptedRequestTransport, soulFactoryReactorFromRuntime(soulFactoryRuntime))
-		soulfactory.RegisterSagaContextVMHandlers(encryptedRequestTransport, soulFactoryReactorFromRuntime(soulFactoryRuntime), fleetOperatorGate)
-		// ContextVM carries the canonical mutation plane, so it must remain
-		// available in the minimum production control-plane tier.
+		// ContextVM remains available for assistant, secret reveal, and run-log fetch.
 		bgManager.RegisterWithOptions(&encryptedRequestTransportRunner{transport: encryptedRequestTransport})
 		logger.Info("encrypted request/result event runtime registered",
 			zap.Strings("request_subscription_relays", contextVMRequestRelays),
@@ -2583,8 +2524,6 @@ func New(cfg *config.Config) (*App, error) {
 			controlplane.WithBackupRestoreResponder(backupRestoreResponder),
 			controlplane.WithBackupRetentionExecutor(backupRetentionCoordinator),
 			controlplane.WithBackupRetentionResponder(backupRetentionResponder),
-			controlplane.WithAdoptionService(adoptionSvc),
-			controlplane.WithRuntimeLifecycleService(runtimeLifecycleSvc),
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
 			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)),
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),
@@ -2604,21 +2543,8 @@ func New(cfg *config.Config) (*App, error) {
 		reactorOpts = append(reactorOpts,
 			controlplane.WithWorkerReadModelPublisher(workerReadModelPublisher))
 		setupWorkerReadModelEventSubscriptions(publisher, workerReadModelPublisher, registry, mlRegistry, logger)
-		reactorOpts = appendPackageControlPlaneOptions(reactorOpts, packageRegistrySvc, packageProjection)
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
-		}
-		// --- D70 worker intent dual dispatch (independent of policy setup) ---
-		reactorOpts = append(reactorOpts, controlplane.WithIntentProcessor(intentProcessor))
-		if policyRepo != nil {
-			reactorOpts = append(reactorOpts, controlplane.WithPolicyService(policySvc))
-			if policyPublisher != nil {
-				reactorOpts = append(reactorOpts, controlplane.WithPolicyStatePublisher(policyPublisher))
-			}
-		}
-		// Phase 3 L1: wire LLM route publisher and ContextVM handlers.
-		if llmRoutePublisher != nil {
-			reactorOpts = append(reactorOpts, controlplane.WithLLMRouteStatePublisher(llmRoutePublisher))
 		}
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
 		if enabledDomains["tool"] {
@@ -2628,10 +2554,6 @@ func New(cfg *config.Config) (*App, error) {
 			intentProcessor.RegisterHandler("worker", controlplane.NewWorkerIntentHandler(reactor))
 		}
 		// --- end D70 worker intent registration ---
-		reactor.RegisterMutationContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
-		reactor.RegisterPackageContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), intentProcessor)
-		reactor.RegisterToolApprovalContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys))
-		controlplane.RegisterLLMContextVMHandlers(encryptedRequestTransport, controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys), llmRegistry, intentProcessor, llmRoutePublisher)
 		bgManager.RegisterWithOptions(&controlplaneRunner{reactor: reactor})
 		logger.Info("nostr control plane reactor registered", zap.Strings("relays", controlPlaneRelays))
 	}
@@ -4469,16 +4391,6 @@ func configureAuthorizationMCPDeps(deps *mcp.ServerDeps, cfg *config.Config, rba
 		return
 	}
 	deps.AuthorizedPubkeys = cfg.Nostr.AuthorizedPubkeys
-}
-
-func appendPackageControlPlaneOptions(opts []controlplane.ReactorOption, packageRegistrySvc *service.PackageRegistryService, packageProjection repository.PackageControlPlaneRepository) []controlplane.ReactorOption {
-	if packageRegistrySvc == nil {
-		return opts
-	}
-	return append(opts,
-		controlplane.WithPackageRegistryService(packageRegistrySvc),
-		controlplane.WithPackageProjectionRepository(packageProjection),
-	)
 }
 
 func controlPlaneSubscriberAuthorScopes(cfg *config.Config, assistant service.AssistantIdentity) nostrAdapter.AuthorizedAuthorScopes {

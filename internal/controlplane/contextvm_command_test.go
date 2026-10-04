@@ -3,8 +3,9 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
-	"fiatjaf.com/nostr"
 	"testing"
+
+	"fiatjaf.com/nostr"
 )
 
 type captureNostrPublisher struct {

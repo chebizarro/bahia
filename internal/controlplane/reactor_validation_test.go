@@ -88,11 +88,9 @@ func TestReactorBuildRequestSubscriptionFiltersUsesCanonicalKindsOnly(t *testing
 	}
 	filter := filters[0]
 	assertAuthors(t, filter.Authors, []string{global, adoption, runtime})
-	assertFilterHasKinds(t, filter, KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap)
+	assertFilterHasKinds(t, filter, nostr.KindNIP38Status)
 	assertFilterMissingKinds(t, filter,
 		nostr.KindCASControlState,
-		nostr.KindNIP38Status,
-		nostr.KindHeartbeatObservation,
 		KindDeployRequest,
 		KindRollbackRequest,
 		KindServiceAction,

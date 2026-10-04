@@ -40,9 +40,8 @@ loom:
     raw_private_key: ""
 
 nostr:
-  # All registered kind-30900 intent domains are on by default. To temporarily
-  # retain a legacy path for a domain, set intent_domains_disabled: [domain].
-  # Deprecated intent_domains is an allowlist only when non-empty; R1 removes both keys.
+  # All registered kind-30900 intent domains are on by default.
+  # intent_domains_disabled: [domain] explicitly disables a domain.
   # Locked-down default: empty means the 25910 ContextVM control plane is not enabled.
   # Deployments must inject the operator signer key through secrets/env; never commit it here.
   private_key: ""

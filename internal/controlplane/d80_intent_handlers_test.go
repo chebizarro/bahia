@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -279,88 +278,4 @@ func TestD80MLPinDesiredStateAcceptedReplayConflict(t *testing.T) {
 	denied.IntentID = uuid.NewString()
 	denied.Actor = "known-non-fleet-principal"
 	require.ErrorContains(t, p.ProcessInProcess(t.Context(), &denied), "insufficient permission")
-}
-
-func TestD80SecurityAndSBOMContextVMDualDispatchAndLegacy(t *testing.T) {
-	actor := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	event := &nostr.Event{ID: testNostrID("d80-request"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}
-	scanner := &d80Scanner{}
-	securityProcessor, _ := d70Processor(t, "security", actor, NewSecurityScanIntentHandler(scanner))
-	scanParams := json.RawMessage(`{"target":{"type":"package","package":{"ecosystem":"npm","name":"left-pad"}}}`)
-	scanRequest := ContextVMRequest{Event: event, RPC: ContextVMJSONRPCRequest{Params: scanParams}}
-	security := securityContextVMHandler{scanner: scanner, processor: securityProcessor}
-	_, err := security.scan(t.Context(), scanRequest)
-	require.NoError(t, err)
-	_, err = security.scan(t.Context(), scanRequest)
-	require.NoError(t, err)
-	require.Len(t, scanner.requests, 1)
-	security.processor = nil
-	_, err = security.scan(t.Context(), scanRequest)
-	require.NoError(t, err)
-	require.Len(t, scanner.requests, 2, "legacy path must still call the scanner directly")
-
-	runner := &d80SBOMRunner{}
-	sbomProcessor, _ := d70Processor(t, "sbom", actor, NewSBOMIntentHandler(runner))
-	key := uuid.NewString()
-	sbomParams, err := json.Marshal(map[string]any{"idempotencyKey": key, "subject": map[string]any{"type": "artifact", "id": uuid.NewString(), "digest": "sha256:abc"}, "source": map[string]any{"kind": "oci-image", "locator": "registry.example/a@sha256:abc"}, "formats": []any{"spdx"}, "generator": "syft", "storage": "blossom"})
-	require.NoError(t, err)
-	sbomRequest := ContextVMRequest{Event: event, RPC: ContextVMJSONRPCRequest{Params: sbomParams}}
-	sbom := sbomContextVMHandler{runner: runner, processor: sbomProcessor}
-	_, err = sbom.generate(t.Context(), sbomRequest)
-	require.NoError(t, err)
-	_, err = sbom.generate(t.Context(), sbomRequest)
-	require.NoError(t, err)
-	require.Len(t, runner.requests, 1)
-	sbom.processor = nil
-	_, err = sbom.generate(t.Context(), sbomRequest)
-	require.NoError(t, err)
-	require.Len(t, runner.requests, 2, "legacy path must still enqueue exactly once")
-	importParams, err := json.Marshal(map[string]any{"idempotencyKey": uuid.NewString(), "subject": map[string]any{"type": "artifact", "id": uuid.NewString(), "digest": "sha256:abc"}, "format": "spdx", "location": map[string]any{"type": "blossom", "uri": "https://blossom.example/sha256"}, "storage": "blossom", "generator": map[string]any{"id": "import"}})
-	require.NoError(t, err)
-	sbomRequest.RPC.Params = importParams
-	sbom.processor = sbomProcessor
-	_, err = sbom.importSBOM(t.Context(), sbomRequest)
-	require.NoError(t, err)
-	_, err = sbom.importSBOM(t.Context(), sbomRequest)
-	require.NoError(t, err)
-	require.Len(t, runner.imports, 1)
-	sbom.processor = nil
-	_, err = sbom.importSBOM(t.Context(), sbomRequest)
-	require.NoError(t, err)
-	require.Len(t, runner.imports, 2)
-}
-
-func TestD80WorkerPlacementContextVMDualDispatch(t *testing.T) {
-	actor := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	event := &nostr.Event{ID: testNostrID("d80-worker-placement"), PubKey: testNostrPubKeyFromPrivateKey(t, testRequesterKey)}
-	workerPubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
-	workers := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey})
-	envID, endpointID := uuid.New(), uuid.New()
-	reg := &stubEnvironmentRegistry{getByID: map[uuid.UUID]*domain.Environment{envID: {ID: envID, OrgID: testOrgID(), Name: "prod"}}}
-	envHandler := NewEnvironmentIntentHandler(reg, nil, zap.NewNop(), workers)
-	envProcessor, _ := d70Processor(t, "environment", actor, envHandler)
-	workerContext := workerContextVMHandlers{intentProcessor: envProcessor}
-	policyParams, err := json.Marshal(WorkerPolicyApplyCommand{EnvironmentID: envID.String(), Policy: map[string]any{"pinned_worker": workerPubkey}, IdempotencyKey: uuid.NewString()})
-	require.NoError(t, err)
-	request := ContextVMRequest{Event: event, RPC: ContextVMJSONRPCRequest{Params: policyParams}}
-	_, err = workerContext.policyApply(t.Context(), request)
-	require.NoError(t, err)
-	_, err = workerContext.policyApply(t.Context(), request)
-	require.NoError(t, err)
-	require.Len(t, reg.updated, 1)
-
-	repo := newD70MLRepo()
-	repo.endpoints[endpointID] = &domain.MLInferenceEndpoint{ID: endpointID, Name: "inference", EnvironmentID: envID}
-	registry := service.NewMLRegistryService(repo, &events.NoopPublisher{}, zap.NewNop())
-	registry.SetMLCPStatePublisher(&d70MLCanonical{})
-	mlProcessor, _ := d70Processor(t, "ml", actor, NewMLIntentHandler(registry, workers))
-	workerContext.intentProcessor = mlProcessor
-	pinParams, err := json.Marshal(WorkloadPinCommand{WorkloadID: endpointID.String(), WorkloadKind: "ml_inference", EnvironmentID: envID.String(), WorkerPubKey: workerPubkey, IdempotencyKey: uuid.NewString()})
-	require.NoError(t, err)
-	request.RPC.Params = pinParams
-	_, err = workerContext.workloadPin(t.Context(), request)
-	require.NoError(t, err)
-	_, err = workerContext.workloadPin(t.Context(), request)
-	require.NoError(t, err)
-	require.Equal(t, 1, repo.writes)
 }

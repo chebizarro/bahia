@@ -307,8 +307,7 @@ func mergeNotificationChannelOntoExisting(existing, intent *domain.NotificationC
 	}
 }
 
-// BuildNotificationIntentContent builds a map suitable for an in-process
-// notification channel intent from a ContextVM mutation. Used for dual dispatch.
+// BuildNotificationIntentContent builds an in-process notification intent for MCP callers.
 func BuildNotificationIntentContent(ch *domain.NotificationChannel) map[string]interface{} {
 	content := map[string]interface{}{
 		"id":           ch.ID.String(),

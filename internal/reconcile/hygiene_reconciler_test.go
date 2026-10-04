@@ -140,7 +140,7 @@ func TestHygieneReconcilerIssuesScanAndTier1Actions(t *testing.T) {
 	}
 	foundPending := false
 	for _, pending := range result.PendingTier2 {
-		if pending.Method == controlplane.ContextVMMethodMaintenanceRelocate && pending.Tier == 2 {
+		if pending.Method == controlplane.MaintenanceWorkerRPCMethodRelocate && pending.Tier == 2 {
 			foundPending = true
 		}
 	}
@@ -357,7 +357,7 @@ type recordingEventPublisher struct {
 func (p *recordingEventPublisher) Publish(_ context.Context, e events.Event) {
 	p.events = append(p.events, e)
 }
-func (p *recordingEventPublisher) Subscribe(_ events.EventType, _ events.Handler) {}
+func (p *recordingEventPublisher) Subscribe(_ events.EventType, _ events.Handler)               {}
 func (p *recordingEventPublisher) SubscribeWithError(_ events.EventType, _ events.ErrorHandler) {}
 
 func TestHygieneReconcilerPressureBreachPublishesEvent(t *testing.T) {

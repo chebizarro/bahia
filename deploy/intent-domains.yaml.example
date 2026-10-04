@@ -1,8 +1,5 @@
-# Optional Bahia config overlay for a staged intent cut-over.
-# Omit this section to enable every registered intent domain by default.
+# All registered kind-30900 intent domains are enabled by default.
+# This opt-out suppresses the named intent domains; it does not re-enable
+# ContextVM mutations. Remove entries to restore intent processing.
 nostr:
-  intent_domains_disabled:
-    - service # example: retain the legacy service mutation path temporarily
-
-# The deprecated nostr.intent_domains allowlist is accepted only during the
-# one-release migration window. R1 (bahia-irsry.11.19) removes both keys.
+  intent_domains_disabled: []

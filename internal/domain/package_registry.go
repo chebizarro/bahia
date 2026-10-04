@@ -115,9 +115,7 @@ const (
 type PackageOperation string
 
 const (
-	PackageOperationRepositoryApply  PackageOperation = "repository_apply"
 	PackageOperationRepositoryDelete PackageOperation = "repository_delete"
-	PackageOperationArtifactPublish  PackageOperation = "artifact_publish"
 	PackageOperationArtifactDelete   PackageOperation = "artifact_delete"
 	PackageOperationPromote          PackageOperation = "promote"
 	PackageOperationYank             PackageOperation = "yank"
@@ -129,22 +127,10 @@ const (
 type PackageIntentStatus string
 
 const (
-	PackageIntentStatusAccepted   PackageIntentStatus = "accepted"
-	PackageIntentStatusExecuting  PackageIntentStatus = "executing"
 	PackageIntentStatusSucceeded  PackageIntentStatus = "succeeded"
 	PackageIntentStatusFailed     PackageIntentStatus = "failed"
 	PackageIntentStatusSuperseded PackageIntentStatus = "superseded"
 )
-
-// Terminal reports whether the intent should not be re-executed during recovery.
-func (s PackageIntentStatus) Terminal() bool {
-	switch s {
-	case PackageIntentStatusSucceeded, PackageIntentStatusFailed, PackageIntentStatusSuperseded:
-		return true
-	default:
-		return false
-	}
-}
 
 // PackageRepositoryPolicy contains policy knobs enforced before backend mutation.
 type PackageRepositoryPolicy struct {

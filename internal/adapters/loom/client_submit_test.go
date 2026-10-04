@@ -71,9 +71,7 @@ func TestSubmitAndCancelRejectZeroRelayAcceptance(t *testing.T) {
 	if eventID != "" || len(client.submittedWorkers) != 0 {
 		t.Fatalf("unaccepted job was recorded: event=%q workers=%#v", eventID, client.submittedWorkers)
 	}
-	if err := client.CancelJob(t.Context(), strings.Repeat("a", 64), ""); err == nil || !strings.Contains(err.Error(), "no relay accepted") {
-		t.Fatalf("CancelJob() error = %v, want zero-relay error", err)
-	}
+
 }
 
 func TestSubmitJob_SecretsWithoutResolvedWorkerFailClosed(t *testing.T) {

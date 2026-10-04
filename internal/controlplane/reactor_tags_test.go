@@ -69,17 +69,16 @@ func TestRequestSubscriptionAuthorsFailClosedForMalformedConfiguredPubkeys(t *te
 	}
 }
 
-func TestRequestSubscriptionScopesContextVMToServicePubkey(t *testing.T) {
+func TestRequestSubscriptionDoesNotUseContextVMRecipientTag(t *testing.T) {
 	reactor := &Reactor{config: Config{PrivateKey: testServiceKey}}
 
 	filters := reactor.buildRequestSubscriptionFilters(42)
 	if len(filters) != 1 {
 		t.Fatalf("filter count = %d, want 1", len(filters))
 	}
-	want := testNostrPubKeyFromPrivateKey(t, testServiceKey).Hex()
 	got := filters[0].Tags["p"]
-	if len(got) != 1 || got[0] != want {
-		t.Fatalf("#p scope = %v, want [%s]", got, want)
+	if len(got) != 0 {
+		t.Fatalf("#p scope = %v, want no ContextVM recipient tag", got)
 	}
 }
 

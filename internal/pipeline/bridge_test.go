@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -501,31 +500,26 @@ func TestBuildRequestReplayPreservesCanonical5401CorrelationFor5402(t *testing.T
 		}},
 		RBAC: auth.NewRBAC(replayBuildMembers{}),
 	})
-	params, err := json.Marshal(controlplane.ArcanaBuildRequest{
-		ServiceID: serviceID, GitRef: "refs/heads/main",
-		RepositoryCredentialRef: credentialID, ArtifactRepo: imageRepo,
-		BuildArgs: map[string]string{},
-	})
+	buildIntent := controlplane.NewBuildIntentHandler(handler)
+	requestEvent := &nostr.Event{ID: nostr.ID{1}, PubKey: nostr.PubKey{2}}
+	newIntent := func() *controlplane.Intent {
+		return &controlplane.Intent{Op: "request", Coordinate: "build-request:" + serviceID.String(), Event: requestEvent,
+			Content: map[string]any{"service_id": serviceID.String(), "git_ref": "refs/heads/main",
+				"repository_credential_ref": credentialID.String(), "artifact_repo": imageRepo, "build_args": map[string]string{}}}
+	}
+	first := newIntent()
+	err := buildIntent.HandleIntent(ctx, first)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("first build intent: %v", err)
 	}
-	request := controlplane.ContextVMRequest{
-		Event: &nostr.Event{ID: nostr.ID{1}, PubKey: nostr.PubKey{2}},
-		RPC:   controlplane.ContextVMJSONRPCRequest{Params: params},
-	}
-	firstRaw, err := handler.RequestBuild(ctx, request)
+	replayed := newIntent()
+	err = buildIntent.HandleIntent(ctx, replayed)
 	if err != nil {
-		t.Fatalf("first RequestBuild: %v", err)
+		t.Fatalf("replayed build intent: %v", err)
 	}
-	replayedRaw, err := handler.RequestBuild(ctx, request)
-	if err != nil {
-		t.Fatalf("replayed RequestBuild: %v", err)
-	}
-	first := firstRaw.(map[string]any)
-	replayed := replayedRaw.(map[string]any)
-	buildID := first["build_id"].(uuid.UUID)
-	if replayed["build_id"] != buildID {
-		t.Fatalf("replay forked canonical build/run correlation: first=%#v replayed=%#v", first, replayed)
+	buildID := first.Result["build_id"].(uuid.UUID)
+	if replayed.Result["build_id"] != buildID {
+		t.Fatalf("replay forked canonical build/run correlation: first=%#v replayed=%#v", first.Result, replayed.Result)
 	}
 	if starter.calls != 1 || requestRegistry.registrations != 1 || len(builds.byRun) != 1 {
 		t.Fatalf("exact replay started=%d registered=%d rows=%d, want one each", starter.calls, requestRegistry.registrations, len(builds.byRun))
@@ -566,16 +560,16 @@ func TestBuildRequestReplayPreservesCanonical5401CorrelationFor5402(t *testing.T
 	if advanced == nil || advanced.ID != buildID || advanced.CIRunID != runEventID || advanced.Status != domain.BuildStatusSucceeded {
 		t.Fatalf("5402 did not advance canonical build: %#v", advanced)
 	}
-	afterResultRaw, err := handler.RequestBuild(ctx, request)
+	afterResult := newIntent()
+	err = buildIntent.HandleIntent(ctx, afterResult)
 	if err != nil {
 		t.Fatalf("replay after correlated 5402: %v", err)
 	}
-	afterResult := afterResultRaw.(map[string]any)
-	if afterResult["build_id"] != buildID || afterResult["ci_run_id"] != runEventID ||
-		afterResult["status"] != domain.BuildStatusSucceeded || starter.calls != 1 ||
+	if afterResult.Result["build_id"] != buildID || afterResult.Result["ci_run_id"] != runEventID ||
+		afterResult.Result["status"] != domain.BuildStatusSucceeded || starter.calls != 1 ||
 		requestRegistry.registrations != 1 || len(builds.byRun) != 1 {
 		t.Fatalf("post-5402 replay lost canonical state: result=%#v starts=%d registrations=%d rows=%d",
-			afterResult, starter.calls, requestRegistry.registrations, len(builds.byRun))
+			afterResult.Result, starter.calls, requestRegistry.registrations, len(builds.byRun))
 	}
 }
 

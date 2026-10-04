@@ -118,7 +118,6 @@ func TestControlPlaneReactorAuditOptionIndependentOfPackageFeature(t *testing.T)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := appendControlPlaneAuditOption(nil, repo)
-			opts = appendPackageControlPlaneOptions(opts, tt.packageSvc, nil)
 			reactor := controlplane.NewReactor(controlplane.Config{}, nil, nil, nil, zap.NewNop(), opts...)
 
 			field := reflect.ValueOf(reactor).Elem().FieldByName("nostrEvents")

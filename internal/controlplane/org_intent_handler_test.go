@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 
-	"fiatjaf.com/nostr"
 	"sync"
 	"testing"
 	"time"
+
+	"fiatjaf.com/nostr"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -651,7 +652,7 @@ func TestOrgIntentHandler_LegacyPathPublishes(t *testing.T) {
 	pub.mu.Lock()
 	defer pub.mu.Unlock()
 	if len(pub.publishedOrgs) == 0 {
-		t.Errorf("expected at least one org publish from intent handler (legacy path)")
+		t.Errorf("expected at least one org publish from intent handler")
 	}
 }
 

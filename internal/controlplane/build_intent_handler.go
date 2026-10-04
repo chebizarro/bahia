@@ -43,15 +43,11 @@ func (h *BuildIntentHandler) HandleIntent(ctx context.Context, intent *Intent) e
 	if intent.Event == nil {
 		return fmt.Errorf("build request requires a signed source event")
 	}
-	result, err := h.builds.requestBuildLegacy(ctx, ContextVMRequest{Event: intent.Event, RPC: ContextVMJSONRPCRequest{Params: raw}})
+	result, err := h.builds.requestBuild(ctx, intent.Event, payload)
 	if err != nil {
 		return err
 	}
-	data, ok := result.(map[string]any)
-	if !ok {
-		return fmt.Errorf("build request returned an invalid result")
-	}
-	intent.Result = data
-	intent.StatusData = data
+	intent.Result = result
+	intent.StatusData = result
 	return nil
 }

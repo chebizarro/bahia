@@ -253,7 +253,7 @@ func TestSecretIntentHandler_CreateWithPlaintext_DualDispatch(t *testing.T) {
 
 	stored, _ := f.repo.GetByID(ctx, secretID)
 	if stored == nil {
-		t.Fatal("secret not created via dual dispatch")
+		t.Fatal("secret not created via in-process intent")
 	}
 
 	// Plaintext should have been encrypted by testEncryptor.

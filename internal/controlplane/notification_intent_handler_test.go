@@ -270,7 +270,7 @@ func TestNotificationIntentHandler_UpdateViaInProcess(t *testing.T) {
 	current, _ := f.repo.GetChannelByID(ctx, channelID)
 	revision := current.UpdatedAt
 
-	// Update via in-process (dual dispatch).
+	// Update via the MCP in-process intent path.
 	intent := &Intent{
 		Domain:            "notification",
 		Op:                "update",

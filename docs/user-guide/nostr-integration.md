@@ -977,7 +977,7 @@ For MCP evaluation, use a client-signed `30900` `domain=policy`, `op=evaluate`
 intent with `d=evaluation:<artifact-uuid>:<environment-uuid>` and JSON content
 `{"artifact_id":"<uuid>","environment_id":"<uuid>"}`. The daemon evaluates
 its signature, SBOM, scan, and attestation repositories with the same
-`PolicyService.Evaluate` semantics as the legacy ContextVM method. It emits a
+`PolicyService.Evaluate` semantics. It emits a
 requester-scoped, replaceable `30315` status at
 `d=intent-status:<requester-pubkey>:<evaluation-coordinate>`; an accepted
 status has `result=evaluated` and an `evaluation` object. The status payload

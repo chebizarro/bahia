@@ -53,7 +53,6 @@ const (
 	KindControlPlaneServiceDelete            = kinds.ServiceDelete
 	KindControlPlaneEnvironmentUpdate        = kinds.EnvironmentUpdate
 	KindControlPlaneEnvironmentDelete        = kinds.EnvironmentDelete
-	KindControlPlaneArtifactRegister         = kinds.ArtifactRegister
 	KindControlPlanePolicyCreate             = kinds.PolicyCreate
 	KindControlPlanePolicyUpdate             = kinds.PolicyUpdate
 	KindControlPlanePolicyDelete             = kinds.PolicyDelete
@@ -92,8 +91,6 @@ const (
 	KindControlPlaneLLMDeploymentStatus = kinds.LLMDeploymentStatus
 	KindControlPlaneToolProvisionStatus = kinds.ToolProvisionStatus
 	KindControlPlaneAdoptionStatus      = kinds.AdoptionStatus
-	KindControlPlanePackageStatus       = kinds.PackageStatus
-	KindControlPlaneWorkerStatus        = kinds.WorkerStatus
 
 	KindControlPlaneDeploymentResult         = kinds.DeploymentResult
 	KindControlPlaneActionResult             = kinds.ActionResult
@@ -106,11 +103,6 @@ const (
 	KindControlPlaneLLMDeploymentResult      = kinds.LLMDeploymentResult
 	KindControlPlaneToolProvisionResult      = kinds.ToolProvisionResult
 	KindControlPlaneToolApprovalResponse     = kinds.ToolApprovalResponse
-	KindControlPlaneAdoptionScanResult       = kinds.AdoptionScanResult
-	KindControlPlaneAdoptionImportResult     = kinds.AdoptionImportResult
-	KindControlPlanePackageResult            = kinds.PackageResult
-	KindControlPlanePackageDriftEvent        = kinds.PackageDriftEvent
-	KindControlPlaneWorkerResult             = kinds.WorkerResult
 
 	KindFIPSOverlayAdvert = kinds.FIPSOverlayAdvert
 )

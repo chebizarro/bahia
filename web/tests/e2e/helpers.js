@@ -362,7 +362,7 @@ export async function installE2EMocks(
         state[serviceId] = secrets.filter((secret) => secret.id !== params.secret_id);
         writeMockServiceSecrets(state);
         payload = { deleted: true };
-      } else if (operation === 'services/secrets-reveal' || operation === 'services.secrets.reveal') {
+      } else if (operation === 'services/secrets-reveal') {
         payload = { value: secrets.find((secret) => secret.id === params.secret_id)?.value || '' };
       }
 

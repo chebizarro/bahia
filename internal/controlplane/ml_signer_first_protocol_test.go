@@ -80,7 +80,7 @@ func TestMLSignerFirstRequestSubscriptionsAreScopedCanonicalContextVM(t *testing
 		t.Fatalf("filters=%d, want one scoped ContextVM subscription", len(filters))
 	}
 	filter := filters[0]
-	wantKinds := []nostr.Kind{KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap, KindArtifactRegister}
+	wantKinds := []nostr.Kind{KindNIP38Status}
 	if !sameNostrKindSet(filter.Kinds, wantKinds) {
 		t.Fatalf("request subscription kinds=%v, want canonical ContextVM kinds plus signed artifact registration %v", filter.Kinds, wantKinds)
 	}
@@ -156,8 +156,7 @@ func TestMLBrowserRouteAvoidsHTTPPollingForCompletion(t *testing.T) {
 	}{
 		{"model import command", `publishMLCommand\(\s*['"]ml/model-import['"]\s*,`},
 		{"inference deploy command", `publishMLCommand\(\s*['"]ml/inference-deploy['"]\s*,`},
-		// Phase 4 W3e: the bridge publishes a signed 30900 intent, never a ContextVM command.
-		{"signed-intent bridge", `async\s+function\s+publishMLCommand\s*\([^)]*\)\s*\{[^}]*publishIntent\s*\(`},
+		{"signed intent bridge", `async\s+function\s+publishMLCommand\s*\([^)]*\)\s*\{[^}]*publishIntent\s*\(`},
 	} {
 		matched, err := regexp.MatchString(required.pattern, src)
 		if err != nil {

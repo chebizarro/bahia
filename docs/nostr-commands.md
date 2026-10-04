@@ -1,18 +1,20 @@
 # Bahia Nostr Control-Plane Events
 
+Phase 3 R1: operator mutations are client-signed kind `30900` intents. The operator-facing ContextVM allowlist is assistant prompt/approval/cancel/reconcile, `services/secrets-reveal`, and `deployments/run-logs-get` only. Older ContextVM mutation examples below describe the retired migration path; do not use them for new requests.
+
 ## D80 request operations and desired state
 
 The [Go-generated D80 wire fixtures](../web/tests/fixtures/d80-intent-content.json) define client-signed kind `30900` content and coordinates for `security/scan-run`, `sbom/generate|import`, `artifact/signature-verify|register-build-result`, `relay/policy-set`, `notification/channel-test`, `environment/worker-policy-apply`, and `ml/pin`. The scan, SBOM, artifact, and channel-test ops are requests; relay policy, worker policy, and ML pin are desired state. Keep `intent_id` stable on retries and follow bounded `30315` status by requester and coordinate. Relay policy and notification test are sensitive-domain intents and must be gift-wrapped.
 
-Scan completion is in security scan status/findings; SBOM completion is in `30078`/`30004` and `32017`/`32018`; verified signatures are `32016`; build-result registration is build/artifact cp-state. Relay policy is the protected `relay-settings:operator` cp-state record (full `bahia.relay-settings.v1` content); subscribe to that record to read it rather than calling ContextVM. Worker policy is the environment record's `runtime_config.worker_policy`; ML pin is the inference endpoint's `placement_policy.pinned_worker`. Notification test delivery result is only the bounded status `data`. Fleet operators admit security, SBOM, relay policy, worker policy, and ML pin; artifact requests require `services:write`, and channel test requires `settings:manage`. A disabled domain retains its ContextVM path during migration.
+Scan completion is in security scan status/findings; SBOM completion is in `30078`/`30004` and `32017`/`32018`; verified signatures are `32016`; build-result registration is build/artifact cp-state. Relay policy is the protected `relay-settings:operator` cp-state record (full `bahia.relay-settings.v1` content); subscribe to that record to read it rather than calling ContextVM. Worker policy is the environment record's `runtime_config.worker_policy`; ML pin is the inference endpoint's `placement_policy.pinned_worker`. Notification test delivery result is only the bounded status `data`. Fleet operators admit security, SBOM, relay policy, worker policy, and ML pin; artifact requests require `services:write`, and channel test requires `settings:manage`. A disabled domain rejects its intents; there is no ContextVM mutation fallback.
 
 ## Deployment-family intents
 
-For registered intent domains (enabled by default unless in `nostr.intent_domains_disabled`), publish client-signed kind `30900` with `schema=bahia.intent.<domain>.v1`, `domain` and `op` tags, and JSON content containing stable `intent_id`. When used, `expected_updated_at` must be copied as an RFC3339 string from canonical `updated_at`, never encoded as a numeric epoch. Supported ops: `deployment/create|approve|reject|rollback`, `runtime/deploy|restart|stop`, `llm/deploy|rollback|approve|reject`, and `backup/restore-approval`. The [wire fixtures](../web/tests/fixtures/deployment-intents.json) specify content fields. Watch kind `30315` status and daemon-authored state, not the submission receipt, for outcomes. Disabled domains continue to use legacy ContextVM handlers.
+For registered intent domains (enabled by default unless in `nostr.intent_domains_disabled`), publish client-signed kind `30900` with `schema=bahia.intent.<domain>.v1`, `domain` and `op` tags, and JSON content containing stable `intent_id`. When used, `expected_updated_at` must be copied as an RFC3339 string from canonical `updated_at`, never encoded as a numeric epoch. Supported ops: `deployment/create|approve|reject|rollback`, `runtime/deploy|restart|stop`, `llm/deploy|rollback|approve|reject`, and `backup/restore-approval`. The [wire fixtures](../web/tests/fixtures/deployment-intents.json) specify content fields. Watch kind `30315` status and daemon-authored state, not the submission receipt, for outcomes. Disabled domains reject those intents; they do not fall back to ContextVM mutation handlers.
 
 ## D79 operator requests
 
-`ml/model-import`, `ml/recipe-apply`, `ml/recipe-run`, `ml/inference-deploy`, `ml/inference-approval`, `ml/inference-rollback`, `tool/approval-response`, `build/request`, and `adoption/scan` now have signed `30900` intent handlers. Use `intent_id` as a tag-level idempotency key; `content.intent_id` in an approval response instead names the pending deployment or provisioning intent. The [D79 fixtures](../web/tests/fixtures/d79-intent-content.json) define coordinates, permissions, modelling and content. Request results appear in requester-scoped `30315` `data`; adoption findings are redacted and paged. The registered ContextVM methods retain dual dispatch during caller migration.
+`ml/model-import`, `ml/recipe-apply`, `ml/recipe-run`, `ml/inference-deploy`, `ml/inference-approval`, `ml/inference-rollback`, `tool/approval-response`, `build/request`, and `adoption/scan` now have signed `30900` intent handlers. Use `intent_id` as a tag-level idempotency key; `content.intent_id` in an approval response instead names the pending deployment or provisioning intent. The [D79 fixtures](../web/tests/fixtures/d79-intent-content.json) define coordinates, permissions, modelling and content. Request results appear in requester-scoped `30315` `data`; adoption findings are redacted and paged. The former ContextVM mutation methods have been removed; callers must sign intents directly.
 
 ## Legacy command publisher compatibility
 
@@ -51,7 +53,7 @@ invalidate the approval before ownership is written.
 [Virtualization parameters, examples and safe output](user-guide/features/virtual-machines.md).
 
 
-Bahia's production Nostr control plane is now ContextVM-first. Mutation intent uses ContextVM JSON-RPC kind `25910`, usually encrypted with ContextVM CEP-4 / NIP-59 wrappers (`1059` or `21059`). When discovery advertises `encrypted_controlplane.progress_ack` plus `contextvm-jsonrpc-v2`, routed and authorized encrypted requests receive an early no-`id` `notifications/progress` JSON-RPC notification before the terminal response. Long-running truth is observed through canonical Nostr events, not through legacy Bahia request/status/result kind families.
+Bahia's operator mutation path is client-signed kind `30900` intents. ContextVM kind `25910` and its encrypted wrappers (`1059` or `21059`) remain only for assistant operations, secret-value reveal, and run-log fetch. Long-running truth is observed through canonical Nostr events, not legacy Bahia request/status/result kind families.
 
 Restart behaviour: a stored `1059` request sent while the daemon is down is executed once it comes back, while relays retain it, and never twice. The daemon keeps a per-relay, post-`EOSE` cursor that resumes 49 hours early to cover NIP-59 backdating, and a local ledger of request IDs and keyed responses. PostgreSQL is optional for both. Plain `25910` and oversized-wrap `21059` requests are ephemeral, so relays cannot replay them after downtime. Durable client-signed intents are Phase 3 (`bahia-irsry.11`). See the [Nostr integration guide](user-guide/nostr-integration.md) for the cursor and idempotency rules.
 
@@ -453,7 +455,7 @@ For MCP evaluation, use a client-signed `30900` `domain=policy`, `op=evaluate`
 intent with `d=evaluation:<artifact-uuid>:<environment-uuid>` and JSON content
 `{"artifact_id":"<uuid>","environment_id":"<uuid>"}`. The daemon evaluates
 its signature, SBOM, scan, and attestation repositories with the same
-`PolicyService.Evaluate` semantics as the legacy ContextVM method. It emits a
+`PolicyService.Evaluate` semantics. It emits a
 requester-scoped, replaceable `30315` status at
 `d=intent-status:<requester-pubkey>:<evaluation-coordinate>`; an accepted
 status has `result=evaluated` and an `evaluation` object. The status payload

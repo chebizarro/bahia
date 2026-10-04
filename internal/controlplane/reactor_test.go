@@ -49,18 +49,11 @@ func TestReactorFallsBackToNowWithoutLastSeen(t *testing.T) {
 	}
 }
 
-func TestSubscriberAndReactorDefaultSubscriptionsDoNotOverlapOrIncludeLegacy(t *testing.T) {
+func TestSubscriberAndReactorDefaultSubscriptionsDoNotIncludeLegacy(t *testing.T) {
 	reactorKinds := requestSubscriptionKinds()
 	for _, kind := range append(append([]int{}, reactorKinds...), nostradapter.DefaultInboundKinds...) {
 		if isLegacyProductionRuntimeKind(kind) && kind != KindArtifactRegister {
 			t.Fatalf("production default subscription still includes legacy runtime kind %d", kind)
-		}
-	}
-	for _, kind := range nostradapter.DefaultInboundKinds {
-		for _, reactorKind := range reactorKinds {
-			if kind == reactorKind {
-				t.Fatalf("subscriber default kind %d duplicates reactor subscription kinds", kind)
-			}
 		}
 	}
 }

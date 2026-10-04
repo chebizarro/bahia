@@ -14,6 +14,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const KindJobCancelReq = 5102 // Historical cancellation event used by status parsing tests.
+
 type fakeLoomRelayPool struct {
 	sub            *nostrAdapter.MergedSubscription
 	subs           []*nostrAdapter.MergedSubscription

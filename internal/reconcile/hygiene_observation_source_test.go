@@ -47,9 +47,9 @@ func (r *hygieneProjectionRelay) Publish(ctx context.Context, outer nostr.Event)
 	r.methods = append(r.methods, request.Method)
 	var result any
 	switch request.Method {
-	case controlplane.ContextVMMethodMaintenanceScan:
+	case controlplane.MaintenanceWorkerRPCMethodScan:
 		result = r.scanResult
-	case controlplane.ContextVMMethodMaintenancePressure:
+	case controlplane.MaintenanceWorkerRPCMethodPressure:
 		result = r.pressureResult
 	default:
 		return 1, nil
@@ -165,7 +165,7 @@ func TestHygieneObservationProjectionTriggersCandidateQuarantine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if !containsMethod(h.relay.methods, controlplane.ContextVMMethodMaintenanceQuarantine) || len(result.Actions) != 1 || result.Actions[0].Method != controlplane.ContextVMMethodMaintenanceQuarantine {
+	if !containsMethod(h.relay.methods, controlplane.MaintenanceWorkerRPCMethodQuarantine) || len(result.Actions) != 1 || result.Actions[0].Method != controlplane.MaintenanceWorkerRPCMethodQuarantine {
 		t.Fatalf("canonical scan did not trigger quarantine: methods=%v actions=%+v", h.relay.methods, result.Actions)
 	}
 	if got := result.Actions[0].Paths; len(got) != 1 || got[0] != "/srv/fleet/worktrees/cruft" {
@@ -187,7 +187,7 @@ func TestHygieneObservationProjectionTriggersPressureGC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if !containsMethod(h.relay.methods, controlplane.ContextVMMethodMaintenanceGC) || len(result.PressureAlerts) != 1 {
+	if !containsMethod(h.relay.methods, controlplane.MaintenanceWorkerRPCMethodGC) || len(result.PressureAlerts) != 1 {
 		t.Fatalf("canonical pressure did not trigger gc: methods=%v alerts=%v", h.relay.methods, result.PressureAlerts)
 	}
 }
@@ -223,7 +223,7 @@ func TestHygieneObservationRejectsForgedAndMismatchedResponses(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reconcile: %v", err)
 			}
-			if len(result.Actions) != 0 || containsMethod(h.relay.methods, controlplane.ContextVMMethodMaintenanceQuarantine) {
+			if len(result.Actions) != 0 || containsMethod(h.relay.methods, controlplane.MaintenanceWorkerRPCMethodQuarantine) {
 				t.Fatalf("rejected response triggered an action: methods=%v actions=%+v", h.relay.methods, result.Actions)
 			}
 		})
@@ -246,10 +246,10 @@ func TestHygieneObservationTruncatedScanSuppressesQuarantineButAllowsGC(t *testi
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if containsMethod(h.relay.methods, controlplane.ContextVMMethodMaintenanceQuarantine) {
+	if containsMethod(h.relay.methods, controlplane.MaintenanceWorkerRPCMethodQuarantine) {
 		t.Fatalf("truncated candidate list triggered quarantine: %v", h.relay.methods)
 	}
-	if !containsMethod(h.relay.methods, controlplane.ContextVMMethodMaintenanceGC) || len(result.PressureAlerts) != 1 {
+	if !containsMethod(h.relay.methods, controlplane.MaintenanceWorkerRPCMethodGC) || len(result.PressureAlerts) != 1 {
 		t.Fatalf("independent pressure result did not trigger gc: methods=%v alerts=%v", h.relay.methods, result.PressureAlerts)
 	}
 	observation, err := h.source.Latest(context.Background(), h.workerKey)
@@ -282,7 +282,7 @@ func TestHygieneObservationSourceDoesNotRegressOnOutOfOrderResponses(t *testing.
 	register := func(requestID, dTag string) {
 		t.Helper()
 		if _, err := source.RegisterMaintenanceRequest(controlplane.MaintenanceRequestCorrelation{
-			Method: controlplane.ContextVMMethodMaintenanceScan, WorkerPubKey: workerPubKey.Hex(),
+			Method: controlplane.MaintenanceWorkerRPCMethodScan, WorkerPubKey: workerPubKey.Hex(),
 			RequestEventID: requestID, RequestPubKey: servicePubKey, DTag: dTag,
 		}); err != nil {
 			t.Fatal(err)
@@ -349,7 +349,7 @@ func TestHygieneObservationSourceBoundsAndExpiresPendingRequests(t *testing.T) {
 	source.now = func() time.Time { return now }
 	correlation := func(id, dTag string) controlplane.MaintenanceRequestCorrelation {
 		return controlplane.MaintenanceRequestCorrelation{
-			Method: controlplane.ContextVMMethodMaintenanceScan, WorkerPubKey: workerSecret.Public().Hex(),
+			Method: controlplane.MaintenanceWorkerRPCMethodScan, WorkerPubKey: workerSecret.Public().Hex(),
 			RequestEventID: id, RequestPubKey: serviceSecret.Public().Hex(), DTag: dTag,
 		}
 	}

@@ -341,19 +341,16 @@ func TestParseIntent_WrongKind(t *testing.T) {
 }
 
 func TestBuildEnabledDomains(t *testing.T) {
-	m := BuildEnabledDomains(nil, nil)
+	m := BuildEnabledDomains(nil)
 	for _, domain := range RegisteredIntentDomains {
 		assert.True(t, m[domain], domain)
 	}
-	m = BuildEnabledDomains([]string{"Service", " environment "}, nil)
+	m = BuildEnabledDomains([]string{"Service", " environment "})
 	assert.Len(t, m, len(RegisteredIntentDomains)-2)
 	assert.False(t, m["service"])
 	assert.False(t, m["environment"])
 	assert.True(t, m["policy"])
-	m = BuildEnabledDomains(nil, []string{"Service", "environment"})
-	assert.Len(t, m, 2)
-	assert.True(t, m["service"])
-	assert.True(t, m["environment"])
+
 }
 
 // --- test helpers ---

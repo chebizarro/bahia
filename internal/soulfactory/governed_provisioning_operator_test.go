@@ -28,8 +28,8 @@ func (g *unavailableSoulGenerator) Generate(context.Context, domain.SoulGenerato
 	return nil, &saga.SafeError{Code: "dependency_unavailable", Retryable: true}
 }
 
-// Start at the same request adapter and reactor handler used by ContextVM,
-// without seeding the saga store or calling saga.Engine in the fixture.
+// Start at the reactor's direct provisioning event handler without seeding the
+// saga store or calling saga.Engine in the fixture.
 func startOperatorFixture(t *testing.T) (*ProductionGovernedProvisioner, *Reactor, *nostr.Event, string, *unavailableSoulGenerator) {
 	t.Helper()
 	signer := newFakeSigner(t)
@@ -53,10 +53,11 @@ func startOperatorFixture(t *testing.T) (*ProductionGovernedProvisioner, *Reacto
 	provisioner, err := NewProductionGovernedProvisioner(full, ProductionGovernedProvisionerConfig{StateDir: dir})
 	require.NoError(t, err)
 	require.NoError(t, reactor.InstallProvisioningEngine(provisioner))
-	request := contextVMTestRequest(t, ContextVMMethodProvision, fmt.Sprintf(`{"agent_id":"saga-canary","brief":"Exercise durable recovery","spec_hash":"test-spec","runtime":{"target":"openclaw","runtime_release_id":%q}}`, uuid.NewString()))
-	reactor.config.AuthorizedPubkeys = []string{request.Event.PubKey.Hex()}
-	event, err := contextVMProvisioningEvent(request)
-	require.NoError(t, err)
+	requester := nostr.Generate().Public().Hex()
+	reactor.config.AuthorizedPubkeys = []string{requester}
+	// Existing in-flight runs retain their historical method discriminator so
+	// restart/retry continues projecting the same canonical state and audit.
+	event := buildProvisioningEvent(t, requester, "saga-canary", nostr.Tags{{"method", soulFactoryLegacyProvisionMethod}}, fmt.Sprintf(`{"agent_id":"saga-canary","brief":"Exercise durable recovery","spec_hash":"test-spec","runtime":{"target":"openclaw","runtime_release_id":%q}}`, uuid.NewString()))
 	reactor.handleProvisioningRequest(t.Context(), event)
 	require.Equal(t, 1, generator.calls, "run: %+v", reactor.runs[event.ID.Hex()])
 	return provisioner, reactor, event, dir, generator
@@ -113,7 +114,7 @@ func TestProductionOperatorRestartRetryAndSafeAbort(t *testing.T) {
 	before, err := restarted.store.Load(t.Context(), requestID)
 	require.NoError(t, err)
 	for _, operation := range []saga.OperatorCommand{saga.CommandInspect, saga.CommandRetry, saga.CommandReconcile, saga.CommandSafeAbort} {
-		report, err := restarted.ExecuteProvisioningCommand(t.Context(), saga.Command{RequestID: requestID, Operation: operation, DryRun: true})
+		report, err := restarted.executeProvisioningCommand(t.Context(), saga.Command{RequestID: requestID, Operation: operation, DryRun: true})
 		require.NoError(t, err)
 		require.True(t, report.DryRun)
 	}
@@ -124,7 +125,7 @@ func TestProductionOperatorRestartRetryAndSafeAbort(t *testing.T) {
 
 	// The reservation already exists, but preparation did not complete. Retry
 	// must resume preparation instead of treating that reservation as completion.
-	_, err = restarted.ExecuteProvisioningCommand(t.Context(), saga.Command{RequestID: requestID, Operation: saga.CommandRetry})
+	_, err = restarted.executeProvisioningCommand(t.Context(), saga.Command{RequestID: requestID, Operation: saga.CommandRetry})
 	require.Error(t, err)
 	require.Equal(t, 2, generator.calls, "retry skipped unfinished identity preparation")
 	after, err = restarted.store.Load(t.Context(), requestID)
@@ -133,7 +134,7 @@ func TestProductionOperatorRestartRetryAndSafeAbort(t *testing.T) {
 	require.Equal(t, saga.StageFailedRecoverable, after.Stage)
 	require.Greater(t, after.Version, before.Version)
 
-	report, err := restarted.ExecuteProvisioningCommand(t.Context(), saga.Command{RequestID: requestID, Operation: saga.CommandSafeAbort})
+	report, err := restarted.executeProvisioningCommand(t.Context(), saga.Command{RequestID: requestID, Operation: saga.CommandSafeAbort})
 	require.NoError(t, err)
 	require.Equal(t, saga.StageRolledBack, report.Stage)
 	state, err := restarted.states.load(t.Context(), requestID)
@@ -156,7 +157,7 @@ func TestProductionOperatorRefusesIdentityDriftAndConcurrentWork(t *testing.T) {
 	require.NoError(t, err)
 	unlock, err := p.states.lockRequest(t.Context(), command.RequestID)
 	require.NoError(t, err)
-	_, err = other.ExecuteProvisioningCommand(t.Context(), command)
+	_, err = other.executeProvisioningCommand(t.Context(), command)
 	require.ErrorIs(t, err, saga.ErrConflict)
 	unlock()
 	state, err := p.states.load(t.Context(), command.RequestID)
@@ -164,7 +165,7 @@ func TestProductionOperatorRefusesIdentityDriftAndConcurrentWork(t *testing.T) {
 	state.Runtime = domain.RuntimeTargetMetiq
 	state.Resolved.Runtime.Target = domain.RuntimeTargetMetiq
 	require.NoError(t, p.states.save(t.Context(), state))
-	_, err = other.ExecuteProvisioningCommand(t.Context(), command)
+	_, err = other.executeProvisioningCommand(t.Context(), command)
 	require.ErrorIs(t, err, saga.ErrConflict)
 	require.Equal(t, 1, generator.calls)
 }

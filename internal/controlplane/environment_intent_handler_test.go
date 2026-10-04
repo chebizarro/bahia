@@ -450,44 +450,7 @@ func TestEnvironmentIntentHandler_FullPipeline(t *testing.T) {
 	assert.Len(t, published.events, 1, "duplicate intent must not publish status again")
 }
 
-// --- F3 test: dual dispatch via ContextVM ---
-func TestEnvironmentIntentHandler_DualDispatchContextVM(t *testing.T) {
-	store := openTestStore(t)
-	reg := &stubEnvironmentRegistry{}
-	ts := NewTrustSet(nil, zap.NewNop(),
-		WithBootstrapOwners(map[string]string{testOrgID().String(): testPubkey}),
-	)
-	proc := NewIntentProcessor(ts, store, nil,
-		IntentProcessorConfig{EnabledDomains: map[string]bool{"environment": true}},
-		zap.NewNop(),
-	)
-	proc.RegisterHandler("environment", NewEnvironmentIntentHandler(reg, nil, zap.NewNop()))
-
-	envID := domain.NewEntityID()
-	content := map[string]interface{}{
-		"id":              envID.String(),
-		"name":            "contextvm-env",
-		"deploy_strategy": "replace",
-	}
-
-	// Simulate ContextVM dual dispatch.
-	intent := &Intent{
-		Domain:     "environment",
-		Op:         "create",
-		OrgID:      testOrgID(),
-		IntentID:   envID.String(),
-		Coordinate: envID.String(),
-		Content:    content,
-		Actor:      testPubkey,
-	}
-
-	err := proc.ProcessInProcess(context.Background(), intent)
-	require.NoError(t, err)
-	require.Len(t, reg.created, 1)
-	assert.Equal(t, "contextvm-env", reg.created[0].env.Name)
-}
-
-// --- F3 test: projector no longer publishes environment records ---
+// --- F3 test: projector does not duplicate intent publication ---
 func TestProjectorNoLongerPublishesEnvironmentRecords(t *testing.T) {
 	// This test verifies that the projector's SetupSubscriptions no longer
 	// includes environment event types. We check the code path by confirming

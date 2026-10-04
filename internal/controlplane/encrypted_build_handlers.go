@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -15,11 +14,6 @@ import (
 )
 
 const (
-	ContextVMMethodBuildRequest                = "build/request"
-	ContextVMMethodBuildGet                    = "build/get"
-	ContextVMMethodBuildList                   = "build/list"
-	ContextVMMethodArtifactRegisterBuildResult = "artifact/register-build-result"
-
 	ArcanaRepositoryCoordinate = "chebizarro/living-library-forge"
 	ArcanaRepositoryURL        = "https://github.com/chebizarro/living-library-forge"
 )
@@ -28,8 +22,8 @@ var (
 	fullGitSHA           = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 	buildArgNamePattern  = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
 	repositoryURLPattern = regexp.MustCompile(`(?i)(?:^|[:/])([^/:]+)/([^/]+?)(?:\.git)?/?$`)
-	// Frozen namespace for build IDs derived from signed ContextVM request events.
-	contextVMBuildRequestNamespace = uuid.MustParse("24ac457f-f5f6-4eb2-bdd5-d67ca47b8b45")
+	// Frozen namespace for build IDs derived from signed request intent events.
+	buildIntentRequestNamespace = uuid.MustParse("24ac457f-f5f6-4eb2-bdd5-d67ca47b8b45")
 )
 
 var ArcanaPublicBuildArgNames = []string{
@@ -52,7 +46,7 @@ var arcanaPublicBuildArgs = func() map[string]struct{} {
 	return allowed
 }()
 
-// ArcanaBuildRequest is the browser-facing, signed ContextVM build contract.
+// ArcanaBuildRequest is the operator-signed build intent contract.
 // repository_credential_ref is an opaque server-side secret ID. The secret value
 // is never accepted in this payload and build_args are restricted to public
 // compile-time values.
@@ -112,97 +106,32 @@ type BuildCredentialReferenceLoader interface {
 }
 
 type EncryptedBuildHandlersConfig struct {
-	IntentProcessor   *IntentProcessor
-	Starter           HiveCIBuildStarter
-	Registry          BuildRegistry
-	Builds            BuildResultLoader
-	ArtifactRegistrar BuildResultArtifactRegistrar
-	Services          encryptedServiceLoader
-	Secrets           BuildCredentialReferenceLoader
-	RBAC              *auth.RBAC
+	Starter  HiveCIBuildStarter
+	Registry BuildRegistry
+	Builds   BuildResultLoader
+	Services encryptedServiceLoader
+	Secrets  BuildCredentialReferenceLoader
+	RBAC     *auth.RBAC
 }
 
 type EncryptedBuildHandlers struct {
-	intentProcessor   *IntentProcessor
-	starter           HiveCIBuildStarter
-	registry          BuildRegistry
-	builds            BuildResultLoader
-	artifactRegistrar BuildResultArtifactRegistrar
-	services          encryptedServiceLoader
-	secrets           BuildCredentialReferenceLoader
-	rbac              *auth.RBAC
+	starter  HiveCIBuildStarter
+	registry BuildRegistry
+	builds   BuildResultLoader
+	services encryptedServiceLoader
+	secrets  BuildCredentialReferenceLoader
+	rbac     *auth.RBAC
 }
 
 func NewEncryptedBuildHandlers(cfg EncryptedBuildHandlersConfig) *EncryptedBuildHandlers {
 	return &EncryptedBuildHandlers{
-		intentProcessor: cfg.IntentProcessor,
-		starter:         cfg.Starter, registry: cfg.Registry, builds: cfg.Builds,
-		artifactRegistrar: cfg.ArtifactRegistrar, services: cfg.Services,
-		secrets: cfg.Secrets, rbac: cfg.RBAC,
+		starter: cfg.Starter, registry: cfg.Registry, builds: cfg.Builds,
+		services: cfg.Services,
+		secrets:  cfg.Secrets, rbac: cfg.RBAC,
 	}
 }
 
-func (h *EncryptedBuildHandlers) Register(transport *EncryptedRequestTransport) {
-	if h == nil || transport == nil {
-		return
-	}
-	transport.RegisterContextVMHandler(ContextVMMethodBuildRequest, h.RequestBuild)
-	transport.RegisterContextVMHandler(ContextVMMethodBuildGet, h.GetBuild)
-	transport.RegisterContextVMHandler(ContextVMMethodBuildList, h.ListBuilds)
-	transport.RegisterContextVMHandler(ContextVMMethodArtifactRegisterBuildResult, h.RegisterBuildResult)
-}
-
-func (h *EncryptedBuildHandlers) RequestBuild(ctx context.Context, request ContextVMRequest) (any, error) {
-	if h != nil && h.intentProcessor != nil && h.intentProcessor.Handler("build") != nil {
-		if request.Event == nil {
-			return nil, fmt.Errorf("build/request requires an authenticated requester")
-		}
-		var payload ArcanaBuildRequest
-		if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
-			return nil, err
-		}
-		if err := validateBuildRequest(payload); err != nil {
-			return nil, err
-		}
-		content := map[string]any{}
-		if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
-			return nil, err
-		}
-		intentID := effectiveIdempotencyKey(request, request.Event.ID.Hex())
-		coordinate := "build-request:" + payload.ServiceID.String()
-		var orgID uuid.UUID
-		if recorded := h.intentProcessor.ProcessedIntent(intentID); recorded != nil {
-			coordinate = recorded.Coordinate
-			orgID, _ = uuid.Parse(recorded.OrgID)
-		} else {
-			if h.services == nil {
-				return nil, fmt.Errorf("build service repository is not configured")
-			}
-			svc, err := h.services.GetByID(ctx, payload.ServiceID)
-			if err != nil {
-				return nil, err
-			}
-			if svc == nil {
-				return nil, fmt.Errorf("service not found")
-			}
-			orgID = svc.OrgID
-		}
-		intent := &Intent{Event: request.Event, Domain: "build", Op: "request", OrgID: orgID,
-			IntentID: intentID, Coordinate: coordinate,
-			Content: content, Actor: request.Event.PubKey.Hex()}
-		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
-			return nil, err
-		}
-		return intent.Result, nil
-	}
-	return h.requestBuildLegacy(ctx, request)
-}
-
-func (h *EncryptedBuildHandlers) requestBuildLegacy(ctx context.Context, request ContextVMRequest) (any, error) {
-	var payload ArcanaBuildRequest
-	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
-		return nil, fmt.Errorf("decode build/request params: %w", err)
-	}
+func (h *EncryptedBuildHandlers) requestBuild(ctx context.Context, event *nostr.Event, payload ArcanaBuildRequest) (map[string]any, error) {
 	if err := validateBuildRequest(payload); err != nil {
 		return nil, err
 	}
@@ -214,7 +143,7 @@ func (h *EncryptedBuildHandlers) requestBuildLegacy(ctx context.Context, request
 	}
 
 	authorizer := encryptedTenantAuthorizer{services: h.services, rbac: h.rbac}
-	svc, err := authorizer.authorizeService(ctx, request.Event, payload.ServiceID, domain.PermWriteServices)
+	svc, err := authorizer.authorizeService(ctx, event, payload.ServiceID, domain.PermWriteServices)
 	if err != nil {
 		return nil, err
 	}
@@ -230,14 +159,14 @@ func (h *EncryptedBuildHandlers) requestBuildLegacy(ctx context.Context, request
 	}
 	sourceEventID := ""
 	requesterPubkey := ""
-	if request.Event != nil {
-		if request.Event.ID == (nostr.ID{}) {
+	if event != nil {
+		if event.ID == (nostr.ID{}) {
 			return nil, fmt.Errorf("build/request requires a signed source event ID")
 		}
-		sourceEventID = request.Event.ID.Hex()
-		requesterPubkey = request.Event.PubKey.Hex()
+		sourceEventID = event.ID.Hex()
+		requesterPubkey = event.PubKey.Hex()
 	}
-	buildID := contextVMBuildID(sourceEventID)
+	buildID := buildIDFromIntentEvent(sourceEventID)
 	existing, err := h.builds.GetByID(ctx, buildID)
 	if err != nil {
 		return nil, fmt.Errorf("load canonical build: %w", err)
@@ -320,11 +249,11 @@ func (h *EncryptedBuildHandlers) requestBuildLegacy(ctx context.Context, request
 	return buildRequestResult(build), nil
 }
 
-func contextVMBuildID(sourceEventID string) uuid.UUID {
-	// The signed ContextVM request event is the replay key already used by the
+func buildIDFromIntentEvent(sourceEventID string) uuid.UUID {
+	// The signed request intent event is the replay key already used by the
 	// Gitea initiator. Namespacing that immutable event ID gives Bahia the same
 	// local build primary key on every exact replay.
-	return uuid.NewSHA1(contextVMBuildRequestNamespace, []byte(strings.TrimSpace(sourceEventID)))
+	return uuid.NewSHA1(buildIntentRequestNamespace, []byte(strings.TrimSpace(sourceEventID)))
 }
 
 func validateCanonicalBuildIdentity(existing *domain.Build, buildID, serviceID uuid.UUID, sourceEventID string) error {
@@ -356,140 +285,6 @@ func buildRequestResult(build *domain.Build) map[string]any {
 		"build_id": build.ID, "status": build.Status, "git_sha": build.GitSHA,
 		"git_ref": build.GitRef, "ci_system": build.CISystem, "ci_run_id": build.CIRunID,
 	}
-}
-
-func (h *EncryptedBuildHandlers) GetBuild(ctx context.Context, request ContextVMRequest) (any, error) {
-	var payload struct {
-		BuildID uuid.UUID `json:"build_id"`
-	}
-	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
-		return nil, fmt.Errorf("decode build/get params: %w", err)
-	}
-	if payload.BuildID == uuid.Nil {
-		return nil, fmt.Errorf("build_id is required")
-	}
-	if h == nil || h.builds == nil || h.services == nil {
-		return nil, fmt.Errorf("build read handling is not configured")
-	}
-	build, err := h.builds.GetByID(ctx, payload.BuildID)
-	if err != nil {
-		return nil, fmt.Errorf("fetch build: %w", err)
-	}
-	if build == nil {
-		return nil, fmt.Errorf("build %s not found", payload.BuildID)
-	}
-	authorizer := encryptedTenantAuthorizer{services: h.services, rbac: h.rbac}
-	if _, err := authorizer.authorizeService(ctx, request.Event, build.ServiceID, domain.PermReadServices); err != nil {
-		return nil, err
-	}
-	return map[string]any{"build": build}, nil
-}
-
-func (h *EncryptedBuildHandlers) ListBuilds(ctx context.Context, request ContextVMRequest) (any, error) {
-	var payload struct {
-		ServiceID uuid.UUID `json:"service_id"`
-		Limit     int       `json:"limit"`
-		Offset    int       `json:"offset"`
-	}
-	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
-		return nil, fmt.Errorf("decode build/list params: %w", err)
-	}
-	if payload.ServiceID == uuid.Nil {
-		return nil, fmt.Errorf("service_id is required")
-	}
-	if h == nil || h.registry == nil || h.services == nil {
-		return nil, fmt.Errorf("build read handling is not configured")
-	}
-	limit := payload.Limit
-	if limit <= 0 {
-		limit = 20
-	} else if limit > 200 {
-		limit = 200
-	}
-	offset := payload.Offset
-	if offset < 0 {
-		offset = 0
-	}
-	authorizer := encryptedTenantAuthorizer{services: h.services, rbac: h.rbac}
-	if _, err := authorizer.authorizeService(ctx, request.Event, payload.ServiceID, domain.PermReadServices); err != nil {
-		return nil, err
-	}
-	builds, err := h.registry.ListBuilds(ctx, payload.ServiceID, limit, offset)
-	if err != nil {
-		return nil, fmt.Errorf("list builds: %w", err)
-	}
-	if builds == nil {
-		builds = []domain.Build{}
-	}
-	return map[string]any{
-		"builds": builds,
-		"count":  len(builds),
-		"limit":  limit,
-		"offset": offset,
-	}, nil
-}
-
-func (h *EncryptedBuildHandlers) RegisterBuildResult(ctx context.Context, request ContextVMRequest) (any, error) {
-	var payload struct {
-		BuildID uuid.UUID `json:"build_id"`
-	}
-	if err := decodeStrictContextVMParams(request.RPC.Params, &payload); err != nil {
-		return nil, fmt.Errorf("decode artifact/register-build-result params: %w", err)
-	}
-	if payload.BuildID == uuid.Nil {
-		return nil, fmt.Errorf("build_id is required")
-	}
-	if h == nil || h.builds == nil || h.artifactRegistrar == nil || h.services == nil {
-		return nil, fmt.Errorf("build-result artifact registration is not configured")
-	}
-	build, err := h.builds.GetByID(ctx, payload.BuildID)
-	if err != nil {
-		return nil, fmt.Errorf("fetch build: %w", err)
-	}
-	if build == nil {
-		return nil, fmt.Errorf("build %s not found", payload.BuildID)
-	}
-	authorizer := encryptedTenantAuthorizer{services: h.services, rbac: h.rbac}
-	svc, err := authorizer.authorizeService(ctx, request.Event, build.ServiceID, domain.PermWriteServices)
-	if err != nil {
-		return nil, err
-	}
-	if build.Status != domain.BuildStatusSucceeded {
-		return nil, fmt.Errorf("only a successful build result can register an artifact")
-	}
-	if h.intentProcessor != nil && h.intentProcessor.Handler("artifact") != nil {
-		if request.Event == nil {
-			return nil, fmt.Errorf("build-result registration requires an authenticated requester")
-		}
-		intent := &Intent{Event: request.Event, Domain: "artifact", Op: "register-build-result",
-			OrgID: svc.OrgID, IntentID: intentIDFromContextVM(request, request.Event.ID.Hex()),
-			Coordinate: "build-result:" + build.ID.String(), Content: map[string]interface{}{"build_id": build.ID.String()},
-			Actor: request.Event.PubKey.Hex()}
-		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
-			return nil, err
-		}
-		return intent.Result, nil
-	}
-	artifact, err := h.artifactRegistrar.RegisterBuildResult(ctx, build.ID)
-	if err != nil {
-		return nil, err
-	}
-	if artifact == nil {
-		return nil, fmt.Errorf("build result did not produce a verified artifact")
-	}
-	return map[string]any{
-		"artifact_id":         artifact.ID,
-		"build_id":            artifact.BuildID,
-		"service_id":          artifact.ServiceID,
-		"image_repo":          artifact.ImageRepo,
-		"image_tag":           artifact.ImageTag,
-		"manifest_digest":     artifact.ImageDigest,
-		"manifest_media_type": artifact.ManifestMediaType,
-		"scan_status":         artifact.ScanStatus,
-		"signature_ref":       artifact.SignatureRef,
-		"sbom_url":            artifact.SBOMURL,
-		"metadata":            artifact.Metadata,
-	}, nil
 }
 
 func validateBuildRequest(payload ArcanaBuildRequest) error {

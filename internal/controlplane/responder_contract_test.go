@@ -25,13 +25,6 @@ func TestRespondersFailWhenPublishingIsNotConfigured(t *testing.T) {
 			},
 		},
 		{
-			name: "ml",
-			call: func() error {
-				intent := &domain.MLDeploymentIntent{ID: uuid.New(), Metadata: map[string]any{"nostr_event_id": "request", "nostr_request_pubkey": "requester"}}
-				return (&MLResponder{}).PublishResult(ctx, intent, nil, "succeeded", "")
-			},
-		},
-		{
 			name: "tool",
 			call: func() error {
 				return (&ToolResponder{}).PublishResult(ctx, request, &domain.ToolProvisionIntent{ID: uuid.New()}, true, "")

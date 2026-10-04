@@ -17,7 +17,7 @@ export const serviceSecretsState = $state({
 });
 
 export const SERVICE_SECRET_ENCRYPTED_OPERATIONS = {
-  reveal: 'services.secrets.reveal'
+  reveal: 'services/secrets-reveal'
 };
 
 const loadedServices = new Set();

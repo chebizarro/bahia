@@ -41,7 +41,7 @@ are mutually exclusive.
 
 ## Signed deployment operations
 
-With `llm` enabled by default (unless in `nostr.intent_domains_disabled`), fleet operators can publish kind `30900` LLM intents: `deploy` (`route_id`, `environment_id`, `release_id`), `rollback` (`route_id`, `environment_id`), and `approve`/`reject` (`deployment_intent_id`, preferably with `expected_updated_at`). Bahia uses the same LLM registry transitions as the legacy operator path and reports admission through bounded kind `30315` intent status. The legacy path remains active when the domain is disabled.
+With `llm` enabled by default (unless in `nostr.intent_domains_disabled`), fleet operators can publish kind `30900` LLM intents: `deploy` (`route_id`, `environment_id`, `release_id`), `rollback` (`route_id`, `environment_id`), and `approve`/`reject` (`deployment_intent_id`, preferably with `expected_updated_at`). Bahia uses the same LLM registry transitions as the legacy operator path and reports admission through bounded kind `30315` intent status. Disabling the domain rejects these intents; it does not restore a ContextVM mutation path.
 
 ## Key Concepts
 

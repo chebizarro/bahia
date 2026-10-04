@@ -28,7 +28,7 @@ func (*AdoptionIntentHandler) PermissionFor(string) domain.Permission {
 }
 
 func (h *AdoptionIntentHandler) AuthorizeIntent(_ context.Context, _ *TrustSet, intent *Intent) error {
-	if authorizedContextVMPubkey(intent.Actor, h.allowed) {
+	if authorizedOperatorPubkey(intent.Actor, h.allowed) {
 		return nil
 	}
 	return fmt.Errorf("requester not in authorized adoption list")
