@@ -39,8 +39,8 @@ func TestPrepareOperatorAttemptSendsRequestsTooLargeToStoreAsEphemeralWraps(t *t
 			inner := &nostr.Event{
 				Kind:      nostr.Kind(controlplane.KindContextVMMessage),
 				CreatedAt: nostr.Now(),
-				Tags:      nostr.Tags{{"method", "secrets/set"}, {"p", servicePubkey}},
-				Content:   `{"jsonrpc":"2.0","id":"1","method":"secrets/set","params":{"value":"` + strings.Repeat("x", tc.value) + `"}}`,
+				Tags:      nostr.Tags{{"method", controlplane.ContextVMMethodServiceSecretsReveal}, {"p", servicePubkey}},
+				Content:   `{"jsonrpc":"2.0","id":"1","method":controlplane.ContextVMMethodServiceSecretsReveal,"params":{"value":"` + strings.Repeat("x", tc.value) + `"}}`,
 			}
 			if err := controlplane.SignGoNostrEvent(ctx, operatorKeyer, inner); err != nil {
 				t.Fatal(err)

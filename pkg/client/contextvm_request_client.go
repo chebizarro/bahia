@@ -13,10 +13,9 @@ import (
 
 	"fiatjaf.com/nostr"
 	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
-	"github.com/google/uuid"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
-	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
 )
 
 const (
@@ -265,358 +264,6 @@ func (t *relayPoolOperatorTransport) Close() {
 	}
 }
 
-// EnvironmentTargetingRequest configures environment-level placement defaults.
-type EnvironmentTargetingRequest struct {
-	DefaultUnitKey       string            `json:"default_unit_key,omitempty"`
-	FailureDomainLabels  map[string]string `json:"failure_domain_labels,omitempty"`
-	SecretScopeMode      string            `json:"secret_scope_mode,omitempty"`
-	DefaultReconcileMode string            `json:"default_reconcile_mode,omitempty"`
-}
-
-// DeploymentUnitRequest is one desired explicit environment deployment unit.
-type DeploymentUnitRequest struct {
-	Key            string            `json:"key"`
-	DisplayName    string            `json:"display_name,omitempty"`
-	RuntimeType    string            `json:"runtime_type,omitempty"`
-	EndpointRef    string            `json:"endpoint_ref,omitempty"`
-	ComposeDir     string            `json:"compose_dir,omitempty"`
-	Namespace      string            `json:"namespace,omitempty"`
-	NetworkProfile map[string]string `json:"network_profile,omitempty"`
-	GitSource      *GitSourceRequest `json:"git_source,omitempty"`
-	OwnershipMode  string            `json:"ownership_mode,omitempty"`
-	ReconcileMode  string            `json:"reconcile_mode,omitempty"`
-	RuntimeConfig  map[string]any    `json:"runtime_config,omitempty"`
-}
-
-// GitSourceRequest identifies the git checkout backing a deployment unit.
-type GitSourceRequest struct {
-	RepositoryURL string `json:"repository_url,omitempty"`
-	Ref           string `json:"ref,omitempty"`
-	Branch        string `json:"branch,omitempty"`
-	CommitSHA     string `json:"commit_sha,omitempty"`
-}
-
-// RepositoryRefRequest is signer-first structured source repository metadata.
-type RepositoryRefRequest struct {
-	Source         string                  `json:"source,omitempty"`
-	RepoCoordinate string                  `json:"repo_coordinate,omitempty"`
-	CloneURL       string                  `json:"clone_url,omitempty"`
-	WebURL         string                  `json:"web_url,omitempty"`
-	RelayURLs      []string                `json:"relay_urls,omitempty"`
-	CI             *ServiceCIConfigRequest `json:"ci,omitempty"`
-}
-
-// ServiceCIConfigRequest describes the build workflow attached to a service repository.
-type ServiceCIConfigRequest struct {
-	Provider     string `json:"provider,omitempty"`
-	WorkflowPath string `json:"workflow_path,omitempty"`
-}
-
-// CreateServiceNostrRequest is the service/create desired-state input shared
-// by the CLI intent builder and legacy compatibility callers.
-type CreateServiceNostrRequest struct {
-	// ID is the client-minted service id (bahia-irsry.42): a canonical
-	// UUIDv7 (or v4). The CLI mints one when it is empty; reuse it to
-	// target the same entity when retrying a create.
-	ID                   string                       `json:"id,omitempty"`
-	OrgID                string                       `json:"org_id,omitempty"`
-	Name                 string                       `json:"name"`
-	RepoURL              string                       `json:"repo_url,omitempty"`
-	Repository           *RepositoryRefRequest        `json:"repository,omitempty"`
-	ArtifactRepo         string                       `json:"artifact_repo"`
-	DefaultBranch        string                       `json:"default_branch,omitempty"`
-	RuntimeType          string                       `json:"runtime_type,omitempty"`
-	ManagedRuntimeConfig *domain.ManagedRuntimeConfig `json:"managed_runtime_config,omitempty"`
-	IdempotencyKey       string                       `json:"idempotency_key,omitempty"`
-}
-
-// UpdateServiceNostrRequest is the signer-first service/update payload.
-type UpdateServiceNostrRequest struct {
-	ID                       string                       `json:"id"`
-	OrgID                    *string                      `json:"org_id,omitempty"`
-	Name                     *string                      `json:"name,omitempty"`
-	RepoURL                  *string                      `json:"repo_url,omitempty"`
-	Repository               *RepositoryRefRequest        `json:"repository,omitempty"`
-	ArtifactRepo             *string                      `json:"artifact_repo,omitempty"`
-	DefaultBranch            *string                      `json:"default_branch,omitempty"`
-	RuntimeType              *string                      `json:"runtime_type,omitempty"`
-	ManagedRuntimeConfig     *domain.ManagedRuntimeConfig `json:"managed_runtime_config,omitempty"`
-	AdoptedPublicEnvironment map[string]string            `json:"adopted_public_environment,omitempty"`
-	IdempotencyKey           string                       `json:"idempotency_key,omitempty"`
-}
-
-// ServiceCommandResult is the terminal acknowledgment for signer-first service mutations.
-type ServiceCommandResult struct {
-	Status         string          `json:"status,omitempty"`
-	Service        *domain.Service `json:"service,omitempty"`
-	ServiceID      string          `json:"service_id,omitempty"`
-	IdempotencyKey string          `json:"idempotency_key,omitempty"`
-	Message        string          `json:"message,omitempty"`
-}
-
-// BuildRequestNostrRequest is the signer-first build/request payload.
-// IdempotencyKey controls the ContextVM d tag and _meta.progressToken; it is
-// deliberately excluded from the strictly decoded business payload.
-type BuildRequestNostrRequest struct {
-	ServiceID               string            `json:"service_id"`
-	GitRef                  string            `json:"git_ref"`
-	RepositoryCredentialRef string            `json:"repository_credential_ref"`
-	ArtifactRepo            string            `json:"artifact_repo"`
-	BuildArgs               map[string]string `json:"build_args,omitempty"`
-	IdempotencyKey          string            `json:"-"`
-}
-
-// BuildListNostrRequest identifies one service's paginated build history.
-type BuildListNostrRequest struct {
-	ServiceID string `json:"service_id"`
-	Limit     int    `json:"limit"`
-	Offset    int    `json:"offset"`
-}
-
-// BuildCommandResult is the terminal acknowledgment for build/request.
-type BuildCommandResult struct {
-	Status   string `json:"status,omitempty"`
-	BuildID  string `json:"build_id,omitempty"`
-	GitSHA   string `json:"git_sha,omitempty"`
-	GitRef   string `json:"git_ref,omitempty"`
-	CISystem string `json:"ci_system,omitempty"`
-	CIRunID  string `json:"ci_run_id,omitempty"`
-	Message  string `json:"message,omitempty"`
-}
-
-// BuildDetailsResult wraps one governed build read.
-type BuildDetailsResult struct {
-	Build *domain.Build `json:"build,omitempty"`
-}
-
-// BuildListResult is one offset-based page of governed build history.
-type BuildListResult struct {
-	Builds []domain.Build `json:"builds"`
-	Count  int            `json:"count"`
-	Limit  int            `json:"limit"`
-	Offset int            `json:"offset"`
-}
-
-// RegisterArtifactNostrRequest is the signer-first artifact/register payload.
-type RegisterArtifactNostrRequest struct {
-	BuildID           string         `json:"build_id"`
-	ServiceID         string         `json:"service_id"`
-	ImageRepo         string         `json:"image_repo"`
-	ImageTag          string         `json:"image_tag"`
-	ImageDigest       string         `json:"image_digest"`
-	ManifestMediaType string         `json:"manifest_media_type,omitempty"`
-	SizeBytes         *int64         `json:"size_bytes,omitempty"`
-	SBOMURL           string         `json:"sbom_url,omitempty"`
-	SignatureRef      string         `json:"signature_ref,omitempty"`
-	ScanStatus        string         `json:"scan_status,omitempty"`
-	Metadata          map[string]any `json:"metadata,omitempty"`
-	IdempotencyKey    string         `json:"idempotency_key,omitempty"`
-}
-
-// ImportObservedArtifactNostrRequest imports an already-running,
-// observation-verified image as governed lineage. There is no build id: Bahia
-// creates the lineage, which is the reason this path exists.
-type ImportObservedArtifactNostrRequest struct {
-	ServiceID        string `json:"service_id"`
-	EnvironmentID    string `json:"environment_id"`
-	DeploymentUnitID string `json:"deployment_unit_id,omitempty"`
-	ImageRepo        string `json:"image_repo"`
-	ImageTag         string `json:"image_tag"`
-	ImageDigest      string `json:"image_digest"`
-	GitSHA           string `json:"git_sha,omitempty"`
-	GitRef           string `json:"git_ref,omitempty"`
-	IdempotencyKey   string `json:"idempotency_key,omitempty"`
-}
-
-// ImportObservedArtifactResult reports imported lineage. DesiredState restates
-// that importing provenance never promotes it.
-type ImportObservedArtifactResult struct {
-	Status           string           `json:"status,omitempty"`
-	Artifact         *domain.Artifact `json:"artifact,omitempty"`
-	ArtifactID       string           `json:"artifact_id,omitempty"`
-	BuildID          string           `json:"build_id,omitempty"`
-	ObservedDigest   string           `json:"observed_digest,omitempty"`
-	ObservationID    string           `json:"observation_id,omitempty"`
-	RegistryVerified bool             `json:"registry_verified,omitempty"`
-	VerifiedLabels   []string         `json:"verified_labels,omitempty"`
-	DesiredState     string           `json:"desired_state,omitempty"`
-}
-
-// ArtifactCommandResult is the terminal acknowledgment for signer-first artifact registration.
-type ArtifactCommandResult struct {
-	Status     string           `json:"status,omitempty"`
-	Artifact   *domain.Artifact `json:"artifact,omitempty"`
-	ArtifactID string           `json:"artifact_id,omitempty"`
-	BuildID    string           `json:"build_id,omitempty"`
-	ServiceID  string           `json:"service_id,omitempty"`
-	Message    string           `json:"message,omitempty"`
-}
-
-// DNSZoneCreateRequest is the signer-first dns/zone-create payload.
-type DNSZoneCreateRequest struct {
-	Name          string                `json:"name"`
-	Visibility    domain.ZoneVisibility `json:"visibility"`
-	BackendRef    string                `json:"backend_ref"`
-	TTL           int                   `json:"ttl"`
-	Authoritative bool                  `json:"authoritative"`
-}
-
-// DNSPolicyApplyRequest is the signer-first dns/policy-apply payload.
-type DNSPolicyApplyRequest struct {
-	ID            uuid.UUID              `json:"id"`
-	Name          string                 `json:"name"`
-	ZoneID        *uuid.UUID             `json:"zone_id,omitempty"`
-	EnvironmentID *uuid.UUID             `json:"environment_id,omitempty"`
-	Rules         []domain.DNSPolicyRule `json:"rules"`
-	Enabled       bool                   `json:"enabled"`
-	Metadata      map[string]any         `json:"metadata,omitempty"`
-	CreatedAt     time.Time              `json:"created_at"`
-	UpdatedAt     time.Time              `json:"updated_at"`
-}
-
-// DNSRecordSetRequest is the signer-first dns/record-set payload. Operator
-// attribution and creation metadata are derived by the server from the signed event.
-type DNSRecordSetRequest struct {
-	ZoneName   string               `json:"zone_name"`
-	RecordName string               `json:"record_name"`
-	RecordType domain.DNSRecordType `json:"record_type"`
-	Value      string               `json:"value"`
-	TTL        int                  `json:"ttl"`
-	Reason     string               `json:"reason"`
-	ExpiresAt  *time.Time           `json:"expires_at,omitempty"`
-}
-
-// DNSDriftRemediateRequest is the signer-first dns/drift-remediate payload.
-// An empty zone requests reconciliation of all configured zones.
-type DNSDriftRemediateRequest struct {
-	Zone string `json:"zone,omitempty"`
-}
-
-// DNSOverrideRetireRequest is the signer-first dns/override-retire payload.
-type DNSOverrideRetireRequest struct {
-	OverrideID string `json:"override_id"`
-	Reason     string `json:"reason"`
-}
-
-// DNSCommandResult is the terminal acknowledgment for signer-first DNS mutations.
-type DNSCommandResult struct {
-	Action     string `json:"action,omitempty"`
-	Status     string `json:"status,omitempty"`
-	Step       string `json:"step,omitempty"`
-	Message    string `json:"message,omitempty"`
-	RecordedAt string `json:"recorded_at,omitempty"`
-	Zone       string `json:"zone,omitempty"`
-	Policy     string `json:"policy,omitempty"`
-	PolicyID   string `json:"policy_id,omitempty"`
-	RuleCount  int    `json:"rule_count,omitempty"`
-	OverrideID string `json:"override_id,omitempty"`
-}
-
-// CreateEnvironmentNostrRequest is the signer-first environment/create payload.
-type CreateEnvironmentNostrRequest struct {
-	// ID is the client-minted environment id; see CreateServiceNostrRequest.ID.
-	ID                 string                       `json:"id,omitempty"`
-	OrgID              string                       `json:"org_id,omitempty"`
-	Name               string                       `json:"name"`
-	LoomWorkerSelector map[string]any               `json:"loom_worker_selector,omitempty"`
-	RuntimeConfig      map[string]any               `json:"runtime_config,omitempty"`
-	Targeting          *EnvironmentTargetingRequest `json:"targeting,omitempty"`
-	ReconcileMode      string                       `json:"reconcile_mode,omitempty"`
-	DeploymentUnits    *[]DeploymentUnitRequest     `json:"deployment_units,omitempty"`
-	DeployStrategy     string                       `json:"deploy_strategy,omitempty"`
-	Protected          bool                         `json:"protected"`
-}
-
-// UpdateEnvironmentNostrRequest is the signer-first environment/update payload.
-type UpdateEnvironmentNostrRequest struct {
-	ID                 string                       `json:"id"`
-	OrgID              *string                      `json:"org_id,omitempty"`
-	ExpectedUpdatedAt  *time.Time                   `json:"expected_updated_at,omitempty"`
-	Name               *string                      `json:"name,omitempty"`
-	LoomWorkerSelector *map[string]any              `json:"loom_worker_selector,omitempty"`
-	RuntimeConfig      *map[string]any              `json:"runtime_config,omitempty"`
-	Targeting          *EnvironmentTargetingRequest `json:"targeting,omitempty"`
-	ReconcileMode      *string                      `json:"reconcile_mode,omitempty"`
-	DeploymentUnits    *[]DeploymentUnitRequest     `json:"deployment_units,omitempty"`
-	DeployStrategy     *string                      `json:"deploy_strategy,omitempty"`
-	Protected          *bool                        `json:"protected,omitempty"`
-}
-
-// EnvironmentCommandResult is the terminal acknowledgment for signer-first environment mutations.
-type EnvironmentCommandResult struct {
-	Status          string                  `json:"status,omitempty"`
-	Environment     *domain.Environment     `json:"environment,omitempty"`
-	EnvironmentID   string                  `json:"environment_id,omitempty"`
-	DeploymentUnits []domain.DeploymentUnit `json:"deployment_units,omitempty"`
-	Message         string                  `json:"message,omitempty"`
-}
-
-// RouteAttachRequest is the signer-first service/route-attach payload.
-type RouteAttachRequest struct {
-	ServiceID        string                    `json:"service_id"`
-	EnvironmentID    string                    `json:"environment_id"`
-	DeploymentUnitID string                    `json:"deployment_unit_id,omitempty"`
-	PublicRoute      domain.PublicRouteRequest `json:"public_route"`
-	Internal         *bool                     `json:"internal,omitempty"`
-	IdempotencyKey   string                    `json:"idempotency_key,omitempty"`
-}
-
-// RollbackDeploymentNostrRequest is the explicit signer-first rollback target.
-// Requester attribution is derived from the signed event, never caller payload.
-type RollbackDeploymentNostrRequest struct {
-	ServiceID          string `json:"service_id"`
-	EnvironmentID      string `json:"environment_id"`
-	DeploymentUnitID   string `json:"deployment_unit_id,omitempty"`
-	TargetArtifactID   string `json:"target_artifact_id"`
-	SupersedesIntentID string `json:"supersedes_intent_id"`
-	IdempotencyKey     string `json:"idempotency_key,omitempty"`
-}
-
-// DeploymentIntentNostrRequest is the signer-first deployment intent target.
-// Requester attribution is derived from the signed event, never caller payload.
-type DeploymentIntentNostrRequest struct {
-	ServiceID                string `json:"service_id"`
-	EnvironmentID            string `json:"environment_id"`
-	DeploymentUnitID         string `json:"deployment_unit_id,omitempty"`
-	ArtifactID               string `json:"artifact_id"`
-	ExpectedDesiredStateHash string `json:"expected_desired_state_hash,omitempty"`
-	RequestedBy              string `json:"-"`
-	IdempotencyKey           string `json:"idempotency_key,omitempty"`
-}
-
-// DeploymentPreviewNostrRequest builds a reviewed managed desired-state hash
-// for a subsequent signer-first deployment request.
-type DeploymentPreviewNostrRequest struct {
-	ServiceID            string         `json:"service_id"`
-	EnvironmentID        string         `json:"environment_id"`
-	DeploymentUnitID     string         `json:"deployment_unit_id,omitempty"`
-	ArtifactID           string         `json:"artifact_id"`
-	ManagedRuntimeConfig map[string]any `json:"managed_runtime_config"`
-	Compact              bool           `json:"compact,omitempty"`
-	IdempotencyKey       string         `json:"idempotency_key,omitempty"`
-}
-
-// DeploymentApprovalNostrRequest is the signer-first approval/rejection target.
-type DeploymentApprovalNostrRequest struct {
-	IntentID       string `json:"intent_id"`
-	Decision       string `json:"decision"`
-	IdempotencyKey string `json:"idempotency_key,omitempty"`
-}
-
-// DeploymentCommandResult is the terminal acknowledgment returned for signer-first deployment intent mutations.
-type DeploymentCommandResult struct {
-	Status           string                         `json:"status,omitempty"`
-	IntentID         string                         `json:"intent_id,omitempty"`
-	ServiceID        string                         `json:"service_id,omitempty"`
-	EnvironmentID    string                         `json:"environment_id,omitempty"`
-	DeploymentUnitID string                         `json:"deployment_unit_id,omitempty"`
-	ArtifactID       string                         `json:"artifact_id,omitempty"`
-	DesiredStateHash string                         `json:"desired_state_hash,omitempty"`
-	PublicRoute      *domain.DesiredPublicRoutePlan `json:"public_route,omitempty"`
-	Message          string                         `json:"message,omitempty"`
-}
-
-// PublishPolicyCreateNostr publishes a signed public PolicyCreate request and returns relay/follow correlation metadata.
 type contextVMRPCRequest struct {
 	JSONRPC string         `json:"jsonrpc"`
 	ID      string         `json:"id"`
@@ -1165,4 +812,275 @@ func firstValue(values map[string][]string, name string) string {
 		return ""
 	}
 	return values[name][0]
+}
+
+// ContextVMRequestConfig configures a generic outbound ContextVM request client.
+// Configure exactly one of Relays or Transport. A relay-backed client owns the
+// pool it creates; an injected Transport remains owned by the caller.
+type ContextVMRequestConfig struct {
+	Relays          []string
+	Transport       ContextVMRelayTransport
+	Signer          nostr.Signer
+	SenderPubkey    string
+	RecipientPubkey string
+	Encrypted       bool
+	ResultTimeout   time.Duration
+	ResultRetries   *int
+}
+
+// ContextVMRequestOption customizes optional request-client integrations.
+type ContextVMRequestOption func(*contextVMRequestOptions)
+
+type contextVMRequestOptions struct {
+	logger *zap.Logger
+}
+
+// WithContextVMRequestLogger surfaces relay warnings through the supplied logger.
+// The library default remains quiet.
+func WithContextVMRequestLogger(logger *zap.Logger) ContextVMRequestOption {
+	return func(options *contextVMRequestOptions) {
+		if logger != nil {
+			options.logger = logger
+		}
+	}
+}
+
+// ContextVMRequestClient publishes signed JSON-RPC 2.0 ContextVM requests and
+// waits for correlated terminal responses.
+type ContextVMRequestClient struct {
+	relays            []string
+	signer            nostr.Signer
+	cipher            contextVMCipherSigner
+	pubkey            string
+	transport         ContextVMRelayTransport
+	servicePubkey     string
+	encrypted         bool
+	resultTimeout     time.Duration
+	resultRetries     int
+	activationTimeout time.Duration
+	ownsTransport     bool
+}
+
+// NewContextVMRequestClient constructs a generic ContextVM request client.
+// When configured with Relays, Close closes the internally-created relay pool.
+// When configured with Transport, Close does not close the injected transport.
+func NewContextVMRequestClient(cfg ContextVMRequestConfig, clientOptions ...ContextVMRequestOption) (*ContextVMRequestClient, error) {
+	options := contextVMRequestOptions{logger: zap.NewNop()}
+	for _, apply := range clientOptions {
+		if apply != nil {
+			apply(&options)
+		}
+	}
+	if cfg.Signer == nil {
+		return nil, fmt.Errorf("ContextVM request signer is required")
+	}
+	senderPubkey := strings.TrimSpace(cfg.SenderPubkey)
+	if len(senderPubkey) != 64 {
+		return nil, fmt.Errorf("ContextVM sender pubkey must be a 64-character hex pubkey")
+	}
+	if _, err := nostr.PubKeyFromHex(senderPubkey); err != nil {
+		return nil, fmt.Errorf("parse ContextVM sender pubkey: %w", err)
+	}
+	recipientPubkey := strings.TrimSpace(cfg.RecipientPubkey)
+	if len(recipientPubkey) != 64 {
+		return nil, fmt.Errorf("ContextVM recipient pubkey must be a 64-character hex pubkey")
+	}
+	if _, err := nostr.PubKeyFromHex(recipientPubkey); err != nil {
+		return nil, fmt.Errorf("parse ContextVM recipient pubkey: %w", err)
+	}
+	var cipherSigner contextVMCipherSigner
+	if cfg.Encrypted {
+		var ok bool
+		cipherSigner, ok = cfg.Signer.(contextVMCipherSigner)
+		if !ok {
+			return nil, fmt.Errorf("encrypted ContextVM requests require a signer with NIP-44 encrypt and decrypt support")
+		}
+	}
+	relays := normalizeOperatorRelays(cfg.Relays)
+	if cfg.Transport != nil && len(relays) > 0 {
+		return nil, fmt.Errorf("configure either ContextVM relays or an injected transport, not both")
+	}
+	if cfg.Transport == nil && len(relays) == 0 {
+		return nil, fmt.Errorf("ContextVM relays or an injected transport are required")
+	}
+	resultTimeout := cfg.ResultTimeout
+	if resultTimeout == 0 {
+		resultTimeout = DefaultOperatorResultTimeout
+	}
+	if resultTimeout < 0 {
+		return nil, fmt.Errorf("ContextVM result timeout must be positive")
+	}
+	resultRetries := DefaultOperatorResultRetries
+	if cfg.ResultRetries != nil {
+		resultRetries = *cfg.ResultRetries
+	}
+	if resultRetries < 0 {
+		return nil, fmt.Errorf("ContextVM result retries cannot be negative")
+	}
+	transport := cfg.Transport
+	ownsTransport := false
+	if transport == nil {
+		pool := nostrpool.NewRelayPool(relays, options.logger, nostrpool.WithAuthSigner(cfg.Signer))
+		transport = &relayPoolOperatorTransport{pool: pool}
+		ownsTransport = true
+	}
+	return &ContextVMRequestClient{
+		relays:            relays,
+		signer:            cfg.Signer,
+		cipher:            cipherSigner,
+		pubkey:            senderPubkey,
+		transport:         transport,
+		servicePubkey:     recipientPubkey,
+		encrypted:         cfg.Encrypted,
+		resultTimeout:     resultTimeout,
+		resultRetries:     resultRetries,
+		activationTimeout: operatorActivationTimeout,
+		ownsTransport:     ownsTransport,
+	}, nil
+}
+
+// Close releases an internally-created relay pool. Injected transports are not
+// closed because their lifecycle remains owned by the caller.
+func (c *ContextVMRequestClient) Close() {
+	if c != nil && c.ownsTransport && c.transport != nil {
+		c.transport.Close()
+	}
+}
+
+// Request publishes a signed ContextVM request and waits for its correlated
+// terminal result. Progress results are delivered to onStatus.
+func (c *ContextVMRequestClient) Request(ctx context.Context, method string, params any, tags nostr.Tags, onStatus func(OperatorStatusEvent)) (*nostr.Event, error) {
+	if c == nil || c.transport == nil || c.signer == nil || c.pubkey == "" {
+		return nil, &ControlPlaneRequestError{Phase: "configure operator control-plane client", RequestAccepted: false, Cause: fmt.Errorf("ContextVM request client is not configured")}
+	}
+	method = strings.TrimSpace(method)
+	if method == "" {
+		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: fmt.Errorf("ContextVM method is required")}
+	}
+	if c.encrypted && (c.cipher == nil || c.servicePubkey == "") {
+		return nil, &ControlPlaneRequestError{Phase: "configure encrypted operator control-plane client", RequestAccepted: false, Cause: fmt.Errorf("encrypted ContextVM requests require recipient pubkey and NIP-44 signer support")}
+	}
+	payloadContent, err := json.Marshal(params)
+	if err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM params", RequestAccepted: false, Cause: err}
+	}
+	tags = append(nostr.Tags(nil), tags...)
+	requestID := firstTagValue(tags, "d")
+	if requestID == "" {
+		requestID = deterministicOperatorIdempotencyKey(method, tags, payloadContent)
+		tags = append(nostr.Tags{{"d", requestID}}, tags...)
+	}
+	rpcParams, err := contextVMParams(params, requestID)
+	if err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM params", RequestAccepted: false, Cause: err}
+	}
+	tags = append(tags, nostr.Tag{"method", method}, nostr.Tag{controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion})
+	if c.servicePubkey != "" {
+		tags = append(tags, nostr.Tag{"p", c.servicePubkey})
+	}
+	rpc := contextVMRPCRequest{JSONRPC: "2.0", ID: requestID, Method: method, Params: rpcParams}
+	content, err := json.Marshal(rpc)
+	if err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: err}
+	}
+	inner := &nostr.Event{Kind: nostr.Kind(controlplane.KindContextVMMessage), CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
+	if err := controlplane.SignGoNostrEvent(ctx, c.signer, inner); err != nil {
+		return nil, &ControlPlaneRequestError{Phase: "sign operator ContextVM request", RequestAccepted: false, Cause: err}
+	}
+
+	attempts := c.resultRetries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+	resultTimeout := c.resultTimeout
+	if resultTimeout <= 0 {
+		resultTimeout = DefaultOperatorResultTimeout
+	}
+	activationTimeout := c.activationTimeout
+	if activationTimeout <= 0 {
+		activationTimeout = operatorActivationTimeout
+	}
+	var (
+		everAccepted    bool
+		publishedRelays int
+		publishResults  []OperatorPublishResult
+		subscribed      []string
+		failed          []string
+		requestEventID  = inner.ID.Hex()
+		outerRequestIDs []string
+	)
+	requestError := func(phase string, attempt int, cause error) *ControlPlaneRequestError {
+		return &ControlPlaneRequestError{
+			Phase:               phase,
+			RequestAccepted:     everAccepted,
+			PublishedRelays:     publishedRelays,
+			ConfiguredRelays:    append([]string(nil), c.relays...),
+			SubscribedRelays:    append([]string(nil), subscribed...),
+			FailedSubscriptions: append([]string(nil), failed...),
+			RequestEventID:      requestEventID,
+			RequestDTag:         requestID,
+			RequestMethod:       method,
+			AttemptsMade:        attempt,
+			PublishResults:      append([]OperatorPublishResult(nil), publishResults...),
+			Cause:               cause,
+		}
+	}
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		publishEvent, filters, attemptOuterIDs, prepareErr := c.prepareOperatorAttempt(ctx, inner, outerRequestIDs)
+		if prepareErr != nil {
+			phase := "prepare operator ContextVM request"
+			if c.encrypted {
+				phase = "wrap encrypted operator ContextVM request"
+			}
+			return nil, requestError(phase, attempt, prepareErr)
+		}
+		outerRequestIDs = attemptOuterIDs
+		requestEventID = publishEvent.ID.Hex()
+		sub, subErr := c.transport.SubscribeOperator(ctx, filters)
+		if subErr != nil {
+			subscribed = nil
+			failed = append([]string(nil), c.relays...)
+			return nil, requestError("subscribe for operator ContextVM replies", attempt, subErr)
+		}
+		subscribed = sub.RelayURLs()
+		failed = operatorFailedSubscriptions(c.relays, subscribed)
+		if len(subscribed) == 0 {
+			sub.Close()
+			return nil, requestError("subscribe for operator ContextVM replies", attempt, fmt.Errorf("no configured relay established a reply subscription"))
+		}
+		activatedSub, activationErr := c.waitForOperatorSubscriptionActivation(ctx, sub, activationTimeout)
+		if activationErr != nil {
+			activatedSub.Close()
+			return nil, requestError("activate operator ContextVM reply subscription", attempt, activationErr)
+		}
+		sub = activatedSub
+		subscribed = sub.RelayURLs()
+		failed = operatorFailedSubscriptions(c.relays, subscribed)
+
+		published, attemptResults, publishErr := c.publishOperatorEvent(ctx, *publishEvent)
+		publishedRelays = published
+		publishResults = append(publishResults, attemptResults...)
+		if published == 0 {
+			sub.Close()
+			if publishErr == nil {
+				publishErr = fmt.Errorf("request was not accepted by any relay")
+			}
+			return nil, requestError("publish operator ContextVM request", attempt, publishErr)
+		}
+		everAccepted = true
+
+		attemptCtx, cancelAttempt := context.WithTimeout(ctx, resultTimeout)
+		result, awaitErr := c.awaitOperatorResult(attemptCtx, sub, inner, outerRequestIDs, requestID, onStatus)
+		cancelAttempt()
+		sub.Close()
+		if awaitErr == nil {
+			return result, nil
+		}
+		if errors.Is(awaitErr, context.DeadlineExceeded) && ctx.Err() == nil && attempt < attempts {
+			continue
+		}
+		return nil, requestError("await operator ContextVM result", attempt, awaitErr)
+	}
+	return nil, requestError("await operator ContextVM result", attempts, fmt.Errorf("result retry attempts exhausted"))
 }
