@@ -721,10 +721,14 @@ type NostrConfig struct {
 	RelayQuorum         RelayQuorumConfig  `koanf:"relay_quorum" yaml:"relay_quorum"`
 	Sidecar             RelaySidecarConfig `koanf:"sidecar"`
 
-	// IntentDomains lists domain families for which the daemon subscribes to
-	// kind-30900 operator intents and processes them through the intent
-	// pipeline. No domain is enabled until its handler is registered (F2/F3).
-	// Safe default: empty (no intent processing).
+	// IntentDomainsDisabled explicitly opts domain families out of kind-30900
+	// intent processing. All registered intent domains are enabled by default.
+	// This migration switch is deprecated and will be removed with the legacy
+	// ContextVM mutation paths (bahia-irsry.11.19).
+	IntentDomainsDisabled []string `koanf:"intent_domains_disabled" yaml:"intent_domains_disabled" secret:"false"`
+	// IntentDomains is the deprecated Phase 3 allowlist. An empty list now
+	// enables every registered domain; a non-empty list retains its former
+	// allowlist meaning for one release. R1 removes this compatibility key.
 	IntentDomains []string `koanf:"intent_domains" yaml:"intent_domains" secret:"false"`
 
 	// BootstrapOwners maps org UUIDs to the hex pubkey of their bootstrap

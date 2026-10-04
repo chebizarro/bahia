@@ -404,7 +404,10 @@ Phase 3 already deletes ContextVM mutation handlers per domain slice (Phase 3 §
 1. The CLI no longer sends `25910` for any domain.
 2. The MCP no longer routes through ContextVM for any domain.
 
-The `nostr.intent_domains` config list is made **default-on** (all domains) when Phase 5 completes. The config key is then deleted.
+Phase 5 F4 makes all registered intent domains **default-on**. A temporary
+`nostr.intent_domains_disabled` opt-out list remains; the deprecated non-empty
+`nostr.intent_domains` allowlist is honored for one release. R1 removes both
+configuration keys with the legacy ContextVM mutation paths.
 
 ### 6.3 What ContextVM keeps
 
@@ -466,7 +469,7 @@ A new MCP read tool `outbox_status` exposes the daemon's outbox counts and faile
 | 5 | Logs and SSE | **Stay as REST/HTTP.** Not migrated to relay events | Streaming and content-addressable blob download are HTTP-native. No relay kind needed |
 | 6 | `--http-fallback` sunset | **Deleted when Phase 5 completes.** No HTTP fallback after intent publishing is proven | The flag exists only for the ContextVM→REST transition. Direct intent publishing removes both ContextVM and REST |
 | 7 | Secret value reveal | **Stays ContextVM.** Not intent-based | Service-key decryption requires daemon involvement. Not a CRUD operation |
-| 8 | ContextVM `intent_domains` default | **Default-on (all domains)** when Phase 5 completes. Then config key deleted | Phase 4+5 ensure all callers sign intents directly. The config key is a migration aid, not a permanent feature |
+| 8 | ContextVM `intent_domains` default | **Default-on (all registered domains)** in F4. Temporary opt-out and deprecated allowlist keys are removed by R1 | Phase 4+5 ensure all callers sign intents directly. These keys are migration aids, not permanent features |
 
 ---
 
@@ -518,7 +521,7 @@ A new MCP read tool `outbox_status` exposes the daemon's outbox counts and faile
 | **F1: REST write route deletion** | Delete remaining REST write routes (builds, ML, LLM, config-fabric, SBOM, tools). Keep only HTTP-native boundaries | Write routes return 404. Test: all deprecated mutation routes rejected | `internal/api/router/router.go` (write route deletions) | F2, F3 | `POST /builds`, `PATCH /builds/{id}/status`, `POST /ml/*`, `PUT /llm/routes/{id}`, `POST /tools/denylist`, `POST /deployments/runs`, `POST /deployments/runs/{id}/complete` |
 | **F2: pkg/client HTTP cleanup** | Delete HTTP `Client`, NIP-98 providers, `OperatorControlPlaneClient`, ContextVM code | `pkg/client` exports only `NostrClient`, `IntentPublisher`, `NormalizeNostrPrivateKey`. No HTTP client code remains | `pkg/client/client.go` (deleted), `pkg/client/operator_nostr.go` (deleted), `pkg/client/contextvm_*.go` (deleted), `pkg/client/operator_discovery.go` (retained if needed for relay discovery) | F1, F3 | `Client` struct, `NIP98PrivateKeyProvider`, `NIP98SignerProvider`, `OperatorControlPlaneClient`, all `*Nostr` methods, `contextvm_*.go` files |
 | **F3: CLI cleanup and `--http-fallback` deletion** | Delete `--server`, `--http-fallback` flags. Delete `apiClient` global. Clean up `operator_nostr.go` to only contain signer resolution | CLI uses only Nostr flags (--relay, --nostr-key-file, etc.). No HTTP flags remain. `buildCLIOperatorClient` deleted | `cmd/cli/main.go` (flag deletions, command rewiring), `cmd/cli/operator_nostr.go` (shrinks to signer resolution only) | F1, F2 | `serverURL`, `apiClient`, `operatorHTTPFallback` globals. `--server`, `--http-fallback` flags. `configureClientAuth`, `configureNIP46HTTPClientAuth` functions. `fallbackOrError`, `isPreAcceptanceOperatorFailure`, `rawTargetRequiresFallbackError` |
-| **F4: `intent_domains` default-on** | Make `nostr.intent_domains` default to all domains. Delete the config key after verification | All domains processed via intents by default. Config key removed. Test: daemon starts without `intent_domains` config and processes intents for all domains | `internal/config/*.go` (config key deletion), `internal/controlplane/intent_subscriber.go` (default-on logic) | — | `nostr.intent_domains` config parsing. Conditional checks on `intent_domains` list |
+| **F4: `intent_domains` default-on** | Enable all registered domains by default; retain temporary `intent_domains_disabled` opt-out and deprecated non-empty `intent_domains` allowlist until R1 | Daemon starts without domain config and processes intents for all registered domains; explicit opt-out disables exactly the listed domains; cold-relay EOSE reaches readiness | `internal/config/config.go`, `internal/controlplane/intent_processor.go`, `internal/app/app.go` | — | No legacy ContextVM deletion in F4; R1 removes both migration keys and dual-dispatch paths |
 
 ---
 
@@ -549,7 +552,7 @@ Assert:
 Test: CLIServiceCreateViaIntentWithStatusWait
 
 Setup:
-1. Daemon running with intent_domains including "service".
+1. Daemon running with default intent domains (no domain list configured).
 2. CLI configured with --nostr-key-file and --relay.
 
 Steps:

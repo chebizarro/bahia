@@ -20,7 +20,7 @@ const (
 // request transport. This is the production consumer for llm/route-create
 // (bahia-irsry.55) and llm/release-register.
 //
-// When the llm domain is enabled in intent_domains, mutations are dual-dispatched
+// When the llm domain is enabled for intents, mutations are dual-dispatched
 // through the intent processor. When disabled, they fall through to the legacy
 // path which calls the registry service directly and publishes canonical 30900
 // records via the LLMRouteStatePublisher.

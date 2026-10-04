@@ -37,7 +37,7 @@ type LLMRouteStatePublisher func(ctx context.Context, route *domain.LLMRoute, de
 // the handler reconciles the entity toward it regardless of whether prior
 // events for the coordinate have been seen.
 //
-// Registered at startup when "llm" is in nostr.intent_domains via
+// Registered at startup when "llm" is enabled via
 // IntentProcessor.RegisterHandler("llm", handler).
 //
 // LLM deployment operations retain the Reactor fleet-operator gate. Route

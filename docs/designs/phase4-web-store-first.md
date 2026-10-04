@@ -606,25 +606,21 @@ Phase 4 waves can begin as soon as Wave 1 + C1 are merged. Later Phase 4 waves (
 
 ### 9.2 Enabling intent domains on the daemon
 
-The daemon's `nostr.intent_domains` config controls which domains accept relay intents (Phase 3 §4.1). The Phase 4 web must know which domains are intent-enabled to decide whether to sign an intent or fall back to ContextVM.
+Phase 5 F4 enables every registered daemon intent domain by default. Operators
+can temporarily opt out through `nostr.intent_domains_disabled`; the deprecated
+non-empty `nostr.intent_domains` list retains its old allowlist meaning until
+R1 removes both migration keys. The web signs intents without reading either key.
 
 **Decision: the web always signs intents for all domains. The daemon's dual-dispatch routes legacy ContextVM through the same pipeline.**
 
-The web does not read `intent_domains` config. It always publishes signed intents. If a domain is not yet in `intent_domains`, the daemon's relay write policy rejects the intent (the sidecar only accepts `t=bahia-intent` events from authorized pubkeys for enabled domains). The web falls back to ContextVM on relay rejection:
-
-```
-1. Sign and publish intent
-2. If relay OK rejected (CLOSED with "restricted:"):
-   → Fall back to ContextVM for this domain
-   → Log warning: "domain not yet intent-enabled"
-3. If relay OK accepted:
-   → Normal pending intent flow
-```
-
-This means the web can be deployed ahead of daemon domain slices. The dual-dispatch window closes per domain when:
-1. The daemon's `intent_domains` includes the domain.
-2. The web confirms relay acceptance.
-3. The ContextVM handler for that domain is deleted (bahia-irsry.11.19).
+The sidecar's `setintentauthors` policy authorizes pubkeys, not domains. An
+explicitly disabled domain can therefore receive relay `OK` while the daemon
+ignores its intent; `OK` is not execution. The web follows bounded status and
+canonical state and must not infer completion from relay acceptance. Legacy
+ContextVM dual-dispatch remains until R1. Relay rejection means admission
+failed; it is not a reliable signal that a domain is disabled. The dual-path
+window closes when the remaining legacy mutation handlers are removed in
+bahia-irsry.11.19.
 
 ### 9.3 Order of operations for full cut-over
 

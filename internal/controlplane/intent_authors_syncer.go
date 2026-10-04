@@ -34,8 +34,8 @@ type IntentAuthorsSyncer struct {
 
 	notifyCh chan struct{}
 
-	mu       sync.Mutex
-	lastPush map[string]string // targetRef → sorted pubkeys fingerprint
+	mu        sync.Mutex
+	lastPush  map[string]string // targetRef → sorted pubkeys fingerprint
 	outOfSync bool              // true when at least one target failed
 
 	// pgPubkeys tracks pubkeys discovered through Postgres org membership
@@ -162,10 +162,10 @@ func (s *IntentAuthorsSyncer) push(ctx context.Context) {
 			return
 		}
 		s.mu.Lock()
-		last := s.lastPush[ref]
+		last, previouslyPushed := s.lastPush[ref]
 		s.mu.Unlock()
 
-		if last == fingerprint {
+		if previouslyPushed && last == fingerprint {
 			continue
 		}
 

@@ -1,0 +1,8 @@
+# Optional Bahia config overlay for a staged intent cut-over.
+# Omit this section to enable every registered intent domain by default.
+nostr:
+  intent_domains_disabled:
+    - service # example: retain the legacy service mutation path temporarily
+
+# The deprecated nostr.intent_domains allowlist is accepted only during the
+# one-release migration window. R1 (bahia-irsry.11.19) removes both keys.

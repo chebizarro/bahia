@@ -321,3 +321,31 @@ under concurrent worktree load; the complete one-worker rerun passed with
 unchanged test and hook deadlines. The initial Go rerun caught a test-only
 use of an existing exported ML helper; the fixture was corrected without
 adding a baseline entry, and the final full Go gate passed.
+
+## Bahia-irsry.13.19, Phase 5 F4: default-on intent domains (2026-10-03)
+
+The daemon now enables every `intentProcessor.RegisterHandler` domain by
+default. `nostr.intent_domains_disabled` opts out specific domains; the
+deprecated non-empty `nostr.intent_domains` allowlist retains its Phase 3
+meaning for one release, and R1 removes both keys. The computed enabled set
+controls handler registration, the shared processor, subscriber/readiness,
+sidecar intent-author sync, and the all-disabled warm-start sentinel.
+Warm-start still covers all cp-state domains independently of intent opt-outs.
+
+`TestDefaultIntentDomainsProcessEveryRegisteredHandler` constructs a daemon
+without domain config and dispatches one intent per registered domain through
+the production processor with recording handlers. An AST guard compares the
+registry against every app-level `RegisterHandler` call. Opt-out tests prove
+only listed domains stop processing; the old no-subscriber test now disables
+all domains explicitly. An empty sidecar relay delivers EOSE and makes the
+author-scoped subscriber ready. Default-sensitive-domain ingress rejects
+plaintext org, secret, and notification intents. Sidecar sync now sends the
+initial empty author set rather than mistaking it for an already-synced set;
+the regression test verifies stale author revocation.
+
+Final F4 gate after the last Go edit: `CGO_ENABLED=0 go build ./...`,
+`CGO_ENABLED=0 go vet ./...`, and `CGO_ENABLED=0 go test ./...` all PASS.
+`TestNoNewTestOnlyExports` and `git diff --check` PASS. An initial full-gate
+run caught a test-only call to an existing unused export; that assertion was
+removed. A later full run failed in `internal/controlplane` under concurrent
+worktree load; the package rerun and final complete Go gate both passed.

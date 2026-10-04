@@ -18,7 +18,7 @@ import (
 // desired state, and the handler reconciles the entity toward it regardless
 // of whether prior events for the coordinate have been seen.
 //
-// Registered at startup when "environment" is in nostr.intent_domains via
+// Registered at startup when "environment" is enabled via
 // IntentProcessor.RegisterHandler("environment", handler).
 //
 // See design §7 Wave 1 F3.

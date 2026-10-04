@@ -769,7 +769,7 @@ func New(cfg *config.Config) (*App, error) {
 	})
 	// Phase 3 intent framework (F1): TrustSet, IntentProcessor, ReadinessTracker.
 	// These are wired unconditionally; domain handlers register at startup when
-	// their domain is listed in nostr.intent_domains.
+	// their domain is not listed in nostr.intent_domains_disabled.
 	trustSetOpts := []controlplane.TrustSetOption{
 		controlplane.WithBootstrapOwners(cfg.Nostr.BootstrapOwners),
 	}
@@ -779,7 +779,7 @@ func New(cfg *config.Config) (*App, error) {
 	trustSet := controlplane.NewTrustSet(cfg.Nostr.AuthorizedPubkeys, logger, trustSetOpts...)
 	intentReadiness := controlplane.NewReadinessTracker()
 	healthProvider.SetReadinessTracker(intentReadiness)
-	enabledDomains := controlplane.BuildEnabledDomains(cfg.Nostr.IntentDomains)
+	enabledDomains := controlplane.BuildEnabledDomains(cfg.Nostr.IntentDomainsDisabled, cfg.Nostr.IntentDomains)
 	if len(enabledDomains) > 0 {
 		intentReadiness.RegisterFilter("intent-30900")
 	}
@@ -1164,7 +1164,7 @@ func New(cfg *config.Config) (*App, error) {
 			zap.String("mode", "full"))
 	}
 	// Phase 3 F3: register environment intent handler when "environment" is
-	// in intent_domains. Uses the relay-first registry (which publishes the
+	// enabled by the computed domain set. Uses the relay-first registry (which publishes the
 	// canonical 30900 via PublishBeforeCommit) or falls back to the plain
 	// registry when relay-first is not configured.
 	if enabledDomains["environment"] {
@@ -1476,7 +1476,7 @@ func New(cfg *config.Config) (*App, error) {
 		orgCanonicalPub = nostrAdapter.NewOrgCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
 	}
 
-	// Phase 3 O1: register org intent handler when "org" is in intent_domains.
+	// Phase 3 O1: register org intent handler when "org" is enabled.
 	// The handler processes org/member/invite intents and publishes canonical
 	// cp-state through the OrgCanonicalPublisher with encrypted content (§1.7).
 	if enabledDomains["org"] && orgRepo != nil && orgMemberRepo != nil && orgInviteRepo != nil {
