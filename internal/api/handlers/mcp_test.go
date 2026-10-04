@@ -2,19 +2,17 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/openagentsinc/bahia/internal/domain"
 	mcpserver "github.com/openagentsinc/bahia/internal/mcp"
 	"go.uber.org/zap"
 )
 
 func TestMCPHandler_HandleJSONRPCInitializeAndListTools(t *testing.T) {
-	h := NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+	h := NewMCPHandler(newHandlerTestMCPServer(nil, zap.NewNop()), zap.NewNop())
 
 	for _, tc := range []struct {
 		name   string
@@ -45,7 +43,7 @@ func TestMCPHandler_HandleJSONRPCInitializeAndListTools(t *testing.T) {
 }
 
 func TestMCPHandler_HandleJSONRPCResourcesList(t *testing.T) {
-	h := NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+	h := NewMCPHandler(newHandlerTestMCPServer(nil, zap.NewNop()), zap.NewNop())
 
 	body := []byte(`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
@@ -77,10 +75,8 @@ func TestMCPHandler_HandleJSONRPCResourcesList(t *testing.T) {
 	}
 }
 
-func TestMCPHandler_HandleJSONRPCResourcesListIncludesFIPSMeshResources(t *testing.T) {
-	server := mcpserver.NewServerWithOptions(nil, zap.NewNop(), mcpserver.ServerDeps{DNSEndpoints: handlerDNSEndpointLister(func(ctx context.Context) ([]domain.DNSEndpoint, error) {
-		return []domain.DNSEndpoint{{Family: domain.DNSEndpointFamilyMesh, Name: "node-a", Environment: "mesh", Zone: "mesh.example", FQDN: "node-a.mesh.example", Address: "fd00::1", Health: domain.HealthStatusHealthy, DriftStatus: domain.DriftStatusInSync}}, nil
-	})})
+func TestMCPHandler_HandleJSONRPCResourcesListHasNoMeshWithoutStoreEvent(t *testing.T) {
+	server := newHandlerTestMCPServer(nil, zap.NewNop())
 	h := NewMCPHandler(server, zap.NewNop())
 
 	body := []byte(`{"jsonrpc":"2.0","id":3,"method":"resources/list"}`)
@@ -105,13 +101,13 @@ func TestMCPHandler_HandleJSONRPCResourcesListIncludesFIPSMeshResources(t *testi
 			found = true
 		}
 	}
-	if !found {
-		t.Fatalf("FIPS mesh resource missing from resources/list: %#v", resources)
+	if found {
+		t.Fatalf("mesh resource appeared without a store event: %#v", resources)
 	}
 }
 
 func TestMCPHandler_NostrCorrelationMetadataExtractsIDs(t *testing.T) {
-	h := NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+	h := NewMCPHandler(newHandlerTestMCPServer(nil, zap.NewNop()), zap.NewNop())
 	result := &mcpserver.ToolResult{Content: []mcpserver.Content{{Type: "text", Text: `{"status":"submitted","intent_id":"intent-1","service_id":"svc-1"}`}}}
 
 	meta := h.nostrCorrelationMetadata("bahia_deploy", map[string]interface{}{"environment_id": "env-1"}, result)
@@ -124,14 +120,8 @@ func TestMCPHandler_NostrCorrelationMetadataExtractsIDs(t *testing.T) {
 	}
 }
 
-type handlerDNSEndpointLister func(context.Context) ([]domain.DNSEndpoint, error)
-
-func (f handlerDNSEndpointLister) ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error) {
-	return f(ctx)
-}
-
 func TestMCPHandler_NostrCorrelationMetadataMapsGenericIDs(t *testing.T) {
-	h := NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+	h := NewMCPHandler(newHandlerTestMCPServer(nil, zap.NewNop()), zap.NewNop())
 	result := &mcpserver.ToolResult{Content: []mcpserver.Content{{Type: "text", Text: `{"id":"svc-1","name":"api"}`}}}
 
 	meta := h.nostrCorrelationMetadata("bahia_get_service", nil, result)

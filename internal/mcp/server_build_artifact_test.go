@@ -156,7 +156,7 @@ func newTestMCPBuildArtifactServer() *Server {
 		events.NewInProcessPublisher(zap.NewNop()),
 		zap.NewNop(),
 	)
-	return NewServerWithOptions(registry, zap.NewNop(), ServerDeps{ArtifactCommandPublisher: &captureArtifactCommandPublisher{}})
+	return newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{ArtifactCommandPublisher: &captureArtifactCommandPublisher{}})
 }
 
 func TestGetTools_IncludesBuildArtifactRegister(t *testing.T) {

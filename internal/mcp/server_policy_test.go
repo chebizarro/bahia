@@ -127,7 +127,7 @@ func (m *testSBOMRepo) SearchPackagesByName(_ context.Context, _ string, _ int) 
 func newTestMCPPolicyServer() (*Server, *testPolicyRepo) {
 	policyRepo := newTestPolicyRepo()
 	policySvc := service.NewPolicyService(policyRepo, &testSigRepo{hasSig: true}, &testSBOMRepo{}, zap.NewNop())
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{Policies: policySvc})
+	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{Policies: policySvc})
 	return server, policyRepo
 }
 
@@ -216,6 +216,7 @@ func TestCallTool_PolicyReadToolsUseDurableReadModels(t *testing.T) {
 	policyID := uuid.New()
 	now := time.Now().UTC()
 	repo.policies[policyID] = &domain.DeploymentPolicy{ID: policyID, Name: "require-signature", EnvironmentID: &envID, Rules: []domain.PolicyRule{{Type: domain.RuleRequireSignature}}, Enforcement: domain.PolicyEnforcementBlock, Enabled: true, CreatedAt: now, UpdatedAt: now}
+	attachCanonicalMCPFixture(t, server).publishPolicy(t, repo.policies[policyID])
 
 	getRes, err := server.CallTool(ctx, "bahia_get_policy", map[string]interface{}{"policy_id": policyID.String()})
 	if err != nil || getRes.IsError {
@@ -239,7 +240,7 @@ func TestCallTool_PolicyReadToolsUseDurableReadModels(t *testing.T) {
 func TestCallTool_PolicyMutationsPublishSignerFirstRequests(t *testing.T) {
 	ctx := authorizedMCPContext()
 	publisher := &capturePolicyCommandPublisher{}
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{PolicyCommandPublisher: publisher})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{PolicyCommandPublisher: publisher})
 	envID := uuid.New()
 	policyID := uuid.New()
 	artifactID := uuid.New()
@@ -292,7 +293,7 @@ func TestCallTool_PolicyMutationsPublishSignerFirstRequests(t *testing.T) {
 func TestCallTool_ToolApprovalMutationsPublishSignerFirstResponses(t *testing.T) {
 	ctx := authorizedMCPContext()
 	publisher := &captureToolApprovalCommandPublisher{}
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{ToolApprovalCommandPublisher: publisher})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{ToolApprovalCommandPublisher: publisher})
 	intentID := uuid.New()
 
 	res, err := server.CallTool(ctx, "bahia_tool_provision_approve", map[string]interface{}{"intent_id": intentID.String(), "reason": "reviewed", "idempotency_key": "tool:approve:test"})
@@ -329,7 +330,7 @@ func TestCallTool_GetPolicy_Validation(t *testing.T) {
 }
 
 func TestCallTool_GetPolicy_NotConfigured(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	res, err := server.CallTool(authorizedMCPContext(), "bahia_get_policy", map[string]interface{}{"policy_id": uuid.New().String()})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)

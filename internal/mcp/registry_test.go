@@ -10,7 +10,7 @@ import (
 )
 
 func TestAssistantToolRegistryIncludesAssistantToolDescriptors(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	registry := server.AssistantToolRegistry()
 
 	assistantTools := append([]Tool{}, assistantAsyncToolDefinitions()...)
@@ -26,7 +26,7 @@ func TestAssistantToolRegistryIncludesAssistantToolDescriptors(t *testing.T) {
 }
 
 func TestAssistantToolRegistryMetadataCorrectness(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	registry := server.AssistantToolRegistry()
 
 	cases := []struct {
@@ -115,7 +115,7 @@ func TestAssistantToolRegistryMetadataCorrectness(t *testing.T) {
 }
 
 func TestAssistantToolRegistryListsOnlyAgentSafeTools(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	registry := server.AssistantToolRegistry()
 
 	agentTools := registry.AgentTools()
@@ -163,7 +163,7 @@ func TestAssistantToolRegistryListsOnlyAgentSafeTools(t *testing.T) {
 }
 
 func TestAssistantToolRegistryMergesExternalToolsAndRejectsCollisions(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	registry, err := NewAssistantToolRegistryForServerWithExternal(server, []ExternalToolDescriptor{
 		{
 			ServerName:  "docs",
@@ -206,7 +206,7 @@ func TestAssistantToolRegistryMergesExternalToolsAndRejectsCollisions(t *testing
 }
 
 func TestAssistantToolRegistryWrapsGetToolsDefinitions(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	toolsByName := map[string]Tool{}
 	for _, tool := range server.GetTools() {
 		toolsByName[tool.Name] = tool
@@ -254,7 +254,7 @@ func hasString(values []string, want string) bool {
 // forward direction (every tool has metadata), which is why four orphaned DNS
 // entries outlived their handlers.
 func TestAssistantToolMetadataHasNoEntriesWithoutTools(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 
 	defined := map[string]bool{}
 	for _, tool := range server.GetTools() {

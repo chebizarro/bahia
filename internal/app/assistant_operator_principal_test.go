@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"iter"
 	"strings"
 	"sync"
 	"testing"
@@ -44,11 +45,22 @@ func (r *principalRecorder) all() []*auth.Principal {
 	return append([]*auth.Principal(nil), r.seen...)
 }
 
-type recordingDNSLister struct{ *principalRecorder }
+type recordingMCPStateStore struct {
+	mu    sync.Mutex
+	reads int
+}
 
-func (l recordingDNSLister) ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error) {
-	l.record(ctx)
-	return []domain.DNSEndpoint{}, nil
+func (s *recordingMCPStateStore) QueryEvents(nostr.Filter) iter.Seq[nostr.Event] {
+	s.mu.Lock()
+	s.reads++
+	s.mu.Unlock()
+	return func(func(nostr.Event) bool) {}
+}
+
+func (s *recordingMCPStateStore) readCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reads
 }
 
 type recordingServiceCommands struct{ *principalRecorder }
@@ -80,7 +92,7 @@ type principalFixture struct {
 	server   *mcp.Server
 	adapter  assistantMCPRuntimeAdapter
 	runtime  *service.AssistantToolRuntime
-	dns      *principalRecorder
+	state    *recordingMCPStateStore
 	commands *principalRecorder
 }
 
@@ -88,8 +100,8 @@ type principalFixture struct {
 // allowlist and the production adapter/registry wiring.
 func newPrincipalFixture(t *testing.T) principalFixture {
 	t.Helper()
-	f := principalFixture{dns: &principalRecorder{}, commands: &principalRecorder{}}
-	f.server = mcp.NewServerWithOptions(nil, zap.NewNop(), mcp.ServerDeps{DNSEndpoints: recordingDNSLister{f.dns}, ServiceCommandPublisher: recordingServiceCommands{f.commands}, AuthorizedPubkeys: []string{allowedOperator}})
+	f := principalFixture{state: &recordingMCPStateStore{}, commands: &principalRecorder{}}
+	f.server = newAppTestMCPServer(nil, zap.NewNop(), mcp.ServerDeps{StateStore: f.state, ServicePubkey: nostr.Generate().Public().Hex(), ServiceCommandPublisher: recordingServiceCommands{f.commands}, AuthorizedPubkeys: []string{allowedOperator}})
 	f.adapter = assistantMCPRuntimeAdapter{server: f.server}
 	registry, err := mcp.NewAssistantToolRegistryForServerWithExternal(f.server, nil)
 	if err != nil {
@@ -149,7 +161,7 @@ func TestAssistantMCPAdapterRejectsUnauthenticatedCalls(t *testing.T) {
 	if err != nil || receipt != nil || obs == nil || obs.Status != domain.AssistantToolObservationFailed {
 		t.Fatalf("operator-less dispatch obs=%+v err=%v", obs, err)
 	}
-	if len(f.dns.all()) != 0 || len(f.commands.all()) != 0 {
+	if f.state.readCount() != 0 || len(f.commands.all()) != 0 {
 		t.Fatal("an unauthenticated call reached a handler dependency")
 	}
 }
@@ -164,11 +176,11 @@ func TestAssistantDispatchActsAsAllowlistedOperator(t *testing.T) {
 	if err != nil || obs != nil || receipt == nil || receipt.RequestEventID == "" {
 		t.Fatalf("allowlisted async dispatch obs=%+v receipt=%+v err=%v", obs, receipt, err)
 	}
-	for _, p := range append(f.dns.all(), f.commands.all()...) {
+	for _, p := range f.commands.all() {
 		assertOperatorPrincipal(t, p, allowedOperator)
 	}
-	if len(f.dns.all()) != 1 || len(f.commands.all()) != 1 {
-		t.Fatalf("handler calls dns=%d commands=%d", len(f.dns.all()), len(f.commands.all()))
+	if f.state.readCount() != 1 || len(f.commands.all()) != 1 {
+		t.Fatalf("handler calls state=%d commands=%d", f.state.readCount(), len(f.commands.all()))
 	}
 }
 
@@ -187,7 +199,7 @@ func TestAssistantDispatchRefusesNonAllowlistedOperatorAsToolFailure(t *testing.
 	if err != nil || receipt != nil || obs == nil || obs.Status != domain.AssistantToolObservationFailed || !strings.Contains(obs.Error, "access denied") {
 		t.Fatalf("stranger async dispatch obs=%+v receipt=%+v err=%v", obs, receipt, err)
 	}
-	if len(f.dns.all()) != 0 || len(f.commands.all()) != 0 {
+	if f.state.readCount() != 0 || len(f.commands.all()) != 0 {
 		t.Fatal("a refused operator's call reached a handler dependency")
 	}
 }
@@ -203,7 +215,9 @@ func TestAssistantApprovedWorkActsAsApprovingOperator(t *testing.T) {
 	if err != nil || obs == nil || obs.Status != domain.AssistantToolObservationSucceeded {
 		t.Fatalf("approved dispatch obs=%+v err=%v", obs, err)
 	}
-	assertOperatorPrincipal(t, f.dns.all()[0], allowedOperator)
+	if f.state.readCount() != 1 {
+		t.Fatal("approved read did not reach the local state store")
+	}
 
 	x = principalExecution(allowedOperator)
 	w.Authorization.OperatorPubkey = strangerPubkey
@@ -253,14 +267,8 @@ func TestAssistantRecoveredRunDispatchesAsPersistedOperator(t *testing.T) {
 			if got.OperatorPubkey != tc.operator || got.Work[0].State != tc.want || len(got.Work[0].Redispatches) != 1 {
 				t.Fatalf("recovered work = %+v operator=%s", got.Work[0], got.OperatorPubkey)
 			}
-			seen := f.dns.all()
-			if tc.want == domain.AssistantWorkSucceeded {
-				if len(seen) != 1 {
-					t.Fatalf("handler calls = %d", len(seen))
-				}
-				assertOperatorPrincipal(t, seen[0], tc.operator)
-			} else if len(seen) != 0 {
-				t.Fatal("a non-allowlisted persisted operator reached the handler")
+			if (tc.want == domain.AssistantWorkSucceeded && f.state.readCount() != 1) || (tc.want != domain.AssistantWorkSucceeded && f.state.readCount() != 0) {
+				t.Fatalf("unexpected local-state reads: %d", f.state.readCount())
 			}
 		})
 	}
@@ -294,12 +302,8 @@ func TestAssistantHooksAndSubagentChildrenActAsWorkOperator(t *testing.T) {
 	if err != nil || obs == nil || obs.Status != domain.AssistantToolObservationSucceeded || child == nil || child.Status != domain.AssistantToolObservationSucceeded {
 		t.Fatalf("delegate obs=%+v child=%+v err=%v", obs, child, err)
 	}
-	seen := f.dns.all()
-	if len(seen) != 2 { // the PreToolUse hook, then the subagent child
-		t.Fatalf("handler calls = %d, want hook + child", len(seen))
-	}
-	for _, p := range seen {
-		assertOperatorPrincipal(t, p, allowedOperator)
+	if f.state.readCount() != 2 {
+		t.Fatalf("hook and child made %d local-state reads, want 2", f.state.readCount())
 	}
 
 	// For a non-allowlisted operator the hook itself is refused by MCP, which
@@ -313,7 +317,7 @@ func TestAssistantHooksAndSubagentChildrenActAsWorkOperator(t *testing.T) {
 	if obs := f.runtime.ExecuteSubagentTool(system, service.AssistantInternalToolCall{SessionID: "s", RunID: "r", WorkID: "w", OperatorPubkey: strangerPubkey}, "child-session", domain.AssistantAgentToolCall{ID: "c", Name: "bahia_dns_list_endpoints", Arguments: map[string]any{}}); obs == nil || obs.Status == domain.AssistantToolObservationSucceeded {
 		t.Fatalf("stranger subagent child obs=%+v", obs)
 	}
-	if child != nil || len(f.dns.all()) != 2 {
+	if child != nil || f.state.readCount() != 2 {
 		t.Fatal("a stranger's hook or subagent child reached the handler")
 	}
 }

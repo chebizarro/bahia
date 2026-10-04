@@ -44,7 +44,7 @@ func mlStringArg(values map[string]any, key string) string {
 }
 
 func TestGetToolsIncludesMLTools(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	tools := server.GetTools()
 	required := map[string]bool{"bahia_ml_import_model": false, "bahia_ml_run_recipe": false, "bahia_ml_deploy": false, "bahia_ml_rollback": false, "bahia_ml_list_state": false, "bahia_ml_get_state": false, "bahia_ml_get_provenance": false}
 	for _, tool := range tools {
@@ -62,7 +62,7 @@ func TestGetToolsIncludesMLTools(t *testing.T) {
 func TestMLMutatingToolsPublishNostrRequestsAndReturnCorrelation(t *testing.T) {
 	ctx := authorizedMCPContext()
 	publisher := &captureMLCommandPublisher{}
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{MLCommandPublisher: publisher})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{MLCommandPublisher: publisher})
 
 	deployRes, err := server.CallTool(ctx, "bahia_ml_deploy", map[string]interface{}{"idempotency_key": "deploy:1", "endpoint": "endpoint:qwen:prod", "model_version": "model-version:qwen:v1", "runtime": "vllm"})
 	if err != nil {
@@ -95,7 +95,7 @@ func TestMLMutatingToolsPublishNostrRequestsAndReturnCorrelation(t *testing.T) {
 }
 
 func TestMLMutatingToolsRequirePublisher(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	res, err := server.CallTool(authorizedMCPContext(), "bahia_ml_deploy", map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("call err: %v", err)

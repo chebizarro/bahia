@@ -63,7 +63,7 @@ func workerTestReceipt(kind int, command, worker, dTag string) *controlplane.Wor
 }
 
 func TestGetToolsIncludesWorkerManagementAndReadModelTools(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	required := map[string]bool{"bahia_worker_cordon": false, "bahia_worker_uncordon": false, "bahia_worker_drain": false, "bahia_worker_undrain": false, "bahia_worker_maintenance_enter": false, "bahia_worker_maintenance_exit": false, "bahia_worker_labels_update": false, "bahia_worker_get_assignments": false, "bahia_worker_get_drain_status": false, "bahia_worker_preview_eligibility": false}
 	for _, tool := range server.GetTools() {
 		if _, ok := required[tool.Name]; ok {
@@ -79,7 +79,7 @@ func TestGetToolsIncludesWorkerManagementAndReadModelTools(t *testing.T) {
 
 func TestWorkerMutatingToolsPublishSignerFirstRequestsAndReturnCorrelation(t *testing.T) {
 	publisher := &captureWorkerCommandPublisher{}
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{WorkerCommandPublisher: publisher})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{WorkerCommandPublisher: publisher})
 	res, err := server.CallTool(authorizedMCPContext(), "bahia_worker_drain", map[string]interface{}{"worker_pubkey": "worker-pubkey", "reason": "kernel upgrade", "idempotency_key": "drain:1"})
 	if err != nil {
 		t.Fatalf("drain call: %v", err)
@@ -113,7 +113,7 @@ func TestWorkerMutatingToolsPublishSignerFirstRequestsAndReturnCorrelation(t *te
 }
 
 func TestWorkerMutatingToolsRequirePublisher(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	res, err := server.CallTool(authorizedMCPContext(), "bahia_worker_cordon", map[string]interface{}{"worker_pubkey": "worker"})
 	if err != nil {
 		t.Fatalf("call err: %v", err)

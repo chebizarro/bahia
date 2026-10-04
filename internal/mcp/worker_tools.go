@@ -134,65 +134,9 @@ func (s *Server) handleWorkerLabelsUpdate(ctx context.Context, args map[string]i
 	return jsonResult(workerCommandReceiptToMap("submitted", receipt))
 }
 
-func (s *Server) handleWorkerGetAssignments(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.workerReadModels == nil {
-		return errorResult("worker read model service is not configured"), nil
-	}
-	state, err := s.workerReadModels.GetAssignmentState(ctx, stringArg(args, "worker_pubkey"))
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get worker assignments: %v", err)), nil
-	}
-	if state == nil {
-		return errorResult("worker not found"), nil
-	}
-	return jsonResult(map[string]interface{}{"assignment_state": state, "read_model_kind": controlplane.KindCASControlState, "read_model_topic": kinds.WorkerAssignmentTopic})
-}
-
-func (s *Server) handleWorkerListAssignments(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.workerReadModels == nil {
-		return errorResult("worker read model service is not configured"), nil
-	}
-	states, err := s.workerReadModels.ListAssignmentStates(ctx)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list worker assignments: %v", err)), nil
-	}
-	return jsonResult(map[string]interface{}{"assignment_states": states, "total": len(states), "read_model_kind": controlplane.KindCASControlState, "read_model_topic": kinds.WorkerAssignmentTopic})
-}
-
-func (s *Server) handleWorkerGetDrainStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.workerReadModels == nil {
-		return errorResult("worker read model service is not configured"), nil
-	}
-	status, err := s.workerReadModels.GetDrainStatus(ctx, stringArg(args, "worker_pubkey"))
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get worker drain status: %v", err)), nil
-	}
-	if status == nil {
-		return errorResult("worker not found"), nil
-	}
-	return jsonResult(map[string]interface{}{"drain_status": status, "read_model_kind": controlplane.KindCASControlState, "read_model_topic": kinds.WorkerDrainTopic})
-}
-
-func (s *Server) handleWorkerListDrainStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.workerReadModels == nil {
-		return errorResult("worker read model service is not configured"), nil
-	}
-	statuses, err := s.workerReadModels.ListDrainStatuses(ctx)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list worker drain statuses: %v", err)), nil
-	}
-	return jsonResult(map[string]interface{}{"drain_statuses": statuses, "total": len(statuses), "read_model_kind": controlplane.KindCASControlState, "read_model_topic": kinds.WorkerDrainTopic})
-}
-
 func (s *Server) handleWorkerPreviewEligibility(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	models := s.workerReadModels
-	if s.stateStore != nil {
-		workers := stateWorkerRepository{server: s}
-		models = service.NewWorkerReadModelService(workers, nil, nil, service.NewWorkerPolicyService(workers, s.logger), service.NewMLPlacementService(workers, s.logger), s.logger)
-	}
-	if models == nil {
-		return errorResult("worker read model service is not configured"), nil
-	}
+	workers := stateWorkerRepository{server: s}
+	models := service.NewWorkerReadModelService(workers, nil, nil, service.NewWorkerPolicyService(workers, s.logger), service.NewMLPlacementService(workers, s.logger), s.logger)
 	previewID := strings.TrimSpace(stringArg(args, "preview_id"))
 	workloadType := strings.TrimSpace(stringArg(args, "workload_type"))
 	policy := anyMapFromArg(args["policy"])
@@ -217,30 +161,20 @@ func (s *Server) handleWorkerPreviewEligibility(ctx context.Context, args map[st
 
 func (s *Server) environmentForWorkerPreview(ctx context.Context, args map[string]interface{}, policy map[string]any) (*domain.Environment, error) {
 	if envIDRaw := strings.TrimSpace(stringArg(args, "environment_id")); envIDRaw != "" {
-		if s.registry == nil && s.stateStore == nil {
-			return nil, fmt.Errorf("registry is not configured")
-		}
 		envID, err := uuid.Parse(envIDRaw)
 		if err != nil {
 			return nil, fmt.Errorf("invalid environment_id: %w", err)
 		}
 		var env *domain.Environment
-		if s.stateStore != nil {
-			record, readErr := s.readStateOne(ctx, nostrpool.KindEnvironmentRegistry, "id", envID.String())
-			if readErr != nil {
-				return nil, readErr
-			}
-			if record != nil {
-				env = &domain.Environment{}
-				if err := json.Unmarshal(record.Content, env); err != nil {
-					return nil, err
-				}
-			}
-		} else {
-			env, err = s.registry.GetEnvironment(ctx, envID)
+		record, readErr := s.readStateOne(ctx, nostrpool.KindEnvironmentRegistry, "id", envID.String())
+		if readErr != nil {
+			return nil, readErr
 		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to get environment: %w", err)
+		if record != nil {
+			env = &domain.Environment{}
+			if err := json.Unmarshal(record.Content, env); err != nil {
+				return nil, err
+			}
 		}
 		if env == nil {
 			return nil, fmt.Errorf("environment not found")

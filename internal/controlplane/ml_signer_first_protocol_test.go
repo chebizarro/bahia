@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 func TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing(t *testing.T) {
@@ -45,7 +46,7 @@ func TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing(t *testing.T) {
 		KindMLRecipeRegistry,
 		KindMLRecipeRunState,
 		KindMLInferenceEndpointRegistry,
-		KindMLInferenceEndpointState,
+		kinds.MLInferenceEndpointState,
 		KindMLEvaluationExperimentState,
 		KindMLArtifactProvenanceGraph,
 		KindMLRuntimeCapabilityProfile,

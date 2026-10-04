@@ -10,11 +10,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// DNSEndpointLister exposes materialized DNS endpoints to the MCP server.
-type DNSEndpointLister interface {
-	ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error)
-}
-
 // Resource represents an MCP resource entry exposed by the Bahia server.
 type Resource struct {
 	URI         string         `json:"uri"`
@@ -55,17 +50,7 @@ func (s *Server) GetResources(ctx context.Context) ([]Resource, error) {
 }
 
 func (s *Server) listDNSResources(ctx context.Context) ([]Resource, error) {
-	if s.dnsEndpoints == nil && s.stateStore == nil {
-		return nil, nil
-	}
-
-	var endpoints []domain.DNSEndpoint
-	var err error
-	if s.stateStore != nil {
-		endpoints, err = s.readDNSEndpoints(ctx)
-	} else {
-		endpoints, err = s.dnsEndpoints.ListDNSEndpoints(ctx)
-	}
+	endpoints, err := s.readDNSEndpoints(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list DNS endpoints for MCP resources: %w", err)
 	}

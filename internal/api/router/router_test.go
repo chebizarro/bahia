@@ -23,7 +23,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
-	mcpserver "github.com/openagentsinc/bahia/internal/mcp"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
@@ -831,7 +830,7 @@ func TestContinuityRESTRoutesAreRemoved(t *testing.T) {
 
 func TestRouter_NativeMCPRemovesLegacyAgentHTTP(t *testing.T) {
 	cfg := config.Defaults()
-	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+	mcpH := handlers.NewMCPHandler(newRouterTestMCPServer(zap.NewNop()), zap.NewNop())
 	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{
 		Config: cfg,
 		MCP:    mcpH,
@@ -863,7 +862,7 @@ func TestRouter_NativeMCPRemovesLegacyAgentHTTP(t *testing.T) {
 func TestRouter_ConfiguredNIP98AuthRejectsBearerOnProtectedRoutes(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Auth.Enabled = true
-	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+	mcpH := handlers.NewMCPHandler(newRouterTestMCPServer(zap.NewNop()), zap.NewNop())
 	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg, MCP: mcpH})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
@@ -894,7 +893,7 @@ func TestRouter_ConfiguredNIP98AuthAllowsProtectedRoutesWithoutJWT(t *testing.T)
 		t.Fatal(err)
 	}
 	cfg.Auth.BootstrapOwnerPubkeys = []string{secret.Public().Hex()}
-	mcpH := handlers.NewMCPHandler(mcpserver.NewServer(nil, zap.NewNop()), zap.NewNop())
+	mcpH := handlers.NewMCPHandler(newRouterTestMCPServer(zap.NewNop()), zap.NewNop())
 	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{AllowedOrigins: []string{"*"}}, nil, router.RouterDeps{Config: cfg, MCP: mcpH})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()

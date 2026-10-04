@@ -10,15 +10,15 @@ import (
 
 	"github.com/google/uuid"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/pkg/client"
 )
 
-// callStoreReadTool handles canonical-state reads before the legacy tool
-// dispatch. Non-state tools (logs, docs, outbox and pending P2 writes) retain
-// their existing path.
+// callStoreReadTool is the exclusive dispatch for canonical-state reads.
+// Non-state tools and pending P2 writes retain their existing path.
 func (s *Server) callStoreReadTool(ctx context.Context, name string, args map[string]interface{}) (*ToolResult, bool) {
 	var result *ToolResult
 	var err error
@@ -687,6 +687,10 @@ func (s *Server) storeArtifactRead(ctx context.Context, name string, args map[st
 }
 
 func (s *Server) storeBuildRead(ctx context.Context, name string, args map[string]any) (*ToolResult, error) {
+	principal := auth.GetPrincipal(ctx)
+	if s.rbac == nil && (principal == nil || principal.Method != auth.MethodSystem || !principal.HasRole(string(domain.RoleAdmin))) {
+		return errorResult("service authorization is not configured"), nil
+	}
 	records, err := s.readStateFamily(ctx, nostrpool.KindBuildRegistry)
 	if err != nil {
 		return nil, err

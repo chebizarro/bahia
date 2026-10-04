@@ -63,7 +63,7 @@ func TestHandleDocsListReturnsScannedCatalog(t *testing.T) {
 	})
 	withDocsBasePath(t, docsDir)
 
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	result, err := server.handleDocsList(context.Background(), map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("handleDocsList returned error: %v", err)
@@ -108,7 +108,7 @@ func TestHandleDocsRead(t *testing.T) {
 	})
 	withDocsBasePath(t, docsDir)
 
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 
 	result, err := server.handleDocsRead(context.Background(), map[string]interface{}{
 		"topic": "test-topic",
@@ -162,7 +162,7 @@ func TestHandleDocsReadReportsOperationalErrors(t *testing.T) {
 	}
 	withDocsBasePath(t, docsFile)
 
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	result, err := server.handleDocsRead(context.Background(), map[string]interface{}{
 		"topic": "index",
 	})
@@ -182,7 +182,7 @@ func TestListDocsResources(t *testing.T) {
 	})
 	withDocsBasePath(t, docsDir)
 
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	resources, err := server.listDocsResources(context.Background())
 	if err != nil {
 		t.Fatalf("listDocsResources returned error: %v", err)

@@ -212,7 +212,7 @@ func newTestMCPRunStateServer() (*Server, *testIntentRepo, *testRunRepo, *testRu
 		events.NewInProcessPublisher(zap.NewNop()),
 		zap.NewNop(),
 	)
-	return NewServer(registry, zap.NewNop()), intentRepo, runRepo, observationRepo, stateRepo
+	return newTestServer(registry, zap.NewNop()), intentRepo, runRepo, observationRepo, stateRepo
 }
 
 func TestGetTools_IncludesRunStateAndIntentTools(t *testing.T) {
@@ -281,6 +281,8 @@ func TestCallTool_RunLifecycle(t *testing.T) {
 	if intentRepo.intents[intentID].Status != domain.IntentStatusDeploying {
 		t.Fatalf("intent status = %s, want deploying", intentRepo.intents[intentID].Status)
 	}
+	fixture := attachCanonicalMCPFixture(t, server)
+	fixture.publishRun(t, runRepo.runs[uuid.MustParse(runID)])
 
 	listRes, err := server.CallTool(ctx, "bahia_list_runs", map[string]interface{}{"intent_id": intentID.String()})
 	if err != nil {
@@ -388,6 +390,14 @@ func TestCallTool_ListAndGetIntents(t *testing.T) {
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	})
+	fixture := attachCanonicalMCPFixture(t, server)
+	fixture.publishIntent(t, intentRepo.intents[firstID])
+	fixture.publishIntent(t, intentRepo.intents[secondID])
+	for id, intent := range intentRepo.intents {
+		if id != firstID && id != secondID {
+			fixture.publishIntent(t, intent)
+		}
+	}
 
 	listRes, err := server.CallTool(ctx, "bahia_list_intents", map[string]interface{}{
 		"service_id":     serviceID.String(),
@@ -406,7 +416,7 @@ func TestCallTool_ListAndGetIntents(t *testing.T) {
 	}
 	intents := listPayload["intents"].([]interface{})
 	listedIntent := intents[0].(map[string]interface{})
-	if listedIntent["id"] != firstID.String() || listedIntent["requested_by"] != "alice" {
+	if listedIntent["id"] != secondID.String() || listedIntent["requested_by"] != "bob" {
 		t.Fatalf("unexpected listed intent: %#v", listedIntent)
 	}
 
@@ -467,6 +477,10 @@ func TestCallTool_RuntimeStateAndObservationHandlers(t *testing.T) {
 		Source:              "runtime-test",
 		ObservedAt:          now,
 	})
+	fixture := attachCanonicalMCPFixture(t, server)
+	for _, state := range stateRepo.states {
+		fixture.publishState(t, state)
+	}
 
 	listAllRes, err := server.CallTool(ctx, "bahia_list_states", map[string]interface{}{})
 	if err != nil {

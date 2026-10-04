@@ -159,7 +159,7 @@ func TestMCPStoreReadsMatchRegistryFixture(t *testing.T) {
 	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop())
 	publisher := nostrpool.NewRelayFirstStatePublisher(projector, sink)
 	require.NoError(t, publisher.PublishServiceRegistry(ctx, &service, false))
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 
 	for _, tc := range []struct {
 		name string
@@ -170,7 +170,7 @@ func TestMCPStoreReadsMatchRegistryFixture(t *testing.T) {
 		{"bahia_get_service", map[string]any{"name": service.Name}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := serviceServer.CallTool(ctx, tc.name, tc.args)
+			want, err := serviceServer.legacyCallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestMCPStoreReadsMatchRegistryFixture(t *testing.T) {
 		{"bahia_get_environment", map[string]any{"name": environment.Name}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := environmentServer.CallTool(ctx, tc.name, tc.args)
+			want, err := environmentServer.legacyCallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
@@ -219,7 +219,7 @@ func TestMCPStoreReadsMatchRegistryFixture(t *testing.T) {
 func TestMCPStoreReadIsDatabaseLess(t *testing.T) {
 	store := testStateStore(t)
 	sk := nostr.Generate()
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 	result, err := server.CallTool(authorizedMCPContext(), "bahia_list_services", map[string]any{})
 	require.NoError(t, err)
 	require.False(t, result.IsError)
@@ -229,7 +229,7 @@ func TestMCPStoreReadIsDatabaseLess(t *testing.T) {
 func TestMCPAllStoreReadToolsAreDatabaseLess(t *testing.T) {
 	store := testStateStore(t)
 	sk := nostr.Generate()
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 	id := uuid.New().String()
 	args := map[string]any{"service_id": id, "environment_id": id, "artifact_id": id, "build_id": id, "intent_id": id, "run_id": id, "policy_id": id, "channel_id": id, "endpoint_id": id, "repository_id": id, "recipe_id": id, "definition_id": id, "restore_id": id, "retention_run_id": id, "worker_pubkey": "worker", "pubkey": "worker", "name": "missing"}
 	ctx := authorizedMCPContext()
@@ -282,8 +282,8 @@ func TestMCPLLMRouteStoreMatchesRepositoryFixture(t *testing.T) {
 	require.NoError(t, controlplane.SignGoNostrEvent(ctx, signer, &ev))
 	_, err = store.SaveEvent(ev)
 	require.NoError(t, err)
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
-	want, err := repositoryServer.CallTool(ctx, "bahia_llm_list_routes", map[string]any{})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	want, err := repositoryServer.legacyCallTool(ctx, "bahia_llm_list_routes", map[string]any{})
 	require.NoError(t, err)
 	got, err := storeServer.CallTool(ctx, "bahia_llm_list_routes", map[string]any{})
 	require.NoError(t, err)
@@ -320,13 +320,13 @@ func TestMCPBackupStoreReadsMatchRepositoryFixture(t *testing.T) {
 	} {
 		require.NoError(t, publish(ctx))
 	}
-	repositoryServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{BackupReadModels: &memoryBackupReadModels{
+	repositoryServer := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{BackupReadModels: &memoryBackupReadModels{
 		repositories: []domain.BackupRepository{repo}, policies: []domain.BackupPolicy{policy},
 		recipes: []domain.BackupRecipe{recipe}, definitions: []domain.BackupDefinition{definition},
 		runs: []domain.BackupRun{run}, restores: []domain.BackupRestoreRun{restore}, retentions: []domain.BackupRetentionRun{retention},
 		verification: &verification,
 	}})
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -348,7 +348,7 @@ func TestMCPBackupStoreReadsMatchRepositoryFixture(t *testing.T) {
 	} {
 		for _, name := range []string{tc.name, strings.TrimPrefix(tc.name, "bahia_")} {
 			t.Run(name, func(t *testing.T) {
-				want, err := repositoryServer.CallTool(ctx, name, tc.args)
+				want, err := repositoryServer.legacyCallTool(ctx, name, tc.args)
 				require.NoError(t, err)
 				got, err := storeServer.CallTool(ctx, name, tc.args)
 				require.NoError(t, err)
@@ -366,7 +366,7 @@ func TestMCPBuildArtifactStoreReadsMatchRepositoryFixture(t *testing.T) {
 	sink := mcpProjectionStore{store}
 	buildRepo, artifactRepo := newTestBuildRepo(), newTestArtifactRepo()
 	registry := service.NewRegistryService(nil, nil, buildRepo, artifactRepo, nil, nil, nil, nil, nil, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	repositoryServer := NewServer(registry, zap.NewNop())
+	repositoryServer := newTestServer(registry, zap.NewNop())
 	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, repositoryServer.registry, sink, nil, zap.NewNop())
 	publisher := nostrpool.NewRelayFirstStatePublisher(projector, sink)
 	serviceID := uuid.New()
@@ -377,7 +377,7 @@ func TestMCPBuildArtifactStoreReadsMatchRepositoryFixture(t *testing.T) {
 	artifactRepo.artifacts[artifact.ID] = &artifact
 	require.NoError(t, publisher.PublishBuildRegistry(ctx, &build, false))
 	require.NoError(t, publisher.PublishArtifactRegistry(ctx, &artifact, false))
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -388,7 +388,7 @@ func TestMCPBuildArtifactStoreReadsMatchRepositoryFixture(t *testing.T) {
 		{"bahia_get_artifact", map[string]any{"artifact_id": artifact.ID.String()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := repositoryServer.CallTool(ctx, tc.name, tc.args)
+			want, err := repositoryServer.legacyCallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
@@ -415,7 +415,7 @@ func TestMCPConfidentialChannelStoreReadsMatchRepositoryFixture(t *testing.T) {
 	channel := domain.NotificationChannel{ID: uuid.New(), OrgID: uuid.New(), Name: "alerts", ChannelType: domain.ChannelTypeWebhook, Config: map[string]any{"url": "https://private.example.test/hook", "secret": "top-secret"}, EventFilter: map[string]any{"severity": "critical"}, Enabled: true, CreatedAt: created, UpdatedAt: created}
 	repo.channels[channel.ID] = &channel
 	require.NoError(t, publisher.PublishChannel(ctx, &channel))
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex(), ConfidentialReader: encryptor})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex(), ConfidentialReader: encryptor})
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -424,7 +424,7 @@ func TestMCPConfidentialChannelStoreReadsMatchRepositoryFixture(t *testing.T) {
 		{"bahia_get_notification_channel", map[string]any{"channel_id": channel.ID.String()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := repositoryServer.CallTool(ctx, tc.name, tc.args)
+			want, err := repositoryServer.legacyCallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
@@ -452,11 +452,11 @@ func TestMCPConfidentialSecretMetadataStoreReadsMatchRepositoryFixture(t *testin
 	secret := domain.ServiceSecret{ID: uuid.New(), ServiceID: uuid.New(), Name: "api-token", Version: 2, CreatedBy: "operator", CreatedAt: created, UpdatedAt: created}
 	repo := newTestSecretRepo()
 	repo.secrets[secret.ID] = &secret
-	repositoryServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{SecretsRepo: repo})
+	repositoryServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{SecretsRepo: repo})
 	require.NoError(t, publisher.PublishSecretRef(ctx, secret.ToRef()))
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex(), ConfidentialReader: encryptor})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex(), ConfidentialReader: encryptor})
 	args := map[string]any{"service_id": secret.ServiceID.String()}
-	want, err := repositoryServer.CallTool(ctx, "bahia_list_secrets", args)
+	want, err := repositoryServer.legacyCallTool(ctx, "bahia_list_secrets", args)
 	require.NoError(t, err)
 	got, err := storeServer.CallTool(ctx, "bahia_list_secrets", args)
 	require.NoError(t, err)
@@ -487,7 +487,7 @@ func TestMCPPaymentStoreReadsMatchRepositoryFixture(t *testing.T) {
 	payment := domain.PaymentRecord{ID: uuid.New(), DeploymentRunID: runID, WorkerPubkey: workerPubkey, MintURL: "https://mint.example", AmountSats: 16, Direction: domain.PaymentDirectionPayment, Status: domain.PaymentStatusSent, Metadata: map[string]any{"source": "mcp-parity"}, CreatedAt: created, UpdatedAt: created}
 	require.NoError(t, paymentRepo.Create(ctx, &payment))
 	require.NoError(t, nostrpool.NewPaymentCanonicalPublisher(projector, encryptor, zap.NewNop()).PublishPaymentRecord(ctx, &payment))
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex(), ConfidentialReader: encryptor})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex(), ConfidentialReader: encryptor})
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -497,7 +497,7 @@ func TestMCPPaymentStoreReadsMatchRepositoryFixture(t *testing.T) {
 		{"bahia_get_payment_history", map[string]any{"worker_pubkey": workerPubkey}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := repositoryServer.CallTool(ctx, tc.name, tc.args)
+			want, err := repositoryServer.legacyCallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
@@ -520,7 +520,7 @@ func TestMCPWorkerStoreReadsMatchRepositoryFixture(t *testing.T) {
 	worker := domain.Worker{PubKey: "worker-a", Name: "build-worker", Software: []domain.WorkerSoftware{{Name: "docker", Version: "27"}}, Pricing: []domain.WorkerPricing{{MintURL: "https://mint.example", PricePerSecond: 5, Unit: "sat"}}, LastAdvertisementAt: now, Status: domain.WorkerStatusOnline, CreatedAt: now, UpdatedAt: now}
 	repo.workers[worker.PubKey] = &worker
 	require.NoError(t, publisher.Publish(ctx, &worker))
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -530,7 +530,7 @@ func TestMCPWorkerStoreReadsMatchRepositoryFixture(t *testing.T) {
 		{"bahia_get_worker_pricing", map[string]any{"pubkey": worker.PubKey}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := repositoryServer.CallTool(ctx, tc.name, tc.args)
+			want, err := repositoryServer.legacyCallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
@@ -538,14 +538,14 @@ func TestMCPWorkerStoreReadsMatchRepositoryFixture(t *testing.T) {
 			require.JSONEq(t, want.Content[0].Text, got.Content[0].Text)
 		})
 	}
-	repositoryServer.workerReadModels = service.NewWorkerReadModelService(repo, nil, nil, service.NewWorkerPolicyService(repo, zap.NewNop()), service.NewMLPlacementService(repo, zap.NewNop()), zap.NewNop())
+	legacyFor(repositoryServer).WorkerReadModels = service.NewWorkerReadModelService(repo, nil, nil, service.NewWorkerPolicyService(repo, zap.NewNop()), service.NewMLPlacementService(repo, zap.NewNop()), zap.NewNop())
 	for _, args := range []map[string]any{
 		{"preview_id": "policy-preview", "workload_type": "worker_policy", "policy": map[string]any{"strategy": "cheapest"}},
 		{"preview_id": "ml-preview", "workload_type": "inference", "runtime_kind": "external_api"},
 	} {
 		name := args["preview_id"].(string)
 		t.Run(name, func(t *testing.T) {
-			want, err := repositoryServer.CallTool(ctx, "bahia_worker_preview_eligibility", args)
+			want, err := repositoryServer.legacyCallTool(ctx, "bahia_worker_preview_eligibility", args)
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, "bahia_worker_preview_eligibility", args)
 			require.NoError(t, err)
@@ -575,8 +575,8 @@ func TestMCPWorkerReadModelsStoreMatchRepositoryFixture(t *testing.T) {
 	workerRepo.workers[worker.PubKey] = &worker
 	models := service.NewWorkerReadModelService(workerRepo, nil, nil, nil, nil, zap.NewNop())
 	controlplane.NewWorkerReadModelPublisher(sink, signer, models, zap.NewNop()).PublishForWorker(ctx, worker.PubKey)
-	repositoryServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{WorkerReadModels: models})
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	repositoryServer := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{WorkerReadModels: models, Workers: workerRepo})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -587,7 +587,7 @@ func TestMCPWorkerReadModelsStoreMatchRepositoryFixture(t *testing.T) {
 		{"bahia_worker_list_drain_status", map[string]any{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := repositoryServer.CallTool(ctx, tc.name, tc.args)
+			want, err := repositoryServer.legacyCallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
@@ -612,7 +612,7 @@ func TestMCPPolicyStoreReadsMatchRepositoryFixture(t *testing.T) {
 	require.NoError(t, controlplane.SignGoNostrEvent(ctx, signer, &ev))
 	_, err = store.SaveEvent(ev)
 	require.NoError(t, err)
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -621,7 +621,7 @@ func TestMCPPolicyStoreReadsMatchRepositoryFixture(t *testing.T) {
 		{"bahia_get_policy", map[string]any{"policy_id": policy.ID.String()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := repositoryServer.CallTool(ctx, tc.name, tc.args)
+			want, err := repositoryServer.legacyCallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
@@ -645,8 +645,8 @@ func TestMCPPackageStoreReadsMatchRepositoryFixture(t *testing.T) {
 	require.NoError(t, publisher.PublishPackageRepositoryRegistry(ctx, &repo, false))
 	require.NoError(t, publisher.PublishPackageArtifactRegistry(ctx, &artifact, false))
 	fixture := &mcpPackageFixtureRepo{repo: repo, artifact: artifact}
-	repositoryServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{PackageProjection: fixture})
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	repositoryServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{PackageProjection: fixture})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -657,7 +657,7 @@ func TestMCPPackageStoreReadsMatchRepositoryFixture(t *testing.T) {
 		{"bahia_package_get", map[string]any{"repository_id": repo.ID.String(), "package_name": artifact.PackageName, "version": artifact.Version, "filename": artifact.Filename}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := repositoryServer.CallTool(ctx, tc.name, tc.args)
+			want, err := repositoryServer.legacyCallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
@@ -681,12 +681,12 @@ func TestMCPMLStoreReadsMatchRepositoryFixture(t *testing.T) {
 	artifact := domain.MLArtifactRef{ID: uuid.New(), URI: "blossom://model", CreatedAt: created}
 	fixture := &mcpMLFixtureRepo{endpoint: endpoint, state: state, artifact: artifact, edges: []domain.MLProvenanceEdge{}}
 	mlRegistry := service.NewMLRegistryService(fixture, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	repositoryServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{MLRegistry: mlRegistry})
+	repositoryServer := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{MLRegistry: mlRegistry})
 	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, environmentServer.registry, sink, nil, zap.NewNop(), nostrpool.WithMLProjectionSource(fixture))
 	publisher := nostrpool.NewMLCanonicalPublisher(projector, zap.NewNop())
 	require.NoError(t, publisher.PublishEndpointState(ctx, &state))
 	require.NoError(t, publisher.PublishProvenanceGraph(ctx, &artifact))
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -696,7 +696,7 @@ func TestMCPMLStoreReadsMatchRepositoryFixture(t *testing.T) {
 		{"bahia_ml_get_provenance", map[string]any{"artifact_id": artifact.ID.String()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := repositoryServer.CallTool(ctx, tc.name, tc.args)
+			want, err := repositoryServer.legacyCallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
@@ -713,7 +713,7 @@ func TestMCPDeploymentStoreReadsMatchRepositoryFixture(t *testing.T) {
 	sink := mcpProjectionStore{store}
 	serviceRepo, environmentRepo, intentRepo, runRepo, stateRepo := newTestServiceRepo(), newTestEnvironmentRepo(), newTestDeploymentIntentRepo(), newTestRunRepo(), newTestDeploymentStateRepo()
 	registry := service.NewRegistryService(serviceRepo, environmentRepo, nil, nil, intentRepo, runRepo, nil, stateRepo, nil, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	repositoryServer := NewServer(registry, zap.NewNop())
+	repositoryServer := newTestServer(registry, zap.NewNop())
 	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, registry, sink, nil, zap.NewNop())
 	publisher := nostrpool.NewRelayFirstStatePublisher(projector, sink)
 	serviceID, environmentID := uuid.New(), uuid.New()
@@ -728,7 +728,7 @@ func TestMCPDeploymentStoreReadsMatchRepositoryFixture(t *testing.T) {
 	require.NoError(t, publisher.PublishDeploymentIntentRegistry(ctx, &intent, false))
 	require.NoError(t, publisher.PublishDeploymentRunRegistry(ctx, &run, false))
 	require.NoError(t, publisher.PublishState(ctx, &state, nil))
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -742,7 +742,7 @@ func TestMCPDeploymentStoreReadsMatchRepositoryFixture(t *testing.T) {
 		{"bahia_get_deployment_status", map[string]any{"service_id": serviceID.String(), "environment_id": environmentID.String()}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, err := repositoryServer.CallTool(ctx, tc.name, tc.args)
+			want, err := repositoryServer.legacyCallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, tc.name, tc.args)
 			require.NoError(t, err)
@@ -763,11 +763,11 @@ func TestMCPDNSEndpointStoreReadsMatchProjectionFixture(t *testing.T) {
 	endpoint := domain.DNSEndpoint{ID: uuid.New(), Family: domain.DNSEndpointFamilyService, Name: "api", Environment: "prod", FQDN: "api.example.test", Coordinate: "endpoint:service:api:prod", Zone: "example.test", Address: "192.0.2.10", Source: "runtime", DriftStatus: domain.DriftStatusDrifted, Health: domain.HealthStatusHealthy, MaterializedAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)}
 	_, _, err := publisher.PublishEndpoints(ctx, []domain.DNSEndpoint{endpoint})
 	require.NoError(t, err)
-	repositoryServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{DNSEndpoints: dnsEndpointListerFunc(func(context.Context) ([]domain.DNSEndpoint, error) { return []domain.DNSEndpoint{endpoint}, nil })})
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
+	repositoryServer := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{DNSEndpoints: dnsEndpointListerFunc(func(context.Context) ([]domain.DNSEndpoint, error) { return []domain.DNSEndpoint{endpoint}, nil })})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
 	for _, name := range []string{"bahia_dns_list_endpoints", "bahia_dns_list_drift", "bahia_assistant_dns_list_endpoints", "bahia_assistant_dns_list_drift", "bahia_fips_list_mesh_nodes", "bahia_fips_mesh_status"} {
 		t.Run(name, func(t *testing.T) {
-			want, err := repositoryServer.CallTool(ctx, name, map[string]any{})
+			want, err := repositoryServer.legacyCallTool(ctx, name, map[string]any{})
 			require.NoError(t, err)
 			got, err := storeServer.CallTool(ctx, name, map[string]any{})
 			require.NoError(t, err)
@@ -775,11 +775,9 @@ func TestMCPDNSEndpointStoreReadsMatchProjectionFixture(t *testing.T) {
 			require.JSONEq(t, want.Content[0].Text, got.Content[0].Text)
 		})
 	}
-	wantResources, err := repositoryServer.GetResources(ctx)
-	require.NoError(t, err)
 	gotResources, err := storeServer.GetResources(ctx)
 	require.NoError(t, err)
-	require.Equal(t, wantResources, gotResources)
+	require.Contains(t, gotResources, dnsEndpointResource(endpoint, endpoint.FQDN))
 }
 
 func TestMCPRunLogsUseStoreRunMetadata(t *testing.T) {
@@ -793,9 +791,9 @@ func TestMCPRunLogsUseStoreRunMetadata(t *testing.T) {
 	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, repositoryServer.registry, sink, nil, zap.NewNop())
 	publisher := nostrpool.NewRelayFirstStatePublisher(projector, sink)
 	require.NoError(t, publisher.PublishDeploymentRunRegistry(ctx, run, false))
-	storeServer := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex(), LogService: repositoryServer.logService})
+	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex(), LogService: repositoryServer.logService})
 	args := map[string]any{"run_id": runID.String()}
-	want, err := repositoryServer.CallTool(ctx, "bahia_get_run_logs", args)
+	want, err := repositoryServer.legacyCallTool(ctx, "bahia_get_run_logs", args)
 	require.NoError(t, err)
 	got, err := storeServer.CallTool(ctx, "bahia_get_run_logs", args)
 	require.NoError(t, err)

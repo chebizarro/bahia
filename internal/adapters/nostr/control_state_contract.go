@@ -278,13 +278,17 @@ func (r *RelayFirstStatePublisher) PublishEnvironmentRegistry(ctx context.Contex
 }
 
 func (r *RelayFirstStatePublisher) publish(ctx context.Context, legacyKind int, id uuid.UUID, deleted bool, tags gonostr.Tags, content, entityType string) error {
+	return r.publishCoordinate(ctx, legacyKind, id.String(), id, deleted, tags, content, entityType)
+}
+
+func (r *RelayFirstStatePublisher) publishCoordinate(ctx context.Context, legacyKind int, dTag string, id uuid.UUID, deleted bool, tags gonostr.Tags, content, entityType string) error {
 	if r == nil || r.projector == nil {
 		return fmt.Errorf("relay-first state publisher is not configured")
 	}
 	if r.publisher == nil {
 		return fmt.Errorf("relay-first state publisher has no publisher")
 	}
-	wireKind, baseTags := controlStateEnvelope(legacyKind, id.String(), deleted)
+	wireKind, baseTags := controlStateEnvelope(legacyKind, dTag, deleted)
 	return r.projector.publishSignedRelayFirst(ctx, wireKind, append(baseTags, tags...), content, entityType, &id, r.publisher)
 }
 
@@ -812,14 +816,14 @@ func (r *RelayFirstStatePublisher) PublishState(ctx context.Context, state *doma
 		return fmt.Errorf("state is nil")
 	}
 	tags, content := RuntimeStateRecord(state, observation)
-	return r.publish(ctx, KindServiceState, state.ServiceID, false, tags, content, "state.projection")
+	return r.publishCoordinate(ctx, KindServiceState, ServiceStateDTag(state.ServiceID, state.EnvironmentID), state.ServiceID, false, tags, content, "state.projection")
 }
 
 // PublishStateTombstone publishes a tombstone for the service/environment state
 // coordinate, so relay readers see the removal.
 func (r *RelayFirstStatePublisher) PublishStateTombstone(ctx context.Context, serviceID, envID uuid.UUID) error {
 	tags, content := RuntimeStateTombstoneRecord(serviceID, envID)
-	return r.publish(ctx, KindServiceState, serviceID, true, tags, content, "state.projection")
+	return r.publishCoordinate(ctx, KindServiceState, ServiceStateDTag(serviceID, envID), serviceID, true, tags, content, "state.projection")
 }
 
 // CPStateFamilyInfo describes one projected cp-state family for external

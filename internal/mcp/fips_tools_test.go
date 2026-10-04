@@ -12,7 +12,7 @@ import (
 )
 
 func TestFIPSToolsAreRegistered(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{})
 	required := map[string]bool{
 		"bahia_fips_list_mesh_nodes": false,
 		"bahia_fips_mesh_status":     false,
@@ -31,7 +31,7 @@ func TestFIPSToolsAreRegistered(t *testing.T) {
 
 func TestFIPSListMeshNodesFiltersMeshRecordsAndEnrichesWorkers(t *testing.T) {
 	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{
+	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{
 		DNSEndpoints: dnsEndpointListerFunc(func(ctx context.Context) ([]domain.DNSEndpoint, error) {
 			return []domain.DNSEndpoint{
 				{Family: domain.DNSEndpointFamilyService, Name: "api", FQDN: "api.prod.example", Address: "10.0.0.10", Health: domain.HealthStatusHealthy, DriftStatus: domain.DriftStatusInSync},
@@ -48,6 +48,19 @@ func TestFIPSListMeshNodesFiltersMeshRecordsAndEnrichesWorkers(t *testing.T) {
 		}},
 		},
 	})
+	fixture := attachCanonicalMCPFixture(t, server)
+	endpoints, err := legacyFor(server).DNSEndpoints.ListDNSEndpoints(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.publishDNS(t, endpoints...)
+	workers, err := legacyFor(server).Workers.List(context.Background(), "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range workers {
+		fixture.publishWorker(t, &workers[i])
+	}
 
 	res, err := server.CallTool(authorizedMCPContext(), "bahia_fips_list_mesh_nodes", map[string]interface{}{})
 	if err != nil || res.IsError {
@@ -79,7 +92,7 @@ func TestFIPSListMeshNodesFiltersMeshRecordsAndEnrichesWorkers(t *testing.T) {
 }
 
 func TestFIPSMeshStatusEmptyStateReturnsEmptyStatus(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{
+	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{
 		DNSEndpoints: dnsEndpointListerFunc(func(ctx context.Context) ([]domain.DNSEndpoint, error) {
 			return []domain.DNSEndpoint{}, nil
 		}),
@@ -108,7 +121,7 @@ func TestFIPSMeshStatusEmptyStateReturnsEmptyStatus(t *testing.T) {
 }
 
 func TestFIPSResourcesListIncludesOnlyMeshResources(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{
+	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{
 		DNSEndpoints: dnsEndpointListerFunc(func(ctx context.Context) ([]domain.DNSEndpoint, error) {
 			return []domain.DNSEndpoint{
 				{Family: domain.DNSEndpointFamilyService, Name: "api", Environment: "prod", Zone: "prod.example", FQDN: "api.prod.example", Address: "10.0.0.10", Health: domain.HealthStatusHealthy, DriftStatus: domain.DriftStatusInSync},
@@ -116,6 +129,11 @@ func TestFIPSResourcesListIncludesOnlyMeshResources(t *testing.T) {
 			}, nil
 		}),
 	})
+	endpoints, err := legacyFor(server).DNSEndpoints.ListDNSEndpoints(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachCanonicalMCPFixture(t, server).publishDNS(t, endpoints...)
 
 	resources, err := server.GetResources(authorizedMCPContext())
 	if err != nil {

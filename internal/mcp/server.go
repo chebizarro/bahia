@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -35,7 +36,6 @@ type Server struct {
 	servicePubkey        string
 	confidentialReader   ConfidentialStateReader
 	registry             *service.RegistryService
-	mlRegistry           *service.MLRegistryService
 	llmRegistry          *service.LLMRegistryService
 	mlCommands           MLCommandPublisher
 	llmCommands          LLMCommandPublisher
@@ -47,22 +47,16 @@ type Server struct {
 	workerCommands       WorkerCommandPublisher
 	backupCommands       BackupCommandPublisher
 	packageProjection    repository.PackageControlPlaneRepository
-	workerReadModels     *service.WorkerReadModelService
-	backupReadModels     BackupReadModelRepository
 	logger               *zap.Logger
 	secretsRepo          repository.SecretRepository       // optional: for secret management tools
 	encryptor            *secrets.Encryptor                // optional: for secret encryption/decryption
-	policies             *service.PolicyService            // optional: for policy management tools
 	notificationRepo     repository.NotificationRepository // optional: for notification tools
 	notificationDisp     *notifications.Dispatcher         // optional: for notification testing
-	workers              repository.WorkerRepository       // optional: for worker management tools
 	logService           *adapterruntime.LogService        // optional: for deployment run log tools
-	payments             *service.PaymentService           // optional: for payment tools
 	sboms                repository.SBOMRepository         // optional: for SBOM tools
 	signatures           repository.ArtifactSignatureRepository
 	signVerifier         SignatureVerifier
 	toolProvisioning     repository.ToolProvisioningRepository
-	dnsEndpoints         DNSEndpointLister
 	authorizedPubkeys    []string
 	rbac                 *auth.RBAC
 	outbox               OutboxReader // optional: for outbox inspection tool
@@ -75,24 +69,20 @@ type Config struct {
 	Description string `json:"description"`
 }
 
-// ServerDeps holds optional dependencies for the MCP server.
+// ServerDeps holds MCP dependencies. StateStore and ServicePubkey are required.
 type ServerDeps struct {
 	StateStore                   StateEventStore
 	ServicePubkey                string
 	ConfidentialReader           ConfidentialStateReader
 	SecretsRepo                  repository.SecretRepository
 	Encryptor                    *secrets.Encryptor
-	Policies                     *service.PolicyService
 	NotificationRepo             repository.NotificationRepository
 	NotificationDispatcher       *notifications.Dispatcher
-	Workers                      repository.WorkerRepository
 	LogService                   *adapterruntime.LogService
-	Payments                     *service.PaymentService
 	SBOMs                        repository.SBOMRepository
 	Signatures                   repository.ArtifactSignatureRepository
 	SignVerifier                 SignatureVerifier
 	ToolProvisioning             repository.ToolProvisioningRepository
-	MLRegistry                   *service.MLRegistryService
 	MLCommandPublisher           MLCommandPublisher
 	LLMRegistry                  *service.LLMRegistryService
 	LLMCommandPublisher          LLMCommandPublisher
@@ -104,9 +94,6 @@ type ServerDeps struct {
 	WorkerCommandPublisher       WorkerCommandPublisher
 	BackupCommandPublisher       BackupCommandPublisher
 	PackageProjection            repository.PackageControlPlaneRepository
-	WorkerReadModels             *service.WorkerReadModelService
-	BackupReadModels             BackupReadModelRepository
-	DNSEndpoints                 DNSEndpointLister
 	// AuthorizedPubkeys is the explicit operator allowlist for external MCP callers.
 	// An empty allowlist denies all non-system callers.
 	AuthorizedPubkeys []string
@@ -176,29 +163,19 @@ type ToolApprovalCommandPublisher interface {
 	PublishToolApprovalResponse(ctx context.Context, cmd controlplane.ToolApprovalCommand) (*controlplane.ToolApprovalCommandReceipt, error)
 }
 
-// NewServer creates a new MCP server for Bahia.
-func NewServer(registry *service.RegistryService, logger *zap.Logger) *Server {
-	return NewServerWithOptions(registry, logger, ServerDeps{})
-}
-
-// NewServerWithDeps creates a new MCP server with optional dependencies.
-// secretsRepo and encryptor are optional; if nil, secret management tools will return errors.
-func NewServerWithDeps(registry *service.RegistryService, logger *zap.Logger, secretsRepo repository.SecretRepository, encryptor *secrets.Encryptor) *Server {
-	return NewServerWithOptions(registry, logger, ServerDeps{
-		SecretsRepo: secretsRepo,
-		Encryptor:   encryptor,
-	})
-}
-
-// NewServerWithOptions creates a new MCP server with optional dependencies.
-// This is the canonical constructor; other constructors delegate to this.
-func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger, deps ServerDeps) *Server {
+// NewServerWithOptionsChecked requires the local event store used by MCP reads.
+func NewServerWithOptionsChecked(registry *service.RegistryService, logger *zap.Logger, deps ServerDeps) (*Server, error) {
+	if deps.StateStore == nil || nilStateStore(deps.StateStore) {
+		return nil, fmt.Errorf("MCP state event store is required")
+	}
+	if strings.TrimSpace(deps.ServicePubkey) == "" {
+		return nil, fmt.Errorf("MCP service pubkey is required for state reads")
+	}
 	return &Server{
 		stateStore:           deps.StateStore,
 		servicePubkey:        deps.ServicePubkey,
 		confidentialReader:   deps.ConfidentialReader,
 		registry:             registry,
-		mlRegistry:           deps.MLRegistry,
 		llmRegistry:          deps.LLMRegistry,
 		mlCommands:           deps.MLCommandPublisher,
 		llmCommands:          deps.LLMCommandPublisher,
@@ -210,25 +187,29 @@ func NewServerWithOptions(registry *service.RegistryService, logger *zap.Logger,
 		workerCommands:       deps.WorkerCommandPublisher,
 		backupCommands:       deps.BackupCommandPublisher,
 		packageProjection:    deps.PackageProjection,
-		workerReadModels:     deps.WorkerReadModels,
-		backupReadModels:     deps.BackupReadModels,
 		logger:               logger,
 		secretsRepo:          deps.SecretsRepo,
 		encryptor:            deps.Encryptor,
-		policies:             deps.Policies,
 		notificationRepo:     deps.NotificationRepo,
 		notificationDisp:     deps.NotificationDispatcher,
-		workers:              deps.Workers,
 		logService:           deps.LogService,
-		payments:             deps.Payments,
 		sboms:                deps.SBOMs,
 		signatures:           deps.Signatures,
 		signVerifier:         deps.SignVerifier,
 		toolProvisioning:     deps.ToolProvisioning,
-		dnsEndpoints:         deps.DNSEndpoints,
 		authorizedPubkeys:    normalizePubkeys(deps.AuthorizedPubkeys),
 		rbac:                 deps.RBAC,
 		outbox:               deps.Outbox,
+	}, nil
+}
+
+func nilStateStore(store StateEventStore) bool {
+	v := reflect.ValueOf(store)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
 	}
 }
 
@@ -1907,19 +1888,20 @@ func (s *Server) authorizeServicePermission(ctx context.Context, serviceID uuid.
 	if principal == nil || !principal.IsAuthenticated() {
 		return errorResult("authentication required")
 	}
-	if (s.registry == nil && s.stateStore == nil) || s.rbac == nil {
+	if s.rbac == nil {
 		return errorResult(fmt.Sprintf("%s authorization is not configured", resource))
 	}
 
 	var svc *domain.Service
 	var err error
-	if s.stateStore != nil {
+	if permission == domain.PermReadServices {
 		var record *stateRecord
 		record, err = s.readStateOne(ctx, nostrAdapter.KindServiceRegistry, "id", serviceID.String())
 		if err == nil && record != nil {
 			svc, err = client.DecodeService(record.Event)
 		}
-	} else {
+	} else if s.registry != nil {
+		// Wave 5 P2 migrates write authorization to the intent path.
 		svc, err = s.registry.GetService(ctx, serviceID)
 	}
 	if err != nil || svc == nil || svc.OrgID == uuid.Nil {
@@ -1976,10 +1958,8 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	if denied := s.authorizeToolCall(ctx, name); denied != nil {
 		return denied, nil
 	}
-	if s.stateStore != nil {
-		if result, handled := s.callStoreReadTool(ctx, name, arguments); handled {
-			return result, nil
-		}
+	if result, handled := s.callStoreReadTool(ctx, name, arguments); handled {
+		return result, nil
 	}
 
 	if isBackupToolName(name) {
@@ -1988,19 +1968,11 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 
 	switch name {
 	// Service operations
-	case "bahia_list_services":
-		return s.handleListServices(ctx, arguments)
-	case "bahia_get_service":
-		return s.handleGetService(ctx, arguments)
 	case "bahia_create_service":
 		return s.handleCreateService(ctx, arguments)
 	case "bahia_update_service":
 		return s.handleUpdateService(ctx, arguments)
 	// Environment operations
-	case "bahia_list_environments":
-		return s.handleListEnvironments(ctx, arguments)
-	case "bahia_get_environment":
-		return s.handleGetEnvironment(ctx, arguments)
 	case "bahia_create_environment":
 		return s.handleCreateEnvironment(ctx, arguments)
 	case "bahia_update_environment":
@@ -2010,8 +1982,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleDeploy(ctx, arguments)
 	case "bahia_rollback":
 		return s.handleRollback(ctx, arguments)
-	case "bahia_get_deployment_status":
-		return s.handleGetDeploymentStatus(ctx, arguments)
 	case "bahia_approve_deployment":
 		return s.handleApproveDeployment(ctx, arguments)
 	case "bahia_reject_deployment":
@@ -2027,21 +1997,11 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleMLRollback(ctx, arguments)
 	case "bahia_assistant_service_deploy", "bahia_assistant_service_rollback", "bahia_assistant_llm_deploy", "bahia_assistant_llm_approve_deployment", "bahia_assistant_llm_rollback", "bahia_assistant_ml_deploy", "bahia_assistant_ml_approve_deployment", "bahia_assistant_ml_rollback":
 		return s.handleAssistantAsyncTool(ctx, name, arguments)
-	case "bahia_dns_list_endpoints", "bahia_assistant_dns_list_endpoints":
-		return s.handleDNSListEndpoints(ctx, arguments)
-	case "bahia_dns_list_drift", "bahia_assistant_dns_list_drift":
-		return s.handleDNSListDrift(ctx, arguments)
 	case "bahia_fips_list_mesh_nodes":
 		return s.handleFIPSListMeshNodes(ctx, arguments)
 	case "bahia_fips_mesh_status":
 		return s.handleFIPSMeshStatus(ctx, arguments)
 
-	case "bahia_ml_list_state":
-		return s.handleMLListState(ctx, arguments)
-	case "bahia_ml_get_state":
-		return s.handleMLGetState(ctx, arguments)
-	case "bahia_ml_get_provenance":
-		return s.handleMLGetProvenance(ctx, arguments)
 	// LLM registry operations
 	case "bahia_llm_create_route":
 		return s.handleLLMCreateRoute(ctx, arguments)
@@ -2049,8 +2009,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleLLMUpdateRoute(ctx, arguments)
 	case "bahia_llm_register_release":
 		return s.handleLLMRegisterRelease(ctx, arguments)
-	case "bahia_llm_list_routes":
-		return s.handleLLMListRoutes(ctx, arguments)
 	case "bahia_llm_list_releases":
 		return s.handleLLMListReleases(ctx, arguments)
 	// Async LLM Nostr command operations
@@ -2067,10 +2025,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	case "bahia_delete_environment":
 		return s.handleDeleteEnvironment(ctx, arguments)
 	// Artifact operations
-	case "bahia_list_artifacts":
-		return s.handleListArtifacts(ctx, arguments)
-	case "bahia_get_artifact":
-		return s.handleGetArtifact(ctx, arguments)
 	case "bahia_register_artifact":
 		return s.handleRegisterArtifact(ctx, arguments)
 	// Signature operations
@@ -2094,36 +2048,20 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	case "bahia_ingest_sbom":
 		return s.handleIngestSBOM(ctx, arguments)
 	// Build operations
-	case "bahia_list_builds":
-		return s.handleListBuilds(ctx, arguments)
-	case "bahia_get_build":
-		return s.handleGetBuild(ctx, arguments)
 	case "bahia_register_build":
 		return s.handleRegisterBuild(ctx, arguments)
 	case "bahia_update_build_status":
 		return s.handleUpdateBuildStatus(ctx, arguments)
 	// Observability operations
-	case "bahia_list_states":
-		return s.handleListStates(ctx, arguments)
-	case "bahia_list_drifted":
-		return s.handleListDrifted(ctx, arguments)
 	case "bahia_get_observation":
 		return s.handleGetObservation(ctx, arguments)
-	case "bahia_list_intents":
-		return s.handleListIntents(ctx, arguments)
-	case "bahia_list_runs":
-		return s.handleListRuns(ctx, arguments)
 	case "bahia_create_run":
 		return s.handleCreateRun(ctx, arguments)
-	case "bahia_get_run":
-		return s.handleGetRun(ctx, arguments)
 	case "bahia_get_run_logs":
 		return s.handleGetRunLogs(ctx, arguments)
 	case "bahia_complete_run":
 		return s.handleCompleteRun(ctx, arguments)
 	// Secret operations
-	case "bahia_list_secrets":
-		return s.handleListSecrets(ctx, arguments)
 	case "bahia_create_secret":
 		return s.handleCreateSecret(ctx, arguments)
 	case "bahia_update_secret":
@@ -2131,10 +2069,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	case "bahia_delete_secret":
 		return s.handleDeleteSecret(ctx, arguments)
 	// Policy operations
-	case "bahia_list_policies":
-		return s.handleListPolicies(ctx, arguments)
-	case "bahia_get_policy":
-		return s.handleGetPolicy(ctx, arguments)
 	case "bahia_create_policy":
 		return s.handleCreatePolicy(ctx, arguments)
 	case "bahia_update_policy":
@@ -2144,38 +2078,16 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	case "bahia_evaluate_policy":
 		return s.handleEvaluatePolicy(ctx, arguments)
 	// Worker operations
-	case "bahia_list_workers":
-		return s.handleListWorkers(ctx, arguments)
-	case "bahia_get_worker":
-		return s.handleGetWorker(ctx, arguments)
-	case "bahia_get_worker_pricing":
-		return s.handleGetWorkerPricing(ctx, arguments)
 	case "bahia_worker_cordon", "bahia_worker_uncordon", "bahia_worker_drain", "bahia_worker_undrain", "bahia_worker_maintenance_enter", "bahia_worker_maintenance_exit":
 		return s.handleWorkerLifecycleCommand(ctx, name, arguments)
 	case "bahia_worker_labels_update":
 		return s.handleWorkerLabelsUpdate(ctx, arguments)
-	case "bahia_worker_get_assignments":
-		return s.handleWorkerGetAssignments(ctx, arguments)
-	case "bahia_worker_list_assignments":
-		return s.handleWorkerListAssignments(ctx, arguments)
-	case "bahia_worker_get_drain_status":
-		return s.handleWorkerGetDrainStatus(ctx, arguments)
-	case "bahia_worker_list_drain_status":
-		return s.handleWorkerListDrainStatus(ctx, arguments)
 	case "bahia_worker_preview_eligibility":
 		return s.handleWorkerPreviewEligibility(ctx, arguments)
 	// Payment operations
-	case "bahia_estimate_cost":
-		return s.handleEstimateCost(ctx, arguments)
-	case "bahia_get_run_cost":
-		return s.handleGetRunCost(ctx, arguments)
-	case "bahia_get_payment_history":
-		return s.handleGetPaymentHistory(ctx, arguments)
 	// Intent alias operations
 	case "bahia_create_intent":
 		return s.handleDeploy(ctx, arguments) // alias
-	case "bahia_get_intent":
-		return s.handleGetIntent(ctx, arguments)
 	case "bahia_approve_intent":
 		return s.handleApproveDeployment(ctx, arguments) // alias
 	case "bahia_reject_intent":
@@ -2210,17 +2122,9 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handlePackageYank(ctx, arguments)
 	case "bahia_package_drift_detect":
 		return s.handlePackageDriftDetect(ctx, arguments)
-	case "bahia_package_list":
-		return s.handlePackageList(ctx, arguments)
-	case "bahia_package_get":
-		return s.handlePackageGet(ctx, arguments)
 	case "bahia_package_status":
 		return s.handlePackageStatus(ctx, arguments)
 	// Notification channel operations
-	case "bahia_list_notification_channels":
-		return s.handleListNotificationChannels(ctx, arguments)
-	case "bahia_get_notification_channel":
-		return s.handleGetNotificationChannel(ctx, arguments)
 	case "bahia_create_notification_channel":
 		return s.handleCreateNotificationChannel(ctx, arguments)
 	case "bahia_update_notification_channel":
@@ -2251,48 +2155,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 }
 
 // --- Tool Handlers ---
-
-func (s *Server) handleListServices(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	services, err := s.registry.ListServices(ctx)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list services: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"services": servicesToMaps(services),
-		"total":    len(services),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleGetService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceID, _ := args["service_id"].(string)
-	name, _ := args["name"].(string)
-
-	var svc *domain.Service
-	var err error
-
-	if serviceID != "" {
-		id, parseErr := uuid.Parse(serviceID)
-		if parseErr != nil {
-			return errorResult(fmt.Sprintf("invalid service_id: %v", parseErr)), nil
-		}
-		svc, err = s.registry.GetService(ctx, id)
-	} else if name != "" {
-		svc, err = s.registry.GetServiceByName(ctx, name)
-	} else {
-		return errorResult("service_id or name is required"), nil
-	}
-
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get service: %v", err)), nil
-	}
-	if svc == nil {
-		return errorResult("service not found"), nil
-	}
-
-	return jsonResult(serviceToMap(svc))
-}
 
 func (s *Server) handleCreateService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	name, _ := args["name"].(string)
@@ -2338,48 +2200,6 @@ func (s *Server) handleCreateService(ctx context.Context, args map[string]interf
 		return errorResult(fmt.Sprintf("failed to publish service create request: %v", err)), nil
 	}
 	return jsonResult(serviceCommandReceiptToMap(receipt))
-}
-
-func (s *Server) handleListEnvironments(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	envs, err := s.registry.ListEnvironments(ctx)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list environments: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"environments": environmentsToMaps(envs),
-		"total":        len(envs),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleGetEnvironment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	envID, _ := args["environment_id"].(string)
-	name, _ := args["name"].(string)
-
-	var env *domain.Environment
-	var err error
-
-	if envID != "" {
-		id, parseErr := uuid.Parse(envID)
-		if parseErr != nil {
-			return errorResult(fmt.Sprintf("invalid environment_id: %v", parseErr)), nil
-		}
-		env, err = s.registry.GetEnvironment(ctx, id)
-	} else if name != "" {
-		env, err = s.registry.GetEnvironmentByName(ctx, name)
-	} else {
-		return errorResult("environment_id or name is required"), nil
-	}
-
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get environment: %v", err)), nil
-	}
-	if env == nil {
-		return errorResult("environment not found"), nil
-	}
-
-	return jsonResult(environmentToMap(env))
 }
 
 // handleCreateEnvironment publishes a signer-first environment/create request
@@ -2558,47 +2378,6 @@ func (s *Server) handleRollback(ctx context.Context, args map[string]interface{}
 		return errorResult(fmt.Sprintf("failed to publish rollback request: %v", err)), nil
 	}
 	return jsonResult(serviceCommandReceiptToMap(receipt))
-}
-
-func (s *Server) handleGetDeploymentStatus(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceIDStr, _ := args["service_id"].(string)
-	envIDStr, _ := args["environment_id"].(string)
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-
-	envID, err := uuid.Parse(envIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
-	}
-
-	state, err := s.registry.GetEnvironmentServiceState(ctx, serviceID, envID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get state: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"service_id":     serviceID.String(),
-		"environment_id": envID.String(),
-		"drift_status":   state.DriftStatus,
-	}
-
-	if state.DesiredArtifactID != nil {
-		result["desired_artifact_id"] = state.DesiredArtifactID.String()
-	}
-	if state.DesiredIntentID != nil {
-		result["desired_intent_id"] = state.DesiredIntentID.String()
-	}
-	if state.LastSuccessfulRunID != nil {
-		result["last_successful_run_id"] = state.LastSuccessfulRunID.String()
-	}
-	if state.LastReconciledAt != nil {
-		result["last_reconciled_at"] = state.LastReconciledAt.Format("2006-01-02T15:04:05Z")
-	}
-
-	return jsonResult(result)
 }
 
 func (s *Server) handleApproveDeployment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -2787,23 +2566,6 @@ func (s *Server) handleLLMRegisterRelease(ctx context.Context, args map[string]i
 	return jsonResult(llmCommandReceiptToMap("submitted", receipt))
 }
 
-func (s *Server) handleLLMListRoutes(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	registry, errResult := s.requireLLMRegistry()
-	if errResult != nil {
-		return errResult, nil
-	}
-	limit, offset := limitOffsetArgs(args, 100)
-	routes, err := registry.ListRoutes(ctx, limit, offset)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list LLM routes: %v", err)), nil
-	}
-	out := make([]map[string]interface{}, 0, len(routes))
-	for i := range routes {
-		out = append(out, llmRouteToMap(&routes[i]))
-	}
-	return jsonResult(map[string]interface{}{"routes": out, "total": len(out), "registry_kind": controlplane.KindLLMRouteRegistry})
-}
-
 // Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs LLMReleaseRegistry.
 func (s *Server) handleLLMListReleases(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	registry, errResult := s.requireLLMRegistry()
@@ -2909,59 +2671,6 @@ func (s *Server) handleDeleteService(ctx context.Context, args map[string]interf
 
 func (s *Server) handleDeleteEnvironment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	return signerFirstMCPMutationUnavailable("bahia_delete_environment", "environment/delete"), nil
-}
-
-func (s *Server) handleListArtifacts(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceIDStr, _ := args["service_id"].(string)
-	limit := 20
-	if l, ok := args["limit"].(float64); ok {
-		limit = int(l)
-	}
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-
-	artifacts, err := s.registry.ListArtifacts(ctx, serviceID, limit, 0)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list artifacts: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"artifacts": artifactsToMaps(artifacts),
-		"total":     len(artifacts),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleGetArtifact(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	artifactIDStr, _ := args["artifact_id"].(string)
-
-	artifactID, err := uuid.Parse(artifactIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid artifact_id: %v", err)), nil
-	}
-
-	artifact, err := s.registry.GetArtifact(ctx, artifactID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get artifact: %v", err)), nil
-	}
-	if artifact == nil {
-		return errorResult("artifact not found"), nil
-	}
-
-	result := map[string]interface{}{
-		"id":           artifact.ID.String(),
-		"build_id":     artifact.BuildID.String(),
-		"service_id":   artifact.ServiceID.String(),
-		"image_repo":   artifact.ImageRepo,
-		"image_tag":    artifact.ImageTag,
-		"image_digest": artifact.ImageDigest,
-		"scan_status":  artifact.ScanStatus,
-		"created_at":   artifact.CreatedAt.Format("2006-01-02T15:04:05Z"),
-	}
-	return jsonResult(result)
 }
 
 func (s *Server) handleRegisterArtifact(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -3300,59 +3009,6 @@ func (s *Server) handleIngestSBOM(ctx context.Context, args map[string]interface
 	return jsonResult(result)
 }
 
-func (s *Server) handleListBuilds(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceIDStr, _ := args["service_id"].(string)
-	limit := 20
-	if l, ok := args["limit"].(float64); ok {
-		limit = int(l)
-	}
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-	if denied := s.authorizeServicePermission(ctx, serviceID, domain.PermReadServices, "service"); denied != nil {
-		return denied, nil
-	}
-
-	builds, err := s.registry.ListBuilds(ctx, serviceID, limit, 0)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list builds: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"builds": buildsToMaps(builds),
-		"total":  len(builds),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleGetBuild(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	buildIDStr, _ := args["build_id"].(string)
-
-	buildID, err := uuid.Parse(buildIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid build_id: %v", err)), nil
-	}
-
-	build, denied := s.authorizeBuildPermission(ctx, buildID, domain.PermReadServices)
-	if denied != nil {
-		return denied, nil
-	}
-
-	result := map[string]interface{}{
-		"id":         build.ID.String(),
-		"service_id": build.ServiceID.String(),
-		"git_sha":    build.GitSHA,
-		"git_ref":    build.GitRef,
-		"status":     build.Status,
-		"ci_system":  build.CISystem,
-		"ci_run_id":  build.CIRunID,
-		"created_at": build.CreatedAt.Format("2006-01-02T15:04:05Z"),
-	}
-	return jsonResult(result)
-}
-
 func (s *Server) handleRegisterBuild(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	serviceIDStr, _ := args["service_id"].(string)
 	gitSHA, _ := args["git_sha"].(string)
@@ -3454,46 +3110,6 @@ func (s *Server) handleUpdateBuildStatus(ctx context.Context, args map[string]in
 	return jsonResult(result)
 }
 
-func (s *Server) handleListStates(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	envIDStr, _ := args["environment_id"].(string)
-
-	var states []domain.EnvironmentServiceState
-	var err error
-
-	if envIDStr != "" {
-		envID, parseErr := uuid.Parse(envIDStr)
-		if parseErr != nil {
-			return errorResult(fmt.Sprintf("invalid environment_id: %v", parseErr)), nil
-		}
-		states, err = s.registry.ListEnvironmentStates(ctx, envID)
-	} else {
-		states, err = s.registry.ListAllStates(ctx)
-	}
-
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list states: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"states": statesToMaps(states),
-		"total":  len(states),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleListDrifted(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	states, err := s.registry.ListDriftedStates(ctx)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list drifted states: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"drifted": statesToMaps(states),
-		"total":   len(states),
-	}
-	return jsonResult(result)
-}
-
 // Phase 5 P1: no canonical family yet — see bahia-irsry.13.11. Needs RuntimeObservationState.
 func (s *Server) handleGetObservation(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	serviceIDStr, _ := args["service_id"].(string)
@@ -3525,56 +3141,6 @@ func (s *Server) handleGetObservation(ctx context.Context, args map[string]inter
 		"container_id":   obs.ObservedContainerID,
 		"health_status":  obs.HealthStatus,
 		"observed_at":    obs.ObservedAt.Format("2006-01-02T15:04:05Z"),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleListIntents(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	serviceIDStr, _ := args["service_id"].(string)
-	envIDStr, _ := args["environment_id"].(string)
-	limit := 20
-	if l, ok := args["limit"].(float64); ok {
-		limit = int(l)
-	}
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-
-	envID, err := uuid.Parse(envIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
-	}
-
-	intents, err := s.registry.ListDeploymentIntents(ctx, serviceID, envID, limit, 0)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list intents: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"intents": intentsToMaps(intents),
-		"total":   len(intents),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleListRuns(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	intentIDStr, _ := args["intent_id"].(string)
-
-	intentID, err := uuid.Parse(intentIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid intent_id: %v", err)), nil
-	}
-
-	runs, err := s.registry.ListDeploymentRuns(ctx, intentID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list runs: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"runs":  runsToMaps(runs),
-		"total": len(runs),
 	}
 	return jsonResult(result)
 }
@@ -3615,26 +3181,6 @@ func (s *Server) handleCreateRun(ctx context.Context, args map[string]interface{
 	return jsonResult(result)
 }
 
-func (s *Server) handleGetRun(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	runIDStr, _ := args["run_id"].(string)
-
-	runID, err := uuid.Parse(runIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid run_id: %v", err)), nil
-	}
-
-	run, err := s.registry.GetDeploymentRun(ctx, runID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get run: %v", err)), nil
-	}
-	if run == nil {
-		return errorResult("run not found"), nil
-	}
-
-	result := runToMap(run)
-	return jsonResult(result)
-}
-
 func (s *Server) handleGetRunLogs(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	runIDStr, _ := args["run_id"].(string)
 
@@ -3642,32 +3188,24 @@ func (s *Server) handleGetRunLogs(ctx context.Context, args map[string]interface
 	if err != nil {
 		return errorResult(fmt.Sprintf("invalid run_id: %v", err)), nil
 	}
-	if s.registry == nil && s.stateStore == nil {
-		return errorResult("deployment registry is not configured"), nil
-	}
 	if s.logService == nil {
 		return errorResult("run log tools are not configured"), nil
 	}
 
+	record, err := s.readStateOne(ctx, nostrAdapter.KindDeploymentRunRegistry, "id", runID.String())
 	var run *domain.DeploymentRun
-	if s.stateStore != nil {
-		var record *stateRecord
-		record, err = s.readStateOne(ctx, nostrAdapter.KindDeploymentRunRegistry, "id", runID.String())
-		if err == nil && record != nil {
-			run = &domain.DeploymentRun{ID: runID, Status: domain.DeploymentRunStatus(fmt.Sprint(record.Fields["status"])), StdoutRef: stringFromRecord(record.Fields, "stdout_ref"), StderrRef: stringFromRecord(record.Fields, "stderr_ref")}
-			if exit, ok := record.Fields["exit_code"].(float64); ok {
-				code := int(exit)
-				run.ExitCode = &code
-			}
-			if started, ok := recordTime(record.Fields, "started_at"); ok {
-				run.StartedAt = &started
-			}
-			if finished, ok := recordTime(record.Fields, "finished_at"); ok {
-				run.FinishedAt = &finished
-			}
+	if err == nil && record != nil {
+		run = &domain.DeploymentRun{ID: runID, Status: domain.DeploymentRunStatus(fmt.Sprint(record.Fields["status"])), StdoutRef: stringFromRecord(record.Fields, "stdout_ref"), StderrRef: stringFromRecord(record.Fields, "stderr_ref")}
+		if exit, ok := record.Fields["exit_code"].(float64); ok {
+			code := int(exit)
+			run.ExitCode = &code
 		}
-	} else {
-		run, err = s.registry.GetDeploymentRun(ctx, runID)
+		if started, ok := recordTime(record.Fields, "started_at"); ok {
+			run.StartedAt = &started
+		}
+		if finished, ok := recordTime(record.Fields, "finished_at"); ok {
+			run.FinishedAt = &finished
+		}
 	}
 	if err != nil {
 		if err == repository.ErrNotFound {
@@ -3760,30 +3298,6 @@ func (s *Server) handleCompleteRun(ctx context.Context, args map[string]interfac
 		"status":  "completed",
 		"run_id":  runID.String(),
 		"message": fmt.Sprintf("Deployment run marked as %s", status),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleListSecrets(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.secretsRepo == nil {
-		return errorResult("secret management tools are not configured"), nil
-	}
-
-	serviceIDStr, _ := args["service_id"].(string)
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-
-	secrets, err := s.secretsRepo.ListByService(ctx, serviceID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list secrets: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"secrets": secretsToMaps(secrets),
-		"total":   len(secrets),
 	}
 	return jsonResult(result)
 }
@@ -3954,197 +3468,6 @@ func (s *Server) handleDeleteSecret(ctx context.Context, args map[string]interfa
 		"secret_id": secretID.String(),
 	}
 	return jsonResult(result)
-}
-
-func (s *Server) handleListWorkers(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.workers == nil {
-		return errorResult("worker tools are not configured"), nil
-	}
-
-	capability, _ := args["capability"].(string)
-	available, hasAvailable := args["available"].(bool)
-	limit := 50
-	if l, ok := args["limit"].(float64); ok {
-		limit = int(l)
-	}
-
-	// List all workers (status filter in repository)
-	workers, err := s.workers.List(ctx, "", limit)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list workers: %v", err)), nil
-	}
-
-	// Apply filters in memory if needed
-	filtered := make([]domain.Worker, 0)
-	for _, w := range workers {
-		// Filter by capability if specified
-		if capability != "" && !w.HasSoftware(capability) {
-			continue
-		}
-		// Filter by availability if specified
-		if hasAvailable {
-			isOnline := w.ComputeStatus(time.Now()) == domain.WorkerStatusOnline
-			if available != isOnline {
-				continue
-			}
-		}
-		filtered = append(filtered, w)
-	}
-
-	result := map[string]interface{}{
-		"workers": workersToMaps(filtered),
-		"total":   len(filtered),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleGetWorker(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.workers == nil {
-		return errorResult("worker tools are not configured"), nil
-	}
-
-	pubkey, _ := args["pubkey"].(string)
-	if pubkey == "" {
-		return errorResult("pubkey is required"), nil
-	}
-
-	worker, err := s.workers.GetByPubKey(ctx, pubkey)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get worker: %v", err)), nil
-	}
-	if worker == nil {
-		return errorResult("worker not found"), nil
-	}
-
-	return jsonResult(workerToMap(worker))
-}
-
-func (s *Server) handleGetWorkerPricing(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.workers == nil {
-		return errorResult("worker tools are not configured"), nil
-	}
-
-	pubkey, _ := args["pubkey"].(string)
-	if pubkey == "" {
-		return errorResult("pubkey is required"), nil
-	}
-
-	worker, err := s.workers.GetByPubKey(ctx, pubkey)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get worker: %v", err)), nil
-	}
-	if worker == nil {
-		return errorResult("worker not found"), nil
-	}
-
-	// Return just the pricing information
-	result := map[string]interface{}{
-		"pubkey":  worker.PubKey,
-		"name":    worker.Name,
-		"pricing": worker.Pricing,
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleEstimateCost(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.payments == nil {
-		return errorResult("payment tools are not configured"), nil
-	}
-
-	runID, err := parseRequiredUUIDArg(args, "run_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	estimatedDurationSecs := optionalIntArg(args, "estimated_duration_secs", 0)
-	estimate, err := s.payments.EstimateCost(ctx, runID, estimatedDurationSecs)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to estimate cost: %v", err)), nil
-	}
-
-	return jsonResult(costEstimateToMap(estimate))
-}
-
-func (s *Server) handleGetRunCost(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.payments == nil {
-		return errorResult("payment tools are not configured"), nil
-	}
-
-	runID, err := parseRequiredUUIDArg(args, "run_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	summary, err := s.payments.GetRunCostSummary(ctx, runID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get run cost summary: %v", err)), nil
-	}
-
-	payments, err := s.payments.GetRunPayments(ctx, runID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get run payments: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"run_id":   runID.String(),
-		"summary":  costSummaryToMap(summary),
-		"payments": paymentRecordsToMaps(payments),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleGetPaymentHistory(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.payments == nil {
-		return errorResult("payment tools are not configured"), nil
-	}
-
-	workerPubkey, _ := args["worker_pubkey"].(string)
-	if workerPubkey == "" {
-		workerPubkey, _ = args["worker"].(string)
-	}
-	if workerPubkey == "" {
-		return errorResult("worker_pubkey is required"), nil
-	}
-
-	limit := optionalIntArg(args, "limit", 50)
-	if limit <= 0 {
-		limit = 50
-	}
-
-	records, err := s.payments.GetPaymentHistory(ctx, workerPubkey, limit)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get payment history: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"worker_pubkey": workerPubkey,
-		"payments":      paymentRecordsToMaps(records),
-		"total":         len(records),
-		"limit":         limit,
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleGetIntent(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	intentIDStr, _ := args["intent_id"].(string)
-	if intentIDStr == "" {
-		return errorResult("intent_id is required"), nil
-	}
-
-	intentID, err := uuid.Parse(intentIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid intent_id: %v", err)), nil
-	}
-
-	intent, err := s.registry.GetDeploymentIntent(ctx, intentID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get intent: %v", err)), nil
-	}
-	if intent == nil {
-		return errorResult("intent not found"), nil
-	}
-
-	return jsonResult(intentToMap(intent))
 }
 
 func (s *Server) handleToolProvisionRequest(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -5080,83 +4403,6 @@ func secretsToMaps(secrets []domain.ServiceSecret) []map[string]interface{} {
 
 // --- Policy Handlers ---
 
-func (s *Server) handleListPolicies(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.policies == nil {
-		return errorResult("policy tools are not configured"), nil
-	}
-
-	// Check for enabled filter
-	enabledOnly := false
-	if enabled, ok := args["enabled"].(bool); ok {
-		enabledOnly = enabled
-	}
-
-	// If environment_id is provided, filter by environment
-	if envIDStr, ok := args["environment_id"].(string); ok && envIDStr != "" {
-		envID, err := uuid.Parse(envIDStr)
-		if err != nil {
-			return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
-		}
-
-		// List all policies and filter by environment
-		allPolicies, err := s.policies.ListPolicies(ctx, enabledOnly)
-		if err != nil {
-			return errorResult(fmt.Sprintf("failed to list policies: %v", err)), nil
-		}
-
-		var filteredPolicies []domain.DeploymentPolicy
-		for _, p := range allPolicies {
-			if p.EnvironmentID != nil && *p.EnvironmentID == envID {
-				filteredPolicies = append(filteredPolicies, p)
-			}
-		}
-
-		result := map[string]interface{}{
-			"policies": policiesToMaps(filteredPolicies),
-			"total":    len(filteredPolicies),
-		}
-		return jsonResult(result)
-	}
-
-	// List all policies
-	policies, err := s.policies.ListPolicies(ctx, enabledOnly)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list policies: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"policies": policiesToMaps(policies),
-		"total":    len(policies),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleGetPolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.policies == nil {
-		return errorResult("policy tools are not configured"), nil
-	}
-
-	policyIDStr, _ := args["policy_id"].(string)
-	if policyIDStr == "" {
-		return errorResult("policy_id is required"), nil
-	}
-
-	policyID, err := uuid.Parse(policyIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid policy_id: %v", err)), nil
-	}
-
-	policy, err := s.policies.GetPolicy(ctx, policyID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get policy: %v", err)), nil
-	}
-	if policy == nil {
-		return errorResult("policy not found"), nil
-	}
-
-	return jsonResult(policyToMap(policy))
-}
-
 func (s *Server) handleCreatePolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.policyCommands == nil {
 		return errorResult("policy command publisher is not configured"), nil
@@ -5338,49 +4584,6 @@ func policyToMap(p *domain.DeploymentPolicy) map[string]interface{} {
 }
 
 // --- Notification Handlers ---
-
-func (s *Server) handleListNotificationChannels(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.notificationRepo == nil {
-		return errorResult("notification channel tools are not configured"), nil
-	}
-
-	enabledOnly := false
-	if enabled, ok := args["enabled"].(bool); ok {
-		enabledOnly = enabled
-	}
-
-	channels, err := s.notificationRepo.ListChannels(ctx, enabledOnly)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list notification channels: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"channels": notificationChannelsToMaps(channels),
-		"total":    len(channels),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleGetNotificationChannel(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.notificationRepo == nil {
-		return errorResult("notification channel tools are not configured"), nil
-	}
-
-	channelID, err := parseRequiredUUIDArg(args, "channel_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	ch, err := s.notificationRepo.GetChannelByID(ctx, channelID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get notification channel: %v", err)), nil
-	}
-	if ch == nil {
-		return errorResult("notification channel not found"), nil
-	}
-
-	return jsonResult(notificationChannelToMap(ch))
-}
 
 func (s *Server) handleCreateNotificationChannel(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	if s.notificationRepo == nil {
