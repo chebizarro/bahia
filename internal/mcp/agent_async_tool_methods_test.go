@@ -2,18 +2,13 @@ package mcp
 
 import "testing"
 
-func TestAssistantAsyncToolRequestMethodsCoverEveryAsyncTool(t *testing.T) {
-	methods := AssistantAsyncToolRequestMethods()
-	defs := assistantAsyncToolDefinitions()
-	if len(methods) != 3 {
-		t.Fatalf("methods=%d async tools=%d", len(methods), len(defs))
+func TestAssistantAsyncToolsUseIntentEvidence(t *testing.T) {
+	if methods := AssistantAsyncToolRequestMethods(); len(methods) != 0 {
+		t.Fatalf("legacy ContextVM methods remain: %v", methods)
 	}
-	for _, def := range defs {
-		if isAssistantIntentTool(def.Name) {
-			continue
-		}
-		if len(methods[def.Name]) == 0 {
-			t.Fatalf("async tool %s has no reconcilable request method", def.Name)
+	for _, def := range assistantAsyncToolDefinitions() {
+		if !isAssistantIntentTool(def.Name) {
+			t.Fatalf("%s is not intent-backed", def.Name)
 		}
 	}
 }

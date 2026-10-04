@@ -12,6 +12,9 @@ import (
 	"github.com/openagentsinc/bahia/internal/repository"
 )
 
+// ContextVMMethodToolApprovalResponse remains for the daemon's legacy ingress path.
+const ContextVMMethodToolApprovalResponse = "tool/approval-response"
+
 type toolApprovalDecisionRepository interface {
 	ApplyToolApprovalDecision(context.Context, uuid.UUID, domain.ToolProvisionStatus, string, time.Time) (*domain.ToolProvisionIntent, error)
 }

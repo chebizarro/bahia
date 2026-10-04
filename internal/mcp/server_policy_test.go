@@ -137,15 +137,6 @@ func newTestMCPPolicyServer() (*Server, *testPolicyRepo) {
 	return server, policyRepo
 }
 
-type captureToolApprovalCommandPublisher struct {
-	cmd *controlplane.ToolApprovalCommand
-}
-
-func (p *captureToolApprovalCommandPublisher) PublishToolApprovalResponse(_ context.Context, cmd controlplane.ToolApprovalCommand) (*controlplane.ToolApprovalCommandReceipt, error) {
-	p.cmd = &cmd
-	return &controlplane.ToolApprovalCommandReceipt{RequestEventID: "tool-approval-event", RequestPubkey: "operator-pubkey", RequestKind: controlplane.KindContextVMMessage, ResultKind: controlplane.KindContextVMMessage, ReadModelKind: controlplane.KindCASControlState, DTag: cmd.IdempotencyKey, IdempotencyKey: cmd.IdempotencyKey, Status: "submitted", PublishedRelays: 1, IntentID: cmd.IntentID.String(), Action: cmd.Action}, nil
-}
-
 func decodeResultMap(t *testing.T, result *ToolResult) map[string]interface{} {
 	t.Helper()
 	if result == nil || len(result.Content) == 0 {
@@ -209,33 +200,6 @@ func TestCallTool_PolicyReadToolsUseDurableReadModels(t *testing.T) {
 	listPayload := decodeResultMap(t, listRes)
 	if int(listPayload["total"].(float64)) != 1 {
 		t.Fatalf("expected 1 policy, got %v", listPayload["total"])
-	}
-}
-
-func TestCallTool_ToolApprovalMutationsPublishSignerFirstResponses(t *testing.T) {
-	ctx := authorizedMCPContext()
-	publisher := &captureToolApprovalCommandPublisher{}
-	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{ToolApprovalCommandPublisher: publisher})
-	intentID := uuid.New()
-
-	res, err := server.CallTool(ctx, "bahia_tool_provision_approve", map[string]interface{}{"intent_id": intentID.String(), "reason": "reviewed", "idempotency_key": "tool:approve:test"})
-	if err != nil || res.IsError {
-		t.Fatalf("approve result=%#v err=%v", res, err)
-	}
-	payload := decodeResultMap(t, res)
-	if int(payload["request_kind"].(float64)) != controlplane.KindContextVMMessage {
-		t.Fatalf("approve request_kind = %v", payload["request_kind"])
-	}
-	if publisher.cmd == nil || publisher.cmd.IntentID != intentID || publisher.cmd.Action != "approve" || publisher.cmd.Reason != "reviewed" || publisher.cmd.IdempotencyKey != "tool:approve:test" {
-		t.Fatalf("approval command not captured correctly: %#v", publisher.cmd)
-	}
-
-	res, err = server.CallTool(ctx, "bahia_tool_provision_reject", map[string]interface{}{"intent_id": intentID.String(), "reason": "unsafe"})
-	if err != nil || res.IsError {
-		t.Fatalf("reject result=%#v err=%v", res, err)
-	}
-	if publisher.cmd == nil || publisher.cmd.Action != "reject" || publisher.cmd.Reason != "unsafe" {
-		t.Fatalf("rejection command not captured correctly: %#v", publisher.cmd)
 	}
 }
 

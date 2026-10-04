@@ -165,7 +165,7 @@ Artifacts can have cryptographic signatures for provenance.
 
 ### Viewing and verifying signatures
 
-Use `bahia_list_signatures`, `bahia_list_verified_signatures`, `bahia_has_verified_signature`, and `bahia_verify_signatures` through MCP. Verification discovers supported signatures, evaluates configured trust roots, stores results, and returns status.
+Use `bahia_list_signatures`, `bahia_list_verified_signatures`, `bahia_has_verified_signature`, and `bahia_verify_signatures` through MCP. Verification submits an `artifact/signature-verify` intent. Its bounded status reports counts; canonical signature records carry the durable verification result. A pending MCP response is correlation, not a completed verification.
 
 ### MCP Tool
 

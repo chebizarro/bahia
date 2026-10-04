@@ -14,7 +14,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
-func TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing(t *testing.T) {
+func TestMLProtocolNamespaces(t *testing.T) {
 	legacyCommandResultKinds := []int{
 		KindMLRecipeRunRequest,
 		KindMLInferenceDeployRequest,
@@ -40,16 +40,16 @@ func TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing(t *testing.T) {
 	}
 
 	legacyReadModelKinds := []int{
-		KindMLModelRegistry,
-		KindMLModelVersionRegistry,
-		KindMLDatasetRegistry,
-		KindMLRecipeRegistry,
-		KindMLRecipeRunState,
-		KindMLInferenceEndpointRegistry,
+		kinds.MLModelRegistry,
+		kinds.MLModelVersionRegistry,
+		kinds.MLDatasetRegistry,
+		kinds.MLRecipeRegistry,
+		kinds.MLRecipeRunState,
+		kinds.MLInferenceEndpointRegistry,
 		kinds.MLInferenceEndpointState,
-		KindMLEvaluationExperimentState,
+		kinds.MLEvaluationExperimentState,
 		kinds.MLArtifactProvenanceGraph,
-		KindMLRuntimeCapabilityProfile,
+		kinds.MLRuntimeCapabilityProfile,
 	}
 	for i, kind := range legacyReadModelKinds {
 		want := 31980 + i
@@ -58,65 +58,6 @@ func TestMLSignerFirstProtocolNamespacesAndCanonicalPublishing(t *testing.T) {
 		}
 	}
 
-	ctx := context.Background()
-	capture := &captureNostrPublisher{published: 2}
-	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
-	if err != nil {
-		t.Fatalf("create signer: %v", err)
-	}
-	publisher := NewMLCommandPublisher(capture, signer)
-
-	receipt, err := publisher.PublishMLInferenceDeployRequest(ctx, MLCommandPayload{
-		IdempotencyKey: "deploy:qwen-prod",
-		Content: map[string]any{
-			"endpoint":           "endpoint:qwen:prod",
-			"model_version":      "model-version:qwen:v1",
-			"runtime_preference": "vllm",
-			"placement":          map[string]any{"accelerator": "gpu_nvidia_cuda"},
-		},
-		Tags: map[string]string{"runtime": "vllm", "accelerator": "gpu_nvidia_cuda"},
-	})
-	if err != nil {
-		t.Fatalf("publish deploy: %v", err)
-	}
-	if receipt.RequestKind != KindContextVMMessage || receipt.ResultKind != KindContextVMMessage {
-		t.Fatalf("production ML receipt must use ContextVM request/result kinds, got %#v", receipt)
-	}
-	if receipt.DTag != "deploy:qwen-prod" || receipt.PublishedRelays != 2 || receipt.Status != "submitted" {
-		t.Fatalf("unexpected receipt status/correlation: %#v", receipt)
-	}
-	for name, kind := range receipt.ReadModelKinds {
-		if kind != KindCASControlState {
-			t.Fatalf("production ML read-model hint %s=%d, want canonical control state %d", name, kind, KindCASControlState)
-		}
-	}
-	if len(capture.events) != 1 {
-		t.Fatalf("published events=%d, want 1", len(capture.events))
-	}
-	ev := capture.events[0]
-	if ev.Kind != KindContextVMMessage {
-		t.Fatalf("production ML command event kind=%d, want ContextVM %d", ev.Kind, KindContextVMMessage)
-	}
-	assertNoLegacyStatusResultEvents(t, capture.events)
-	params := assertContextVMCommand(t, ev, "ml/inference-deploy")
-	assertReactorTag(t, ev.Tags, "d", "deploy:qwen-prod")
-	assertReactorTag(t, ev.Tags, "endpoint", "endpoint:qwen:prod")
-	assertReactorTag(t, ev.Tags, "environment", "prod")
-	assertReactorTag(t, ev.Tags, "model_version", "model-version:qwen:v1")
-	assertReactorTag(t, ev.Tags, "runtime", "vllm")
-	assertReactorTag(t, ev.Tags, "accelerator", "gpu_nvidia_cuda")
-	meta, ok := params["_meta"].(map[string]any)
-	if !ok || meta["progressToken"] != "deploy:qwen-prod" {
-		t.Fatalf("ContextVM params missing progressToken correlation: %#v", params)
-	}
-	var rpc ContextVMJSONRPCRequest
-	if err := json.Unmarshal([]byte(ev.Content), &rpc); err != nil {
-		t.Fatalf("decode ContextVM command: %v", err)
-	}
-	var rpcID string
-	if err := json.Unmarshal(rpc.ID, &rpcID); err != nil || rpcID != "deploy:qwen-prod" {
-		t.Fatalf("ContextVM request id=%s err=%v, want d-tag", string(rpc.ID), err)
-	}
 }
 
 func TestMLSignerFirstRequestSubscriptionsAreScopedCanonicalContextVM(t *testing.T) {
