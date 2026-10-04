@@ -8,7 +8,7 @@
   import AssistantChat from '$lib/components/assistant/AssistantChat.svelte';
   import { currentRouteDocsRef } from '$lib/components/nav-model.js';
   import { bootstrapControlplane, disconnectControlplane } from '$lib/stores';
-  import { boot, getEventStore, getServicePubkey, shutdown } from '$lib/nostr/boot.js';
+  import { boot, getEventStore, getServicePubkey, prefetchRelayLimits, shutdown } from '$lib/nostr/boot.js';
   import { resumeIntentClient, stopIntentClient } from '$lib/nostr/intent-client.svelte.js';
   import { startRoleDerivation, stopRoleDerivation } from '$lib/stores/auth-roles.svelte.js';
   import { initServiceStoreBinding, teardownServiceStoreBinding } from '$lib/stores/collections/services.svelte.js';
@@ -113,6 +113,7 @@
   $effect(() => {
     const pubkey = authState.status === 'authenticated' ? authState.pubkey : '';
     if (!eventStoreReady || !pubkey) return;
+    prefetchRelayLimits();
     void resumeIntentClient().catch(error => console.error('[layout] intent client failed:', error));
     return stopIntentClient;
   });

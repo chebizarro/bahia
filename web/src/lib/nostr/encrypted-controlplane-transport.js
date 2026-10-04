@@ -60,7 +60,7 @@ export class EncryptedControlplaneTransport {
     }
     assertConnectedBahiaRelays(this.client);
     this.connectedRelays = this.client.getConnectedRelays?.() || this.relays;
-    await relayLimits.resolve(this.connectedRelays);
+    void relayLimits.resolve(this.connectedRelays);
     this.connected = true;
     return this;
   }

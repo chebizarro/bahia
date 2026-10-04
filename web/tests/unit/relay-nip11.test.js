@@ -26,5 +26,7 @@ describe('NIP-11 relay limits', () => {
     expect(await failed.resolve(['ws://offline.example.test'])).toEqual({ maxMessageBytes: 512000, maxContentBytes: 65535 });
     const malformed = createRelayLimitResolver(relay => fetchRelayMetadata(relay, vi.fn().mockResolvedValue({ ok: true, json: async () => [] })));
     expect(await malformed.resolve(['wss://malformed.example.test'])).toEqual({ maxMessageBytes: 512000, maxContentBytes: 65535 });
+    const rejected = createRelayLimitResolver(async () => { throw new Error('aborted'); });
+    await expect(rejected.resolve(['wss://aborted.example.test'])).resolves.toEqual({ maxMessageBytes: 512000, maxContentBytes: 65535 });
   });
 });

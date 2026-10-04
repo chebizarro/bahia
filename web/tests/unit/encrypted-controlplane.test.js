@@ -344,10 +344,21 @@ describe('encrypted controlplane transport', () => {
     client.getConnectedRelays.mockReturnValue(['wss://limited.example']);
     const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://limited.example'], servicePubkey: SERVICE_PUBKEY });
     await transport.connect();
+    const { relayLimits } = await import('../../src/lib/nostr/relay-nip11.js');
+    await relayLimits.resolve(['wss://limited.example']);
     const event = await transport.buildEncryptedRequestEvent({ operation: 'secrets.set', payload: { value: 'abc' } });
     expect(event.kind).toBe(module.CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND);
     await expect(transport.publishEncryptedRequest(event)).rejects.toThrow('1000-byte relay message limit');
     expect(client.publish).not.toHaveBeenCalled();
+  });
+
+  it('connects without waiting for a stalled NIP-11 fetch', async () => {
+    global.fetch.mockImplementation(() => new Promise(() => {}));
+    client.getConnectedRelays.mockReturnValue(['wss://stalled.example']);
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://stalled.example'], servicePubkey: SERVICE_PUBKEY });
+    await expect(transport.connect()).resolves.toBe(transport);
+    expect(transport.connected).toBe(true);
+    expect(global.fetch).toHaveBeenCalledOnce();
   });
 
   it('publishes an sbom/import at the inline limit as one relay message', async () => {

@@ -36,6 +36,8 @@ const mockDiscovery = vi.hoisted(() => ({
   }),
 }));
 
+const mockRelayLimits = vi.hoisted(() => ({ resolve: vi.fn().mockResolvedValue(undefined) }));
+
 vi.mock('../../src/lib/nostr/store.js', () => ({
   createBahiaEventStore: mockStore.createBahiaEventStore,
 }));
@@ -48,8 +50,12 @@ vi.mock('../../src/lib/stores/discovery.svelte.js', () => ({
   getBootstrapSeed: mockDiscovery.getBootstrapSeed,
 }));
 
+vi.mock('../../src/lib/nostr/relay-nip11.js', () => ({
+  relayLimits: mockRelayLimits,
+}));
+
 describe('boot.js', () => {
-  let boot, shutdown, getEventStore, getPool, getServicePubkey, getRelayUrls, onStoreRefresh, flushBatch;
+  let boot, shutdown, getEventStore, getPool, getServicePubkey, getRelayUrls, prefetchRelayLimits, onStoreRefresh, flushBatch;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -61,6 +67,7 @@ describe('boot.js', () => {
     getPool = mod.getPool;
     getServicePubkey = mod.getServicePubkey;
     getRelayUrls = mod.getRelayUrls;
+    prefetchRelayLimits = mod.prefetchRelayLimits;
     onStoreRefresh = mod.onStoreRefresh;
     flushBatch = mod.flushBatch;
   });
@@ -79,6 +86,17 @@ describe('boot.js', () => {
     expect(mockPool.createBahiaPool).toHaveBeenCalledWith({
       store: mockStore.store,
     });
+    expect(mockRelayLimits.resolve).not.toHaveBeenCalled();
+  });
+
+  it('prefetches NIP-11 once after boot without waiting for metadata', async () => {
+    mockRelayLimits.resolve.mockImplementationOnce(() => new Promise(() => {}));
+    await boot();
+    prefetchRelayLimits();
+    prefetchRelayLimits();
+    expect(getPool()).toBe(mockPool.pool);
+    expect(mockRelayLimits.resolve).toHaveBeenCalledOnce();
+    expect(mockRelayLimits.resolve).toHaveBeenCalledWith(['wss://relay.example']);
   });
 
   it('exposes singletons after boot', async () => {

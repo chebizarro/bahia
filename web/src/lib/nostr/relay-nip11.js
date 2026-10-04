@@ -60,7 +60,10 @@ export function createRelayLimitResolver(fetchMetadata = fetchRelayMetadata) {
     cached,
     async resolve(relays = []) {
       await Promise.all([...new Set(relays)].map(async relay => {
-        if (!resolved.has(relay)) resolved.set(relay, limitsFromMetadata((await fetchMetadata(relay))?.metadata));
+        if (resolved.has(relay)) return;
+        let metadata = null;
+        try { metadata = (await fetchMetadata(relay))?.metadata; } catch { /* NIP-11 is advisory. */ }
+        resolved.set(relay, limitsFromMetadata(metadata));
       }));
       return cached(relays);
     }

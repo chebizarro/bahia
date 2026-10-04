@@ -146,7 +146,6 @@ import Table from '$lib/components/Table.svelte';
 
     try {
       await boot();
-      void resolveInlineSBOMLimitBytes().then(limit => { sbomInlineLimit = limit; });
       await tick();
       const loadedArtifact = artifacts.find((candidate) => candidate.id === id) || null;
 
