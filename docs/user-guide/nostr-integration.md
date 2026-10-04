@@ -791,14 +791,14 @@ const signed = await bunker.signEvent(event);
 
 ### NIP-98 (HTTP Auth)
 
-For REST endpoints that remain HTTP-compatible, such as read-model queries:
+For HTTP-native endpoints that still require NIP-98 authentication, such as run-log fetch:
 
 ```javascript
 const authEvent = {
   kind: 27235,
   content: "",
   tags: [
-    ["u", "https://bahia.example.com/api/v1/services"],
+    ["u", "https://bahia.example.com/api/v1/deployments/runs/<run-id>/logs"],
     ["method", "GET"]
   ]
 };

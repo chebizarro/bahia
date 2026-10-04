@@ -2,7 +2,6 @@ package router_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -278,13 +277,8 @@ func TestSensitiveRoutesRejectCrossTenantRequests(t *testing.T) {
 	}{
 		{name: "deployment run logs", method: http.MethodGet, path: "/api/v1/deployments/runs/" + fixture.runB.String() + "/logs"},
 		{name: "live logs", method: http.MethodGet, path: "/api/v1/services/" + fixture.serviceB.String() + "/environments/" + fixture.environmentB.String() + "/logs"},
-		{name: "read SBOM", method: http.MethodGet, path: "/api/v1/artifacts/" + fixture.artifactB.String() + "/sbom"},
-		{name: "read SBOM packages", method: http.MethodGet, path: "/api/v1/artifacts/" + fixture.artifactB.String() + "/sbom/packages"},
 		{name: "ingest SBOM", method: http.MethodPost, path: "/api/v1/artifacts/" + fixture.artifactB.String() + "/sbom", body: `{}`},
-		{name: "list channels for foreign org", method: http.MethodGet, path: "/api/v1/notifications/channels", orgID: fixture.orgB},
-		{name: "get foreign channel", method: http.MethodGet, path: "/api/v1/notifications/channels/" + fixture.channelB.String(), orgID: fixture.orgA},
 		{name: "test foreign channel", method: http.MethodPost, path: "/api/v1/notifications/channels/" + fixture.channelB.String() + "/test", orgID: fixture.orgA},
-		{name: "list logs for foreign org", method: http.MethodGet, path: "/api/v1/notifications/log", orgID: fixture.orgB},
 	}
 
 	for _, tt := range tests {
@@ -308,56 +302,4 @@ func TestSensitiveRoutesRejectCrossTenantRequests(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestTenantListRoutesFilterGlobalStateChannelsAndLogs(t *testing.T) {
-	fixture := newTenantIsolationFixture(t)
-
-	t.Run("state", func(t *testing.T) {
-		body := tenantIsolationGET(t, fixture, "/api/v1/state")
-		data := body["data"].([]any)
-		if len(data) != 1 || data[0].(map[string]any)["service_id"] != fixture.serviceA.String() {
-			t.Fatalf("unexpected tenant state data: %#v", data)
-		}
-	})
-
-	t.Run("notification channels", func(t *testing.T) {
-		body := tenantIsolationGET(t, fixture, "/api/v1/notifications/channels")
-		data := body["data"].([]any)
-		if len(data) != 1 || data[0].(map[string]any)["id"] != fixture.channelA.String() {
-			t.Fatalf("unexpected tenant channel data: %#v", data)
-		}
-	})
-
-	t.Run("notification logs", func(t *testing.T) {
-		body := tenantIsolationGET(t, fixture, "/api/v1/notifications/log")
-		data := body["data"].([]any)
-		if len(data) != 1 || data[0].(map[string]any)["channel_id"] != fixture.channelA.String() {
-			t.Fatalf("unexpected tenant notification logs: %#v", data)
-		}
-	})
-}
-
-func tenantIsolationGET(t *testing.T, fixture tenantIsolationFixture, path string) map[string]any {
-	t.Helper()
-	url := fixture.server.URL + path
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Authorization", makeRouterNIP98HeaderWithKey(t, fixture.aliceKey, http.MethodGet, url))
-	req.Header.Set("X-Bahia-Org-ID", fixture.orgA.String())
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeResponseBody(t, resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	return body
 }

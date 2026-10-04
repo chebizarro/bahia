@@ -107,7 +107,7 @@ For NIP-46 remote signing, use `--nostr-bunker-file` (or `BAHIA_NOSTR_BUNKER_FIL
 
 Service/environment create and update publish signed kind `30900` intents directly, subscribe for kind `30315` status, and read the resulting canonical `30900` state. Other signer-first CLI mutations still use ContextVM JSON-RPC over kind `25910`. Plain transport remains the default for those commands. Pass `--encrypted` to wrap the signed inner request in a NIP-59 kind `1059` gift wrap; encrypted mode requires `--service-pubkey` and works with either a local key or a NIP-46 signer that supports NIP-44. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
 
-For service/environment/deployment/runtime writes, the CLI enqueues the signed intent in its local outbox, subscribes before publishing, requires at least one relay OK, and waits up to `--result-timeout` (default `30s`, or `BAHIA_RESULT_TIMEOUT`) for status. Exit codes are 0 accepted, 1 rejected/conflict/superseded, 2 published without status, and 3 no relay accepted. Exit 2 prints `intent_id` and `event_id`; inspect the pending event with `bahia outbox list`.
+For service/environment/deployment/runtime writes, the CLI enqueues the signed intent in its local outbox, subscribes before publishing, requires at least one relay OK, and waits up to `--result-timeout` (default `30s`, or `BAHIA_RESULT_TIMEOUT`) for status. Exit codes are 0 accepted, 1 rejected/conflict/superseded, 2 published without status, and 3 no relay accepted. Exit 2 prints `intent_id` and `event_id`; inspect the pending event with `bahia outbox list`. These writes do not use HTTP.
 
 For remaining ContextVM commands, before publishing, the CLI waits for the reply subscription to reach EOSE on its established relays. Each publish attempt waits up to `--result-timeout` (default `30s`). On timeout it re-subscribes and republishes the same logical request up to `--result-retries` times (default `2`); the stable `d` tag lets Bahia replay its cached idempotent response. Bahia keeps completed idempotent responses in memory and in PostgreSQL for 24 hours, so duplicate requests replay the terminal response without re-running the handler.
 
@@ -152,7 +152,7 @@ Bahia does **not** currently register top-level `llm` or `payments` CLI commands
 
 ### Services
 
-`services list` and `services get` read canonical service events from the configured relays. Pass `--service-pubkey` (or set `BAHIA_NOSTR_SERVICE_PUBKEY`) and configure a relay with `--relay` or `BAHIA_NOSTR_RELAYS`. Reads reuse a local cursor under `$BAHIA_DATA_DIR/store/<service-pubkey>/` or `$XDG_DATA_HOME/bahia/store/<service-pubkey>/`.
+`services list` and `services get` read canonical service events from the configured relays by default. Pass `--service-pubkey` (or set `BAHIA_NOSTR_SERVICE_PUBKEY`) and configure a relay with `--relay` or `BAHIA_NOSTR_RELAYS`. Reads reuse a local cursor under `$BAHIA_DATA_DIR/store/<service-pubkey>/` or `$XDG_DATA_HOME/bahia/store/<service-pubkey>/`. The legacy REST read path is no longer mounted.
 
 ```bash
 # List services
@@ -178,10 +178,10 @@ bahia services stop --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$
 
 ### Environments
 
-`environments list` and `environments get` read canonical environment events from relays by default; `get` includes the deployment-unit read model. Environment create/update publish signed `30900` intents and wait for `30315` status. Updates read the current canonical `30900` record, merge flags into the complete desired state, and include its `updated_at` revision. Deployment-unit helpers use the same canonical read and intent write path; there is no automatic HTTP fallback.
+`environments list` and `environments get` read canonical environment events from relays by default; `get` includes the deployment-unit read model. The legacy REST read path is no longer mounted. Environment create/update publish signed `30900` intents and wait for `30315` status. Updates read the current canonical `30900` record, merge flags into the complete desired state, and include its `updated_at` revision. Deployment-unit helpers use the same canonical read and intent write path; there is no automatic HTTP fallback.
 
 ```bash
-# Read environments (GET responses include deployment_units)
+# Read environments (detail includes deployment_units)
 bahia environments list
 bahia environments get <environment-id>
 
@@ -241,7 +241,7 @@ First-time mirror creation and ref resolution can exceed the default 30-second p
 
 `--build-arg KEY=VALUE` is repeatable and values may contain `=`, but the fleet-local tag-only kind-5401 dispatch contract has no build-argument field. The private-mirror Hive-CI initiator therefore rejects non-empty build arguments before any secret resolution, mirror operation, event publication, or queued-build registration. Omit `--build-arg` for this workflow.
 
-`builds get/list` and `artifacts get/list` read signed `30900` build-registry and artifact-registry records from relays by default, using the same local cursor and stale-EOSE warning policy as service reads. Build and artifact mutations remain signer-first.
+`builds get/list` and `artifacts get/list` read signed `30900` build-registry and artifact-registry records from relays by default, using the same local cursor and stale-EOSE warning policy as service reads. The legacy REST read endpoints are no longer mounted. Build and artifact mutations remain signer-first.
 
 If the queued ID returned by `builds request` remains `queued` while `builds list --service` shows a newer `succeeded` row, use that succeeded row's ID with `register-result`; this is the recovery path when CI result correlation lands on a separate build row.
 
@@ -281,7 +281,7 @@ bahia deployments approve --org "$ORG_UUID" --intent "$INTENT_UUID" --expected-u
 bahia deployments reject --org "$ORG_UUID" --intent "$INTENT_UUID" --expected-updated-at "$UPDATED_AT"
 ```
 
-Deployment creation, rollback, approval/rejection, and `services actions deploy/restart/stop` publish signed `30900` intents, not ContextVM requests. They require `--org` and UUID entity IDs; `--idempotency-key` accepts a UUIDv7 for retrying one logical intent. The CLI persists the signed event in its outbox before relay publication, then waits for `30315` status. Exit codes are 0 accepted, 1 rejected/conflict, 2 published without status (inspect `bahia outbox list`), and 3 no relay accepted. Configure the daemon's `deployment` and `runtime` intent domains before using them. Deployment preview and route-attach remain ContextVM calls and retain their retry keys.
+Deployment creation, rollback, approval/rejection, and `services actions deploy/restart/stop` publish signed `30900` intents, not ContextVM requests. They require `--org` and UUID entity IDs; `--idempotency-key` accepts a UUIDv7 for retrying one logical intent. The CLI persists the signed event in its outbox before relay publication, then waits for `30315` status. Exit codes are 0 accepted, 1 rejected/conflict, 2 published without status (inspect `bahia outbox list`), and 3 no relay accepted. These writes do not use HTTP. Configure the daemon's `deployment` and `runtime` intent domains before using them. Deployment preview and route-attach remain ContextVM calls and retain their retry keys.
 
 ### State
 
@@ -294,7 +294,7 @@ bahia state list --output json
 bahia state drifted
 ```
 
-These reads use the Bahia service's signed `30900` service-state records by default. Set `--service-pubkey` and `--relay` (or their environment equivalents). `drifted` selects records whose `drift_status` is exactly `drifted`. A missing EOSE prints a stale-data warning to stderr and still exits 0 with the local-store result.
+These reads use the Bahia service's signed `30900` service-state records by default. Set `--service-pubkey` and `--relay` (or their environment equivalents). `drifted` selects records whose `drift_status` is exactly `drifted`. A missing EOSE prints a stale-data warning to stderr and still exits 0 with the local-store result. The legacy REST read endpoint is no longer mounted.
 
 ### DNS
 
@@ -383,7 +383,7 @@ bahia policies create \
   --idempotency-key policy-create-require-sbom
 ```
 
-Policy reads use signed `30900` policy-registry records; `get` requires a policy UUID and returns an error when that UUID is absent. The same stale-data warning and successful exit behavior applies when no relay reaches EOSE.
+Policy reads use signed `30900` policy-registry records by default. The legacy REST endpoint is no longer mounted. `get` requires a policy UUID and returns an error when that UUID is absent. The same stale-data warning and successful exit behavior applies when no relay reaches EOSE.
 
 ### Config fabric
 
@@ -418,7 +418,7 @@ desired version is merely accepted, so local drift retains the applied version.
 
 ### Secrets
 
-`secrets list` reads OCK-encrypted `30900` secret references from relays by default. It returns metadata only; secret values are never included and remain available only through the authorized ContextVM reveal flow. A NIP-44-capable signer (`--nostr-key-file`/`BAHIA_NOSTR_NSEC`, or a NIP-46 bunker) and the Bahia service pubkey are required.
+`secrets list` reads OCK-encrypted `30900` secret references from relays by default. It returns metadata only; secret values are never included and remain available only through the authorized ContextVM reveal flow. A NIP-44-capable signer (`--nostr-key-file`/`BAHIA_NOSTR_NSEC`, or a NIP-46 bunker) and the Bahia service pubkey are required. The legacy REST read is no longer mounted.
 
 ```bash
 # List secrets for a service
@@ -433,7 +433,7 @@ bahia secrets delete svc-123 secret-456
 
 ### Organizations
 
-`orgs list`, `orgs get`, and `orgs members list` read the service's signed `30900` records and unwrap the matching `32010` OCK envelope through the CLI signer. A non-member receives `not readable with this key` with exit code 0, not decrypted org data. The local event-store cursor is reused across reads; missing relay EOSE prints a stale warning while returning cached state.
+`orgs list`, `orgs get`, and `orgs members list` read the service's signed `30900` records and unwrap the matching `32010` OCK envelope through the CLI signer. A non-member receives `not readable with this key` with exit code 0, not decrypted org data. The local event-store cursor is reused across reads; missing relay EOSE prints a stale warning while returning cached state. The legacy REST reads are no longer mounted.
 
 ```bash
 # List organizations
@@ -457,7 +457,7 @@ bahia orgs members remove org-123 npub1member...
 
 ### Notification channels
 
-`notifications channels list` and `notifications channels get <channel-uuid>` read OCK-encrypted channel metadata from relays. Their output omits service-only webhook URLs and credentials, including for fleet-scoped channels. The signer, relay, service pubkey, and stale-cache rules are the same as for organization reads.
+`notifications channels list` and `notifications channels get <channel-uuid>` read OCK-encrypted channel metadata from relays. Their output omits service-only webhook URLs and credentials, including for fleet-scoped channels. The signer, relay, service pubkey, stale-cache rules are the same as for organization reads.
 
 ```bash
 bahia notifications channels list -o json

@@ -102,7 +102,7 @@ bahia workers list
 bahia workers show <64-character-worker-hex-pubkey>
 ```
 
-The CLI reads canonical service-authored worker state, assignment, drain, and eligibility families from `30900` events. It also subscribes to worker-authored advertisements using the known worker pubkeys as the author filter. Configure `--service-pubkey` and `--relay` (or their environment equivalents). Reads use a local cursor; without relay EOSE, cached results carry a warning and exit 0.
+The CLI reads canonical service-authored worker state, assignment, drain, and eligibility families from `30900` events. It also subscribes to worker-authored advertisements using the known worker pubkeys as the author filter. Configure `--service-pubkey` and `--relay` (or their environment equivalents). Reads use a local cursor; without relay EOSE, cached results carry a warning and exit 0. The legacy REST read path is no longer mounted.
 
 ### MCP Tool
 

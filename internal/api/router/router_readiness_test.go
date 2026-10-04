@@ -81,7 +81,7 @@ func TestRouterRequireRepoGatedRoutesReturn503(t *testing.T) {
 	server := httptest.NewServer(newReadinessTestRouter(provider))
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/api/v1/services")
+	resp, err := http.Post(server.URL+"/api/v1/repositories/ci/lookup", "application/json", nil)
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)

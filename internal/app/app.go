@@ -516,13 +516,10 @@ func New(cfg *config.Config) (*App, error) {
 	// verified end to end and watched continuously.
 	var routeCanarySupervisor *service.RouteCanarySupervisor
 	var routeCanaryStore service.RouteCanaryRepository
-	var routeCanaryReader handlers.RouteCanaryReader
-	var routeCanaryHealthReader handlers.RouteInstanceHealthReader
 	if publicRoutePlanner != nil && cfg.RouteCanaries.Enabled {
 		if dbAvailable && pool != nil {
 			pgRouteCanaries := repository.NewPgRouteCanaryRepository(pool)
 			routeCanaryStore = pgRouteCanaries
-			routeCanaryReader = pgRouteCanaries
 		}
 		routeCanaryEvaluator, evalErr := service.NewRouteCanaryEvaluator(runtime.RouteProber{}, cfg.RouteCanaries.Policy())
 		if evalErr != nil {
@@ -532,7 +529,6 @@ func New(cfg *config.Config) (*App, error) {
 		if managedInstanceHealthRepo != nil {
 			healthSource := service.NewManagedInstanceRouteHealthSource(managedInstanceHealthRepo)
 			routeHealthSource = healthSource
-			routeCanaryHealthReader = healthSource
 		}
 		canaryCfg := cfg.RouteCanaries.Normalized()
 
@@ -2637,37 +2633,25 @@ func New(cfg *config.Config) (*App, error) {
 			Virtualization:            virtualizationRepo,
 			Config:                    cfg,
 			AuthMiddleware:            authMiddleware,
-			Workers:                   workerRepo,
 			Builds:                    buildRepo,
 			Runs:                      runRepo,
 			Services:                  serviceRepo,
 			Environments:              envRepo,
-			DeploymentUnits:           deploymentUnitRepo,
 			EnvStates:                 stateRepo,
-			InstanceHealth:            managedInstanceHealthRepo,
-			RouteCanaries:             routeCanaryReader,
-			RouteHealth:               routeCanaryHealthReader,
 			InstanceOperator:          managedInstanceSupervisor,
 			RuntimeResolver:           runtimeResolver,
 			Payments:                  paymentSvc,
 			SBOMs:                     sbomRepo,
 			SBOMImporter:              sbomOrchestrator,
 			Artifacts:                 artifactRepo,
-			Policies:                  policySvc,
 			Adoption:                  adoptionSvc,
 			RuntimeLifecycle:          runtimeLifecycleSvc,
-			AgentRuntimeReleases:      agentRuntimeReleaseSvc,
 			LegacyAgentReconciliation: legacyAgentReconciler,
-			Secrets:                   secretRepo,
-			Encryptor:                 secretEncryptor,
 			Notifications:             notifRepo,
 			Dispatcher:                notifDispatcher,
 			MCP:                       mcpHandler,
 			Blossom:                   blossomClient,
 			OCI:                       ociHandler,
-			Orgs:                      orgRepo,
-			OrgMembers:                orgMemberRepo,
-			OrgInvites:                orgInviteRepo,
 			RBAC:                      tenantRBAC,
 			MLCommands:                mlCommandPublisher,
 			LLMRegistry:               llmRegistry,

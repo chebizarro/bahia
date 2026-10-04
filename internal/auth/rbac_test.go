@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -120,7 +121,7 @@ func TestAuthzContext_RequireRole(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("RequireRole() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if err != nil && !IsAccessDenied(err) {
+			if err != nil && !errors.As(err, new(*AccessDeniedError)) {
 				t.Errorf("RequireRole() should return AccessDeniedError")
 			}
 		})
@@ -239,7 +240,7 @@ func TestRBAC_CheckOrgAccess(t *testing.T) {
 		if err == nil {
 			t.Error("CheckOrgAccess() should return error")
 		}
-		if !IsAccessDenied(err) {
+		if !errors.As(err, new(*AccessDeniedError)) {
 			t.Errorf("CheckOrgAccess() should return AccessDeniedError, got %T", err)
 		}
 	})
@@ -253,7 +254,7 @@ func TestAccessDeniedError(t *testing.T) {
 		Required: "admin",
 	}
 
-	if !IsAccessDenied(err) {
+	if !errors.As(err, new(*AccessDeniedError)) {
 		t.Error("IsAccessDenied should return true")
 	}
 

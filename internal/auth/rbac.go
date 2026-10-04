@@ -141,12 +141,6 @@ func (e *AccessDeniedError) Error() string {
 	return fmt.Sprintf("access denied: %s (org: %s)", e.Reason, e.OrgID)
 }
 
-// IsAccessDenied returns true if the error is an access denied error.
-func IsAccessDenied(err error) bool {
-	_, ok := err.(*AccessDeniedError)
-	return ok
-}
-
 // CheckOrgAccess is a convenience function to check org membership and role.
 func (r *RBAC) CheckOrgAccess(ctx context.Context, p *Principal, orgID uuid.UUID, requiredRole domain.Role) error {
 	authz, err := r.LoadAuthzContext(ctx, p, orgID)
