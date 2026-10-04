@@ -13,6 +13,7 @@ import (
 )
 
 type testEnvironmentRepo struct {
+	mutations    int
 	environments map[uuid.UUID]*domain.Environment
 }
 
@@ -21,6 +22,7 @@ func newTestEnvironmentRepo() *testEnvironmentRepo {
 }
 
 func (m *testEnvironmentRepo) Create(_ context.Context, env *domain.Environment) error {
+	m.mutations++
 	if env.ID == uuid.Nil {
 		env.ID = uuid.New()
 	}
@@ -63,11 +65,13 @@ func (m *testEnvironmentRepo) ListByOrg(_ context.Context, orgID uuid.UUID) ([]d
 }
 
 func (m *testEnvironmentRepo) Update(_ context.Context, env *domain.Environment) error {
+	m.mutations++
 	m.environments[env.ID] = env
 	return nil
 }
 
 func (m *testEnvironmentRepo) Delete(_ context.Context, id uuid.UUID) error {
+	m.mutations++
 	delete(m.environments, id)
 	return nil
 }
@@ -91,7 +95,7 @@ func newTestMCPEnvironmentServer() (*Server, *testEnvironmentRepo) {
 	return server, envRepo
 }
 
-func TestCallTool_EnvironmentListGetAndMutationsDeprecated(t *testing.T) {
+func TestCallTool_EnvironmentListGetFromCanonicalState(t *testing.T) {
 	ctx := authorizedMCPContext()
 	server, envRepo := newTestMCPEnvironmentServer()
 	envID := uuid.New()
@@ -146,19 +150,4 @@ func TestCallTool_EnvironmentListGetAndMutationsDeprecated(t *testing.T) {
 		t.Fatalf("expected 1 environment, got %v", listPayload["total"])
 	}
 
-	assertSignerFirstMutationError(t, server, "bahia_create_environment", map[string]interface{}{
-		"name": "production",
-	})
-	assertSignerFirstMutationError(t, server, "bahia_update_environment", map[string]interface{}{
-		"environment_id": envID.String(),
-		"name":           "production",
-	})
-	assertSignerFirstMutationError(t, server, "bahia_delete_environment", map[string]interface{}{"environment_id": envID.String()})
-
-	if len(envRepo.environments) != 1 {
-		t.Fatalf("deprecated mutations must not change repository state, got %d environments", len(envRepo.environments))
-	}
-	if envRepo.environments[envID].Name != "staging" {
-		t.Fatalf("deprecated update mutated environment name to %q", envRepo.environments[envID].Name)
-	}
 }

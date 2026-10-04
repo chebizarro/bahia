@@ -31,6 +31,15 @@ type intentWrite struct {
 	deleteCoordinate       string
 }
 
+// invokeIntentWrite makes direct handler calls obey the same pipeline as CallTool.
+// There is no legacy publisher fallback when the processor is unavailable.
+func (s *Server) invokeIntentWrite(ctx context.Context, name string, args map[string]interface{}) (*ToolResult, error) {
+	if result, ok := s.callIntentWrite(ctx, name, args); ok {
+		return result, nil
+	}
+	return intentWriteError("rejected", "", "", "intent processor is not configured"), nil
+}
+
 // callIntentWrite is the only MCP transport for intent-backed mutations. The
 // event is built by the same builder used by the CLI/web fixtures; it is not
 // published or signed, because ProcessInProcess authenticates the HTTP caller
@@ -555,6 +564,12 @@ func (s *Server) intentWriteForTool(ctx context.Context, name string, args map[s
 			w.content, err = s.existingIntentState(ctx, w.family, id.String())
 			if err != nil {
 				return w, err
+			}
+			// A partial environment edit does not replace deployment units.
+			// The canonical read model includes that field, but copying it
+			// would turn an ordinary edit into a complete-set CAS mutation.
+			if _, explicit := args["deployment_units"]; !explicit {
+				delete(w.content, "deployment_units")
 			}
 			for _, key := range []string{"name", "loom_worker_selector", "runtime_config", "reconcile_mode", "protected", "deploy_strategy", "expected_updated_at"} {
 				if value, ok := args[key]; ok {

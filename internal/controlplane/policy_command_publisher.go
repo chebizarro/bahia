@@ -71,20 +71,6 @@ func (p *PolicyCommandPublisher) PublishPolicyCreateRequest(ctx context.Context,
 	return p.publish(ctx, ContextVMMethodPolicyCreate, "policy-create", cmd, false)
 }
 
-func (p *PolicyCommandPublisher) PublishPolicyUpdateRequest(ctx context.Context, cmd PolicyMutationCommand) (*PolicyCommandReceipt, error) {
-	if cmd.ID == uuid.Nil {
-		return nil, fmt.Errorf("policy id is required")
-	}
-	return p.publish(ctx, ContextVMMethodPolicyUpdate, "policy-update", cmd, true)
-}
-
-func (p *PolicyCommandPublisher) PublishPolicyDeleteRequest(ctx context.Context, cmd PolicyMutationCommand) (*PolicyCommandReceipt, error) {
-	if cmd.ID == uuid.Nil {
-		return nil, fmt.Errorf("policy id is required")
-	}
-	return p.publish(ctx, ContextVMMethodPolicyDelete, "policy-delete", cmd, true)
-}
-
 func (p *PolicyCommandPublisher) PublishPolicyEvaluateRequest(ctx context.Context, cmd PolicyMutationCommand) (*PolicyCommandReceipt, error) {
 	if cmd.ArtifactID == uuid.Nil {
 		return nil, fmt.Errorf("artifact id is required")

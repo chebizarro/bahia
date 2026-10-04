@@ -2019,25 +2019,9 @@ func New(cfg *config.Config) (*App, error) {
 	if mlRegistry != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		mlCommandPublisher = controlplane.NewMLCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
-	var llmCommandPublisher mcp.LLMCommandPublisher
-	if llmRegistry != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
-		llmCommandPublisher = controlplane.NewLLMCommandPublisher(controlPlanePool, controlPlaneSigner)
-	}
-	var serviceCommandPublisher *controlplane.ServiceCommandPublisher
-	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
-		serviceCommandPublisher = controlplane.NewServiceCommandPublisher(controlPlanePool, controlPlaneSigner)
-	}
 	var artifactCommandPublisher *controlplane.ArtifactCommandPublisher
 	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		artifactCommandPublisher = controlplane.NewArtifactCommandPublisher(controlPlanePool, controlPlaneSigner)
-	}
-	var packageCommandPublisher mcp.PackageCommandPublisher
-	if packageRegistrySvc != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
-		packageCommandPublisher = controlplane.NewPackageCommandPublisher(controlPlanePool, controlPlaneSigner)
-	}
-	var workerCommandPublisher mcp.WorkerCommandPublisher
-	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
-		workerCommandPublisher = controlplane.NewWorkerCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
 
 	// Fleet hygiene (Swabbie, fp-jan): periodic dry-run scans + Tier-1
@@ -2072,15 +2056,10 @@ func New(cfg *config.Config) (*App, error) {
 		SignVerifier:             signVerifier,
 		MLCommandPublisher:       mlCommandPublisher,
 		LLMRegistry:              llmRegistry,
-		LLMCommandPublisher:      llmCommandPublisher,
-		ServiceCommandPublisher:  serviceCommandPublisher,
 		ArtifactCommandPublisher: artifactCommandPublisher,
-		PackageCommandPublisher:  packageCommandPublisher,
-		WorkerCommandPublisher:   workerCommandPublisher,
 		PackageProjection:        packageProjection,
 	}
 	configurePolicyToolMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
-	configureBackupMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	configureAuthorizationMCPDeps(&mcpDeps, cfg, tenantRBAC)
 	mcpServer, err := mcp.NewServerWithOptionsChecked(registry, logger, mcpDeps)
 	if err != nil {
@@ -4386,15 +4365,6 @@ func configurePolicyToolMCPDeps(deps *mcp.ServerDeps, publisher controlplane.Nos
 	deps.PolicyCommandPublisher = policyPublisher
 	deps.ToolApprovalCommandPublisher = controlplane.NewToolApprovalCommandPublisher(publisher, signer)
 	return policyPublisher
-}
-
-func configureBackupMCPDeps(deps *mcp.ServerDeps, publisher controlplane.NostrEventPublisher, signer nostr.Signer, relays []string) {
-	if deps == nil {
-		return
-	}
-	if publisher != nil && signer != nil && len(relays) > 0 {
-		deps.BackupCommandPublisher = mcp.NewBackupCommandPublisher(publisher, signer)
-	}
 }
 
 // newTenantRBAC leaves tenant authorization unconfigured when no durable

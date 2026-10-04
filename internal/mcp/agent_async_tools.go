@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -17,11 +19,11 @@ var ErrToolCallUnauthorized = errors.New("MCP tool call not authorized")
 
 func assistantAsyncToolDefinitions() []Tool {
 	return []Tool{
-		{Name: "bahia_assistant_service_deploy", Description: "Assistant-safe async service deploy command (ContextVM service/deploy intent)", InputSchema: objectSchema(map[string]interface{}{"service_id": stringProp, "environment_id": stringProp, "artifact_id": stringProp, "idempotency_key": stringProp}, "service_id", "environment_id", "artifact_id", "idempotency_key")},
-		{Name: "bahia_assistant_service_rollback", Description: "Assistant-safe async service rollback command (ContextVM service/rollback intent)", InputSchema: objectSchema(map[string]interface{}{"service_id": stringProp, "environment_id": stringProp, "idempotency_key": stringProp}, "service_id", "environment_id", "idempotency_key")},
-		{Name: "bahia_assistant_llm_deploy", Description: "Assistant-safe async LLM deploy command (ContextVM llm/deploy request)", InputSchema: objectSchema(map[string]interface{}{"route_id": stringProp, "environment_id": stringProp, "release_id": stringProp, "requested_by": stringProp, "idempotency_key": stringProp}, "route_id", "environment_id", "release_id", "idempotency_key")},
-		{Name: "bahia_assistant_llm_approve_deployment", Description: "Assistant-safe async LLM approval command (ContextVM approval/llm-approve or approval/llm-reject request)", InputSchema: objectSchema(map[string]interface{}{"intent_id": stringProp, "decision": stringProp, "idempotency_key": stringProp}, "intent_id", "decision", "idempotency_key")},
-		{Name: "bahia_assistant_llm_rollback", Description: "Assistant-safe async LLM rollback command (ContextVM llm/rollback request)", InputSchema: objectSchema(map[string]interface{}{"route_id": stringProp, "environment_id": stringProp, "requested_by": stringProp, "idempotency_key": stringProp}, "route_id", "environment_id", "idempotency_key")},
+		{Name: "bahia_assistant_service_deploy", Description: "Assistant-safe service deploy through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{"service_id": stringProp, "environment_id": stringProp, "artifact_id": stringProp, "idempotency_key": stringProp}, "service_id", "environment_id", "artifact_id", "idempotency_key")},
+		{Name: "bahia_assistant_service_rollback", Description: "Assistant-safe service rollback through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{"service_id": stringProp, "environment_id": stringProp, "idempotency_key": stringProp}, "service_id", "environment_id", "idempotency_key")},
+		{Name: "bahia_assistant_llm_deploy", Description: "Assistant-safe LLM deploy through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{"route_id": stringProp, "environment_id": stringProp, "release_id": stringProp, "requested_by": stringProp, "idempotency_key": stringProp}, "route_id", "environment_id", "release_id", "idempotency_key")},
+		{Name: "bahia_assistant_llm_approve_deployment", Description: "Assistant-safe LLM approval through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{"intent_id": stringProp, "org_id": stringProp, "decision": stringProp, "idempotency_key": stringProp}, "intent_id", "org_id", "decision", "idempotency_key")},
+		{Name: "bahia_assistant_llm_rollback", Description: "Assistant-safe LLM rollback through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{"route_id": stringProp, "environment_id": stringProp, "requested_by": stringProp, "idempotency_key": stringProp}, "route_id", "environment_id", "idempotency_key")},
 		{Name: "bahia_assistant_ml_deploy", Description: "Assistant-safe async ML deploy command (ContextVM ml/inference-deploy request)", InputSchema: objectSchema(map[string]interface{}{"endpoint": stringProp, "endpoint_id": stringProp, "model_version": stringProp, "model_version_id": stringProp, "runtime_preference": stringProp, "runtime": stringProp, "placement": map[string]interface{}{"type": "object"}, "tags": map[string]interface{}{"type": "object"}, "idempotency_key": stringProp}, "idempotency_key")},
 		{Name: "bahia_assistant_ml_approve_deployment", Description: "Assistant-safe async ML approval command (ContextVM ml/inference-approval request)", InputSchema: objectSchema(map[string]interface{}{"intent_id": stringProp, "decision": stringProp, "tags": map[string]interface{}{"type": "object"}, "idempotency_key": stringProp}, "intent_id", "decision", "idempotency_key")},
 		{Name: "bahia_assistant_ml_rollback", Description: "Assistant-safe async ML rollback command (ContextVM ml/inference-rollback request)", InputSchema: objectSchema(map[string]interface{}{"endpoint": stringProp, "endpoint_id": stringProp, "requested_by": stringProp, "tags": map[string]interface{}{"type": "object"}, "idempotency_key": stringProp}, "idempotency_key")},
@@ -52,91 +54,14 @@ func (s *Server) InvokeAssistantAsyncTool(ctx context.Context, name string, args
 }
 
 func (s *Server) invokeAssistantAsyncTool(ctx context.Context, name string, args map[string]interface{}) (*domain.AsyncToolReceipt, error) {
-	key, _ := args["idempotency_key"].(string)
+	key := strings.TrimSpace(stringArg(args, "idempotency_key"))
 	if key == "" {
 		return nil, fmt.Errorf("idempotency_key is required")
 	}
 	switch name {
-	case "bahia_assistant_service_deploy":
-		if s.serviceCommands == nil {
-			return nil, fmt.Errorf("service command publisher is not configured")
-		}
-		sid, err := parseRequiredUUIDArg(args, "service_id")
-		if err != nil {
-			return nil, err
-		}
-		eid, err := parseRequiredUUIDArg(args, "environment_id")
-		if err != nil {
-			return nil, err
-		}
-		aid, err := parseRequiredUUIDArg(args, "artifact_id")
-		if err != nil {
-			return nil, err
-		}
-		r, err := s.serviceCommands.PublishDeployRequest(ctx, controlplane.ServiceDeployCommand{ServiceID: sid, EnvironmentID: eid, ArtifactID: aid, IdempotencyKey: key, AgentID: assistantAgentID})
-		if err != nil {
-			return nil, err
-		}
-		return serviceReceipt(name, key, r), nil
-	case "bahia_assistant_service_rollback":
-		if s.serviceCommands == nil {
-			return nil, fmt.Errorf("service command publisher is not configured")
-		}
-		sid, err := parseRequiredUUIDArg(args, "service_id")
-		if err != nil {
-			return nil, err
-		}
-		eid, err := parseRequiredUUIDArg(args, "environment_id")
-		if err != nil {
-			return nil, err
-		}
-		r, err := s.serviceCommands.PublishRollbackRequest(ctx, controlplane.ServiceRollbackCommand{ServiceID: sid, EnvironmentID: eid, IdempotencyKey: key, AgentID: assistantAgentID})
-		if err != nil {
-			return nil, err
-		}
-		return serviceReceipt(name, key, r), nil
-	case "bahia_assistant_llm_deploy":
-		if s.llmCommands == nil {
-			return nil, fmt.Errorf("LLM command publisher is not configured")
-		}
-		routeID, err := parseRequiredUUIDArg(args, "route_id")
-		if err != nil {
-			return nil, err
-		}
-		envID, err := parseRequiredUUIDArg(args, "environment_id")
-		if err != nil {
-			return nil, err
-		}
-		relID, err := parseRequiredUUIDArg(args, "release_id")
-		if err != nil {
-			return nil, err
-		}
-		req, _ := args["requested_by"].(string)
-		r, err := s.llmCommands.PublishLLMDeployRequest(ctx, controlplane.LLMDeployCommand{RouteID: routeID, EnvironmentID: envID, ReleaseID: relID, RequestedBy: req, IdempotencyKey: key, AgentID: assistantAgentID})
-		if err != nil {
-			return nil, err
-		}
-		return llmReceipt(name, key, r), nil
-	case "bahia_assistant_llm_approve_deployment":
-		return s.invokeAssistantLLMApproval(ctx, name, args, key)
-	case "bahia_assistant_llm_rollback":
-		if s.llmCommands == nil {
-			return nil, fmt.Errorf("LLM command publisher is not configured")
-		}
-		routeID, err := parseRequiredUUIDArg(args, "route_id")
-		if err != nil {
-			return nil, err
-		}
-		envID, err := parseRequiredUUIDArg(args, "environment_id")
-		if err != nil {
-			return nil, err
-		}
-		req, _ := args["requested_by"].(string)
-		r, err := s.llmCommands.PublishLLMRollbackRequest(ctx, controlplane.LLMRollbackCommand{RouteID: routeID, EnvironmentID: envID, RequestedBy: req, IdempotencyKey: key, AgentID: assistantAgentID})
-		if err != nil {
-			return nil, err
-		}
-		return llmReceipt(name, key, r), nil
+	case "bahia_assistant_service_deploy", "bahia_assistant_service_rollback",
+		"bahia_assistant_llm_deploy", "bahia_assistant_llm_approve_deployment", "bahia_assistant_llm_rollback":
+		return s.invokeAssistantIntent(ctx, name, args, key)
 	case "bahia_assistant_ml_deploy", "bahia_assistant_ml_approve_deployment", "bahia_assistant_ml_rollback":
 		return s.invokeAssistantML(ctx, name, args, key)
 	default:
@@ -144,27 +69,77 @@ func (s *Server) invokeAssistantAsyncTool(ctx context.Context, name string, args
 	}
 }
 
-func (s *Server) invokeAssistantLLMApproval(ctx context.Context, name string, args map[string]interface{}, key string) (*domain.AsyncToolReceipt, error) {
-	if s.llmCommands == nil {
-		return nil, fmt.Errorf("LLM command publisher is not configured")
-	}
-	intentID, err := parseRequiredUUIDArg(args, "intent_id")
+func (s *Server) invokeAssistantIntent(ctx context.Context, name string, args map[string]interface{}, key string) (*domain.AsyncToolReceipt, error) {
+	result, err := s.invokeIntentWrite(ctx, name, args)
 	if err != nil {
 		return nil, err
 	}
-	decision, _ := args["decision"].(string)
-	if decision == "" {
-		decision = "approve"
+	if result == nil || len(result.Content) == 0 {
+		return nil, fmt.Errorf("intent pipeline returned no result")
 	}
-	r, err := s.llmCommands.PublishLLMApprovalRequest(ctx, controlplane.LLMApprovalCommand{IntentID: intentID, Decision: decision, IdempotencyKey: key, AgentID: assistantAgentID})
+	var outcome struct {
+		Status   string `json:"status"`
+		IntentID string `json:"intent_id"`
+		EventID  string `json:"event_id"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &outcome); err != nil {
+		return nil, fmt.Errorf("decode intent result: %w", err)
+	}
+	if result.IsError {
+		if outcome.EventID == "" && outcome.Status == "rejected" {
+			return nil, fmt.Errorf("%w: %s", ErrToolCallUnauthorized, outcome.Reason)
+		}
+		// An event-correlated failure may follow a handler side effect. It is
+		// not a pre-submission refusal; the executor must treat it as uncertain.
+		return nil, fmt.Errorf("intent result %s: %s", outcome.Status, outcome.Reason)
+	}
+	if outcome.IntentID == "" || outcome.EventID == "" {
+		return nil, fmt.Errorf("intent result missing correlation")
+	}
+	return assistantIntentReceipt(name, key, outcome.IntentID, outcome.EventID), nil
+}
+
+func assistantIntentReceipt(name, key, intentID, eventID string) *domain.AsyncToolReceipt {
+	return &domain.AsyncToolReceipt{
+		ToolName: name, RequestEventID: eventID, RequestKind: 30900,
+		StatusKinds: []int{30315}, ResultKinds: []int{30315},
+		DTag: intentID, IdempotencyKey: key,
+		ResourceTags: map[string]string{"intent_id": intentID},
+	}
+}
+
+// ResolveAssistantIntentReceipt proves a previously processed assistant call
+// from the durable processor marker. The work key includes the persisted
+// arguments digest, actor and tool; no unsigned caller-provided event ID is
+// accepted as evidence.
+func (s *Server) ResolveAssistantIntentReceipt(name, actor, key, eventID string) (*domain.AsyncToolReceipt, error) {
+	if s == nil || s.intentProc == nil || !isAssistantIntentTool(name) {
+		return nil, fmt.Errorf("assistant intent processor is not configured")
+	}
+	intentID, err := mcpIntentID(name, strings.ToLower(strings.TrimSpace(actor)), map[string]any{"idempotency_key": key})
 	if err != nil {
 		return nil, err
 	}
-	return llmReceipt(name, key, r), nil
+	marker := s.intentProc.ProcessedIntent(intentID)
+	if marker == nil || marker.Actor != strings.ToLower(strings.TrimSpace(actor)) || marker.EventID != eventID {
+		return nil, fmt.Errorf("processed assistant intent evidence does not match work")
+	}
+	return assistantIntentReceipt(name, key, intentID, eventID), nil
+}
+
+func isAssistantIntentTool(name string) bool {
+	switch name {
+	case "bahia_assistant_service_deploy", "bahia_assistant_service_rollback",
+		"bahia_assistant_llm_deploy", "bahia_assistant_llm_approve_deployment", "bahia_assistant_llm_rollback":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) invokeAssistantML(ctx context.Context, name string, args map[string]interface{}, key string) (*domain.AsyncToolReceipt, error) {
-	// Phase 5 P2: no intent handler yet — bahia-irsry.76
+	// Phase 5 P2: kept — ML inference deploy/approval/rollback lack intent handlers, bahia-irsry.76
 	if s.mlCommands == nil {
 		return nil, fmt.Errorf("ML command publisher is not configured")
 	}
@@ -180,13 +155,7 @@ func (s *Server) invokeAssistantML(ctx context.Context, name string, args map[st
 	case "bahia_assistant_ml_deploy":
 		r, err = s.mlCommands.PublishMLInferenceDeployRequest(ctx, payload)
 	case "bahia_assistant_ml_approve_deployment":
-		publisher, ok := s.mlCommands.(interface {
-			PublishMLInferenceApprovalRequest(context.Context, controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
-		})
-		if !ok {
-			return nil, fmt.Errorf("ML approval command publisher is not configured")
-		}
-		r, err = publisher.PublishMLInferenceApprovalRequest(ctx, payload)
+		r, err = s.mlCommands.PublishMLInferenceApprovalRequest(ctx, payload)
 	case "bahia_assistant_ml_rollback":
 		r, err = s.mlCommands.PublishMLInferenceRollbackRequest(ctx, payload)
 	}
@@ -196,12 +165,6 @@ func (s *Server) invokeAssistantML(ctx context.Context, name string, args map[st
 	return mlAsyncReceipt(name, key, r), nil
 }
 
-func serviceReceipt(tool, key string, r *controlplane.ServiceCommandReceipt) *domain.AsyncToolReceipt {
-	return &domain.AsyncToolReceipt{ToolName: tool, RequestEventID: r.RequestEventID, RequestKind: r.RequestKind, StatusKinds: positiveKinds(r.StatusKind), ResultKinds: positiveKinds(r.ResultKind), ReadModelKinds: positiveKinds(controlplane.KindCASControlState), DTag: r.DTag, IdempotencyKey: key, PublishedRelays: []string{fmt.Sprint(r.PublishedRelays)}, ResourceTags: map[string]string{"service": r.ServiceID, "environment": r.EnvironmentID, "artifact": r.ArtifactID}}
-}
-func llmReceipt(tool, key string, r *controlplane.LLMCommandReceipt) *domain.AsyncToolReceipt {
-	return &domain.AsyncToolReceipt{ToolName: tool, RequestEventID: r.RequestEventID, RequestKind: r.RequestKind, StatusKinds: positiveKinds(r.StatusKind), ResultKinds: positiveKinds(r.ResultKind), ReadModelKinds: positiveKinds(r.RegistryKind, r.StateKind), DTag: key, IdempotencyKey: key, PublishedRelays: []string{fmt.Sprint(r.PublishedRelays)}, ResourceTags: map[string]string{"route": r.RouteID, "environment": r.EnvironmentID, "release": r.ReleaseID, "intent": r.IntentID}}
-}
 func mlAsyncReceipt(tool, key string, r *controlplane.MLCommandReceipt) *domain.AsyncToolReceipt {
 	return &domain.AsyncToolReceipt{ToolName: tool, RequestEventID: r.RequestEventID, RequestKind: r.RequestKind, ResultKinds: positiveKinds(r.ResultKind), ReadModelKinds: mapValues(r.ReadModelKinds), DTag: r.DTag, IdempotencyKey: key, PublishedRelays: []string{fmt.Sprint(r.PublishedRelays)}, ResourceTags: mlResourceTags(r)}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"fiatjaf.com/nostr"
@@ -306,4 +307,79 @@ func TestMCPPackageIntentReturnsCanonicalRepositoryAndArtifact(t *testing.T) {
 	_, err = server.CallTool(ctx, "bahia_package_upload", uploadArgs)
 	require.NoError(t, err)
 	require.Equal(t, 2, handler.calls)
+}
+
+func TestAssistantServiceAndLLMUseInProcessIntents(t *testing.T) {
+	for _, tc := range []struct {
+		name, domain string
+		args         func(orgID, serviceID, environmentID uuid.UUID) map[string]any
+	}{
+		{"bahia_assistant_service_deploy", "deployment", func(_, svc, env uuid.UUID) map[string]any {
+			return map[string]any{"service_id": svc.String(), "environment_id": env.String(), "artifact_id": uuid.NewString()}
+		}},
+		{"bahia_assistant_service_rollback", "deployment", func(_, svc, env uuid.UUID) map[string]any {
+			return map[string]any{"service_id": svc.String(), "environment_id": env.String(), "supersedes_intent_id": uuid.NewString(), "target_artifact_id": uuid.NewString()}
+		}},
+		{"bahia_assistant_llm_deploy", "llm", func(_, _, env uuid.UUID) map[string]any {
+			return map[string]any{"route_id": uuid.NewString(), "environment_id": env.String(), "release_id": uuid.NewString()}
+		}},
+		{"bahia_assistant_llm_rollback", "llm", func(_, _, env uuid.UUID) map[string]any {
+			return map[string]any{"route_id": uuid.NewString(), "environment_id": env.String()}
+		}},
+		{"bahia_assistant_llm_approve_deployment", "llm", func(org, _, _ uuid.UUID) map[string]any {
+			return map[string]any{"intent_id": uuid.NewString(), "org_id": org.String(), "decision": "approve"}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			actor := nostr.Generate().Public().Hex()
+			orgID, serviceID, environmentID := uuid.New(), uuid.New(), uuid.New()
+			server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{AuthorizedPubkeys: []string{actor}})
+			canonical := attachCanonicalMCPFixture(t, server)
+			canonical.publishService(t, &domain.Service{ID: serviceID, OrgID: orgID, Name: "api", ArtifactRepo: "registry.example/api", DefaultBranch: "main", RuntimeType: domain.RuntimeTypeDocker})
+			canonical.publishEnvironment(t, &domain.Environment{ID: environmentID, OrgID: orgID, Name: "prod"})
+			handler := &mcpIntentHandler{}
+			proc := controlplane.NewIntentProcessor(controlplane.NewTrustSet(nil, zap.NewNop(), controlplane.WithBootstrapOwners(map[string]string{orgID.String(): actor})), canonical.store, nil, controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{tc.domain: true}}, zap.NewNop())
+			proc.RegisterHandler(tc.domain, handler)
+			server.intentProc = proc
+			ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: actor, PubKey: actor, Method: auth.MethodNIP98})
+			args := tc.args(orgID, serviceID, environmentID)
+			args["idempotency_key"] = "assistant-work-key"
+			first, err := server.InvokeAssistantAsyncTool(ctx, tc.name, args)
+			require.NoError(t, err)
+			require.Equal(t, 30900, first.RequestKind)
+			require.Equal(t, []int{30315}, first.ResultKinds)
+			require.NotEmpty(t, first.RequestEventID)
+			require.Equal(t, first.DTag, first.ResourceTags["intent_id"])
+			require.Equal(t, 1, handler.calls)
+			again, err := server.InvokeAssistantAsyncTool(ctx, tc.name, args)
+			require.NoError(t, err)
+			require.Equal(t, first.RequestEventID, again.RequestEventID)
+			require.Equal(t, 1, handler.calls, "same assistant work key must not reapply")
+			proven, err := server.ResolveAssistantIntentReceipt(tc.name, actor, "assistant-work-key", first.RequestEventID)
+			require.NoError(t, err)
+			require.Equal(t, first.RequestEventID, proven.RequestEventID)
+			_, err = server.ResolveAssistantIntentReceipt(tc.name, actor, "assistant-work-key", strings.Repeat("0", 64))
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestAssistantIntentHandlerFailureIsNotPreSubmissionRefusal(t *testing.T) {
+	actor := nostr.Generate().Public().Hex()
+	orgID, serviceID, environmentID := uuid.New(), uuid.New(), uuid.New()
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{AuthorizedPubkeys: []string{actor}})
+	canonical := attachCanonicalMCPFixture(t, server)
+	canonical.publishService(t, &domain.Service{ID: serviceID, OrgID: orgID, Name: "api", ArtifactRepo: "registry.example/api", DefaultBranch: "main", RuntimeType: domain.RuntimeTypeDocker})
+	canonical.publishEnvironment(t, &domain.Environment{ID: environmentID, OrgID: orgID, Name: "prod"})
+	handler := &mcpIntentHandler{failure: errors.New("handler failed after dispatch")}
+	proc := controlplane.NewIntentProcessor(controlplane.NewTrustSet(nil, zap.NewNop(), controlplane.WithBootstrapOwners(map[string]string{orgID.String(): actor})), canonical.store, nil, controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{"deployment": true}}, zap.NewNop())
+	proc.RegisterHandler("deployment", handler)
+	server.intentProc = proc
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: actor, PubKey: actor, Method: auth.MethodNIP98})
+	_, err := server.InvokeAssistantAsyncTool(ctx, "bahia_assistant_service_deploy", map[string]any{
+		"service_id": serviceID.String(), "environment_id": environmentID.String(), "artifact_id": uuid.NewString(), "idempotency_key": "handler-failure",
+	})
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrToolCallUnauthorized)
+	require.Equal(t, 1, handler.calls)
 }
