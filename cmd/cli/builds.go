@@ -22,8 +22,8 @@ func buildsCommands() *cobra.Command {
 			"replays the first completed ContextVM result without starting another build.\n\n" +
 			"The server must enable hiveci.initiator. First-mirror builds can exceed the default\n" +
 			"result timeout; use --result-timeout 120s when necessary. A successful request only\n" +
-			"queues the build. Follow it with builds get/list, register its verified artifact with\n" +
-			"builds register-result, then use a reviewed deployment preview before deployment.",
+			"queues the build. The daemon registers verified HiveCI artifact results; follow\n" +
+			"builds and artifacts get/list, then review a deployment preview before deployment.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			serviceID, _ := cmd.Flags().GetString("service")
@@ -99,23 +99,7 @@ func buildsCommands() *cobra.Command {
 	listCmd.Flags().Int("offset", 0, "Number of builds to skip")
 	_ = listCmd.MarkFlagRequired("service")
 
-	registerResultCmd := &cobra.Command{
-		Use:   "register-result",
-		Short: "Register the verified artifact produced by a successful build",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			buildID, _ := cmd.Flags().GetString("build")
-			result, err := runBuildRegisterResultContextVM(cmd, buildID)
-			if err != nil {
-				return err
-			}
-			return outputSingle(result)
-		},
-	}
-	registerResultCmd.Flags().String("build", "", "Successful build ID")
-	_ = registerResultCmd.MarkFlagRequired("build")
-
-	cmd.AddCommand(requestCmd, getCmd, listCmd, registerResultCmd)
+	cmd.AddCommand(requestCmd, getCmd, listCmd)
 	return cmd
 }
 

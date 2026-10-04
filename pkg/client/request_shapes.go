@@ -179,6 +179,7 @@ type ImportObservedArtifactResult struct {
 
 // ArtifactCommandResult is the terminal acknowledgment for signer-first artifact registration.
 type ArtifactCommandResult struct {
+	IntentID   string           `json:"intent_id,omitempty"`
 	Status     string           `json:"status,omitempty"`
 	Artifact   *domain.Artifact `json:"artifact,omitempty"`
 	ArtifactID string           `json:"artifact_id,omitempty"`
@@ -203,7 +204,8 @@ type DNSPolicyApplyRequest struct {
 // DNSRecordSetRequest is the signer-first dns/record-set payload. Operator
 // An empty zone requests reconciliation of all configured zones.
 type DNSDriftRemediateRequest struct {
-	Zone string `json:"zone,omitempty"`
+	Zone           string `json:"zone,omitempty"`
+	IdempotencyKey string `json:"-"`
 }
 
 // DNSCommandResult is the terminal acknowledgment for signer-first DNS mutations.
@@ -261,12 +263,13 @@ type EnvironmentCommandResult struct {
 
 // RouteAttachRequest is the signer-first service/route-attach payload.
 type RouteAttachRequest struct {
-	ServiceID        string                    `json:"service_id"`
-	EnvironmentID    string                    `json:"environment_id"`
-	DeploymentUnitID string                    `json:"deployment_unit_id,omitempty"`
-	PublicRoute      domain.PublicRouteRequest `json:"public_route"`
-	Internal         *bool                     `json:"internal,omitempty"`
-	IdempotencyKey   string                    `json:"idempotency_key,omitempty"`
+	ServiceID         string                    `json:"service_id"`
+	EnvironmentID     string                    `json:"environment_id"`
+	DeploymentUnitID  string                    `json:"deployment_unit_id,omitempty"`
+	PublicRoute       domain.PublicRouteRequest `json:"public_route"`
+	ExpectedUpdatedAt string                    `json:"expected_updated_at,omitempty"`
+	Internal          *bool                     `json:"internal,omitempty"`
+	IdempotencyKey    string                    `json:"idempotency_key,omitempty"`
 }
 
 // RollbackDeploymentNostrRequest is the explicit signer-first rollback target.

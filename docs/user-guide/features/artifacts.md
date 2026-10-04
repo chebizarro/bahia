@@ -36,7 +36,7 @@ hiveci:
   allow_manual_artifact_registration: false
 ```
 
-The **Builds** page also provides an idempotent **Register verified build artifact** recovery action for a successful result. The signed ContextVM request contains only `build_id`; repository, tag, digest, CI provenance, signatures, SBOM reference, scan state, and policy state come from verified server-side evidence.
+Verified HiveCI build-result artifact registration is daemon-owned; there is no operator register-result action. Repository, tag, digest, CI provenance, signatures, SBOM reference, scan state, and policy state come from verified server-side evidence.
 
 ### Advanced manual registration
 
@@ -295,3 +295,5 @@ docker push bahia.example.com/my-api:v2.0.0
 ## Canonical MCP reads
 
 Artifact signature and parsed SBOM MCP reads use daemon-authored `30900` state. SBOM packages are indexed one per record, so large package lists do not exceed relay frame limits. The existing `30078` reference and `30004` availability records remain the public interop source for SBOM availability.
+
+CLI `artifacts register` and `artifacts import-observed` publish signed kind-`30900` artifact intents and wait for bounded kind-`30315` status. Registration accepts a client-minted `--id` artifact UUID for retry; observed import never promotes or deploys the imported image.

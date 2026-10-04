@@ -140,6 +140,10 @@ func publishMutationIntentForOrg(cmd *cobra.Command, domain, op, coordinate, sch
 }
 
 func publishCLIIntent(cmd *cobra.Command, request client.PublishIntentRequest) error {
+	return publishCLIIntentWithResult(cmd, request, nil)
+}
+
+func publishCLIIntentWithResult(cmd *cobra.Command, request client.PublishIntentRequest, onAccepted func(*client.PublishIntentResult) error) error {
 	publisher, relays, err := buildCLIIntentPublisher(cmd)
 	if err != nil {
 		return err
@@ -200,6 +204,9 @@ func publishCLIIntent(cmd *cobra.Command, request client.PublishIntentRequest) e
 	}
 	switch result.ExitCode {
 	case client.ExitCodeAccepted:
+		if onAccepted != nil {
+			return onAccepted(result)
+		}
 		return nil
 	case client.ExitCodeTimeout:
 		return &IntentExitError{Code: 2, Message: fmt.Sprintf("intent published but no status within timeout: intent_id=%s event_id=%s; inspect with bahia outbox list", result.IntentID, result.EventID)}
