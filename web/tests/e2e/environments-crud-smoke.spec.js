@@ -175,6 +175,7 @@ test.describe('Environments CRUD Smoke Test', () => {
       await organization.fill(ORG_ID);
     }
     await expect(organization).toHaveValue(ORG_ID);
+    await page.locator('select#env-org').selectOption(ORG_ID);
     await page.getByLabel('Name *').fill('development');
     await page.getByLabel('Loom Worker Selector').fill('role=dev');
     await page.getByLabel('Runtime Config (JSON)').fill('{"cpu_limit":"1","memory_limit":"1Gi"}');
@@ -226,6 +227,7 @@ test.describe('Environments CRUD Smoke Test', () => {
       await organization.fill(ORG_ID);
     }
     await expect(organization).toHaveValue(ORG_ID);
+    await page.locator('select#env-org').selectOption(ORG_ID);
     await page.getByLabel('Name *').fill('max-production');
     await page.getByLabel('Create an explicit Bahia-managed Compose deployment unit').check();
     await page.getByLabel('Unit key *').fill('max');

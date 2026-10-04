@@ -184,3 +184,12 @@ const (
 	CPStateTopicSBOMPackage        = "artifact-sbom-package"
 	CPStateTopicRuntimeObservation = "runtime-observation"
 )
+
+// F74b confidential fleet cp-state topics.
+const (
+	CPStateTopicPackageIntent       = "package-intent"
+	CPStateTopicToolProvisionIntent = "tool-provision-intent"
+	CPStateTopicToolDenylist        = "tool-denylist"
+	CPStateTopicToolProfile         = "tool-profile"
+	CPStateTopicNotificationLog     = "notification-log"
+)

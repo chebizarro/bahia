@@ -320,6 +320,11 @@ var constantJustifications = map[string]KindJustification{
 	"SoulRuntimePolicyRecord":        omitted("SoulRuntimePolicyRecord", kinds.SoulRuntimePolicyRecord, "cp-state-family", "canonical enabled Soul Factory runtime policy on 30900"),
 	"BlossomAdminRecord":             omitted("BlossomAdminRecord", kinds.BlossomAdminRecord, "cp-state-family", "canonical confidential Blossom server administration on 30900"),
 	"BlossomBlobRecord":              omitted("BlossomBlobRecord", kinds.BlossomBlobRecord, "cp-state-family", "canonical confidential Blossom blob metadata on 30900"),
+	"PackageIntentState":             omitted("PackageIntentState", kinds.PackageIntentState, "cp-state-family", "fleet-OCK encrypted package intent and approval lifecycle state on 30900"),
+	"ToolProvisionIntentState":       omitted("ToolProvisionIntentState", kinds.ToolProvisionIntentState, "cp-state-family", "fleet-OCK encrypted tool provisioning intent state on 30900"),
+	"ToolDenylistState":              omitted("ToolDenylistState", kinds.ToolDenylistState, "cp-state-family", "fleet-OCK encrypted operator denylist policy on 30900"),
+	"ToolProfileState":               omitted("ToolProfileState", kinds.ToolProfileState, "cp-state-family", "fleet-OCK encrypted tool profile state on 30900"),
+	"NotificationLogState":           omitted("NotificationLogState", kinds.NotificationLogState, "cp-state-family", "fleet-OCK encrypted bounded per-channel notification log index on 30900"),
 }
 
 func omitted(name string, kind int, category, reason string) KindJustification {

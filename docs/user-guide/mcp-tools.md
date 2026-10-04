@@ -41,6 +41,12 @@ with the daemon key; runtime observations omit arbitrary metadata. Existing rows
 backfilled into signed state at startup before these MCP reads are served. Package-intent,
 tool-provisioning, and notification-log reads still require separate read models.
 
+same canonical worker records. Package-intent/approval, tool-provisioning
+intent/denylist/profile, and notification-log reads also use the encrypted
+canonical `30900` store; no repository is consulted by those MCP reads.
+Signature, SBOM, runtime-observation, and LLM-release reads remain separate
+until their canonical producers are integrated.
+
 The relay subscriptions that populate the daemon store determine freshness;
 MCP does not issue a one-shot relay request for each tool call.
 
@@ -134,7 +140,7 @@ Use `bahia_assistant_service_deploy` and `bahia_assistant_service_rollback` for 
 - Channels: `bahia_list_notification_channels`, `bahia_get_notification_channel`, `bahia_create_notification_channel`, `bahia_update_notification_channel`, `bahia_delete_notification_channel`, `bahia_test_notification_channel`
 - Logs: `bahia_list_notifications`, `bahia_get_notification`, `bahia_mark_notification_read`, `bahia_dismiss_notification`
 
-`bahia_get_notification` and `bahia_dismiss_notification` are registered compatibility tools but currently return unsupported. `bahia_mark_notification_read` searches recent logs and overwrites delivery status to `sent`; its read/unread behavior is a compatibility mapping, not a separate receipt model.
+`bahia_get_notification` resolves an ID within the bounded canonical latest-50-per-channel window; older IDs return not found. `bahia_list_notifications` sorts those windows globally and limits results to 50 (filters apply after the limit, matching the earlier repository read). `bahia_dismiss_notification` remains unsupported. `bahia_mark_notification_read` searches recent logs and overwrites delivery status to `sent`; its read/unread behavior is a compatibility mapping, not a separate receipt model.
 
 ### LLM and ML
 

@@ -84,6 +84,16 @@ an error response rather than success. Partial backend changes are not rolled ba
 Migration `000069_package_authorization` adds authoritative local approval and
 admission records: preserve them across relay-projection rebuilds.
 
+The package intent and approval lifecycle also has a fleet-OCK-encrypted
+`30900` `package-intent` read model (`legacy_kind=32030`). Persisted legacy
+intent transitions use `d=package:intent:<request event ID>`; signed ContextVM
+claim and approval mutations use `package:claim:<request event ID>` and
+`package:approval:<approval UUID>`. Signed intent completion publishes a
+separate terminal record at `package:signed-intent:<SHA-256(intent ID)>`. `bahia_package_status` reads this signed
+state by intent UUID or request event ID rather than querying the projection.
+Approval/admission records remain authoritative locally for single-use
+semantics; relay state is a read model, not an authorization decision.
+
 Repository apply/delete are not registered by this handler group. Their existing
 publishers do not establish server reachability.
 

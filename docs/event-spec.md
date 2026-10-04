@@ -576,3 +576,13 @@ addressable coordinates. See the
 [family table](nostr-event-implementation-guide.md#f74a-mcp-read-families-30900).
 
 Wave F75 operator-view state and its bounded history contract are specified in [Wave F75 operator views](nostr-event-implementation-guide.md#wave-f75-operator-views-bahia-irsry75).
+
+## F74b fleet-private cp-state families
+
+Package intent/approval (`32030`), tool provisioning intent (`32031`), tool
+denylist (`32032`), tool profile (`32033`), and notification delivery log
+(`32034`) are `30900` addressable state with `#t` topics and fleet-OCK encrypted
+content. The log is one latest-50-per-channel replaceable window, not a growing
+per-line relay history; delete publishes a same-coordinate tombstone. See
+[the event implementation guide](nostr-event-implementation-guide.md#f74b-canonical-fleet-private-state-bahia-irsry74)
+for coordinates, size bounds, and confidentiality.

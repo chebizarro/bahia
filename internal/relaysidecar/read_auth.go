@@ -247,8 +247,13 @@ var publicCPStateTopics = map[string]bool{
 	kinds.CPStateTopicManagedInstanceHealth: true,
 	kinds.CPStateTopicRouteCanary:           true,
 	// Blossom records are OCK ciphertext; relay-level auth is redundant.
-	kinds.CPStateTopicBlossomAdmin: true,
-	kinds.CPStateTopicBlossomBlob:  true,
+	kinds.CPStateTopicBlossomAdmin:        true,
+	kinds.CPStateTopicBlossomBlob:         true,
+	kinds.CPStateTopicPackageIntent:       true,
+	kinds.CPStateTopicToolProvisionIntent: true,
+	kinds.CPStateTopicToolDenylist:        true,
+	kinds.CPStateTopicToolProfile:         true,
+	kinds.CPStateTopicNotificationLog:     true,
 
 	// Protected topics (NOT in this map):
 	//   security-findings, security-audit — detailed vulnerability data

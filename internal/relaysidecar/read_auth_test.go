@@ -126,6 +126,14 @@ func TestFilterNeedsAuth(t *testing.T) {
 			needsAuth: true,
 		},
 		{
+			name: "F74b fleet OCK topics are public ciphertext",
+			filter: nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{
+				kinds.CPStateTopicPackageIntent, kinds.CPStateTopicToolProvisionIntent,
+				kinds.CPStateTopicToolDenylist, kinds.CPStateTopicToolProfile, kinds.CPStateTopicNotificationLog,
+			}}},
+			needsAuth: false,
+		},
+		{
 			name:      "OCK-encrypted org topics are public (content is ciphertext)",
 			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicOrgRegistry, kinds.CPStateTopicSecretRegistry}}},
 			needsAuth: false,

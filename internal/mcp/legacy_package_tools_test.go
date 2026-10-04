@@ -3,7 +3,11 @@ package mcp
 import (
 	"context"
 
+	"fmt"
+
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 )
 
 func (s *Server) handlePackageList(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -43,4 +47,26 @@ func (s *Server) handlePackageGet(ctx context.Context, args map[string]interface
 		return errorResult("package artifact not found"), nil
 	}
 	return jsonResult(artifact)
+}
+
+func lookupPackageProjectionRepository(ctx context.Context, repo repository.PackageControlPlaneRepository, id uuid.UUID, name string) (*domain.PackageRepository, error) {
+	if id != uuid.Nil {
+		out, err := repo.GetRepository(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if out != nil {
+			return out, nil
+		}
+	}
+	if name != "" {
+		out, err := repo.GetRepositoryByName(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		if out != nil {
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("package repository not found")
 }

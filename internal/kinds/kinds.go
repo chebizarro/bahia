@@ -506,3 +506,13 @@ const (
 	BlossomAdminRecord          = 32043
 	BlossomBlobRecord           = 32044
 )
+
+// F74b cp-state discriminators (wire kind 30900). This block is reserved for
+// package intent/approval, tool provisioning policy, and notification history.
+const (
+	PackageIntentState       = 32030
+	ToolProvisionIntentState = 32031
+	ToolDenylistState        = 32032
+	ToolProfileState         = 32033
+	NotificationLogState     = 32034
+)

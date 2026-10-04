@@ -851,3 +851,26 @@ The web reads managed-instance health, route canaries, Blossom administration, a
 Blossom metadata is published once after a successful daemon-owned upload and once per configured owner at startup. Raw blob retrieval remains HTTP as required by Blossom. The UI's owner filter applies to already-published metadata; it does not issue a new server-side listing for arbitrary pubkeys. Soul policy is published at daemon startup and replaced only when a new daemon config is started.
 
 Config Fabric does not add a family: the browser computes current desired/applied drift from signed kind `30000`/`30078` desired events tagged `config-fabric` and service-authored `30900` status tagged `config-status`, mirroring `ConfigDriftFromEvents`. NIP-01 addressable replacement means a cold relay provides only current desired and status events, not historical versions or receipts; the web cannot reconstruct the REST archive's full version/status history after a cold start.
+
+## F74b canonical fleet-private state (bahia-irsry.74)
+
+Five logical families share wire kind `30900`, `schema=bahia.cp-state.v1`, and
+a `#t` topic; their `legacy_kind` discriminators are not emitted as wire kinds.
+
+| Legacy discriminator | `#t` | Addressable `d` |
+|---|---|---|
+| `32030` package intent/claim/approval | `package-intent` | `package:intent:<request event ID>`, `package:claim:<request event ID>`, `package:approval:<UUID>`, or `package:signed-intent:<SHA-256(intent ID)>` |
+| `32031` tool provisioning intent | `tool-provision-intent` | `tool:intent:<UUID>` |
+| `32032` tool denylist policy | `tool-denylist` | `tool:denylist:<SHA-256(manager\0package)>` |
+| `32033` tool profile | `tool-profile` | `tool:profile:<service UUID>:<environment UUID>` |
+| `32034` notification delivery log window | `notification-log` | `notification:log:<channel UUID>` |
+
+All content is fleet-OCK encrypted because requests may contain private source
+URLs, tool entries encode operator policy, and delivery logs may contain
+recipient details. Relay read auth classifies the topics as public **ciphertext**;
+MCP decrypts with the daemon service key. Deletion uses the same coordinate with
+`deleted=true`. The notification event is one bounded replaceable window per
+channel (at most 50 attempts, 512 JSON bytes per payload, 256 error characters,
+60 KiB plaintext), never one addressable event per append-only log line.
+Mutation-bound repository decorators publish after successful persistence via
+`publishControlState`; the legacy mutation path is not duplicated.
