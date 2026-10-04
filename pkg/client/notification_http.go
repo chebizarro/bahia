@@ -9,6 +9,7 @@ import (
 
 // ListNotificationChannels returns channels through the compatibility API.
 // Deprecated: use the NostrClient confidential notification read path.
+// Phase 5 F2: retained until F3 lands.
 func (c *Client) ListNotificationChannels(ctx context.Context) ([]domain.NotificationChannel, error) {
 	var channels []domain.NotificationChannel
 	if err := c.do(ctx, http.MethodGet, "/api/v1/notifications/channels", nil, &channels); err != nil {
@@ -19,6 +20,7 @@ func (c *Client) ListNotificationChannels(ctx context.Context) ([]domain.Notific
 
 // GetNotificationChannel returns one channel through the compatibility API.
 // Deprecated: use the NostrClient confidential notification read path.
+// Phase 5 F2: retained until F3 lands.
 func (c *Client) GetNotificationChannel(ctx context.Context, id string) (*domain.NotificationChannel, error) {
 	var channel domain.NotificationChannel
 	if err := c.do(ctx, http.MethodGet, "/api/v1/notifications/channels/"+id, nil, &channel); err != nil {

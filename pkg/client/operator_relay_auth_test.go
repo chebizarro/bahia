@@ -64,7 +64,7 @@ func TestOperatorRelayAuthIsThePools(t *testing.T) {
 	defer cancel()
 
 	type outcome struct {
-		result *RuntimeActionResult
+		result *testLogFetchResult
 		err    error
 	}
 	done := make(chan outcome, 1)
@@ -81,7 +81,7 @@ func TestOperatorRelayAuthIsThePools(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("the request never reached the auth-required relay")
 	}
-	reply := signedContextVMResult(t, replyKey.Hex(), request, map[string]any{"action": "restart", "service_id": "svc-1", "environment_id": "env-1"})
+	reply := signedContextVMResult(t, replyKey.Hex(), request, map[string]any{"run_id": "run-1", "stdout": "started"})
 	if !reply.Kind.IsEphemeral() {
 		t.Fatalf("reply kind %d is not ephemeral; store it before broadcasting", reply.Kind)
 	}
@@ -91,7 +91,7 @@ func TestOperatorRelayAuthIsThePools(t *testing.T) {
 
 	select {
 	case got := <-done:
-		if got.err != nil || got.result == nil || got.result.Action != "restart" {
+		if got.err != nil || got.result == nil || got.result.Stdout != "started" {
 			t.Fatalf("result=%+v error=%v", got.result, got.err)
 		}
 	case <-ctx.Done():
