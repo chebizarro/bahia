@@ -347,25 +347,6 @@ type LLMExternalBackendRequest struct {
 	HealthHeaderSecretRefs map[string]string `json:"health_header_secret_refs,omitempty"`
 }
 
-// RegisterLLMHostRequest registers or updates an LLM-capable runtime host.
-type RegisterLLMHostRequest struct {
-	PubKey            string              `json:"pubkey"`
-	Name              string              `json:"name"`
-	Description       string              `json:"description,omitempty"`
-	Architecture      string              `json:"architecture,omitempty"`
-	MaxConcurrentJobs int                 `json:"max_concurrent_jobs,omitempty"`
-	CurrentQueueDepth int                 `json:"current_queue_depth,omitempty"`
-	Software          []map[string]string `json:"software,omitempty"`
-	Pricing           []map[string]any    `json:"pricing,omitempty"`
-	Resources         map[string]int      `json:"resources,omitempty"`
-	Accelerators      []map[string]any    `json:"accelerators,omitempty"`
-	RuntimeTarget     map[string]string   `json:"runtime_target,omitempty"`
-	MinDurationSecs   int                 `json:"min_duration_secs,omitempty"`
-	MaxDurationSecs   int                 `json:"max_duration_secs,omitempty"`
-	Geohash           string              `json:"geohash,omitempty"`
-	PreferredRelays   []string            `json:"preferred_relays,omitempty"`
-}
-
 // CreateLLMReleaseRequest registers an immutable model release for a route.
 type CreateLLMReleaseRequest struct {
 	Version            string                           `json:"version"`

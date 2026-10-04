@@ -64,14 +64,6 @@ func TestLLMRegistryListMethodsTolerateMissingLegacyRepositories(t *testing.T) {
 		t.Fatalf("ListAllRouteStates() returned %d states, want 0", len(allStates))
 	}
 
-	envStates, err := reg.ListEnvironmentRouteStates(t.Context(), uuid.New())
-	if err != nil {
-		t.Fatalf("ListEnvironmentRouteStates() error = %v", err)
-	}
-	if len(envStates) != 0 {
-		t.Fatalf("ListEnvironmentRouteStates() returned %d states, want 0", len(envStates))
-	}
-
 	routeStates, err := reg.ListRouteStates(t.Context(), uuid.New())
 	if err != nil {
 		t.Fatalf("ListRouteStates() error = %v", err)
@@ -80,13 +72,6 @@ func TestLLMRegistryListMethodsTolerateMissingLegacyRepositories(t *testing.T) {
 		t.Fatalf("ListRouteStates() returned %d states, want 0", len(routeStates))
 	}
 
-	drifted, err := reg.ListDriftedRouteStates(t.Context())
-	if err != nil {
-		t.Fatalf("ListDriftedRouteStates() error = %v", err)
-	}
-	if len(drifted) != 0 {
-		t.Fatalf("ListDriftedRouteStates() returned %d states, want 0", len(drifted))
-	}
 }
 
 func TestLLMRegistryCreateIntentAndObservationState(t *testing.T) {

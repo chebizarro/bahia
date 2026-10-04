@@ -770,29 +770,6 @@ func (s *LLMRegistryService) GetRouteState(ctx context.Context, routeID, envID u
 	return s.state.Get(ctx, routeID, envID)
 }
 
-func (s *LLMRegistryService) ListEnvironmentRouteStates(ctx context.Context, envID uuid.UUID) ([]domain.LLMRouteState, error) {
-	if s == nil {
-		return nil, nil
-	}
-	if s.mlBacked() {
-		states, err := s.ListAllRouteStates(ctx)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]domain.LLMRouteState, 0, len(states))
-		for i := range states {
-			if states[i].EnvironmentID == envID {
-				out = append(out, states[i])
-			}
-		}
-		return out, nil
-	}
-	if s.state == nil {
-		return nil, nil
-	}
-	return s.state.ListByEnvironment(ctx, envID)
-}
-
 func (s *LLMRegistryService) ListRouteStates(ctx context.Context, routeID uuid.UUID) ([]domain.LLMRouteState, error) {
 	if s == nil {
 		return nil, nil
@@ -835,29 +812,6 @@ func (s *LLMRegistryService) ListAllRouteStates(ctx context.Context) ([]domain.L
 		return nil, nil
 	}
 	return s.state.ListAll(ctx)
-}
-
-func (s *LLMRegistryService) ListDriftedRouteStates(ctx context.Context) ([]domain.LLMRouteState, error) {
-	if s == nil {
-		return nil, nil
-	}
-	if s.mlBacked() {
-		states, err := s.ListAllRouteStates(ctx)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]domain.LLMRouteState, 0, len(states))
-		for i := range states {
-			if states[i].DriftStatus == domain.DriftStatusDrifted {
-				out = append(out, states[i])
-			}
-		}
-		return out, nil
-	}
-	if s.state == nil {
-		return nil, nil
-	}
-	return s.state.ListDrifted(ctx)
 }
 
 // LLM projector source aliases keep projection wiring explicit without changing the HTTP-facing service API.

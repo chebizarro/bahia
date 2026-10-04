@@ -18,7 +18,6 @@ const (
 	KindMLRecipeRunState            = kinds.MLRecipeRunState
 	KindMLInferenceEndpointRegistry = kinds.MLInferenceEndpointRegistry
 	KindMLEvaluationExperimentState = kinds.MLEvaluationExperimentState
-	KindMLArtifactProvenanceGraph   = kinds.MLArtifactProvenanceGraph
 	KindMLRuntimeCapabilityProfile  = kinds.MLRuntimeCapabilityProfile
 )
 
