@@ -89,6 +89,8 @@ type Intent struct {
 	Coordinate string
 	// Content is the parsed JSON content.
 	Content map[string]interface{}
+	// Evaluation is the daemon-computed policy decision for an evaluate intent.
+	Evaluation *domain.PolicyEvaluation
 	// ExpectedUpdatedAt is the canonical record's updated_at revision.
 	ExpectedUpdatedAt *time.Time
 	// Actor is the pubkey that originated the intent. For relay-path intents
@@ -317,12 +319,22 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		return err
 	}
 
+	// A compute intent has no registry record: its result must be published
+	// before deduplication marks it complete, so a failed publication can retry.
+	if intent.Evaluation != nil {
+		if p.status == nil {
+			return fmt.Errorf("intent outcome status publisher is not configured")
+		}
+		if err := p.status.PublishAcceptedEvaluation(ctx, intent); err != nil {
+			return err
+		}
+	}
+
 	// Step 6: Mark processed (idempotency).
 	p.markProcessed(intent)
 
 	// Step 7: Publish canonical state is done by the domain handler.
-	// Publish acceptance status.
-	if p.status != nil {
+	if p.status != nil && intent.Evaluation == nil {
 		p.status.PublishAccepted(ctx, intent)
 	}
 

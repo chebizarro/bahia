@@ -30,7 +30,7 @@ func TestDNSKindConstantsUnique(t *testing.T) {
 			KindLLMDeployRequest, KindLLMDeploymentApproval, KindLLMRollbackRequest, KindToolProvisionRequest,
 			KindToolApprovalRequest, KindAdoptionScanRequest, KindAdoptionImportRequest, KindEncryptedRequest,
 			KindServiceUpdate, KindServiceDelete, KindEnvironmentUpdate, KindEnvironmentDelete, KindArtifactRegister,
-			KindPolicyCreate, KindPolicyUpdate, KindPolicyDelete, KindPolicyEvaluate, KindPackageRepositoryApply,
+			KindPolicyCreate, KindPolicyUpdate, KindPolicyDelete, KindPackageRepositoryApply,
 			KindPackageRepositoryDelete, KindPackagePublishIntent, KindPackagePromotionRequest, KindPackageYankRequest,
 			KindPackageDriftDetect, KindDeploymentStatus, KindServiceStatus, KindActionStatus, KindLLMDeploymentStatus,
 			KindToolProvisionStatus, KindAdoptionStatus, KindPackageStatus, KindEncryptedResult, KindDeploymentResult,

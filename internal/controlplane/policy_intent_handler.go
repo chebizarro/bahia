@@ -27,6 +27,12 @@ type PolicyCRUD interface {
 // PublishBeforeCommit for outbox durability (design §3.6).
 type PolicyStatePublisher func(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error
 
+// PolicyEvaluator preserves the daemon's full signature, SBOM, security-scan,
+// and attestation checks when evaluating a deployment decision.
+type PolicyEvaluator interface {
+	Evaluate(ctx context.Context, artifactID, environmentID uuid.UUID) (*domain.PolicyEvaluation, error)
+}
+
 // PolicyIntentHandler processes kind-30900 intents for the "policy" domain.
 // It is level-triggered: the intent's content is the full desired state, and
 // the handler reconciles the entity toward it regardless of whether prior
@@ -47,6 +53,7 @@ type PolicyStatePublisher func(ctx context.Context, policy *domain.DeploymentPol
 // See design §7 Wave 2 S3.
 type PolicyIntentHandler struct {
 	policies PolicyCRUD
+	evaluate PolicyEvaluator
 	publish  PolicyStatePublisher
 	status   *IntentStatusPublisher
 	logger   *zap.Logger
@@ -54,10 +61,11 @@ type PolicyIntentHandler struct {
 
 // PolicyIntentHandlerConfig configures the policy intent handler.
 type PolicyIntentHandlerConfig struct {
-	Policies PolicyCRUD
-	Publish  PolicyStatePublisher
-	Status   *IntentStatusPublisher
-	Logger   *zap.Logger
+	Policies  PolicyCRUD
+	Evaluator PolicyEvaluator
+	Publish   PolicyStatePublisher
+	Status    *IntentStatusPublisher
+	Logger    *zap.Logger
 }
 
 // NewPolicyIntentHandler constructs the handler.
@@ -68,6 +76,7 @@ func NewPolicyIntentHandler(cfg PolicyIntentHandlerConfig) *PolicyIntentHandler 
 	}
 	return &PolicyIntentHandler{
 		policies: cfg.Policies,
+		evaluate: cfg.Evaluator,
 		publish:  cfg.Publish,
 		status:   cfg.Status,
 		logger:   logger.Named("policy-intent"),
@@ -80,10 +89,38 @@ func (h *PolicyIntentHandler) HandleIntent(ctx context.Context, intent *Intent) 
 	switch intent.Op {
 	case "delete":
 		return h.handleDelete(ctx, intent)
+	case "evaluate":
+		return h.handleEvaluate(ctx, intent)
 	default:
 		// Level-triggered: create and update both reconcile toward desired state.
 		return h.handleCreateOrUpdate(ctx, intent)
 	}
+}
+
+func (h *PolicyIntentHandler) handleEvaluate(ctx context.Context, intent *Intent) error {
+	if h.evaluate == nil {
+		return fmt.Errorf("policy evaluator is not configured")
+	}
+	artifactID, err := uuid.Parse(fmt.Sprint(intent.Content["artifact_id"]))
+	if err != nil || artifactID == uuid.Nil {
+		return fmt.Errorf("artifact_id must be a non-nil UUID")
+	}
+	environmentID, err := uuid.Parse(fmt.Sprint(intent.Content["environment_id"]))
+	if err != nil || environmentID == uuid.Nil {
+		return fmt.Errorf("environment_id must be a non-nil UUID")
+	}
+	if intent.Coordinate != "evaluation:"+artifactID.String()+":"+environmentID.String() {
+		return fmt.Errorf("policy evaluation coordinate does not match artifact and environment")
+	}
+	evaluation, err := h.evaluate.Evaluate(ctx, artifactID, environmentID)
+	if err != nil {
+		return err
+	}
+	if evaluation == nil {
+		return fmt.Errorf("policy evaluator returned no decision")
+	}
+	intent.Evaluation = evaluation
+	return nil
 }
 
 // PermissionFor returns domain.PermWritePolicies for all policy ops.

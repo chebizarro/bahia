@@ -6,13 +6,14 @@ When the corresponding `intent_domains` entry is enabled, clients sign kind `309
 
 ## Artifact, policy, and approval publishers
 
-Artifact registration, policy create/update/delete/evaluate, and tool approval
-publishers emit signed ContextVM JSON-RPC kind `25910` envelopes through the shared
-command publisher, never retired request kinds `5985`–`5989` or `7977`. They retain
-idempotency/progress tokens, correlate receipts with the request event, and require
-relay acceptance. Methods are `artifact/register`, `policy/create`, `policy/update`,
-`policy/delete`, `policy/evaluate`, and `tool/approval-response`. LLM approval uses
-`approval/llm-approve` or `approval/llm-reject`, selected by the validated decision.
+Artifact registration and tool approval still publish signed ContextVM JSON-RPC
+kind `25910` requests. Legacy web callers also use `policy/create`,
+`policy/update`, `policy/delete`, and `policy/evaluate` while their migration is
+pending. MCP policy CRUD already dispatches kind-30900 intents; MCP evaluation
+now uses the `policy/evaluate` intent operation described below. No outbound
+`PolicyCommandPublisher` remains. Never publish retired numeric request kinds
+`5985`–`5989` or `7977`. LLM approval uses `approval/llm-approve` or
+`approval/llm-reject`, selected by the validated decision.
 
 Publisher support does not imply a registered server consumer. Discovery's
 `control_plane.methods` contains only registered methods; unsupported LLM,
@@ -874,3 +875,20 @@ channel (at most 50 attempts, 512 JSON bytes per payload, 256 error characters,
 60 KiB plaintext), never one addressable event per append-only log line.
 Mutation-bound repository decorators publish after successful persistence via
 `publishControlState`; the legacy mutation path is not duplicated.
+
+## Policy evaluation intent and build ownership (bahia-irsry.77)
+
+For MCP evaluation, use a client-signed `30900` `domain=policy`, `op=evaluate`
+intent with `d=evaluation:<artifact-uuid>:<environment-uuid>` and JSON content
+`{"artifact_id":"<uuid>","environment_id":"<uuid>"}`. The daemon evaluates
+its signature, SBOM, scan, and attestation repositories with the same
+`PolicyService.Evaluate` semantics as the legacy ContextVM method. It emits a
+requester-scoped, replaceable `30315` status at
+`d=intent-status:<requester-pubkey>:<evaluation-coordinate>`; an accepted
+status has `result=evaluated` and an `evaluation` object. The status payload
+is capped at 16 KiB. A rejected evaluation is not an allow decision.
+
+Build registration and status are daemon-authored from `build/request` and
+trusted Hive-CI `5401`/`5402` evidence. MCP manual build writes are removed;
+F1 removes the compatibility REST writes `POST /builds` and
+`PATCH /builds/{id}/status`.

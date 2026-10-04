@@ -10,6 +10,8 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
+const ContextVMMethodPolicyEvaluate = "policy/evaluate"
+
 func (r *Reactor) handlePolicyCreate(ctx context.Context, request ContextVMRequest) (any, error) {
 	var req struct {
 		// ID is the optional client-minted policy id (bahia-irsry.42): a

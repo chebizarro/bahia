@@ -321,3 +321,42 @@ under concurrent worktree load; the complete one-worker rerun passed with
 unchanged test and hook deadlines. The initial Go rerun caught a test-only
 use of an existing exported ML helper; the fixture was corrected without
 adding a baseline entry, and the final full Go gate passed.
+
+## Bahia issue bahia-irsry.77 — build authority and policy evaluation (2026-10-03)
+
+Observed build authority: `EncryptedBuildHandlers.RequestBuild` creates queued
+builds from accepted `build/request`; `pipeline.Bridge` creates or updates a
+build only after trusted Hive-CI run/result correlation. Web and CLI expose
+build request/read and verified artifact registration, not manual build-row
+registration. The MCP `bahia_register_build` and `bahia_update_build_status`
+tools were therefore removed rather than adding an operator-authored build
+intent. F1 owns deletion of the still-present compatibility REST writes
+`POST /builds` and `PATCH /builds/{id}/status`; this slice did not edit the
+router. Existing DB-less build-request, subscriber, and bridge tests remain
+the daemon path evidence, and MCP tests assert the manual tools are absent.
+
+Policy evaluation depends on daemon-private signature, SBOM, security-scan,
+and attestation repositories. MCP now dispatches `policy/evaluate` through the
+in-process intent processor, preserving `PolicyService.Evaluate` semantics.
+The accepted requester/coordinate-bounded kind-30315 status carries the
+actual `evaluation`, with a 16 KiB payload limit; failed publication leaves
+the intent retryable. The legacy ContextVM handler remains for existing web
+callers until their separate migration. `PublishPolicyEvaluateRequest` and its
+unused publisher were deleted; the `unwired_exports` baseline shrank by one
+obsolete policy-evaluate kind alias.
+
+DB-less tests: `TestPolicyEvaluateIntentMatchesContextVMDecision`,
+`TestPolicyEvaluateIntentRetriesWhenStatusPublishFails`,
+`TestPolicyEvaluateIntentRejectsInvalidCoordinate`,
+`TestCallTool_EvaluatePolicyUsesIntentAndPublishesDecision`,
+`TestIntentStatusPublisher_OutcomeSizeBound`, and
+`TestGetTools_ExcludesManualBuildWrites`. The earlier full Go gate passed,
+and the final gate after the last code/test edit passed:
+
+| Gate | Outcome |
+|---|---|
+| `CGO_ENABLED=0 go build ./...` | PASS |
+| `CGO_ENABLED=0 go vet ./...` | PASS |
+| `CGO_ENABLED=0 go test ./...` | PASS |
+| `CGO_ENABLED=0 go test ./internal/archtest -run TestNoNewTestOnlyExports -count=1` | PASS; baseline shrank by one |
+| `gofmt` / `git diff --check` | PASS |
