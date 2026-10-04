@@ -74,6 +74,11 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 	if reason != "" {
 		content["reason"] = reason
 	}
+	if status == "accepted" && len(intent.StatusData) != 0 {
+		content["data"] = intent.StatusData
+	} else if status == "accepted" && len(intent.Result) != 0 {
+		content["data"] = intent.Result
+	}
 	contentJSON, err := json.Marshal(content)
 	if err != nil {
 		p.logger.Warn("failed to marshal intent status content", zap.Error(err))

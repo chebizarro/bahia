@@ -67,6 +67,49 @@ func (h *DeploymentIntentHandler) handleDeployment(ctx context.Context, intent *
 	}
 	var method func(context.Context, ContextVMRequest) (any, error)
 	switch intent.Op {
+	case "preview", "route-attach":
+		serviceID, err := uuid.Parse(firstIntentString(content, "service_id"))
+		if err != nil || serviceID == uuid.Nil {
+			return fmt.Errorf("service_id must be a UUID")
+		}
+		environmentID, err := uuid.Parse(firstIntentString(content, "environment_id"))
+		if err != nil || environmentID == uuid.Nil {
+			return fmt.Errorf("environment_id must be a UUID")
+		}
+		prefix := "deployment-preview:"
+		if intent.Op == "route-attach" {
+			prefix = "deployment-route:"
+		}
+		if intent.Coordinate != prefix+serviceID.String()+":"+environmentID.String() {
+			return fmt.Errorf("deployment %s coordinate does not match content", intent.Op)
+		}
+		if intent.Op == "route-attach" {
+			if intent.ExpectedUpdatedAt != nil {
+				var unitID *uuid.UUID
+				if raw := firstIntentString(content, "deployment_unit_id"); raw != "" {
+					parsed, err := uuid.Parse(raw)
+					if err != nil || parsed == uuid.Nil {
+						return fmt.Errorf("deployment_unit_id must be a UUID")
+					}
+					unitID = &parsed
+				}
+				current, err := h.service.latestDeployedIntent(ctx, serviceID, environmentID, unitID)
+				if err != nil {
+					return err
+				}
+				if current == nil || !intent.RevisionMatches(current.UpdatedAt) {
+					return &revisionConflictError{entityID: serviceID, expected: *intent.ExpectedUpdatedAt}
+				}
+			}
+			method = h.service.routeAttachLegacy
+		} else {
+			if intent.ExpectedUpdatedAt != nil {
+				return fmt.Errorf("expected_updated_at is not supported for deployment preview")
+			}
+			method = h.service.previewDeployLegacy
+		}
+		delete(content, "intent_id")
+		delete(content, "expected_updated_at")
 	case "create":
 		delete(content, "intent_id")
 		delete(content, "expected_updated_at")
@@ -167,8 +210,65 @@ func (h *DeploymentIntentHandler) handleDeployment(ctx context.Context, intent *
 	}
 	req := ContextVMRequest{Event: event, RPC: ContextVMJSONRPCRequest{Params: params}, ProgressToken: intent.IntentID}
 	ctx = context.WithValue(ctx, authorizedDeploymentIntentOrgKey{}, intent.OrgID)
-	_, err = method(ctx, req)
+	result, err := method(ctx, req)
+	if err == nil && (intent.Op == "preview" || intent.Op == "route-attach") {
+		if data, ok := result.(map[string]any); ok {
+			intent.Result = data
+			if intent.Op == "preview" {
+				intent.StatusData = deploymentPreviewStatusData(data)
+			} else {
+				intent.StatusData = map[string]any{
+					"status": data["status"], "intent_id": data["intent_id"],
+					"service_id": data["service_id"], "environment_id": data["environment_id"],
+					"desired_state_hash": data["desired_state_hash"],
+				}
+			}
+		}
+	}
 	return err
+}
+
+// The preview response can include environment values and arbitrarily long
+// commands. The public 30315 status deliberately carries only fixed-size,
+// non-secret plan structure and the authoritative review hash.
+func deploymentPreviewStatusData(data map[string]any) map[string]any {
+	status := map[string]any{
+		"service_id": data["service_id"], "environment_id": data["environment_id"],
+		"artifact_id": data["artifact_id"], "desired_state_hash": data["desired_state_hash"],
+		"route_approval_required": data["route_approval_required"], "plan_truncated": true,
+	}
+	var summary *desiredStateSummary
+	if value, ok := data["desired_state_summary"].(*desiredStateSummary); ok {
+		summary = value
+	} else if desired, ok := data["desired_state"].(*domain.DesiredServiceSpec); ok {
+		summary = buildDesiredStateSummary(desired)
+	}
+	if summary != nil {
+		plan := map[string]any{
+			"image_ref":     boundedIntentStatusText(summary.ImageRef, 256),
+			"env_key_count": summary.EnvKeyCount, "labels_count": summary.LabelsCount,
+			"ports_count": len(summary.Ports), "volumes_count": len(summary.Volumes),
+			"command_count": len(summary.Command), "secret_ref_count": len(summary.SecretRefKeys),
+		}
+		if summary.PublicRoute != nil {
+			plan["public_route_hostname"] = boundedIntentStatusText(summary.PublicRoute.Hostname, 256)
+		}
+		status["desired_state_summary"] = plan
+	}
+	if policy, ok := data["policy"].(*domain.PolicyEvaluation); ok {
+		status["policy"] = map[string]any{
+			"allowed": policy.Allowed, "blockers": policy.Blockers, "warnings": policy.Warnings,
+			"requires_approval": policy.RequiresApproval,
+		}
+	}
+	return status
+}
+
+func boundedIntentStatusText(value string, limit int) string {
+	if len(value) > limit {
+		return value[:limit]
+	}
+	return value
 }
 
 func (h *DeploymentIntentHandler) handleRuntime(ctx context.Context, intent *Intent) error {

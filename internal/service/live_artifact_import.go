@@ -281,8 +281,10 @@ func (s *RegistryService) ImportObservedArtifact(ctx context.Context, in ImportO
 	if status == "imported" {
 		if build != nil {
 			s.publisher.Publish(ctx, events.Event{Type: events.EventBuildRegistered, EntityID: build.ID.String(), Data: build})
+			s.publishBuildCPState(ctx, build)
 		}
 		s.publisher.Publish(ctx, events.Event{Type: events.EventArtifactRegistered, EntityID: artifact.ID.String(), Data: artifact})
+		s.publishArtifactCPState(ctx, artifact)
 		s.logger.Info("imported observed runtime artifact",
 			zap.String("service_id", in.ServiceID.String()),
 			zap.String("environment_id", in.EnvironmentID.String()),

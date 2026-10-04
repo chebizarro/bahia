@@ -1273,14 +1273,26 @@ func New(cfg *config.Config) (*App, error) {
 		if relayFirstRegistry != nil {
 			serviceMutationBackend = relayFirstRegistry
 		}
-		intentProcessor.RegisterHandler("service", controlplane.NewServiceIntentHandler(
+		serviceIntentHandler := controlplane.NewServiceIntentHandler(
 			controlplane.ServiceIntentHandlerConfig{
 				Registry: serviceMutationBackend,
 				Reader:   serviceRepo,
 				Logger:   logger,
 			},
-		))
+		)
+		intentProcessor.RegisterHandler("service", serviceIntentHandler)
 	}
+
+	// --- D76 artifact intent registration (separate from D77 build handlers) ---
+	// RegistryService owns build/artifact cp-state publication. Do not pass its
+	// relay-first wrapper here: that would invoke the same publisher twice.
+	if enabledDomains["artifact"] {
+		intentProcessor.RegisterHandler("artifact", controlplane.NewArtifactIntentHandler(registry, serviceRepo))
+	}
+	if enabledDomains["adoption"] && adoptionSvc != nil {
+		intentProcessor.RegisterHandler("adoption", controlplane.NewAdoptionIntentHandler(adoptionSvc, cfg.Adoption.AllowedPubkeys))
+	}
+	// --- end D76 artifact intent registration ---
 
 	// Phase 3 S3: PolicyStatePublisher for canonical 30900 via PublishBeforeCommit.
 	// Created unconditionally so both the legacy (non-intent) ContextVM path and
