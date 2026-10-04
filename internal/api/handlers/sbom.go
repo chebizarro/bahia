@@ -28,90 +28,9 @@ type SBOMImportService interface {
 
 const maxSBOMIngestBytes = 10 * 1024 * 1024
 
-// NewSBOMReadHandler creates a read-only SBOM handler for REST compatibility reads.
-func NewSBOMReadHandler(sboms repository.SBOMRepository, artifacts repository.ArtifactRepository) *SBOMHandler {
-	return &SBOMHandler{sboms: sboms, artifacts: artifacts}
-}
-
 // NewSBOMHandler creates an SBOM handler with the required import service for REST compatibility writes.
 func NewSBOMHandler(sboms repository.SBOMRepository, artifacts repository.ArtifactRepository, importer SBOMImportService) *SBOMHandler {
 	return &SBOMHandler{sboms: sboms, artifacts: artifacts, importer: importer}
-}
-
-// GetSBOM returns the SBOM for an artifact.
-// GET /artifacts/{id}/sbom
-func (h *SBOMHandler) GetSBOM(w http.ResponseWriter, r *http.Request) {
-	if !requireMember(w, r) {
-		return
-	}
-	artifactID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid artifact ID")
-		return
-	}
-
-	s, err := h.sboms.GetSBOMByArtifact(r.Context(), artifactID)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			writeError(w, http.StatusNotFound, "SBOM not found for this artifact")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	writeData(w, http.StatusOK, s)
-}
-
-// GetSBOMPackages returns packages for an artifact's SBOM.
-// GET /artifacts/{id}/sbom/packages
-func (h *SBOMHandler) GetSBOMPackages(w http.ResponseWriter, r *http.Request) {
-	if !requireMember(w, r) {
-		return
-	}
-	artifactID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid artifact ID")
-		return
-	}
-
-	s, err := h.sboms.GetSBOMByArtifact(r.Context(), artifactID)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			writeError(w, http.StatusNotFound, "SBOM not found for this artifact")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	pkgs, err := h.sboms.ListPackagesBySBOM(r.Context(), s.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	writeData(w, http.StatusOK, pkgs)
-}
-
-// SearchPackages searches for packages across all SBOMs.
-// GET /sbom/search?package=log4j&limit=100
-func (h *SBOMHandler) SearchPackages(w http.ResponseWriter, r *http.Request) {
-	name := r.URL.Query().Get("package")
-	if name == "" {
-		writeError(w, http.StatusBadRequest, "package query parameter is required")
-		return
-	}
-
-	limit := queryInt(r, "limit", 100)
-
-	pkgs, err := h.sboms.SearchPackagesByName(r.Context(), name, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	writeData(w, http.StatusOK, pkgs)
 }
 
 // IngestSBOM accepts an SBOM document through the REST compatibility path.

@@ -3,7 +3,6 @@ package router
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"reflect"
 	"strings"
@@ -14,7 +13,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	runtimeadapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
-	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/api/dto"
 	"github.com/openagentsinc/bahia/internal/api/handlers"
@@ -38,16 +36,11 @@ type RouterDeps struct {
 	Virtualization            repository.VirtualizationRepository
 	Config                    *config.Config
 	AuthMiddleware            auth.MiddlewareConfig
-	Workers                   repository.WorkerRepository
 	Builds                    repository.BuildRepository
 	Runs                      repository.DeploymentRunRepository
 	Services                  repository.ServiceRepository
 	Environments              repository.EnvironmentRepository
-	DeploymentUnits           repository.DeploymentUnitRepository
 	EnvStates                 repository.EnvironmentServiceStateRepository
-	InstanceHealth            repository.ManagedInstanceHealthRepository
-	RouteCanaries             handlers.RouteCanaryReader
-	RouteHealth               handlers.RouteInstanceHealthReader
 	InstanceOperator          handlers.InstanceMaintenanceOperator
 	RuntimeResolver           runtimeadapter.RuntimeResolver
 	Payments                  *service.PaymentService
@@ -56,13 +49,9 @@ type RouterDeps struct {
 	Artifacts                 repository.ArtifactRepository
 	Signatures                repository.ArtifactSignatureRepository
 	SignVerifier              SignatureVerifier
-	Policies                  *service.PolicyService
 	Adoption                  *service.AdoptionService
 	RuntimeLifecycle          *service.RuntimeLifecycleService
-	AgentRuntimeReleases      handlers.AgentRuntimeReleaseReader
 	LegacyAgentReconciliation handlers.LegacyAgentReconciliationController
-	Secrets                   repository.SecretRepository
-	Encryptor                 *secrets.Encryptor
 	Notifications             repository.NotificationRepository
 	Dispatcher                *notifications.Dispatcher
 	ToolProvisioning          repository.ToolProvisioningRepository
@@ -70,9 +59,6 @@ type RouterDeps struct {
 	HiveCI                    repository.HiveCIRepository
 	Blossom                   *blossom.Client
 	OCI                       http.Handler
-	Orgs                      repository.OrganizationRepository
-	OrgMembers                repository.OrgMemberRepository
-	OrgInvites                repository.OrgInviteRepository
 	RBAC                      *auth.RBAC
 	LLMRegistry               *service.LLMRegistryService
 	MLCommands                handlers.MLCommandPublisher
@@ -165,27 +151,15 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	}
 
 	// Create handlers.
-	svcH := handlers.NewServiceHandler(registry)
-	envH := handlers.NewEnvironmentHandler(registry, deps.DeploymentUnits)
 	buildH := handlers.NewBuildHandler(registry)
-	artifactH := handlers.NewArtifactHandler(registry)
-	var agentRuntimeReleaseH *handlers.AgentRuntimeReleaseHandler
-	if deps.AgentRuntimeReleases != nil {
-		agentRuntimeReleaseH = handlers.NewAgentRuntimeReleaseHandler(deps.AgentRuntimeReleases)
-	}
 	var legacyReconciliationH *handlers.LegacyAgentReconciliationHandler
 	if deps.LegacyAgentReconciliation != nil {
 		legacyReconciliationH = handlers.NewLegacyAgentReconciliationHandler(deps.LegacyAgentReconciliation)
 	}
 	deployH := handlers.NewDeploymentHandler(registry)
-	stateH := handlers.NewStateHandler(registry, deps.Services, deps.Environments)
-	var routeCanaryH *handlers.RouteCanaryHandler
-	if deps.RouteCanaries != nil {
-		routeCanaryH = handlers.NewRouteCanaryHandler(deps.RouteCanaries, deps.RouteHealth)
-	}
 	var instanceHealthH *handlers.InstanceHealthHandler
-	if deps.InstanceHealth != nil && deps.Services != nil && deps.Environments != nil {
-		instanceHealthH = handlers.NewInstanceHealthHandler(deps.InstanceHealth, deps.Services, deps.Environments, deps.InstanceOperator)
+	if deps.InstanceOperator != nil && deps.Services != nil && deps.Environments != nil {
+		instanceHealthH = handlers.NewInstanceHealthHandler(deps.InstanceOperator)
 	}
 	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
 	var llmH *handlers.LLMHandler
@@ -203,15 +177,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			logService = runtimeadapter.NewLogService(deps.Blossom, nil, logger)
 		}
 		logsH = handlers.NewLogHandlerWithResolver(logService, deps.RuntimeResolver, deps.Runs, deps.Services, deps.Environments, deps.EnvStates, logger)
-	}
-
-	var tenantH *handlers.TenantHandler
-	if deps.Orgs != nil && deps.OrgMembers != nil && deps.OrgInvites != nil && deps.RBAC != nil {
-		var bootstrapOwnerPubkeys []string
-		if deps.Config != nil {
-			bootstrapOwnerPubkeys = deps.Config.Auth.BootstrapOwnerPubkeys
-		}
-		tenantH = handlers.NewTenantHandler(deps.Orgs, deps.OrgMembers, deps.OrgInvites, deps.RBAC, bootstrapOwnerPubkeys, logger)
 	}
 
 	if deps.OCI != nil {
@@ -241,44 +206,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			r.Use(middleware.RateLimit(readLimiter))
 			RegisterVirtualizationRoutes(r, deps, dbGate)
 
-			// Tenant orgs (read)
-			if tenantH != nil {
-				r.With(dbGate).Get("/orgs", tenantH.ListOrgs)
-				r.With(dbGate).Get("/orgs/{id}", tenantH.GetOrg)
-				r.With(dbGate).Get("/orgs/{id}/members", tenantH.ListMembers)
-				r.With(dbGate).Get("/orgs/{id}/invites", tenantH.ListInvites)
-				r.With(dbGate).Get("/me/invites", tenantH.MyInvites)
-			}
-
-			// Phase 5 D1: retained for --http-fallback until Wave 6 F-slices.
-			// Routes: GET /services, /services/{id}, /environments, /environments/{id},
-			// /builds/{id}, /services/{serviceId}/builds, /artifacts/{id},
-			// /services/{serviceId}/artifacts, /state, /state/drifted,
-			// /workers, /workers/{pubkey}, /policies, /policies/{id},
-			// /orgs, /orgs/{id}, /orgs/{id}/members, /services/{id}/secrets,
-			// /notifications/channels, /notifications/channels/{id}.
-			// Services (read)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/services", svcH.List)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}", svcH.Get)
-
-			// Environments (read)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/environments", envH.List)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, environmentOrgResolver(deps.Environments, "id"), true)).Get("/environments/{id}", envH.Get)
-
-			// Builds (read)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true)).Get("/builds/{id}", buildH.Get)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/builds", buildH.ListByService)
-
-			// Artifacts (read)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)).Get("/artifacts/{id}", artifactH.Get)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/artifacts", artifactH.ListByService)
-
-			// Shared agent runtime releases (read-only; mutations remain signer-first).
-			if agentRuntimeReleaseH != nil {
-				r.With(dbGate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/runtime-releases", agentRuntimeReleaseH.ListServiceReleases)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "serviceId"), true)).Get("/services/{serviceId}/runtime-releases/rollback", agentRuntimeReleaseH.GetRollbackRelease)
-			}
-
 			// Deployment run logs remain HTTP-native.
 			if logsH != nil && deps.Blossom != nil {
 				r.With(dbGate, coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true)).Get("/deployments/runs/{id}/logs", logsH.GetRunLogs)
@@ -289,36 +216,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(dbGate, coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "id", "envId"), true)).Get("/services/{id}/environments/{envId}/logs", logsH.StreamLiveLogs)
 			}
 
-			// State (CLI HTTP fallback)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/state", stateH.ListAll)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/state/drifted", stateH.ListDrifted)
-
-			// Managed instance health (read)
-			if instanceHealthH != nil {
-				instanceRBAC := coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true, domain.PermWriteDeployments)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/instance-health", instanceHealthH.List)
-				r.With(dbGate, instanceRBAC).Get("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health", instanceHealthH.Get)
-				r.With(dbGate, instanceRBAC).Get("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health/events", instanceHealthH.ListEvents)
-				r.With(dbGate, instanceRBAC).Get("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/health/recovery-attempts", instanceHealthH.ListRecoveryAttempts)
-			}
-
-			// Managed route canaries (read)
-			if routeCanaryH != nil {
-				routeRBAC := coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/route-canaries", routeCanaryH.List)
-				r.With(dbGate, routeRBAC).Get("/services/{serviceId}/environments/{envId}/routes/{hostname}/canary", routeCanaryH.Get)
-				r.With(dbGate, routeRBAC).Get("/services/{serviceId}/environments/{envId}/routes/{hostname}/canary/events", routeCanaryH.ListEvents)
-			}
-
 			// Repository CI lookup (read)
 			r.With(dbGate, platformAdminGate).Post("/repositories/ci/lookup", repoCIHandler.Lookup)
-
-			// Workers (CLI HTTP fallback)
-			if deps.Workers != nil {
-				workerH := handlers.NewWorkerHandler(deps.Workers)
-				r.With(dbGate).Get("/workers", workerH.List)
-				r.With(dbGate).Get("/workers/{pubkey}", workerH.Get)
-			}
 
 			// Payment records are retained for non-event MCP reads.
 			if deps.Payments != nil {
@@ -333,69 +232,9 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(dbGate, platformAdminGate).Get("/config-fabric/drift", configFabricH.ListDrift)
 			}
 
-			// Policies (read)
-			if deps.Policies != nil {
-				polH := handlers.NewPolicyHandler(deps.Policies)
-				r.With(dbGate, platformAdminGate).Get("/policies", polH.List)
-				r.With(dbGate, platformAdminGate).Get("/policies/{id}", polH.Get)
-			}
-
-			// SBOM (read)
-			if deps.SBOMs != nil && deps.Artifacts != nil {
-				sbomH := handlers.NewSBOMReadHandler(deps.SBOMs, deps.Artifacts)
-				artifactRBAC := coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)
-				r.With(dbGate, artifactRBAC).Get("/artifacts/{id}/sbom", sbomH.GetSBOM)
-				r.With(dbGate, artifactRBAC).Get("/artifacts/{id}/sbom/packages", sbomH.GetSBOMPackages)
-				r.With(dbGate, platformAdminGate).Get("/sbom/search", sbomH.SearchPackages)
-			}
-
-			// Signatures (read)
-			if deps.Signatures != nil && deps.Artifacts != nil && deps.SignVerifier != nil {
-				sigH := handlers.NewSignatureHandler(deps.Signatures, deps.Artifacts, deps.SignVerifier)
-				artifactRBAC := coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true)
-				r.With(dbGate, artifactRBAC).Get("/artifacts/{id}/signatures", sigH.List)
-				r.With(dbGate, artifactRBAC).Get("/artifacts/{id}/signatures/verified", sigH.ListVerified)
-				r.With(dbGate, artifactRBAC).Get("/artifacts/{id}/signatures/check", sigH.HasVerified)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, signatureOrgResolver(deps.Signatures, deps.Artifacts, deps.Services, "id"), true)).Get("/signatures/{id}", sigH.Get)
-			}
-
-			// Secrets (read)
-			if deps.Secrets != nil && deps.Encryptor != nil {
-				secretH := handlers.NewSecretHandler(deps.Secrets, deps.Encryptor)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true, domain.PermReadSecrets)).Get("/services/{id}/secrets", secretH.List)
-			}
-
-			// Notifications (read)
-			if deps.Notifications != nil && deps.Dispatcher != nil {
-				notifH := handlers.NewNotificationHandler(deps.Notifications, deps.Dispatcher)
-				notificationRBAC := coreRBAC(deps, authMiddleware, notificationChannelOrgResolver(deps.Notifications, "id"), true)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/notifications/channels", notifH.ListChannels)
-				r.With(dbGate, notificationRBAC).Get("/notifications/channels/{id}", notifH.GetChannel)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/notifications/log", notifH.ListLogs)
-			}
-
-			// Tool provisioning (read)
-			if deps.ToolProvisioning != nil {
-				toolH := handlers.NewToolHandler(deps.ToolProvisioning)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/tools/pending", toolH.ListPending)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, toolIntentOrgResolver(deps.ToolProvisioning, deps.Services, "id"), true)).Get("/tools/{id}", toolH.GetIntent)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true)).Get("/tools/denylist", toolH.ListDenylist)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, serviceOrgResolver(deps.Services, "id"), true)).Get("/services/{id}/tools", toolH.GetProfile)
-			}
-
-			// SoulFactory agent runtime policy (read, non-secret)
-			if deps.Config != nil && deps.Config.SoulFactory.Enabled {
-				sfH := handlers.NewSoulFactoryHandler(deps.Config)
-				r.With(dbGate, platformAdminGate).Get("/soulfactory/runtimes", sfH.GetRuntimes)
-			}
-
-			// Blossom (read)
+			// Blossom blob fetch stays HTTP-native for browser content-addressed downloads.
 			if deps.Blossom != nil {
 				blossomH := handlers.NewBlossomHandler(deps.Blossom)
-				r.With(dbGate, platformAdminGate).Post("/blossom/list", blossomH.ListBlobs)
-				r.With(dbGate, platformAdminGate).Get("/blossom/servers", blossomH.GetServers)
-				r.With(dbGate, platformAdminGate).Get("/blossom/health", blossomH.HealthCheck)
-				r.With(dbGate, platformAdminGate).Get("/blossom/stats", blossomH.GetStats)
 				// Blob download is unauthenticated: content-addressable blobs are
 				// publicly verifiable by SHA-256 hash and the Blossom server itself
 				// may be HTTP-only, requiring this HTTPS proxy to avoid mixed-content.
@@ -410,7 +249,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Tenant orgs (write) — Phase 3 O1 (B-26): REST mutation routes
 			// deleted. Org/member/invite mutations now go through the
 			// encrypted ContextVM path (dual dispatch to intent processor).
-			// Read routes needed by the explicit CLI HTTP fallback remain above.
+			// Signer-first intent consumers no longer require those REST reads.
 
 			// Managed instance maintenance (write)
 			if instanceHealthH != nil {
@@ -656,9 +495,6 @@ func isUnaffiliatedOnboardingRoute(r *http.Request) bool {
 	if r == nil {
 		return false
 	}
-	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/me/invites" {
-		return true
-	}
 	if r.Method != http.MethodPost {
 		return false
 	}
@@ -852,51 +688,6 @@ func runOrgResolver(registry *service.RegistryService, services repository.Servi
 		}
 		req := requestWithRouteParam(r, "intentId", run.DeploymentIntentID.String())
 		return intentOrgResolver(registry, services, "intentId")(req)
-	}
-}
-
-func toolIntentOrgResolver(tools repository.ToolProvisioningRepository, services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {
-	return func(r *http.Request) (uuid.UUID, error) {
-		id, err := parseRouteUUID(r, param)
-		if err != nil {
-			return uuid.Nil, err
-		}
-		intent, err := tools.GetIntent(r.Context(), id)
-		if err != nil {
-			return uuid.Nil, err
-		}
-		if intent == nil {
-			return uuid.Nil, middleware.ErrOrgContextNotFound
-		}
-		svc, err := services.GetByID(r.Context(), intent.ServiceID)
-		if err != nil {
-			return uuid.Nil, err
-		}
-		if svc == nil || svc.OrgID == uuid.Nil {
-			return uuid.Nil, middleware.ErrOrgContextNotFound
-		}
-		return svc.OrgID, nil
-	}
-}
-
-func signatureOrgResolver(signatures repository.ArtifactSignatureRepository, artifacts repository.ArtifactRepository, services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {
-	return func(r *http.Request) (uuid.UUID, error) {
-		id, err := parseRouteUUID(r, param)
-		if err != nil {
-			return uuid.Nil, err
-		}
-		sig, err := signatures.GetByID(r.Context(), id)
-		if err != nil {
-			if errors.Is(err, repository.ErrNotFound) {
-				return uuid.Nil, middleware.ErrOrgContextNotFound
-			}
-			return uuid.Nil, err
-		}
-		if sig == nil {
-			return uuid.Nil, middleware.ErrOrgContextNotFound
-		}
-		req := requestWithRouteParam(r, "artifactId", sig.ArtifactID.String())
-		return artifactOrgResolver(artifacts, services, "artifactId")(req)
 	}
 }
 
