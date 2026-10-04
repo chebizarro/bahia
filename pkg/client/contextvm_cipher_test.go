@@ -45,18 +45,12 @@ func TestRemoteSignerWithoutNIP04SatisfiesEncryptedContextVMPath(t *testing.T) {
 		t.Fatal("a signer with NIP-44 encrypt/decrypt must satisfy contextVMCipherSigner")
 	}
 
-	// Both encrypted clients must now construct without a raw private key.
+	// The generic encrypted client constructs without a raw private key.
 	if _, err := NewContextVMRequestClient(ContextVMRequestConfig{
 		Relays: []string{"wss://relay.example"}, Signer: signer, SenderPubkey: pubkey,
 		RecipientPubkey: strings.Repeat("a", 64), Encrypted: true,
 	}); err != nil {
 		t.Fatalf("generic encrypted client rejected a NIP-46-shaped signer: %v", err)
-	}
-	if _, err := NewOperatorControlPlaneClient(OperatorControlPlaneConfig{
-		Relays: []string{"wss://relay.example"}, Signer: signer, Pubkey: pubkey,
-		ServicePubkey: strings.Repeat("a", 64), Encrypted: true,
-	}); err != nil {
-		t.Fatalf("operator encrypted client rejected a NIP-46-shaped signer: %v", err)
 	}
 }
 

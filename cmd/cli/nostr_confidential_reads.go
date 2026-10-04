@@ -405,12 +405,13 @@ func getCLINotificationChannel(cmd *cobra.Command, id string) error {
 }
 
 func notificationCommands() *cobra.Command {
-	cmd := &cobra.Command{Use: "notifications", Short: "Read notification channels"}
+	cmd := &cobra.Command{Use: "notifications", Short: "Manage notification channels"}
 	channels := &cobra.Command{Use: "channels", Short: "Notification channels"}
 	channels.AddCommand(
 		&cobra.Command{Use: "list", Short: "List notification channel metadata", RunE: func(cmd *cobra.Command, _ []string) error { return listCLINotificationChannels(cmd) }},
 		&cobra.Command{Use: "get [id]", Short: "Get notification channel metadata", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error { return getCLINotificationChannel(cmd, args[0]) }},
 	)
+	channels.AddCommand(notificationMutationCommands()...)
 	cmd.AddCommand(channels)
 	return cmd
 }

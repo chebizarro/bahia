@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
@@ -13,6 +14,7 @@ import (
 func dnsCommands() *cobra.Command {
 	cmd := &cobra.Command{Use: "dns", Short: "Manage DNS through the signer-first Nostr control plane"}
 	cmd.AddCommand(dnsZoneCreateCommand(), dnsPolicyApplyCommand(), dnsRecordSetCommand(), dnsDriftRemediateCommand(), dnsOverrideRetireCommand())
+	cmd.AddCommand(dnsD72Commands()...)
 	return cmd
 }
 
@@ -27,13 +29,16 @@ func dnsZoneCreateCommand() *cobra.Command {
 			backendRef, _ := cmd.Flags().GetString("backend-ref")
 			ttl, _ := cmd.Flags().GetInt("ttl")
 			authoritative, _ := cmd.Flags().GetBool("authoritative")
-			result, err := runDNSZoneCreate(cmd, client.DNSZoneCreateRequest{
-				Name: name, Visibility: domain.ZoneVisibility(visibility), BackendRef: backendRef, TTL: ttl, Authoritative: authoritative,
-			})
+			zone := domain.DNSZone{Name: name, Visibility: domain.ZoneVisibility(visibility), BackendRef: backendRef, TTL: ttl, Authoritative: authoritative}
+			if err := domain.ValidateDNSZone(&zone); err != nil {
+				return err
+			}
+			content := map[string]interface{}{"name": zone.Name, "visibility": string(zone.Visibility), "backend_ref": zone.BackendRef, "ttl": zone.TTL, "authoritative": zone.Authoritative}
+			id, err := publishMutationIntent(cmd, "dns", "zone-create", "zone:"+zone.Name, "", "", content)
 			if err != nil {
 				return err
 			}
-			return outputSingle(result)
+			return outputSingle(map[string]string{"intent_id": id, "zone": zone.Name})
 		},
 	}
 	cmd.Flags().String("name", "", "DNS zone name")
@@ -59,11 +64,22 @@ func dnsPolicyApplyCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := runDNSPolicyApply(cmd, policy)
+			if policy.ID == uuid.Nil {
+				policy.ID, err = uuid.NewV7()
+				if err != nil {
+					return err
+				}
+			}
+			content := map[string]interface{}{}
+			if err := decodeJSONFile(path, &content, true); err != nil {
+				return err
+			}
+			content["id"] = policy.ID.String()
+			id, err := publishMutationIntent(cmd, "dns", "policy-apply", "dnspolicy:"+policy.ID.String(), "", "", content)
 			if err != nil {
 				return err
 			}
-			return outputSingle(result)
+			return outputSingle(map[string]string{"intent_id": id, "policy_id": policy.ID.String()})
 		},
 	}
 	cmd.Flags().String("file", "", "Read the DNS policy JSON document from this file")
@@ -92,14 +108,20 @@ func dnsRecordSetCommand() *cobra.Command {
 				}
 				expiresAt = &parsed
 			}
-			result, err := runDNSRecordSet(cmd, client.DNSRecordSetRequest{
-				ZoneName: zone, RecordName: name, RecordType: domain.DNSRecordType(recordType),
-				Value: value, TTL: ttl, Reason: reason, ExpiresAt: expiresAt,
-			})
+			overrideID, err := uuid.NewV7()
 			if err != nil {
 				return err
 			}
-			return outputSingle(result)
+			override := domain.DNSRecordOverride{ID: overrideID, ZoneName: zone, RecordName: name, RecordType: domain.DNSRecordType(recordType), Value: value, TTL: ttl, Reason: reason, ExpiresAt: expiresAt}
+			content := map[string]interface{}{"id": overrideID.String(), "zone_name": override.ZoneName, "record_name": override.RecordName, "record_type": string(override.RecordType), "value": override.Value, "ttl": override.TTL, "reason": override.Reason}
+			if expiresAt != nil {
+				content["expires_at"] = expiresAt.UTC().Format(time.RFC3339Nano)
+			}
+			id, err := publishMutationIntent(cmd, "dns", "record-set", "dns-override:"+overrideID.String(), "", "", content)
+			if err != nil {
+				return err
+			}
+			return outputSingle(map[string]string{"intent_id": id, "override_id": overrideID.String()})
 		},
 	}
 	cmd.Flags().String("zone", "", "Managed DNS zone name")
@@ -123,13 +145,14 @@ func dnsOverrideRetireCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			overrideID, _ := cmd.Flags().GetString("override-id")
 			reason, _ := cmd.Flags().GetString("reason")
-			result, err := runDNSOverrideRetire(cmd, client.DNSOverrideRetireRequest{
-				OverrideID: overrideID, Reason: reason,
-			})
+			if _, err := uuid.Parse(overrideID); err != nil {
+				return fmt.Errorf("invalid override ID: %w", err)
+			}
+			id, err := publishMutationIntent(cmd, "dns", "override-retire", "dns-override:"+overrideID, "", "", map[string]interface{}{"override_id": overrideID, "reason": reason})
 			if err != nil {
 				return err
 			}
-			return outputSingle(result)
+			return outputSingle(map[string]string{"intent_id": id, "override_id": overrideID})
 		},
 	}
 	cmd.Flags().String("override-id", "", "UUID of the DNS record override to retire")
@@ -147,7 +170,7 @@ func dnsDriftRemediateCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			zone, _ := cmd.Flags().GetString("zone")
-			result, err := runDNSDriftRemediate(cmd, client.DNSDriftRemediateRequest{Zone: zone})
+			result, err := runDNSDriftRemediateContextVM(cmd, client.DNSDriftRemediateRequest{Zone: zone})
 			if err != nil {
 				return err
 			}

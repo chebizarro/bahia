@@ -30,14 +30,8 @@ func TestContextVMResultDeliveryE2ERetryReplaysCachedDesiredStateHash(t *testing
 		}, nil
 	})
 
-	result, err := client.publishAndAwait(context.Background(), operatorRequest{
-		Method: controlplane.ContextVMMethodServiceDeployPreview,
-		Tags:   nostr.Tags{{"d", "preview-hash-replay-1"}},
-		Payload: map[string]any{
-			"service_id":     "service-1",
-			"environment_id": "environment-1",
-		},
-	}, nil)
+	result, err := client.Request(context.Background(),
+		controlplane.ContextVMMethodServiceDeployPreview, map[string]any{"service_id": "service-1", "environment_id": "environment-1"}, nostr.Tags{{"d", "preview-hash-replay-1"}}, nil)
 	if err != nil {
 		t.Fatalf("publishAndAwait() error = %v", err)
 	}
@@ -58,11 +52,8 @@ func TestContextVMResultDeliveryE2EEncryptedRoundTrip(t *testing.T) {
 		return map[string]any{"status": "success", "payload": map[string]any{"delivered": "encrypted"}}, nil
 	})
 
-	result, err := client.publishAndAwait(context.Background(), operatorRequest{
-		Method:  "test/encrypted-round-trip",
-		Tags:    nostr.Tags{{"d", "encrypted-round-trip-1"}},
-		Payload: map[string]any{"service_id": "service-1"},
-	}, nil)
+	result, err := client.Request(context.Background(),
+		"test/encrypted-round-trip", map[string]any{"service_id": "service-1"}, nostr.Tags{{"d", "encrypted-round-trip-1"}}, nil)
 	if err != nil {
 		t.Fatalf("publishAndAwait() error = %v", err)
 	}
@@ -78,11 +69,8 @@ func TestContextVMResultDeliveryE2EDualRelaySubscriptionPartialFailure(t *testin
 		return map[string]any{"status": "success", "payload": map[string]any{"relay": "b"}}, nil
 	})
 
-	result, err := client.publishAndAwait(context.Background(), operatorRequest{
-		Method:  "test/dual-relay",
-		Tags:    nostr.Tags{{"d", "dual-relay-1"}},
-		Payload: map[string]any{"service_id": "service-1"},
-	}, nil)
+	result, err := client.Request(context.Background(),
+		"test/dual-relay", map[string]any{"service_id": "service-1"}, nostr.Tags{{"d", "dual-relay-1"}}, nil)
 	if err != nil {
 		t.Fatalf("publishAndAwait() error = %v", err)
 	}
@@ -133,7 +121,7 @@ type contextVME2ERelayTransport struct {
 	requestPublishes  int
 }
 
-func newContextVMResultDeliveryHarness(t *testing.T, encrypted, dropFirstTerminal bool, relays []contextVME2ERelay) (*OperatorControlPlaneClient, *controlplane.EncryptedRequestTransport, *contextVME2ERelayTransport) {
+func newContextVMResultDeliveryHarness(t *testing.T, encrypted, dropFirstTerminal bool, relays []contextVME2ERelay) (*ContextVMRequestClient, *controlplane.EncryptedRequestTransport, *contextVME2ERelayTransport) {
 	t.Helper()
 	operatorPrivateKey := nostr.Generate().Hex()
 	serviceSecret := nostr.Generate()
