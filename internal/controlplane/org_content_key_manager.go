@@ -143,6 +143,11 @@ func (m *OCKManager) EnsureKey(ctx context.Context, orgID string) (OrgContentKey
 // member set (excluding removed members), and activates it. Old versions
 // remain available for historical reads.
 func (m *OCKManager) RotateKey(ctx context.Context, orgID string) (OrgContentKey, error) {
+	// Recover the current version before choosing the successor. A fresh daemon
+	// must not reuse v1 when only the service envelope is in history.
+	if _, err := m.GetKey(ctx, orgID); err != nil {
+		return OrgContentKey{}, err
+	}
 	m.mu.RLock()
 	nextVersion := 1
 	if state, ok := m.cache[orgID]; ok {

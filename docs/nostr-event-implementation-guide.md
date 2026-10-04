@@ -1,5 +1,11 @@
 # Bahia Nostr Event Implementation Guide
 
+## Organization refounding
+
+The daemon accepts `domain=org`, `op=rekey`, `schema=bahia.intent.org.v1` as a client-signed kind-30900 intent. JSON content is `{"org_id":"<org UUID>","reason":"<optional string>"}`; the `org` tag must match `org_id`. The intent's `d` coordinate can be the org UUID. An owner or admin may request it. For fleet-scoped state, use `org_id="fleet"`, no `org` tag, and a fleet-operator signer. The intent must be gift-wrapped like other sensitive org intents.
+
+On success the requester-scoped kind-30315 status has `status=accepted` and `data={"key_version":"v<n>","records_republished":<integer>}`. Authorization or mid-batch errors produce `status=rejected` with a reason. The daemon first distributes the new org content key, then replaces each confidential current cp-state coordinate on the same kind-30900 `d` address. Records not yet replaced remain readable under their old key versions. Organization cp-state JSON also carries `strict_revocation` (boolean, default `false`); when true, member removal and role downgrade trigger this same refounding after rotation.
+
 D80 request/desired-state operations use the established `30900` intent envelope and bounded `30315` status; the [Go-generated fixture](../web/tests/fixtures/d80-intent-content.json) defines domain/op/coordinate/content. Their canonical outcomes remain security status/findings, SBOM `30078`/`30004` plus `32017`/`32018`, artifact-signature `32016`, build/artifact cp-state, relay-settings protected cp-state, environment cp-state, and ML endpoint cp-state. Notification channel test has only bounded `30315` delivery data. The [command guide](nostr-commands.md#d80-request-operations-and-desired-state) records permissions and read subscription guidance.
 
 ## Deployment, runtime, LLM, and backup intents

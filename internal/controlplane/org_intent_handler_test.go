@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"sync"
 	"testing"
@@ -256,6 +257,74 @@ type stubOrgPublisher struct {
 	publishedOrgs    []orgPublishRecord
 	publishedMembers []memberPublishRecord
 	publishedInvites []invitePublishRecord
+	rekeyScopes      []string
+	rekeyErr         error
+	memberErr        error
+}
+
+func (p *stubOrgPublisher) Rekey(_ context.Context, scope string) (string, int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rekeyScopes = append(p.rekeyScopes, scope)
+	return "v3", 4, p.rekeyErr
+}
+
+func TestOrgIntentHandler_RekeyAuthorizationAndStatusData(t *testing.T) {
+	ctx := context.Background()
+	handler, orgs, _, _, publisher, _ := newTestOrgHandler(t)
+	id := uuid.New()
+	if err := orgs.Create(ctx, &domain.Organization{ID: id, Name: "rekey-test"}); err != nil {
+		t.Fatal(err)
+	}
+	trust := NewTrustSet([]string{"fleet-operator"}, zap.NewNop())
+	trust.SetRelayMembers(id.String(), map[string]domain.Role{
+		"owner": domain.RoleOwner, "admin": domain.RoleAdmin, "viewer": domain.RoleViewer,
+	})
+	for _, actor := range []string{"owner", "admin"} {
+		intent := &Intent{Domain: "org", Op: "rekey", Schema: "bahia.intent.org.v1", OrgID: id,
+			Coordinate: id.String(), Actor: actor, Content: map[string]any{"org_id": id.String(), "reason": "member departure"}}
+		if err := handler.AuthorizeIntent(ctx, trust, intent); err != nil {
+			t.Fatalf("%s rejected: %v", actor, err)
+		}
+		if err := handler.HandleIntent(ctx, intent); err != nil {
+			t.Fatalf("%s rekey: %v", actor, err)
+		}
+		if intent.StatusData["key_version"] != "v3" || intent.StatusData["records_republished"] != 4 {
+			t.Fatalf("status data = %#v", intent.StatusData)
+		}
+	}
+	if err := handler.AuthorizeIntent(ctx, trust, &Intent{Domain: "org", Op: "rekey", OrgID: id,
+		Actor: "viewer", Content: map[string]any{"org_id": id.String()}}); err == nil {
+		t.Fatal("viewer was authorized to rekey")
+	}
+	if len(publisher.rekeyScopes) != 2 {
+		t.Fatalf("rekey calls = %v", publisher.rekeyScopes)
+	}
+	publisher.rekeyErr = errors.New("publish failed")
+	failed := &Intent{Domain: "org", Op: "rekey", Schema: "bahia.intent.org.v1", OrgID: id,
+		Coordinate: id.String(), Content: map[string]any{"org_id": id.String()}}
+	if err := handler.HandleIntent(ctx, failed); err == nil || failed.StatusData != nil {
+		t.Fatalf("partial failure must reject without accepted status: %v %#v", err, failed.StatusData)
+	}
+	fleet := &Intent{Domain: "org", Op: "rekey", Schema: "bahia.intent.org.v1",
+		Coordinate: "fleet", Actor: "fleet-operator", Content: map[string]any{"org_id": "fleet"}}
+	if err := handler.AuthorizeIntent(ctx, trust, fleet); err != nil {
+		t.Fatalf("fleet operator rejected: %v", err)
+	}
+}
+
+func TestParseIntent_FleetOrgRekey(t *testing.T) {
+	event := &nostr.Event{Kind: 30900, Tags: nostr.Tags{
+		{"d", "fleet"}, {"domain", "org"}, {"op", "rekey"},
+		{"schema", "bahia.intent.org.v1"}, {"intent_id", uuid.New().String()}, {"t", "bahia-intent"},
+	}, Content: `{"org_id":"fleet","reason":"operator rotation"}`}
+	intent, err := ParseIntent(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intent.OrgID != uuid.Nil || intent.Op != "rekey" || intent.Schema != "bahia.intent.org.v1" || stringField(intent.Content, "org_id") != "fleet" {
+		t.Fatalf("parsed fleet intent = %#v", intent)
+	}
 }
 
 type orgPublishRecord struct {
@@ -284,7 +353,48 @@ func (p *stubOrgPublisher) PublishMember(_ context.Context, member *domain.OrgMe
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.publishedMembers = append(p.publishedMembers, memberPublishRecord{Member: member, Deleted: deleted})
-	return nil
+	return p.memberErr
+}
+
+func TestOrgIntentHandler_StrictMemberFailureRejectsAndRetries(t *testing.T) {
+	ctx := context.Background()
+	handler, orgs, members, _, publisher, _ := newTestOrgHandler(t)
+	id := uuid.New()
+	if err := orgs.Create(ctx, &domain.Organization{ID: id, Name: "strict-org", StrictRevocation: true}); err != nil {
+		t.Fatal(err)
+	}
+	viewer := &domain.OrgMember{OrgID: id, Pubkey: "viewer", Role: domain.RoleViewer}
+	if err := members.Add(ctx, viewer); err != nil {
+		t.Fatal(err)
+	}
+	remove := memberRemoveIntent(id, viewer.Pubkey, "owner")
+	publisher.memberErr = errors.New("refounding interrupted")
+	if err := handler.HandleIntent(ctx, remove); err == nil {
+		t.Fatal("strict member removal failure was accepted")
+	}
+	publisher.memberErr = nil
+	if err := handler.HandleIntent(ctx, remove); err != nil {
+		t.Fatalf("strict removal retry: %v", err)
+	}
+	if len(publisher.publishedMembers) != 2 {
+		t.Fatalf("removal publishes = %d", len(publisher.publishedMembers))
+	}
+	admin := &domain.OrgMember{OrgID: id, Pubkey: "admin", Role: domain.RoleAdmin}
+	if err := members.Add(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
+	downgrade := memberRoleChangeIntent(id, admin.Pubkey, domain.RoleViewer, "owner")
+	publisher.memberErr = errors.New("refounding interrupted")
+	if err := handler.HandleIntent(ctx, downgrade); err == nil {
+		t.Fatal("strict role downgrade failure was accepted")
+	}
+	publisher.memberErr = nil
+	if err := handler.HandleIntent(ctx, downgrade); err != nil {
+		t.Fatalf("strict downgrade retry: %v", err)
+	}
+	if len(publisher.publishedMembers) != 4 {
+		t.Fatalf("total member publishes = %d", len(publisher.publishedMembers))
+	}
 }
 
 func (p *stubOrgPublisher) PublishInvite(_ context.Context, invite *domain.OrgInvite, deleted bool) error {

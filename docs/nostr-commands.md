@@ -1,5 +1,9 @@
 # Bahia Nostr Control-Plane Events
 
+## Org rekey
+
+Use a signed, gift-wrapped kind-30900 intent with `domain=org`, `op=rekey`, `schema=bahia.intent.org.v1`, `d=<org UUID>`, `org=<org UUID>`, and content `{"org_id":"<org UUID>","reason":"<optional string>"}`. Owner and admin roles are admitted. For fleet operators, use `d=fleet`, omit the `org` tag, and send `{"org_id":"fleet"}`. Watch requester-scoped kind-30315 status: success contains `data={"key_version":"v<n>","records_republished":<integer>}`; failures carry a rejection reason.
+
 Phase 3 R1: operator mutations are client-signed kind `30900` intents. The operator-facing ContextVM allowlist is assistant prompt/approval/cancel/reconcile, `services/secrets-reveal`, and `deployments/run-logs-get` only. Older ContextVM mutation examples below describe the retired migration path; do not use them for new requests.
 
 ## D80 request operations and desired state

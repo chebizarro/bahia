@@ -26,12 +26,31 @@ func TestPgOrganizationRepository_CreateNormalizesOwnerPubkey(t *testing.T) {
 	}
 
 	mock.ExpectExec("INSERT INTO organizations").
-		WithArgs(org.ID, org.Name, org.DisplayName, "abcdef1234", pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(org.ID, org.Name, org.DisplayName, "abcdef1234", false, pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	err = repo.Create(ctx, org)
 	require.NoError(t, err)
 	require.Equal(t, "abcdef1234", org.OwnerPubkey)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPgOrganizationRepository_PersistsStrictRevocation(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	repo := newPgOrganizationRepositoryWithDB(mock)
+	org := &domain.Organization{ID: uuid.New(), Name: "strict-org", DisplayName: "Strict Org", OwnerPubkey: "owner", StrictRevocation: true}
+	mock.ExpectExec("INSERT INTO organizations").WithArgs(org.ID, org.Name, org.DisplayName, org.OwnerPubkey, true, pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	require.NoError(t, repo.Create(ctx, org))
+	mock.ExpectQuery("FROM organizations WHERE id = \\$1").WithArgs(org.ID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "display_name", "owner_pubkey", "strict_revocation", "created_at", "updated_at"}).
+			AddRow(org.ID, org.Name, org.DisplayName, org.OwnerPubkey, true, org.CreatedAt, org.UpdatedAt))
+	loaded, err := repo.GetByID(ctx, org.ID)
+	require.NoError(t, err)
+	require.True(t, loaded.StrictRevocation)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -133,9 +152,9 @@ func TestTenantRepositoriesSharedScannersServeGetAndList(t *testing.T) {
 		require.NoError(t, err)
 		defer mock.Close()
 		id := uuid.New()
-		columns := []string{"id", "name", "display_name", "owner_pubkey", "created_at", "updated_at"}
+		columns := []string{"id", "name", "display_name", "owner_pubkey", "strict_revocation", "created_at", "updated_at"}
 		row := func() *pgxmock.Rows {
-			return pgxmock.NewRows(columns).AddRow(id, "acme", "ACME", "owner", now, now)
+			return pgxmock.NewRows(columns).AddRow(id, "acme", "ACME", "owner", false, now, now)
 		}
 		mock.ExpectQuery("FROM organizations WHERE id = \\$1").WithArgs(id).WillReturnRows(row())
 		mock.ExpectQuery("FROM organizations ORDER BY name").WillReturnRows(row())

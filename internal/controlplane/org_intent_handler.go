@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -196,6 +197,28 @@ func (h *OrgIntentHandler) AuthorizeIntent(ctx context.Context, trustSet *TrustS
 	sub := classifyOrgIntent(intent)
 	switch sub {
 	case orgSubOrg:
+		if intent.Op == "rekey" {
+			orgID := stringField(intent.Content, "org_id")
+			if orgID == kinds.FleetOCKScope {
+				if intent.OrgID != uuid.Nil {
+					return fmt.Errorf("fleet rekey must use the fleet key scope")
+				}
+				for _, pk := range trustSet.FleetOps() {
+					if pk == intent.Actor {
+						return nil
+					}
+				}
+				return fmt.Errorf("fleet rekey requires fleet operator authorization")
+			}
+			id, err := uuid.Parse(orgID)
+			if err != nil || id == uuid.Nil || id != intent.OrgID {
+				return fmt.Errorf("rekey org_id must match the intent org tag")
+			}
+			if !domain.HasAtLeastRole(trustSet.RoleFor(ctx, id, intent.Actor), domain.RoleAdmin) {
+				return fmt.Errorf("org rekey requires owner or admin authorization")
+			}
+			return nil
+		}
 		if intent.Op == "create" {
 			// Org create requires fleet-ops.
 			for _, pk := range trustSet.FleetOps() {
@@ -250,6 +273,41 @@ func (h *OrgIntentHandler) acceptanceInvite(ctx context.Context, intent *Intent)
 
 func (h *OrgIntentHandler) handleOrg(ctx context.Context, intent *Intent) error {
 	switch intent.Op {
+	case "rekey":
+		if intent.Schema != "bahia.intent.org.v1" {
+			return fmt.Errorf("rekey requires bahia.intent.org.v1 schema")
+		}
+		if h.publisher == nil {
+			return fmt.Errorf("org rekey publisher is not configured")
+		}
+		publisher, ok := h.publisher.(interface {
+			Rekey(context.Context, string) (string, int, error)
+		})
+		if !ok {
+			return fmt.Errorf("org rekey publisher does not support refounding")
+		}
+		orgID := stringField(intent.Content, "org_id")
+		if orgID != kinds.FleetOCKScope {
+			id, err := uuid.Parse(orgID)
+			if err != nil || id == uuid.Nil || id != intent.OrgID {
+				return fmt.Errorf("rekey org_id must match the intent org tag")
+			}
+			if _, err := h.orgs.GetByID(ctx, id); err != nil {
+				return fmt.Errorf("load rekey org: %w", err)
+			}
+		}
+		if reason, exists := intent.Content["reason"]; exists {
+			if _, ok := reason.(string); !ok {
+				return fmt.Errorf("rekey reason must be a string")
+			}
+		}
+		version, count, err := publisher.Rekey(ctx, orgID)
+		if err != nil {
+			return err
+		}
+		intent.StatusData = map[string]any{"key_version": version, "records_republished": count}
+		intent.Result = intent.StatusData
+		return nil
 	case "delete":
 		return h.deleteOrg(ctx, intent)
 	default:
@@ -312,6 +370,9 @@ func (h *OrgIntentHandler) createOrg(ctx context.Context, org *domain.Organizati
 }
 
 func (h *OrgIntentHandler) updateOrg(ctx context.Context, existing *domain.Organization, intent_org *domain.Organization, intent *Intent) error {
+	if _, ok := intent.Content["strict_revocation"]; ok {
+		existing.StrictRevocation = intent_org.StrictRevocation
+	}
 	if intent_org.DisplayName != "" {
 		existing.DisplayName = intent_org.DisplayName
 	}
@@ -424,6 +485,20 @@ func (h *OrgIntentHandler) addOrUpdateMember(ctx context.Context, intent *Intent
 	if existing != nil {
 		// Update role.
 		if existing.Role == role {
+			// A previous attempt may have committed the role but failed while
+			// refounding. Repeating a strict downgrade repairs that projection
+			// before this intent can be marked accepted.
+			if intent.Op == "update" && role != domain.RoleOwner && h.publisher != nil && h.orgs != nil {
+				org, err := h.orgs.GetByID(ctx, intent.OrgID)
+				if err != nil {
+					return fmt.Errorf("load org for member retry: %w", err)
+				}
+				if org.StrictRevocation {
+					if err := h.publisher.PublishMember(ctx, existing, false, domain.RoleOwner); err != nil {
+						return fmt.Errorf("repair strict member role projection: %w", err)
+					}
+				}
+			}
 			// No change; idempotent.
 			h.logger.Debug("member role unchanged, idempotent",
 				zap.String("org_id", intent.OrgID.String()),
@@ -440,7 +515,8 @@ func (h *OrgIntentHandler) addOrUpdateMember(ctx context.Context, intent *Intent
 		if h.publisher != nil {
 			// Pass oldRole so the publisher can detect downgrade and rotate.
 			if err := h.publisher.PublishMember(ctx, existing, false, oldRole); err != nil {
-				h.logger.Warn("failed to publish member state", zap.Error(err))
+				h.notifyMemberChange(intent.OrgID)
+				return fmt.Errorf("publish member role state: %w", err)
 			}
 		}
 		h.notifyMemberChange(intent.OrgID)
@@ -497,6 +573,20 @@ func (h *OrgIntentHandler) removeMember(ctx context.Context, intent *Intent) err
 
 	existing, _ := h.members.GetMember(ctx, intent.OrgID, pubkey)
 	if existing == nil {
+		// A previous attempt may have removed the row but failed while
+		// publishing the tombstone or refounding its old key scope.
+		if h.publisher != nil && h.orgs != nil {
+			org, err := h.orgs.GetByID(ctx, intent.OrgID)
+			if err != nil {
+				return fmt.Errorf("load org for member removal retry: %w", err)
+			}
+			if org.StrictRevocation {
+				member := &domain.OrgMember{OrgID: intent.OrgID, Pubkey: pubkey}
+				if err := h.publisher.PublishMember(ctx, member, true); err != nil {
+					return fmt.Errorf("repair strict member tombstone: %w", err)
+				}
+			}
+		}
 		// Already removed; idempotent.
 		return nil
 	}
@@ -521,7 +611,8 @@ func (h *OrgIntentHandler) removeMember(ctx context.Context, intent *Intent) err
 
 	if h.publisher != nil {
 		if err := h.publisher.PublishMember(ctx, existing, true); err != nil {
-			h.logger.Warn("failed to publish member tombstone", zap.Error(err))
+			h.notifyMemberChange(intent.OrgID)
+			return fmt.Errorf("publish member tombstone: %w", err)
 		}
 	}
 	h.notifyMemberChange(intent.OrgID)
@@ -682,6 +773,13 @@ func orgFromIntentContent(intent *Intent) (*domain.Organization, error) {
 	}
 
 	org.OwnerPubkey = intent.Actor
+	if value, ok := content["strict_revocation"]; ok {
+		strict, valid := value.(bool)
+		if !valid {
+			return nil, fmt.Errorf("strict_revocation must be a boolean")
+		}
+		org.StrictRevocation = strict
+	}
 
 	return org, nil
 }

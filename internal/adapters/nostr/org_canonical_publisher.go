@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -53,6 +54,8 @@ type OrgCanonicalPublisher struct {
 	encryptor         ConfidentialStateEncryptor
 	onMemberPublished MemberPublishedCallback
 	logger            *zap.Logger
+	rekeyMu           sync.Mutex
+	strictRevocation  func(context.Context, uuid.UUID) (bool, error)
 }
 
 // NewOrgCanonicalPublisher creates a publisher backed by the given projector.
@@ -71,6 +74,11 @@ func (p *OrgCanonicalPublisher) SetOnMemberPublished(cb MemberPublishedCallback)
 	p.onMemberPublished = cb
 }
 
+// SetStrictRevocationLookup supplies the persisted organization setting.
+func (p *OrgCanonicalPublisher) SetStrictRevocationLookup(lookup func(context.Context, uuid.UUID) (bool, error)) {
+	p.strictRevocation = lookup
+}
+
 // PublishOrg publishes a canonical org registry record.
 func (p *OrgCanonicalPublisher) PublishOrg(ctx context.Context, org *domain.Organization, deleted bool) error {
 	content := map[string]any{
@@ -81,6 +89,7 @@ func (p *OrgCanonicalPublisher) PublishOrg(ctx context.Context, org *domain.Orga
 		content["name"] = org.Name
 		content["display_name"] = org.DisplayName
 		content["owner_pubkey"] = org.OwnerPubkey
+		content["strict_revocation"] = org.StrictRevocation
 		putRecordTime(content, "created_at", org.CreatedAt)
 		putRecordTime(content, "updated_at", org.UpdatedAt)
 	}
@@ -124,12 +133,23 @@ func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domai
 	if err != nil {
 		return err
 	}
+	strict := false
+	if p.strictRevocation != nil {
+		strict, err = p.strictRevocation(ctx, member.OrgID)
+		if err != nil {
+			return fmt.Errorf("load strict revocation for org %s: %w", member.OrgID, err)
+		}
+	}
 
 	// Key lifecycle (Phase 3 C1). Errors are logged but do not fail the
 	// publish — the member record is already committed.
 	orgID := member.OrgID.String()
 	if deleted {
 		// (a) Member removed → rotate so they can't decrypt future records.
+		if strict {
+			_, _, err := p.Rekey(ctx, orgID)
+			return err
+		}
 		if rotErr := p.encryptor.RotateKey(ctx, orgID); rotErr != nil {
 			p.logger.Warn("OCK rotation after member removal failed",
 				zap.String("org_id", orgID), zap.Error(rotErr))
@@ -148,6 +168,10 @@ func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domai
 		// wrapping and provides an audit boundary).
 		if len(prevRole) > 0 && prevRole[0] != "" {
 			if domain.RoleWeight(member.Role) < domain.RoleWeight(prevRole[0]) {
+				if strict {
+					_, _, err := p.Rekey(ctx, orgID)
+					return err
+				}
 				if rotErr := p.encryptor.RotateKey(ctx, orgID); rotErr != nil {
 					p.logger.Warn("OCK rotation after role downgrade failed",
 						zap.String("org_id", orgID), zap.Error(rotErr))

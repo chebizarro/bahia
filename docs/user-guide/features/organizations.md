@@ -60,6 +60,12 @@ other members' roles shown in the organization member list never grant access.
 
 ## Managing Members
 
+### Rekeying confidential state
+
+An owner or admin can request the signed `org/rekey` intent (`bahia.intent.org.v1`) with `{"org_id":"<org UUID>","reason":"<optional string>"}`. It rotates the org content key and republishes the current confidential records on their existing coordinates. The resulting intent status reports `data.key_version` and `data.records_republished`. A failed batch reports rejection; records not yet republished remain readable with their previous key version.
+
+Organization state includes `strict_revocation`, default `false`. Setting it to `true` makes member removal or role downgrade automatically run the same republish after key rotation. Otherwise those changes only rotate the key, and historical records stay on older versions. Fleet operators may request the same operation for `org_id="fleet"` to refound fleet-scoped confidential state.
+
 ### Adding Members
 
 **Via Web UI:**
