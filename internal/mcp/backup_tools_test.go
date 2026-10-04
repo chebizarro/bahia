@@ -3,8 +3,10 @@ package mcp
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
@@ -69,7 +71,7 @@ func backupTestReceipt(requestKind, resultKind int, dTag string) *BackupCommandR
 }
 
 func TestGetToolsIncludesBackupTools(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	required := map[string]bool{}
 	for _, name := range backupBaseToolNames {
 		required[name] = false
@@ -90,7 +92,7 @@ func TestGetToolsIncludesBackupTools(t *testing.T) {
 func TestBackupMutatingToolsPublishNostrRequestsAndReturnCorrelation(t *testing.T) {
 	ctx := authorizedMCPContext()
 	publisher := &captureBackupCommandPublisher{}
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{BackupCommandPublisher: publisher})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{BackupCommandPublisher: publisher})
 	repoID := uuid.New()
 	policyID := uuid.New()
 	recipeID := uuid.New()
@@ -140,7 +142,7 @@ func TestBackupMutatingToolsPublishNostrRequestsAndReturnCorrelation(t *testing.
 }
 
 func TestBackupMutatingToolsRequirePublisher(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	res, err := server.CallTool(authorizedMCPContext(), "request_backup_run", map[string]interface{}{"recipe": "postgres:v1"})
 	if err != nil {
 		t.Fatalf("call err: %v", err)
@@ -151,7 +153,7 @@ func TestBackupMutatingToolsRequirePublisher(t *testing.T) {
 }
 
 func TestBackupMutatingToolsRequireIdempotencyKeyWhenPublisherConfigured(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{BackupCommandPublisher: &captureBackupCommandPublisher{}})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{BackupCommandPublisher: &captureBackupCommandPublisher{}})
 	res, err := server.CallTool(authorizedMCPContext(), "request_backup_run", map[string]interface{}{"recipe": "postgres:v1"})
 	if err != nil {
 		t.Fatalf("call err: %v", err)
@@ -311,7 +313,74 @@ func TestBackupReadModelToolsListAndInspectDurableBackupState(t *testing.T) {
 		retentions:   []domain.BackupRetentionRun{{ID: retentionRunID, RepositoryID: repoID, PolicyID: &policyID, RequestedBy: "operator", RequestEventID: "retention-event", RequestKind: controlplane.KindBackupRetentionEnforce, RequestDTag: "retention:1", Status: domain.RunStatusQueued, Backend: domain.BackupBackendKopia, DryRun: true}},
 		verification: &domain.BackupVerificationRecord{ID: uuid.New(), BackupRunID: runID, Mode: domain.BackupVerificationKopiaSnapshotVerify, Status: domain.BackupVerificationSucceeded, Verified: true},
 	}
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{BackupReadModels: readModels})
+	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{BackupReadModels: readModels})
+	fixture := attachCanonicalMCPFixture(t, server)
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	for i := range readModels.repositories {
+		readModels.repositories[i].CreatedAt, readModels.repositories[i].UpdatedAt = now, now
+	}
+	for i := range readModels.policies {
+		readModels.policies[i].CreatedAt, readModels.policies[i].UpdatedAt = now, now
+	}
+	for i := range readModels.recipes {
+		readModels.recipes[i].CreatedAt, readModels.recipes[i].UpdatedAt = now, now
+	}
+	for i := range readModels.definitions {
+		readModels.definitions[i].CreatedAt, readModels.definitions[i].UpdatedAt = now, now
+	}
+	for i := range readModels.runs {
+		readModels.runs[i].CreatedAt, readModels.runs[i].UpdatedAt = now, now
+	}
+	for i := range readModels.restores {
+		readModels.restores[i].CreatedAt, readModels.restores[i].UpdatedAt = now, now
+	}
+	for i := range readModels.retentions {
+		readModels.retentions[i].CreatedAt, readModels.retentions[i].UpdatedAt = now, now
+	}
+	if readModels.verification != nil {
+		readModels.verification.CreatedAt, readModels.verification.UpdatedAt = now, now
+	}
+	publisher := nostrpool.NewBackupCanonicalPublisher(fixture.projector, zap.NewNop())
+	for i := range readModels.repositories {
+		if err := publisher.PublishRepository(ctx, &readModels.repositories[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range readModels.policies {
+		if err := publisher.PublishPolicy(ctx, &readModels.policies[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range readModels.recipes {
+		if err := publisher.PublishRecipe(ctx, &readModels.recipes[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range readModels.definitions {
+		if err := publisher.PublishDefinition(ctx, &readModels.definitions[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range readModels.runs {
+		if err := publisher.PublishRun(ctx, &readModels.runs[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range readModels.restores {
+		if err := publisher.PublishRestore(ctx, &readModels.restores[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range readModels.retentions {
+		if err := publisher.PublishRetention(ctx, &readModels.retentions[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if readModels.verification != nil {
+		if err := publisher.PublishVerification(ctx, readModels.verification); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	listRes, err := server.CallTool(ctx, "bahia_list_backup_repositories", map[string]interface{}{})
 	if err != nil || listRes.IsError {
@@ -346,7 +415,7 @@ func TestBackupReadModelToolsListAndInspectDurableBackupState(t *testing.T) {
 		t.Fatalf("unexpected recipe inspect payload: %#v", decodeResultMap(t, inspectRecipe))
 	}
 
-	inspectRun, err := server.CallTool(ctx, "inspect_backup_run", map[string]interface{}{"backup_run_id": runID.String()})
+	inspectRun, err := server.CallTool(ctx, "inspect_backup_run", map[string]interface{}{"run_id": runID.String()})
 	if err != nil || inspectRun.IsError {
 		t.Fatalf("inspect run result=%#v err=%v", inspectRun, err)
 	}
@@ -379,22 +448,22 @@ func TestBackupReadModelToolsListAndInspectDurableBackupState(t *testing.T) {
 		t.Fatalf("unexpected definition inspect payload: %#v", decodeResultMap(t, definitionRes))
 	}
 
-	_, err = server.CallTool(ctx, "list_backup_runs", map[string]interface{}{"status": "succeeded"})
+	filteredRuns, err := server.CallTool(ctx, "list_backup_runs", map[string]interface{}{"status": "succeeded"})
 	if err != nil {
 		t.Fatalf("list runs err: %v", err)
 	}
-	if readModels.lastStatus != domain.RunStatusSucceeded {
-		t.Fatalf("status filter not forwarded: %q", readModels.lastStatus)
+	if int(decodeResultMap(t, filteredRuns)["total"].(float64)) != 1 {
+		t.Fatalf("store status filter returned wrong runs: %#v", filteredRuns)
 	}
 }
 
-func TestBackupReadModelToolsRequireRepository(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+func TestBackupReadModelToolsWorkWithoutRepository(t *testing.T) {
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	res, err := server.CallTool(authorizedMCPContext(), "list_backup_repositories", map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("call err: %v", err)
 	}
-	if res == nil || !res.IsError {
-		t.Fatalf("expected missing read-model repository error, got %#v", res)
+	if res == nil || res.IsError || int(decodeResultMap(t, res)["total"].(float64)) != 0 {
+		t.Fatalf("expected empty store-backed result, got %#v", res)
 	}
 }

@@ -168,12 +168,12 @@ func newTestLLMRegistryServer() (*Server, *testLLMRouteRepo, *testLLMReleaseRepo
 	routeRepo := newTestLLMRouteRepo()
 	releaseRepo := newTestLLMReleaseRepo()
 	llmRegistry := service.NewLLMRegistryService(routeRepo, releaseRepo, nil, nil, nil, nil, nil, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{LLMRegistry: llmRegistry})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{LLMRegistry: llmRegistry})
 	return server, routeRepo, releaseRepo
 }
 
 func TestGetTools_IncludesLLMTools(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	tools := server.GetTools()
 	required := map[string]bool{
 		"bahia_llm_create_route":       false,
@@ -201,7 +201,7 @@ func TestGetTools_IncludesLLMTools(t *testing.T) {
 func TestCallTool_LLMRouteReleaseToolsPublishCanonicalNostrRequests(t *testing.T) {
 	ctx := authorizedMCPContext()
 	publisher := &captureLLMCommandPublisher{}
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{LLMCommandPublisher: publisher})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{LLMCommandPublisher: publisher})
 	routeID := uuid.New()
 
 	createRes, err := server.CallTool(ctx, "bahia_llm_create_route", map[string]interface{}{
@@ -279,7 +279,7 @@ func TestCallTool_LLMUpdateRoutePersistsRegistryMetadata(t *testing.T) {
 func TestCallTool_LLMAsyncToolsPublishCanonicalNostrRequests(t *testing.T) {
 	ctx := authorizedMCPContext()
 	publisher := &captureLLMCommandPublisher{}
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{LLMCommandPublisher: publisher})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{LLMCommandPublisher: publisher})
 	routeID := uuid.New()
 	envID := uuid.New()
 	releaseID := uuid.New()

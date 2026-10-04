@@ -119,7 +119,7 @@ func newTestMCPServiceServer() (*Server, *testServiceRepo) {
 		events.NewInProcessPublisher(zap.NewNop()),
 		zap.NewNop(),
 	)
-	server := NewServer(registry, zap.NewNop())
+	server := newTestServer(registry, zap.NewNop())
 	return server, svcRepo
 }
 
@@ -135,6 +135,7 @@ func TestCallTool_ServiceListGetAndMutationsDeprecated(t *testing.T) {
 		DefaultBranch: "main",
 		RuntimeType:   domain.RuntimeTypeCompose,
 	}
+	attachCanonicalMCPFixture(t, server).publishService(t, svcRepo.services[serviceID])
 
 	getByIDRes, err := server.CallTool(ctx, "bahia_get_service", map[string]interface{}{"service_id": serviceID.String()})
 	if err != nil {

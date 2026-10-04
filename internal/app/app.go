@@ -2062,12 +2062,13 @@ func New(cfg *config.Config) (*App, error) {
 		}
 	}
 	mcpDeps := mcp.ServerDeps{
+		StateStore:               localEventStore,
+		ServicePubkey:            servicePubkey,
+		ConfidentialReader:       confidentialEncryptor,
 		LogService:               runLogService,
-		Payments:                 paymentSvc,
 		SBOMs:                    sbomRepo,
 		Signatures:               sigRepo,
 		SignVerifier:             signVerifier,
-		MLRegistry:               mlRegistry,
 		MLCommandPublisher:       mlCommandPublisher,
 		LLMRegistry:              llmRegistry,
 		LLMCommandPublisher:      llmCommandPublisher,
@@ -2076,14 +2077,14 @@ func New(cfg *config.Config) (*App, error) {
 		PackageCommandPublisher:  packageCommandPublisher,
 		WorkerCommandPublisher:   workerCommandPublisher,
 		PackageProjection:        packageProjection,
-		WorkerReadModels:         workerReadModelSvc,
-		Workers:                  workerRepo,
-		DNSEndpoints:             dnsProjector,
 	}
 	configurePolicyToolMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
-	configureBackupMCPDeps(&mcpDeps, backupRegistryRepo, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
+	configureBackupMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	configureAuthorizationMCPDeps(&mcpDeps, cfg, tenantRBAC)
-	mcpServer := mcp.NewServerWithOptions(registry, logger, mcpDeps)
+	mcpServer, err := mcp.NewServerWithOptionsChecked(registry, logger, mcpDeps)
+	if err != nil {
+		return nil, fmt.Errorf("initialize MCP server: %w", err)
+	}
 	mcpHandler := handlers.NewMCPHandler(mcpServer, logger)
 	logger.Info("mcp server initialized")
 
@@ -4386,11 +4387,10 @@ func configurePolicyToolMCPDeps(deps *mcp.ServerDeps, publisher controlplane.Nos
 	return policyPublisher
 }
 
-func configureBackupMCPDeps(deps *mcp.ServerDeps, readModels mcp.BackupReadModelRepository, publisher controlplane.NostrEventPublisher, signer nostr.Signer, relays []string) {
+func configureBackupMCPDeps(deps *mcp.ServerDeps, publisher controlplane.NostrEventPublisher, signer nostr.Signer, relays []string) {
 	if deps == nil {
 		return
 	}
-	deps.BackupReadModels = readModels
 	if publisher != nil && signer != nil && len(relays) > 0 {
 		deps.BackupCommandPublisher = mcp.NewBackupCommandPublisher(publisher, signer)
 	}

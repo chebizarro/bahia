@@ -146,19 +146,16 @@ func TestConfigurePolicyToolMCPDepsFailsClosedWhenPublishingDepsMissing(t *testi
 	}
 }
 
-func TestConfigureBackupMCPDepsProvidesPublisherAndPostgresReadModels(t *testing.T) {
-	var _ mcp.BackupReadModelRepository = (*repository.PgBackupControlPlaneRepository)(nil)
+func TestConfigureBackupMCPDepsProvidesPublisherWithoutReadModels(t *testing.T) {
 
 	signer, err := controlplane.NewPrivateKeySigner(nostr.Generate().Hex())
 	require.NoError(t, err)
-	readModels := repository.NewPgBackupControlPlaneRepository(nil)
 	deps := mcp.ServerDeps{}
 
-	configureBackupMCPDeps(&deps, readModels, appWiringBackupMCPPublisher{}, signer, []string{"ws://relay.test"})
+	configureBackupMCPDeps(&deps, appWiringBackupMCPPublisher{}, signer, []string{"ws://relay.test"})
 
 	require.NotNil(t, deps.BackupCommandPublisher)
-	require.Same(t, readModels, deps.BackupReadModels)
-	server := mcp.NewServerWithOptions(nil, zap.NewNop(), deps)
+	server := newAppTestMCPServer(nil, zap.NewNop(), deps)
 	ctx := auth.ContextWithPrincipal(context.Background(), auth.SystemPrincipal("controlplane-wiring-test"))
 	result, err := server.CallTool(ctx, "request_backup_run", map[string]interface{}{
 		"recipe":          "recipe:postgres:v1",
@@ -198,7 +195,7 @@ func TestMCPServerDepsWiresAuthorizedPubkeys(t *testing.T) {
 	deps := mcp.ServerDeps{
 		AuthorizedPubkeys: cfg.Nostr.AuthorizedPubkeys,
 	}
-	server := mcp.NewServerWithOptions(nil, zap.NewNop(), deps)
+	server := newAppTestMCPServer(nil, zap.NewNop(), deps)
 
 	unauthorizedCtx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
 		Subject: "npub-unauthorized",
@@ -227,7 +224,7 @@ func TestMCPServerDepsWiresAuthorizedPubkeys(t *testing.T) {
 
 func TestMCPServerDepsEmptyAllowlistDeniesExternalCallers(t *testing.T) {
 	deps := mcp.ServerDeps{}
-	server := mcp.NewServerWithOptions(nil, zap.NewNop(), deps)
+	server := newAppTestMCPServer(nil, zap.NewNop(), deps)
 	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
 		Subject: "npub-someone",
 		PubKey:  "some-pubkey",
@@ -248,7 +245,7 @@ func TestConfigureAuthorizationMCPDepsAuthorizesConfiguredPubkeys(t *testing.T) 
 
 	deps := mcp.ServerDeps{}
 	configureAuthorizationMCPDeps(&deps, cfg, nil)
-	server := mcp.NewServerWithOptions(nil, zap.NewNop(), deps)
+	server := newAppTestMCPServer(nil, zap.NewNop(), deps)
 
 	unauthorizedCtx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
 		Subject: "npub-unauthorized",
@@ -300,7 +297,7 @@ func TestConfigureAuthorizationMCPDepsWiresTenantRBACFailClosed(t *testing.T) {
 		deps := mcp.ServerDeps{}
 		configureAuthorizationMCPDeps(&deps, cfg, rbac)
 		registryWithoutRepositories := service.NewRegistryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
-		server := mcp.NewServerWithOptions(registryWithoutRepositories, zap.NewNop(), deps)
+		server := newAppTestMCPServer(registryWithoutRepositories, zap.NewNop(), deps)
 		ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
 			Subject: "npub-default-operator",
 			PubKey:  callerPubkey,

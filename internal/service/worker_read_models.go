@@ -82,32 +82,6 @@ func (s *WorkerReadModelService) GetAssignmentState(ctx context.Context, workerP
 	return &domain.WorkerAssignmentState{WorkerPubKey: workerPubKey, ActiveAssignments: assignments, UpdatedAt: updatedAt}, nil
 }
 
-func (s *WorkerReadModelService) ListAssignmentStates(ctx context.Context) ([]domain.WorkerAssignmentState, error) {
-	if s == nil || s.workers == nil {
-		return nil, fmt.Errorf("worker read model service is not configured")
-	}
-	workers, err := s.workers.List(ctx, "", 1000)
-	if err != nil {
-		return nil, err
-	}
-	byWorker, err := s.assignmentsByWorker(ctx)
-	if err != nil {
-		return nil, err
-	}
-	states := make([]domain.WorkerAssignmentState, 0, len(workers))
-	for i := range workers {
-		assignments := byWorker[workers[i].PubKey]
-		updatedAt := workers[i].UpdatedAt
-		for _, assignment := range assignments {
-			if assignment.UpdatedAt.After(updatedAt) {
-				updatedAt = assignment.UpdatedAt
-			}
-		}
-		states = append(states, domain.WorkerAssignmentState{WorkerPubKey: workers[i].PubKey, ActiveAssignments: assignments, UpdatedAt: updatedAt})
-	}
-	return states, nil
-}
-
 func (s *WorkerReadModelService) GetDrainStatus(ctx context.Context, workerPubKey string) (*domain.WorkerDrainStatus, error) {
 	if s == nil || s.workers == nil {
 		return nil, fmt.Errorf("worker read model service is not configured")
@@ -128,26 +102,6 @@ func (s *WorkerReadModelService) GetDrainStatus(ctx context.Context, workerPubKe
 		return nil, err
 	}
 	return drainStatusForWorker(worker, assignments), nil
-}
-
-func (s *WorkerReadModelService) ListDrainStatuses(ctx context.Context) ([]domain.WorkerDrainStatus, error) {
-	if s == nil || s.workers == nil {
-		return nil, fmt.Errorf("worker read model service is not configured")
-	}
-	workers, err := s.workers.List(ctx, "", 1000)
-	if err != nil {
-		return nil, err
-	}
-	byWorker, err := s.assignmentsByWorker(ctx)
-	if err != nil {
-		return nil, err
-	}
-	statuses := make([]domain.WorkerDrainStatus, 0, len(workers))
-	for i := range workers {
-		status := drainStatusForWorker(&workers[i], byWorker[workers[i].PubKey])
-		statuses = append(statuses, *status)
-	}
-	return statuses, nil
 }
 
 func (s *WorkerReadModelService) PreviewWorkerPolicyEligibility(ctx context.Context, previewID string, env *domain.Environment, policy map[string]any) (*domain.WorkerEligibilityPreview, error) {

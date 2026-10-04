@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
@@ -111,7 +112,7 @@ func newTestMCPSecretServer(t *testing.T) (*Server, *testSecretRepo, *secrets.En
 	if err != nil {
 		t.Fatalf("NewEncryptor: %v", err)
 	}
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{
 		SecretsRepo: repo,
 		Encryptor:   encryptor,
 	})
@@ -175,6 +176,11 @@ func TestCallTool_SecretCRUD(t *testing.T) {
 	}
 	if plaintext != "postgres://user:pass@example/db" || stored.Version != 1 || stored.CreatedBy != "mcp-agent" {
 		t.Fatalf("unexpected stored secret metadata or decrypted value mismatch: version=%d created_by=%q", stored.Version, stored.CreatedBy)
+	}
+	fixture := attachCanonicalMCPFixture(t, server)
+	canonicalPublisher := nostrpool.NewSecretCanonicalPublisher(fixture.projector, fixture.confidentialEncryptor(t, server), mcpSecretOrgResolver{uuid.New().String()}, zap.NewNop())
+	if err := canonicalPublisher.PublishSecretRef(ctx, stored.ToRef()); err != nil {
+		t.Fatal(err)
 	}
 
 	listRes, err := server.CallTool(ctx, "bahia_list_secrets", map[string]interface{}{"service_id": serviceID.String()})
@@ -258,19 +264,19 @@ func TestCallTool_SecretValidationAndConfiguration(t *testing.T) {
 		t.Fatalf("expected invalid secret_id error, got %#v", result)
 	}
 
-	unconfigured := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	unconfigured := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	result, err = unconfigured.CallTool(ctx, "bahia_list_secrets", map[string]interface{}{"service_id": uuid.New().String()})
 	if err != nil {
 		t.Fatalf("call err: %v", err)
 	}
-	if !result.IsError || !strings.Contains(result.Content[0].Text, "not configured") {
-		t.Fatalf("expected configuration error, got %#v", result)
+	if result.IsError || int(decodeResultMap(t, result)["total"].(float64)) != 0 {
+		t.Fatalf("expected empty store-backed secrets, got %#v", result)
 	}
 }
 
 func newTestMCPWorkerServer() (*Server, *testPaymentWorkerRepo) {
 	repo := newTestPaymentWorkerRepo()
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{Workers: repo})
+	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{Workers: repo})
 	return server, repo
 }
 
@@ -326,6 +332,9 @@ func TestCallTool_WorkerQueriesAndPricing(t *testing.T) {
 		CreatedAt:           now.Add(-2 * time.Hour),
 		UpdatedAt:           now.Add(-time.Hour),
 	}
+	fixture := attachCanonicalMCPFixture(t, server)
+	fixture.publishWorker(t, repo.workers["worker-online"])
+	fixture.publishWorker(t, repo.workers["worker-offline"])
 
 	listRes, err := server.CallTool(ctx, "bahia_list_workers", map[string]interface{}{
 		"capability": "docker",
@@ -395,12 +404,12 @@ func TestCallTool_WorkerValidationAndConfiguration(t *testing.T) {
 		t.Fatalf("expected not found error, got %#v", result)
 	}
 
-	unconfigured := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	unconfigured := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	result, err = unconfigured.CallTool(ctx, "bahia_list_workers", map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("call err: %v", err)
 	}
-	if !result.IsError || !strings.Contains(result.Content[0].Text, "not configured") {
-		t.Fatalf("expected configuration error, got %#v", result)
+	if result.IsError || int(decodeResultMap(t, result)["total"].(float64)) != 0 {
+		t.Fatalf("expected empty store result, got %#v", result)
 	}
 }

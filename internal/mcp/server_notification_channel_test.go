@@ -143,7 +143,7 @@ func newTestMCPNotificationServer() (*Server, *testNotificationRepo, *testNotifi
 	dispatcher := notifications.NewDispatcher(repo, zap.NewNop())
 	sender := &testNotificationSender{}
 	dispatcher.RegisterSender(domain.ChannelTypeWebhook, sender)
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{
 		NotificationRepo:       repo,
 		NotificationDispatcher: dispatcher,
 	})
@@ -178,6 +178,8 @@ func TestGetTools_IncludesNotificationChannelCRUDAndTest(t *testing.T) {
 func TestCallTool_NotificationChannelCRUDAndTest(t *testing.T) {
 	ctx := authorizedMCPContext()
 	server, repo, sender := newTestMCPNotificationServer()
+	fixture := attachCanonicalMCPFixture(t, server)
+	canonicalPublisher := fixture.notificationPublisher(t, server)
 
 	createRes, err := server.CallTool(ctx, "bahia_create_notification_channel", map[string]interface{}{
 		"name":         "deployments",
@@ -195,6 +197,9 @@ func TestCallTool_NotificationChannelCRUDAndTest(t *testing.T) {
 	channelID := createPayload["channel_id"].(string)
 	if len(repo.channels) != 1 {
 		t.Fatalf("expected channel to be persisted")
+	}
+	if err := canonicalPublisher.PublishChannel(ctx, repo.channels[uuid.MustParse(channelID)]); err != nil {
+		t.Fatal(err)
 	}
 
 	getRes, err := server.CallTool(ctx, "bahia_get_notification_channel", map[string]interface{}{"channel_id": channelID})
@@ -286,6 +291,9 @@ func TestCallTool_NotificationChannelCRUDAndTest(t *testing.T) {
 	}
 	if deleteRes.IsError {
 		t.Fatalf("delete returned error: %s", deleteRes.Content[0].Text)
+	}
+	if err := canonicalPublisher.PublishChannelDeleted(ctx, uuid.MustParse(channelID)); err != nil {
+		t.Fatal(err)
 	}
 	getAfterDeleteRes, err := server.CallTool(ctx, "bahia_get_notification_channel", map[string]interface{}{"channel_id": channelID})
 	if err != nil {
@@ -508,7 +516,7 @@ func TestCallTool_NotificationLogUnsupportedAndValidation(t *testing.T) {
 		t.Fatalf("expected notification not found error, got %#v", result)
 	}
 
-	unconfigured := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	unconfigured := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	result, err = unconfigured.CallTool(ctx, "bahia_list_notifications", map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("unconfigured call err: %v", err)

@@ -285,7 +285,7 @@ func newTestMCPDeploymentServer(t *testing.T, protected bool) *deploymentTestFix
 
 	commands := &captureServiceCommandPublisher{}
 	return &deploymentTestFixture{
-		server:    NewServerWithOptions(registry, zap.NewNop(), ServerDeps{ServiceCommandPublisher: commands}),
+		server:    newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{ServiceCommandPublisher: commands}),
 		services:  svcRepo,
 		envs:      envRepo,
 		artifacts: artifactRepo,
@@ -452,7 +452,7 @@ func TestCallTool_GetDeploymentStatus(t *testing.T) {
 	intentID := uuid.New()
 	runID := uuid.New()
 	lastReconciled := time.Date(2026, 5, 2, 12, 34, 56, 0, time.UTC)
-	if err := fixture.state.Upsert(ctx, &domain.EnvironmentServiceState{
+	state := &domain.EnvironmentServiceState{
 		ServiceID:            fixture.serviceID,
 		EnvironmentID:        fixture.envID,
 		DesiredArtifactID:    &artifactID,
@@ -460,10 +460,13 @@ func TestCallTool_GetDeploymentStatus(t *testing.T) {
 		LastSuccessfulRunID:  &runID,
 		DriftStatus:          domain.DriftStatusDrifted,
 		LastReconciledAt:     &lastReconciled,
+		UpdatedAt:            lastReconciled,
 		CurrentObservationID: ptrUUID(uuid.New()),
-	}); err != nil {
+	}
+	if err := fixture.state.Upsert(ctx, state); err != nil {
 		t.Fatalf("seed state: %v", err)
 	}
+	attachCanonicalMCPFixture(t, fixture.server).publishState(t, state)
 
 	result, err := fixture.server.CallTool(ctx, "bahia_get_deployment_status", map[string]interface{}{
 		"service_id":     fixture.serviceID.String(),

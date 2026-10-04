@@ -44,7 +44,7 @@ func packageTestReceipt() *controlplane.PackageCommandReceipt {
 }
 
 func TestGetToolsIncludesPackageTools(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	tools := server.GetTools()
 	required := map[string]bool{"bahia_package_repository_apply": false, "bahia_package_upload": false, "bahia_package_promote": false, "bahia_package_yank": false, "bahia_package_list": false, "bahia_package_get": false, "bahia_package_status": false}
 	for _, tool := range tools {
@@ -62,7 +62,7 @@ func TestGetToolsIncludesPackageTools(t *testing.T) {
 func TestPackageMutatingToolsPublishSignerFirstRequests(t *testing.T) {
 	ctx := authorizedMCPContext()
 	publisher := &capturePackageCommandPublisher{}
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{PackageCommandPublisher: publisher})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{PackageCommandPublisher: publisher})
 	if res, err := server.CallTool(ctx, "bahia_package_repository_apply", map[string]interface{}{"name": "libs", "format": "npm", "backend_ref": "mock", "backend_type": "filesystem_mock", "policy": map[string]interface{}{"require_sha256": true}}); err != nil || res.IsError {
 		t.Fatalf("apply result=%#v err=%v", res, err)
 	}
@@ -84,7 +84,7 @@ func TestPackageMutatingToolsPublishSignerFirstRequests(t *testing.T) {
 }
 
 func TestPackageMutatingToolsRequireCommandPublisher(t *testing.T) {
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	res, err := server.CallTool(authorizedMCPContext(), "bahia_package_upload", map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("call err: %v", err)

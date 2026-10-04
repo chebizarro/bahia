@@ -115,61 +115,6 @@ func (s *Server) handleMLRollback(ctx context.Context, args map[string]interface
 	return jsonResult(mlCommandReceiptToMap("submitted", receipt))
 }
 
-func (s *Server) handleMLListState(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.mlRegistry == nil {
-		return errorResult("ML registry is not configured"), nil
-	}
-	states, err := s.mlRegistry.ListInferenceStates(ctx)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list ML state: %v", err)), nil
-	}
-	return jsonResult(map[string]interface{}{"states": states, "total": len(states), "read_model_kind": controlplane.KindMLInferenceEndpointState})
-}
-
-func (s *Server) handleMLGetState(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.mlRegistry == nil {
-		return errorResult("ML registry is not configured"), nil
-	}
-	endpointID, err := parseRequiredUUIDArg(args, "endpoint_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	envID, err := parseRequiredUUIDArg(args, "environment_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	state, err := s.mlRegistry.GetInferenceState(ctx, endpointID, envID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get ML state: %v", err)), nil
-	}
-	if state == nil {
-		return errorResult("ML state not found"), nil
-	}
-	return jsonResult(map[string]interface{}{"state": state, "read_model_kind": controlplane.KindMLInferenceEndpointState})
-}
-
-func (s *Server) handleMLGetProvenance(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.mlRegistry == nil {
-		return errorResult("ML registry is not configured"), nil
-	}
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	artifact, err := s.mlRegistry.GetArtifactRef(ctx, artifactID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get ML artifact: %v", err)), nil
-	}
-	if artifact == nil {
-		return errorResult("ML artifact not found"), nil
-	}
-	edges, err := s.mlRegistry.ListProvenanceEdgesByArtifact(ctx, artifactID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to list ML provenance: %v", err)), nil
-	}
-	return jsonResult(map[string]interface{}{"artifact": artifact, "edges": edges, "read_model_kind": controlplane.KindMLArtifactProvenanceGraph})
-}
-
 func mlPayloadFromArgs(args map[string]interface{}) controlplane.MLCommandPayload {
 	payload := controlplane.MLCommandPayload{Content: args, Tags: map[string]string{}}
 	for _, key := range []string{"idempotency_key", "request_id", "d"} {

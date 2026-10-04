@@ -107,6 +107,9 @@ func PaymentRecordContent(rec *domain.PaymentRecord) (gonostr.Tags, string) {
 	if rec.ErrorMessage != "" {
 		payload["error_message"] = rec.ErrorMessage
 	}
+	if rec.Metadata != nil {
+		payload["metadata"] = rec.Metadata
+	}
 	if !rec.CreatedAt.IsZero() {
 		payload["created_at"] = rec.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00")
 	}

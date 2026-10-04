@@ -6,19 +6,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
 
 func TestDNSReadOnlyToolsListEndpointsAndDrift(t *testing.T) {
 	now := time.Now().UTC()
-	server := NewServerWithOptions(nil, zap.NewNop(), ServerDeps{DNSEndpoints: dnsEndpointListerFunc(func(ctx context.Context) ([]domain.DNSEndpoint, error) {
+	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{DNSEndpoints: dnsEndpointListerFunc(func(ctx context.Context) ([]domain.DNSEndpoint, error) {
 		return []domain.DNSEndpoint{
 			{Name: "sync", FQDN: "sync.prod.example", DriftStatus: domain.DriftStatusInSync, MaterializedAt: now.Add(-2 * time.Minute)},
 			{Name: "old", FQDN: "old.prod.example", DriftStatus: domain.DriftStatusDrifted, MaterializedAt: now.Add(-1 * time.Hour)},
 			{Name: "new", FQDN: "new.prod.example", DriftStatus: domain.DriftStatusDeploying, MaterializedAt: now},
 		}, nil
 	})})
+	fixtureEndpoints, err := legacyFor(server).DNSEndpoints.ListDNSEndpoints(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range fixtureEndpoints {
+		fixtureEndpoints[i].ID = uuid.New()
+		fixtureEndpoints[i].Family = domain.DNSEndpointFamilyService
+	}
+	attachCanonicalMCPFixture(t, server).publishDNS(t, fixtureEndpoints...)
 
 	endpointsRes, err := server.CallTool(authorizedMCPContext(), "bahia_assistant_dns_list_endpoints", map[string]interface{}{"limit": float64(2)})
 	if err != nil || endpointsRes.IsError {

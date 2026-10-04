@@ -108,7 +108,9 @@ func newTestMCPRunLogServer(t *testing.T, stdoutContent, stderrContent string, r
 	blossomClient := blossom.NewClient(blossom.Config{Servers: []string{blossomServer.URL}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	logService := adapterruntime.NewLogService(blossomClient, nil, zap.NewNop())
 
-	return NewServerWithOptions(registry, zap.NewNop(), ServerDeps{LogService: logService}), runID
+	server := newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{LogService: logService})
+	attachCanonicalMCPFixture(t, server).publishRun(t, runRepo.runs[runID])
+	return server, runID
 }
 
 func TestGetTools_IncludesRunLogs(t *testing.T) {
@@ -200,7 +202,7 @@ func TestCallTool_GetRunLogs_ValidationAndConfiguration(t *testing.T) {
 		t.Fatalf("expected invalid stream error, got %#v", invalidStream)
 	}
 
-	unconfigured := NewServerWithOptions(server.registry, zap.NewNop(), ServerDeps{})
+	unconfigured := newTestServerWithOptions(server.registry, zap.NewNop(), ServerDeps{StateStore: server.stateStore, ServicePubkey: server.servicePubkey})
 	missingService, err := unconfigured.CallTool(authorizedMCPContext(), "bahia_get_run_logs", map[string]interface{}{
 		"run_id": runID.String(),
 	})
