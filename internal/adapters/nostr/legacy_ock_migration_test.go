@@ -35,6 +35,9 @@ func (f *fakeConfidentialEncryptor) DecryptServiceInner(_ context.Context, _ str
 	return nil, fmt.Errorf("not implemented in test")
 }
 func (f *fakeConfidentialEncryptor) RotateKey(_ context.Context, _ string) error { return nil }
+func (f *fakeConfidentialEncryptor) RotateKeyExcluding(_ context.Context, _, _ string) error {
+	return nil
+}
 func (f *fakeConfidentialEncryptor) WrapKeyForMember(_ context.Context, _, _ string) error {
 	return nil
 }

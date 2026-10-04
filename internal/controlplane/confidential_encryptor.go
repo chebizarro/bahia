@@ -48,9 +48,21 @@ func (e *ConfidentialEncryptor) EncryptConfidential(
 	dTag, topic string,
 	serviceOnlyPlaintext []byte,
 ) (string, error) {
-	key, err := e.ockManager.EnsureKey(ctx, orgID)
+	_, err := e.ockManager.EnsureKey(ctx, orgID)
 	if err != nil {
 		return "", fmt.Errorf("ensure OCK for org %s: %w", orgID, err)
+	}
+
+	// EnsureKey can perform event-triggered retries. Recheck under the same
+	// lock as rotation, and use the latest epoch if it changed in between.
+	e.ockManager.rotationMu.Lock()
+	defer e.ockManager.rotationMu.Unlock()
+	if err := e.ockManager.rotationGuard(orgID); err != nil {
+		return "", err
+	}
+	key, err := e.ockManager.getKey(ctx, orgID)
+	if err != nil {
+		return "", err
 	}
 
 	recordCtx := ConfidentialRecordContext{
@@ -107,10 +119,16 @@ func (e *ConfidentialEncryptor) DecryptOrgState(content string) ([]byte, error) 
 	return e.DecryptConfidential(context.Background(), content, 0, "", "")
 }
 
-// RotateKey triggers OCK rotation for an org. Called after member removal or
-// role downgrade.
+// RotateKey triggers OCK rotation for an org.
 func (e *ConfidentialEncryptor) RotateKey(ctx context.Context, orgID string) error {
 	_, err := e.ockManager.RotateKey(ctx, orgID)
+	return err
+}
+
+// RotateKeyExcluding rotates before publishing a removal, while the relay
+// membership source may still contain the departing member.
+func (e *ConfidentialEncryptor) RotateKeyExcluding(ctx context.Context, orgID, removedPubkey string) error {
+	_, err := e.ockManager.RotateKeyExcluding(ctx, orgID, removedPubkey)
 	return err
 }
 

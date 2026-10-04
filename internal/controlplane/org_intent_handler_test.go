@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"sync"
 	"testing"
@@ -356,44 +357,54 @@ func (p *stubOrgPublisher) PublishMember(_ context.Context, member *domain.OrgMe
 	return p.memberErr
 }
 
-func TestOrgIntentHandler_StrictMemberFailureRejectsAndRetries(t *testing.T) {
-	ctx := context.Background()
-	handler, orgs, members, _, publisher, _ := newTestOrgHandler(t)
-	id := uuid.New()
-	if err := orgs.Create(ctx, &domain.Organization{ID: id, Name: "strict-org", StrictRevocation: true}); err != nil {
-		t.Fatal(err)
-	}
-	viewer := &domain.OrgMember{OrgID: id, Pubkey: "viewer", Role: domain.RoleViewer}
-	if err := members.Add(ctx, viewer); err != nil {
-		t.Fatal(err)
-	}
-	remove := memberRemoveIntent(id, viewer.Pubkey, "owner")
-	publisher.memberErr = errors.New("refounding interrupted")
-	if err := handler.HandleIntent(ctx, remove); err == nil {
-		t.Fatal("strict member removal failure was accepted")
-	}
-	publisher.memberErr = nil
-	if err := handler.HandleIntent(ctx, remove); err != nil {
-		t.Fatalf("strict removal retry: %v", err)
-	}
-	if len(publisher.publishedMembers) != 2 {
-		t.Fatalf("removal publishes = %d", len(publisher.publishedMembers))
-	}
-	admin := &domain.OrgMember{OrgID: id, Pubkey: "admin", Role: domain.RoleAdmin}
-	if err := members.Add(ctx, admin); err != nil {
-		t.Fatal(err)
-	}
-	downgrade := memberRoleChangeIntent(id, admin.Pubkey, domain.RoleViewer, "owner")
-	publisher.memberErr = errors.New("refounding interrupted")
-	if err := handler.HandleIntent(ctx, downgrade); err == nil {
-		t.Fatal("strict role downgrade failure was accepted")
-	}
-	publisher.memberErr = nil
-	if err := handler.HandleIntent(ctx, downgrade); err != nil {
-		t.Fatalf("strict downgrade retry: %v", err)
-	}
-	if len(publisher.publishedMembers) != 4 {
-		t.Fatalf("total member publishes = %d", len(publisher.publishedMembers))
+func TestOrgIntentHandler_MemberFailureRejectsAndRetries(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		t.Run(fmt.Sprintf("strict=%t", strict), func(t *testing.T) {
+			ctx := context.Background()
+			handler, orgs, members, _, publisher, _ := newTestOrgHandler(t)
+			id := uuid.New()
+			if err := orgs.Create(ctx, &domain.Organization{ID: id, Name: "strict-org", StrictRevocation: strict}); err != nil {
+				t.Fatal(err)
+			}
+			viewer := &domain.OrgMember{OrgID: id, Pubkey: "viewer", Role: domain.RoleViewer}
+			if err := members.Add(ctx, viewer); err != nil {
+				t.Fatal(err)
+			}
+			remove := memberRemoveIntent(id, viewer.Pubkey, "owner")
+			publisher.memberErr = errors.New("refounding interrupted")
+			if err := handler.HandleIntent(ctx, remove); err == nil {
+				t.Fatal("strict member removal failure was accepted")
+			}
+			if _, err := members.GetMember(ctx, id, viewer.Pubkey); err != nil {
+				t.Fatalf("failed canonical removal mutated member repository: %v", err)
+			}
+			publisher.memberErr = nil
+			if err := handler.HandleIntent(ctx, remove); err != nil {
+				t.Fatalf("strict removal retry: %v", err)
+			}
+			if len(publisher.publishedMembers) != 2 {
+				t.Fatalf("removal publishes = %d", len(publisher.publishedMembers))
+			}
+			admin := &domain.OrgMember{OrgID: id, Pubkey: "admin", Role: domain.RoleAdmin}
+			if err := members.Add(ctx, admin); err != nil {
+				t.Fatal(err)
+			}
+			downgrade := memberRoleChangeIntent(id, admin.Pubkey, domain.RoleViewer, "owner")
+			publisher.memberErr = errors.New("refounding interrupted")
+			if err := handler.HandleIntent(ctx, downgrade); err == nil {
+				t.Fatal("strict role downgrade failure was accepted")
+			}
+			if stillAdmin, err := members.GetMember(ctx, id, admin.Pubkey); err != nil || stillAdmin.Role != domain.RoleAdmin {
+				t.Fatalf("failed canonical downgrade mutated member repository: member=%+v err=%v", stillAdmin, err)
+			}
+			publisher.memberErr = nil
+			if err := handler.HandleIntent(ctx, downgrade); err != nil {
+				t.Fatalf("strict downgrade retry: %v", err)
+			}
+			if len(publisher.publishedMembers) != 4 {
+				t.Fatalf("total member publishes = %d", len(publisher.publishedMembers))
+			}
+		})
 	}
 }
 
@@ -1455,4 +1466,38 @@ func mustMarshalTags(t *testing.T, tags [][]string) json.RawMessage {
 		t.Fatalf("marshal tags: %v", err)
 	}
 	return b
+}
+
+func TestHandleEncryptedMemberEventOverridesStaleRepository(t *testing.T) {
+	ctx := t.Context()
+	_, _, members, _, _, _ := newTestOrgHandler(t)
+	orgID := uuid.New()
+	if err := members.Add(ctx, &domain.OrgMember{OrgID: orgID, Pubkey: "member", Role: domain.RoleAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	manager, _, _ := newTestOCKManager(t, nil)
+	encryptor := NewConfidentialEncryptor(manager, nil)
+	trustSet := NewTrustSet(nil, zap.NewNop())
+	handler := NewRelayMemberEventHandler(encryptor, nil, trustSet, members, zap.NewNop())
+	for _, deleted := range []bool{false, true} {
+		plaintext, err := json.Marshal(map[string]any{"org_id": orgID.String(), "pubkey": "member", "role": domain.RoleViewer, "deleted": deleted})
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := encryptor.EncryptConfidential(ctx, orgID.String(), plaintext, 32006, "member:test", "org-member", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := handler.HandleEncryptedMemberEvent(ctx, content, 32006, "member:test", "org-member"); err != nil {
+			t.Fatal(err)
+		}
+		role, found := trustSet.RelayMembersFor(orgID.String())["member"]
+		if deleted && found || !deleted && role != domain.RoleViewer {
+			t.Fatalf("stale repository overrode published membership: deleted=%t role=%q found=%t", deleted, role, found)
+		}
+		old, err := members.GetMember(ctx, orgID, "member")
+		if err != nil || old.Role != domain.RoleAdmin {
+			t.Fatal("fixture repository was already updated")
+		}
+	}
 }

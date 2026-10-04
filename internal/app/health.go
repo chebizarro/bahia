@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/openagentsinc/bahia/internal/controlplane"
@@ -250,4 +251,21 @@ func checksWarn(checks []HealthCheck) bool {
 		}
 	}
 	return false
+}
+
+// Rotation degrades org writes, not subscription catch-up or liveness. Keep it
+// separate from ReadinessTracker's one-shot EOSE gate so operators can retry.
+func registerOCKRotationHealthCheck(provider *HealthProvider, pendingRotations func() []string) {
+	provider.RegisterCheck("ock_rotation", func() HealthCheck {
+		pending := pendingRotations()
+		if len(pending) == 0 {
+			return HealthCheck{Name: "ock_rotation", Status: HealthStatusPass, Message: "no pending key rotations"}
+		}
+		messages := make([]string, 0, len(pending))
+		for _, orgID := range pending {
+			messages = append(messages, (&controlplane.OCKRotationPendingError{OrgID: orgID}).Error())
+		}
+		return HealthCheck{Name: "ock_rotation", Status: HealthStatusWarn,
+			Message: strings.Join(messages, "; "), Details: map[string]string{"orgs": strings.Join(pending, ",")}}
+	})
 }
