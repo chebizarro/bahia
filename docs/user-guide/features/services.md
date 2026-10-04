@@ -80,9 +80,9 @@ Click a service to see:
 
 ### CLI
 
-For `bahia services create/update`, the CLI publishes a signed kind `30900` service intent directly, waits for kind `30315` status, and reads the canonical service record. Create requires `--org`; update reads the current canonical `updated_at` and sends a full desired state with an exact revision precondition. A published intent without status exits 2 and remains visible in `bahia outbox list`; no relay acceptance exits 3. `--http-fallback` does not change this write path.
+For `bahia services create/update`, the CLI publishes a signed kind `30900` service intent directly, waits for kind `30315` status, and reads the canonical service record. Create requires `--org`; update reads the current canonical `updated_at` and sends a full desired state with an exact revision precondition. A published intent without status exits 2 and remains visible in `bahia outbox list`; no relay acceptance exits 3.
 
-Service reads use canonical Nostr events by default. Configure `--service-pubkey` and `--relay` (or their environment variables); `--http-fallback` explicitly selects the legacy REST path. If EOSE does not arrive before `--eose-timeout`, the CLI prints cached data and warns on stderr.
+Service reads use canonical Nostr events by default. Configure `--service-pubkey` and `--relay` (or their environment variables). If EOSE does not arrive before `--eose-timeout`, the CLI prints cached data and warns on stderr.
 
 ```bash
 # List all services
@@ -230,7 +230,7 @@ The referenced credential may be a raw API token or a JSON secret containing `ap
 
 ## Service Actions
 
-Deploy, restart, and stop are signer-first Nostr control-plane operations. The CLI commands `bahia services deploy|restart|stop` (also available under `services actions`) require `--org`, `--service`, and `--environment` UUIDs. Deploy may also include `--artifact`. They publish signed kind `30900` `runtime` intents, wait for kind `30315` status, and keep the event in the CLI outbox if no status arrives. `--http-fallback` has no effect for these commands. Remaining legacy clients may still use ContextVM service actions during migration.
+Deploy, restart, and stop are signer-first Nostr control-plane operations. The CLI commands `bahia services deploy|restart|stop` (also available under `services actions`) require `--org`, `--service`, and `--environment` UUIDs. Deploy may also include `--artifact`. They publish signed kind `30900` `runtime` intents, wait for kind `30315` status, and keep the event in the CLI outbox if no status arrives. Remaining legacy clients may still use ContextVM service actions during migration.
 
 - In the web console, deploy by publishing a signed `runtime/deploy` intent and subscribing for canonical deployment status, audit, and state events. For Compose/Docker desired-state deploys, status events include the shared step progression and state/result observables may include sanitized desired-state metadata.
 - In the web console, restart or stop an adopted direct-runtime workload with signed `runtime/restart` or `runtime/stop` intents.

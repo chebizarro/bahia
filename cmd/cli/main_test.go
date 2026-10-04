@@ -1,15 +1,13 @@
 package main
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"fiatjaf.com/nostr"
-	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
 )
 
@@ -93,27 +91,28 @@ func TestRootCommandRegistersConfigGroup(t *testing.T) {
 	}
 }
 
-func TestConfigDriftCommandDoesNotCallConfigFabricEndpoint(t *testing.T) {
-	resetNostrKeyGlobals(t)
-	t.Setenv("BAHIA_NOSTR_KEY_FILE", "")
-	t.Setenv("BAHIA_NOSTR_NSEC", "")
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
-
-	var gotMethod, gotPath string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotMethod, gotPath = r.Method, r.URL.Path
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[]}`))
-	}))
-	defer server.Close()
-
+func TestConfigDriftRequiresRelays(t *testing.T) {
+	resetOperatorGlobals(t)
 	root := newRootCommand()
-	root.SetArgs([]string{"--server", server.URL, "--output", "json", "config", "drift"})
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetArgs([]string{"--output", "json", "config", "drift"})
 	if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "no operator relays configured") {
 		t.Fatalf("bahia config drift error = %v, want missing-relay error", err)
 	}
-	if gotMethod != "" || gotPath != "" {
-		t.Fatalf("bahia config drift made an HTTP request: %s %s", gotMethod, gotPath)
+}
+
+func TestRemovedHTTPFlagsAreUnknown(t *testing.T) {
+	for _, flag := range []string{"--server", "--http-fallback"} {
+		t.Run(flag, func(t *testing.T) {
+			root := newRootCommand()
+			root.SilenceUsage = true
+			root.SilenceErrors = true
+			root.SetArgs([]string{"services", "list", flag})
+			if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "unknown flag") {
+				t.Fatalf("%s error = %v, want unknown flag", flag, err)
+			}
+		})
 	}
 }
 
@@ -171,47 +170,27 @@ func TestResolveNostrPrivateKeyInputRejectsAmbiguousEnvironment(t *testing.T) {
 	}
 }
 
-func TestResolveNIP98ProviderValidatesKey(t *testing.T) {
+func TestAuthInspectUsesNostrSigner(t *testing.T) {
 	resetNostrKeyGlobals(t)
-	path := filepath.Join(t.TempDir(), "nostr.key")
-	if err := os.WriteFile(path, []byte("not-a-key"), 0o600); err != nil {
-		t.Fatalf("write invalid key file: %v", err)
-	}
-	cmd := newAuthFlagTestCommand()
-	if err := cmd.PersistentFlags().Set("nostr-key-file", path); err != nil {
-		t.Fatalf("set nostr-key-file flag: %v", err)
-	}
-	if _, err := resolveNIP98Provider(cmd); err == nil {
-		t.Fatal("expected invalid key error")
-	}
-
-	cmd = newAuthFlagTestCommand()
 	key := nostr.Generate().Hex()
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", key)
-	provider, err := resolveNIP98Provider(cmd)
+	signer, closeSigner, err := newCLIReadSigner(newAuthFlagTestCommand())
 	if err != nil {
-		t.Fatalf("resolveNIP98Provider() error = %v", err)
+		t.Fatal(err)
 	}
-	pubkey, err := provider.PublicKey()
+	if closeSigner != nil {
+		defer closeSigner()
+	}
+	pubkey, err := signer.GetPublicKey(context.Background())
 	if err != nil {
-		t.Fatalf("PublicKey() error = %v", err)
+		t.Fatal(err)
 	}
 	secret, err := nostr.SecretKeyFromHex(key)
 	if err != nil {
-		t.Fatalf("SecretKeyFromHex() error = %v", err)
+		t.Fatal(err)
 	}
-	wantPubkey := secret.Public().Hex()
-	if pubkey != wantPubkey {
-		t.Fatalf("pubkey = %s, want %s", pubkey, wantPubkey)
-	}
-}
-
-func TestConfigureClientAuthAllowsNoKeyForPublicEndpoints(t *testing.T) {
-	resetNostrKeyGlobals(t)
-	t.Setenv("BAHIA_NOSTR_NSEC", "")
-	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
-	if err := configureClientAuth(newAuthFlagTestCommand(), client.New("http://example.com")); err != nil {
-		t.Fatalf("configureClientAuth() error = %v", err)
+	if pubkey != secret.Public() {
+		t.Fatalf("pubkey = %s", pubkey.Hex())
 	}
 }
 

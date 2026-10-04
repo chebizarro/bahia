@@ -42,32 +42,14 @@ func newEnvironmentsCommand() *cobra.Command {
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all environments",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if operatorHTTPFallback {
-				envs, err := apiClient.ListEnvironments(cmd.Context())
-				if err != nil {
-					return err
-				}
-				return renderEnvironments(envs)
-			}
-			return runEnvironmentsListNostr(cmd)
-		},
+		RunE:  func(cmd *cobra.Command, args []string) error { return runEnvironmentsListNostr(cmd) },
 	}
 
 	getCmd := &cobra.Command{
 		Use:   "get [id]",
 		Short: "Get an environment by ID",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if operatorHTTPFallback {
-				env, err := apiClient.GetEnvironmentDetails(cmd.Context(), args[0])
-				if err != nil {
-					return err
-				}
-				return outputSingle(env)
-			}
-			return runEnvironmentGetNostr(cmd, args[0])
-		},
+		RunE:  func(cmd *cobra.Command, args []string) error { return runEnvironmentGetNostr(cmd, args[0]) },
 	}
 
 	createCmd := newEnvironmentCreateCommand()

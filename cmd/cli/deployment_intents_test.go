@@ -48,7 +48,7 @@ func TestCLIDeploymentRuntimeIntentsMatchD69FixturesAndStayInOutboxWithoutStatus
 			}
 			org := deploymentFixtureTag(fixture.Tags, "org")
 			id := deploymentFixtureTag(fixture.Tags, "intent_id")
-			args := []string{"--http-fallback"}
+			args := []string{}
 			if domain == "deployment" {
 				if op == "approve" || op == "reject" {
 					args = append(args, "deployments")

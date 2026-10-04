@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"io"
 	"strings"
 
 	"fiatjaf.com/nostr"
@@ -45,9 +48,6 @@ func requestCLIContextVM(cmd *cobra.Command, method string, payload any, tags no
 	defer requester.Close()
 	if explicitKey != "" {
 		tags = append(nostr.Tags{{"d", explicitKey}}, tags...)
-	}
-	if operatorHTTPFallback {
-		fmt.Fprintln(cmd.ErrOrStderr(), "--http-fallback has no effect for this command; using keyed ContextVM")
 	}
 	event, err := requester.Request(cmd.Context(), method, payload, tags, operatorStatusCallback(cmd, label))
 	if err != nil {
@@ -220,4 +220,29 @@ func runAdoptionImportContextVM(cmd *cobra.Command, req client.AdoptionImportReq
 	payload := map[string]any{"targets": targets, "selections": req.Selections, "import_all": req.ImportAll, "org_id": req.OrgID}
 	err = requestCLIContextVM(cmd, "adoption/import", payload, nil, "", "adoption import", &result)
 	return result, err
+}
+
+func newCLIOperatorLogger(stderr io.Writer) *zap.Logger {
+	if stderr == nil {
+		return zap.NewNop()
+	}
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoderConfig.TimeKey = ""
+	return zap.New(zapcore.NewCore(zapcore.NewConsoleEncoder(encoderConfig), zapcore.AddSync(stderr), zap.WarnLevel))
+}
+
+func operatorStatusCallback(cmd *cobra.Command, label string) func(client.OperatorStatusEvent) {
+	if outputFormat != "table" {
+		return nil
+	}
+	return func(status client.OperatorStatusEvent) {
+		message := strings.TrimSpace(status.Message)
+		if message == "" {
+			message = firstNonEmpty(status.Step, status.Status)
+		}
+		if message == "" {
+			message = "status update"
+		}
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "→ %s: %s\n", label, message)
+	}
 }

@@ -5,7 +5,7 @@ Normative gate: [`adoption-live-network-verification.md`](adoption-live-network-
 Execution checklist: [`adoption-signer-first-operator-checklist.md`](adoption-signer-first-operator-checklist.md)
 
 This runbook now assumes signer-first operator execution over Nostr control-plane requests.
-Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
+The CLI uses relay transport; privileged HTTP routes, where still deployed, are not CLI fallback paths.
 
 ## Safety defaults
 
@@ -13,7 +13,7 @@ Legacy privileged HTTP/NIP-98 paths remain compatibility-only and secondary.
 - Signer-first operator execution is authorized by operator pubkeys and signed event verification.
 - Prefer server-managed `runtime.endpoints.<ref>` aliases. Raw `docker_host` request payloads are compatibility/break-glass only.
 - CLI defaults to signer-first operator transport for `bahia adopt ...` and `bahia services actions ...`.
-- explicit relay configuration is explicit only (`--http-fallback` or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) and is safe only before any relay accepts the signed request.
+- Configure relays with `--relay` or `BAHIA_NOSTR_RELAYS`; CLI commands do not fall back to HTTP.
 - Scan and import responses redact sensitive environment variables and labels. Sensitive environment values are imported through Bahia secrets when secret storage/encryption is configured.
 - Compose-origin containers are direct-Docker takeover candidates; enable takeover only after operators accept that Bahia, not Compose, will drive restart/deploy/stop actions.
 - Signed imports must resolve one organization. Pass `--org <organization-uuid>` when target environments/the organization catalog do not make the choice unambiguous; Bahia rejects cross-org reuse.
@@ -124,20 +124,19 @@ Monitor:
 - `bahia_runtime_actions_total` and duration metrics;
 - logs with `service_id`, `environment_id`, optional `artifact_id`, `target_name`, `endpoint_ref`, `result`, `request_id`, and request event id.
 
-## Compatibility-only fallback mode
+## Raw-target compatibility mode
 
-Fallback is not the primary operator path.
-Use it only when explicitly approved.
+Raw Docker targets are privileged compatibility inputs; use server-managed endpoint references by default.
 
-- Enable with `--http-fallback` or `BAHIA_OPERATOR_HTTP_FALLBACK=true`.
-- Fallback is allowed only before any relay accepts the signer-first request.
-- `--raw-target` is compatibility-only and requires explicit fallback approval.
-- Do not use fallback to bypass signer-first terminal failures, authorization failures after acceptance, or runtime guardrails.
+- The CLI has no HTTP fallback mode.
+- Relay failures return an error or the documented intent exit code; they do not trigger HTTP.
+- `--raw-target` remains a privileged compatibility input and requires daemon `allow_raw_docker_hosts` approval.
+- Do not bypass signer-first terminal failures, authorization failures, or runtime guardrails.
 
-Example compatibility-only raw-target invocation:
+Example raw-target invocation (requires the daemon compatibility gate):
 
 ```bash
-bahia --http-fallback adopt scan --raw-target breakglass=tcp://127.0.0.1:2375
+bahia adopt scan --raw-target breakglass=tcp://127.0.0.1:2375
 ```
 
 ## Rate limits and telemetry

@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip19"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
@@ -24,9 +26,7 @@ import (
 )
 
 var (
-	serverURL                     string
 	outputFormat                  string
-	apiClient                     *client.Client
 	nostrKeyFile                  string
 	nostrBunkerFile               string
 	nostrBunkerRelays             []string
@@ -36,7 +36,6 @@ var (
 	operatorServicePubkey         string
 	operatorIntentOrg             string
 	operatorTrustedServicePubkeys []string
-	operatorHTTPFallback          bool
 	operatorEncrypted             bool
 	operatorResultTimeout         time.Duration
 	operatorResultRetries         int
@@ -60,16 +59,8 @@ func newRootCommand() *cobra.Command {
 		Use:   "bahia",
 		Short: "Bahia Deployment Registry CLI",
 		Long:  "Command-line interface for the Bahia Nostr-Native Deployment Registry Service",
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if isDefaultStatePolicyRead(cmd) || isDefaultWorkerBuildArtifactRead(cmd) {
-				return nil
-			}
-			apiClient = client.New(serverURL)
-			return configureClientAuth(cmd, apiClient)
-		},
 	}
 
-	rootCmd.PersistentFlags().StringVar(&serverURL, "server", getEnvOrDefault("BAHIA_SERVER", "http://localhost:8080"), "Bahia server URL")
 	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "Output format: table, json, yaml")
 	rootCmd.PersistentFlags().StringVar(&nostrKeyFile, "nostr-key-file", "", "Read the Nostr private key from this file (use - for stdin; env BAHIA_NOSTR_KEY_FILE, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY)")
 	rootCmd.PersistentFlags().StringVar(&nostrBunkerFile, "nostr-bunker-file", "", "Read the NIP-46 bunker URI from this file (env BAHIA_NOSTR_BUNKER_FILE or BAHIA_NOSTR_BUNKER_URI)")
@@ -80,7 +71,6 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringVar(&operatorIntentOrg, "org", getEnvOrDefault("BAHIA_ORG_ID", ""), "Organization UUID for signed mutation intents (env BAHIA_ORG_ID)")
 	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "Trusted Bahia service pubkey for operator bootstrap discovery (repeatable; env BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS)")
-	rootCmd.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", getEnvBool("BAHIA_OPERATOR_HTTP_FALLBACK"), "Use the legacy HTTP read path for service, environment, state, policy, worker, build, artifact, organization, secret and notification reads; also permits explicit operator compatibility fallback")
 	rootCmd.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "Encrypt operator ContextVM requests and responses with NIP-59/NIP-44 (requires --service-pubkey)")
 	rootCmd.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "Maximum time to await a 30315 intent status or legacy ContextVM result (BAHIA_RESULT_TIMEOUT for intents)")
 	rootCmd.PersistentFlags().IntVar(&operatorResultRetries, "result-retries", client.DefaultOperatorResultRetries, "Number of idempotent ContextVM re-publish attempts after result timeout")
@@ -123,29 +113,25 @@ func newRootCommand() *cobra.Command {
 // --- Auth Commands ---
 
 func authCommands() *cobra.Command {
-	authCmd := &cobra.Command{Use: "auth", Short: "Inspect Nostr HTTP auth identity"}
+	authCmd := &cobra.Command{Use: "auth", Short: "Inspect Nostr signer identity"}
 
 	inspectCmd := &cobra.Command{
 		Use:   "inspect",
-		Short: "Show the Nostr identity used for per-request NIP-98 auth",
+		Short: "Show the configured Nostr signer identity",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			provider, err := resolveNIP98Provider(cmd)
+			signer, closeSigner, err := newCLIReadSigner(cmd)
 			if err != nil {
 				return err
 			}
-			if provider == nil {
-				return fmt.Errorf("provide --nostr-key-file, BAHIA_NOSTR_KEY_FILE, BAHIA_NOSTR_NSEC, or BAHIA_NOSTR_PRIVATE_KEY")
+			if closeSigner != nil {
+				defer closeSigner()
 			}
-			pubkey, err := provider.PublicKey()
+			pubkey, err := signer.GetPublicKey(cmd.Context())
 			if err != nil {
 				return err
 			}
-			npub, err := provider.Npub()
-			if err != nil {
-				return err
-			}
-			fmt.Printf("pubkey: %s\n", pubkey)
-			fmt.Printf("npub: %s\n", npub)
+			fmt.Printf("pubkey: %s\n", pubkey.Hex())
+			fmt.Printf("npub: %s\n", nip19.EncodeNpub(pubkey))
 			return nil
 		},
 	}
@@ -162,32 +148,14 @@ func servicesCommands() *cobra.Command {
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all services",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if operatorHTTPFallback {
-				services, err := apiClient.ListServices(cmd.Context())
-				if err != nil {
-					return err
-				}
-				return renderServices(services)
-			}
-			return runServicesListNostr(cmd)
-		},
+		RunE:  func(cmd *cobra.Command, args []string) error { return runServicesListNostr(cmd) },
 	}
 
 	getCmd := &cobra.Command{
 		Use:   "get [id]",
 		Short: "Get a service by ID",
 		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if operatorHTTPFallback {
-				svc, err := apiClient.GetService(cmd.Context(), args[0])
-				if err != nil {
-					return err
-				}
-				return outputSingle(svc)
-			}
-			return runServiceGetNostr(cmd, args[0])
-		},
+		RunE:  func(cmd *cobra.Command, args []string) error { return runServiceGetNostr(cmd, args[0]) },
 	}
 
 	createCmd := &cobra.Command{
@@ -1043,6 +1011,14 @@ func workersCommands() *cobra.Command {
 
 // --- Logs Commands ---
 
+type cliRunLogs struct {
+	RunID    string `json:"run_id"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+	ExitCode *int   `json:"exit_code"`
+	Duration string `json:"duration"`
+}
+
 func logsCommands() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs",
@@ -1057,7 +1033,11 @@ func logsCommands() *cobra.Command {
 			tail, _ := cmd.Flags().GetInt("tail")
 			stream, _ := cmd.Flags().GetString("stream")
 
-			logs, err := apiClient.GetRunLogs(cmd.Context(), args[0], tail, stream)
+			result := &struct {
+				Logs cliRunLogs `json:"logs"`
+			}{}
+			err := requestCLIContextVM(cmd, controlplane.ContextVMMethodDeploymentRunLogsGet, map[string]any{"run_id": args[0], "tail": tail, "stream": stream}, nil, "", "logs run", result)
+			logs := &result.Logs
 			if err != nil {
 				return err
 			}
@@ -1086,32 +1066,7 @@ func logsCommands() *cobra.Command {
 	runLogsCmd.Flags().Int("tail", 0, "Number of lines from end (0 = all)")
 	runLogsCmd.Flags().String("stream", "", "Stream filter: stdout, stderr, or merged")
 
-	liveCmd := &cobra.Command{
-		Use:   "live [service-id] [env-id]",
-		Short: "Stream live container logs",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			tail, _ := cmd.Flags().GetInt("tail")
-
-			fmt.Println("Streaming logs (Ctrl+C to stop)...")
-			return apiClient.StreamLiveLogs(cmd.Context(), args[0], args[1], tail, func(line client.LogLine) {
-				ts := line.Timestamp
-				if len(ts) > 19 {
-					ts = ts[:19]
-				}
-				stream := line.Stream
-				if stream == "stderr" {
-					stream = "ERR"
-				} else {
-					stream = "OUT"
-				}
-				fmt.Printf("[%s] [%s] %s\n", ts, stream, line.Message)
-			})
-		},
-	}
-	liveCmd.Flags().Int("tail", 100, "Number of historical lines")
-
-	cmd.AddCommand(runLogsCmd, liveCmd)
+	cmd.AddCommand(runLogsCmd)
 	return cmd
 }
 
@@ -1526,26 +1481,7 @@ func getEnvOrDefault(key, def string) string {
 	return def
 }
 
-// --- NIP-98 Auth Helpers ---
-
-func configureClientAuth(cmd *cobra.Command, c *client.Client) error {
-	provider, err := resolveNIP98Provider(cmd)
-	if err != nil {
-		return err
-	}
-	if provider != nil {
-		c.SetAuthorizationProvider(provider)
-	}
-	return nil
-}
-
-func resolveNIP98Provider(cmd *cobra.Command) (*client.NIP98PrivateKeyProvider, error) {
-	key, err := resolveNostrPrivateKeyInput(cmd)
-	if err != nil || key == "" {
-		return nil, err
-	}
-	return client.NewNIP98PrivateKeyProvider(key)
-}
+// --- Nostr signer input ---
 
 const maxNostrPrivateKeyInputBytes = 4096
 

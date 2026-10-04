@@ -31,7 +31,7 @@ bahia orgs get acme-corp --service-pubkey <bahia-service-pubkey> --relay wss://<
 bahia orgs members list <org-uuid> --service-pubkey <bahia-service-pubkey> --relay wss://<relay>
 ```
 
-CLI reads use the operator's NIP-44 signer to unwrap the org content key from signed relay key envelopes. Configure `--nostr-key-file` or a NIP-46 bunker signer. A key without membership cannot decrypt the org record and receives `not readable with this key` without a command error. `--http-fallback` is the explicit compatibility REST read path.
+CLI reads use the operator's NIP-44 signer to unwrap the org content key from signed relay key envelopes. Configure `--nostr-key-file` or a NIP-46 bunker signer. A key without membership cannot decrypt the org record and receives `not readable with this key` without a command error.
 
 ### Encrypted request/result flow
 

@@ -14,17 +14,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func isDefaultWorkerBuildArtifactRead(cmd *cobra.Command) bool {
-	if useHTTPReadFallback(cmd) || cmd.Parent() == nil {
-		return false
-	}
-	switch cmd.Parent().Name() + "/" + cmd.Name() {
-	case "workers/list", "workers/show", "builds/get", "builds/list", "artifacts/get", "artifacts/list":
-		return true
-	}
-	return false
-}
-
 func readCLIWorkerEvents(cmd *cobra.Command, extraAuthor string) ([]nostr.Event, []nostr.Event, error) {
 	pubkey := resolveOperatorServicePubkey(cmd)
 	if pubkey == "" {
@@ -90,9 +79,6 @@ func listCLIWorkers(cmd *cobra.Command) ([]domain.Worker, error) {
 }
 
 func listCLIWorkersForAuthor(cmd *cobra.Command, extraAuthor string) ([]domain.Worker, error) {
-	if useHTTPReadFallback(cmd) {
-		return apiClient.ListWorkerStates(cmd.Context())
-	}
 	states, adverts, err := readCLIWorkerEvents(cmd, extraAuthor)
 	if err != nil {
 		return nil, err
@@ -145,9 +131,6 @@ func listCLIWorkersForAuthor(cmd *cobra.Command, extraAuthor string) ([]domain.W
 }
 
 func getCLIWorker(cmd *cobra.Command, pubkey string) (*domain.Worker, error) {
-	if useHTTPReadFallback(cmd) {
-		return apiClient.GetWorkerState(cmd.Context(), pubkey)
-	}
 	if _, err := nostr.PubKeyFromHex(pubkey); err != nil {
 		return nil, fmt.Errorf("invalid worker pubkey %q: %w", pubkey, err)
 	}
@@ -181,14 +164,21 @@ func renderWorkers(workers []domain.Worker) error {
 	})
 }
 
-func getCLIBuild(cmd *cobra.Command, id string) (*client.BuildDetailsResult, error) {
+type cliBuildDetailsResult struct {
+	Build *domain.Build `json:"build,omitempty"`
+}
+
+type cliBuildListResult struct {
+	Builds []domain.Build `json:"builds"`
+	Count  int            `json:"count"`
+	Limit  int            `json:"limit"`
+	Offset int            `json:"offset"`
+}
+
+func getCLIBuild(cmd *cobra.Command, id string) (*cliBuildDetailsResult, error) {
 	want, err := uuid.Parse(id)
 	if err != nil {
 		return nil, fmt.Errorf("invalid build ID %q: %w", id, err)
-	}
-	if useHTTPReadFallback(cmd) {
-		build, err := apiClient.GetBuild(cmd.Context(), id)
-		return &client.BuildDetailsResult{Build: build}, err
 	}
 	events, err := readNostrEvents(cmd, "build", kinds.BuildRegistry)
 	if err != nil {
@@ -200,23 +190,19 @@ func getCLIBuild(cmd *cobra.Command, id string) (*client.BuildDetailsResult, err
 			return nil, err
 		}
 		if build != nil && build.ID == want {
-			return &client.BuildDetailsResult{Build: build}, nil
+			return &cliBuildDetailsResult{Build: build}, nil
 		}
 	}
 	return nil, fmt.Errorf("build %s not found", id)
 }
 
-func listCLIBuilds(cmd *cobra.Command, serviceID string, limit, offset int) (*client.BuildListResult, error) {
+func listCLIBuilds(cmd *cobra.Command, serviceID string, limit, offset int) (*cliBuildListResult, error) {
 	service, err := uuid.Parse(serviceID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid service ID %q: %w", serviceID, err)
 	}
 	if limit < 1 || limit > 200 || offset < 0 {
 		return nil, fmt.Errorf("limit must be 1..200 and offset must be nonnegative")
-	}
-	if useHTTPReadFallback(cmd) {
-		builds, err := apiClient.ListBuilds(cmd.Context(), serviceID, limit, offset)
-		return &client.BuildListResult{Builds: builds, Count: len(builds), Limit: limit, Offset: offset}, err
 	}
 	events, err := readNostrEvents(cmd, "build", kinds.BuildRegistry)
 	if err != nil {
@@ -247,16 +233,13 @@ func listCLIBuilds(cmd *cobra.Command, serviceID string, limit, offset int) (*cl
 			builds = builds[:limit]
 		}
 	}
-	return &client.BuildListResult{Builds: builds, Count: count, Limit: limit, Offset: offset}, nil
+	return &cliBuildListResult{Builds: builds, Count: count, Limit: limit, Offset: offset}, nil
 }
 
 func getCLIArtifact(cmd *cobra.Command, id string) (*domain.Artifact, error) {
 	want, err := uuid.Parse(id)
 	if err != nil {
 		return nil, fmt.Errorf("invalid artifact ID %q: %w", id, err)
-	}
-	if useHTTPReadFallback(cmd) {
-		return apiClient.GetArtifact(cmd.Context(), id)
 	}
 	events, err := readNostrEvents(cmd, "artifact", kinds.ArtifactRegistry)
 	if err != nil {
@@ -281,9 +264,6 @@ func listCLIArtifacts(cmd *cobra.Command, serviceID string, limit, offset int) (
 	}
 	if limit < 1 || limit > 200 || offset < 0 {
 		return nil, fmt.Errorf("limit must be 1..200 and offset must be nonnegative")
-	}
-	if useHTTPReadFallback(cmd) {
-		return apiClient.ListArtifacts(cmd.Context(), serviceID, limit, offset)
 	}
 	events, err := readNostrEvents(cmd, "artifact", kinds.ArtifactRegistry)
 	if err != nil {

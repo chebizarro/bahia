@@ -157,27 +157,7 @@ func showUnreadable(cmd *cobra.Command, unreadable, readable int) bool {
 	return false
 }
 
-func withHTTPConfidentialRead(cmd *cobra.Command, run func() error) (retErr error) {
-	closeSigner, err := configureNIP46HTTPClientAuth(cmd, apiClient)
-	if err != nil {
-		return err
-	}
-	if closeSigner != nil {
-		defer func() { retErr = errors.Join(retErr, closeSigner()) }()
-	}
-	return run()
-}
-
 func listCLIOrgs(cmd *cobra.Command) error {
-	if useHTTPReadFallback(cmd) {
-		return withHTTPConfidentialRead(cmd, func() error {
-			orgs, err := apiClient.ListOrgs(cmd.Context())
-			if err != nil {
-				return err
-			}
-			return renderCLIOrgs(orgs)
-		})
-	}
 	orgs, unreadable, err := readCLIConfidentialRecords[domain.Organization](cmd, kinds.OrgRegistry)
 	if err != nil {
 		return err
@@ -196,15 +176,6 @@ func renderCLIOrgs(orgs []domain.Organization) error {
 }
 
 func getCLIOrg(cmd *cobra.Command, idOrName string) error {
-	if useHTTPReadFallback(cmd) {
-		return withHTTPConfidentialRead(cmd, func() error {
-			org, err := apiClient.GetOrg(cmd.Context(), idOrName)
-			if err != nil {
-				return err
-			}
-			return outputSingle(org)
-		})
-	}
 	var include []func(*client.DecodedEvent) bool
 	if parsed, err := uuid.Parse(idOrName); err == nil {
 		include = append(include, func(record *client.DecodedEvent) bool { return record.DTag == parsed.String() })
@@ -228,15 +199,6 @@ func listCLIOrgMembers(cmd *cobra.Command, orgID string) error {
 	parsed, err := uuid.Parse(orgID)
 	if err != nil {
 		return fmt.Errorf("invalid organization ID %q: %w", orgID, err)
-	}
-	if useHTTPReadFallback(cmd) {
-		return withHTTPConfidentialRead(cmd, func() error {
-			members, err := apiClient.ListOrgMembers(cmd.Context(), orgID)
-			if err != nil {
-				return err
-			}
-			return renderCLIOrgMembers(members)
-		})
 	}
 	all, unreadable, err := readCLIConfidentialRecords[domain.OrgMember](cmd, kinds.OrgMemberRegistry, func(record *client.DecodedEvent) bool {
 		return strings.HasPrefix(record.DTag, "org:member:"+parsed.String()+":")
@@ -263,21 +225,21 @@ func renderCLIOrgMembers(members []domain.OrgMember) error {
 	})
 }
 
+type cliSecretRef struct {
+	ID               string `json:"id"`
+	ServiceID        string `json:"service_id"`
+	EnvironmentID    string `json:"environment_id,omitempty"`
+	Name             string `json:"name"`
+	EncryptionMethod string `json:"encryption_method"`
+	Version          int    `json:"version"`
+}
+
 func listCLISecrets(cmd *cobra.Command, serviceID string) error {
 	parsed, err := uuid.Parse(serviceID)
 	if err != nil {
 		return fmt.Errorf("invalid service ID %q: %w", serviceID, err)
 	}
-	if useHTTPReadFallback(cmd) {
-		return withHTTPConfidentialRead(cmd, func() error {
-			secrets, err := apiClient.ListSecrets(cmd.Context(), serviceID)
-			if err != nil {
-				return err
-			}
-			return renderCLISecrets(secrets)
-		})
-	}
-	all, unreadable, err := readCLIConfidentialRecords[client.SecretRef](cmd, kinds.SecretRegistry, func(record *client.DecodedEvent) bool {
+	all, unreadable, err := readCLIConfidentialRecords[cliSecretRef](cmd, kinds.SecretRegistry, func(record *client.DecodedEvent) bool {
 		for _, tag := range record.Event.Tags {
 			if len(tag) >= 2 && tag[0] == "service_id" {
 				return tag[1] == parsed.String()
@@ -288,7 +250,7 @@ func listCLISecrets(cmd *cobra.Command, serviceID string) error {
 	if err != nil {
 		return err
 	}
-	secrets := make([]client.SecretRef, 0)
+	secrets := make([]cliSecretRef, 0)
 	for _, secret := range all {
 		if secret.ServiceID == parsed.String() {
 			secrets = append(secrets, secret)
@@ -301,8 +263,8 @@ func listCLISecrets(cmd *cobra.Command, serviceID string) error {
 	return renderCLISecrets(secrets)
 }
 
-func renderCLISecrets(secrets []client.SecretRef) error {
-	return output(secrets, []string{"ID", "NAME", "ENV", "ENCRYPTION", "VERSION"}, func(s client.SecretRef) []string {
+func renderCLISecrets(secrets []cliSecretRef) error {
+	return output(secrets, []string{"ID", "NAME", "ENV", "ENCRYPTION", "VERSION"}, func(s cliSecretRef) []string {
 		env := s.EnvironmentID
 		if env == "" {
 			env = "(all)"
@@ -324,43 +286,20 @@ func notificationMetadata(ch domain.NotificationChannel) (map[string]any, error)
 }
 
 func listCLINotificationChannels(cmd *cobra.Command) error {
-	var channels []map[string]any
-	if useHTTPReadFallback(cmd) {
-		err := withHTTPConfidentialRead(cmd, func() error {
-			all, err := apiClient.ListNotificationChannels(cmd.Context())
-			if err != nil {
-				return err
-			}
-			for _, ch := range all {
-				metadata, err := notificationMetadata(ch)
-				if err != nil {
-					return err
-				}
-				channels = append(channels, metadata)
-			}
-			return nil
-		})
+	visible, unreadable, err := readCLIConfidentialRecords[domain.NotificationChannel](cmd, kinds.NotificationChannelRegistry)
+	if err != nil {
+		return err
+	}
+	if showUnreadable(cmd, unreadable, len(visible)) {
+		return nil
+	}
+	channels := make([]map[string]any, 0, len(visible))
+	for _, ch := range visible {
+		metadata, err := notificationMetadata(ch)
 		if err != nil {
 			return err
 		}
-	} else {
-		var unreadable int
-		var err error
-		var visible []domain.NotificationChannel
-		visible, unreadable, err = readCLIConfidentialRecords[domain.NotificationChannel](cmd, kinds.NotificationChannelRegistry)
-		if err != nil {
-			return err
-		}
-		if showUnreadable(cmd, unreadable, len(visible)) {
-			return nil
-		}
-		for _, ch := range visible {
-			metadata, err := notificationMetadata(ch)
-			if err != nil {
-				return err
-			}
-			channels = append(channels, metadata)
-		}
+		channels = append(channels, metadata)
 	}
 	sort.Slice(channels, func(i, j int) bool { return fmt.Sprint(channels[i]["id"]) < fmt.Sprint(channels[j]["id"]) })
 	return output(channels, []string{"ID", "NAME", "TYPE", "ENABLED"}, func(ch map[string]any) []string {
@@ -371,19 +310,6 @@ func listCLINotificationChannels(cmd *cobra.Command) error {
 func getCLINotificationChannel(cmd *cobra.Command, id string) error {
 	if _, err := uuid.Parse(id); err != nil {
 		return fmt.Errorf("invalid notification channel ID %q: %w", id, err)
-	}
-	if useHTTPReadFallback(cmd) {
-		return withHTTPConfidentialRead(cmd, func() error {
-			ch, err := apiClient.GetNotificationChannel(cmd.Context(), id)
-			if err != nil {
-				return err
-			}
-			metadata, err := notificationMetadata(*ch)
-			if err != nil {
-				return err
-			}
-			return outputSingle(metadata)
-		})
 	}
 	channels, unreadable, err := readCLIConfidentialRecords[domain.NotificationChannel](cmd, kinds.NotificationChannelRegistry, func(record *client.DecodedEvent) bool { return record.DTag == id })
 	if err != nil {
