@@ -109,7 +109,7 @@ To add managed HTTPS to an existing deployment, use `service/route-attach` with 
 
 ### Hive-CI self-dispatch
 
-The signed `build/request` mutation arrives over ContextVM kind `25910`. After Bahia resolves and mirrors the source repository, it publishes the CI-bus workflow run as durable kind `5401`, not as another ContextVM message. The run is tag-only and carries the configured NIP-34 `a` coordinate plus `commit`, `branch`, `trigger`, `triggered-by`, `workflow`, `publisher`, and `t=hive-ci`; the returned `ci_run_id` is the signed 5401 event id used by kind-5402 correlation.
+The CLI publishes a signed kind-`30900` `build/request` intent and reads the queued build from accepted `30315` status `data`; the older ContextVM kind-`25910` method remains a dual-dispatch compatibility path until its callers retire. After Bahia resolves and mirrors the source repository, it publishes the CI-bus workflow run as durable kind `5401`, not as another request envelope. The run is tag-only and carries the configured NIP-34 `a` coordinate plus `commit`, `branch`, `trigger`, `triggered-by`, `workflow`, `publisher`, and `t=hive-ci`; the returned `ci_run_id` is the signed 5401 event id used by kind-5402 correlation.
 
 Set `hiveci.initiator.repo_announcement_addr` and include Bahia's service pubkey in `hiveci.trusted_ci_pubkeys`. The latter remains explicit operator trust: Bahia logs `self_issued_run_untrusted` if a self-issued 5401 would be filtered out, but does not auto-trust its key.
 

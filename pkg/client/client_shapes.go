@@ -16,7 +16,10 @@ type AdoptionTarget struct {
 
 // AdoptionScanRequest requests an adoption preview scan.
 type AdoptionScanRequest struct {
-	Targets []AdoptionTarget `json:"targets"`
+	Targets        []AdoptionTarget `json:"targets"`
+	Offset         int              `json:"offset"`
+	Limit          int              `json:"limit"`
+	IdempotencyKey string           `json:"-"`
 }
 
 // AdoptionSelection selects one discovered container for import.

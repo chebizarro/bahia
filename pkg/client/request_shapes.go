@@ -97,8 +97,8 @@ type ServiceCommandResult struct {
 }
 
 // BuildRequestNostrRequest is the signer-first build/request payload.
-// IdempotencyKey controls the ContextVM d tag and _meta.progressToken; it is
-// deliberately excluded from the strictly decoded business payload.
+// IdempotencyKey is the UUIDv7 intent ID used for safe request replay; it is
+// deliberately excluded from the business payload.
 type BuildRequestNostrRequest struct {
 	ServiceID               string            `json:"service_id"`
 	GitRef                  string            `json:"git_ref"`
@@ -108,8 +108,9 @@ type BuildRequestNostrRequest struct {
 	IdempotencyKey          string            `json:"-"`
 }
 
-// BuildCommandResult is the terminal acknowledgment for build/request.
+// BuildCommandResult is the accepted 30315 projection for a build request.
 type BuildCommandResult struct {
+	IntentID string `json:"intent_id,omitempty"`
 	Status   string `json:"status,omitempty"`
 	BuildID  string `json:"build_id,omitempty"`
 	GitSHA   string `json:"git_sha,omitempty"`

@@ -38,10 +38,10 @@ func lastOpServiceOrg(cmd *cobra.Command, serviceID string) (string, error) {
 }
 
 func runArtifactRegisterIntent(cmd *cobra.Command, artifactID string, req client.RegisterArtifactNostrRequest) (*client.ArtifactCommandResult, error) {
-	if err := requireContextVMUUID("build_id", req.BuildID); err != nil {
+	if err := requireCLIUUID("build_id", req.BuildID); err != nil {
 		return nil, err
 	}
-	if err := requireContextVMUUID("service_id", req.ServiceID); err != nil {
+	if err := requireCLIUUID("service_id", req.ServiceID); err != nil {
 		return nil, err
 	}
 	if req.ImageRepo == "" || req.ImageTag == "" || req.ImageDigest == "" {
@@ -69,10 +69,10 @@ func runArtifactRegisterIntent(cmd *cobra.Command, artifactID string, req client
 }
 
 func runArtifactImportObservedIntent(cmd *cobra.Command, req client.ImportObservedArtifactNostrRequest) (*client.ImportObservedArtifactResult, error) {
-	if err := requireContextVMUUID("service_id", req.ServiceID); err != nil {
+	if err := requireCLIUUID("service_id", req.ServiceID); err != nil {
 		return nil, err
 	}
-	if err := requireContextVMUUID("environment_id", req.EnvironmentID); err != nil {
+	if err := requireCLIUUID("environment_id", req.EnvironmentID); err != nil {
 		return nil, err
 	}
 	if req.ImageRepo == "" || req.ImageTag == "" || req.ImageDigest == "" {
@@ -117,7 +117,7 @@ func runDNSDriftRemediateIntent(cmd *cobra.Command, req client.DNSDriftRemediate
 
 func runDeploymentPreviewIntent(cmd *cobra.Command, req client.DeploymentPreviewNostrRequest) (map[string]any, error) {
 	for field, value := range map[string]string{"service_id": req.ServiceID, "environment_id": req.EnvironmentID, "artifact_id": req.ArtifactID} {
-		if err := requireContextVMUUID(field, value); err != nil {
+		if err := requireCLIUUID(field, value); err != nil {
 			return nil, err
 		}
 	}
@@ -146,10 +146,10 @@ func runDeploymentPreviewIntent(cmd *cobra.Command, req client.DeploymentPreview
 }
 
 func runRouteAttachIntent(cmd *cobra.Command, req client.RouteAttachRequest) (*client.DeploymentCommandResult, error) {
-	if err := requireContextVMUUID("service_id", req.ServiceID); err != nil {
+	if err := requireCLIUUID("service_id", req.ServiceID); err != nil {
 		return nil, err
 	}
-	if err := requireContextVMUUID("environment_id", req.EnvironmentID); err != nil {
+	if err := requireCLIUUID("environment_id", req.EnvironmentID); err != nil {
 		return nil, err
 	}
 	normalized, err := domain.NormalizePublicRouteRequest(req.PublicRoute)
