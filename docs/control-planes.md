@@ -345,7 +345,7 @@ CLI behavior:
   and NIP-46 inputs are mixed.
 - Relay resolution is deterministic: repeatable `--relay` flags, then comma-separated `BAHIA_NOSTR_RELAYS`, then ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`).
 - Live status chatter is written to stderr only in table mode; JSON/YAML stdout remains reserved for the final ContextVM acknowledgment or canonical result projection selected by the command.
-- `--http-fallback` (or `BAHIA_OPERATOR_HTTP_FALLBACK=true`) is explicit compatibility mode and is only safe before any relay accepts a signed ContextVM request, such as signer/relay discovery failure or publish with zero accepted relays.
+- CLI commands use relay transport; there is no HTTP fallback for signer or relay discovery failures.
 - `--raw-target` is compatibility-only. ContextVM adoption paths use server-managed endpoint refs; raw Docker transport material is not published as public relay content.
 
 Authorization uses the verified inner ContextVM event pubkey after unwrap:

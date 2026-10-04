@@ -39,23 +39,6 @@ func readEOSETimeout(cmd *cobra.Command) (time.Duration, error) {
 	return client.DefaultEOSETimeout, nil
 }
 
-func useHTTPReadFallback(cmd *cobra.Command) bool {
-	flags := cmd.Root().PersistentFlags()
-	return flags.Changed("http-fallback") && operatorHTTPFallback
-}
-
-func isDefaultStatePolicyRead(cmd *cobra.Command) bool {
-	if useHTTPReadFallback(cmd) || cmd.Parent() == nil {
-		return false
-	}
-	switch cmd.Parent().Name() + "/" + cmd.Name() {
-	case "state/list", "state/drifted", "policies/list", "policies/get", "orgs/list", "orgs/get", "members/list", "secrets/list", "channels/list", "channels/get":
-		return true
-	default:
-		return false
-	}
-}
-
 // readCLIStateEvents owns the pool and local store for one command invocation.
 func readCLIStateEvents(cmd *cobra.Command, domain string) ([]nostr.Event, error) {
 	relays, err := resolveOperatorRelays(cmd)
@@ -95,12 +78,6 @@ func readCLIStateEvents(cmd *cobra.Command, domain string) ([]nostr.Event, error
 }
 
 func listCLIStates(cmd *cobra.Command, driftedOnly bool) ([]domain.EnvironmentServiceState, error) {
-	if useHTTPReadFallback(cmd) {
-		if driftedOnly {
-			return apiClient.ListDriftedStates(cmd.Context())
-		}
-		return apiClient.ListStates(cmd.Context())
-	}
 	events, err := readCLIStateEvents(cmd, "state")
 	if err != nil {
 		return nil, err
@@ -129,9 +106,6 @@ func decodeCLIStates(events []nostr.Event, driftedOnly bool) ([]domain.Environme
 }
 
 func listCLIPolicies(cmd *cobra.Command) ([]domain.DeploymentPolicy, error) {
-	if useHTTPReadFallback(cmd) {
-		return apiClient.ListPolicies(cmd.Context())
-	}
 	events, err := readCLIStateEvents(cmd, "policy")
 	if err != nil {
 		return nil, err
@@ -155,9 +129,6 @@ func decodeCLIPolicies(events []nostr.Event) ([]domain.DeploymentPolicy, error) 
 }
 
 func getCLIPolicy(cmd *cobra.Command, id string) (*domain.DeploymentPolicy, error) {
-	if useHTTPReadFallback(cmd) {
-		return apiClient.GetPolicy(cmd.Context(), id)
-	}
 	parsed, err := uuid.Parse(id)
 	if err != nil {
 		return nil, fmt.Errorf("invalid policy ID %q: %w", id, err)

@@ -2,8 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -15,9 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestR3ReadRESTNostrGolden(t *testing.T) {
+func TestR3ReadNostrGolden(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
-	t.Setenv("BAHIA_OPERATOR_HTTP_FALLBACK", "")
 	serviceSK := nostr.Generate()
 	workerSK := nostr.Generate()
 	servicePub := nostr.GetPublicKey(serviceSK).Hex()
@@ -42,46 +39,36 @@ func TestR3ReadRESTNostrGolden(t *testing.T) {
 	require.NoError(t, ad.Sign(workerSK))
 	pool := &cliReadPool{events: []nostr.Event{state, ad, makeCLIReadEvent(t, serviceSK, kinds.BuildRegistry, buildID, build, stamp), makeCLIReadEvent(t, serviceSK, kinds.ArtifactRegistry, artifactID, artifact, stamp)}}
 	installCLIReadPool(t, pool)
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		var data any
-		switch r.URL.Path {
-		case "/api/v1/workers":
-			data = []domain.Worker{worker}
-		case "/api/v1/workers/" + workerPub:
-			data = worker
-		case "/api/v1/builds/" + buildID.String():
-			data = build
-		case "/api/v1/services/" + serviceID.String() + "/builds":
-			data = []domain.Build{build}
-		case "/api/v1/artifacts/" + artifactID.String():
-			data = artifact
-		case "/api/v1/services/" + serviceID.String() + "/artifacts":
-			data = []domain.Artifact{artifact}
-		default:
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
-	}))
-	defer server.Close()
 	cases := [][]string{{"workers", "list"}, {"workers", "show", workerPub}, {"builds", "get", "--build", buildID.String()}, {"builds", "list", "--service", serviceID.String()}, {"artifacts", "get", "--artifact", artifactID.String()}, {"artifacts", "list", "--service", serviceID.String()}}
 	for _, command := range cases {
 		for _, format := range []string{"table", "json"} {
 			t.Run(strings.Join(command, "-")+"-"+format, func(t *testing.T) {
-				base := []string{"--server", server.URL, "--service-pubkey", servicePub, "--relay", "wss://fixture.invalid", "--output", format}
-				rest, _, err := runReadCLI(t, append(append([]string{}, base...), append([]string{"--http-fallback"}, command...)...)...)
-				require.NoError(t, err)
+				base := []string{"--service-pubkey", servicePub, "--relay", "wss://fixture.invalid", "--output", format}
 				got, stderr, err := runReadCLI(t, append(append([]string{}, base...), command...)...)
 				require.NoError(t, err)
 				require.Empty(t, stderr)
-				require.Equal(t, rest, got)
+				require.NotEmpty(t, got)
+				expected := serviceID.String()
+				if command[0] == "workers" {
+					expected = workerPub
+					if format == "table" {
+						expected = workerPub[:13]
+					}
+				}
+				if command[0] == "builds" {
+					expected = buildID.String()
+				}
+				if command[0] == "artifacts" {
+					expected = artifactID.String()
+				}
+				require.Contains(t, got, expected)
+				if format == "json" {
+					require.True(t, json.Valid([]byte(got)), "invalid JSON: %s", got)
+				}
+
 			})
 		}
 	}
-	require.Equal(t, 12, calls, "default reads must not hit HTTP")
 	adFilters := 0
 	for _, filter := range pool.filters {
 		if len(filter.Kinds) == 1 && filter.Kinds[0] == nostr.Kind(kinds.LoomWorkerAdvertisement) {

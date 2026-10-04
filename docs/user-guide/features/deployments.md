@@ -166,7 +166,7 @@ Relay updates may arrive late or repeat after reconnect. The dashboard merges in
 
 ### CLI
 
-The current CLI does not register `bahia deployments list`, `bahia deployments get`, or `bahia deployments logs` commands. Use `bahia state list` / `bahia state drifted` for current state views and `bahia logs run <run-id>` for run logs. State reads sync signed service-state `30900` records into a per-service local store; `drifted` means `drift_status=drifted`, matching the former REST filter. The public record includes the non-secret desired runtime snapshot, reconciliation backoff time, and failure count, but not free-form failure messages. `--http-fallback` explicitly selects the legacy REST read route. Without EOSE, the CLI warns and renders stale local state with exit 0.
+The current CLI does not register `bahia deployments list`, `bahia deployments get`, or `bahia deployments logs` commands. Use `bahia state list` / `bahia state drifted` for current state views and `bahia logs run <run-id>` for run logs. State reads sync signed service-state `30900` records into a per-service local store; `drifted` means `drift_status=drifted`, matching the former REST filter. The public record includes the non-secret desired runtime snapshot, reconciliation backoff time, and failure count, but not free-form failure messages. Without EOSE, the CLI warns and renders stale local state with exit 0.
 
 ### Nostr Subscriptions
 

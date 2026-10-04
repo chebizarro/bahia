@@ -24,8 +24,10 @@ func TestRootCommandExposesOperatorFlags(t *testing.T) {
 	if flag := cmd.PersistentFlags().Lookup("trusted-service-pubkey"); flag == nil {
 		t.Fatal("root command missing --trusted-service-pubkey")
 	}
-	if flag := cmd.PersistentFlags().Lookup("http-fallback"); flag == nil {
-		t.Fatal("root command missing --http-fallback")
+	for _, name := range []string{"server", "http-fallback"} {
+		if cmd.PersistentFlags().Lookup(name) != nil {
+			t.Fatalf("root command still exposes --%s", name)
+		}
 	}
 	for _, name := range []string{"encrypted", "result-timeout", "result-retries"} {
 		if flag := cmd.PersistentFlags().Lookup(name); flag == nil {
@@ -171,7 +173,6 @@ func newOperatorFlagTestCommand(t *testing.T) *cobra.Command {
 	root.PersistentFlags().StringArrayVar(&operatorBootstrapRelays, "bootstrap-relay", nil, "")
 	root.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", "", "")
 	root.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "")
-	root.PersistentFlags().BoolVar(&operatorHTTPFallback, "http-fallback", false, "")
 	root.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "")
 	root.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "")
 	root.PersistentFlags().IntVar(&operatorResultRetries, "result-retries", client.DefaultOperatorResultRetries, "")
@@ -192,9 +193,7 @@ func replaceOperatorDiscovery(discover func(context.Context, client.OperatorRela
 
 func resetOperatorGlobals(t *testing.T) {
 	t.Helper()
-	serverURL = ""
 	outputFormat = "table"
-	apiClient = nil
 	nostrKeyFile = ""
 	nostrBunkerFile = ""
 	nostrBunkerRelays = nil
@@ -203,7 +202,6 @@ func resetOperatorGlobals(t *testing.T) {
 	operatorBootstrapRelays = nil
 	operatorServicePubkey = ""
 	operatorTrustedServicePubkeys = nil
-	operatorHTTPFallback = false
 	operatorEncrypted = false
 	operatorResultTimeout = client.DefaultOperatorResultTimeout
 	operatorResultRetries = client.DefaultOperatorResultRetries
@@ -213,7 +211,6 @@ func resetOperatorGlobals(t *testing.T) {
 	t.Setenv("BAHIA_NOSTR_BOOTSTRAP_RELAYS", "")
 	t.Setenv("BAHIA_NOSTR_SERVICE_PUBKEY", "")
 	t.Setenv("BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS", "")
-	t.Setenv("BAHIA_OPERATOR_HTTP_FALLBACK", "")
 	t.Setenv("BAHIA_NOSTR_KEY_FILE", "")
 	t.Setenv("BAHIA_NOSTR_NSEC", "")
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
@@ -223,9 +220,7 @@ func resetOperatorGlobals(t *testing.T) {
 	t.Setenv("BAHIA_NOSTR_CLIENT_KEY_FILE", "")
 	t.Setenv("BAHIA_NOSTR_CLIENT_PRIVATE_KEY", "")
 	t.Cleanup(func() {
-		serverURL = ""
 		outputFormat = "table"
-		apiClient = nil
 		nostrKeyFile = ""
 		nostrBunkerFile = ""
 		nostrBunkerRelays = nil
@@ -234,7 +229,6 @@ func resetOperatorGlobals(t *testing.T) {
 		operatorBootstrapRelays = nil
 		operatorServicePubkey = ""
 		operatorTrustedServicePubkeys = nil
-		operatorHTTPFallback = false
 		operatorEncrypted = false
 		operatorResultTimeout = client.DefaultOperatorResultTimeout
 		operatorResultRetries = client.DefaultOperatorResultRetries

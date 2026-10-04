@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/url"
 	"os"
@@ -13,8 +12,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 var discoverOperatorRelaysForCLI = func(ctx context.Context, cfg client.OperatorRelayDiscoveryConfig) ([]string, error) {
@@ -93,43 +90,6 @@ var newCLINIP46Signer = func(ctx context.Context, bunkerURI, clientKey string) (
 		return nil, "", nil, err
 	}
 	return &cliNIP46Signer{client: signetClient, pubkey: pubkey}, pubkey, signetClient.Close, nil
-}
-
-func configureNIP46HTTPClientAuth(cmd *cobra.Command, c *client.Client) (func() error, error) {
-	key, err := resolveNostrPrivateKeyInput(cmd)
-	if err != nil {
-		return nil, err
-	}
-	bunkerURI, clientKey, err := resolveNIP46OperatorInput(cmd)
-	if err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(key) != "" && bunkerURI != "" {
-		return nil, fmt.Errorf("configure either a NIP-46 bunker signer or a local private key, not both")
-	}
-	if bunkerURI == "" {
-		return nil, nil
-	}
-	signer, _, closeSigner, err := newCLINIP46Signer(cmd.Context(), bunkerURI, clientKey)
-	if err != nil {
-		return nil, fmt.Errorf("connect NIP-46 HTTP signer: %w", err)
-	}
-	provider, err := client.NewNIP98SignerProvider(signer)
-	if err != nil {
-		_ = closeSigner()
-		return nil, err
-	}
-	c.SetAuthorizationProvider(provider)
-	return closeSigner, nil
-}
-
-func newCLIOperatorLogger(stderr io.Writer) *zap.Logger {
-	if stderr == nil {
-		return zap.NewNop()
-	}
-	encoderConfig := zap.NewProductionEncoderConfig()
-	encoderConfig.TimeKey = ""
-	return zap.New(zapcore.NewCore(zapcore.NewConsoleEncoder(encoderConfig), zapcore.AddSync(stderr), zap.WarnLevel))
 }
 
 func resolveNIP46OperatorInput(cmd *cobra.Command) (string, string, error) {
@@ -302,29 +262,4 @@ func normalizeRelayList(values []string) []string {
 		}
 	}
 	return out
-}
-
-func operatorStatusCallback(cmd *cobra.Command, label string) func(client.OperatorStatusEvent) {
-	if outputFormat != "table" {
-		return nil
-	}
-	return func(status client.OperatorStatusEvent) {
-		message := strings.TrimSpace(status.Message)
-		if message == "" {
-			message = firstNonEmpty(status.Step, status.Status)
-		}
-		if message == "" {
-			message = "status update"
-		}
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "→ %s: %s\n", label, message)
-	}
-}
-
-func getEnvBool(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
-	case "1", "true", "yes", "y", "on":
-		return true
-	default:
-		return false
-	}
 }
