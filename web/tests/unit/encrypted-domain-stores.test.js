@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const intentMock = vi.hoisted(() => vi.fn(async request => ({ id: request.coordinate, pending: true })));
 vi.mock('../../src/lib/stores/sensitive-intents.svelte.js', () => ({ submitSensitiveIntent: intentMock }));
+vi.mock('$lib/nostr/intent-client.svelte.js', () => ({ publishIntent: intentMock }));
 
 vi.mock('$lib/nostr/encrypted-controlplane.js', () => ({
   encryptedRequestsAvailable: vi.fn(),

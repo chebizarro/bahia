@@ -106,5 +106,54 @@ export async function submitSensitiveIntent({ domain, op, coordinate, orgId, con
   row.wrapEventId = wrap.id;
   await outbox.enqueue(wrap);
   for (const relay of getRelayUrls()) outbox.onReconnect(relay);
-  return { id: coordinate, intentId: signedIntentId, pending: true };
+  return { id: coordinate, coordinate, intentId: signedIntentId, pending: true, sensitive: true };
+}
+
+/** Resolve a gift-wrapped intent only from its signed, correlated daemon status. */
+export async function waitForSensitiveIntentStatus({ coordinate, intentId }, { signal } = {}) {
+  const { pending } = await ensureSession();
+  const requester = authState.pubkey;
+  const service = getServicePubkey();
+  const filter = { kinds: [30315], authors: [service],
+    '#d': [`intent-status:${requester}:${coordinate}`], '#p': [requester], '#t': ['intent-status'] };
+  const store = getEventStore();
+  return new Promise((resolve, reject) => {
+    let finished = false;
+    let unsubscribe = () => {};
+    let unsubscribePending = () => {};
+    const request = getPool().subscribe({ relays: getRelayUrls(), filters: [{ ...filter, limit: 1 }] });
+    const finish = (value, error) => {
+      if (finished) return;
+      finished = true;
+      unsubscribe();
+      unsubscribePending();
+      request.unsubscribe();
+      signal?.removeEventListener('abort', abort);
+      if (error) reject(error); else resolve(value);
+    };
+    const abort = () => finish(null, signal.reason || new Error('Intent status wait aborted'));
+    const onStatus = event => {
+      const tag = name => event.tags?.find(item => item[0] === name)?.[1];
+      if (event.kind !== 30315 || event.pubkey !== service || tag('d') !== filter['#d'][0] ||
+          tag('p') !== requester || tag('intent_id') !== intentId || tag('t') !== 'intent-status') return;
+      let body;
+      try { body = JSON.parse(event.content || '{}'); }
+      catch { finish(null, new Error('Invalid intent status content')); return; }
+      const status = tag('status') || body.status;
+      if (status === 'accepted') finish({ ...body, status });
+      else if (['rejected', 'conflict', 'superseded'].includes(status)) {
+        finish(null, new Error(tag('reason') || body.reason || `Intent ${status}`));
+      }
+    };
+    unsubscribe = store.subscribe(filter, onStatus);
+    unsubscribePending = pending.subscribe(() => {
+      const row = pending.query({ coordinate }).find(item => item.intentId === intentId);
+      if (row?.status === 'failed') finish(null, new Error(row.reason || 'Intent publish failed'));
+    });
+    if (signal?.aborted) abort();
+    else {
+      signal?.addEventListener('abort', abort, { once: true });
+      for (const event of store.query(filter)) onStatus(event);
+    }
+  });
 }
