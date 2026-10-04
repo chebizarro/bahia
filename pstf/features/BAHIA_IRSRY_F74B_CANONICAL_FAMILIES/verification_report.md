@@ -25,10 +25,17 @@ Verification on this branch:
   TestNoNew -count=1` passed. One earlier full run hit a transient timeout in
   `TestAssistantExecutionReconnectRacingUserOperationKeepsOneChain` during
   concurrent worktree gates; its isolated rerun and the final full run passed.
-- `pnpm run test:unit` passed (1069 tests, one skipped; one file skipped), as
-  did `pnpm run lint` and `pnpm run build`.
-- Playwright ran on the supported alternate port 4174 because another
-  worktree owned 4173. Result: 222 passed, 4 skipped, 3 failed in untouched
-  tests: `deployment-history-and-run-details.spec.js` could not find
-  `pre.logs`; two `environments-crud-smoke.spec.js` cases call `fill()` on an
-  organization `<select>`. No F74b browser code or tests were changed.
+- The final `pnpm run test:unit` passed (1069 tests, one skipped; one file
+  skipped), as did `pnpm run lint` and `pnpm run build`. An earlier post-edit
+  unit run hit two 5-second timeouts under load; both files passed in isolation
+  and the exact full unit command passed on retry.
+- The first Playwright run used alternate port 4174 while another worktree
+  owned 4173: 222 passed, 4 skipped, 3 failed. The three suspect specs passed
+  on detached base `ffcc55bf` (3/3). A focused branch run reproduced the
+  organization failure before retry: the form switches from an input to a
+  select when organization state arrives, but two tests always called
+  `fill()`. Those tests now wait for the select and use `selectOption()`; the
+  focused deployment-history/environment suite passed (15/15). The prior
+  deployment-log assertion failure did not reproduce in that focused run or
+  either full 4173 run. The final exact `CGO_ENABLED=0 CI=1 npx playwright
+  test` on port 4173 passed: **225 passed, 4 skipped, 0 failed**.
