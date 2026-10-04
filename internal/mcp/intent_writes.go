@@ -293,7 +293,8 @@ func isIntentWriteTool(name string) bool {
 		return true
 	}
 	switch name {
-	case "bahia_package_repository_apply", "bahia_package_repository_delete", "bahia_package_upload", "bahia_package_promote", "bahia_package_yank", "bahia_package_drift_detect",
+	case "bahia_register_artifact",
+		"bahia_package_repository_apply", "bahia_package_repository_delete", "bahia_package_upload", "bahia_package_promote", "bahia_package_yank", "bahia_package_drift_detect",
 		"bahia_create_service", "bahia_update_service", "bahia_delete_service",
 		"bahia_create_environment", "bahia_update_environment", "bahia_delete_environment",
 		"bahia_deploy", "bahia_create_intent", "bahia_rollback",
@@ -487,6 +488,32 @@ func (s *Server) intentWriteForTool(ctx context.Context, name string, args map[s
 	var w intentWrite
 	var err error
 	switch name {
+	case "bahia_register_artifact":
+		id, e := mcpIntentEntityID(args, intentID)
+		if e != nil {
+			return w, e
+		}
+		serviceID, e := parseRequiredUUIDArg(args, "service_id")
+		if e != nil {
+			return w, e
+		}
+		buildID, e := parseRequiredUUIDArg(args, "build_id")
+		if e != nil {
+			return w, e
+		}
+		w = intentWrite{domain: "artifact", op: "register", coordinate: "artifact:" + id.String(), family: nostrpool.KindArtifactRegistry, stateKey: "id", stateValue: id.String(), content: map[string]any{"id": id.String(), "service_id": serviceID.String(), "build_id": buildID.String()}}
+		w.orgID, err = s.intentOrgFromState(ctx, args, nostrpool.KindServiceRegistry, "id", serviceID.String())
+		if err != nil {
+			return w, err
+		}
+		if err := domain.ValidateScanStatus(domain.ScanStatus(stringArg(args, "scan_status"))); err != nil {
+			return w, err
+		}
+		for _, key := range []string{"image_repo", "image_tag", "image_digest", "manifest_media_type", "size_bytes", "sbom_url", "signature_ref", "scan_status", "metadata"} {
+			if value, ok := args[key]; ok {
+				w.content[key] = value
+			}
+		}
 	case "bahia_create_service":
 		id, e := mcpIntentEntityID(args, intentID)
 		if e != nil {

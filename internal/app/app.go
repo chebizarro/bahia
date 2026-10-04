@@ -2100,10 +2100,6 @@ func New(cfg *config.Config) (*App, error) {
 	if mlRegistry != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
 		mlCommandPublisher = controlplane.NewMLCommandPublisher(controlPlanePool, controlPlaneSigner)
 	}
-	var artifactCommandPublisher *controlplane.ArtifactCommandPublisher
-	if controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
-		artifactCommandPublisher = controlplane.NewArtifactCommandPublisher(controlPlanePool, controlPlaneSigner)
-	}
 
 	// Fleet hygiene (Swabbie, fp-jan): periodic dry-run scans + Tier-1
 	// convergence via the per-host maintenance driver.
@@ -2127,17 +2123,16 @@ func New(cfg *config.Config) (*App, error) {
 		}
 	}
 	mcpDeps := mcp.ServerDeps{
-		IntentProcessor:          intentProcessor,
-		StateStore:               localEventStore,
-		ServicePubkey:            servicePubkey,
-		ConfidentialReader:       confidentialEncryptor,
-		LogService:               runLogService,
-		SBOMs:                    sbomRepo,
-		Signatures:               sigRepo,
-		SignVerifier:             signVerifier,
-		MLCommandPublisher:       mlCommandPublisher,
-		LLMRegistry:              llmRegistry,
-		ArtifactCommandPublisher: artifactCommandPublisher,
+		IntentProcessor:    intentProcessor,
+		StateStore:         localEventStore,
+		ServicePubkey:      servicePubkey,
+		ConfidentialReader: confidentialEncryptor,
+		LogService:         runLogService,
+		SBOMs:              sbomRepo,
+		Signatures:         sigRepo,
+		SignVerifier:       signVerifier,
+		MLCommandPublisher: mlCommandPublisher,
+		LLMRegistry:        llmRegistry,
 	}
 	configureToolApprovalMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	configureAuthorizationMCPDeps(&mcpDeps, cfg, tenantRBAC)

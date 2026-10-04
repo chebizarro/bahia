@@ -139,7 +139,8 @@ func isAssistantIntentTool(name string) bool {
 }
 
 func (s *Server) invokeAssistantML(ctx context.Context, name string, args map[string]interface{}, key string) (*domain.AsyncToolReceipt, error) {
-	// Phase 5 P2: kept — ML inference deploy/approval/rollback lack intent handlers, bahia-irsry.76
+	// No handlers for ml/inference-deploy, ml/inference-approval, or ml/inference-rollback.
+	// LLM route deployment intents do not operate on ML endpoints.
 	if s.mlCommands == nil {
 		return nil, fmt.Errorf("ML command publisher is not configured")
 	}
