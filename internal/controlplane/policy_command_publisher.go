@@ -61,16 +61,6 @@ type PolicyCommandReceipt struct {
 	ServiceID       string         `json:"service_id,omitempty"`
 }
 
-func (p *PolicyCommandPublisher) PublishPolicyCreateRequest(ctx context.Context, cmd PolicyMutationCommand) (*PolicyCommandReceipt, error) {
-	if strings.TrimSpace(cmd.Name) == "" {
-		return nil, fmt.Errorf("name is required")
-	}
-	if len(cmd.Rules) == 0 {
-		return nil, fmt.Errorf("rules is required")
-	}
-	return p.publish(ctx, ContextVMMethodPolicyCreate, "policy-create", cmd, false)
-}
-
 func (p *PolicyCommandPublisher) PublishPolicyEvaluateRequest(ctx context.Context, cmd PolicyMutationCommand) (*PolicyCommandReceipt, error) {
 	if cmd.ArtifactID == uuid.Nil {
 		return nil, fmt.Errorf("artifact id is required")

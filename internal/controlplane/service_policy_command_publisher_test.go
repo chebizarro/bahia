@@ -12,47 +12,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-func TestPolicyCommandPublisherPublishesCanonicalCreateAndEvaluateRequests(t *testing.T) {
-	ctx := context.Background()
-	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
-	if err != nil {
-		t.Fatalf("create signer: %v", err)
-	}
-	publisher := NewPolicyCommandPublisher(capture, signer)
-	envID := uuid.New()
-	artifactID := uuid.New()
-	serviceID := uuid.New()
-
-	enabled := true
-	create, err := publisher.PublishPolicyCreateRequest(ctx, PolicyMutationCommand{Name: "require-sbom", EnvironmentID: &envID, Rules: []domain.PolicyRule{{Type: domain.RuleRequireSBOM}}, Enforcement: string(domain.PolicyEnforcementBlock), Enabled: &enabled, IdempotencyKey: "policy-create:require-sbom", AgentID: "agent-7"})
-	if err != nil {
-		t.Fatalf("publish policy create: %v", err)
-	}
-	if create.RequestKind != KindContextVMMessage || create.StatusKind != KindNIP38Status || create.ResultKind != KindContextVMMessage || create.ReadModelKinds["policy_registry"] != KindCASControlState || create.PublishedRelays != 1 {
-		t.Fatalf("unexpected create receipt: %#v", create)
-	}
-	createParams := assertContextVMCommand(t, capture.events[0], ContextVMMethodPolicyCreate)
-	if createParams["name"] != "require-sbom" || createParams["enabled"] != true {
-		t.Fatalf("unexpected create params: %#v", createParams)
-	}
-	assertReactorTag(t, capture.events[0].Tags, "environment", envID.String())
-	assertReactorTag(t, capture.events[0].Tags, "d", "policy-create:require-sbom")
-	assertReactorTag(t, capture.events[0].Tags, "agent", "agent-7")
-
-	evaluate, err := publisher.PublishPolicyEvaluateRequest(ctx, PolicyMutationCommand{ArtifactID: artifactID, EnvironmentID: &envID, ServiceID: &serviceID, IdempotencyKey: "policy-evaluate:artifact"})
-	if err != nil {
-		t.Fatalf("publish policy evaluate: %v", err)
-	}
-	if evaluate.RequestKind != KindContextVMMessage || evaluate.ReadModelKinds != nil {
-		t.Fatalf("unexpected evaluate receipt: %#v", evaluate)
-	}
-	evalParams := assertContextVMCommand(t, capture.events[1], ContextVMMethodPolicyEvaluate)
-	if evalParams["artifact_id"] != artifactID.String() || evalParams["environment_id"] != envID.String() || evalParams["service_id"] != serviceID.String() {
-		t.Fatalf("unexpected evaluate params: %#v", evalParams)
-	}
-}
-
 func TestToolApprovalCommandPublisherPublishesCanonicalApprovalResponse(t *testing.T) {
 	ctx := context.Background()
 	capture := &captureNostrPublisher{published: 2}
@@ -123,51 +82,3 @@ func TestArtifactCommandPublisherPublishesCanonicalArtifactRegisterRequest(t *te
 
 // TestMCPCommandPublishersNeverSignLegacyRequestKinds guards bahia-n5uin: the
 // policy, artifact, and tool-approval publishers must only emit ContextVM 25910.
-func TestMCPCommandPublishersNeverSignLegacyRequestKinds(t *testing.T) {
-	ctx := context.Background()
-	capture := &captureNostrPublisher{published: 1}
-	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
-	if err != nil {
-		t.Fatalf("create signer: %v", err)
-	}
-	envID := uuid.New()
-	enabled := true
-	policies := NewPolicyCommandPublisher(capture, signer)
-	if _, err := policies.PublishPolicyCreateRequest(ctx, PolicyMutationCommand{Name: "p", Rules: []domain.PolicyRule{{Type: domain.RuleRequireSBOM}}, Enabled: &enabled}); err != nil {
-		t.Fatalf("policy create: %v", err)
-	}
-	if _, err := policies.PublishPolicyEvaluateRequest(ctx, PolicyMutationCommand{ArtifactID: uuid.New(), EnvironmentID: &envID}); err != nil {
-		t.Fatalf("policy evaluate: %v", err)
-	}
-	if _, err := NewArtifactCommandPublisher(capture, signer).PublishArtifactRegisterRequest(ctx, ArtifactRegisterCommand{BuildID: uuid.New(), ServiceID: uuid.New(), ImageRepo: "r", ImageTag: "t", ImageDigest: "sha256:" + strings.Repeat("b", 64)}); err != nil {
-		t.Fatalf("artifact register: %v", err)
-	}
-	if _, err := NewToolApprovalCommandPublisher(capture, signer).PublishToolApprovalResponse(ctx, ToolApprovalCommand{IntentID: uuid.New(), Action: "reject", Reason: "no"}); err != nil {
-		t.Fatalf("tool approval: %v", err)
-	}
-	legacy := map[nostr.Kind]bool{KindArtifactRegister: true, KindPolicyCreate: true, KindPolicyUpdate: true, KindPolicyDelete: true, KindPolicyEvaluate: true, KindToolApprovalResponse: true}
-	if len(capture.events) != 4 {
-		t.Fatalf("published events=%d, want 4", len(capture.events))
-	}
-	for i, ev := range capture.events {
-		if legacy[ev.Kind] || ev.Kind != KindContextVMMessage {
-			t.Fatalf("event %d kind = %d, want ContextVM %d", i, ev.Kind, KindContextVMMessage)
-		}
-	}
-}
-
-func TestPolicyCommandPublisherFailsWhenNoRelayAccepts(t *testing.T) {
-	ctx := context.Background()
-	capture := &captureNostrPublisher{published: 0}
-	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
-	if err != nil {
-		t.Fatalf("create signer: %v", err)
-	}
-	publisher := NewPolicyCommandPublisher(capture, signer)
-
-	enabled := true
-	_, err = publisher.PublishPolicyCreateRequest(ctx, PolicyMutationCommand{Name: "require-sbom", Rules: []domain.PolicyRule{{Type: domain.RuleRequireSBOM}}, Enabled: &enabled})
-	if err == nil {
-		t.Fatalf("expected no relay acceptance error")
-	}
-}

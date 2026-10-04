@@ -3,10 +3,10 @@ package mcp
 import (
 	"context"
 	"fmt"
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -149,7 +149,7 @@ func (s *Server) handleLLMListRoutes(ctx context.Context, args map[string]interf
 	for i := range routes {
 		out = append(out, llmRouteToMap(&routes[i]))
 	}
-	return jsonResult(map[string]interface{}{"routes": out, "total": len(out), "registry_kind": controlplane.KindLLMRouteRegistry})
+	return jsonResult(map[string]interface{}{"routes": out, "total": len(out), "registry_kind": nostrpool.KindLLMRouteRegistry})
 }
 
 func (s *Server) handleListArtifacts(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
