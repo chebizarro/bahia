@@ -23,7 +23,7 @@ import (
 //
 // 1. Implement DomainHandler for your domain (e.g. ServiceIntentHandler).
 // 2. Call IntentProcessor.RegisterHandler("service", handler) at startup.
-// 3. Add your domain string to config nostr.intent_domains.
+// 3. Add your domain string to RegisteredIntentDomains below.
 // 4. The processor routes matching intents to your handler automatically.
 //
 // The handler receives a validated, authorized, deduplicated intent with the
@@ -556,11 +556,28 @@ func IntentDomainEnabled(enabledDomains []string, domain string) bool {
 	return false
 }
 
-// BuildEnabledDomains creates the domain set from config.
-func BuildEnabledDomains(domains []string) map[string]bool {
-	m := make(map[string]bool, len(domains))
-	for _, d := range domains {
-		m[strings.ToLower(d)] = true
+// RegisteredIntentDomains is the set of intent handlers wired in app.New.
+// Keep this list in sync with every RegisterHandler call in internal/app/app.go.
+var RegisteredIntentDomains = []string{
+	"service", "environment", "policy", "package", "backup", "llm", "ml",
+	"dns", "worker", "deployment", "runtime", "org", "secret", "notification",
+}
+
+// BuildEnabledDomains enables every registered domain except explicit opt-outs.
+// A non-empty deprecated allowlist retains the Phase 3 selection semantics.
+func BuildEnabledDomains(disabled, legacyAllowlist []string) map[string]bool {
+	m := make(map[string]bool, len(RegisteredIntentDomains))
+	allowed := make(map[string]bool, len(legacyAllowlist))
+	for _, domain := range legacyAllowlist {
+		allowed[strings.ToLower(strings.TrimSpace(domain))] = true
+	}
+	for _, domain := range RegisteredIntentDomains {
+		if len(legacyAllowlist) == 0 || allowed[domain] {
+			m[domain] = true
+		}
+	}
+	for _, domain := range disabled {
+		delete(m, strings.ToLower(strings.TrimSpace(domain)))
 	}
 	return m
 }

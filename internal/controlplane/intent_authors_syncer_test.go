@@ -147,6 +147,32 @@ func TestIntentAuthorsSyncerPushesToSidecar(t *testing.T) {
 	<-done
 }
 
+func TestIntentAuthorsSyncerInitialEmptySetClearsSidecar(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	adminKey := nostr.Generate()
+	staleAuthor := nostr.Generate()
+	h := startSidecarTestHarness(t, adminKey)
+	require.NoError(t, h.adminClient.SetIntentAuthors(ctx, "test-sidecar", []string{staleAuthor.Public().Hex()}))
+
+	relay, err := nostr.RelayConnect(ctx, h.wsURL, nostr.RelayOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = relay.Close() })
+	orgID := "00000000-0000-0000-0000-000000000001"
+	require.NoError(t, relay.Publish(ctx, signedIntentForTest(t, staleAuthor, orgID)))
+
+	syncer := NewIntentAuthorsSyncer(IntentAuthorsSyncerConfig{
+		TrustSet: NewTrustSet(nil, zap.NewNop()), Admin: h.adminClient,
+		TargetRefs: []string{"test-sidecar"}, Logger: zap.NewNop(),
+	})
+	syncer.push(ctx)
+	require.False(t, syncer.SyncStatus().OutOfSync)
+	afterClear := signedIntentForTest(t, staleAuthor, orgID)
+	afterClear.Tags = append(afterClear.Tags, nostr.Tag{"nonce", "after-clear"})
+	require.NoError(t, afterClear.Sign(staleAuthor))
+	require.ErrorContains(t, relay.Publish(ctx, afterClear), "blocked")
+}
+
 // TestIntentAuthorsSyncerMembershipMutationReachesSidecar verifies that a
 // Postgres org membership change (via the NotifyingOrgMemberRepository)
 // propagates to the sidecar so the new member's intents are accepted and,

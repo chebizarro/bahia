@@ -520,23 +520,22 @@ During migration, both the old ContextVM/REST/MCP mutation path and the new rela
 
 ```yaml
 nostr:
-  intent_domains:
-    - service     # accepts intent events for services
-    - environment # accepts intent events for environments
-    - deployment  # deployment create/approval/rollback
-    - runtime     # direct runtime actions
-    - llm         # LLM registry and deployment lifecycle
-    - backup      # backup lifecycle, including restore approval
+  intent_domains_disabled: [] # all registered intent domains are enabled
 ```
 
-When a domain is listed in `intent_domains`:
+As of Phase 5 F4, all registered domains are enabled unless listed in
+`intent_domains_disabled`. The deprecated `intent_domains` key retains its
+Phase 3 allowlist meaning only when non-empty; an empty or omitted list enables
+all domains. Both migration keys are removed with R1 (bahia-irsry.11.19).
+
+When a domain is enabled:
 - The daemon subscribes to `30900` intents with `#t=bahia-intent` from trusted authors.
 - The daemon still accepts ContextVM `25910` / REST / MCP mutations for that domain.
-- The ContextVM/REST/MCP handler, when invoked for a domain in `intent_domains`, **keeps today's authorization** (the existing `encryptedTenantAuthorizer` or REST auth middleware) and then calls the **same in-process intent processor** with the requester's pubkey as actor and a synthetic `intent_id` (or the request's existing idempotency key, e.g. the ContextVM `d` tag / `_meta.progressToken`).
+- The ContextVM/REST/MCP handler **keeps today's authorization** (the existing `encryptedTenantAuthorizer` or REST auth middleware) and then calls the **same in-process intent processor** with the requester's pubkey as actor and a synthetic `intent_id` (or the request's existing idempotency key, e.g. the ContextVM `d` tag / `_meta.progressToken`).
 - **No daemon-signed intent event is published to the relay.** The in-process path bypasses relay publication and feeds directly into the shared pipeline at step 1 (§3.2). The relay intent path and the in-process path share one pipeline and one idempotency store, so double-dispatch is impossible.
 - The handler returns the canonical state to the caller (ContextVM reply, REST response, MCP result) just as today.
 
-When a domain is _not_ in `intent_domains`:
+When a domain is explicitly disabled:
 - The existing handler processes it as today, unchanged.
 
 D70's handler coverage in this window is deliberately bounded by existing durable mutation boundaries. Fleet-scoped authorizations use configured operator pubkeys rather than org RBAC; each accepted intent receives bounded kind-30315 status from `IntentProcessor`.
@@ -621,7 +620,8 @@ F4 replaces the startup `RepublishSnapshot` call in `Projector.Run` with a warm-
    - Any local record not on the relay, or with a newer fingerprint → publish it.
    - Any relay record newer than local → ingest it (handles split-brain recovery).
 3. For unmigrated domains, the legacy `RepublishSnapshot` leg still runs (it shrinks as slices land).
-4. The warm-start check runs only for domains listed in `intent_domains` (§4.1).
+4. Current X1 wiring warm-starts all cp-state domains; it does not use the
+   intent-domain opt-out list. This supersedes the interim Wave 1 scope.
 
 ### 5.4 Acceptance test (Wave 1, slice F4)
 
@@ -841,17 +841,12 @@ intentProcessor.RegisterHandler("service", &controlplane.ServiceIntentHandler{
 })
 ```
 
-### 10.3 Add the domain to config
+### 10.3 Register the domain for default-on processing
 
-```yaml
-nostr:
-  intent_domains:
-    - service
-    - deployment
-    - runtime
-    - llm
-    - backup
-```
+Add its `RegisterHandler` call in `internal/app/app.go` and its name to
+`controlplane.RegisteredIntentDomains`. The app test compares the two sets so
+new handlers cannot silently be omitted from default-on processing. Operators
+may temporarily disable a domain with `nostr.intent_domains_disabled`.
 
 ### 10.4 Wire dual dispatch
 

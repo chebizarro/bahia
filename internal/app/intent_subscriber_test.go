@@ -3,6 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -52,7 +56,6 @@ func TestIntentSubscriberWiredWhenDomainsEnabled(t *testing.T) {
 	// Configure the actor as a bootstrap owner for the test org so the
 	// TrustSet grants it org-level permissions.
 	cfg.Nostr.AuthorizedPubkeys = []string{actorPubkey}
-	cfg.Nostr.IntentDomains = []string{"service"}
 	cfg.Nostr.BootstrapOwners = map[string]string{orgID.String(): actorPubkey}
 
 	app, err := New(cfg)
@@ -115,21 +118,157 @@ func TestIntentSubscriberWiredWhenDomainsEnabled(t *testing.T) {
 	require.True(t, app.IntentReadiness.IsReady(), "readiness should be true after marking filter ready")
 }
 
-// TestIntentSubscriberNotWiredWithoutDomains verifies that the subscriber is
-// nil when no intent domains are configured.
-func TestIntentSubscriberNotWiredWithoutDomains(t *testing.T) {
+// TestIntentSubscriberNotWiredWhenAllDomainsDisabled preserves the legacy
+// ContextVM-only path for an explicit all-domain opt-out.
+func TestIntentSubscriberNotWiredWhenAllDomainsDisabled(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
 
 	cfg := startupTestConfig("emergency")
-	// No intent domains configured.
+	cfg.Nostr.IntentDomainsDisabled = append([]string(nil), controlplane.RegisteredIntentDomains...)
 
 	app, err := New(cfg)
 	require.NoError(t, err)
 	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
 
-	require.Nil(t, app.IntentSubscriber, "IntentSubscriber should be nil when no domains are configured")
+	require.Nil(t, app.IntentSubscriber, "IntentSubscriber should be nil when all domains are disabled")
 	// Readiness is vacuously true when no filters are registered.
 	require.True(t, app.IntentReadiness.IsReady(), "readiness should be vacuously true with no filters")
+}
+
+// TestDefaultIntentDomainsProcessEveryRegisteredHandler guards both startup
+// wiring and in-process delivery when no domain config is supplied.
+func TestDefaultIntentDomainsProcessEveryRegisteredHandler(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+
+	cfg := startupTestConfig("emergency")
+	actorKey := nostr.Generate()
+	actor := actorKey.Public().Hex()
+	orgID := uuid.MustParse("00000000-0000-0000-0000-000000000002")
+	cfg.Nostr.AuthorizedPubkeys = []string{actor}
+	cfg.Nostr.BootstrapOwners = map[string]string{orgID.String(): actor}
+
+	app, err := New(cfg)
+	require.NoError(t, err)
+	defer syncTestLogger(t, app.Logger)
+	defer closeRelayPools(app.relayPools...)
+	require.NotNil(t, app.IntentSubscriber)
+	require.False(t, app.IntentReadiness.IsReady())
+
+	for _, domainName := range controlplane.RegisteredIntentDomains {
+		t.Run(domainName, func(t *testing.T) {
+			handler := &testDomainHandler{}
+			app.IntentProcessor.RegisterHandler(domainName, handler)
+			event := nostr.Event{
+				Kind: 30900, CreatedAt: nostr.Now(),
+				Tags: nostr.Tags{{"d", domainName + "-test"}, {"t", "bahia-intent"},
+					{"domain", domainName}, {"op", "create"}, {"org", orgID.String()},
+					{"intent_id", "default-" + domainName}},
+				Content: `{"name":"test"}`,
+			}
+			require.NoError(t, event.Sign(actorKey))
+			intent, err := controlplane.ParseIntent(&event)
+			require.NoError(t, err)
+			intent.Actor = actor
+			require.NoError(t, app.IntentProcessor.ProcessInProcess(context.Background(), intent))
+			require.Len(t, handler.received(), 1)
+		})
+	}
+	app.IntentReadiness.MarkFilterReady("intent-30900")
+	require.True(t, app.IntentReadiness.IsReady())
+}
+
+func TestIntentDomainsDisabledStopsExactlyListedDomains(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+	cfg := startupTestConfig("emergency")
+	cfg.Nostr.IntentDomainsDisabled = []string{"service", "policy"}
+	actorKey := nostr.Generate()
+	actor := actorKey.Public().Hex()
+	orgID := uuid.MustParse("00000000-0000-0000-0000-000000000003")
+	cfg.Nostr.AuthorizedPubkeys = []string{actor}
+	cfg.Nostr.BootstrapOwners = map[string]string{orgID.String(): actor}
+	app, err := New(cfg)
+	require.NoError(t, err)
+	defer syncTestLogger(t, app.Logger)
+	defer closeRelayPools(app.relayPools...)
+	require.NotNil(t, app.IntentSubscriber)
+
+	for _, domainName := range controlplane.RegisteredIntentDomains {
+		handler := &testDomainHandler{}
+		app.IntentProcessor.RegisterHandler(domainName, handler)
+		event := nostr.Event{Kind: 30900, CreatedAt: nostr.Now(),
+			Tags: nostr.Tags{{"d", domainName + "-opt-out"}, {"t", "bahia-intent"},
+				{"domain", domainName}, {"op", "create"}, {"org", orgID.String()},
+				{"intent_id", "opt-out-" + domainName}},
+			Content: `{"name":"test"}`}
+		require.NoError(t, event.Sign(actorKey))
+		intent, err := controlplane.ParseIntent(&event)
+		require.NoError(t, err)
+		intent.Actor = actor
+		err = app.IntentProcessor.ProcessInProcess(context.Background(), intent)
+		if domainName == "service" || domainName == "policy" {
+			require.ErrorContains(t, err, "disabled", domainName)
+			require.Empty(t, handler.received(), domainName)
+		} else {
+			require.NoError(t, err, domainName)
+			require.Len(t, handler.received(), 1, domainName)
+		}
+	}
+}
+
+func TestDefaultSensitiveIntentDomainsRequireGiftWrap(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+	cfg := startupTestConfig("emergency")
+	actorKey := nostr.Generate()
+	actor := actorKey.Public().Hex()
+	orgID := uuid.MustParse("00000000-0000-0000-0000-000000000004")
+	cfg.Nostr.AuthorizedPubkeys = []string{actor}
+	cfg.Nostr.BootstrapOwners = map[string]string{orgID.String(): actor}
+	app, err := New(cfg)
+	require.NoError(t, err)
+	defer syncTestLogger(t, app.Logger)
+	defer closeRelayPools(app.relayPools...)
+
+	for _, domainName := range []string{"org", "secret", "notification"} {
+		event := nostr.Event{Kind: 30900, CreatedAt: nostr.Now(),
+			Tags: nostr.Tags{{"d", domainName + "-plaintext"}, {"t", "bahia-intent"},
+				{"domain", domainName}, {"op", "create"}, {"org", orgID.String()},
+				{"intent_id", "plaintext-" + domainName}},
+			Content: `{"name":"test"}`}
+		require.NoError(t, event.Sign(actorKey))
+		require.ErrorContains(t, app.IntentProcessor.ProcessRelayIntent(context.Background(), &event),
+			"plaintext intent rejected", domainName)
+	}
+}
+
+func TestIntentDomainRegistryCoversAppHandlers(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "app.go", nil, 0)
+	require.NoError(t, err)
+	registered := make(map[string]bool)
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "RegisterHandler" {
+			return true
+		}
+		literal, ok := call.Args[0].(*ast.BasicLit)
+		if !ok {
+			return true
+		}
+		name, err := strconv.Unquote(literal.Value)
+		require.NoError(t, err)
+		registered[name] = true
+		return true
+	})
+	require.Len(t, registered, len(controlplane.RegisteredIntentDomains))
+	for _, name := range controlplane.RegisteredIntentDomains {
+		require.True(t, registered[name], "missing app.RegisterHandler for %q", name)
+	}
 }

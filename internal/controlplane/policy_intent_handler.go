@@ -32,7 +32,7 @@ type PolicyStatePublisher func(ctx context.Context, policy *domain.DeploymentPol
 // the handler reconciles the entity toward it regardless of whether prior
 // events for the coordinate have been seen.
 //
-// Registered at startup when "policy" is in nostr.intent_domains via
+// Registered at startup when "policy" is enabled via
 // IntentProcessor.RegisterHandler("policy", handler).
 //
 // Policies are fleet-scoped: authorization uses FleetOperatorGate rather than

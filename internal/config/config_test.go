@@ -130,6 +130,24 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestIntentDomainMigrationKeysLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "intent-domains.yaml")
+	content := "nostr:\n  intent_domains_disabled: [service, policy]\n  intent_domains: [service, environment]\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Nostr.IntentDomainsDisabled; len(got) != 2 || got[0] != "service" || got[1] != "policy" {
+		t.Fatalf("disabled domains = %v", got)
+	}
+	if got := cfg.Nostr.IntentDomains; len(got) != 2 || got[0] != "service" || got[1] != "environment" {
+		t.Fatalf("legacy domains = %v", got)
+	}
+}
+
 func TestValidateHiveCIInitiatorSourceProvider(t *testing.T) {
 	validConfig := func() *Config {
 		cfg := Defaults()
