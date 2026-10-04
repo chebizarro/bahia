@@ -47,6 +47,17 @@ func TestIsPublicKind(t *testing.T) {
 	}
 }
 
+func TestF74aReadAuthClassification(t *testing.T) {
+	for _, topic := range []string{kinds.CPStateTopicLLMRelease, kinds.CPStateTopicArtifactSignature, kinds.CPStateTopicArtifactSBOM, kinds.CPStateTopicSBOMPackage} {
+		if filterNeedsAuth(nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": {topic}}}) {
+			t.Fatalf("%s must be public", topic)
+		}
+	}
+	if !filterNeedsAuth(nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": {kinds.CPStateTopicRuntimeObservation}}}) {
+		t.Fatal("runtime observations require read auth")
+	}
+}
+
 func TestFilterNeedsAuth(t *testing.T) {
 	tests := []struct {
 		name      string

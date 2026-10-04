@@ -282,3 +282,7 @@ Historical `5971`-`5975`, `6973`, `7971`-`7973`, and `31964`/`31965` events are 
 - [Environments](environments.md) — Deployment targets
 - [Workers](workers.md) — LLM execution hosts
 - [ML Models](ml-models.md) — Generic AI/ML models
+
+## Canonical MCP reads
+
+`bahia_llm_list_releases` reads the daemon's canonical `30900` release family (`t=llm-release`). Release configuration is Fleet-OCK encrypted; the daemon decrypts it for authorized MCP callers.

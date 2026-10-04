@@ -237,6 +237,12 @@ var publicCPStateTopics = map[string]bool{
 	kinds.CPStateTopicSecurityFinding:       true,
 	kinds.CPStateTopicSecuritySchedule:      true,
 	kinds.CPStateTopicSecurityFindingDetail: true,
+	// Supply-chain records are public to external verifiers; release payloads
+	// are OCK ciphertext. Runtime observations remain protected fleet state.
+	kinds.CPStateTopicLLMRelease:        true,
+	kinds.CPStateTopicArtifactSignature: true,
+	kinds.CPStateTopicArtifactSBOM:      true,
+	kinds.CPStateTopicSBOMPackage:       true,
 
 	// Protected topics (NOT in this map):
 	//   security-findings, security-audit — detailed vulnerability data

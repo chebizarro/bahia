@@ -291,3 +291,7 @@ docker push bahia.example.com/my-api:v2.0.0
 - [Services](services.md) — Artifact owners
 - [Deployments](deployments.md) — Deploying artifacts
 - [Policies](policies.md) — SBOM requirements
+
+## Canonical MCP reads
+
+Artifact signature and parsed SBOM MCP reads use daemon-authored `30900` state. SBOM packages are indexed one per record, so large package lists do not exceed relay frame limits. The existing `30078` reference and `30004` availability records remain the public interop source for SBOM availability.

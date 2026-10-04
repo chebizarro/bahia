@@ -37,6 +37,7 @@ func TestManifestCoversBahiaInventoryLegacyKinds(t *testing.T) {
 	want = append(want, 31310, 31311, 31400, 31401, 31402, 31403, 31404, 31410, 31411, 30350, 30351, 30352, 30353, 30360)
 	appendRange(31961, 31978)
 	appendRange(31980, 32003)
+	want = append(want, 32015, 32016, 32017, 32018, 32019)
 	appendRange(38390, 38399)
 	appendRange(38400, 38423)
 	want = append(want, 38430, 38431, 30002, 30078, 30079)

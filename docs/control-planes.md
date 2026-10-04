@@ -559,3 +559,14 @@ run. The public 30900 `bahia.assistant-session.v2` projection is not the
 execution journal; kind 4903 encrypted immutable checkpoints are. Batch
 continuation never invokes the model. This is a frozen contract, not current
 production wiring; see [design](designs/assistant-unified-execution.md).
+
+## MCP read-state families (F74a)
+
+Daemon-authored kind `30900` now carries LLM releases (32015), artifact
+signatures (32016), parsed artifact SBOMs (32017), one package per indexed
+record (32018), and latest runtime observations (32019). These are
+`legacy_kind` discriminators, not wire kinds. Release content is Fleet-OCK
+encrypted; signature/SBOM data is public; runtime observations omit arbitrary
+metadata and are classified protected (NIP-42 enforced in `read_auth_mode=enforce`). Live records and tombstones share their
+addressable coordinates. See the
+[family table](nostr-event-implementation-guide.md#f74a-mcp-read-families-30900).

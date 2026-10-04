@@ -35,9 +35,11 @@ configuration fields. Service/environment, build/artifact, deployment state,
 worker state, policy, DNS endpoint, ML state, package, backup, secret metadata,
 notification-channel, LLM-route, and payment/cost tools use this path when the
 local store is configured. Worker eligibility previews rank workers from the
-same canonical worker records. Signature, SBOM, runtime-observation, LLM-release,
-package-intent, tool-provisioning, and notification-log reads still require
-non-canonical read models until corresponding 30900 producers exist.
+same canonical worker records. Signature, parsed SBOM/package, latest runtime-observation, and LLM-release
+reads now use canonical `30900` families as well. LLM releases are decrypted
+with the daemon key; runtime observations omit arbitrary metadata. Existing rows are
+backfilled into signed state at startup before these MCP reads are served. Package-intent,
+tool-provisioning, and notification-log reads still require separate read models.
 
 The relay subscriptions that populate the daemon store determine freshness;
 MCP does not issue a one-shot relay request for each tool call.
