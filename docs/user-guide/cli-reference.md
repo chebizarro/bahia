@@ -105,15 +105,15 @@ For NIP-46 remote signing, use `--nostr-bunker-file` (or `BAHIA_NOSTR_BUNKER_FIL
 
 ## Nostr-native transport
 
-CLI mutations with registered daemon intent handlers publish signed kind `30900` intents directly, subscribe for kind `30315` status, and read canonical `30900` state where applicable. The remaining `builds request` and `adopt scan` commands have no intent handlers and still use ContextVM JSON-RPC over kind `25910`. Plain transport remains the default for those commands. Pass `--encrypted` to wrap the signed inner request in a NIP-59 kind `1059` gift wrap; encrypted mode requires `--service-pubkey` and works with either a local key or a NIP-46 signer that supports NIP-44. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
+CLI mutations, including `builds request` and `adopt scan`, publish signed kind `30900` intents through the local outbox and subscribe for kind `30315` status. `builds request` returns the accepted status `data` (including the queued build ID); `adopt scan` renders the bounded, redacted findings page in accepted status `data`. Only `logs run` still uses the keyed ContextVM JSON-RPC request client. `--encrypted` applies to that run-log fetch, wrapping its signed inner request in a NIP-59 kind `1059` gift wrap; sensitive intent domains use their own automatic gift-wrap policy. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
 
 For service/environment/deployment/runtime writes, the CLI enqueues the signed intent in its local outbox, subscribes before publishing, requires at least one relay OK, and waits up to `--result-timeout` (default `30s`, or `BAHIA_RESULT_TIMEOUT`) for status. Exit codes are 0 accepted, 1 rejected/conflict/superseded, 2 published without status, and 3 no relay accepted. Exit 2 prints `intent_id` and `event_id`; inspect the pending event with `bahia outbox list`. These writes do not use HTTP.
 
-For remaining ContextVM commands, before publishing, the CLI waits for the reply subscription to reach EOSE on its established relays. Each publish attempt waits up to `--result-timeout` (default `30s`). On timeout it re-subscribes and republishes the same logical request up to `--result-retries` times (default `2`); the stable `d` tag lets Bahia replay its cached idempotent response. Bahia keeps completed idempotent responses in memory and in PostgreSQL for 24 hours, so duplicate requests replay the terminal response without re-running the handler.
+For `logs run`, before publishing, the CLI waits for the reply subscription to reach EOSE on its established relays. Each publish attempt waits up to `--result-timeout` (default `30s`). On timeout it re-subscribes and republishes the same logical request up to `--result-retries` times (default `2`); the stable `d` tag lets Bahia replay its cached idempotent response.
 
 ### Troubleshooting: CLI times out but server logs handler completed
 
-A handler-completed log means the mutation ran, not that the ephemeral response reached a subscribed relay. The CLI automatically re-subscribes and republishes the same logical request after each result timeout; Bahia answers the duplicate from its response cache. If all attempts fail, use the CLI error fields `method`, `request_event_id`, `d`, `configured_relays`, `subscribed_relays`, `failed_subscriptions`, `published_relays`, `attempts`, and `publish_results` to correlate the request with server logs and per-relay acceptance or subscription failures. Do not submit a new idempotency key until that evidence is checked.
+For the remaining `logs run` ContextVM request, a handler-completed log does not prove that the ephemeral response reached the subscribed relay. The CLI re-subscribes and republishes the same keyed request after a result timeout; correlate its error fields `method`, `request_event_id`, `d`, `configured_relays`, `subscribed_relays`, `failed_subscriptions`, `published_relays`, `attempts`, and `publish_results` with server logs. For an intent timeout, inspect `bahia outbox list` and retry the same UUIDv7 intent ID rather than creating another request.
 
 Operator relay resolution is deterministic and ordered:
 
@@ -206,11 +206,12 @@ The `builds` group provides the signer-first request → follow path without SQL
 ```bash
 # Queue the exact Astillero commit through the governed HiveCI path.
 bahia builds request \
+  --org <organization-uuid> \
   --service <service-uuid> \
   --git-ref b13b14fba6e54f008bfa1ba26d716c2ef05c206e \
   --credential-ref <repository-credential-secret-uuid> \
   --artifact-repo <registered-service-artifact-repo> \
-  --idempotency-key build:astillero:b13b14f \
+  --idempotency-key <uuidv7-intent-id> \
   --result-timeout 120s
 
 # Follow durable build lineage. Production transitions are queued directly to
@@ -235,7 +236,7 @@ bahia deployments deploy \
   --expected-desired-state-hash <reviewed-hash>
 ```
 
-First-time mirror creation and ref resolution can exceed the default 30-second per-attempt result timeout, so `--result-timeout 120s` is recommended for the first request. Reusing the same `--idempotency-key` replays the first completed ContextVM result from Bahia's durable response store instead of starting another CI run or registering another build. An idempotency key identifies one logical request: do not reuse it with different request fields.
+First-time mirror creation and ref resolution can exceed the default 30-second status wait, so `--result-timeout 120s` is recommended for the first request. Reusing the same UUIDv7 `--idempotency-key` replays the accepted intent status instead of starting another CI run or registering another build. An intent ID identifies one logical request: do not reuse it with different request fields. The build request derives its organization from the canonical service; if `--org` is set, it must match.
 
 `--build-arg KEY=VALUE` is repeatable and values may contain `=`, but the fleet-local tag-only kind-5401 dispatch contract has no build-argument field. The private-mirror Hive-CI initiator therefore rejects non-empty build arguments before any secret resolution, mirror operation, event publication, or queued-build registration. Omit `--build-arg` for this workflow.
 
@@ -594,13 +595,13 @@ bahia souls templates get research-agent
 
 ```bash
 # Scan for containers (target syntax is alias=endpointRef)
-bahia adopt scan --target prod=prod-docker
+bahia adopt scan --org <organization-uuid> --target prod=prod-docker
 
 # Import discovered containers and bind the signed request to an organization
 bahia adopt import --target prod=prod-docker --all --org 11111111-1111-1111-1111-111111111111
 ```
 
-`--org` is part of the signed import intent. Use the destination organization UUID; it is not client-only display metadata. The accepted status returns an intent ID and candidate count; inspect canonical imported services for the resulting records.
+`--org` is part of both signed adoption intents. Use the destination organization UUID; it is not client-only display metadata. `adopt scan` reads only the accepted `30315` redacted findings page: use `--offset` and `--limit` (default 20, maximum 100) for bounded pages, and `--idempotency-key` with a UUIDv7 value for safe replay. The status includes `next_offset`, `total_findings`, and `truncated`; it does not include raw runtime secrets or full container metadata. Import's accepted status returns an intent ID and candidate count; inspect canonical imported services for the resulting records.
 
 ### Legacy agent Soul adoption report
 
@@ -639,9 +640,9 @@ bahia services get svc-123 -o yaml
 | `--service-pubkey` | Specify Bahia service pubkey for routing and single-service discovery trust |
 | `--trusted-service-pubkey` | Specify trusted Bahia service pubkey for bootstrap discovery (repeatable) |
 | `--eose-timeout` | Maximum wait for relay EOSE on Nostr reads (default `5s`; env `BAHIA_EOSE_TIMEOUT`). If no relay reaches EOSE, cached data is printed with a stale warning on stderr and the read exits 0 |
-| `--encrypted` | Use NIP-59/NIP-44 encrypted operator requests and replies; requires `--service-pubkey` |
-| `--result-timeout` | Maximum wait for a 30315 status on service/environment intents, or a ContextVM result for remaining commands (default `30s`; intents also support `BAHIA_RESULT_TIMEOUT`) |
-| `--result-retries` | Idempotent re-publishes after a result timeout (default `2`) |
+| `--encrypted` | Encrypt the `logs run` ContextVM request and reply with NIP-59/NIP-44; requires `--service-pubkey` |
+| `--result-timeout` | Maximum wait for a 30315 intent status, or a ContextVM result for `logs run` (default `30s`; intents also support `BAHIA_RESULT_TIMEOUT`) |
+| `--result-retries` | ContextVM `logs run` idempotent re-publishes after a result timeout (default `2`) |
 | `-o, --output` | Output format (`table`, `json`, `yaml`) |
 | `--help` | Show help |
 

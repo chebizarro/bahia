@@ -328,13 +328,13 @@ The notification bridge uses the internal event type `security.policy_breached` 
 
 ### ContextVM Operator Actions
 
-Operator workflows are ContextVM JSON-RPC requests carried as kind `25910`, usually inside CEP-4/NIP-59 gift-wrap (`1059` or `21059`). They are not REST RPC and must be followed as event streams: publish the ContextVM request, subscribe for the correlated ContextVM response and canonical observables, process `30315` statuses and `4903` audit facts as progress/evidence, and treat canonical state convergence (`30900`/domain NIPs) plus explicit JSON-RPC errors as the durable truth. Clients should not poll or use timeout-based completion; use EOSE for historical catch-up and keep subscriptions open for realtime replies.
+Interactive operator RPCs (assistant turns, secret reveal, and run-log fetch) use ContextVM JSON-RPC kind `25910`, optionally inside CEP-4/NIP-59 gift-wrap (`1059` or `21059`). CLI mutations instead publish signed kind-`30900` intents and follow requester-scoped `30315` status plus canonical observables. Neither path is REST RPC: clients process EOSE for historical catch-up, keep subscriptions open for realtime events, and treat canonical state convergence (`30900`/domain NIPs) as durable truth rather than polling.
 
 `maintenance/*` is a stricter sub-protocol: Bahia publishes a conformant NIP-59 `1059`, the worker returns a conformant NIP-59 `1059`, and absolute host paths exist only inside the authenticated rumor payload. Public `30315`/`4903` projections use opaque request-event correlation and omit path-bearing details.
 
 CLI behavior:
 
-- `bahia adopt scan|import` and `bahia services actions deploy|restart|stop` use ContextVM methods such as `adoption/scan`, `adoption/import`, `service/deploy`, `service/restart`, and `service/stop`.
+- `bahia adopt scan|import`, `bahia builds request`, and `bahia services actions deploy|restart|stop` publish signed intents through the CLI outbox and follow `30315` status. `bahia logs run` retains the keyed ContextVM request path.
 - Production operators can sign through NIP-46 without holding the operator
   identity key. Provide `--nostr-bunker-file` and
   `--nostr-client-key-file`; when the signer relay is stored separately from
@@ -467,14 +467,14 @@ REST write endpoints (`POST`, `PUT`, `DELETE` for creating, updating, or deletin
 
 1. **Nostr is the source of truth.** Every mutation must be a signed Nostr event published to relays, giving relay-side indexing, signature verification, replay protection, and audit lineage. REST writes bypass all of this.
 2. **Command receipts are relay-acknowledged.** The `CommandReceipt` contract requires a signed event ID and relay `OK` acceptance. REST-originated writes cannot produce authentic receipts because no Nostr event was published.
-3. **ContextVM is the canonical mutation transport.** AGENTS.md mandates that all mutations flow through ContextVM kind `25910` JSON-RPC intents. Wrapping Nostr publish calls behind REST handlers creates "fake request/response wrappers over relays" — an explicitly prohibited pattern.
+3. **Signed intents are the canonical mutation transport.** Clients publish kind `30900` directly and follow kind `30315` status; client ContextVM use is limited to approved interactive RPCs while the daemon's legacy mutation dual-dispatch is retired. Wrapping Nostr publish calls behind REST handlers creates "fake request/response wrappers over relays" — an explicitly prohibited pattern.
 
 ### What to use instead
 
 | Surface | Mutation entry point | Implementation |
 |---------|---------------------|----------------|
 | **MCP tools** | `POST /mcp` with `tools/call` JSON-RPC | `internal/mcp/server.go` → controlplane publishers |
-| **CLI** | `bahia services actions deploy\|restart\|stop`, `bahia adopt scan\|import` | `cmd/cli/operator_nostr.go` → ContextVM `25910` |
+| **CLI** | `bahia services actions deploy\|restart\|stop`, `bahia adopt scan\|import`, `bahia builds request` | `cmd/cli/intent_mutations.go` → signed intent `30900`, status `30315` |
 | **Browser** | ContextVM `25910` via NIP-07/NIP-46 signer | Direct Nostr event publication to relay |
 | **REST** | Read-only `GET` endpoints only | `internal/api/handlers/*.go` (Get/List methods) |
 

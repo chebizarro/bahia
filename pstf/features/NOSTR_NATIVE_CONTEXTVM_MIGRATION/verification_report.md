@@ -520,3 +520,25 @@ generated web intent-content fixtures, and
 `TestIntentDomainRegistryCoversAppHandlers` passed. Full Go build, vet, and
 test gate passed. Web unit tests, lint, build, and Playwright gate passed
 (234 passed, four skipped, one flaky retry). No remote push was requested.
+
+## CLI final request migration — bahia-irsry.13.20 — 2026-10-04
+
+`bahia builds request` now publishes the D79 `build/request` intent and decodes
+the queued build projection from accepted `30315` status `data`. `bahia adopt scan`
+publishes `adoption/scan` and renders the bounded, redacted findings page
+from accepted status `data`; `--offset`, `--limit`, and UUIDv7 retry IDs expose
+the D79 page contract. Both use the CLI outbox before publication. The exact
+signed content is checked against `d79-intent-content.json`, and CLI end-to-end
+tests drive the D79 handlers through `IntentProcessor.ProcessInProcess` for
+acceptance, rejection, and build replay without another CI start.
+
+The production `ContextVMRequestClient` caller allowlist is now `bahia logs run`
+(run-log fetch) and `internal/adapters/dns/dnsmasq_agent.go` (DNS-agent
+health/list/sync RPC). The client rejects other methods before publishing;
+transport tests use the remaining run-log method. Grep over production `cmd/`
+and `internal/` found no D80 CLI ContextVM caller to migrate. The
+`unwired_exports` baseline was not changed.
+
+Verification: `CGO_ENABLED=0 go build ./...`, `CGO_ENABLED=0 go vet ./...`,
+`CGO_ENABLED=0 go test ./...` (including `internal/archtest`) and
+`git diff --check` passed. No remote push was requested for this worktree.

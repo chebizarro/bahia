@@ -15,27 +15,24 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestContextVMResultDeliveryE2ERetryReplaysCachedDesiredStateHash(t *testing.T) {
+func TestContextVMResultDeliveryE2ERetryReplaysCachedRunLogs(t *testing.T) {
 	client, server, relay := newContextVMResultDeliveryHarness(t, false, true, []contextVME2ERelay{
 		{url: "ws://127.0.0.1:7777", subscribes: true, acceptsRequests: true, publishesResponses: true},
 	})
 	client.resultTimeout = 25 * time.Millisecond
 	client.resultRetries = 1
 	var handlerCalls atomic.Int32
-	server.RegisterContextVMHandler(controlplane.ContextVMMethodServiceDeployPreview, func(context.Context, controlplane.ContextVMRequest) (any, error) {
+	server.RegisterContextVMHandler(controlplane.ContextVMMethodDeploymentRunLogsGet, func(context.Context, controlplane.ContextVMRequest) (any, error) {
 		handlerCalls.Add(1)
-		return map[string]any{
-			"status":             "success",
-			"desired_state_hash": "sha256:0123456789abcdef",
-		}, nil
+		return map[string]any{"status": "success", "stdout": "cached logs"}, nil
 	})
 
 	result, err := client.Request(context.Background(),
-		controlplane.ContextVMMethodServiceDeployPreview, map[string]any{"service_id": "service-1", "environment_id": "environment-1"}, nostr.Tags{{"d", "preview-hash-replay-1"}}, nil)
+		controlplane.ContextVMMethodDeploymentRunLogsGet, map[string]any{"run_id": "run-1"}, nostr.Tags{{"d", "run-logs-replay-1"}}, nil)
 	if err != nil {
 		t.Fatalf("publishAndAwait() error = %v", err)
 	}
-	assertContextVMResultField(t, result, "desired_state_hash", "sha256:0123456789abcdef")
+	assertContextVMResultField(t, result, "stdout", "cached logs")
 	if got := handlerCalls.Load(); got != 1 {
 		t.Fatalf("handler calls = %d, want 1 (retry must replay cached response)", got)
 	}
@@ -48,12 +45,12 @@ func TestContextVMResultDeliveryE2EEncryptedRoundTrip(t *testing.T) {
 	client, server, _ := newContextVMResultDeliveryHarness(t, true, false, []contextVME2ERelay{
 		{url: "wss://relay.example", subscribes: true, acceptsRequests: true, publishesResponses: true},
 	})
-	server.RegisterContextVMHandler("test/encrypted-round-trip", func(context.Context, controlplane.ContextVMRequest) (any, error) {
+	server.RegisterContextVMHandler(controlplane.ContextVMMethodDeploymentRunLogsGet, func(context.Context, controlplane.ContextVMRequest) (any, error) {
 		return map[string]any{"status": "success", "payload": map[string]any{"delivered": "encrypted"}}, nil
 	})
 
 	result, err := client.Request(context.Background(),
-		"test/encrypted-round-trip", map[string]any{"service_id": "service-1"}, nostr.Tags{{"d", "encrypted-round-trip-1"}}, nil)
+		controlplane.ContextVMMethodDeploymentRunLogsGet, map[string]any{"run_id": "run-1"}, nostr.Tags{{"d", "encrypted-round-trip-1"}}, nil)
 	if err != nil {
 		t.Fatalf("publishAndAwait() error = %v", err)
 	}
@@ -65,12 +62,12 @@ func TestContextVMResultDeliveryE2EDualRelaySubscriptionPartialFailure(t *testin
 		{url: "wss://relay-a.example", subscribes: false, acceptsRequests: true, publishesResponses: false},
 		{url: "wss://relay-b.example", subscribes: true, acceptsRequests: true, publishesResponses: true},
 	})
-	server.RegisterContextVMHandler("test/dual-relay", func(context.Context, controlplane.ContextVMRequest) (any, error) {
+	server.RegisterContextVMHandler(controlplane.ContextVMMethodDeploymentRunLogsGet, func(context.Context, controlplane.ContextVMRequest) (any, error) {
 		return map[string]any{"status": "success", "payload": map[string]any{"relay": "b"}}, nil
 	})
 
 	result, err := client.Request(context.Background(),
-		"test/dual-relay", map[string]any{"service_id": "service-1"}, nostr.Tags{{"d", "dual-relay-1"}}, nil)
+		controlplane.ContextVMMethodDeploymentRunLogsGet, map[string]any{"run_id": "run-1"}, nostr.Tags{{"d", "dual-relay-1"}}, nil)
 	if err != nil {
 		t.Fatalf("publishAndAwait() error = %v", err)
 	}

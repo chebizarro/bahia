@@ -209,7 +209,7 @@ func setupCLIIntentPipelineWithProcessor(t *testing.T) (*cliIntentRegistry, *cli
 		return nil
 	}, signer, zap.NewNop())
 	trust := controlplane.NewTrustSet([]string{operatorKey.Public().Hex()}, zap.NewNop(), controlplane.WithBootstrapOwners(map[string]string{orgID: operatorKey.Public().Hex()}))
-	processor := controlplane.NewIntentProcessor(trust, store, status, controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{"service": true, "environment": true, "artifact": true, "adoption": true, "dns": true, "deployment": true}}, zap.NewNop())
+	processor := controlplane.NewIntentProcessor(trust, store, status, controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{"service": true, "environment": true, "artifact": true, "adoption": true, "build": true, "dns": true, "deployment": true}}, zap.NewNop())
 	processor.RegisterHandler("service", controlplane.NewServiceIntentHandler(controlplane.ServiceIntentHandlerConfig{Registry: registry, Reader: registry, Logger: zap.NewNop()}))
 	processor.RegisterHandler("environment", controlplane.NewEnvironmentIntentHandler(registry, nil, zap.NewNop()))
 	transport.process = func(ev nostr.Event) {
