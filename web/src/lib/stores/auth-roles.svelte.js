@@ -23,8 +23,8 @@ import {
   decryptConfidentialContent,
   parseKeyEnvelopeDTag,
   isConfidentialEnvelope,
+  referencedKeyVersions,
   CONFIDENTIAL_SCHEMA,
-  KEY_ENVELOPE_LEGACY_KIND,
   KEY_ENVELOPE_TOPIC,
   ORG_MEMBER_LEGACY_KIND,
   ORG_MEMBER_TOPIC
@@ -38,12 +38,25 @@ import {
 // State — Svelte 5 runes ($state)
 // ---------------------------------------------------------------------------
 
-/** @type {Map<string, import('$lib/nostr/confidential.js').OrgContentKey>} orgID → current OCK */
+/** @type {Map<string, import('$lib/nostr/confidential.js').OrgContentKey>} orgID:version → OCK */
 const ockCache = new Map();
+const latestVersionByOrg = new Map();
+const retiredVersions = new Set();
 const contentKeyListeners = new Set();
 
 export function contentKeyFor(orgID, version) {
   return ockCache.get(`${orgID}:${version}`) || null;
+}
+
+export function currentKeyVersionForOrg(orgID) {
+  return latestVersionByOrg.get(orgID) ?? null;
+}
+
+export function contentKeyStateFor(orgID, version) {
+  const key = contentKeyFor(orgID, version);
+  if (key) return { key, status: 'ready' };
+  return { key: null, status: (currentKeyVersionForOrg(orgID) || 0) > version
+    ? 're-encryption pending' : 'key unavailable' };
 }
 
 export function onContentKeyChange(callback) {
@@ -134,6 +147,8 @@ export function stopRoleDerivation() {
   }
   activeUnsubscribes = [];
   ockCache.clear();
+  latestVersionByOrg.clear();
+  retiredVersions.clear();
   notifyContentKeyChange();
   for (const key of Object.keys(orgRoles)) {
     delete orgRoles[key];
@@ -185,7 +200,7 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
 
     // 4. Subscribe to live updates for both key envelopes and member records
     const envelopeUnsub = store.subscribe(
-      { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': [KEY_ENVELOPE_TOPIC] },
+      { kinds: [CASCADIA_CONTROLPLANE_STATE, ORG_KEY_ENVELOPE], '#t': [KEY_ENVELOPE_TOPIC] },
       () => {
         if (generation !== derivationGeneration) return;
         // Re-process on any key envelope change
@@ -206,6 +221,14 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
     );
     activeUnsubscribes.push(memberUnsub);
 
+    const recordUnsub = store.subscribe(
+      { kinds: [CASCADIA_CONTROLPLANE_STATE], authors: [servicePubkey] },
+      () => {
+        if (generation === derivationGeneration) reconcileContentKeys(store, servicePubkey);
+      }
+    );
+    activeUnsubscribes.push(recordUnsub);
+
     roleDerivationActive.value = false;
   } catch (err) {
     if (generation !== derivationGeneration) return;
@@ -224,7 +247,7 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
  */
 async function processKeyEnvelopes(store, userPubkey, servicePubkey, signer, generation) {
   const envelopeEvents = store.query({
-    kinds: [CASCADIA_CONTROLPLANE_STATE],
+    kinds: [CASCADIA_CONTROLPLANE_STATE, ORG_KEY_ENVELOPE],
     '#t': [KEY_ENVELOPE_TOPIC]
   });
 
@@ -240,7 +263,7 @@ async function processKeyEnvelopes(store, userPubkey, servicePubkey, signer, gen
 
     // Skip if we already have this org+version cached
     const cacheKey = `${parsed.orgID}:${parsed.version}`;
-    if (ockCache.has(cacheKey)) continue;
+    if (ockCache.has(cacheKey) || retiredVersions.has(cacheKey)) continue;
 
     // Trial-decrypt: try to unwrap the NIP-44 content with our signer
     try {
@@ -248,23 +271,33 @@ async function processKeyEnvelopes(store, userPubkey, servicePubkey, signer, gen
       if (generation !== derivationGeneration) return;
       const { key, recipientPubkey } = unmarshalOCKWrap(plaintext);
       if (recipientPubkey !== userPubkey) continue;
-      if (key.orgID !== parsed.orgID) continue;
+      if (key.orgID !== parsed.orgID || key.version !== parsed.version) continue;
 
       // Found our envelope — cache the OCK in memory only
       ockCache.set(cacheKey, key);
+      latestVersionByOrg.set(parsed.orgID, Math.max(latestVersionByOrg.get(parsed.orgID) || 0, key.version));
       notifyContentKeyChange();
-
-      // Also set as current if it's the highest version for this org
-      const currentKey = `${parsed.orgID}:current`;
-      const existing = ockCache.get(currentKey);
-      if (!existing || existing.version < key.version) {
-        ockCache.set(currentKey, key);
-      }
     } catch {
       // Trial-decrypt failed — not our envelope, skip silently
       continue;
     }
   }
+  reconcileContentKeys(store, servicePubkey);
+}
+
+function reconcileContentKeys(store, servicePubkey) {
+  const references = referencedKeyVersions(store.query({
+    kinds: [CASCADIA_CONTROLPLANE_STATE], authors: [servicePubkey]
+  }), servicePubkey);
+  let changed = false;
+  for (const [cacheKey, key] of ockCache) {
+    if (key.version >= (latestVersionByOrg.get(key.orgID) || 0) ||
+        references.get(key.orgID)?.has(key.version)) continue;
+    ockCache.delete(cacheKey);
+    retiredVersions.add(cacheKey);
+    changed = true;
+  }
+  if (changed) notifyContentKeyChange();
 }
 
 // ---------------------------------------------------------------------------
@@ -303,8 +336,9 @@ function processMemberRecords(store, servicePubkey, userPubkey) {
       if (!orgID || !versionStr) continue;
       if (dTag !== `org:member:${orgID}:${userPubkey}`) continue;
 
-      const version = parseInt(versionStr.substring(1), 10);
-      if (isNaN(version)) continue;
+      if (!/^v[1-9]\d*$/.test(versionStr)) continue;
+      const version = Number(versionStr.substring(1));
+      if (!Number.isSafeInteger(version)) continue;
 
       // Look up the OCK for this org+version
       const cacheKey = `${orgID}:${version}`;

@@ -4,7 +4,7 @@ import { ORG_REGISTRY, ORG_MEMBER_REGISTRY, ORG_INVITE_REGISTRY } from '$lib/nos
 import { onContentKeyChange } from './auth-roles.svelte.js';
 import { readConfidentialTopic } from './collections/confidential-records.js';
 import { mintEntityId } from '$lib/entity-id.js';
-import { submitSensitiveIntent } from './sensitive-intents.svelte.js';
+import { publishIntent } from '$lib/nostr/intent-client.svelte.js';
 
 export const orgsState = $state({ orgs: [], myInvites: [], loading: false, error: null });
 export const orgDetailState = $state({ org: null, invites: [], loading: false, error: null });
@@ -82,39 +82,53 @@ export async function subscribeToOrgsUpdates({ detailId = '' } = {}) {
 
 export async function createOrg({ name, displayName }) {
   const id = mintEntityId();
-  return submitSensitiveIntent({ domain: 'org', op: 'create', coordinate: id, orgId: id,
+  return publishIntent({ domain: 'org', op: 'create', coordinate: id, orgId: id,
     content: { id, name, display_name: displayName } });
 }
 
 export async function deleteOrg(id) {
-  return submitSensitiveIntent({ domain: 'org', op: 'delete', coordinate: id, orgId: id, content: { id } });
+  return publishIntent({ domain: 'org', op: 'delete', coordinate: id, orgId: id, content: { id } });
+}
+
+export async function rekeyOrg(orgId, reason = '') {
+  const content = { org_id: orgId };
+  if (reason.trim()) content.reason = reason.trim();
+  return publishIntent({ domain: 'org', op: 'rekey', coordinate: orgId, orgId,
+    schema: 'bahia.intent.org.v1', content });
+}
+
+export async function updateOrgStrictRevocation(org, enabled) {
+  if (!org?.id) throw new Error('Organization state is unavailable');
+  return publishIntent({ domain: 'org', op: 'update', coordinate: org.id, orgId: org.id,
+    schema: 'bahia.intent.org.v1', currentRecord: org,
+    content: { id: org.id, strict_revocation: Boolean(enabled) } });
 }
 
 export async function acceptInvite(inviteId) {
   const invite = orgsState.myInvites.find(item => item.id === inviteId);
   if (!invite?.org_id || !invite?.role) throw new Error('Invite state is not available from the canonical store');
-  return submitSensitiveIntent({ domain: 'org', op: 'create',
+  return publishIntent({ domain: 'org', op: 'create',
     coordinate: `org:member:${invite.org_id}:${authState.pubkey}`, orgId: invite.org_id,
     schema: 'bahia.intent.org-member.v1', content: { pubkey: authState.pubkey, role: invite.role, invite_id: inviteId } });
 }
 
 export async function createOrgInvite(orgId, { pubkey, role, expiresIn = 72 } = {}) {
   const id = mintEntityId();
-  return submitSensitiveIntent({ domain: 'org', op: 'create', coordinate: id, orgId,
+  return publishIntent({ domain: 'org', op: 'create', coordinate: id, orgId,
     schema: 'bahia.intent.org-invite.v1', content: { id, pubkey, role, expires_in: expiresIn } });
 }
 
 export async function revokeOrgInvite(orgId, inviteId) {
-  return submitSensitiveIntent({ domain: 'org', op: 'delete', coordinate: inviteId, orgId,
+  return publishIntent({ domain: 'org', op: 'delete', coordinate: inviteId, orgId,
     schema: 'bahia.intent.org-invite.v1', content: { id: inviteId } });
 }
 
 export async function updateOrgMemberRole(orgId, pubkey, { role }) {
-  return submitSensitiveIntent({ domain: 'org', op: 'create',
+  return publishIntent({ domain: 'org', op: 'create',
     coordinate: `org:member:${orgId}:${pubkey}`, orgId, schema: 'bahia.intent.org-member.v1', content: { pubkey, role } });
 }
 
 export async function removeOrgMember(orgId, pubkey) {
-  return submitSensitiveIntent({ domain: 'org', op: 'delete',
+  return publishIntent({ domain: 'org', op: 'delete',
     coordinate: `org:member:${orgId}:${pubkey}`, orgId, schema: 'bahia.intent.org-member.v1', content: { pubkey } });
 }

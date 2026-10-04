@@ -121,14 +121,32 @@ export function parseConfidentialEnvelope(content) {
 export function versionFromEnvelope(content) {
   const envelope = parseConfidentialEnvelope(content);
   const versionStr = envelope.key_version;
-  if (!versionStr || !versionStr.startsWith('v')) {
+  if (typeof versionStr !== 'string' || !/^v[1-9]\d*$/.test(versionStr) || !envelope.key_org) {
     throw new Error(`invalid key_version: ${versionStr}`);
   }
-  const version = parseInt(versionStr.substring(1), 10);
-  if (isNaN(version)) {
+  const version = Number(versionStr.substring(1));
+  if (!Number.isSafeInteger(version)) {
     throw new Error(`non-numeric key_version: ${versionStr}`);
   }
   return { orgID: envelope.key_org, version };
+}
+
+/** Versions referenced by the current, non-deleted confidential records in the event store. */
+export function referencedKeyVersions(events, servicePubkey) {
+  const references = new Map();
+  for (const event of events) {
+    if (event.kind !== KEY_ENVELOPE_KIND || event.pubkey !== servicePubkey ||
+        event.tags?.some(tag => tag[0] === 'deleted' && tag[1] === 'true') ||
+        !isConfidentialEnvelope(event.content)) continue;
+    try {
+      const { orgID, version } = versionFromEnvelope(event.content);
+      if (!references.has(orgID)) references.set(orgID, new Set());
+      references.get(orgID).add(version);
+    } catch {
+      // Malformed content cannot identify a key to retain.
+    }
+  }
+  return references;
 }
 
 // ---------------------------------------------------------------------------
@@ -333,9 +351,9 @@ export function parseKeyEnvelopeDTag(dTag) {
   if (parts.length < 4) return null;
   const orgID = parts[1];
   const versionStr = parts[2];
-  if (!versionStr.startsWith('v')) return null;
-  const version = parseInt(versionStr.substring(1), 10);
-  if (isNaN(version)) return null;
+  if (!/^v[1-9]\d*$/.test(versionStr)) return null;
+  const version = Number(versionStr.substring(1));
+  if (!Number.isSafeInteger(version)) return null;
   const handle = parts.slice(3).join(':');
   return { orgID, version, handle };
 }

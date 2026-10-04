@@ -10,10 +10,12 @@
     loadOrgDetail,
     orgDetailState,
     orgMemberListState,
+    rekeyOrg,
     removeOrgMember,
     revokeOrgInvite,
     subscribeToOrgsUpdates,
-    updateOrgMemberRole
+    updateOrgMemberRole,
+    updateOrgStrictRevocation
   } from '$lib/stores/orgs.svelte.js';
   import { toast } from '$lib/components/toast.js';
   import Card from '$lib/components/Card.svelte';
@@ -27,6 +29,8 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { OrganizationIcon, PendingIcon, WarningIcon } from '$lib/icons/domain-icons.js';
   import { sensitiveMutationBlocker } from '$lib/stores/sensitive-intents.svelte.js';
+  import { sensitivePendingState } from '$lib/stores/sensitive-intents.svelte.js';
+  import { acceptedIntentStatus } from '$lib/nostr/intent-client.svelte.js';
 
   let org = $derived(orgDetailState.org);
   let members = $derived(orgMemberListState.orgID === page.params.id ? orgMemberListState.members : []);
@@ -35,6 +39,14 @@
   let error = $derived(orgDetailState.error);
   let orgId = $derived(page.params.id);
   let myRole = $derived(roleForOrg(orgId));
+  let orgPendingRows = $derived(sensitivePendingState.rows.filter(row => row.domain === 'org' && row.coordinate === orgId));
+  let rekeyReason = $state('');
+  let rekeySubmitting = $state(false);
+  let rekeyWaiting = $state(false);
+  let rekeyResult = $state(null);
+  let strictUpdating = $state(false);
+  let strictPendingValue = $state(null);
+  let strictChecked = $derived(strictPendingValue ?? Boolean(org?.strict_revocation));
 
   // Invite modal state
   let showInviteModal = $state(false);
@@ -54,6 +66,10 @@
 
   let canManageMembers = $derived(myRole === 'owner' || myRole === 'admin');
   let canDelete = $derived(myRole === 'owner');
+
+  $effect(() => {
+    if (org && strictPendingValue === Boolean(org.strict_revocation)) strictPendingValue = null;
+  });
 
   $effect(() => {
     const id = orgId;
@@ -153,6 +169,44 @@
     } finally {
       deleting = false;
       showDeleteConfirm = false;
+    }
+  }
+
+  async function rotateAndReencrypt() {
+    rekeySubmitting = true;
+    rekeyResult = null;
+    try {
+      const submitted = await rekeyOrg(orgId, rekeyReason);
+      rekeyWaiting = true;
+      rekeyReason = '';
+      const status = await acceptedIntentStatus(submitted);
+      if (!/^v[1-9]\d*$/.test(status.data?.key_version || '') ||
+          !Number.isInteger(status.data?.records_republished) || status.data.records_republished < 0) {
+        throw new Error('Daemon returned an invalid re-encryption result');
+      }
+      rekeyResult = status.data;
+      toast.success('Organization records re-encrypted');
+    } catch (e) {
+      toast.error(`Re-encryption failed: ${e.message}`);
+    } finally {
+      rekeySubmitting = false;
+      rekeyWaiting = false;
+    }
+  }
+
+  async function changeStrictRevocation(enabled) {
+    strictPendingValue = enabled;
+    strictUpdating = true;
+    try {
+      const submitted = await updateOrgStrictRevocation(org, enabled);
+      await acceptedIntentStatus(submitted);
+      toast.success('Strict revocation updated');
+      await loadData();
+    } catch (e) {
+      strictPendingValue = null;
+      toast.error(`Could not update strict revocation: ${e.message}`);
+    } finally {
+      strictUpdating = false;
     }
   }
 
@@ -290,6 +344,44 @@
             {/each}
           </tbody>
         </table>
+      </Card>
+    </section>
+  {/if}
+
+  {#if canManageMembers}
+    <section class="section">
+      <h2>Organization settings</h2>
+      <Card>
+        <label class="setting-row">
+          <span>
+            <strong>Strict revocation</strong>
+            <span class="setting-description">Automatically rotate and re-encrypt after a member is removed or downgraded.</span>
+          </span>
+          <input type="checkbox" checked={strictChecked}
+            onchange={(event) => changeStrictRevocation(event.currentTarget.checked)}
+            disabled={strictUpdating || Boolean(sensitiveMutationBlocker()) || !org.updated_at}
+            title={sensitiveMutationBlocker() || (!org.updated_at ? 'Waiting for a revisioned organization record' : undefined)} />
+        </label>
+        <form class="rekey-form" onsubmit={(event) => { event.preventDefault(); void rotateAndReencrypt(); }}>
+          <FormField label="Reason for re-encryption (optional)">
+            <Input bind:value={rekeyReason} placeholder="Why are you rotating this key?" />
+          </FormField>
+          <LoadingButton type="submit" loading={rekeySubmitting || rekeyWaiting}
+            disabled={Boolean(sensitiveMutationBlocker()) || rekeySubmitting || rekeyWaiting}
+            title={sensitiveMutationBlocker() || undefined}>Rotate and re-encrypt</LoadingButton>
+        </form>
+        {#if rekeyWaiting && !orgPendingRows.some(row => row.op === 'rekey' && row.status === 'pending')}
+          <p class="intent-status" role="status">Re-encryption pending daemon acceptance…</p>
+        {/if}
+        {#each orgPendingRows.filter(row => row.status === 'pending') as row (row.key)}
+          <p class="intent-status" role="status">{row.op === 'rekey' ? 'Re-encryption' : 'Organization update'} pending daemon acceptance…</p>
+        {/each}
+        {#if rekeyResult}
+          <p class="intent-status" role="status">Key version {rekeyResult.key_version} · {rekeyResult.records_republished} records re-encrypted</p>
+        {/if}
+        {#each orgPendingRows.filter(row => row.status !== 'pending') as row (row.key)}
+          <p class="intent-status" role="alert">{row.op}: {row.status}{row.reason ? ` — ${row.reason}` : ''}</p>
+        {/each}
       </Card>
     </section>
   {/if}
@@ -530,5 +622,28 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
+  }
+
+  .setting-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .setting-description {
+    display: block;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    margin-top: 0.25rem;
+  }
+
+  .rekey-form {
+    margin-top: 1.5rem;
+    align-items: flex-start;
+  }
+
+  .intent-status {
+    margin-top: 1rem;
   }
 </style>
