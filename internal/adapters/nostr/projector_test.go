@@ -60,6 +60,14 @@ func (p *captureProjectionPublisher) Publish(_ context.Context, ev gonostr.Event
 	return 1, nil
 }
 
+// snapshot returns a copy of the captured events under the lock; tests must use
+// it instead of reading p.events while publishers may still append.
+func (p *captureProjectionPublisher) snapshot() []gonostr.Event {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]gonostr.Event(nil), p.events...)
+}
+
 func (p *captureProjectionPublisher) byKind(kind int) []gonostr.Event {
 	p.mu.Lock()
 	defer p.mu.Unlock()

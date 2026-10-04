@@ -196,8 +196,8 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 		t.Errorf("expected exactly 1 service publish (stale record), got %d", n)
 	}
 	// Verify it's the stale record.
-	if countByDomain(sink.events, "service") == 1 {
-		for _, ev := range sink.events {
+	if events := sink.snapshot(); countByDomain(events, "service") == 1 {
+		for _, ev := range events {
 			if hasDomainTag(ev, "service") {
 				if d := tagValue(ev.Tags, "d"); d != staleDTag {
 					t.Errorf("republished d-tag = %q, want %q", d, staleDTag)

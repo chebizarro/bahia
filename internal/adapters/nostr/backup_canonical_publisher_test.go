@@ -145,15 +145,16 @@ func TestBackupCanonicalPublisher_DTagAndLegacyKindForAllEntityTypes(t *testing.
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			before := len(sink.events)
+			before := len(sink.snapshot())
 			if err := tt.publish(); err != nil {
 				t.Fatalf("publish: %v", err)
 			}
-			after := len(sink.events)
+			events := sink.snapshot()
+			after := len(events)
 			if after <= before {
 				t.Fatal("expected at least one new event")
 			}
-			ev := sink.events[after-1]
+			ev := events[after-1]
 			if !hasTag(ev.Tags, "legacy_kind", tt.wantLegacy) {
 				t.Errorf("wrong legacy_kind: want %s, got tags %v", tt.wantLegacy, ev.Tags)
 			}
@@ -253,8 +254,8 @@ func TestBackupCanonicalPublisher_NilInputsAreGraceful(t *testing.T) {
 		t.Errorf("PublishRetention(nil): %v", err)
 	}
 
-	if len(sink.events) != 0 {
-		t.Errorf("expected 0 events for nil inputs, got %d", len(sink.events))
+	if n := len(sink.snapshot()); n != 0 {
+		t.Errorf("expected 0 events for nil inputs, got %d", n)
 	}
 }
 
@@ -357,7 +358,7 @@ func TestBackupCanonicalPublisher_RuntimeObservationRepublish(t *testing.T) {
 
 	// Should have the run event + the runtime observation event.
 	var runtimeObs []gonostr.Event
-	for _, ev := range sink.events {
+	for _, ev := range sink.snapshot() {
 		if hasTag(ev.Tags, "scope", "fleet") && hasTag(ev.Tags, "status", "summary") {
 			runtimeObs = append(runtimeObs, ev)
 		}
