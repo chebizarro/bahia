@@ -71,6 +71,7 @@ import { base64Encode } from '../../src/lib/nostr/confidential.js';
 import {
   CONFIDENTIAL_SCHEMA,
   CONFIDENTIAL_ALGORITHM,
+  decryptConfidentialContent,
   OCK_WRAP_SCHEMA
 } from '../../src/lib/nostr/confidential.js';
 
@@ -88,23 +89,23 @@ TEST_OCK[0] = 0xDE;
 TEST_OCK[1] = 0xAD;
 TEST_OCK[31] = 0xBE;
 
-function buildFixtureKeyEnvelope(orgID = TEST_ORG_ID) {
+function buildFixtureKeyEnvelope(orgID = TEST_ORG_ID, version = 1) {
   const wrapPayload = JSON.stringify({
     schema: OCK_WRAP_SCHEMA,
     org_id: orgID,
     key_ref: 'ock:' + orgID,
-    version: 1,
+    version,
     key: base64Encode(TEST_OCK),
     recipient_pubkey: TEST_USER_PUBKEY
   });
 
   return {
-    id: `envelope-${orgID}`,
+    id: `envelope-${orgID}-v${version}`,
     pubkey: TEST_SERVICE_PUBKEY,
     created_at: 1700000000,
     kind: 30900,
     tags: [
-      ['d', 'org-key:' + orgID + ':v1:handle123'],
+      ['d', 'org-key:' + orgID + ':v' + version + ':handle123'],
       ['t', 'org-key-envelope']
     ],
     content: wrapPayload, // In real life this would be NIP-44 encrypted
@@ -112,7 +113,7 @@ function buildFixtureKeyEnvelope(orgID = TEST_ORG_ID) {
   };
 }
 
-function buildFixtureMemberRecord({ orgID = TEST_ORG_ID, pubkey = TEST_USER_PUBKEY, role = 'admin', deleted = false, createdAt = 1700000001, id = `member-${orgID}-${pubkey}-${createdAt}`, dTagPubkey = pubkey } = {}) {
+function buildFixtureMemberRecord({ orgID = TEST_ORG_ID, pubkey = TEST_USER_PUBKEY, role = 'admin', deleted = false, version = 1, createdAt = 1700000001, id = `member-${orgID}-${pubkey}-${createdAt}`, dTagPubkey = pubkey } = {}) {
   const memberPlaintext = JSON.stringify({
     org_id: orgID,
     pubkey,
@@ -124,7 +125,7 @@ function buildFixtureMemberRecord({ orgID = TEST_ORG_ID, pubkey = TEST_USER_PUBK
     schema: CONFIDENTIAL_SCHEMA,
     key_org: orgID,
     key_ref: 'ock:' + orgID,
-    key_version: 'v1',
+    key_version: 'v' + version,
     legacy_kind: '32006',
     d: 'org:member:' + orgID + ':' + dTagPubkey,
     t: 'org-member'
@@ -158,7 +159,7 @@ function buildFixtureMemberRecord({ orgID = TEST_ORG_ID, pubkey = TEST_USER_PUBK
       algorithm: CONFIDENTIAL_ALGORITHM,
       key_org: orgID,
       key_ref: 'ock:' + orgID,
-      key_version: 'v1',
+      key_version: 'v' + version,
       nonce: base64Encode(nonce),
       ciphertext: base64Encode(ciphertext),
       associated_data: ad
@@ -196,6 +197,13 @@ function createMockStore(events = []) {
     emit(event) {
       events.push(event);
       for (const { cb } of subscribers) cb(event);
+    },
+    replace(event) {
+      const d = event.tags.find(tag => tag[0] === 'd')?.[1];
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i].pubkey === event.pubkey && events[i].tags.find(tag => tag[0] === 'd')?.[1] === d) events.splice(i, 1);
+      }
+      this.emit(event);
     }
   };
 }
@@ -404,8 +412,7 @@ describe('auth-roles', () => {
       signer
     });
 
-    // Should have registered two subscriptions
-    expect(store._subscribers.length).toBe(2);
+    expect(store._subscribers.length).toBe(3);
 
     stopRoleDerivation();
 
@@ -449,6 +456,55 @@ describe('OCK never persisted to storage', () => {
       }
     }
 
+    stopRoleDerivation();
+  });
+});
+
+describe('OCK version hygiene', () => {
+  it('holds a referenced old version, decrypts a late old record, then retires it after refounding', async () => {
+    vi.resetModules();
+    const { startRoleDerivation, stopRoleDerivation, contentKeyFor, contentKeyStateFor, onContentKeyChange,
+      currentKeyVersionForOrg } = await import('../../src/lib/stores/auth-roles.svelte.js');
+    const oldEnvelope = buildFixtureKeyEnvelope();
+    const oldMember = buildFixtureMemberRecord({ role: 'owner' });
+    const store = createMockStore([oldEnvelope, oldMember]);
+    const signer = { decryptNip44: vi.fn(async (_pubkey, ciphertext) => ciphertext) };
+    await startRoleDerivation({ store, userPubkey: TEST_USER_PUBKEY,
+      servicePubkey: TEST_SERVICE_PUBKEY, signer });
+
+    const nextKey = new Promise(resolve => {
+      const unsubscribe = onContentKeyChange(() => {
+        if (currentKeyVersionForOrg(TEST_ORG_ID) === 2) { unsubscribe(); resolve(); }
+      });
+    });
+    store.emit(buildFixtureKeyEnvelope(TEST_ORG_ID, 2));
+    await nextKey;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(currentKeyVersionForOrg(TEST_ORG_ID)).toBe(2);
+    expect(contentKeyFor(TEST_ORG_ID, 1)).toBeTruthy();
+    expect(contentKeyFor(TEST_ORG_ID, 2)).toBeTruthy();
+
+    const late = buildFixtureMemberRecord({ pubkey: 'c'.repeat(64), role: 'viewer', createdAt: 1700000002 });
+    store.emit(late);
+    const held = contentKeyStateFor(TEST_ORG_ID, 1);
+    expect(held.status).toBe('ready');
+    expect(JSON.parse(decryptConfidentialContent(held.key, late.content, {
+      legacyKind: 32006, dTag: late.tags[0][1], topic: 'org-member'
+    })).role).toBe('viewer');
+
+    store.replace(buildFixtureMemberRecord({ role: 'owner', version: 2, createdAt: 1700000003 }));
+    expect(contentKeyFor(TEST_ORG_ID, 1)).toBeTruthy();
+    store.replace(buildFixtureMemberRecord({ pubkey: 'c'.repeat(64), role: 'viewer',
+      version: 2, createdAt: 1700000003 }));
+    expect(contentKeyFor(TEST_ORG_ID, 1)).toBeNull();
+    expect(contentKeyStateFor(TEST_ORG_ID, 1)).toMatchObject({ key: null, status: 're-encryption pending' });
+
+    store.emit(buildFixtureMemberRecord({ pubkey: 'd'.repeat(64), version: 1, createdAt: 1700000004 }));
+    expect(contentKeyStateFor(TEST_ORG_ID, 1).status).toBe('re-encryption pending');
+    store.emit(oldEnvelope);
+    await Promise.resolve();
+    expect(contentKeyFor(TEST_ORG_ID, 1)).toBeNull();
     stopRoleDerivation();
   });
 });

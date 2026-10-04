@@ -1,12 +1,13 @@
 import { decryptConfidentialContent, isConfidentialEnvelope, versionFromEnvelope } from '../../nostr/confidential.js';
 import { CAS_CONTROL_STATE } from '../../nostr/kinds.gen.js';
-import { contentKeyFor } from '../auth-roles.svelte.js';
+import { contentKeyStateFor } from '../auth-roles.svelte.js';
 import { queryTopic, getDTag, getTagValue } from './store-query.js';
 
 export function readConfidentialTopic(topic, legacyKind) {
   const rows = [];
   const tombstones = [];
   let unreadable = 0;
+  const reencryptionPending = [];
   for (const event of queryTopic(topic, [CAS_CONTROL_STATE])) {
     if (getTagValue(event, 'legacy_kind') !== String(legacyKind)) continue;
     if (getTagValue(event, 'deleted') === 'true') {
@@ -16,8 +17,15 @@ export function readConfidentialTopic(topic, legacyKind) {
     if (!isConfidentialEnvelope(event.content)) continue;
     try {
       const { orgID, version } = versionFromEnvelope(event.content);
-      const key = contentKeyFor(orgID, version);
-      if (!key) { unreadable++; continue; }
+      const { key, status } = contentKeyStateFor(orgID, version);
+      if (!key) {
+        unreadable++;
+        if (status === 're-encryption pending') {
+          reencryptionPending.push({ orgID, version, dTag: getDTag(event), eventId: event.id,
+            status });
+        }
+        continue;
+      }
       const content = JSON.parse(decryptConfidentialContent(key, event.content, {
         legacyKind, dTag: getDTag(event), topic
       }));
@@ -32,7 +40,7 @@ export function readConfidentialTopic(topic, legacyKind) {
       unreadable++;
     }
   }
-  return { rows, unreadable, tombstones };
+  return { rows, unreadable, tombstones, reencryptionPending };
 }
 
 export function reassembleFindingDetails(records, tombstones = []) {

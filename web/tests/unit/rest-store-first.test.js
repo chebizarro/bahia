@@ -36,6 +36,7 @@ vi.mock('../../src/lib/nostr/boot.js', () => ({
 }));
 vi.mock('../../src/lib/stores/auth-roles.svelte.js', () => ({
   contentKeyFor: () => mock.key,
+  contentKeyStateFor: () => ({ key: mock.key, status: mock.key ? 'ready' : 'key unavailable' }),
   onContentKeyChange: () => () => {}
 }));
 
