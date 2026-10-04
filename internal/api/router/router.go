@@ -48,7 +48,6 @@ type RouterDeps struct {
 	SBOMImporter              *service.SBOMOrchestrator
 	Artifacts                 repository.ArtifactRepository
 	Signatures                repository.ArtifactSignatureRepository
-	SignVerifier              SignatureVerifier
 	Adoption                  *service.AdoptionService
 	RuntimeLifecycle          *service.RuntimeLifecycleService
 	LegacyAgentReconciliation handlers.LegacyAgentReconciliationController
@@ -56,19 +55,11 @@ type RouterDeps struct {
 	Dispatcher                *notifications.Dispatcher
 	ToolProvisioning          repository.ToolProvisioningRepository
 	MCP                       *handlers.MCPHandler
-	HiveCI                    repository.HiveCIRepository
 	Blossom                   *blossom.Client
 	OCI                       http.Handler
 	RBAC                      *auth.RBAC
-	LLMRegistry               *service.LLMRegistryService
-	MLCommands                handlers.MLCommandPublisher
 	ConfigFabric              *service.ConfigFabricService
 	HealthProvider            any
-}
-
-// SignatureVerifier is the interface for signature verification.
-type SignatureVerifier interface {
-	VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error)
 }
 
 func New(registry *service.RegistryService, logger *zap.Logger, corsCfg config.CORSConfig, telemetryProvider *telemetry.Provider, authCfg ...config.AuthConfig) http.Handler {
@@ -111,7 +102,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	// backing repository is nil (e.g. no Postgres) return 503.
 	dbGate := middleware.RequireRepo(deps.Services)
 	platformAdminGate := platformRoleRBAC(deps, authMiddleware, domain.RoleAdmin)
-	platformDeployerGate := platformRoleRBAC(deps, authMiddleware, domain.RoleDeployer)
 	// Health, readiness, and metrics (unauthenticated).
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		if deps.HealthProvider == nil {
@@ -151,24 +141,13 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	}
 
 	// Create handlers.
-	buildH := handlers.NewBuildHandler(registry)
 	var legacyReconciliationH *handlers.LegacyAgentReconciliationHandler
 	if deps.LegacyAgentReconciliation != nil {
 		legacyReconciliationH = handlers.NewLegacyAgentReconciliationHandler(deps.LegacyAgentReconciliation)
 	}
-	deployH := handlers.NewDeploymentHandler(registry)
 	var instanceHealthH *handlers.InstanceHealthHandler
 	if deps.InstanceOperator != nil && deps.Services != nil && deps.Environments != nil {
 		instanceHealthH = handlers.NewInstanceHealthHandler(deps.InstanceOperator)
-	}
-	repoCIHandler := handlers.NewRepositoryCIHandler(deps.HiveCI)
-	var llmH *handlers.LLMHandler
-	if deps.LLMRegistry != nil {
-		llmH = handlers.NewLLMHandler(deps.LLMRegistry)
-	}
-	var mlH *handlers.MLHandler
-	if deps.MLCommands != nil {
-		mlH = handlers.NewMLHandler(deps.MLCommands)
 	}
 	var logsH *handlers.LogHandler
 	if deps.Runs != nil && deps.Services != nil && deps.Environments != nil {
@@ -192,14 +171,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		r.Use(middleware.ContentType)
 		r.Use(auth.MiddlewareFromConfig(authMiddleware))
 		r.Use(platformRBAC(deps, authMiddleware))
-		// A removed GET must be absent even when a write route still owns the same path.
-		r.MethodNotAllowed(func(w http.ResponseWriter, req *http.Request) {
-			if req.Method == http.MethodGet {
-				http.NotFound(w, req)
-				return
-			}
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		})
+		// Removed REST methods return 404 even where a surviving read owns the path.
+		r.MethodNotAllowed(http.NotFound)
 
 		// Read routes: GET/list endpoints with read rate limit.
 		r.Group(func(r chi.Router) {
@@ -215,9 +188,6 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			if logsH != nil && deps.RuntimeResolver != nil {
 				r.With(dbGate, coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "id", "envId"), true)).Get("/services/{id}/environments/{envId}/logs", logsH.StreamLiveLogs)
 			}
-
-			// Repository CI lookup (read)
-			r.With(dbGate, platformAdminGate).Post("/repositories/ci/lookup", repoCIHandler.Lookup)
 
 			// Payment records are retained for non-event MCP reads.
 			if deps.Payments != nil {
@@ -251,6 +221,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// encrypted ContextVM path (dual dispatch to intent processor).
 			// Signer-first intent consumers no longer require those REST reads.
 
+			// Phase 5 F1: retained — web/src/routes/instance-health/+page.svelte; replaced by bahia-irsry.11.19.
 			// Managed instance maintenance (write)
 			if instanceHealthH != nil {
 				instanceRBAC := coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)
@@ -258,44 +229,11 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(dbGate, instanceRBAC).Delete("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/maintenance", instanceHealthH.ClearMaintenance)
 			}
 
-			// Builds (write)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true, domain.PermWriteServices)).Post("/builds", buildH.Register)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, buildOrgResolver(deps.Builds, deps.Services, "id"), true, domain.PermWriteServices)).Patch("/builds/{id}/status", buildH.UpdateStatus)
-
-			// ML control plane (write compatibility actions publish Nostr commands)
-			if mlH != nil {
-				r.With(dbGate, platformAdminGate).Post("/ml/imports", mlH.ImportModel)
-				r.With(dbGate, platformAdminGate).Post("/ml/recipes/runs", mlH.RunRecipe)
-				r.With(dbGate, platformAdminGate).Post("/ml/deployments", mlH.Deploy)
-				r.With(dbGate, platformAdminGate).Post("/ml/rollback", mlH.Rollback)
-			}
-
-			// LLM control plane (write): route updates remain REST-compatible;
-			// route/release creation moved to signer-first Nostr commands.
-			if llmH != nil {
-				r.With(dbGate, platformAdminGate).Put("/llm/routes/{id}", llmH.UpdateRoute)
-			}
-
-			// Deployment Runs (write)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true, domain.PermWriteDeployments)).Post("/deployments/runs", deployH.CreateRun)
-			r.With(dbGate, coreRBAC(deps, authMiddleware, runOrgResolver(registry, deps.Services, "id"), true, domain.PermWriteDeployments)).Post("/deployments/runs/{id}/complete", deployH.CompleteRun)
-
-			// Payments (write)
-			if deps.Payments != nil {
-				payH := handlers.NewPaymentHandler(deps.Payments)
-				r.With(dbGate, platformDeployerGate).Post("/payments/estimate", payH.EstimateCost)
-			}
-
+			// Phase 5 F1: retained — docs/user-guide/features/artifacts.md curl import; replaced by bahia-irsry.11.19.
 			// SBOM (write compatibility import)
 			if deps.SBOMs != nil && deps.Artifacts != nil && deps.SBOMImporter != nil {
 				sbomH := handlers.NewSBOMHandler(deps.SBOMs, deps.Artifacts, deps.SBOMImporter)
 				r.With(dbGate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true, domain.PermWriteServices)).Post("/artifacts/{id}/sbom", sbomH.IngestSBOM)
-			}
-
-			// Signatures (write)
-			if deps.Signatures != nil && deps.Artifacts != nil && deps.SignVerifier != nil {
-				sigH := handlers.NewSignatureHandler(deps.Signatures, deps.Artifacts, deps.SignVerifier)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true, domain.PermWriteServices)).Post("/artifacts/{id}/signatures/verify", sigH.Verify)
 			}
 
 			// Deprecated policy REST mutations are intentionally not mounted.
@@ -304,31 +242,13 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Secrets (write): deleted in Phase 3 N1.
 			// Secret create/update/delete now go through intent publishing (30900).
 
-			// Notifications (write): Create/Update/Delete deleted in Phase 3 N1.
-			// Notification channel mutations now go through intent publishing (30900).
-			// TestChannel remains as a non-mutating diagnostic endpoint.
-			if deps.Notifications != nil && deps.Dispatcher != nil {
-				notifH := handlers.NewNotificationHandler(deps.Notifications, deps.Dispatcher)
-				notificationRBAC := coreRBAC(deps, authMiddleware, notificationChannelOrgResolver(deps.Notifications, "id"), true, domain.PermManageSettings)
-				r.With(dbGate, notificationRBAC).Post("/notifications/channels/{id}/test", notifH.TestChannel)
-			}
-
+			// Phase 5 F1: retained — docs/user-guide/features/souls.md migration workflow; replaced by bahia-irsry.11.19.
 			// Legacy Soul reconciliation is authenticated and dry-run-first.
 			if legacyReconciliationH != nil {
 				r.With(dbGate, platformAdminGate).Post("/soulfactory/legacy-reconciliation/preview", legacyReconciliationH.Preview)
 				r.With(dbGate, platformAdminGate).Post("/soulfactory/legacy-reconciliation/apply", legacyReconciliationH.Apply)
 			}
 
-			// Tool provisioning (write)
-			if deps.ToolProvisioning != nil {
-				toolH := handlers.NewToolHandler(deps.ToolProvisioning)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true, domain.PermManageSettings)).Post("/tools/denylist", toolH.AddDenylist)
-				r.With(dbGate, coreRBAC(deps, authMiddleware, nil, true, domain.PermManageSettings)).Delete("/tools/denylist/{package}/{manager}", toolH.RemoveDenylist)
-			}
-
-			if deps.MCP != nil {
-				r.With(dbGate, platformAdminGate).Post("/mcp", deps.MCP.HandleJSONRPC)
-			}
 		})
 
 		// Deprecated LLM operational, adoption, and direct runtime REST mutations

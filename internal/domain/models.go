@@ -13,10 +13,8 @@ type BuildStatus string
 
 const (
 	BuildStatusQueued    BuildStatus = "queued"
-	BuildStatusRunning   BuildStatus = "running"
 	BuildStatusSucceeded BuildStatus = "succeeded"
 	BuildStatusFailed    BuildStatus = "failed"
-	BuildStatusCancelled BuildStatus = "cancelled"
 )
 
 // ScanStatus represents the vulnerability scan state of an artifact.

@@ -117,7 +117,7 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 - **Web UI**: Access the dashboard at `http://localhost:3000`
 - **Docs UI**: Browse documentation at `http://localhost:3000/docs`; internal documentation links stay inside `/docs/<topic>`.
 - **Assistant**: Open the floating assistant on a mapped product route to include a visible, dismissible route docs reference in `selected_refs`.
-- **MCP**: Connect to `/mcp` or `/api/v1/mcp` for AI agent tooling, including `bahia_docs_list` and `bahia_docs_read`.
+- **MCP**: Connect to `/mcp` for AI agent tooling, including `bahia_docs_list` and `bahia_docs_read`.
 - **Nostr**: Subscribe to read models and status events
 - **API Docs**: See [api.md](../api.md) for HTTP reference
 

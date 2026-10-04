@@ -110,7 +110,7 @@ func newTestPaymentService() (*PaymentService, *mockPaymentRepo, *mockRunRepo, *
 	paymentRepo := newMockPaymentRepo()
 	runRepo := newMockRunRepo()
 	workerRepo := &mockWorkerRepoForPayments{workers: make(map[string]*domain.Worker)}
-	svc := NewPaymentService(paymentRepo, workerRepo, runRepo, zap.NewNop())
+	svc := NewPaymentService(paymentRepo, zap.NewNop())
 	return svc, paymentRepo, runRepo, workerRepo
 }
 
@@ -203,71 +203,6 @@ func TestPaymentService_GetRunCostSummary(t *testing.T) {
 	}
 	if summary.ChangeCount != 1 {
 		t.Errorf("change_count = %d, want 1", summary.ChangeCount)
-	}
-}
-
-func TestPaymentService_EstimateCost(t *testing.T) {
-	svc, _, runRepo, workerRepo := newTestPaymentService()
-
-	// Setup: create run and worker.
-	runID := uuid.New()
-	runRepo.runs[runID] = &domain.DeploymentRun{
-		ID:           runID,
-		WorkerPubkey: "worker1",
-		Status:       domain.RunStatusQueued,
-	}
-
-	workerRepo.workers["worker1"] = &domain.Worker{
-		PubKey: "worker1",
-		Name:   "Test Worker",
-		Pricing: []domain.WorkerPricing{
-			{MintURL: "https://mint.example.com", PricePerSecond: 10, Unit: "sat"},
-		},
-		MaxDurationSecs: 600,
-	}
-
-	est, err := svc.EstimateCost(context.Background(), runID, 120)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if est.EstimatedCost != 1200 {
-		t.Errorf("estimated_cost = %d, want 1200", est.EstimatedCost)
-	}
-	if est.WorkerPubkey != "worker1" {
-		t.Errorf("worker_pubkey = %q", est.WorkerPubkey)
-	}
-	if est.WorkerName != "Test Worker" {
-		t.Errorf("worker_name = %q", est.WorkerName)
-	}
-}
-
-func TestPaymentService_EstimateCost_DefaultDuration(t *testing.T) {
-	svc, _, runRepo, workerRepo := newTestPaymentService()
-
-	runID := uuid.New()
-	runRepo.runs[runID] = &domain.DeploymentRun{
-		ID:           runID,
-		WorkerPubkey: "worker1",
-		Status:       domain.RunStatusQueued,
-	}
-
-	workerRepo.workers["worker1"] = &domain.Worker{
-		PubKey:          "worker1",
-		MaxDurationSecs: 600,
-		Pricing: []domain.WorkerPricing{
-			{PricePerSecond: 5, Unit: "sat", MintURL: "https://mint.example.com"},
-		},
-	}
-
-	est, err := svc.EstimateCost(context.Background(), runID, 0) // use default
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if est.EstimatedSecs != 600 { // should use worker's max duration
-		t.Errorf("estimated_secs = %d, want 600", est.EstimatedSecs)
-	}
-	if est.EstimatedCost != 3000 {
-		t.Errorf("estimated_cost = %d, want 3000", est.EstimatedCost)
 	}
 }
 

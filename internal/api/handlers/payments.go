@@ -27,36 +27,6 @@ func (h *PaymentHandler) requirePayments(w http.ResponseWriter) bool {
 	return false
 }
 
-// EstimateCost returns a cost estimate for a deployment run.
-// POST /payments/estimate
-func (h *PaymentHandler) EstimateCost(w http.ResponseWriter, r *http.Request) {
-	if !h.requirePayments(w) {
-		return
-	}
-	var req struct {
-		RunID             string `json:"run_id"`
-		EstimatedDuration int    `json:"estimated_duration_secs"`
-	}
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	runID, err := uuid.Parse(req.RunID)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid run_id")
-		return
-	}
-
-	estimate, err := h.payments.EstimateCost(r.Context(), runID, req.EstimatedDuration)
-	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
-
-	writeData(w, http.StatusOK, estimate)
-}
-
 // GetRunCost returns payment records and cost summary for a deployment run.
 // GET /deployments/runs/{id}/cost
 func (h *PaymentHandler) GetRunCost(w http.ResponseWriter, r *http.Request) {

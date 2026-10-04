@@ -19,6 +19,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/api/handlers"
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/app"
+	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -768,8 +769,8 @@ func closeResponseBody(t *testing.T, body io.Closer) {
 
 func assertDeprecatedMutationRouteRemoved(t *testing.T, method, path string, resp *http.Response, body map[string]any) {
 	t.Helper()
-	if resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Fatalf("%s %s: expected removed route to return 404 or 405, got %d: %v", method, path, resp.StatusCode, body)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("%s %s: expected removed route to return 404, got %d: %v", method, path, resp.StatusCode, body)
 	}
 }
 
@@ -837,7 +838,7 @@ func TestRouter_NativeMCPRemovesLegacyAgentHTTP(t *testing.T) {
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	for _, path := range []string{"/mcp", "/api/v1/mcp"} {
+	for _, path := range []string{"/mcp"} {
 		resp, body := doJSON(t, "POST", srv.URL+path, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
 		if resp.StatusCode != http.StatusOK || body["error"] != nil || body["result"] == nil {
 			t.Fatalf("%s expected native MCP JSON-RPC success, status=%d body=%#v", path, resp.StatusCode, body)
@@ -866,7 +867,7 @@ func TestRouter_ConfiguredNIP98AuthRejectsBearerOnProtectedRoutes(t *testing.T) 
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	url := srv.URL + "/api/v1/mcp"
+	url := srv.URL + "/mcp"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
@@ -897,7 +898,7 @@ func TestRouter_ConfiguredNIP98AuthAllowsProtectedRoutesWithoutJWT(t *testing.T)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
-	url := srv.URL + "/api/v1/mcp"
+	url := srv.URL + "/mcp"
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -927,6 +928,23 @@ func TestHealth(t *testing.T) {
 	}
 	if body["status"] != "healthy" {
 		t.Errorf("expected status healthy, got %v", body["status"])
+	}
+}
+
+func TestRouterRateLimitDoesNotTrustForwardedClientIP(t *testing.T) {
+	handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{})
+	for i := 0; i <= 100; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/vm-images", nil)
+		req.RemoteAddr = "192.0.2.1:1234"
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i))
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		if i < 100 && recorder.Code == http.StatusTooManyRequests {
+			t.Fatalf("request %d was rate limited before the configured burst", i+1)
+		}
+		if i == 100 && recorder.Code != http.StatusTooManyRequests {
+			t.Fatalf("request %d status = %d, want %d", i+1, recorder.Code, http.StatusTooManyRequests)
+		}
 	}
 }
 
@@ -966,90 +984,44 @@ func TestReadyReturnsServiceUnavailableWhenReadinessCheckFails(t *testing.T) {
 
 // --- Service CRUD ---
 
-// --- Environment CRUD ---
-
-// --- Build Registration ---
-
-func TestBuildLifecycle(t *testing.T) {
-	srv, registry := newTestServerWithRegistry()
-	defer srv.Close()
-	svcID := seedTestService(t, registry, "build-svc", "harbor/build-svc")
-
-	// Register a build.
-	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/builds", map[string]any{
-		"service_id": svcID,
-		"git_sha":    "abc1234",
-		"git_ref":    "refs/heads/main",
-		"ci_run_id":  "run-123",
-		"status":     "running",
+func TestSignedUnknownPrincipalCannotCrossPlatformBoundary(t *testing.T) {
+	const unknownKey = "0000000000000000000000000000000000000000000000000000000000000003"
+	lookup := &rbacMemberLookup{members: map[uuid.UUID]map[string]domain.Role{}}
+	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
+		AuthMiddleware: auth.MiddlewareConfig{Enabled: true, NIP98Validator: auth.NewNIP98Validator(auth.DefaultNIP98Config())},
+		RBAC:           auth.NewRBAC(lookup),
+		ConfigFabric:   service.NewConfigFabricService(nil, nil, nil),
 	})
-	if resp.StatusCode != 201 {
-		t.Fatalf("build register: expected 201, got %d: %v", resp.StatusCode, body)
-	}
-	buildID := body["data"].(map[string]any)["id"].(string)
+	server := httptest.NewServer(handler)
+	defer server.Close()
 
-	// Update build status.
-	resp, _ = doJSON(t, "PATCH", srv.URL+"/api/v1/builds/"+buildID+"/status", map[string]any{
-		"status": "succeeded",
-	})
-	if resp.StatusCode != 200 {
-		t.Fatalf("build status update: expected 200, got %d", resp.StatusCode)
+	url := server.URL + "/api/v1/config-fabric/drift"
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-
+	req.Header.Set("Authorization", makeRouterNIP98HeaderWithKey(t, unknownKey, http.MethodGet, url))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeResponseBody(t, resp.Body)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusForbidden)
+	}
 }
 
-// --- Artifacts ---
-
-// --- Deployment Intent & Run Full Flow ---
-
-func TestDeploymentFlow(t *testing.T) {
-	srv, registry := newTestServerWithRegistry()
+func TestDeploymentRunRESTWritesRemoved(t *testing.T) {
+	srv := newTestServer()
 	defer srv.Close()
-	svcID := seedTestService(t, registry, "deploy-svc", "harbor/deploy")
-	envID := seedTestEnvironment(t, registry, "staging", domain.DeployStrategyReplace, false)
-	buildID := seedTestBuild(t, registry, svcID, "aaa1111a")
-	artID := seedTestArtifact(t, registry, svcID, buildID, "harbor/deploy", "v2.0", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	intentID := seedTestIntent(t, registry, svcID, envID, artID, "test-user")
-
-	resp, _ := doJSON(t, "GET", srv.URL+"/api/v1/deployments/intents/"+intentID, nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("get intent: expected 404, got %d", resp.StatusCode)
-	}
-
-	// Create deployment run.
-	resp, body := doJSON(t, "POST", srv.URL+"/api/v1/deployments/runs", map[string]any{
-		"deployment_intent_id": intentID,
-		"loom_job_id":          "loom-123",
-	})
-	if resp.StatusCode != 201 {
-		t.Fatalf("create run: expected 201, got %d: %v", resp.StatusCode, body)
-	}
-	runID := body["data"].(map[string]any)["id"].(string)
-
-	// Get the run.
-	resp, _ = doJSON(t, "GET", srv.URL+"/api/v1/deployments/runs/"+runID, nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("get run: expected 404, got %d", resp.StatusCode)
-	}
-
-	// Complete the run.
-	resp, body = doJSON(t, "POST", srv.URL+"/api/v1/deployments/runs/"+runID+"/complete", map[string]any{
-		"status": "succeeded",
-	})
-	if resp.StatusCode != 200 {
-		t.Fatalf("complete run: expected 200, got %d: %v", resp.StatusCode, body)
-	}
-
-	// List intents by service+env.
-	resp, _ = doJSON(t, "GET", fmt.Sprintf("%s/api/v1/services/%s/environments/%s/intents", srv.URL, svcID, envID), nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("list intents: expected 404, got %d", resp.StatusCode)
-	}
-
-	// List runs by intent.
-	resp, _ = doJSON(t, "GET", fmt.Sprintf("%s/api/v1/deployments/intents/%s/runs", srv.URL, intentID), nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("list runs: expected 404, got %d", resp.StatusCode)
+	for _, tt := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/deployments/runs"},
+		{http.MethodPost, "/api/v1/deployments/runs/00000000-0000-0000-0000-000000000001/complete"},
+	} {
+		resp, body := doJSON(t, tt.method, srv.URL+tt.path, nil)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s %s: status=%d body=%v", tt.method, tt.path, resp.StatusCode, body)
+		}
 	}
 }
 
@@ -1094,14 +1066,12 @@ func TestRejectFlow(t *testing.T) {
 	resp, _ = doJSON(t, "POST", srv.URL+"/api/v1/deployments/runs", map[string]any{
 		"deployment_intent_id": intentID,
 	})
-	if resp.StatusCode != 500 {
-		t.Fatalf("run on rejected intent: expected 500, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("retired run route: expected 404, got %d", resp.StatusCode)
 	}
 }
 
 // --- State Endpoints ---
-
-// --- Observation State ---
 
 func TestObservationStateReadRemovedAndDeprecatedRecordRouteIsRemoved(t *testing.T) {
 	srv, registry := newTestServerWithRegistry()
@@ -1152,46 +1122,6 @@ func TestDeprecatedDeploymentObservationArtifactMutationRoutesAreRemoved(t *test
 	}
 }
 
-func TestToolDenylistRoutesRemainAndDeprecatedApprovalRoutesAreRemoved(t *testing.T) {
-	toolRepo := newMockToolProvisioningRepo()
-	intentID := uuid.New()
-	if err := toolRepo.CreateIntent(context.Background(), &domain.ToolProvisionIntent{
-		ID:             intentID,
-		ServiceID:      uuid.New(),
-		EnvironmentID:  uuid.New(),
-		RequestedTools: []domain.ToolRequest{{Name: "curl", Version: "8"}},
-		Status:         domain.ToolProvisionStatusAwaitingApproval,
-	}); err != nil {
-		t.Fatalf("seed tool intent: %v", err)
-	}
-
-	handler := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{ToolProvisioning: toolRepo})
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
-
-	resp, body := doJSON(t, http.MethodPost, srv.URL+"/api/v1/tools/denylist", map[string]any{
-		"package": "left-pad",
-		"manager": "npm",
-		"reason":  "blocked by policy",
-	})
-	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("add tool denylist: expected 201, got %d: %v", resp.StatusCode, body)
-	}
-
-	resp, body = doJSON(t, http.MethodDelete, srv.URL+"/api/v1/tools/denylist/left-pad/npm", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("remove tool denylist: expected 200, got %d: %v", resp.StatusCode, body)
-	}
-
-	for _, path := range []string{
-		"/api/v1/tools/" + intentID.String() + "/approve",
-		"/api/v1/tools/" + intentID.String() + "/reject",
-	} {
-		resp, body := doJSON(t, http.MethodPost, srv.URL+path, map[string]any{"reason": "reviewed"})
-		assertDeprecatedMutationRouteRemoved(t, http.MethodPost, path, resp, body)
-	}
-}
-
 func TestDeprecatedPolicyAndToolApprovalMutationRoutesAreRemoved(t *testing.T) {
 	policyID := uuid.New()
 	toolRepo := newMockToolProvisioningRepo()
@@ -1219,26 +1149,6 @@ func TestDeprecatedPolicyAndToolApprovalMutationRoutesAreRemoved(t *testing.T) {
 }
 
 // --- 404 on Non-Existent Resources ---
-
-func TestGetNonExistentIntent(t *testing.T) {
-	srv := newTestServer()
-	defer srv.Close()
-
-	resp, _ := doJSON(t, "GET", srv.URL+"/api/v1/deployments/intents/"+uuid.New().String(), nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
-	}
-}
-
-func TestGetNonExistentRun(t *testing.T) {
-	srv := newTestServer()
-	defer srv.Close()
-
-	resp, _ := doJSON(t, "GET", srv.URL+"/api/v1/deployments/runs/"+uuid.New().String(), nil)
-	if resp.StatusCode != 404 {
-		t.Fatalf("expected 404, got %d", resp.StatusCode)
-	}
-}
 
 func TestDeprecatedServiceAndEnvironmentMutationRoutesAreRemoved(t *testing.T) {
 	srv := newTestServer()

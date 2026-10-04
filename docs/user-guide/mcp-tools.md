@@ -24,7 +24,7 @@ credentials into arguments; only authorized SecretRefs are valid bootstrap input
 [Parameters, acknowledgments and query examples](features/virtual-machines.md).
 
 
-Bahia exposes Model Context Protocol (MCP) over `/mcp` and `/api/v1/mcp`. Use JSON-RPC discovery at runtime: `tools/list` is the authority for the exact tools enabled by the running server.
+Bahia exposes Model Context Protocol (MCP) over `/mcp`. Use JSON-RPC discovery at runtime: `tools/list` is the authority for the exact tools enabled by the running server.
 
 For canonical-state families, the in-daemon MCP server reads its local Nostr
 event store rather than querying the PostgreSQL projection. These reads are

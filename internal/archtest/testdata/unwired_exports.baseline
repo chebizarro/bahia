@@ -133,7 +133,6 @@
 1	internal/adapters/telemetry.Metrics.SetWorkersTotal
 1	internal/adapters/telemetry.Provider.LoggerProvider
 1	internal/adapters/telemetry.VirtualizationEvidence
-1	internal/api/handlers.NewLogHandler
 1	internal/api/middleware.ParseStatusBucket
 1	internal/api/middleware.RequireOperator
 1	internal/api/middleware.RequireRole

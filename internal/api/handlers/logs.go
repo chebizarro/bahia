@@ -25,18 +25,6 @@ type LogHandler struct {
 	logger     *zap.Logger
 }
 
-// NewLogHandler creates a new LogHandler.
-func NewLogHandler(
-	logService *runtime.LogService,
-	runs repository.DeploymentRunRepository,
-	services repository.ServiceRepository,
-	envs repository.EnvironmentRepository,
-	states repository.EnvironmentServiceStateRepository,
-	logger *zap.Logger,
-) *LogHandler {
-	return NewLogHandlerWithResolver(logService, nil, runs, services, envs, states, logger)
-}
-
 // NewLogHandlerWithResolver creates a new LogHandler that resolves live-log
 // runtime targets per service/environment while retaining LogService for stored run logs.
 func NewLogHandlerWithResolver(

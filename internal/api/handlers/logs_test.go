@@ -206,7 +206,7 @@ func TestLogHandler_GetRunLogs(t *testing.T) {
 		},
 	}
 
-	handler := NewLogHandler(logService, runRepo, nil, nil, nil, testZapLogger())
+	handler := NewLogHandlerWithResolver(logService, nil, runRepo, nil, nil, nil, testZapLogger())
 
 	// Create request with chi URL params
 	req := httptest.NewRequest("GET", "/deployments/runs/"+runID.String()+"/logs", nil)
@@ -241,7 +241,7 @@ func TestLogHandler_GetRunLogs_NotFound(t *testing.T) {
 		err: repository.ErrNotFound,
 	}
 
-	handler := NewLogHandler(nil, runRepo, nil, nil, nil, testZapLogger())
+	handler := NewLogHandlerWithResolver(nil, nil, runRepo, nil, nil, nil, testZapLogger())
 
 	runID := uuid.New()
 	req := httptest.NewRequest("GET", "/deployments/runs/"+runID.String()+"/logs", nil)
@@ -266,7 +266,7 @@ func TestLogHandler_GetRunLogs_InProgress(t *testing.T) {
 		},
 	}
 
-	handler := NewLogHandler(nil, runRepo, nil, nil, nil, testZapLogger())
+	handler := NewLogHandlerWithResolver(nil, nil, runRepo, nil, nil, nil, testZapLogger())
 
 	req := httptest.NewRequest("GET", "/deployments/runs/"+runID.String()+"/logs", nil)
 	rctx := chi.NewRouteContext()
@@ -282,7 +282,7 @@ func TestLogHandler_GetRunLogs_InProgress(t *testing.T) {
 }
 
 func TestLogHandler_GetRunLogs_InvalidID(t *testing.T) {
-	handler := NewLogHandler(nil, nil, nil, nil, nil, testZapLogger())
+	handler := NewLogHandlerWithResolver(nil, nil, nil, nil, nil, nil, testZapLogger())
 
 	req := httptest.NewRequest("GET", "/deployments/runs/invalid/logs", nil)
 	rctx := chi.NewRouteContext()
@@ -324,7 +324,7 @@ func TestLogHandler_GetRunLogs_WithTail(t *testing.T) {
 		},
 	}
 
-	handler := NewLogHandler(logService, runRepo, nil, nil, nil, testZapLogger())
+	handler := NewLogHandlerWithResolver(logService, nil, runRepo, nil, nil, nil, testZapLogger())
 
 	req := httptest.NewRequest("GET", "/deployments/runs/"+runID.String()+"/logs?tail=3", nil)
 	rctx := chi.NewRouteContext()
@@ -390,7 +390,7 @@ func TestLogHandler_GetRunLogs_StreamFilter(t *testing.T) {
 		},
 	}
 
-	handler := NewLogHandler(logService, runRepo, nil, nil, nil, testZapLogger())
+	handler := NewLogHandlerWithResolver(logService, nil, runRepo, nil, nil, nil, testZapLogger())
 
 	// Test stdout only
 	req := httptest.NewRequest("GET", "/deployments/runs/"+runID.String()+"/logs?stream=stdout", nil)
@@ -444,7 +444,7 @@ func TestLogHandler_StreamLiveLogs_ServiceNotFound(t *testing.T) {
 		err: repository.ErrNotFound,
 	}
 
-	handler := NewLogHandler(nil, nil, svcRepo, nil, nil, testZapLogger())
+	handler := NewLogHandlerWithResolver(nil, nil, nil, svcRepo, nil, nil, testZapLogger())
 
 	serviceID := uuid.New()
 	envID := uuid.New()
@@ -531,7 +531,7 @@ func TestLogHandler_StreamLiveLogs_EnvironmentNotFound(t *testing.T) {
 		err: repository.ErrNotFound,
 	}
 
-	handler := NewLogHandler(nil, nil, svcRepo, envRepo, nil, testZapLogger())
+	handler := NewLogHandlerWithResolver(nil, nil, nil, svcRepo, envRepo, nil, testZapLogger())
 
 	serviceID := uuid.New()
 	envID := uuid.New()

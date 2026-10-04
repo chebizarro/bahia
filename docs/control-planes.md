@@ -40,7 +40,7 @@ See [Virtual machines](user-guide/features/virtual-machines.md).
 Bahia's supported control-plane contract is now sidecar-first and Nostr-native. Agents implementing Nostr events should use `docs/nostr-event-implementation-guide.md` as the Bahia-specific authority for event-kind selection, event shapes, migration boundaries, and Cascadia fleet interoperability.
 
 1. **Nostr relay sidecar** — primary async/realtime plane for browser state, ContextVM intent transport, agent progress, and read models.
-2. **ContextVM / native MCP JSON-RPC** — canonical mutation method surface over Nostr kind `25910` and HTTP MCP at `/mcp` / `/api/v1/mcp`.
+2. **ContextVM / native MCP JSON-RPC** — canonical mutation method surface over Nostr kind `25910` and HTTP MCP at `/mcp`.
 3. **REST API** — narrowed CRUD/query/log surface protected by direct NIP-98 when auth is enabled; Bearer credentials are not accepted.
 
 Fleet-local CI interoperability is a deliberate exception to the generic ContextVM mutation model: an inbound `build/request` is kind `25910`, while the accepted durable CI-bus workflow run/result facts remain Hive-CI kinds `5401`/`5402`. Bahia self-dispatch publishes 5401 with the hive-ci-protocol tag-only contract (its `publisher` is a per-run ephemeral key) and returns that event id as `ci_run_id`; it then submits a loom-protocol kind-5100 job whose `e` tag references that 5401, shaped as `cmd=loom-ci` plus `args`. The job targets a trusted worker advertising `loom-ci` as `S` software, keeps the mirror URL credential-free, and carries the dedicated read-only mirror username/password and the ephemeral publisher key (`HIVE_CI_NSEC`) only in `secret` tags after NIP-44 encryption to that selected worker. It carries no payment tag and does not use ephemeral 25910 as the durable CI bus.
@@ -58,7 +58,7 @@ ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) is the ca
 ## ContextVM and Native MCP Transport
 
 > **Nostr kind**: `25910` ContextVM JSON-RPC messages, usually CEP-4/NIP-59 encrypted with `1059` or `21059`.  
-> **HTTP MCP base paths**: `/mcp` and `/api/v1/mcp`
+> **HTTP MCP base paths**: `/mcp`
 
 ContextVM clients use JSON-RPC 2.0 over Nostr for mutations; HTTP MCP clients use the same JSON-RPC method model over HTTP. Tool implementations are backed by `internal/mcp/server.go`; long-running tool results include Nostr correlation metadata (`request_event_id`, `method`, `service_id`, `route_id`, `release_id`, `environment_id`, `intent_id`, `run_id`, and canonical observable kinds) so agents can follow async truth on the relay. ContextVM discovery kinds `11316`-`11320` plus NIP-51 relay sets (`30002`) advertise bootstrap metadata for clients before subscribing.
 

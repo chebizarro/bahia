@@ -1,6 +1,7 @@
 package router_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
@@ -9,21 +10,17 @@ import (
 	"testing"
 
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
+	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/api/router"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
-// The deleted reads must stay absent even if write-only ML/LLM handlers exist.
+// All reads retired by D1b remain absent with the merged router dependencies.
 func TestPhase5D1DeletedReadsReturn404(t *testing.T) {
-	cfg := config.Defaults()
-	cfg.SoulFactory.Enabled = true
-	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{
-		LLMRegistry: &service.LLMRegistryService{},
-		Config:      cfg,
-		MLCommands:  &captureMLRESTPublisher{},
-	})
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{})
 	paths := []string{
 		"/api/v1/services",
 		"/api/v1/services/00000000-0000-0000-0000-000000000001",
@@ -124,17 +121,6 @@ func TestPhase5D1RouterConstructsWithoutDeletedDomainDeps(t *testing.T) {
 	}
 }
 
-func TestPhase5D1bRetainedHTTPNativeReadsReturn200(t *testing.T) {
-	h := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{})
-	for _, path := range []string{"/health", "/ready"} {
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("GET %s = %d, want 200", path, rec.Code)
-		}
-	}
-}
-
 func TestPhase5D1bBlossomBlobFetchRemains200(t *testing.T) {
 	content := []byte("retained blossom blob")
 	digest := sha256.Sum256(content)
@@ -154,27 +140,42 @@ func TestPhase5D1bBlossomBlobFetchRemains200(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Body.String() != string(content) {
 		t.Fatalf("blob fetch = %d %q, want 200 and exact content", rec.Code, rec.Body.String())
 	}
-	for _, path := range []string{"/api/v1/blossom/servers", "/api/v1/blossom/health", "/api/v1/blossom/stats"} {
-		response := httptest.NewRecorder()
-		h.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
-		if response.Code != http.StatusNotFound {
-			t.Fatalf("GET %s = %d, want 404", path, response.Code)
-		}
-	}
-	response := httptest.NewRecorder()
-	h.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/blossom/list", nil))
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("POST /api/v1/blossom/list = %d, want 404", response.Code)
-	}
 }
 
-func TestPhase5D1bDeletedToolReadsAre404WithWritesMounted(t *testing.T) {
-	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{ToolProvisioning: newMockToolProvisioningRepo()})
-	for _, path := range []string{"/api/v1/tools/pending", "/api/v1/tools/denylist", "/api/v1/tools/00000000-0000-0000-0000-000000000001"} {
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("GET %s = %d, want 404", path, rec.Code)
+type emptyConfigFabricEvents struct {
+	repository.NostrEventRepository
+}
+
+func (emptyConfigFabricEvents) ListByKind(context.Context, int, int) ([]repository.NostrEventRecord, error) {
+	return nil, nil
+}
+
+func TestRetainedMetricsPaymentsAndConfigFabricReads(t *testing.T) {
+	provider := telemetry.Setup(telemetry.Config{}, zap.NewNop())
+	defer func() {
+		if err := provider.Shutdown(context.Background()); err != nil {
+			t.Fatal(err)
 		}
+	}()
+	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, provider, router.RouterDeps{
+		Payments:     &service.PaymentService{},
+		ConfigFabric: service.NewConfigFabricService(emptyConfigFabricEvents{}, nil, nil),
+	})
+	for _, tt := range []struct {
+		path string
+		want int
+	}{
+		{path: "/metrics", want: http.StatusOK},
+		{path: "/api/v1/payments/history", want: http.StatusBadRequest},
+		{path: "/api/v1/deployments/runs/not-a-uuid/cost", want: http.StatusBadRequest},
+		{path: "/api/v1/config-fabric/drift", want: http.StatusOK},
+	} {
+		t.Run(tt.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.path, nil))
+			if rec.Code != tt.want {
+				t.Fatalf("GET %s = %d, want %d: %s", tt.path, rec.Code, tt.want, rec.Body.String())
+			}
+		})
 	}
 }

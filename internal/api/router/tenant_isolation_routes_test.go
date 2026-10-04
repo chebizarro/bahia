@@ -17,7 +17,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
-	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
@@ -51,119 +50,6 @@ func (tenantIsolationRuntimeResolver) Resolve(*domain.Service, *domain.Environme
 	return nil, errors.New("runtime resolution should not run for a cross-tenant request")
 }
 
-type tenantIsolationNotificationRepo struct {
-	channels map[uuid.UUID]*domain.NotificationChannel
-	logs     []domain.NotificationLog
-}
-
-func (r *tenantIsolationNotificationRepo) CreateChannel(_ context.Context, ch *domain.NotificationChannel) error {
-	copyChannel := *ch
-	r.channels[ch.ID] = &copyChannel
-	return nil
-}
-func (r *tenantIsolationNotificationRepo) GetChannelByID(_ context.Context, id uuid.UUID) (*domain.NotificationChannel, error) {
-	ch := r.channels[id]
-	if ch == nil {
-		return nil, nil
-	}
-	copyChannel := *ch
-	return &copyChannel, nil
-}
-func (r *tenantIsolationNotificationRepo) ListChannels(_ context.Context, enabledOnly bool) ([]domain.NotificationChannel, error) {
-	var out []domain.NotificationChannel
-	for _, ch := range r.channels {
-		if !enabledOnly || ch.Enabled {
-			out = append(out, *ch)
-		}
-	}
-	return out, nil
-}
-func (r *tenantIsolationNotificationRepo) UpdateChannel(_ context.Context, ch *domain.NotificationChannel) error {
-	if r.channels[ch.ID] == nil {
-		return repository.ErrNotFound
-	}
-	copyChannel := *ch
-	r.channels[ch.ID] = &copyChannel
-	return nil
-}
-func (r *tenantIsolationNotificationRepo) DeleteChannel(_ context.Context, id uuid.UUID) error {
-	if r.channels[id] == nil {
-		return repository.ErrNotFound
-	}
-	delete(r.channels, id)
-	return nil
-}
-func (r *tenantIsolationNotificationRepo) CreateLog(_ context.Context, log *domain.NotificationLog) error {
-	r.logs = append(r.logs, *log)
-	return nil
-}
-func (r *tenantIsolationNotificationRepo) UpdateLog(context.Context, *domain.NotificationLog) error {
-	return nil
-}
-func (r *tenantIsolationNotificationRepo) ListLogsByChannel(_ context.Context, channelID uuid.UUID, limit int) ([]domain.NotificationLog, error) {
-	var out []domain.NotificationLog
-	for _, log := range r.logs {
-		if log.ChannelID == channelID && len(out) < limit {
-			out = append(out, log)
-		}
-	}
-	return out, nil
-}
-func (r *tenantIsolationNotificationRepo) ListRecentLogs(_ context.Context, limit int) ([]domain.NotificationLog, error) {
-	if limit > len(r.logs) {
-		limit = len(r.logs)
-	}
-	return append([]domain.NotificationLog(nil), r.logs[:limit]...), nil
-}
-func (r *tenantIsolationNotificationRepo) ListRetryable(context.Context, int) ([]domain.NotificationLog, error) {
-	return nil, nil
-}
-func (r *tenantIsolationNotificationRepo) GetChannelByIDForOrg(ctx context.Context, id, orgID uuid.UUID) (*domain.NotificationChannel, error) {
-	ch, err := r.GetChannelByID(ctx, id)
-	if err != nil || ch == nil || ch.OrgID != orgID {
-		return nil, err
-	}
-	return ch, nil
-}
-func (r *tenantIsolationNotificationRepo) ListChannelsByOrg(_ context.Context, orgID uuid.UUID, enabledOnly bool) ([]domain.NotificationChannel, error) {
-	var out []domain.NotificationChannel
-	for _, ch := range r.channels {
-		if ch.OrgID == orgID && (!enabledOnly || ch.Enabled) {
-			out = append(out, *ch)
-		}
-	}
-	return out, nil
-}
-func (r *tenantIsolationNotificationRepo) UpdateChannelForOrg(ctx context.Context, ch *domain.NotificationChannel, orgID uuid.UUID) error {
-	existing, err := r.GetChannelByIDForOrg(ctx, ch.ID, orgID)
-	if err != nil {
-		return err
-	}
-	if existing == nil {
-		return repository.ErrNotFound
-	}
-	return r.UpdateChannel(ctx, ch)
-}
-func (r *tenantIsolationNotificationRepo) DeleteChannelForOrg(ctx context.Context, id, orgID uuid.UUID) error {
-	existing, err := r.GetChannelByIDForOrg(ctx, id, orgID)
-	if err != nil {
-		return err
-	}
-	if existing == nil {
-		return repository.ErrNotFound
-	}
-	return r.DeleteChannel(ctx, id)
-}
-func (r *tenantIsolationNotificationRepo) ListRecentLogsByOrg(_ context.Context, orgID uuid.UUID, limit int) ([]domain.NotificationLog, error) {
-	var out []domain.NotificationLog
-	for _, log := range r.logs {
-		if ch := r.channels[log.ChannelID]; ch != nil && ch.OrgID == orgID && len(out) < limit {
-			out = append(out, log)
-		}
-	}
-	return out, nil
-}
-
 type tenantIsolationFixture struct {
 	server       *httptest.Server
 	aliceKey     string
@@ -175,8 +61,6 @@ type tenantIsolationFixture struct {
 	environmentB uuid.UUID
 	runB         uuid.UUID
 	artifactB    uuid.UUID
-	channelA     uuid.UUID
-	channelB     uuid.UUID
 }
 
 func newTenantIsolationFixture(t *testing.T) tenantIsolationFixture {
@@ -219,16 +103,6 @@ func newTenantIsolationFixture(t *testing.T) tenantIsolationFixture {
 		nil, &events.NoopPublisher{}, zap.NewNop(),
 	)
 
-	channelA := &domain.NotificationChannel{ID: uuid.New(), OrgID: orgA, Name: "channel-a", ChannelType: domain.ChannelTypeWebhook, Enabled: true}
-	channelB := &domain.NotificationChannel{ID: uuid.New(), OrgID: orgB, Name: "channel-b", ChannelType: domain.ChannelTypeWebhook, Enabled: true}
-	notificationRepo := &tenantIsolationNotificationRepo{
-		channels: map[uuid.UUID]*domain.NotificationChannel{channelA.ID: channelA, channelB.ID: channelB},
-		logs: []domain.NotificationLog{
-			{ID: uuid.New(), ChannelID: channelA.ID, EventType: "org-a"},
-			{ID: uuid.New(), ChannelID: channelB.ID, EventType: "org-b"},
-		},
-	}
-	dispatcher := notifications.NewDispatcher(notificationRepo, zap.NewNop())
 	lookup := &rbacMemberLookup{members: map[uuid.UUID]map[string]domain.Role{
 		orgA: {alicePubkey: domain.RoleViewer},
 	}}
@@ -243,8 +117,6 @@ func newTenantIsolationFixture(t *testing.T) tenantIsolationFixture {
 		SBOMs:           tenantIsolationSBOMRepo{},
 		SBOMImporter:    &service.SBOMOrchestrator{},
 		Blossom:         &blossom.Client{},
-		Notifications:   notificationRepo,
-		Dispatcher:      dispatcher,
 		RBAC:            auth.NewRBAC(lookup),
 	})
 	server := httptest.NewServer(handler)
@@ -261,8 +133,6 @@ func newTenantIsolationFixture(t *testing.T) tenantIsolationFixture {
 		environmentB: environmentB.ID,
 		runB:         runB.ID,
 		artifactB:    artifactB.ID,
-		channelA:     channelA.ID,
-		channelB:     channelB.ID,
 	}
 }
 
@@ -278,7 +148,6 @@ func TestSensitiveRoutesRejectCrossTenantRequests(t *testing.T) {
 		{name: "deployment run logs", method: http.MethodGet, path: "/api/v1/deployments/runs/" + fixture.runB.String() + "/logs"},
 		{name: "live logs", method: http.MethodGet, path: "/api/v1/services/" + fixture.serviceB.String() + "/environments/" + fixture.environmentB.String() + "/logs"},
 		{name: "ingest SBOM", method: http.MethodPost, path: "/api/v1/artifacts/" + fixture.artifactB.String() + "/sbom", body: `{}`},
-		{name: "test foreign channel", method: http.MethodPost, path: "/api/v1/notifications/channels/" + fixture.channelB.String() + "/test", orgID: fixture.orgA},
 	}
 
 	for _, tt := range tests {

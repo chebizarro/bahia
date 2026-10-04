@@ -549,7 +549,7 @@ func TestRegisterBuildResultRejectsNonSuccessfulBuild(t *testing.T) {
 	serviceID := uuid.New()
 	buildID := uuid.New()
 	handler := NewEncryptedBuildHandlers(EncryptedBuildHandlersConfig{
-		Builds:            buildResultTestLoader{build: &domain.Build{ID: buildID, ServiceID: serviceID, Status: domain.BuildStatusRunning}},
+		Builds:            buildResultTestLoader{build: &domain.Build{ID: buildID, ServiceID: serviceID, Status: domain.BuildStatus("running")}},
 		ArtifactRegistrar: &buildResultTestRegistrar{},
 		Services:          buildTestServices{service: &domain.Service{ID: serviceID, OrgID: uuid.New()}},
 		RBAC:              auth.NewRBAC(buildTestMembers{}),

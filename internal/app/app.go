@@ -1989,10 +1989,10 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("security OSV scanner and scheduler registered")
 	}
 
-	// Payment service exposes payment record/history and cost-estimate APIs.
+	// Payment service exposes payment records and history; estimates use relay-backed worker pricing.
 	// It does not create or redeem Cashu tokens; cashu.enabled live wallet mode
 	// remains fail-closed until mint-backed proof flows are implemented.
-	paymentSvc := service.NewPaymentService(paymentRepo, workerRepo, runRepo, logger)
+	paymentSvc := service.NewPaymentService(paymentRepo, logger)
 	// bahia-irsry.60: confidential cp-state for payment records.
 	if nostrProjector != nil && confidentialEncryptor != nil {
 		paymentCanonical := nostrAdapter.NewPaymentCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
@@ -2654,8 +2654,6 @@ func New(cfg *config.Config) (*App, error) {
 			Blossom:                   blossomClient,
 			OCI:                       ociHandler,
 			RBAC:                      tenantRBAC,
-			MLCommands:                mlCommandPublisher,
-			LLMRegistry:               llmRegistry,
 			ConfigFabric:              configFabricSvc,
 
 			HealthProvider: healthProvider,
