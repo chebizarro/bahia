@@ -365,27 +365,3 @@ func TestDeploymentRollbackIntentFromPriorRunPublishesCanonicalOnce(t *testing.T
 	require.Equal(t, 1, fixture.canonical.intents)
 	require.Equal(t, "rejected", tagValueNostr(fixture.statuses.events[2].Tags, "status"))
 }
-
-func TestRuntimeContextVMDualDispatch(t *testing.T) {
-	ctx := context.Background()
-	serviceID, environmentID := uuid.New(), uuid.New()
-	orgID := uuid.New()
-	signedEvent := makeContextVMEvent(t, testRequesterKey, `{}`)
-	actor := signedEvent.PubKey.Hex()
-	resources := runtimeIntentResourcesTest{service: &domain.Service{ID: serviceID, OrgID: orgID}, environment: &domain.Environment{ID: environmentID, OrgID: orgID}}
-	lifecycle := &runtimeIntentLifecycleTest{}
-	statuses := &statusCollector{}
-	proc := NewIntentProcessor(NewTrustSet(nil, zap.NewNop(), WithBootstrapOwners(map[string]string{orgID.String(): actor})), openTestStore(t), NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()), IntentProcessorConfig{EnabledDomains: map[string]bool{"runtime": true}}, zap.NewNop())
-	proc.RegisterHandler("runtime", &DeploymentIntentHandler{resources: resources, runtime: lifecycle})
-	handlers := NewOperatorContextVMHandlers(OperatorContextVMHandlersConfig{RuntimeLifecycle: &stubRuntimeLifecycleOperatorService{}, DirectRuntimeAuthorizedPubkeys: []string{actor}, IntentProcessor: proc, Resources: resources})
-	request := ContextVMRequest{Event: signedEvent, RPC: ContextVMJSONRPCRequest{Params: []byte(`{"action":"restart","service_id":"` + serviceID.String() + `","environment_id":"` + environmentID.String() + `"}`)}}
-	result, err := handlers.ServiceAction(ctx, request)
-	require.NoError(t, err)
-	require.Equal(t, "accepted", result.(map[string]any)["status"])
-	require.Equal(t, 1, lifecycle.restarts)
-	require.Len(t, statuses.events, 1)
-	_, err = handlers.ServiceAction(ctx, request)
-	require.NoError(t, err)
-	require.Equal(t, 1, lifecycle.restarts)
-	require.Len(t, statuses.events, 1)
-}

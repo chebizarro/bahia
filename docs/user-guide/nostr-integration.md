@@ -1,5 +1,7 @@
 # Nostr Integration
 
+The daemon supports the nine D80 intent operations listed in the [D80 wire fixtures](../../web/tests/fixtures/d80-intent-content.json). Sign the exact content with a stable `intent_id`; use a NIP-59 gift wrap for `notification/channel-test` and `relay/policy-set`. A relay `OK` is delivery, while bounded `30315` data is admission or (for channel test) delivery result. Subscribe to the operation's existing canonical outcome family for durable state. Relay settings can already be read by scoped subscription to the service-authored protected `relay-settings:operator` cp-state record, including its full policy content. See [D80 commands](../nostr-commands.md#d80-request-operations-and-desired-state).
+
 ## Web registry changes
 
 The web app signs service, environment, and policy create/update/delete requests as
@@ -107,7 +109,7 @@ To add managed HTTPS to an existing deployment, use `service/route-attach` with 
 
 ### Hive-CI self-dispatch
 
-The signed `build/request` mutation arrives over ContextVM kind `25910`. After Bahia resolves and mirrors the source repository, it publishes the CI-bus workflow run as durable kind `5401`, not as another ContextVM message. The run is tag-only and carries the configured NIP-34 `a` coordinate plus `commit`, `branch`, `trigger`, `triggered-by`, `workflow`, `publisher`, and `t=hive-ci`; the returned `ci_run_id` is the signed 5401 event id used by kind-5402 correlation.
+The CLI publishes a signed kind-`30900` `build/request` intent and reads the queued build from accepted `30315` status `data`; the older ContextVM kind-`25910` method remains a dual-dispatch compatibility path until its callers retire. After Bahia resolves and mirrors the source repository, it publishes the CI-bus workflow run as durable kind `5401`, not as another request envelope. The run is tag-only and carries the configured NIP-34 `a` coordinate plus `commit`, `branch`, `trigger`, `triggered-by`, `workflow`, `publisher`, and `t=hive-ci`; the returned `ci_run_id` is the signed 5401 event id used by kind-5402 correlation.
 
 Set `hiveci.initiator.repo_announcement_addr` and include Bahia's service pubkey in `hiveci.trusted_ci_pubkeys`. The latter remains explicit operator trust: Bahia logs `self_issued_run_untrusted` if a self-issued 5401 would be filtered out, but does not auto-trust its key.
 
@@ -907,6 +909,12 @@ Stage 3 uses existing canonical observable kinds only: `30315` managed-instance 
 Bahia projects shared verified runtime releases as kind `30315` control state using schema `bahia.agent-runtime-release.v1`. Filter narrowly by `domain=agent-runtime-release` plus `org`/`digest`, or by `domain=agent-service-release` plus `org`/`agent`/`service`. Binding events retain `release_channel`, source event, and previous-binding correlation for exact rollback lookup. They do not represent deployment intent.
 
 
+## D79 operator intents
+
+The daemon accepts signed kind-30900 `build/request`, `adoption/scan`, `tool/approval-response`, and the ML operations listed in [ML Models](features/ml-models.md). Use the domain-specific schema `bahia.intent.<domain>.v1`, a stable `intent_id` tag, and the coordinate/content shapes in the [D79 fixtures](../../web/tests/fixtures/d79-intent-content.json). Build requests require `services:write`; adoption scans require the adoption operator pubkey allowlist; ML and tool decisions require the fleet-operator allowlist. A reused `intent_id` with different content, actor, operation, or coordinate produces a conflict rather than another mutation.
+
+`adoption/scan` is a request, not canonical adoption state. Its requester-scoped kind-30315 acceptance `data` contains redacted findings, `total_findings`, `offset`, `limit`, `next_offset`, and `truncated`. Each page is capped below the status size budget; request the next offset to read more findings. The daemon alone authors queued builds, ML run/deployment records, and approval decisions. ContextVM methods dual-dispatch to the same handlers while those legacy methods remain available.
+
 ## Config Fabric status durability
 
 Config Fabric status uses kind `30900`, `domain=config-status`, and
@@ -969,7 +977,7 @@ For MCP evaluation, use a client-signed `30900` `domain=policy`, `op=evaluate`
 intent with `d=evaluation:<artifact-uuid>:<environment-uuid>` and JSON content
 `{"artifact_id":"<uuid>","environment_id":"<uuid>"}`. The daemon evaluates
 its signature, SBOM, scan, and attestation repositories with the same
-`PolicyService.Evaluate` semantics as the legacy ContextVM method. It emits a
+`PolicyService.Evaluate` semantics. It emits a
 requester-scoped, replaceable `30315` status at
 `d=intent-status:<requester-pubkey>:<evaluation-coordinate>`; an accepted
 status has `result=evaluated` and an `evaluation` object. The status payload

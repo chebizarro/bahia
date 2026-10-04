@@ -1,5 +1,7 @@
 # Security
 
+Manual `security/scan-run` is a client-signed request intent. Its bounded `30315` acceptance identifies the run and target hash; follow the existing security scan status, summary, findings, and audit records for progress and completion. See the [D80 wire fixture](../../../web/tests/fixtures/d80-intent-content.json).
+
 The Security dashboard provides visibility into vulnerability scanning powered by the [OSV](https://osv.dev) database. Bahia scans SBOMs, packages, PURLs, and Git commits for known vulnerabilities and surfaces the results in a unified view.
 
 ## How Scanning Works
@@ -8,9 +10,9 @@ Security scans are triggered in three ways:
 
 1. **Automatic SBOM scans** — when an SBOM is created, imported, or updated, Bahia automatically submits it for vulnerability scanning.
 2. **Scheduled rescans** — policies can configure recurring scans on a cadence (e.g., every 24 hours) to catch newly disclosed vulnerabilities.
-3. **Manual scans** — operators can trigger a rescan of any target directly from the Security dashboard.
+3. **Manual scans** — operators submit a complete target from the Security dashboard.
 
-Scan and rescan submissions still use the existing encrypted ContextVM mutations (`security/scan`, `security/rescan`). Findings, schedules, and finding details are read from service-authored kind `30900` relay events, encrypted with the fleet operator content key; the browser does not issue ContextVM or REST list requests.
+Manual submissions use signed kind-`30900` `security/scan-run` intents, with bounded acceptance data in requester-scoped `30315` status. Findings, schedules, and finding details are read from service-authored kind-`30900` relay events, encrypted with the fleet operator content key; the browser does not issue ContextVM or REST list requests.
 
 ## Dashboard
 
@@ -62,11 +64,11 @@ Click a finding row on the dashboard to navigate to `/security/{run_id}`, which 
   - **References** — links to advisories and patches (opens in new tab)
   - **OSV ID** links directly to the OSV database entry
 
-A **Rescan Target** button at the top right lets you trigger a new scan for the same target.
+A **Rescan Target** button can reuse a complete target only when one is available in the canonical schedule metadata. Otherwise use **Run a manual scan** on the Security dashboard and provide the target details.
 
 ## Rescan
 
-From both the dashboard and detail pages, you can trigger a rescan of any target. This submits a new scan request via ContextVM and the results will appear once the scan completes. Scan progress is published as NIP-38 status events on the relay.
+Use **Run a manual scan** with a complete package, PURL, commit, or SBOM target JSON object. The accepted `30315` status identifies the run; progress and findings arrive through signed scan observables. A hash-only rescan cannot be reconstructed from the bounded schedule projection and fails closed rather than submitting a different target.
 
 ## Notifications
 
@@ -80,8 +82,8 @@ A persisted NIP-07 or NIP-46 signer session can render relay state immediately; 
 
 Security scan operations follow Bahia's Nostr-native architecture:
 
-- **Mutations**: ContextVM kind `25910` wrapped in NIP-59 gift-wrap (`1059`/`21059`)
+- **Manual scan mutation**: client-signed kind-`30900` `security/scan-run` intent
 - **Scan status**: NIP-38 kind `30315` status events with `schema=bahia.status.security-scan.v1`
 - **Encrypted state projections**: Kind `30900` topics `security-finding` (legacy kind `32012`), `security-schedule` (`32013`), and `security-finding-detail` (`32014`). Large detail records are published as `:part:<n>` chunks with `total_parts` and reassembled only when all parts are present.
 
-The ContextVM acknowledgment (`security/scan` returning `accepted` with a `run_id`) is not completion — subscribe to the corresponding NIP-38 status events to track scan progress to terminal state.
+The requester-scoped `30315` acceptance for `security/scan-run` is not completion — subscribe to the corresponding scan status events to track progress to terminal state.

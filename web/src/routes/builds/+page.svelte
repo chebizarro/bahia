@@ -99,7 +99,7 @@
         buildArgs
       });
       await requestArcanaBuild(payload);
-      notice = 'Build request accepted. Status will update from signed HiveCI projections.';
+      notice = 'Signed build request submitted. Acceptance and progress will update from daemon status and HiveCI projections.';
     } catch (cause) {
       error = cause?.message || 'Build request failed';
     } finally {
@@ -128,7 +128,7 @@
       await registerBuildResult(build.id);
       registrationMessage = {
         ...registrationMessage,
-        [build.id]: 'Verified artifact registration accepted. The signed artifact projection will make it deployment-selectable.'
+        [build.id]: 'Verified artifact registration submitted. The signed artifact projection will make it deployment-selectable after daemon acceptance.'
       };
     } catch (cause) {
       registrationMessage = {

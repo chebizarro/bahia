@@ -486,34 +486,6 @@ func (s *PackageRegistryService) ObserveRepositoryDrift(ctx context.Context, rep
 	return &PackageDriftObservation{ResourceKind: "repository", ResourceID: repo.ID.String(), Expected: expected, Observed: obs.Exists, Drifted: drifted, Reason: reason}, nil
 }
 
-func (s *PackageRegistryService) ObserveArtifactDrift(ctx context.Context, repo *domain.PackageRepository, artifact *domain.PackageArtifact) (*PackageDriftObservation, error) {
-	if err := s.validateRepositoryConfigured(repo); err != nil {
-		return nil, err
-	}
-	if artifact == nil {
-		return nil, fmt.Errorf("package artifact is required")
-	}
-	backend, _ := s.backend(repo.BackendRef)
-	caps := backend.Capabilities()
-	obs, err := backend.ObserveArtifact(ctx, *repo, *artifact)
-	if err != nil {
-		return nil, err
-	}
-	expected := !artifact.Deleted && artifact.Status == domain.PackageArtifactStatusAvailable
-	drifted := expected != obs.Exists
-	if caps.CanObserveDrift && expected && obs.Exists && artifact.SHA256 != "" && obs.SHA256 != "" && !strings.EqualFold(artifact.SHA256, obs.SHA256) {
-		drifted = true
-	}
-	reason := ""
-	if drifted {
-		reason = fmt.Sprintf("artifact expected exists=%v observed exists=%v", expected, obs.Exists)
-		if caps.CanObserveDrift && expected && obs.Exists && artifact.SHA256 != "" && obs.SHA256 != "" && !strings.EqualFold(artifact.SHA256, obs.SHA256) {
-			reason = fmt.Sprintf("artifact sha256 expected=%s observed=%s", artifact.SHA256, obs.SHA256)
-		}
-	}
-	return &PackageDriftObservation{ResourceKind: "artifact", ResourceID: artifact.ID.String(), Expected: expected, Observed: obs.Exists, Drifted: drifted, Reason: reason}, nil
-}
-
 func (s *PackageRegistryService) regenerateIndex(ctx context.Context, repo *domain.PackageRepository, backend packagebackend.Backend) {
 	generator, ok := backend.(packagebackend.IndexGenerator)
 	if !ok || repo == nil {

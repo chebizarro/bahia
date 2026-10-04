@@ -446,15 +446,11 @@ export function previewWorkerEligibility(workers, form) {
 
 export function buildImportPayload(form) {
   return {
-    idempotency_key: `import:${Date.now()}`,
     model: form.model_slug,
     source: form.source_kind,
     source_uri: form.source_uri,
     revision: form.revision || undefined,
-    tags: {
-      task: form.task_kind || undefined,
-      source: form.source_kind
-    }
+    task: form.task_kind || undefined
   };
 }
 

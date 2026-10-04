@@ -15,15 +15,15 @@ func buildsCommands() *cobra.Command {
 
 	requestCmd := &cobra.Command{
 		Use:   "request",
-		Short: "Request a governed HiveCI build through signer-first ContextVM",
+		Short: "Request a governed HiveCI build through a signed intent",
 		Long: "Requests a governed HiveCI build through the configured fleet Gitea mirror.\n\n" +
 			"Build arguments are public in the signed CI request and require an approved service\n" +
 			"allowlist. Services without one must omit --build-arg. Reusing --idempotency-key\n" +
-			"replays the first completed ContextVM result without starting another build.\n\n" +
+			"replays the same signed intent without starting another build.\n\n" +
 			"The server must enable hiveci.initiator. First-mirror builds can exceed the default\n" +
 			"result timeout; use --result-timeout 120s when necessary. A successful request only\n" +
-			"queues the build. Follow it with builds get/list, register its verified artifact with\n" +
-			"builds register-result, then use a reviewed deployment preview before deployment.",
+			"queues the build. The daemon registers verified HiveCI artifact results; follow\n" +
+			"builds and artifacts get/list, then review a deployment preview before deployment.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			serviceID, _ := cmd.Flags().GetString("service")
@@ -36,7 +36,7 @@ func buildsCommands() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := runBuildRequestContextVM(cmd, client.BuildRequestNostrRequest{
+			result, err := runBuildRequestIntent(cmd, client.BuildRequestNostrRequest{
 				ServiceID: serviceID, GitRef: gitRef, RepositoryCredentialRef: credentialRef,
 				ArtifactRepo: artifactRepo, BuildArgs: buildArgs, IdempotencyKey: idempotencyKey,
 			})
@@ -51,7 +51,7 @@ func buildsCommands() *cobra.Command {
 	requestCmd.Flags().String("credential-ref", "", "Opaque repository credential secret ID")
 	requestCmd.Flags().String("artifact-repo", "", "Artifact repository; must match the registered service")
 	requestCmd.Flags().StringArray("build-arg", nil, "Approved public build argument as KEY=VALUE (repeatable)")
-	requestCmd.Flags().String("idempotency-key", "", "Explicit ContextVM idempotency key for safe completed-request replay")
+	requestCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for safe request replay")
 	_ = requestCmd.MarkFlagRequired("service")
 	_ = requestCmd.MarkFlagRequired("git-ref")
 	_ = requestCmd.MarkFlagRequired("credential-ref")
@@ -99,23 +99,7 @@ func buildsCommands() *cobra.Command {
 	listCmd.Flags().Int("offset", 0, "Number of builds to skip")
 	_ = listCmd.MarkFlagRequired("service")
 
-	registerResultCmd := &cobra.Command{
-		Use:   "register-result",
-		Short: "Register the verified artifact produced by a successful build",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			buildID, _ := cmd.Flags().GetString("build")
-			result, err := runBuildRegisterResultContextVM(cmd, buildID)
-			if err != nil {
-				return err
-			}
-			return outputSingle(result)
-		},
-	}
-	registerResultCmd.Flags().String("build", "", "Successful build ID")
-	_ = registerResultCmd.MarkFlagRequired("build")
-
-	cmd.AddCommand(requestCmd, getCmd, listCmd, registerResultCmd)
+	cmd.AddCommand(requestCmd, getCmd, listCmd)
 	return cmd
 }
 

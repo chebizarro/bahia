@@ -2,8 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"testing"
 
 	"fiatjaf.com/nostr"
@@ -163,19 +161,6 @@ func TestContinuityDefinitionsClosedAndCancellationAreNotEOSE(t *testing.T) {
 		t.Fatal("cancellation is not successful backfill")
 	default:
 	}
-}
-
-func TestContinuityCommandWaitsForHistoryBeforeStorage(t *testing.T) {
-	gate := NewFleetOperatorGate([]string{testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)})
-	_, h, store, _, _ := continuityFixture(t, gate)
-	event := continuityRequest(t, ContextVMMethodContinuityFailover, testRequesterKey, 0)
-	var rpc ContextVMJSONRPCRequest
-	require.NoError(t, json.Unmarshal([]byte(event.Content), &rpc))
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err := gate.wrap(h.handleFailoverRequest)(ctx, ContextVMRequest{Event: event, RPC: rpc, ProgressToken: "continuity-test"})
-	require.True(t, errors.Is(err, context.Canceled))
-	require.Zero(t, store.touches.Load())
 }
 
 func TestContinuityDefinitionsEqualTimestampUsesLowestID(t *testing.T) {

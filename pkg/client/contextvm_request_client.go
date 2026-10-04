@@ -15,6 +15,7 @@ import (
 	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
+	"github.com/openagentsinc/bahia/internal/dnsagent/protocol"
 	"go.uber.org/zap"
 )
 
@@ -845,8 +846,9 @@ func WithContextVMRequestLogger(logger *zap.Logger) ContextVMRequestOption {
 	}
 }
 
-// ContextVMRequestClient publishes signed JSON-RPC 2.0 ContextVM requests and
-// waits for correlated terminal responses.
+// ContextVMRequestClient publishes signed JSON-RPC 2.0 ContextVM requests for
+// run-log fetch and daemon-to-DNS-agent RPC only. It waits for correlated
+// terminal responses.
 type ContextVMRequestClient struct {
 	relays            []string
 	signer            nostr.Signer
@@ -861,7 +863,7 @@ type ContextVMRequestClient struct {
 	ownsTransport     bool
 }
 
-// NewContextVMRequestClient constructs a generic ContextVM request client.
+// NewContextVMRequestClient constructs the narrowed interactive request client.
 // When configured with Relays, Close closes the internally-created relay pool.
 // When configured with Transport, Close does not close the injected transport.
 func NewContextVMRequestClient(cfg ContextVMRequestConfig, clientOptions ...ContextVMRequestOption) (*ContextVMRequestClient, error) {
@@ -956,6 +958,11 @@ func (c *ContextVMRequestClient) Request(ctx context.Context, method string, par
 	method = strings.TrimSpace(method)
 	if method == "" {
 		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: fmt.Errorf("ContextVM method is required")}
+	}
+	switch method {
+	case controlplane.ContextVMMethodDeploymentRunLogsGet, protocol.MethodHealth, protocol.MethodList, protocol.MethodSync:
+	default:
+		return nil, &ControlPlaneRequestError{Phase: "encode operator ContextVM request", RequestAccepted: false, Cause: fmt.Errorf("ContextVM method %q is not a run-log fetch or DNS-agent RPC", method)}
 	}
 	if c.encrypted && (c.cipher == nil || c.servicePubkey == "") {
 		return nil, &ControlPlaneRequestError{Phase: "configure encrypted operator control-plane client", RequestAccepted: false, Cause: fmt.Errorf("encrypted ContextVM requests require recipient pubkey and NIP-44 signer support")}

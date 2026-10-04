@@ -1,0 +1,171 @@
+{
+  "schema": "bahia.intent-fixtures.d80.v1",
+  "intents": [
+    {
+      "domain": "security",
+      "op": "scan-run",
+      "coordinate": "security-scan:018f6a60-0000-7000-8000-000000000007",
+      "permission": "fleet-operator",
+      "modelling": "request",
+      "outcome": "security scan status/findings; bounded 30315 acknowledgement",
+      "content": {
+        "intent_id": "018f6a60-0000-7000-8000-000000000007",
+        "target": {
+          "package": {
+            "ecosystem": "npm",
+            "name": "left-pad",
+            "version": "1.3.0"
+          },
+          "type": "package"
+        }
+      }
+    },
+    {
+      "domain": "sbom",
+      "op": "generate",
+      "coordinate": "sbom-generate:018f6a60-0000-7000-8000-000000000007",
+      "permission": "fleet-operator",
+      "modelling": "request",
+      "outcome": "SBOM 30078/30004 and 32017/32018; bounded 30315 acknowledgement",
+      "content": {
+        "formats": [
+          "spdx"
+        ],
+        "generator": "syft",
+        "idempotencyKey": "018f6a60-0000-7000-8000-000000000007",
+        "intent_id": "018f6a60-0000-7000-8000-000000000007",
+        "source": {
+          "kind": "oci-image",
+          "locator": "registry.example/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "storage": "blossom",
+        "subject": {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "id": "018f6a60-0000-7000-8000-000000000004",
+          "type": "artifact"
+        }
+      }
+    },
+    {
+      "domain": "sbom",
+      "op": "import",
+      "coordinate": "sbom-import:018f6a60-0000-7000-8000-000000000007",
+      "permission": "fleet-operator",
+      "modelling": "request",
+      "outcome": "SBOM 30078/30004 and 32017/32018; bounded 30315 acknowledgement",
+      "content": {
+        "format": "spdx",
+        "generator": {
+          "id": "import"
+        },
+        "idempotencyKey": "018f6a60-0000-7000-8000-000000000007",
+        "intent_id": "018f6a60-0000-7000-8000-000000000007",
+        "location": {
+          "type": "blossom",
+          "uri": "https://blossom.example/sha256"
+        },
+        "storage": "blossom",
+        "subject": {
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "id": "018f6a60-0000-7000-8000-000000000004",
+          "type": "artifact"
+        }
+      }
+    },
+    {
+      "domain": "artifact",
+      "op": "signature-verify",
+      "coordinate": "artifact:018f6a60-0000-7000-8000-000000000004",
+      "permission": "services:write",
+      "modelling": "request",
+      "outcome": "artifact-signature 32016; bounded 30315 counts",
+      "content": {
+        "artifact_id": "018f6a60-0000-7000-8000-000000000004",
+        "intent_id": "018f6a60-0000-7000-8000-000000000007"
+      }
+    },
+    {
+      "domain": "artifact",
+      "op": "register-build-result",
+      "coordinate": "build-result:018f6a60-0000-7000-8000-000000000007",
+      "permission": "services:write",
+      "modelling": "request",
+      "outcome": "build/artifact cp-state 30900; bounded 30315 acknowledgement",
+      "content": {
+        "build_id": "018f6a60-0000-7000-8000-000000000007",
+        "intent_id": "018f6a60-0000-7000-8000-000000000007"
+      }
+    },
+    {
+      "domain": "relay",
+      "op": "policy-set",
+      "coordinate": "relay-settings:operator",
+      "permission": "fleet-operator",
+      "modelling": "desired-state-sensitive",
+      "outcome": "relay-settings protected cp-state 30900",
+      "content": {
+        "browser_relays": [
+          "wss://relay.example"
+        ],
+        "contextvm_relays": [
+          "wss://relay.example"
+        ],
+        "expected_projection": {
+          "availability": "never-configured"
+        },
+        "intent_id": "018f6a60-0000-7000-8000-000000000007",
+        "relay_administration": {
+          "enabled": false
+        },
+        "schema": "bahia.relay-settings.v1",
+        "service_relays": [
+          "wss://relay.example"
+        ]
+      }
+    },
+    {
+      "domain": "notification",
+      "op": "channel-test",
+      "coordinate": "018f6a60-0000-7000-8000-000000000006",
+      "permission": "settings:manage",
+      "modelling": "request-sensitive",
+      "outcome": "bounded 30315 delivery result",
+      "content": {
+        "id": "018f6a60-0000-7000-8000-000000000006",
+        "intent_id": "018f6a60-0000-7000-8000-000000000007"
+      }
+    },
+    {
+      "domain": "environment",
+      "op": "worker-policy-apply",
+      "coordinate": "018f6a60-0000-7000-8000-000000000003",
+      "permission": "fleet-operator",
+      "modelling": "desired-state",
+      "outcome": "environment cp-state 30900",
+      "content": {
+        "environment_id": "018f6a60-0000-7000-8000-000000000003",
+        "expected_updated_at": "2026-10-03T12:00:00Z",
+        "intent_id": "018f6a60-0000-7000-8000-000000000007",
+        "policy": {
+          "pinned_worker": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "domain": "ml",
+      "op": "pin",
+      "coordinate": "endpoint:018f6a60-0000-7000-8000-000000000005",
+      "permission": "fleet-operator",
+      "modelling": "desired-state",
+      "outcome": "ML inference endpoint cp-state 30900",
+      "content": {
+        "environment_id": "018f6a60-0000-7000-8000-000000000003",
+        "expected_updated_at": "2026-10-03T12:00:00Z",
+        "intent_id": "018f6a60-0000-7000-8000-000000000007",
+        "worker_pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "workload_id": "018f6a60-0000-7000-8000-000000000005",
+        "workload_kind": "ml_inference"
+      }
+    }
+  ]
+}

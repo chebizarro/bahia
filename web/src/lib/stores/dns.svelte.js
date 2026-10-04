@@ -911,13 +911,14 @@ function commandErrorMessage(error) {
   return error?.message || String(error || 'DNS command failed');
 }
 
-export async function startDNSCommandRun(command, payload = {}, { tags = [], signal } = {}) {
+export async function startDNSCommandRun(command, payload = {}, { signal } = {}) {
   if (command !== DNS_COMMANDS.DRIFT_REMEDIATE) throw new Error(`DNS ${command} uses signed intents`);
   const run = pushCommandRun({
     id: nextCommandRunId(command),
     command,
     phase: 'publishing',
     requestEventId: '',
+    intentId: '',
     publishOk: [],
     acceptedRelays: [],
     rejectedRelays: [],
@@ -934,7 +935,6 @@ export async function startDNSCommandRun(command, payload = {}, { tags = [], sig
     const tracker = await startDNSCommand({
       command,
       payload,
-      tags,
       signal,
       onStatus: (status) => {
         run.statusEvents = [...run.statusEvents, status];
@@ -945,11 +945,11 @@ export async function startDNSCommandRun(command, payload = {}, { tags = [], sig
       }
     });
 
-    run.phase = 'published';
-    run.requestEventId = tracker.requestEventId;
-    run.publishOk = tracker.ok;
-    run.acceptedRelays = tracker.acceptedRelays;
-    run.rejectedRelays = tracker.rejectedRelays;
+    run.phase = 'pending';
+    run.intentId = tracker.intentId;
+    run.publishOk = [];
+    run.acceptedRelays = [];
+    run.rejectedRelays = [];
 
     run.result = tracker.result.then((result) => {
       run.result = result;

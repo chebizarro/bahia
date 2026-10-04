@@ -1,5 +1,7 @@
 # Notifications
 
+`notification/channel-test` is a gift-wrapped signed request intent. It requires `settings:manage`, and its delivery result appears in bounded `30315` `data`; no channel record is changed by a test. The [D80 fixture](../../../web/tests/fixtures/d80-intent-content.json) shows the wire content.
+
 **Notifications** alert an organization about operational events and retain delivery results for investigation.
 
 ## Supported channels
@@ -73,7 +75,7 @@ The registered channel tools are:
 | `bahia_delete_notification_channel` | Delete a channel |
 | `bahia_test_notification_channel` | Deliver a test through that exact channel |
 
-Testing a disabled channel or a delivery that cannot be accepted returns an error. The test path does not report success merely because the request was queued.
+The channel-test tool submits a `notification/channel-test` intent. A signed accepted status confirms the dispatcher accepted the test delivery; `pending` means the status is not yet visible. A disabled channel or a delivery that cannot be accepted is rejected.
 
 ## Event filters
 
@@ -128,7 +130,7 @@ The MCP status filter maps `read` to sent records and `unread` to pending or ret
 
 The CLI can list or get channel metadata with `bahia notifications channels list` and `bahia notifications channels get <channel-uuid>`. These reads use the signed relay state and the operator's NIP-44 signer to unwrap an org or fleet OCK envelope. They never show the service-only `service_inner` credentials. The legacy REST channel reads are no longer mounted.
 
-Channel URLs, headers, and recipient details are sensitive. Browser channel CRUD uses encrypted request/result events and requires a NIP-44-capable signer. Do not publish channel configuration in public Nostr events or logs.
+Channel URLs, headers, and recipient details are sensitive. Browser channel CRUD and channel tests use signed kind-`30900` intents inside NIP-59 gift wraps and require a NIP-44-capable signer. Channel-test results arrive as requester-scoped kind-`30315` status data; delivery history reads bounded fleet-OCK-encrypted notification-log state. Do not publish channel configuration in public Nostr events or logs.
 
 ## Troubleshooting
 

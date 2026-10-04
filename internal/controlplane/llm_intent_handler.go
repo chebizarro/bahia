@@ -40,9 +40,8 @@ type LLMRouteStatePublisher func(ctx context.Context, route *domain.LLMRoute, de
 // Registered at startup when "llm" is enabled via
 // IntentProcessor.RegisterHandler("llm", handler).
 //
-// LLM deployment operations retain the Reactor fleet-operator gate. Route
-// registry operations accept org membership and the legacy ContextVM fleet
-// operator gate during the dual-dispatch window. The handler implements
+// LLM deployment operations retain the fleet-operator gate. Route registry
+// operations accept fleet operators or org members. The handler implements
 // SelfAuthorizingHandler to preserve both authorities.
 //
 // Revision decision: latest-wins. LLMRoute carries UpdatedAt but has
@@ -146,7 +145,7 @@ func (h *LLMRouteIntentHandler) handleDeploymentCreate(ctx context.Context, inte
 	if err != nil || releaseID == uuid.Nil {
 		return fmt.Errorf("release_id must be a UUID")
 	}
-	metadata, _ := intent.Content["metadata"].(map[string]any)
+	metadata := llmProvisioningIntentMetadata(intent)
 	return h.routes.CreateDeploymentIntent(ctx, &domain.LLMDeploymentIntent{RouteID: routeID, EnvironmentID: envID, ReleaseID: releaseID, RequestedBy: intent.Actor, SourceKind: domain.SourceKindEventTriggered, Metadata: metadata})
 }
 
@@ -162,9 +161,23 @@ func (h *LLMRouteIntentHandler) handleDeploymentRollback(ctx context.Context, in
 	if err != nil || envID == uuid.Nil {
 		return fmt.Errorf("environment_id must be a UUID")
 	}
-	metadata, _ := intent.Content["metadata"].(map[string]any)
+	metadata := llmProvisioningIntentMetadata(intent)
 	_, err = h.routes.RollbackWithMetadata(ctx, routeID, envID, intent.Actor, metadata)
 	return err
+}
+
+func llmProvisioningIntentMetadata(intent *Intent) map[string]any {
+	metadata := map[string]any{}
+	if supplied, ok := intent.Content["metadata"].(map[string]any); ok {
+		for key, value := range supplied {
+			metadata[key] = value
+		}
+	}
+	if intent.Event != nil {
+		metadata["nostr_event_id"] = intent.Event.ID.Hex()
+	}
+	metadata["nostr_request_pubkey"] = intent.Actor
+	return metadata
 }
 
 func (h *LLMRouteIntentHandler) handleDeploymentDecision(ctx context.Context, intent *Intent) error {
@@ -203,8 +216,7 @@ func (h *LLMRouteIntentHandler) AuthorizeIntent(ctx context.Context, trustSet *T
 		}
 		return fmt.Errorf("fleet operator permission required for LLM %s", intent.Op)
 	default:
-		// The legacy LLM ContextVM surface is fleet-gated; accept that same
-		// principal during dual dispatch while relay authors may use org RBAC.
+		// Fleet operators may manage routes alongside authors with org RBAC.
 		for _, pubkey := range trustSet.FleetOps() {
 			if pubkey == intent.Actor {
 				return nil

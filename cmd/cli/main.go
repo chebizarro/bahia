@@ -18,7 +18,6 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
@@ -69,11 +68,11 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringArrayVar(&operatorRelays, "relay", nil, "Nostr relay URL for signer-first operator requests (repeatable; env BAHIA_NOSTR_RELAYS)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorBootstrapRelays, "bootstrap-relay", nil, "Bootstrap relay URL for trusted operator relay discovery when --relay/BAHIA_NOSTR_RELAYS are absent (repeatable; env BAHIA_NOSTR_BOOTSTRAP_RELAYS)")
 	rootCmd.PersistentFlags().StringVar(&operatorIntentOrg, "org", getEnvOrDefault("BAHIA_ORG_ID", ""), "Organization UUID for signed mutation intents (env BAHIA_ORG_ID)")
-	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia ContextVM service pubkey for signer-first operator request routing and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
+	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia service pubkey for intent status, run-log fetch, and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "Trusted Bahia service pubkey for operator bootstrap discovery (repeatable; env BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS)")
-	rootCmd.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "Encrypt operator ContextVM requests and responses with NIP-59/NIP-44 (requires --service-pubkey)")
-	rootCmd.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "Maximum time to await a 30315 intent status or legacy ContextVM result (BAHIA_RESULT_TIMEOUT for intents)")
-	rootCmd.PersistentFlags().IntVar(&operatorResultRetries, "result-retries", client.DefaultOperatorResultRetries, "Number of idempotent ContextVM re-publish attempts after result timeout")
+	rootCmd.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "Encrypt logs run ContextVM request and response with NIP-59/NIP-44 (requires --service-pubkey)")
+	rootCmd.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "Maximum time to await a 30315 intent status or logs run ContextVM result (BAHIA_RESULT_TIMEOUT for intents)")
+	rootCmd.PersistentFlags().IntVar(&operatorResultRetries, "result-retries", client.DefaultOperatorResultRetries, "Number of idempotent logs run ContextVM re-publish attempts after result timeout")
 	registerNostrReadFlags(rootCmd)
 
 	// Add all command groups
@@ -462,7 +461,7 @@ func deployCommands() *cobra.Command {
 				return err
 			}
 			compact, _ := cmd.Flags().GetBool("compact")
-			result, err := runDeploymentPreviewContextVM(cmd, client.DeploymentPreviewNostrRequest{
+			result, err := runDeploymentPreviewIntent(cmd, client.DeploymentPreviewNostrRequest{
 				ServiceID:            serviceID,
 				EnvironmentID:        envID,
 				DeploymentUnitID:     deploymentUnitID,
@@ -483,36 +482,26 @@ func deployCommands() *cobra.Command {
 			} else {
 				fmt.Println("✓ Deployment preview ready")
 			}
-			if isCompact, _ := result["compact"].(bool); isCompact {
-				if summaryRaw, ok := result["desired_state_summary"]; ok && summaryRaw != nil {
-					summary := summaryRaw.(map[string]any)
-					fmt.Printf("  Image:        %v\n", summary["image_ref"])
-					fmt.Printf("  Ports:        %v\n", summary["ports"])
-					fmt.Printf("  Volumes:      %v\n", summary["volumes"])
-					if hc, ok := summary["healthcheck"].(map[string]any); ok && hc != nil {
-						if enabled, _ := hc["enabled"].(bool); enabled {
-							fmt.Printf("  Healthcheck:  %v (port %v)\n", hc["path"], hc["port"])
-						}
-					}
-					if route, ok := summary["public_route"].(map[string]any); ok && route != nil {
-						fmt.Printf("  Public Route: %v\n", route["hostname"])
-					}
-					if internal, ok := summary["internal_https"].(map[string]any); ok && internal != nil {
-						if enabled, _ := internal["enabled"].(bool); enabled {
-							fmt.Printf("  Internal HTTPS: %v\n", internal["hostname"])
-						}
-					}
-					fmt.Printf("  Env Keys:     %v\n", summary["env_key_count"])
-					if policyRaw, ok := result["policy"]; ok && policyRaw != nil {
-						policy := policyRaw.(map[string]any)
-						if allowed, _ := policy["allowed"].(bool); allowed {
-							fmt.Printf("  Policy:       allowed\n")
-						} else {
-							fmt.Printf("  Policy:       blocked (%v warnings, %v blockers)\n", policy["warnings"], policy["blockers"])
-						}
-					}
+			if summary, ok := result["desired_state_summary"].(map[string]any); ok {
+				fmt.Printf("  Image:       %v\n", summary["image_ref"])
+				fmt.Printf("  Ports:       %v\n", summary["ports_count"])
+				fmt.Printf("  Volumes:     %v\n", summary["volumes_count"])
+				fmt.Printf("  Env Keys:    %v\n", summary["env_key_count"])
+				if hostname, ok := summary["public_route_hostname"].(string); ok {
+					fmt.Printf("  Public Route: %s\n", hostname)
 				}
 			}
+			if policy, ok := result["policy"].(map[string]any); ok {
+				if allowed, _ := policy["allowed"].(bool); allowed {
+					fmt.Println("  Policy:      allowed")
+				} else {
+					fmt.Printf("  Policy:      blocked (%v warnings, %v blockers)\n", policy["warnings"], policy["blockers"])
+				}
+			}
+			if truncated, _ := result["plan_truncated"].(bool); truncated {
+				fmt.Println("  Plan:        bounded public summary; use hash to approve the full state")
+			}
+
 			return nil
 		},
 	}
@@ -593,7 +582,8 @@ func deployCommands() *cobra.Command {
 				internalOverride = &internal
 			}
 			idempotencyKey, _ := cmd.Flags().GetString("idempotency-key")
-			result, err := runRouteAttachContextVM(cmd, client.RouteAttachRequest{
+			expectedUpdatedAt, _ := cmd.Flags().GetString("expected-updated-at")
+			result, err := runRouteAttachIntent(cmd, client.RouteAttachRequest{
 				ServiceID:        serviceID,
 				EnvironmentID:    envID,
 				DeploymentUnitID: unitID,
@@ -601,8 +591,9 @@ func deployCommands() *cobra.Command {
 					Hostname: hostname, UpstreamScheme: upstreamScheme, UpstreamPort: upstreamPort,
 					HealthPath: healthPath, TLS: tlsMode,
 				},
-				Internal:       internalOverride,
-				IdempotencyKey: idempotencyKey,
+				Internal:          internalOverride,
+				ExpectedUpdatedAt: expectedUpdatedAt,
+				IdempotencyKey:    idempotencyKey,
 			})
 			if err != nil {
 				return err
@@ -623,6 +614,7 @@ func deployCommands() *cobra.Command {
 	routeAttachCmd.Flags().String("health-path", "", "HTTPS verification health path")
 	routeAttachCmd.Flags().String("tls", "managed", "TLS mode (managed)")
 	routeAttachCmd.Flags().Bool("internal", true, "Automatically attach configured internal HTTPS routing; set --internal=false to opt out")
+	routeAttachCmd.Flags().String("expected-updated-at", "", "Optional current deployment revision (RFC3339) for compare-and-set")
 	routeAttachCmd.Flags().String("idempotency-key", "", "Optional retry idempotency key")
 	for _, flag := range []string{"service", "environment", "deployment-unit", "hostname", "upstream-port", "health-path"} {
 		_ = routeAttachCmd.MarkFlagRequired(flag)
@@ -740,6 +732,7 @@ func adoptCommands() *cobra.Command {
 	var scanTargets []string
 	var scanRawTargets []string
 	var scanEnvironments []string
+	var scanOffset, scanLimit int
 	scanCmd := &cobra.Command{
 		Use:   "scan",
 		Short: "Preview adoptable containers from Docker targets",
@@ -748,7 +741,8 @@ func adoptCommands() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			previews, err := runAdoptionScanContextVM(cmd, client.AdoptionScanRequest{Targets: targets})
+			retryKey, _ := cmd.Flags().GetString("idempotency-key")
+			previews, err := runAdoptionScanIntent(cmd, client.AdoptionScanRequest{Targets: targets, Offset: scanOffset, Limit: scanLimit, IdempotencyKey: retryKey})
 			if err != nil {
 				return err
 			}
@@ -756,14 +750,17 @@ func adoptCommands() *cobra.Command {
 				return outputJSONorYAML(previews)
 			}
 			rows := flattenAdoptionPreviewRows(previews)
-			return output(rows, []string{"TARGET", "CONTAINER", "SERVICE", "IMAGE", "HEALTH", "ADOPTABLE", "WARNINGS"}, func(row adoptionPreviewRow) []string {
-				return []string{row.Target, row.Container, row.Service, row.Image, row.Health, row.Adoptable, row.Warnings}
+			return output(rows, []string{"TARGET", "CONTAINER", "SERVICE", "IMAGE", "ADOPTABLE", "WARNINGS", "STATUS"}, func(row adoptionPreviewRow) []string {
+				return []string{row.Target, row.Container, row.Service, row.Image, row.Adoptable, row.Warnings, row.Status}
 			})
 		},
 	}
 	scanCmd.Flags().StringArrayVar(&scanTargets, "target", nil, "Server-managed endpoint target as endpointRef or alias=endpointRef (repeatable)")
 	scanCmd.Flags().StringArrayVar(&scanRawTargets, "raw-target", nil, "Compatibility raw Docker target as alias=dockerHost (requires server allow_raw_docker_hosts)")
 	scanCmd.Flags().StringArrayVar(&scanEnvironments, "environment", nil, "Environment name as alias=environmentName (repeatable)")
+	scanCmd.Flags().IntVar(&scanOffset, "offset", 0, "Finding offset for a bounded scan page")
+	scanCmd.Flags().IntVar(&scanLimit, "limit", 20, "Maximum findings in the status page (1-100)")
+	scanCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for safe scan replay")
 
 	var importTargets []string
 	var importRawTargets []string
@@ -786,14 +783,13 @@ func adoptCommands() *cobra.Command {
 			if !importAll && len(selections) == 0 {
 				return fmt.Errorf("specify --all or at least one --select alias/containerID")
 			}
-			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll, OrgID: strings.TrimSpace(importOrgID)}
-			results, err := runAdoptionImportContextVM(cmd, req)
+			retryKey, _ := cmd.Flags().GetString("idempotency-key")
+			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll, OrgID: strings.TrimSpace(importOrgID), IdempotencyKey: retryKey}
+			result, err := runAdoptionImportIntent(cmd, req)
 			if err != nil {
 				return err
 			}
-			return output(results, []string{"TARGET", "CONTAINER", "SERVICE", "STATUS", "ERROR"}, func(row client.AdoptionImportResult) []string {
-				return []string{row.TargetName, firstNonEmpty(row.ContainerName, row.ContainerID), row.ServiceName, row.Status, row.Error}
-			})
+			return outputSingle(result)
 		},
 	}
 	importCmd.Flags().StringArrayVar(&importTargets, "target", nil, "Server-managed endpoint target as endpointRef or alias=endpointRef (repeatable)")
@@ -802,6 +798,7 @@ func adoptCommands() *cobra.Command {
 	importCmd.Flags().StringArrayVar(&importSelections, "select", nil, "Container selection as alias/containerID[=serviceName] (repeatable)")
 	importCmd.Flags().BoolVar(&importAll, "all", false, "Import all adoptable containers from the scanned targets")
 	importCmd.Flags().StringVar(&importOrgID, "org", "", "Organization UUID for imported services and environments")
+	importCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this import")
 
 	cmd.AddCommand(scanCmd, importCmd)
 	return cmd
@@ -812,33 +809,28 @@ type adoptionPreviewRow struct {
 	Container string
 	Service   string
 	Image     string
-	Health    string
 	Adoptable string
 	Warnings  string
+	Status    string
 }
 
-func flattenAdoptionPreviewRows(previews []client.AdoptionPreview) []adoptionPreviewRow {
-	var rows []adoptionPreviewRow
-	for _, preview := range previews {
-		if preview.Error != "" {
-			rows = append(rows, adoptionPreviewRow{Target: preview.Target.Name, Health: "error", Adoptable: "no", Warnings: preview.Error})
-			continue
+func flattenAdoptionPreviewRows(previews *adoptionScanStatus) []adoptionPreviewRow {
+	rows := make([]adoptionPreviewRow, 0, len(previews.Findings))
+	for _, finding := range previews.Findings {
+		row := adoptionPreviewRow{
+			Target: finding.TargetName, Container: firstNonEmpty(finding.ContainerName, finding.ContainerID),
+			Service: finding.ProposedServiceName, Image: finding.ImageRef,
+			Adoptable: "no", Warnings: fmt.Sprint(finding.WarningsCount),
 		}
-		for _, container := range preview.Containers {
-			adoptable := "no"
-			if container.Adoptable {
-				adoptable = "yes"
-			}
-			rows = append(rows, adoptionPreviewRow{
-				Target:    preview.Target.Name,
-				Container: firstNonEmpty(container.Discovered.ContainerName, container.Discovered.ContainerID),
-				Service:   container.ProposedServiceName,
-				Image:     firstNonEmpty(container.Discovered.ImageRef, container.Discovered.ImageRepo),
-				Health:    string(container.Discovered.HealthStatus),
-				Adoptable: adoptable,
-				Warnings:  strings.Join(container.Warnings, "; "),
-			})
+		if finding.Adoptable {
+			row.Adoptable = "yes"
 		}
+		if finding.ScanFailed {
+			row.Status = "scan failed"
+		} else if finding.ItemTruncated {
+			row.Status = "truncated"
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }
@@ -1036,7 +1028,7 @@ func logsCommands() *cobra.Command {
 			result := &struct {
 				Logs cliRunLogs `json:"logs"`
 			}{}
-			err := requestCLIContextVM(cmd, controlplane.ContextVMMethodDeploymentRunLogsGet, map[string]any{"run_id": args[0], "tail": tail, "stream": stream}, nil, "", "logs run", result)
+			err := fetchCLIRunLogs(cmd, args[0], tail, stream, result)
 			logs := &result.Logs
 			if err != nil {
 				return err

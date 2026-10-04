@@ -531,7 +531,7 @@ func TestEncryptedRequestTransport_RunLeavesAuthToPool(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(subscriber, newResponder(t, publisher), contextVMTestAuthorizedPubkeys(t), zap.NewNop())
 	processed := make(chan string, 1)
-	transport.RegisterContextVMHandler(ContextVMMethodServiceCreate, func(_ context.Context, request ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(_ context.Context, request ContextVMRequest) (any, error) {
 		processed <- request.RPC.Method
 		return map[string]string{"status": "ok"}, nil
 	})
@@ -546,10 +546,10 @@ func TestEncryptedRequestTransport_RunLeavesAuthToPool(t *testing.T) {
 	// resubscribes, and keeps consuming the same subscription.
 	subscription := receiveEncryptedSubscription(t, subscriber.subscribeRequests)
 	subscription.closed <- nostrpool.RelayClosed{RelayURL: "wss://relay.example", SubscriptionID: "sub-1", Reason: "auth-required: restricted kind"}
-	subscription.events <- makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"req-1","method":"service/create","params":{}}`)
+	subscription.events <- makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"req-1","method":"deployments/run-logs-get","params":{}}`)
 	select {
 	case method := <-processed:
-		if method != ContextVMMethodServiceCreate {
+		if method != ContextVMMethodDeploymentRunLogsGet {
 			t.Fatalf("unexpected processed method: %s", method)
 		}
 	case <-time.After(time.Second):
@@ -775,9 +775,9 @@ func TestContextVMTransport_PublishesProgressAckBeforeResponseForAuthorizedRoute
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"ack-1","method":"service/deploy","params":{"service_id":"svc-1"}}`)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"ack-1","method":"deployments/run-logs-get","params":{"service_id":"svc-1"}}`)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
-	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		return map[string]any{"accepted": true}, nil
 	})
 
@@ -801,10 +801,10 @@ func TestContextVMTransport_ProgressAckBackpressureDoesNotGateHandler(t *testing
 	}
 	responder := NewEncryptedResponder(publisher, signer, testServiceKey, zap.NewNop())
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"ack-blocked","method":"service/deploy","params":{"service_id":"svc-1"}}`)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"ack-blocked","method":"deployments/run-logs-get","params":{"service_id":"svc-1"}}`)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
 	handled := make(chan struct{})
-	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		close(handled)
 		return map[string]any{"accepted": true}, nil
 	})
@@ -836,13 +836,13 @@ func TestContextVMTransport_ProgressAckBackpressureDoesNotGateHandler(t *testing
 func TestContextVMTransport_DoesNotPublishProgressAckForRoutingMismatch(t *testing.T) {
 	publisher := &mockEncryptedPublisher{}
 	responder := newResponder(t, publisher)
-	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"ack-mismatch","method":"service/deploy"}`)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"ack-mismatch","method":"deployments/run-logs-get"}`)
 	event.Tags = nostr.Tags{{"p", "c" + event.PubKey.Hex()[1:]}}
 	if err := event.Sign(testNostrSecretKey(t, testRequesterKey)); err != nil {
 		t.Fatal(err)
 	}
 	transport := NewEncryptedRequestTransport(nil, responder, []string{event.PubKey.Hex()}, zap.NewNop())
-	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		t.Fatalf("routing mismatch reached handler")
 		return nil, nil
 	})
@@ -910,13 +910,13 @@ func TestContextVMTransport_DispatchesJSONRPCRequest(t *testing.T) {
 	responder := newResponder(t, publisher)
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
-	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, func(_ context.Context, request ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(_ context.Context, request ContextVMRequest) (any, error) {
 		if request.ProgressToken != "deploy-1" {
 			t.Fatalf("progress token = %q", request.ProgressToken)
 		}
 		return map[string]any{"accepted": true, "method": request.RPC.Method}, nil
 	})
-	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":7,"method":"service/deploy","params":{"service_id":"svc","_meta":{"progressToken":"deploy-1"}}}`)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":7,"method":"deployments/run-logs-get","params":{"service_id":"svc","_meta":{"progressToken":"deploy-1"}}}`)
 
 	transport.HandleEvent(context.Background(), event)
 
@@ -931,36 +931,6 @@ func TestContextVMTransport_DispatchesJSONRPCRequest(t *testing.T) {
 	response := contextVMResponse(t, responseEvent)
 	if string(response.ID) != "7" || response.Error != nil {
 		t.Fatalf("unexpected response: %+v", response)
-	}
-}
-
-func TestRegisterServiceContextVMHandlers_RegistersDeployMethods(t *testing.T) {
-	for _, method := range []string{ContextVMMethodServiceDeployPreview, ContextVMMethodServiceDeploy, ContextVMMethodServiceRouteAttach, ContextVMMethodServiceRollback} {
-		t.Run(method, func(t *testing.T) {
-			publisher := &mockEncryptedPublisher{}
-			responder := newResponder(t, publisher)
-			requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-			transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
-			RegisterServiceContextVMHandlers(transport, EncryptedServiceHandlersConfig{})
-			event := makeContextVMEvent(t, testRequesterKey, fmt.Sprintf(`{"jsonrpc":"2.0","id":"deploy-registration","method":%q,"params":{}}`, method))
-
-			transport.HandleEvent(context.Background(), event)
-
-			if len(publisher.events) != 2 {
-				t.Fatalf("expected progress acknowledgement and ContextVM response, got %d events", len(publisher.events))
-			}
-			assertContextVMProgressAck(t, publisher.events[0], event)
-			response := contextVMResponse(t, publisher.events[1])
-			if response.Error == nil {
-				t.Fatal("expected missing dependency error")
-			}
-			if response.Error.Message == "method not found" {
-				t.Fatalf("%s was not registered: %+v", method, response.Error)
-			}
-			if response.Error.Message != "service deployment control plane is not configured" {
-				t.Fatalf("unexpected error: %+v", response.Error)
-			}
-		})
 	}
 }
 
@@ -1005,11 +975,11 @@ func TestContextVMTransport_AuthorizationRejectsBeforeDispatch(t *testing.T) {
 	otherPubkey := testNostrPubKeyHexFromPrivateKey(t, testOtherKey)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{otherPubkey}, zap.NewNop())
 	called := false
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerCordon, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		called = true
 		return nil, nil
 	})
-	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"worker/cordon","params":{"_meta":{"progressToken":"cordon-1"}}}`)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"cordon-1"}}}`)
 
 	transport.HandleEvent(context.Background(), event)
 
@@ -1030,12 +1000,12 @@ func TestContextVMTransport_IdempotencyCachesProgressToken(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
 	calls := 0
-	transport.RegisterContextVMHandler(ContextVMMethodPackagePromote, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		calls++
 		return map[string]any{"call": calls}, nil
 	})
-	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"package/promote","params":{"_meta":{"progressToken":"promote-1"}}}`)
-	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":2,"method":"package/promote","params":{"_meta":{"progressToken":"promote-1"}}}`)
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"promote-1"}}}`)
+	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":2,"method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"promote-1"}}}`)
 
 	transport.HandleEvent(context.Background(), first)
 	transport.HandleEvent(context.Background(), second)
@@ -1058,21 +1028,21 @@ func TestContextVMTransport_RejectsProgressTokenReuseWithDifferentParams(t *test
 	firstPublisher := &mockEncryptedPublisher{}
 	firstTransport := NewEncryptedRequestTransport(nil, newResponder(t, firstPublisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
 	firstCalls := 0
-	firstTransport.RegisterContextVMHandler(ContextVMMethodPackagePromote, func(context.Context, ContextVMRequest) (any, error) {
+	firstTransport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		firstCalls++
 		return map[string]any{"promoted": true}, nil
 	})
-	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"first","method":"package/promote","params":{"package_id":"package-a","_meta":{"progressToken":"promote-conflict"}}}`)
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"first","method":"deployments/run-logs-get","params":{"package_id":"package-a","_meta":{"progressToken":"promote-conflict"}}}`)
 	firstTransport.HandleEvent(context.Background(), first)
 
 	secondPublisher := &mockEncryptedPublisher{}
 	secondTransport := NewEncryptedRequestTransport(nil, newResponder(t, secondPublisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
 	secondCalls := 0
-	secondTransport.RegisterContextVMHandler(ContextVMMethodPackagePromote, func(context.Context, ContextVMRequest) (any, error) {
+	secondTransport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		secondCalls++
 		return map[string]any{"promoted": true}, nil
 	})
-	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"second","method":"package/promote","params":{"package_id":"package-b","_meta":{"progressToken":"promote-conflict"}}}`)
+	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"second","method":"deployments/run-logs-get","params":{"package_id":"package-b","_meta":{"progressToken":"promote-conflict"}}}`)
 	secondTransport.HandleEvent(context.Background(), second)
 
 	if firstCalls != 1 || secondCalls != 0 {
@@ -1089,7 +1059,7 @@ func TestContextVMTransport_RejectsProgressTokenReuseWithDifferentParams(t *test
 		t.Fatalf("conflicting retry response leaked request payload: %s", secondPublisher.events[0].Content)
 	}
 
-	original := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"original-retry","method":"package/promote","params":{"_meta":{"progressToken":"promote-conflict"},"package_id":"package-a"}}`)
+	original := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"original-retry","method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"promote-conflict"},"package_id":"package-a"}}`)
 	secondTransport.HandleEvent(context.Background(), original)
 	if secondCalls != 0 {
 		t.Fatalf("handler calls after original retry = %d, want 0", secondCalls)
@@ -1107,12 +1077,12 @@ func TestContextVMTransport_RejectsInMemoryFingerprintMismatch(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
 	calls := 0
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerCordon, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		calls++
 		return map[string]any{"cordoned": true}, nil
 	})
-	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"worker/cordon","params":{"worker_id":"worker-a","_meta":{"progressToken":"cordon-conflict"}}}`)
-	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":2,"method":"worker/cordon","params":{"worker_id":"worker-b","_meta":{"progressToken":"cordon-conflict"}}}`)
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"deployments/run-logs-get","params":{"worker_id":"worker-a","_meta":{"progressToken":"cordon-conflict"}}}`)
+	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":2,"method":"deployments/run-logs-get","params":{"worker_id":"worker-b","_meta":{"progressToken":"cordon-conflict"}}}`)
 
 	transport.HandleEvent(context.Background(), first)
 	transport.HandleEvent(context.Background(), second)
@@ -1133,12 +1103,12 @@ func TestContextVMTransport_CanonicalParamsReplayAcrossReserialization(t *testin
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
 	calls := 0
-	transport.RegisterContextVMHandler(ContextVMMethodPackagePromote, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		calls++
 		return map[string]any{"call": calls}, nil
 	})
-	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"package/promote","params":{"package":{"version":1.0,"name":"bahia"},"_meta":{"progressToken":"canonical-retry"}}}`)
-	second := makeContextVMEvent(t, testRequesterKey, `{ "jsonrpc": "2.0", "id": 2, "method": "package/promote", "params": { "_meta": { "progressToken": "canonical-retry" }, "package": { "name": "bahia", "version": 1 } } }`)
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"deployments/run-logs-get","params":{"package":{"version":1.0,"name":"bahia"},"_meta":{"progressToken":"canonical-retry"}}}`)
+	second := makeContextVMEvent(t, testRequesterKey, `{ "jsonrpc": "2.0", "id": 2, "method": "deployments/run-logs-get", "params": { "_meta": { "progressToken": "canonical-retry" }, "package": { "name": "bahia", "version": 1 } } }`)
 
 	transport.HandleEvent(context.Background(), first)
 	transport.HandleEvent(context.Background(), second)
@@ -1157,9 +1127,9 @@ func TestContextVMTransport_CanonicalParamsReplayAcrossReserialization(t *testin
 func TestContextVMTransport_LegacyPersistedResponseWithoutFingerprintReplays(t *testing.T) {
 	store := newMemoryContextVMResponseStore()
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	store.records[contextVMCacheKey(requesterPubkey, ContextVMMethodBackupRun, "legacy-retry")] = repository.ContextVMResponseRecord{
+	store.records[contextVMCacheKey(requesterPubkey, ContextVMMethodDeploymentRunLogsGet, "legacy-retry")] = repository.ContextVMResponseRecord{
 		RequesterPubkey: requesterPubkey,
-		Method:          ContextVMMethodBackupRun,
+		Method:          ContextVMMethodDeploymentRunLogsGet,
 		ProgressToken:   "legacy-retry",
 		Response:        []byte(`{"jsonrpc":"2.0","id":"legacy","result":{"run_id":"existing"}}`),
 		CreatedAt:       time.Now().UTC(),
@@ -1167,11 +1137,11 @@ func TestContextVMTransport_LegacyPersistedResponseWithoutFingerprintReplays(t *
 	publisher := &mockEncryptedPublisher{}
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
 	calls := 0
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		calls++
 		return nil, nil
 	})
-	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"retry","method":"backup/run","params":{"run":"changed-but-legacy-unverifiable","_meta":{"progressToken":"legacy-retry"}}}`)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"retry","method":"deployments/run-logs-get","params":{"run":"changed-but-legacy-unverifiable","_meta":{"progressToken":"legacy-retry"}}}`)
 
 	transport.HandleEvent(context.Background(), event)
 
@@ -1209,7 +1179,7 @@ func TestContextVMTransport_FailedTerminalRetryDoesNotBlockSubscriptionLoop(t *t
 	publisher := &loopLivenessPublisher{secondPublished: make(chan struct{})}
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(subscriber, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResultRetry(500*time.Millisecond, 250*time.Millisecond, 250*time.Millisecond))
-	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		return map[string]any{"accepted": true}, nil
 	})
 
@@ -1217,8 +1187,8 @@ func TestContextVMTransport_FailedTerminalRetryDoesNotBlockSubscriptionLoop(t *t
 	runErr := make(chan error, 1)
 	go func() { runErr <- transport.Run(ctx) }()
 	subscription := receiveEncryptedSubscription(t, subscriber.subscribeRequests)
-	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"first","method":"service/deploy","params":{"_meta":{"progressToken":"first"}}}`)
-	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"second","method":"service/deploy","params":{"_meta":{"progressToken":"second"}}}`)
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"first","method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"first"}}}`)
+	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"second","method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"second"}}}`)
 
 	subscription.events <- first
 	subscription.events <- second
@@ -1245,10 +1215,10 @@ func TestContextVMTransport_RetriesPublishErrorUntilDelivered(t *testing.T) {
 	}}
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResultRetry(50*time.Millisecond, time.Millisecond, time.Millisecond))
-	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		return map[string]any{"delivered": true}, nil
 	})
-	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"retry-error","method":"service/deploy","params":{"_meta":{"progressToken":"retry-error"}}}`)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"retry-error","method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"retry-error"}}}`)
 
 	transport.HandleEvent(context.Background(), event)
 	waitForPublishCall(t, publisher.called, 3)
@@ -1275,10 +1245,10 @@ func TestContextVMTransport_RetriesZeroAcceptedUntilDelivered(t *testing.T) {
 	}}
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResultRetry(50*time.Millisecond, time.Millisecond, time.Millisecond))
-	transport.RegisterContextVMHandler(ContextVMMethodPackagePromote, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		return map[string]any{"delivered": true}, nil
 	})
-	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"retry-zero","method":"package/promote","params":{"_meta":{"progressToken":"retry-zero"}}}`)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"retry-zero","method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"retry-zero"}}}`)
 
 	transport.HandleEvent(context.Background(), event)
 	waitForPublishCall(t, publisher.called, 3)
@@ -1304,11 +1274,11 @@ func TestContextVMTransport_ExhaustedRetryLogsAndCachedResponseReplays(t *testin
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, logger, WithContextVMResultRetry(8*time.Millisecond, time.Millisecond, time.Millisecond))
 	handlerCalls := 0
-	transport.RegisterContextVMHandler(ContextVMMethodWorkerCordon, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		handlerCalls++
 		return map[string]any{"cordoned": true}, nil
 	})
-	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"worker/cordon","params":{"_meta":{"progressToken":"cordon-retry"}}}`)
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":1,"method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"cordon-retry"}}}`)
 	transport.HandleEvent(context.Background(), first)
 	select {
 	case <-exhausted:
@@ -1321,7 +1291,7 @@ func TestContextVMTransport_ExhaustedRetryLogsAndCachedResponseReplays(t *testin
 		t.Fatalf("terminal failure logs = %d, want 1", len(entries))
 	}
 	fields := entries[0].ContextMap()
-	if fields["event_id"] != first.ID.Hex() || fields["method"] != ContextVMMethodWorkerCordon || fields["recipient_pubkey_prefix"] != requesterPubkey[:8] {
+	if fields["event_id"] != first.ID.Hex() || fields["method"] != ContextVMMethodDeploymentRunLogsGet || fields["recipient_pubkey_prefix"] != requesterPubkey[:8] {
 		t.Fatalf("terminal failure fields = %#v", fields)
 	}
 	if _, ok := fields["relay_outcomes"]; !ok {
@@ -1329,7 +1299,7 @@ func TestContextVMTransport_ExhaustedRetryLogsAndCachedResponseReplays(t *testin
 	}
 
 	publisher.setFail(false)
-	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":2,"method":"worker/cordon","params":{"_meta":{"progressToken":"cordon-retry"}}}`)
+	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":2,"method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"cordon-retry"}}}`)
 	transport.HandleEvent(context.Background(), second)
 	if handlerCalls != 1 {
 		t.Fatalf("handler calls = %d, want cached replay without redispatch", handlerCalls)
@@ -1349,21 +1319,21 @@ func TestContextVMTransport_PersistedResponseReplaysAfterRestart(t *testing.T) {
 	firstPublisher := &mockEncryptedPublisher{}
 	firstTransport := NewEncryptedRequestTransport(nil, newResponder(t, firstPublisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
 	firstCalls := 0
-	firstTransport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+	firstTransport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		firstCalls++
 		return map[string]any{"run_id": "run-1", "serial": serial}, nil
 	})
-	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"before-restart","method":"backup/run","params":{"_meta":{"progressToken":"backup-restart"}}}`)
+	first := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"before-restart","method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"backup-restart"}}}`)
 	firstTransport.HandleEvent(context.Background(), first)
 
 	secondPublisher := &mockEncryptedPublisher{}
 	secondTransport := NewEncryptedRequestTransport(nil, newResponder(t, secondPublisher), []string{requesterPubkey}, zap.NewNop(), WithContextVMResponseStore(store, 24*time.Hour))
 	secondCalls := 0
-	secondTransport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+	secondTransport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		secondCalls++
 		return nil, nil
 	})
-	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"after-restart","method":"backup/run","params":{"_meta":{"progressToken":"backup-restart"}}}`)
+	second := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"after-restart","method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"backup-restart"}}}`)
 	secondTransport.HandleEvent(context.Background(), second)
 
 	if firstCalls != 1 || secondCalls != 0 {
@@ -1391,10 +1361,10 @@ func TestContextVMTransport_LargeTerminalPayloadUnchanged(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
 	large := strings.Repeat("contextvm-result-", 16384)
-	transport.RegisterContextVMHandler(ContextVMMethodToolsCall, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		return map[string]any{"payload": large}, nil
 	})
-	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"large","method":"tools/call","params":{}}`)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"large","method":"deployments/run-logs-get","params":{}}`)
 
 	transport.HandleEvent(context.Background(), event)
 
@@ -1415,10 +1385,10 @@ func TestContextVMTransport_ResponsePublishesToEveryConfiguredRelay(t *testing.T
 	}}
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
-	transport.RegisterContextVMHandler(ContextVMMethodServiceRollback, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		return map[string]any{"rolled_back": true}, nil
 	})
-	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"multi-relay","method":"service/rollback","params":{}}`)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"multi-relay","method":"deployments/run-logs-get","params":{}}`)
 
 	transport.HandleEvent(context.Background(), event)
 
@@ -1444,10 +1414,10 @@ func TestContextVMTransport_MultiRelayPartialFailureSucceedsWithoutRetry(t *test
 	// publication "succeeded" on another relay.
 	core, logs := observer.New(zap.WarnLevel)
 	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.New(core), WithContextVMResultRetry(50*time.Millisecond, time.Millisecond, time.Millisecond))
-	transport.RegisterContextVMHandler(ContextVMMethodServiceRollback, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		return map[string]any{"rolled_back": true}, nil
 	})
-	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"partial","method":"service/rollback","params":{}}`)
+	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"partial","method":"deployments/run-logs-get","params":{}}`)
 
 	transport.HandleEvent(context.Background(), event)
 
@@ -1475,8 +1445,8 @@ func TestContextVMTransport_MultiRelayPartialFailureSucceedsWithoutRetry(t *test
 	if size, ok := fields["payload_bytes"].(int64); !ok || size <= 0 {
 		t.Fatalf("payload_bytes = %v, want a positive size", fields["payload_bytes"])
 	}
-	if method, _ := fields["method"].(string); method != ContextVMMethodServiceRollback {
-		t.Fatalf("method = %q, want %q", method, ContextVMMethodServiceRollback)
+	if method, _ := fields["method"].(string); method != ContextVMMethodDeploymentRunLogsGet {
+		t.Fatalf("method = %q, want %q", method, ContextVMMethodDeploymentRunLogsGet)
 	}
 }
 
@@ -1494,7 +1464,7 @@ func TestContextVMTransport_RandomKeyGiftWrapDispatchesAndResponds(t *testing.T)
 			publisher := &mockEncryptedPublisher{}
 			responder := newResponder(t, publisher)
 			transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
-			transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(_ context.Context, request ContextVMRequest) (any, error) {
+			transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(_ context.Context, request ContextVMRequest) (any, error) {
 				if request.Event.PubKey.Hex() != requesterPubkey {
 					t.Fatalf("handler saw sender %s, want inner requester %s", request.Event.PubKey.Hex(), requesterPubkey)
 				}
@@ -1506,7 +1476,7 @@ func TestContextVMTransport_RandomKeyGiftWrapDispatchesAndResponds(t *testing.T)
 				}
 				return map[string]any{"accepted": true}, nil
 			})
-			inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"backup/run","params":{"_meta":{"progressToken":"backup-1"}}}`)
+			inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"backup-1"}}}`)
 			outer := wrapContextVMEvent(t, inner, tc.kind)
 
 			transport.HandleEvent(context.Background(), outer)
@@ -1558,11 +1528,11 @@ func TestContextVMTransport_EncryptedGiftWrapAuthorizesInnerSenderNotWrapper(t *
 	otherPubkey := testNostrPubKeyHexFromPrivateKey(t, testOtherKey)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{otherPubkey}, zap.NewNop())
 	called := false
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		called = true
 		return map[string]any{"accepted": true}, nil
 	})
-	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"backup/run","params":{"_meta":{"progressToken":"backup-unauthorized"}}}`)
+	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"backup-unauthorized"}}}`)
 	outer := wrapContextVMEvent(t, inner, KindContextVMGiftWrap)
 
 	transport.HandleEvent(context.Background(), outer)
@@ -1588,11 +1558,11 @@ func TestContextVMTransport_AcceptsCascadiaStoredWrapperPubkey(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
 	called := false
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		called = true
 		return nil, nil
 	})
-	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"backup/run"}`)
+	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"deployments/run-logs-get"}`)
 	outer := wrapContextVMEventWithWrapperKey(t, inner, testRequesterKey, KindContextVMGiftWrap)
 
 	transport.HandleEvent(context.Background(), outer)
@@ -1777,11 +1747,11 @@ func TestContextVMTransport_RejectsInvalidRandomKeyWrapper(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
 	called := false
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		called = true
 		return nil, nil
 	})
-	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"backup/run"}`)
+	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"deployments/run-logs-get"}`)
 	outer := wrapContextVMEvent(t, inner, KindContextVMGiftWrap)
 	outer.Content = "tampered-" + outer.Content
 
@@ -1828,8 +1798,8 @@ func TestContextVMIdempotencyKeySupportsCompatibilityAlias(t *testing.T) {
 }
 
 func TestContextVMCacheKeyScopesBySignerAndMethod(t *testing.T) {
-	base := contextVMCacheKey("requester-a", "service/deploy", "deploy-1")
-	if base == contextVMCacheKey("requester-b", "service/deploy", "deploy-1") {
+	base := contextVMCacheKey("requester-a", "deployments/run-logs-get", "deploy-1")
+	if base == contextVMCacheKey("requester-b", "deployments/run-logs-get", "deploy-1") {
 		t.Fatal("cache key must be signer scoped")
 	}
 	if base == contextVMCacheKey("requester-a", "service/delete", "deploy-1") {
@@ -1902,12 +1872,12 @@ func TestContextVMTransport_RejectsInvalidWrappedInnerEvent(t *testing.T) {
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())
 	called := false
-	transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		called = true
 		return nil, nil
 	})
-	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"backup/run"}`)
-	inner.Content = `{"jsonrpc":"2.0","id":"backup","method":"tools/call"}`
+	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"backup","method":"deployments/run-logs-get"}`)
+	inner.Content = `{"jsonrpc":"2.0","id":"tampered","method":"deployments/run-logs-get"}`
 	outer := wrapContextVMEvent(t, inner, KindContextVMEphemeralWrap)
 
 	transport.HandleEvent(context.Background(), outer)

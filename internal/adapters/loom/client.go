@@ -37,11 +37,10 @@ import (
 
 // Loom Protocol event kinds.
 const (
-	KindWorkerAd     = 10100 // Replaceable worker advertisement
-	KindJobRequest   = 5100  // Job request (subprocess)
-	KindJobStatus    = 30100 // Parameterized replaceable status update
-	KindJobResult    = 5101  // Final job result
-	KindJobCancelReq = 5102  // Cancellation request
+	KindWorkerAd   = 10100 // Replaceable worker advertisement
+	KindJobRequest = 5100  // Job request (subprocess)
+	KindJobStatus  = 30100 // Parameterized replaceable status update
+	KindJobResult  = 5101  // Final job result
 
 	defaultJobSubscriptionBackoff = 250 * time.Millisecond
 	maxJobSubscriptionBackoff     = 5 * time.Second
@@ -874,47 +873,6 @@ func requireTagPresent(tags nostr.Tags, key string) error {
 		}
 	}
 	return fmt.Errorf("missing %q tag", key)
-}
-
-// CancelJob publishes a Kind 5102 cancellation request for the given job.
-func (c *Client) CancelJob(ctx context.Context, jobEventID string, workerPubkey string) error {
-	if c.privateKey == "" {
-		return fmt.Errorf("nostr private key not configured")
-	}
-
-	tags := nostr.Tags{
-		{tagJobEvent, jobEventID},
-	}
-	if workerPubkey != "" {
-		tags = append(tags, nostr.Tag{tagJobPubkey, workerPubkey})
-	}
-
-	ev := nostr.Event{
-		Kind:      KindJobCancelReq,
-		Content:   "",
-		CreatedAt: nostr.Timestamp(time.Now().Unix()),
-		Tags:      tags,
-	}
-
-	if err := nostrutil.SignEventWithHexKey(&ev, c.privateKey); err != nil {
-		return fmt.Errorf("signing cancellation event: %w", err)
-	}
-
-	published, err := c.pool.Publish(ctx, ev)
-	if err != nil {
-		return fmt.Errorf("publishing cancellation request: %w", err)
-	}
-	if published == 0 {
-		return fmt.Errorf("publishing cancellation request: no relay accepted event")
-	}
-
-	c.logger.Info("loom job cancellation sent",
-		zap.String("job_event_id", jobEventID),
-		zap.Int("kind", KindJobCancelReq),
-		zap.Int("relays", published),
-	)
-
-	return nil
 }
 
 // ---------------------------------------------------------------------------

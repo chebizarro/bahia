@@ -977,37 +977,12 @@ func discoveryRegistries(cfg *config.Config) []map[string]any {
 	return registries
 }
 
-// DiscoveryContextVMMethods returns the ContextVM JSON-RPC methods advertised in
-// discovery control_plane.methods. Every entry must have a server-side
-// RegisterContextVMHandler registration on bahia-server's encrypted transport;
-// internal/controlplane tests enforce this. Methods that Bahia's REST/MCP
-// command publishers emit without a server-side consumer (llm/*, ml/*,
-// package/*, worker/policy-apply, worker/workload-pin) are intentionally not
-// advertised. DNS methods are always registered but only advertised when a DNS
-// source is configured.
-func DiscoveryContextVMMethods(dnsEnabled bool) []string {
-	methods := []string{
-		"service/deploy-preview",
-		"service/deploy",
-		"service/route-attach",
-		"service/rollback",
-		"worker/cordon",
-		"worker/uncordon",
-		"worker/drain",
-		"worker/undrain",
-		"worker/maintenance-enter",
-		"worker/maintenance-exit",
-		"worker/labels-update",
-		"worker/cleanup",
-		"approval/approve",
-		"approval/reject",
-		"sbom/generate",
-		"sbom/import",
+// DiscoveryContextVMMethods advertises only the interactive RPC exceptions.
+func DiscoveryContextVMMethods(_ bool) []string {
+	return []string{
+		"assistant/prompt", "assistant/approval", "assistant/cancel", "assistant/reconcile",
+		"services/secrets-reveal", "deployments/run-logs-get",
 	}
-	if dnsEnabled {
-		methods = append(methods, "dns/zone-create", "dns/policy-apply", "dns/record-set", "dns/drift-remediate", "dns/override-retire")
-	}
-	return methods
 }
 
 func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map[string]any {
@@ -1026,8 +1001,6 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 	if dnsEnabled {
 		capabilities = append(capabilities, "dns_endpoint_catalog")
 	}
-	// ML registry methods are registered on the encrypted request transport.
-	aiMLMethods := []string{"ml/model-create", "ml/model-update", "ml/model-delete", "ml/version-create", "ml/version-update", "ml/version-delete", "ml/endpoint-create", "ml/endpoint-update", "ml/endpoint-delete"}
 	transportKinds := map[string]int{
 		"contextvm_message":        kinds.ContextVMMessage,
 		"contextvm_gift_wrap":      kinds.ContextVMGiftWrap,
@@ -1052,11 +1025,11 @@ func discoveryControlPlane(llmEnabled, mcpTransportEnabled, dnsEnabled bool) map
 	aiML := map[string]any{
 		"enabled":               true,
 		"transport_kinds":       transportKinds,
-		"methods":               aiMLMethods,
+		"methods":               []string{},
 		"observable_kinds":      observableKinds,
 		"capabilities":          []string{"ml_model_registry_read_models", "ml_model_version_read_models", "ml_inference_endpoint_read_models", "ml_provenance_read_models", "ml_runtime_capability_read_models"},
 		"correlation_tags":      []string{"model", "model_version", "recipe", "run", "endpoint", "environment", "deployment", "artifact", "worker", "runtime", "e", "p", "status"},
-		"contextvm_commands":    len(aiMLMethods) > 0,
+		"contextvm_commands":    false,
 		"canonical_observables": true,
 		"unsupported_in_d1":     []string{"recipe_execution", "model_import_orchestration", "dataset_import", "evaluation", "benchmark", "fine_tune"},
 	}

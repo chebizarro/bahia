@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 )
 
 // MLIntentRegistry is the existing ML registry service mutation boundary.
@@ -25,10 +26,29 @@ type MLIntentRegistry interface {
 	DeleteInferenceEndpoint(context.Context, uuid.UUID) error
 }
 
-type MLIntentHandler struct{ registry MLIntentRegistry }
+type MLIntentHandler struct {
+	registry     MLIntentRegistry
+	environments interface {
+		GetEnvironmentByName(context.Context, string) (*domain.Environment, error)
+	}
+	workers repository.WorkerRepository
+}
 
-func NewMLIntentHandler(registry MLIntentRegistry) *MLIntentHandler {
-	return &MLIntentHandler{registry: registry}
+// NewMLIntentHandler accepts optional dependencies by type: an environment
+// lookup (D79 inference ops) and/or a worker repository (D80 pin).
+func NewMLIntentHandler(registry MLIntentRegistry, deps ...any) *MLIntentHandler {
+	h := &MLIntentHandler{registry: registry}
+	for _, dep := range deps {
+		switch d := dep.(type) {
+		case repository.WorkerRepository:
+			h.workers = d
+		case interface {
+			GetEnvironmentByName(context.Context, string) (*domain.Environment, error)
+		}:
+			h.environments = d
+		}
+	}
+	return h
 }
 func (*MLIntentHandler) PermissionFor(string) domain.Permission { return domain.PermWriteServices }
 func (*MLIntentHandler) IsFleetScoped() bool                    { return true }
@@ -42,6 +62,10 @@ func (h *MLIntentHandler) HandleIntent(ctx context.Context, intent *Intent) erro
 		return fmt.Errorf("marshal ML intent: %w", err)
 	}
 	switch intent.Op {
+	case "model-import", "recipe-apply", "recipe-run", "inference-deploy", "inference-approval", "inference-rollback":
+		return h.handleMLOperation(ctx, intent, content)
+	case "pin":
+		return h.handlePin(ctx, intent)
 	case "model-create", "model-update":
 		var model domain.MLModel
 		if err := json.Unmarshal(content, &model); err != nil {
@@ -180,6 +204,62 @@ func (h *MLIntentHandler) HandleIntent(ctx context.Context, intent *Intent) erro
 	default:
 		return fmt.Errorf("unsupported op: ml %s — no durable mutation path", intent.Op)
 	}
+}
+
+// D80 pin operation: the endpoint record's placement_policy is the complete
+// desired state. MLRegistryService publishes its canonical record once.
+func (h *MLIntentHandler) handlePin(ctx context.Context, intent *Intent) error {
+	var payload struct {
+		WorkloadID    string `json:"workload_id"`
+		WorkloadKind  string `json:"workload_kind"`
+		EnvironmentID string `json:"environment_id"`
+		WorkerPubkey  string `json:"worker_pubkey"`
+	}
+	if err := decodeIntentContent(intent.Content, &payload); err != nil {
+		return err
+	}
+	id, err := uuid.Parse(strings.TrimSpace(payload.WorkloadID))
+	if err != nil || id == uuid.Nil || payload.WorkloadKind != "ml_inference" || intent.Coordinate != "endpoint:"+id.String() {
+		return fmt.Errorf("ml pin requires an inference workload_id and matching endpoint coordinate")
+	}
+	if !isHexNostrPubKey(payload.WorkerPubkey) {
+		return fmt.Errorf("ml pin requires a 32-byte lowercase hex worker_pubkey")
+	}
+	if h.workers == nil {
+		return fmt.Errorf("worker repository is not configured")
+	}
+	worker, err := h.workers.GetByPubKey(ctx, payload.WorkerPubkey)
+	if err != nil {
+		return err
+	}
+	if worker == nil {
+		return fmt.Errorf("pinned worker not found")
+	}
+	endpoint, err := h.registry.GetInferenceEndpoint(ctx, id)
+	if err != nil {
+		return err
+	}
+	if endpoint == nil {
+		return fmt.Errorf("ML inference endpoint not found")
+	}
+	if payload.EnvironmentID != "" && endpoint.EnvironmentID.String() != payload.EnvironmentID {
+		return fmt.Errorf("environment_id does not match ML inference endpoint environment")
+	}
+	if err := checkIntentRevision(intent, id.String(), true, endpoint.UpdatedAt); err != nil {
+		return err
+	}
+	updated := *endpoint
+	updated.PlacementPolicy = make(map[string]any, len(endpoint.PlacementPolicy)+1)
+	for key, value := range endpoint.PlacementPolicy {
+		updated.PlacementPolicy[key] = value
+	}
+	updated.PlacementPolicy["pinned_worker"] = payload.WorkerPubkey
+	if err := h.registry.CreateOrUpdateInferenceEndpoint(ctx, &updated); err != nil {
+		return err
+	}
+	intent.Result = map[string]any{"endpoint_id": id.String(), "pinned_worker": payload.WorkerPubkey}
+	intent.StatusData = intent.Result
+	return nil
 }
 
 func checkIntentRevision(intent *Intent, entity string, exists bool, actual time.Time) error {

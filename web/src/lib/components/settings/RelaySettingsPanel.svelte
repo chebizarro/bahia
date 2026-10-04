@@ -7,7 +7,6 @@
     RELAY_POLICY_TRUTH_STATES,
     applyRelayPolicy,
     buildRelayPolicyPayload,
-    callRelayAdmin,
     compareRelayPolicyTruthCandidates,
     getRelayPolicy,
     liveRelayPolicyTruth,
@@ -31,7 +30,6 @@
 
   let operatorPolicyInitialized = $state(false);
   let operatorPolicySaving = $state(false);
-  let relayAdminCalling = $state(false);
   let browserPolicyInput = $state('');
   let requestRelayPolicyInput = $state('');
   let servicePolicyInput = $state('');
@@ -39,9 +37,6 @@
   let nip34RelaysInput = $state('');
   let dmRelaysInput = $state('');
   let relayAdminTargetsInput = $state('[]');
-  let relayAdminTargetRef = $state('');
-  let relayAdminMethod = $state('supportedmethods');
-  let relayAdminParamsInput = $state('[]');
   let operatorPolicyHydrationStatus = $state('Waiting for trusted service discovery');
   let operatorPolicyHydrationError = $state('');
   let operatorPolicyHydratedAt = $state('');
@@ -130,6 +125,7 @@
     ];
     if (!servicePubkey || policyRelays.length === 0) return;
 
+    const caughtUpRelays = new Set();
     operatorPolicyHydrationStatus = 'loading service relay policy';
     operatorPolicyHydrationError = '';
     const unsubscribe = subscribeRelayPolicyReadModel({
@@ -183,9 +179,16 @@
           : 'Loaded directly from a live service-signed relay event';
         operatorPolicyHydrationError = '';
       },
-      onEose: () => {
-        if (!operatorPolicyObservedLive && !operatorPolicyHydrationSucceeded) {
-          operatorPolicyHydrationStatus = 'Live relay catch-up complete; durable projection remains authoritative';
+      onEose: (relay) => {
+        caughtUpRelays.add(relay);
+        if ((nostrConfig?.contextvm_relays?.length || 0) + (nostrConfig?.service_relays?.length || 0) > 0 &&
+            !operatorPolicyObservedLive && !operatorPolicyHydrationSucceeded &&
+            operatorPolicyTruthState !== RELAY_POLICY_TRUTH_STATES.UNAVAILABLE &&
+            caughtUpRelays.size >= new Set(policyRelays).size) {
+          operatorPolicyTruthState = RELAY_POLICY_TRUTH_STATES.NEVER_CONFIGURED;
+          operatorPolicyHydrationStatus = 'Relay catch-up confirmed no signed policy at the configured relays';
+          operatorPolicyHydrationError = '';
+          operatorPolicyInitialized = true;
         }
       },
       onClosed: (reason, relay, metadata = {}) => {
@@ -247,6 +250,7 @@
       const response = await getRelayPolicy();
       if (requestKey !== operatorPolicyProjectionKey) return;
       const projected = normalizeRelayPolicyProjectionResponse(response);
+      if (projected.truthState === RELAY_POLICY_TRUTH_STATES.LOADING) return;
       const projectedCandidate = { ...projected, service_key: requestKey };
       const candidateOrder = compareRelayPolicyTruthCandidates(projectedCandidate, operatorPolicyCandidate);
 
@@ -265,7 +269,7 @@
       }
 
       if (projected.truthState === RELAY_POLICY_TRUTH_STATES.UNAVAILABLE) {
-        setRelayPolicyUnavailable('The signer-first projection API reported canonical relay policy unavailable.');
+        setRelayPolicyUnavailable('The signed relay-policy state is unavailable in the event store.');
         return;
       }
 
@@ -330,11 +334,11 @@
       case RELAY_POLICY_TRUTH_STATES.UNAVAILABLE:
         return 'No canonical policy is being shown. Form values are only a noncanonical draft until hydration succeeds or an audited replacement is confirmed.';
       case RELAY_POLICY_TRUTH_STATES.NEVER_CONFIGURED:
-        return 'The signer-first durable projection confirms that no canonical relay policy has ever been accepted.';
+        return 'Configured relays completed catch-up without a canonical relay policy.';
       case RELAY_POLICY_TRUTH_STATES.INTENTIONALLY_EMPTY:
         return operatorPolicyObservedLive
           ? 'A live service-signed canonical event explicitly defines an empty policy.'
-          : 'The durable projection contains an explicit service-signed empty policy; this is not missing data.';
+          : 'The signed event store contains an explicit empty policy; this is not missing data.';
       case RELAY_POLICY_TRUTH_STATES.LOADED_STALE:
         return 'Showing the last-known-good service-signed projection. Relay synchronization is stale; absence was not treated as empty.';
       case RELAY_POLICY_TRUTH_STATES.LOADED_CACHED:
@@ -342,7 +346,7 @@
       case RELAY_POLICY_TRUTH_STATES.LOADED_LIVE:
         return 'Showing the newest validated service-signed event received from the live relay subscription.';
       default:
-        return 'Waiting for signer-first projection hydration or a validated live relay event.';
+        return 'Waiting for a validated service-signed relay event.';
     }
   }
 
@@ -466,20 +470,6 @@
       toast.error(err?.message || 'Failed to publish relay policy update');
     } finally {
       operatorPolicySaving = false;
-    }
-  }
-
-  async function runRelayAdminCall() {
-    relayAdminCalling = true;
-    try {
-      const params = parseJsonArray(relayAdminParamsInput, 'relay administration params');
-      const response = await callRelayAdmin({ targetRef: relayAdminTargetRef, method: relayAdminMethod, params });
-      const result = response?.result || response?.resultEvent || response;
-      toast.success(`Relay administration method accepted: ${JSON.stringify(result).slice(0, 160)}`);
-    } catch (err) {
-      toast.error(err?.message || 'Failed to publish relay administration request');
-    } finally {
-      relayAdminCalling = false;
     }
   }
 
@@ -688,7 +678,7 @@
         </label>
       {:else}
         <strong>Apply disabled while signed truth is loading</strong>
-        <p>Wait for signer-first projection hydration or a validated live event. Audited replacement is available only after the state is definitively unavailable.</p>
+        <p>Wait for canonical relay catch-up or a validated live event. Audited replacement is available only after the state is definitively unavailable.</p>
       {/if}
     </div>
   {/if}
@@ -702,14 +692,6 @@
     >Publish Relay Policy Update</LoadingButton>
   </div>
 
-  <div class="relay-admin-call">
-    <h3>Relay Administration</h3>
-    <p class="section-description">Administration requests are restricted to configured Bahia-owned or Bahia-authorized relay targets.</p>
-    <Input placeholder="target ref, e.g. sidecar" bind:value={relayAdminTargetRef} />
-    <Input placeholder="administration method, e.g. supportedmethods" bind:value={relayAdminMethod} />
-    <textarea class="relay-textarea monospace" rows="3" bind:value={relayAdminParamsInput} placeholder='JSON array params, e.g. []'></textarea>
-    <LoadingButton variant="secondary" loading={relayAdminCalling} onclick={runRelayAdminCall}>Run Administration Method</LoadingButton>
-  </div>
 </section>
 
 <section id="relays" class="settings-section">
@@ -955,19 +937,6 @@
     color: var(--text-muted);
     font-size: 0.75rem;
     font-weight: 400;
-  }
-
-  .relay-admin-call {
-    display: grid;
-    gap: 0.625rem;
-    margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--border-color);
-  }
-
-  .relay-admin-call h3 {
-    margin: 0;
-    font-size: 1rem;
   }
 
   .relay-summary,

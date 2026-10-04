@@ -37,7 +37,7 @@ test.describe('Deployment policy preview gate', () => {
     await expect(dialog.getByRole('button', { name: 'Sign & submit idempotently' })).toHaveCount(0);
 
     const operations = await page.evaluate(() => window.__BAHIA_E2E_PUBLIC_REQUESTS.map((request) => request.operation));
-    expect(operations).toContain('service/deploy-preview');
+    expect(operations).toContain('deployment/preview');
     expect(operations).not.toContain('service/deploy');
   });
 
@@ -51,9 +51,9 @@ test.describe('Deployment policy preview gate', () => {
     const dialog = await openDeployReliabilityStep(page);
     await dialog.getByRole('button', { name: 'Continue' }).click();
 
-    await expect(dialog.getByText('Exact signed desired state')).toBeVisible();
+    await expect(dialog.getByText('Accepted deployment plan')).toBeVisible();
     await expect(dialog.getByText('Policy preview reported blocking failures. Resolve them before creating a deployment intent.')).toBeVisible();
-    await expect(dialog.getByText('Artifact is missing a required signature.')).toBeVisible();
+    await expect(dialog.getByText(/1 blocker/)).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Sign & submit idempotently' })).toBeDisabled();
 
     const operations = await page.evaluate(() => window.__BAHIA_E2E_PUBLIC_REQUESTS.map((request) => request.operation));
@@ -74,7 +74,7 @@ test.describe('Deployment policy preview gate', () => {
 
     await page.evaluate(() => window.__BAHIA_E2E_PUBLIC_RESOLVE_POLICY_PREVIEW?.('allow'));
 
-    await expect(dialog.getByText('Exact signed desired state')).toBeVisible();
+    await expect(dialog.getByText('Accepted deployment plan')).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Sign & submit idempotently' })).toBeEnabled();
     await dialog.getByRole('button', { name: 'Sign & submit idempotently' }).click();
 

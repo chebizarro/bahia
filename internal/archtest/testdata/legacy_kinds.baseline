@@ -5,11 +5,8 @@
 1	internal/adapters/nostr/catalog.go kinds.ActionResult
 1	internal/adapters/nostr/catalog.go kinds.ActionStatus
 1	internal/adapters/nostr/catalog.go kinds.AdoptionImportRequest
-1	internal/adapters/nostr/catalog.go kinds.AdoptionImportResult
 1	internal/adapters/nostr/catalog.go kinds.AdoptionScanRequest
-1	internal/adapters/nostr/catalog.go kinds.AdoptionScanResult
 1	internal/adapters/nostr/catalog.go kinds.AdoptionStatus
-1	internal/adapters/nostr/catalog.go kinds.ArtifactRegister
 1	internal/adapters/nostr/catalog.go kinds.DeployRequest
 1	internal/adapters/nostr/catalog.go kinds.DeploymentApproval
 1	internal/adapters/nostr/catalog.go kinds.DeploymentResult
@@ -31,13 +28,10 @@
 1	internal/adapters/nostr/catalog.go kinds.ObservationResult
 1	internal/adapters/nostr/catalog.go kinds.ObservationSubmit
 1	internal/adapters/nostr/catalog.go kinds.PackageDriftDetect
-1	internal/adapters/nostr/catalog.go kinds.PackageDriftEvent
 1	internal/adapters/nostr/catalog.go kinds.PackagePromotionRequest
 1	internal/adapters/nostr/catalog.go kinds.PackagePublishIntent
 1	internal/adapters/nostr/catalog.go kinds.PackageRepositoryApply
 1	internal/adapters/nostr/catalog.go kinds.PackageRepositoryDelete
-1	internal/adapters/nostr/catalog.go kinds.PackageResult
-1	internal/adapters/nostr/catalog.go kinds.PackageStatus
 1	internal/adapters/nostr/catalog.go kinds.PackageYankRequest
 1	internal/adapters/nostr/catalog.go kinds.PolicyCreate
 1	internal/adapters/nostr/catalog.go kinds.PolicyDelete
@@ -63,15 +57,9 @@
 1	internal/adapters/nostr/catalog.go kinds.WorkerMaintenanceEnter
 1	internal/adapters/nostr/catalog.go kinds.WorkerMaintenanceExit
 1	internal/adapters/nostr/catalog.go kinds.WorkerPolicyApplyRequest
-1	internal/adapters/nostr/catalog.go kinds.WorkerResult
-1	internal/adapters/nostr/catalog.go kinds.WorkerStatus
 1	internal/adapters/nostr/catalog.go kinds.WorkerUncordonRequest
 1	internal/adapters/nostr/catalog.go kinds.WorkerUndrainRequest
 1	internal/adapters/nostr/catalog.go kinds.WorkloadPinRequest
-1	internal/adapters/nostr/dns_canonical_publisher.go nostr.KindDNSBackendState
-3	internal/adapters/nostr/dns_canonical_publisher.go nostr.KindDNSEndpointState
-1	internal/adapters/nostr/dns_canonical_publisher.go nostr.KindDNSPolicyState
-3	internal/adapters/nostr/dns_canonical_publisher.go nostr.KindDNSZoneState
 2	internal/adapters/nostr/projector.go nostr.KindDNSBackendState
 2	internal/adapters/nostr/projector.go nostr.KindDNSEndpointState
 2	internal/adapters/nostr/projector.go nostr.KindDNSPolicyState
@@ -86,10 +74,6 @@
 1	internal/adapters/nostr/subscriber.go literal 6961
 1	internal/adapters/nostr/subscriber.go literal 7961
 1	internal/adapters/sbom/index.go sbom.KindLegacySBOMIndex
-2	internal/controlplane/backup_contextvm_handlers.go controlplane.KindBackupObservation
-2	internal/controlplane/backup_contextvm_handlers.go controlplane.KindBackupRestoreStatus
-5	internal/controlplane/backup_contextvm_handlers.go controlplane.KindBackupRunStatus
-1	internal/controlplane/backup_contextvm_handlers.go controlplane.KindBackupVerificationStatus
 1	internal/controlplane/backup_kinds.go kinds.BackupObservation
 1	internal/controlplane/backup_kinds.go kinds.BackupRestoreStatus
 1	internal/controlplane/backup_kinds.go kinds.BackupRunStatus
@@ -123,13 +107,6 @@
 1	internal/controlplane/dns_kinds.go kinds.DNSRecordOverrideResult
 1	internal/controlplane/dns_kinds.go kinds.DNSZoneCreateRequest
 1	internal/controlplane/dns_kinds.go kinds.DNSZoneCreateResult
-7	internal/controlplane/operator_actions.go controlplane.KindAdoptionImportResult
-5	internal/controlplane/operator_actions.go controlplane.KindAdoptionScanResult
-1	internal/controlplane/package_handlers.go controlplane.KindPackageDriftEvent
-1	internal/controlplane/package_handlers.go controlplane.KindPackageResult
-1	internal/controlplane/package_handlers.go controlplane.KindPackageStatus
-2	internal/controlplane/reactor.go controlplane.KindArtifactRegister
-1	internal/controlplane/reactor.go kinds.ArtifactRegister
 1	internal/controlplane/reactor.go literal 31100
 1	internal/controlplane/reactor.go literal 5941
 1	internal/controlplane/reactor.go literal 5999
@@ -138,11 +115,8 @@
 1	internal/controlplane/reactor.go nostr.KindControlPlaneActionResult
 1	internal/controlplane/reactor.go nostr.KindControlPlaneActionStatus
 1	internal/controlplane/reactor.go nostr.KindControlPlaneAdoptionImportRequest
-1	internal/controlplane/reactor.go nostr.KindControlPlaneAdoptionImportResult
 1	internal/controlplane/reactor.go nostr.KindControlPlaneAdoptionScanRequest
-1	internal/controlplane/reactor.go nostr.KindControlPlaneAdoptionScanResult
 1	internal/controlplane/reactor.go nostr.KindControlPlaneAdoptionStatus
-1	internal/controlplane/reactor.go nostr.KindControlPlaneArtifactRegister
 1	internal/controlplane/reactor.go nostr.KindControlPlaneDeployRequest
 1	internal/controlplane/reactor.go nostr.KindControlPlaneDeploymentApproval
 1	internal/controlplane/reactor.go nostr.KindControlPlaneDeploymentResult
@@ -164,17 +138,13 @@
 1	internal/controlplane/reactor.go nostr.KindControlPlaneObservationResult
 1	internal/controlplane/reactor.go nostr.KindControlPlaneObservationSubmit
 1	internal/controlplane/reactor.go nostr.KindControlPlanePackageDriftDetect
-1	internal/controlplane/reactor.go nostr.KindControlPlanePackageDriftEvent
 1	internal/controlplane/reactor.go nostr.KindControlPlanePackagePromotionRequest
 1	internal/controlplane/reactor.go nostr.KindControlPlanePackagePublishIntent
 1	internal/controlplane/reactor.go nostr.KindControlPlanePackageRepositoryApply
 1	internal/controlplane/reactor.go nostr.KindControlPlanePackageRepositoryDelete
-1	internal/controlplane/reactor.go nostr.KindControlPlanePackageResult
-1	internal/controlplane/reactor.go nostr.KindControlPlanePackageStatus
 1	internal/controlplane/reactor.go nostr.KindControlPlanePackageYankRequest
 1	internal/controlplane/reactor.go nostr.KindControlPlanePolicyCreate
 1	internal/controlplane/reactor.go nostr.KindControlPlanePolicyDelete
-1	internal/controlplane/reactor.go nostr.KindControlPlanePolicyEvaluate
 1	internal/controlplane/reactor.go nostr.KindControlPlanePolicyUpdate
 1	internal/controlplane/reactor.go nostr.KindControlPlaneRemediationResult
 1	internal/controlplane/reactor.go nostr.KindControlPlaneRollbackRequest
@@ -196,13 +166,9 @@
 1	internal/controlplane/reactor.go nostr.KindControlPlaneWorkerMaintenanceEnter
 1	internal/controlplane/reactor.go nostr.KindControlPlaneWorkerMaintenanceExit
 1	internal/controlplane/reactor.go nostr.KindControlPlaneWorkerPolicyApplyRequest
-1	internal/controlplane/reactor.go nostr.KindControlPlaneWorkerResult
-1	internal/controlplane/reactor.go nostr.KindControlPlaneWorkerStatus
 1	internal/controlplane/reactor.go nostr.KindControlPlaneWorkerUncordonRequest
 1	internal/controlplane/reactor.go nostr.KindControlPlaneWorkerUndrainRequest
 1	internal/controlplane/reactor.go nostr.KindControlPlaneWorkloadPinRequest
-2	internal/controlplane/worker_handlers.go controlplane.KindWorkerResult
-1	internal/controlplane/worker_handlers.go controlplane.KindWorkerStatus
 2	internal/domain/soul.go domain.KindProvisioningResult
 2	internal/domain/soul.go domain.KindSoulActionLegacyResult
 1	internal/domain/soul.go literal 5950
@@ -259,15 +225,6 @@
 1	internal/kinds/policy.go kinds.WorkerUncordonRequest
 1	internal/kinds/policy.go kinds.WorkerUndrainRequest
 1	internal/kinds/policy.go kinds.WorkloadPinRequest
-2	internal/mcp/backup_command_publisher.go controlplane.KindBackupObservation
-2	internal/mcp/backup_command_publisher.go controlplane.KindBackupRestoreStatus
-5	internal/mcp/backup_command_publisher.go controlplane.KindBackupRunStatus
-1	internal/mcp/backup_command_publisher.go controlplane.KindBackupVerificationStatus
-1	internal/mcp/backup_tools.go controlplane.KindBackupObservation
-1	internal/mcp/backup_tools.go controlplane.KindBackupRestoreStatus
-1	internal/mcp/backup_tools.go controlplane.KindBackupRunStatus
-1	internal/mcp/backup_tools.go controlplane.KindBackupVerificationStatus
-1	internal/soulfactory/contextvm_handlers.go domain.KindProvisioningRequest
 3	internal/soulfactory/event_codec.go domain.KindProvisioningResult
 2	internal/soulfactory/event_codec.go domain.KindProvisioningStatus
 1	internal/soulfactory/event_codec.go domain.KindSoulActionLegacyResult

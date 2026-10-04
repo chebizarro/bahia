@@ -97,8 +97,8 @@ type ServiceCommandResult struct {
 }
 
 // BuildRequestNostrRequest is the signer-first build/request payload.
-// IdempotencyKey controls the ContextVM d tag and _meta.progressToken; it is
-// deliberately excluded from the strictly decoded business payload.
+// IdempotencyKey is the UUIDv7 intent ID used for safe request replay; it is
+// deliberately excluded from the business payload.
 type BuildRequestNostrRequest struct {
 	ServiceID               string            `json:"service_id"`
 	GitRef                  string            `json:"git_ref"`
@@ -108,8 +108,9 @@ type BuildRequestNostrRequest struct {
 	IdempotencyKey          string            `json:"-"`
 }
 
-// BuildCommandResult is the terminal acknowledgment for build/request.
+// BuildCommandResult is the accepted 30315 projection for a build request.
 type BuildCommandResult struct {
+	IntentID string `json:"intent_id,omitempty"`
 	Status   string `json:"status,omitempty"`
 	BuildID  string `json:"build_id,omitempty"`
 	GitSHA   string `json:"git_sha,omitempty"`
@@ -179,6 +180,7 @@ type ImportObservedArtifactResult struct {
 
 // ArtifactCommandResult is the terminal acknowledgment for signer-first artifact registration.
 type ArtifactCommandResult struct {
+	IntentID   string           `json:"intent_id,omitempty"`
 	Status     string           `json:"status,omitempty"`
 	Artifact   *domain.Artifact `json:"artifact,omitempty"`
 	ArtifactID string           `json:"artifact_id,omitempty"`
@@ -203,7 +205,8 @@ type DNSPolicyApplyRequest struct {
 // DNSRecordSetRequest is the signer-first dns/record-set payload. Operator
 // An empty zone requests reconciliation of all configured zones.
 type DNSDriftRemediateRequest struct {
-	Zone string `json:"zone,omitempty"`
+	Zone           string `json:"zone,omitempty"`
+	IdempotencyKey string `json:"-"`
 }
 
 // DNSCommandResult is the terminal acknowledgment for signer-first DNS mutations.
@@ -261,12 +264,13 @@ type EnvironmentCommandResult struct {
 
 // RouteAttachRequest is the signer-first service/route-attach payload.
 type RouteAttachRequest struct {
-	ServiceID        string                    `json:"service_id"`
-	EnvironmentID    string                    `json:"environment_id"`
-	DeploymentUnitID string                    `json:"deployment_unit_id,omitempty"`
-	PublicRoute      domain.PublicRouteRequest `json:"public_route"`
-	Internal         *bool                     `json:"internal,omitempty"`
-	IdempotencyKey   string                    `json:"idempotency_key,omitempty"`
+	ServiceID         string                    `json:"service_id"`
+	EnvironmentID     string                    `json:"environment_id"`
+	DeploymentUnitID  string                    `json:"deployment_unit_id,omitempty"`
+	PublicRoute       domain.PublicRouteRequest `json:"public_route"`
+	ExpectedUpdatedAt string                    `json:"expected_updated_at,omitempty"`
+	Internal          *bool                     `json:"internal,omitempty"`
+	IdempotencyKey    string                    `json:"idempotency_key,omitempty"`
 }
 
 // RollbackDeploymentNostrRequest is the explicit signer-first rollback target.

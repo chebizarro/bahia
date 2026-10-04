@@ -16,7 +16,7 @@ import Table from '$lib/components/Table.svelte';
   import { onStoreRefresh } from '$lib/nostr/boot.js';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
-  import { generateArtifactSBOM, importArtifactSBOM, inlineSBOMLimitMessage, MAX_CONTEXTVM_INLINE_SBOM_BYTES } from '$lib/stores/public-controlplane.svelte.js';
+  import { generateArtifactSBOM, importArtifactSBOM, inlineSBOMLimitMessage, MAX_INLINE_SBOM_BYTES } from '$lib/stores/public-controlplane.svelte.js';
   import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
   import { BAHIA_SBOM_AVAILABLE_LIST_SCHEMA, BAHIA_SBOM_REFERENCE_SCHEMA, SBOM_AVAILABILITY_LIST, SBOM_REFERENCE, SBOM_REFERENCE_TOPIC, SBOM_AVAILABILITY_TOPIC } from '$lib/nostr/kinds.gen.js';
   import {
@@ -285,7 +285,7 @@ import Table from '$lib/components/Table.svelte';
     subscribeGeneratedSBOMReferences();
     try {
       const event = await generateArtifactSBOM({ ...artifact, service_artifact_repo: service?.artifact_repo || '' });
-      sbomRequestEventId = event?.requestEventId || event?.id || null;
+      sbomRequestEventId = event?.event?.id || null;
       if (sbomGenerationStatus !== 'completed') sbomGenerationStatus = 'waiting';
       toast.success('SBOM generation started');
       void observeGeneratedSBOMReferences();
@@ -297,7 +297,7 @@ import Table from '$lib/components/Table.svelte';
   }
 
   function isSBOMImportFileOversized(file) {
-    return Number(file?.size || 0) > MAX_CONTEXTVM_INLINE_SBOM_BYTES;
+    return Number(file?.size || 0) > MAX_INLINE_SBOM_BYTES;
   }
 
   function detectSBOMImportFormat(file) {
@@ -361,7 +361,7 @@ import Table from '$lib/components/Table.svelte';
         payloadBase64,
         generator: { id: 'web-import' }
       });
-      sbomRequestEventId = event?.requestEventId || event?.id || null;
+      sbomRequestEventId = event?.event?.id || null;
       if (sbomGenerationStatus !== 'completed') sbomGenerationStatus = 'waiting';
       toast.success('SBOM import started');
       void observeGeneratedSBOMReferences();
@@ -518,11 +518,7 @@ import Table from '$lib/components/Table.svelte';
   function userFacingSBOMError(err) {
     const message = String(err?.message || '').trim();
     if (!message) return 'Failed to publish SBOM generation request';
-    return message
-      .replace(/ContextVM requests/gi, 'Bahia requests')
-      .replace(/ContextVM request/gi, 'Bahia request')
-      .replace(/ContextVM/gi, 'Bahia service')
-      .replace(/NIP-07|NIP-46/gi, 'Nostr signer');
+    return message.replace(/NIP-07|NIP-46/gi, 'Nostr signer');
   }
 
   function userFacingVerifyError(err) {
@@ -531,11 +527,7 @@ import Table from '$lib/components/Table.svelte';
     if (/method not found/i.test(message) || /not configured/i.test(message)) {
       return 'Signature verification is not available from this Bahia service yet.';
     }
-    return message
-      .replace(/ContextVM requests/gi, 'Bahia requests')
-      .replace(/ContextVM request/gi, 'Bahia request')
-      .replace(/ContextVM/gi, 'Bahia service')
-      .replace(/NIP-07|NIP-46/gi, 'Nostr signer');
+    return message.replace(/NIP-07|NIP-46/gi, 'Nostr signer');
   }
 </script>
 
@@ -676,7 +668,7 @@ import Table from '$lib/components/Table.svelte';
           <div class="section-header">
             <div>
               <h2 class="section-title"><SbomIcon size={20} strokeWidth={1.75} ariaHidden="true" /> <span>SBOM</span></h2>
-              <p class="section-subtitle">Generate or import SPDX and CycloneDX manifests by publishing signer-backed Nostr ContextVM requests. Completion is shown only after canonical <code>30078</code>/<code>30004</code> SBOM events arrive.</p>
+              <p class="section-subtitle">Generate or import SPDX and CycloneDX manifests with signed Nostr intents. Completion is shown only after canonical <code>30078</code>/<code>30004</code> SBOM events arrive.</p>
             </div>
             <div class="header-actions">
               <LoadingButton

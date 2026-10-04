@@ -95,15 +95,6 @@ func VirtualizationMethods() []string {
 	methods := []string{"virtualization-host/list", "virtualization-host/get", "vm-image/list", "vm-image/get", "vm-image/register", "persistent-vm/list", "persistent-vm/get", "persistent-vm/create", "persistent-vm/register-adoption", "persistent-vm/update", "persistent-vm/operate", "execution-plane/list", "execution-plane/get", "execution-plane/create", "execution-plane/update", "execution-plane/reconcile", "vm-checkpoint/list", "vm-checkpoint/get", "vm-export/list", "vm-export/get", "vm-operation/get", "vm-operation/approve", "vm-operation/approve-plan", "vm-operation/cancel"}
 	return methods
 }
-func (h *VirtualizationHandlers) Register(t *EncryptedRequestTransport) {
-	if t == nil {
-		return
-	}
-	for _, method := range VirtualizationMethods() {
-		method := method
-		t.RegisterContextVMHandler(method, func(ctx context.Context, r ContextVMRequest) (any, error) { return h.Handle(ctx, method, r) })
-	}
-}
 func strictVirtualizationParams(data json.RawMessage, out any) error {
 	if len(data) == 0 || len(data) > 1<<20 || bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
 		return domain.ErrInvalidValue

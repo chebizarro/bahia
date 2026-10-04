@@ -30,7 +30,6 @@ type EncryptedServiceHandlersConfig struct {
 	RBAC              *auth.RBAC
 	ReleasePromotions *ReleasePromotionAuthorizer
 	Logger            *zap.Logger
-	IntentProcessor   *IntentProcessor
 }
 
 type encryptedServiceHandlers struct {
@@ -42,23 +41,6 @@ type encryptedServiceHandlers struct {
 	authorizer        encryptedTenantAuthorizer
 	releasePromotions *ReleasePromotionAuthorizer
 	logger            *zap.Logger
-	intentProcessor   *IntentProcessor
-}
-
-// RegisterServiceContextVMHandlers wires the signer-first service deployment
-// method emitted by the operator CLI into the encrypted ContextVM runtime.
-func RegisterServiceContextVMHandlers(transport *EncryptedRequestTransport, cfg EncryptedServiceHandlersConfig) {
-	if transport == nil {
-		return
-	}
-	h := newEncryptedServiceHandlers(cfg)
-
-	transport.RegisterContextVMHandler(ContextVMMethodServiceDeployPreview, h.previewDeploy)
-	transport.RegisterContextVMHandler(ContextVMMethodServiceDeploy, h.deploy)
-	transport.RegisterContextVMHandler(ContextVMMethodServiceRouteAttach, h.routeAttach)
-	transport.RegisterContextVMHandler(ContextVMMethodServiceRollback, h.rollback)
-	transport.RegisterContextVMHandler(ContextVMMethodApprovalApprove, h.approve)
-	transport.RegisterContextVMHandler(ContextVMMethodApprovalReject, h.reject)
 }
 
 func newEncryptedServiceHandlers(cfg EncryptedServiceHandlersConfig) *encryptedServiceHandlers {
@@ -71,7 +53,6 @@ func newEncryptedServiceHandlers(cfg EncryptedServiceHandlersConfig) *encryptedS
 		authorizer:        encryptedTenantAuthorizer{services: cfg.Services, environments: cfg.Registry, rbac: cfg.RBAC},
 		releasePromotions: cfg.ReleasePromotions,
 		logger:            cfg.Logger,
-		intentProcessor:   cfg.IntentProcessor,
 	}
 	if h.logger == nil {
 		h.logger = zap.NewNop()
@@ -80,37 +61,6 @@ func newEncryptedServiceHandlers(cfg EncryptedServiceHandlersConfig) *encryptedS
 }
 
 func (h *encryptedServiceHandlers) previewDeploy(ctx context.Context, request ContextVMRequest) (any, error) {
-	if h.deploymentIntentEnabled() {
-		var params dto.ServiceDeployPreviewRequest
-		if err := decodeStrictContextVMParams(request.RPC.Params, &params); err != nil {
-			return nil, err
-		}
-		svc, _, err := h.authorizer.authorizeServiceEnvironment(ctx, request.Event, params.ServiceID, params.EnvironmentID, domain.PermWriteDeployments, domain.PermWriteDeployments)
-		if err != nil {
-			return nil, err
-		}
-		content := map[string]any{}
-		if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
-			return nil, err
-		}
-		intent := &Intent{Event: request.Event, Domain: "deployment", Op: "preview", OrgID: svc.OrgID,
-			IntentID:   intentIDFromContextVM(request, params.IdempotencyKey),
-			Coordinate: "deployment-preview:" + params.ServiceID.String() + ":" + params.EnvironmentID.String(),
-			Content:    content, Actor: request.Event.PubKey.Hex()}
-		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
-			return nil, err
-		}
-		if intent.Result == nil {
-			// Preview is read-only. On replay compute a fresh plan rather than
-			// persisting the full (possibly sensitive) plan in a local marker.
-			return h.previewDeployLegacy(ctx, request)
-		}
-		return intent.Result, nil
-	}
-	return h.previewDeployLegacy(ctx, request)
-}
-
-func (h *encryptedServiceHandlers) previewDeployLegacy(ctx context.Context, request ContextVMRequest) (any, error) {
 	if h.registry == nil || h.runtimeLifecycle == nil || h.policy == nil {
 		return nil, fmt.Errorf("service deployment control plane is not configured")
 	}
@@ -256,104 +206,7 @@ func (h *encryptedServiceHandlers) authorizeDeploymentServiceEnvironment(ctx con
 	return svc, env, nil
 }
 
-func (h *encryptedServiceHandlers) deploymentIntentEnabled() bool {
-	return h.intentProcessor != nil && h.intentProcessor.Handler("deployment") != nil
-}
-
-func (h *encryptedServiceHandlers) deploymentDualDispatch(ctx context.Context, request ContextVMRequest, op string, content map[string]any, coordinate string) (any, error) {
-	if request.Event == nil {
-		return nil, fmt.Errorf("requester event is required")
-	}
-	serviceID, err := uuid.Parse(firstIntentString(content, "service_id"))
-	if err != nil || serviceID == uuid.Nil {
-		if targetID, parseErr := uuid.Parse(firstIntentString(content, "deployment_intent_id")); parseErr == nil {
-			target, getErr := h.registry.GetDeploymentIntent(ctx, targetID)
-			if getErr != nil {
-				return nil, getErr
-			}
-			if target != nil {
-				serviceID = target.ServiceID
-			}
-		}
-	}
-	svc, err := h.registry.GetService(ctx, serviceID)
-	if err != nil {
-		return nil, err
-	}
-	if svc == nil {
-		return nil, fmt.Errorf("service not found")
-	}
-	intent := &Intent{OrgID: svc.OrgID, Domain: "deployment", Op: op, IntentID: effectiveIdempotencyKey(request, request.Event.ID.Hex()), Coordinate: coordinate, Content: content, Event: request.Event, Actor: request.Event.PubKey.Hex()}
-	if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
-		return nil, err
-	}
-	return map[string]any{"status": "accepted", "intent_id": intent.IntentID}, nil
-}
-
-func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVMRequest) (any, error) {
-	if !h.deploymentIntentEnabled() {
-		return h.deployLegacy(ctx, request)
-	}
-	var params dto.ServiceDeployRequest
-	if err := decodeStrictContextVMParams(request.RPC.Params, &params); err != nil {
-		return nil, err
-	}
-	if _, _, err := h.authorizer.authorizeServiceEnvironment(ctx, request.Event, params.ServiceID, params.EnvironmentID, domain.PermWriteDeployments, domain.PermWriteDeployments); err != nil {
-		return nil, err
-	}
-	var content map[string]any
-	if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
-		return nil, err
-	}
-	return h.deploymentDualDispatch(ctx, request, "create", content, params.ServiceID.String()+":"+params.EnvironmentID.String())
-}
-
-func (h *encryptedServiceHandlers) rollback(ctx context.Context, request ContextVMRequest) (any, error) {
-	if !h.deploymentIntentEnabled() {
-		return h.rollbackLegacy(ctx, request)
-	}
-	var params dto.ServiceRollbackRequest
-	if err := decodeStrictContextVMParams(request.RPC.Params, &params); err != nil {
-		return nil, err
-	}
-	if _, _, err := h.authorizer.authorizeServiceEnvironment(ctx, request.Event, params.ServiceID, params.EnvironmentID, domain.PermWriteDeployments, domain.PermWriteDeployments); err != nil {
-		return nil, err
-	}
-	var content map[string]any
-	if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
-		return nil, err
-	}
-	return h.deploymentDualDispatch(ctx, request, "rollback", content, params.ServiceID.String()+":"+params.EnvironmentID.String())
-}
-
-func (h *encryptedServiceHandlers) decide(ctx context.Context, request ContextVMRequest, methodDecision string) (any, error) {
-	if !h.deploymentIntentEnabled() {
-		return h.decideLegacy(ctx, request, methodDecision)
-	}
-	var params dto.DeploymentDecisionRequest
-	if err := decodeStrictContextVMParams(request.RPC.Params, &params); err != nil {
-		return nil, err
-	}
-	target, err := h.registry.GetDeploymentIntent(ctx, params.IntentID)
-	if err != nil {
-		return nil, err
-	}
-	if target == nil {
-		return nil, fmt.Errorf("deployment intent not found")
-	}
-	if _, _, err := h.authorizer.authorizeServiceEnvironment(ctx, request.Event, target.ServiceID, target.EnvironmentID, domain.PermApproveDeployments, domain.PermApproveDeployments); err != nil {
-		return nil, err
-	}
-	var content map[string]any
-	if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
-		return nil, err
-	}
-	content["deployment_intent_id"] = params.IntentID.String()
-	content["decision"] = methodDecision
-	return h.deploymentDualDispatch(ctx, request, methodDecision, content, params.IntentID.String())
-}
-
-func (h *encryptedServiceHandlers) deployLegacy(ctx context.Context, request ContextVMRequest) (result any, err error) {
+func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVMRequest) (result any, err error) {
 	if h.registry == nil || h.runtimeLifecycle == nil || h.policy == nil {
 		return nil, fmt.Errorf("service deployment control plane is not configured")
 	}
@@ -458,7 +311,7 @@ func (h *encryptedServiceHandlers) deployLegacy(ctx context.Context, request Con
 	requestedBy, metadata, approvalMetadata, artifactDigest, target, err := h.deploymentIntentMetadata(
 		ctx,
 		request,
-		ContextVMMethodServiceDeploy,
+		"deployment/create",
 		serviceID,
 		environmentID,
 		artifactID,
@@ -551,32 +404,6 @@ func (h *encryptedServiceHandlers) deployLegacy(ctx context.Context, request Con
 }
 
 func (h *encryptedServiceHandlers) routeAttach(ctx context.Context, request ContextVMRequest) (any, error) {
-	if h.deploymentIntentEnabled() {
-		var params dto.ServiceRouteAttachRequest
-		if err := decodeStrictContextVMParams(request.RPC.Params, &params); err != nil {
-			return nil, err
-		}
-		svc, _, err := h.authorizer.authorizeServiceEnvironment(ctx, request.Event, params.ServiceID, params.EnvironmentID, domain.PermWriteDeployments, domain.PermWriteDeployments)
-		if err != nil {
-			return nil, err
-		}
-		content := map[string]any{}
-		if err := json.Unmarshal(request.RPC.Params, &content); err != nil {
-			return nil, err
-		}
-		intent := &Intent{Event: request.Event, Domain: "deployment", Op: "route-attach", OrgID: svc.OrgID,
-			IntentID:   intentIDFromContextVM(request, params.IdempotencyKey),
-			Coordinate: "deployment-route:" + params.ServiceID.String() + ":" + params.EnvironmentID.String(),
-			Content:    content, Actor: request.Event.PubKey.Hex()}
-		if err := h.intentProcessor.ProcessInProcess(ctx, intent); err != nil {
-			return nil, err
-		}
-		return intent.Result, nil
-	}
-	return h.routeAttachLegacy(ctx, request)
-}
-
-func (h *encryptedServiceHandlers) routeAttachLegacy(ctx context.Context, request ContextVMRequest) (any, error) {
 	if h.registry == nil || h.policy == nil || h.publicRoutes == nil {
 		return nil, fmt.Errorf("service deployment control plane is not configured")
 	}
@@ -629,7 +456,7 @@ func (h *encryptedServiceHandlers) routeAttachLegacy(ctx context.Context, reques
 		return nil, fmt.Errorf("route attachment blocked by policy: %s", summarizePolicyBlockReason(evaluation))
 	}
 	requestedBy := ""
-	metadata := map[string]any{"contextvm_method": ContextVMMethodServiceRouteAttach}
+	metadata := map[string]any{"intent_op": "deployment/route-attach"}
 	if request.Event != nil {
 		requestedBy = strings.TrimSpace(request.Event.PubKey.Hex())
 		if request.Event.ID.Hex() != "" {
@@ -785,8 +612,8 @@ func cloneDesiredServiceSpec(source *domain.DesiredServiceSpec) (*domain.Desired
 	return &cloned, nil
 }
 
-func (h *encryptedServiceHandlers) rollbackLegacy(ctx context.Context, request ContextVMRequest) (_ any, retErr error) {
-	ctx, span := telemetry.StartOperation(ctx, "bahia.release.rollback", attribute.String("rpc.method", ContextVMMethodServiceRollback))
+func (h *encryptedServiceHandlers) rollback(ctx context.Context, request ContextVMRequest) (_ any, retErr error) {
+	ctx, span := telemetry.StartOperation(ctx, "bahia.release.rollback", attribute.String("intent.op", "deployment/rollback"))
 	defer func() {
 		outcome := "success"
 		if retErr != nil {
@@ -865,7 +692,7 @@ func (h *encryptedServiceHandlers) rollbackLegacy(ctx context.Context, request C
 	requestedBy, metadata, approvalMetadata, artifactDigest, target, err := h.deploymentIntentMetadata(
 		ctx,
 		request,
-		ContextVMMethodServiceRollback,
+		"deployment/rollback",
 		params.ServiceID,
 		params.EnvironmentID,
 		params.TargetArtifactID,
@@ -989,15 +816,7 @@ func desiredStateHashesEqual(expected, actual string) bool {
 	return subtle.ConstantTimeCompare(expectedBytes, actualBytes) == 1
 }
 
-func (h *encryptedServiceHandlers) approve(ctx context.Context, request ContextVMRequest) (any, error) {
-	return h.decide(ctx, request, "approve")
-}
-
-func (h *encryptedServiceHandlers) reject(ctx context.Context, request ContextVMRequest) (any, error) {
-	return h.decide(ctx, request, "reject")
-}
-
-func (h *encryptedServiceHandlers) decideLegacy(ctx context.Context, request ContextVMRequest, methodDecision string) (result any, err error) {
+func (h *encryptedServiceHandlers) decide(ctx context.Context, request ContextVMRequest, methodDecision string) (result any, err error) {
 	if h.registry == nil {
 		return nil, fmt.Errorf("service deployment control plane is not configured")
 	}

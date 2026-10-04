@@ -38,7 +38,7 @@ export async function publishFixtureEvent(relay, event) {
 
 /** Pure daemon wire template, shared by real-relay and browser-mock harnesses. */
 export function buildDaemonIntentStatus(intent, { servicePubkey, status = 'accepted', reason = '', id,
-  createdAt, created_at } = {}) {
+  createdAt, created_at, data, evaluation } = {}) {
   const tag = name => intent.tags?.find(item => item[0] === name)?.[1] || '';
   const coordinate = tag('d');
   const intentId = tag('intent_id');
@@ -50,7 +50,8 @@ export function buildDaemonIntentStatus(intent, { servicePubkey, status = 'accep
     tags: [['d', `intent-status:${intent.pubkey}:${coordinate}`], ['domain', 'intent'], ['status', status],
       ['t', 'intent-status'], ['p', intent.pubkey], ['intent_id', intentId], ['e', intent.id],
       ...(reason ? [['reason', reason]] : [])],
-    content: JSON.stringify({ status, intent_id: intentId, coordinate, reason })
+    content: JSON.stringify({ status, intent_id: intentId, coordinate, reason,
+      ...(data !== undefined ? { data } : {}), ...(evaluation !== undefined ? { evaluation } : {}) })
   };
 }
 

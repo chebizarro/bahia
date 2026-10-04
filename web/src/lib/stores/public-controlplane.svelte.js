@@ -1,9 +1,10 @@
 import { goto } from '$app/navigation';
-import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
-import { CONTEXTVM_MESSAGE_KIND, publishEncryptedRequest, requestEncryptedResult } from '$lib/nostr/encrypted-controlplane.js';
-import { bootstrapControlplane } from './controlplane.svelte.js';
+import { parseJsonContent } from '$lib/nostr/client.js';
 import { mintEntityId, withEntityId } from '$lib/entity-id.js';
-import { publishIntent, canonicalIntentRecord, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
+import { publishIntent, publishIntentForStatus, canonicalIntentRecord, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
+import { artifactRegisterIntent, observedArtifactImportIntent, adoptionImportIntent,
+  deploymentPreviewIntent, deploymentRouteAttachIntent, policyEvaluateIntent } from '$lib/nostr/last-ops-intents.js';
+import { adoptionScanIntent, sbomIntent } from '$lib/nostr/final-ops-intents.js';
 import { orgRoles } from './auth-roles.svelte.js';
 import { orgsState } from './orgs.svelte.js';
 import { currentSystemInfo } from './system.svelte.js';
@@ -37,25 +38,6 @@ async function mutateIntent(domain, op, payload, id = payload?.id) {
   return publishIntent({ domain, op, coordinate, orgId, content, currentRecord: current?.content });
 }
 
-function operationResultEvent({ requestEventId, resultEvent, result }) {
-  if (result !== undefined) {
-    return {
-      id: resultEvent?.id || requestEventId || '',
-      requestEventId: requestEventId || '',
-      kind: resultEvent?.kind || 25910,
-      tags: resultEvent?.tags || [['e', requestEventId || '']],
-      content: JSON.stringify(result ?? {})
-    };
-  }
-  return resultEvent || {
-    id: requestEventId || '',
-    requestEventId: requestEventId || '',
-    kind: 25910,
-    tags: [['e', requestEventId || '']],
-    content: JSON.stringify({})
-  };
-}
-
 function unwrapCommandPayload(content) {
   if (!content || typeof content !== 'object' || Array.isArray(content)) return content;
   const status = String(content.status || '').toLowerCase();
@@ -68,72 +50,6 @@ function unwrapCommandPayload(content) {
 export function resultContent(event) {
   if (event?.pending) return { ...event.desiredState, status: 'pending', message: 'Signed intent pending daemon acceptance' };
   return unwrapCommandPayload(parseJsonContent(event, {}));
-}
-
-export function throwIfErrorResult(event, operation = '') {
-  const rawContent = parseJsonContent(event, {});
-  const status = String(getTagValue(event, 'status') || rawContent?.status || '').toLowerCase();
-  if (status === 'error' || status === 'failed') {
-    const payloadError = rawContent?.error;
-    const message = typeof payloadError === 'object' && payloadError !== null ? payloadError.message : payloadError;
-    const error = new Error(getTagValue(event, 'error') || message || rawContent?.message || event.content || 'Nostr command failed');
-    const code = typeof payloadError === 'object' && payloadError !== null
-      ? payloadError.code
-      : rawContent?.code ?? rawContent?.error_code;
-    const data = typeof payloadError === 'object' && payloadError !== null
-      ? payloadError.data
-      : rawContent?.data;
-    if (code !== undefined) error.code = code;
-    if (data !== undefined) error.data = data;
-    if (operation) error.operation = operation;
-    throw error;
-  }
-  return event;
-}
-
-export async function publishCommand({ operation, tags = [], content = {}, payload, signal, timeoutMs, requestId } = {}) {
-  if (typeof operation !== 'string' || !operation.trim()) {
-    throw new Error('ContextVM operation is required for Nostr control-plane commands');
-  }
-  const bootstrap = await bootstrapControlplane();
-  if (!bootstrap?.ok) {
-    throw new Error(bootstrap?.reason || 'Failed to bootstrap relay-backed control plane');
-  }
-  const response = await requestEncryptedResult({
-    operation,
-    payload: payload ?? content,
-    tags,
-    kind: CONTEXTVM_MESSAGE_KIND,
-    resultKinds: [CONTEXTVM_MESSAGE_KIND],
-    signal,
-    timeoutMs,
-    ...(requestId ? { requestId } : {})
-  });
-  return throwIfErrorResult(operationResultEvent(response), operation);
-}
-
-/**
- * Publish a ContextVM command and return immediately after relay acceptance.
- * Does NOT wait for a result event — the caller must subscribe to canonical
- * observables for durable progress and terminal truth (per AGENTS.md).
- * Use this for long-running operations (e.g. sbom/generate) where completion
- * is detected via scoped subscriptions, not timeout-based result waiting.
- */
-export async function publishCommandOnly({ operation, tags = [], content = {}, payload, signal } = {}) {
-  if (typeof operation !== 'string' || !operation.trim()) {
-    throw new Error('ContextVM operation is required for Nostr control-plane commands');
-  }
-  const bootstrap = await bootstrapControlplane();
-  if (!bootstrap?.ok) {
-    throw new Error(bootstrap?.reason || 'Failed to bootstrap relay-backed control plane');
-  }
-  return publishEncryptedRequest({
-    operation,
-    payload: payload ?? content,
-    tags,
-    kind: CONTEXTVM_MESSAGE_KIND,
-    signal
-  });
 }
 
 // Create intents carry a client-minted entity id (bahia-irsry.35). Callers that
@@ -163,21 +79,10 @@ export function deleteEnvironment(id, force = false) {
 }
 
 export async function previewServiceDeployment(payload) {
-  const unitId = String(payload?.deployment_unit_id || '').trim();
-  const event = await publishCommand({
-    operation: 'service/deploy-preview',
-    tags: [
-      ['service', payload?.service_id],
-      ['environment', payload?.environment_id],
-      ...(unitId ? [['unit', unitId]] : []),
-      ['artifact', payload?.artifact_id]
-    ].filter((tag) => tag[1]),
-    content: {
-      ...payload,
-      ...(unitId ? { deployment_unit_id: unitId } : {})
-    }
-  });
-  return resultContent(event);
+  const status = await publishIntentForStatus(deploymentPreviewIntent(payload,
+    intentOrgId({ ...payload, org_id: payload.org_id || serviceOrgId(payload.service_id) }, null, 'deployment')));
+  if (!status?.data) throw new Error('Accepted deployment preview has no plan data');
+  return status.data;
 }
 
 function serviceOrgId(serviceId) {
@@ -264,7 +169,30 @@ export function approveLLMDeploymentIntent(id) { return decideLLMDeployment(id, 
 export function rejectLLMDeploymentIntent(id) { return decideLLMDeployment(id, 'reject'); }
 
 export function registerArtifact(payload) {
-  return publishCommand({ operation: 'artifact/register', tags: [['service', payload.service_id], ['build', payload.build_id]].filter((tag) => tag[1]), content: payload });
+  return publishIntent(artifactRegisterIntent(payload,
+    intentOrgId({ ...payload, org_id: payload.org_id || serviceOrgId(payload.service_id) }, null, 'artifact')));
+}
+
+export function importObservedArtifact(payload) {
+  return publishIntent(observedArtifactImportIntent(payload,
+    intentOrgId({ ...payload, org_id: payload.org_id || serviceOrgId(payload.service_id) }, null, 'artifact')));
+}
+
+export function importAdoption(payload) {
+  const orgId = intentOrgId(payload, null, 'adoption');
+  return publishIntent(adoptionImportIntent(payload, orgId));
+}
+
+export async function scanAdoption(payload) {
+  const orgId = intentOrgId(payload, null, 'adoption');
+  const status = await publishIntentForStatus(adoptionScanIntent(payload, orgId));
+  if (!Array.isArray(status.data?.findings)) throw new Error('Accepted adoption scan has no findings data');
+  return status.data;
+}
+
+export function attachDeploymentRoute(payload) {
+  return publishIntent(deploymentRouteAttachIntent(payload,
+    intentOrgId({ ...payload, org_id: payload.org_id || serviceOrgId(payload.service_id) }, null, 'deployment')));
 }
 
 function artifactDigest(artifact) {
@@ -301,11 +229,9 @@ function artifactDisplayName(artifact) {
   return String(artifact?.name || artifact?.image_repo || artifact?.image_tag || artifact?.id || '').trim();
 }
 
-// An inline SBOM travels base64-encoded (4/3 larger) inside one relay message,
-// and Bahia's relay drops frames over 512,000 bytes without an OK. 360 KiB
-// encodes to 491,520 bytes and leaves room for the envelope. The daemon
-// enforces the same limit (maxContextVMInlineSBOMBytes).
-export const MAX_CONTEXTVM_INLINE_SBOM_BYTES = 360 * 1024;
+// Inline SBOM data is base64-encoded in one relay event; keep room for the
+// signed intent envelope below the relay's 512 KiB message limit.
+export const MAX_INLINE_SBOM_BYTES = 360 * 1024;
 
 function normalizeSBOMFormat(format) {
   const normalized = String(format || '').trim().toLowerCase();
@@ -332,16 +258,11 @@ function decodedBase64Length(payloadBase64) {
   return Math.floor((normalized.length * 3) / 4) - padding;
 }
 
-function inlineSBOMSourceKey(payloadBase64) {
-  const normalized = String(payloadBase64 || '').replace(/\s/g, '');
-  return `inline:${decodedBase64Length(normalized)}:${normalized.slice(0, 24)}:${normalized.slice(-24)}`;
-}
-
 export function inlineSBOMLimitMessage() {
-  return `Inline SBOM imports are limited to ${MAX_CONTEXTVM_INLINE_SBOM_BYTES} bytes (360 KiB); upload larger SBOM files to Blossom and import them by location.`;
+  return `Inline SBOM imports are limited to ${MAX_INLINE_SBOM_BYTES} bytes (360 KiB); upload larger SBOM files to Blossom and import them by location.`;
 }
 
-export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx'], generator = 'syft', signal } = {}) {
+export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx'], generator = 'syft' } = {}) {
   const artifactId = String(artifact?.id || '').trim();
   if (!artifactId) throw new Error('artifact id is required');
   const digest = artifactDigest(artifact);
@@ -351,22 +272,7 @@ export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx']
   const normalizedFormats = Array.from(new Set((Array.isArray(formats) ? formats : [formats]).map((format) => String(format || '').trim()).filter(Boolean)));
   if (normalizedFormats.length === 0) throw new Error('at least one SBOM format is required');
   const generatorId = String(generator || 'syft').trim() || 'syft';
-  const idempotencyKey = `web.sbom.generate:artifact:${artifactId}:${digest}:${normalizedFormats.join(',')}:${generatorId}`;
-  // Publish-only: do NOT wait for a ContextVM result with a timeout.
-  // SBOM generation is a long-running operation; terminal truth arrives as
-  // canonical 30078/30004 observable events via the caller's scoped subscription.
-  return publishCommandOnly({
-    operation: 'sbom/generate',
-    tags: [
-      ['domain', 'sbom'],
-      ['operation', 'sbom/generate'],
-      ['subject_type', 'artifact'],
-      ['artifact', artifactId],
-      ['subject', digest],
-      ['generator', generatorId]
-    ],
-    content: {
-      idempotencyKey,
+  return publishIntent(sbomIntent('generate', {
       subject: {
         type: 'artifact',
         id: artifactId,
@@ -380,12 +286,10 @@ export function generateArtifactSBOM(artifact, { formats = ['spdx', 'cyclonedx']
       formats: normalizedFormats,
       generator: generatorId,
       storage: 'blossom'
-    },
-    signal
-  });
+    }, intentOrgId(artifact, null, 'sbom')));
 }
 
-export function importArtifactSBOM(artifact, { format = 'spdx', payloadBase64 = '', location = null, storage = '', generator = { id: 'import' }, idempotencyKey = '', signal } = {}) {
+export function importArtifactSBOM(artifact, { format = 'spdx', payloadBase64 = '', location = null, storage = '', generator = { id: 'import' } } = {}) {
   const artifactId = String(artifact?.id || '').trim();
   if (!artifactId) throw new Error('artifact id is required');
   const digest = artifactDigest(artifact);
@@ -403,27 +307,12 @@ export function importArtifactSBOM(artifact, { format = 'spdx', payloadBase64 = 
   const hasLocation = Boolean(normalizedLocation?.uri);
   if (hasInlinePayload && hasLocation) throw new Error('provide either inline payloadBase64 or location, not both');
   if (!hasInlinePayload && !hasLocation) throw new Error('SBOM import requires an inline payload or a Blossom/REST compatibility import reference');
-  if (hasInlinePayload && decodedBase64Length(inlinePayload) > MAX_CONTEXTVM_INLINE_SBOM_BYTES) {
+  if (hasInlinePayload && decodedBase64Length(inlinePayload) > MAX_INLINE_SBOM_BYTES) {
     throw new Error(inlineSBOMLimitMessage());
   }
   const generatorInfo = normalizeSBOMGenerator(generator, 'import');
   const storageType = String(storage || normalizedLocation?.type || 'blossom').trim() || 'blossom';
-  const sourceKey = hasLocation ? `location:${normalizedLocation.type}:${normalizedLocation.uri}` : inlineSBOMSourceKey(inlinePayload);
-  const finalIdempotencyKey = String(idempotencyKey || '').trim() || `web.sbom.import:artifact:${artifactId}:${digest}:${normalizedFormat}:${sourceKey}:${generatorInfo.id}`;
-
-  return publishCommandOnly({
-    operation: 'sbom/import',
-    tags: [
-      ['domain', 'sbom'],
-      ['operation', 'sbom/import'],
-      ['subject_type', 'artifact'],
-      ['artifact', artifactId],
-      ['subject', digest],
-      ['format', normalizedFormat],
-      ['generator', generatorInfo.id]
-    ],
-    content: {
-      idempotencyKey: finalIdempotencyKey,
+  return publishIntent(sbomIntent('import', {
       subject: {
         type: 'artifact',
         id: artifactId,
@@ -434,9 +323,7 @@ export function importArtifactSBOM(artifact, { format = 'spdx', payloadBase64 = 
       ...(hasInlinePayload ? { payloadBase64: inlinePayload } : { location: normalizedLocation }),
       storage: storageType,
       generator: generatorInfo
-    },
-    signal
-  });
+    }, intentOrgId(artifact, null, 'sbom')));
 }
 
 export function promotePackage(payload) {
@@ -468,17 +355,9 @@ export function deletePolicy(id) {
 }
 
 export async function evaluatePolicy(payload) {
-  const event = await publishCommand({
-    operation: 'policy/evaluate',
-    tags: [
-      ['service', payload.service_id],
-      ['environment', payload.environment_id],
-      ['unit', payload.deployment_unit_id],
-      ['artifact', payload.artifact_id]
-    ].filter((tag) => tag[1]),
-    content: payload
-  });
-  return resultContent(event);
+  const status = await publishIntentForStatus(policyEvaluateIntent(payload, intentOrgId(payload, null, 'policy')));
+  if (!status?.evaluation) throw new Error('Accepted policy evaluation has no evaluation data');
+  return status.evaluation;
 }
 
 function backupMetadata(source, metadata = {}) {

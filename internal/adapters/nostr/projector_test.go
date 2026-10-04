@@ -969,8 +969,18 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 	if !ok {
 		t.Fatalf("control_plane.methods missing: %#v", controlPlane["methods"])
 	}
-	for _, method := range []string{"service/deploy-preview", "service/deploy", "service/rollback", "worker/cordon", "dns/zone-create", "dns/record-set", "dns/override-retire", "sbom/generate", "sbom/import"} {
+	for _, method := range []string{"assistant/prompt", "assistant/approval", "assistant/cancel", "assistant/reconcile", "services/secrets-reveal", "deployments/run-logs-get"} {
 		assertDiscoveryStringContains(t, methods, method)
+	}
+	if len(methods) != 6 {
+		t.Fatalf("control_plane.methods must advertise exactly six retained methods, got %v", methods)
+	}
+	aiML, ok := controlPlane["ai_ml"].(map[string]any)
+	if !ok || aiML["contextvm_commands"] != false {
+		t.Fatalf("ai_ml must not advertise ContextVM commands: %#v", controlPlane["ai_ml"])
+	}
+	if mlMethods, ok := aiML["methods"].([]any); !ok || len(mlMethods) != 0 {
+		t.Fatalf("ai_ml.methods must be empty, got %#v", aiML["methods"])
 	}
 	assertDiscoveryContainsNoLegacyKinds(t, payload)
 }

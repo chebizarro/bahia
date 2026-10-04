@@ -1,5 +1,7 @@
 # Artifacts
 
+`sbom/generate|import` and `artifact/signature-verify|register-build-result` are signed request intents with the [D80 content shapes](../../../web/tests/fixtures/d80-intent-content.json). Their `30315` data is a bounded acknowledgement or count, not the SBOM, signature evidence, or artifact record. Read those from the existing canonical families.
+
 An **Artifact** is an immutable container image registered with Bahia — the unit of deployment.
 
 ## Overview
@@ -36,11 +38,13 @@ hiveci:
   allow_manual_artifact_registration: false
 ```
 
-The **Builds** page also provides an idempotent **Register verified build artifact** recovery action for a successful result. The signed ContextVM request contains only `build_id`; repository, tag, digest, CI provenance, signatures, SBOM reference, scan state, and policy state come from verified server-side evidence.
+Verified HiveCI build-result artifact registration is daemon-owned; there is no operator register-result action. Repository, tag, digest, CI provenance, signatures, SBOM reference, scan state, and policy state come from verified server-side evidence.
 
 ### Advanced manual registration
 
 The legacy `POST /api/v1/artifacts` mutation has been removed. Signed kind `5985`/`bahia_register_artifact` registration is an advanced recovery path and is rejected unless `hiveci.allow_manual_artifact_registration: true` is explicitly configured.
+
+The web control-plane API can submit an operator-supplied artifact registration as a signed kind-30900 `artifact/register` intent at `artifact:<client-minted-id>`. It carries the build and service IDs, repository, tag, and immutable digest; the daemon publishes the canonical registry record and a bounded acceptance status. Observed-artifact import uses `artifact/import-observed` at `artifact-import:<service-id>:<environment-id>:<digest>`. The separate Builds-page recovery action still delegates verification of a trusted HiveCI result to the daemon using only its build ID; it does not substitute operator-supplied metadata for that verification.
 
 Even when enabled, the server requires an existing service/build binding, the service's exact artifact repository, a non-empty tag, and a full `sha256:` manifest digest. It resolves the tag in the configured registry and refuses missing, mutable-only, unverifiable, or tag/digest-mismatched references. Manual registration cannot bypass canonical deduplication or verification.
 
@@ -92,21 +96,17 @@ Each `30078` reference contains a DSSE envelope over the exact in-toto statement
 
 ### Generating or importing SBOMs
 
-Signer-first generation and import use ContextVM methods over kind `25910`:
+The browser publishes signed kind-`30900` `sbom/generate` or `sbom/import` request intents. The content follows the [D80 fixture](../../../web/tests/fixtures/d80-intent-content.json); the signed `intent_id` is also the `idempotencyKey`. For example, generation content is:
 
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": "sbom-art-456-spdx",
-  "method": "sbom/generate",
-  "params": {
-    "idempotencyKey": "sbom-art-456-spdx",
-    "subject": { "type": "artifact", "id": "art-456", "digest": "sha256:<artifact-digest>" },
-    "source": { "kind": "oci-image", "locator": "registry.example.com/my-api@sha256:<artifact-digest>" },
-    "formats": ["spdx", "cyclonedx"],
-    "generator": "syft",
-    "storage": "blossom"
-  }
+  "intent_id": "<intent-uuid>",
+  "idempotencyKey": "<intent-uuid>",
+  "subject": { "type": "artifact", "id": "art-456", "digest": "sha256:<artifact-digest>" },
+  "source": { "kind": "oci-image", "locator": "registry.example.com/my-api@sha256:<artifact-digest>" },
+  "formats": ["spdx", "cyclonedx"],
+  "generator": "syft",
+  "storage": "blossom"
 }
 ```
 
@@ -151,8 +151,8 @@ Use `bahia_get_sbom` for the compatibility projection, `bahia_get_sbom_packages`
 1. Go to **Artifacts → Registry**.
 2. Use the per-row **Generate SBOM** or **Regenerate SBOM** action to open the artifact directly on its SBOM tab.
 3. On artifact detail, the same **Generate SBOM** or **Regenerate SBOM** action is also visible in the page header and on the SBOM tab.
-4. The browser opens the SBOM tab, reads artifact-scoped `30078` SBOM references and `30004` availability lists from its event store (routed by kind and `t` topic), then publishes a signer-backed encrypted ContextVM `sbom/generate` request. It does not call a REST generation endpoint.
-5. Bahia only uses explicit image refs or configured artifact repositories plus immutable digests as generation sources. The ContextVM reply only acknowledges request handling; durable completion is shown when canonical SBOM reference or availability events arrive.
+4. The browser opens the SBOM tab, reads artifact-scoped `30078` SBOM references and `30004` availability lists from its event store (routed by kind and `t` topic), then publishes a signed `sbom/generate` intent. It does not call a REST generation endpoint.
+5. Bahia only uses explicit image refs or configured artifact repositories plus immutable digests as generation sources. The requester-scoped `30315` status acknowledges handling; durable completion is shown when canonical SBOM reference or availability events arrive.
 6. View attestation details, Blossom location, hashes, NTIA status, and package list directly from the canonical SBOM events and compatibility projection data.
 
 ## Signatures
@@ -161,7 +161,7 @@ Artifacts can have cryptographic signatures for provenance.
 
 ### Viewing and verifying signatures
 
-Use `bahia_list_signatures`, `bahia_list_verified_signatures`, `bahia_has_verified_signature`, and `bahia_verify_signatures` through MCP. Verification discovers supported signatures, evaluates configured trust roots, stores results, and returns status.
+Use `bahia_list_signatures`, `bahia_list_verified_signatures`, `bahia_has_verified_signature`, and `bahia_verify_signatures` through MCP. Verification submits an `artifact/signature-verify` intent. Its bounded status reports counts; canonical signature records carry the durable verification result. A pending MCP response is correlation, not a completed verification.
 
 ### MCP Tool
 
@@ -295,3 +295,5 @@ docker push bahia.example.com/my-api:v2.0.0
 ## Canonical MCP reads
 
 Artifact signature and parsed SBOM MCP reads use daemon-authored `30900` state. SBOM packages are indexed one per record, so large package lists do not exceed relay frame limits. The existing `30078` reference and `30004` availability records remain the public interop source for SBOM availability.
+
+CLI `artifacts register` and `artifacts import-observed` publish signed kind-`30900` artifact intents and wait for bounded kind-`30315` status. Registration accepts a client-minted `--id` artifact UUID for retry; observed import never promotes or deploys the imported image.

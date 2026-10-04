@@ -1081,6 +1081,60 @@ export async function installPublicServiceDeploymentHarness(
         const requestEvent = message[1];
         const domain = requestEvent.tags.find((tag) => tag[0] === 'domain')?.[1];
         const op = requestEvent.tags.find((tag) => tag[0] === 'op')?.[1];
+        if (domain === 'policy' && op === 'evaluate') {
+          const payload = JSON.parse(requestEvent.content || '{}');
+          window.__BAHIA_E2E_PUBLIC_REQUESTS.push({ relay: this.url, kind: 30900,
+            operation: 'policy/evaluate', eventId: requestEvent.id, tags: requestEvent.tags,
+            content: requestEvent.content, payload });
+          window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS.push(30900);
+          persistPublicTrace();
+          const sent = originalSend.call(this, data);
+          const { status: _status, ...evaluation } = JSON.parse(buildPolicyEvaluateResultEvent(requestEvent, payload, 'allow').content || '{}');
+          const status = window.__BAHIA_E2E_MAKE_INTENT_STATUS(requestEvent,
+            { id: `status-${requestEvent.id}`, evaluation });
+          queueRelayEvent(status, { traceAs: 'result', traceRequestEventId: requestEvent.id });
+          return sent;
+        }
+        if (domain === 'deployment' && op === 'preview') {
+          const payload = JSON.parse(requestEvent.content || '{}');
+          window.__BAHIA_E2E_PUBLIC_REQUESTS.push({ relay: this.url, kind: 30900,
+            operation: 'deployment/preview', eventId: requestEvent.id, tags: requestEvent.tags,
+            content: requestEvent.content, payload });
+          window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS.push(30900);
+          persistPublicTrace();
+          const sent = originalSend.call(this, data);
+          const resolvePreview = (mode = 'allow') => {
+            const result = JSON.parse(buildDesiredStatePreviewResultEvent(requestEvent, payload, mode).content || '{}');
+            const rejected = result.status === 'failed';
+            const desired = result.desired_state || {};
+            const policy = result.policy || {};
+            const status = window.__BAHIA_E2E_MAKE_INTENT_STATUS(requestEvent, {
+              id: `status-${requestEvent.id}`, status: rejected ? 'rejected' : 'accepted',
+              reason: rejected ? result.error : '',
+              ...(!rejected ? { data: {
+                service_id: payload.service_id, environment_id: payload.environment_id,
+                artifact_id: payload.artifact_id, desired_state_hash: result.desired_state_hash,
+                route_approval_required: false, plan_truncated: true,
+                desired_state_summary: { image_ref: desired.image_ref,
+                  env_key_count: Object.keys(desired.env || {}).length,
+                  labels_count: 0, ports_count: (desired.ports || []).length,
+                  volumes_count: (desired.volumes || []).length,
+                  command_count: (desired.command || []).length,
+                  secret_ref_count: (desired.secret_refs || []).length },
+                policy: { allowed: policy.allowed, warnings: policy.warnings,
+                  blockers: policy.blockers, requires_approval: false }
+              } } : {})
+            });
+            queueRelayEvent(status, { traceAs: 'result', traceRequestEventId: requestEvent.id });
+            window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.delete(requestEvent.id);
+            return true;
+          };
+          if (policyPreviewMode === 'delay') {
+            window.__BAHIA_E2E_PUBLIC_PENDING_POLICY_PREVIEWS.set(requestEvent.id, { requestEvent, payload });
+            window.__BAHIA_E2E_PUBLIC_RESOLVE_POLICY_PREVIEW = (mode = 'allow') => resolvePreview(mode);
+          } else resolvePreview(policyPreviewMode);
+          return sent;
+        }
         if (!['service', 'environment'].includes(domain)) return originalSend.call(this, data);
         window.__BAHIA_E2E_PUBLIC_PUBLISHES.push({ relay: this.url, eventId: requestEvent.id, kind: 30900 });
         window.__BAHIA_E2E_PUBLIC_REQUEST_KINDS.push(30900);

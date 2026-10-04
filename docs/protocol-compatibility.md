@@ -1,10 +1,16 @@
 # Bahia Protocol Compatibility Matrix
 
+D80 adds `security/scan-run`, `sbom/generate|import`, `artifact/signature-verify|register-build-result`, `relay/policy-set`, `notification/channel-test`, `environment/worker-policy-apply`, and `ml/pin` to existing kind-`30900` intent processing. The [fixtures](../web/tests/fixtures/d80-intent-content.json) are the cross-client content contract. Enabled ContextVM methods dual-dispatch through the same idempotency marker; disabled domains retain the legacy method. No new numeric kind is introduced. The protected relay-settings cp-state content is sufficient for the web's scoped read and replaces its ContextVM GET.
+
 ## Deployment-family intent compatibility
 
 `deployment`, `runtime`, `llm`, and `backup` are default-on intent domains using existing client-signed kind `30900` and bounded kind `30315` status; no numeric kind is allocated. Enabled ContextVM mutations share the same in-process processor, while disabled domains preserve existing ContextVM behavior and canonical state publication. Stable `content.intent_id` makes relay replay non-duplicating; revision-guarded operations may return conflict. Their `expected_updated_at` wire value is the canonical record's RFC3339 `updated_at` string; numeric epochs are rejected. The [fixtures](../web/tests/fixtures/deployment-intents.json) are the cross-client wire contract.
 
-## Publisher migration and discovery
+## D79 compatibility window
+
+`ml/model-import|recipe-run|inference-deploy|inference-approval|inference-rollback`, `tool/approval-response`, `build/request`, and `adoption/scan` have default-on kind-30900 intent handlers without allocating new numeric kinds. The registered ContextVM methods dual-dispatch to those handlers while they remain. Replayed D79 `intent_id` values with different actor/op/coordinate/content conflict, and accepted request output is on kind-30315 status. The [D79 fixtures](../web/tests/fixtures/d79-intent-content.json) are the cross-client contract.
+
+## Legacy publisher migration and discovery
 
 Artifact, policy, and tool-approval writers now use ContextVM envelopes rather
 than retired request kinds `5985`–`5989` / `7977`. No new numeric kinds or legacy

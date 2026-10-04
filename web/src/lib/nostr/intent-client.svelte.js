@@ -14,7 +14,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12
 
 export function resolveIntentOrgId(domain, explicit, candidates = []) {
   if (UUID.test(String(explicit || ''))) return explicit;
-  if (['backup', 'package', 'worker', 'dns', 'ml'].includes(domain)) return FLEET_INTENT_ORG_ID;
+  if (['backup', 'package', 'worker', 'dns', 'ml', 'security', 'sbom', 'relay'].includes(domain)) return FLEET_INTENT_ORG_ID;
   const available = [...new Set(candidates.filter(value => UUID.test(String(value || ''))))];
   if (available.length === 1) return available[0];
   if (available.length > 1) throw new Error('Select an organization before submitting this intent');
@@ -28,6 +28,7 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
   const namespace = `${servicePubkey}-${requesterPubkey}`;
   const pending = createPendingIntents({ namespace, servicePubkey, requesterPubkey });
   const subscriptions = new Map();
+  const statusWaiters = new Map();
   let unsubscribeCanonical = () => {};
   let unsubscribeStatus = () => {};
   let unsubscribePending = () => {};
@@ -53,7 +54,7 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
   function releaseResolved(coordinate) {
     const active = pending.query({ coordinate, status: 'pending' });
     const existing = subscriptions.get(coordinate);
-    if (!existing || active.length) return;
+    if (!existing || active.length || [...statusWaiters.values()].includes(coordinate)) return;
     existing.handle.unsubscribe();
     subscriptions.delete(coordinate);
   }
@@ -77,8 +78,57 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
     },
     close() {
       unsubscribeCanonical(); unsubscribeStatus(); unsubscribePending();
+      for (const cancel of [...statusWaiters.keys()]) cancel(new Error('Intent client closed before status arrived'));
       for (const { handle } of subscriptions.values()) handle.unsubscribe();
       subscriptions.clear(); outbox.close(); pending.close();
+    },
+    waitForStatus({ coordinate, intentId, signal }) {
+      const filter = { kinds: [30315], authors: [servicePubkey],
+        '#d': [`intent-status:${requesterPubkey}:${coordinate}`], '#p': [requesterPubkey], '#t': ['intent-status'] };
+      return new Promise((resolve, reject) => {
+        let finished = false;
+        let unsubscribe = () => {};
+        let unsubscribePendingStatus = () => {};
+        const finish = (value, error) => {
+          if (finished) return;
+          finished = true;
+          unsubscribe();
+          unsubscribePendingStatus();
+          signal?.removeEventListener('abort', abort);
+          statusWaiters.delete(cancel);
+          releaseResolved(coordinate);
+          if (error) reject(error); else resolve(value);
+        };
+        const abort = () => finish(null, signal.reason || new Error('Intent status wait aborted'));
+        const cancel = error => finish(null, error);
+        const onEvent = event => {
+          if (event?.kind !== 30315 || event.pubkey !== servicePubkey ||
+              tag(event, 'd') !== filter['#d'][0] || tag(event, 'p') !== requesterPubkey ||
+              tag(event, 'intent_id') !== intentId || tag(event, 't') !== 'intent-status') return;
+          let body;
+          try { body = JSON.parse(event.content || '{}'); }
+          catch { finish(null, new Error('Invalid intent status content')); return; }
+          const status = tag(event, 'status') || body.status;
+          if (status === 'accepted') finish({ ...body, status });
+          else if (['rejected', 'conflict', 'superseded'].includes(status)) {
+            finish(null, new Error(tag(event, 'reason') || body.reason || `Intent ${status}`));
+          }
+        };
+        if (signal?.aborted) { abort(); return; }
+        statusWaiters.set(cancel, coordinate);
+        signal?.addEventListener('abort', abort, { once: true });
+        unsubscribe = store.subscribe(filter, onEvent);
+        unsubscribePendingStatus = pending.subscribe(() => {
+          const row = pending.query({ coordinate }).find(item => item.intentId === intentId);
+          if (row?.status === 'failed') finish(null, new Error(row.reason || 'Intent publish failed'));
+        });
+        const existing = pending.query({ coordinate }).find(item => item.intentId === intentId);
+        if (existing?.status === 'failed') {
+          finish(null, new Error(existing.reason || 'Intent publish failed'));
+          return;
+        }
+        for (const event of store.query(filter)) onEvent(event);
+      });
     },
     async submit({ domain, op, coordinate, orgId, content, currentRecord, expectedUpdatedAt, intentId }) {
       const signed = await signIntent({ domain, op, coordinate, orgId, content, currentRecord,
@@ -120,6 +170,35 @@ async function currentClient() {
 /** Sign and enqueue a full desired-state intent; never wait for daemon completion. */
 export async function publishIntent(request) {
   return (await currentClient()).submit(request);
+}
+
+/** Resolve a request intent from its scoped daemon status, not a ContextVM result. */
+export async function acceptedIntentStatus(submitted, { signal } = {}) {
+  return (await currentClient()).waitForStatus({ coordinate: submitted.coordinate,
+    intentId: submitted.intentId, signal });
+}
+
+/** Subscribe before publication so canonical projections cannot outrun request status. */
+export async function publishIntentForStatus(request, { signal } = {}) {
+  if (!request.intentId) throw new Error('Request intent requires a stable intent id');
+  if (signal?.aborted) throw signal.reason || new Error('Intent status wait aborted');
+  const client = await currentClient();
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal.reason);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort', abort, { once: true });
+  const status = client.waitForStatus({ coordinate: request.coordinate, intentId: request.intentId,
+    signal: controller.signal });
+  void status.catch(() => {});
+  try {
+    await client.submit(request);
+    return await status;
+  } catch (error) {
+    controller.abort(error);
+    throw error;
+  } finally {
+    signal?.removeEventListener('abort', abort);
+  }
 }
 
 export async function resumeIntentClient() { return currentClient(); }

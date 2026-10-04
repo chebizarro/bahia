@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDeployPayload, buildPlacementPolicy, previewWorkerEligibility, resolveEndpointForInput } from '../../src/routes/ml/page-model.js';
+import { buildDeployPayload, buildImportPayload, buildPlacementPolicy, previewWorkerEligibility, resolveEndpointForInput } from '../../src/routes/ml/page-model.js';
 
 const onlineWorker = {
   pubkey: 'a'.repeat(64),
@@ -24,6 +24,13 @@ const drainingWorker = {
 };
 
 describe('Inference placement page model', () => {
+  it('keeps the selected import task in D79 intent content', () => {
+    expect(buildImportPayload({ model_slug: 'weather', source_kind: 'huggingface', source_uri: 'hf://weather/model',
+      revision: 'v1', task_kind: 'embeddings' })).toEqual({
+      model: 'weather', source: 'huggingface', source_uri: 'hf://weather/model', revision: 'v1', task: 'embeddings'
+    });
+  });
+
   it('builds deploy placement policy with pin, labels, rollout, and selector', () => {
     const form = {
       endpoint: 'endpoint:qwen:prod',

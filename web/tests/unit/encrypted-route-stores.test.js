@@ -12,6 +12,8 @@ const nip07Mock = vi.hoisted(() => ({
   encryptNip44: vi.fn(async (_pubkey, plaintext) => 'encrypted:' + plaintext)
 }));
 const intentMock = vi.hoisted(() => vi.fn(async request => ({ id: request.coordinate, pending: true })));
+const publishIntentForStatusMock = vi.hoisted(() => vi.fn(async () => ({ data: { found: 2, stored: 2, verified: 1, rejected: 1 } })));
+vi.mock('../../src/lib/nostr/intent-client.svelte.js', () => ({ publishIntentForStatus: publishIntentForStatusMock }));
 vi.mock('../../src/lib/stores/sensitive-intents.svelte.js', () => ({
   orgIdFor: record => record?.org_id || '0199c749-9300-7444-8444-444444444444',
   submitSensitiveIntent: intentMock
@@ -67,7 +69,7 @@ describe('encrypted route stores', () => {
       content: expect.objectContaining({ encrypted_value: 'encrypted:super-secret' }) }));
     // Reveal still uses ContextVM
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledTimes(1);
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith(expect.objectContaining({ operation: 'services.secrets.reveal', payload: { service_id: serviceId, secret_id: secretId } }));
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith(expect.objectContaining({ operation: 'services/secrets-reveal', payload: { service_id: serviceId, secret_id: secretId } }));
     expect(intentMock).toHaveBeenCalledWith(expect.objectContaining({ domain: 'secret', op: 'delete' }));
   });
 
@@ -108,18 +110,19 @@ describe('encrypted route stores', () => {
     }));
   });
 
-  it('verifies artifact signatures through ContextVM requests and records success state', async () => {
-    encryptedRequestsMock.requestEncryptedResult.mockResolvedValueOnce({
-      result: { status: 'ok', payload: { found: 2, stored: 2, verified: 1, rejected: 1, signatures: [{ id: 'sig-1', verified: true }] } }
-    });
+  it('verifies artifact signatures through a signed request intent and scoped status data', async () => {
+    const { artifacts } = await import('../../src/lib/stores/collections/deployments.svelte.js');
+    const { services } = await import('../../src/lib/stores/collections/services.svelte.js');
+    artifacts.push({ id: 'artifact-1', service_id: 'svc-1' });
+    services.push({ id: 'svc-1', org_id: '0199c749-9300-7444-8444-444444444444' });
     const store = await import('../../src/lib/stores/artifact-signatures.svelte.js');
 
     await expect(store.verifyArtifactSignatures('artifact-1')).resolves.toMatchObject({ found: 2, stored: 2, verified: 1 });
     expect(store.artifactSignatureState.lastResultByArtifact['artifact-1']).toMatchObject({ found: 2, stored: 2 });
-    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith(expect.objectContaining({
-      operation: 'artifacts.signatures.verify',
-      payload: { artifact_id: 'artifact-1' }
-    }));
+    const request = publishIntentForStatusMock.mock.calls[0][0];
+    expect(request).toMatchObject({ domain: 'artifact', op: 'signature-verify', coordinate: 'artifact:artifact-1',
+      content: { artifact_id: 'artifact-1', intent_id: request.intentId } });
+    expect(encryptedRequestsMock.requestEncryptedResult).not.toHaveBeenCalled();
   });
 
   it('reads relay secret references without ContextVM but blocks reveal when ContextVM is unavailable', async () => {

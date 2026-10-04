@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -106,40 +105,6 @@ func TestControlPlaneReactorBackupOptionsInjectFinalSliceDependencies(t *testing
 	}
 }
 
-type appWiringBackupMCPPublisher struct{}
-
-func (appWiringBackupMCPPublisher) Publish(context.Context, nostr.Event) (int, error) { return 1, nil }
-
-func TestConfigureToolApprovalMCPDepsWiresPublisher(t *testing.T) {
-	signer, err := controlplane.NewPrivateKeySigner(nostr.Generate().Hex())
-	require.NoError(t, err)
-	deps := mcp.ServerDeps{}
-	configureToolApprovalMCPDeps(&deps, appWiringBackupMCPPublisher{}, signer, []string{"ws://relay.test"})
-	require.NotNil(t, deps.ToolApprovalCommandPublisher)
-}
-
-func TestConfigureToolApprovalMCPDepsFailsClosedWhenPublishingDepsMissing(t *testing.T) {
-	signer, err := controlplane.NewPrivateKeySigner(nostr.Generate().Hex())
-	require.NoError(t, err)
-
-	for _, tt := range []struct {
-		name      string
-		publisher controlplane.NostrEventPublisher
-		signer    nostr.Signer
-		relays    []string
-	}{
-		{name: "nil publisher", signer: signer, relays: []string{"ws://relay.test"}},
-		{name: "nil signer", publisher: appWiringBackupMCPPublisher{}, relays: []string{"ws://relay.test"}},
-		{name: "no relays", publisher: appWiringBackupMCPPublisher{}, signer: signer},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			deps := mcp.ServerDeps{}
-			configureToolApprovalMCPDeps(&deps, tt.publisher, tt.signer, tt.relays)
-			require.Nil(t, deps.ToolApprovalCommandPublisher)
-		})
-	}
-}
-
 func TestControlPlaneReactorAuditOptionIndependentOfPackageFeature(t *testing.T) {
 	repo := &appWiringNostrEventRepo{}
 	tests := []struct {
@@ -153,7 +118,6 @@ func TestControlPlaneReactorAuditOptionIndependentOfPackageFeature(t *testing.T)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := appendControlPlaneAuditOption(nil, repo)
-			opts = appendPackageControlPlaneOptions(opts, tt.packageSvc, nil)
 			reactor := controlplane.NewReactor(controlplane.Config{}, nil, nil, nil, zap.NewNop(), opts...)
 
 			field := reflect.ValueOf(reactor).Elem().FieldByName("nostrEvents")

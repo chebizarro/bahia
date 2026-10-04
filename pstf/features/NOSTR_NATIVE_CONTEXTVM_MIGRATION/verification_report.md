@@ -411,3 +411,134 @@ Verification: `CGO_ENABLED=0 go test -count=50 -run
 TestIntentAuthorsSyncerMembershipMutationReachesSidecar ./internal/controlplane/`
 passed 50/50; `-count=10 -cpu=1,2,8` passed 10/10 at each CPU setting.
 `CGO_ENABLED=0 go build ./...`, `go vet ./...`, and `go test ./...` passed.
+
+## Bahia-irsry.13.20, Phase 5 M4: last CLI handler migrations (2026-10-03)
+
+The CLI now publishes signed, outbox-backed kind-30900 intents for
+`artifact/register`, `artifact/import-observed`, `adoption/import`,
+`dns/drift-remediate`, `deployment/preview`, and `deployment/route-attach`.
+Accepted 30315 `data` supplies the bounded preview plan and hash. The
+`builds register-result` operator command was removed because verified HiveCI
+artifact registration is daemon-owned. No CLI ContextVM request function for
+any of the six migrated operations remains.
+
+`TestCLILastOpsThroughD76Handlers` publishes actual CLI events through
+`IntentProcessor.ProcessInProcess` and D76 artifact, adoption, and DNS
+handlers. `TestCLILastOpsD76FixtureContent` checks the signed CLI events
+against all six D76 fixture entries (exact content for five; route-attach
+adds required, normalized route fields beyond the fixture's hostname-only
+example). D76 control-plane handler tests independently exercise deployment
+preview and route-attach through the same processor. The intent publisher
+status-data unit test verifies the bounded preview projection reaches clients.
+
+The generic `pkg/client.ContextVMRequestClient.Request` is still used by the
+CLI's `builds request`, `adopt scan`, and `logs run` commands. The first two
+have no intent handlers and were retained rather than silently deleting
+operator functionality. `internal/adapters/dns/dnsmasq_agent.go` also uses this
+client for a separate daemon-to-agent RPC. Thus the requested three-purpose
+ContextVM surface has **not** been reached; a handler or explicit removal
+decision is needed for the two commands, and the DNS agent dependency must
+be treated separately. The Beads Dolt database was unavailable in this
+worktree, so the issue status could not be updated without modifying the
+prohibited `.beads/` directory.
+
+Final verification: `CGO_ENABLED=0 go build ./...`, `CGO_ENABLED=0 go vet
+./...`, and `CGO_ENABLED=0 go test ./...` passed; the archtest ratchets,
+including `unwired_exports`, passed without baseline growth. `gofmt` and
+`git diff --check` passed.
+
+## Wave H web last-operations pass — bahia-irsry.12.14
+
+The web now signs D76 `artifact/register`, `artifact/import-observed`,
+`adoption/import`, `dns/drift-remediate`, `deployment/preview`, and
+`deployment/route-attach` intents plus D77 `policy/evaluate`. Preview renders
+the accepted requester/coordinate-correlated kind-30315 `data`; policy
+evaluation renders its `evaluation`. The request-status subscription is active
+before publication, remains active if canonical state arrives first, and
+terminates on accepted/rejected status, caller cancellation, client shutdown,
+or relay publication failure. DNS remediation and artifact registration use
+the shared pending-intent overlay. Go-generated D76 fixtures and the D77
+evaluation coordinate are asserted by unit tests; four browser tests exercise
+pending-to-accepted status transitions with bounded results.
+
+The requested strict web ContextVM allowlist is **not yet satisfied**. The
+static unit test inventories all remaining direct call-site files and rejects
+reintroduction of the migrated operations. Beyond assistant, secret-value
+reveal, run-log fetch, and their transport, web still invokes ContextVM for
+relay policy/admin, notification test/logs, security scan/rescan, artifact
+signature verification, SBOM generation/import, build request and verified
+build-result recovery, environment worker policy application, and ML model
+import/inference deploy/workload pin. These live operations have no matching
+registered intent handler in this branch; converting them to unhandled intents
+or deleting their UI would not complete the migration. Wave H's D79 handler
+work is a dependency for some of them. The legacy-call-site inventory is not
+an assertion that these extra operations are part of the approved final
+allowlist.
+
+Verification for this branch:
+
+| Gate | Outcome |
+|---|---|
+| `pnpm run test:unit` | PASS: 1,079 passed, 1 skipped |
+| `pnpm run lint` | PASS: 0 errors, 0 warnings |
+| `pnpm run build` | PASS |
+| `CGO_ENABLED=0 CI=1 npx playwright test` | PASS: 239 passed, 4 skipped, 0 failures or retries |
+| DNS zone-create hydration regression, repeated 10 times | PASS: 10/10 |
+| `CGO_ENABLED=0 go build ./...` | PASS |
+| `CGO_ENABLED=0 go vet ./...` | PASS |
+| `CGO_ENABLED=0 go test ./...` | PASS |
+| `git diff --check` | PASS |
+
+The first full browser run had one DNS zone-create retry: Playwright entered
+the form before the signer-ready hydration transition and its Zone value was
+reset. Waiting for operator readiness before filling stabilized that existing
+test; the subsequent full run had no retries.
+
+### D79 operator intent handlers (bahia-irsry.79)
+
+The `ml` intent handler now accepts model import and recipe definition as desired state, and recipe run, inference deploy/approval/rollback as daemon-authored requests. `tool/approval-response`, `build/request`, and `adoption/scan` have their own intent paths. The registered ContextVM methods dual-dispatch through the processor and retain a direct legacy service path. New D79 replay markers bind actor, domain, operation, coordinate and content hash to the idempotency key; a different payload conflicts rather than reapplying. Request result status publication can retry from the marker without rerunning the mutation. Adoption findings use the existing DTO redaction, strip Docker host, page by offset/limit, and cap serialized findings below the `30315` budget. The [Go-generated D79 fixture](../../../web/tests/fixtures/d79-intent-content.json) defines the signed wire shapes.
+
+Evidence: `TestD79MLOperationsAcceptedRejectedReplayConflict`, `TestD79ModelImportPublishesCanonicalOnce`, `TestD79StatusPublishFailureReplaysWithoutSecondMutation`, `TestD79MLContextVMOperationsDualAndLegacyDispatch`, `TestD79BuildRequestIntentAndLegacyDispatch`, `TestD79AdoptionScanStatusBoundedAndReplay`, `TestD79AdoptionScanContextVMDualAndLegacyDispatch`, `TestD79AdoptionScanOversizedFindingAdvancesBoundedPage`, `TestD79ToolApprovalIntentAcceptedReplayConflictAndLegacy`, `TestD79ToolApprovalRejectIntent`, `TestD79IntentContentFixtures`, and `TestIntentDomainRegistryCoversAppHandlers`.
+
+Verification in the D79 worktree: `CGO_ENABLED=0 go build ./...`, `go vet ./...`, and `go test ./...` passed; Go `TestNoNew` architecture tests passed with zero added violations. `make lint-arch`, web unit tests (1067 passed, 1 skipped), web lint (0 errors/warnings), and web build passed after installing the lockfile dependencies. Playwright completed with 234 passed, 4 skipped, and one DNS pending-overlay load flake that passed on retry; that single test passed again on a standalone rerun. No relay-side executor/provisioner is introduced here: ML recipe-run and inference-deploy acceptance records the queued canonical work that the existing ML services author; processing those records remains governed by the separately configured ML execution subsystem.
+
+## D80 request operations and desired-state migration — bahia-irsry.80 — 2026-10-04
+
+Signed intents now handle `security/scan-run`, `sbom/generate`, `sbom/import`,
+`artifact/signature-verify`, `artifact/register-build-result`,
+`notification/channel-test`, `relay/policy-set`,
+`environment/worker-policy-apply`, and `ml/pin`. Existing service boundaries
+perform the mutation once and retain their canonical outcome publishers;
+`30315` contains a bounded acknowledgement or delivery result. The protected
+relay policy remains NIP-59 wrapped and is readable from the complete
+`relay-settings` cp-state family. ContextVM handlers dual-dispatch when the
+intent domain is enabled and retain their legacy path otherwise. D80 does not
+change the D79 ML deploy, tool approval, build request, or adoption operations.
+
+Verification: D80 accepted/rejected/replay/conflict and dual-dispatch tests,
+generated web intent-content fixtures, and
+`TestIntentDomainRegistryCoversAppHandlers` passed. Full Go build, vet, and
+test gate passed. Web unit tests, lint, build, and Playwright gate passed
+(234 passed, four skipped, one flaky retry). No remote push was requested.
+
+## CLI final request migration — bahia-irsry.13.20 — 2026-10-04
+
+`bahia builds request` now publishes the D79 `build/request` intent and decodes
+the queued build projection from accepted `30315` status `data`. `bahia adopt scan`
+publishes `adoption/scan` and renders the bounded, redacted findings page
+from accepted status `data`; `--offset`, `--limit`, and UUIDv7 retry IDs expose
+the D79 page contract. Both use the CLI outbox before publication. The exact
+signed content is checked against `d79-intent-content.json`, and CLI end-to-end
+tests drive the D79 handlers through `IntentProcessor.ProcessInProcess` for
+acceptance, rejection, and build replay without another CI start.
+
+The production `ContextVMRequestClient` caller allowlist is now `bahia logs run`
+(run-log fetch) and `internal/adapters/dns/dnsmasq_agent.go` (DNS-agent
+health/list/sync RPC). The client rejects other methods before publishing;
+transport tests use the remaining run-log method. Grep over production `cmd/`
+and `internal/` found no D80 CLI ContextVM caller to migrate. The
+`unwired_exports` baseline was not changed.
+
+Verification: `CGO_ENABLED=0 go build ./...`, `CGO_ENABLED=0 go vet ./...`,
+`CGO_ENABLED=0 go test ./...` (including `internal/archtest`) and
+`git diff --check` passed. No remote push was requested for this worktree.

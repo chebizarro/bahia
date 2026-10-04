@@ -30,9 +30,8 @@ type SecretIntentCRUD interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
-// SecretIntentEncryptor encrypts secret values server-side. Used when
-// the intent arrives from the in-process dual-dispatch path (ContextVM)
-// where the value may not already be NIP-44 encrypted.
+// SecretIntentEncryptor encrypts values supplied by the in-process MCP path
+// when the value is not already NIP-44 encrypted.
 type SecretIntentEncryptor interface {
 	Encrypt(plaintext string, method domain.EncryptionMethod) ([]byte, error)
 }
@@ -109,8 +108,7 @@ func (h *SecretIntentHandler) handleCreateOrUpdate(ctx context.Context, intent *
 	// secret value (encrypted by the client to the daemon's service pubkey).
 	// Store it as-is; never decrypt for storage.
 	if len(parsed.EncryptedValue) == 0 {
-		// If no pre-encrypted value but a plaintext value was provided
-		// (dual-dispatch / ContextVM path), encrypt it server-side.
+		// Encrypt plaintext supplied by an in-process MCP caller.
 		if plaintext, ok := intent.Content["value"].(string); ok && plaintext != "" {
 			if h.encryptor == nil {
 				return fmt.Errorf("secret value encryption is not configured")
@@ -289,14 +287,13 @@ type secretIntentPayload struct {
 	ServiceID        string `json:"service_id"`
 	EnvironmentID    string `json:"environment_id,omitempty"`
 	Name             string `json:"name"`
-	Value            string `json:"value,omitempty"`           // plaintext (dual-dispatch only)
+	Value            string `json:"value,omitempty"`           // plaintext from in-process MCP
 	EncryptedValue   string `json:"encrypted_value,omitempty"` // NIP-44 encrypted (relay intent path)
 	EncryptionMethod string `json:"encryption_method,omitempty"`
 	Version          int    `json:"version,omitempty"`
 }
 
-// BuildSecretIntentContent builds a map suitable for an in-process secret
-// intent from a ContextVM secret mutation. Used for dual dispatch.
+// BuildSecretIntentContent builds an in-process secret intent for MCP callers.
 func BuildSecretIntentContent(serviceID, secretID uuid.UUID, name, value string, envID *uuid.UUID, encryptionMethod domain.EncryptionMethod) map[string]interface{} {
 	id := secretID
 	if id == uuid.Nil {

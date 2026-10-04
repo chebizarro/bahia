@@ -141,20 +141,6 @@ func (e *AccessDeniedError) Error() string {
 	return fmt.Sprintf("access denied: %s (org: %s)", e.Reason, e.OrgID)
 }
 
-// CheckOrgAccess is a convenience function to check org membership and role.
-func (r *RBAC) CheckOrgAccess(ctx context.Context, p *Principal, orgID uuid.UUID, requiredRole domain.Role) error {
-	authz, err := r.LoadAuthzContext(ctx, p, orgID)
-	if err != nil {
-		return fmt.Errorf("loading auth context: %w", err)
-	}
-
-	if err := authz.RequireMember(); err != nil {
-		return err
-	}
-
-	return authz.RequireRole(requiredRole)
-}
-
 // CheckPermission is a convenience function to check a specific permission.
 func (r *RBAC) CheckPermission(ctx context.Context, p *Principal, orgID uuid.UUID, perm domain.Permission) error {
 	authz, err := r.LoadAuthzContext(ctx, p, orgID)

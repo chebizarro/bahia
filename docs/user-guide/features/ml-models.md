@@ -1,5 +1,7 @@
 # ML Models
 
+`ml/pin` is fleet-operator desired state on `endpoint:<endpoint_id>`. It sets `placement_policy.pinned_worker` on the canonical inference endpoint, guarded by the endpoint's `expected_updated_at` revision. See the [D80 fixture](../../../web/tests/fixtures/d80-intent-content.json).
+
 **ML Models** in Bahia provide a generic AI/ML fabric for model registry, recipes, and inference deployment.
 
 ## Overview
@@ -12,9 +14,9 @@ The ML fabric supports:
 
 ## Transport Semantics
 
-The ML registry forms publish signed kind-`30900` intents for model, version, and endpoint create, update, and delete. Updates can change identity fields; the daemon tombstones the old canonical coordinate before publishing the replacement. Deletes and updates carry the selected record's canonical `updated_at` revision. The pending overlay clears only after a scoped `30315` acceptance or a newer canonical event. The distinct import and inference-deploy forms still publish signed Nostr ContextVM commands (`ml/model-import` and `ml/inference-deploy`). Submission is not terminal workflow completion: follow the relevant status and canonical ML read models below.
+The ML registry forms publish signed kind-`30900` intents for model, version, and endpoint create, update, and delete. Updates can change identity fields; the daemon tombstones the old canonical coordinate before publishing the replacement. Deletes and updates carry the selected record's canonical `updated_at` revision. The pending overlay clears only after a scoped `30315` acceptance or a newer canonical event. Import, recipe apply/run, inference deploy/approval/rollback, worker pinning, and the assistant ML tools also publish signed `30900` intents. Submission is not terminal workflow completion: follow the requester-scoped `30315` status and canonical ML read models below.
 
-Browser pinning for an existing endpoint is also signer-first Nostr ingress for the worker placement command. External clients that still require compatibility HTTP can use backend compatibility endpoints, but the Bahia web route no longer depends on them.
+Browser pinning for an existing endpoint updates desired worker placement through `ml/pin` with the endpoint's canonical revision. External clients that still require compatibility HTTP can use backend compatibility endpoints, but the Bahia web route no longer depends on them.
 
 ## Key Concepts
 
@@ -75,29 +77,34 @@ runtime: "vllm"
 {
   "tool": "bahia_ml_import_model",
   "arguments": {
+    "org_id": "018f6a60-0000-7000-8000-000000000001",
+    "model": "model:qwen-coder",
     "source": "huggingface",
-    "uri": "hf://Qwen/Qwen2.5-Coder-32B-Instruct",
+    "source_uri": "hf://Qwen/Qwen2.5-Coder-32B-Instruct",
     "revision": "abc123..."
   }
 }
 ```
 
 **Via Nostr:**
-Publish a `38394` MLModelImportRequest:
+Publish a kind-`30900` `ml/model-import` intent with a client UUIDv7 `intent_id`:
 
 ```json
 {
-  "kind": 38394,
+  "kind": 30900,
   "content": {
-    "source": {
-      "kind": "huggingface",
-      "uri": "hf://Qwen/Qwen2.5-Coder-32B-Instruct"
-    }
+    "model": "model:qwen-coder",
+    "source": "huggingface",
+    "source_uri": "hf://Qwen/Qwen2.5-Coder-32B-Instruct",
+    "revision": "abc123..."
   },
   "tags": [
-    ["d", "import:qwen-coder"],
-    ["source", "huggingface"],
-    ["task", "chat_completions"]
+    ["d", "model:qwen-coder"],
+    ["domain", "ml"],
+    ["op", "model-import"],
+    ["t", "bahia-intent"],
+    ["org", "018f6a60-0000-7000-8000-000000000001"],
+    ["intent_id", "018f6a60-0000-7000-8000-000000000020"]
   ]
 }
 ```
@@ -118,6 +125,7 @@ Recipes automate multi-step workflows:
 {
   "tool": "bahia_ml_run_recipe",
   "arguments": {
+    "org_id": "018f6a60-0000-7000-8000-000000000001",
     "recipe": "recipe:hf-vllm-import-deploy:1",
     "inputs": {
       "model_source": "hf://Qwen/Qwen2.5-Coder-32B-Instruct"
@@ -132,13 +140,13 @@ Recipes automate multi-step workflows:
 
 ### Nostr Event
 
-Publish a `38390` MLRecipeRunRequest:
+Publish a kind-`30900` `ml/recipe-run` intent with the canonical recipe UUID:
 
 ```json
 {
-  "kind": 38390,
+  "kind": 30900,
   "content": {
-    "recipe": "recipe:hf-vllm-import-deploy:1",
+    "recipe_id": "018f6a60-0000-7000-8000-000000000006",
     "inputs": {
       "model_source": "hf://..."
     },
@@ -147,9 +155,12 @@ Publish a `38390` MLRecipeRunRequest:
     }
   },
   "tags": [
-    ["d", "recipe-run:qwen-prod-20240115"],
-    ["recipe", "recipe:hf-vllm-import-deploy:1"],
-    ["runtime", "vllm"]
+    ["d", "recipe-run:018f6a60-0000-7000-8000-000000000006"],
+    ["domain", "ml"],
+    ["op", "recipe-run"],
+    ["t", "bahia-intent"],
+    ["org", "018f6a60-0000-7000-8000-000000000001"],
+    ["intent_id", "018f6a60-0000-7000-8000-000000000022"]
   ]
 }
 ```
@@ -162,20 +173,16 @@ Publish a `38390` MLRecipeRunRequest:
 {
   "tool": "bahia_ml_deploy",
   "arguments": {
-    "model_version_id": "mv-123",
-    "environment_id": "env-prod",
-    "runtime": "vllm",
-    "config": {
-      "replicas": 2,
-      "gpu_type": "a100"
-    }
+    "endpoint_id": "018f6a60-0000-7000-8000-000000000003",
+    "model_version_id": "018f6a60-0000-7000-8000-000000000004",
+    "runtime_preference": "vllm"
   }
 }
 ```
 
 ### Nostr Event
 
-Publish a `38391` MLInferenceDeployRequest.
+Publish a kind-`30900` `ml/inference-deploy` intent at `inference-deploy:<endpoint UUID>` with `endpoint_id` and `model_version_id` in content. The MCP tool returns accepted or pending intent correlation; follow the bounded kind-`30315` status and canonical ML state for completion.
 
 ### Approving Deployments
 
@@ -292,4 +299,6 @@ Supported inference runtimes:
 
 ## Signed ML registry intents
 
-Fleet operators can publish `bahia.intent.ml.v1` kind-30900 intents for model, model-version, and inference-endpoint create/update/delete. The daemon writes the durable local registry, publishes canonical records through `MLCanonicalPublisher`, and emits bounded kind-30315 status. Deletes publish `deleted=true` tombstones. A slug, version identity, or endpoint name/environment change tombstones the old canonical coordinate before publishing the replacement. Model-version records now include `updated_at`; update/delete intents may provide the canonical RFC3339 `expected_updated_at` revision. The encrypted `ml/model-*`, `ml/version-*`, and `ml/endpoint-*` ContextVM methods use the same intent processor when ML intents are enabled; their legacy path still calls the registry service once. Existing ML import, deploy, and recipe commands remain on their prior transport.
+Fleet operators can publish `bahia.intent.ml.v1` kind-30900 intents for model, model-version, and inference-endpoint create/update/delete. The daemon writes the durable local registry, publishes canonical records through `MLCanonicalPublisher`, and emits bounded kind-30315 status. Deletes publish `deleted=true` tombstones. A slug, version identity, or endpoint name/environment change tombstones the old canonical coordinate before publishing the replacement. Model-version records include `updated_at`; update/delete intents may provide the canonical RFC3339 `expected_updated_at` revision. The encrypted registry ContextVM mutation methods are removed.
+
+The additional fleet-operator operations are `model-import` (`d=model:<slug>`, model and optional version desired state), `recipe-apply` (`d=recipe:<name>:<version>`, definition desired state), `recipe-run` (`d=recipe-run:<recipe-id>`), `inference-deploy` (`d=inference-deploy:<endpoint-id>`), `inference-approval` (`d=inference-approval:<deployment-intent-id>`, `decision=approve|reject`), and `inference-rollback` (`d=inference-rollback:<endpoint-id>`). The latter four are requests: the daemon authors the run, deployment intent, approval state, or rollback intent and returns its ID in requester-scoped `30315` status `data`. Import accepts `model`, `source`, `source_uri` (or `uri`), and optional `revision`/`model_version`; source URI is a registry reference, not a request to download model bytes. Encrypted ML command methods dual-dispatch through these operations while enabled. See the [D79 wire fixtures](../../../web/tests/fixtures/d79-intent-content.json).

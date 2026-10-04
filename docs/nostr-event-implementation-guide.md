@@ -1,16 +1,29 @@
 # Bahia Nostr Event Implementation Guide
 
+D80 request/desired-state operations use the established `30900` intent envelope and bounded `30315` status; the [Go-generated fixture](../web/tests/fixtures/d80-intent-content.json) defines domain/op/coordinate/content. Their canonical outcomes remain security status/findings, SBOM `30078`/`30004` plus `32017`/`32018`, artifact-signature `32016`, build/artifact cp-state, relay-settings protected cp-state, environment cp-state, and ML endpoint cp-state. Notification channel test has only bounded `30315` delivery data. The [command guide](nostr-commands.md#d80-request-operations-and-desired-state) records permissions and read subscription guidance.
+
 ## Deployment, runtime, LLM, and backup intents
 
 With registered intent domains enabled by default, clients sign kind `30900` events with `schema=bahia.intent.<domain>.v1`, `domain=deployment|runtime|llm|backup`, `op`, and a stable `content.intent_id`. Deployment operations are `create`, `approve`, `reject`, and `rollback`; runtime operations are `deploy`, `restart`, and `stop`; LLM adds `deploy`, `rollback`, `approve`, and `reject`; backup adds `restore-approval`. If present, `content.expected_updated_at` is the canonical record's RFC3339 `updated_at` string, not a numeric epoch. See the [wire fixtures](../web/tests/fixtures/deployment-intents.json) and [operation table](designs/phase3-authority-inversion.md#13-intent-event-structure). The daemon emits bounded `30315` status and its existing canonical state publishers remain the sole state writers. ContextVM mutation handlers dispatch in-process through the same intent processor only for enabled domains; disabled domains retain their legacy execution path.
 
-## Artifact, policy, and approval publishers
+## D79 operator intent families
 
-Artifact registration and tool approval still publish signed ContextVM JSON-RPC
-kind `25910` requests. Legacy web callers also use `policy/create`,
-`policy/update`, `policy/delete`, and `policy/evaluate` while their migration is
-pending. MCP policy CRUD already dispatches kind-30900 intents; MCP evaluation
-now uses the `policy/evaluate` intent operation described below. No outbound
+No new kind is introduced. Signed `30900` intents with `schema=bahia.intent.<domain>.v1` now accept ML model import, recipe definition/run, inference deploy/approval/rollback, tool provisioning approval, HiveCI build request, and adoption scan. The tag-level `intent_id` is the replay key even when approval content also has an `intent_id` target. The daemon invokes its existing registry, approval, build-initiation and adoption service methods once and reports the daemon-authored result through requester-scoped `30315` status. `adoption/scan` status data contains a redacted, byte-bounded page of findings. Coordinates, payloads and permissions are in the [D79 fixtures](../web/tests/fixtures/d79-intent-content.json). Unmigrated ContextVM methods use in-process dual dispatch; their legacy service path remains available until the caller migration closes.
+
+## Legacy artifact, policy, and approval publishers
+
+The web signs `artifact/register`, `artifact/import-observed`, `adoption/import`,
+`dns/drift-remediate`, `deployment/preview`, `deployment/route-attach`, and
+`policy/evaluate` as kind-30900 intents. Request-like preview and evaluation
+results arrive in the correlated, bounded kind-30315 status: `data` for the
+preview plan and `evaluation` for the policy decision. The web never treats
+relay `OK` as daemon acceptance. The Go-generated D76 content fixtures are in
+`web/tests/fixtures/d76-intent-content.json`.
+
+Tool approval still publishes signed ContextVM JSON-RPC kind `25910` requests.
+Web policy CRUD and evaluation now publish kind-30900 intents. MCP policy CRUD
+already dispatches kind-30900 intents; MCP evaluation uses the same
+`policy/evaluate` intent operation. No outbound
 `PolicyCommandPublisher` remains. Never publish retired numeric request kinds
 `5985`–`5989` or `7977`. LLM approval uses `approval/llm-approve` or
 `approval/llm-reject`, selected by the validated decision.

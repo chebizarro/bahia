@@ -53,7 +53,7 @@ test.describe('Core service-to-deployment public controlplane smoke', () => {
     await page.locator('#deploy-artifact').selectOption('artifact-existing-1');
     const deployDialog = page.getByRole('dialog', { name: 'Create Deployment Intent' });
     await reachDesiredStateReview(deployDialog);
-    await expect(deployDialog.getByText('Exact signed desired state')).toBeVisible();
+    await expect(deployDialog.getByText('Accepted deployment plan')).toBeVisible();
     await deployDialog.getByRole('button', { name: 'Sign & submit idempotently' }).click();
 
     await expect(page).toHaveURL(/\/deployments$/);

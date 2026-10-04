@@ -33,17 +33,3 @@ func TestPackageBackendTypesAreRegisteredValues(t *testing.T) {
 		t.Fatal("unexpected backend accepted")
 	}
 }
-
-func TestPackageIntentTerminalStatus(t *testing.T) {
-	terminal := []PackageIntentStatus{PackageIntentStatusSucceeded, PackageIntentStatusFailed, PackageIntentStatusSuperseded}
-	for _, status := range terminal {
-		if !status.Terminal() {
-			t.Fatalf("expected %q to be terminal", status)
-		}
-	}
-	for _, status := range []PackageIntentStatus{PackageIntentStatusAccepted, PackageIntentStatusExecuting} {
-		if status.Terminal() {
-			t.Fatalf("expected %q to be non-terminal", status)
-		}
-	}
-}

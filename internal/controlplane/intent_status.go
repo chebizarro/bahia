@@ -45,6 +45,12 @@ func (p *IntentStatusPublisher) PublishAccepted(ctx context.Context, intent *Int
 	_ = p.publishStatus(ctx, intent, "accepted", "applied", "", nil)
 }
 
+// PublishAcceptedChecked lets request operations surface a failed result
+// publication so a replay can re-emit status without repeating the mutation.
+func (p *IntentStatusPublisher) PublishAcceptedChecked(ctx context.Context, intent *Intent) error {
+	return p.publishStatus(ctx, intent, "accepted", "applied", "", nil)
+}
+
 // PublishRejection publishes a "rejected" status for an intent that failed
 // authorization or validation. Only for known principals (§2.3).
 func (p *IntentStatusPublisher) PublishRejection(ctx context.Context, intent *Intent, reason string) {
@@ -54,6 +60,10 @@ func (p *IntentStatusPublisher) PublishRejection(ctx context.Context, intent *In
 // PublishConflict publishes a "conflict" status for a stale expected_updated_at.
 func (p *IntentStatusPublisher) PublishConflict(ctx context.Context, intent *Intent) {
 	_ = p.publishStatus(ctx, intent, "conflict", "revision_conflict", "stale expected_updated_at", nil)
+}
+
+func (p *IntentStatusPublisher) PublishConflictReason(ctx context.Context, intent *Intent, reason string) {
+	_ = p.publishStatus(ctx, intent, "conflict", "conflict", reason, nil)
 }
 
 // PublishAcceptedEvaluation carries a computed decision in the same bounded

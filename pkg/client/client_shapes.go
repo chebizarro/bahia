@@ -16,7 +16,10 @@ type AdoptionTarget struct {
 
 // AdoptionScanRequest requests an adoption preview scan.
 type AdoptionScanRequest struct {
-	Targets []AdoptionTarget `json:"targets"`
+	Targets        []AdoptionTarget `json:"targets"`
+	Offset         int              `json:"offset"`
+	Limit          int              `json:"limit"`
+	IdempotencyKey string           `json:"-"`
 }
 
 // AdoptionSelection selects one discovered container for import.
@@ -28,10 +31,11 @@ type AdoptionSelection struct {
 
 // AdoptionImportRequest requests adoption import for selected or all containers.
 type AdoptionImportRequest struct {
-	Targets    []AdoptionTarget    `json:"targets"`
-	Selections []AdoptionSelection `json:"selections,omitempty"`
-	ImportAll  bool                `json:"import_all,omitempty"`
-	OrgID      string              `json:"org_id,omitempty"`
+	Targets        []AdoptionTarget    `json:"targets"`
+	Selections     []AdoptionSelection `json:"selections,omitempty"`
+	ImportAll      bool                `json:"import_all,omitempty"`
+	IdempotencyKey string              `json:"-"`
+	OrgID          string              `json:"org_id,omitempty"`
 }
 
 // DiscoveredContainer is a normalized container preview returned by adoption scan.

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	adapterSBOM "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -27,6 +29,7 @@ type intentWrite struct {
 	family                 int
 	stateKey, stateValue   string
 	stateMatch             map[string]string
+	statusOnly             bool
 	deleted                bool
 	deleteCoordinate       string
 }
@@ -82,7 +85,9 @@ func (s *Server) callIntentWrite(ctx context.Context, name string, args map[stri
 	if replay != nil && (replay.Domain != write.domain || replay.Op != write.op || replay.Coordinate != write.coordinate) {
 		return intentWriteError("conflict", intentID, replay.EventID, "idempotency key reused for a different intent"), true
 	}
-	write.content["intent_id"] = intentID
+	if _, exists := write.content["intent_id"]; !exists {
+		write.content["intent_id"] = intentID
+	}
 	req := client.PublishIntentRequest{
 		Domain: write.domain, Op: write.op, Coordinate: write.coordinate,
 		OrgID: write.orgID.String(), Content: write.content, IntentID: intentID,
@@ -121,6 +126,20 @@ func (s *Server) callIntentWrite(ctx context.Context, name string, args map[stri
 		return intentWriteError(status, intentID, eventID, err.Error()), true
 	}
 	result := map[string]any{"status": "pending", "intent_id": intentID, "event_id": eventID}
+	if write.statusOnly {
+		result["status_kind"] = controlplane.KindNIP38Status
+		result["status_coordinate"] = "intent-status:" + actor + ":" + write.coordinate
+		status, readErr := s.readIntentOutcome(ctx, actor, write.coordinate, intentID)
+		if readErr != nil {
+			return intentWriteError("error", intentID, eventID, "read intent outcome: "+readErr.Error()), true
+		}
+		if status != nil {
+			result["status"] = "accepted"
+			if data, ok := status["data"].(map[string]any); ok {
+				result["result"] = data
+			}
+		}
+	}
 	if name == "bahia_evaluate_policy" {
 		result["status"] = "accepted"
 		result["status_kind"] = controlplane.KindNIP38Status
@@ -167,6 +186,41 @@ func (s *Server) callIntentWrite(ctx context.Context, name string, args map[stri
 
 	toolResult, _ := jsonResult(result)
 	return toolResult, true
+}
+
+// A request is accepted only after its signed, scoped NIP-38 outcome is
+// visible. Handler completion alone is not durable progress for an MCP caller.
+func (s *Server) readIntentOutcome(ctx context.Context, actor, coordinate, intentID string) (map[string]any, error) {
+	if s.stateStore == nil || s.servicePubkey == "" {
+		return nil, nil
+	}
+	pubkey, err := nostr.PubKeyFromHex(s.servicePubkey)
+	if err != nil {
+		return nil, err
+	}
+	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(controlplane.KindNIP38Status)}, Authors: []nostr.PubKey{pubkey}, Tags: nostr.TagMap{"d": {"intent-status:" + actor + ":" + coordinate}}}
+	for event := range s.stateStore.QueryEvents(filter) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if event.PubKey != pubkey || !event.CheckID() || !event.VerifySignature() {
+			return nil, fmt.Errorf("invalid signed intent outcome %s", event.ID.Hex())
+		}
+		var body map[string]any
+		if err := json.Unmarshal([]byte(event.Content), &body); err != nil {
+			return nil, err
+		}
+		accepted := false
+		for _, tag := range event.Tags {
+			if len(tag) > 1 && tag[0] == "status" && tag[1] == "accepted" {
+				accepted = true
+			}
+		}
+		if body["intent_id"] == intentID && accepted {
+			return body, nil
+		}
+	}
+	return nil, nil
 }
 
 func (s *Server) readIntentWriteState(ctx context.Context, write intentWrite) (*stateRecord, error) {
@@ -286,6 +340,9 @@ func intentWriteError(status, intentID, eventID, reason string) *ToolResult {
 }
 
 func isIntentWriteTool(name string) bool {
+	if isFinalIntentWriteTool(name) {
+		return true
+	}
 	if backupToolPublishesCommand(backupToolBaseName(name)) {
 		return true
 	}
@@ -293,7 +350,8 @@ func isIntentWriteTool(name string) bool {
 		return true
 	}
 	switch name {
-	case "bahia_package_repository_apply", "bahia_package_repository_delete", "bahia_package_upload", "bahia_package_promote", "bahia_package_yank", "bahia_package_drift_detect",
+	case "bahia_register_artifact",
+		"bahia_package_repository_apply", "bahia_package_repository_delete", "bahia_package_upload", "bahia_package_promote", "bahia_package_yank", "bahia_package_drift_detect",
 		"bahia_create_service", "bahia_update_service", "bahia_delete_service",
 		"bahia_create_environment", "bahia_update_environment", "bahia_delete_environment",
 		"bahia_deploy", "bahia_create_intent", "bahia_rollback",
@@ -307,6 +365,18 @@ func isIntentWriteTool(name string) bool {
 		"bahia_assistant_service_deploy", "bahia_assistant_service_rollback",
 		"bahia_create_secret", "bahia_update_secret", "bahia_delete_secret",
 		"bahia_create_notification_channel", "bahia_update_notification_channel", "bahia_delete_notification_channel":
+		return true
+	default:
+		return false
+	}
+}
+
+func isFinalIntentWriteTool(name string) bool {
+	switch name {
+	case "bahia_ml_import_model", "bahia_ml_run_recipe", "bahia_ml_deploy", "bahia_ml_rollback",
+		"bahia_assistant_ml_deploy", "bahia_assistant_ml_approve_deployment", "bahia_assistant_ml_rollback",
+		"bahia_tool_provision_approve", "bahia_tool_provision_reject",
+		"bahia_verify_signatures", "bahia_ingest_sbom", "bahia_test_notification_channel":
 		return true
 	default:
 		return false
@@ -487,6 +557,85 @@ func (s *Server) intentWriteForTool(ctx context.Context, name string, args map[s
 	var w intentWrite
 	var err error
 	switch name {
+	case "bahia_ml_import_model", "bahia_ml_run_recipe", "bahia_ml_deploy", "bahia_ml_rollback", "bahia_assistant_ml_deploy", "bahia_assistant_ml_approve_deployment", "bahia_assistant_ml_rollback":
+		return s.mlOperationIntentWrite(ctx, name, args, intentID)
+	case "bahia_tool_provision_approve", "bahia_tool_provision_reject":
+		id, e := parseRequiredUUIDArg(args, "intent_id")
+		if e != nil {
+			return w, e
+		}
+		action := "approve"
+		if name == "bahia_tool_provision_reject" {
+			action = "reject"
+		}
+		reason := strings.TrimSpace(stringArg(args, "reason"))
+		if reason == "" {
+			return w, fmt.Errorf("reason is required")
+		}
+		w = intentWrite{domain: "tool", op: "approval-response", coordinate: "tool-approval:" + id.String(), content: map[string]any{"intent_id": id.String(), "action": action, "reason": reason}, statusOnly: true}
+		w.orgID, err = s.intentOrgFromState(ctx, args, nostrpool.KindToolProvisionIntentState, "id", id.String())
+	case "bahia_verify_signatures":
+		id, e := parseRequiredUUIDArg(args, "artifact_id")
+		if e != nil {
+			return w, e
+		}
+		w = intentWrite{domain: "artifact", op: "signature-verify", coordinate: "artifact:" + id.String(), content: map[string]any{"artifact_id": id.String()}, statusOnly: true}
+		w.orgID, err = s.intentOrgFromState(ctx, args, nostrpool.KindArtifactRegistry, "id", id.String())
+	case "bahia_test_notification_channel":
+		id, e := parseRequiredUUIDArg(args, "channel_id")
+		if e != nil {
+			return w, e
+		}
+		w = intentWrite{domain: "notification", op: "channel-test", coordinate: id.String(), content: map[string]any{"id": id.String()}, statusOnly: true}
+		w.orgID, err = s.intentOrgFromState(ctx, args, nostrpool.KindNotificationChannelRegistry, "id", id.String())
+	case "bahia_ingest_sbom":
+		id, e := parseRequiredUUIDArg(args, "artifact_id")
+		if e != nil {
+			return w, e
+		}
+		artifact, e := s.readStateOne(ctx, nostrpool.KindArtifactRegistry, "id", id.String())
+		if e != nil {
+			return w, e
+		}
+		if artifact == nil {
+			return w, fmt.Errorf("canonical artifact not found")
+		}
+		data, e := sbomDataArg(args)
+		if e != nil {
+			return w, e
+		}
+		parsed, e := adapterSBOM.Parse(data, id)
+		if e != nil {
+			return w, e
+		}
+		w = intentWrite{domain: "sbom", op: "import", coordinate: "sbom-import:" + intentID, statusOnly: true, content: map[string]any{"idempotencyKey": intentID, "subject": map[string]any{"type": "artifact", "id": id.String(), "digest": stringFromRecord(artifact.Fields, "image_digest")}, "format": parsed.SBOM.Format, "payloadBase64": base64.StdEncoding.EncodeToString(data), "storage": "blossom", "generator": map[string]any{"id": "import"}}}
+		w.orgID, err = s.intentOrgFromState(ctx, args, nostrpool.KindArtifactRegistry, "id", id.String())
+	case "bahia_register_artifact":
+		id, e := mcpIntentEntityID(args, intentID)
+		if e != nil {
+			return w, e
+		}
+		serviceID, e := parseRequiredUUIDArg(args, "service_id")
+		if e != nil {
+			return w, e
+		}
+		buildID, e := parseRequiredUUIDArg(args, "build_id")
+		if e != nil {
+			return w, e
+		}
+		w = intentWrite{domain: "artifact", op: "register", coordinate: "artifact:" + id.String(), family: nostrpool.KindArtifactRegistry, stateKey: "id", stateValue: id.String(), content: map[string]any{"id": id.String(), "service_id": serviceID.String(), "build_id": buildID.String()}}
+		w.orgID, err = s.intentOrgFromState(ctx, args, nostrpool.KindServiceRegistry, "id", serviceID.String())
+		if err != nil {
+			return w, err
+		}
+		if err := domain.ValidateScanStatus(domain.ScanStatus(stringArg(args, "scan_status"))); err != nil {
+			return w, err
+		}
+		for _, key := range []string{"image_repo", "image_tag", "image_digest", "manifest_media_type", "size_bytes", "sbom_url", "signature_ref", "scan_status", "metadata"} {
+			if value, ok := args[key]; ok {
+				w.content[key] = value
+			}
+		}
 	case "bahia_create_service":
 		id, e := mcpIntentEntityID(args, intentID)
 		if e != nil {

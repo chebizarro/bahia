@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	soulFactoryLegacyProvisionMethod      = "soul-factory/provision" // historical run reconciliation only
 	canonicalSoulFactoryDomain            = "soul-factory"
 	canonicalProvisioningEntity           = "provisioning"
 	canonicalProvisioningStateSchema      = "bahia.state.soul-factory-provisioning.v1"
@@ -20,7 +21,7 @@ const (
 )
 
 func (r *Reactor) publishCanonicalProvisioningObservable(ctx context.Context, requestEvent, resultEvent *nostr.Event) error {
-	if requestEvent == nil || resultEvent == nil || tagValue(requestEvent.Tags, "method") != ContextVMMethodProvision {
+	if requestEvent == nil || resultEvent == nil || tagValue(requestEvent.Tags, "method") != soulFactoryLegacyProvisionMethod {
 		return nil
 	}
 	requestID := requestEvent.ID.Hex()

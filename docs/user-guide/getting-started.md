@@ -59,14 +59,11 @@ make run-dev
 
 Bahia is configured via environment variables or a config file.
 
-All registered kind-30900 intent domains are enabled by default. To temporarily
-keep a domain on its legacy mutation path, list it under
-`nostr.intent_domains_disabled` (for example, `[service, policy]`). Only those
-domains are disabled. A non-empty legacy `nostr.intent_domains` list still acts
-as an allowlist for one release; an empty list now enables all domains. Both
-keys are deprecated and removed with the ContextVM mutation-path cleanup
-(bahia-irsry.11.19). Relay `OK` does not prove intent execution, including for
-an opted-out domain; follow kind-30315 status and canonical state.
+All registered kind-30900 intent domains are enabled by default. The optional
+`nostr.intent_domains_disabled` list suppresses processing for named domains;
+it does not restore the retired ContextVM mutation path. Remove an entry to
+re-enable that domain. Relay `OK` confirms publication, not execution; follow
+kind-30315 status and canonical state.
 
 ### Essential Environment Variables
 

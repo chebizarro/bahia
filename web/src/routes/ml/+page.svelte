@@ -1,8 +1,8 @@
 <script>
   import { bootstrapControlplane, controlplaneConnection, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, environments, workers, operations } from '$lib/stores';
   import { MLFabricIcon, ArtifactIcon, DeploymentIcon, WarningIcon, ProgressIcon, AcceleratorIcon } from '$lib/icons/domain-icons.js';
-  import { publishCommand, resultContent } from '$lib/stores/public-controlplane.svelte.js';
-  import { currentRequesterPubkey } from '$lib/nostr/controlplane-requests.js';
+  import { publishIntent, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
+  import { mlOperationIntent, mlPinIntent } from '$lib/nostr/final-ops-intents.js';
   import MLRegistryMutations from './MLRegistryMutations.svelte';
   import {
     buildTaskKindOptions,
@@ -62,44 +62,25 @@
     rollout_from_labels: '',
     rollout_to_labels: ''
   });
-
-  const WORKER_PLACEMENT_COMMANDS = {
-    WORKLOAD_PIN: 'worker.workload.pin.request'
-  };
-
+  let recipeForm = $state({ name: '', version: '', yaml: '' });
+  let recipeRunForm = $state({ recipe_id: '', inputs: '{}' });
+  let approvalForm = $state({ intent_id: '', decision: 'approve' });
+  let rollbackEndpointId = $state('');
+  let auxiliarySubmitting = $state(false);
 
   function setSuccess(message) { notice = { type: 'success', message }; }
   function setFailure(message) { notice = { type: 'error', message }; }
   function resetNotice() { notice = null; }
 
-  function commandTagsFromPayload(payload = {}) {
-    const tags = [];
-    const idempotencyKey = String(payload.idempotency_key || payload.request_id || payload.d || '').trim();
-    if (idempotencyKey) tags.push(['d', idempotencyKey]);
-    if (payload.tags && typeof payload.tags === 'object' && !Array.isArray(payload.tags)) {
-      for (const [key, value] of Object.entries(payload.tags)) {
-        const tagValue = String(value ?? '').trim();
-        if (key && tagValue) tags.push([key, tagValue]);
-      }
-    }
-    for (const key of ['model', 'model_version', 'endpoint', 'runtime_preference', 'source']) {
-      const value = String(payload[key] ?? '').trim();
-      if (!value) continue;
-      const tagName = key === 'runtime_preference' ? 'runtime' : key;
-      if (!tags.some((tag) => tag[0] === tagName && tag[1] === value)) tags.push([tagName, value]);
-    }
-    return tags;
-  }
-
   function formatNostrReceipt(action, result, fallback) {
-    const eventId = result?.id || result?.request_event_id;
+    const eventId = result?.event?.id;
     if (!eventId) return result?.message || fallback;
     const requestPreview = String(eventId).slice(0, 12);
     return `${action} submitted (${requestPreview}…). Watch the deployment and model status panels for completion.`;
   }
 
   async function publishMLCommand(operation, payload) {
-    return publishCommand({ operation, tags: commandTagsFromPayload(payload), content: payload });
+    return publishIntent(mlOperationIntent(operation.replace(/^ml\//, ''), payload, resolveIntentOrgId('ml')));
   }
 
   // Derived
@@ -137,17 +118,6 @@
     }
   }
 
-  function randomId() {
-    const cryptoApi = globalThis.crypto;
-    if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
-    if (cryptoApi?.getRandomValues) {
-      const bytes = new Uint8Array(16);
-      cryptoApi.getRandomValues(bytes);
-      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-    }
-    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  }
-
   function endpointEnvironmentId(endpoint) {
     return endpoint?.environment_id || endpoint?.environmentId || '';
   }
@@ -156,33 +126,10 @@
     if (!endpoint || !workerPubkey) return null;
     const endpointID = endpoint.id || endpoint.endpoint_id;
     if (!endpointID) return null;
-    const key = `${WORKER_PLACEMENT_COMMANDS.WORKLOAD_PIN}:${endpointID}:${workerPubkey}:${randomId()}`;
     const environmentID = endpointEnvironmentId(endpoint);
-    const tags = [
-      ['d', key],
-      ['command', WORKER_PLACEMENT_COMMANDS.WORKLOAD_PIN],
-      ['worker', workerPubkey],
-      ['workload', endpointID],
-      ['workload_kind', 'ml_inference']
-    ];
-    if (environmentID) tags.push(['environment', environmentID]);
-    const result = await publishCommand({
-      operation: 'worker/workload-pin',
-      tags,
-      content: {
-        environment_id: environmentID,
-        workload_id: endpointID,
-        workload_kind: 'ml_inference',
-        worker_pubkey: workerPubkey,
-        reason: 'Operator pin from Inference deploy form',
-        idempotency_key: key,
-        operator_metadata: {
-          source: 'web.ml.deploy',
-          requested_by: currentRequesterPubkey() || ''
-        }
-      }
-    });
-    return resultContent(result);
+    await publishIntent(mlPinIntent(endpointID, environmentID, workerPubkey, endpoint.updated_at,
+      resolveIntentOrgId('ml')));
+    return { message: 'Signed pin pending canonical confirmation' };
   }
 
   async function handleDeploy(event) {
@@ -195,12 +142,18 @@
         throw new Error('No eligible workers match this placement policy. Review rejected workers before submitting.');
       }
       const policy = buildPlacementPolicy(deployForm);
+      const endpoint = existingEndpointForDeploy;
+      if (!endpoint?.id) throw new Error('Select an existing canonical inference endpoint before deploying');
+      const version = mlModelVersions.find(row => row.id === deployForm.model_version || row.coordinate === deployForm.model_version);
+      if (!version?.id) throw new Error('Select an existing canonical model version before deploying');
       let pinMessage = '';
-      if (policy.pinned_worker && existingEndpointForDeploy) {
-        const pinResult = await publishExistingEndpointPin(existingEndpointForDeploy, policy.pinned_worker);
-        pinMessage = pinResult?.message ? ` ${pinResult.message}.` : ' Existing endpoint pin command accepted.';
+      if (policy.pinned_worker) {
+        const pinResult = await publishExistingEndpointPin(endpoint, policy.pinned_worker);
+        pinMessage = pinResult?.message ? ` ${pinResult.message}.` : '';
       }
-      const result = await publishMLCommand('ml/inference-deploy', buildDeployPayload(deployForm));
+      const result = await publishMLCommand('ml/inference-deploy', {
+        ...buildDeployPayload(deployForm), endpoint_id: endpoint.id, model_version_id: version.id
+      });
       const deploymentReceipt = formatNostrReceipt('Inference deployment', result, `Inference deployment submitted with ${preview.estimated_eligible_count} eligible worker(s). Watch the endpoint status panels for completion.`);
       setSuccess(`${deploymentReceipt}${pinMessage}`);
       deployForm = { ...deployForm, endpoint: '', model_version: '' };
@@ -209,6 +162,47 @@
     } finally {
       deploySubmitting = false;
     }
+  }
+
+  async function submitAuxiliary(operation, payload) {
+    auxiliarySubmitting = true;
+    resetNotice();
+    try {
+      const submitted = await publishMLCommand(`ml/${operation}`, payload);
+      setSuccess(formatNostrReceipt(operation.replaceAll('-', ' '), submitted, 'Signed intent pending daemon acceptance.'));
+    } catch (err) {
+      setFailure(err?.message || `Failed to submit ${operation}`);
+    } finally {
+      auxiliarySubmitting = false;
+    }
+  }
+
+  function handleRecipeApply(event) {
+    event.preventDefault();
+    return submitAuxiliary('recipe-apply', { ...recipeForm });
+  }
+
+  function handleRecipeRun(event) {
+    event.preventDefault();
+    let inputs;
+    try {
+      inputs = JSON.parse(recipeRunForm.inputs);
+      if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) throw new Error('Inputs must be a JSON object');
+    } catch (err) {
+      setFailure(`Invalid recipe inputs: ${err.message}`);
+      return;
+    }
+    return submitAuxiliary('recipe-run', { recipe_id: recipeRunForm.recipe_id, inputs });
+  }
+
+  function handleInferenceApproval(event) {
+    event.preventDefault();
+    return submitAuxiliary('inference-approval', { ...approvalForm });
+  }
+
+  function handleInferenceRollback(event) {
+    event.preventDefault();
+    return submitAuxiliary('inference-rollback', { endpoint_id: rollbackEndpointId });
   }
 </script>
 
@@ -546,7 +540,7 @@
               <p class="error-text">{deployEligibilityPreview.error}</p>
             {:else}
               {#if existingEndpointForDeploy && deployForm.pinned_worker}
-                <p class="form-hint">Submitting will publish <code>workload.pin.request</code> for the existing endpoint before requesting deployment.</p>
+                <p class="form-hint">Submitting will publish a signed ML pin intent for the existing endpoint before requesting deployment.</p>
               {:else if deployForm.pinned_worker}
                 <p class="form-hint">The pin is included in the inference deployment placement policy for backend placement.</p>
               {/if}
@@ -583,6 +577,40 @@
           </div>
           <p class="form-hint">Deployment requests are matched against the shared worker pool by runtime, accelerator, pin, and label selector requirements.</p>
           <button type="submit" disabled={deploySubmitting || Boolean(deployEligibilityPreview.error) || (workers.length > 0 && deployEligibilityPreview.estimated_eligible_count === 0)}>{deploySubmitting ? 'Submitting…' : 'Request deployment'}</button>
+        </form>
+      </section>
+    </div>
+    <div class="workflow-grid" data-testid="ml-auxiliary-intents">
+      <section class="panel">
+        <h2>Apply ML recipe</h2>
+        <form onsubmit={handleRecipeApply}>
+          <label>Name<input bind:value={recipeForm.name} required /></label>
+          <label>Version<input bind:value={recipeForm.version} required /></label>
+          <label>Recipe YAML<textarea bind:value={recipeForm.yaml} rows="8" required></textarea></label>
+          <button type="submit" disabled={auxiliarySubmitting}>Apply recipe</button>
+        </form>
+      </section>
+      <section class="panel">
+        <h2>Run ML recipe</h2>
+        <form onsubmit={handleRecipeRun}>
+          <label>Canonical recipe ID<input bind:value={recipeRunForm.recipe_id} required /></label>
+          <label>Inputs JSON<textarea bind:value={recipeRunForm.inputs} rows="4" required></textarea></label>
+          <button type="submit" disabled={auxiliarySubmitting}>Run recipe</button>
+        </form>
+      </section>
+      <section class="panel">
+        <h2>Decide inference approval</h2>
+        <form onsubmit={handleInferenceApproval}>
+          <label>Deployment intent ID<input bind:value={approvalForm.intent_id} required /></label>
+          <label>Decision<select bind:value={approvalForm.decision}><option value="approve">Approve</option><option value="reject">Reject</option></select></label>
+          <button type="submit" disabled={auxiliarySubmitting}>Submit decision</button>
+        </form>
+      </section>
+      <section class="panel">
+        <h2>Roll back inference endpoint</h2>
+        <form onsubmit={handleInferenceRollback}>
+          <label>Endpoint<select bind:value={rollbackEndpointId} required><option value="">Select endpoint</option>{#each mlEndpoints as endpoint (endpoint.id)}<option value={endpoint.id}>{endpoint.name || endpoint.id}</option>{/each}</select></label>
+          <button type="submit" disabled={auxiliarySubmitting}>Request rollback</button>
         </form>
       </section>
     </div>

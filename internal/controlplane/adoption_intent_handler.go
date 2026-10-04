@@ -28,14 +28,14 @@ func (*AdoptionIntentHandler) PermissionFor(string) domain.Permission {
 }
 
 func (h *AdoptionIntentHandler) AuthorizeIntent(_ context.Context, _ *TrustSet, intent *Intent) error {
-	if authorizedContextVMPubkey(intent.Actor, h.allowed) {
+	if authorizedOperatorPubkey(intent.Actor, h.allowed) {
 		return nil
 	}
 	return fmt.Errorf("requester not in authorized adoption list")
 }
 
 func (h *AdoptionIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
-	if intent.Op != "import" {
+	if intent.Op != "import" && intent.Op != "scan" {
 		return fmt.Errorf("unsupported adoption operation %q", intent.Op)
 	}
 	if h.adoption == nil {
@@ -55,6 +55,29 @@ func (h *AdoptionIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 	var request adoptionImportEventRequest
 	if err := json.Unmarshal(raw, &request); err != nil {
 		return err
+	}
+	if intent.Op == "scan" {
+		var scan adoptionScanEventRequest
+		if err := json.Unmarshal(raw, &scan); err != nil {
+			return err
+		}
+		if scan.Offset < 0 || scan.Limit < 0 || scan.Limit > 100 {
+			return fmt.Errorf("scan offset must be non-negative and limit must be 0..100")
+		}
+		targets, err := mapAdoptionEventTargets(scan.Targets)
+		if err != nil {
+			return err
+		}
+		previews, err := h.adoption.Scan(ctx, service.AdoptionScanRequest{Targets: targets})
+		if err != nil {
+			return err
+		}
+		mapped := dto.AdoptionPreviewResponsesFromService(previews)
+		page, count := adoptionScanStatusPage(mapped, scan.Offset, scan.Limit)
+		intent.Result = page
+		intent.StatusData = page
+		intent.StatusData["total_findings"] = count
+		return nil
 	}
 	if !request.ImportAll && len(request.Selections) == 0 {
 		return fmt.Errorf("import requires import_all=true or at least one selection")
@@ -77,4 +100,58 @@ func (h *AdoptionIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 	intent.Result = map[string]any{"imports": dto.AdoptionImportResultResponsesFromService(results)}
 	intent.StatusData = map[string]any{"candidate_count": len(results)}
 	return nil
+}
+
+// The scan status is public relay data. DTO mapping redacts runtime secrets;
+// this page additionally caps the serialized result below the 30315 budget.
+func adoptionScanStatusPage(previews []dto.AdoptionPreviewResponse, offset, limit int) (map[string]any, int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	page := map[string]any{"findings": []any{}, "offset": offset, "limit": limit, "truncated": false}
+	findings := make([]any, 0)
+	count := 0
+	appendFinding := func(entry map[string]any) {
+		if count >= offset && len(findings) < limit {
+			candidate := append(findings, entry)
+			encoded, _ := json.Marshal(candidate)
+			if len(encoded) <= 12*1024 {
+				findings = candidate
+			}
+		}
+		count++
+	}
+	for _, preview := range previews {
+		if len(preview.Containers) == 0 && preview.Error != "" {
+			appendFinding(map[string]any{"target_name": boundedIntentStatusText(preview.Target.Name, 128), "scan_failed": true})
+		}
+		for _, container := range preview.Containers {
+			discovered := container.Discovered
+			entry := map[string]any{
+				"target_name":                    boundedIntentStatusText(preview.Target.Name, 128),
+				"endpoint_ref":                   boundedIntentStatusText(preview.Target.EndpointRef, 128),
+				"container_id":                   boundedIntentStatusText(discovered.ContainerID, 128),
+				"container_name":                 boundedIntentStatusText(discovered.ContainerName, 256),
+				"image_ref":                      boundedIntentStatusText(discovered.ImageRef, 256),
+				"proposed_service_name":          boundedIntentStatusText(container.ProposedServiceName, 256),
+				"existing_service_id":            container.ExistingServiceID,
+				"will_update":                    container.WillUpdate,
+				"adoptable":                      container.Adoptable,
+				"warnings_count":                 len(container.Warnings),
+				"redacted_environment_key_count": len(discovered.RedactedEnvironmentKeys),
+				"redacted_label_key_count":       len(discovered.RedactedLabelKeys),
+			}
+			if len(discovered.ContainerName) > 256 || len(discovered.ImageRef) > 256 || len(preview.Target.Name) > 128 {
+				entry["item_truncated"] = true
+			}
+			appendFinding(entry)
+		}
+	}
+	page["findings"] = findings
+	page["next_offset"] = offset + len(findings)
+	page["truncated"] = offset+len(findings) < count
+	return page, count
 }

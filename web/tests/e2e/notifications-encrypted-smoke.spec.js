@@ -1,10 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { installE2EMocks, TEST_PUBKEY } from './helpers.js';
+import { installE2EMocks } from './helpers.js';
 import {
-  PUBLIC_RELAY,
   ENCRYPTED_RELAY,
-  SERVICE_PUBKEY,
-  KIND_CONTEXTVM,
   KIND_GIFT_WRAP,
   createEncryptedNotificationsSystemInfo,
   installEncryptedNotificationHarness,
@@ -60,54 +57,25 @@ test.describe('Notifications encrypted transport smoke', () => {
 
     const normalizeRelay = (relay) => String(relay || '').replace(/\/$/, '');
     const transportTrace = await page.evaluate(() => ({
-      relays: window.__BAHIA_E2E_ENCRYPTED_PUBLISHES.map((entry) => entry.relay),
-      requests: window.__BAHIA_E2E_ENCRYPTED_REQUESTS,
-      oks: window.__BAHIA_E2E_ENCRYPTED_OKS,
-      results: window.__BAHIA_E2E_ENCRYPTED_RESULTS,
+      relays: window.__BAHIA_E2E_ENCRYPTED_WIRE_PUBLISHES.map((entry) => entry.relay),
       operations: [...window.__BAHIA_E2E_ENCRYPTED_OPERATIONS],
       intentWraps: window.__BAHIA_E2E_INTENT_WRAPS,
       statuses: window.__BAHIA_E2E_INTENT_STATUS_EVENTS
     }));
 
     const normalizedRelays = transportTrace.relays.map(normalizeRelay);
-    expect(normalizedRelays).toHaveLength(1);
+    expect(normalizedRelays).toHaveLength(2);
     expect(normalizedRelays.every((relay) => relay === ENCRYPTED_RELAY)).toBe(true);
-    expect(normalizedRelays.some((relay) => relay === PUBLIC_RELAY)).toBe(false);
     expect(transportTrace.operations).toEqual(expect.arrayContaining([
       'notification.intent.create',
-      'notifications.channels.test'
+      'notification.intent.channel-test'
     ]));
-    expect(transportTrace.intentWraps).toHaveLength(1);
-    expect(transportTrace.intentWraps[0].outer.kind).toBe(KIND_GIFT_WRAP);
-    expect(transportTrace.intentWraps[0].inner.kind).toBe(30900);
-    expect(transportTrace.intentWraps[0].inner.tags).toContainEqual(['domain', 'notification']);
-    expect(transportTrace.statuses[0].tags).toContainEqual(['status', 'accepted']);
-
-    for (const request of transportTrace.requests) {
-      expect(request.kind).toBe(KIND_GIFT_WRAP);
-      expect(request.innerKind).toBe(KIND_CONTEXTVM);
-      expect(request.requesterPubkey).toBe(TEST_PUBKEY);
-      expect(request.wrapperPubkey).toMatch(/^[0-9a-f]{64}$/);
-      expect(request.wrapperPubkey).not.toBe(TEST_PUBKEY);
-      expect(request.tags).toEqual(expect.arrayContaining([['p', SERVICE_PUBKEY]]));
-      expect(normalizeRelay(request.relay)).toBe(ENCRYPTED_RELAY);
-      expect(normalizeRelay(request.relay)).not.toBe(PUBLIC_RELAY);
-      expect(transportTrace.oks).toEqual(expect.arrayContaining([
-        expect.objectContaining({ eventId: request.eventId, kind: KIND_GIFT_WRAP, accepted: true })
-      ]));
-      expect(transportTrace.results).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          requestEventId: request.eventId,
-          kind: KIND_GIFT_WRAP,
-          requesterPubkey: TEST_PUBKEY,
-          status: 'ok',
-          tags: expect.arrayContaining([
-            ['e', request.eventId],
-            ['p', TEST_PUBKEY],
-            ['encrypted', 'contextvm-jsonrpc-v1']
-          ])
-        })
-      ]));
-    }
+    expect(transportTrace.intentWraps).toHaveLength(2);
+    expect(transportTrace.intentWraps.map(({ outer, inner }) => ({ kind: outer.kind,
+      domain: inner.tags.find(tag => tag[0] === 'domain')?.[1], op: inner.tags.find(tag => tag[0] === 'op')?.[1] })))
+      .toEqual([{ kind: KIND_GIFT_WRAP, domain: 'notification', op: 'create' },
+        { kind: KIND_GIFT_WRAP, domain: 'notification', op: 'channel-test' }]);
+    expect(transportTrace.statuses).toHaveLength(2);
+    expect(transportTrace.statuses.every(status => status.tags.some(tag => tag[0] === 'status' && tag[1] === 'accepted'))).toBe(true);
   });
 });

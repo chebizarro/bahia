@@ -153,7 +153,7 @@ func TestPgPackageControlPlaneRepository_UpsertIntentKeepsRequestEventIDIdempote
 	intent := &domain.PackageIntent{
 		ID:              uuid.New(),
 		RequestEventID:  "nostr-request-1",
-		Operation:       domain.PackageOperationArtifactPublish,
+		Operation:       domain.PackageOperation("artifact_publish"),
 		RepositoryID:    &repositoryID,
 		RepositoryName:  "frontend-npm",
 		PackageName:     "@acme/web",
@@ -161,7 +161,7 @@ func TestPgPackageControlPlaneRepository_UpsertIntentKeepsRequestEventIDIdempote
 		Filename:        "acme-web-1.2.3.tgz",
 		RequesterPubkey: "pubkey",
 		RequestPayload:  map[string]any{"source_url": "https://blob.example/pkg.tgz"},
-		Status:          domain.PackageIntentStatusExecuting,
+		Status:          domain.PackageIntentStatus("executing"),
 	}
 
 	mock.ExpectExec("INSERT INTO package_intents_projection").
@@ -193,7 +193,7 @@ func TestPgPackageControlPlaneRepository_ListNonTerminalIntents(t *testing.T) {
 	intents, err := repo.ListNonTerminalIntents(ctx, 25)
 	require.NoError(t, err)
 	require.Len(t, intents, 1)
-	require.Equal(t, domain.PackageOperationRepositoryApply, intents[0].Operation)
+	require.Equal(t, domain.PackageOperation("repository_apply"), intents[0].Operation)
 	require.NotNil(t, intents[0].RepositoryID)
 	require.Equal(t, repositoryID, *intents[0].RepositoryID)
 	require.Equal(t, "frontend-npm", intents[0].RequestPayload["name"])

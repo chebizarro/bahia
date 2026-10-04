@@ -2,7 +2,6 @@ package dto
 
 import (
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
@@ -73,37 +72,5 @@ func TestAdoptionPreviewResponsesFromServiceUsesSafePayloads(t *testing.T) {
 	}
 	if container.Discovered.Compose == nil || container.Discovered.Compose.ProjectName != "legacy" || len(container.Discovered.Compose.ConfigFiles) != 1 {
 		t.Fatalf("compose metadata not mapped: %#v", container.Discovered.Compose)
-	}
-}
-
-func TestRuntimeActionResponseFromDomainCopiesObservation(t *testing.T) {
-	serviceID := uuid.New()
-	envID := uuid.New()
-	obsID := uuid.New()
-	observedAt := time.Now().UTC().Truncate(time.Second)
-	metadata := map[string]any{"container": "abc123"}
-	obs := &domain.RuntimeObservation{
-		ID:                  obsID,
-		ServiceID:           serviceID,
-		EnvironmentID:       envID,
-		ObservedImageDigest: "sha256:abc",
-		ObservedImageRepo:   "ghcr.io/org/api",
-		ObservedContainerID: "abc123",
-		HealthStatus:        domain.HealthStatusHealthy,
-		Source:              "direct_runtime",
-		Metadata:            metadata,
-		ObservedAt:          observedAt,
-	}
-
-	mapped := RuntimeActionResponseFromDomain("deploy", serviceID, envID, obs)
-	if mapped.Action != "deploy" || mapped.ServiceID != serviceID || mapped.EnvironmentID != envID {
-		t.Fatalf("action response context not mapped: %#v", mapped)
-	}
-	if mapped.Observation == nil || mapped.Observation.ID != obsID || mapped.Observation.HealthStatus != string(domain.HealthStatusHealthy) {
-		t.Fatalf("observation not mapped: %#v", mapped.Observation)
-	}
-	metadata["container"] = "mutated"
-	if mapped.Observation.Metadata["container"] != "abc123" {
-		t.Fatalf("observation metadata was not copied: %#v", mapped.Observation.Metadata)
 	}
 }

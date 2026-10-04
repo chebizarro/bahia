@@ -28,7 +28,7 @@ func TestDefaultIntentSubscriberColdRelayBecomesReady(t *testing.T) {
 	readiness := NewReadinessTracker()
 	readiness.RegisterFilter("intent-30900")
 	processor := NewIntentProcessor(trustSet, store, nil,
-		IntentProcessorConfig{EnabledDomains: BuildEnabledDomains(nil, nil)}, zap.NewNop())
+		IntentProcessorConfig{EnabledDomains: BuildEnabledDomains(nil)}, zap.NewNop())
 	subscriber := NewIntentSubscriber(pool, store, trustSet, processor, readiness, "", zap.NewNop())
 	filter := subscriber.buildFilter()
 	require.Equal(t, []nostr.Kind{30900}, filter.Kinds)

@@ -208,18 +208,18 @@ func TestContextVMRequestClientEncryptedLocalKeyRoundTrip(t *testing.T) {
 			t.Fatalf("unwrap encrypted request: %v", err)
 		}
 		rpc := decodePublishedContextVMRequest(t, *inner)
-		if rpc.Method != controlplane.ContextVMMethodServiceSecretsReveal || rpc.Params["secret_id"] != "secret-1" {
+		if rpc.Method != controlplane.ContextVMMethodDeploymentRunLogsGet || rpc.Params["run_id"] != "run-1" {
 			t.Fatalf("RPC envelope = %#v", rpc)
 		}
-		transport.events <- wrappedContextVMResult(t, senderSecret.Public(), outer, *inner, recipientSecret, false, map[string]any{"value": "revealed"})
+		transport.events <- wrappedContextVMResult(t, senderSecret.Public(), outer, *inner, recipientSecret, false, map[string]any{"stdout": "encrypted"})
 		return 1, nil
 	}
 
-	result, err := client.Request(context.Background(), controlplane.ContextVMMethodServiceSecretsReveal, map[string]any{"secret_id": "secret-1"}, nil, nil)
+	result, err := client.Request(context.Background(), controlplane.ContextVMMethodDeploymentRunLogsGet, map[string]any{"run_id": "run-1"}, nil, nil)
 	if err != nil {
 		t.Fatalf("Request() error = %v", err)
 	}
-	if result.PubKey.Hex() != recipientSecret.Public().Hex() || result.Content != `{"value":"revealed"}` {
+	if result.PubKey.Hex() != recipientSecret.Public().Hex() || result.Content != `{"stdout":"encrypted"}` {
 		t.Fatalf("result author/content = %s %s", result.PubKey.Hex(), result.Content)
 	}
 	filter := transport.onlyFilter(t)

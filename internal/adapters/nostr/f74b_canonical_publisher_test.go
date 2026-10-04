@@ -197,7 +197,7 @@ func TestF74bPackageIntentAndApprovalMutationPublishing(t *testing.T) {
 	pub, sink, _ := f74bTestPublisher(t)
 	inner := &f74bPackageRepo{}
 	repo := NewCanonicalPackageRepository(inner, inner, pub)
-	intent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: "request-1", Status: domain.PackageIntentStatusAccepted}
+	intent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: "request-1", Status: domain.PackageIntentStatus("accepted")}
 	if err := repo.UpsertIntent(ctx, intent); err != nil {
 		t.Fatal(err)
 	}

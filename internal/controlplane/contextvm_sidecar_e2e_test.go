@@ -2,8 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -12,7 +10,6 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/relaysidecar"
-	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -127,83 +124,15 @@ func (h *contextVMSidecarHarness) nextReply(t *testing.T, ctx context.Context, r
 // exactly as the web sends it (plaintext 25910, inline payload of
 // maxContextVMInlineSBOMBytes) fits one relay message, is relayed by the
 // sidecar to the daemon, is enqueued in full, and the reply comes back.
-func TestContextVMInlineSBOMAtTheLimitCrossesTheSidecar(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancel()
-	h := startContextVMSidecarHarness(t, ctx)
-	ack, err := service.NewSBOMAcceptedAck("web.sbom.import:artifact")
-	if err != nil {
-		t.Fatal(err)
-	}
-	runner := &fakeSBOMRequestRunner{importAck: ack}
-	h.transport.RegisterContextVMHandler(ContextVMMethodSBOMImport, sbomContextVMHandler{runner: runner}.importSBOM)
-
-	artifactID := "0b6f2c1e-4d7a-4e8b-9c3d-2f1a5b6c7d8e"
-	digest := "sha256:" + strings.Repeat("ab", 32)
-	payload := base64.StdEncoding.EncodeToString(make([]byte, maxContextVMInlineSBOMBytes))
-	requestID := "6f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f"
-	params := map[string]any{
-		"idempotencyKey": "web.sbom.import:artifact:" + artifactID + ":" + digest + ":spdx:inline:" + payload[:24] + ":" + payload[len(payload)-24:] + ":web-import",
-		"subject":        map[string]any{"type": "artifact", "id": artifactID, "display_name": "registry.example.com/acme/some-service-with-a-long-name", "digest": digest},
-		"format":         "spdx",
-		"payloadBase64":  payload,
-		"storage":        "blossom",
-		"generator":      map[string]any{"id": "web-import"},
-		"_meta":          map[string]any{"progressToken": requestID},
-	}
-	content, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": requestID, "method": ContextVMMethodSBOMImport, "params": params})
-	if err != nil {
-		t.Fatal(err)
-	}
-	servicePubkey := testNostrPubKeyFromPrivateKey(t, testServiceKey).Hex()
-	request := nostr.Event{
-		Kind:      KindContextVMMessage,
-		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"domain", "sbom"}, {"operation", "sbom/import"}, {"subject_type", "artifact"}, {"artifact", artifactID},
-			{"subject", digest}, {"format", "spdx"}, {"generator", "web-import"},
-			{"p", servicePubkey}, {EncryptedRequestRoutingTag, ContextVMWireVersion}, {"method", ContextVMMethodSBOMImport},
-		},
-		Content: string(content),
-	}
-	if err := request.Sign(testNostrSecretKey(t, testRequesterKey)); err != nil {
-		t.Fatal(err)
-	}
-	frame, err := json.Marshal([]any{"EVENT", request})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(frame) > sidecarRelayMaxMessageBytes {
-		t.Fatalf("an at-limit inline SBOM request is a %d-byte frame, over the relay's %d", len(frame), sidecarRelayMaxMessageBytes)
-	}
-	t.Logf("at-limit inline SBOM frame: %d bytes (%d to spare)", len(frame), sidecarRelayMaxMessageBytes-len(frame))
-
-	if err := h.requester.Publish(ctx, request); err != nil {
-		t.Fatalf("sidecar refused the at-limit inline SBOM: %v", err)
-	}
-	h.deliverNextRequest(t, ctx)
-	if runner.importCalls != 1 || len(runner.importReq.Payload) != maxContextVMInlineSBOMBytes {
-		t.Fatalf("daemon enqueued calls=%d payload=%d bytes, want 1 and %d", runner.importCalls, len(runner.importReq.Payload), maxContextVMInlineSBOMBytes)
-	}
-	reply := h.nextReply(t, ctx, request.ID)
-	if rpc := contextVMResponse(t, reply); rpc.Error != nil {
-		t.Fatalf("sbom/import reply error: %+v", rpc.Error)
-	}
-}
-
-// TestContextVMReplyTooLargeToStoreCrossesTheSidecar: a 1059 request whose
-// reply is too large for the relay to store (41-64 KB of logs) gets the reply
-// as an ephemeral 21059 wrap, which the sidecar relays to the waiting
-// requester. A stored 1059 of the same size would be refused.
 func TestContextVMReplyTooLargeToStoreCrossesTheSidecar(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	h := startContextVMSidecarHarness(t, ctx)
 	logs := strings.Repeat("log line\n", 5_000) // 45 KB
-	h.transport.RegisterContextVMHandler(ContextVMMethodBackupRun, func(context.Context, ContextVMRequest) (any, error) {
+	h.transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
 		return map[string]any{"logs": logs}, nil
 	})
-	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"logs","method":"backup/run","params":{"_meta":{"progressToken":"logs"}}}`)
+	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"logs","method":"deployments/run-logs-get","params":{"_meta":{"progressToken":"logs"}}}`)
 	request := wrapContextVMEvent(t, inner, KindContextVMGiftWrap)
 	if err := h.requester.Publish(ctx, *request); err != nil {
 		t.Fatalf("publish request: %v", err)

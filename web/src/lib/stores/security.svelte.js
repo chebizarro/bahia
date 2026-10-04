@@ -1,9 +1,9 @@
-import { requestEncryptedResult, encryptedRequestsAvailable } from '$lib/nostr/encrypted-controlplane.js';
+import { publishIntentForStatus, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
+import { securityScanIntent } from '$lib/nostr/final-ops-intents.js';
 import { onStoreRefresh } from '$lib/nostr/boot.js';
 import { CP_STATE_TOPICS, SECURITY_FINDING_RECORD, SECURITY_SCHEDULE_RECORD, SECURITY_FINDING_DETAIL_RECORD } from '$lib/nostr/kinds.gen.js';
 import { onContentKeyChange } from '$lib/stores/auth-roles.svelte.js';
 import { readConfidentialTopic, reassembleFindingDetails } from './collections/confidential-records.js';
-import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
 
 export const securityState = $state({
   findings: [], findingsLoading: false, findingsError: null,
@@ -11,28 +11,12 @@ export const securityState = $state({
   unreadable: false, scanSubmitting: false, scanError: null
 });
 
-export const SECURITY_ENCRYPTED_OPERATIONS = { scan: 'security/scan', rescan: 'security/rescan' };
 let findingsScope = null;
 let scheduleParams = {};
 let unsubscribeRefresh = null;
 let unsubscribeKeys = null;
 let findingsUnreadable = false;
 let schedulesUnreadable = false;
-
-async function ensureEncryptedSecurity() {
-  let info = currentSystemInfo();
-  if (!info) info = await loadSystemInfo();
-  if (!encryptedRequestsAvailable(info)) {
-    throw new Error('ContextVM requests are not available. Ensure Bahia discovery advertises standard relay URLs and a Bahia service pubkey before using security features.');
-  }
-  return info;
-}
-
-function extractEncryptedPayload(response, fallback = {}) {
-  const envelope = response?.result ?? response;
-  if (envelope?.status === 'error') throw new Error(envelope?.error?.message || 'Encrypted security operation failed');
-  return envelope?.payload ?? fallback;
-}
 
 export function computeSeverityCounts(findings) {
   const counts = { critical: 0, high: 0, moderate: 0, low: 0, unknown: 0 };
@@ -86,22 +70,14 @@ export function listSecuritySchedules(params = {}) {
   return securityState.schedules;
 }
 
-/**
- * Submit a security scan via ContextVM.
- * @param {object} target - Scan target input: { type, sbom?, package?, purl?, commit? }
- * @param {object} options - Optional: { force }
- * @returns {object} Accepted response with run_id, target_key_hash, target_type
- */
 export async function submitSecurityScan(target, options = {}) {
   securityState.scanSubmitting = true;
   securityState.scanError = null;
   try {
-    await ensureEncryptedSecurity();
-    const response = await requestEncryptedResult({
-      operation: SECURITY_ENCRYPTED_OPERATIONS.scan,
-      payload: { target, force: Boolean(options.force) }
-    });
-    return extractEncryptedPayload(response);
+    const status = await publishIntentForStatus(securityScanIntent(target, options,
+      resolveIntentOrgId('security')));
+    if (!status.data?.run_id) throw new Error('Accepted security scan has no run id');
+    return status.data;
   } catch (error) {
     securityState.scanError = error?.message || 'Failed to submit security scan';
     throw error;
@@ -110,27 +86,11 @@ export async function submitSecurityScan(target, options = {}) {
   }
 }
 
-/**
- * Trigger a rescan for an existing target via ContextVM.
- * @param {string} targetKeyHash - The target_key_hash to rescan
- * @returns {object} Accepted response with run_id
- */
 export async function rescanSecurityTarget(targetKeyHash) {
-  securityState.scanSubmitting = true;
-  securityState.scanError = null;
-  try {
-    await ensureEncryptedSecurity();
-    const response = await requestEncryptedResult({
-      operation: SECURITY_ENCRYPTED_OPERATIONS.rescan,
-      payload: { target_key_hash: targetKeyHash }
-    });
-    return extractEncryptedPayload(response);
-  } catch (error) {
-    securityState.scanError = error?.message || 'Failed to submit security rescan';
-    throw error;
-  } finally {
-    securityState.scanSubmitting = false;
-  }
+  const schedule = securityState.schedules.find(row => row.target_key_hash === targetKeyHash);
+  const target = schedule?.target || schedule?.metadata?.target;
+  if (!target) throw new Error('The canonical schedule does not contain a scan target; submit a new scan with its target details');
+  return submitSecurityScan(target, { force: true });
 }
 
 export function refreshSecurityStore({ findingsScope: scope = findingsScope, scheduleParams: schedules = scheduleParams } = {}) {

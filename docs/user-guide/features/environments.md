@@ -1,5 +1,7 @@
 # Environments
 
+`environment/worker-policy-apply` is a fleet-operator desired-state intent on the environment coordinate. It updates the full `runtime_config.worker_policy` in the canonical environment record; use that record's `updated_at` as `expected_updated_at` to detect conflicts. See the [D80 fixture](../../../web/tests/fixtures/d80-intent-content.json).
+
 The web environment list and detail views read the local verified event store by the `environment-registry` topic. Runtime state uses the `service-state` topic. Cached data renders without waiting for relay EOSE, and live updates or kind-5 deletions update the view in place. Mutation transport remains unchanged in this phase.
 
 
@@ -26,7 +28,7 @@ Environments define:
 
 ## Creating an Environment
 
-Environment creation is signer-first. Bahia no longer accepts REST `POST /api/v1/environments`; clients publish a ContextVM JSON-RPC `environment/create` intent as Nostr kind `25910`, usually wrapped with CEP-4/NIP-59 `1059` or `21059`. The response acknowledges receipt only; durable environment state, status, and audit facts come from canonical `30900`, `30315`, and `4903` observables.
+Environment creation is signer-first. Bahia web publishes a signed kind-`30900` `environment/create` intent, not a ContextVM or REST request. Requester-scoped `30315` acknowledges the intent; durable environment state and audit facts come from canonical `30900` and `4903` observables.
 
 ### Web UI
 
@@ -37,7 +39,7 @@ Environment creation is signer-first. Bahia no longer accepts REST `POST /api/v1
 
 ### Nostr
 
-Publish a ContextVM `environment/create` request as kind `25910` or inside an encrypted `1059`/`21059` wrapper.
+Publish a signed `environment/create` kind-`30900` intent. Worker-policy changes use `environment/worker-policy-apply` with the current environment's `updated_at` revision.
 
 ## Environment Properties
 
@@ -55,7 +57,7 @@ Publish a ContextVM `environment/create` request as kind `25910` or inside an en
 | `deploy_strategy` | `replace`, `blue_green`, or `canary` | No |
 | `protected` | Enables additional deployment protections | No |
 
-For `environment/update`, omitted fields remain unchanged. `deployment_units` is special: omission preserves the current set, a supplied array replaces the complete explicit set atomically, and `[]` returns the environment to an implicit default unit. A request that supplies `deployment_units` must include `expected_updated_at` from the latest read; stale revisions fail closed with ContextVM code `-32009` and no registry mutation. If explicit units are supplied, `targeting.default_unit_key` must name one of them.
+For `environment/update`, omitted fields remain unchanged. `deployment_units` is special: omission preserves the current set, a supplied array replaces the complete explicit set atomically, and `[]` returns the environment to an implicit default unit. An intent that supplies `deployment_units` must include `expected_updated_at` from the latest read; stale revisions fail closed with a conflict status and no registry mutation. If explicit units are supplied, `targeting.default_unit_key` must name one of them.
 
 ## Environment Types
 
@@ -213,17 +215,17 @@ The CLI publishes signer-first kind `30900` environment intents and waits for ki
 1. Go to the environment detail page
 2. Click **Edit** for environment properties, or use **Deployment Units** to create/edit an explicit Compose target
 3. For a target, review the unit key, server-managed endpoint alias, dedicated Compose directory, Bahia-managed ownership, execution mode, and reconcile mode
-4. Click **Save Unit** (or confirm the protected-environment summary) to publish the signed ContextVM intent
+4. Click **Save Unit** (or confirm the protected-environment summary) to publish the signed intent
 
 If the canonical environment revision changes while a target draft is open, Bahia disables submission and requires the operator to reload and review instead of silently rebasing the signed full set.
 
 ### Nostr
 
-Publish a ContextVM `environment/update` request with `id` and only the fields to change. If `deployment_units` is present, it is the complete desired explicit set, not a patch, and `expected_updated_at` is required. The `environments units` CLI commands obtain environment, targeting, `updated_at`, and resolved units from canonical `30900` state, then publish a full desired-state intent. There is no automatic HTTP fallback or silent retry of a stale complete-set write.
+Publish a signed `environment/update` intent with `id` and only the fields to change. If `deployment_units` is present, it is the complete desired explicit set, not a patch, and `expected_updated_at` is required. The `environments units` CLI commands obtain environment, targeting, `updated_at`, and resolved units from canonical `30900` state, then publish a full desired-state intent. There is no automatic HTTP fallback or silent retry of a stale complete-set write.
 
 ## Deleting Environments
 
-Environments can be deleted when no longer needed by publishing a ContextVM `environment/delete` intent. REST `DELETE /api/v1/environments/{id}` is no longer accepted for signer-first mutations.
+Environments can be deleted when no longer needed by publishing a signed `environment/delete` intent. REST `DELETE /api/v1/environments/{id}` is no longer accepted for signer-first mutations.
 
 **Warning**: You cannot delete an environment that has:
 - Active deployments

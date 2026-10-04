@@ -2,12 +2,10 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
-	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -286,39 +284,6 @@ func TestD72MLIntentsDeleteAndIdentityChange(t *testing.T) {
 			case "endpoint-update":
 				require.Equal(t, "new", repo.endpoints[id].Name)
 				require.Equal(t, 1, canonical.endpoints)
-			}
-		})
-	}
-}
-
-func TestD72MLContextVMDualAndLegacyDispatch(t *testing.T) {
-	for _, dual := range []bool{false, true} {
-		t.Run(map[bool]string{false: "legacy", true: "dual"}[dual], func(t *testing.T) {
-			actor := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
-			repo, canonical := newD70MLRepo(), &d70MLCanonical{}
-			registry := service.NewMLRegistryService(repo, nil, zap.NewNop())
-			registry.SetMLCPStatePublisher(canonical)
-			var processor *IntentProcessor
-			var statuses *statusCollector
-			if dual {
-				processor, statuses = d70Processor(t, "ml", actor, NewMLIntentHandler(registry))
-			}
-			h := mlRegistryContextVMHandlers{registry: registry, processor: processor}
-			id := uuid.New()
-			content, err := json.Marshal(map[string]any{"id": id.String(), "slug": "sample", "name": "Sample"})
-			require.NoError(t, err)
-			request := ContextVMRequest{Event: &nostr.Event{ID: testNostrID("d72-ml-contextvm"), PubKey: testNostrPubKeyFromHex(t, actor)}, RPC: ContextVMJSONRPCRequest{Params: content}}
-			_, err = h.mutate(context.Background(), request, "model-create")
-			require.NoError(t, err)
-			require.Equal(t, 1, repo.writes)
-			require.Equal(t, 1, canonical.models)
-			if dual {
-				require.Len(t, statuses.events, 1)
-				require.Equal(t, "accepted", tagValueNostr(statuses.events[0].Tags, "status"))
-				_, err = h.mutate(context.Background(), request, "model-create")
-				require.NoError(t, err)
-				require.Equal(t, 1, repo.writes)
-				require.Equal(t, 1, canonical.models)
 			}
 		})
 	}

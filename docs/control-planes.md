@@ -1,15 +1,21 @@
 # Bahia Control Planes
 
+The D80 scan, SBOM generation/import, artifact signature verification and build-result registration, relay policy, notification test, environment worker policy, and ML pin contracts are specified in the [D80 fixtures](../web/tests/fixtures/d80-intent-content.json) and [command guide](nostr-commands.md#d80-request-operations-and-desired-state). They use existing kind `30900` intents, bounded `30315` acknowledgements, and existing canonical outcome families; no new kind is allocated. Relay policy reads subscribe to the complete protected `relay-settings:operator` cp-state record.
+
 ## Deployment-family intent admission
 
 The `deployment`, `runtime`, `llm`, and `backup` intent domains admit client-signed kind `30900` desires when individually enabled. Revisioned intents copy the canonical record's RFC3339 `updated_at` string into `content.expected_updated_at`; numeric epochs are invalid. The processor verifies TrustSet permissions, deduplicates by `content.intent_id`, invokes the existing service paths, and emits bounded `30315` admission status; those services alone publish canonical state. Existing ContextVM mutations use in-process intent dispatch only for enabled domains and keep the legacy path otherwise. See the [domain operation table](designs/phase3-authority-inversion.md) and [wire fixtures](../web/tests/fixtures/deployment-intents.json).
 
-## Publisher and discovery boundaries
+## D79 operator request boundary
+
+The `ml`, `tool`, `build`, and `adoption` intent domains add the [D79 operation set](../web/tests/fixtures/d79-intent-content.json). The client signs the desired content or request and a stable tag-level `intent_id`; the daemon creates the queued build/ML records, applies approvals, or scans and emits bounded requester-scoped `30315` status. Adoption scan results are redacted, paged, and never treated as canonical adoption state. Fleet-operator or adoption-operator allowlists and tenant `services:write` remain as on the corresponding ContextVM methods. Those methods dual-dispatch through the intent processor until removed.
+
+## Legacy publisher and discovery boundaries
 
 Artifact and tool-approval publishers use canonical ContextVM envelopes. MCP policy evaluation uses a `policy` kind-30900 intent (`op=evaluate`) whose bounded kind-30315 status carries the decision. LLM approval selects `approval/llm-approve` or `approval/llm-reject`. Discovery
 advertises registered server methods only, so outbound publisher support is not
 proof that the server can execute the request. AI/ML discovery remains read-model
-only until mutation consumers exist. See the [implementation guide](nostr-event-implementation-guide.md#artifact-policy-and-approval-publishers).
+only; mutation consumers are the ML intent handlers. See the [implementation guide](nostr-event-implementation-guide.md#artifact-policy-and-approval-publishers).
 
 ## Virtualization control boundary
 
@@ -247,7 +253,7 @@ After receiving this acknowledgment, clients subscribe to `30315` with `#d=<stat
 Human browser operators use the DNS dashboard as a Nostr-native console:
 
 - DNS and FIPS mesh state are read from canonical state/app-data observables (`30900` and `30078`) with semantic `domain`, `schema`, `d`, and resource tags such as `dns-endpoint`, `dns-zone`, `dns-policy`, `worker`, and `fips-mesh`. The dashboard bootstraps historical state through EOSE-aware queries and keeps subscriptions open for realtime EVENT updates. REST read catalogs are not the dashboard substrate.
-- DNS writes are ContextVM methods (`dns/zone-create`, `dns/policy-apply`, `dns/record-set`, `dns/override-retire`, `dns/drift-remediate`) rather than Bahia-specific request kinds. The browser records the ContextVM event id, relay OK accepted/rejected outcomes, and canonical observable updates.
+- The browser signs kind-30900 DNS intents, including zone-scoped `drift-remediate`. It keeps the pending overlay until a correlated kind-30315 acceptance or rejection; remediation completion comes from the accepted status `data`, not a ContextVM response.
 - No REST DNS write endpoints are part of this UX. REST remains a compatibility/query surface for areas that have not moved to Nostr-native flows.
 
 Agent operators use MCP for synchronous discovery and action entry points while following Nostr truth for async state:
@@ -322,13 +328,13 @@ The notification bridge uses the internal event type `security.policy_breached` 
 
 ### ContextVM Operator Actions
 
-Operator workflows are ContextVM JSON-RPC requests carried as kind `25910`, usually inside CEP-4/NIP-59 gift-wrap (`1059` or `21059`). They are not REST RPC and must be followed as event streams: publish the ContextVM request, subscribe for the correlated ContextVM response and canonical observables, process `30315` statuses and `4903` audit facts as progress/evidence, and treat canonical state convergence (`30900`/domain NIPs) plus explicit JSON-RPC errors as the durable truth. Clients should not poll or use timeout-based completion; use EOSE for historical catch-up and keep subscriptions open for realtime replies.
+Interactive operator RPCs (assistant turns, secret reveal, and run-log fetch) use ContextVM JSON-RPC kind `25910`, optionally inside CEP-4/NIP-59 gift-wrap (`1059` or `21059`). CLI mutations instead publish signed kind-`30900` intents and follow requester-scoped `30315` status plus canonical observables. Neither path is REST RPC: clients process EOSE for historical catch-up, keep subscriptions open for realtime events, and treat canonical state convergence (`30900`/domain NIPs) as durable truth rather than polling.
 
 `maintenance/*` is a stricter sub-protocol: Bahia publishes a conformant NIP-59 `1059`, the worker returns a conformant NIP-59 `1059`, and absolute host paths exist only inside the authenticated rumor payload. Public `30315`/`4903` projections use opaque request-event correlation and omit path-bearing details.
 
 CLI behavior:
 
-- `bahia adopt scan|import` and `bahia services actions deploy|restart|stop` use ContextVM methods such as `adoption/scan`, `adoption/import`, `service/deploy`, `service/restart`, and `service/stop`.
+- `bahia adopt scan|import`, `bahia builds request`, and `bahia services actions deploy|restart|stop` publish signed intents through the CLI outbox and follow `30315` status. `bahia logs run` retains the keyed ContextVM request path.
 - Production operators can sign through NIP-46 without holding the operator
   identity key. Provide `--nostr-bunker-file` and
   `--nostr-client-key-file`; when the signer relay is stored separately from
@@ -461,14 +467,14 @@ REST write endpoints (`POST`, `PUT`, `DELETE` for creating, updating, or deletin
 
 1. **Nostr is the source of truth.** Every mutation must be a signed Nostr event published to relays, giving relay-side indexing, signature verification, replay protection, and audit lineage. REST writes bypass all of this.
 2. **Command receipts are relay-acknowledged.** The `CommandReceipt` contract requires a signed event ID and relay `OK` acceptance. REST-originated writes cannot produce authentic receipts because no Nostr event was published.
-3. **ContextVM is the canonical mutation transport.** AGENTS.md mandates that all mutations flow through ContextVM kind `25910` JSON-RPC intents. Wrapping Nostr publish calls behind REST handlers creates "fake request/response wrappers over relays" — an explicitly prohibited pattern.
+3. **Signed intents are the canonical mutation transport.** Clients publish kind `30900` directly and follow kind `30315` status; client ContextVM use is limited to approved interactive RPCs while the daemon's legacy mutation dual-dispatch is retired. Wrapping Nostr publish calls behind REST handlers creates "fake request/response wrappers over relays" — an explicitly prohibited pattern.
 
 ### What to use instead
 
 | Surface | Mutation entry point | Implementation |
 |---------|---------------------|----------------|
 | **MCP tools** | `POST /mcp` with `tools/call` JSON-RPC | `internal/mcp/server.go` → controlplane publishers |
-| **CLI** | `bahia services actions deploy\|restart\|stop`, `bahia adopt scan\|import` | `cmd/cli/operator_nostr.go` → ContextVM `25910` |
+| **CLI** | `bahia services actions deploy\|restart\|stop`, `bahia adopt scan\|import`, `bahia builds request` | `cmd/cli/intent_mutations.go` → signed intent `30900`, status `30315` |
 | **Browser** | ContextVM `25910` via NIP-07/NIP-46 signer | Direct Nostr event publication to relay |
 | **REST** | Read-only `GET` endpoints only | `internal/api/handlers/*.go` (Get/List methods) |
 

@@ -54,7 +54,10 @@ func TestDecodeJSON(t *testing.T) {
 	body := `{"name": "test-service", "artifact_repo": "harbor/test"}`
 	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
 
-	var req dto.CreateServiceRequest
+	var req struct {
+		Name         string `json:"name"`
+		ArtifactRepo string `json:"artifact_repo"`
+	}
 	if err := decodeJSON(r, &req); err != nil {
 		t.Fatalf("failed to decode: %v", err)
 	}

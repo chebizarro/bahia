@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -58,6 +59,12 @@ type FleetScopedHandler interface {
 	IsFleetScoped() bool
 }
 
+// FleetScopedOperationHandler allows a single operation on an otherwise
+// organization-scoped domain to retain its fleet-operator permission gate.
+type FleetScopedOperationHandler interface {
+	IsFleetScopedOperation(op string) bool
+}
+
 // SelfAuthorizingHandler is an optional interface that DomainHandler
 // implementations may satisfy when the default per-org RBAC or fleet-scoped
 // authorization is insufficient. The org domain needs this because org-create
@@ -100,8 +107,7 @@ type Intent struct {
 	// ExpectedUpdatedAt is the canonical record's updated_at revision.
 	ExpectedUpdatedAt *time.Time
 	// Actor is the pubkey that originated the intent. For relay-path intents
-	// this is Event.PubKey; for in-process dispatch it is the ContextVM/REST
-	// caller's pubkey.
+	// this is Event.PubKey; for in-process MCP dispatch it is the caller's pubkey.
 	Actor string
 }
 
@@ -112,7 +118,7 @@ type IntentProcessorConfig struct {
 	EnabledDomains map[string]bool
 }
 
-// IntentProcessor is the shared pipeline for relay and in-process intents.
+// IntentProcessor is the pipeline for signed relay and in-process MCP intents.
 // See design §3.2 for the seven processing steps.
 type IntentProcessor struct {
 	mu       sync.RWMutex
@@ -194,13 +200,9 @@ func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Even
 	return p.process(ctx, intent, false)
 }
 
-// ProcessInProcess handles an intent from the dual-dispatch path (ContextVM/
-// REST/MCP). The caller has already authorized the request through the
-// existing encryptedTenantAuthorizer or REST auth middleware. The actor is the
-// original requester's pubkey, not the daemon's.
-//
-// This path shares the same pipeline and idempotency store as the relay path,
-// preventing double application (§4.1).
+// ProcessInProcess handles MCP-originated intents through the same pipeline
+// and idempotency store as signed relay intents. The caller must already be
+// authenticated and authorized; Actor identifies that caller, not the daemon.
 func (p *IntentProcessor) ProcessInProcess(ctx context.Context, intent *Intent) error {
 	if raw, ok := intent.Content["expected_updated_at"]; ok {
 		revision, err := parseIntentRevision(raw)
@@ -227,13 +229,28 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		)
 		return nil
 	}
+	if requiresStrictIntentReplay(intent) && (p.status == nil || p.status.publish == nil || p.status.signer == nil) {
+		return fmt.Errorf("intent outcome status publisher is not configured")
+	}
 
 	// Step 1: Deduplicate by intent_id.
 	if p.isProcessed(intent.IntentID) {
+		record := p.ProcessedIntent(intent.IntentID)
+		if requiresStrictIntentReplay(intent) && record != nil && (record.Actor != intent.Actor || record.Domain != intent.Domain || record.Op != intent.Op || record.Coordinate != intent.Coordinate || (record.ContentHash != "" && record.ContentHash != intentContentHash(intent.Content))) {
+			err := &intentReplayConflictError{intentID: intent.IntentID}
+			if p.status != nil {
+				p.status.PublishConflictReason(ctx, intent, err.Error())
+			}
+			return err
+		}
 		if inProcess {
-			if record := p.ProcessedIntent(intent.IntentID); record != nil {
+			if record != nil {
 				intent.Result = record.Result
 			}
+		}
+		if requiresStrictIntentReplay(intent) && record != nil {
+			intent.StatusData = record.Result
+			return p.status.PublishAcceptedChecked(ctx, intent)
 		}
 		p.logger.Debug("skipping already-processed intent",
 			zap.String("intent_id", intent.IntentID),
@@ -277,7 +294,9 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	} else {
 		perm := handler.PermissionFor(intent.Op)
 		authorized := false
-		if fs, ok := handler.(FleetScopedHandler); ok && fs.IsFleetScoped() {
+		if fs, ok := handler.(FleetScopedOperationHandler); ok && fs.IsFleetScopedOperation(intent.Op) {
+			authorized = p.isFleetOperator(intent.Actor)
+		} else if fs, ok := handler.(FleetScopedHandler); ok && fs.IsFleetScoped() {
 			// Fleet-scoped domain: check fleet operator identity instead of
 			// per-org RBAC. Fleet operators are NOT org members (§2.2).
 			authorized = p.isFleetOperator(intent.Actor)
@@ -322,7 +341,11 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		)
 		if p.status != nil {
 			if IsRevisionConflict(err) {
-				p.status.PublishConflict(ctx, intent)
+				if _, stateConflict := err.(*intentStateConflictError); stateConflict {
+					p.status.PublishConflictReason(ctx, intent, err.Error())
+				} else {
+					p.status.PublishConflict(ctx, intent)
+				}
 			} else {
 				p.status.PublishRejection(ctx, intent, err.Error())
 			}
@@ -343,6 +366,9 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 
 	// Step 6: Mark processed (idempotency).
 	p.markProcessed(intent)
+	if requiresStrictIntentReplay(intent) {
+		return p.status.PublishAcceptedChecked(ctx, intent)
+	}
 
 	// Step 7: Publish canonical state is done by the domain handler.
 	if p.status != nil && intent.Evaluation == nil {
@@ -369,13 +395,14 @@ func (p *IntentProcessor) IsProcessed(intentID string) bool {
 // intent. It lets in-process retry transports return the original event ID
 // even after a canonical entity has been tombstoned.
 type ProcessedIntentRecord struct {
-	Actor      string         `json:"actor"`
-	OrgID      string         `json:"org_id"`
-	Domain     string         `json:"domain"`
-	Op         string         `json:"op"`
-	Coordinate string         `json:"coordinate"`
-	EventID    string         `json:"event_id"`
-	Result     map[string]any `json:"result,omitempty"`
+	Actor       string         `json:"actor"`
+	OrgID       string         `json:"org_id"`
+	Domain      string         `json:"domain"`
+	Op          string         `json:"op"`
+	Coordinate  string         `json:"coordinate"`
+	EventID     string         `json:"event_id"`
+	ContentHash string         `json:"content_hash,omitempty"`
+	Result      map[string]any `json:"result,omitempty"`
 }
 
 // ProcessedIntent returns the durable idempotency marker for an intent ID.
@@ -437,6 +464,9 @@ func (p *IntentProcessor) markProcessed(intent *Intent) {
 		result = nil
 	}
 	record := ProcessedIntentRecord{Actor: intent.Actor, OrgID: intent.OrgID.String(), Domain: intent.Domain, Op: intent.Op, Coordinate: intent.Coordinate, Result: result}
+	if requiresStrictIntentReplay(intent) {
+		record.ContentHash = intentContentHash(intent.Content)
+	}
 	if intent.Event != nil {
 		record.EventID = intent.Event.ID.Hex()
 	}
@@ -461,6 +491,41 @@ func (p *IntentProcessor) markProcessed(intent *Intent) {
 		)
 	}
 }
+
+func intentContentHash(content map[string]any) string {
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
+}
+
+func requiresStrictIntentReplay(intent *Intent) bool {
+	switch intent.Domain {
+	case "build":
+		return intent.Op == "request"
+	case "tool":
+		return intent.Op == "approval-response"
+	case "adoption":
+		return intent.Op == "scan"
+	case "ml":
+		switch intent.Op {
+		case "model-import", "recipe-apply", "recipe-run", "inference-deploy", "inference-approval", "inference-rollback":
+			return true
+		}
+	}
+	return false
+}
+
+type intentReplayConflictError struct{ intentID string }
+
+func (e *intentReplayConflictError) Error() string {
+	return "intent_id " + e.intentID + " conflicts with previously accepted content"
+}
+
+type intentStateConflictError struct{ message string }
+
+func (e *intentStateConflictError) Error() string { return e.message }
 
 // ParseIntent extracts a validated Intent from a kind 30900 event.
 func ParseIntent(ev *nostr.Event) (*Intent, error) {
@@ -521,7 +586,7 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 		return nil, fmt.Errorf("missing intent_id tag")
 	}
 	if intent.OrgID == uuid.Nil && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" &&
-		intent.Domain != "adoption" {
+		intent.Domain != "adoption" && intent.Domain != "tool" && intent.Domain != "security" && intent.Domain != "sbom" && intent.Domain != "relay" {
 		return nil, fmt.Errorf("missing or invalid org tag")
 	}
 
@@ -593,20 +658,15 @@ var RegisteredIntentDomains = []string{
 	"service", "environment", "policy", "package", "backup", "llm", "ml",
 	"dns", "worker", "deployment", "runtime", "org", "secret", "notification",
 	"artifact", "adoption", // D76 (bahia-irsry.76)
+	"build", "tool", // D79 (bahia-irsry.79)
+	"security", "sbom", "relay", // D80 (bahia-irsry.80)
 }
 
 // BuildEnabledDomains enables every registered domain except explicit opt-outs.
-// A non-empty deprecated allowlist retains the Phase 3 selection semantics.
-func BuildEnabledDomains(disabled, legacyAllowlist []string) map[string]bool {
+func BuildEnabledDomains(disabled []string) map[string]bool {
 	m := make(map[string]bool, len(RegisteredIntentDomains))
-	allowed := make(map[string]bool, len(legacyAllowlist))
-	for _, domain := range legacyAllowlist {
-		allowed[strings.ToLower(strings.TrimSpace(domain))] = true
-	}
 	for _, domain := range RegisteredIntentDomains {
-		if len(legacyAllowlist) == 0 || allowed[domain] {
-			m[domain] = true
-		}
+		m[domain] = true
 	}
 	for _, domain := range disabled {
 		delete(m, strings.ToLower(strings.TrimSpace(domain)))

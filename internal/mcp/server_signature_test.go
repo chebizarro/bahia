@@ -87,7 +87,7 @@ func (v *testMCPSignatureVerifier) VerifySignatures(_ context.Context, artifact 
 	return out, nil
 }
 
-func newTestMCPSignatureServer(t *testing.T, verifier SignatureVerifier) (*Server, *testMCPSignatureRepo, uuid.UUID) {
+func newTestMCPSignatureServer(t *testing.T) (*Server, *testMCPSignatureRepo, uuid.UUID) {
 	t.Helper()
 
 	artifactID := uuid.New()
@@ -118,15 +118,12 @@ func newTestMCPSignatureServer(t *testing.T, verifier SignatureVerifier) (*Serve
 		zap.NewNop(),
 	)
 	sigRepo := newTestMCPSignatureRepo()
-	server := newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{
-		Signatures:   sigRepo,
-		SignVerifier: verifier,
-	})
+	server := newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{})
 	return server, sigRepo, artifactID
 }
 
 func TestGetTools_IncludesSignatureTools(t *testing.T) {
-	server, _, _ := newTestMCPSignatureServer(t, &testMCPSignatureVerifier{})
+	server, _, _ := newTestMCPSignatureServer(t)
 
 	required := map[string]bool{
 		"bahia_list_signatures":          false,
@@ -149,7 +146,7 @@ func TestGetTools_IncludesSignatureTools(t *testing.T) {
 
 func TestCallTool_SignatureListingStatusAndGet(t *testing.T) {
 	ctx := authorizedMCPContext()
-	server, sigRepo, artifactID := newTestMCPSignatureServer(t, &testMCPSignatureVerifier{})
+	server, sigRepo, artifactID := newTestMCPSignatureServer(t)
 	now := time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC)
 	verifiedID := uuid.New()
 	unverifiedID := uuid.New()
@@ -229,45 +226,6 @@ func TestCallTool_SignatureListingStatusAndGet(t *testing.T) {
 	}
 }
 
-func TestCallTool_VerifySignaturesStoresDiscoveredRecords(t *testing.T) {
-	ctx := authorizedMCPContext()
-	now := time.Date(2026, 5, 2, 11, 0, 0, 0, time.UTC)
-	verifier := &testMCPSignatureVerifier{
-		signatures: []domain.ArtifactSignature{
-			{
-				ID:             uuid.New(),
-				SignerIdentity: "builder@example.com",
-				SignatureType:  domain.SignatureCosign,
-				SignatureRef:   "sha256:signature",
-				Verified:       true,
-				VerifiedAt:     &now,
-				CreatedAt:      now,
-			},
-		},
-	}
-	server, sigRepo, artifactID := newTestMCPSignatureServer(t, verifier)
-	verifier.signatures[0].ArtifactID = artifactID
-
-	res, err := server.CallTool(ctx, "bahia_verify_signatures", map[string]interface{}{"artifact_id": artifactID.String()})
-	if err != nil {
-		t.Fatalf("verify signatures: %v", err)
-	}
-	payload := decodeResultMap(t, res)
-	if payload["discovered"] != float64(1) || payload["stored"] != float64(1) {
-		t.Fatalf("unexpected verify payload: %#v", payload)
-	}
-	if verifier.artifactID != artifactID {
-		t.Fatalf("verifier artifactID = %s, want %s", verifier.artifactID, artifactID)
-	}
-	stored, err := sigRepo.ListByArtifact(ctx, artifactID)
-	if err != nil {
-		t.Fatalf("list stored signatures: %v", err)
-	}
-	if len(stored) != 1 || !stored[0].Verified {
-		t.Fatalf("stored signatures = %#v, want one verified signature", stored)
-	}
-}
-
 func TestCallTool_SignatureValidationAndConfigurationErrors(t *testing.T) {
 	ctx := authorizedMCPContext()
 
@@ -280,7 +238,7 @@ func TestCallTool_SignatureValidationAndConfigurationErrors(t *testing.T) {
 		t.Fatalf("expected empty canonical signature family without repository")
 	}
 
-	server, _, artifactID := newTestMCPSignatureServer(t, nil)
+	server, _, artifactID := newTestMCPSignatureServer(t)
 	res, err = server.CallTool(ctx, "bahia_has_verified_signature", map[string]interface{}{"artifact_id": "not-a-uuid"})
 	if err != nil {
 		t.Fatalf("invalid artifact id: %v", err)

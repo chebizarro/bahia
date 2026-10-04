@@ -420,7 +420,7 @@ func TestD70WorkerIntentConflictAndUnsupported(t *testing.T) {
 }
 
 func TestD70IntentContentRoundTrip(t *testing.T) {
-	// JSON maps are what ParseIntent and ContextVM dual dispatch pass to handlers.
+	// JSON maps are what ParseIntent and in-process MCP dispatch pass to handlers.
 	content := map[string]interface{}{"worker_pubkey": strings.Repeat("a", 64), "labels": map[string]interface{}{"region": "west"}}
 	encoded, err := json.Marshal(content)
 	require.NoError(t, err)
@@ -429,58 +429,4 @@ func TestD70IntentContentRoundTrip(t *testing.T) {
 	labels, err := workerIntentLabels(decoded)
 	require.NoError(t, err)
 	require.Equal(t, "west", labels["region"])
-}
-
-func TestD70DNSContextVMDualDispatchUsesIntentPipeline(t *testing.T) {
-	actor := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
-	op := &recordingDNSPersistentOperator{recordingDNSOperator: &recordingDNSOperator{zones: map[string]bool{}, backends: map[string]bool{"primary": true}}}
-	canonical := &d70DNSCanonical{}
-	p, statuses := d70Processor(t, "dns", actor, NewDNSIntentHandler(op, canonical))
-	h := dnsContextVMHandlers{operator: op, enabled: true, intentProcessor: p}
-	request := ContextVMRequest{Event: &nostr.Event{ID: testNostrID("d70-dns-contextvm"), PubKey: testNostrPubKeyFromHex(t, actor)}, ProgressToken: "d70-dns-zone", RPC: ContextVMJSONRPCRequest{Params: json.RawMessage(`{"name":"dual.example","visibility":"internal","backend_ref":"primary","ttl":60}`)}}
-	result, err := h.zoneCreate(context.Background(), request)
-	require.NoError(t, err)
-	require.Equal(t, "succeeded", result.(map[string]any)["status"])
-	require.Len(t, op.zonesCreated, 1)
-	require.Equal(t, 1, canonical.zones)
-	require.Len(t, statuses.events, 1)
-	_, err = h.zoneCreate(context.Background(), request)
-	require.NoError(t, err)
-	require.Len(t, op.zonesCreated, 1)
-	require.Equal(t, 1, canonical.zones)
-}
-
-func TestD70WorkerContextVMDualDispatchUsesIntentPipeline(t *testing.T) {
-	actor := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
-	workerPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
-	capture := &captureNostrPublisher{published: 1}
-	repo := newMemoryWorkerRepo(domain.Worker{PubKey: workerPubkey, Name: "worker", SchedulingState: domain.WorkerSchedulingActive})
-	reactor := newWorkerHandlerTestReactor(t, actor, capture, repo)
-	p, statuses := d70Processor(t, "worker", actor, NewWorkerIntentHandler(reactor))
-	h := workerContextVMHandlers{intentProcessor: p}
-	request := ContextVMRequest{Event: &nostr.Event{ID: testNostrID("d70-worker-contextvm"), PubKey: testNostrPubKeyFromHex(t, actor)}, ProgressToken: "d70-worker-cordon", RPC: ContextVMJSONRPCRequest{Params: json.RawMessage(`{"worker_pubkey":"` + workerPubkey + `"}`)}}
-	result, err := h.cordon(context.Background(), request)
-	require.NoError(t, err)
-	require.Equal(t, "succeeded", result.(map[string]any)["status"])
-	worker, err := repo.GetByPubKey(context.Background(), workerPubkey)
-	require.NoError(t, err)
-	require.Equal(t, domain.WorkerSchedulingCordoned, worker.SchedulingState)
-	require.Len(t, capture.events, 1, "dual dispatch must not publish a second worker command")
-	require.Len(t, statuses.events, 1)
-	_, err = h.cordon(context.Background(), request)
-	require.NoError(t, err)
-	require.Len(t, capture.events, 1)
-
-	// The three reactor-owned ContextVM methods use the same processor path.
-	reactor.intentProcessor = p
-	request.ProgressToken = "d70-worker-uncordon"
-	request.Event.ID = testNostrID("d70-worker-uncordon")
-	result, err = reactor.handleWorkerUncordonRequest(context.Background(), request)
-	require.NoError(t, err)
-	require.Equal(t, "succeeded", result.(map[string]any)["status"])
-	worker, err = repo.GetByPubKey(context.Background(), workerPubkey)
-	require.NoError(t, err)
-	require.Equal(t, domain.WorkerSchedulingActive, worker.SchedulingState)
-	require.Len(t, capture.events, 2)
-	require.Len(t, statuses.events, 2)
 }
