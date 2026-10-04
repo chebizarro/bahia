@@ -112,7 +112,7 @@ Intent-backed MCP writes currently cover service/environment CRUD, deployment an
 
 Supply `idempotency_key` in tool arguments or `_meta.progressToken` in the MCP `tools/call` params. The server derives a stable actor-and-tool-scoped intent ID so retries do not apply twice; without either key, it mints a new UUIDv7 per call. For creates, an omitted entity `id` is derived from that intent ID. The JSON tool result includes `intent_id` and `event_id`: `status:"accepted"` includes canonical `state` (or a verified deletion tombstone), `status:"rejected"`/`"conflict"` is a structured tool error, and `status:"pending"` is a successful result when canonical state has not become visible. Do not interpret pending as failure or a ContextVM `-32011` error. Notification-channel state in write results redacts sensitive config just like read results.
 
-Other registered mutations, including ML import/recipe/inference commands, artifact/SBOM writes, tool provisioning, and notification-log actions, retain their existing behavior. Artifact registration uses a stable keyed ContextVM request. Build rows and status are daemon-authored from trusted CI events; MCP has no manual build write tools. `bahia_evaluate_policy` uses the policy intent processor and returns the coordinate of a bounded kind-30315 status containing the actual evaluation.
+ML import/recipe/inference commands, tool approval responses, signature verification, SBOM import, and notification channel tests also use kind-30900 intents. Request-style tools return `accepted` only when their signed kind-30315 status is visible; otherwise they return `pending` with `intent_id` and `event_id` for correlation. ML model import returns `accepted` only when its canonical model state is visible. Build rows and status are daemon-authored from trusted CI events; MCP has no manual build write tools. `bahia_evaluate_policy` returns the coordinate of a bounded kind-30315 status containing the actual evaluation.
 
 ### Deployments and runs
 
@@ -129,6 +129,8 @@ Use `bahia_assistant_service_deploy` and `bahia_assistant_service_rollback` for 
   `bahia_register_artifact` submits an `artifact/register` intent and returns accepted, pending, or rejected status with `intent_id` and `event_id`. Supply `idempotency_key` (or an MCP progress token) to make retries replay-safe; manual registration must be enabled by the daemon policy.
 - SBOM: `bahia_get_sbom`, `bahia_get_sbom_packages`, `bahia_search_sbom_packages`, `bahia_ingest_sbom`
 - Signatures: `bahia_list_signatures`, `bahia_get_signature`, `bahia_list_verified_signatures`, `bahia_has_verified_signature`, `bahia_verify_signatures`
+
+`bahia_ingest_sbom` submits `sbom/import` with inline SPDX or CycloneDX JSON (maximum 360 KiB). The response acknowledges the request, not completed parsing or publication; follow the canonical SBOM reference and availability events. `bahia_verify_signatures` submits `artifact/signature-verify`; its bounded status carries verification counts, while canonical signature records carry the durable result.
 
 ### Policies, secrets, workers, and payments
 
@@ -154,7 +156,7 @@ Use `bahia_assistant_service_deploy` and `bahia_assistant_service_rollback` for 
 - ML reads: `bahia_ml_list_state`, `bahia_ml_get_state`, `bahia_ml_get_provenance`
 - Assistant ML: `bahia_assistant_ml_deploy`, `bahia_assistant_ml_approve_deployment`, `bahia_assistant_ml_rollback`
 
-Use the names above exactly; the older model-import and recipe-run spellings are not registered.
+Use the names above exactly; the older model-import and recipe-run spellings are not registered. Fleet-scoped ML import, recipe run, and approval accept an optional `org_id`; deploy/rollback derive the organization from the endpoint's canonical environment. Assistant ML approval requires `intent_id` and `decision`. Assistant receipts identify kind-30900 requests and reconcile through the processed-intent marker, not ContextVM request events.
 
 ### Package management
 
@@ -170,6 +172,8 @@ Use the names above exactly; the older model-import and recipe-run spellings are
 ### Tool provisioning and policy
 
 `bahia_tool_provision_request`, `bahia_tool_provision_status`, `bahia_tool_provision_approve`, `bahia_tool_provision_reject`, `bahia_tool_profile_get`, `bahia_tool_denylist_list`, `bahia_tool_denylist_add`, and `bahia_tool_denylist_remove`.
+
+Approval and rejection submit `tool/approval-response` intents. Supply the provisioning `intent_id` and a non-empty `reason`; the response is accepted only after the signed outcome is visible.
 
 ### Backup
 

@@ -75,7 +75,7 @@ The registered channel tools are:
 | `bahia_delete_notification_channel` | Delete a channel |
 | `bahia_test_notification_channel` | Deliver a test through that exact channel |
 
-Testing a disabled channel or a delivery that cannot be accepted returns an error. The test path does not report success merely because the request was queued.
+The channel-test tool submits a `notification/channel-test` intent. A signed accepted status confirms the dispatcher accepted the test delivery; `pending` means the status is not yet visible. A disabled channel or a delivery that cannot be accepted is rejected.
 
 ## Event filters
 

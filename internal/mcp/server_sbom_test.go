@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -126,7 +125,7 @@ func newTestMCPSBOMServer() (*Server, *testMCPSBOMRepo, uuid.UUID) {
 		zap.NewNop(),
 	)
 	sbomRepo := newTestMCPSBOMRepo()
-	server := newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{SBOMs: sbomRepo})
+	server := newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{})
 	return server, sbomRepo, artifactID
 }
 
@@ -147,112 +146,6 @@ func TestGetTools_IncludesSBOMTools(t *testing.T) {
 		if !found {
 			t.Fatalf("missing %s tool", name)
 		}
-	}
-}
-
-func TestCallTool_IngestGetListAndSearchSBOM(t *testing.T) {
-	ctx := authorizedMCPContext()
-	server, repo, artifactID := newTestMCPSBOMServer()
-	fixture := attachCanonicalMCPFixture(t, server)
-	server.sboms = service.NewCanonicalSBOMRepository(repo, nostrpool.NewF74aCanonicalPublisher(fixture.projector, nil), zap.NewNop())
-	sbomData := `{
-		"bomFormat": "CycloneDX",
-		"specVersion": "1.5",
-		"version": 1,
-		"components": [
-			{"type": "library", "name": "lodash", "version": "4.17.21", "purl": "pkg:npm/lodash@4.17.21", "licenses": [{"license": {"id": "MIT"}}]},
-			{"type": "library", "name": "log4j-core", "version": "2.14.1", "purl": "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1"}
-		],
-		"vulnerabilities": [
-			{"id": "CVE-2021-44228", "ratings": [{"severity": "critical"}]}
-		]
-	}`
-
-	ingestRes, err := server.CallTool(ctx, "bahia_ingest_sbom", map[string]interface{}{
-		"artifact_id": artifactID.String(),
-		"sbom_data":   sbomData,
-		"source_url":  "oci://registry.example.com/api@sha256:sbom",
-	})
-	if err != nil {
-		t.Fatalf("ingest sbom err: %v", err)
-	}
-	if ingestRes.IsError {
-		t.Fatalf("ingest sbom returned error: %s", ingestRes.Content[0].Text)
-	}
-	ingestPayload := decodeResultMap(t, ingestRes)
-	if ingestPayload["status"] != "created" {
-		t.Fatalf("status = %v, want created", ingestPayload["status"])
-	}
-	if int(ingestPayload["package_count"].(float64)) != 2 {
-		t.Fatalf("package_count = %v, want 2", ingestPayload["package_count"])
-	}
-	if len(repo.sboms) != 1 || len(repo.packages) != 2 {
-		t.Fatalf("repo stored %d sboms and %d packages, want 1 and 2", len(repo.sboms), len(repo.packages))
-	}
-
-	getRes, err := server.CallTool(ctx, "bahia_get_sbom", map[string]interface{}{"artifact_id": artifactID.String()})
-	if err != nil {
-		t.Fatalf("get sbom err: %v", err)
-	}
-	if getRes.IsError {
-		t.Fatalf("get sbom returned error: %s", getRes.Content[0].Text)
-	}
-	getPayload := decodeResultMap(t, getRes)
-	if getPayload["artifact_id"] != artifactID.String() {
-		t.Fatalf("artifact_id = %v, want %s", getPayload["artifact_id"], artifactID.String())
-	}
-	if getPayload["source_url"] != "oci://registry.example.com/api@sha256:sbom" {
-		t.Fatalf("source_url = %v", getPayload["source_url"])
-	}
-	if int(getPayload["critical_count"].(float64)) != 1 {
-		t.Fatalf("critical_count = %v, want 1", getPayload["critical_count"])
-	}
-
-	packagesRes, err := server.CallTool(ctx, "bahia_get_sbom_packages", map[string]interface{}{"artifact_id": artifactID.String()})
-	if err != nil {
-		t.Fatalf("get sbom packages err: %v", err)
-	}
-	if packagesRes.IsError {
-		t.Fatalf("get sbom packages returned error: %s", packagesRes.Content[0].Text)
-	}
-	packagesPayload := decodeResultMap(t, packagesRes)
-	if int(packagesPayload["total"].(float64)) != 2 {
-		t.Fatalf("packages total = %v, want 2", packagesPayload["total"])
-	}
-
-	searchRes, err := server.CallTool(ctx, "bahia_search_sbom_packages", map[string]interface{}{"query": "lodash", "limit": 10})
-	if err != nil {
-		t.Fatalf("search sbom packages err: %v", err)
-	}
-	if searchRes.IsError {
-		t.Fatalf("search sbom packages returned error: %s", searchRes.Content[0].Text)
-	}
-	searchPayload := decodeResultMap(t, searchRes)
-	if int(searchPayload["total"].(float64)) != 1 {
-		t.Fatalf("search total = %v, want 1", searchPayload["total"])
-	}
-	packages := searchPayload["packages"].([]interface{})
-	pkg := packages[0].(map[string]interface{})
-	if pkg["ecosystem"] != "npm" || pkg["license"] != "MIT" {
-		t.Fatalf("unexpected package payload: %#v", pkg)
-	}
-
-	duplicateRes, err := server.CallTool(ctx, "bahia_ingest_sbom", map[string]interface{}{
-		"artifact_id": artifactID.String(),
-		"sbom_data":   sbomData,
-	})
-	if err != nil {
-		t.Fatalf("duplicate ingest err: %v", err)
-	}
-	if duplicateRes.IsError {
-		t.Fatalf("duplicate ingest returned error: %s", duplicateRes.Content[0].Text)
-	}
-	duplicatePayload := decodeResultMap(t, duplicateRes)
-	if duplicatePayload["status"] != "existing" {
-		t.Fatalf("duplicate status = %v, want existing", duplicatePayload["status"])
-	}
-	if len(repo.sboms) != 1 || len(repo.packages) != 2 {
-		t.Fatalf("duplicate ingest changed storage to %d sboms and %d packages", len(repo.sboms), len(repo.packages))
 	}
 }
 

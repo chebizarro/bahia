@@ -4,8 +4,6 @@ package mcp
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -16,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
-	adapterSBOM "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/controlplane"
@@ -32,27 +29,22 @@ import (
 // Server provides an MCP-compatible interface for Bahia operations.
 // It exposes deployment registry functionality as MCP tools.
 type Server struct {
-	stateStore           StateEventStore
-	intentProc           *controlplane.IntentProcessor
-	servicePubkey        string
-	confidentialReader   ConfidentialStateReader
-	registry             *service.RegistryService
-	llmRegistry          *service.LLMRegistryService
-	mlCommands           MLCommandPublisher
-	toolApprovalCommands ToolApprovalCommandPublisher
-	logger               *zap.Logger
-	secretsRepo          repository.SecretRepository       // optional: for secret management tools
-	encryptor            *secrets.Encryptor                // optional: for secret encryption/decryption
-	notificationRepo     repository.NotificationRepository // optional: for notification tools
-	notificationDisp     *notifications.Dispatcher         // optional: for notification testing
-	logService           *adapterruntime.LogService        // optional: for deployment run log tools
-	sboms                repository.SBOMRepository         // optional: for SBOM tools
-	signatures           repository.ArtifactSignatureRepository
-	signVerifier         SignatureVerifier
-	toolProvisioning     repository.ToolProvisioningRepository
-	authorizedPubkeys    []string
-	rbac                 *auth.RBAC
-	outbox               OutboxReader // optional: for outbox inspection tool
+	stateStore         StateEventStore
+	intentProc         *controlplane.IntentProcessor
+	servicePubkey      string
+	confidentialReader ConfidentialStateReader
+	registry           *service.RegistryService
+	llmRegistry        *service.LLMRegistryService
+	logger             *zap.Logger
+	secretsRepo        repository.SecretRepository       // optional: for secret management tools
+	encryptor          *secrets.Encryptor                // optional: for secret encryption/decryption
+	notificationRepo   repository.NotificationRepository // optional: for notification tools
+	notificationDisp   *notifications.Dispatcher         // optional: for notification testing
+	logService         *adapterruntime.LogService        // optional: for deployment run log tools
+	toolProvisioning   repository.ToolProvisioningRepository
+	authorizedPubkeys  []string
+	rbac               *auth.RBAC
+	outbox             OutboxReader // optional: for outbox inspection tool
 }
 
 // Config holds MCP server configuration.
@@ -73,15 +65,8 @@ type ServerDeps struct {
 	NotificationRepo       repository.NotificationRepository
 	NotificationDispatcher *notifications.Dispatcher
 	LogService             *adapterruntime.LogService
-	SBOMs                  repository.SBOMRepository
-	Signatures             repository.ArtifactSignatureRepository
-	SignVerifier           SignatureVerifier
 	ToolProvisioning       repository.ToolProvisioningRepository
-	// No handlers for ml/model-import, ml/recipe-run, ml/inference-deploy, ml/inference-approval, or ml/inference-rollback.
-	MLCommandPublisher MLCommandPublisher
-	LLMRegistry        *service.LLMRegistryService
-	// No handler for tool/approval-response (the package intent handler is unrelated).
-	ToolApprovalCommandPublisher ToolApprovalCommandPublisher
+	LLMRegistry            *service.LLMRegistryService
 	// AuthorizedPubkeys is the explicit operator allowlist for external MCP callers.
 	// An empty allowlist denies all non-system callers.
 	AuthorizedPubkeys []string
@@ -89,25 +74,6 @@ type ServerDeps struct {
 	RBAC *auth.RBAC
 	// Outbox is optional: exposes daemon outbox counts and failed entries to MCP callers.
 	Outbox OutboxReader
-}
-
-// SignatureVerifier verifies signatures for an artifact.
-type SignatureVerifier interface {
-	VerifySignatures(ctx context.Context, artifact *domain.Artifact) ([]domain.ArtifactSignature, error)
-}
-
-// No handlers for ml/model-import, ml/recipe-run, ml/inference-deploy, ml/inference-approval, or ml/inference-rollback.
-type MLCommandPublisher interface {
-	PublishMLModelImportRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
-	PublishMLRecipeRunRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
-	PublishMLInferenceDeployRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
-	PublishMLInferenceApprovalRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
-	PublishMLInferenceRollbackRequest(ctx context.Context, cmd controlplane.MLCommandPayload) (*controlplane.MLCommandReceipt, error)
-}
-
-// No handler for tool/approval-response.
-type ToolApprovalCommandPublisher interface {
-	PublishToolApprovalResponse(ctx context.Context, cmd controlplane.ToolApprovalCommand) (*controlplane.ToolApprovalCommandReceipt, error)
 }
 
 // NewServerWithOptionsChecked requires the local event store used by MCP reads.
@@ -119,27 +85,22 @@ func NewServerWithOptionsChecked(registry *service.RegistryService, logger *zap.
 		return nil, fmt.Errorf("MCP service pubkey is required for state reads")
 	}
 	return &Server{
-		stateStore:           deps.StateStore,
-		intentProc:           deps.IntentProcessor,
-		servicePubkey:        deps.ServicePubkey,
-		confidentialReader:   deps.ConfidentialReader,
-		registry:             registry,
-		llmRegistry:          deps.LLMRegistry,
-		mlCommands:           deps.MLCommandPublisher,
-		toolApprovalCommands: deps.ToolApprovalCommandPublisher,
-		logger:               logger,
-		secretsRepo:          deps.SecretsRepo,
-		encryptor:            deps.Encryptor,
-		notificationRepo:     deps.NotificationRepo,
-		notificationDisp:     deps.NotificationDispatcher,
-		logService:           deps.LogService,
-		sboms:                deps.SBOMs,
-		signatures:           deps.Signatures,
-		signVerifier:         deps.SignVerifier,
-		toolProvisioning:     deps.ToolProvisioning,
-		authorizedPubkeys:    normalizePubkeys(deps.AuthorizedPubkeys),
-		rbac:                 deps.RBAC,
-		outbox:               deps.Outbox,
+		stateStore:         deps.StateStore,
+		intentProc:         deps.IntentProcessor,
+		servicePubkey:      deps.ServicePubkey,
+		confidentialReader: deps.ConfidentialReader,
+		registry:           registry,
+		llmRegistry:        deps.LLMRegistry,
+		logger:             logger,
+		secretsRepo:        deps.SecretsRepo,
+		encryptor:          deps.Encryptor,
+		notificationRepo:   deps.NotificationRepo,
+		notificationDisp:   deps.NotificationDispatcher,
+		logService:         deps.LogService,
+		toolProvisioning:   deps.ToolProvisioning,
+		authorizedPubkeys:  normalizePubkeys(deps.AuthorizedPubkeys),
+		rbac:               deps.RBAC,
+		outbox:             deps.Outbox,
 	}, nil
 }
 
@@ -802,7 +763,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_verify_signatures",
-			Description: "Verify signatures for an artifact and store any discovered signature records",
+			Description: "Request signature verification for an artifact through a kind-30900 intent",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -867,7 +828,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_ingest_sbom",
-			Description: "Parse and store an SPDX or CycloneDX JSON SBOM document for an artifact",
+			Description: "Queue an SPDX or CycloneDX SBOM import for an artifact through a kind-30900 intent (inline limit 360 KiB)",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -878,10 +839,6 @@ func (s *Server) GetTools() []Tool {
 					"sbom_data": map[string]interface{}{
 						"type":        "string",
 						"description": "Raw SPDX or CycloneDX JSON SBOM document",
-					},
-					"source_url": map[string]interface{}{
-						"type":        "string",
-						"description": "SBOM source URL or OCI referrer (optional)",
 					},
 				},
 				"required": []string{"artifact_id", "sbom_data"},
@@ -1493,12 +1450,12 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_tool_provision_approve",
-			Description: "Publish a signed ContextVM tool/approval-response (kind 25910) approval and return relay/follow correlation metadata",
+			Description: "Apply a tool approval through a kind-30900 intent",
 			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"intent_id": map[string]interface{}{"type": "string", "description": "Intent UUID"}, "reason": map[string]interface{}{"type": "string", "description": "Approval reason"}, "idempotency_key": map[string]interface{}{"type": "string", "description": "Optional Nostr d tag for idempotency/correlation"}}, "required": []string{"intent_id", "reason"}},
 		},
 		{
 			Name:        "bahia_tool_provision_reject",
-			Description: "Publish a signed ContextVM tool/approval-response (kind 25910) rejection and return relay/follow correlation metadata",
+			Description: "Apply a tool rejection through a kind-30900 intent",
 			InputSchema: map[string]interface{}{"type": "object", "properties": map[string]interface{}{"intent_id": map[string]interface{}{"type": "string", "description": "Intent UUID"}, "reason": map[string]interface{}{"type": "string", "description": "Rejection reason"}, "idempotency_key": map[string]interface{}{"type": "string", "description": "Optional Nostr d tag for idempotency/correlation"}}, "required": []string{"intent_id", "reason"}},
 		},
 		{
@@ -1619,7 +1576,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_test_notification_channel",
-			Description: "Send a test notification through the configured dispatcher",
+			Description: "Request a channel test through a kind-30900 intent",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1834,6 +1791,12 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	if isRegistryIntentTool(name) && s.intentProc == nil {
 		return intentWriteError("error", "", "", "intent processor is not configured"), nil
 	}
+	if isFinalIntentWriteTool(name) && s.intentProc == nil {
+		if denied := s.authorizeToolCall(ctx, name); denied != nil {
+			return denied, nil
+		}
+		return intentWriteError("error", "", "", "intent processor is not configured"), nil
+	}
 	// Intent-backed writes authenticate their Nostr actor and authorize against
 	// TrustSet inside ProcessInProcess. The legacy MCP operator allowlist must
 	// not deny an otherwise authorized org member before that check runs.
@@ -1871,15 +1834,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleApproveDeployment(ctx, arguments)
 	case "bahia_reject_deployment":
 		return s.handleRejectDeployment(ctx, arguments)
-	// ML compatibility operations
-	case "bahia_ml_import_model":
-		return s.handleMLModelImport(ctx, arguments)
-	case "bahia_ml_run_recipe":
-		return s.handleMLRecipeRun(ctx, arguments)
-	case "bahia_ml_deploy":
-		return s.handleMLDeploy(ctx, arguments)
-	case "bahia_ml_rollback":
-		return s.handleMLRollback(ctx, arguments)
 	case "bahia_assistant_service_deploy", "bahia_assistant_service_rollback", "bahia_assistant_llm_deploy", "bahia_assistant_llm_approve_deployment", "bahia_assistant_llm_rollback", "bahia_assistant_ml_deploy", "bahia_assistant_ml_approve_deployment", "bahia_assistant_ml_rollback":
 		return s.handleAssistantAsyncTool(ctx, name, arguments)
 	case "bahia_fips_list_mesh_nodes":
@@ -1910,12 +1864,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	// Artifact operations
 	case "bahia_register_artifact":
 		return s.handleRegisterArtifact(ctx, arguments)
-	// Signature operations
-	case "bahia_verify_signatures":
-		return s.handleVerifySignatures(ctx, arguments)
-	// SBOM operations
-	case "bahia_ingest_sbom":
-		return s.handleIngestSBOM(ctx, arguments)
 	// Observability operations
 	case "bahia_create_run":
 		return s.handleCreateRun(ctx, arguments)
@@ -1957,10 +1905,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	// Tool provisioning operations
 	case "bahia_tool_provision_request":
 		return s.handleToolProvisionRequest(ctx, arguments)
-	case "bahia_tool_provision_approve":
-		return s.handleToolProvisionApprove(ctx, arguments)
-	case "bahia_tool_provision_reject":
-		return s.handleToolProvisionReject(ctx, arguments)
 	case "bahia_tool_denylist_add":
 		return s.handleToolDenylistAdd(ctx, arguments)
 	case "bahia_tool_denylist_remove":
@@ -1985,8 +1929,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleUpdateNotificationChannel(ctx, arguments)
 	case "bahia_delete_notification_channel":
 		return s.handleDeleteNotificationChannel(ctx, arguments)
-	case "bahia_test_notification_channel":
-		return s.handleTestNotificationChannel(ctx, arguments)
 	// Notification log operations
 	case "bahia_mark_notification_read":
 		return s.handleMarkNotificationRead(ctx, arguments)
@@ -2110,119 +2052,6 @@ func (s *Server) handleDeleteEnvironment(ctx context.Context, args map[string]in
 
 func (s *Server) handleRegisterArtifact(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	return s.invokeIntentWrite(ctx, "bahia_register_artifact", args)
-}
-
-func (s *Server) handleVerifySignatures(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.signatures == nil {
-		return errorResult("signature tools are not configured"), nil
-	}
-	if s.signVerifier == nil {
-		return errorResult("signature verifier is not configured"), nil
-	}
-	if s.registry == nil {
-		return errorResult("artifact registry is not configured"), nil
-	}
-
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	artifact, err := s.registry.GetArtifact(ctx, artifactID)
-	if err != nil {
-		if err == repository.ErrNotFound {
-			return errorResult("artifact not found"), nil
-		}
-		return errorResult(fmt.Sprintf("failed to get artifact: %v", err)), nil
-	}
-	if artifact == nil {
-		return errorResult("artifact not found"), nil
-	}
-
-	signatures, err := s.signVerifier.VerifySignatures(ctx, artifact)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to verify signatures: %v", err)), nil
-	}
-
-	stored := 0
-	for i := range signatures {
-		if err := s.signatures.Create(ctx, &signatures[i]); err != nil {
-			s.logger.Warn("failed to store signature record",
-				zap.String("artifact_id", artifactID.String()),
-				zap.String("signature_id", signatures[i].ID.String()),
-				zap.Error(err),
-			)
-			continue
-		}
-		stored++
-	}
-
-	return jsonResult(map[string]interface{}{
-		"artifact_id": artifactID.String(),
-		"discovered":  len(signatures),
-		"stored":      stored,
-		"signatures":  signaturesToMaps(signatures),
-	})
-}
-
-func (s *Server) handleIngestSBOM(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.sboms == nil {
-		return errorResult("SBOM tools are not configured"), nil
-	}
-	if s.registry == nil {
-		return errorResult("registry service is not configured"), nil
-	}
-
-	artifactID, err := parseRequiredUUIDArg(args, "artifact_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	if _, err := s.registry.GetArtifact(ctx, artifactID); err != nil {
-		if err == repository.ErrNotFound {
-			return errorResult("artifact not found"), nil
-		}
-		return errorResult(fmt.Sprintf("failed to get artifact: %v", err)), nil
-	}
-
-	data, err := sbomDataArg(args)
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	hash := sha256.Sum256(data)
-	rawHash := hex.EncodeToString(hash[:])
-	if existing, err := s.sboms.GetSBOMByHash(ctx, rawHash); err == nil && existing != nil {
-		result := map[string]interface{}{
-			"status": "existing",
-			"sbom":   sbomToMap(existing),
-		}
-		return jsonResult(result)
-	}
-
-	parsed, err := adapterSBOM.Parse(data, artifactID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("parsing SBOM: %v", err)), nil
-	}
-	if sourceURL, _ := args["source_url"].(string); strings.TrimSpace(sourceURL) != "" {
-		parsed.SBOM.SourceURL = strings.TrimSpace(sourceURL)
-	}
-
-	if err := s.sboms.CreateSBOM(ctx, &parsed.SBOM); err != nil {
-		return errorResult(fmt.Sprintf("storing SBOM: %v", err)), nil
-	}
-	if len(parsed.Packages) > 0 {
-		if err := s.sboms.CreatePackages(ctx, parsed.Packages); err != nil {
-			return errorResult(fmt.Sprintf("storing SBOM packages: %v", err)), nil
-		}
-	}
-
-	result := map[string]interface{}{
-		"status":        "created",
-		"sbom_id":       parsed.SBOM.ID.String(),
-		"package_count": len(parsed.Packages),
-		"sbom":          sbomToMap(&parsed.SBOM),
-	}
-	return jsonResult(result)
 }
 
 func (s *Server) handleCreateRun(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -2634,33 +2463,6 @@ func (s *Server) handleToolProvisionRequest(ctx context.Context, args map[string
 		"status": "created",
 		"intent": toolProvisionIntentToMap(intent),
 	})
-}
-
-func (s *Server) handleToolProvisionApprove(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	return s.handleToolProvisionApprovalResponse(ctx, args, "approve")
-}
-
-func (s *Server) handleToolProvisionReject(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	return s.handleToolProvisionApprovalResponse(ctx, args, "reject")
-}
-
-func (s *Server) handleToolProvisionApprovalResponse(ctx context.Context, args map[string]interface{}, action string) (*ToolResult, error) {
-	if s.toolApprovalCommands == nil {
-		return errorResult("tool approval command publisher is not configured"), nil
-	}
-	intentID, err := parseRequiredUUIDArg(args, "intent_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	reason := strings.TrimSpace(stringArg(args, "reason"))
-	if reason == "" {
-		return errorResult("reason is required"), nil
-	}
-	receipt, err := s.toolApprovalCommands.PublishToolApprovalResponse(ctx, controlplane.ToolApprovalCommand{IntentID: intentID, Action: action, Reason: reason, IdempotencyKey: stringArg(args, "idempotency_key")})
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish ToolApprovalResponse request: %v", err)), nil
-	}
-	return jsonResult(receipt)
 }
 
 func (s *Server) handleToolDenylistAdd(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -3516,44 +3318,6 @@ func (s *Server) handleDeleteNotificationChannel(ctx context.Context, args map[s
 	result := map[string]interface{}{
 		"status":     "deleted",
 		"channel_id": channelID.String(),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleTestNotificationChannel(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.notificationRepo == nil {
-		return errorResult("notification channel tools are not configured"), nil
-	}
-	if s.notificationDisp == nil {
-		return errorResult("notification dispatcher is not configured"), nil
-	}
-
-	channelID, err := parseRequiredUUIDArg(args, "channel_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-
-	ch, err := s.notificationRepo.GetChannelByID(ctx, channelID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get notification channel: %v", err)), nil
-	}
-	if ch == nil {
-		return errorResult("notification channel not found"), nil
-	}
-	if !ch.Enabled {
-		return errorResult("notification channel is disabled"), nil
-	}
-
-	if err := s.notificationDisp.DispatchToChannel(ctx, ch, "test", map[string]any{
-		"message":    "This is a test notification from Bahia",
-		"channel_id": ch.ID.String(),
-	}); err != nil {
-		return errorResult(fmt.Sprintf("failed to send test notification: %v", err)), nil
-	}
-
-	result := map[string]interface{}{
-		"status":     "test_sent",
-		"channel_id": ch.ID.String(),
 	}
 	return jsonResult(result)
 }

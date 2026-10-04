@@ -7,11 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
-
-const assistantAgentID = "bahia-operator-assistant"
 
 // ErrToolCallUnauthorized means the caller's principal was refused before the
 // tool did anything, so nothing was submitted.
@@ -24,9 +21,9 @@ func assistantAsyncToolDefinitions() []Tool {
 		{Name: "bahia_assistant_llm_deploy", Description: "Assistant-safe LLM deploy through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{"route_id": stringProp, "environment_id": stringProp, "release_id": stringProp, "requested_by": stringProp, "idempotency_key": stringProp}, "route_id", "environment_id", "release_id", "idempotency_key")},
 		{Name: "bahia_assistant_llm_approve_deployment", Description: "Assistant-safe LLM approval through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{"intent_id": stringProp, "org_id": stringProp, "decision": stringProp, "idempotency_key": stringProp}, "intent_id", "org_id", "decision", "idempotency_key")},
 		{Name: "bahia_assistant_llm_rollback", Description: "Assistant-safe LLM rollback through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{"route_id": stringProp, "environment_id": stringProp, "requested_by": stringProp, "idempotency_key": stringProp}, "route_id", "environment_id", "idempotency_key")},
-		{Name: "bahia_assistant_ml_deploy", Description: "Assistant-safe async ML deploy command (ContextVM ml/inference-deploy request)", InputSchema: objectSchema(map[string]interface{}{"endpoint": stringProp, "endpoint_id": stringProp, "model_version": stringProp, "model_version_id": stringProp, "runtime_preference": stringProp, "runtime": stringProp, "placement": map[string]interface{}{"type": "object"}, "tags": map[string]interface{}{"type": "object"}, "idempotency_key": stringProp}, "idempotency_key")},
-		{Name: "bahia_assistant_ml_approve_deployment", Description: "Assistant-safe async ML approval command (ContextVM ml/inference-approval request)", InputSchema: objectSchema(map[string]interface{}{"intent_id": stringProp, "decision": stringProp, "tags": map[string]interface{}{"type": "object"}, "idempotency_key": stringProp}, "intent_id", "decision", "idempotency_key")},
-		{Name: "bahia_assistant_ml_rollback", Description: "Assistant-safe async ML rollback command (ContextVM ml/inference-rollback request)", InputSchema: objectSchema(map[string]interface{}{"endpoint": stringProp, "endpoint_id": stringProp, "requested_by": stringProp, "tags": map[string]interface{}{"type": "object"}, "idempotency_key": stringProp}, "idempotency_key")},
+		{Name: "bahia_assistant_ml_deploy", Description: "Assistant-safe ML deploy through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{"endpoint": stringProp, "endpoint_id": stringProp, "model_version": stringProp, "model_version_id": stringProp, "runtime_preference": stringProp, "runtime": stringProp, "idempotency_key": stringProp}, "idempotency_key")},
+		{Name: "bahia_assistant_ml_approve_deployment", Description: "Assistant-safe ML approval through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{"intent_id": stringProp, "org_id": stringProp, "decision": stringProp, "expected_updated_at": stringProp, "idempotency_key": stringProp}, "intent_id", "decision", "idempotency_key")},
+		{Name: "bahia_assistant_ml_rollback", Description: "Assistant-safe ML rollback through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{"endpoint": stringProp, "endpoint_id": stringProp, "requested_by": stringProp, "idempotency_key": stringProp}, "idempotency_key")},
 	}
 }
 
@@ -60,10 +57,9 @@ func (s *Server) invokeAssistantAsyncTool(ctx context.Context, name string, args
 	}
 	switch name {
 	case "bahia_assistant_service_deploy", "bahia_assistant_service_rollback",
-		"bahia_assistant_llm_deploy", "bahia_assistant_llm_approve_deployment", "bahia_assistant_llm_rollback":
+		"bahia_assistant_llm_deploy", "bahia_assistant_llm_approve_deployment", "bahia_assistant_llm_rollback",
+		"bahia_assistant_ml_deploy", "bahia_assistant_ml_approve_deployment", "bahia_assistant_ml_rollback":
 		return s.invokeAssistantIntent(ctx, name, args, key)
-	case "bahia_assistant_ml_deploy", "bahia_assistant_ml_approve_deployment", "bahia_assistant_ml_rollback":
-		return s.invokeAssistantML(ctx, name, args, key)
 	default:
 		return nil, fmt.Errorf("assistant tool %q is not allowlisted", name)
 	}
@@ -131,69 +127,10 @@ func (s *Server) ResolveAssistantIntentReceipt(name, actor, key, eventID string)
 func isAssistantIntentTool(name string) bool {
 	switch name {
 	case "bahia_assistant_service_deploy", "bahia_assistant_service_rollback",
-		"bahia_assistant_llm_deploy", "bahia_assistant_llm_approve_deployment", "bahia_assistant_llm_rollback":
+		"bahia_assistant_llm_deploy", "bahia_assistant_llm_approve_deployment", "bahia_assistant_llm_rollback",
+		"bahia_assistant_ml_deploy", "bahia_assistant_ml_approve_deployment", "bahia_assistant_ml_rollback":
 		return true
 	default:
 		return false
 	}
-}
-
-func (s *Server) invokeAssistantML(ctx context.Context, name string, args map[string]interface{}, key string) (*domain.AsyncToolReceipt, error) {
-	// No handlers for ml/inference-deploy, ml/inference-approval, or ml/inference-rollback.
-	// LLM route deployment intents do not operate on ML endpoints.
-	if s.mlCommands == nil {
-		return nil, fmt.Errorf("ML command publisher is not configured")
-	}
-	payload := mlPayloadFromArgs(args)
-	payload.IdempotencyKey = key
-	if payload.Tags == nil {
-		payload.Tags = map[string]string{}
-	}
-	payload.Tags["agent"] = assistantAgentID
-	var r *controlplane.MLCommandReceipt
-	var err error
-	switch name {
-	case "bahia_assistant_ml_deploy":
-		r, err = s.mlCommands.PublishMLInferenceDeployRequest(ctx, payload)
-	case "bahia_assistant_ml_approve_deployment":
-		r, err = s.mlCommands.PublishMLInferenceApprovalRequest(ctx, payload)
-	case "bahia_assistant_ml_rollback":
-		r, err = s.mlCommands.PublishMLInferenceRollbackRequest(ctx, payload)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return mlAsyncReceipt(name, key, r), nil
-}
-
-func mlAsyncReceipt(tool, key string, r *controlplane.MLCommandReceipt) *domain.AsyncToolReceipt {
-	return &domain.AsyncToolReceipt{ToolName: tool, RequestEventID: r.RequestEventID, RequestKind: r.RequestKind, ResultKinds: positiveKinds(r.ResultKind), ReadModelKinds: mapValues(r.ReadModelKinds), DTag: r.DTag, IdempotencyKey: key, PublishedRelays: []string{fmt.Sprint(r.PublishedRelays)}, ResourceTags: mlResourceTags(r)}
-}
-
-func positiveKinds(values ...int) []int {
-	out := []int{}
-	seen := map[int]bool{}
-	for _, value := range values {
-		if value <= 0 || seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
-	}
-	return out
-}
-
-func mapValues(m map[string]int) []int {
-	out := []int{}
-	seen := map[int]bool{}
-	for _, v := range m {
-		if !seen[v] {
-			seen[v] = true
-			out = append(out, v)
-		}
-	}
-	return out
-}
-func mlResourceTags(r *controlplane.MLCommandReceipt) map[string]string {
-	return map[string]string{"endpoint": r.Endpoint, "endpoint_id": r.EndpointID, "environment": r.Environment, "environment_id": r.EnvironmentID, "model_version": r.ModelVersion, "model_version_id": r.ModelVersionID, "model": r.Model, "runtime": r.Runtime}
 }

@@ -1,37 +1,27 @@
 package mcp
 
-import (
-	"context"
-	"fmt"
-	"strings"
-
-	"github.com/openagentsinc/bahia/internal/controlplane"
-)
-
 func mlToolDefinitions() []Tool {
 	return []Tool{
-		{Name: "bahia_ml_import_model", Description: "Publish a generic ML model/model-version import request and return Nostr correlation metadata", InputSchema: objectSchema(map[string]interface{}{
+		{Name: "bahia_ml_import_model", Description: "Import an ML model through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{
 			"idempotency_key": map[string]interface{}{"type": "string"},
+			"org_id":          map[string]interface{}{"type": "string", "description": "Optional fleet organization UUID"},
 			"model":           map[string]interface{}{"type": "string", "description": "Model coordinate such as model:<slug>"},
 			"model_version":   map[string]interface{}{"type": "string", "description": "Model version coordinate such as model-version:<slug>:<version>"},
 			"source":          map[string]interface{}{"type": "string", "description": "Source family, e.g. huggingface"},
 			"uri":             map[string]interface{}{"type": "string", "description": "Source URI"},
+			"source_uri":      map[string]interface{}{"type": "string", "description": "Source URI (preferred alias)"},
 			"revision":        map[string]interface{}{"type": "string"},
-			"runtime":         map[string]interface{}{"type": "string"},
 			"task":            map[string]interface{}{"type": "string"},
-			"artifact":        map[string]interface{}{"type": "string"},
-			"tags":            map[string]interface{}{"type": "object"},
 		})},
-		{Name: "bahia_ml_run_recipe", Description: "Publish a generic ML recipe run request and return Nostr correlation metadata", InputSchema: objectSchema(map[string]interface{}{
+		{Name: "bahia_ml_run_recipe", Description: "Run a canonical ML recipe through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{
 			"idempotency_key": map[string]interface{}{"type": "string"},
+			"org_id":          map[string]interface{}{"type": "string", "description": "Optional fleet organization UUID"},
 			"recipe":          map[string]interface{}{"type": "string", "description": "Recipe coordinate such as recipe:<name>:<version>"},
+			"recipe_id":       map[string]interface{}{"type": "string", "description": "Canonical recipe UUID (alternative to recipe)"},
 			"inputs":          map[string]interface{}{"type": "object"},
 			"parameters":      map[string]interface{}{"type": "object"},
-			"runtime":         map[string]interface{}{"type": "string"},
-			"task":            map[string]interface{}{"type": "string"},
-			"tags":            map[string]interface{}{"type": "object"},
-		}, "recipe")},
-		{Name: "bahia_ml_deploy", Description: "Publish a generic ML inference deployment request and return Nostr correlation metadata", InputSchema: objectSchema(map[string]interface{}{
+		})},
+		{Name: "bahia_ml_deploy", Description: "Deploy an ML inference endpoint through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{
 			"idempotency_key":    map[string]interface{}{"type": "string"},
 			"endpoint":           map[string]interface{}{"type": "string", "description": "Endpoint coordinate endpoint:<name>:<environment>"},
 			"endpoint_id":        map[string]interface{}{"type": "string"},
@@ -39,15 +29,12 @@ func mlToolDefinitions() []Tool {
 			"model_version_id":   map[string]interface{}{"type": "string"},
 			"runtime_preference": map[string]interface{}{"type": "string"},
 			"runtime":            map[string]interface{}{"type": "string"},
-			"placement":          map[string]interface{}{"type": "object"},
-			"tags":               map[string]interface{}{"type": "object"},
 		})},
-		{Name: "bahia_ml_rollback", Description: "Publish a generic ML inference rollback request and return Nostr correlation metadata", InputSchema: objectSchema(map[string]interface{}{
+		{Name: "bahia_ml_rollback", Description: "Roll back an ML inference endpoint through the in-process intent pipeline", InputSchema: objectSchema(map[string]interface{}{
 			"idempotency_key": map[string]interface{}{"type": "string"},
 			"endpoint":        map[string]interface{}{"type": "string"},
 			"endpoint_id":     map[string]interface{}{"type": "string"},
 			"requested_by":    map[string]interface{}{"type": "string"},
-			"tags":            map[string]interface{}{"type": "object"},
 		})},
 		{Name: "bahia_ml_list_state", Description: "List generic ML inference endpoint state read models", InputSchema: objectSchema(map[string]interface{}{})},
 		{Name: "bahia_ml_get_state", Description: "Get generic ML inference state for an endpoint/environment", InputSchema: objectSchema(map[string]interface{}{
@@ -58,135 +45,4 @@ func mlToolDefinitions() []Tool {
 			"artifact_id": map[string]interface{}{"type": "string"},
 		}, "artifact_id")},
 	}
-}
-
-func (s *Server) requireMLCommands() (MLCommandPublisher, *ToolResult) {
-	// No handlers for ml/model-import, ml/recipe-run, ml/inference-deploy,
-	// ml/inference-approval, or ml/inference-rollback; ML registry CRUD is distinct.
-	if s.mlCommands == nil {
-		return nil, errorResult("ML command publisher is not configured")
-	}
-	return s.mlCommands, nil
-}
-
-func (s *Server) handleMLModelImport(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireMLCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	receipt, err := publisher.PublishMLModelImportRequest(ctx, mlPayloadFromArgs(args))
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish ML model import request: %v", err)), nil
-	}
-	return jsonResult(mlCommandReceiptToMap("submitted", receipt))
-}
-
-func (s *Server) handleMLRecipeRun(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireMLCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	receipt, err := publisher.PublishMLRecipeRunRequest(ctx, mlPayloadFromArgs(args))
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish ML recipe run request: %v", err)), nil
-	}
-	return jsonResult(mlCommandReceiptToMap("submitted", receipt))
-}
-
-func (s *Server) handleMLDeploy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireMLCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	receipt, err := publisher.PublishMLInferenceDeployRequest(ctx, mlPayloadFromArgs(args))
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish ML deploy request: %v", err)), nil
-	}
-	return jsonResult(mlCommandReceiptToMap("submitted", receipt))
-}
-
-func (s *Server) handleMLRollback(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	publisher, errResult := s.requireMLCommands()
-	if errResult != nil {
-		return errResult, nil
-	}
-	receipt, err := publisher.PublishMLInferenceRollbackRequest(ctx, mlPayloadFromArgs(args))
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to publish ML rollback request: %v", err)), nil
-	}
-	return jsonResult(mlCommandReceiptToMap("submitted", receipt))
-}
-
-func mlPayloadFromArgs(args map[string]interface{}) controlplane.MLCommandPayload {
-	payload := controlplane.MLCommandPayload{Content: args, Tags: map[string]string{}}
-	for _, key := range []string{"idempotency_key", "request_id", "d"} {
-		if value, ok := args[key].(string); ok && strings.TrimSpace(value) != "" {
-			payload.IdempotencyKey = strings.TrimSpace(value)
-			break
-		}
-	}
-	if raw, ok := args["tags"].(map[string]interface{}); ok {
-		for k, v := range raw {
-			payload.Tags[k] = fmt.Sprint(v)
-		}
-	}
-	return payload
-}
-
-func mlReceiptResourceTags(receipt *controlplane.MLCommandReceipt) map[string]string {
-	if receipt == nil {
-		return nil
-	}
-	return map[string]string{"endpoint": receipt.Endpoint, "endpoint_id": receipt.EndpointID, "environment": receipt.Environment, "environment_id": receipt.EnvironmentID, "model_version": receipt.ModelVersion, "model_version_id": receipt.ModelVersionID, "model": receipt.Model, "recipe": receipt.Recipe, "run": receipt.Run, "artifact": receipt.Artifact, "runtime": receipt.Runtime}
-}
-
-func mlCommandReceiptToMap(status string, receipt *controlplane.MLCommandReceipt) map[string]interface{} {
-	result := map[string]interface{}{"status": status}
-	if receipt == nil {
-		return result
-	}
-	result["request_event_id"] = receipt.RequestEventID
-	result["request_pubkey"] = receipt.RequestPubkey
-	result["request_kind"] = receipt.RequestKind
-	result["result_kind"] = receipt.ResultKind
-	result["status_kinds"] = []int{}
-	result["result_kinds"] = []int{receipt.ResultKind}
-	result["read_model_kinds"] = receipt.ReadModelKinds
-	result["resource_tags"] = mlReceiptResourceTags(receipt)
-	result["d_tag"] = receipt.DTag
-	result["published_relays"] = receipt.PublishedRelays
-	if receipt.Endpoint != "" {
-		result["endpoint"] = receipt.Endpoint
-	}
-	if receipt.EndpointID != "" {
-		result["endpoint_id"] = receipt.EndpointID
-	}
-	if receipt.Environment != "" {
-		result["environment"] = receipt.Environment
-	}
-	if receipt.EnvironmentID != "" {
-		result["environment_id"] = receipt.EnvironmentID
-	}
-	if receipt.ModelVersion != "" {
-		result["model_version"] = receipt.ModelVersion
-	}
-	if receipt.ModelVersionID != "" {
-		result["model_version_id"] = receipt.ModelVersionID
-	}
-	if receipt.Model != "" {
-		result["model"] = receipt.Model
-	}
-	if receipt.Recipe != "" {
-		result["recipe"] = receipt.Recipe
-	}
-	if receipt.Run != "" {
-		result["run"] = receipt.Run
-	}
-	if receipt.Artifact != "" {
-		result["artifact"] = receipt.Artifact
-	}
-	if receipt.Runtime != "" {
-		result["runtime"] = receipt.Runtime
-	}
-	return result
 }

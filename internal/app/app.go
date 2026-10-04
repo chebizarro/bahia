@@ -314,7 +314,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Image verifier: use Harbor (legacy), or the new multi-registry adapter, or no-op.
 	var verifier service.ImageVerifier
-	var signVerifier mcp.SignatureVerifier
+	var signVerifier controlplane.SignatureVerifier
 	var pipelineRegistryInspector registryAdapter.ImageInspector
 	switch {
 	case cfg.Harbor.Enabled:
@@ -2105,10 +2105,6 @@ func New(cfg *config.Config) (*App, error) {
 	bgManager.RegisterWithOptions(toolCoordinator)
 
 	// MCP (Model Context Protocol) server for AI agent integration.
-	var mlCommandPublisher mcp.MLCommandPublisher
-	if mlRegistry != nil && controlPlaneSigner != nil && controlPlanePool != nil && len(controlPlaneRelays) > 0 {
-		mlCommandPublisher = controlplane.NewMLCommandPublisher(controlPlanePool, controlPlaneSigner)
-	}
 
 	// Fleet hygiene (Swabbie, fp-jan): periodic dry-run scans + Tier-1
 	// convergence via the per-host maintenance driver.
@@ -2137,13 +2133,8 @@ func New(cfg *config.Config) (*App, error) {
 		ServicePubkey:      servicePubkey,
 		ConfidentialReader: confidentialEncryptor,
 		LogService:         runLogService,
-		SBOMs:              sbomRepo,
-		Signatures:         sigRepo,
-		SignVerifier:       signVerifier,
-		MLCommandPublisher: mlCommandPublisher,
 		LLMRegistry:        llmRegistry,
 	}
-	configureToolApprovalMCPDeps(&mcpDeps, controlPlanePool, controlPlaneSigner, controlPlaneRelays)
 	configureAuthorizationMCPDeps(&mcpDeps, cfg, tenantRBAC)
 	mcpServer, err := mcp.NewServerWithOptionsChecked(registry, logger, mcpDeps)
 	if err != nil {
@@ -4458,13 +4449,6 @@ func appendControlPlaneAuditOption(opts []controlplane.ReactorOption, repo repos
 		return opts
 	}
 	return append(opts, controlplane.WithNostrEventRepository(repo))
-}
-
-func configureToolApprovalMCPDeps(deps *mcp.ServerDeps, publisher controlplane.NostrEventPublisher, signer nostr.Signer, relays []string) {
-	if deps == nil || publisher == nil || signer == nil || len(relays) == 0 {
-		return
-	}
-	deps.ToolApprovalCommandPublisher = controlplane.NewToolApprovalCommandPublisher(publisher, signer)
 }
 
 // newTenantRBAC leaves tenant authorization unconfigured when no durable
