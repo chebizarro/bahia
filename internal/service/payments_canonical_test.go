@@ -85,4 +85,49 @@ func TestPaymentCanonicalRejectionLeavesSQLUntouched(t *testing.T) {
 	if index.creates != 0 {
 		t.Fatalf("SQL touched after rejection: %d", index.creates)
 	}
+	canonical.mu.Lock()
+	firstID := canonical.attempts[0]
+	canonical.err = nil
+	canonical.mu.Unlock()
+	retried, err := svc.RecordPayment(ctx, uuid.New(), "worker", "https://mint", 17, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.ID != firstID {
+		t.Fatalf("retry changed canonical identity: %s != %s", retried.ID, firstID)
+	}
+	canonical.mu.Lock()
+	n := len(canonical.records)
+	canonical.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("retry created %d canonical coordinates, want 1", n)
+	}
+}
+
+func TestPaymentStatusRejectionLeavesSQLUntouched(t *testing.T) {
+	ctx := context.Background()
+	canonical := &mockPaymentCanonical{records: map[uuid.UUID]domain.PaymentRecord{}}
+	index := &failingPaymentIndex{mockPaymentRepo: newMockPaymentRepo()}
+	svc := NewPaymentService(index, zap.NewNop())
+	svc.SetCPStatePublisher(canonical)
+	svc.SetCanonicalView(canonical)
+	rec, err := svc.RecordPayment(ctx, uuid.New(), "worker", "https://mint", 17, "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical.mu.Lock()
+	canonical.err = errors.New("relay rejected")
+	canonical.mu.Unlock()
+	if err := svc.MarkPaymentSent(ctx, rec.ID); err == nil {
+		t.Fatal("expected status publish rejection")
+	}
+	if index.updates != 0 {
+		t.Fatalf("SQL status touched after rejection: %d", index.updates)
+	}
+	canonical.mu.Lock()
+	status := canonical.records[rec.ID].Status
+	canonical.mu.Unlock()
+	if status != domain.PaymentStatusPending {
+		t.Fatalf("rejected transition changed canonical status to %q", status)
+	}
 }

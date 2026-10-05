@@ -62,12 +62,12 @@ func (s *PaymentService) recordToken(ctx context.Context, runID uuid.UUID, worke
 	}
 	tokenHash := hashToken(tokenData)
 	for i := range records {
-		if records[i].TokenHash == tokenHash && records[i].Direction == direction {
+		if records[i].TokenHash == tokenHash {
 			return &records[i], nil
 		}
 	}
 	now := time.Now().UTC()
-	rec := &domain.PaymentRecord{ID: domain.NewEntityID(), DeploymentRunID: runID, WorkerPubkey: workerPubkey, MintURL: mintURL, AmountSats: amountSats, TokenHash: tokenHash, Direction: direction, Status: status, CreatedAt: now, UpdatedAt: now}
+	rec := &domain.PaymentRecord{ID: paymentRecordID(tokenHash), DeploymentRunID: runID, WorkerPubkey: workerPubkey, MintURL: mintURL, AmountSats: amountSats, TokenHash: tokenHash, Direction: direction, Status: status, CreatedAt: now, UpdatedAt: now}
 	if err := s.publishCPState(ctx, rec); err != nil {
 		return nil, err
 	}
@@ -222,4 +222,12 @@ func (s *PaymentService) publishCPState(ctx context.Context, rec *domain.Payment
 func hashToken(tokenData string) string {
 	h := sha256.Sum256([]byte(tokenData))
 	return hex.EncodeToString(h[:])
+}
+
+// paymentRecordID keeps the canonical coordinate stable when a caller retries
+// after an unconfirmed publish. The token hash is already the payment's global
+// idempotency key (and is unique in the SQL index), so deriving the UUID from it
+// cannot merge two records that the legacy store would have accepted.
+func paymentRecordID(tokenHash string) uuid.UUID {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("bahia:payment:"+tokenHash))
 }

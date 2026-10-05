@@ -108,14 +108,16 @@ func (m *mockWorkerRepoForPayments) UpdateStatus(_ context.Context, _ string, _ 
 // --- Tests ---
 
 type mockPaymentCanonical struct {
-	mu      sync.Mutex
-	records map[uuid.UUID]domain.PaymentRecord
-	err     error
+	mu       sync.Mutex
+	records  map[uuid.UUID]domain.PaymentRecord
+	attempts []uuid.UUID
+	err      error
 }
 
 func (m *mockPaymentCanonical) PublishPaymentRecord(_ context.Context, rec *domain.PaymentRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.attempts = append(m.attempts, rec.ID)
 	if m.err != nil {
 		return m.err
 	}
