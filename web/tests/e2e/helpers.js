@@ -71,6 +71,21 @@ export async function installE2EMocks(
   await page.route('**/api/v1/orgs', (route) => route.fulfill({
     json: { data: [{ id: 'org-e2e', name: 'E2E organization', role: backendRole }] }
   }));
+  // NIP-11 relay information documents for the mock relays. The web resolves
+  // relay limits over HTTP(S) at the relay host (relay-nip11.js); the mock
+  // relays are WebSocket-only, and an unanswered fetch surfaces as a browser
+  // console error on hosts with fast NXDOMAIN (CI), which the console-error
+  // assertions would fail. Serve a document with Bahia's default limits instead.
+  await page.route(/^https?:\/\/[^/]*\.test\.local\/?(\?.*)?$/, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/nostr+json',
+    headers: { 'Access-Control-Allow-Origin': '*' },
+    body: JSON.stringify({
+      name: 'bahia-e2e-mock-relay',
+      supported_nips: [1, 9, 11, 40, 42, 59, 77],
+      limitation: { max_message_length: 512000, max_content_length: 65535, auth_required: false }
+    })
+  }));
   await page.addInitScript(({ authenticated, extension, nip44, realNip44, pubkey, backendRole, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations, defaultServicePubkey }) => {
     const existingSseEvents = localStorage.getItem('__bahia_e2e_sse_events');
     if (!existingSseEvents || (Array.isArray(sseEvents) && sseEvents.length > 0)) {
