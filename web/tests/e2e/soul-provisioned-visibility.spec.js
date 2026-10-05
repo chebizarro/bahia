@@ -100,7 +100,11 @@ function soulEvent({ agentId, name, purpose }) {
 }
 
 test('A newly provisioned soul becomes visible through relay-backed browsing', async ({ page }) => {
-  await installE2EMocks(page, { authenticated: true, extension: true, nostrEvents: [runtimeCapabilityEvent()], systemInfo });
+  await installE2EMocks(page, { authenticated: true, extension: true, nostrEvents: [
+    { ...soulEvent({ agentId: 'existing', name: 'Existing', purpose: 'Trusted runtime anchor' }),
+      tags: [...soulEvent({ agentId: 'existing', name: 'Existing', purpose: 'Trusted runtime anchor' }).tags, ['runtime-pubkey', RUNTIME_PUBKEY]] },
+    runtimeCapabilityEvent()
+  ], systemInfo });
 
   await page.goto('/souls/new');
   await fillRequiredIdentity(page, {

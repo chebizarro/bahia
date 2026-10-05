@@ -534,7 +534,7 @@ export async function installE2EMocks(
       }
 
       emitOpen() {
-        if (this.readyState === MockWebSocket.CLOSED) return;
+        if (this.readyState === MockWebSocket.CLOSED || localStorage.getItem('__bahia_e2e_relay_unreachable') === 'true') return;
         this.readyState = MockWebSocket.OPEN;
         const event = { type: 'open', target: this };
         this.onopen?.(event);

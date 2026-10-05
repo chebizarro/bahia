@@ -23,8 +23,7 @@
     loading,
     error,
     runtimeCapabilities,
-    subscribeToSoulFactoryUpdates,
-    unsubscribeFromSoulUpdates
+    subscribeToSoulFactoryUpdates
   } from '$lib/stores/souls.js';
 
   let filter = $state('all');
@@ -35,10 +34,6 @@
   
   $effect(() => {
     subscribeToSoulFactoryUpdates();
-
-    return () => {
-      unsubscribeFromSoulUpdates();
-    };
   });
 </script>
 

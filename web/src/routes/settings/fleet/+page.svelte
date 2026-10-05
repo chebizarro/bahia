@@ -9,8 +9,7 @@
   } from '$lib/stores/fleet-rollout.svelte.js';
   import {
     souls,
-    subscribeToSoulFactoryUpdates,
-    unsubscribeFromSoulUpdates
+    subscribeToSoulFactoryUpdates
   } from '$lib/stores/souls.svelte.js';
   import {
     FLEET_CONFIG_ALLOWED_SECTIONS,
@@ -42,7 +41,6 @@
     return () => {
       unsubscribeFleetConfig();
       fleetRolloutStore.stop();
-      unsubscribeFromSoulUpdates();
     };
   });
 

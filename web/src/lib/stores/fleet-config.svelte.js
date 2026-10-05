@@ -5,6 +5,7 @@ import {
   SOUL_FACTORY_FLEET_CONFIG_SCHEMA
 } from '$lib/nostr/kinds.js';
 import { authState, login, signWithAuth } from '$lib/stores/auth.js';
+import { getEventStore, onStoreRefresh } from '$lib/nostr/boot.js';
 
 export const FLEET_CONFIG_ALLOWED_SECTIONS = Object.freeze([
   '$comment', 'logging', 'auth', 'models', 'agents', 'bindings', 'messages',
@@ -138,6 +139,19 @@ export function createFleetConfigStore({
       state.event = null;
       state.document = null;
       state.publishResults = [];
+    }
+    if (client === nostr) {
+      // The layout-owned SoulFactory reader covers kind 31953. Page consumers
+      // only project the verified local store and never open their own REQ.
+      const refresh = () => {
+        const cached = getEventStore()?.query({ kinds: [KINDS.SOUL_FLEET_CONFIG], authors: [author], '#d': [SOUL_FACTORY_FLEET_CONFIG_IDENTIFIER] }) || [];
+        for (const event of cached.sort((a, b) => a.created_at - b.created_at || b.id.localeCompare(a.id))) {
+          try { apply(event); } catch (error) { state.error = error?.message || 'Invalid cached fleet configuration'; }
+        }
+        state.loading = false;
+      };
+      refresh();
+      return onStoreRefresh(refresh);
     }
     state.loading = true;
     state.error = '';

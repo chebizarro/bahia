@@ -20,6 +20,8 @@
   import { initBackupStoreBinding, teardownBackupStoreBinding } from '$lib/stores/collections/backup.svelte.js';
   import { initMLStoreBinding, teardownMLStoreBinding } from '$lib/stores/collections/ml.svelte.js';
   import { initSBOMStoreBinding, teardownSBOMStoreBinding } from '$lib/stores/collections/sbom.svelte.js';
+  import { initContinuityStoreBinding, teardownContinuityStoreBinding } from '$lib/nostr/continuity';
+  import { initSoulFactoryStoreBinding, teardownSoulFactoryStoreBinding } from '$lib/stores/souls.svelte.js';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
   import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
   import { theme } from '$lib/stores/theme.js';
@@ -75,6 +77,8 @@
         initBackupStoreBinding();
         initMLStoreBinding();
         initSBOMStoreBinding();
+        initContinuityStoreBinding();
+        initSoulFactoryStoreBinding();
       } catch (err) {
         console.warn('[layout] boot() failed:', err);
       }
@@ -104,10 +108,18 @@
       teardownBackupStoreBinding();
       teardownMLStoreBinding();
       teardownSBOMStoreBinding();
+      teardownContinuityStoreBinding();
+      teardownSoulFactoryStoreBinding();
       stopRoleDerivation();
       disconnectControlplane();
       disconnectAssistant();
     };
+  });
+
+  $effect(() => {
+    const pubkey = authState.status === 'authenticated' ? authState.pubkey : '';
+    if (!eventStoreReady) return;
+    untrack(() => { initContinuityStoreBinding(); initSoulFactoryStoreBinding(); });
   });
 
   $effect(() => {

@@ -14,7 +14,9 @@ import {
   SOUL_RUNTIME_METHODS
 } from '$lib/nostr/client.js';
 import { authState, login, signWithAuth } from '$lib/stores/auth.js';
-import { ensureRelayConnection, boot, onStoreRefresh } from '$lib/nostr/boot.js';
+import { ensureRelayConnection, boot, getEventStore, getPool, getRelayUrls, getServicePubkey, onStoreRefresh } from '$lib/nostr/boot.js';
+import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
+import { subscribeWithPagedBackfill } from '$lib/nostr/store-first-backfill.js';
 import { soulRuntimePolicy } from '$lib/stores/operational-views.js';
 import { createReadModelMetadataTracker } from '$lib/nostr/read-model-metadata.js';
 
@@ -478,7 +480,51 @@ export function diffDraftContent(before = {}, after = {}, prefix = '') {
 
 // --- Actions ---
 
-let soulFactorySubscription = null;
+const SOUL_READ_KINDS = [KINDS.AGENT_SOUL, KINDS.SOUL_TEMPLATE, KINDS.SOUL_DRAFT, KINDS.RUNTIME_CAPABILITY];
+const SOUL_HISTORY_KINDS = [KINDS.PROVISIONING_STATUS, KINDS.PROVISIONING_RESULT, KINDS.SOUL_ACTION_LEGACY_RESULT].filter(Boolean);
+let soulBinding = null;
+
+function trustedSoulAuthors(store = getEventStore(), service = getServicePubkey()) {
+  if (!store || !service) return { factory: [], operator: [], runtime: [] };
+  // The deployment service key is the root. A separate factory key is accepted
+  // only when named in a service-signed system discovery event.
+  const factory = new Set([service]);
+  for (const event of store.query({ kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY], authors: [service], '#d': ['bahia-system-v1'] })) {
+    const info = parseJson(event.content);
+    const key = info?.nostr?.soul_factory_pubkey;
+    if (info?.schema === 'bahia.system-discovery.v1' && /^[0-9a-f]{64}$/.test(key || '')) factory.add(key);
+  }
+  const operator = authState.status === 'authenticated' && /^[0-9a-f]{64}$/.test(authState.pubkey || '') ? [authState.pubkey] : [];
+  const runtime = new Set();
+  for (const event of store.query({ kinds: [KINDS.AGENT_SOUL], authors: [...factory] })) {
+    const soul = parseSoulEvent(event);
+    const key = soul?.runtime?.runtime_pubkey;
+    if (/^[0-9a-f]{64}$/.test(key || '')) runtime.add(key);
+  }
+  return { factory: [...factory], operator, runtime: [...runtime] };
+}
+
+export function soulStoreFilters(store = getEventStore(), service = getServicePubkey()) {
+  const authors = trustedSoulAuthors(store, service);
+  return [
+    { kinds: [KINDS.AGENT_SOUL, KINDS.SOUL_TEMPLATE], authors: authors.factory },
+    { kinds: [KINDS.SOUL_DRAFT, KINDS.SOUL_ACTION, KINDS.SOUL_FLEET_CONFIG], authors: authors.operator },
+    { kinds: [KINDS.RUNTIME_CAPABILITY], authors: authors.runtime },
+    { kinds: SOUL_HISTORY_KINDS, authors: authors.factory }
+  ].filter((filter) => filter.kinds.length && filter.authors.length);
+}
+
+function rebuildSoulFactoryFromStore(store = getEventStore()) {
+  if (!store) return;
+  const trusted = soulStoreFilters(store);
+  for (const map of [soulEvents, templateEvents, draftEvents, capabilityEvents]) map.clear();
+  for (const target of [souls, templates, drafts, runtimeCapabilities]) replaceStateArray(target, []);
+  const events = trusted.flatMap((filter) => store.query(filter))
+    .filter((event) => SOUL_READ_KINDS.includes(event.kind))
+    .sort((a, b) => a.created_at - b.created_at || b.id.localeCompare(a.id));
+  for (const event of events) applySoulFactoryEvent(event);
+  for (const key of ['souls', 'templates', 'drafts', 'capabilities']) loading[key] = false;
+}
 
 function applySoulFactoryEvent(event) {
   if (event.kind === KINDS.AGENT_SOUL) {
@@ -492,84 +538,57 @@ function applySoulFactoryEvent(event) {
   }
 }
 
-// Single persistent subscription for all soul factory read models.
-// Receives stored events, marks ready on EOSE, keeps listening for live updates.
-export async function subscribeToSoulFactoryUpdates(options = null) {
-  if (soulFactorySubscription) return;
-
-  // Accept either a bare author pubkey string or an options object. Callers such as
-  // Some callers pass an options object; only a real pubkey
-  // string may ever reach the relay `authors` filter, which must be an array of
-  // strings (a non-string here triggers a relay "parse error ... of authors").
-  const authorPubkey = typeof options === 'string'
-    ? options
-    : (options && typeof options === 'object' ? (options.authorPubkey || options.author || null) : null);
-
-  loading.souls = true;
-  loading.templates = true;
-  loading.drafts = true;
-  loading.capabilities = true;
-  error.value = null;
-
-  // Server policy is advisory context, not a subscription gate.
-  refreshServerAgentRuntimes();
-
-  try {
-    await ensureRelayConnection();
-  } catch (err) {
-    console.error('[souls] Failed to connect:', err);
-    error.value = err.message;
-    loading.souls = false;
-    loading.templates = false;
-    loading.drafts = false;
-    loading.capabilities = false;
-    return;
-  }
-
-  const soulFilter = { kinds: [KINDS.AGENT_SOUL, KINDS.SOUL_TEMPLATE, KINDS.SOUL_DRAFT] };
-  if (typeof authorPubkey === 'string' && authorPubkey) soulFilter.authors = [authorPubkey];
-
-  const tracker = createReadModelMetadataTracker({ relays: knownPoolRelays() });
-  const finishHistoricalCatchup = () => {
-    const metadata = tracker.metadata();
-    rememberSoulFactoryReadModelMeta(metadata);
-    loading.souls = false;
-    loading.templates = false;
-    loading.drafts = false;
-    loading.capabilities = false;
-  };
-
-  soulFactorySubscription = nostr.subscribe([
-    soulFilter,
-    { kinds: [KINDS.RUNTIME_CAPABILITY] }
-  ], {
-    onEvent: (event, relay) => {
-      tracker.markEvent(event, relay);
-      applySoulFactoryEvent(event);
-    },
-    onEose: (relay) => {
-      tracker.markEose(relay);
-      if (tracker.isComplete()) finishHistoricalCatchup();
-    },
-    onClosed: (reason, relay, meta) => {
-      tracker.markClosed(reason, relay, meta);
-      console.warn(`[souls] Subscription closed by ${relay}: ${reason}`);
-      if (tracker.isTerminal()) finishHistoricalCatchup();
-    },
-    onAuth: (challenge, relay) => {
-      tracker.markAuth(challenge, relay);
+export function initSoulFactoryStoreBinding() {
+  const store = getEventStore();
+  const pool = getPool();
+  const service = getServicePubkey();
+  if (!store || !pool || !service) return;
+  if (soulBinding?.store === store) { soulBinding.sync(); return; }
+  soulBinding?.stop();
+  const relays = [...new Set(getRelayUrls().map(toWebSocketUrl).filter(Boolean))];
+  const active = new Map();
+  let currentFilters = '';
+  const sync = () => {
+    const filters = soulStoreFilters(store, service);
+    const filterKey = JSON.stringify(filters);
+    if (filterKey !== currentFilters) {
+      currentFilters = filterKey;
+      rebuildSoulFactoryFromStore(store);
+    } else {
+      rebuildSoulFactoryFromStore(store);
     }
-  });
+    const wanted = new Set();
+    filters.forEach((filter, index) => {
+      const key = `souls:${index}:${filter.authors.join(',')}`;
+      wanted.add(key);
+      if (active.has(key) || !relays.length) return;
+      active.set(key, subscribeWithPagedBackfill({ pool, store, relays, filter, key, onEose: (_relay, complete) => {
+        for (const model of ['souls', 'templates', 'drafts', 'capabilities', 'history']) {
+          readModelMeta[model] = { complete, degraded: complete ? null : { incomplete: true, reason: 'paged-boundary' }, relaySummary: [] };
+        }
+      } }));
+    });
+    for (const [key, stop] of active) if (!wanted.has(key)) { stop(); active.delete(key); }
+  };
+  sync();
+  const offRefresh = onStoreRefresh(sync);
+  soulBinding = { store, sync, stop: () => { offRefresh(); for (const stop of active.values()) stop(); active.clear(); } };
+  void refreshServerAgentRuntimes();
 }
 
-export function unsubscribeFromSoulUpdates() {
+export function teardownSoulFactoryStoreBinding() {
+  soulBinding?.stop();
+  soulBinding = null;
   stopPolicyRefresh?.();
   stopPolicyRefresh = null;
-  if (soulFactorySubscription) {
-    soulFactorySubscription();
-    soulFactorySubscription = null;
-  }
 }
+
+// Kept for existing page consumers. The app layout owns the retained reader.
+export async function subscribeToSoulFactoryUpdates() {
+  await boot();
+  initSoulFactoryStoreBinding();
+}
+export function unsubscribeFromSoulUpdates() {}
 
 function getTag(event, name, fallback = '') {
   const tag = (event.tags || []).findLast?.((candidate) => candidate[0] === name) || [...(event.tags || [])].reverse().find((candidate) => candidate[0] === name);
@@ -1169,66 +1188,25 @@ function summarizeHistoryEvent(event, soulRef) {
 
 export async function fetchSoulHistory(soul, { limit = 50 } = {}) {
   if (!soul?.agentId) return [];
-
+  await boot();
+  const store = getEventStore();
+  if (!store) return [];
   const soulRef = buildSoulRef(soul);
-  const lifecycleKinds = [KINDS.PROVISIONING_STATUS, KINDS.PROVISIONING_RESULT, KINDS.SOUL_ACTION_LEGACY_RESULT].filter(Boolean);
+  const authors = trustedSoulAuthors(store);
+  if (!authors.factory.includes(soul.pubkey)) return [];
   const filters = [
-    { kinds: [KINDS.AGENT_SOUL], '#d': [soul.agentId], limit },
-    // NIP-01 relay filters only support single-letter tag indexes. The SoulFactory
-    // compatibility tags use `soul`, so query bounded recent kind sets and apply
-    // the multi-letter tag match locally instead of sending an invalid `#soul` filter.
-    { kinds: [KINDS.SOUL_ACTION], limit },
-    { kinds: lifecycleKinds, limit }
-  ];
-
-  return new Promise((resolve) => {
-    const events = [];
-    const tracker = createReadModelMetadataTracker({
-      relays: knownPoolRelays(),
-      partialEventCount: () => events.length
-    });
-    let settled = false;
-    let unsubscribe = null;
-    let unsubscribeAfterAssign = false;
-
-    const buildHistory = () => {
-      const deduped = new Map();
-      for (const event of events) {
-        if (deduped.has(event.id)) continue;
-        if (event.kind !== KINDS.AGENT_SOUL && getTag(event, 'soul') !== soulRef) continue;
-        deduped.set(event.id, summarizeHistoryEvent(event, soulRef));
-      }
-      return Array.from(deduped.values()).sort((a, b) => b.createdAt - a.createdAt);
-    };
-
-    const settle = () => {
-      if (settled) return;
-      settled = true;
-      const metadata = tracker.metadata();
-      const history = attachHistoryMetadata(buildHistory(), metadata);
-      rememberReadModelMeta('history', history);
-      resolve(history);
-      if (unsubscribe) unsubscribe();
-      else unsubscribeAfterAssign = true;
-    };
-
-    unsubscribe = nostr.subscribe(filters, {
-      onEvent: (event, relay) => {
-        tracker.markEvent(event, relay);
-        events.push(event);
-      },
-      onEose: (relay) => {
-        tracker.markEose(relay);
-        if (tracker.isComplete()) settle();
-      },
-      onClosed: (reason, relay, meta) => {
-        tracker.markClosed(reason, relay, meta);
-        if (tracker.isTerminal()) settle();
-      },
-      onAuth: (challenge, relay) => {
-        tracker.markAuth(challenge, relay);
-      }
-    });
-    if (unsubscribeAfterAssign) unsubscribe?.();
-  });
+    { kinds: [KINDS.AGENT_SOUL], authors: [soul.pubkey], '#d': [soul.agentId] },
+    { kinds: [KINDS.SOUL_ACTION], authors: authors.operator },
+    { kinds: SOUL_HISTORY_KINDS, authors: authors.factory }
+  ].filter((filter) => filter.authors.length && filter.kinds.length);
+  const events = new Map();
+  for (const filter of filters) for (const event of store.query(filter)) {
+    if (event.kind !== KINDS.AGENT_SOUL && getTag(event, 'soul') !== soulRef) continue;
+    events.set(event.id, event);
+  }
+  const rows = [...events.values()].map((event) => summarizeHistoryEvent(event, soulRef))
+    .sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+  const metadata = readModelMeta.history || { complete: false, degraded: { incomplete: true, reason: 'catching-up' }, relaySummary: [] };
+  rememberReadModelMeta('history', metadata);
+  return attachHistoryMetadata(rows, metadata);
 }

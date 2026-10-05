@@ -3,7 +3,13 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 // Mock browser environment
 global.window = global;
 
-const bootMock = vi.hoisted(() => ({ ensureRelayConnection: vi.fn(async () => {}) }));
+const bootMock = vi.hoisted(() => ({
+  ensureRelayConnection: vi.fn(async () => {}), boot: vi.fn(async () => {}),
+  store: null, pool: null, refreshCallbacks: new Set(),
+  getEventStore: () => bootMock.store, getPool: () => bootMock.pool,
+  getServicePubkey: () => 'a'.repeat(64), getRelayUrls: () => ['wss://relay.example'],
+  onStoreRefresh: (cb) => { bootMock.refreshCallbacks.add(cb); return () => bootMock.refreshCallbacks.delete(cb); }
+}));
 vi.mock('../../src/lib/nostr/boot.js', () => bootMock);
 vi.mock('$lib/nostr/boot.js', () => bootMock);
 
@@ -18,7 +24,8 @@ const nostrClientMockFactory = vi.hoisted(() => () => {
     PROVISIONING_RESULT: 7950,
     SOUL_ACTION: 1950,
     SOUL_ACTION_LEGACY_RESULT: 1951,
-    RUNTIME_CAPABILITY: 30317
+    RUNTIME_CAPABILITY: 30317,
+    BAHIA_SYSTEM_DISCOVERY: 11316
   };
 
   const mockNostr = {
@@ -40,7 +47,8 @@ const nostrClientMockFactory = vi.hoisted(() => () => {
     createdAt: event.created_at,
     agentId: event.tags.find(t => t[0] === 'd')?.[1] || '',
     name: event.tags.find(t => t[0] === 'name')?.[1] || '',
-    status: event.tags.find(t => t[0] === 'status')?.[1] || 'active'
+    status: event.tags.find(t => t[0] === 'status')?.[1] || 'active',
+    runtime: { runtime_pubkey: event.tags.find(t => t[0] === 'runtime-pubkey')?.[1] || '' }
   }));
 
   const parseTemplateEvent = vi.fn((event) => ({
@@ -188,27 +196,26 @@ describe('Souls Store', () => {
     queryOrPartial.mockResolvedValue([]);
     mockNostr.subscribe.mockReturnValue(() => {});
 
+    bootMock.refreshCallbacks.clear();
+    const cached = [];
+    bootMock.store = {
+      events: cached,
+      query: vi.fn((filter) => cached.filter((event) =>
+        filter.kinds?.includes(event.kind) &&
+        (!filter.authors || filter.authors.includes(event.pubkey)) &&
+        Object.entries(filter).filter(([key]) => key.startsWith('#')).every(([key, values]) =>
+          event.tags?.some((tag) => tag[0] === key.slice(1) && values.includes(tag[1]))))),
+      getCursor: vi.fn(() => null), setCursor: vi.fn()
+    };
+    bootMock.pool = { subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })) };
     // Dynamically import souls module
     soulsModule = await import('../../src/lib/stores/souls.js');
   });
 
   afterEach(() => {
     // Clean up subscriptions
-    if (soulsModule.unsubscribeFromSoulUpdates) {
-      soulsModule.unsubscribeFromSoulUpdates();
-    }
+    soulsModule.teardownSoulFactoryStoreBinding?.();
   });
-
-  async function startSoulFactorySubscription(authorPubkey = null, entrypoint = 'subscribeToSoulFactoryUpdates') {
-    const cleanup = vi.fn();
-    mockNostr.subscribe.mockReturnValue(cleanup);
-
-    await soulsModule[entrypoint](authorPubkey);
-
-    expect(mockNostr.subscribe).toHaveBeenCalledTimes(1);
-    const [filters, handlers] = mockNostr.subscribe.mock.calls.at(-1);
-    return { filters, handlers, cleanup };
-  }
 
   it('removes a stale rerank model when reranking is disabled', () => {
     const memory = soulsModule.normalizeProvisioningMemorySpec({
@@ -227,282 +234,40 @@ describe('Souls Store', () => {
     expect(memory.search.rerank_model).toBe('rerank-v3.5');
   });
 
-  function applyBackfill(handlers, events) {
-    for (const event of events) {
-      handlers.onEvent(event);
-    }
-    handlers.onEose('wss://relay.example');
-  }
-
-  describe('soul factory subscription read models', () => {
-    it('subscribes once to current soul factory read-model kinds without an author filter', async () => {
-      const { filters, handlers } = await startSoulFactorySubscription();
-
-      expect(filters).toEqual([
-        { kinds: [31951, 31950, 31952] },
-        { kinds: [30317] }
-      ]);
-      expect(handlers).toEqual(expect.objectContaining({
-        onEvent: expect.any(Function),
-        onEose: expect.any(Function),
-        onClosed: expect.any(Function)
-      }));
-      expect(soulsModule.loading).toMatchObject({
-        souls: true,
-        templates: true,
-        drafts: true,
-        capabilities: true
-      });
-
-      handlers.onEose('wss://relay.example');
-
-      expect(soulsModule.readModelMeta.souls).toMatchObject({
-        complete: true,
-        degraded: null,
-        relaySummary: [expect.objectContaining({ relay: 'wss://relay.example', status: 'eose' })]
-      });
-      expect(soulsModule.readModelMeta.templates.complete).toBe(true);
-      expect(soulsModule.readModelMeta.drafts.complete).toBe(true);
-      expect(soulsModule.readModelMeta.capabilities.complete).toBe(true);
-      expect(soulsModule.loading).toMatchObject({
-        souls: false,
-        templates: false,
-        drafts: false,
-        capabilities: false
-      });
+  describe('store-first soul read models', () => {
+    const service = 'a'.repeat(64);
+    const stranger = 'b'.repeat(64);
+    const soul = (id, pubkey = service) => ({
+      id, kind: KINDS.AGENT_SOUL, pubkey, created_at: 100,
+      tags: [['d', id], ['name', id], ['status', 'active']], content: '{}'
     });
 
-    it('applies the author filter to replaceable soul/template/draft events only', async () => {
-      const authorPubkey = 'author-all-789';
-
-      const { filters } = await startSoulFactorySubscription(authorPubkey);
-
-      expect(filters).toEqual([
-        { kinds: [31951, 31950, 31952], authors: [authorPubkey] },
-        { kinds: [30317] }
-      ]);
-    });
-
-    it('applies stored EVENT callbacks, dedupes replaceable records, sorts read models, and marks ready on EOSE', async () => {
-      const { handlers } = await startSoulFactorySubscription();
-
-      applyBackfill(handlers, [
-        {
-          id: 'old-soul',
-          kind: 31951,
-          pubkey: 'factory',
-          created_at: 100,
-          tags: [['d', 'scout'], ['name', 'Old Scout'], ['status', 'active']]
-        },
-        {
-          id: 'new-soul',
-          kind: 31951,
-          pubkey: 'factory',
-          created_at: 200,
-          tags: [['d', 'scout'], ['name', 'New Scout'], ['status', 'suspended']]
-        },
-        {
-          id: 'agent-beta',
-          kind: 31951,
-          pubkey: 'factory',
-          created_at: 300,
-          tags: [['d', 'agent-beta'], ['name', 'Agent Beta'], ['status', 'provisioning']]
-        },
-        {
-          id: 'template-z',
-          kind: 31950,
-          pubkey: 'factory',
-          created_at: 50,
-          tags: [['d', 'z-template'], ['name', 'Zebra']]
-        },
-        {
-          id: 'template-a',
-          kind: 31950,
-          pubkey: 'factory',
-          created_at: 60,
-          tags: [['d', 'a-template'], ['name', 'Alpha']]
-        },
-        {
-          id: 'draft-1',
-          kind: 31952,
-          pubkey: 'author-pubkey',
-          created_at: 120,
-          tags: [['d', 'scout']],
-          content: JSON.stringify({ identity: { name: 'Scout' } })
-        },
-        {
-          id: 'cap-1',
-          kind: 30317,
-          pubkey: 'runtime',
-          created_at: 140,
-          tags: [['runtime', 'openclaw']],
-          content: '{}'
-        }
-      ]);
-
-      expect(parseSoulEvent).toHaveBeenCalled();
-      expect(parseTemplateEvent).toHaveBeenCalled();
-      expect(soulsModule.souls.map((soul) => soul.agentId)).toEqual(['agent-beta', 'scout']);
-      expect(soulsModule.souls.find((soul) => soul.agentId === 'scout')).toMatchObject({
-        id: 'new-soul',
-        name: 'New Scout',
-        status: 'suspended'
-      });
-      expect(soulsModule.templates.map((template) => template.name)).toEqual(['Alpha', 'Zebra']);
-      expect(soulsModule.drafts).toHaveLength(1);
-      expect(soulsModule.drafts[0]).toMatchObject({ agentId: 'scout' });
-      expect(soulsModule.runtimeCapabilities).toHaveLength(1);
-      // Unknown server policy fails closed.
-      expect(soulsModule.supportedRuntimeTargets()).toEqual([]);
-      soulsModule.serverAgentRuntimes.push('openclaw');
-      soulsModule.serverPolicy.known = true;
-      expect(soulsModule.supportedRuntimeTargets()).toEqual(['openclaw']);
-      expect(soulsModule.loading.souls).toBe(false);
-    });
-
-    it('keeps the persistent subscription open and applies live updates after EOSE', async () => {
-      const { handlers } = await startSoulFactorySubscription();
-
-      applyBackfill(handlers, [
-        {
-          id: 'soul-1',
-          kind: 31951,
-          pubkey: 'factory',
-          created_at: 100,
-          tags: [['d', 'agent-id-1'], ['name', 'Agent Alpha'], ['status', 'active']]
-        }
-      ]);
-
-      handlers.onEvent({
-        id: 'soul-1-updated',
-        kind: 31951,
-        pubkey: 'factory',
-        created_at: 220,
-        tags: [['d', 'agent-id-1'], ['name', 'Agent Alpha Updated'], ['status', 'suspended']]
-      });
-      handlers.onEvent({
-        id: 'soul-2',
-        kind: 31951,
-        pubkey: 'factory',
-        created_at: 230,
-        tags: [['d', 'agent-id-2'], ['name', 'Agent Beta'], ['status', 'active']]
-      });
-
-      expect(soulsModule.souls.map((soul) => soul.agentId)).toEqual(['agent-id-2', 'agent-id-1']);
-      expect(soulsModule.souls.find((soul) => soul.agentId === 'agent-id-1')).toMatchObject({
-        name: 'Agent Alpha Updated',
-        status: 'suspended'
-      });
-    });
-
-    it('records degraded read-model metadata when CLOSED occurs before EOSE after partial events', async () => {
-      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const { handlers } = await startSoulFactorySubscription();
-
-      handlers.onEvent({
-        id: 'partial-soul',
-        kind: 31951,
-        pubkey: 'factory',
-        created_at: 100,
-        tags: [['d', 'partial'], ['name', 'Partial Soul'], ['status', 'active']]
-      }, 'wss://relay.example');
-      handlers.onClosed('relay closed before EOSE', 'wss://relay.example', { terminal: true, source: 'closed' });
-
-      expect(soulsModule.loading.souls).toBe(false);
-      expect(soulsModule.readModelMeta.souls).toMatchObject({
-        complete: false,
-        degraded: {
-          incomplete: true,
-          reason: 'closed',
-          partialEventCount: 1,
-          relaySummary: [expect.objectContaining({ relay: 'wss://relay.example', status: 'closed' })]
-        }
-      });
-      expect(soulsModule.souls.map((soul) => soul.agentId)).toContain('partial');
-      consoleWarn.mockRestore();
-    });
-
-    it('records AUTH-required closure metadata for soul factory read models', async () => {
-      const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      const { handlers } = await startSoulFactorySubscription();
-
-      handlers.onClosed('auth-required: sign in', 'wss://auth.example', { terminal: true, source: 'auth', authRequired: true });
-
-      expect(soulsModule.loading.souls).toBe(false);
-      expect(soulsModule.readModelMeta.souls).toMatchObject({
-        complete: false,
-        degraded: {
-          incomplete: true,
-          reason: 'auth-required',
-          authRequired: true,
-          partialEventCount: 0,
-          relaySummary: [expect.objectContaining({ relay: 'wss://auth.example', status: 'auth-required' })]
-        }
-      });
-      consoleWarn.mockRestore();
-    });
-
-    it('records relay connection failures without opening a subscription', async () => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      bootMock.ensureRelayConnection.mockRejectedValueOnce(new Error('Relay connection failed'));
-
+    it('renders cached souls without a loading gate or direct Nostr subscription', async () => {
+      bootMock.store.events.push(soul('cached'));
       await soulsModule.subscribeToSoulFactoryUpdates();
-
-      expect(consoleError).toHaveBeenCalledWith('[souls] Failed to connect:', expect.any(Error));
+      expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['cached']);
+      expect(soulsModule.loading.souls).toBe(false);
       expect(mockNostr.subscribe).not.toHaveBeenCalled();
-      expect(soulsModule.error.value).toBe('Relay connection failed');
-      expect(soulsModule.loading).toMatchObject({
-        souls: false,
-        templates: false,
-        drafts: false,
-        capabilities: false
-      });
-
-      consoleError.mockRestore();
+      expect(bootMock.pool.subscribe).toHaveBeenCalled();
     });
 
-    it('clears a previous connection error on a successful subscription', async () => {
-      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-      bootMock.ensureRelayConnection.mockRejectedValueOnce(new Error('Network error'));
-
+    it('drops untrusted cached and live soul authors', async () => {
+      bootMock.store.events.push(soul('trusted'), soul('forged', stranger));
       await soulsModule.subscribeToSoulFactoryUpdates();
-      expect(soulsModule.error.value).toBe('Network error');
-
-      await soulsModule.subscribeToSoulFactoryUpdates();
-
-      expect(soulsModule.error.value).toBeNull();
-      expect(mockNostr.subscribe).toHaveBeenCalledTimes(1);
-
-      consoleError.mockRestore();
+      expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['trusted']);
+      bootMock.store.events.push(soul('forged-live', stranger));
+      for (const cb of bootMock.refreshCallbacks) cb();
+      expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['trusted']);
     });
 
-    it('does not create duplicate subscriptions while the persistent reader is live', async () => {
-      const cleanup = vi.fn();
-      mockNostr.subscribe.mockReturnValue(cleanup);
-
+    it('keeps app-level subscriptions across page consumer cleanup', async () => {
       await soulsModule.subscribeToSoulFactoryUpdates();
-      await soulsModule.subscribeToSoulFactoryUpdates();
-
-      expect(mockNostr.subscribe).toHaveBeenCalledTimes(1);
-      expect(cleanup).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('unsubscribeFromSoulUpdates', () => {
-    it('should call cleanup function when unsubscribing', async () => {
-      const cleanup = vi.fn();
-      mockNostr.subscribe.mockReturnValue(cleanup);
-
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      const count = bootMock.pool.subscribe.mock.calls.length;
       soulsModule.unsubscribeFromSoulUpdates();
-
-      expect(cleanup).toHaveBeenCalledTimes(1);
-    });
-
-    it('should be safe to call when not subscribed', () => {
-      expect(() => {
-        soulsModule.unsubscribeFromSoulUpdates();
-      }).not.toThrow();
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      expect(bootMock.pool.subscribe).toHaveBeenCalledTimes(count);
+      soulsModule.teardownSoulFactoryStoreBinding();
+      expect(bootMock.refreshCallbacks.size).toBe(0);
     });
   });
 
@@ -782,96 +547,20 @@ describe('Souls Store', () => {
   });
 
   describe('drafts and capabilities', () => {
-    it('subscription read model exposes compatible runtime targets from capability events', async () => {
-      const { handlers } = await startSoulFactorySubscription();
-
-      applyBackfill(handlers, [
-        {
-          id: 'cap-1',
-          kind: 30317,
-          pubkey: 'runtime',
-          created_at: 100,
-          tags: [['runtime', 'openclaw']],
-          content: '{}'
-        }
-      ]);
-
-      expect(soulsModule.runtimeCapabilities).toHaveLength(1);
+    it('trusts runtime capability only from a factory-signed soul runtime key', async () => {
+      const service = 'a'.repeat(64);
+      const runtime = 'c'.repeat(64);
+      bootMock.store.events.push({ id: 'soul', kind: KINDS.AGENT_SOUL, pubkey: service, created_at: 1,
+        tags: [['d', 'scout'], ['runtime-pubkey', runtime]], content: '{}' });
+      bootMock.store.events.push({ id: 'cap', kind: KINDS.RUNTIME_CAPABILITY, pubkey: runtime, created_at: 2,
+        tags: [['runtime', 'openclaw']], content: '{}' });
+      bootMock.store.events.push({ id: 'forged-cap', kind: KINDS.RUNTIME_CAPABILITY, pubkey: 'd'.repeat(64), created_at: 3,
+        tags: [['runtime', 'metiq']], content: '{}' });
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      expect(soulsModule.runtimeCapabilities.map((cap) => cap.id)).toEqual(['cap']);
       soulsModule.serverAgentRuntimes.push('openclaw');
       soulsModule.serverPolicy.known = true;
       expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual(['openclaw']);
-    });
-
-    it('supportedRuntimeMethods gates controls by advertised methods per runtime', async () => {
-      const nostrModule = await import('$lib/nostr/client.js');
-      nostrModule.parseRuntimeCapabilityEvent.mockImplementation((event) => ({
-        id: event.id,
-        pubkey: event.pubkey,
-        createdAt: event.created_at,
-        runtime: event.tags.find((t) => t[0] === 'runtime')?.[1] || 'unknown',
-        methods: event.tags.filter((t) => t[0] === 'method').map((t) => t[1]),
-        compatible: true,
-        event
-      }));
-      const { handlers } = await startSoulFactorySubscription();
-
-      applyBackfill(handlers, [
-        {
-          id: 'cap-oc',
-          kind: 30317,
-          pubkey: 'runtime-oc',
-          created_at: 100,
-          tags: [['runtime', 'openclaw'], ['method', 'soulfactory.provision'], ['method', 'soulfactory.config.reload']],
-          content: '{}'
-        },
-        {
-          id: 'cap-mq',
-          kind: 30317,
-          pubkey: 'runtime-mq',
-          created_at: 100,
-          tags: [['runtime', 'metiq'], ['method', 'soulfactory.provision']],
-          content: '{}'
-        }
-      ]);
-
-      soulsModule.serverAgentRuntimes.push('openclaw', 'metiq');
-      soulsModule.serverPolicy.known = true;
-      expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw' })).toEqual(
-        expect.arrayContaining(['soulfactory.provision', 'soulfactory.config.reload'])
-      );
-      expect(soulsModule.supportedRuntimeMethods({ runtime: 'metiq' })).toEqual(['soulfactory.provision']);
-      expect(soulsModule.supportedRuntimeMethods({ runtime: 'unregistered-rt' })).toBeNull();
-      expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw', runtimePubkey: 'runtime-oc' })).toContain('soulfactory.config.reload');
-      expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw', runtimePubkey: 'other-pubkey' })).toBeNull();
-    });
-
-    it('intersects discovered targets with the server-enabled runtime policy', async () => {
-      const nostrModule = await import('$lib/nostr/client.js');
-      nostrModule.parseRuntimeCapabilityEvent.mockImplementation((event) => ({
-        id: event.id,
-        pubkey: event.pubkey,
-        createdAt: event.created_at,
-        runtime: event.tags.find((t) => t[0] === 'runtime')?.[1] || 'unknown',
-        methods: event.tags.filter((t) => t[0] === 'method').map((t) => t[1]),
-        compatible: true,
-        event
-      }));
-      const { handlers } = await startSoulFactorySubscription();
-
-      applyBackfill(handlers, [
-        { id: 'cap-oc', kind: 30317, pubkey: 'runtime-oc', created_at: 100, tags: [['runtime', 'openclaw'], ['method', 'soulfactory.provision']], content: '{}' },
-        { id: 'cap-mq', kind: 30317, pubkey: 'runtime-mq', created_at: 100, tags: [['runtime', 'metiq'], ['method', 'soulfactory.provision']], content: '{}' }
-      ]);
-
-      // Unknown policy fails closed even with live compatible capabilities.
-      expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual([]);
-      expect(soulsModule.supportedRuntimeMethods({ runtime: 'metiq' })).toBeNull();
-
-      soulsModule.serverAgentRuntimes.push('metiq');
-      soulsModule.serverPolicy.known = true;
-      expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual(['metiq']);
-      expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw' })).toBeNull();
-      expect(soulsModule.supportedRuntimeMethods({ runtime: 'metiq' })).toEqual(['soulfactory.provision']);
     });
 
     it('publishSoulDraft signs, publishes, and stores a 31952 draft', async () => {
@@ -1004,93 +693,18 @@ describe('Souls Store', () => {
       });
     });
 
-    it('fetchSoulHistory includes soul updates and actions sorted newest-first', async () => {
-      let handlers = null;
-      mockNostr.subscribe.mockImplementationOnce((filters, incomingHandlers) => {
-        handlers = incomingHandlers;
-        return () => {};
-      });
-
-      const historyPromise = soulsModule.fetchSoulHistory({ agentId: 'scout', pubkey: 'factory' }, { limit: 10 });
-
-      expect(mockNostr.subscribe).toHaveBeenCalledWith([
-        { kinds: [31951], '#d': ['scout'], limit: 10 },
-        { kinds: [1950], limit: 10 },
-        { kinds: [6950, 7950, 1951], limit: 10 }
-      ], expect.objectContaining({
-        onEvent: expect.any(Function),
-        onEose: expect.any(Function),
-        onClosed: expect.any(Function)
-      }));
-
-      handlers.onEvent({
-        id: 'evt-action',
-        kind: 1950,
-        created_at: 200,
-        pubkey: 'author2',
-        tags: [['soul', '31951:factory:scout'], ['action', 'suspend'], ['reason', 'maintenance']]
-      });
-      handlers.onEvent({
-        id: 'evt-other-soul',
-        kind: 1950,
-        created_at: 300,
-        pubkey: 'author2',
-        tags: [['soul', '31951:factory:other'], ['action', 'suspend']]
-      });
-      handlers.onEvent({
-        id: 'evt-soul',
-        kind: 31951,
-        created_at: 100,
-        pubkey: 'factory',
-        tags: [['d', 'scout'], ['status', 'active']]
-      });
-      handlers.onEose('wss://relay.example');
-
-      const history = await historyPromise;
-
+    it('reads soul history from the local store without opening a REQ', async () => {
+      const service = 'a'.repeat(64);
+      authModule.authState.pubkey = 'c'.repeat(64);
+      bootMock.store.events.push({ id: 'evt-soul', kind: KINDS.AGENT_SOUL, pubkey: service,
+        created_at: 100, tags: [['d', 'scout'], ['status', 'active']], content: '{}' });
+      bootMock.store.events.push({ id: 'evt-action', kind: KINDS.SOUL_ACTION, pubkey: authModule.authState.pubkey,
+        created_at: 200, tags: [['soul', `31951:${service}:scout`], ['action', 'suspend'], ['reason', 'maintenance']], content: '' });
+      const history = await soulsModule.fetchSoulHistory({ agentId: 'scout', pubkey: service }, { limit: 10 });
       expect(history.map((item) => item.id)).toEqual(['evt-action', 'evt-soul']);
-      expect(history[0].summary).toBe('suspend: maintenance');
-      expect(history.complete).toBe(true);
-      expect(history.degraded).toBeNull();
-      expect(soulsModule.readModelMeta.history).toMatchObject({
-        complete: true,
-        degraded: null,
-        relaySummary: [expect.objectContaining({ relay: 'wss://relay.example', status: 'eose' })]
-      });
+      expect(mockNostr.subscribe).not.toHaveBeenCalled();
+      expect(bootMock.pool.subscribe).not.toHaveBeenCalled();
     });
 
-    it('fetchSoulHistory returns partial activity with degraded metadata on CLOSED-before-EOSE', async () => {
-      let handlers = null;
-      mockNostr.subscribe.mockImplementationOnce((_filters, incomingHandlers) => {
-        handlers = incomingHandlers;
-        return () => {};
-      });
-
-      const historyPromise = soulsModule.fetchSoulHistory({ agentId: 'scout', pubkey: 'factory' }, { limit: 10 });
-
-      handlers.onEvent({
-        id: 'evt-action',
-        kind: 1950,
-        created_at: 200,
-        pubkey: 'author2',
-        tags: [['soul', '31951:factory:scout'], ['action', 'suspend']]
-      }, 'wss://relay.example');
-      handlers.onClosed('relay closed before EOSE', 'wss://relay.example', { terminal: true, source: 'closed' });
-
-      const history = await historyPromise;
-
-      expect(history.map((item) => item.id)).toEqual(['evt-action']);
-      expect(history.complete).toBe(false);
-      expect(history.degraded).toMatchObject({
-        incomplete: true,
-        reason: 'closed',
-        partialEventCount: 1,
-        relaySummary: [expect.objectContaining({ relay: 'wss://relay.example', status: 'closed' })]
-      });
-      expect(soulsModule.readModelMeta.history).toMatchObject({
-        complete: false,
-        degraded: expect.objectContaining({ incomplete: true, reason: 'closed' })
-      });
-    });
   });
 });

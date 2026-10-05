@@ -19,7 +19,7 @@
     WorkspaceIcon
   } from '$lib/icons/domain-icons.js';
   import { nostr, parseSoulEvent, KINDS, normalizeSoulDraftContent } from '$lib/nostr/client.js';
-  import { buildSoulRef, fetchSoulHistory, subscribeToSoulFactoryUpdates, unsubscribeFromSoulUpdates, publishSoulAction, publishSoulDraft, publishSoulUpdateAction, provisioningRuns, souls, trackLifecycleRun } from '$lib/stores/souls.js';
+  import { buildSoulRef, fetchSoulHistory, subscribeToSoulFactoryUpdates, publishSoulAction, publishSoulDraft, publishSoulUpdateAction, provisioningRuns, souls, trackLifecycleRun } from '$lib/stores/souls.js';
   
   let soul = $state(null);
   let loading = $state(true);

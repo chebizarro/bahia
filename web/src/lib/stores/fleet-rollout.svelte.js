@@ -1,5 +1,6 @@
 import { nostr } from '$lib/nostr/client.js';
 import { KINDS, SOUL_RUNTIME_TARGETS } from '$lib/nostr/kinds.js';
+import { getEventStore, onStoreRefresh } from '$lib/nostr/boot.js';
 
 export const FLEET_ROLLOUT_STATUSES = Object.freeze({
   PENDING: 'pending',
@@ -184,6 +185,24 @@ export function createFleetRolloutStore({ client = nostr } = {}) {
       return;
     }
 
+    if (client === nostr) {
+      // The layout reader retains the SoulFactory history. Rebuild the
+      // rollout from the local verified store on each batch, not from a
+      // navigation-owned bounded REQ.
+      const refresh = () => {
+        const store = getEventStore();
+        if (!store) return;
+        const events = [
+          ...store.query({ kinds: [KINDS.PROVISIONING_STATUS, KINDS.PROVISIONING_RESULT], authors, '#e': [revision] }),
+          ...store.query({ kinds: [KINDS.AGENT_SOUL], authors, '#d': agentIds })
+        ].sort((a, b) => a.created_at - b.created_at || b.id.localeCompare(a.id));
+        for (const event of events) apply(event);
+        state.loading = false;
+      };
+      refresh();
+      unsubscribe = onStoreRefresh(refresh);
+      return;
+    }
     state.loading = true;
     const reconciliationFilter = {
       kinds: [KINDS.PROVISIONING_STATUS, KINDS.PROVISIONING_RESULT],
