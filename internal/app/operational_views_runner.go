@@ -5,12 +5,13 @@ import (
 	"strings"
 
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
+	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
 type operationalViewPublisher interface {
-	PublishSoulRuntimePolicy(context.Context, []string) error
+	PublishSoulRuntimePolicy(context.Context, nostrAdapter.SoulRuntimePolicy) error
 	PublishBlossomAdmin(context.Context, []string, map[string]string) error
 	PublishBlossomBlob(context.Context, string, blossom.BlobDescriptor) error
 }
@@ -20,7 +21,7 @@ type operationalViewPublisher interface {
 type operationalViewsRunner struct {
 	publisher operationalViewPublisher
 	blossom   *blossom.Client
-	runtimes  []string
+	policy    nostrAdapter.SoulRuntimePolicy
 	owners    []string
 	logger    *zap.Logger
 }
@@ -28,7 +29,7 @@ type operationalViewsRunner struct {
 func (r *operationalViewsRunner) Name() string { return "operational-views" }
 
 func (r *operationalViewsRunner) Run(ctx context.Context) error {
-	if err := r.publisher.PublishSoulRuntimePolicy(ctx, r.runtimes); err != nil {
+	if err := r.publisher.PublishSoulRuntimePolicy(ctx, r.policy); err != nil {
 		return err
 	}
 	if r.blossom != nil {

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { E2E_SERVICE_PUBKEY, installE2EMocks, e2eTestPubkey } from './helpers.js';
+import { soulRuntimePolicyFixture } from './cp-state-fixtures.js';
 import { SOUL_FACTORY_PROVISIONING_REQUEST } from '../../src/lib/nostr/kinds.gen.js';
 
 const SERVICE_PUBKEY = E2E_SERVICE_PUBKEY;
@@ -56,7 +57,9 @@ async function openPreview(page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await installE2EMocks(page, { authenticated: true, extension: true, nostrEvents: [runtimeCapabilityEvent()], systemInfo });
+  await installE2EMocks(page, { authenticated: true, extension: true, nostrEvents: [
+    soulRuntimePolicyFixture({ runtimePubkeys: { openclaw: [RUNTIME_PUBKEY] } }), runtimeCapabilityEvent()
+  ], systemInfo });
 });
 
 test.describe('Soul Signing Smoke Test', () => {

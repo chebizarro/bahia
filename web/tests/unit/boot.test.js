@@ -55,7 +55,7 @@ vi.mock('../../src/lib/nostr/relay-nip11.js', () => ({
 }));
 
 describe('boot.js', () => {
-  let boot, shutdown, getEventStore, getPool, getServicePubkey, getRelayUrls, prefetchRelayLimits, onStoreRefresh, flushBatch;
+  let boot, shutdown, getEventStore, getPool, getServicePubkey, getServicePubkeys, getRelayUrls, prefetchRelayLimits, onStoreRefresh, flushBatch;
 
   beforeEach(async () => {
     vi.resetModules();
@@ -66,6 +66,7 @@ describe('boot.js', () => {
     getEventStore = mod.getEventStore;
     getPool = mod.getPool;
     getServicePubkey = mod.getServicePubkey;
+    getServicePubkeys = mod.getServicePubkeys;
     getRelayUrls = mod.getRelayUrls;
     prefetchRelayLimits = mod.prefetchRelayLimits;
     onStoreRefresh = mod.onStoreRefresh;
@@ -103,13 +104,23 @@ describe('boot.js', () => {
     expect(getEventStore()).toBeNull();
     expect(getPool()).toBeNull();
     expect(getServicePubkey()).toBe('');
+    expect(getServicePubkeys()).toEqual([]);
 
     await boot();
 
     expect(getEventStore()).toBe(mockStore.store);
     expect(getPool()).toBe(mockPool.pool);
     expect(getServicePubkey()).toBe('a'.repeat(64));
+    expect(getServicePubkeys()).toEqual(['a'.repeat(64)]);
     expect(getRelayUrls()).toEqual(['wss://relay.example']);
+  });
+
+  it('retains every seeded service/controller trust root while namespacing by the first', async () => {
+    const first = 'c'.repeat(64);
+    const second = 'd'.repeat(64);
+    await boot({ seed: { service_pubkeys: [first, second, first], relay_urls: [] } });
+    expect(getServicePubkey()).toBe(first);
+    expect(getServicePubkeys()).toEqual([first, second]);
   });
 
   it('is idempotent — second call does not re-create store', async () => {

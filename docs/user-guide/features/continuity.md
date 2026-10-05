@@ -26,7 +26,19 @@ The view reads current continuity state from canonical events:
 | `31400`–`31404` | Continuity profile, failover policy, standby, replication, and recovery workflow definitions |
 | `30900` | Canonical worker state used in the topology assessment |
 
-The browser requests at most 1,000 events for each continuity filter and deduplicates replaceable events before projecting the page.
+The app opens the shared verified `BahiaEventStore` before connecting to relays, so the route renders persisted continuity events immediately and stays usable when relays are unreachable. Rendering never waits for a relay connection or EOSE; relay catch-up only updates a "synced" state. The app layout owns the subscriptions, so navigating away and back does not open another REQ. The readers start at boot and never wait for a relay to connect or reach EOSE; they are only ordered after the app's own boot requests (discovery and the core read model) on the shared connection.
+
+History is read in pages rather than under a fixed event cap. Per relay, one live REQ stays open and stored history is walked backwards one page at a time (`until` + `limit`) until a page comes back empty, so a relay that caps a REQ below the requested page size is still read completely. A per-relay cursor is saved once every page reached EOSE; the next session reads only the gap since that cursor, again in pages. The cursor deliberately trails by five minutes and never passes the browser clock, so clock skew and late-arriving events are re-read instead of skipped. If one second holds more events than a relay returns in a page, NIP-01 cannot page inside that second: older history is still read, but the cursor is not saved and catch-up is reported as incomplete so the next session retries.
+
+## Trusted publishers
+
+The browser puts an `authors` list on every continuity filter and on every read of the local store:
+
+- `30351` status, `30353` recovery progress and `30900` worker state are projections signed by the Bahia service. They are accepted from the service keys in the deployment bootstrap seed (`service_pubkeys`).
+- `31400`–`31404` definitions, `38430`/`38431` failover and recovery requests, and continuity-heartbeat `30315` events are operator-authored. The daemon acts on them only when signed by `nostr.authorized_pubkeys`; a heartbeat's `worker` tag names the observed worker and is not its signing authority. The browser has no service-signed copy of that allowlist, so it accepts these kinds only from the signed-in operator's own key. Definitions published by a different operator do not shape your topology, requests or simulation, and those tabs carry a note saying so; the service-signed status cards are the same for everyone. Lifting this needs the Bahia service to publish its operator allowlist, which it does not do today: for example the service-signed NIP-51 set the event guide already names (`30000`, `d=operators:<scope>`, one `p` tag per `nostr.authorized_pubkeys` entry). Org membership cannot stand in for it, because the daemon does not accept continuity documents from org members.
+- When nobody is signed in, the route still renders service-authored status and worker state from cache. It does not accept definitions, heartbeats or requests from any signer.
+
+A valid signature proves who signed an event; it does not by itself make that signer trusted.
 
 ## Reading status safely
 

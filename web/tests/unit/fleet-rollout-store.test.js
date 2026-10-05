@@ -161,57 +161,63 @@ describe('fleet rollout reducer', () => {
 });
 
 describe('fleet rollout subscription', () => {
-  it('uses revision-, operator-, soul-, and factory-scoped filters and deduplicates events', () => {
-    const cleanup = vi.fn();
-    let handlers;
-    const subscribe = vi.fn((filters, nextHandlers) => {
-      handlers = nextHandlers;
-      return cleanup;
-    });
-    const store = createFleetRolloutStore({ client: { subscribe } });
+  // A verified-store double: query() honours kinds, authors and tag filters.
+  function eventStoreDouble(events) {
+    return { query: vi.fn((filter) => events.filter((event) =>
+      filter.kinds.includes(event.kind) && filter.authors.includes(event.pubkey) &&
+      Object.entries(filter).filter(([key]) => key.startsWith('#')).every(([key, values]) =>
+        event.tags.some((tag) => tag[0] === key.slice(1) && values.includes(tag[1]))))) };
+  }
 
+  it('projects the local store with revision-, operator-, soul-, and factory-scoped queries, opens no REQ, and deduplicates', () => {
+    const events = [];
+    const eventStore = eventStoreDouble(events);
+    let refresh;
+    const cleanup = vi.fn();
+    const registerRefresh = vi.fn((callback) => { refresh = callback; return cleanup; });
+    const store = createFleetRolloutStore({ eventStore: () => eventStore, registerRefresh });
+
+    // Cached reconciliation progress renders at once, with no loading gate.
+    events.push(reconciliationEvent({ id: 'progress', kind: 6950 }));
     store.track({
       revision,
       souls: [soul('alpha'), soul('metiq', { runtime: { target: 'metiq' } })],
       operatorPubkey
     });
-
-    expect(subscribe).toHaveBeenCalledWith([
-      {
-        kinds: [6950, 7950],
-        '#e': [revision],
-        limit: 100,
-        authors: [factoryPubkey],
-        '#p': [operatorPubkey]
-      },
-      {
-        kinds: [31951],
-        '#d': ['alpha'],
-        limit: 1,
-        authors: [factoryPubkey]
-      }
-    ], expect.objectContaining({
-      onEvent: expect.any(Function),
-      onEose: expect.any(Function),
-      onClosed: expect.any(Function)
-    }));
-
-    const progress = reconciliationEvent({ id: 'progress', kind: 6950 });
-    handlers.onEvent(progress);
-    handlers.onEvent(progress);
+    expect(store.state.loading).toBe(false);
     expect(store.state.souls[0].status).toBe('reloading');
 
-    handlers.onEvent(reconciliationEvent({
+    expect(eventStore.query).toHaveBeenCalledWith({
+      kinds: [6950, 7950], authors: [factoryPubkey], '#e': [revision], '#p': [operatorPubkey]
+    });
+    expect(eventStore.query).toHaveBeenCalledWith({ kinds: [31951], authors: [factoryPubkey], '#d': ['alpha'] });
+
+    // A later store batch replays the same event and adds a spoofed terminal result.
+    events.push(reconciliationEvent({
       id: 'untrusted',
       kind: 7950,
       status: 'error',
       pubkey: 'b'.repeat(64),
       content: JSON.stringify({ fleet_status: 'failed', error: 'spoofed' })
     }));
+    refresh();
     expect(store.state.souls[0].status).toBe('reloading');
+
+    events.push(reconciliationEvent({ id: 'done', kind: 7950, status: 'success', createdAt: 300 }));
+    refresh();
+    expect(store.state.souls[0].status).toBe('ok');
 
     store.stop();
     expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it('tracks nothing and stays idle without a revision or a deployed soul', () => {
+    const registerRefresh = vi.fn();
+    const store = createFleetRolloutStore({ eventStore: () => eventStoreDouble([]), registerRefresh });
+    store.track({ revision: '', souls: [soul('alpha')], operatorPubkey });
+    store.track({ revision, souls: [], operatorPubkey });
+    expect(registerRefresh).not.toHaveBeenCalled();
+    expect(store.state.loading).toBe(false);
   });
 });
 

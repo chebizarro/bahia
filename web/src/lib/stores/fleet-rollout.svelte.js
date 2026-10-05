@@ -1,5 +1,5 @@
-import { nostr } from '$lib/nostr/client.js';
 import { KINDS, SOUL_RUNTIME_TARGETS } from '$lib/nostr/kinds.js';
+import { getEventStore, onStoreRefresh } from '$lib/nostr/boot.js';
 
 export const FLEET_ROLLOUT_STATUSES = Object.freeze({
   PENDING: 'pending',
@@ -113,7 +113,7 @@ export function summarizeFleetRollout(souls = []) {
   return summary;
 }
 
-export function createFleetRolloutStore({ client = nostr } = {}) {
+export function createFleetRolloutStore({ eventStore = getEventStore, registerRefresh = onStoreRefresh } = {}) {
   const state = $state({
     revision: '',
     souls: [],
@@ -184,35 +184,25 @@ export function createFleetRolloutStore({ client = nostr } = {}) {
       return;
     }
 
-    state.loading = true;
-    const reconciliationFilter = {
-      kinds: [KINDS.PROVISIONING_STATUS, KINDS.PROVISIONING_RESULT],
-      '#e': [revision],
-      limit: Math.max(100, agentIds.length * 10)
+    // Reconciliation status/results and the 31951 read model are retained by
+    // the layout-owned SoulFactory reader. Project them from the verified local
+    // store, scoped to this revision and to the factories that signed the
+    // tracked Souls; navigation opens no REQ.
+    const refresh = () => {
+      const store = eventStore();
+      if (!store) return;
+      const events = [
+        ...store.query({
+          kinds: [KINDS.PROVISIONING_STATUS, KINDS.PROVISIONING_RESULT], authors, '#e': [revision],
+          ...(operatorPubkey ? { '#p': [operatorPubkey] } : {})
+        }),
+        ...store.query({ kinds: [KINDS.AGENT_SOUL], authors, '#d': agentIds })
+      ].sort((a, b) => a.created_at - b.created_at || b.id.localeCompare(a.id));
+      for (const event of events) apply(event);
+      state.loading = false;
     };
-    const readModelFilter = {
-      kinds: [KINDS.AGENT_SOUL],
-      '#d': agentIds,
-      limit: agentIds.length
-    };
-    if (authors.length > 0) {
-      reconciliationFilter.authors = authors;
-      readModelFilter.authors = authors;
-    }
-    if (operatorPubkey) reconciliationFilter['#p'] = [operatorPubkey];
-
-    const cleanup = client.subscribe([reconciliationFilter, readModelFilter], {
-      onEvent: apply,
-      onEose: () => {
-        state.loading = false;
-      },
-      onClosed: (reason, relay) => {
-        state.loading = false;
-        state.closedRelays.push({ reason: reason || '', relay: relay || '' });
-        if (reason) state.error = `Rollout subscription closed: ${reason}`;
-      }
-    });
-    unsubscribe = typeof cleanup === 'function' ? cleanup : null;
+    refresh();
+    unsubscribe = registerRefresh(refresh);
   }
 
   function stop() {

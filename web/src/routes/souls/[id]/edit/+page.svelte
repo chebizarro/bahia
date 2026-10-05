@@ -4,7 +4,7 @@
   import LiveUpdate from '$lib/components/LiveUpdate.svelte';
   import { KINDS, SOUL_RUNTIME_METHODS } from '$lib/nostr/client.js';
   import {
-    subscribeToSoulFactoryUpdates,
+    waitForSoul,
     drafts,
     souls,
     publishSoulDraft,
@@ -103,9 +103,9 @@
     error = '';
 
     try {
-      await subscribeToSoulFactoryUpdates();
-
-      const found = souls.find((s) => s.agentId === id);
+      // Cached Souls resolve at once; otherwise wait for relay catch-up before
+      // concluding the Soul does not exist.
+      const found = await waitForSoul(id);
       if (!found) throw new Error('Soul not found');
 
       soul = found;
