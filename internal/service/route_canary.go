@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -167,6 +168,7 @@ type RouteCanarySupervisor struct {
 	evaluator    *RouteCanaryEvaluator
 	healthSource RouteInstanceHealthSource
 	publisher    events.Publisher
+	canonical    *RouteCanaryProjector
 	interval     time.Duration
 	logger       *zap.Logger
 	now          func() time.Time
@@ -223,6 +225,11 @@ func NewRouteCanarySupervisor(
 
 // Name identifies the supervisor in background-runner logging and health.
 func (s *RouteCanarySupervisor) Name() string { return "route-canary-supervisor" }
+
+// SetCanonicalProjector makes canonical route state durable before SQL indexing.
+func (s *RouteCanarySupervisor) SetCanonicalProjector(projector *RouteCanaryProjector) {
+	s.canonical = projector
+}
 
 // Run probes every route immediately and then each route whenever it falls
 // due, until the context is done.
@@ -423,21 +430,25 @@ func (s *RouteCanarySupervisor) EvaluatePlan(ctx context.Context, plan *domain.D
 	next.RouteCanaryKey = key
 
 	if transition == domain.RouteCanaryTransitionNone {
+		payload := RouteCanaryChanged{State: next, ObservedInstanceStatus: s.instanceStatus(ctx, key), Reason: next.FailureReason, OccurredAt: now}
+		if s.canonical != nil {
+			if err := s.canonical.Project(ctx, events.Event{Type: events.EventRouteCanaryObserved, EntityID: next.Coordinate(), Data: payload}); err != nil {
+				return err
+			}
+		}
 		// Keep the Nostr state as fresh as the persisted REST read model.
 		if err := s.repo.UpsertState(ctx, &next); err != nil {
 			return err
 		}
 		if s.publisher != nil {
-			s.publisher.Publish(ctx, events.Event{Type: events.EventRouteCanaryObserved, EntityID: next.Coordinate(), Data: RouteCanaryChanged{
-				State: next, ObservedInstanceStatus: s.instanceStatus(ctx, key),
-				Reason: next.FailureReason, OccurredAt: now,
-			}})
+			s.publisher.Publish(ctx, events.Event{Type: events.EventRouteCanaryObserved, EntityID: next.Coordinate(), Data: payload})
 		}
 		return nil
 	}
 
 	instanceStatus := s.instanceStatus(ctx, key)
 	event := domain.RouteCanaryEvent{
+		ID:                     uuid.New(),
 		RouteCanaryKey:         key,
 		Transition:             transition,
 		PreviousClassification: prior.Classification,
@@ -447,6 +458,13 @@ func (s *RouteCanarySupervisor) EvaluatePlan(ctx context.Context, plan *domain.D
 		Evidence:               summarizeRouteObservations(verdict.Observations),
 		ObservedInstanceStatus: instanceStatus,
 		ObservedAt:             now,
+	}
+	if s.canonical != nil {
+		if projection, ok := routeCanaryTransitionEvent(next, event, instanceStatus, now); ok {
+			if err := s.canonical.Project(ctx, projection); err != nil {
+				return err
+			}
+		}
 	}
 	if err := s.repo.UpsertStateWithEvent(ctx, &next, &event); err != nil {
 		return err

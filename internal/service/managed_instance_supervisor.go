@@ -15,7 +15,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
-	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -54,6 +53,20 @@ type SupervisionSpec struct {
 // SupervisionSpecSource enumerates the current supervised target set.
 type SupervisionSpecSource interface {
 	SupervisionSpecs(context.Context) ([]SupervisionSpec, error)
+}
+
+// ManagedInstanceState is the supervision write/read surface. Its production
+// implementation reads subscribed canonical state and treats SQL as an index.
+type ManagedInstanceState interface {
+	GetHealth(context.Context, domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error)
+	UpsertHealth(context.Context, *domain.ManagedInstanceHealth) error
+	UpsertHealthWithEvent(context.Context, *domain.ManagedInstanceHealth, *domain.ManagedInstanceHealthEvent) error
+	GetActiveMaintenanceOverride(context.Context, domain.ManagedInstanceKey, time.Time) (*domain.MaintenanceOverride, error)
+	CreateMaintenanceOverride(context.Context, *domain.MaintenanceOverride) error
+	ClearMaintenanceOverride(context.Context, domain.ManagedInstanceKey) error
+	ListRecentRecoveryAttempts(context.Context, domain.ManagedInstanceKey, int) ([]domain.RecoveryAttempt, error)
+	RecordRecoveryAttempt(context.Context, *domain.RecoveryAttempt) (bool, error)
+	CompleteRecoveryAttemptWithHealthEvent(context.Context, string, domain.RecoveryAttemptResult, string, *domain.ManagedInstanceHealth, *domain.ManagedInstanceHealthEvent) (bool, error)
 }
 
 // StaticSupervisionSpecSource is useful for configuration-driven targets.
@@ -103,9 +116,10 @@ func (ManagedInstanceMaintenanceEvent) ShouldNotify() bool { return false }
 // ManagedInstanceSupervisor observes local managed instances and performs narrowly scoped recovery.
 type ManagedInstanceSupervisor struct {
 	source             SupervisionSpecSource
-	repo               repository.ManagedInstanceHealthRepository
+	repo               ManagedInstanceState
 	lock               ManagedInstanceTryLocker
 	publisher          events.Publisher
+	canonical          *ManagedInstanceHealthProjector
 	interval           time.Duration
 	observationTimeout time.Duration
 	logger             *zap.Logger
@@ -117,7 +131,7 @@ type ManagedInstanceSupervisor struct {
 	instanceLocks  map[string]*sync.Mutex
 }
 
-func NewManagedInstanceSupervisor(source SupervisionSpecSource, repo repository.ManagedInstanceHealthRepository, lock ManagedInstanceTryLocker, publisher events.Publisher, interval time.Duration, logger *zap.Logger, observationTimeout ...time.Duration) (*ManagedInstanceSupervisor, error) {
+func NewManagedInstanceSupervisor(source SupervisionSpecSource, repo ManagedInstanceState, lock ManagedInstanceTryLocker, publisher events.Publisher, interval time.Duration, logger *zap.Logger, observationTimeout ...time.Duration) (*ManagedInstanceSupervisor, error) {
 	if source == nil || repo == nil {
 		return nil, fmt.Errorf("managed instance supervisor requires spec source and health repository")
 	}
@@ -138,6 +152,11 @@ func NewManagedInstanceSupervisor(source SupervisionSpecSource, repo repository.
 }
 
 func (s *ManagedInstanceSupervisor) Name() string { return "managed-instance-supervisor" }
+
+// SetCanonicalProjector makes observations durable before SQL indexing.
+func (s *ManagedInstanceSupervisor) SetCanonicalProjector(projector *ManagedInstanceHealthProjector) {
+	s.canonical = projector
+}
 
 func (s *ManagedInstanceSupervisor) Run(ctx context.Context) error {
 	if err := s.EvaluateOnce(ctx); err != nil {
@@ -200,12 +219,18 @@ func (s *ManagedInstanceSupervisor) evaluateSpec(ctx context.Context, spec *Supe
 		if previous != nil {
 			e.PreviousStatus = previous.Status
 		}
+		severity := healthSeverity(health.Status, s.highMemoryCount(spec.Key) >= sustainCount(spec))
+		alert := s.shouldAlert(spec, severity, health.LastObservedAt)
+		payload := ManagedInstanceHealthChanged{EventID: e.ID.String(), Health: health, PreviousStatus: e.PreviousStatus, Severity: severity, Alert: alert, Reason: health.FailureReason, OccurredAt: health.LastObservedAt}
+		if s.canonical != nil {
+			if err := s.canonical.Project(ctx, events.Event{Type: events.EventRuntimeInstanceHealthChanged, EntityID: instanceKeyString(spec.Key), Data: payload}); err != nil {
+				return err
+			}
+		}
 		if err := s.repo.UpsertHealthWithEvent(ctx, &health, &e); err != nil {
 			return err
 		}
-		severity := healthSeverity(health.Status, s.highMemoryCount(spec.Key) >= sustainCount(spec))
-		alert := s.shouldAlert(spec, severity, health.LastObservedAt)
-		s.publish(ctx, events.EventRuntimeInstanceHealthChanged, instanceKeyString(spec.Key), ManagedInstanceHealthChanged{EventID: e.ID.String(), Health: health, PreviousStatus: e.PreviousStatus, Severity: severity, Alert: alert, Reason: health.FailureReason, OccurredAt: health.LastObservedAt})
+		s.publish(ctx, events.EventRuntimeInstanceHealthChanged, instanceKeyString(spec.Key), payload)
 	}
 	recoverErr := s.recover(ctx, spec, &health)
 	if observeErr != nil {
@@ -396,6 +421,12 @@ func (s *ManagedInstanceSupervisor) recover(ctx context.Context, spec *Supervisi
 	var transition *domain.ManagedInstanceHealthEvent
 	if beforeRestart.Status != health.Status {
 		transition = &domain.ManagedInstanceHealthEvent{ID: uuid.New(), ManagedInstanceKey: spec.Key, PreviousStatus: beforeRestart.Status, Status: health.Status, Reason: health.FailureReason, Evidence: health.FailureReason, ObservedAt: health.LastObservedAt}
+		if s.canonical != nil {
+			payload := ManagedInstanceHealthChanged{EventID: transition.ID.String(), Health: *health, PreviousStatus: beforeRestart.Status, Severity: healthSeverity(health.Status, false), Reason: health.FailureReason, OccurredAt: health.LastObservedAt}
+			if err := s.canonical.Project(ctx, events.Event{Type: events.EventRuntimeInstanceHealthChanged, EntityID: instanceKeyString(spec.Key), Data: payload}); err != nil {
+				return err
+			}
+		}
 	}
 	completed, err := s.repo.CompleteRecoveryAttemptWithHealthEvent(ctx, attempt.CorrelationID, attempt.Result, attempt.Evidence, health, transition)
 	if err != nil {

@@ -76,6 +76,12 @@ func (p *ManagedInstanceHealthProjector) handle(ctx context.Context, e events.Ev
 	return fmt.Errorf("unsupported managed instance event payload %T", e.Data)
 }
 
+// Project persists a supervisor observable before its optional SQL index is
+// updated. The bus handler remains for other producers and dedupes redelivery.
+func (p *ManagedInstanceHealthProjector) Project(ctx context.Context, e events.Event) error {
+	return p.handle(ctx, e)
+}
+
 func (p *ManagedInstanceHealthProjector) projectHealth(ctx context.Context, payload ManagedInstanceHealthChanged) error {
 	h := sanitizeProjectedHealth(payload.Health)
 	base := managedInstanceTags(h, managedHealthStatusSchema)

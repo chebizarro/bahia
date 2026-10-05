@@ -134,6 +134,13 @@ func (p *RouteCanaryProjector) handle(ctx context.Context, e events.Event) error
 	return p.publish(ctx, obs)
 }
 
+// Project writes the canonical observable synchronously before an optional
+// SQL index update. The bus subscription still handles gate-produced events
+// and deduplicates the supervisor's subsequent notification dispatch.
+func (p *RouteCanaryProjector) Project(ctx context.Context, e events.Event) error {
+	return p.handle(ctx, e)
+}
+
 // routeCanaryObservation is one sanitized, projection-ready route transition.
 type routeCanaryObservation struct {
 	eventType      events.EventType

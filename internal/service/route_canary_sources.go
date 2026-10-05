@@ -2,10 +2,40 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 )
+
+// LocalRoutePlanSource enumerates the latest relay-derived desired service
+// states. A newly received replacement or tombstone changes the next sweep's
+// set without consulting a repository.
+type LocalRoutePlanSource struct{ State LocalSupervisionState }
+
+func (s LocalRoutePlanSource) ListManagedRoutePlans(context.Context) ([]*domain.DesiredPublicRoutePlan, error) {
+	records, err := s.State.records(kinds.CPStateTopicServiceState)
+	if err != nil {
+		return nil, err
+	}
+	var plans []*domain.DesiredPublicRoutePlan
+	for _, event := range records {
+		var state domain.EnvironmentServiceState
+		if !localStateContent(event, &state) || state.DesiredRuntimeState == nil || state.DesiredRuntimeState.PublicRoute == nil {
+			continue
+		}
+		// The record's content is a projection, not a repository row. Decode
+		// before returning so callers cannot mutate the store's event value.
+		var plan domain.DesiredPublicRoutePlan
+		encoded, err := json.Marshal(state.DesiredRuntimeState.PublicRoute)
+		if err != nil || json.Unmarshal(encoded, &plan) != nil {
+			continue
+		}
+		plans = append(plans, &plan)
+	}
+	return plans, nil
+}
 
 // DesiredStateRoutePlanSource enumerates managed routes from environment service
 // state.
