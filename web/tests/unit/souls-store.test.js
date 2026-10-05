@@ -7,7 +7,8 @@ const bootMock = vi.hoisted(() => ({
   ensureRelayConnection: vi.fn(async () => {}), boot: vi.fn(async () => {}),
   store: null, pool: null, refreshCallbacks: new Set(),
   getEventStore: () => bootMock.store, getPool: () => bootMock.pool,
-  getServicePubkey: () => 'a'.repeat(64), getRelayUrls: () => ['wss://relay.example'],
+  getServicePubkey: () => 'a'.repeat(64), getServicePubkeys: () => ['a'.repeat(64)],
+  getRelayUrls: () => ['wss://relay.example'],
   onStoreRefresh: (cb) => { bootMock.refreshCallbacks.add(cb); return () => bootMock.refreshCallbacks.delete(cb); }
 }));
 vi.mock('../../src/lib/nostr/boot.js', () => bootMock);
@@ -563,6 +564,52 @@ describe('Souls Store', () => {
       expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual(['openclaw']);
     });
 
+    it('keeps runtime method controls scoped to capabilities from trusted Soul runtime keys', async () => {
+      const nostrModule = await import('$lib/nostr/client.js');
+      nostrModule.parseRuntimeCapabilityEvent.mockImplementation((event) => ({
+        id: event.id, pubkey: event.pubkey, createdAt: event.created_at,
+        runtime: event.tags.find((tag) => tag[0] === 'runtime')?.[1] || 'unknown',
+        methods: event.tags.filter((tag) => tag[0] === 'method').map((tag) => tag[1]),
+        compatible: true, event
+      }));
+      const service = 'a'.repeat(64);
+      const openclaw = 'c'.repeat(64);
+      const metiq = 'd'.repeat(64);
+      bootMock.store.events.push(
+        { id: 'soul-oc', kind: KINDS.AGENT_SOUL, pubkey: service, created_at: 1, tags: [['d', 'oc'], ['runtime-pubkey', openclaw]], content: '{}' },
+        { id: 'soul-mq', kind: KINDS.AGENT_SOUL, pubkey: service, created_at: 1, tags: [['d', 'mq'], ['runtime-pubkey', metiq]], content: '{}' },
+        { id: 'cap-oc', kind: KINDS.RUNTIME_CAPABILITY, pubkey: openclaw, created_at: 2, tags: [['runtime', 'openclaw'], ['method', 'soulfactory.provision'], ['method', 'soulfactory.config.reload']], content: '{}' },
+        { id: 'cap-mq', kind: KINDS.RUNTIME_CAPABILITY, pubkey: metiq, created_at: 2, tags: [['runtime', 'metiq'], ['method', 'soulfactory.provision']], content: '{}' }
+      );
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      await Promise.resolve();
+      soulsModule.serverAgentRuntimes.push('openclaw', 'metiq');
+      soulsModule.serverPolicy.known = true;
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw', runtimePubkey: openclaw }))
+        .toEqual(expect.arrayContaining(['soulfactory.provision', 'soulfactory.config.reload']));
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw', runtimePubkey: metiq })).toBeNull();
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'unregistered' })).toBeNull();
+    });
+
+    it('intersects trusted runtime capabilities with service-authored runtime policy', async () => {
+      const service = 'a'.repeat(64);
+      const openclaw = 'c'.repeat(64);
+      const metiq = 'd'.repeat(64);
+      bootMock.store.events.push(
+        { id: 'soul-oc', kind: KINDS.AGENT_SOUL, pubkey: service, created_at: 1, tags: [['d', 'oc'], ['runtime-pubkey', openclaw]], content: '{}' },
+        { id: 'soul-mq', kind: KINDS.AGENT_SOUL, pubkey: service, created_at: 1, tags: [['d', 'mq'], ['runtime-pubkey', metiq]], content: '{}' },
+        { id: 'cap-oc', kind: KINDS.RUNTIME_CAPABILITY, pubkey: openclaw, created_at: 2, tags: [['runtime', 'openclaw'], ['method', 'soulfactory.provision']], content: '{}' },
+        { id: 'cap-mq', kind: KINDS.RUNTIME_CAPABILITY, pubkey: metiq, created_at: 2, tags: [['runtime', 'metiq'], ['method', 'soulfactory.provision']], content: '{}' }
+      );
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      await Promise.resolve();
+      expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual([]);
+      soulsModule.serverAgentRuntimes.push('metiq');
+      soulsModule.serverPolicy.known = true;
+      expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual(['metiq']);
+      expect(soulsModule.supportedRuntimeMethods({ runtime: 'openclaw' })).toBeNull();
+    });
+
     it('publishSoulDraft signs, publishes, and stores a 31952 draft', async () => {
       mockNostr.publish.mockResolvedValue([{ relay: 'wss://relay', accepted: true, message: '' }]);
 
@@ -704,6 +751,8 @@ describe('Souls Store', () => {
       expect(history.map((item) => item.id)).toEqual(['evt-action', 'evt-soul']);
       expect(mockNostr.subscribe).not.toHaveBeenCalled();
       expect(bootMock.pool.subscribe).not.toHaveBeenCalled();
+      expect(history.complete).toBe(false);
+      expect(history.degraded).toMatchObject({ incomplete: true, reason: 'catching-up' });
     });
 
   });

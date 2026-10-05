@@ -14,11 +14,10 @@ import {
   SOUL_RUNTIME_METHODS
 } from '$lib/nostr/client.js';
 import { authState, login, signWithAuth } from '$lib/stores/auth.js';
-import { ensureRelayConnection, boot, getEventStore, getPool, getRelayUrls, getServicePubkey, onStoreRefresh } from '$lib/nostr/boot.js';
+import { boot, getEventStore, getPool, getRelayUrls, getServicePubkey, getServicePubkeys, onStoreRefresh } from '$lib/nostr/boot.js';
 import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
 import { subscribeWithPagedBackfill } from '$lib/nostr/store-first-backfill.js';
 import { soulRuntimePolicy } from '$lib/stores/operational-views.js';
-import { createReadModelMetadataTracker } from '$lib/nostr/read-model-metadata.js';
 
 /** @typedef {import('$lib/types/customization').SoulAvatarSpec} SoulAvatarSpec */
 /** @typedef {import('$lib/types/customization').SoulDraftContentV2} SoulDraftContentV2 */
@@ -113,17 +112,6 @@ function rememberReadModelMeta(key, result) {
   };
 }
 
-function rememberSoulFactoryReadModelMeta(metadata) {
-  for (const key of ['souls', 'templates', 'drafts', 'capabilities']) {
-    rememberReadModelMeta(key, metadata);
-  }
-}
-
-function knownPoolRelays() {
-  if (typeof nostr.getConnectedRelays === 'function') return nostr.getConnectedRelays();
-  if (typeof nostr.getRelays === 'function') return nostr.getRelays();
-  return [];
-}
 
 function attachHistoryMetadata(history, metadata) {
   Object.defineProperties(history, {
@@ -484,28 +472,34 @@ const SOUL_READ_KINDS = [KINDS.AGENT_SOUL, KINDS.SOUL_TEMPLATE, KINDS.SOUL_DRAFT
 const SOUL_HISTORY_KINDS = [KINDS.PROVISIONING_STATUS, KINDS.PROVISIONING_RESULT, KINDS.SOUL_ACTION_LEGACY_RESULT].filter(Boolean);
 let soulBinding = null;
 
-function trustedSoulAuthors(store = getEventStore(), service = getServicePubkey()) {
-  if (!store || !service) return { factory: [], operator: [], runtime: [] };
-  // The deployment service key is the root. A separate factory key is accepted
-  // only when named in a service-signed system discovery event.
-  const factory = new Set([service]);
-  for (const event of store.query({ kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY], authors: [service], '#d': ['bahia-system-v1'] })) {
-    const info = parseJson(event.content);
-    const key = info?.nostr?.soul_factory_pubkey;
-    if (info?.schema === 'bahia.system-discovery.v1' && /^[0-9a-f]{64}$/.test(key || '')) factory.add(key);
-  }
-  const operator = authState.status === 'authenticated' && /^[0-9a-f]{64}$/.test(authState.pubkey || '') ? [authState.pubkey] : [];
-  const runtime = new Set();
-  for (const event of store.query({ kinds: [KINDS.AGENT_SOUL], authors: [...factory] })) {
-    const soul = parseSoulEvent(event);
-    const key = soul?.runtime?.runtime_pubkey;
-    if (/^[0-9a-f]{64}$/.test(key || '')) runtime.add(key);
-  }
-  return { factory: [...factory], operator, runtime: [...runtime] };
+function normalizedPubkeys(values = []) {
+  return [...new Set(values.map((value) => String(value || '').trim().toLowerCase())
+    .filter((value) => /^[0-9a-f]{64}$/.test(value)))].sort();
 }
 
-export function soulStoreFilters(store = getEventStore(), service = getServicePubkey()) {
-  const authors = trustedSoulAuthors(store, service);
+// Trusted-author policy by kind:
+// - 31950 templates, 31951 authoritative Souls, 6950/7950/1951 lifecycle
+//   history: deployment-seeded service/controller keys. Deployments that use a
+//   distinct SoulFactory controller include it in service_pubkeys.
+// - 31952 drafts, 1950 actions, 31953 fleet config: the authenticated operator
+//   that signs those documents. We never subscribe without that author.
+// - 30317 runtime capabilities: only runtime keys named by an already-trusted
+//   31951 Soul. Thus a self-signed capability cannot bootstrap its own trust.
+export function trustedSoulAuthors(store = getEventStore(), serviceAuthors = getServicePubkeys()) {
+  const factory = normalizedPubkeys(serviceAuthors.length ? serviceAuthors : [getServicePubkey()]);
+  const operator = authState.status === 'authenticated' ? normalizedPubkeys([authState.pubkey]) : [];
+  const runtime = new Set();
+  if (store && factory.length) {
+    for (const event of store.query({ kinds: [KINDS.AGENT_SOUL], authors: factory })) {
+      const key = parseSoulEvent(event)?.runtime?.runtime_pubkey;
+      if (/^[0-9a-f]{64}$/.test(key || '')) runtime.add(key);
+    }
+  }
+  return { factory, operator, runtime: [...runtime].sort() };
+}
+
+export function soulStoreFilters(store = getEventStore(), serviceAuthors = getServicePubkeys()) {
+  const authors = trustedSoulAuthors(store, serviceAuthors);
   return [
     { kinds: [KINDS.AGENT_SOUL, KINDS.SOUL_TEMPLATE], authors: authors.factory },
     { kinds: [KINDS.SOUL_DRAFT, KINDS.SOUL_ACTION, KINDS.SOUL_FLEET_CONFIG], authors: authors.operator },
@@ -514,9 +508,9 @@ export function soulStoreFilters(store = getEventStore(), service = getServicePu
   ].filter((filter) => filter.kinds.length && filter.authors.length);
 }
 
-function rebuildSoulFactoryFromStore(store = getEventStore()) {
+function rebuildSoulFactoryFromStore(store = getEventStore(), serviceAuthors = getServicePubkeys()) {
   if (!store) return;
-  const trusted = soulStoreFilters(store);
+  const trusted = soulStoreFilters(store, serviceAuthors);
   for (const map of [soulEvents, templateEvents, draftEvents, capabilityEvents]) map.clear();
   for (const target of [souls, templates, drafts, runtimeCapabilities]) replaceStateArray(target, []);
   const events = trusted.flatMap((filter) => store.query(filter))
@@ -538,41 +532,74 @@ function applySoulFactoryEvent(event) {
   }
 }
 
+function updateSoulBackfillMetadata(states) {
+  const relaySummary = [...states.entries()].map(([key, state]) => ({
+    relay: key.split('\t').at(-1), ...state
+  }));
+  const complete = relaySummary.length > 0 && relaySummary.every((state) => state.status === 'eose' && state.complete);
+  const incomplete = relaySummary.find((state) => state.status === 'closed' || state.status === 'incomplete');
+  const degraded = complete ? null : {
+    incomplete: true,
+    reason: incomplete?.reason || (incomplete ? 'paged-boundary' : 'catching-up'),
+    relaySummary
+  };
+  const metadata = { complete, degraded, relaySummary };
+  for (const model of ['souls', 'templates', 'drafts', 'capabilities', 'history']) rememberReadModelMeta(model, metadata);
+}
+
 export function initSoulFactoryStoreBinding() {
   const store = getEventStore();
   const pool = getPool();
-  const service = getServicePubkey();
-  if (!store || !pool || !service) return;
+  const serviceAuthors = getServicePubkeys();
+  if (!store || !pool || serviceAuthors.length === 0) return;
   if (soulBinding?.store === store) { soulBinding.sync(); return; }
   soulBinding?.stop();
   const relays = [...new Set(getRelayUrls().map(toWebSocketUrl).filter(Boolean))];
   const active = new Map();
+  const backfillStates = new Map();
   let currentFilters = '';
   const sync = () => {
-    const filters = soulStoreFilters(store, service);
+    const filters = soulStoreFilters(store, serviceAuthors);
     const filterKey = JSON.stringify(filters);
-    if (filterKey !== currentFilters) {
-      currentFilters = filterKey;
-      rebuildSoulFactoryFromStore(store);
-    } else {
-      rebuildSoulFactoryFromStore(store);
-    }
+    if (filterKey !== currentFilters) currentFilters = filterKey;
+    rebuildSoulFactoryFromStore(store, serviceAuthors);
+
     const wanted = new Set();
     filters.forEach((filter, index) => {
       const key = `souls:${index}:${filter.authors.join(',')}`;
       wanted.add(key);
       if (active.has(key) || !relays.length) return;
-      active.set(key, subscribeWithPagedBackfill({ pool, store, relays, filter, key, onEose: (_relay, complete) => {
-        for (const model of ['souls', 'templates', 'drafts', 'capabilities', 'history']) {
-          readModelMeta[model] = { complete, degraded: complete ? null : { incomplete: true, reason: 'paged-boundary' }, relaySummary: [] };
+      for (const relay of relays) backfillStates.set(`${key}\t${relay}`, { status: 'pending', complete: false, reason: '' });
+      updateSoulBackfillMetadata(backfillStates);
+      active.set(key, subscribeWithPagedBackfill({
+        pool, store, relays, filter, key,
+        onEose: (relay, complete) => {
+          backfillStates.set(`${key}\t${relay}`, {
+            status: complete ? 'eose' : 'incomplete', complete, reason: complete ? '' : 'paged-boundary'
+          });
+          updateSoulBackfillMetadata(backfillStates);
+        },
+        onError: (caught, relay) => {
+          backfillStates.set(`${key}\t${relay}`, { status: 'closed', complete: false, reason: caught.message });
+          updateSoulBackfillMetadata(backfillStates);
+          error.value = caught.message;
         }
-      } }));
+      }));
     });
-    for (const [key, stop] of active) if (!wanted.has(key)) { stop(); active.delete(key); }
+    for (const [key, stop] of active) if (!wanted.has(key)) {
+      stop();
+      active.delete(key);
+      for (const stateKey of [...backfillStates.keys()]) if (stateKey.startsWith(`${key}\t`)) backfillStates.delete(stateKey);
+    }
   };
   sync();
   const offRefresh = onStoreRefresh(sync);
-  soulBinding = { store, sync, stop: () => { offRefresh(); for (const stop of active.values()) stop(); active.clear(); } };
+  soulBinding = { store, sync, stop: () => {
+    offRefresh();
+    for (const stop of active.values()) stop();
+    active.clear();
+    backfillStates.clear();
+  } };
   void refreshServerAgentRuntimes();
 }
 

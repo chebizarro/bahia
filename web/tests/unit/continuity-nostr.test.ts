@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 const bootMock = vi.hoisted(() => ({ store: null as any, refresh: null as any }));
 vi.mock('$lib/nostr/boot.js', () => ({
   getEventStore: () => bootMock.store, getServicePubkey: () => 'a'.repeat(64),
+  getServicePubkeys: () => ['a'.repeat(64)],
   getPool: () => null, getRelayUrls: () => [],
   onStoreRefresh: (cb: any) => { bootMock.refresh = cb; return () => { bootMock.refresh = null; }; }
 }));
@@ -34,8 +35,8 @@ function event(overrides: Record<string, any>) {
 }
 
 describe('continuity Nostr read models', () => {
-  it('requires a trusted author for every continuity filter', () => {
-    const filters = continuityNostrFilters({ serviceAuthors: [SERVICE_AUTHOR], operatorAuthors: [WORKER_AUTHOR], workerAuthors: [WORKER_AUTHOR] });
+  it('scopes service projections to seed roots and operator-authored families to the authenticated operator', () => {
+    const filters = continuityNostrFilters({ serviceAuthors: [SERVICE_AUTHOR], operatorAuthors: [WORKER_AUTHOR] });
     expect(filters).toHaveLength(6);
     expect(filters).toEqual(expect.arrayContaining([
       expect.objectContaining({ kinds: [30351], authors: [SERVICE_AUTHOR] }),

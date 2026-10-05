@@ -19,7 +19,7 @@ import {
   parseJsonContent
 } from '$lib/nostr/client.js';
 import { controlStateSchema, workerRecordId } from '$lib/nostr/cp-state.js';
-import { getEventStore, getPool, getRelayUrls, getServicePubkey, onStoreRefresh } from '$lib/nostr/boot.js';
+import { getEventStore, getPool, getRelayUrls, getServicePubkey, getServicePubkeys, onStoreRefresh } from '$lib/nostr/boot.js';
 import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
 import { authState } from '$lib/stores/auth.js';
 import { subscribeWithPagedBackfill } from '$lib/nostr/store-first-backfill.js';
@@ -120,36 +120,40 @@ function newestFirst(left: ContinuityNostrEvent, right: ContinuityNostrEvent): n
   return String(right.id || '').localeCompare(String(left.id || ''));
 }
 
-// Service projections and cp-state are anchored to the deployment service key.
-// Definitions/commands are operator-authored, so only the authenticated
-// operator's own key is trusted here. Heartbeats are worker-authored and their
-// keys must be named by a service-signed worker-state record.
-export function continuityNostrFilters({ serviceAuthors = [], operatorAuthors = [], workerAuthors = [] }: {
-  serviceAuthors?: string[]; operatorAuthors?: string[]; workerAuthors?: string[];
+// Trusted-author policy by kind:
+// - 30351/30353 status and 30900 worker state: every deployment-seeded
+//   Bahia service key (service-authored canonical projections).
+// - 31400-31404 definitions, historical 38430/38431 commands, and 30315
+//   continuity heartbeats: the authenticated fleet operator. The daemon gates
+//   all three families with nostr.authorized_pubkeys; worker identity is data in
+//   the heartbeat, not its signing authority. Until a service-signed operator
+//   allowlist exists, the browser must not broaden this to arbitrary signers.
+export function continuityNostrFilters({ serviceAuthors = [], operatorAuthors = [] }: {
+  serviceAuthors?: string[]; operatorAuthors?: string[];
 } = {}) {
   return [
     { kinds: [CONTINUITY_STATUS], '#t': [CONTINUITY_STATUS_TAG, CONTINUITY_STATUS_READ_MODEL_TAG], authors: serviceAuthors },
     { kinds: [RECOVERY_PROGRESS], '#t': [CONTINUITY_STATUS_TAG, 'recovery-progress'], authors: serviceAuthors },
     { kinds: CONTINUITY_DEFINITION_KINDS, authors: operatorAuthors },
     { kinds: CONTINUITY_COMMAND_KINDS, authors: operatorAuthors },
-    { kinds: [HEARTBEAT_OBSERVATION], '#t': ['continuity-heartbeat'], authors: workerAuthors },
+    { kinds: [HEARTBEAT_OBSERVATION], '#t': ['continuity-heartbeat'], authors: operatorAuthors },
     { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': [WORKER_STATE_TOPIC], authors: serviceAuthors }
   ].filter((filter) => filter.authors.length > 0);
 }
 
-function trustedContinuityAuthors(store: any, service: string) {
-  const workerStates = store.query({ kinds: [CASCADIA_CONTROLPLANE_STATE], authors: [service], '#t': [WORKER_STATE_TOPIC] });
-  const workerAuthors: string[] = [...new Set<string>(workerStates.map((event: ContinuityNostrEvent) => {
-    const content = contentObject(event);
-    return text(content.worker_pubkey) || text(content.pubkey) || eventTagValue(event, 'worker') || workerRecordId(event, content);
-  }).filter((key: string) => /^[0-9a-f]{64}$/.test(key)))];
-  const operator = authState.status === 'authenticated' && /^[0-9a-f]{64}$/.test(authState.pubkey || '') ? authState.pubkey : '';
-  return { serviceAuthors: [service], operatorAuthors: operator ? [operator] : [], workerAuthors };
+function normalizedPubkeys(values: string[]): string[] {
+  return [...new Set(values.map((value) => text(value).toLowerCase()).filter((value) => /^[0-9a-f]{64}$/.test(value)))].sort();
 }
 
-export function continuityEventsFromStore(store = getEventStore(), service = getServicePubkey()): ContinuityNostrEvent[] {
-  if (!store || !service) return [];
-  const filters = continuityNostrFilters(trustedContinuityAuthors(store, service));
+export function trustedContinuityAuthors(serviceAuthors = getServicePubkeys()) {
+  const seeded = normalizedPubkeys(serviceAuthors.length ? serviceAuthors : [getServicePubkey()]);
+  const operator = authState.status === 'authenticated' ? normalizedPubkeys([authState.pubkey || '']) : [];
+  return { serviceAuthors: seeded, operatorAuthors: operator };
+}
+
+export function continuityEventsFromStore(store = getEventStore(), serviceAuthors = getServicePubkeys()): ContinuityNostrEvent[] {
+  if (!store) return [];
+  const filters = continuityNostrFilters(trustedContinuityAuthors(serviceAuthors));
   const events = new Map<string, ContinuityNostrEvent>();
   for (const filter of filters) for (const event of store.query(filter)) if (event.id) events.set(event.id, event);
   return [...events.values()].sort(newestFirst);
@@ -159,20 +163,23 @@ let binding: { stop: () => void; sync: () => void; store: any } | null = null;
 export function initContinuityStoreBinding() {
   const store = getEventStore();
   const pool = getPool();
-  const service = getServicePubkey();
-  if (!store || !pool || !service) return;
+  const serviceAuthors = getServicePubkeys();
+  if (!store || !pool || serviceAuthors.length === 0) return;
   if (binding?.store === store) { binding.sync(); return; }
   binding?.stop();
   const relays = [...new Set(getRelayUrls().map(toWebSocketUrl).filter(Boolean))];
   const active = new Map<string, () => void>();
   const sync = () => {
-    const filters = continuityNostrFilters(trustedContinuityAuthors(store, service));
+    const filters = continuityNostrFilters(trustedContinuityAuthors(serviceAuthors));
     const wanted = new Set<string>();
     filters.forEach((filter, index) => {
       const key = `continuity:${index}:${filter.authors.join(',')}`;
       wanted.add(key);
       if (active.has(key) || !relays.length) return;
-      active.set(key, subscribeWithPagedBackfill({ pool, store, relays, filter, key, pageSize: CONTINUITY_PAGE_SIZE }));
+      active.set(key, subscribeWithPagedBackfill({
+        pool, store, relays, filter, key, pageSize: CONTINUITY_PAGE_SIZE,
+        onError: (caught) => console.warn(`[continuity] ${caught.message}`)
+      }));
     });
     for (const [key, stop] of active) if (!wanted.has(key)) { stop(); active.delete(key); }
   };

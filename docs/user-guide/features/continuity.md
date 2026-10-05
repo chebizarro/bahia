@@ -26,7 +26,17 @@ The view reads current continuity state from canonical events:
 | `31400`–`31404` | Continuity profile, failover policy, standby, replication, and recovery workflow definitions |
 | `30900` | Canonical worker state used in the topology assessment |
 
-The browser requests at most 1,000 events for each continuity filter and deduplicates replaceable events before projecting the page.
+The app opens the shared verified `BahiaEventStore` before connecting to relays, so the route renders persisted continuity events immediately and remains usable when relays are unreachable. The layout owns the retained subscriptions; navigating away and back does not open another REQ. Historical reads use bounded descending pages with persisted per-relay/filter cursors rather than a fixed event cap. A cursor is committed only after every history page reaches EOSE; live events then advance it. If more than one page of events shares the same second and the relay cannot page that boundary losslessly, the browser continues older history but leaves the cursor uncommitted and marks catch-up incomplete.
+
+## Trusted publishers
+
+The browser applies an `authors` allowlist to every continuity filter:
+
+- `30351` status, `30353` recovery progress, and `30900` worker state accept every service/controller key in the deployment bootstrap seed.
+- `31400`–`31404` definitions, historical `38430`/`38431` request records, and continuity-heartbeat `30315` events accept only the authenticated fleet operator. The daemon gates these inputs through `nostr.authorized_pubkeys`; the heartbeat's `worker` tag is the observed identity, not signing authority.
+- When no authenticated operator is available, the public route still renders service-authored status and worker state from cache, but it does not accept definitions, heartbeats, or historical commands from arbitrary signers.
+
+A valid signature proves who signed an event; it does not by itself make that signer trusted.
 
 ## Reading status safely
 

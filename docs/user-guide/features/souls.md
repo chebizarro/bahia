@@ -226,6 +226,18 @@ bahia souls templates get research-agent
 | 38384 | RuntimeControlRequest | Runtime-directed control request |
 | 38386 | RuntimeControlResult | Runtime-directed result |
 
+## Browser store-first reads and trusted publishers
+
+The app layout owns one retained SoulFactory reader backed by the shared verified `BahiaEventStore`. Soul Gallery, Soul details, and **Settings → OpenClaw Fleet** query that local store first, render cached rows without a loading gate, and observe batched store refreshes. Returning to those routes does not open another REQ. Soul history is sliced from local events first; the layout reader catches up the complete trusted history with cursor-backed bounded pages, including histories larger than 1,000 events.
+
+Every relay filter has a non-empty author allowlist:
+
+- `31950` templates, `31951` authoritative Souls, and `6950`/`7950`/`1951` lifecycle history use every service or SoulFactory-controller key supplied in the deployment bootstrap `service_pubkeys` set. A deployment with a distinct SoulFactory controller must seed that public key alongside the Bahia service key.
+- `31952` drafts, `1950` actions, and `31953` fleet configuration use the authenticated operator key that signs them.
+- `30317` runtime capabilities are accepted only from runtime pubkeys named by an already-trusted `31951` Soul. An arbitrary capability event cannot bootstrap its own publisher into the trusted set.
+
+The runtime-capability set is also intersected with the service-authored runtime policy before controls are enabled. Valid signatures from other authors remain stored only if another trusted subscription needs them; they are never projected into SoulFactory views.
+
 ## Fleet-wide OpenClaw configuration
 
 Open **Settings → OpenClaw Fleet** at `/settings/fleet` to edit and publish the parameterized-replaceable kind `31953` document. The event content uses `soulfactory-fleet-config/v1` and contains an allowlisted OpenClaw `template` plus optional `defaults` for model, CLI bindings, and reproducible `plugin-id=install-source` requirements. Secret-shaped string fields must use `${VAR}` placeholders.
