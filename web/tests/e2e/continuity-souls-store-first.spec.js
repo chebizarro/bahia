@@ -71,7 +71,9 @@ test('continuity renders the verified cache on reload with the relay unreachable
   await page.goto('/continuity');
   await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'svc-forged' })).toHaveCount(0);
-  await expect.poll(() => cachedKinds(page)).toContain(30351);
+  // Operator-signed kinds are only requested once the session is signed in, so
+  // wait until the request is cached too before cutting the relay off.
+  await expect.poll(() => cachedKinds(page)).toEqual(expect.arrayContaining([30351, 38430]));
 
   await reloadWithRelayUnreachable(page);
   await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();

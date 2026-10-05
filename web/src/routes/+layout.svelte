@@ -20,8 +20,8 @@
   import { initBackupStoreBinding, teardownBackupStoreBinding } from '$lib/stores/collections/backup.svelte.js';
   import { initMLStoreBinding, teardownMLStoreBinding } from '$lib/stores/collections/ml.svelte.js';
   import { initSBOMStoreBinding, teardownSBOMStoreBinding } from '$lib/stores/collections/sbom.svelte.js';
-  import { initContinuityStoreBinding, teardownContinuityStoreBinding } from '$lib/nostr/continuity';
-  import { initSoulFactoryStoreBinding, teardownSoulFactoryStoreBinding } from '$lib/stores/souls.svelte.js';
+  import { initContinuityStoreBinding, reprojectContinuityForOperator, teardownContinuityStoreBinding } from '$lib/nostr/continuity';
+  import { initSoulFactoryStoreBinding, reprojectSoulFactoryForOperator, teardownSoulFactoryStoreBinding } from '$lib/stores/souls.svelte.js';
   import { initOpsWidgetWallBinding, teardownOpsWidgetWallBinding } from '$lib/widgets/ops-widget-wall.js';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
   import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
@@ -139,6 +139,15 @@
     void (authState.status === 'authenticated' ? authState.pubkey : '');
     if (!eventStoreReady || !historyReadersStarted) return;
     untrack(() => { initContinuityStoreBinding(); initSoulFactoryStoreBinding(); });
+  });
+
+  // The signed-in operator is a trusted author for operator-signed kinds, so
+  // cached views are re-projected as soon as the session resolves — not gated
+  // on the readers above, which wait for the core REQs to be issued.
+  $effect(() => {
+    void (authState.status === 'authenticated' ? authState.pubkey : '');
+    if (!eventStoreReady) return;
+    untrack(() => { reprojectContinuityForOperator(); reprojectSoulFactoryForOperator(); });
   });
 
   $effect(() => {

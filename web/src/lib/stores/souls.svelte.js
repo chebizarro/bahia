@@ -600,6 +600,16 @@ function publishSoulCatchupMetadata(caught) {
  * without waiting on any relay, and re-syncs it when the signed-in operator
  * changes. Pages pass `relay: false`.
  */
+// Re-projects cached SoulFactory read models for the current trusted author
+// set (the signed-in operator is a trusted author of drafts, actions and fleet
+// config). Independent of the relay reader, so it also runs with every relay
+// unreachable.
+export function reprojectSoulFactoryForOperator() {
+  if (!getEventStore()) return;
+  projectSoulFactory();
+  for (const listener of [...soulListeners]) listener();
+}
+
 export function initSoulFactoryStoreBinding({ relay = true } = {}) {
   const store = getEventStore();
   const pool = getPool();

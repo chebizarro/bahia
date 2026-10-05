@@ -200,6 +200,16 @@ export function initContinuityStoreBinding() {
     binding = next;
   }
   binding.reader.sync(continuityFilterUnits(trustedContinuityAuthors(serviceAuthors)));
+  reprojectContinuityForOperator();
+}
+
+// Re-projects the cache for the current trusted author set. The layout calls
+// this whenever the signed-in operator changes, independently of the relay
+// reader: with the relay unreachable no store refresh or reader progress
+// follows, and a page that projected before the session resolved would
+// otherwise never show the operator-signed records.
+export function reprojectContinuityForOperator() {
+  for (const listener of dashboardListeners) listener();
 }
 
 /** Relay catch-up state of the continuity reader (a badge, never a render gate). */
