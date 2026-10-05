@@ -312,13 +312,16 @@ const CONTENT_TYPES = {
 };
 
 export function startDashboardServer({ buildDir, port, relayUrl, servicePubkey, backendPort }) {
-  const indexHtml = readFileSync(path.join(buildDir, 'index.html'), 'utf8')
-    .replaceAll('__PUBLIC_BAHIA_BOOTSTRAP_RELAYS__', relayUrl)
-    .replaceAll('__PUBLIC_BAHIA_SERVICE_PUBKEYS__', servicePubkey);
-  if (indexHtml.includes('__PUBLIC_BAHIA_')) throw new Error('dashboard build still contains bootstrap placeholders');
+  const indexHtml = readFileSync(path.join(buildDir, 'index.html'), 'utf8');
+  const seedScript = `window.__BAHIA_BOOTSTRAP__ = ${JSON.stringify({ schema: 'bahia.bootstrap.v1', relay_urls: [relayUrl], service_pubkeys: [servicePubkey] })};`;
   const root = path.resolve(buildDir);
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
+    if (url.pathname === '/bahia-bootstrap.js') {
+      res.writeHead(200, { 'content-type': CONTENT_TYPES['.js'], 'cache-control': 'no-store' });
+      res.end(seedScript);
+      return;
+    }
     if (url.pathname.startsWith('/api/')) {
       const upstream = httpRequest({ host: '127.0.0.1', port: backendPort, method: req.method, path: req.url, headers: req.headers }, (up) => {
         res.writeHead(up.statusCode || 502, up.headers);

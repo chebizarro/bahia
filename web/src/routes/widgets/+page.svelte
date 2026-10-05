@@ -2,45 +2,18 @@
   import { onMount } from 'svelte';
   import { WidgetRenderer } from 'wheelhouse';
   import 'wheelhouse/style.css';
-  import {
-    OPS_WIDGET_ALLOWED_PUBKEYS,
-    OPS_WIDGET_RELAYS,
-    createOpsWidgetWall
-  } from '$lib/widgets/ops-widget-wall.js';
+  import { opsWidgetWall } from '$lib/widgets/ops-widget-wall.js';
+  import { controlplaneConnection } from '$lib/stores/controlplane.svelte.js';
+  import { syncStatus } from '$lib/stores/sync-status.svelte.js';
 
   let events = $state([]);
-  let caughtUpRelays = $state([]);
-  let failedRelays = $state([]);
-  let lastError = $state('');
-  let resubscribeAttempts = $state(0);
-
-  const allowlistConfigured = OPS_WIDGET_ALLOWED_PUBKEYS.length > 0;
-  let connectionLabel = $derived(`${caughtUpRelays.length}/${OPS_WIDGET_RELAYS.length} relays caught up`);
+  const allowlistConfigured = opsWidgetWall.allowedPubkeys.length > 0;
+  let connectionLabel = $derived(`${syncStatus.eoseCount}/${syncStatus.relayCount} deployment relays caught up`);
 
   onMount(() => {
-    const wall = createOpsWidgetWall();
-    const unsubscribeStore = wall.store.subscribe((snapshot) => {
+    return opsWidgetWall.subscribe((snapshot) => {
       events = [...snapshot];
     });
-    wall.start({
-      onEose: (relay) => {
-        caughtUpRelays = Array.from(new Set([...caughtUpRelays, relay]));
-        failedRelays = failedRelays.filter((item) => item !== relay);
-      },
-      onClosed: (reason, relay) => {
-        failedRelays = Array.from(new Set([...failedRelays, relay]));
-        caughtUpRelays = caughtUpRelays.filter((item) => item !== relay);
-        lastError = reason || `Subscription closed by ${relay}`;
-      },
-      onHealth: (health) => {
-        resubscribeAttempts = health.resubscribeAttempts || 0;
-      }
-    });
-
-    return () => {
-      unsubscribeStore();
-      wall.destroy();
-    };
   });
 </script>
 
@@ -65,15 +38,13 @@
     <div class="relay-status" aria-label="Widget relay status">
       <strong>{connectionLabel}</strong>
       <span>{events.length} current widget{events.length === 1 ? '' : 's'}</span>
-      {#if resubscribeAttempts > 0}<span>{resubscribeAttempts} reconnect attempt{resubscribeAttempts === 1 ? '' : 's'}</span>{/if}
+      {#if controlplaneConnection.reconnects > 0}<span>{controlplaneConnection.reconnects} reconnect attempt{controlplaneConnection.reconnects === 1 ? '' : 's'}</span>{/if}
     </div>
   </header>
 
-  <section class="relay-panel" aria-label="Fleet widget relays">
-    {#each OPS_WIDGET_RELAYS as relay}
-      <span class:caught-up={caughtUpRelays.includes(relay)} class:failed={failedRelays.includes(relay)}>
-        {relay}
-      </span>
+  <section class="relay-panel" aria-label="Deployment widget relays">
+    {#each controlplaneConnection.relays as relay}
+      <span>{relay}</span>
     {/each}
   </section>
 
@@ -81,16 +52,17 @@
     <section class="notice warning" role="status">
       <strong>Publisher allowlist required</strong>
       <p>
-        Set <code>PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS</code> to a comma-separated list of trusted
-        64-character hexadecimal pubkeys. The wall rejects every publisher while the list is empty.
+        Set <code>PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS</code> on the web container to the trusted 64-character
+        hexadecimal publisher pubkeys; the entrypoint writes them to the deployment seed as <code>widget_pubkeys</code>.
+        The wall rejects every publisher while the list is empty.
       </p>
     </section>
   {/if}
 
-  {#if lastError}
+  {#if controlplaneConnection.lastError}
     <section class="notice error" role="status">
       <strong>Relay subscription degraded</strong>
-      <p>{lastError}</p>
+      <p>{controlplaneConnection.lastError}</p>
     </section>
   {/if}
 
@@ -105,9 +77,9 @@
       <h2>No trusted widget snapshots</h2>
       <p>
         {allowlistConfigured
-          ? caughtUpRelays.length > 0
-            ? 'The fleet relays have no current kind-30318 events from allowed publishers.'
-            : 'Connecting to the fleet relays…'
+          ? syncStatus.eoseCount > 0
+            ? 'The deployment relays have no current kind-30318 events from allowed publishers.'
+            : 'Waiting for deployment relays; cached widgets appear without a connection.'
           : 'Publisher trust is fail-closed until an allowlist is configured.'}
       </p>
     </section>
@@ -181,16 +153,6 @@
     border-radius: 999px;
     color: var(--text-muted);
     font-size: 0.8rem;
-  }
-
-  .relay-panel .caught-up {
-    border-color: color-mix(in srgb, var(--success, #22c55e) 55%, var(--border-color));
-    color: var(--success, #22c55e);
-  }
-
-  .relay-panel .failed {
-    border-color: color-mix(in srgb, var(--danger, #ef4444) 55%, var(--border-color));
-    color: var(--danger, #ef4444);
   }
 
   .notice,

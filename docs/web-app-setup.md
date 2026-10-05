@@ -52,16 +52,18 @@ For production deployments, configure your reverse proxy/ingress to route `/api/
 
 ### Environment Variables
 
-The web app uses compile-time environment variables for Nostr bootstrap discovery and frontend artifact versioning:
+Production containers read a validated runtime Nostr bootstrap seed. Set both relay URLs (`ws://` or `wss://`) and 64-hex service pubkeys as runtime environment variables; the entrypoint fails startup if either is missing or invalid. It writes `/bahia-bootstrap.js`, which is loaded before the app and served with `no-store`. These service keys also authorize public documentation publishers. Rotating either trust root requires a container restart, not a rebuild. Vite build-time bootstrap variables are only a local development/test fallback when no runtime seed is injected.
+
+Runtime seed and compile-time artifact metadata variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` | Comma-separated relay URLs used to discover the Bahia system announcement. |
-| `PUBLIC_BAHIA_SERVICE_PUBKEYS` | Comma-separated trusted Bahia service pubkeys for discovery events. |
+| `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` | Runtime comma-separated WebSocket relay URLs; development/test build fallback only without an injected seed. |
+| `PUBLIC_BAHIA_SERVICE_PUBKEYS` | Runtime comma-separated trusted 64-hex Bahia service pubkeys for discovery and docs. |
 | `PUBLIC_BAHIA_WEB_BASE_VERSION` | Frontend SemVer base, default `0.1.0`. |
 | `PUBLIC_BAHIA_GIT_COMMIT` | Commit hash stamped into the frontend version. |
 | `PUBLIC_BAHIA_WEB_VERSION` | Optional full frontend version override. |
-| `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` | Comma-separated 64-character hex pubkeys trusted to publish ops widgets; empty denies all widget events. |
+| `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` | Optional **runtime** variable on the web container: comma-separated 64-character hex pubkeys trusted to publish ops widgets. The entrypoint validates it and writes `widget_pubkeys` into the deployment seed; unset or empty denies all widget events. With an injected seed, build-time values are ignored. |
 
 The Settings **Versions** section treats the signed system-discovery `observed_deployments` projection as runtime truth. Each row is derived from the current environment-service state and its matching runtime observation, with service/environment names, runtime target, observed version or image digest, host, health, drift, and observation time. The backend publishes this discovery projection when browser relay policy is configured even when the relay runs as a separate container and `nostr.sidecar.enabled=false`.
 

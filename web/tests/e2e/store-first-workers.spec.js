@@ -43,6 +43,10 @@ test('live worker state and operation result reach /workers without a collection
   await page.goto('/workers');
   const row = page.getByRole('row', { name: /Store Worker/ });
   await expect(row).toContainText('running');
+  await page.waitForFunction(async () => {
+    const { getEventStore } = await import('/src/lib/nostr/boot.js');
+    return getEventStore() !== null;
+  });
 
   const result = signE2EEvent({
     kind: WORKER_RESULT,

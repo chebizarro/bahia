@@ -33,7 +33,7 @@ describe('assistant joined harness dashboard server', () => {
   beforeEach(async () => {
     buildDir = mkdtempSync(path.join(os.tmpdir(), 'joined-build-'));
     mkdirSync(path.join(buildDir, '_app', 'immutable'), { recursive: true });
-    writeFileSync(path.join(buildDir, 'index.html'), "<script>relays='__PUBLIC_BAHIA_BOOTSTRAP_RELAYS__';keys='__PUBLIC_BAHIA_SERVICE_PUBKEYS__'</script>");
+    writeFileSync(path.join(buildDir, 'index.html'), '<script src="/bahia-bootstrap.js"></script>');
     writeFileSync(path.join(buildDir, '_app', 'immutable', 'entry.js'), 'export {};');
     backend = createServer((req, res) => res.end(JSON.stringify({ proxied: req.url })));
     const backendPort = await listen(backend);
@@ -49,12 +49,14 @@ describe('assistant joined harness dashboard server', () => {
     rmSync(buildDir, { recursive: true, force: true });
   });
 
-  it('substitutes the bootstrap placeholders like the nginx entrypoint and falls back to the app shell', async () => {
+  it('serves the runtime bootstrap seed and falls back to the app shell', async () => {
+    const seed = await httpGet(`${dashboard.url}bahia-bootstrap.js`);
+    expect(seed.contentType).toContain('javascript');
+    expect(seed.body).toContain(RELAY);
+    expect(seed.body).toContain(SERVICE);
     for (const route of ['', 'services/abc']) {
       const { body } = await httpGet(`${dashboard.url}${route}`);
-      expect(body).toContain(`relays='${RELAY}'`);
-      expect(body).toContain(`keys='${SERVICE}'`);
-      expect(body).not.toContain('__PUBLIC_BAHIA_');
+      expect(body).toContain('/bahia-bootstrap.js');
     }
   });
 
@@ -64,7 +66,7 @@ describe('assistant joined harness dashboard server', () => {
     expect(asset.body).toBe('export {};');
     expect((await httpGet(`${dashboard.url}_app/immutable/missing.js`)).status).toBe(404);
     const traversal = await httpGet(`${dashboard.url}..%2f..%2fetc%2fpasswd`);
-    expect(traversal.body).toContain(`relays='${RELAY}'`);
+    expect(traversal.body).toContain('/bahia-bootstrap.js');
   });
 
   it('proxies /api to the backend', async () => {
