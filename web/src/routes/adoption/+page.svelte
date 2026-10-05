@@ -1,6 +1,7 @@
 <script>
   import { scanAdoption } from '$lib/stores/public-controlplane.svelte.js';
   import { orgsState } from '$lib/stores/orgs.svelte.js';
+  import IntentGate from '$lib/components/IntentGate.svelte';
 
   let orgId = $state('');
   let targetName = $state('');
@@ -47,7 +48,9 @@
     <label>Organization ID<input bind:value={orgId} required /></label>
     <label>Target name<input bind:value={targetName} required /></label>
     <label>Runtime endpoint reference<input bind:value={endpointRef} required /></label>
-    <button type="submit" disabled={loading}>{loading ? 'Scanning…' : 'Scan target'}</button>
+    <IntentGate domain="adoption" {orgId} orgField>
+      <button type="submit" disabled={loading}>{loading ? 'Scanning…' : 'Scan target'}</button>
+    </IntentGate>
   </form>
   {#if error}<p role="alert">{error}</p>{/if}
   {#if findings.length > 0}
@@ -57,7 +60,7 @@
         <tr><td>{finding.target_name || '-'}</td><td>{finding.container_name || finding.container_id || '-'}</td><td>{finding.image_ref || '-'}</td>
           <td>{finding.proposed_service_name || '-'}</td><td>{finding.adoptable ? 'Yes' : 'No'}</td><td>{finding.warnings_count ?? 0}</td></tr>
       {/each}</tbody></table></div>
-    {#if truncated}<button type="button" disabled={loading} onclick={() => scan(nextOffset)}>Load more findings</button>{/if}
+    {#if truncated}<IntentGate domain="adoption" {orgId} orgField><button type="button" disabled={loading} onclick={() => scan(nextOffset)}>Load more findings</button></IntentGate>{/if}
   {:else if !loading && !error}
     <p>No scan findings loaded.</p>
   {/if}

@@ -1,0 +1,15 @@
+{
+  "issue": "bahia-1wb8l",
+  "observed": [
+    "The layout and AuthGuard both call initializeAuth(). The layout's call runs after the event store opens and set authState.status back to 'checking' for an already authenticated session, so AuthGuard unmounted and remounted the routed page. Anything typed or selected before that moment was discarded; a submit then failed form validation or was lost, and no intent was published. On a slow runner the remount lands after a spec has started filling a form.",
+    "Org-scoped mutation controls were clickable before system discovery or membership roles had named the organization. resolveIntentOrgId() threw 'Select an organization before submitting this intent' and the page showed it as a failure, although the organization arrives by itself moments later."
+  ],
+  "intended": "A routed page stays mounted for the life of a resolved session. A control that publishes a signed intent is disabled, with its reason, until the browser can submit that intent, and that is decided from local state only: the auth session, the session intent client and the organizations the local event store has revealed. Relay connectivity and catch-up never affect it; an intent that is ready locally is signed, shown as pending and delivered by the outbox on reconnect. When only the operator can resolve readiness (signed out, several organizations, an empty organization field) the control stays enabled and submitting reports the existing explicit error.",
+  "scope": {
+    "signal": "web/src/lib/stores/intent-readiness.svelte.js intentReadiness(domain, { orgId, record, orgField }) -> { ready, pending, reason, waitingOn }",
+    "org_rules": "web/src/lib/nostr/intent-org.js",
+    "shared_ui": ["web/src/lib/components/IntentGate.svelte", "web/src/lib/components/ConfirmDialog.svelte (intentDomain, intentOrgId, intentRecord)"],
+    "pages": ["adoption", "artifacts/[id]", "backup", "builds", "deployments", "dns", "environments", "llm", "ml", "packages/[id]", "policies", "security", "services", "workers"],
+    "out_of_scope": "Mutations on the sensitive gift-wrapped transport (organizations, service secrets, notification channels, relay policy) keep their own sensitiveMutationBlocker gating; their orgIdFor() lookup is not covered by this signal."
+  }
+}

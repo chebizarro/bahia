@@ -294,9 +294,9 @@
   {/if}
 </div>
 
-<ConfirmDialog bind:open={approveOpen} title="Approve deployment" titleIcon={SuccessIcon} message="Approve this reviewed desired state? Current policy is re-evaluated before execution." confirmLabel="Approve" loading={approving} onConfirm={() => handleDecision('approve')} onCancel={() => approveOpen = false} onClose={() => approveOpen = false} />
-<ConfirmDialog bind:open={rejectOpen} title="Reject deployment" titleIcon={WarningIcon} message="Reject this deployment? Rejection creates no deployment run and makes no runtime change." confirmLabel="Reject" variant="danger" loading={rejecting} onConfirm={() => handleDecision('reject')} onCancel={() => rejectOpen = false} onClose={() => rejectOpen = false} />
-<ConfirmDialog bind:open={rollbackOpen} title="Rollback deployment" titleIcon={WarningIcon} message={rollbackTargetIntent ? `Create a fresh policy-checked intent for artifact ${rollbackArtifact?.image_tag || rollbackTargetIntent.artifact_id}?` : 'No rollback target is available.'} confirmLabel="Rollback" variant="danger" loading={rollingBack} onConfirm={handleRollback} onCancel={() => rollbackOpen = false} onClose={() => rollbackOpen = false} />
+<ConfirmDialog intentDomain="deployment" intentRecord={intent} bind:open={approveOpen} title="Approve deployment" titleIcon={SuccessIcon} message="Approve this reviewed desired state? Current policy is re-evaluated before execution." confirmLabel="Approve" loading={approving} onConfirm={() => handleDecision('approve')} onCancel={() => approveOpen = false} onClose={() => approveOpen = false} />
+<ConfirmDialog intentDomain="deployment" intentRecord={intent} bind:open={rejectOpen} title="Reject deployment" titleIcon={WarningIcon} message="Reject this deployment? Rejection creates no deployment run and makes no runtime change." confirmLabel="Reject" variant="danger" loading={rejecting} onConfirm={() => handleDecision('reject')} onCancel={() => rejectOpen = false} onClose={() => rejectOpen = false} />
+<ConfirmDialog intentDomain="deployment" intentRecord={intent} bind:open={rollbackOpen} title="Rollback deployment" titleIcon={WarningIcon} message={rollbackTargetIntent ? `Create a fresh policy-checked intent for artifact ${rollbackArtifact?.image_tag || rollbackTargetIntent.artifact_id}?` : 'No rollback target is available.'} confirmLabel="Rollback" variant="danger" loading={rollingBack} onConfirm={handleRollback} onCancel={() => rollbackOpen = false} onClose={() => rollbackOpen = false} />
 
 <style>
   .page { padding: 0; }

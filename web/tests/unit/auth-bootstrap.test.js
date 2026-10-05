@@ -133,6 +133,44 @@ describe('auth bootstrap', () => {
     expect(authState.pubkey).toBeNull();
   });
 
+  it('re-evaluates a resolved session in place instead of regressing it to checking', async () => {
+    localStorage.setItem('bahia_auth_session', JSON.stringify({
+      pubkey: TEST_PUBKEY,
+      relays: {},
+      authMethod: 'nip07',
+      lastAuthenticatedAt: new Date().toISOString(),
+      signerVerifiedAt: new Date().toISOString()
+    }));
+    const nip07 = await import('$lib/nostr/nip07.js');
+    const { initializeAuth, authState } = await import('../../src/lib/stores/auth.svelte.js');
+
+    // First bootstrap of an undetermined session shows the transitional status.
+    let releaseFirst;
+    nip07.waitForNip07.mockImplementationOnce(() => new Promise(resolve => { releaseFirst = () => resolve({ available: true }); }));
+    const first = initializeAuth();
+    expect(authState.status).toBe('checking');
+    releaseFirst();
+    await first;
+    expect(authState.status).toBe('authenticated');
+
+    // The layout bootstraps again after AuthGuard already rendered the page.
+    // AuthGuard treats 'checking' as loading and unmounts the routed page, so
+    // the status must never leave 'authenticated' while the session is re-read.
+    let releaseSecond;
+    nip07.waitForNip07.mockImplementationOnce(() => new Promise(resolve => { releaseSecond = () => resolve({ available: true }); }));
+    const second = initializeAuth();
+    expect(authState.status).toBe('authenticated');
+    expect(authState.pubkey).toBe(TEST_PUBKEY);
+    releaseSecond();
+    await second;
+    expect(authState.status).toBe('authenticated');
+
+    // A repeat bootstrap still applies what it finds: the session was cleared elsewhere.
+    localStorage.clear();
+    await initializeAuth();
+    expect(authState.status).toBe('unauthenticated');
+  });
+
   it('does not call backendAuthenticated gate', async () => {
     localStorage.setItem('bahia_auth_session', JSON.stringify({
       pubkey: TEST_PUBKEY,

@@ -378,7 +378,12 @@ async function backgroundSignerVerify(persisted) {
 export async function initializeAuth() {
   if (initializeInProgress) return initializeInProgress;
   initializeInProgress = (async () => {
-    updateAuthState({ status: 'checking' });
+    // Only an undetermined session shows the transitional status. The layout
+    // and AuthGuard both bootstrap auth, and the later call lands after the
+    // routed page is interactive; regressing a resolved session to 'checking'
+    // would make AuthGuard unmount that page and discard what the user entered.
+    // A repeat bootstrap re-evaluates the session in place instead.
+    if (authState.status === 'unknown') updateAuthState({ status: 'checking' });
     ensureSignerAvailabilityWatcher();
 
     try {
