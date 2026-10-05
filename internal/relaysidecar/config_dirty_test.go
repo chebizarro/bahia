@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/stretchr/testify/require"
@@ -57,7 +58,12 @@ func TestSidecarConfigBurstLargerThanOldQueueAppliesLatest(t *testing.T) {
 		}
 		break
 	}
-	require.Equal(t, total, appliedVersionForTest(server.consumer, secret.Public().Hex(), "membership"))
+	// The test's apply hook reports a version before the worker records it in
+	// state.Applied under the lock, so the bookkeeping may land a moment later.
+	author := secret.Public().Hex()
+	require.Eventually(t, func() bool {
+		return appliedVersionForTest(server.consumer, author, "membership") == total
+	}, 5*time.Second, 10*time.Millisecond, "latest desired version %d was applied but not recorded", total)
 }
 
 func TestSidecarConfigWorkerReadsLatestFromStoreNotStaleNotification(t *testing.T) {
