@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -167,6 +168,8 @@ type RouteCanarySupervisor struct {
 	evaluator    *RouteCanaryEvaluator
 	healthSource RouteInstanceHealthSource
 	publisher    events.Publisher
+	canonical    *RouteCanaryProjector
+	readiness    SupervisionReadiness
 	interval     time.Duration
 	logger       *zap.Logger
 	now          func() time.Time
@@ -224,9 +227,26 @@ func NewRouteCanarySupervisor(
 // Name identifies the supervisor in background-runner logging and health.
 func (s *RouteCanarySupervisor) Name() string { return "route-canary-supervisor" }
 
+// SetCanonicalProjector makes the supervisor publish a route's canonical
+// records before its state is indexed. The canonical state record is what a
+// restarted daemon resumes the route's failure streak and outage start from.
+func (s *RouteCanarySupervisor) SetCanonicalProjector(projector *RouteCanaryProjector) {
+	s.canonical = projector
+}
+
+// SetReadiness makes Run wait for the local event store's first relay
+// catch-up before the first sweep, so routes are enumerated from current
+// desired state. EvaluateOnce and EvaluateDue are not gated.
+func (s *RouteCanarySupervisor) SetReadiness(readiness SupervisionReadiness) {
+	s.readiness = readiness
+}
+
 // Run probes every route immediately and then each route whenever it falls
 // due, until the context is done.
 func (s *RouteCanarySupervisor) Run(ctx context.Context) error {
+	if err := waitForSupervisionReadiness(ctx, s.readiness); err != nil {
+		return err
+	}
 	for {
 		s.EvaluateDue(ctx)
 		timer := time.NewTimer(s.NextWakeDelay(s.now()))
@@ -423,21 +443,26 @@ func (s *RouteCanarySupervisor) EvaluatePlan(ctx context.Context, plan *domain.D
 	next.RouteCanaryKey = key
 
 	if transition == domain.RouteCanaryTransitionNone {
-		// Keep the Nostr state as fresh as the persisted REST read model.
+		// Every observation refreshes the canonical state, so the failure
+		// streak a restarted daemon resumes from is the latest one.
+		observed := routeCanaryObservedEvent(next, s.instanceStatus(ctx, key), now)
+		if s.canonical != nil {
+			if err := s.canonical.Project(ctx, observed); err != nil {
+				return err
+			}
+		}
 		if err := s.repo.UpsertState(ctx, &next); err != nil {
 			return err
 		}
 		if s.publisher != nil {
-			s.publisher.Publish(ctx, events.Event{Type: events.EventRouteCanaryObserved, EntityID: next.Coordinate(), Data: RouteCanaryChanged{
-				State: next, ObservedInstanceStatus: s.instanceStatus(ctx, key),
-				Reason: next.FailureReason, OccurredAt: now,
-			}})
+			s.publisher.Publish(ctx, observed)
 		}
 		return nil
 	}
 
 	instanceStatus := s.instanceStatus(ctx, key)
 	event := domain.RouteCanaryEvent{
+		ID:                     uuid.New(),
 		RouteCanaryKey:         key,
 		Transition:             transition,
 		PreviousClassification: prior.Classification,
@@ -448,11 +473,29 @@ func (s *RouteCanarySupervisor) EvaluatePlan(ctx context.Context, plan *domain.D
 		ObservedInstanceStatus: instanceStatus,
 		ObservedAt:             now,
 	}
+	// Canonical records first: the relay path (or its outbox) holds the
+	// transition before the SQL index sees it, and the bus delivery below is
+	// deduplicated by the projector.
+	if s.canonical != nil {
+		if projection, ok := routeCanaryTransitionEvent(next, event, instanceStatus, now); ok {
+			if err := s.canonical.Project(ctx, projection); err != nil {
+				return err
+			}
+		}
+	}
 	if err := s.repo.UpsertStateWithEvent(ctx, &next, &event); err != nil {
 		return err
 	}
 	publishRouteCanaryTransition(ctx, s.publisher, next, event, instanceStatus, now)
 	return nil
+}
+
+// routeCanaryObservedEvent builds the in-process event for an observation that
+// changed no outage state.
+func routeCanaryObservedEvent(state domain.RouteCanaryState, instanceStatus domain.InstanceHealthStatus, now time.Time) events.Event {
+	return events.Event{Type: events.EventRouteCanaryObserved, EntityID: state.Coordinate(), Data: RouteCanaryChanged{
+		State: state, ObservedInstanceStatus: instanceStatus, Reason: state.FailureReason, OccurredAt: now,
+	}}
 }
 
 func (s *RouteCanarySupervisor) instanceStatus(ctx context.Context, key domain.RouteCanaryKey) domain.InstanceHealthStatus {

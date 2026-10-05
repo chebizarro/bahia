@@ -928,6 +928,8 @@ Legacy Bahia-specific request/status/result/read-model ranges (`5961`-`6006`, `6
 
 Stage 3 uses existing canonical observable kinds only: `30315` managed-instance status, `30900` current health state, and `4903` recovery/maintenance audit facts. Projection reacts to internal subscriptions and publishes through the verified signed outbox path; it adds no mutation command or polling transport.
 
+Two more `30900` records of the same family carry the state the supervisor resumes after a restart, with or without PostgreSQL: the per-instance recovery ledger (`bahia.state.managed-instance-recovery.v1`, `d=runtime:recovery:<service>:<environment>:<unit>:<target-sha256>`, the restart budget and any pending recovery claim) and the maintenance override (`bahia.state.managed-instance-maintenance.v1`, `d=runtime:maintenance:<...>`, `active=true|false`). Instance-health listings select `bahia.state.managed-instance-health.v1`.
+
 ### Shared agent runtime releases
 
 Bahia projects shared verified runtime releases as kind `30315` control state using schema `bahia.agent-runtime-release.v1`. Filter narrowly by `domain=agent-runtime-release` plus `org`/`digest`, or by `domain=agent-service-release` plus `org`/`agent`/`service`. Binding events retain `release_channel`, source event, and previous-binding correlation for exact rollback lookup. They do not represent deployment intent.

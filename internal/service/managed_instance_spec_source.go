@@ -7,63 +7,75 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
-// RepositorySupervisionSpecSource adds Bahia-managed desired deployment units to configured specs.
-type RepositorySupervisionSpecSource struct {
+// LocalSupervisionSpecSource adds Bahia-managed desired deployment units to
+// the configured specs. The desired set is the service-state records in the
+// local event store, joined with the service and environment registry records
+// (an environment record carries its deployment units). A replacement or
+// tombstone received from a relay changes the next evaluation's set.
+type LocalSupervisionSpecSource struct {
 	Configured      []SupervisionSpec
-	States          repository.EnvironmentServiceStateRepository
-	Services        repository.ServiceRepository
-	Environments    repository.EnvironmentRepository
-	Units           repository.DeploymentUnitRepository
+	State           LocalSupervisionState
 	Resolver        runtime.RuntimeResolver
 	Policy          domain.RecoveryPolicy
 	MemoryThreshold float64
 }
 
-func (s *RepositorySupervisionSpecSource) SupervisionSpecs(ctx context.Context) ([]SupervisionSpec, error) {
+func (s *LocalSupervisionSpecSource) SupervisionSpecs(ctx context.Context) ([]SupervisionSpec, error) {
 	result := append([]SupervisionSpec(nil), s.Configured...)
-	if s.States == nil || s.Services == nil || s.Environments == nil || s.Units == nil || s.Resolver == nil {
+	if s.Resolver == nil {
 		return result, nil
 	}
-	states, err := s.States.ListAll(ctx)
+	stateRecords, err := s.State.family(ctx, kinds.CPStateTopicServiceState)
 	if err != nil {
 		return nil, err
+	}
+	serviceRecords, err := s.State.family(ctx, kinds.CPStateTopicServiceRegistry)
+	if err != nil {
+		return nil, err
+	}
+	environmentRecords, err := s.State.family(ctx, kinds.CPStateTopicEnvironmentRegistry)
+	if err != nil {
+		return nil, err
+	}
+	services := make(map[uuid.UUID]*domain.Service, len(serviceRecords))
+	for _, record := range serviceRecords {
+		if svc, ok := decodeServiceRecord(record); ok {
+			services[svc.ID] = svc
+		}
+	}
+	environments := make(map[uuid.UUID]*localEnvironment, len(environmentRecords))
+	for _, record := range environmentRecords {
+		if env, ok := decodeEnvironmentRecord(record); ok {
+			environments[env.Environment.ID] = env
+		}
 	}
 	seen := map[string]struct{}{}
 	for _, spec := range result {
 		seen[instanceKeyString(spec.Key)] = struct{}{}
 	}
-	for _, state := range states {
-		if state.DesiredArtifactID == nil && state.DesiredRuntimeState == nil {
+	for _, record := range stateRecords {
+		state, ok := decodeServiceStateRecord(record)
+		if !ok || (state.DesiredArtifactID == nil && state.DesiredRuntimeState == nil) {
 			continue
 		}
-		svc, err := s.Services.GetByID(ctx, state.ServiceID)
-		if err != nil {
-			return nil, err
+		// A state whose service or environment record has not arrived cannot
+		// be resolved to a runtime target yet; it joins the set once it has.
+		svc, env := services[state.ServiceID], environments[state.EnvironmentID]
+		if svc == nil || env == nil {
+			continue
 		}
-		env, err := s.Environments.GetByID(ctx, state.EnvironmentID)
-		if err != nil {
-			return nil, err
-		}
-		var unit *domain.DeploymentUnit
-		if state.DeploymentUnitID != nil {
-			unit, err = s.Units.GetByID(ctx, *state.DeploymentUnitID)
-		} else {
-			unit, err = s.Units.ResolveDefault(ctx, env)
-		}
-		if err != nil {
-			return nil, err
-		}
+		unit := env.unit(state.DeploymentUnitID)
 		if unit == nil || unit.OwnershipMode != domain.OwnershipModeBahiaManaged || (!unit.Implicit && unit.ID == uuid.Nil) {
 			continue
 		}
 		var adapter runtime.Runtime
 		if explicit, ok := s.Resolver.(runtime.DeploymentUnitRuntimeResolver); ok {
-			adapter, err = explicit.ResolveDeploymentUnit(svc, env, unit)
+			adapter, err = explicit.ResolveDeploymentUnit(svc, &env.Environment, unit)
 		} else {
-			adapter, err = s.Resolver.Resolve(svc, env)
+			adapter, err = s.Resolver.Resolve(svc, &env.Environment)
 		}
 		if err != nil {
 			return nil, err
@@ -73,7 +85,7 @@ func (s *RepositorySupervisionSpecSource) SupervisionSpecs(ctx context.Context) 
 		if !observerOK || !controllerOK {
 			continue
 		}
-		key := domain.ManagedInstanceKey{ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: unit.ID, RuntimeTargetName: svc.RuntimeTargetName()}
+		key := domain.ManagedInstanceKey{ServiceID: svc.ID, EnvironmentID: env.Environment.ID, DeploymentUnitID: unit.ID, RuntimeTargetName: svc.RuntimeTargetName()}
 		if _, exists := seen[instanceKeyString(key)]; exists {
 			continue
 		}
@@ -81,7 +93,7 @@ func (s *RepositorySupervisionSpecSource) SupervisionSpecs(ctx context.Context) 
 		if !ok {
 			continue
 		}
-		result = append(result, SupervisionSpec{Key: key, Host: strings.TrimSpace(env.Name), SupervisorType: supervisor, RecoveryPolicy: s.Policy, DesiredRunning: desiredRuntimeStateRunning(state), Observer: observer, Controller: controller, MemoryThresholdRatio: s.MemoryThreshold})
+		result = append(result, SupervisionSpec{Key: key, Host: strings.TrimSpace(env.Environment.Name), SupervisorType: supervisor, RecoveryPolicy: s.Policy, DesiredRunning: desiredRuntimeStateRunning(state), Observer: observer, Controller: controller, MemoryThresholdRatio: s.MemoryThreshold})
 		seen[instanceKeyString(key)] = struct{}{}
 	}
 	return result, nil
@@ -106,4 +118,4 @@ func supervisorForRuntime(runtimeType domain.RuntimeType) (domain.InstanceSuperv
 	}
 }
 
-var _ SupervisionSpecSource = (*RepositorySupervisionSpecSource)(nil)
+var _ SupervisionSpecSource = (*LocalSupervisionSpecSource)(nil)

@@ -134,6 +134,14 @@ func (p *RouteCanaryProjector) handle(ctx context.Context, e events.Event) error
 	return p.publish(ctx, obs)
 }
 
+// Project publishes the canonical observables of one route canary event
+// synchronously. The supervisor and the gate call it before they index the
+// state, then announce the same event on the bus; that delivery finds every
+// slot already published and signs nothing again.
+func (p *RouteCanaryProjector) Project(ctx context.Context, e events.Event) error {
+	return p.handle(ctx, e)
+}
+
 // routeCanaryObservation is one sanitized, projection-ready route transition.
 type routeCanaryObservation struct {
 	eventType      events.EventType

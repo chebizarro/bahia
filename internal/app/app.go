@@ -462,12 +462,14 @@ func New(cfg *config.Config) (*App, error) {
 
 	var publicRoutePlanner *service.PublicRoutePlanner
 	var internalRouteBackend *routingAdapter.NginxBackend
-	if cfg.EdgeRouting.Enabled {
+	if cfg.EdgeRouting.Enabled && secretRepo != nil {
 		publicRoutePlanner, internalRouteBackend, err = buildPublicRoutePlanner(ctx, cfg.EdgeRouting, cfg.InternalRouting, secretRepo, secretEncryptor, logger)
 		if err != nil {
 			return nil, fmt.Errorf("configuring edge routing: %w", err)
 		}
 		logger.Info("managed edge routing enabled", zap.String("provider", cfg.EdgeRouting.Provider), zap.String("backend_ref", cfg.EdgeRouting.BackendRef), zap.Bool("internal_https", internalRouteBackend != nil))
+	} else if cfg.EdgeRouting.Enabled {
+		logger.Warn("edge routing convergence unavailable without secret index; route canary observation remains enabled")
 	}
 
 	// Adopted workload orchestration and direct runtime lifecycle services.
@@ -514,28 +516,59 @@ func New(cfg *config.Config) (*App, error) {
 	// Route canaries. Converging a routing provider only proves configuration
 	// was accepted, not that the route serves traffic, so managed routes are
 	// verified end to end and watched continuously.
+	servicePubkey := ""
+	if strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
+		if secret, keyErr := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); keyErr == nil {
+			servicePubkey = secret.Public().Hex()
+		}
+	}
+	// Route-canary and managed-instance supervision read their desired set and
+	// their durable progress from the daemon's canonical records in the local
+	// event store (B-33, B-34). They need the service key, never PostgreSQL.
+	localSupervisionState, supervisionStateErr := service.NewLocalSupervisionState(localEventStore, servicePubkey)
+	supervisionFromLocalState := supervisionStateErr == nil
+	if !supervisionFromLocalState && (cfg.RouteCanaries.Enabled || cfg.Supervision.Enabled) {
+		logger.Warn("route canary and managed instance supervision are disabled: the daemon has no service key to read its canonical state with",
+			zap.Error(supervisionStateErr))
+	}
 	var routeCanarySupervisor *service.RouteCanarySupervisor
-	var routeCanaryStore service.RouteCanaryRepository
-	if publicRoutePlanner != nil && cfg.RouteCanaries.Enabled {
+	if cfg.RouteCanaries.Enabled {
+		// PostgreSQL is a write-behind query index of route state.
+		var routeCanaryStore service.RouteCanaryRepository
 		if dbAvailable && pool != nil {
-			pgRouteCanaries := repository.NewPgRouteCanaryRepository(pool)
-			routeCanaryStore = pgRouteCanaries
+			routeCanaryStore = repository.NewPgRouteCanaryRepository(pool)
+		}
+		// The projector publishes the canonical route-canary records a restarted
+		// daemon resumes outage state from, and makes a route outage visible to
+		// Nostr consumers and fleet-health telemetry.
+		var routeCanaryProjector *service.RouteCanaryProjector
+		if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
+			routeCanaryProjector, err = service.NewRouteCanaryProjector(publisher, nostrPub, logger)
+			if err != nil {
+				return nil, fmt.Errorf("configuring route canary projector: %w", err)
+			}
+		}
+		var routeHealthSource service.RouteInstanceHealthSource
+		if supervisionFromLocalState {
+			var storeOpts []service.LocalRouteCanaryOption
+			if routeCanaryProjector == nil {
+				// Without relay publishing no canonical record exists, so the
+				// index is the only durable copy of route state.
+				storeOpts = append(storeOpts, service.WithRouteCanaryIndexResume())
+			}
+			routeCanaryStore = service.NewLocalRouteCanaryRepository(localSupervisionState, routeCanaryStore, logger, storeOpts...)
+			routeHealthSource = service.LocalRouteInstanceHealthSource{State: localSupervisionState}
 		}
 		routeCanaryEvaluator, evalErr := service.NewRouteCanaryEvaluator(runtime.RouteProber{}, cfg.RouteCanaries.Policy())
 		if evalErr != nil {
 			return nil, fmt.Errorf("configuring route canary evaluator: %w", evalErr)
-		}
-		var routeHealthSource service.RouteInstanceHealthSource
-		if managedInstanceHealthRepo != nil {
-			healthSource := service.NewManagedInstanceRouteHealthSource(managedInstanceHealthRepo)
-			routeHealthSource = healthSource
 		}
 		canaryCfg := cfg.RouteCanaries.Normalized()
 
 		// The gate decorates the planner rather than being spliced into the
 		// coordinator, so the route-only and combined deploy paths are both
 		// verified through the single apply call each already makes.
-		if canaryCfg.GateEnabled {
+		if publicRoutePlanner != nil && canaryCfg.GateEnabled {
 			// The gate publishes its transitions on the same bus as the
 			// supervisor, so a gate-opened or gate-recovered outage reaches the
 			// Nostr projection and notifications instead of only the database.
@@ -544,27 +577,22 @@ func New(cfg *config.Config) (*App, error) {
 			if gateErr != nil {
 				return nil, fmt.Errorf("configuring route canary gate: %w", gateErr)
 			}
+			gate.SetCanonicalProjector(routeCanaryProjector)
 			coordinatorOptions = append(coordinatorOptions, workflow.WithPublicRoutes(gate))
-		} else {
+		} else if publicRoutePlanner != nil {
 			coordinatorOptions = append(coordinatorOptions, workflow.WithPublicRoutes(publicRoutePlanner))
 		}
 
-		// Periodic probing needs somewhere to record verdicts; without a
-		// database there is no durable outage state to maintain.
-		if routeCanaryStore != nil && stateRepo != nil {
+		// Periodic probing follows desired state, not the planner: a route in
+		// desired state is probed even when this daemon cannot converge it.
+		if supervisionFromLocalState {
 			routeCanarySupervisor, err = service.NewRouteCanarySupervisor(
-				service.NewDesiredStateRoutePlanSource(stateRepo),
+				service.LocalRoutePlanSource{State: localSupervisionState},
 				routeCanaryStore, routeCanaryEvaluator, routeHealthSource, publisher, canaryCfg.Interval, logger)
 			if err != nil {
 				return nil, fmt.Errorf("configuring route canary supervisor: %w", err)
 			}
-			// Project supervisor transitions to canonical Nostr observables so a
-			// route outage is visible to Nostr consumers and fleet-health telemetry.
-			if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-				if _, projErr := service.NewRouteCanaryProjector(publisher, nostrPub, logger); projErr != nil {
-					return nil, fmt.Errorf("configuring route canary projector: %w", projErr)
-				}
-			}
+			routeCanarySupervisor.SetCanonicalProjector(routeCanaryProjector)
 		}
 	} else if publicRoutePlanner != nil {
 		coordinatorOptions = append(coordinatorOptions, workflow.WithPublicRoutes(publicRoutePlanner))
@@ -594,18 +622,27 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	var managedInstanceSupervisor *service.ManagedInstanceSupervisor
-	if cfg.Supervision.Enabled && managedInstanceHealthRepo != nil && runtimeApplyLock != nil {
+	if cfg.Supervision.Enabled && supervisionFromLocalState {
 		configuredSpecs, specErr := configuredSupervisionSpecs(cfg.Supervision, logger)
 		if specErr != nil {
 			return nil, specErr
 		}
 		policy := defaultSupervisionPolicy(cfg.Supervision.ObserveOnly)
-		source := &service.RepositorySupervisionSpecSource{Configured: configuredSpecs, States: stateRepo, Services: serviceRepo, Environments: envRepo, Units: deploymentUnitRepo, Resolver: runtimeResolver, Policy: policy, MemoryThreshold: cfg.Supervision.MemoryThreshold}
-		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, managedInstanceHealthRepo, runtimeApplyLock, publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
+		source := &service.LocalSupervisionSpecSource{Configured: configuredSpecs, State: localSupervisionState, Resolver: runtimeResolver, Policy: policy, MemoryThreshold: cfg.Supervision.MemoryThreshold}
+		// PostgreSQL is a write-behind query index of health, recovery attempts
+		// and maintenance overrides; the canonical records are published first.
+		state := service.NewLocalManagedInstanceState(localSupervisionState, managedInstanceHealthRepo, nostrPub, logger)
+		// A recovery shares the deploys' environment lock when PostgreSQL holds
+		// it and is never blocked by an unreachable database.
+		var deployLock service.ManagedInstanceTryLocker
+		if runtimeApplyLock != nil {
+			deployLock = runtimeApplyLock
+		}
+		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, state, service.NewSupervisionApplyLock(deployLock, logger), publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("configuring managed instance supervisor: %w", err)
 		}
-		service.NewManagedInstanceHealthProjector(publisher, nostrPub, logger)
+		managedInstanceSupervisor.SetCanonicalProjector(service.NewManagedInstanceHealthProjector(publisher, nostrPub, logger))
 	}
 
 	// Telemetry.
@@ -732,12 +769,6 @@ func New(cfg *config.Config) (*App, error) {
 		bahiaStatusProjector = service.NewBahiaStatusProjector(nostrPub, logger, cfg.Nostr.PrivateKey)
 	}
 
-	servicePubkey := ""
-	if strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-		if secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); err == nil {
-			servicePubkey = secret.Public().Hex()
-		}
-	}
 	controlPlaneAuthors := compactBootstrapAuthors([]string{servicePubkey}, cfg.Nostr.AuthorizedPubkeys, cfg.Auth.BootstrapOwnerPubkeys)
 	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, localEventStore, bootstrapCache, logger, nostrAdapter.BootstrapConfig{
 		ProjectionAuthors:   compactBootstrapAuthors([]string{servicePubkey}),
@@ -745,6 +776,14 @@ func New(cfg *config.Config) (*App, error) {
 		SelfAuthors:         compactBootstrapAuthors([]string{servicePubkey}),
 		Resume:              inboundSyncConfigScoped(cfg.Nostr.LocalStore, cfg.Nostr.ServiceRelays),
 	})
+	// Supervisors act on the local event store only after its first relay
+	// catch-up.
+	if routeCanarySupervisor != nil {
+		routeCanarySupervisor.SetReadiness(bootstrapper)
+	}
+	if managedInstanceSupervisor != nil {
+		managedInstanceSupervisor.SetReadiness(bootstrapper)
+	}
 	healthProvider.SetBootstrapFunc(func() (phase string, ready bool) {
 		progress := bootstrapper.Progress()
 		return string(progress.Phase), bootstrapper.Ready()
