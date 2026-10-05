@@ -46,10 +46,14 @@ export function intentOrgCandidates() {
  * Org context arrives from system discovery, relay catch-up of control-plane
  * state and membership decryption. While any of them is in flight an org that
  * is unknown now can still become known without the operator.
+ *
+ * Catch-up counts until the first relay has served its history: every relay
+ * carries the same service-authored state, so one unreachable relay among
+ * several must not keep an organization "on its way" forever.
  */
 function orgContextLoading() {
-  return systemInfo.loading || discoveryState.loading || roleDerivationActive.value ||
-    syncStatus.phase === 'connecting' || syncStatus.phase === 'syncing';
+  const catchingUp = (syncStatus.phase === 'connecting' || syncStatus.phase === 'syncing') && syncStatus.eoseCount === 0;
+  return systemInfo.loading || discoveryState.loading || roleDerivationActive.value || catchingUp;
 }
 
 /**

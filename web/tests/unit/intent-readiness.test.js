@@ -173,17 +173,20 @@ describe('intent submission readiness', () => {
     await signedIn(modules);
     await client.resumeIntentClient();
 
-    // Catch-up finished and nothing named an organization.
-    sync.markConnecting(['wss://relay.readiness.example']);
+    // One relay served its history and nothing named an organization. The
+    // second relay never answers; it must not keep the control "connecting".
+    sync.markConnecting(['wss://relay.readiness.example', 'wss://unreachable.readiness.example']);
     sync.markSyncing();
+    expect(readiness.intentReadiness('llm')).toEqual(pending);
     sync.markRelayEose();
-    expect(sync.syncStatus.phase).toBe('live');
+    expect(sync.syncStatus.phase).toBe('syncing');
     expect(readiness.intentReadiness('llm')).toEqual(blocked(SELECT_ORG));
     expect(() => client.resolveIntentOrgId('llm', undefined, readiness.intentOrgCandidates())).toThrow(SELECT_ORG);
 
     // Several organizations need the operator to choose, even mid catch-up.
     roles.orgRoles[ORG_A] = 'admin';
     roles.orgRoles[ORG_B] = 'member';
+    sync.markConnecting(['wss://relay.readiness.example']);
     sync.markSyncing();
     expect(readiness.intentReadiness('llm')).toEqual(blocked(SELECT_ORG));
     expect(() => client.resolveIntentOrgId('llm', undefined, readiness.intentOrgCandidates())).toThrow(SELECT_ORG);
