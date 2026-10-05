@@ -89,13 +89,22 @@ const (
 	CPStateFamilySecurityFinding       CPStateFamily = SecurityFindingRecord
 	CPStateFamilySecuritySchedule      CPStateFamily = SecurityScheduleRecord
 	CPStateFamilySecurityFindingDetail CPStateFamily = SecurityFindingDetailRecord
-	CPStateFamilySecurityTarget        CPStateFamily = SecurityTargetRecord
-	CPStateFamilySecurityRun           CPStateFamily = SecurityRunRecord
 	CPStateFamilyManagedInstanceHealth CPStateFamily = ManagedInstanceHealthRecord
 	CPStateFamilyRouteCanary           CPStateFamily = RouteCanaryRecord
 	CPStateFamilySoulRuntimePolicy     CPStateFamily = SoulRuntimePolicyRecord
 	CPStateFamilyBlossomAdmin          CPStateFamily = BlossomAdminRecord
 	CPStateFamilyBlossomBlob           CPStateFamily = BlossomBlobRecord
+)
+
+// Security scan execution families (audit B-32). A target record carries the
+// scan input and a run record is the signed claim and durable progress of one
+// scan, so the daemon schedules and resumes scans from its local event store
+// instead of SQL leases. Like worker cleanup, these families never had a wire
+// kind: they exist only as 30900 discriminators, so they are declared here and
+// not in the kind catalog.
+const (
+	CPStateFamilySecurityTarget CPStateFamily = 32020
+	CPStateFamilySecurityRun    CPStateFamily = 32021
 )
 
 // FleetOCKScope is the well-known orgID value used for fleet-wide

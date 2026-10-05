@@ -7,6 +7,7 @@ const (
 	KindSecurityFindingRecord       = kinds.SecurityFindingRecord
 	KindSecurityScheduleRecord      = kinds.SecurityScheduleRecord
 	KindSecurityFindingDetailRecord = kinds.SecurityFindingDetailRecord
-	KindSecurityTargetRecord        = kinds.SecurityTargetRecord
-	KindSecurityRunRecord           = kinds.SecurityRunRecord
+	// Target and run are 30900-only families with no catalog kind (audit B-32).
+	KindSecurityTargetRecord = int(kinds.CPStateFamilySecurityTarget)
+	KindSecurityRunRecord    = int(kinds.CPStateFamilySecurityRun)
 )
