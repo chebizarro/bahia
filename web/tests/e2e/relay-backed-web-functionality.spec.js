@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { attachRuntimeErrorGuards } from './helpers-console.js';
+import { e2eTestPubkey, signE2EEvent } from './e2e-keyring.js';
 import {
   installEmptyRestFallbacks,
   installRelayBackedBrowserContext,
@@ -162,6 +163,39 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
       secretName: 'RELAY_BACKED_SECRET'
     });
     await assertNoRuntimeErrors();
+  });
+
+  test('docs pages ignore an attacker-signed topic with the same d-tag', async ({ page }) => {
+    const attackerPubkey = e2eTestPubkey('docs-attacker');
+    const attack = signE2EEvent({
+      kind: 30023, pubkey: attackerPubkey, created_at: Math.floor(Date.now() / 1000),
+      tags: [['d', 'features-services'], ['t', 'bahia-docs'], ['title', 'Forged Services']],
+      content: '# Forged documentation'
+    });
+    await page.goto('/');
+    const accepted = await page.evaluate(async ({ url, event }) => {
+      const socket = new WebSocket(url);
+      return new Promise((resolve, reject) => {
+        socket.onerror = () => reject(new Error('attacker event relay connection failed'));
+        socket.onopen = () => socket.send(JSON.stringify(['EVENT', event]));
+        socket.onmessage = ({ data }) => {
+          const frame = JSON.parse(data);
+          if (frame[0] === 'OK' && frame[1] === event.id) {
+            socket.close();
+            resolve(frame[2]);
+          }
+        };
+      });
+    }, { url: relay.wsUrl, event: attack });
+    expect(accepted).toBe(true);
+
+    await page.goto('/docs');
+    await expect(page.getByRole('link', { name: 'Services' })).toBeVisible();
+    await expect(page.getByText('Forged Services')).toHaveCount(0);
+    await page.goto('/docs/features-services');
+    await expect(page.locator('.topic-header').getByRole('heading', { name: 'Services' })).toBeVisible();
+    await expect(page.getByText('Relay-backed service documentation.')).toBeVisible();
+    await expect(page.getByText('Forged documentation')).toHaveCount(0);
   });
 
   test('docs fetch bypasses stale cache and reads relay-backed NIP-23 topic deterministically', async ({ page }) => {

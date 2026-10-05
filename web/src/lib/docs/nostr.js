@@ -11,19 +11,23 @@ import { nostr } from '$lib/nostr/subscriptions.js';
 import { dedupeReplaceableEvents } from '$lib/nostr/replaceable.js';
 import { getDTag, getTagValue, getTagValues } from '$lib/nostr/tags.js';
 import { createReadModelMetadataTracker } from '$lib/nostr/read-model-metadata.js';
+import { getBootstrapSeed } from '$lib/stores/discovery.svelte.js';
 
 /**
  * Fetch docs from the event store, then subscribe for historical catch-up.
  * @param {Object} [options]
- * @param {string} [options.servicePubkey]
  * @param {boolean} [options.bypassCache=false] Wait for relay EOSE even if the event store has a snapshot.
  * @returns {Promise<{events: Array, complete: boolean, degraded: Object|null, relaySummary: Array}>} Deduplicated events with EOSE metadata.
  */
-async function fetchDocsEvents({ servicePubkey = null, bypassCache = false } = {}) {
+async function fetchDocsEvents({ bypassCache = false } = {}) {
+  const publishers = getBootstrapSeed()?.service_pubkeys || [];
+  if (!publishers.length) throw new Error('Documentation publisher not configured');
   await boot();
-  const filter = { kinds: [KINDS.LONG_FORM_CONTENT], '#t': ['bahia-docs'] };
-  if (servicePubkey) filter.authors = [servicePubkey];
-  const stored = getEventStore()?.query(filter) || [];
+  const filter = { kinds: [KINDS.LONG_FORM_CONTENT], '#t': ['bahia-docs'], authors: publishers };
+  const trusted = new Set(publishers);
+  const isTrustedDoc = (event) => event?.kind === KINDS.LONG_FORM_CONTENT && trusted.has(event.pubkey)
+    && event.tags?.some((tag) => tag[0] === 't' && tag[1] === 'bahia-docs');
+  const stored = (getEventStore()?.query(filter) || []).filter(isTrustedDoc);
   if (stored.length && !bypassCache) {
     return { events: dedupeReplaceableEvents(stored), complete: false,
       degraded: { incomplete: true, reason: 'local-event-store', partialEventCount: stored.length }, relaySummary: [] };
@@ -51,6 +55,7 @@ async function fetchDocsEvents({ servicePubkey = null, bypassCache = false } = {
 
     stop = nostr.subscribeWithRecovery([filter], {
       onEvent: (event, relay) => {
+        if (!isTrustedDoc(event)) return;
         tracker.markEvent(event, relay);
         collected.push(event);
       },
@@ -80,12 +85,11 @@ async function fetchDocsEvents({ servicePubkey = null, bypassCache = false } = {
  *   { topics: Topic[], groups: Group[], count: number }
  *
  * @param {Object} [options]
- * @param {string} [options.servicePubkey] - Filter by service pubkey (optional)
  * @param {boolean} [options.bypassCache=false] - Require relay EOSE rather than local history
  * @returns {Promise<{topics: Array, groups: Array, count: number}>}
  */
-export async function fetchDocsCatalog({ servicePubkey = null, bypassCache = false } = {}) {
-  const result = await fetchDocsEvents({ servicePubkey, bypassCache });
+export async function fetchDocsCatalog({ bypassCache = false } = {}) {
+  const result = await fetchDocsEvents({ bypassCache });
   const topics = result.events.map(parseDocTopic).filter(Boolean);
 
   // Sort deterministically by topic slug.
@@ -109,13 +113,12 @@ export async function fetchDocsCatalog({ servicePubkey = null, bypassCache = fal
  *
  * @param {string} topic - Topic slug (d-tag value)
  * @param {Object} [options]
- * @param {string} [options.servicePubkey] - Filter by service pubkey (optional)
  * @param {boolean} [options.bypassCache=false] - Require relay EOSE rather than local history
  * @returns {Promise<{metadata: Object, markdown: string, links: Array}|null>}
  */
-export async function fetchDoc(topic, { servicePubkey = null, bypassCache = false } = {}) {
+export async function fetchDoc(topic, { bypassCache = false } = {}) {
   // Fetch all docs events (leverages cache) so we have the catalog for link resolution.
-  const result = await fetchDocsEvents({ servicePubkey, bypassCache });
+  const result = await fetchDocsEvents({ bypassCache });
   const allEvents = result.events;
 
   const event = allEvents.find((e) => getDTag(e) === topic);

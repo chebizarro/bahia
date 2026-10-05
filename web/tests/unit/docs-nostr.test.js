@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const trustMock = vi.hoisted(() => ({ publishers: ['a'.repeat(64)], stored: [] }));
+
+vi.mock('$lib/nostr/boot.js', () => ({
+  boot: vi.fn(async () => undefined),
+  getEventStore: () => ({ query: () => trustMock.stored })
+}));
+vi.mock('$lib/stores/discovery.svelte.js', () => ({
+  getBootstrapSeed: () => trustMock.publishers.length ? { service_pubkeys: trustMock.publishers } : null
+}));
+
 const subscriptionsMock = vi.hoisted(() => ({
   relayEvents: [],
   closedRelays: [],
@@ -32,7 +42,7 @@ function docEvent(topic, title, category = 'guide', content = '# Document') {
   return {
     id: `event-${topic}`,
     kind: 30023,
-    pubkey: 'docs-publisher',
+    pubkey: trustMock.publishers[0],
     created_at: 1_700_000_000,
     content,
     tags: [
@@ -49,6 +59,8 @@ function docEvent(topic, title, category = 'guide', content = '# Document') {
 describe('Nostr documentation client', () => {
   beforeEach(() => {
     localStorage.clear();
+    trustMock.publishers = ['a'.repeat(64)];
+    trustMock.stored = [];
     subscriptionsMock.relayEvents = [];
     subscriptionsMock.closedRelays = [];
     subscriptionsMock.emitEose = true;
@@ -71,7 +83,7 @@ describe('Nostr documentation client', () => {
     const catalog = await fetchDocsCatalog({ timeoutMs: 2500 });
 
     expect(subscriptionsMock.nostr.subscribeWithRecovery).toHaveBeenCalledWith([
-      { kinds: [30023], '#t': ['bahia-docs'] }
+      { kinds: [30023], '#t': ['bahia-docs'], authors: ['a'.repeat(64)] }
     ], expect.objectContaining({
       onEvent: expect.any(Function),
       onEose: expect.any(Function),
@@ -87,6 +99,35 @@ describe('Nostr documentation client', () => {
       category: 'feature',
       href: '/docs/features-services'
     });
+  });
+
+  it('rejects untrusted relay and persisted events even if a query returns them', async () => {
+    const trusted = docEvent('features-services', 'Services', 'feature', '# Trusted documentation');
+    const attacker = { ...docEvent('features-services', 'Forged Services', 'feature', '# Forged documentation'),
+      id: 'forged-doc', pubkey: 'b'.repeat(64), created_at: trusted.created_at + 100 };
+    trustMock.stored = [attacker];
+    subscriptionsMock.relayEvents = [attacker, trusted];
+    const catalog = await fetchDocsCatalog({ bypassCache: true });
+    expect(catalog.topics).toEqual([expect.objectContaining({ title: 'Services' })]);
+    const doc = await fetchDoc('features-services', { bypassCache: true });
+    expect(doc?.markdown).toBe('# Trusted documentation');
+    expect(subscriptionsMock.nostr.subscribeWithRecovery).toHaveBeenCalledWith([
+      expect.objectContaining({ authors: ['a'.repeat(64)] })
+    ], expect.any(Object));
+  });
+
+  it('rejects an untrusted stored snapshot before returning from cache', async () => {
+    trustMock.stored = [{ ...docEvent('features-services', 'Forged Services'), pubkey: 'b'.repeat(64) }];
+    const catalog = await fetchDocsCatalog();
+    expect(catalog.count).toBe(0);
+    expect(subscriptionsMock.nostr.subscribeWithRecovery).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed without a configured documentation publisher', async () => {
+    trustMock.publishers = [];
+    await expect(fetchDocsCatalog()).rejects.toThrow('Documentation publisher not configured');
+    await expect(fetchDoc('features-services')).rejects.toThrow('Documentation publisher not configured');
+    expect(subscriptionsMock.nostr.subscribeWithRecovery).not.toHaveBeenCalled();
   });
 
   it('does not cache empty relay snapshots as documentation truth', async () => {
