@@ -52,12 +52,14 @@ For production deployments, configure your reverse proxy/ingress to route `/api/
 
 ### Environment Variables
 
-The web app uses compile-time environment variables for Nostr bootstrap discovery and frontend artifact versioning:
+Production containers read a validated runtime Nostr bootstrap seed. Set both relay URLs (`ws://` or `wss://`) and 64-hex service pubkeys as runtime environment variables; the entrypoint fails startup if either is missing or invalid. It writes `/bahia-bootstrap.js`, which is loaded before the app and served with `no-store`. These service keys also authorize public documentation publishers. Rotating either trust root requires a container restart, not a rebuild. Vite build-time bootstrap variables are only a local development/test fallback when no runtime seed is injected.
+
+Runtime seed and compile-time artifact metadata variables:
 
 | Variable | Purpose |
 | --- | --- |
-| `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` | Comma-separated relay URLs used to discover the Bahia system announcement. |
-| `PUBLIC_BAHIA_SERVICE_PUBKEYS` | Comma-separated trusted Bahia service pubkeys for discovery events. |
+| `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` | Runtime comma-separated WebSocket relay URLs; development/test build fallback only without an injected seed. |
+| `PUBLIC_BAHIA_SERVICE_PUBKEYS` | Runtime comma-separated trusted 64-hex Bahia service pubkeys for discovery and docs. |
 | `PUBLIC_BAHIA_WEB_BASE_VERSION` | Frontend SemVer base, default `0.1.0`. |
 | `PUBLIC_BAHIA_GIT_COMMIT` | Commit hash stamped into the frontend version. |
 | `PUBLIC_BAHIA_WEB_VERSION` | Optional full frontend version override. |

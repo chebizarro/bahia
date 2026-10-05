@@ -83,7 +83,7 @@ curl -fsS -H 'Accept: application/nostr+json' http://127.0.0.1:3334/relay >/dev/
 curl -fsS http://127.0.0.1:8081/ >/dev/null
 ```
 
-The workflow uses these image/build arguments:
+The workflow stamps artifact versions at build time; relay and service-pubkey trust roots are runtime-only:
 
 ```bash
 tag="github-${GITHUB_SHA::7}"
@@ -96,12 +96,32 @@ docker build \
 
 docker build \
   -f web/Dockerfile \
-  --build-arg PUBLIC_BAHIA_BOOTSTRAP_RELAYS="wss://bahia.sharegap.net/relay" \
-  --build-arg PUBLIC_BAHIA_SERVICE_PUBKEYS="37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc" \
   --build-arg PUBLIC_BAHIA_GIT_COMMIT="$GITHUB_SHA" \
   --build-arg PUBLIC_BAHIA_WEB_VERSION="0.1.0-$GITHUB_SHA" \
   -t "local/bahia-controlplane-web:$tag" web
 ```
+
+The web container requires `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS` in its **runtime environment**. Its entrypoint validates WebSocket relay URLs and 64-hex service keys, writes the no-cache `/bahia-bootstrap.js` seed, and fails startup if either value is absent or invalid. The image carries no baked relay or publisher keys. Restart the container to rotate trust roots; docs accept only the configured service pubkeys.
+
+### Upgrade note: runtime bootstrap seed is now required
+
+Before deploying an image without baked trust roots, update the **host** Compose file at `/srv/data/bahia-controlplane/docker-compose.yml`. Add these entries to its existing `web.environment` (preserve any other entries):
+
+```yaml
+web:
+  environment:
+    PUBLIC_BAHIA_BOOTSTRAP_RELAYS: ${PUBLIC_BAHIA_BOOTSTRAP_RELAYS:?required}
+    PUBLIC_BAHIA_SERVICE_PUBKEYS: ${PUBLIC_BAHIA_SERVICE_PUBKEYS:?required}
+```
+
+The singular `PUBLIC_BAHIA_SERVICE_PUBKEY` is also accepted instead of the plural key. The `deploy-edge.yml` job exports the relay and plural pubkey values to **every** run step, including Compose interpolation and `up`; the host file must still forward them into the web service. For a manual check, export the values in your shell, then run this from a checkout containing the validator:
+
+```bash
+docker compose -f /srv/data/bahia-controlplane/docker-compose.yml config --format json \
+  | python3 scripts/check_web_bootstrap_compose.py
+```
+
+The deploy preflight runs the same read-only check before any Compose backup/replacement or `docker compose up`. If a value is absent or blank, it exits with `ERROR: web.environment missing non-empty PUBLIC_BAHIA_BOOTSTRAP_RELAYS` or `PUBLIC_BAHIA_SERVICE_PUBKEYS (or PUBLIC_BAHIA_SERVICE_PUBKEY)` and points to `docs/web-app-setup.md`; the running stack remains unchanged. A missing value in a `${VAR:?required}` expression makes Compose itself fail during rendering, also before stack changes.
 
 ### Compose Mutation Helper
 
