@@ -2016,19 +2016,35 @@ func New(cfg *config.Config) (*App, error) {
 	// Payment service exposes payment records and history; estimates use relay-backed worker pricing.
 	// It does not create or redeem Cashu tokens; cashu.enabled live wallet mode
 	// remains fail-closed until mint-backed proof flows are implemented.
-	paymentSvc := service.NewPaymentService(paymentRepo, logger)
-	// bahia-irsry.60: confidential cp-state for payment records.
+	//
+	// Audit B-31: payment state is canonical cp-state. The service publishes
+	// first and reads from the local event store, so it needs the projector and
+	// the confidential encryptor but no database; paymentRepo is an optional
+	// SQL index rebuilt from the retained records once the store has caught up.
+	var paymentSvc *service.PaymentService
 	if nostrProjector != nil && confidentialEncryptor != nil {
 		paymentCanonical := nostrAdapter.NewPaymentCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
+		paymentSvc = service.NewPaymentService(paymentRepo, logger)
 		paymentSvc.SetCPStatePublisher(paymentCanonical)
 		paymentSvc.SetCanonicalView(paymentCanonical)
-		nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
-			if err := paymentSvc.RebuildIndex(ctx); err != nil {
-				logger.Warn("payment SQL index rebuild failed", zap.Error(err))
-			}
-		})
-		logger.Info("payment cp-state publisher wired")
+		if paymentRepo != nil {
+			nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+				if err := paymentSvc.RebuildIndex(ctx); err != nil {
+					logger.Warn("payment SQL index rebuild failed", zap.Error(err))
+				}
+			})
+		}
+		logger.Info("payment service wired canonical-first", zap.Bool("sql_index", paymentRepo != nil))
 	}
+	healthProvider.RegisterCheck("payments", func() HealthCheck {
+		check := HealthCheck{Name: "payments", Status: HealthStatusPass, Message: "payment records are canonical cp-state read from the local event store",
+			Details: map[string]string{"sql_index": fmt.Sprintf("%t", paymentRepo != nil)}}
+		if err := paymentSvc.Ready(); err != nil {
+			check.Message = "payment service disabled: " + err.Error()
+			check.Details["availability"] = "unavailable"
+		}
+		return check
+	})
 	if cfg.Cashu.Enabled {
 		return nil, fmt.Errorf("cashu.enabled=true is unsupported because mint-backed token flows are not implemented; disable cashu.enabled")
 	}

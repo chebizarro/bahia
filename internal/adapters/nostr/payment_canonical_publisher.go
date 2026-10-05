@@ -20,9 +20,14 @@ import (
 // URLs, token hashes) that must not appear as plaintext on any relay.
 //
 // Each mutation (RecordPayment, MarkPaymentSent, RecordChange) publishes
-// exactly one 30900 record. The d-tag is "payment:<id>" so each payment has
-// a unique relay coordinate. Warm-start covers the "payment" domain
-// automatically via CPStateDomains().
+// exactly one 30900 record before the service touches its SQL index (audit
+// B-31). The d-tag is "payment:<id>" so each payment has a unique relay
+// coordinate and a status transition replaces it. Warm-start covers the
+// "payment" domain automatically via CPStateDomains().
+//
+// The publisher is also the service's read view: ListPaymentRecords decodes
+// the daemon's own retained records from the local event store, so payment
+// history needs no SQL repository.
 //
 // bahia-irsry.60: confidential cp-state for payments.
 type PaymentCanonicalPublisher struct {
@@ -76,8 +81,7 @@ func (p *PaymentCanonicalPublisher) publishConfidential(ctx context.Context, leg
 		return fmt.Errorf("encrypt payment state: %w", err)
 	}
 
-	extraTags = append(extraTags, confidentialStateHash(p.projector.privateKey, content))
-	return p.projector.publishControlState(ctx, legacyKind, dTag, deleted, extraTags, encrypted, entityType, entityID)
+	return p.projector.publishCanonicalFirst(ctx, legacyKind, dTag, deleted, extraTags, content, encrypted, entityType, entityID)
 }
 
 // PaymentDTag returns the d-tag for a payment record: "payment:<id>".
@@ -127,25 +131,27 @@ func PaymentRecordContent(rec *domain.PaymentRecord) (gonostr.Tags, string) {
 	return tags, string(contentJSON)
 }
 
-// ListPaymentRecords decodes the authored local cp-state view. The event store
-// retains only the winning event for each replaceable coordinate.
+// ListPaymentRecords decodes the daemon's own retained payment records from
+// the local event store, oldest first. The store keeps only the winning event
+// of each replaceable coordinate, so every payment appears once, in its latest
+// state. A record that cannot be decrypted or decoded fails the read: a
+// partial history would understate what was paid.
 func (p *PaymentCanonicalPublisher) ListPaymentRecords(ctx context.Context) ([]domain.PaymentRecord, error) {
 	if p == nil || p.projector == nil || p.projector.history == nil || p.encryptor == nil {
 		return nil, fmt.Errorf("payment canonical local view is unavailable")
 	}
-	const limit = 1000000
 	family := cpStateFamilies[KindPaymentRecord]
-	records, err := p.projector.history.FindByTag(ctx, "t", family.topic, []int{KindCASControlState}, limit)
+	records, err := p.projector.history.FindByTag(ctx, "t", family.topic, []int{KindCASControlState}, canonicalViewLimit)
 	if err != nil {
 		return nil, err
 	}
-	if len(records) >= limit {
+	if len(records) >= canonicalViewLimit {
 		return nil, fmt.Errorf("payment canonical view reached history limit")
 	}
 	out := make([]domain.PaymentRecord, 0, len(records))
 	for _, record := range records {
 		tags := recordTags(record)
-		if tagValue(tags, "legacy_kind") != strconv.Itoa(KindPaymentRecord) || tagValue(tags, "deleted") == "true" {
+		if tagValue(tags, "legacy_kind") != strconv.Itoa(KindPaymentRecord) || isTombstoneTags(tags) {
 			continue
 		}
 		dTag := tagValue(tags, "d")
@@ -165,6 +171,11 @@ func (p *PaymentCanonicalPublisher) ListPaymentRecords(ctx context.Context) ([]d
 		}
 		out = append(out, rec)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID.String() < out[j].ID.String()
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
 	return out, nil
 }
