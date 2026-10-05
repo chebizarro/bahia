@@ -19,6 +19,30 @@ intent. Relay `OK` only confirms delivery. If relays are unavailable, the
 browser keeps the intent pending and retries delivery on reconnect or AUTH,
 without a timeout that turns it into a failure.
 
+A control that publishes a signed intent is disabled until the browser can
+submit that intent. This is decided from local state only: the signed-in
+session, its intent client (event store, relay seed, signer, service and
+requester pubkeys) and the organizations the local event store has revealed. It
+never waits for a relay to be connected or caught up; with every relay
+unreachable an intent that is ready locally is still signed, shown as pending
+and delivered on reconnect.
+
+- While the session is still opening, the control is described as
+  **Connecting…**.
+- Fleet-scoped domains (`backup`, `package`, `worker`, `dns`, `ml`, `security`,
+  `sbom`, `relay`) need no organization.
+- Organization-scoped domains use the organization on the record or form, the
+  one owning the record's service or LLM route, or the single organization named
+  by system discovery or the operator's memberships. When the session knows
+  none, the control stays disabled with **No organization is known for this
+  session yet** shown beside it, and enables as soon as local data names one.
+  Form fields stay editable meanwhile.
+- When only the operator can resolve it (several organizations are known, or
+  the form's organization field is empty), the control stays enabled and
+  submitting reports `Select an organization before submitting this intent`.
+
+Cancel and close controls are never disabled this way.
+
 ## Deployment-family signed intents
 
 With `deployment`, `runtime`, `llm`, and `backup` enabled by default, sign a kind `30900` `bahia.intent.<domain>.v1` event for the supported deployment, runtime, LLM deployment/approval, or backup restore-approval operation. Reuse `content.intent_id` for retries and subscribe to bounded kind `30315` status plus the daemon-authored canonical state; a ContextVM receipt or relay `OK` is not durable completion. Disabled domains retain the existing ContextVM mutation path. The [wire fixtures](../../web/tests/fixtures/deployment-intents.json) show every content shape.

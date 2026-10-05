@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { workers, workerCleanupExecutions, workerJobs, operations } from '$lib/stores';
   import { goto } from '$app/navigation';
   import { StandardIcon } from '$lib/icons/domain-icons.js';
@@ -739,6 +740,7 @@
                   <summary>Actions</summary>
                   <div class="action-menu-panel">
                     <button type="button" onclick={() => goto(`/workers/${encodeURIComponent(worker.pubkey)}`)}>View details</button>
+                    <IntentGate domain="worker">
                     {#each WORKER_ACTIONS as action}
                       {@const disabled = isWorkerPublishPending(worker) || !isWorkerActionAllowed(worker, action)}
                       <button
@@ -750,6 +752,7 @@
                         {isActionPending(worker, action) ? 'Publishing…' : action.label}
                       </button>
                     {/each}
+                    </IntentGate>
                     <button type="button" onclick={(event) => copySelector(event, worker)}>Copy selector</button>
                   </div>
                 </details>

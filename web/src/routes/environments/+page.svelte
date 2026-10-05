@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { goto } from '$app/navigation';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
@@ -457,6 +458,7 @@
       >
         Cancel
       </LoadingButton>
+      <IntentGate domain="environment" orgId={createForm.org_id} orgField>
       <LoadingButton
         type="submit"
         variant="primary"
@@ -464,6 +466,7 @@
       >
         Create
       </LoadingButton>
+      </IntentGate>
     </div>
   </form>
 </Modal>

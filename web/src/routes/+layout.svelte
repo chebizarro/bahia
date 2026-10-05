@@ -53,6 +53,7 @@
   );
   let assistantBootstrappedForPubkey = $state('');
   let eventStoreReady = $state(false);
+  let bootSettled = $state(false);
 
   onMount(() => createVersionReloadWatcher().start());
 
@@ -79,6 +80,8 @@
         initOpsWidgetWallBinding();
       } catch (err) {
         console.warn('[layout] boot() failed:', err);
+      } finally {
+        bootSettled = true;
       }
 
       // Connect the single pool in the background; EOSE only updates the badge.
@@ -115,9 +118,14 @@
 
   $effect(() => {
     const pubkey = authState.status === 'authenticated' ? authState.pubkey : '';
-    if (!eventStoreReady || !pubkey) return;
+    if (!bootSettled || !pubkey) return;
     prefetchRelayLimits();
-    void resumeIntentClient().catch(error => console.error('[layout] intent client failed:', error));
+    // Resume even when boot produced no event store: the attempt records why
+    // this session cannot sign, which the readiness signal reports on submit
+    // instead of leaving mutation controls disabled as "connecting" forever.
+    void resumeIntentClient().catch(error => {
+      if (getEventStore()) console.error('[layout] intent client failed:', error);
+    });
     return stopIntentClient;
   });
 

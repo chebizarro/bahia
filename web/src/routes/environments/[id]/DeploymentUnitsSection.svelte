@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import Input from '$lib/components/Input.svelte';
@@ -273,14 +274,17 @@
 
     <div class="form-actions">
       <LoadingButton type="button" variant="secondary" onclick={closeEditor} disabled={saving}>Cancel</LoadingButton>
+      <IntentGate domain="environment" orgId={environment?.org_id}>
       <LoadingButton type="submit" variant="primary" loading={saving} disabled={draftStale}>
         {environment?.protected ? 'Review Protected Change' : 'Save Unit'}
       </LoadingButton>
+      </IntentGate>
     </div>
   </form>
 </Modal>
 
 <ConfirmDialog
+  intentDomain="environment" intentOrgId={environment?.org_id}
   bind:open={confirmOpen}
   title="Confirm Protected Target Change"
   confirmLabel="Sign Target Update"

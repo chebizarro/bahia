@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { page } from '$app/state';
   import { untrack } from 'svelte';
   import { goto } from '$app/navigation';
@@ -300,9 +301,11 @@
     <div class="header">
       <h1>{policy.name}</h1>
       <div class="actions">
+        <IntentGate domain="policy" orgId={policy?.org_id}>
         <LoadingButton variant="secondary" onclick={togglePolicyEnabled}>
           {policy.enabled ? 'Disable' : 'Enable'}
         </LoadingButton>
+        </IntentGate>
         <LoadingButton variant="secondary" onclick={openEditModal}>
           Edit
         </LoadingButton>
@@ -357,7 +360,9 @@
         </div>
       </div>
       <div class="eval-actions">
+        <IntentGate domain="policy" orgId={policy?.org_id}>
         <LoadingButton variant="primary" onclick={runEvaluation} loading={evaluating}>Run Evaluation</LoadingButton>
+        </IntentGate>
       </div>
       {#if evaluationError}
         <p class="error-message">{evaluationError}</p>
@@ -526,6 +531,7 @@
       >
         Cancel
       </LoadingButton>
+      <IntentGate domain="policy" orgId={policy?.org_id}>
       <LoadingButton
         type="submit"
         variant="primary"
@@ -533,12 +539,14 @@
       >
         Save
       </LoadingButton>
+      </IntentGate>
     </div>
   </form>
 </Modal>
 
 <!-- Delete Confirmation Dialog -->
 <ConfirmDialog
+  intentDomain="policy" intentOrgId={policy?.org_id}
   bind:open={deleteOpen}
   title="Delete Policy"
   titleIcon={WarningIcon}

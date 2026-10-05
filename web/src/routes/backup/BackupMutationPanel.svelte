@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { toast } from '$lib/components/toast.js';
   import {
     applyBackupDefinition,
@@ -104,7 +105,9 @@
           <label><span>Approval policy</span><input bind:value={definitionForm.approval_policy} disabled={!definitionForm.requires_approval} placeholder="operator" /></label>
         {/if}
         <div class="form-actions">
+          <IntentGate domain="backup">
           <button type="submit" disabled={submitting}>{submitting ? 'Publishing…' : actionLabel}</button>
+          </IntentGate>
           <button type="button" class="secondary" disabled={submitting} onclick={resetForm}>Reset</button>
         </div>
       </form>

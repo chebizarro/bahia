@@ -14,6 +14,7 @@
   } from '$lib/stores/dns.svelte.js';
   import { DNS_COMMANDS } from '$lib/nostr/dns-controlplane.js';
   import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import DNSRegistryMutations from './DNSRegistryMutations.svelte';
   import {
     DNS_CONTROL_FORMS,
@@ -213,6 +214,7 @@
       <div class="alert compact" role="status"><strong>Signing unavailable.</strong><span>{commandDisabledReason}</span></div>
     {/if}
 
+    <IntentGate domain="dns">
     <div class="command-grid">
       <form class="command-card" onsubmit={(event) => { event.preventDefault(); submitDNSCommand(DNS_COMMANDS.ZONE_CREATE); }}>
         <h3>{DNS_CONTROL_FORMS[DNS_COMMANDS.ZONE_CREATE].title}</h3>
@@ -269,6 +271,7 @@
         <button type="submit" disabled={!operatorReady || submittingCommand === DNS_COMMANDS.DRIFT_REMEDIATE}>{submittingCommand === DNS_COMMANDS.DRIFT_REMEDIATE ? 'Signing…' : DNS_CONTROL_FORMS[DNS_COMMANDS.DRIFT_REMEDIATE].submitLabel}</button>
       </form>
     </div>
+    </IntentGate>
 
     <div class="runs" aria-label="DNS command run tracker">
       <h3>Recent command runs</h3>
@@ -296,7 +299,9 @@
     </div>
   </section>
 
-  <DNSRegistryMutations {zones} {endpoints} {backends} {policies} disabled={!operatorReady} />
+  <IntentGate domain="dns">
+    <DNSRegistryMutations {zones} {endpoints} {backends} {policies} disabled={!operatorReady} />
+  </IntentGate>
 
   <nav class="tabs" aria-label="DNS views">
     <button type="button" class:active={activeTab === 'zones'} onclick={() => (activeTab = 'zones')}>Zones</button>
