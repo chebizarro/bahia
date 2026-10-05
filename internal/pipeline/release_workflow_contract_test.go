@@ -140,37 +140,57 @@ func TestHiveCIBuildRetainsResultFileAndEmitsLoomMarker(t *testing.T) {
 }
 
 func TestWebBootstrapEntrypoint(t *testing.T) {
-	body, err := os.ReadFile("../../web/docker-entrypoint.d/40-bahia-bootstrap-env.sh")
+	// The image carries no baked trust roots: the entrypoint must write the
+	// validated runtime seed, or fail without touching the existing seed file.
+	script, err := filepath.Abs("../../web/docker-entrypoint.d/40-bahia-bootstrap-env.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
+	const untouched = "// seed from the image build\n"
+	key := strings.Repeat("c", 64)
+	widget := strings.Repeat("d", 64)
 	for _, tc := range []struct {
-		name, html, relays, keys string
-		success                  bool
+		name, relays, keys, widgets string
+		want                        string // empty: startup must fail and leave the seed untouched
 	}{
-		{name: "baked values need no runtime env", html: "<html>baked config</html>", success: true},
-		{name: "missing explicit identity", html: "__PUBLIC_BAHIA_BOOTSTRAP_RELAYS__ __PUBLIC_BAHIA_SERVICE_PUBKEYS__", relays: "wss://relay.example"},
-		{name: "runtime substitution", html: "__PUBLIC_BAHIA_BOOTSTRAP_RELAYS__ __PUBLIC_BAHIA_SERVICE_PUBKEYS__", relays: "wss://relay.example/path?a=1&b=2|3", keys: strings.Repeat("c", 64), success: true},
+		{name: "no runtime env fails closed"},
+		{name: "missing explicit identity", relays: "wss://relay.example"},
+		{name: "missing relays", keys: key},
+		{name: "invalid relay URL", relays: "wss://relay.example/path|3", keys: key},
+		{name: "invalid service pubkey", relays: "wss://relay.example", keys: "not-a-pubkey"},
+		{name: "invalid widget pubkey", relays: "wss://relay.example", keys: key, widgets: "not-a-pubkey"},
+		{name: "runtime seed", relays: "wss://relay.example/path?a=1&b=2,ws://localhost:3334/relay", keys: key,
+			want: `window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:["wss://relay.example/path?a=1&b=2","ws://localhost:3334/relay"],service_pubkeys:["` + key + `"],widget_pubkeys:[]};` + "\n"},
+		{name: "runtime seed with widget publishers", relays: "wss://relay.example", keys: key, widgets: widget,
+			want: `window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:["wss://relay.example"],service_pubkeys:["` + key + `"],widget_pubkeys:["` + widget + `"]};` + "\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "index.html")
-			if err := os.WriteFile(path, []byte(tc.html), 0o600); err != nil {
+			path := filepath.Join(t.TempDir(), "bahia-bootstrap.js")
+			if err := os.WriteFile(path, []byte(untouched), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			script := strings.Replace(string(body), "INDEX_HTML=/usr/share/nginx/html/index.html", "INDEX_HTML="+path, 1)
-			cmd := exec.Command("sh", "-c", script)
-			cmd.Env = []string{"PATH=/usr/bin:/bin", "PUBLIC_BAHIA_BOOTSTRAP_RELAYS=" + tc.relays, "PUBLIC_BAHIA_SERVICE_PUBKEYS=" + tc.keys}
+			cmd := exec.Command("sh", script)
+			cmd.Env = []string{"PATH=/usr/bin:/bin", "BAHIA_BOOTSTRAP_SCRIPT_PATH=" + path}
+			for name, value := range map[string]string{
+				"PUBLIC_BAHIA_BOOTSTRAP_RELAYS":     tc.relays,
+				"PUBLIC_BAHIA_SERVICE_PUBKEYS":      tc.keys,
+				"PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS": tc.widgets,
+			} {
+				if value != "" {
+					cmd.Env = append(cmd.Env, name+"="+value)
+				}
+			}
 			output, err := cmd.CombinedOutput()
-			if (err == nil) != tc.success {
+			if (err == nil) != (tc.want != "") {
 				t.Fatalf("error=%v output=%s", err, output)
 			}
 			got, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := tc.html
-			if tc.success && tc.keys != "" {
-				want = tc.relays + " " + tc.keys
+			want := tc.want
+			if want == "" {
+				want = untouched
 			}
 			if string(got) != want {
 				t.Fatalf("got %q want %q", got, want)

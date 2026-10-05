@@ -139,6 +139,8 @@ Bahia currently exposes three main control-plane surfaces:
 2. **Native MCP** — JSON-RPC tools over HTTP at `/mcp` and `/api/v1/mcp`
 3. **REST API** — narrowed CRUD/query/log/compatibility surface
 
+For production, the web image contains no baked relay or service-pubkey trust roots. Set `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS` on the web container at runtime. Startup validates both and writes a no-cache seed script; the configured service keys are also the only accepted public documentation publishers. Restart the container to rotate roots without rebuilding the image.
+
 Important: the web app's shared state is **not** primarily a REST polling client. It bootstraps from ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`), connects to relays, waits for EOSE on read models, and then stays live on subscriptions.
 
 Also note: ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) expose the core control-plane discovery map. Broader kind families are documented in `docs/control-planes.md` and `docs/nostr-commands.md`.

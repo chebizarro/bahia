@@ -44,7 +44,8 @@ export async function installE2EMocks(
     routeRoleRequirements = null,
     contextVMOperations = [],
     nip44 = true,
-    realNip44 = false
+    realNip44 = false,
+    widgetAllowedPubkeys = undefined
   } = {}
 ) {
   const discoveryInfo = systemInfo || {
@@ -86,7 +87,7 @@ export async function installE2EMocks(
       limitation: { max_message_length: 512000, max_content_length: 65535, auth_required: false }
     })
   }));
-  await page.addInitScript(({ authenticated, extension, nip44, realNip44, pubkey, backendRole, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations, defaultServicePubkey }) => {
+  await page.addInitScript(({ authenticated, extension, nip44, realNip44, pubkey, backendRole, sseEvents, nostrEvents, systemInfo, routeRoleRequirements, contextVMOperations, defaultServicePubkey, widgetAllowedPubkeys }) => {
     const existingSseEvents = localStorage.getItem('__bahia_e2e_sse_events');
     if (!existingSseEvents || (Array.isArray(sseEvents) && sseEvents.length > 0)) {
       localStorage.setItem('__bahia_e2e_sse_events', JSON.stringify(sseEvents || []));
@@ -96,7 +97,8 @@ export async function installE2EMocks(
     window.__BAHIA_BOOTSTRAP__ = {
       schema: 'bahia.bootstrap.v1',
       relay_urls: browserRelays,
-      service_pubkeys: [servicePubkey]
+      service_pubkeys: [servicePubkey],
+      ...(widgetAllowedPubkeys !== undefined ? { widget_pubkeys: widgetAllowedPubkeys } : {})
     };
     const discoveryEvents = [
       {
@@ -517,7 +519,11 @@ export async function installE2EMocks(
         this.subscriptions = new Map();
         this.listeners = new Map();
         window.__BAHIA_E2E_WS_CONNECTIONS.push(this);
-        setTimeout(() => this.emitOpen(), 0);
+        if (sessionStorage.getItem('__bahia_e2e_relay_offline') === '1') {
+          setTimeout(() => this.close(), 0);
+        } else {
+          setTimeout(() => this.emitOpen(), 0);
+        }
       }
 
       addEventListener(type, listener) {
@@ -712,7 +718,8 @@ export async function installE2EMocks(
     systemInfo: effectiveSystemInfo,
     routeRoleRequirements,
     contextVMOperations,
-    defaultServicePubkey: E2E_SERVICE_PUBKEY
+    defaultServicePubkey: E2E_SERVICE_PUBKEY,
+    widgetAllowedPubkeys
   });
 }
 

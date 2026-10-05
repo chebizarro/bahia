@@ -45,31 +45,40 @@ function splitList(value) {
   return value.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
-export function getBootstrapSeed() {
-  if (!browser || typeof window === 'undefined') return null;
-  const injected = window.__BAHIA_BOOTSTRAP__;
-
-  const env = import.meta.env || {};
-  const envRelayUrls = splitList(env.PUBLIC_BAHIA_BOOTSTRAP_RELAYS || env.VITE_BAHIA_BOOTSTRAP_RELAYS);
-  const envServicePubkeys = splitList(env.PUBLIC_BAHIA_SERVICE_PUBKEYS || env.VITE_BAHIA_SERVICE_PUBKEYS || env.PUBLIC_BAHIA_SERVICE_PUBKEY || env.VITE_BAHIA_SERVICE_PUBKEY);
-
-  const relay_urls = Array.from(new Set([
-    ...(Array.isArray(injected?.relay_urls) ? injected.relay_urls : []),
-    ...envRelayUrls
-  ].filter(Boolean)));
-
-  const service_pubkeys = Array.from(new Set([
-    ...(Array.isArray(injected?.service_pubkeys) ? injected.service_pubkeys : []),
-    ...envServicePubkeys
-  ].filter(Boolean)));
-
-  if (relay_urls.length === 0 && service_pubkeys.length === 0) return null;
-
+function validSeed(relayUrls, servicePubkeys) {
+  if (!Array.isArray(relayUrls) || !Array.isArray(servicePubkeys) || !relayUrls.length || !servicePubkeys.length) return null;
+  if (relayUrls.some((url) => {
+    if (typeof url !== 'string' || !/^wss?:\/\//.test(url) || /\s/.test(url)) return true;
+    try {
+      const parsed = new URL(url);
+      return !parsed.hostname || !['ws:', 'wss:'].includes(parsed.protocol) || !!parsed.username || !!parsed.password || !!parsed.hash;
+    } catch {
+      return true;
+    }
+  })) return null;
+  if (servicePubkeys.some((key) => typeof key !== 'string' || !/^[0-9a-f]{64}$/i.test(key))) return null;
   return {
     schema: BOOTSTRAP_SCHEMA,
-    relay_urls,
-    service_pubkeys
+    relay_urls: [...new Set(relayUrls)],
+    service_pubkeys: [...new Set(servicePubkeys.map((key) => key.toLowerCase()))]
   };
+}
+
+export function getBootstrapSeed() {
+  if (!browser || typeof window === 'undefined') return null;
+  // An injected deployment seed is authoritative, including when it is invalid.
+  if (window.__BAHIA_BOOTSTRAP__ !== undefined) {
+    const injected = window.__BAHIA_BOOTSTRAP__;
+    if (injected?.schema !== BOOTSTRAP_SCHEMA) return null;
+    return validSeed(injected.relay_urls, injected.service_pubkeys);
+  }
+
+  // Vite variables are only a local-development/test fallback, never merged into an injected seed.
+  const env = import.meta.env || {};
+  return validSeed(
+    splitList(env.PUBLIC_BAHIA_BOOTSTRAP_RELAYS || env.VITE_BAHIA_BOOTSTRAP_RELAYS),
+    splitList(env.PUBLIC_BAHIA_SERVICE_PUBKEYS || env.VITE_BAHIA_SERVICE_PUBKEYS || env.PUBLIC_BAHIA_SERVICE_PUBKEY || env.VITE_BAHIA_SERVICE_PUBKEY)
+  );
 }
 
 export function resolveBrowserRelays(systemInfo) {

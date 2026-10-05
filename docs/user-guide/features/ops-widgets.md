@@ -9,7 +9,7 @@ Bahia subscribes only to the fleet relays exported by Wheelhouse:
 - `wss://relay.sharegap.net`
 - `wss://nos.lol`
 
-Set `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` to a comma-separated list of trusted 64-character hexadecimal publisher pubkeys. The view fails closed and renders no events when the allowlist is empty. Invalid Nostr signatures are rejected by Bahia's relay client before events reach Wheelhouse.
+Set `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` on the web container (runtime, not build time) to a comma-separated list of trusted 64-character hexadecimal publisher pubkeys; the container entrypoint writes it into the deployment seed as `widget_pubkeys`. The view fails closed and renders no events when the allowlist is empty. Invalid Nostr signatures are rejected by Bahia's relay client before events reach Wheelhouse.
 
 ## Display behavior
 
