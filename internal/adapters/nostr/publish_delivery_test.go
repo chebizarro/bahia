@@ -218,7 +218,10 @@ func TestPublisherDefaultQuorumRelayBDownSucceedsKeepsRowPendingAndRetriesB(t *t
 	require.Equal(t, localstore.OutboxPublished, entry.State)
 	require.Equal(t, 3, entry.Rounds)
 	require.Empty(t, entry.LastError)
-	require.False(t, publisher.isTracked(event.ID.Hex()), "fully delivered events are no longer tracked")
+	// The outbox row is marked published before the runner drops the event from
+	// its retry set, so the untrack can land a moment after the signal above.
+	require.Eventually(t, func() bool { return !publisher.isTracked(event.ID.Hex()) },
+		5*time.Second, time.Millisecond, "fully delivered events are no longer tracked")
 	relays.requireNoPendingCalls(t)
 }
 
@@ -266,7 +269,8 @@ func TestPublisherDefaultQuorumPermanentRejectionCompletesWithoutRetry(t *testin
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{relayA, relayB}, relays.nextCall(t))
 	require.Equal(t, event.ID.Hex(), receive(t, outbox.published, "delivery complete: A accepted, B terminal"))
-	require.False(t, publisher.isTracked(event.ID.Hex()))
+	require.Eventually(t, func() bool { return !publisher.isTracked(event.ID.Hex()) },
+		5*time.Second, time.Millisecond, "delivered or abandoned events are no longer tracked")
 	relays.requireNoPendingCalls(t)
 }
 
@@ -323,7 +327,8 @@ func TestPublisherPermanentRejectionMakingQuorumUnreachableAbandonsWithoutRetry(
 	depth, err := outbox.CountUnpublished(ctx)
 	require.NoError(t, err)
 	require.Zero(t, depth)
-	require.False(t, publisher.isTracked(event.ID.Hex()))
+	require.Eventually(t, func() bool { return !publisher.isTracked(event.ID.Hex()) },
+		5*time.Second, time.Millisecond, "delivered or abandoned events are no longer tracked")
 	relays.requireNoPendingCalls(t)
 }
 
