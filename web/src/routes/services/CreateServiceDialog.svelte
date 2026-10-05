@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { untrack } from 'svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Input from '$lib/components/Input.svelte';
@@ -319,6 +320,7 @@
       >
         Cancel
       </LoadingButton>
+      <IntentGate domain="service" orgId={createForm.org_id}>
       <LoadingButton
         type="submit"
         variant="primary"
@@ -326,6 +328,7 @@
       >
         Create
       </LoadingButton>
+      </IntentGate>
     </div>
   </form>
 </Modal>

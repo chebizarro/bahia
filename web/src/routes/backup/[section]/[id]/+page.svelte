@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { page } from '$app/state';
   import BackupShell from '../../BackupShell.svelte';
   import StatusPill from '../../StatusPill.svelte';
@@ -142,6 +143,7 @@
   {:else}
     <div class="actions">
       <a href={`/backup/${section}`}>Back to {config.label}</a>
+      <IntentGate domain="backup">
       {#if section === 'repositories'}
         <button type="button" disabled={pending === 'probe'} onclick={runProbe}>{pending === 'probe' ? 'Queueing probe…' : 'Probe repository'}</button>
       {/if}
@@ -160,6 +162,7 @@
         <button type="button" class="approve" disabled={Boolean(pending)} onclick={() => decideRestore(true)}>{pending === 'approve' ? 'Approving…' : 'Approve restore'}</button>
         <button type="button" class="reject" disabled={Boolean(pending)} onclick={() => decideRestore(false)}>{pending === 'reject' ? 'Rejecting…' : 'Reject restore'}</button>
       {/if}
+      </IntentGate>
     </div>
 
     {#if notice}

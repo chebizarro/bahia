@@ -538,6 +538,7 @@
 </style>
 
 <ConfirmDialog
+  intentDomain="deployment"
   bind:open={rollbackOpen}
   title="Confirm Rollback"
   titleIcon={RollbackIcon}

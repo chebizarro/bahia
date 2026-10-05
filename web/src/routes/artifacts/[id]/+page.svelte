@@ -16,6 +16,7 @@ import Table from '$lib/components/Table.svelte';
   import { onStoreRefresh } from '$lib/nostr/boot.js';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { generateArtifactSBOM, importArtifactSBOM, resolveInlineSBOMLimitBytes, MAX_INLINE_SBOM_BYTES } from '$lib/stores/public-controlplane.svelte.js';
   import { blossomLocation, uploadSBOMToBlossom } from '$lib/nostr/blossom-upload.js';
   import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
@@ -674,6 +675,7 @@ import Table from '$lib/components/Table.svelte';
 
       {:else if activeTab === 'sbom'}
         <!-- SBOM Tab -->
+        <IntentGate domain="sbom">
         <section class="sbom-section">
           <div class="section-header">
             <div>
@@ -758,9 +760,11 @@ import Table from '$lib/components/Table.svelte';
             loading={false}
           />
         </section>
+        </IntentGate>
 
       {:else if activeTab === 'signatures'}
         <!-- Signatures Tab -->
+        <IntentGate domain="artifact" orgId={artifact?.org_id || service?.org_id}>
         <section class="signatures-section">
           <div class="section-header">
             <h2 class="section-title"><SignatureIcon size={20} strokeWidth={1.75} ariaHidden="true" /> <span>Signatures</span></h2>
@@ -796,6 +800,7 @@ import Table from '$lib/components/Table.svelte';
             />
           {/if}
         </section>
+        </IntentGate>
       {/if}
     </div>
   {:else}

@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { page } from '$app/state';
   import { untrack } from 'svelte';
   import { goto } from '$app/navigation';
@@ -574,7 +575,9 @@
 
     <div class="form-actions">
       <LoadingButton type="button" variant="secondary" onclick={closePlacementModal} disabled={placementSaving}>Cancel</LoadingButton>
+      <IntentGate domain="environment" orgId={environment?.org_id}>
       <LoadingButton type="submit" variant="primary" loading={placementSaving}>Publish signed policy intent</LoadingButton>
+      </IntentGate>
     </div>
   </form>
 </Modal>
@@ -656,6 +659,7 @@
       >
         Cancel
       </LoadingButton>
+      <IntentGate domain="environment" orgId={environment?.org_id}>
       <LoadingButton
         type="submit"
         variant="primary"
@@ -663,12 +667,14 @@
       >
         Save Environment
       </LoadingButton>
+      </IntentGate>
     </div>
   </form>
 </Modal>
 
 <!-- Delete Confirmation Dialog -->
 <ConfirmDialog
+  intentDomain="environment" intentOrgId={environment?.org_id}
   bind:open={deleteOpen}
   title="Delete Environment"
   titleIcon={WarningIcon}

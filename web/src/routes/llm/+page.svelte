@@ -1,5 +1,6 @@
 <script>
   import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { bootstrapControlplane, controlplaneConnection, environments, events, llmRouteStates, llmRoutes, operations } from '$lib/stores';
   import {
     approveLLMDeploymentIntent,
@@ -265,6 +266,7 @@
   {:else if error}
     <div class="error-state"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{error}</span></div>
   {:else}
+    <IntentGate domain="llm">
     <div class="workflow-grid">
       <section class="panel">
         <h2><LlmIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Create Route</h2>
@@ -448,8 +450,10 @@
         </table>
       {/if}
     </section>
+    </IntentGate>
 
     <div class="observability-grid">
+      <IntentGate domain="llm">
       <section class="panel" data-testid="llm-route-state-table">
         <div class="section-header">
           <h2><EnvironmentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Route State</h2>
@@ -501,6 +505,7 @@
           </table>
         {/if}
       </section>
+      </IntentGate>
 
       <section class="panel" data-testid="llm-operation-table">
         <div class="section-header">

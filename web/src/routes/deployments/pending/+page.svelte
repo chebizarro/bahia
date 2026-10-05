@@ -204,6 +204,7 @@
 
 <!-- Approve confirmation dialog -->
 <ConfirmDialog
+  intentDomain="deployment"
   bind:open={approveOpen}
   title="Approve Deployment"
   titleIcon={SuccessIcon}
@@ -222,6 +223,7 @@
 
 <!-- Reject confirmation dialog -->
 <ConfirmDialog
+  intentDomain="deployment"
   bind:open={rejectOpen}
   title="Reject Deployment"
   titleIcon={WarningIcon}

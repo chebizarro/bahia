@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import BackupMutationPanel from '../BackupMutationPanel.svelte';
@@ -240,6 +241,7 @@
                 {/each}
                 <td class="actions" onclick={(event) => event.stopPropagation()}>
                   <button type="button" onclick={() => goto(rowHref(row))}>Details</button>
+                  <IntentGate domain="backup">
                   {#if shouldShowActions(row)}
                     {#if section === 'repositories'}
                       <button type="button" disabled={isPending(row, 'probe')} onclick={(event) => runProbe(row, event)}>{isPending(row, 'probe') ? 'Queued…' : 'Probe'}</button>
@@ -256,6 +258,7 @@
                       <button type="button" class="reject" disabled={isPending(row, 'approve') || isPending(row, 'reject')} onclick={(event) => decideRestore(row, false, event)}>{isPending(row, 'reject') ? 'Rejecting…' : 'Reject'}</button>
                     {/if}
                   {/if}
+                  </IntentGate>
                 </td>
               </tr>
             {/each}

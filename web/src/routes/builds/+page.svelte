@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { boot } from '$lib/nostr/boot.js';
   import { untrack } from 'svelte';
   import OperationalActivity from '../OperationalActivity.svelte';
@@ -224,9 +225,11 @@
 
       {#if error}<p class="message error" role="alert">{error}</p>{/if}
       {#if notice}<p class="message success" role="status">{notice}</p>{/if}
-      <button type="submit" disabled={submitting || !selectedService || !credentialRef}>
-        {submitting ? 'Requesting…' : 'Request HiveCI build'}
-      </button>
+      <IntentGate domain="build" orgId={selectedService?.org_id}>
+        <button type="submit" disabled={submitting || !selectedService || !credentialRef}>
+          {submitting ? 'Requesting…' : 'Request HiveCI build'}
+        </button>
+      </IntentGate>
     </form>
   </section>
 
@@ -296,13 +299,15 @@
             {:else if build.status === 'succeeded'}
               <div class="registration">
                 <p class="warning">No verified immutable artifact projection exists for this successful build.</p>
-                <button
-                  type="button"
-                  disabled={registeringBuildId === build.id}
-                  onclick={() => registerArtifactForBuild(build)}
-                >
-                  {registeringBuildId === build.id ? 'Verifying manifest…' : 'Register verified build artifact'}
-                </button>
+                <IntentGate domain="artifact" orgId={services.find((service) => service.id === build.service_id)?.org_id}>
+                  <button
+                    type="button"
+                    disabled={registeringBuildId === build.id}
+                    onclick={() => registerArtifactForBuild(build)}
+                  >
+                    {registeringBuildId === build.id ? 'Verifying manifest…' : 'Register verified build artifact'}
+                  </button>
+                </IntentGate>
                 {#if registrationMessage[build.id]}
                   <p class="registration-message" role="status">{registrationMessage[build.id]}</p>
                 {/if}

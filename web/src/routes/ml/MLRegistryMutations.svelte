@@ -3,6 +3,7 @@
   import { publishIntent, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
   import { mlIntentRequest } from '$lib/nostr/domain-intents.js';
   import PendingDomainIntents from '$lib/components/PendingDomainIntents.svelte';
+  import IntentGate from '$lib/components/IntentGate.svelte';
 
   let { models = [], versions = [], endpoints = [], environments = [] } = $props();
   let modelId = $state('');
@@ -98,6 +99,7 @@
   <PendingDomainIntents domain="ml" />
   {#if notice}<p role="status">{notice}</p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
+  <IntentGate domain="ml">
   <div class="registry-forms">
     <form onsubmit={submitModel}>
       <h3>Model</h3>
@@ -137,6 +139,7 @@
       {#if endpointId}<button type="button" disabled={Boolean(submitting)} onclick={() => deleteSelected('endpoint', endpoints.find(item => item.id === endpointId))}>Delete endpoint</button>{/if}
     </form>
   </div>
+  </IntentGate>
 </section>
 
 <style>

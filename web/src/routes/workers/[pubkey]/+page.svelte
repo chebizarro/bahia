@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import ErrorState from '$lib/components/ErrorState.svelte';
   import { page } from '$app/state';
   import Table from '$lib/components/Table.svelte';
@@ -563,6 +564,7 @@
         </div>
       </div>
       <div class="quick-actions" aria-label="Worker quick actions">
+        <IntentGate domain="worker">
         {#each QUICK_ACTIONS as action}
           {@const disabled = isAnyActionPending(worker) || !isWorkerActionAllowed(worker, action)}
           <button
@@ -574,6 +576,7 @@
             {isActionPending(worker, action) ? 'Publishing…' : action.label}
           </button>
         {/each}
+        </IntentGate>
       </div>
     </div>
 
@@ -652,7 +655,9 @@
     <section>
       <div class="section-heading">
         <h2>Labels & Placement</h2>
+        <IntentGate domain="worker">
         <button type="button" class="secondary-action" disabled={isAnyActionPending(worker)} onclick={() => handleWorkerAction(LABEL_ACTION)}>Edit labels</button>
+        </IntentGate>
       </div>
       {#if labels.length > 0}
         <div class="label-list">
