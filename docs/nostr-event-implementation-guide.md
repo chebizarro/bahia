@@ -864,7 +864,7 @@ The web reads managed-instance health, route canaries, Blossom administration, a
 |---|---|---|---|---|
 | 32040 managed-instance health | `runtime-instance-health` | `runtime:instance:<service>:<environment>:<unit>:<target-sha256>` | sanitized `health` | public sanitized operational signal |
 | 32041 route canary | `route-canary` | `route:<service>:<environment>:<unit-or-none>:<hostname>` | full sanitized `route_canary`, observed instance status, contradiction flag | public sanitized operational signal |
-| 32042 Soul runtime policy | `soul-factory-runtime-policy` | `soul-factory:runtime-policy` | `agent_runtimes` from validated daemon config | member-authenticated |
+| 32042 Soul runtime policy | `soul-factory-runtime-policy` | `soul-factory:runtime-policy` | `agent_runtimes` from validated daemon config; when SoulFactory is enabled also `controller_pubkeys` (the resolved controller identity) and, when pinned, `runtime_pubkeys` (`soul_factory.runtime_pubkeys`). Browsers use these as the trust root for `31951`/`6950`/`7950`/`1951` and `30317` authors | member-authenticated |
 | 32043 Blossom administration | `blossom-admin` | `blossom:admin` | OCK-encrypted configured servers and observed health | ciphertext public, fleet OCK required |
 | 32044 Blossom blob | `blossom-blob` | `blossom:blob:<owner-pubkey>:<sha256>` | OCK-encrypted BUD-02 descriptor and owner | ciphertext public, fleet OCK required |
 

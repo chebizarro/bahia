@@ -26,15 +26,17 @@ The view reads current continuity state from canonical events:
 | `31400`–`31404` | Continuity profile, failover policy, standby, replication, and recovery workflow definitions |
 | `30900` | Canonical worker state used in the topology assessment |
 
-The app opens the shared verified `BahiaEventStore` before connecting to relays, so the route renders persisted continuity events immediately and remains usable when relays are unreachable. The layout owns the retained subscriptions; navigating away and back does not open another REQ. Historical reads use bounded descending pages with persisted per-relay/filter cursors rather than a fixed event cap. A cursor is committed only after every history page reaches EOSE; live events then advance it. If more than one page of events shares the same second and the relay cannot page that boundary losslessly, the browser continues older history but leaves the cursor uncommitted and marks catch-up incomplete.
+The app opens the shared verified `BahiaEventStore` before connecting to relays, so the route renders persisted continuity events immediately and stays usable when relays are unreachable. Rendering never waits for a relay connection or EOSE; relay catch-up only updates a "synced" state. The app layout owns the subscriptions, so navigating away and back does not open another REQ.
+
+History is read in pages rather than under a fixed event cap. Per relay, one live REQ stays open and stored history is walked backwards one page at a time (`until` + `limit`) until a page comes back empty, so a relay that caps a REQ below the requested page size is still read completely. A per-relay cursor is saved once every page reached EOSE; the next session reads only the gap since that cursor, again in pages. The cursor deliberately trails by five minutes and never passes the browser clock, so clock skew and late-arriving events are re-read instead of skipped. If one second holds more events than a relay returns in a page, NIP-01 cannot page inside that second: older history is still read, but the cursor is not saved and catch-up is reported as incomplete so the next session retries.
 
 ## Trusted publishers
 
-The browser applies an `authors` allowlist to every continuity filter:
+The browser puts an `authors` list on every continuity filter and on every read of the local store:
 
-- `30351` status, `30353` recovery progress, and `30900` worker state accept every service/controller key in the deployment bootstrap seed.
-- `31400`–`31404` definitions, historical `38430`/`38431` request records, and continuity-heartbeat `30315` events accept only the authenticated fleet operator. The daemon gates these inputs through `nostr.authorized_pubkeys`; the heartbeat's `worker` tag is the observed identity, not signing authority.
-- When no authenticated operator is available, the public route still renders service-authored status and worker state from cache, but it does not accept definitions, heartbeats, or historical commands from arbitrary signers.
+- `30351` status, `30353` recovery progress and `30900` worker state are projections signed by the Bahia service. They are accepted from the service keys in the deployment bootstrap seed (`service_pubkeys`).
+- `31400`–`31404` definitions, `38430`/`38431` failover and recovery requests, and continuity-heartbeat `30315` events are operator-authored. The daemon acts on them only when signed by `nostr.authorized_pubkeys`; a heartbeat's `worker` tag names the observed worker and is not its signing authority. The browser has no service-signed copy of that allowlist, so it accepts these kinds only from the signed-in operator's own key. Definitions published by a different operator do not shape your assessments or simulation; the service-signed status cards are the same for everyone.
+- When nobody is signed in, the route still renders service-authored status and worker state from cache. It does not accept definitions, heartbeats or requests from any signer.
 
 A valid signature proves who signed an event; it does not by itself make that signer trusted.
 

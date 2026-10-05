@@ -1761,8 +1761,8 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		bgManager.RegisterWithOptions(&operationalViewsRunner{
 			publisher: viewPublisher, blossom: blossomClient,
-			runtimes: append([]string{}, cfg.SoulFactory.AgentRuntimes...),
-			owners:   owners, logger: logger,
+			policy: soulRuntimePolicy(cfg.SoulFactory, soulFactoryRuntime),
+			owners: owners, logger: logger,
 		}, RunnerRequired(false))
 	}
 	var runLogService *runtime.LogService

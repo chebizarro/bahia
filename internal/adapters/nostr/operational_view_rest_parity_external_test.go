@@ -50,7 +50,7 @@ func TestOperationalViewProjectionMatchesSource(t *testing.T) {
 	projector := nostradapter.NewProjector(config.NostrConfig{PrivateKey: strings.Repeat("1", 64), PublishEnabled: true}, &paritySource{}, sink, nil, zap.NewNop())
 	require.True(t, projector.Enabled())
 	publisher := nostradapter.NewOperationalViewPublisher(projector, parityEncryptor{})
-	require.NoError(t, publisher.PublishSoulRuntimePolicy(context.Background(), cfg.SoulFactory.AgentRuntimes))
+	require.NoError(t, publisher.PublishSoulRuntimePolicy(context.Background(), nostradapter.SoulRuntimePolicy{AgentRuntimes: cfg.SoulFactory.AgentRuntimes}))
 	require.Len(t, sink.events, 1)
 	require.Equal(t, gonostr.Kind(kinds.CASControlState), sink.events[0].Kind)
 	var soulState struct {
