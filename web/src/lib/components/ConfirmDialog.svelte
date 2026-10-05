@@ -2,6 +2,7 @@
 <script>
   import Modal from './Modal.svelte';
   import LoadingButton from './LoadingButton.svelte';
+  import IntentGate from './IntentGate.svelte';
 
   export let open = false;
   export let title = 'Confirm Action';
@@ -14,6 +15,11 @@
   export let onConfirm = null;
   export let onCancel = null;
   export let onClose = null;
+  // When confirming publishes a signed intent, name its domain (and the
+  // record's org id, when known) so confirm stays disabled until the intent
+  // can be submitted. Cancel is never gated.
+  export let intentDomain = '';
+  export let intentOrgId = '';
 
   function handleConfirm() {
     onConfirm?.();
@@ -50,13 +56,25 @@
       >
         {cancelLabel}
       </LoadingButton>
-      <LoadingButton
-        variant={variant === 'danger' ? 'danger' : 'primary'}
-        {loading}
-        onclick={handleConfirm}
-      >
-        {confirmLabel}
-      </LoadingButton>
+      {#if intentDomain}
+        <IntentGate domain={intentDomain} orgId={intentOrgId}>
+          <LoadingButton
+            variant={variant === 'danger' ? 'danger' : 'primary'}
+            {loading}
+            onclick={handleConfirm}
+          >
+            {confirmLabel}
+          </LoadingButton>
+        </IntentGate>
+      {:else}
+        <LoadingButton
+          variant={variant === 'danger' ? 'danger' : 'primary'}
+          {loading}
+          onclick={handleConfirm}
+        >
+          {confirmLabel}
+        </LoadingButton>
+      {/if}
     </div>
   </div>
 </Modal>

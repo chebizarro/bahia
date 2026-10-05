@@ -5,8 +5,7 @@ import { publishIntent, publishIntentForStatus, canonicalIntentRecord, resolveIn
 import { artifactRegisterIntent, observedArtifactImportIntent, adoptionImportIntent,
   deploymentPreviewIntent, deploymentRouteAttachIntent, policyEvaluateIntent } from '$lib/nostr/last-ops-intents.js';
 import { adoptionScanIntent, sbomIntent } from '$lib/nostr/final-ops-intents.js';
-import { orgRoles } from './auth-roles.svelte.js';
-import { orgsState } from './orgs.svelte.js';
+import { intentOrgCandidates } from './intent-readiness.svelte.js';
 import { currentSystemInfo } from './system.svelte.js';
 import { inlineSBOMLimitBytes, relayLimits } from '$lib/nostr/relay-nip11.js';
 import { nostr } from '$lib/nostr/subscriptions.js';
@@ -21,8 +20,7 @@ function intentOrgId(payload, current, domain) {
   const explicit = [payload?.org_id, current?.org_id,
     payload?.environment_id ? canonicalIntentRecord(payload.environment_id)?.content?.org_id : null]
     .find(value => UUID.test(String(value || '')));
-  return resolveIntentOrgId(domain, explicit, [...Object.keys(orgRoles),
-    ...orgsState.orgs.map(org => org.id || org.org_id), currentSystemInfo()?.organization_id]);
+  return resolveIntentOrgId(domain, explicit, intentOrgCandidates());
 }
 
 async function mutateIntent(domain, op, payload, id = payload?.id) {
