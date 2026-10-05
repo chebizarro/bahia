@@ -15,7 +15,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
-	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -54,6 +53,22 @@ type SupervisionSpec struct {
 // SupervisionSpecSource enumerates the current supervised target set.
 type SupervisionSpecSource interface {
 	SupervisionSpecs(context.Context) ([]SupervisionSpec, error)
+}
+
+// ManagedInstanceState is the state the supervisor decides from and records
+// to: health, the recovery ledger and maintenance overrides. The production
+// implementation (LocalManagedInstanceState) reads the daemon's canonical
+// records from the local event store and writes SQL only as an index.
+type ManagedInstanceState interface {
+	GetHealth(context.Context, domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error)
+	UpsertHealth(context.Context, *domain.ManagedInstanceHealth) error
+	UpsertHealthWithEvent(context.Context, *domain.ManagedInstanceHealth, *domain.ManagedInstanceHealthEvent) error
+	GetActiveMaintenanceOverride(context.Context, domain.ManagedInstanceKey, time.Time) (*domain.MaintenanceOverride, error)
+	CreateMaintenanceOverride(context.Context, *domain.MaintenanceOverride) error
+	ClearMaintenanceOverride(context.Context, domain.ManagedInstanceKey) error
+	ListRecentRecoveryAttempts(context.Context, domain.ManagedInstanceKey, int) ([]domain.RecoveryAttempt, error)
+	RecordRecoveryAttempt(context.Context, *domain.RecoveryAttempt) (bool, error)
+	CompleteRecoveryAttemptWithHealthEvent(context.Context, string, domain.RecoveryAttemptResult, string, *domain.ManagedInstanceHealth, *domain.ManagedInstanceHealthEvent) (bool, error)
 }
 
 // StaticSupervisionSpecSource is useful for configuration-driven targets.
@@ -103,9 +118,11 @@ func (ManagedInstanceMaintenanceEvent) ShouldNotify() bool { return false }
 // ManagedInstanceSupervisor observes local managed instances and performs narrowly scoped recovery.
 type ManagedInstanceSupervisor struct {
 	source             SupervisionSpecSource
-	repo               repository.ManagedInstanceHealthRepository
+	repo               ManagedInstanceState
 	lock               ManagedInstanceTryLocker
 	publisher          events.Publisher
+	canonical          *ManagedInstanceHealthProjector
+	readiness          SupervisionReadiness
 	interval           time.Duration
 	observationTimeout time.Duration
 	logger             *zap.Logger
@@ -117,7 +134,7 @@ type ManagedInstanceSupervisor struct {
 	instanceLocks  map[string]*sync.Mutex
 }
 
-func NewManagedInstanceSupervisor(source SupervisionSpecSource, repo repository.ManagedInstanceHealthRepository, lock ManagedInstanceTryLocker, publisher events.Publisher, interval time.Duration, logger *zap.Logger, observationTimeout ...time.Duration) (*ManagedInstanceSupervisor, error) {
+func NewManagedInstanceSupervisor(source SupervisionSpecSource, repo ManagedInstanceState, lock ManagedInstanceTryLocker, publisher events.Publisher, interval time.Duration, logger *zap.Logger, observationTimeout ...time.Duration) (*ManagedInstanceSupervisor, error) {
 	if source == nil || repo == nil {
 		return nil, fmt.Errorf("managed instance supervisor requires spec source and health repository")
 	}
@@ -139,7 +156,36 @@ func NewManagedInstanceSupervisor(source SupervisionSpecSource, repo repository.
 
 func (s *ManagedInstanceSupervisor) Name() string { return "managed-instance-supervisor" }
 
+// SetCanonicalProjector makes the supervisor publish an instance's canonical
+// health records before its health is indexed. The canonical state record is
+// what a restarted daemon resumes the instance's health from.
+func (s *ManagedInstanceSupervisor) SetCanonicalProjector(projector *ManagedInstanceHealthProjector) {
+	s.canonical = projector
+}
+
+// SetReadiness makes Run wait for the local event store's first relay
+// catch-up before the first evaluation, so no instance is restarted from a
+// stale desired set. EvaluateOnce is not gated.
+func (s *ManagedInstanceSupervisor) SetReadiness(readiness SupervisionReadiness) {
+	s.readiness = readiness
+}
+
+// managedInstanceStateBackfiller is a state that can publish canonical records
+// for what a deployment recorded only in SQL before they existed.
+type managedInstanceStateBackfiller interface {
+	BackfillFromIndex(context.Context) error
+}
+
 func (s *ManagedInstanceSupervisor) Run(ctx context.Context) error {
+	if err := waitForSupervisionReadiness(ctx, s.readiness); err != nil {
+		return nil
+	}
+	if backfiller, ok := s.repo.(managedInstanceStateBackfiller); ok {
+		// Best effort: an unreachable index must not delay supervision.
+		if err := backfiller.BackfillFromIndex(ctx); err != nil {
+			s.logger.Warn("managed instance state backfill from the SQL index did not complete", zap.Error(err))
+		}
+	}
 	if err := s.EvaluateOnce(ctx); err != nil {
 		s.logger.Warn("managed instance evaluation failed", zap.Error(err))
 	}
@@ -194,24 +240,38 @@ func (s *ManagedInstanceSupervisor) evaluateSpec(ctx context.Context, spec *Supe
 	if previous != nil && health.LastObservedAt.Before(previous.LastObservedAt) {
 		return nil
 	}
+	var publishErr error
 	material := previous == nil || health.Status != previous.Status || health.FailureReason != previous.FailureReason || health.RestartCount != previous.RestartCount || health.MemoryCurrentBytes != previous.MemoryCurrentBytes || health.MemoryPeakBytes != previous.MemoryPeakBytes || health.MemoryLimitBytes != previous.MemoryLimitBytes
 	if material {
 		e := domain.ManagedInstanceHealthEvent{ID: uuid.New(), ManagedInstanceKey: spec.Key, Status: health.Status, Reason: health.FailureReason, Evidence: health.FailureReason, ObservedAt: health.LastObservedAt}
 		if previous != nil {
 			e.PreviousStatus = previous.Status
 		}
-		if err := s.repo.UpsertHealthWithEvent(ctx, &health, &e); err != nil {
-			return err
-		}
 		severity := healthSeverity(health.Status, s.highMemoryCount(spec.Key) >= sustainCount(spec))
 		alert := s.shouldAlert(spec, severity, health.LastObservedAt)
-		s.publish(ctx, events.EventRuntimeInstanceHealthChanged, instanceKeyString(spec.Key), ManagedInstanceHealthChanged{EventID: e.ID.String(), Health: health, PreviousStatus: e.PreviousStatus, Severity: severity, Alert: alert, Reason: health.FailureReason, OccurredAt: health.LastObservedAt})
+		payload := ManagedInstanceHealthChanged{EventID: e.ID.String(), Health: health, PreviousStatus: e.PreviousStatus, Severity: severity, Alert: alert, Reason: health.FailureReason, OccurredAt: health.LastObservedAt}
+		// Canonical records first: the relay path (or its outbox) holds the
+		// observation before the SQL index sees it, and the bus delivery below
+		// is deduplicated by the projector. An observation that could not be
+		// published is not recorded, so the next evaluation publishes it; it
+		// does not hold back the recovery of the instance it describes.
+		if s.canonical != nil {
+			if err := s.canonical.Project(ctx, events.Event{Type: events.EventRuntimeInstanceHealthChanged, EntityID: instanceKeyString(spec.Key), Data: payload}); err != nil {
+				publishErr = fmt.Errorf("publish health observation: %w", err)
+			}
+		}
+		if publishErr == nil {
+			if err := s.repo.UpsertHealthWithEvent(ctx, &health, &e); err != nil {
+				return err
+			}
+			s.publish(ctx, events.EventRuntimeInstanceHealthChanged, instanceKeyString(spec.Key), payload)
+		}
 	}
 	recoverErr := s.recover(ctx, spec, &health)
 	if observeErr != nil {
-		return errors.Join(fmt.Errorf("observe instance: %w", observeErr), recoverErr)
+		observeErr = fmt.Errorf("observe instance: %w", observeErr)
 	}
-	return recoverErr
+	return errors.Join(observeErr, publishErr, recoverErr)
 }
 
 func (s *ManagedInstanceSupervisor) classify(ctx context.Context, spec *SupervisionSpec, previous *domain.ManagedInstanceHealth, obs *runtime.InstanceObservation, observeErr error) domain.ManagedInstanceHealth {
@@ -396,6 +456,12 @@ func (s *ManagedInstanceSupervisor) recover(ctx context.Context, spec *Supervisi
 	var transition *domain.ManagedInstanceHealthEvent
 	if beforeRestart.Status != health.Status {
 		transition = &domain.ManagedInstanceHealthEvent{ID: uuid.New(), ManagedInstanceKey: spec.Key, PreviousStatus: beforeRestart.Status, Status: health.Status, Reason: health.FailureReason, Evidence: health.FailureReason, ObservedAt: health.LastObservedAt}
+		if s.canonical != nil {
+			payload := ManagedInstanceHealthChanged{EventID: transition.ID.String(), Health: *health, PreviousStatus: beforeRestart.Status, Severity: healthSeverity(health.Status, false), Reason: health.FailureReason, OccurredAt: health.LastObservedAt}
+			if err := s.canonical.Project(ctx, events.Event{Type: events.EventRuntimeInstanceHealthChanged, EntityID: instanceKeyString(spec.Key), Data: payload}); err != nil {
+				return err
+			}
+		}
 	}
 	completed, err := s.repo.CompleteRecoveryAttemptWithHealthEvent(ctx, attempt.CorrelationID, attempt.Result, attempt.Evidence, health, transition)
 	if err != nil {

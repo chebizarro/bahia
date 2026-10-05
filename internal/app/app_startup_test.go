@@ -49,10 +49,11 @@ func TestNewStartsEmergencyModeWithoutDatabase(t *testing.T) {
 	require.NotNil(t, app.Health)
 }
 
-func TestNewWiresDBLessRouteCanarySupervision(t *testing.T) {
+func TestNewWiresDBLessRouteAndManagedSupervision(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
 	cfg := startupTestConfig("emergency")
+	cfg.Supervision.Enabled = true
 	cfg.RouteCanaries.Enabled = true
 	cfg.EdgeRouting.Enabled = true
 	app, err := New(cfg)
@@ -60,6 +61,8 @@ func TestNewWiresDBLessRouteCanarySupervision(t *testing.T) {
 	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
 	require.Nil(t, app.DB)
+	require.NotNil(t, app.ManagedInstanceSupervisor)
+	require.True(t, appHasRunner(app, "managed-instance-supervisor"))
 	require.True(t, appHasRunner(app, "route-canary-supervisor"))
 }
 

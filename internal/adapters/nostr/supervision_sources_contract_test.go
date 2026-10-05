@@ -9,16 +9,25 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
+	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
+type supervisionContractResolver struct{ runtime runtime.Runtime }
+
+func (r supervisionContractResolver) Resolve(*domain.Service, *domain.Environment) (runtime.Runtime, error) {
+	return r.runtime, nil
+}
+
 // TestSupervisionSourcesReadRelayFirstRecords pins the contract between the
-// cp-state record builders and the supervisors' local-store sources (B-33): the
-// desired-state record the daemon publishes is exactly what route-canary
-// supervision enumerates, with no repository in between.
+// cp-state record builders and the supervisors' local-store sources (B-33,
+// B-34): the records the daemon publishes for a service, its environment and
+// its desired state are exactly what route-canary and managed-instance
+// supervision enumerate, with no repository in between.
 func TestSupervisionSourcesReadRelayFirstRecords(t *testing.T) {
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 	require.NoError(t, err)
@@ -56,6 +65,7 @@ func TestSupervisionSourcesReadRelayFirstRecords(t *testing.T) {
 	local, err := service.NewLocalSupervisionState(store, secret.Public().Hex())
 	require.NoError(t, err)
 	routes := service.LocalRoutePlanSource{State: local}
+	instances := &service.LocalSupervisionSpecSource{State: local, Resolver: supervisionContractResolver{runtime: runtime.NewDockerObserver("unix:///var/run/docker.sock", zap.NewNop())}}
 	ctx := context.Background()
 
 	plans, err := routes.ListManagedRoutePlans(ctx)
@@ -63,10 +73,20 @@ func TestSupervisionSourcesReadRelayFirstRecords(t *testing.T) {
 	require.Len(t, plans, 1)
 	require.Equal(t, route, plans[0], "the signed route plan is probed as published")
 
-	// The state publisher's tombstone withdraws it.
+	specs, err := instances.SupervisionSpecs(ctx)
+	require.NoError(t, err)
+	require.Len(t, specs, 1)
+	require.Equal(t, domain.ManagedInstanceKey{ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: unit.ID, RuntimeTargetName: svc.RuntimeTargetName()}, specs[0].Key)
+	require.True(t, specs[0].DesiredRunning)
+	require.Equal(t, "production", specs[0].Host)
+
+	// The state publisher's tombstone withdraws both.
 	tombstoneTags, tombstoneContent := RuntimeStateTombstoneRecord(svc.ID, env.ID)
 	save(KindServiceState, ServiceStateDTag(svc.ID, env.ID), true, tombstoneTags, tombstoneContent)
 	plans, err = routes.ListManagedRoutePlans(ctx)
 	require.NoError(t, err)
 	require.Empty(t, plans)
+	specs, err = instances.SupervisionSpecs(ctx)
+	require.NoError(t, err)
+	require.Empty(t, specs)
 }

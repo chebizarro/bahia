@@ -77,6 +77,14 @@ func (p *ManagedInstanceHealthProjector) handle(ctx context.Context, e events.Ev
 	return fmt.Errorf("unsupported managed instance event payload %T", e.Data)
 }
 
+// Project publishes the canonical observables of one supervisor event
+// synchronously. The supervisor calls it before it indexes the observation,
+// then announces the same event on the bus; that delivery finds every record
+// already published and signs nothing again.
+func (p *ManagedInstanceHealthProjector) Project(ctx context.Context, e events.Event) error {
+	return p.handle(ctx, e)
+}
+
 func (p *ManagedInstanceHealthProjector) projectHealth(ctx context.Context, payload ManagedInstanceHealthChanged) error {
 	h := sanitizeProjectedHealth(payload.Health)
 	base := managedInstanceTags(h, managedHealthStatusSchema)

@@ -522,13 +522,13 @@ func New(cfg *config.Config) (*App, error) {
 			servicePubkey = secret.Public().Hex()
 		}
 	}
-	// Route-canary supervision reads its desired set and its durable progress
-	// from the daemon's canonical records in the local event store (B-33). It
-	// needs the service key, never PostgreSQL.
+	// Route-canary and managed-instance supervision read their desired set and
+	// their durable progress from the daemon's canonical records in the local
+	// event store (B-33, B-34). They need the service key, never PostgreSQL.
 	localSupervisionState, supervisionStateErr := service.NewLocalSupervisionState(localEventStore, servicePubkey)
 	supervisionFromLocalState := supervisionStateErr == nil
-	if !supervisionFromLocalState && cfg.RouteCanaries.Enabled {
-		logger.Warn("route canary supervision is disabled: the daemon has no service key to read its canonical state with",
+	if !supervisionFromLocalState && (cfg.RouteCanaries.Enabled || cfg.Supervision.Enabled) {
+		logger.Warn("route canary and managed instance supervision are disabled: the daemon has no service key to read its canonical state with",
 			zap.Error(supervisionStateErr))
 	}
 	var routeCanarySupervisor *service.RouteCanarySupervisor
@@ -622,18 +622,27 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	var managedInstanceSupervisor *service.ManagedInstanceSupervisor
-	if cfg.Supervision.Enabled && managedInstanceHealthRepo != nil && runtimeApplyLock != nil {
+	if cfg.Supervision.Enabled && supervisionFromLocalState {
 		configuredSpecs, specErr := configuredSupervisionSpecs(cfg.Supervision, logger)
 		if specErr != nil {
 			return nil, specErr
 		}
 		policy := defaultSupervisionPolicy(cfg.Supervision.ObserveOnly)
-		source := &service.RepositorySupervisionSpecSource{Configured: configuredSpecs, States: stateRepo, Services: serviceRepo, Environments: envRepo, Units: deploymentUnitRepo, Resolver: runtimeResolver, Policy: policy, MemoryThreshold: cfg.Supervision.MemoryThreshold}
-		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, managedInstanceHealthRepo, runtimeApplyLock, publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
+		source := &service.LocalSupervisionSpecSource{Configured: configuredSpecs, State: localSupervisionState, Resolver: runtimeResolver, Policy: policy, MemoryThreshold: cfg.Supervision.MemoryThreshold}
+		// PostgreSQL is a write-behind query index of health, recovery attempts
+		// and maintenance overrides; the canonical records are published first.
+		state := service.NewLocalManagedInstanceState(localSupervisionState, managedInstanceHealthRepo, nostrPub, logger)
+		// A recovery shares the deploys' environment lock when PostgreSQL holds
+		// it and is never blocked by an unreachable database.
+		var deployLock service.ManagedInstanceTryLocker
+		if runtimeApplyLock != nil {
+			deployLock = runtimeApplyLock
+		}
+		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, state, service.NewSupervisionApplyLock(deployLock, logger), publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("configuring managed instance supervisor: %w", err)
 		}
-		service.NewManagedInstanceHealthProjector(publisher, nostrPub, logger)
+		managedInstanceSupervisor.SetCanonicalProjector(service.NewManagedInstanceHealthProjector(publisher, nostrPub, logger))
 	}
 
 	// Telemetry.
@@ -767,10 +776,13 @@ func New(cfg *config.Config) (*App, error) {
 		SelfAuthors:         compactBootstrapAuthors([]string{servicePubkey}),
 		Resume:              inboundSyncConfigScoped(cfg.Nostr.LocalStore, cfg.Nostr.ServiceRelays),
 	})
-	// The supervisor acts on the local event store only after its first relay
+	// Supervisors act on the local event store only after its first relay
 	// catch-up.
 	if routeCanarySupervisor != nil {
 		routeCanarySupervisor.SetReadiness(bootstrapper)
+	}
+	if managedInstanceSupervisor != nil {
+		managedInstanceSupervisor.SetReadiness(bootstrapper)
 	}
 	healthProvider.SetBootstrapFunc(func() (phase string, ready bool) {
 		progress := bootstrapper.Progress()
