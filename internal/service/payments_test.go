@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -106,11 +107,39 @@ func (m *mockWorkerRepoForPayments) UpdateStatus(_ context.Context, _ string, _ 
 
 // --- Tests ---
 
+type mockPaymentCanonical struct {
+	mu      sync.Mutex
+	records map[uuid.UUID]domain.PaymentRecord
+	err     error
+}
+
+func (m *mockPaymentCanonical) PublishPaymentRecord(_ context.Context, rec *domain.PaymentRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.err != nil {
+		return m.err
+	}
+	m.records[rec.ID] = *rec
+	return nil
+}
+func (m *mockPaymentCanonical) ListPaymentRecords(context.Context) ([]domain.PaymentRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]domain.PaymentRecord, 0, len(m.records))
+	for _, rec := range m.records {
+		out = append(out, rec)
+	}
+	return out, nil
+}
+
 func newTestPaymentService() (*PaymentService, *mockPaymentRepo, *mockRunRepo, *mockWorkerRepoForPayments) {
 	paymentRepo := newMockPaymentRepo()
 	runRepo := newMockRunRepo()
 	workerRepo := &mockWorkerRepoForPayments{workers: make(map[string]*domain.Worker)}
 	svc := NewPaymentService(paymentRepo, zap.NewNop())
+	canonical := &mockPaymentCanonical{records: make(map[uuid.UUID]domain.PaymentRecord)}
+	svc.SetCPStatePublisher(canonical)
+	svc.SetCanonicalView(canonical)
 	return svc, paymentRepo, runRepo, workerRepo
 }
 

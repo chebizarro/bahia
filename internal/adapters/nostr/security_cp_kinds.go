@@ -7,4 +7,6 @@ const (
 	KindSecurityFindingRecord       = kinds.SecurityFindingRecord
 	KindSecurityScheduleRecord      = kinds.SecurityScheduleRecord
 	KindSecurityFindingDetailRecord = kinds.SecurityFindingDetailRecord
+	KindSecurityTargetRecord        = int(kinds.CPStateFamilySecurityTarget)
+	KindSecurityRunRecord           = int(kinds.CPStateFamilySecurityRun)
 )

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +33,7 @@ type SecuritySchedulerConfig struct {
 }
 
 type SecurityScheduler struct {
+	mu            sync.Mutex
 	repo          repository.SecurityRepository
 	scanner       SecurityScheduledScanner
 	deriver       SecurityScheduleDeriver
@@ -92,6 +94,11 @@ func (s *SecurityScheduler) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+			if s.deriver != nil {
+				if err := s.deriver.DeriveSecurityScanSchedules(ctx); err != nil {
+					s.logger.Warn("security schedule derivation failed", zap.Error(err))
+				}
+			}
 			if err := s.Tick(ctx); err != nil {
 				s.logger.Warn("security scheduler tick failed", zap.Error(err))
 			}
@@ -103,15 +110,25 @@ func (s *SecurityScheduler) Tick(ctx context.Context) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	now := s.now().UTC()
-	due, err := s.repo.ClaimDueSecurityScanSchedules(ctx, now, s.batchSize, s.workerID, now.Add(s.leaseDuration))
+	schedules, err := s.repo.ListSecurityScanSchedulesFiltered(ctx, repository.SecurityScheduleFilter{EnabledOnly: true})
 	if err != nil {
 		return err
 	}
-	for _, schedule := range due {
-		if err := s.dispatchSchedule(ctx, schedule, now); err != nil {
-			s.logger.Warn("security scheduled scan dispatch failed", zap.String("schedule_id", schedule.ID.String()), zap.Error(err))
+	dispatched := 0
+	for _, schedule := range schedules {
+		if !schedule.Enabled || schedule.NextDueAt.After(now) {
+			continue
 		}
+		if dispatched >= s.batchSize {
+			break
+		}
+		if err := s.dispatchSchedule(ctx, schedule, now); err != nil {
+			return err
+		}
+		dispatched++
 	}
 	return nil
 }
@@ -130,7 +147,8 @@ func (s *SecurityScheduler) dispatchSchedule(ctx context.Context, schedule domai
 	if err != nil {
 		return err
 	}
-	accepted, err := s.scanner.SubmitScan(ctx, SecurityScanRequest{Target: targetInputFromStored(target), Trigger: domain.SecurityTriggerScheduled, RequestedBy: s.workerID})
+	claimID := uuid.NewSHA1(uuid.NameSpaceOID, []byte("security:scheduled-run:"+schedule.ID.String()+":"+schedule.NextDueAt.UTC().Format(time.RFC3339Nano)))
+	accepted, err := s.scanner.SubmitScan(ctx, SecurityScanRequest{Target: targetInputFromStored(target), Trigger: domain.SecurityTriggerScheduled, RequestedBy: s.workerID, ScheduledRunID: claimID})
 	if err != nil {
 		return err
 	}

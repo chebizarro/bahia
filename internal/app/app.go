@@ -1984,14 +1984,13 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	var securityScanner *service.SecurityScanner
-	if securityRepo != nil && sbomStorageResolver != nil && nostrPub != nil && relayPool != nil {
-		// bahia-irsry.60: confidential cp-state for security findings.
-		var securityCPPub *nostrAdapter.SecurityCanonicalPublisher
-		if nostrProjector != nil && confidentialEncryptor != nil {
-			securityCPPub = nostrAdapter.NewSecurityCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
-		}
+	if sbomStorageResolver != nil && nostrPub != nil && relayPool != nil && nostrProjector != nil && confidentialEncryptor != nil {
+		securityCPPub := nostrAdapter.NewSecurityCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
+		canonicalSecurity := service.NewCanonicalSecurityRepository(securityRepo, securityCPPub, logger)
+		policySvc.SetSecurityRepository(canonicalSecurity)
+		policySvc.SetCanonicalPolicyView(nostrAdapter.NewSecurityPolicyView(projectionHistory))
 		securityScanner = service.NewSecurityScanner(service.SecurityScannerConfig{
-			Repo:       securityRepo,
+			Repo:       canonicalSecurity,
 			SBOMs:      sbomManifestRepo,
 			Policies:   policySvc,
 			Events:     publisher,
@@ -2002,17 +2001,16 @@ func New(cfg *config.Config) (*App, error) {
 			Pubkey:     servicePubkey,
 			Logger:     logger,
 		})
-		// Publications recorded as queued become published when the outbox
-		// delivers their event, and failed_terminal if it abandons it.
 		nostrPub.OnDeliveryAbandoned(securityScanner.HandlePublishAbandoned)
 		nostrPub.OnDelivered(securityScanner.HandlePublishDelivered)
 		bgManager.RegisterWithOptions(securityScanner)
-		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{Repo: securityRepo, Scanner: securityScanner, Deriver: policySvc, Logger: logger}))
-		// bahia-irsry.60: wire schedule cp-state publisher to policy service.
-		if securityCPPub != nil {
-			policySvc.SetSecurityScheduleCPPublisher(securityCPPub)
-		}
-		logger.Info("security OSV scanner and scheduler registered")
+		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{Repo: canonicalSecurity, Scanner: securityScanner, Deriver: policySvc, Logger: logger}))
+		nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+			if err := canonicalSecurity.RebuildIndex(ctx); err != nil {
+				logger.Warn("security SQL index rebuild failed", zap.Error(err))
+			}
+		})
+		logger.Info("security OSV scanner and canonical scheduler registered")
 	}
 
 	// Payment service exposes payment records and history; estimates use relay-backed worker pricing.
@@ -2023,6 +2021,12 @@ func New(cfg *config.Config) (*App, error) {
 	if nostrProjector != nil && confidentialEncryptor != nil {
 		paymentCanonical := nostrAdapter.NewPaymentCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
 		paymentSvc.SetCPStatePublisher(paymentCanonical)
+		paymentSvc.SetCanonicalView(paymentCanonical)
+		nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+			if err := paymentSvc.RebuildIndex(ctx); err != nil {
+				logger.Warn("payment SQL index rebuild failed", zap.Error(err))
+			}
+		})
 		logger.Info("payment cp-state publisher wired")
 	}
 	if cfg.Cashu.Enabled {

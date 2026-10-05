@@ -472,9 +472,14 @@ func (r *PgSecurityRepository) UpsertSecurityScanSchedule(ctx context.Context, s
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($12, '{}'::jsonb),$13,$14)
 		ON CONFLICT (policy_id, target_key_hash) DO UPDATE SET
 			target_id = EXCLUDED.target_id,
-			enabled = EXCLUDED.enabled,
-			interval_seconds = EXCLUDED.interval_seconds,
-			metadata = EXCLUDED.metadata,
+            enabled = EXCLUDED.enabled,
+            interval_seconds = EXCLUDED.interval_seconds,
+            next_due_at = EXCLUDED.next_due_at,
+            last_dispatched_at = EXCLUDED.last_dispatched_at,
+            last_run_id = EXCLUDED.last_run_id,
+            lease_until = NULL,
+            leased_by = NULL,
+            metadata = EXCLUDED.metadata,
 			updated_at = EXCLUDED.updated_at
 	`, schedule.ID, schedule.PolicyID, schedule.TargetID, schedule.TargetKeyHash, schedule.Enabled, schedule.IntervalSeconds,
 		schedule.NextDueAt, schedule.LeaseUntil, nilIfEmpty(schedule.LeasedBy), schedule.LastDispatchedAt, schedule.LastRunID,

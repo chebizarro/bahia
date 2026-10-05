@@ -228,7 +228,17 @@ func projectionFingerprint(wireKind int, tags gonostr.Tags, content string) stri
 	h := sha256.New()
 	h.Write([]byte(strconv.Itoa(wireKind) + "\x00" + strings.Join(tagLines, "\x1e") + "\x00"))
 	_, keepRevision := revisionTokenFamilies[tagValue(tags, "legacy_kind")]
-	h.Write([]byte(stableContent(content, keepRevision)))
+	if stateHash := tagValue(tags, "state_hash"); stateHash != "" {
+		// Confidential ciphertext is randomized. Compare the signed keyed
+		// plaintext digest, plus the OCK version so key rotation still republishes.
+		var envelope struct {
+			KeyVersion string `json:"key_version"`
+		}
+		_ = json.Unmarshal([]byte(content), &envelope)
+		h.Write([]byte(stateHash + "\x00" + envelope.KeyVersion))
+	} else {
+		h.Write([]byte(stableContent(content, keepRevision)))
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 

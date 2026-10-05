@@ -43,9 +43,13 @@ func (r *PgPaymentRepository) Create(ctx context.Context, p *domain.PaymentRecor
 	if p.ID == uuid.Nil {
 		p.ID = uuid.New()
 	}
-	now := time.Now()
-	p.CreatedAt = now
-	p.UpdatedAt = now
+	now := time.Now().UTC()
+	if p.CreatedAt.IsZero() {
+		p.CreatedAt = now
+	}
+	if p.UpdatedAt.IsZero() {
+		p.UpdatedAt = now
+	}
 
 	_, err = r.pool.Exec(ctx, `
 		INSERT INTO payment_records (

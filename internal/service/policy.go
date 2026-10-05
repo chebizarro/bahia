@@ -30,7 +30,12 @@ type SecurityScheduleCPPublisher interface {
 	PublishSchedule(ctx context.Context, schedule *domain.SecurityScanSchedule) error
 }
 
+type SecurityPolicyView interface {
+	ListSecurityPolicies(context.Context) ([]domain.DeploymentPolicy, error)
+}
+
 type PolicyService struct {
+	canonicalPolicies   SecurityPolicyView
 	policies            repository.DeploymentPolicyRepository
 	signatures          repository.ArtifactSignatureRepository
 	sboms               repository.SBOMRepository
@@ -97,6 +102,8 @@ func NewPolicyService(
 func (s *PolicyService) SetSecurityScheduleCPPublisher(pub SecurityScheduleCPPublisher) {
 	s.scheduleCPPublisher = pub
 }
+func (s *PolicyService) SetSecurityRepository(repo repository.SecurityRepository) { s.security = repo }
+func (s *PolicyService) SetCanonicalPolicyView(view SecurityPolicyView)           { s.canonicalPolicies = view }
 
 // Evaluate runs all applicable policies against an artifact for the given environment.
 // Returns the aggregate evaluation result.
@@ -770,18 +777,28 @@ func (s *PolicyService) UpdatePolicy(ctx context.Context, p *domain.DeploymentPo
 // DeletePolicy removes a policy.
 func (s *PolicyService) DeletePolicy(ctx context.Context, id uuid.UUID) error {
 	if s.security != nil {
-		_ = s.security.DisableSecurityScanSchedulesForPolicy(ctx, id, time.Now().UTC())
+		if err := s.security.DisableSecurityScanSchedulesForPolicy(ctx, id, time.Now().UTC()); err != nil {
+			return err
+		}
 	}
 	return s.policies.Delete(ctx, id)
 }
 
 func (s *PolicyService) DeriveSecurityScanSchedules(ctx context.Context) error {
-	if s.security == nil || s.policies == nil {
+	if s.security == nil {
 		return nil
 	}
-	policies, err := s.policies.List(ctx, true)
+	var policies []domain.DeploymentPolicy
+	var err error
+	if s.canonicalPolicies != nil {
+		policies, err = s.canonicalPolicies.ListSecurityPolicies(ctx)
+	} else if s.policies != nil {
+		policies, err = s.policies.List(ctx, true)
+	} else {
+		return fmt.Errorf("canonical policy view is not configured")
+	}
 	if err != nil {
-		return fmt.Errorf("listing policies for Security schedule derivation: %w", err)
+		return fmt.Errorf("listing canonical policies for security schedule derivation: %w", err)
 	}
 	for i := range policies {
 		if err := s.syncSecuritySchedulesForPolicy(ctx, &policies[i]); err != nil {
@@ -814,45 +831,51 @@ func (s *PolicyService) syncSecuritySchedulesForPolicy(ctx context.Context, p *d
 		return nil
 	}
 	rules := enabledSecurityOSVScanRules(p)
-	if !p.Enabled || len(rules) == 0 {
-		return s.security.DisableSecurityScanSchedulesForPolicy(ctx, p.ID, time.Now().UTC())
-	}
-	if err := s.security.DisableSecurityScanSchedulesForPolicy(ctx, p.ID, time.Now().UTC()); err != nil {
-		return err
-	}
+	desired := map[string]domain.SecurityScanSchedule{}
 	for _, rule := range rules {
 		interval := getIntParam(rule.Params, "interval_seconds", getIntParam(rule.Params, "schedule_seconds", 86400))
-		if interval <= 0 {
+		if interval <= 0 || !p.Enabled {
 			continue
 		}
 		targets, err := s.securityTargetsForScheduleRule(ctx, rule)
 		if err != nil {
 			return err
 		}
-		now := time.Now().UTC()
 		for _, target := range targets {
-			schedule := &domain.SecurityScanSchedule{PolicyID: p.ID, TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, Enabled: true, IntervalSeconds: interval, NextDueAt: now, Metadata: map[string]any{"source": "policy", "policy_name": p.Name, "rule_type": string(rule.Type)}}
-			if err := s.security.UpsertSecurityScanSchedule(ctx, schedule); err != nil {
-				return err
+			desired[target.TargetKeyHash] = domain.SecurityScanSchedule{PolicyID: p.ID, TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, Enabled: true, IntervalSeconds: interval, Metadata: map[string]any{"source": "policy", "policy_name": p.Name, "rule_type": string(rule.Type)}}
+		}
+	}
+	existing, err := s.security.ListSecurityScanSchedulesFiltered(ctx, repository.SecurityScheduleFilter{PolicyID: &p.ID})
+	if err != nil {
+		return err
+	}
+	for _, schedule := range desired {
+		schedule := schedule
+		if s.scheduleCPPublisher != nil {
+			if err := s.scheduleCPPublisher.PublishSchedule(ctx, &schedule); err != nil {
+				return fmt.Errorf("publish security schedule: %w", err)
 			}
-			s.publishScheduleCPState(ctx, schedule)
+		}
+		if err := s.security.UpsertSecurityScanSchedule(ctx, &schedule); err != nil {
+			return err
+		}
+	}
+	for _, schedule := range existing {
+		if _, ok := desired[schedule.TargetKeyHash]; ok || !schedule.Enabled {
+			continue
+		}
+		schedule.Enabled = false
+		schedule.UpdatedAt = time.Now().UTC()
+		if s.scheduleCPPublisher != nil {
+			if err := s.scheduleCPPublisher.PublishSchedule(ctx, &schedule); err != nil {
+				return fmt.Errorf("publish disabled security schedule: %w", err)
+			}
+		}
+		if err := s.security.UpsertSecurityScanSchedule(ctx, &schedule); err != nil {
+			return err
 		}
 	}
 	return nil
-}
-
-// publishScheduleCPState publishes a schedule as confidential cp-state.
-// Errors are logged, not propagated — the database is the source of truth.
-func (s *PolicyService) publishScheduleCPState(ctx context.Context, schedule *domain.SecurityScanSchedule) {
-	if s.scheduleCPPublisher == nil || schedule == nil {
-		return
-	}
-	if err := s.scheduleCPPublisher.PublishSchedule(ctx, schedule); err != nil {
-		s.logger.Warn("security schedule cp-state publish failed",
-			zap.String("schedule_id", schedule.ID.String()),
-			zap.Error(err),
-		)
-	}
 }
 
 func (s *PolicyService) securityTargetsForScheduleRule(ctx context.Context, rule domain.PolicyRule) ([]domain.SecurityTarget, error) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -45,8 +47,11 @@ func NewPaymentCanonicalPublisher(projector *Projector, encryptor ConfidentialSt
 // PublishPaymentRecord publishes a single payment record as a confidential
 // 30900 cp-state record. Called from PaymentService mutation sites.
 func (p *PaymentCanonicalPublisher) PublishPaymentRecord(ctx context.Context, rec *domain.PaymentRecord) error {
-	if p.projector == nil || !p.projector.Enabled() || rec == nil {
+	if rec == nil {
 		return nil
+	}
+	if p.projector == nil || !p.projector.Enabled() {
+		return fmt.Errorf("payment canonical projector is unavailable")
 	}
 	dTag := PaymentDTag(rec.ID)
 	tags, content := PaymentRecordContent(rec)
@@ -71,6 +76,7 @@ func (p *PaymentCanonicalPublisher) publishConfidential(ctx context.Context, leg
 		return fmt.Errorf("encrypt payment state: %w", err)
 	}
 
+	extraTags = append(extraTags, confidentialStateHash(p.projector.privateKey, content))
 	return p.projector.publishControlState(ctx, legacyKind, dTag, deleted, extraTags, encrypted, entityType, entityID)
 }
 
@@ -119,4 +125,46 @@ func PaymentRecordContent(rec *domain.PaymentRecord) (gonostr.Tags, string) {
 
 	contentJSON, _ := json.Marshal(payload)
 	return tags, string(contentJSON)
+}
+
+// ListPaymentRecords decodes the authored local cp-state view. The event store
+// retains only the winning event for each replaceable coordinate.
+func (p *PaymentCanonicalPublisher) ListPaymentRecords(ctx context.Context) ([]domain.PaymentRecord, error) {
+	if p == nil || p.projector == nil || p.projector.history == nil || p.encryptor == nil {
+		return nil, fmt.Errorf("payment canonical local view is unavailable")
+	}
+	const limit = 1000000
+	family := cpStateFamilies[KindPaymentRecord]
+	records, err := p.projector.history.FindByTag(ctx, "t", family.topic, []int{KindCASControlState}, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(records) >= limit {
+		return nil, fmt.Errorf("payment canonical view reached history limit")
+	}
+	out := make([]domain.PaymentRecord, 0, len(records))
+	for _, record := range records {
+		tags := recordTags(record)
+		if tagValue(tags, "legacy_kind") != strconv.Itoa(KindPaymentRecord) || tagValue(tags, "deleted") == "true" {
+			continue
+		}
+		dTag := tagValue(tags, "d")
+		if dTag == "" {
+			return nil, fmt.Errorf("payment record %s lacks d tag", record.ID)
+		}
+		plaintext, err := p.encryptor.DecryptConfidential(ctx, record.Content, KindPaymentRecord, dTag, family.topic)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt payment %s: %w", record.ID, err)
+		}
+		var rec domain.PaymentRecord
+		if err := json.Unmarshal(plaintext, &rec); err != nil {
+			return nil, fmt.Errorf("decode payment %s: %w", record.ID, err)
+		}
+		if PaymentDTag(rec.ID) != dTag {
+			return nil, fmt.Errorf("payment %s coordinate mismatch", record.ID)
+		}
+		out = append(out, rec)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
 }

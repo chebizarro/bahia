@@ -465,8 +465,23 @@ func (r *memorySecurityRepo) UpsertSecurityScanSchedule(_ context.Context, sched
 	r.schedules[schedule.ID] = &c
 	return nil
 }
-func (r *memorySecurityRepo) ListSecurityScanSchedulesFiltered(context.Context, repository.SecurityScheduleFilter) ([]domain.SecurityScanSchedule, error) {
-	return nil, nil
+func (r *memorySecurityRepo) ListSecurityScanSchedulesFiltered(_ context.Context, filter repository.SecurityScheduleFilter) ([]domain.SecurityScanSchedule, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := []domain.SecurityScanSchedule{}
+	for _, v := range r.schedules {
+		if filter.EnabledOnly && !v.Enabled {
+			continue
+		}
+		if filter.PolicyID != nil && v.PolicyID != *filter.PolicyID {
+			continue
+		}
+		if filter.TargetKeyHash != "" && v.TargetKeyHash != filter.TargetKeyHash {
+			continue
+		}
+		out = append(out, *v)
+	}
+	return out, nil
 }
 func (r *memorySecurityRepo) ClaimDueSecurityScanSchedules(_ context.Context, now time.Time, _ int, leasedBy string, leaseUntil time.Time) ([]domain.SecurityScanSchedule, error) {
 	r.mu.Lock()
