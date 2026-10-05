@@ -472,14 +472,14 @@ func (r *PgSecurityRepository) UpsertSecurityScanSchedule(ctx context.Context, s
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($12, '{}'::jsonb),$13,$14)
 		ON CONFLICT (policy_id, target_key_hash) DO UPDATE SET
 			target_id = EXCLUDED.target_id,
-            enabled = EXCLUDED.enabled,
-            interval_seconds = EXCLUDED.interval_seconds,
-            next_due_at = EXCLUDED.next_due_at,
-            last_dispatched_at = EXCLUDED.last_dispatched_at,
-            last_run_id = EXCLUDED.last_run_id,
-            lease_until = NULL,
-            leased_by = NULL,
-            metadata = EXCLUDED.metadata,
+			enabled = EXCLUDED.enabled,
+			interval_seconds = EXCLUDED.interval_seconds,
+			next_due_at = EXCLUDED.next_due_at,
+			last_dispatched_at = EXCLUDED.last_dispatched_at,
+			last_run_id = EXCLUDED.last_run_id,
+			lease_until = NULL,
+			leased_by = NULL,
+			metadata = EXCLUDED.metadata,
 			updated_at = EXCLUDED.updated_at
 	`, schedule.ID, schedule.PolicyID, schedule.TargetID, schedule.TargetKeyHash, schedule.Enabled, schedule.IntervalSeconds,
 		schedule.NextDueAt, schedule.LeaseUntil, nilIfEmpty(schedule.LeasedBy), schedule.LastDispatchedAt, schedule.LastRunID,
@@ -514,30 +514,6 @@ func (r *PgSecurityRepository) ListSecurityScanSchedulesFiltered(ctx context.Con
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing filtered security scan schedules: %w", err)
-	}
-	defer rows.Close()
-	return scanSecurityScheduleRows(rows)
-}
-
-func (r *PgSecurityRepository) ClaimDueSecurityScanSchedules(ctx context.Context, now time.Time, limit int, leasedBy string, leaseUntil time.Time) ([]domain.SecurityScanSchedule, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	rows, err := r.pool.Query(ctx, `
-		UPDATE security_scan_schedules
-		SET lease_until = $3, leased_by = $4, updated_at = $1
-		WHERE id IN (
-			SELECT id FROM security_scan_schedules
-			WHERE enabled = true
-			  AND next_due_at <= $1
-			  AND (lease_until IS NULL OR lease_until <= $1)
-			ORDER BY next_due_at ASC
-			LIMIT $2
-			FOR UPDATE SKIP LOCKED
-		)
-		RETURNING `+securityScheduleColumns, now, limit, leaseUntil, strings.TrimSpace(leasedBy))
-	if err != nil {
-		return nil, fmt.Errorf("claiming due security scan schedules: %w", err)
 	}
 	defer rows.Close()
 	return scanSecurityScheduleRows(rows)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -20,6 +19,13 @@ import (
 // through the shared signing/outbox pipeline. Content is OCK-encrypted under
 // the "fleet" scope: security findings contain per-org vulnerability data and
 // scan schedules contain policy configuration that must not appear in plaintext.
+//
+// It is the canonical security store (audit B-32): targets, runs, schedules
+// and findings are published here before any SQL index is written, and the
+// List methods read them back from the daemon's own retained records in the
+// local event store. A run record on "security:run:<run-id>" is the signed
+// claim of one scan; the scheduler derives that id from the schedule and its
+// due time, so concurrent wakeups address one coordinate.
 //
 // Each finding is one 30900 record (d="security:finding:<hash>") so no single
 // event exceeds NIP-44's 65,535-byte plaintext limit. This replaces the
@@ -121,7 +127,9 @@ func (p *SecurityCanonicalPublisher) PublishFindingDetail(ctx context.Context, f
 	}
 	// Publish a base-coordinate manifest last. Readers use it to choose the
 	// current fixed part set and ignore stale extra parts from an older, larger
-	// detail. If a part publish fails, the previous manifest remains authoritative.
+	// detail. Parts are replaced in place, so a part publish that fails leaves
+	// a mixed set the manifest does not describe; readers then report no
+	// detail for the finding until a retry completes the set.
 	tags, content := SecurityFindingDetailManifestContent(finding.FindingKeyHash, finding.OSVID, len(chunks))
 	return p.publishConfidential(ctx, KindSecurityFindingDetailRecord, SecurityFindingDetailDTag(finding.FindingKeyHash), false, tags, content, "security_finding_detail.projection", &finding.ID)
 }
@@ -142,8 +150,7 @@ func (p *SecurityCanonicalPublisher) publishConfidential(ctx context.Context, le
 		return fmt.Errorf("encrypt security state: %w", err)
 	}
 
-	extraTags = append(extraTags, confidentialStateHash(p.projector.privateKey, content))
-	return p.projector.publishControlState(ctx, legacyKind, dTag, deleted, extraTags, encrypted, entityType, entityID)
+	return p.projector.publishCanonicalFirst(ctx, legacyKind, dTag, deleted, extraTags, content, encrypted, entityType, entityID)
 }
 
 // SecurityFindingDetailDTag returns the d-tag for a finding's detail record.
@@ -353,23 +360,29 @@ func (p *SecurityCanonicalPublisher) PublishRun(ctx context.Context, run *domain
 	return p.publishConfidential(ctx, KindSecurityRunRecord, d, false, tags, string(content), "security_run.projection", &run.ID)
 }
 
-func (p *SecurityCanonicalPublisher) listState(ctx context.Context, kind int) ([][]byte, error) {
+// listState returns the decrypted content of the daemon's retained records of
+// one security family. match, when non-nil, selects records by their public
+// tags before anything is decrypted. A record that cannot be decrypted fails
+// the read: scheduling and claims must not act on a partial view.
+func (p *SecurityCanonicalPublisher) listState(ctx context.Context, kind int, match func(gonostr.Tags) bool) ([][]byte, error) {
 	if p == nil || p.projector == nil || p.projector.history == nil || p.encryptor == nil {
 		return nil, fmt.Errorf("security canonical local view is unavailable")
 	}
-	const limit = 1000000
 	family := cpStateFamilies[kind]
-	records, err := p.projector.history.FindByTag(ctx, "t", family.topic, []int{KindCASControlState}, limit)
+	records, err := p.projector.history.FindByTag(ctx, "t", family.topic, []int{KindCASControlState}, canonicalViewLimit)
 	if err != nil {
 		return nil, err
 	}
-	if len(records) >= limit {
+	if len(records) >= canonicalViewLimit {
 		return nil, fmt.Errorf("security %s view reached history limit", family.entity)
 	}
 	out := make([][]byte, 0, len(records))
 	for _, record := range records {
 		tags := recordTags(record)
-		if tagValue(tags, "legacy_kind") != strconv.Itoa(kind) || tagValue(tags, "deleted") == "true" {
+		if tagValue(tags, "legacy_kind") != strconv.Itoa(kind) || isTombstoneTags(tags) {
+			continue
+		}
+		if match != nil && !match(tags) {
 			continue
 		}
 		d := tagValue(tags, "d")
@@ -384,14 +397,11 @@ func (p *SecurityCanonicalPublisher) listState(ctx context.Context, kind int) ([
 	}
 	return out, nil
 }
-func (p *SecurityCanonicalPublisher) ListSecurityTargets(ctx context.Context) ([]domain.SecurityTarget, error) {
-	raw, err := p.listState(ctx, KindSecurityTargetRecord)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]domain.SecurityTarget, 0, len(raw))
+
+func decodeSecurityState[T any](raw [][]byte) ([]T, error) {
+	out := make([]T, 0, len(raw))
 	for _, b := range raw {
-		var v domain.SecurityTarget
+		var v T
 		if err := json.Unmarshal(b, &v); err != nil {
 			return nil, err
 		}
@@ -399,71 +409,123 @@ func (p *SecurityCanonicalPublisher) ListSecurityTargets(ctx context.Context) ([
 	}
 	return out, nil
 }
-func (p *SecurityCanonicalPublisher) ListSecurityRuns(ctx context.Context) ([]domain.SecurityScanRun, error) {
-	raw, err := p.listState(ctx, KindSecurityRunRecord)
+
+// matchSecurityTags selects records whose public tags carry every non-empty
+// wanted value.
+func matchSecurityTags(want map[string]string) func(gonostr.Tags) bool {
+	return func(tags gonostr.Tags) bool {
+		for name, value := range want {
+			if value != "" && tagValue(tags, name) != value {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// ListSecurityTargets returns the retained scan targets; targetKeyHash, when
+// set, selects one.
+func (p *SecurityCanonicalPublisher) ListSecurityTargets(ctx context.Context, targetKeyHash string) ([]domain.SecurityTarget, error) {
+	raw, err := p.listState(ctx, KindSecurityTargetRecord, matchSecurityTags(map[string]string{"target_key_hash": targetKeyHash}))
 	if err != nil {
 		return nil, err
 	}
-	out := make([]domain.SecurityScanRun, 0, len(raw))
-	for _, b := range raw {
-		var v domain.SecurityScanRun
-		if err := json.Unmarshal(b, &v); err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, nil
+	return decodeSecurityState[domain.SecurityTarget](raw)
 }
+
+// ListSecurityRuns returns the retained scan runs; runID (when not nil) and
+// targetKeyHash (when set) narrow the result.
+func (p *SecurityCanonicalPublisher) ListSecurityRuns(ctx context.Context, runID uuid.UUID, targetKeyHash string) ([]domain.SecurityScanRun, error) {
+	want := map[string]string{"target_key_hash": targetKeyHash}
+	if runID != uuid.Nil {
+		want["run_id"] = runID.String()
+	}
+	raw, err := p.listState(ctx, KindSecurityRunRecord, matchSecurityTags(want))
+	if err != nil {
+		return nil, err
+	}
+	return decodeSecurityState[domain.SecurityScanRun](raw)
+}
+
+// ListSecuritySchedules returns every retained scan schedule.
 func (p *SecurityCanonicalPublisher) ListSecuritySchedules(ctx context.Context) ([]domain.SecurityScanSchedule, error) {
-	raw, err := p.listState(ctx, KindSecurityScheduleRecord)
+	raw, err := p.listState(ctx, KindSecurityScheduleRecord, nil)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]domain.SecurityScanSchedule, 0, len(raw))
-	for _, b := range raw {
-		var v domain.SecurityScanSchedule
-		if err := json.Unmarshal(b, &v); err != nil {
-			return nil, err
-		}
-		out = append(out, v)
+	return decodeSecurityState[domain.SecurityScanSchedule](raw)
+}
+
+// ListSecurityFindings returns the retained findings with their detail text
+// reassembled; runID (when not nil) and targetKeyHash (when set) narrow the
+// result. A finding coordinate holds the finding of the latest run that
+// reported it.
+func (p *SecurityCanonicalPublisher) ListSecurityFindings(ctx context.Context, runID uuid.UUID, targetKeyHash string) ([]domain.SecurityOSVFinding, error) {
+	want := map[string]string{"target_key_hash": targetKeyHash}
+	if runID != uuid.Nil {
+		want["run_id"] = runID.String()
+	}
+	raw, err := p.listState(ctx, KindSecurityFindingRecord, matchSecurityTags(want))
+	if err != nil {
+		return nil, err
+	}
+	out, err := decodeSecurityState[domain.SecurityOSVFinding](raw)
+	if err != nil || len(out) == 0 {
+		return out, err
+	}
+	wanted := make(map[string]struct{}, len(out))
+	for _, finding := range out {
+		wanted[finding.FindingKeyHash] = struct{}{}
+	}
+	details, err := p.findingDetails(ctx, wanted)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].Details = details[out[i].FindingKeyHash]
 	}
 	return out, nil
 }
-func (p *SecurityCanonicalPublisher) ListSecurityFindings(ctx context.Context) ([]domain.SecurityOSVFinding, error) {
-	raw, err := p.listState(ctx, KindSecurityFindingRecord)
-	if err != nil {
-		return nil, err
+
+// findingDetailHash returns the finding key hash a detail coordinate belongs
+// to and whether the coordinate is the base record (single detail, manifest
+// or tombstone) rather than a numbered part.
+func findingDetailHash(d string) (hash string, base, ok bool) {
+	rest, found := strings.CutPrefix(d, "security:finding-detail:")
+	if !found || rest == "" {
+		return "", false, false
 	}
-	out := make([]domain.SecurityOSVFinding, 0, len(raw))
-	for _, b := range raw {
-		var v domain.SecurityOSVFinding
-		if err := json.Unmarshal(b, &v); err != nil {
-			return nil, err
-		}
-		out = append(out, v)
+	if hash, _, isPart := strings.Cut(rest, ":part:"); isPart {
+		return hash, false, true
 	}
-	if len(out) == 0 {
-		return out, nil
-	}
-	const limit = 1000000
+	return rest, true, true
+}
+
+// findingDetails reassembles the detail text of the wanted findings from
+// their detail records. The base coordinate decides: a tombstone means no
+// detail, a single record carries the text, and a manifest names how many
+// parts make up the current text, so stale parts of an older, longer detail
+// are ignored. A part set the manifest does not describe (a multi-part
+// publish that stopped half way) yields no detail rather than a mixture.
+func (p *SecurityCanonicalPublisher) findingDetails(ctx context.Context, wanted map[string]struct{}) (map[string]string, error) {
 	family := cpStateFamilies[KindSecurityFindingDetailRecord]
-	records, err := p.projector.history.FindByTag(ctx, "t", family.topic, []int{KindCASControlState}, limit)
+	records, err := p.projector.history.FindByTag(ctx, "t", family.topic, []int{KindCASControlState}, canonicalViewLimit)
 	if err != nil {
 		return nil, err
 	}
-	if len(records) >= limit {
+	if len(records) >= canonicalViewLimit {
 		return nil, fmt.Errorf("security finding detail view reached history limit")
 	}
 	type detailPart struct {
 		index, total int
 		text         string
 	}
-	type detailManifest struct {
+	type detailBase struct {
 		text  string
 		total int
 	}
 	parts := map[string][]detailPart{}
-	manifests := map[string]detailManifest{}
+	bases := map[string]detailBase{}
 	deleted := map[string]bool{}
 	for _, record := range records {
 		tags := recordTags(record)
@@ -471,76 +533,73 @@ func (p *SecurityCanonicalPublisher) ListSecurityFindings(ctx context.Context) (
 			continue
 		}
 		d := tagValue(tags, "d")
-		baseHash := strings.TrimPrefix(d, "security:finding-detail:")
-		isBase := baseHash != d && !strings.Contains(baseHash, ":part:")
-		if isBase && tagValue(tags, "deleted") == "true" {
-			deleted[baseHash] = true
+		hash, isBase, ok := findingDetailHash(d)
+		if !ok {
 			continue
 		}
-		if tagValue(tags, "deleted") == "true" {
+		if _, want := wanted[hash]; !want {
+			continue
+		}
+		if isTombstoneTags(tags) {
+			if isBase {
+				deleted[hash] = true
+			}
 			continue
 		}
 		plaintext, err := p.encryptor.DecryptConfidential(ctx, record.Content, KindSecurityFindingDetailRecord, d, family.topic)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decrypt security finding detail %s: %w", record.ID, err)
 		}
 		var detail struct {
-			FindingKeyHash string `json:"finding_key_hash"`
-			Details        string `json:"details"`
-			PartIndex      int    `json:"part_index"`
-			TotalParts     int    `json:"total_parts"`
+			Details    string `json:"details"`
+			PartIndex  int    `json:"part_index"`
+			TotalParts int    `json:"total_parts"`
 		}
 		if err := json.Unmarshal(plaintext, &detail); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode security finding detail %s: %w", record.ID, err)
 		}
 		if detail.TotalParts == 0 {
 			detail.TotalParts = 1
 		}
 		if isBase {
-			manifests[detail.FindingKeyHash] = detailManifest{text: detail.Details, total: detail.TotalParts}
+			bases[hash] = detailBase{text: detail.Details, total: detail.TotalParts}
 			continue
 		}
-		parts[detail.FindingKeyHash] = append(parts[detail.FindingKeyHash], detailPart{detail.PartIndex, detail.TotalParts, detail.Details})
+		parts[hash] = append(parts[hash], detailPart{detail.PartIndex, detail.TotalParts, detail.Details})
 	}
-	for i := range out {
-		if deleted[out[i].FindingKeyHash] {
+	out := make(map[string]string, len(wanted))
+	for hash := range wanted {
+		if deleted[hash] {
 			continue
 		}
-		manifest, hasManifest := manifests[out[i].FindingKeyHash]
-		if hasManifest && manifest.total <= 1 {
-			out[i].Details = manifest.text
+		base, hasBase := bases[hash]
+		if hasBase && base.total <= 1 {
+			out[hash] = base.text
 			continue
 		}
-		group := parts[out[i].FindingKeyHash]
+		group := parts[hash]
 		if len(group) == 0 {
 			continue
 		}
-		if hasManifest {
-			filtered := group[:0]
-			for _, part := range group {
-				if part.total == manifest.total && part.index >= 0 && part.index < manifest.total {
-					filtered = append(filtered, part)
-				}
-			}
-			group = filtered
-		}
-		if len(group) == 0 {
-			return nil, fmt.Errorf("incomplete security finding detail %s", out[i].FindingKeyHash)
-		}
-		sort.Slice(group, func(i, j int) bool { return group[i].index < group[j].index })
+		// Parts published before manifests existed describe themselves.
 		total := group[0].total
-		if hasManifest {
-			total = manifest.total
+		if hasBase {
+			total = base.total
 		}
-		if len(group) != total {
-			return nil, fmt.Errorf("incomplete security finding detail %s", out[i].FindingKeyHash)
-		}
-		for partIndex, part := range group {
-			if part.index != partIndex {
-				return nil, fmt.Errorf("missing security finding detail part %d", partIndex)
+		ordered := make([]string, total)
+		seen := 0
+		for _, part := range group {
+			if part.total != total || part.index < 0 || part.index >= total {
+				continue
 			}
-			out[i].Details += part.text
+			ordered[part.index] = part.text
+			seen++
 		}
+		if seen != total {
+			p.logger.Warn("security finding detail is incomplete; reporting no detail", zap.String("finding_key_hash", hash), zap.Int("parts", seen), zap.Int("total_parts", total))
+			continue
+		}
+		out[hash] = strings.Join(ordered, "")
 	}
 	return out, nil
 }

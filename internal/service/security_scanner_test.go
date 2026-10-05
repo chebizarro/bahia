@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -316,8 +317,16 @@ func (r *memorySecurityRepo) GetSecurityTargetByHash(_ context.Context, targetKe
 	}
 	return nil, repository.ErrNotFound
 }
-func (r *memorySecurityRepo) ListSecurityTargets(context.Context, domain.SecurityTargetType, int) ([]domain.SecurityTarget, error) {
-	return nil, nil
+func (r *memorySecurityRepo) ListSecurityTargets(_ context.Context, targetType domain.SecurityTargetType, _ int) ([]domain.SecurityTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := []domain.SecurityTarget{}
+	for _, target := range r.targets {
+		if targetType == "" || target.Type == targetType {
+			out = append(out, *target)
+		}
+	}
+	return out, nil
 }
 func (r *memorySecurityRepo) CreateSecurityScanRun(_ context.Context, run *domain.SecurityScanRun) error {
 	r.mu.Lock()
@@ -349,8 +358,17 @@ func (r *memorySecurityRepo) GetActiveSecurityScanRunByTargetHash(_ context.Cont
 	}
 	return nil, repository.ErrNotFound
 }
-func (r *memorySecurityRepo) ListSecurityScanRuns(context.Context, string, int) ([]domain.SecurityScanRun, error) {
-	return nil, nil
+func (r *memorySecurityRepo) ListSecurityScanRuns(_ context.Context, targetKeyHash string, _ int) ([]domain.SecurityScanRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := []domain.SecurityScanRun{}
+	for _, run := range r.runs {
+		if run.TargetKeyHash == targetKeyHash {
+			out = append(out, *run)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
 }
 func (r *memorySecurityRepo) ListSecurityScanRunsByStatus(_ context.Context, statuses []domain.SecurityScanStatus, _ int) ([]domain.SecurityScanRun, error) {
 	r.mu.Lock()
@@ -432,8 +450,16 @@ func (r *memorySecurityRepo) UpsertSecurityFindings(_ context.Context, findings 
 	r.findings = append(r.findings, findings...)
 	return nil
 }
-func (r *memorySecurityRepo) ListSecurityFindings(context.Context, uuid.UUID) ([]domain.SecurityOSVFinding, error) {
-	return nil, nil
+func (r *memorySecurityRepo) ListSecurityFindings(_ context.Context, runID uuid.UUID) ([]domain.SecurityOSVFinding, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := []domain.SecurityOSVFinding{}
+	for _, finding := range r.findings {
+		if finding.RunID == runID {
+			out = append(out, finding)
+		}
+	}
+	return out, nil
 }
 func (r *memorySecurityRepo) ListSecurityFindingsFiltered(context.Context, repository.SecurityFindingFilter) ([]domain.SecurityOSVFinding, error) {
 	return nil, nil
@@ -481,21 +507,13 @@ func (r *memorySecurityRepo) ListSecurityScanSchedulesFiltered(_ context.Context
 		}
 		out = append(out, *v)
 	}
-	return out, nil
-}
-func (r *memorySecurityRepo) ClaimDueSecurityScanSchedules(_ context.Context, now time.Time, _ int, leasedBy string, leaseUntil time.Time) ([]domain.SecurityScanSchedule, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := []domain.SecurityScanSchedule{}
-	for _, schedule := range r.schedules {
-		if schedule.Enabled && !schedule.NextDueAt.After(now) && (schedule.LeaseUntil == nil || !schedule.LeaseUntil.After(now)) {
-			c := *schedule
-			c.LeasedBy = leasedBy
-			c.LeaseUntil = &leaseUntil
-			schedule.LeasedBy = leasedBy
-			schedule.LeaseUntil = &leaseUntil
-			out = append(out, c)
-		}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID.String() < out[j].ID.String() })
+	if filter.Offset >= len(out) {
+		return []domain.SecurityScanSchedule{}, nil
+	}
+	out = out[filter.Offset:]
+	if filter.Limit > 0 && len(out) > filter.Limit {
+		out = out[:filter.Limit]
 	}
 	return out, nil
 }
@@ -553,15 +571,6 @@ func (r *memorySecurityRepo) ResolveSecurityPolicyBreach(_ context.Context, poli
 		return nil
 	}
 	return repository.ErrNotFound
-}
-func (r *memorySecurityRepo) GetActiveSecurityPolicyBreach(_ context.Context, policyID uuid.UUID, targetKeyHash string) (*domain.SecurityPolicyBreach, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if breach := r.breaches[policyID.String()+":"+targetKeyHash]; breach != nil && breach.ResolvedAt == nil {
-		c := *breach
-		return &c, nil
-	}
-	return nil, repository.ErrNotFound
 }
 func (r *memorySecurityRepo) UpsertOSVVulnerabilityCache(context.Context, *domain.OSVVulnerabilityCache) error {
 	return nil

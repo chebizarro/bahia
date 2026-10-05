@@ -352,7 +352,9 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Policy service gates both artifact and runtime-release deployment intents.
-	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger, service.WithSecurityRepository(securityRepo))
+	// Its security store is set further down, once the canonical security
+	// publisher exists (audit B-32): it never reads the SQL security tables.
+	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger)
 
 	// Registry service.
 	registryOptions := []service.RegistryOption{
@@ -1983,12 +1985,32 @@ func New(cfg *config.Config) (*App, error) {
 			zap.String("reason", "hiveci_disabled"), zap.Strings("available_interop_relays", relayURLs))
 	}
 
-	var securityScanner *service.SecurityScanner
-	if sbomStorageResolver != nil && nostrPub != nil && relayPool != nil && nostrProjector != nil && confidentialEncryptor != nil {
+	// Audit B-32: security state (targets, run claims, schedules, findings)
+	// is canonical cp-state. The store publishes first and reads from the
+	// local event store, so it needs the projector and the confidential
+	// encryptor but no database; securityRepo is an optional SQL index.
+	var canonicalSecurity *service.CanonicalSecurityRepository
+	if nostrProjector != nil && confidentialEncryptor != nil {
 		securityCPPub := nostrAdapter.NewSecurityCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
-		canonicalSecurity := service.NewCanonicalSecurityRepository(securityRepo, securityCPPub, logger)
+		canonicalSecurity = service.NewCanonicalSecurityRepository(securityRepo, securityCPPub, logger)
 		policySvc.SetSecurityRepository(canonicalSecurity)
 		policySvc.SetCanonicalPolicyView(nostrAdapter.NewSecurityPolicyView(projectionHistory))
+		if securityRepo != nil {
+			// Once the local store has caught up with the relays: publish
+			// SQL-era state that has no canonical record yet (once), then
+			// bring the index up to the canonical records.
+			nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+				if err := canonicalSecurity.BackfillFromIndex(ctx, localOutbox); err != nil {
+					logger.Warn("security canonical backfill failed; retrying on next start", zap.Error(err))
+				}
+				if err := canonicalSecurity.RebuildIndex(ctx); err != nil {
+					logger.Warn("security SQL index rebuild failed", zap.Error(err))
+				}
+			})
+		}
+	}
+	var securityScanner *service.SecurityScanner
+	if canonicalSecurity != nil && sbomStorageResolver != nil && nostrPub != nil && relayPool != nil {
 		securityScanner = service.NewSecurityScanner(service.SecurityScannerConfig{
 			Repo:       canonicalSecurity,
 			SBOMs:      sbomManifestRepo,
@@ -2001,17 +2023,27 @@ func New(cfg *config.Config) (*App, error) {
 			Pubkey:     servicePubkey,
 			Logger:     logger,
 		})
+		// Publications recorded as queued become published when the outbox
+		// delivers their event, and failed_terminal if it abandons it.
 		nostrPub.OnDeliveryAbandoned(securityScanner.HandlePublishAbandoned)
 		nostrPub.OnDelivered(securityScanner.HandlePublishDelivered)
 		bgManager.RegisterWithOptions(securityScanner)
-		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{Repo: canonicalSecurity, Scanner: securityScanner, Deriver: policySvc, Logger: logger}))
-		nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
-			if err := canonicalSecurity.RebuildIndex(ctx); err != nil {
-				logger.Warn("security SQL index rebuild failed", zap.Error(err))
-			}
-		})
-		logger.Info("security OSV scanner and canonical scheduler registered")
+		// The scheduler derives schedules from retained policy and target
+		// cp-state, so it waits for the local store's first catch-up.
+		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{
+			Repo: canonicalSecurity, Scanner: securityScanner, Deriver: policySvc, Ready: intentReadiness.Ready, Logger: logger,
+		}))
+		logger.Info("security OSV scanner and canonical scheduler registered", zap.Bool("sql_index", securityRepo != nil))
 	}
+	healthProvider.RegisterCheck("security_scanner", func() HealthCheck {
+		check := HealthCheck{Name: "security_scanner", Status: HealthStatusPass, Message: "security scans are scheduled and claimed from canonical cp-state in the local event store",
+			Details: map[string]string{"sql_index": fmt.Sprintf("%t", securityRepo != nil)}}
+		if securityScanner == nil {
+			check.Message = "security scanner disabled: it needs the Nostr projector, the confidential encryptor, relay publishing and SBOM storage"
+			check.Details["availability"] = "unavailable"
+		}
+		return check
+	})
 
 	// Payment service exposes payment records and history; estimates use relay-backed worker pricing.
 	// It does not create or redeem Cashu tokens; cashu.enabled live wallet mode

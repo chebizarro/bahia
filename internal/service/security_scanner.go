@@ -373,8 +373,11 @@ func (s *SecurityScanner) SubmitScan(ctx context.Context, req SecurityScanReques
 		}
 		return nil, err
 	}
+	// The run record is the claim and is already canonical. The legacy status
+	// observable is best effort: failing here would strand an accepted run
+	// that nothing executes until the next restart.
 	if err := s.publishStatus(ctx, run, stored, domain.SecurityScanAccepted, "accepted", ""); err != nil {
-		return nil, err
+		s.logger.Warn("publish security accepted status failed", zap.String("run_id", run.ID.String()), zap.Error(err))
 	}
 	s.startRun(ctx, run.ID)
 	return acceptedResponse(run.ID, stored, false, false), nil
@@ -457,6 +460,11 @@ func (s *SecurityScanner) executeRun(ctx context.Context, runID uuid.UUID) error
 	run, err := s.repo.GetSecurityScanRun(ctx, runID)
 	if err != nil {
 		return err
+	}
+	if run.Status.IsTerminal() {
+		// A second wakeup or a recovery pass found a run that already
+		// finished: its record is the result, there is nothing to execute.
+		return nil
 	}
 	target, err := s.repo.GetSecurityTargetByHash(ctx, run.TargetKeyHash)
 	if err != nil {
@@ -595,6 +603,9 @@ func (s *SecurityScanner) scanTarget(ctx context.Context, run *domain.SecuritySc
 		coordinate := outcome.queries[i]
 		for _, vuln := range result.Vulnerabilities {
 			finding := findingFromVulnerability(run.ID, target.TargetKeyHash, coordinate, vuln)
+			// Stamped from the run, so re-executing it after a crash
+			// re-asserts identical finding records instead of new ones.
+			finding.CreatedAt = run.CreatedAt
 			outcome.severityCounts = addSeverity(outcome.severityCounts, finding.Severity)
 			outcome.findings = append(outcome.findings, finding)
 		}
@@ -884,8 +895,7 @@ func findingFromVulnerability(runID uuid.UUID, targetHash string, coordinate sca
 	key := strings.Join([]string{targetHash, coordinate.key, vuln.ID}, ":")
 	keyHash := domain.CanonicalTargetHash(key)
 	severity := normalizeSecuritySeverity(vuln.Severity)
-	id := uuid.NewSHA1(uuid.NameSpaceOID, []byte("bahia:security-finding:"+runID.String()+":"+keyHash))
-	return domain.SecurityOSVFinding{ID: id, RunID: runID, TargetKeyHash: targetHash, FindingKey: key, FindingKeyHash: keyHash, OSVID: vuln.ID, CVE: vuln.CVE, Summary: vuln.Summary, Details: vuln.Details, Severity: severity, Package: coordinate.pkg, Aliases: append([]string(nil), vuln.Aliases...), References: append([]string(nil), vuln.References...), WithdrawnAt: parseOptionalTime(vuln.Withdrawn), RawModified: vuln.Modified, Metadata: map[string]any{"coordinate_key": coordinate.key}}
+	return domain.SecurityOSVFinding{ID: securityFindingID(runID, keyHash), RunID: runID, TargetKeyHash: targetHash, FindingKey: key, FindingKeyHash: keyHash, OSVID: vuln.ID, CVE: vuln.CVE, Summary: vuln.Summary, Details: vuln.Details, Severity: severity, Package: coordinate.pkg, Aliases: append([]string(nil), vuln.Aliases...), References: append([]string(nil), vuln.References...), WithdrawnAt: parseOptionalTime(vuln.Withdrawn), RawModified: vuln.Modified, Metadata: map[string]any{"coordinate_key": coordinate.key}}
 }
 
 func (s *SecurityScanner) publishCompletionObservables(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget, findings []domain.SecurityOSVFinding) error {
@@ -991,8 +1001,9 @@ func (s *SecurityScanner) evaluatePolicyBreaches(ctx context.Context, run *domai
 	for _, policy := range policies {
 		violated := breachedSecurityRules(policy, run)
 		if len(violated) == 0 {
-			if active, err := s.repo.GetActiveSecurityPolicyBreach(ctx, policy.ID, target.TargetKeyHash); err == nil && active != nil {
-				_ = s.repo.ResolveSecurityPolicyBreach(ctx, policy.ID, target.TargetKeyHash, time.Now().UTC())
+			// Resolving is idempotent; a policy with no open breach is a no-op.
+			if err := s.repo.ResolveSecurityPolicyBreach(ctx, policy.ID, target.TargetKeyHash, time.Now().UTC()); err != nil && !errors.Is(err, repository.ErrNotFound) {
+				s.logger.Warn("security policy breach resolution failed", zap.String("policy_id", policy.ID.String()), zap.Error(err))
 			}
 			continue
 		}

@@ -22,28 +22,26 @@ type SBOMAttestationProvider interface {
 	GetSBOMDataForArtifact(ctx context.Context, artifactID uuid.UUID) ([]byte, error)
 }
 
-// PolicyService evaluates deployment policies against artifacts.
-// SecurityScheduleCPPublisher publishes security scan schedules as confidential
-// cp-state records (bahia-irsry.60). Optional: if nil, schedule mutations
-// succeed without relay publication.
-type SecurityScheduleCPPublisher interface {
-	PublishSchedule(ctx context.Context, schedule *domain.SecurityScanSchedule) error
-}
-
+// SecurityPolicyView lists the live deployment policies from the daemon's
+// retained policy cp-state in the local event store. Security scan schedules
+// and scan-time policy evaluation are derived from it (audit B-32), so they
+// need no SQL policy repository.
 type SecurityPolicyView interface {
 	ListSecurityPolicies(context.Context) ([]domain.DeploymentPolicy, error)
 }
 
+// PolicyService evaluates deployment policies against artifacts.
 type PolicyService struct {
-	canonicalPolicies   SecurityPolicyView
-	policies            repository.DeploymentPolicyRepository
-	signatures          repository.ArtifactSignatureRepository
-	sboms               repository.SBOMRepository
-	security            repository.SecurityRepository
-	attestations        SBOMAttestationProvider
-	scheduleCPPublisher SecurityScheduleCPPublisher
-	trustedGens         map[string]bool // map of trusted generator IDs
-	logger              *zap.Logger
+	canonicalPolicies SecurityPolicyView
+	policies          repository.DeploymentPolicyRepository
+	signatures        repository.ArtifactSignatureRepository
+	sboms             repository.SBOMRepository
+	// security is the canonical security store. Schedules written through it
+	// are published as cp-state before any SQL index is updated.
+	security     repository.SecurityRepository
+	attestations SBOMAttestationProvider
+	trustedGens  map[string]bool // map of trusted generator IDs
+	logger       *zap.Logger
 }
 
 // PolicyServiceOption configures the PolicyService.
@@ -52,17 +50,6 @@ type PolicyServiceOption func(*PolicyService)
 // WithAttestationProvider sets the SBOM attestation provider.
 func WithAttestationProvider(provider SBOMAttestationProvider) PolicyServiceOption {
 	return func(s *PolicyService) { s.attestations = provider }
-}
-
-// WithSecurityRepository sets the Security repository used for latest-scan gates and policy-derived schedules.
-func WithSecurityRepository(repo repository.SecurityRepository) PolicyServiceOption {
-	return func(s *PolicyService) { s.security = repo }
-}
-
-// WithSecurityScheduleCPPublisher sets the cp-state publisher for security
-// scan schedules (bahia-irsry.60).
-func WithSecurityScheduleCPPublisher(pub SecurityScheduleCPPublisher) PolicyServiceOption {
-	return func(s *PolicyService) { s.scheduleCPPublisher = pub }
 }
 
 // WithTrustedGenerators sets the list of trusted SBOM generator IDs.
@@ -96,14 +83,13 @@ func NewPolicyService(
 	return s
 }
 
-// SetSecurityScheduleCPPublisher sets the cp-state publisher for security
-// scan schedules. Called after construction when the publisher's dependencies
-// (projector, encryptor) are available.
-func (s *PolicyService) SetSecurityScheduleCPPublisher(pub SecurityScheduleCPPublisher) {
-	s.scheduleCPPublisher = pub
-}
+// SetSecurityRepository sets the canonical security store used for
+// latest-scan gates and policy-derived schedules. It is set after construction
+// because the store needs the projector and the confidential encryptor.
 func (s *PolicyService) SetSecurityRepository(repo repository.SecurityRepository) { s.security = repo }
-func (s *PolicyService) SetCanonicalPolicyView(view SecurityPolicyView)           { s.canonicalPolicies = view }
+
+// SetCanonicalPolicyView sets the local event store view of policy cp-state.
+func (s *PolicyService) SetCanonicalPolicyView(view SecurityPolicyView) { s.canonicalPolicies = view }
 
 // Evaluate runs all applicable policies against an artifact for the given environment.
 // Returns the aggregate evaluation result.
@@ -784,32 +770,61 @@ func (s *PolicyService) DeletePolicy(ctx context.Context, id uuid.UUID) error {
 	return s.policies.Delete(ctx, id)
 }
 
+// securityPolicies lists the policies schedules are derived from: the retained
+// policy cp-state when the view is configured, else the policy repository.
+func (s *PolicyService) securityPolicies(ctx context.Context) ([]domain.DeploymentPolicy, error) {
+	switch {
+	case s.canonicalPolicies != nil:
+		return s.canonicalPolicies.ListSecurityPolicies(ctx)
+	case s.policies != nil:
+		return s.policies.List(ctx, false)
+	}
+	return nil, errors.New("no policy source is configured")
+}
+
+// DeriveSecurityScanSchedules brings every policy's scan schedules up to date
+// with policy and target state. It is level triggered and safe to repeat; a
+// policy whose schedules cannot be derived does not stop the others. Schedules
+// of a deleted policy are disabled by DeletePolicy before the policy goes.
 func (s *PolicyService) DeriveSecurityScanSchedules(ctx context.Context) error {
 	if s.security == nil {
 		return nil
 	}
-	var policies []domain.DeploymentPolicy
-	var err error
-	if s.canonicalPolicies != nil {
-		policies, err = s.canonicalPolicies.ListSecurityPolicies(ctx)
-	} else if s.policies != nil {
-		policies, err = s.policies.List(ctx, true)
-	} else {
-		return fmt.Errorf("canonical policy view is not configured")
-	}
+	policies, err := s.securityPolicies(ctx)
 	if err != nil {
-		return fmt.Errorf("listing canonical policies for security schedule derivation: %w", err)
+		return fmt.Errorf("listing policies for security schedule derivation: %w", err)
 	}
+	var failed []error
 	for i := range policies {
 		if err := s.syncSecuritySchedulesForPolicy(ctx, &policies[i]); err != nil {
-			return err
+			failed = append(failed, fmt.Errorf("policy %s: %w", policies[i].ID, err))
 		}
 	}
-	return nil
+	return errors.Join(failed...)
 }
 
 func (s *PolicyService) SecurityPoliciesForTarget(ctx context.Context, target *domain.SecurityTarget) ([]domain.DeploymentPolicy, error) {
-	if s == nil || s.policies == nil {
+	if s == nil {
+		return nil, nil
+	}
+	if s.canonicalPolicies != nil {
+		all, err := s.canonicalPolicies.ListSecurityPolicies(ctx)
+		if err != nil {
+			return nil, err
+		}
+		envID := environmentIDFromSecurityTarget(target)
+		policies := make([]domain.DeploymentPolicy, 0, len(all))
+		for _, policy := range all {
+			if !policy.Enabled {
+				continue
+			}
+			if policy.EnvironmentID == nil || (envID != nil && *policy.EnvironmentID == *envID) {
+				policies = append(policies, policy)
+			}
+		}
+		return policies, nil
+	}
+	if s.policies == nil {
 		return nil, nil
 	}
 	policies, err := s.policies.ListGlobal(ctx)
@@ -849,13 +864,10 @@ func (s *PolicyService) syncSecuritySchedulesForPolicy(ctx context.Context, p *d
 	if err != nil {
 		return err
 	}
+	// The store publishes each schedule as canonical cp-state before it
+	// mirrors it to SQL, and returns the publish error.
 	for _, schedule := range desired {
 		schedule := schedule
-		if s.scheduleCPPublisher != nil {
-			if err := s.scheduleCPPublisher.PublishSchedule(ctx, &schedule); err != nil {
-				return fmt.Errorf("publish security schedule: %w", err)
-			}
-		}
 		if err := s.security.UpsertSecurityScanSchedule(ctx, &schedule); err != nil {
 			return err
 		}
@@ -865,12 +877,6 @@ func (s *PolicyService) syncSecuritySchedulesForPolicy(ctx context.Context, p *d
 			continue
 		}
 		schedule.Enabled = false
-		schedule.UpdatedAt = time.Now().UTC()
-		if s.scheduleCPPublisher != nil {
-			if err := s.scheduleCPPublisher.PublishSchedule(ctx, &schedule); err != nil {
-				return fmt.Errorf("publish disabled security schedule: %w", err)
-			}
-		}
 		if err := s.security.UpsertSecurityScanSchedule(ctx, &schedule); err != nil {
 			return err
 		}
