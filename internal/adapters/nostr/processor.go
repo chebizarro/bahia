@@ -112,6 +112,68 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 		return nil
 	}
 
+	w := WorkerFromAdvertisement(ev)
+	pubkey := w.PubKey
+
+	if err := p.workerRepo.Upsert(ctx, w); err != nil {
+		return fmt.Errorf("upserting worker %s: %w", pubkey, err)
+	}
+
+	canonical, err := p.workerRepo.GetByPubKey(ctx, pubkey)
+	if err != nil {
+		return fmt.Errorf("reloading worker %s: %w", pubkey, err)
+	}
+	if canonical == nil {
+		return fmt.Errorf("reloading worker %s: not found after upsert", pubkey)
+	}
+	if canonical.LastAdvertisementAt.After(ev.CreatedAt.Time()) {
+		p.logger.Info("stale worker advertisement ignored after repository timestamp guard",
+			zap.String("pubkey", pubkey),
+			zap.Time("event_created_at", ev.CreatedAt.Time()),
+			zap.Time("stored_last_advertisement_at", canonical.LastAdvertisementAt),
+		)
+		return nil
+	}
+
+	canonical.Pressure = service.AssessWithThresholds(*canonical, time.Now().UTC(), p.pressureThresholds)
+	if err := p.workerRepo.Upsert(ctx, canonical); err != nil {
+		return fmt.Errorf("upserting worker pressure %s: %w", pubkey, err)
+	}
+	assessed, err := p.workerRepo.GetByPubKey(ctx, pubkey)
+	if err != nil {
+		return fmt.Errorf("reloading assessed worker %s: %w", pubkey, err)
+	}
+	if assessed == nil {
+		return fmt.Errorf("reloading assessed worker %s: not found after pressure upsert", pubkey)
+	}
+	if assessed.LastAdvertisementAt.After(ev.CreatedAt.Time()) {
+		p.logger.Info("worker telemetry event skipped after newer advertisement won pressure upsert",
+			zap.String("pubkey", pubkey),
+			zap.Time("event_created_at", ev.CreatedAt.Time()),
+			zap.Time("stored_last_advertisement_at", assessed.LastAdvertisementAt),
+		)
+		return nil
+	}
+
+	p.eventPublisher.Publish(ctx, events.Event{
+		Type:     events.EventWorkerTelemetryObserved,
+		EntityID: assessed.PubKey,
+		Data:     events.WorkerTelemetryObserved{Worker: *assessed},
+	})
+
+	p.logger.Info("worker advertisement processed",
+		zap.String("pubkey", pubkey),
+		zap.String("name", assessed.Name),
+		zap.Int("software_count", len(assessed.Software)),
+	)
+	return nil
+}
+
+// WorkerFromAdvertisement decodes a signed Loom worker advertisement (kind
+// 10100) into the worker it describes. The caller has verified the event. The
+// result carries only what the worker itself signed: operator scheduling state
+// and assessed pressure are not part of an advertisement.
+func WorkerFromAdvertisement(ev *gonostr.Event) *domain.Worker {
 	// Parse content JSON for name/description/queue info.
 	var content struct {
 		Name              string                      `json:"name"`
@@ -196,59 +258,7 @@ func (p *Processor) handleWorkerAdvertisement(ctx context.Context, ev *gonostr.E
 	}
 
 	w.MLCapabilities = domain.NormalizeWorkerMLCapabilities(*w)
-
-	if err := p.workerRepo.Upsert(ctx, w); err != nil {
-		return fmt.Errorf("upserting worker %s: %w", pubkey, err)
-	}
-
-	canonical, err := p.workerRepo.GetByPubKey(ctx, pubkey)
-	if err != nil {
-		return fmt.Errorf("reloading worker %s: %w", pubkey, err)
-	}
-	if canonical == nil {
-		return fmt.Errorf("reloading worker %s: not found after upsert", pubkey)
-	}
-	if canonical.LastAdvertisementAt.After(ev.CreatedAt.Time()) {
-		p.logger.Info("stale worker advertisement ignored after repository timestamp guard",
-			zap.String("pubkey", pubkey),
-			zap.Time("event_created_at", ev.CreatedAt.Time()),
-			zap.Time("stored_last_advertisement_at", canonical.LastAdvertisementAt),
-		)
-		return nil
-	}
-
-	canonical.Pressure = service.AssessWithThresholds(*canonical, time.Now().UTC(), p.pressureThresholds)
-	if err := p.workerRepo.Upsert(ctx, canonical); err != nil {
-		return fmt.Errorf("upserting worker pressure %s: %w", pubkey, err)
-	}
-	assessed, err := p.workerRepo.GetByPubKey(ctx, pubkey)
-	if err != nil {
-		return fmt.Errorf("reloading assessed worker %s: %w", pubkey, err)
-	}
-	if assessed == nil {
-		return fmt.Errorf("reloading assessed worker %s: not found after pressure upsert", pubkey)
-	}
-	if assessed.LastAdvertisementAt.After(ev.CreatedAt.Time()) {
-		p.logger.Info("worker telemetry event skipped after newer advertisement won pressure upsert",
-			zap.String("pubkey", pubkey),
-			zap.Time("event_created_at", ev.CreatedAt.Time()),
-			zap.Time("stored_last_advertisement_at", assessed.LastAdvertisementAt),
-		)
-		return nil
-	}
-
-	p.eventPublisher.Publish(ctx, events.Event{
-		Type:     events.EventWorkerTelemetryObserved,
-		EntityID: assessed.PubKey,
-		Data:     events.WorkerTelemetryObserved{Worker: *assessed},
-	})
-
-	p.logger.Info("worker advertisement processed",
-		zap.String("pubkey", pubkey),
-		zap.String("name", assessed.Name),
-		zap.Int("software_count", len(assessed.Software)),
-	)
-	return nil
+	return w
 }
 
 func (p *Processor) handleLoomStatusUpdate(ctx context.Context, ev *gonostr.Event) error {

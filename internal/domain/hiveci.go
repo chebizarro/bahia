@@ -130,3 +130,27 @@ type RepositoryCIServiceLink struct {
 	EnvironmentIDs   []uuid.UUID `json:"environment_ids"`
 	EnvironmentNames []string    `json:"environment_names"`
 }
+
+// HiveCIResultState is the daemon's processing state of one signed kind-5402
+// workflow result. The signed result itself is the evidence; this record is
+// what the daemon decided about it and how often it tried, so pending results
+// are found and retried from canonical state instead of a SQL scan.
+type HiveCIResultState struct {
+	ResultEventID   string                `json:"result_event_id"`
+	RunEventID      string                `json:"run_event_id"`
+	ProcessingState HiveCIProcessingState `json:"processing_state"`
+	ProcessingError string                `json:"processing_error,omitempty"`
+	RetryCount      int                   `json:"retry_count"`
+	LastRetryAt     *time.Time            `json:"last_retry_at,omitempty"`
+	UpdatedAt       time.Time             `json:"updated_at"`
+}
+
+// Terminal reports whether no further processing of the result is expected.
+func (s HiveCIProcessingState) Terminal() bool {
+	switch s {
+	case HiveCIProcessingStateProcessed, HiveCIProcessingStateRejected, HiveCIProcessingStateFailed:
+		return true
+	default:
+		return false
+	}
+}

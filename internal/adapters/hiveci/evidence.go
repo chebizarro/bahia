@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"strings"
 	"time"
 
@@ -11,7 +12,6 @@ import (
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
-	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
@@ -19,79 +19,90 @@ type ReleaseObjectResolver interface {
 	ResolveReleaseObject(context.Context, domain.HiveCIReleaseArtifact) (ResolvedReleaseArtifact, error)
 }
 
-type RepositoryReleaseEvidence struct {
-	events  repository.NostrEventRepository
-	hive    repository.HiveCIRepository
-	workers repository.WorkerRepository
-	objects ReleaseObjectResolver
-	now     func() time.Time
+// EvidenceStore is the local event store: the verified relay copy of the
+// signed events release admission is decided on. *localstore.Store satisfies
+// it.
+type EvidenceStore interface {
+	SaveEvent(nostr.Event) (bool, error)
+	QueryEvents(nostr.Filter) iter.Seq[nostr.Event]
 }
 
-func NewRepositoryReleaseEvidence(events repository.NostrEventRepository, hive repository.HiveCIRepository, workers repository.WorkerRepository, objects ReleaseObjectResolver) *RepositoryReleaseEvidence {
-	return &RepositoryReleaseEvidence{
-		events: events, hive: hive, workers: workers, objects: objects,
-		now: func() time.Time { return time.Now().UTC() },
+// PipelinePolicySource lists the canonical pipeline policies.
+type PipelinePolicySource interface {
+	ListPolicies(context.Context) ([]domain.HiveCIPipelinePolicy, error)
+}
+
+// WorkerSchedulingSource reports the operator scheduling state of a worker.
+type WorkerSchedulingSource interface {
+	WorkerSchedulingState(ctx context.Context, pubkey string) (domain.WorkerSchedulingState, error)
+}
+
+// LocalReleaseEvidence resolves everything release admission checks from the
+// local event store (audit C-48): the signed 5401 lineage, the worker's
+// signed advertisement, and the canonical pipeline policies. No SQL mirror is
+// read, so a missing or stale row can neither reject evidence the relays hold
+// nor admit evidence they do not.
+type LocalReleaseEvidence struct {
+	events     EvidenceStore
+	policies   PipelinePolicySource
+	scheduling WorkerSchedulingSource
+	objects    ReleaseObjectResolver
+	thresholds service.WorkerPressureThresholds
+	now        func() time.Time
+}
+
+// NewLocalReleaseEvidence returns release evidence over the local event store.
+// scheduling may be nil, in which case no operator override applies.
+func NewLocalReleaseEvidence(events EvidenceStore, policies PipelinePolicySource, scheduling WorkerSchedulingSource, objects ReleaseObjectResolver, thresholds service.WorkerPressureThresholds) *LocalReleaseEvidence {
+	return &LocalReleaseEvidence{
+		events: events, policies: policies, scheduling: scheduling, objects: objects,
+		thresholds: thresholds, now: func() time.Time { return time.Now().UTC() },
 	}
 }
 
-func (e *RepositoryReleaseEvidence) GetWorkflowRunEvent(ctx context.Context, eventID string) (*nostr.Event, error) {
+func (e *LocalReleaseEvidence) GetWorkflowRunEvent(_ context.Context, eventID string) (*nostr.Event, error) {
 	if e == nil || e.events == nil {
-		return nil, fmt.Errorf("nostr evidence repository is not configured")
+		return nil, fmt.Errorf("local evidence store is not configured")
 	}
-	return e.getSignedEvent(ctx, eventID)
+	return storedEvent(e.events, eventID, kinds.HiveCIWorkflowRun)
 }
 
-func (e *RepositoryReleaseEvidence) getSignedEvent(ctx context.Context, eventID string) (*nostr.Event, error) {
-	record, err := e.events.GetByID(ctx, eventID)
-	if err != nil || record == nil {
-		return nil, err
-	}
-	return signedEventFromRecord(record)
-}
-
-func signedEventFromRecord(record *repository.NostrEventRecord) (*nostr.Event, error) {
-	if record == nil {
+// storedEvent returns the stored event with id and kind, or nil. The caller
+// validates its signature: the store is a cache, not a trust boundary.
+func storedEvent(store EvidenceStore, eventID string, kind int) (*nostr.Event, error) {
+	id, err := nostr.IDFromHex(strings.TrimSpace(eventID))
+	if err != nil {
 		return nil, nil
 	}
-	wire := struct {
-		ID        string          `json:"id"`
-		PubKey    string          `json:"pubkey"`
-		CreatedAt int64           `json:"created_at"`
-		Kind      int             `json:"kind"`
-		Tags      json.RawMessage `json:"tags"`
-		Content   string          `json:"content"`
-		Sig       string          `json:"sig"`
-	}{
-		ID: record.ID, PubKey: record.PubKey, CreatedAt: record.CreatedAt.Unix(),
-		Kind: record.Kind, Tags: record.Tags, Content: record.Content, Sig: record.Sig,
+	for ev := range store.QueryEvents(nostr.Filter{IDs: []nostr.ID{id}, Kinds: []nostr.Kind{nostr.Kind(kind)}}) {
+		found := ev
+		return &found, nil
 	}
-	encoded, err := json.Marshal(wire)
-	if err != nil {
-		return nil, err
-	}
-	var event nostr.Event
-	if err := json.Unmarshal(encoded, &event); err != nil {
-		return nil, fmt.Errorf("decode stored signed event: %w", err)
-	}
-	return &event, nil
+	return nil, nil
 }
 
-func (e *RepositoryReleaseEvidence) ListPipelinePolicies(ctx context.Context) ([]domain.HiveCIPipelinePolicy, error) {
-	if e == nil || e.hive == nil {
-		return nil, fmt.Errorf("Hive-CI policy repository is not configured")
+func (e *LocalReleaseEvidence) ListPipelinePolicies(ctx context.Context) ([]domain.HiveCIPipelinePolicy, error) {
+	if e == nil || e.policies == nil {
+		return nil, fmt.Errorf("Hive-CI pipeline policy view is not configured")
 	}
-	return e.hive.ListPolicies(ctx)
+	return e.policies.ListPolicies(ctx)
 }
 
-func (e *RepositoryReleaseEvidence) AdmitWorker(
+// AdmitWorker admits the release worker on its own signed advertisement. The
+// advertisement is replaceable, so the store holds only the worker's current
+// one: a release that names an older advertisement finds nothing and is not
+// admitted. Capacity and pressure come from what the worker signed; the only
+// other input is the operator's scheduling state, read from the daemon's
+// retained worker-state record.
+func (e *LocalReleaseEvidence) AdmitWorker(
 	ctx context.Context,
 	pubkey, capability, workerAdEventID string,
 ) (WorkerAdmissionEvidence, bool, error) {
 	var evidence WorkerAdmissionEvidence
-	if e == nil || e.workers == nil || e.events == nil || e.now == nil {
+	if e == nil || e.events == nil || e.now == nil {
 		return evidence, false, fmt.Errorf("worker admission evidence is not configured")
 	}
-	ad, err := e.getSignedEvent(ctx, workerAdEventID)
+	ad, err := storedEvent(e.events, workerAdEventID, kinds.LoomWorkerAdvertisement)
 	if err != nil {
 		return evidence, false, err
 	}
@@ -119,17 +130,27 @@ func (e *RepositoryReleaseEvidence) AdmitWorker(
 	if len(signedCapability) == 0 || strings.TrimSpace(capability) != string(encodedCapability) {
 		return evidence, false, fmt.Errorf("worker capability does not match referenced signed advertisement")
 	}
-	worker, err := e.workers.GetByPubKey(ctx, pubkey)
-	if err != nil || worker == nil {
-		return evidence, false, err
+	// The store collapses replaceable events, but it is asked rather than
+	// assumed: a newer advertisement by the same worker supersedes this one.
+	for current := range e.events.QueryEvents(nostr.Filter{
+		Kinds: []nostr.Kind{nostr.Kind(kinds.LoomWorkerAdvertisement)}, Authors: []nostr.PubKey{ad.PubKey}, Limit: 1,
+	}) {
+		if current.ID != ad.ID {
+			return evidence, false, fmt.Errorf("referenced worker advertisement is not the current admitted advertisement")
+		}
 	}
-	if !worker.LastAdvertisementAt.Equal(ad.CreatedAt.Time()) {
-		return evidence, false, fmt.Errorf("referenced worker advertisement is not the current admitted advertisement")
+	worker := nostradapter.WorkerFromAdvertisement(ad)
+	if e.scheduling != nil {
+		state, err := e.scheduling.WorkerSchedulingState(ctx, pubkey)
+		if err != nil {
+			return evidence, false, fmt.Errorf("worker scheduling state: %w", err)
+		}
+		worker.SchedulingState = state
 	}
-	current := *worker
-	current.Status = current.ComputeStatus(now)
+	worker.Pressure = service.AssessWithThresholds(*worker, now, e.thresholds)
+	worker.Status = worker.ComputeStatus(now)
 	decision := service.Evaluate(service.WorkerAdmissionRequest{
-		Scope: service.AdmissionScopeServiceDeploy, Worker: &current, PinnedWorker: pubkey,
+		Scope: service.AdmissionScopeServiceDeploy, Worker: worker, PinnedWorker: pubkey,
 	})
 	evidence = WorkerAdmissionEvidence{
 		WorkerIdentity: pubkey, WorkerCapability: capability, WorkerAdEventID: workerAdEventID,
@@ -139,11 +160,11 @@ func (e *RepositoryReleaseEvidence) AdmitWorker(
 	return evidence, decision.Eligible, nil
 }
 
-func (e *RepositoryReleaseEvidence) ResolveArtifact(ctx context.Context, descriptor domain.HiveCIReleaseArtifact) (ResolvedReleaseArtifact, error) {
+func (e *LocalReleaseEvidence) ResolveArtifact(ctx context.Context, descriptor domain.HiveCIReleaseArtifact) (ResolvedReleaseArtifact, error) {
 	if e == nil || e.objects == nil {
 		return ResolvedReleaseArtifact{}, fmt.Errorf("release object resolver is not configured")
 	}
 	return e.objects.ResolveReleaseObject(ctx, descriptor)
 }
 
-var _ ReleaseEvidence = (*RepositoryReleaseEvidence)(nil)
+var _ ReleaseEvidence = (*LocalReleaseEvidence)(nil)
