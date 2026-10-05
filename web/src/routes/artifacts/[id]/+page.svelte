@@ -764,7 +764,7 @@ import Table from '$lib/components/Table.svelte';
 
       {:else if activeTab === 'signatures'}
         <!-- Signatures Tab -->
-        <IntentGate domain="artifact" orgId={artifact?.org_id || service?.org_id}>
+        <IntentGate domain="artifact" record={artifact}>
         <section class="signatures-section">
           <div class="section-header">
             <h2 class="section-title"><SignatureIcon size={20} strokeWidth={1.75} ariaHidden="true" /> <span>Signatures</span></h2>

@@ -299,7 +299,7 @@
             {:else if build.status === 'succeeded'}
               <div class="registration">
                 <p class="warning">No verified immutable artifact projection exists for this successful build.</p>
-                <IntentGate domain="artifact" orgId={services.find((service) => service.id === build.service_id)?.org_id}>
+                <IntentGate domain="artifact" record={build}>
                   <button
                     type="button"
                     disabled={registeringBuildId === build.id}

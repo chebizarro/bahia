@@ -266,7 +266,6 @@
   {:else if error}
     <div class="error-state"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{error}</span></div>
   {:else}
-    <IntentGate domain="llm">
     <div class="workflow-grid">
       <section class="panel">
         <h2><LlmIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Create Route</h2>
@@ -291,7 +290,9 @@
             Authorization secret UUID
             <input bind:value={routeForm.authorization_secret_ref} name="route-authorization-secret-ref" placeholder="Bahia secret UUID (optional)" />
           </label>
+          <IntentGate domain="llm">
           <button type="submit" disabled={routeSubmitting}>{routeSubmitting ? 'Creating…' : 'Create route'}</button>
+          </IntentGate>
         </form>
       </section>
 
@@ -368,7 +369,9 @@
               <input bind:value={releaseForm.runtime_health_path} name="runtime-health-path" required />
             </label>
           {/if}
+          <IntentGate domain="llm">
           <button type="submit" disabled={releaseSubmitting}>{releaseSubmitting ? 'Registering…' : 'Register release'}</button>
+          </IntentGate>
         </form>
       </section>
 
@@ -406,7 +409,9 @@
             Requested by
             <input bind:value={deployForm.requested_by} name="requested-by" placeholder="requester pubkey" required />
           </label>
+          <IntentGate domain="llm" record={{ route_id: deployForm.route_id }}>
           <button type="submit" disabled={deploySubmitting}>{deploySubmitting ? 'Submitting…' : 'Request deployment'}</button>
+          </IntentGate>
         </form>
       </section>
     </div>
@@ -440,8 +445,10 @@
                 <td>{approval.accepted_at ? new Date(approval.accepted_at).toLocaleString() : '-'}</td>
                 <td>
                   <div class="button-row">
+                    <IntentGate domain="llm" record={{ route_id: approval.route_id }}>
                     <button type="button" data-testid={`approve-${approval.intent_id}`} disabled={decisionSubmitting === `approve:${approval.intent_id}` || decisionSubmitting === `reject:${approval.intent_id}`} onclick={() => handleDecision(approval.intent_id, 'approve')}>Approve</button>
                     <button type="button" class="danger" data-testid={`reject-${approval.intent_id}`} disabled={decisionSubmitting === `approve:${approval.intent_id}` || decisionSubmitting === `reject:${approval.intent_id}`} onclick={() => handleDecision(approval.intent_id, 'reject')}>Reject</button>
+                    </IntentGate>
                   </div>
                 </td>
               </tr>
@@ -450,10 +457,8 @@
         </table>
       {/if}
     </section>
-    </IntentGate>
 
     <div class="observability-grid">
-      <IntentGate domain="llm">
       <section class="panel" data-testid="llm-route-state-table">
         <div class="section-header">
           <h2><EnvironmentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Route State</h2>
@@ -487,6 +492,7 @@
                   <td>{state.gateway_status || '-'}</td>
                   <td>
                     {#if state.desired_release_id}
+                      <IntentGate domain="llm" record={{ route_id: state.route_id }}>
                       <button
                         type="button"
                         data-testid={`rollback-${state.route_id}-${state.environment_id}`}
@@ -495,6 +501,7 @@
                       >
                         {rollbackSubmitting === rollbackKey(state) ? 'Rolling back…' : 'Rollback'}
                       </button>
+                      </IntentGate>
                     {:else}
                       -
                     {/if}
@@ -505,7 +512,6 @@
           </table>
         {/if}
       </section>
-      </IntentGate>
 
       <section class="panel" data-testid="llm-operation-table">
         <div class="section-header">

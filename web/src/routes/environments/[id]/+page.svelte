@@ -26,6 +26,7 @@
   } from '$lib/stores';
   import { updateEnvironment, deleteEnvironment } from '$lib/stores/public-controlplane.svelte.js';
   import { publishIntent, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
+  import { intentOrgCandidates } from '$lib/stores/intent-readiness.svelte.js';
   import { environmentWorkerPolicyIntent } from '$lib/nostr/final-ops-intents.js';
   import { environmentFormSchema, parseRuntimeConfig, validateForm } from '$lib/validation/forms.js';
   import { keyValueLines, parseKeyValueLines } from '../../ml/page-model.js';
@@ -321,7 +322,7 @@
     try {
       const policy = buildPlacementPolicyFromForm(placementForm);
       await publishIntent(environmentWorkerPolicyIntent(environmentId, policy,
-        environment?.updated_at, resolveIntentOrgId('environment', environment?.org_id)));
+        environment?.updated_at, resolveIntentOrgId('environment', environment?.org_id, intentOrgCandidates())));
       placementNotice = 'Signed worker placement policy pending canonical confirmation';
       closePlacementModal();
     } catch (err) {

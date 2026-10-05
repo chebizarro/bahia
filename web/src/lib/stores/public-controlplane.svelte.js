@@ -5,21 +5,19 @@ import { publishIntent, publishIntentForStatus, canonicalIntentRecord, resolveIn
 import { artifactRegisterIntent, observedArtifactImportIntent, adoptionImportIntent,
   deploymentPreviewIntent, deploymentRouteAttachIntent, policyEvaluateIntent } from '$lib/nostr/last-ops-intents.js';
 import { adoptionScanIntent, sbomIntent } from '$lib/nostr/final-ops-intents.js';
-import { intentOrgCandidates } from './intent-readiness.svelte.js';
+import { intentOrgCandidates, intentRecordOrgId } from './intent-readiness.svelte.js';
+import { isIntentOrgId } from '$lib/nostr/intent-org.js';
 import { currentSystemInfo } from './system.svelte.js';
 import { inlineSBOMLimitBytes, relayLimits } from '$lib/nostr/relay-nip11.js';
 import { nostr } from '$lib/nostr/subscriptions.js';
 import { backupRecipes, backupRepositories, backupPolicies, backupDefinitions } from './collections/backup.svelte.js';
-import { services } from './collections/services.svelte.js';
-import { deploymentIntents, llmRoutes, llmRouteStates } from './collections/deployments.svelte.js';
+import { deploymentIntents, llmRouteStates } from './collections/deployments.svelte.js';
 import { deploymentIntentRequest, runtimeIntentRequest, llmLifecycleIntentRequest, backupRestoreApprovalIntentRequest } from '$lib/nostr/domain-intents.js';
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function intentOrgId(payload, current, domain) {
   const explicit = [payload?.org_id, current?.org_id,
     payload?.environment_id ? canonicalIntentRecord(payload.environment_id)?.content?.org_id : null]
-    .find(value => UUID.test(String(value || '')));
+    .find(isIntentOrgId);
   return resolveIntentOrgId(domain, explicit, intentOrgCandidates());
 }
 
@@ -86,7 +84,7 @@ export async function previewServiceDeployment(payload) {
 }
 
 function serviceOrgId(serviceId) {
-  return services.find(service => service.id === serviceId)?.org_id;
+  return intentRecordOrgId({ service_id: serviceId });
 }
 
 export function createDeploymentIntent(serviceId, environmentId, artifactId, deploymentUnitId = '', expectedDesiredStateHash = '', publicRoute = null) {
@@ -143,7 +141,7 @@ export function registerLLMRelease(payload) {
 }
 
 function llmOrgId(routeId) {
-  return llmRoutes.find(route => route.id === routeId || route.route_id === routeId)?.org_id;
+  return intentRecordOrgId({ route_id: routeId });
 }
 
 export function requestLLMDeploy(payload) {

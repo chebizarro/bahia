@@ -204,7 +204,7 @@
 
 <!-- Approve confirmation dialog -->
 <ConfirmDialog
-  intentDomain="deployment"
+  intentDomain="deployment" intentRecord={actionIntent}
   bind:open={approveOpen}
   title="Approve Deployment"
   titleIcon={SuccessIcon}
@@ -223,7 +223,7 @@
 
 <!-- Reject confirmation dialog -->
 <ConfirmDialog
-  intentDomain="deployment"
+  intentDomain="deployment" intentRecord={actionIntent}
   bind:open={rejectOpen}
   title="Reject Deployment"
   titleIcon={WarningIcon}

@@ -356,7 +356,7 @@
       >
         Cancel
       </LoadingButton>
-      <IntentGate domain="policy" orgId={createForm.org_id}>
+      <IntentGate domain="policy" orgId={createForm.org_id} orgField>
       <LoadingButton
         type="submit"
         variant="primary"

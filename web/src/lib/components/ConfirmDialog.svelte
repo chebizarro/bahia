@@ -15,11 +15,12 @@
   export let onConfirm = null;
   export let onCancel = null;
   export let onClose = null;
-  // When confirming publishes a signed intent, name its domain (and the
-  // record's org id, when known) so confirm stays disabled until the intent
-  // can be submitted. Cancel is never gated.
+  // When confirming publishes a signed intent, name its domain and the record
+  // it acts on (or the org id, when the page already holds it) so confirm
+  // stays disabled until the intent can be submitted. Cancel is never gated.
   export let intentDomain = '';
   export let intentOrgId = '';
+  export let intentRecord = null;
 
   function handleConfirm() {
     onConfirm?.();
@@ -57,7 +58,7 @@
         {cancelLabel}
       </LoadingButton>
       {#if intentDomain}
-        <IntentGate domain={intentDomain} orgId={intentOrgId}>
+        <IntentGate domain={intentDomain} orgId={intentOrgId} record={intentRecord}>
           <LoadingButton
             variant={variant === 'danger' ? 'danger' : 'primary'}
             {loading}

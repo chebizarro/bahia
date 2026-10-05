@@ -2,17 +2,20 @@
 // app can submit its signed intent, and the page a user is typing into must
 // not be remounted by a repeated auth bootstrap.
 //
-// Both mutations run under CPU throttling, the condition that exposed the
-// flakes on slow CI runners. The assertions themselves do not depend on speed:
-// the relay holds system discovery back until the test releases it, and the
-// page counts how often its mutation region is attached.
+// The first two mutations run under CPU throttling, the condition that exposed
+// the flakes on slow CI runners. The assertions themselves do not depend on
+// speed: the relay holds system discovery back until the test releases it, and
+// the page counts how often its mutation region is attached.
+//
+// Readiness comes from local state only. The last test takes the relay away
+// entirely: what is ready locally must still submit.
 import { test, expect } from '@playwright/test';
 import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
 import { createLLMState, createLLMSystemInfo, installPublicLLMControlplaneHarness } from './harnesses/llm-controlplane-public.js';
 
 const CPU_THROTTLING_RATE = 6;
 const SYSTEM_DISCOVERY_KIND = 11316;
-const ORG_REQUIRED = 'Select an organization before submitting this intent';
+const ORG_UNKNOWN = 'No organization is known for this session yet';
 const systemInfoWithoutOrg = { nostr: { browser_relays: ['ws://relay.test.local'], service_pubkey: E2E_SERVICE_PUBKEY },
   features: { relay_sidecar: true, relay_read_models: true, encrypted_nostr_requests: true, legacy_sse: false } };
 
@@ -105,15 +108,20 @@ test('org-scoped mutation stays disabled until the organization is known, then s
   await throttleCPU(page);
   await page.goto('/llm');
 
-  // The route is on screen, but nothing has named the organization yet.
+  // The route is on screen, but nothing has named the organization yet: the
+  // control is disabled and says why, next to it and to assistive technology.
   const routeState = page.getByTestId('llm-route-state-table');
   const rollback = routeState.getByRole('button', { name: 'Rollback' }).first();
   await expect(routeState).toContainText('chat-prod');
-  const gate = page.locator('fieldset[data-intent-domain="llm"]', { has: routeState });
-  await expect(gate).toHaveAttribute('aria-busy', 'true');
-  await expect(gate).toHaveAccessibleDescription('Connecting…');
+  const gate = routeState.locator('fieldset[data-intent-domain="llm"]');
   await expect(rollback).toBeDisabled();
-  await expect(page.locator('input[name="route-name"]')).toBeDisabled();
+  await expect(gate).toHaveAccessibleDescription(ORG_UNKNOWN);
+  await expect(gate.getByText(ORG_UNKNOWN)).toBeVisible();
+  await expect(page.getByTestId('llm-notice')).toHaveCount(0);
+
+  // Only the submitting controls wait; the forms can be filled in meanwhile.
+  await page.locator('input[name="route-name"]').fill('chat-next');
+  await expect(page.getByTestId('llm-create-route-form').getByRole('button', { name: 'Create route' })).toBeDisabled();
 
   // A user who clicks now waits for the control instead of getting a failure.
   const clicked = rollback.click();
@@ -126,6 +134,8 @@ test('org-scoped mutation stays disabled until the organization is known, then s
   expect(intentTag(intent, 'org')).toBe(systemInfo.organization_id);
   await expect(gate).toHaveAttribute('data-intent-ready', 'true');
   await expect(gate).not.toHaveAttribute('aria-describedby');
+  await expect(page.getByText(ORG_UNKNOWN)).toHaveCount(0);
+  await expect(page.locator('input[name="route-name"]')).toHaveValue('chat-next');
 });
 
 test('fleet-scoped mutation keeps what was typed while the session finishes booting', async ({ page }) => {
@@ -153,21 +163,38 @@ test('fleet-scoped mutation keeps what was typed while the session finishes boot
   expect(await page.evaluate(() => window.__attachments)).toBe(1);
 });
 
-test('an organization that can never be resolved still reports the explicit error', async ({ page }) => {
+test('with no relay reachable, fleet-scoped intents still submit and org-scoped ones say what is missing', async ({ page }) => {
   await installE2EMocks(page, { systemInfo: systemInfoWithoutOrg });
-  await page.goto('/llm');
+  // The mock relay refuses every connection for this session.
+  await page.addInitScript(() => sessionStorage.setItem('__bahia_e2e_relay_offline', '1'));
 
-  // Discovery and relay catch-up finished without naming an organization, so
-  // the form is usable and submitting says what the operator has to do.
+  // Fleet-scoped: accepted locally and shown as pending; the outbox delivers
+  // it when a relay comes back. Nothing here waits for a relay.
+  await page.goto('/dns');
+  const backend = page.getByTestId('dns-registry-mutations').locator('form').nth(2);
+  await backend.getByLabel('Reference').fill('offline');
+  await backend.getByRole('button', { name: 'Create backend' }).click();
+  await expect(page.getByTestId('dns-pending-intents')).toContainText('Pending');
+  const intent = await signedIntent(page, 'dns', 'backend-create');
+  expect(intentTag(intent, 'd')).toBe('dnsbackend:offline');
+  expect(await page.evaluate(async () => {
+    const { getPool, getRelayUrls } = await import('/src/lib/nostr/boot.js');
+    return getPool().getConnectedRelays(getRelayUrls());
+  })).toEqual([]);
+
+  // Org-scoped with no organization in the local store: disabled, with the
+  // reason shown, and no failure invented for the operator to dismiss.
+  await page.goto('/llm');
   const form = page.getByTestId('llm-create-route-form');
-  const gate = page.locator('fieldset[data-intent-domain="llm"]', { has: form });
-  await expect(gate).toHaveAttribute('aria-busy', 'false');
-  await expect(gate).toHaveAttribute('data-intent-ready', 'false');
+  const create = form.getByRole('button', { name: 'Create route' });
+  const gate = form.locator('fieldset[data-intent-domain="llm"]');
   await form.locator('input[name="route-name"]').fill('chat-prod');
   await form.locator('input[name="public-model"]').fill('bahia/chat');
-  await form.getByRole('button', { name: 'Create route' }).click();
-
-  await expect(page.getByTestId('llm-notice')).toHaveText(ORG_REQUIRED);
-  await expect(page.getByTestId('llm-pending-intents')).toHaveCount(0);
-  expect(await page.evaluate(() => window.__BAHIA_E2E_SIGNED_INTENTS.length)).toBe(0);
+  await expect(create).toBeDisabled();
+  await expect(gate).toHaveAttribute('aria-busy', 'false');
+  await expect(gate).toHaveAccessibleDescription(ORG_UNKNOWN);
+  await expect(gate.getByText(ORG_UNKNOWN)).toBeVisible();
+  await expect(page.getByTestId('llm-notice')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__BAHIA_E2E_SIGNED_INTENTS.filter(event =>
+    event.tags.some(tag => tag[0] === 'domain' && tag[1] === 'llm')).length)).toBe(0);
 });

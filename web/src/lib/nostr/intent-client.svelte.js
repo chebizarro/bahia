@@ -9,32 +9,9 @@ import { submitSensitiveIntent, waitForSensitiveIntentStatus } from '../stores/s
 
 export const pendingIntentRows = $state([]);
 
-// ParseIntent requires an org UUID even when FleetScopedHandler authorizes by
-// fleet operator pubkey rather than per-org membership.
-export const FLEET_INTENT_ORG_ID = 'f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7';
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const FLEET_SCOPED_DOMAINS = ['backup', 'package', 'worker', 'dns', 'ml', 'security', 'sbom', 'relay'];
+export { FLEET_INTENT_ORG_ID, INTENT_ORG_REQUIRED, resolveIntentOrgId } from './intent-org.js';
 
-export const INTENT_ORG_REQUIRED = 'Select an organization before submitting this intent';
 export const INTENT_CLIENT_REQUIRED = 'Signing an intent requires an authenticated signer, Bahia store and relay seed';
-
-/** Fleet-scoped domains authorize by fleet operator pubkey and need no org context. */
-export function isFleetScopedIntentDomain(domain) { return FLEET_SCOPED_DOMAINS.includes(domain); }
-
-export function isIntentOrgId(value) { return UUID.test(String(value || '')); }
-
-/** Distinct well-formed org ids among the known org-context candidates. */
-export function intentOrgChoices(candidates = []) {
-  return [...new Set(candidates.filter(isIntentOrgId))];
-}
-
-export function resolveIntentOrgId(domain, explicit, candidates = []) {
-  if (isIntentOrgId(explicit)) return explicit;
-  if (isFleetScopedIntentDomain(domain)) return FLEET_INTENT_ORG_ID;
-  const available = intentOrgChoices(candidates);
-  if (available.length === 1) return available[0];
-  throw new Error(INTENT_ORG_REQUIRED);
-}
 
 function tag(event, name) { return event?.tags?.find(item => item[0] === name)?.[1]; }
 
@@ -162,16 +139,22 @@ let opening = null;
 
 /**
  * Lifecycle of the session intent client, for the submission readiness signal
- * (stores/intent-readiness.svelte.js): idle until the layout resumes it,
- * opening while its stores open, then ready; unavailable carries the reason
- * the session cannot sign intents.
+ * (stores/intent-readiness.svelte.js). Every phase is a local fact; none
+ * depends on a relay being connected or caught up.
+ *
+ *   idle         the session has not opened a client yet (boot or sign-in
+ *                still to come)
+ *   opening      its local pending and outbox stores are being opened
+ *   ready        open
+ *   closed       stopped after use; the next submit reopens it on demand
+ *   unavailable  the session cannot sign intents; error says why
  */
 export const intentClientState = $state({ phase: 'idle', error: '' });
 
 async function currentClient() {
   // Callers include effects (the layout resumes the client from one); the
   // phase is this module's own bookkeeping and must not become their dependency.
-  if (untrack(() => intentClientState.phase) === 'idle') intentClientState.phase = 'opening';
+  if (['idle', 'closed'].includes(untrack(() => intentClientState.phase))) intentClientState.phase = 'opening';
   try {
     const client = await openCurrentClient();
     intentClientState.phase = 'ready';
@@ -257,7 +240,7 @@ export function canonicalIntentRecord(coordinate) {
 
 export function stopIntentClient() {
   active?.client.close(); active = null; opening = null;
-  intentClientState.phase = 'idle';
+  if (untrack(() => intentClientState.phase) !== 'idle') intentClientState.phase = 'closed';
   intentClientState.error = '';
   pendingIntentRows.splice(0);
 }
