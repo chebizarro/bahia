@@ -120,6 +120,11 @@ jobs:
           test -f scripts/relay_policy_rollout_gate.py
           test -f scripts/soul_gallery_rollout_gate.mjs
           test -f "$COMPOSE_FILE"
+          # Read-only gate on the HOST compose file, before image swap, backup, or up.
+          # Job-level PUBLIC_BAHIA_* values reach Compose interpolation, but the
+          # host file must explicitly pass them into web.environment.
+          docker compose -f "$COMPOSE_FILE" config --format json \
+            | python3 scripts/check_web_bootstrap_compose.py
           test -w "$CONTROLPLANE_ROOT"
           mkdir -p "$RELEASE_ROOT" "$CONTROLPLANE_ROOT/backups"
           test -w "$RELEASE_ROOT"
