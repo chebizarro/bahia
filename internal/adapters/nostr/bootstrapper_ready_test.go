@@ -27,6 +27,17 @@ func productionCatalogBootstrapper(t *testing.T, pool *RelayPool, cache Bootstra
 	})
 }
 
+// bootstrapReadySignalled reports whether the bootstrapper's ready signal has
+// been closed.
+func bootstrapReadySignalled(b *Bootstrapper) bool {
+	select {
+	case <-b.ReadySignal():
+		return true
+	default:
+		return false
+	}
+}
+
 func TestBootstrapperEmptyFleetBecomesReadyWhenEveryRelaySendsEOSE(t *testing.T) {
 	// A non-nil empty store answers every REQ with zero events then EOSE.
 	one := &bootstrapFakeRelay{url: "wss://one.example", store: []gonostr.Event{}}
@@ -35,10 +46,11 @@ func TestBootstrapperEmptyFleetBecomesReadyWhenEveryRelaySendsEOSE(t *testing.T)
 	cache := &bootstrapSourceRecorder{}
 	bootstrapper := productionCatalogBootstrapper(t, pool, cache)
 
+	require.False(t, bootstrapReadySignalled(bootstrapper), "the ready signal must stay open until catch-up completes")
 	require.NoError(t, bootstrapper.attemptBootstrap(context.Background()))
 
 	require.True(t, bootstrapper.Ready())
-	require.True(t, bootstrapper.Ready())
+	require.True(t, bootstrapReadySignalled(bootstrapper), "consumers waiting on the ready signal are released")
 	require.Empty(t, cache.ids())
 	required := len(NewKindCatalog().RequiredGroups())
 	require.Equal(t, required, bootstrapper.Progress().GroupsComplete)
@@ -131,7 +143,7 @@ func TestBootstrapperNotReadyWhenNoRelaySendsEOSE(t *testing.T) {
 			err := <-done
 			require.Error(t, err)
 			require.False(t, bootstrapper.Ready())
-			require.False(t, bootstrapper.Ready())
+			require.False(t, bootstrapReadySignalled(bootstrapper), "a failed catch-up must not release consumers")
 			progress := bootstrapper.Progress()
 			require.Equal(t, BootstrapPhaseFailed, progress.Phase)
 			require.Zero(t, progress.GroupsComplete)

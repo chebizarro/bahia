@@ -252,6 +252,10 @@ Stage 3 uses existing canonical observable kinds only: `30315` managed-instance 
 
 Route canary transitions use existing canonical observable kinds only, under `domain=route`: `30315` route status (`bahia.status.route-canary.v1`) and `30900` route state (`bahia.state.route-canary.v1`), both addressed by `d=route:<service>:<environment>:<deployment-unit or none>:<hostname>`, plus `4903` transition audit facts (`bahia.audit.route-canary.v1`, `state=<route coordinate>`). Every event carries the bounded fleet-health `status`, `outage=open|closed`, `classification`, `hostname`, `instance_status` when observed, and `service_healthy_route_broken`. An open outage is `unhealthy`, a warning or pre-threshold failure is `degraded`, and `route_ok` is `healthy`. Projection reacts to every persisted route observation: `30315`/`30900` refresh current state, while only transitions add `4903` audit history. It publishes through the verified signed outbox path and adds no mutation command or polling transport. See `docs/nostr-event-implementation-guide.md` for the full shape.
 
+### Supervision state authority
+
+Route-canary and managed-instance supervision enumerate their desired set from the daemon's `service-state`, `service-registry` and `environment-registry` `30900` records in the local event store and resume their progress from canonical records: the route failure streak and outage start from `bahia.state.route-canary.v1`, instance health from `bahia.state.managed-instance-health.v1`, the restart budget and pending recovery claim from the per-instance ledger `bahia.state.managed-instance-recovery.v1` (`d=runtime:recovery:<service>:<environment>:<unit>:<target-sha256>`), and maintenance overrides from `bahia.state.managed-instance-maintenance.v1` (`d=runtime:maintenance:<...>`). Both new schemas are `30900` records of the managed-instance family (`t=runtime-instance-health`, `legacy_kind=32040`); no wire kind is added. PostgreSQL is a write-behind index written after the canonical record and is never read to decide a probe or a recovery. See `docs/nostr-event-implementation-guide.md` for the full shape.
+
 ### Agent runtime release schema compatibility
 
 `bahia.agent-runtime-release.v1` is additive on canonical kind `30315`. Older consumers may ignore the two new `domain` values. Consumers that understand them must preserve tenant tags, immutable provenance, explicit branch/channel, and previous-binding rollback linkage; they must not infer per-agent build evidence from a shared release.
@@ -314,6 +318,12 @@ content. The log is one latest-50-per-channel replaceable window, not a growing
 per-line relay history; delete publishes a same-coordinate tombstone. See
 [the event implementation guide](nostr-event-implementation-guide.md#f74b-canonical-fleet-private-state-bahia-irsry74)
 for coordinates, size bounds, and confidentiality.
+
+Security execution state likewise remains on wire kind `30900`: target (`32020`)
+and run (`32021`) join the existing schedule (`32013`), finding (`32012`), and
+finding-detail (`32014`) fleet-OCK cp-state families. These values are
+`legacy_kind` discriminators only. The signed run record replaces the former
+SQL schedule lease as the idempotent claim and durable restart ledger.
 
 ## Policy evaluation intent and build ownership (bahia-irsry.77)
 

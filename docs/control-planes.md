@@ -317,6 +317,7 @@ Durable Security truth is published by the Bahia service key as:
 
 - `30315` with `domain=security`, `schema=bahia.status.security-scan.v1`, `d=security:scan:<run_id>`, `run`, `target_type`, `target_key_hash`, `status`, optional `step`, and `e`/`p` correlation tags.
 - `30900` with `schema=bahia.security.scan-summary.v1` and `d=security:scan-summary:<run_id>` for per-run summaries, or `schema=bahia.security.target-summary.v1` and `d=security:target-summary:<target_key_hash>` for latest target state.
+- Fleet-OCK encrypted `30900` cp-state on `#t=security-target|security-run|security-schedule|security-finding|security-finding-detail`. Target and deterministic run records are the DB-less execution input, idempotent schedule claim, and durable progress ledger; SQL is an optional rebuilt index.
 - `30078` with `domain=security`, `schema=bahia.security.findings.v1`, and `d=security:findings:<run_id>:<chunk_or_finding_hash>` for normalized public-safe finding details.
 - `4903` with `domain=security`, `schema=bahia.audit.security.v1`, and `type=security-scan`, `security-policy-breach`, or `security-publication` for lifecycle, failure, policy-breach, and publication-retry facts.
 
@@ -527,6 +528,10 @@ Stage 3 uses existing canonical observable kinds only: `30315` managed-instance 
 ### Route canary projection
 
 Route canary transitions use existing canonical observable kinds only, under `domain=route`: `30315` route status (`bahia.status.route-canary.v1`) and `30900` route state (`bahia.state.route-canary.v1`), both addressed by `d=route:<service>:<environment>:<deployment-unit or none>:<hostname>`, plus `4903` transition audit facts (`bahia.audit.route-canary.v1`, `state=<route coordinate>`). Every event carries the bounded fleet-health `status`, `outage=open|closed`, `classification`, `hostname`, `instance_status` when observed, and `service_healthy_route_broken`. An open outage is `unhealthy`, a warning or pre-threshold failure is `degraded`, and `route_ok` is `healthy`. Projection reacts to every persisted route observation: `30315`/`30900` refresh current state, while only transitions add `4903` audit history. It publishes through the verified signed outbox path and adds no mutation command or polling transport. See `docs/nostr-event-implementation-guide.md` for the full shape.
+
+### Supervision state authority
+
+Route-canary and managed-instance supervision enumerate their desired set from the daemon's `service-state`, `service-registry` and `environment-registry` `30900` records in the local event store and resume their progress from canonical records: the route failure streak and outage start from `bahia.state.route-canary.v1`, instance health from `bahia.state.managed-instance-health.v1`, the restart budget and pending recovery claim from the per-instance ledger `bahia.state.managed-instance-recovery.v1` (`d=runtime:recovery:<service>:<environment>:<unit>:<target-sha256>`), and maintenance overrides from `bahia.state.managed-instance-maintenance.v1` (`d=runtime:maintenance:<...>`). Both new schemas are `30900` records of the managed-instance family (`t=runtime-instance-health`, `legacy_kind=32040`); no wire kind is added. PostgreSQL is a write-behind index written after the canonical record and is never read to decide a probe or a recovery. See `docs/nostr-event-implementation-guide.md` for the full shape.
 
 ### Agent runtime release projection boundary
 

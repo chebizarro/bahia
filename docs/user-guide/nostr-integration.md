@@ -736,6 +736,8 @@ For repository archive snapshots, use `subjectLocator.repository.content_digest`
 
 Security scanning is an event-driven observer of canonical SBOM truth and an explicit ContextVM scan surface. SBOM generation/import still completes on SBOM `30078` references and `30004` availability lists; Security watches those events and publishes separate Security observables after it verifies the referenced payload hash and scans normalized targets.
 
+The daemon's private execution ledger is fleet-OCK encrypted kind `30900` cp-state on `security-target`, `security-run`, `security-schedule`, `security-finding`, and `security-finding-detail` topics. Signed deterministic run records are schedule claims and restart progress; Postgres availability does not gate scans or readiness.
+
 Security ContextVM methods are:
 
 | Method | Use | Completion signal |
@@ -927,6 +929,8 @@ Legacy Bahia-specific request/status/result/read-model ranges (`5961`-`6006`, `6
 ### Managed-instance health projection
 
 Stage 3 uses existing canonical observable kinds only: `30315` managed-instance status, `30900` current health state, and `4903` recovery/maintenance audit facts. Projection reacts to internal subscriptions and publishes through the verified signed outbox path; it adds no mutation command or polling transport.
+
+Two more `30900` records of the same family carry the state the supervisor resumes after a restart, with or without PostgreSQL: the per-instance recovery ledger (`bahia.state.managed-instance-recovery.v1`, `d=runtime:recovery:<service>:<environment>:<unit>:<target-sha256>`, the restart budget and any pending recovery claim) and the maintenance override (`bahia.state.managed-instance-maintenance.v1`, `d=runtime:maintenance:<...>`, `active=true|false`). Instance-health listings select `bahia.state.managed-instance-health.v1`.
 
 ### Shared agent runtime releases
 

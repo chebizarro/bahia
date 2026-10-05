@@ -626,10 +626,13 @@ Security uses the same decision tree without allocating a new kind:
 - Explicit scan/rescan and read intent: ContextVM `25910` methods `security/scan`, `security/rescan`, `security/findings-list`, and `security/schedules-list`, usually wrapped with `1059` or `21059` for sensitive target or policy data.
 - Progress: NIP-38 `30315` with `domain=security`, `schema=bahia.status.security-scan.v1`, and `d=security:scan:<run_id>`.
 - Current state: `30900` with `schema=bahia.security.scan-summary.v1` for per-run summaries and `schema=bahia.security.target-summary.v1` for latest target summaries.
+- Fleet-private execution state: OCK-encrypted `30900` cp-state topics `security-target` (`legacy_kind=32020`), `security-run` (`32021`), `security-schedule` (`32013`), `security-finding` (`32012`), and `security-finding-detail` (`32014`). The target supplies restartable scan input; the deterministic run coordinate is the idempotent schedule claim and durable progress record. These numbers are family discriminators, never wire kinds.
 - App-specific details: NIP-78 `30078` with `schema=bahia.security.findings.v1` for normalized public-safe findings.
 - Audit and policy breach evidence: `4903` with `schema=bahia.audit.security.v1`.
 
 Security scans triggered by SBOM production subscribe to existing SBOM `30078` reference and `30004` availability events with exact `#domain=sbom`, `#schema`, subject, and service-author filters. The scanner treats `EOSE` as historical catch-up completion, keeps realtime subscriptions open when needed, handles `CLOSED` and `AUTH`, verifies inbound event signatures and hashes before trust, and verifies relay `OK` for every Security observable it publishes.
+
+Finding detail parts use fixed `security:finding-detail:<hash>:part:<n>` coordinates. For multipart details the daemon publishes every part first and then replaces the base `security:finding-detail:<hash>` manifest with the authoritative `total_parts`; readers ignore parts outside that manifest. A base tombstone means no detail, even if older part coordinates remain retained.
 
 Relay topology is separate and should be published as NIP-51 relay sets:
 
@@ -867,6 +870,29 @@ The web reads managed-instance health, route canaries, Blossom administration, a
 | 32042 Soul runtime policy | `soul-factory-runtime-policy` | `soul-factory:runtime-policy` | `agent_runtimes` from validated daemon config | member-authenticated |
 | 32043 Blossom administration | `blossom-admin` | `blossom:admin` | OCK-encrypted configured servers and observed health | ciphertext public, fleet OCK required |
 | 32044 Blossom blob | `blossom-blob` | `blossom:blob:<owner-pubkey>:<sha256>` | OCK-encrypted BUD-02 descriptor and owner | ciphertext public, fleet OCK required |
+
+#### Supervision state read from the local event store (B-33, B-34)
+
+Route-canary and managed-instance supervision decide from the daemon's own canonical `30900` records in the local event store, never from PostgreSQL. PostgreSQL rows are a write-behind query index written after the canonical record; a failed index write is logged and blocks nothing.
+
+| Input | Canonical record |
+|---|---|
+| Routes to probe, instances to supervise | `service-state`, `service-registry` and `environment-registry` records (latest version per coordinate; a tombstone or a replacement without the route or desired runtime state leaves the set at the next sweep) |
+| Route failure streak, outage start ("failing since") | `bahia.state.route-canary.v1` at the route coordinate |
+| Instance health before the current observation | `bahia.state.managed-instance-health.v1` at `runtime:instance:<...>` |
+| Restart budget, backoff history, pending recovery claim | `bahia.state.managed-instance-recovery.v1` at `runtime:recovery:<service>:<environment>:<unit>:<target-sha256>` |
+| Maintenance override | `bahia.state.managed-instance-maintenance.v1` at `runtime:maintenance:<service>:<environment>:<unit>:<target-sha256>` |
+
+The recovery ledger and the maintenance record are two further schemas of the `32040` family. Both are `30900` events tagged `domain=runtime`, `t=runtime-instance-health`, `legacy_kind=32040`, `service`, `environment`, `deployment_unit` and `target`, with `entity=managed-instance-recovery` or `entity=managed-instance-maintenance`:
+
+```json
+{"schema":"bahia.state.managed-instance-recovery.v1","attempts":[{"id":"<uuid>","service_id":"<uuid>","environment_id":"<uuid>","deployment_unit_id":"<uuid>","runtime_target_name":"api","correlation_id":"<sha256>","requested_at":"<rfc3339>","result":"pending|success|degraded|failed|budget_exhausted|skipped_override","evidence":"<sanitized>"}]}
+{"schema":"bahia.state.managed-instance-maintenance.v1","active":true,"override":{"id":"<uuid>","service_id":"<uuid>","environment_id":"<uuid>","deployment_unit_id":"<uuid>","runtime_target_name":"api","actor":"<sanitized>","reason":"<sanitized>","created_at":"<rfc3339>","expires_at":"<rfc3339, optional>"}}
+```
+
+The ledger is one replaceable record per instance holding its newest 100 attempts (a pending attempt is never dropped), so canonical state grows with the number of instances, not with the number of restarts; the immutable history of each attempt remains its `4903` audit facts. An attempt is identified by its `correlation_id`, which is derived from the failure generation: recording it again publishes nothing. A rewrite of either record is signed with a `created_at` strictly after the version it replaces. Clearing an override republishes the record with `active=false`. Consumers that list instance health must select `bahia.state.managed-instance-health.v1` (content carries `health`); the web operator view already does.
+
+Both supervisors start their periodic work only after the bootstrapper's first relay catch-up of the local event store. On first start after an upgrade, an instance that has recovery attempts or an active override in PostgreSQL and no canonical record gets them published once (design Phase 3 §4.2); afterwards PostgreSQL is not read. With `nostr.publish_enabled=false` no canonical route-canary record exists, so route state lives in the process and, when configured, in the PostgreSQL index it then resumes from.
 
 Blossom metadata is published once after a successful daemon-owned upload and once per configured owner at startup. Raw blob retrieval remains HTTP as required by Blossom. The UI's owner filter applies to already-published metadata; it does not issue a new server-side listing for arbitrary pubkeys. Soul policy is published at daemon startup and replaced only when a new daemon config is started.
 

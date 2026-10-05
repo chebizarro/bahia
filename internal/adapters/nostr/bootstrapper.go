@@ -79,6 +79,7 @@ type Bootstrapper struct {
 	mu       sync.RWMutex
 	progress BootstrapProgress
 	config   BootstrapConfig
+	readyCh  chan struct{}
 }
 
 type bootstrapEventDecodeError struct {
@@ -146,6 +147,7 @@ func NewBootstrapper(pool *RelayPool, catalog *KindCatalog, cursors *localstore.
 		progress: BootstrapProgress{
 			Phase: BootstrapPhaseInit,
 		},
+		readyCh: make(chan struct{}),
 	}
 }
 
@@ -290,6 +292,7 @@ func (b *Bootstrapper) attemptBootstrap(ctx context.Context) error {
 	b.setProgress(func(progress *BootstrapProgress) {
 		progress.Phase = BootstrapPhaseReady
 	})
+	b.markReady()
 	b.logger.Info("bootstrap ready",
 		zap.Int("groups_synced", len(completed)),
 		zap.Int("events_applied", decodedEvents))
@@ -318,6 +321,20 @@ func (b *Bootstrapper) Progress() BootstrapProgress {
 
 func (b *Bootstrapper) Ready() bool {
 	return b.Progress().Phase == BootstrapPhaseReady
+}
+
+// ReadySignal closes after the first complete relay catch-up. Consumers use it
+// to gate actions on authoritative local state without polling.
+func (b *Bootstrapper) ReadySignal() <-chan struct{} {
+	return b.readyCh
+}
+
+func (b *Bootstrapper) markReady() {
+	select {
+	case <-b.readyCh:
+	default:
+		close(b.readyCh)
+	}
 }
 
 func (b *Bootstrapper) requiredGroups() []ReplayGroup {

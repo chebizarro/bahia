@@ -96,6 +96,17 @@ const (
 	CPStateFamilyBlossomBlob           CPStateFamily = BlossomBlobRecord
 )
 
+// Security scan execution families (audit B-32). A target record carries the
+// scan input and a run record is the signed claim and durable progress of one
+// scan, so the daemon schedules and resumes scans from its local event store
+// instead of SQL leases. Like worker cleanup, these families never had a wire
+// kind: they exist only as 30900 discriminators, so they are declared here and
+// not in the kind catalog.
+const (
+	CPStateFamilySecurityTarget CPStateFamily = 32020
+	CPStateFamilySecurityRun    CPStateFamily = 32021
+)
+
 // FleetOCKScope is the well-known orgID value used for fleet-wide
 // confidential cp-state (payments, security findings/schedules). The OCK
 // for this scope is wrapped to all fleet operators (config authorized_pubkeys

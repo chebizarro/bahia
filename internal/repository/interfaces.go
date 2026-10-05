@@ -220,15 +220,16 @@ type SecurityRepository interface {
 	ListSecurityFindings(ctx context.Context, runID uuid.UUID) ([]domain.SecurityOSVFinding, error)
 	ListSecurityFindingsFiltered(ctx context.Context, filter SecurityFindingFilter) ([]domain.SecurityOSVFinding, error)
 
+	// Schedules mirror canonical security cp-state (audit B-32). There is no
+	// claim or lease here: a scheduled scan is claimed by its signed run
+	// record, whose id is derived from the schedule and its due time.
 	UpsertSecurityScanSchedule(ctx context.Context, schedule *domain.SecurityScanSchedule) error
 	ListSecurityScanSchedulesFiltered(ctx context.Context, filter SecurityScheduleFilter) ([]domain.SecurityScanSchedule, error)
-	ClaimDueSecurityScanSchedules(ctx context.Context, now time.Time, limit int, leasedBy string, leaseUntil time.Time) ([]domain.SecurityScanSchedule, error)
 	MarkSecurityScheduleDispatched(ctx context.Context, id uuid.UUID, runID uuid.UUID, dispatchedAt time.Time, nextDueAt time.Time) error
 	DisableSecurityScanSchedulesForPolicy(ctx context.Context, policyID uuid.UUID, disabledAt time.Time) error
 
 	RecordSecurityPolicyBreach(ctx context.Context, breach *domain.SecurityPolicyBreach) (domain.SecurityBreachRecordResult, error)
 	ResolveSecurityPolicyBreach(ctx context.Context, policyID uuid.UUID, targetKeyHash string, resolvedAt time.Time) error
-	GetActiveSecurityPolicyBreach(ctx context.Context, policyID uuid.UUID, targetKeyHash string) (*domain.SecurityPolicyBreach, error)
 
 	UpsertOSVVulnerabilityCache(ctx context.Context, cache *domain.OSVVulnerabilityCache) error
 	GetOSVVulnerabilityCache(ctx context.Context, osvID string, now time.Time) (*domain.OSVVulnerabilityCache, error)

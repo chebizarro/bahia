@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/adapters/routing"
@@ -58,9 +59,16 @@ type RouteCanaryGate struct {
 	repo         RouteCanaryRepository
 	healthSource RouteInstanceHealthSource
 	publisher    events.Publisher
+	canonical    *RouteCanaryProjector
 	cfg          RouteCanaryGateConfig
 	logger       *zap.Logger
 	now          func() time.Time
+}
+
+// SetCanonicalProjector makes the gate publish a route's canonical records
+// before its state is indexed, as the periodic supervisor does.
+func (g *RouteCanaryGate) SetCanonicalProjector(projector *RouteCanaryProjector) {
+	g.canonical = projector
 }
 
 // NewRouteCanaryGate builds a post-deploy route gate. publisher receives the
@@ -234,6 +242,7 @@ func (g *RouteCanaryGate) record(ctx context.Context, plan *domain.DesiredPublic
 	}
 
 	event := domain.RouteCanaryEvent{
+		ID:                     uuid.New(),
 		RouteCanaryKey:         key,
 		Transition:             transition,
 		PreviousClassification: prior.Classification,
@@ -243,6 +252,18 @@ func (g *RouteCanaryGate) record(ctx context.Context, plan *domain.DesiredPublic
 		Evidence:               summarizeRouteObservations(verdict.Observations),
 		ObservedInstanceStatus: instanceStatus,
 		ObservedAt:             now,
+	}
+	if g.canonical != nil {
+		// The canonical record is the durable state; the repository indexes it.
+		projection, ok := routeCanaryTransitionEvent(next, event, instanceStatus, now)
+		if !ok {
+			projection = routeCanaryObservedEvent(next, instanceStatus, now)
+		}
+		if err := g.canonical.Project(context.WithoutCancel(ctx), projection); err != nil {
+			g.logger.Error("publish route canary gate outcome",
+				zap.String("route", key.Coordinate()), zap.Error(err))
+			return
+		}
 	}
 	if err := g.repo.UpsertStateWithEvent(recordCtx, &next, &event); err != nil {
 		g.logger.Error("record route canary gate outcome",

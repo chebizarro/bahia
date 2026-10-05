@@ -72,6 +72,8 @@ var cpStateTopicsByFamily = map[int]string{
 	KindSecurityFindingRecord:           kinds.CPStateTopicSecurityFinding,
 	KindSecurityScheduleRecord:          kinds.CPStateTopicSecuritySchedule,
 	KindSecurityFindingDetailRecord:     kinds.CPStateTopicSecurityFindingDetail,
+	KindSecurityTargetRecord:            kinds.CPStateTopicSecurityTarget,
+	KindSecurityRunRecord:               kinds.CPStateTopicSecurityRun,
 	KindLLMReleaseRegistry:              kinds.CPStateTopicLLMRelease,
 	KindArtifactSignatureRegistry:       kinds.CPStateTopicArtifactSignature,
 	KindArtifactSBOMRegistry:            kinds.CPStateTopicArtifactSBOM,

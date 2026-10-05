@@ -507,6 +507,8 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindSecurityFindingRecord:       {"security", "finding", kinds.CPStateTopicSecurityFinding},
 	KindSecurityScheduleRecord:      {"security", "schedule", kinds.CPStateTopicSecuritySchedule},
 	KindSecurityFindingDetailRecord: {"security", "finding-detail", kinds.CPStateTopicSecurityFindingDetail},
+	KindSecurityTargetRecord:        {"security", "target", kinds.CPStateTopicSecurityTarget},
+	KindSecurityRunRecord:           {"security", "run", kinds.CPStateTopicSecurityRun},
 	// F74a: independent coordinates for release, signature, SBOM and runtime state.
 	KindLLMReleaseRegistry:            {"llm", "release", kinds.CPStateTopicLLMRelease},
 	KindArtifactSignatureRegistry:     {"artifact", "signature", kinds.CPStateTopicArtifactSignature},
