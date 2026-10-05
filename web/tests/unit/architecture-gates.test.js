@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = join(here, '..', '..');
+const srcDir = join(webRoot, 'src');
 const libDir = join(webRoot, 'src', 'lib');
 const storesDir = join(webRoot, 'src', 'lib', 'stores');
 const baselinePath = join(here, 'architecture-gates.baseline.json');
@@ -59,6 +60,19 @@ function readBaseline() {
 }
 
 describe('web architecture gates (bahia-irsry.8)', () => {
+  it('application source never uses Wheelhouse relay defaults or hardcoded public relay hosts', () => {
+    const offenders = [];
+    for (const file of sourceFiles(srcDir)) {
+      const code = stripComments(readFileSync(file, 'utf8'));
+      const rel = relative(webRoot, file);
+      if (/\bFLEET_RELAY_URLS\b/.test(code)) offenders.push(`${rel}: Wheelhouse relay defaults`);
+      for (const [, scheme, host] of code.matchAll(/\b(ws{1,2}):\/\/([a-z0-9][a-z0-9.:-]*)(?=[/:'"`\s<]|$)/gi)) {
+        if (!/(?:^|\.)example(?:\.com)?$/i.test(host)) offenders.push(`${rel}: ${scheme}://${host}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('W4-S1 keeps SimplePool and PoolBackedClient out of application library code', () => {
     const offenders = sourceFiles(libDir)
       .filter((file) => !file.endsWith('/nostr/pool-welshman.js'))
