@@ -153,8 +153,6 @@ jobs:
           tag="github-${RELEASE_REVISION::7}"
           docker build \
             -f web/Dockerfile \
-            --build-arg PUBLIC_BAHIA_BOOTSTRAP_RELAYS="$PUBLIC_BAHIA_BOOTSTRAP_RELAYS" \
-            --build-arg PUBLIC_BAHIA_SERVICE_PUBKEYS="$PUBLIC_BAHIA_SERVICE_PUBKEYS" \
             --build-arg PUBLIC_BAHIA_GIT_COMMIT="$RELEASE_REVISION" \
             --build-arg PUBLIC_BAHIA_WEB_VERSION="0.1.0-$RELEASE_REVISION" \
             -t "local/bahia-controlplane-web:$tag" web
