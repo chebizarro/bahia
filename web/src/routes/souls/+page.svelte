@@ -67,7 +67,7 @@
     <section class="drafts-section">
       <div class="drafts-header">
         <h2><SeedIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Saved drafts</h2>
-        <p>Signed 31952 drafts you can resume and provision later.</p>
+        <p>Signed 31952 drafts from your key that you can resume and provision later. Drafts by other operators are not shown.</p>
       </div>
       <div class="drafts-list">
         {#each savedDrafts as draft (draft.agentId || draft.id)}

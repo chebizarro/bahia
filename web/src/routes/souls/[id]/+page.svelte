@@ -642,6 +642,10 @@
 
         <section class="info-section wide">
           <h3><MemoryIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Activity & History</h3>
+          <!-- The browser cannot verify soul_factory.authorized_pubkeys, so kind 1950 actions are trusted from the signed-in key only. -->
+          <p class="history-muted" data-testid="soul-activity-operator-scope-note">
+            Actions are listed only when signed by your key; actions by other operators are not shown. Soul Factory results are shown for every operator.
+          </p>
           {#if historyLoading}
             <p class="history-muted">Loading activity history...</p>
           {:else if historyError}

@@ -23,9 +23,16 @@ const fleetConfig = (pubkey = TEST_PUBKEY, model = '') => ({
   content: JSON.stringify({ schema: 'soulfactory-fleet-config/v1', template: {}, defaults: { model, bindings: [], required_plugins: [] } })
 });
 
+const failoverRequest = (service, pubkey) => ({
+  kind: 38430, pubkey, created_at: now,
+  tags: [['service', service], ['worker', 'standby-a']], content: JSON.stringify({ reason: 'primary unavailable' })
+});
+
 async function setup(page) {
   await installE2EMocks(page, { nostrEvents: [
     status('svc-cached'), status('svc-forged', untrusted),
+    // Operator-signed kinds are trusted from the signed-in key only.
+    failoverRequest('svc-mine', TEST_PUBKEY), failoverRequest('svc-other-operator', untrusted),
     soul('cached-soul', 'Cached Fleet Soul'), soul('forged-soul', 'Forged Fleet Soul', untrusted),
     // A stranger re-signing a trusted Soul's coordinate must not replace it.
     soul('cached-soul', 'Hijacked Fleet Soul', untrusted, now + 60),
@@ -70,6 +77,13 @@ test('continuity renders the verified cache on reload with the relay unreachable
   await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'svc-forged' })).toHaveCount(0);
   await expect(page.getByText('Loading continuity history')).toHaveCount(0);
+
+  // Operator-signed requests: mine is shown, another signer's is not, and the
+  // view says so instead of silently omitting other operators' documents.
+  await page.getByRole('button', { name: /^Requests/ }).click();
+  await expect(page.getByRole('heading', { name: 'svc-mine' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'svc-other-operator' })).toHaveCount(0);
+  await expect(page.getByTestId('continuity-operator-scope-note')).toContainText('other fleet operators are not shown');
   await expect.poll(() => noOpenSocket(page)).toBe(true);
 });
 
@@ -85,6 +99,7 @@ test('settings/fleet renders cached souls and fleet config on reload with the re
   await expect(page.getByText('Hijacked Fleet Soul')).toHaveCount(0);
   await expect(page.getByText('Loading the latest operator-authored fleet document')).toHaveCount(0);
   await expect(page.getByText('Loading retained rollout events')).toHaveCount(0);
+  await expect(page.getByTestId('fleet-operator-scope-note')).toContainText('another operator is not shown');
   await expect.poll(() => noOpenSocket(page)).toBe(true);
 });
 
@@ -103,6 +118,7 @@ test('soul gallery and detail render from cache with the relay unreachable and k
   await expect(page.getByRole('heading', { name: 'Cached Fleet Soul' })).toBeVisible();
   await expect(page.getByText('Hijacked Fleet Soul')).toHaveCount(0);
   await expect(page.getByText('Soul not found')).toHaveCount(0);
+  await expect(page.getByTestId('soul-activity-operator-scope-note')).toContainText('other operators are not shown');
   await expect.poll(() => noOpenSocket(page)).toBe(true);
 });
 

@@ -229,8 +229,8 @@ describe('Souls Store', () => {
     soulsModule = await import('../../src/lib/stores/souls.js');
   });
 
-  // What the app does: a page projects the cache, then the layout starts the
-  // relay reader (after the core read model caught up).
+  // What the app does: the layout starts the relay reader at boot and pages
+  // only project the cache.
   const startSoulFactory = async () => {
     await soulsModule.subscribeToSoulFactoryUpdates();
     soulsModule.initSoulFactoryStoreBinding();

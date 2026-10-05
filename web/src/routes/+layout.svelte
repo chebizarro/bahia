@@ -24,7 +24,6 @@
   import { initSoulFactoryStoreBinding, teardownSoulFactoryStoreBinding } from '$lib/stores/souls.svelte.js';
   import { initOpsWidgetWallBinding, teardownOpsWidgetWallBinding } from '$lib/widgets/ops-widget-wall.js';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
-  import { syncStatus } from '$lib/stores/sync-status.svelte.js';
   import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
   import { theme } from '$lib/stores/theme.js';
   import { authState, initializeAuth, isAuthenticated, resolveActiveSigner } from '$lib/stores/auth.js';
@@ -80,8 +79,10 @@
         initBackupStoreBinding();
         initMLStoreBinding();
         initSBOMStoreBinding();
-        // Cached Souls project now; relay readers start in the effect below.
-        initSoulFactoryStoreBinding({ relay: false });
+        // Cached continuity and SoulFactory views project from the store; their
+        // relay readers start here too and never wait on a relay or EOSE.
+        initContinuityStoreBinding();
+        initSoulFactoryStoreBinding();
         initOpsWidgetWallBinding();
       } catch (err) {
         console.warn('[layout] boot() failed:', err);
@@ -123,19 +124,12 @@
     };
   });
 
-  // Continuity and SoulFactory history readers are background traffic. Their
-  // views already render from the cache; the paged relay readers start once
-  // the core read model has caught up on at least one relay, so they never
-  // compete with boot-critical subscriptions, and they re-sync whenever the
-  // signed-in operator (a trusted author for operator-signed kinds) changes.
+  // The signed-in operator is a trusted author for operator-signed kinds, so
+  // the continuity and SoulFactory readers re-sync whenever it changes.
   $effect(() => {
     void (authState.status === 'authenticated' ? authState.pubkey : '');
     if (!eventStoreReady) return;
-    const coreCaughtUp = syncStatus.eoseCount > 0;
-    untrack(() => {
-      initSoulFactoryStoreBinding({ relay: coreCaughtUp });
-      if (coreCaughtUp) initContinuityStoreBinding();
-    });
+    untrack(() => { initContinuityStoreBinding(); initSoulFactoryStoreBinding(); });
   });
 
   $effect(() => {

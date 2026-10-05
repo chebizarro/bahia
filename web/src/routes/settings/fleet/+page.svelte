@@ -168,6 +168,11 @@
 
   {#if authState.status !== 'authenticated'}
     <div class="status error">Sign in with a trusted Soul Factory operator key before publishing.</div>
+  {:else}
+    <!-- The browser cannot verify soul_factory.authorized_pubkeys, so only the signed-in key is trusted for kind 31953. -->
+    <p class="muted" data-testid="fleet-operator-scope-note">
+      Only the fleet configuration signed by your key is shown. A configuration published by another operator is not shown here.
+    </p>
   {/if}
   {#if storeState.loading}<div class="status">Loading the latest operator-authored fleet document…</div>{/if}
   {#if storeState.error}<div class="status error">{storeState.error}</div>{/if}

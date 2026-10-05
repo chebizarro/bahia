@@ -596,7 +596,7 @@ function publishSoulCatchupMetadata(caught) {
  * Bind the SoulFactory read models to the shared store and project the cache
  * at once. With `relay` (the default) also start, or re-sync, the app-lifetime
  * relay reader; once started it stays on until teardown. The layout owns that
- * call: it starts the reader after the core read model has caught up and
+ * call: it starts the reader at boot, without waiting on any relay, and
  * re-syncs it when the signed-in operator changes. Pages pass `relay: false`.
  */
 export function initSoulFactoryStoreBinding({ relay = true } = {}) {

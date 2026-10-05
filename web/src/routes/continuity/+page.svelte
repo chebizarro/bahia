@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { subscribeToContinuityDashboard } from '$lib/nostr/continuity';
+  import { authState } from '$lib/stores/auth.js';
 import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
   import SimulationPanel from './SimulationPanel.svelte';
   import TopologyView from './TopologyView.svelte';
@@ -112,6 +113,19 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
     <button type="button" class:active={activeTab === 'requests'} onclick={() => (activeTab = 'requests')}>Requests ({requests.length})</button>
     <button type="button" class:active={activeTab === 'simulation'} onclick={() => (activeTab = 'simulation')}>Simulation</button>
   </nav>
+
+  {#if activeTab !== 'status'}
+    <!-- The browser cannot verify the daemon's operator allowlist, so operator-signed kinds are trusted from one key only. -->
+    <p class="operator-scope-note" data-testid="continuity-operator-scope-note">
+      {#if authState.status === 'authenticated'}
+        Topology, requests and simulation use only the definitions, requests and heartbeats signed by your key.
+        Documents published by other fleet operators are not shown here. Status includes every operator's changes, because the Bahia service signs it.
+      {:else}
+        Sign in as a fleet operator to see topology, requests and simulation: without a signed-in key, no operator-signed
+        definitions, requests or heartbeats are shown. Status is signed by the Bahia service and is always shown.
+      {/if}
+    </p>
+  {/if}
 
   {#if activeTab === 'status'}
     {#if sortedStatuses.length === 0 && !error}
@@ -298,6 +312,14 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
 
   .alert strong {
     color: var(--error);
+  }
+
+  .operator-scope-note {
+    margin: 0 0 1rem;
+    padding: 0.6rem 0.8rem;
+    border-left: 3px solid var(--border-color);
+    color: var(--text-muted);
+    font-size: 0.875rem;
   }
 
   .tabs {
