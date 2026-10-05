@@ -522,32 +522,46 @@ func New(cfg *config.Config) (*App, error) {
 			servicePubkey = secret.Public().Hex()
 		}
 	}
-	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
-	localSupervisionState := service.LocalSupervisionState{History: projectionHistory}
+	// Route-canary supervision reads its desired set and its durable progress
+	// from the daemon's canonical records in the local event store (B-33). It
+	// needs the service key, never PostgreSQL.
+	localSupervisionState, supervisionStateErr := service.NewLocalSupervisionState(localEventStore, servicePubkey)
+	supervisionFromLocalState := supervisionStateErr == nil
+	if !supervisionFromLocalState && cfg.RouteCanaries.Enabled {
+		logger.Warn("route canary supervision is disabled: the daemon has no service key to read its canonical state with",
+			zap.Error(supervisionStateErr))
+	}
 	var routeCanarySupervisor *service.RouteCanarySupervisor
-	var routeCanaryStore service.RouteCanaryRepository
 	if cfg.RouteCanaries.Enabled {
-		var routeCanaryIndex service.RouteCanaryRepository
+		// PostgreSQL is a write-behind query index of route state.
+		var routeCanaryStore service.RouteCanaryRepository
 		if dbAvailable && pool != nil {
-			pgRouteCanaries := repository.NewPgRouteCanaryRepository(pool)
-			routeCanaryIndex = pgRouteCanaries
+			routeCanaryStore = repository.NewPgRouteCanaryRepository(pool)
 		}
-		if servicePubkey != "" {
-			routeCanaryStore = service.NewLocalRouteCanaryRepository(localSupervisionState, routeCanaryIndex, logger)
-		} else {
-			// Preserve the existing DB-backed deployment gate when this daemon
-			// has no canonical signing identity. The periodic supervisor below
-			// remains disabled because it cannot produce canonical observables.
-			routeCanaryStore = routeCanaryIndex
+		// The projector publishes the canonical route-canary records a restarted
+		// daemon resumes outage state from, and makes a route outage visible to
+		// Nostr consumers and fleet-health telemetry.
+		var routeCanaryProjector *service.RouteCanaryProjector
+		if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
+			routeCanaryProjector, err = service.NewRouteCanaryProjector(publisher, nostrPub, logger)
+			if err != nil {
+				return nil, fmt.Errorf("configuring route canary projector: %w", err)
+			}
+		}
+		var routeHealthSource service.RouteInstanceHealthSource
+		if supervisionFromLocalState {
+			var storeOpts []service.LocalRouteCanaryOption
+			if routeCanaryProjector == nil {
+				// Without relay publishing no canonical record exists, so the
+				// index is the only durable copy of route state.
+				storeOpts = append(storeOpts, service.WithRouteCanaryIndexResume())
+			}
+			routeCanaryStore = service.NewLocalRouteCanaryRepository(localSupervisionState, routeCanaryStore, logger, storeOpts...)
+			routeHealthSource = service.LocalRouteInstanceHealthSource{State: localSupervisionState}
 		}
 		routeCanaryEvaluator, evalErr := service.NewRouteCanaryEvaluator(runtime.RouteProber{}, cfg.RouteCanaries.Policy())
 		if evalErr != nil {
 			return nil, fmt.Errorf("configuring route canary evaluator: %w", evalErr)
-		}
-		var routeHealthSource service.RouteInstanceHealthSource
-		if managedInstanceHealthRepo != nil {
-			healthSource := service.NewManagedInstanceRouteHealthSource(managedInstanceHealthRepo)
-			routeHealthSource = healthSource
 		}
 		canaryCfg := cfg.RouteCanaries.Normalized()
 
@@ -563,27 +577,22 @@ func New(cfg *config.Config) (*App, error) {
 			if gateErr != nil {
 				return nil, fmt.Errorf("configuring route canary gate: %w", gateErr)
 			}
+			gate.SetCanonicalProjector(routeCanaryProjector)
 			coordinatorOptions = append(coordinatorOptions, workflow.WithPublicRoutes(gate))
 		} else if publicRoutePlanner != nil {
 			coordinatorOptions = append(coordinatorOptions, workflow.WithPublicRoutes(publicRoutePlanner))
 		}
 
-		if servicePubkey != "" {
+		// Periodic probing follows desired state, not the planner: a route in
+		// desired state is probed even when this daemon cannot converge it.
+		if supervisionFromLocalState {
 			routeCanarySupervisor, err = service.NewRouteCanarySupervisor(
 				service.LocalRoutePlanSource{State: localSupervisionState},
 				routeCanaryStore, routeCanaryEvaluator, routeHealthSource, publisher, canaryCfg.Interval, logger)
 			if err != nil {
 				return nil, fmt.Errorf("configuring route canary supervisor: %w", err)
 			}
-			// Project supervisor transitions to canonical Nostr observables so a
-			// route outage is visible to Nostr consumers and fleet-health telemetry.
-			if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-				projector, projErr := service.NewRouteCanaryProjector(publisher, nostrPub, logger)
-				if projErr != nil {
-					return nil, fmt.Errorf("configuring route canary projector: %w", projErr)
-				}
-				routeCanarySupervisor.SetCanonicalProjector(projector)
-			}
+			routeCanarySupervisor.SetCanonicalProjector(routeCanaryProjector)
 		}
 	} else if publicRoutePlanner != nil {
 		coordinatorOptions = append(coordinatorOptions, workflow.WithPublicRoutes(publicRoutePlanner))
@@ -613,23 +622,18 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	var managedInstanceSupervisor *service.ManagedInstanceSupervisor
-	if cfg.Supervision.Enabled && servicePubkey != "" {
+	if cfg.Supervision.Enabled && managedInstanceHealthRepo != nil && runtimeApplyLock != nil {
 		configuredSpecs, specErr := configuredSupervisionSpecs(cfg.Supervision, logger)
 		if specErr != nil {
 			return nil, specErr
 		}
 		policy := defaultSupervisionPolicy(cfg.Supervision.ObserveOnly)
-		source := &service.LocalSupervisionSpecSource{Configured: configuredSpecs, State: localSupervisionState, Resolver: runtimeResolver, Policy: policy, MemoryThreshold: cfg.Supervision.MemoryThreshold}
-		state := service.NewLocalManagedInstanceState(localSupervisionState, managedInstanceHealthRepo, nostrPub, logger)
-		// Canonical recovery claims and the per-process lock keep supervision
-		// independent of PostgreSQL advisory-lock availability.
-		supervisorLock := &service.LocalRuntimeApplyLock{}
-		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, state, supervisorLock, publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
+		source := &service.RepositorySupervisionSpecSource{Configured: configuredSpecs, States: stateRepo, Services: serviceRepo, Environments: envRepo, Units: deploymentUnitRepo, Resolver: runtimeResolver, Policy: policy, MemoryThreshold: cfg.Supervision.MemoryThreshold}
+		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, managedInstanceHealthRepo, runtimeApplyLock, publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("configuring managed instance supervisor: %w", err)
 		}
-		projector := service.NewManagedInstanceHealthProjector(publisher, nostrPub, logger)
-		managedInstanceSupervisor.SetCanonicalProjector(projector)
+		service.NewManagedInstanceHealthProjector(publisher, nostrPub, logger)
 	}
 
 	// Telemetry.
@@ -763,11 +767,10 @@ func New(cfg *config.Config) (*App, error) {
 		SelfAuthors:         compactBootstrapAuthors([]string{servicePubkey}),
 		Resume:              inboundSyncConfigScoped(cfg.Nostr.LocalStore, cfg.Nostr.ServiceRelays),
 	})
+	// The supervisor acts on the local event store only after its first relay
+	// catch-up.
 	if routeCanarySupervisor != nil {
 		routeCanarySupervisor.SetReadiness(bootstrapper)
-	}
-	if managedInstanceSupervisor != nil {
-		managedInstanceSupervisor.SetReadiness(bootstrapper)
 	}
 	healthProvider.SetBootstrapFunc(func() (phase string, ready bool) {
 		progress := bootstrapper.Progress()
@@ -1143,6 +1146,7 @@ func New(cfg *config.Config) (*App, error) {
 	)
 	// The projector's memory of what it published is its own latest events
 	// in the local event store, never PostgreSQL (B-3).
+	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
 	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePub, projectionHistory, logger, projectorOpts...)
 	controlPlanePub.OnDeliveryAbandoned(nostrProjector.ForgetAbandonedProjection)
 

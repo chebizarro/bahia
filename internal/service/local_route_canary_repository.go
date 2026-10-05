@@ -2,115 +2,177 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 
+	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
-	"go.uber.org/zap"
 )
 
-// LocalRouteCanaryRepository uses canonical route state for restart and an
-// in-process overlay for observations not yet projected by the event bus.
-// PostgreSQL is only a best-effort REST/query index.
+// LocalRouteCanaryRepository is the route canary state the supervisor and the
+// post-deploy gate decide from.
+//
+// A route's durable state is its canonical route-canary record (kind 30900,
+// d = route coordinate) in the local event store, so a restarted or
+// PostgreSQL-less daemon resumes the failure streak and the outage start it
+// had published. The values written in this process are kept in memory as
+// well: they are what the canonical record was built from, unredacted, and
+// they keep the decision state current when a record's relay delivery was
+// abandoned. PostgreSQL is a write-behind query index: a failed index write is
+// logged and never fails the caller.
 type LocalRouteCanaryRepository struct {
-	State   LocalSupervisionState
-	Index   RouteCanaryRepository
-	Logger  *zap.Logger
+	state  LocalSupervisionState
+	index  RouteCanaryRepository
+	logger *zap.Logger
+	// resumeFromIndex makes a route that has neither a canonical record nor a
+	// value written in this process read its state from the index. It is set
+	// only when the daemon publishes no canonical route-canary records (relay
+	// publishing disabled), where the index is the only durable copy.
+	resumeFromIndex bool
+
 	mu      sync.Mutex
-	current map[string]domain.RouteCanaryState
+	written map[string]domain.RouteCanaryState
 }
 
-func NewLocalRouteCanaryRepository(state LocalSupervisionState, index RouteCanaryRepository, logger *zap.Logger) *LocalRouteCanaryRepository {
+// LocalRouteCanaryOption configures a LocalRouteCanaryRepository.
+type LocalRouteCanaryOption func(*LocalRouteCanaryRepository)
+
+// WithRouteCanaryIndexResume makes the index the durable copy of route state.
+// Use it only when no canonical route-canary records are published.
+func WithRouteCanaryIndexResume() LocalRouteCanaryOption {
+	return func(r *LocalRouteCanaryRepository) { r.resumeFromIndex = true }
+}
+
+// NewLocalRouteCanaryRepository builds the repository. index may be nil.
+func NewLocalRouteCanaryRepository(state LocalSupervisionState, index RouteCanaryRepository, logger *zap.Logger, opts ...LocalRouteCanaryOption) *LocalRouteCanaryRepository {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &LocalRouteCanaryRepository{State: state, Index: index, Logger: logger, current: make(map[string]domain.RouteCanaryState)}
+	r := &LocalRouteCanaryRepository{state: state, index: index, logger: logger.Named("route-canary-state"), written: map[string]domain.RouteCanaryState{}}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
+// UpsertStateWithEvent records a transition and indexes it with its lineage.
 func (r *LocalRouteCanaryRepository) UpsertStateWithEvent(ctx context.Context, state *domain.RouteCanaryState, event *domain.RouteCanaryEvent) error {
 	if event.ID == uuid.Nil {
 		event.ID = uuid.New()
 	}
-	r.mu.Lock()
-	r.current[state.Coordinate()] = *state
-	r.mu.Unlock()
-	if r.Index != nil {
-		if err := r.Index.UpsertStateWithEvent(ctx, state, event); err != nil {
-			r.Logger.Warn("route canary SQL index unavailable", zap.Error(err))
+	r.remember(*state)
+	if r.index != nil {
+		if err := r.index.UpsertStateWithEvent(ctx, state, event); err != nil {
+			r.logger.Warn("route canary SQL index write failed", zap.String("route", state.Coordinate()), zap.Error(err))
 		}
 	}
 	return nil
 }
 
+// UpsertState records an observation that changed no outage state.
 func (r *LocalRouteCanaryRepository) UpsertState(ctx context.Context, state *domain.RouteCanaryState) error {
-	r.mu.Lock()
-	r.current[state.Coordinate()] = *state
-	r.mu.Unlock()
-	if r.Index != nil {
-		if err := r.Index.UpsertState(ctx, state); err != nil {
-			r.Logger.Warn("route canary SQL index unavailable", zap.Error(err))
+	r.remember(*state)
+	if r.index != nil {
+		if err := r.index.UpsertState(ctx, state); err != nil {
+			r.logger.Warn("route canary SQL index write failed", zap.String("route", state.Coordinate()), zap.Error(err))
 		}
 	}
 	return nil
 }
 
-func (r *LocalRouteCanaryRepository) GetState(ctx context.Context, key domain.RouteCanaryKey) (*domain.RouteCanaryState, error) {
-	states, err := r.ListState(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for i := range states {
-		if states[i].Coordinate() == key.Coordinate() {
-			return &states[i], nil
-		}
-	}
-	return nil, nil
+func (r *LocalRouteCanaryRepository) remember(state domain.RouteCanaryState) {
+	r.mu.Lock()
+	r.written[state.Coordinate()] = state
+	r.mu.Unlock()
 }
 
-func (r *LocalRouteCanaryRepository) ListState(ctx context.Context) ([]domain.RouteCanaryState, error) {
-	records, err := r.State.records(ctx, kinds.CPStateTopicRouteCanary)
+// GetState returns the route's latest state, or nil when it has none.
+func (r *LocalRouteCanaryRepository) GetState(ctx context.Context, key domain.RouteCanaryKey) (*domain.RouteCanaryState, error) {
+	record, err := r.state.coordinate(ctx, key.Coordinate())
 	if err != nil {
 		return nil, err
 	}
-	byKey := make(map[string]domain.RouteCanaryState)
-	for _, event := range records {
-		if localTag(event, "schema") != routeCanaryStateSchema {
-			continue
+	var latest *domain.RouteCanaryState
+	if record != nil {
+		if state, ok := decodeRouteCanaryStateRecord(*record); ok {
+			latest = &state
 		}
-		var projection struct {
-			RouteCanary *domain.RouteCanaryState `json:"route_canary"`
-		}
-		if !localStateContent(event, &projection) || projection.RouteCanary == nil {
-			continue
-		}
-		state := *projection.RouteCanary
-		byKey[state.Coordinate()] = state
 	}
 	r.mu.Lock()
-	for key, state := range r.current {
-		if prior, ok := byKey[key]; !ok || !prior.UpdatedAt.After(state.UpdatedAt) {
-			byKey[key] = state
+	written, ok := r.written[key.Coordinate()]
+	r.mu.Unlock()
+	if ok && (latest == nil || !latest.UpdatedAt.After(written.UpdatedAt)) {
+		latest = &written
+	}
+	if latest == nil && r.resumeFromIndex && r.index != nil {
+		indexed, err := r.index.GetState(ctx, key)
+		if err != nil {
+			r.logger.Warn("route canary SQL index read failed", zap.String("route", key.Coordinate()), zap.Error(err))
+			return nil, nil
+		}
+		return indexed, nil
+	}
+	return latest, nil
+}
+
+// ListState returns the latest state of every route that has one.
+func (r *LocalRouteCanaryRepository) ListState(ctx context.Context) ([]domain.RouteCanaryState, error) {
+	records, err := r.state.family(ctx, kinds.CPStateTopicRouteCanary)
+	if err != nil {
+		return nil, err
+	}
+	byCoordinate := make(map[string]domain.RouteCanaryState, len(records))
+	for _, record := range records {
+		if state, ok := decodeRouteCanaryStateRecord(record); ok {
+			byCoordinate[state.Coordinate()] = state
+		}
+	}
+	r.mu.Lock()
+	for coordinate, written := range r.written {
+		if canonical, ok := byCoordinate[coordinate]; !ok || !canonical.UpdatedAt.After(written.UpdatedAt) {
+			byCoordinate[coordinate] = written
 		}
 	}
 	r.mu.Unlock()
-	result := make([]domain.RouteCanaryState, 0, len(byKey))
-	for _, state := range byKey {
-		result = append(result, state)
+	out := make([]domain.RouteCanaryState, 0, len(byCoordinate))
+	for _, state := range byCoordinate {
+		out = append(out, state)
 	}
-	return result, nil
+	return out, nil
 }
 
+// DeleteState forgets the state written in this process and its index row.
 func (r *LocalRouteCanaryRepository) DeleteState(ctx context.Context, key domain.RouteCanaryKey) error {
 	r.mu.Lock()
-	delete(r.current, key.Coordinate())
+	delete(r.written, key.Coordinate())
 	r.mu.Unlock()
-	if r.Index != nil {
-		if err := r.Index.DeleteState(ctx, key); err != nil {
-			r.Logger.Warn("route canary SQL index unavailable", zap.Error(err))
+	if r.index != nil {
+		if err := r.index.DeleteState(ctx, key); err != nil {
+			r.logger.Warn("route canary SQL index delete failed", zap.String("route", key.Coordinate()), zap.Error(err))
 		}
 	}
 	return nil
+}
+
+// decodeRouteCanaryStateRecord decodes the canonical route-canary state record
+// the RouteCanaryProjector publishes.
+func decodeRouteCanaryStateRecord(ev gonostr.Event) (domain.RouteCanaryState, bool) {
+	if supervisionTag(ev, kinds.CASControlStateTagSchema) != routeCanaryStateSchema || supervisionTag(ev, kinds.CASControlStateTagDeleted) == "true" {
+		return domain.RouteCanaryState{}, false
+	}
+	var projection routeCanaryProjection
+	if json.Unmarshal([]byte(ev.Content), &projection) != nil || projection.RouteCanary == nil {
+		return domain.RouteCanaryState{}, false
+	}
+	state := *projection.RouteCanary
+	if state.ServiceID == uuid.Nil || state.EnvironmentID == uuid.Nil || state.Coordinate() != supervisionTag(ev, kinds.CASControlStateTagD) {
+		return domain.RouteCanaryState{}, false
+	}
+	return state, true
 }
 
 var _ RouteCanaryRepository = (*LocalRouteCanaryRepository)(nil)

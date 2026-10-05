@@ -2,95 +2,47 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
-	"github.com/openagentsinc/bahia/internal/repository"
 )
 
-// LocalRoutePlanSource enumerates the latest relay-derived desired service
-// states. A newly received replacement or tombstone changes the next sweep's
-// set without consulting a repository.
-type LocalRoutePlanSource struct{ State LocalSupervisionState }
-
-func (s LocalRoutePlanSource) ListManagedRoutePlans(ctx context.Context) ([]*domain.DesiredPublicRoutePlan, error) {
-	records, err := s.State.records(ctx, kinds.CPStateTopicServiceState)
-	if err != nil {
-		return nil, err
-	}
-	var plans []*domain.DesiredPublicRoutePlan
-	for _, event := range records {
-		if localTag(event, "schema") != kinds.CASControlStateSchema {
-			continue
-		}
-		var state domain.EnvironmentServiceState
-		if !localStateContent(event, &state) || state.DesiredRuntimeState == nil || state.DesiredRuntimeState.PublicRoute == nil {
-			continue
-		}
-		// The record's content is a projection, not a repository row. Decode
-		// before returning so callers cannot mutate the store's event value.
-		var plan domain.DesiredPublicRoutePlan
-		encoded, err := json.Marshal(state.DesiredRuntimeState.PublicRoute)
-		if err != nil || json.Unmarshal(encoded, &plan) != nil {
-			continue
-		}
-		plans = append(plans, &plan)
-	}
-	return plans, nil
-}
-
-// DesiredStateRoutePlanSource enumerates managed routes from environment service
-// state.
+// LocalRoutePlanSource enumerates managed routes from the service-state
+// records in the local event store.
 //
 // Desired state is the correct source of truth for what should be probed. Live
 // provider configuration is not: a route that vanished from Cloudflare must
 // still be probed so its disappearance is detected, and a route withdrawn from
-// desired state must stop being probed so it does not alarm forever.
-type DesiredStateRoutePlanSource struct {
-	states repository.EnvironmentServiceStateRepository
-}
+// desired state must stop being probed so it does not alarm forever. A
+// replacement or tombstone received from a relay changes the next sweep's set.
+type LocalRoutePlanSource struct{ State LocalSupervisionState }
 
-// NewDesiredStateRoutePlanSource builds a plan source over environment state.
-func NewDesiredStateRoutePlanSource(states repository.EnvironmentServiceStateRepository) *DesiredStateRoutePlanSource {
-	return &DesiredStateRoutePlanSource{states: states}
-}
-
-// ListManagedRoutePlans returns the route plan of every service whose desired
-// runtime state carries one.
-func (s *DesiredStateRoutePlanSource) ListManagedRoutePlans(ctx context.Context) ([]*domain.DesiredPublicRoutePlan, error) {
-	if s == nil || s.states == nil {
-		return nil, nil
-	}
-	states, err := s.states.ListAll(ctx)
+// ListManagedRoutePlans returns the route plan of every service whose latest
+// desired runtime state carries one.
+func (s LocalRoutePlanSource) ListManagedRoutePlans(ctx context.Context) ([]*domain.DesiredPublicRoutePlan, error) {
+	records, err := s.State.family(ctx, kinds.CPStateTopicServiceState)
 	if err != nil {
 		return nil, err
 	}
-	plans := make([]*domain.DesiredPublicRoutePlan, 0, len(states))
-	for i := range states {
-		desired := states[i].DesiredRuntimeState
-		if desired == nil || desired.PublicRoute == nil {
+	plans := make([]*domain.DesiredPublicRoutePlan, 0, len(records))
+	for _, record := range records {
+		state, ok := decodeServiceStateRecord(record)
+		if !ok || state.DesiredRuntimeState == nil || state.DesiredRuntimeState.PublicRoute == nil {
 			continue
 		}
-		plans = append(plans, desired.PublicRoute)
+		plans = append(plans, state.DesiredRuntimeState.PublicRoute)
 	}
 	return plans, nil
 }
 
-// ManagedInstanceRouteHealthSource reports the container-level status of the
-// deployment unit behind a route.
+// LocalRouteInstanceHealthSource reports the container-level status of the
+// deployment unit behind a route from the canonical managed-instance health
+// records in the local event store.
 //
 // It exists purely to annotate route findings. A route verdict never depends on
-// it, so a missing or stale health row degrades the annotation rather than
+// it, so a missing or stale health record degrades the annotation rather than
 // changing whether an outage is declared.
-type ManagedInstanceRouteHealthSource struct {
-	health repository.ManagedInstanceHealthRepository
-}
-
-// NewManagedInstanceRouteHealthSource builds the contrast source.
-func NewManagedInstanceRouteHealthSource(health repository.ManagedInstanceHealthRepository) *ManagedInstanceRouteHealthSource {
-	return &ManagedInstanceRouteHealthSource{health: health}
-}
+type LocalRouteInstanceHealthSource struct{ State LocalSupervisionState }
 
 // InstanceStatusForRoute returns the worst status observed for the route's
 // deployment unit.
@@ -98,11 +50,8 @@ func NewManagedInstanceRouteHealthSource(health repository.ManagedInstanceHealth
 // The worst status is reported so the contrast is never flattering: if any
 // instance behind the route is unhealthy, the operator should not be told the
 // service was fine while its route broke.
-func (s *ManagedInstanceRouteHealthSource) InstanceStatusForRoute(ctx context.Context, key domain.RouteCanaryKey) (domain.InstanceHealthStatus, bool) {
-	if s == nil || s.health == nil {
-		return "", false
-	}
-	rows, err := s.health.ListHealthByService(ctx, key.ServiceID)
+func (s LocalRouteInstanceHealthSource) InstanceStatusForRoute(ctx context.Context, key domain.RouteCanaryKey) (domain.InstanceHealthStatus, bool) {
+	records, err := s.State.family(ctx, kinds.CPStateTopicManagedInstanceHealth)
 	if err != nil {
 		return "", false
 	}
@@ -110,15 +59,16 @@ func (s *ManagedInstanceRouteHealthSource) InstanceStatusForRoute(ctx context.Co
 		worst     domain.InstanceHealthStatus
 		worstRank = -1
 	)
-	for _, row := range rows {
-		if row.EnvironmentID != key.EnvironmentID {
+	for _, record := range records {
+		health, ok := decodeManagedHealthRecord(record)
+		if !ok || health.ServiceID != key.ServiceID || health.EnvironmentID != key.EnvironmentID {
 			continue
 		}
-		if key.DeploymentUnitID != nil && row.DeploymentUnitID != *key.DeploymentUnitID {
+		if key.DeploymentUnitID != nil && health.DeploymentUnitID != *key.DeploymentUnitID {
 			continue
 		}
-		if rank := instanceStatusSeverityRank(row.Status); rank > worstRank {
-			worst, worstRank = row.Status, rank
+		if rank := instanceStatusSeverityRank(health.Status); rank > worstRank {
+			worst, worstRank = health.Status, rank
 		}
 	}
 	if worstRank < 0 {

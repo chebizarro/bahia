@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	gonostr "fiatjaf.com/nostr"
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -74,12 +75,6 @@ func (p *ManagedInstanceHealthProjector) handle(ctx context.Context, e events.Ev
 		}
 	}
 	return fmt.Errorf("unsupported managed instance event payload %T", e.Data)
-}
-
-// Project persists a supervisor observable before its optional SQL index is
-// updated. The bus handler remains for other producers and dedupes redelivery.
-func (p *ManagedInstanceHealthProjector) Project(ctx context.Context, e events.Event) error {
-	return p.handle(ctx, e)
 }
 
 func (p *ManagedInstanceHealthProjector) projectHealth(ctx context.Context, payload ManagedInstanceHealthChanged) error {
@@ -200,4 +195,20 @@ func managedEventFingerprint(ev gonostr.Event) (string, error) {
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// decodeManagedHealthRecord decodes the canonical health state record the
+// ManagedInstanceHealthProjector publishes. A record written for an instance
+// that was never observed carries no status and is not health.
+func decodeManagedHealthRecord(ev gonostr.Event) (domain.ManagedInstanceHealth, bool) {
+	if supervisionTag(ev, kinds.CASControlStateTagSchema) != managedHealthStateSchema || supervisionTag(ev, kinds.CASControlStateTagDeleted) == "true" {
+		return domain.ManagedInstanceHealth{}, false
+	}
+	var content struct {
+		Health domain.ManagedInstanceHealth `json:"health"`
+	}
+	if json.Unmarshal([]byte(ev.Content), &content) != nil || content.Health.ServiceID == uuid.Nil || content.Health.Status == "" {
+		return domain.ManagedInstanceHealth{}, false
+	}
+	return content.Health, true
 }
