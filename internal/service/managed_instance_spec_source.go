@@ -26,20 +26,23 @@ func (s *LocalSupervisionSpecSource) SupervisionSpecs(ctx context.Context) ([]Su
 	if s.Resolver == nil {
 		return result, nil
 	}
-	serviceEvents, err := s.State.records(kinds.CPStateTopicServiceRegistry)
+	serviceEvents, err := s.State.records(ctx, kinds.CPStateTopicServiceRegistry)
 	if err != nil {
 		return nil, err
 	}
-	environmentEvents, err := s.State.records(kinds.CPStateTopicEnvironmentRegistry)
+	environmentEvents, err := s.State.records(ctx, kinds.CPStateTopicEnvironmentRegistry)
 	if err != nil {
 		return nil, err
 	}
-	stateEvents, err := s.State.records(kinds.CPStateTopicServiceState)
+	stateEvents, err := s.State.records(ctx, kinds.CPStateTopicServiceState)
 	if err != nil {
 		return nil, err
 	}
 	services := make(map[uuid.UUID]*domain.Service)
 	for _, event := range serviceEvents {
+		if localTag(event, "schema") != kinds.CASControlStateSchema {
+			continue
+		}
 		var service domain.Service
 		if localStateContent(event, &service) && service.ID != uuid.Nil {
 			services[service.ID] = &service
@@ -51,6 +54,9 @@ func (s *LocalSupervisionSpecSource) SupervisionSpecs(ctx context.Context) ([]Su
 	}
 	environments := make(map[uuid.UUID]*environmentRecord)
 	for _, event := range environmentEvents {
+		if localTag(event, "schema") != kinds.CASControlStateSchema {
+			continue
+		}
 		var record environmentRecord
 		if localStateContent(event, &record) && record.ID != uuid.Nil {
 			environments[record.ID] = &record
@@ -61,6 +67,9 @@ func (s *LocalSupervisionSpecSource) SupervisionSpecs(ctx context.Context) ([]Su
 		seen[instanceKeyString(spec.Key)] = struct{}{}
 	}
 	for _, event := range stateEvents {
+		if localTag(event, "schema") != kinds.CASControlStateSchema {
+			continue
+		}
 		var state domain.EnvironmentServiceState
 		if !localStateContent(event, &state) || (state.DesiredArtifactID == nil && state.DesiredRuntimeState == nil) {
 			continue

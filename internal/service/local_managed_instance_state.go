@@ -43,12 +43,12 @@ func NewLocalManagedInstanceState(state LocalSupervisionState, index repository.
 	return &LocalManagedInstanceState{State: state, Index: index, Publisher: publisher, Logger: logger, health: map[string]domain.ManagedInstanceHealth{}, attempts: map[string]domain.RecoveryAttempt{}, overrides: map[string]*domain.MaintenanceOverride{}}
 }
 
-func (r *LocalManagedInstanceState) GetHealth(_ context.Context, key domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error) {
-	return r.healthSnapshot(key)
+func (r *LocalManagedInstanceState) GetHealth(ctx context.Context, key domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error) {
+	return r.healthSnapshot(ctx, key)
 }
 
-func (r *LocalManagedInstanceState) healthSnapshot(key domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error) {
-	records, err := r.State.records(kinds.CPStateTopicManagedInstanceHealth)
+func (r *LocalManagedInstanceState) healthSnapshot(ctx context.Context, key domain.ManagedInstanceKey) (*domain.ManagedInstanceHealth, error) {
+	records, err := r.State.records(ctx, kinds.CPStateTopicManagedInstanceHealth)
 	if err != nil {
 		return nil, err
 	}
@@ -99,8 +99,8 @@ func (r *LocalManagedInstanceState) UpsertHealthWithEvent(ctx context.Context, h
 	return nil
 }
 
-func (r *LocalManagedInstanceState) ListRecentRecoveryAttempts(_ context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.RecoveryAttempt, error) {
-	records, err := r.State.records(kinds.CPStateTopicManagedInstanceHealth)
+func (r *LocalManagedInstanceState) ListRecentRecoveryAttempts(ctx context.Context, key domain.ManagedInstanceKey, limit int) ([]domain.RecoveryAttempt, error) {
+	records, err := r.State.records(ctx, kinds.CPStateTopicManagedInstanceHealth)
 	if err != nil {
 		return nil, err
 	}
@@ -193,8 +193,8 @@ func (r *LocalManagedInstanceState) CompleteRecoveryAttemptWithHealthEvent(ctx c
 	return true, nil
 }
 
-func (r *LocalManagedInstanceState) GetActiveMaintenanceOverride(_ context.Context, key domain.ManagedInstanceKey, at time.Time) (*domain.MaintenanceOverride, error) {
-	records, err := r.State.records(kinds.CPStateTopicManagedInstanceHealth)
+func (r *LocalManagedInstanceState) GetActiveMaintenanceOverride(ctx context.Context, key domain.ManagedInstanceKey, at time.Time) (*domain.MaintenanceOverride, error) {
+	records, err := r.State.records(ctx, kinds.CPStateTopicManagedInstanceHealth)
 	if err != nil {
 		return nil, err
 	}

@@ -522,7 +522,8 @@ func New(cfg *config.Config) (*App, error) {
 			servicePubkey = secret.Public().Hex()
 		}
 	}
-	localSupervisionState := service.LocalSupervisionState{Store: localEventStore, Author: servicePubkey}
+	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
+	localSupervisionState := service.LocalSupervisionState{History: projectionHistory}
 	var routeCanarySupervisor *service.RouteCanarySupervisor
 	var routeCanaryStore service.RouteCanaryRepository
 	if cfg.RouteCanaries.Enabled {
@@ -620,10 +621,9 @@ func New(cfg *config.Config) (*App, error) {
 		policy := defaultSupervisionPolicy(cfg.Supervision.ObserveOnly)
 		source := &service.LocalSupervisionSpecSource{Configured: configuredSpecs, State: localSupervisionState, Resolver: runtimeResolver, Policy: policy, MemoryThreshold: cfg.Supervision.MemoryThreshold}
 		state := service.NewLocalManagedInstanceState(localSupervisionState, managedInstanceHealthRepo, nostrPub, logger)
-		var supervisorLock service.ManagedInstanceTryLocker = &service.LocalRuntimeApplyLock{}
-		if runtimeApplyLock != nil {
-			supervisorLock = runtimeApplyLock
-		}
+		// Canonical recovery claims and the per-process lock keep supervision
+		// independent of PostgreSQL advisory-lock availability.
+		supervisorLock := &service.LocalRuntimeApplyLock{}
 		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, state, supervisorLock, publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("configuring managed instance supervisor: %w", err)
@@ -763,6 +763,12 @@ func New(cfg *config.Config) (*App, error) {
 		SelfAuthors:         compactBootstrapAuthors([]string{servicePubkey}),
 		Resume:              inboundSyncConfigScoped(cfg.Nostr.LocalStore, cfg.Nostr.ServiceRelays),
 	})
+	if routeCanarySupervisor != nil {
+		routeCanarySupervisor.SetReadiness(bootstrapper)
+	}
+	if managedInstanceSupervisor != nil {
+		managedInstanceSupervisor.SetReadiness(bootstrapper)
+	}
 	healthProvider.SetBootstrapFunc(func() (phase string, ready bool) {
 		progress := bootstrapper.Progress()
 		return string(progress.Phase), bootstrapper.Ready()
@@ -1137,7 +1143,6 @@ func New(cfg *config.Config) (*App, error) {
 	)
 	// The projector's memory of what it published is its own latest events
 	// in the local event store, never PostgreSQL (B-3).
-	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
 	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePub, projectionHistory, logger, projectorOpts...)
 	controlPlanePub.OnDeliveryAbandoned(nostrProjector.ForgetAbandonedProjection)
 

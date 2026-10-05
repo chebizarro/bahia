@@ -120,6 +120,7 @@ type ManagedInstanceSupervisor struct {
 	lock               ManagedInstanceTryLocker
 	publisher          events.Publisher
 	canonical          *ManagedInstanceHealthProjector
+	readiness          SupervisionReadiness
 	interval           time.Duration
 	observationTimeout time.Duration
 	logger             *zap.Logger
@@ -158,7 +159,16 @@ func (s *ManagedInstanceSupervisor) SetCanonicalProjector(projector *ManagedInst
 	s.canonical = projector
 }
 
+// SetReadiness gates autonomous recovery on relay catch-up. EvaluateOnce stays
+// directly callable for deterministic operations and tests.
+func (s *ManagedInstanceSupervisor) SetReadiness(readiness SupervisionReadiness) {
+	s.readiness = readiness
+}
+
 func (s *ManagedInstanceSupervisor) Run(ctx context.Context) error {
+	if err := waitForSupervisionReadiness(ctx, s.readiness); err != nil {
+		return nil
+	}
 	if err := s.EvaluateOnce(ctx); err != nil {
 		s.logger.Warn("managed instance evaluation failed", zap.Error(err))
 	}

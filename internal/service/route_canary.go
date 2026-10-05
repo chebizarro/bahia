@@ -169,6 +169,7 @@ type RouteCanarySupervisor struct {
 	healthSource RouteInstanceHealthSource
 	publisher    events.Publisher
 	canonical    *RouteCanaryProjector
+	readiness    SupervisionReadiness
 	interval     time.Duration
 	logger       *zap.Logger
 	now          func() time.Time
@@ -231,9 +232,18 @@ func (s *RouteCanarySupervisor) SetCanonicalProjector(projector *RouteCanaryProj
 	s.canonical = projector
 }
 
+// SetReadiness gates autonomous probing on relay catch-up. EvaluateOnce stays
+// directly callable for deterministic operations and tests.
+func (s *RouteCanarySupervisor) SetReadiness(readiness SupervisionReadiness) {
+	s.readiness = readiness
+}
+
 // Run probes every route immediately and then each route whenever it falls
 // due, until the context is done.
 func (s *RouteCanarySupervisor) Run(ctx context.Context) error {
+	if err := waitForSupervisionReadiness(ctx, s.readiness); err != nil {
+		return nil
+	}
 	for {
 		s.EvaluateDue(ctx)
 		timer := time.NewTimer(s.NextWakeDelay(s.now()))

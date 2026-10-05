@@ -68,8 +68,8 @@ func (r *LocalRouteCanaryRepository) GetState(ctx context.Context, key domain.Ro
 	return nil, nil
 }
 
-func (r *LocalRouteCanaryRepository) ListState(context.Context) ([]domain.RouteCanaryState, error) {
-	records, err := r.State.records(kinds.CPStateTopicRouteCanary)
+func (r *LocalRouteCanaryRepository) ListState(ctx context.Context) ([]domain.RouteCanaryState, error) {
+	records, err := r.State.records(ctx, kinds.CPStateTopicRouteCanary)
 	if err != nil {
 		return nil, err
 	}

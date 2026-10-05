@@ -10,6 +10,7 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -21,7 +22,7 @@ import (
 
 const supervisionTestKey = "f555555555555555555555555555555555555555555555555555555555555555"
 
-func localSupervisionFixture(t *testing.T) (LocalSupervisionState, gonostr.SecretKey) {
+func localSupervisionFixture(t *testing.T) (LocalSupervisionState, gonostr.SecretKey, *localstore.Store) {
 	t.Helper()
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 	if err != nil {
@@ -32,10 +33,11 @@ func localSupervisionFixture(t *testing.T) (LocalSupervisionState, gonostr.Secre
 	if err != nil {
 		t.Fatal(err)
 	}
-	return LocalSupervisionState{Store: store, Author: secret.Public().Hex()}, secret
+	history := nostrAdapter.NewLocalEventRepository(store, nil).Authored(secret.Public().Hex())
+	return LocalSupervisionState{History: history}, secret, store
 }
 
-func saveSupervisionRecord(t *testing.T, state LocalSupervisionState, secret gonostr.SecretKey, topic, schema, coordinate string, content any, createdAt int64) {
+func saveSupervisionRecord(t *testing.T, store *localstore.Store, secret gonostr.SecretKey, topic, schema, coordinate string, content any, createdAt int64) {
 	t.Helper()
 	encoded, err := json.Marshal(content)
 	if err != nil {
@@ -45,7 +47,7 @@ func saveSupervisionRecord(t *testing.T, state LocalSupervisionState, secret gon
 	if err := event.Sign(secret); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := state.Store.SaveEvent(event); err != nil {
+	if _, err := store.SaveEvent(event); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -60,10 +62,10 @@ func (f failingRouteIndex) UpsertStateWithEvent(context.Context, *domain.RouteCa
 }
 
 func TestLocalRouteCanarySweepFollowsRelayDesiredStateAndSQLFailure(t *testing.T) {
-	state, secret := localSupervisionFixture(t)
+	state, secret, store := localSupervisionFixture(t)
 	plan := testRoutePlan()
 	serviceState := domain.EnvironmentServiceState{ServiceID: plan.ServiceID, EnvironmentID: plan.EnvironmentID, DesiredRuntimeState: &domain.DesiredServiceSpec{PublicRoute: plan}}
-	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", serviceState, 100)
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", serviceState, 100)
 	prober := &stubRouteProber{byPerspective: map[domain.RouteCanaryPerspective]domain.RouteCanaryObservation{domain.RouteCanaryPerspectivePublicEdge: staleUpstreamObservation()}}
 	evaluator, err := NewRouteCanaryEvaluator(prober, testRouteCanaryPolicy())
 	if err != nil {
@@ -75,7 +77,7 @@ func TestLocalRouteCanarySweepFollowsRelayDesiredStateAndSQLFailure(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical := &savingSupervisionPublisher{store: state.Store, secret: secret}
+	canonical := &savingSupervisionPublisher{store: store, secret: secret}
 	projector, err := NewRouteCanaryProjector(bus, canonical, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +92,7 @@ func TestLocalRouteCanarySweepFollowsRelayDesiredStateAndSQLFailure(t *testing.T
 	require.Equal(t, beforeRetry, canonical.count, "bus retry must not duplicate canonical route records")
 	previous := prober.calls
 	serviceState.DesiredRuntimeState = nil
-	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", serviceState, 101)
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", serviceState, 101)
 	supervisor.EvaluateOnce(context.Background())
 	if prober.calls != previous {
 		t.Fatalf("withdrawn relay route was probed: %d -> %d", previous, prober.calls)
@@ -98,11 +100,11 @@ func TestLocalRouteCanarySweepFollowsRelayDesiredStateAndSQLFailure(t *testing.T
 }
 
 func TestLocalRouteCanaryRestartResumesFailureStreak(t *testing.T) {
-	state, secret := localSupervisionFixture(t)
+	state, secret, store := localSupervisionFixture(t)
 	plan := testRoutePlan()
-	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", domain.EnvironmentServiceState{ServiceID: plan.ServiceID, EnvironmentID: plan.EnvironmentID, DesiredRuntimeState: &domain.DesiredServiceSpec{PublicRoute: plan}}, 100)
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", domain.EnvironmentServiceState{ServiceID: plan.ServiceID, EnvironmentID: plan.EnvironmentID, DesiredRuntimeState: &domain.DesiredServiceSpec{PublicRoute: plan}}, 100)
 	prior := domain.RouteCanaryState{RouteCanaryKey: domain.RouteCanaryKeyForPlan(plan), ConsecutiveFailures: 1, Classification: domain.RouteCanaryClassificationUpstreamError, UpdatedAt: time.Unix(100, 0)}
-	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicRouteCanary, routeCanaryStateSchema, prior.Coordinate(), map[string]any{"route_canary": prior}, 100)
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicRouteCanary, routeCanaryStateSchema, prior.Coordinate(), map[string]any{"route_canary": prior}, 100)
 	prober := &stubRouteProber{byPerspective: map[domain.RouteCanaryPerspective]domain.RouteCanaryObservation{domain.RouteCanaryPerspectivePublicEdge: staleUpstreamObservation()}}
 	evaluator, err := NewRouteCanaryEvaluator(prober, testRouteCanaryPolicy())
 	if err != nil {
@@ -126,12 +128,12 @@ func TestLocalRouteCanaryRestartResumesFailureStreak(t *testing.T) {
 }
 
 func TestLocalRouteCanaryRestartRetainsOpenOutageSince(t *testing.T) {
-	state, secret := localSupervisionFixture(t)
+	state, secret, store := localSupervisionFixture(t)
 	plan := testRoutePlan()
-	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", domain.EnvironmentServiceState{ServiceID: plan.ServiceID, EnvironmentID: plan.EnvironmentID, DesiredRuntimeState: &domain.DesiredServiceSpec{PublicRoute: plan}}, 100)
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", domain.EnvironmentServiceState{ServiceID: plan.ServiceID, EnvironmentID: plan.EnvironmentID, DesiredRuntimeState: &domain.DesiredServiceSpec{PublicRoute: plan}}, 100)
 	openedAt := time.Unix(90, 0).UTC()
 	prior := domain.RouteCanaryState{RouteCanaryKey: domain.RouteCanaryKeyForPlan(plan), Open: true, ConsecutiveFailures: 2, Classification: domain.RouteCanaryClassificationUpstreamError, OpenedAt: &openedAt, LastObservedAt: time.Unix(100, 0).UTC(), UpdatedAt: time.Unix(100, 0).UTC()}
-	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicRouteCanary, routeCanaryStateSchema, prior.Coordinate(), map[string]any{"route_canary": prior}, 100)
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicRouteCanary, routeCanaryStateSchema, prior.Coordinate(), map[string]any{"route_canary": prior}, 100)
 	prober := &stubRouteProber{byPerspective: map[domain.RouteCanaryPerspective]domain.RouteCanaryObservation{domain.RouteCanaryPerspectivePublicEdge: staleUpstreamObservation()}}
 	evaluator, err := NewRouteCanaryEvaluator(prober, testRouteCanaryPolicy())
 	require.NoError(t, err)
@@ -178,15 +180,22 @@ func (f failingManagedIndex) CompleteRecoveryAttemptWithHealthEvent(context.Cont
 }
 
 func TestLocalManagedInstanceSweepSurvivesSQLIndexFailureAndRestartBudget(t *testing.T) {
-	state, secret := localSupervisionFixture(t)
-	publisher := &savingSupervisionPublisher{store: state.Store, secret: secret}
+	state, secret, store := localSupervisionFixture(t)
+	publisher := &savingSupervisionPublisher{store: store, secret: secret}
 	repo := NewLocalManagedInstanceState(state, failingManagedIndex{&supervisorRepoFake{}}, publisher, nil)
 	now := time.Now().UTC().Truncate(time.Second)
-	key := testKey()
 	rt := &sequenceRuntime{observations: []*runtime.InstanceObservation{{Status: domain.InstanceHealthStatusUnhealthy, ObservedAt: now}, {Status: domain.InstanceHealthStatusRunning, ObservedAt: now.Add(time.Second)}, {Status: domain.InstanceHealthStatusUnhealthy, ObservedAt: now.Add(2 * time.Second)}}}
-	spec := SupervisionSpec{Key: key, SupervisorType: domain.InstanceSupervisorDocker, DesiredRunning: true, Observer: rt, Controller: rt, RecoveryPolicy: testPolicy(false)}
+	serviceID, environmentID, artifactID := uuid.New(), uuid.New(), uuid.New()
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicServiceRegistry, kinds.CASControlStateSchema, serviceID.String(), domain.Service{ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker}, 100)
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicEnvironmentRegistry, kinds.CASControlStateSchema, environmentID.String(), map[string]any{"id": environmentID, "name": "production", "runtime_config": map[string]any{"type": "docker"}, "deployment_units": []map[string]any{{"key": "default", "implicit": true}}}, 100)
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", domain.EnvironmentServiceState{ServiceID: serviceID, EnvironmentID: environmentID, DesiredArtifactID: &artifactID, DesiredRuntimeState: &domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: environmentID, ArtifactID: artifactID, StableServiceKey: "api"}}, 100)
+	source := &LocalSupervisionSpecSource{State: state, Resolver: supervisionResolverFake{runtime: rt}, Policy: testPolicy(false)}
+	specs, err := source.SupervisionSpecs(context.Background())
+	require.NoError(t, err)
+	require.Len(t, specs, 1)
+	key := specs[0].Key
 	bus := &eventBusFake{}
-	supervisor, err := NewManagedInstanceSupervisor(StaticSupervisionSpecSource{spec}, repo, lockFake{acquired: true}, bus, time.Second, zap.NewNop())
+	supervisor, err := NewManagedInstanceSupervisor(source, repo, lockFake{acquired: true}, bus, time.Second, zap.NewNop())
 	require.NoError(t, err)
 	supervisor.SetCanonicalProjector(NewManagedInstanceHealthProjector(bus, publisher, zap.NewNop()))
 	require.NoError(t, supervisor.EvaluateOnce(context.Background()))
@@ -210,8 +219,8 @@ func TestLocalManagedInstanceSweepSurvivesSQLIndexFailureAndRestartBudget(t *tes
 }
 
 func TestLocalManagedInstanceMaintenanceOverrideSurvivesRestart(t *testing.T) {
-	state, secret := localSupervisionFixture(t)
-	publisher := &savingSupervisionPublisher{store: state.Store, secret: secret}
+	state, secret, store := localSupervisionFixture(t)
+	publisher := &savingSupervisionPublisher{store: store, secret: secret}
 	key := testKey()
 	now := time.Now().UTC().Truncate(time.Second)
 	override := &domain.MaintenanceOverride{ID: uuid.New(), ManagedInstanceKey: key, Actor: "operator", Reason: "maintenance", CreatedAt: now}
@@ -230,8 +239,8 @@ func TestLocalManagedInstanceMaintenanceOverrideSurvivesRestart(t *testing.T) {
 }
 
 func TestLocalManagedInstanceRestartUsesCanonicalBudget(t *testing.T) {
-	state, secret := localSupervisionFixture(t)
-	publisher := &savingSupervisionPublisher{store: state.Store, secret: secret}
+	state, secret, store := localSupervisionFixture(t)
+	publisher := &savingSupervisionPublisher{store: store, secret: secret}
 	key := testKey()
 	now := time.Now().UTC().Truncate(time.Second)
 	for i := range 3 {
@@ -250,21 +259,21 @@ func TestLocalManagedInstanceRestartUsesCanonicalBudget(t *testing.T) {
 }
 
 func TestLocalManagedInstanceSpecSourceFollowsRelayReplacement(t *testing.T) {
-	state, secret := localSupervisionFixture(t)
+	state, secret, store := localSupervisionFixture(t)
 	serviceID, environmentID, artifactID := uuid.New(), uuid.New(), uuid.New()
 	svc := domain.Service{ID: serviceID, Name: "api", RuntimeType: domain.RuntimeTypeDocker}
 	env := domain.Environment{ID: environmentID, Name: "production", RuntimeConfig: map[string]any{"type": "docker"}}
-	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicServiceRegistry, kinds.CASControlStateSchema, serviceID.String(), svc, 100)
-	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicEnvironmentRegistry, kinds.CASControlStateSchema, environmentID.String(), map[string]any{"id": environmentID, "name": env.Name, "runtime_config": env.RuntimeConfig, "deployment_units": []map[string]any{{"key": "default", "implicit": true}}}, 100)
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicServiceRegistry, kinds.CASControlStateSchema, serviceID.String(), svc, 100)
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicEnvironmentRegistry, kinds.CASControlStateSchema, environmentID.String(), map[string]any{"id": environmentID, "name": env.Name, "runtime_config": env.RuntimeConfig, "deployment_units": []map[string]any{{"key": "default", "implicit": true}}}, 100)
 	desired := domain.EnvironmentServiceState{ServiceID: serviceID, EnvironmentID: environmentID, DesiredArtifactID: &artifactID, DesiredRuntimeState: &domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: environmentID, ArtifactID: artifactID, StableServiceKey: "api"}}
-	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", desired, 100)
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", desired, 100)
 	source := &LocalSupervisionSpecSource{State: state, Resolver: supervisionResolverFake{runtime: runtime.NewDockerObserver("unix:///var/run/docker.sock", zap.NewNop())}}
 	specs, err := source.SupervisionSpecs(context.Background())
 	require.NoError(t, err)
 	require.Len(t, specs, 1)
 	require.True(t, specs[0].DesiredRunning)
 	desired.DesiredArtifactID, desired.DesiredRuntimeState = nil, nil
-	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", desired, 101)
+	saveSupervisionRecord(t, store, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", desired, 101)
 	specs, err = source.SupervisionSpecs(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, specs)

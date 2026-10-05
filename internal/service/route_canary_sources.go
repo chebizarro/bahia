@@ -14,8 +14,8 @@ import (
 // set without consulting a repository.
 type LocalRoutePlanSource struct{ State LocalSupervisionState }
 
-func (s LocalRoutePlanSource) ListManagedRoutePlans(context.Context) ([]*domain.DesiredPublicRoutePlan, error) {
-	records, err := s.State.records(kinds.CPStateTopicServiceState)
+func (s LocalRoutePlanSource) ListManagedRoutePlans(ctx context.Context) ([]*domain.DesiredPublicRoutePlan, error) {
+	records, err := s.State.records(ctx, kinds.CPStateTopicServiceState)
 	if err != nil {
 		return nil, err
 	}
