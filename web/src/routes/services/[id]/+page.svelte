@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { boot } from '$lib/nostr/boot.js';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
@@ -1176,9 +1177,11 @@
         </select>
       </label>
       <div class="actions">
+        <IntentGate domain="runtime" orgId={service?.org_id}>
         <button type="button" disabled={!runtimeEnvironmentId || Boolean(runtimeSubmitting)} onclick={() => handleRuntimeAction('deploy')}>Runtime deploy</button>
         <button type="button" disabled={!runtimeEnvironmentId || Boolean(runtimeSubmitting)} onclick={() => handleRuntimeAction('restart')}>Restart runtime</button>
         <button type="button" disabled={!runtimeEnvironmentId || Boolean(runtimeSubmitting)} onclick={() => handleRuntimeAction('stop')}>Stop runtime</button>
+        </IntentGate>
       </div>
       {#if runtimeNotice}<p role="status">{runtimeNotice}</p>{/if}
       {#if runtimeError}<p role="alert" class="error">{runtimeError}</p>{/if}
@@ -1396,6 +1399,7 @@
       >
         Cancel
       </LoadingButton>
+      <IntentGate domain="service" orgId={service?.org_id}>
       <LoadingButton
         type="submit"
         variant="primary"
@@ -1403,12 +1407,14 @@
       >
         Save
       </LoadingButton>
+      </IntentGate>
     </div>
   </form>
 </Modal>
 
 <!-- Delete Confirmation Dialog -->
 <ConfirmDialog
+  intentDomain="service" intentOrgId={service?.org_id}
   bind:open={deleteOpen}
   title="Delete Service"
   titleIcon={WarningIcon}
@@ -1815,17 +1821,20 @@
       {#if deployStep > 1}
         <LoadingButton type="button" variant="secondary" onclick={previousDeployStep} disabled={deploying || deployPolicyPreviewLoading}>Back</LoadingButton>
       {/if}
+      <IntentGate domain="deployment" orgId={service?.org_id}>
       {#if deployStep < 6}
         <LoadingButton type="button" variant="primary" onclick={nextDeployStep} loading={deployPolicyPreviewLoading} disabled={deploying}>Continue</LoadingButton>
       {:else}
         <LoadingButton type="submit" variant="primary" loading={deploying} disabled={deployCreateDisabled}>Sign & submit idempotently</LoadingButton>
       {/if}
+      </IntentGate>
     </div>
   </form>
 </Modal>
 
 <!-- Rollback Modal -->
 <ConfirmDialog
+  intentDomain="deployment" intentOrgId={service?.org_id}
   bind:open={rollbackOpen}
   title="Confirm Rollback"
   titleIcon={RollbackIcon}

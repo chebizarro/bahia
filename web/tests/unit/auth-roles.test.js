@@ -419,6 +419,41 @@ describe('auth-roles', () => {
     // Subscriptions should be cleaned up
     expect(store._subscribers.length).toBe(0);
   });
+
+  it('stays active while a live key envelope is still being decrypted, then exposes the role', async () => {
+    const { startRoleDerivation, stopRoleDerivation, orgRoles, roleDerivationActive } =
+      await import('../../src/lib/stores/auth-roles.svelte.js');
+
+    const store = createMockStore([]);
+    let finishDecrypt;
+    const signer = { decryptNip44: vi.fn(() => new Promise(resolve => { finishDecrypt = resolve; })) };
+
+    await startRoleDerivation({ store, userPubkey: TEST_USER_PUBKEY, servicePubkey: TEST_SERVICE_PUBKEY, signer });
+    // Nothing in the store yet: the initial pass is complete and found no org.
+    expect(roleDerivationActive.value).toBe(false);
+    expect(Object.keys(orgRoles)).toEqual([]);
+
+    // Relay catch-up delivers the membership; the org is not known until the
+    // signer finishes the trial decryption, and the store must say so.
+    const envelopeEvent = buildFixtureKeyEnvelope();
+    store.emit(buildFixtureMemberRecord());
+    store.emit(envelopeEvent);
+    expect(roleDerivationActive.value).toBe(true);
+    expect(Object.keys(orgRoles)).toEqual([]);
+
+    finishDecrypt(envelopeEvent.content);
+    await vi.waitFor(() => expect(roleDerivationActive.value).toBe(false));
+    expect(orgRoles[TEST_ORG_ID]).toBe('admin');
+
+    // A superseded pass must not leave the next derivation marked active.
+    store.emit(buildFixtureKeyEnvelope('org-fixture-2'));
+    expect(roleDerivationActive.value).toBe(true);
+    stopRoleDerivation();
+    expect(roleDerivationActive.value).toBe(false);
+    finishDecrypt('late');
+    await Promise.resolve();
+    expect(roleDerivationActive.value).toBe(false);
+  });
 });
 
 describe('OCK never persisted to storage', () => {

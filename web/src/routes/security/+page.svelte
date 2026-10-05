@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { goto } from '$app/navigation';
   import { onMount, untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
@@ -311,7 +312,9 @@
     <form onsubmit={handleManualScan} data-testid="security-scan-form">
       <label for="security-scan-target">Scan target JSON</label>
       <textarea id="security-scan-target" bind:value={manualTargetJson} rows="5" required></textarea>
+      <IntentGate domain="security">
       <button type="submit" disabled={manualScanSubmitting}>{manualScanSubmitting ? 'Submitting…' : 'Run signed scan'}</button>
+      </IntentGate>
     </form>
     {#if manualScanError}<p role="alert">{manualScanError}</p>{/if}
     {#if manualScanNotice}<p role="status">{manualScanNotice}</p>{/if}
@@ -416,6 +419,7 @@
         {#if targetHashes.length > 0}
           <div class="actions-bar">
             <span class="actions-label">Rescan targets:</span>
+            <IntentGate domain="security">
             {#each targetHashes.slice(0, 5) as hash}
               <LoadingButton
                 loading={rescanningHash === hash}
@@ -424,6 +428,7 @@
                 loadingLabel="Scanning..."
               />
             {/each}
+            </IntentGate>
           </div>
         {/if}
         <Table

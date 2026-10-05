@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { bootstrapControlplane, controlplaneConnection, mlModels, mlModelVersions, mlEndpoints, mlEndpointStates, environments, workers, operations } from '$lib/stores';
   import { MLFabricIcon, ArtifactIcon, DeploymentIcon, WarningIcon, ProgressIcon, AcceleratorIcon } from '$lib/icons/domain-icons.js';
   import { publishIntent, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
@@ -421,6 +422,7 @@
     </section>
 
     <!-- Action Forms -->
+    <IntentGate domain="ml">
     <div class="workflow-grid">
       <section class="panel">
         <h2><ArtifactIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Import Model</h2>
@@ -614,6 +616,7 @@
         </form>
       </section>
     </div>
+    </IntentGate>
   {/if}
 </div>
 

@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { WORKER_COMMANDS, workerOperation } from './actions.js';
   import { workerIntentRequest } from '$lib/nostr/domain-intents.js';
   import { publishIntent, resolveIntentOrgId } from '$lib/nostr/intent-client.svelte.js';
@@ -147,9 +148,11 @@
 
     <footer>
       <button type="button" class="secondary" disabled={pending} onclick={closeDialog}>Close</button>
+      <IntentGate domain="worker">
       <button type="button" class="primary" disabled={submitDisabled} onclick={submitCleanup}>
         {pending ? 'Publishing…' : 'Publish cleanup intent'}
       </button>
+      </IntentGate>
     </footer>
   </div>
 {/if}

@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { page } from '$app/state';
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
@@ -296,7 +297,9 @@ import { formatBytes } from '../../instance-health/page-model.js';
     {#if actionError}<p class="error">{actionError}</p>{/if}
     <div class="form-actions">
       <LoadingButton type="button" variant="secondary" onclick={() => { promoteOpen = false; actionError = null; }} disabled={submitting}>Cancel</LoadingButton>
+      <IntentGate domain="package">
       <LoadingButton type="submit" variant="primary" loading={submitting}>Promote</LoadingButton>
+      </IntentGate>
     </div>
   </form>
 </Modal>
@@ -316,7 +319,9 @@ import { formatBytes } from '../../instance-health/page-model.js';
     {#if actionError}<p class="error">{actionError}</p>{/if}
     <div class="form-actions">
       <LoadingButton type="button" variant="secondary" onclick={() => { yankOpen = false; actionError = null; }} disabled={submitting}>Cancel</LoadingButton>
+      <IntentGate domain="package">
       <LoadingButton type="submit" variant="danger" loading={submitting}>Yank</LoadingButton>
+      </IntentGate>
     </div>
   </form>
 </Modal>

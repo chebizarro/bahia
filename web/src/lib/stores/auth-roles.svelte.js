@@ -81,7 +81,9 @@ export const orgRoles = $state({});
 export let nip44Available = $state({ value: null });
 
 /**
- * Whether role derivation is in progress.
+ * Whether role derivation is in progress: the initial pass over the store or a
+ * live key-envelope pass whose trial decryption has not finished. While true,
+ * `orgRoles` can still gain an organization without the operator.
  */
 export let roleDerivationActive = $state({ value: false });
 
@@ -135,6 +137,19 @@ export function roleForOrg(orgID) {
 /** @type {Array<() => void>} */
 let activeUnsubscribes = [];
 let derivationGeneration = 0;
+let derivationPasses = 0;
+
+function beginDerivationPass() {
+  derivationPasses++;
+  roleDerivationActive.value = true;
+}
+
+/** Passes started by a superseded generation were already discarded by the reset. */
+function endDerivationPass(generation) {
+  if (generation !== derivationGeneration) return;
+  derivationPasses = Math.max(0, derivationPasses - 1);
+  if (derivationPasses === 0) roleDerivationActive.value = false;
+}
 
 /**
  * Stop all active store subscriptions and clear cached state.
@@ -154,6 +169,7 @@ export function stopRoleDerivation() {
     delete orgRoles[key];
   }
   nip44Available.value = null;
+  derivationPasses = 0;
   roleDerivationActive.value = false;
   roleDerivationError.value = null;
 }
@@ -175,7 +191,7 @@ export function stopRoleDerivation() {
 export async function startRoleDerivation({ store, userPubkey, servicePubkey, signer }) {
   stopRoleDerivation();
   const generation = derivationGeneration;
-  roleDerivationActive.value = true;
+  beginDerivationPass();
   roleDerivationError.value = null;
 
   // 1. Check NIP-44 capability
@@ -184,7 +200,7 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
 
   if (!hasNip44) {
     // Graceful degradation: roles remain empty, user sees only public state
-    roleDerivationActive.value = false;
+    endDerivationPass(generation);
     roleDerivationError.value = 'Signer does not support NIP-44 decryption';
     return;
   }
@@ -204,9 +220,11 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
       () => {
         if (generation !== derivationGeneration) return;
         // Re-process on any key envelope change
+        beginDerivationPass();
         processKeyEnvelopes(store, userPubkey, servicePubkey, signer, generation)
           .then(() => generation === derivationGeneration && processMemberRecords(store, servicePubkey, userPubkey))
-          .catch(err => console.warn('[auth-roles] live key envelope processing error:', err));
+          .catch(err => console.warn('[auth-roles] live key envelope processing error:', err))
+          .finally(() => endDerivationPass(generation));
       }
     );
     activeUnsubscribes.push(envelopeUnsub);
@@ -229,10 +247,10 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
     );
     activeUnsubscribes.push(recordUnsub);
 
-    roleDerivationActive.value = false;
+    endDerivationPass(generation);
   } catch (err) {
     if (generation !== derivationGeneration) return;
-    roleDerivationActive.value = false;
+    endDerivationPass(generation);
     roleDerivationError.value = err?.message || String(err);
     console.error('[auth-roles] role derivation failed:', err);
   }

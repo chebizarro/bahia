@@ -1,3 +1,4 @@
+import { untrack } from 'svelte';
 import { boot, getEventStore, getPool, getRelayUrls, getServicePubkey } from './boot.js';
 import { toWebSocketUrl } from './pool-utils.js';
 import { signIntent } from './intent-signer.js';
@@ -8,19 +9,9 @@ import { submitSensitiveIntent, waitForSensitiveIntentStatus } from '../stores/s
 
 export const pendingIntentRows = $state([]);
 
-// ParseIntent requires an org UUID even when FleetScopedHandler authorizes by
-// fleet operator pubkey rather than per-org membership.
-export const FLEET_INTENT_ORG_ID = 'f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7';
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export { FLEET_INTENT_ORG_ID, INTENT_ORG_REQUIRED, resolveIntentOrgId } from './intent-org.js';
 
-export function resolveIntentOrgId(domain, explicit, candidates = []) {
-  if (UUID.test(String(explicit || ''))) return explicit;
-  if (['backup', 'package', 'worker', 'dns', 'ml', 'security', 'sbom', 'relay'].includes(domain)) return FLEET_INTENT_ORG_ID;
-  const available = [...new Set(candidates.filter(value => UUID.test(String(value || ''))))];
-  if (available.length === 1) return available[0];
-  if (available.length > 1) throw new Error('Select an organization before submitting this intent');
-  throw new Error('Select an organization before submitting this intent');
-}
+export const INTENT_CLIENT_REQUIRED = 'Signing an intent requires an authenticated signer, Bahia store and relay seed';
 
 function tag(event, name) { return event?.tags?.find(item => item[0] === name)?.[1]; }
 
@@ -146,7 +137,37 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
 let active = null;
 let opening = null;
 
+/**
+ * Lifecycle of the session intent client, for the submission readiness signal
+ * (stores/intent-readiness.svelte.js). Every phase is a local fact; none
+ * depends on a relay being connected or caught up.
+ *
+ *   idle         the session has not opened a client yet (boot or sign-in
+ *                still to come)
+ *   opening      its local pending and outbox stores are being opened
+ *   ready        open
+ *   closed       stopped after use; the next submit reopens it on demand
+ *   unavailable  the session cannot sign intents; error says why
+ */
+export const intentClientState = $state({ phase: 'idle', error: '' });
+
 async function currentClient() {
+  // Callers include effects (the layout resumes the client from one); the
+  // phase is this module's own bookkeeping and must not become their dependency.
+  if (['idle', 'closed'].includes(untrack(() => intentClientState.phase))) intentClientState.phase = 'opening';
+  try {
+    const client = await openCurrentClient();
+    intentClientState.phase = 'ready';
+    intentClientState.error = '';
+    return client;
+  } catch (error) {
+    intentClientState.phase = 'unavailable';
+    intentClientState.error = error?.message || String(error);
+    throw error;
+  }
+}
+
+async function openCurrentClient() {
   await boot();
   const requesterPubkey = authState.pubkey;
   const servicePubkey = getServicePubkey();
@@ -154,7 +175,7 @@ async function currentClient() {
   const pool = getPool();
   const relays = [...new Set(getRelayUrls().map(toWebSocketUrl).filter(Boolean))];
   if (!requesterPubkey || !servicePubkey || !store || !pool || relays.length === 0) {
-    throw new Error('Signing an intent requires an authenticated signer, Bahia store and relay seed');
+    throw new Error(INTENT_CLIENT_REQUIRED);
   }
   const key = `${servicePubkey}:${requesterPubkey}:${relays.join(',')}`;
   if (active?.key === key) return active.client;
@@ -219,5 +240,7 @@ export function canonicalIntentRecord(coordinate) {
 
 export function stopIntentClient() {
   active?.client.close(); active = null; opening = null;
+  if (untrack(() => intentClientState.phase) !== 'idle') intentClientState.phase = 'closed';
+  intentClientState.error = '';
   pendingIntentRows.splice(0);
 }

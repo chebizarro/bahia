@@ -1,4 +1,5 @@
 <script>
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { page } from '$app/stores';
   import { onMount, untrack } from 'svelte';
   import Table from '$lib/components/Table.svelte';
@@ -159,12 +160,14 @@
       <span class="run-id">{runId}</span>
     </div>
     {#if targetHash}
+      <IntentGate domain="security">
       <LoadingButton
         loading={rescanning}
         onclick={handleRescan}
         label="Rescan Target"
         loadingLabel="Submitting..."
       />
+      </IntentGate>
     {/if}
   </div>
 
