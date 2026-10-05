@@ -1,16 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const bootMock = vi.hoisted(() => ({ store: null as any, refresh: null as any }));
+const bootMock = vi.hoisted(() => ({
+  store: null as any, pool: null as any, relays: [] as string[], refresh: null as any,
+  auth: { status: 'unauthenticated', pubkey: '' }
+}));
 vi.mock('$lib/nostr/boot.js', () => ({
-  getEventStore: () => bootMock.store, getServicePubkey: () => 'a'.repeat(64),
+  getEventStore: () => bootMock.store,
   getServicePubkeys: () => ['a'.repeat(64)],
-  getPool: () => null, getRelayUrls: () => [],
+  getPool: () => bootMock.pool, getRelayUrls: () => bootMock.relays,
   onStoreRefresh: (cb: any) => { bootMock.refresh = cb; return () => { bootMock.refresh = null; }; }
 }));
-vi.mock('$lib/stores/auth.js', () => ({ authState: { status: 'unauthenticated', pubkey: '' } }));
+vi.mock('$lib/stores/auth.js', () => ({ authState: bootMock.auth }));
 import {
   continuityNostrFilters,
   continuityEventsFromStore,
+  initContinuityStoreBinding,
+  teardownContinuityStoreBinding,
   continuityRequestsFromEvents,
   continuityStatusesFromEvents,
   deriveContinuityAssessments,
@@ -223,5 +228,84 @@ describe('continuity heartbeat expiry', () => {
     expect(active([standby('w'), heartbeat('w', [['expiration', String(now - 1)], ['expires_after_ms', '600000']], now - 60)])).toBe(false);
     expect(active([standby('w'), heartbeat('w', [['expires_after_ms', '1000']], now - 60)])).toBe(false);
     expect(active([standby('w'), heartbeat('w', [['expires_after_ms', '600000']], now - 60)])).toBe(true);
+  });
+});
+
+describe('continuity app-lifetime store binding', () => {
+  const RELAY = 'wss://relay.test';
+  const OPERATOR = 'c'.repeat(64);
+
+  // Answers every paged REQ with an empty page so catch-up completes.
+  function relayPool() {
+    const requests: any[] = [];
+    const pool = { subscribe: vi.fn((options: any) => {
+      requests.push(options);
+      if (options.filters[0].limit !== undefined) queueMicrotask(() => options.onEose(RELAY));
+      return { unsubscribe: vi.fn() };
+    }) };
+    return { pool, requests };
+  }
+
+  function start() {
+    const { pool, requests } = relayPool();
+    bootMock.pool = pool;
+    bootMock.relays = [RELAY];
+    bootMock.store = { query: () => [], getCursor: () => null, setCursor: vi.fn() };
+    bootMock.auth.status = 'unauthenticated';
+    bootMock.auth.pubkey = '';
+    teardownContinuityStoreBinding();
+    initContinuityStoreBinding();
+    return { pool, requests };
+  }
+
+  it('subscribes only under trusted authors and adds operator families when an operator signs in', async () => {
+    const { pool, requests } = start();
+    const authorsOf = () => requests.flatMap((request) => request.filters.map((filter: any) => filter.authors));
+    expect(requests.length).toBeGreaterThan(0);
+    expect(authorsOf().every((authors) => authors.length === 1 && authors[0] === SERVICE_AUTHOR)).toBe(true);
+    expect(requests.flatMap((request) => request.filters.flatMap((filter: any) => filter.kinds))).not.toContain(31400);
+
+    await vi.waitFor(() => expect(pool.subscribe.mock.calls.length).toBeGreaterThanOrEqual(4));
+    const beforeLogin = pool.subscribe.mock.calls.length;
+    bootMock.auth.status = 'authenticated';
+    bootMock.auth.pubkey = OPERATOR;
+    initContinuityStoreBinding();
+    const added = requests.slice(beforeLogin);
+    expect(added.length).toBeGreaterThan(0);
+    expect(added.every((request) => request.filters.every((filter: any) => filter.authors[0] === OPERATOR))).toBe(true);
+    expect(added[0].filters.map((filter: any) => filter.kinds)).toEqual([[31400, 31401, 31402, 31403, 31404], [38430, 38431], [30315]]);
+    expect(authorsOf().every((authors) => Array.isArray(authors) && authors.length === 1)).toBe(true);
+    teardownContinuityStoreBinding();
+  });
+
+  it('lets pages come and go without opening or closing a relay REQ', async () => {
+    const { pool } = start();
+    await vi.waitFor(() => expect(pool.subscribe.mock.calls.length).toBeGreaterThanOrEqual(4));
+    const opened = pool.subscribe.mock.calls.length;
+    const closed = () => pool.subscribe.mock.results.filter((result: any) => result.value.unsubscribe.mock.calls.length > 0).length;
+    const closedBefore = closed();
+    for (let visit = 0; visit < 3; visit += 1) {
+      const leave = await subscribeToContinuityDashboard({ onUpdate: () => {} });
+      initContinuityStoreBinding();
+      leave();
+    }
+    expect(pool.subscribe).toHaveBeenCalledTimes(opened);
+    expect(closed()).toBe(closedBefore);
+    teardownContinuityStoreBinding();
+  });
+
+  it('reports relay catch-up as a badge on an already rendered snapshot and skips unchanged refreshes', async () => {
+    const { pool } = start();
+    const updates: any[] = [];
+    const leave = await subscribeToContinuityDashboard({ onUpdate: (snapshot) => updates.push(snapshot) });
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({ ready: true, synced: false, error: null });
+    await vi.waitFor(() => expect(updates.at(-1).synced).toBe(true));
+    const delivered = updates.length;
+    bootMock.refresh();
+    expect(updates).toHaveLength(delivered);
+    expect(pool.subscribe.mock.calls.every(([options]: any) => options.filters.every((filter: any) => filter.authors?.length))).toBe(true);
+    leave();
+    teardownContinuityStoreBinding();
   });
 });

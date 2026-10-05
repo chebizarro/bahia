@@ -19,10 +19,10 @@ import {
   parseJsonContent
 } from '$lib/nostr/client.js';
 import { controlStateSchema, workerRecordId } from '$lib/nostr/cp-state.js';
-import { getEventStore, getPool, getRelayUrls, getServicePubkey, getServicePubkeys, onStoreRefresh } from '$lib/nostr/boot.js';
+import { getEventStore, getPool, getRelayUrls, getServicePubkeys, onStoreRefresh } from '$lib/nostr/boot.js';
 import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
 import { authState } from '$lib/stores/auth.js';
-import { subscribeWithPagedBackfill } from '$lib/nostr/store-first-backfill.js';
+import { createPagedReader } from '$lib/nostr/store-first-backfill.js';
 import type { ContinuityAssessmentDTO, ContinuityRunDTO, ContinuityServiceStatusDTO } from '$lib/types/continuity';
 
 const CONTINUITY_PAGE_SIZE = 500;
@@ -120,75 +120,90 @@ function newestFirst(left: ContinuityNostrEvent, right: ContinuityNostrEvent): n
   return String(right.id || '').localeCompare(String(left.id || ''));
 }
 
-// Trusted-author policy by kind:
-// - 30351/30353 status and 30900 worker state: every deployment-seeded
-//   Bahia service key (service-authored canonical projections).
-// - 31400-31404 definitions, historical 38430/38431 commands, and 30315
-//   continuity heartbeats: the authenticated fleet operator. The daemon gates
-//   all three families with nostr.authorized_pubkeys; worker identity is data in
-//   the heartbeat, not its signing authority. Until a service-signed operator
-//   allowlist exists, the browser must not broaden this to arbitrary signers.
-export function continuityNostrFilters({ serviceAuthors = [], operatorAuthors = [] }: {
+// Trusted-author policy by kind. Nothing here is read without `authors`.
+// - 30351 continuity status, 30353 recovery progress and 30900 worker state are
+//   projections the Bahia service signs: every deployment-seeded service key.
+// - 31400-31404 definitions, 38430/38431 failover/recovery commands and 30315
+//   continuity heartbeats are operator-authored. The daemon acts on them only
+//   when signed by `nostr.authorized_pubkeys` (worker identity is data inside a
+//   heartbeat, not its signing authority). The browser has no service-signed
+//   copy of that allowlist, so it trusts exactly one operator: the signed-in
+//   key. Another operator's definitions therefore do not shape this view; the
+//   service-signed 30351/30353 status does, whoever defined the service.
+export function trustedContinuityAuthors(serviceAuthors = getServicePubkeys()) {
+  return {
+    serviceAuthors: normalizedPubkeys(serviceAuthors),
+    operatorAuthors: authState.status === 'authenticated' ? normalizedPubkeys([authState.pubkey || '']) : []
+  };
+}
+
+/** The subscription units; each is one live REQ and one paged history walk. */
+export function continuityFilterUnits({ serviceAuthors = [], operatorAuthors = [] }: {
   serviceAuthors?: string[]; operatorAuthors?: string[];
 } = {}) {
   return [
-    { kinds: [CONTINUITY_STATUS], '#t': [CONTINUITY_STATUS_TAG, CONTINUITY_STATUS_READ_MODEL_TAG], authors: serviceAuthors },
-    { kinds: [RECOVERY_PROGRESS], '#t': [CONTINUITY_STATUS_TAG, 'recovery-progress'], authors: serviceAuthors },
-    { kinds: CONTINUITY_DEFINITION_KINDS, authors: operatorAuthors },
-    { kinds: CONTINUITY_COMMAND_KINDS, authors: operatorAuthors },
-    { kinds: [HEARTBEAT_OBSERVATION], '#t': ['continuity-heartbeat'], authors: operatorAuthors },
-    { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': [WORKER_STATE_TOPIC], authors: serviceAuthors }
-  ].filter((filter) => filter.authors.length > 0);
+    { name: 'service', filters: serviceAuthors.length ? [
+      { kinds: [CONTINUITY_STATUS], '#t': [CONTINUITY_STATUS_TAG, CONTINUITY_STATUS_READ_MODEL_TAG], authors: serviceAuthors },
+      { kinds: [RECOVERY_PROGRESS], '#t': [CONTINUITY_STATUS_TAG, 'recovery-progress'], authors: serviceAuthors },
+      { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': [WORKER_STATE_TOPIC], authors: serviceAuthors }
+    ] : [] },
+    { name: 'operator', filters: operatorAuthors.length ? [
+      { kinds: CONTINUITY_DEFINITION_KINDS, authors: operatorAuthors },
+      { kinds: CONTINUITY_COMMAND_KINDS, authors: operatorAuthors },
+      { kinds: [HEARTBEAT_OBSERVATION], '#t': ['continuity-heartbeat'], authors: operatorAuthors }
+    ] : [] }
+  ];
+}
+
+export function continuityNostrFilters(authors: { serviceAuthors?: string[]; operatorAuthors?: string[] } = {}) {
+  return continuityFilterUnits(authors).flatMap((unit) => unit.filters);
 }
 
 function normalizedPubkeys(values: string[]): string[] {
   return [...new Set(values.map((value) => text(value).toLowerCase()).filter((value) => /^[0-9a-f]{64}$/.test(value)))].sort();
 }
 
-export function trustedContinuityAuthors(serviceAuthors = getServicePubkeys()) {
-  const seeded = normalizedPubkeys(serviceAuthors.length ? serviceAuthors : [getServicePubkey()]);
-  const operator = authState.status === 'authenticated' ? normalizedPubkeys([authState.pubkey || '']) : [];
-  return { serviceAuthors: seeded, operatorAuthors: operator };
-}
-
 export function continuityEventsFromStore(store = getEventStore(), serviceAuthors = getServicePubkeys()): ContinuityNostrEvent[] {
   if (!store) return [];
-  const filters = continuityNostrFilters(trustedContinuityAuthors(serviceAuthors));
   const events = new Map<string, ContinuityNostrEvent>();
-  for (const filter of filters) for (const event of store.query(filter)) if (event.id) events.set(event.id, event);
+  for (const filter of continuityNostrFilters(trustedContinuityAuthors(serviceAuthors))) {
+    for (const event of store.query(filter)) if (event.id) events.set(event.id, event);
+  }
   return [...events.values()].sort(newestFirst);
 }
 
-let binding: { stop: () => void; sync: () => void; store: any } | null = null;
+// One reader for the app's lifetime: the layout starts it after boot, calls it
+// again when the signed-in operator changes, and stops it on teardown. Pages
+// only project the store, so navigation never opens or closes a relay REQ.
+let binding: { store: unknown; reader: ReturnType<typeof createPagedReader>; error: string | null } | null = null;
+
 export function initContinuityStoreBinding() {
   const store = getEventStore();
   const pool = getPool();
   const serviceAuthors = getServicePubkeys();
   if (!store || !pool || serviceAuthors.length === 0) return;
-  if (binding?.store === store) { binding.sync(); return; }
-  binding?.stop();
-  const relays = [...new Set(getRelayUrls().map(toWebSocketUrl).filter(Boolean))];
-  const active = new Map<string, () => void>();
-  const sync = () => {
-    const filters = continuityNostrFilters(trustedContinuityAuthors(serviceAuthors));
-    const wanted = new Set<string>();
-    filters.forEach((filter, index) => {
-      const key = `continuity:${index}:${filter.authors.join(',')}`;
-      wanted.add(key);
-      if (active.has(key) || !relays.length) return;
-      active.set(key, subscribeWithPagedBackfill({
-        pool, store, relays, filter, key, pageSize: CONTINUITY_PAGE_SIZE,
-        onError: (caught) => console.warn(`[continuity] ${caught.message}`)
-      }));
-    });
-    for (const [key, stop] of active) if (!wanted.has(key)) { stop(); active.delete(key); }
-  };
-  sync();
-  const offRefresh = onStoreRefresh(sync);
-  binding = { store, sync, stop: () => { offRefresh(); for (const stop of active.values()) stop(); active.clear(); } };
+  if (binding?.store !== store) {
+    binding?.reader.stop();
+    const next: NonNullable<typeof binding> = {
+      store,
+      error: null,
+      reader: createPagedReader({
+        name: 'continuity', pool, store, pageSize: CONTINUITY_PAGE_SIZE,
+        relays: [...new Set(getRelayUrls().map(toWebSocketUrl).filter(Boolean))],
+        onChange: (caught?: Error) => {
+          if (caught) console.warn(`[continuity] ${caught.message}`);
+          next.error = caught?.message || (next.reader.metadata().complete ? null : next.error);
+          for (const listener of dashboardListeners) listener();
+        }
+      })
+    };
+    binding = next;
+  }
+  binding.reader.sync(continuityFilterUnits(trustedContinuityAuthors(serviceAuthors)));
 }
+
 export function teardownContinuityStoreBinding() {
-  binding?.stop();
+  binding?.reader.stop();
   binding = null;
 }
 
@@ -218,26 +233,41 @@ export function continuityRequestsFromEvents(events: ContinuityNostrEvent[] = []
     .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id));
 }
 
-function continuityDashboardSnapshot(events: ContinuityNostrEvent[], ready: boolean, error: string | null = null) {
+function continuityDashboardSnapshot(events: ContinuityNostrEvent[]) {
   const statuses = continuityStatusesFromEvents(events);
   return {
     statuses,
     assessments: deriveContinuityAssessments(events, statuses),
     requests: continuityRequestsFromEvents(events),
     events,
-    ready,
-    error
+    // Cached events render at once; `ready` is kept for existing consumers and
+    // `synced` reports relay catch-up as a badge, never as a gate.
+    ready: true,
+    synced: binding?.reader.metadata().complete ?? false,
+    error: binding?.error ?? null
   };
 }
 
+const dashboardListeners = new Set<() => void>();
+
+/** Project the shared store for a page. Resolves once the cached view is delivered. */
 export async function subscribeToContinuityDashboard({ onUpdate }: {
   onUpdate?: (snapshot: ReturnType<typeof continuityDashboardSnapshot>) => void;
+  onError?: (error: Error) => void;
 } = {}): Promise<() => void> {
-  // Page listeners observe the app-lifetime store binding; navigation never
-  // opens or closes a relay REQ.
-  const publish = () => onUpdate?.(continuityDashboardSnapshot(continuityEventsFromStore(), true));
+  let signature: string | null = null;
+  const publish = () => {
+    const events = continuityEventsFromStore();
+    const snapshot = continuityDashboardSnapshot(events);
+    const next = `${snapshot.synced}|${snapshot.error}|${events.map((event) => event.id).join(',')}`;
+    if (next === signature) return;
+    signature = next;
+    onUpdate?.(snapshot);
+  };
   publish();
-  return onStoreRefresh(publish);
+  dashboardListeners.add(publish);
+  const offRefresh = onStoreRefresh(publish);
+  return () => { offRefresh(); dashboardListeners.delete(publish); };
 }
 
 export function continuityStatusesFromEvents(events: ContinuityNostrEvent[] = []): ContinuityServiceStatusDTO[] {
