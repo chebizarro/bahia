@@ -84,6 +84,6 @@ Security scan operations follow Bahia's Nostr-native architecture:
 
 - **Manual scan mutation**: client-signed kind-`30900` `security/scan-run` intent
 - **Scan status**: NIP-38 kind `30315` status events with `schema=bahia.status.security-scan.v1`
-- **Encrypted state projections**: Kind `30900` topics `security-finding` (legacy kind `32012`), `security-schedule` (`32013`), and `security-finding-detail` (`32014`). Large detail records are published as `:part:<n>` chunks with `total_parts` and reassembled only when all parts are present.
+- **Encrypted state projections**: Kind `30900` topics `security-target` (legacy kind `32020`), `security-run` (`32021`), `security-finding` (`32012`), `security-schedule` (`32013`), and `security-finding-detail` (`32014`). Targets and runs make scans restartable without Postgres. Large details publish fixed `:part:<n>` chunks followed by a base-coordinate `total_parts` manifest; readers ignore stale parts outside the current manifest.
 
 The requester-scoped `30315` acceptance for `security/scan-run` is not completion — subscribe to the corresponding scan status events to track progress to terminal state.

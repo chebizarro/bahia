@@ -317,6 +317,7 @@ Durable Security truth is published by the Bahia service key as:
 
 - `30315` with `domain=security`, `schema=bahia.status.security-scan.v1`, `d=security:scan:<run_id>`, `run`, `target_type`, `target_key_hash`, `status`, optional `step`, and `e`/`p` correlation tags.
 - `30900` with `schema=bahia.security.scan-summary.v1` and `d=security:scan-summary:<run_id>` for per-run summaries, or `schema=bahia.security.target-summary.v1` and `d=security:target-summary:<target_key_hash>` for latest target state.
+- Fleet-OCK encrypted `30900` cp-state on `#t=security-target|security-run|security-schedule|security-finding|security-finding-detail`. Target and deterministic run records are the DB-less execution input, idempotent schedule claim, and durable progress ledger; SQL is an optional rebuilt index.
 - `30078` with `domain=security`, `schema=bahia.security.findings.v1`, and `d=security:findings:<run_id>:<chunk_or_finding_hash>` for normalized public-safe finding details.
 - `4903` with `domain=security`, `schema=bahia.audit.security.v1`, and `type=security-scan`, `security-policy-breach`, or `security-publication` for lifecycle, failure, policy-breach, and publication-retry facts.
 

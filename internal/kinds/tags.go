@@ -177,6 +177,8 @@ const (
 	CPStateTopicSecurityFinding       = "security-finding"
 	CPStateTopicSecuritySchedule      = "security-schedule"
 	CPStateTopicSecurityFindingDetail = "security-finding-detail"
+	CPStateTopicSecurityTarget        = "security-target"
+	CPStateTopicSecurityRun           = "security-run"
 
 	CPStateTopicLLMRelease         = "llm-release"
 	CPStateTopicArtifactSignature  = "artifact-signature"

@@ -626,10 +626,13 @@ Security uses the same decision tree without allocating a new kind:
 - Explicit scan/rescan and read intent: ContextVM `25910` methods `security/scan`, `security/rescan`, `security/findings-list`, and `security/schedules-list`, usually wrapped with `1059` or `21059` for sensitive target or policy data.
 - Progress: NIP-38 `30315` with `domain=security`, `schema=bahia.status.security-scan.v1`, and `d=security:scan:<run_id>`.
 - Current state: `30900` with `schema=bahia.security.scan-summary.v1` for per-run summaries and `schema=bahia.security.target-summary.v1` for latest target summaries.
+- Fleet-private execution state: OCK-encrypted `30900` cp-state topics `security-target` (`legacy_kind=32020`), `security-run` (`32021`), `security-schedule` (`32013`), `security-finding` (`32012`), and `security-finding-detail` (`32014`). The target supplies restartable scan input; the deterministic run coordinate is the idempotent schedule claim and durable progress record. These numbers are family discriminators, never wire kinds.
 - App-specific details: NIP-78 `30078` with `schema=bahia.security.findings.v1` for normalized public-safe findings.
 - Audit and policy breach evidence: `4903` with `schema=bahia.audit.security.v1`.
 
 Security scans triggered by SBOM production subscribe to existing SBOM `30078` reference and `30004` availability events with exact `#domain=sbom`, `#schema`, subject, and service-author filters. The scanner treats `EOSE` as historical catch-up completion, keeps realtime subscriptions open when needed, handles `CLOSED` and `AUTH`, verifies inbound event signatures and hashes before trust, and verifies relay `OK` for every Security observable it publishes.
+
+Finding detail parts use fixed `security:finding-detail:<hash>:part:<n>` coordinates. For multipart details the daemon publishes every part first and then replaces the base `security:finding-detail:<hash>` manifest with the authoritative `total_parts`; readers ignore parts outside that manifest. A base tombstone means no detail, even if older part coordinates remain retained.
 
 Relay topology is separate and should be published as NIP-51 relay sets:
 

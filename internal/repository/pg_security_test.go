@@ -168,33 +168,6 @@ func TestPgSecurityRepositoryUpsertFindingsDedupesByRunAndFindingHash(t *testing
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestPgSecurityRepositoryClaimDueSchedulesUsesAtomicLeaseQuery(t *testing.T) {
-	ctx := context.Background()
-	mock, err := pgxmock.NewPool()
-	require.NoError(t, err)
-	defer mock.Close()
-	repo := newPgSecurityRepositoryWithDB(mock)
-	now := time.Now().UTC().Truncate(time.Second)
-	leaseUntil := now.Add(5 * time.Minute)
-	scheduleID := uuid.New()
-	policyID := uuid.New()
-	targetID := uuid.New()
-
-	mock.ExpectQuery("UPDATE security_scan_schedules").
-		WithArgs(now, 10, leaseUntil, "worker-1").
-		WillReturnRows(pgxmock.NewRows(splitColumns(securityScheduleColumns)).
-			AddRow(scheduleID, policyID, targetID, "target-hash", true, 3600, now, leaseUntil, "worker-1", nil, nil, []byte(`{"source":"policy"}`), now, now))
-
-	schedules, err := repo.ClaimDueSecurityScanSchedules(ctx, now, 10, "worker-1", leaseUntil)
-
-	require.NoError(t, err)
-	require.Len(t, schedules, 1)
-	require.Equal(t, "worker-1", schedules[0].LeasedBy)
-	require.Equal(t, leaseUntil, *schedules[0].LeaseUntil)
-	require.Equal(t, "policy", schedules[0].Metadata["source"])
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestPgSecurityRepositoryBreachLifecycleNewUnchangedChangedResolved(t *testing.T) {
 	ctx := context.Background()
 	mock, err := pgxmock.NewPool()

@@ -45,15 +45,6 @@ const (
 	maxSecurityBackoff                = 30 * time.Second
 )
 
-// SecurityCPStatePublisher publishes individual security findings and schedules
-// as confidential cp-state records (bahia-irsry.60). Optional: if nil, security
-// mutations succeed without cp-state publication.
-type SecurityCPStatePublisher interface {
-	PublishFinding(ctx context.Context, finding domain.SecurityOSVFinding) error
-	PublishFindingDetail(ctx context.Context, finding domain.SecurityOSVFinding) error
-	PublishSchedule(ctx context.Context, schedule *domain.SecurityScanSchedule) error
-}
-
 // SecurityVerifiedPublisher signs and publishes Security observables through
 // the durable outbox publisher. Its error contract is the outbox's: nil means
 // the publish quorum accepted the event; an error wrapping
@@ -118,7 +109,6 @@ type SecurityScannerConfig struct {
 	OSV                SecurityOSVClient
 	Publisher          SecurityVerifiedPublisher
 	Subscriber         SecurityRelaySubscriber
-	CPPublisher        SecurityCPStatePublisher
 	Pubkey             string
 	Logger             *zap.Logger
 	RecoveryLimit      int
@@ -127,17 +117,16 @@ type SecurityScannerConfig struct {
 }
 
 type SecurityScanner struct {
-	repo        repository.SecurityRepository
-	sboms       repository.SBOMManifestRepository
-	policies    SecurityPolicyProvider
-	events      events.Publisher
-	storage     *sbomadapter.StorageResolver
-	osv         SecurityOSVClient
-	publisher   SecurityVerifiedPublisher
-	subscriber  SecurityRelaySubscriber
-	cpPublisher SecurityCPStatePublisher
-	pubkey      string
-	logger      *zap.Logger
+	repo       repository.SecurityRepository
+	sboms      repository.SBOMManifestRepository
+	policies   SecurityPolicyProvider
+	events     events.Publisher
+	storage    *sbomadapter.StorageResolver
+	osv        SecurityOSVClient
+	publisher  SecurityVerifiedPublisher
+	subscriber SecurityRelaySubscriber
+	pubkey     string
+	logger     *zap.Logger
 
 	recoveryLimit      int
 	findingChunkSize   int
@@ -183,6 +172,7 @@ type SecurityScanRequest struct {
 	RequestEventID string                     `json:"request_event_id,omitempty"`
 	RequestDTag    string                     `json:"request_d_tag,omitempty"`
 	Force          bool                       `json:"force,omitempty"`
+	ScheduledRunID uuid.UUID                  `json:"-"`
 }
 
 type SecurityRescanRequest struct {
@@ -277,7 +267,6 @@ func NewSecurityScanner(cfg SecurityScannerConfig) *SecurityScanner {
 		osv:                cfg.OSV,
 		publisher:          cfg.Publisher,
 		subscriber:         cfg.Subscriber,
-		cpPublisher:        cfg.CPPublisher,
 		pubkey:             strings.TrimSpace(cfg.Pubkey),
 		logger:             logger.Named("security-scanner"),
 		recoveryLimit:      recoveryLimit,
@@ -329,6 +318,17 @@ func (s *SecurityScanner) SubmitScan(ctx context.Context, req SecurityScanReques
 	if err != nil {
 		return nil, err
 	}
+	if req.ScheduledRunID != uuid.Nil {
+		if existing, err := s.repo.GetSecurityScanRun(ctx, req.ScheduledRunID); err == nil {
+			stored, targetErr := s.repo.GetSecurityTargetByHash(ctx, existing.TargetKeyHash)
+			if targetErr != nil {
+				return nil, targetErr
+			}
+			return acceptedResponse(existing.ID, stored, true, existing.Status.IsTerminal()), nil
+		} else if !errors.Is(err, repository.ErrNotFound) {
+			return nil, err
+		}
+	}
 	stored, err := s.repo.UpsertSecurityTarget(ctx, &target)
 	if err != nil {
 		return nil, err
@@ -359,14 +359,25 @@ func (s *SecurityScanner) SubmitScan(ctx context.Context, req SecurityScanReques
 		PublishState:   domain.SecurityPublicationPending,
 		Metadata:       map[string]any{"target_type": stored.Type},
 	}
+	if req.ScheduledRunID != uuid.Nil {
+		run.ID = req.ScheduledRunID
+	}
 	if err := s.repo.CreateSecurityScanRun(ctx, run); err != nil {
+		if req.ScheduledRunID != uuid.Nil {
+			if existing, existingErr := s.repo.GetSecurityScanRun(ctx, req.ScheduledRunID); existingErr == nil {
+				return acceptedResponse(existing.ID, stored, true, existing.Status.IsTerminal()), nil
+			}
+		}
 		if active, activeErr := s.repo.GetActiveSecurityScanRunByTargetHash(ctx, stored.TargetKeyHash); activeErr == nil {
 			return acceptedResponse(active.ID, stored, true, false), nil
 		}
 		return nil, err
 	}
+	// The run record is the claim and is already canonical. The legacy status
+	// observable is best effort: failing here would strand an accepted run
+	// that nothing executes until the next restart.
 	if err := s.publishStatus(ctx, run, stored, domain.SecurityScanAccepted, "accepted", ""); err != nil {
-		return nil, err
+		s.logger.Warn("publish security accepted status failed", zap.String("run_id", run.ID.String()), zap.Error(err))
 	}
 	s.startRun(ctx, run.ID)
 	return acceptedResponse(run.ID, stored, false, false), nil
@@ -450,6 +461,11 @@ func (s *SecurityScanner) executeRun(ctx context.Context, runID uuid.UUID) error
 	if err != nil {
 		return err
 	}
+	if run.Status.IsTerminal() {
+		// A second wakeup or a recovery pass found a run that already
+		// finished: its record is the result, there is nothing to execute.
+		return nil
+	}
 	target, err := s.repo.GetSecurityTargetByHash(ctx, run.TargetKeyHash)
 	if err != nil {
 		return err
@@ -473,7 +489,6 @@ func (s *SecurityScanner) executeRun(ctx context.Context, runID uuid.UUID) error
 	if err := s.repo.UpsertSecurityFindings(ctx, outcome.findings); err != nil {
 		return s.failRun(ctx, run, target, err)
 	}
-	s.publishFindingsCPState(ctx, outcome.findings)
 	finished := time.Now().UTC()
 	run.Status = domain.SecurityScanCompleted
 	run.OSVQueryCount = len(outcome.queries)
@@ -483,12 +498,15 @@ func (s *SecurityScanner) executeRun(ctx context.Context, runID uuid.UUID) error
 	run.UnsupportedReasons = outcome.unsupportedReasons
 	run.FinishedAt = &finished
 	run.PublishState = domain.SecurityPublicationPublished
+	if err := s.repo.CompleteSecurityScanRun(ctx, run); err != nil {
+		return err
+	}
 	if err := s.publishCompletionObservables(ctx, run, target, outcome.findings); err != nil {
 		run.PublishState = domain.SecurityPublicationFailedTerminal
 		run.Error = "security observables publish failed: " + err.Error()
-	}
-	if err := s.repo.CompleteSecurityScanRun(ctx, run); err != nil {
-		return err
+		if err := s.repo.CompleteSecurityScanRun(ctx, run); err != nil {
+			return err
+		}
 	}
 	latest := &domain.SecurityTargetLatest{TargetID: target.ID, TargetKeyHash: target.TargetKeyHash, RunID: run.ID, Status: run.Status, SeverityCounts: run.SeverityCounts, FindingCount: run.FindingCount, ScannedAt: finished, UpdatedAt: finished}
 	if err := s.repo.UpsertSecurityTargetLatest(ctx, latest); err != nil {
@@ -585,6 +603,9 @@ func (s *SecurityScanner) scanTarget(ctx context.Context, run *domain.SecuritySc
 		coordinate := outcome.queries[i]
 		for _, vuln := range result.Vulnerabilities {
 			finding := findingFromVulnerability(run.ID, target.TargetKeyHash, coordinate, vuln)
+			// Stamped from the run, so re-executing it after a crash
+			// re-asserts identical finding records instead of new ones.
+			finding.CreatedAt = run.CreatedAt
 			outcome.severityCounts = addSeverity(outcome.severityCounts, finding.Severity)
 			outcome.findings = append(outcome.findings, finding)
 		}
@@ -872,34 +893,9 @@ func sbomReferenceFromTarget(target *domain.SecurityTarget) (SecuritySBOMReferen
 
 func findingFromVulnerability(runID uuid.UUID, targetHash string, coordinate scanCoordinate, vuln securityadapter.Vulnerability) domain.SecurityOSVFinding {
 	key := strings.Join([]string{targetHash, coordinate.key, vuln.ID}, ":")
+	keyHash := domain.CanonicalTargetHash(key)
 	severity := normalizeSecuritySeverity(vuln.Severity)
-	return domain.SecurityOSVFinding{ID: uuid.New(), RunID: runID, TargetKeyHash: targetHash, FindingKey: key, FindingKeyHash: domain.CanonicalTargetHash(key), OSVID: vuln.ID, CVE: vuln.CVE, Summary: vuln.Summary, Details: vuln.Details, Severity: severity, Package: coordinate.pkg, Aliases: append([]string(nil), vuln.Aliases...), References: append([]string(nil), vuln.References...), WithdrawnAt: parseOptionalTime(vuln.Withdrawn), RawModified: vuln.Modified, Metadata: map[string]any{"coordinate_key": coordinate.key}}
-}
-
-// publishFindingsCPState publishes each finding as an individual confidential
-// cp-state record (bahia-irsry.60). Errors are logged but do not fail the scan
-// — the database is the source of truth, and the cp-state records are
-// projections. One record per finding ensures no event exceeds NIP-44 limits.
-func (s *SecurityScanner) publishFindingsCPState(ctx context.Context, findings []domain.SecurityOSVFinding) {
-	if s.cpPublisher == nil || len(findings) == 0 {
-		return
-	}
-	for _, finding := range findings {
-		if err := s.cpPublisher.PublishFinding(ctx, finding); err != nil {
-			s.logger.Warn("security finding cp-state publish failed",
-				zap.String("finding_id", finding.ID.String()),
-				zap.String("osv_id", finding.OSVID),
-				zap.Error(err),
-			)
-		}
-		if err := s.cpPublisher.PublishFindingDetail(ctx, finding); err != nil {
-			s.logger.Warn("security finding detail cp-state publish failed",
-				zap.String("finding_id", finding.ID.String()),
-				zap.String("osv_id", finding.OSVID),
-				zap.Error(err),
-			)
-		}
-	}
+	return domain.SecurityOSVFinding{ID: securityFindingID(runID, keyHash), RunID: runID, TargetKeyHash: targetHash, FindingKey: key, FindingKeyHash: keyHash, OSVID: vuln.ID, CVE: vuln.CVE, Summary: vuln.Summary, Details: vuln.Details, Severity: severity, Package: coordinate.pkg, Aliases: append([]string(nil), vuln.Aliases...), References: append([]string(nil), vuln.References...), WithdrawnAt: parseOptionalTime(vuln.Withdrawn), RawModified: vuln.Modified, Metadata: map[string]any{"coordinate_key": coordinate.key}}
 }
 
 func (s *SecurityScanner) publishCompletionObservables(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget, findings []domain.SecurityOSVFinding) error {
@@ -1005,8 +1001,9 @@ func (s *SecurityScanner) evaluatePolicyBreaches(ctx context.Context, run *domai
 	for _, policy := range policies {
 		violated := breachedSecurityRules(policy, run)
 		if len(violated) == 0 {
-			if active, err := s.repo.GetActiveSecurityPolicyBreach(ctx, policy.ID, target.TargetKeyHash); err == nil && active != nil {
-				_ = s.repo.ResolveSecurityPolicyBreach(ctx, policy.ID, target.TargetKeyHash, time.Now().UTC())
+			// Resolving is idempotent; a policy with no open breach is a no-op.
+			if err := s.repo.ResolveSecurityPolicyBreach(ctx, policy.ID, target.TargetKeyHash, time.Now().UTC()); err != nil && !errors.Is(err, repository.ErrNotFound) {
+				s.logger.Warn("security policy breach resolution failed", zap.String("policy_id", policy.ID.String()), zap.Error(err))
 			}
 			continue
 		}

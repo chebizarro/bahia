@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"sort"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -106,11 +108,97 @@ func (m *mockWorkerRepoForPayments) UpdateStatus(_ context.Context, _ string, _ 
 
 // --- Tests ---
 
+// paymentOpLog records the order in which a test's canonical publisher and
+// SQL index were written, so publish-first ordering can be asserted.
+type paymentOpLog struct {
+	mu  sync.Mutex
+	ops []string
+}
+
+func (l *paymentOpLog) add(op string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ops = append(l.ops, op)
+}
+
+func (l *paymentOpLog) snapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.ops...)
+}
+
+// mockPaymentCanonical is an in-memory canonical store: one record per payment
+// coordinate, replaced on every accepted publish.
+type mockPaymentCanonical struct {
+	mu       sync.Mutex
+	records  map[uuid.UUID]domain.PaymentRecord
+	attempts []uuid.UUID
+	err      error
+	log      *paymentOpLog
+}
+
+func newMockPaymentCanonical() *mockPaymentCanonical {
+	return &mockPaymentCanonical{records: make(map[uuid.UUID]domain.PaymentRecord)}
+}
+
+func (m *mockPaymentCanonical) PublishPaymentRecord(_ context.Context, rec *domain.PaymentRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.attempts = append(m.attempts, rec.ID)
+	if m.err != nil {
+		return m.err
+	}
+	m.records[rec.ID] = *rec
+	m.log.add("publish:" + string(rec.Status))
+	return nil
+}
+
+func (m *mockPaymentCanonical) ListPaymentRecords(context.Context) ([]domain.PaymentRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]domain.PaymentRecord, 0, len(m.records))
+	for _, rec := range m.records {
+		out = append(out, rec)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID.String() < out[j].ID.String()
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+func (m *mockPaymentCanonical) setErr(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.err = err
+}
+
+func (m *mockPaymentCanonical) record(id uuid.UUID) (domain.PaymentRecord, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rec, ok := m.records[id]
+	return rec, ok
+}
+
+func (m *mockPaymentCanonical) counts() (coordinates, attempts int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.records), len(m.attempts)
+}
+
 func newTestPaymentService() (*PaymentService, *mockPaymentRepo, *mockRunRepo, *mockWorkerRepoForPayments) {
 	paymentRepo := newMockPaymentRepo()
 	runRepo := newMockRunRepo()
 	workerRepo := &mockWorkerRepoForPayments{workers: make(map[string]*domain.Worker)}
 	svc := NewPaymentService(paymentRepo, zap.NewNop())
+	canonical := newMockPaymentCanonical()
+	svc.SetCPStatePublisher(canonical)
+	svc.SetCanonicalView(canonical)
 	return svc, paymentRepo, runRepo, workerRepo
 }
 

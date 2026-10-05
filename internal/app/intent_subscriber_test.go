@@ -6,12 +6,14 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/stretchr/testify/require"
@@ -41,6 +43,17 @@ func (h *testDomainHandler) received() []*controlplane.Intent {
 	return append([]*controlplane.Intent(nil), h.intents...)
 }
 
+// intentSubscriberTestConfig gives each test its own local store. These tests
+// submit intents with fixed intent ids, and the processed-intent ledger lives
+// in the local store: sharing the package-wide store made every run after the
+// first (go test -count=N) skip the intent as already processed.
+func intentSubscriberTestConfig(t *testing.T) *config.Config {
+	t.Helper()
+	cfg := startupTestConfig("emergency")
+	cfg.Nostr.LocalStore.Path = filepath.Join(t.TempDir(), "daemon.bolt")
+	return cfg
+}
+
 // TestIntentSubscriberWiredWhenDomainsEnabled verifies that with a test domain
 // enabled, the intent subscriber is constructed and the processor pipeline
 // delivers a signed intent to the registered handler, with readiness tracking.
@@ -48,7 +61,7 @@ func TestIntentSubscriberWiredWhenDomainsEnabled(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
 
-	cfg := startupTestConfig("emergency")
+	cfg := intentSubscriberTestConfig(t)
 	// Generate a separate keypair for the intent actor.
 	actorKey := nostr.Generate()
 	actorPubkey := actorKey.Public().Hex()
@@ -124,7 +137,7 @@ func TestIntentSubscriberNotWiredWhenAllDomainsDisabled(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
 
-	cfg := startupTestConfig("emergency")
+	cfg := intentSubscriberTestConfig(t)
 	cfg.Nostr.IntentDomainsDisabled = append([]string(nil), controlplane.RegisteredIntentDomains...)
 
 	app, err := New(cfg)
@@ -143,7 +156,7 @@ func TestDefaultIntentDomainsProcessEveryRegisteredHandler(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
 
-	cfg := startupTestConfig("emergency")
+	cfg := intentSubscriberTestConfig(t)
 	actorKey := nostr.Generate()
 	actor := actorKey.Public().Hex()
 	orgID := uuid.MustParse("00000000-0000-0000-0000-000000000002")
@@ -183,7 +196,7 @@ func TestDefaultIntentDomainsProcessEveryRegisteredHandler(t *testing.T) {
 func TestIntentDomainsDisabledStopsExactlyListedDomains(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
-	cfg := startupTestConfig("emergency")
+	cfg := intentSubscriberTestConfig(t)
 	cfg.Nostr.IntentDomainsDisabled = []string{"service", "policy"}
 	actorKey := nostr.Generate()
 	actor := actorKey.Public().Hex()
@@ -222,7 +235,7 @@ func TestIntentDomainsDisabledStopsExactlyListedDomains(t *testing.T) {
 func TestDefaultSensitiveIntentDomainsRequireGiftWrap(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
-	cfg := startupTestConfig("emergency")
+	cfg := intentSubscriberTestConfig(t)
 	actorKey := nostr.Generate()
 	actor := actorKey.Public().Hex()
 	orgID := uuid.MustParse("00000000-0000-0000-0000-000000000004")

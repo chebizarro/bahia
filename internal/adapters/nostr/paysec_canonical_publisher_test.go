@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -725,9 +726,9 @@ func TestSecurityFindingDetailPublisher_LargeDetailsChunked(t *testing.T) {
 			detailRecords = append(detailRecords, ev)
 		}
 	}
-	// 70,000 bytes / 60,000 chunk size = 2 parts
-	if len(detailRecords) != 2 {
-		t.Fatalf("expected 2 chunked detail records, got %d", len(detailRecords))
+	// 70,000 bytes / 60,000 chunk size = 2 parts plus one base manifest.
+	if len(detailRecords) != 3 {
+		t.Fatalf("expected 2 chunked detail records and a manifest, got %d", len(detailRecords))
 	}
 
 	// Each part should have the part tag
@@ -750,6 +751,9 @@ func TestSecurityFindingDetailPublisher_LargeDetailsChunked(t *testing.T) {
 	}
 	if !dtags["security:finding-detail:large_detail_hash:part:1"] {
 		t.Error("missing part 1 d-tag")
+	}
+	if !dtags["security:finding-detail:large_detail_hash"] {
+		t.Error("missing detail manifest d-tag")
 	}
 }
 
@@ -823,5 +827,18 @@ func TestChunkString(t *testing.T) {
 				t.Error("reassembled chunks do not match original")
 			}
 		})
+	}
+}
+
+func TestChunkStringPreservesUTF8(t *testing.T) {
+	input := strings.Repeat("vulnerabilidad-🔥", 5000)
+	chunks := chunkString(input, 101)
+	for i, chunk := range chunks {
+		if !utf8.ValidString(chunk) {
+			t.Fatalf("chunk %d is not valid UTF-8", i)
+		}
+	}
+	if got := strings.Join(chunks, ""); got != input {
+		t.Fatal("UTF-8 detail did not round-trip")
 	}
 }
