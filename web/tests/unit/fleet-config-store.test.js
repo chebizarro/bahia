@@ -80,53 +80,86 @@ describe('fleet config store', () => {
     expect(store.state.event).toBeNull();
   });
 
-  it('uses an exact author and d-tag subscription filter and returns cleanup', () => {
-    const cleanup = vi.fn();
-    const subscribe = vi.fn(() => cleanup);
+  // A verified-store double: query() honours kinds, authors and #d.
+  function eventStoreDouble(events) {
+    return { query: vi.fn((filter) => events.filter((event) =>
+      filter.kinds.includes(event.kind) && filter.authors.includes(event.pubkey) &&
+      event.tags.some((tag) => tag[0] === 'd' && filter['#d'].includes(tag[1])))) };
+  }
+  const configEvent = (id, pubkey, createdAt, document) => ({
+    id, kind: 31953, pubkey, created_at: createdAt,
+    tags: [['d', 'soulfactory-fleet-config/v1'], ['schema', 'soulfactory-fleet-config/v1']],
+    content: JSON.stringify(document)
+  });
+
+  it('renders the cached configuration at once from an exact author and d-tag store query, without a REQ', () => {
     const auth = { status: 'authenticated', pubkey: 'c'.repeat(64) };
+    const cached = emptyFleetConfigDocument();
+    cached.defaults.model = 'provider/cached';
+    const forged = emptyFleetConfigDocument();
+    forged.defaults.model = 'provider/forged';
+    const events = [configEvent('cached', auth.pubkey, 100, cached), configEvent('forged', 'd'.repeat(64), 900, forged)];
+    const eventStore = eventStoreDouble(events);
+    const cleanup = vi.fn();
+    let refresh;
+    const subscribe = vi.fn();
     const store = createFleetConfigStore({
       client: { subscribe, publish: vi.fn() },
       auth,
-      sign: vi.fn()
+      sign: vi.fn(),
+      eventStore: () => eventStore,
+      registerRefresh: (callback) => { refresh = callback; return cleanup; }
     });
 
     expect(store.subscribe()).toBe(cleanup);
-    expect(subscribe).toHaveBeenCalledWith([{
+    expect(eventStore.query).toHaveBeenCalledWith({
       kinds: [31953],
       authors: [auth.pubkey],
-      '#d': ['soulfactory-fleet-config/v1'],
-      limit: 10
-    }], expect.objectContaining({
-      onEvent: expect.any(Function),
-      onEose: expect.any(Function),
-      onClosed: expect.any(Function)
-    }));
+      '#d': ['soulfactory-fleet-config/v1']
+    });
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(store.state.loading).toBe(false);
+    expect(store.state.document.defaults.model).toBe('provider/cached');
+
+    // A newer revision arriving in the store replaces it; an older one does not.
+    const newer = emptyFleetConfigDocument();
+    newer.defaults.model = 'provider/newer';
+    const older = emptyFleetConfigDocument();
+    older.defaults.model = 'provider/older';
+    events.push(configEvent('newer', auth.pubkey, 200, newer), configEvent('older', auth.pubkey, 50, older));
+    refresh();
+    expect(store.state.document.defaults.model).toBe('provider/newer');
+    expect(store.state.event.id).toBe('newer');
+  });
+
+  it('reports an invalid cached configuration without a loading gate', () => {
+    const auth = { status: 'authenticated', pubkey: 'c'.repeat(64) };
+    const events = [{ ...configEvent('broken', auth.pubkey, 100, {}), content: '{not json' }];
+    const store = createFleetConfigStore({
+      client: {}, auth, eventStore: () => eventStoreDouble(events), registerRefresh: () => () => {}
+    });
+    store.subscribe();
+    expect(store.state.loading).toBe(false);
+    expect(store.state.document).toBeNull();
+    expect(store.state.error).not.toBe('');
   });
 
   it('clears stale state when the authenticated operator changes', () => {
-    const subscriptions = [];
     const auth = { status: 'authenticated', pubkey: 'a'.repeat(64) };
-    const subscribe = vi.fn((filters, handlers) => {
-      subscriptions.push({ filters, handlers });
-      return vi.fn();
-    });
-    const store = createFleetConfigStore({
-      client: { subscribe, publish: vi.fn() },
-      auth,
-      sign: vi.fn()
-    });
     const document = emptyFleetConfigDocument();
     document.defaults.model = 'provider/operator-a';
+    const nextDocument = emptyFleetConfigDocument();
+    nextDocument.defaults.model = 'provider/operator-b';
+    const events = [configEvent('z-event', auth.pubkey, 200, document)];
+    const store = createFleetConfigStore({
+      client: { publish: vi.fn() },
+      auth,
+      sign: vi.fn(),
+      eventStore: () => eventStoreDouble(events),
+      registerRefresh: () => () => {}
+    });
 
     store.subscribe();
-    subscriptions[0].handlers.onEvent({
-      id: 'z-event',
-      kind: 31953,
-      pubkey: auth.pubkey,
-      created_at: 200,
-      tags: [['d', 'soulfactory-fleet-config/v1'], ['schema', 'soulfactory-fleet-config/v1']],
-      content: JSON.stringify(document)
-    });
     expect(store.state.document.defaults.model).toBe('provider/operator-a');
 
     auth.pubkey = 'b'.repeat(64);
@@ -134,16 +167,10 @@ describe('fleet config store', () => {
     expect(store.state.event).toBeNull();
     expect(store.state.document).toBeNull();
 
-    const nextDocument = emptyFleetConfigDocument();
-    nextDocument.defaults.model = 'provider/operator-b';
-    subscriptions[1].handlers.onEvent({
-      id: 'a-event',
-      kind: 31953,
-      pubkey: auth.pubkey,
-      created_at: 100,
-      tags: [['d', 'soulfactory-fleet-config/v1'], ['schema', 'soulfactory-fleet-config/v1']],
-      content: JSON.stringify(nextDocument)
-    });
+    // The new operator's older, lower-id revision is theirs to see: nothing of
+    // the previous operator's state competes with it.
+    events.push(configEvent('a-event', auth.pubkey, 100, nextDocument));
+    store.subscribe();
     expect(store.state.document.defaults.model).toBe('provider/operator-b');
   });
 

@@ -31,8 +31,9 @@ let _store = null;
 /** @type {ReturnType<typeof createBahiaPool> | null} */
 let _pool = null;
 
-/** Service pubkey from the deploy seed. */
+/** Service pubkeys from the deployment seed; the first remains the store namespace. */
 let _servicePubkey = '';
+let _servicePubkeys = /** @type {string[]} */ ([]);
 
 /** Relay URLs from the deploy seed. */
 let _relayUrls = /** @type {string[]} */ ([]);
@@ -101,6 +102,7 @@ export function getEventStore() { return _store; }
 export function getPool() { return _pool; }
 
 export function getServicePubkey() { return _servicePubkey; }
+export function getServicePubkeys() { return [..._servicePubkeys]; }
 export function getRelayUrls() { return [..._relayUrls]; }
 
 /** Start the one-shot NIP-11 lookup after an authenticated session is available. */
@@ -149,7 +151,8 @@ async function _bootInternal({ store: injectedStore, pool: injectedPool, seed: i
   const seed = injectedSeed || getBootstrapSeed();
   if (!seed?.service_pubkeys?.length) return;
 
-  _servicePubkey = seed.service_pubkeys[0];
+  _servicePubkeys = [...new Set(seed.service_pubkeys.map(key => key.toLowerCase()))];
+  _servicePubkey = _servicePubkeys[0];
   _relayUrls = seed.relay_urls ? [...seed.relay_urls] : [];
 
   // Open the IndexedDB event store (step 2).
@@ -192,6 +195,7 @@ export async function shutdown() {
   }
 
   _servicePubkey = '';
+  _servicePubkeys = [];
   _relayUrls = [];
   _relayLimitsPrefetched = false;
   _bootPromise = null;

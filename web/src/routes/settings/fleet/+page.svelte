@@ -9,8 +9,7 @@
   } from '$lib/stores/fleet-rollout.svelte.js';
   import {
     souls,
-    subscribeToSoulFactoryUpdates,
-    unsubscribeFromSoulUpdates
+    subscribeToSoulFactoryUpdates
   } from '$lib/stores/souls.svelte.js';
   import {
     FLEET_CONFIG_ALLOWED_SECTIONS,
@@ -42,7 +41,6 @@
     return () => {
       unsubscribeFleetConfig();
       fleetRolloutStore.stop();
-      unsubscribeFromSoulUpdates();
     };
   });
 
@@ -61,14 +59,17 @@
     if (!dirty && !storeState.document) hydrate(emptyFleetConfigDocument());
   });
 
+  // Called from effects: build everything from a local snapshot so the effect
+  // never reads back the state it just wrote (which would re-trigger it).
   function hydrate(next) {
-    document = structuredClone(next);
-    rawText = JSON.stringify(document, null, 2);
+    const snapshot = structuredClone($state.snapshot(next));
+    document = snapshot;
+    rawText = JSON.stringify(snapshot, null, 2);
     sectionText = {
-      defaults: JSON.stringify(document.defaults || {}, null, 2),
+      defaults: JSON.stringify(snapshot.defaults || {}, null, 2),
       ...Object.fromEntries(FLEET_CONFIG_ALLOWED_SECTIONS.map((section) => [
         section,
-        document.template?.[section] === undefined ? '' : JSON.stringify(document.template[section], null, 2)
+        snapshot.template?.[section] === undefined ? '' : JSON.stringify(snapshot.template[section], null, 2)
       ]))
     };
     editorError = '';
@@ -167,6 +168,11 @@
 
   {#if authState.status !== 'authenticated'}
     <div class="status error">Sign in with a trusted Soul Factory operator key before publishing.</div>
+  {:else}
+    <!-- The browser cannot verify soul_factory.authorized_pubkeys, so only the signed-in key is trusted for kind 31953. -->
+    <p class="muted" data-testid="fleet-operator-scope-note">
+      Only the fleet configuration signed by your key is shown. A configuration published by another operator is not shown here.
+    </p>
   {/if}
   {#if storeState.loading}<div class="status">Loading the latest operator-authored fleet document…</div>{/if}
   {#if storeState.error}<div class="status error">{storeState.error}</div>{/if}
