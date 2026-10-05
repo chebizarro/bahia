@@ -192,3 +192,43 @@ test('live events from trusted signers appear, untrusted ones do not, and return
   expect(state.sockets).toBe(sockets);
   expect(state.text).not.toContain('Loading continuity history');
 });
+
+test('boot issues discovery and the core read model before the history readers, with no relay answer needed', async ({ page }) => {
+  await setup(page);
+  // Registered after the relay double, so this wraps its send().
+  await page.addInitScript(() => {
+    window.__reqOrder = [];
+    const original = WebSocket.prototype.send;
+    WebSocket.prototype.send = function(data) {
+      try { const frame = JSON.parse(data); if (frame[0] === 'REQ') window.__reqOrder.push(frame.slice(2)); } catch {}
+      return original.call(this, data);
+    };
+  });
+  await page.goto('/continuity');
+  await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();
+  await expect.poll(() => page.evaluate(async () =>
+    (await import('/src/lib/nostr/continuity.ts')).continuityCatchup().complete)).toBe(true);
+
+  const order = await page.evaluate(() => {
+    const first = (matches) => window.__reqOrder.findIndex((filters) => filters.some(matches));
+    return {
+      discovery: first((filter) => filter.kinds?.includes(11316)),
+      core: first((filter) => filter['#t']?.includes('service-registry')),
+      continuity: first((filter) => filter.kinds?.includes(30351)),
+      souls: first((filter) => filter.kinds?.includes(31951))
+    };
+  });
+  expect(order.discovery).toBeGreaterThanOrEqual(0);
+  expect(order.core).toBeGreaterThanOrEqual(0);
+  expect(order.continuity).toBeGreaterThan(Math.max(order.discovery, order.core));
+  expect(order.souls).toBeGreaterThan(Math.max(order.discovery, order.core));
+
+  // The readers are issued by ordering, not by a relay answering: with every
+  // socket refused they are still started (and simply stay pending).
+  await reloadWithRelayUnreachable(page);
+  await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();
+  await expect.poll(() => page.evaluate(async () =>
+    (await import('/src/lib/nostr/continuity.ts')).continuityCatchup().relaySummary.length)).toBeGreaterThan(0);
+  expect(await page.evaluate(async () =>
+    (await import('/src/lib/nostr/continuity.ts')).continuityCatchup().complete)).toBe(false);
+});

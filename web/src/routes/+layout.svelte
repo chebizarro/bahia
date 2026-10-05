@@ -55,6 +55,7 @@
   );
   let assistantBootstrappedForPubkey = $state('');
   let eventStoreReady = $state(false);
+  let historyReadersStarted = $state(false);
   let bootSettled = $state(false);
 
   onMount(() => createVersionReloadWatcher().start());
@@ -79,10 +80,9 @@
         initBackupStoreBinding();
         initMLStoreBinding();
         initSBOMStoreBinding();
-        // Cached continuity and SoulFactory views project from the store; their
-        // relay readers start here too and never wait on a relay or EOSE.
-        initContinuityStoreBinding();
-        initSoulFactoryStoreBinding();
+        // Cached SoulFactory read models project now (continuity projects on
+        // page mount); the relay readers start below, after boot's own REQs.
+        initSoulFactoryStoreBinding({ relay: false });
         initOpsWidgetWallBinding();
       } catch (err) {
         console.warn('[layout] boot() failed:', err);
@@ -90,17 +90,25 @@
         bootSettled = true;
       }
 
+      // REQ ordering on the shared connection. Discovery and the core read
+      // model issue their REQs first (each right after the already-open store,
+      // in call order); the continuity and SoulFactory history readers are
+      // background traffic and start once those REQs have been issued. This is
+      // an ordering rule only: nothing here waits for a relay to connect or
+      // answer, so the readers start even when every relay is unreachable.
+      eagerRelayConnect().catch((error) => {
+        console.error('Eager relay connection failed before controlplane load:', error);
+      });
+
       // Connect the single pool in the background; EOSE only updates the badge.
       void bootstrapControlplane().then((result) => {
         if (!result.ok) console.error('Nostr controlplane bootstrap failed:', result.reason);
+      }).finally(() => {
+        if (active) historyReadersStarted = true;
       });
 
       initializeAuth().catch((error) => {
         console.error('Auth bootstrap failed before controlplane load:', error);
-      });
-
-      eagerRelayConnect().catch((error) => {
-        console.error('Eager relay connection failed before controlplane load:', error);
       });
     });
 
@@ -124,11 +132,12 @@
     };
   });
 
-  // The signed-in operator is a trusted author for operator-signed kinds, so
-  // the continuity and SoulFactory readers re-sync whenever it changes.
+  // Starts the continuity and SoulFactory relay readers once boot has issued
+  // its own REQs, and re-syncs them whenever the signed-in operator (a trusted
+  // author for operator-signed kinds) changes.
   $effect(() => {
     void (authState.status === 'authenticated' ? authState.pubkey : '');
-    if (!eventStoreReady) return;
+    if (!eventStoreReady || !historyReadersStarted) return;
     untrack(() => { initContinuityStoreBinding(); initSoulFactoryStoreBinding(); });
   });
 
