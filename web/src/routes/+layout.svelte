@@ -24,6 +24,7 @@
   import { initSoulFactoryStoreBinding, teardownSoulFactoryStoreBinding } from '$lib/stores/souls.svelte.js';
   import { initOpsWidgetWallBinding, teardownOpsWidgetWallBinding } from '$lib/widgets/ops-widget-wall.js';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
+  import { syncStatus } from '$lib/stores/sync-status.svelte.js';
   import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
   import { theme } from '$lib/stores/theme.js';
   import { authState, initializeAuth, isAuthenticated, resolveActiveSigner } from '$lib/stores/auth.js';
@@ -78,8 +79,8 @@
         initBackupStoreBinding();
         initMLStoreBinding();
         initSBOMStoreBinding();
-        initContinuityStoreBinding();
-        initSoulFactoryStoreBinding();
+        // Cached Souls project now; relay readers start in the effect below.
+        initSoulFactoryStoreBinding({ relay: false });
         initOpsWidgetWallBinding();
       } catch (err) {
         console.warn('[layout] boot() failed:', err);
@@ -119,10 +120,19 @@
     };
   });
 
+  // Continuity and SoulFactory history readers are background traffic. Their
+  // views already render from the cache; the paged relay readers start once
+  // the core read model has caught up on at least one relay, so they never
+  // compete with boot-critical subscriptions, and they re-sync whenever the
+  // signed-in operator (a trusted author for operator-signed kinds) changes.
   $effect(() => {
-    const pubkey = authState.status === 'authenticated' ? authState.pubkey : '';
+    void (authState.status === 'authenticated' ? authState.pubkey : '');
     if (!eventStoreReady) return;
-    untrack(() => { initContinuityStoreBinding(); initSoulFactoryStoreBinding(); });
+    const coreCaughtUp = syncStatus.eoseCount > 0;
+    untrack(() => {
+      initSoulFactoryStoreBinding({ relay: coreCaughtUp });
+      if (coreCaughtUp) initContinuityStoreBinding();
+    });
   });
 
   $effect(() => {

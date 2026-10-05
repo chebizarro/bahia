@@ -512,7 +512,8 @@ export function attestedSoulFactoryKeys(store = getEventStore(), serviceAuthors 
  *   controller may also publish: operator and factory keys are both trusted.
  * - runtime: 30317 capabilities are signed by runtime sidecars. Trusted
  *   runtime keys are those the service attests (its pinned
- *   `runtime_pubkeys`) plus those named by an already-trusted 31951 Soul. A
+ *   `runtime_pubkeys`), those named by an already-trusted 31951 Soul, and the
+ *   factory keys themselves, which could vouch for any runtime anyway. A
  *   self-signed capability can never introduce its own key.
  */
 export function trustedSoulAuthors(store = getEventStore(), serviceAuthors = getServicePubkeys()) {
@@ -522,7 +523,7 @@ export function trustedSoulAuthors(store = getEventStore(), serviceAuthors = get
   const soulRuntimes = store && factory.length
     ? store.query({ kinds: [KINDS.AGENT_SOUL], authors: factory }).map((event) => parseSoulEvent(event)?.runtime?.runtime_pubkey)
     : [];
-  return { factory, operator, runtime: normalizedPubkeys([...attested.runtimes, ...soulRuntimes]) };
+  return { factory, operator, runtime: normalizedPubkeys([...factory, ...attested.runtimes, ...soulRuntimes]) };
 }
 
 /** The subscription units; each is one live REQ and one paged history walk. */
@@ -579,7 +580,7 @@ function projectSoulFactory() {
   const units = soulFilterUnits(authors);
   rebuildSoulFactoryFromStore(soulBinding.store, units.flatMap((unit) => unit.filters));
   // A newly trusted Soul can name a runtime key, which widens the runtime unit.
-  soulBinding.reader.sync(units);
+  if (soulBinding.relay) soulBinding.reader.sync(units);
 }
 
 function publishSoulCatchupMetadata(caught) {
@@ -592,10 +593,13 @@ function publishSoulCatchupMetadata(caught) {
 }
 
 /**
- * Start (or re-sync) the app-lifetime SoulFactory reader. The layout calls this
- * after boot and again when the signed-in operator changes; pages never own it.
+ * Bind the SoulFactory read models to the shared store and project the cache
+ * at once. With `relay` (the default) also start, or re-sync, the app-lifetime
+ * relay reader; once started it stays on until teardown. The layout owns that
+ * call: it starts the reader after the core read model has caught up and
+ * re-syncs it when the signed-in operator changes. Pages pass `relay: false`.
  */
-export function initSoulFactoryStoreBinding() {
+export function initSoulFactoryStoreBinding({ relay = true } = {}) {
   const store = getEventStore();
   const pool = getPool();
   const serviceAuthors = getServicePubkeys();
@@ -605,16 +609,19 @@ export function initSoulFactoryStoreBinding() {
     soulBinding = {
       store,
       serviceAuthors,
+      relay: false,
       reader: createPagedReader({
         name: 'souls', pool, store,
         relays: [...new Set(getRelayUrls().map(toWebSocketUrl).filter(Boolean))],
         onChange: publishSoulCatchupMetadata
       }),
-      offRefresh: onStoreRefresh(() => { projectSoulFactory(); for (const waiter of [...soulListeners]) waiter(); })
+      offRefresh: onStoreRefresh(() => { projectSoulFactory(); for (const listener of [...soulListeners]) listener(); })
     };
     void refreshServerAgentRuntimes();
   }
+  if (relay) soulBinding.relay = true;
   projectSoulFactory();
+  publishSoulCatchupMetadata();
 }
 
 export function teardownSoulFactoryStoreBinding() {
@@ -633,7 +640,7 @@ export function teardownSoulFactoryStoreBinding() {
  */
 export async function subscribeToSoulFactoryUpdates() {
   await boot();
-  initSoulFactoryStoreBinding();
+  initSoulFactoryStoreBinding({ relay: false });
 }
 
 /** Kept for existing consumers. The reader belongs to the app lifecycle. */

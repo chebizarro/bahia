@@ -229,6 +229,13 @@ describe('Souls Store', () => {
     soulsModule = await import('../../src/lib/stores/souls.js');
   });
 
+  // What the app does: a page projects the cache, then the layout starts the
+  // relay reader (after the core read model caught up).
+  const startSoulFactory = async () => {
+    await soulsModule.subscribeToSoulFactoryUpdates();
+    soulsModule.initSoulFactoryStoreBinding();
+  };
+
   afterEach(() => {
     // Clean up subscriptions
     soulsModule.teardownSoulFactoryStoreBinding?.();
@@ -275,7 +282,7 @@ describe('Souls Store', () => {
 
     it('renders cached souls at once with no loading gate, before any relay answers', async () => {
       bootMock.store.events.push(soul('cached'));
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['cached']);
       expect(soulsModule.loading).toEqual({ souls: false, templates: false, drafts: false, capabilities: false });
       // The relay never answered: catch-up is reported as metadata, not an error or a gate.
@@ -286,7 +293,7 @@ describe('Souls Store', () => {
     });
 
     it('never raises a loading flag when the cache is empty either', async () => {
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       expect(soulsModule.souls).toEqual([]);
       expect(Object.values(soulsModule.loading)).toEqual([false, false, false, false]);
     });
@@ -299,7 +306,7 @@ describe('Souls Store', () => {
         event(KINDS.SOUL_DRAFT, 'draft-forged', stranger),
         event(KINDS.RUNTIME_CAPABILITY, 'cap-forged', stranger)
       );
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['trusted']);
       bootMock.store.events.push(soul('forged-live', { pubkey: stranger }));
       refresh();
@@ -310,14 +317,13 @@ describe('Souls Store', () => {
     });
 
     it('subscribes with trusted authors on every filter and never without an operator for operator kinds', async () => {
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       expect(requestedFilters().length).toBeGreaterThan(0);
       expect(requestedFilters().every((filter) => Array.isArray(filter.authors) && filter.authors.length > 0)).toBe(true);
       // The mocked session key is not a valid pubkey, so no operator-authored kind is requested.
       const kinds = () => new Set(requestedFilters().flatMap((filter) => filter.kinds));
       expect(kinds().has(KINDS.SOUL_DRAFT)).toBe(false);
       expect(kinds().has(KINDS.SOUL_ACTION)).toBe(false);
-      expect(kinds().has(KINDS.RUNTIME_CAPABILITY)).toBe(false);
 
       signIn();
       soulsModule.initSoulFactoryStoreBinding();
@@ -337,8 +343,8 @@ describe('Souls Store', () => {
         soul('by-controller', { pubkey: controller }),
         event(KINDS.RUNTIME_CAPABILITY, 'cap-pinned', runtimeKey, { tags: [['runtime', 'openclaw']] })
       );
-      await soulsModule.subscribeToSoulFactoryUpdates();
-      expect(soulsModule.trustedSoulAuthors()).toMatchObject({ factory: [service, controller], runtime: [runtimeKey] });
+      await startSoulFactory();
+      expect(soulsModule.trustedSoulAuthors()).toMatchObject({ factory: [service, controller], runtime: [service, runtimeKey, controller] });
       expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['by-controller']);
       // A pinned runtime is usable before any Soul exists (first provisioning).
       expect(soulsModule.runtimeCapabilities.map((cap) => cap.id)).toEqual(['cap-pinned']);
@@ -350,23 +356,32 @@ describe('Souls Store', () => {
         soul('self-appointed', { pubkey: stranger }),
         event(KINDS.RUNTIME_CAPABILITY, 'cap-self-appointed', stranger)
       );
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       expect(soulsModule.attestedSoulFactoryKeys()).toEqual({ controllers: [], runtimes: [] });
       expect(soulsModule.souls).toEqual([]);
       expect(soulsModule.runtimeCapabilities).toEqual([]);
     });
 
     it('widens the runtime subscription when a trusted Soul names a new runtime key', async () => {
-      await soulsModule.subscribeToSoulFactoryUpdates();
-      expect(requestedFilters().some((filter) => filter.kinds.includes(KINDS.RUNTIME_CAPABILITY))).toBe(false);
+      await startSoulFactory();
+      const runtimeAuthors = () => requestedFilters().filter((filter) => filter.kinds.includes(KINDS.RUNTIME_CAPABILITY)).at(-1).authors;
+      // A factory key may sign a capability itself; nobody else may yet.
+      expect(runtimeAuthors()).toEqual([service]);
       bootMock.store.events.push(
         soul('scout', { tags: [['d', 'scout'], ['runtime-pubkey', runtimeKey]] }),
         soul('forged', { pubkey: stranger, tags: [['d', 'forged'], ['runtime-pubkey', stranger]] })
       );
       refresh();
-      const runtimeFilters = requestedFilters().filter((filter) => filter.kinds.includes(KINDS.RUNTIME_CAPABILITY));
-      expect(runtimeFilters.length).toBeGreaterThan(0);
-      expect(runtimeFilters.every((filter) => filter.authors.join() === runtimeKey)).toBe(true);
+      expect(runtimeAuthors()).toEqual([service, runtimeKey]);
+    });
+
+    it('accepts a capability signed by a factory key and never one that only vouches for itself', async () => {
+      bootMock.store.events.push(
+        event(KINDS.RUNTIME_CAPABILITY, 'cap-by-service', service, { tags: [['runtime', 'local-runtime']] }),
+        event(KINDS.RUNTIME_CAPABILITY, 'cap-self-signed', stranger, { tags: [['runtime', 'rogue']] })
+      );
+      await startSoulFactory();
+      expect(soulsModule.runtimeCapabilities.map((cap) => cap.id)).toEqual(['cap-by-service']);
     });
 
     it('projects the newest replaceable record per coordinate, drops tombstones, and sorts each model', async () => {
@@ -381,7 +396,7 @@ describe('Souls Store', () => {
         event(KINDS.SOUL_DRAFT, 'draft-1', operator, { created_at: 10 }),
         event(KINDS.SOUL_DRAFT, 'draft-2', operator, { created_at: 20 })
       );
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       expect(soulsModule.souls.map((row) => `${row.agentId}:${row.name}`)).toEqual(['builder:builder', 'scout:New']);
       expect(soulsModule.templates.map((row) => row.name)).toEqual(['Alpha', 'Zulu']);
       expect(soulsModule.drafts.map((row) => row.id)).toEqual(['draft-2', 'draft-1']);
@@ -390,7 +405,7 @@ describe('Souls Store', () => {
     it('applies live store events after catch-up and leaves unrelated refreshes alone', async () => {
       bootMock.pool.reachable = true;
       bootMock.store.events.push(soul('cached'));
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       await vi.waitFor(() => expect(soulsModule.readModelMeta.souls.complete).toBe(true));
       expect(soulsModule.readModelMeta.souls.degraded).toBeNull();
       expect(soulsModule.readModelMeta.souls.relaySummary).toEqual(
@@ -411,7 +426,7 @@ describe('Souls Store', () => {
 
     it('keeps cached rows and records degraded metadata when a relay closes history for good', async () => {
       bootMock.store.events.push(soul('cached'));
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       pageRequests()[0].onClosed('restricted: members only', 'wss://relay.example', { terminal: true });
       expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['cached']);
       expect(soulsModule.loading.souls).toBe(false);
@@ -425,18 +440,31 @@ describe('Souls Store', () => {
     it('clears a previous relay error once catch-up completes', async () => {
       bootMock.pool.reachable = true;
       soulsModule.error.value = 'History incomplete at wss://relay.example';
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       await vi.waitFor(() => expect(soulsModule.readModelMeta.souls.complete).toBe(true));
       expect(soulsModule.error.value).toBeNull();
     });
 
-    it('keeps the app-level REQs across page visits and closes them only on app teardown', async () => {
+    it('a page projects the cache without opening a REQ; only the app lifecycle starts the reader', async () => {
+      bootMock.store.events.push(soul('cached'));
       await soulsModule.subscribeToSoulFactoryUpdates();
+      expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['cached']);
+      expect(soulsModule.loading.souls).toBe(false);
+      expect(bootMock.pool.subscribe).not.toHaveBeenCalled();
+      expect(soulsModule.readModelMeta.souls).toMatchObject({ complete: false, degraded: { reason: 'catching-up' } });
+
+      soulsModule.initSoulFactoryStoreBinding();
+      expect(bootMock.pool.subscribe).toHaveBeenCalled();
+    });
+
+    it('keeps the app-level REQs across page visits and closes them only on app teardown', async () => {
+      await startSoulFactory();
       const count = bootMock.pool.subscribe.mock.calls.length;
       expect(count).toBeGreaterThan(0);
       soulsModule.unsubscribeFromSoulUpdates();
       await soulsModule.subscribeToSoulFactoryUpdates();
       await soulsModule.subscribeToSoulFactoryUpdates();
+      for (const cb of [...bootMock.refreshCallbacks]) cb();
       expect(bootMock.pool.subscribe).toHaveBeenCalledTimes(count);
       const closed = () => bootMock.pool.subscribe.mock.results.filter((result) => result.value.unsubscribe.mock.calls.length > 0).length;
       expect(closed()).toBe(0);
@@ -451,7 +479,10 @@ describe('Souls Store', () => {
 
     it('waitForSoul resolves a cached Soul at once and a missing one only after relay catch-up', async () => {
       bootMock.store.events.push(soul('cached'));
+      // Cached: resolves before the relay reader has even started.
       await expect(soulsModule.waitForSoul('cached')).resolves.toMatchObject({ agentId: 'cached' });
+      expect(bootMock.pool.subscribe).not.toHaveBeenCalled();
+      soulsModule.initSoulFactoryStoreBinding();
 
       let settled = false;
       const pending = soulsModule.waitForSoul('late').then((value) => { settled = true; return value; });
@@ -758,7 +789,7 @@ describe('Souls Store', () => {
         tags: [['runtime', 'openclaw']], content: '{}' });
       bootMock.store.events.push({ id: 'forged-cap', kind: KINDS.RUNTIME_CAPABILITY, pubkey: 'd'.repeat(64), created_at: 3,
         tags: [['runtime', 'metiq']], content: '{}' });
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       expect(soulsModule.runtimeCapabilities.map((cap) => cap.id)).toEqual(['cap']);
       soulsModule.serverAgentRuntimes.push('openclaw');
       soulsModule.serverPolicy.known = true;
@@ -782,7 +813,7 @@ describe('Souls Store', () => {
         { id: 'cap-oc', kind: KINDS.RUNTIME_CAPABILITY, pubkey: openclaw, created_at: 2, tags: [['runtime', 'openclaw'], ['method', 'soulfactory.provision'], ['method', 'soulfactory.config.reload']], content: '{}' },
         { id: 'cap-mq', kind: KINDS.RUNTIME_CAPABILITY, pubkey: metiq, created_at: 2, tags: [['runtime', 'metiq'], ['method', 'soulfactory.provision']], content: '{}' }
       );
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       await Promise.resolve();
       soulsModule.serverAgentRuntimes.push('openclaw', 'metiq');
       soulsModule.serverPolicy.known = true;
@@ -802,7 +833,7 @@ describe('Souls Store', () => {
         { id: 'cap-oc', kind: KINDS.RUNTIME_CAPABILITY, pubkey: openclaw, created_at: 2, tags: [['runtime', 'openclaw'], ['method', 'soulfactory.provision']], content: '{}' },
         { id: 'cap-mq', kind: KINDS.RUNTIME_CAPABILITY, pubkey: metiq, created_at: 2, tags: [['runtime', 'metiq'], ['method', 'soulfactory.provision']], content: '{}' }
       );
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       await Promise.resolve();
       expect(soulsModule.supportedRuntimeTargets({ method: 'soulfactory.provision' })).toEqual([]);
       soulsModule.serverAgentRuntimes.push('metiq');
@@ -843,7 +874,7 @@ describe('Souls Store', () => {
       authModule.authState.pubkey = operator;
       bootMock.store.ingest = vi.fn((event) => { bootMock.store.events.push(event); return true; });
       mockNostr.publish.mockResolvedValue([{ relay: 'wss://relay.example', accepted: true, message: '' }]);
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
 
       const { event } = await soulsModule.publishSoulDraft({
         agentId: 'scout', content: { identity: { name: 'Scout', tier: 'standard' } }
@@ -976,8 +1007,7 @@ describe('Souls Store', () => {
       expect(history.map((item) => item.id)).toEqual(['evt-result', 'evt-action', 'evt-soul']);
       expect(history[1].summary).toBe('suspend: maintenance');
       expect(mockNostr.subscribe).not.toHaveBeenCalled();
-      // No history-specific REQ: the only relay traffic is the app-lifetime reader.
-      expect(bootMock.pool.requests.every((request) => request.filters.every((filter) => filter['#d'] === undefined))).toBe(true);
+      expect(bootMock.pool.subscribe).not.toHaveBeenCalled();
 
       const limited = await soulsModule.fetchSoulHistory({ agentId: 'scout', pubkey: service }, { limit: 2 });
       expect(limited.map((item) => item.id)).toEqual(['evt-result', 'evt-action']);
@@ -992,6 +1022,8 @@ describe('Souls Store', () => {
 
       const cached = await soulsModule.fetchSoulHistory(target);
       expect(cached.map((item) => item.id)).toEqual(['evt-soul']); // cached activity is returned before any relay answers
+      expect(bootMock.pool.subscribe).not.toHaveBeenCalled(); // and reading history never opens a REQ
+      soulsModule.initSoulFactoryStoreBinding();
       expect(cached.complete).toBe(false);
       expect(cached.degraded).toMatchObject({ incomplete: true, reason: 'catching-up' });
 
@@ -1012,7 +1044,7 @@ describe('Souls Store', () => {
       const soulRef = `31951:${service}:scout`;
       bootMock.pool.reachable = true;
       bootMock.store.events.push({ id: 'evt-soul', kind: KINDS.AGENT_SOUL, pubkey: service, created_at: 100, tags: [['d', 'scout']], content: '{}' });
-      await soulsModule.subscribeToSoulFactoryUpdates();
+      await startSoulFactory();
       const updates = [];
       const stop = soulsModule.subscribeToSoulHistory({ agentId: 'scout', pubkey: service }, { onUpdate: (history) => updates.push(history) });
       expect(updates).toHaveLength(1);

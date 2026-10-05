@@ -228,7 +228,7 @@ bahia souls templates get research-agent
 
 ## Browser store-first reads and trusted publishers
 
-The app layout owns one SoulFactory reader backed by the shared verified `BahiaEventStore`. Soul Gallery, Soul details, Soul edit and **Settings → OpenClaw Fleet** read that local store, render cached rows with no loading gate, and update as the store changes. Rendering never waits for a relay connection or EOSE, and returning to those routes does not open another REQ. A Soul that is not in the local store yet is reported as "not found" only after relay catch-up has finished.
+The app layout owns one SoulFactory reader backed by the shared verified `BahiaEventStore`. Soul Gallery, Soul details, Soul edit and **Settings → OpenClaw Fleet** read that local store, render cached rows with no loading gate, and update as the store changes. Rendering never waits for a relay connection or EOSE, and returning to those routes does not open another REQ: pages only read the local store, and the layout starts the relay reader once the core read model has caught up on at least one relay. A Soul that is not in the local store yet is reported as "not found" only after relay catch-up has finished.
 
 Soul activity is read from local events. The layout reader catches up the trusted history in pages with a saved per-relay cursor, so histories larger than 1,000 events are read completely (see [Continuity](continuity.md) for how paging and cursors work).
 
@@ -237,7 +237,7 @@ Every relay filter and every local read carries an author list:
 - `31951` Souls and their `6950`/`7950`/`1951` lifecycle history are signed by the SoulFactory controller. Trusted controllers are the service keys in the deployment bootstrap seed (`service_pubkeys`) plus the controller the Bahia service attests: the daemon publishes its resolved controller key as `controller_pubkeys` in the service-signed runtime policy record (`30900`, `t=soul-factory-runtime-policy`). A deployment whose controller is a separate Signet key therefore needs no extra web configuration.
 - `31952` drafts, `1950` actions and the `31953` fleet configuration are operator documents. They are accepted only from the signed-in operator's own key.
 - `31950` templates are accepted from the signed-in operator and from trusted controllers.
-- `30317` runtime capabilities are accepted from the runtime keys the service attests (`runtime_pubkeys` in the same policy record, mirroring `soul_factory.runtime_pubkeys`) and from runtime keys named by an already-trusted `31951` Soul. A capability event can never add its own signer to the trusted set. If `soul_factory.runtime_pubkeys` is not configured and no Soul exists yet, no runtime is trusted and the New Soul form offers no runtime target: pin the runtime keys in the daemon configuration.
+- `30317` runtime capabilities are accepted from the runtime keys the service attests (`runtime_pubkeys` in the same policy record, mirroring `soul_factory.runtime_pubkeys`) from runtime keys named by an already-trusted `31951` Soul, and from the trusted controller and service keys themselves. A capability event can never add its own signer to the trusted set. If `soul_factory.runtime_pubkeys` is not configured and no Soul exists yet, no runtime is trusted and the New Soul form offers no runtime target: pin the runtime keys in the daemon configuration.
 
 The runtime policy record requires relay authentication, so attested keys are available once you are signed in.
 
