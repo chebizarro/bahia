@@ -202,6 +202,11 @@ export function initContinuityStoreBinding() {
   binding.reader.sync(continuityFilterUnits(trustedContinuityAuthors(serviceAuthors)));
 }
 
+/** Relay catch-up state of the continuity reader (a badge, never a render gate). */
+export function continuityCatchup() {
+  return binding?.reader.metadata() ?? { complete: false, settled: false, degraded: null, relaySummary: [] };
+}
+
 export function teardownContinuityStoreBinding() {
   binding?.reader.stop();
   binding = null;

@@ -3,121 +3,176 @@ import { E2E_SERVICE_PUBKEY, TEST_PUBKEY, e2eTestPubkey, installE2EMocks } from 
 
 const now = Math.floor(Date.now() / 1000);
 const untrusted = e2eTestPubkey('untrusted-continuity-souls');
-const status = (service, pubkey = E2E_SERVICE_PUBKEY) => ({
-  kind: 30351, pubkey, created_at: now,
+
+// Kinds owned by the continuity and SoulFactory read models (A-35/A-36).
+const READ_MODEL_KINDS = [30351, 30353, 31400, 31401, 31402, 31403, 31404, 38430, 38431,
+  31950, 31951, 31952, 31953, 1950, 1951, 6950, 7950, 30317];
+
+const status = (service, pubkey = E2E_SERVICE_PUBKEY, createdAt = now) => ({
+  kind: 30351, pubkey, created_at: createdAt,
   tags: [['d', `continuity-status:${service}`], ['service', service], ['t', 'continuity'], ['t', 'continuity-status']],
   content: JSON.stringify({ service_key: service, active_profile: 'full', operation_state: 'steady' })
 });
-const soul = (agent, pubkey = E2E_SERVICE_PUBKEY) => ({
-  kind: 31951, pubkey, created_at: now,
-  tags: [['d', agent], ['name', agent], ['status', 'active'], ['runtime', 'openclaw']], content: `# ${agent}`
+const soul = (agentId, name, pubkey = E2E_SERVICE_PUBKEY, createdAt = now) => ({
+  kind: 31951, pubkey, created_at: createdAt,
+  tags: [['d', agentId], ['name', name], ['status', 'active'], ['runtime', 'openclaw']], content: `# ${name}`
 });
-const fleetConfig = {
-  kind: 31953, pubkey: TEST_PUBKEY, created_at: now,
+const fleetConfig = (pubkey = TEST_PUBKEY, model = '') => ({
+  kind: 31953, pubkey, created_at: now,
   tags: [['d', 'soulfactory-fleet-config/v1'], ['schema', 'soulfactory-fleet-config/v1']],
-  content: JSON.stringify({ schema: 'soulfactory-fleet-config/v1', template: {}, defaults: { model: '', bindings: [], required_plugins: [] } })
-};
-
-async function cachedKinds(page, kinds) {
-  return page.evaluate(({ prefix, kinds }) => new Promise((resolve, reject) => {
-    const request = indexedDB.open(`bahia-events-${prefix}`);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const db = request.result;
-      const tx = db.transaction('events', 'readonly');
-      const all = tx.objectStore('events').getAll();
-      all.onsuccess = () => { resolve(all.result.filter((event) => kinds.includes(event.kind)).map((event) => event.kind)); db.close(); };
-      all.onerror = () => reject(all.error);
-    };
-  }), { prefix: E2E_SERVICE_PUBKEY.slice(0, 8), kinds });
-}
+  content: JSON.stringify({ schema: 'soulfactory-fleet-config/v1', template: {}, defaults: { model, bindings: [], required_plugins: [] } })
+});
 
 async function setup(page) {
   await installE2EMocks(page, { nostrEvents: [
     status('svc-cached'), status('svc-forged', untrusted),
-    soul('Cached Fleet Soul'), soul('Forged Fleet Soul', untrusted), fleetConfig
+    soul('cached-soul', 'Cached Fleet Soul'), soul('forged-soul', 'Forged Fleet Soul', untrusted),
+    // A stranger re-signing a trusted Soul's coordinate must not replace it.
+    soul('cached-soul', 'Hijacked Fleet Soul', untrusted, now + 60),
+    fleetConfig()
   ] });
 }
 
-test('continuity renders verified cache with relay unreachable on reload', async ({ page }) => {
+/** Kinds persisted in the browser's verified IndexedDB event store. */
+async function cachedKinds(page) {
+  return page.evaluate((prefix) => new Promise((resolve, reject) => {
+    const request = indexedDB.open(`bahia-events-${prefix}`);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const all = db.transaction('events', 'readonly').objectStore('events').getAll();
+      all.onsuccess = () => { resolve([...new Set(all.result.map((event) => event.kind))]); db.close(); };
+      all.onerror = () => reject(all.error);
+    };
+  }), E2E_SERVICE_PUBKEY.slice(0, 8));
+}
+
+/** Empty the mock relay and refuse every socket, then reload: only the cache can render. */
+async function reloadWithRelayUnreachable(page) {
+  await page.evaluate(() => {
+    localStorage.setItem('__bahia_e2e_nostr_events', '[]');
+    sessionStorage.setItem('__bahia_e2e_relay_offline', '1');
+  });
+  await page.reload();
+}
+
+const noOpenSocket = (page) => page.evaluate(() =>
+  (window.__BAHIA_E2E_WS_CONNECTIONS || []).every((socket) => socket.readyState !== WebSocket.OPEN));
+
+test('continuity renders the verified cache on reload with the relay unreachable', async ({ page }) => {
   await setup(page);
   await page.goto('/continuity');
   await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'svc-forged' })).toHaveCount(0);
-  await expect.poll(() => cachedKinds(page, [30351])).toContain(30351);
-  await page.evaluate(() => localStorage.setItem('__bahia_e2e_relay_unreachable', 'true'));
-  await page.reload();
+  await expect.poll(() => cachedKinds(page)).toContain(30351);
+
+  await reloadWithRelayUnreachable(page);
   await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'svc-forged' })).toHaveCount(0);
-  expect(await page.locator('body').innerText()).not.toContain('Loading continuity history');
-
-
+  await expect(page.getByText('Loading continuity history')).toHaveCount(0);
+  await expect.poll(() => noOpenSocket(page)).toBe(true);
 });
 
-
-test('fleet renders verified cached souls with relay unreachable on reload', async ({ page }) => {
+test('settings/fleet renders cached souls and fleet config on reload with the relay unreachable', async ({ page }) => {
   await setup(page);
   await page.goto('/settings/fleet');
   await expect(page.locator('.rollout-row strong')).toHaveText('Cached Fleet Soul');
-  await expect(page.getByText('Forged Fleet Soul')).toHaveCount(0);
-  await expect.poll(() => cachedKinds(page, [31951, 31953])).toEqual(expect.arrayContaining([31951, 31953]));
-  await page.evaluate(() => localStorage.setItem('__bahia_e2e_relay_unreachable', 'true'));
-  await page.reload();
+  await expect.poll(() => cachedKinds(page)).toEqual(expect.arrayContaining([31951, 31953]));
+
+  await reloadWithRelayUnreachable(page);
   await expect(page.locator('.rollout-row strong')).toHaveText('Cached Fleet Soul');
   await expect(page.getByText('Forged Fleet Soul')).toHaveCount(0);
-  expect(await page.locator('body').innerText()).not.toContain('Loading retained rollout events');
+  await expect(page.getByText('Hijacked Fleet Soul')).toHaveCount(0);
+  await expect(page.getByText('Loading the latest operator-authored fleet document')).toHaveCount(0);
+  await expect(page.getByText('Loading retained rollout events')).toHaveCount(0);
+  await expect.poll(() => noOpenSocket(page)).toBe(true);
 });
-test('continuity and souls update by the next frame and return navigation opens no REQ', async ({ page }) => {
+
+test('soul gallery and detail render from cache with the relay unreachable and keep the trusted signer', async ({ page }) => {
+  await setup(page);
+  await page.goto('/souls');
+  await expect(page.getByText('Cached Fleet Soul')).toBeVisible();
+  await expect.poll(() => cachedKinds(page)).toContain(31951);
+
+  await reloadWithRelayUnreachable(page);
+  await expect(page.getByText('Cached Fleet Soul')).toBeVisible();
+  await expect(page.getByText('Forged Fleet Soul')).toHaveCount(0);
+  await expect(page.getByText('Loading souls')).toHaveCount(0);
+
+  await page.goto('/souls/cached-soul');
+  await expect(page.getByRole('heading', { name: 'Cached Fleet Soul' })).toBeVisible();
+  await expect(page.getByText('Hijacked Fleet Soul')).toHaveCount(0);
+  await expect(page.getByText('Soul not found')).toHaveCount(0);
+  await expect.poll(() => noOpenSocket(page)).toBe(true);
+});
+
+test('live events from trusted signers appear, untrusted ones do not, and returning opens no REQ', async ({ page }) => {
   await setup(page);
   await page.goto('/continuity');
   await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();
-  const continuityFrame = await page.evaluate(async (live) => {
-    const { getEventStore } = await import('/src/lib/nostr/boot.js');
-    return new Promise((resolve) => {
-      const off = getEventStore().subscribe({ kinds: [30351], authors: [live.pubkey] }, (event) => {
-        if (!event.tags.some((tag) => tag[0] === 'service' && tag[1] === 'svc-live')) return;
-        off();
-        requestAnimationFrame(() => resolve(!![...document.querySelectorAll('.service-card h2')].find((node) => node.textContent === 'svc-live')));
-      });
-      window.__bahiaPushNostrEvent(live);
-    });
-  }, status('svc-live'));
-  expect(continuityFrame).toBe(true);
+
+  // The forged event is delivered first on the same sockets, so once the
+  // trusted one is rendered the forged one has already been handled.
+  await page.evaluate(([forged, live]) => {
+    window.__bahiaPushNostrEvent(forged);
+    window.__bahiaPushNostrEvent(live);
+  }, [status('svc-live-forged', untrusted, now + 1), status('svc-live', E2E_SERVICE_PUBKEY, now + 1)]);
+  await expect(page.getByRole('heading', { name: 'svc-live', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'svc-live-forged' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Open navigation menu' }).click();
   await page.locator('#navigation-drawer a[href="/settings"]').click();
   await page.getByRole('link', { name: /OpenClaw Fleet/ }).click();
   await expect(page.locator('.rollout-row strong')).toHaveText('Cached Fleet Soul');
-  const soulFrame = await page.evaluate(async (live) => {
-    const { getEventStore } = await import('/src/lib/nostr/boot.js');
-    const { souls } = await import('/src/lib/stores/souls.svelte.js');
-    return new Promise((resolve) => {
-      const off = getEventStore().subscribe({ kinds: [31951], authors: [live.pubkey] }, (event) => {
-        if (!event.tags.some((tag) => tag[0] === 'd' && tag[1] === 'Live Fleet Soul')) return;
-        off();
-        requestAnimationFrame(() => resolve(souls.some((row) => row.agentId === 'Live Fleet Soul')));
-      });
-      window.__bahiaPushNostrEvent(live);
-    });
-  }, soul('Live Fleet Soul'));
-  expect(soulFrame).toBe(true);
+  await page.evaluate(([forged, live]) => {
+    window.__bahiaPushNostrEvent(forged);
+    window.__bahiaPushNostrEvent(live);
+  }, [soul('live-forged', 'Live Forged Soul', untrusted, now + 1), soul('live-soul', 'Live Fleet Soul', E2E_SERVICE_PUBKEY, now + 1)]);
   await expect(page.locator('.rollout-row strong', { hasText: 'Live Fleet Soul' })).toBeVisible();
+  await expect(page.getByText('Live Forged Soul')).toHaveCount(0);
 
-  await page.evaluate(() => {
-    window.__newReqs = [];
-    const send = WebSocket.prototype.send;
+  // Wait until the app-lifetime readers finished paging stored history, so
+  // any REQ recorded from here on would be caused by navigation.
+  await expect.poll(() => page.evaluate(async () => {
+    const { continuityCatchup } = await import('/src/lib/nostr/continuity.ts');
+    const { readModelMeta } = await import('/src/lib/stores/souls.svelte.js');
+    return continuityCatchup().complete && readModelMeta.souls?.complete === true;
+  })).toBe(true);
+
+  // Both views are now warm. Record every REQ that touches their kinds.
+  const sockets = await page.evaluate((kinds) => {
+    window.__readModelReqs = [];
+    const original = WebSocket.prototype.send;
     WebSocket.prototype.send = function(data) {
-      try { const frame = JSON.parse(data); if (frame[0] === 'REQ') window.__newReqs.push(frame); } catch {}
-      return send.call(this, data);
+      try {
+        const frame = JSON.parse(data);
+        if (frame[0] === 'REQ' && frame.slice(2).some((filter) => filter.kinds?.some((kind) => kinds.includes(kind)))) {
+          window.__readModelReqs.push(frame);
+        }
+      } catch {}
+      return original.call(this, data);
     };
-  });
+    return window.__BAHIA_E2E_WS_CONNECTIONS.length;
+  }, READ_MODEL_KINDS);
+
   await page.locator('a.back-link[href="/settings"]').click();
   await page.getByRole('button', { name: 'Open navigation menu' }).click();
   await page.locator('#navigation-drawer a[href="/continuity"]').click();
-  await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'svc-live', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Open navigation menu' }).click();
   await page.locator('#navigation-drawer a[href="/settings"]').click();
   await page.getByRole('link', { name: /OpenClaw Fleet/ }).click();
-  await expect(page.locator('.rollout-row strong')).toHaveText('Cached Fleet Soul');
-  expect(await page.evaluate(() => window.__newReqs)).toEqual([]);
+  await expect(page.locator('.rollout-row strong', { hasText: 'Live Fleet Soul' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open navigation menu' }).click();
+  await page.locator('#navigation-drawer a[href="/souls"]').click();
+  await expect(page.getByText('Live Fleet Soul')).toBeVisible();
+  await page.getByText('Live Fleet Soul').first().click();
+  await expect(page.getByRole('heading', { name: 'Live Fleet Soul' })).toBeVisible();
+
+  const state = await page.evaluate(() => ({
+    reqs: window.__readModelReqs, sockets: window.__BAHIA_E2E_WS_CONNECTIONS.length, text: document.body.textContent
+  }));
+  expect(state.reqs).toEqual([]);
+  expect(state.sockets).toBe(sockets);
+  expect(state.text).not.toContain('Loading continuity history');
 });

@@ -129,6 +129,22 @@ describe('store-first paged backfill', () => {
     expect(ctx.cursor()).toBe(1700);
   });
 
+  it('stops paging a relay that ignores until and does not certify it', async () => {
+    const events = history(3);
+    const store = { getCursor: () => null, setCursor: vi.fn() };
+    // Returns every stored event for any REQ, whatever `until` says.
+    const pool = { subscribe: vi.fn(({ filters, onEvent, onEose }) => {
+      if (filters[0].limit !== undefined) queueMicrotask(() => { for (const event of events) onEvent(event, RELAY); onEose(RELAY); });
+      return { unsubscribe: vi.fn() };
+    }) };
+    const completed = vi.fn();
+    subscribeWithPagedBackfill({ pool, store, relays: [RELAY], filters: [trusted], key: 'model', now: () => 2000, onEose: completed });
+    await vi.waitFor(() => expect(completed).toHaveBeenCalledWith(RELAY, false));
+    // One live REQ, the first page, and the one page that exposed the relay.
+    expect(pool.subscribe).toHaveBeenCalledTimes(3);
+    expect(store.setCursor).not.toHaveBeenCalled();
+  });
+
   it('shares one live REQ across filters and pages them one REQ at a time', async () => {
     const second = { kinds: [30353], authors: [AUTHOR] };
     const ctx = harness([...history(700), ...history(700, 1900).map((event) => ({ ...event, id: `p-${event.id}`, kind: 30353 }))]);

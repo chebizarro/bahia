@@ -59,14 +59,17 @@
     if (!dirty && !storeState.document) hydrate(emptyFleetConfigDocument());
   });
 
+  // Called from effects: build everything from a local snapshot so the effect
+  // never reads back the state it just wrote (which would re-trigger it).
   function hydrate(next) {
-    document = structuredClone(next);
-    rawText = JSON.stringify(document, null, 2);
+    const snapshot = structuredClone($state.snapshot(next));
+    document = snapshot;
+    rawText = JSON.stringify(snapshot, null, 2);
     sectionText = {
-      defaults: JSON.stringify(document.defaults || {}, null, 2),
+      defaults: JSON.stringify(snapshot.defaults || {}, null, 2),
       ...Object.fromEntries(FLEET_CONFIG_ALLOWED_SECTIONS.map((section) => [
         section,
-        document.template?.[section] === undefined ? '' : JSON.stringify(document.template[section], null, 2)
+        snapshot.template?.[section] === undefined ? '' : JSON.stringify(snapshot.template[section], null, 2)
       ]))
     };
     editorError = '';

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { E2E_SERVICE_PUBKEY, installE2EMocks, e2eTestPubkey } from './helpers.js';
+import { soulRuntimePolicyFixture } from './cp-state-fixtures.js';
 
 const FACTORY_PUBKEY = E2E_SERVICE_PUBKEY;
 const AGENT_PUBKEY = e2eTestPubkey('agent');
@@ -100,9 +101,9 @@ function soulEvent({ agentId, name, purpose }) {
 }
 
 test('A newly provisioned soul becomes visible through relay-backed browsing', async ({ page }) => {
+  // No Soul exists yet: the runtime is trusted because the service pins its key.
   await installE2EMocks(page, { authenticated: true, extension: true, nostrEvents: [
-    { ...soulEvent({ agentId: 'existing', name: 'Existing', purpose: 'Trusted runtime anchor' }),
-      tags: [...soulEvent({ agentId: 'existing', name: 'Existing', purpose: 'Trusted runtime anchor' }).tags, ['runtime-pubkey', RUNTIME_PUBKEY]] },
+    soulRuntimePolicyFixture({ runtimePubkeys: { openclaw: [RUNTIME_PUBKEY] } }),
     runtimeCapabilityEvent()
   ], systemInfo });
 

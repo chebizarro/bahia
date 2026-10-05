@@ -26,7 +26,8 @@
  * is either full or has older history below it (the relay stopped short of the
  * requested limit). Older history is still read, but that filter's cursor
  * stays uncommitted and completion is reported as incomplete so a later
- * session retries the boundary.
+ * session retries the boundary. A relay that ignores `until` is treated the same
+ * way and is not asked for further pages.
  *
  * @param {object} options
  * @param {{ subscribe: Function }} options.pool
@@ -120,6 +121,7 @@ export function subscribeWithPagedBackfill({
 
       const ids = new Set();
       let oldest = Infinity;
+      let ignoresUntil = false;
       let settled = false;
       const request = { ...filters[index], until, limit: pageSize };
       if (since !== null) request.since = since;
@@ -130,13 +132,22 @@ export function subscribeWithPagedBackfill({
         onEvent(event) {
           if (settled || !event?.id || ids.has(event.id)) return;
           ids.add(event.id);
-          oldest = Math.min(oldest, Number(event.created_at || 0));
+          const createdAt = Number(event.created_at || 0);
+          oldest = Math.min(oldest, createdAt);
+          if (createdAt > until) ignoresUntil = true;
         },
         onEose() {
           if (settled || stopped) return;
           settled = true;
           close();
           if (ids.size === 0) { pageFilter(index + 1, sessionStart); return; }
+          if (ignoresUntil) {
+            // The relay answered with events newer than `until`, so it cannot
+            // be paged. Keep what it sent, never certify it, and stop asking.
+            lossless[index] = false;
+            pageFilter(index + 1, sessionStart);
+            return;
+          }
           if (belowFullSecond) lossless[index] = false;
           if (oldest < until) {
             // The limit may have cut `oldest` short; repeat that second.
