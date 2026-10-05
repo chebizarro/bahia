@@ -98,6 +98,7 @@ export const WORKER_RESULT = 7997;
 export const CAS_AUDIT = 4903;
 export const NIP38_STATUS = 30315;
 export const ASSISTANT_TRANSCRIPT = 30316;
+export const DASHBOARD_WIDGET = 30318;
 export const CAS_CONTROL_STATE = 30900;
 export const CONFIG_ACL_LIST = 30000;
 export const CONFIG_POLICY = 30078;

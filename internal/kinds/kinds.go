@@ -159,6 +159,7 @@ const (
 	CASAudit            = cascadia.CAS_AUDIT
 	NIP38Status         = cascadia.NIP38_USER_STATUS
 	AssistantTranscript = cascadia.CAS_AGENT_HEARTBEAT
+	DashboardWidget     = 30318 // NIP-CAS-0009 addressable operations widget
 	CASControlState     = cascadia.CAS_CP_STATE
 
 	ConfigACLList = cascadia.NIP51_TASK_COLLECTION

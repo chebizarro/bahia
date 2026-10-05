@@ -63,6 +63,13 @@ describe('docs catalog component and page', () => {
     expect(target.querySelector('a[href="/docs/features-services"]')?.textContent).toContain('Services');
   });
 
+  it('shows an explicit state when no documentation publisher is configured', async () => {
+    nostrDocsMock.fetchDocsCatalog.mockRejectedValueOnce(new Error('Documentation publisher not configured'));
+    const page = renderComponent(DocsPage);
+    await vi.waitFor(() => expect(textOf(page)).toContain('Documentation publisher not configured'));
+    expect(page.querySelector('a[href="/docs/index"]')).toBeNull();
+  });
+
   it('loads the catalog from relay via NIP-23 and surfaces failures', async () => {
     nostrDocsMock.fetchDocsCatalog.mockResolvedValueOnce({
       count: 1,

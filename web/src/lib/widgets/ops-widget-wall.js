@@ -1,69 +1,48 @@
-import {
-  createWidgetStore,
-  DASHBOARD_WIDGET_KIND,
-  FLEET_RELAY_URLS
-} from 'wheelhouse';
-import { nostr } from '$lib/nostr/subscriptions.js';
+import { getEventStore, onStoreRefresh } from '$lib/nostr/boot.js';
+import { DASHBOARD_WIDGET } from '$lib/nostr/kinds.gen.js';
+import { getOpsWidgetAllowedPubkeys, parseOpsWidgetPublisherAllowlist } from './ops-widget-config.js';
+export { getOpsWidgetAllowedPubkeys, parseOpsWidgetPublisherAllowlist } from './ops-widget-config.js';
 
-const HEX_PUBKEY = /^[0-9a-f]{64}$/i;
-
-export function parseOpsWidgetPublisherAllowlist(value) {
-  return Array.from(new Set(
-    String(value || '')
-      .split(',')
-      .map((pubkey) => pubkey.trim().toLowerCase())
-      .filter((pubkey) => HEX_PUBKEY.test(pubkey))
-  ));
-}
-
-const env = import.meta.env || {};
-export const OPS_WIDGET_RELAYS = [...FLEET_RELAY_URLS];
-export const OPS_WIDGET_ALLOWED_PUBKEYS = parseOpsWidgetPublisherAllowlist(
-  env.PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS || env.VITE_WHEELHOUSE_ALLOWED_PUBKEYS
-);
-
+/** A store-query read model; the app layout owns its binding, not the widgets route. */
 export function createOpsWidgetWall({
-  allowedPubkeys = OPS_WIDGET_ALLOWED_PUBKEYS,
-  clientFactory = null
+  allowedPubkeys = getOpsWidgetAllowedPubkeys(),
+  eventStore = getEventStore,
+  registerRefresh = onStoreRefresh
 } = {}) {
-  const store = createWidgetStore({ allowedPubkeys });
-  const client = clientFactory?.({
-    relays: [...OPS_WIDGET_RELAYS],
-    saveRelayConfig: () => {}
-  });
-  let unsubscribe = null;
+  const authors = parseOpsWidgetPublisherAllowlist(allowedPubkeys);
+  const filter = { kinds: [DASHBOARD_WIDGET], authors };
+  const listeners = new Set();
+  let events = [];
+  let unbind = null;
 
-  function start({ onEose, onClosed, onRejected, onHealth } = {}) {
-    unsubscribe?.();
-    const subscribe = client
-      ? (filters, handlers) => client.subscribeWithRecovery(filters, handlers)
-      : (filters, handlers) => nostr.subscribeWithRecoveryOnRelays(OPS_WIDGET_RELAYS, filters, handlers);
-    unsubscribe = subscribe(
-      [{ kinds: [DASHBOARD_WIDGET_KIND] }],
-      {
-        onEvent: (event, relay) => {
-          const result = store.ingest(event);
-          if (!result.accepted) onRejected?.(result.reason, event, relay);
-        },
-        onEose,
-        onClosed,
-        onHealth
-      }
-    );
+  function refresh() {
+    events = authors.length ? (eventStore()?.query(filter) || []) : [];
+    for (const listener of listeners) listener(events);
+  }
 
+  function subscribe(listener) {
+    listeners.add(listener);
+    listener(events);
+    return () => listeners.delete(listener);
+  }
+
+  function start() {
+    if (unbind) return stop;
+    refresh(); // Persisted, verified events are available before any relay connects.
+    unbind = registerRefresh(refresh);
     return stop;
   }
 
   function stop() {
-    unsubscribe?.();
-    unsubscribe = null;
+    unbind?.();
+    unbind = null;
+    events = [];
+    for (const listener of listeners) listener(events);
   }
 
-  function destroy() {
-    stop();
-    store.clear();
-    client?.disconnect?.();
-  }
-
-  return { store, start, stop, destroy, client: client || nostr };
+  return { allowedPubkeys: authors, filter, subscribe, start, stop, refresh };
 }
+
+export const opsWidgetWall = createOpsWidgetWall();
+export const initOpsWidgetWallBinding = () => opsWidgetWall.start();
+export const teardownOpsWidgetWallBinding = () => opsWidgetWall.stop();
