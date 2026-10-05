@@ -43,6 +43,17 @@ describe('Bahia ops widget store-first wall', () => {
     expect(getOpsWidgetAllowedPubkeys()).toEqual([]);
   });
 
+  it('treats an injected seed without widget_pubkeys as deny-all, never falling back to build-time values', () => {
+    vi.stubEnv('PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS', OTHER);
+    vi.stubGlobal('window', { __BAHIA_BOOTSTRAP__: { relay_urls: ['wss://relay.example'], service_pubkeys: [PUBKEY] } });
+    expect(getOpsWidgetAllowedPubkeys()).toEqual([]);
+    vi.stubGlobal('window', { __BAHIA_BOOTSTRAP__: null });
+    expect(getOpsWidgetAllowedPubkeys()).toEqual([]);
+    vi.stubGlobal('window', {});
+    expect(getOpsWidgetAllowedPubkeys()).toEqual([OTHER]);
+    vi.unstubAllEnvs();
+  });
+
   it('queries cached trusted widgets before network and refreshes from the shared store', () => {
     const cached = widgetEvent('1'.repeat(64));
     const untrusted = widgetEvent('2'.repeat(64), OTHER);

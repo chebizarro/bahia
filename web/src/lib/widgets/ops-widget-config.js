@@ -8,10 +8,17 @@ export function parseOpsWidgetPublisherAllowlist(value) {
   ));
 }
 
-/** The runtime seed takes precedence over build-time deployment configuration. */
+/**
+ * An injected deployment seed is authoritative, as for relays and service
+ * pubkeys (discovery.svelte.js): a seed without widget_pubkeys denies every
+ * publisher. Build-time variables are only a local-development/test fallback
+ * when no seed is injected, and are never merged into one.
+ */
 export function getOpsWidgetAllowedPubkeys() {
-  const seeded = typeof window !== 'undefined' ? window.__BAHIA_BOOTSTRAP__?.widget_pubkeys : undefined;
-  if (Array.isArray(seeded)) return parseOpsWidgetPublisherAllowlist(seeded);
+  if (typeof window !== 'undefined' && window.__BAHIA_BOOTSTRAP__ !== undefined) {
+    const seeded = window.__BAHIA_BOOTSTRAP__?.widget_pubkeys;
+    return parseOpsWidgetPublisherAllowlist(Array.isArray(seeded) ? seeded : []);
+  }
   const env = import.meta.env || {};
   return parseOpsWidgetPublisherAllowlist(
     env.PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS || env.VITE_WHEELHOUSE_ALLOWED_PUBKEYS

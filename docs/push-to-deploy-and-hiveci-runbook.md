@@ -114,7 +114,7 @@ web:
     PUBLIC_BAHIA_SERVICE_PUBKEYS: ${PUBLIC_BAHIA_SERVICE_PUBKEYS:?required}
 ```
 
-The singular `PUBLIC_BAHIA_SERVICE_PUBKEY` is also accepted instead of the plural key. The `deploy-edge.yml` job exports the relay and plural pubkey values to **every** run step, including Compose interpolation and `up`; the host file must still forward them into the web service. For a manual check, export the values in your shell, then run this from a checkout containing the validator:
+The singular `PUBLIC_BAHIA_SERVICE_PUBKEY` is also accepted instead of the plural key. To show ops widgets, also forward the optional `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` (comma-separated trusted widget publisher pubkeys); it is validated the same way and, when unset, the widgets wall denies every publisher. The `deploy-edge.yml` job exports the relay and plural pubkey values to **every** run step, including Compose interpolation and `up`; the host file must still forward them into the web service. For a manual check, export the values in your shell, then run this from a checkout containing the validator:
 
 ```bash
 docker compose -f /srv/data/bahia-controlplane/docker-compose.yml config --format json \

@@ -9,14 +9,15 @@ const script = resolve('docker-entrypoint.d/40-bahia-bootstrap-env.sh');
 let dir;
 let output;
 
-function run(relays, pubkeys) {
+function run(relays, pubkeys, widgets) {
   return spawnSync('sh', [script], {
     encoding: 'utf8',
     env: {
       PATH: process.env.PATH,
       BAHIA_BOOTSTRAP_SCRIPT_PATH: output,
       PUBLIC_BAHIA_BOOTSTRAP_RELAYS: relays,
-      PUBLIC_BAHIA_SERVICE_PUBKEYS: pubkeys
+      PUBLIC_BAHIA_SERVICE_PUBKEYS: pubkeys,
+      ...(widgets !== undefined ? { PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS: widgets } : {})
     }
   });
 }
@@ -35,6 +36,20 @@ describe('web runtime bootstrap entrypoint', () => {
     expect(readFileSync(output, 'utf8')).toContain('relay_urls:["wss://relay.example/nostr","ws://localhost:3334/relay"]');
     expect(readFileSync(output, 'utf8')).toContain(`service_pubkeys:["${'a'.repeat(64)}","${'b'.repeat(64)}"]`);
     expect(readFileSync(output, 'utf8')).not.toContain('old build output');
+  });
+
+  it('emits the optional widget publisher allowlist and denies all when it is unset', () => {
+    const relays = 'wss://relay.example/nostr';
+    const keys = 'a'.repeat(64);
+    expect(run(relays, keys).status).toBe(0);
+    expect(readFileSync(output, 'utf8')).toContain('widget_pubkeys:[]');
+    expect(run(relays, keys, `${'c'.repeat(64)},${'d'.repeat(64)}`).status).toBe(0);
+    expect(readFileSync(output, 'utf8')).toContain(`widget_pubkeys:["${'c'.repeat(64)}","${'d'.repeat(64)}"]`);
+    const before = readFileSync(output, 'utf8');
+    const invalid = run(relays, keys, 'not-a-pubkey');
+    expect(invalid.status).not.toBe(0);
+    expect(invalid.stderr).toContain('invalid widget pubkey');
+    expect(readFileSync(output, 'utf8')).toBe(before);
   });
 
   it('fails on missing or invalid roots without changing the seed file', () => {

@@ -5,6 +5,8 @@ set -f
 SEED_SCRIPT=${BAHIA_BOOTSTRAP_SCRIPT_PATH:-/usr/share/nginx/html/bahia-bootstrap.js}
 BOOT_RELAYS=${PUBLIC_BAHIA_BOOTSTRAP_RELAYS:-}
 SERVICE_PUBKEYS=${PUBLIC_BAHIA_SERVICE_PUBKEYS:-${PUBLIC_BAHIA_SERVICE_PUBKEY:-}}
+# Optional: publishers trusted for ops widgets (kind 30318). Unset denies all.
+WIDGET_PUBKEYS=${PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS:-}
 
 if [ -z "$BOOT_RELAYS" ] || [ -z "$SERVICE_PUBKEYS" ]; then
   echo 'bahia-web bootstrap env missing: PUBLIC_BAHIA_BOOTSTRAP_RELAYS and PUBLIC_BAHIA_SERVICE_PUBKEYS must be set' >&2
@@ -28,7 +30,7 @@ seed_array() {
         echo "bahia-web invalid relay URL: $value" >&2; IFS=$old_ifs; return 1
       fi
     elif ! printf '%s\n' "$value" | grep -Eiq '^[0-9a-f]{64}$'; then
-      echo "bahia-web invalid service pubkey: $value" >&2; IFS=$old_ifs; return 1
+      echo "bahia-web invalid $kind: $value" >&2; IFS=$old_ifs; return 1
     fi
     if [ "$first" -eq 0 ]; then printf ','; fi
     first=0
@@ -40,8 +42,9 @@ seed_array() {
 # Validate both lists before replacing the existing script, so a failed restart
 # cannot leave a partial seed behind.
 RELAYS_JSON=$(seed_array "$BOOT_RELAYS" relay)
-KEYS_JSON=$(seed_array "$SERVICE_PUBKEYS" pubkey)
+KEYS_JSON=$(seed_array "$SERVICE_PUBKEYS" "service pubkey")
+WIDGETS_JSON=$(seed_array "$WIDGET_PUBKEYS" "widget pubkey")
 TEMP_SCRIPT=$(mktemp "${SEED_SCRIPT}.XXXXXX")
 trap 'rm -f "$TEMP_SCRIPT"' EXIT
-printf 'window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:[%s],service_pubkeys:[%s]};\n' "$RELAYS_JSON" "$KEYS_JSON" > "$TEMP_SCRIPT"
+printf 'window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:[%s],service_pubkeys:[%s],widget_pubkeys:[%s]};\n' "$RELAYS_JSON" "$KEYS_JSON" "$WIDGETS_JSON" > "$TEMP_SCRIPT"
 mv "$TEMP_SCRIPT" "$SEED_SCRIPT"

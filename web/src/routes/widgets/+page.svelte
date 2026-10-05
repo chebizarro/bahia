@@ -52,8 +52,8 @@
     <section class="notice warning" role="status">
       <strong>Publisher allowlist required</strong>
       <p>
-        Configure <code>widget_pubkeys</code> in the deployment bootstrap seed or set
-        <code>VITE_WHEELHOUSE_ALLOWED_PUBKEYS</code> at build time to trusted 64-character hexadecimal pubkeys.
+        Set <code>PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS</code> on the web container to the trusted 64-character
+        hexadecimal publisher pubkeys; the entrypoint writes them to the deployment seed as <code>widget_pubkeys</code>.
         The wall rejects every publisher while the list is empty.
       </p>
     </section>
