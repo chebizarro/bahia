@@ -322,15 +322,17 @@ The daemon now publishes payment and security state through the shared `cpStateF
 | Security Finding | 32012 | security | finding | `security-finding` | `security:finding:<hash>` | OCK "fleet" scope | `SecurityCanonicalPublisher` |
 | Security Schedule | 32013 | security | schedule | `security-schedule` | `security:schedule:<id>` | OCK "fleet" scope | `SecurityCanonicalPublisher` |
 | Security Finding Detail | 32014 | security | finding-detail | `security-finding-detail` | `security:finding-detail:<hash>` (or `:part:<n>` when chunked) | OCK "fleet" scope | `SecurityCanonicalPublisher` |
+| Security Target | 32020 | security | target | `security-target` | `security:target:<target-key-hash>` | OCK "fleet" scope | `SecurityCanonicalPublisher` |
+| Security Run | 32021 | security | run | `security-run` | `security:run:<run-id>` | OCK "fleet" scope | `SecurityCanonicalPublisher` |
 
 **Mutation sites (publish-on-mutation):**
 - Payment: `PaymentService.RecordPayment`, `PaymentService.RecordChange`, `PaymentService.MarkPaymentSent`
-- Security findings: `SecurityScanner.executeRun` after `UpsertSecurityFindings` (one finding record + one detail record per finding)
-- Security schedules: `PolicyService.syncSecuritySchedulesForPolicy` after `UpsertSecurityScanSchedule`
+- Security targets/runs/findings: `CanonicalSecurityRepository` admits the signed target, run/claim, finding and detail records before updating the optional SQL index.
+- Security schedules: `PolicyService.syncSecuritySchedulesForPolicy` writes through `CanonicalSecurityRepository`, which publishes the schedule before the optional SQL index.
 
-**Size limits (bahia-irsry.39 item 1):** Each finding summary is published as one record (family 32012). Finding details are published as a separate addressable record (family 32014, d=`security:finding-detail:<hash>`). If a single detail exceeds the 60,000-byte chunk threshold (within NIP-44's 65,535-byte plaintext limit), it is split into numbered parts (`security:finding-detail:<hash>:part:<n>`) with `total_parts` metadata so consumers can reassemble. Empty details publish a tombstone. The relay copy is the source of truth — no ContextVM fallback is needed for detail text.
+**Size limits (bahia-irsry.39 item 1):** Each finding summary is published as one record (family 32012). Finding details are published as a separate addressable record (family 32014, d=`security:finding-detail:<hash>`). If a single detail exceeds the 60,000-byte chunk threshold (within NIP-44's 65,535-byte plaintext limit), it is split into fixed numbered parts (`security:finding-detail:<hash>:part:<n>`). A base-coordinate manifest carrying `total_parts` is published last, so readers ignore stale extra parts after a detail shrinks and retain the previous complete generation if a part publish fails. Empty details publish a base-coordinate tombstone. The relay copy is the source of truth — no ContextVM fallback is needed for detail text.
 
-**Fleet OCK scope:** All four families encrypt under the "fleet" OCK scope (`kinds.FleetOCKScope`). The fleet OCK is wrapped to fleet operators (`authorized_pubkeys`) and bootstrap owners via `TrustSetMemberSource.fleetOpsPubkeys()`, so web dashboard users can decrypt. Neither payments nor security entities carry per-org IDs, so fleet scope is the correct granularity.
+**Fleet OCK scope:** All six families encrypt under the "fleet" OCK scope (`kinds.FleetOCKScope`). The fleet OCK is wrapped to fleet operators (`authorized_pubkeys`) and bootstrap owners via `TrustSetMemberSource.fleetOpsPubkeys()`, so web dashboard users can decrypt. Neither payments nor security entities carry per-org IDs, so fleet scope is the correct granularity.
 
 **Legacy path:** The scanner's existing chunked `publishFindings` path (kind 30078) continues to publish alongside the new per-finding cp-state records.
 

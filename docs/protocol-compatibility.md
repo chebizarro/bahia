@@ -315,6 +315,12 @@ per-line relay history; delete publishes a same-coordinate tombstone. See
 [the event implementation guide](nostr-event-implementation-guide.md#f74b-canonical-fleet-private-state-bahia-irsry74)
 for coordinates, size bounds, and confidentiality.
 
+Security execution state likewise remains on wire kind `30900`: target (`32020`)
+and run (`32021`) join the existing schedule (`32013`), finding (`32012`), and
+finding-detail (`32014`) fleet-OCK cp-state families. These values are
+`legacy_kind` discriminators only. The signed run record replaces the former
+SQL schedule lease as the idempotent claim and durable restart ledger.
+
 ## Policy evaluation intent and build ownership (bahia-irsry.77)
 
 For MCP evaluation, use a client-signed `30900` `domain=policy`, `op=evaluate`

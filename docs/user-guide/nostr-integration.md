@@ -712,6 +712,8 @@ For repository archive snapshots, use `subjectLocator.repository.content_digest`
 
 Security scanning is an event-driven observer of canonical SBOM truth and an explicit ContextVM scan surface. SBOM generation/import still completes on SBOM `30078` references and `30004` availability lists; Security watches those events and publishes separate Security observables after it verifies the referenced payload hash and scans normalized targets.
 
+The daemon's private execution ledger is fleet-OCK encrypted kind `30900` cp-state on `security-target`, `security-run`, `security-schedule`, `security-finding`, and `security-finding-detail` topics. Signed deterministic run records are schedule claims and restart progress; Postgres availability does not gate scans or readiness.
+
 Security ContextVM methods are:
 
 | Method | Use | Completion signal |

@@ -89,8 +89,8 @@ const (
 	CPStateFamilySecurityFinding       CPStateFamily = SecurityFindingRecord
 	CPStateFamilySecuritySchedule      CPStateFamily = SecurityScheduleRecord
 	CPStateFamilySecurityFindingDetail CPStateFamily = SecurityFindingDetailRecord
-	CPStateFamilySecurityTarget        CPStateFamily = 32020
-	CPStateFamilySecurityRun           CPStateFamily = 32021
+	CPStateFamilySecurityTarget        CPStateFamily = SecurityTargetRecord
+	CPStateFamilySecurityRun           CPStateFamily = SecurityRunRecord
 	CPStateFamilyManagedInstanceHealth CPStateFamily = ManagedInstanceHealthRecord
 	CPStateFamilyRouteCanary           CPStateFamily = RouteCanaryRecord
 	CPStateFamilySoulRuntimePolicy     CPStateFamily = SoulRuntimePolicyRecord

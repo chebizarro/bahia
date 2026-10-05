@@ -497,6 +497,8 @@ const (
 	ArtifactSBOMRegistry      = 32017
 	SBOMPackageRegistry       = 32018
 	RuntimeObservationState   = 32019
+	SecurityTargetRecord      = 32020
+	SecurityRunRecord         = 32021
 )
 
 // F75 read-model family discriminators. All publish on wire kind 30900.

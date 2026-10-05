@@ -75,7 +75,7 @@ func (r *CanonicalSecurityRepository) UpsertSecurityTarget(ctx context.Context, 
 		target.ID = existing.ID
 		target.CreatedAt = existing.CreatedAt
 	} else if target.ID == uuid.Nil {
-		target.ID = domain.NewEntityID()
+		target.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("bahia:security-target:"+target.TargetKeyHash))
 	}
 	if target.CreatedAt.IsZero() {
 		target.CreatedAt = now
@@ -138,7 +138,7 @@ func (r *CanonicalSecurityRepository) CreateSecurityScanRun(ctx context.Context,
 		run.ID = domain.NewEntityID()
 	}
 	if existing, err := r.GetSecurityScanRun(ctx, run.ID); err == nil && existing != nil {
-		return nil
+		return repository.ErrAlreadyExists
 	} else if err != nil && !errors.Is(err, repository.ErrNotFound) {
 		return err
 	}
@@ -315,10 +315,28 @@ func (r *CanonicalSecurityRepository) UpsertSecurityFindings(ctx context.Context
 	if err := r.available(); err != nil {
 		return err
 	}
+	existing, err := r.canonical.ListSecurityFindings(ctx)
+	if err != nil {
+		return err
+	}
+	byRunAndHash := make(map[string]domain.SecurityOSVFinding, len(existing))
+	for _, finding := range existing {
+		byRunAndHash[finding.RunID.String()+":"+finding.FindingKeyHash] = finding
+	}
+	now := time.Now().UTC()
 	for i := range findings {
-		if findings[i].ID == uuid.Nil {
-			findings[i].ID = domain.NewEntityID()
+		key := findings[i].RunID.String() + ":" + findings[i].FindingKeyHash
+		if previous, ok := byRunAndHash[key]; ok {
+			findings[i].ID = previous.ID
+			findings[i].CreatedAt = previous.CreatedAt
 		}
+		if findings[i].ID == uuid.Nil {
+			findings[i].ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("bahia:security-finding:"+key))
+		}
+		if findings[i].CreatedAt.IsZero() {
+			findings[i].CreatedAt = now
+		}
+		findings[i].UpdatedAt = now
 		if err := r.canonical.PublishFinding(ctx, findings[i]); err != nil {
 			return err
 		}

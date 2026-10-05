@@ -363,6 +363,11 @@ func (s *SecurityScanner) SubmitScan(ctx context.Context, req SecurityScanReques
 		run.ID = req.ScheduledRunID
 	}
 	if err := s.repo.CreateSecurityScanRun(ctx, run); err != nil {
+		if req.ScheduledRunID != uuid.Nil {
+			if existing, existingErr := s.repo.GetSecurityScanRun(ctx, req.ScheduledRunID); existingErr == nil {
+				return acceptedResponse(existing.ID, stored, true, existing.Status.IsTerminal()), nil
+			}
+		}
 		if active, activeErr := s.repo.GetActiveSecurityScanRunByTargetHash(ctx, stored.TargetKeyHash); activeErr == nil {
 			return acceptedResponse(active.ID, stored, true, false), nil
 		}
@@ -877,8 +882,10 @@ func sbomReferenceFromTarget(target *domain.SecurityTarget) (SecuritySBOMReferen
 
 func findingFromVulnerability(runID uuid.UUID, targetHash string, coordinate scanCoordinate, vuln securityadapter.Vulnerability) domain.SecurityOSVFinding {
 	key := strings.Join([]string{targetHash, coordinate.key, vuln.ID}, ":")
+	keyHash := domain.CanonicalTargetHash(key)
 	severity := normalizeSecuritySeverity(vuln.Severity)
-	return domain.SecurityOSVFinding{ID: uuid.New(), RunID: runID, TargetKeyHash: targetHash, FindingKey: key, FindingKeyHash: domain.CanonicalTargetHash(key), OSVID: vuln.ID, CVE: vuln.CVE, Summary: vuln.Summary, Details: vuln.Details, Severity: severity, Package: coordinate.pkg, Aliases: append([]string(nil), vuln.Aliases...), References: append([]string(nil), vuln.References...), WithdrawnAt: parseOptionalTime(vuln.Withdrawn), RawModified: vuln.Modified, Metadata: map[string]any{"coordinate_key": coordinate.key}}
+	id := uuid.NewSHA1(uuid.NameSpaceOID, []byte("bahia:security-finding:"+runID.String()+":"+keyHash))
+	return domain.SecurityOSVFinding{ID: id, RunID: runID, TargetKeyHash: targetHash, FindingKey: key, FindingKeyHash: keyHash, OSVID: vuln.ID, CVE: vuln.CVE, Summary: vuln.Summary, Details: vuln.Details, Severity: severity, Package: coordinate.pkg, Aliases: append([]string(nil), vuln.Aliases...), References: append([]string(nil), vuln.References...), WithdrawnAt: parseOptionalTime(vuln.Withdrawn), RawModified: vuln.Modified, Metadata: map[string]any{"coordinate_key": coordinate.key}}
 }
 
 func (s *SecurityScanner) publishCompletionObservables(ctx context.Context, run *domain.SecurityScanRun, target *domain.SecurityTarget, findings []domain.SecurityOSVFinding) error {

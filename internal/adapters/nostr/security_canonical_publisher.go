@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -117,7 +119,11 @@ func (p *SecurityCanonicalPublisher) PublishFindingDetail(ctx context.Context, f
 			return fmt.Errorf("publish finding detail part %d/%d: %w", i+1, len(chunks), err)
 		}
 	}
-	return nil
+	// Publish a base-coordinate manifest last. Readers use it to choose the
+	// current fixed part set and ignore stale extra parts from an older, larger
+	// detail. If a part publish fails, the previous manifest remains authoritative.
+	tags, content := SecurityFindingDetailManifestContent(finding.FindingKeyHash, finding.OSVID, len(chunks))
+	return p.publishConfidential(ctx, KindSecurityFindingDetailRecord, SecurityFindingDetailDTag(finding.FindingKeyHash), false, tags, content, "security_finding_detail.projection", &finding.ID)
 }
 
 func (p *SecurityCanonicalPublisher) publishConfidential(ctx context.Context, legacyKind int, dTag string, deleted bool, extraTags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
@@ -179,6 +185,19 @@ func SecurityFindingDetailContent(findingKeyHash, osvID, detail string, partInde
 	return tags, string(contentJSON)
 }
 
+// SecurityFindingDetailManifestContent describes the fixed part coordinates
+// that make up the current detail. The manifest is published only after every
+// part has been admitted, so a failed update leaves the previous complete set
+// readable instead of exposing a mixture of generations.
+func SecurityFindingDetailManifestContent(findingKeyHash, osvID string, totalParts int) (gonostr.Tags, string) {
+	tags := gonostr.Tags{{"finding_key_hash", findingKeyHash}, {"manifest", "true"}, {"total_parts", strconv.Itoa(totalParts)}}
+	if osvID != "" {
+		tags = append(tags, gonostr.Tag{"osv_id", osvID})
+	}
+	content, _ := json.Marshal(map[string]any{"finding_key_hash": findingKeyHash, "total_parts": totalParts})
+	return tags, string(content)
+}
+
 // chunkString splits s into chunks of at most maxLen bytes.
 func chunkString(s string, maxLen int) []string {
 	if len(s) <= maxLen {
@@ -189,6 +208,13 @@ func chunkString(s string, maxLen int) []string {
 		end := maxLen
 		if end > len(s) {
 			end = len(s)
+		}
+		for end > 0 && !utf8.ValidString(s[:end]) {
+			end--
+		}
+		if end == 0 {
+			_, size := utf8.DecodeRuneInString(s)
+			end = size
 		}
 		chunks = append(chunks, s[:end])
 		s = s[end:]
@@ -432,13 +458,28 @@ func (p *SecurityCanonicalPublisher) ListSecurityFindings(ctx context.Context) (
 		index, total int
 		text         string
 	}
+	type detailManifest struct {
+		text  string
+		total int
+	}
 	parts := map[string][]detailPart{}
+	manifests := map[string]detailManifest{}
+	deleted := map[string]bool{}
 	for _, record := range records {
 		tags := recordTags(record)
-		if tagValue(tags, "legacy_kind") != strconv.Itoa(KindSecurityFindingDetailRecord) || tagValue(tags, "deleted") == "true" {
+		if tagValue(tags, "legacy_kind") != strconv.Itoa(KindSecurityFindingDetailRecord) {
 			continue
 		}
 		d := tagValue(tags, "d")
+		baseHash := strings.TrimPrefix(d, "security:finding-detail:")
+		isBase := baseHash != d && !strings.Contains(baseHash, ":part:")
+		if isBase && tagValue(tags, "deleted") == "true" {
+			deleted[baseHash] = true
+			continue
+		}
+		if tagValue(tags, "deleted") == "true" {
+			continue
+		}
 		plaintext, err := p.encryptor.DecryptConfidential(ctx, record.Content, KindSecurityFindingDetailRecord, d, family.topic)
 		if err != nil {
 			return nil, err
@@ -455,15 +496,43 @@ func (p *SecurityCanonicalPublisher) ListSecurityFindings(ctx context.Context) (
 		if detail.TotalParts == 0 {
 			detail.TotalParts = 1
 		}
+		if isBase {
+			manifests[detail.FindingKeyHash] = detailManifest{text: detail.Details, total: detail.TotalParts}
+			continue
+		}
 		parts[detail.FindingKeyHash] = append(parts[detail.FindingKeyHash], detailPart{detail.PartIndex, detail.TotalParts, detail.Details})
 	}
 	for i := range out {
+		if deleted[out[i].FindingKeyHash] {
+			continue
+		}
+		manifest, hasManifest := manifests[out[i].FindingKeyHash]
+		if hasManifest && manifest.total <= 1 {
+			out[i].Details = manifest.text
+			continue
+		}
 		group := parts[out[i].FindingKeyHash]
 		if len(group) == 0 {
 			continue
 		}
+		if hasManifest {
+			filtered := group[:0]
+			for _, part := range group {
+				if part.total == manifest.total && part.index >= 0 && part.index < manifest.total {
+					filtered = append(filtered, part)
+				}
+			}
+			group = filtered
+		}
+		if len(group) == 0 {
+			return nil, fmt.Errorf("incomplete security finding detail %s", out[i].FindingKeyHash)
+		}
 		sort.Slice(group, func(i, j int) bool { return group[i].index < group[j].index })
-		if len(group) != group[0].total {
+		total := group[0].total
+		if hasManifest {
+			total = manifest.total
+		}
+		if len(group) != total {
 			return nil, fmt.Errorf("incomplete security finding detail %s", out[i].FindingKeyHash)
 		}
 		for partIndex, part := range group {
