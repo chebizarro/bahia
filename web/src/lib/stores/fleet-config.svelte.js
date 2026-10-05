@@ -104,7 +104,9 @@ export function createFleetConfigStore({
   auth = authState,
   loginFn = login,
   sign = signWithAuth,
-  now = () => Math.floor(Date.now() / 1000)
+  now = () => Math.floor(Date.now() / 1000),
+  eventStore = getEventStore,
+  registerRefresh = onStoreRefresh
 } = {}) {
   const state = $state({
     event: null,
@@ -140,41 +142,20 @@ export function createFleetConfigStore({
       state.document = null;
       state.publishResults = [];
     }
-    if (client === nostr) {
-      // The layout-owned SoulFactory reader covers kind 31953. Page consumers
-      // only project the verified local store and never open their own REQ.
-      const refresh = () => {
-        const cached = getEventStore()?.query({ kinds: [KINDS.SOUL_FLEET_CONFIG], authors: [author], '#d': [SOUL_FACTORY_FLEET_CONFIG_IDENTIFIER] }) || [];
-        for (const event of cached.sort((a, b) => a.created_at - b.created_at || b.id.localeCompare(a.id))) {
-          try { apply(event); } catch (error) { state.error = error?.message || 'Invalid cached fleet configuration'; }
-        }
-        state.loading = false;
-      };
-      refresh();
-      return onStoreRefresh(refresh);
-    }
-    state.loading = true;
-    state.error = '';
-    const unsubscribe = client.subscribe([{
-      kinds: [KINDS.SOUL_FLEET_CONFIG],
-      authors: [author],
-      '#d': [SOUL_FACTORY_FLEET_CONFIG_IDENTIFIER],
-      limit: 10
-    }], {
-      onEvent: (event) => {
-        try {
-          apply(event);
-        } catch (error) {
-          state.error = error?.message || 'Invalid fleet config event';
-        }
-      },
-      onEose: () => { state.loading = false; },
-      onClosed: (reason) => {
-        state.loading = false;
-        if (reason) state.error = `Fleet config subscription closed: ${reason}`;
+    // Kind 31953 is retained by the layout-owned SoulFactory reader under the
+    // signed-in operator's key. This only projects the verified local store:
+    // cached configuration renders at once and no REQ is opened here.
+    const refresh = () => {
+      const cached = eventStore()?.query({
+        kinds: [KINDS.SOUL_FLEET_CONFIG], authors: [author], '#d': [SOUL_FACTORY_FLEET_CONFIG_IDENTIFIER]
+      }) || [];
+      for (const event of [...cached].sort((a, b) => a.created_at - b.created_at || b.id.localeCompare(a.id))) {
+        try { apply(event); } catch (error) { state.error = error?.message || 'Invalid fleet config event'; }
       }
-    });
-    return typeof unsubscribe === 'function' ? unsubscribe : () => {};
+      state.loading = false;
+    };
+    refresh();
+    return registerRefresh(refresh);
   }
 
   async function publish(document) {

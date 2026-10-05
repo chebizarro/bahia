@@ -20,6 +20,7 @@ const nostrClientMockFactory = vi.hoisted(() => () => {
     SOUL_TEMPLATE: 31950,
     AGENT_SOUL: 31951,
     SOUL_DRAFT: 31952,
+    SOUL_FLEET_CONFIG: 31953,
     PROVISIONING_REQUEST: 5950,
     PROVISIONING_STATUS: 6950,
     PROVISIONING_RESULT: 7950,
@@ -153,6 +154,9 @@ describe('Souls Store', () => {
     queryOrPartial = nostrModule.queryOrPartial;
     parseTemplateEvent = nostrModule.parseTemplateEvent;
     authModule = await import('$lib/stores/auth.js');
+    // The mocked session is shared across module resets; start each test from the same operator.
+    authModule.authState.status = 'authenticated';
+    authModule.authState.pubkey = 'author-pubkey';
 
     // Set default mock implementations
     fetchSouls.mockResolvedValue([
@@ -208,7 +212,19 @@ describe('Souls Store', () => {
           event.tags?.some((tag) => tag[0] === key.slice(1) && values.includes(tag[1]))))),
       getCursor: vi.fn(() => null), setCursor: vi.fn()
     };
-    bootMock.pool = { subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })) };
+    // Records every REQ. Paged history is answered (empty page + EOSE) only
+    // while `reachable` is true; otherwise the relay stays silent.
+    bootMock.pool = {
+      reachable: false,
+      requests: [],
+      subscribe: vi.fn((options) => {
+        bootMock.pool.requests.push(options);
+        if (bootMock.pool.reachable && options.filters[0].limit !== undefined) {
+          queueMicrotask(() => options.onEose('wss://relay.example'));
+        }
+        return { unsubscribe: vi.fn() };
+      })
+    };
     // Dynamically import souls module
     soulsModule = await import('../../src/lib/stores/souls.js');
   });
@@ -238,37 +254,222 @@ describe('Souls Store', () => {
   describe('store-first soul read models', () => {
     const service = 'a'.repeat(64);
     const stranger = 'b'.repeat(64);
-    const soul = (id, pubkey = service) => ({
-      id, kind: KINDS.AGENT_SOUL, pubkey, created_at: 100,
-      tags: [['d', id], ['name', id], ['status', 'active']], content: '{}'
+    const operator = 'c'.repeat(64);
+    const runtimeKey = 'd'.repeat(64);
+    const controller = 'e'.repeat(64);
+    const soul = (id, overrides = {}) => ({
+      id: overrides.id || id, kind: KINDS.AGENT_SOUL, pubkey: service, created_at: 100,
+      tags: [['d', id], ['name', id], ['status', 'active']], content: '{}', ...overrides
     });
+    const event = (kind, id, pubkey, overrides = {}) => ({
+      id, kind, pubkey, created_at: 100, tags: [['d', id], ['name', id]], content: '{}', ...overrides
+    });
+    const policy = (content, pubkey = service) => ({
+      id: `policy-${pubkey.slice(0, 4)}`, kind: 30900, pubkey, created_at: 50,
+      tags: [['d', 'soul-factory:runtime-policy'], ['t', 'soul-factory-runtime-policy']], content: JSON.stringify(content)
+    });
+    const refresh = () => { for (const cb of [...bootMock.refreshCallbacks]) cb(); };
+    const signIn = (pubkey = operator) => { authModule.authState.status = 'authenticated'; authModule.authState.pubkey = pubkey; };
+    const requestedFilters = () => bootMock.pool.requests.flatMap((request) => request.filters);
+    const pageRequests = () => bootMock.pool.requests.filter((request) => request.filters[0].limit !== undefined);
 
-    it('renders cached souls without a loading gate or direct Nostr subscription', async () => {
+    it('renders cached souls at once with no loading gate, before any relay answers', async () => {
       bootMock.store.events.push(soul('cached'));
       await soulsModule.subscribeToSoulFactoryUpdates();
       expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['cached']);
-      expect(soulsModule.loading.souls).toBe(false);
+      expect(soulsModule.loading).toEqual({ souls: false, templates: false, drafts: false, capabilities: false });
+      // The relay never answered: catch-up is reported as metadata, not an error or a gate.
+      expect(soulsModule.readModelMeta.souls).toMatchObject({ complete: false, degraded: { incomplete: true, reason: 'catching-up' } });
+      expect(soulsModule.error.value).toBeNull();
       expect(mockNostr.subscribe).not.toHaveBeenCalled();
-      expect(bootMock.pool.subscribe).toHaveBeenCalled();
+      expect(bootMock.ensureRelayConnection).not.toHaveBeenCalled();
     });
 
-    it('drops untrusted cached and live soul authors', async () => {
-      bootMock.store.events.push(soul('trusted'), soul('forged', stranger));
+    it('never raises a loading flag when the cache is empty either', async () => {
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      expect(soulsModule.souls).toEqual([]);
+      expect(Object.values(soulsModule.loading)).toEqual([false, false, false, false]);
+    });
+
+    it('drops untrusted cached and live authors for every read model', async () => {
+      signIn();
+      bootMock.store.events.push(
+        soul('trusted'), soul('forged', { pubkey: stranger }),
+        event(KINDS.SOUL_TEMPLATE, 'tpl-forged', stranger),
+        event(KINDS.SOUL_DRAFT, 'draft-forged', stranger),
+        event(KINDS.RUNTIME_CAPABILITY, 'cap-forged', stranger)
+      );
       await soulsModule.subscribeToSoulFactoryUpdates();
       expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['trusted']);
-      bootMock.store.events.push(soul('forged-live', stranger));
-      for (const cb of bootMock.refreshCallbacks) cb();
+      bootMock.store.events.push(soul('forged-live', { pubkey: stranger }));
+      refresh();
       expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['trusted']);
+      expect(soulsModule.templates).toEqual([]);
+      expect(soulsModule.drafts).toEqual([]);
+      expect(soulsModule.runtimeCapabilities).toEqual([]);
     });
 
-    it('keeps app-level subscriptions across page consumer cleanup', async () => {
+    it('subscribes with trusted authors on every filter and never without an operator for operator kinds', async () => {
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      expect(requestedFilters().length).toBeGreaterThan(0);
+      expect(requestedFilters().every((filter) => Array.isArray(filter.authors) && filter.authors.length > 0)).toBe(true);
+      // The mocked session key is not a valid pubkey, so no operator-authored kind is requested.
+      const kinds = () => new Set(requestedFilters().flatMap((filter) => filter.kinds));
+      expect(kinds().has(KINDS.SOUL_DRAFT)).toBe(false);
+      expect(kinds().has(KINDS.SOUL_ACTION)).toBe(false);
+      expect(kinds().has(KINDS.RUNTIME_CAPABILITY)).toBe(false);
+
+      signIn();
+      soulsModule.initSoulFactoryStoreBinding();
+      const byKind = (kind) => requestedFilters().filter((filter) => filter.kinds.includes(kind)).map((filter) => filter.authors);
+      expect(byKind(KINDS.AGENT_SOUL).every((authors) => authors.join() === service)).toBe(true);
+      expect(byKind(KINDS.PROVISIONING_RESULT).every((authors) => authors.join() === service)).toBe(true);
+      expect(byKind(KINDS.SOUL_DRAFT).every((authors) => authors.join() === operator)).toBe(true);
+      expect(byKind(KINDS.SOUL_FLEET_CONFIG).every((authors) => authors.join() === operator)).toBe(true);
+      expect(byKind(KINDS.SOUL_ACTION).every((authors) => authors.join() === operator)).toBe(true);
+      // Templates are operator input the controller may also publish.
+      expect(byKind(KINDS.SOUL_TEMPLATE).at(-1)).toEqual([service, operator]);
+    });
+
+    it('trusts a controller and pinned runtime keys only when a seeded service key attests them', async () => {
+      bootMock.store.events.push(
+        policy({ agent_runtimes: ['openclaw'], controller_pubkeys: [controller], runtime_pubkeys: { openclaw: [runtimeKey] } }),
+        soul('by-controller', { pubkey: controller }),
+        event(KINDS.RUNTIME_CAPABILITY, 'cap-pinned', runtimeKey, { tags: [['runtime', 'openclaw']] })
+      );
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      expect(soulsModule.trustedSoulAuthors()).toMatchObject({ factory: [service, controller], runtime: [runtimeKey] });
+      expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['by-controller']);
+      // A pinned runtime is usable before any Soul exists (first provisioning).
+      expect(soulsModule.runtimeCapabilities.map((cap) => cap.id)).toEqual(['cap-pinned']);
+    });
+
+    it('ignores a runtime policy record that a seeded service key did not sign', async () => {
+      bootMock.store.events.push(
+        policy({ controller_pubkeys: [stranger], runtime_pubkeys: { openclaw: [stranger] } }, stranger),
+        soul('self-appointed', { pubkey: stranger }),
+        event(KINDS.RUNTIME_CAPABILITY, 'cap-self-appointed', stranger)
+      );
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      expect(soulsModule.attestedSoulFactoryKeys()).toEqual({ controllers: [], runtimes: [] });
+      expect(soulsModule.souls).toEqual([]);
+      expect(soulsModule.runtimeCapabilities).toEqual([]);
+    });
+
+    it('widens the runtime subscription when a trusted Soul names a new runtime key', async () => {
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      expect(requestedFilters().some((filter) => filter.kinds.includes(KINDS.RUNTIME_CAPABILITY))).toBe(false);
+      bootMock.store.events.push(
+        soul('scout', { tags: [['d', 'scout'], ['runtime-pubkey', runtimeKey]] }),
+        soul('forged', { pubkey: stranger, tags: [['d', 'forged'], ['runtime-pubkey', stranger]] })
+      );
+      refresh();
+      const runtimeFilters = requestedFilters().filter((filter) => filter.kinds.includes(KINDS.RUNTIME_CAPABILITY));
+      expect(runtimeFilters.length).toBeGreaterThan(0);
+      expect(runtimeFilters.every((filter) => filter.authors.join() === runtimeKey)).toBe(true);
+    });
+
+    it('projects the newest replaceable record per coordinate, drops tombstones, and sorts each model', async () => {
+      signIn();
+      bootMock.store.events.push(
+        soul('scout', { id: 'scout-old', created_at: 100, tags: [['d', 'scout'], ['name', 'Old']] }),
+        soul('scout', { id: 'scout-new', created_at: 200, tags: [['d', 'scout'], ['name', 'New']] }),
+        soul('builder', { id: 'builder', created_at: 300 }),
+        soul('retired', { id: 'retired', created_at: 400, content: JSON.stringify({ deleted: true }) }),
+        event(KINDS.SOUL_TEMPLATE, 'tpl-z', service, { tags: [['d', 'tpl-z'], ['name', 'Zulu']] }),
+        event(KINDS.SOUL_TEMPLATE, 'tpl-a', operator, { tags: [['d', 'tpl-a'], ['name', 'Alpha']] }),
+        event(KINDS.SOUL_DRAFT, 'draft-1', operator, { created_at: 10 }),
+        event(KINDS.SOUL_DRAFT, 'draft-2', operator, { created_at: 20 })
+      );
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      expect(soulsModule.souls.map((row) => `${row.agentId}:${row.name}`)).toEqual(['builder:builder', 'scout:New']);
+      expect(soulsModule.templates.map((row) => row.name)).toEqual(['Alpha', 'Zulu']);
+      expect(soulsModule.drafts.map((row) => row.id)).toEqual(['draft-2', 'draft-1']);
+    });
+
+    it('applies live store events after catch-up and leaves unrelated refreshes alone', async () => {
+      bootMock.pool.reachable = true;
+      bootMock.store.events.push(soul('cached'));
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      await vi.waitFor(() => expect(soulsModule.readModelMeta.souls.complete).toBe(true));
+      expect(soulsModule.readModelMeta.souls.degraded).toBeNull();
+      expect(soulsModule.readModelMeta.souls.relaySummary).toEqual(
+        expect.arrayContaining([expect.objectContaining({ relay: 'wss://relay.example', status: 'eose' })]));
+
+      const before = soulsModule.souls[0];
+      refresh(); // another domain's event: nothing about souls changed
+      expect(soulsModule.souls[0]).toBe(before);
+
+      bootMock.store.events.push(soul('live', { created_at: 500 }));
+      refresh();
+      expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['live', 'cached']);
+      // The retained live REQs stay open after catch-up.
+      const live = bootMock.pool.subscribe.mock.results.filter((_, index) => bootMock.pool.requests[index].filters[0].limit === undefined);
+      expect(live.length).toBeGreaterThan(0);
+      expect(live.every((result) => result.value.unsubscribe.mock.calls.length === 0)).toBe(true);
+    });
+
+    it('keeps cached rows and records degraded metadata when a relay closes history for good', async () => {
+      bootMock.store.events.push(soul('cached'));
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      pageRequests()[0].onClosed('restricted: members only', 'wss://relay.example', { terminal: true });
+      expect(soulsModule.souls.map((row) => row.agentId)).toEqual(['cached']);
+      expect(soulsModule.loading.souls).toBe(false);
+      expect(soulsModule.readModelMeta.souls).toMatchObject({ complete: false, degraded: { incomplete: true } });
+      expect(soulsModule.readModelMeta.souls.degraded.reason).toContain('restricted');
+      expect(soulsModule.readModelMeta.souls.relaySummary).toEqual(expect.arrayContaining(
+        [expect.objectContaining({ unit: 'factory', relay: 'wss://relay.example', status: 'closed' })]));
+      expect(soulsModule.error.value).toContain('restricted');
+    });
+
+    it('clears a previous relay error once catch-up completes', async () => {
+      bootMock.pool.reachable = true;
+      soulsModule.error.value = 'History incomplete at wss://relay.example';
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      await vi.waitFor(() => expect(soulsModule.readModelMeta.souls.complete).toBe(true));
+      expect(soulsModule.error.value).toBeNull();
+    });
+
+    it('keeps the app-level REQs across page visits and closes them only on app teardown', async () => {
       await soulsModule.subscribeToSoulFactoryUpdates();
       const count = bootMock.pool.subscribe.mock.calls.length;
+      expect(count).toBeGreaterThan(0);
       soulsModule.unsubscribeFromSoulUpdates();
       await soulsModule.subscribeToSoulFactoryUpdates();
+      await soulsModule.subscribeToSoulFactoryUpdates();
       expect(bootMock.pool.subscribe).toHaveBeenCalledTimes(count);
+      const closed = () => bootMock.pool.subscribe.mock.results.filter((result) => result.value.unsubscribe.mock.calls.length > 0).length;
+      expect(closed()).toBe(0);
       soulsModule.teardownSoulFactoryStoreBinding();
+      expect(closed()).toBe(count);
       expect(bootMock.refreshCallbacks.size).toBe(0);
+    });
+
+    it('page-level unsubscribe is safe when nothing is subscribed', () => {
+      expect(() => soulsModule.unsubscribeFromSoulUpdates()).not.toThrow();
+    });
+
+    it('waitForSoul resolves a cached Soul at once and a missing one only after relay catch-up', async () => {
+      bootMock.store.events.push(soul('cached'));
+      await expect(soulsModule.waitForSoul('cached')).resolves.toMatchObject({ agentId: 'cached' });
+
+      let settled = false;
+      const pending = soulsModule.waitForSoul('late').then((value) => { settled = true; return value; });
+      await Promise.resolve();
+      expect(settled).toBe(false); // the relay has not finished: not "not found" yet
+      bootMock.store.events.push(soul('late'));
+      refresh();
+      await expect(pending).resolves.toMatchObject({ agentId: 'late' });
+
+      const missing = soulsModule.waitForSoul('missing');
+      for (const request of pageRequests()) request.onClosed('blocked: no', 'wss://relay.example', { terminal: true });
+      await expect(missing).resolves.toBeNull();
+
+      const aborted = new AbortController();
+      soulsModule.teardownSoulFactoryStoreBinding();
+      const abandoned = soulsModule.waitForSoul('never', { signal: aborted.signal });
+      aborted.abort();
+      await expect(abandoned).resolves.toBeNull();
     });
   });
 
@@ -637,6 +838,23 @@ describe('Souls Store', () => {
       expect(result.publishResults[0].accepted).toBe(true);
     });
 
+    it('keeps a published draft through later store projections by ingesting it into the shared store', async () => {
+      const operator = 'c'.repeat(64);
+      authModule.authState.pubkey = operator;
+      bootMock.store.ingest = vi.fn((event) => { bootMock.store.events.push(event); return true; });
+      mockNostr.publish.mockResolvedValue([{ relay: 'wss://relay.example', accepted: true, message: '' }]);
+      await soulsModule.subscribeToSoulFactoryUpdates();
+
+      const { event } = await soulsModule.publishSoulDraft({
+        agentId: 'scout', content: { identity: { name: 'Scout', tier: 'standard' } }
+      });
+      expect(bootMock.store.ingest).toHaveBeenCalledWith(event);
+      expect(soulsModule.drafts.map((draft) => draft.agentId)).toEqual(['scout']);
+      // A later store batch re-projects from the store; the draft must not vanish.
+      for (const cb of [...bootMock.refreshCallbacks]) cb();
+      expect(soulsModule.drafts.map((draft) => draft.agentId)).toEqual(['scout']);
+    });
+
     it('publishProvisioningRequest signs 5950 with exact draft and capability refs', async () => {
       mockNostr.publish.mockResolvedValue([{ relay: 'wss://relay', accepted: true, message: '' }]);
       const beforePublish = vi.fn();
@@ -740,19 +958,80 @@ describe('Souls Store', () => {
       });
     });
 
-    it('reads soul history from the local store without opening a REQ', async () => {
+    it('fetchSoulHistory reads the local store: this Soul only, trusted signers only, newest first', async () => {
       const service = 'a'.repeat(64);
-      authModule.authState.pubkey = 'c'.repeat(64);
-      bootMock.store.events.push({ id: 'evt-soul', kind: KINDS.AGENT_SOUL, pubkey: service,
-        created_at: 100, tags: [['d', 'scout'], ['status', 'active']], content: '{}' });
-      bootMock.store.events.push({ id: 'evt-action', kind: KINDS.SOUL_ACTION, pubkey: authModule.authState.pubkey,
-        created_at: 200, tags: [['soul', `31951:${service}:scout`], ['action', 'suspend'], ['reason', 'maintenance']], content: '' });
+      const operator = 'c'.repeat(64);
+      const stranger = 'b'.repeat(64);
+      const soulRef = `31951:${service}:scout`;
+      authModule.authState.pubkey = operator;
+      bootMock.store.events.push(
+        { id: 'evt-soul', kind: KINDS.AGENT_SOUL, pubkey: service, created_at: 100, tags: [['d', 'scout'], ['status', 'active']], content: '{}' },
+        { id: 'evt-action', kind: KINDS.SOUL_ACTION, pubkey: operator, created_at: 200, tags: [['soul', soulRef], ['action', 'suspend'], ['reason', 'maintenance']], content: '' },
+        { id: 'evt-result', kind: KINDS.PROVISIONING_RESULT, pubkey: service, created_at: 300, tags: [['soul', soulRef], ['status', 'success']], content: '{}' },
+        { id: 'evt-other-soul', kind: KINDS.SOUL_ACTION, pubkey: operator, created_at: 400, tags: [['soul', `31951:${service}:other`], ['action', 'suspend']], content: '' },
+        { id: 'evt-forged-action', kind: KINDS.SOUL_ACTION, pubkey: stranger, created_at: 500, tags: [['soul', soulRef], ['action', 'revoke']], content: '' },
+        { id: 'evt-forged-result', kind: KINDS.PROVISIONING_RESULT, pubkey: stranger, created_at: 600, tags: [['soul', soulRef], ['status', 'failed']], content: '{}' }
+      );
       const history = await soulsModule.fetchSoulHistory({ agentId: 'scout', pubkey: service }, { limit: 10 });
-      expect(history.map((item) => item.id)).toEqual(['evt-action', 'evt-soul']);
+      expect(history.map((item) => item.id)).toEqual(['evt-result', 'evt-action', 'evt-soul']);
+      expect(history[1].summary).toBe('suspend: maintenance');
       expect(mockNostr.subscribe).not.toHaveBeenCalled();
-      expect(bootMock.pool.subscribe).not.toHaveBeenCalled();
-      expect(history.complete).toBe(false);
-      expect(history.degraded).toMatchObject({ incomplete: true, reason: 'catching-up' });
+      // No history-specific REQ: the only relay traffic is the app-lifetime reader.
+      expect(bootMock.pool.requests.every((request) => request.filters.every((filter) => filter['#d'] === undefined))).toBe(true);
+
+      const limited = await soulsModule.fetchSoulHistory({ agentId: 'scout', pubkey: service }, { limit: 2 });
+      expect(limited.map((item) => item.id)).toEqual(['evt-result', 'evt-action']);
+      // A Soul signed by an untrusted key has no history to show.
+      expect(await soulsModule.fetchSoulHistory({ agentId: 'scout', pubkey: stranger })).toEqual([]);
+    });
+
+    it('soul history carries relay catch-up state: catching up, degraded, then complete', async () => {
+      const service = 'a'.repeat(64);
+      const target = { agentId: 'scout', pubkey: service };
+      bootMock.store.events.push({ id: 'evt-soul', kind: KINDS.AGENT_SOUL, pubkey: service, created_at: 100, tags: [['d', 'scout']], content: '{}' });
+
+      const cached = await soulsModule.fetchSoulHistory(target);
+      expect(cached.map((item) => item.id)).toEqual(['evt-soul']); // cached activity is returned before any relay answers
+      expect(cached.complete).toBe(false);
+      expect(cached.degraded).toMatchObject({ incomplete: true, reason: 'catching-up' });
+
+      bootMock.pool.requests.find((request) => request.filters[0].limit !== undefined)
+        .onClosed('restricted: members only', 'wss://relay.example', { terminal: true });
+      const degraded = await soulsModule.fetchSoulHistory(target);
+      expect(degraded.map((item) => item.id)).toEqual(['evt-soul']);
+      expect(degraded.complete).toBe(false);
+      expect(degraded.degraded.reason).toContain('restricted');
+      expect(soulsModule.readModelMeta.history).toMatchObject({
+        complete: false,
+        relaySummary: expect.arrayContaining([expect.objectContaining({ relay: 'wss://relay.example', status: 'closed' })])
+      });
+    });
+
+    it('subscribeToSoulHistory delivers cached history at once and follows later events and catch-up', async () => {
+      const service = 'a'.repeat(64);
+      const soulRef = `31951:${service}:scout`;
+      bootMock.pool.reachable = true;
+      bootMock.store.events.push({ id: 'evt-soul', kind: KINDS.AGENT_SOUL, pubkey: service, created_at: 100, tags: [['d', 'scout']], content: '{}' });
+      await soulsModule.subscribeToSoulFactoryUpdates();
+      const updates = [];
+      const stop = soulsModule.subscribeToSoulHistory({ agentId: 'scout', pubkey: service }, { onUpdate: (history) => updates.push(history) });
+      expect(updates).toHaveLength(1);
+      expect(updates[0].map((item) => item.id)).toEqual(['evt-soul']);
+
+      await vi.waitFor(() => expect(updates.at(-1).complete).toBe(true));
+      expect(updates.at(-1).degraded).toBeNull();
+
+      bootMock.store.events.push({ id: 'evt-status', kind: KINDS.PROVISIONING_STATUS, pubkey: service, created_at: 200, tags: [['soul', soulRef], ['status', 'running']], content: '{}' });
+      for (const cb of [...bootMock.refreshCallbacks]) cb();
+      expect(updates.at(-1).map((item) => item.id)).toEqual(['evt-status', 'evt-soul']);
+
+      const delivered = updates.length;
+      for (const cb of [...bootMock.refreshCallbacks]) cb(); // nothing changed
+      expect(updates).toHaveLength(delivered);
+      stop();
+      bootMock.store.events.push({ id: 'evt-after-stop', kind: KINDS.PROVISIONING_STATUS, pubkey: service, created_at: 300, tags: [['soul', soulRef]], content: '{}' });
+      for (const cb of [...bootMock.refreshCallbacks]) cb();
+      expect(updates).toHaveLength(delivered);
     });
 
   });
