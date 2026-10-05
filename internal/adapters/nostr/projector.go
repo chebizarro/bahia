@@ -509,6 +509,8 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindSecurityFindingDetailRecord: {"security", "finding-detail", kinds.CPStateTopicSecurityFindingDetail},
 	KindSecurityTargetRecord:        {"security", "target", kinds.CPStateTopicSecurityTarget},
 	KindSecurityRunRecord:           {"security", "run", kinds.CPStateTopicSecurityRun},
+	// Adoption binding family (audit B-35).
+	KindAdoptionBindingRecord: {"adoption", "binding", kinds.CPStateTopicAdoptionBinding},
 	// F74a: independent coordinates for release, signature, SBOM and runtime state.
 	KindLLMReleaseRegistry:            {"llm", "release", kinds.CPStateTopicLLMRelease},
 	KindArtifactSignatureRegistry:     {"artifact", "signature", kinds.CPStateTopicArtifactSignature},
@@ -1135,7 +1137,7 @@ func uuidStringPtr(id *uuid.UUID) string {
 // serviceStateDTag is the one coordinate builder for service state: the live
 // record and its tombstone both use it, so they share one relay coordinate.
 func serviceStateDTag(serviceID, environmentID uuid.UUID) string {
-	return fmt.Sprintf("service:%s:environment:%s", serviceID, environmentID)
+	return kinds.ServiceStateDTag(serviceID.String(), environmentID.String())
 }
 
 func auditDomainForEvent(t events.EventType) string {

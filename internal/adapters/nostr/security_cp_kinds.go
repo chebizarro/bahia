@@ -11,3 +11,7 @@ const (
 	KindSecurityTargetRecord = int(kinds.CPStateFamilySecurityTarget)
 	KindSecurityRunRecord    = int(kinds.CPStateFamilySecurityRun)
 )
+
+// KindAdoptionBindingRecord is the adoption binding family: a 30900-only
+// family with no catalog kind (audit B-35).
+const KindAdoptionBindingRecord = int(kinds.CPStateFamilyAdoptionBinding)

@@ -107,6 +107,35 @@ const (
 	CPStateFamilySecurityRun    CPStateFamily = 32021
 )
 
+// Adoption binding family (audit B-35). One record per adopted workload binds
+// its runtime fingerprints to the service, environment, deployment unit, build
+// and artifact the adoption published for it, and carries the adoption's
+// durable progress. The daemon resolves an adopted workload's identity and
+// resumes an interrupted adoption from these records in its local event store
+// instead of the SQL adopted_runtime_identity table. Like the security scan
+// families, it never had a wire kind and exists only as a 30900 discriminator.
+const CPStateFamilyAdoptionBinding CPStateFamily = 32022
+
+// AdoptionBindingDTag is the d of the adoption binding of a service in an
+// environment: "adoption:binding:<service-id>:<environment-id>".
+func AdoptionBindingDTag(serviceID, environmentID string) string {
+	return "adoption:binding:" + serviceID + ":" + environmentID
+}
+
+// ServiceStateDTag is the d of a service's state in an environment:
+// "service:<service-id>:environment:<environment-id>". The publishers of the
+// family and the readers that look a state up in the local event store both
+// build the coordinate here.
+func ServiceStateDTag(serviceID, environmentID string) string {
+	return "service:" + serviceID + ":environment:" + environmentID
+}
+
+// RuntimeObservationDTag is the d of the runtime observation of a service in
+// an environment: "runtime:observation:<service-id>:<environment-id>".
+func RuntimeObservationDTag(serviceID, environmentID string) string {
+	return "runtime:observation:" + serviceID + ":" + environmentID
+}
+
 // FleetOCKScope is the well-known orgID value used for fleet-wide
 // confidential cp-state (payments, security findings/schedules). The OCK
 // for this scope is wrapped to all fleet operators (config authorized_pubkeys

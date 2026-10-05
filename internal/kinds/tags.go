@@ -179,6 +179,8 @@ const (
 	CPStateTopicSecurityFindingDetail = "security-finding-detail"
 	CPStateTopicSecurityTarget        = "security-target"
 	CPStateTopicSecurityRun           = "security-run"
+	// CPStateTopicAdoptionBinding is the adoption binding family (audit B-35).
+	CPStateTopicAdoptionBinding = "adoption-binding"
 
 	CPStateTopicLLMRelease         = "llm-release"
 	CPStateTopicArtifactSignature  = "artifact-signature"

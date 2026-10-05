@@ -152,8 +152,17 @@ func (p *F74aCanonicalPublisher) PublishRuntimeObservationState(ctx context.Cont
 	if obs == nil || obs.ServiceID == uuid.Nil || obs.EnvironmentID == uuid.Nil {
 		return fmt.Errorf("runtime observation service and environment IDs are required")
 	}
+	d, tags, record := runtimeObservationRecord(obs, deleted)
+	return p.publish(ctx, KindRuntimeObservationState, d, deleted, false, tags, record, "runtime_observation.projection", &obs.ID)
+}
+
+// runtimeObservationRecord is the one builder of a runtime observation's
+// cp-state record: its coordinate (one per service and environment), family
+// tags and content. Every publisher of the family builds the record here, so
+// they all replace the same coordinate with the same shape.
+func runtimeObservationRecord(obs *domain.RuntimeObservation, deleted bool) (d string, tags gonostr.Tags, record map[string]any) {
 	// Arbitrary metadata can contain secrets and is not projected.
-	record := map[string]any{
+	record = map[string]any{
 		"id": obs.ID.String(), "service_id": obs.ServiceID.String(), "environment_id": obs.EnvironmentID.String(),
 		"observed_image_digest": obs.ObservedImageDigest, "observed_container_id": obs.ObservedContainerID,
 		"health_status": obs.HealthStatus, "observed_at": obs.ObservedAt.UTC().Format(time.RFC3339Nano),
@@ -161,8 +170,13 @@ func (p *F74aCanonicalPublisher) PublishRuntimeObservationState(ctx context.Cont
 	if deleted {
 		record = map[string]any{"service_id": obs.ServiceID.String(), "environment_id": obs.EnvironmentID.String(), "deleted": true}
 	}
-	d := "runtime:observation:" + obs.ServiceID.String() + ":" + obs.EnvironmentID.String()
-	return p.publish(ctx, KindRuntimeObservationState, d, deleted, false,
-		gonostr.Tags{{"service_id", obs.ServiceID.String()}, {"environment_id", obs.EnvironmentID.String()}},
-		record, "runtime_observation.projection", &obs.ID)
+	d = RuntimeObservationDTag(obs.ServiceID, obs.EnvironmentID)
+	tags = gonostr.Tags{{"service_id", obs.ServiceID.String()}, {"environment_id", obs.EnvironmentID.String()}}
+	return d, tags, record
+}
+
+// RuntimeObservationDTag returns the cp-state d-tag of the runtime observation
+// of a service in an environment.
+func RuntimeObservationDTag(serviceID, environmentID uuid.UUID) string {
+	return kinds.RuntimeObservationDTag(serviceID.String(), environmentID.String())
 }
