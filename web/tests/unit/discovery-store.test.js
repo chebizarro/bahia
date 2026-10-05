@@ -25,7 +25,7 @@ function relaySet(d, relays, overrides = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  window.__BAHIA_BOOTSTRAP__ = { relay_urls: ['https://relay.example'], service_pubkeys: [trustedPubkey] };
+  window.__BAHIA_BOOTSTRAP__ = { schema: 'bahia.bootstrap.v1', relay_urls: ['wss://relay.example'], service_pubkeys: [trustedPubkey] };
   bridge.events = [system(), relaySet('bahia-browser-v1', ['https://relay.example']), relaySet('bahia-contextvm-v1', ['wss://contextvm.example'])];
   bridge.handlers = null;
   bridge.pool.subscribe.mockImplementation(({ onEvent, onEose, onClosed, ...request }) => {
@@ -36,6 +36,39 @@ beforeEach(() => {
 });
 
 describe('Nostr system discovery store', () => {
+  it('uses injected roots instead of merging baked roots', () => {
+    vi.stubEnv('PUBLIC_BAHIA_BOOTSTRAP_RELAYS', 'wss://baked.example');
+    vi.stubEnv('PUBLIC_BAHIA_SERVICE_PUBKEYS', otherPubkey);
+    expect(discovery.getBootstrapSeed()).toEqual({
+      schema: 'bahia.bootstrap.v1', relay_urls: ['wss://relay.example'], service_pubkeys: [trustedPubkey]
+    });
+    vi.unstubAllEnvs();
+  });
+
+  it('uses baked values only when no seed was injected', () => {
+    delete window.__BAHIA_BOOTSTRAP__;
+    vi.stubEnv('PUBLIC_BAHIA_BOOTSTRAP_RELAYS', 'wss://baked.example');
+    vi.stubEnv('PUBLIC_BAHIA_SERVICE_PUBKEYS', otherPubkey);
+    expect(discovery.getBootstrapSeed()).toEqual({
+      schema: 'bahia.bootstrap.v1', relay_urls: ['wss://baked.example'], service_pubkeys: [otherPubkey]
+    });
+    vi.unstubAllEnvs();
+  });
+
+  it('rejects invalid injected roots without falling back to baked values', () => {
+    vi.stubEnv('PUBLIC_BAHIA_BOOTSTRAP_RELAYS', 'wss://baked.example');
+    vi.stubEnv('PUBLIC_BAHIA_SERVICE_PUBKEYS', otherPubkey);
+    for (const invalid of [
+      { schema: 'bahia.bootstrap.v1', relay_urls: ['https://wrong.example'], service_pubkeys: [trustedPubkey] },
+      { schema: 'bahia.bootstrap.v1', relay_urls: ['wss://relay.example'], service_pubkeys: ['not-a-pubkey'] },
+      { schema: 'bahia.bootstrap.v1', relay_urls: [], service_pubkeys: [trustedPubkey] }
+    ]) {
+      window.__BAHIA_BOOTSTRAP__ = invalid;
+      expect(discovery.getBootstrapSeed()).toBeNull();
+    }
+    vi.unstubAllEnvs();
+  });
+
   it('renders persisted signed discovery without waiting for network and keeps one REQ', async () => {
     const info = await discovery.discoverSystemInfo();
     expect(bridge.boot).toHaveBeenCalledOnce();

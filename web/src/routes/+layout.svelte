@@ -22,6 +22,7 @@
   import { initSBOMStoreBinding, teardownSBOMStoreBinding } from '$lib/stores/collections/sbom.svelte.js';
   import { initContinuityStoreBinding, teardownContinuityStoreBinding } from '$lib/nostr/continuity';
   import { initSoulFactoryStoreBinding, teardownSoulFactoryStoreBinding } from '$lib/stores/souls.svelte.js';
+  import { initOpsWidgetWallBinding, teardownOpsWidgetWallBinding } from '$lib/widgets/ops-widget-wall.js';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
   import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
   import { theme } from '$lib/stores/theme.js';
@@ -79,6 +80,7 @@
         initSBOMStoreBinding();
         initContinuityStoreBinding();
         initSoulFactoryStoreBinding();
+        initOpsWidgetWallBinding();
       } catch (err) {
         console.warn('[layout] boot() failed:', err);
       }
@@ -110,6 +112,7 @@
       teardownSBOMStoreBinding();
       teardownContinuityStoreBinding();
       teardownSoulFactoryStoreBinding();
+      teardownOpsWidgetWallBinding();
       stopRoleDerivation();
       disconnectControlplane();
       disconnectAssistant();

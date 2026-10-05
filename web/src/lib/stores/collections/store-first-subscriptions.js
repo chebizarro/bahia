@@ -1,5 +1,6 @@
 import { getPool, getRelayUrls, getServicePubkey } from '../../nostr/boot.js';
 import { toWebSocketUrl } from '../../nostr/pool-utils.js';
+import { getOpsWidgetAllowedPubkeys } from '../../widgets/ops-widget-config.js';
 import { ORG_TOPIC, ORG_MEMBER_TOPIC, ORG_INVITE_TOPIC, NOTIFICATION_CHANNEL_TOPIC, KEY_ENVELOPE_TOPIC } from '../../nostr/confidential.js';
 import {
   BAHIA_AUDIT_KINDS,
@@ -10,6 +11,7 @@ import {
   CONFIG_ACL_LIST,
   CONFIG_POLICY,
   CP_AUDIT_TOPIC,
+  DASHBOARD_WIDGET,
   CP_STATE_TOPICS,
   SBOM_AVAILABILITY_LIST,
   SBOM_AVAILABILITY_TOPIC,
@@ -67,6 +69,7 @@ export function initStoreFirstSubscriptions(handlers = {}) {
   const relays = [...new Set(getRelayUrls().map(toWebSocketUrl).filter(Boolean))];
   if (!pool || !servicePubkey || relays.length === 0) return null;
   const recent = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
+  const widgetAuthors = getOpsWidgetAllowedPubkeys();
   handle = pool.subscribe({
     relays,
     filters: [
@@ -82,6 +85,7 @@ export function initStoreFirstSubscriptions(handlers = {}) {
       { kinds: [SBOM_REFERENCE], authors: [servicePubkey], '#t': [SBOM_REFERENCE_TOPIC], limit: 200 },
       { kinds: [SBOM_AVAILABILITY_LIST], authors: [servicePubkey], '#t': [SBOM_AVAILABILITY_TOPIC], limit: 200 },
       { kinds: [BACKUP_RUN_ATTESTATION, BACKUP_VERIFICATION_ATTESTATION], authors: [servicePubkey], since: recent, limit: 1000 },
+      ...(widgetAuthors.length ? [{ kinds: [DASHBOARD_WIDGET], authors: widgetAuthors }] : []),
       { kinds: [5], authors: [servicePubkey], limit: 1000 }
     ],
     ...handlers

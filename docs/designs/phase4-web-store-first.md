@@ -109,7 +109,7 @@ One IndexedDB database per deployment, namespaced by the service pubkey from the
 Database name: bahia-events-<service_pubkey_prefix_8>
 ```
 
-The 8-character hex prefix is sufficient to avoid collisions between deployments while keeping the name human-readable. The service pubkey comes from `app.html`'s `__PUBLIC_BAHIA_SERVICE_PUBKEYS__[0]`.
+The 8-character hex prefix is sufficient to avoid collisions between deployments while keeping the name human-readable. The service pubkey comes from the validated runtime `/bahia-bootstrap.js` seed's `service_pubkeys[0]`.
 
 On first authenticated boot, the store calls `navigator.storage.persist()` to request durable storage. This is a best-effort API — if the browser denies it (e.g. mobile Safari under storage pressure), the store operates normally but may be evicted by the browser. The store logs whether persistence was granted.
 
@@ -485,8 +485,8 @@ No spinner. No redirect. Unauthenticated users see relay-public data. Authentica
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ 1. Read deploy seed from app.html                   │
-│    → service_pubkeys, relay_urls                    │
+│ 1. Read validated runtime deploy seed              │
+│    → /bahia-bootstrap.js: service_pubkeys, relays   │
 ├─────────────────────────────────────────────────────┤
 │ 2. Open IndexedDB event store                       │
 │    → Namespace: bahia-events-<service_pubkey[:8]>   │

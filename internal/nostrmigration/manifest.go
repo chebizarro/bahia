@@ -300,6 +300,7 @@ var constantJustifications = map[string]KindJustification{
 	"LongFormDraft":                  omitted("LongFormDraft", kinds.LongFormDraft, "standard", "standard NIP-23 long-form draft event consumed directly; not a Bahia legacy control-plane/read-model kind to rewrite"),
 	"NostrSignature":                 omitted("NostrSignature", kinds.NostrSignature, "custom-support", "signature support event is not part of the legacy control-plane/read-model migration inventory"),
 	"FIPSOverlayAdvert":              omitted("FIPSOverlayAdvert", kinds.FIPSOverlayAdvert, "custom-interop", "FIPS overlay advertisement is handled by the FIPS overlay path, not the Bahia legacy migration"),
+	"DashboardWidget":                omitted("DashboardWidget", kinds.DashboardWidget, "interop", "NIP-CAS-0009 agent-published dashboard widget consumed read-only by the web widgets wall; never a Bahia legacy control-plane/read-model kind to rewrite"),
 	"HTTPAuth":                       omitted("HTTPAuth", kinds.HTTPAuth, "standard", "standard NIP-98 HTTP auth event; never a Bahia legacy migration input"),
 	"LegacyWorkerState":              omitted("LegacyWorkerState", kinds.LegacyWorkerState, "conflicting-alias", "shares 31974 with SystemDiscovery; ResolveDisposition maps worker-tagged/worker-shaped events to worker state"),
 	"LegacyWorkerAssignmentState":    omitted("LegacyWorkerAssignmentState", kinds.LegacyWorkerAssignmentState, "conflicting-alias", "shares 31991 with BackupDefinitionRegistry; ResolveDisposition maps worker assignment events to worker state"),
