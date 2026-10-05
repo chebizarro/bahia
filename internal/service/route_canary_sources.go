@@ -21,6 +21,9 @@ func (s LocalRoutePlanSource) ListManagedRoutePlans(context.Context) ([]*domain.
 	}
 	var plans []*domain.DesiredPublicRoutePlan
 	for _, event := range records {
+		if localTag(event, "schema") != kinds.CASControlStateSchema {
+			continue
+		}
 		var state domain.EnvironmentServiceState
 		if !localStateContent(event, &state) || state.DesiredRuntimeState == nil || state.DesiredRuntimeState.PublicRoute == nil {
 			continue

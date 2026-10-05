@@ -69,7 +69,7 @@ func TestLocalRouteCanarySweepFollowsRelayDesiredStateAndSQLFailure(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	bus := &routeCanaryPublisher{}
+	bus := &eventBusFake{}
 	repo := NewLocalRouteCanaryRepository(state, failingRouteIndex{newMemoryRouteCanaryRepo()}, nil)
 	supervisor, err := NewRouteCanarySupervisor(LocalRoutePlanSource{State: state}, repo, evaluator, nil, bus, time.Minute, nil)
 	if err != nil {
@@ -85,6 +85,9 @@ func TestLocalRouteCanarySweepFollowsRelayDesiredStateAndSQLFailure(t *testing.T
 	if prober.calls == 0 || len(bus.published) == 0 || canonical.count == 0 {
 		t.Fatalf("DB-less sweep lost probe/observable: probes=%d events=%d", prober.calls, len(bus.published))
 	}
+	beforeRetry := canonical.count
+	bus.Publish(context.Background(), bus.published[0])
+	require.Equal(t, beforeRetry, canonical.count, "bus retry must not duplicate canonical route records")
 	previous := prober.calls
 	serviceState.DesiredRuntimeState = nil
 	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", serviceState, 101)
@@ -120,6 +123,29 @@ func TestLocalRouteCanaryRestartResumesFailureStreak(t *testing.T) {
 	if !found {
 		t.Fatal("restart did not resume canonical failure streak")
 	}
+}
+
+func TestLocalRouteCanaryRestartRetainsOpenOutageSince(t *testing.T) {
+	state, secret := localSupervisionFixture(t)
+	plan := testRoutePlan()
+	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicServiceState, kinds.CASControlStateSchema, "service-state", domain.EnvironmentServiceState{ServiceID: plan.ServiceID, EnvironmentID: plan.EnvironmentID, DesiredRuntimeState: &domain.DesiredServiceSpec{PublicRoute: plan}}, 100)
+	openedAt := time.Unix(90, 0).UTC()
+	prior := domain.RouteCanaryState{RouteCanaryKey: domain.RouteCanaryKeyForPlan(plan), Open: true, ConsecutiveFailures: 2, Classification: domain.RouteCanaryClassificationUpstreamError, OpenedAt: &openedAt, LastObservedAt: time.Unix(100, 0).UTC(), UpdatedAt: time.Unix(100, 0).UTC()}
+	saveSupervisionRecord(t, state, secret, kinds.CPStateTopicRouteCanary, routeCanaryStateSchema, prior.Coordinate(), map[string]any{"route_canary": prior}, 100)
+	prober := &stubRouteProber{byPerspective: map[domain.RouteCanaryPerspective]domain.RouteCanaryObservation{domain.RouteCanaryPerspectivePublicEdge: staleUpstreamObservation()}}
+	evaluator, err := NewRouteCanaryEvaluator(prober, testRouteCanaryPolicy())
+	require.NoError(t, err)
+	repo := NewLocalRouteCanaryRepository(state, nil, nil)
+	supervisor, err := NewRouteCanarySupervisor(LocalRoutePlanSource{State: state}, repo, evaluator, nil, &routeCanaryPublisher{}, time.Minute, nil)
+	require.NoError(t, err)
+	supervisor.EvaluateOnce(context.Background())
+	resumed, err := repo.GetState(context.Background(), prior.RouteCanaryKey)
+	require.NoError(t, err)
+	require.NotNil(t, resumed)
+	require.True(t, resumed.Open)
+	require.Equal(t, prior.ConsecutiveFailures+1, resumed.ConsecutiveFailures)
+	require.NotNil(t, resumed.OpenedAt)
+	require.True(t, resumed.OpenedAt.Equal(openedAt), "restart must retain the canonical outage start")
 }
 
 type savingSupervisionPublisher struct {

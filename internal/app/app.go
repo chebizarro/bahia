@@ -531,7 +531,14 @@ func New(cfg *config.Config) (*App, error) {
 			pgRouteCanaries := repository.NewPgRouteCanaryRepository(pool)
 			routeCanaryIndex = pgRouteCanaries
 		}
-		routeCanaryStore = service.NewLocalRouteCanaryRepository(localSupervisionState, routeCanaryIndex, logger)
+		if servicePubkey != "" {
+			routeCanaryStore = service.NewLocalRouteCanaryRepository(localSupervisionState, routeCanaryIndex, logger)
+		} else {
+			// Preserve the existing DB-backed deployment gate when this daemon
+			// has no canonical signing identity. The periodic supervisor below
+			// remains disabled because it cannot produce canonical observables.
+			routeCanaryStore = routeCanaryIndex
+		}
 		routeCanaryEvaluator, evalErr := service.NewRouteCanaryEvaluator(runtime.RouteProber{}, cfg.RouteCanaries.Policy())
 		if evalErr != nil {
 			return nil, fmt.Errorf("configuring route canary evaluator: %w", evalErr)
