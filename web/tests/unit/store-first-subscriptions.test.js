@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CP_STATE_TOPICS, BACKUP_RUN_ATTESTATION, BACKUP_VERIFICATION_ATTESTATION, CAS_CONTROL_STATE, SBOM_REFERENCE, SBOM_AVAILABILITY_LIST } from '../../src/lib/nostr/kinds.gen.js';
+import { CP_STATE_TOPICS, BACKUP_RUN_ATTESTATION, BACKUP_VERIFICATION_ATTESTATION, CAS_CONTROL_STATE, DASHBOARD_WIDGET, SBOM_REFERENCE, SBOM_AVAILABILITY_LIST } from '../../src/lib/nostr/kinds.gen.js';
 
 const bridge = vi.hoisted(() => ({ subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })) }));
 vi.mock('../../src/lib/nostr/boot.js', () => ({
@@ -9,7 +9,7 @@ vi.mock('../../src/lib/nostr/boot.js', () => ({
 }));
 import { initStoreFirstSubscriptions, teardownStoreFirstSubscriptions } from '../../src/lib/stores/collections/store-first-subscriptions.js';
 
-afterEach(() => { teardownStoreFirstSubscriptions(); bridge.subscribe.mockClear(); });
+afterEach(() => { teardownStoreFirstSubscriptions(); bridge.subscribe.mockClear(); vi.unstubAllGlobals(); });
 
 describe('store-first relay subscriptions', () => {
   it('subscribes once to state topics and operator-authored config desired events', () => {
@@ -30,5 +30,15 @@ describe('store-first relay subscriptions', () => {
       if (filter['#t']?.includes('config-fabric')) expect(filter.authors).toBeUndefined();
       else expect(filter.authors).toEqual(['b'.repeat(64)]);
     }
+  });
+
+  it('uses the boot pool and deployment relays for only trusted widget publishers', () => {
+    const publisher = 'a'.repeat(64);
+    vi.stubGlobal('window', { __BAHIA_BOOTSTRAP__: { widget_pubkeys: [publisher] } });
+    initStoreFirstSubscriptions();
+    expect(bridge.subscribe).toHaveBeenCalledOnce();
+    const { relays, filters } = bridge.subscribe.mock.calls[0][0];
+    expect(relays).toEqual(['wss://relay.example']);
+    expect(filters).toContainEqual({ kinds: [DASHBOARD_WIDGET], authors: [publisher] });
   });
 });

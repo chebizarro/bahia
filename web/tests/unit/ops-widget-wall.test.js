@@ -1,107 +1,73 @@
-import { describe, expect, it, vi } from 'vitest';
-import { DASHBOARD_WIDGET_KIND, FLEET_RELAY_URLS } from 'wheelhouse';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DASHBOARD_WIDGET } from '../../src/lib/nostr/kinds.gen.js';
 import {
   createOpsWidgetWall,
+  getOpsWidgetAllowedPubkeys,
   parseOpsWidgetPublisherAllowlist
 } from '../../src/lib/widgets/ops-widget-wall.js';
 
 const PUBKEY = 'ab'.repeat(32);
+const OTHER = 'cd'.repeat(32);
 
-function widgetEvent(overrides = {}) {
-  return {
-    id: '1'.repeat(64),
-    pubkey: PUBKEY,
-    created_at: 100,
-    kind: DASHBOARD_WIDGET_KIND,
-    tags: [['d', 'cpu:host-a:api:5m']],
-    content: '{}',
-    sig: '2'.repeat(128),
-    ...overrides
-  };
+function widgetEvent(id, pubkey = PUBKEY, created_at = 100) {
+  return { id, pubkey, created_at, kind: DASHBOARD_WIDGET, tags: [['d', 'cpu:host-a:api:5m']], content: '{}' };
 }
 
-function fakeClientHarness() {
-  let handlers;
-  const unsubscribe = vi.fn();
-  const client = {
-    subscribeWithRecovery: vi.fn((filters, nextHandlers) => {
-      handlers = nextHandlers;
-      return unsubscribe;
-    }),
-    disconnect: vi.fn()
+function harness(initial = [], allowedPubkeys = [PUBKEY]) {
+  let events = initial;
+  let onRefresh;
+  const unregister = vi.fn();
+  const store = {
+    query: vi.fn(({ kinds, authors }) => events.filter((event) => kinds.includes(event.kind) && authors.includes(event.pubkey)))
   };
-  const clientFactory = vi.fn(() => client);
-  return { client, clientFactory, unsubscribe, getHandlers: () => handlers };
+  const wall = createOpsWidgetWall({
+    allowedPubkeys,
+    eventStore: () => store,
+    registerRefresh: (callback) => { onRefresh = callback; return unregister; }
+  });
+  return { wall, store, unregister, setEvents: (next) => { events = next; onRefresh?.(); } };
 }
 
-describe('Bahia ops widget wall', () => {
+afterEach(() => vi.unstubAllGlobals());
+
+describe('Bahia ops widget store-first wall', () => {
   it('normalizes and validates publisher allowlist entries', () => {
-    expect(
-      parseOpsWidgetPublisherAllowlist(` ${PUBKEY.toUpperCase()},invalid,${PUBKEY} `)
-    ).toEqual([PUBKEY]);
+    expect(parseOpsWidgetPublisherAllowlist(` ${PUBKEY.toUpperCase()},invalid,${PUBKEY} `)).toEqual([PUBKEY]);
+    expect(parseOpsWidgetPublisherAllowlist([OTHER.toUpperCase(), 'bad'])).toEqual([OTHER]);
   });
 
-  it('subscribes with recovery on only the Wheelhouse fleet relays', () => {
-    const harness = fakeClientHarness();
-    const wall = createOpsWidgetWall({
-      allowedPubkeys: [PUBKEY],
-      clientFactory: harness.clientFactory
-    });
-
-    const stop = wall.start();
-
-    expect(harness.clientFactory).toHaveBeenCalledWith({
-      relays: [...FLEET_RELAY_URLS],
-      saveRelayConfig: expect.any(Function)
-    });
-    expect(harness.client.subscribeWithRecovery).toHaveBeenCalledWith(
-      [{ kinds: [DASHBOARD_WIDGET_KIND] }],
-      expect.objectContaining({ onEvent: expect.any(Function) })
-    );
-
-    stop();
-    expect(harness.unsubscribe).toHaveBeenCalledOnce();
+  it('takes runtime deployment publisher trust over build-time configuration', () => {
+    vi.stubGlobal('window', { __BAHIA_BOOTSTRAP__: { widget_pubkeys: [PUBKEY, 'invalid'] } });
+    expect(getOpsWidgetAllowedPubkeys()).toEqual([PUBKEY]);
+    window.__BAHIA_BOOTSTRAP__.widget_pubkeys = [];
+    expect(getOpsWidgetAllowedPubkeys()).toEqual([]);
   });
 
-  it('feeds trusted events through Wheelhouse latest-by-slot storage', () => {
-    const harness = fakeClientHarness();
-    const wall = createOpsWidgetWall({
-      allowedPubkeys: [PUBKEY],
-      clientFactory: harness.clientFactory
-    });
-    let events = [];
-    const unsubscribeStore = wall.store.subscribe((snapshot) => {
-      events = snapshot;
-    });
+  it('queries cached trusted widgets before network and refreshes from the shared store', () => {
+    const cached = widgetEvent('1'.repeat(64));
+    const untrusted = widgetEvent('2'.repeat(64), OTHER);
+    const live = widgetEvent('3'.repeat(64), PUBKEY, 101);
+    const { wall, store, unregister, setEvents } = harness([cached, untrusted]);
+    const snapshots = [];
+    const unsubscribe = wall.subscribe((events) => snapshots.push(events.map((event) => event.id)));
+
     wall.start();
-
-    harness.getHandlers().onEvent(widgetEvent(), FLEET_RELAY_URLS[0]);
-    harness.getHandlers().onEvent(widgetEvent({ id: '3'.repeat(64), created_at: 101 }), FLEET_RELAY_URLS[1]);
-    harness.getHandlers().onEvent(widgetEvent({ id: '0'.repeat(64), created_at: 99 }), FLEET_RELAY_URLS[0]);
-
-    expect(events).toHaveLength(1);
-    expect(events[0].id).toBe('3'.repeat(64));
-
-    wall.destroy();
-    expect(harness.client.disconnect).toHaveBeenCalledOnce();
-    unsubscribeStore();
+    expect(store.query).toHaveBeenCalledWith({ kinds: [DASHBOARD_WIDGET], authors: [PUBKEY] });
+    expect(snapshots.at(-1)).toEqual([cached.id]);
+    setEvents([live, untrusted]); // Boot's frame callback re-queries latest-by-slot state.
+    expect(snapshots.at(-1)).toEqual([live.id]);
+    wall.stop();
+    expect(unregister).toHaveBeenCalledOnce();
+    unsubscribe();
   });
 
-  it('fails closed when no publisher allowlist is configured', () => {
-    const harness = fakeClientHarness();
-    const rejected = vi.fn();
-    const wall = createOpsWidgetWall({ allowedPubkeys: [], clientFactory: harness.clientFactory });
-    let events = [];
-    const unsubscribeStore = wall.store.subscribe((snapshot) => {
-      events = snapshot;
-    });
-    wall.start({ onRejected: rejected });
-
-    harness.getHandlers().onEvent(widgetEvent(), FLEET_RELAY_URLS[0]);
-
+  it('fails closed without configured publishers', () => {
+    const { wall, store } = harness([widgetEvent('1'.repeat(64))], []);
+    let events;
+    wall.subscribe((snapshot) => { events = snapshot; });
+    wall.start();
     expect(events).toEqual([]);
-    expect(rejected).toHaveBeenCalledWith('untrusted_publisher', expect.any(Object), FLEET_RELAY_URLS[0]);
-    wall.destroy();
-    unsubscribeStore();
+    expect(store.query).not.toHaveBeenCalled();
+    wall.stop();
   });
 });
