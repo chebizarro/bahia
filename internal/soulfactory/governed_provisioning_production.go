@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,13 +37,37 @@ const (
 var errProductionStateNotFound = errors.New("production provisioning state not found")
 
 // ProductionGovernedProvisionerConfig wires the real Bahia persistence seams
-// used by the governed provisioning port. StateDir contains both saga
-// checkpoints and a secret-free adapter ledger. No key material or bunker URI
-// is ever written there.
+// used by the governed provisioning port. StateDir contains the saga
+// checkpoint cache and a secret-free adapter ledger. No key material or bunker
+// URI is ever written there.
+//
+// SagaEvents, SagaPublisher and ServicePubkey make the daemon's canonical
+// saga-run records the authority of saga progress (audit C-45): every
+// checkpoint is published as one replaceable cp-state record per run before
+// it is reported durable, and a daemon moved to a fresh host resumes from its
+// local event store. The StateDir checkpoint file is then only a cache.
+// Without them the saga store is the local file journal alone, which is the
+// configuration tests and a daemon without a service identity run with.
 type ProductionGovernedProvisionerConfig struct {
 	StateDir        string
 	RuntimeReleases *service.AgentRuntimeReleaseService
 	DeploymentUnits repository.DeploymentUnitRepository
+	SagaEvents      saga.EventReader
+	SagaPublisher   saga.EventPublisher
+	ServicePubkey   string
+	Logger          *slog.Logger
+}
+
+// newSagaStore builds the canonical saga store when the daemon identity and
+// event seams are configured, else the local file journal.
+func newSagaStore(cfg ProductionGovernedProvisionerConfig, dir string) (saga.Store, error) {
+	if cfg.SagaEvents == nil && cfg.SagaPublisher == nil && strings.TrimSpace(cfg.ServicePubkey) == "" {
+		return saga.NewFileStore(dir)
+	}
+	if strings.TrimSpace(cfg.ServicePubkey) == "" {
+		return nil, errors.New("canonical saga records require the daemon's service identity (nostr.private_key)")
+	}
+	return saga.NewEventStore(saga.EventStoreConfig{Reader: cfg.SagaEvents, Publisher: cfg.SagaPublisher, ServicePubkey: cfg.ServicePubkey, CacheDir: dir, Logger: cfg.Logger})
 }
 
 // ProductionGovernedProvisioner is the reachable Reactor ProvisioningEngine.
@@ -79,7 +104,7 @@ func NewProductionGovernedProvisioner(full *FullProvisioner, cfg ProductionGover
 	if root == "" {
 		return nil, fmt.Errorf("production governed provisioning state directory is required")
 	}
-	store, err := saga.NewFileStore(filepath.Join(root, "sagas"))
+	store, err := newSagaStore(cfg, filepath.Join(root, "sagas"))
 	if err != nil {
 		return nil, fmt.Errorf("configure governed provisioning saga store: %w", err)
 	}

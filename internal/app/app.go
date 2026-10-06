@@ -723,7 +723,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	var soulFactoryRuntime *soulFactoryRuntime
-	soulFactoryRuntime, err = buildSoulFactoryRuntime(ctx, cfg, registry, agentRuntimeReleaseSvc, deploymentUnitRepo, logger)
+	soulFactoryRuntime, err = buildSoulFactoryRuntime(ctx, cfg, registry, agentRuntimeReleaseSvc, deploymentUnitRepo, soulFactorySagaSeams{Events: localEventStore, Publisher: nostrPub, ServicePubkey: servicePubkey}, logger)
 	if err != nil {
 		return nil, fmt.Errorf("configuring SoulFactory OpenClaw runtime: %w", err)
 	}
@@ -2319,6 +2319,8 @@ func New(cfg *config.Config) (*App, error) {
 			ExternalMCP:      externalMCP,
 			RelayConnections: controlPlanePool,
 			History:          projectionHistory,
+			LocalStore:       localEventStore,
+			Readiness:        bootstrapper,
 		})
 		if err != nil {
 			return nil, err

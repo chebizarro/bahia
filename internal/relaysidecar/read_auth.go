@@ -259,6 +259,7 @@ var publicCPStateTopics = map[string]bool{
 	//   security-findings, security-audit — detailed vulnerability data
 	//   assistant-transcript — private conversation content
 	//   assistant-session — session recovery data
+	//   soul-factory-saga-run — governed provisioning saga progress (C-45)
 	//   relay-settings — operator relay policy
 	//   config-status — config-fabric state (admin-only)
 }

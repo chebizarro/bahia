@@ -124,6 +124,18 @@ func (r *assistantTestRelay) Publish(_ context.Context, ev nostr.Event) (int, er
 	return 1, nil
 }
 
+// assistantFiltersLimit is the largest limit any filter of the REQ asks for,
+// or 0 when none does.
+func assistantFiltersLimit(filters []nostr.Filter) int {
+	limit := 0
+	for _, f := range filters {
+		if f.Limit > limit {
+			limit = f.Limit
+		}
+	}
+	return limit
+}
+
 func assistantFiltersMatch(filters []nostr.Filter, ev nostr.Event) bool {
 	for _, f := range filters {
 		if f.Matches(ev) {
@@ -146,6 +158,11 @@ func (r *assistantTestRelay) SubscribeAllWithEOSE(_ context.Context, filters []n
 		}
 	}
 	sort.SliceStable(backfill, func(i, j int) bool { return backfill[i].CreatedAt > backfill[j].CreatedAt })
+	// A relay returns at most the newest `limit` matching events of a REQ
+	// (NIP-01); a consumer that wants more pages with `until`.
+	if limit := assistantFiltersLimit(filters); limit > 0 && len(backfill) > limit {
+		backfill = backfill[:limit]
+	}
 	for i := range backfill {
 		ev := backfill[i]
 		sub.queue = append(sub.queue, assistantTestRelayItem{ev: &ev})
