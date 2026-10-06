@@ -126,39 +126,66 @@ func (r *OSVVulnerabilityCacheCleanupRunner) Run(ctx context.Context) error {
 	}
 }
 
-const defaultContextVMResponseRetention = 24 * time.Hour
+const (
+	defaultContextVMResponseRetention = 24 * time.Hour
+	defaultRetentionInterval          = time.Hour
+)
 
 type ContextVMResponsePruner interface {
 	DeleteCreatedBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
-type ContextVMResponseCleanupRunner struct {
-	pruner    ContextVMResponsePruner
-	retention time.Duration
-	interval  time.Duration
-	logger    *zap.Logger
+// RetentionTask is one bounded-retention pass the RetentionRunner drives:
+// Retire removes what has outlived its retention as of now and reports how
+// much it removed. Tasks are idempotent and tolerate any cadence.
+type RetentionTask interface {
+	Name() string
+	Retire(ctx context.Context, now time.Time) (int64, error)
 }
 
-func NewContextVMResponseCleanupRunner(pruner ContextVMResponsePruner, retention, interval time.Duration, logger *zap.Logger) *ContextVMResponseCleanupRunner {
+// ContextVMResponseRetention retires ContextVM responses older than
+// Retention.
+type ContextVMResponseRetention struct {
+	Pruner    ContextVMResponsePruner
+	Retention time.Duration
+}
+
+func (ContextVMResponseRetention) Name() string { return "contextvm-responses" }
+
+func (t ContextVMResponseRetention) Retire(ctx context.Context, now time.Time) (int64, error) {
+	retention := t.Retention
+	if retention <= 0 {
+		retention = defaultContextVMResponseRetention
+	}
+	return t.Pruner.DeleteCreatedBefore(ctx, now.Add(-retention))
+}
+
+// RetentionRunner is the daemon's one housekeeping wakeup for records whose
+// expiry no event signals: on each interval it runs every RetentionTask in
+// turn. New retention work joins it as a task instead of adding a ticker.
+type RetentionRunner struct {
+	tasks    []RetentionTask
+	interval time.Duration
+	logger   *zap.Logger
+}
+
+func NewRetentionRunner(interval time.Duration, logger *zap.Logger, tasks ...RetentionTask) *RetentionRunner {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	if retention <= 0 {
-		retention = 24 * time.Hour
-	}
 	if interval <= 0 {
-		interval = time.Hour
+		interval = defaultRetentionInterval
 	}
-	return &ContextVMResponseCleanupRunner{pruner: pruner, retention: retention, interval: interval, logger: logger}
+	return &RetentionRunner{tasks: append([]RetentionTask(nil), tasks...), interval: interval, logger: logger}
 }
 
-func (r *ContextVMResponseCleanupRunner) Name() string { return "contextvm-response-cleanup" }
+func (r *RetentionRunner) Name() string { return "retention" }
 
-func (r *ContextVMResponseCleanupRunner) Run(ctx context.Context) error {
-	if r.pruner == nil {
+func (r *RetentionRunner) Run(ctx context.Context) error {
+	if len(r.tasks) == 0 {
 		return nil
 	}
-	//nostr:allow-poll housekeeping: expires retained ContextVM responses; no event signals their expiry
+	//nostr:allow-poll housekeeping: retires records past their retention (ContextVM responses, OpenClaw saga runs); no event signals their expiry
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 	for {
@@ -166,14 +193,25 @@ func (r *ContextVMResponseCleanupRunner) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			count, err := r.pruner.DeleteCreatedBefore(ctx, time.Now().UTC().Add(-r.retention))
-			if err != nil {
-				r.logger.Warn("ContextVM response cleanup failed", zap.Error(err))
-				continue
-			}
-			if count > 0 {
-				r.logger.Info("deleted expired ContextVM responses", zap.Int64("count", count))
-			}
+			r.retire(ctx, time.Now().UTC())
+		}
+	}
+}
+
+// retire runs every task once. A failing task is logged and does not hold
+// back the others; it is retried on the next wakeup.
+func (r *RetentionRunner) retire(ctx context.Context, now time.Time) {
+	for _, task := range r.tasks {
+		if ctx.Err() != nil {
+			return
+		}
+		count, err := task.Retire(ctx, now)
+		if err != nil {
+			r.logger.Warn("retention pass failed", zap.String("task", task.Name()), zap.Int64("retired", count), zap.Error(err))
+			continue
+		}
+		if count > 0 {
+			r.logger.Info("retention pass retired records", zap.String("task", task.Name()), zap.Int64("retired", count))
 		}
 	}
 }

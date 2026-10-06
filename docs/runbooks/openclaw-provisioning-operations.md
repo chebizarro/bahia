@@ -104,6 +104,38 @@ Restore first into an isolated disposable environment. Start relay and Signet, r
 4. Retain prior policy revision for restoration.
 5. Revoke old client policy only after every runtime reconnects durably.
 
+## Run retention
+
+Saga runs are retired by time only once they are terminal. When a run reaches
+`failed_terminal` or `rolled_back` the engine stamps `retain_until` on its
+checkpoint (defaults: 30 days after a terminal failure, 7 days after a
+rollback; `saga.RetentionPolicy`). The daemon's hourly `retention` background
+runner (the same housekeeping wakeup that expires ContextVM responses; it adds
+no ticker and runs whenever SoulFactory is configured, database or not) then
+purges every run whose `retain_until` has passed:
+
+- the saga-run record (`t=soul-factory-saga-run`) is tombstoned and its cache
+  file removed;
+- the request's adapter-ledger record (`record=request`) is tombstoned with it;
+- the agent id's identity reservation (`record=identity`) is tombstoned only
+  when **both** hold: the reservation names the purged request (a run that lost
+  the agent id to another request leaves the holder's reservation alone), and
+  the agent has no live Soul, i.e. `GetSoul` returns nothing or a revoked Soul.
+  An active, suspended, provisioning or draft Soul keeps the reservation,
+  because the identity has outlived the request (legacy provisioning, adoption,
+  a re-bound agent) and the reservation is what stops a later request from
+  minting a second identity for a live agent.
+
+`failed_recoverable`, `running` and in-flight runs are never purged by time:
+reconcile or safe-abort them. A run whose request lock is busy or whose Soul
+cannot be read (incomplete relay read) is skipped for that pass with a
+`retention pass failed` warning and retried an hour later; the Soul read
+precedes every write, so a skipped run is left whole. Each pass is idempotent.
+Logs: `retention pass retired records` with `task=openclaw-saga-runs`, and
+`adapter ledger identity reservation released` / `kept` per agent id. The
+public terminal result (`7950`) of a purged run stays on the relays; only the
+daemon's private checkpoint and ledger are retired.
+
 ## Credential cleanup
 
 Remove only consumed one-time handoff and proven failed-run client material. Retain protected durable client references needed for restart. Scan sanitized evidence for credential markers. Never delete an incumbent identity or SNR key as cleanup.

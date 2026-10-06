@@ -944,8 +944,10 @@ Every record is published outbox-first (a publish the outbox keeps for retry
 counts) before the checkpoint or adapter step that produced it is reported
 durable, with a `created_at` strictly after the record it replaces. Removal is
 a tombstone at the same coordinate (`deleted=true`, empty content, `version`
-tag) which retires every copy at or below that version; purging a saga run
-tombstones the request's ledger record with it. Both ledger records carry a
+tag) which retires every copy at or below that version. Purging a saga run
+tombstones the request's ledger record with it, and the agent id's identity
+record when the purged request reserved the agent id and no live (non-revoked)
+Soul of the agent exists; see retention below. Both ledger records carry a
 `version` tag; the request content is refused before publish when it would
 exceed the event store's 65535-byte content cap. Precedence on read is the
 highest version, a tie going to the copy the process committed, then the
@@ -976,6 +978,19 @@ The identity record (`schema`, `agent_id`, `spec_hash`, `request_id`,
 holds a secret value; keys, tokens and bunker URIs never enter the ledger.
 Relay read auth treats both topics as protected (the ledger is ciphertext in
 any case).
+
+Retention (bahia-fpubg): a run's record carries `retain_until` once the run is
+`failed_terminal` (30 days) or `rolled_back` (7 days). The daemon's hourly
+`retention` runner (one `//nostr:allow-poll housekeeping` ticker shared with
+ContextVM response expiry; no event signals a retention deadline) tombstones
+the saga-run and request records of every run past `retain_until`, under the
+request lock, saga run last so an interrupted purge is completed by the next
+pass. The identity record is tombstoned only when the purged request is the
+one that reserved the agent id and `GetSoul` (complete relay read, fail
+closed) finds no Soul or a revoked one; any other Soul keeps the reservation.
+A released coordinate starts a new life at version 1 with a `created_at` after
+the tombstone. Recoverable and running runs are never purged by time. See the
+[operations runbook](runbooks/openclaw-provisioning-operations.md#run-retention).
 
 ## Policy evaluation intent and build ownership (bahia-irsry.77)
 

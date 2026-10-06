@@ -276,13 +276,22 @@ func (p RetentionPolicy) Mark(run *Run, now time.Time) {
 	}
 }
 
+// PurgeExpired deletes every terminal run whose retention has elapsed as of
+// now. A run that cannot be deleted (busy under its request lock, or a store
+// failure) does not hold back the others: it is reported in the joined error
+// and retried by the next pass. The production store tombstones the run's
+// adapter-ledger records with it (soulfactory.ledgerPurgingStore).
 func PurgeExpired(ctx context.Context, store Store, now time.Time) (int, error) {
 	runs, err := store.List(ctx)
 	if err != nil {
 		return 0, err
 	}
 	removed := 0
+	var errs []error
 	for _, run := range runs {
+		if err := ctx.Err(); err != nil {
+			return removed, errors.Join(append(errs, err)...)
+		}
 		// Recoverable runs retain intent and ownership lineage until an operator
 		// reconciles or safely aborts them; time alone may never orphan resources.
 		if run.Stage == StageFailedRecoverable {
@@ -295,9 +304,10 @@ func PurgeExpired(ctx context.Context, store Store, now time.Time) (int, error) 
 			continue
 		}
 		if err := store.Delete(ctx, run.RequestID, run.Version); err != nil {
-			return removed, err
+			errs = append(errs, fmt.Errorf("purge saga run of request %s: %w", run.RequestID, err))
+			continue
 		}
 		removed++
 	}
-	return removed, nil
+	return removed, errors.Join(errs...)
 }

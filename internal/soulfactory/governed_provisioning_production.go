@@ -114,9 +114,21 @@ func NewProductionGovernedProvisioner(full *FullProvisioner, cfg ProductionGover
 	if err != nil {
 		return nil, fmt.Errorf("configure governed provisioning adapter ledger: %w", err)
 	}
-	// Purging a saga run (saga.PurgeExpired) tombstones the request's ledger
-	// record with it, so the adapter ledger never outlives the run it serves.
-	return &ProductionGovernedProvisioner{full: full, store: ledgerPurgingStore{Store: store, states: states}, states: states, releases: cfg.RuntimeReleases, units: cfg.DeploymentUnits}, nil
+	// Purging a saga run (RetireExpiredRuns) tombstones the request's ledger
+	// record with it, so the adapter ledger never outlives the run it serves,
+	// and releases the agent id's identity reservation when no Soul is live.
+	return &ProductionGovernedProvisioner{full: full, store: ledgerPurgingStore{Store: store, states: states, souls: full.reactor.GetSoul}, states: states, releases: cfg.RuntimeReleases, units: cfg.DeploymentUnits}, nil
+}
+
+// RetireExpiredRuns is the saga retention pass (bahia-fpubg). It purges
+// every failed_terminal or rolled_back run whose retain_until (set by the
+// engine's RetentionPolicy when the run reached its terminal stage) has
+// elapsed as of now, together with its adapter-ledger records under the
+// identity rule of ledgerPurgingStore. Recoverable and running runs are never
+// purged by time. It is idempotent and safe to run on any housekeeping
+// cadence; the daemon drives it from the hourly retention runner.
+func (p *ProductionGovernedProvisioner) RetireExpiredRuns(ctx context.Context, now time.Time) (int, error) {
+	return saga.PurgeExpired(ctx, p.store, now)
 }
 
 // Provision is the live kind-5950 caller. An exact relay replay reuses the
