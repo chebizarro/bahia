@@ -629,6 +629,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	var managedInstanceSupervisor *service.ManagedInstanceSupervisor
+	var supervisionApplyLock *service.SupervisionApplyLock
 	if cfg.Supervision.Enabled && supervisionFromLocalState {
 		configuredSpecs, specErr := configuredSupervisionSpecs(cfg.Supervision, logger)
 		if specErr != nil {
@@ -645,7 +646,8 @@ func New(cfg *config.Config) (*App, error) {
 		if runtimeApplyLock != nil {
 			deployLock = runtimeApplyLock
 		}
-		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, state, service.NewSupervisionApplyLock(deployLock, logger), publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
+		supervisionApplyLock = service.NewSupervisionApplyLock(deployLock, logger)
+		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, state, supervisionApplyLock, publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("configuring managed instance supervisor: %w", err)
 		}
@@ -713,6 +715,28 @@ func New(cfg *config.Config) (*App, error) {
 		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
 	registerSignetHealthCheck(healthProvider, loomSignetManager)
+	if supervisionApplyLock != nil {
+		// bahia-as2bo: the process-local fallback of the recovery apply lock
+		// excludes only this daemon's applies, so it is a degraded condition
+		// operators must see (docs/runbooks/managed-instance-supervision.md).
+		healthProvider.RegisterCheck("supervision_apply_lock", func() HealthCheck {
+			status := supervisionApplyLock.Status()
+			check := HealthCheck{Name: "supervision_apply_lock", Status: HealthStatusPass,
+				Message: "supervised recoveries are serialized with deploys through the shared PostgreSQL advisory lock",
+				Details: map[string]string{"shared_lock": fmt.Sprintf("%t", status.Shared), "fallback": fmt.Sprintf("%t", status.Fallback)}}
+			switch {
+			case status.Fallback:
+				check.Status = HealthStatusWarn
+				check.Message = "shared runtime apply lock unreachable; recoveries proceed under the process-local lock only, which does not exclude deploys driven by other daemons in the same environment"
+				check.Details["fallback_since"] = status.FallbackSince.UTC().Format(time.RFC3339)
+				check.Details["last_error"] = status.LastError
+			case !status.Shared:
+				check.Status = HealthStatusWarn
+				check.Message = "no shared runtime apply lock (PostgreSQL unavailable at startup); recoveries are serialized only within this daemon and do not exclude deploys driven by other daemons in the same environment"
+			}
+			return check
+		})
+	}
 	if cfg.EdgeRouting.Enabled {
 		healthProvider.RegisterCheck("edge_routing", func() HealthCheck {
 			check := HealthCheck{Name: "edge_routing", Status: HealthStatusPass, Message: "edge-route convergence and route canary observation are enabled",

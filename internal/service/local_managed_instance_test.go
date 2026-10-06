@@ -596,15 +596,33 @@ func TestSupervisionApplyLockSerializesPerEnvironmentAndSurvivesSharedLockOutage
 	unlock()
 	require.Equal(t, 1, shared.unlocked)
 
-	// The database behind the shared lock is unreachable: recovery proceeds.
+	require.False(t, withShared.Status().Fallback)
+
+	// The database behind the shared lock is unreachable: recovery proceeds,
+	// and the fallback is observable (bahia-as2bo).
 	shared.err = errors.New("connection refused")
 	unlock, acquired, err = withShared.TryLock(ctx, environment)
 	require.NoError(t, err)
 	require.True(t, acquired, "an unreachable shared lock must not block recovery")
+	status := withShared.Status()
+	require.True(t, status.Shared)
+	require.True(t, status.Fallback, "the fallback is reported while the shared lock is unreachable")
+	require.False(t, status.FallbackSince.IsZero())
+	require.Equal(t, "connection refused", status.LastError)
 	_, acquired, err = withShared.TryLock(ctx, environment)
 	require.NoError(t, err)
 	require.False(t, acquired, "the process-local lock still serializes")
 	unlock()
+
+	// The shared lock answers again: the fallback ends.
+	shared.err = nil
+	unlock, acquired, err = withShared.TryLock(ctx, environment)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	unlock()
+	require.False(t, withShared.Status().Fallback)
+	require.False(t, local.Status().Shared, "a lock without a shared lock is never in fallback")
+	require.False(t, local.Status().Fallback)
 }
 
 // signalObserver reports each observation on a channel.
