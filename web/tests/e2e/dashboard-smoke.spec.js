@@ -566,7 +566,6 @@ test.describe('Dashboard Smoke Test', () => {
   test('should display stat cards with counts', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(800);
     
     // Services stat card
     await expect(page.locator('.card:has-text("Services") .card-value')).toHaveText('3');
@@ -581,7 +580,6 @@ test.describe('Dashboard Smoke Test', () => {
   test('should show live workers count in stat card', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(800);
     
     await expect(page.locator('.card:has-text("Workers") .card-value')).toHaveText('2');
     await expect(page.locator('.card:has-text("Workers") .card-subtitle')).toHaveText('2 recent / 3 catalog');
@@ -590,7 +588,6 @@ test.describe('Dashboard Smoke Test', () => {
   test('should show drift count in states stat card', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(800);
     
     // States with drift (1 out of 3 has drift in mock data)
     await expect(page.locator('.card:has-text("Drifted") .card-value')).toHaveText('1');
@@ -599,7 +596,6 @@ test.describe('Dashboard Smoke Test', () => {
   test('should expose dashboard actions for drifted states', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(800);
 
     const driftCardLink = page.locator('main a[href="/environment-states"]');
     await expect(driftCardLink).toBeVisible();
@@ -617,7 +613,6 @@ test.describe('Dashboard Smoke Test', () => {
   test('should display pending approvals card', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
     
     // Pending approvals card should exist
     await expect(page.locator('.card-link .card:has-text("Pending Approvals")')).toBeVisible();
@@ -629,7 +624,6 @@ test.describe('Dashboard Smoke Test', () => {
   test('should link to pending deployments page from pending approvals card', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
     
     // Find link to pending deployments
     const pendingLink = page.locator('main a[href="/deployments/pending"]');
@@ -702,7 +696,6 @@ test.describe('Dashboard Smoke Test', () => {
   test('should expose logo, menu, and linked dashboard cards', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(800);
 
     const logo = page.locator('img[alt="Bahia"]');
     await expect(logo).toBeVisible();
@@ -729,7 +722,6 @@ test.describe('Dashboard Smoke Test', () => {
   test('should display recent activity section', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(800);
     
     // Recent activity heading
     await expect(page.getByRole('heading', { name: 'Recent Activity' })).toBeVisible();
@@ -739,36 +731,36 @@ test.describe('Dashboard Smoke Test', () => {
   test('should show recent events in activity feed', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
     
-    // The activity table should render; events arrive through mocked EventSource.
-    await expect(page.locator('section:has-text("Recent Activity") table')).toBeVisible();
+    // The activity table renders the events that arrive through the mocked relay.
+    const activitySection = page.locator('section:has-text("Recent Activity")');
+    await expect(activitySection.locator('table')).toBeVisible();
+    await expect(activitySection.locator('a[href="/deployments/deploy-2"]')).toBeVisible();
   });
   
   test('should render event type badges in recent activity', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
     
-    // Event rows or the empty-state hint should render safely.
+    // Event rows render with their type badges.
     const activitySection = page.locator('section:has-text("Recent Activity")');
-    await expect(activitySection.locator('table, .hint').first()).toBeVisible();
+    await expect(activitySection.locator('tbody tr').first()).toBeVisible();
+    await expect(activitySection.locator('tbody tr').first()).toContainText(/deployment\.(started|completed)|drift\.detected/);
   });
   
   test('should show service and environment names in recent events', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
     
-    // Event entity cells or the SSE empty hint should render without errors.
+    // Event entity cells name the service and environment.
     const activitySection = page.locator('section:has-text("Recent Activity")');
-    await expect(activitySection.locator('table, .hint').first()).toBeVisible();
+    await expect(activitySection.locator('.activity-entity-links').first()).toContainText('Service web-app');
+    await expect(activitySection.locator('.activity-entity-links').first()).toContainText('Environment production');
   });
 
   test('should deep-link recent activity entities to dashboard detail routes', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
 
     const activitySection = page.locator('section:has-text("Recent Activity")');
     await expect(activitySection.locator('a[href="/deployments/deploy-2"]')).toBeVisible();
@@ -829,11 +821,11 @@ test.describe('Dashboard Smoke Test', () => {
   test('should show event timestamps in recent activity', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
     
-    // Timestamps should be formatted (relative or absolute)
-    const pageContent = await page.content();
-    expect(pageContent.match(/\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2}|ago|seconds|minutes|hours|just now/i)).toBeTruthy();
+    // Timestamps should be formatted (relative or absolute) on the rendered activity rows.
+    const activityTime = page.locator('section:has-text("Recent Activity") .activity-time').first();
+    await expect(activityTime).toBeVisible();
+    await expect(activityTime).toHaveText(/\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2}|ago|seconds|minutes|hours|just now/i);
   });
   
   test('should handle empty pending approvals gracefully', async ({ page }) => {
@@ -848,7 +840,6 @@ test.describe('Dashboard Smoke Test', () => {
     
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
     
     // Dashboard should still render the pending approvals card when there are no intents.
     await expect(page.locator('.card-link .card:has-text("Pending Approvals")')).toBeVisible();
@@ -860,11 +851,12 @@ test.describe('Dashboard Smoke Test', () => {
     
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
     
-    // Should show the activity table or its empty state hint.
+    // Should show the activity table or its empty state hint, with no event rows.
     const activitySection = page.locator('section:has-text("Recent Activity")');
     await expect(activitySection.locator('table, .hint').first()).toBeVisible();
+    await expect(page.locator('.card:has-text("Services") .card-value')).toHaveText('3');
+    await expect(activitySection.locator('a[href^="/deployments/deploy-"]')).toHaveCount(0);
   });
   
   test('should handle API errors gracefully', async ({ page }) => {
@@ -879,11 +871,11 @@ test.describe('Dashboard Smoke Test', () => {
     
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
     
-    // Page should still render, possibly with error state or 0 counts
-    const body = await page.locator('body');
-    await expect(body).toBeVisible();
+    // Page still renders its stat cards: the dashboard is relay-backed, so a
+    // failing legacy REST route does not change what it shows.
+    await expect(page.locator('.card:has-text("Services") .card-value')).toHaveText('3');
+    await expect(page.locator('.card:has-text("Environments") .card-value')).toHaveText('2');
   });
   
   test('should not show console errors on dashboard load', async ({ page }) => {
@@ -896,7 +888,12 @@ test.describe('Dashboard Smoke Test', () => {
     
     await page.goto('/');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
+    // Let the dashboard reach its hydrated state before reading the console:
+    // stat counts from the store and activity rows from the relay.
+    await expect(page.locator('.card:has-text("Services") .card-value')).toHaveText('3');
+    await expect(page.locator('.card:has-text("Workers") .card-value')).toHaveText('2');
+    await expect(page.locator('main a[href="/deployments/pending"] .card-value')).toHaveText('2');
+    await expect(page.locator('section:has-text("Recent Activity") a[href="/deployments/deploy-2"]')).toBeVisible();
     
     // Filter out expected SSE-related errors
     const unexpectedErrors = consoleErrors.filter(err => 

@@ -245,7 +245,6 @@ test.describe('Workers and Events Smoke Test', () => {
   test('should display worker status indicators', async ({ page }) => {
     await page.goto('/workers');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
     
     // Worker capabilities should be listed in the table
     await expect(page.getByText('docker, kubernetes')).toBeVisible();
@@ -279,7 +278,6 @@ test.describe('Workers and Events Smoke Test', () => {
   test('should display worker metadata on detail page', async ({ page }) => {
     await page.goto('/workers/npub1worker1abc123def456');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
     
     // Metadata-derived software fields should be visible
     await expect(page.getByRole('cell', { name: 'version' })).toBeVisible();
@@ -291,7 +289,6 @@ test.describe('Workers and Events Smoke Test', () => {
   test('should display worker capabilities', async ({ page }) => {
     await page.goto('/workers/npub1worker1abc123def456');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
     
     // Capabilities should be listed
     await expect(page.locator('text=docker')).toBeVisible();
@@ -353,17 +350,17 @@ test.describe('Workers and Events Smoke Test', () => {
   test('should display connection status on events page', async ({ page }) => {
     await page.goto('/events');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
     
     // Connection status should be shown (connected, disconnected, connecting, etc.)
-    // The text should NOT be hardcoded only - it should reflect actual SSE state
+    // The text should NOT be hardcoded only - it should reflect actual relay state
     await expect(page.locator('.status')).toBeVisible();
+    // The mock relay answers the initial sync, so the status settles on live.
+    await expect(page.locator('.status')).toHaveText('🟢 Connected via Nostr relay');
   });
   
   test('should render events table safely', async ({ page }) => {
     await page.goto('/events');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(800);
     
     // Events table should render
     const table = page.locator('table, .events-table, .table');
@@ -377,12 +374,12 @@ test.describe('Workers and Events Smoke Test', () => {
     
     await page.goto('/events');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(800);
     
     // Timestamps should be formatted and displayed (could be relative or absolute)
-    // Just verify some time-related text appears
-    const pageContent = await page.content();
-    expect(pageContent.match(/\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2}|ago|seconds|minutes|hours/i)).toBeTruthy();
+    // on the event rows once the relay events have been rendered.
+    const firstEventRow = page.getByRole('row', { name: /deployment\.started/ });
+    await expect(firstEventRow).toBeVisible();
+    await expect(firstEventRow).toHaveText(/\d{1,2}:\d{2}|\d{4}-\d{2}-\d{2}|ago|seconds|minutes|hours/i);
   });
   
   test('should show event types with badges or labels', async ({ page }) => {
@@ -390,7 +387,6 @@ test.describe('Workers and Events Smoke Test', () => {
     
     await page.goto('/events');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(800);
     
     await expect(page.getByText('drift.detected')).toBeVisible();
   });
@@ -405,11 +401,12 @@ test.describe('Workers and Events Smoke Test', () => {
     
     await page.goto('/events');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(1000);
     
-    // Relay-related errors are expected in test environment, but page should still render.
-    const pageContent = await page.locator('body');
-    await expect(pageContent).toBeVisible();
+    // Relay-related errors are expected in test environment, but the page
+    // still renders through to its relay-backed state.
+    await expect(page.getByRole('heading', { name: 'Live Events' })).toBeVisible();
+    await expect(page.locator('.status')).toHaveText('🟢 Connected via Nostr relay');
+    await expect(page.getByText('deployment.started')).toBeVisible();
   });
   
   test('should show empty state when no events', async ({ page }) => {
@@ -417,10 +414,12 @@ test.describe('Workers and Events Smoke Test', () => {
     
     await page.goto('/events');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(800);
     
-    // Should show the events table/empty state safely.
+    // Should show the events table/empty state safely, once the relay has
+    // reported end of stored events with nothing to show.
     await expect(page.locator('table, .events-table, .table').first()).toBeVisible();
+    await expect(page.locator('.status')).toHaveText('🟢 Connected via Nostr relay');
+    await expect(page.locator('.filter-stats')).toHaveText('Showing 0 of 0 events');
   });
   
   test('should show error state when workers endpoint fails', async ({ page }) => {
@@ -435,9 +434,10 @@ test.describe('Workers and Events Smoke Test', () => {
     
     await page.goto('/workers');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
     
-    // Store-level worker load errors are logged and the page remains usable with an empty table.
+    // Store-level worker load errors are logged and the page remains usable:
+    // workers are relay-backed, so the row still renders.
     await expect(page.getByRole('heading', { name: 'Workers' })).toBeVisible();
+    await expect(page.getByRole('row', { name: /npub1worker1/ })).toBeVisible();
   });
 });
