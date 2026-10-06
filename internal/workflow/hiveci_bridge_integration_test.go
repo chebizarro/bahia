@@ -62,9 +62,6 @@ func (r *hiveCIBridgeRepo) GetPolicyByRepoAndWorkflow(context.Context, string, s
 func (r *hiveCIBridgeRepo) EnsurePipelinePolicy(context.Context, domain.HiveCIPipelinePolicy) error {
 	return nil
 }
-func (r *hiveCIBridgeRepo) LookupRepositoryCI(context.Context, []string, bool) ([]domain.RepositoryCILookup, error) {
-	return nil, nil
-}
 
 type hiveCIBridgeOCIRepo struct {
 	manifest *domain.OCIManifest

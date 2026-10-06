@@ -519,15 +519,6 @@ func (r *CanonicalRepository) EnsurePipelinePolicy(ctx context.Context, policy d
 	return nil
 }
 
-// LookupRepositoryCI is a query over the SQL index; the canonical store keeps
-// no cross-repository summary.
-func (r *CanonicalRepository) LookupRepositoryCI(ctx context.Context, repoCoordinates []string, includeDisabledPolicies bool) ([]domain.RepositoryCILookup, error) {
-	if r == nil || r.index == nil {
-		return nil, errors.New("repository CI lookup needs the SQL index")
-	}
-	return r.index.LookupRepositoryCI(ctx, repoCoordinates, includeDisabledPolicies)
-}
-
 // Accepted releases -------------------------------------------------------------
 
 // acceptedRelease returns the ledger record for the release identity, or nil.
