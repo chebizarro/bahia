@@ -182,7 +182,7 @@ func newLiveFixture(t *testing.T, ownership saga.Ownership) *liveFixture {
 	if err != nil {
 		t.Fatalf("NewBahiaIntegration: %v", err)
 	}
-	states, err := newProductionStateStore(t.TempDir())
+	states, err := newProductionStateStore(t.TempDir(), productionLedgerSeams{})
 	if err != nil {
 		t.Fatalf("newProductionStateStore: %v", err)
 	}

@@ -523,8 +523,11 @@ var cpStateFamilies = map[int]cpStateFamily{
 	kinds.ManagedInstanceHealthRecord: {"runtime", "instance-health", kinds.CPStateTopicManagedInstanceHealth},
 	kinds.RouteCanaryRecord:           {"route", "canary", kinds.CPStateTopicRouteCanary},
 	kinds.SoulRuntimePolicyRecord:     {"soul-factory", "runtime-policy", kinds.CPStateTopicSoulRuntimePolicy},
-	kinds.BlossomAdminRecord:          {"blossom", "admin", kinds.CPStateTopicBlossomAdmin},
-	kinds.BlossomBlobRecord:           {"blossom", "blob", kinds.CPStateTopicBlossomBlob},
+	// Governed provisioning adapter ledger (bahia-nfc95); published by the
+	// soulfactory package through the publisher seam, not the projector.
+	int(kinds.CPStateFamilySoulFactoryAdapterLedger): {"soul-factory", "adapter-ledger", kinds.CPStateTopicSoulFactoryAdapterLedger},
+	kinds.BlossomAdminRecord:                         {"blossom", "admin", kinds.CPStateTopicBlossomAdmin},
+	kinds.BlossomBlobRecord:                          {"blossom", "blob", kinds.CPStateTopicBlossomBlob},
 }
 
 // CPStateDomains returns all unique cp-state domain names from the

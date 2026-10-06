@@ -118,6 +118,7 @@ const (
 	CPStateTopicRouteCanary              = "route-canary"
 	CPStateTopicSoulRuntimePolicy        = "soul-factory-runtime-policy"
 	CPStateTopicSoulFactorySagaRun       = "soul-factory-saga-run"
+	CPStateTopicSoulFactoryAdapterLedger = "soul-factory-adapter-ledger"
 	CPStateTopicBlossomAdmin             = "blossom-admin"
 	CPStateTopicBlossomBlob              = "blossom-blob"
 

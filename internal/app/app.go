@@ -711,25 +711,6 @@ func New(cfg *config.Config) (*App, error) {
 		bgManager.RegisterWithOptions(newDatabaseRecoveryRunner(cfg.DB, 30*time.Second, logger), RunnerRequired(false))
 	}
 
-	var soulFactoryRuntime *soulFactoryRuntime
-	soulFactoryRuntime, err = buildSoulFactoryRuntime(ctx, cfg, registry, agentRuntimeReleaseSvc, deploymentUnitRepo, soulFactorySagaSeams{Events: localEventStore, Publisher: nostrPub, ServicePubkey: servicePubkey}, logger)
-	if err != nil {
-		return nil, fmt.Errorf("configuring SoulFactory OpenClaw runtime: %w", err)
-	}
-	soulFactoryRuntimeReleased := false
-	defer func() {
-		if !soulFactoryRuntimeReleased && soulFactoryRuntime != nil && soulFactoryRuntime.close != nil {
-			_ = soulFactoryRuntime.close()
-		}
-	}()
-	if soulFactoryRuntime != nil {
-		telemetryProvider.SetOpenClawSagaExporter(soulFactoryRuntime.sagaMonitor.WritePrometheus)
-		bgManager.RegisterWithOptions(soulFactoryRuntime.connection, RunnerRequired(false))
-		registerSignetHealthCheck(healthProvider, soulFactoryRuntime.connection)
-		bgManager.RegisterWithOptions(soulFactoryRuntime.runner)
-		logger.Info("SoulFactory reactor registered", zap.Bool("enabled", cfg.SoulFactory.Enabled))
-	}
-
 	catalog := nostrAdapter.NewKindCatalog()
 
 	// Relay projection cache: applies decoded relay events to local repositories.
@@ -1557,6 +1538,33 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Error("org domain requires control-plane signer for confidential state; " +
 			"disabling org domain to prevent plaintext state publication")
 		delete(enabledDomains, "org")
+	}
+
+	// SoulFactory is built here, after the confidential encryptor, because
+	// its canonical adapter-ledger records are fleet-OCK encrypted
+	// (bahia-nfc95). Nothing earlier depends on the runtime, and its runners
+	// are registered before the background manager starts.
+	soulFactorySeams := soulFactorySagaSeams{Events: localEventStore, Publisher: nostrPub, ServicePubkey: servicePubkey}
+	if confidentialEncryptor != nil {
+		soulFactorySeams.LedgerEncryptor = confidentialEncryptor
+	}
+	var soulFactoryRuntime *soulFactoryRuntime
+	soulFactoryRuntime, err = buildSoulFactoryRuntime(ctx, cfg, registry, agentRuntimeReleaseSvc, deploymentUnitRepo, soulFactorySeams, logger)
+	if err != nil {
+		return nil, fmt.Errorf("configuring SoulFactory OpenClaw runtime: %w", err)
+	}
+	soulFactoryRuntimeReleased := false
+	defer func() {
+		if !soulFactoryRuntimeReleased && soulFactoryRuntime != nil && soulFactoryRuntime.close != nil {
+			_ = soulFactoryRuntime.close()
+		}
+	}()
+	if soulFactoryRuntime != nil {
+		telemetryProvider.SetOpenClawSagaExporter(soulFactoryRuntime.sagaMonitor.WritePrometheus)
+		bgManager.RegisterWithOptions(soulFactoryRuntime.connection, RunnerRequired(false))
+		registerSignetHealthCheck(healthProvider, soulFactoryRuntime.connection)
+		bgManager.RegisterWithOptions(soulFactoryRuntime.runner)
+		logger.Info("SoulFactory reactor registered", zap.Bool("enabled", cfg.SoulFactory.Enabled))
 	}
 
 	// Phase 3 C1: create encrypted canonical publisher for org state.
