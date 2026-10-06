@@ -507,6 +507,8 @@ export const CP_STATE_TOPICS = Object.freeze({
   SECURITY_FINDING: 'security-finding',
   SECURITY_SCHEDULE: 'security-schedule',
   SECURITY_FINDING_DETAIL: 'security-finding-detail',
+  SECURITY_TARGET: 'security-target',
+  SECURITY_RUN: 'security-run',
   LLM_RELEASE: 'llm-release',
   ARTIFACT_SIGNATURE: 'artifact-signature',
   ARTIFACT_SBOM: 'artifact-sbom',
