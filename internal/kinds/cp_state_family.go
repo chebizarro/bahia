@@ -114,7 +114,7 @@ const (
 // resumes an interrupted adoption from these records in its local event store
 // instead of the SQL adopted_runtime_identity table. Like the security scan
 // families, it never had a wire kind and exists only as a 30900 discriminator.
-// 32022-32025 are taken by the HiveCI and SoulFactory saga families.
+// 32022-32025 and 32027 are taken by the HiveCI and SoulFactory saga families.
 const CPStateFamilyAdoptionBinding CPStateFamily = 32026
 
 // AdoptionBindingDTag is the d of the adoption binding of a service in an
@@ -137,19 +137,23 @@ func RuntimeObservationDTag(serviceID, environmentID string) string {
 	return "runtime:observation:" + serviceID + ":" + environmentID
 }
 
-// Hive-CI execution families (audit C-48, C-49). A policy record is the
-// pipeline policy release admission is checked against, a result record is
-// the daemon's processing state of one signed kind-5402 result, and an
-// initiation record is the journal of one build initiation (its prepared
-// signed events, with the per-run publisher key in the service-only layer),
-// so admission, retry and initiation resume from the local event store with
-// no SQL row. Like the security execution families these never had a wire
-// kind: they exist only as 30900 discriminators and are not in the kind
-// catalog.
+// Hive-CI execution families (audit C-48, C-49, bahia-xjdo9). A policy
+// record is the pipeline policy release admission is checked against, a
+// result record is the daemon's processing state of one signed kind-5402
+// result, an initiation record is the journal of one build initiation (its
+// prepared signed events, with the per-run publisher key in the service-only
+// layer), and a release record is the accepted-release ledger: the daemon's
+// admission of one signed kind-4903 release attestation under a release
+// identity (or the quarantine of an attestation that conflicts with it), so
+// admission, retry, initiation and release replay detection resume from the
+// local event store with no SQL row. Like the security execution families
+// these never had a wire kind: they exist only as 30900 discriminators and
+// are not in the kind catalog. 32026 is the adoption binding family.
 const (
 	CPStateFamilyHiveCIPolicy     CPStateFamily = 32022
 	CPStateFamilyHiveCIResult     CPStateFamily = 32023
 	CPStateFamilyHiveCIInitiation CPStateFamily = 32024
+	CPStateFamilyHiveCIRelease    CPStateFamily = 32027
 )
 
 // CPStateFamilySoulFactorySagaRun is the canonical progress record of one

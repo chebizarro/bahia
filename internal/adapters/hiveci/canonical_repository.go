@@ -17,15 +17,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// CanonicalState is the daemon's canonical Hive-CI state: pipeline policies
-// and the processing state of each signed result, published before any SQL
-// index is written and read back from the local event store.
-// *nostr.HiveCICanonicalPublisher satisfies it.
+// CanonicalState is the daemon's canonical Hive-CI state: pipeline policies,
+// the processing state of each signed result and the accepted-release ledger,
+// published before any SQL index is written and read back from the local
+// event store. *nostr.HiveCICanonicalPublisher satisfies it.
 type CanonicalState interface {
 	PublishPipelinePolicy(context.Context, domain.HiveCIPipelinePolicy) error
 	ListPipelinePolicies(context.Context) ([]domain.HiveCIPipelinePolicy, error)
 	PublishResultState(context.Context, domain.HiveCIResultState) error
 	ListResultStates(ctx context.Context, resultEventID, runEventID string) ([]domain.HiveCIResultState, error)
+	PublishAcceptedRelease(context.Context, domain.HiveCIAcceptedRelease) error
+	ListAcceptedReleases(ctx context.Context, releaseIdentity string) ([]domain.HiveCIAcceptedRelease, error)
+	PublishReleaseConflict(context.Context, domain.HiveCIReleaseConflict) error
 }
 
 // hiveCIPolicyNamespace derives the id of a pipeline policy that has no
@@ -38,13 +41,15 @@ const evidenceQueryLimit = 1000
 // CanonicalRepository is the Hive-CI store (audit C-48). Signed 5401 runs and
 // 5402 results are the evidence: they live in the local event store, where the
 // subscriber saves them, and every read decodes the signed event. What the
-// daemon decides about a result (its processing state and retry count) and the
-// pipeline policies are the daemon's own canonical records, published through
-// the outbox before the optional SQL index is written. SQL failures are logged
-// and repaired by RebuildIndex; with no database the store is complete.
+// daemon decides about a result (its processing state and retry count), the
+// pipeline policies and the accepted-release ledger (bahia-xjdo9) are the
+// daemon's own canonical records, published through the outbox before the
+// optional SQL index is written. SQL failures are logged and repaired by
+// RebuildIndex; with no database the store is complete.
 //
 // It has the shape of repository.HiveCIRepository because that is what the
-// subscriber and the pipeline bridge speak.
+// subscriber and the pipeline bridge speak, and of ReleaseStore because that
+// is what the release ingestor commits through.
 type CanonicalRepository struct {
 	events    EvidenceStore
 	canonical CanonicalState
@@ -56,7 +61,10 @@ type CanonicalRepository struct {
 	now    func() time.Time
 }
 
-var _ repository.HiveCIRepository = (*CanonicalRepository)(nil)
+var (
+	_ repository.HiveCIRepository = (*CanonicalRepository)(nil)
+	_ ReleaseStore                = (*CanonicalRepository)(nil)
+)
 
 // NewCanonicalRepository returns the canonical store over events and
 // canonical. index may be nil. trustedCIPubkeys are the kind-5401 producers
@@ -520,11 +528,87 @@ func (r *CanonicalRepository) LookupRepositoryCI(ctx context.Context, repoCoordi
 	return r.index.LookupRepositoryCI(ctx, repoCoordinates, includeDisabledPolicies)
 }
 
+// Accepted releases -------------------------------------------------------------
+
+// acceptedRelease returns the ledger record for the release identity, or nil.
+func (r *CanonicalRepository) acceptedRelease(ctx context.Context, releaseIdentity string) (*domain.HiveCIAcceptedRelease, error) {
+	releases, err := r.canonical.ListAcceptedReleases(ctx, releaseIdentity)
+	if err != nil {
+		return nil, err
+	}
+	if len(releases) == 0 {
+		return nil, nil
+	}
+	return &releases[0], nil
+}
+
+// CommitAcceptedRelease is the atomic accepted-release identity boundary over
+// canonical state (bahia-xjdo9). The first attestation accepted for a release
+// identity is published as the identity's ledger record; an attestation with
+// the same content digest is an exact replay and commits nothing; one with
+// different content is quarantined as a conflict record and rejected with
+// repository.ErrHiveCIReleaseReplayConflict. The decision is made on the
+// canonical ledger alone; the SQL accepted-release table is mirrored
+// afterwards as an index and its failures are logged.
+func (r *CanonicalRepository) CommitAcceptedRelease(ctx context.Context, release domain.HiveCIAcceptedRelease) (domain.HiveCIReleaseCommitResult, error) {
+	if err := r.available(); err != nil {
+		return domain.HiveCIReleaseCommitResult{}, err
+	}
+	if err := release.Validate(); err != nil {
+		return domain.HiveCIReleaseCommitResult{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	existing, err := r.acceptedRelease(ctx, release.Result.ReleaseIdentity)
+	if err != nil {
+		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("read Hive-CI accepted release: %w", err)
+	}
+	switch {
+	case existing == nil:
+		if err := r.canonical.PublishAcceptedRelease(ctx, release); err != nil {
+			return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("publish Hive-CI accepted release: %w", err)
+		}
+		r.mirrorRelease(ctx, release, false)
+		return domain.HiveCIReleaseCommitResult{Release: release}, nil
+	case existing.ContentDigest == release.ContentDigest:
+		r.mirrorRelease(ctx, release, false)
+		return domain.HiveCIReleaseCommitResult{Release: release, Replay: true}, nil
+	default:
+		if err := r.canonical.PublishReleaseConflict(ctx, domain.HiveCIReleaseConflict{
+			ReleaseIdentity: release.Result.ReleaseIdentity, AcceptedContentDigest: existing.ContentDigest,
+			ConflictingContentDigest: release.ContentDigest, ResultEventID: release.ResultEventID,
+			SignedEvent: release.SignedEvent, QuarantinedAt: r.now(),
+		}); err != nil {
+			return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("quarantine conflicting Hive-CI release: %w", err)
+		}
+		r.mirrorRelease(ctx, release, true)
+		return domain.HiveCIReleaseCommitResult{}, fmt.Errorf("%w: %s", repository.ErrHiveCIReleaseReplayConflict, release.Result.ReleaseIdentity)
+	}
+}
+
+// mirrorRelease writes the release through the SQL accepted-release store
+// when the index is one. The SQL store applies the same replay and conflict
+// rules: when the canonical ledger quarantined the release (conflict), the
+// index's conflict is the same decision mirrored; otherwise an index conflict
+// means a SQL-era row disagrees with canonical state and is logged like any
+// other index failure.
+func (r *CanonicalRepository) mirrorRelease(ctx context.Context, release domain.HiveCIAcceptedRelease, conflict bool) {
+	index, ok := r.index.(repository.HiveCIReleaseRepository)
+	if !ok || r.index == nil {
+		return
+	}
+	_, err := index.CommitAcceptedRelease(ctx, release)
+	if conflict && errors.Is(err, repository.ErrHiveCIReleaseReplayConflict) {
+		return
+	}
+	r.mirror("accepted release", err)
+}
+
 // Index rebuild and migration ---------------------------------------------------
 
-// RebuildIndex replays the canonical policies and result states into the
-// optional SQL index. It never removes rows; one failed row does not stop
-// the rest.
+// RebuildIndex replays the canonical policies, result states and accepted
+// releases into the optional SQL index. It never removes rows; one failed
+// row does not stop the rest.
 func (r *CanonicalRepository) RebuildIndex(ctx context.Context) error {
 	if r == nil || r.index == nil {
 		return nil
@@ -573,6 +657,20 @@ func (r *CanonicalRepository) RebuildIndex(ctx context.Context) error {
 		}
 		if err := r.index.UpdateResultState(ctx, result.ResultEventID, result.ProcessingState); err != nil {
 			failed = append(failed, fmt.Errorf("result %s state: %w", result.ResultEventID, err))
+		}
+	}
+	if releaseIndex, ok := r.index.(repository.HiveCIReleaseRepository); ok {
+		releases, err := r.canonical.ListAcceptedReleases(ctx, "")
+		if err != nil {
+			return err
+		}
+		for _, release := range releases {
+			// The SQL store treats a release it already holds as an exact
+			// replay; a conflict means a SQL-era row disagrees with canonical
+			// state and is reported.
+			if _, err := releaseIndex.CommitAcceptedRelease(ctx, release); err != nil {
+				failed = append(failed, fmt.Errorf("release %s: %w", release.Result.ReleaseIdentity, err))
+			}
 		}
 	}
 	return errors.Join(failed...)

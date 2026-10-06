@@ -300,7 +300,21 @@ from terminal release-attestation acceptance.
 A release attestation is registered only after manifest, SBOM, and in-toto
 provenance bytes match every signed descriptor and lineage binding. The
 artifact identity is `repository@sha256:digest`; any signed image tag is stored
-only as evidence. CI success does not promote production. The legacy `auto_deploy_staging` policy
+only as evidence. The accepted release is committed to the daemon's canonical
+accepted-release ledger first: one fleet-OCK encrypted `30900` record per
+release identity (`legacy_kind=32027`, `d=hiveci:release:<release-identity>`,
+`t=hiveci-release`, public tags `release`, `digest`, `result`, `run`,
+`status=accepted`) in the local event store. An exact replay of the same
+attestation is recognised from that record, across restarts and with no
+database; an attestation naming an accepted identity with different content is
+quarantined on `d=hiveci:release-conflict:<release-identity>:<digest>`
+(`status=conflict`, tag `accepted=<accepted digest>`) and rejected. The SQL
+`hiveci_accepted_releases`/`hiveci_release_conflicts` tables are an index
+written after the canonical commit and rebuilt from the ledger after warm
+start; a failed index write is logged, never returned. Releases accepted
+before the ledger existed live only in SQL: the first attestation seen for such
+an identity is accepted canonically, and the index mirror then reports whether
+it matched the SQL row. CI success does not promote production. The legacy `auto_deploy_staging` policy
 metadata may create a staging intent; protected environments leave that intent
 pending approval. Production promotion remains a separately authorized
 control-plane action.

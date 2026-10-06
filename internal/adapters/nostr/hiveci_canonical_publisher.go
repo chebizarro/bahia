@@ -21,11 +21,19 @@ const (
 	KindHiveCIPolicyRecord     = int(kinds.CPStateFamilyHiveCIPolicy)
 	KindHiveCIResultRecord     = int(kinds.CPStateFamilyHiveCIResult)
 	KindHiveCIInitiationRecord = int(kinds.CPStateFamilyHiveCIInitiation)
+	KindHiveCIReleaseRecord    = int(kinds.CPStateFamilyHiveCIRelease)
+)
+
+// Accepted-release ledger record statuses (public "status" tag).
+const (
+	hiveCIReleaseStatusAccepted = "accepted"
+	hiveCIReleaseStatusConflict = "conflict"
 )
 
 // HiveCICanonicalPublisher is the canonical store of the daemon's own Hive-CI
 // state (audit C-48): the pipeline policies release admission is checked
-// against, and the processing state of each signed workflow result. Records
+// against, the processing state of each signed workflow result, the build
+// initiation journal and the accepted-release ledger (bahia-xjdo9). Records
 // are fleet-OCK encrypted 30900 cp-state, published through the outbox before
 // any SQL index is written, and read back from the daemon's retained records
 // in the local event store. The signed 5401/5402/4903 evidence itself is not
@@ -228,6 +236,83 @@ func (p *HiveCICanonicalPublisher) listInitiations(ctx context.Context, match fu
 		})
 	}
 	return out, nil
+}
+
+// Accepted releases ---------------------------------------------------------
+
+func hiveCIReleaseDTag(releaseIdentity string) string { return "hiveci:release:" + releaseIdentity }
+
+func hiveCIReleaseConflictDTag(releaseIdentity, conflictingDigest string) string {
+	return "hiveci:release-conflict:" + releaseIdentity + ":" + conflictingDigest
+}
+
+// PublishAcceptedRelease publishes the daemon's admission of one release on
+// "hiveci:release:<release-identity>" (bahia-xjdo9). The identity, the
+// attestation's content digest and the signed events it was accepted from
+// are public tags so a replay is recognised without decrypting; the release
+// itself (its policy snapshot, worker admission and signed evidence) is in
+// the fleet-OCK encrypted content.
+func (p *HiveCICanonicalPublisher) PublishAcceptedRelease(ctx context.Context, release domain.HiveCIAcceptedRelease) error {
+	if err := p.available(); err != nil {
+		return err
+	}
+	if err := release.Validate(); err != nil {
+		return err
+	}
+	content, err := json.Marshal(release)
+	if err != nil {
+		return err
+	}
+	tags := gonostr.Tags{
+		{"release", release.Result.ReleaseIdentity}, {"digest", release.ContentDigest},
+		{"result", release.ResultEventID}, {"run", release.Result.Lineage.WorkflowRunEventID},
+		{"status", hiveCIReleaseStatusAccepted},
+	}
+	return p.publishConfidential(ctx, KindHiveCIReleaseRecord, hiveCIReleaseDTag(release.Result.ReleaseIdentity), tags, string(content), "hiveci_release.projection", nil)
+}
+
+// ListAcceptedReleases returns the retained accepted releases; releaseIdentity,
+// when set, narrows the result to that identity's record.
+func (p *HiveCICanonicalPublisher) ListAcceptedReleases(ctx context.Context, releaseIdentity string) ([]domain.HiveCIAcceptedRelease, error) {
+	raw, err := p.listState(ctx, KindHiveCIReleaseRecord, func(tags gonostr.Tags) bool {
+		return tagValue(tags, "status") == hiveCIReleaseStatusAccepted &&
+			(releaseIdentity == "" || tagValue(tags, "release") == releaseIdentity)
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.HiveCIAcceptedRelease, 0, len(raw))
+	for _, b := range raw {
+		var release domain.HiveCIAcceptedRelease
+		if err := json.Unmarshal(b, &release); err != nil {
+			return nil, fmt.Errorf("decode Hive-CI accepted release: %w", err)
+		}
+		out = append(out, release)
+	}
+	return out, nil
+}
+
+// PublishReleaseConflict quarantines an attestation that names an accepted
+// release identity with different content, on
+// "hiveci:release-conflict:<release-identity>:<conflicting-digest>". The
+// accepted record is untouched.
+func (p *HiveCICanonicalPublisher) PublishReleaseConflict(ctx context.Context, conflict domain.HiveCIReleaseConflict) error {
+	if err := p.available(); err != nil {
+		return err
+	}
+	if conflict.ReleaseIdentity == "" || conflict.ConflictingContentDigest == "" || conflict.AcceptedContentDigest == "" {
+		return fmt.Errorf("Hive-CI release conflict requires the release identity and both content digests")
+	}
+	content, err := json.Marshal(conflict)
+	if err != nil {
+		return err
+	}
+	tags := gonostr.Tags{
+		{"release", conflict.ReleaseIdentity}, {"digest", conflict.ConflictingContentDigest},
+		{"accepted", conflict.AcceptedContentDigest}, {"result", conflict.ResultEventID},
+		{"status", hiveCIReleaseStatusConflict},
+	}
+	return p.publishConfidential(ctx, KindHiveCIReleaseRecord, hiveCIReleaseConflictDTag(conflict.ReleaseIdentity, conflict.ConflictingContentDigest), tags, string(content), "hiveci_release_conflict.projection", nil)
 }
 
 func (p *HiveCICanonicalPublisher) publishConfidential(ctx context.Context, legacyKind int, dTag string, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {

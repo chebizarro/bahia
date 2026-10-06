@@ -1929,10 +1929,8 @@ func New(cfg *config.Config) (*App, error) {
 			zap.String("reason", "hiveci_canonical_unavailable"))
 	default:
 		var hiveIndex repository.HiveCIRepository
-		var hivePgRepo *repository.PgHiveCIRepository
 		if dbAvailable && pool != nil {
-			hivePgRepo = repository.NewPgHiveCIRepository(pool)
-			hiveIndex = hivePgRepo
+			hiveIndex = repository.NewPgHiveCIRepository(pool)
 		}
 		hiveCanonical = nostrAdapter.NewHiveCICanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
 		hiveRepo = hiveciAdapter.NewCanonicalRepository(localEventStore, hiveCanonical, hiveIndex, cfg.HiveCI.TrustedCIPubkeys, logger)
@@ -1974,16 +1972,17 @@ func New(cfg *config.Config) (*App, error) {
 			if controlPlaneSigner == nil {
 				return nil, fmt.Errorf("Hive-CI release registration requires a control-plane audit signer")
 			}
-			if hivePgRepo == nil {
-				return nil, fmt.Errorf("Hive-CI release registration requires the PostgreSQL accepted-release store")
-			}
+			// bahia-xjdo9: the accepted-release ledger is canonical cp-state in
+			// the local event store (CanonicalRepository.CommitAcceptedRelease);
+			// the SQL accepted-release table is an index mirrored afterwards, so
+			// release ingestion needs no database.
 			releaseAudit := hiveciAdapter.NewRegistrationAudit(controlPlaneSigner, auditEventRepo)
 			releaseEvidence := hiveciAdapter.NewLocalReleaseEvidence(
 				localEventStore, hiveRepo, nostrAdapter.NewWorkerSchedulingView(projectionHistory),
 				hiveciAdapter.NewOCIReleaseObjectResolver(ociSvc, pipelineRegistryInspector), pressureThresholds,
 			)
 			releaseIngestor := hiveciAdapter.NewReleaseIngestor(
-				releaseEvidence, hivePgRepo, cfg.HiveCI.TrustedReleaseAttestors, cfg.HiveCI.TrustedCIPubkeys,
+				releaseEvidence, hiveRepo, cfg.HiveCI.TrustedReleaseAttestors, cfg.HiveCI.TrustedCIPubkeys,
 			)
 			promotionSvc, err := service.NewProductionAgentRuntimePromotionService(
 				agentRuntimeReleaseRepo, serviceRepo, envRepo, hiveRepo, registry,
