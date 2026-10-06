@@ -2,11 +2,9 @@ package hiveci
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -71,8 +69,12 @@ type Subscriber struct {
 	onRelease      AcceptedReleaseConsumer
 	attestors      map[string]struct{}
 	releaseAuditor ReleaseIngestAuditor
-	evidenceEvents repository.NostrEventRepository
-	now            func() time.Time
+	// evidence is the local event store: the verified relay copy of every
+	// signed run, result and release attestation the subscriber admits
+	// (audit C-48). Release admission and retry read it; no SQL mirror is
+	// consulted.
+	evidence EvidenceStore
+	now      func() time.Time
 }
 
 func (s *Subscriber) SetRunConsumer(consumer RunConsumer) { s.onRun = consumer }
@@ -109,8 +111,10 @@ func (s *Subscriber) SetReleaseAttestors(pubkeys []string) {
 
 func (s *Subscriber) SetReleaseAuditor(auditor ReleaseIngestAuditor) { s.releaseAuditor = auditor }
 
-func (s *Subscriber) SetReleaseEvidenceRecorder(events repository.NostrEventRepository) {
-	s.evidenceEvents = events
+// SetEvidenceStore makes the subscriber retain every admitted signed event in
+// the local event store before acting on it.
+func (s *Subscriber) SetEvidenceStore(events EvidenceStore) {
+	s.evidence = events
 }
 
 func NewSubscriber(pool *nostrAdapter.RelayPool, repo repository.HiveCIRepository, trustedCIPubkeys []string, logger *zap.Logger, onResult ResultConsumer) *Subscriber {
@@ -339,66 +343,20 @@ func (s *Subscriber) handleWorkflowRun(ctx context.Context, ev *nostr.Event) {
 		return
 	}
 
-	repoCoordinate, err := requiredTag(ev, "a")
+	run, err := parseWorkflowRunEvent(ev)
 	if err != nil {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
-		return
-	}
-	var envelope struct {
-		Params struct {
-			Commit      string `json:"commit"`
-			Branch      string `json:"branch"`
-			Workflow    string `json:"workflow"`
-			TriggeredBy string `json:"triggered_by"`
-		} `json:"params"`
-	}
-	if strings.TrimSpace(ev.Content) != "" {
-		if err := json.Unmarshal([]byte(ev.Content), &envelope); err != nil {
-			s.warnDecision("invalid Hive-CI workflow run content envelope", "envelope_parse_failure",
+		var parse *parseError
+		if errors.As(err, &parse) && parse.reason == parseReasonContent {
+			s.warnDecision("invalid Hive-CI workflow run content envelope", parse.reason,
 				zap.String("event_id", eventID), zap.Int("kind", kinds.HiveCIWorkflowRun), zap.Error(err))
-			return
+		} else {
+			s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
 		}
-	}
-	commit := firstNonEmpty(optionalTag(ev, "commit"), envelope.Params.Commit)
-	branch := firstNonEmpty(optionalTag(ev, "branch"), envelope.Params.Branch)
-	workflow := firstNonEmpty(optionalTag(ev, "workflow"), envelope.Params.Workflow)
-	triggeredBy := firstNonEmpty(optionalTag(ev, "triggered-by"), envelope.Params.TriggeredBy)
-	if commit == "" || branch == "" || workflow == "" || triggeredBy == "" {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.String("reason", "missing canonical workflow params"))
 		return
 	}
-	publisher, err := requiredTag(ev, "publisher")
-	if err != nil {
-		s.logger.Warn("invalid hiveci workflow run", zap.String("event_id", eventID), zap.Error(err))
+	repoCoordinate, commit, workflow := run.RepoCoordinate, run.CommitSHA, run.WorkflowPath
+	if !s.retainEvidence(ev) {
 		return
-	}
-
-	run := domain.HiveCIWorkflowRun{
-		RunEventID:      eventID,
-		RepoCoordinate:  repoCoordinate,
-		CommitSHA:       commit,
-		Branch:          branch,
-		WorkflowPath:    workflow,
-		TriggerType:     optionalTag(ev, "trigger"),
-		TriggeredBy:     triggeredBy,
-		PublisherPubkey: publisher,
-		EventCreatedAt:  ev.CreatedAt.Time(),
-		ProcessingState: domain.HiveCIProcessingStatePendingResult,
-	}
-	if s.evidenceEvents != nil {
-		tagsJSON, marshalErr := json.Marshal(ev.Tags)
-		if marshalErr != nil {
-			s.logger.Warn("failed to encode signed Hive-CI workflow evidence", zap.Error(marshalErr))
-			return
-		}
-		if _, recordErr := s.evidenceEvents.Record(ctx, &repository.NostrEventRecord{
-			ID: eventID, Kind: int(ev.Kind), PubKey: pubkey, Content: ev.Content, Tags: tagsJSON,
-			Sig: hex.EncodeToString(ev.Sig[:]), CreatedAt: ev.CreatedAt.Time(), ReceivedAt: s.now(),
-			EntityType: "hiveci_workflow_run", PublishState: repository.NostrPublishStateNotApplicable,
-		}); recordErr != nil {
-			s.logger.Warn("failed to persist signed Hive-CI workflow evidence", zap.Error(recordErr))
-			return
-		}
 	}
 	// hive-ci-protocol identity: one (a, commit, workflow) tuple is one build.
 	// A second signed run for the same tuple (for example Bahia's own
@@ -485,56 +443,50 @@ func (s *Subscriber) processOrphanedResults(ctx context.Context, runEventID stri
 	}
 }
 
-func (s *Subscriber) recordReleaseCandidate(ctx context.Context, ev *nostr.Event) error {
-	if s.evidenceEvents == nil {
-		return fmt.Errorf("release evidence repository is not configured")
+// retainEvidence saves a validated signed event in the local event store. It
+// reports false, after logging, when the store is configured but refused it:
+// an event the daemon cannot retain must not be acted on, since every later
+// decision about it reads the store.
+func (s *Subscriber) retainEvidence(ev *nostr.Event) bool {
+	if s.evidence == nil {
+		return true
 	}
-	tagsJSON, err := json.Marshal(ev.Tags)
-	if err != nil {
-		return fmt.Errorf("encode signed release candidate tags: %w", err)
+	if _, err := s.evidence.SaveEvent(*ev); err != nil {
+		s.logger.Warn("failed to retain signed Hive-CI evidence", zap.String("event_id", nostrutil.EventIDHex(ev)), zap.Int("kind", int(ev.Kind)), zap.Error(err))
+		return false
 	}
-	receivedAt := time.Now().UTC()
-	if s.now != nil {
-		receivedAt = s.now().UTC()
+	return true
+}
+
+func (s *Subscriber) recordReleaseCandidate(ev *nostr.Event) error {
+	if s.evidence == nil {
+		return fmt.Errorf("release evidence store is not configured")
 	}
-	_, err = s.evidenceEvents.Record(ctx, &repository.NostrEventRecord{
-		ID: ev.ID.Hex(), Kind: int(ev.Kind), PubKey: ev.PubKey.Hex(), Content: ev.Content, Tags: tagsJSON,
-		Sig: hex.EncodeToString(ev.Sig[:]), CreatedAt: ev.CreatedAt.Time(), ReceivedAt: receivedAt,
-		EntityType: "hiveci_release_candidate", PublishState: repository.NostrPublishStateNotApplicable,
-	})
-	if err != nil {
+	if _, err := s.evidence.SaveEvent(*ev); err != nil {
 		return fmt.Errorf("persist signed release candidate: %w", err)
 	}
 	return nil
 }
 
+// processOrphanedReleases re-ingests the retained release attestations that
+// name the run, now that its signed lineage is here.
 func (s *Subscriber) processOrphanedReleases(ctx context.Context, runEventID string) {
-	if s.releases == nil || s.evidenceEvents == nil {
+	if s.releases == nil || s.evidence == nil {
 		return
 	}
-	records, err := s.evidenceEvents.FindByTag(
-		ctx, "run", runEventID, []int{kinds.CASAudit}, 1000,
-	)
-	if err != nil {
-		s.logger.Warn("failed to list orphaned release attestations",
-			zap.String("run_event_id", runEventID), zap.Error(err))
-		return
+	authors := make([]nostr.PubKey, 0, len(s.attestors))
+	for raw := range s.attestors {
+		if author, err := nostr.PubKeyFromHex(raw); err == nil {
+			authors = append(authors, author)
+		}
 	}
-	for index := range records {
-		record := &records[index]
-		if record.EntityType != "hiveci_release_candidate" {
+	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASAudit)}, Authors: authors, Limit: evidenceQueryLimit}
+	for ev := range s.evidence.QueryEvents(filter) {
+		candidate := ev
+		if !IsReleaseCandidate(&candidate) || optionalTag(&candidate, "run") != runEventID {
 			continue
 		}
-		event, decodeErr := signedEventFromRecord(record)
-		if decodeErr != nil {
-			s.logger.Warn("failed to decode orphaned release attestation",
-				zap.String("event_id", record.ID), zap.Error(decodeErr))
-			continue
-		}
-		if !IsReleaseCandidate(event) {
-			continue
-		}
-		s.handleReleaseAttestation(ctx, event)
+		s.handleReleaseAttestation(ctx, &candidate)
 	}
 }
 
@@ -545,7 +497,7 @@ func (s *Subscriber) processOrphanedReleases(ctx context.Context, runEventID str
 func (s *Subscriber) handleReleaseAttestation(ctx context.Context, ev *nostr.Event) {
 	eventID := nostrutil.EventIDHex(ev)
 	{
-		if err := s.recordReleaseCandidate(ctx, ev); err != nil {
+		if err := s.recordReleaseCandidate(ev); err != nil {
 			s.logger.Warn("failed to durably retain release attestation", zap.String("event_id", eventID), zap.Error(err))
 			if s.releaseAuditor != nil {
 				_ = s.releaseAuditor.AuditReleaseRejection(ctx, ev, err)
@@ -601,45 +553,16 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		)
 		return
 	}
-	pubkey := nostrutil.EventPubKeyHex(ev)
-	runEventID, err := requiredTag(ev, "e")
+	result, contentErr, err := parseWorkflowResultEvent(ev)
 	if err != nil {
-		s.warnDecision("invalid Hive-CI workflow result", "envelope_validation_failed", zap.String("event_id", eventID), zap.Error(err))
+		s.warnDecision("invalid Hive-CI workflow result", parseReasonInvalid, zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
-	logURL, err := requiredTag(ev, "log_url")
-	if err != nil {
-		s.warnDecision("invalid Hive-CI workflow result", "envelope_validation_failed", zap.String("event_id", eventID), zap.Error(err))
-		return
-	}
-	status, err := requiredTag(ev, "status")
-	if err != nil {
-		s.warnDecision("invalid Hive-CI workflow result", "envelope_validation_failed", zap.String("event_id", eventID), zap.Error(err))
-		return
-	}
-	if status != "success" && status != "failure" {
-		s.warnDecision("invalid Hive-CI workflow result status", "envelope_validation_failed", zap.String("event_id", eventID), zap.String("status", status))
-		return
-	}
-	exitCodeStr, err := requiredTag(ev, "exit_code")
-	if err != nil {
-		s.warnDecision("invalid Hive-CI workflow result", "envelope_validation_failed", zap.String("event_id", eventID), zap.Error(err))
-		return
-	}
-	exitCode, err := strconv.Atoi(exitCodeStr)
-	if err != nil {
-		s.warnDecision("invalid Hive-CI workflow result exit_code", "envelope_validation_failed", zap.String("event_id", eventID), zap.String("exit_code", exitCodeStr))
-		return
-	}
-	durationStr, err := requiredTag(ev, "duration")
-	if err != nil {
-		s.warnDecision("invalid Hive-CI workflow result", "envelope_validation_failed", zap.String("event_id", eventID), zap.Error(err))
-		return
-	}
-	duration, err := strconv.Atoi(durationStr)
-	if err != nil {
-		s.warnDecision("invalid Hive-CI workflow result duration", "envelope_validation_failed", zap.String("event_id", eventID), zap.String("duration", durationStr))
-		return
+	pubkey, runEventID, status := result.PublisherPubkey, result.RunEventID, result.Status
+	if contentErr != nil {
+		s.warnDecision("ignoring malformed Hive-CI result content and falling back to signed tags", parseReasonContent,
+			zap.String("event_id", eventID), zap.String("run_event_id", runEventID),
+			zap.String("pubkey", pubkey), zap.Error(contentErr))
 	}
 
 	run, err := s.repo.GetRunByEventID(ctx, runEventID)
@@ -658,6 +581,9 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 			return
 		}
 	}
+	if !s.retainEvidence(ev) {
+		return
+	}
 
 	// Determine processing state: pending_run if run hasn't arrived yet, pending_result otherwise
 	processingState := domain.HiveCIProcessingStatePendingResult
@@ -667,48 +593,7 @@ func (s *Subscriber) handleWorkflowResult(ctx context.Context, ev *nostr.Event) 
 		s.logger.Info("hiveci workflow result arrived before run, storing as orphan", zap.String("run_event_id", runEventID), zap.String("result_event_id", eventID))
 	}
 
-	var content workflowResultContent
-	if strings.TrimSpace(ev.Content) != "" {
-		var decodeErr error
-		content, decodeErr = parseWorkflowResultContent(ev.Content)
-		if decodeErr != nil {
-			s.warnDecision("ignoring malformed Hive-CI result content and falling back to signed tags", "envelope_parse_failure",
-				zap.String("event_id", eventID), zap.String("run_event_id", runEventID),
-				zap.String("pubkey", pubkey), zap.Error(decodeErr))
-		}
-	}
-	imageRepo := optionalTag(ev, "image_repo")
-	if imageRepo == "" {
-		imageRepo = content.ImageRepo
-	}
-	imageTag := optionalTag(ev, "image_tag")
-	if imageTag == "" {
-		imageTag = content.ImageTag
-	}
-	imageDigest := optionalTag(ev, "image_digest")
-	if imageDigest == "" {
-		imageDigest = content.ImageDigest
-	}
-	pstfGateName := firstNonEmpty(optionalTag(ev, "pstf_gate_name"), optionalTag(ev, "gate_name"), content.PSTFGateName)
-	pstfGateStatus := firstNonEmpty(optionalTag(ev, "pstf_gate_status"), optionalTag(ev, "gate_status"), optionalTag(ev, "pstf_status"), content.PSTFGateStatus)
-
-	result := domain.HiveCIWorkflowResult{
-		ResultEventID:   eventID,
-		RunEventID:      runEventID,
-		Status:          status,
-		ExitCode:        exitCode,
-		DurationSeconds: duration,
-		LogURL:          logURL,
-		Error:           optionalTag(ev, "error"),
-		ImageRepo:       imageRepo,
-		ImageTag:        imageTag,
-		ImageDigest:     imageDigest,
-		PSTFGateName:    pstfGateName,
-		PSTFGateStatus:  pstfGateStatus,
-		PublisherPubkey: pubkey,
-		EventCreatedAt:  ev.CreatedAt.Time(),
-		ProcessingState: processingState,
-	}
+	result.ProcessingState = processingState
 
 	if err := s.repo.UpsertWorkflowResult(ctx, result); err != nil {
 		s.logger.Warn("failed to persist hiveci workflow result", zap.String("event_id", eventID), zap.Error(err))
@@ -756,14 +641,7 @@ func parseWorkflowResultContent(raw string) (workflowResultContent, error) {
 }
 
 func isTerminalHiveCIResultState(state domain.HiveCIProcessingState) bool {
-	switch state {
-	case domain.HiveCIProcessingStateProcessed,
-		domain.HiveCIProcessingStateRejected,
-		domain.HiveCIProcessingStateFailed:
-		return true
-	default:
-		return false
-	}
+	return state.Terminal()
 }
 
 func isArtifactCandidate(event *nostr.Event) bool {

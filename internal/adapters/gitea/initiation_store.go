@@ -37,9 +37,11 @@ var (
 	ErrPublishUnconfirmed = errors.New("build initiation publish is unconfirmed; inspect relay evidence before proceeding")
 )
 
-// InitiationRecord is local authority, not a rebuildable relay projection.
-// Prepared signed events and the per-run publisher key survive process loss.
-// The PostgreSQL store encrypts the entire document; upstream and mirror-read
+// InitiationRecord is the journal of one build initiation: the prepared
+// signed events, pinned job arguments and the per-run publisher key survive
+// process loss. Its canonical home is the daemon's confidential initiation
+// record in the local event store (CanonicalInitiationStore); the PostgreSQL
+// store is an optional encrypted index of it. Upstream and mirror-read
 // passwords are never stored here.
 type InitiationRecord struct {
 	SourceEventID           string
@@ -83,11 +85,16 @@ func NewPgInitiationStore(pool *pgxpool.Pool, cipher initiationCipher) *PgInitia
 
 func newInitiationRecord(req controlplane.HiveCIBuildStartRequest) (*InitiationRecord, error) {
 	req.SourceEventID = strings.TrimSpace(req.SourceEventID)
-	if req.SourceEventID == "" || req.BuildID == uuid.Nil {
-		return nil, fmt.Errorf("build initiation requires a source event ID and build ID")
+	if req.SourceEventID == "" {
+		return nil, fmt.Errorf("build initiation requires a source event ID")
+	}
+	// The build identity is derived from the signed source event, so two
+	// initiators or a restart name the same build without a claim.
+	if req.BuildID == uuid.Nil {
+		req.BuildID = controlplane.BuildIDForSourceEvent(req.SourceEventID)
 	}
 	identity := req
-	identity.BuildID = uuid.Nil // The first claim owns the canonical build ID.
+	identity.BuildID = uuid.Nil // The identity is the request, not the id.
 	encoded, err := json.Marshal(identity)
 	if err != nil {
 		return nil, err
@@ -204,4 +211,53 @@ func validInitiationTransition(from, to InitiationStage) bool {
 	default:
 		return false
 	}
+}
+
+// Upsert writes the record into the index as it is, whatever stage the index
+// holds. It is the mirror and rebuild path of the canonical store.
+func (s *PgInitiationStore) Upsert(ctx context.Context, rec *InitiationRecord) error {
+	document, err := s.encode(rec)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `INSERT INTO hiveci_initiations (source_event_id, build_id, stage, document)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (source_event_id) DO UPDATE SET stage = EXCLUDED.stage, document = EXCLUDED.document, updated_at = now()`,
+		rec.SourceEventID, rec.Request.BuildID, rec.Stage, document)
+	if err != nil {
+		return fmt.Errorf("index build initiation: %w", err)
+	}
+	return nil
+}
+
+// ListInFlight returns the initiations the index holds in a non-terminal
+// stage: what a one-time backfill into the canonical journal carries over.
+func (s *PgInitiationStore) ListInFlight(ctx context.Context) ([]*InitiationRecord, error) {
+	rows, err := s.pool.Query(ctx, `SELECT source_event_id FROM hiveci_initiations WHERE stage <> $1 ORDER BY created_at`, StageEvidencePublished)
+	if err != nil {
+		return nil, fmt.Errorf("list in-flight build initiations: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]*InitiationRecord, 0, len(ids))
+	for _, id := range ids {
+		rec, err := s.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if rec != nil {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
 }

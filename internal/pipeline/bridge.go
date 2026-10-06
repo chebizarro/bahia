@@ -241,6 +241,11 @@ func (b *Bridge) RegisterBuildResult(ctx context.Context, buildID uuid.UUID) (*d
 }
 
 func (b *Bridge) processResult(ctx context.Context, resultEventID string, expectedBuild *domain.Build, explicit bool) (artifact *domain.Artifact, err error) {
+	if b == nil || b.hiveRepo == nil || b.buildRepo == nil {
+		// Build registration is a PostgreSQL-backed registry; without it the
+		// result keeps its pending state and is resumed when one is wired.
+		return nil, fmt.Errorf("HiveCI build registration is not configured")
+	}
 	result, err := b.hiveRepo.GetResultByEventID(ctx, resultEventID)
 	if err != nil {
 		return nil, fmt.Errorf("load hiveci result: %w", err)

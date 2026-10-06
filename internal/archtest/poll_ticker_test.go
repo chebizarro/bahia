@@ -16,6 +16,9 @@ import (
 var pollGatedPaths = []string{
 	"internal/service/",
 	"internal/reconcile/",
+	// Daemon background runners: a ticker there is a SQL scan standing in
+	// for an event trigger (audit C-48) unless it is annotated housekeeping.
+	"internal/app/",
 }
 
 // allowPollAnnotation must carry a reason, on the ticker's line or the line

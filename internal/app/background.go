@@ -2,11 +2,9 @@ package app
 
 import (
 	"context"
-	"math"
 	"sync"
 	"time"
 
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -38,100 +36,6 @@ type OSVVulnerabilityCachePruner interface {
 	PruneExpiredOSVVulnerabilityCache(ctx context.Context, now time.Time) (int64, error)
 }
 
-type HiveCIRetryRepository interface {
-	ListPendingResults(ctx context.Context) ([]domain.HiveCIWorkflowResult, error)
-	IncrementResultRetry(ctx context.Context, eventID string, at time.Time) (int, error)
-	MarkResultFailed(ctx context.Context, eventID, reason string) error
-}
-
-type HiveCIBridgeProcessor interface {
-	ProcessResult(ctx context.Context, resultEventID string) error
-}
-
-type HiveCIRetryRunner struct {
-	repo       HiveCIRetryRepository
-	processor  HiveCIBridgeProcessor
-	interval   time.Duration
-	maxRetries int
-	logger     *zap.Logger
-}
-
-func NewHiveCIRetryRunner(repo HiveCIRetryRepository, processor HiveCIBridgeProcessor, interval time.Duration, maxRetries int, logger *zap.Logger) *HiveCIRetryRunner {
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
-	if maxRetries <= 0 {
-		maxRetries = 10
-	}
-	return &HiveCIRetryRunner{repo: repo, processor: processor, interval: interval, maxRetries: maxRetries, logger: logger}
-}
-
-func (r *HiveCIRetryRunner) Name() string { return "hiveci-retry" }
-
-func (r *HiveCIRetryRunner) Run(ctx context.Context) error {
-	if r.repo == nil || r.processor == nil {
-		return nil
-	}
-	ticker := time.NewTicker(r.interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			r.runOnce(ctx)
-		}
-	}
-}
-
-func (r *HiveCIRetryRunner) runOnce(ctx context.Context) {
-	pending, err := r.repo.ListPendingResults(ctx)
-	if err != nil {
-		r.logger.Warn("hiveci retry list pending failed", zap.Error(err))
-		return
-	}
-	now := time.Now()
-	for _, result := range pending {
-		if result.RetryCount >= r.maxRetries {
-			_ = r.repo.MarkResultFailed(ctx, result.ResultEventID, "max retries exceeded")
-			continue
-		}
-		if !r.shouldRetryNow(result, now) {
-			continue
-		}
-
-		attempt, err := r.repo.IncrementResultRetry(ctx, result.ResultEventID, now)
-		if err != nil {
-			r.logger.Warn("hiveci retry increment failed", zap.String("result_event_id", result.ResultEventID), zap.Error(err))
-			continue
-		}
-		if attempt > r.maxRetries {
-			_ = r.repo.MarkResultFailed(ctx, result.ResultEventID, "max retries exceeded")
-			continue
-		}
-
-		if err := r.processor.ProcessResult(ctx, result.ResultEventID); err != nil {
-			r.logger.Warn("hiveci retry process failed", zap.String("result_event_id", result.ResultEventID), zap.Int("retry_count", attempt), zap.Error(err))
-			if attempt >= r.maxRetries {
-				_ = r.repo.MarkResultFailed(ctx, result.ResultEventID, "max retries exceeded")
-			}
-		}
-	}
-}
-
-func (r *HiveCIRetryRunner) shouldRetryNow(result domain.HiveCIWorkflowResult, now time.Time) bool {
-	if result.LastRetryAt == nil {
-		return true
-	}
-	backoff := float64(r.interval) * math.Pow(2, float64(result.RetryCount))
-	next := result.LastRetryAt.Add(time.Duration(backoff))
-	return !now.Before(next)
-}
-
 type OCIUploadCleanupRunner struct {
 	cleaner  OCIUploadCleaner
 	interval time.Duration
@@ -154,6 +58,7 @@ func (r *OCIUploadCleanupRunner) Run(ctx context.Context) error {
 	if r.cleaner == nil {
 		return nil
 	}
+	//nostr:allow-poll housekeeping: expires abandoned OCI upload sessions; no event signals their expiry
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 
@@ -200,6 +105,7 @@ func (r *OSVVulnerabilityCacheCleanupRunner) Run(ctx context.Context) error {
 	if r.pruner == nil {
 		return nil
 	}
+	//nostr:allow-poll housekeeping: prunes the expired OSV vulnerability cache; no event signals expiry
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 
@@ -252,6 +158,7 @@ func (r *ContextVMResponseCleanupRunner) Run(ctx context.Context) error {
 	if r.pruner == nil {
 		return nil
 	}
+	//nostr:allow-poll housekeeping: expires retained ContextVM responses; no event signals their expiry
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 	for {

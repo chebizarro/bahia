@@ -101,6 +101,7 @@ func (r *nostrTransportMetricsRunner) Name() string { return "nostr-transport-me
 
 func (r *nostrTransportMetricsRunner) Run(ctx context.Context) error {
 	r.refresh(ctx)
+	//nostr:allow-poll metrics heartbeat: samples transport gauges for Prometheus on an interval
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 	for {

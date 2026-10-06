@@ -138,7 +138,7 @@ func proveInitiationResume(t *testing.T, freshStore func(t *testing.T) (Initiati
 			_, err := initiator.StartHiveCIBuild(context.Background(), req)
 			require.ErrorIs(t, err, errSimulatedCrash)
 			canonicalID := req.BuildID
-			req.BuildID = uuid.New() // A caller cannot replace the durable identity.
+			req.BuildID = uuid.Nil // The durable identity is derived from the source event, not supplied.
 			restarted := restartInitiator(t, original, restartStore(), relay)
 			result, err := restarted.StartHiveCIBuild(context.Background(), req)
 			require.NoError(t, err)
