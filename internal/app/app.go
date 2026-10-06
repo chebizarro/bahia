@@ -464,14 +464,24 @@ func New(cfg *config.Config) (*App, error) {
 
 	var publicRoutePlanner *service.PublicRoutePlanner
 	var internalRouteBackend *routingAdapter.NginxBackend
-	if cfg.EdgeRouting.Enabled && secretRepo != nil {
+	// bahia-as2bo: edge-route convergence needs the routing provider's API
+	// token (edge_routing.api_token_ref). That token is a secret value, which
+	// the canonical secret registry does not carry (it holds references); it
+	// exists only in the PostgreSQL secret store, decrypted with the service
+	// key. So convergence, and only convergence, is gated on the store being
+	// present; the desired route plan, canary probing and route state are
+	// canonical and keep running without it.
+	edgeRoutingConvergence := cfg.EdgeRouting.Enabled && secretRepo != nil && secretEncryptor != nil
+	if edgeRoutingConvergence {
 		publicRoutePlanner, internalRouteBackend, err = buildPublicRoutePlanner(ctx, cfg.EdgeRouting, cfg.InternalRouting, secretRepo, secretEncryptor, logger)
 		if err != nil {
 			return nil, fmt.Errorf("configuring edge routing: %w", err)
 		}
 		logger.Info("managed edge routing enabled", zap.String("provider", cfg.EdgeRouting.Provider), zap.String("backend_ref", cfg.EdgeRouting.BackendRef), zap.Bool("internal_https", internalRouteBackend != nil))
 	} else if cfg.EdgeRouting.Enabled {
-		logger.Warn("edge routing convergence unavailable without secret index; route canary observation remains enabled")
+		logger.Warn("edge routing convergence is suspended: the provider API token is a secret value held only in the PostgreSQL secret store; desired routes are not converged until it is reachable, route canary observation of them continues",
+			zap.String("reason", "edge_routing_secret_store_unavailable"),
+			zap.Bool("secret_store", secretRepo != nil), zap.Bool("secret_encryptor", secretEncryptor != nil))
 	}
 
 	// Adopted workload orchestration is wired further down, once the Nostr
@@ -546,6 +556,12 @@ func New(cfg *config.Config) (*App, error) {
 				// Without relay publishing no canonical record exists, so the
 				// index is the only durable copy of route state.
 				storeOpts = append(storeOpts, service.WithRouteCanaryIndexResume())
+			} else {
+				// The projector mints each route record strictly after the one
+				// the local store holds, and withdraws a deleted route with a
+				// tombstone on its coordinate (bahia-as2bo).
+				routeCanaryProjector.SetLocalState(localSupervisionState)
+				storeOpts = append(storeOpts, service.WithRouteCanaryCanonicalProjector(routeCanaryProjector))
 			}
 			routeCanaryStore = service.NewLocalRouteCanaryRepository(localSupervisionState, routeCanaryStore, logger, storeOpts...)
 			routeHealthSource = service.LocalRouteInstanceHealthSource{State: localSupervisionState}
@@ -613,6 +629,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	var managedInstanceSupervisor *service.ManagedInstanceSupervisor
+	var supervisionApplyLock *service.SupervisionApplyLock
 	if cfg.Supervision.Enabled && supervisionFromLocalState {
 		configuredSpecs, specErr := configuredSupervisionSpecs(cfg.Supervision, logger)
 		if specErr != nil {
@@ -629,7 +646,8 @@ func New(cfg *config.Config) (*App, error) {
 		if runtimeApplyLock != nil {
 			deployLock = runtimeApplyLock
 		}
-		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, state, service.NewSupervisionApplyLock(deployLock, logger), publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
+		supervisionApplyLock = service.NewSupervisionApplyLock(deployLock, logger)
+		managedInstanceSupervisor, err = service.NewManagedInstanceSupervisor(source, state, supervisionApplyLock, publisher, cfg.Supervision.Interval, logger, cfg.Supervision.ObservationTimeout)
 		if err != nil {
 			return nil, fmt.Errorf("configuring managed instance supervisor: %w", err)
 		}
@@ -697,6 +715,40 @@ func New(cfg *config.Config) (*App, error) {
 		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
 	registerSignetHealthCheck(healthProvider, loomSignetManager)
+	registerUndeliveredHealthCheck(healthProvider, localEventStore)
+	if supervisionApplyLock != nil {
+		// bahia-as2bo: the process-local fallback of the recovery apply lock
+		// excludes only this daemon's applies, so it is a degraded condition
+		// operators must see (docs/runbooks/managed-instance-supervision.md).
+		healthProvider.RegisterCheck("supervision_apply_lock", func() HealthCheck {
+			status := supervisionApplyLock.Status()
+			check := HealthCheck{Name: "supervision_apply_lock", Status: HealthStatusPass,
+				Message: "supervised recoveries are serialized with deploys through the shared PostgreSQL advisory lock",
+				Details: map[string]string{"shared_lock": fmt.Sprintf("%t", status.Shared), "fallback": fmt.Sprintf("%t", status.Fallback)}}
+			switch {
+			case status.Fallback:
+				check.Status = HealthStatusWarn
+				check.Message = "shared runtime apply lock unreachable; recoveries proceed under the process-local lock only, which does not exclude deploys driven by other daemons in the same environment"
+				check.Details["fallback_since"] = status.FallbackSince.UTC().Format(time.RFC3339)
+				check.Details["last_error"] = status.LastError
+			case !status.Shared:
+				check.Status = HealthStatusWarn
+				check.Message = "no shared runtime apply lock (PostgreSQL unavailable at startup); recoveries are serialized only within this daemon and do not exclude deploys driven by other daemons in the same environment"
+			}
+			return check
+		})
+	}
+	if cfg.EdgeRouting.Enabled {
+		healthProvider.RegisterCheck("edge_routing", func() HealthCheck {
+			check := HealthCheck{Name: "edge_routing", Status: HealthStatusPass, Message: "edge-route convergence and route canary observation are enabled",
+				Details: map[string]string{"provider": cfg.EdgeRouting.Provider, "convergence": fmt.Sprintf("%t", edgeRoutingConvergence)}}
+			if !edgeRoutingConvergence {
+				check.Status = HealthStatusWarn
+				check.Message = "edge-route convergence suspended: the provider API token is a secret value held only in the PostgreSQL secret store; route canary observation continues"
+			}
+			return check
+		})
+	}
 	if internalRouteBackend != nil {
 		healthProvider.RegisterCheck("internal_routing", func() HealthCheck {
 			check := HealthCheck{Name: "internal_routing", Status: HealthStatusPass, Message: "nginx include directory and certificate files are ready"}
@@ -1929,10 +1981,8 @@ func New(cfg *config.Config) (*App, error) {
 			zap.String("reason", "hiveci_canonical_unavailable"))
 	default:
 		var hiveIndex repository.HiveCIRepository
-		var hivePgRepo *repository.PgHiveCIRepository
 		if dbAvailable && pool != nil {
-			hivePgRepo = repository.NewPgHiveCIRepository(pool)
-			hiveIndex = hivePgRepo
+			hiveIndex = repository.NewPgHiveCIRepository(pool)
 		}
 		hiveCanonical = nostrAdapter.NewHiveCICanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
 		hiveRepo = hiveciAdapter.NewCanonicalRepository(localEventStore, hiveCanonical, hiveIndex, cfg.HiveCI.TrustedCIPubkeys, logger)
@@ -1974,16 +2024,17 @@ func New(cfg *config.Config) (*App, error) {
 			if controlPlaneSigner == nil {
 				return nil, fmt.Errorf("Hive-CI release registration requires a control-plane audit signer")
 			}
-			if hivePgRepo == nil {
-				return nil, fmt.Errorf("Hive-CI release registration requires the PostgreSQL accepted-release store")
-			}
+			// bahia-xjdo9: the accepted-release ledger is canonical cp-state in
+			// the local event store (CanonicalRepository.CommitAcceptedRelease);
+			// the SQL accepted-release table is an index mirrored afterwards, so
+			// release ingestion needs no database.
 			releaseAudit := hiveciAdapter.NewRegistrationAudit(controlPlaneSigner, auditEventRepo)
 			releaseEvidence := hiveciAdapter.NewLocalReleaseEvidence(
 				localEventStore, hiveRepo, nostrAdapter.NewWorkerSchedulingView(projectionHistory),
 				hiveciAdapter.NewOCIReleaseObjectResolver(ociSvc, pipelineRegistryInspector), pressureThresholds,
 			)
 			releaseIngestor := hiveciAdapter.NewReleaseIngestor(
-				releaseEvidence, hivePgRepo, cfg.HiveCI.TrustedReleaseAttestors, cfg.HiveCI.TrustedCIPubkeys,
+				releaseEvidence, hiveRepo, cfg.HiveCI.TrustedReleaseAttestors, cfg.HiveCI.TrustedCIPubkeys,
 			)
 			promotionSvc, err := service.NewProductionAgentRuntimePromotionService(
 				agentRuntimeReleaseRepo, serviceRepo, envRepo, hiveRepo, registry,
@@ -2058,8 +2109,14 @@ func New(cfg *config.Config) (*App, error) {
 			zap.Int("pipeline_policies", len(cfg.HiveCI.Policies)))
 	}
 	healthProvider.RegisterCheck("hiveci", func() HealthCheck {
-		check := HealthCheck{Name: "hiveci", Status: HealthStatusPass, Message: "Hive-CI evidence and result state are read from the local event store; pending results resume from canonical state",
-			Details: map[string]string{"sql_index": fmt.Sprintf("%t", dbAvailable && pool != nil)}}
+		check := HealthCheck{Name: "hiveci", Status: HealthStatusPass, Message: "Hive-CI evidence, result state and the accepted-release ledger are read from the local event store; pending results resume from canonical state",
+			Details: map[string]string{
+				"sql_index": fmt.Sprintf("%t", dbAvailable && pool != nil),
+				// Build initiation resolves repository credentials (secret
+				// values) from the PostgreSQL secret store; without it new
+				// initiations fail closed at that step (bahia-xjdo9).
+				"initiator_credential_store": fmt.Sprintf("%t", secretRepo != nil && secretEncryptor != nil),
+			}}
 		if hiveRepo == nil {
 			check.Message = "Hive-CI ingestion disabled: it needs hiveci.enabled, the Nostr projector and the confidential encryptor"
 			check.Details["availability"] = "unavailable"
@@ -2080,8 +2137,14 @@ func New(cfg *config.Config) (*App, error) {
 		if securityRepo != nil {
 			// Once the local store has caught up with the relays: publish
 			// SQL-era state that has no canonical record yet (once), then
-			// bring the index up to the canonical records.
+			// bring the index up to the canonical records. Policies go
+			// first: schedules derive only from published policy cp-state,
+			// so a policy that exists only in SQL would otherwise never be
+			// scheduled (bahia-u5whr).
 			nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+				if err := policySvc.BackfillCanonicalPolicies(ctx, localOutbox, service.PolicyCanonicalPublisher(policyPublisher)); err != nil {
+					logger.Warn("policy canonical backfill failed; retrying on next start", zap.Error(err))
+				}
 				if err := canonicalSecurity.BackfillFromIndex(ctx, localOutbox); err != nil {
 					logger.Warn("security canonical backfill failed; retrying on next start", zap.Error(err))
 				}
@@ -2113,7 +2176,7 @@ func New(cfg *config.Config) (*App, error) {
 		// The scheduler derives schedules from retained policy and target
 		// cp-state, so it waits for the local store's first catch-up.
 		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{
-			Repo: canonicalSecurity, Scanner: securityScanner, Deriver: policySvc, Ready: intentReadiness.Ready, Logger: logger,
+			Repo: canonicalSecurity, Scanner: securityScanner, Deriver: policySvc, Pruner: canonicalSecurity, Ready: intentReadiness.Ready, Logger: logger,
 		}))
 		logger.Info("security OSV scanner and canonical scheduler registered", zap.Bool("sql_index", securityRepo != nil))
 	}
@@ -2274,6 +2337,7 @@ func New(cfg *config.Config) (*App, error) {
 		ConfidentialReader: confidentialEncryptor,
 		LogService:         runLogService,
 		LLMRegistry:        llmRegistry,
+		Outbox:             localOutbox,
 	}
 	configureAuthorizationMCPDeps(&mcpDeps, cfg, tenantRBAC)
 	mcpServer, err := mcp.NewServerWithOptionsChecked(registry, logger, mcpDeps)
@@ -2604,18 +2668,34 @@ func New(cfg *config.Config) (*App, error) {
 			}
 			initiationStore = canonicalInitiations
 		}
-		if cfg.HiveCI.Initiator.Enabled && secretEncryptor != nil && initiationStore == nil {
+		if cfg.HiveCI.Initiator.Enabled && initiationStore == nil {
 			logger.Error("Hive-CI build initiator disabled: the initiation journal needs the Nostr projector and the confidential encryptor",
 				zap.String("reason", "hiveci_initiation_journal_unavailable"))
 		}
-		if cfg.HiveCI.Initiator.Enabled && secretEncryptor != nil && initiationStore != nil {
+		// bahia-xjdo9: the initiator's only database dependency is credential
+		// resolution. The upstream repository credential and the mirror-read
+		// password are secret values, which the canonical secret registry does
+		// not carry (it holds references); they live only in the PostgreSQL
+		// secret store. The journal, build identity and resume of a prepared
+		// initiation are DB-less, so the initiator is wired whenever the
+		// journal exists and credential resolution alone fails closed without
+		// the store (giteaAdapter.ErrSecretStoreUnavailable).
+		hiveCICredentialStore := secretRepo != nil && secretEncryptor != nil
+		if cfg.HiveCI.Initiator.Enabled && initiationStore != nil {
 			dependencyAuthorizations, err := hiveCIBuildDependencyAuthorizations(ctx, cfg.HiveCI.Policies, serviceRepo)
 			if err != nil {
 				return nil, fmt.Errorf("configure Hive-CI service build dependencies: %w", err)
 			}
+			var credentialResolver giteaAdapter.SecretResolver = giteaAdapter.SecretStoreUnavailable{}
+			if hiveCICredentialStore {
+				credentialResolver = secretsAdapter.NewResolver(secretRepo, secretEncryptor)
+			} else {
+				logger.Warn("Hive-CI build initiator has no secret store: new initiations fail closed at repository credential resolution until PostgreSQL is reachable; journaled initiations still resume",
+					zap.String("reason", "hiveci_credential_store_unavailable"))
+			}
 			hiveCIInitiator = giteaAdapter.NewInitiator(
 				giteaAdapter.NewAPIClient(cfg.HiveCI.Initiator.GiteaBaseURL, cfg.HiveCI.Initiator.GiteaToken, nil),
-				secretsAdapter.NewResolver(secretRepo, secretEncryptor),
+				credentialResolver,
 				controlPlanePool,
 				controlPlaneSigner,
 				initiationStore,
@@ -2642,6 +2722,7 @@ func New(cfg *config.Config) (*App, error) {
 			hiveCIBuildStarter = hiveCIInitiator
 			logger.Info("fleet gitea private-mirror HiveCI build initiator enabled",
 				zap.Bool("initiation_sql_index", dbAvailable && pool != nil),
+				zap.Bool("credential_store", hiveCICredentialStore),
 				zap.String("gitea_base_url", cfg.HiveCI.Initiator.GiteaBaseURL),
 				zap.String("mirror_owner", cfg.HiveCI.Initiator.MirrorOwner),
 				zap.String("workflow_path", cfg.HiveCI.Initiator.WorkflowPath),

@@ -43,13 +43,15 @@ const USER_PUBKEY = 'a'.repeat(64);
 const ORG_A = '3b45458b-2724-4dda-9fc6-66f12249660d';
 const ORG_B = '0199c749-9300-7444-8444-444444444444';
 const SELECT_ORG = 'Select an organization before submitting this intent';
+const SELECT_SENSITIVE_ORG = 'Select an organization before changing sensitive settings';
 const CLIENT_REQUIRED = 'Signing an intent requires an authenticated signer, Bahia store and relay seed';
+const NIP44_REQUIRED = 'This signer does not support NIP-44 encryption. Sensitive mutations require a NIP-44-capable NIP-07 or NIP-46 signer.';
 
-const connecting = { ready: false, pending: true, reason: 'Connecting…', waitingOn: 'session' };
-const decrypting = { ready: false, pending: true, reason: 'Connecting…', waitingOn: 'organization' };
-const noOrganization = { ready: false, pending: true, reason: 'No organization is known for this session yet', waitingOn: 'organization' };
-const ready = { ready: true, pending: false, reason: '', waitingOn: '' };
-const blocked = reason => ({ ready: false, pending: false, reason, waitingOn: '' });
+const connecting = { ready: false, pending: true, reason: 'Connecting…', waitingOn: 'session', blockedBy: '' };
+const decrypting = { ready: false, pending: true, reason: 'Connecting…', waitingOn: 'organization', blockedBy: '' };
+const noOrganization = { ready: false, pending: true, reason: 'No organization is known for this session yet', waitingOn: 'organization', blockedBy: '' };
+const ready = { ready: true, pending: false, reason: '', waitingOn: '', blockedBy: '' };
+const blocked = (reason, blockedBy = '') => ({ ready: false, pending: false, reason, waitingOn: '', blockedBy });
 
 function fakeStore() {
   return { query: () => [], subscribe: () => () => {}, ingest: () => true, close: async () => {} };
@@ -70,14 +72,16 @@ async function load() {
   const { llmRoutes } = await import('../../src/lib/stores/collections/deployments.svelte.js');
   const client = await import('../../src/lib/nostr/intent-client.svelte.js');
   const readiness = await import('../../src/lib/stores/intent-readiness.svelte.js');
-  return { boot, auth, roles, system, sync, client, readiness, services, llmRoutes };
+  const sensitive = await import('../../src/lib/stores/sensitive-intents.svelte.js');
+  return { boot, auth, roles, system, sync, client, readiness, sensitive, services, llmRoutes };
 }
 
-/** A signed-in session whose event store, pool and relay seed booted. */
-async function signedIn(modules, { relays = ['wss://relay.readiness.example'] } = {}) {
+/** A signed-in session whose event store, pool and relay seed booted, on a NIP-44-capable signer. */
+async function signedIn(modules, { relays = ['wss://relay.readiness.example'], nip44 = true } = {}) {
   await modules.boot.boot({ store: fakeStore(), pool: fakePool(),
     seed: { service_pubkeys: [SERVICE_PUBKEY], relay_urls: relays } });
-  Object.assign(modules.auth.authState, { status: 'authenticated', pubkey: USER_PUBKEY, authMethod: 'nip07' });
+  Object.assign(modules.auth.authState, { status: 'authenticated', pubkey: USER_PUBKEY, authMethod: 'nip07',
+    capabilities: { getPublicKey: true, signEvent: true, nip44 } });
 }
 
 describe('intent submission readiness', () => {
@@ -234,5 +238,105 @@ describe('intent submission readiness', () => {
     expect(readiness.intentReadiness('dns')).toEqual(blocked(CLIENT_REQUIRED));
     await expect(client.publishIntent({ domain: 'dns', op: 'zone-create', coordinate: 'zone:example.test',
       orgId: client.FLEET_INTENT_ORG_ID, content: { name: 'example.test' } })).rejects.toThrow(CLIENT_REQUIRED);
+  });
+  describe('sensitive (gift-wrapped) domains', () => {
+    it('is not ready for an org-scoped sensitive domain before roles are derived, and ready after', async () => {
+      const { client, roles, readiness, sensitive } = modules;
+      await signedIn(modules);
+      // The gift-wrapped transport opens its own session on submit: the intent
+      // client being idle never holds a sensitive control back.
+      expect(client.intentClientState.phase).toBe('idle');
+
+      for (const domain of ['notification', 'secret']) {
+        expect(readiness.intentReadiness(domain)).toEqual(noOrganization);
+      }
+      expect(() => sensitive.orgIdFor({ name: 'ops' })).toThrow(SELECT_SENSITIVE_ORG);
+
+      // Membership found in the local store is being decrypted.
+      roles.roleDerivationActive.value = true;
+      expect(readiness.intentReadiness('notification')).toEqual(decrypting);
+      expect(readiness.intentReadiness('secret')).toEqual(decrypting);
+
+      roles.orgRoles[ORG_A] = 'admin';
+      roles.roleDerivationActive.value = false;
+      expect(readiness.intentReadiness('notification')).toEqual(ready);
+      expect(readiness.intentReadiness('secret')).toEqual(ready);
+      expect(sensitive.orgIdFor({ name: 'ops' })).toBe(ORG_A);
+    });
+
+    it('names the organization whose content key the session holds before its member record is read', async () => {
+      const { roles, readiness, sensitive } = modules;
+      await signedIn(modules);
+      expect(readiness.intentReadiness('notification')).toEqual(noOrganization);
+
+      roles.contentKeyOrgs[ORG_B] = true;
+      expect(readiness.intentOrgCandidates()).toContain(ORG_B);
+      expect(readiness.intentReadiness('notification')).toEqual(ready);
+      expect(sensitive.orgIdFor({ name: 'ops' })).toBe(ORG_B);
+    });
+
+    it('resolves the organization from the record the way the readiness signal does', async () => {
+      const { readiness, sensitive, services } = modules;
+      await signedIn(modules);
+
+      expect(readiness.intentReadiness('notification', { record: { org_id: ORG_A } })).toEqual(ready);
+      expect(sensitive.orgIdFor({ org_id: ORG_A })).toBe(ORG_A);
+
+      expect(readiness.intentReadiness('secret', { record: { service_id: 'svc-1' } })).toEqual(noOrganization);
+      services.push({ id: 'svc-1', org_id: ORG_B });
+      expect(readiness.intentReadiness('secret', { record: { service_id: 'svc-1' } })).toEqual(ready);
+      expect(readiness.intentReadiness('secret', { orgId: ORG_B })).toEqual(ready);
+      expect(sensitive.orgIdFor({ service_id: 'svc-1', name: 'DATABASE_URL' })).toBe(ORG_B);
+    });
+
+    it('keeps the explicit error when several organizations are known', async () => {
+      const { roles, readiness, sensitive } = modules;
+      await signedIn(modules);
+      roles.orgRoles[ORG_A] = 'admin';
+      roles.orgRoles[ORG_B] = 'member';
+
+      expect(readiness.intentReadiness('notification')).toEqual(blocked(SELECT_SENSITIVE_ORG));
+      expect(readiness.intentReadiness('secret')).toEqual(blocked(SELECT_SENSITIVE_ORG));
+      expect(() => sensitive.orgIdFor({ name: 'ops' })).toThrow(SELECT_SENSITIVE_ORG);
+      expect(readiness.intentReadiness('notification', { orgId: ORG_A })).toEqual(ready);
+    });
+
+    it('names the signer as the blocker, known up front, when it cannot encrypt with NIP-44', async () => {
+      const { readiness, sensitive } = modules;
+      await signedIn(modules, { nip44: false });
+      for (const domain of ['org', 'relay', 'secret', 'notification']) {
+        expect(readiness.intentReadiness(domain)).toEqual(blocked(NIP44_REQUIRED, 'signer'));
+      }
+      // Non-sensitive domains never depend on NIP-44.
+      expect(readiness.intentReadiness('dns')).toEqual(connecting);
+      expect(sensitive.sensitiveMutationBlocker()).toBe(NIP44_REQUIRED);
+      await expect(sensitive.submitSensitiveIntent({ domain: 'org', op: 'create', coordinate: 'org:x', orgId: ORG_A, content: {} }))
+        .rejects.toThrow(NIP44_REQUIRED);
+    });
+
+    it('is ready for organization and relay-policy intents without any organization context or intent client', async () => {
+      const { client, roles, readiness } = modules;
+      await signedIn(modules);
+      expect(client.intentClientState.phase).toBe('idle');
+      expect(Object.keys(roles.orgRoles)).toEqual([]);
+      expect(readiness.intentReadiness('org')).toEqual(ready);
+      expect(readiness.intentReadiness('relay')).toEqual(ready);
+    });
+
+    it('does not depend on relay connectivity', async () => {
+      const { roles, sync, system, readiness } = modules;
+      await signedIn(modules);
+      roles.orgRoles[ORG_A] = 'admin';
+      for (const enter of [
+        () => { sync.markConnecting(['wss://relay.readiness.example']); sync.markSyncing(); },
+        () => { sync.markDisconnected(); },
+        () => { sync.markError('relay unreachable'); system.systemInfo.error = 'relay unreachable'; }
+      ]) {
+        enter();
+        expect(readiness.intentReadiness('notification')).toEqual(ready);
+        expect(readiness.intentReadiness('secret', { orgId: ORG_B })).toEqual(ready);
+        expect(readiness.intentReadiness('org')).toEqual(ready);
+      }
+    });
   });
 });

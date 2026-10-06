@@ -24,19 +24,72 @@ const (
 	managedHealthAuditSchema  = "bahia.audit.managed-instance-health.v1"
 )
 
+// managedAuditDedupeLimit bounds how many recently published immutable audit
+// facts the projector remembers for redelivery suppression, and
+// managedSlotDedupeLimit how many recent records of one replaceable slot.
+// Redelivery of a transition follows its synchronous Project call closely, so
+// small windows suffice; a record evicted from them would at worst be signed
+// twice, and relays discard a replaceable record older than the one they hold.
+const (
+	managedAuditDedupeLimit = 1024
+	managedSlotDedupeLimit  = 16
+)
+
 // ManagedInstanceHealthProjector projects internal supervisor events to canonical durable Nostr observables.
+//
+// Its redelivery memory is bounded by the supervised set, not by the number
+// of events published (bahia-as2bo): a replaceable observable (30315 status,
+// 30900 state) remembers the managedSlotDedupeLimit most recent fingerprints
+// of its (kind, coordinate) slot, and immutable 4903 audit facts share one
+// FIFO window of managedAuditDedupeLimit fingerprints.
 type ManagedInstanceHealthProjector struct {
 	publisher NostrEventPublisher
 	logger    *zap.Logger
 	mu        sync.Mutex
-	published map[string]struct{}
+	// replaceable holds, per (kind, coordinate) slot, the recently accepted
+	// replaceable records.
+	replaceable map[string]*managedFingerprintWindow
+	// audits is the FIFO window of recently accepted audit fingerprints.
+	audits *managedFingerprintWindow
 }
+
+// managedFingerprintWindow is a FIFO-evicting set of fingerprints.
+type managedFingerprintWindow struct {
+	limit   int
+	members map[string]struct{}
+	order   []string
+}
+
+func newManagedFingerprintWindow(limit int) *managedFingerprintWindow {
+	return &managedFingerprintWindow{limit: limit, members: make(map[string]struct{}, limit), order: make([]string, 0, limit)}
+}
+
+func (w *managedFingerprintWindow) has(fingerprint string) bool {
+	_, ok := w.members[fingerprint]
+	return ok
+}
+
+func (w *managedFingerprintWindow) add(fingerprint string) {
+	if w.has(fingerprint) {
+		return
+	}
+	if len(w.order) >= w.limit {
+		oldest := w.order[0]
+		w.order = w.order[1:]
+		delete(w.members, oldest)
+	}
+	w.members[fingerprint] = struct{}{}
+	w.order = append(w.order, fingerprint)
+}
+
+func (w *managedFingerprintWindow) len() int { return len(w.members) }
 
 func NewManagedInstanceHealthProjector(bus events.Publisher, publisher NostrEventPublisher, logger *zap.Logger) *ManagedInstanceHealthProjector {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	p := &ManagedInstanceHealthProjector{publisher: publisher, logger: logger.Named("managed-instance-health-projector"), published: map[string]struct{}{}}
+	p := &ManagedInstanceHealthProjector{publisher: publisher, logger: logger.Named("managed-instance-health-projector"),
+		replaceable: map[string]*managedFingerprintWindow{}, audits: newManagedFingerprintWindow(managedAuditDedupeLimit)}
 	if bus != nil {
 		for _, typ := range []events.EventType{events.EventRuntimeInstanceHealthChanged, events.EventRuntimeRecoveryRequested, events.EventRuntimeRecoveryCompleted, events.EventRuntimeRecoveryFailed, events.EventRuntimeRecoveryBudgetExhausted, events.EventRuntimeMaintenanceChanged} {
 			if subscriber, ok := bus.(events.ErrorSubscriber); ok {
@@ -147,7 +200,7 @@ func (p *ManagedInstanceHealthProjector) publishAll(ctx context.Context, list []
 		if err != nil {
 			return err
 		}
-		if _, ok := p.published[fingerprint]; ok {
+		if p.alreadyPublished(list[i], fingerprint) {
 			continue
 		}
 		if p.publisher != nil {
@@ -158,9 +211,53 @@ func (p *ManagedInstanceHealthProjector) publishAll(ctx context.Context, list []
 				return fmt.Errorf("publish managed instance kind %d: %w", list[i].Kind, err)
 			}
 		}
-		p.published[fingerprint] = struct{}{}
+		p.remember(list[i], fingerprint)
 	}
 	return nil
+}
+
+// managedSlot is the dedupe slot of a replaceable observable, or "" for an
+// immutable audit fact.
+func managedSlot(ev gonostr.Event) string {
+	if ev.Kind.IsAddressable() {
+		return fmt.Sprintf("%d|%s", ev.Kind, supervisionTag(ev, kinds.CASControlStateTagD))
+	}
+	return ""
+}
+
+// alreadyPublished reports whether ev is a recently accepted record of its
+// slot (replaceable) or a recently accepted audit fact. The caller holds p.mu.
+func (p *ManagedInstanceHealthProjector) alreadyPublished(ev gonostr.Event, fingerprint string) bool {
+	if slot := managedSlot(ev); slot != "" {
+		window, ok := p.replaceable[slot]
+		return ok && window.has(fingerprint)
+	}
+	return p.audits.has(fingerprint)
+}
+
+func (p *ManagedInstanceHealthProjector) remember(ev gonostr.Event, fingerprint string) {
+	if slot := managedSlot(ev); slot != "" {
+		window, ok := p.replaceable[slot]
+		if !ok {
+			window = newManagedFingerprintWindow(managedSlotDedupeLimit)
+			p.replaceable[slot] = window
+		}
+		window.add(fingerprint)
+		return
+	}
+	p.audits.add(fingerprint)
+}
+
+// dedupeSize is the number of fingerprints held: bounded by the supervised
+// slots and the audit window, never by the number of events published.
+func (p *ManagedInstanceHealthProjector) dedupeSize() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	size := p.audits.len()
+	for _, window := range p.replaceable {
+		size += window.len()
+	}
+	return size
 }
 
 func newManagedEvent(kind int, createdAt int64, tags gonostr.Tags, content any) gonostr.Event {

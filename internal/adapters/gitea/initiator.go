@@ -3,6 +3,7 @@ package gitea
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -24,6 +25,28 @@ import (
 // plaintext values with audit recording. Matches secrets.Resolver.
 type SecretResolver interface {
 	ResolveSecretWithAudit(ctx context.Context, ref string, opts domain.SecretResolveOptions) (string, domain.SecretAccessManifest, error)
+}
+
+// ErrSecretStoreUnavailable is returned when a build initiation reaches
+// credential resolution on a daemon without the secret store (bahia-xjdo9).
+//
+// The upstream repository credential and the fleet mirror-read password are
+// secret values, not metadata: the canonical secret registry (30900
+// secret-registry records) carries references only, and the values exist
+// solely in the PostgreSQL secret store, encrypted with the service key. The
+// initiation journal, build identity and resume of an already prepared
+// initiation need no database; only this step does, and it fails closed here
+// with the record left at its claimed stage so a retry once the store is
+// reachable prepares the initiation.
+var ErrSecretStoreUnavailable = errors.New("secret store unavailable: repository credentials are secret values held only in the PostgreSQL secret store")
+
+// SecretStoreUnavailable is the SecretResolver of a daemon that has no secret
+// store. Every resolution fails with ErrSecretStoreUnavailable.
+type SecretStoreUnavailable struct{}
+
+// ResolveSecretWithAudit fails closed with ErrSecretStoreUnavailable.
+func (SecretStoreUnavailable) ResolveSecretWithAudit(_ context.Context, _ string, _ domain.SecretResolveOptions) (string, domain.SecretAccessManifest, error) {
+	return "", domain.SecretAccessManifest{}, ErrSecretStoreUnavailable
 }
 
 // MirrorClient is the fleet Gitea surface the initiator depends on.
@@ -267,6 +290,10 @@ func (i *Initiator) prepareInitiation(ctx context.Context, rec *InitiationRecord
 			RequestID: idempotencyKey,
 		})
 		if err != nil {
+			if errors.Is(err, ErrSecretStoreUnavailable) {
+				// No value was produced, so the sentinel is kept for callers.
+				return fmt.Errorf("resolve mirror-read credential reference: %w", err)
+			}
 			return scrubSecrets(fmt.Errorf("resolve mirror-read credential reference: %w", err), mirrorReadPassword)
 		}
 		if strings.TrimSpace(mirrorReadPassword) == "" {
@@ -287,6 +314,9 @@ func (i *Initiator) prepareInitiation(ctx context.Context, rec *InitiationRecord
 		RequestID: idempotencyKey,
 	})
 	if err != nil {
+		if errors.Is(err, ErrSecretStoreUnavailable) && token == "" && mirrorReadPassword == "" {
+			return fmt.Errorf("resolve repository credential reference: %w", err)
+		}
 		// The resolver can surface errors after producing a value (e.g. audit
 		// persistence failures); scrub defensively.
 		return scrubSecrets(fmt.Errorf("resolve repository credential reference: %w", err), token, mirrorReadPassword)

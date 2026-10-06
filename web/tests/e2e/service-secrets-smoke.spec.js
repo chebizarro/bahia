@@ -231,10 +231,17 @@ test.describe('Service Secrets Smoke Test', () => {
   });
 
   test('disables Create Secret with an explanatory NIP-44 tooltip when unavailable', async ({ page }) => {
+    // The signer blocker is known before the operator acts and the page cannot
+    // resolve it, so the gate disables the control with the reason instead of
+    // letting a secret value be typed into a form that cannot submit.
     await page.addInitScript(() => { if (window.nostr) delete window.nostr.nip44; });
     await page.goto(`/services/${SERVICE_ID}`);
     const create = page.getByRole('button', { name: 'Add Secret' });
     await expect(create).toBeDisabled();
-    await expect(create).toHaveAttribute('title', /NIP-44/);
+    const gate = page.locator('fieldset[data-intent-domain="secret"]', { has: create });
+    await expect(gate).toHaveAttribute('title', /NIP-44/);
+    await expect(gate).toHaveAccessibleDescription(/NIP-44/);
+    await expect(gate).toHaveAttribute('data-intent-blocked-by', 'signer');
+    expect(await page.evaluate(() => window.__BAHIA_E2E_INTENT_WRAPS.length)).toBe(0);
   });
 });

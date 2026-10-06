@@ -136,7 +136,7 @@ export async function createServiceSecret(serviceId, payload) {
   const servicePubkey = servicePubkeyFromSystemInfo(info);
   const { value, ...rest } = payload;
   const secretId = mintEntityId();
-  const orgId = orgIdFor(payload, getServiceSecrets(id));
+  const orgId = orgIdFor({ ...payload, service_id: id });
   const encrypted_value = value ? await encryptWithAuth(servicePubkey, value) : undefined;
   const intent = await submitSensitiveIntent({ domain: 'secret', op: 'create', coordinate: secretId, orgId,
     content: { id: secretId, service_id: id, ...rest, ...(encrypted_value ? { encrypted_value } : {}) } });
@@ -154,7 +154,7 @@ export async function updateServiceSecret(serviceId, secretId, payload) {
   if (!current) throw new Error('Load the canonical secret reference before updating it');
   const encrypted_value = value ? await encryptWithAuth(servicePubkey, value) : undefined;
   const intent = await submitSensitiveIntent({ domain: 'secret', op: 'update', coordinate: secretId,
-    orgId: orgIdFor({ ...current, ...payload }), currentRecord: current,
+    orgId: orgIdFor({ ...current, ...payload, service_id: id }), currentRecord: current,
     content: { id: secretId, service_id: id, name: current.name, ...rest,
       ...(encrypted_value ? { encrypted_value } : {}) } });
   const secret = { ...current, ...rest, pending: true, pendingIntentId: intent.intentId };
@@ -166,7 +166,7 @@ export async function deleteServiceSecret(serviceId, secretId, orgId = null) {
   const id = String(serviceId || '').trim();
   const current = getServiceSecrets(id).find(secret => secret.id === secretId);
   const intent = await submitSensitiveIntent({ domain: 'secret', op: 'delete', coordinate: secretId,
-    orgId: orgIdFor({ ...current, org_id: orgId || current?.org_id }), content: { id: secretId, service_id: id } });
+    orgId: orgIdFor({ ...current, org_id: orgId || current?.org_id, service_id: id }), content: { id: secretId, service_id: id } });
   upsertServiceSecret(id, { ...current, id: secretId, pending: true, pendingDelete: true, pendingIntentId: intent.intentId });
   return { id: secretId, pending: true, pendingIntentId: intent.intentId };
 }

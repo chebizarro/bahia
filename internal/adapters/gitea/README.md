@@ -44,6 +44,24 @@ guarantee with explicit uncertainty, not a distributed transaction or a
 guarantee of eventual completion. Do not mint a different request to bypass an
 unknown outcome; restore/inspect the original relay evidence first.
 
+## Credential boundary (bahia-xjdo9)
+
+Initiation has exactly one database dependency: resolving the upstream
+repository credential (`CredentialRef`) and the fleet mirror-read password
+(`MirrorReadCredentialRef`). Both are secret **values**, not metadata. The
+canonical secret registry (`30900` secret-registry records) carries
+references only; the values exist solely in the PostgreSQL secret store,
+encrypted with the service key, and the daemon has no canonical path that
+could yield them. The initiator is therefore wired whenever the journal
+exists, and `app.go` substitutes `SecretStoreUnavailable` for the resolver
+when the store is absent (WARN `hiveci_credential_store_unavailable`; health
+check `hiveci.initiator_credential_store=false`). A new initiation then fails
+closed at credential resolution with `ErrSecretStoreUnavailable`, before any
+mirror call or publication, and its journal record stays at `claimed`, so the
+same signed request prepares once the store is reachable
+(`initiator_secret_store_test.go`). Journaling, build identity, replay of a
+completed initiation and resume of a prepared one never touch the store.
+
 `hiveci_initiations` (`PgInitiationStore`) is an optional, encrypted SQL
 index of the journal. It is written after each journal publish (failures are
 logged), rebuilt from the journal after the local store's warm start, and

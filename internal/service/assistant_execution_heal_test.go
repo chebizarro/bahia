@@ -254,16 +254,25 @@ func TestAssistantExecutionReconnectStormOnFlappingRelayHealsSingleFlight(t *tes
 // A reconnect racing an operator cancellation: whichever lifts the fence,
 // the pending checkpoint is confirmed once, the cancellation follows it on
 // the same chain, and the reserved tool runs at most once.
+//
+// The tool is held at the harness gate until both operations have returned.
+// Without it the healed run can complete before Cancel takes the session
+// lock, and a cancellation of a finished run is correctly acknowledged as
+// run_already_finished: the run stays completed and the test would wait for
+// a phase that never comes. Holding the tool keeps the race between the two
+// fence-lifting operations and takes the driver's speed out of it.
 func TestAssistantExecutionReconnectRacingUserOperationKeepsOneChain(t *testing.T) {
 	for i := range 12 {
 		t.Run(fmt.Sprintf("race-%02d", i), func(t *testing.T) {
 			sessionID := fmt.Sprintf("s-race-%02d", i)
 			st, relay, heal, server, runID := fenceAssistantReservation(t, sessionID)
+			gate := server.gate("read-one")
 			heal.setDown(false)
 			ctx := context.Background()
 			barrier := make(chan struct{})
 			var wg sync.WaitGroup
 			var cancelErr error
+			var cancelRes AssistantTurnResult
 			wg.Add(2)
 			go func() {
 				defer wg.Done()
@@ -273,13 +282,19 @@ func TestAssistantExecutionReconnectRacingUserOperationKeepsOneChain(t *testing.
 			go func() {
 				defer wg.Done()
 				<-barrier
-				_, cancelErr = st.engine.Cancel(ctx, assistantCancelRequest(sessionID, runID, "cancel-"+sessionID))
+				cancelRes, cancelErr = st.engine.Cancel(ctx, assistantCancelRequest(sessionID, runID, "cancel-"+sessionID))
 			}()
 			close(barrier)
 			wg.Wait()
 			if cancelErr != nil {
 				t.Fatalf("cancel racing reconnect: %v", cancelErr)
 			}
+			switch cancelRes.Acknowledgment {
+			case string(domain.AssistantExecutionCancelled), string(domain.AssistantExecutionCancelling):
+			default:
+				t.Fatalf("cancel acknowledged %q, want the run cancelled or cancelling", cancelRes.Acknowledgment)
+			}
+			close(gate) // the reserved tool, if it was dispatched, now returns
 			relay.waitFor(t, "cancelled", func() bool { return st.snapshot(sessionID).Phase == domain.AssistantExecutionCancelled })
 			if n := server.count("read-one"); n > 1 {
 				t.Fatalf("read-one dispatched %d times", n)
@@ -289,5 +304,36 @@ func TestAssistantExecutionReconnectRacingUserOperationKeepsOneChain(t *testing.
 				t.Fatalf("journal head %+v", head.Execution)
 			}
 		})
+	}
+}
+
+// A cancellation that reaches the session only after the healed run has
+// completed must not rewrite the finished run: it is acknowledged as
+// run_already_finished and the journal stays one unforked chain ending in
+// the completed revision. This is the interleaving a starved Cancel goroutine
+// produces in the race above.
+func TestAssistantExecutionCancelAfterHealedRunCompletedKeepsCompletedChain(t *testing.T) {
+	sessionID := "s-late-cancel"
+	st, relay, heal, server, runID := fenceAssistantReservation(t, sessionID)
+	heal.setDown(false)
+	ctx := context.Background()
+	if n := st.engine.HealFenced(ctx); n != 1 {
+		t.Fatalf("healed %d sessions, want 1", n)
+	}
+	relay.waitFor(t, "healed run completes", func() bool { return st.snapshot(sessionID).Phase == domain.AssistantExecutionCompleted })
+
+	res, err := st.engine.Cancel(ctx, assistantCancelRequest(sessionID, runID, "cancel-"+sessionID))
+	if err != nil {
+		t.Fatalf("cancel after completion: %v", err)
+	}
+	if res.Acknowledgment != "run_already_finished" {
+		t.Fatalf("cancel acknowledged %q, want run_already_finished", res.Acknowledgment)
+	}
+	if server.count("read-one") != 1 {
+		t.Fatalf("read-one=%d", server.count("read-one"))
+	}
+	head := assertAssistantHealedChain(t, st, relay, heal, sessionID, runID)
+	if head.Execution.Cancellation != nil || head.Execution.Phase != domain.AssistantExecutionCompleted {
+		t.Fatalf("journal head %+v", head.Execution)
 	}
 }

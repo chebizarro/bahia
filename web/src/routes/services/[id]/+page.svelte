@@ -70,7 +70,7 @@
     serviceSecretsState,
     updateServiceSecret
   } from '$lib/stores/service-secrets.svelte.js';
-  import { sensitiveMutationBlocker, sensitivePendingState } from '$lib/stores/sensitive-intents.svelte.js';
+  import { sensitivePendingState } from '$lib/stores/sensitive-intents.svelte.js';
   import SensitiveIntentNotice from '$lib/components/SensitiveIntentNotice.svelte';
   import {
     ArtifactIcon,
@@ -1234,9 +1234,11 @@
     <section>
       <div class="section-header">
         <h2 class="section-title"><ProtectedIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Secrets ({secrets.length})</span></h2>
-        <LoadingButton variant="primary" onclick={openSecretCreateModal} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
-          Add Secret
-        </LoadingButton>
+        <IntentGate domain="secret" orgId={service?.org_id}>
+          <LoadingButton variant="primary" onclick={openSecretCreateModal}>
+            Add Secret
+          </LoadingButton>
+        </IntentGate>
       </div>
       <SensitiveIntentNotice domain="secret" />
       {#if secretsLoading}
@@ -1267,22 +1269,22 @@
                 >
                   Reveal
                 </LoadingButton>
-                <LoadingButton
-                  variant="secondary"
-                  onclick={() => openSecretUpdateModal(secret)}
-                  disabled={Boolean(sensitiveMutationBlocker()) || secret.pending}
-                  title={sensitiveMutationBlocker() || undefined}
-                >
-                  Update
-                </LoadingButton>
-                <LoadingButton 
-                  variant="danger" 
-                  onclick={() => openSecretDeleteModal(secret)}
-                  disabled={Boolean(sensitiveMutationBlocker()) || secret.pending}
-                  title={sensitiveMutationBlocker() || undefined}
-                >
-                  Delete
-                </LoadingButton>
+                <IntentGate domain="secret" orgId={service?.org_id} record={secret}>
+                  <LoadingButton
+                    variant="secondary"
+                    onclick={() => openSecretUpdateModal(secret)}
+                    disabled={secret.pending}
+                  >
+                    Update
+                  </LoadingButton>
+                  <LoadingButton
+                    variant="danger"
+                    onclick={() => openSecretDeleteModal(secret)}
+                    disabled={secret.pending}
+                  >
+                    Delete
+                  </LoadingButton>
+                </IntentGate>
               </div>
             </div>
           {/each}
@@ -1291,9 +1293,11 @@
         <div class="empty-state">
           <ProtectedIcon size={32} strokeWidth={1.5} ariaHidden="true" className="empty-icon" />
           <p class="empty">No secrets configured</p>
-          <LoadingButton variant="primary" onclick={openSecretCreateModal} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
-            Add Your First Secret
-          </LoadingButton>
+          <IntentGate domain="secret" orgId={service?.org_id}>
+            <LoadingButton variant="primary" onclick={openSecretCreateModal}>
+              Add Your First Secret
+            </LoadingButton>
+          </IntentGate>
         </div>
       {/if}
     </section>
@@ -1958,15 +1962,15 @@
       >
         Cancel
       </LoadingButton>
-      <LoadingButton
-        type="submit"
-        variant="primary"
-        loading={secretCreating}
-        disabled={Boolean(sensitiveMutationBlocker())}
-        title={sensitiveMutationBlocker() || undefined}
-      >
-        Create Secret
-      </LoadingButton>
+      <IntentGate domain="secret" orgId={service?.org_id}>
+        <LoadingButton
+          type="submit"
+          variant="primary"
+          loading={secretCreating}
+        >
+          Create Secret
+        </LoadingButton>
+      </IntentGate>
     </div>
   </form>
 </Modal>
@@ -2000,9 +2004,11 @@
       <LoadingButton type="button" variant="secondary" onclick={closeSecretUpdateModal} disabled={secretUpdating}>
         Cancel
       </LoadingButton>
-      <LoadingButton type="submit" variant="primary" loading={secretUpdating}>
-        Update Secret
-      </LoadingButton>
+      <IntentGate domain="secret" orgId={service?.org_id} record={secretToUpdate}>
+        <LoadingButton type="submit" variant="primary" loading={secretUpdating}>
+          Update Secret
+        </LoadingButton>
+      </IntentGate>
     </div>
   </form>
 </Modal>
@@ -2039,6 +2045,9 @@
   titleIcon={WarningIcon}
   confirmLabel="Delete"
   variant="danger"
+  intentDomain="secret"
+  intentOrgId={service?.org_id}
+  intentRecord={secretToDelete}
   loading={secretDeleting}
   onConfirm={handleSecretDelete}
   onCancel={closeSecretDeleteModal}

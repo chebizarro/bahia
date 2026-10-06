@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -14,15 +12,13 @@ import (
 
 var ErrHiveCIReleaseReplayConflict = errors.New("Hive-CI release replay conflicts with accepted content")
 
-var releaseDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-
 // HiveCIReleaseRepository is the atomic accepted-release identity boundary.
 type HiveCIReleaseRepository interface {
 	CommitAcceptedRelease(context.Context, domain.HiveCIAcceptedRelease) (domain.HiveCIReleaseCommitResult, error)
 }
 
 func (r *PgHiveCIRepository) CommitAcceptedRelease(ctx context.Context, release domain.HiveCIAcceptedRelease) (result domain.HiveCIReleaseCommitResult, err error) {
-	if err := validateAcceptedRelease(release); err != nil {
+	if err := release.Validate(); err != nil {
 		return result, err
 	}
 	resultJSON, err := json.Marshal(release.Result)
@@ -110,20 +106,6 @@ func (r *PgHiveCIRepository) CommitAcceptedRelease(ctx context.Context, release 
 	}
 	committed = true
 	return result, fmt.Errorf("%w: %s", ErrHiveCIReleaseReplayConflict, release.Result.ReleaseIdentity)
-}
-
-func validateAcceptedRelease(release domain.HiveCIAcceptedRelease) error {
-	if !strings.HasPrefix(release.Result.ReleaseIdentity, domain.HiveCIReleaseIdentityPrefix) ||
-		!releaseDigestPattern.MatchString("sha256:"+strings.TrimPrefix(release.Result.ReleaseIdentity, domain.HiveCIReleaseIdentityPrefix)) ||
-		!releaseDigestPattern.MatchString(release.ContentDigest) ||
-		!releaseDigestPattern.MatchString(release.Result.Manifest.Digest) ||
-		!releaseDigestPattern.MatchString(release.Result.SBOM.Digest) ||
-		!releaseDigestPattern.MatchString(release.Result.Provenance.Digest) ||
-		release.ResultEventID == "" || release.Attestor == "" || release.SignedEvent == "" ||
-		release.AcceptedAt.IsZero() {
-		return fmt.Errorf("complete canonical accepted Hive-CI release is required")
-	}
-	return nil
 }
 
 var _ HiveCIReleaseRepository = (*PgHiveCIRepository)(nil)

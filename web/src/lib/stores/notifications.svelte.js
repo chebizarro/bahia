@@ -53,7 +53,7 @@ export async function getNotificationChannel(id) {
 
 export async function createNotificationChannel(payload) {
   const id = mintEntityId();
-  const orgId = orgIdFor(payload, notificationState.channels);
+  const orgId = orgIdFor(payload);
   const intent = await submitSensitiveIntent({ domain: 'notification', op: 'create', coordinate: id, orgId,
     content: { ...payload, id, org_id: orgId } });
   const channel = { ...payload, id, org_id: orgId, pending: true, pendingIntentId: intent.intentId };

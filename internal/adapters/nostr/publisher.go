@@ -141,8 +141,14 @@ type Publisher struct {
 	// to publish. Required for redelivery-enabled publishers (bahia-irsry.62).
 	localOutbox *localstore.Outbox
 	// ownEvents is the daemon's local event store. Each published event is
-	// kept there as the daemon's latest output, and removed again if its
-	// delivery is abandoned (the Projector hydrates its dedupe from it, B-3).
+	// kept there as the daemon's latest output (the Projector hydrates its
+	// dedupe from it, B-3). An event abandoned in the round its caller was
+	// waiting on is removed again (the caller is told and commits nothing);
+	// one abandoned after the caller was told it was queued stays there,
+	// marked undelivered on its coordinate (localstore.Undelivered), until a
+	// publish on the coordinate reaches the quorum: canonical reads keep
+	// answering with the state the daemon committed to, and nothing is lost
+	// silently (bahia-u5whr, design doc §3.7).
 	ownEvents *localstore.Store
 	// archive mirrors locally delivered events into eventRepo.
 	archive      *postgresArchive
@@ -371,7 +377,9 @@ func (p *Publisher) markOutbound(rec *repository.NostrEventRecord) {
 func (p *Publisher) publishOutboxEvent(ctx context.Context, ev nostr.Event) publishAttempt {
 	d, _ := p.trackDelivery(ev, 0)
 	d.mu.Lock()
+	d.callerWaiting = true
 	report := p.deliverRound(ctx, d)
+	d.callerWaiting = false
 	settled := d.settled
 	d.mu.Unlock()
 	if settled || !p.running.Load() {
@@ -451,6 +459,7 @@ func (p *Publisher) Run(ctx context.Context) error {
 	}
 	p.running.Store(true)
 	defer p.running.Store(false)
+	p.restoreUndelivered()
 
 	discoveryBackoff := p.newBackoff()
 	if discoveryBackoff == nil {
@@ -673,14 +682,81 @@ func (p *Publisher) keepOwnEvent(ev nostr.Event) {
 	}
 }
 
-// forgetOwnEvent removes an abandoned event from the local event store: it
-// never reached the quorum, so it must not count as the daemon's output.
+// forgetOwnEvent removes an event abandoned in the round its publisher was
+// waiting on from the local event store: the caller is told, treats the
+// operation as failed and commits nothing, so the event is not the daemon's
+// output.
 func (p *Publisher) forgetOwnEvent(ev nostr.Event) {
 	if p.ownEvents == nil {
 		return
 	}
 	if err := p.ownEvents.DeleteEvent(ev.ID); err != nil {
 		p.logger.Warn("failed to drop abandoned event from the local event store", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
+	}
+}
+
+// markOwnEventUndelivered keeps an abandoned event in the local event store
+// and marks its coordinate undelivered: the event is the daemon's committed
+// state and must stay readable, but no quorum holds it (§3.7). The event is
+// saved again first, so a marker never points at an event the store lost.
+func (p *Publisher) markOwnEventUndelivered(ev nostr.Event, detail string) {
+	if p.ownEvents == nil {
+		return
+	}
+	if _, err := p.ownEvents.SaveEvent(ev); err != nil {
+		p.logger.Warn("failed to keep abandoned event in the local event store", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
+	}
+	marked, err := p.ownEvents.MarkUndelivered(ev, detail, p.now())
+	if err != nil {
+		p.logger.Warn("failed to mark abandoned event undelivered in the local event store", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
+		return
+	}
+	if marked {
+		p.logger.Warn("event abandoned by the publish outbox; its coordinate is marked undelivered until a publish of it reaches the quorum",
+			zap.String("event_id", ev.ID.Hex()), zap.Int("kind", int(ev.Kind)), zap.String("detail", detail))
+	}
+}
+
+// clearOwnEventUndelivered lifts the undelivered marker on ev's coordinate
+// once the publish quorum accepted ev.
+func (p *Publisher) clearOwnEventUndelivered(ev nostr.Event) {
+	if p.ownEvents == nil {
+		return
+	}
+	cleared, err := p.ownEvents.ClearUndelivered(ev)
+	if err != nil {
+		p.logger.Warn("failed to clear the undelivered marker in the local event store", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
+		return
+	}
+	if cleared {
+		p.logger.Info("undelivered coordinate reached the publish quorum", zap.String("event_id", ev.ID.Hex()), zap.Int("kind", int(ev.Kind)))
+	}
+}
+
+// restoreUndeliveredLimit bounds how many retained failed outbox entries a
+// runner re-marks at start.
+const restoreUndeliveredLimit = 10_000
+
+// restoreUndelivered re-marks the coordinates of the outbox's retained failed
+// entries in the local event store at runner start. The store is a cache that
+// may have been deleted and rebuilt from relays, which do not hold abandoned
+// events; the outbox keeps them for failedOutboxRetention, so for that long an
+// abandonment outlives the store file. Entries a newer version has superseded
+// are skipped by MarkUndelivered.
+func (p *Publisher) restoreUndelivered() {
+	if p.localOutbox == nil || p.ownEvents == nil {
+		return
+	}
+	failed, err := p.localOutbox.ListFailed(restoreUndeliveredLimit)
+	if err != nil {
+		p.logger.Warn("failed to list abandoned outbox entries for undelivered markers", zap.Error(err))
+		return
+	}
+	for _, entry := range failed {
+		if entry.Target != p.target {
+			continue
+		}
+		p.markOwnEventUndelivered(entry.Event, entry.LastError)
 	}
 }
 

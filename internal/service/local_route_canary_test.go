@@ -42,7 +42,9 @@ func (f *supervisionFixture) routeDaemon(clock *testClock, prober RouteProber, p
 	publisher := f.publisher()
 	projector, err := NewRouteCanaryProjector(bus, publisher, nil)
 	require.NoError(f.t, err)
-	repo := NewLocalRouteCanaryRepository(f.state, index, nil)
+	projector.SetLocalState(f.state)
+	repo := NewLocalRouteCanaryRepository(f.state, index, nil, WithRouteCanaryCanonicalProjector(projector))
+	repo.now = clock.Now
 	supervisor, err := NewRouteCanarySupervisor(LocalRoutePlanSource{State: f.state}, repo, evaluator,
 		LocalRouteInstanceHealthSource{State: f.state}, bus, time.Minute, nil)
 	require.NoError(f.t, err)
@@ -388,4 +390,136 @@ func TestRouteCanarySupervisorRunWaitsForLocalStoreReadiness(t *testing.T) {
 	<-prober.probed
 	stop()
 	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+// bahia-as2bo: a route's 30900 record is minted strictly after the record it
+// replaces. Two observations in one second (and an observation in the same
+// second as the record a restarted daemon finds in its store) would otherwise
+// share a created_at, the store and relays would tie-break by event id, and a
+// restart could resume the stale one. The later observation wins.
+func TestLocalRouteCanarySameSecondObservationsResumeTheLaterOne(t *testing.T) {
+	f := newSupervisionFixture(t)
+	clock := newTestClock()
+	plan := testRoutePlan()
+	key := domain.RouteCanaryKeyForPlan(plan)
+	f.deliverServiceState(routeServiceState(plan), clock.Now())
+	ctx := context.Background()
+
+	// Two observations in the same second: the first failure, then the one
+	// that opens the outage.
+	first := f.routeDaemon(clock, failingRouteProber(), testRouteCanaryPolicy(), nil)
+	first.supervisor.EvaluateOnce(ctx)
+	states := f.stored(kinds.CASControlState, routeCanaryStateSchema)
+	require.Len(t, states, 1)
+	initial := states[0].CreatedAt
+	require.Equal(t, gonostr.Timestamp(clock.Now().Unix()), initial)
+	first.supervisor.EvaluateOnce(ctx)
+	require.Equal(t, 1, first.announced(events.EventRouteCanaryOutageOpened))
+	states = f.stored(kinds.CASControlState, routeCanaryStateSchema)
+	require.Len(t, states, 1, "one canonical record per route")
+	require.Equal(t, initial+1, states[0].CreatedAt, "the second record is minted strictly after the first")
+	state, ok := decodeRouteCanaryStateRecord(states[0])
+	require.True(t, ok)
+	require.Equal(t, 2, state.ConsecutiveFailures)
+	require.True(t, state.Open)
+
+	// A daemon restarted in the same second resumes the later observation and
+	// its own first record is minted after the one it found.
+	second := f.routeDaemon(clock, failingRouteProber(), testRouteCanaryPolicy(), nil)
+	resumed, err := second.repo.GetState(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, resumed)
+	require.True(t, resumed.Open, "restart resumes the later same-second observation")
+	require.Equal(t, 2, resumed.ConsecutiveFailures)
+	second.supervisor.EvaluateOnce(ctx)
+	require.Zero(t, second.announced(events.EventRouteCanaryOutageOpened))
+	states = f.stored(kinds.CASControlState, routeCanaryStateSchema)
+	require.Len(t, states, 1)
+	require.Equal(t, initial+2, states[0].CreatedAt, "a restarted daemon mints after the record it found")
+	state, ok = decodeRouteCanaryStateRecord(states[0])
+	require.True(t, ok)
+	require.Equal(t, 3, state.ConsecutiveFailures)
+
+	// Redelivery of the same observation signs nothing again.
+	published := second.publisher.total()
+	second.supervisor.EvaluateOnce(ctx)
+	require.Equal(t, initial+3, f.stored(kinds.CASControlState, routeCanaryStateSchema)[0].CreatedAt)
+	require.Greater(t, second.publisher.total(), published)
+}
+
+// bahia-as2bo: deleting a route's state publishes a tombstone on the route
+// coordinate, so the withdrawal is canonical: a restarted daemon finds no
+// state, and the first observation after the withdrawal is minted after the
+// tombstone.
+func TestLocalRouteCanaryDeleteStatePublishesTombstoneThatSurvivesRestart(t *testing.T) {
+	f := newSupervisionFixture(t)
+	clock := newTestClock()
+	plan := testRoutePlan()
+	key := domain.RouteCanaryKeyForPlan(plan)
+	f.deliverServiceState(routeServiceState(plan), clock.Now())
+	ctx := context.Background()
+
+	first := f.routeDaemon(clock, failingRouteProber(), testRouteCanaryPolicy(), nil)
+	first.supervisor.EvaluateOnce(ctx)
+	first.supervisor.EvaluateOnce(ctx)
+	require.Equal(t, 1, first.announced(events.EventRouteCanaryOutageOpened))
+	live := f.stored(kinds.CASControlState, routeCanaryStateSchema)
+	require.Len(t, live, 1)
+
+	require.NoError(t, first.repo.DeleteState(ctx, key))
+	gone, err := first.repo.GetState(ctx, key)
+	require.NoError(t, err)
+	require.Nil(t, gone, "a deleted route has no state in the deleting process")
+	records := f.stored(kinds.CASControlState, routeCanaryStateSchema)
+	require.Len(t, records, 1, "the tombstone replaces the live record on the coordinate")
+	require.Equal(t, "true", supervisionTag(records[0], kinds.CASControlStateTagDeleted))
+	require.Equal(t, key.Coordinate(), supervisionTag(records[0], kinds.CASControlStateTagD))
+	require.Equal(t, live[0].CreatedAt+1, records[0].CreatedAt, "the tombstone is minted after the record it withdraws")
+	require.NoError(t, first.repo.DeleteState(ctx, key), "withdrawing twice publishes nothing new")
+	require.Len(t, f.stored(kinds.CASControlState, routeCanaryStateSchema), 1)
+
+	// Restart: the route is withdrawn, not resumed as an open outage.
+	second := f.routeDaemon(clock, failingRouteProber(), testRouteCanaryPolicy(), nil)
+	resumed, err := second.repo.GetState(ctx, key)
+	require.NoError(t, err)
+	require.Nil(t, resumed, "restart must not resume a withdrawn route")
+	listed, err := second.repo.ListState(ctx)
+	require.NoError(t, err)
+	require.Empty(t, listed)
+
+	// The route is still desired, so it is probed again from a clean streak,
+	// and the new record replaces the tombstone.
+	second.supervisor.EvaluateOnce(ctx)
+	require.Zero(t, second.announced(events.EventRouteCanaryOutageOpened), "the streak restarts after withdrawal")
+	records = f.stored(kinds.CASControlState, routeCanaryStateSchema)
+	require.Len(t, records, 1)
+	require.Equal(t, live[0].CreatedAt+2, records[0].CreatedAt, "the new record is minted after the tombstone")
+	state, ok := decodeRouteCanaryStateRecord(records[0])
+	require.True(t, ok)
+	require.Equal(t, 1, state.ConsecutiveFailures)
+	require.False(t, state.Open)
+}
+
+// A tombstone that the publisher rejects fails DeleteState and changes
+// nothing, so the caller retries and the route is never half-withdrawn.
+func TestLocalRouteCanaryDeleteStateFailsClosedWhenTombstoneIsRejected(t *testing.T) {
+	f := newSupervisionFixture(t)
+	clock := newTestClock()
+	plan := testRoutePlan()
+	key := domain.RouteCanaryKeyForPlan(plan)
+	f.deliverServiceState(routeServiceState(plan), clock.Now())
+	ctx := context.Background()
+	daemon := f.routeDaemon(clock, failingRouteProber(), testRouteCanaryPolicy(), nil)
+	daemon.supervisor.EvaluateOnce(ctx)
+
+	daemon.publisher.failWith(errors.New("relay rejected"))
+	require.Error(t, daemon.repo.DeleteState(ctx, key))
+	kept, err := daemon.repo.GetState(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, kept, "a failed withdrawal keeps the state")
+	daemon.publisher.failWith(nil)
+	require.NoError(t, daemon.repo.DeleteState(ctx, key))
+	gone, err := daemon.repo.GetState(ctx, key)
+	require.NoError(t, err)
+	require.Nil(t, gone)
 }

@@ -107,6 +107,14 @@ var bootstrapSubscribeAllWithEOSE = func(pool *RelayPool, ctx context.Context, f
 	return pool.SubscribeAllWithEOSE(ctx, filters)
 }
 
+// bootstrapPageTimer starts the EOSE deadline of one replay page and returns
+// the channel that fires when it elapses plus a stop function. Tests replace
+// it with a timer they control, so scripted relays never race the wall clock.
+var bootstrapPageTimer = func(timeout time.Duration) (<-chan time.Time, func()) {
+	timer := time.NewTimer(timeout)
+	return timer.C, func() { timer.Stop() }
+}
+
 // NewBootstrapper creates a bootstrapper. cursors (optional) is the local event
 // store keeping live groups' per-relay resume cursors.
 func NewBootstrapper(pool *RelayPool, catalog *KindCatalog, cursors *localstore.Store, cache BootstrapCacheApplier, logger *zap.Logger, config BootstrapConfig) *Bootstrapper {
@@ -457,8 +465,8 @@ func (b *Bootstrapper) runPage(ctx context.Context, group ReplayGroup, filter go
 	delivered := make(map[string]struct{})
 	eoseRelays := result.eoseRelays
 
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	timedOut, stopTimer := bootstrapPageTimer(timeout)
+	defer stopTimer()
 	eventsCh := subscription.Events
 	aggregateEOSECh := subscription.EndOfStoredEvents
 	relayEOSECh := subscription.RelayEOSE
@@ -530,7 +538,7 @@ func (b *Bootstrapper) runPage(ctx context.Context, group ReplayGroup, filter go
 		select {
 		case <-ctx.Done():
 			return result, ctx.Err()
-		case <-timer.C:
+		case <-timedOut:
 			blocking := subscription.PendingEOSE()
 			if len(blocking) == 0 {
 				blocking = subscription.RelayURLs()
