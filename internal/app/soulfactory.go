@@ -61,7 +61,16 @@ var (
 	newSoulFactoryBahiaIntegration = soulfactory.NewBahiaIntegration
 )
 
-func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *service.RegistryService, runtimeReleases *service.AgentRuntimeReleaseService, deploymentUnits repository.DeploymentUnitRepository, logger *zap.Logger) (*soulFactoryRuntime, error) {
+// soulFactorySagaSeams are the daemon's local event store, publisher and
+// identity the governed saga publishes and resumes its canonical progress
+// records through (audit C-45).
+type soulFactorySagaSeams struct {
+	Events        saga.EventReader
+	Publisher     saga.EventPublisher
+	ServicePubkey string
+}
+
+func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *service.RegistryService, runtimeReleases *service.AgentRuntimeReleaseService, deploymentUnits repository.DeploymentUnitRepository, sagaSeams soulFactorySagaSeams, logger *zap.Logger) (*soulFactoryRuntime, error) {
 	if cfg == nil || !cfg.SoulFactory.Enabled {
 		return nil, nil
 	}
@@ -215,6 +224,10 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		StateDir:        sf.ProvisioningStateDir,
 		RuntimeReleases: runtimeReleases,
 		DeploymentUnits: deploymentUnits,
+		SagaEvents:      sagaSeams.Events,
+		SagaPublisher:   sagaSeams.Publisher,
+		ServicePubkey:   sagaSeams.ServicePubkey,
+		Logger:          slogLogger,
 	})
 	if err != nil {
 		_ = closeSigner()

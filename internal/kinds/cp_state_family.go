@@ -107,6 +107,29 @@ const (
 	CPStateFamilySecurityRun    CPStateFamily = 32021
 )
 
+// Hive-CI execution families (audit C-48, C-49). A policy record is the
+// pipeline policy release admission is checked against, a result record is
+// the daemon's processing state of one signed kind-5402 result, and an
+// initiation record is the journal of one build initiation (its prepared
+// signed events, with the per-run publisher key in the service-only layer),
+// so admission, retry and initiation resume from the local event store with
+// no SQL row. Like the security execution families these never had a wire
+// kind: they exist only as 30900 discriminators and are not in the kind
+// catalog.
+const (
+	CPStateFamilyHiveCIPolicy     CPStateFamily = 32022
+	CPStateFamilyHiveCIResult     CPStateFamily = 32023
+	CPStateFamilyHiveCIInitiation CPStateFamily = 32024
+)
+
+// CPStateFamilySoulFactorySagaRun is the canonical progress record of one
+// governed Soul Factory provisioning saga run (audit C-45): its stage,
+// ownership lineage, compensations and current failure, replaced per run so
+// a daemon moved to a fresh host resumes from its local event store instead
+// of a local checkpoint file. Like the security families above it has no
+// wire kind of its own: it is a 30900 discriminator only.
+const CPStateFamilySoulFactorySagaRun CPStateFamily = 32025
+
 // FleetOCKScope is the well-known orgID value used for fleet-wide
 // confidential cp-state (payments, security findings/schedules). The OCK
 // for this scope is wrapped to all fleet operators (config authorized_pubkeys

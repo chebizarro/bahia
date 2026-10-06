@@ -520,7 +520,7 @@ func replaceResolvedContent(f *releaseFixture, descriptor *domain.HiveCIReleaseA
 func TestSubscriberDispatchesAcceptedReleaseAndExactReplay(t *testing.T) {
 	f := newReleaseFixture(t)
 	calls := 0
-	subscriber := &Subscriber{logger: zap.NewNop(), releases: f.ingestor, evidenceEvents: &admissionEventRepo{},
+	subscriber := &Subscriber{logger: zap.NewNop(), releases: f.ingestor, evidence: openTestStore(t),
 		onRelease: func(_ context.Context, commit domain.HiveCIReleaseCommitResult) {
 			calls++
 			if commit.Release.Result.Manifest.Digest != f.result.Manifest.Digest {
@@ -538,11 +538,12 @@ func TestSubscriberDurablyReprocessesReleaseDeliveredBeforeWorkflowRun(t *testin
 	f := newReleaseFixture(t)
 	storedRun := f.run
 	f.evidence.run = nil
-	events := &admissionEventRepo{}
+	events := openTestStore(t)
 	calls := 0
 	subscriber := NewSubscriber(nil, newTestHiveRepo(), []string{f.issuer.Public().Hex()}, zap.NewNop(), nil)
 	subscriber.now = func() time.Time { return f.now }
-	subscriber.SetReleaseEvidenceRecorder(events)
+	subscriber.SetEvidenceStore(events)
+	subscriber.SetReleaseAttestors([]string{f.attestor.Public().Hex()})
 	subscriber.SetReleaseIngestor(f.ingestor, func(_ context.Context, commit domain.HiveCIReleaseCommitResult) {
 		calls++
 		if commit.Replay {
@@ -554,7 +555,7 @@ func TestSubscriberDurablyReprocessesReleaseDeliveredBeforeWorkflowRun(t *testin
 	if calls != 0 || f.store.commits != 0 {
 		t.Fatalf("orphan release registered before lineage: callbacks=%d commits=%d", calls, f.store.commits)
 	}
-	if _, ok := events.records[f.event.ID.Hex()]; !ok {
+	if retained, _ := storedEvent(events, f.event.ID.Hex(), kinds.CASAudit); retained == nil {
 		t.Fatal("orphan release was not durably retained")
 	}
 

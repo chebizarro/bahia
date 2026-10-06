@@ -16,39 +16,57 @@ import (
 
 // AssistantSessionRecoveryConfig configures startup recovery of assistant sessions.
 type AssistantSessionRecoveryConfig struct {
-	// RecentLimit bounds the startup hydration query. It is a cache warm-up
-	// bound, not a historical inventory or migration-completeness guarantee.
-	RecentLimit   int
+	// PageLimit bounds one page of the relay inventory query. The inventory
+	// is never truncated to it: pages are requested with `until` until one
+	// comes back short (audit C-46).
+	PageLimit     int
 	ServicePubkey string
 	Logger        *slog.Logger
 	Engine        AssistantTurnEngine
 	Store         AssistantCheckpointStore
-	// Subscriber defaults to the orchestrator's relay subscriber.
+	// Subscriber defaults to the orchestrator's relay subscriber. It is the
+	// inventory source only when LocalStore is nil.
 	Subscriber AssistantRelaySubscriber
+	// LocalStore is the daemon's local event store. When set, the session
+	// inventory is every assistant-session record it holds, read once
+	// Readiness reports the first relay catch-up complete; the bootstrapper
+	// pages the daemon's 30900 records to completion into it.
+	LocalStore SupervisionEventStore
+	// Readiness gates the local-store inventory on the first relay catch-up.
+	// Optional: without it the local store is read as it is.
+	Readiness SupervisionReadiness
 }
 
 // AssistantSessionRecoveryRunner is the single recovery path for both
 // workflows: validate source sessions, classify/convert v1 history through the
 // pure compatibility classifier, checkpoint the conversion idempotently, then
 // hand the newest valid execution checkpoint to the engine's Recover entry.
+// The inventory it recovers is complete: every session record in the local
+// event store, or, without one, every record a relay holds, paged with a
+// cursor to the last page. Recovery is idempotent: a run the engine already
+// owns is adopted in place and a finished run is only hydrated.
 type AssistantSessionRecoveryRunner struct {
 	engine         AssistantTurnEngine
 	store          AssistantCheckpointStore
 	subscriber     AssistantRelaySubscriber
-	limit          int
+	local          SupervisionEventStore
+	readiness      SupervisionReadiness
+	pageLimit      int
 	servicePubkey  string
 	logger         *slog.Logger
 	topicMigration *AssistantSessionTopicMigration
 }
+
+const defaultAssistantRecoveryPageLimit = 500
 
 func NewAssistantSessionRecoveryRunner(orchestrator *AssistantOrchestrator, cfg AssistantSessionRecoveryConfig) *AssistantSessionRecoveryRunner {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-	limit := cfg.RecentLimit
-	if limit <= 0 {
-		limit = 500
+	pageLimit := cfg.PageLimit
+	if pageLimit <= 0 {
+		pageLimit = defaultAssistantRecoveryPageLimit
 	}
 	subscriber := cfg.Subscriber
 	servicePubkey := strings.TrimSpace(cfg.ServicePubkey)
@@ -60,7 +78,7 @@ func NewAssistantSessionRecoveryRunner(orchestrator *AssistantOrchestrator, cfg 
 			servicePubkey = strings.TrimSpace(orchestrator.identity.Pubkey)
 		}
 	}
-	return &AssistantSessionRecoveryRunner{engine: cfg.Engine, store: cfg.Store, subscriber: subscriber, limit: limit, servicePubkey: servicePubkey, logger: logger.With("component", "assistant_session_recovery")}
+	return &AssistantSessionRecoveryRunner{engine: cfg.Engine, store: cfg.Store, subscriber: subscriber, local: cfg.LocalStore, readiness: cfg.Readiness, pageLimit: pageLimit, servicePubkey: servicePubkey, logger: logger.With("component", "assistant_session_recovery")}
 }
 
 // SetTopicMigration attaches the startup migration that adds t=assistant-session
@@ -89,8 +107,8 @@ func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
 		r.logger.Warn("assistant recovery skipped: unified executor is not configured; sessions remain parked")
 		return nil
 	}
-	if r.subscriber == nil || r.servicePubkey == "" {
-		r.logger.Warn("assistant recovery skipped: relay subscriber or service pubkey not configured")
+	if (r.subscriber == nil && r.local == nil) || r.servicePubkey == "" {
+		r.logger.Warn("assistant recovery skipped: no session inventory source or service pubkey configured")
 		return nil
 	}
 	// bahia-irsry.43: re-tag legacy assistant session events before recovery
@@ -126,84 +144,180 @@ func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
 		}
 		recovered++
 	}
-	r.logger.Info("assistant recovery pass completed", "sessions_seen", len(sources), "sessions_recovered", recovered, "limit", r.limit)
+	r.logger.Info("assistant recovery pass completed", "sessions_seen", len(sources), "sessions_recovered", recovered, "source", r.inventorySource())
 	return nil
 }
 
+func (r *AssistantSessionRecoveryRunner) inventorySource() string {
+	if r.local != nil {
+		return "local-store"
+	}
+	return "relay-paged"
+}
+
+// assistantRecoveryInventory selects the latest valid projection per session
+// out of the records it is offered, in first-seen order.
+type assistantRecoveryInventory struct {
+	author nostr.PubKey
+	latest map[string]assistantRecoverySource
+	order  []string
+}
+
+func newAssistantRecoveryInventory(author nostr.PubKey) *assistantRecoveryInventory {
+	return &assistantRecoveryInventory{author: author, latest: map[string]assistantRecoverySource{}}
+}
+
+// offer validates ev as a session record of the service author and keeps it
+// when it is the session's newest.
+func (inv *assistantRecoveryInventory) offer(ev *nostr.Event) {
+	if ev == nil || ev.PubKey != inv.author || !ev.CheckID() || !ev.VerifySignature() {
+		return
+	}
+	schema := tagValue(ev.Tags, domain.AssistantSessionTagSchema)
+	if schema != domain.AssistantSessionSchema && schema != domain.AssistantSessionSchemaV2 {
+		return
+	}
+	var header struct {
+		SessionID string `json:"session_id"`
+	}
+	if json.Unmarshal([]byte(ev.Content), &header) != nil || header.SessionID == "" || tagValue(ev.Tags, "session") != header.SessionID || tagValue(ev.Tags, "d") != schema+":"+header.SessionID {
+		return
+	}
+	current, seen := inv.latest[header.SessionID]
+	if !seen {
+		inv.order = append(inv.order, header.SessionID)
+	}
+	if !seen || assistantRecoverySourceNewer(schema, ev, current) {
+		copyEvent := *ev
+		inv.latest[header.SessionID] = assistantRecoverySource{event: &copyEvent, schema: schema}
+	}
+}
+
+func (inv *assistantRecoveryInventory) selected() []assistantRecoverySource {
+	out := make([]assistantRecoverySource, 0, len(inv.order))
+	for _, id := range inv.order {
+		out = append(out, inv.latest[id])
+	}
+	return out
+}
+
+func assistantRecoveryFilter(author nostr.PubKey) nostr.Filter {
+	// bahia-irsry.43: scope on #t (single-letter) instead of #schema
+	// (multi-letter, invisible to NIP-01 relays). Legacy records published
+	// before .43 are re-tagged by the topic migration that runs synchronously
+	// before the inventory is read (SetTopicMigration).
+	return nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{author}, Tags: nostr.TagMap{"t": []string{kinds.AssistantSessionTopic}}}
+}
+
+// collectSources enumerates the session inventory: every record in the local
+// event store, or every record the relays hold when no local store is
+// configured.
 func (r *AssistantSessionRecoveryRunner) collectSources(ctx context.Context) ([]assistantRecoverySource, error) {
 	author, err := nostr.PubKeyFromHex(r.servicePubkey)
 	if err != nil {
 		return nil, fmt.Errorf("decode service pubkey: %w", err)
 	}
-	// bahia-irsry.43: scope the REQ with #t (single-letter) instead of
-	// #schema (multi-letter, invisible to NIP-01 relays). Legacy records
-	// published before .43 are re-tagged by the topic migration that runs
-	// synchronously before this query (SetTopicMigration). The migration
-	// reads the local event store — not a relay REQ — and re-publishes
-	// untagged records with the t tag added.
-	//
-	// The web assistant store (assistant.svelte.js) also scopes on #t, so
-	// legacy sessions are invisible to the browser until the daemon
-	// re-publishes them with the tag. No browser-side fix is needed.
-	filter := nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{author}, Tags: nostr.TagMap{"t": []string{kinds.AssistantSessionTopic}}, Limit: r.limit}
-	sub, err := r.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
-	if err != nil {
+	if r.local != nil {
+		return r.collectLocalSources(ctx, author)
+	}
+	return r.collectRelaySources(ctx, author)
+}
+
+// collectLocalSources reads the inventory from the local event store after
+// the first relay catch-up. The store collapses each coordinate to its
+// latest version and the query has no limit, so the inventory is complete.
+func (r *AssistantSessionRecoveryRunner) collectLocalSources(ctx context.Context, author nostr.PubKey) ([]assistantRecoverySource, error) {
+	if err := waitForSupervisionReadiness(ctx, r.readiness); err != nil {
 		return nil, err
 	}
-	defer sub.Close()
-	latest := map[string]assistantRecoverySource{}
-	order := []string{}
-	selected := func() []assistantRecoverySource {
-		out := make([]assistantRecoverySource, 0, len(order))
-		for _, id := range order {
-			out = append(out, latest[id])
+	inventory := newAssistantRecoveryInventory(author)
+	for ev := range r.local.QueryEvents(assistantRecoveryFilter(author)) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		return out
+		inventory.offer(&ev)
 	}
+	return inventory.selected(), nil
+}
+
+// collectRelaySources pages the relay inventory to completion: each page is
+// one EOSE-aware REQ of at most pageLimit events, and a full page is followed
+// by an `until`-bounded page from its oldest created_at (inclusive, events
+// already seen deduplicated by id) until a page comes back short.
+func (r *AssistantSessionRecoveryRunner) collectRelaySources(ctx context.Context, author nostr.PubKey) ([]assistantRecoverySource, error) {
+	inventory := newAssistantRecoveryInventory(author)
+	seen := map[nostr.ID]struct{}{}
+	var until nostr.Timestamp
+	for page := 1; ; page++ {
+		filter := assistantRecoveryFilter(author)
+		filter.Limit = r.pageLimit
+		filter.Until = until
+		delivered, oldest, err := r.collectRelayPage(ctx, filter, seen, inventory)
+		if err != nil {
+			return nil, err
+		}
+		if delivered < r.pageLimit {
+			return inventory.selected(), nil
+		}
+		if until != 0 && oldest >= until {
+			// A full page at one created_at cannot be paged past with until.
+			return nil, fmt.Errorf("assistant recovery page %d: %d events share created_at %d; inventory is incomplete", page, delivered, oldest)
+		}
+		until = oldest
+	}
+}
+
+// collectRelayPage runs one page and returns how many distinct events the
+// relays delivered for it and the oldest created_at among them.
+func (r *AssistantSessionRecoveryRunner) collectRelayPage(ctx context.Context, filter nostr.Filter, seen map[nostr.ID]struct{}, inventory *assistantRecoveryInventory) (int, nostr.Timestamp, error) {
+	sub, err := r.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
+	if err != nil {
+		return 0, 0, err
+	}
+	defer sub.Close()
+	delivered := 0
+	var oldest nostr.Timestamp
+	page := map[nostr.ID]struct{}{}
 	events := sub.EventChan()
 	closed := sub.ClosedChan()
 	eose := sub.EOSEChan()
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return 0, 0, ctx.Err()
 		case c, ok := <-closed:
 			if !ok {
 				closed = nil
 				continue
 			}
 			// Incomplete history cannot prove absence; park rather than guess.
-			return nil, fmt.Errorf("assistant recovery subscription closed: %s %s", c.RelayURL, c.Reason)
+			return 0, 0, fmt.Errorf("assistant recovery subscription closed: %s %s", c.RelayURL, c.Reason)
 		case ev, ok := <-events:
 			if !ok {
 				if !assistantEOSEReached(eose) {
-					return nil, errors.New("assistant recovery subscription ended before EOSE")
+					return 0, 0, errors.New("assistant recovery subscription ended before EOSE")
 				}
-				return selected(), nil
+				return delivered, oldest, nil
 			}
-			if ev == nil || ev.PubKey != author || !ev.CheckID() || !ev.VerifySignature() {
+			if ev == nil {
 				continue
 			}
-			schema := tagValue(ev.Tags, domain.AssistantSessionTagSchema)
-			if schema != domain.AssistantSessionSchema && schema != domain.AssistantSessionSchemaV2 {
+			// Every delivered event counts against the relay's limit, even
+			// one already seen on the previous page's inclusive boundary.
+			if _, dup := page[ev.ID]; !dup {
+				page[ev.ID] = struct{}{}
+				delivered++
+				if oldest == 0 || ev.CreatedAt < oldest {
+					oldest = ev.CreatedAt
+				}
+			}
+			if _, dup := seen[ev.ID]; dup {
 				continue
 			}
-			var header struct {
-				SessionID string `json:"session_id"`
-			}
-			if json.Unmarshal([]byte(ev.Content), &header) != nil || header.SessionID == "" || tagValue(ev.Tags, "session") != header.SessionID || tagValue(ev.Tags, "d") != schema+":"+header.SessionID {
-				continue
-			}
-			current, seen := latest[header.SessionID]
-			if !seen {
-				order = append(order, header.SessionID)
-			}
-			if !seen || assistantRecoverySourceNewer(schema, ev, current) {
-				copyEvent := *ev
-				latest[header.SessionID] = assistantRecoverySource{event: &copyEvent, schema: schema}
-			}
+			seen[ev.ID] = struct{}{}
+			inventory.offer(ev)
 		case <-eose:
-			return selected(), nil
+			return delivered, oldest, nil
 		}
 	}
 }

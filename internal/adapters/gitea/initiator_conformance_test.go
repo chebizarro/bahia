@@ -313,15 +313,16 @@ func TestConformanceRunLookupFailureBlocksPublication(t *testing.T) {
 }
 
 func arcanaStartRequest(credentialRef uuid.UUID) controlplane.HiveCIBuildStartRequest {
+	sourceEventID := strings.Repeat("cd", 32)
 	return controlplane.HiveCIBuildStartRequest{
-		BuildID:              uuid.New(),
+		BuildID:              controlplane.BuildIDForSourceEvent(sourceEventID),
 		ServiceID:            testServiceID,
 		RepositoryCoordinate: controlplane.ArcanaRepositoryCoordinate,
 		GitRef:               "main",
 		CredentialRef:        credentialRef,
 		ArtifactRepo:         "registry.fleet.internal/arcana/web",
 		RequesterPubkey:      strings.Repeat("ab", 32),
-		SourceEventID:        strings.Repeat("cd", 32),
+		SourceEventID:        sourceEventID,
 	}
 }
 

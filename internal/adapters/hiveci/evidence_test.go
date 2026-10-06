@@ -2,161 +2,103 @@ package hiveci
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"fiatjaf.com/nostr"
-	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
-	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/service"
+	"github.com/stretchr/testify/require"
 )
 
-type admissionEventRepo struct {
-	record  *repository.NostrEventRecord
-	records map[string]repository.NostrEventRecord
+// fixedScheduling stands in for the daemon's retained worker-state record.
+type fixedScheduling struct{ state domain.WorkerSchedulingState }
+
+func (s *fixedScheduling) WorkerSchedulingState(context.Context, string) (domain.WorkerSchedulingState, error) {
+	return s.state, nil
 }
 
-func (r *admissionEventRepo) Record(_ context.Context, record *repository.NostrEventRecord) (bool, error) {
-	if r.records == nil {
-		r.records = map[string]repository.NostrEventRecord{}
-	}
-	if _, exists := r.records[record.ID]; exists {
-		return false, nil
-	}
-	r.records[record.ID] = *record
-	return true, nil
-}
-func (r *admissionEventRepo) GetByID(_ context.Context, id string) (*repository.NostrEventRecord, error) {
-	if r.record != nil && r.record.ID == id {
-		return r.record, nil
-	}
-	if record, exists := r.records[id]; exists {
-		copy := record
-		return &copy, nil
-	}
-	return nil, nil
-}
-func (*admissionEventRepo) ListByKind(context.Context, int, int) ([]repository.NostrEventRecord, error) {
-	return nil, nil
-}
-func (*admissionEventRepo) ListByKinds(context.Context, []int, int) ([]repository.NostrEventRecord, error) {
-	return nil, nil
-}
-func (r *admissionEventRepo) FindByTag(_ context.Context, name, value string, kinds []int, limit int) ([]repository.NostrEventRecord, error) {
-	allowed := map[int]bool{}
-	for _, kind := range kinds {
-		allowed[kind] = true
-	}
-	var found []repository.NostrEventRecord
-	for _, record := range r.records {
-		if !allowed[record.Kind] {
-			continue
-		}
-		var tags nostr.Tags
-		if json.Unmarshal(record.Tags, &tags) != nil {
-			continue
-		}
-		for _, tag := range tags {
-			if len(tag) >= 2 && tag[0] == name && tag[1] == value {
-				found = append(found, record)
-				break
-			}
-		}
-		if limit > 0 && len(found) >= limit {
-			break
-		}
-	}
-	return found, nil
-}
-func (*admissionEventRepo) ListByEntity(context.Context, string, uuid.UUID, int) ([]repository.NostrEventRecord, error) {
-	return nil, nil
-}
-func (*admissionEventRepo) LatestCreatedAtForKinds(context.Context, []int) (*time.Time, error) {
-	return nil, nil
-}
-func (*admissionEventRepo) LatestCreatedAtForKindsAndAuthors(context.Context, []int, []string) (*time.Time, error) {
-	return nil, nil
+func openTestStore(t *testing.T) *localstore.Store {
+	t.Helper()
+	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.bolt"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }
 
-type admissionWorkerRepo struct {
-	worker *domain.Worker
+func signedWorkerAd(t *testing.T, key nostr.SecretKey, at time.Time) *nostr.Event {
+	t.Helper()
+	ad := &nostr.Event{
+		Kind: kinds.LoomWorkerAdvertisement, CreatedAt: nostr.Timestamp(at.Unix()),
+		Tags:    nostr.Tags{{"S", "docker", "1"}, {"A", "linux-amd64"}},
+		Content: `{"name":"release-worker","max_concurrent_jobs":4}`,
+	}
+	require.NoError(t, ad.Sign(key))
+	return ad
 }
 
-func (*admissionWorkerRepo) Upsert(context.Context, *domain.Worker) error { return nil }
-func (r *admissionWorkerRepo) GetByPubKey(context.Context, string) (*domain.Worker, error) {
-	return r.worker, nil
-}
-func (*admissionWorkerRepo) List(context.Context, string, int) ([]domain.Worker, error) {
-	return nil, nil
-}
-func (*admissionWorkerRepo) UpdateStatus(context.Context, string, domain.WorkerStatus) error {
-	return nil
-}
-
-func TestRepositoryReleaseEvidenceBindsCurrentSignedWorkerAdvertisementAndCapability(t *testing.T) {
+// C-48: worker admission is decided on the worker's own signed advertisement
+// in the local event store. There is no SQL worker row to be missing or stale.
+func TestLocalReleaseEvidenceAdmitsWorkerFromTheLocalStore(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()
 	key := nostr.Generate()
-	ad := &nostr.Event{
-		Kind: kinds.LoomWorkerAdvertisement, CreatedAt: nostr.Timestamp(now.Add(-time.Minute).Unix()),
-		Tags:    nostr.Tags{{"S", "docker", "1"}, {"A", "linux-amd64"}},
-		Content: `{"name":"release-worker"}`,
-	}
-	if err := ad.Sign(key); err != nil {
-		t.Fatal(err)
-	}
-	tags, err := json.Marshal(ad.Tags)
-	if err != nil {
-		t.Fatal(err)
-	}
-	events := &admissionEventRepo{record: &repository.NostrEventRecord{
-		ID: ad.ID.Hex(), Kind: int(ad.Kind), PubKey: ad.PubKey.Hex(), Content: ad.Content,
-		Tags: tags, Sig: hex.EncodeToString(ad.Sig[:]), CreatedAt: ad.CreatedAt.Time(), ReceivedAt: now,
-	}}
-	worker := &domain.Worker{
-		PubKey: ad.PubKey.Hex(), LastAdvertisementAt: ad.CreatedAt.Time(),
-		Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive,
-		Pressure: &domain.WorkerPressureAssessment{
-			CapacityClass: domain.WorkerCapacityOpen, OverallLevel: domain.WorkerPressureNominal,
-		},
-	}
-	evidence := NewRepositoryReleaseEvidence(events, nil, &admissionWorkerRepo{worker: worker}, nil)
+	ad := signedWorkerAd(t, key, now.Add(-time.Minute))
+	store := openTestStore(t)
+	_, err := store.SaveEvent(*ad)
+	require.NoError(t, err)
+	scheduling := &fixedScheduling{state: domain.WorkerSchedulingActive}
+	evidence := NewLocalReleaseEvidence(store, nil, scheduling, nil, service.WorkerPressureThresholds{})
 	evidence.now = func() time.Time { return now }
 	capabilityBytes, _ := json.Marshal(ad.Tags)
-	admission, admitted, err := evidence.AdmitWorker(
-		context.Background(), ad.PubKey.Hex(), string(capabilityBytes), ad.ID.Hex(),
-	)
-	if err != nil || !admitted {
-		t.Fatalf("admission=%+v admitted=%v err=%v", admission, admitted, err)
-	}
-	if admission.WorkerAdEventID != ad.ID.Hex() || admission.DecisionCode != "eligible" {
-		t.Fatalf("unexpected admission evidence: %+v", admission)
-	}
+
+	admission, admitted, err := evidence.AdmitWorker(context.Background(), ad.PubKey.Hex(), string(capabilityBytes), ad.ID.Hex())
+	require.NoError(t, err)
+	require.True(t, admitted, "admission=%+v", admission)
+	require.Equal(t, ad.ID.Hex(), admission.WorkerAdEventID)
+	require.Equal(t, "eligible", admission.DecisionCode)
 
 	t.Run("capability mismatch", func(t *testing.T) {
 		_, _, err := evidence.AdmitWorker(context.Background(), ad.PubKey.Hex(), `[["S","other"]]`, ad.ID.Hex())
-		if err == nil {
-			t.Fatal("unsigned capability was admitted")
-		}
+		require.Error(t, err, "unsigned capability was admitted")
 	})
-	t.Run("superseded advertisement", func(t *testing.T) {
-		worker.LastAdvertisementAt = ad.CreatedAt.Time().Add(time.Second)
-		_, _, err := evidence.AdmitWorker(context.Background(), ad.PubKey.Hex(), string(capabilityBytes), ad.ID.Hex())
-		if err == nil {
-			t.Fatal("superseded worker advertisement was admitted")
-		}
+	t.Run("unknown advertisement", func(t *testing.T) {
+		other := signedWorkerAd(t, nostr.Generate(), now.Add(-time.Minute))
+		_, _, err := evidence.AdmitWorker(context.Background(), other.PubKey.Hex(), string(capabilityBytes), other.ID.Hex())
+		require.ErrorContains(t, err, "missing")
 	})
 	t.Run("cordoned worker", func(t *testing.T) {
-		worker.LastAdvertisementAt = ad.CreatedAt.Time()
-		worker.SchedulingState = domain.WorkerSchedulingCordoned
+		scheduling.state = domain.WorkerSchedulingCordoned
+		defer func() { scheduling.state = domain.WorkerSchedulingActive }()
 		_, admitted, err := evidence.AdmitWorker(context.Background(), ad.PubKey.Hex(), string(capabilityBytes), ad.ID.Hex())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if admitted {
-			t.Fatal("cordoned worker was admitted")
-		}
+		require.NoError(t, err)
+		require.False(t, admitted, "cordoned worker was admitted")
 	})
+	t.Run("superseded advertisement", func(t *testing.T) {
+		newer := signedWorkerAd(t, key, now.Add(-30*time.Second))
+		_, err := store.SaveEvent(*newer)
+		require.NoError(t, err)
+		_, _, err = evidence.AdmitWorker(context.Background(), ad.PubKey.Hex(), string(capabilityBytes), ad.ID.Hex())
+		require.Error(t, err, "superseded worker advertisement was admitted")
+	})
+}
+
+// A stored event is a cache entry, not a trust decision: an advertisement
+// whose signature does not verify is rejected even though the store holds it
+// (the store does not verify on save; the subscriber does before saving).
+func TestLocalReleaseEvidenceRejectsBadSignatureFromTheStore(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0).UTC()
+	ad := signedWorkerAd(t, nostr.Generate(), now.Add(-time.Minute))
+	ad.Sig[0] ^= 0xff
+	store := openTestStore(t)
+	_, err := store.SaveEvent(*ad)
+	require.NoError(t, err)
+	evidence := NewLocalReleaseEvidence(store, nil, nil, nil, service.WorkerPressureThresholds{})
+	evidence.now = func() time.Time { return now }
+	capabilityBytes, _ := json.Marshal(ad.Tags)
+	_, _, err = evidence.AdmitWorker(context.Background(), ad.PubKey.Hex(), string(capabilityBytes), ad.ID.Hex())
+	require.ErrorContains(t, err, "signature")
 }
