@@ -30,6 +30,7 @@ func newDatabaseRecoveryRunner(cfg config.DBConfig, interval time.Duration, logg
 func (r *databaseRecoveryRunner) Name() string { return "database-recovery" }
 
 func (r *databaseRecoveryRunner) Run(ctx context.Context) error {
+	//nostr:allow-poll reconnect backoff: probes the optional PostgreSQL index until it is reachable again
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 

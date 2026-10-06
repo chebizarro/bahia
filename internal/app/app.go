@@ -1873,8 +1873,29 @@ func New(cfg *config.Config) (*App, error) {
 	// The initiator consults ingested runs so a build/request adopts an existing
 	// trusted 5401 for the same (a, commit, workflow) instead of competing.
 	var hiveRunLookup giteaAdapter.WorkflowRunLookup
-	if shouldRegisterHiveCIRunners(cfg.HiveCI) {
-		hiveRepo := repository.NewPgHiveCIRepository(pool)
+	// Audit C-48: signed Hive-CI evidence (5401 runs, 5402 results, 4903
+	// release attestations and the workers' 10100 advertisements) is read from
+	// the local event store, and the daemon's own result/policy state is
+	// canonical cp-state published through the outbox. The store needs the
+	// projector and the confidential encryptor but no database; the SQL
+	// Hive-CI repository is an optional index rebuilt from canonical state.
+	var hiveRepo *hiveciAdapter.CanonicalRepository
+	switch {
+	case !shouldRegisterHiveCIRunners(cfg.HiveCI):
+		logger.Warn("Hive-CI release ingestion is disabled; signed 5401/5402 events will not be consumed",
+			zap.String("reason", "hiveci_disabled"), zap.Strings("available_interop_relays", relayURLs))
+	case nostrProjector == nil || confidentialEncryptor == nil:
+		logger.Error("Hive-CI ingestion disabled: canonical Hive-CI state needs the Nostr projector and the confidential encryptor",
+			zap.String("reason", "hiveci_canonical_unavailable"))
+	default:
+		var hiveIndex repository.HiveCIRepository
+		var hivePgRepo *repository.PgHiveCIRepository
+		if dbAvailable && pool != nil {
+			hivePgRepo = repository.NewPgHiveCIRepository(pool)
+			hiveIndex = hivePgRepo
+		}
+		hiveCanonical := nostrAdapter.NewHiveCICanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
+		hiveRepo = hiveciAdapter.NewCanonicalRepository(localEventStore, hiveCanonical, hiveIndex, cfg.HiveCI.TrustedCIPubkeys, logger)
 		hiveRunLookup = hiveRepo
 		bridge := pipeline.NewBridge(
 			hiveRepo, serviceRepo, buildRepo, artifactRepo, intentRepo, envRepo,
@@ -1901,6 +1922,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		hiveSub := hiveciAdapter.NewSubscriber(relayPool, hiveRepo, cfg.HiveCI.TrustedCIPubkeys, logger, onResult)
 		hiveSub.SetTrustedResultPubkeys(cfg.HiveCI.TrustedLoomWorkerPubkeys)
+		hiveSub.SetEvidenceStore(localEventStore)
 		if len(cfg.HiveCI.TrustedLoomWorkerPubkeys) == 0 {
 			logger.Warn("Hive-CI Loom worker result allowlist is empty; worker-signed 5402 artifact results will be rejected",
 				zap.String("reason", "trusted_loom_worker_pubkeys_missing"))
@@ -1912,12 +1934,16 @@ func New(cfg *config.Config) (*App, error) {
 			if controlPlaneSigner == nil {
 				return nil, fmt.Errorf("Hive-CI release registration requires a control-plane audit signer")
 			}
+			if hivePgRepo == nil {
+				return nil, fmt.Errorf("Hive-CI release registration requires the PostgreSQL accepted-release store")
+			}
 			releaseAudit := hiveciAdapter.NewRegistrationAudit(controlPlaneSigner, auditEventRepo)
-			releaseEvidence := hiveciAdapter.NewRepositoryReleaseEvidence(
-				nostrEventRepo, hiveRepo, workerRepo, hiveciAdapter.NewOCIReleaseObjectResolver(ociSvc, pipelineRegistryInspector),
+			releaseEvidence := hiveciAdapter.NewLocalReleaseEvidence(
+				localEventStore, hiveRepo, nostrAdapter.NewWorkerSchedulingView(projectionHistory),
+				hiveciAdapter.NewOCIReleaseObjectResolver(ociSvc, pipelineRegistryInspector), pressureThresholds,
 			)
 			releaseIngestor := hiveciAdapter.NewReleaseIngestor(
-				releaseEvidence, hiveRepo, cfg.HiveCI.TrustedReleaseAttestors, cfg.HiveCI.TrustedCIPubkeys,
+				releaseEvidence, hivePgRepo, cfg.HiveCI.TrustedReleaseAttestors, cfg.HiveCI.TrustedCIPubkeys,
 			)
 			promotionSvc, err := service.NewProductionAgentRuntimePromotionService(
 				agentRuntimeReleaseRepo, serviceRepo, envRepo, hiveRepo, registry,
@@ -1927,7 +1953,6 @@ func New(cfg *config.Config) (*App, error) {
 			}
 			bridge.SetReleaseRegistrationAuditor(releaseAudit)
 			hiveSub.SetReleaseAuditor(releaseAudit)
-			hiveSub.SetReleaseEvidenceRecorder(nostrEventRepo)
 			hiveSub.SetReleaseAttestors(cfg.HiveCI.TrustedReleaseAttestors)
 			hiveSub.SetReleaseIngestor(releaseIngestor, func(ctx context.Context, commit domain.HiveCIReleaseCommitResult) {
 				if _, err := bridge.RegisterAcceptedRelease(ctx, commit.Release); err != nil {
@@ -1957,60 +1982,31 @@ func New(cfg *config.Config) (*App, error) {
 		runDispatcher := newHiveCIRunDispatcher(cfg.HiveCI.Policies, dependencyPinner, loomClient, logger)
 		hiveSub.SetRunConsumer(runDispatcher.Dispatch)
 		bgManager.RegisterWithOptions(hiveSub)
-		bgManager.RegisterWithOptions(NewHiveCIRetryRunner(hiveRepo, bridge, cfg.HiveCI.RetryInterval, cfg.HiveCI.MaxRetries, logger))
 
-		// Seed configured pipeline policies idempotently.
-		for i, pc := range cfg.HiveCI.Policies {
-			if pc.RepoCoordinate == "" || pc.WorkflowPath == "" || pc.ServiceName == "" || pc.EnvironmentName == "" {
-				logger.Warn("skipping incomplete hiveci policy config",
-					zap.Int("index", i),
-					zap.String("repo_coordinate", pc.RepoCoordinate),
-					zap.String("workflow_path", pc.WorkflowPath),
-					zap.String("service_name", pc.ServiceName),
-					zap.String("environment_name", pc.EnvironmentName),
-				)
-				continue
+		// Pending results are not scanned on a timer: a result is processed
+		// when it arrives, when its run arrives, and once per start from the
+		// canonical result states the store retains. Config-declared pipeline
+		// policies are seeded after the SQL-era backfill so a policy that
+		// already has an id keeps it.
+		resumer := hiveciAdapter.NewPendingResultResumer(hiveRepo, bridge, cfg.HiveCI.MaxRetries, logger)
+		policies := cfg.HiveCI.Policies
+		hiveSeed := func(ctx context.Context) {
+			if hiveIndex != nil {
+				if err := hiveRepo.BackfillFromIndex(ctx, localOutbox); err != nil {
+					logger.Warn("Hive-CI canonical backfill failed; retrying on next start", zap.Error(err))
+				}
 			}
-			svc, err := serviceRepo.GetByName(ctx, pc.ServiceName)
-			if err != nil || svc == nil {
-				logger.Warn("hiveci policy: service not found, skipping",
-					zap.String("service_name", pc.ServiceName), zap.Error(err))
-				continue
+			seedHiveCIPipelinePolicies(ctx, policies, serviceRepo, envRepo, hiveRepo, logger)
+			if hiveIndex != nil {
+				if err := hiveRepo.RebuildIndex(ctx); err != nil {
+					logger.Warn("Hive-CI SQL index rebuild failed", zap.Error(err))
+				}
 			}
-			env, err := envRepo.GetByName(ctx, pc.EnvironmentName)
-			if err != nil || env == nil {
-				logger.Warn("hiveci policy: environment not found, skipping",
-					zap.String("environment_name", pc.EnvironmentName), zap.Error(err))
-				continue
-			}
-			enabled := true
-			if pc.Enabled != nil {
-				enabled = *pc.Enabled
-			}
-			policy := domain.HiveCIPipelinePolicy{
-				RepoCoordinate: pc.RepoCoordinate,
-				WorkflowPath:   pc.WorkflowPath,
-				BranchPattern:  pc.BranchPattern,
-				ServiceID:      svc.ID,
-				EnvironmentID:  env.ID,
-				Enabled:        enabled,
-				Metadata:       pc.Metadata,
-			}
-			if err := hiveRepo.EnsurePipelinePolicy(ctx, policy); err != nil {
-				logger.Error("failed to ensure hiveci pipeline policy",
-					zap.String("repo_coordinate", pc.RepoCoordinate),
-					zap.String("workflow_path", pc.WorkflowPath),
-					zap.Error(err),
-				)
-			} else {
-				logger.Info("hiveci pipeline policy ensured",
-					zap.String("repo_coordinate", pc.RepoCoordinate),
-					zap.String("workflow_path", pc.WorkflowPath),
-					zap.String("service", pc.ServiceName),
-					zap.String("environment", pc.EnvironmentName),
-				)
+			if err := resumer.Resume(ctx); err != nil {
+				logger.Warn("Hive-CI pending result resume finished with errors", zap.Error(err))
 			}
 		}
+		nostrProjector.AddPostWarmStartHook(hiveSeed)
 
 		logger.Info("hive-ci bridge enabled",
 			zap.Strings("subscription_relays", relayURLs),
@@ -2018,11 +2014,18 @@ func New(cfg *config.Config) (*App, error) {
 			zap.Int("trusted_loom_worker_pubkeys", len(cfg.HiveCI.TrustedLoomWorkerPubkeys)),
 			zap.Int("trusted_release_attestors", len(cfg.HiveCI.TrustedReleaseAttestors)),
 			zap.Bool("auto_register_builds", cfg.HiveCI.AutoRegisterBuilds),
+			zap.Bool("sql_index", hiveIndex != nil),
 			zap.Int("pipeline_policies", len(cfg.HiveCI.Policies)))
-	} else {
-		logger.Warn("Hive-CI release ingestion is disabled; signed 5401/5402 events will not be consumed",
-			zap.String("reason", "hiveci_disabled"), zap.Strings("available_interop_relays", relayURLs))
 	}
+	healthProvider.RegisterCheck("hiveci", func() HealthCheck {
+		check := HealthCheck{Name: "hiveci", Status: HealthStatusPass, Message: "Hive-CI evidence and result state are read from the local event store; pending results resume from canonical state",
+			Details: map[string]string{"sql_index": fmt.Sprintf("%t", dbAvailable && pool != nil)}}
+		if hiveRepo == nil {
+			check.Message = "Hive-CI ingestion disabled: it needs hiveci.enabled, the Nostr projector and the confidential encryptor"
+			check.Details["availability"] = "unavailable"
+		}
+		return check
+	})
 
 	// Audit B-32: security state (targets, run claims, schedules, findings)
 	// is canonical cp-state. The store publishes first and reads from the
@@ -4141,6 +4144,71 @@ func subscribeAgentHealth(ctx context.Context, pool *nostrAdapter.RelayPool, age
 
 func shouldRegisterHiveCIRunners(cfg config.HiveCIConfig) bool {
 	return cfg.Enabled
+}
+
+// seedHiveCIPipelinePolicies publishes the config-declared pipeline policies
+// idempotently. Service and environment names resolve through their
+// repositories, so it needs the database; without one, policies come from the
+// retained canonical records.
+func seedHiveCIPipelinePolicies(ctx context.Context, policies []config.HiveCIPolicyConfig, serviceRepo repository.ServiceRepository, envRepo repository.EnvironmentRepository, hiveRepo repository.HiveCIRepository, logger *zap.Logger) {
+	if len(policies) == 0 {
+		return
+	}
+	if serviceRepo == nil || envRepo == nil {
+		logger.Warn("hiveci policies not seeded: service and environment repositories are unavailable", zap.Int("pipeline_policies", len(policies)))
+		return
+	}
+	for i, pc := range policies {
+		if pc.RepoCoordinate == "" || pc.WorkflowPath == "" || pc.ServiceName == "" || pc.EnvironmentName == "" {
+			logger.Warn("skipping incomplete hiveci policy config",
+				zap.Int("index", i),
+				zap.String("repo_coordinate", pc.RepoCoordinate),
+				zap.String("workflow_path", pc.WorkflowPath),
+				zap.String("service_name", pc.ServiceName),
+				zap.String("environment_name", pc.EnvironmentName),
+			)
+			continue
+		}
+		svc, err := serviceRepo.GetByName(ctx, pc.ServiceName)
+		if err != nil || svc == nil {
+			logger.Warn("hiveci policy: service not found, skipping",
+				zap.String("service_name", pc.ServiceName), zap.Error(err))
+			continue
+		}
+		env, err := envRepo.GetByName(ctx, pc.EnvironmentName)
+		if err != nil || env == nil {
+			logger.Warn("hiveci policy: environment not found, skipping",
+				zap.String("environment_name", pc.EnvironmentName), zap.Error(err))
+			continue
+		}
+		enabled := true
+		if pc.Enabled != nil {
+			enabled = *pc.Enabled
+		}
+		policy := domain.HiveCIPipelinePolicy{
+			RepoCoordinate: pc.RepoCoordinate,
+			WorkflowPath:   pc.WorkflowPath,
+			BranchPattern:  pc.BranchPattern,
+			ServiceID:      svc.ID,
+			EnvironmentID:  env.ID,
+			Enabled:        enabled,
+			Metadata:       pc.Metadata,
+		}
+		if err := hiveRepo.EnsurePipelinePolicy(ctx, policy); err != nil {
+			logger.Error("failed to ensure hiveci pipeline policy",
+				zap.String("repo_coordinate", pc.RepoCoordinate),
+				zap.String("workflow_path", pc.WorkflowPath),
+				zap.Error(err),
+			)
+		} else {
+			logger.Info("hiveci pipeline policy ensured",
+				zap.String("repo_coordinate", pc.RepoCoordinate),
+				zap.String("workflow_path", pc.WorkflowPath),
+				zap.String("service", pc.ServiceName),
+				zap.String("environment", pc.EnvironmentName),
+			)
+		}
+	}
 }
 
 func controlPlaneRelayURLs(cfg config.NostrConfig) []string {

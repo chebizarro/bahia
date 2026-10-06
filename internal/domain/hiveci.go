@@ -154,3 +154,26 @@ func (s HiveCIProcessingState) Terminal() bool {
 		return false
 	}
 }
+
+// CanTransitionTo reports whether the bridge may move a result from s to
+// next. It is the transition table the SQL index enforces.
+func (s HiveCIProcessingState) CanTransitionTo(next HiveCIProcessingState) bool {
+	if next == "" {
+		return false
+	}
+	if s == next {
+		return true
+	}
+	allowed := map[HiveCIProcessingState][]HiveCIProcessingState{
+		HiveCIProcessingStatePendingRun:      {HiveCIProcessingStatePendingResult, HiveCIProcessingStateRejected, HiveCIProcessingStateFailed},
+		HiveCIProcessingStatePendingResult:   {HiveCIProcessingStateProcessed, HiveCIProcessingStateVerified, HiveCIProcessingStateArtifactPending, HiveCIProcessingStateRejected, HiveCIProcessingStateFailed},
+		HiveCIProcessingStateVerified:        {HiveCIProcessingStateArtifactPending, HiveCIProcessingStateProcessed, HiveCIProcessingStateRejected, HiveCIProcessingStateFailed},
+		HiveCIProcessingStateArtifactPending: {HiveCIProcessingStateProcessed, HiveCIProcessingStateFailed},
+	}
+	for _, candidate := range allowed[s] {
+		if candidate == next {
+			return true
+		}
+	}
+	return false
+}
