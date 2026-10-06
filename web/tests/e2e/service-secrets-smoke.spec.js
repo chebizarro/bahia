@@ -230,11 +230,21 @@ test.describe('Service Secrets Smoke Test', () => {
     await expect(page.locator('.secret-row:has-text("API_KEY")')).not.toBeVisible();
   });
 
-  test('disables Create Secret with an explanatory NIP-44 tooltip when unavailable', async ({ page }) => {
+  test('keeps Create Secret usable and reports the explicit NIP-44 error when the signer cannot encrypt', async ({ page }) => {
+    // Only the operator can resolve this (another signer), so the readiness
+    // contract leaves the control enabled and submitting reports the reason
+    // instead of disabling it as if it would resolve by itself.
     await page.addInitScript(() => { if (window.nostr) delete window.nostr.nip44; });
     await page.goto(`/services/${SERVICE_ID}`);
     const create = page.getByRole('button', { name: 'Add Secret' });
-    await expect(create).toBeDisabled();
-    await expect(create).toHaveAttribute('title', /NIP-44/);
+    await expect(create).toBeEnabled();
+    await expect(page.locator('fieldset[data-intent-domain="secret"]').first()).toHaveAttribute('data-intent-ready', 'false');
+    await create.click();
+    const dialog = page.getByRole('dialog', { name: 'Add Secret' });
+    await dialog.locator('#secret-name').fill('DATABASE_URL_2');
+    await dialog.locator('#secret-value').fill('postgres://hidden.example/db2');
+    await dialog.getByRole('button', { name: 'Create Secret' }).click();
+    await expect(dialog.locator('.error')).toContainText('NIP-44');
+    expect(await page.evaluate(() => window.__BAHIA_E2E_INTENT_WRAPS.length)).toBe(0);
   });
 });

@@ -24,19 +24,28 @@
  *            field). The control stays enabled and submitting reports `reason`,
  *            the explicit error the intent client raises.
  *
+ * Sensitive domains (organizations, service secrets, notification channels,
+ * relay policy; nostr/intent-giftwrap.js) travel gift-wrapped on a transport
+ * that opens its own session on submit, so they never wait on the intent
+ * client. They need a NIP-44-capable signer (a never-ready state the operator
+ * resolves) and the same org context, which stores/sensitive-intents.svelte.js
+ * `orgIdFor()` resolves from the same candidates, so a control is never
+ * enabled for an intent whose organization the store could not name.
+ *
  * Reads only `$state`, so it is reactive inside `$derived` and templates.
  *
  * @module lib/stores/intent-readiness
  */
 
 import { authState } from './auth.svelte.js';
-import { orgRoles, roleDerivationActive } from './auth-roles.svelte.js';
+import { contentKeyOrgs, orgRoles, roleDerivationActive } from './auth-roles.svelte.js';
 import { llmRoutes } from './collections/deployments.svelte.js';
 import { services } from './collections/services.svelte.js';
 import { orgsState } from './orgs.svelte.js';
 import { currentSystemInfo } from './system.svelte.js';
 import { INTENT_CLIENT_REQUIRED, intentClientState } from '$lib/nostr/intent-client.svelte.js';
-import { INTENT_ORG_REQUIRED, intentOrgChoices, isFleetScopedIntentDomain, isIntentOrgId } from '$lib/nostr/intent-org.js';
+import { INTENT_ORG_REQUIRED, SENSITIVE_INTENT_ORG_REQUIRED, intentOrgChoices, isFleetScopedIntentDomain, isIntentOrgId } from '$lib/nostr/intent-org.js';
+import { SENSITIVE_INTENT_DOMAINS, sensitiveIntentBlocker } from '$lib/nostr/intent-giftwrap.js';
 
 export const INTENT_CONNECTING = 'Connecting…';
 export const INTENT_ORG_UNKNOWN = 'No organization is known for this session yet';
@@ -45,9 +54,12 @@ const ready = { ready: true, pending: false, reason: '', waitingOn: '' };
 const waiting = (waitingOn, reason) => ({ ready: false, pending: true, reason, waitingOn });
 const blocked = reason => ({ ready: false, pending: false, reason, waitingOn: '' });
 
-/** Every org id the session currently knows: membership roles, org records and system discovery. */
+/**
+ * Every org id the session currently knows: membership roles, held content
+ * keys, org records and system discovery.
+ */
 export function intentOrgCandidates() {
-  return [...Object.keys(orgRoles), ...orgsState.orgs.map(org => org.id || org.org_id),
+  return [...Object.keys(orgRoles), ...Object.keys(contentKeyOrgs), ...orgsState.orgs.map(org => org.id || org.org_id),
     currentSystemInfo()?.organization_id];
 }
 
@@ -76,15 +88,20 @@ export function intentRecordOrgId(record) {
 export function intentReadiness(domain, { orgId = '', record = null, orgField = false } = {}) {
   if (['unknown', 'checking', 'authenticating'].includes(authState.status)) return waiting('session', INTENT_CONNECTING);
   if (authState.status !== 'authenticated' || !authState.pubkey) return blocked(INTENT_CLIENT_REQUIRED);
-  // Organization intents carry their own org id and travel on the sensitive
-  // (gift-wrapped) transport, which opens its own session on submit.
-  if (domain === 'org') return ready;
-  if (intentClientState.phase === 'unavailable') return blocked(intentClientState.error || INTENT_CLIENT_REQUIRED);
-  if (intentClientState.phase === 'idle' || intentClientState.phase === 'opening') return waiting('session', INTENT_CONNECTING);
+  const sensitive = SENSITIVE_INTENT_DOMAINS.has(domain);
+  if (sensitive) {
+    const blocker = sensitiveIntentBlocker(authState.capabilities);
+    if (blocker) return blocked(blocker);
+    // Organization intents carry their own org id.
+    if (domain === 'org') return ready;
+  } else {
+    if (intentClientState.phase === 'unavailable') return blocked(intentClientState.error || INTENT_CLIENT_REQUIRED);
+    if (intentClientState.phase === 'idle' || intentClientState.phase === 'opening') return waiting('session', INTENT_CONNECTING);
+  }
   if (isFleetScopedIntentDomain(domain) || isIntentOrgId(orgId) || intentRecordOrgId(record)) return ready;
   const choices = intentOrgChoices(intentOrgCandidates());
   if (choices.length === 1) return ready;
-  if (choices.length > 1 || orgField) return blocked(INTENT_ORG_REQUIRED);
+  if (choices.length > 1 || orgField) return blocked(sensitive ? SENSITIVE_INTENT_ORG_REQUIRED : INTENT_ORG_REQUIRED);
   // Membership found in the local store is still being decrypted.
   if (roleDerivationActive.value) return waiting('organization', INTENT_CONNECTING);
   return waiting('organization', INTENT_ORG_UNKNOWN);
