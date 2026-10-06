@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -97,4 +98,38 @@ func TestManagedInstanceHealthProjectorPublishesMaterialObservationHistory(t *te
 	require.Len(t, rec.events, 3)
 	require.Equal(t, gonostr.Kind(kinds.CASAudit), rec.events[2].Kind)
 	require.Equal(t, "health_observation", managedTagValue(rec.events[2].Tags, "type"))
+}
+
+// bahia-as2bo: the projector's redelivery memory is bounded by the supervised
+// set and a fixed audit window, not by the number of events it publishes.
+func TestManagedInstanceHealthProjectorDedupeMemoryDoesNotGrowWithEvents(t *testing.T) {
+	start := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	key := testKey()
+	rec := &managedNostrRecorder{}
+	p := NewManagedInstanceHealthProjector(nil, rec, zap.NewNop())
+	const observations = 5 * managedAuditDedupeLimit
+	for i := 0; i < observations; i++ {
+		at := start.Add(time.Duration(i) * time.Second)
+		payload := ManagedInstanceHealthChanged{EventID: fmt.Sprintf("evt-%d", i), Health: domain.ManagedInstanceHealth{ManagedInstanceKey: key, SupervisorType: domain.InstanceSupervisorDocker, Status: domain.InstanceHealthStatusHealthy, LastObservedAt: at}, PreviousStatus: domain.InstanceHealthStatusHealthy, OccurredAt: at}
+		require.NoError(t, p.handle(context.Background(), events.Event{Type: events.EventRuntimeInstanceHealthChanged, Data: payload}))
+	}
+	require.Len(t, rec.events, 3*observations, "every distinct observation is published")
+	// Two replaceable slots for the instance (status, state), each a bounded
+	// window, plus the audit window.
+	bound := 2*managedSlotDedupeLimit + managedAuditDedupeLimit
+	require.Equal(t, bound, p.dedupeSize())
+
+	// A redelivery of the latest observation is still suppressed.
+	last := start.Add(time.Duration(observations-1) * time.Second)
+	payload := ManagedInstanceHealthChanged{EventID: fmt.Sprintf("evt-%d", observations-1), Health: domain.ManagedInstanceHealth{ManagedInstanceKey: key, SupervisorType: domain.InstanceSupervisorDocker, Status: domain.InstanceHealthStatusHealthy, LastObservedAt: last}, PreviousStatus: domain.InstanceHealthStatusHealthy, OccurredAt: last}
+	require.NoError(t, p.handle(context.Background(), events.Event{Type: events.EventRuntimeInstanceHealthChanged, Data: payload}))
+	require.Len(t, rec.events, 3*observations, "redelivery of the latest observation signs nothing")
+	require.Equal(t, bound, p.dedupeSize())
+
+	// A second instance adds its own slots and nothing else.
+	other := key
+	other.RuntimeTargetName = "other-target"
+	payload = ManagedInstanceHealthChanged{EventID: "other-1", Health: domain.ManagedInstanceHealth{ManagedInstanceKey: other, SupervisorType: domain.InstanceSupervisorDocker, Status: domain.InstanceHealthStatusHealthy, LastObservedAt: last}, PreviousStatus: domain.InstanceHealthStatusHealthy, OccurredAt: last}
+	require.NoError(t, p.handle(context.Background(), events.Event{Type: events.EventRuntimeInstanceHealthChanged, Data: payload}))
+	require.Equal(t, bound+2, p.dedupeSize())
 }
