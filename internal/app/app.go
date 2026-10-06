@@ -2081,8 +2081,14 @@ func New(cfg *config.Config) (*App, error) {
 		if securityRepo != nil {
 			// Once the local store has caught up with the relays: publish
 			// SQL-era state that has no canonical record yet (once), then
-			// bring the index up to the canonical records.
+			// bring the index up to the canonical records. Policies go
+			// first: schedules derive only from published policy cp-state,
+			// so a policy that exists only in SQL would otherwise never be
+			// scheduled (bahia-u5whr).
 			nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+				if err := policySvc.BackfillCanonicalPolicies(ctx, localOutbox, service.PolicyCanonicalPublisher(policyPublisher)); err != nil {
+					logger.Warn("policy canonical backfill failed; retrying on next start", zap.Error(err))
+				}
 				if err := canonicalSecurity.BackfillFromIndex(ctx, localOutbox); err != nil {
 					logger.Warn("security canonical backfill failed; retrying on next start", zap.Error(err))
 				}
