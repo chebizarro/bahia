@@ -166,6 +166,31 @@ export function confidentialCpStateFixture({ d, topic, legacyKind, content, crea
   };
 }
 
+/**
+ * The service-signed SoulFactory runtime policy as OperationalViewPublisher
+ * emits it: the enabled runtimes plus the controller and pinned runtime keys
+ * the browser may trust for Souls and kind:30317 capabilities.
+ */
+export function soulRuntimePolicyFixture({
+  agentRuntimes = ['openclaw'], controllerPubkeys = [], runtimePubkeys = {}, createdAt, pubkey = E2E_SERVICE_PUBKEY
+} = {}) {
+  return {
+    id: 'cp-state-soul-factory-runtime-policy',
+    kind: CASCADIA_CONTROLPLANE_STATE,
+    pubkey,
+    created_at: createdAt ?? Math.floor(Date.now() / 1000),
+    tags: [
+      ['d', 'soul-factory:runtime-policy'], ['domain', 'soul-factory'], ['schema', BAHIA_CP_STATE_SCHEMA],
+      ['legacy_kind', '32042'], ['deleted', 'false'], ['t', 'soul-factory-runtime-policy']
+    ],
+    content: JSON.stringify({
+      agent_runtimes: agentRuntimes,
+      ...(controllerPubkeys.length ? { controller_pubkeys: controllerPubkeys } : {}),
+      ...(Object.keys(runtimePubkeys).length ? { runtime_pubkeys: runtimePubkeys } : {})
+    })
+  };
+}
+
 /** One audit fact authored by the e2e service identity, with the producer's sha256 fact id. */
 export function cpAuditFixture({ pubkey = E2E_SERVICE_PUBKEY, fact, ...options }) {
   const { type, entityId = '', data = {} } = options;

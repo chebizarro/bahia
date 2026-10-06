@@ -22,11 +22,32 @@ func NewOperationalViewPublisher(projector *Projector, encryptor ConfidentialSta
 	return &OperationalViewPublisher{projector: projector, encryptor: encryptor}
 }
 
-func (p *OperationalViewPublisher) PublishSoulRuntimePolicy(ctx context.Context, runtimes []string) error {
+// SoulRuntimePolicy is the SoulFactory policy the Bahia service vouches for.
+// Browsers trust only the deployment-seeded service key, so this record is
+// their trust root for the SoulFactory keys: which controller signs Souls and
+// which runtime identities may advertise kind:30317 capabilities.
+type SoulRuntimePolicy struct {
+	// AgentRuntimes lists the administratively enabled runtime targets.
+	AgentRuntimes []string
+	// ControllerPubkeys are the SoulFactory controller identities, empty when
+	// SoulFactory is disabled.
+	ControllerPubkeys []string
+	// RuntimePubkeys mirrors soul_factory.runtime_pubkeys, empty when unpinned.
+	RuntimePubkeys map[string][]string
+}
+
+func (p *OperationalViewPublisher) PublishSoulRuntimePolicy(ctx context.Context, policy SoulRuntimePolicy) error {
 	if p.projector == nil || !p.projector.Enabled() {
 		return nil
 	}
-	content, err := json.Marshal(map[string]any{"agent_runtimes": append([]string{}, runtimes...)})
+	body := map[string]any{"agent_runtimes": append([]string{}, policy.AgentRuntimes...)}
+	if len(policy.ControllerPubkeys) > 0 {
+		body["controller_pubkeys"] = append([]string{}, policy.ControllerPubkeys...)
+	}
+	if len(policy.RuntimePubkeys) > 0 {
+		body["runtime_pubkeys"] = policy.RuntimePubkeys
+	}
+	content, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
+
+const bootMock = vi.hoisted(() => ({
+  store: null as any, pool: null as any, relays: [] as string[], refresh: null as any,
+  auth: { status: 'unauthenticated', pubkey: '' }
+}));
+vi.mock('$lib/nostr/boot.js', () => ({
+  getEventStore: () => bootMock.store,
+  getServicePubkeys: () => ['a'.repeat(64)],
+  getPool: () => bootMock.pool, getRelayUrls: () => bootMock.relays,
+  onStoreRefresh: (cb: any) => { bootMock.refresh = cb; return () => { bootMock.refresh = null; }; }
+}));
+vi.mock('$lib/stores/auth.js', () => ({ authState: bootMock.auth }));
 import {
   continuityNostrFilters,
+  continuityEventsFromStore,
+  initContinuityStoreBinding,
+  teardownContinuityStoreBinding,
   continuityRequestsFromEvents,
   continuityStatusesFromEvents,
   deriveContinuityAssessments,
@@ -25,63 +40,37 @@ function event(overrides: Record<string, any>) {
 }
 
 describe('continuity Nostr read models', () => {
-  it('uses scoped filters for continuity status, definitions, heartbeat, and worker state events', () => {
-    expect(continuityNostrFilters()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kinds: [30351], '#t': ['continuity', 'continuity-status'] }),
-      expect.objectContaining({ kinds: [30353], '#t': ['continuity', 'recovery-progress'] }),
-      expect.objectContaining({ kinds: [31400, 31401, 31402, 31403, 31404] }),
-      expect.objectContaining({ kinds: [38430, 38431] }),
-      expect.objectContaining({ kinds: [30315], '#t': ['continuity-heartbeat'] }),
-      { kinds: [30900], '#t': ['worker-state'], limit: 1000 }
+  it('scopes service projections to seed roots and operator-authored families to the authenticated operator', () => {
+    const filters = continuityNostrFilters({ serviceAuthors: [SERVICE_AUTHOR], operatorAuthors: [WORKER_AUTHOR] });
+    expect(filters).toHaveLength(6);
+    expect(filters).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kinds: [30351], authors: [SERVICE_AUTHOR] }),
+      expect.objectContaining({ kinds: [30353], authors: [SERVICE_AUTHOR] }),
+      expect.objectContaining({ kinds: [31400, 31401, 31402, 31403, 31404], authors: [WORKER_AUTHOR] }),
+      expect.objectContaining({ kinds: [38430, 38431], authors: [WORKER_AUTHOR] }),
+      expect.objectContaining({ kinds: [30315], authors: [WORKER_AUTHOR] }),
+      expect.objectContaining({ kinds: [30900], '#t': ['worker-state'], authors: [SERVICE_AUTHOR] })
     ]));
-    expect(continuityNostrFilters()).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ kinds: [30350] })
-    ]));
+    expect(continuityNostrFilters()).toEqual([]);
   });
 
-  it('keeps the subscription open after EOSE and applies later live events', async () => {
-    let handlers: any;
-    const stop = vi.fn();
-    const client = {
-      getConnectedRelays: () => ['wss://continuity.example'],
-      subscribe: vi.fn((_filters, nextHandlers) => {
-        handlers = nextHandlers;
-        return stop;
-      })
-    };
-    const updates: any[] = [];
-
-    const unsubscribe = await subscribeToContinuityDashboard({
-      client,
-      connect: vi.fn(async () => undefined),
-      onUpdate: (snapshot) => updates.push(snapshot)
+  it('renders verified cached service events immediately and ignores an untrusted signer', async () => {
+    const status = (id: string, pubkey: string) => event({
+      id, kind: 30351, pubkey, created_at: 300,
+      tags: [['d', `continuity-status:${SERVICE}`], ['service', SERVICE], ['t', 'continuity']],
+      content: { service_key: SERVICE, active_profile: 'degraded', operation_state: 'failover_in_progress' }
     });
-
-    handlers.onEose('wss://continuity.example');
-    expect(stop).not.toHaveBeenCalled();
-    expect(updates.at(-1).ready).toBe(true);
-
-    handlers.onEvent(event({
-      id: 'live-status',
-      kind: 30351,
-      created_at: 300,
-      tags: [['d', `continuity-status:${SERVICE}`], ['service', SERVICE], ['t', 'continuity'], ['t', 'continuity-status']],
-      content: {
-        service_key: SERVICE,
-        active_profile: 'degraded',
-        operation_state: 'failover_in_progress',
-        primary_worker_pubkey: 'primary-a',
-        active_worker_pubkey: 'standby-a'
-      }
-    }), 'wss://continuity.example');
-
-    expect(updates.at(-1).statuses).toEqual([
-      expect.objectContaining({ service_key: SERVICE, operation_state: 'failover_in_progress' })
-    ]);
-    expect(stop).not.toHaveBeenCalled();
-
+    const events = [status('cached', SERVICE_AUTHOR), status('forged', WORKER_AUTHOR)];
+    bootMock.store = { query: (filter: any) => events.filter((item) => filter.kinds.includes(item.kind) && filter.authors.includes(item.pubkey)) };
+    const updates: any[] = [];
+    const unsubscribe = await subscribeToContinuityDashboard({ onUpdate: (snapshot) => updates.push(snapshot) });
+    expect(updates.at(-1).events.map((item: any) => item.id)).toEqual(['cached']);
+    expect(continuityEventsFromStore().map((item) => item.id)).toEqual(['cached']);
+    events.push(status('live', SERVICE_AUTHOR));
+    bootMock.refresh();
+    expect(updates.at(-1).events.map((item: any) => item.id)).toContain('live');
     unsubscribe();
-    expect(stop).toHaveBeenCalledOnce();
+    expect(bootMock.refresh).toBeNull();
   });
 
   it('represents failover and recovery request events', () => {
@@ -239,5 +228,84 @@ describe('continuity heartbeat expiry', () => {
     expect(active([standby('w'), heartbeat('w', [['expiration', String(now - 1)], ['expires_after_ms', '600000']], now - 60)])).toBe(false);
     expect(active([standby('w'), heartbeat('w', [['expires_after_ms', '1000']], now - 60)])).toBe(false);
     expect(active([standby('w'), heartbeat('w', [['expires_after_ms', '600000']], now - 60)])).toBe(true);
+  });
+});
+
+describe('continuity app-lifetime store binding', () => {
+  const RELAY = 'wss://relay.test';
+  const OPERATOR = 'c'.repeat(64);
+
+  // Answers every paged REQ with an empty page so catch-up completes.
+  function relayPool() {
+    const requests: any[] = [];
+    const pool = { subscribe: vi.fn((options: any) => {
+      requests.push(options);
+      if (options.filters[0].limit !== undefined) queueMicrotask(() => options.onEose(RELAY));
+      return { unsubscribe: vi.fn() };
+    }) };
+    return { pool, requests };
+  }
+
+  function start() {
+    const { pool, requests } = relayPool();
+    bootMock.pool = pool;
+    bootMock.relays = [RELAY];
+    bootMock.store = { query: () => [], getCursor: () => null, setCursor: vi.fn() };
+    bootMock.auth.status = 'unauthenticated';
+    bootMock.auth.pubkey = '';
+    teardownContinuityStoreBinding();
+    initContinuityStoreBinding();
+    return { pool, requests };
+  }
+
+  it('subscribes only under trusted authors and adds operator families when an operator signs in', async () => {
+    const { pool, requests } = start();
+    const authorsOf = () => requests.flatMap((request) => request.filters.map((filter: any) => filter.authors));
+    expect(requests.length).toBeGreaterThan(0);
+    expect(authorsOf().every((authors) => authors.length === 1 && authors[0] === SERVICE_AUTHOR)).toBe(true);
+    expect(requests.flatMap((request) => request.filters.flatMap((filter: any) => filter.kinds))).not.toContain(31400);
+
+    await vi.waitFor(() => expect(pool.subscribe.mock.calls.length).toBeGreaterThanOrEqual(4));
+    const beforeLogin = pool.subscribe.mock.calls.length;
+    bootMock.auth.status = 'authenticated';
+    bootMock.auth.pubkey = OPERATOR;
+    initContinuityStoreBinding();
+    const added = requests.slice(beforeLogin);
+    expect(added.length).toBeGreaterThan(0);
+    expect(added.every((request) => request.filters.every((filter: any) => filter.authors[0] === OPERATOR))).toBe(true);
+    expect(added[0].filters.map((filter: any) => filter.kinds)).toEqual([[31400, 31401, 31402, 31403, 31404], [38430, 38431], [30315]]);
+    expect(authorsOf().every((authors) => Array.isArray(authors) && authors.length === 1)).toBe(true);
+    teardownContinuityStoreBinding();
+  });
+
+  it('lets pages come and go without opening or closing a relay REQ', async () => {
+    const { pool } = start();
+    await vi.waitFor(() => expect(pool.subscribe.mock.calls.length).toBeGreaterThanOrEqual(4));
+    const opened = pool.subscribe.mock.calls.length;
+    const closed = () => pool.subscribe.mock.results.filter((result: any) => result.value.unsubscribe.mock.calls.length > 0).length;
+    const closedBefore = closed();
+    for (let visit = 0; visit < 3; visit += 1) {
+      const leave = await subscribeToContinuityDashboard({ onUpdate: () => {} });
+      initContinuityStoreBinding();
+      leave();
+    }
+    expect(pool.subscribe).toHaveBeenCalledTimes(opened);
+    expect(closed()).toBe(closedBefore);
+    teardownContinuityStoreBinding();
+  });
+
+  it('reports relay catch-up as a badge on an already rendered snapshot and skips unchanged refreshes', async () => {
+    const { pool } = start();
+    const updates: any[] = [];
+    const leave = await subscribeToContinuityDashboard({ onUpdate: (snapshot) => updates.push(snapshot) });
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({ ready: true, synced: false, error: null });
+    await vi.waitFor(() => expect(updates.at(-1).synced).toBe(true));
+    const delivered = updates.length;
+    bootMock.refresh();
+    expect(updates).toHaveLength(delivered);
+    expect(pool.subscribe.mock.calls.every(([options]: any) => options.filters.every((filter: any) => filter.authors?.length))).toBe(true);
+    leave();
+    teardownContinuityStoreBinding();
   });
 });

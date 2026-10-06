@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { subscribeToContinuityDashboard } from '$lib/nostr/continuity';
+  import { authState } from '$lib/stores/auth.js';
 import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
   import SimulationPanel from './SimulationPanel.svelte';
   import TopologyView from './TopologyView.svelte';
@@ -10,7 +11,6 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
   let assessments = $state([]);
   let requests = $state([]);
   let continuityEvents = $state([]);
-  let ready = $state(false);
   let error = $state(null);
 
   onMount(() => {
@@ -24,7 +24,6 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
         assessments = snapshot.assessments;
         requests = snapshot.requests;
         continuityEvents = snapshot.events;
-        ready = snapshot.ready;
         error = snapshot.error;
       },
       onError: (caught) => {
@@ -115,13 +114,21 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
     <button type="button" class:active={activeTab === 'simulation'} onclick={() => (activeTab = 'simulation')}>Simulation</button>
   </nav>
 
+  {#if activeTab !== 'status'}
+    <!-- The browser cannot verify the daemon's operator allowlist, so operator-signed kinds are trusted from one key only. -->
+    <p class="operator-scope-note" data-testid="continuity-operator-scope-note">
+      {#if authState.status === 'authenticated'}
+        Topology, requests and simulation use only the definitions, requests and heartbeats signed by your key.
+        Documents published by other fleet operators are not shown here. Status includes every operator's changes, because the Bahia service signs it.
+      {:else}
+        Sign in as a fleet operator to see topology, requests and simulation: without a signed-in key, no operator-signed
+        definitions, requests or heartbeats are shown. Status is signed by the Bahia service and is always shown.
+      {/if}
+    </p>
+  {/if}
+
   {#if activeTab === 'status'}
-    {#if !ready && sortedStatuses.length === 0 && !error}
-      <section class="empty-card">
-        <h2>Loading continuity history</h2>
-        <p>The retained relay subscription is processing stored events and will remain open after EOSE.</p>
-      </section>
-    {:else if sortedStatuses.length === 0 && !error}
+    {#if sortedStatuses.length === 0 && !error}
       <section class="empty-card">
         <h2>No continuity status projected yet</h2>
         <p>Services will appear here after the continuity status projector records kind 30351/30353 read-model state.</p>
@@ -305,6 +312,14 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
 
   .alert strong {
     color: var(--error);
+  }
+
+  .operator-scope-note {
+    margin: 0 0 1rem;
+    padding: 0.6rem 0.8rem;
+    border-left: 3px solid var(--border-color);
+    color: var(--text-muted);
+    font-size: 0.875rem;
   }
 
   .tabs {
