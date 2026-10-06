@@ -39,6 +39,12 @@ func (r *bootstrapApplyRecorder) count() int {
 	return len(r.events)
 }
 
+type bootstrapApplyFunc func(ctx context.Context, event *DecodedProjectionEvent) error
+
+func (f bootstrapApplyFunc) Apply(ctx context.Context, event *DecodedProjectionEvent) error {
+	return f(ctx, event)
+}
+
 type scriptedBootstrapSubscription struct {
 	events []*gonostr.Event
 	eose   bool
@@ -55,10 +61,7 @@ func TestBootstrapperRunReplaysSnapshotAndLiveCatchupToReady(t *testing.T) {
 		testKindTier2Live:     {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier2Live, "live-2")}, eose: true},
 	})
 
-	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
-		SnapshotTimeout: 50 * time.Millisecond,
-		CatchupTimeout:  50 * time.Millisecond,
-	})
+	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{})
 
 	err := bootstrapper.Run(context.Background())
 
@@ -85,10 +88,7 @@ func TestBootstrapperTimeoutOnRequiredGroupRetriesUntilSuccess(t *testing.T) {
 		testKindTier2Live:     {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier2Live, "live-2")}, eose: true},
 	})
 
-	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
-		SnapshotTimeout: 50 * time.Millisecond,
-		CatchupTimeout:  50 * time.Millisecond,
-	})
+	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{})
 
 	err := bootstrapper.Run(context.Background())
 
@@ -99,6 +99,100 @@ func TestBootstrapperTimeoutOnRequiredGroupRetriesUntilSuccess(t *testing.T) {
 	require.Equal(t, 5, progress.GroupsTotal)
 	require.Equal(t, 5, progress.GroupsComplete)
 	require.Equal(t, 4, cache.count())
+}
+
+// A page whose deadline elapses before EOSE fails the attempt, and the retry
+// re-issues every REQ: relays answer each REQ with their stored events again,
+// so the bootstrapper delivers at least once and leaves deduplication to the
+// cache (RelayProjectionCache skips event IDs it has already applied). The
+// deadline is fired by the test itself, after the stalled page's event has
+// been applied, so the interleaving does not depend on the wall clock.
+func TestBootstrapperTimedOutAttemptRetriesAndRedeliversEveryGroup(t *testing.T) {
+	catalog := testBootstrapCatalog()
+	scripts := map[int]scriptedBootstrapSubscription{
+		testKindTier0Snapshot: {eose: true},
+		testKindTier1Snapshot: {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Snapshot, "snapshot-1")}, eose: true},
+		testKindTier1Live:     {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier1Live, "live-1")}, eose: true},
+		testKindTier2Snapshot: {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier2Snapshot, "snapshot-2")}, eose: true},
+		testKindTier2Live:     {events: []*gonostr.Event{signedBootstrapEvent(t, testKindTier2Live, "live-2")}, eose: true},
+	}
+	stalledEvent := scripts[testKindTier2Live].events[0]
+	stalledEventID := eventIDHex(stalledEvent)
+
+	var mu sync.Mutex
+	subscriptionsByKind := make(map[int]int)
+	// deadline is the stalled page's timer; the cache fires it once the
+	// stalled page's event has been applied.
+	var deadline chan time.Time
+	stallNextPage := false
+
+	originalSubscribe := bootstrapSubscribeAllWithEOSE
+	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
+		require.Len(t, filters, 1)
+		require.Len(t, filters[0].Kinds, 1)
+		kind := int(filters[0].Kinds[0])
+		mu.Lock()
+		defer mu.Unlock()
+		subscriptionsByKind[kind]++
+		script := scripts[kind]
+		if kind == testKindTier2Live && subscriptionsByKind[kind] == 1 {
+			// The relay delivers its stored event but never sends EOSE.
+			script.eose = false
+			stallNextPage = true
+		}
+		return scriptedMergedSubscription(ctx, script), nil
+	}
+	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = originalSubscribe })
+
+	originalTimer := bootstrapPageTimer
+	bootstrapPageTimer = func(time.Duration) (<-chan time.Time, func()) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !stallNextPage {
+			return nil, func() {}
+		}
+		stallNextPage = false
+		deadline = make(chan time.Time)
+		return deadline, func() {}
+	}
+	t.Cleanup(func() { bootstrapPageTimer = originalTimer })
+
+	cache := &bootstrapApplyRecorder{}
+	firingCache := bootstrapApplyFunc(func(ctx context.Context, event *DecodedProjectionEvent) error {
+		if err := cache.Apply(ctx, event); err != nil {
+			return err
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if event.SourceID == stalledEventID && deadline != nil {
+			close(deadline)
+			deadline = nil
+		}
+		return nil
+	})
+
+	bootstrapper := NewBootstrapper(nil, catalog, nil, firingCache, zap.NewNop(), BootstrapConfig{
+		RetryInterval: time.Millisecond,
+	})
+
+	err := bootstrapper.Run(context.Background())
+
+	require.NoError(t, err)
+	require.True(t, bootstrapper.Ready())
+	mu.Lock()
+	for kind, subscriptions := range subscriptionsByKind {
+		require.Equalf(t, 2, subscriptions, "kind %d replayed once per attempt", kind)
+	}
+	mu.Unlock()
+	require.Equal(t, 8, cache.count(), "every scripted event is redelivered by the retried attempt")
+	unique := make(map[string]struct{})
+	for _, event := range cache.events {
+		unique[event.SourceID] = struct{}{}
+	}
+	require.Len(t, unique, 4)
+	progress := bootstrapper.Progress()
+	require.Equal(t, BootstrapPhaseReady, progress.Phase)
+	require.Equal(t, 5, progress.GroupsComplete)
 }
 
 func TestBootstrapperTimeoutNamesBlockingRelaysInProgress(t *testing.T) {
@@ -137,10 +231,7 @@ func TestBootstrapperEmptyFleetWithEOSEBecomesReady(t *testing.T) {
 		testKindTier2Live:     {eose: true},
 	})
 
-	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{
-		SnapshotTimeout: 50 * time.Millisecond,
-		CatchupTimeout:  50 * time.Millisecond,
-	})
+	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{})
 
 	cache := &bootstrapApplyRecorder{}
 	bootstrapper.cache = cache
@@ -160,6 +251,7 @@ func TestBootstrapperRunRetriesAfterFailedAttempt(t *testing.T) {
 	cache := &bootstrapApplyRecorder{}
 	attemptsByKind := make(map[int]int)
 	var attemptsMu sync.Mutex
+	disableBootstrapPageTimeouts(t)
 	original := bootstrapSubscribeAllWithEOSE
 	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
 		require.Len(t, filters, 1)
@@ -187,9 +279,7 @@ func TestBootstrapperRunRetriesAfterFailedAttempt(t *testing.T) {
 	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
 
 	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
-		SnapshotTimeout: 50 * time.Millisecond,
-		CatchupTimeout:  50 * time.Millisecond,
-		RetryInterval:   time.Millisecond,
+		RetryInterval: time.Millisecond,
 	})
 
 	err := bootstrapper.Run(context.Background())
@@ -226,10 +316,7 @@ func TestBootstrapperSkipsMalformedEventsAndContinuesGroup(t *testing.T) {
 		testKindTier2Live:     {eose: true},
 	})
 
-	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{
-		SnapshotTimeout: 50 * time.Millisecond,
-		CatchupTimeout:  50 * time.Millisecond,
-	})
+	bootstrapper := NewBootstrapper(nil, catalog, nil, cache, zap.NewNop(), BootstrapConfig{})
 	// Replace the tier1 snapshot decoder with strict JSON decoding so malformed content is skipped.
 	catalog.decoders[testKindTier1Snapshot] = func(ev *gonostr.Event) (*DecodedProjectionEvent, error) {
 		var payload map[string]bool
@@ -275,6 +362,7 @@ func TestBootstrapperScopesRequiredGroupsToConfiguredAuthors(t *testing.T) {
 		},
 	}
 	var captured []gonostr.Filter
+	disableBootstrapPageTimeouts(t)
 	original := bootstrapSubscribeAllWithEOSE
 	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
 		require.Len(t, filters, 1)
@@ -295,8 +383,6 @@ func TestBootstrapperScopesRequiredGroupsToConfiguredAuthors(t *testing.T) {
 	require.NoError(t, err)
 
 	bootstrapper := NewBootstrapper(nil, catalog, nil, &bootstrapApplyRecorder{}, zap.NewNop(), BootstrapConfig{
-		SnapshotTimeout:     50 * time.Millisecond,
-		CatchupTimeout:      50 * time.Millisecond,
 		ProjectionAuthors:   []string{servicePubkey},
 		ControlPlaneAuthors: []string{operatorOne, operatorTwo},
 	})
@@ -316,6 +402,7 @@ func TestBootstrapperUnknownAuthorScopeIsHardError(t *testing.T) {
 	catalog := testBootstrapCatalog()
 	catalog.Groups[0].Authors = ""
 	subscribed := false
+	disableBootstrapPageTimeouts(t)
 	original := bootstrapSubscribeAllWithEOSE
 	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, _ []gonostr.Filter) (*MergedSubscription, error) {
 		subscribed = true
@@ -377,8 +464,13 @@ func testBootstrapCatalog() *KindCatalog {
 	return catalog
 }
 
+// setBootstrapSubscribeScript answers every replay REQ from the script for its
+// kind. Scripted relays always reach a terminal state on their own, so the
+// page deadline is disabled: a wall-clock timeout firing under load would
+// fail the attempt and make Run retry, redelivering every scripted event.
 func setBootstrapSubscribeScript(t *testing.T, scripts map[int]scriptedBootstrapSubscription) {
 	t.Helper()
+	disableBootstrapPageTimeouts(t)
 	original := bootstrapSubscribeAllWithEOSE
 	bootstrapSubscribeAllWithEOSE = func(_ *RelayPool, ctx context.Context, filters []gonostr.Filter) (*MergedSubscription, error) {
 		require.Len(t, filters, 1)
@@ -390,6 +482,15 @@ func setBootstrapSubscribeScript(t *testing.T, scripts map[int]scriptedBootstrap
 		return scriptedMergedSubscription(ctx, script), nil
 	}
 	t.Cleanup(func() { bootstrapSubscribeAllWithEOSE = original })
+}
+
+// disableBootstrapPageTimeouts makes every page deadline unreachable for the
+// rest of the test, so only the scripted relays decide when a group ends.
+func disableBootstrapPageTimeouts(t *testing.T) {
+	t.Helper()
+	original := bootstrapPageTimer
+	bootstrapPageTimer = func(time.Duration) (<-chan time.Time, func()) { return nil, func() {} }
+	t.Cleanup(func() { bootstrapPageTimer = original })
 }
 
 func scriptedMergedSubscription(ctx context.Context, script scriptedBootstrapSubscription) *MergedSubscription {
