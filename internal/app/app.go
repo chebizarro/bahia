@@ -464,14 +464,24 @@ func New(cfg *config.Config) (*App, error) {
 
 	var publicRoutePlanner *service.PublicRoutePlanner
 	var internalRouteBackend *routingAdapter.NginxBackend
-	if cfg.EdgeRouting.Enabled && secretRepo != nil {
+	// bahia-as2bo: edge-route convergence needs the routing provider's API
+	// token (edge_routing.api_token_ref). That token is a secret value, which
+	// the canonical secret registry does not carry (it holds references); it
+	// exists only in the PostgreSQL secret store, decrypted with the service
+	// key. So convergence, and only convergence, is gated on the store being
+	// present; the desired route plan, canary probing and route state are
+	// canonical and keep running without it.
+	edgeRoutingConvergence := cfg.EdgeRouting.Enabled && secretRepo != nil && secretEncryptor != nil
+	if edgeRoutingConvergence {
 		publicRoutePlanner, internalRouteBackend, err = buildPublicRoutePlanner(ctx, cfg.EdgeRouting, cfg.InternalRouting, secretRepo, secretEncryptor, logger)
 		if err != nil {
 			return nil, fmt.Errorf("configuring edge routing: %w", err)
 		}
 		logger.Info("managed edge routing enabled", zap.String("provider", cfg.EdgeRouting.Provider), zap.String("backend_ref", cfg.EdgeRouting.BackendRef), zap.Bool("internal_https", internalRouteBackend != nil))
 	} else if cfg.EdgeRouting.Enabled {
-		logger.Warn("edge routing convergence unavailable without secret index; route canary observation remains enabled")
+		logger.Warn("edge routing convergence is suspended: the provider API token is a secret value held only in the PostgreSQL secret store; desired routes are not converged until it is reachable, route canary observation of them continues",
+			zap.String("reason", "edge_routing_secret_store_unavailable"),
+			zap.Bool("secret_store", secretRepo != nil), zap.Bool("secret_encryptor", secretEncryptor != nil))
 	}
 
 	// Adopted workload orchestration is wired further down, once the Nostr
@@ -703,6 +713,17 @@ func New(cfg *config.Config) (*App, error) {
 		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
 	registerSignetHealthCheck(healthProvider, loomSignetManager)
+	if cfg.EdgeRouting.Enabled {
+		healthProvider.RegisterCheck("edge_routing", func() HealthCheck {
+			check := HealthCheck{Name: "edge_routing", Status: HealthStatusPass, Message: "edge-route convergence and route canary observation are enabled",
+				Details: map[string]string{"provider": cfg.EdgeRouting.Provider, "convergence": fmt.Sprintf("%t", edgeRoutingConvergence)}}
+			if !edgeRoutingConvergence {
+				check.Status = HealthStatusWarn
+				check.Message = "edge-route convergence suspended: the provider API token is a secret value held only in the PostgreSQL secret store; route canary observation continues"
+			}
+			return check
+		})
+	}
 	if internalRouteBackend != nil {
 		healthProvider.RegisterCheck("internal_routing", func() HealthCheck {
 			check := HealthCheck{Name: "internal_routing", Status: HealthStatusPass, Message: "nginx include directory and certificate files are ready"}
