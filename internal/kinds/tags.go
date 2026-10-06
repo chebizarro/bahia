@@ -180,9 +180,10 @@ const (
 	CPStateTopicSecurityTarget        = "security-target"
 	CPStateTopicSecurityRun           = "security-run"
 
-	// Hive-CI execution state (audit C-48), fleet-OCK encrypted.
-	CPStateTopicHiveCIPolicy = "hiveci-policy"
-	CPStateTopicHiveCIResult = "hiveci-result"
+	// Hive-CI execution state (audit C-48, C-49), fleet-OCK encrypted.
+	CPStateTopicHiveCIPolicy     = "hiveci-policy"
+	CPStateTopicHiveCIResult     = "hiveci-result"
+	CPStateTopicHiveCIInitiation = "hiveci-initiation"
 
 	CPStateTopicLLMRelease         = "llm-release"
 	CPStateTopicArtifactSignature  = "artifact-signature"

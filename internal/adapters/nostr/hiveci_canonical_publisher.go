@@ -18,8 +18,9 @@ import (
 // Hive-CI cp-state families (audit C-48). They are 30900-only families with no
 // catalog kind.
 const (
-	KindHiveCIPolicyRecord = int(kinds.CPStateFamilyHiveCIPolicy)
-	KindHiveCIResultRecord = int(kinds.CPStateFamilyHiveCIResult)
+	KindHiveCIPolicyRecord     = int(kinds.CPStateFamilyHiveCIPolicy)
+	KindHiveCIResultRecord     = int(kinds.CPStateFamilyHiveCIResult)
+	KindHiveCIInitiationRecord = int(kinds.CPStateFamilyHiveCIInitiation)
 )
 
 // HiveCICanonicalPublisher is the canonical store of the daemon's own Hive-CI
@@ -147,11 +148,97 @@ func HiveCIResultStateRef(ev gonostr.Event) (resultEventID string, state domain.
 	return resultEventID, domain.HiveCIProcessingState(tagValue(ev.Tags, "status")), resultEventID != ""
 }
 
+// HiveCIInitiationEntry is one retained initiation journal record: the
+// fleet-visible document and the service-only secret material that was
+// stored beside it, decrypted.
+type HiveCIInitiationEntry struct {
+	SourceEventID string
+	Stage         string
+	BuildID       string
+	Document      []byte
+	ServiceOnly   []byte
+}
+
+func hiveCIInitiationDTag(sourceEventID string) string { return "hiveci:initiation:" + sourceEventID }
+
+// PublishInitiation journals one build initiation on
+// "hiveci:initiation:<source-event-id>" (audit C-49). document is fleet-OCK
+// encrypted; serviceOnly, when non-empty, is additionally NIP-44 encrypted to
+// the service pubkey as the envelope's service_inner, so key material never
+// reaches the relay in plaintext or under the fleet key.
+func (p *HiveCICanonicalPublisher) PublishInitiation(ctx context.Context, sourceEventID, stage, buildID string, document, serviceOnly []byte) error {
+	if err := p.available(); err != nil {
+		return err
+	}
+	if sourceEventID == "" || stage == "" {
+		return fmt.Errorf("Hive-CI initiation journal requires a source event id and stage")
+	}
+	tags := gonostr.Tags{{"source", sourceEventID}, {"stage", stage}, {"build", buildID}}
+	return p.publishConfidentialWithSecret(ctx, KindHiveCIInitiationRecord, hiveCIInitiationDTag(sourceEventID), tags, string(document), serviceOnly, "hiveci_initiation.projection", nil)
+}
+
+// ReadInitiation returns the retained journal record for the source event,
+// or nil.
+func (p *HiveCICanonicalPublisher) ReadInitiation(ctx context.Context, sourceEventID string) (*HiveCIInitiationEntry, error) {
+	entries, err := p.listInitiations(ctx, func(tags gonostr.Tags) bool { return tagValue(tags, "source") == sourceEventID })
+	if err != nil || len(entries) == 0 {
+		return nil, err
+	}
+	return &entries[0], nil
+}
+
+// ListInitiations returns every retained journal record.
+func (p *HiveCICanonicalPublisher) ListInitiations(ctx context.Context) ([]HiveCIInitiationEntry, error) {
+	return p.listInitiations(ctx, nil)
+}
+
+func (p *HiveCICanonicalPublisher) listInitiations(ctx context.Context, match func(gonostr.Tags) bool) ([]HiveCIInitiationEntry, error) {
+	if p == nil || p.projector == nil || p.projector.history == nil || p.encryptor == nil {
+		return nil, fmt.Errorf("Hive-CI canonical local view is unavailable")
+	}
+	family := cpStateFamilies[KindHiveCIInitiationRecord]
+	records, err := p.projector.history.FindByTag(ctx, "t", family.topic, []int{KindCASControlState}, canonicalViewLimit)
+	if err != nil {
+		return nil, err
+	}
+	if len(records) >= canonicalViewLimit {
+		return nil, fmt.Errorf("Hive-CI initiation view reached history limit")
+	}
+	var out []HiveCIInitiationEntry
+	for _, record := range records {
+		tags := recordTags(record)
+		if tagValue(tags, "legacy_kind") != strconv.Itoa(KindHiveCIInitiationRecord) || isTombstoneTags(tags) {
+			continue
+		}
+		if match != nil && !match(tags) {
+			continue
+		}
+		d := tagValue(tags, "d")
+		document, err := p.encryptor.DecryptConfidential(ctx, record.Content, KindHiveCIInitiationRecord, d, family.topic)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt Hive-CI initiation %s: %w", record.ID, err)
+		}
+		serviceOnly, err := p.encryptor.DecryptServiceInner(ctx, record.Content)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt Hive-CI initiation %s service layer: %w", record.ID, err)
+		}
+		out = append(out, HiveCIInitiationEntry{
+			SourceEventID: tagValue(tags, "source"), Stage: tagValue(tags, "stage"), BuildID: tagValue(tags, "build"),
+			Document: document, ServiceOnly: serviceOnly,
+		})
+	}
+	return out, nil
+}
+
 func (p *HiveCICanonicalPublisher) publishConfidential(ctx context.Context, legacyKind int, dTag string, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
+	return p.publishConfidentialWithSecret(ctx, legacyKind, dTag, tags, content, nil, entityType, entityID)
+}
+
+func (p *HiveCICanonicalPublisher) publishConfidentialWithSecret(ctx context.Context, legacyKind int, dTag string, tags gonostr.Tags, content string, serviceOnly []byte, entityType string, entityID *uuid.UUID) error {
 	family := cpStateFamilies[legacyKind]
 	// Hive-CI state is fleet-scoped: it names private repositories and the
 	// operator's release constraints.
-	encrypted, err := p.encryptor.EncryptConfidential(ctx, kinds.FleetOCKScope, []byte(content), legacyKind, dTag, family.topic, nil)
+	encrypted, err := p.encryptor.EncryptConfidential(ctx, kinds.FleetOCKScope, []byte(content), legacyKind, dTag, family.topic, serviceOnly)
 	if err != nil {
 		return fmt.Errorf("encrypt Hive-CI %s state: %w", family.entity, err)
 	}

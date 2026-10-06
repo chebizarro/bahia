@@ -250,9 +250,14 @@ func (h *EncryptedBuildHandlers) requestBuild(ctx context.Context, event *nostr.
 }
 
 func buildIDFromIntentEvent(sourceEventID string) uuid.UUID {
-	// The signed request intent event is the replay key already used by the
-	// Gitea initiator. Namespacing that immutable event ID gives Bahia the same
-	// local build primary key on every exact replay.
+	return BuildIDForSourceEvent(sourceEventID)
+}
+
+// BuildIDForSourceEvent is the canonical build identity of a signed
+// build/request: the request intent event id, namespaced. Every daemon, and
+// every replay, derives the same id from the same signed request, so the
+// build needs no claim to be named (audit C-49).
+func BuildIDForSourceEvent(sourceEventID string) uuid.UUID {
 	return uuid.NewSHA1(buildIntentRequestNamespace, []byte(strings.TrimSpace(sourceEventID)))
 }
 

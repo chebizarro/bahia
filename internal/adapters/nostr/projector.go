@@ -511,6 +511,7 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindSecurityRunRecord:           {"security", "run", kinds.CPStateTopicSecurityRun},
 	KindHiveCIPolicyRecord:          {"hiveci", "policy", kinds.CPStateTopicHiveCIPolicy},
 	KindHiveCIResultRecord:          {"hiveci", "result", kinds.CPStateTopicHiveCIResult},
+	KindHiveCIInitiationRecord:      {"hiveci", "initiation", kinds.CPStateTopicHiveCIInitiation},
 	// F74a: independent coordinates for release, signature, SBOM and runtime state.
 	KindLLMReleaseRegistry:            {"llm", "release", kinds.CPStateTopicLLMRelease},
 	KindArtifactSignatureRegistry:     {"artifact", "signature", kinds.CPStateTopicArtifactSignature},

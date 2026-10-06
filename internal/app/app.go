@@ -1880,6 +1880,7 @@ func New(cfg *config.Config) (*App, error) {
 	// projector and the confidential encryptor but no database; the SQL
 	// Hive-CI repository is an optional index rebuilt from canonical state.
 	var hiveRepo *hiveciAdapter.CanonicalRepository
+	var hiveCanonical *nostrAdapter.HiveCICanonicalPublisher
 	switch {
 	case !shouldRegisterHiveCIRunners(cfg.HiveCI):
 		logger.Warn("Hive-CI release ingestion is disabled; signed 5401/5402 events will not be consumed",
@@ -1894,7 +1895,7 @@ func New(cfg *config.Config) (*App, error) {
 			hivePgRepo = repository.NewPgHiveCIRepository(pool)
 			hiveIndex = hivePgRepo
 		}
-		hiveCanonical := nostrAdapter.NewHiveCICanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
+		hiveCanonical = nostrAdapter.NewHiveCICanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
 		hiveRepo = hiveciAdapter.NewCanonicalRepository(localEventStore, hiveCanonical, hiveIndex, cfg.HiveCI.TrustedCIPubkeys, logger)
 		hiveRunLookup = hiveRepo
 		bridge := pipeline.NewBridge(
@@ -2533,7 +2534,40 @@ func New(cfg *config.Config) (*App, error) {
 		// mirror initiator is unavailable, so browsers receive a signed,
 		// fail-closed error instead of falling back to credential-bearing flows.
 		var hiveCIBuildStarter controlplane.HiveCIBuildStarter
-		if cfg.HiveCI.Initiator.Enabled && secretEncryptor != nil {
+		// Audit C-49: the initiation journal (prepared signed events, pinned
+		// job, per-run publisher key in the service-only layer) is a
+		// confidential record in the local event store; the build id is
+		// derived from the signed request. PostgreSQL is an optional index,
+		// backfilled once from SQL-era in-flight initiations and rebuilt
+		// from the journal after warm start.
+		var initiationStore giteaAdapter.InitiationStore
+		if nostrProjector != nil && confidentialEncryptor != nil {
+			journal := hiveCanonical
+			if journal == nil {
+				journal = nostrAdapter.NewHiveCICanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
+			}
+			var initiationIndex giteaAdapter.InitiationIndex
+			if dbAvailable && pool != nil && secretEncryptor != nil {
+				initiationIndex = giteaAdapter.NewPgInitiationStore(pool, secretEncryptor)
+			}
+			canonicalInitiations := giteaAdapter.NewCanonicalInitiationStore(journal, initiationIndex, logger)
+			if initiationIndex != nil {
+				nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+					if err := canonicalInitiations.BackfillFromIndex(ctx, localOutbox); err != nil {
+						logger.Warn("Hive-CI initiation journal backfill failed; retrying on next start", zap.Error(err))
+					}
+					if err := canonicalInitiations.RebuildIndex(ctx); err != nil {
+						logger.Warn("Hive-CI initiation SQL index rebuild failed", zap.Error(err))
+					}
+				})
+			}
+			initiationStore = canonicalInitiations
+		}
+		if cfg.HiveCI.Initiator.Enabled && secretEncryptor != nil && initiationStore == nil {
+			logger.Error("Hive-CI build initiator disabled: the initiation journal needs the Nostr projector and the confidential encryptor",
+				zap.String("reason", "hiveci_initiation_journal_unavailable"))
+		}
+		if cfg.HiveCI.Initiator.Enabled && secretEncryptor != nil && initiationStore != nil {
 			dependencyAuthorizations, err := hiveCIBuildDependencyAuthorizations(ctx, cfg.HiveCI.Policies, serviceRepo)
 			if err != nil {
 				return nil, fmt.Errorf("configure Hive-CI service build dependencies: %w", err)
@@ -2543,7 +2577,7 @@ func New(cfg *config.Config) (*App, error) {
 				secretsAdapter.NewResolver(secretRepo, secretEncryptor),
 				controlPlanePool,
 				controlPlaneSigner,
-				giteaAdapter.NewPgInitiationStore(pool, secretEncryptor),
+				initiationStore,
 				giteaAdapter.InitiatorConfig{
 					GiteaBaseURL:                  cfg.HiveCI.Initiator.GiteaBaseURL,
 					MirrorOwner:                   cfg.HiveCI.Initiator.MirrorOwner,
@@ -2566,6 +2600,7 @@ func New(cfg *config.Config) (*App, error) {
 			)
 			hiveCIBuildStarter = hiveCIInitiator
 			logger.Info("fleet gitea private-mirror HiveCI build initiator enabled",
+				zap.Bool("initiation_sql_index", dbAvailable && pool != nil),
 				zap.String("gitea_base_url", cfg.HiveCI.Initiator.GiteaBaseURL),
 				zap.String("mirror_owner", cfg.HiveCI.Initiator.MirrorOwner),
 				zap.String("workflow_path", cfg.HiveCI.Initiator.WorkflowPath),
