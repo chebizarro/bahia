@@ -910,7 +910,13 @@ func isValidHiveCIResultTransition(ctx context.Context, pool hiveCIDB, eventID s
 		},
 		domain.HiveCIProcessingStateProcessed: {},
 		domain.HiveCIProcessingStateRejected:  {},
-		domain.HiveCIProcessingStateFailed:    {},
+		// Operator recovery of a result whose automatic attempts were exhausted
+		// (domain.HiveCIProcessingState.CanTransitionTo).
+		domain.HiveCIProcessingStateFailed: {
+			domain.HiveCIProcessingStateArtifactPending: true,
+			domain.HiveCIProcessingStateProcessed:       true,
+			domain.HiveCIProcessingStateRejected:        true,
+		},
 	}
 
 	currentState := domain.HiveCIProcessingState(current)

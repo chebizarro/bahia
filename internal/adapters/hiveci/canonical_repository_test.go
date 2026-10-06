@@ -231,6 +231,15 @@ func TestPendingResultResumeBoundsAttempts(t *testing.T) {
 	require.Equal(t, "max retries exceeded", stored.ProcessingError)
 	require.NoError(t, resumer.Resume(ctx))
 	require.Equal(t, 3, processor.count(), "a failed result is terminal")
+
+	// bahia-xjdo9: there is no retry timer behind the exhausted attempts; the
+	// operator's signer-first build-result action is the contract, so the
+	// bridge may finish a failed result through it.
+	require.NoError(t, d.repo.UpdateResultState(ctx, result.ID.Hex(), domain.HiveCIProcessingStateProcessed))
+	finished, err := d.repo.GetResultByEventID(ctx, result.ID.Hex())
+	require.NoError(t, err)
+	require.Equal(t, domain.HiveCIProcessingStateProcessed, finished.ProcessingState)
+	require.Error(t, d.repo.UpdateResultState(ctx, result.ID.Hex(), domain.HiveCIProcessingStatePendingResult), "a processed result never reopens")
 }
 
 // Evidence is read from the local event store: with the SQL index empty and

@@ -23,6 +23,19 @@ type ResultProcessor interface {
 // the canonical result states the local event store retains. Each attempt is
 // counted on the result's canonical state; past maxAttempts the result is
 // marked failed instead of being attempted again.
+//
+// There is deliberately no backoff timer behind these triggers (bahia-xjdo9).
+// Every transient cause of a failed attempt already has a signal that ends in
+// one of them: an unreachable PostgreSQL build registry is probed by the
+// database-recovery runner, which restarts the process into Resume; a
+// manifest the registry cannot yet serve leaves the result artifact_pending
+// for the operator, since the attestor signs after the push; a policy or
+// service misconfiguration is fixed by the operator and restarts into Resume.
+// A timer would re-run registry and policy lookups on a schedule with no
+// signal that anything changed, which is the "waiting and checking" the
+// architecture rejects. Once attempts are exhausted the contract is the
+// signer-first build-result action (pipeline.Bridge.RegisterBuildResult): a
+// failed result may be finished by it, and only by it.
 type PendingResultResumer struct {
 	repo        repository.HiveCIRepository
 	processor   ResultProcessor

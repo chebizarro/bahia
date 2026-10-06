@@ -405,6 +405,22 @@ key enables the kind-4903 release-attestation verifier and additionally requires
 Bahia's OCI evidence service, full lineage/SBOM/provenance descriptors, worker
 admission evidence, and the metadata constraints shown below.
 
+### Retry contract for a result that failed processing
+
+A signed result is processed when it arrives, when the run an orphaned result
+waits for arrives, and once per daemon start from the canonical result states
+in the local event store (`hiveci.max_retries` attempts, counted on the
+canonical record). There is no retry timer: an unreachable PostgreSQL build
+registry is probed by the database-recovery runner, which restarts the daemon
+into that resume pass; a manifest the registry cannot serve yet leaves the
+result `artifact_pending`; a policy or service misconfiguration is fixed by the
+operator and the next start resumes. Once attempts are exhausted the result is
+`failed` and the contract is the signer-first build-result action (the
+`artifact` request op, `pipeline.Bridge.RegisterBuildResult`): it re-verifies
+the manifest from the trusted result and may move a `failed` result to
+`artifact_pending`, `processed` or `rejected`. Nothing else reopens a failed
+result.
+
 On startup, verify the `hive-ci bridge enabled` log includes the expected relay
 and non-zero trusted-key/policy counts. A `hiveci_disabled`,
 `trusted_loom_worker_pubkeys_missing`, `unauthorized_signer`,
