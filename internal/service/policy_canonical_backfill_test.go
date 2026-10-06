@@ -38,7 +38,8 @@ func TestBackfillCanonicalPoliciesPublishesSQLOnlyPolicies(t *testing.T) {
 	failing := errors.New("outbox refused")
 	publish := func(_ context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
 		require.False(t, deleted)
-		if policy.ID == disabled.ID && len(published) == 0 {
+		require.NotEqual(t, retained.ID, policy.ID, "a policy the canonical view holds is not republished")
+		if policy.ID == disabled.ID {
 			return failing
 		}
 		published = append(published, policy.ID)
@@ -51,7 +52,9 @@ func TestBackfillCanonicalPoliciesPublishesSQLOnlyPolicies(t *testing.T) {
 	require.Empty(t, done, "a failed backfill is retried on the next start")
 
 	published = nil
-	require.NoError(t, svc.BackfillCanonicalPolicies(ctx, marker, func(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
+	require.NoError(t, svc.BackfillCanonicalPolicies(ctx, marker, func(_ context.Context, policy *domain.DeploymentPolicy, deleted bool) error {
+		require.False(t, deleted)
+		require.NotEqual(t, retained.ID, policy.ID)
 		published = append(published, policy.ID)
 		return nil
 	}))
