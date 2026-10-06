@@ -2315,6 +2315,8 @@ func New(cfg *config.Config) (*App, error) {
 			ExternalMCP:      externalMCP,
 			RelayConnections: controlPlanePool,
 			History:          projectionHistory,
+			LocalStore:       localEventStore,
+			Readiness:        bootstrapper,
 		})
 		if err != nil {
 			return nil, err

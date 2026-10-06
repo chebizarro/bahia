@@ -39,6 +39,11 @@ type assistantExecutionDeps struct {
 	// History is the daemon's local event store for the service pubkey.
 	// Used by the assistant session topic migration (bahia-irsry.43).
 	History repository.NostrEventRepository
+	// LocalStore is the daemon's local event store; startup recovery
+	// enumerates every assistant session from it once Readiness reports the
+	// first relay catch-up complete (audit C-46).
+	LocalStore service.SupervisionEventStore
+	Readiness  service.SupervisionReadiness
 }
 
 // assistantRelayConnectionNotifier is implemented by *nostr.RelayPool.
@@ -199,7 +204,7 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 		InitialSessions: deps.InitialSessions,
 		Logger:          slog.Default(),
 	})
-	recovery := service.NewAssistantSessionRecoveryRunner(orchestrator, service.AssistantSessionRecoveryConfig{RecentLimit: 500, ServicePubkey: deps.ServicePubkey, Logger: slog.Default(), Engine: engine, Store: store, Subscriber: deps.Subscriber})
+	recovery := service.NewAssistantSessionRecoveryRunner(orchestrator, service.AssistantSessionRecoveryConfig{PageLimit: 500, ServicePubkey: deps.ServicePubkey, Logger: slog.Default(), Engine: engine, Store: store, Subscriber: deps.Subscriber, LocalStore: deps.LocalStore, Readiness: deps.Readiness})
 	// bahia-irsry.43: attach the startup topic migration so recovery re-tags
 	// legacy assistant session events before querying the relay with #t.
 	if deps.History != nil && deps.Signer != nil && deps.Publisher != nil {
