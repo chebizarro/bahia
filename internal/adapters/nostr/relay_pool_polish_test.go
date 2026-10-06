@@ -2,6 +2,7 @@ package nostr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"strings"
@@ -98,6 +99,23 @@ func TestRelayPoolGaveUpAfterEOSEWhenTheBudgetRunsOut(t *testing.T) {
 	reqs.none(t)
 }
 
+// testDeadlineContext bounds a test by the test binary's own deadline
+// (go test -timeout), less a grace period so a wait that never ends fails
+// with the test's own message rather than the binary's panic, and only by
+// test end when there is no deadline. Every wait in the tests that use it is
+// on a protocol signal, so no fixed wall-clock budget is needed, and a loaded
+// package run (-race, -count=N, a busy host) cannot consume one (bahia-fyfez).
+func testDeadlineContext(t *testing.T) context.Context {
+	t.Helper()
+	deadline, ok := t.Deadline()
+	if !ok {
+		return t.Context()
+	}
+	ctx, cancel := context.WithDeadline(t.Context(), deadline.Add(-5*time.Second))
+	t.Cleanup(cancel)
+	return ctx
+}
+
 // maxLimitRelay is an in-process khatru relay that serves at most maxLimit
 // events per REQ and says so in its NIP-11 document, like a production relay
 // with a query cap. It records every REQ filter.
@@ -174,8 +192,7 @@ func TestRelayPoolPagesPastNIP11MaxLimit(t *testing.T) {
 	history := relay.storeHistory(t, 23)
 	pool := NewRelayPool([]string{relay.url}, zap.NewNop())
 	defer pool.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
-	defer cancel()
+	ctx := testDeadlineContext(t)
 	pool.Connect(ctx)
 
 	t.Run("limit below the history", func(t *testing.T) {
@@ -248,8 +265,7 @@ func TestRelayPoolReportsAnAnswerItCannotPageAsTruncated(t *testing.T) {
 	}
 	pool := NewRelayPool([]string{relay.url}, zap.NewNop())
 	defer pool.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
-	defer cancel()
+	ctx := testDeadlineContext(t)
 	pool.Connect(ctx)
 
 	merged, err := pool.SubscribeAllWithEOSE(ctx, []gonostr.Filter{{Kinds: []gonostr.Kind{1}, Limit: 100}})
@@ -393,5 +409,131 @@ func TestStoreBackedSubscriptionReportsTheGiveUp(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("the store-backed subscription never ended")
 		}
+	}
+}
+
+// inboundREQ is one REQ the inbound sync sent to a scripted relay, with the
+// reply the test chooses for it: a subscription to drive, or a failure.
+type inboundREQ struct {
+	filter gonostr.Filter
+	reply  chan inboundREQReply
+}
+
+type inboundREQReply struct {
+	sub *gonostr.Subscription
+	err error
+}
+
+// scriptInboundREQs hands the test every REQ the inbound sync sends through
+// subscribeOnRelay, in order, and blocks each until the test answers it.
+func scriptInboundREQs(t *testing.T) chan inboundREQ {
+	t.Helper()
+	reqs := make(chan inboundREQ, 16)
+	setSubscribeOnRelayForTest(t, func(_ *gonostr.Relay, ctx context.Context, filter gonostr.Filter) (*gonostr.Subscription, error) {
+		req := inboundREQ{filter: filter, reply: make(chan inboundREQReply, 1)}
+		select {
+		case reqs <- req:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		select {
+		case reply := <-req.reply:
+			return reply.sub, reply.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	return reqs
+}
+
+// nextInboundREQ waits for the inbound sync's next REQ and checks its kind.
+func nextInboundREQ(t *testing.T, ctx context.Context, reqs chan inboundREQ, kind gonostr.Kind, what string) inboundREQ {
+	t.Helper()
+	select {
+	case req := <-reqs:
+		require.Equal(t, []gonostr.Kind{kind}, req.filter.Kinds, "the %s", what)
+		return req
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for the %s", what)
+		return inboundREQ{}
+	}
+}
+
+// serveInboundREQ answers a REQ with a subscription the test drives.
+func serveInboundREQ(req inboundREQ) *gonostr.Subscription {
+	sub := newTestSubscription()
+	req.reply <- inboundREQReply{sub: sub}
+	return sub
+}
+
+// TestInboundSyncChargesAClosedTheSessionEndedWithout: the CLOSED retry
+// budget is charged for every CLOSED a filter's REQ receives, not only for the
+// one that ends the sync session. Here filter A's live REQ is CLOSED with a
+// retryable reason at the same moment filter B's live REQ fails (the
+// connection dropped), so the session ends on B's error with A's CLOSED still
+// in flight. A's budget is 1: the CLOSED counts, the next session's refusal
+// exhausts it, and A is given up on while B keeps syncing. Before the fix the
+// in-flight CLOSED was lost, and A was reissued once more than its budget.
+func TestInboundSyncChargesAClosedTheSessionEndedWithout(t *testing.T) {
+	const (
+		relayURL = "wss://closed-in-flight.example"
+		kindA    = gonostr.Kind(syncTestRegularKind)
+		kindB    = gonostr.Kind(1) // any regular kind: a second, cursor-resumed filter
+	)
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	pool := newRelayPoolWithManagedRelays(relayURL)
+	WithRetryableClosedBudget(1)(pool)
+	markRelayConnectedForSubscribeTest(pool, relayURL)
+	// A cached NIP-11 document keeps the sync from fetching one.
+	pool.mu.Lock()
+	pool.relayInfoCache[relayURL] = &nip11.RelayInformationDocument{}
+	pool.mu.Unlock()
+	reqs := scriptInboundREQs(t)
+
+	sub := NewSubscriber(pool, nil, zap.NewNop(),
+		WithKinds([]int{int(kindA), int(kindB)}),
+		WithLocalStore(openTestLocalStore(t, "")),
+		WithInboundSync(syncTestConfig()))
+	sub.newRelayBackoff = fastTestBackoff
+	filterA := gonostr.Filter{Kinds: []gonostr.Kind{kindA}}
+	filterB := gonostr.Filter{Kinds: []gonostr.Kind{kindB}}
+	filters := []inboundFilter{
+		{filter: filterA, hash: inboundFilterHash(filterA)},
+		{filter: filterB, hash: inboundFilterHash(filterB)},
+	}
+	runCtx, stopRun := context.WithCancel(ctx)
+	out := make(chan inboundItem, 1024)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sub.runRelay(runCtx, relayURL, filters, out)
+	}()
+	t.Cleanup(func() {
+		stopRun()
+		<-done
+	})
+
+	// Session 1: both filters catch up, then are followed live.
+	serveInboundREQ(nextInboundREQ(t, ctx, reqs, kindA, "catch-up REQ for A")).EndOfStoredEvents <- gonostr.EndOfStoredEvent{}
+	serveInboundREQ(nextInboundREQ(t, ctx, reqs, kindB, "catch-up REQ for B")).EndOfStoredEvents <- gonostr.EndOfStoredEvent{}
+	liveA := serveInboundREQ(nextInboundREQ(t, ctx, reqs, kindA, "live REQ for A"))
+	liveB := nextInboundREQ(t, ctx, reqs, kindB, "live REQ for B")
+	// The relay refuses A's live REQ and the connection drops before B's live
+	// REQ is up: the session ends on B's error, with A's CLOSED in flight.
+	closeScripted(liveA, "error: overloaded")
+	liveB.reply <- inboundREQReply{err: errors.New("connection dropped")}
+
+	// Session 2: A's first reissue (its whole budget) is refused again.
+	closeScripted(serveInboundREQ(nextInboundREQ(t, ctx, reqs, kindA, "reissued catch-up REQ for A")), "error: overloaded")
+
+	// Session 3: A is given up on; only B is synced, and never A again.
+	serveInboundREQ(nextInboundREQ(t, ctx, reqs, kindB, "catch-up REQ for B after A was given up")).EndOfStoredEvents <- gonostr.EndOfStoredEvent{}
+	serveInboundREQ(nextInboundREQ(t, ctx, reqs, kindB, "live REQ for B after A was given up"))
+	require.Equal(t, int64(1), pool.HealthSnapshot().Relays[0].ClosedRetryExhausted)
+	select {
+	case req := <-reqs:
+		t.Fatalf("unexpected REQ after A was given up: %+v", req.filter)
+	default:
 	}
 }

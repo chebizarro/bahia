@@ -131,3 +131,99 @@ func TestOSVVulnerabilityCacheCleanupRunner_NilPrunerReturns(t *testing.T) {
 	require.Equal(t, defaultOSVVulnerabilityCacheCleanupInterval, runner.interval)
 	require.NoError(t, runner.Run(context.Background()))
 }
+
+type testRetentionTask struct {
+	name  string
+	calls chan time.Time
+	count int64
+	err   error
+}
+
+func (t *testRetentionTask) Name() string { return t.name }
+
+func (t *testRetentionTask) Retire(_ context.Context, now time.Time) (int64, error) {
+	select {
+	case t.calls <- now:
+	default:
+	}
+	return t.count, t.err
+}
+
+// The retention runner drives every task on each wakeup: the ContextVM
+// response cutoff is now minus the retention, and the saga retention task
+// (bahia-fpubg) is reached on the same ticker even when another task fails.
+func TestRetentionRunner_DrivesEveryTaskOnOneWakeup(t *testing.T) {
+	pruner := &testContextVMResponsePruner{calls: make(chan time.Time, 1), count: 2}
+	failing := &testRetentionTask{name: "failing", calls: make(chan time.Time, 1), err: errors.New("retire failed")}
+	sagas := &testRetentionTask{name: "openclaw-saga-runs", calls: make(chan time.Time, 1), count: 1}
+	core, logs := observer.New(zap.InfoLevel)
+	runner := NewRetentionRunner(time.Millisecond, zap.New(core),
+		ContextVMResponseRetention{Pruner: pruner, Retention: 24 * time.Hour}, failing, sagas)
+	require.Equal(t, "retention", runner.Name())
+	require.Len(t, runner.tasks, 3)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+
+	for name, calls := range map[string]chan time.Time{"contextvm": pruner.calls, "failing": failing.calls, "sagas": sagas.calls} {
+		select {
+		case now := <-calls:
+			require.False(t, now.IsZero(), name)
+			if name == "contextvm" {
+				require.WithinDuration(t, time.Now().Add(-24*time.Hour), now, time.Minute, "ContextVM cutoff is now minus the retention")
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("retention task %s was not driven", name)
+		}
+	}
+	require.Eventually(t, func() bool {
+		return logs.FilterMessage("retention pass failed").Len() > 0 &&
+			logs.FilterMessage("retention pass retired records").FilterField(zap.String("task", "openclaw-saga-runs")).Len() > 0
+	}, time.Second, time.Millisecond)
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
+func TestRetentionRunner_NoTasksReturns(t *testing.T) {
+	runner := NewRetentionRunner(0, nil)
+	require.Equal(t, defaultRetentionInterval, runner.interval)
+	require.Empty(t, runner.tasks)
+	require.NoError(t, runner.Run(context.Background()))
+}
+
+type testContextVMResponsePruner struct {
+	calls chan time.Time
+	count int64
+}
+
+func (p *testContextVMResponsePruner) DeleteCreatedBefore(_ context.Context, cutoff time.Time) (int64, error) {
+	select {
+	case p.calls <- cutoff:
+	default:
+	}
+	return p.count, nil
+}
+
+// The SoulFactory runtime's retention task adapts the governed provisioner's
+// retention pass to the runner.
+func TestOpenClawSagaRetentionAdaptsRetirer(t *testing.T) {
+	var got time.Time
+	task := openClawSagaRetention{retirer: sagaRetirerFunc(func(_ context.Context, now time.Time) (int, error) {
+		got = now
+		return 4, nil
+	})}
+	require.Equal(t, "openclaw-saga-runs", task.Name())
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	count, err := task.Retire(context.Background(), now)
+	require.NoError(t, err)
+	require.Equal(t, int64(4), count)
+	require.Equal(t, now, got)
+}
+
+type sagaRetirerFunc func(ctx context.Context, now time.Time) (int, error)
+
+func (f sagaRetirerFunc) RetireExpiredRuns(ctx context.Context, now time.Time) (int, error) {
+	return f(ctx, now)
+}

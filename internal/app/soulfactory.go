@@ -43,9 +43,28 @@ type soulFactoryRuntime struct {
 	reactor     *soulfactory.Reactor
 	integration *soulfactory.BahiaIntegration
 	provisioner soulfactory.ProvisioningEngine
-	runner      BackgroundRunner
-	connection  *signetAdapter.ConnectionManager
-	close       func() error
+	// retention retires expired saga runs and their adapter-ledger records
+	// on the daemon's hourly RetentionRunner (bahia-fpubg).
+	retention  RetentionTask
+	runner     BackgroundRunner
+	connection *signetAdapter.ConnectionManager
+	close      func() error
+}
+
+// SagaRunRetirer is the governed provisioner's retention pass.
+// *soulfactory.ProductionGovernedProvisioner satisfies it.
+type SagaRunRetirer interface {
+	RetireExpiredRuns(ctx context.Context, now time.Time) (int, error)
+}
+
+// openClawSagaRetention adapts the saga retention pass to the RetentionRunner.
+type openClawSagaRetention struct{ retirer SagaRunRetirer }
+
+func (openClawSagaRetention) Name() string { return "openclaw-saga-runs" }
+
+func (t openClawSagaRetention) Retire(ctx context.Context, now time.Time) (int64, error) {
+	removed, err := t.retirer.RetireExpiredRuns(ctx, now)
+	return int64(removed), err
 }
 
 var (
@@ -259,6 +278,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		reactor:     reactor,
 		integration: bahiaIntegration,
 		provisioner: governedProvisioner,
+		retention:   openClawSagaRetention{retirer: governedProvisioner},
 		sagaMonitor: monitor,
 		runner:      &soulFactoryRunner{reactor: reactor, signer: signer, controllerPubkey: controllerPubkey},
 		connection:  connection,

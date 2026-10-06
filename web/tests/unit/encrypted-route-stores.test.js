@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
 const encryptedRequestsMock = vi.hoisted(() => ({
   requestEncryptedResult: vi.fn(),
@@ -40,7 +40,28 @@ vi.mock('$lib/stores/controlplane.svelte.js', () => ({ bootstrapControlplane: bo
 vi.mock('../../src/lib/stores/controlplane.svelte.js', () => ({ bootstrapControlplane: bootstrapMock }));
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 
+// Every store under test is imported inside its test, after vi.resetModules(),
+// so each test gets fresh module state. The first import of a store also pays
+// Vite's one-time transform of its module graph (@noble/ciphers, kinds.gen.js,
+// confidential.js, ...): ~300ms idle, several seconds on a CPU-starved CI
+// host, all charged to whichever test imports it first and bounded by that
+// test's 5s testTimeout (bahia-0ym3y). Warm the graphs once here, under the
+// hook's own timeout; the transform cache survives vi.resetModules(), so the
+// per-test imports are then evaluation only and the tests time nothing but
+// their mocked, promise-driven logic.
+const STORE_MODULES = [
+  '../../src/lib/stores/service-secrets.svelte.js',
+  '../../src/lib/stores/deployment-run-logs.svelte.js',
+  '../../src/lib/stores/collections/deployments.svelte.js',
+  '../../src/lib/stores/collections/services.svelte.js',
+  '../../src/lib/stores/artifact-signatures.svelte.js'
+];
+
 describe('encrypted route stores', () => {
+  beforeAll(async () => {
+    for (const path of STORE_MODULES) await import(path);
+  }, 60_000);
+
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();

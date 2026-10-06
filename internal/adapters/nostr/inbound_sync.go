@@ -266,16 +266,19 @@ func (s *Subscriber) pruneStore() {
 // up on this relay, while its other filters keep syncing. A filter's count
 // starts over once its catch-up commits. Every resync resumes each filter from
 // its EOSE-anchored cursor, or reconciles it with NIP-77, as before.
+//
+// Each CLOSED is charged to its filter's budget the moment the REQ observes it
+// (inboundClosedLedger), and every verdict pending from the session is applied
+// here before the next session's REQs go out. A session can end for a reason
+// other than that CLOSED (the connection dropped, another filter's REQ ended)
+// with the CLOSED still in flight; it still counts, so a flapping relay cannot
+// get a refused filter reissued past its budget (bahia-qcw0s).
 func (s *Subscriber) runRelay(ctx context.Context, relayURL string, filters []inboundFilter, out chan<- inboundItem) {
 	backoff := s.newRelayBackoff()
-	budgets := make(map[string]*closedRetryBudget, len(filters))
-	for _, filter := range filters {
-		budgets[filter.hash] = s.pool.newClosedRetryBudget()
-	}
-	served := func(hash string) { budgets[hash].served() }
+	ledger := newInboundClosedLedger(s.pool, filters)
 	active := filters
 	for {
-		caughtUp, err := s.syncRelay(ctx, relayURL, active, out, backoff, served)
+		caughtUp, err := s.syncRelay(ctx, relayURL, active, out, backoff, ledger)
 		if ctx.Err() != nil {
 			return
 		}
@@ -285,10 +288,8 @@ func (s *Subscriber) runRelay(ctx context.Context, relayURL string, filters []in
 			return
 		}
 		immediate := false
-		var closed *relayClosedError
-		if errors.As(err, &closed) && budgets[closed.hash] != nil {
-			verdict := budgets[closed.hash].closed(closed.reason)
-			action := verdict.Action
+		for _, closed := range ledger.take(active) {
+			action := closed.Action
 			if action == ClosedAuthenticate {
 				if authErr := s.pool.AuthenticateRelay(ctx, relayURL); authErr != nil {
 					s.logger.Warn("relay requires NIP-42 AUTH for an inbound REQ and AUTH failed",
@@ -299,20 +300,21 @@ func (s *Subscriber) runRelay(ctx context.Context, relayURL string, filters []in
 					immediate = true
 				}
 			}
-			if action == ClosedTerminal {
-				if verdict.Exhausted {
-					s.pool.recordClosedRetryExhausted(relayURL)
-				}
-				active = withoutInboundFilter(active, closed.hash)
-				s.logger.Warn("relay refused an inbound filter for good; not retrying it",
-					zap.String("relay", relayURL),
-					zap.String("reason", closed.reason),
-					zap.Bool("retry_budget_exhausted", verdict.Exhausted),
-					zap.Int("filters_left", len(active)))
-				if len(active) == 0 {
-					sendInbound(ctx, out, inboundItem{op: opRelayGaveUp, relay: relayURL, reason: closed.reason})
-					return
-				}
+			if action != ClosedTerminal {
+				continue
+			}
+			if closed.Exhausted {
+				s.pool.recordClosedRetryExhausted(relayURL)
+			}
+			active = withoutInboundFilter(active, closed.hash)
+			s.logger.Warn("relay refused an inbound filter for good; not retrying it",
+				zap.String("relay", relayURL),
+				zap.String("reason", closed.reason),
+				zap.Bool("retry_budget_exhausted", closed.Exhausted),
+				zap.Int("filters_left", len(active)))
+			if len(active) == 0 {
+				sendInbound(ctx, out, inboundItem{op: opRelayGaveUp, relay: relayURL, reason: closed.reason})
+				return
 			}
 		}
 		if !caughtUp {
@@ -337,6 +339,75 @@ func (s *Subscriber) runRelay(ctx context.Context, relayURL string, filters []in
 	}
 }
 
+// inboundClosedLedger applies the pool's CLOSED policy to one relay's inbound
+// filters across its sync sessions: a closedRetryBudget per filter, charged
+// the moment a REQ observes a CLOSED, and the verdicts not yet acted on. The
+// live REQs of a session observe CLOSEDs concurrently, hence the lock.
+type inboundClosedLedger struct {
+	mu      sync.Mutex
+	budgets map[string]*closedRetryBudget
+	pending map[string]inboundClosedVerdict
+}
+
+// inboundClosedVerdict is the budget's verdict on one filter's CLOSED.
+type inboundClosedVerdict struct {
+	closedVerdict
+	hash   string
+	reason string
+}
+
+func newInboundClosedLedger(pool *RelayPool, filters []inboundFilter) *inboundClosedLedger {
+	l := &inboundClosedLedger{
+		budgets: make(map[string]*closedRetryBudget, len(filters)),
+		pending: make(map[string]inboundClosedVerdict, len(filters)),
+	}
+	for _, filter := range filters {
+		l.budgets[filter.hash] = pool.newClosedRetryBudget()
+	}
+	return l
+}
+
+// served records that hash's catch-up committed: its CLOSED count starts over.
+func (l *inboundClosedLedger) served(hash string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if budget := l.budgets[hash]; budget != nil {
+		budget.served()
+	}
+}
+
+// closed charges one CLOSED to hash's budget and keeps the verdict for take.
+// A filter's REQs run one at a time, so at most one CLOSED per filter is
+// pending; should a second arrive, a terminal verdict is never downgraded.
+func (l *inboundClosedLedger) closed(hash, reason string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	budget := l.budgets[hash]
+	if budget == nil {
+		return
+	}
+	verdict := inboundClosedVerdict{closedVerdict: budget.closed(reason), hash: hash, reason: reason}
+	if previous, ok := l.pending[hash]; ok && previous.Action == ClosedTerminal && verdict.Action != ClosedTerminal {
+		return
+	}
+	l.pending[hash] = verdict
+}
+
+// take returns the pending verdicts for filters, in their order, and clears
+// them. A verdict for a filter no longer synced is dropped.
+func (l *inboundClosedLedger) take(filters []inboundFilter) []inboundClosedVerdict {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	verdicts := make([]inboundClosedVerdict, 0, len(l.pending))
+	for _, filter := range filters {
+		if verdict, ok := l.pending[filter.hash]; ok {
+			verdicts = append(verdicts, verdict)
+		}
+	}
+	clear(l.pending)
+	return verdicts
+}
+
 // withoutInboundFilter returns filters less those with hash.
 func withoutInboundFilter(filters []inboundFilter, hash string) []inboundFilter {
 	kept := make([]inboundFilter, 0, len(filters))
@@ -349,22 +420,22 @@ func withoutInboundFilter(filters []inboundFilter, hash string) []inboundFilter 
 }
 
 // syncRelay runs one session with a relay: catch up every filter, then follow
-// live until the relay drops. It reports whether catch-up finished; served
-// is told each filter whose catch-up committed.
-func (s *Subscriber) syncRelay(ctx context.Context, relayURL string, filters []inboundFilter, out chan<- inboundItem, backoff *Backoff, served func(hash string)) (bool, error) {
+// live until the relay drops. It reports whether catch-up finished; ledger is
+// told each filter whose catch-up committed and each CLOSED a REQ observed.
+func (s *Subscriber) syncRelay(ctx context.Context, relayURL string, filters []inboundFilter, out chan<- inboundItem, backoff *Backoff, ledger *inboundClosedLedger) (bool, error) {
 	sessionStart := s.now()
 	s.refreshRelayInfo(ctx, relayURL)
 	for _, filter := range filters {
-		if err := s.catchUp(ctx, relayURL, filter, sessionStart, out); err != nil {
+		if err := s.catchUp(ctx, relayURL, filter, sessionStart, out, ledger); err != nil {
 			return false, err
 		}
-		served(filter.hash)
+		ledger.served(filter.hash)
 	}
 	if !sendInbound(ctx, out, inboundItem{op: opCaughtUp, relay: relayURL}) {
 		return true, ctx.Err()
 	}
 	backoff.Reset()
-	return true, s.follow(ctx, relayURL, filters, sessionStart, out)
+	return true, s.follow(ctx, relayURL, filters, sessionStart, out, ledger)
 }
 
 // relayInfoTimeout bounds the NIP-11 fetch that tells catch-up a relay's
@@ -383,7 +454,7 @@ func (s *Subscriber) refreshRelayInfo(ctx context.Context, relayURL string) {
 }
 
 // catchUp brings one filter up to date with one relay.
-func (s *Subscriber) catchUp(ctx context.Context, relayURL string, filter inboundFilter, sessionStart time.Time, out chan<- inboundItem) error {
+func (s *Subscriber) catchUp(ctx context.Context, relayURL string, filter inboundFilter, sessionStart time.Time, out chan<- inboundItem, ledger *inboundClosedLedger) error {
 	key := cursorKey{relay: relayURL, hash: filter.hash}
 	if !sendInbound(ctx, out, inboundItem{op: opBegin, relay: relayURL, key: key}) {
 		return ctx.Err()
@@ -406,7 +477,7 @@ func (s *Subscriber) catchUp(ctx context.Context, relayURL string, filter inboun
 			zap.String("relay", relayURL),
 			zap.Ints("kinds", kindsToInts(filter.filter.Kinds)),
 			zap.Error(err))
-		if err := s.fetchPaged(ctx, relayURL, key, filter.filter, out); err != nil {
+		if err := s.fetchPaged(ctx, relayURL, key, filter.filter, out, ledger); err != nil {
 			return err
 		}
 		sendInbound(ctx, out, inboundItem{op: opCommit, relay: relayURL, key: key})
@@ -418,7 +489,7 @@ func (s *Subscriber) catchUp(ctx context.Context, relayURL string, filter inboun
 	}
 	req := filter.filter
 	req.Since = s.sync.resumeSince(cursor, sessionStart)
-	if err := s.fetchPaged(ctx, relayURL, key, req, out); err != nil {
+	if err := s.fetchPaged(ctx, relayURL, key, req, out, ledger); err != nil {
 		return err
 	}
 	sendInbound(ctx, out, inboundItem{op: opCommit, relay: relayURL, key: key, floor: req.Since})
@@ -441,7 +512,7 @@ const pagingBackdateOverlap = 120
 // After the last page, a widened-overlap REQ rechecks the paged window to catch
 // events backdated beyond the relay's NIP-01 tolerance and published during
 // paging (.56 item 4). The store's dedup makes this idempotent.
-func (s *Subscriber) fetchPaged(ctx context.Context, relayURL string, key cursorKey, base nostr.Filter, out chan<- inboundItem) error {
+func (s *Subscriber) fetchPaged(ctx context.Context, relayURL string, key cursorKey, base nostr.Filter, out chan<- inboundItem, ledger *inboundClosedLedger) error {
 	limit := s.pool.relayPageLimit(relayURL, s.sync.PageLimit)
 	var until nostr.Timestamp
 	pagingStart := nostr.Now()
@@ -450,7 +521,7 @@ func (s *Subscriber) fetchPaged(ctx context.Context, relayURL string, key cursor
 		req := base
 		req.Limit = limit
 		req.Until = until
-		delivered, oldest, err := s.drainStored(ctx, relayURL, key, req, out)
+		delivered, oldest, err := s.drainStored(ctx, relayURL, key, req, out, ledger)
 		if err != nil {
 			return err
 		}
@@ -488,7 +559,7 @@ func (s *Subscriber) fetchPaged(ctx context.Context, relayURL string, key cursor
 	overlap.Since = overlapSince
 	overlap.Limit = 0
 	overlap.Until = 0
-	_, _, err := s.drainStored(ctx, relayURL, key, overlap, out)
+	_, _, err := s.drainStored(ctx, relayURL, key, overlap, out, ledger)
 	if err != nil {
 		return err
 	}
@@ -497,7 +568,7 @@ func (s *Subscriber) fetchPaged(ctx context.Context, relayURL string, key cursor
 
 // drainStored runs one REQ to EOSE and forwards its events. It returns how
 // many distinct events the page held and the oldest created_at among them.
-func (s *Subscriber) drainStored(ctx context.Context, relayURL string, key cursorKey, filter nostr.Filter, out chan<- inboundItem) (int, nostr.Timestamp, error) {
+func (s *Subscriber) drainStored(ctx context.Context, relayURL string, key cursorKey, filter nostr.Filter, out chan<- inboundItem, ledger *inboundClosedLedger) (int, nostr.Timestamp, error) {
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	sub, err := s.pool.subscribeRelay(reqCtx, relayURL, filter)
@@ -519,9 +590,13 @@ func (s *Subscriber) drainStored(ctx context.Context, relayURL string, key curso
 	for {
 		select {
 		case <-ctx.Done():
+			s.closedBeforeEnd(sub, key, ledger)
 			return len(seen), oldest, ctx.Err()
 		case ev, ok := <-sub.Events:
 			if !ok {
+				if err := s.closedBeforeEnd(sub, key, ledger); err != nil {
+					return len(seen), oldest, err
+				}
 				return len(seen), oldest, fmt.Errorf("relay %s ended the REQ before EOSE", relayURL)
 			}
 			if !deliver(ev) {
@@ -542,15 +617,31 @@ func (s *Subscriber) drainStored(ctx context.Context, relayURL string, key curso
 			}
 			return len(seen), oldest, ctx.Err()
 		case reason := <-sub.ClosedReason:
-			return len(seen), oldest, s.relayClosed(key, reason)
+			return len(seen), oldest, s.relayClosed(key, reason, ledger)
 		}
 	}
+}
+
+// closedBeforeEnd records the CLOSED, if any, the relay sent before the REQ
+// ended, and returns its error. The library delivers a CLOSED on ClosedReason
+// before it ends the subscription, so when Events closes (or the REQ's context
+// ends) with a CLOSED buffered, that CLOSED must not be lost: it ended the
+// REQ, and its filter's budget is charged for it.
+func (s *Subscriber) closedBeforeEnd(sub *nostr.Subscription, key cursorKey, ledger *inboundClosedLedger) error {
+	select {
+	case reason, ok := <-sub.ClosedReason:
+		if ok {
+			return s.relayClosed(key, reason, ledger)
+		}
+	default:
+	}
+	return nil
 }
 
 // follow holds one live REQ per filter on the relay until any of them ends.
 // Live REQs start at the catch-up start less the overlap, covering events that
 // reached the relay while it was being caught up.
-func (s *Subscriber) follow(ctx context.Context, relayURL string, filters []inboundFilter, sessionStart time.Time, out chan<- inboundItem) error {
+func (s *Subscriber) follow(ctx context.Context, relayURL string, filters []inboundFilter, sessionStart time.Time, out chan<- inboundItem, ledger *inboundClosedLedger) error {
 	liveCtx, cancel := context.WithCancel(ctx)
 	ended := make(chan error, len(filters))
 	var forwarders sync.WaitGroup
@@ -573,7 +664,7 @@ func (s *Subscriber) follow(ctx context.Context, relayURL string, filters []inbo
 		forwarders.Add(1)
 		go func() {
 			defer forwarders.Done()
-			ended <- s.forwardLive(liveCtx, relayURL, key, sub, out)
+			ended <- s.forwardLive(liveCtx, relayURL, key, sub, out, ledger)
 		}()
 	}
 	return <-ended
@@ -583,7 +674,10 @@ func (s *Subscriber) follow(ctx context.Context, relayURL string, filters []inbo
 // stored at the relay since the catch-up began; the REQ's since is not a floor
 // for the cursor, which stays at the newest event the relay delivered so a
 // quiet filter keeps resuming from before its last event.
-func (s *Subscriber) forwardLive(ctx context.Context, relayURL string, key cursorKey, sub *nostr.Subscription, out chan<- inboundItem) error {
+//
+// Live REQs end together: once one ends, follow cancels the rest. A CLOSED
+// the relay sent to one of those is still recorded on the way out.
+func (s *Subscriber) forwardLive(ctx context.Context, relayURL string, key cursorKey, sub *nostr.Subscription, out chan<- inboundItem, ledger *inboundClosedLedger) error {
 	eose := sub.EndOfStoredEvents
 	forward := func(ev nostr.Event) bool {
 		return sendInbound(ctx, out, inboundItem{op: opEvent, relay: relayURL, key: key, ev: &ev})
@@ -591,9 +685,13 @@ func (s *Subscriber) forwardLive(ctx context.Context, relayURL string, key curso
 	for {
 		select {
 		case <-ctx.Done():
+			s.closedBeforeEnd(sub, key, ledger)
 			return ctx.Err()
 		case ev, ok := <-sub.Events:
 			if !ok {
+				if err := s.closedBeforeEnd(sub, key, ledger); err != nil {
+					return err
+				}
 				return fmt.Errorf("relay %s ended the live REQ", relayURL)
 			}
 			if !forward(ev) {
@@ -613,13 +711,14 @@ func (s *Subscriber) forwardLive(ctx context.Context, relayURL string, key curso
 				return ctx.Err()
 			}
 		case reason := <-sub.ClosedReason:
-			return s.relayClosed(key, reason)
+			return s.relayClosed(key, reason, ledger)
 		}
 	}
 }
 
-// relayClosedError ends a sync session on a relay's CLOSED for one filter;
-// runRelay applies the pool's CLOSED policy to it.
+// relayClosedError ends a sync session on a relay's CLOSED for one filter.
+// The CLOSED was charged to the filter's budget when it was observed
+// (inboundClosedLedger); runRelay acts on the verdict before the next session.
 type relayClosedError struct {
 	relay  string
 	hash   string
@@ -630,10 +729,12 @@ func (e *relayClosedError) Error() string {
 	return fmt.Sprintf("relay %s CLOSED the REQ: %s", e.relay, e.reason)
 }
 
-// relayClosed records a relay CLOSED for key's filter and returns the error
-// that ends the session (see runRelay for what follows).
-func (s *Subscriber) relayClosed(key cursorKey, reason string) error {
+// relayClosed records a relay CLOSED for key's filter, charges it to the
+// filter's budget, and returns the error that ends the session (see runRelay
+// for what follows).
+func (s *Subscriber) relayClosed(key cursorKey, reason string, ledger *inboundClosedLedger) error {
 	reason = strings.TrimSpace(reason)
+	ledger.closed(key.hash, reason)
 	s.pool.RecordRelayClosed(key.relay, reason)
 	s.logger.Warn("relay closed inbound subscription", zap.String("relay", key.relay), zap.String("reason", reason))
 	for _, observer := range s.ingestionObservers {

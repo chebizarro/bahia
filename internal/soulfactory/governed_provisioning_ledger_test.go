@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -460,4 +461,199 @@ func TestAdapterLedgerBoundsAndFailsClosed(t *testing.T) {
 	require.NotNil(t, best)
 	require.Equal(t, uint64(3), best.v)
 	require.Equal(t, nostr.Timestamp(10), replaces)
+}
+
+// The retention pass (bahia-fpubg): a terminal run past its retain_until is
+// purged with its request record, and its identity reservation is released
+// only when the run reserved the agent id and no Soul of the agent is live.
+// Unexpired, recoverable and running runs are untouched; a failed Soul read
+// leaves the run whole; a second pass changes nothing.
+func TestAdapterLedgerRetentionPassRetiresExpiredRuns(t *testing.T) {
+	ctx := context.Background()
+	host := startLedgerDaemon(t, ledgerDaemonKeyHex)
+	ledger := host.ledger(t, filepath.Join(host.dir, "adapters"))
+	sagas, err := saga.NewFileStore(filepath.Join(host.dir, "sagas"))
+	require.NoError(t, err)
+	now := host.clock.Now()
+	past, future := now.Add(-time.Hour), now.Add(time.Hour)
+
+	souls := map[string]*domain.AgentSoul{}
+	soulErrs := map[string]error{}
+	store := ledgerPurgingStore{Store: sagas, states: ledger, souls: func(_ context.Context, agentID string) (*domain.AgentSoul, error) {
+		return souls[agentID], soulErrs[agentID]
+	}}
+
+	// seed writes one request's ledger record, reserves its agent id when no
+	// reservation exists, and checkpoints its saga run at stage.
+	seed := func(requestID, agentID string, stage saga.Stage, retainUntil *time.Time) *saga.Run {
+		t.Helper()
+		spec := ProvisioningSpec{RequestID: requestID, RunID: uuid.NewSHA1(uuid.NameSpaceOID, []byte("run/"+requestID)).String(), AgentID: agentID, SpecHash: "spec-hash-" + agentID, Runtime: domain.RuntimeTargetOpenClaw}
+		state := sampleProductionState(requestID)
+		state.AgentID, state.Soul.AgentID, state.SpecHash, state.RunID = agentID, agentID, spec.SpecHash, spec.RunID
+		require.NoError(t, ledger.save(ctx, state))
+		_, _, err := ledger.reservation(ctx, spec, true)
+		require.NoError(t, err)
+		run, err := saga.NewRun(requestID, spec.RunID, agentID, spec.SpecHash, now.Add(-48*time.Hour))
+		require.NoError(t, err)
+		run.Stage, run.RetainUntil = stage, retainUntil
+		require.NoError(t, sagas.Create(ctx, run))
+		return run
+	}
+	reservationOf := func(agentID string) *productionIdentityReservation {
+		t.Helper()
+		reservation, _, err := ledger.reservation(ctx, ProvisioningSpec{AgentID: agentID}, false)
+		require.NoError(t, err)
+		return reservation
+	}
+	requireLive := func(run *saga.Run) {
+		t.Helper()
+		_, err := sagas.Load(ctx, run.RequestID)
+		require.NoError(t, err, "saga run of %s", run.AgentID)
+		_, err = ledger.load(ctx, run.RequestID)
+		require.NoError(t, err, "ledger record of %s", run.AgentID)
+	}
+	requirePurged := func(run *saga.Run) {
+		t.Helper()
+		_, err := sagas.Load(ctx, run.RequestID)
+		require.ErrorIs(t, err, saga.ErrNotFound, "saga run of %s", run.AgentID)
+		_, err = ledger.load(ctx, run.RequestID)
+		require.ErrorIs(t, err, errProductionStateNotFound, "ledger record of %s", run.AgentID)
+		tombstone := host.latestLedgerRecord(t, ledgerRequestDTag(run.RequestID))
+		require.Equal(t, "true", tagValue(tombstone.Tags, kinds.CASControlStateTagDeleted), "request tombstone of %s", run.AgentID)
+	}
+
+	free := seed(strings.Repeat("01", 32), "free", saga.StageFailedTerminal, &past)
+	live := seed(strings.Repeat("02", 32), "live", saga.StageRolledBack, &past)
+	souls["live"] = &domain.AgentSoul{AgentID: "live", Status: domain.SoulStatusActive}
+	revoked := seed(strings.Repeat("03", 32), "revoked", saga.StageFailedTerminal, &past)
+	souls["revoked"] = &domain.AgentSoul{AgentID: "revoked", Status: domain.SoulStatusRevoked}
+	fresh := seed(strings.Repeat("04", 32), "fresh", saga.StageFailedTerminal, &future)
+	stuck := seed(strings.Repeat("05", 32), "stuck", saga.StageFailedRecoverable, &past)
+	winner := seed(strings.Repeat("06", 32), "contested", saga.StageRunning, nil)
+	loser := seed(strings.Repeat("07", 32), "contested", saga.StageFailedTerminal, &past)
+	require.Equal(t, winner.RequestID, reservationOf("contested").RequestID, "the first request holds the agent id")
+	unreachable := seed(strings.Repeat("08", 32), "unreachable", saga.StageFailedTerminal, &past)
+	soulErrs["unreachable"] = errors.New("relay read incomplete")
+
+	removed, err := saga.PurgeExpired(ctx, store, now)
+	require.ErrorContains(t, err, unreachable.RequestID)
+	require.ErrorContains(t, err, "relay read incomplete")
+	require.Equal(t, 4, removed, "free, live, revoked and the contested loser")
+
+	// Purged with their request records.
+	for _, run := range []*saga.Run{free, live, revoked, loser} {
+		requirePurged(run)
+	}
+	// Untouched: unexpired, recoverable, running, and the run whose Soul could
+	// not be read.
+	for _, run := range []*saga.Run{fresh, stuck, winner, unreachable} {
+		requireLive(run)
+	}
+
+	// Identity rule.
+	require.Nil(t, reservationOf("free"), "no Soul: the agent id is released")
+	require.Equal(t, "true", tagValue(host.latestLedgerRecord(t, ledgerIdentityDTag("free")).Tags, kinds.CASControlStateTagDeleted))
+	require.NoFileExists(t, ledger.reservationPath("free"))
+	require.Nil(t, reservationOf("revoked"), "a revoked Soul does not hold the agent id")
+	require.NotNil(t, reservationOf("live"), "an active Soul keeps the agent id reserved")
+	require.Equal(t, live.RequestID, reservationOf("live").RequestID)
+	require.Equal(t, "false", tagValue(host.latestLedgerRecord(t, ledgerIdentityDTag("live")).Tags, kinds.CASControlStateTagDeleted))
+	require.Equal(t, winner.RequestID, reservationOf("contested").RequestID, "the loser's purge leaves the winner's reservation")
+	require.Equal(t, unreachable.RequestID, reservationOf("unreachable").RequestID, "a failed Soul read keeps the reservation")
+	require.NotNil(t, reservationOf("fresh"))
+	require.NotNil(t, reservationOf("stuck"))
+
+	// A released agent id can be reserved again by a new request.
+	again := ProvisioningSpec{RequestID: strings.Repeat("09", 32), RunID: "run-again", AgentID: "free", SpecHash: "spec-hash-free", Runtime: domain.RuntimeTargetOpenClaw}
+	reservation, created, err := ledger.reservation(ctx, again, true)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, again.RequestID, reservation.RequestID)
+	require.Equal(t, uint64(1), reservation.Version)
+	require.Equal(t, again.RequestID, reservationOf("free").RequestID)
+
+	// Idempotent: a second pass retires nothing more and publishes nothing.
+	records := func() int {
+		total := 0
+		for _, run := range []*saga.Run{free, live, revoked, fresh, stuck, winner, loser, unreachable} {
+			total += len(host.ledgerRecords(t, ledgerRequestDTag(run.RequestID))) + len(host.ledgerRecords(t, ledgerIdentityDTag(run.AgentID)))
+		}
+		return total
+	}
+	before := records()
+	removed, err = saga.PurgeExpired(ctx, store, now)
+	require.ErrorContains(t, err, unreachable.RequestID)
+	require.Equal(t, 0, removed)
+	require.Equal(t, before, records())
+
+	// Once the Soul read succeeds, the held-back run is purged and its agent
+	// id released.
+	delete(soulErrs, "unreachable")
+	removed, err = saga.PurgeExpired(ctx, store, now)
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	requirePurged(unreachable)
+	require.Nil(t, reservationOf("unreachable"))
+
+	// A fresh host sees the same outcome from the canonical records alone.
+	replica := startLedgerDaemon(t, ledgerDaemonKeyHex)
+	host.replicate(t, replica)
+	resumed := replica.ledger(t, filepath.Join(replica.dir, "adapters"))
+	_, err = resumed.load(ctx, free.RequestID)
+	require.ErrorIs(t, err, errProductionStateNotFound)
+	reservation, _, err = resumed.reservation(ctx, ProvisioningSpec{AgentID: "live"}, false)
+	require.NoError(t, err)
+	require.Equal(t, live.RequestID, reservation.RequestID)
+	reservation, _, err = resumed.reservation(ctx, ProvisioningSpec{AgentID: "revoked"}, false)
+	require.NoError(t, err)
+	require.Nil(t, reservation)
+}
+
+// Without a Soul seam (the file-only configuration tests run with) a purge
+// still retires the run and its request record but keeps the reservation:
+// an agent id is never released blind.
+func TestAdapterLedgerRetentionKeepsIdentityWithoutSoulLookup(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	ledger, err := newProductionStateStore(filepath.Join(dir, "adapters"), productionLedgerSeams{})
+	require.NoError(t, err)
+	sagas, err := saga.NewFileStore(filepath.Join(dir, "sagas"))
+	require.NoError(t, err)
+	requestID := strings.Repeat("0a", 32)
+	spec := ledgerSpec(requestID)
+	require.NoError(t, ledger.save(ctx, sampleProductionState(requestID)))
+	_, _, err = ledger.reservation(ctx, spec, true)
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	past := now.Add(-time.Minute)
+	run, err := saga.NewRun(requestID, spec.RunID, spec.AgentID, spec.SpecHash, now.Add(-time.Hour))
+	require.NoError(t, err)
+	run.Stage, run.RetainUntil = saga.StageFailedTerminal, &past
+	require.NoError(t, sagas.Create(ctx, run))
+
+	removed, err := saga.PurgeExpired(ctx, store(sagas, ledger, nil), now)
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	_, err = sagas.Load(ctx, requestID)
+	require.ErrorIs(t, err, saga.ErrNotFound)
+	require.NoFileExists(t, ledger.requestPath(requestID))
+	reservation, _, err := ledger.reservation(ctx, ProvisioningSpec{AgentID: spec.AgentID}, false)
+	require.NoError(t, err)
+	require.NotNil(t, reservation)
+	require.FileExists(t, ledger.reservationPath(spec.AgentID))
+
+	// With a seam that finds no Soul, the same request's run (recreated, as a
+	// replay of the request would) releases the file-only reservation too.
+	require.NoError(t, sagas.Create(ctx, run))
+	removed, err = saga.PurgeExpired(ctx, store(sagas, ledger, func(context.Context, string) (*domain.AgentSoul, error) { return nil, nil }), now)
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	reservation, _, err = ledger.reservation(ctx, ProvisioningSpec{AgentID: spec.AgentID}, false)
+	require.NoError(t, err)
+	require.Nil(t, reservation)
+	require.NoFileExists(t, ledger.reservationPath(spec.AgentID))
+}
+
+func store(sagas saga.Store, ledger *productionStateStore, souls soulLookup) saga.Store {
+	return ledgerPurgingStore{Store: sagas, states: ledger, souls: souls}
 }
