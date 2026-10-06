@@ -2057,8 +2057,14 @@ func New(cfg *config.Config) (*App, error) {
 			zap.Int("pipeline_policies", len(cfg.HiveCI.Policies)))
 	}
 	healthProvider.RegisterCheck("hiveci", func() HealthCheck {
-		check := HealthCheck{Name: "hiveci", Status: HealthStatusPass, Message: "Hive-CI evidence and result state are read from the local event store; pending results resume from canonical state",
-			Details: map[string]string{"sql_index": fmt.Sprintf("%t", dbAvailable && pool != nil)}}
+		check := HealthCheck{Name: "hiveci", Status: HealthStatusPass, Message: "Hive-CI evidence, result state and the accepted-release ledger are read from the local event store; pending results resume from canonical state",
+			Details: map[string]string{
+				"sql_index": fmt.Sprintf("%t", dbAvailable && pool != nil),
+				// Build initiation resolves repository credentials (secret
+				// values) from the PostgreSQL secret store; without it new
+				// initiations fail closed at that step (bahia-xjdo9).
+				"initiator_credential_store": fmt.Sprintf("%t", secretRepo != nil && secretEncryptor != nil),
+			}}
 		if hiveRepo == nil {
 			check.Message = "Hive-CI ingestion disabled: it needs hiveci.enabled, the Nostr projector and the confidential encryptor"
 			check.Details["availability"] = "unavailable"
@@ -2603,18 +2609,34 @@ func New(cfg *config.Config) (*App, error) {
 			}
 			initiationStore = canonicalInitiations
 		}
-		if cfg.HiveCI.Initiator.Enabled && secretEncryptor != nil && initiationStore == nil {
+		if cfg.HiveCI.Initiator.Enabled && initiationStore == nil {
 			logger.Error("Hive-CI build initiator disabled: the initiation journal needs the Nostr projector and the confidential encryptor",
 				zap.String("reason", "hiveci_initiation_journal_unavailable"))
 		}
-		if cfg.HiveCI.Initiator.Enabled && secretEncryptor != nil && initiationStore != nil {
+		// bahia-xjdo9: the initiator's only database dependency is credential
+		// resolution. The upstream repository credential and the mirror-read
+		// password are secret values, which the canonical secret registry does
+		// not carry (it holds references); they live only in the PostgreSQL
+		// secret store. The journal, build identity and resume of a prepared
+		// initiation are DB-less, so the initiator is wired whenever the
+		// journal exists and credential resolution alone fails closed without
+		// the store (giteaAdapter.ErrSecretStoreUnavailable).
+		hiveCICredentialStore := secretRepo != nil && secretEncryptor != nil
+		if cfg.HiveCI.Initiator.Enabled && initiationStore != nil {
 			dependencyAuthorizations, err := hiveCIBuildDependencyAuthorizations(ctx, cfg.HiveCI.Policies, serviceRepo)
 			if err != nil {
 				return nil, fmt.Errorf("configure Hive-CI service build dependencies: %w", err)
 			}
+			var credentialResolver giteaAdapter.SecretResolver = giteaAdapter.SecretStoreUnavailable{}
+			if hiveCICredentialStore {
+				credentialResolver = secretsAdapter.NewResolver(secretRepo, secretEncryptor)
+			} else {
+				logger.Warn("Hive-CI build initiator has no secret store: new initiations fail closed at repository credential resolution until PostgreSQL is reachable; journaled initiations still resume",
+					zap.String("reason", "hiveci_credential_store_unavailable"))
+			}
 			hiveCIInitiator = giteaAdapter.NewInitiator(
 				giteaAdapter.NewAPIClient(cfg.HiveCI.Initiator.GiteaBaseURL, cfg.HiveCI.Initiator.GiteaToken, nil),
-				secretsAdapter.NewResolver(secretRepo, secretEncryptor),
+				credentialResolver,
 				controlPlanePool,
 				controlPlaneSigner,
 				initiationStore,
@@ -2641,6 +2663,7 @@ func New(cfg *config.Config) (*App, error) {
 			hiveCIBuildStarter = hiveCIInitiator
 			logger.Info("fleet gitea private-mirror HiveCI build initiator enabled",
 				zap.Bool("initiation_sql_index", dbAvailable && pool != nil),
+				zap.Bool("credential_store", hiveCICredentialStore),
 				zap.String("gitea_base_url", cfg.HiveCI.Initiator.GiteaBaseURL),
 				zap.String("mirror_owner", cfg.HiveCI.Initiator.MirrorOwner),
 				zap.String("workflow_path", cfg.HiveCI.Initiator.WorkflowPath),
