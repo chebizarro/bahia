@@ -113,7 +113,7 @@ const (
 // a daemon moved to a fresh host resumes from its local event store instead
 // of a local checkpoint file. Like the security families above it has no
 // wire kind of its own: it is a 30900 discriminator only.
-const CPStateFamilySoulFactorySagaRun CPStateFamily = 32022
+const CPStateFamilySoulFactorySagaRun CPStateFamily = 32025
 
 // FleetOCKScope is the well-known orgID value used for fleet-wide
 // confidential cp-state (payments, security findings/schedules). The OCK
