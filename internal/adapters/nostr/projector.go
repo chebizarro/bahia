@@ -510,7 +510,10 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindSecurityTargetRecord:        {"security", "target", kinds.CPStateTopicSecurityTarget},
 	KindSecurityRunRecord:           {"security", "run", kinds.CPStateTopicSecurityRun},
 	// Adoption binding family (audit B-35).
-	KindAdoptionBindingRecord: {"adoption", "binding", kinds.CPStateTopicAdoptionBinding},
+	KindAdoptionBindingRecord:  {"adoption", "binding", kinds.CPStateTopicAdoptionBinding},
+	KindHiveCIPolicyRecord:     {"hiveci", "policy", kinds.CPStateTopicHiveCIPolicy},
+	KindHiveCIResultRecord:     {"hiveci", "result", kinds.CPStateTopicHiveCIResult},
+	KindHiveCIInitiationRecord: {"hiveci", "initiation", kinds.CPStateTopicHiveCIInitiation},
 	// F74a: independent coordinates for release, signature, SBOM and runtime state.
 	KindLLMReleaseRegistry:            {"llm", "release", kinds.CPStateTopicLLMRelease},
 	KindArtifactSignatureRegistry:     {"artifact", "signature", kinds.CPStateTopicArtifactSignature},

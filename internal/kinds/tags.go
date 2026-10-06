@@ -117,6 +117,7 @@ const (
 	CPStateTopicManagedInstanceHealth    = "runtime-instance-health"
 	CPStateTopicRouteCanary              = "route-canary"
 	CPStateTopicSoulRuntimePolicy        = "soul-factory-runtime-policy"
+	CPStateTopicSoulFactorySagaRun       = "soul-factory-saga-run"
 	CPStateTopicBlossomAdmin             = "blossom-admin"
 	CPStateTopicBlossomBlob              = "blossom-blob"
 
@@ -181,6 +182,11 @@ const (
 	CPStateTopicSecurityRun           = "security-run"
 	// CPStateTopicAdoptionBinding is the adoption binding family (audit B-35).
 	CPStateTopicAdoptionBinding = "adoption-binding"
+
+	// Hive-CI execution state (audit C-48, C-49), fleet-OCK encrypted.
+	CPStateTopicHiveCIPolicy     = "hiveci-policy"
+	CPStateTopicHiveCIResult     = "hiveci-result"
+	CPStateTopicHiveCIInitiation = "hiveci-initiation"
 
 	CPStateTopicLLMRelease         = "llm-release"
 	CPStateTopicArtifactSignature  = "artifact-signature"
