@@ -107,6 +107,14 @@ const (
 	CPStateFamilySecurityRun    CPStateFamily = 32021
 )
 
+// CPStateFamilySoulFactorySagaRun is the canonical progress record of one
+// governed Soul Factory provisioning saga run (audit C-45): its stage,
+// ownership lineage, compensations and current failure, replaced per run so
+// a daemon moved to a fresh host resumes from its local event store instead
+// of a local checkpoint file. Like the security families above it has no
+// wire kind of its own: it is a 30900 discriminator only.
+const CPStateFamilySoulFactorySagaRun CPStateFamily = 32022
+
 // FleetOCKScope is the well-known orgID value used for fleet-wide
 // confidential cp-state (payments, security findings/schedules). The OCK
 // for this scope is wrapped to all fleet operators (config authorized_pubkeys

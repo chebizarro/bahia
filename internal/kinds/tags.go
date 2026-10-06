@@ -117,6 +117,7 @@ const (
 	CPStateTopicManagedInstanceHealth    = "runtime-instance-health"
 	CPStateTopicRouteCanary              = "route-canary"
 	CPStateTopicSoulRuntimePolicy        = "soul-factory-runtime-policy"
+	CPStateTopicSoulFactorySagaRun       = "soul-factory-saga-run"
 	CPStateTopicBlossomAdmin             = "blossom-admin"
 	CPStateTopicBlossomBlob              = "blossom-blob"
 
