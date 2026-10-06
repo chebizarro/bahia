@@ -697,6 +697,7 @@ func New(cfg *config.Config) (*App, error) {
 		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
 	registerSignetHealthCheck(healthProvider, loomSignetManager)
+	registerUndeliveredHealthCheck(healthProvider, localEventStore)
 	if internalRouteBackend != nil {
 		healthProvider.RegisterCheck("internal_routing", func() HealthCheck {
 			check := HealthCheck{Name: "internal_routing", Status: HealthStatusPass, Message: "nginx include directory and certificate files are ready"}
@@ -2274,6 +2275,7 @@ func New(cfg *config.Config) (*App, error) {
 		ConfidentialReader: confidentialEncryptor,
 		LogService:         runLogService,
 		LLMRegistry:        llmRegistry,
+		Outbox:             localOutbox,
 	}
 	configureAuthorizationMCPDeps(&mcpDeps, cfg, tenantRBAC)
 	mcpServer, err := mcp.NewServerWithOptionsChecked(registry, logger, mcpDeps)

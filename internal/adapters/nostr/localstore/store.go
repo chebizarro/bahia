@@ -6,7 +6,11 @@
 // It is a cache, not a source of truth. Relays are canonical: deleting the file
 // is always safe, and the daemon rebuilds it by syncing from its relays. A file
 // that cannot be opened because it is corrupt is moved aside and recreated for
-// the same reason.
+// the same reason. The one thing relays cannot rebuild is the daemon's own
+// output whose delivery the outbox abandoned (see Undelivered): that event and
+// its marker are restored from the outbox's retained failed entries when the
+// publisher starts, so they outlive a deleted store file as long as the outbox
+// retains the entry.
 //
 // Events live in a fiatjaf.com/nostr/eventstore bbolt backend (the same pure-Go
 // store the relay sidecar uses). The store keeps what a NIP-01/NIP-09 relay
@@ -157,7 +161,7 @@ func openBackend(path string) (*boltdb.BoltBackend, error) {
 		return nil, err
 	}
 	if err := backend.DB.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{cursorBucket, deletionBucket, tagBucket, metaBucket} {
+		for _, name := range [][]byte{cursorBucket, deletionBucket, tagBucket, metaBucket, undeliveredBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -230,6 +234,13 @@ func (s *Store) SaveEvent(ev nostr.Event) (bool, error) {
 		stored, err := s.coords().Replace(s.scan, ev)
 		if err != nil {
 			return false, fmt.Errorf("replace local event %s: %w", ev.ID.Hex(), err)
+		}
+		if stored {
+			// A newer version supersedes an abandoned one: its own delivery
+			// now decides whether the coordinate is on the relays.
+			if _, err := s.clearSupersededUndelivered(ev); err != nil {
+				return false, err
+			}
 		}
 		return stored, nil
 	}

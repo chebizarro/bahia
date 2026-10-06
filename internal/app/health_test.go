@@ -3,9 +3,12 @@ package app
 import (
 	"context"
 	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/stretchr/testify/require"
@@ -228,4 +231,45 @@ func TestOCKRotationDegradesReadinessUntilRecovery(t *testing.T) {
 	pending = nil
 	require.Equal(t, SnapshotStatusHealthy, provider.Readiness().Status)
 	requireCheckStatus(t, provider.Readiness().Checks, "ock_rotation", HealthStatusPass)
+}
+
+// A coordinate the outbox abandoned after its producer was told it was queued
+// degrades readiness (warn, still ready) until a publish of it reaches the
+// quorum (bahia-u5whr, §3.7).
+func TestUndeliveredCanonicalStateDegradesReadinessUntilDelivered(t *testing.T) {
+	store, err := localstore.Open(filepath.Join(t.TempDir(), "daemon.bolt"))
+	require.NoError(t, err)
+	defer store.Close()
+	tracker := controlplane.NewReadinessTracker()
+	provider := NewHealthProvider(tracker, nil)
+	registerUndeliveredHealthCheck(provider, store)
+	require.Equal(t, SnapshotStatusHealthy, provider.Readiness().Status)
+	requireCheckStatus(t, provider.Readiness().Checks, "canonical_delivery", HealthStatusPass)
+
+	sk := nostr.Generate()
+	ev := nostr.Event{Kind: 30900, CreatedAt: 100, Tags: nostr.Tags{{"d", "payment:1"}}, Content: "{}"}
+	require.NoError(t, ev.Sign(sk))
+	_, err = store.SaveEvent(ev)
+	require.NoError(t, err)
+	_, err = store.MarkUndelivered(ev, "abandoned after 5 publish attempts", time.Unix(1_700_000_000, 0))
+	require.NoError(t, err)
+
+	snapshot := provider.Readiness()
+	require.True(t, snapshot.Ready, "committed state is still served; the daemon is degraded, not unready")
+	require.Equal(t, SnapshotStatusDegraded, snapshot.Status)
+	requireCheckStatus(t, snapshot.Checks, "canonical_delivery", HealthStatusWarn)
+	for _, check := range snapshot.Checks {
+		if check.Name == "canonical_delivery" {
+			require.Contains(t, check.Message, "1 canonical record(s) abandoned")
+			require.Contains(t, check.Message, "abandoned after 5 publish attempts")
+			require.Equal(t, "1", check.Details["count"])
+			require.Equal(t, "30900:"+sk.Public().Hex()+":payment:1", check.Details["coordinates"])
+			require.Equal(t, "2023-11-14T22:13:20Z", check.Details["oldest_at"])
+		}
+	}
+
+	_, err = store.ClearUndelivered(ev)
+	require.NoError(t, err)
+	require.Equal(t, SnapshotStatusHealthy, provider.Readiness().Status)
+	requireCheckStatus(t, provider.Readiness().Checks, "canonical_delivery", HealthStatusPass)
 }

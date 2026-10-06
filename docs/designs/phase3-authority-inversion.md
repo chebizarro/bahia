@@ -530,6 +530,24 @@ The canonical state event references the intent that caused it:
 - Per-relay `OK` tracking resumes on restart.
 - A publish that crashes mid-delivery resumes exactly where it stopped.
 
+### 3.7 Abandoned delivery: durable observable progress, no silent loss
+
+This contract binds every canonical domain that publishes through the local outbox (`internal/adapters/nostr/localstore`), not only payments and security (bahia-u5whr). It governs what happens when the outbox **abandons** an event: the publish quorum became unreachable (permanent `blocked:`/`invalid:`/`pow:` rejections) or the bounded attempt budget was spent.
+
+**Two cases, decided by who was told.**
+
+1. **Abandoned in the caller's round.** The first delivery round of an inline publish (`PublishSignedEventWithResults`, `PublishProjection`, `publishCanonicalFirst`) already makes the quorum unreachable. The caller receives `ErrPublishAbandoned`, treats the operation as failed and commits nothing derived from it (no SQL index row, no "queued" producer state). The outbox entry is `failed`; the event is **removed** from the local event store because it is not the daemon's output. Nothing is lost: the caller knows.
+2. **Abandoned after the caller was told "queued".** The operation returned success (`nil` or `ErrPublishIncomplete`), derived state may already exist (a SQL index row, a producer's `queued` publication), and the outbox runner abandons the event later. This is the case §3.7 exists for, and it must never be a silent drop:
+   - The outbox entry stays in its terminal `failed` state (retained `failedOutboxRetention`, 7 days) with the abandonment reason.
+   - The event **stays in the local event store** as the daemon's committed state, and the store records an **undelivered marker on its coordinate** (`localstore.Undelivered`: `<kind>:<pubkey>:<d>` for replaceable/addressable events, the event id for regular ones) carrying the event id, the abandonment reason and the time. Canonical reads (every `ListPaymentRecords`-style view over the store) keep answering with that state, so a SQL index written after the queued publish **agrees with the canonical read** instead of holding a row the store has forgotten.
+   - Readers can expose the flag: the local event repository reports such a record with `PublishState = failed`, which is also what keeps the projector's dedupe cache from treating the abandoned content as published (its `created_at` still floors the coordinate, so the replacement is strictly newer everywhere).
+   - The failure is **surfaced on readiness**: the `canonical_delivery` health check turns `warn` (the daemon is `degraded`, still `ready`) with the count, the coordinates and the oldest failure, alongside `ock_rotation` and the intent-domain checks. The outbox's failed count stays on the metrics/alert path it already had.
+   - The condition is **retried on explicit operator action** — `bahia_outbox_retry` (MCP, platform-admin) or `bahia outbox retry` (CLI, daemon stopped) moves the entry back to `pending` and the runner delivers it on its next pass — **or by the next publish of the same coordinate**: a canonical-first producer re-asserts state on its next mutation and the projector re-signs on its next trigger or repair, and the replacement is strictly newer than the flagged event.
+   - The marker is **cleared** when a publish quorum accepts the flagged event (operator retry) or when a newer version is saved on the coordinate — whether the daemon produced it (the next publish; its own delivery then decides) or a relay served it (the coordinate moved on without this daemon). A late abandonment report of an older version never re-flags a coordinate that has moved on.
+   - The local event store remains a rebuildable cache: the publisher re-marks the coordinates of the outbox's retained failed entries when its runner starts, so a deleted store file loses no flag for as long as the outbox retains the entry.
+
+**What is deliberately not done:** the marker is not a second retry loop (no ticker; the outbox runner and the next publish of the coordinate are the only redelivery paths), and a flagged coordinate does not make the daemon unready — the state is committed and served locally, and operators need the daemon up to act on it.
+
 ---
 
 ## 4. Migration and Coexistence
