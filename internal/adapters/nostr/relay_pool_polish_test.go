@@ -99,6 +99,23 @@ func TestRelayPoolGaveUpAfterEOSEWhenTheBudgetRunsOut(t *testing.T) {
 	reqs.none(t)
 }
 
+// testDeadlineContext bounds a test by the test binary's own deadline
+// (go test -timeout), less a grace period so a wait that never ends fails
+// with the test's own message rather than the binary's panic, and only by
+// test end when there is no deadline. Every wait in the tests that use it is
+// on a protocol signal, so no fixed wall-clock budget is needed, and a loaded
+// package run (-race, -count=N, a busy host) cannot consume one (bahia-fyfez).
+func testDeadlineContext(t *testing.T) context.Context {
+	t.Helper()
+	deadline, ok := t.Deadline()
+	if !ok {
+		return t.Context()
+	}
+	ctx, cancel := context.WithDeadline(t.Context(), deadline.Add(-5*time.Second))
+	t.Cleanup(cancel)
+	return ctx
+}
+
 // maxLimitRelay is an in-process khatru relay that serves at most maxLimit
 // events per REQ and says so in its NIP-11 document, like a production relay
 // with a query cap. It records every REQ filter.
@@ -175,8 +192,7 @@ func TestRelayPoolPagesPastNIP11MaxLimit(t *testing.T) {
 	history := relay.storeHistory(t, 23)
 	pool := NewRelayPool([]string{relay.url}, zap.NewNop())
 	defer pool.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
-	defer cancel()
+	ctx := testDeadlineContext(t)
 	pool.Connect(ctx)
 
 	t.Run("limit below the history", func(t *testing.T) {
@@ -249,8 +265,7 @@ func TestRelayPoolReportsAnAnswerItCannotPageAsTruncated(t *testing.T) {
 	}
 	pool := NewRelayPool([]string{relay.url}, zap.NewNop())
 	defer pool.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
-	defer cancel()
+	ctx := testDeadlineContext(t)
 	pool.Connect(ctx)
 
 	merged, err := pool.SubscribeAllWithEOSE(ctx, []gonostr.Filter{{Kinds: []gonostr.Kind{1}, Limit: 100}})
