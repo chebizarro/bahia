@@ -113,6 +113,16 @@ func (p *nostrFleetHealthProjector) observeEvent(_ context.Context, ev *gonostr.
 	if current, exists := p.entities[key]; exists && !ev.CreatedAt.Time().After(current.eventAt) {
 		return
 	}
+	// A cp-state tombstone withdraws the entity: a route or service removed
+	// from the fleet is no longer counted, not reported as unknown.
+	if kind == kinds.CASControlState && tagValue(ev, "deleted") == "true" {
+		delete(p.entities, key)
+		if ev.CreatedAt.Time().After(p.lastEventAt) {
+			p.lastEventAt = ev.CreatedAt.Time().UTC()
+		}
+		p.lastIngestedAt = p.now().UTC()
+		return
+	}
 	if len(p.entities) >= maxFleetHealthEventEntities {
 		if _, exists := p.entities[key]; !exists {
 			p.countRejected(ev)

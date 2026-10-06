@@ -1,6 +1,11 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"regexp"
+	"strings"
+	"time"
+)
 
 const (
 	// HiveCIReleaseSchemaV1 is the inner provenance document carried under
@@ -139,4 +144,39 @@ type HiveCIAcceptedRelease struct {
 type HiveCIReleaseCommitResult struct {
 	Release HiveCIAcceptedRelease
 	Replay  bool
+}
+
+// ErrHiveCIReleaseIncomplete is returned by Validate for an accepted release
+// that lacks a field the ledger keys or replays on.
+var ErrHiveCIReleaseIncomplete = errors.New("complete canonical accepted Hive-CI release is required")
+
+var hiveCIReleaseDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// Validate reports whether the accepted release carries everything the
+// accepted-release ledger needs: a v1 release identity, sha256 content and
+// artifact digests, the attestation it was accepted from, and when.
+func (r HiveCIAcceptedRelease) Validate() error {
+	if !strings.HasPrefix(r.Result.ReleaseIdentity, HiveCIReleaseIdentityPrefix) ||
+		!hiveCIReleaseDigestPattern.MatchString("sha256:"+strings.TrimPrefix(r.Result.ReleaseIdentity, HiveCIReleaseIdentityPrefix)) ||
+		!hiveCIReleaseDigestPattern.MatchString(r.ContentDigest) ||
+		!hiveCIReleaseDigestPattern.MatchString(r.Result.Manifest.Digest) ||
+		!hiveCIReleaseDigestPattern.MatchString(r.Result.SBOM.Digest) ||
+		!hiveCIReleaseDigestPattern.MatchString(r.Result.Provenance.Digest) ||
+		r.ResultEventID == "" || r.Attestor == "" || r.SignedEvent == "" ||
+		r.AcceptedAt.IsZero() {
+		return ErrHiveCIReleaseIncomplete
+	}
+	return nil
+}
+
+// HiveCIReleaseConflict is a release attestation that names an accepted
+// release identity with different content. It is quarantined beside the
+// accepted release and never replaces it.
+type HiveCIReleaseConflict struct {
+	ReleaseIdentity          string    `json:"release_identity"`
+	AcceptedContentDigest    string    `json:"accepted_content_digest"`
+	ConflictingContentDigest string    `json:"conflicting_content_digest"`
+	ResultEventID            string    `json:"result_event_id"`
+	SignedEvent              string    `json:"signed_event"`
+	QuarantinedAt            time.Time `json:"quarantined_at"`
 }
