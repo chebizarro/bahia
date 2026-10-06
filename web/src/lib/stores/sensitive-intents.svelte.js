@@ -6,7 +6,8 @@ import { signIntent } from '$lib/nostr/intent-signer.js';
 import { giftWrapIntent, sensitiveIntentBlocker } from '$lib/nostr/intent-giftwrap.js';
 import { createIntentOutbox } from '$lib/nostr/outbox.js';
 import { createPendingIntents } from './pending-intents.svelte.js';
-import { orgRoles } from './auth-roles.svelte.js';
+import { intentOrgCandidates, intentRecordOrgId } from './intent-readiness.svelte.js';
+import { SENSITIVE_INTENT_ORG_REQUIRED, intentOrgChoices } from '$lib/nostr/intent-org.js';
 
 export const sensitivePendingState = $state({ rows: [] });
 let session = null;
@@ -16,12 +17,21 @@ export function sensitiveMutationBlocker() {
   return sensitiveIntentBlocker(authState.capabilities);
 }
 
-export function orgIdFor(record, relatedRecords = []) {
+/**
+ * The organization a sensitive intent acts on, resolved exactly the way
+ * `intentReadiness()` decides a sensitive control is ready: the record's own
+ * org id, the org of the service it belongs to, or the one organization this
+ * session knows. Throws the explicit error only in the never-ready state
+ * (several organizations, none known), which the readiness signal reports too.
+ */
+export function orgIdFor(record) {
   const explicit = record?.org_id || record?.orgId || record?.organization_id;
   if (explicit) return explicit;
-  const orgs = [...new Set([...Object.keys(orgRoles), ...relatedRecords.map(item => item?.org_id || item?.orgId).filter(Boolean)])];
-  if (orgs.length === 1) return orgs[0];
-  throw new Error('Select an organization before changing sensitive settings');
+  const fromRecord = intentRecordOrgId(record);
+  if (fromRecord) return fromRecord;
+  const choices = intentOrgChoices(intentOrgCandidates());
+  if (choices.length === 1) return choices[0];
+  throw new Error(SENSITIVE_INTENT_ORG_REQUIRED);
 }
 
 function activeSigner() {

@@ -4,7 +4,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import Select from '$lib/components/Select.svelte';
   import Textarea from '$lib/components/Textarea.svelte';
-  import { sensitiveMutationBlocker } from '$lib/stores/sensitive-intents.svelte.js';
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import {
     CHANNEL_TYPE_OPTIONS,
     EVENT_FILTER_MODE_OPTIONS,
@@ -191,9 +191,11 @@
     <LoadingButton type="button" variant="secondary" disabled={submitting} onclick={onCancel}>
       Cancel
     </LoadingButton>
-    <LoadingButton type="submit" variant="primary" loading={submitting} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
-      {submitLabel}
-    </LoadingButton>
+    <IntentGate domain="notification" record={initialChannel}>
+      <LoadingButton type="submit" variant="primary" loading={submitting}>
+        {submitLabel}
+      </LoadingButton>
+    </IntentGate>
   </div>
 </form>
 

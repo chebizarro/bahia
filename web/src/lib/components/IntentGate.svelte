@@ -12,7 +12,9 @@
   for an org-scoped intent, the reason is also shown beside the control, since
   that state can last. When only the operator can resolve readiness (signed
   out, several organizations) the controls stay enabled and submitting reports
-  the explicit error.
+  the explicit error — except when the blocker is the signer itself (no
+  NIP-44): that is known before the operator acts and the page cannot resolve
+  it, so the controls are disabled with the reason as tooltip and description.
 
   The fieldset generates no box, so wrapping never changes page layout. The
   reason follows the wrapped controls so they keep their :first-child styling.
@@ -35,19 +37,21 @@
 
   const reasonId = $props.id();
   const readiness = $derived(intentReadiness(domain, { orgId, record, orgField }));
+  const disabled = $derived(readiness.pending || readiness.blockedBy === 'signer');
 </script>
 
 <fieldset
   class="intent-gate"
-  disabled={readiness.pending}
+  {disabled}
   aria-busy={readiness.waitingOn === 'session'}
-  aria-describedby={readiness.pending ? reasonId : undefined}
-  title={readiness.pending ? readiness.reason : undefined}
+  aria-describedby={disabled ? reasonId : undefined}
+  title={disabled ? readiness.reason : undefined}
   data-intent-domain={domain}
   data-intent-ready={readiness.ready}
+  data-intent-blocked-by={readiness.blockedBy || undefined}
 >
   {@render children?.()}
-  {#if readiness.pending}
+  {#if disabled}
     <span id={reasonId} class="intent-gate-reason" class:shown={readiness.waitingOn === 'organization'}>{readiness.reason}</span>
   {/if}
 </fieldset>
