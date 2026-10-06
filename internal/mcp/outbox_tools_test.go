@@ -3,8 +3,11 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/stretchr/testify/require"
 )
@@ -74,4 +77,43 @@ func TestOutboxStatusNilOutbox(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.IsError)
 	require.Contains(t, result.Content[0].Text, "not available")
+}
+
+// A real local outbox file: a failed entry retried through the tool goes
+// back to pending for the daemon's runner (bahia-u5whr, §3.7).
+func TestOutboxRetryRequeuesFailedEntry(t *testing.T) {
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	sk := nostr.Generate()
+	ev := nostr.Event{Kind: 30900, CreatedAt: 100, Tags: nostr.Tags{{"d", "x"}}, Content: "{}"}
+	require.NoError(t, ev.Sign(sk))
+	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: ev, Target: "control-plane", EnqueuedAt: time.Now()})
+	require.NoError(t, err)
+	_, err = outbox.CommitRound(ev.ID, localstore.OutboxRound{Rounds: 5, State: localstore.OutboxFailed, Detail: "abandoned after 5 publish attempts", At: time.Now()})
+	require.NoError(t, err)
+
+	srv := &Server{outbox: outbox}
+	result, err := srv.handleOutboxRetry(context.Background(), map[string]interface{}{"event_id": ev.ID.Hex()})
+	require.NoError(t, err)
+	require.False(t, result.IsError, result.Content[0].Text)
+	var data map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(result.Content[0].Text), &data))
+	require.Equal(t, localstore.OutboxPending, data["state"])
+	entry, found, err := outbox.Get(ev.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, localstore.OutboxPending, entry.State)
+
+	// Retrying a pending entry is refused; a read-only outbox is reported.
+	result, err = srv.handleOutboxRetry(context.Background(), map[string]interface{}{"event_id": ev.ID.Hex()})
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	result, err = (&Server{outbox: &stubOutbox{}}).handleOutboxRetry(context.Background(), map[string]interface{}{"all": true})
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	require.Contains(t, result.Content[0].Text, "read-only")
+	result, err = srv.handleOutboxRetry(context.Background(), map[string]interface{}{"all": true, "event_id": "x"})
+	require.NoError(t, err)
+	require.True(t, result.IsError)
 }

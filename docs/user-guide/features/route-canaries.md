@@ -124,6 +124,20 @@ Independently of deployments, every managed route is re-probed on an interval. R
 
 Outages open and clear with hysteresis. A failure streak counts *any* failing classification, not a single class, so a route flapping between `dns_unresolved` and `upstream_error` cannot evade the threshold.
 
+### Convergence without the secret store
+
+Converging routes at the provider needs the provider API token
+(`edge_routing.api_token_ref`). That token is a secret **value**: the canonical
+secret registry carries references only, and the value exists solely in the
+PostgreSQL secret store, decrypted with the service key. When the daemon has no
+database, convergence — and only convergence — is suspended: the WARN
+`edge_routing_secret_store_unavailable` is logged at startup and the
+`edge_routing` health check reports `warn` with `convergence=false`. Desired
+routes, periodic probing, outage detection and the canonical `30900`/`30315`/
+`4903` observables all continue, because they read desired state and route
+state from the local event store. Once PostgreSQL is reachable the
+database-recovery runner restarts the daemon with convergence enabled.
+
 ## Configuration
 
 ```yaml
@@ -246,7 +260,7 @@ migration in place.
 
 ## Reading route state
 
-Subscribe to the service-authored `30900` route state, scoped by the route coordinate `route:<service>:<environment>:<deployment-unit or none>:<hostname>`. The `30315` status and `4903` audit events carry outage transitions and sanitized evidence. The Route Canaries page renders those relay observables; the former REST list, detail, and event-history reads are no longer mounted.
+Subscribe to the service-authored `30900` route state, scoped by the route coordinate `route:<service>:<environment>:<deployment-unit or none>:<hostname>`. The `30315` status and `4903` audit events carry outage transitions and sanitized evidence. Each replaceable record is minted with a `created_at` strictly after the record it replaces, so two observations within one second never tie; a route whose state is deleted is withdrawn by a tombstone (`deleted=true`) on the same coordinate, which a restarted daemon and fleet-health telemetry honour. The Route Canaries page renders those relay observables; the former REST list, detail, and event-history reads are no longer mounted.
 
 ## Events and alerting
 

@@ -21,9 +21,12 @@ import (
 // collapses replaceable and addressable events to their latest version, and
 // prunes regular events, so it stays bounded and survives restarts.
 //
-// It stores signed events, not rows: entity labels and publish state are not
-// kept (ListByEntity is always empty, records carry no PublishState). Two
-// kinds of "pending" row are honoured:
+// It stores signed events, not rows: entity labels are not kept (ListByEntity
+// is always empty), and the only publish state a record carries is
+// NostrPublishStateFailed, on an event whose delivery the outbox abandoned
+// (localstore.Undelivered, bahia-u5whr): readers see the daemon's committed
+// state and that relays do not hold it, and the Projector's dedupe does not
+// treat it as delivered. Two kinds of "pending" row are honoured:
 //   - a row for a PostgreSQL-drained publish target, which a producer records
 //     so that it gets delivered, is handed to the publisher outbox for that
 //     target (see WithPendingAdmission);
@@ -100,6 +103,11 @@ func (r *LocalEventRepository) GetByID(_ context.Context, id string) (*repositor
 	for ev := range r.store.QueryEvents(nostr.Filter{IDs: []nostr.ID{parsed}}) {
 		if r.authored(ev) {
 			rec := localEventRecord(ev)
+			if _, found, err := r.store.Undelivered(ev); err != nil {
+				return nil, err
+			} else if found {
+				rec.PublishState = repository.NostrPublishStateFailed
+			}
 			return &rec, nil
 		}
 	}
@@ -189,12 +197,24 @@ func (r *LocalEventRepository) query(filter nostr.Filter, match func(nostr.Event
 	if match != nil {
 		filter.Limit = 0
 	}
+	undelivered, err := r.store.UndeliveredEventIDs()
+	if err != nil {
+		// Without the markers every record would read as delivered; the
+		// Projector would then dedupe against an abandoned event. Flag
+		// nothing rather than fail the read, and leave the warning to the
+		// readiness check that lists the markers.
+		undelivered = nil
+	}
 	var out []repository.NostrEventRecord
 	for ev := range r.store.QueryEvents(filter) {
 		if match != nil && !match(ev) {
 			continue
 		}
-		out = append(out, localEventRecord(ev))
+		rec := localEventRecord(ev)
+		if _, flagged := undelivered[ev.ID]; flagged {
+			rec.PublishState = repository.NostrPublishStateFailed
+		}
+		out = append(out, rec)
 		if limit > 0 && len(out) == limit {
 			break
 		}

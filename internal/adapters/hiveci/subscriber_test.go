@@ -166,9 +166,6 @@ func (r *testHiveRepo) GetPolicyByRepoAndWorkflow(_ context.Context, _, _ string
 func (r *testHiveRepo) EnsurePipelinePolicy(_ context.Context, _ domain.HiveCIPipelinePolicy) error {
 	return nil
 }
-func (r *testHiveRepo) LookupRepositoryCI(_ context.Context, _ []string, _ bool) ([]domain.RepositoryCILookup, error) {
-	return nil, nil
-}
 
 func TestHandleEventDropsInvalidBeforePersistenceAndDispatch(t *testing.T) {
 	repo := newTestHiveRepo()

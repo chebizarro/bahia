@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	gonostr "fiatjaf.com/nostr"
@@ -358,6 +359,24 @@ func (p *SecurityCanonicalPublisher) PublishRun(ctx context.Context, run *domain
 	d := "security:run:" + run.ID.String()
 	tags := gonostr.Tags{{"run_id", run.ID.String()}, {"target_key_hash", run.TargetKeyHash}, {"status", string(run.Status)}}
 	return p.publishConfidential(ctx, KindSecurityRunRecord, d, false, tags, string(content), "security_run.projection", &run.ID)
+}
+
+// RetireRun replaces a run record with a tombstone that carries a NIP-40
+// expiration (bahia-u5whr): readers drop the run at once (tombstones are
+// skipped), and the expiration lets the relay sidecar's retention sweep and
+// the local event store's expiry prune remove the coordinate itself, which
+// latest-wins retention would otherwise keep for good. It is the bounded
+// retention of run records, applied by CanonicalSecurityRepository per target.
+func (p *SecurityCanonicalPublisher) RetireRun(ctx context.Context, run *domain.SecurityScanRun, expiresAt time.Time) error {
+	if run == nil || p == nil || p.projector == nil || !p.projector.Enabled() {
+		return fmt.Errorf("security run canonical publisher is unavailable")
+	}
+	d := "security:run:" + run.ID.String()
+	tags := gonostr.Tags{
+		{"run_id", run.ID.String()}, {"target_key_hash", run.TargetKeyHash}, {"status", string(run.Status)},
+		{"expiration", strconv.FormatInt(expiresAt.Unix(), 10)},
+	}
+	return p.publishConfidential(ctx, KindSecurityRunRecord, d, true, tags, "{}", "security_run.projection", &run.ID)
 }
 
 // listState returns the decrypted content of the daemon's retained records of

@@ -175,7 +175,8 @@ func TestLocalOutboxWithoutPostgresRetriesDownRelayUntilAccepted(t *testing.T) {
 // A permanent rejection ends retries for that relay only; when it leaves the
 // quorum unreachable the first round abandons the event: the caller gets
 // ErrPublishAbandoned, OnDeliveryAbandoned fires, the entry is failed and the
-// event no longer counts as the daemon's output.
+// event no longer counts as the daemon's output (the caller was told; §3.7
+// flags only events abandoned after the caller was told they were queued).
 func TestLocalOutboxWithoutPostgresPermanentRejectionAndAbandonment(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
 	defer cancel()
@@ -208,7 +209,10 @@ func TestLocalOutboxWithoutPostgresPermanentRejectionAndAbandonment(t *testing.T
 		entry := h.entry(t, ev.ID)
 		require.Equal(t, localstore.OutboxFailed, entry.State)
 		require.Contains(t, entry.LastError, "abandoned: required relay acceptance is unreachable")
-		require.False(t, h.storeHolds(ev.ID), "an abandoned event is not the daemon's output")
+		require.False(t, h.storeHolds(ev.ID), "an event abandoned in the caller's round is not the daemon's output")
+		_, found, err := h.store.Undelivered(*ev)
+		require.NoError(t, err)
+		require.False(t, found, "nothing to flag: the caller was told")
 		outcome, err := h.pub.DeliveryOutcome(ctx, ev.ID.Hex())
 		require.NoError(t, err)
 		require.Equal(t, nostrutil.DeliveryAbandoned, outcome)

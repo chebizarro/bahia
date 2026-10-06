@@ -6,7 +6,7 @@
   import Input from '$lib/components/Input.svelte';
   import FormField from '$lib/components/FormField.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
-  import { sensitiveMutationBlocker } from '$lib/stores/sensitive-intents.svelte.js';
+  import IntentGate from '$lib/components/IntentGate.svelte';
 
   let name = $state('');
   let displayName = $state('');
@@ -101,9 +101,11 @@
 
       <div class="actions">
         <a href="/orgs" class="btn-cancel">Cancel</a>
-        <LoadingButton type="submit" loading={submitting} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
-          Create Organization
-        </LoadingButton>
+        <IntentGate domain="org">
+          <LoadingButton type="submit" loading={submitting}>
+            Create Organization
+          </LoadingButton>
+        </IntentGate>
       </div>
     </form>
   </Card>

@@ -28,7 +28,7 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { OrganizationIcon, PendingIcon, WarningIcon } from '$lib/icons/domain-icons.js';
-  import { sensitiveMutationBlocker } from '$lib/stores/sensitive-intents.svelte.js';
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { sensitivePendingState } from '$lib/stores/sensitive-intents.svelte.js';
   import { acceptedIntentStatus } from '$lib/nostr/intent-client.svelte.js';
 
@@ -253,9 +253,11 @@
     <div class="section-header">
       <h2><OrganizationIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Members ({members.length})</h2>
       {#if canManageMembers}
-        <button class="btn-primary" onclick={() => showInviteModal = true} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
-          Invite Member
-        </button>
+        <IntentGate domain="org">
+          <button class="btn-primary" onclick={() => showInviteModal = true}>
+            Invite Member
+          </button>
+        </IntentGate>
       {/if}
     </div>
 
@@ -285,17 +287,17 @@
               </td>
               <td>
                 {#if canManageMembers && member.role !== 'owner' && member.pubkey !== authState.pubkey}
-                  <select
-                    value={member.role}
-                    onchange={(e) => updateRole(member, e.target.value)}
-                    class="role-select"
-                    disabled={Boolean(sensitiveMutationBlocker())}
-                    title={sensitiveMutationBlocker() || undefined}
-                  >
-                    {#each roleOptions as opt}
-                      <option value={opt.value}>{opt.label}</option>
-                    {/each}
-                  </select>
+                  <IntentGate domain="org">
+                    <select
+                      value={member.role}
+                      onchange={(e) => updateRole(member, e.target.value)}
+                      class="role-select"
+                    >
+                      {#each roleOptions as opt}
+                        <option value={opt.value}>{opt.label}</option>
+                      {/each}
+                    </select>
+                  </IntentGate>
                 {:else}
                   <Badge variant={getRoleBadgeType(member.role)}>{member.role}</Badge>
                 {/if}
@@ -303,9 +305,11 @@
               {#if canManageMembers}
                 <td>
                   {#if member.role !== 'owner' && member.pubkey !== authState.pubkey}
-                    <button class="btn-danger-small" onclick={() => removeMember(member)} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
-                      Remove
-                    </button>
+                    <IntentGate domain="org">
+                      <button class="btn-danger-small" onclick={() => removeMember(member)}>
+                        Remove
+                      </button>
+                    </IntentGate>
                   {/if}
                 </td>
               {/if}
@@ -336,9 +340,11 @@
                 <td><Badge variant={getRoleBadgeType(invite.role)}>{invite.role}</Badge></td>
                 <td>{new Date(invite.expires_at).toLocaleDateString()}</td>
                 <td>
-                  <button class="btn-danger-small" onclick={() => revokeInvite(invite)} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
-                    Revoke
-                  </button>
+                  <IntentGate domain="org">
+                    <button class="btn-danger-small" onclick={() => revokeInvite(invite)}>
+                      Revoke
+                    </button>
+                  </IntentGate>
                 </td>
               </tr>
             {/each}
@@ -352,23 +358,26 @@
     <section class="section">
       <h2>Organization settings</h2>
       <Card>
-        <label class="setting-row">
-          <span>
-            <strong>Strict revocation</strong>
-            <span class="setting-description">Automatically rotate and re-encrypt after a member is removed or downgraded.</span>
-          </span>
-          <input type="checkbox" checked={strictChecked}
-            onchange={(event) => changeStrictRevocation(event.currentTarget.checked)}
-            disabled={strictUpdating || Boolean(sensitiveMutationBlocker()) || !org.updated_at}
-            title={sensitiveMutationBlocker() || (!org.updated_at ? 'Waiting for a revisioned organization record' : undefined)} />
-        </label>
+        <IntentGate domain="org">
+          <label class="setting-row">
+            <span>
+              <strong>Strict revocation</strong>
+              <span class="setting-description">Automatically rotate and re-encrypt after a member is removed or downgraded.</span>
+            </span>
+            <input type="checkbox" checked={strictChecked}
+              onchange={(event) => changeStrictRevocation(event.currentTarget.checked)}
+              disabled={strictUpdating || !org.updated_at}
+              title={!org.updated_at ? 'Waiting for a revisioned organization record' : undefined} />
+          </label>
+        </IntentGate>
         <form class="rekey-form" onsubmit={(event) => { event.preventDefault(); void rotateAndReencrypt(); }}>
           <FormField label="Reason for re-encryption (optional)">
             <Input bind:value={rekeyReason} placeholder="Why are you rotating this key?" />
           </FormField>
-          <LoadingButton type="submit" loading={rekeySubmitting || rekeyWaiting}
-            disabled={Boolean(sensitiveMutationBlocker()) || rekeySubmitting || rekeyWaiting}
-            title={sensitiveMutationBlocker() || undefined}>Rotate and re-encrypt</LoadingButton>
+          <IntentGate domain="org">
+            <LoadingButton type="submit" loading={rekeySubmitting || rekeyWaiting}
+              disabled={rekeySubmitting || rekeyWaiting}>Rotate and re-encrypt</LoadingButton>
+          </IntentGate>
         </form>
         {#if rekeyWaiting && !orgPendingRows.some(row => row.op === 'rekey' && row.status === 'pending')}
           <p class="intent-status" role="status">Re-encryption pending daemon acceptance…</p>
@@ -395,9 +404,11 @@
             <strong>Delete this organization</strong>
             <p>Once deleted, all data will be permanently removed.</p>
           </div>
-          <button class="btn-danger" onclick={() => showDeleteConfirm = true} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
-            Delete Organization
-          </button>
+          <IntentGate domain="org">
+            <button class="btn-danger" onclick={() => showDeleteConfirm = true}>
+              Delete Organization
+            </button>
+          </IntentGate>
         </div>
       </Card>
     </section>
@@ -418,9 +429,11 @@
         <button type="button" class="btn-cancel" onclick={() => showInviteModal = false}>
           Cancel
         </button>
-        <LoadingButton type="submit" loading={inviting} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
-          Send Invite
-        </LoadingButton>
+        <IntentGate domain="org">
+          <LoadingButton type="submit" loading={inviting}>
+            Send Invite
+          </LoadingButton>
+        </IntentGate>
       </div>
     </form>
   </Modal>
@@ -435,6 +448,7 @@
     message="Are you sure you want to delete this organization? This action cannot be undone."
     confirmLabel="Delete"
     variant="danger"
+    intentDomain="org"
     onConfirm={deleteOrg}
     onCancel={() => showDeleteConfirm = false}
     loading={deleting}

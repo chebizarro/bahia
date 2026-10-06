@@ -392,12 +392,20 @@ func (p *Projector) hydrateProjectionCache(ctx context.Context, wireKind int) er
 		if servicePubkey != "" && record.PubKey != servicePubkey {
 			continue
 		}
+		tags := recordTags(record)
 		if record.PublishState == repository.NostrPublishStateFailed {
 			// Abandoned by the outbox: never reached the quorum, so it must
-			// not suppress the next publish of the same content.
+			// not suppress the next publish of the same content. Its
+			// created_at still floors the coordinate, so the replacement is
+			// strictly newer and wins over it in every store.
+			if record.Kind != KindCASAudit {
+				key := projectionKeyOf(record.Kind, tags)
+				if createdAt := gonostr.Timestamp(record.CreatedAt.Unix()); createdAt > s.createdAt[key] {
+					s.createdAt[key] = createdAt
+				}
+			}
 			continue
 		}
-		tags := recordTags(record)
 		if record.Kind == KindCASAudit {
 			s.auditFacts.add(tagValue(tags, kinds.CPAuditTagFact))
 			continue

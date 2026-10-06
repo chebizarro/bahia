@@ -188,6 +188,7 @@ const (
 	CPStateTopicHiveCIPolicy     = "hiveci-policy"
 	CPStateTopicHiveCIResult     = "hiveci-result"
 	CPStateTopicHiveCIInitiation = "hiveci-initiation"
+	CPStateTopicHiveCIRelease    = "hiveci-release"
 
 	CPStateTopicLLMRelease         = "llm-release"
 	CPStateTopicArtifactSignature  = "artifact-signature"

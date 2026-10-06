@@ -129,9 +129,6 @@ func (m *mockHiveRepo) GetPolicyByRepoAndWorkflow(_ context.Context, _, _ string
 func (m *mockHiveRepo) EnsurePipelinePolicy(_ context.Context, _ domain.HiveCIPipelinePolicy) error {
 	return nil
 }
-func (m *mockHiveRepo) LookupRepositoryCI(_ context.Context, _ []string, _ bool) ([]domain.RepositoryCILookup, error) {
-	return nil, nil
-}
 
 type mockBuildRepo struct {
 	byRun map[string]*domain.Build

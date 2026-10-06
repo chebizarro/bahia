@@ -300,7 +300,21 @@ from terminal release-attestation acceptance.
 A release attestation is registered only after manifest, SBOM, and in-toto
 provenance bytes match every signed descriptor and lineage binding. The
 artifact identity is `repository@sha256:digest`; any signed image tag is stored
-only as evidence. CI success does not promote production. The legacy `auto_deploy_staging` policy
+only as evidence. The accepted release is committed to the daemon's canonical
+accepted-release ledger first: one fleet-OCK encrypted `30900` record per
+release identity (`legacy_kind=32027`, `d=hiveci:release:<release-identity>`,
+`t=hiveci-release`, public tags `release`, `digest`, `result`, `run`,
+`status=accepted`) in the local event store. An exact replay of the same
+attestation is recognised from that record, across restarts and with no
+database; an attestation naming an accepted identity with different content is
+quarantined on `d=hiveci:release-conflict:<release-identity>:<digest>`
+(`status=conflict`, tag `accepted=<accepted digest>`) and rejected. The SQL
+`hiveci_accepted_releases`/`hiveci_release_conflicts` tables are an index
+written after the canonical commit and rebuilt from the ledger after warm
+start; a failed index write is logged, never returned. Releases accepted
+before the ledger existed live only in SQL: the first attestation seen for such
+an identity is accepted canonically, and the index mirror then reports whether
+it matched the SQL row. CI success does not promote production. The legacy `auto_deploy_staging` policy
 metadata may create a staging intent; protected environments leave that intent
 pending approval. Production promotion remains a separately authorized
 control-plane action.
@@ -390,6 +404,22 @@ Do not add `trusted_release_attestors` for the ordinary Loom result path. That
 key enables the kind-4903 release-attestation verifier and additionally requires
 Bahia's OCI evidence service, full lineage/SBOM/provenance descriptors, worker
 admission evidence, and the metadata constraints shown below.
+
+### Retry contract for a result that failed processing
+
+A signed result is processed when it arrives, when the run an orphaned result
+waits for arrives, and once per daemon start from the canonical result states
+in the local event store (`hiveci.max_retries` attempts, counted on the
+canonical record). There is no retry timer: an unreachable PostgreSQL build
+registry is probed by the database-recovery runner, which restarts the daemon
+into that resume pass; a manifest the registry cannot serve yet leaves the
+result `artifact_pending`; a policy or service misconfiguration is fixed by the
+operator and the next start resumes. Once attempts are exhausted the result is
+`failed` and the contract is the signer-first build-result action (the
+`artifact` request op, `pipeline.Bridge.RegisterBuildResult`): it re-verifies
+the manifest from the trusted result and may move a `failed` result to
+`artifact_pending`, `processed` or `rejected`. Nothing else reopens a failed
+result.
 
 On startup, verify the `hive-ci bridge enabled` log includes the expected relay
 and non-zero trusted-key/policy counts. A `hiveci_disabled`,

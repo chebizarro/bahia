@@ -100,6 +100,10 @@ func (s *memoryCanonicalSecurityStore) PublishRun(_ context.Context, v *domain.S
 	return s.publish("run", func() { s.runs[v.ID] = stored })
 }
 
+func (s *memoryCanonicalSecurityStore) RetireRun(_ context.Context, v *domain.SecurityScanRun, _ time.Time) error {
+	return s.publish("retire-run", func() { delete(s.runs, v.ID) })
+}
+
 func (s *memoryCanonicalSecurityStore) PublishSchedule(_ context.Context, v *domain.SecurityScanSchedule) error {
 	stored := *v
 	return s.publish("schedule", func() { s.schedules[v.ID] = stored })

@@ -64,7 +64,19 @@ export function onContentKeyChange(callback) {
   return () => contentKeyListeners.delete(callback);
 }
 
+/**
+ * Organizations whose content key this session holds: orgID → true. A key
+ * envelope addressed to the signed-in member is decrypted before the member
+ * record that names the role, so this names an organization the session
+ * belongs to as soon as local state can. Reactive, unlike the key cache.
+ * @type {Record<string, true>}
+ */
+export const contentKeyOrgs = $state({});
+
 function notifyContentKeyChange() {
+  const held = new Set([...ockCache.values()].map(key => key.orgID));
+  for (const orgID of Object.keys(contentKeyOrgs)) if (!held.has(orgID)) delete contentKeyOrgs[orgID];
+  for (const orgID of held) contentKeyOrgs[orgID] = true;
   for (const callback of contentKeyListeners) callback();
 }
 

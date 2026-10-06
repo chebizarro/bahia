@@ -74,63 +74,6 @@ type HiveCIPipelinePolicy struct {
 	UpdatedAt      time.Time      `json:"updated_at"`
 }
 
-type RepositoryCILookup struct {
-	RepoCoordinate string                     `json:"repo_coordinate"`
-	LatestRun      *RepositoryCIRunSummary    `json:"latest_run,omitempty"`
-	LatestResult   *RepositoryCIResultSummary `json:"latest_result,omitempty"`
-	Policies       []RepositoryCIPolicyLink   `json:"policies"`
-	LinkedServices []RepositoryCIServiceLink  `json:"linked_services"`
-}
-
-type RepositoryCIRunSummary struct {
-	RunEventID      string                `json:"run_event_id"`
-	WorkflowPath    string                `json:"workflow_path"`
-	Branch          string                `json:"branch"`
-	CommitSHA       string                `json:"commit_sha"`
-	TriggerType     string                `json:"trigger_type,omitempty"`
-	TriggeredBy     string                `json:"triggered_by,omitempty"`
-	PublisherPubkey string                `json:"publisher_pubkey"`
-	EventCreatedAt  time.Time             `json:"event_created_at"`
-	ProcessingState HiveCIProcessingState `json:"processing_state"`
-}
-
-type RepositoryCIResultSummary struct {
-	ResultEventID   string                `json:"result_event_id"`
-	Status          string                `json:"status"`
-	ExitCode        int                   `json:"exit_code"`
-	DurationSeconds int                   `json:"duration_seconds"`
-	LogURL          string                `json:"log_url,omitempty"`
-	Error           string                `json:"error,omitempty"`
-	ImageRepo       string                `json:"image_repo,omitempty"`
-	ImageTag        string                `json:"image_tag,omitempty"`
-	ImageDigest     string                `json:"image_digest,omitempty"`
-	PSTFGateName    string                `json:"pstf_gate_name,omitempty"`
-	PSTFGateStatus  string                `json:"pstf_gate_status,omitempty"`
-	ProcessingState HiveCIProcessingState `json:"processing_state"`
-	ProcessingError string                `json:"processing_error,omitempty"`
-	RetryCount      int                   `json:"retry_count"`
-	LastRetryAt     *time.Time            `json:"last_retry_at,omitempty"`
-	EventCreatedAt  time.Time             `json:"event_created_at"`
-}
-
-type RepositoryCIPolicyLink struct {
-	PolicyID        uuid.UUID `json:"policy_id"`
-	WorkflowPath    string    `json:"workflow_path"`
-	BranchPattern   string    `json:"branch_pattern,omitempty"`
-	Enabled         bool      `json:"enabled"`
-	ServiceID       uuid.UUID `json:"service_id"`
-	ServiceName     string    `json:"service_name"`
-	EnvironmentID   uuid.UUID `json:"environment_id"`
-	EnvironmentName string    `json:"environment_name"`
-}
-
-type RepositoryCIServiceLink struct {
-	ServiceID        uuid.UUID   `json:"service_id"`
-	ServiceName      string      `json:"service_name"`
-	EnvironmentIDs   []uuid.UUID `json:"environment_ids"`
-	EnvironmentNames []string    `json:"environment_names"`
-}
-
 // HiveCIResultState is the daemon's processing state of one signed kind-5402
 // workflow result. The signed result itself is the evidence; this record is
 // what the daemon decided about it and how often it tried, so pending results
@@ -145,7 +88,12 @@ type HiveCIResultState struct {
 	UpdatedAt       time.Time             `json:"updated_at"`
 }
 
-// Terminal reports whether no further processing of the result is expected.
+// Terminal reports whether no further automatic processing of the result is
+// expected: arrival, the arrival of its run and the per-start resume leave it
+// alone. A failed result is terminal for the daemon but not for the operator:
+// the signer-first build-result action (pipeline.Bridge.RegisterBuildResult)
+// may still finish it, which is the recovery contract once automatic attempts
+// are exhausted (bahia-xjdo9).
 func (s HiveCIProcessingState) Terminal() bool {
 	switch s {
 	case HiveCIProcessingStateProcessed, HiveCIProcessingStateRejected, HiveCIProcessingStateFailed:
@@ -169,6 +117,8 @@ func (s HiveCIProcessingState) CanTransitionTo(next HiveCIProcessingState) bool 
 		HiveCIProcessingStatePendingResult:   {HiveCIProcessingStateProcessed, HiveCIProcessingStateVerified, HiveCIProcessingStateArtifactPending, HiveCIProcessingStateRejected, HiveCIProcessingStateFailed},
 		HiveCIProcessingStateVerified:        {HiveCIProcessingStateArtifactPending, HiveCIProcessingStateProcessed, HiveCIProcessingStateRejected, HiveCIProcessingStateFailed},
 		HiveCIProcessingStateArtifactPending: {HiveCIProcessingStateProcessed, HiveCIProcessingStateFailed},
+		// Operator recovery of a result whose automatic attempts were exhausted.
+		HiveCIProcessingStateFailed: {HiveCIProcessingStateArtifactPending, HiveCIProcessingStateProcessed, HiveCIProcessingStateRejected},
 	}
 	for _, candidate := range allowed[s] {
 		if candidate == next {

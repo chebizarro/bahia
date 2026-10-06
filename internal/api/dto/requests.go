@@ -411,12 +411,6 @@ type DeployServiceActionRequest struct {
 	ArtifactID *uuid.UUID `json:"artifact_id,omitempty"`
 }
 
-// LookupRepositoryCIRequest is the request payload for batch CI status lookup.
-type LookupRepositoryCIRequest struct {
-	RepoCoordinates         []string `json:"repo_coordinates"`
-	IncludeDisabledPolicies bool     `json:"include_disabled_policies,omitempty"`
-}
-
 // ListBlossomBlobsRequest is the request payload for listing Blossom blobs.
 type ListBlossomBlobsRequest struct {
 	// Pubkey filters blobs by owner pubkey. If empty, lists blobs for the server's configured identity.

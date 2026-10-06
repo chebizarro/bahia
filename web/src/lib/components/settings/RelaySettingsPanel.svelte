@@ -1,6 +1,7 @@
 <script>
   import Input from '$lib/components/Input.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import { RelayIcon } from '$lib/icons/domain-icons.js';
   import { nostr } from '$lib/nostr/client.js';
   import {
@@ -684,12 +685,14 @@
   {/if}
 
   <div class="relay-actions">
-    <LoadingButton
-      variant="primary"
-      loading={operatorPolicySaving}
-      disabled={operatorPolicyApplyBlocked}
-      onclick={saveOperatorRelayPolicy}
-    >Publish Relay Policy Update</LoadingButton>
+    <IntentGate domain="relay">
+      <LoadingButton
+        variant="primary"
+        loading={operatorPolicySaving}
+        disabled={operatorPolicyApplyBlocked}
+        onclick={saveOperatorRelayPolicy}
+      >Publish Relay Policy Update</LoadingButton>
+    </IntentGate>
   </div>
 
 </section>

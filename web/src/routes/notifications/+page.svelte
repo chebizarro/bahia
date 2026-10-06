@@ -5,11 +5,12 @@
   import EmptyState from '$lib/components/EmptyState.svelte';
   import ErrorState from '$lib/components/ErrorState.svelte';
   import SensitiveIntentNotice from '$lib/components/SensitiveIntentNotice.svelte';
+  import IntentGate from '$lib/components/IntentGate.svelte';
   import Input from '$lib/components/Input.svelte';
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import Select from '$lib/components/Select.svelte';
   import { toast } from '$lib/components/toast.js';
-  import { sensitiveMutationBlocker, sensitivePendingState } from '$lib/stores/sensitive-intents.svelte.js';
+  import { sensitivePendingState } from '$lib/stores/sensitive-intents.svelte.js';
   import { NotificationIcon, WarningIcon } from '$lib/icons/domain-icons.js';
   import {
     deleteNotificationChannel,
@@ -167,7 +168,7 @@
       <LoadingButton variant="secondary" onclick={() => goto('/notifications/log')}>
         View log
       </LoadingButton>
-      <LoadingButton variant="primary" onclick={() => goto('/notifications/new')} disabled={Boolean(sensitiveMutationBlocker())} title={sensitiveMutationBlocker() || undefined}>
+      <LoadingButton variant="primary" onclick={() => goto('/notifications/new')}>
         Create channel
       </LoadingButton>
     </div>
@@ -213,9 +214,9 @@
   {:else if channels.length === 0}
     <EmptyState
       title="No notification channels"
-      message={sensitiveMutationBlocker() || 'Create a webhook or Nostr DM channel to start receiving platform event notifications.'}
+      message="Create a webhook or Nostr DM channel to start receiving platform event notifications."
       iconComponent={NotificationIcon}
-      actionLabel={sensitiveMutationBlocker() ? '' : 'Create channel'}
+      actionLabel="Create channel"
       onAction={() => goto('/notifications/new')}
     />
   {:else}
@@ -253,15 +254,16 @@
               <td>{formatDateTime(channel.updated_at || channel.created_at)}</td>
               <td>
                 <div class="row-actions">
-                  <button
-                    type="button"
-                    class="action-button"
-                    disabled={Boolean(actionKey) || Boolean(sensitiveMutationBlocker()) || channel.pending}
-                    title={sensitiveMutationBlocker() || undefined}
-                    onclick={() => toggleChannel(channel)}
-                  >
-                    {actionKey === `toggle:${channel.id}` ? 'Saving...' : channel.enabled ? 'Disable' : 'Enable'}
-                  </button>
+                  <IntentGate domain="notification" record={channel}>
+                    <button
+                      type="button"
+                      class="action-button"
+                      disabled={Boolean(actionKey) || channel.pending}
+                      onclick={() => toggleChannel(channel)}
+                    >
+                      {actionKey === `toggle:${channel.id}` ? 'Saving...' : channel.enabled ? 'Disable' : 'Enable'}
+                    </button>
+                  </IntentGate>
                   <button
                     type="button"
                     class="action-button"
@@ -273,21 +275,21 @@
                   <button
                     type="button"
                     class="action-button"
-                    disabled={Boolean(actionKey) || Boolean(sensitiveMutationBlocker()) || channel.pending}
-                    title={sensitiveMutationBlocker() || undefined}
+                    disabled={Boolean(actionKey) || channel.pending}
                     onclick={() => goto(`/notifications/${encodeURIComponent(channel.id)}/edit`)}
                   >
                     Edit
                   </button>
-                  <button
-                    type="button"
-                    class="action-button danger"
-                    disabled={Boolean(actionKey) || Boolean(sensitiveMutationBlocker()) || channel.pending}
-                    title={sensitiveMutationBlocker() || undefined}
-                    onclick={() => requestDelete(channel)}
-                  >
-                    Delete
-                  </button>
+                  <IntentGate domain="notification" record={channel}>
+                    <button
+                      type="button"
+                      class="action-button danger"
+                      disabled={Boolean(actionKey) || channel.pending}
+                      onclick={() => requestDelete(channel)}
+                    >
+                      Delete
+                    </button>
+                  </IntentGate>
                 </div>
               </td>
             </tr>
@@ -310,6 +312,8 @@
   message={deleteTarget ? `Delete ${deleteTarget.name}? Delivery history remains, but this channel can no longer receive notifications.` : ''}
   confirmLabel="Delete channel"
   variant="danger"
+  intentDomain="notification"
+  intentRecord={deleteTarget}
   loading={actionKey === `delete:${deleteTarget?.id}`}
   onConfirm={confirmDelete}
   onClose={() => { deleteTarget = null; }}
