@@ -18,8 +18,8 @@
     WarningIcon,
     WorkspaceIcon
   } from '$lib/icons/domain-icons.js';
-  import { nostr, parseSoulEvent, KINDS, normalizeSoulDraftContent } from '$lib/nostr/client.js';
-  import { buildSoulRef, fetchSoulHistory, subscribeToSoulFactoryUpdates, unsubscribeFromSoulUpdates, publishSoulAction, publishSoulDraft, publishSoulUpdateAction, provisioningRuns, souls, trackLifecycleRun } from '$lib/stores/souls.js';
+  import { KINDS, normalizeSoulDraftContent } from '$lib/nostr/client.js';
+  import { fetchSoulHistory, subscribeToSoulHistory, waitForSoul, publishSoulAction, publishSoulDraft, publishSoulUpdateAction, provisioningRuns, souls, trackLifecycleRun } from '$lib/stores/souls.js';
   
   let soul = $state(null);
   let loading = $state(true);
@@ -214,43 +214,6 @@
     return found;
   }
   
-  function tagValue(event, name) {
-    return (event?.tags || []).find((tag) => tag[0] === name)?.[1] || '';
-  }
-
-  function eventBelongsToSoul(event) {
-    if (!soul || event.kind === KINDS.AGENT_SOUL) return true;
-    return tagValue(event, 'soul') === buildSoulRef(soul);
-  }
-
-  function subscribeToUpdates(id = agentId) {
-    const filters = [{
-      kinds: [KINDS.AGENT_SOUL],
-      '#d': [id]
-    }];
-
-    if (soul) {
-      filters.push({
-        kinds: [KINDS.PROVISIONING_STATUS, KINDS.PROVISIONING_RESULT, KINDS.SOUL_ACTION_LEGACY_RESULT],
-        since: Math.floor(Date.now() / 1000),
-        limit: 100
-      });
-    }
-
-    unsub = nostr.subscribe(filters, {
-      onEvent: (event) => {
-        if (!eventBelongsToSoul(event)) return;
-        if (event.kind === KINDS.AGENT_SOUL) {
-          soul = parseSoulEvent(event);
-        }
-        void loadHistory();
-      },
-      onClosed: () => {
-        // Relay interruptions are informational here; terminal lifecycle state comes only from result events.
-      }
-    });
-  }
-
   async function loadHistory() {
     if (!soul) return;
     historyLoading = true;
@@ -314,29 +277,36 @@
     const id = agentId;
     if (!id) return;
 
-    let cancelled = false;
-    if (unsub) {
-      unsub();
-      unsub = null;
-    }
+    // The Soul and its activity are projections of the shared verified store,
+    // kept current by the app-lifetime SoulFactory reader. This page opens no
+    // REQ: a cached Soul renders at once, and "not found" is only reported after
+    // every relay finished catch-up without it.
+    const waiting = new AbortController();
+    loading = true;
+    error = null;
 
     async function initializeSoul() {
-      await subscribeToSoulFactoryUpdates();
-      if (cancelled) return;
-      if (!lookupSoul(id)) {
+      const found = await waitForSoul(id, { signal: waiting.signal });
+      if (waiting.signal.aborted) return;
+      if (!found) {
         loading = false;
         error = 'Soul not found';
         return;
       }
-      await loadHistory();
-      if (cancelled) return;
-      subscribeToUpdates(id);
+      lookupSoul(id);
+      unsub = subscribeToSoulHistory(found, {
+        limit: 25,
+        onUpdate: (history) => {
+          activityHistory = history;
+          lookupSoul(id);
+        }
+      });
     }
 
     void initializeSoul();
 
     return () => {
-      cancelled = true;
+      waiting.abort();
       if (unsub) {
         unsub();
         unsub = null;
@@ -672,6 +642,10 @@
 
         <section class="info-section wide">
           <h3><MemoryIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Activity & History</h3>
+          <!-- The browser cannot verify soul_factory.authorized_pubkeys, so kind 1950 actions are trusted from the signed-in key only. -->
+          <p class="history-muted" data-testid="soul-activity-operator-scope-note">
+            Actions are listed only when signed by your key; actions by other operators are not shown. Soul Factory results are shown for every operator.
+          </p>
           {#if historyLoading}
             <p class="history-muted">Loading activity history...</p>
           {:else if historyError}

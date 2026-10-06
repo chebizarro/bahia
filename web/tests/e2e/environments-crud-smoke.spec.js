@@ -168,14 +168,12 @@ test.describe('Environments CRUD Smoke Test', () => {
     const dialog = page.getByRole('dialog', { name: 'Create Environment' });
     await expect(dialog).toBeVisible();
 
-    const organization = page.getByLabel('Organization *');
-    if (await organization.evaluate((element) => element.tagName === 'SELECT')) {
-      await organization.selectOption(ORG_ID);
-    } else {
-      await organization.fill(ORG_ID);
-    }
+    // The organization control is an <input> until the org collection has
+    // loaded, then a <select>; the e2e fixture always provides organizations,
+    // so wait for the select instead of racing the swap.
+    const organization = page.locator('select#env-org');
+    await organization.selectOption(ORG_ID);
     await expect(organization).toHaveValue(ORG_ID);
-    await page.locator('select#env-org').selectOption(ORG_ID);
     await page.getByLabel('Name *').fill('development');
     await page.getByLabel('Loom Worker Selector').fill('role=dev');
     await page.getByLabel('Runtime Config (JSON)').fill('{"cpu_limit":"1","memory_limit":"1Gi"}');
@@ -220,14 +218,12 @@ test.describe('Environments CRUD Smoke Test', () => {
     await page.getByRole('button', { name: 'Create Environment' }).first().click();
     const dialog = page.getByRole('dialog', { name: 'Create Environment' });
 
-    const organization = page.getByLabel('Organization *');
-    if (await organization.evaluate((element) => element.tagName === 'SELECT')) {
-      await organization.selectOption(ORG_ID);
-    } else {
-      await organization.fill(ORG_ID);
-    }
+    // The organization control is an <input> until the org collection has
+    // loaded, then a <select>; the e2e fixture always provides organizations,
+    // so wait for the select instead of racing the swap.
+    const organization = page.locator('select#env-org');
+    await organization.selectOption(ORG_ID);
     await expect(organization).toHaveValue(ORG_ID);
-    await page.locator('select#env-org').selectOption(ORG_ID);
     await page.getByLabel('Name *').fill('max-production');
     await page.getByLabel('Create an explicit Bahia-managed Compose deployment unit').check();
     await page.getByLabel('Unit key *').fill('max');

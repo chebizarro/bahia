@@ -226,6 +226,27 @@ bahia souls templates get research-agent
 | 38384 | RuntimeControlRequest | Runtime-directed control request |
 | 38386 | RuntimeControlResult | Runtime-directed result |
 
+## Browser store-first reads and trusted publishers
+
+The app layout owns one SoulFactory reader backed by the shared verified `BahiaEventStore`. Soul Gallery, Soul details, Soul edit and **Settings → OpenClaw Fleet** read that local store, render cached rows with no loading gate, and update as the store changes. Rendering never waits for a relay connection or EOSE, and returning to those routes does not open another REQ: pages only read the local store, and the layout starts the relay reader at boot without waiting for any relay. A Soul that is not in the local store yet is reported as "not found" only after relay catch-up has finished.
+
+Soul activity is read from local events. The layout reader catches up the trusted history in pages with a saved per-relay cursor, so histories larger than 1,000 events are read completely (see [Continuity](continuity.md) for how paging and cursors work).
+
+Every relay filter and every local read carries an author list:
+
+- `31951` Souls and their `6950`/`7950`/`1951` lifecycle history are signed by the SoulFactory controller. Trusted controllers are the service keys in the deployment bootstrap seed (`service_pubkeys`) plus the controller the Bahia service attests: the daemon publishes its resolved controller key as `controller_pubkeys` in the service-signed runtime policy record (`30900`, `t=soul-factory-runtime-policy`). A deployment whose controller is a separate Signet key therefore needs no extra web configuration.
+- `31952` drafts, `1950` actions and the `31953` fleet configuration are operator documents. They are accepted only from the signed-in operator's own key.
+- `31950` templates are accepted from the signed-in operator and from trusted controllers.
+- `30317` runtime capabilities are accepted from the runtime keys the service attests (`runtime_pubkeys` in the same policy record, mirroring `soul_factory.runtime_pubkeys`) from runtime keys named by an already-trusted `31951` Soul, and from the trusted controller and service keys themselves. A capability event can never add its own signer to the trusted set. If `soul_factory.runtime_pubkeys` is not configured and no Soul exists yet, no runtime is trusted and the New Soul form offers no runtime target: pin the runtime keys in the daemon configuration.
+
+The runtime policy record is plaintext (not OCK-encrypted). On the Bahia relay sidecar its topic is a protected read: with `nostr.relay_sidecar.read_auth_mode: enforce` only authenticated members, fleet operators and relay administrators can read it, so attested keys become available once you are signed in. The default mode is `warn`, which logs but does not reject, and other relays the service publishes to apply no such rule. Treat the controller and pinned runtime public keys in this record as disclosed to anyone who can read that topic.
+
+### Other operators' documents are not shown
+
+Drafts, actions and the fleet configuration are shown only when signed by your own key, and the affected views say so. The daemon decides who may author them from `soul_factory.authorized_pubkeys`, which it does not publish, so the browser has no verified list of the other operators. Showing their documents would need the Bahia service to publish that list, for example as the service-signed NIP-51 set the event guide already names (`30000`, `d=operators:<scope>`, one `p` tag per operator) or as a field on the runtime policy record. Org membership cannot stand in for it: fleet operators are not org members and org roles do not authorize SoulFactory documents.
+
+The runtime-capability set is also intersected with the service-authored runtime policy before controls are enabled. Valid signatures from other authors remain stored only if another trusted subscription needs them; they are never projected into SoulFactory views.
+
 ## Fleet-wide OpenClaw configuration
 
 Open **Settings → OpenClaw Fleet** at `/settings/fleet` to edit and publish the parameterized-replaceable kind `31953` document. The event content uses `soulfactory-fleet-config/v1` and contains an allowlisted OpenClaw `template` plus optional `defaults` for model, CLI bindings, and reproducible `plugin-id=install-source` requirements. Secret-shaped string fields must use `${VAR}` placeholders.

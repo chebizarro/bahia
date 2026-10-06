@@ -13,6 +13,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/agentmemory"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/llm"
+	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/qdrant"
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -429,6 +430,27 @@ func firstConfiguredBlossomServer(cfg config.BlossomConfig) string {
 		return ""
 	}
 	return servers[0]
+}
+
+// soulRuntimePolicy is what the service publishes about SoulFactory for
+// browsers: the enabled runtimes plus the keys they may trust. The controller
+// is the identity resolved at startup (configured or Signet-derived); it is
+// absent when SoulFactory is disabled.
+func soulRuntimePolicy(sf config.SoulFactoryConfig, runtime *soulFactoryRuntime) nostrAdapter.SoulRuntimePolicy {
+	policy := nostrAdapter.SoulRuntimePolicy{AgentRuntimes: append([]string{}, sf.AgentRuntimes...)}
+	if runtime == nil {
+		return policy
+	}
+	if runner, ok := runtime.runner.(*soulFactoryRunner); ok && runner.controllerPubkey != "" {
+		policy.ControllerPubkeys = []string{runner.controllerPubkey}
+	}
+	if len(sf.RuntimePubkeys) > 0 {
+		policy.RuntimePubkeys = make(map[string][]string, len(sf.RuntimePubkeys))
+		for target, pubkeys := range sf.RuntimePubkeys {
+			policy.RuntimePubkeys[target] = append([]string{}, pubkeys...)
+		}
+	}
+	return policy
 }
 
 type soulFactoryRunner struct {

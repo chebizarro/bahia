@@ -202,6 +202,7 @@ export async function installE2EMocks(
       if (!filter || typeof filter !== 'object') return true;
       if (Array.isArray(filter.kinds) && !filter.kinds.includes(event.kind)) return false;
       if (typeof filter.since === 'number' && Number(event.created_at || 0) < filter.since) return false;
+      if (typeof filter.until === 'number' && Number(event.created_at || 0) > filter.until) return false;
       if (Array.isArray(filter.authors) && !filter.authors.includes(event.pubkey)) return false;
       for (const [key, values] of Object.entries(filter)) {
         if (!key.startsWith('#') || !Array.isArray(values)) continue;
