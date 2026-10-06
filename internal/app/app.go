@@ -697,6 +697,7 @@ func New(cfg *config.Config) (*App, error) {
 		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
 	registerSignetHealthCheck(healthProvider, loomSignetManager)
+	registerUndeliveredHealthCheck(healthProvider, localEventStore)
 	if internalRouteBackend != nil {
 		healthProvider.RegisterCheck("internal_routing", func() HealthCheck {
 			check := HealthCheck{Name: "internal_routing", Status: HealthStatusPass, Message: "nginx include directory and certificate files are ready"}
@@ -2080,8 +2081,14 @@ func New(cfg *config.Config) (*App, error) {
 		if securityRepo != nil {
 			// Once the local store has caught up with the relays: publish
 			// SQL-era state that has no canonical record yet (once), then
-			// bring the index up to the canonical records.
+			// bring the index up to the canonical records. Policies go
+			// first: schedules derive only from published policy cp-state,
+			// so a policy that exists only in SQL would otherwise never be
+			// scheduled (bahia-u5whr).
 			nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+				if err := policySvc.BackfillCanonicalPolicies(ctx, localOutbox, service.PolicyCanonicalPublisher(policyPublisher)); err != nil {
+					logger.Warn("policy canonical backfill failed; retrying on next start", zap.Error(err))
+				}
 				if err := canonicalSecurity.BackfillFromIndex(ctx, localOutbox); err != nil {
 					logger.Warn("security canonical backfill failed; retrying on next start", zap.Error(err))
 				}
@@ -2113,7 +2120,7 @@ func New(cfg *config.Config) (*App, error) {
 		// The scheduler derives schedules from retained policy and target
 		// cp-state, so it waits for the local store's first catch-up.
 		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{
-			Repo: canonicalSecurity, Scanner: securityScanner, Deriver: policySvc, Ready: intentReadiness.Ready, Logger: logger,
+			Repo: canonicalSecurity, Scanner: securityScanner, Deriver: policySvc, Pruner: canonicalSecurity, Ready: intentReadiness.Ready, Logger: logger,
 		}))
 		logger.Info("security OSV scanner and canonical scheduler registered", zap.Bool("sql_index", securityRepo != nil))
 	}
@@ -2274,6 +2281,7 @@ func New(cfg *config.Config) (*App, error) {
 		ConfidentialReader: confidentialEncryptor,
 		LogService:         runLogService,
 		LLMRegistry:        llmRegistry,
+		Outbox:             localOutbox,
 	}
 	configureAuthorizationMCPDeps(&mcpDeps, cfg, tenantRBAC)
 	mcpServer, err := mcp.NewServerWithOptionsChecked(registry, logger, mcpDeps)

@@ -25,6 +25,9 @@ type SecurityCanonicalStore interface {
 	PublishSchedule(context.Context, *domain.SecurityScanSchedule) error
 	PublishFinding(context.Context, domain.SecurityOSVFinding) error
 	PublishFindingDetail(context.Context, domain.SecurityOSVFinding) error
+	// RetireRun tombstones a run record with a NIP-40 expiration so the
+	// coordinate is dropped by readers now and swept by retention later.
+	RetireRun(context.Context, *domain.SecurityScanRun, time.Time) error
 	// The List methods narrow by the records' public tags: an empty hash or
 	// uuid.Nil means "any".
 	ListSecurityTargets(ctx context.Context, targetKeyHash string) ([]domain.SecurityTarget, error)
@@ -1037,4 +1040,77 @@ func (r *CanonicalSecurityRepository) backfillTarget(ctx context.Context, target
 		return r.canonical.PublishRun(ctx, &indexed[i])
 	}
 	return nil
+}
+
+// Run retention ----------------------------------------------------------------
+
+// Run records are one coordinate per run (bahia-u5whr item 6). Latest-wins
+// retention never sweeps a coordinate, so growth is bounded here: per target,
+// the newest securityRunsRetainedPerTarget terminal runs are kept (the breach
+// lifecycle compares a run with the target's previous terminal run, and the
+// SQL index historically listed about this many) and older terminal runs are
+// retired with a tombstone that expires after securityRunTombstoneTTL, the
+// NIP-40 lifetime intent-status and sidecar-status records already use. Runs
+// that are not terminal are never retired.
+const (
+	securityRunsRetainedPerTarget = 20
+	securityRunTombstoneTTL       = 7 * 24 * time.Hour
+)
+
+// PruneSecurityScanRuns retires, per target, every terminal run beyond the
+// newest securityRunsRetainedPerTarget. It is level triggered and safe to
+// repeat; the security scheduler calls it on its existing wakeup. It returns
+// how many runs were retired; a run that cannot be retired does not stop the
+// others.
+func (r *CanonicalSecurityRepository) PruneSecurityScanRuns(ctx context.Context) (int, error) {
+	if err := r.available(); err != nil {
+		return 0, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	runs, err := r.canonical.ListSecurityRuns(ctx, uuid.Nil, "")
+	if err != nil {
+		return 0, err
+	}
+	byTarget := map[string][]domain.SecurityScanRun{}
+	for _, run := range runs {
+		if run.Status.IsTerminal() {
+			byTarget[run.TargetKeyHash] = append(byTarget[run.TargetKeyHash], run)
+		}
+	}
+	expiresAt := time.Now().UTC().Add(securityRunTombstoneTTL)
+	retired := 0
+	var failed []error
+	for _, terminal := range byTarget {
+		if len(terminal) <= securityRunsRetainedPerTarget {
+			continue
+		}
+		sort.Slice(terminal, func(i, j int) bool {
+			if a, b := securityRunSettledAt(terminal[i]), securityRunSettledAt(terminal[j]); !a.Equal(b) {
+				return a.After(b)
+			}
+			return terminal[i].ID.String() < terminal[j].ID.String()
+		})
+		for i := securityRunsRetainedPerTarget; i < len(terminal); i++ {
+			run := terminal[i]
+			if err := r.canonical.RetireRun(ctx, &run, expiresAt); err != nil {
+				failed = append(failed, fmt.Errorf("retire security run %s: %w", run.ID, err))
+				continue
+			}
+			retired++
+		}
+	}
+	if retired > 0 {
+		r.logger.Info("retired security scan runs beyond per-target retention", zap.Int("runs", retired), zap.Int("retained_per_target", securityRunsRetainedPerTarget))
+	}
+	return retired, errors.Join(failed...)
+}
+
+// securityRunSettledAt orders terminal runs: when they finished, else when
+// they were created.
+func securityRunSettledAt(run domain.SecurityScanRun) time.Time {
+	if run.FinishedAt != nil {
+		return *run.FinishedAt
+	}
+	return run.CreatedAt
 }

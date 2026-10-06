@@ -173,3 +173,32 @@ func TestPruneRegularEventsKeepsReplaceableState(t *testing.T) {
 	require.True(t, store.hasLocked(recent.ID))
 	require.True(t, store.hasLocked(state.ID), "replaceable state is bounded by its coordinates, never by age")
 }
+
+// NIP-40: an event whose expiration has passed is pruned whatever its kind
+// (addressable tombstones included), one that has not, or carries no
+// expiration, is kept (bahia-u5whr).
+func TestPruneExpiredEventsHonoursNIP40OnEveryKind(t *testing.T) {
+	store, _ := openTemp(t)
+	sk := nostr.Generate()
+	now := time.Unix(1_700_000_000, 0)
+	expiredTombstone := signed(t, sk, 30900, 100, nostr.Tags{{"d", "security:run:1"}, {"deleted", "true"}, {"expiration", "1699999999"}}, "{}")
+	liveTombstone := signed(t, sk, 30900, 100, nostr.Tags{{"d", "security:run:2"}, {"deleted", "true"}, {"expiration", "1700000001"}}, "{}")
+	noExpiry := signed(t, sk, 30900, 100, nostr.Tags{{"d", "security:run:3"}}, "{}")
+	expiredRegular := signed(t, sk, 4903, 100, nostr.Tags{{"expiration", "1"}}, "audit")
+	malformed := signed(t, sk, 30900, 100, nostr.Tags{{"d", "security:run:4"}, {"expiration", "soon"}}, "{}")
+	for _, ev := range []nostr.Event{expiredTombstone, liveTombstone, noExpiry, expiredRegular, malformed} {
+		_, err := store.SaveEvent(ev)
+		require.NoError(t, err)
+	}
+	removed, err := store.PruneExpiredEvents(now)
+	require.NoError(t, err)
+	require.Equal(t, 2, removed)
+	var held []nostr.ID
+	for ev := range store.QueryEvents(nostr.Filter{}) {
+		held = append(held, ev.ID)
+	}
+	require.ElementsMatch(t, []nostr.ID{liveTombstone.ID, noExpiry.ID, malformed.ID}, held)
+	removed, err = store.PruneExpiredEvents(now.Add(time.Second))
+	require.NoError(t, err)
+	require.Equal(t, 1, removed, "the deadline is inclusive")
+}

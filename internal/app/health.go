@@ -2,9 +2,12 @@ package app
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 )
 
@@ -267,5 +270,49 @@ func registerOCKRotationHealthCheck(provider *HealthProvider, pendingRotations f
 		}
 		return HealthCheck{Name: "ock_rotation", Status: HealthStatusWarn,
 			Message: strings.Join(messages, "; "), Details: map[string]string{"orgs": strings.Join(pending, ",")}}
+	})
+}
+
+// undeliveredHealthCheckDetailLimit bounds how many undelivered coordinates
+// the readiness check names; the count is always reported.
+const undeliveredHealthCheckDetailLimit = 10
+
+// registerUndeliveredHealthCheck reports the coordinates whose latest event
+// the publish outbox abandoned after the producer was told it was queued
+// (localstore.Undelivered, §3.7). The state is committed locally and served
+// by canonical reads, but no relay quorum holds it, so the daemon is degraded
+// (warn), not unready: reads and writes still work, and the next publish of
+// each coordinate, or an operator retry of its failed outbox entry, clears
+// the condition. It is kept separate from ReadinessTracker's EOSE gate for
+// the same reason as OCK rotation.
+func registerUndeliveredHealthCheck(provider *HealthProvider, store *localstore.Store) {
+	if provider == nil || store == nil {
+		return
+	}
+	provider.RegisterCheck("canonical_delivery", func() HealthCheck {
+		markers, err := store.ListUndelivered()
+		if err != nil {
+			return HealthCheck{Name: "canonical_delivery", Status: HealthStatusWarn, Message: "undelivered canonical state unknown: " + err.Error()}
+		}
+		if len(markers) == 0 {
+			return HealthCheck{Name: "canonical_delivery", Status: HealthStatusPass, Message: "every canonical record the daemon published reached its relay quorum"}
+		}
+		sort.Slice(markers, func(i, j int) bool { return markers[i].FailedAt.Before(markers[j].FailedAt) })
+		coordinates := make([]string, 0, min(len(markers), undeliveredHealthCheckDetailLimit))
+		for _, marker := range markers[:cap(coordinates)] {
+			coordinates = append(coordinates, marker.Coordinate)
+		}
+		oldest := markers[0]
+		return HealthCheck{
+			Name:   "canonical_delivery",
+			Status: HealthStatusWarn,
+			Message: fmt.Sprintf("%d canonical record(s) abandoned by the publish outbox are held locally but not on the relays; retry their outbox entries (bahia outbox retry) or republish the coordinates; oldest %s (event %s): %s",
+				len(markers), oldest.Coordinate, oldest.EventID.Hex(), oldest.Detail),
+			Details: map[string]string{
+				"count":       strconv.Itoa(len(markers)),
+				"coordinates": strings.Join(coordinates, ","),
+				"oldest_at":   oldest.FailedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+			},
+		}
 	})
 }

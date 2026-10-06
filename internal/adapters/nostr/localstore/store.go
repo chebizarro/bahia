@@ -6,7 +6,11 @@
 // It is a cache, not a source of truth. Relays are canonical: deleting the file
 // is always safe, and the daemon rebuilds it by syncing from its relays. A file
 // that cannot be opened because it is corrupt is moved aside and recreated for
-// the same reason.
+// the same reason. The one thing relays cannot rebuild is the daemon's own
+// output whose delivery the outbox abandoned (see Undelivered): that event and
+// its marker are restored from the outbox's retained failed entries when the
+// publisher starts, so they outlive a deleted store file as long as the outbox
+// retains the entry.
 //
 // Events live in a fiatjaf.com/nostr/eventstore bbolt backend (the same pure-Go
 // store the relay sidecar uses). The store keeps what a NIP-01/NIP-09 relay
@@ -31,6 +35,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -157,7 +163,7 @@ func openBackend(path string) (*boltdb.BoltBackend, error) {
 		return nil, err
 	}
 	if err := backend.DB.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{cursorBucket, deletionBucket, tagBucket, metaBucket} {
+		for _, name := range [][]byte{cursorBucket, deletionBucket, tagBucket, metaBucket, undeliveredBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -230,6 +236,13 @@ func (s *Store) SaveEvent(ev nostr.Event) (bool, error) {
 		stored, err := s.coords().Replace(s.scan, ev)
 		if err != nil {
 			return false, fmt.Errorf("replace local event %s: %w", ev.ID.Hex(), err)
+		}
+		if stored {
+			// A newer version supersedes an abandoned one: its own delivery
+			// now decides whether the coordinate is on the relays.
+			if _, err := s.clearSupersededUndelivered(ev); err != nil {
+				return false, err
+			}
 		}
 		return stored, nil
 	}
@@ -442,6 +455,39 @@ func (s *Store) PruneRegularEvents(cutoff time.Time) (int, error) {
 		}
 	}
 	return len(expired), nil
+}
+
+// PruneExpiredEvents deletes stored events of any kind whose NIP-40
+// expiration tag is at or before now, and returns how many it removed. It is
+// what lets a tombstone with an expiration (for example a retired security
+// run, bahia-u5whr) leave the store as it leaves the relay sidecar's
+// retention sweep; without it, latest-wins coordinates would stay for good.
+// Events without a parsable expiration are kept.
+func (s *Store) PruneExpiredEvents(now time.Time) (int, error) {
+	deadline := now.Unix()
+	var expired []nostr.ID
+	for ev := range s.QueryEvents(nostr.Filter{}) {
+		if expiresAt, ok := expirationOf(ev); ok && expiresAt <= deadline {
+			expired = append(expired, ev.ID)
+		}
+	}
+	for i, id := range expired {
+		if err := s.DeleteEvent(id); err != nil {
+			return i, fmt.Errorf("prune expired local event %s: %w", id.Hex(), err)
+		}
+	}
+	return len(expired), nil
+}
+
+// expirationOf returns ev's NIP-40 expiration, when it carries a valid one.
+func expirationOf(ev nostr.Event) (int64, bool) {
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "expiration" {
+			expiresAt, err := strconv.ParseInt(strings.TrimSpace(tag[1]), 10, 64)
+			return expiresAt, err == nil && expiresAt > 0
+		}
+	}
+	return 0, false
 }
 
 // Cursor returns the committed resume cursor for (relayURL, filterHash), or 0

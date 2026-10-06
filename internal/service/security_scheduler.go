@@ -21,12 +21,22 @@ type SecurityScheduledScanner interface {
 	SubmitScan(ctx context.Context, req SecurityScanRequest) (*SecurityScanAccepted, error)
 }
 
+// SecurityRunPruner bounds run-record retention (see
+// CanonicalSecurityRepository.PruneSecurityScanRuns). The scheduler runs it on
+// its existing wakeup so retention needs no ticker of its own.
+type SecurityRunPruner interface {
+	PruneSecurityScanRuns(ctx context.Context) (int, error)
+}
+
 type SecuritySchedulerConfig struct {
 	// Repo is the canonical security store: schedules, targets and run
 	// claims are read from and published to canonical cp-state.
-	Repo     repository.SecurityRepository
-	Scanner  SecurityScheduledScanner
-	Deriver  SecurityScheduleDeriver
+	Repo    repository.SecurityRepository
+	Scanner SecurityScheduledScanner
+	Deriver SecurityScheduleDeriver
+	// Pruner, when set, retires terminal runs beyond the per-target
+	// retention on every wakeup.
+	Pruner   SecurityRunPruner
 	Interval time.Duration
 	// Ready, when set, returns a channel that is closed once the local event
 	// store has caught up with the relays. It is asked when the scheduler
@@ -52,6 +62,7 @@ type SecurityScheduler struct {
 	repo      repository.SecurityRepository
 	scanner   SecurityScheduledScanner
 	deriver   SecurityScheduleDeriver
+	pruner    SecurityRunPruner
 	interval  time.Duration
 	ready     func() <-chan struct{}
 	batchSize int
@@ -81,7 +92,7 @@ func NewSecurityScheduler(cfg SecuritySchedulerConfig) *SecurityScheduler {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &SecurityScheduler{repo: cfg.Repo, scanner: cfg.Scanner, deriver: cfg.Deriver, interval: interval, ready: cfg.Ready, batchSize: batch, workerID: worker, logger: logger.Named("security-scheduler"), now: now}
+	return &SecurityScheduler{repo: cfg.Repo, scanner: cfg.Scanner, deriver: cfg.Deriver, pruner: cfg.Pruner, interval: interval, ready: cfg.Ready, batchSize: batch, workerID: worker, logger: logger.Named("security-scheduler"), now: now}
 }
 
 func (s *SecurityScheduler) Name() string { return "security-osv-scheduler" }
@@ -122,6 +133,11 @@ func (s *SecurityScheduler) wake(ctx context.Context) {
 	}
 	if err := s.Tick(ctx); err != nil {
 		s.logger.Warn("security scheduler tick failed", zap.Error(err))
+	}
+	if s.pruner != nil {
+		if _, err := s.pruner.PruneSecurityScanRuns(ctx); err != nil {
+			s.logger.Warn("security run retention failed", zap.Error(err))
+		}
 	}
 }
 

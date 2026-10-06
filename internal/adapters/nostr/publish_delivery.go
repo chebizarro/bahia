@@ -165,6 +165,12 @@ type outboxDelivery struct {
 	delivered bool
 	// reportedDelivered is set once OnDelivered handlers saw the event.
 	reportedDelivered bool
+	// callerWaiting is set while the round whose outcome the publishing
+	// caller receives runs (the first round of an inline publish). An
+	// abandonment in that round is returned to the caller, who treats the
+	// operation as failed; one in any later round is reported only through
+	// the hooks, after the caller was told the event was queued (§3.7).
+	callerWaiting bool
 	// quorumReached mirrors delivered for readers that do not hold mu (see
 	// Publisher.DeliveryOutcome).
 	quorumReached atomic.Bool
@@ -400,13 +406,23 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 	if persistErr == nil && delivered && !d.reportedDelivered {
 		// The quorum's acceptance is durable; tell the owner of the content.
 		d.reportedDelivered = true
+		p.clearOwnEventUndelivered(d.event)
 		p.notifyDelivered(d.event)
 	}
 	switch {
 	case settled:
 		if !delivered {
 			// The entry is now durably failed; tell the owner of the content.
-			p.forgetOwnEvent(d.event)
+			if d.callerWaiting {
+				// The caller learns of the abandonment from this round's
+				// error and does not commit the operation: the event is not
+				// the daemon's output.
+				p.forgetOwnEvent(d.event)
+			} else {
+				// The caller was told the event was queued: keep it as the
+				// daemon's committed state and flag its coordinate (§3.7).
+				p.markOwnEventUndelivered(d.event, abandonmentDetail(exhausted, p.maxAttempts, detail))
+			}
 			p.notifyAbandoned(d.event)
 		}
 	case skipped:
@@ -481,11 +497,7 @@ func (p *Publisher) persistRound(ctx context.Context, d *outboxDelivery, deliver
 	eventID := d.event.ID.Hex()
 	now := p.now().UTC()
 	if settled && !delivered {
-		reason := "abandoned: required relay acceptance is unreachable"
-		if exhausted {
-			reason = fmt.Sprintf("abandoned after %d publish attempts", p.maxAttempts)
-		}
-		detail = joinDetail(reason, detail)
+		detail = abandonmentDetail(exhausted, p.maxAttempts, detail)
 	}
 	switch d.ledger {
 	case ledgerLocal:
@@ -506,6 +518,15 @@ func (p *Publisher) persistRound(ctx context.Context, d *outboxDelivery, deliver
 		}
 	}
 	return nil
+}
+
+// abandonmentDetail is the recorded reason for an abandoned delivery.
+func abandonmentDetail(exhausted bool, maxAttempts int, detail string) string {
+	reason := "abandoned: required relay acceptance is unreachable"
+	if exhausted {
+		reason = fmt.Sprintf("abandoned after %d publish attempts", maxAttempts)
+	}
+	return joinDetail(reason, detail)
 }
 
 // mirrorSettled copies a local outbox outcome onto the event's PostgreSQL

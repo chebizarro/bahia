@@ -189,11 +189,13 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(dbGate, coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "id", "envId"), true)).Get("/services/{id}/environments/{envId}/logs", logsH.StreamLiveLogs)
 			}
 
-			// Payment records are retained for non-event MCP reads.
+			// Payment records are canonical cp-state read from the local event
+			// store (audit B-31), so these reads need no PostgreSQL gate: the
+			// service answers from the local store alone (bahia-u5whr).
 			if deps.Payments != nil {
 				payH := handlers.NewPaymentHandler(deps.Payments)
-				r.With(dbGate).Get("/deployments/runs/{id}/cost", payH.GetRunCost)
-				r.With(dbGate).Get("/payments/history", payH.GetPaymentHistory)
+				r.Get("/deployments/runs/{id}/cost", payH.GetRunCost)
+				r.Get("/payments/history", payH.GetPaymentHistory)
 			}
 
 			// Config fabric desired/applied drift (read)

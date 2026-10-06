@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -281,4 +282,135 @@ func TestPaymentCanonicalQueuedPublishIsDurableAndIndexFailureIsNotFatal(t *test
 	require.Len(t, rows, 1)
 	require.Equal(t, int64(41), rows[rec.ID].AmountSats)
 	require.Equal(t, runID, rows[rec.ID].DeploymentRunID)
+}
+
+// runOutbox runs the daemon's publish outbox runner with a short retry
+// schedule until the returned stop function is called.
+func runOutbox(t *testing.T, d *localHistoryDaemon, maxAttempts int) (stop func()) {
+	t.Helper()
+	d.publisher.newBackoff = func() *Backoff { return &Backoff{Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2} }
+	d.publisher.idleInterval = 5 * time.Millisecond
+	d.publisher.maxAttempts = maxAttempts
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = d.publisher.Run(ctx)
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+// A record that was queued (the mutation succeeded and the SQL index was
+// written) and later abandoned by the outbox is not lost: it stays readable
+// from the canonical view, flagged undelivered on its coordinate, the outbox
+// entry stays failed, and the SQL index agrees with the canonical read. An
+// operator retry of the entry that reaches the quorum clears the flag
+// (bahia-u5whr, §3.7).
+func TestPaymentCanonicalQueuedThenAbandonedRecordStaysReadableAndFlagged(t *testing.T) {
+	ctx := context.Background()
+	runID := uuid.New()
+	script := newRelayScript()
+	script.setDown(cpRelayA, true)
+	script.setDown(cpRelayB, true)
+	daemon := startLocalHistoryDaemon(t, t.TempDir(), script)
+	index := newMemoryPaymentIndex()
+	svc := localPaymentService(daemon, index)
+	abandoned := make(chan nostr.Event, 1)
+	daemon.publisher.OnDeliveryAbandoned(func(ev nostr.Event) { abandoned <- ev })
+
+	rec, err := svc.RecordPayment(ctx, runID, "worker", "https://mint", 41, "proof")
+	require.NoError(t, err, "a queued publish succeeds")
+	rows, _ := index.snapshot()
+	require.Len(t, rows, 1, "the SQL index is written after the queued publish")
+
+	stop := runOutbox(t, daemon, 2)
+	ev := receive(t, abandoned, "abandonment after the attempt budget")
+	stop()
+	entry, held, err := daemon.outbox.Get(ev.ID)
+	require.NoError(t, err)
+	require.True(t, held)
+	require.Equal(t, localstore.OutboxFailed, entry.State, "the outbox entry stays in its terminal failed state")
+
+	events := storedPaymentEvents(t, daemon.store)
+	require.Len(t, events, 1, "the abandoned record is still the daemon's committed state")
+	require.Equal(t, ev.ID, events[0].ID)
+	marker, flagged, err := daemon.store.Undelivered(events[0])
+	require.NoError(t, err)
+	require.True(t, flagged, "the coordinate is marked undelivered")
+	require.Equal(t, ev.ID, marker.EventID)
+	require.Contains(t, marker.Detail, "abandoned after 2 publish attempts")
+	records, err := daemon.projector.history.ListByKind(ctx, KindCASControlState, 10)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, repository.NostrPublishStateFailed, records[0].PublishState, "the record reads as delivery-failed")
+
+	history, err := svc.GetPaymentHistory(ctx, "worker", 10)
+	require.NoError(t, err)
+	require.Len(t, history, 1, "the canonical read still answers with the record")
+	require.Equal(t, rec.ID, history[0].ID)
+	rows, _ = index.snapshot()
+	require.Len(t, rows, 1)
+	require.Equal(t, history[0].ID, rows[rec.ID].ID, "the SQL index agrees with the canonical read")
+	require.Equal(t, history[0].Status, rows[rec.ID].Status)
+	require.Equal(t, history[0].AmountSats, rows[rec.ID].AmountSats)
+
+	// Operator action: the relays are back and the failed entry is retried.
+	script.setDown(cpRelayA, false)
+	script.setDown(cpRelayB, false)
+	delivered := make(chan nostr.Event, 1)
+	daemon.publisher.OnDelivered(func(ev nostr.Event) { delivered <- ev })
+	_, err = daemon.outbox.Retry(ev.ID)
+	require.NoError(t, err)
+	stop = runOutbox(t, daemon, 2)
+	require.Equal(t, ev.ID, receive(t, delivered, "delivery of the retried entry").ID)
+	stop()
+	_, flagged, err = daemon.store.Undelivered(events[0])
+	require.NoError(t, err)
+	require.False(t, flagged, "a quorum-accepted retry clears the marker")
+	markers, err := daemon.store.ListUndelivered()
+	require.NoError(t, err)
+	require.Empty(t, markers)
+	require.Len(t, storedPaymentEvents(t, daemon.store), 1, "the retry delivered the same event; nothing was re-signed")
+}
+
+// The next publish of an abandoned coordinate (here a status transition) is
+// strictly newer than the flagged event, replaces it locally and on the relays,
+// and clears the flag.
+func TestPaymentCanonicalNextPublishOfAbandonedCoordinateClearsTheFlag(t *testing.T) {
+	ctx := context.Background()
+	runID := uuid.New()
+	script := newRelayScript()
+	script.setDown(cpRelayA, true)
+	script.setDown(cpRelayB, true)
+	daemon := startLocalHistoryDaemon(t, t.TempDir(), script)
+	svc := localPaymentService(daemon, newMemoryPaymentIndex())
+	abandoned := make(chan nostr.Event, 1)
+	daemon.publisher.OnDeliveryAbandoned(func(ev nostr.Event) { abandoned <- ev })
+
+	rec, err := svc.RecordPayment(ctx, runID, "worker", "https://mint", 41, "proof")
+	require.NoError(t, err)
+	stop := runOutbox(t, daemon, 2)
+	first := receive(t, abandoned, "abandonment after the attempt budget")
+	stop()
+	_, flagged, err := daemon.store.Undelivered(first)
+	require.NoError(t, err)
+	require.True(t, flagged)
+
+	script.setDown(cpRelayA, false)
+	script.setDown(cpRelayB, false)
+	require.NoError(t, svc.MarkPaymentSent(ctx, rec.ID))
+	events := storedPaymentEvents(t, daemon.store)
+	require.Len(t, events, 1)
+	require.NotEqual(t, first.ID, events[0].ID, "the transition is a new event on the same coordinate")
+	require.Greater(t, events[0].CreatedAt, first.CreatedAt, "the replacement is strictly newer than the flagged event")
+	_, flagged, err = daemon.store.Undelivered(events[0])
+	require.NoError(t, err)
+	require.False(t, flagged, "the delivered replacement clears the flag")
+	history, err := svc.GetPaymentHistory(ctx, "worker", 10)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	require.Equal(t, domain.PaymentStatusSent, history[0].Status)
 }

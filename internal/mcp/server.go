@@ -1941,6 +1941,8 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	// Outbox inspection
 	case "bahia_outbox_status":
 		return s.handleOutboxStatus(ctx, arguments)
+	case "bahia_outbox_retry":
+		return s.handleOutboxRetry(ctx, arguments)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", name)), nil
 	}

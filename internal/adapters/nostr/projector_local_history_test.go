@@ -84,31 +84,62 @@ func TestProjectorHydratesDedupeFromTheLocalStoreAcrossRestart(t *testing.T) {
 	require.Equal(t, published, script.sent(cpRelayA)[0])
 }
 
-// An abandoned projection is dropped from the local store, so a restarted
-// projector re-signs that content instead of treating it as published.
+// A projection abandoned after it was queued stays in the local store flagged
+// undelivered (§3.7): the history reports it as failed, so a restarted
+// projector re-signs that content instead of treating it as published, and
+// the replacement is strictly newer than the flagged event and clears its
+// marker. (An abandonment in the caller's own round is returned to the caller
+// and the event dropped; see TestLocalOutboxWithoutPostgresPermanentRejectionAndAbandonment.)
 func TestProjectorRepublishesContentWhoseDeliveryWasAbandoned(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	script := newRelayScript()
-	script.reject[cpRelayA] = "blocked: maintenance"
-	script.reject[cpRelayB] = "blocked: maintenance"
+	script.setDown(cpRelayA, true)
+	script.setDown(cpRelayB, true)
 	serviceID, envID := uuid.New(), uuid.New()
 	state := dedupeTestState(serviceID, envID, time.Now().UTC())
 
 	first := startLocalHistoryDaemon(t, dir, script)
-	require.ErrorIs(t, first.projector.publishStateForTest(ctx, &state), ErrPublishAbandoned)
-	var held int
-	for range first.store.QueryEvents(gonostr.Filter{Kinds: []gonostr.Kind{KindCASControlState}}) {
-		held++
+	abandonedCh := make(chan gonostr.Event, 1)
+	first.publisher.OnDeliveryAbandoned(func(ev gonostr.Event) { abandonedCh <- ev })
+	require.NoError(t, first.projector.publishStateForTest(ctx, &state), "queued while the relays are down")
+	stop := runOutbox(t, first, 2)
+	abandoned := receive(t, abandonedCh, "abandonment after the attempt budget")
+	stop()
+	var held []gonostr.Event
+	for ev := range first.store.QueryEvents(gonostr.Filter{Kinds: []gonostr.Kind{KindCASControlState}}) {
+		held = append(held, ev)
 	}
-	require.Zero(t, held, "the abandoned event is not kept as the daemon's output")
+	require.Len(t, held, 1, "the abandoned event stays the daemon's committed state")
+	require.Equal(t, abandoned.ID, held[0].ID)
+	marker, found, err := first.store.Undelivered(abandoned)
+	require.NoError(t, err)
+	require.True(t, found, "the abandoned coordinate is marked undelivered")
+	require.Equal(t, abandoned.ID, marker.EventID)
+	records, err := first.projector.history.ListByKind(ctx, KindCASControlState, 10)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.Equal(t, repository.NostrPublishStateFailed, records[0].PublishState, "readers see the record as delivery-failed")
 	first.close()
 
-	script.mu.Lock()
-	script.reject = map[string]string{}
-	script.mu.Unlock()
+	script.setDown(cpRelayA, false)
+	script.setDown(cpRelayB, false)
 	calls := script.totalCalls()
 	restarted := startLocalHistoryDaemon(t, dir, script)
 	require.NoError(t, restarted.projector.publishStateForTest(ctx, &state))
 	require.Equal(t, calls+2, script.totalCalls(), "the abandoned content is signed and published again")
+	held = nil
+	for ev := range restarted.store.QueryEvents(gonostr.Filter{Kinds: []gonostr.Kind{KindCASControlState}}) {
+		held = append(held, ev)
+	}
+	require.Len(t, held, 1)
+	replacement := held[0]
+	require.NotEqual(t, abandoned.ID, replacement.ID)
+	require.Greater(t, replacement.CreatedAt, abandoned.CreatedAt, "the replacement is strictly newer than the flagged event")
+	_, found, err = restarted.store.Undelivered(replacement)
+	require.NoError(t, err)
+	require.False(t, found, "a delivered publish of the coordinate clears the marker")
+	markers, err := restarted.store.ListUndelivered()
+	require.NoError(t, err)
+	require.Empty(t, markers)
 }
