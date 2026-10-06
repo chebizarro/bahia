@@ -27,48 +27,60 @@ func (b *SliceStore) Init() error {
 func (b *SliceStore) Close() {}
 
 func (b *SliceStore) QueryEvents(filter nostr.Filter, maxLimit int) iter.Seq[nostr.Event] {
+	// Take the window under the lock: SaveEvent/DeleteEvent shift the backing
+	// array concurrently (khatru runs REQ and EVENT handlers on separate
+	// goroutines). The lock cannot be held across yield, so iterate a copy.
 	return func(yield func(nostr.Event) bool) {
-		if tlimit := filter.GetTheoreticalLimit(); tlimit == 0 {
-			return
-		} else if tlimit < maxLimit {
-			maxLimit = tlimit
-		}
-
-		// Take the window under the lock: SaveEvent/DeleteEvent shift the
-		// backing array concurrently (khatru runs REQ and EVENT handlers on
-		// separate goroutines). The lock cannot be held across yield, so
-		// iterate over a copy of the matching window instead.
 		b.Lock()
-		// efficiently determine where to start and end
-		start := 0
-		end := len(b.internal)
-		if filter.Until != 0 {
-			start, _ = slices.BinarySearchFunc(b.internal, filter.Until, eventTimestampComparator)
-		}
-		if filter.Since != 0 {
-			end, _ = slices.BinarySearchFunc(b.internal, filter.Since, eventTimestampComparator)
-		}
-
-		// ham
-		if end < start {
-			b.Unlock()
-			return
-		}
-		window := slices.Clone(b.internal[start:end])
+		window, maxLimit := b.window(filter, maxLimit)
 		b.Unlock()
+		b.iterate(window, filter, maxLimit, yield)
+	}
+}
 
-		count := 0
-		for _, event := range window {
-			if count == maxLimit {
-				break
-			}
+// queryLocked is QueryEvents for callers that already hold the lock.
+func (b *SliceStore) queryLocked(filter nostr.Filter, maxLimit int) iter.Seq[nostr.Event] {
+	return func(yield func(nostr.Event) bool) {
+		window, maxLimit := b.window(filter, maxLimit)
+		b.iterate(window, filter, maxLimit, yield)
+	}
+}
 
-			if filter.Matches(event) {
-				if !yield(event) {
-					return
-				}
-				count++
+// window returns a copy of the events that can match filter's time bounds.
+// The caller holds the lock.
+func (b *SliceStore) window(filter nostr.Filter, maxLimit int) ([]nostr.Event, int) {
+	if tlimit := filter.GetTheoreticalLimit(); tlimit == 0 {
+		return nil, 0
+	} else if tlimit < maxLimit {
+		maxLimit = tlimit
+	}
+	// efficiently determine where to start and end
+	start := 0
+	end := len(b.internal)
+	if filter.Until != 0 {
+		start, _ = slices.BinarySearchFunc(b.internal, filter.Until, eventTimestampComparator)
+	}
+	if filter.Since != 0 {
+		end, _ = slices.BinarySearchFunc(b.internal, filter.Since, eventTimestampComparator)
+	}
+	// ham
+	if end < start {
+		return nil, 0
+	}
+	return slices.Clone(b.internal[start:end]), maxLimit
+}
+
+func (b *SliceStore) iterate(window []nostr.Event, filter nostr.Filter, maxLimit int, yield func(nostr.Event) bool) {
+	count := 0
+	for _, event := range window {
+		if count == maxLimit {
+			break
+		}
+		if filter.Matches(event) {
+			if !yield(event) {
+				return
 			}
+			count++
 		}
 	}
 }
@@ -142,7 +154,7 @@ func (b *SliceStore) ReplaceEvent(evt nostr.Event) (deleted []nostr.Event, err e
 	}
 
 	shouldStore := true
-	for previous := range b.QueryEvents(filter, 1) {
+	for previous := range b.queryLocked(filter, 1) {
 		if nostr.IsOlder(previous, evt) {
 			if err := b.delete(previous.ID); err != nil {
 				return nil, fmt.Errorf("failed to delete event for replacing: %w", err)
