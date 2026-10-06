@@ -44,7 +44,7 @@ func sampleProductionState(requestID string) *productionProvisioningState {
 func TestProductionStateStoreRestartDurableRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	store, err := newProductionStateStore(dir)
+	store, err := newProductionStateStore(dir, productionLedgerSeams{})
 	if err != nil {
 		t.Fatalf("newProductionStateStore() error = %v", err)
 	}
@@ -54,7 +54,7 @@ func TestProductionStateStoreRestartDurableRoundTrip(t *testing.T) {
 	}
 
 	// Simulate a process restart: a brand-new store instance over the same dir.
-	restarted, err := newProductionStateStore(dir)
+	restarted, err := newProductionStateStore(dir, productionLedgerSeams{})
 	if err != nil {
 		t.Fatalf("newProductionStateStore(restart) error = %v", err)
 	}
@@ -79,7 +79,7 @@ func TestProductionStateStoreRestartDurableRoundTrip(t *testing.T) {
 // TestProductionStateStoreLoadMissingIsNotFound ensures a missing request maps
 // to the sentinel the Provision replay path branches on.
 func TestProductionStateStoreLoadMissingIsNotFound(t *testing.T) {
-	store, err := newProductionStateStore(t.TempDir())
+	store, err := newProductionStateStore(t.TempDir(), productionLedgerSeams{})
 	if err != nil {
 		t.Fatalf("newProductionStateStore() error = %v", err)
 	}
@@ -95,7 +95,7 @@ func TestProductionStateStoreLoadMissingIsNotFound(t *testing.T) {
 func TestProductionStateStoreReservationIsReplayIdempotent(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	store, err := newProductionStateStore(dir)
+	store, err := newProductionStateStore(dir, productionLedgerSeams{})
 	if err != nil {
 		t.Fatalf("newProductionStateStore() error = %v", err)
 	}
@@ -118,7 +118,7 @@ func TestProductionStateStoreReservationIsReplayIdempotent(t *testing.T) {
 	}
 
 	// Restart durability: a fresh store over the same dir still observes it.
-	restarted, err := newProductionStateStore(dir)
+	restarted, err := newProductionStateStore(dir, productionLedgerSeams{})
 	if err != nil {
 		t.Fatalf("newProductionStateStore(restart) error = %v", err)
 	}

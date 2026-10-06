@@ -2,16 +2,12 @@ package soulfactory
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -38,22 +34,26 @@ var errProductionStateNotFound = errors.New("production provisioning state not f
 
 // ProductionGovernedProvisionerConfig wires the real Bahia persistence seams
 // used by the governed provisioning port. StateDir contains the saga
-// checkpoint cache and a secret-free adapter ledger. No key material or bunker
-// URI is ever written there.
+// checkpoint cache, the adapter ledger cache and the per-request lock files.
+// No key material or bunker URI is ever written there.
 //
 // SagaEvents, SagaPublisher and ServicePubkey make the daemon's canonical
 // saga-run records the authority of saga progress (audit C-45): every
 // checkpoint is published as one replaceable cp-state record per run before
 // it is reported durable, and a daemon moved to a fresh host resumes from its
-// local event store. The StateDir checkpoint file is then only a cache.
-// Without them the saga store is the local file journal alone, which is the
-// configuration tests and a daemon without a service identity run with.
+// local event store. With LedgerEncryptor they likewise make the canonical,
+// fleet-OCK encrypted adapter-ledger records the authority of the production
+// adapters' request and identity state (bahia-nfc95). The StateDir files are
+// then only caches. Without any of them both stores are the local file
+// journal alone, which is the configuration tests and a daemon without a
+// service identity run with.
 type ProductionGovernedProvisionerConfig struct {
 	StateDir        string
 	RuntimeReleases *service.AgentRuntimeReleaseService
 	DeploymentUnits repository.DeploymentUnitRepository
 	SagaEvents      saga.EventReader
 	SagaPublisher   saga.EventPublisher
+	LedgerEncryptor LedgerEncryptor
 	ServicePubkey   string
 	Logger          *slog.Logger
 }
@@ -108,11 +108,15 @@ func NewProductionGovernedProvisioner(full *FullProvisioner, cfg ProductionGover
 	if err != nil {
 		return nil, fmt.Errorf("configure governed provisioning saga store: %w", err)
 	}
-	states, err := newProductionStateStore(filepath.Join(root, "adapters"))
+	states, err := newProductionStateStore(filepath.Join(root, "adapters"), productionLedgerSeams{
+		Reader: cfg.SagaEvents, Publisher: cfg.SagaPublisher, Encryptor: cfg.LedgerEncryptor, ServicePubkey: cfg.ServicePubkey, Logger: cfg.Logger,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("configure governed provisioning adapter state: %w", err)
+		return nil, fmt.Errorf("configure governed provisioning adapter ledger: %w", err)
 	}
-	return &ProductionGovernedProvisioner{full: full, store: store, states: states, releases: cfg.RuntimeReleases, units: cfg.DeploymentUnits}, nil
+	// Purging a saga run (saga.PurgeExpired) tombstones the request's ledger
+	// record with it, so the adapter ledger never outlives the run it serves.
+	return &ProductionGovernedProvisioner{full: full, store: ledgerPurgingStore{Store: store, states: states}, states: states, releases: cfg.RuntimeReleases, units: cfg.DeploymentUnits}, nil
 }
 
 // Provision is the live kind-5950 caller. An exact relay replay reuses the
@@ -192,6 +196,13 @@ type productionProvisioningState struct {
 	Steps               map[OrderedStep]productionStepState `json:"steps,omitempty"`
 	ActiveSoulPublished bool                                `json:"active_soul_published,omitempty"`
 	TerminalResultStage saga.Stage                          `json:"terminal_result_stage,omitempty"`
+	// Version is the ledger's optimistic version of this request's state: 0
+	// before the first save (and in a pre-canonical file), then one more per
+	// committed save. The store maintains it; callers never set it.
+	Version uint64 `json:"version,omitempty"`
+	// SuccessResultID names the retained success result in the fleet-visible
+	// record; the signed event itself is service-only (ledger record layout).
+	SuccessResultID string `json:"success_result_id,omitempty"`
 }
 
 type productionIdentityReservation struct {
@@ -201,143 +212,7 @@ type productionIdentityReservation struct {
 	RequestID string    `json:"request_id"`
 	RunID     string    `json:"run_id"`
 	CreatedAt time.Time `json:"created_at"`
-}
-
-type productionStateStore struct {
-	dir string
-	mu  sync.Mutex
-}
-
-func newProductionStateStore(dir string) (*productionStateStore, error) {
-	if err := os.MkdirAll(filepath.Join(dir, "requests"), 0o700); err != nil {
-		return nil, err
-	}
-	if err := os.MkdirAll(filepath.Join(dir, "identities"), 0o700); err != nil {
-		return nil, err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return nil, err
-	}
-	return &productionStateStore{dir: dir}, nil
-}
-
-func productionStateName(namespace, value string) string {
-	sum := sha256.Sum256([]byte(namespace + "\x00" + strings.TrimSpace(value)))
-	return hex.EncodeToString(sum[:]) + ".json"
-}
-
-func (s *productionStateStore) requestPath(requestID string) string {
-	return filepath.Join(s.dir, "requests", productionStateName("request", requestID))
-}
-
-func (s *productionStateStore) reservationPath(agentID string) string {
-	return filepath.Join(s.dir, "identities", productionStateName("agent", agentID))
-}
-
-func (s *productionStateStore) load(ctx context.Context, requestID string) (*productionProvisioningState, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var state productionProvisioningState
-	if err := readProductionJSON(s.requestPath(requestID), &state); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, errProductionStateNotFound
-		}
-		return nil, err
-	}
-	if state.Schema != productionStateSchema || state.RequestID != requestID || state.AgentID == "" || state.RunID == "" || state.SpecHash == "" {
-		return nil, fmt.Errorf("invalid production provisioning state")
-	}
-	if state.Steps == nil {
-		state.Steps = map[OrderedStep]productionStepState{}
-	}
-	return &state, nil
-}
-
-func (s *productionStateStore) save(ctx context.Context, state *productionProvisioningState) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if state == nil || state.RequestID == "" || state.RunID == "" || state.AgentID == "" || state.SpecHash == "" {
-		return fmt.Errorf("incomplete production provisioning state")
-	}
-	state.Schema = productionStateSchema
-	if state.Steps == nil {
-		state.Steps = map[OrderedStep]productionStepState{}
-	}
-	state.Soul.BunkerURI = ""
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return writeProductionJSON(s.requestPath(state.RequestID), state)
-}
-
-func (s *productionStateStore) reservation(ctx context.Context, spec ProvisioningSpec, create bool) (*productionIdentityReservation, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, false, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	path := s.reservationPath(spec.AgentID)
-	var current productionIdentityReservation
-	if err := readProductionJSON(path, &current); err == nil {
-		if current.Schema != productionReservationSchema || current.AgentID != spec.AgentID {
-			return nil, false, fmt.Errorf("invalid governed identity reservation")
-		}
-		return &current, false, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, false, err
-	}
-	if !create {
-		return nil, false, nil
-	}
-	current = productionIdentityReservation{
-		Schema: productionReservationSchema, AgentID: spec.AgentID, SpecHash: spec.SpecHash,
-		RequestID: spec.RequestID, RunID: spec.RunID, CreatedAt: time.Now().UTC(),
-	}
-	if err := writeProductionJSON(path, &current); err != nil {
-		return nil, false, err
-	}
-	return &current, true, nil
-}
-
-func readProductionJSON(path string, target any) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if err := json.Unmarshal(data, target); err != nil {
-		return fmt.Errorf("decode %s: %w", filepath.Base(path), err)
-	}
-	return nil
-}
-
-func writeProductionJSON(path string, value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	file, err := os.CreateTemp(filepath.Dir(path), ".governed-*")
-	if err != nil {
-		return err
-	}
-	name := file.Name()
-	defer func() { _ = os.Remove(name) }()
-	if err = file.Chmod(0o600); err == nil {
-		_, err = file.Write(data)
-	}
-	if err == nil {
-		err = file.Sync()
-	}
-	if closeErr := file.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	return os.Rename(name, path)
+	Version   uint64    `json:"version,omitempty"`
 }
 
 type productionProvisioningPort struct {

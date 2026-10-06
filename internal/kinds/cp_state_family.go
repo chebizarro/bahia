@@ -164,6 +164,16 @@ const (
 // wire kind of its own: it is a 30900 discriminator only.
 const CPStateFamilySoulFactorySagaRun CPStateFamily = 32025
 
+// CPStateFamilySoulFactoryAdapterLedger is the canonical adapter ledger of
+// governed Soul Factory provisioning (bahia-nfc95): one replaceable record
+// per provisioning request (the resolved request, the Soul projection, the
+// registry identifiers and the per-step resource references the production
+// adapters resume from) and one per reserved agent identity. The records
+// are fleet-OCK encrypted; the retained signed success result is in the
+// service-only layer. 32026 is the adoption binding and 32027 the HiveCI
+// release ledger. Like the saga-run family it is a 30900 discriminator only.
+const CPStateFamilySoulFactoryAdapterLedger CPStateFamily = 32028
+
 // FleetOCKScope is the well-known orgID value used for fleet-wide
 // confidential cp-state (payments, security findings/schedules). The OCK
 // for this scope is wrapped to all fleet operators (config authorized_pubkeys

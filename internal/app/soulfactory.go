@@ -68,6 +68,9 @@ type soulFactorySagaSeams struct {
 	Events        saga.EventReader
 	Publisher     saga.EventPublisher
 	ServicePubkey string
+	// LedgerEncryptor encrypts the canonical adapter-ledger records
+	// (bahia-nfc95); nil only when the daemon has no confidential encryptor.
+	LedgerEncryptor soulfactory.LedgerEncryptor
 }
 
 func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *service.RegistryService, runtimeReleases *service.AgentRuntimeReleaseService, deploymentUnits repository.DeploymentUnitRepository, sagaSeams soulFactorySagaSeams, logger *zap.Logger) (*soulFactoryRuntime, error) {
@@ -226,6 +229,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		DeploymentUnits: deploymentUnits,
 		SagaEvents:      sagaSeams.Events,
 		SagaPublisher:   sagaSeams.Publisher,
+		LedgerEncryptor: sagaSeams.LedgerEncryptor,
 		ServicePubkey:   sagaSeams.ServicePubkey,
 		Logger:          slogLogger,
 	})

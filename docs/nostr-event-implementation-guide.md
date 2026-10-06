@@ -925,6 +925,58 @@ channel (at most 50 attempts, 512 JSON bytes per payload, 256 error characters,
 Mutation-bound repository decorators publish after successful persistence via
 `publishControlState`; the legacy mutation path is not duplicated.
 
+## Governed Soul Factory provisioning records (C-45, bahia-nfc95)
+
+Governed provisioning keeps no local-file authority. Two `30900` families,
+both authored by the daemon service key and read back from its local event
+store (design §3.3, §3.6, §6.2), carry everything a daemon moved to a fresh
+host needs to resume, operate or replay a run. The state directory
+(`soul_factory.provisioning_state_dir`) holds only caches of these records,
+the per-request lock files and the Signet enrollment state.
+
+| Legacy discriminator | `#t` | Addressable `d` | Content |
+|---|---|---|---|
+| `32025` saga run | `soul-factory-saga-run` | `soul-factory:saga-run:<SHA-256(request event ID)>` | plain `bahia.state.soulfactory-saga-run.v1` (stage, resume stage, version, one-way resource references, compensations, sanitized failure, newest 16 transitions/failures with totals); protected topic |
+| `32028` adapter ledger, request | `soul-factory-adapter-ledger`, `record=request` | `soul-factory:adapter-request:<SHA-256("request\0" + request event ID)>` | fleet-OCK `bahia.confidential.aead.v1`; event tag `schema=bahia.state.soulfactory-adapter-request.v1` |
+| `32028` adapter ledger, identity | `soul-factory-adapter-ledger`, `record=identity` | `soul-factory:adapter-identity:<SHA-256("agent\0" + agent ID)>` | fleet-OCK `bahia.confidential.aead.v1`; event tag `schema=bahia.state.soulfactory-adapter-identity.v1` |
+
+Every record is published outbox-first (a publish the outbox keeps for retry
+counts) before the checkpoint or adapter step that produced it is reported
+durable, with a `created_at` strictly after the record it replaces. Removal is
+a tombstone at the same coordinate (`deleted=true`, empty content, `version`
+tag) which retires every copy at or below that version; purging a saga run
+tombstones the request's ledger record with it. Both ledger records carry a
+`version` tag; the request content is refused before publish when it would
+exceed the event store's 65535-byte content cap. Precedence on read is the
+highest version, a tie going to the copy the process committed, then the
+record, then the file cache; a pre-canonical file (version 0) is resumed from
+once and the next save publishes version 1.
+
+The adapter ledger's public tags are only `d`, `domain`, `schema`, `entity`,
+`t`, `legacy_kind`, `deleted`, `record` and `version`: no agent id, request id,
+run id or stage is readable without the fleet key. Confidentiality of the
+request content, field by field (fleet-visible = OCK layer any fleet operator
+decrypts; service-only = `service_inner`, NIP-44 to the service key):
+
+| Field | Classification | Why |
+|---|---|---|
+| `request_id`, `run_id`, `agent_id`, `spec_hash`, `runtime`, `request_method`, `version`, `prepared`, `identity_created`, `active_soul_published`, `success_delivered`, `terminal_result_stage` | fleet-visible | correlation identifiers and progress flags; the ids are public event ids already |
+| `request` (the resolved kind-5950 request) | fleet-visible | the public request, retained so a replay uses the exact input |
+| `resolved` (template, draft, fleet-config snapshot, identity/persona/runtime/relay/workspace specs) | fleet-visible | names private workspace and runtime targets; the fleet-config validator refuses literal secret values (placeholders only); the Signet identity contract (bunker URL) is excluded from the payload |
+| `soul` (Soul projection: pubkey, npub, NIP-05, persona markdown, permissions, asset references, runtime binding, readiness evidence) | fleet-visible | the same projection the public `31951` carries; `bunker_uri` is always empty |
+| `soul.bunker_uri` | out of the record | one-time NIP-46 handoff secret; consumed by the runtime step and the Signet enrollment manager, never persisted |
+| `service_id`, `environment_id`, `deployment_unit_id`, `deployment_intent_id`, `release`, `release_source`, `release_binding` | fleet-visible | internal registry identifiers and release provenance |
+| `runtime_result` (kind-38386 envelope) | fleet-visible | the runtime's signed plaintext relay event, retained as evidence |
+| `steps` (per-step observed resources) | fleet-visible | one-way resource references, ownership and correlation |
+| `success_result_id` | fleet-visible | names the retained result |
+| `success_result` (the signed kind-6950 event) | service-only | a signed, possibly undelivered event is deliverable by whoever holds it; delivery is the daemon's |
+
+The identity record (`schema`, `agent_id`, `spec_hash`, `request_id`,
+`run_id`, `created_at`, `version`) is wholly fleet-visible. Neither record
+holds a secret value; keys, tokens and bunker URIs never enter the ledger.
+Relay read auth treats both topics as protected (the ledger is ciphertext in
+any case).
+
 ## Policy evaluation intent and build ownership (bahia-irsry.77)
 
 For MCP evaluation, use a client-signed `30900` `domain=policy`, `op=evaluate`

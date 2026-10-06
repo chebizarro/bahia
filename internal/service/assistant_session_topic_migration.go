@@ -2,14 +2,12 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 
 	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
-	"github.com/openagentsinc/bahia/internal/repository"
 )
 
 // AssistantSessionTopicMigration is a one-time startup migration that adds the
@@ -17,12 +15,12 @@ import (
 // before bahia-irsry.43. NIP-01 relays index only single-letter tags, so the
 // recovery REQ (which scopes on #t=assistant-session) misses untagged records.
 //
-// The migration reads from the daemon's local event store (a local query, not
-// a relay REQ), selects legacy records client-side, and re-publishes each one
-// with the tag added. It is idempotent: a no-op once no untagged records remain.
-// No persistent flag is needed.
+// The migration enumerates the daemon's local event store completely (a local
+// query with no page limit, not a relay REQ), selects legacy records
+// client-side, and re-publishes each one with the tag added. It is idempotent:
+// a no-op once no untagged records remain. No persistent flag is needed.
 type AssistantSessionTopicMigration struct {
-	history       repository.NostrEventRepository
+	local         SupervisionEventStore
 	signer        nostr.Signer
 	publisher     AssistantEventPublisher
 	servicePubkey string
@@ -31,8 +29,9 @@ type AssistantSessionTopicMigration struct {
 
 // AssistantSessionTopicMigrationConfig holds the wiring for the migration.
 type AssistantSessionTopicMigrationConfig struct {
-	// History is the daemon's local event store (projectionHistory).
-	History       repository.NostrEventRepository
+	// LocalStore is the daemon's local event store. Its QueryEvents pages to
+	// completion, so every legacy record is migrated however many there are.
+	LocalStore    SupervisionEventStore
 	Signer        nostr.Signer
 	Publisher     AssistantEventPublisher
 	ServicePubkey string
@@ -47,7 +46,7 @@ func NewAssistantSessionTopicMigration(cfg AssistantSessionTopicMigrationConfig)
 		logger = slog.Default()
 	}
 	return &AssistantSessionTopicMigration{
-		history:       cfg.History,
+		local:         cfg.LocalStore,
 		signer:        cfg.Signer,
 		publisher:     cfg.Publisher,
 		servicePubkey: cfg.ServicePubkey,
@@ -58,50 +57,50 @@ func NewAssistantSessionTopicMigration(cfg AssistantSessionTopicMigrationConfig)
 // Run migrates untagged assistant session events. It is safe to call on every
 // startup: once all records carry the t tag, it does nothing.
 func (m *AssistantSessionTopicMigration) Run(ctx context.Context) error {
-	if m.history == nil || m.signer == nil || m.publisher == nil || m.servicePubkey == "" {
+	if m.local == nil || m.signer == nil || m.publisher == nil || m.servicePubkey == "" {
 		m.logger.Warn("assistant session topic migration skipped: missing dependencies")
 		return nil
 	}
-
-	// Query the local store for kind 30900 records by the service author with
-	// the assistant session schema tag. This is a local query — no relay REQ,
-	// no TagMap, no archtest issue.
-	v1Records, err := m.history.FindByTag(ctx, domain.AssistantSessionTagSchema, domain.AssistantSessionSchema, []int{int(domain.KindAssistantSessionState)}, 500)
+	author, err := nostr.PubKeyFromHex(m.servicePubkey)
 	if err != nil {
-		m.logger.Warn("assistant session topic migration: v1 query failed", "error", err)
-		return nil
-	}
-	v2Records, err := m.history.FindByTag(ctx, domain.AssistantSessionTagSchema, domain.AssistantSessionSchemaV2, []int{int(domain.KindAssistantSessionState)}, 500)
-	if err != nil {
-		m.logger.Warn("assistant session topic migration: v2 query failed", "error", err)
+		m.logger.Warn("assistant session topic migration skipped: invalid service pubkey", "error", err)
 		return nil
 	}
 
-	records := append(v1Records, v2Records...)
-	migrated := 0
-	for _, rec := range records {
+	// Enumerate every assistant session record the daemon authored, with no
+	// limit: the local store pages to completion. Schema and topic are
+	// selected client-side (no multi-letter tag filter), so legacy v1 and v2
+	// records are found alike.
+	scanned, migrated := 0, 0
+	for ev := range m.local.QueryEvents(nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{author}}) {
 		if ctx.Err() != nil {
 			return nil
 		}
-		if rec.PubKey != m.servicePubkey {
+		schema := tagValueOf(ev.Tags, domain.AssistantSessionTagSchema)
+		if schema != domain.AssistantSessionSchema && schema != domain.AssistantSessionSchemaV2 {
 			continue
 		}
-		tags, err := parseTags(rec.Tags)
-		if err != nil {
-			m.logger.Warn("assistant session topic migration: parse tags failed", "event_id", rec.ID, "error", err)
-			continue
-		}
-		if hasTopicTag(tags) {
+		scanned++
+		if hasTopicTag(ev.Tags) {
 			continue // Already migrated.
 		}
-		if err := m.republishWithTopic(ctx, rec, tags); err != nil {
-			m.logger.Warn("assistant session topic migration: republish failed", "event_id", rec.ID, "error", err)
+		if err := m.republishWithTopic(ctx, ev); err != nil {
+			m.logger.Warn("assistant session topic migration: republish failed", "event_id", ev.ID.Hex(), "error", err)
 			continue
 		}
 		migrated++
 	}
-	m.logger.Info("assistant session topic migration completed", "records_scanned", len(records), "migrated", migrated)
+	m.logger.Info("assistant session topic migration completed", "records_scanned", scanned, "migrated", migrated)
 	return nil
+}
+
+func tagValueOf(tags nostr.Tags, name string) string {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == name {
+			return tag[1]
+		}
+	}
+	return ""
 }
 
 // hasTopicTag returns true if the tags include ["t", "assistant-session"].
@@ -114,33 +113,20 @@ func hasTopicTag(tags nostr.Tags) bool {
 	return false
 }
 
-// parseTags decodes the JSON tags from a NostrEventRecord.
-func parseTags(raw json.RawMessage) (nostr.Tags, error) {
-	var tags nostr.Tags
-	if err := json.Unmarshal(raw, &tags); err != nil {
-		return nil, err
-	}
-	return tags, nil
-}
-
 // republishWithTopic creates a new event with the same coordinate but adds
 // the t=assistant-session tag, bumps created_at, re-signs, and publishes.
-func (m *AssistantSessionTopicMigration) republishWithTopic(ctx context.Context, rec repository.NostrEventRecord, existingTags nostr.Tags) error {
+func (m *AssistantSessionTopicMigration) republishWithTopic(ctx context.Context, legacy nostr.Event) error {
 	// Add the t tag to the existing tags.
-	newTags := make(nostr.Tags, 0, len(existingTags)+1)
-	for _, tag := range existingTags {
-		newTags = append(newTags, tag)
-	}
+	newTags := make(nostr.Tags, 0, len(legacy.Tags)+1)
+	newTags = append(newTags, legacy.Tags...)
 	newTags = append(newTags, nostr.Tag{"t", kinds.AssistantSessionTopic})
 
-	// Bump created_at by 1 second so the relay replaces the old event.
-	created := nostr.Timestamp(rec.CreatedAt.Unix() + 1)
-
 	ev := nostr.Event{
-		Kind:      nostr.Kind(rec.Kind),
-		CreatedAt: created,
+		Kind: legacy.Kind,
+		// Bump created_at by 1 second so the relay replaces the old event.
+		CreatedAt: legacy.CreatedAt + 1,
 		Tags:      newTags,
-		Content:   rec.Content,
+		Content:   legacy.Content,
 	}
 	if err := m.signer.SignEvent(ctx, &ev); err != nil {
 		return err

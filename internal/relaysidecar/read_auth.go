@@ -260,6 +260,8 @@ var publicCPStateTopics = map[string]bool{
 	//   assistant-transcript — private conversation content
 	//   assistant-session — session recovery data
 	//   soul-factory-saga-run — governed provisioning saga progress (C-45)
+	//   soul-factory-adapter-ledger — governed provisioning adapter ledger,
+	//     fleet-OCK ciphertext (bahia-nfc95)
 	//   relay-settings — operator relay policy
 	//   config-status — config-fabric state (admin-only)
 }
