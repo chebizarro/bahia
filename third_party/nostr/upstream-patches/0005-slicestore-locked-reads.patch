@@ -1,36 +1,94 @@
-diff --git a/eventstore/slicestore/lib.go b/eventstore/slicestore/lib.go
-index 8d637957..d2d9d34b 100644
---- a/eventstore/slicestore/lib.go
-+++ b/eventstore/slicestore/lib.go
-@@ -34,6 +34,11 @@ func (b *SliceStore) QueryEvents(filter nostr.Filter, maxLimit int) iter.Seq[nos
- 			maxLimit = tlimit
- 		}
+--- a/eventstore/slicestore/lib.go	2026-10-05 22:29:28
++++ b/eventstore/slicestore/lib.go	2026-10-05 22:29:17
+@@ -27,45 +27,67 @@
+ func (b *SliceStore) Close() {}
  
-+		// Take the window under the lock: SaveEvent/DeleteEvent shift the
-+		// backing array concurrently (khatru runs REQ and EVENT handlers on
-+		// separate goroutines). The lock cannot be held across yield, so
-+		// iterate over a copy of the matching window instead.
+ func (b *SliceStore) QueryEvents(filter nostr.Filter, maxLimit int) iter.Seq[nostr.Event] {
++	// Take the window under the lock: SaveEvent/DeleteEvent shift the backing
++	// array concurrently (khatru runs REQ and EVENT handlers on separate
++	// goroutines). The lock cannot be held across yield, so iterate a copy.
+ 	return func(yield func(nostr.Event) bool) {
+-		if tlimit := filter.GetTheoreticalLimit(); tlimit == 0 {
+-			return
+-		} else if tlimit < maxLimit {
+-			maxLimit = tlimit
+-		}
 +		b.Lock()
- 		// efficiently determine where to start and end
- 		start := 0
- 		end := len(b.internal)
-@@ -46,11 +51,14 @@ func (b *SliceStore) QueryEvents(filter nostr.Filter, maxLimit int) iter.Seq[nos
- 
- 		// ham
- 		if end < start {
-+			b.Unlock()
- 			return
- 		}
-+		window := slices.Clone(b.internal[start:end])
++		window, maxLimit := b.window(filter, maxLimit)
 +		b.Unlock()
++		b.iterate(window, filter, maxLimit, yield)
++	}
++}
  
- 		count := 0
+-		// efficiently determine where to start and end
+-		start := 0
+-		end := len(b.internal)
+-		if filter.Until != 0 {
+-			start, _ = slices.BinarySearchFunc(b.internal, filter.Until, eventTimestampComparator)
+-		}
+-		if filter.Since != 0 {
+-			end, _ = slices.BinarySearchFunc(b.internal, filter.Since, eventTimestampComparator)
+-		}
++// queryLocked is QueryEvents for callers that already hold the lock.
++func (b *SliceStore) queryLocked(filter nostr.Filter, maxLimit int) iter.Seq[nostr.Event] {
++	return func(yield func(nostr.Event) bool) {
++		window, maxLimit := b.window(filter, maxLimit)
++		b.iterate(window, filter, maxLimit, yield)
++	}
++}
+ 
+-		// ham
+-		if end < start {
+-			return
+-		}
++// window returns a copy of the events that can match filter's time bounds.
++// The caller holds the lock.
++func (b *SliceStore) window(filter nostr.Filter, maxLimit int) ([]nostr.Event, int) {
++	if tlimit := filter.GetTheoreticalLimit(); tlimit == 0 {
++		return nil, 0
++	} else if tlimit < maxLimit {
++		maxLimit = tlimit
++	}
++	// efficiently determine where to start and end
++	start := 0
++	end := len(b.internal)
++	if filter.Until != 0 {
++		start, _ = slices.BinarySearchFunc(b.internal, filter.Until, eventTimestampComparator)
++	}
++	if filter.Since != 0 {
++		end, _ = slices.BinarySearchFunc(b.internal, filter.Since, eventTimestampComparator)
++	}
++	// ham
++	if end < start {
++		return nil, 0
++	}
++	return slices.Clone(b.internal[start:end]), maxLimit
++}
+ 
+-		count := 0
 -		for _, event := range b.internal[start:end] {
-+		for _, event := range window {
- 			if count == maxLimit {
- 				break
+-			if count == maxLimit {
+-				break
++func (b *SliceStore) iterate(window []nostr.Event, filter nostr.Filter, maxLimit int, yield func(nostr.Event) bool) {
++	count := 0
++	for _, event := range window {
++		if count == maxLimit {
++			break
++		}
++		if filter.Matches(event) {
++			if !yield(event) {
++				return
  			}
-@@ -66,6 +74,8 @@ func (b *SliceStore) QueryEvents(filter nostr.Filter, maxLimit int) iter.Seq[nos
+-
+-			if filter.Matches(event) {
+-				if !yield(event) {
+-					return
+-				}
+-				count++
+-			}
++			count++
+ 		}
+ 	}
  }
  
  func (b *SliceStore) CountEvents(filter nostr.Filter) (uint32, error) {
@@ -39,3 +97,12 @@ index 8d637957..d2d9d34b 100644
  	var val uint32
  	for _, event := range b.internal {
  		if filter.Matches(event) {
+@@ -132,7 +154,7 @@
+ 	}
+ 
+ 	shouldStore := true
+-	for previous := range b.QueryEvents(filter, 1) {
++	for previous := range b.queryLocked(filter, 1) {
+ 		if nostr.IsOlder(previous, evt) {
+ 			if err := b.delete(previous.ID); err != nil {
+ 				return nil, fmt.Errorf("failed to delete event for replacing: %w", err)
