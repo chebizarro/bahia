@@ -11,7 +11,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/mcp"
-	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
@@ -36,12 +35,10 @@ type assistantExecutionDeps struct {
 	// RelayConnections signals relay (re)connection of the pool behind
 	// Publisher; fenced sessions are healed on each signal. Optional.
 	RelayConnections assistantRelayConnectionNotifier
-	// History is the daemon's local event store for the service pubkey.
-	// Used by the assistant session topic migration (bahia-irsry.43).
-	History repository.NostrEventRepository
 	// LocalStore is the daemon's local event store; startup recovery
 	// enumerates every assistant session from it once Readiness reports the
-	// first relay catch-up complete (audit C-46).
+	// first relay catch-up complete (audit C-46), after the topic migration
+	// (bahia-irsry.43) has re-tagged every legacy session it holds.
 	LocalStore service.SupervisionEventStore
 	Readiness  service.SupervisionReadiness
 }

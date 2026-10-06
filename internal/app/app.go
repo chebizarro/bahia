@@ -2365,7 +2365,6 @@ func New(cfg *config.Config) (*App, error) {
 			InitialSessions:  loadAssistantSessions(ctx, nostrEventRepo, logger),
 			ExternalMCP:      externalMCP,
 			RelayConnections: controlPlanePool,
-			History:          projectionHistory,
 			LocalStore:       localEventStore,
 			Readiness:        bootstrapper,
 		})
