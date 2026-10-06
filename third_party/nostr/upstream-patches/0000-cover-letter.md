@@ -56,3 +56,12 @@ the `pendingListener` interaction does not apply.
 Wait for upstream activity in `subscription.go` / `relay.go` / `khatru/handlers.go`
 to avoid unnecessary conflicts. Patches 0001–0003 are independent; 0004 depends
 on the server not having its own gap-buffer mechanism.
+
+### 0005: slicestore reads without the lock
+
+`SliceStore.QueryEvents` and `CountEvents` iterate the backing slice while
+`SaveEvent`/`DeleteEvent` may be shifting it from another goroutine (khatru
+handles REQ and EVENT on separate goroutines). Snapshot the queried window under
+the lock and iterate the copy; hold the lock in `CountEvents`.
+
+**Status**: Applied to Bahia's vendored copy. Ready for upstream review.

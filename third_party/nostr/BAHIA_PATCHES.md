@@ -411,3 +411,18 @@ is not required for correctness.
 | `Pool.subMany()` | `pool.go:434` | Forwards `IncomingEvent{Event, Relay}` | None |
 | `Pool.subManyEose()` | `pool.go:625` | Same as subMany, with EOSE collection | None |
 | `FetchManyReplaceable()` | `pool.go` | Compares by `created_at` (latest wins) | None |
+
+## eventstore/slicestore: unlocked reads (CI race job, 2026-10-05)
+
+`SliceStore.QueryEvents` and `CountEvents` iterated `b.internal` without the
+mutex that `SaveEvent`/`DeleteEvent`/`ReplaceEvent` hold while shifting the
+backing array. khatru runs REQ and EVENT handlers on separate goroutines, so
+any Bahia test that drives a khatru relay over a `SliceStore` (ten files, e.g.
+`internal/adapters/nostr/relay_pool_stack_test.go`) can trip `-race` under
+load; `make race` on GitHub Actions did (`TestRelayPoolPagesPastNIP11MaxLimit`).
+
+- `QueryEvents` computes the since/until window and clones it under the lock,
+  then iterates the clone (the lock cannot be held across `yield`).
+- `CountEvents` holds the lock.
+
+Prepared for upstream as `upstream-patches/0005-slicestore-locked-reads.patch`.

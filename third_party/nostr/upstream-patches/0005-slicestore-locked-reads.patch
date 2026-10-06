@@ -1,0 +1,41 @@
+diff --git a/eventstore/slicestore/lib.go b/eventstore/slicestore/lib.go
+index 8d637957..d2d9d34b 100644
+--- a/eventstore/slicestore/lib.go
++++ b/eventstore/slicestore/lib.go
+@@ -34,6 +34,11 @@ func (b *SliceStore) QueryEvents(filter nostr.Filter, maxLimit int) iter.Seq[nos
+ 			maxLimit = tlimit
+ 		}
+ 
++		// Take the window under the lock: SaveEvent/DeleteEvent shift the
++		// backing array concurrently (khatru runs REQ and EVENT handlers on
++		// separate goroutines). The lock cannot be held across yield, so
++		// iterate over a copy of the matching window instead.
++		b.Lock()
+ 		// efficiently determine where to start and end
+ 		start := 0
+ 		end := len(b.internal)
+@@ -46,11 +51,14 @@ func (b *SliceStore) QueryEvents(filter nostr.Filter, maxLimit int) iter.Seq[nos
+ 
+ 		// ham
+ 		if end < start {
++			b.Unlock()
+ 			return
+ 		}
++		window := slices.Clone(b.internal[start:end])
++		b.Unlock()
+ 
+ 		count := 0
+-		for _, event := range b.internal[start:end] {
++		for _, event := range window {
+ 			if count == maxLimit {
+ 				break
+ 			}
+@@ -66,6 +74,8 @@ func (b *SliceStore) QueryEvents(filter nostr.Filter, maxLimit int) iter.Seq[nos
+ }
+ 
+ func (b *SliceStore) CountEvents(filter nostr.Filter) (uint32, error) {
++	b.Lock()
++	defer b.Unlock()
+ 	var val uint32
+ 	for _, event := range b.internal {
+ 		if filter.Matches(event) {
