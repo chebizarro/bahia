@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -394,4 +395,41 @@ func TestSecurityCanonicalFindingDetailsAreReassembledAndDeduped(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, high, 1)
 	require.Equal(t, "replacement detail", high[0].Details, "the base record hides stale multipart coordinates")
+}
+
+// A retired run is replaced on its coordinate by a tombstone carrying a
+// NIP-40 expiration: readers drop it at once, the local store keeps one
+// coordinate for it (bounded growth), and the store's expiry prune removes
+// the tombstone once it has expired (bahia-u5whr item 6).
+func TestSecurityCanonicalRetiredRunIsTombstonedAndExpires(t *testing.T) {
+	ctx := context.Background()
+	daemon := startLocalHistoryDaemon(t, t.TempDir(), newRelayScript())
+	stack := newLocalSecurityStack(daemon, nil)
+	canonical := NewSecurityCanonicalPublisher(daemon.projector, &nonceConfidentialEncryptor{}, zap.NewNop())
+	finished := time.Now().UTC().Add(-time.Hour)
+	run := domain.SecurityScanRun{ID: uuid.New(), TargetKeyHash: "target", Status: domain.SecurityScanCompleted, CreatedAt: finished.Add(-time.Minute), FinishedAt: &finished}
+	require.NoError(t, stack.store.CreateSecurityScanRun(ctx, &run))
+	runs, err := canonical.ListSecurityRuns(ctx, uuid.Nil, "target")
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	require.NoError(t, canonical.RetireRun(ctx, &run, expiresAt))
+	runs, err = canonical.ListSecurityRuns(ctx, uuid.Nil, "target")
+	require.NoError(t, err)
+	require.Empty(t, runs, "a retired run is dropped by readers")
+	var held []nostr.Event
+	for ev := range daemon.store.QueryEvents(nostr.Filter{Kinds: []nostr.Kind{KindCASControlState}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicSecurityRun}}}) {
+		held = append(held, ev)
+	}
+	require.Len(t, held, 1, "the run coordinate holds one event: the tombstone")
+	require.True(t, isTombstoneTags(held[0].Tags))
+	require.Equal(t, strconv.FormatInt(expiresAt.Unix(), 10), tagValue(held[0].Tags, "expiration"))
+
+	removed, err := daemon.store.PruneExpiredEvents(expiresAt.Add(-time.Minute))
+	require.NoError(t, err)
+	require.Zero(t, removed, "the tombstone stays until it expires")
+	removed, err = daemon.store.PruneExpiredEvents(expiresAt)
+	require.NoError(t, err)
+	require.Equal(t, 1, removed, "the expired tombstone leaves the store")
 }

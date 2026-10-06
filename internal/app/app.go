@@ -2120,7 +2120,7 @@ func New(cfg *config.Config) (*App, error) {
 		// The scheduler derives schedules from retained policy and target
 		// cp-state, so it waits for the local store's first catch-up.
 		bgManager.RegisterWithOptions(service.NewSecurityScheduler(service.SecuritySchedulerConfig{
-			Repo: canonicalSecurity, Scanner: securityScanner, Deriver: policySvc, Ready: intentReadiness.Ready, Logger: logger,
+			Repo: canonicalSecurity, Scanner: securityScanner, Deriver: policySvc, Pruner: canonicalSecurity, Ready: intentReadiness.Ready, Logger: logger,
 		}))
 		logger.Info("security OSV scanner and canonical scheduler registered", zap.Bool("sql_index", securityRepo != nil))
 	}

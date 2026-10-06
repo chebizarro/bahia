@@ -242,6 +242,16 @@ func (s *Subscriber) pruneStore() {
 	if removed > 0 {
 		s.logger.Info("pruned expired regular events from the local event store", zap.Int("removed", removed))
 	}
+	// NIP-40: expired events of any kind leave the store on the same pass
+	// (retired run tombstones, expired status records; bahia-u5whr).
+	expired, err := s.store.PruneExpiredEvents(s.now())
+	if err != nil {
+		s.logger.Warn("prune expired local events failed", zap.Error(err))
+		return
+	}
+	if expired > 0 {
+		s.logger.Info("pruned NIP-40 expired events from the local event store", zap.Int("removed", expired))
+	}
 }
 
 // runRelay keeps one relay in sync until ctx ends, the relay leaves the pool,

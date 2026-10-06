@@ -35,6 +35,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -453,6 +455,39 @@ func (s *Store) PruneRegularEvents(cutoff time.Time) (int, error) {
 		}
 	}
 	return len(expired), nil
+}
+
+// PruneExpiredEvents deletes stored events of any kind whose NIP-40
+// expiration tag is at or before now, and returns how many it removed. It is
+// what lets a tombstone with an expiration (for example a retired security
+// run, bahia-u5whr) leave the store as it leaves the relay sidecar's
+// retention sweep; without it, latest-wins coordinates would stay for good.
+// Events without a parsable expiration are kept.
+func (s *Store) PruneExpiredEvents(now time.Time) (int, error) {
+	deadline := now.Unix()
+	var expired []nostr.ID
+	for ev := range s.QueryEvents(nostr.Filter{}) {
+		if expiresAt, ok := expirationOf(ev); ok && expiresAt <= deadline {
+			expired = append(expired, ev.ID)
+		}
+	}
+	for i, id := range expired {
+		if err := s.DeleteEvent(id); err != nil {
+			return i, fmt.Errorf("prune expired local event %s: %w", id.Hex(), err)
+		}
+	}
+	return len(expired), nil
+}
+
+// expirationOf returns ev's NIP-40 expiration, when it carries a valid one.
+func expirationOf(ev nostr.Event) (int64, bool) {
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "expiration" {
+			expiresAt, err := strconv.ParseInt(strings.TrimSpace(tag[1]), 10, 64)
+			return expiresAt, err == nil && expiresAt > 0
+		}
+	}
+	return 0, false
 }
 
 // Cursor returns the committed resume cursor for (relayURL, filterHash), or 0
