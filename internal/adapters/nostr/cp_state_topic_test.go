@@ -74,6 +74,7 @@ var cpStateTopicsByFamily = map[int]string{
 	KindSecurityFindingDetailRecord:     kinds.CPStateTopicSecurityFindingDetail,
 	KindSecurityTargetRecord:            kinds.CPStateTopicSecurityTarget,
 	KindSecurityRunRecord:               kinds.CPStateTopicSecurityRun,
+	KindAdoptionBindingRecord:           kinds.CPStateTopicAdoptionBinding,
 	KindHiveCIPolicyRecord:              kinds.CPStateTopicHiveCIPolicy,
 	KindHiveCIResultRecord:              kinds.CPStateTopicHiveCIResult,
 	KindHiveCIInitiationRecord:          kinds.CPStateTopicHiveCIInitiation,

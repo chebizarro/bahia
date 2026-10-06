@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -26,40 +27,126 @@ const (
 	adoptionStatusCreated = "created"
 	adoptionStatusUpdated = "updated"
 	adoptionStatusFailed  = "failed"
+
+	// adoptionBackfillMarker records, in the local outbox's control records,
+	// that the SQL-era adopted_runtime_identity rows were published as
+	// canonical bindings once.
+	adoptionBackfillMarker = "adoption-binding-backfill-v1"
+	adoptionBackfillPage   = 500
 )
 
-// AdoptionCanonicalPublisher publishes canonical 30900 cp-state records for
-// services and environments created by adoption imports. When set on the
-// AdoptionService, each successful import publishes the service-registry and
-// environment-registry records directly from the mutation site instead of
-// reactively through the projector bus handler (Phase 3 X1).
-type AdoptionCanonicalPublisher interface {
-	PublishServiceRegistry(ctx context.Context, svc *domain.Service) error
-	PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment) error
+// Adoption step names, in publication order. A result that did not complete
+// names the step whose canonical publish failed.
+const (
+	adoptionStepBinding     = "binding"
+	adoptionStepEnvironment = "environment"
+	adoptionStepService     = "service"
+	adoptionStepBuild       = "build"
+	adoptionStepArtifact    = "artifact"
+	adoptionStepSecrets     = "secrets"
+	adoptionStepObservation = "observation"
+	adoptionStepState       = "state"
+	adoptionStepFinalize    = "finalize"
+	adoptionStepComplete    = "complete"
+)
+
+// adoptionIDNamespace derives the deterministic ids of adopted resources.
+var adoptionIDNamespace = uuid.NewSHA1(uuid.NameSpaceOID, []byte("bahia:adoption:v1"))
+
+// adoptionEntityID derives the id of an adopted resource from the facts that
+// identify it, so a retry or a resumed adoption addresses the same canonical
+// coordinate instead of minting a second one.
+func adoptionEntityID(parts ...string) uuid.UUID {
+	return uuid.NewSHA1(adoptionIDNamespace, []byte(strings.Join(parts, "\x1f")))
 }
 
-// AdoptionService scans Docker hosts and imports existing containers into Bahia models.
+// AdoptionCanonicalPublisher publishes the signed canonical cp-state record of
+// each resource an adoption produces. Every method signs at most one event and
+// admits it to the durable publish outbox before the first relay round: a nil
+// error means the record is accepted or queued for per-relay retry, any error
+// means it was never admitted (or was abandoned) and nothing derived from it
+// may be written. internal/adapters/nostr.AdoptionCanonicalPublisher
+// implements it.
+type AdoptionCanonicalPublisher interface {
+	PublishAdoptionBinding(ctx context.Context, binding *domain.AdoptionBinding) error
+	PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment, units []domain.DeploymentUnit) error
+	PublishServiceRegistry(ctx context.Context, svc *domain.Service) error
+	PublishBuildRegistry(ctx context.Context, build *domain.Build) error
+	PublishArtifactRegistry(ctx context.Context, artifact *domain.Artifact) error
+	PublishSecretRef(ctx context.Context, orgID uuid.UUID, ref domain.SecretRef) error
+	PublishRuntimeObservation(ctx context.Context, obs *domain.RuntimeObservation) error
+	PublishServiceState(ctx context.Context, state *domain.EnvironmentServiceState, observation *domain.RuntimeObservation) error
+}
+
+// AdoptionIndexRepositories are the optional SQL repositories the adoption
+// service mirrors its canonical records into. The index is derived: it is
+// written after every record of a candidate is published, a failed write is
+// reported and never undoes canonical state, and RebuildIndex recreates it.
+type AdoptionIndexRepositories struct {
+	Services          repository.ServiceRepository
+	Environments      repository.EnvironmentRepository
+	Builds            repository.BuildRepository
+	Artifacts         repository.ArtifactRepository
+	DeploymentUnits   repository.DeploymentUnitRepository
+	State             repository.EnvironmentServiceStateRepository
+	Observations      repository.RuntimeObservationRepository
+	AdoptedIdentities repository.AdoptedRuntimeIdentityRepository
+	// Tx, when set, writes a candidate's index rows in one transaction.
+	Tx repository.TxExecutor
+}
+
+func (idx AdoptionIndexRepositories) configured() bool {
+	return idx.Services != nil || idx.Environments != nil || idx.Builds != nil || idx.Artifacts != nil ||
+		idx.DeploymentUnits != nil || idx.State != nil || idx.Observations != nil || idx.AdoptedIdentities != nil
+}
+
+// adoptedIdentityLister is the optional page reader of the SQL identity table
+// that BackfillFromIndex uses. repository.PgAdoptedRuntimeIdentityRepository
+// implements it.
+type adoptedIdentityLister interface {
+	List(ctx context.Context, limit, offset int) ([]domain.AdoptedRuntimeIdentity, error)
+}
+
+// AdoptionBackfillMarker remembers that the one-time SQL-era backfill ran.
+// The local outbox's control records implement it.
+type AdoptionBackfillMarker interface {
+	GetControlRecord(family, id string) ([]byte, error)
+	PutControlRecord(family, id string, value []byte) error
+}
+
+// AdoptionService scans Docker hosts and imports existing containers into
+// Bahia models.
+//
+// Adoption output is canonical on relays (audit B-35). Each candidate is first
+// planned from the daemon's canonical records in the local event store, where
+// every refusal of ambiguous evidence happens and every id is derived from the
+// request, and then published one signed cp-state record at a time through the
+// outbox: the adoption binding (in progress), the environment with its
+// deployment units, the service, the build, the artifact, the imported secret
+// references, the runtime observation, the service state, and the binding
+// again (complete). A publish failure stops the candidate and is returned to
+// the caller; a resumed adoption of the same request re-derives the same
+// coordinates, finds the records already published and completes the rest.
+// Only then is the optional SQL index written, in one transaction, and a
+// failed index write is reported without undoing anything.
 type AdoptionService struct {
-	registry          *RegistryService
-	services          repository.ServiceRepository
-	environments      repository.EnvironmentRepository
-	builds            repository.BuildRepository
-	artifacts         repository.ArtifactRepository
-	deploymentUnits   repository.DeploymentUnitRepository
-	state             repository.EnvironmentServiceStateRepository
-	observations      repository.RuntimeObservationRepository
-	secrets           repository.SecretRepository
-	organizations     repository.OrganizationRepository
-	adoptedIdentities repository.AdoptedRuntimeIdentityRepository
-	txExecutor        repository.TxExecutor
-	publisher         events.Publisher
-	logger            *zap.Logger
+	// mu serializes the plan-and-publish of candidates, so two imports never
+	// plan from the same stale view and overwrite each other's environment
+	// units or service revision.
+	mu            sync.Mutex
+	canonical     AdoptionCanonicalPublisher
+	view          AdoptionCanonicalView
+	index         AdoptionIndexRepositories
+	secrets       repository.SecretRepository
+	organizations repository.OrganizationRepository
+	publisher     events.Publisher
+	logger        *zap.Logger
 
 	secretEncryptor      *secretsAdapter.Encryptor
 	runtimeCfg           config.RuntimeConfig
-	adoptionPublisher    AdoptionCanonicalPublisher
 	allowRawDockerHosts  bool
 	allowComposeTakeover bool
+	now                  func() time.Time
 }
 
 // AdoptionServiceOption configures adoption runtime governance behavior.
@@ -73,21 +160,6 @@ func WithAdoptionRuntimeConfig(runtimeCfg config.RuntimeConfig, allowRawDockerHo
 	}
 }
 
-// WithAdoptionCanonicalPublisher sets the canonical cp-state publisher for
-// adopted services and environments as a constructor option.
-func WithAdoptionCanonicalPublisher(p AdoptionCanonicalPublisher) AdoptionServiceOption {
-	return func(s *AdoptionService) {
-		s.adoptionPublisher = p
-	}
-}
-
-// SetAdoptionCanonicalPublisher sets the canonical cp-state publisher after
-// construction. This is used when the publisher depends on the projector
-// which is created after the adoption service (Phase 3 X1).
-func (s *AdoptionService) SetAdoptionCanonicalPublisher(p AdoptionCanonicalPublisher) {
-	s.adoptionPublisher = p
-}
-
 // WithAdoptionComposeTakeoverPolicy controls whether Compose-origin containers
 // may be imported into Bahia's direct Docker runtime management mode.
 func WithAdoptionComposeTakeoverPolicy(allow bool) AdoptionServiceOption {
@@ -96,18 +168,13 @@ func WithAdoptionComposeTakeoverPolicy(allow bool) AdoptionServiceOption {
 	}
 }
 
-// WithAdoptionSecrets wires imported sensitive environment values into Bahia's existing secrets path.
+// WithAdoptionSecrets wires imported sensitive environment values into Bahia's
+// secret value store. Secret values are never published; without a store and
+// an encryptor a container with sensitive environment values is refused.
 func WithAdoptionSecrets(repo repository.SecretRepository, encryptor *secretsAdapter.Encryptor) AdoptionServiceOption {
 	return func(s *AdoptionService) {
 		s.secrets = repo
 		s.secretEncryptor = encryptor
-	}
-}
-
-// WithAdoptionTxExecutor makes per-candidate import persistence atomic.
-func WithAdoptionTxExecutor(txExecutor repository.TxExecutor) AdoptionServiceOption {
-	return func(s *AdoptionService) {
-		s.txExecutor = txExecutor
 	}
 }
 
@@ -118,30 +185,19 @@ func WithAdoptionOrganizations(repo repository.OrganizationRepository) AdoptionS
 	}
 }
 
-// WithAdoptionRuntimeIdentities enables persistent adopted workload fingerprint matching.
-func WithAdoptionRuntimeIdentities(repo repository.AdoptedRuntimeIdentityRepository) AdoptionServiceOption {
+// WithAdoptionIndex mirrors canonical adoption records into the given SQL
+// repositories after they are published.
+func WithAdoptionIndex(index AdoptionIndexRepositories) AdoptionServiceOption {
 	return func(s *AdoptionService) {
-		s.adoptedIdentities = repo
+		s.index = index
 	}
 }
 
-// WithAdoptionDeploymentUnits makes imported workloads durable, independently
-// reconcilable ownership boundaries rather than label-only observations.
-func WithAdoptionDeploymentUnits(repo repository.DeploymentUnitRepository) AdoptionServiceOption {
-	return func(s *AdoptionService) {
-		s.deploymentUnits = repo
-	}
-}
-
-// NewAdoptionService creates an AdoptionService.
+// NewAdoptionService creates an AdoptionService publishing through canonical
+// and planning from view. Both are required for Scan and Import.
 func NewAdoptionService(
-	registry *RegistryService,
-	services repository.ServiceRepository,
-	environments repository.EnvironmentRepository,
-	builds repository.BuildRepository,
-	artifacts repository.ArtifactRepository,
-	state repository.EnvironmentServiceStateRepository,
-	observations repository.RuntimeObservationRepository,
+	canonical AdoptionCanonicalPublisher,
+	view AdoptionCanonicalView,
 	publisher events.Publisher,
 	logger *zap.Logger,
 	opts ...AdoptionServiceOption,
@@ -153,22 +209,31 @@ func NewAdoptionService(
 		publisher = &events.NoopPublisher{}
 	}
 	svc := &AdoptionService{
-		registry:             registry,
-		services:             services,
-		environments:         environments,
-		builds:               builds,
-		artifacts:            artifacts,
-		state:                state,
-		observations:         observations,
+		canonical:            canonical,
+		view:                 view,
 		publisher:            publisher,
 		logger:               logger,
 		allowRawDockerHosts:  true,
 		allowComposeTakeover: true,
+		now:                  func() time.Time { return time.Now().UTC() },
 	}
 	for _, opt := range opts {
 		opt(svc)
 	}
 	return svc
+}
+
+// Ready reports whether the service can plan and publish adoptions.
+func (s *AdoptionService) Ready() error {
+	switch {
+	case s == nil:
+		return errors.New("adoption service is not configured")
+	case s.canonical == nil:
+		return errors.New("adoption canonical publisher is not configured")
+	case s.view == nil:
+		return errors.New("adoption canonical local view is not configured")
+	}
+	return nil
 }
 
 // AdoptionScanRequest requests a scan of one or more Docker targets.
@@ -191,6 +256,10 @@ type AdoptionImportRequest struct {
 	Selections []AdoptionSelection
 	ImportAll  bool
 	OrgID      uuid.UUID
+	// RequestID identifies the signed request (its intent_id). Resources
+	// minted per request, such as the observation, derive their ids from it,
+	// so re-processing the same request addresses the same coordinates.
+	RequestID string
 }
 
 // AdoptionSelection selects one container on a target host.
@@ -236,11 +305,30 @@ type AdoptionImportResult struct {
 	RedactedEnvironmentKeys []string
 	RedactedLabelKeys       []string
 	Error                   string
+	// Incomplete reports that the candidate was accepted but a canonical
+	// publish failed at Step: the records before it are published, and
+	// re-processing the same request completes the remainder.
+	Incomplete bool
+	Step       string
+	// IndexError reports a failed write of the optional SQL index. The
+	// canonical records are complete; RebuildIndex repairs the index.
+	IndexError string
+
+	// cause is the publish error behind an incomplete result, kept so the
+	// import's error chain carries it to the caller.
+	cause error
 }
+
+// ErrAdoptionIncomplete marks an import whose canonical publication did not
+// complete for at least one candidate. The import is resumable.
+var ErrAdoptionIncomplete = errors.New("adoption canonical publication incomplete")
 
 // Scan discovers containers and proposes Bahia service names.
 func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]AdoptionPreview, error) {
 	start := time.Now()
+	if err := s.Ready(); err != nil {
+		return nil, err
+	}
 	targets, err := s.normalizeAdoptionTargets(req.Targets)
 	if err != nil {
 		s.logger.Warn("adoption scan rejected", zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
@@ -251,7 +339,11 @@ func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]
 		s.logger.Warn("adoption scan discovery failed", zap.Int("target_count", len(targets)), zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
 		return nil, err
 	}
-	previews := s.buildPreviews(ctx, targets, results)
+	known, err := s.loadKnownServices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	previews := s.buildPreviews(targets, results, known)
 	candidateCount, redactedEnvKeyCount, redactedLabelKeyCount, targetErrors := adoptionPreviewOperationalStats(previews)
 	duration := time.Since(start)
 	s.publisher.Publish(ctx, events.Event{
@@ -278,9 +370,16 @@ func (s *AdoptionService) Scan(ctx context.Context, req AdoptionScanRequest) ([]
 	return previews, nil
 }
 
-// Import scans targets and imports selected containers. Individual candidate failures are returned in result rows.
+// Import scans targets and imports selected containers. Candidate refusals
+// are returned in result rows. When a candidate's canonical publication did
+// not complete, the rows are returned together with an error wrapping
+// ErrAdoptionIncomplete, so the caller reports the request as not applied
+// and re-processes it to resume.
 func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest) ([]AdoptionImportResult, error) {
 	start := time.Now()
+	if err := s.Ready(); err != nil {
+		return nil, err
+	}
 	targets, err := s.normalizeAdoptionTargets(req.Targets)
 	if err != nil {
 		s.logger.Warn("adoption import rejected", zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
@@ -302,7 +401,11 @@ func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest)
 		s.logger.Warn("adoption import discovery failed", zap.Int("target_count", len(targets)), zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
 		return nil, err
 	}
-	previews := s.buildPreviews(ctx, targets, results)
+	known, err := s.loadKnownServices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	previews := s.buildPreviews(targets, results, known)
 
 	var imported []AdoptionImportResult
 	processedSelections := map[string]struct{}{}
@@ -331,7 +434,7 @@ func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest)
 			if selected && selection.ServiceNameOverride != "" {
 				serviceName = normalizeResourceName(selection.ServiceNameOverride)
 			}
-			imported = append(imported, s.importCandidate(ctx, orgID, preview.Target, container, serviceName))
+			imported = append(imported, s.importCandidate(ctx, req.RequestID, orgID, preview.Target, container, serviceName))
 		}
 	}
 	if !req.ImportAll {
@@ -342,6 +445,12 @@ func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest)
 			imported = append(imported, AdoptionImportResult{TargetName: selection.TargetName, ContainerID: selection.ContainerID, Status: adoptionStatusFailed, Error: "selected container was not discovered"})
 		}
 	}
+	sort.SliceStable(imported, func(i, j int) bool {
+		if imported[i].TargetName != imported[j].TargetName {
+			return imported[i].TargetName < imported[j].TargetName
+		}
+		return imported[i].ContainerID < imported[j].ContainerID
+	})
 	successCount, failureCount, redactedEnvKeyCount, redactedLabelKeyCount := adoptionImportOperationalStats(imported)
 	result := "success"
 	if failureCount > 0 {
@@ -360,10 +469,118 @@ func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest)
 		zap.Int64("duration_ms", time.Since(start).Milliseconds()),
 		zap.String("result", result),
 	)
-	return imported, nil
+	return imported, incompleteImportError(imported)
 }
 
-func (s *AdoptionService) buildPreviews(ctx context.Context, targets []AdoptionTarget, results []runtime.DockerDiscoveryResult) []AdoptionPreview {
+// incompleteImportError summarizes the candidates whose canonical publication
+// did not complete, or returns nil when every accepted candidate completed.
+func incompleteImportError(results []AdoptionImportResult) error {
+	var incomplete []error
+	for _, result := range results {
+		if result.Incomplete {
+			incomplete = append(incomplete, fmt.Errorf("%s/%s at %s: %w", result.TargetName, result.ContainerName, result.Step, result.cause))
+		}
+	}
+	if len(incomplete) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w for %d of %d candidates; re-process the same request to resume: %w", ErrAdoptionIncomplete, len(incomplete), len(results), errors.Join(incomplete...))
+}
+
+// knownServices is the view's live service set at the start of a request,
+// joined with the adoption bindings that identify adopted workloads.
+type knownServices struct {
+	services []domain.Service
+	bindings []domain.AdoptionBinding
+}
+
+func (s *AdoptionService) loadKnownServices(ctx context.Context) (*knownServices, error) {
+	services, err := s.view.ListServices(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading canonical services: %w", err)
+	}
+	bindings, err := s.view.ListAdoptionBindings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading canonical adoption bindings: %w", err)
+	}
+	return &knownServices{services: services, bindings: bindings}, nil
+}
+
+func (k *knownServices) byName(name string) *domain.Service {
+	for i := range k.services {
+		if k.services[i].Name == name {
+			svc := k.services[i]
+			return &svc
+		}
+	}
+	return nil
+}
+
+func (k *knownServices) byID(id uuid.UUID) *domain.Service {
+	for i := range k.services {
+		if k.services[i].ID == id {
+			svc := k.services[i]
+			return &svc
+		}
+	}
+	return nil
+}
+
+func (k *knownServices) binding(serviceID, environmentID uuid.UUID) *domain.AdoptionBinding {
+	for i := range k.bindings {
+		if k.bindings[i].ServiceID == serviceID && k.bindings[i].EnvironmentID == environmentID {
+			binding := k.bindings[i]
+			return &binding
+		}
+	}
+	return nil
+}
+
+// byAdoptedTarget resolves the service that the workload's stable
+// fingerprints are bound to, in orgID. It fails closed when the fingerprints
+// resolve to more than one service.
+func (k *knownServices) byAdoptedTarget(orgID uuid.UUID, target AdoptionTarget, discovered runtime.DiscoveredContainer) (*domain.Service, error) {
+	fingerprints := map[string]struct{}{}
+	for _, fingerprint := range adoptedRuntimeFingerprintsByKind(target, discovered) {
+		fingerprints[fingerprint] = struct{}{}
+	}
+	var matched *domain.Service
+	for _, binding := range k.bindings {
+		if binding.OrgID != orgID {
+			continue
+		}
+		bound := false
+		for _, fingerprint := range binding.Fingerprints {
+			if _, ok := fingerprints[fingerprint]; ok {
+				bound = true
+				break
+			}
+		}
+		if !bound {
+			continue
+		}
+		svc := k.byID(binding.ServiceID)
+		if svc == nil {
+			continue
+		}
+		if matched != nil && matched.ID != svc.ID {
+			return nil, fmt.Errorf("adopted runtime identity matches multiple services in org %s", orgID)
+		}
+		matched = svc
+	}
+	if matched != nil {
+		return matched, nil
+	}
+	for i := range k.services {
+		if k.services[i].OrgID == orgID && sameAdoptedTarget(&k.services[i], target, discovered) {
+			svc := k.services[i]
+			return &svc, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *AdoptionService) buildPreviews(targets []AdoptionTarget, results []runtime.DockerDiscoveryResult, known *knownServices) []AdoptionPreview {
 	previews := make([]AdoptionPreview, len(results))
 	usedNames := map[string]int{}
 	for i, result := range results {
@@ -375,8 +592,8 @@ func (s *AdoptionService) buildPreviews(ctx context.Context, targets []AdoptionT
 		}
 		for _, discovered := range result.Containers {
 			classified := classifyDiscoveredSensitiveData(discovered)
-			proposed := s.proposedServiceName(ctx, target, discovered, usedNames)
-			existing, _ := s.services.GetByName(ctx, proposed)
+			proposed := proposedServiceNameFor(target, discovered, usedNames, known)
+			existing := known.byName(proposed)
 			warnings := append([]string(nil), discovered.Warnings...)
 			adoptable := discovered.Adoptable
 			if isComposeOrigin(discovered) {
@@ -407,16 +624,19 @@ func (s *AdoptionService) buildPreviews(ctx context.Context, targets []AdoptionT
 	return previews
 }
 
-func (s *AdoptionService) proposedServiceName(ctx context.Context, target AdoptionTarget, discovered runtime.DiscoveredContainer, usedNames map[string]int) string {
+func proposedServiceNameFor(target AdoptionTarget, discovered runtime.DiscoveredContainer, usedNames map[string]int, known *knownServices) string {
 	base := proposedServiceName(discovered)
 	if base == "" {
 		base = "adopted-" + shortID(discovered.ContainerID)
 	}
+	conflicts := func(name string) bool {
+		existing := known.byName(name)
+		return existing != nil && !sameAdoptedTarget(existing, target, discovered)
+	}
 	name := base
-	if usedNames[name] > 0 || s.serviceNameConflicts(ctx, name, target, discovered) {
-		withEnv := normalizeResourceName(base + "-" + target.EnvironmentName)
-		name = withEnv
-		if usedNames[name] > 0 || s.serviceNameConflicts(ctx, name, target, discovered) {
+	if usedNames[name] > 0 || conflicts(name) {
+		name = normalizeResourceName(base + "-" + target.EnvironmentName)
+		if usedNames[name] > 0 || conflicts(name) {
 			name = normalizeResourceName(base + "-" + shortID(discovered.ContainerID))
 		}
 	}
@@ -424,15 +644,34 @@ func (s *AdoptionService) proposedServiceName(ctx context.Context, target Adopti
 	return name
 }
 
-func (s *AdoptionService) serviceNameConflicts(ctx context.Context, name string, target AdoptionTarget, discovered runtime.DiscoveredContainer) bool {
-	existing, err := s.services.GetByName(ctx, name)
-	if err != nil || existing == nil {
-		return false
-	}
-	return !sameAdoptedTarget(existing, target, discovered)
+// adoptionPlan is everything one candidate publishes, derived before the
+// first publish so that a refusal leaves no record behind.
+type adoptionPlan struct {
+	orgID      uuid.UUID
+	target     AdoptionTarget
+	discovered runtime.DiscoveredContainer
+	classified sensitiveDataClassification
+
+	env            domain.Environment
+	envUnits       []domain.DeploymentUnit
+	unit           domain.DeploymentUnit
+	svc            domain.Service
+	createdService bool
+	build          domain.Build
+	artifact       domain.Artifact
+	secrets        []plannedSecret
+	obs            domain.RuntimeObservation
+	state          domain.EnvironmentServiceState
+	binding        domain.AdoptionBinding
 }
 
-func (s *AdoptionService) importCandidate(ctx context.Context, orgID uuid.UUID, target AdoptionTarget, candidate AdoptionPreviewContainer, serviceName string) AdoptionImportResult {
+type plannedSecret struct {
+	id    uuid.UUID
+	name  string
+	value string
+}
+
+func (s *AdoptionService) importCandidate(ctx context.Context, requestID string, orgID uuid.UUID, target AdoptionTarget, candidate AdoptionPreviewContainer, serviceName string) AdoptionImportResult {
 	discovered := candidate.Discovered
 	result := AdoptionImportResult{
 		TargetName:              target.Name,
@@ -443,165 +682,948 @@ func (s *AdoptionService) importCandidate(ctx context.Context, orgID uuid.UUID, 
 		RedactedEnvironmentKeys: append([]string(nil), candidate.RedactedEnvironmentKeys...),
 		RedactedLabelKeys:       append([]string(nil), candidate.RedactedLabelKeys...),
 	}
-	if !candidate.Adoptable {
-		result.Status = adoptionStatusFailed
-		result.Error = "container has unsupported adoption warnings"
-		s.logAdoptionImportResult(target, result, "failed")
-		return result
-	}
-	if discovered.ImageRepo == "" || discovered.ImageDigest == "" {
-		result.Status = adoptionStatusFailed
-		result.Error = "container image repo and digest are required for import"
-		s.logAdoptionImportResult(target, result, "failed")
-		return result
-	}
-	if serviceName == "" {
-		result.Status = adoptionStatusFailed
-		result.Error = "service name is required"
-		s.logAdoptionImportResult(target, result, "failed")
-		return result
-	}
-
-	classified := classifyDiscoveredSensitiveData(discovered)
-	result.RedactedEnvironmentKeys = append([]string(nil), classified.SensitiveEnvironmentKeys...)
-	result.RedactedLabelKeys = append([]string(nil), classified.SensitiveLabelKeys...)
-	if len(classified.SensitiveEnvironment) > 0 && (s.secrets == nil || s.secretEncryptor == nil) {
-		result.Status = adoptionStatusFailed
-		result.Error = "sensitive environment values require configured secret storage and encryption"
-		s.logAdoptionImportResult(target, result, "failed")
-		return result
-	}
-
-	var committedResult AdoptionImportResult
-	var importEvent events.Event
-	var committedSvc *domain.Service
-	var committedEnv *domain.Environment
-	persist := func(repos repository.TxRepos) error {
-		stagedResult := result
-		repos = s.completeTxRepos(repos)
-		registry := s.registryForRepos(repos)
-
-		env, err := s.ensureAdoptionEnvironment(ctx, registry, repos.Environments, orgID, target)
-		if err != nil {
-			return err
-		}
-		stagedResult.EnvironmentID = &env.ID
-
-		svc, createdService, err := s.ensureAdoptionService(ctx, registry, repos.Services, orgID, target, discovered, classified, serviceName)
-		if err != nil {
-			return err
-		}
-		stagedResult.ServiceID = &svc.ID
-		stagedResult.ServiceName = svc.Name
-
-		build, err := s.ensureAdoptionBuild(ctx, repos.Builds, target, discovered, svc.ID)
-		if err != nil {
-			return err
-		}
-		stagedResult.BuildID = &build.ID
-
-		artifact, err := s.ensureAdoptionArtifact(ctx, repos.Artifacts, discovered, svc.ID, build.ID)
-		if err != nil {
-			return err
-		}
-		stagedResult.ArtifactID = &artifact.ID
-
-		var deploymentUnitID *uuid.UUID
-		if repos.DeploymentUnits != nil {
-			unit, err := s.ensureAdoptionDeploymentUnit(ctx, repos.DeploymentUnits, env, target, discovered, svc.Name)
-			if err != nil {
-				return err
-			}
-			deploymentUnitID = &unit.ID
-		}
-
-		state := &domain.EnvironmentServiceState{
-			ServiceID:         svc.ID,
-			EnvironmentID:     env.ID,
-			DeploymentUnitID:  deploymentUnitID,
-			DesiredArtifactID: &artifact.ID,
-			DriftStatus:       domain.DriftStatusUnknown,
-		}
-		if err := repos.State.Upsert(ctx, state); err != nil {
-			return fmt.Errorf("seeding environment service state: %w", err)
-		}
-
-		obs := observationFromDiscovered(target, svc.ID, env.ID, discovered)
-		obs.DeploymentUnitID = deploymentUnitID
-		if err := registry.RecordObservation(ctx, obs); err != nil {
-			return fmt.Errorf("recording runtime observation: %w", err)
-		}
-
-		if err := s.importSensitiveEnvironmentSecrets(ctx, repos.Secrets, svc.ID, env.ID, classified.SensitiveEnvironment); err != nil {
-			return err
-		}
-		if err := s.persistAdoptedRuntimeIdentities(ctx, repos.AdoptedIdentities, orgID, svc.ID, env.ID, target, discovered); err != nil {
-			return err
-		}
-
-		status := adoptionStatusUpdated
-		if createdService {
-			status = adoptionStatusCreated
-		}
-		stagedResult.Status = status
-		committedResult = stagedResult
-		committedSvc = svc
-		committedEnv = env
-		importEvent = events.Event{
-			Type:     adoptionImportedEvent,
-			EntityID: svc.ID.String(),
-			Data: map[string]any{
-				"service_id":     svc.ID,
-				"environment_id": env.ID,
-				"artifact_id":    artifact.ID,
-				"target_name":    target.Name,
-				"container_id":   discovered.ContainerID,
-				"container_name": discovered.ContainerName,
-				"status":         status,
-			},
-		}
-		return nil
-	}
-
-	var err error
-	if s.txExecutor != nil {
-		for attempt := 0; attempt < 2; attempt++ {
-			committedResult = AdoptionImportResult{}
-			importEvent = events.Event{}
-			err = s.txExecutor.WithinTx(ctx, persist)
-			if err == nil || !isRetryableImportTxError(err) {
-				break
-			}
-		}
-	} else {
-		err = persist(s.completeTxRepos(repository.TxRepos{}))
-	}
-	if err != nil {
+	fail := func(err error) AdoptionImportResult {
 		result.Status = adoptionStatusFailed
 		result.Error = err.Error()
 		s.logAdoptionImportResult(target, result, "failed")
 		return result
 	}
-	if committedResult.Status != "" {
-		result = committedResult
+	if !candidate.Adoptable {
+		return fail(errors.New("container has unsupported adoption warnings"))
 	}
-	if importEvent.Type != "" {
-		s.publisher.Publish(ctx, importEvent)
+	if discovered.ImageRepo == "" || discovered.ImageDigest == "" {
+		return fail(errors.New("container image repo and digest are required for import"))
 	}
-	// Phase 3 X1: publish canonical cp-state records from the mutation site
-	// instead of reactively through the projector bus handler.
-	if s.adoptionPublisher != nil && committedSvc != nil {
-		if err := s.adoptionPublisher.PublishServiceRegistry(ctx, committedSvc); err != nil {
-			s.logger.Warn("publish adopted service registry record failed", zap.String("service_id", committedSvc.ID.String()), zap.Error(err))
-		}
+	if serviceName == "" {
+		return fail(errors.New("service name is required"))
 	}
-	if s.adoptionPublisher != nil && committedEnv != nil {
-		if err := s.adoptionPublisher.PublishEnvironmentRegistry(ctx, committedEnv); err != nil {
-			s.logger.Warn("publish adopted environment registry record failed", zap.String("environment_id", committedEnv.ID.String()), zap.Error(err))
-		}
+	classified := classifyDiscoveredSensitiveData(discovered)
+	result.RedactedEnvironmentKeys = append([]string(nil), classified.SensitiveEnvironmentKeys...)
+	result.RedactedLabelKeys = append([]string(nil), classified.SensitiveLabelKeys...)
+	if len(classified.SensitiveEnvironment) > 0 && (s.secrets == nil || s.secretEncryptor == nil) {
+		return fail(errors.New("sensitive environment values require configured secret storage and encryption"))
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	plan, err := s.planCandidate(ctx, requestID, orgID, target, discovered, classified, serviceName)
+	if err != nil {
+		return fail(err)
+	}
+	result.ServiceName = plan.svc.Name
+	result.EnvironmentID = &plan.env.ID
+	result.ServiceID = &plan.svc.ID
+	result.BuildID = &plan.build.ID
+	result.ArtifactID = &plan.artifact.ID
+	result.Status = adoptionStatusUpdated
+	if plan.createdService {
+		result.Status = adoptionStatusCreated
+	}
+
+	if step, err := s.publishPlan(ctx, plan); err != nil {
+		result.Status = adoptionStatusFailed
+		result.Incomplete = true
+		result.Step = step
+		result.Error = err.Error()
+		result.cause = err
+		s.logAdoptionImportResult(target, result, "incomplete")
+		return result
+	}
+	result.Step = adoptionStepComplete
+
+	if err := s.writeIndex(ctx, plan); err != nil {
+		result.IndexError = err.Error()
+		s.logger.Warn("adoption SQL index write failed; canonical state retained", zap.String("service_id", plan.svc.ID.String()), zap.String("environment_id", plan.env.ID.String()), zap.Error(err))
+	}
+	s.publisher.Publish(ctx, events.Event{
+		Type:     adoptionImportedEvent,
+		EntityID: plan.svc.ID.String(),
+		Data: map[string]any{
+			"service_id":     plan.svc.ID,
+			"environment_id": plan.env.ID,
+			"artifact_id":    plan.artifact.ID,
+			"target_name":    target.Name,
+			"container_id":   discovered.ContainerID,
+			"container_name": discovered.ContainerName,
+			"status":         result.Status,
+		},
+	})
 	s.logAdoptionImportResult(target, result, "success")
 	return result
+}
+
+// planCandidate derives every record of a candidate from the request and the
+// canonical records already published, refusing ambiguous or conflicting
+// evidence before anything is written.
+func (s *AdoptionService) planCandidate(ctx context.Context, requestID string, orgID uuid.UUID, target AdoptionTarget, discovered runtime.DiscoveredContainer, classified sensitiveDataClassification, serviceName string) (*adoptionPlan, error) {
+	known, err := s.loadKnownServices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	plan := &adoptionPlan{orgID: orgID, target: target, discovered: discovered, classified: classified}
+	now := s.now()
+
+	if err := s.planEnvironment(ctx, plan, now); err != nil {
+		return nil, err
+	}
+	if err := planService(plan, known, requestID, serviceName, now); err != nil {
+		return nil, err
+	}
+	planDeploymentUnit(plan, now)
+	if err := s.planBuild(ctx, plan, now); err != nil {
+		return nil, err
+	}
+	if err := s.planArtifact(ctx, plan, now); err != nil {
+		return nil, err
+	}
+	for _, name := range sortedStringKeys(classified.SensitiveEnvironment) {
+		plan.secrets = append(plan.secrets, plannedSecret{id: adoptionEntityID("secret", plan.svc.ID.String(), plan.env.ID.String(), name), name: name, value: classified.SensitiveEnvironment[name]})
+	}
+
+	obs := observationFromDiscovered(target, plan.svc.ID, plan.env.ID, discovered)
+	obs.ObservedAt = now
+	obs.DeploymentUnitID = &plan.unit.ID
+	if requestID != "" {
+		obs.ID = adoptionEntityID("observation", plan.svc.ID.String(), plan.env.ID.String(), requestID)
+	} else {
+		obs.ID = uuid.New()
+	}
+	normalizeRuntimeObservationHash(obs)
+	plan.obs = *obs
+
+	state, err := s.view.GetServiceState(ctx, plan.svc.ID, plan.env.ID)
+	if err != nil {
+		return nil, fmt.Errorf("reading canonical state of service %s: %w", plan.svc.ID, err)
+	}
+	if state == nil {
+		state = &domain.EnvironmentServiceState{ServiceID: plan.svc.ID, EnvironmentID: plan.env.ID}
+	}
+	state.DeploymentUnitID = &plan.unit.ID
+	state.DesiredArtifactID = &plan.artifact.ID
+	state.CurrentObservationID = &obs.ID
+	state.DriftStatus = domain.ArtifactDigestDriftStatus(plan.artifact.ImageDigest, obs.ObservedImageDigest, obs.HealthStatus, domain.DriftStatusDeploying)
+	state.LastReconciledAt = &now
+	state.UpdatedAt = now
+	plan.state = *state
+
+	fingerprints := adoptedRuntimeFingerprintsByKind(target, discovered)
+	if len(fingerprints) == 0 {
+		return nil, fmt.Errorf("adopted runtime identity requires at least one stable fingerprint")
+	}
+	plan.binding = domain.AdoptionBinding{
+		OrgID:            orgID,
+		ServiceID:        plan.svc.ID,
+		EnvironmentID:    plan.env.ID,
+		DeploymentUnitID: &plan.unit.ID,
+		BuildID:          &plan.build.ID,
+		ArtifactID:       &plan.artifact.ID,
+		HostAlias:        target.Name,
+		EndpointRef:      target.EndpointRef,
+		TargetName:       discovered.TargetName,
+		ContainerID:      discovered.ContainerID,
+		ImageDigest:      discovered.ImageDigest,
+		Compose:          discovered.Compose,
+		Fingerprints:     fingerprints,
+		RequestID:        requestID,
+		ServiceCreated:   plan.createdService,
+		Status:           domain.AdoptionBindingInProgress,
+		UpdatedAt:        now,
+	}
+	return plan, nil
+}
+
+func (s *AdoptionService) planEnvironment(ctx context.Context, plan *adoptionPlan, now time.Time) error {
+	target := plan.target
+	existing, err := s.environmentByName(ctx, target.EnvironmentName)
+	if err != nil {
+		return err
+	}
+	config := map[string]any{
+		"type":            string(domain.RuntimeTypeDocker),
+		"host_alias":      target.Name,
+		"management_mode": "direct_runtime",
+	}
+	if target.EndpointRef != "" {
+		config["endpoint_ref"] = target.EndpointRef
+	} else {
+		config["docker_host"] = target.DockerHost
+	}
+	if existing == nil {
+		id := adoptionEntityID("environment", plan.orgID.String(), target.EnvironmentName)
+		if occupant, err := s.environmentByID(ctx, id); err != nil {
+			return err
+		} else if occupant != nil {
+			return fmt.Errorf("environment coordinate %s is already occupied by %q", id, occupant.Environment.Name)
+		}
+		env := domain.Environment{
+			ID:            id,
+			OrgID:         plan.orgID,
+			Name:          target.EnvironmentName,
+			RuntimeConfig: config,
+		}
+		if err := normalizeAndValidateEnvironmentMutation(&env, nil); err != nil {
+			return fmt.Errorf("creating environment %q: %w", target.EnvironmentName, err)
+		}
+		env.CreatedAt, env.UpdatedAt = domain.NormalizeRevisionTime(now), domain.NormalizeRevisionTime(now)
+		plan.env = env
+		return nil
+	}
+
+	env := existing.Environment
+	if env.OrgID != uuid.Nil && env.OrgID != plan.orgID {
+		return fmt.Errorf("environment %q belongs to different org %s", target.EnvironmentName, env.OrgID)
+	}
+	changed := false
+	if env.OrgID == uuid.Nil && plan.orgID != uuid.Nil {
+		env.OrgID = plan.orgID
+		changed = true
+	}
+	if env.RuntimeConfig == nil {
+		env.RuntimeConfig = map[string]any{}
+	} else {
+		env.RuntimeConfig = copyRuntimeConfig(env.RuntimeConfig)
+	}
+	if currentType, ok := stringFromAny(env.RuntimeConfig["type"]); ok && currentType != "" && currentType != string(domain.RuntimeTypeDocker) {
+		return fmt.Errorf("environment %q has incompatible runtime type %q", target.EnvironmentName, currentType)
+	}
+	if currentMode, ok := stringFromAny(env.RuntimeConfig["management_mode"]); ok && currentMode != "" && currentMode != "direct_runtime" {
+		return fmt.Errorf("environment %q has incompatible management_mode %q", target.EnvironmentName, currentMode)
+	}
+	if currentEndpointRef, ok := stringFromAny(env.RuntimeConfig["endpoint_ref"]); ok && currentEndpointRef != "" && currentEndpointRef != target.EndpointRef {
+		return fmt.Errorf("environment %q already targets endpoint_ref %q", target.EnvironmentName, currentEndpointRef)
+	}
+	if currentHost, ok := stringFromAny(env.RuntimeConfig["docker_host"]); ok && currentHost != "" && currentHost != target.DockerHost {
+		return fmt.Errorf("environment %q already targets docker_host %q", target.EnvironmentName, currentHost)
+	}
+	if target.EndpointRef != "" {
+		if _, ok := env.RuntimeConfig["docker_host"]; ok {
+			delete(env.RuntimeConfig, "docker_host")
+			changed = true
+		}
+	} else if _, ok := env.RuntimeConfig["endpoint_ref"]; ok {
+		delete(env.RuntimeConfig, "endpoint_ref")
+		changed = true
+	}
+	for k, v := range config {
+		if env.RuntimeConfig[k] != v {
+			env.RuntimeConfig[k] = v
+			changed = true
+		}
+	}
+	if changed {
+		if err := prepareEnvironmentUpdate(&env); err != nil {
+			return fmt.Errorf("updating environment %q: %w", target.EnvironmentName, err)
+		}
+	}
+	plan.env = env
+	plan.envUnits = append([]domain.DeploymentUnit(nil), existing.Units...)
+	return nil
+}
+
+func (s *AdoptionService) environmentByID(ctx context.Context, id uuid.UUID) (*AdoptionEnvironment, error) {
+	environments, err := s.view.ListEnvironments(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("looking up environment %s: %w", id, err)
+	}
+	for i := range environments {
+		if environments[i].Environment.ID == id {
+			return &environments[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *AdoptionService) environmentByName(ctx context.Context, name string) (*AdoptionEnvironment, error) {
+	environments, err := s.view.ListEnvironments(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("looking up environment %q: %w", name, err)
+	}
+	for i := range environments {
+		if environments[i].Environment.Name == name {
+			return &environments[i], nil
+		}
+	}
+	return nil, nil
+}
+
+func planService(plan *adoptionPlan, known *knownServices, requestID, serviceName string, now time.Time) error {
+	target, discovered := plan.target, plan.discovered
+	adopted := adoptedRuntimeConfig(target, discovered, plan.classified)
+	byIdentity, err := known.byAdoptedTarget(plan.orgID, target, discovered)
+	if err != nil {
+		return err
+	}
+	byName := known.byName(serviceName)
+	if byName != nil && byName.OrgID != uuid.Nil && byName.OrgID != plan.orgID {
+		return fmt.Errorf("service name %q belongs to different org %s", serviceName, byName.OrgID)
+	}
+	if byName != nil && byIdentity != nil && byName.ID != byIdentity.ID {
+		return fmt.Errorf("service name %q already exists for a different target", serviceName)
+	}
+	if byName != nil && byIdentity == nil && byName.RuntimeConfig != nil &&
+		byName.RuntimeConfig.Adopted != nil && !sameAdoptedTarget(byName, target, discovered) {
+		return fmt.Errorf("service name %q already exists for a different target", serviceName)
+	}
+
+	existing := byIdentity
+	if existing == nil {
+		existing = byName
+	}
+	if existing == nil {
+		id := adoptionEntityID("service", plan.orgID.String(), target.Name, discovered.TargetName)
+		if occupant := known.byID(id); occupant != nil {
+			// The derived coordinate names a record this adoption does not
+			// own (it matched neither by identity nor by name): never replace it.
+			return fmt.Errorf("service coordinate %s is already occupied by %q", id, occupant.Name)
+		}
+		svc := domain.Service{
+			ID:            id,
+			OrgID:         plan.orgID,
+			Name:          serviceName,
+			ArtifactRepo:  discovered.ImageRepo,
+			RuntimeType:   domain.RuntimeTypeDocker,
+			RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: adopted},
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}
+		prepareServiceCreate(&svc)
+		normalizeServiceRepositoryForRead(&svc)
+		plan.svc = svc
+		plan.createdService = true
+		return nil
+	}
+	if existing.OrgID != uuid.Nil && existing.OrgID != plan.orgID {
+		return fmt.Errorf("service %q belongs to different org %s", existing.Name, existing.OrgID)
+	}
+	// A resumed request reports the outcome it had: its binding records
+	// whether that same request created the service.
+	if binding := known.binding(existing.ID, plan.env.ID); binding != nil && requestID != "" && binding.RequestID == requestID && binding.ServiceCreated {
+		plan.createdService = true
+	}
+	svc := *existing
+	desired := svc
+	desired.OrgID = plan.orgID
+	desired.RuntimeType = domain.RuntimeTypeDocker
+	desired.ArtifactRepo = discovered.ImageRepo
+	desired.RuntimeConfig = &domain.ServiceRuntimeConfig{Adopted: adopted}
+	if !reflect.DeepEqual(svc, desired) {
+		// A changed service takes a new revision; an unchanged one keeps its
+		// record, so a resumed adoption signs nothing for it.
+		prepareServiceUpdate(&desired)
+	}
+	normalizeServiceRepositoryForRead(&desired)
+	plan.svc = desired
+	return nil
+}
+
+// planDeploymentUnit makes the imported workload a durable, independently
+// reconcilable ownership boundary of its environment: the explicit unit keyed
+// by the service name, kept from the environment's record when it exists.
+func planDeploymentUnit(plan *adoptionPlan, now time.Time) {
+	key := normalizeResourceName(plan.svc.Name)
+	for _, unit := range plan.envUnits {
+		if unit.Key == key {
+			plan.unit = unit
+			return
+		}
+	}
+	runtimeType := domain.RuntimeTypeDocker
+	composeDir := ""
+	if isComposeOrigin(plan.discovered) {
+		runtimeType = domain.RuntimeTypeCompose
+		if plan.discovered.Compose != nil {
+			composeDir = strings.TrimSpace(plan.discovered.Compose.WorkingDir)
+		}
+	}
+	unit := domain.DeploymentUnit{
+		ID:            adoptionEntityID("deployment-unit", plan.env.ID.String(), key),
+		EnvironmentID: plan.env.ID,
+		Key:           key,
+		DisplayName:   plan.svc.Name,
+		RuntimeType:   runtimeType,
+		EndpointRef:   strings.TrimSpace(plan.target.EndpointRef),
+		ComposeDir:    composeDir,
+		ReconcileMode: domain.ReconcileModeAutoApply,
+		OwnershipMode: domain.OwnershipModeBahiaManaged,
+		CreatedAt:     domain.NormalizeRevisionTime(now),
+		UpdatedAt:     domain.NormalizeRevisionTime(now),
+	}
+	domain.NormalizeDeploymentUnitTargeting(&unit)
+	plan.unit = unit
+	plan.envUnits = append(plan.envUnits, unit)
+}
+
+func (s *AdoptionService) planBuild(ctx context.Context, plan *adoptionPlan, now time.Time) error {
+	runID := adoptionRunID(plan.target, plan.discovered)
+	builds, err := s.view.ListBuilds(ctx)
+	if err != nil {
+		return fmt.Errorf("looking up adoption build: %w", err)
+	}
+	for i := range builds {
+		if builds[i].CISystem != adoptionCISystem || builds[i].CIRunID != runID {
+			continue
+		}
+		if builds[i].ServiceID != plan.svc.ID {
+			return fmt.Errorf("adoption build %q already belongs to service %s", runID, builds[i].ServiceID)
+		}
+		plan.build = builds[i]
+		return nil
+	}
+	discovered := plan.discovered
+	gitSHA := strings.TrimSpace(discovered.Labels["org.opencontainers.image.revision"])
+	if gitSHA == "" {
+		gitSHA = "adopted"
+	}
+	gitRef := discovered.ImageTag
+	if gitRef == "" {
+		gitRef = "adopted"
+	}
+	buildID := adoptionEntityID("build", plan.svc.ID.String(), runID)
+	for i := range builds {
+		if builds[i].ID == buildID {
+			return fmt.Errorf("build coordinate %s is already occupied by %s run %q", buildID, builds[i].CISystem, builds[i].CIRunID)
+		}
+	}
+	build := domain.Build{
+		ID:        buildID,
+		ServiceID: plan.svc.ID,
+		GitSHA:    gitSHA,
+		GitRef:    gitRef,
+		CISystem:  adoptionCISystem,
+		CIRunID:   runID,
+		Status:    domain.BuildStatusSucceeded,
+		Metadata: map[string]any{
+			"import_source":  "adoption",
+			"target_name":    plan.target.Name,
+			"container_id":   discovered.ContainerID,
+			"container_name": discovered.ContainerName,
+			"image_ref":      discovered.ImageRef,
+			"source_runtime": discovered.SourceRuntime,
+			"compose":        discovered.Compose,
+		},
+		CreatedAt: now,
+	}
+	for k, v := range targetTransportMetadata(plan.target) {
+		build.Metadata[k] = v
+	}
+	finished := now
+	build.StartedAt = &finished
+	build.FinishedAt = &finished
+	plan.build = build
+	return nil
+}
+
+func (s *AdoptionService) planArtifact(ctx context.Context, plan *adoptionPlan, now time.Time) error {
+	discovered := plan.discovered
+	artifacts, err := s.view.ListArtifacts(ctx)
+	if err != nil {
+		return fmt.Errorf("looking up adoption artifact: %w", err)
+	}
+	for i := range artifacts {
+		if artifacts[i].ImageRepo != discovered.ImageRepo || artifacts[i].ImageDigest != discovered.ImageDigest {
+			continue
+		}
+		if artifacts[i].ServiceID != plan.svc.ID {
+			return fmt.Errorf("artifact %s@%s already belongs to service %s", discovered.ImageRepo, discovered.ImageDigest, artifacts[i].ServiceID)
+		}
+		plan.artifact = artifacts[i]
+		return nil
+	}
+	imageTag := discovered.ImageTag
+	if imageTag == "" {
+		imageTag = "adopted"
+	}
+	artifactID := adoptionEntityID("artifact", plan.svc.ID.String(), discovered.ImageRepo, discovered.ImageDigest)
+	for i := range artifacts {
+		if artifacts[i].ID == artifactID {
+			return fmt.Errorf("artifact coordinate %s is already occupied by %s@%s", artifactID, artifacts[i].ImageRepo, artifacts[i].ImageDigest)
+		}
+	}
+	plan.artifact = domain.Artifact{
+		ID:          artifactID,
+		BuildID:     plan.build.ID,
+		ServiceID:   plan.svc.ID,
+		ImageRepo:   discovered.ImageRepo,
+		ImageTag:    imageTag,
+		ImageDigest: discovered.ImageDigest,
+		ScanStatus:  domain.ScanStatusUnknown,
+		Metadata: map[string]any{
+			"import_source":  "adoption",
+			"source_runtime": discovered.SourceRuntime,
+			"container_id":   discovered.ContainerID,
+			"container_name": discovered.ContainerName,
+			"image_ref":      discovered.ImageRef,
+		},
+		CreatedAt: now,
+	}
+	return nil
+}
+
+// publishPlan publishes the plan's records in order and returns the step
+// whose publish failed. The binding is published first in progress and last
+// complete, so an interrupted adoption is visible until it is resumed.
+func (s *AdoptionService) publishPlan(ctx context.Context, plan *adoptionPlan) (string, error) {
+	binding := plan.binding
+	binding.Status = domain.AdoptionBindingInProgress
+	if err := s.canonical.PublishAdoptionBinding(ctx, &binding); err != nil {
+		return adoptionStepBinding, fmt.Errorf("publish adoption binding: %w", err)
+	}
+	if err := s.canonical.PublishEnvironmentRegistry(ctx, &plan.env, plan.envUnits); err != nil {
+		return adoptionStepEnvironment, fmt.Errorf("publish environment %q: %w", plan.env.Name, err)
+	}
+	if err := s.canonical.PublishServiceRegistry(ctx, &plan.svc); err != nil {
+		return adoptionStepService, fmt.Errorf("publish service %q: %w", plan.svc.Name, err)
+	}
+	if err := s.canonical.PublishBuildRegistry(ctx, &plan.build); err != nil {
+		return adoptionStepBuild, fmt.Errorf("publish adoption build: %w", err)
+	}
+	if err := s.canonical.PublishArtifactRegistry(ctx, &plan.artifact); err != nil {
+		return adoptionStepArtifact, fmt.Errorf("publish adoption artifact: %w", err)
+	}
+	for _, secret := range plan.secrets {
+		if err := s.importSecret(ctx, plan, secret); err != nil {
+			return adoptionStepSecrets, err
+		}
+	}
+	if err := s.canonical.PublishRuntimeObservation(ctx, &plan.obs); err != nil {
+		return adoptionStepObservation, fmt.Errorf("publish runtime observation: %w", err)
+	}
+	if err := s.canonical.PublishServiceState(ctx, &plan.state, &plan.obs); err != nil {
+		return adoptionStepState, fmt.Errorf("publish service state: %w", err)
+	}
+	binding.Status = domain.AdoptionBindingComplete
+	if err := s.canonical.PublishAdoptionBinding(ctx, &binding); err != nil {
+		return adoptionStepFinalize, fmt.Errorf("publish adoption binding: %w", err)
+	}
+	return adoptionStepComplete, nil
+}
+
+// importSecret stores one imported secret value, encrypted, in the secret
+// value store and then publishes its reference. The value store is the only
+// holder of the value; it is never published.
+func (s *AdoptionService) importSecret(ctx context.Context, plan *adoptionPlan, secret plannedSecret) error {
+	if s.secrets == nil || s.secretEncryptor == nil {
+		return fmt.Errorf("sensitive environment values require configured secret storage and encryption")
+	}
+	ciphertext, encErr := s.secretEncryptor.Encrypt(secret.value, domain.EncryptionAES256)
+	if encErr != nil {
+		return fmt.Errorf("encrypting imported secret %q: %w", secret.name, encErr)
+	}
+	envID := plan.env.ID
+	record := &domain.ServiceSecret{
+		ID:               secret.id,
+		ServiceID:        plan.svc.ID,
+		EnvironmentID:    &envID,
+		Name:             secret.name,
+		EncryptedValue:   ciphertext,
+		EncryptionMethod: domain.EncryptionAES256,
+		Version:          1,
+		CreatedBy:        "adoption",
+		CreatedAt:        plan.obs.ObservedAt,
+		UpdatedAt:        plan.obs.ObservedAt,
+	}
+	// The value is replaced atomically when a transaction executor exists,
+	// so a failure between the delete and the create cannot lose a working
+	// secret; the deterministic id makes a resumed replacement idempotent.
+	replace := func(secrets repository.SecretRepository) error {
+		if secrets == nil {
+			secrets = s.secrets
+		}
+		if err := secrets.DeleteByName(ctx, plan.svc.ID, &envID, secret.name); err != nil {
+			return fmt.Errorf("replacing imported secret %q: %w", secret.name, err)
+		}
+		if err := secrets.Create(ctx, record); err != nil {
+			return fmt.Errorf("creating imported secret %q: %w", secret.name, err)
+		}
+		return nil
+	}
+	var err error
+	if s.index.Tx != nil {
+		err = s.index.Tx.WithinTx(ctx, func(repos repository.TxRepos) error { return replace(repos.Secrets) })
+	} else {
+		err = replace(nil)
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.canonical.PublishSecretRef(ctx, plan.orgID, record.ToRef()); err != nil {
+		return fmt.Errorf("publish imported secret reference %q: %w", secret.name, err)
+	}
+	return nil
+}
+
+// writeIndex mirrors a published plan into the optional SQL index, in one
+// transaction when one is configured. Every write is an upsert, so a resumed
+// or repeated adoption converges on the same rows.
+func (s *AdoptionService) writeIndex(ctx context.Context, plan *adoptionPlan) error {
+	if !s.index.configured() {
+		return nil
+	}
+	write := func(repos repository.TxRepos) error {
+		repos = s.completeIndexRepos(repos)
+		if err := upsertIndexEnvironment(ctx, repos.Environments, plan.env); err != nil {
+			return err
+		}
+		if err := upsertIndexService(ctx, repos.Services, plan.svc); err != nil {
+			return err
+		}
+		if err := upsertIndexDeploymentUnit(ctx, repos.DeploymentUnits, plan.unit); err != nil {
+			return err
+		}
+		if err := upsertIndexBuild(ctx, repos.Builds, plan.build); err != nil {
+			return err
+		}
+		if err := upsertIndexArtifact(ctx, repos.Artifacts, plan.artifact); err != nil {
+			return err
+		}
+		if err := insertIndexObservation(ctx, repos.Observations, plan.obs); err != nil {
+			return err
+		}
+		if repos.State != nil {
+			state := plan.state
+			if err := repos.State.Upsert(ctx, &state); err != nil {
+				return fmt.Errorf("indexing environment service state: %w", err)
+			}
+		}
+		if repos.AdoptedIdentities != nil {
+			if err := repos.AdoptedIdentities.UpsertMany(ctx, plan.binding.Identities()); err != nil {
+				return fmt.Errorf("indexing adopted runtime identities: %w", err)
+			}
+		}
+		return nil
+	}
+	if s.index.Tx != nil {
+		return s.index.Tx.WithinTx(ctx, write)
+	}
+	return write(repository.TxRepos{})
+}
+
+func (s *AdoptionService) completeIndexRepos(repos repository.TxRepos) repository.TxRepos {
+	if repos.Services == nil {
+		repos.Services = s.index.Services
+	}
+	if repos.Environments == nil {
+		repos.Environments = s.index.Environments
+	}
+	if repos.Builds == nil {
+		repos.Builds = s.index.Builds
+	}
+	if repos.Artifacts == nil {
+		repos.Artifacts = s.index.Artifacts
+	}
+	if repos.DeploymentUnits == nil {
+		repos.DeploymentUnits = s.index.DeploymentUnits
+	}
+	if repos.State == nil {
+		repos.State = s.index.State
+	}
+	if repos.Observations == nil {
+		repos.Observations = s.index.Observations
+	}
+	if repos.AdoptedIdentities == nil {
+		repos.AdoptedIdentities = s.index.AdoptedIdentities
+	}
+	return repos
+}
+
+func upsertIndexEnvironment(ctx context.Context, repo repository.EnvironmentRepository, env domain.Environment) error {
+	if repo == nil {
+		return nil
+	}
+	existing, err := repo.GetByID(ctx, env.ID)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("indexing environment %q: %w", env.Name, err)
+	}
+	if existing == nil {
+		if err := repo.Create(ctx, &env); err != nil && !errors.Is(err, repository.ErrAlreadyExists) {
+			return fmt.Errorf("indexing environment %q: %w", env.Name, err)
+		} else if err == nil {
+			return nil
+		}
+	}
+	if err := repo.Update(ctx, &env); err != nil {
+		return fmt.Errorf("indexing environment %q: %w", env.Name, err)
+	}
+	return nil
+}
+
+func upsertIndexService(ctx context.Context, repo repository.ServiceRepository, svc domain.Service) error {
+	if repo == nil {
+		return nil
+	}
+	existing, err := repo.GetByID(ctx, svc.ID)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("indexing service %q: %w", svc.Name, err)
+	}
+	if existing == nil {
+		if err := repo.Create(ctx, &svc); err != nil && !errors.Is(err, repository.ErrAlreadyExists) {
+			return fmt.Errorf("indexing service %q: %w", svc.Name, err)
+		} else if err == nil {
+			return nil
+		}
+	}
+	if err := repo.Update(ctx, &svc); err != nil {
+		return fmt.Errorf("indexing service %q: %w", svc.Name, err)
+	}
+	return nil
+}
+
+func upsertIndexDeploymentUnit(ctx context.Context, repo repository.DeploymentUnitRepository, unit domain.DeploymentUnit) error {
+	if repo == nil || unit.ID == uuid.Nil {
+		return nil
+	}
+	existing, err := repo.GetByEnvironmentKey(ctx, unit.EnvironmentID, unit.Key)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("indexing deployment unit %q: %w", unit.Key, err)
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, &unit); err != nil && !errors.Is(err, repository.ErrAlreadyExists) {
+		return fmt.Errorf("indexing deployment unit %q: %w", unit.Key, err)
+	}
+	return nil
+}
+
+func upsertIndexBuild(ctx context.Context, repo repository.BuildRepository, build domain.Build) error {
+	if repo == nil {
+		return nil
+	}
+	existing, err := repo.GetByID(ctx, build.ID)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("indexing adoption build: %w", err)
+	}
+	if existing == nil {
+		existing, err = repo.GetByCISystemRunID(ctx, build.CISystem, build.CIRunID)
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return fmt.Errorf("indexing adoption build: %w", err)
+		}
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, &build); err != nil && !errors.Is(err, repository.ErrAlreadyExists) {
+		return fmt.Errorf("indexing adoption build: %w", err)
+	}
+	return nil
+}
+
+func upsertIndexArtifact(ctx context.Context, repo repository.ArtifactRepository, artifact domain.Artifact) error {
+	if repo == nil {
+		return nil
+	}
+	existing, err := repo.GetByID(ctx, artifact.ID)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("indexing adoption artifact: %w", err)
+	}
+	if existing == nil {
+		existing, err = repo.GetByImageRepoDigest(ctx, artifact.ImageRepo, artifact.ImageDigest)
+		if err != nil && !errors.Is(err, repository.ErrNotFound) {
+			return fmt.Errorf("indexing adoption artifact: %w", err)
+		}
+	}
+	if existing != nil {
+		return nil
+	}
+	if err := repo.Create(ctx, &artifact); err != nil && !errors.Is(err, repository.ErrAlreadyExists) {
+		return fmt.Errorf("indexing adoption artifact: %w", err)
+	}
+	return nil
+}
+
+func insertIndexObservation(ctx context.Context, repo repository.RuntimeObservationRepository, obs domain.RuntimeObservation) error {
+	if repo == nil {
+		return nil
+	}
+	latest, err := repo.GetLatest(ctx, obs.ServiceID, obs.EnvironmentID)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return fmt.Errorf("indexing runtime observation: %w", err)
+	}
+	if latest != nil && latest.ID == obs.ID {
+		return nil
+	}
+	if err := repo.Create(ctx, &obs); err != nil && !errors.Is(err, repository.ErrAlreadyExists) {
+		return fmt.Errorf("indexing runtime observation: %w", err)
+	}
+	return nil
+}
+
+// RebuildIndex replays every complete adoption binding and the canonical
+// records it names into the optional SQL index. It is safe to repeat and never
+// removes rows. Bindings whose adoption did not complete are skipped: their
+// records are published, but a partial adoption must not be indexed as an
+// adopted workload.
+func (s *AdoptionService) RebuildIndex(ctx context.Context) error {
+	if !s.index.configured() {
+		return nil
+	}
+	if err := s.Ready(); err != nil {
+		return err
+	}
+	bindings, err := s.view.ListAdoptionBindings(ctx)
+	if err != nil {
+		return err
+	}
+	var failed []error
+	for _, binding := range bindings {
+		if binding.Status != domain.AdoptionBindingComplete {
+			continue
+		}
+		if err := s.rebuildBinding(ctx, binding); err != nil {
+			failed = append(failed, fmt.Errorf("adoption %s/%s: %w", binding.ServiceID, binding.EnvironmentID, err))
+		}
+	}
+	return errors.Join(failed...)
+}
+
+func (s *AdoptionService) rebuildBinding(ctx context.Context, binding domain.AdoptionBinding) error {
+	known, err := s.loadKnownServices(ctx)
+	if err != nil {
+		return err
+	}
+	svc := known.byID(binding.ServiceID)
+	if svc == nil {
+		return fmt.Errorf("service record is missing")
+	}
+	environments, err := s.view.ListEnvironments(ctx)
+	if err != nil {
+		return err
+	}
+	var env *AdoptionEnvironment
+	for i := range environments {
+		if environments[i].Environment.ID == binding.EnvironmentID {
+			env = &environments[i]
+		}
+	}
+	if env == nil {
+		return fmt.Errorf("environment record is missing")
+	}
+	write := func(repos repository.TxRepos) error {
+		repos = s.completeIndexRepos(repos)
+		if err := upsertIndexEnvironment(ctx, repos.Environments, env.Environment); err != nil {
+			return err
+		}
+		if err := upsertIndexService(ctx, repos.Services, *svc); err != nil {
+			return err
+		}
+		if binding.DeploymentUnitID != nil {
+			for _, unit := range env.Units {
+				if unit.ID == *binding.DeploymentUnitID {
+					if err := upsertIndexDeploymentUnit(ctx, repos.DeploymentUnits, unit); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if binding.BuildID != nil {
+			build, err := s.view.GetBuild(ctx, *binding.BuildID)
+			if err != nil {
+				return err
+			}
+			if build != nil {
+				if err := upsertIndexBuild(ctx, repos.Builds, *build); err != nil {
+					return err
+				}
+			}
+		}
+		if binding.ArtifactID != nil {
+			artifact, err := s.view.GetArtifact(ctx, *binding.ArtifactID)
+			if err != nil {
+				return err
+			}
+			if artifact != nil {
+				if err := upsertIndexArtifact(ctx, repos.Artifacts, *artifact); err != nil {
+					return err
+				}
+			}
+		}
+		obs, err := s.view.GetRuntimeObservation(ctx, binding.ServiceID, binding.EnvironmentID)
+		if err != nil {
+			return err
+		}
+		if obs != nil {
+			if err := insertIndexObservation(ctx, repos.Observations, *obs); err != nil {
+				return err
+			}
+		}
+		state, err := s.view.GetServiceState(ctx, binding.ServiceID, binding.EnvironmentID)
+		if err != nil {
+			return err
+		}
+		if state != nil && repos.State != nil {
+			if err := repos.State.Upsert(ctx, state); err != nil {
+				return fmt.Errorf("indexing environment service state: %w", err)
+			}
+		}
+		if repos.AdoptedIdentities != nil {
+			if err := repos.AdoptedIdentities.UpsertMany(ctx, binding.Identities()); err != nil {
+				return fmt.Errorf("indexing adopted runtime identities: %w", err)
+			}
+		}
+		return nil
+	}
+	if s.index.Tx != nil {
+		return s.index.Tx.WithinTx(ctx, write)
+	}
+	return write(repository.TxRepos{})
+}
+
+// BackfillFromIndex publishes, once, an adoption binding for every adopted
+// workload that exists only in the SQL-era adopted_runtime_identity table, so
+// identity matching never depends on SQL again. A binding the local store
+// already holds is left alone.
+func (s *AdoptionService) BackfillFromIndex(ctx context.Context, marker AdoptionBackfillMarker) error {
+	lister, ok := s.index.AdoptedIdentities.(adoptedIdentityLister)
+	if !ok || marker == nil {
+		return nil
+	}
+	if err := s.Ready(); err != nil {
+		return err
+	}
+	if done, err := marker.GetControlRecord("bootstrap", adoptionBackfillMarker); err != nil || string(done) == "1" {
+		return err
+	}
+	known, err := s.loadKnownServices(ctx)
+	if err != nil {
+		return err
+	}
+	type bindingKey struct{ service, environment uuid.UUID }
+	grouped := map[bindingKey]*domain.AdoptionBinding{}
+	var order []bindingKey
+	for offset := 0; ; {
+		page, err := lister.List(ctx, adoptionBackfillPage, offset)
+		if err != nil {
+			return err
+		}
+		for _, identity := range page {
+			key := bindingKey{identity.ServiceID, identity.EnvironmentID}
+			if known.binding(key.service, key.environment) != nil {
+				continue
+			}
+			binding := grouped[key]
+			if binding == nil {
+				binding = &domain.AdoptionBinding{
+					OrgID: identity.OrgID, ServiceID: identity.ServiceID, EnvironmentID: identity.EnvironmentID,
+					HostAlias: identity.HostAlias, EndpointRef: identity.EndpointRef, TargetName: identity.TargetName,
+					ContainerID: identity.ContainerID, ImageDigest: identity.ImageDigest, Compose: identity.Compose,
+					Fingerprints: map[string]string{}, Status: domain.AdoptionBindingComplete, UpdatedAt: s.now(),
+				}
+				grouped[key] = binding
+				order = append(order, key)
+			}
+			binding.Fingerprints[identity.FingerprintKind] = identity.Fingerprint
+		}
+		if len(page) < adoptionBackfillPage {
+			break
+		}
+		offset += len(page)
+	}
+	for _, key := range order {
+		if err := s.canonical.PublishAdoptionBinding(ctx, grouped[key]); err != nil {
+			return fmt.Errorf("backfill adoption binding %s/%s: %w", key.service, key.environment, err)
+		}
+	}
+	return marker.PutControlRecord("bootstrap", adoptionBackfillMarker, []byte("1"))
 }
 
 func (s *AdoptionService) logAdoptionImportResult(target AdoptionTarget, result AdoptionImportResult, outcome string) {
@@ -613,6 +1635,7 @@ func (s *AdoptionService) logAdoptionImportResult(target AdoptionTarget, result 
 		zap.String("container_name", result.ContainerName),
 		zap.String("service_name", result.ServiceName),
 		zap.String("status", result.Status),
+		zap.String("step", result.Step),
 		zap.String("result", outcome),
 		zap.Int("redacted_env_key_count", len(result.RedactedEnvironmentKeys)),
 		zap.Int("redacted_label_key_count", len(result.RedactedLabelKeys)),
@@ -629,20 +1652,10 @@ func (s *AdoptionService) logAdoptionImportResult(target AdoptionTarget, result 
 	if result.Error != "" {
 		fields = append(fields, zap.String("error", result.Error))
 	}
+	if result.IndexError != "" {
+		fields = append(fields, zap.String("index_error", result.IndexError))
+	}
 	s.logger.Info("adoption candidate import completed", fields...)
-}
-
-func isRetryableImportTxError(err error) bool {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
-		return false
-	}
-	switch pgErr.Code {
-	case "23505", "40001", "40P01":
-		return true
-	default:
-		return false
-	}
 }
 
 func adoptionPreviewOperationalStats(previews []AdoptionPreview) (candidateCount, redactedEnvKeyCount, redactedLabelKeyCount, targetErrorCount int) {
@@ -672,100 +1685,6 @@ func adoptionImportOperationalStats(results []AdoptionImportResult) (successCoun
 	return successCount, failureCount, redactedEnvKeyCount, redactedLabelKeyCount
 }
 
-func (s *AdoptionService) completeTxRepos(repos repository.TxRepos) repository.TxRepos {
-	if repos.Services == nil {
-		repos.Services = s.services
-	}
-	if repos.Environments == nil {
-		repos.Environments = s.environments
-	}
-	if repos.Builds == nil {
-		repos.Builds = s.builds
-	}
-	if repos.Artifacts == nil {
-		repos.Artifacts = s.artifacts
-	}
-	if repos.DeploymentUnits == nil {
-		repos.DeploymentUnits = s.deploymentUnits
-	}
-	if repos.State == nil {
-		repos.State = s.state
-	}
-	if repos.Observations == nil {
-		repos.Observations = s.observations
-	}
-	if repos.Secrets == nil {
-		repos.Secrets = s.secrets
-	}
-	if repos.AdoptedIdentities == nil {
-		repos.AdoptedIdentities = s.adoptedIdentities
-	}
-	return repos
-}
-
-func (s *AdoptionService) ensureAdoptionDeploymentUnit(
-	ctx context.Context,
-	units repository.DeploymentUnitRepository,
-	env *domain.Environment,
-	target AdoptionTarget,
-	discovered runtime.DiscoveredContainer,
-	serviceName string,
-) (*domain.DeploymentUnit, error) {
-	if units == nil {
-		return nil, fmt.Errorf("deployment unit repository is required for adoption")
-	}
-	key := normalizeResourceName(serviceName)
-	if key == "" {
-		return nil, fmt.Errorf("deployment unit key is required for adoption")
-	}
-	existing, err := units.GetByEnvironmentKey(ctx, env.ID, key)
-	if err != nil {
-		return nil, fmt.Errorf("loading adoption deployment unit: %w", err)
-	}
-	if existing != nil {
-		return existing, nil
-	}
-
-	runtimeType := domain.RuntimeTypeDocker
-	composeDir := ""
-	if isComposeOrigin(discovered) {
-		runtimeType = domain.RuntimeTypeCompose
-		if discovered.Compose != nil {
-			composeDir = strings.TrimSpace(discovered.Compose.WorkingDir)
-		}
-	}
-	unit := &domain.DeploymentUnit{
-		EnvironmentID: env.ID,
-		Key:           key,
-		DisplayName:   serviceName,
-		RuntimeType:   runtimeType,
-		EndpointRef:   strings.TrimSpace(target.EndpointRef),
-		ComposeDir:    composeDir,
-		ReconcileMode: domain.ReconcileModeAutoApply,
-		OwnershipMode: domain.OwnershipModeBahiaManaged,
-	}
-	if err := units.Create(ctx, unit); err != nil {
-		return nil, fmt.Errorf("creating adoption deployment unit: %w", err)
-	}
-	return unit, nil
-}
-
-func (s *AdoptionService) registryForRepos(repos repository.TxRepos) *RegistryService {
-	return NewRegistryService(
-		repos.Services,
-		repos.Environments,
-		repos.Builds,
-		repos.Artifacts,
-		nil,
-		nil,
-		repos.Observations,
-		repos.State,
-		nil,
-		&events.NoopPublisher{},
-		s.logger,
-	)
-}
-
 func (s *AdoptionService) resolveImportOrgID(ctx context.Context, requested uuid.UUID, targets []AdoptionTarget) (uuid.UUID, error) {
 	if s.organizations == nil {
 		return requested, nil
@@ -783,12 +1702,12 @@ func (s *AdoptionService) resolveImportOrgID(ctx context.Context, requested uuid
 
 	resolvedFromEnvironments := map[uuid.UUID]struct{}{}
 	for _, target := range targets {
-		env, err := s.environments.GetByName(ctx, target.EnvironmentName)
+		env, err := s.environmentByName(ctx, target.EnvironmentName)
 		if err != nil {
 			return uuid.Nil, fmt.Errorf("looking up environment %q for org resolution: %w", target.EnvironmentName, err)
 		}
-		if env != nil && env.OrgID != uuid.Nil {
-			resolvedFromEnvironments[env.OrgID] = struct{}{}
+		if env != nil && env.Environment.OrgID != uuid.Nil {
+			resolvedFromEnvironments[env.Environment.OrgID] = struct{}{}
 		}
 	}
 	if len(resolvedFromEnvironments) == 1 {
@@ -811,254 +1730,6 @@ func (s *AdoptionService) resolveImportOrgID(ctx context.Context, requested uuid
 		return uuid.Nil, fmt.Errorf("adoption import requires org_id because no organization is available for inference")
 	}
 	return uuid.Nil, fmt.Errorf("adoption import requires org_id because %d organizations are available", len(orgs))
-}
-
-func (s *AdoptionService) ensureAdoptionEnvironment(ctx context.Context, registry *RegistryService, environments repository.EnvironmentRepository, orgID uuid.UUID, target AdoptionTarget) (*domain.Environment, error) {
-	existing, err := environments.GetByName(ctx, target.EnvironmentName)
-	if err != nil {
-		return nil, fmt.Errorf("looking up environment %q: %w", target.EnvironmentName, err)
-	}
-	config := map[string]any{
-		"type":            string(domain.RuntimeTypeDocker),
-		"host_alias":      target.Name,
-		"management_mode": "direct_runtime",
-	}
-	if target.EndpointRef != "" {
-		config["endpoint_ref"] = target.EndpointRef
-	} else {
-		config["docker_host"] = target.DockerHost
-	}
-	if existing == nil {
-		env := &domain.Environment{
-			OrgID:         orgID,
-			Name:          target.EnvironmentName,
-			RuntimeConfig: config,
-		}
-		if err := registry.CreateEnvironment(ctx, env); err != nil {
-			return nil, fmt.Errorf("creating environment %q: %w", target.EnvironmentName, err)
-		}
-		return env, nil
-	}
-
-	if existing.OrgID != uuid.Nil && existing.OrgID != orgID {
-		return nil, fmt.Errorf("environment %q belongs to different org %s", target.EnvironmentName, existing.OrgID)
-	}
-	changed := false
-	if existing.OrgID == uuid.Nil {
-		existing.OrgID = orgID
-		changed = true
-	}
-	if existing.RuntimeConfig == nil {
-		existing.RuntimeConfig = map[string]any{}
-	}
-	if currentType, ok := stringFromAny(existing.RuntimeConfig["type"]); ok && currentType != "" && currentType != string(domain.RuntimeTypeDocker) {
-		return nil, fmt.Errorf("environment %q has incompatible runtime type %q", target.EnvironmentName, currentType)
-	}
-	if currentMode, ok := stringFromAny(existing.RuntimeConfig["management_mode"]); ok && currentMode != "" && currentMode != "direct_runtime" {
-		return nil, fmt.Errorf("environment %q has incompatible management_mode %q", target.EnvironmentName, currentMode)
-	}
-	if currentEndpointRef, ok := stringFromAny(existing.RuntimeConfig["endpoint_ref"]); ok && currentEndpointRef != "" && currentEndpointRef != target.EndpointRef {
-		return nil, fmt.Errorf("environment %q already targets endpoint_ref %q", target.EnvironmentName, currentEndpointRef)
-	}
-	if currentHost, ok := stringFromAny(existing.RuntimeConfig["docker_host"]); ok && currentHost != "" && currentHost != target.DockerHost {
-		return nil, fmt.Errorf("environment %q already targets docker_host %q", target.EnvironmentName, currentHost)
-	}
-	if target.EndpointRef != "" {
-		if _, ok := existing.RuntimeConfig["docker_host"]; ok {
-			delete(existing.RuntimeConfig, "docker_host")
-			changed = true
-		}
-	} else if _, ok := existing.RuntimeConfig["endpoint_ref"]; ok {
-		delete(existing.RuntimeConfig, "endpoint_ref")
-		changed = true
-	}
-	for k, v := range config {
-		if existing.RuntimeConfig[k] != v {
-			existing.RuntimeConfig[k] = v
-			changed = true
-		}
-	}
-	if changed {
-		if err := registry.UpdateEnvironment(ctx, existing); err != nil {
-			return nil, fmt.Errorf("updating environment %q: %w", target.EnvironmentName, err)
-		}
-	}
-	return existing, nil
-}
-
-func (s *AdoptionService) ensureAdoptionService(ctx context.Context, registry *RegistryService, services repository.ServiceRepository, orgID uuid.UUID, target AdoptionTarget, discovered runtime.DiscoveredContainer, classified sensitiveDataClassification, serviceName string) (*domain.Service, bool, error) {
-	adopted := adoptedRuntimeConfig(target, discovered, classified)
-	byIdentity, err := s.findServiceByAdoptedTarget(ctx, services, orgID, target, discovered)
-	if err != nil {
-		return nil, false, err
-	}
-	byName, err := services.GetByName(ctx, serviceName)
-	if err != nil {
-		return nil, false, fmt.Errorf("looking up service %q: %w", serviceName, err)
-	}
-	if byName != nil && byName.OrgID != uuid.Nil && byName.OrgID != orgID {
-		return nil, false, fmt.Errorf("service name %q belongs to different org %s", serviceName, byName.OrgID)
-	}
-	if byName != nil && byIdentity != nil && byName.ID != byIdentity.ID {
-		return nil, false, fmt.Errorf("service name %q already exists for a different target", serviceName)
-	}
-	if byName != nil && byIdentity == nil && byName.RuntimeConfig != nil &&
-		byName.RuntimeConfig.Adopted != nil && !sameAdoptedTarget(byName, target, discovered) {
-		return nil, false, fmt.Errorf("service name %q already exists for a different target", serviceName)
-	}
-
-	existing := byIdentity
-	if existing == nil {
-		existing = byName
-	}
-	if existing == nil {
-		svc := &domain.Service{
-			OrgID:         orgID,
-			Name:          serviceName,
-			ArtifactRepo:  discovered.ImageRepo,
-			RuntimeType:   domain.RuntimeTypeDocker,
-			RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: adopted},
-		}
-		if err := registry.CreateService(ctx, svc); err != nil {
-			return nil, false, fmt.Errorf("creating service %q: %w", serviceName, err)
-		}
-		return svc, true, nil
-	}
-	if existing.OrgID != uuid.Nil && existing.OrgID != orgID {
-		return nil, false, fmt.Errorf("service %q belongs to different org %s", existing.Name, existing.OrgID)
-	}
-	existing.OrgID = orgID
-	existing.RuntimeType = domain.RuntimeTypeDocker
-	existing.ArtifactRepo = discovered.ImageRepo
-	existing.RuntimeConfig = &domain.ServiceRuntimeConfig{Adopted: adopted}
-	if err := registry.UpdateService(ctx, existing); err != nil {
-		return nil, false, fmt.Errorf("updating service %q: %w", existing.Name, err)
-	}
-	return existing, false, nil
-}
-
-func (s *AdoptionService) findServiceByAdoptedTarget(ctx context.Context, serviceRepo repository.ServiceRepository, orgID uuid.UUID, target AdoptionTarget, discovered runtime.DiscoveredContainer) (*domain.Service, error) {
-	if s.adoptedIdentities != nil {
-		identities, err := s.adoptedIdentities.FindByFingerprints(ctx, orgID, adoptedRuntimeFingerprints(target, discovered))
-		if err != nil {
-			return nil, err
-		}
-		var matched *domain.Service
-		for _, identity := range identities {
-			if identity.OrgID != orgID {
-				continue
-			}
-			svc, err := serviceRepo.GetByID(ctx, identity.ServiceID)
-			if err != nil {
-				return nil, fmt.Errorf("looking up service by adopted identity: %w", err)
-			}
-			if svc == nil {
-				continue
-			}
-			if matched != nil && matched.ID != svc.ID {
-				return nil, fmt.Errorf("adopted runtime identity matches multiple services in org %s", orgID)
-			}
-			matched = svc
-		}
-		if matched != nil {
-			return matched, nil
-		}
-	}
-	services, err := serviceRepo.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("listing services for adopted target lookup: %w", err)
-	}
-	for i := range services {
-		if services[i].OrgID == orgID && sameAdoptedTarget(&services[i], target, discovered) {
-			return &services[i], nil
-		}
-	}
-	return nil, nil
-}
-
-func (s *AdoptionService) ensureAdoptionBuild(ctx context.Context, builds repository.BuildRepository, target AdoptionTarget, discovered runtime.DiscoveredContainer, serviceID uuid.UUID) (*domain.Build, error) {
-	runID := adoptionRunID(target, discovered)
-	existing, err := builds.GetByCISystemRunID(ctx, adoptionCISystem, runID)
-	if err != nil {
-		return nil, fmt.Errorf("looking up adoption build: %w", err)
-	}
-	if existing != nil {
-		if existing.ServiceID != serviceID {
-			return nil, fmt.Errorf("adoption build %q already belongs to service %s", runID, existing.ServiceID)
-		}
-		return existing, nil
-	}
-	gitSHA := strings.TrimSpace(discovered.Labels["org.opencontainers.image.revision"])
-	if gitSHA == "" {
-		gitSHA = "adopted"
-	}
-	gitRef := discovered.ImageTag
-	if gitRef == "" {
-		gitRef = "adopted"
-	}
-	build := &domain.Build{
-		ServiceID: serviceID,
-		GitSHA:    gitSHA,
-		GitRef:    gitRef,
-		CISystem:  adoptionCISystem,
-		CIRunID:   runID,
-		Status:    domain.BuildStatusSucceeded,
-		Metadata: map[string]any{
-			"import_source":  "adoption",
-			"target_name":    target.Name,
-			"container_id":   discovered.ContainerID,
-			"container_name": discovered.ContainerName,
-			"image_ref":      discovered.ImageRef,
-			"source_runtime": discovered.SourceRuntime,
-			"compose":        discovered.Compose,
-		},
-	}
-	for k, v := range targetTransportMetadata(target) {
-		build.Metadata[k] = v
-	}
-	finished := time.Now().UTC()
-	build.StartedAt = &finished
-	build.FinishedAt = &finished
-	if err := builds.Create(ctx, build); err != nil {
-		return nil, fmt.Errorf("creating adoption build: %w", err)
-	}
-	return build, nil
-}
-
-func (s *AdoptionService) ensureAdoptionArtifact(ctx context.Context, artifacts repository.ArtifactRepository, discovered runtime.DiscoveredContainer, serviceID, buildID uuid.UUID) (*domain.Artifact, error) {
-	existing, err := artifacts.GetByImageRepoDigest(ctx, discovered.ImageRepo, discovered.ImageDigest)
-	if err != nil {
-		return nil, fmt.Errorf("looking up adoption artifact: %w", err)
-	}
-	if existing != nil {
-		if existing.ServiceID != serviceID {
-			return nil, fmt.Errorf("artifact %s@%s already belongs to service %s", discovered.ImageRepo, discovered.ImageDigest, existing.ServiceID)
-		}
-		return existing, nil
-	}
-	imageTag := discovered.ImageTag
-	if imageTag == "" {
-		imageTag = "adopted"
-	}
-	artifact := &domain.Artifact{
-		BuildID:     buildID,
-		ServiceID:   serviceID,
-		ImageRepo:   discovered.ImageRepo,
-		ImageTag:    imageTag,
-		ImageDigest: discovered.ImageDigest,
-		ScanStatus:  domain.ScanStatusUnknown,
-		Metadata: map[string]any{
-			"import_source":  "adoption",
-			"source_runtime": discovered.SourceRuntime,
-			"container_id":   discovered.ContainerID,
-			"container_name": discovered.ContainerName,
-			"image_ref":      discovered.ImageRef,
-		},
-	}
-	if err := artifacts.Create(ctx, artifact); err != nil {
-		return nil, fmt.Errorf("creating adoption artifact: %w", err)
-	}
-	return artifact, nil
 }
 
 func (s *AdoptionService) normalizeAdoptionTargets(targets []AdoptionTarget) ([]AdoptionTarget, error) {
@@ -1185,84 +1856,6 @@ func isComposeOrigin(discovered runtime.DiscoveredContainer) bool {
 
 func adoptionRunID(target AdoptionTarget, discovered runtime.DiscoveredContainer) string {
 	return strings.Join([]string{target.Name, discovered.TargetName, discovered.ImageDigest}, ":")
-}
-
-func (s *AdoptionService) importSensitiveEnvironmentSecrets(ctx context.Context, secrets repository.SecretRepository, serviceID, envID uuid.UUID, sensitiveEnv map[string]string) error {
-	if len(sensitiveEnv) == 0 {
-		return nil
-	}
-	if secrets == nil || s.secretEncryptor == nil {
-		return fmt.Errorf("sensitive environment values require configured secret storage and encryption")
-	}
-	keys := sortedStringKeys(sensitiveEnv)
-	for _, key := range keys {
-		value := sensitiveEnv[key]
-		ciphertext, err := s.secretEncryptor.Encrypt(value, domain.EncryptionAES256)
-		if err != nil {
-			return fmt.Errorf("encrypting imported secret %q: %w", key, err)
-		}
-		if err := secrets.DeleteByName(ctx, serviceID, &envID, key); err != nil {
-			return fmt.Errorf("replacing imported secret %q: %w", key, err)
-		}
-		secret := &domain.ServiceSecret{
-			ID:               uuid.New(),
-			ServiceID:        serviceID,
-			EnvironmentID:    &envID,
-			Name:             key,
-			EncryptedValue:   ciphertext,
-			EncryptionMethod: domain.EncryptionAES256,
-			Version:          1,
-			CreatedBy:        "adoption",
-		}
-		if err := secrets.Create(ctx, secret); err != nil {
-			return fmt.Errorf("creating imported secret %q: %w", key, err)
-		}
-	}
-	return nil
-}
-
-func (s *AdoptionService) persistAdoptedRuntimeIdentities(ctx context.Context, repo repository.AdoptedRuntimeIdentityRepository, orgID, serviceID, envID uuid.UUID, target AdoptionTarget, discovered runtime.DiscoveredContainer) error {
-	if repo == nil {
-		return nil
-	}
-	fingerprints := adoptedRuntimeFingerprintsByKind(target, discovered)
-	identities := make([]domain.AdoptedRuntimeIdentity, 0, len(fingerprints))
-	for kind, fingerprint := range fingerprints {
-		identities = append(identities, domain.AdoptedRuntimeIdentity{
-			OrgID:           orgID,
-			ServiceID:       serviceID,
-			EnvironmentID:   envID,
-			FingerprintKind: kind,
-			Fingerprint:     fingerprint,
-			ContainerID:     discovered.ContainerID,
-			ImageDigest:     discovered.ImageDigest,
-			EndpointRef:     target.EndpointRef,
-			HostAlias:       target.Name,
-			TargetName:      discovered.TargetName,
-			Compose:         discovered.Compose,
-		})
-	}
-	if len(identities) == 0 {
-		return fmt.Errorf("adopted runtime identity requires at least one stable fingerprint")
-	}
-	if err := repo.UpsertMany(ctx, identities); err != nil {
-		return fmt.Errorf("persisting adopted runtime identities: %w", err)
-	}
-	return nil
-}
-
-func adoptedRuntimeFingerprints(target AdoptionTarget, discovered runtime.DiscoveredContainer) []string {
-	byKind := adoptedRuntimeFingerprintsByKind(target, discovered)
-	keys := make([]string, 0, len(byKind))
-	for kind := range byKind {
-		keys = append(keys, kind)
-	}
-	sort.Strings(keys)
-	fingerprints := make([]string, 0, len(keys))
-	for _, kind := range keys {
-		fingerprints = append(fingerprints, byKind[kind])
-	}
-	return fingerprints
 }
 
 func adoptedRuntimeFingerprintsByKind(target AdoptionTarget, discovered runtime.DiscoveredContainer) map[string]string {
@@ -1471,6 +2064,14 @@ func stringFromAny(v any) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(s), true
+}
+
+func copyRuntimeConfig(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func copyStringMap(in map[string]string) map[string]string {

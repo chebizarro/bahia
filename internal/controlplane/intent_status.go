@@ -104,6 +104,11 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 		content["data"] = intent.StatusData
 	} else if status == "accepted" && len(intent.Result) != 0 {
 		content["data"] = intent.Result
+	} else if status == "rejected" && len(intent.StatusData) != 0 {
+		// A handler that got part of the way (adoption's per-resource
+		// canonical publication) reports its progress on the rejection, so a
+		// partial application is visible, not silent.
+		content["data"] = intent.StatusData
 	}
 	contentJSON, err := json.Marshal(content)
 	if err != nil {

@@ -50,6 +50,9 @@ func AdoptionImportResultResponsesFromService(results []service.AdoptionImportRe
 			RedactedEnvironmentKeys: append([]string(nil), result.RedactedEnvironmentKeys...),
 			RedactedLabelKeys:       append([]string(nil), result.RedactedLabelKeys...),
 			Error:                   result.Error,
+			Incomplete:              result.Incomplete,
+			Step:                    result.Step,
+			IndexError:              result.IndexError,
 		})
 	}
 	return mapped
