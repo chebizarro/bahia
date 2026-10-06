@@ -36,8 +36,13 @@ type AdoptionBinding struct {
 	Compose     *ComposeMetadata `json:"compose,omitempty"`
 	// Fingerprints maps a fingerprint kind to the fingerprint itself.
 	Fingerprints map[string]string `json:"fingerprints"`
-	Status       string            `json:"status"`
-	UpdatedAt    time.Time         `json:"updated_at"`
+	// RequestID is the signed request (intent id) that published this
+	// binding, and ServiceCreated whether that request created the service,
+	// so a resumed request reports the outcome it originally had.
+	RequestID      string    `json:"request_id,omitempty"`
+	ServiceCreated bool      `json:"service_created,omitempty"`
+	Status         string    `json:"status"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // Identities expands the binding into one adopted runtime identity per

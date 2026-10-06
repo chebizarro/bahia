@@ -46,6 +46,12 @@ func NewAdoptionCanonicalPublisher(projector *Projector, encryptor ConfidentialS
 	}
 }
 
+// SetEncryptor installs the confidential encryptor after construction, for
+// wiring where the encryptor is created after the publisher.
+func (p *AdoptionCanonicalPublisher) SetEncryptor(encryptor ConfidentialStateEncryptor) {
+	p.encryptor = encryptor
+}
+
 // publish signs one live plaintext record on the coordinate (legacyKind, d).
 func (p *AdoptionCanonicalPublisher) publish(ctx context.Context, legacyKind int, d string, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
 	if p == nil || p.projector == nil || !p.projector.Enabled() {

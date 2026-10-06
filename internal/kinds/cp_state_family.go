@@ -114,7 +114,8 @@ const (
 // resumes an interrupted adoption from these records in its local event store
 // instead of the SQL adopted_runtime_identity table. Like the security scan
 // families, it never had a wire kind and exists only as a 30900 discriminator.
-const CPStateFamilyAdoptionBinding CPStateFamily = 32022
+// 32022-32025 are taken by the HiveCI and SoulFactory saga families.
+const CPStateFamilyAdoptionBinding CPStateFamily = 32026
 
 // AdoptionBindingDTag is the d of the adoption binding of a service in an
 // environment: "adoption:binding:<service-id>:<environment-id>".

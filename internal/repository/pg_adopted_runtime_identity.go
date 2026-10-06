@@ -119,6 +119,33 @@ func (r *PgAdoptedRuntimeIdentityRepository) FindByFingerprints(ctx context.Cont
 	return identities, rows.Err()
 }
 
+// List returns a page of every stored identity, oldest first. The adoption
+// service uses it once to publish SQL-era identities as canonical adoption
+// bindings (audit B-35).
+func (r *PgAdoptedRuntimeIdentityRepository) List(ctx context.Context, limit, offset int) ([]domain.AdoptedRuntimeIdentity, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, org_id, service_id, environment_id, fingerprint_kind, fingerprint,
+		       container_id, image_digest, endpoint_ref, host_alias, target_name, compose, created_at, updated_at
+		FROM adopted_runtime_identity
+		ORDER BY created_at, id
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("listing adopted runtime identities: %w", err)
+	}
+	defer rows.Close()
+
+	var identities []domain.AdoptedRuntimeIdentity
+	for rows.Next() {
+		identity, err := scanAdoptedRuntimeIdentity(rows)
+		if err != nil {
+			return nil, err
+		}
+		identities = append(identities, identity)
+	}
+	return identities, rows.Err()
+}
+
 func scanAdoptedRuntimeIdentity(row pgx.Row) (domain.AdoptedRuntimeIdentity, error) {
 	var identity domain.AdoptedRuntimeIdentity
 	var composeJSON []byte
