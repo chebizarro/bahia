@@ -694,9 +694,6 @@ func New(cfg *config.Config) (*App, error) {
 	if securityRepo != nil {
 		bgManager.RegisterWithOptions(NewOSVVulnerabilityCacheCleanupRunner(securityRepo, defaultOSVVulnerabilityCacheCleanupInterval, logger))
 	}
-	if contextVMResponseStore != nil {
-		bgManager.RegisterWithOptions(NewContextVMResponseCleanupRunner(contextVMResponseStore, defaultContextVMResponseRetention, time.Hour, logger), RunnerRequired(false))
-	}
 	if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
 		if staleRunSource, ok := runRepo.(workflow.DeploymentRunHealthSource); ok {
 			bgManager.RegisterWithOptions(
@@ -1617,6 +1614,21 @@ func New(cfg *config.Config) (*App, error) {
 		registerSignetHealthCheck(healthProvider, soulFactoryRuntime.connection)
 		bgManager.RegisterWithOptions(soulFactoryRuntime.runner)
 		logger.Info("SoulFactory reactor registered", zap.Bool("enabled", cfg.SoulFactory.Enabled))
+	}
+
+	// Hourly retention: one housekeeping wakeup for every record whose expiry
+	// no event signals. ContextVM responses need the SQL store; OpenClaw saga
+	// runs and their adapter-ledger records (bahia-fpubg) need only the
+	// SoulFactory runtime, so the runner is registered whenever either exists.
+	var retentionTasks []RetentionTask
+	if contextVMResponseStore != nil {
+		retentionTasks = append(retentionTasks, ContextVMResponseRetention{Pruner: contextVMResponseStore, Retention: defaultContextVMResponseRetention})
+	}
+	if soulFactoryRuntime != nil && soulFactoryRuntime.retention != nil {
+		retentionTasks = append(retentionTasks, soulFactoryRuntime.retention)
+	}
+	if len(retentionTasks) > 0 {
+		bgManager.RegisterWithOptions(NewRetentionRunner(defaultRetentionInterval, logger, retentionTasks...), RunnerRequired(false))
 	}
 
 	// Phase 3 C1: create encrypted canonical publisher for org state.

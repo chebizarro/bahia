@@ -18,6 +18,7 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/codec/betterbinary"
 
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/soulfactory/saga"
@@ -325,7 +326,7 @@ func (s *productionStateStore) reservation(ctx context.Context, spec Provisionin
 		Schema: productionReservationSchema, AgentID: spec.AgentID, SpecHash: spec.SpecHash,
 		RequestID: spec.RequestID, RunID: spec.RunID, CreatedAt: s.now().UTC(), Version: 1,
 	}
-	createdAt, err := s.publishIdentity(ctx, next, replaces)
+	createdAt, err := s.publishIdentity(ctx, next, replaces, false)
 	if err != nil {
 		return nil, false, err
 	}
@@ -338,6 +339,38 @@ func (s *productionStateStore) reservation(ctx context.Context, spec Provisionin
 	}
 	copied := *next
 	return &copied, true, nil
+}
+
+// removeIdentity tombstones the agent id's identity reservation and drops
+// its cache, releasing the agent id for a later request. It is idempotent: an
+// agent id with no live reservation is already released. Callers decide
+// eligibility (ledgerPurgingStore.retireIdentity); this only commits it.
+func (s *productionStateStore) removeIdentity(ctx context.Context, agentID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, replaces, err := s.currentIdentity(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		return nil
+	}
+	createdAt, err := s.publishIdentity(ctx, current, replaces, true)
+	if err != nil {
+		return err
+	}
+	s.identities[agentID] = ledgerCommitted[productionIdentityReservation]{version: current.Version, createdAt: createdAt, deleted: true}
+	if err := os.Remove(s.reservationPath(agentID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if s.canonical() {
+			s.logger.Warn("adapter ledger reservation cache remove failed", "agent_id", agentID, "error", err)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // currentRequest is the request's live state from the highest-version
@@ -577,20 +610,24 @@ func (s *productionStateStore) publishRequest(ctx context.Context, state *produc
 	return s.publish(ctx, ledgerRequestDTag(state.RequestID), ledgerRequestSchema, ledgerRecordRequest, state.Version, content, replaces, deleted, "request "+state.RequestID)
 }
 
-// publishIdentity publishes the agent id's reservation record.
-func (s *productionStateStore) publishIdentity(ctx context.Context, reservation *productionIdentityReservation, replaces nostr.Timestamp) (nostr.Timestamp, error) {
+// publishIdentity publishes the agent id's reservation record (or its
+// tombstone).
+func (s *productionStateStore) publishIdentity(ctx context.Context, reservation *productionIdentityReservation, replaces nostr.Timestamp, deleted bool) (nostr.Timestamp, error) {
 	if !s.canonical() {
 		return 0, nil
 	}
-	plaintext, err := json.Marshal(reservation)
-	if err != nil {
-		return 0, fmt.Errorf("encode adapter ledger reservation: %w", err)
+	content := ""
+	if !deleted {
+		plaintext, err := json.Marshal(reservation)
+		if err != nil {
+			return 0, fmt.Errorf("encode adapter ledger reservation: %w", err)
+		}
+		content, err = s.encryptor.EncryptConfidential(ctx, kinds.FleetOCKScope, plaintext, int(kinds.CPStateFamilySoulFactoryAdapterLedger), ledgerIdentityDTag(reservation.AgentID), kinds.CPStateTopicSoulFactoryAdapterLedger, nil)
+		if err != nil {
+			return 0, fmt.Errorf("encrypt adapter ledger reservation: %w", err)
+		}
 	}
-	content, err := s.encryptor.EncryptConfidential(ctx, kinds.FleetOCKScope, plaintext, int(kinds.CPStateFamilySoulFactoryAdapterLedger), ledgerIdentityDTag(reservation.AgentID), kinds.CPStateTopicSoulFactoryAdapterLedger, nil)
-	if err != nil {
-		return 0, fmt.Errorf("encrypt adapter ledger reservation: %w", err)
-	}
-	return s.publish(ctx, ledgerIdentityDTag(reservation.AgentID), ledgerIdentitySchema, ledgerRecordIdentity, reservation.Version, content, replaces, false, "agent "+reservation.AgentID)
+	return s.publish(ctx, ledgerIdentityDTag(reservation.AgentID), ledgerIdentitySchema, ledgerRecordIdentity, reservation.Version, content, replaces, deleted, "agent "+reservation.AgentID)
 }
 
 // publish signs and publishes one ledger record outbox-first. Its created_at
@@ -690,14 +727,35 @@ func writeProductionJSON(path string, value any) error {
 	return os.Rename(name, path)
 }
 
+// soulLookup reads the agent id's current Soul projection, nil when there is
+// none. *Reactor.GetSoul satisfies it; it fails closed on an incomplete relay
+// read, and so does the identity retirement that asks it.
+type soulLookup func(ctx context.Context, agentID string) (*domain.AgentSoul, error)
+
 // ledgerPurgingStore is the saga store the engine and saga.PurgeExpired see:
-// deleting a run also tombstones the request's adapter-ledger record, under
+// deleting a run also tombstones the request's adapter-ledger record and,
+// when the rule below allows, the agent id's identity reservation, all under
 // the request lock so a running workflow is never purged from under itself.
-// Both deletions are idempotent, so a purge interrupted between them is
-// completed by the next one.
+//
+// Order: the ledger records are retired first and the saga run last. Every
+// step is idempotent and the saga run is what the next retention pass lists,
+// so a purge interrupted anywhere is completed by the next pass instead of
+// leaking a ledger record whose run is already gone.
+//
+// Identity rule. The reservation names the request that reserved the agent
+// id. It is retired with that request's run only; a run that lost the agent
+// id to another request (ownership_conflict) leaves the winner's reservation
+// alone. And it is retired only when no Soul projection of the agent id is
+// live, that is GetSoul returns nothing or a revoked Soul: an identity
+// outlives its request whenever the agent exists outside the governed path
+// (legacy provisioning, adoption) or was re-bound after the run ended, and
+// the reservation is what keeps a later request from minting a second
+// identity for that live agent. A Soul read that fails, or no Soul seam at
+// all, keeps the reservation: releasing an agent id is never done blind.
 type ledgerPurgingStore struct {
 	saga.Store
 	states *productionStateStore
+	souls  soulLookup
 }
 
 func (s ledgerPurgingStore) Delete(ctx context.Context, requestID string, expectedVersion uint64) error {
@@ -706,8 +764,52 @@ func (s ledgerPurgingStore) Delete(ctx context.Context, requestID string, expect
 		return err
 	}
 	defer unlock()
-	if err := s.Store.Delete(ctx, requestID, expectedVersion); err != nil {
+	run, err := s.Store.Load(ctx, requestID)
+	if err != nil {
 		return err
 	}
-	return s.states.remove(ctx, requestID)
+	if run.Version != expectedVersion {
+		return saga.ErrConflict
+	}
+	// The Soul read is the one step that can fail closed; take it before any
+	// record is touched so a failed read leaves the run whole for the next pass.
+	release, err := s.releasesIdentity(ctx, run)
+	if err != nil {
+		return err
+	}
+	if err := s.states.remove(ctx, requestID); err != nil {
+		return err
+	}
+	if release {
+		if err := s.states.removeIdentity(ctx, run.AgentID); err != nil {
+			return err
+		}
+		s.states.logger.Info("adapter ledger identity reservation released", "agent_id", run.AgentID, "request_id", run.RequestID)
+	}
+	return s.Store.Delete(ctx, requestID, expectedVersion)
+}
+
+// releasesIdentity applies the identity rule to the run being purged and
+// reports whether the agent id's reservation is released with it.
+func (s ledgerPurgingStore) releasesIdentity(ctx context.Context, run *saga.Run) (bool, error) {
+	reservation, _, err := s.states.reservation(ctx, ProvisioningSpec{AgentID: run.AgentID}, false)
+	if err != nil {
+		return false, err
+	}
+	if reservation == nil || reservation.RequestID != run.RequestID {
+		return false, nil
+	}
+	if s.souls == nil {
+		s.states.logger.Warn("adapter ledger identity reservation kept: no Soul lookup to prove the agent id is free", "agent_id", run.AgentID, "request_id", run.RequestID)
+		return false, nil
+	}
+	soul, err := s.souls(ctx, run.AgentID)
+	if err != nil {
+		return false, fmt.Errorf("inspect Soul of agent %s before releasing its identity reservation: %w", run.AgentID, err)
+	}
+	if soul != nil && soul.Status != domain.SoulStatusRevoked {
+		s.states.logger.Info("adapter ledger identity reservation kept: agent has a live Soul", "agent_id", run.AgentID, "request_id", run.RequestID, "soul_status", string(soul.Status))
+		return false, nil
+	}
+	return true, nil
 }
