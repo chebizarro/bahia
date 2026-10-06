@@ -105,6 +105,12 @@ type AdoptionImportResultResponse struct {
 	RedactedEnvironmentKeys []string   `json:"redacted_environment_keys,omitempty"`
 	RedactedLabelKeys       []string   `json:"redacted_label_keys,omitempty"`
 	Error                   string     `json:"error,omitempty"`
+	// Incomplete reports that a canonical publish failed at Step; the
+	// request is resumable by re-processing it. IndexError reports a failed
+	// write of the optional SQL index after the canonical records completed.
+	Incomplete bool   `json:"incomplete,omitempty"`
+	Step       string `json:"step,omitempty"`
+	IndexError string `json:"index_error,omitempty"`
 }
 
 // RuntimeActionResponse reports a completed direct runtime action.

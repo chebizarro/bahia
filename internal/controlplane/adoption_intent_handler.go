@@ -93,13 +93,72 @@ func (h *AdoptionIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 	if request.OrgID != "" && request.OrgID != intent.OrgID.String() {
 		return fmt.Errorf("adoption org_id does not match intent organization")
 	}
-	results, err := h.adoption.Import(ctx, service.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: request.ImportAll, OrgID: intent.OrgID})
+	// The intent id keys the resources minted per request, so re-processing
+	// this intent after a crash or a failed publish resumes onto the same
+	// canonical coordinates (audit B-35).
+	results, err := h.adoption.Import(ctx, service.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: request.ImportAll, OrgID: intent.OrgID, RequestID: intent.IntentID})
+	if results != nil {
+		intent.Result = map[string]any{"imports": dto.AdoptionImportResultResponsesFromService(results)}
+		intent.StatusData = adoptionImportStatusData(dto.AdoptionImportResultResponsesFromService(results))
+	}
 	if err != nil {
+		// A candidate whose canonical publication did not complete leaves the
+		// intent unapplied: the rejection carries the reason and the per-step
+		// progress, and the intent is not marked processed, so its next
+		// delivery resumes the adoption.
 		return err
 	}
-	intent.Result = map[string]any{"imports": dto.AdoptionImportResultResponsesFromService(results)}
-	intent.StatusData = map[string]any{"candidate_count": len(results)}
 	return nil
+}
+
+// adoptionImportStatusData is the bounded progress summary of an import: how
+// many candidates were adopted, refused, left incomplete at a canonical
+// publish, or adopted with a failed SQL index write. It never carries runtime
+// environment values.
+func adoptionImportStatusData(results []dto.AdoptionImportResultResponse) map[string]any {
+	imported, failed, incomplete, indexWarnings := 0, 0, 0, 0
+	progress := make([]map[string]any, 0, len(results))
+	for _, result := range results {
+		switch {
+		case result.Incomplete:
+			incomplete++
+		case result.Status == "failed" || result.Error != "":
+			failed++
+		default:
+			imported++
+		}
+		if result.IndexError != "" {
+			indexWarnings++
+		}
+		entry := map[string]any{
+			"target_name":  boundedIntentStatusText(result.TargetName, 128),
+			"container_id": boundedIntentStatusText(result.ContainerID, 128),
+			"status":       result.Status,
+		}
+		if result.Step != "" {
+			entry["step"] = result.Step
+		}
+		if result.Incomplete {
+			entry["incomplete"] = true
+		}
+		if result.ServiceID != nil {
+			entry["service_id"] = result.ServiceID.String()
+		}
+		if result.Error != "" {
+			entry["error"] = boundedIntentStatusText(result.Error, 256)
+		}
+		if len(progress) < 100 {
+			progress = append(progress, entry)
+		}
+	}
+	return map[string]any{
+		"candidate_count":     len(results),
+		"imported_count":      imported,
+		"failed_count":        failed,
+		"incomplete_count":    incomplete,
+		"index_warning_count": indexWarnings,
+		"progress":            progress,
+	}
 }
 
 // The scan status is public relay data. DTO mapping redacts runtime secrets;

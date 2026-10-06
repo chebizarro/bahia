@@ -474,21 +474,10 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Warn("edge routing convergence unavailable without secret index; route canary observation remains enabled")
 	}
 
-	// Adopted workload orchestration and direct runtime lifecycle services.
-	// Privileged routes are opt-in; keep services nil unless their route family is enabled.
+	// Adopted workload orchestration is wired further down, once the Nostr
+	// projector it publishes through exists (audit B-35). Privileged routes
+	// are opt-in; the service stays nil unless its route family is enabled.
 	var adoptionSvc *service.AdoptionService
-	if cfg.Adoption.Enabled {
-		adoptionSvc = service.NewAdoptionService(
-			registry, serviceRepo, envRepo, buildRepo, artifactRepo, stateRepo, obsRepo, publisher, logger,
-			service.WithAdoptionRuntimeConfig(cfg.Runtime, cfg.Adoption.AllowRawDockerHosts),
-			service.WithAdoptionComposeTakeoverPolicy(cfg.Adoption.AllowComposeTakeover),
-			service.WithAdoptionSecrets(secretRepo, secretEncryptor),
-			service.WithAdoptionOrganizations(orgRepo),
-			service.WithAdoptionRuntimeIdentities(repository.NewPgAdoptedRuntimeIdentityRepository(pool)),
-			service.WithAdoptionDeploymentUnits(deploymentUnitRepo),
-			service.WithAdoptionTxExecutor(repository.NewPgTxExecutor(pool)),
-		)
-	}
 	var runtimeApplyLock *service.RuntimeApplyLock
 	if dbAvailable {
 		runtimeApplyLock = service.NewRuntimeApplyLock(pool, logger)
@@ -1233,14 +1222,61 @@ func New(cfg *config.Config) (*App, error) {
 
 	nostrProjector.SetupSubscriptions(publisher)
 
-	// --- Phase 3 X1: Adoption canonical publisher ---
-	// Publishes service-registry and environment-registry cp-state records
-	// directly from the adoption import site instead of reactively through
-	// the projector's EventAdoptionImported handler (bahia-irsry.11.17).
-	if adoptionSvc != nil {
-		adoptionCanonical := nostrAdapter.NewAdoptionCanonicalPublisher(nostrProjector, logger)
-		adoptionSvc.SetAdoptionCanonicalPublisher(adoptionCanonical)
+	// --- Audit B-35: adoption is relay-canonical ---
+	// Every record an adoption produces is published as signed cp-state
+	// through the projector's outbox before the optional SQL index is
+	// written, and adoption plans from the daemon's canonical records in the
+	// local event store, so it needs the service key but no database. The
+	// confidential encryptor (imported secret references) is installed below,
+	// where it is created.
+	var adoptionCanonical *nostrAdapter.AdoptionCanonicalPublisher
+	if cfg.Adoption.Enabled && !supervisionFromLocalState {
+		logger.Warn("adoption is disabled: the daemon has no service key to read its canonical state with", zap.Error(supervisionStateErr))
 	}
+	if cfg.Adoption.Enabled && supervisionFromLocalState {
+		adoptionCanonical = nostrAdapter.NewAdoptionCanonicalPublisher(nostrProjector, nil, logger)
+		adoptionOptions := []service.AdoptionServiceOption{
+			service.WithAdoptionRuntimeConfig(cfg.Runtime, cfg.Adoption.AllowRawDockerHosts),
+			service.WithAdoptionComposeTakeoverPolicy(cfg.Adoption.AllowComposeTakeover),
+			service.WithAdoptionSecrets(secretRepo, secretEncryptor),
+			service.WithAdoptionOrganizations(orgRepo),
+		}
+		if dbAvailable && pool != nil {
+			adoptionOptions = append(adoptionOptions, service.WithAdoptionIndex(service.AdoptionIndexRepositories{
+				Services: serviceRepo, Environments: envRepo, Builds: buildRepo, Artifacts: artifactRepo,
+				DeploymentUnits: deploymentUnitRepo, State: stateRepo, Observations: obsRepo,
+				AdoptedIdentities: repository.NewPgAdoptedRuntimeIdentityRepository(pool),
+				Tx:                repository.NewPgTxExecutor(pool),
+			}))
+		}
+		adoptionSvc = service.NewAdoptionService(adoptionCanonical, service.NewLocalAdoptionView(localSupervisionState), publisher, logger, adoptionOptions...)
+		if dbAvailable && pool != nil {
+			// Once the local store has caught up with the relays: publish a
+			// binding for every SQL-era adopted identity (once), then bring
+			// the index up to the canonical records.
+			adoptionIndex := adoptionSvc
+			nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+				if err := adoptionIndex.BackfillFromIndex(ctx, localOutbox); err != nil {
+					logger.Warn("adoption binding backfill failed; retrying on next start", zap.Error(err))
+				}
+				if err := adoptionIndex.RebuildIndex(ctx); err != nil {
+					logger.Warn("adoption SQL index rebuild failed", zap.Error(err))
+				}
+			})
+		}
+	}
+	healthProvider.RegisterCheck("adoption", func() HealthCheck {
+		check := HealthCheck{Name: "adoption", Status: HealthStatusPass, Message: "adoption publishes canonical cp-state per resource before the optional SQL index",
+			Details: map[string]string{"sql_index": fmt.Sprintf("%t", dbAvailable && pool != nil)}}
+		if !cfg.Adoption.Enabled {
+			check.Message = "adoption disabled by configuration"
+			check.Details["availability"] = "disabled"
+		} else if err := adoptionSvc.Ready(); err != nil {
+			check.Message = "adoption unavailable: " + err.Error()
+			check.Details["availability"] = "unavailable"
+		}
+		return check
+	})
 
 	// --- Phase 3 B1: Backup canonical publisher and intent handler ---
 	// BackupCanonicalPublisher follows the MLCanonicalPublisher pattern: holds
@@ -1514,6 +1550,9 @@ func New(cfg *config.Config) (*App, error) {
 		registerOCKRotationHealthCheck(healthProvider, ockManager.PendingRotations)
 		confidentialEncryptor = controlplane.NewConfidentialEncryptor(ockManager, logger)
 		f74bCanonical.SetEncryptor(confidentialEncryptor)
+		if adoptionCanonical != nil {
+			adoptionCanonical.SetEncryptor(confidentialEncryptor)
+		}
 	} else if enabledDomains["org"] {
 		logger.Error("org domain requires control-plane signer for confidential state; " +
 			"disabling org domain to prevent plaintext state publication")
