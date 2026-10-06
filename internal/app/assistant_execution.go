@@ -207,9 +207,9 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 	recovery := service.NewAssistantSessionRecoveryRunner(orchestrator, service.AssistantSessionRecoveryConfig{PageLimit: 500, ServicePubkey: deps.ServicePubkey, Logger: slog.Default(), Engine: engine, Store: store, Subscriber: deps.Subscriber, LocalStore: deps.LocalStore, Readiness: deps.Readiness})
 	// bahia-irsry.43: attach the startup topic migration so recovery re-tags
 	// legacy assistant session events before querying the relay with #t.
-	if deps.History != nil && deps.Signer != nil && deps.Publisher != nil {
+	if deps.LocalStore != nil && deps.Signer != nil && deps.Publisher != nil {
 		recovery.SetTopicMigration(service.NewAssistantSessionTopicMigration(service.AssistantSessionTopicMigrationConfig{
-			History:       deps.History,
+			LocalStore:    deps.LocalStore,
 			Signer:        deps.Signer,
 			Publisher:     deps.Publisher,
 			ServicePubkey: deps.ServicePubkey,

@@ -2,108 +2,19 @@ package service
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
-	"github.com/google/uuid"
 
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
-	"github.com/openagentsinc/bahia/internal/repository"
 )
-
-// topicMigrationStore is a minimal in-memory NostrEventRepository for testing.
-type topicMigrationStore struct {
-	mu      sync.Mutex
-	records []repository.NostrEventRecord
-}
-
-func (s *topicMigrationStore) Record(_ context.Context, rec *repository.NostrEventRecord) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.records = append(s.records, *rec)
-	return true, nil
-}
-
-func (s *topicMigrationStore) GetByID(_ context.Context, id string) (*repository.NostrEventRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, rec := range s.records {
-		if rec.ID == id {
-			return &rec, nil
-		}
-	}
-	return nil, nil
-}
-
-func (s *topicMigrationStore) ListByKind(_ context.Context, kind int, limit int) ([]repository.NostrEventRecord, error) {
-	return s.ListByKinds(context.Background(), []int{kind}, limit)
-}
-
-func (s *topicMigrationStore) ListByKinds(_ context.Context, ks []int, limit int) ([]repository.NostrEventRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	kindSet := map[int]bool{}
-	for _, k := range ks {
-		kindSet[k] = true
-	}
-	var out []repository.NostrEventRecord
-	for _, rec := range s.records {
-		if kindSet[rec.Kind] {
-			out = append(out, rec)
-			if limit > 0 && len(out) >= limit {
-				break
-			}
-		}
-	}
-	return out, nil
-}
-
-func (s *topicMigrationStore) FindByTag(_ context.Context, tagName, tagValue string, ks []int, limit int) ([]repository.NostrEventRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	kindSet := map[int]bool{}
-	for _, k := range ks {
-		kindSet[k] = true
-	}
-	var out []repository.NostrEventRecord
-	for _, rec := range s.records {
-		if len(ks) > 0 && !kindSet[rec.Kind] {
-			continue
-		}
-		var tags nostr.Tags
-		if err := json.Unmarshal(rec.Tags, &tags); err != nil {
-			continue
-		}
-		for _, tag := range tags {
-			if len(tag) >= 2 && tag[0] == tagName && tag[1] == tagValue {
-				out = append(out, rec)
-				break
-			}
-		}
-		if limit > 0 && len(out) >= limit {
-			break
-		}
-	}
-	return out, nil
-}
-
-func (s *topicMigrationStore) ListByEntity(_ context.Context, _ string, _ uuid.UUID, _ int) ([]repository.NostrEventRecord, error) {
-	return nil, nil
-}
-
-func (s *topicMigrationStore) LatestCreatedAtForKinds(_ context.Context, _ []int) (*time.Time, error) {
-	return nil, nil
-}
-
-func (s *topicMigrationStore) LatestCreatedAtForKindsAndAuthors(_ context.Context, _ []int, _ []string) (*time.Time, error) {
-	return nil, nil
-}
 
 // topicMigrationPublisher captures published events.
 type topicMigrationPublisher struct {
@@ -137,50 +48,32 @@ func topicMigrationSigner(t *testing.T) (nostr.Signer, string) {
 	return signer, pub.Hex()
 }
 
-func makeUntaggedSessionRecord(t *testing.T, signer nostr.Signer, pubkey, sessionID, schema string, createdAt int64) repository.NostrEventRecord {
+// topicMigrationStore is the daemon's real local event store in a temp dir.
+func topicMigrationStore(t *testing.T) *localstore.Store {
 	t.Helper()
-	content := map[string]any{"schema": schema, "session_id": sessionID, "state": "executing"}
-	raw, _ := json.Marshal(content)
-	tags := nostr.Tags{
-		{"d", schema + ":" + sessionID},
-		{domain.AssistantSessionTagSchema, schema},
-		{"session", sessionID},
-		{"p", "operator-pubkey", "", "operator"},
-	}
-	ev := nostr.Event{
-		Kind:      nostr.Kind(domain.KindAssistantSessionState),
-		CreatedAt: nostr.Timestamp(createdAt),
-		Tags:      tags,
-		Content:   string(raw),
-	}
-	if err := signer.SignEvent(context.Background(), &ev); err != nil {
+	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.bolt"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	tagsJSON, _ := json.Marshal(ev.Tags)
-	return repository.NostrEventRecord{
-		ID:        ev.ID.Hex(),
-		Kind:      int(ev.Kind),
-		PubKey:    pubkey,
-		Content:   ev.Content,
-		Tags:      tagsJSON,
-		Sig:       hex.EncodeToString(ev.Sig[:]),
-		CreatedAt: ev.CreatedAt.Time(),
-	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }
 
-func makeTaggedSessionRecord(t *testing.T, signer nostr.Signer, pubkey, sessionID, schema string, createdAt int64) repository.NostrEventRecord {
+func seedSessionRecord(t *testing.T, store *localstore.Store, signer nostr.Signer, sessionID, schema string, createdAt int64, tagged bool) nostr.Event {
 	t.Helper()
 	content := map[string]any{"schema": schema, "session_id": sessionID, "state": "executing"}
 	raw, _ := json.Marshal(content)
 	tags := nostr.Tags{
 		{"d", schema + ":" + sessionID},
 		{domain.AssistantSessionTagSchema, schema},
-		{"t", kinds.AssistantSessionTopic},
 		{"session", sessionID},
 		{"p", "operator-pubkey", "", "operator"},
 	}
+	if tagged {
+		tags = append(tags, nostr.Tag{"t", kinds.AssistantSessionTopic})
+	}
 	ev := nostr.Event{
-		Kind:      nostr.Kind(domain.KindAssistantSessionState),
+		Kind:      domain.KindAssistantSessionState,
 		CreatedAt: nostr.Timestamp(createdAt),
 		Tags:      tags,
 		Content:   string(raw),
@@ -188,35 +81,40 @@ func makeTaggedSessionRecord(t *testing.T, signer nostr.Signer, pubkey, sessionI
 	if err := signer.SignEvent(context.Background(), &ev); err != nil {
 		t.Fatal(err)
 	}
-	tagsJSON, _ := json.Marshal(ev.Tags)
-	return repository.NostrEventRecord{
-		ID:        ev.ID.Hex(),
-		Kind:      int(ev.Kind),
-		PubKey:    pubkey,
-		Content:   ev.Content,
-		Tags:      tagsJSON,
-		Sig:       hex.EncodeToString(ev.Sig[:]),
-		CreatedAt: ev.CreatedAt.Time(),
+	if _, err := store.SaveEvent(ev); err != nil {
+		t.Fatal(err)
 	}
+	return ev
+}
+
+func hasAssistantTopic(ev nostr.Event) bool {
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "t" && tag[1] == kinds.AssistantSessionTopic {
+			return true
+		}
+	}
+	return false
+}
+
+func dTagOf(ev nostr.Event) string {
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "d" {
+			return tag[1]
+		}
+	}
+	return ""
 }
 
 // TestAssistantSessionTopicMigrationRetagsLegacyRecords verifies the upgrade
 // scenario: an untagged active session is re-published with the t tag.
 func TestAssistantSessionTopicMigrationRetagsLegacyRecords(t *testing.T) {
 	signer, pubkey := topicMigrationSigner(t)
-	store := &topicMigrationStore{}
+	store := topicMigrationStore(t)
 	publisher := &topicMigrationPublisher{}
-
-	// Seed an untagged V2 session.
-	store.records = append(store.records,
-		makeUntaggedSessionRecord(t, signer, pubkey, "s-active", domain.AssistantSessionSchemaV2, 1000),
-	)
+	seedSessionRecord(t, store, signer, "s-active", domain.AssistantSessionSchemaV2, 1000, false)
 
 	m := NewAssistantSessionTopicMigration(AssistantSessionTopicMigrationConfig{
-		History:       store,
-		Signer:        signer,
-		Publisher:     publisher,
-		ServicePubkey: pubkey,
+		LocalStore: store, Signer: signer, Publisher: publisher, ServicePubkey: pubkey,
 	})
 	if err := m.Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -227,35 +125,20 @@ func TestAssistantSessionTopicMigrationRetagsLegacyRecords(t *testing.T) {
 		t.Fatalf("expected 1 published event, got %d", len(events))
 	}
 	ev := events[0]
-	// Verify the t tag is present.
-	found := false
-	for _, tag := range ev.Tags {
-		if len(tag) >= 2 && tag[0] == "t" && tag[1] == kinds.AssistantSessionTopic {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if !hasAssistantTopic(ev) {
 		t.Fatal("republished event missing t=assistant-session tag")
 	}
-	// Verify created_at is bumped.
 	if ev.CreatedAt != 1001 {
 		t.Fatalf("expected created_at=1001, got %d", ev.CreatedAt)
 	}
-	// Verify content is preserved.
 	if ev.Content == "" {
 		t.Fatal("content empty")
 	}
-	// Verify the d coordinate is preserved.
-	dTag := ""
-	for _, tag := range ev.Tags {
-		if len(tag) >= 2 && tag[0] == "d" {
-			dTag = tag[1]
-			break
-		}
+	if got, want := dTagOf(ev), domain.AssistantSessionSchemaV2+":s-active"; got != want {
+		t.Fatalf("d tag = %q, want %q", got, want)
 	}
-	if dTag != domain.AssistantSessionSchemaV2+":s-active" {
-		t.Fatalf("d tag = %q, want %q", dTag, domain.AssistantSessionSchemaV2+":s-active")
+	if !ev.VerifySignature() {
+		t.Fatal("republished event is not validly signed")
 	}
 }
 
@@ -263,55 +146,41 @@ func TestAssistantSessionTopicMigrationRetagsLegacyRecords(t *testing.T) {
 // a no-op when all records are already tagged.
 func TestAssistantSessionTopicMigrationIdempotent(t *testing.T) {
 	signer, pubkey := topicMigrationSigner(t)
-	store := &topicMigrationStore{}
+	store := topicMigrationStore(t)
 	publisher := &topicMigrationPublisher{}
-
-	// Seed an already-tagged session.
-	store.records = append(store.records,
-		makeTaggedSessionRecord(t, signer, pubkey, "s-tagged", domain.AssistantSessionSchemaV2, 1000),
-	)
+	seedSessionRecord(t, store, signer, "s-tagged", domain.AssistantSessionSchemaV2, 1000, true)
 
 	m := NewAssistantSessionTopicMigration(AssistantSessionTopicMigrationConfig{
-		History:       store,
-		Signer:        signer,
-		Publisher:     publisher,
-		ServicePubkey: pubkey,
+		LocalStore: store, Signer: signer, Publisher: publisher, ServicePubkey: pubkey,
 	})
-
-	// First run: no-op because the record is already tagged.
-	if err := m.Run(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(publisher.events()) != 0 {
-		t.Fatalf("expected 0 published events for already-tagged record, got %d", len(publisher.events()))
-	}
-
-	// Second run: still a no-op.
-	if err := m.Run(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(publisher.events()) != 0 {
-		t.Fatalf("expected 0 published events on second run, got %d", len(publisher.events()))
+	for run := 0; run < 2; run++ {
+		if err := m.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(publisher.events()) != 0 {
+			t.Fatalf("run %d: expected 0 published events for already-tagged record, got %d", run, len(publisher.events()))
+		}
 	}
 }
 
 // TestAssistantSessionTopicMigrationBothSchemas verifies that both V1 and V2
-// untagged records are migrated.
+// untagged records are migrated and other 30900 families are left alone.
 func TestAssistantSessionTopicMigrationBothSchemas(t *testing.T) {
 	signer, pubkey := topicMigrationSigner(t)
-	store := &topicMigrationStore{}
+	store := topicMigrationStore(t)
 	publisher := &topicMigrationPublisher{}
-
-	store.records = append(store.records,
-		makeUntaggedSessionRecord(t, signer, pubkey, "s-v1", domain.AssistantSessionSchema, 1000),
-		makeUntaggedSessionRecord(t, signer, pubkey, "s-v2", domain.AssistantSessionSchemaV2, 2000),
-	)
+	seedSessionRecord(t, store, signer, "s-v1", domain.AssistantSessionSchema, 1000, false)
+	seedSessionRecord(t, store, signer, "s-v2", domain.AssistantSessionSchemaV2, 2000, false)
+	other := nostr.Event{Kind: domain.KindAssistantSessionState, CreatedAt: 3000, Tags: nostr.Tags{{"d", "service:x"}, {domain.AssistantSessionTagSchema, "bahia.other.v1"}}, Content: "{}"}
+	if err := signer.SignEvent(context.Background(), &other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveEvent(other); err != nil {
+		t.Fatal(err)
+	}
 
 	m := NewAssistantSessionTopicMigration(AssistantSessionTopicMigrationConfig{
-		History:       store,
-		Signer:        signer,
-		Publisher:     publisher,
-		ServicePubkey: pubkey,
+		LocalStore: store, Signer: signer, Publisher: publisher, ServicePubkey: pubkey,
 	})
 	if err := m.Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -321,14 +190,7 @@ func TestAssistantSessionTopicMigrationBothSchemas(t *testing.T) {
 		t.Fatalf("expected 2 published events, got %d", len(events))
 	}
 	for _, ev := range events {
-		found := false
-		for _, tag := range ev.Tags {
-			if len(tag) >= 2 && tag[0] == "t" && tag[1] == kinds.AssistantSessionTopic {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !hasAssistantTopic(ev) {
 			t.Fatalf("republished event missing t tag: %v", ev.Tags)
 		}
 	}
@@ -338,25 +200,69 @@ func TestAssistantSessionTopicMigrationBothSchemas(t *testing.T) {
 // from other pubkeys are ignored.
 func TestAssistantSessionTopicMigrationSkipsOtherAuthors(t *testing.T) {
 	signer, pubkey := topicMigrationSigner(t)
-	otherSigner, otherPubkey := topicMigrationSigner(t)
-	store := &topicMigrationStore{}
+	otherSigner, _ := topicMigrationSigner(t)
+	store := topicMigrationStore(t)
 	publisher := &topicMigrationPublisher{}
-
-	// Create a record signed by otherSigner but attributed to otherPubkey.
-	store.records = append(store.records,
-		makeUntaggedSessionRecord(t, otherSigner, otherPubkey, "s-other", domain.AssistantSessionSchemaV2, 1000),
-	)
+	seedSessionRecord(t, store, otherSigner, "s-other", domain.AssistantSessionSchemaV2, 1000, false)
 
 	m := NewAssistantSessionTopicMigration(AssistantSessionTopicMigrationConfig{
-		History:       store,
-		Signer:        signer,
-		Publisher:     publisher,
-		ServicePubkey: pubkey,
+		LocalStore: store, Signer: signer, Publisher: publisher, ServicePubkey: pubkey,
 	})
 	if err := m.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(publisher.events()) != 0 {
 		t.Fatalf("expected 0 published events for other-author record, got %d", len(publisher.events()))
+	}
+}
+
+// TestAssistantSessionTopicMigrationMigratesMoreThanFiveHundred proves the
+// enumeration is complete: with more untagged legacy records than the old
+// bounded query returned, every one is migrated, including the oldest, and
+// nothing is migrated twice.
+func TestAssistantSessionTopicMigrationMigratesMoreThanFiveHundred(t *testing.T) {
+	const legacy = 650
+	signer, pubkey := topicMigrationSigner(t)
+	store := topicMigrationStore(t)
+	publisher := &topicMigrationPublisher{}
+	want := map[string]struct{}{}
+	for i := 0; i < legacy; i++ {
+		schema := domain.AssistantSessionSchemaV2
+		if i%3 == 0 {
+			schema = domain.AssistantSessionSchema
+		}
+		ev := seedSessionRecord(t, store, signer, fmt.Sprintf("s-%04d", i), schema, int64(1000+i), false)
+		want[dTagOf(ev)] = struct{}{}
+	}
+	for i := 0; i < 20; i++ {
+		seedSessionRecord(t, store, signer, fmt.Sprintf("tagged-%02d", i), domain.AssistantSessionSchemaV2, int64(5000+i), true)
+	}
+
+	m := NewAssistantSessionTopicMigration(AssistantSessionTopicMigrationConfig{
+		LocalStore: store, Signer: signer, Publisher: publisher, ServicePubkey: pubkey,
+	})
+	if err := m.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	events := publisher.events()
+	if len(events) != legacy {
+		t.Fatalf("migrated %d records, want all %d", len(events), legacy)
+	}
+	got := map[string]struct{}{}
+	for _, ev := range events {
+		if !hasAssistantTopic(ev) {
+			t.Fatalf("republished event missing t tag: %v", ev.Tags)
+		}
+		d := dTagOf(ev)
+		if _, dup := got[d]; dup {
+			t.Fatalf("record %s migrated twice", d)
+		}
+		got[d] = struct{}{}
+		if _, ok := want[d]; !ok {
+			t.Fatalf("unexpected record %s migrated", d)
+		}
+	}
+	if _, ok := got[domain.AssistantSessionSchema+":s-0000"]; !ok {
+		t.Fatal("the oldest legacy record was not migrated")
 	}
 }
