@@ -122,3 +122,25 @@ test('a channel the session already reads is ready to change as soon as it is on
     org: inner.tags.find(tag => tag[0] === 'org')?.[1]
   })))).toEqual([{ domain: 'notification', op: 'update', org: ORG_ID }]);
 });
+
+test('a signer without NIP-44 disables sensitive controls up front, with the reason as tooltip and description', async ({ page }) => {
+  // Known before the operator acts and not resolvable by the page: the gate
+  // disables the control rather than letting a form be filled in to fail.
+  await page.addInitScript(() => { if (window.nostr) delete window.nostr.nip44; });
+
+  await page.goto('/notifications/new');
+  const form = page.locator('form');
+  const submit = form.getByRole('button', { name: 'Create channel' });
+  const gate = form.locator('fieldset[data-intent-domain="notification"]');
+  await expect(submit).toBeDisabled();
+  await expect(gate).toHaveAttribute('data-intent-blocked-by', 'signer');
+  await expect(gate).toHaveAttribute('title', /NIP-44/);
+  await expect(gate).toHaveAccessibleDescription(/NIP-44/);
+  await expect(gate).toHaveAttribute('aria-busy', 'false');
+
+  await page.goto('/orgs/new');
+  const create = page.getByRole('button', { name: 'Create Organization' });
+  await expect(create).toBeDisabled();
+  await expect(page.locator('fieldset[data-intent-domain="org"]', { has: create })).toHaveAttribute('title', /NIP-44/);
+  expect(await page.evaluate(() => window.__BAHIA_E2E_INTENT_WRAPS.length)).toBe(0);
+});

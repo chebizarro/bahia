@@ -47,11 +47,11 @@ const SELECT_SENSITIVE_ORG = 'Select an organization before changing sensitive s
 const CLIENT_REQUIRED = 'Signing an intent requires an authenticated signer, Bahia store and relay seed';
 const NIP44_REQUIRED = 'This signer does not support NIP-44 encryption. Sensitive mutations require a NIP-44-capable NIP-07 or NIP-46 signer.';
 
-const connecting = { ready: false, pending: true, reason: 'Connecting…', waitingOn: 'session' };
-const decrypting = { ready: false, pending: true, reason: 'Connecting…', waitingOn: 'organization' };
-const noOrganization = { ready: false, pending: true, reason: 'No organization is known for this session yet', waitingOn: 'organization' };
-const ready = { ready: true, pending: false, reason: '', waitingOn: '' };
-const blocked = reason => ({ ready: false, pending: false, reason, waitingOn: '' });
+const connecting = { ready: false, pending: true, reason: 'Connecting…', waitingOn: 'session', blockedBy: '' };
+const decrypting = { ready: false, pending: true, reason: 'Connecting…', waitingOn: 'organization', blockedBy: '' };
+const noOrganization = { ready: false, pending: true, reason: 'No organization is known for this session yet', waitingOn: 'organization', blockedBy: '' };
+const ready = { ready: true, pending: false, reason: '', waitingOn: '', blockedBy: '' };
+const blocked = (reason, blockedBy = '') => ({ ready: false, pending: false, reason, waitingOn: '', blockedBy });
 
 function fakeStore() {
   return { query: () => [], subscribe: () => () => {}, ingest: () => true, close: async () => {} };
@@ -301,12 +301,14 @@ describe('intent submission readiness', () => {
       expect(readiness.intentReadiness('notification', { orgId: ORG_A })).toEqual(ready);
     });
 
-    it('keeps the explicit error when the signer cannot encrypt with NIP-44', async () => {
+    it('names the signer as the blocker, known up front, when it cannot encrypt with NIP-44', async () => {
       const { readiness, sensitive } = modules;
       await signedIn(modules, { nip44: false });
       for (const domain of ['org', 'relay', 'secret', 'notification']) {
-        expect(readiness.intentReadiness(domain)).toEqual(blocked(NIP44_REQUIRED));
+        expect(readiness.intentReadiness(domain)).toEqual(blocked(NIP44_REQUIRED, 'signer'));
       }
+      // Non-sensitive domains never depend on NIP-44.
+      expect(readiness.intentReadiness('dns')).toEqual(connecting);
       expect(sensitive.sensitiveMutationBlocker()).toBe(NIP44_REQUIRED);
       await expect(sensitive.submitSensitiveIntent({ domain: 'org', op: 'create', coordinate: 'org:x', orgId: ORG_A, content: {} }))
         .rejects.toThrow(NIP44_REQUIRED);

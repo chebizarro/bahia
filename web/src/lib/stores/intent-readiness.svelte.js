@@ -22,7 +22,11 @@
  *   neither  only the operator can resolve it (signed out, an intent client
  *            that cannot open, several organizations, or an empty organization
  *            field). The control stays enabled and submitting reports `reason`,
- *            the explicit error the intent client raises.
+ *            the explicit error the intent client raises. When the blocker is
+ *            known before the operator acts and the page cannot resolve it
+ *            (`blockedBy: 'signer'`, a signer without NIP-44), the control is
+ *            disabled with the reason instead, so nothing is typed into a form
+ *            that cannot submit.
  *
  * Sensitive domains (organizations, service secrets, notification channels,
  * relay policy; nostr/intent-giftwrap.js) travel gift-wrapped on a transport
@@ -50,9 +54,9 @@ import { SENSITIVE_INTENT_DOMAINS, sensitiveIntentBlocker } from '$lib/nostr/int
 export const INTENT_CONNECTING = 'Connecting…';
 export const INTENT_ORG_UNKNOWN = 'No organization is known for this session yet';
 
-const ready = { ready: true, pending: false, reason: '', waitingOn: '' };
-const waiting = (waitingOn, reason) => ({ ready: false, pending: true, reason, waitingOn });
-const blocked = reason => ({ ready: false, pending: false, reason, waitingOn: '' });
+const ready = { ready: true, pending: false, reason: '', waitingOn: '', blockedBy: '' };
+const waiting = (waitingOn, reason) => ({ ready: false, pending: true, reason, waitingOn, blockedBy: '' });
+const blocked = (reason, blockedBy = '') => ({ ready: false, pending: false, reason, waitingOn: '', blockedBy });
 
 /**
  * Every org id the session currently knows: membership roles, held content
@@ -83,7 +87,7 @@ export function intentRecordOrgId(record) {
  * @param {object} [target.record] record the intent acts on (org_id, service_id, route_id)
  * @param {boolean} [target.orgField] the control sits beside an organization
  *   field, so an unknown organization is the operator's to supply
- * @returns {{ ready: boolean, pending: boolean, reason: string, waitingOn: '' | 'session' | 'organization' }}
+ * @returns {{ ready: boolean, pending: boolean, reason: string, waitingOn: '' | 'session' | 'organization', blockedBy: '' | 'signer' }}
  */
 export function intentReadiness(domain, { orgId = '', record = null, orgField = false } = {}) {
   if (['unknown', 'checking', 'authenticating'].includes(authState.status)) return waiting('session', INTENT_CONNECTING);
@@ -91,7 +95,7 @@ export function intentReadiness(domain, { orgId = '', record = null, orgField = 
   const sensitive = SENSITIVE_INTENT_DOMAINS.has(domain);
   if (sensitive) {
     const blocker = sensitiveIntentBlocker(authState.capabilities);
-    if (blocker) return blocked(blocker);
+    if (blocker) return blocked(blocker, 'signer');
     // Organization intents carry their own org id.
     if (domain === 'org') return ready;
   } else {
