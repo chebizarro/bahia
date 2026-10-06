@@ -7,7 +7,7 @@ This runbook operates the durable saga and dedicated runtime contract. Supply va
 ## Deploy
 
 1. Verify the release record contains exact Bahia/OpenClaw/Signet/relay image digests and source commits.
-2. Back up database, relay data, saga state, Signet enrollment/client-reference state, and per-soul volumes.
+2. Back up database, relay data (the canonical saga-run and adapter-ledger records live there and in the daemon's local event store; the state directory is a cache), Signet enrollment/client-reference state, and per-soul volumes.
 3. Render Compose and verify every promoted image is repository@sha256 with 64 lowercase hexadecimal characters.
 4. Enable one disposable canary only. Keep incumbents and previous release available.
 5. Gate on Bahia readiness, Signet connectivity, relay NIP-11/AUTH/EOSE, runtime health, real inference, independent encrypted DM round-trip, terminal 7950 plus 31951, and Marjam/SNR reachability.
@@ -30,12 +30,16 @@ inspect, requires the signed requester in `nostr.authorized_pubkeys` through
 acknowledgments or execution. A broader transport allowlist is not sufficient.
 
 The operator reconstructs production drivers from the original persisted request
-and resolved input snapshot under `soul_factory.provisioning_state_dir`. It cannot
-replace the spec, runtime, identity, or credentials. A busy request fails with a
-checkpoint conflict instead of racing provisioning or another operator process.
-Dry runs leave checkpoints and external systems unchanged. Pre-upgrade ledgers
-without captured inputs require replaying the original request before mutation;
-missing or conflicting inputs never trigger guessed recovery.
+and resolved input snapshot in the daemon's canonical adapter-ledger record
+(`30900`, `t=soul-factory-adapter-ledger`, `legacy_kind=32028`, fleet-OCK
+encrypted; see the Nostr event implementation guide), read from the local event
+store; `soul_factory.provisioning_state_dir` holds only the cache and lock files.
+It cannot replace the spec, runtime, identity, or credentials. A busy request
+fails with a checkpoint conflict instead of racing provisioning or another
+operator process. Dry runs leave checkpoints and external systems unchanged.
+Pre-upgrade ledgers without captured inputs require replaying the original
+request before mutation; missing or conflicting inputs never trigger guessed
+recovery.
 
 Reports describe durable checkpoints, not independent evidence that the runtime
 is healthy. Retry/reconcile continue the existing workflow and publish its terminal
@@ -82,13 +86,15 @@ Never retry an ownership conflict by changing labels or deleting the conflict.
 
 Back up together:
 
-- Bahia database and durable saga
-- relay event store and policy baseline
+- Bahia database
+- relay event store and policy baseline (the durable saga: canonical saga-run
+  and adapter-ledger records, plus the fleet key envelopes that decrypt the
+  ledger)
 - Signet service state and enrollment/client-reference files
 - each managed soul's Compose/config/agent/workspace
 - release record, provenance, and sanitized inventory
 
-Restore first into an isolated disposable environment. Start relay and Signet, restore Bahia/saga, then reconcile runtimes. Verify exact replay, NIP-46 reconnect without one-time handoff, EOSE backfill, inference, DM gate, and terminal projection. Restore is incomplete if it recreates an identity or reintroduces a consumed pairing secret.
+Restore first into an isolated disposable environment. Start relay and Signet, restore Bahia with the same service key (a daemon on a fresh host resumes every run from the relay-held records after its first catch-up; the state directory is not required), then reconcile runtimes. Verify exact replay, NIP-46 reconnect without one-time handoff, EOSE backfill, inference, DM gate, and terminal projection. Restore is incomplete if it recreates an identity or reintroduces a consumed pairing secret.
 
 ## Policy rotation
 
@@ -115,9 +121,10 @@ Remove only consumed one-time handoff and proven failed-run client material. Ret
 
 When SoulFactory is enabled, Bahia's `/metrics` scrape includes
 `bahia_openclaw_provisioning_*` from the governed provisioner's live checkpoint
-store at `<soul_factory.provisioning_state_dir>/sagas`. The monitor shares the
-engine's store, reads durable state on each scrape, and does not reconcile or
-mutate runs. Build labels use Bahia's build version; the instance label uses
+store: the canonical saga-run records (`t=soul-factory-saga-run`) in the local
+event store, with `<soul_factory.provisioning_state_dir>/sagas` as their file
+cache. The monitor shares the engine's store, reads durable state on each
+scrape, and does not reconcile or mutate runs. Build labels use Bahia's build version; the instance label uses
 `telemetry.service_name`. No separate `openclaw_saga_store_dir` is required.
 With SoulFactory disabled these gauges are absent, not evidence of healthy runs.
 The historical `openclaw` metric/alert names also cover governed Metiq runs in
