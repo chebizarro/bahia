@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -28,6 +29,10 @@ type LocalRouteCanaryRepository struct {
 	state  LocalSupervisionState
 	index  RouteCanaryRepository
 	logger *zap.Logger
+	// canonical, when set, withdraws a deleted route's canonical record with
+	// a tombstone on the route coordinate.
+	canonical *RouteCanaryProjector
+	now       func() time.Time
 	// resumeFromIndex makes a route that has neither a canonical record nor a
 	// value written in this process read its state from the index. It is set
 	// only when the daemon publishes no canonical route-canary records (relay
@@ -47,12 +52,20 @@ func WithRouteCanaryIndexResume() LocalRouteCanaryOption {
 	return func(r *LocalRouteCanaryRepository) { r.resumeFromIndex = true }
 }
 
+// WithRouteCanaryCanonicalProjector makes DeleteState publish the route's
+// tombstone through projector before forgetting it, so the withdrawal is
+// canonical and survives a restart.
+func WithRouteCanaryCanonicalProjector(projector *RouteCanaryProjector) LocalRouteCanaryOption {
+	return func(r *LocalRouteCanaryRepository) { r.canonical = projector }
+}
+
 // NewLocalRouteCanaryRepository builds the repository. index may be nil.
 func NewLocalRouteCanaryRepository(state LocalSupervisionState, index RouteCanaryRepository, logger *zap.Logger, opts ...LocalRouteCanaryOption) *LocalRouteCanaryRepository {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	r := &LocalRouteCanaryRepository{state: state, index: index, logger: logger.Named("route-canary-state"), written: map[string]domain.RouteCanaryState{}}
+	r := &LocalRouteCanaryRepository{state: state, index: index, logger: logger.Named("route-canary-state"),
+		now: func() time.Time { return time.Now().UTC() }, written: map[string]domain.RouteCanaryState{}}
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -145,8 +158,16 @@ func (r *LocalRouteCanaryRepository) ListState(ctx context.Context) ([]domain.Ro
 	return out, nil
 }
 
-// DeleteState forgets the state written in this process and its index row.
+// DeleteState withdraws the route: its canonical state record is replaced by
+// a tombstone on the route coordinate first (bahia-as2bo), then the state
+// written in this process and the index row are forgotten. A failed tombstone
+// publish fails the call and changes nothing, so the caller retries.
 func (r *LocalRouteCanaryRepository) DeleteState(ctx context.Context, key domain.RouteCanaryKey) error {
+	if r.canonical != nil {
+		if err := r.canonical.Withdraw(ctx, key, r.now()); err != nil {
+			return err
+		}
+	}
 	r.mu.Lock()
 	delete(r.written, key.Coordinate())
 	r.mu.Unlock()

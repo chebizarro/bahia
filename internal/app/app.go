@@ -546,6 +546,12 @@ func New(cfg *config.Config) (*App, error) {
 				// Without relay publishing no canonical record exists, so the
 				// index is the only durable copy of route state.
 				storeOpts = append(storeOpts, service.WithRouteCanaryIndexResume())
+			} else {
+				// The projector mints each route record strictly after the one
+				// the local store holds, and withdraws a deleted route with a
+				// tombstone on its coordinate (bahia-as2bo).
+				routeCanaryProjector.SetLocalState(localSupervisionState)
+				storeOpts = append(storeOpts, service.WithRouteCanaryCanonicalProjector(routeCanaryProjector))
 			}
 			routeCanaryStore = service.NewLocalRouteCanaryRepository(localSupervisionState, routeCanaryStore, logger, storeOpts...)
 			routeHealthSource = service.LocalRouteInstanceHealthSource{State: localSupervisionState}
