@@ -1,276 +1,210 @@
 # Bahia Architecture
 
-## Virtualization resource control plane
+This is the overview. The detailed architecture documents live in
+[`docs/architecture/`](architecture/README.md) and are linked from each
+section below.
 
-Typed virtualization resources are PostgreSQL-authoritative today. This is a
-known gap against the [charter](#charter-relay-canonical-bahia-normative):
-the resources should become addressable relay state with Postgres as a derived
-index (epic `bahia-irsry`, Phase 3). The public API, the current ContextVM reads
-and canonical projections share an explicit DTO allowlist; none serializes
-private resource documents directly. New code must not add ContextVM reads
-for these resources. C/D admission services are
-injected through `internal/app/virtualization.go`; until wired, mutations return
-unavailable rather than invoking repositories or providers from handlers.
+Bahia is a deployment and runtime control plane whose canonical state lives
+on Nostr relays as signed events. It registers builds and artifacts, holds the
+desired state of services across environments, executes deployments and
+rollbacks on Loom workers or direct runtime targets, observes what is running,
+detects drift, and records every change as relay-verifiable evidence.
 
-The existing constructor (`internal/app/app.go`) composes queries, startup journal
-recovery, event subscriptions and metrics. REST registration is in
-`internal/api/router/router.go` plus `virtualization.go`; ContextVM methods use
-`EncryptedRequestTransport.RegisterContextVMHandler` in
-`internal/controlplane/encrypted_transport.go`. Committed in-process events wake
-journal replay, with durable author/tenant cursors and the signed-event outbox;
-no PostgreSQL notification producer or polling queue is introduced.
+## Invariants
 
-Persistent VM ownership is distinct from both Loom ephemeral lifecycle classes.
-See [Virtual machines and execution planes](user-guide/features/virtual-machines.md)
-for public contracts, approval gates, capability rules and integration status.
+1. **Relays are the source of truth.** Shared state is addressable events —
+   `30900` control-plane state, `30315` status, `30078` app data and the
+   relevant standard NIPs; history and attestations are regular `4903`
+   events. Latest-wins by coordinate replaces row updates.
+2. **Reads are REQ subscriptions.** Every client — web, CLI, MCP, sidecars
+   and the daemon itself — reads by subscribing with narrow filters, treats
+   `EOSE` as caught-up and keeps the subscription open. A local event store
+   (IndexedDB in the browser, a bbolt store per Go process) holds what has
+   been seen so rendering and restart never wait on a re-fetch.
+3. **Writes are signed events verified by relay `OK`.** The author signs an
+   intent and publishes it; `OK` is delivery, not business completion.
+   Durable progress and terminal truth come from the canonical observables
+   the daemon publishes.
+4. **ContextVM is interactive RPC only.** `25910` carries assistant turns,
+   secret reveal and run-log fetch — never a read of state.
+5. **Identity and authorization are event state.** Entity ids are minted by
+   the author (UUIDv7); membership, roles and operator allowlists are events
+   relays serve and clients verify.
+6. **PostgreSQL is an index.** It is optional for the daemon to start and
+   is never the trigger for publishing.
 
+The architecture ratchet (`make lint-arch`, also run by `go test ./...` and
+`pnpm run test:unit`; see [ratchets](architecture/ratchets.md)) enforces
+these: no legacy kind numbers outside
+`internal/nostrmigration`, no direct library relay subscriptions outside the
+relay pool and SoulFactory bus, no unannotated poll tickers in
+`internal/service`/`internal/reconcile`, no test-only exports in `internal/`,
+no `setInterval` or HTTP-client use in web stores, and no HTTP route a
+DB-less daemon exposes without a dependency gate.
 
-## Overview
-
-Bahia is a **deployment and runtime control plane**. Its core responsibilities are still familiar:
-- register and track builds and artifacts
-- manage deployment intents, approvals, execution, and rollback
-- observe runtime state and detect drift
-- coordinate execution on remote workers or direct runtime targets
-
-What changed is the **shape of the control plane**.
-
-Bahia is now:
-- **Nostr-native** — control-plane operations are modeled as signed events
-- **Sidecar-first** — the relay sidecar is the primary public/realtime event boundary
-- **Signer-first** — browser and operator actions are tied to Nostr signer identity
-- **Relay-read-model-first** — the browser bootstraps shared state from relay projections rather than primarily from REST lists
-- **Encrypted for sensitive domains** — notifications, payments history, org/member flows, secrets, logs, and similar domains use encrypted Nostr request/result events where configured
-
-The HTTP API and MCP server still matter, but they are now **narrowed compatibility/query/tooling surfaces**, not the entire product contract.
-
-Several of these properties are targets rather than current behaviour. The [charter](#charter-relay-canonical-bahia-normative) below is normative; the [source-of-truth table](#source-of-truth) records where today's code still falls short.
-
----
-
-## Charter: relay-canonical Bahia (normative)
-
-This charter was first written as the goal of `docs/plans/reconstructible-bahia-2026-05-23.md` and moved here on 2026-09-30 (bahia-irsry.8) so that it has normative status. When code, docs or reviews disagree with it, the charter wins; if the charter is wrong, change it here first.
-
-**Goal.** Bahia is a reconstructible, relay-canonical orchestration fabric. Nostr relays hold canonical state as signed events. Any database is a disposable, rebuildable cache. A fresh Bahia instance cold-starts by replaying the event graph, which makes Bahia restartable, replaceable infrastructure rather than a sacred cluster brain.
-
-**Invariants.**
-1. **Relays are the source of truth.** Shared state is addressable/replaceable events (kind `30900` CAS state, `30315` status, `30078` app data, and the relevant standard NIPs); history and attestations are regular events (`4903`). Latest-wins by coordinate replaces row updates.
-2. **Postgres is optional, derived and rebuildable.** It may index or cache relay state. It is never authoritative, never the trigger for republishing, and losing it loses no control-plane truth. The daemon boots and serves relay state without it.
-3. **Reads are REQ subscriptions against addressable state.** Clients (web, CLI, MCP, sidecars, the daemon itself) read by subscribing with narrow filters, treat `EOSE` as "caught up", and keep the subscription open for live updates. A local event store (IndexedDB in the browser, an event store per Go process) holds what has been seen, so rendering and restart never wait on a re-fetch.
-4. **ContextVM is interactive RPC only, never a read path.** ContextVM `25910` (optionally wrapped in CEP-4/NIP-59 `1059`/`21059`) is for interactions that are inherently request/response and not state: assistant turns, secret reveal and log fetch. A ContextVM reply is never the answer to "what is the current state of X"; that answer is a REQ.
-5. **Writes are signed events verified by `OK`.** The author signs a canonical event and publishes it; relay `OK` (per relay) is delivery, not business completion. Durable progress and terminal truth come from subscriptions to canonical observables.
-6. **Identity and authorization are event state.** Addressable `d` tags are minted by the author, not by a database sequence or UUID column, and membership/roles/trust lists are events relays can serve and clients can verify.
-7. **Deletion is the definition of done.** Each migration slice removes the projector leg, reconciler ticker, REST route and ContextVM handler it replaces in the same change. Dead but exported code is removed rather than kept "for later".
-
-**Enforcement.** The architecture ratchet (`make lint-arch`, also part of `go test ./...` and `pnpm run test:unit`) fails on new legacy-kind use outside `internal/nostrmigration`, new direct library relay subscriptions outside the relay pool and SoulFactory bus, new unannotated poll tickers in `internal/service`/`internal/reconcile` (`//nostr:allow-poll <reason>` to justify one), new test-only exported symbols in `internal/`, new `setInterval`/`$lib/api/client.js` use in web stores, and any route a DB-less daemon exposes without a tier gate. Pending acceptance tests name the issue that un-skips them (`bahia-irsry.11`: services visible from relays with no DB; `bahia-irsry.12`: protected routes render relay state with the daemon offline).
-
----
-
-## Control-plane hierarchy
-
-### 1. System discovery
-ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) advertise:
-- browser relay URLs
-- sidecar URL
-- service pubkey
-- control-plane kind mappings
-- registry/runtime/blossom metadata
-- feature flags such as `relay_read_models`, `direct_nostr_http_auth`, and `encrypted_nostr_requests`
-
-This endpoint is the browser and tooling bootstrap contract.
-
-### 2. Public Nostr control plane
-Bahia's canonical public control-plane contract is the set of canonical observable events described in `docs/control-planes.md`: clients read them with REQ subscriptions and write by publishing signed events. ContextVM (`25910`, normally wrapped by CEP-4/NIP-59 `1059`/`21059`) is for **interactive RPC only**: assistant turns, secret reveal and log fetch. Reads are never ContextVM.
-
-Current gap: most mutations (and some reads, for example CLI/MCP/DNS-agent queries and the web's encrypted domains) still travel as ContextVM request/response, and the daemon mints entity identity in Postgres before replying (audit RC-1, RC-4). These handlers are legacy transport being replaced by client-signed intent events and REQs against addressable state (`bahia-irsry` Phases 3-5). Do not add new ContextVM read or CRUD methods.
-
-Production examples:
-- ContextVM interactive RPC (assistant, secret reveal, log fetch; legacy mutations until migrated): `25910`
-- canonical state/app data: `30900`, `30078`
-- canonical audit/status: `4903`, `30315`
-- continuity heartbeat observations: NIP-38 status `30315` with `#domain=continuity` and heartbeat schema/d/worker tags (not a separate `30350` kind)
-- ContextVM discovery: `11316`-`11320`
-- relay sets and deletes: `30002`, `5`
-
-Legacy Bahia request/status/result/read-model/encrypted kinds are migration inventory only and are not production runtime contracts.
-
-### 3. Encrypted Nostr request/result plane
-Sensitive browser-facing domains use encrypted ContextVM events (`25910` inside `1059`/`21059` where supported) on configured encrypted-request relays. Under the charter this plane carries interactive RPC only (secret reveal, log fetch, assistant); sensitive *state* belongs in encrypted events readable by REQ. Today several encrypted domains (notifications, payments, org/member flows) still read and write through it, which is part of the RC-4 gap above.
-
-### 4. Native MCP transport
-Bahia exposes JSON-RPC tools over HTTP at `/mcp`. Tool responses include correlation metadata so clients can follow async truth on relays.
-
-### 5. REST API compatibility surface
-REST remains for narrowed CRUD, query, logs, registry, and operational compatibility routes. It is no longer the best single description of overall product behavior.
-
-Managed runtime observation and policy-bounded exact-target recovery are operated according to the [managed-instance supervision runbook](runbooks/managed-instance-supervision.md).
-
----
-
-## Major components
-
-### Browser / CLI / MCP clients
-Clients discover capabilities from ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`), then interact with Bahia through a mix of:
-- public relay traffic
-- encrypted relay traffic
-- MCP JSON-RPC
-- selected REST endpoints
-
-### Relay sidecar and public relays
-The relay sidecar is the primary realtime/public boundary for:
-- browser read models
-- public control-plane requests
-- status/result replies
-- activity feed events
-
-This keeps browser state event-driven and avoids REST polling as the primary shared-state mechanism.
-
-### Control-plane reactor
-The reactor validates signed inbound Nostr requests, authorizes pubkeys, executes domain logic, publishes status/result replies, and drives read-model projection.
-
-Key responsibilities:
-- service/deployment actions
-- LLM route/release/deployment flows
-- adoption/import and direct runtime operator flows
-- encrypted result dispatch hooks
-
-Primary implementation:
-- `internal/controlplane/reactor.go`
-- `internal/controlplane/operator_actions.go`
-- `internal/controlplane/encrypted_transport.go`
-
-### Domain / service layer
-Core business logic still lives in the service/domain layer:
-- registry services for services/builds/artifacts/deployments/state
-- runtime lifecycle and rollout handling
-- payment, policy, notification, and LLM coordination
-- Soul Factory lifecycle/provisioning logic
-
-### OCI registry server
-Bahia serves as an OCI-compatible internal registry.
+## Components
 
 ```text
-┌─────────────────────────────────────────────────────┐
-│                  OCI Registry                       │
-├─────────────────────────────────────────────────────┤
-│  /v2/* endpoints                                    │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐ │
-│  │  Manifests  │  │    Blobs    │  │    Tags     │ │
-│  │ (PostgreSQL)│  │  (Blossom)  │  │ (PostgreSQL)│ │
-│  └─────────────┘  └─────────────┘  └─────────────┘ │
-└─────────────────────────────────────────────────────┘
+ web (SvelteKit, store-first)   bahia CLI / pkg/client     MCP agents
+        │ REQ / intents                │ REQ / intents          │ POST /mcp
+        ▼                              ▼                        ▼
+ ┌──────────────────────── relay sidecar (khatru, bbolt) ───────────────────────┐
+ │  intents · ContextVM wraps · canonical state · status · audit · discovery   │
+ └───────────────▲──────────────────────────────────────────────▲──────────────┘
+                 │ publish (outbox)                              │ subscribe
+            ┌────┴──────────────────── bahia daemon ─────────────┴────┐
+            │ intent processor → domain handlers → registry/services   │
+            │ projector · reactors · supervisors · schedulers          │
+            │ local event store (bbolt) · publish outbox               │
+            └──┬──────────┬──────────┬───────────┬──────────┬─────────┘
+               │          │          │           │          │
+           PostgreSQL   Blossom   OCI /v2    Loom workers  runtime targets
+           (index)     (blobs)   (images)   (jobs)        (docker/compose/k8s/podman)
 ```
 
-Authentication includes NIP-98, service accounts, and anonymous pull from allowed CIDRs.
+### Relay sidecar
 
-### Hive-CI bridge
-The Hive-CI bridge subscribes to workflow events and registers verified build artifacts. Deployment promotion is a separate authority: CI success cannot create an intent or change desired state.
+`bahia-relay` (`cmd/relay`, `internal/relaysidecar`) is a khatru relay with
+a bbolt event store. It verifies ids and signatures, admits writes by a
+persisted NIP-86 policy plus the intent-author set the daemon pushes, serves
+public topics anonymously and protected topics only to NIP-42-authenticated,
+admitted readers, applies NIP-09 deletions, sweeps retention by kind class,
+and supports NIP-45 COUNT and NIP-77 negentropy. Details:
+[relay sidecar](relay-sidecar.md).
 
-```text
-Hive-CI (canonical dispatch)     Hive-CI (canonical result)
-Workflow Run  ────▶  Workflow Result
-     │                    │
-     └────────┬───────────┘
-              ▼
-       ┌─────────────┐
-       │   Bridge    │
-       │  (Bahia)    │
-       └──────┬──────┘
-              │
-         ┌────┴────┐
-         ▼         ▼
-       Build    Artifact
-                   │
-                   ▼
-              OCI Registry
+### Daemon
 
-A separately authorized promotion intent may later reference the registered
-digest; it is not emitted by the Hive-CI bridge.
-```
+`bahia-server` (`cmd/server`, composed in `internal/app`) runs:
 
-### Runtime and reconcile layer
-Bahia executes deployments through Loom workers and/or direct runtime targets, then reconciles desired vs observed state.
-
-Runtime targets may include:
-- Docker
-- Compose
-- Kubernetes
-- Podman
-- adopted direct-runtime targets
+- the **intent subscriber and processor** (`internal/controlplane`): parses
+  `30900` `t=bahia-intent` events (and gift-wrapped intents for sensitive
+  domains), deduplicates by `intent_id`, authorizes the signer through the
+  TrustSet, dispatches to the domain handler, and publishes the bounded
+  `30315` status ([intents and authority](architecture/intents-and-authority.md));
+- the **registry and domain services** (`internal/service`): services,
+  environments, builds, artifacts, deployment intents and runs, policies,
+  secrets, notifications, organizations, LLM routes and releases, ML models,
+  packages, backups, DNS, workers, virtualization, security scanning, SBOM;
+- the **relay-first registry**: a mutation publishes its canonical `30900`
+  record and waits for `nostr.publish_quorum` relays before the index row is
+  committed;
+- the **projector** (`internal/adapters/nostr/projector.go`): discovery
+  (`11316`–`11320`, `30002`, `10002`, `10050`), cp-state records, audit
+  facts and tombstones, with per-coordinate deduplication so an unchanged
+  state is not re-signed;
+- **reactors and supervisors**: the reconciler (`reconcile.interval`,
+  default 60s), drift detection, managed-instance supervision and route
+  canaries (`supervision`), hygiene, continuity failover, Hive-CI dispatch
+  and result processing, Loom job tracking, SoulFactory provisioning, the
+  operator assistant;
+- the **local event store and publish outbox** (`nostr.local_store`): inbound
+  deduplication and per-(relay, filter) cursors ([event lifecycle](architecture/event-lifecycle.md));
+  every signed outbound event is durable there before its first relay
+  attempt and tracked per relay `OK` ([outbox delivery](architecture/outbox-delivery.md));
+- the **HTTP server** (`server.host`/`server.port`, default
+  `127.0.0.1:8080`): health, readiness, metrics, the OCI registry, MCP and a
+  small set of `/api/v1` routes ([HTTP reference](api.md));
+- the **MCP server** (`internal/mcp`): tools that sign intents in-process
+  with the caller's identity and read state from the local event store
+  ([CLI and MCP](architecture/cli-and-mcp.md)).
 
 ### Persistence
-Target: canonical state lives on relays as signed events, and PostgreSQL is an optional, derived index/cache that can be dropped and rebuilt from relays (see the charter). Blobs and logs live in Blossom-backed storage.
 
-Today: most domain state is still written to PostgreSQL first and projected to relays, and a daemon without PostgreSQL caps itself at tier1 (no services, environments, deployments or DNS). The [source-of-truth table](#source-of-truth) lists each gap and the issue that closes it.
+| Data | Where | Role |
+|---|---|---|
+| Canonical records, status, audit, discovery | relays (sidecar and `nostr.service_relays`) | source of truth |
+| Everything the daemon has seen or published | `nostr.local_store` (bbolt) | cursors, deduplication, store-read tools, supervision inputs |
+| Pending outbound events | `nostr.local_store.outbox_path` (bbolt) | durable publish with per-relay acceptance; `bahia outbox` inspects it |
+| Registry index | PostgreSQL (`db.*`) | queryable index of services, environments, builds, artifacts, intents, runs, policies, secrets, notifications, orgs, DNS, workers; `nostr_events` archives events best effort ([PostgreSQL event store lifecycle](architecture/postgres-event-store-lifecycle.md)) |
+| Payments, security targets/runs/schedules/findings, operator allowlists, Hive-CI execution state | relays only (`service.PaymentService`, `CanonicalSecurityRepository`) | PostgreSQL, when present, is a rebuildable index |
+| Blobs, logs, SBOM payloads | Blossom (`blossom.*`) | content-addressed storage |
+| Container images | the built-in OCI registry (`oci.*`, manifests in PostgreSQL, blobs in Blossom), Harbor, or any configured registry | image distribution |
+| Relay history | sidecar `data_dir/events.bolt` | replay and retention |
 
-Service-authored Nostr events are delivered from the daemon's local publish outbox (`nostr.local_store.outbox_path`, a bbolt file next to the local event store; `bahia-irsry.10.4`). A signed event is durable there before its first relay attempt. Each relay's `OK` is tracked and committed per round, so a restart resumes exactly where delivery stopped. The caller succeeds once `nostr.publish_quorum` relays accept; the entry settles as `published` or `failed` once every write relay has accepted or reached a terminal state. Producers that recorded an event as queued learn the outcome through `OnDelivered` and `OnDeliveryAbandoned`. No PostgreSQL write gates a publish: with PostgreSQL configured, each event is also archived to `nostr_events`, best effort, with its outcome mirrored. `nostr_events` remains the outbox of producers that write a signed audit event in the same PostgreSQL transaction as the change it audits (registry release registration and promotion); the same runner drains those rows, and rows left pending by an older daemon, in place. This outbox protects service-authored operational/audit publication; it does not turn a caller's ContextVM acknowledgment into terminal business truth.
+The daemon starts without PostgreSQL (`postgres cache unavailable; continuing
+with relay-first reduced tier`): it serves health and readiness, discovery,
+the relay-only families above, MCP store reads and ContextVM RPC. Families
+whose index is PostgreSQL are unavailable until it is reachable; HTTP routes
+backed by those repositories answer `503`. A `database-recovery` runner
+reconnects when PostgreSQL returns.
 
----
+### Operating modes
 
-## Key browser/runtime flows
+`mode` (`full`, `degraded`, `emergency`; default `full`) selects the readiness
+relay quorum (`nostr.relay_quorum.{full,degraded,emergency}_min_healthy`). The
+relay-first write path is active whenever `nostr.publish_enabled` is true (the
+default) or the mode is `full`.
 
-### Browser bootstrap flow
-1. Browser subscribes to ContextVM discovery (`11316`-`11320`) and relay sets (`30002`)
-2. Browser discovers relay topology and feature flags
-3. Browser connects to advertised relays
-4. Browser queries canonical observables until EOSE
-5. Browser subscribes live for ongoing updates
+## Flows
 
-### Public action flow
-1. User/operator signs a public Nostr request
-2. Bahia validates and processes the event
-3. Bahia publishes status and terminal result replies
-4. Bahia projects updated canonical observables
-5. Browser state updates from relays
+### Bootstrap
 
-### Encrypted action flow
-1. Browser encrypts a request to Bahia's service pubkey
-2. Request is published to the ContextVM request relay policy
-3. Bahia decrypts, verifies the inner signer, authorizes, and executes the operation
-4. Bahia publishes the encrypted response through an isolated response pool on the same ContextVM relay policy
-5. Stored `1059` requests receive stored `1059` replies; ephemeral `21059` requests receive `21059` replies, correlated to the outer request with an `e` reply tag
+The web's store-first design is described in
+[web store-first](architecture/web-store-first.md).
 
-### Deployment flow
-1. Build/artifact state exists or is ingested from CI
-2. A signed `service/deploy` request is policy-evaluated and creates a deployment intent with a desired-state snapshot
-3. Approval occurs when required
-4. Approved native deployments create a run and execute through the runtime lifecycle service, including deployment-unit targeting
-5. Runtime observation updates desired/observed state; failed apply or completion is recorded as failure rather than success
-6. Drift and operational status are projected to canonical Nostr observables
+1. A client starts from its seed: the web from `PUBLIC_BAHIA_BOOTSTRAP_RELAYS`
+   and `PUBLIC_BAHIA_SERVICE_PUBKEYS` injected at container start; the CLI
+   from `--relay`/`BAHIA_NOSTR_RELAYS` or bootstrap-relay discovery with
+   trusted service pubkeys.
+2. It reads `11316` and the `30002` relay sets from the trusted service
+   pubkey, learns the browser and ContextVM relays, feature flags and
+   advertised capabilities.
+3. It REQs the canonical families it needs with `authors` + `#t`, processes
+   until `EOSE`, answers the NIP-42 challenge for protected topics, and
+   keeps the subscriptions live.
 
----
+### Write
 
-## Source of truth
+1. The client mints the entity id, builds the full desired state, signs the
+   intent (gift-wrapping sensitive domains) and publishes it.
+2. The daemon validates, deduplicates, authorizes, dispatches and publishes
+   `30315` `accepted` or `rejected` with any daemon-authored output.
+3. The handler drives the service layer; the relay-first registry publishes
+   the canonical record and only then commits the index row.
+4. The client sees the record in its subscription and renders it.
 
-Normative rule: **relays (addressable events) are canonical; PostgreSQL is an optional, derived index or cache.** The "Today" column is the honest current state; every row where it differs from the canonical home is a gap tracked under epic `bahia-irsry` (findings from `docs/investigations/nostr-first-architecture-audit-2026-09-29.md`).
+### Deployment
 
-| Concern | Canonical home (normative) | Today | Gap / tracking |
-|---------|----------------------------|-------|----------------|
-| Desired deployment/runtime state (services, environments, intents, runs, policies, DNS) | Addressable `30900` CAS state on relays, `d` minted by the author | PostgreSQL rows are authoritative; the projector republishes them to `30900` every 10 minutes. Entity ids are client-minted UUIDv7 (legacy v4 still valid) for services and environments, so `d` no longer requires the DB to mint it; other domains follow the migration table in `docs/event-spec.md` | B-1, B-8; C-40 resolved for services/environments (`bahia-irsry.35`); daemon authority inversion `bahia-irsry.11` |
-| Daemon without PostgreSQL | Boots and serves relay state | Boots, but caps at tier1: tier2/tier3 routes return 503 and services/environments/DNS are unavailable | B-11; ratchet `TestArchitectureDBLessDaemonBootCapsTierAndGatesNilRepositoryRoutes`, pending acceptance test un-skipped by `bahia-irsry.11` |
-| Shared browser state | Browser local event store (IndexedDB) kept current by REQ subscriptions (`since` cursor or NIP-77) | Relay `30900` projections of DB state; IndexedDB holds derived snapshots; protected routes are gated on a REST `/orgs` probe | A-1, A-3, A-4; web tier `bahia-irsry.12` (pending test "protected routes render relay state with the daemon offline") |
-| Runtime observations | `30315` status and `30900` state published by the observer | PostgreSQL (from runtime queries and action results), then projected | Phase 3 `bahia-irsry.11` |
-| Workflow history / audit trail | `4903` audit events, retained on at least one archival relay | PostgreSQL workflow history; `4903` is published, and the sidecar now keeps regular events durably (no archival relay yet) | C-19, C-39; relay tier `bahia-irsry.9` |
-| Membership, roles, org and trust lists | Events relays can serve and clients can verify (encrypted where sensitive) | PostgreSQL only, reached through REST or ContextVM | RC-6, B-27; `bahia-irsry.11`/`.12` |
-| Payments | Confidential (OCK-encrypted) `30900` cp-state, topic `payment-record`, signed by the daemon | Canonical: every mutation publishes the signed record first and reads come from the daemon's retained records in the local event store (`service.PaymentService`, `PaymentCanonicalPublisher`); the daemon works with no PostgreSQL at all and the REST reads are served DB-less. PostgreSQL `payment_records` is an optional index rebuilt from the canonical records after warm start | Audit B-31 resolved (`bahia-svj9x`); abandoned-delivery contract `docs/designs/phase3-authority-inversion.md` §3.7 (`bahia-u5whr`) |
-| Security (targets, run claims, schedules, findings) | Confidential `30900` cp-state, topics `security-target`/`security-run`/`security-schedule`/`security-finding`/`security-finding-detail`, signed by the daemon | Canonical: the store publishes first and reads from the local event store (`service.CanonicalSecurityRepository`); schedules derive from published policy cp-state; PostgreSQL is an optional index, backfilled once from SQL-era rows and rebuilt from the canonical records after warm start | Audit B-32 resolved (`bahia-svj9x`); §3.7 (`bahia-u5whr`) |
-| Secrets, notifications | Encrypted events for state; ContextVM only for interactive secret reveal | PostgreSQL rows remain the read path; mutations also publish confidential cp-state (`SecretCanonicalPublisher`, `NotificationCanonicalPublisher`) and the secret/notification intent handlers write through the PostgreSQL repositories (Phase 3 N1) | RC-4; `bahia-irsry.11`/`.12` |
-| Pending service-authored Nostr delivery | Per-relay `OK` tracking in the publisher; local event store per process | Local publish outbox (`nostr.local_store.outbox_path`) with durable per-relay acceptance; works without PostgreSQL. PostgreSQL `nostr_events` is a best-effort archive with the outcome mirrored (rows with `publish_target` `local:<target>`). It stays the outbox only for audit events written in a PostgreSQL transaction (registry release registration and promotion) and for rows left pending by an older daemon, both drained in place | B-13 resolved (`bahia-irsry.10.4`); transactional audit events move with the registry to relays in `bahia-irsry.11` |
-| Inbound idempotency and the daemon's own outputs | Local event store per process | Local event store (`nostr.local_store`): inbound dedup and per-(relay, filter) cursors (`bahia-irsry.10.1`); NIP-01 latest-wins and NIP-09 deletions for coordinates of any length, through the relay sidecar's coordinate index (`internal/boltcoord`, `bahia-irsry.51`), and tag filters on empty or over-100-byte values through its hashed tag index (`bahia-irsry.52`); the daemon's published events, which the projector's dedupe hydrates from (an event abandoned after its producer was told it was queued stays, flagged undelivered on its coordinate and reported on readiness, §3.7 of the Phase 3 design). Inbound handling never waits on PostgreSQL; `nostr_events` archives inbound events best effort. Without PostgreSQL, `nostr_events` readers use the local event store; the in-memory fallback is gone | B-3, B-12, B-14 resolved (`bahia-irsry.10.4`) |
-| Kind model | Canonical kinds only (`30900`, `4903`, `30315`, `25910`, `11316`-`11320`, `30002`, `30078`, standard NIPs) | Legacy kinds still defined in `internal/kinds` and referenced by runtime code; 30900 cp-state records carry `legacy_kind=<31975..31978>` as the family discriminator, named only through `kinds.CPStateFamily` | C-43, C-44; frozen by the legacy-kind ratchet, removed in `bahia-irsry.9` |
-| Container image distribution | Bahia OCI registry and/or configured image registries | Same | — |
-| Logs / blobs | Blossom-backed storage where configured | Same | — |
+1. Build and artifact records exist (Hive-CI bridge or `artifact/register`).
+2. A `deployment/create` intent is policy-evaluated and produces an intent
+   record with a desired-state snapshot; `deployment/approve` is required
+   when policy says so.
+3. An approved intent creates a run. Native runs execute through the runtime
+   lifecycle service (`building_desired_state`, `locking_environment`,
+   `rendering`, `applying`, `observing`, `projecting`); Loom-backed runs
+   submit a `5100` job and follow `30100`/`5101`.
+4. Observation updates `service-state`; a failed apply is recorded as failure.
+   Drift is detected by the reconciler and published as state; route
+   canaries and managed-instance supervision keep probing.
 
----
+### Encrypted RPC
+
+1. The client encrypts a `25910` request to the service pubkey inside a
+   `1059` (or `21059` when oversized) wrap and publishes it to the ContextVM
+   relay set.
+2. The daemon unwraps, verifies the inner signer, authorizes, replies with a
+   `notifications/progress` ack, executes, and publishes the reply in a wrap
+   of the same lifetime correlated by `e=<outer request>,reply`.
 
 ## Key design decisions
 
-1. **Relays are canonical** — state is addressable events, reads are REQ subscriptions, writes are signed events verified by `OK`; PostgreSQL is an optional derived cache (see the charter; current gaps in the source-of-truth table)
-2. **ContextVM for interactive RPC only** — assistant, secret reveal and log fetch; never a read path
-3. **Intent-based deployments** — request and execution are separate, enabling approvals and auditability
-4. **Signer-first identity** — users and operators act through signed Nostr identities
-5. **Encrypted sensitive domains** — not all browser state belongs on public relays
-6. **REST as narrowed compatibility** — HTTP remains important, but is no longer the whole system model
-7. **Drift detection as first-class state** — runtime truth is continuously compared with desired state
-8. **Durable outbound publication** — service-authored events are persisted before relay delivery and retried without treating transport acceptance as business completion
+- **Relays are canonical; databases index.** Losing PostgreSQL loses no
+  control-plane truth.
+- **Intent-based mutations.** Request and execution are separate, which gives
+  approvals, replay protection by `intent_id` and revision checks by
+  `expected_updated_at`.
+- **Signer-first identity.** Users, operators, agents and the daemon act
+  through Nostr keys; allowlists and memberships are events; entity ids are
+  author-minted ([entity identity](architecture/entity-identity.md)).
+- **Confidential state is encrypted, not hidden.** Org-scoped records use the
+  org content key; fleet-scoped records the fleet OCK; relays hold
+  ciphertext ([confidential state](architecture/confidential-state.md)).
+- **Durable publication.** Service-authored events are persisted before relay
+  delivery and retried until every write relay accepts or reaches a terminal
+  state; an abandoned delivery is surfaced on readiness, never silently
+  dropped.
+- **The operator assistant runs as governed execution** with encrypted
+  checkpoints ([assistant execution](architecture/assistant-execution.md)).
+- **HTTP is for what HTTP is good at.** Probes, metrics, the OCI
+  distribution API, browser blob downloads, log streaming and a handful of
+  authenticated operator routes.

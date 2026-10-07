@@ -1,19 +1,19 @@
 # Bahia Web Component Reference
 
-Reusable Svelte components live in `web/src/lib/components/`. This page describes current source contracts; route-specific components remain documented by source and tests.
+Reusable Svelte components live in `web/src/lib/components/`. This page describes their source contracts; route-specific components are documented by their source and tests.
 
-The codebase mixes legacy non-runes components and Svelte 5 runes components. Follow each component's actual callback/slot contract rather than assuming every component dispatches Svelte events.
+Form primitives, dialogs and feedback components are `runes={false}` components with exported props and default slots; the rest use Svelte 5 `$props()` and snippets. Every component takes callback props (`onclick`, `onChange`, `onClose`, …); none dispatches custom Svelte events.
 
 ## Form primitives
 
 | Component | Current props |
 | --- | --- |
-| `Input` | `id`, `name`, `type`, `value`, `placeholder`, `disabled`, `required`, `error`, `oninput`, `onchange`, `onblur`, `onkeydown` |
+| `Input` | `id`, `name`, `type`, `value`, `placeholder`, `min`, `max`, `step`, `ariaLabel`, `disabled`, `required`, `error`, `oninput`, `onchange`, `onblur`, `onkeydown` |
 | `Select` | `id`, `name`, `value`, `options`, `disabled`, `required`, `error`, `placeholder`, `onchange`, `onblur` |
 | `Textarea` | `id`, `name`, `value`, `placeholder`, `disabled`, `required`, `error`, `rows`, `oninput`, `onchange`, `onblur` |
 | `Checkbox` | `id`, `name`, `checked`, `disabled`, `label`, `onchange`; default slot when `label` is empty |
 | `FormField` | `label`, `id`, `error`, `hint`, `required`; default slot |
-| `LoadingButton` | `type`, `variant`, `loading`, `disabled`, `fullWidth`, `onclick`; default slot |
+| `LoadingButton` | `type`, `variant`, `loading`, `disabled`, `fullWidth`, `title`, `onclick`; default slot |
 
 Labels and hints/errors belong in `FormField`; `Input`, `Select`, and `Textarea` render only native controls.
 
@@ -82,7 +82,7 @@ Content is one default slot; there is no footer slot. The component focuses the 
 
 ### ConfirmDialog
 
-Props are `open`, `title`, `titleIcon`, `message`, `confirmLabel`, `cancelLabel`, `variant`, `loading`, `onConfirm`, `onCancel`, and `onClose`. It also accepts a default slot.
+Props are `open`, `title`, `titleIcon`, `message`, `confirmLabel`, `cancelLabel`, `variant`, `loading`, `onConfirm`, `onCancel`, and `onClose`, plus a default slot. When the confirmation submits a signed intent, pass `intentDomain` (and `intentOrgId` or `intentRecord`) so the confirm button is gated by intent readiness like an `IntentGate`.
 
 ```svelte
 <ConfirmDialog
@@ -131,6 +131,30 @@ The empty row text is fixed to `No data`. `render(row)` returns trusted HTML and
 <Badge variant="success">Running</Badge>
 ```
 
+## Intent and session gates
+
+### IntentGate
+
+`IntentGate` wraps mutation controls in a native `fieldset` that is disabled until a signed intent for `domain` can be submitted (`$lib/stores/intent-readiness.svelte.js`). Props: `domain`, optional `orgId`, `record` (its org id is resolved the way the stores resolve it) and `orgField`; content is the `children` snippet. Readiness comes from local state only — a disconnected relay never disables a control. While the session opens, the reason ("Connecting…") is exposed as tooltip and to assistive technology; when the session knows no organization for an org-scoped intent the reason is shown beside the control; when the signer lacks NIP-44 the controls are disabled with the blocker.
+
+```svelte
+<IntentGate domain="service" record={service}>
+  <LoadingButton onclick={save}>Save</LoadingButton>
+</IntentGate>
+```
+
+### AuthGuard
+
+`AuthGuard` renders `children` only for a signed-in session that holds one of `requiredRoles` (roles come from the decrypted `org-member` records); otherwise it redirects to `/`. `requiresRestCompatibility` additionally requires the daemon to advertise `direct_nostr_http_auth` for pages that use an HTTP route.
+
+### PendingDomainIntents and SensitiveIntentNotice
+
+`PendingDomainIntents` lists the session's pending intents for `domain` (published, awaiting the `30315` status or the canonical record). `SensitiveIntentNotice` does the same for a gift-wrapped sensitive `domain` (`org`, `secret`, `notification`, `relay`), whose pending rows live in `$lib/stores/sensitive-intents.svelte.js` and are initialized once the session is authenticated.
+
+### RouteCanaryOutages and SBOMDetails
+
+`RouteCanaryOutages` renders the `route-canary` records for `serviceId`/`environmentId` (or all, when null), with `open` filtering, `showServiceNames`/`resolveServiceName`, `emptyTitle`/`emptyMessage` and an `onCount` callback. `SBOMDetails` renders an `sbom` reference with its `packages`, `attestation` and `loading` state and downloads the payload through the Blossom blob proxy.
+
 ## ConnectionStatus
 
 `ConnectionStatus` exposes subscription health in the app shell.
@@ -140,7 +164,7 @@ Props:
 - `connection`, defaulting to `controlplaneConnection`;
 - `retry`, defaulting to control-plane `manualRetry`.
 
-The expanded panel shows relay count/list, `lastEventAt`, `lastEoseAt`, and `lastError`, with manual retry for error/disconnected states. The connection object also carries `resubscribeAttempts`, `lastClosedReason`, and reconnect state.
+The expanded panel shows relay count/list, `lastEventAt`, `lastEoseAt`, `lastError` and the last `CLOSED` reason of the protected bootstrap REQ (for example `restricted:` when the signed-in pubkey is not admitted by the sidecar), with manual retry for error/disconnected states. The connection object also carries `resubscribeAttempts`, `lastClosedReason`, and reconnect state.
 
 ## SoulFactory components
 
@@ -184,5 +208,5 @@ Souls routes also use `AvatarStudio`, `PersonalityBuilder`, `VoiceStudio`, and t
 ## Related documents
 
 - [Web app setup](web-app-setup.md)
-- [Web HTTP client](web-api-client.md)
 - [Web testing](web-testing.md)
+- [Web store-first design](architecture/web-store-first.md)

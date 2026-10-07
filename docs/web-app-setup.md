@@ -1,204 +1,134 @@
-# Bahia Web App Setup Guide
+# Bahia Web App Setup
 
-This guide covers setting up and running the Bahia SvelteKit web application.
+The web app (`web/`) is a static SvelteKit 5 application. It has no backend
+of its own: it connects to Nostr relays, hydrates an IndexedDB event store
+from REQ subscriptions, signs intents with the operator's signer and
+publishes them to the relays. The only HTTP it uses is the daemon's Blossom
+blob proxy and the two operator maintenance routes listed in the
+[HTTP reference](api.md). Design: [web store-first](architecture/web-store-first.md).
 
 ## Prerequisites
 
-- **Node.js**: `^20.19.0`, `^22.12.0`, or `>=24.0.0` (required by the current Vite dependency)
-- **pnpm**: use a version compatible with `web/pnpm-lock.yaml`
-- **Bahia Backend**: Running locally or remotely (default: `http://localhost:8080`)
-- **NIP-07 Browser Extension** (optional): For direct browser signing (NIP-07)
-- **NIP-46 Signer/Bunker** (optional): For remote signing via Nostr Connect
-  - [nos2x](https://github.com/fiatjaf/nos2x) (Firefox/Chrome)
-  - [Alby](https://getalby.com/) (Firefox/Chrome)
-  - [Nostore](https://apps.apple.com/us/app/nostore/id1666553677) (iOS Safari)
+- Node.js `^22.22.2 || ^24.15.0 || >=26.0.0` and pnpm 10 (`web/package.json`
+  `engines`; the lockfile is authoritative).
+- A reachable relay sidecar (`bahia-relay`) and a running daemon publishing
+  to it.
+- A signer: a NIP-07 extension (nos2x, Alby, Nostore) or a NIP-46 bunker. For
+  encrypted flows the signer must expose NIP-44 (`window.nostr.nip44.*` or
+  the NIP-46 provider's `nip44.encrypt/decrypt`); without it the app shows
+  the exact blocker instead of falling back to plaintext.
 
-## Running the Web App
-
-### Development Mode
-
-From the `web/` directory:
+## Running
 
 ```bash
 cd web
-pnpm install
-pnpm dev
+pnpm install --frozen-lockfile
+PUBLIC_BAHIA_BOOTSTRAP_RELAYS=ws://localhost:3334/relay \
+PUBLIC_BAHIA_SERVICE_PUBKEYS=<service-pubkey-hex> \
+pnpm dev                      # http://localhost:5173
 ```
 
-The app will be available at **http://localhost:5173** by default.
-
-### Production Build
+`vite.config.js` proxies `/api` to `http://localhost:8080` for the few HTTP
+routes. The relay URL is dialed directly by the browser.
 
 ```bash
-pnpm build
-pnpm preview
+pnpm build                    # static output in web/build/
+pnpm preview                  # http://localhost:4173
 ```
 
-Preview server runs at **http://localhost:4173**.
+The container image (`web/Dockerfile`) serves `build/` with nginx, which
+also proxies `/relay` to the sidecar (`web/nginx.conf`).
 
-## Configuration
+## Runtime bootstrap seed
 
-### Backend API URL
-
-The web app connects to the Bahia backend API via `/api/v1` routes. The base URL is configured in `web/src/lib/api/client.js`:
-
-```javascript
-const BASE_URL = '/api/v1';
-```
-
-For local development, Vite proxies `/api` to `http://localhost:8080` in `web/vite.config.js`.
-
-For production deployments, configure your reverse proxy/ingress to route `/api/*` to the Bahia backend service.
-
-### Environment Variables
-
-Production containers read a validated runtime Nostr bootstrap seed. Set both relay URLs (`ws://` or `wss://`) and 64-hex service pubkeys as runtime environment variables; the entrypoint fails startup if either is missing or invalid. The repo `docker-compose.yml` forwards them from the shell environment, and the edge deploy (`deploy-edge.yml`) injects the same `web.environment` forwarding entries into the host Compose file before every rollout, so operators only set the values in the workflow (see the upgrade note in `docs/push-to-deploy-and-hiveci-runbook.md`). It writes `/bahia-bootstrap.js`, which is loaded before the app and served with `no-store`. These service keys also authorize public documentation publishers. Rotating either trust root requires a container restart, not a rebuild. Vite build-time bootstrap variables are only a local development/test fallback when no runtime seed is injected.
-
-Runtime seed and compile-time artifact metadata variables:
+The image contains no relay URLs or trust roots. At container start
+`docker-entrypoint.d/40-bahia-bootstrap-env.sh` validates the runtime
+environment and writes `/bahia-bootstrap.js`
+(`window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1", relay_urls,
+service_pubkeys, widget_pubkeys}`), served with `no-store` and loaded before
+the app. Startup fails if a value is missing or malformed, so a bad restart
+never leaves a partial seed. Rotating a trust root is a container restart,
+not a rebuild.
 
 | Variable | Purpose |
-| --- | --- |
-| `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` | Runtime comma-separated WebSocket relay URLs; development/test build fallback only without an injected seed. |
-| `PUBLIC_BAHIA_SERVICE_PUBKEYS` | Runtime comma-separated trusted 64-hex Bahia service pubkeys for discovery and docs. |
-| `PUBLIC_BAHIA_WEB_BASE_VERSION` | Frontend SemVer base, default `0.1.0`. |
-| `PUBLIC_BAHIA_GIT_COMMIT` | Commit hash stamped into the frontend version. |
-| `PUBLIC_BAHIA_WEB_VERSION` | Optional full frontend version override. |
-| `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` | Optional **runtime** variable on the web container: comma-separated 64-character hex pubkeys trusted to publish ops widgets. The entrypoint validates it and writes `widget_pubkeys` into the deployment seed; unset or empty denies all widget events. With an injected seed, build-time values are ignored. |
+|---|---|
+| `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` | Comma-separated `ws://`/`wss://` relay URLs the app dials first (required at runtime) |
+| `PUBLIC_BAHIA_SERVICE_PUBKEYS` | Comma-separated 64-hex service pubkeys whose discovery, state and published documentation the app trusts (required) |
+| `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` | Optional comma-separated 64-hex pubkeys allowed to publish ops widgets (kind `30318`); unset denies all widgets |
+| `PUBLIC_BAHIA_WEB_BASE_VERSION`, `PUBLIC_BAHIA_GIT_COMMIT`, `PUBLIC_BAHIA_WEB_VERSION` | Build-time version metadata shown under Settings → Build information |
 
-The Settings **Versions** section treats the signed system-discovery `observed_deployments` projection as runtime truth. Each row is derived from the current environment-service state and its matching runtime observation, with service/environment names, runtime target, observed version or image digest, host, health, drift, and observation time. The backend publishes this discovery projection when browser relay policy is configured even when the relay runs as a separate container and `nostr.sidecar.enabled=false`.
+`docker-compose.yml` forwards the three runtime variables from the shell
+environment; the edge deploy workflow (`.github/workflows/deploy-edge.yml`)
+injects the same entries into the host Compose file. With `pnpm dev` or
+`pnpm preview` and no injected seed, the same variables are read at build
+time as a development fallback.
 
-Compile-time metadata remains visible under **Build information**. It includes the web artifact stamped into the frontend and the backend-side packaged artifact catalog, but the UI explicitly does not present those entries as evidence that an artifact is deployed. Release builds should stamp build versions as `0.1.0-<commit-hash>` unless release automation intentionally provides another SemVer-compatible value.
+## How the app reads and writes
 
-### Relay subscriptions, health, and caches
+1. **Discovery.** From the seed relays the app REQs `11316` and the `30002`
+   relay sets authored by a trusted service pubkey, learns the browser and
+   ContextVM relays, feature flags and advertised capabilities
+   (`$lib/stores/discovery.svelte.js`).
+2. **Store-first hydration.** Every collection renders from the IndexedDB
+   event store (`$lib/nostr/store.js`) immediately, then subscribes with
+   `authors` + `#t` filters through the welshman-based pool
+   (`$lib/nostr/pool-welshman.js`). Stored events arrive until `EOSE`; the
+   subscription stays open; a `CLOSED` or dropped connection is reissued
+   with capped jittered backoff from the last-seen cursor. Large families use
+   paged backfill (`$lib/nostr/store-first-backfill.js`).
+3. **Protected topics.** Public families hydrate before sign-in. After the
+   operator signs in the pool answers the sidecar's NIP-42 challenge with
+   the session signer (`$lib/nostr/relay-auth-signer.js`); a pubkey the
+   sidecar does not admit sees `restricted:` in the connection status and
+   only the public models.
+4. **Writes.** Forms build the full desired state, mint a UUIDv7 id
+   (`$lib/entity-id.js`), sign a `30900` intent (`$lib/nostr/intent-client.svelte.js`),
+   gift-wrap it for sensitive domains (`$lib/nostr/intent-giftwrap.js`),
+   publish it through the browser outbox (`$lib/nostr/outbox.js`) and wait
+   for the requester-scoped `30315` status. Pending intents are shown in
+   `PendingDomainIntents` until the status or the canonical record arrives.
+5. **Confidential records.** Org and fleet content keys are trial-decrypted
+   from `org-key-envelope` records with the signer's NIP-44; encrypted
+   families (`$lib/nostr/confidential.js`) decrypt locally.
+6. **Interactive RPC.** Secret reveal and assistant turns use ContextVM
+   `25910` inside gift wraps (`$lib/nostr/encrypted-controlplane*.js`).
 
-Long-lived app stores use `PoolBackedClient.subscribeWithRecovery()`: relay `CLOSED`/connection failures reissue REQ with capped jittered backoff and a last-seen replay cursor. EOSE marks the stored/live boundary; it does not close the subscription or imply terminal workflow completion.
+The connection indicator (`ConnectionStatus`) shows relay count, last event,
+last `EOSE`, errors, auth state and a manual retry.
 
-The connection indicator exposes relay count/list, last event, last EOSE, errors, and manual retry. Store-local health also tracks resubscribe attempts and the last close reason.
+## Authentication
 
-Control-plane collections hydrate from a TTL-bounded IndexedDB cache before relay sync. Persistence snapshots Svelte reactive proxies to plain structured-clone-safe objects and intentionally skips high-churn collections. Discovery/docs caches use browser storage separately.
+The app is signer-first. Sign-in establishes a signer session (NIP-07 or
+NIP-46; `$lib/stores/auth.svelte.js`); the pubkey is the identity used for
+intents, relay AUTH and the NIP-98 header on the few HTTP routes
+(`signHttpRequest`). Organization roles come from the decrypted `org-member`
+records (`$lib/stores/auth-roles.svelte.js`). There is no token exchange and
+nothing is stored beyond the signer session.
 
-Branch and relay-document reads resolve their initial EOSE/degraded result while retaining recovery subscriptions for live follow-up events. The pre-auth NIP-65/metadata lookup is the intentional bounded exception.
+## Settings
 
-### Current LLM and Souls UI
-
-The `/llm` UI can configure external LiteLLM-backed releases with `metadata.litellm_model`. Authorization headers are secret references (`header_secret_refs` / `health_header_secret_refs`), never literal secret values.
-
-The Souls gallery reconciles provisioned read models with drafts: a draft whose `agent_id` already has a final `31951` is not shown as unresolved. Runtime choices remain gated by compatible `30317` capabilities and advertised methods.
-
-## Authentication & Authorization
-
-### Signer-first Authentication (NIP-07 and NIP-46)
-
-The first-party web app is signer-first: an authenticated signer session is the primary identity state. Both signer paths are supported:
-
-- **NIP-07 browser extension** (nos2x, Alby, Nostore)
-- **NIP-46 remote signer/bunker** (Nostr Connect)
-
-Protected HTTP compatibility requests are signed with NIP-98 headers (`Authorization: Nostr <base64event>`). The app no longer stores `bahia_token` or calls `/api/v1/auth/nostr`.
-
-Signer-session auth and REST compatibility are tracked separately:
-
-- signer login can succeed even when REST compatibility is unavailable
-- REST compatibility requires backend `features.direct_nostr_http_auth=true`
-- routes that still depend on REST compatibility show compatibility messaging instead of treating signer login as failed
-
-### REST Compatibility Surface
-
-Most realtime app state is sourced from the Nostr sidecar/control-plane subscriptions. REST compatibility remains a legacy fallback for HTTP CRUD/query operations that have not yet moved to signer-first transports. As of this migration stage, sensitive route families such as `/notifications` use encrypted Nostr request/result flows instead of REST compatibility.
-
-### Encrypted Nostr Request/Result Flows
-
-Sensitive route migrations use signer-first encrypted ContextVM transport instead of REST compatibility. The backend advertises this only when operators configure service publish/backfill relays, browser-safe relays, ContextVM request/reply relays or their degraded browser-relay fallback, and a service key. Browser code reads ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`), prefers `bahia-contextvm-v1` for ContextVM kind `25910` requests, and uses CEP-4/NIP-59 gift-wrap (`1059` or `21059`) where encrypted transport is available. Results are correlated by ContextVM response tags and durable completion still comes from canonical observable events.
-
-Important signer constraints:
-
-- NIP-07 must expose `window.nostr.nip44.encrypt` and `window.nostr.nip44.decrypt`.
-- NIP-46 works only if the provider exposes `provider.nip44.encrypt/decrypt`; otherwise encrypted request/result routes must remain blocked for that signer with the explicit provider blocker shown.
-- Public sidecar relays from `nostr.browser_relays` are not encrypted-request relay URLs. Do not copy notification, org, payment, service secret, stored run log, or artifact signature verification payloads into public read-model events.
+- **Relays**: the operator relay policy (`relay-settings:operator` record)
+  and the per-session relay list.
+- **Versions**: the daemon's signed `observed_deployments` projection — each
+  row is an environment-service state joined with its runtime observation
+  (names, target, observed version or digest, host, health, drift, time).
+- **Build information**: the web artifact version and the backend's
+  packaged artifact catalog; not evidence of what is deployed.
 
 ## Troubleshooting
 
-### API Connection Errors
+| Symptom | Check |
+|---|---|
+| Blank app, console `bahia-web bootstrap env missing` | Set `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS` on the container |
+| "No trusted discovery" | The seed pubkeys do not match `nostr.private_key` of the daemon, or the daemon has no `nostr.browser_relays` so it never published `11316`/`30002` |
+| Connection status `auth-required` / `restricted` | Sign in; if still restricted, the pubkey must be admitted by the sidecar (org member, fleet operator, or `read_auth_allowed_pubkeys`) |
+| Intent stays pending | Watch the sidecar `OK` in the outbox panel; a `rejected` status carries the reason; the signer must be a member of the `org` the intent names |
+| Encrypted action blocked | The signer lacks NIP-44; switch to a signer that exposes it |
+| Stale data after a daemon restart | The store renders what it has; the subscription resumes from its cursor once relays reconnect — use the connection indicator's retry |
+| `pnpm dev` fails on Node 20 | Upgrade Node (jsdom 30 and isomorphic-dompurify 4 need 22+) |
 
-**Problem**: `fetch failed` or CORS errors
+## Browser support
 
-**Solutions**:
-- Verify the backend is running: `curl http://localhost:8080/api/v1/services`
-- Check SvelteKit dev server proxy configuration
-- For production, verify reverse proxy routes `/api/v1/*` to backend
-
-### Authentication Failures
-
-**Problem**: `401 Unauthorized` on API requests
-
-**Solutions**:
-- Verify a NIP-07 browser extension is installed and unlocked
-- Reload the app and grant signing permission when prompted
-- Check ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) advertises `direct_nostr_http_auth: true` when backend auth is enabled
-- If signer login works but a page reports compatibility required, that route still depends on REST compatibility
-
-### NIP-07 Extension Not Detected
-
-**Problem**: "No Nostr extension found" message on Soul Factory pages
-
-**Solutions**:
-- Install a NIP-07 browser extension (nos2x, Alby, Nostore)
-- Reload the page after installing the extension
-- Grant the app permission when prompted
-- Check browser console for `window.nostr` availability
-
-Compatibility notes for renamed keys:
-
-- Canonical names: `nostr.relays`, `nostr.browser_relays`, `features.encrypted_nostr_requests`.
-- Wire marker for encrypted request/result routing is `encrypted=bahia-encrypted-v1`.
-
-### Real-Time Events Not Updating
-
-**Problem**: Dashboard/events page not showing live updates
-
-**Solutions**:
-- Check the relay connection status indicator (top-right corner)
-- Verify ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) advertises `relay_sidecar` and `relay_read_models`
-- Open DevTools → Network and confirm WebSocket connections to the relay URLs advertised by discovery
-- Check Bahia and relay sidecar logs for publish/subscribe errors
-
-### Development Server Issues
-
-**Problem**: `pnpm dev` fails to start
-
-**Solutions**:
-- Clear `.svelte-kit/` build cache: `rm -rf .svelte-kit`
-- Delete `node_modules` and reinstall: `rm -rf node_modules && pnpm install`
-- Check Node.js version: `node -v` (must satisfy the current Vite engine: `^20.19.0`, `^22.12.0`, or `>=24`)
-- Check for port conflicts on 5173
-
-### Test Failures
-
-**Problem**: Unit or E2E tests fail
-
-**Solutions**:
-- Run tests in isolation: `pnpm exec vitest run tests/unit/specific.test.js`
-- Check test setup files: `tests/setup/vitest.setup.js`
-- For E2E failures, verify the preview server is accessible at `http://127.0.0.1:4173`
-- Review Playwright HTML report: `pnpm exec playwright show-report`
-
-## Browser Compatibility
-
-The web app is tested on:
-- **Chrome/Edge**: v120+
-- **Firefox**: v115+
-- **Safari**: v16+
-
-### Known Limitations
-
-- **NIP-07 on Mobile**: Limited browser extension support (use Nostore on iOS Safari)
-- **Compatibility-gated pages**: Some routes still depend on backend direct NIP-98 compatibility while migration to fully Nostr-native read/write flows continues
-- **WebSocket relay**: Required for live control-plane updates
-- **Browser storage**: IndexedDB caches read-model collections; localStorage holds discovery/docs caches and non-secret session metadata. Private browsing or storage eviction may clear them
-
-## Next Steps
-
-- **API Client Reference**: See [web-api-client.md](./web-api-client.md)
-- **Component Library**: See [web-components.md](./web-components.md)
-- **Testing Guide**: See [web-testing.md](./web-testing.md)
-- **Production Plan**: See [WEB_APP_PRODUCTION_PLAN.md](./WEB_APP_PRODUCTION_PLAN.md)
+Current Chrome, Firefox, Safari and Edge. IndexedDB and WebSocket are
+required; NIP-07 depends on the extension's platform support (iOS Safari
+through Nostore).

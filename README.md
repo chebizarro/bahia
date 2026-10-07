@@ -2,162 +2,90 @@
 
 ![bahia logo](docs/assets/logo.png)
 
-## What is Bahia?
+**Bahia tracks your builds, deploys your containers, and tells you when
+something goes wrong.**
 
-**Bahia tracks your builds, deploys your containers, and tells you when something goes wrong.**
+Bahia is a deployment and runtime control plane whose state lives on Nostr
+relays as signed events. It:
 
-At its core, Bahia is a **deployment and runtime control plane**. It:
-- Tracks which builds and artifacts exist
-- Knows which versions should be running in which environments
-- Executes deployments and rollbacks
-- Observes runtime state and detects drift
-- Records operational truth to Nostr
-- Optionally provisions and manages Soul Factory agents
+- registers builds and artifacts from CI (Hive-CI) and its own OCI registry;
+- holds the desired state of every service in every environment;
+- executes deployments and rollbacks on Loom workers or direct runtime
+  targets (Docker, Compose, Kubernetes, Podman);
+- observes what is running, detects drift, supervises managed instances and
+  probes public routes;
+- publishes every state change, status and audit fact to relays, where the
+  web app, the CLI, MCP agents and other services read it;
+- optionally manages DNS, LLM routes, ML models, packages, backups, security
+  scanning, SBOMs and Soul Factory agents.
 
-## Current product shape
-
-Bahia's **purpose** is still deployment/runtime control, but the **current interaction model** is Nostr-native:
-
-- **Nostr-native** — Nostr is a primary control-plane transport, not just an audit log
-- **Sidecar-first** — the relay sidecar is the main realtime/public event boundary for browser and backend control-plane traffic
-- **Signer-first** — operators and web users sign actions with Nostr identities (for example NIP-07 or NIP-46)
-- **Relay-backed read models** — the web app bootstraps shared state from relay subscriptions and replaceable events
-- **Encrypted sensitive flows** — notifications, payments history, orgs, secrets, run logs, and similar sensitive operations use encrypted Nostr request/result events
-- **Narrowed HTTP compatibility surfaces** — REST and MCP still exist, but they are no longer the whole product story
-
-If you are integrating with Bahia, start with:
-- [`docs/user-guide/index.md`](docs/user-guide/index.md)
-- [`docs/control-planes.md`](docs/control-planes.md)
-- [`docs/relay-sidecar.md`](docs/relay-sidecar.md)
-- [`docs/nostr-commands.md`](docs/nostr-commands.md)
-- [`docs/event-spec.md`](docs/event-spec.md)
-
----
-
-## How It Works
+## How it works
 
 ```text
-You push code → CI builds it → Bahia registers build/artifact state →
-You request a deployment → Bahia coordinates execution →
-Bahia observes runtime state → Bahia publishes status, results, and read models to Nostr
+you push code → Hive-CI builds it → Bahia registers the build and artifact
+→ an operator signs a deployment intent → Bahia evaluates policy, runs it
+→ Bahia observes the runtime → Bahia publishes state, status and audit to relays
+→ the web app, CLI and agents see it live
 ```
-
-**The main pieces:**
-- **Hive-CI / external CI** — Produces workflow/build events and artifacts
-- **Bahia** — Maintains deployment/runtime state and coordinates actions
-- **OCI registry / Harbor-compatible image sources** — Stores container images
-- **Loom workers / direct runtime targets** — Execute deployments or host workloads
-- **PostgreSQL** — Stores canonical persisted state
-- **Nostr relays / relay sidecar** — Carry public control-plane events, status/results, and read models
-- **Encrypted request relays** — Carry sensitive encrypted Nostr request/result traffic where configured
-
-## Architecture at a glance
 
 ```text
-┌───────────────┐      ┌──────────────────────┐
-│ Browser / CLI │─────▶│ ContextVM discovery (11316-11320) + NIP-51 30002 │
-│ / MCP client  │      │   capability bootstrap│
-└──────┬────────┘      └──────────┬───────────┘
-       │                           │
-       │ signed requests           │ relay + feature discovery
-       ▼                           ▼
-┌───────────────────────────────────────────────┐
-│         Nostr control plane / sidecar         │
-│  public requests • status/results • read models│
-└──────────┬───────────────────────┬────────────┘
-           │                       │
-           ▼                       ▼
-   ┌───────────────┐       ┌──────────────────┐
-   │    Bahia      │       │ encrypted relays │
-   │ reactor/router│       │ sensitive flows  │
-   └──────┬────────┘       └──────────────────┘
-          │
-          ├──────────────▶ PostgreSQL
-          ├──────────────▶ OCI / Blossom
-          ├──────────────▶ Loom / runtime targets
-          └──────────────▶ audit + projections back to relays
+ web (SvelteKit)      bahia CLI       MCP agents
+      │ REQ + signed intents │             │ POST /mcp
+      ▼                      ▼             ▼
+ ┌───────────── relay sidecar (bahia-relay) ─────────────┐
+ │ intents · state 30900 · status 30315 · audit 4903     │
+ └──────────────────▲────────────────────▲───────────────┘
+                    │ publish            │ subscribe
+               ┌────┴──── bahia daemon ──┴────┐
+               │ intent processor · registry   │
+               │ projector · supervisors        │
+               └──┬───────┬───────┬────────┬───┘
+            PostgreSQL  Blossom  OCI    Loom / runtimes
+             (index)   (blobs) (images)
 ```
 
-For a fuller architectural description, see [`docs/architecture.md`](docs/architecture.md).
+Every mutation is a client-signed Nostr intent; the daemon answers with a
+bounded status and publishes the canonical record; readers subscribe. HTTP
+exists for probes, metrics, the OCI distribution API, MCP and a handful of
+HTTP-native routes.
 
-## Current Status
-
-- ✅ Service, environment, build, and artifact registration
-- ✅ Deployment intents, approvals, execution, and rollback workflows
-- ✅ Runtime observation and drift detection (Docker, Podman, Compose, Kubernetes)
-- ✅ Nostr-native control plane with canonical request/status/result/read-model kinds
-- ✅ Sidecar-first relay discovery via ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`)
-- ✅ Durable relay history with bounded replay/retention and a retrying outbound Nostr publish outbox
-- ✅ Signer-first browser auth, NIP-46 CLI operator signing, and direct NIP-98 HTTP compatibility auth
-- ✅ Encrypted Nostr request/result flows for sensitive domains
-- ✅ PostgreSQL persistence
-- ✅ Native MCP transport at `/mcp` and `/api/v1/mcp`
-- ✅ Web UI for services, deployments, notifications, ML, workers, fleet health, and more
-- ✅ Feature-gated web surfaces for LLM routes and Souls when those domains are enabled
-- ✅ OCI Registry Server backed by PostgreSQL + Blossom
-- ✅ Hive-CI Bridge for auto-ingesting workflow events into build/artifact state
-- ✅ Soul Factory agent provisioning when enabled (feature-gated and disabled by default)
-
-See [`docs/control-planes.md`](docs/control-planes.md) for the current product transport contract.
-
-## Quick Start
+## Quick start
 
 ```bash
-# Start with Docker Compose (includes PostgreSQL, API server, and Web UI)
+# A Nostr key for the daemon and the host docker socket group id
+export BAHIA_NOSTR_PRIVATE_KEY=<64-hex>
+export DOCKER_SOCKET_GID=$(stat -c %g /var/run/docker.sock)
+# The web app trusts only the service pubkeys you name
+export PUBLIC_BAHIA_SERVICE_PUBKEYS=<service-pubkey-hex>
+
 docker compose up --build
 
-# API health
-curl http://localhost:8080/health
-
-# Browser UI
-open http://localhost:3000
+curl http://localhost:8080/health      # liveness
+curl http://localhost:8080/ready       # readiness with checks
+open http://localhost:3000             # web app (relay proxied at /relay)
 ```
+
+`docker-compose.yml` starts PostgreSQL, the relay sidecar (`:3334`), the
+daemon (`:8080`) and the web app (`:3000`); the Go services share
+`config.compose.yaml`. See the [deployment guide](docs/deployment.md).
 
 ## Development
 
 ```bash
-# Prerequisites: Go 1.24+, PostgreSQL 16+
-
-# Install dependencies
-make deps
-
-# Run locally
-make run-dev
-
-# Run tests
-make test
-
-# Build binaries
-make build
+# Go 1.26, PostgreSQL 16, pnpm 10 / Node 22+ for the web
+make deps        # go mod download
+make run-dev     # daemon with dev-mode config
+make test        # go test ./... (includes the architecture ratchet)
+make lint        # golangci-lint
+make build       # bahia-server, bahia, bahia-relay and the other binaries
 ```
 
-## Control planes
-
-Bahia currently exposes three main control-plane surfaces:
-
-1. **Nostr relay sidecar** — primary async/realtime plane for shared browser state, operator requests, status/results, and read models
-2. **Native MCP** — JSON-RPC tools over HTTP at `/mcp` and `/api/v1/mcp`
-3. **REST API** — narrowed CRUD/query/log/compatibility surface
-
-For production, the web image contains no baked relay or service-pubkey trust roots. Set `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS` on the web container at runtime. Startup validates both and writes a no-cache seed script; the configured service keys are also the only accepted public documentation publishers. Restart the container to rotate roots without rebuilding the image.
-
-Important: the web app's shared state is **not** primarily a REST polling client. It bootstraps from ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`), connects to relays, waits for EOSE on read models, and then stays live on subscriptions.
-
-Also note: ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) expose the core control-plane discovery map. Broader kind families are documented in `docs/control-planes.md` and `docs/nostr-commands.md`.
-
-## Key Nostr event contracts
-
-Full HTTP reference: [`docs/api.md`](docs/api.md)
-
-| Endpoint | Description |
-|----------|-------------|
-| `ContextVM discovery (11316-11320) + NIP-51 relay sets (30002)` | Capability + relay/bootstrap discovery (core kind map; broader families documented separately) |
-| `POST /mcp` | Native MCP JSON-RPC endpoint |
-| `POST /api/v1/services` | Create a service (REST compatibility surface) |
-| `POST /api/v1/deployments/intents` | Create deployment intent |
-| `service/rollback` over ContextVM kind `25910` | Create signer-first rollback intent |
-| `GET /api/v1/state/drifted` | List drifted service state |
-| `GET /v2/` | OCI Distribution API |
+Binaries (`cmd/`): `server` (`bahia-server`), `cli` (`bahia`), `relay`
+(`bahia-relay`), `bahia-migrate`, `bahia-event-archive`, `bahia-dns-agent`,
+`bahia-test-relay`, `fips-bahia-bridge`, `openclaw-soulfactory-sidecar`,
+`openclaw-soulfactory-control`, `metiq-signet-enrollment`,
+`soulfactory-runtime-validate`, `soulfactory-legacy-adoption-report`,
+`bahia-assistant-e2e-provider`.
 
 ## CLI
 
@@ -166,43 +94,43 @@ bahia services list
 bahia environments list
 bahia state list
 bahia state drifted
-bahia deployments deploy --service <id> --environment <id> --artifact <id>
-bahia deployments rollback --service <id> --environment <id> --deployment-unit <unit-id> --target-artifact <previous-artifact-id> --supersedes-intent <current-intent-id>
+bahia deploy --service <id> --environment <id> --artifact <id>
+bahia rollback --service <id> --environment <id> --deployment-unit <unit-id> \
+  --target-artifact <previous-artifact-id> --supersedes-intent <current-intent-id>
+bahia outbox list
 ```
 
-Some operator flows are signer-first and relay-driven. See:
-- [`docs/adoption-production-rollout.md`](docs/adoption-production-rollout.md)
-- [`docs/nostr-commands.md`](docs/nostr-commands.md)
+The CLI signs with a key file or a NIP-46 bunker, talks to relays only, and
+follows the daemon's status events. Full reference:
+[CLI](docs/user-guide/cli-reference.md).
 
-## Key Concepts
+## Key concepts
 
-| Term | What it means |
-|------|---------------|
+| Term | Meaning |
+|---|---|
 | **Service** | An application you deploy |
-| **Environment** | A target deployment context such as staging or production |
+| **Environment** | A target context such as staging or production, with one or more deployment units |
 | **Build** | A CI run that produced deployable output |
 | **Artifact** | An immutable container image plus metadata |
-| **Deployment Intent** | A request to deploy an artifact |
-| **Deployment Run** | A concrete execution attempt |
-| **Runtime Observation** | A snapshot of what is actually running |
+| **Deployment intent** | A signed request to deploy an artifact, with its policy evaluation and approval |
+| **Deployment run** | One execution attempt of an approved intent |
+| **Runtime observation** | A snapshot of what is actually running |
 | **Drift** | A mismatch between desired and observed state |
-| **Read Model** | Relay-published replaceable event that reflects current shared UI state |
+| **Canonical record** | A `30900` event on a relay that is the current truth for one entity |
 
 ## Documentation
 
-### Start here
-- [User Guide](docs/user-guide/index.md) — task-oriented product documentation
-- [Control Planes](docs/control-planes.md) — current transport and control-plane contract
-- [Relay Sidecar](docs/relay-sidecar.md) — sidecar topology and boundaries
-- [Nostr Commands](docs/nostr-commands.md) — canonical Nostr request kinds
-- [Event Specification](docs/event-spec.md) — event kinds and payloads
-
-### Core product docs
-- [Architecture](docs/architecture.md) — how Bahia is structured
-- [API Reference](docs/api.md) — HTTP compatibility/query surface
-- [Deployment Guide](docs/deployment.md) — how to run Bahia
-- [Soul Factory](docs/soul-factory.md) — AI agent provisioning
-
-### Operational docs
-- [Adoption Production Rollout](docs/adoption-production-rollout.md) — signer-first adoption/import + direct-runtime rollout
-- [Protocol Compatibility](docs/protocol-compatibility.md) — protocol support status and compatibility notes
+- [User guide](docs/user-guide/index.md) — task-oriented product
+  documentation, also published to relays as kind `30023`
+- [Architecture](docs/architecture.md) — components, invariants, flows
+- [Control planes](docs/control-planes.md) — surfaces, relays, authorization
+- [Event specification](docs/event-spec.md) — every kind, tag and topic
+- [Nostr event implementation guide](docs/nostr-event-implementation-guide.md)
+  — how to add an event
+- [Relay sidecar](docs/relay-sidecar.md) — the relay's policy and operation
+- [HTTP reference](docs/api.md) — the exact HTTP routes
+- [Deployment guide](docs/deployment.md) — running Bahia
+- [Web app setup](docs/web-app-setup.md), [web components](docs/web-components.md), [web testing](docs/web-testing.md)
+- [Soul Factory](docs/soul-factory.md), [VM runtimes](docs/vm-runtimes.md),
+  [protocol compatibility](docs/protocol-compatibility.md)
+- Runbooks under [`docs/runbooks/`](docs/runbooks/)
