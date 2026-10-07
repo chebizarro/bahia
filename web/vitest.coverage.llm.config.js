@@ -8,7 +8,7 @@ export default mergeConfig(base, defineConfig({
       provider: 'v8',
       all: true,
       reporter: ['json-summary', 'text'],
-      reportsDirectory: '../pstf/features/LLM_ROUTE_RELEASE_DEPLOYMENT/coverage/web',
+      reportsDirectory: '../coverage/web/llm',
       include: [
         'src/lib/auth/route-access.js',
         'src/lib/components/nav-model.js',

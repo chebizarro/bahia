@@ -1,11 +1,10 @@
 /**
  * Smoke test for E2E agent test harness
  * 
- * This script verifies that all drivers (API, Playwright, MCP) can connect
- * and perform basic operations against the Bahia stack.
+ * This script verifies that the harness, the Playwright driver and the MCP
+ * driver can connect and perform basic operations against the Bahia stack.
  */
 import { TestHarness } from './harness.js';
-import { BahiaAPIDriver } from './drivers/api.js';
 import { PlaywrightDriver } from './drivers/playwright.js';
 import { MCPDriver } from './drivers/mcp.js';
 
@@ -28,37 +27,13 @@ async function runSmokeTests() {
     });
     console.log();
 
-    // ==================== API Driver ====================
-    console.log('🌐 Test 2: REST API Driver');
-    const apiDriver = new BahiaAPIDriver(harness.getApiUrl());
-
-    // Health check
-    const healthResult = await apiDriver.health();
-    console.log('  ✅ Health check:', healthResult);
-
-    // Create a test service
-    const serviceResult = await apiDriver.createService({
-      name: `test-service-${Date.now()}`,
-      artifact_repo: 'registry.example.com/test/app',
-      runtime_type: 'docker',
-    });
-    console.log('  ✅ Created service:', serviceResult.data?.name);
-
-    // List services
-    const servicesResult = await apiDriver.listServices();
-    console.log('  ✅ Listed services:', servicesResult.data?.length ?? 0, 'services');
-
-    // Create a test environment
-    const envResult = await apiDriver.createEnvironment({
-      name: `test-env-${Date.now()}`,
-      protected: false,
-      deploy_strategy: 'replace',
-    });
-    console.log('  ✅ Created environment:', envResult.data?.name);
-
-    // List environments
-    const envsResult = await apiDriver.listEnvironments();
-    console.log('  ✅ Listed environments:', envsResult.data?.length ?? 0, 'environments');
+    // ==================== Daemon readiness ====================
+    console.log('🌐 Test 2: Daemon health and readiness');
+    for (const route of ['/health', '/ready']) {
+      const response = await fetch(`${harness.getApiUrl()}${route}`);
+      if (!response.ok) throw new Error(`GET ${route} returned ${response.status}`);
+      console.log(`  ✅ ${route}:`, await response.json());
+    }
     console.log();
 
     // ==================== Playwright Driver ====================

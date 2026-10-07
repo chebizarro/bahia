@@ -36,7 +36,7 @@ export interface MCPHTTPConnectionOptions {
 
 /**
  * MCPDriver provides MCP client functionality for testing Bahia MCP tools.
- * Bahia exposes MCP as HTTP JSON-RPC at /mcp and /api/v1/mcp.
+ * Bahia exposes MCP as HTTP JSON-RPC at POST /mcp.
  */
 export class MCPDriver {
   private serverUrl: string | null = null;

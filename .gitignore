@@ -10,6 +10,7 @@ bin/
 *.test
 coverage.out
 coverage.html
+coverage/
 
 # IDE
 .idea/

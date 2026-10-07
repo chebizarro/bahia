@@ -1,7 +1,0 @@
-{
-  "id": "BAHIA_PHASE5_R3_WORKER_BUILD_ARTIFACT_READS",
-  "issue": "bahia-irsry.13.9",
-  "intent": "Read CLI workers, builds, and artifacts from canonical signed Nostr events by default, retaining explicit REST read compatibility.",
-  "source_of_truth": "service-authored kind 30900 worker-state, worker-assignment, worker-drain, worker-eligibility, build-registry, and artifact-registry records; worker-authored Loom advertisement events",
-  "safety": "Worker advertisement filters are scoped to known or explicitly named worker authors. Stale local reads warn and exit successfully without claiming relay freshness."
-}
