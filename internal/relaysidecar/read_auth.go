@@ -361,10 +361,9 @@ func (r *readAuthPolicy) checkReadAuth(ctx context.Context, filter nostr.Filter)
 		return false, ""
 	}
 
-	// enforce mode: request NIP-42 auth if the connection has a WebSocket.
-	if !isAuthed && khatru.GetConnection(ctx) != nil {
-		khatru.RequestAuth(ctx)
-	}
+	// enforce mode. Khatru issues the NIP-42 challenge itself for every
+	// "auth-required:" refusal (REQ, COUNT and NEG-OPEN), so the policy only
+	// returns the reason.
 	return true, reason
 }
 
