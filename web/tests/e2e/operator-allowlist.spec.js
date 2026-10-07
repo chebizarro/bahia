@@ -32,9 +32,8 @@ test('the allowlist record names no operator in the clear', () => {
   const serialized = JSON.stringify(allowlist).toLowerCase();
   expect(serialized).not.toContain(otherOperator);
   expect(allowlist.tags.some((tag) => tag[0] === 'p')).toBe(false);
-  expect(allowlist.tags).toContainEqual(['d', 'operators:continuity']);
-  expect(allowlist.tags).toContainEqual(['t', 'operator-allowlist']);
-  expect(allowlist.tags).toContainEqual(['legacy_kind', '32029']);
+  const tags = Object.fromEntries(allowlist.tags.filter(([name]) => ['d', 't', 'legacy_kind', 'domain'].includes(name)));
+  expect(tags).toEqual({ d: 'operators:continuity', t: 'operator-allowlist', legacy_kind: '32029', domain: 'operator' });
   expect(JSON.parse(allowlist.content).schema).toBe('bahia.confidential.aead.v1');
 });
 
