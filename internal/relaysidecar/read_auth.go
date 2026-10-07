@@ -116,9 +116,10 @@ var publicKindRanges = [][2]nostr.Kind{
 //
 // Per-topic decisions:
 //
-//	dns-endpoint, dns-zone, dns-policy, dns-backend — PUBLIC:
+//	dns-endpoint, dns-zone, dns-zone-sync, dns-policy, dns-backend — PUBLIC:
 //	  FIPS bridge reads anonymously; pkg/discovery WithPrivateKey is optional;
-//	  web pre-login bootstrap reads these for the DNS dashboard.
+//	  web pre-login bootstrap reads these for the DNS dashboard; the DNS agent
+//	  applies dns-zone-sync with a key the sidecar need not admit.
 //
 //	service-state, service-registry, environment-registry — PUBLIC:
 //	  CLI NostrClient (pkg/client) reads anonymously (no WithPrivateKey in its pool);
@@ -174,11 +175,15 @@ var publicKindRanges = [][2]nostr.Kind{
 //	assistant-session — PROTECTED:
 //	  Session recovery data, private.
 var publicCPStateTopics = map[string]bool{
-	// DNS — anonymous readers (FIPS bridge, pkg/discovery).
+	// DNS — anonymous readers (FIPS bridge, pkg/discovery). dns-zone-sync is
+	// the per-zone record set the DNS agent subscribes to with its own key
+	// (cmd/bahia-dns-agent, dns_canonical_publisher.PublishZoneSync); it
+	// carries the same records as the public dns-zone/dns-endpoint topics.
 	kinds.DNSZoneTopic:     true,
 	kinds.DNSEndpointTopic: true,
 	kinds.DNSPolicyTopic:   true,
 	kinds.DNSBackendTopic:  true,
+	"dns-zone-sync":        true,
 
 	// Core fleet state — CLI NostrClient, web pre-login bootstrap.
 	kinds.CPStateTopicServiceState:        true,

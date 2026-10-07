@@ -18,7 +18,9 @@ func TestDefaultIntentSubscriberColdRelayBecomesReady(t *testing.T) {
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "intent-local.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	pool := nostrAdapter.NewRelayPool([]string{h.wsURL}, zap.NewNop())
+	// Intents (t=bahia-intent) are a protected topic on the default sidecar
+	// config; the daemon pool answers the NIP-42 challenge with the service key.
+	pool := nostrAdapter.NewRelayPool([]string{h.wsURL}, zap.NewNop(), nostrAdapter.WithPrivateKey(h.serviceKey.Hex()))
 	t.Cleanup(pool.Close)
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()

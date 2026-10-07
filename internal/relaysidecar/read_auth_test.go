@@ -107,6 +107,11 @@ func TestFilterNeedsAuth(t *testing.T) {
 			needsAuth: false,
 		},
 		{
+			name:      "DNS agent zone sync is public like the other DNS topics",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{"dns-zone-sync"}}},
+			needsAuth: false,
+		},
+		{
 			name:      "30900 with protected topic requires auth",
 			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.SecurityFindingsTopic}}},
 			needsAuth: true,

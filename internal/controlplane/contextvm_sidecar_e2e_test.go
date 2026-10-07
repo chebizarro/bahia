@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"net"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -35,48 +36,97 @@ type contextVMSidecarHarness struct {
 	requests  *nostr.Subscription // daemon's requests
 }
 
-// startContextVMSidecarHarness runs a real relay sidecar with two clients: a
-// requester (the web or CLI role) and the daemon, whose ContextVM transport
-// answers through the sidecar. Both subscriptions are live (EOSE) before the
-// test publishes anything.
+// startContextVMSidecarHarness runs a real relay sidecar on its default
+// config (read_auth_mode enforce) with two clients: a requester (the web or
+// CLI role, admitted through read_auth_allowed_pubkeys) and the daemon (the
+// sidecar's service key), whose ContextVM transport answers through the
+// sidecar. ContextVM wraps are a protected kind, so each client's first REQ
+// is refused with auth-required, answered with NIP-42, and issued again;
+// both subscriptions are live (EOSE) before the test publishes anything.
 func startContextVMSidecarHarness(t *testing.T, ctx context.Context) *contextVMSidecarHarness {
 	t.Helper()
+	servicePubkey := testNostrPubKeyFromPrivateKey(t, testServiceKey).Hex()
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	// NIP-42 binds the AUTH event to the relay URL, so the sidecar must know
+	// the address the clients dial before it starts.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
 	cfg := config.Defaults().Nostr
 	cfg.Sidecar.DataDir = t.TempDir()
+	cfg.PrivateKey = testServiceKey
+	cfg.Sidecar.PublicURL = "ws://" + listener.Addr().String()
+	cfg.Sidecar.ReadAuthAllowedPubkeys = []string{requesterPubkey}
 	sidecar, err := relaysidecar.New(cfg, zap.NewNop())
 	if err != nil {
 		t.Fatalf("start sidecar: %v", err)
 	}
 	t.Cleanup(func() { _ = sidecar.Close() })
-	server := httptest.NewServer(sidecar.Handler())
+	server := httptest.NewUnstartedServer(sidecar.Handler())
+	server.Listener = listener
+	server.Start()
 	t.Cleanup(server.Close)
 	h := &contextVMSidecarHarness{url: "ws" + strings.TrimPrefix(server.URL, "http")}
-	connect := func() *nostr.Relay {
-		relay, err := nostr.RelayConnect(ctx, h.url, nostr.RelayOptions{})
+	connect := func(privateKey string) (*nostr.Relay, <-chan error) {
+		authed := make(chan error, 4)
+		relay, err := nostr.RelayConnect(ctx, h.url, nostr.RelayOptions{
+			AuthHandler: func(_ context.Context, _ *nostr.Relay, ev *nostr.Event) error {
+				return ev.Sign(testNostrSecretKey(t, privateKey))
+			},
+			AuthResultHandler: func(_ *nostr.Relay, err error) { authed <- err },
+		})
 		if err != nil {
 			t.Fatalf("connect: %v", err)
 		}
 		t.Cleanup(func() { _ = relay.Close() })
-		return relay
+		return relay, authed
 	}
-	h.requester, h.daemon = connect(), connect()
+	var requesterAuthed, daemonAuthed <-chan error
+	h.requester, requesterAuthed = connect(testRequesterKey)
+	h.daemon, daemonAuthed = connect(testServiceKey)
 	wrapKinds := []nostr.Kind{KindContextVMMessage, KindContextVMGiftWrap, KindContextVMEphemeralWrap}
-	subscribe := func(relay *nostr.Relay, pubkey string) *nostr.Subscription {
-		sub, err := relay.Subscribe(ctx, nostr.Filter{Kinds: wrapKinds, Tags: nostr.TagMap{"p": {pubkey}}}, nostr.SubscriptionOptions{})
+	subscribe := func(relay *nostr.Relay, authed <-chan error, pubkey string) *nostr.Subscription {
+		filter := nostr.Filter{Kinds: wrapKinds, Tags: nostr.TagMap{"p": {pubkey}}}
+		// First REQ: refused with auth-required while the AuthHandler answers
+		// the challenge the sidecar sent alongside the refusal.
+		probe, err := relay.Subscribe(ctx, filter, nostr.SubscriptionOptions{})
+		if err != nil {
+			t.Fatalf("subscribe: %v", err)
+		}
+		select {
+		case reason := <-probe.ClosedReason:
+			if !strings.HasPrefix(reason, "auth-required:") {
+				t.Fatalf("unauthenticated REQ on the default sidecar config: CLOSED %q, want auth-required", reason)
+			}
+		case <-probe.EndOfStoredEvents:
+			t.Fatal("the default sidecar config served a protected kind without NIP-42")
+		case <-ctx.Done():
+			t.Fatal("no CLOSED for the unauthenticated REQ")
+		}
+		select {
+		case err := <-authed:
+			if err != nil {
+				t.Fatalf("NIP-42 AUTH refused: %v", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("no AUTH result")
+		}
+		sub, err := relay.Subscribe(ctx, filter, nostr.SubscriptionOptions{})
 		if err != nil {
 			t.Fatalf("subscribe: %v", err)
 		}
 		select {
 		case <-sub.EndOfStoredEvents:
+		case reason := <-sub.ClosedReason:
+			t.Fatalf("authenticated REQ refused: %s", reason)
 		case <-ctx.Done():
 			t.Fatal("no EOSE")
 		}
 		return sub
 	}
-	servicePubkey := testNostrPubKeyFromPrivateKey(t, testServiceKey).Hex()
-	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	h.inbox = subscribe(h.requester, requesterPubkey)
-	h.requests = subscribe(h.daemon, servicePubkey)
+	h.inbox = subscribe(h.requester, requesterAuthed, requesterPubkey)
+	h.requests = subscribe(h.daemon, daemonAuthed, servicePubkey)
 	h.transport = NewEncryptedRequestTransport(nil, newResponder(t, relayPublisher{relay: h.daemon}), []string{requesterPubkey}, zap.NewNop())
 	return h
 }
