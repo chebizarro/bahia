@@ -58,7 +58,6 @@ func TestConcordPublicationsArePacedByOperationInsteadOfRejected(t *testing.T) {
 		require.NoError(t, publishConcordInvite(opCtx, client, relays, concordAdmissionEvent(t, 1059)),
 			"operation publication %d must be paced, not refused", i)
 	}
-	require.Zero(t, op.Remaining())
 	err = publishConcordInvite(opCtx, client, relays, concordAdmissionEvent(t, 1059))
 	require.True(t, errors.Is(err, nostrout.ErrOperation), "publication beyond the declared bound error = %v", err)
 

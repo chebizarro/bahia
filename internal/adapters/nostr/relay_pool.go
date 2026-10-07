@@ -714,16 +714,6 @@ func cachedPublishResult(cached []PublishResult, url string) PublishResult {
 	return PublishResult{RelayURL: url, Cached: true, Reason: "duplicate: suppressed locally"}
 }
 
-// OutboundAdmissionMetrics returns content-free process publication counters.
-func (p *RelayPool) OutboundAdmissionMetrics() nostrout.Metrics {
-	return p.outboundAdmission.Metrics()
-}
-
-// OutboundAdmissionState returns metrics plus gate status for readiness checks.
-func (p *RelayPool) OutboundAdmissionState() nostrout.State {
-	return p.outboundAdmission.State()
-}
-
 // PublishResult contains the outcome of a publish attempt. It is the shared
 // outbound result type so admission can observe every gateway's outcomes.
 type PublishResult = nostrout.Result

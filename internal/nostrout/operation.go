@@ -141,8 +141,8 @@ func (op *Operation) Deadline() time.Time {
 	return op.deadline
 }
 
-// Remaining returns how many more logical publications the operation may start.
-func (op *Operation) Remaining() int {
+// remaining returns how many more logical publications the operation may start.
+func (op *Operation) remaining() int {
 	if op == nil {
 		return 0
 	}

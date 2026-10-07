@@ -100,7 +100,7 @@ func TestRelayPoolRateLimitOpensCircuitForEveryPool(t *testing.T) {
 
 	_, err = other.PublishWithResults(t.Context(), gonostr.Event{Kind: 5})
 	require.ErrorIs(t, err, nostrout.ErrCircuitOpen)
-	require.Equal(t, uint64(1), limited.OutboundAdmissionMetrics().RelayRateLimited)
+	require.Equal(t, uint64(1), admission.Metrics().RelayRateLimited)
 }
 
 func TestRelayPoolReconnectReplaySuppressesAcceptedDestinationsOnly(t *testing.T) {

@@ -54,8 +54,6 @@
 1	internal/adapters/nostr.Projector.ProjectionMetrics
 1	internal/adapters/nostr.Projector.PublishAgentRuntimeRelease
 1	internal/adapters/nostr.Projector.PublishAgentServiceReleaseBinding
-1	internal/adapters/nostr.PublishResult.IsAuthRequired
-1	internal/adapters/nostr.PublishResult.IsBlocked
 1	internal/adapters/nostr.Publisher.Pool
 1	internal/adapters/nostr.RelayHealth.AvgLatency
 1	internal/adapters/nostr.RelayHealth.P95Latency
@@ -203,7 +201,6 @@
 1	internal/controlplane.MaintenanceCommandPublisher.PublishPurge
 1	internal/controlplane.ReadinessTracker.IsReady
 1	internal/controlplane.RelaySettingsHydrator.IsCaughtUp
-1	internal/controlplane.TrustSet.RoleFor
 1	internal/controlplane.WithBackupDefinitionRegistry
 1	internal/controlplane.WithBackupRepositoryProbeExecutor
 1	internal/controlplane.WithBackupVerificationExecutor
@@ -343,7 +340,6 @@
 1	internal/soulfactory.BuildSoulDraftEvent
 1	internal/soulfactory.FullProvisioner.RotateConcordCommunity
 1	internal/soulfactory.GenerateSystemPrompt
-1	internal/soulfactory.GovernedProvisioner.Retry
 1	internal/soulfactory.MergeSoulDraftContent
 1	internal/soulfactory.NewAgentManagementInvariantReporter
 1	internal/soulfactory.NewMCPServer
@@ -357,5 +353,4 @@
 1	internal/soulfactory.StatusSyncHandler.RegisterSoul
 1	internal/soulfactory.VoiceProviderRegistry.SetCacheTTL
 1	internal/soulfactory.WithProvisioningEngine
-1	internal/soulfactory/saga.PurgeExpired
 1	internal/workflow.WithDeploymentLoomClient

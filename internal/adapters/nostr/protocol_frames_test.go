@@ -30,7 +30,7 @@ func TestPublishResult_IsAuthRequired(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := PublishResult{Reason: tt.reason}
-			assert.Equal(t, tt.expected, result.IsAuthRequired())
+			assert.Equal(t, tt.expected, IsAuthRequiredReason(result.Reason))
 		})
 	}
 }
@@ -72,7 +72,7 @@ func TestPublishResult_IsBlocked(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := PublishResult{Reason: tt.reason}
-			assert.Equal(t, tt.expected, result.IsBlocked())
+			assert.Equal(t, tt.expected, IsBlockedReason(result.Reason))
 		})
 	}
 }
@@ -163,9 +163,9 @@ func TestPublishResult_AcceptedVsRejected(t *testing.T) {
 			Error:    nil,
 		}
 		assert.True(t, result.Accepted)
-		assert.False(t, result.IsAuthRequired())
+		assert.False(t, IsAuthRequiredReason(result.Reason))
 		assert.False(t, result.IsRateLimited())
-		assert.False(t, result.IsBlocked())
+		assert.False(t, IsBlockedReason(result.Reason))
 		assert.False(t, result.IsDuplicate())
 		assert.Nil(t, result.Error)
 	})
@@ -178,9 +178,9 @@ func TestPublishResult_AcceptedVsRejected(t *testing.T) {
 			Error:    nil,
 		}
 		assert.False(t, result.Accepted)
-		assert.True(t, result.IsAuthRequired())
+		assert.True(t, IsAuthRequiredReason(result.Reason))
 		assert.False(t, result.IsRateLimited())
-		assert.False(t, result.IsBlocked())
+		assert.False(t, IsBlockedReason(result.Reason))
 		assert.False(t, result.IsDuplicate())
 	})
 
@@ -203,7 +203,7 @@ func TestPublishResult_AcceptedVsRejected(t *testing.T) {
 			Error:    nil,
 		}
 		assert.False(t, result.Accepted)
-		assert.True(t, result.IsBlocked())
+		assert.True(t, IsBlockedReason(result.Reason))
 	})
 
 	t.Run("duplicate event - not error", func(t *testing.T) {

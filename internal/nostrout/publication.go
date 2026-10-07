@@ -196,8 +196,8 @@ func (p *Publication) hasRelay(relay string) bool {
 	return false
 }
 
-// PendingRelays returns the normalized destinations that still need the event.
-func (p *Publication) PendingRelays() []string {
+// pendingRelays returns the normalized destinations that still need the event.
+func (p *Publication) pendingRelays() []string {
 	if p == nil {
 		return nil
 	}
@@ -218,14 +218,6 @@ func (p *Publication) CachedResults() []Result {
 		return nil
 	}
 	return append([]Result(nil), p.cached...)
-}
-
-// Purpose returns the admission lane charged for this publication.
-func (p *Publication) Purpose() Purpose {
-	if p == nil {
-		return ""
-	}
-	return p.purpose
 }
 
 // BeforeAttempt authorizes one raw EVENT frame to relayURL. It must be called

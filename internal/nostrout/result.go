@@ -37,14 +37,8 @@ func IsDuplicateReason(reason string) bool {
 	return strings.HasPrefix(reason, "duplicate:")
 }
 
-// IsAuthRequired returns true if the relay requires authentication.
-func (r Result) IsAuthRequired() bool { return IsAuthRequiredReason(r.Reason) }
-
 // IsRateLimited returns true if the relay is rate-limiting.
 func (r Result) IsRateLimited() bool { return IsRateLimitedReason(r.Reason) }
-
-// IsBlocked returns true if the event was blocked by relay policy.
-func (r Result) IsBlocked() bool { return IsBlockedReason(r.Reason) }
 
 // IsDuplicate returns true if the relay already has this event.
 func (r Result) IsDuplicate() bool { return IsDuplicateReason(r.Reason) }

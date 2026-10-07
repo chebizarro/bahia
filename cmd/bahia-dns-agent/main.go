@@ -26,6 +26,7 @@ import (
 	dnsagent "github.com/openagentsinc/bahia/internal/dnsagent/agent"
 	"github.com/openagentsinc/bahia/internal/dnsagent/engine"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/strutil"
 	"github.com/openagentsinc/bahia/internal/version"
@@ -248,11 +249,14 @@ func startHealthServer(ctx context.Context, addr string, service *dnsagent.Agent
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		status := service.Status()
+		// Content-free counters from the process-wide outbound admission
+		// controller that gates this agent's relay publications.
 		_ = json.NewEncoder(w).Encode(struct {
 			dnsagent.Status
-			Version string `json:"version"`
-			Commit  string `json:"commit"`
-		}{Status: status, Version: version.Semantic(), Commit: version.Commit})
+			Version           string           `json:"version"`
+			Commit            string           `json:"commit"`
+			OutboundAdmission nostrout.Metrics `json:"outbound_admission"`
+		}{Status: status, Version: version.Semantic(), Commit: version.Commit, OutboundAdmission: nostrout.Default().Metrics()})
 	})
 	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {

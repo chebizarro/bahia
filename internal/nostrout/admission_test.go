@@ -135,7 +135,7 @@ func publishOnce(t *testing.T, a *Admission, ev nostr.Event, relays []string, ou
 		return err
 	}
 	defer pub.Close()
-	for _, relay := range pub.PendingRelays() {
+	for _, relay := range pub.pendingRelays() {
 		if err := pub.BeforeAttempt(context.Background(), relay); err != nil {
 			return err
 		}
@@ -194,7 +194,7 @@ func TestPriorityCapacityIsReservedFromStateAndBulkChurn(t *testing.T) {
 	require.NoError(t, err)
 	pub, err := op.Begin(context.Background(), signedEvent(t, 1059), []string{relayA})
 	require.NoError(t, err)
-	require.Equal(t, PurposeBulk, pub.Purpose())
+	require.Equal(t, PurposeBulk, pub.purpose)
 	pub.Close()
 	op.Close()
 
@@ -281,7 +281,7 @@ func TestDuplicateSuppressionIsDestinationAware(t *testing.T) {
 
 	pub, err := a.Begin(context.Background(), ev, []string{relayA, relayB})
 	require.NoError(t, err)
-	require.Equal(t, []string{relayB}, pub.PendingRelays(), "a newly added relay still receives the event")
+	require.Equal(t, []string{relayB}, pub.pendingRelays(), "a newly added relay still receives the event")
 	cached := pub.CachedResults()
 	require.Len(t, cached, 1)
 	require.Equal(t, relayA, cached[0].RelayURL)
@@ -296,7 +296,7 @@ func TestDuplicateSuppressionIsDestinationAware(t *testing.T) {
 	before := a.Metrics()
 	replay, err := a.Begin(context.Background(), ev, []string{relayA, relayB + "/"})
 	require.NoError(t, err)
-	require.Empty(t, replay.PendingRelays())
+	require.Empty(t, replay.pendingRelays())
 	require.Len(t, replay.CachedResults(), 2)
 	replay.Close()
 	after := a.Metrics()
@@ -312,7 +312,7 @@ func TestFailedDestinationRemainsEligibleForReplay(t *testing.T) {
 	}))
 	pub, err := a.Begin(context.Background(), ev, []string{relayA})
 	require.NoError(t, err)
-	require.Equal(t, []string{relayA}, pub.PendingRelays())
+	require.Equal(t, []string{relayA}, pub.pendingRelays())
 	pub.Close()
 }
 
@@ -371,7 +371,7 @@ func TestReceiptCacheIsBounded(t *testing.T) {
 	clk.Advance(11 * time.Minute)
 	pub, err := a.Begin(context.Background(), events[4], []string{relayA})
 	require.NoError(t, err)
-	require.Equal(t, []string{relayA}, pub.PendingRelays(), "receipts expire after the TTL")
+	require.Equal(t, []string{relayA}, pub.pendingRelays(), "receipts expire after the TTL")
 	pub.Close()
 }
 
@@ -561,7 +561,7 @@ func TestLargeOperationIsPacedNotFlushedOrRejected(t *testing.T) {
 	}
 	_, open := <-sent
 	require.False(t, open)
-	require.Zero(t, op.Remaining())
+	require.Zero(t, op.remaining())
 	_, err = op.Begin(context.Background(), signedEvent(t, 1059), []string{relayA})
 	require.ErrorIs(t, err, ErrOperation, "an operation cannot exceed its declared size")
 }
