@@ -6,6 +6,8 @@ import (
 
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
@@ -16,14 +18,46 @@ type operationalViewPublisher interface {
 	PublishBlossomBlob(context.Context, string, blossom.BlobDescriptor) error
 }
 
+// operatorAllowlistPublisher publishes one scope's operator allowlist as a
+// fleet-OCK encrypted record (bahia-fbyo5).
+type operatorAllowlistPublisher interface {
+	PublishOperatorAllowlist(ctx context.Context, scope string, pubkeys []string) error
+}
+
+// operatorAllowlistSet is one configured operator allowlist: the scope it is
+// published under and the pubkeys the daemon accepts for that scope. An empty
+// list (a disabled or emptied scope) tombstones the scope's record.
+type operatorAllowlistSet struct {
+	scope   string
+	pubkeys []string
+}
+
+// operatorAllowlistSets derives the published allowlists from config:
+// `operators:continuity` mirrors nostr.authorized_pubkeys and
+// `operators:soul-factory` mirrors soul_factory.authorized_pubkeys, which only
+// authorizes anyone while the Soul Factory is enabled.
+func operatorAllowlistSets(cfg *config.Config) []operatorAllowlistSet {
+	sets := []operatorAllowlistSet{{scope: kinds.OperatorAllowlistScopeContinuity, pubkeys: append([]string{}, cfg.Nostr.AuthorizedPubkeys...)}}
+	soulFactory := operatorAllowlistSet{scope: kinds.OperatorAllowlistScopeSoulFactory}
+	if cfg.SoulFactory.Enabled {
+		soulFactory.pubkeys = append([]string{}, cfg.SoulFactory.AuthorizedPubkeys...)
+	}
+	return append(sets, soulFactory)
+}
+
 // operationalViewsRunner performs one startup observation. Future daemon-owned
 // uploads publish at their mutation site; no relay or Blossom polling is used.
+// It also publishes the operator allowlists: config is read at startup, and a
+// config change that is not hot-reloadable rebuilds the application, so every
+// configuration the daemon enforces is the one it publishes.
 type operationalViewsRunner struct {
-	publisher operationalViewPublisher
-	blossom   *blossom.Client
-	policy    nostrAdapter.SoulRuntimePolicy
-	owners    []string
-	logger    *zap.Logger
+	publisher     operationalViewPublisher
+	allowlists    operatorAllowlistPublisher
+	allowlistSets []operatorAllowlistSet
+	blossom       *blossom.Client
+	policy        nostrAdapter.SoulRuntimePolicy
+	owners        []string
+	logger        *zap.Logger
 }
 
 func (r *operationalViewsRunner) Name() string { return "operational-views" }
@@ -31,6 +65,13 @@ func (r *operationalViewsRunner) Name() string { return "operational-views" }
 func (r *operationalViewsRunner) Run(ctx context.Context) error {
 	if err := r.publisher.PublishSoulRuntimePolicy(ctx, r.policy); err != nil {
 		return err
+	}
+	if r.allowlists != nil {
+		for _, set := range r.allowlistSets {
+			if err := r.allowlists.PublishOperatorAllowlist(ctx, set.scope, set.pubkeys); err != nil {
+				return err
+			}
+		}
 	}
 	if r.blossom != nil {
 		health := map[string]string{}

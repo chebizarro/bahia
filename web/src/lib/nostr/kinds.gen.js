@@ -424,6 +424,14 @@ export const WORKER_ASSIGNMENT_STATE_D_PREFIX = 'worker:assignment:';
 export const WORKER_DRAIN_STATUS_D_PREFIX = 'worker:drain:';
 export const WORKER_ELIGIBILITY_PREVIEW_D_PREFIX = 'worker:eligibility:';
 export const WORKER_CLEANUP_EXECUTION_D_PREFIX = 'worker:cleanup:';
+// Operator allowlist cp-state family (internal/kinds CPStateFamilyOperatorAllowlist,
+// bahia-fbyo5): fleet-OCK encrypted copies of the daemon's operator allowlists,
+// one record per scope on 'operators:<scope>'.
+export const OPERATOR_ALLOWLIST_CATALOG_KIND = 32029;
+export const OPERATOR_ALLOWLIST_TOPIC = 'operator-allowlist';
+export const OPERATOR_ALLOWLIST_D_PREFIX = 'operators:';
+export const OPERATOR_ALLOWLIST_SCOPE_CONTINUITY = 'continuity';
+export const OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY = 'soul-factory';
 // Assistant and relay-settings single-letter t topics (internal/kinds
 // Assistant*Topic, RelaySettingsTopic; bahia-irsry.37).
 export const ASSISTANT_TRANSCRIPT_TOPIC = 'assistant-transcript';
@@ -519,6 +527,7 @@ export const CP_STATE_TOPICS = Object.freeze({
   SOUL_RUNTIME_POLICY: 'soul-factory-runtime-policy',
   BLOSSOM_ADMIN: 'blossom-admin',
   BLOSSOM_BLOB: 'blossom-blob',
+  OPERATOR_ALLOWLIST: 'operator-allowlist',
 });
 
 // Family schema -> t topic for the cp-state families the web routes. The

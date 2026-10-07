@@ -527,8 +527,11 @@ var cpStateFamilies = map[int]cpStateFamily{
 	// Governed provisioning adapter ledger (bahia-nfc95); published by the
 	// soulfactory package through the publisher seam, not the projector.
 	int(kinds.CPStateFamilySoulFactoryAdapterLedger): {"soul-factory", "adapter-ledger", kinds.CPStateTopicSoulFactoryAdapterLedger},
-	kinds.BlossomAdminRecord:                         {"blossom", "admin", kinds.CPStateTopicBlossomAdmin},
-	kinds.BlossomBlobRecord:                          {"blossom", "blob", kinds.CPStateTopicBlossomBlob},
+	// Fleet-OCK encrypted operator allowlists (bahia-fbyo5); published by
+	// OperatorAllowlistPublisher through the canonical-first path.
+	int(kinds.CPStateFamilyOperatorAllowlist): {"operator", "allowlist", kinds.CPStateTopicOperatorAllowlist},
+	kinds.BlossomAdminRecord:                  {"blossom", "admin", kinds.CPStateTopicBlossomAdmin},
+	kinds.BlossomBlobRecord:                   {"blossom", "blob", kinds.CPStateTopicBlossomBlob},
 }
 
 // CPStateDomains returns all unique cp-state domain names from the
