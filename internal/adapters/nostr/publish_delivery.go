@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sort"
 	"strings"
 	"sync"
@@ -13,10 +14,44 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
+
+// isAdmissionRejection reports a refusal by the process-wide outbound
+// admission controller (internal/nostrout): a lane, aggregate, wire-share or
+// controller-capacity budget, the shared rate-limit circuit breaker, the
+// operator kill switch, or a concurrent in-flight copy of the same event.
+// None of these say anything about any relay, so a refused round is skipped:
+// it never counts against the attempt budget, never abandons the event, and
+// never marks its coordinate undelivered (docs/architecture/outbox-delivery.md).
+func isAdmissionRejection(err error) bool {
+	return errors.Is(err, nostrout.ErrBudgetExceeded) ||
+		errors.Is(err, nostrout.ErrCircuitOpen) ||
+		errors.Is(err, nostrout.ErrKillSwitch) ||
+		errors.Is(err, nostrout.ErrCapacity) ||
+		errors.Is(err, nostrout.ErrInFlight)
+}
+
+// isAdmissionHalt reports an admission refusal from a process-wide gate (kill
+// switch, open circuit, exhausted controller capacity) that would refuse every
+// remaining entry of a redelivery pass identically, so the pass stops early.
+// A lane or per-relay budget refusal is not a halt: other events may be in a
+// lane that still has capacity.
+func isAdmissionHalt(err error) bool {
+	return errors.Is(err, nostrout.ErrKillSwitch) ||
+		errors.Is(err, nostrout.ErrCircuitOpen) ||
+		errors.Is(err, nostrout.ErrCapacity)
+}
+
+// admissionRetryDelay paces the retry of an admission-refused round: about one
+// second, jittered so a restart's outbox hydration cannot resynchronize
+// refused deliveries into a burst when capacity returns.
+func admissionRetryDelay() time.Duration {
+	return time.Second + time.Duration(rand.Int64N(int64(time.Second)))
+}
 
 // defaultMaxPublishAttempts bounds how many delivery rounds an outbound event
 // gets before the relays that still have not accepted it are given up on. With
@@ -187,7 +222,15 @@ type deliveryReport struct {
 	delivered   bool
 	settled     bool
 	rateLimited bool
-	err         error
+	// admissionRefused reports that the shared outbound controller refused
+	// the round before any relay I/O; the round was skipped and does not
+	// count against the attempt budget. admissionHalt additionally reports
+	// that the refusal came from a process-wide gate, so the runner stops
+	// the current pass instead of offering every remaining entry the same
+	// refusal.
+	admissionRefused bool
+	admissionHalt    bool
+	err              error
 }
 
 func (p *Publisher) newDelivery(ev nostr.Event, rounds int) *outboxDelivery {
@@ -314,6 +357,12 @@ func (p *Publisher) requiredAcceptances(configured int) int {
 // accepted. The outbox row stays pending until every write relay has accepted
 // or reached a terminal state (permanent rejection, attempt budget); it is then
 // marked published if the quorum was reached, otherwise abandoned.
+//
+// A round the shared outbound admission controller refuses before any relay
+// I/O is skipped: it does not count against the attempt budget, records no
+// per-relay state, and is rescheduled about a second out (jittered). Admission
+// refusal is back-pressure, never an abandonment, so a kill switch or an open
+// circuit leaves entries pending for as long as it lasts.
 func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliveryReport {
 	eventID := d.event.ID.Hex()
 	configured := normalizeRelayURLs(p.relayURLs())
@@ -344,7 +393,22 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 			results, callErr = p.publishFn(ctx, d.event, targets)
 		}
 	}
-	countable, backoffUntil, rateLimited := d.applyRound(targets, results, callErr)
+	var (
+		countable     bool
+		backoffUntil  time.Time
+		rateLimited   bool
+		admissionGone bool
+	)
+	if callErr != nil && len(results) == 0 && len(targets) > 0 && isAdmissionRejection(callErr) {
+		// The controller refused before any relay was contacted: nothing was
+		// learned about any relay, so applyRound does not run, the round does
+		// not count, and the event stays pending with its per-relay state
+		// untouched. Admission refusal is back-pressure, never abandonment.
+		admissionGone = true
+		backoffUntil = p.now().Add(admissionRetryDelay())
+	} else {
+		countable, backoffUntil, rateLimited = d.applyRound(targets, results, callErr)
+	}
 	skipped := !countable
 	if !skipped {
 		d.rounds++
@@ -366,13 +430,15 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 	}
 
 	report := deliveryReport{
-		detail:      detail,
-		results:     results,
-		accepted:    accepted,
-		required:    required,
-		delivered:   delivered,
-		settled:     settled,
-		rateLimited: rateLimited,
+		detail:           detail,
+		results:          results,
+		accepted:         accepted,
+		required:         required,
+		delivered:        delivered,
+		settled:          settled,
+		rateLimited:      rateLimited,
+		admissionRefused: admissionGone,
+		admissionHalt:    admissionGone && isAdmissionHalt(callErr),
 	}
 	if !delivered {
 		report.err = &PublishIncompleteError{EventID: eventID, Accepted: accepted, Required: required, Detail: detail}
@@ -673,6 +739,11 @@ func (p *Publisher) redeliverDue(ctx context.Context) (rateLimited bool) {
 		if settled {
 			p.forgetDelivery(d)
 		}
+		if report.admissionHalt {
+			// A process-wide gate refuses every remaining entry identically;
+			// stop the pass. Skipped rounds are already rescheduled.
+			return rateLimited
+		}
 	}
 	return rateLimited
 }
@@ -718,11 +789,17 @@ func (p *Publisher) discoverLocal(ctx context.Context) (bool, error) {
 			continue
 		}
 		d.restore(entry)
-		p.deliverRound(ctx, d)
+		report := p.deliverRound(ctx, d)
 		settled := d.settled
 		d.mu.Unlock()
 		if settled {
 			p.forgetDelivery(d)
+		}
+		if report.admissionHalt {
+			// Restart hydration must not burst into a closed gate: the
+			// remaining entries stay pending in the durable outbox and are
+			// discovered again on a later pass.
+			return false, nil
 		}
 	}
 	return len(entries) == p.pageSize, nil
