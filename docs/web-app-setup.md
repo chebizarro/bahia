@@ -52,7 +52,7 @@ For production deployments, configure your reverse proxy/ingress to route `/api/
 
 ### Environment Variables
 
-Production containers read a validated runtime Nostr bootstrap seed. Set both relay URLs (`ws://` or `wss://`) and 64-hex service pubkeys as runtime environment variables; the entrypoint fails startup if either is missing or invalid. It writes `/bahia-bootstrap.js`, which is loaded before the app and served with `no-store`. These service keys also authorize public documentation publishers. Rotating either trust root requires a container restart, not a rebuild. Vite build-time bootstrap variables are only a local development/test fallback when no runtime seed is injected.
+Production containers read a validated runtime Nostr bootstrap seed. Set both relay URLs (`ws://` or `wss://`) and 64-hex service pubkeys as runtime environment variables; the entrypoint fails startup if either is missing or invalid. The repo `docker-compose.yml` forwards them from the shell environment, and the edge deploy (`deploy-edge.yml`) injects the same `web.environment` forwarding entries into the host Compose file before every rollout, so operators only set the values in the workflow (see the upgrade note in `docs/push-to-deploy-and-hiveci-runbook.md`). It writes `/bahia-bootstrap.js`, which is loaded before the app and served with `no-store`. These service keys also authorize public documentation publishers. Rotating either trust root requires a container restart, not a rebuild. Vite build-time bootstrap variables are only a local development/test fallback when no runtime seed is injected.
 
 Runtime seed and compile-time artifact metadata variables:
 

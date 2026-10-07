@@ -105,23 +105,26 @@ The web container requires `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SER
 
 ### Upgrade note: runtime bootstrap seed is now required
 
-Before deploying an image without baked trust roots, update the **host** Compose file at `/srv/data/bahia-controlplane/docker-compose.yml`. Add these entries to its existing `web.environment` (preserve any other entries):
+Images without baked trust roots read `PUBLIC_BAHIA_BOOTSTRAP_RELAYS`, `PUBLIC_BAHIA_SERVICE_PUBKEYS` and the optional `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` from the web container's runtime environment. The **host** Compose file at `/srv/data/bahia-controlplane/docker-compose.yml` lives outside the repository, so the deploy injects the forwarding entries for you. Operators only need the values present in the workflow: the relay and plural pubkey values are job-level `env` in `deploy-edge.yml`; the widget allowlist comes from the optional `wheelhouse_allowed_pubkeys` dispatch input or the repository variable `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` (empty is valid and denies every widget publisher).
+
+The `Seed web runtime environment into host compose` step runs after the read-only preflight and before any image build, Compose backup, image swap or `docker compose up`. It calls `scripts/deploy_edge_compose_update.py --seed-web-env-only`, which makes sure `web.environment` contains:
 
 ```yaml
 web:
   environment:
-    PUBLIC_BAHIA_BOOTSTRAP_RELAYS: ${PUBLIC_BAHIA_BOOTSTRAP_RELAYS:?required}
-    PUBLIC_BAHIA_SERVICE_PUBKEYS: ${PUBLIC_BAHIA_SERVICE_PUBKEYS:?required}
+    PUBLIC_BAHIA_BOOTSTRAP_RELAYS: ${PUBLIC_BAHIA_BOOTSTRAP_RELAYS:?PUBLIC_BAHIA_BOOTSTRAP_RELAYS must be set}
+    PUBLIC_BAHIA_SERVICE_PUBKEYS: ${PUBLIC_BAHIA_SERVICE_PUBKEYS:?PUBLIC_BAHIA_SERVICE_PUBKEYS must identify the trusted Bahia signer}
+    PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS: ${PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS:-}
 ```
 
-The singular `PUBLIC_BAHIA_SERVICE_PUBKEY` is also accepted instead of the plural key. To show ops widgets, also forward the optional `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` (comma-separated trusted widget publisher pubkeys); it is validated the same way and, when unset, the widgets wall denies every publisher. The `deploy-edge.yml` job exports the relay and plural pubkey values to **every** run step, including Compose interpolation and `up`; the host file must still forward them into the web service. For a manual check, export the values in your shell, then run this from a checkout containing the validator:
+The injector is text-preserving and idempotent: it only appends keys that are missing, matches the style the block already uses (`KEY: value` mapping or `- KEY=value` list), creates a mapping-style `environment:` when the web service has none, never rewrites an existing key's value (a hard-coded relay URL or the singular `PUBLIC_BAHIA_SERVICE_PUBKEY` stay as they are), leaves every other line byte-for-byte unchanged, and does not write at all when nothing is missing. It refuses (non-zero, no write) when the `web` service is missing or `environment:` uses inline flow syntax (`environment: {TZ: UTC}`). Because the deploy step backs the file up afterwards, the rollback Compose file carries the seed too. The full image-swap run later in the deploy applies the same injection, so a host edited by hand between deploys is repaired on the next run.
+
+The preflight validator stays as the safety net. Immediately after injection the same step renders the host file (`docker compose config --format json | python3 scripts/check_web_bootstrap_compose.py`) with the job-level values in scope. It still fails the deploy, before any stack change, when a value is blank or missing from the rendered `web.environment` (for example an existing hard-coded entry was emptied, or a `${VAR:?...}` reference has no value in the runner environment, which makes Compose itself fail during rendering), or when the rendered config has no `web` service. The error names the missing key and points to `docs/web-app-setup.md`; the running stack remains unchanged. For a manual check, export the values in your shell and run the same pipeline from a checkout containing the validator:
 
 ```bash
 docker compose -f /srv/data/bahia-controlplane/docker-compose.yml config --format json \
   | python3 scripts/check_web_bootstrap_compose.py
 ```
-
-The deploy preflight runs the same read-only check before any Compose backup/replacement or `docker compose up`. If a value is absent or blank, it exits with `ERROR: web.environment missing non-empty PUBLIC_BAHIA_BOOTSTRAP_RELAYS` or `PUBLIC_BAHIA_SERVICE_PUBKEYS (or PUBLIC_BAHIA_SERVICE_PUBKEY)` and points to `docs/web-app-setup.md`; the running stack remains unchanged. A missing value in a `${VAR:?required}` expression makes Compose itself fail during rendering, also before stack changes.
 
 ### Compose Mutation Helper
 
@@ -140,7 +143,10 @@ It updates exactly:
 
 - `bahia.image` and `relay.image` to the supplied backend digest reference;
 - `web.image` to the supplied web digest reference;
-- the single `/srv/data/bahia-controlplane/releases/.../docs:/docs:ro` mount to `<release-dir>/docs:/docs:ro`.
+- the single `/srv/data/bahia-controlplane/releases/.../docs:/docs:ro` mount to `<release-dir>/docs:/docs:ro`;
+- `web.environment`, adding any missing runtime bootstrap seed entry (see the upgrade note above); existing entries are never rewritten.
+
+With `--seed-web-env-only` (no tag or image arguments) it performs only the `web.environment` step; the deploy runs that mode before building images so the preflight validator sees the seeded file.
 
 It refuses to write when any of these safety checks fail:
 
@@ -150,7 +156,8 @@ It refuses to write when any of these safety checks fail:
 - an expected service has no image line;
 - an expected service has more than one image line;
 - the release docs mount is missing;
-- more than one release docs mount is present.
+- more than one release docs mount is present;
+- `web.environment` uses inline flow syntax, so entries cannot be appended line-wise.
 
 Deterministic helper coverage lives in `test/scripts/test_deploy_edge_compose_update.py` and runs with:
 
