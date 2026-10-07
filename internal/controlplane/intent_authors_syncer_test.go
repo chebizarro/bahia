@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -26,6 +27,9 @@ type sidecarTestHarness struct {
 	sidecar     *relaysidecar.Server
 	adminClient *relayadmin.Client
 	wsURL       string
+	// serviceKey is the sidecar's nostr.private_key: the daemon's identity,
+	// always admitted by the default read_auth_mode (enforce).
+	serviceKey nostr.SecretKey
 }
 
 type observedIntentAuthorsAdmin struct {
@@ -112,17 +116,25 @@ func startSidecarTestHarness(t *testing.T, adminKey nostr.SecretKey) sidecarTest
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(policyPath, policyJSON, 0o600))
 
+	// NIP-42 binds AUTH events to the relay URL, so the sidecar's public URL
+	// must be the address the daemon pool dials.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	serviceKey := nostr.Generate()
 	sidecarCfg := config.Defaults().Nostr
+	sidecarCfg.PrivateKey = serviceKey.Hex()
 	sidecarCfg.Sidecar.DataDir = dataDir
 	sidecarCfg.Sidecar.Enabled = true
-	sidecarCfg.Sidecar.PublicURL = "ws://localhost:3334"
+	sidecarCfg.Sidecar.PublicURL = "ws://" + listener.Addr().String()
 	sidecarCfg.Sidecar.AdministratorPubkeys = []string{adminKey.Public().Hex()}
 	sidecarCfg.Sidecar.AdminPolicyPath = policyPath
 	sidecar, err := relaysidecar.New(sidecarCfg, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sidecar.Close() })
 
-	httpServer := httptest.NewServer(sidecar.Handler())
+	httpServer := httptest.NewUnstartedServer(sidecar.Handler())
+	httpServer.Listener = listener
+	httpServer.Start()
 	t.Cleanup(httpServer.Close)
 
 	adminClient, err := relayadmin.NewClient(relayadmin.Config{
@@ -130,7 +142,7 @@ func startSidecarTestHarness(t *testing.T, adminKey nostr.SecretKey) sidecarTest
 		PrivateKeyHex: adminKey.Hex(),
 		Targets: []relayadmin.Target{{
 			Ref:                  "test-sidecar",
-			RelayURL:             "ws://localhost:3334",
+			RelayURL:             sidecarCfg.Sidecar.PublicURL,
 			HTTPURL:              httpServer.URL,
 			AdministratorPubkeys: []string{adminKey.Public().Hex()},
 		}},
@@ -141,6 +153,7 @@ func startSidecarTestHarness(t *testing.T, adminKey nostr.SecretKey) sidecarTest
 		sidecar:     sidecar,
 		adminClient: adminClient,
 		wsURL:       "ws" + strings.TrimPrefix(httpServer.URL, "http"),
+		serviceKey:  serviceKey,
 	}
 }
 

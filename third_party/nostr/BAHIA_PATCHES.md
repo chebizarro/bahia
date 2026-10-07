@@ -426,3 +426,15 @@ load; `make race` on GitHub Actions did (`TestRelayPoolPagesPastNIP11MaxLimit`).
 - `CountEvents` holds the lock.
 
 Prepared for upstream as `upstream-patches/0005-slicestore-locked-reads.patch`.
+
+## COUNT rejection answers CLOSED (khatru/handlers.go, bahia-amv53)
+
+Upstream `handleCountRequest`/`handleCountRequestWithHLL` answer a filter
+refused by `OnCount` with a `NOTICE` and then a `COUNT` of 0, which a client
+cannot tell from a real empty count. The `CountEnvelope` branch in
+`handleMessage` now runs `OnCount` first and, on refusal, writes
+`CLOSED <id> <reason>` (NIP-45 permits CLOSED for a rejected COUNT), issuing
+the NIP-42 challenge first when the reason is `auth-required:`, exactly as the
+REQ branch does. The read-auth sidecar relies on this so an unauthenticated
+COUNT on a protected topic is reported as `auth-required:` rather than 0.
+Covered by `internal/relaysidecar/read_auth_default_test.go`.

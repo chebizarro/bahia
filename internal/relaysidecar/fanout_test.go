@@ -274,6 +274,10 @@ func (c *rawRelayClient) next() relayFrame {
 	case "CLOSED":
 		require.NoError(c.t, json.Unmarshal(parts[1], &frame.subID))
 		require.NoError(c.t, json.Unmarshal(parts[2], &frame.reason))
+	case "AUTH": // NIP-42 challenge: reason carries the challenge string
+		require.NoError(c.t, json.Unmarshal(parts[1], &frame.reason))
+	case "NOTICE":
+		require.NoError(c.t, json.Unmarshal(parts[1], &frame.reason))
 	case "COUNT":
 		require.NoError(c.t, json.Unmarshal(parts[1], &frame.subID))
 		var count struct {

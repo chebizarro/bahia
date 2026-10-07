@@ -421,6 +421,27 @@ describe('Auth Store', () => {
     });
   });
 
+  describe('relay NIP-42 signer', () => {
+    it('is published for a restored session, signs AUTH with the operator key, and is cleared on logout', async () => {
+      const { getRelayAuthSigner } = await import('../../src/lib/nostr/relay-auth-signer.js');
+      expect(getRelayAuthSigner()).toBeNull();
+      localStorage.setItem('bahia_auth_session', JSON.stringify({
+        pubkey: 'b'.repeat(64), relays: {}, lastAuthenticatedAt: '2026-04-29T12:00:00.000Z', signerVerifiedAt: new Date().toISOString()
+      }));
+      await authModule.initializeAuth();
+      const signer = getRelayAuthSigner();
+      expect(typeof signer).toBe('function');
+      const template = { kind: 22242, tags: [['relay', 'wss://relay.test'], ['challenge', 'c']], content: '', created_at: 1 };
+      await signer(template);
+      // Delegates to the active (NIP-07 here) signer, exactly like intents.
+      expect(nip07Module.signEvent).toHaveBeenCalledWith(template);
+      authModule.logout();
+      expect(getRelayAuthSigner()).toBeNull();
+      await authModule.login();
+      expect(typeof getRelayAuthSigner()).toBe('function');
+    });
+  });
+
   describe('logout', () => {
     it('should clear session and reset to unauthenticated', async () => {
       await authModule.login();

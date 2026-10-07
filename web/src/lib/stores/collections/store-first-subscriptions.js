@@ -60,40 +60,84 @@ const STATE_TOPICS = Object.freeze([
   KEY_ENVELOPE_TOPIC
 ]);
 
-let handle = null;
+/**
+ * Bootstrap runs as two REQs because the relay sidecar enforces NIP-42 reads
+ * by default (`read_auth_mode: enforce`, internal/relaysidecar/read_auth.go)
+ * and khatru refuses a whole REQ when any one filter is protected:
+ *
+ * - PUBLIC: cp-state topics the sidecar classifies public (fleet state,
+ *   workers, backup/ML, OCK-encrypted org/secret families, sanitized
+ *   health), NIP-38 status and the service's deletions. Served to anyone, so
+ *   the pre-login dashboards hydrate and reach EOSE.
+ * - PROTECTED: config-status, the soul-factory runtime policy, config-fabric
+ *   documents (30000/30078), audit (4903), SBOM documents (30078/30004),
+ *   backup attestations and dashboard widgets. The sidecar answers an
+ *   unauthenticated socket with an AUTH challenge and `CLOSED
+ *   auth-required:`; welshman's auth buffer withholds that refusal and
+ *   replays the REQ once the signed-in operator's signer (installed by the
+ *   auth store) completes AUTH. An authenticated pubkey the sidecar does not
+ *   admit gets `CLOSED restricted:` and only the public read models.
+ */
+let handles = [];
 
+function publicFilters(servicePubkey, recent) {
+  return [
+    { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': STATE_TOPICS, limit: 1000 },
+    { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': [
+      CP_STATE_TOPICS.MANAGED_INSTANCE_HEALTH, CP_STATE_TOPICS.ROUTE_CANARY
+    ], limit: 500 },
+    { kinds: BAHIA_STATUS_KINDS, authors: [servicePubkey], since: recent, limit: 100 },
+    { kinds: [5], authors: [servicePubkey], limit: 1000 }
+  ];
+}
+
+function protectedFilters(servicePubkey, recent, widgetAuthors) {
+  return [
+    { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': [CP_STATE_TOPICS.SOUL_RUNTIME_POLICY], limit: 50 },
+    { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': ['config-status'], limit: 500 },
+    { kinds: [CONFIG_ACL_LIST, CONFIG_POLICY], '#t': ['config-fabric'], limit: 500 },
+    { kinds: BAHIA_AUDIT_KINDS, authors: [servicePubkey], '#t': [CP_AUDIT_TOPIC, CP_STATE_TOPICS.MANAGED_INSTANCE_HEALTH, CP_STATE_TOPICS.ROUTE_CANARY], since: recent, limit: 500 },
+    { kinds: [SBOM_REFERENCE], authors: [servicePubkey], '#t': [SBOM_REFERENCE_TOPIC], limit: 200 },
+    { kinds: [SBOM_AVAILABILITY_LIST], authors: [servicePubkey], '#t': [SBOM_AVAILABILITY_TOPIC], limit: 200 },
+    { kinds: [BACKUP_RUN_ATTESTATION, BACKUP_VERIFICATION_ATTESTATION], authors: [servicePubkey], since: recent, limit: 1000 },
+    ...(widgetAuthors.length ? [{ kinds: [DASHBOARD_WIDGET], authors: widgetAuthors }] : [])
+  ];
+}
+
+/** Filters of the bootstrap REQ that needs no NIP-42 (exported for tests). */
+export function storeFirstPublicFilters(servicePubkey, recent) { return publicFilters(servicePubkey, recent); }
+/** Filters of the bootstrap REQ the sidecar serves only to admitted, authenticated readers (exported for tests). */
+export function storeFirstProtectedFilters(servicePubkey, recent, widgetAuthors = []) { return protectedFilters(servicePubkey, recent, widgetAuthors); }
+
+/**
+ * @param {object} handlers pool handlers; `onEose`, `onClosed`, `onEvent` and
+ *   `onHealth` receive the subscription scope (`'public' | 'protected'`) as
+ *   their last argument so callers can keep bootstrap completion on the
+ *   public REQ and report protected-read refusals separately.
+ */
 export function initStoreFirstSubscriptions(handlers = {}) {
-  if (handle) return handle;
+  if (handles.length) return handles[0];
   const pool = getPool();
   const servicePubkey = getServicePubkey();
   const relays = [...new Set(getRelayUrls().map(toWebSocketUrl).filter(Boolean))];
   if (!pool || !servicePubkey || relays.length === 0) return null;
   const recent = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
   const widgetAuthors = getOpsWidgetAllowedPubkeys();
-  handle = pool.subscribe({
-    relays,
-    filters: [
-      { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': STATE_TOPICS, limit: 1000 },
-      { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': [
-        CP_STATE_TOPICS.MANAGED_INSTANCE_HEALTH, CP_STATE_TOPICS.ROUTE_CANARY,
-        CP_STATE_TOPICS.SOUL_RUNTIME_POLICY
-      ], limit: 500 },
-      { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': ['config-status'], limit: 500 },
-      { kinds: [CONFIG_ACL_LIST, CONFIG_POLICY], '#t': ['config-fabric'], limit: 500 },
-      { kinds: BAHIA_AUDIT_KINDS, authors: [servicePubkey], '#t': [CP_AUDIT_TOPIC, CP_STATE_TOPICS.MANAGED_INSTANCE_HEALTH, CP_STATE_TOPICS.ROUTE_CANARY], since: recent, limit: 500 },
-      { kinds: BAHIA_STATUS_KINDS, authors: [servicePubkey], since: recent, limit: 100 },
-      { kinds: [SBOM_REFERENCE], authors: [servicePubkey], '#t': [SBOM_REFERENCE_TOPIC], limit: 200 },
-      { kinds: [SBOM_AVAILABILITY_LIST], authors: [servicePubkey], '#t': [SBOM_AVAILABILITY_TOPIC], limit: 200 },
-      { kinds: [BACKUP_RUN_ATTESTATION, BACKUP_VERIFICATION_ATTESTATION], authors: [servicePubkey], since: recent, limit: 1000 },
-      ...(widgetAuthors.length ? [{ kinds: [DASHBOARD_WIDGET], authors: widgetAuthors }] : []),
-      { kinds: [5], authors: [servicePubkey], limit: 1000 }
-    ],
-    ...handlers
+  const scoped = (scope) => ({
+    onEvent: (event, url) => handlers.onEvent?.(event, url, scope),
+    onEose: (url) => handlers.onEose?.(url, scope),
+    onClosed: (reason, url, meta) => handlers.onClosed?.(reason, url, meta, scope),
+    onAuth: (challenge, url) => handlers.onAuth?.(challenge, url, scope),
+    onHealth: (health) => handlers.onHealth?.(health, scope)
   });
-  return handle;
+  handles = [
+    pool.subscribe({ relays, filters: publicFilters(servicePubkey, recent), ...scoped('public') }),
+    pool.subscribe({ relays, filters: protectedFilters(servicePubkey, recent, widgetAuthors), ...scoped('protected') })
+  ];
+  return handles[0];
 }
 
 export function teardownStoreFirstSubscriptions() {
-  handle?.unsubscribe();
-  handle = null;
+  for (const handle of handles) handle?.unsubscribe();
+  handles = [];
 }

@@ -25,7 +25,11 @@ export const controlplaneConnection = $state({
   lastError: null,
   lastEoseAt: null,
   lastEventAt: null,
-  reconnects: 0
+  reconnects: 0,
+  /** The protected (NIP-42) bootstrap REQ reached EOSE for this session. */
+  protectedReadsReady: false,
+  /** Last CLOSED reason of the protected bootstrap REQ (e.g. `restricted:`). */
+  protectedReadError: null
 });
 
 let bootstrapPromise = null;
@@ -67,6 +71,8 @@ export async function bootstrapControlplane({ force = false } = {}) {
       controlplaneConnection.bootstrapComplete = false;
       controlplaneConnection.lastError = null;
       completedRelays = new Set();
+      controlplaneConnection.protectedReadsReady = false;
+      controlplaneConnection.protectedReadError = null;
       markConnecting(relays);
       markSyncing();
       observeConnections(pool);
@@ -75,18 +81,32 @@ export async function bootstrapControlplane({ force = false } = {}) {
           controlplaneConnection.lastEventAt = new Date().toISOString();
           markEventIngested();
         },
-        onEose: (relay) => {
+        onEose: (relay, scope) => {
+          controlplaneConnection.lastEoseAt = new Date().toISOString();
+          // Bootstrap completes on the public REQ: the protected REQ only
+          // reaches EOSE after NIP-42 AUTH, which a signed-out page never does.
+          if (scope === 'protected') {
+            controlplaneConnection.protectedReadsReady = true;
+            controlplaneConnection.protectedReadError = null;
+            return;
+          }
           const key = toWebSocketUrl(relay);
           if (completedRelays.has(key)) return;
           completedRelays.add(key);
-          controlplaneConnection.lastEoseAt = new Date().toISOString();
           markRelayEose();
           if (completedRelays.size >= relays.length) {
             controlplaneConnection.bootstrapComplete = true;
             controlplaneConnection.status = 'live';
           }
         },
-        onClosed: (reason, relay) => {
+        onClosed: (reason, relay, _meta, scope) => {
+          if (scope === 'protected') {
+            // `restricted:` — authenticated but not admitted by the sidecar's
+            // read policy; `auth-required:` only surfaces once AUTH failed.
+            controlplaneConnection.protectedReadsReady = false;
+            controlplaneConnection.protectedReadError = `${relay}: ${reason || 'relay closed'}`;
+            return;
+          }
           controlplaneConnection.lastError = `${relay}: ${reason || 'relay closed'}`;
           if (!controlplaneConnection.bootstrapComplete) controlplaneConnection.status = 'disconnected';
         }

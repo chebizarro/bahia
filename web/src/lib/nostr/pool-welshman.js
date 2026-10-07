@@ -126,10 +126,27 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
 
   /**
    * Update the signer function (e.g. after login).
+   *
+   * A relay that enforces NIP-42 reads (the Bahia sidecar default) answers a
+   * protected REQ from an unauthenticated socket with an AUTH challenge and
+   * `CLOSED auth-required:`. welshman's auth-buffer socket policy withholds
+   * that refusal and replays the REQ once AUTH succeeds, but only a signer
+   * can complete the flow. So when a signer arrives after the challenge
+   * (login after the bootstrap REQ went out) every socket that is still
+   * waiting on its challenge is authenticated now; the buffered REQs then
+   * replay by themselves. A denied or forbidden AUTH is terminal for that
+   * socket's buffered REQs (welshman releases the refusals), so those are
+   * not retried here; a reconnect starts the flow over.
+   *
    * @param {typeof signFn} fn
    */
   function setSign(fn) {
-    signFn = fn;
+    signFn = typeof fn === 'function' ? fn : null;
+    if (!signFn) return;
+    for (const socket of socketListeners.keys()) {
+      if (socket.auth?.status !== 'requested') continue;
+      socket.auth.attemptAuth(signFn).catch(err => console.warn('[BahiaPool] AUTH failed for', socket.url, err));
+    }
   }
 
   function getConnectedRelays(relays = configuredRelays) {

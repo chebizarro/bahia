@@ -853,7 +853,7 @@ stable `d`; a delete publishes `deleted=true` on the same coordinate.
 | Artifact signature | 32016 | `artifact-signature` | `artifact:signature:<id>` | Plaintext supply-chain record; public |
 | Artifact SBOM | 32017 | `artifact-sbom` | `artifact:sbom:<id>` | Plaintext manifest details; public |
 | SBOM package | 32018 | `artifact-sbom-package` | `artifact:sbom-package:<id>` | One package per indexed record; public |
-| Latest runtime observation | 32019 | `runtime-observation` | `runtime:observation:<service-id>:<environment-id>` | Minimal non-secret snapshot; classified protected (NIP-42 enforced in `read_auth_mode=enforce`) |
+| Latest runtime observation | 32019 | `runtime-observation` | `runtime:observation:<service-id>:<environment-id>` | Minimal non-secret snapshot; classified protected (NIP-42 enforced; `read_auth_mode` defaults to `enforce`) |
 
 SBOM references and availability remain their existing `30078` and `30004`
 interop records; these 30900 families add the parsed manifest and package index

@@ -12,13 +12,23 @@ export { RELAY_OPERATOR_PUBKEY };
 const activeRelayProcesses = new Map();
 let cleanupHooksInstalled = false;
 
+/**
+ * @param {object} [options]
+ * @param {'enforce' | 'warn' | 'off'} [options.readAuth] NIP-42 read policy the
+ *   test relay applies with the sidecar's topic classification. Defaults to
+ *   `enforce`, the sidecar's production default: protected topics answer an
+ *   unauthenticated REQ with CLOSED auth-required and need AUTH from the
+ *   seeded operator (browser) or service identity (test observers). Pass
+ *   `off` only for a spec that must read protected models while signed out.
+ */
 export async function startBahiaTestRelay({
   addr = defaultAddr,
+  readAuth = 'enforce',
   waitForReady = waitForRelayReady,
   spawnImpl = spawn,
   killImpl = process.kill.bind(process)
 } = {}) {
-  const child = spawnImpl('go', ['run', './cmd/bahia-test-relay', '--addr', addr], {
+  const child = spawnImpl('go', ['run', './cmd/bahia-test-relay', '--addr', addr, '--read-auth', readAuth], {
     cwd: repoRoot,
     detached: process.platform !== 'win32',
     env: { ...process.env, BAHIA_TEST_RELAY_ADDR: addr },

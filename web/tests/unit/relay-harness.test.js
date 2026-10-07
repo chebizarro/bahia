@@ -77,7 +77,7 @@ describe('relay harness', () => {
     });
     expect(spawnMock).toHaveBeenCalledWith(
       'go',
-      ['run', './cmd/bahia-test-relay', '--addr', '127.0.0.1:0'],
+      ['run', './cmd/bahia-test-relay', '--addr', '127.0.0.1:0', '--read-auth', 'enforce'],
       expect.objectContaining({ detached: process.platform !== 'win32' })
     );
     expect(globalThis.fetch).toHaveBeenCalledOnce();
