@@ -19,6 +19,7 @@ import { createBahiaEventStore } from './store.js';
 import { createBahiaPool } from './pool-welshman.js';
 import { toWebSocketUrl } from './pool-utils.js';
 import { relayLimits } from './relay-nip11.js';
+import { getRelayAuthSigner, onRelayAuthSigner } from './relay-auth-signer.js';
 import { getBootstrapSeed } from '../stores/discovery.svelte.js';
 
 // ---------------------------------------------------------------------------
@@ -37,6 +38,9 @@ let _servicePubkeys = /** @type {string[]} */ ([]);
 
 /** Relay URLs from the deploy seed. */
 let _relayUrls = /** @type {string[]} */ ([]);
+
+/** Unsubscribe from relay-auth signer changes. */
+let _signerUnsubscribe = /** @type {(() => void) | null} */ (null);
 
 let _relayLimitsPrefetched = false;
 
@@ -164,8 +168,13 @@ async function _bootInternal({ store: injectedStore, pool: injectedPool, seed: i
   }
   _storeUnsubscribe = _store.subscribe?.({}, scheduleRefresh) || null;
 
-  // Create the pool (but don't connect yet — bootstrap does that).
-  _pool = injectedPool || createBahiaPool({ store: _store });
+  // Create the pool (but don't connect yet — bootstrap does that). The pool
+  // answers NIP-42 challenges with the signed-in operator's signer: the relay
+  // sidecar enforces read auth for protected topics by default, so the signer
+  // follows the auth session (login installs it, logout removes it).
+  _pool = injectedPool || createBahiaPool({ store: _store, sign: getRelayAuthSigner() });
+  _signerUnsubscribe?.();
+  _signerUnsubscribe = onRelayAuthSigner((signer) => _pool?.setSign?.(signer));
 
   // Trigger initial refresh so derived stores see persisted data.
   _flushRefresh();
@@ -178,6 +187,8 @@ async function _bootInternal({ store: injectedStore, pool: injectedPool, seed: i
 export async function shutdown() {
   _storeUnsubscribe?.();
   _storeUnsubscribe = null;
+  _signerUnsubscribe?.();
+  _signerUnsubscribe = null;
   if (_rafId !== null && typeof cancelAnimationFrame === 'function') {
     cancelAnimationFrame(_rafId);
     _rafId = null;

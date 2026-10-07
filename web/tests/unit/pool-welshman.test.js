@@ -399,4 +399,39 @@ describe('pool-welshman', () => {
       expect(results[RELAY_URL].status).toBe('timeout');
     });
   });
+
+  // ── NIP-42 signer installed after the challenge ────────────────────
+  describe('setSign after an AUTH challenge', () => {
+    it('answers every socket still waiting on its challenge once a signer arrives', async () => {
+      const socket = ctx.pool.getPool().get(RELAY_URL);
+      socket.attemptToOpen = () => {}; // no real WebSocket in unit tests
+      const sent = [];
+      socket.send = (message) => { sent.push(message); socket.emit('sending', message); };
+      // The relay challenged this socket while no operator was signed in
+      // (sidecar read_auth_mode: enforce on a protected REQ).
+      socket.receive(['AUTH', 'challenge-1']);
+      await vi.waitFor(() => expect(socket.auth.status).toBe('requested'));
+      expect(sent).toEqual([]);
+
+      const sign = vi.fn(async (template) => finalizeEvent(template, alice.sk));
+      ctx.pool.setSign(sign);
+
+      await vi.waitFor(() => expect(sign).toHaveBeenCalledTimes(1));
+      const template = sign.mock.calls[0][0];
+      expect(template.kind).toBe(22242);
+      expect(template.tags).toContainEqual(['challenge', 'challenge-1']);
+      await vi.waitFor(() => expect(sent.some((message) => message[0] === 'AUTH' && message[1].kind === 22242)).toBe(true));
+    });
+
+    it('leaves sockets without a pending challenge alone and ignores a null signer', async () => {
+      const socket = ctx.pool.getPool().get(RELAY_URL);
+      socket.attemptToOpen = () => {};
+      const sign = vi.fn();
+      ctx.pool.setSign(sign);
+      ctx.pool.setSign(null);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(sign).not.toHaveBeenCalled();
+      expect(socket.auth.status).toBe('none');
+    });
+  });
 });
