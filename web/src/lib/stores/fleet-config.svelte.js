@@ -6,6 +6,12 @@ import {
 } from '$lib/nostr/kinds.js';
 import { authState, login, signWithAuth } from '$lib/stores/auth.js';
 import { getEventStore, onStoreRefresh } from '$lib/nostr/boot.js';
+import { OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY } from '$lib/nostr/kinds.gen.js';
+import {
+  onOperatorAllowlistChange,
+  operatorAllowlistFor,
+  trustedOperatorAuthors
+} from '$lib/stores/operator-allowlist.svelte.js';
 
 export const FLEET_CONFIG_ALLOWED_SECTIONS = Object.freeze([
   '$comment', 'logging', 'auth', 'models', 'agents', 'bindings', 'messages',
@@ -65,10 +71,19 @@ export function validateFleetConfigDocument(input) {
   return { valid: errors.length === 0, errors };
 }
 
-export function parseFleetConfigEvent(event, expectedAuthor = '') {
+/**
+ * Parse a kind 31953 fleet configuration. `expectedAuthors` is the trusted
+ * operator set (a single pubkey or a list): the signed-in operator plus, when
+ * this session reads the daemon's `operators:soul-factory` allowlist, the
+ * other authorized operators. The daemon applies the newest configuration
+ * across its authorized operators, so the browser projects the same set.
+ */
+export function parseFleetConfigEvent(event, expectedAuthors = '') {
   if (!event || event.kind !== KINDS.SOUL_FLEET_CONFIG) throw new Error('Unexpected fleet config event kind');
-  if (expectedAuthor && String(event.pubkey || '').toLowerCase() !== String(expectedAuthor).toLowerCase()) {
-    throw new Error('Fleet config event is not authored by the active operator');
+  const trusted = (Array.isArray(expectedAuthors) ? expectedAuthors : [expectedAuthors])
+    .map((author) => String(author || '').toLowerCase()).filter(Boolean);
+  if (trusted.length && !trusted.includes(String(event.pubkey || '').toLowerCase())) {
+    throw new Error('Fleet config event is not authored by a trusted operator');
   }
   if (tagValue(event.tags, 'd') !== SOUL_FACTORY_FLEET_CONFIG_IDENTIFIER) {
     throw new Error('Fleet config event has an invalid d tag');
@@ -106,7 +121,11 @@ export function createFleetConfigStore({
   sign = signWithAuth,
   now = () => Math.floor(Date.now() / 1000),
   eventStore = getEventStore,
-  registerRefresh = onStoreRefresh
+  registerRefresh = onStoreRefresh,
+  // The trusted operator authors for kind 31953: the signed-in key plus the
+  // decrypted `operators:soul-factory` allowlist when the session reads it.
+  trustedAuthors = (signedIn) => trustedOperatorAuthors(operatorAllowlistFor(OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY), signedIn),
+  registerAllowlistChange = onOperatorAllowlistChange
 } = {}) {
   const state = $state({
     event: null,
@@ -117,7 +136,7 @@ export function createFleetConfigStore({
   });
 
   function apply(event) {
-    const parsed = parseFleetConfigEvent(event, auth.pubkey);
+    const parsed = parseFleetConfigEvent(event, trustedAuthors(auth.pubkey));
     const current = state.event;
     if (current && (Number(current.created_at || 0) > Number(event.created_at || 0)
       || (Number(current.created_at || 0) === Number(event.created_at || 0) && String(current.id || '') <= String(event.id || '')))) {
@@ -136,26 +155,32 @@ export function createFleetConfigStore({
       state.error = 'Sign in with a trusted fleet operator to load fleet configuration.';
       return () => {};
     }
-    const currentAuthor = String(state.event?.pubkey || '').trim().toLowerCase();
-    if (currentAuthor && currentAuthor !== author) {
-      state.event = null;
-      state.document = null;
-      state.publishResults = [];
-    }
     // Kind 31953 is retained by the layout-owned SoulFactory reader under the
-    // signed-in operator's key. This only projects the verified local store:
-    // cached configuration renders at once and no REQ is opened here.
+    // trusted operator keys. This only projects the verified local store:
+    // cached configuration renders at once and no REQ is opened here. The
+    // newest configuration across the trusted operators wins, as it does in
+    // the daemon; a shrinking trusted set drops a configuration it no longer
+    // covers.
     const refresh = () => {
-      const cached = eventStore()?.query({
-        kinds: [KINDS.SOUL_FLEET_CONFIG], authors: [author], '#d': [SOUL_FACTORY_FLEET_CONFIG_IDENTIFIER]
-      }) || [];
+      const authors = trustedAuthors(author);
+      const currentAuthor = String(state.event?.pubkey || '').trim().toLowerCase();
+      if (currentAuthor && !authors.includes(currentAuthor)) {
+        state.event = null;
+        state.document = null;
+        state.publishResults = [];
+      }
+      const cached = authors.length ? eventStore()?.query({
+        kinds: [KINDS.SOUL_FLEET_CONFIG], authors, '#d': [SOUL_FACTORY_FLEET_CONFIG_IDENTIFIER]
+      }) || [] : [];
       for (const event of [...cached].sort((a, b) => a.created_at - b.created_at || b.id.localeCompare(a.id))) {
         try { apply(event); } catch (error) { state.error = error?.message || 'Invalid fleet config event'; }
       }
       state.loading = false;
     };
     refresh();
-    return registerRefresh(refresh);
+    const offRefresh = registerRefresh(refresh);
+    const offAllowlist = registerAllowlistChange(refresh);
+    return () => { offRefresh(); offAllowlist(); };
   }
 
   async function publish(document) {

@@ -19,6 +19,8 @@
     WorkspaceIcon
   } from '$lib/icons/domain-icons.js';
   import { KINDS, normalizeSoulDraftContent } from '$lib/nostr/client.js';
+  import { OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY } from '$lib/nostr/kinds.gen.js';
+  import { operatorAllowlistAvailable } from '$lib/stores/operator-allowlist.svelte.js';
   import { fetchSoulHistory, subscribeToSoulHistory, waitForSoul, publishSoulAction, publishSoulDraft, publishSoulUpdateAction, provisioningRuns, souls, trackLifecycleRun } from '$lib/stores/souls.js';
   
   let soul = $state(null);
@@ -642,9 +644,13 @@
 
         <section class="info-section wide">
           <h3><MemoryIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Activity & History</h3>
-          <!-- The browser cannot verify soul_factory.authorized_pubkeys, so kind 1950 actions are trusted from the signed-in key only. -->
+          <!-- Kind 1950 actions are trusted from the signed-in key, widened by the daemon's fleet-OCK encrypted Soul Factory operator allowlist when this session can decrypt it (bahia-fbyo5). -->
           <p class="history-muted" data-testid="soul-activity-operator-scope-note">
-            Actions are listed only when signed by your key; actions by other operators are not shown. Soul Factory results are shown for every operator.
+            {#if operatorAllowlistAvailable(OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY)}
+              Actions are listed when signed by your key or by an authorized Soul Factory operator in the Bahia service's operator allowlist. Soul Factory results are shown for every operator.
+            {:else}
+              Actions are listed only when signed by your key; actions by other operators are not shown. Soul Factory results are shown for every operator.
+            {/if}
           </p>
           {#if historyLoading}
             <p class="history-muted">Loading activity history...</p>

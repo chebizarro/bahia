@@ -14,6 +14,7 @@ vi.mock('$lib/stores/auth.js', () => ({ authState: bootMock.auth }));
 import {
   continuityNostrFilters,
   continuityEventsFromStore,
+  trustedContinuityAuthors,
   initContinuityStoreBinding,
   teardownContinuityStoreBinding,
   continuityRequestsFromEvents,
@@ -275,6 +276,39 @@ describe('continuity app-lifetime store binding', () => {
     expect(added.every((request) => request.filters.every((filter: any) => filter.authors[0] === OPERATOR))).toBe(true);
     expect(added[0].filters.map((filter: any) => filter.kinds)).toEqual([[31400, 31401, 31402, 31403, 31404], [38430, 38431], [30315]]);
     expect(authorsOf().every((authors) => Array.isArray(authors) && authors.length === 1)).toBe(true);
+    teardownContinuityStoreBinding();
+  });
+
+  // bahia-fbyo5: the decrypted `operators:continuity` allowlist widens the
+  // operator unit to the other authorized operators (and the relay REQ with
+  // it); without it only the signed-in key is trusted.
+  it('trusts the allowlisted continuity operators plus the signed-in key once the allowlist is readable', async () => {
+    const { operatorAllowlists } = await import('../../src/lib/stores/operator-allowlist.svelte.js');
+    const OTHER_OPERATOR = 'd'.repeat(64);
+    const mine = event({ id: 'req-mine', kind: 38430, pubkey: OPERATOR, tags: [['service', SERVICE]] });
+    const theirs = event({ id: 'req-theirs', kind: 38430, pubkey: OTHER_OPERATOR, tags: [['service', SERVICE]] });
+    const stranger = event({ id: 'req-stranger', kind: 38430, pubkey: WORKER_AUTHOR, tags: [['service', SERVICE]] });
+    const { pool, requests } = start();
+    bootMock.store.query = (filter: any) => [mine, theirs, stranger].filter((candidate) =>
+      filter.kinds.includes(candidate.kind) && filter.authors.includes(candidate.pubkey));
+    await vi.waitFor(() => expect(pool.subscribe.mock.calls.length).toBeGreaterThanOrEqual(4));
+    bootMock.auth.status = 'authenticated';
+    bootMock.auth.pubkey = OPERATOR;
+    expect(trustedContinuityAuthors().operatorAuthors).toEqual([OPERATOR]);
+    expect(continuityRequestsFromEvents(continuityEventsFromStore()).map((row) => row.id)).toEqual(['req-mine']);
+
+    operatorAllowlists.continuity = [OTHER_OPERATOR];
+    const before = requests.length;
+    initContinuityStoreBinding();
+    expect(trustedContinuityAuthors().operatorAuthors).toEqual([OPERATOR, OTHER_OPERATOR]);
+    expect(continuityRequestsFromEvents(continuityEventsFromStore()).map((row) => row.id).sort()).toEqual(['req-mine', 'req-theirs']);
+    const added = requests.slice(before);
+    expect(added.length).toBeGreaterThan(0);
+    expect(added.every((request) => request.filters.every((filter: any) => filter.authors.join() === [OPERATOR, OTHER_OPERATOR].join()))).toBe(true);
+
+    operatorAllowlists.continuity = null;
+    expect(trustedContinuityAuthors().operatorAuthors).toEqual([OPERATOR]);
+    expect(continuityRequestsFromEvents(continuityEventsFromStore()).map((row) => row.id)).toEqual(['req-mine']);
     teardownContinuityStoreBinding();
   });
 

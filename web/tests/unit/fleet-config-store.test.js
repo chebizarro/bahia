@@ -111,7 +111,7 @@ describe('fleet config store', () => {
       registerRefresh: (callback) => { refresh = callback; return cleanup; }
     });
 
-    expect(store.subscribe()).toBe(cleanup);
+    const unsubscribe = store.subscribe();
     expect(eventStore.query).toHaveBeenCalledWith({
       kinds: [31953],
       authors: [auth.pubkey],
@@ -130,6 +130,46 @@ describe('fleet config store', () => {
     refresh();
     expect(store.state.document.defaults.model).toBe('provider/newer');
     expect(store.state.event.id).toBe('newer');
+    unsubscribe();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  // bahia-fbyo5: with the daemon's `operators:soul-factory` allowlist readable,
+  // the newest configuration across the authorized operators is shown, as the
+  // daemon applies it; without it only the signed-in key's configuration is.
+  it('projects the newest configuration across the trusted operator set and re-projects when the allowlist changes', () => {
+    const auth = { status: 'authenticated', pubkey: 'a'.repeat(64) };
+    const other = 'b'.repeat(64);
+    const mine = emptyFleetConfigDocument();
+    mine.defaults.model = 'provider/mine';
+    const theirs = emptyFleetConfigDocument();
+    theirs.defaults.model = 'provider/theirs';
+    const events = [configEvent('mine', auth.pubkey, 100, mine), configEvent('theirs', other, 200, theirs)];
+    const eventStore = eventStoreDouble(events);
+    let allowlist = null;
+    let onAllowlistChange;
+    const store = createFleetConfigStore({
+      client: {}, auth, eventStore: () => eventStore, registerRefresh: () => () => {},
+      trustedAuthors: (signedIn) => [signedIn, ...(allowlist || [])].sort(),
+      registerAllowlistChange: (callback) => { onAllowlistChange = callback; return () => { onAllowlistChange = null; }; }
+    });
+    const unsubscribe = store.subscribe();
+    expect(eventStore.query).toHaveBeenLastCalledWith({ kinds: [31953], authors: [auth.pubkey], '#d': ['soulfactory-fleet-config/v1'] });
+    expect(store.state.event.id).toBe('mine');
+
+    allowlist = [other];
+    onAllowlistChange();
+    expect(eventStore.query).toHaveBeenLastCalledWith({ kinds: [31953], authors: [auth.pubkey, other], '#d': ['soulfactory-fleet-config/v1'] });
+    expect(store.state.event.id).toBe('theirs');
+    expect(store.state.document.defaults.model).toBe('provider/theirs');
+
+    // Losing the allowlist (logout of the key holder, key rotation) drops the
+    // other operator's configuration again.
+    allowlist = null;
+    onAllowlistChange();
+    expect(store.state.event.id).toBe('mine');
+    unsubscribe();
+    expect(onAllowlistChange).toBeNull();
   });
 
   it('reports an invalid cached configuration without a loading gate', () => {
