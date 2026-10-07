@@ -809,12 +809,17 @@ type RelaySidecarConfig struct {
 	// A NEG-OPEN whose filter matches more is refused with NEG-ERR instead of
 	// being silently truncated, so the client narrows the filter.
 	NegentropyMaxEvents int `koanf:"negentropy_max_events" yaml:"negentropy_max_events" secret:"false"`
-	// ReadAuthMode controls NIP-42 authentication for REQ filters that
-	// target non-public kinds (C-21). Values:
-	//   "enforce" - CLOSED auth-required for unauthenticated protected-kind
-	//               REQs (default).
-	//   "warn"   - log but allow unauthenticated reads (migration aid).
-	//   "off"    - no read-side auth (pre-C-21 behaviour).
+	// ReadAuthMode controls NIP-42 authentication for REQ and COUNT filters
+	// that target non-public kinds or protected cp-state topics (C-21, C-47).
+	// Values:
+	//   "enforce" - CLOSED auth-required for unauthenticated protected
+	//               REQs and NIP-11 advertises auth_required (default; an
+	//               empty or unknown value normalises to this).
+	//   "warn"    - log but allow unauthenticated reads. Explicit opt-out
+	//               for migrations; protected records such as the
+	//               soul-factory-runtime-policy are then readable by anyone
+	//               who can connect.
+	//   "off"     - no read-side auth (pre-C-21 behaviour).
 	ReadAuthMode string `koanf:"read_auth_mode" yaml:"read_auth_mode" secret:"false"`
 	// ReadAuthAllowedPubkeys are additional hex pubkeys allowed to read
 	// protected kinds, beyond the admin allowlist, intent authors and the
@@ -1430,7 +1435,7 @@ func Defaults() *Config {
 				SubscriberQueueSize:   DefaultRelaySidecarSubscriberQueueSize,
 				RequestRetentionKinds: DefaultRelaySidecarRequestRetentionKinds(),
 				NegentropyMaxEvents:   DefaultRelaySidecarNegentropyMaxEvents,
-				ReadAuthMode:          ReadAuthModeWarn,
+				ReadAuthMode:          ReadAuthModeEnforce,
 			},
 			LocalStore: DefaultNostrLocalStoreConfig(),
 		},
@@ -2250,13 +2255,15 @@ func (c NostrConfig) RelayAuthUnavailableSemantics() string {
 }
 
 // NormalizedReadAuthMode returns the effective read auth mode for the sidecar.
+// Unset and unrecognised values fall back to enforce: a typo must not silently
+// open protected topics (C-47).
 func (c RelaySidecarConfig) NormalizedReadAuthMode() string {
 	mode := strings.ToLower(strings.TrimSpace(c.ReadAuthMode))
 	switch mode {
 	case ReadAuthModeEnforce, ReadAuthModeWarn, ReadAuthModeOff:
 		return mode
 	default:
-		return ReadAuthModeWarn
+		return ReadAuthModeEnforce
 	}
 }
 

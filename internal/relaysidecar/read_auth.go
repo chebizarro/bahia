@@ -33,12 +33,20 @@ import (
 //
 // The mode controls behaviour:
 //   - "enforce": CLOSED auth-required for unauthenticated protected-kind REQs
-//   - "warn":    log but allow (migration aid; default for this release)
+//     and COUNTs; NIP-11 advertises auth_required (default, C-47)
+//   - "warn":    log but allow (explicit migration opt-out)
 //   - "off":     no read-side auth (pre-C-21 behaviour)
 //
-// The default is "warn". Set read_auth_mode to "enforce" only after verifying
-// all readers (web, CLI, DNS agent, FIPS bridge, workers) authenticate or read
-// only public topics. See the per-topic classification in publicCPStateTopics.
+// Readers that only need public topics (FIPS bridge, DNS agent zone reads,
+// CLI state reads, the web's pre-login bootstrap) are unaffected by enforce.
+// Every reader of a protected topic or non-public kind must answer the NIP-42
+// challenge with a pubkey in the allowed set above: the daemon with its
+// service key, operators and org members through the intent-authors sync
+// (NIP-86 setintentauthors from the daemon's TrustSet), and every other
+// service key (SoulFactory controller, pinned runtimes, loom workers, HiveCI
+// runner) through read_auth_allowed_pubkeys or the NIP-86 allowed list. See
+// docs/relay-sidecar.md "Upgrade note" and the per-topic classification in
+// publicCPStateTopics.
 type readAuthPolicy struct {
 	mode          string // enforce | warn | off
 	servicePubkey string
@@ -69,17 +77,22 @@ func newReadAuthPolicy(cfg config.RelaySidecarConfig, admission *policy, logger 
 }
 
 // publicKinds are non-30900 kinds that remain readable without authentication.
-// These are standard Nostr discovery/profile kinds and open interop kinds.
+// These are standard Nostr discovery/profile/status kinds and open interop
+// kinds. Anything else (30078 app data, 4903 audit, 1059 gift wraps, the
+// SoulFactory and loom families, ...) requires NIP-42 regardless of topic.
 var publicKinds = func() []nostr.Kind {
 	return []nostr.Kind{
-		nostr.KindProfileMetadata,        // 0: profiles
-		nostr.KindFollowList,             // 3: follow lists
-		nostr.KindDeletion,               // 5: deletion requests
-		nostr.KindRelayListMetadata,      // 10002: NIP-65 relay lists
-		nostr.KindRelayDiscovery,         // 30166: relay discovery
-		nostr.KindRepositoryAnnouncement, // 30617: NIP-34 git repos
-		nostr.KindRepositoryState,        // 30618: NIP-34 git state
-		nostr.KindClientAuthentication,   // 22242: NIP-42 auth events
+		nostr.KindProfileMetadata,           // 0: profiles
+		nostr.KindFollowList,                // 3: follow lists
+		nostr.KindDeletion,                  // 5: deletion requests
+		nostr.KindRelayListMetadata,         // 10002: NIP-65 relay lists
+		nostr.KindDMRelayList,               // 10050: NIP-17 inbox relay lists
+		nostr.Kind(kinds.RelaySetDiscovery), // 30002: relay set discovery (bootstrap)
+		nostr.Kind(kinds.NIP38Status),       // 30315: NIP-38 operational status (worker/assistant health)
+		nostr.KindRelayDiscovery,            // 30166: relay discovery
+		nostr.KindRepositoryAnnouncement,    // 30617: NIP-34 git repos
+		nostr.KindRepositoryState,           // 30618: NIP-34 git state
+		nostr.KindClientAuthentication,      // 22242: NIP-42 auth events
 	}
 }()
 
@@ -119,14 +132,15 @@ var publicKindRanges = [][2]nostr.Kind{
 //	worker-cleanup — PUBLIC:
 //	  Web pre-login bootstrap reads worker state; loom worker adverts are open interop.
 //
-//	sbom-reference, sbom-availability — PUBLIC:
+//	sbom-reference, sbom-availability — PUBLIC (as 30900 topics):
 //	  Supply-chain attestations consumed by the security scanner and external verifiers.
-//	  Kinds 30078/30004 are also public for the same reason.
+//	  The 30078/30004 SBOM documents stay behind kind-level auth because 30078
+//	  also carries operator config documents.
 //
 //	security-scan-status, security-summary — PUBLIC:
 //	  Observable security posture, no detailed vulnerability data.
 //
-//	assistant-status (30315) — PUBLIC:
+//	assistant-status — PUBLIC (and kind 30315 NIP-38 status is a public kind):
 //	  Worker health/adverts; web pre-login reads these.
 //
 //	continuity-heartbeat — PUBLIC:
@@ -262,6 +276,9 @@ var publicCPStateTopics = map[string]bool{
 	//   soul-factory-saga-run — governed provisioning saga progress (C-45)
 	//   soul-factory-adapter-ledger — governed provisioning adapter ledger,
 	//     fleet-OCK ciphertext (bahia-nfc95)
+	//   soul-factory-runtime-policy — plaintext controller and pinned runtime
+	//     pubkeys (bahia-amv53)
+	//   runtime-observation — runtime observations (F74a)
 	//   relay-settings — operator relay policy
 	//   config-status — config-fabric state (admin-only)
 }
@@ -391,4 +408,18 @@ func (r *readAuthPolicy) isAdminOrAllowed(pubkey string) bool {
 		}
 	}
 	return false
+}
+
+// ReadAuthHook returns a khatru OnRequest/OnCount hook that applies the
+// sidecar's NIP-42 read policy outside a full sidecar: the given mode, the
+// service pubkey, and an explicit reader allowlist. The Playwright test relay
+// (cmd/bahia-test-relay) uses it so the web harness exercises the production
+// default (enforce) against the same topic classification the sidecar ships.
+func ReadAuthHook(mode, servicePubkey string, allowedReaders []string, logger *zap.Logger) func(ctx context.Context, filter nostr.Filter) (bool, string) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	cfg := config.RelaySidecarConfig{ReadAuthMode: mode, ReadAuthAllowedPubkeys: allowedReaders}
+	admission := &policy{now: nostr.Now, servicePubkey: strings.ToLower(strings.TrimSpace(servicePubkey))}
+	return newReadAuthPolicy(cfg, admission, logger).checkReadAuth
 }

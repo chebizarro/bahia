@@ -12,9 +12,12 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/slicestore"
 	"fiatjaf.com/nostr/khatru"
+	"fiatjaf.com/nostr/nip11"
 	"fiatjaf.com/nostr/nip44"
 
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/relaysidecar"
 	"github.com/openagentsinc/bahia/internal/strutil"
 )
 
@@ -55,9 +58,13 @@ type eventSpec struct {
 
 func main() {
 	addr := flag.String("addr", strutil.Env("BAHIA_TEST_RELAY_ADDR", "127.0.0.1:0"), "HTTP/WebSocket listen address")
+	readAuth := flag.String("read-auth", strutil.Env("BAHIA_TEST_RELAY_READ_AUTH", config.ReadAuthModeOff),
+		"NIP-42 read policy applied with the sidecar's topic classification: enforce (the sidecar default; the seeded operator and service keys are admitted), warn or off")
 	flag.Parse()
+	readAuthMode := config.RelaySidecarConfig{ReadAuthMode: *readAuth}.NormalizedReadAuthMode()
 
 	serviceKey := nostr.MustSecretKeyFromHex(serviceSecretHex)
+	operatorPubkey := nostr.MustSecretKeyFromHex(operatorSecretHex).Public().Hex()
 	store := &slicestore.SliceStore{}
 	if err := store.Init(); err != nil {
 		log.Fatalf("init slicestore: %v", err)
@@ -71,6 +78,17 @@ func main() {
 	relay.Info.PubKey = &servicePubKey
 	relay.Info.SupportedNIPs = []any{1, 11, 42, 51, 65, 78}
 	relay.UseEventstore(store, 10000)
+	if readAuthMode != config.ReadAuthModeOff {
+		// Same policy the sidecar ships (internal/relaysidecar/read_auth.go):
+		// protected topics and non-public kinds need NIP-42 from an admitted
+		// pubkey. The Playwright operator (0x33..33) is the only admitted reader
+		// besides the service identity, so an unauthenticated page sees CLOSED
+		// auth-required and must recover through AUTH like production.
+		hook := relaysidecar.ReadAuthHook(readAuthMode, servicePubKey.Hex(), []string{operatorPubkey}, nil)
+		relay.OnRequest = hook
+		relay.OnCount = hook
+		relay.Info.Limitation = &nip11.RelayLimitationDocument{AuthRequired: readAuthMode == config.ReadAuthModeEnforce}
+	}
 
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -111,7 +129,7 @@ func main() {
 		}
 	})
 
-	log.Printf("bahia test relay listening on %s service_pubkey=%s events=%d", actualAddr, serviceKey.Public().Hex(), len(seedEvents))
+	log.Printf("bahia test relay listening on %s service_pubkey=%s events=%d read_auth=%s", actualAddr, serviceKey.Public().Hex(), len(seedEvents), readAuthMode)
 	if err := http.Serve(listener, relay); err != nil {
 		log.Fatal(err)
 	}
