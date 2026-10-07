@@ -1674,7 +1674,7 @@ func (s *Server) InvokeTool(ctx context.Context, name string, arguments map[stri
 }
 
 func signerFirstMCPMutationUnavailable(toolName, method string) *ToolResult {
-	return errorResult(fmt.Sprintf("%s is no longer available as a direct registry mutation; publish a signed ContextVM/Nostr %s command with an operator signer instead", toolName, method))
+	return errorResult(fmt.Sprintf("%s is not available as a direct registry mutation; publish a signed ContextVM/Nostr %s command with an operator signer instead", toolName, method))
 }
 
 func normalizePubkeys(pubkeys []string) []string {
