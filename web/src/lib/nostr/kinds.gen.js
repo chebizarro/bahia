@@ -424,8 +424,8 @@ export const WORKER_ASSIGNMENT_STATE_D_PREFIX = 'worker:assignment:';
 export const WORKER_DRAIN_STATUS_D_PREFIX = 'worker:drain:';
 export const WORKER_ELIGIBILITY_PREVIEW_D_PREFIX = 'worker:eligibility:';
 export const WORKER_CLEANUP_EXECUTION_D_PREFIX = 'worker:cleanup:';
-// Operator allowlist cp-state family (internal/kinds CPStateFamilyOperatorAllowlist,
-// bahia-fbyo5): fleet-OCK encrypted copies of the daemon's operator allowlists,
+// Operator allowlist cp-state family (internal/kinds CPStateFamilyOperatorAllowlist):
+// fleet-OCK encrypted copies of the daemon's operator allowlists,
 // one record per scope on 'operators:<scope>'.
 export const OPERATOR_ALLOWLIST_CATALOG_KIND = 32029;
 export const OPERATOR_ALLOWLIST_TOPIC = 'operator-allowlist';

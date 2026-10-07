@@ -23,8 +23,7 @@ const (
 
 // BackupCanonicalPublisher publishes canonical 30900 cp-state records after
 // backup entity mutations. When set on the registry, each state change
-// automatically publishes the corresponding record. This replaces the
-// projector backup legs deleted in Phase 3 B1.
+// automatically publishes the corresponding record.
 type BackupCanonicalPublisher interface {
 	PublishRecipe(ctx context.Context, recipe *domain.BackupRecipe) error
 	PublishPolicy(ctx context.Context, policy *domain.BackupPolicy) error

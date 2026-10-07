@@ -24,7 +24,7 @@ import (
 // It stores signed events, not rows: entity labels are not kept (ListByEntity
 // is always empty), and the only publish state a record carries is
 // NostrPublishStateFailed, on an event whose delivery the outbox abandoned
-// (localstore.Undelivered, bahia-u5whr): readers see the daemon's committed
+// (localstore.Undelivered): readers see the daemon's committed
 // state and that relays do not hold it, and the Projector's dedupe does not
 // treat it as delivered. Two kinds of "pending" row are honoured:
 //   - a row for a PostgreSQL-drained publish target, which a producer records

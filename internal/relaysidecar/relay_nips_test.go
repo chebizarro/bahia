@@ -218,7 +218,7 @@ func countingSync(up, down *atomic.Int64) func(context.Context, nip77.Direction)
 	}
 }
 
-// TestSidecarNegentropyReconcilesBothDirections covers C-17: a client holding
+// TestSidecarNegentropyReconcilesBothDirections covers both-direction reconciliation: a client holding
 // a different subset reconciles against the sidecar with
 // fiatjaf.com/nostr/nip77. Each side ends with the union, and a second
 // session finds nothing missing either way.

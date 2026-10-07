@@ -33,9 +33,9 @@ import (
 //
 // The mode controls behaviour:
 //   - "enforce": CLOSED auth-required for unauthenticated protected-kind REQs
-//     and COUNTs; NIP-11 advertises auth_required (default, C-47)
+//     and COUNTs; NIP-11 advertises auth_required (the default)
 //   - "warn":    log but allow (explicit migration opt-out)
-//   - "off":     no read-side auth (pre-C-21 behaviour)
+//   - "off":     no read-side auth
 //
 // Readers that only need public topics (FIPS bridge, DNS agent zone reads,
 // CLI state reads, the web's pre-login bootstrap) are unaffected by enforce.

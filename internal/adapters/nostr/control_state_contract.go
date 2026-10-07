@@ -688,8 +688,7 @@ func (r *RelayFirstStatePublisher) publishAuthoritativeProjection(ctx context.Co
 // The runtime state record for a service+environment pair is published both by
 // the projector (warm-start, handleEvent) and by the reconciler via its
 // RuntimeStatePublisher. Both must emit the same wire shape, so the record
-// builder lives here. Phase 3 S1 moves publication to the reconciler and
-// deletes the projector state legs.
+// builder lives here.
 
 // RuntimeStateRecord returns the family tags and JSON content of a
 // service/environment runtime state record. observation may be nil when the

@@ -13,7 +13,7 @@ import (
 
 // IntentSubscriber opens a long-lived subscription for kind-30900 events
 // tagged with t=bahia-intent, scoped to trusted author pubkeys from the
-// TrustSet. It uses Phase 2's ProcessSync for relay-independent catch-up,
+// TrustSet. It uses ProcessSync for relay-independent catch-up,
 // per-relay cursors, and NIP-77 reconciliation.
 //
 // When the trust set changes, the subscriber restarts with an updated authors

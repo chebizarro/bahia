@@ -97,7 +97,7 @@ type App struct {
 	localOutbox               *localstore.Outbox
 	reloadMu                  sync.Mutex
 
-	// Phase 3 intent framework (F1).
+	// Intent framework.
 	TrustSet            *controlplane.TrustSet
 	IntentProcessor     *controlplane.IntentProcessor
 	IntentReadiness     *controlplane.ReadinessTracker
@@ -254,7 +254,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	tenantRBAC := newTenantRBAC(orgMemberRepo)
 
-	// Local event store and publish outbox (bahia-irsry.10.1, .10.4). They are
+	// Local event store and publish outbox. They are
 	// present at every tier: the store is the inbound subscriptions' cache,
 	// dedup set and per-(relay, filter) cursors, and the daemon's own outputs;
 	// the outbox holds every event the daemon publishes until its relays
@@ -823,7 +823,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		return details
 	})
-	// Phase 3 intent framework (F1): TrustSet, IntentProcessor, ReadinessTracker.
+	// Intent framework: TrustSet, IntentProcessor, ReadinessTracker.
 	// These are wired unconditionally; domain handlers register at startup when
 	// their domain is not listed in nostr.intent_domains_disabled.
 	trustSetOpts := []controlplane.TrustSetOption{
@@ -857,7 +857,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Readiness tracked by HealthProvider via ReadinessTracker.
 
-	// Phase 3 intent subscriber (F1): runs when intent domains are enabled.
+	// Intent subscriber: runs when intent domains are enabled.
 	// Author-scoped subscription via TrustSet, feeding the processor, marking
 	// readiness after first catch-up.
 	var intentSubscriber *controlplane.IntentSubscriber
@@ -1244,12 +1244,12 @@ func New(cfg *config.Config) (*App, error) {
 		rec.SetRuntimeStatePublisher(statePublisher)
 		tombstoneHandler := reconcile.NewStateTombstoneHandler(statePublisher, logger)
 		tombstoneHandler.SetupSubscriptions(publisher)
-		logger.Info("runtime state direct publisher and tombstone handler wired (Phase 3 S1)")
+		logger.Info("runtime state direct publisher and tombstone handler wired")
 	}
 
 	nostrProjector.SetupSubscriptions(publisher)
 
-	// --- Audit B-35: adoption is relay-canonical ---
+	// --- Adoption is relay-canonical ---
 	// Every record an adoption produces is published as signed cp-state
 	// through the projector's outbox before the optional SQL index is
 	// written, and adoption plans from the daemon's canonical records in the
@@ -1356,7 +1356,7 @@ func New(cfg *config.Config) (*App, error) {
 		if dnsZoneSyncPublisher != nil {
 			dnsZoneSyncPublisher.SetDelegate(dnsCanonicalPub)
 		}
-		logger.Info("DNS canonical publisher wired to reconciler (Phase 3 D1)")
+		logger.Info("DNS canonical publisher wired to reconciler")
 	}
 
 	// --- DNS intent registration ---
@@ -1989,7 +1989,7 @@ func New(cfg *config.Config) (*App, error) {
 	// The initiator consults ingested runs so a build/request adopts an existing
 	// trusted 5401 for the same (a, commit, workflow) instead of competing.
 	var hiveRunLookup giteaAdapter.WorkflowRunLookup
-	// Audit C-48: signed Hive-CI evidence (5401 runs, 5402 results, 4903
+	// Signed Hive-CI evidence (5401 runs, 5402 results, 4903
 	// release attestations and the workers' 10100 advertisements) is read from
 	// the local event store, and the daemon's own result/policy state is
 	// canonical cp-state published through the outbox. The store needs the
@@ -2149,7 +2149,7 @@ func New(cfg *config.Config) (*App, error) {
 		return check
 	})
 
-	// Audit B-32: security state (targets, run claims, schedules, findings)
+	// Security state (targets, run claims, schedules, findings)
 	// is canonical cp-state. The store publishes first and reads from the
 	// local event store, so it needs the projector and the confidential
 	// encryptor but no database; securityRepo is an optional SQL index.
@@ -2219,7 +2219,7 @@ func New(cfg *config.Config) (*App, error) {
 	// It does not create or redeem Cashu tokens; cashu.enabled live wallet mode
 	// remains fail-closed until mint-backed proof flows are implemented.
 	//
-	// Audit B-31: payment state is canonical cp-state. The service publishes
+	// Payment state is canonical cp-state. The service publishes
 	// first and reads from the local event store, so it needs the projector and
 	// the confidential encryptor but no database; paymentRepo is an optional
 	// SQL index rebuilt from the retained records once the store has caught up.
@@ -2663,7 +2663,7 @@ func New(cfg *config.Config) (*App, error) {
 		// mirror initiator is unavailable, so browsers receive a signed,
 		// fail-closed error instead of falling back to credential-bearing flows.
 		var hiveCIBuildStarter controlplane.HiveCIBuildStarter
-		// Audit C-49: the initiation journal (prepared signed events, pinned
+		// The initiation journal (prepared signed events, pinned
 		// job, per-run publisher key in the service-only layer) is a
 		// confidential record in the local event store; the build id is
 		// derived from the signed request. PostgreSQL is an optional index,

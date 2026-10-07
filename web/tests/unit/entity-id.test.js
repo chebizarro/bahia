@@ -9,7 +9,7 @@ import {
 
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-describe('client-minted entity ids (bahia-irsry.35)', () => {
+describe('client-minted entity ids', () => {
   it('mints canonical lowercase UUIDv7 ids', () => {
     const ids = new Set(Array.from({ length: 200 }, () => mintEntityId()));
     expect(ids.size).toBe(200);

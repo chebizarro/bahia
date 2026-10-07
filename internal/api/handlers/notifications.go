@@ -29,8 +29,6 @@ func NewNotificationHandler(repo repository.NotificationRepository, dispatcher *
 	return &NotificationHandler{repo: repo, dispatcher: dispatcher}
 }
 
-// createChannelRequest: deleted in Phase 3 N1 (no longer needed).
-
 func (h *NotificationHandler) tenantRepo(w http.ResponseWriter) (tenantNotificationRepository, bool) {
 	repo, ok := h.repo.(tenantNotificationRepository)
 	if !ok {
@@ -38,12 +36,6 @@ func (h *NotificationHandler) tenantRepo(w http.ResponseWriter) (tenantNotificat
 	}
 	return repo, ok
 }
-
-// CreateChannel: deleted in Phase 3 N1 — channel mutations go through intent publishing.
-
-// UpdateChannel: deleted in Phase 3 N1 — channel mutations go through intent publishing.
-
-// DeleteChannel: deleted in Phase 3 N1 — channel mutations go through intent publishing.
 
 // TestChannel handles POST /notifications/channels/{id}/test.
 func (h *NotificationHandler) TestChannel(w http.ResponseWriter, r *http.Request) {

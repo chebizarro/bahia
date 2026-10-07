@@ -491,7 +491,7 @@ func (p *Projector) resetProjectionBackoff() {
 
 // savePendingRetry stores the publish arguments for a coordinate suppressed
 // by the shared backoff window. The map is keyed by projectionKey so only the
-// latest state per coordinate is retained (bounded memory, Phase 3 X1).
+// latest state per coordinate is retained (bounded memory).
 func (p *Projector) savePendingRetry(key projectionKey, kind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) {
 	s := p.projection()
 	s.mu.Lock()

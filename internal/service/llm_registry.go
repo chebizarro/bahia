@@ -53,7 +53,6 @@ func NewLLMRegistryService(
 }
 
 // NewMLBackedLLMRegistryService creates an LLM compatibility facade over the generic ML registry.
-// The legacy constructor remains unchanged so existing LLM behavior can continue during cutover.
 func NewMLBackedLLMRegistryService(ml *MLRegistryService, environments repository.EnvironmentRepository, publisher events.Publisher, logger *zap.Logger) *LLMRegistryService {
 	svc := NewLLMRegistryService(nil, nil, environments, nil, nil, nil, nil, publisher, logger)
 	svc.ml = ml

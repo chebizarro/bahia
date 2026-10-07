@@ -1,4 +1,4 @@
-// Regression for bahia-ncjun: a mutation on the gift-wrapped (sensitive)
+// Regression test: a mutation on the gift-wrapped (sensitive)
 // transport resolves its organization through the same readiness contract as
 // every other signed intent. While the session is still deriving membership
 // (the async OCK trial-decrypt), the control is disabled with the pending

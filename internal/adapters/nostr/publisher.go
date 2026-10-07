@@ -108,7 +108,7 @@ const (
 // Duplicate OK counts as acceptance; blocked:, invalid: and pow: rejections
 // are terminal for the relay that sent them.
 //
-// The outbox is the daemon's local outbox (WithLocalOutbox, bahia-irsry.10.4):
+// The outbox is the daemon's local outbox (WithLocalOutbox):
 // the signed event is durable there before the first relay attempt, and every
 // counted round commits each relay's state, so a restart resumes exactly where
 // delivery stopped without resending to relays that already accepted. No
@@ -116,9 +116,9 @@ const (
 // each event is also archived to nostr_events with its outcome mirrored, best
 // effort, for the PostgreSQL-backed readers.
 //
-// Since bahia-irsry.62 the local outbox is a required dependency: the
-// constructor panics when a publisher that can run (redelivery-enabled)
-// is built without one. Pre-upgrade pending PostgreSQL rows are moved
+// The local outbox is a required dependency: the constructor panics when a
+// publisher that can run (redelivery-enabled) is built without one. Pending
+// rows in the PostgreSQL outbox table are moved
 // to the local outbox by MigratePendingPostgresRows at startup.
 //
 // Every outbox entry a Publisher writes carries its publish target (see
@@ -142,7 +142,7 @@ type Publisher struct {
 	localOutbox *localstore.Outbox
 	// ownEvents is the daemon's local event store. Each published event is
 	// kept there as the daemon's latest output (the Projector hydrates its
-	// dedupe from it, B-3). An event abandoned in the round its caller was
+	// dedupe from it). An event abandoned in the round its caller was
 	// waiting on is removed again (the caller is told and commits nothing);
 	// one abandoned after the caller was told it was queued stays there,
 	// marked undelivered on its coordinate (localstore.Undelivered), until a
@@ -200,7 +200,7 @@ type PublisherOption func(*Publisher)
 // from the local outbox, and keeps the daemon's own outputs in its local
 // event store (both may be shared by several publishers). The PostgreSQL
 // repository given to NewPublisher, if any, becomes a best-effort archive.
-// Required for redelivery-enabled publishers since bahia-irsry.62.
+// Required for redelivery-enabled publishers.
 func WithLocalOutbox(outbox *localstore.Outbox, ownEvents *localstore.Store) PublisherOption {
 	return func(p *Publisher) {
 		p.localOutbox = outbox
@@ -632,7 +632,7 @@ func (p *Publisher) Enqueue(ctx context.Context, ev nostr.Event, entityType stri
 }
 
 // admit makes ev durable in this publisher's outbox: the local outbox for
-// redelivery-enabled publishers (required since bahia-irsry.62), else the
+// redelivery-enabled publishers (required), else the
 // PostgreSQL audit table for non-redelivery publishers that only record.
 // prior, when non-nil, is a delivery round that ran before admission (see
 // PublishBeforeCommit): the local outbox entry starts from its per-relay

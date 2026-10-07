@@ -183,7 +183,7 @@ func (c *BackupRunCoordinator) Name() string { return "backup-run-recovery" }
 
 // Run performs durable worker recovery for stored backup work. Event-driven:
 // wakes on the trigger channel or when the stale-recovery timer fires at the
-// computed next-due time. Phase 3 B1 replaces the fixed 30s polling ticker.
+// computed next-due time; no polling ticker runs.
 func (c *BackupRunCoordinator) Run(ctx context.Context) error {
 	if err := c.validateDependencies(); err != nil {
 		return err

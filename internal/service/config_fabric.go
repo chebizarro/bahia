@@ -167,7 +167,7 @@ type ConfigFabricServiceOption func(*ConfigFabricService)
 
 // WithDeliveryQuery sets the delivery-state query used by ListDrift to
 // determine whether a desired version was abandoned when the event record
-// carries no PublishState (non-Postgres mode, bahia-irsry.61).
+// carries no PublishState (non-Postgres mode).
 func WithDeliveryQuery(q ConfigFabricDeliveryQuery) ConfigFabricServiceOption {
 	return func(s *ConfigFabricService) { s.delivery = q }
 }

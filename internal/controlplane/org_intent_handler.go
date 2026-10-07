@@ -32,7 +32,7 @@ type OrgCanonicalPublisher interface {
 type OrgMemberChangeCallback func(orgID uuid.UUID)
 
 // OrgIntentHandler processes org/member/invite intents. It is the O1 domain
-// handler for the Phase 3 intent framework.
+// handler for the intent framework.
 //
 // Level-triggered: the newest trusted intent's full desired state wins.
 // Idempotent by intent_id (handled by the intent processor).

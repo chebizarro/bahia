@@ -1734,7 +1734,7 @@ func (s *Server) authorizeServicePermission(ctx context.Context, serviceID uuid.
 			svc, err = client.DecodeService(record.Event)
 		}
 	} else if s.registry != nil {
-		// Wave 5 P2 migrates write authorization to the intent path.
+		// Write authorization goes through the intent path.
 		svc, err = s.registry.GetService(ctx, serviceID)
 	}
 	if err != nil || svc == nil || svc.OrgID == uuid.Nil {

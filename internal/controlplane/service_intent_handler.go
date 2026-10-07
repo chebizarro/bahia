@@ -20,7 +20,7 @@ type ServiceReader interface {
 }
 
 // ServiceIntentHandler processes service create/update/delete intents.
-// It is the reference F2 domain handler for the Phase 3 intent framework.
+// It is the reference domain handler for the intent framework.
 //
 // Level-triggered: the newest trusted intent's full desired state wins.
 // An update on a cold daemon (no prior create seen) creates the service.

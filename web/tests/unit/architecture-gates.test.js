@@ -1,5 +1,5 @@
-// Architecture ratchet for web stores (bahia-irsry.8, audit "Preventive
-// Measures"). Stores keep state topped up from long-lived relay
+// Architecture ratchet for web stores. Stores keep state topped up from
+// long-lived relay
 // subscriptions; they must not poll with setInterval or reach the daemon's
 // REST client ($lib/api/client.js). Existing violations are recorded in
 // architecture-gates.baseline.json and may only shrink.
@@ -59,7 +59,7 @@ function readBaseline() {
   return JSON.parse(readFileSync(baselinePath, 'utf8')).violations ?? {};
 }
 
-describe('web architecture gates (bahia-irsry.8)', () => {
+describe('web architecture gates', () => {
   it('application source never uses Wheelhouse relay defaults or hardcoded public relay hosts', () => {
     const offenders = [];
     for (const file of sourceFiles(srcDir)) {
@@ -73,7 +73,7 @@ describe('web architecture gates (bahia-irsry.8)', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('W4-S1 keeps SimplePool and PoolBackedClient out of application library code', () => {
+  it('keeps SimplePool and PoolBackedClient out of application library code', () => {
     const offenders = sourceFiles(libDir)
       .filter((file) => !file.endsWith('/nostr/pool-welshman.js'))
       .filter((file) => /\b(?:SimplePool|PoolBackedClient)\b/.test(stripComments(readFileSync(file, 'utf8'))))

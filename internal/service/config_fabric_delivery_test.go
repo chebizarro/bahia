@@ -90,7 +90,7 @@ func TestConfigFabricPublishAcceptedReceipt(t *testing.T) {
 
 // TestConfigFabricListDriftWithDeliveryQuery verifies that ListDrift consults
 // the delivery query when the NostrEventRecord carries no PublishState
-// (non-Postgres mode, bahia-irsry.61). An abandoned version is excluded from
+// (non-Postgres mode). An abandoned version is excluded from
 // desired state; a pending version is kept.
 func TestConfigFabricListDriftWithDeliveryQuery(t *testing.T) {
 	ctx := context.Background()

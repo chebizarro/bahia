@@ -25,7 +25,7 @@ const (
 	dnsReconcileTriggerBuffer                     = 16
 )
 
-// DNSBackend is the narrow zone-snapshot backend interface used by the Phase 0 reconciler.
+// DNSBackend is the narrow zone-snapshot backend interface used by the DNS reconciler.
 type DNSBackend interface {
 	ListRecords(ctx context.Context, zone domain.DNSZone) ([]domain.DNSRecord, error)
 	SyncZone(ctx context.Context, zone domain.DNSZone, records []domain.DNSRecord) error

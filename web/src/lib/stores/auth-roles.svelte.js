@@ -105,7 +105,7 @@ export let roleDerivationActive = $state({ value: false });
 export let roleDerivationError = $state({ value: null });
 
 // ---------------------------------------------------------------------------
-// Getters for W1-S2 (boot) and AuthGuard
+// Getters for boot and AuthGuard
 // ---------------------------------------------------------------------------
 
 /**

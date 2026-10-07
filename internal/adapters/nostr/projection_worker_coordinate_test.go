@@ -76,7 +76,7 @@ func TestProjectorWorkerFamiliesCoexistOnRelay(t *testing.T) {
 // TestCatalogKeysWorkerRecordsByFamilyCoordinate: the catalog reads a worker
 // record's id off its family coordinate when content and tags omit it, and
 // skips a record that is not on its family's coordinate (the bare-pubkey d
-// assignment and drain shared before bahia-irsry.36).
+// that assignment and drain shared before per-family coordinates).
 func TestCatalogKeysWorkerRecordsByFamilyCoordinate(t *testing.T) {
 	workerPubkey := strings.Repeat("cd", 32)
 	decode, ok := NewKindCatalog().Decoder(KindCASControlState)

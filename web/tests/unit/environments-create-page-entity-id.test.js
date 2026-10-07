@@ -77,7 +77,7 @@ async function submit(target) {
   await settle();
 }
 
-describe('environments page create modal client-minted entity id (bahia-irsry.42)', () => {
+describe('environments page create modal client-minted entity id', () => {
   beforeEach(() => {
     createEnvironmentMock.mockReset();
     loadEnvironmentsMock.mockClear();

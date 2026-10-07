@@ -120,7 +120,7 @@ const (
 	CPStateTopicSoulFactorySagaRun       = "soul-factory-saga-run"
 	CPStateTopicSoulFactoryAdapterLedger = "soul-factory-adapter-ledger"
 	// CPStateTopicOperatorAllowlist is the fleet-OCK encrypted operator
-	// allowlist family (CPStateFamilyOperatorAllowlist, bahia-fbyo5).
+	// allowlist family (CPStateFamilyOperatorAllowlist).
 	CPStateTopicOperatorAllowlist = "operator-allowlist"
 	CPStateTopicBlossomAdmin      = "blossom-admin"
 	CPStateTopicBlossomBlob       = "blossom-blob"

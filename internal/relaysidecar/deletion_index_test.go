@@ -218,7 +218,7 @@ func TestSidecarNIP09LongCoordinateTombstonesOverWebsocket(t *testing.T) {
 	}
 }
 
-// TestSidecarAgeCapSparesStateKinds covers the write side of C-11 over a real
+// TestSidecarAgeCapSparesStateKinds covers the write-side age cap over a real
 // websocket: replaceable and addressable events and deletion requests older
 // than a year are accepted and served, while regular and ephemeral events
 // that old are still refused.

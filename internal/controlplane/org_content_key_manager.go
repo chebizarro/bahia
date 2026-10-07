@@ -590,8 +590,8 @@ func (m *OCKManager) wrapAndPublish(ctx context.Context, key OrgContentKey, reci
 	// for current deployment sizes (< 100 members/org). A deterministic
 	// HMAC(conversation_key, org|version) handle would reduce this to O(1)
 	// lookup, but the NIP-44 conversation key is not accessible through the
-	// bunker signer interface (Keyer.Encrypt/Decrypt are black-box). Phase 4
-	// web clients that hold their own key material can compute conversation
+	// bunker signer interface (Keyer.Encrypt/Decrypt are black-box). Web
+	// clients that hold their own key material can compute conversation
 	// keys directly and would benefit from deterministic handles.
 	//
 	// Future: when bunker signers support conversation key derivation or a

@@ -71,7 +71,7 @@ type IngestionObserver interface {
 //     NIP-77, falling back to paged REQs when the relay refuses (NEG-ERR) or
 //     does not speak NIP-77; each regular-kind filter is paged from that
 //     relay's cursor less the overlap (from a lookback window on a fresh
-//     node, never from "now", C-3), backwards with `until` whenever a page
+//     node, never from "now"), backwards with `until` whenever a page
 //     comes back full, so a large gap is never truncated;
 //   - live: one REQ per filter from the catch-up start less the overlap.
 //

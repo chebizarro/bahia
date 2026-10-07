@@ -116,7 +116,7 @@ type NostrEventRepository interface {
 // NostrEventOutboxRepository is the durable publish-state extension implemented by
 // repositories that can redeliver outbound audit events.
 //
-// Since bahia-irsry.10.4 the daemon's own publishes are delivered from the
+// The daemon's own publishes are delivered from the
 // local outbox (localstore.Outbox). PostgreSQL rows are drained in place: rows
 // written inside a PostgreSQL transaction together with the domain change
 // they audit (registry release registration and promotion), and rows left

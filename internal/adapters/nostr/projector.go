@@ -266,16 +266,15 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		return
 	}
 	for _, eventType := range []events.EventType{
-		// Phase 3 F2/F3: service and environment Created/Updated/Deleted
-		// subscriptions removed — their state is published by the intent handlers
-		// via PublishBeforeCommit.
+		// Service and environment Created/Updated/Deleted need no bus
+		// subscription: their state is published by the intent handlers via
+		// PublishBeforeCommit.
 		//
-		// Phase 3 S2/W1: deployment run event subscriptions removed — their
-		// cp-state is published directly from RegistryService (S2), and worker
-		// read models are published from the run mutation site (W1, bahia-irsry.11.14).
-		// Observed-deployments side effect only (no audit). Their cp-state is
-		// published by the mutation-site publishers; the observed-deployments
-		// announcement is a coalesced aggregate refreshed on change.
+		// Deployment run event subscriptions serve the observed-deployments
+		// side effect only (no audit): run cp-state is published directly from
+		// RegistryService and worker read models from the run mutation site.
+		// The observed-deployments announcement is a coalesced aggregate
+		// refreshed on change.
 		events.EventRuntimeObservation,
 		events.EventEnvironmentServiceStateChanged,
 		events.EventDriftDetected,
@@ -292,7 +291,7 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		events.EventLLMDeploymentIntentRejected,
 		events.EventLLMDeploymentRunCreated,
 		events.EventLLMDeploymentRunCompleted,
-		// Phase 3 X1 B-16: observation/sync/state-changed/drift events removed.
+		// Observation/sync/state-changed/drift events are not audited.
 		// EventLLMDeploymentRunStatusChanged, EventLLMRouteObservation,
 		// EventLLMRouteStateChanged, EventLLMRouteDriftDetected,
 		// EventLLMGatewayRouteSynced, eventDNSZoneSynced, eventDNSRecordChanged,

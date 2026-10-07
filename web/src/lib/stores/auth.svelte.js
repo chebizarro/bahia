@@ -439,7 +439,7 @@ export async function initializeAuth() {
           backgroundSignerVerify(persisted);
         }
 
-        // Wire NIP-98 for any remaining interim REST calls (Wave 2/3)
+        // Wire NIP-98 for REST calls that still need backend auth
         if (browser) localStorage.removeItem('bahia_token');
 
         return;
@@ -779,7 +779,7 @@ export async function signHttpRequest({ method = 'GET', url }) {
 }
 
 /**
- * For interim REST calls that still need backend auth (Wave 2/3).
+ * For REST calls that still need backend auth.
  * This just wires NIP-98 signing — no /orgs probe.
  */
 export async function authenticateBackend() {

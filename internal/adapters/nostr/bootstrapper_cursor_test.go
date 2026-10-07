@@ -45,7 +45,7 @@ func TestBootstrapperLiveGroupsKeepPerRelayCursorsInTheLocalStore(t *testing.T) 
 	}
 
 	require.NoError(t, bootstrapper.attemptBootstrap(ctx))
-	require.InDelta(t, float64(now-3600), float64(lastSince(up)), 5, "a fresh node starts at the lookback window, not now (C-3)")
+	require.InDelta(t, float64(now-3600), float64(lastSince(up)), 5, "a fresh node starts at the lookback window, not now")
 	require.Equal(t, newer.CreatedAt, cursor(up))
 	require.Zero(t, cursor(refusing), "a relay that CLOSED the REQ gets no cursor")
 

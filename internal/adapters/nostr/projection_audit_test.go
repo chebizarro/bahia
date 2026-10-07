@@ -188,7 +188,7 @@ func TestProjectionAuditFactAbandonedDeliveryAllowsRepublish(t *testing.T) {
 	}
 }
 
-// TestObservationBurstProducesZeroAuditAndDeployProducesOne verifies B-16:
+// TestObservationBurstProducesZeroAuditAndDeployProducesOne verifies that
 // high-frequency observation/sync/state-changed/drift events produce zero
 // 4903 audit facts, while an operator-meaningful discrete mutation (runtime
 // deploy) produces exactly one.
@@ -220,7 +220,7 @@ func TestObservationBurstProducesZeroAuditAndDeployProducesOne(t *testing.T) {
 		}
 	}
 	if got := len(auditEvents(sink)); got != 0 {
-		t.Fatalf("audit facts after observation burst = %d, want 0 (B-16: observations are not audited)", got)
+		t.Fatalf("audit facts after observation burst = %d, want 0 (observations are not audited)", got)
 	}
 
 	// LLM observation/sync/drift events also produce zero audit facts.
@@ -237,7 +237,7 @@ func TestObservationBurstProducesZeroAuditAndDeployProducesOne(t *testing.T) {
 		}
 	}
 	if got := len(auditEvents(sink)); got != 0 {
-		t.Fatalf("audit facts after LLM observation burst = %d, want 0 (B-16)", got)
+		t.Fatalf("audit facts after LLM observation burst = %d, want 0", got)
 	}
 
 	// DNS sync events also produce zero audit facts.
@@ -252,7 +252,7 @@ func TestObservationBurstProducesZeroAuditAndDeployProducesOne(t *testing.T) {
 		}
 	}
 	if got := len(auditEvents(sink)); got != 0 {
-		t.Fatalf("audit facts after DNS sync burst = %d, want 0 (B-16)", got)
+		t.Fatalf("audit facts after DNS sync burst = %d, want 0", got)
 	}
 
 	// A runtime deploy (operator-meaningful mutation) produces exactly one.

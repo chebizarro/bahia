@@ -206,8 +206,8 @@ func (p *Publisher) newDelivery(ev nostr.Event, rounds int) *outboxDelivery {
 }
 
 // defaultLedger is where events this publisher admits are persisted (see
-// Publisher.admit). Since bahia-irsry.62 the local outbox is required for
-// redelivery-enabled publishers, so ledgerLocal is the normal case.
+// Publisher.admit). The local outbox is required for redelivery-enabled
+// publishers, so ledgerLocal is the normal case.
 func (p *Publisher) defaultLedger() deliveryLedger {
 	switch {
 	case p.localOutbox != nil:
@@ -682,9 +682,9 @@ func (p *Publisher) redeliverDue(ctx context.Context) (rateLimited bool) {
 // already tracking (left pending by a previous process or an inactive runner).
 // It reports whether the page was full, meaning more follow its cursor.
 //
-// Since bahia-irsry.62 the local outbox is a required dependency; this is
-// the only discovery path. Pre-upgrade pending PostgreSQL rows are moved to
-// the local outbox at startup by MigratePendingPostgresRows.
+// The local outbox is a required dependency; this is the only discovery
+// path. Pending rows in the PostgreSQL outbox table are moved to the local
+// outbox at startup by MigratePendingPostgresRows.
 func (p *Publisher) discoverPending(ctx context.Context) (bool, error) {
 	return p.discoverLocal(ctx)
 }
