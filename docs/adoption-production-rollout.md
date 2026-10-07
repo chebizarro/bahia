@@ -1,217 +1,109 @@
-# Adoption and Direct Runtime Production Rollout Runbook
+# Docker workload adoption
 
-Scope: production/staging rollout of signer-first adoption/import and direct-runtime operator workflows.
-Normative gate: [`adoption-live-network-verification.md`](adoption-live-network-verification.md)
-Execution checklist: [`adoption-signer-first-operator-checklist.md`](adoption-signer-first-operator-checklist.md)
+Bahia can scan existing Docker endpoints and import selected containers as
+services, environments, builds, artifacts and canonical adoption bindings. The
+operator surface is the signed `adoption/scan` and `adoption/import` intent path
+used by `bahia adopt`; there is no HTTP adoption route.
 
-This runbook now assumes signer-first operator execution over Nostr control-plane requests.
-The CLI uses relay transport; privileged HTTP routes, where still deployed, are not CLI fallback paths.
+## Enablement
 
-## Safety defaults
+Adoption is disabled by default. A daemon that enables it requires HTTP auth,
+a service signing key and at least one authorized operator pubkey:
 
-- Adoption and direct runtime actions are disabled unless explicitly enabled.
-- Signer-first operator execution is authorized by operator pubkeys and signed event verification.
-- Prefer server-managed `runtime.endpoints.<ref>` aliases. Raw `docker_host` request payloads are compatibility/break-glass only.
-- CLI defaults to signer-first operator transport for `bahia adopt ...` and `bahia services actions ...`.
-- Configure relays with `--relay` or `BAHIA_NOSTR_RELAYS`; CLI commands do not fall back to HTTP.
-- Scan and import responses redact sensitive environment variables and labels. Sensitive environment values are imported through Bahia secrets when secret storage/encryption is configured.
-- Compose-origin containers are direct-Docker takeover candidates; enable takeover only after operators accept that Bahia, not Compose, will drive restart/deploy/stop actions.
-- Signed imports must resolve one organization. Pass `--org <organization-uuid>` when target environments/the organization catalog do not make the choice unambiguous; Bahia rejects cross-org reuse.
-- Each imported service is bound to a deployment unit, and its initial state plus observation carry that unit identity.
-- Importing a same-name legacy service with no adopted-runtime identity is an explicit takeover. An already-adopted same-name service on a different target remains a hard conflict.
-
-## Enablement checklist
-
-1. Enable signer-first operator features and allowlists (use the same signer in the global and relevant scoped lists):
-
-   ```yaml
-   auth:
-     enabled: true
-
-   adoption:
-     enabled: true
-     allow_raw_docker_hosts: false
-     allow_compose_takeover: false
-     allowed_pubkeys: ["<operator-hex-pubkey>"]
-
-   direct_runtime_actions:
-     enabled: true
-     allowed_pubkeys: ["<operator-hex-pubkey>"]
-
-   nostr:
-     authorized_pubkeys: ["<operator-hex-pubkey>"]
-   ```
-
-   Notes:
-   - Each enabled surface requires a non-empty `allowed_pubkeys` list of 64-character hex keys at config load; whitespace is trimmed, case normalized, and duplicates removed.
-   - ContextVM requires membership in both `nostr.authorized_pubkeys` and the relevant scoped list. Neither list is a fallback for the other; empty lists deny all requests.
-   - Subject/email operator allowlists are compatibility-only and do not authorize signer-first requests. Subject/email-only configurations are rejected for enabled surfaces.
-
-2. Configure endpoint aliases; do not expose Docker credentials to clients:
-
-   ```yaml
-   runtime:
-     endpoints:
-       prod-docker:
-         docker_host: tcp://docker-prod.example.com:2376
-         ca_cert_file: /etc/bahia/docker/prod/ca.pem
-         client_cert_file: /etc/bahia/docker/prod/cert.pem
-         client_key_file: /etc/bahia/docker/prod/key.pem
-   ```
-
-3. Confirm signer-first discovery and topology evidence:
-   - ContextVM discovery (`11316`-`11320`) plus NIP-51 relay sets (`30002`) is captured for the release candidate
-   - relay URLs are available either via explicit `--relay`, `BAHIA_NOSTR_RELAYS`, or trusted ContextVM/NIP-51 discovery (`bahia-contextvm-v1` preferred, `bahia-browser-v1` fallback)
-   - if encrypted request/response web validation is in scope, verify ContextVM discovery plus NIP-51 relay sets advertise `nostr.browser_relays` / `nostr.contextvm_relays` and `features.encrypted_nostr_requests`
-   - if sidecar/web validation is in scope, verify `/relay` pathing and reachability
-
-4. Prepare signer/operator execution inputs:
-   - local signer key material is available via `--nsec`, `--privkey`, `BAHIA_NOSTR_NSEC`, or `BAHIA_NOSTR_PRIVATE_KEY`; or NIP-46 is configured with `--nostr-bunker-file` and `--nostr-client-key-file` (plus repeatable `--nostr-bunker-relay` when needed)
-   - operators know whether compatibility explicit relay configuration is approved for this rollout
-   - evidence capture includes request event IDs and correlated progress/terminal ContextVM `25910` response IDs, plus canonical observable IDs where emitted
-
-## Dry-run scan
-
-Run a signer-first scan before importing anything:
-
-```bash
-bahia --relay wss://relay.example/relay adopt scan --target prod-docker
+```yaml
+auth:
+  enabled: true
+nostr:
+  private_key: ${BAHIA_NOSTR_PRIVATE_KEY}
+adoption:
+  enabled: true
+  allowed_pubkeys:
+    - <64-hex-operator-pubkey>
+  allow_raw_docker_hosts: false
+  allow_compose_takeover: false
+runtime:
+  endpoints:
+    prod-docker:
+      docker_host: tcp://docker.example:2376
+      ca_cert_file: /run/secrets/docker-ca.pem
+      client_cert_file: /run/secrets/docker-cert.pem
+      client_key_file: /run/secrets/docker-key.pem
 ```
 
-Validate:
+`adoption.allowed_subjects` and `allowed_emails` do not authorize signed
+requests. Configuration fails when adoption is enabled without
+`auth.enabled`, a service key, or an `allowed_pubkeys` entry.
 
-- candidate count matches the expected running workloads;
-- every candidate has an image digest;
-- `redacted_environment_keys` / `redacted_label_keys` contain only key names, never values;
-- compose-origin warnings are understood before enabling `allow_compose_takeover`;
-- logs show the operator actor pubkey and endpoint alias, not raw secrets or certificate material;
-- CLI status appears on `stderr` only, while final result output remains clean on `stdout`.
+Prefer named `runtime.endpoints`. `--raw-target` is accepted only when
+`adoption.allow_raw_docker_hosts: true`; raw Docker connection material must
+not be placed in an intent or relay-visible event.
 
-## Import rollout
+## Scan
 
-1. Start with one non-critical Docker-origin workload.
-2. Import by explicit selection before using `--all`:
-
-   ```bash
-   bahia --relay wss://relay.example/relay adopt import --org <organization-uuid> --target prod-docker --select prod-docker/<container-id>=<name>
-   ```
-
-3. Confirm:
-
-   - service, environment, build, artifact, deployment unit, state, and runtime observation rows exist;
-   - service/environment organization IDs match `--org`, and state/observation rows reference the imported deployment unit;
-   - the request event ID and correlated terminal ContextVM `25910` response event ID are captured, along with any progress or canonical observable event IDs;
-   - metrics advanced: `bahia_adoption_imports_total`, success/failure counters, redaction counters;
-   - no raw sensitive env values are present in results or logs.
-
-4. Only then import additional workloads or use `--all` for a bounded target.
-
-## Direct runtime actions
-
-Direct runtime actions are intended only for imported direct-runtime workloads. Failed guardrails must fail closed and should not be bypassed.
-
-Use signer-first CLI actions after import validation:
+Sign with an authorized local key file or NIP-46 bunker, then request a bounded
+preview:
 
 ```bash
-bahia --relay wss://relay.example/relay services actions restart --service <service-id> --environment <env-id>
-bahia --relay wss://relay.example/relay services actions stop --service <service-id> --environment <env-id>
-bahia --relay wss://relay.example/relay services actions deploy --service <service-id> --environment <env-id> --artifact <artifact-id>
+bahia --relay wss://relay.example \
+  --service-pubkey <bahia-service-pubkey> \
+  --nostr-key-file /run/secrets/operator.nsec \
+  adopt scan \
+  --target prod=prod-docker \
+  --environment prod=production \
+  --limit 20
 ```
 
-Monitor:
+Use `--offset` for the next page. `--idempotency-key <uuidv7>` makes a scan
+safe to replay. The preview reports whether each container is adoptable and
+lists warnings; sensitive environment and label values are omitted and only
+their key names are reported.
 
-- the correlated ContextVM `25910` response plus canonical `30315` status, `4903` audit, and `30900` state events; legacy `6963`/`7962` are migration inventory only;
-- `bahia_runtime_actions_total` and duration metrics;
-- logs with `service_id`, `environment_id`, optional `artifact_id`, `target_name`, `endpoint_ref`, `result`, `request_id`, and request event id.
+Compose-owned containers are refused unless
+`adoption.allow_compose_takeover: true`. Enabling that option authorizes Bahia
+to manage the selected containers directly rather than their Compose project,
+so review the preview before import.
 
-## Raw-target compatibility mode
+## Import
 
-Raw Docker targets are privileged compatibility inputs; use server-managed endpoint references by default.
-
-- The CLI has no HTTP fallback mode.
-- Relay failures return an error or the documented intent exit code; they do not trigger HTTP.
-- `--raw-target` remains a privileged compatibility input and requires daemon `allow_raw_docker_hosts` approval.
-- Do not bypass signer-first terminal failures, authorization failures, or runtime guardrails.
-
-Example raw-target invocation (requires the daemon compatibility gate):
+Import explicit container IDs from the preview:
 
 ```bash
-bahia adopt scan --raw-target breakglass=tcp://127.0.0.1:2375
+bahia --relay wss://relay.example \
+  --service-pubkey <bahia-service-pubkey> \
+  --nostr-key-file /run/secrets/operator.nsec \
+  adopt import \
+  --org <organization-uuid> \
+  --target prod=prod-docker \
+  --environment prod=production \
+  --select prod/<container-id>=api \
+  --idempotency-key <uuidv7>
 ```
 
-## Rate limits and telemetry
+`--all` imports every adoptable candidate from the named targets; it is
+mutually exclusive with an empty selection only in the sense that one of
+`--all` or `--select` is required. Repeat `--select` for multiple containers.
 
-Dedicated operational rate limits remain separate from the generic write limiter:
+The daemon publishes canonical service/environment/build/artifact records and
+an `adoption-binding` record at
+`adoption:binding:<service-id>:<environment-id>`. A binding moves from
+`in_progress` to `complete` only after its canonical publications succeed. If
+a relay publication interrupts the request, repeat the same import with the
+same idempotency key; the service resumes from the binding rather than
+repeating completed work.
 
-- adoption scan: 5 requests/minute/IP;
-- adoption import: 10 requests/minute/IP;
-- direct runtime actions: 20 requests/minute/IP.
+## Verification
 
-Prometheus-style metrics include:
+1. Confirm the CLI receives an accepted `30315` intent status.
+2. REQ the service pubkey for `30900` topics `service-registry`,
+   `environment-registry`, `build-registry`, `artifact-registry` and
+   `adoption-binding`.
+3. Confirm the binding is `complete` and its fingerprints match the selected
+   runtime workload.
+4. Inspect `GET /ready`; an enabled adoption service contributes the
+   `adoption` check.
+5. Run a second scan. The imported workload must resolve to its existing
+   binding rather than appear as a new unbound candidate.
 
-- `bahia_adoption_scans_total{status=...}`;
-- `bahia_adoption_targets_scanned_total`;
-- `bahia_adoption_candidates_total`;
-- `bahia_adoption_redacted_keys_total`;
-- `bahia_adoption_imports_total{status=...}`;
-- `bahia_adoption_import_success_total` and `bahia_adoption_import_failure_total`;
-- `bahia_runtime_actions_total{key="action:status"}`;
-- scan/import/runtime action duration summaries.
-
-## Rollback / disable
-
-If adoption or direct-runtime execution causes unexpected behavior:
-
-1. Disable the execution surface and restart Bahia:
-
-   ```yaml
-   adoption:
-     enabled: false
-   direct_runtime_actions:
-     enabled: false
-   ```
-
-2. Retry signer-first operator requests and verify they fail closed.
-3. Stop issuing direct runtime actions. For compose-origin workloads, return to the Compose project and run the normal Compose deployment/restart flow from the original project directory.
-4. If a workload should no longer be Bahia-managed, remove or quarantine the imported service/environment state through the normal registry/admin path after exporting audit records.
-5. Keep endpoint aliases configured until rollback verification is complete so observations can still be inspected if needed.
-
-## Compatibility notes
-
-- HTTP privileged adoption/import/direct-runtime endpoints are no longer the primary rollout gate.
-- Bearer rejection (`401`) and any legacy NIP-98 execution checks are compatibility evidence only.
-- Canonical encrypted request/result terminology: `nostr.relays`, `nostr.browser_relays`, `features.encrypted_nostr_requests`.
-- Encrypted request/result wire marker is `encrypted=bahia-encrypted-v1`.
-- If a release requirement still depends on the legacy HTTP operator path, record that dependency explicitly in the signoff evidence.
-
-## Allowlist upgrade (bahia-kppzm)
-
-This security hardening deliberately breaks compatibility with configurations
-that enabled adoption or direct-runtime actions with only subjects/emails, blank pubkeys, or
-malformed pubkeys. Previously, subject/email-only configurations passed load
-validation and left the scoped ContextVM allowlist empty, admitting any signer
-that passed the transport-wide gate. A global allowlist alone is no longer
-sufficient for these methods.
-
-Before upgrading:
-1. Set each enabled surface's `allowed_pubkeys` to the operators' full 64-character
-   hex public keys (not npubs, subjects, or email addresses).
-2. Include those same signers in `nostr.authorized_pubkeys` for ContextVM transport
-   admission; a scoped key does not bypass the global gate.
-3. Keep `auth.enabled=true` and the service's `nostr.private_key` configured.
-   Disable the surface if no operator should have access.
-
-Enabled surfaces with missing/invalid scoped keys now fail configuration load
-with an actionable error rather than starting with unusable operator access.
-Disabled surfaces may keep empty lists. No allow-any escape hatch is provided.
-
-The committed defaults and Compose config keep these surfaces disabled, and the
-committed enabled operator rehearsal config already has valid scoped keys.
-Subject-only and malformed-key test fixtures relied on the old validation and
-have been corrected. Private deployment overrides must be checked before rollout.
-
-This follows the explicit-grant, empty-means-deny convention established by
-`bahia-zz8n` (reactor fallback removal, commit `9a5902c5`). The later transport
-hardening (`ca348cf1`) already denies an empty global list. Unlike the older
-unmerged `bahia-9sav5` patch, an empty transport list is not a disabled pre-filter;
-its proposed warning would misdescribe current behavior.
+A failed or incomplete import is not evidence of success. Preserve the intent
+ID and sanitized CLI output, correct the endpoint or relay failure, and replay
+the same request.

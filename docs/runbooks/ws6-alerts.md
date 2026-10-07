@@ -11,9 +11,9 @@ promtool test rules deploy/observability/bahia-alerts.test.yml
 Alertmanager-to-Nostr delivery terminates at the `alerting.Dispatcher` contract.
 Production must supply a Signet-backed publisher that emits a NIP-29 kind-9
 message to group `incidents`. Source tests use dry-run mode and never load a
-signing key or publish an event. Deploying the publisher, configuring the
-authenticated NIP-29 group, and routing Alertmanager webhooks are Track B
-operations and are not implied by these source fixtures.
+signing key or publish an event. Deploying the publisher, configuring the authenticated NIP-29 group, and
+routing Alertmanager webhooks are production operations and are not implied by
+these source fixtures.
 
 ## Detection and response matrix
 
@@ -61,11 +61,11 @@ docker run --rm \
 go test ./internal/adapters/alerting -run TestDispatcherDryRunRendersWithoutPublishing
 ```
 
-The commands above are Track A source verification. Track B acceptance is
+The commands above verify source fixtures only. Deployment acceptance is
 separate and requires Prometheus to scrape the deployed Bahia `/metrics`,
 Alertmanager to load the checked-in rules, and a Signet-backed adapter to
 deliver a test alert to the authenticated NIP-29 `incidents` group. A successful
-Track A fixture is not evidence that production delivery is configured.
+fixture is not evidence that production delivery is configured.
 
 ## BahiaWorkerHeartbeatStale
 

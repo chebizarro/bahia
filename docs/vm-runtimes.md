@@ -1,273 +1,118 @@
-# VM Runtimes: Operating vm-qemu and vm-firecracker Environments
+# VM runtimes
 
-## Resource-managed VMs versus the legacy service runtime
+Bahia manages persistent virtual machines through explicit virtualization
+resources and also supports `vm-qemu` and `vm-firecracker` service runtime
+types. Both paths share the libvirt/Firecracker provider machinery, immutable
+image releases and signed operation records.
 
-The configuration/lifecycle descriptions below cover the existing service-runtime
-adapter. The typed persistent resource API is a separate admission path over the
-shared provider machinery, not a call to legacy replacement `Deploy`.
-See [Virtual machines](user-guide/features/virtual-machines.md) for the query,
-ContextVM and public observability contract. Its C/D mutation adapters must be
-wired before those intents become available.
+## Resource model
 
-Ownership is verified from resource identity, never `bahia-` names. Persistent
-VMs, Loom Firecracker job microVMs and Loom QEMU job domains are explicit separate
-classes. Persistent observations keep runtime state, availability, drift and guest
-health separate; hypervisor-running alone does not prove a healthy guest agent.
-Connection metadata is public-safe; credentials, bootstrap values, console
-contents and provider evidence are not published. Execution-plane probes do not
-advertise Windows QEMU job capability.
+Virtualization resources are tenant-scoped:
 
+- host;
+- VM image;
+- persistent VM deployment;
+- execution plane;
+- checkpoint;
+- export;
+- operation.
 
-Bahia can deploy and monitor long-lived VM instances as environment services with
-the same lifecycle, observation, drift, and log surfaces containers get. Two
-runtime types are available:
+Current state is published as kind-`30900` virtualization topics and indexed in
+PostgreSQL when available. Authenticated HTTP GET routes expose projections;
+mutations use the registered virtualization control methods:
 
-| Runtime type | Mechanism | Guests |
+`virtualization-host/list|get`, `vm-image/list|get|register`,
+`persistent-vm/list|get|create|register-adoption|update|operate`,
+`execution-plane/list|get|create|update|reconcile`,
+`vm-checkpoint/list|get`, `vm-export/list|get`, and
+`vm-operation/get|approve|approve-plan|cancel`.
+
+Every mutation is tied to the requesting principal, organization, resource
+generation and idempotency key. Provider operations record an operation ID and
+verify observed state before completion.
+
+## Providers
+
+| Runtime/provider | Host requirements | Image format |
 |---|---|---|
-| `vm-qemu` | Persistent QEMU/KVM domains via libvirt (`virsh define` + `start`) | Linux and Windows (UEFI) |
-| `vm-firecracker` | Long-lived supervised Firecracker microVMs | Linux microVMs |
+| `vm-qemu` / `libvirt` | libvirt, `virsh`, `qemu-img`; `qemu:///system` or `qemu:///session` | `qcow2` release with verified digest |
+| `vm-firecracker` / `firecracker` | Linux, KVM, Firecracker binary, instance/image state directories | `firecracker-rootfs` release with verified kernel and rootfs digests |
 
-These map to the fleet's canonical isolation mechanisms `vm/qemu-kvm` and
-`vm/firecracker`.
+Firecracker persistent networking is isolated and uses vsock/console. Libvirt
+builds a per-instance qcow2 overlay over the verified base image and stores a
+Bahia ownership marker in domain metadata.
 
-**V1 scope.** VMs run on the host where bahia executes (local `virsh`, local
-state dir). Instances are vsock+console only — no network interfaces are
-attached, and deploy options that imply container semantics (ports, volumes,
-env vars, command overrides, restart policies, `pull_always`) are rejected
-explicitly. Image releases are pre-provisioned on the host out-of-band;
-bahia never pulls VM images.
+## Configuration
 
-## Host prerequisites
-
-### vm-qemu
-
-- Linux host with KVM (`/dev/kvm`), libvirt daemon, `virsh`, and `qemu-img`.
-- OVMF firmware for UEFI/Windows guests (default firmware code path:
-  `/usr/share/OVMF/OVMF_CODE.fd`).
-- `vhost_vsock` kernel module loaded (guest agent transport).
-- The bahia user must be able to talk to the configured libvirt URI
-  (default `qemu:///system`) and to create AF_VSOCK sockets.
-
-### vm-firecracker
-
-- Linux host with KVM and the `firecracker` binary on `PATH`.
-- No jailer/network setup is required in v1; each instance gets a
-  hybrid-vsock unix socket under its state directory.
-
-## Configuring an environment
-
-VM runtimes are selected per environment (or as the default target) in the
-`runtime:` block of `config.yaml`. All `vm.*` fields are only valid for the
-`vm-qemu` and `vm-firecracker` types; setting them on any other type is a
-configuration error, as is `vm.libvirt_uri` on `vm-firecracker`.
-
-### vm-qemu environment
+The resource-managed persistent provider is opt-in:
 
 ```yaml
-runtime:
-  environments:
-    windows-lab:
-      type: vm-qemu
-      vm:
-        state_dir: /var/lib/bahia/vm/qemu          # per-instance state (overlays, nvram, console logs, metadata)
-        image_root: /var/lib/bahia/vm-images       # release channels live under here
-        libvirt_uri: qemu:///system                # optional; this is the default
-        vsock_guest_port: 5000                     # guest-agent port; omit to disable guest probing
-        vcpus: 4                                   # default instance size
-        memory_mb: 8192
+virtualization:
+  operator_pubkeys:
+    - <64-hex-operator-pubkey>
+  reconcile_pubkey: <64-hex-reconciler-pubkey>
+  hosts:
+    - org_id: <organization-uuid>
+      host_id: <host-uuid>
+      trust_policy_ref: <policy-uuid>
+      trusted_signers: [<64-hex>]
+      networks: []
+      plane_secret_refs: []
+  persistent_vm:
+    enabled: true
+    state_dir: /var/lib/bahia/persistent-vms
+    image_root: /var/lib/bahia/vm-images
+    libvirt_uri: qemu:///system
+    event_socket: /run/libvirt/libvirt-sock
+    firecracker_binary: /usr/bin/firecracker
 ```
 
-### vm-firecracker environment
+Host and resource UUIDs are explicit; Bahia does not infer them from domain or
+container names. Runtime settings for service environments use `runtime.vm`
+and are valid only for `vm-qemu` or `vm-firecracker`.
 
-```yaml
-runtime:
-  environments:
-    microvms:
-      type: vm-firecracker
-      vm:
-        state_dir: /var/lib/bahia/vm/firecracker
-        image_root: /var/lib/bahia/vm-images
-        vsock_guest_port: 5000
-        vcpus: 2
-        memory_mb: 2048
-```
+## Image releases
 
-`state_dir` and `image_root` are required; `vcpus`/`memory_mb` default to
-2/2048. Instances are named `bahia-<envID-short>-<serviceName>` (this is the
-libvirt domain name / firecracker instance directory name).
+A VM image release is immutable and digest-pinned. `qcow2` manifests identify
+the disk; `firecracker-rootfs` manifests identify both kernel and rootfs and
+carry SHA-256 values for each. Bahia verifies the manifest and component
+digests before defining an instance.
 
-After a bahia restart, the firecracker runtime reconciles its on-disk
-instance registry automatically: still-running VMMs are adopted, dead ones
-are reaped so their instances read as cleanly stopped. Persistent libvirt
-domains survive restarts natively.
+Publish release bytes to the configured artifact storage, register the image
+resource under the tenant, and reference its resource ID/generation from the
+persistent VM. Do not point desired state at an unversioned mutable path.
 
-## VM image releases and artifact publishing
+## Lifecycle and safety
 
-VM artifacts keep bahia's normal artifact identity (`ImageRepo` +
-`ImageDigest`) but point at a **VM image release manifest** instead of an
-OCI image:
+Persistent operations include create/define, start, stop, restart, update,
+checkpoint, restore/transfer, export and delete according to provider support.
+Destructive and high-risk operations require the configured approval tier.
 
-- **`ImageRepo`** is the release *channel* path relative to the host's
-  `image_root` (e.g. `cascadia/base-linux`).
-- **`ImageDigest`** is `sha256:<hex>` over the release's canonical
-  `manifest.json` bytes.
+Bahia refuses ownership mismatches, stale generations, invalid provider/image
+pairs and unconfirmed provider outcomes. An `unconfirmed` result is not
+success; reconcile observation before retrying a destructive operation.
 
-A channel directory contains hash-pinned release directories plus an atomic
-`current` symlink:
+Adoption (`persistent-vm/register-adoption`) records a measured existing
+instance without claiming a different owner's resource. The libvirt and
+Firecracker adapters verify provider identifiers, image/config evidence and
+Bahia ownership markers before accepting later mutations.
 
-```
-<image_root>/cascadia/base-linux/
-├── current -> fc-x86_64-20260808-abcdef
-└── fc-x86_64-20260808-abcdef/
-    ├── manifest.json
-    ├── kernel            # firecracker-rootfs format
-    └── rootfs.ext4
-```
+Deletion can require an export and digest verification before provider
+teardown. Preserve operation, checkpoint and export records until the
+corresponding canonical events and provider observations agree.
 
-At deploy time bahia resolves `<image_root>/<repo>/current` (following the
-symlink at most once), recomputes the manifest hash, and **fails explicitly**
-when it does not match the artifact's pinned digest, when the manifest
-format does not match the runtime type, or when any file hash in
-`manifest.sha256` does not verify. Tag-only artifact references are
-rejected — VM deploys require digest pinning.
+## Observation
 
-### Publishing flow
+Observations report availability, power, guest health, drift, ownership and
+optional measured resource pressure. Metrics label only bounded provider and
+lifecycle values. Guest logs/console paths remain provider-specific and must
+not be copied into public relay content.
 
-1. **Build** a release with the cascadia-go packaging pipeline
-   (`packaging/firecracker/` — `make all ARCH=x86_64` builds kernel, rootfs,
-   guest agent, and `manifest.json`), or hand-build a qcow2 release
-   (below).
-2. **Install** it onto the VM host with the atomic installer, using the
-   channel directory as the install root:
+Troubleshoot in this order:
 
-   ```sh
-   packaging/firecracker/scripts/install-image.sh \
-     out/releases/<image_id> /var/lib/bahia/vm-images/cascadia/base-linux
-   ```
-
-   The installer re-verifies every hash, copies into
-   `<channel>/<image_id>/`, and atomically repoints `current`.
-3. **Compute the artifact digest** from the installed manifest:
-
-   ```sh
-   printf 'sha256:%s\n' "$(sha256sum /var/lib/bahia/vm-images/cascadia/base-linux/current/manifest.json | cut -d' ' -f1)"
-   ```
-4. **Register the artifact** in bahia with
-   `image_repo = cascadia/base-linux` and the digest from step 3 as
-   `image_digest`, then attach it to the service intent as usual. The
-   observed image digest reported by Observe is this same manifest hash, so
-   drift detection works unchanged.
-
-Rolling a channel forward is: install the new release (repoints `current`),
-publish a new artifact with the new manifest digest, deploy. A deploy
-pinned to an older digest fails loudly rather than silently booting the
-wrong release.
-
-### Manifest formats
-
-`manifest.json` carries `image_id`, `arch`, `format`, `sha256.*`, and
-`agent_protocol_version`:
-
-- **`firecracker-rootfs`** (vm-firecracker): `kernel` + `rootfs.ext4`,
-  hashes under `sha256.kernel` / `sha256.rootfs`. The base rootfs is cloned
-  per instance.
-- **`qcow2`** (vm-qemu): `disk.qcow2` (hash `sha256.disk`) and optionally
-  `uefi-vars.fd` (hash `sha256.uefi_vars`). Each instance boots a qcow2
-  overlay backed by the read-only base disk, so the release is never
-  written to.
-
-### Windows image preparation (vm-qemu, UEFI)
-
-Windows guests boot UEFI. Prepare a golden image once, then package it:
-
-1. Install Windows into a qcow2 disk under OVMF (e.g. with virt-install or
-   virt-manager: OVMF_CODE + writable OVMF_VARS copy, virtio disk drivers
-   loaded during setup). Generalize with `sysprep` if instances should not
-   share machine identity.
-2. Keep the **UEFI vars file** from that installation — it holds the boot
-   entries. This becomes the release's `uefi-vars.fd` template; every
-   deployed instance gets its own private copy of it (per-instance NVRAM).
-3. Assemble the release directory:
-
-   ```
-   disk.qcow2      # the golden Windows disk
-   uefi-vars.fd    # NVRAM/vars template from the install
-   manifest.json
-   ```
-
-   with a manifest like:
-
-   ```json
-   {
-     "image_id": "win2022-20260808",
-     "arch": "x86_64",
-     "format": "qcow2",
-     "agent_protocol_version": 1,
-     "sha256": {
-       "disk": "<sha256 of disk.qcow2>",
-       "uefi_vars": "<sha256 of uefi-vars.fd>"
-     }
-   }
-   ```
-4. Install into a channel with `install-image.sh` and publish as above.
-
-When a release ships `uefi_vars`, bahia defines the domain with
-`FirmwareCodePath` as the read-only pflash loader and a per-instance copy
-of the vars template as NVRAM. Releases without `uefi_vars` boot BIOS.
-
-**Windows guest agent:** until the guest agent is cross-compiled for
-Windows, declare `agent_protocol_version: 1` (or omit it). Bahia then
-treats hypervisor-running as sufficient for `healthy` instead of demanding
-a guest-agent ping that can never succeed.
-
-## Observation, health, and guest metrics
-
-`Observe` composes two sources per instance:
-
-1. **Hypervisor state** (`virsh domstate` / VMM process liveness) decides
-   running vs stopped: `running → healthy`, `shut off/absent → stopped`,
-   `paused/crashed → unhealthy`.
-2. **Guest agent** (images declaring `agent_protocol_version >= 2`, with
-   `vsock_guest_port` configured): bahia dials the guest over vsock and
-   runs the protocol-v2 probe — hello handshake, `ping`/`pong`, and a
-   metrics request. A running instance whose agent answers the ping is
-   `healthy` and its observation metadata gains a `guest_metrics` map
-   (`cpu_percent`, `memory_used_bytes`, `memory_total_bytes`,
-   `disk_used_bytes`, `disk_total_bytes`, `uptime_seconds`). A running
-   instance whose agent is unreachable degrades to `unhealthy`, with the
-   probe error recorded under `guest_agent_error`.
-
-Guest probing degrades gracefully: images without a v2 agent, runtimes
-without `vsock_guest_port`, and probe failures never make Observe itself
-fail — the hypervisor-state observation is always recorded.
-
-For the probe to work, guest images must run `cascadia-guest-agent
---service` listening on the configured vsock port (the cascadia-go
-firecracker rootfs pipeline wires this in).
-
-## Logs
-
-`StreamLogs` tails the instance's serial console log (libvirt serial/console
-file, firecracker console log) with the same semantics as the container
-collectors: `tail` bounds historical lines (default 100), `follow` streams
-appended lines until the client disconnects, and per-line timestamps are
-parsed when the guest prefixes lines with RFC3339 timestamps (falling back
-to read time). Follow mode survives console log rotation/truncation. Live
-logs are served over the same SSE endpoint as containers:
-
-```
-GET /services/{id}/environments/{envId}/logs?tail=200&follow=true
-```
-
-Guest-agent-based structured log streaming is out of scope for v1.
-
-## Lifecycle
-
-`Restart` and `Stop` request a graceful (ACPI) shutdown and wait, bounded
-by the request context, before reporting success; `Undeploy` force-stops,
-removes the hypervisor definition (including per-instance NVRAM), and
-deletes the instance state directory. Redeploying a service replaces its
-existing instance from the freshly resolved release. This legacy path destroys
-the old instance before replacement; it is not an atomic handover and must not
-be used for typed persistent-resource updates. Typed lifecycle mutations go
-through generation checks, service-owned approvals and exact provider identity.
+1. resource generation and tenant authorization;
+2. host enabled state, capacity observation freshness and trust policy;
+3. image manifest/component digests;
+4. provider socket/binary and storage permissions;
+5. operation record, provider correlation ID and latest observation;
+6. canonical `30900` projection and `/ready` subsystem checks.

@@ -1,7 +1,5 @@
 # SoulFactory Runtime Control Contract
 
-> Source plan: [`docs/plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md`](plans/soulfactory-nostr-agent-lifecycle-2026-05-14.md)
-
 This document defines the shared `soulfactory.*` runtime control contract for the Bahia-owned OpenClaw sidecar/control-driver path and Metiq Go implementations. It is the schema source for bridge work and tests; implementation must not fork field names or error shapes by runtime.
 
 ## Event kinds
@@ -12,7 +10,7 @@ This document defines the shared `soulfactory.*` runtime control contract for th
 - `38386` — runtime control result, signed by the target runtime key.
 - `30900` / `4903` — canonical provisioning state/audit projections emitted for ContextVM-originated provisioning progress and results.
 
-Bahia-facing UX remains on `31952` drafts, `5950` provisioning requests, `1950` lifecycle action requests, `6950` progress, `7950` terminal results, and `31951` soul read models. Runtime completion is translated back to `6950/7950`; legacy `KindSoulAction + 1` results are migration aliases only.
+Bahia-facing UX uses `31952` drafts, `5950` provisioning requests, `1950` lifecycle action requests, `6950` progress, `7950` terminal results, and `31951` soul read models. Runtime completion is translated back to `6950/7950`; `KindSoulAction + 1` results are compatibility aliases only.
 
 ## Required `38384` tags
 
@@ -94,7 +92,7 @@ Required params: `reason` and optional `until` timestamp.
 
 ### `soulfactory.resume`
 
-Resumes a previously suspended managed agent.
+Resumes a suspended managed agent.
 
 Required params: `reason`; optional `expected_state` may be used for optimistic validation.
 

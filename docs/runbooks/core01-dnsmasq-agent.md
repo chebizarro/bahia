@@ -51,7 +51,7 @@ ssh core-01 install -m 755 /tmp/bahia-dns-agent-linux-amd64 /usr/local/bin/bahia
 |---|---|---|
 | amd64 | `linux/amd64`, `CGO_ENABLED=0` static | Supported |
 | arm64 | `linux/arm64`, `CGO_ENABLED=0` static | Supported |
-| mips (32-bit softfloat) | `linux/mips` | **Not currently buildable** — `modernc.org/sqlite` libc has no 32-bit MIPS port; tracked as beads issue `bahia-1m1ef` |
+| mips (32-bit softfloat) | `linux/mips` | **Not currently buildable** — `modernc.org/sqlite` libc has no 32-bit MIPS port |
 
 ## 2. Generate the agent keypair — [operator]
 

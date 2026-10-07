@@ -1,558 +1,197 @@
-# Deployment Guide
+# Deployment guide
 
-This guide covers how to run Bahia in different environments.
+Bahia ships three primary services:
 
-## Prerequisites
+- `bahia-server`: daemon, HTTP probes, MCP and OCI/API routes;
+- `bahia-relay`: relay sidecar with bbolt storage;
+- `web`: static SvelteKit application served by nginx.
 
-- Go 1.24+
-- PostgreSQL 16+
-- Docker, Podman, or Kubernetes (for runtime observation)
+PostgreSQL is optional derived-index storage. Blossom, OCI, Harbor, Hive-CI,
+DNS, Soul Factory and runtime integrations are enabled independently.
 
-## Quick Start with Docker Compose
+## Local Docker Compose
+
+Requirements: Docker Engine with Compose, a 64-hex or `nsec` service key, and
+the host Docker socket group ID.
 
 ```bash
-# Clone and start
-cd bahia
+export BAHIA_NOSTR_PRIVATE_KEY=<service-private-key>
+export BAHIA_NOSTR_AUTHORIZED_PUBKEYS=<comma-separated-operator-pubkeys>
+export PUBLIC_BAHIA_SERVICE_PUBKEYS=<service-pubkey-hex>
+export DOCKER_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock)
 docker compose up --build
-
-# The API is available at http://localhost:8080
-curl http://localhost:8080/health
 ```
 
-## Manual Setup
+The stack exposes:
 
-### 1. Database
+| Service | Address | Check |
+|---|---|---|
+| Web | `http://localhost:3000` | loads the runtime bootstrap seed |
+| Daemon | `http://localhost:8080` | `/health` liveness, `/ready` readiness |
+| Relay | `ws://localhost:3334/relay` | NIP-11 at the same HTTP URL |
+| PostgreSQL | `localhost:5432` | `pg_isready` |
+
+Both Go services mount `config.compose.yaml`. The daemon also mounts the host
+Docker socket and joins `DOCKER_SOCKET_GID`; using a group name would resolve
+against the image's group database instead of the host socket owner.
+
+Container health probes liveness only. Use `/ready` for traffic admission and
+operator gates so an unavailable signer or relay degrades readiness without
+restarting a live process.
+
+## Configuration loading
+
+`config.Load` starts with code defaults, reads an optional YAML file, then
+loads `BAHIA_` environment variables. A single underscore separates the
+section from its field (`BAHIA_DB_SSLMODE` → `db.sslmode`); use double
+underscores for nested maps (`BAHIA_RUNTIME__ENDPOINTS__prod__DOCKER_HOST`).
+
+Important defaults:
+
+| Key | Default |
+|---|---|
+| `mode` | `full` |
+| `server.host`, `server.port` | `127.0.0.1`, `8080` |
+| `db.host`, `db.port`, `db.user`, `db.name` | `localhost`, `5432`, `bahia`, `bahia` |
+| `db.password`, `db.sslmode` | empty, `require` |
+| `nostr.publish_enabled`, `publish_quorum` | `true`, `1` |
+| `nostr.closed_retry_budget` | `5` |
+| `nostr.relay_auth_unavailable` | `exclude_and_fail` |
+| `nostr.relay_quorum` | full `2`, degraded `1`, emergency `1` |
+| `nostr.sidecar.enabled` | `false` |
+| `nostr.sidecar.read_auth_mode` | `enforce` (also for empty/unknown values) |
+| `nostr.sidecar.event_retention` | `0` (durable regular events) |
+| `nostr.sidecar.request_retention` | `24h` |
+| `reconcile.enabled`, `reconcile.interval` | `true`, `60s` |
+| `runtime.type`, `runtime.docker_host` | `docker`, `unix:///var/run/docker.sock` |
+| `auth.enabled`, `adoption.enabled`, `direct_runtime_actions.enabled` | `false` |
+| `cors.allowed_origins` | empty |
+| `oci.enabled`, `telemetry.enabled`, `soul_factory.enabled` | `false` |
+
+The full schema and validation rules are in `internal/config/config.go`.
+`config.yaml` is a compact example and `.env.example` contains local Compose
+overrides.
+
+Outside `dev_mode`, a wildcard HTTP bind requires `auth.enabled`, the bundled
+`bahia` database password is rejected, database TLS must be `require`,
+`verify-ca` or `verify-full`, and non-loopback WebSocket endpoints must use
+`wss`. Keep private keys and tokens in the deployment secret system rather
+than YAML.
+
+## Running binaries
 
 ```bash
-# Create the database
-createdb bahia
-
-# Migrations run automatically on server start
-```
-
-### 2. Configuration
-
-Copy and edit the config file:
-
-```bash
-cp config.yaml config.local.yaml
-# Edit config.local.yaml with your settings
-```
-
-Or use environment variables:
-
-```bash
-export BAHIA_DB_HOST=localhost
-export BAHIA_DB_PORT=5432
-export BAHIA_DB_USER=bahia
-export BAHIA_DB_PASSWORD=bahia
-export BAHIA_DB_NAME=bahia
-```
-
-### 3. Build and Run
-
-```bash
-# Build
 make build
-
-# Run server
-./bin/bahia-server -config config.local.yaml
-
-# Or with make
-make run-dev
+./bin/bahia-relay --config /etc/bahia/config.yaml
+./bin/bahia-server -config /etc/bahia/config.yaml
+./bin/bahia --help
 ```
 
-### 4. CLI
+The server listens even when PostgreSQL is unavailable. Relay-backed
+services, ContextVM handling, discovery, health/readiness and DB-less payment
+reads can operate; `/mcp`, `/v2/*` and repository-backed HTTP routes are
+dependency-gated. The `database-recovery` runner reconnects and installs
+repository-backed services when PostgreSQL returns.
 
-```bash
-# Build CLI
-make build-cli
+## Relay topology
 
-# List services
-./bin/bahia services list
+Configure each purpose explicitly:
 
-# Deployments are signer-first Nostr operations.
-# Publish a ContextVM service/deploy request (kind 25910, wrapped with 1059/21059 when encrypted) and subscribe for canonical observables.
-# Legacy REST-backed deploy CLI paths are deprecated until they publish signed events directly.
+```yaml
+nostr:
+  private_key: <secret>
+  authorized_pubkeys: [<operator-pubkey>]
+  service_relays: [wss://relay.example]
+  browser_relays: [wss://relay.example]
+  contextvm_relays: [wss://relay.example]
+  sidecar:
+    enabled: true
+    listen_addr: 127.0.0.1:3334
+    public_url: wss://bahia.example/relay
+    backend_url: ws://127.0.0.1:3334/relay
+    read_auth_mode: enforce
 ```
 
-## Production Deployment
+`service_relays` is the daemon publication/backfill set. When it is empty,
+`nostr.relays` supplies that list. Browser and ContextVM sets are advertised
+by discovery; the sidecar URL is added to the ContextVM policy when enabled.
+See [control planes](control-planes.md) and the
+[relay sidecar reference](relay-sidecar.md).
 
-### Docker
+## Runtime targets
 
-```bash
-# Build image
-make docker
-
-# Run
-docker run -p 8080:8080 \
-  -e BAHIA_DB_HOST=db.example.com \
-  -e BAHIA_DB_PASSWORD=secret \
-  bahia:latest
-```
-
-Backend, relay, CLI, bridge, sidecar, and web artifacts are stamped with SemVer component versions. The backend Dockerfile accepts `VERSION_BASE` (default `0.1.0`), `GIT_COMMIT` (default `dev`), and optional full `VERSION` build args; Compose passes the same defaults to the backend and relay images. The web Dockerfile accepts `PUBLIC_BAHIA_WEB_BASE_VERSION`, `PUBLIC_BAHIA_GIT_COMMIT`, and optional `PUBLIC_BAHIA_WEB_VERSION`. Release automation should pass the same commit hash to both backend and web builds so Settings displays matching `0.1.0-<commit-hash>` provenance.
-
-### Environment Variables
-
-See `.env.example` for all available configuration options.
-
-Nested runtime target settings use double underscores in environment variables:
-
-```bash
-export BAHIA_RUNTIME__DEFAULT__TYPE=compose
-export BAHIA_RUNTIME__DEFAULT__EXECUTION_MODE=cli
-export BAHIA_RUNTIME__DEFAULT__COMPOSE_DIR=/srv/bahia/compose/default
-export BAHIA_RUNTIME__DEFAULT__BAHIA_OWNED=true
-export BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR=/srv/bahia/compose/production
-export BAHIA_RUNTIME__ENVIRONMENTS__production__BAHIA_OWNED=false
-export BAHIA_RUNTIME__ENVIRONMENTS__production__ENDPOINT_REF=prod-docker
-export BAHIA_RUNTIME__ENDPOINTS__prod-docker__DOCKER_HOST=tcp://docker-prod.example.com:2376
-export BAHIA_RUNTIME__ENDPOINTS__prod-docker__CA_CERT_FILE=/etc/bahia/docker/ca.pem
-export BAHIA_RUNTIME__ENDPOINTS__prod-docker__CLIENT_CERT_FILE=/etc/bahia/docker/cert.pem
-export BAHIA_RUNTIME__ENDPOINTS__prod-docker__CLIENT_KEY_FILE=/etc/bahia/docker/key.pem
-```
-
-## Runtime Targeting
-
-Bahia supports a process-wide runtime default plus per-environment runtime targets:
+Use named endpoints so signed intents carry an opaque `endpoint_ref`, not a
+Docker URL or TLS material:
 
 ```yaml
 runtime:
-  # Legacy flat keys are still accepted as fallback defaults.
-  type: docker
-  docker_host: unix:///var/run/docker.sock
-
-  default:
-    type: compose
-    # Compose control mode: "cli" (compose CLI compatibility) or "sdk"
-    # (embedded Compose v5 Go SDK, in-process over the Engine API).
-    execution_mode: cli
-    docker_host: unix:///var/run/docker.sock
-    compose_dir: /srv/bahia/compose/default
-    bahia_owned: true
-
   endpoints:
     prod-docker:
-      docker_host: tcp://docker-prod.example.com:2376
-      ca_cert_file: /etc/bahia/docker/ca.pem
-      client_cert_file: /etc/bahia/docker/cert.pem
-      client_key_file: /etc/bahia/docker/key.pem
-      # Compatibility only; prefer verified TLS for live endpoints.
-      insecure_skip_verify: false
-
+      docker_host: tcp://docker.example:2376
+      ca_cert_file: /run/secrets/docker-ca.pem
+      client_cert_file: /run/secrets/docker-cert.pem
+      client_key_file: /run/secrets/docker-key.pem
   environments:
-    staging:
-      compose_dir: /srv/bahia/compose/staging
-      # false records that the operator has not approved authoritative generation.
-      # A valid .bahia/render-state.json marker can still prove Bahia ownership.
-      bahia_owned: false
     production:
-      endpoint_ref: prod-docker
       compose_dir: /srv/bahia/compose/production
-      bahia_owned: false
+      bahia_owned: true
+      docker_host: unix:///var/run/docker.sock
 ```
 
-Resolution order is: legacy flat `runtime.*`, then `runtime.default.*`, then `runtime.environments.<environment-name>.*`, then the persisted `Environment.runtime_config` keys (`type`, `endpoint_ref`, `docker_host`, `podman_host`, `compose_dir`, `bahia_owned`, `kube_context`, `kube_namespace`, `kube_config`). When `endpoint_ref` is present, Bahia resolves the concrete Docker host and TLS material from server-managed `runtime.endpoints` and does not need callers or imported environments to carry raw Docker credentials. A service's `runtime_type` remains authoritative for whether Bahia uses Docker, Compose, Kubernetes, or Podman; environment-specific `type` overrides are rejected if they conflict with the service.
+Docker, Compose, Kubernetes and Podman runtimes are selected from the service
+and environment desired state. Bahia-owned Compose projects render under the
+configured `compose_dir`; generated environment files can contain resolved
+secrets and must inherit the same storage protection as the daemon's secret
+inputs. Remote Docker endpoints should use mutual TLS.
 
-Docker API access accepts individual CA/client certificate file paths. Docker Compose uses the Docker CLI `DOCKER_CERT_PATH` convention, so configured Compose endpoint certificates must live in one directory with Docker's standard names (`ca.pem`, `cert.pem`, `key.pem`).
+Virtual-machine runtimes are configured separately under `virtualization`;
+see [VM runtimes](vm-runtimes.md).
 
-### Runtime execution mode
+## Built-in OCI registry
 
-Runtime apply results report `execution_mode`:
+Set `oci.enabled: true` only with PostgreSQL and Blossom available. The daemon
+mounts the distribution API at `/v2`, stores manifests/tags in PostgreSQL and
+blobs in Blossom, and authenticates with NIP-98, configured service accounts,
+or anonymous pull CIDRs. See the exact route behavior in the
+[HTTP reference](api.md).
 
-- `engine_api`: Docker and Podman control clients mutate runtime resources directly through the Docker-compatible Engine API.
-- `cli`: Compose control executes through the configured `docker compose`/`docker-compose` CLI compatibility path.
-- `sdk`: Compose desired-state apply executes in-process through the embedded Docker Compose v5 Go SDK (`github.com/docker/compose/v5`), talking to the Docker Engine API directly with the same semantics as the CLI path (`config -q`, `up -d --remove-orphans`, `--pull`, `--no-deps`). Scope: `sdk` currently governs desired-state apply (validate/up). Observation (`compose ps`) and the legacy per-service deploy path still execute through the compose CLI, so the compose CLI must remain available on the host for those operations.
+## Edge deployment workflow
 
-Compose control mode is not implicit. Any Docker Compose runtime target must set `execution_mode: cli` or `execution_mode: sdk` (or `BAHIA_RUNTIME__...__EXECUTION_MODE=cli|sdk`). Docker and Podman use `engine_api`. Podman Compose targets support only `execution_mode: cli`, because `podman-compose` is a separate implementation the embedded SDK does not drive.
+`.github/workflows/deploy-edge.yml` is a manually dispatched deployment on a
+runner labelled `self-hosted`, `edge-01`, `docker`. Required input
+`release_revision` selects the full commit. Optional inputs set release-tree
+retention, image retention and the operations-widget publisher allowlist.
 
-The `sdk` mode uses the endpoint's Docker host and TLS material directly (individual `ca_cert_file`/`client_cert_file`/`client_key_file` paths); it does not depend on the `DOCKER_CERT_PATH` directory convention required by the CLI path.
+The workflow:
 
-In desired-state apply, Compose business logic remains above the execution transport (CLI or SDK). Bahia selects the target deployment unit, renders the unit-owned full Compose project into that unit's `compose_dir`, enforces the Compose ownership gate for that directory before writing, validates the staged render through the Compose executor control seam, and then applies the full project with `up -d --remove-orphans`. The desired-state path does not use per-service image environment substitution, service-scoped `up`, or unconditional `--force-recreate`.
+1. checks out the exact revision;
+2. validates the runner, Compose file, runtime bootstrap seed and image policy;
+3. builds SHA-tagged daemon and web images locally;
+4. stages the release tree under `/srv/data/bahia-controlplane/releases`;
+5. updates the host Compose file through `scripts/deploy_edge_compose_update.py`;
+6. applies the stack under the relay-policy gate;
+7. waits for the daemon readiness URL;
+8. restores the saved Compose file and safe images if the gated apply fails;
+9. prunes only release trees, backups and Bahia-tagged images outside the
+   configured retention windows.
 
-Compose ownership is recordable per runtime target with `bahia_owned`. Set `bahia_owned: true` only after an operator has confirmed the directory is dedicated to Bahia authoritative generation. `bahia_owned: false` or an unset value does not grant ownership; Bahia will still allow the target if the directory contains a valid `.bahia/render-state.json` marker written by prior Bahia rendering. Unknown, missing, malformed, or operator-authored directories are blocked before staging or file writes. Checked-in staging/production examples record `bahia_owned: false`, so rollout remains blocked until an operator confirms ownership or Bahia has written a valid marker.
+The workflow never runs a blanket `docker image prune -a`. Operational detail
+and Hive-CI artifact publication are in
+[push-to-deploy and Hive-CI](push-to-deploy-and-hiveci-runbook.md).
 
-Generated Compose env files live under `.bahia/env/` inside the Bahia-owned project. They may contain resolved secret values required by Docker Compose, so operators must protect the directory with deployment-appropriate ownership and permissions and treat it as runtime secret material. Nostr events, apply metadata summaries, logs, desired-state snapshots, and normalized observations must use redacted secret refs or key-presence metadata instead of those values.
+## Production checks
 
-### Max direct-runtime Compose target
-
-Model a host such as `max` as a normal Compose deployment unit, not as a new runtime type:
-
-```json
-{
-  "key": "max",
-  "display_name": "Max Compose",
-  "runtime_type": "compose",
-  "endpoint_ref": "max",
-  "compose_dir": "/srv/bahia/compose/gastown",
-  "ownership_mode": "bahia_managed",
-  "reconcile_mode": "approval_required",
-  "runtime_config": {
-    "execution_mode": "sdk"
-  }
-}
-```
-
-`endpoint_ref` must name a server-managed `runtime.endpoints` alias, and `compose_dir` must be a directory dedicated to Bahia's full-project rendering. Set `ownership_mode` to `bahia_managed`; the runtime ownership gate must also be satisfied by operator-approved `bahia_owned: true` configuration or a valid Bahia render marker. Choose the unit's reconcile policy explicitly (`observe_only`, `auto_apply`, `approval_required`, or `disabled`) and set `runtime_config.execution_mode` explicitly to `sdk` or `cli`.
-
-The workload desired state supplies the operational details that are not part of the deployment-unit record:
-
-- Use named-volume mounts such as `gastown-data:/var/lib/gastown` for durable state. Reapplying or restarting the Compose project must reuse the named volume rather than container-local storage.
-- Keep NIP-46 bunker URIs, persistent client keys, and other signer material out of command arguments and signed payloads. Materialize them as permission-restricted files, mount them read-only through desired-state volume entries, and configure the application with non-secret file-path environment variables. When a value must be injected as an environment variable, use a Bahia secret reference so apply writes it only to the protected generated env file under `.bahia/env/`; plaintext is excluded from desired state, events, metadata, and logs.
-- Set an explicit restart policy (for example, `unless-stopped`) and a real healthcheck in each critical service's desired state. A successful apply renders these into the Bahia-owned Compose project; subsequent observation and reconciliation use the persisted desired state.
-
-Compose routing is fail closed. Once the resolved deployment unit has `runtime_type: compose`, Bahia requires `ownership_mode: bahia_managed`, a non-empty managed `endpoint_ref`, a non-empty `compose_dir`, and an available runtime lifecycle. Missing or invalid configuration, render/apply errors, and unhealthy results fail the deployment; Bahia does not fall back to a Loom job or the obsolete bare `docker run` path.
-
-## Signet readiness diagnosis and recovery
-
-`GET /health` is process liveness and remains independent of Signet. The bundled Compose healthcheck intentionally uses it so a bunker or relay outage does not create a restart loop. Load balancers, deployment rollout gates, and operator checks should use `GET /ready`.
-
-Each configured signer appears as `signet-loom`, `signet-soulfactory`, or `signet-operator-assistant` in `checks`. A disconnected signer has `status: warn`; the snapshot remains ready but reports `status: degraded`. Its `details` contain:
-
-- `state`: `connected` or `disconnected`;
-- `last_error`: the latest attempt or heartbeat failure;
-- `last_attempt`: UTC RFC3339 timestamp for the latest attempt;
-- `last_success`: UTC RFC3339 timestamp for the latest successful connection.
-
-Signing-required calls fail immediately with `signet client is not connected` while the dependency is down. Relay consumers that do not require signing continue running. Diagnose the `last_error`, then verify the configured bunker URI, NIP-46 relay reachability/AUTH, and bunker process. Do not delete or rotate the persistent Signet client secret merely to retry: Bahia automatically makes bounded attempts with exponential backoff and jitter. After the relay or bunker recovers, confirm `state=connected`, a newer `last_success`, and an overall readiness transition back to `healthy`; no Bahia restart is required.
-
-Soul Factory does not consume provisioning requests until its signer is connected, because consuming a request without the ability to publish a durable terminal result is unsafe. On connection or reconnection it subscribes with historical filters for the queued `5950`/`1950` backlog. Existing terminal-result and in-flight reservations prevent duplicate provisioning.
-
-## Deployment Units and Targeting
-
-Environment targeting is typed and additive. Each environment owns a `targeting` object with `default_unit_key`, `failure_domain_labels`, `secret_scope_mode`, and `default_reconcile_mode`. `default_reconcile_mode` accepts `observe_only`, `auto_apply`, `approval_required`, or `disabled`; `secret_scope_mode` accepts `service`, `environment`, or `unit`.
-
-A deployment unit is the runtime ownership boundary inside an environment. Each unit records its environment reference, runtime type (`docker`, `compose`, `kubernetes`, or `podman`), endpoint reference, Compose directory, namespace, network profile, reconcile mode override, ownership mode (`bahia_managed`, `adopted`, or `external`), and unit-local runtime configuration.
-
-Reconcile policy is persisted on `environments.targeting.default_reconcile_mode` and, for explicit units, `deployment_units.reconcile_mode`. Explicit unit policy overrides the environment default; implicit default-unit rows use the environment default.
-
-Scheduled reconciliation always observes through the resolved runtime and compares desired state with normalized observations when desired-state hashes are present, falling back to desired artifact digest comparison for legacy rows. `observe_only` records observations and drift only. `approval_required` records drift as `remediation_needed` and waits for an authorized operator-authored ContextVM `service/drift-remediate` request; Bahia does not synthesize a public remediation request internally. `auto_apply` invokes the same runtime lifecycle desired-state deploy helper used by deploy/apply operations, using the persisted desired artifact and desired-state snapshot.
-
-Runtime mutation is serialized by the same environment apply lock as user deploy/apply. User-initiated deploys acquire the lock in blocking mode and therefore preempt scheduled auto-remediation. Scheduled `auto_apply` attempts the lock without blocking; if another operation holds it, Bahia keeps the desired state, records failure metadata on `environment_service_state.reconcile_failure_metadata`, sets `reconcile_backoff_until`, increments `reconcile_consecutive_failures`, and retries only after backoff. Apply failures follow the same rule: desired state remains authoritative, failure details are stored, and future scheduled attempts back off. `disabled` excludes the environment or unit from scheduled observation.
-
-Existing single-runtime environments do not need a persisted unit row. When no explicit `deployment_units` row exists, Bahia resolves an in-memory default unit from typed environment targeting first, then falls back to legacy `Environment.runtime_config` keys. The implicit default is used for planning and placement resolution, but its ID remains absent from state, intent, run, and observation rows until an operator creates a real unit boundary.
-
-Backward compatibility is read-tolerant and write-forward. Runtime fields moved into typed targeting are read from typed fields first and then from `runtime_config` (`default_unit_key`, `failure_domain_labels`, `secret_scope_mode`, `default_reconcile_mode`, `reconcile_mode`, `type`, `endpoint_ref`, `compose_dir`, `namespace`, `kube_namespace`, and `network_profile`). Environment and unit writes normalize those values into typed targeting columns/JSON so new reads do not depend on raw runtime JSON alone.
-
-Environment and deployment-unit writes are signer-first. An authorized signer publishes ContextVM `environment/create` or `environment/update` with this payload shape (create requires `name` and may carry a client-minted UUIDv7 `id` that fixes the environment's coordinate, see [entity identity](event-spec.md#entity-identity-and-coordinates); update requires `id`):
-
-```json
-{
-  "org_id": "organization-uuid",
-  "name": "production",
-  "id": "environment-uuid",
-  "expected_updated_at": "2026-08-02T08:00:00Z",
-  "loom_worker_selector": {},
-  "runtime_config": {},
-  "targeting": {
-    "default_unit_key": "max",
-    "failure_domain_labels": {},
-    "secret_scope_mode": "service",
-    "default_reconcile_mode": "approval_required"
-  },
-  "reconcile_mode": "approval_required",
-  "deployment_units": [
-    {
-      "key": "max",
-      "display_name": "Max Compose",
-      "runtime_type": "compose",
-      "endpoint_ref": "max",
-      "compose_dir": "/srv/bahia/compose/gastown",
-      "namespace": "",
-      "network_profile": {},
-      "ownership_mode": "bahia_managed",
-      "reconcile_mode": "approval_required",
-      "runtime_config": {"execution_mode": "sdk"}
-    }
-  ],
-  "deploy_strategy": "replace",
-  "protected": true
-}
-```
-
-`deployment_units` has complete-set semantics. Omitting it leaves the current unit set unchanged; providing it atomically replaces the complete explicit set; providing `[]` returns the environment to its implicit default. Every update that supplies `deployment_units` must also supply `expected_updated_at` from the latest environment read. Bahia locks the environment row and rejects a stale revision with ContextVM error code `-32009` before publishing canonical registry state or writing the environment/unit transaction. Bahia also rejects removal of units referenced by state, runs, intents, or observations, and requires `targeting.default_unit_key` to identify a member of any non-empty explicit set. Deploy, apply, and observe do not materialize the implicit unit.
-
-Environment GET and list responses embed `deployment_units`. They contain the persisted explicit units when present; otherwise they contain the resolved default unit marked with `"implicit": true`.
-
-The CLI uses the same contract and never revives REST mutations:
+Before directing traffic to a release:
 
 ```bash
-bahia environments create --name production --units-file units.json
-bahia environments update <environment-id> --units-file units.json
-bahia environments units list <environment-id>
-bahia environments units create <environment-id> --file unit.json --default-unit-key max
-bahia environments units update <environment-id> max --file unit.json --default-unit-key max
+curl -fsS https://bahia.example/health
+curl -fsS https://bahia.example/ready
+curl -fsS -H 'Accept: application/nostr+json' https://bahia.example/relay
 ```
 
-The unit `create` and `update` helpers read the environment, merge the requested unit locally, and publish a signed `environment/update` carrying the complete explicit unit set plus its `expected_updated_at` revision. On revision conflict the CLI rereads, deliberately remerges, and resigns at most three attempts so unrelated concurrent units are preserved; the final conflict is surfaced to the operator. `--default-unit-key` changes targeting in the same atomic update, including implicit-to-explicit transitions to a non-`default` key. Use JSON files for unit specifications and secret-bearing configuration; do not place secrets in arguments.
-
-The core control-plane tables include nullable `deployment_unit_id` foreign keys on `deployment_intents`, `deployment_runs`, `runtime_observations`, and `environment_service_state`. A `NULL` value means the record belongs to the implicit default unit for the environment. API request DTOs accept additive `deployment_unit_id`, `deployment_units`, `targeting`, and `reconcile_mode` fields. Canonical Nostr projections (`30900` state and `30078` app data) include additive `unit` tags; `NULL` placement is tagged as `default`. Historical `31961`, `31963`, `31967`, and `31968` projections are migration inventory only.
-
-For adoption, prefer endpoint aliases:
-
-```bash
-bahia adopt scan --target prod-docker
-bahia adopt import --target prod-docker --all
-```
-
-Raw Docker hosts are a compatibility path only. They require the server to set `adoption.allow_raw_docker_hosts: true` and the CLI to use `--raw-target alias=dockerHost`.
-
-For production rollout, follow the signer-first operator runbook in [`adoption-production-rollout.md`](adoption-production-rollout.md). In short: configure signer/operator pubkeys and relay discovery, keep raw-host mode off, run a signer-first scan-only dry run, import a single low-risk workload first, then monitor correlated adoption/runtime events, logs, and `/metrics` before expanding. Use `bahia adopt import --org <organization-uuid>` whenever the organization cannot be inferred unambiguously.
-
-A successful import creates or reuses a deployment unit for the imported service and binds both `environment_service_state` and the initial runtime observation to it. Cross-organization service/environment reuse is rejected. Explicit import may take over a same-name legacy service that has no adopted-runtime identity, but an already-adopted same-name service on a different target remains a conflict.
-
-Signer-first adoption/import and direct-runtime events remain subject to relay, authorization, and reactor-side operator controls; the legacy per-IP REST mutation limiters are no longer mounted.
-
-## Rollout and Runtime Failure Semantics
-
-Canary and blue/green plans require a runtime implementing verifiable traffic transitions. Bahia checks the runtime-reported target slot and weight after a shift/switch; unsupported runtimes, rejected changes, or mismatched reported state fail the step instead of logging success.
-
-Before rollout, Bahia captures the prior primary artifact. Automatic rollback restores progressive traffic, restores or removes the primary as appropriate, verifies artifact identity and healthy runtime state, and cleans up canary/green slots. Only a fully persisted verified restoration emits `rollout.rolled_back`; any restoration, cleanup, observation, or persistence error produces terminal `rollback_failed` state and a `rollout.rollback_failed` event.
-
-Health-observer errors count toward the configured consecutive failure threshold just like unhealthy observations, so an unavailable observer fails fast instead of waiting for the full gate timeout.
-
-Native encrypted `service/deploy` accepts UUID service/environment/artifact IDs, evaluates deployment policy, creates an intent with a desired-state snapshot, and executes the runtime lifecycle immediately only when approval policy marks the intent approved. The run is completed as failed when runtime apply fails.
-
-Loom-backed non-terminal runs are monitored for missing kind-`30100` status. After `nostr.stale_run_after` (default `5m`), Bahia publishes replaceable NIP-38 `30315` health state with schema `bahia.deployment-run-health.v1`; it publishes a `recovered` transition when Loom status resumes, the job changes, or the run becomes terminal.
-
-## Desired-State Persistence
-
-Bahia persists desired-state metadata additively so deploy, observe, and projection paths can compare deterministic state without relying on image digest alone:
-
-- `deployment_intents.desired_state` / `deployment_intents.desired_hash` store the canonical `DesiredServiceSpec` snapshot and hash accepted for a deploy intent.
-- `deployment_runs.apply_metadata` stores runtime apply metadata such as renderer, revision, resources, and warnings.
-- `environment_service_state.desired_runtime_state` / `environment_service_state.desired_hash` store the current desired runtime snapshot for the service/environment row.
-- `runtime_observations.normalized_state` / `runtime_observations.normalized_hash` store normalized observed runtime state for drift comparison.
-
-For desired-state-managed workloads, service drift is evaluated from deterministic hashes: `environment_service_state.desired_hash` is compared with the latest observation's normalized hash (`normalized_state.observation_hash`, falling back to `normalized_hash`). The resulting `drift_status` is `in_sync` only when hashes match and runtime health is acceptable, `drifted` when hashes differ or matching state is unhealthy, and `unknown` when the desired or observed hash is unavailable. Workloads without desired-state metadata continue to use the legacy desired artifact digest versus observed image digest comparison.
-
-`DesiredServiceSpec` includes deployment-unit identity: `deployment_unit_id` when a persisted unit exists, `deployment_unit_key` for implicit or explicit unit grouping, and `unit_runtime_type` for renderer/runtime ownership. Older snapshots without those fields are normalized into the implicit `default` unit during planning.
-
-`DesiredEnvironmentPlan` is both environment-scoped and unit-scoped. The flat `services` list remains available for existing renderers, and `unit_plans` groups the same services by deployment unit. Each unit plan computes a unit `revision_hash` from its unit identity, runtime type, and sorted service desired hashes. The environment `revision_hash` is an aggregate over sorted unit revision hashes, so moving a service between units or changing one unit's desired state changes the aggregate deterministically.
-
-Compose dependencies are unit-local. During plan assembly Bahia rejects `depends_on` edges that reference a service in a different deployment unit; operators must colocate those services in one Compose-owned unit or express the relationship through runtime/network configuration instead of a cross-unit Compose graph.
-
-Secret plaintext is never stored in desired-state or normalized-observation JSON. Desired-state secret entries use redacted references only.
-
-## Podman Runtime
-
-Bahia supports Podman as an alternative to Docker. Since Podman emulates Docker's API, Bahia communicates with Podman via its Docker-compatible socket.
-
-### Configuration
-
-```yaml
-runtime:
-  type: podman
-  # Rootless Podman (default if omitted):
-  podman_host: unix:///run/user/1000/podman/podman.sock
-
-  # Or for rootful Podman:
-  # podman_host: unix:///run/podman/podman.sock
-```
-
-### Socket Paths
-
-| Mode | Socket Path |
-|------|-------------|
-| Rootless | `unix:///run/user/<UID>/podman/podman.sock` |
-| Rootful | `unix:///run/podman/podman.sock` |
-
-### Enabling the Podman Socket
-
-Podman's API socket is not enabled by default. Enable it with:
-
-```bash
-# Rootless (user service)
-systemctl --user enable --now podman.socket
-
-# Rootful (system service)
-sudo systemctl enable --now podman.socket
-```
-
-### Environment Variables
-
-```bash
-export BAHIA_RUNTIME__DEFAULT__TYPE=podman
-export BAHIA_RUNTIME__DEFAULT__PODMAN_HOST=unix:///run/user/1000/podman/podman.sock
-```
-
-For Compose desired-state deploys, Bahia intentionally owns the generated Compose project for the environment or deployment unit. Multiple environments can point to different `compose_dir` values, and services in the same Compose-owned unit share that generated project. Bahia writes the service image directly into the rendered model from the desired-state snapshot; operators should not rely on the old service-name-derived `<SERVICE>_IMAGE` override pattern for desired-state-managed deploys.
-
-When running Bahia inside a container with the Compose runtime, mount both `/var/run/docker.sock` and the configured Compose project directory at the same path used by `runtime.default.compose_dir` or the per-environment `compose_dir`. The mounted directory must be Bahia-owned or carry a valid `.bahia/render-state.json` marker before authoritative generation is allowed.
-
-## OCI Registry Configuration
-
-Bahia includes an internal OCI-compliant container registry. Configure it in your config file:
-
-```yaml
-oci:
-  enabled: true
-  public_host: registry.sharegap.net
-  spool_dir: /srv/data/bahia/oci-uploads
-  upload_expiry: 24h
-  
-  # Anonymous pull from internal network
-  allow_anonymous_pull_cidrs:
-    - 192.168.40.0/24
-    - 10.0.0.0/8
-  
-  # Trusted proxies for X-Forwarded-For
-  trusted_proxy_cidrs:
-    - 127.0.0.1/32
-    - 172.17.0.0/16
-  
-  # Service accounts for push access
-  service_accounts:
-    - username: hive-ci
-      password_hash: "$2a$10$..."  # bcrypt hash
-      permissions: [pull, push]
-      repo_prefixes: [cascadia/]
-```
-
-### Blossom Backend
-
-The registry uses Blossom for blob storage. Ensure Blossom is configured:
-
-```yaml
-blossom:
-  base_url: https://blossom.sharegap.net
-  auth_pubkey: <your-blossom-auth-pubkey>
-```
-
-### Spool Directory
-
-Create the spool directory for upload chunks:
-
-```bash
-mkdir -p /srv/data/bahia/oci-uploads
-chown bahia:bahia /srv/data/bahia/oci-uploads
-```
-
-## Hive-CI Integration
-
-Enable automatic CI event ingestion:
-
-```yaml
-hiveci:
-  enabled: true
-  
-  # Trusted CI dispatcher pubkeys for signed kind-5401 workflow-run evidence
-  trusted_ci_pubkeys:
-    - <hive-ci-dispatcher-pubkey>
-
-  # Loom workers Bahia may dispatch loom-ci jobs to. Their advertised
-  # software must include loom-ci. Bahia-authored 5401s carry a per-run
-  # ephemeral publisher that signs the 5402; these worker keys are accepted
-  # as 5402 signers only for runs Bahia did not author (observed release=true
-  # 5401s dispatched without a publisher key).
-  trusted_loom_worker_pubkeys:
-    - <loom-worker-pubkey>
-
-  # Read-only fleet Gitea access for pinning authorized build dependencies.
-  # If omitted, Bahia reuses hiveci.initiator.gitea_base_url/gitea_token.
-  dependency_gitea:
-    base_url: https://git.example
-    token: <fleet-gitea-read-token>
-
-  # Trusted release-attestor pubkeys for terminal RELEASE kind-5402 results.
-  # Omit this block unless the second release-provenance event and Bahia OCI
-  # evidence service are both deployed.
-  trusted_release_attestors:
-    - <hive-ci-release-attestor-pubkey>
-  
-  # Verify successful ordinary CI results and register one immutable artifact
-  auto_register_builds: true
-
-  # Advanced signed manual artifact registration (disabled by default)
-  allow_manual_artifact_registration: false
-  
-  # Terminal RELEASE registration never promotes production. Ordinary results
-  # may create a staging intent only when legacy auto_deploy_staging metadata is
-  # enabled; protected environments keep that intent pending approval.
-  # Production promotion requires a separately authorized promotion intent.
-
-  # Each release policy must explicitly bind workflow_digest, policy_digest,
-  # review_policy, source_repo_identity, release_image_repository, and a
-  # non-empty release_attestors list. Missing constraints fail closed.
-  
-  # Retry configuration
-  retry_interval: 30s
-  max_retries: 10
-```
-
-Services that need named build contexts declare the complete authorized set on
-their `hiveci.policies` entry:
-
-```yaml
-hiveci:
-  policies:
-    - repo_coordinate: "30617:<owner-pubkey>:astillero"
-      workflow_path: ".gitea/workflows/release.yml"
-      service_name: astillero
-      environment_name: edge-01-production
-      build_dependencies:
-        - name: cascadia-go
-          clone_url: https://git.example/cascadia/cascadia-go.git
-        - name: drydock
-          clone_url: https://git.example/cascadia/drydock.git
-```
-
-The dependency list is fleet configuration, not workflow input. At dispatch,
-Bahia resolves each repository's default-branch head to a full commit SHA and
-places only the credential-free URL and immutable SHA in the kind-5100 `dep`
-tag. Resolution or validation failure prevents job publication.
-
-### Promoting a registered release
-
-A successful CI result only registers evidence. Promotion is a separate ContextVM
-kind `25910` mutation using generated method schema `bahia.deploy.v2`:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "promote-release-identity",
-  "method": "service/deploy",
-  "params": {
-    "service_id": "<service-uuid>",
-    "environment_id": "<staged-environment-uuid>",
-    "deployment_unit_id": "<deployment-unit-uuid>",
-    "artifact_id": "<registered-artifact-uuid>",
-    "strategy": "canary",
-    "idempotency_key": "promote-release-identity",
-    "parameters": {
-      "release_identity": "hiveci-release:v1:<sha256>",
-      "artifact_digest": "sha256:<registered-manifest-digest>",
-      "previous_artifact_digest": "sha256:<current-desired-digest>"
-    }
-  }
-}
-```
-
-For fully-qualified producer repositories such as
-`harbor.example/project/image`, Bahia must have a configured registry/Harbor
-adapter whose authority matches the repository. It retrieves the manifest,
-SBOM, and provenance bytes through the OCI Distribution API by their signed
-digests. If that byte-capable resolver is absent, unreachable, unauthorized, or
-returns missing/mismatched bytes, registration fails closed; Bahia never falls
-back to a tag or to metadata-only existence checks. OCI blob responses do not
-carry descriptor media types, so SBOM/provenance media types remain bound to the
-signed descriptors while bytes, digest, size, and document structure are
-verified.
-
-Bahia accepts the mutation only when the signer has deployment permission, the
-pipeline policy binds the exact service and staged environment, the environment
-strategy is `canary`, all registered manifest/SBOM/provenance and signed lineage
-evidence remains complete, rollback compatibility names the current artifact,
-and concrete health/readiness contracts are present. The resulting Loom job uses
-`repository@sha256:digest`; the signed producer tag is never a deployment input.
-Exact replays return the existing intent and conflicting replays fail closed.
-Every accepted or rejected promotion decision is written as signed kind `4903`
-audit evidence through the durable Nostr outbox.
-
-## Monitoring
-
-- Liveness/health snapshot: `GET /health`
-- Active-tier readiness: `GET /ready` (`503` when required checks fail)
-- Drift detection: `GET /api/v1/state/drifted`
-- Registry API: `GET /v2/`
+Confirm that `/ready` reports passing `relay_quorum`, `bootstrap_ready`,
+`background_runners`, `intent_readiness`, `ock_rotation` and
+`canonical_delivery` checks, plus every enabled subsystem check. Validate one
+REQ/EOSE subscription, one signed intent and its relay `OK`, requester-scoped
+`30315` status, and canonical record before considering the deployment
+operational.

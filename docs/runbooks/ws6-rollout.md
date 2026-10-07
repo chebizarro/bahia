@@ -10,7 +10,7 @@ interface.
 | Target | Internal endpoint | Metrics | Required |
 |---|---|---|---|
 | Bahia control plane | `bahia:8080/metrics` | Fleet health, drift, workers, relays, audit, authorization, runtime operations | Yes |
-| Legacy Routstr gateway | `fleet-routstr-gateway:<port>/metrics` | Requests, spend, wallet, routing | Only when the legacy custom gateway is intentionally deployed |
+| External LLM gateway | deployment-specific `/metrics` | Requests, spend, wallet, routing | Only when the selected gateway exposes a verified authenticated endpoint |
 | Loom | deployment-specific `/metrics` | Job lifecycle | When an authenticated internal endpoint exists |
 
 The initial production target is Bahia only. On `edge-01`, Bahia is currently
@@ -21,11 +21,9 @@ port, ownership, auth mode, and label cardinality have been verified.
 
 The checked-in `prometheus.yml` contains no credentials. When Bahia auth is
 enabled, `/metrics` uses the same NIP-98 middleware boundary as the application;
-production scraping therefore requires the fresh-request signing/proxy bridge
-tracked by `fp-obs.1`, not a static bearer token in Git. The accepted `fp-397`
-Routstr deployment uses Bahia → LiteLLM → fleet policy proxy → `routstrd-auth` →
-`routstrd`; the stopped custom `fleet-routstr-gateway` is a legacy rollback path,
-not a current required scrape target.
+production scraping therefore requires a fresh-request signing proxy, not a
+static bearer token in Git. Optional gateway metrics must be configured against
+the gateway actually selected for the environment.
 
 Do not place agent IDs, event IDs, pubkeys, free-form errors, repository names,
 URLs, or secrets in target labels. Use bounded labels such as `environment`

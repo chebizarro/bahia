@@ -3,7 +3,7 @@
 The embedded Go runner identifies each migration by its **complete filename
 stem**, not its numeric prefix. It applies `.up.sql` files in lexicographic
 filename order and records that entire stem in `schema_migrations.version`.
-Several historical numeric prefixes are shared by distinct migrations; do not
+Several numeric prefixes are shared by distinct migrations; do not
 renumber or collapse them. External runners such as golang-migrate, goose, and
 dbmate are unsupported for this directory: their version or file conventions
 would not preserve Bahia's live version keys and transactional behavior.

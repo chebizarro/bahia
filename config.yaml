@@ -1,191 +1,99 @@
-# Bahia Deployment Registry - Example Configuration
+# Bahia configuration example. Omitted fields use internal/config/config.go
+# defaults. This file is safe as a starting point only after replacing the key,
+# relay, database, and runtime values for the target deployment.
+mode: full
+
+dev_mode: false
+
 server:
-  host: "0.0.0.0"
+  # Code defaults: 127.0.0.1:8080, 30s read/write, 15s shutdown.
+  host: "127.0.0.1"
   port: 8080
   read_timeout: 30s
   write_timeout: 30s
   shutdown_timeout: 15s
 
 db:
+  # PostgreSQL is an optional derived index. The daemon starts without it.
+  # Code defaults: localhost:5432, user/name bahia, empty password,
+  # sslmode=require, 25 open / 5 idle connections, 5m max lifetime.
   host: localhost
   port: 5432
   user: bahia
-  password: bahia
+  password: ""
   name: bahia
-  sslmode: disable
+  sslmode: require
   max_open_conns: 25
   max_idle_conns: 5
   conn_max_lifetime: 5m
 
-harbor:
-  url: "https://harbor.example.com"
-  username: ""
-  password: ""
-  insecure: false
-
-loom:
-  relays:
-    - "wss://relay.damus.io"
-    - "wss://nos.lol"
-  job_timeout: 30m
-  canonical_projection:
-    # Disabled by default. When enabled, production signs canonical 30900 state
-    # and 4903 audit projections through Signet/NIP-46, not raw nsec material.
-    enabled: false
-    signet_bunker_uri: ""
-    signet_client_secret_key: ""
-    # Reserved for rejected legacy/dev configs; validated Bahia runtime config
-    # never enables raw-key canonical projection signing.
-    allow_raw_key_dev: false
-    raw_private_key: ""
-
 nostr:
-  # All registered kind-30900 intent domains are on by default.
-  # intent_domains_disabled: [domain] explicitly disables a domain.
-  # Locked-down default: empty means the 25910 ContextVM control plane is not enabled.
-  # Deployments must inject the operator signer key through secrets/env; never commit it here.
-  private_key: ""
-  # Backward-compatible alias for service_relays. Do not use this as the public browser relay policy.
-  relays:
-    - "wss://relay.damus.io"
-    - "wss://nos.lol"
-  # Backend/service publish and backfill relays. If omitted, nostr.relays is used as a compatibility alias.
-  service_relays:
-    - "wss://relay.damus.io"
-    - "wss://nos.lol"
-  # Browser-safe relay endpoints advertised by ContextVM discovery plus NIP-51 kind 30002 only when
-  # nostr.sidecar.enabled=true. Use the nginx /relay proxy for the web app.
-  browser_relays:
-    - "ws://localhost:3000/relay"
-  # Direct ContextVM request/reply relays. When the sidecar is enabled, Bahia uses
-  # the deduplicated union of its URL and this list. If empty, browser_relays is the direct fallback.
-  contextvm_relays:
-    - "ws://localhost:3000/relay"
-  # Fixed relay AUTH-unavailable behavior: exclude auth-required relays without credentials and fail if quorum is unmet.
-  relay_auth_unavailable: "exclude_and_fail"
-  # Locked-down default. MVP enablement is a deploy step with a deployment-provided signer key.
-  publish_enabled: false
-  # Publish a replaceable domain-health event when a Loom-backed deployment run
-  # has no kind-30100 status update for this long.
+  private_key: ""                 # nsec or 64-hex service key; inject as a secret
+  authorized_pubkeys: []           # fleet operator 64-hex pubkeys
+  service_relays: []               # daemon publication and backfill
+  browser_relays: []               # advertised browser read relays
+  contextvm_relays: []             # intents and encrypted interactive RPC
+  nip34_relays: []
+  publish_enabled: true
+  publish_quorum: 1                # -1 requires every configured write relay
+  closed_retry_budget: 5
+  relay_auth_unavailable: exclude_and_fail
   stale_run_after: 5m
-  # Retired request-kind history is blocked by the hardened Bahia sidecar.
-  # Enable only when migrating from a separate relay that explicitly permits
-  # author-scoped reads of legacy Bahia kinds.
-  legacy_relay_backfill: false
+  intent_domains_disabled: []      # every registered domain is enabled by default
+  relay_quorum:
+    full_min_healthy: 2
+    degraded_min_healthy: 1
+    emergency_min_healthy: 1
   sidecar:
     enabled: false
-    listen_addr: "0.0.0.0:3334"
-    public_url: "ws://localhost:3000/relay"
-    backend_url: "ws://localhost:3334"
+    listen_addr: "127.0.0.1:3334"
+    public_url: "ws://127.0.0.1:3334"
+    backend_url: "ws://127.0.0.1:3334"
     data_dir: "./data/relay-sidecar"
     mirror_external: false
-    event_retention: 0s # regular events (e.g. 4903 audits) are durable; set a duration to cap them
+    event_retention: 0s            # regular events remain durable
     request_retention: 24h
-    auth_private_key: ""
+    request_retention_kinds: [25910, 1059, 21059]
     max_query_limit: 2000
     subscriber_queue_size: 1024
+    negentropy_max_events: 1000000
+    read_auth_mode: enforce        # enforce is also the unset/unknown default
+    read_auth_allowed_pubkeys: []
 
 reconcile:
-  interval: 60s
   enabled: true
+  interval: 60s
 
 runtime:
-  # Locked-down default: no production runtime endpoint aliases are shipped enabled.
-  # MVP btc-01 enablement must register a server-managed endpoint_ref such as
-  # runtime.endpoints.btc-01-docker; raw docker_host values must not be sent over Nostr.
-  # endpoints:
-  #   btc-01-docker:
-  #     docker_host: "tcp://btc-01.example.com:2376"
-  #     ca_cert_file: "/etc/bahia/docker/btc-01/ca.pem"
-  #     client_cert_file: "/etc/bahia/docker/btc-01/cert.pem"
-  #     client_key_file: "/etc/bahia/docker/btc-01/key.pem"
-  # Legacy flat keys remain supported as the process-wide fallback.
   type: docker
   docker_host: "unix:///var/run/docker.sock"
+  endpoints: {}
+  environments: {}
 
-  # Preferred runtime target defaults. Services use their runtime_type to choose
-  # docker, compose, or kubernetes; these fields choose where that runtime runs.
-  default:
-    type: docker
-    docker_host: "unix:///var/run/docker.sock"
-    compose_dir: "/srv/bahia/compose/default"
-    kube_context: ""
-    kube_namespace: "default"
-    kube_config: ""
+auth:
+  enabled: false
+  bootstrap_owner_pubkeys: []
 
-  # Optional per-environment runtime targets. Compose uses one project directory
-  # per Bahia environment; all services in that environment share it.
-  environments:
-    staging:
-      compose_dir: "/srv/bahia/compose/staging"
-      bahia_owned: false
-      docker_host: "unix:///var/run/docker.sock"
-    production:
-      compose_dir: "/srv/bahia/compose/production"
-      bahia_owned: false
-      docker_host: "tcp://docker-prod.example.com:2375"
+adoption:
+  enabled: false
+  allow_raw_docker_hosts: false
+  allow_compose_takeover: false
+  allowed_pubkeys: []
+
+direct_runtime_actions:
+  enabled: false
+  allowed_pubkeys: []
+
+cors:
+  allowed_origins: []
+
+oci:
+  enabled: false
+  spool_dir: /tmp/bahia-oci-spool
+  upload_expiry: 24h
+  allow_anonymous_pull_cidrs: []
+  service_accounts: []
 
 log:
   level: info
   format: json
-
-auth:
-  # Locked-down default. MVP deployments enable this and configure operator/agent
-  # allowlists (Biz, Stew, and the Bahia signer) outside the committed config.
-  # When enabled, protected HTTP routes require NIP-98 Authorization headers.
-  enabled: false
-
-adoption:
-  # Locked-down default. MVP deployments enable this only with auth.enabled=true,
-  # operator pubkey allowlists, and endpoint_ref targets such as btc-01-docker.
-  # Privileged adoption scan/import routes are disabled by default.
-  # To enable, set auth.enabled=true and at least one 64-hex allowed_pubkeys entry.
-  # Empty/subject-only/email-only lists fail config validation when enabled.
-  # ContextVM also requires the signer in nostr.authorized_pubkeys.
-  enabled: false
-  # Compose-origin containers are blocked unless operators explicitly accept
-  # direct Docker takeover semantics for those workloads.
-  allow_compose_takeover: false
-  allowed_subjects: []
-  allowed_pubkeys: []
-  allowed_emails: []
-
-direct_runtime_actions:
-  # Locked-down default. MVP deployments enable this only after btc-01 endpoint_ref
-  # registration and operator allowlist review.
-  # Direct deploy/restart/stop runtime routes are disabled by default.
-  # To enable, set auth.enabled=true and at least one 64-hex allowed_pubkeys entry.
-  # Empty/subject-only/email-only lists fail config validation when enabled.
-  # ContextVM also requires the signer in nostr.authorized_pubkeys.
-  enabled: false
-  allowed_subjects: []
-  allowed_pubkeys: []
-  allowed_emails: []
-
-soul_factory:
-  enabled: false
-  # Durable governed provisioning checkpoints and secret-free adapter ledger.
-  provisioning_state_dir: "./data/soulfactory/provisioning"
-  # Tenant and optional existing environment used by release-backed agent deployments.
-  organization_id: ""
-  agent_environment_id: ""
-  # Durable identity for agent-memory tasks across Bahia process restarts.
-  agent_memory_task_id_file: "./data/soulfactory/agent-memory-task-ids.json"
-
-# Opt-in governed VM/plane composition. See docs/user-guide/features/virtual-machines.md.
-# Hosts must already exist in the migrated virtualization repository. UUIDs below
-# are supplied by the operator, never inferred from domain or container names.
-virtualization:
-  operator_pubkeys: []
-  reconcile_pubkey: "" # explicit operator identity; tenant RBAC is rechecked
-  hosts: [] # [{org_id, host_id, trust_policy_ref, trusted_signers, networks, plane_secret_refs}]
-  persistent_vm:
-    enabled: false
-    # host_id: <registered-host-uuid>
-    # storage_pool_ref: <operator-storage-pool-uuid>
-    # state_dir: /var/lib/bahia/persistent-vms
-    # image_root: /var/lib/bahia/vm-images
-    # libvirt_uri: qemu:///system
-    # event_socket: /run/libvirt/libvirt-sock
-    # firecracker_binary: /usr/bin/firecracker
-  plane_endpoints: [] # [{host_id, endpoint_ref, author}] — exact administrative identities
