@@ -42,7 +42,7 @@ const (
 )
 
 // NostrPublishTargetLocalPrefix marks archive rows of events whose delivery
-// the daemon's local outbox owns (bahia-irsry.10.4). Their publish_state
+// the daemon's local outbox owns. Their publish_state
 // mirrors the local outcome for PostgreSQL readers (config-fabric drift,
 // virtualization, the failed-row runbook), but no runner drains them and the
 // outbox metrics do not count them: the local outbox does.

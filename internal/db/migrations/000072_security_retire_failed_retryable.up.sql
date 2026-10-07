@@ -4,7 +4,7 @@
 -- CHECK constraints and its retry partial index goes away.
 --
 -- This runs at startup, so it follows the 000062/000071 conventions
--- (docs/designs/nostr-event-store-lifecycle.md): every statement is
+-- (see docs/architecture/postgres-event-store-lifecycle.md): every statement is
 -- metadata-only or touches only the retired rows through an index.
 --   - The only UPDATE converts leftover failed_retryable publications and is
 --     served by idx_security_observable_publications_retry, whose partial

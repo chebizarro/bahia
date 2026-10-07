@@ -15,7 +15,7 @@ import (
 )
 
 // readAuthPolicy implements NIP-42 read-side authentication for the sidecar
-// relay (C-21). Non-public kinds — and protected cp-state topics within kind
+// relay. Non-public kinds — and protected cp-state topics within kind
 // 30900 — require the requester to have authenticated via NIP-42 and be in the
 // allowed reader set.
 //
@@ -250,7 +250,7 @@ var publicCPStateTopics = map[string]bool{
 	kinds.CPStateTopicSecretRegistry:              true,
 	kinds.CPStateTopicNotificationChannelRegistry: true,
 
-	// B2 families (bahia-irsry.60): payment records and security findings/
+	// B2 families: payment records and security findings/
 	// schedules/finding-details are OCK-encrypted (fleet scope); ciphertext only.
 	kinds.CPStateTopicPaymentRecord:         true,
 	kinds.CPStateTopicSecurityFinding:       true,
@@ -278,11 +278,11 @@ var publicCPStateTopics = map[string]bool{
 	//   security-findings, security-audit — detailed vulnerability data
 	//   assistant-transcript — private conversation content
 	//   assistant-session — session recovery data
-	//   soul-factory-saga-run — governed provisioning saga progress (C-45)
+	//   soul-factory-saga-run — governed provisioning saga progress
 	//   soul-factory-adapter-ledger — governed provisioning adapter ledger,
-	//     fleet-OCK ciphertext (bahia-nfc95)
+	//     fleet-OCK ciphertext
 	//   soul-factory-runtime-policy — plaintext controller and pinned runtime
-	//     pubkeys (bahia-amv53)
+	//     pubkeys
 	//   runtime-observation — runtime observations (F74a)
 	//   relay-settings — operator relay policy
 	//   config-status — config-fabric state (admin-only)

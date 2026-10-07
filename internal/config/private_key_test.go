@@ -7,10 +7,9 @@ import (
 	"testing"
 )
 
-// LoadPrivateKey is the single loader two binaries now share. Its two security
-// properties - refusing key material from the environment, and bounding how
-// much it will read - previously existed as duplicated code in each binary and
-// had no test in either. These pin them.
+// LoadPrivateKey is the single loader both binaries share. These tests pin
+// its two security properties: refusing key material from the environment,
+// and bounding how much it will read.
 func TestLoadPrivateKeyRefusesEnvironmentSuppliedKey(t *testing.T) {
 	const envKey = "BAHIA_TEST_PRIVATE_KEY"
 	t.Setenv(envKey, "nsec1shouldneverbeaccepted")

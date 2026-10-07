@@ -131,7 +131,7 @@ func TestIntentSubscriberWiredWhenDomainsEnabled(t *testing.T) {
 	require.True(t, app.IntentReadiness.IsReady(), "readiness should be true after marking filter ready")
 }
 
-// TestIntentSubscriberNotWiredWhenAllDomainsDisabled preserves the legacy
+// TestIntentSubscriberNotWiredWhenAllDomainsDisabled preserves the
 // ContextVM-only path for an explicit all-domain opt-out.
 func TestIntentSubscriberNotWiredWhenAllDomainsDisabled(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)

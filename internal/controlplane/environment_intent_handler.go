@@ -22,7 +22,7 @@ import (
 // Registered at startup when "environment" is enabled via
 // IntentProcessor.RegisterHandler("environment", handler).
 //
-// See design §7 Wave 1 F3.
+// See docs/architecture/intents-and-authority.md.
 type EnvironmentIntentHandler struct {
 	registry       service.EnvironmentIntentRegistry
 	workers        repository.WorkerRepository
@@ -235,7 +235,7 @@ func (h *EnvironmentIntentHandler) handleDelete(ctx context.Context, intent *Int
 
 // environmentFromIntentContent parses an intent's content JSON into a
 // domain.Environment and optional deployment units. The content must be
-// the complete desired state (level-triggered, §1.2).
+// the complete desired state (level-triggered).
 func environmentFromIntentContent(intent *Intent) (*domain.Environment, []*domain.DeploymentUnit, error) {
 	if intent == nil || intent.Content == nil {
 		return nil, nil, fmt.Errorf("intent content is nil")
@@ -389,7 +389,7 @@ type environmentIntentGitSource struct {
 }
 
 // revisionConflictError signals an expected_updated_at mismatch. The intent
-// processor uses this to publish a bounded conflict status (§3.3).
+// processor uses this to publish a bounded conflict status.
 type revisionConflictError struct {
 	entityType string
 	entityID   uuid.UUID

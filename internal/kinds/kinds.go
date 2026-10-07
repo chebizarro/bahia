@@ -280,7 +280,7 @@ const (
 )
 
 // =============================================================================
-// Deprecated Legacy Command Kinds (31100-31105)
+// Retired Legacy Command Kinds (31100-31105), decode-only
 // =============================================================================
 
 const (
@@ -369,14 +369,14 @@ const (
 	SecretRegistry              = 32008
 	NotificationChannelRegistry = 32009
 
-	// Org key-envelope kind (Phase 3 C1: per-org content key distribution).
+	// Org key-envelope kind (per-org content key distribution).
 	// Key-envelope records wrap the per-org content key (OCK) to individual
 	// org members and the service via NIP-44.
 	OrgKeyEnvelope = 32010
 )
 
 // =============================================================================
-// Legacy Worker State Kinds (deprecated, for mixed-version compatibility)
+// Legacy Worker State Kinds (retired, decode-only)
 // =============================================================================
 
 const (
@@ -467,7 +467,7 @@ const (
 )
 
 // =============================================================================
-// Org Read-Model Kinds (32005-32007) — Phase 3 Wave 5 O1
+// Org Read-Model Kinds (32005-32007)
 // =============================================================================
 
 const (
@@ -477,7 +477,7 @@ const (
 )
 
 // =============================================================================
-// Payment & Security CP-State Kinds (32011-32013) — bahia-irsry.60
+// Payment & Security CP-State Kinds (32011-32013)
 // =============================================================================
 //
 // These are "legacy kinds" used as keys in cpStateFamilies; the wire kind

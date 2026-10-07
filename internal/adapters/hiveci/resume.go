@@ -17,8 +17,8 @@ type ResultProcessor interface {
 }
 
 // PendingResultResumer re-attempts the results whose processing is not
-// finished. It replaces the timer that scanned SQL for them:
-// processing is triggered by the arrival of a result, by the arrival of the
+// finished. Processing is triggered by the arrival of a result, by the arrival
+// of the
 // run an orphaned result waits for, and, through Resume, once per start from
 // the canonical result states the local event store retains. Each attempt is
 // counted on the result's canonical state; past maxAttempts the result is

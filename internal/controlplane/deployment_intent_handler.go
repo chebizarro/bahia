@@ -13,7 +13,7 @@ import (
 )
 
 // DeploymentIntentHandler routes operator-signed deployment and runtime desires
-// through the same services used by the legacy ContextVM and direct-action paths.
+// through the same services used by the ContextVM and direct-action paths.
 // Those services are the sole publishers of canonical deployment state.
 type DeploymentIntentResourceReader interface {
 	GetService(context.Context, uuid.UUID) (*domain.Service, error)

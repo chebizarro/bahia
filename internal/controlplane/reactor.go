@@ -26,7 +26,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
-// Legacy Bahia control-plane kind aliases retained for direct handler tests and
+// Legacy Bahia control-plane kind aliases, kept for direct handler tests and
 // migration rejection. Production subscriptions use ContextVM/canonical kinds.
 const (
 	// Legacy request kind aliases
@@ -71,8 +71,8 @@ const (
 	KindWorkloadPinRequest       = nostrpool.KindControlPlaneWorkloadPinRequest       // Pin workload placement to a worker
 	KindWorkerCleanupRequest     = nostrpool.KindControlPlaneWorkerCleanupRequest     // Request worker cleanup
 
-	// Generic AI/ML command/result kinds (38390-38399). Their separation from the
-	// retired legacy DVM allocation is historical; fleet-local Loom, Hive-CI, and
+	// Generic AI/ML command/result kinds (38390-38399). They stay separate from
+	// the retired DVM allocation range; fleet-local Loom, Hive-CI, and
 	// SoulFactory kinds within 5000-7000 are explicit independent protocols.
 	KindMLRecipeRunRequest            = nostrpool.KindMLRecipeRunRequest            // Request a generic ML recipe run
 	KindMLInferenceDeployRequest      = nostrpool.KindMLInferenceDeployRequest      // Request inference endpoint deployment
@@ -219,7 +219,7 @@ type DeploymentRun struct {
 	CompletedAt     *time.Time
 }
 
-// ReactorOption configures optional reactor dependencies without breaking the legacy constructor shape.
+// ReactorOption configures optional reactor dependencies without breaking the existing constructor shape.
 type ReactorOption func(*Reactor)
 
 // WithLLMRegistry enables LLM Nostr lifecycle request handling.
@@ -565,7 +565,7 @@ func (r *Reactor) auditInboundEvent(ctx context.Context, event *nostr.Event) boo
 		ReceivedAt: time.Now().UTC(),
 	})
 	if err != nil {
-		// The audit table is an archive, not the dedupe authority (B-14): a
+		// The audit table is an archive, not the dedupe authority: a
 		// database error must not make the reactor deaf to its relays. The
 		// in-memory dedupe still stops relay replays within this process.
 		r.logger.Warn("failed to audit inbound control-plane event; handling it anyway", "event_id", event.ID.Hex(), "kind", int(event.Kind), "error", err)

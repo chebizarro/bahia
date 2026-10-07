@@ -14,7 +14,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/repository"
 )
 
-// Create-path identity (bahia-irsry.35, C-40).
+// Create-path identity.
 //
 // A create intent may carry a client-minted id. The registry mints one only
 // when none is supplied. Because the id is fixed before any write, a retried

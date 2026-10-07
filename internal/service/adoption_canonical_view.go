@@ -21,7 +21,7 @@ type AdoptionEnvironment struct {
 
 // AdoptionCanonicalView reads the daemon's own canonical records, in their
 // latest state, from the local event store. Adoption plans and resumes from
-// this view only; it never reads a SQL repository (audit B-35).
+// this view only; it never reads a SQL repository.
 type AdoptionCanonicalView interface {
 	ListServices(ctx context.Context) ([]domain.Service, error)
 	ListEnvironments(ctx context.Context) ([]AdoptionEnvironment, error)

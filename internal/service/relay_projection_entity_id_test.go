@@ -13,8 +13,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// bahia-irsry.35: relay consumers decode legacy Postgres-minted (v4) and
-// client-minted (v7) service coordinates identically.
+// Relay consumers decode Postgres-minted (v4) and client-minted (v7)
+// service coordinates identically.
 func TestRelayProjectionCacheDecodesLegacyAndClientMintedServiceCoordinates(t *testing.T) {
 	ctx := context.Background()
 	repo := &entityIDServiceRepo{services: map[uuid.UUID]domain.Service{}}

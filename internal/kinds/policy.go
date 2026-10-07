@@ -98,7 +98,7 @@ func IsSoulFactoryKind(kind int) bool {
 
 // IsAuthorScopedReadableRequestKind returns true if the kind is a legacy
 // request kind that may be exposed in migration-only author-scoped reads.
-// Production sidecar policy no longer exposes these kinds.
+// Production sidecar policy does not expose these kinds.
 func IsAuthorScopedReadableRequestKind(kind int) bool {
 	return false
 }

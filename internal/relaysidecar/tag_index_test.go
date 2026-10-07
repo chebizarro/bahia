@@ -87,7 +87,7 @@ func requireTagFilters(t *testing.T, store *eventStore, f tagFilterFixture) {
 	}
 }
 
-// TestEventStoreMatchesEmptyAndLongTagValues (bahia-irsry.52): REQ and COUNT
+// TestEventStoreMatchesEmptyAndLongTagValues: REQ and COUNT
 // filters on tag values the eventstore does not index (empty, or over 100
 // bytes) match the events that carry them, through the sidecar's tag index.
 func TestEventStoreMatchesEmptyAndLongTagValues(t *testing.T) {
@@ -158,7 +158,7 @@ func writePreIrsry44Store(t *testing.T, dataDir string, events ...nostr.Event) {
 	backend.Close()
 }
 
-// TestEventStoreRepairsPreIrsry44StoresOnce (bahia-irsry.54): on its first
+// TestEventStoreRepairsPreIrsry44StoresOnce: on its first
 // open after the upgrade, a store written before bahia-irsry.44 drops the
 // events its stored kind-5 requests delete and every superseded version of an
 // empty or long-d coordinate, behind its own marker. A rerun without the

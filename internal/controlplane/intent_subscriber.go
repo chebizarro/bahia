@@ -19,7 +19,7 @@ import (
 // When the trust set changes, the subscriber restarts with an updated authors
 // list. A 5-second debounce prevents churn from rapid membership changes.
 //
-// See design §3.1.
+// See docs/architecture/intents-and-authority.md.
 type IntentSubscriber struct {
 	pool      *nostrAdapter.RelayPool
 	store     *localstore.Store
@@ -153,7 +153,7 @@ func (s *IntentSubscriber) buildFilter() nostr.Filter {
 		Tags:  nostr.TagMap{"t": {"bahia-intent"}},
 	}
 
-	// Author-scoped subscription (§3.1, anti-amplification).
+	// Author-scoped subscription (anti-amplification).
 	// When Postgres is the only trust source, we cannot enumerate all
 	// members, so we use an open subscription and rely on the processor
 	// to check permissions.
@@ -188,7 +188,7 @@ func (s *IntentSubscriber) applyEvent(ctx context.Context, ev *nostr.Event) {
 		return
 	}
 
-	// Drop events from untrusted authors silently (§2.3).
+	// Drop events from untrusted authors silently.
 	// This is a second check after the author-scoped subscription filter.
 	// Events may arrive despite the filter during trust-set transitions.
 	actor := ev.PubKey.Hex()

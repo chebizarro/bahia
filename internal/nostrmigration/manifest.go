@@ -29,7 +29,7 @@ const (
 	CanonicalNIP78AppData          = 30078
 )
 
-// Retired worker read-model wire kinds (bahia-irsry.9.2). Older producers
+// Retired worker read-model wire kinds. Older producers
 // published worker state on these kinds; current producers publish only 30900
 // cp-state records whose legacy_kind is the matching kinds.CPStateFamilyWorker*
 // discriminator. They are decoded here, and nowhere else, so old events still
@@ -41,7 +41,7 @@ const (
 	retiredWorkerEligibilityPreviewKind = 32003
 )
 
-// Retired addressable audit kinds (bahia-irsry.37). Audits are regular 4903
+// Retired addressable audit kinds. Audits are regular 4903
 // facts; older producers published one addressable kind per audit type in
 // 31000-31024 (31000-31099 reserved), with d=<entity>, so each audit replaced
 // the previous one. The kinds are decoded here, and nowhere else, so old audit

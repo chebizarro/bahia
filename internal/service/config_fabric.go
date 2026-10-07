@@ -148,7 +148,7 @@ type ConfigDrift struct {
 // ConfigFabricDeliveryQuery reports the publish-outbox state of a desired
 // config-fabric event. Without Postgres the NostrEventRecord carries no
 // PublishState; this query lets ListDrift determine whether a version was
-// abandoned by asking the local outbox directly (bahia-irsry.61).
+// abandoned by asking the local outbox directly.
 type ConfigFabricDeliveryQuery interface {
 	DeliveryOutcome(ctx context.Context, id string) (nostrutil.DeliveryOutcome, error)
 }
@@ -495,7 +495,7 @@ func (s *ConfigFabricService) maxVersion(ctx context.Context, pubkey string, req
 
 // isDesiredAbandoned reports whether a desired-state event's publish was
 // abandoned. With PostgreSQL the record carries the publish state directly;
-// without it, the delivery query (local outbox) is asked (bahia-irsry.61).
+// without it, the delivery query (local outbox) is asked.
 func (s *ConfigFabricService) isDesiredAbandoned(ctx context.Context, record repository.NostrEventRecord) bool {
 	if record.PublishState == repository.NostrPublishStateFailed {
 		return true

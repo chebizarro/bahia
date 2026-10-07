@@ -14,12 +14,8 @@ import (
 )
 
 // WorkerReadModelPublisher publishes worker assignment state and drain status
-// read models as canonical 30900 cp-state records. It replaces the projector's
-// publishWorkerAssignmentState and publishWorkerDrainStatus methods with
-// direct publish at the mutation site, ensuring each material change publishes
-// exactly once.
-//
-// Phase 3 W1 (bahia-irsry.11.14).
+// read models as canonical 30900 cp-state records directly at the mutation
+// site, ensuring each material change publishes exactly once.
 type WorkerReadModelPublisher struct {
 	publisher NostrEventPublisher
 	signer    nostr.Signer

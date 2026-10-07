@@ -11,12 +11,12 @@ import (
 )
 
 // IntentGiftWrapIngress handles NIP-59 gift-wrapped intents for sensitive
-// domains (org, secret, notification). Per design §1.7, sensitive-domain
+// domains (org, secret, notification). Per docs/architecture/confidential-state.md, sensitive-domain
 // intents arrive as kind 1059 with #p=service-pubkey; the inner event is an
 // operator-signed 30900 t=bahia-intent.
 //
 // Plaintext 30900 intents for sensitive domains are REJECTED with a bounded
-// status so nobody publishes them unencrypted (§1.7 enforcement).
+// status so nobody publishes them unencrypted.
 //
 // The ingress is shared by O1 (org) and N1 (secret, notification) slices.
 type IntentGiftWrapIngress struct {

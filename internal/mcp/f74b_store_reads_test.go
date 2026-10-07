@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// These goldens are the legacy MCP result shapes, served without any repository
+// These goldens pin the MCP result shapes, served without any repository
 // dependency. Real OCK encryption and the local signed-event store are used.
 func TestF74bMCPStoreReadParityWithoutDatabase(t *testing.T) {
 	ctx := authorizedMCPContext()

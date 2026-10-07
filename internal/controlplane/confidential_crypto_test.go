@@ -815,7 +815,7 @@ func TestProductionPathRemoveMemberRotation(t *testing.T) {
 	signer := newTestKeySigner(t, serviceKeyHex)
 	servicePubkey := pubkeyFromHex(t, serviceKeyHex)
 
-	// Phase 1: both members are present.
+	// both members are present.
 	trustSet := NewTrustSet(nil, nil)
 	trustSet.SetRelayMembers("test-org-rotation", map[string]domain.Role{
 		memberAPubkey: domain.RoleAdmin,
@@ -855,7 +855,7 @@ func TestProductionPathRemoveMemberRotation(t *testing.T) {
 		t.Fatalf("member B should decrypt pre-rotation: %v", err)
 	}
 
-	// Phase 2: remove member B — update TrustSet and rotate.
+	// remove member B — update TrustSet and rotate.
 	trustSet.SetRelayMembers(orgID, map[string]domain.Role{
 		memberAPubkey: domain.RoleAdmin,
 	})

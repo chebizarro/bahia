@@ -105,8 +105,8 @@ func NewBackupRetentionCoordinator(registry *BackupRegistryService, backendResol
 func (c *BackupRetentionCoordinator) Name() string { return "backup-retention-recovery" }
 
 // Run performs durable retention worker recovery. Event-driven: wakes on the
-// trigger channel or when the stale-recovery timer fires. Phase 3 B1 replaces
-// the fixed 30s polling ticker.
+// trigger channel or when the stale-recovery timer fires; no polling ticker
+// runs.
 func (c *BackupRetentionCoordinator) Run(ctx context.Context) error {
 	if c == nil || c.registry == nil || c.queue == nil {
 		return nil

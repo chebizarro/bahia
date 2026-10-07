@@ -16,8 +16,7 @@ import (
 // from every relay (a *RelayReadIncompleteError) may stand in for a complete
 // one. The zero value is RelayReadComplete: partial reads fail closed.
 //
-// Every SoulFactory relay client read names its policy explicitly. Decision table
-// (bahia-irsry.27):
+// Every SoulFactory relay client read names its policy explicitly. Decision table:
 //
 //	Caller                                       Read                          Policy          Why
 //	-------------------------------------------  ----------------------------  --------------  ------------------------------------------------

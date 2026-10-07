@@ -18,7 +18,7 @@ import (
 type AssistantSessionRecoveryConfig struct {
 	// PageLimit bounds one page of the relay inventory query. The inventory
 	// is never truncated to it: pages are requested with `until` until one
-	// comes back short (audit C-46).
+	// comes back short.
 	PageLimit     int
 	ServicePubkey string
 	Logger        *slog.Logger
@@ -111,7 +111,7 @@ func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
 		r.logger.Warn("assistant recovery skipped: no session inventory source or service pubkey configured")
 		return nil
 	}
-	// bahia-irsry.43: re-tag legacy assistant session events before recovery
+	// re-tag old-topic assistant session events before recovery
 	// queries the relay with #t. The migration reads from the local event
 	// store, adds t=assistant-session to untagged records, and re-publishes
 	// them so the relay indexes them under #t. Idempotent: a no-op once
@@ -202,7 +202,7 @@ func (inv *assistantRecoveryInventory) selected() []assistantRecoverySource {
 }
 
 func assistantRecoveryFilter(author nostr.PubKey) nostr.Filter {
-	// bahia-irsry.43: scope on #t (single-letter) instead of #schema
+	// scope on #t (single-letter) instead of #schema
 	// (multi-letter, invisible to NIP-01 relays). Legacy records published
 	// before .43 are re-tagged by the topic migration that runs synchronously
 	// before the inventory is read (SetTopicMigration).

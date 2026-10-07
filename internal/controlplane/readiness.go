@@ -9,7 +9,7 @@ import (
 // filter, at least one relay has delivered EOSE and reconciliation has
 // completed.
 //
-// See design §6.2.
+// See docs/architecture/intents-and-authority.md.
 type ReadinessTracker struct {
 	mu      sync.RWMutex
 	filters map[string]bool // filter-key → ready

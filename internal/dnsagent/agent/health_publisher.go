@@ -104,7 +104,7 @@ func (h *HealthPublisher) publishOnce(ctx context.Context) error {
 			{"t", "bahia"},
 			{"t", "dns-agent-health"},
 			// Advertise zone-subscribe capability so the daemon can choose
-			// event-based zone sync instead of ContextVM RPC (C-34).
+			// event-based zone sync instead of ContextVM RPC.
 			{"capability", CapabilityZoneSubscribe, CapabilityZoneSubscribeVersion},
 			// NIP-40 expiration: event becomes invalid after this time.
 			{"expiration", strconv.FormatInt(expiresAt.Unix(), 10)},

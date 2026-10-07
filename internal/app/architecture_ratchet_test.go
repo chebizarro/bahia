@@ -104,8 +104,7 @@ var dbLessServedRoutes = map[string]bool{
 	"/health":  true,
 	"/ready":   true,
 	"/metrics": true,
-	// Payment records are canonical cp-state in the local event store
-	// (audit B-31, bahia-u5whr).
+	// Payment records are canonical cp-state in the local event store.
 	"/api/v1/payments/history":           true,
 	"/api/v1/deployments/runs/{id}/cost": true,
 }

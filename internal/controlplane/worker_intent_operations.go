@@ -193,7 +193,7 @@ func (r *Reactor) publishWorkerState(ctx context.Context, worker *domain.Worker)
 }
 
 // publishWorkerReadModels publishes assignment and drain read models directly
-// from the mutation site. Phase 3 W1: replaces projector event-driven refresh.
+// from the mutation site.
 func (r *Reactor) publishWorkerReadModels(ctx context.Context, workerPubKey string) {
 	if r.workerReadModelPublisher != nil {
 		r.workerReadModelPublisher.PublishForWorker(ctx, workerPubKey)

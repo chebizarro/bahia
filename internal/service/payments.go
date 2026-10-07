@@ -33,7 +33,7 @@ type PaymentCanonicalView interface {
 
 // PaymentService manages Cashu payment lifecycle for deployment runs.
 //
-// Payment state is canonical on relays (audit B-31): every mutation mints its
+// Payment state is canonical on relays: every mutation mints its
 // identity up front, publishes the signed cp-state record first, and only then
 // updates the SQL repository, which is an optional index that RebuildIndex can
 // recreate. Reads come from the local event store, so the service works with no

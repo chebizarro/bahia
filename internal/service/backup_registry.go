@@ -465,9 +465,9 @@ func (s *BackupRegistryService) publishVerificationChanged(ctx context.Context, 
 	}
 }
 
-// UpsertBackupDefinition delegates to the repository. Phase 3 B1: exposes the
-// definition upsert through the registry service so the intent handler can use
-// a single interface for all backup entity types.
+// UpsertBackupDefinition delegates to the repository, exposing the
+// definition upsert through the registry service so the intent handler can
+// use a single interface for all backup entity types.
 func (s *BackupRegistryService) UpsertBackupDefinition(ctx context.Context, definition *domain.BackupDefinition) error {
 	return s.repo.UpsertBackupDefinition(ctx, definition)
 }

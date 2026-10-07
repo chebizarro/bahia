@@ -11,7 +11,7 @@ import (
 	"fiatjaf.com/nostr"
 )
 
-// Late runtime-control results (bahia-irsry.31).
+// Late runtime-control results.
 //
 // A runtime adapter bounds its wait for the kind:38386 result correlated with
 // a published kind:38384 request (RuntimeAdapterConfig.ResultTimeout). When the
@@ -287,7 +287,7 @@ func (w *runtimeResultWaiters) dropUnclaimedLocked(id string, index int) {
 // unknown (the caller reports rollback_status outcome_unknown) and a follow-up
 // is parked: report receives the late result once the reactor observes it, so
 // the rollback's actual outcome is published rather than only logged
-// (bahia-irsry.38). A result that arrived between the wait's timeout and the
+// A result that arrived between the wait's timeout and the
 // park is the rollback's outcome and is returned as if observed in time. The
 // follow-up holds no soul.
 func (w *runtimeResultWaiters) observeLateRollback(shardKey string, result *RuntimeControlResultEnvelope, err error, report func(context.Context, *RuntimeControlResultEnvelope)) (*RuntimeControlResultEnvelope, error) {

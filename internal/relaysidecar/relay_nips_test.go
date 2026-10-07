@@ -154,11 +154,11 @@ func fetchNIP11Body(t *testing.T, relayURL string) []byte {
 	return body
 }
 
-// TestSidecarNIP11AdvertisesAccurateCapabilities covers C-21: NIPs 9, 40, 45
+// TestSidecarNIP11AdvertisesAccurateCapabilities covers the NIP-11 advertisement contract: NIPs 9, 40, 45
 // and 77 are advertised, limits match what the relay enforces, retention
 // describes the kind classes, and restricted_writes follows the allow list.
 // created_at_lower_limit is absent: the one-year cap only covers regular and
-// ephemeral kinds (C-11), which the field cannot express.
+// ephemeral kinds, which the field cannot express.
 func TestSidecarNIP11AdvertisesAccurateCapabilities(t *testing.T) {
 	server, relayURL := startSidecarForFanoutTest(t)
 	info := fetchNIP11(t, relayURL)
