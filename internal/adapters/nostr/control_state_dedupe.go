@@ -472,7 +472,7 @@ func (p *Projector) noteProjectionRejection() {
 	}
 	delay := s.retryDelay + jitter
 	s.retryAfter = p.projectionNow().Add(delay)
-	// Schedule event-driven retry at the backoff window end (Phase 3 X1).
+	// Schedule event-driven retry at the backoff window end.
 	// This replaces the 10-minute periodic RepublishSnapshot ticker.
 	p.scheduleBackoffRetry(delay)
 }
@@ -511,7 +511,7 @@ func (p *Projector) savePendingRetry(key projectionKey, kind int, tags gonostr.T
 // scheduleBackoffRetry sets a one-shot timer that flushes pending retries
 // when the backoff window closes. It replaces the 10-minute periodic ticker
 // with an event-driven mechanism: the timer fires exactly when the backoff
-// expires, not on a fixed schedule (Phase 3 X1). Must be called with
+// expires, not on a fixed schedule. Must be called with
 // backoffMu held.
 func (p *Projector) scheduleBackoffRetry(delay time.Duration) {
 	s := p.projection()
@@ -684,7 +684,7 @@ func (p *Projector) ForgetAbandonedProjection(ev gonostr.Event) {
 }
 
 // publishAuthoritative signs one cp-state record for a domain that publishes
-// its canonical state directly from the code that mutates it (Phase 3 S2).
+// its canonical state directly from the code that mutates it.
 // It shares publishSigned's per-coordinate lock, created_at floor and
 // fingerprint memory so the record is fingerprint-deduped, and every later
 // event on the coordinate is strictly newer. Unlike publishSigned it does

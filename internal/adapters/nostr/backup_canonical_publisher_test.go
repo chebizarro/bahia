@@ -15,7 +15,7 @@ import (
 
 // --- BackupCanonicalPublisher acceptance tests -------------------------------
 //
-// These tests verify Phase 3 B1 invariants:
+// These tests verify the backup canonical publisher invariants:
 //   - One canonical event per material change through the shared path.
 //   - D-tag, legacy_kind, and family tags are correct.
 //   - Content change after char 64 IS published (no fingerprint truncation).

@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Readiness means "synced", not "non-empty" (bahia-irsry.20): every relay a
+// Readiness means "synced", not "non-empty": every relay a
 // replay REQ reached must be terminal (EOSE, CLOSED or dropped) for every
 // required group, and at least one relay must have sent a real EOSE. These
 // tests are driven purely by EVENT/EOSE/CLOSED frames through a real

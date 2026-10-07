@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Inbound resume cursors (bahia-irsry.10.1; audit C-2, C-3, B-15).
+// Inbound resume cursors.
 //
 // A cursor is kept per (relay, filter hash) in the local event store. It is the
 // newest created_at, clamped to the local clock, among the events that relay
@@ -30,7 +30,7 @@ import (
 // backdated events are still delivered; duplicates are dropped by id against
 // the local store. Replaceable and addressable sets do not rely on cursors at
 // all: they are reconciled in full with NIP-77, or paged in full, on every
-// (re)connect (C-3).
+// (re)connect.
 
 const (
 	// defaultInboundResumeOverlap is how far before a cursor a resume REQ
@@ -61,7 +61,7 @@ type InboundSyncConfig struct {
 	// NegentropyUploadFilter, when set, is consulted per relay before uploading.
 	// If it returns false for a relay URL, upload is suppressed even when
 	// NegentropyUpload is true. This scopes uploads to the daemon's own relays
-	// so control-plane events are not pushed to interop relays (.50 item 4).
+	// so control-plane events are not pushed to interop relays.
 	NegentropyUploadFilter func(relayURL string) bool
 	// PageLimit is the `limit` of each catch-up REQ page (lowered to a
 	// relay's NIP-11 max_limit). A full page is followed by an older page

@@ -19,7 +19,7 @@ import (
 )
 
 // TestMigratePendingPostgresRowsToLocalOutbox verifies the one-shot startup
-// migration (bahia-irsry.62): pending PostgreSQL outbox rows are enqueued to
+// migration: pending PostgreSQL outbox rows are enqueued to
 // the local outbox, the PG row is re-targeted as a local archive row, and
 // running the migration again is idempotent.
 func TestMigratePendingPostgresRowsToLocalOutbox(t *testing.T) {
@@ -78,7 +78,7 @@ func TestMigratePendingPostgresRowsToLocalOutbox(t *testing.T) {
 }
 
 // TestHiveCIAuditEnqueuesToLocalOutbox verifies that hiveci audit events
-// enqueue to the local outbox and publish without Postgres (bahia-irsry.62).
+// enqueue to the local outbox and publish without Postgres.
 func TestHiveCIAuditEnqueuesToLocalOutbox(t *testing.T) {
 	ctx := context.Background()
 	sk := gonostr.Generate()

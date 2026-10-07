@@ -38,7 +38,7 @@ type WorkerSchedulingSource interface {
 }
 
 // LocalReleaseEvidence resolves everything release admission checks from the
-// local event store (audit C-48): the signed 5401 lineage, the worker's
+// local event store: the signed 5401 lineage, the worker's
 // signed advertisement, and the canonical pipeline policies. No SQL mirror is
 // read, so a missing or stale row can neither reject evidence the relays hold
 // nor admit evidence they do not.

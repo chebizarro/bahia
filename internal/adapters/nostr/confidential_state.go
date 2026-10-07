@@ -11,32 +11,28 @@ import (
 	"github.com/openagentsinc/bahia/internal/repository"
 )
 
-// Legacy NIP-44 self-encryption (Phase 3 N1). Retained as a read-only path
-// during migration from the old per-private-key scheme to the per-org content
-// key (OCK) scheme. New publishes use ConfidentialStateEncryptor.
+// Read-only decryption for records NIP-44 self-encrypted to the service
+// pubkey with the raw private key. Current publishes encrypt with the
+// per-org content key (OCK) scheme via ConfidentialStateEncryptor; this
+// path exists for records still stored in the self-encrypted form.
 //
-// N1 migration coverage:
-// - N1-era secret/notification records on relays used NIP-44 self-encryption
-//   to the service pubkey. These records are audit/backup copies — the daemon's
-//   source of truth for secrets and notifications is the database, not relay
-//   events. No relay read-back path decodes them.
-// - O1-era org/member/invite records used the sha256-derived key AEAD. The
-//   RelayMemberEventHandler.HydrateTrustSetFromHistory path does read these
-//   back and has a dual-read (new format first, legacy O1 fallback).
-// - selfDecryptNIP44Legacy is retained for future relay recovery tooling and
-//   warm-start re-publication of N1 records under the OCK scheme.
+// Readers:
+//   - LegacyOCKMigrator (legacy_ock_migration.go) re-publishes
+//     self-encrypted records under the OCK scheme at warm start.
+//   - RelayMemberEventHandler.HydrateTrustSetFromHistory dual-reads
+//     org/member/invite records (OCK format first, old-format fallback).
+//   - Relay recovery tooling can decode self-encrypted history with it.
 //
-// DEPRECATED(bahia-irsry.64): This decrypt-only path is retained for one
-// release so that the LegacyOCKMigrator (legacy_ock_migration.go) can
-// re-publish N1-era records under the OCK scheme at startup. Once all
-// deployments have run the warm-start migration (bahia-irsry.64), remove
-// this function and the selfDecryptNIP44Legacy call sites. Condition for
-// deletion: no legacy-format (N1 NIP-44 self-encrypted) records remain
-// in any deployment's local event store or relay history.
-// Follow-up issue: bahia-irsry.65 (file after soak).
+// Self-encrypted secret/notification records on relays are audit/backup
+// copies — the daemon's source of truth for them is the database — and no
+// relay read-back path decodes them.
+//
+// The function and its call sites can be removed once no self-encrypted
+// records remain in any deployment's local event store or relay history
+// (bahia-irsry.65).
 
-// selfDecryptNIP44Legacy decrypts content that was NIP-44 self-encrypted
-// to the service's own pubkey using the raw private key. Legacy read-only path.
+// selfDecryptNIP44Legacy decrypts content that is NIP-44 self-encrypted
+// to the service's own pubkey using the raw private key. Read-only path.
 func (p *Projector) selfDecryptNIP44Legacy(content string) (string, error) {
 	if p.privateKey == "" {
 		return "", fmt.Errorf("no private key configured for legacy NIP-44 self-decryption")

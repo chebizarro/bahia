@@ -12,7 +12,7 @@ import (
 
 // PublishBeforeCommit delivers a signed event for a producer that commits its
 // own state only once the publish quorum has accepted the event, such as the
-// relay-first registry (bahia-irsry.41). Such a producer abandons its write
+// relay-first registry. Such a producer abandons its write
 // when the quorum is not met, so nothing may remain queued to be delivered
 // later. The order is therefore reversed from PublishProjection, which makes
 // the event durable before the first round:

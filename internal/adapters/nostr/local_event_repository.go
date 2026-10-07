@@ -16,7 +16,7 @@ import (
 
 // LocalEventRepository serves the nostr_events reads and writes of the
 // daemon's PostgreSQL-backed components from the local event store
-// (bahia-irsry.10.4, audit B-12). It replaces the unbounded in-memory
+// It replaces the unbounded in-memory
 // nostr_events fallback of PostgreSQL-less mode: the store is persistent,
 // collapses replaceable and addressable events to their latest version, and
 // prunes regular events, so it stays bounded and survives restarts.
@@ -34,7 +34,7 @@ import (
 //     stored: the producer publishes it through a Publisher itself.
 //
 // Authored returns a view limited to some authors, which the Projector uses
-// as its memory of what the daemon published (B-3).
+// as its memory of what the daemon published.
 type LocalEventRepository struct {
 	store   *localstore.Store
 	authors []nostr.PubKey

@@ -10,7 +10,7 @@ import (
 )
 
 // postgresArchive writes to the optional PostgreSQL nostr_events table without
-// letting PostgreSQL gate relay traffic (audit B-13, B-14). Delivery state and
+// letting PostgreSQL gate relay traffic. Delivery state and
 // inbound idempotency live in the local store; the table is an archive and
 // index for the PostgreSQL-backed readers.
 //

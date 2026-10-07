@@ -9,13 +9,9 @@ import (
 
 // SystemConfigCanonicalPublisher publishes system-configuration-derived records
 // (DM relay lists, system discovery announcement, relay sets, NIP-65 preferences)
-// through the shared signing and outbox pipeline. It replaces the unconditional
-// startup and periodic snapshot publish of these records: publishing is now
-// triggered once at startup (through warm-start comparison, which skips
-// unchanged records) and event-driven when config changes.
-//
-// Phase 3 X1: these records were previously published by RepublishSnapshot's
-// publishConfiguredDMRelayListsFromSystemConfig and publishSystemDiscovery.
+// through the shared signing and outbox pipeline. Publishing is triggered
+// once at startup (through warm-start comparison, which skips unchanged
+// records) and event-driven when config changes.
 type SystemConfigCanonicalPublisher struct {
 	projector *Projector
 	logger    *zap.Logger

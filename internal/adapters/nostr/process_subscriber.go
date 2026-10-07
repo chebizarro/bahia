@@ -14,7 +14,7 @@ import (
 
 // StoreBackedSubscriber serves SubscribeAllWithEOSE from a ProcessSync over a
 // local store, for consumers written against MergedSubscription such as the
-// DNS agent's ContextVM request transport (bahia-irsry.10.5). The consumer
+// DNS agent's ContextVM request transport. The consumer
 // keeps its own validation, routing, expiry and response handling; what
 // changes is that a restart or reconnect delivers only events the store has
 // not seen, each relay catching up independently.

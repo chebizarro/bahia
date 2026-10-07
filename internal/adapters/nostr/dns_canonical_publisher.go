@@ -17,12 +17,10 @@ import (
 )
 
 // DNSCanonicalPublisher publishes authoritative DNS state records through the
-// shared builder and outbox. It replaces the projector's DNS snapshot legs
-// (publishDNSEndpointSnapshot, publishDNSZoneSnapshot, etc.) that previously
-// ran on a 10-minute timer and on ~40 bus event types (B-17).
+// shared builder and outbox.
 //
 // The reconciler calls this after each material reconcile, so each canonical
-// record is published once per mutation instead of O(fleet) per tick.
+// record is published once per mutation.
 type DNSCanonicalPublisher struct {
 	projector *Projector // delegates to publishReplaceableJSON/publishReplaceableTombstone
 	logger    *zap.Logger
@@ -44,9 +42,8 @@ func NewDNSCanonicalPublisher(projector *Projector, logger *zap.Logger) *DNSCano
 	}
 }
 
-// HydrateFromProjector copies the projector's existing DNS published cache
-// into this publisher so that tombstoning works correctly for endpoints
-// that the projector previously published.
+// HydrateFromProjector copies the projector's DNS published cache into this
+// publisher so tombstoning covers endpoints already in that cache.
 func (p *DNSCanonicalPublisher) HydrateFromProjector() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -294,10 +291,9 @@ func (p *DNSCanonicalPublisher) PublishPolicyTombstone(ctx context.Context, id u
 		map[string]any{"deleted": true, "id": id.String(), "updated_at": formatTime(time.Now().UTC())}, "dns_policy.projection", &id)
 }
 
-// HydrateFromStore loads previously-published DNS endpoint coordinates from
-// the event store so tombstoning works correctly after a daemon restart.
-// This replaces the projector's hydrateDNSPublishedCache for the endpoint
-// family. It is idempotent: only fills gaps not already present in memory.
+// HydrateFromStore loads published DNS endpoint coordinates from the event
+// store so tombstoning works correctly after a daemon restart. It is
+// idempotent: only fills gaps not already present in memory.
 func (p *DNSCanonicalPublisher) HydrateFromStore(ctx context.Context) error {
 	if p.projector == nil || p.projector.history == nil {
 		return nil
@@ -327,7 +323,7 @@ func (p *DNSCanonicalPublisher) HydrateFromStore(ctx context.Context) error {
 
 // PublishZoneSync publishes a zone sync event carrying the full set of DNS
 // records for a zone. The agent subscribes to these events instead of
-// receiving ContextVM RPC pushes (C-34). The created_at timestamp serves as
+// receiving ContextVM RPC pushes. The created_at timestamp serves as
 // the serial; the event ID is the tie-breaker for equal serials.
 func (p *DNSCanonicalPublisher) PublishZoneSync(ctx context.Context, zone domain.DNSZone, records []domain.DNSRecord) error {
 	if p.projector == nil || !p.projector.Enabled() {

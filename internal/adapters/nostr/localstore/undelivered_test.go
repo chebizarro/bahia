@@ -12,7 +12,7 @@ import (
 // undelivered; the marker is cleared by a quorum-accepted publish of the
 // event, moves forward when a newer version is abandoned, is not cleared by
 // the acceptance of an older version, and is superseded by a newer version
-// saved on the coordinate (bahia-u5whr, §3.7).
+// saved on the coordinate.
 func TestUndeliveredMarkerFollowsCoordinateDelivery(t *testing.T) {
 	store, _ := openTemp(t)
 	sk := nostr.Generate()

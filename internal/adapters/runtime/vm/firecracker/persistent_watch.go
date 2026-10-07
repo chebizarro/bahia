@@ -42,7 +42,7 @@ func (d *Driver) WatchPersistent(ctx context.Context, id uuid.UUID, changed func
 	// Watch the instance directory for file events (API socket state changes,
 	// console.log writes) so that health transitions trigger re-observation
 	// even when the process stays alive. This closes the gap where readiness
-	// could miss the API socket until another file event arrived (.40 item 5).
+	// could miss the API socket until another file event arrived.
 	watcher, watcherErr := fsnotify.NewWatcher()
 	if watcherErr == nil {
 		watcherErr = watcher.Add(d.instanceDir(id.String()))

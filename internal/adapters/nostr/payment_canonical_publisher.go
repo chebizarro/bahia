@@ -29,7 +29,7 @@ import (
 // the daemon's own retained records from the local event store, so payment
 // history needs no SQL repository.
 //
-// bahia-irsry.60: confidential cp-state for payments.
+// confidential cp-state for payments.
 type PaymentCanonicalPublisher struct {
 	projector *Projector
 	encryptor ConfidentialStateEncryptor

@@ -17,16 +17,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// --- bahia-irsry.60 payment/security cp-state publisher tests ----------------
+// --- Payment/security cp-state publisher tests ----------------
 //
 // Invariants tested:
 //   - Publish-on-mutation: each mutation site publishes exactly one 30900 record.
-//   - Legacy path: the original publish path is not disrupted.
+//   - The original publish path is not disrupted.
 //   - Confidentiality: all content passes through EncryptConfidential; no
 //     plaintext org data appears in event content; sensitive fields (token_hash,
 //     amounts, vulnerability details) are inside the encrypted envelope.
 //   - Size bounds: individual finding records stay within NIP-44's 65,535-byte
-//     plaintext limit even with large payloads (.39 item 1).
+//     plaintext limit even with large payloads.
 
 // --- Payment Canonical Publisher ---
 
@@ -377,7 +377,7 @@ func TestSecuritySchedulePublisher_NilScheduleNoOp(t *testing.T) {
 	}
 }
 
-// --- Size bounds: NIP-44 limit compliance (.39 item 1) ---
+// --- Size bounds: NIP-44 limit compliance ---
 
 func TestSecurityFindingRecordContent_SizeBound(t *testing.T) {
 	// Create a finding with large fields to ensure the serialized content

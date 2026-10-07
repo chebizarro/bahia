@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Relay-stack polish (bahia-irsry.49): terminal CLOSEDs recorded in stored
+// Relay-stack polish: terminal CLOSEDs recorded in stored
 // outcomes, the CLOSED retry budget across consumers, and max_limit paging.
 // Every wait is on a protocol signal under a deadline; none sleeps.
 
@@ -104,7 +104,7 @@ func TestRelayPoolGaveUpAfterEOSEWhenTheBudgetRunsOut(t *testing.T) {
 // with the test's own message rather than the binary's panic, and only by
 // test end when there is no deadline. Every wait in the tests that use it is
 // on a protocol signal, so no fixed wall-clock budget is needed, and a loaded
-// package run (-race, -count=N, a busy host) cannot consume one (bahia-fyfez).
+// package run (-race, -count=N, a busy host) cannot consume one.
 func testDeadlineContext(t *testing.T) context.Context {
 	t.Helper()
 	deadline, ok := t.Deadline()

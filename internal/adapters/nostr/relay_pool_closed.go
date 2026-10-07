@@ -9,8 +9,7 @@ import (
 // bounded by WithRetryableClosedBudget) to the successive REQs one caller
 // issues for one filter on one relay. The pool's subscription workers use it,
 // and so does the inbound sync, which drives its own single-relay REQs, so a
-// relay that keeps closing a REQ is given up on the same way everywhere
-// (bahia-irsry.49).
+// relay that keeps closing a REQ is given up on the same way everywhere.
 type closedRetryBudget struct {
 	max         int
 	retryable   int

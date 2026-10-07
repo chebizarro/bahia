@@ -233,7 +233,7 @@ func (p *PersistentProvider) readRecord(id uuid.UUID) (*persistentRecord, error)
 			return nil, ProviderError(domain.VMErrorForeign, nil)
 		}
 		return nil, nil
-	} // Legacy metadata is never mutation authority.
+	} // The v1 metadata record is never mutation authority.
 	if r.SchemaVersion != 2 {
 		return nil, ProviderError(domain.VMErrorIntegrity, nil)
 	}

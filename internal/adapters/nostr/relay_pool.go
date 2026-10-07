@@ -919,7 +919,7 @@ type RelayEOSE struct {
 	// Reissued is true when this EOSE comes from a REQ the pool reissued
 	// after a dropped connection or a retryable CLOSED, not the subscription's
 	// initial REQ. Consumers that track cursors can commit a fresh anchor at
-	// a reissued EOSE without a periodic re-anchor REQ (bahia-irsry.48 item 4).
+	// a reissued EOSE without a periodic re-anchor REQ.
 	Reissued bool
 	// ReissuedAt, when Reissued, is the wall-clock time taken just before
 	// the reissued REQ was opened: the cursor anchor for the reissue.
@@ -970,7 +970,7 @@ func (m *MergedSubscription) PendingEOSE() []string {
 // terminal subscription without EOSE is not sufficient bootstrap evidence.
 func (m *MergedSubscription) HasRealEOSE() bool {
 	if m == nil || m.active == nil {
-		// Synthetic and legacy merged subscriptions close their aggregate EOSE
+		// Merged subscriptions with no active set close their aggregate EOSE
 		// channel only when their caller has supplied EOSE semantics.
 		return true
 	}

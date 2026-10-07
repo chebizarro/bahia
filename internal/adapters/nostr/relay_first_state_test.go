@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// bahia-irsry.41: the relay-first registry and the projector write the same
+// the relay-first registry and the projector write the same
 // service- and environment-registry coordinates. These tests drive the
 // production relay-first path (service.RelayFirstRegistry over
 // RelayFirstStatePublisher) and the projector over one registry cache.
@@ -135,14 +135,14 @@ func TestRelayFirstServiceRecordMatchesProjectionAndIsSignedOnce(t *testing.T) {
 	}
 	relayFirst := h.relayFirst.events[0]
 
-	// F2: the projector no longer publishes service registry records;
+	// The projector does not publish service registry records;
 	// the relay-first path is the only publisher.
 	assertCPStateEnvelope(t, relayFirst, KindServiceRegistry, stored.ID.String(), false, kinds.CPStateTopicServiceRegistry)
 	var content map[string]any
 	if err := json.Unmarshal([]byte(relayFirst.Content), &content); err != nil {
 		t.Fatalf("decode relay-first content: %v", err)
 	}
-	// The update's revision is minted before publishing (bahia-irsry.53):
+	// The update's revision is minted before publishing:
 	// the record carries the revision the cache then stored, newer than the
 	// one the edit started from.
 	revision := h.services.rows[stored.ID].UpdatedAt
@@ -155,11 +155,11 @@ func TestRelayFirstServiceRecordMatchesProjectionAndIsSignedOnce(t *testing.T) {
 	}
 	assertWebReadModelFilterMatches(t, relayFirst)
 
-	// F2: projector no longer handles service events at all.
+	// The projector does not handle service events at all.
 	h.projector.handleEvent(ctx, events.Event{Type: events.EventServiceUpdated, EntityID: stored.ID.String()})
 	h.republishRegistrySnapshot(t)
 	if got := h.projectorRelay.byKind(KindServiceRegistry); len(got) != 0 {
-		t.Fatalf("projector published %d service records after F2 leg deletion, want 0", len(got))
+		t.Fatalf("projector published %d service records on service event, want 0", len(got))
 	}
 }
 
@@ -185,7 +185,7 @@ func TestRelayFirstEnvironmentRecordMatchesProjectionAndIsSignedOnce(t *testing.
 	}
 	relayFirst := h.relayFirst.events[0]
 
-	// Phase 3 F3: environment handleEvent case removed. Use direct
+	// The projector has no environment handleEvent case; use direct
 	// publishEnvironmentRegistry for the reference projection.
 	refSink := &captureProjectionPublisher{}
 	refProj := newRelayFirstTestProjector(h.source, refSink)
@@ -257,7 +257,7 @@ func TestRelayFirstTombstonesMatchProjectorTombstones(t *testing.T) {
 // signs next on a coordinate is strictly newer, even within one second: a
 // tombstone never loses a created_at tie to the live record it replaces.
 func TestRelayFirstAndProjectorShareTheCoordinateCreatedAtFloor(t *testing.T) {
-	// F2: the projector no longer publishes service registry records.
+	// The projector does not publish service registry records.
 	// Verify that successive relay-first writes on the same coordinate
 	// produce strictly increasing created_at values.
 	ctx := context.Background()
@@ -294,7 +294,7 @@ func TestRelayFirstAndProjectorShareTheCoordinateCreatedAtFloor(t *testing.T) {
 // of the stamped row must replace the relay-first record rather than be
 // deduplicated against it.
 func TestRelayFirstRecordIsReplacedWhenTheCacheStampsANewRevision(t *testing.T) {
-	// F2: the projector no longer publishes service registry records.
+	// The projector does not publish service registry records.
 	// Verify the relay-first update publishes exactly one record with the
 	// correct cached revision.
 	ctx := context.Background()
@@ -308,7 +308,7 @@ func TestRelayFirstRecordIsReplacedWhenTheCacheStampsANewRevision(t *testing.T) 
 	if err := h.registry.UpdateService(ctx, &edit); err != nil {
 		t.Fatalf("relay-first UpdateService: %v", err)
 	}
-	// Projector no longer handles service events.
+	// The projector does not handle service events.
 	h.projector.handleEvent(ctx, events.Event{Type: events.EventServiceUpdated, EntityID: stored.ID.String()})
 	_ = ctx // keep linter happy
 
@@ -326,8 +326,8 @@ func TestRelayFirstRecordIsReplacedWhenTheCacheStampsANewRevision(t *testing.T) 
 	if err := json.Unmarshal([]byte(h.relayFirst.events[0].Content), &content); err != nil {
 		t.Fatal(err)
 	}
-	// F2: the relay-first record carries the revision minted by prepareServiceUpdate,
-	// which is newer than the original. The projector no longer re-projects.
+	// The relay-first record carries the revision minted by prepareServiceUpdate,
+	// which is newer than the original. The projector does not re-project.
 	parsed, err := time.Parse(time.RFC3339Nano, content.UpdatedAt)
 	if err != nil {
 		t.Fatalf("parse relay-first updated_at %q: %v", content.UpdatedAt, err)
@@ -371,11 +371,11 @@ func TestRelayFirstWriteFailsWithoutRelayAcceptanceAndIsNotRemembered(t *testing
 	if h.services.rows[stored.ID].Name != "api" {
 		t.Fatal("cache written after the relay rejected the record")
 	}
-	// F2: the projector no longer publishes service records. After a rejected
+	// The projector does not publish service records. After a rejected
 	// relay-first write, there is no fallback projector publish.
 	h.projector.handleEvent(ctx, events.Event{Type: events.EventServiceUpdated, EntityID: stored.ID.String()})
 	if got := h.projectorRelay.byKind(KindServiceRegistry); len(got) != 0 {
-		t.Fatalf("projector published %d service records after F2 leg deletion, want 0", len(got))
+		t.Fatalf("projector published %d service records on service event, want 0", len(got))
 	}
 	_ = ctx
 }
@@ -389,7 +389,7 @@ func TestProjectionFingerprintKeepsRegistryRevision(t *testing.T) {
 	state := gonostr.Tags{{"d", "x"}, {"legacy_kind", strconv.Itoa(KindServiceState)}}
 	if projectionFingerprint(KindCASControlState, state, `{"id":"x","updated_at":"t1"}`) !=
 		projectionFingerprint(KindCASControlState, state, `{"id":"x","updated_at":"t2"}`) {
-		t.Fatal("service-state fingerprint no longer treats updated_at as volatile")
+		t.Fatal("service-state fingerprint must not treat updated_at as volatile")
 	}
 }
 
@@ -669,7 +669,7 @@ func TestRelayFirstQuorumNotMetQueuesNothingAndSkipsTheCacheWrite(t *testing.T) 
 	require.Empty(t, h.delivered)
 }
 
-// Phase 3 S2 (bahia-irsry.11.7): build, artifact, deployment intent and
+// build, artifact, deployment intent and
 // deployment run families publish canonical cp-state through the authoritative
 // projection path, not through the projector's event handler.
 

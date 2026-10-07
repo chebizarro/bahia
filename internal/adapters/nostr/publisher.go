@@ -133,12 +133,12 @@ type Publisher struct {
 	// eventRepo is the optional PostgreSQL nostr_events table. Without a local
 	// outbox it is the outbox itself; with one it is a best-effort archive.
 	eventRepo repository.NostrEventRepository
-	// outboxRepo is eventRepo's publish-state extension. It is no longer
-	// drained at runtime (bahia-irsry.62): MigratePendingPostgresRows moves
-	// any pre-upgrade pending rows to the local outbox at startup.
+	// outboxRepo is eventRepo's publish-state extension. It is not drained
+	// at runtime: MigratePendingPostgresRows moves any pending rows it holds
+	// to the local outbox at startup.
 	outboxRepo repository.NostrEventOutboxRepository
 	// localOutbox owns the delivery of every event this publisher is asked
-	// to publish. Required for redelivery-enabled publishers (bahia-irsry.62).
+	// to publish. Required for redelivery-enabled publishers.
 	localOutbox *localstore.Outbox
 	// ownEvents is the daemon's local event store. Each published event is
 	// kept there as the daemon's latest output (the Projector hydrates its
@@ -148,7 +148,7 @@ type Publisher struct {
 	// marked undelivered on its coordinate (localstore.Undelivered), until a
 	// publish on the coordinate reaches the quorum: canonical reads keep
 	// answering with the state the daemon committed to, and nothing is lost
-	// silently (bahia-u5whr, design doc §3.7).
+	// silently (docs/architecture/outbox-delivery.md).
 	ownEvents *localstore.Store
 	// archive mirrors locally delivered events into eventRepo.
 	archive      *postgresArchive
@@ -697,7 +697,7 @@ func (p *Publisher) forgetOwnEvent(ev nostr.Event) {
 
 // markOwnEventUndelivered keeps an abandoned event in the local event store
 // and marks its coordinate undelivered: the event is the daemon's committed
-// state and must stay readable, but no quorum holds it (§3.7). The event is
+// state and must stay readable, but no quorum holds it. The event is
 // saved again first, so a marker never points at an event the store lost.
 func (p *Publisher) markOwnEventUndelivered(ev nostr.Event, detail string) {
 	if p.ownEvents == nil {
@@ -764,7 +764,7 @@ func (p *Publisher) restoreUndelivered() {
 // with id (hex). A producer that records an event id after publishing calls it
 // once the id is stored, so an outcome the outbox reached in between (before
 // OnDelivered or OnDeliveryAbandoned could find the producer's row) is not
-// lost (bahia-irsry.40). Settled local entries stay readable for a day.
+// lost. Settled local entries stay readable for a day.
 func (p *Publisher) DeliveryOutcome(ctx context.Context, id string) (nostrutil.DeliveryOutcome, error) {
 	if p == nil {
 		return nostrutil.DeliveryUnknown, nil

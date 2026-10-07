@@ -65,9 +65,8 @@ type WorkerProjectionSource interface {
 	List(ctx context.Context, status string, limit int) ([]domain.Worker, error)
 }
 
-// Phase 3 W1: WorkerReadModelProjectionSource interface removed — worker
-// assignment/drain read models are published directly from the mutation site
-// via WorkerReadModelPublisher (bahia-irsry.11.14).
+// Worker assignment/drain read models are published from the mutation site
+// via WorkerReadModelPublisher, not projected here.
 
 type latestObservationSource interface {
 	GetLatestObservation(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error)
@@ -142,10 +141,9 @@ type ProjectionPublisher interface {
 // read models and append-only audit events. It is rebuildable: a startup and
 // periodic snapshot can repair a cold or wiped sidecar store.
 type Projector struct {
-	source       ProjectionSource
-	mlSource     MLProjectionSource
-	workerSource WorkerProjectionSource
-	// Phase 3 W1: workerReadModelSource field removed (bahia-irsry.11.14).
+	source               ProjectionSource
+	mlSource             MLProjectionSource
+	workerSource         WorkerProjectionSource
 	dnsSource            DNSProjectionSource
 	dnsZoneSource        DNSZoneProjectionSource
 	dnsBackendSource     DNSBackendProjectionSource
@@ -189,8 +187,8 @@ func WithWorkerProjectionSource(source WorkerProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.workerSource = source }
 }
 
-// Phase 3 W1: WithWorkerReadModelProjectionSource removed (bahia-irsry.11.14).
-// Worker read models are published directly from the mutation site.
+// Worker read models are published from the mutation site, not from a
+// projector source.
 
 func WithDNSProjectionSource(source DNSProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.dnsSource = source }
@@ -219,7 +217,7 @@ func WithSystemDiscoveryConfig(cfg *config.Config, mcpTransportEnabled bool) Pro
 // daemon's own events, newest first. In the daemon it is the author-scoped
 // view of the local event store (LocalEventRepository.Authored), which holds
 // only the latest version of each addressable coordinate and nothing whose
-// delivery was abandoned (bahia-irsry.10.4, audit B-3); PostgreSQL is not
+// delivery was abandoned; PostgreSQL is not
 // consulted. Every NostrEventRepository satisfies it.
 type ProjectionHistory interface {
 	ListByKind(ctx context.Context, kind int, limit int) ([]repository.NostrEventRecord, error)
@@ -270,14 +268,14 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 	for _, eventType := range []events.EventType{
 		// Phase 3 F2/F3: service and environment Created/Updated/Deleted
 		// subscriptions removed — their state is published by the intent handlers
-		// via PublishBeforeCommit (bahia-irsry.11.3, bahia-irsry.11.4).
+		// via PublishBeforeCommit.
 		//
 		// Phase 3 S2/W1: deployment run event subscriptions removed — their
 		// cp-state is published directly from RegistryService (S2), and worker
 		// read models are published from the run mutation site (W1, bahia-irsry.11.14).
 		// Observed-deployments side effect only (no audit). Their cp-state is
 		// published by the mutation-site publishers; the observed-deployments
-		// announcement is a coalesced aggregate refreshed on change (B-16).
+		// announcement is a coalesced aggregate refreshed on change.
 		events.EventRuntimeObservation,
 		events.EventEnvironmentServiceStateChanged,
 		events.EventDriftDetected,
@@ -314,7 +312,7 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 // Run performs warm-start comparison for all domains, publishes system
 // configuration records if missing from relays, and then waits for context
 // cancellation. No periodic snapshot or ticker: every canonical record is
-// published once by the code that mutates it (Phase 3 X1).
+// published once by the code that mutates it.
 func (p *Projector) Run(ctx context.Context) error {
 	if !p.Enabled() {
 		return nil
@@ -365,30 +363,23 @@ func (p *Projector) handleEvent(ctx context.Context, e events.Event) {
 		p.logger.Warn("publish Nostr audit event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
 	}
 
-	// Phase 3 X1: all reactive handleEvent cases removed. Service/environment
-	// registry records are published directly from the mutation site (intent
-	// handlers, adoption canonical publisher). The remaining projector bus
-	// handler serves the append-only audit log and observed-deployments
-	// refresh only.
+	// Service/environment registry records are published directly from the
+	// mutation site (intent handlers, adoption canonical publisher). The
+	// projector bus handler serves the append-only audit log and
+	// observed-deployments refresh only.
 	if shouldRefreshObservedDeploymentsProjection(e.Type) && p.systemConfig != nil && len(p.systemConfig.Nostr.BrowserRelayPolicyRelays()) > 0 {
 		if err := p.publishSystemDiscoveryAnnouncement(ctx, p.systemConfig); err != nil {
 			p.logger.Warn("publish observed deployments discovery after event failed", zap.String("event_type", string(e.Type)), zap.Error(err))
 		}
 	}
-	// Phase 3 D1: DNS endpoint publishing moved to the reconciler's
-	// DNSCanonicalPublisher (B-17 fix). The projector no longer re-derives
-	// DNS endpoints on every bus event.
+	// DNS endpoints are published by the reconciler's DNSCanonicalPublisher,
+	// not derived from bus events here.
 }
 
-// Phase 3 X1: publishServiceByID and publishEnvironmentByID removed.
-// Adoption-imported service/environment records are now published directly
-// by the AdoptionCanonicalPublisher wired to the adoption service.
+// Adoption-imported service/environment records are published directly by
+// the AdoptionCanonicalPublisher wired to the adoption service.
 
-// Phase 3 M1: publishMLModelByID, publishMLModelVersionByID,
-// publishMLEndpointByID, publishMLStateForIntent, publishMLStateForRun,
-// publishMLStateForIDs, publishMLProvenanceByArtifactID,
-// publishMLProvenanceFromEvent, publishMLProvenanceForEdge removed.
-// ML state is now published directly from the mutation site via MLCanonicalPublisher.
+// ML state is published directly from the mutation site via MLCanonicalPublisher.
 
 func (p *Projector) publishReplaceableJSON(ctx context.Context, kind int, dTag string, tags gonostr.Tags, value any, entityType string, entityID *uuid.UUID) error {
 	content, _ := json.Marshal(value)
@@ -417,7 +408,7 @@ func (p *Projector) publishControlState(ctx context.Context, legacyKind int, id 
 // Relays replace an addressable event only with a newer event on the exact
 // same (kind, pubkey, d) coordinate, so a live record and its tombstone must
 // both be built here; deriving either one separately is how deletions ended up
-// on a coordinate nobody reads (B-18, B-19).
+// on a coordinate nobody reads.
 func controlStateEnvelope(legacyKind int, id string, deleted bool) (wireKind int, tags gonostr.Tags) {
 	deletedValue := strconv.FormatBool(deleted)
 	domainName, _ := canonicalStateDomain(legacyKind)
@@ -438,7 +429,7 @@ const controlStateSchema = kinds.CASControlStateSchema
 
 // cpStateFamily is one projected cp-state family: the 30900 domain and entity
 // of its records and the single-letter "t" topic ("<domain>-<entity>") each
-// record carries so consumers can REQ it by #t (audit A-27).
+// record carries so consumers can REQ it by #t.
 type cpStateFamily struct {
 	domain string
 	entity string
@@ -447,7 +438,7 @@ type cpStateFamily struct {
 
 // cpStateFamilies is the projector's single table of cp-state families, keyed
 // by the catalog kind stamped in legacy_kind. The worker topics are the worker
-// contract's (bahia-irsry.9.2).
+// contract's.
 var cpStateFamilies = map[int]cpStateFamily{
 	KindServiceState:                  {"service", "state", kinds.CPStateTopicServiceState},
 	KindServiceRegistry:               {"service", "registry", kinds.CPStateTopicServiceRegistry},
@@ -494,22 +485,22 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindBackupVerificationState:       {"backup", "verification", kinds.CPStateTopicBackupVerification},
 	KindBackupRestoreState:            {"backup", "restore", kinds.CPStateTopicBackupRestore},
 	KindBackupRuntimeObservationState: {"backup", "runtime", kinds.CPStateTopicBackupRuntimeObservation},
-	// Org cp-state families (Phase 3 Wave 5 O1).
+	// Org cp-state families.
 	KindOrgRegistry:                 {"org", "registry", kinds.CPStateTopicOrgRegistry},
 	KindOrgMemberRegistry:           {"org", "member", kinds.CPStateTopicOrgMemberRegistry},
 	KindOrgInviteRegistry:           {"org", "invite", kinds.CPStateTopicOrgInviteRegistry},
 	KindSecretRegistry:              {"secret", "registry", kinds.CPStateTopicSecretRegistry},
 	KindNotificationChannelRegistry: {"notification", "channel", kinds.CPStateTopicNotificationChannelRegistry},
-	// Org key-envelope family (Phase 3 C1: per-org content key distribution).
+	// Org key-envelope family (per-org content key distribution).
 	KindOrgKeyEnvelope: {"org", "key-envelope", kinds.CPStateTopicOrgKeyEnvelope},
-	// Payment and security cp-state families (bahia-irsry.60).
+	// Payment and security cp-state families.
 	KindPaymentRecord:               {"payment", "record", kinds.CPStateTopicPaymentRecord},
 	KindSecurityFindingRecord:       {"security", "finding", kinds.CPStateTopicSecurityFinding},
 	KindSecurityScheduleRecord:      {"security", "schedule", kinds.CPStateTopicSecuritySchedule},
 	KindSecurityFindingDetailRecord: {"security", "finding-detail", kinds.CPStateTopicSecurityFindingDetail},
 	KindSecurityTargetRecord:        {"security", "target", kinds.CPStateTopicSecurityTarget},
 	KindSecurityRunRecord:           {"security", "run", kinds.CPStateTopicSecurityRun},
-	// Adoption binding family (audit B-35).
+	// Adoption binding family.
 	KindAdoptionBindingRecord:  {"adoption", "binding", kinds.CPStateTopicAdoptionBinding},
 	KindHiveCIPolicyRecord:     {"hiveci", "policy", kinds.CPStateTopicHiveCIPolicy},
 	KindHiveCIResultRecord:     {"hiveci", "result", kinds.CPStateTopicHiveCIResult},
@@ -524,10 +515,10 @@ var cpStateFamilies = map[int]cpStateFamily{
 	kinds.ManagedInstanceHealthRecord: {"runtime", "instance-health", kinds.CPStateTopicManagedInstanceHealth},
 	kinds.RouteCanaryRecord:           {"route", "canary", kinds.CPStateTopicRouteCanary},
 	kinds.SoulRuntimePolicyRecord:     {"soul-factory", "runtime-policy", kinds.CPStateTopicSoulRuntimePolicy},
-	// Governed provisioning adapter ledger (bahia-nfc95); published by the
+	// Governed provisioning adapter ledger; published by the
 	// soulfactory package through the publisher seam, not the projector.
 	int(kinds.CPStateFamilySoulFactoryAdapterLedger): {"soul-factory", "adapter-ledger", kinds.CPStateTopicSoulFactoryAdapterLedger},
-	// Fleet-OCK encrypted operator allowlists (bahia-fbyo5); published by
+	// Fleet-OCK encrypted operator allowlists; published by
 	// OperatorAllowlistPublisher through the canonical-first path.
 	int(kinds.CPStateFamilyOperatorAllowlist): {"operator", "allowlist", kinds.CPStateTopicOperatorAllowlist},
 	kinds.BlossomAdminRecord:                  {"blossom", "admin", kinds.CPStateTopicBlossomAdmin},
@@ -536,7 +527,7 @@ var cpStateFamilies = map[int]cpStateFamily{
 
 // CPStateDomains returns all unique cp-state domain names from the
 // cpStateFamilies table. The warm-start uses this to iterate all domains
-// without hard-coding the list in app.go (Phase 3 X1).
+// without hard-coding the list in app.go.
 func CPStateDomains() []string {
 	seen := map[string]struct{}{}
 	var out []string
@@ -559,7 +550,7 @@ func canonicalStateDomain(kind int) (domainName string, entity string) {
 // id, except that worker families prefix it per family (kinds.CPStateFamily
 // WorkerDTag, "worker:<entity>:<id>"): assignment and drain are both keyed by
 // the worker pubkey, and on one bare-pubkey d each replaced the other on the
-// relay (bahia-irsry.36).
+// relay.
 func canonicalStateDTag(legacyKind int, id string) string {
 	if d, ok := kinds.CPStateFamily(legacyKind).WorkerDTag(id); ok {
 		return d
@@ -567,7 +558,6 @@ func canonicalStateDTag(legacyKind int, id string) string {
 	return id
 }
 
-// Phase 3 X1: publishSBOMSnapshots and predicateTypeForSBOMFormat removed.
 // SBOM reference events (30078) and availability lists (30004) are published
 // from the SBOM orchestrator's mutation site via Publisher.PublishSignedEventWithResults.
 // The projector never re-derives SBOM state from the persistent repository.
@@ -1092,11 +1082,9 @@ func normalizeProjectionRelays(values []string) []string {
 	return out
 }
 
-// Phase 3 S2: publishBuildRegistry, publishArtifactRegistry,
-// publishDeploymentIntentRegistry and publishDeploymentRunRegistry removed —
-// their canonical state is published directly from RegistryService mutation
-// methods via the shared record builders in control_state_contract.go
-// (bahia-irsry.11.7).
+// Build, artifact, deployment intent and deployment run registry state is
+// published directly from RegistryService mutation methods via the shared
+// record builders in control_state_contract.go.
 
 // publishServiceRegistry and publishEnvironmentRegistry publish the records
 // serviceRegistryRecord and environmentRegistryRecord build, the builders the
@@ -1128,21 +1116,15 @@ func uuidStringPtr(id *uuid.UUID) string {
 	return id.String()
 }
 
-// Phase 3 M1: publishMLModelRegistry, publishMLModelVersionRegistry,
-// publishMLInferenceEndpointRegistry, publishMLInferenceEndpointState,
-// environmentNameForMLProjection, publishMLArtifactProvenanceGraph,
-// publishMLRuntimeCapabilityProfile removed. ML state is now published
-// directly from the mutation site via MLCanonicalPublisher.
+// ML registry state is published directly from the mutation site via
+// MLCanonicalPublisher.
 
-// Phase 3 W1: publishWorkerAssignmentState, publishWorkerDrainStatus,
-// publishWorkerReadModelsForWorker, and publishWorkerReadModelSnapshots
-// removed — worker assignment/drain read models are published directly from
-// the mutation site (worker_handlers.go, registry.go, ml_registry.go) via
-// WorkerReadModelPublisher (bahia-irsry.11.14).
+// Worker assignment/drain read models are published directly from the
+// mutation site (worker_handlers.go, registry.go, ml_registry.go) via
+// WorkerReadModelPublisher.
 
-// Phase 3 S1: publishState removed — the shared record builder
-// RuntimeStateRecord in control_state_contract.go replaces it, and the
-// reconciler publishes via RuntimeStatePublisher (bahia-irsry.11.6).
+// Runtime state is published by the reconciler via RuntimeStatePublisher
+// using the shared RuntimeStateRecord builder in control_state_contract.go.
 
 // serviceStateDTag is the one coordinate builder for service state: the live
 // record and its tombstone both use it, so they share one relay coordinate.

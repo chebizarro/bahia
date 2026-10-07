@@ -133,7 +133,7 @@ func TestBootstrapperPagesLiveCatchup(t *testing.T) {
 		if len(filter.Kinds) == 1 && int(filter.Kinds[0]) == testKindTier1Live {
 			livePages++
 			require.Equal(t, 2, filter.Limit)
-			require.Zero(t, filter.Since, "an addressable live group is replayed in full, never from the attempt start (C-3)")
+			require.Zero(t, filter.Since, "an addressable live group is replayed in full, never from the attempt start")
 		}
 	}
 	require.GreaterOrEqual(t, livePages, 3)

@@ -169,7 +169,7 @@ type outboxDelivery struct {
 	// caller receives runs (the first round of an inline publish). An
 	// abandonment in that round is returned to the caller, who treats the
 	// operation as failed; one in any later round is reported only through
-	// the hooks, after the caller was told the event was queued (§3.7).
+	// the hooks, after the caller was told the event was queued.
 	callerWaiting bool
 	// quorumReached mirrors delivered for readers that do not hold mu (see
 	// Publisher.DeliveryOutcome).
@@ -420,7 +420,7 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 				p.forgetOwnEvent(d.event)
 			} else {
 				// The caller was told the event was queued: keep it as the
-				// daemon's committed state and flag its coordinate (§3.7).
+				// daemon's committed state and flag its coordinate.
 				p.markOwnEventUndelivered(d.event, abandonmentDetail(exhausted, p.maxAttempts, detail))
 			}
 			p.notifyAbandoned(d.event)
@@ -728,7 +728,7 @@ func (p *Publisher) discoverLocal(ctx context.Context) (bool, error) {
 	return len(entries) == p.pageSize, nil
 }
 
-// MigratePendingPostgresRows is a one-shot startup migration (bahia-irsry.62)
+// MigratePendingPostgresRows is a one-shot startup migration
 // that moves any pending PostgreSQL outbox rows for this publisher's target
 // into the local outbox. Each row is enqueued idempotently by event ID. On
 // success the PostgreSQL row is re-targeted as a "local:" archive row so it

@@ -52,7 +52,7 @@ func newAuthRequiredRelay(t *testing.T, reqs *atomic.Int32, rejectFirst func(nos
 }
 
 // TestAwaitJobStatusFromWorker_RelayAuthIsThePools: the Loom client has no
-// AUTH logic of its own (bahia-irsry.47). With a signer, the shared pool
+// AUTH logic of its own. With a signer, the shared pool
 // answers the relay's challenge and reissues both REQs. The fixture refuses
 // each filter's first REQ even if AUTH completes between them. The result
 // arrives after both authenticated listeners are installed, so completion cannot

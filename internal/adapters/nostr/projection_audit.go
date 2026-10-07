@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Audit facts (audit C-16). Every audited bus event is one immutable fact on
+// Audit facts. Every audited bus event is one immutable fact on
 // the regular kind 4903: no d tag, so repeated audits of one entity coexist
 // instead of replacing each other the way the retired addressable 31000-31099
 // kinds did. A fact is correlated by tags rather than a coordinate:
@@ -181,11 +181,11 @@ func isHexEventID(id string) bool {
 	return err == nil
 }
 
-// isAuditedEvent reports whether the projector records e as an audit fact.
-// isAuditedEvent returns true for operator-meaningful, discrete mutations.
-// Phase 3 X1 B-16: observation/sync/state-changed/drift events removed.
-// Their state is already published as replaceable cp-state by the
-// mutation-site publishers; auditing them produced ~1 440 noise events/day.
+// isAuditedEvent reports whether the projector records e as an audit fact:
+// operator-meaningful, discrete mutations. Observation/sync/state-changed/
+// drift events are not audited — their state is published as replaceable
+// cp-state by the mutation-site publishers, and auditing them would add
+// ~1 440 noise events/day.
 func isAuditedEvent(t events.EventType) bool {
 	switch t {
 	case events.EventBuildRegistered, events.EventArtifactRegistered,

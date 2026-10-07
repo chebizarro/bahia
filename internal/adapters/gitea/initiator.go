@@ -28,7 +28,7 @@ type SecretResolver interface {
 }
 
 // ErrSecretStoreUnavailable is returned when a build initiation reaches
-// credential resolution on a daemon without the secret store (bahia-xjdo9).
+// credential resolution on a daemon without the secret store.
 //
 // The upstream repository credential and the fleet mirror-read password are
 // secret values, not metadata: the canonical secret registry (30900

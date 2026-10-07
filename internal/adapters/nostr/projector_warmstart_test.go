@@ -207,11 +207,8 @@ func TestWarmStartStaleRecordPublishesExactlyOne(t *testing.T) {
 	}
 }
 
-// Phase 3 X1: fakeSBOMSource removed — SBOM is no longer projected here.
-
-// TestWarmStartUnmigratedSBOMStillGetsLegacySnapshot verifies that SBOM, the
 // TestWarmStartAllDomainsRepublishStaleOnly verifies that warm-start covers
-// all cp-state domains (Phase 3 X1) and only re-publishes stale records.
+// all cp-state domains and only re-publishes stale records.
 func TestWarmStartAllDomainsRepublishStaleOnly(t *testing.T) {
 	ctx := t.Context()
 	logger := zap.NewNop()
@@ -255,7 +252,7 @@ func TestWarmStartAllDomainsRepublishStaleOnly(t *testing.T) {
 
 // TestProjectorRunHasNoTicker verifies that the projector's Run method
 // has no periodic ticker: it waits for context cancellation after warm-start
-// and startup publish, with no snapshot repair loop (Phase 3 X1).
+// and startup publish, with no snapshot repair loop.
 func TestProjectorRunHasNoTicker(t *testing.T) {
 	ctx := t.Context()
 	logger := zap.NewNop()

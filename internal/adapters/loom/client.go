@@ -481,9 +481,9 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (_ string, retEr
 
 var buildDependencyNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
-// validatedBuildDependencyTags renders the legacy non-spec `dep` tags. New
-// Hive-CI dispatch passes dependencies as loom-ci `--dep` args instead (see
-// HiveCIJobArgs); this remains for non-CI jobs that still carry them.
+// validatedBuildDependencyTags renders the non-spec `dep` tags. Hive-CI
+// dispatch passes dependencies as loom-ci `--dep` args instead (see
+// HiveCIJobArgs); this remains for non-CI jobs that carry them.
 func validatedBuildDependencyTags(dependencies []BuildDependency) (nostr.Tags, error) {
 	ordered, err := validatedBuildDependencies(dependencies)
 	if err != nil {
@@ -609,7 +609,7 @@ resubscribe:
 				// Every REQ stopped. If the pool gave up on the relays (a
 				// policy refusal, failed AUTH or an exhausted CLOSED retry
 				// budget), resubscribing would only sidestep that give-up
-				// with a fresh budget (bahia-irsry.49).
+				// with a fresh budget.
 				if gaveUp := sub.GaveUp(); gaveUp != nil {
 					return nil, fmt.Errorf("loom job status subscription for %s: %w", jobEventID, gaveUp)
 				}

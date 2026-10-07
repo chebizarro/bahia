@@ -12,12 +12,11 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
-// Phase 3 W1: fakeWorkerReadModelSource removed — worker assignment/drain
-// read models are published directly from the mutation site via
-// WorkerReadModelPublisher (bahia-irsry.11.14). The coordinate-isolation
+// Worker assignment/drain read models are published directly from the
+// mutation site via WorkerReadModelPublisher. The coordinate-isolation
 // test below uses publishReplaceableJSON directly.
 
-// TestProjectorWorkerFamiliesCoexistOnRelay pins bahia-irsry.36 against a relay
+// TestProjectorWorkerFamiliesCoexistOnRelay verifies against a relay
 // with NIP-01 addressable replacement: the projector's assignment and drain
 // records for one worker (and a worker-state or eligibility record built by
 // the same envelope) sit on distinct coordinates, so the relay serves every

@@ -44,14 +44,11 @@ func DNSPolicyDTag(id uuid.UUID) string { return dnsPolicyDTag(id) }
 // Service and environment registry records ----------------------------------
 //
 // The service-registry and environment-registry cp-state coordinates have two
-// writers until Phase 3 removes the dual write: the projector, and the
-// relay-first registry (internal/service.RelayFirstRegistry), which publishes
-// before it writes the local cache. Both build the record here, on the
-// envelope controlStateEnvelope derives, so for one entity state they emit one
-// tag set and one content serialization (bahia-irsry.41, audit B-5). Before,
-// the relay-first record had no t or legacy_kind tag, so #t consumers missed
-// it, and its content differed (org_id, repository, timestamp precision), so
-// the coordinate alternated between two shapes.
+// writers: the projector, and the relay-first registry
+// (internal/service.RelayFirstRegistry), which publishes before it writes the
+// local cache. Both build the record here, on the envelope controlStateEnvelope
+// derives, so for one entity state they emit one tag set and one content
+// serialization — including the t and legacy_kind tags #t consumers filter on.
 
 // serviceRegistryRecord returns the family tags and content of a service's
 // registry record. svc must already carry the read normalization readers see
@@ -93,7 +90,7 @@ func serviceRegistryRecord(svc *domain.Service, deleted bool) (gonostr.Tags, str
 // deployment-unit set; when it is empty the record carries the implicit
 // default unit instead. The relay-first registry passes the set it is about
 // to store and the projector the set it reads back (environmentRecordUnits),
-// so both writers emit one record for one state (bahia-irsry.53).
+// so both writers emit one record for one state.
 func environmentRegistryRecord(env *domain.Environment, units []domain.DeploymentUnit, deleted bool) (gonostr.Tags, string) {
 	snapshot := *env
 	domain.NormalizeEnvironmentTargeting(&snapshot)
@@ -294,7 +291,7 @@ func (r *RelayFirstStatePublisher) publishCoordinate(ctx context.Context, legacy
 
 // Build, artifact, deployment intent and deployment run registry records -----
 //
-// Phase 3 S2: these families publish their canonical cp-state directly from
+// these families publish their canonical cp-state directly from
 // the code that mutates them (RegistryService), through the shared record
 // builder and the outbox, exactly one event per material change. The
 // functions below are the single record builders both the projector's (now
@@ -490,7 +487,7 @@ func deploymentRunRegistryRecord(run *domain.DeploymentRun, deleted bool) (gonos
 }
 
 // PublishBuildRegistry publishes a build's registry record (or its tombstone).
-// Phase 3 S2: canonical state published directly from the mutation site.
+// canonical state published directly from the mutation site.
 func (r *RelayFirstStatePublisher) PublishBuildRegistry(ctx context.Context, build *domain.Build, deleted bool) error {
 	if build == nil {
 		return fmt.Errorf("build is nil")
@@ -529,7 +526,7 @@ func (r *RelayFirstStatePublisher) PublishDeploymentRunRegistry(ctx context.Cont
 
 // Package registry records ----------------------------------------------------
 //
-// Phase 3 P1: package repository, artifact and promotion families publish
+// package repository, artifact and promotion families publish
 // canonical cp-state directly from the intent handler, through the shared
 // record builder and the outbox, exactly one event per material change.
 
@@ -646,7 +643,7 @@ func packagePromotionRegistryRecord(publication *domain.PackagePublication, dele
 }
 
 // PublishPackageRepositoryRegistry publishes a package repository's cp-state record.
-// Phase 3 P1: canonical state published directly from the intent handler.
+// canonical state published directly from the intent handler.
 func (r *RelayFirstStatePublisher) PublishPackageRepositoryRegistry(ctx context.Context, repo *domain.PackageRepository, deleted bool) error {
 	if repo == nil {
 		return fmt.Errorf("package repository is nil")
@@ -676,7 +673,7 @@ func (r *RelayFirstStatePublisher) PublishPackagePromotionRegistry(ctx context.C
 // publishAuthoritativeProjection delivers a cp-state record through the
 // projector's authoritative path (fingerprint-deduped, outbox-queued, no
 // backoff gating). Used for domains that publish directly from the mutation
-// site after the database write has committed (Phase 3 S2), as opposed to
+// site after the database write has committed, as opposed to
 // publish (which uses the relay-first PublishBeforeCommit path).
 func (r *RelayFirstStatePublisher) publishAuthoritativeProjection(ctx context.Context, legacyKind int, id uuid.UUID, deleted bool, tags gonostr.Tags, content, entityType string) error {
 	if r == nil || r.projector == nil {
@@ -837,7 +834,7 @@ type CPStateFamilyInfo struct {
 
 // CPStateFamilyTopics returns every family in the projector's cp-state table
 // as a flat list, keyed by legacy kind. pkg/client uses this to build REQ
-// filters by domain without duplicating the topic table (Phase 5 N1).
+// filters by domain without duplicating the topic table.
 func CPStateFamilyTopics() []CPStateFamilyInfo {
 	out := make([]CPStateFamilyInfo, 0, len(cpStateFamilies))
 	for legacyKind, f := range cpStateFamilies {
