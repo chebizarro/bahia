@@ -57,6 +57,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/mcp"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/pipeline"
@@ -148,21 +149,33 @@ func New(cfg *config.Config) (*App, error) {
 	continuityRecipeExecutor := service.NewContinuityRecipeExecutor(publisher, service.WithContinuityRecipeLogger(logger))
 
 	// Relay pools are initialized before the optional database cache.
+	//
+	// One process-wide controller gates every outbound EVENT: these pools,
+	// the Signet clients, the SoulFactory relay clients, and the NIP-46
+	// signer RPCs all resolve to the same instance. It is initialized here,
+	// before any gateway exists, from nostr.outbound (see
+	// docs/runbooks/nostr-outbound-admission.md).
+	outboundAdmission := nostrout.InitDefault(nostrOutboundAdmissionConfig(cfg.Nostr.Outbound))
+	poolOptions := []nostrAdapter.RelayPoolOption{
+		nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey),
+		nostrAdapter.WithOutboundAdmission(outboundAdmission),
+		closedRetryBudgetOption(cfg.Nostr),
+	}
 	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)
 	contextVMRequestRelays := contextVMRelayURLs(cfg.Nostr)
 	contextVMResponseRelays := append([]string(nil), contextVMRequestRelays...)
-	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey), closedRetryBudgetOption(cfg.Nostr))
+	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, poolOptions...)
 	controlPlanePool.Connect(ctx)
-	contextVMRequestPool := nostrAdapter.NewRelayPool(contextVMRequestRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey), closedRetryBudgetOption(cfg.Nostr))
+	contextVMRequestPool := nostrAdapter.NewRelayPool(contextVMRequestRelays, logger, poolOptions...)
 	contextVMRequestPool.Connect(ctx)
-	contextVMResponsePool := nostrAdapter.NewRelayPool(contextVMResponseRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey), closedRetryBudgetOption(cfg.Nostr))
+	contextVMResponsePool := nostrAdapter.NewRelayPool(contextVMResponseRelays, logger, poolOptions...)
 	contextVMResponsePool.Connect(ctx)
 	relayPolicyHydrationRelays := relayPolicyHydrationRelayURLs(cfg.Nostr)
-	relayPolicyHydrationPool := nostrAdapter.NewRelayPool(relayPolicyHydrationRelays, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey), closedRetryBudgetOption(cfg.Nostr))
+	relayPolicyHydrationPool := nostrAdapter.NewRelayPool(relayPolicyHydrationRelays, logger, poolOptions...)
 	relayPolicyHydrationPool.Connect(ctx)
 
 	relayURLs := interopRelayURLs(cfg, controlPlaneRelays)
-	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey), closedRetryBudgetOption(cfg.Nostr))
+	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, poolOptions...)
 	relayPool.Connect(ctx)
 	logger.Info("nostr relay topology initialized",
 		zap.Strings("control_plane_relays", controlPlaneRelays),
@@ -711,6 +724,9 @@ func New(cfg *config.Config) (*App, error) {
 	healthProvider.SetRelayHealthFunc(func() (connected, healthy int) {
 		return aggregateRelayHealth(controlPlanePool, relayPool)
 	})
+	healthProvider.RegisterCheck("nostr_outbound_admission", func() HealthCheck {
+		return nostrOutboundAdmissionCheck(outboundAdmission)
+	})
 	registerSignetHealthCheck(healthProvider, loomSignetManager)
 	registerUndeliveredHealthCheck(healthProvider, localEventStore)
 	if supervisionApplyLock != nil {
@@ -929,7 +945,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	var fipsRelayPool *nostrAdapter.RelayPool
 	if cfg.FIPS.Enabled {
-		fipsRelayPool = nostrAdapter.NewRelayPool(cfg.FIPS.RelayURLs, logger, nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey), closedRetryBudgetOption(cfg.Nostr))
+		fipsRelayPool = nostrAdapter.NewRelayPool(cfg.FIPS.RelayURLs, logger, poolOptions...)
 		fipsRelayPool.Connect(ctx)
 		fipsSubscriber := nostrAdapter.NewFIPSSubscriber(fipsRelayPool, workerRepo, logger,
 			nostrAdapter.WithFIPSAppNamespace(cfg.FIPS.AppNamespace),

@@ -60,6 +60,7 @@ func Components() []Component {
 		component("relay", "Bahia relay", "service", "cmd/relay", version, base, commit),
 		component("fips-bahia-bridge", "FIPS Bahia bridge", "bridge", "cmd/fips-bahia-bridge", version, base, commit),
 		component("openclaw-soulfactory-sidecar", "OpenClaw SoulFactory sidecar", "sidecar", "cmd/openclaw-soulfactory-sidecar", version, base, commit),
+		component("bahia-dns-agent", "Bahia DNS agent", "agent", "cmd/bahia-dns-agent", version, base, commit),
 	}
 }
 

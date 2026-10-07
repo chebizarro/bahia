@@ -28,6 +28,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/strutil"
+	"github.com/openagentsinc/bahia/internal/version"
 	pkgclient "github.com/openagentsinc/bahia/pkg/client"
 	"go.uber.org/zap"
 )
@@ -56,6 +57,10 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "version") {
+		fmt.Println(version.Semantic())
+		return nil
+	}
 	cfg, err := loadConfig(args)
 	if err != nil {
 		return err
@@ -242,7 +247,12 @@ func startHealthServer(ctx context.Context, addr string, service *dnsagent.Agent
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(service.Status())
+		status := service.Status()
+		_ = json.NewEncoder(w).Encode(struct {
+			dnsagent.Status
+			Version string `json:"version"`
+			Commit  string `json:"commit"`
+		}{Status: status, Version: version.Semantic(), Commit: version.Commit})
 	})
 	server := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {

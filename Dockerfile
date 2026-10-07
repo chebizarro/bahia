@@ -53,6 +53,15 @@ RUN VERSION_VALUE="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}" && \
     -ldflags "-X github.com/openagentsinc/bahia/internal/version.Base=${VERSION_BASE} -X github.com/openagentsinc/bahia/internal/version.Commit=${GIT_COMMIT} -X github.com/openagentsinc/bahia/internal/version.Full=${VERSION_VALUE}" \
     -o /bin/bahia-event-archive ./cmd/bahia-event-archive
 
+# The DNS agent is deployed as a host systemd binary rather than a container.
+# Building it into the same provenance-labelled image gives operators one
+# canonical artifact from which to extract the exact matching binary instead of
+# compiling an unversioned copy on the resolver host.
+RUN VERSION_VALUE="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}" && \
+    CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-X github.com/openagentsinc/bahia/internal/version.Base=${VERSION_BASE} -X github.com/openagentsinc/bahia/internal/version.Commit=${GIT_COMMIT} -X github.com/openagentsinc/bahia/internal/version.Full=${VERSION_VALUE}" \
+    -o /bin/bahia-dns-agent ./cmd/bahia-dns-agent
+
 RUN VERSION_VALUE="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}" && \
     CGO_ENABLED=0 GOOS=linux go build \
     -ldflags "-X github.com/openagentsinc/bahia/internal/version.Base=${VERSION_BASE} -X github.com/openagentsinc/bahia/internal/version.Commit=${GIT_COMMIT} -X github.com/openagentsinc/bahia/internal/version.Full=${VERSION_VALUE}" \
@@ -101,6 +110,7 @@ COPY --from=builder /bin/fips-bahia-bridge /usr/local/bin/fips-bahia-bridge
 COPY --from=builder /bin/openclaw-soulfactory-sidecar /usr/local/bin/openclaw-soulfactory-sidecar
 COPY --from=builder /bin/openclaw-soulfactory-control /usr/local/bin/openclaw-soulfactory-control
 COPY --from=builder /bin/bahia-event-archive /usr/local/bin/bahia-event-archive
+COPY --from=builder /bin/bahia-dns-agent /usr/local/bin/bahia-dns-agent
 COPY --from=builder /bin/metiq-signet-enrollment /usr/local/bin/metiq-signet-enrollment
 COPY --from=builder /bin/soulfactory-runtime-validate /usr/local/bin/soulfactory-runtime-validate
 

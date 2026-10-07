@@ -732,6 +732,75 @@ type NostrConfig struct {
 
 	// LocalStore is the daemon's local event store and inbound cursors.
 	LocalStore NostrLocalStoreConfig `koanf:"local_store" yaml:"local_store"`
+
+	// Outbound bounds the process-wide outbound admission controller that
+	// every Bahia publisher crosses before relay I/O (internal/nostrout;
+	// docs/runbooks/nostr-outbound-admission.md).
+	Outbound NostrOutboundConfig `koanf:"outbound" yaml:"outbound"`
+}
+
+// NostrOutboundConfig bounds the process-wide outbound Nostr admission
+// controller: one shared instance per process gates every relay pool, the
+// Signet management plane, the SoulFactory relay clients, and every NIP-46
+// signer RPC. Every value is optional; a zero value keeps the controller's
+// bounded default (aggregate 45 events/min burst 15; priority 10/4, state
+// 10/3, general 10/3, bulk 5/1, signer 10/4; per-relay wire 40 frames/min
+// burst 13 plus a reserved priority share of 15/5; breaker 2s doubling to
+// 1m; duplicate receipts 4096 entries for 10m). There is no unlimited
+// setting: admission is fail-closed.
+type NostrOutboundConfig struct {
+	// KillSwitchFile is the file-backed emergency kill switch, checked on
+	// every admission: the content 1, true, stop, stopped, disable, or
+	// disabled rejects every new publication (signer RPCs included) before
+	// relay I/O; a missing file permits bounded traffic and an unreadable
+	// configured file fails closed. Also settable through
+	// BAHIA_NOSTR_OUTBOUND_KILL_SWITCH_FILE.
+	KillSwitchFile string `koanf:"kill_switch_file" yaml:"kill_switch_file" secret:"false"`
+	// Aggregate bounds all lanes together (events per minute).
+	Aggregate NostrOutboundLaneConfig `koanf:"aggregate" yaml:"aggregate"`
+	// Lanes partition the aggregate budget per purpose so state repair and
+	// bulk operations can never consume the priority capacity reserved for
+	// operator results and tombstones.
+	Lanes NostrOutboundLaneConfigs `koanf:"lanes" yaml:"lanes"`
+	// RelayWire bounds non-priority EVENT frames per relay, charged
+	// immediately before every frame including NIP-42 AUTH retries.
+	RelayWire NostrOutboundLaneConfig `koanf:"relay_wire" yaml:"relay_wire"`
+	// RelayWirePriority is each relay's reserved wire share for priority
+	// frames (tombstones, gift wraps, ContextVM results).
+	RelayWirePriority NostrOutboundLaneConfig `koanf:"relay_wire_priority" yaml:"relay_wire_priority"`
+	// BreakerMin/BreakerMax bound the exponential backoff of the shared
+	// circuit breaker that any relay rate-limited: response opens.
+	BreakerMin time.Duration `koanf:"breaker_min" yaml:"breaker_min" secret:"false"`
+	BreakerMax time.Duration `koanf:"breaker_max" yaml:"breaker_max" secret:"false"`
+	// DuplicateTTL/DuplicateLimit bound the per-destination receipt cache
+	// that suppresses replays of an already-accepted signed event.
+	DuplicateTTL   time.Duration `koanf:"duplicate_ttl" yaml:"duplicate_ttl" secret:"false"`
+	DuplicateLimit int           `koanf:"duplicate_limit" yaml:"duplicate_limit" secret:"false"`
+}
+
+// NostrOutboundLaneConfig is one token-bucket budget in events (or frames)
+// per minute. Zero values keep the controller's bounded default for that
+// lane; negative values are rejected by validation.
+type NostrOutboundLaneConfig struct {
+	RatePerMinute int `koanf:"rate_per_minute" yaml:"rate_per_minute" secret:"false"`
+	Burst         int `koanf:"burst" yaml:"burst" secret:"false"`
+}
+
+// NostrOutboundLaneConfigs are the per-purpose admission lanes.
+type NostrOutboundLaneConfigs struct {
+	// Priority carries kind 5 tombstones, kind 1059 gift wraps, and kind
+	// 25910 ContextVM traffic.
+	Priority NostrOutboundLaneConfig `koanf:"priority" yaml:"priority"`
+	// State carries replaceable (10000-19999) and addressable
+	// (30000-39999) events.
+	State NostrOutboundLaneConfig `koanf:"state" yaml:"state"`
+	// General carries everything else.
+	General NostrOutboundLaneConfig `koanf:"general" yaml:"general"`
+	// Bulk carries declared multi-event operations only (Concord rotations
+	// and Direct Invite batches); its events are paced, not refused.
+	Bulk NostrOutboundLaneConfig `koanf:"bulk" yaml:"bulk"`
+	// Signer carries NIP-46 remote-signer requests (kind 24133).
+	Signer NostrOutboundLaneConfig `koanf:"signer" yaml:"signer"`
 }
 
 const (
@@ -1627,6 +1696,9 @@ func Load(configPath string) (*Config, error) {
 		if strings.HasPrefix(key, "worker_pressure_") {
 			return "worker_pressure." + strings.TrimPrefix(key, "worker_pressure_")
 		}
+		if strings.HasPrefix(key, "nostr_outbound_") {
+			return "nostr.outbound." + strings.TrimPrefix(key, "nostr_outbound_")
+		}
 		if strings.HasPrefix(key, "soul_factory_") {
 			return "soul_factory." + strings.TrimPrefix(key, "soul_factory_")
 		}
@@ -2022,6 +2094,9 @@ func (c *Config) validate() error {
 	if c.Nostr.ClosedRetryBudget < 0 || c.Nostr.ClosedRetryBudget > ClosedRetryBudgetMax {
 		return fmt.Errorf("config validation failed: nostr.closed_retry_budget must be between 0 (default) and %d", ClosedRetryBudgetMax)
 	}
+	if err := c.Nostr.Outbound.validate(); err != nil {
+		return err
+	}
 
 	nostrAuthorized, err := normalizePubkeyList(c.Nostr.AuthorizedPubkeys)
 	if err != nil {
@@ -2054,6 +2129,34 @@ func validNIP34RepositoryAddress(raw string) bool {
 }
 
 const bundledOCIServiceAccountHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+
+// validate rejects negative outbound admission budgets. Zero values are not
+// an error: they keep the controller's bounded defaults, and there is no
+// value that disables admission.
+func (c NostrOutboundConfig) validate() error {
+	lanes := map[string]NostrOutboundLaneConfig{
+		"aggregate":           c.Aggregate,
+		"lanes.priority":      c.Lanes.Priority,
+		"lanes.state":         c.Lanes.State,
+		"lanes.general":       c.Lanes.General,
+		"lanes.bulk":          c.Lanes.Bulk,
+		"lanes.signer":        c.Lanes.Signer,
+		"relay_wire":          c.RelayWire,
+		"relay_wire_priority": c.RelayWirePriority,
+	}
+	for name, lane := range lanes {
+		if lane.RatePerMinute < 0 || lane.Burst < 0 {
+			return fmt.Errorf("config validation failed: nostr.outbound.%s rate_per_minute and burst must be >= 0 (0 keeps the bounded default)", name)
+		}
+	}
+	if c.BreakerMin < 0 || c.BreakerMax < 0 {
+		return fmt.Errorf("config validation failed: nostr.outbound.breaker_min and breaker_max must be >= 0")
+	}
+	if c.DuplicateTTL < 0 || c.DuplicateLimit < 0 {
+		return fmt.Errorf("config validation failed: nostr.outbound.duplicate_ttl and duplicate_limit must be >= 0")
+	}
+	return nil
+}
 
 func (c *Config) validateSupervision() error {
 	if !c.Supervision.Enabled {

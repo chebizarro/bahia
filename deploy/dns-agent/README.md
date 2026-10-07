@@ -22,6 +22,23 @@ systemctl daemon-reload
 systemctl enable --now bahia-dns-agent
 ```
 
+For a release built by the canonical Bahia Dockerfile, extract the DNS agent
+from the exact provenance-labelled image rather than rebuilding on the resolver
+host:
+
+```sh
+container=$(docker create <immutable-bahia-image-digest>)
+docker cp "$container:/usr/local/bin/bahia-dns-agent" ./bahia-dns-agent
+docker rm "$container"
+install -m 0755 ./bahia-dns-agent /usr/local/bin/bahia-dns-agent.next
+/usr/local/bin/bahia-dns-agent.next --version
+```
+
+After the guarded systemd replacement, `GET http://127.0.0.1:8953/healthz`
+must report the same full `commit` embedded in the source image. A missing,
+`dev`, short, or mismatched commit fails deployment. Preserve the previous
+binary until relay reconnection and one encrypted DNS request/response pass.
+
 ## OpenWrt (procd)
 
 Use [`bahia-dns-agent.init`](bahia-dns-agent.init). OpenWrt's default dnsmasq

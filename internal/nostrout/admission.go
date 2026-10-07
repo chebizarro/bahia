@@ -154,7 +154,7 @@ func DefaultConfig() Config {
 		RelayWirePriority:     PurposeBudget{RatePerMinute: 15, Burst: 5},
 		BreakerMin:            2 * time.Second,
 		BreakerMax:            time.Minute,
-		KillSwitchFile:        strings.TrimSpace(os.Getenv("BAHIA_NOSTR_OUTBOUND_KILL_SWITCH_FILE")),
+		KillSwitchFile:        strings.TrimSpace(os.Getenv(KillSwitchEnv)),
 		DuplicateTTL:          10 * time.Minute,
 		DuplicateLimit:        4096,
 		MaxActivePublications: defaultMaxActivePublications,
@@ -331,12 +331,31 @@ var (
 	defaultAdmission *Admission
 )
 
+// KillSwitchEnv is the environment variable DefaultConfig reads for the
+// emergency kill-switch file path. Processes that configure the controller
+// explicitly (the Bahia server through internal/config) map the same
+// variable onto Config.KillSwitchFile.
+const KillSwitchEnv = "BAHIA_NOSTR_OUTBOUND_KILL_SWITCH_FILE"
+
 // Default returns the process-wide controller. Every gateway constructed
 // without an explicit controller shares it, so bounded defaults are genuinely
 // process-wide rather than per-pool.
 func Default() *Admission {
 	defaultOnce.Do(func() {
 		defaultAdmission = New(DefaultConfig())
+	})
+	return defaultAdmission
+}
+
+// InitDefault initializes the process-wide controller from cfg exactly once
+// and returns it; cfg fields left zero keep DefaultConfig's bounded values.
+// A process entry point calls it before constructing any gateway. When the
+// default was already initialized — by an earlier InitDefault or by a
+// Default() call — the existing controller is returned unchanged, so the
+// first initialization wins and later ones are silent no-ops.
+func InitDefault(cfg Config) *Admission {
+	defaultOnce.Do(func() {
+		defaultAdmission = New(cfg)
 	})
 	return defaultAdmission
 }
