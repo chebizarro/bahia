@@ -37,7 +37,8 @@ func TestRemoteSignerWithoutNIP04SatisfiesEncryptedContextVMPath(t *testing.T) {
 	signer, pubkey := newRemoteSignerLike(t)
 
 	// Guard the regression precisely: this signer is NOT a full nostr.Keyer
-	// because it has no NIP-04, which is what previously rejected NIP-46.
+	// because it has no NIP-04 — the missing NIP-04 pair must not keep it
+	// off the NIP-46 path.
 	if _, isKeyer := any(signer).(nostr.Keyer); isKeyer {
 		t.Fatal("fixture must not satisfy nostr.Keyer, or it cannot prove the regression")
 	}

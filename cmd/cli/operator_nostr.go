@@ -26,8 +26,9 @@ type cliNIP46Signer struct {
 // cliEncryptedCapableSigner mirrors the capability pkg/client requires for
 // encrypted ContextVM operator requests: NIP-59 sealing needs SignEvent plus
 // NIP-44 Encrypt, and the correlated response needs NIP-44 Decrypt. It
-// deliberately excludes the deprecated NIP-04 pair, whose absence previously
-// rejected this signer and pushed operators toward a raw local nsec.
+// deliberately excludes the deprecated NIP-04 pair: requiring NIP-04 would
+// reject remote signers that implement only NIP-44 and push operators toward
+// a raw local nsec.
 type cliEncryptedCapableSigner interface {
 	canonicalnostr.Signer
 
