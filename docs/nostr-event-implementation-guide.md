@@ -419,7 +419,7 @@ Common Bahia conventions:
 
 | Semantic | Preferred NIP-51 shape |
 |---|---|
-| Operators for a scope | kind `30000`, `d=operators:<scope>`, `p` tags |
+| Operators for a scope | kind `30000`, `d=operators:<scope>`, `p` tags — public sets only. The daemon's own operator allowlists are **not** published this way: a public `p` list would disclose the operator pubkeys to every relay, so they are the fleet-OCK encrypted `30900` family `32029` (`t=operator-allowlist`, `d=operators:<scope>`, no `p` tags; see "Operator allowlist records" below) |
 | Approvers for a service/env | kind `30000`, `d=approvers:<service>:<environment>`, `p` tags |
 | Relay bootstrap set | kind `30002`, `d=bahia-browser-v1`, `relay` tags |
 | Watched repositories | kind `30001` or `30004`, stable `d`, `a`/`e`/URL tags as appropriate |
@@ -991,6 +991,56 @@ closed) finds no Soul or a revoked one; any other Soul keeps the reservation.
 A released coordinate starts a new life at version 1 with a `created_at` after
 the tombstone. Recoverable and running runs are never purged by time. See the
 [operations runbook](runbooks/openclaw-provisioning-operations.md#run-retention).
+
+## Operator allowlist records (bahia-fbyo5)
+
+The daemon accepts operator-authored documents only from configured
+allowlists: `nostr.authorized_pubkeys` for continuity definitions
+(`31400`–`31404`), failover/recovery requests (`38430`/`38431`) and continuity
+heartbeats (`30315`); `soul_factory.authorized_pubkeys` for SoulFactory drafts
+(`31952`), actions (`1950`) and the fleet configuration (`31953`). It publishes
+each list as one fleet-OCK encrypted `30900` record so a browser that holds the
+fleet OCK (every fleet operator, bootstrap owner and the service; see
+`TrustSetMemberSource`) can trust the other authorized operators' documents,
+while relays and non-holders learn nothing but the scope's existence. The
+public NIP-51 shape (`30000` with `p` tags) is deliberately not used here: it
+would disclose the operator pubkeys to every relay.
+
+| Legacy discriminator | `#t` | Addressable `d` | Content |
+|---|---|---|---|
+| `32029` operator allowlist | `operator-allowlist` (domain `operator`, entity `allowlist`) | `operators:continuity` (mirrors `nostr.authorized_pubkeys`); `operators:soul-factory` (mirrors `soul_factory.authorized_pubkeys`) | fleet-OCK `bahia.confidential.aead.v1` of `{"scope": "<scope>", "pubkeys": [<64-hex, lower-case, deduplicated, sorted>], "updated_at": <RFC 3339>}`; AEAD bound to (`32029`, `d`, `operator-allowlist`) |
+
+The public tags are only the family envelope (`d`, `domain`, `schema`,
+`legacy_kind`, `deleted`, `t`) and the daemon's keyed `state_hash`: **no `p`
+tag and no pubkey in any tag or in `d`**. Lifecycle:
+
+- **Published at startup** by the operational-views runner, after the fleet
+  OCK exists (the same place the runtime policy record is published), through
+  the canonical-first path: durable in the publish outbox before the first
+  relay round. A configuration change that is not hot-reloadable rebuilds the
+  application, so the enforced lists and the published lists are always the
+  same config.
+- **Replaced** only when the normalised set changes (`updated_at` is volatile
+  and excluded from the dedupe hash), with a `created_at` strictly after the
+  record it replaces.
+- **Tombstoned** (`deleted=true`, encrypted `{}` content, same coordinate) when
+  a scope's list is empty or disabled: `soul_factory.enabled: false`
+  tombstones `operators:soul-factory`; an empty `nostr.authorized_pubkeys`
+  tombstones `operators:continuity`.
+- Without a confidential encryptor (no control-plane signer) nothing is
+  published and a warning is logged; an allowlist is never published in
+  plaintext.
+
+Web consumers (`web/src/lib/stores/operator-allowlist.svelte.js`) read the
+record through the core cp-state REQ (`#t=operator-allowlist`, service
+authors), decrypt it with the fleet OCK the session already trial-decrypts
+from the key-envelope records, and derive the trusted operator set per scope
+as *allowlist ∪ signed-in key*. The derivation re-runs when the record arrives
+and when a content key is obtained or lost (logout clears the keys), and it
+widens the continuity and SoulFactory readers' `authors` filters and
+re-projects their cached views. A session without the fleet OCK, a tombstoned
+scope or a missing record all yield the signed-in key only — the behaviour
+before this record existed.
 
 ## Policy evaluation intent and build ownership (bahia-irsry.77)
 
