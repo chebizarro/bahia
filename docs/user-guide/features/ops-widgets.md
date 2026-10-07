@@ -1,28 +1,13 @@
 # Ops Widgets
 
-The **Operations → Ops Widgets** view displays live dashboard snapshots published as Nostr kind `30318` events using the `dashboard-widget/v1` envelope.
+**Operations → Ops Widgets** renders live dashboard snapshots that trusted services publish to the fleet relays as kind `30318` events in the `dashboard-widget/v1` envelope.
 
-## Trust and relay policy
+## Trust
 
-Bahia subscribes only to the fleet relays exported by Wheelhouse:
+The view subscribes to the Bahia control-plane relays for kind `30318` events whose author is in the widget allowlist. Set `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` on the web container (at runtime, not build time) to a comma-separated list of 64-character hex publisher pubkeys; the container entrypoint writes it into the deployment seed as `widget_pubkeys`. With an empty allowlist the page subscribes to nothing and shows **No trusted widget snapshots**. Signatures are verified before an event reaches the renderer.
 
-- `wss://relay.sharegap.net`
-- `wss://nos.lol`
+## Rendering
 
-Set `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` on the web container (runtime, not build time) to a comma-separated list of trusted 64-character hexadecimal publisher pubkeys; the container entrypoint writes it into the deployment seed as `widget_pubkeys`. The view fails closed and renders no events when the allowlist is empty. Invalid Nostr signatures are rejected by Bahia's relay client before events reach Wheelhouse.
+The page keeps the latest event per `(publisher, d-tag)` slot, deduplicates by event id, keeps the subscription open after EOSE, and reconnects after a relay closes. Supported templates are `ops.timeseries.v1`, `ops.gauge.v1`, `ops.stat.v1`, and `ops.event_table.v1`; an envelope that passes publisher and address checks but is invalid or unsupported is shown as a metadata fallback card. External `data_ref` payloads are shown as a placeholder rather than fetched.
 
-## Display behavior
-
-Wheelhouse provides the event store, envelope validation, template registry, ECharts option builders, and fallback cards. The view therefore:
-
-- deduplicates events by event ID;
-- retains the latest event for each `(publisher, d-tag)` widget slot;
-- renders `ops.timeseries.v1`, `ops.gauge.v1`, `ops.stat.v1`, and `ops.event_table.v1`;
-- shows a safe metadata fallback card for invalid or unsupported envelopes that pass publisher and address checks;
-- keeps subscriptions open after EOSE and reconnects after relay closure or connection failure.
-
-External `data_ref` payloads remain represented by Wheelhouse's verified-sidecar placeholder unless a hash-verifying fetcher is added to the library boundary.
-
-## Local package dependency
-
-Wheelhouse is not published yet. The web package consumes it from `file:../../wheelhouse`, so the sibling Wheelhouse checkout must exist and its library artifact must be built before installing or building Bahia web.
+The relay panel lists the deployment relays and how many have caught up.
