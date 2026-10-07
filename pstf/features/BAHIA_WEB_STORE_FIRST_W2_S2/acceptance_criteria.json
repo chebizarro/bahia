@@ -1,9 +1,0 @@
-{
-  "feature_id": "BAHIA_WEB_STORE_FIRST_W2_S2",
-  "criteria": [
-    { "id": "W2-S2-1", "statement": "A pre-seeded verified store renders the worker list and job or operation timeline without a network gate or loading spinner." },
-    { "id": "W2-S2-2", "statement": "Live worker-state and operation events update their view; older addressable events cannot regress state and tombstones remove deleted worker records." },
-    { "id": "W2-S2-3", "statement": "Any number of worker-authored advertisements use one open-author ref-counted REQ, and seen-event memory is bounded." },
-    { "id": "W2-S2-4", "statement": "Navigating away and back does not trigger worker REST reads or a second per-worker subscription." }
-  ]
-}

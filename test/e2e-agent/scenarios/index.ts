@@ -5,13 +5,9 @@
  */
 import type { Scenario } from '../types.js';
 
-// Import all scenario modules
-import { serviceScenarios } from './services.js';
-import { environmentScenarios } from './environments.js';
-import { deploymentScenarios } from './deployments.js';
-import { policyScenarios } from './policies.js';
-import { workerScenarios } from './workers.js';
-import { secretScenarios } from './secrets.js';
+// Scenario modules. Entity reads and mutations are relay subscriptions and
+// signed intents (docs/architecture/cli-and-mcp.md); scenarios drive the web
+// UI and the MCP endpoint, never daemon REST routes.
 import { eventScenarios } from './events.js';
 
 /**
@@ -27,36 +23,6 @@ export interface ScenarioCategory {
  * All scenario categories
  */
 export const categories: ScenarioCategory[] = [
-  {
-    name: 'Services',
-    description: 'Service CRUD operations and lifecycle management',
-    scenarios: serviceScenarios,
-  },
-  {
-    name: 'Environments',
-    description: 'Environment CRUD with protected flag and deploy strategies',
-    scenarios: environmentScenarios,
-  },
-  {
-    name: 'Deployments',
-    description: 'Deployment workflows: intents, approvals, and execution',
-    scenarios: deploymentScenarios,
-  },
-  {
-    name: 'Policies',
-    description: 'Policy creation, management, and enforcement',
-    scenarios: policyScenarios,
-  },
-  {
-    name: 'Workers',
-    description: 'Worker catalog queries and status checks',
-    scenarios: workerScenarios,
-  },
-  {
-    name: 'Secrets',
-    description: 'Service secrets CRUD with encryption (NIP-44, AES-256-GCM)',
-    scenarios: secretScenarios,
-  },
   {
     name: 'Events',
     description: 'Nostr sidecar relay discovery and control-plane feature checks',
@@ -167,12 +133,4 @@ export function printSummary(): void {
 }
 
 // Export individual scenario arrays for direct imports
-export {
-  serviceScenarios,
-  environmentScenarios,
-  deploymentScenarios,
-  policyScenarios,
-  workerScenarios,
-  secretScenarios,
-  eventScenarios,
-};
+export { eventScenarios };

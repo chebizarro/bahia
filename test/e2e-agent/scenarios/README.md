@@ -1,272 +1,79 @@
-# E2E Test Scenario Library
+# E2E test scenario library
 
-Tagged scenarios for the agent-driven harness in `test/e2e-agent`.
+Tagged scenarios for the agent-driven harness in `test/e2e-agent`. Each
+scenario implements the `Scenario` interface, receives `ScenarioDrivers`
+(`web`: Playwright, `mcp`: MCP JSON-RPC client) and returns a `ScenarioResult`
+with per-step status. Scenarios drive the web UI and the MCP endpoint; entity
+reads and mutations in Bahia are relay subscriptions and signed intents, so
+no scenario calls daemon REST routes.
 
-The `api`-tagged scenarios (services, environments, deployments, policies,
-secrets) and the SSE `events` scenarios address REST routes the daemon no
-longer serves (see `../README.md`, "What the daemon serves"); they fail until
-rewritten over MCP tools or `pkg/client`. `workers` and the `web`/`mcp`
-scenarios run against the current daemon.
+## Categories
 
-## Overview
+### Events (`events.ts`)
 
-This directory contains test scenarios organized by feature area. Each scenario is a self-contained test that:
-- Uses the driver infrastructure from `../drivers/`
-- Returns a `ScenarioResult` with pass/fail status and detailed steps
-- Can be executed individually or as part of a test suite
-
-## Scenario Categories
-
-### 1. Services (`services.ts`)
-Service CRUD operations and lifecycle management.
-
-**Scenarios:**
-- `createServiceAPI` - Create a service via REST API
-- `listServices` - List all services
-- `updateService` - Update service properties
-- `deleteService` - Delete a service
-- `fullServiceCRUD` - Complete CRUD lifecycle
-
-### 2. Environments (`environments.ts`)
-Environment management with protected flag and deploy strategies.
-
-**Scenarios:**
-- `createEnvironment` - Create a non-protected environment
-- `createProtectedEnvironment` - Create a protected environment requiring approvals
-- `listEnvironments` - List all environments
-- `updateEnvironment` - Update environment properties
-- `deleteEnvironment` - Delete an environment
-
-### 3. Deployments (`deployments.ts`)
-Deployment workflows: intents, approvals, and execution.
-
-**Scenarios:**
-- `createDeploymentIntent` - Create a deployment intent
-- `approveDeploymentIntent` - Approve a deployment to protected environment
-- `rejectDeploymentIntent` - Reject a deployment with reason
-- `fullDeploymentWorkflow` - End-to-end deployment workflow
-
-### 4. Policies (`policies.ts`)
-Policy creation, management, and enforcement rules.
-
-**Scenarios:**
-- `createPolicy` - Create a deployment policy with rules
-- `listPolicies` - List all policies
-- `updatePolicy` - Update policy enforcement settings
-- `deletePolicy` - Delete a policy
-- `policyWithMultipleRules` - Create policy with multiple enforcement rules
-
-### 5. Workers (`workers.ts`)
-Worker catalog queries and status checks (read-only).
-
-**Scenarios:**
-- `listWorkers` - List all registered workers
-- `listWorkersByStatus` - Filter workers by status
-- `getWorkerByPubkey` - Fetch specific worker details
-- `getWorkerPricing` - Get worker pricing information
-
-### 6. Secrets (`secrets.ts`)
-Service secrets CRUD with encryption (NIP-44, AES-256-GCM).
-
-**Scenarios:**
-- `createSecretNIP44` - Create secret with NIP-44 encryption
-- `createSecretAES256` - Create secret with AES-256-GCM encryption
-- `listServiceSecrets` - List secrets for a service (values never exposed)
-- `updateSecret` - Update secret value and verify versioning
-- `deleteSecret` - Delete a secret
-- `environmentScopedSecrets` - Create secrets scoped to specific environments
-
-### 7. Events (`events.ts`)
-SSE event stream connection, filtering, and verification.
-
-**Scenarios:**
-- `connectSSEStream` - Establish SSE connection
-- `receiveDeploymentEvents` - Verify deployment events are broadcast
-- `filterEventsByType` - Test event type filtering
-- `sseHeartbeat` - Verify heartbeat keeps connection alive
-- `multipleConcurrentConnections` - Test multiple simultaneous SSE clients
+- `sidecarRelayDiscovery` — verifies that an explicit Nostr bootstrap seed is
+  configured for the run (`BAHIA_BOOTSTRAP_RELAYS` or `BAHIA_NOSTR_RELAYS`,
+  and `BAHIA_SERVICE_PUBKEYS` or `BAHIA_SERVICE_PUBKEY`). Tags: `events`,
+  `nostr`, `sidecar`, `smoke`.
 
 ## Usage
 
-### Import and Run Individual Scenarios
-
 ```typescript
-import { BahiaAPIDriver } from '../drivers/api.js';
 import { PlaywrightDriver } from '../drivers/playwright.js';
 import { MCPDriver } from '../drivers/mcp.js';
-import { createServiceAPI } from './services.js';
+import { getSmokeTests, getScenariosByTag, printSummary, getStats } from './index.js';
 
-const drivers = {
-  api: new BahiaAPIDriver('http://localhost:8080'),
-  web: new PlaywrightDriver('http://localhost:3000'),
-  mcp: new MCPDriver(),
-};
-
-const result = await createServiceAPI.run(drivers);
-console.log(result.status); // 'passed' | 'failed' | 'skipped' | 'error'
-```
-
-### Run All Scenarios in a Category
-
-```typescript
-import { serviceScenarios } from './services.js';
-
-for (const scenario of serviceScenarios) {
-  console.log(`Running: ${scenario.name}`);
+const drivers = { web: new PlaywrightDriver('http://localhost:3000'), mcp: new MCPDriver() };
+for (const scenario of getSmokeTests()) {
   const result = await scenario.run(drivers);
-  console.log(`  Status: ${result.status} (${result.duration}ms)`);
+  console.log(scenario.name, result.status, `${result.duration}ms`);
 }
+printSummary();   // categories, scenarios and tag counts
+getStats();       // { totalScenarios, categories, tags, smokeTests, integrationTests, crudTests }
 ```
 
-### Filter by Tags
+`cli.ts` selects scenarios with `--all`, `--tags a,b` (AND) or `--scenario
+<name>`; `npm run scenarios` prints the summary.
 
-```typescript
-import { getScenariosByTag, getSmokeTests } from './index.js';
+## Tags
 
-// Run all smoke tests
-const smokeTests = getSmokeTests();
-for (const test of smokeTests) {
-  await test.run(drivers);
-}
+`smoke` (fast, critical path), `integration` (multi-step), `crud`, `web`
+(Playwright), `mcp` (MCP tools), plus feature tags such as `events`, `nostr`,
+`sidecar`.
 
-// Run all API tests
-const apiTests = getScenariosByTag('api');
-for (const test of apiTests) {
-  await test.run(drivers);
-}
-```
-
-### Print Library Summary
-
-```typescript
-import { printSummary } from './index.js';
-
-printSummary();
-```
-
-## Scenario Tags
-
-Scenarios are tagged for easy filtering:
-
-- **`smoke`** - Quick sanity checks (fast, critical path)
-- **`integration`** - Multi-step workflows
-- **`crud`** - Create/Read/Update/Delete operations
-- **`api`** - REST API tests
-- **`web`** - Web UI tests (Playwright)
-- **`mcp`** - MCP tool tests
-
-Feature-specific tags:
-- `services`, `environments`, `deployments`, `policies`, `workers`, `secrets`, `events`
-- `encryption`, `protected`, `approval`, `filtering`, etc.
-
-## Scenario Structure
-
-Each scenario implements the `Scenario` interface:
+## Structure
 
 ```typescript
 interface Scenario {
-  name: string;              // Human-readable name
-  description: string;       // What the scenario tests
-  tags: string[];           // Tags for filtering/categorization
+  name: string;
+  description: string;
+  tags: string[];
   run(drivers: ScenarioDrivers): Promise<ScenarioResult>;
 }
-```
 
-Results include detailed step-by-step execution:
-
-```typescript
 interface ScenarioResult {
   name: string;
   status: 'passed' | 'failed' | 'skipped' | 'error';
-  duration: number;         // Total duration in ms
-  steps: TestStepResult[];  // Individual step results
-  error?: string;           // Error message if failed
-  metadata?: Record<string, unknown>; // Additional data
+  duration: number;
+  steps: TestStepResult[];
+  error?: string;
+  metadata?: Record<string, unknown>;
 }
 ```
 
-## Pass/Fail Criteria
+`passed`: every step and assertion succeeded; `failed`: an assertion failed
+or a response was unexpected; `skipped`: a prerequisite is missing;
+`error`: an unexpected exception.
 
-Each scenario has clear pass/fail criteria:
+## Adding a scenario
 
-- **PASSED**: All steps complete successfully, assertions pass
-- **FAILED**: Test assertions fail, unexpected response
-- **SKIPPED**: Test cannot run (e.g., no workers available for worker tests)
-- **ERROR**: Unexpected error during execution
-
-## Adding New Scenarios
-
-1. Create scenario in appropriate category file
-2. Implement `Scenario` interface
-3. Add to category's exported array
-4. Use the `step()` helper to track individual steps
-5. Return detailed `ScenarioResult`
-
-Example template:
-
-```typescript
-export const myNewScenario: Scenario = {
-  name: 'My New Test',
-  description: 'What this test verifies',
-  tags: ['category', 'smoke'],
-  
-  async run(drivers: ScenarioDrivers): Promise<ScenarioResult> {
-    const steps: TestStepResult[] = [];
-    const startTime = Date.now();
-    
-    try {
-      // Step 1
-      const step1Start = Date.now();
-      // ... test code ...
-      steps.push(step('Step 1 name', 'passed', Date.now() - step1Start));
-      
-      // Step 2
-      const step2Start = Date.now();
-      // ... test code ...
-      steps.push(step('Step 2 name', 'passed', Date.now() - step2Start));
-      
-      return {
-        name: this.name,
-        status: 'passed',
-        duration: Date.now() - startTime,
-        steps,
-      };
-    } catch (error) {
-      steps.push(step('Error occurred', 'error', Date.now() - startTime, String(error)));
-      return {
-        name: this.name,
-        status: 'failed',
-        duration: Date.now() - startTime,
-        steps,
-        error: String(error),
-      };
-    }
-  },
-};
-```
-
-## Statistics
-
-Run `getStats()` from `index.ts` to see scenario library metrics:
-
-```typescript
-import { getStats } from './index.js';
-
-const stats = getStats();
-console.log(stats);
-// {
-//   totalScenarios: 30,
-//   categories: 7,
-//   tags: [...],
-//   smokeTests: 6,
-//   integrationTests: 4,
-//   crudTests: 15
-// }
-```
-
-## Notes
-
-- Scenarios are designed to be idempotent where possible
-- Each scenario creates its own test data (services, environments, etc.)
-- Cleanup is generally not performed (tests run in isolated docker environment)
-- Some scenarios may be skipped if prerequisites aren't met (e.g., no workers registered)
+1. Create it in the matching category file (or a new file) and implement
+   `Scenario`, using a `step()` helper to record each step's status and
+   duration.
+2. Add it to the category's exported array and, for a new file, to
+   `categories` in `index.ts`.
+3. Drive the web UI through `drivers.web` and the daemon through
+   `drivers.mcp` (`listTools`, `callTool`); for signed intents use the MCP
+   intent tools, which return `{status, intent_id, event_id}`.
+4. Scenarios create their own data and should be idempotent; cleanup is not
+   required because the stack is disposable.

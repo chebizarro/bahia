@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../../..');
-const matrixPath = resolve(repoRoot, 'pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json');
+const matrixPath = resolve(__dirname, '../fixtures/route-transport-matrix.json');
 const routesRoot = resolve(repoRoot, 'web/src/routes');
 
 const matrix = JSON.parse(readFileSync(matrixPath, 'utf8'));

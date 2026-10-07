@@ -2,8 +2,11 @@
 
 `test/e2e-agent` is a TypeScript harness that launches the Bahia
 docker-compose stack (postgres, `bahia` on 8080, web on 3000), drives it
-through three drivers, runs a tagged scenario library, and can hand failures
-to a self-healing loop that proposes fixes. It is independent of the web
+through the web UI (Playwright) and the MCP endpoint, runs a tagged scenario
+library, and can hand failures to a self-healing loop that proposes fixes.
+Entity reads and mutations are relay subscriptions and signed intents
+(`docs/architecture/cli-and-mcp.md`), so there is no REST driver; the daemon's
+HTTP surface used here is `/health`, `/ready` and `POST /mcp`. It is independent of the web
 Playwright suites in `web/tests/e2e`.
 
 ## Layout
@@ -11,10 +14,9 @@ Playwright suites in `web/tests/e2e`.
 | Path | Role |
 |---|---|
 | `harness.ts` | `TestHarness`: `docker compose up`/`down`, health-check wait, log retrieval, URL accessors. Runs `docker info` first and exits with `DockerPreflightError` and remediation text if no daemon is reachable |
-| `drivers/api.ts` | `BahiaAPIDriver`: typed `fetch` calls against the daemon's HTTP routes |
 | `drivers/playwright.ts` | `PlaywrightDriver`: browser launch, navigation helpers, screenshots, DOM inspection |
 | `drivers/mcp.ts` | `MCPDriver`: JSON-RPC client for the daemon's MCP endpoint (`tools/list`, `tools/call`) |
-| `scenarios/` | Scenario library (see `scenarios/README.md`) |
+| `scenarios/` | Scenario library (see `scenarios/README.md`); `ScenarioDrivers` is `{ web, mcp }` |
 | `runner.ts`, `cli.ts`, `reporter.ts` | Scenario execution, CLI flags, JSON/HTML reports |
 | `diagnostics.ts`, `fixer.ts`, `healing-loop.ts` | Failure diagnosis and the optional fix loop |
 | `check-*.ts`, `smoke-test.ts`, `mcp-config.test.ts` | Standalone checks |
@@ -34,7 +36,7 @@ npm run typecheck          # tsc --noEmit
 npm test                   # tsx cli.ts --all
 npm run test:smoke         # tsx cli.ts --tags smoke
 npm run test:json          # machine-readable report
-npm run smoke              # driver smoke test (stack up, API + web + MCP tools/list, stack down)
+npm run smoke              # smoke test (stack up, /health + /ready, web navigation, MCP tools/list, stack down)
 npm run scenarios          # print the scenario library summary
 npm run demo
 npm run test:mcp-config
@@ -67,18 +69,6 @@ new TestHarness({
   mcpServerUrl: 'http://localhost:8080/mcp',
 });
 ```
-
-## What the daemon serves
-
-The daemon's HTTP surface is health/readiness/metrics, MCP, deployment and
-live logs, DB-less payment reads, config-fabric drift, the Blossom blob proxy
-and a few HTTP-native routes; entity reads and mutations are relay
-subscriptions and signed intents (`docs/architecture/cli-and-mcp.md`).
-`drivers/api.ts` and the `api`-tagged scenarios still address
-`/api/v1/services`, `/api/v1/environments`, policies, secrets and SSE events,
-which return 404 from the current daemon, so those scenarios fail until the
-driver is rewritten over the MCP tools or `pkg/client`. The `web` and `mcp`
-drivers are the usable paths today.
 
 ## Troubleshooting
 

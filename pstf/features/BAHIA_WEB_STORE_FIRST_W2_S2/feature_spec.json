@@ -1,7 +1,0 @@
-{
-  "feature_id": "BAHIA_WEB_STORE_FIRST_W2_S2",
-  "issue": "bahia-irsry.12.5",
-  "observed_before": "Worker and operation pages were populated by controlplane event applicators, collection maps, and loadWorkers() bootstrap calls; worker adverts were part of the legacy broad read-model subscription.",
-  "intended_behavior": "Workers, Loom jobs, and operations render from the verified BahiaEventStore on boot and update from topic- or kind-scoped relay events. Worker advertisements are open-author on one long-lived REQ regardless of worker count. EOSE is sync status, never a render gate.",
-  "implemented_behavior": "Worker and operation collection bindings hydrate from store queries and maintain keyed incremental projections. The shared welshman pool subscribes to worker-state topics, one open-author advertisement REQ, Loom jobs, and canonical/external operation kinds. Worker/operation applicators and loadWorkers() were removed; mutations were not changed."
-}

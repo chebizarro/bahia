@@ -162,8 +162,8 @@ Otherwise push your branch and report the commit hashes.
 ### Implementation standard
 
 Before changing code: run `bd prime`, inspect the relevant code and tests,
-read the contract in `docs/architecture/` (and the feature's PSTF record if
-one exists), and claim or create the Beads issue.
+read the contract in `docs/architecture/`, and claim or create the Beads
+issue.
 
 While changing code: preserve event-driven semantics; remove fake or
 placeholder behaviour in touched paths; implement vertical slices end to end;
@@ -171,11 +171,10 @@ validate inbound events; verify publish outcomes; handle relay failures
 explicitly; add deterministic tests.
 
 After changing code: run the relevant tests, linters and builds; update the
-documentation listed below; update PSTF artifacts when a feature record
-exists; update or close Beads issues and file new ones for remaining work.
+documentation listed below; update or close Beads issues and file new ones
+for remaining work.
 
-Escalate to a human — in the issue and, where a record exists, in
-`hitl_decisions.md` — when docs contradict code, behaviour looks accidental,
+Escalate to a human — in the Beads issue — when docs contradict code, behaviour looks accidental,
 acceptance criteria need product judgment, UX expectations are subjective, or
 security, privacy, billing, permissions, destructive data or broad
 architecture changes are involved. Do not silently resolve product ambiguity.
@@ -187,23 +186,14 @@ Tests are deterministic and event-driven: inject `EVENT`, `EOSE`, `OK`,
 rejection, reconnect and dedupe paths; map tests to acceptance criteria. Do
 not sleep for async behaviour, assert only that a mock was called, skip hard
 cases without a Beads issue, or keep tests that encode placeholder behaviour.
-Passing tests are not enough; they must prove the intended behaviour.
-
-## PSTF feature records
-
-`pstf/features/<FEATURE_ID>/` holds per-feature specification and
-verification records (`feature_spec.json`, `acceptance_criteria.json`,
-`test_matrix.json`, `defects.json`, `verification_report.md`,
-`hitl_decisions.md`); `pstf/README.md` describes the layout. They are
-engineering records, not product documentation. Rules when you touch one:
-ground claims in repository evidence, separate observed from intended
-behaviour, give every acceptance criterion a test and every failing test a
-defect, and never mark a feature verified without evidence. Two records are
-consumed by tooling and must stay valid:
-`pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json`
-(`web/tests/unit/route-transport-matrix.test.js`) and the coverage output
-directories written by `make pstf-soulfactory-coverage`,
-`web/vitest.coverage.*.config.js` and `test/integration/run-hf-vllm-verify.sh`.
+Passing tests are not enough; they must prove the intended behaviour. Ground
+claims in repository evidence, separate observed from intended behaviour, give
+every acceptance criterion a test and every failing test a Beads issue, and
+never call a feature verified without evidence. The route transport
+classification the web tests enforce is
+`web/tests/fixtures/route-transport-matrix.json`
+(`web/tests/unit/route-transport-matrix.test.js`); update it when a route's
+transport class changes.
 
 ## Build, test and lint
 
@@ -216,6 +206,7 @@ make lint                       # make lint-arch + golangci-lint run ./...
 make lint-arch                  # Go gates (internal/archtest, internal/app) + web gates
 make arch-baseline              # regenerate ratchet baselines after paying down debt
 make fmt                        # gofmt + goimports (skips third_party/)
+make soulfactory-coverage       # Go + web Soul Factory coverage into coverage/ (gitignored)
 make migrate                    # go run ./cmd/bahia-migrate --config config.yaml up
 cd web && pnpm install && pnpm run test:unit && pnpm run lint   # vitest + svelte-check
 cd web && pnpm run test:e2e     # Playwright (mock relays, signed fixtures)
@@ -262,8 +253,7 @@ Before calling work complete:
 - Production readiness: no stubs, mocks, fakes, placeholders, TODOs or
   hardcoded production values in touched paths; explicit error handling;
   configuration externalized; integrations real or tracked as blocked.
-- Records: documentation updated; PSTF record updated where one exists;
-  remaining work in Beads.
+- Records: documentation updated; remaining work in Beads.
 
 ## Session completion
 
@@ -272,14 +262,13 @@ worktree, committed and reported to the orchestrator):
 
 1. Create Beads issues for remaining work.
 2. Run the quality gates for what changed.
-3. Update PSTF artifacts where a record exists.
-4. Update Beads issue status.
-5. Commit; then `git pull --rebase && git push && git status` — the branch
+3. Update Beads issue status.
+4. Commit; then `git pull --rebase && git push && git status` — the branch
    must be up to date with its remote. If push fails, resolve and retry.
 
 Never say "ready to push when you are", "left as future work", "good enough
 for now" or "in a real system…". The handoff lists the Beads issues worked,
-code changed, tests run, PSTF artifacts updated, remaining issues, blockers,
+code changed, tests run, remaining issues, blockers,
 and a statement that no fake, stubbed, hardcoded or placeholder
 production-path behaviour remains in the touched scope.
 
@@ -287,5 +276,5 @@ production-path behaviour remains in the touched scope.
 
 These instructions are architectural constraints, not preferences.
 Violations are bugs: fix them if in scope, otherwise file or update a Beads
-issue, record product ambiguity in the PSTF record or issue, and never bury
-the problem in comments or handoff prose.
+issue, record product ambiguity in that issue, and never bury the problem in
+comments or handoff prose.

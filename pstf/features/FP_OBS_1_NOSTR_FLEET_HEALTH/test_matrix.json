@@ -1,9 +1,0 @@
-{
-  "tests": [
-    {"criterion": "AC1", "test": "TestNostrFleetHealthProjectsCanonicalObservables"},
-    {"criterion": "AC2", "test": "TestNostrFleetHealthKeepsLatestReplaceableAndSeparatesRelayFailure"},
-    {"criterion": "AC3", "test": "TestNostrFleetHealthProjectsCanonicalObservables; TestNostrFleetHealthKeepsLatestReplaceableAndSeparatesRelayFailure"},
-    {"criterion": "AC4", "test": "TestNostrFleetHealthMetricsUseBoundedLabelsAndNoRawContent"},
-    {"criterion": "AC5", "test": "TestDefaultInboundKindsContainsOnlyOperationalNonReactorStreams plus architecture review"}
-  ]
-}

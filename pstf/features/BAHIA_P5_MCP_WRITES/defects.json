@@ -1,9 +1,0 @@
-{
-  "tracking_note": "The worktree's bd client could not connect to the configured Dolt database; the user prohibited .beads writes. These must be filed or reconciled in Beads by the integration owner.",
-  "defects": [
-    {"id": "P2-D1", "severity": "high", "observed": "ML model/version/endpoint registry and DNS handler operations now have intent-backed MCP tools, but ML import/recipe/inference, build/SBOM, tool-provisioning, policy-evaluate and notification-log mutation tools still use legacy paths. Build registration is a direct repository write rather than keyed ContextVM.", "required": "Complete bahia-irsry.76 handler contracts and migrate or explicitly preserve each command path."},
-    {"id": "P2-D2", "severity": "high", "observed": "ContextVM publisher interfaces remain in MCP ServerDeps and agent_async_tools.go; direct assistant execution bypasses the in-process adapter.", "required": "Migrate assistant observation/evidence to intent status, then delete publisher functions and dependencies."},
-    {"id": "P2-D3", "severity": "medium", "observed": "The 25 ML/DNS registry tool variants have per-tool accepted/replay/pending/rejection tests through the real processor and in-memory state store, but the handler is synthetic; remaining mapped tool families are under-tested.", "required": "Add per-tool tests using the concrete domain handlers and in-memory repositories; cover all previously mapped families."},
-    {"id": "P2-D4", "severity": "medium", "observed": "LLM deployment and some backup operations have no immediately readable canonical family in this branch, so their successful calls return pending.", "required": "Use newly published canonical families after integration or report accepted status through a durable intent-status read."}
-  ]
-}

@@ -8,7 +8,7 @@ export default mergeConfig(base, defineConfig({
       provider: 'v8',
       all: true,
       reporter: ['json-summary', 'text'],
-      reportsDirectory: '../pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage/web',
+      reportsDirectory: '../coverage/web/soulfactory',
       include: [
         'src/lib/auth/route-access.js',
         'src/lib/components/nav-model.js',
