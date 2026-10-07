@@ -33,7 +33,7 @@ The same documentation corpus is available in three places:
 - **Contextual help**: Product routes with matching guides expose a route-specific docs action, and the assistant composer shows a dismissible documentation reference such as `docs:features-services` before you send a prompt.
 - **MCP**: AI agents can discover docs with `bahia_docs_list`, read topics with `bahia_docs_read`, or read `bahia://docs/<topic>` resources.
 
-The relay-published docs catalog is built from Bahia’s user-guide content. Keep `docs/user-guide/**/*.md` authoritative and do not duplicate user-facing docs in route code or assistant prompts.
+The catalog is published to the Bahia relay as NIP-23 articles (kind `30023`, `t=bahia-docs`) from `docs/user-guide/**/*.md`; the web app reads it from the relay.
 
 ### Getting Started
 - [Getting Started](getting-started.md) — Installation, first deployment, initial setup
@@ -49,8 +49,8 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 | [Adoption](features/adoption.md) | Scan existing runtime targets before importing services |
 | [Environments](features/environments.md) | Configure deployment targets (staging, production) |
 | [Deployments](features/deployments.md) | Deploy artifacts with intents, approvals, and runs |
-| [Operator Assistant](features/operator-assistant.md) | Batch plan review/editing and iterative assistant workflows (unified execution contract) |
-| [Virtual Machines](features/virtual-machines.md) | Persistent VMs, execution planes, public queries, approvals and observability |
+| [Operator Assistant](features/operator-assistant.md) | In-product assistant that plans, asks for approval, and runs MCP tools |
+| [Virtual Machines](features/virtual-machines.md) | Persistent VMs and execution planes |
 | [Artifacts](features/artifacts.md) | Container images and build outputs |
 | [Notifications](features/notifications.md) | Organization-scoped webhook and Nostr DM delivery |
 | [Organizations](features/organizations.md) | Team management and access control |
@@ -60,7 +60,7 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 | [Workers](features/workers.md) | Loom workers for deployment execution |
 | [Fleet Health](features/fleet-health.md) | Resource pressure map and cleanup orchestration status |
 | [Route Canaries](features/route-canaries.md) | End-to-end verification and outage detection for managed routes |
-| [Ops Widgets](features/ops-widgets.md) | Trusted live kind-30318 operations widgets rendered by Wheelhouse |
+| [Ops Widgets](features/ops-widgets.md) | Live operations widgets published by trusted services |
 | [Continuity](features/continuity.md) | Failover readiness, topology, and local simulation |
 | [Events](features/events.md) | Live inspection of Nostr control-plane and read-model events |
 | [Environment States](features/environment-states.md) | Desired-versus-observed state and drift inspection |
@@ -91,27 +91,31 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 | **Deployment Intent** | A request to deploy an artifact |
 | **Deployment Run** | A concrete execution of a deployment |
 | **Drift** | A mismatch between desired and observed state |
-| **Read Model** | Nostr event reflecting current shared state |
+| **Canonical record** | Service-signed Nostr event (kind `30900`) holding an entity's current state |
+| **Intent** | Operator-signed Nostr event (kind `30900`, `t=bahia-intent`) requesting a change |
 
 ## Architecture Overview
 
 ```
-┌─────────────────┐     ┌──────────────────────────────┐
-│ Browser / CLI   │────▶│ ContextVM discovery (11316-11320) │
-│ / MCP Agent     │     │ + NIP-51 relay sets (30002)      │
-└────────┬────────┘     └──────────────┬───────────────┘
-         │                              │
-         │ signed requests              │ relay discovery
-         ▼                              ▼
-┌────────────────────────────────────────────────────────┐
-│            Nostr Control Plane / Sidecar               │
-│   public requests • status/results • read models       │
-└────────────────────────────────────────────────────────┘
-                          │
-         ┌────────────────┼────────────────┐
-         ▼                ▼                ▼
-    PostgreSQL      OCI / Blossom    Loom Workers
+┌──────────────────────┐   signed intents (30900)    ┌──────────────────────┐
+│ Browser / CLI / MCP  │ ──────────────────────────▶ │  Nostr relays        │
+│ (operator signer)    │ ◀────────────────────────── │  (sidecar + others)  │
+└──────────────────────┘   status (30315), state     └──────────┬───────────┘
+                           (30900), audit (4903)                │
+                                                                ▼
+                                                     ┌──────────────────────┐
+                                                     │  Bahia daemon        │
+                                                     │  local event store   │
+                                                     │  PostgreSQL (optional│
+                                                     │  derived index)      │
+                                                     └──────────┬───────────┘
+                                          ┌─────────────────────┼─────────────────────┐
+                                          ▼                     ▼                     ▼
+                                   Docker / Compose /     OCI registry /        Loom workers /
+                                   VM runtimes            Blossom                Hive-CI
 ```
+
+The daemon runs without PostgreSQL; when configured, PostgreSQL is a derived index, never the source of truth.
 
 ## Getting Help
 
@@ -119,8 +123,7 @@ The relay-published docs catalog is built from Bahia’s user-guide content. Kee
 - **Docs UI**: Browse documentation at `http://localhost:3000/docs`; internal documentation links stay inside `/docs/<topic>`.
 - **Assistant**: Open the floating assistant on a mapped product route to include a visible, dismissible route docs reference in `selected_refs`.
 - **MCP**: Connect to `/mcp` for AI agent tooling, including `bahia_docs_list` and `bahia_docs_read`.
-- **Nostr**: Subscribe to read models and status events
-- **API Docs**: See [api.md](../api.md) for HTTP reference
+- **Nostr**: Subscribe to canonical records and status events; see [Nostr Integration](nostr-integration.md)
 
 ---
 
