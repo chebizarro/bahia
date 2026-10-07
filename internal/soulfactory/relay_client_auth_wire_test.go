@@ -58,7 +58,7 @@ func TestRelayClientNIP42AgainstChallengingRelayIsRaceFree(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			signer := newFakeSigner(t)
 			url := newNIP42KhatruRelay(t, tc.challengeOnConnect)
-			bus, err := NewRelayClient([]string{url}, WithRelaySigner(signer), withRelayResubscribeBackoff(fastRelayBackoff))
+			bus, err := NewRelayClient([]string{url}, WithRelaySigner(signer), withRelayResubscribeBackoff(fastRelayBackoff), withRelayAdmission(generousTestAdmission()))
 			if err != nil {
 				t.Fatalf("new relay client: %v", err)
 			}

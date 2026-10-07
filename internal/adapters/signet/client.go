@@ -19,10 +19,10 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
 	"fiatjaf.com/nostr/nip44"
-	"fiatjaf.com/nostr/nip46"
 	cascadia "git.sharegap.net/cascadia/cascadia-go"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -64,9 +64,12 @@ const (
 //
 // Two relay stacks, by protocol:
 //   - NIP-46 RPC (connect, sign, NIP-44, per-agent bunkers) runs on pool, a
-//     library nostr.Pool, because nip46.ConnectBunker and BunkerClient take
-//     one and own its kind-24133 request/response subscription. That is the
-//     library's NIP-46 client, not a Bahia relay consumer.
+//     library nostr.Pool, because the NIP-46 client takes one and owns its
+//     kind-24133 request/response subscription. That is the library's NIP-46
+//     client, not a Bahia relay consumer. The library exposes no publish
+//     hook, so every RPC is admitted as one opaque signer-lane publication
+//     (plus every bunker relay's wire share) through nostrout.Bunker before
+//     the library sends it.
 //   - Signet's ContextVM management plane (NIP-59 gift-wrapped JSON-RPC,
 //     callManagement) is a Bahia REQ/EVENT exchange and runs on the shared
 //     RelayPool: supervised per-relay REQ, CLOSED classification and NIP-42.
@@ -77,6 +80,7 @@ type Client struct {
 	bunkerURI         string
 	relays            []string
 	pool              *nostr.Pool // NIP-46 only; see above
+	admission         *nostrout.Admission
 	managementRelays  []string
 	closedRetryBudget int
 	logger            *slog.Logger
@@ -87,7 +91,7 @@ type Client struct {
 
 	connectMu            sync.Mutex
 	mu                   sync.Mutex
-	bunker               *nip46.BunkerClient  // Active NIP-46 connection
+	bunker               *nostrout.Bunker     // Active admission-gated NIP-46 connection
 	management           *nostrpool.RelayPool // Management plane of the active connection
 	agents               map[string]*AgentIdentity
 	connected            bool
@@ -104,7 +108,7 @@ type AgentIdentity struct {
 	Pubkey           string
 	Npub             string
 	BunkerURI        string
-	bunkerClient     *nip46.BunkerClient // Agent-specific bunker connection
+	bunkerClient     *nostrout.Bunker // Agent-specific admission-gated bunker connection
 	bunkerGeneration uint64
 	mockSecretKey    string // Explicit mock-mode-only agent signing key
 	mockStatus       string // Explicit mock-mode-only lifecycle status
@@ -120,6 +124,10 @@ type Config struct {
 	ConnectTimeout    time.Duration // Bounds each connection attempt without becoming the successful connection lifetime
 	SignTimeout       time.Duration // Deprecated: caller context controls signing lifetime
 	ClosedRetryBudget int           // nostr.closed_retry_budget for the management pool; 0 keeps the pool default
+	// OutboundAdmission gates every EVENT this client publishes: NIP-46
+	// requests and management gift wraps. Nil uses the process-wide
+	// controller; there is no unlimited mode.
+	OutboundAdmission *nostrout.Admission
 }
 
 // NewClient creates a new Signet client.
@@ -138,6 +146,7 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 		bunkerURI:         config.BunkerURI,
 		relays:            config.Relays,
 		pool:              nostr.NewPool(),
+		admission:         nostrout.Or(config.OutboundAdmission),
 		managementRelays:  signetManagementRelays(config),
 		closedRetryBudget: config.ClosedRetryBudget,
 		logger:            logger.With("component", "signet"),
@@ -200,8 +209,9 @@ func (c *Client) Connect(ctx context.Context) error {
 	// ConnectBunker retains ctx for its response subscription. The application
 	// context is therefore the connection lifetime; installing a child deadline
 	// here silently kills later NIP-46 RPCs.
-	bunker, err := nip46.ConnectBunker(
+	bunker, err := nostrout.ConnectBunker(
 		connectCtx,
+		c.admission,
 		clientSecret,
 		bunkerURI,
 		c.pool,
@@ -273,7 +283,7 @@ func (c *Client) waitForConnectionState(ctx context.Context, want bool) error {
 	}
 }
 
-func (c *Client) setConnection(bunker *nip46.BunkerClient, lifetime context.Context, cancel context.CancelFunc, connected bool) {
+func (c *Client) setConnection(bunker *nostrout.Bunker, lifetime context.Context, cancel context.CancelFunc, connected bool) {
 	c.mu.Lock()
 	previousCancel := c.lifetimeCancel
 	changed := c.connected != connected || c.bunker != bunker
@@ -311,12 +321,15 @@ func signetManagementRelays(config Config) []string {
 // provisioner the replies are gift-wrapped to: inbox relays serve kind-1059
 // events only to their authenticated recipient. The pool logs through the
 // client's slog logger.
-func (c *Client) newManagementPool(bunker *nip46.BunkerClient) *nostrpool.RelayPool {
+func (c *Client) newManagementPool(bunker *nostrout.Bunker) *nostrpool.RelayPool {
 	if len(c.managementRelays) == 0 {
 		return nil
 	}
 	logger := nostrpool.NewSlogZapLogger(c.logger.With("relay_pool", "signet-management"))
-	opts := []nostrpool.RelayPoolOption{nostrpool.WithAuthSignFunc(bunker.SignEvent)}
+	opts := []nostrpool.RelayPoolOption{
+		nostrpool.WithAuthSignFunc(bunker.SignEvent),
+		nostrpool.WithOutboundAdmission(c.admission),
+	}
 	if c.closedRetryBudget > 0 {
 		opts = append(opts, nostrpool.WithRetryableClosedBudget(c.closedRetryBudget))
 	}
@@ -680,8 +693,9 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 		if connectCtx == nil {
 			return ErrNotConnected
 		}
-		bunker, err := nip46.ConnectBunker(
+		bunker, err := nostrout.ConnectBunker(
 			connectCtx,
+			c.admission,
 			clientSecret,
 			bunkerURI,
 			c.pool,

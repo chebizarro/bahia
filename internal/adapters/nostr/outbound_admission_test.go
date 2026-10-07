@@ -16,16 +16,16 @@ import (
 
 // newIsolatedTestAdmission keeps unrelated pool tests from sharing the
 // process-wide budget while still exercising real admission.
-func newIsolatedTestAdmission() *OutboundAdmission {
-	generous := OutboundPurposeBudget{RatePerMinute: 60_000, Burst: 10_000}
-	return NewOutboundAdmission(OutboundAdmissionConfig{
+func newIsolatedTestAdmission() *nostrout.Admission {
+	generous := nostrout.PurposeBudget{RatePerMinute: 60_000, Burst: 10_000}
+	return nostrout.New(nostrout.Config{
 		Aggregate: generous,
-		PurposeBudgets: map[OutboundPurpose]OutboundPurposeBudget{
-			OutboundPurposePriority: generous,
-			OutboundPurposeState:    generous,
-			OutboundPurposeGeneral:  generous,
-			OutboundPurposeBulk:     generous,
-			OutboundPurposeSigner:   generous,
+		PurposeBudgets: map[nostrout.Purpose]nostrout.PurposeBudget{
+			nostrout.PurposePriority: generous,
+			nostrout.PurposeState:    generous,
+			nostrout.PurposeGeneral:  generous,
+			nostrout.PurposeBulk:     generous,
+			nostrout.PurposeSigner:   generous,
 		},
 		RelayWire:             generous,
 		RelayWirePriority:     generous,
@@ -33,7 +33,7 @@ func newIsolatedTestAdmission() *OutboundAdmission {
 	})
 }
 
-func connectedTestPool(t *testing.T, admission *OutboundAdmission, urls ...string) *RelayPool {
+func connectedTestPool(t *testing.T, admission *nostrout.Admission, urls ...string) *RelayPool {
 	t.Helper()
 	pool := NewRelayPool(urls, zap.NewNop(), WithOutboundAdmission(admission))
 	for _, url := range pool.URLs() {
@@ -51,11 +51,10 @@ func TestRelayPoolsDefaultToOneProcessWideAdmission(t *testing.T) {
 	two := NewRelayPool(nil, zap.NewNop(), WithOutboundAdmission(nil))
 	require.Same(t, defaultOutboundAdmission(), one.outboundAdmission)
 	require.Same(t, one.outboundAdmission, two.outboundAdmission, "nil injection must keep the shared default, never disable admission")
-	require.Same(t, nostrout.Default(), DefaultOutboundAdmission())
-}
+	}
 
 func TestWithOutboundAdmissionSharesBudgetAcrossPools(t *testing.T) {
-	admission := NewOutboundAdmission(OutboundAdmissionConfig{RatePerMinute: 1, Burst: 1})
+	admission := nostrout.New(nostrout.Config{RatePerMinute: 1, Burst: 1})
 	one := connectedTestPool(t, admission, "wss://one.example")
 	two := connectedTestPool(t, admission, "wss://two.example")
 	var frames atomic.Int32
@@ -67,7 +66,7 @@ func TestWithOutboundAdmissionSharesBudgetAcrossPools(t *testing.T) {
 	_, err := one.Publish(t.Context(), gonostr.Event{Kind: 1})
 	require.NoError(t, err)
 	_, err = two.Publish(t.Context(), gonostr.Event{Kind: 1})
-	require.True(t, errors.Is(err, ErrOutboundBudgetExceeded), "second pool must share first pool's exhausted budget: %v", err)
+	require.True(t, errors.Is(err, nostrout.ErrBudgetExceeded), "second pool must share first pool's exhausted budget: %v", err)
 	require.Equal(t, int32(1), frames.Load(), "rejection must happen before relay I/O")
 }
 
@@ -76,14 +75,14 @@ func TestRelayPoolRejectedPublicationSendsNoFrame(t *testing.T) {
 	pool := connectedTestPool(t, admission, "wss://relay.example")
 	path := filepath.Join(t.TempDir(), "stop")
 	require.NoError(t, os.WriteFile(path, []byte("stop"), 0o600))
-	killed := NewOutboundAdmission(OutboundAdmissionConfig{KillSwitchFile: path})
+	killed := nostrout.New(nostrout.Config{KillSwitchFile: path})
 	pool.outboundAdmission = killed
 	setPublishOnRelayForTest(t, func(*gonostr.Relay, context.Context, gonostr.Event) error {
 		t.Fatal("kill switch must prevent every EVENT frame")
 		return nil
 	})
 	_, err := pool.PublishWithResults(t.Context(), gonostr.Event{Kind: 5})
-	require.ErrorIs(t, err, ErrOutboundKillSwitch)
+	require.ErrorIs(t, err, nostrout.ErrKillSwitch)
 }
 
 func TestRelayPoolRateLimitOpensCircuitForEveryPool(t *testing.T) {
@@ -98,7 +97,7 @@ func TestRelayPoolRateLimitOpensCircuitForEveryPool(t *testing.T) {
 	require.True(t, results[0].IsRateLimited())
 
 	_, err = other.PublishWithResults(t.Context(), gonostr.Event{Kind: 5})
-	require.ErrorIs(t, err, ErrOutboundCircuitOpen)
+	require.ErrorIs(t, err, nostrout.ErrCircuitOpen)
 	require.Equal(t, uint64(1), limited.OutboundAdmissionMetrics().RelayRateLimited)
 }
 

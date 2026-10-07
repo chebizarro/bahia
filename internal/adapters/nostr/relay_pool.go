@@ -49,7 +49,7 @@ type RelayPool struct {
 	connectRelay        func(context.Context, string, nostr.RelayOptions) (*nostr.Relay, error)
 	// outboundAdmission is the fail-closed publication controller shared by
 	// every gateway in the process (see internal/nostrout).
-	outboundAdmission *OutboundAdmission
+	outboundAdmission *nostrout.Admission
 	// now and newReconnectBackoff pace reconnects to failing relays; both are
 	// replaceable in tests.
 	now                 func() time.Time
@@ -218,7 +218,7 @@ func WithAuthSignFunc(sign func(context.Context, *nostr.Event) error) RelayPoolO
 // WithOutboundAdmission injects the fail-closed publication controller. Pools
 // default to the process-wide controller; passing nil keeps that default, so
 // there is no option for unlimited publication.
-func WithOutboundAdmission(admission *OutboundAdmission) RelayPoolOption {
+func WithOutboundAdmission(admission *nostrout.Admission) RelayPoolOption {
 	return func(p *RelayPool) {
 		if admission != nil {
 			p.outboundAdmission = admission
@@ -715,8 +715,13 @@ func cachedPublishResult(cached []PublishResult, url string) PublishResult {
 }
 
 // OutboundAdmissionMetrics returns content-free process publication counters.
-func (p *RelayPool) OutboundAdmissionMetrics() OutboundAdmissionMetrics {
+func (p *RelayPool) OutboundAdmissionMetrics() nostrout.Metrics {
 	return p.outboundAdmission.Metrics()
+}
+
+// OutboundAdmissionState returns metrics plus gate status for readiness checks.
+func (p *RelayPool) OutboundAdmissionState() nostrout.State {
+	return p.outboundAdmission.State()
 }
 
 // PublishResult contains the outcome of a publish attempt. It is the shared

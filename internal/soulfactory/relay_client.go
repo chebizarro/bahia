@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 )
 
 // SoulFactory relay I/O runs on the shared relay pool
@@ -100,6 +101,17 @@ func withRelayResubscribeBackoff(newBackoff func() *nostradapter.Backoff) RelayC
 	return func(c *RelayClient) { c.resubscribeBackoff = newBackoff }
 }
 
+// withRelayAdmission injects the outbound admission controller for the
+// client's pool. Production clients keep the process-wide controller; tests
+// use this to isolate unrelated cases from each other's budget.
+func withRelayAdmission(admission *nostrout.Admission) RelayClientOption {
+	return func(c *RelayClient) {
+		if admission != nil {
+			c.admission = admission
+		}
+	}
+}
+
 // RelayClient is SoulFactory's handle on a relay pool for one relay set.
 type RelayClient struct {
 	pool   *nostradapter.RelayPool
@@ -112,6 +124,7 @@ type RelayClient struct {
 	validateEvent      func(*nostr.Event) bool
 	publishQuorum      int
 	resubscribeBackoff func() *nostradapter.Backoff
+	admission          *nostrout.Admission
 }
 
 // NewRelayClient returns a client over a new relay pool for relays. The pool
@@ -134,6 +147,9 @@ func NewRelayClient(relays []string, opts ...RelayClientOption) (*RelayClient, e
 	poolOpts := []nostradapter.RelayPoolOption{}
 	if c.signer != nil {
 		poolOpts = append(poolOpts, nostradapter.WithAuthSignFunc(c.signer.Sign))
+	}
+	if c.admission != nil {
+		poolOpts = append(poolOpts, nostradapter.WithOutboundAdmission(c.admission))
 	}
 	if c.resubscribeBackoff != nil {
 		poolOpts = append(poolOpts, nostradapter.WithResubscribeBackoff(c.resubscribeBackoff))

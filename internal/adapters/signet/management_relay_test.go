@@ -37,7 +37,7 @@ func startFakeSignet(t *testing.T, ctx context.Context, relayURL string) *fakeSi
 	t.Helper()
 	key := nostr.Generate()
 	s := &fakeSignet{key: key, signer: nip46.NewStaticKeySigner(key)}
-	s.pool = nostrpool.NewRelayPool([]string{relayURL}, zap.NewNop(), nostrpool.WithPrivateKey(key.Hex()))
+	s.pool = nostrpool.NewRelayPool([]string{relayURL}, zap.NewNop(), nostrpool.WithPrivateKey(key.Hex()), nostrpool.WithOutboundAdmission(generousTestAdmission()))
 	t.Cleanup(s.pool.Close)
 	sub, err := s.pool.SubscribeWithOptions(ctx, []nostr.Filter{
 		{Kinds: []nostr.Kind{nostr.KindNostrConnect}, Tags: nostr.TagMap{"p": []string{key.Public().Hex()}}},
@@ -182,7 +182,7 @@ func TestSignetManagementRunsOnRelayPoolWithRecipientAuth(t *testing.T) {
 	defer cancel()
 
 	signet := startFakeSignet(t, ctx, relayURL)
-	client, err := NewClient(Config{BunkerURI: signet.bunkerURI(relayURL), ClientSecretKey: nostr.Generate().Hex(), RequireReal: true}, nil)
+	client, err := NewClient(Config{BunkerURI: signet.bunkerURI(relayURL), ClientSecretKey: nostr.Generate().Hex(), RequireReal: true, OutboundAdmission: generousTestAdmission()}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

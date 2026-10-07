@@ -15,6 +15,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/coder/websocket"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 )
 
 // Test names for the pool's stored-event vocabulary.
@@ -366,6 +367,28 @@ func fastRelayBackoff() *nostradapter.Backoff {
 	return &nostradapter.Backoff{Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2}
 }
 
+// generousTestAdmission keeps unrelated SoulFactory tests from sharing the
+// process-wide production budget, which would make them order-dependent.
+// Admission behavior is still exercised for real; tests that assert budgets
+// inject tight controllers.
+func generousTestAdmission() *nostrout.Admission {
+	generous := nostrout.PurposeBudget{RatePerMinute: 600_000, Burst: 100_000}
+	return nostrout.New(nostrout.Config{
+		Aggregate: generous,
+		PurposeBudgets: map[nostrout.Purpose]nostrout.PurposeBudget{
+			nostrout.PurposePriority: generous,
+			nostrout.PurposeState:    generous,
+			nostrout.PurposeGeneral:  generous,
+			nostrout.PurposeBulk:     generous,
+			nostrout.PurposeSigner:   generous,
+		},
+		RelayWire:             generous,
+		RelayWirePriority:     generous,
+		MaxActivePublications: 100_000,
+		MaxRelayIdentities:    100_000,
+	})
+}
+
 // newRelayClientFromEndpoints returns a RelayClient over the fake relays.
 func newRelayClientFromEndpoints(endpoints []*fakeRelayEndpoint, opts ...RelayClientOption) (*RelayClient, error) {
 	if len(endpoints) == 0 {
@@ -375,7 +398,7 @@ func newRelayClientFromEndpoints(endpoints []*fakeRelayEndpoint, opts ...RelayCl
 	for _, endpoint := range endpoints {
 		urls = append(urls, endpoint.url)
 	}
-	client, err := NewRelayClient(urls, append([]RelayClientOption{withRelayResubscribeBackoff(fastRelayBackoff)}, opts...)...)
+	client, err := NewRelayClient(urls, append([]RelayClientOption{withRelayResubscribeBackoff(fastRelayBackoff), withRelayAdmission(generousTestAdmission())}, opts...)...)
 	if err != nil {
 		return nil, err
 	}

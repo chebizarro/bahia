@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"fiatjaf.com/nostr"
-	"fiatjaf.com/nostr/nip46"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +25,7 @@ func TestSignetManagementPoolLogsThroughTheClientLogger(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	client, err := NewClient(Config{Relays: []string{relayURL}}, logger)
 	require.NoError(t, err)
-	pool := client.newManagementPool((*nip46.BunkerClient)(nil))
+	pool := client.newManagementPool((*nostrout.Bunker)(nil))
 	require.NotNil(t, pool)
 	defer pool.Close()
 

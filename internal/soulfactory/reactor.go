@@ -20,6 +20,7 @@ import (
 	"fiatjaf.com/nostr"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 )
 
 // Config holds reactor configuration.
@@ -79,8 +80,11 @@ type Reactor struct {
 	// relayClient is the one relay client for the reactor's relay set: its
 	// subscription, reads and publishes share its pool. ownsRelayClient is
 	// false when WithRelayClient supplied it (its creator closes it).
-	relayClient              *RelayClient
-	ownsRelayClient          bool
+	relayClient     *RelayClient
+	ownsRelayClient bool
+	// relayClientOpts are extra options for the reactor's own relay client
+	// (see withReactorRelayAdmission).
+	relayClientOpts          []RelayClientOption
 	publishFn                func(context.Context, *nostr.Event, []string) error
 	getSoulFn                func(context.Context, string) (*domain.AgentSoul, error)
 	getDraftFn               func(context.Context, string, string) (*domain.SoulDraft, error)
@@ -150,6 +154,17 @@ func WithRelayClient(client *RelayClient) ReactorOption {
 	}
 }
 
+// withReactorRelayAdmission injects the outbound admission controller for the
+// reactor's own relay client. Production reactors keep the process-wide
+// controller; tests use this to isolate unrelated cases from its budget.
+func withReactorRelayAdmission(admission *nostrout.Admission) ReactorOption {
+	return func(r *Reactor) {
+		if admission != nil {
+			r.relayClientOpts = append(r.relayClientOpts, withRelayAdmission(admission))
+		}
+	}
+}
+
 // InstallProvisioningEngine installs the production provisioning engine after
 // dependent adapters have been constructed around this reactor.
 func (r *Reactor) InstallProvisioningEngine(engine ProvisioningEngine) error {
@@ -203,6 +218,7 @@ func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *s
 			if signer != nil {
 				clientOpts = append(clientOpts, WithRelaySigner(signer))
 			}
+			clientOpts = append(clientOpts, r.relayClientOpts...)
 			if relayClient, err := NewRelayClient(allRelays, append(clientOpts, WithRelayLogger(r.logger))...); err == nil {
 				r.relayClient = relayClient
 				r.ownsRelayClient = true

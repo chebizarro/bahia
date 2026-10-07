@@ -58,7 +58,7 @@ func TestRelayClientQueryAgainstRelayThatNeverSendsEOSEIsBoundedAndPartial(t *te
 		}
 	})
 	silent := newSilentKhatruRelay(t)
-	bus, err := NewRelayClient([]string{answering, silent}, withRelayResubscribeBackoff(fastRelayBackoff))
+	bus, err := NewRelayClient([]string{answering, silent}, withRelayResubscribeBackoff(fastRelayBackoff), withRelayAdmission(generousTestAdmission()))
 	if err != nil {
 		t.Fatalf("new relay client: %v", err)
 	}

@@ -42,7 +42,7 @@ func TestRelayClientPublishCollectsSlowRelayOKOverTheWire(t *testing.T) {
 		}
 	})
 
-	bus, err := NewRelayClient([]string{fast, slow}, WithRelaySigner(signer))
+	bus, err := NewRelayClient([]string{fast, slow}, WithRelaySigner(signer), withRelayAdmission(generousTestAdmission()))
 	if err != nil {
 		t.Fatalf("new relay client: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestReactorPublishesOverOneSharedPool(t *testing.T) {
 			return true, "blocked: refusing test publication"
 		}
 	})
-	reactor := NewReactor(Config{Relays: []string{first}, AdditionalRelays: []string{second}}, nil, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{first}, AdditionalRelays: []string{second}}, nil, signer, slog.Default(), withReactorRelayAdmission(generousTestAdmission()))
 	defer reactor.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -119,7 +119,7 @@ func TestSharedRelayClientViews(t *testing.T) {
 	first := newKhatruTestRelay(t, withStore)
 	second := newKhatruTestRelay(t, withStore)
 	other := newKhatruTestRelay(t, func(*khatru.Relay) {})
-	shared, err := NewRelayClient([]string{first, second}, WithRelaySigner(signer))
+	shared, err := NewRelayClient([]string{first, second}, WithRelaySigner(signer), withRelayAdmission(generousTestAdmission()))
 	if err != nil {
 		t.Fatal(err)
 	}
