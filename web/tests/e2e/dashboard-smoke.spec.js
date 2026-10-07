@@ -535,11 +535,11 @@ test.beforeEach(async ({ page }) => {
     });
   });
   
-  // Guard against legacy REST payment reads for dashboard cost summary.
+  // Guard against REST payment reads for the dashboard cost summary.
   await page.route('**/api/v1/payments/history**', (route) => route.fulfill({
     status: 500,
     contentType: 'application/json',
-    body: JSON.stringify({ error: 'legacy REST payment history should not be called' })
+    body: JSON.stringify({ error: 'REST payment history should not be called' })
   }));
 
   // Mock events endpoint
@@ -873,7 +873,7 @@ test.describe('Dashboard Smoke Test', () => {
     await page.waitForLoadState('networkidle');
     
     // Page still renders its stat cards: the dashboard is relay-backed, so a
-    // failing legacy REST route does not change what it shows.
+    // failing REST route does not change what it shows.
     await expect(page.locator('.card:has-text("Services") .card-value')).toHaveText('3');
     await expect(page.locator('.card:has-text("Environments") .card-value')).toHaveText('2');
   });

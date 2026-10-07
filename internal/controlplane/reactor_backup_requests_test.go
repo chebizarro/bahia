@@ -157,7 +157,7 @@ func TestHandleBackupRepositoryRegisterRequestAppliesRegistryRecordAndPublishesR
 		t.Fatalf("repository was not applied with Nostr metadata: %#v", repo)
 	}
 	if repo.ID.Version() != 7 {
-		t.Fatalf("new repository id %s is not daemon-minted UUIDv7 (bahia-irsry.42)", repo.ID)
+		t.Fatalf("new repository id %s is not daemon-minted UUIDv7", repo.ID)
 	}
 	if len(capture.events) != 1 || capture.events[0].Kind != KindBackupRepositoryRegisterResult {
 		t.Fatalf("result events = %#v", capture.events)

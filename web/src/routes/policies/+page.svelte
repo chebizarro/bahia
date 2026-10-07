@@ -32,7 +32,7 @@
   let creating = $state(false);
   let createError = $state(null);
   // Client-minted policy id for this create attempt, reused on retry and
-  // re-minted when the modal is closed (bahia-irsry.42).
+  // re-minted when the modal is closed.
   let createEntityId = mintEntityId();
   let useVisualBuilder = $state(true); // Toggle between visual builder and JSON
   let visualRules = $state([]); // Rules from visual builder

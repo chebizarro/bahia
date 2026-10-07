@@ -206,7 +206,7 @@ type assistantPlanHashEnvelope struct {
 // ComputePlanHash returns sha256(canonical_json({session_id, plan})) as a
 // lowercase hex string. encoding/json emits deterministic struct field order and
 // sorted map keys for JSON object maps, with HTML escaping disabled, which is
-// sufficient for the Phase 1 plan hash contract. If the plan contains
+// sufficient for the plan hash contract. If the plan contains
 // non-JSON-marshalable values, an empty string is returned so callers can reject
 // the invalid plan.
 func ComputePlanHash(plan AssistantPlan, sessionID string) string {

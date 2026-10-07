@@ -131,7 +131,6 @@ export interface ScenarioResult {
  * Scenario drivers collection
  */
 export interface ScenarioDrivers {
-  api: import('./drivers/api.js').BahiaAPIDriver;
   web: import('./drivers/playwright.js').PlaywrightDriver;
   mcp: import('./drivers/mcp.js').MCPDriver;
 }

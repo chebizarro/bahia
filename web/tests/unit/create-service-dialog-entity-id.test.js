@@ -69,7 +69,7 @@ function resultEvent(id) {
   return { content: JSON.stringify({ status: 'created', service_id: id, service: { id, name: 'payments-api' } }) };
 }
 
-describe('CreateServiceDialog client-minted entity id (bahia-irsry.35)', () => {
+describe('CreateServiceDialog client-minted entity id', () => {
   beforeEach(() => {
     createServiceMock.mockReset();
     upsertServiceProjectionMock.mockReset();

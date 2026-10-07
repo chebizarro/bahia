@@ -1,9 +1,0 @@
-{
-  "feature_id": "BAHIA_PHASE5_F1_REST_WRITE_REMOVAL",
-  "criteria": [
-    {"id": "F1-1", "description": "All retired API-v1 writes return 404 even where a GET shares the path."},
-    {"id": "F1-2", "description": "Retained caller-dependent writes and native /mcp remain mounted."},
-    {"id": "F1-3", "description": "Deleted routes have no orphaned handler methods or RouterDeps fields, and the architecture ratchet does not grow."},
-    {"id": "F1-4", "description": "Full Go build, vet, and test gates pass."}
-  ]
-}

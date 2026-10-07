@@ -279,7 +279,7 @@ describe('continuity app-lifetime store binding', () => {
     teardownContinuityStoreBinding();
   });
 
-  // bahia-fbyo5: the decrypted `operators:continuity` allowlist widens the
+  // the decrypted `operators:continuity` allowlist widens the
   // operator unit to the other authorized operators (and the relay REQ with
   // it); without it only the signed-in key is trusted.
   it('trusts the allowlisted continuity operators plus the signed-in key once the allowlist is readable', async () => {

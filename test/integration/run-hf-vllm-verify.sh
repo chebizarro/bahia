@@ -7,8 +7,8 @@
 #   ./test/integration/run-hf-vllm-verify.sh [--env FILE] [--dry-run] [--verbose]
 #
 # Loads prerequisites from .env.integration, validates all required values are
-# present, then runs TestAIHFVLLMProductionIntegrations. Results are recorded
-# in pstf/features/AI_FABRIC_HF_VLLM_DEPLOYMENT/verification_report.md.
+# present, then runs TestAIHFVLLMProductionIntegrations. Evidence is written
+# to coverage/integration/hf-vllm-production-evidence.md (gitignored).
 #
 # =============================================================================
 set -euo pipefail
@@ -191,10 +191,10 @@ else
 fi
 
 # --- Record evidence ---
-PSTF_DIR="$PROJECT_ROOT/pstf/features/AI_FABRIC_HF_VLLM_DEPLOYMENT"
-EVIDENCE_FILE="$PSTF_DIR/production_evidence.md"
+EVIDENCE_DIR="$PROJECT_ROOT/coverage/integration"
+EVIDENCE_FILE="$EVIDENCE_DIR/hf-vllm-production-evidence.md"
 
-mkdir -p "$PSTF_DIR"
+mkdir -p "$EVIDENCE_DIR"
 
 cat > "$EVIDENCE_FILE" <<EVIDENCE
 # Production Verification Evidence — AI_FABRIC_HF_VLLM_DEPLOYMENT

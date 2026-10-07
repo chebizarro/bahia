@@ -118,18 +118,9 @@ function inferSourceHints(scenarioName: string, pattern: FailurePattern): string
   const lowerName = scenarioName.toLowerCase();
   const hints = new Set<string>();
 
-  if (lowerName.includes('service')) hints.add('test/e2e-agent/scenarios/services.ts');
-  if (lowerName.includes('environment')) hints.add('test/e2e-agent/scenarios/environments.ts');
-  if (lowerName.includes('deployment')) hints.add('test/e2e-agent/scenarios/deployments.ts');
-  if (lowerName.includes('policy')) hints.add('test/e2e-agent/scenarios/policies.ts');
-  if (lowerName.includes('worker')) hints.add('test/e2e-agent/scenarios/workers.ts');
-  if (lowerName.includes('secret')) hints.add('test/e2e-agent/scenarios/secrets.ts');
-  if (lowerName.includes('event')) hints.add('test/e2e-agent/scenarios/events.ts');
+  if (lowerName.includes('event') || lowerName.includes('relay')) hints.add('test/e2e-agent/scenarios/events.ts');
 
   switch (pattern) {
-    case 'api_error':
-      hints.add('test/e2e-agent/drivers/api.ts');
-      break;
     case 'ui_element_not_found':
     case 'timeout':
       hints.add('test/e2e-agent/drivers/playwright.ts');

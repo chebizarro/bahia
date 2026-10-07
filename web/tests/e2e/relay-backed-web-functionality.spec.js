@@ -134,7 +134,7 @@ test.describe.serial('relay-backed Bahia web functionality', () => {
       const { eagerRelayConnect } = await import('/src/lib/stores/system.svelte.js');
 
       await initializeAuth();
-      // §6.2 auth no longer triggers system discovery — await it explicitly
+      // initializeAuth does not trigger system discovery — await it explicitly
       // so assertEncryptedRequestsAvailable() sees features.encrypted_nostr_requests.
       await eagerRelayConnect();
 

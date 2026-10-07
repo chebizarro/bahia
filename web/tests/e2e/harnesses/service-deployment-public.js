@@ -214,7 +214,7 @@ export async function installPublicServiceDeploymentHarness(
     // created_at past the previous one. With one fixed created_at the pending
     // and approved versions of an intent tie, NIP-01 keeps the lowest id, and
     // the ids hash content carrying wall-clock timestamps, so the reader kept
-    // whichever version happened to hash lower (bahia-etwho). The floor is
+    // whichever version happened to hash lower. The floor is
     // persisted so it survives page.reload() along with the state.
     const coordinateRevisions = loadPersistedJson('__BAHIA_E2E_PUBLIC_REVISIONS', {});
 

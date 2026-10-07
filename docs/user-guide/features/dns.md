@@ -1,271 +1,51 @@
 # DNS
 
-**DNS** in Bahia provides service discovery through DNS zone and endpoint management.
+Bahia manages DNS zones, endpoints, backends, policies, record overrides, projection, drift, and FIPS mesh visibility. The feature is enabled with the `dns` configuration section.
 
-## Overview
+## Web and CLI
 
-DNS features include:
-- **Zone management** — Define DNS zones
-- **Endpoint projection** — Auto-discover service endpoints
-- **Policy routing** — Split-horizon, weighted routing
-- **FIPS mesh integration** — Federated identity endpoints
-
-## Key Concepts
-
-### DNS Zone
-
-A **Zone** defines a DNS namespace:
-
-```yaml
-name: "services.example.com"
-visibility: "internal"
-backend: "dnsmasq-main"
-ttl: 3600
-authoritative: true
-allow_empty_authoritative: false
-```
-
-### DNS Endpoint
-
-An **Endpoint** is a discoverable service address:
-
-```yaml
-family: "service"
-name: "payment-api"
-environment: "prod"
-fqdn: "payment-api.prod.services.example.com"
-address: "10.0.1.100"
-port: 8080
-protocol: "https"
-health: "healthy"
-```
-
-### DNS Policy
-
-A **Policy** controls routing behavior:
-
-```yaml
-name: "geo-routing"
-type: "weighted"
-rules:
-  - weight: 80
-    endpoint: "payment-api-us"
-  - weight: 20
-    endpoint: "payment-api-eu"
-```
-
-## Viewing DNS State
-
-### Web UI
-
-Navigate to **DNS** in the sidebar:
-- **Zones**: DNS zone definitions
-- **Endpoints**: Service endpoint catalog
-- **Policies**: Routing policies
-- **FIPS Mesh**: Federated identity endpoints
-
-The web DNS registry controls publish signed kind-`30900` intents for zone update/delete, endpoint create/update/delete, backend create/update/delete, policy update/delete, zone creation, policy application, record overrides, override retirement, and drift remediation. Existing rows supply their canonical `updated_at` revision for edits and deletes. The pending overlay remains visible until a scoped kind-`30315` acceptance or newer canonical state arrives; a rejected or conflicting intent displays its reason. Drift remediation is zone-scoped; the accepted status `data` completes its run tracker. The old FQDN, reason, and idempotency-key form fields are no longer sent because the signed remediation operation accepts only a zone.
-
-### CLI and MCP
-
-The signer-first `bahia dns` group provides zone creation, policy application, record overrides, and drift remediation. These commands use the configured operator signer to publish kind-`30900` intents, persist them in the CLI outbox, and await scoped kind-`30315` status. Drift remediation uses `dns/drift-remediate` with coordinate `dns-remediate:<zone>` (or `dns-remediate:all`) and accepts a UUIDv7 `--idempotency-key` for retry.
+Open **DNS** (`/dns`) for zones, endpoints, policies, backends, overrides, drift, and mesh status.
 
 ```bash
-bahia dns zone-create --name prod.example --visibility internal --backend-ref dnsmasq-main --ttl 300 --authoritative
+bahia dns zone-create --name prod.example --visibility external --backend-ref powerdns-prod --ttl 300
+bahia dns endpoint-create --file endpoint.json
 bahia dns policy-apply --file dns-policy.json
-bahia dns record-set --zone prod.example --name api --type A --value 192.0.2.10 --ttl 60 --reason "incident pin"
+bahia dns record-set --zone prod.example --name api --type A --value 192.0.2.10 \
+  --reason "incident pin"
+bahia dns override-retire --override-id <uuid> --reason "projection is authoritative"
 bahia dns drift-remediate --zone prod.example
-bahia dns drift-remediate
 ```
 
-For dnsmasq and `dnsmasq_agent` zones, `authoritative: true` renders a managed `local=/<zone>/` guard so unanswered query types are not forwarded upstream. The default is `false`, preserving existing forwarding behavior.
+DNS commands are fleet-scoped and require a fleet operator. Updates and deletes use `expected_updated_at` where the command exposes it.
 
-Authoritative zones also refuse a destructive transition from a non-empty listed record set to an empty projected record set. The reconciler leaves the existing backend include unchanged, emits drift plus a `dns.zone_sync_refused` status event, and warns once until projection recovers. Set `allow_empty_authoritative: true` only when an intentional authoritative-zone teardown must be allowed; non-authoritative zones continue to permit empty syncs.
+## MCP and resources
 
-For external MCP embeddings with authorization configured, `bahia_dns_list_endpoints`, `bahia_dns_list_drift`, and the `bahia_assistant_dns_*` tools remain available as listed in the [MCP reference](../mcp-tools.md).
+MCP reads use `bahia_dns_list_endpoints`, `bahia_dns_list_drift`, and their assistant aliases. The `bahia_assistant_dns_*` intent tools cover zone, endpoint, backend, policy, record, and override changes. Drift remediation is available through the CLI.
 
-## MCP Resources
+`resources/list` also exposes DNS endpoint resources as `bahia://dns/…`.
 
-DNS endpoints are exposed as MCP resources:
+## Projection
 
-```json
-{
-  "uri": "bahia://dns/endpoint/payment-api.prod.services.example.com",
-  "name": "payment-api (prod)",
-  "description": "Payment API production endpoint",
-  "mimeType": "application/json",
-  "metadata": {
-    "protocol": "https",
-    "address": "10.0.1.100",
-    "port": 8080,
-    "health": "healthy"
-  }
-}
-```
+A DNS policy maps an environment or service scope to a zone. Runtime observations produce endpoint records only when the selected service, environment, and unit have enough address evidence. Host overrides can translate an endpoint alias to an IP address or fully qualified hostname.
 
-Agents can query these resources for service discovery.
+Record overrides take precedence until retired or expired. They require a reason, are retained for audit, and do not silently disappear after a successful projection.
 
-## Creating DNS Records
+Supported zone visibility values are `internal`, `external`, `edge`, and `mesh`. Record types are `A`, `AAAA`, `CNAME`, and `SRV`.
 
-### Zones, policies, and overrides
+## Backends
 
-Use the signer-first CLI commands above, the DNS web mutation flows, or the registered assistant tools:
+Configure a backend that Bahia can actively apply: dnsmasq, dnsmasq agent, CoreDNS, PowerDNS, or FIPS. The filesystem renderer alone does not activate snapshots.
 
-- `bahia_assistant_dns_zone_create`
-- `bahia_assistant_dns_policy_apply`
-- `bahia_assistant_dns_record_override`
+For a remote dnsmasq host, the dnsmasq agent accepts signed requests from the configured Bahia identity, writes only Bahia-owned include files, applies a monotonic serial, and restores the prior file when validation or reload fails. Give every agent or bridge its own writable local event-store path.
 
-Each publishes the corresponding signed Nostr request and returns correlation metadata.
+## Drift and safety
 
-## Endpoint Projection
+The drift view compares desired endpoint records with backend observations. A remediation intent is zone-scoped and reports bounded status data. Do not mark a zone authoritative until backend delegation is in place. Protect manual overrides with expiry and ownership review.
 
-For an operational LAN configuration using dnsmasq, environment-to-zone mapping, and managed external HTTPS routing, follow [Managed DNS and HTTPS Routes](../guides/managed-dns-and-https-routes.md). The dnsmasq backend is the deployable internal-LAN exemplar for mapping `edge-01-production` services into `sharegap.net`. When the LAN resolver runs on a **different host** than Bahia (the edge-01/core-01 topology), use the `dnsmasq_agent` backend instead: Bahia publishes signed ContextVM kind `25910` requests (schema `bahia.dnsagent.v1`) over the configured relays to a `bahia-dns-agent` process on the resolver host, which manages only Bahia-owned dnsmasq include files with atomic writes, serial-guarded applies, and automatic rollback on failed reloads. It is configured with `agent_pubkey` (the agent's hex pubkey), optional `agent_relays`, `agent_encrypted`, `agent_timeout`, and `agent_retries`; see the [core-01 dnsmasq agent runbook](../../runbooks/core01-dnsmasq-agent.md) for deployment. The filesystem backend is not deployable because Bahia does not wire an operational activator for its snapshots; choose dnsmasq, dnsmasq_agent, CoreDNS, PowerDNS, or FIPS instead. DNS configuration changes take effect on `SIGHUP` through whole-application reconstruction, not in-place backend mutation.
-
-The DNS agent, the standalone `fips-bahia-bridge` and (optionally) `pkg/discovery` keep a local Nostr event store: a rebuildable bbolt cache of the events they received plus per-relay sync state. Each relay is synced on its own (NIP-77 reconciliation where the relay supports it), so a restart downloads only the events the store lacks, and a relay that was down catches up by itself when it returns without holding back the others. The DNS agent's store is at `--store-path` / `BAHIA_DNS_AGENT_STORE_PATH` (default: `.bahia-dns-agent-events.bolt` beside `--state-file`); a request it has already received is not handed to it again after a restart, and its replay window still rejects stale requests. The bridge's store is at `--store-path` / `FIPS_BAHIA_STORE_PATH` / `store_path` (default: `.bahia-fips-bridge.bolt` beside its hosts file); it restores endpoints and tombstones from the store on restart and writes the managed hosts section once after its first catch-up, then per live change. `pkg/discovery` callers opt in with `discovery.WithStorePath`. Every store can be deleted to rebuild from relays; keep its directory writable by the process, and give each process its own path.
-
-Bahia automatically projects endpoints from:
-- **Services** — Healthy service deployments
-- **LLM routes** — Active LLM endpoints
-- **ML endpoints** — Inference endpoints
-- **Workers** — Available workers
-- **FIPS mesh** — Federated identity nodes
-
-For service observations, `dns.projection.host_overrides` translates a runtime-observed host or deployment-unit endpoint alias into a concrete IP address or fully qualified hostname before Bahia selects the DNS record type. IP overrides produce `A` or `AAAA` records; fully qualified hostname overrides produce `CNAME` records. Configure an override for every Bahia-managed endpoint alias that is not itself resolvable:
-
-```yaml
-dns:
-  projection:
-    host_overrides:
-      edge-01-docker: 192.168.40.104
-```
-
-Bahia never emits a `CNAME` to a bare single-label target such as `edge-01-docker`. Without a matching override, it skips that service record and logs a warning rather than publishing a record whose target will return `NXDOMAIN`.
-
-### Endpoint Families
-
-| Family | Source |
-|--------|--------|
-| `service` | Deployed services |
-| `llm` | LLM route endpoints |
-| `ml` | ML inference endpoints |
-| `worker` | Loom workers |
-| `fips` | FIPS mesh nodes |
-
-### Health Status
-
-| Status | Description |
-|--------|-------------|
-| `healthy` | Endpoint is responding |
-| `unhealthy` | Endpoint is failing |
-| `unknown` | Health not determined |
-
-## FIPS Mesh
-
-The FIPS mesh provides federated identity endpoints:
-
-### Viewing FIPS mesh
-
-Use the web panel or `bahia_fips_mesh_status` and `bahia_fips_list_mesh_nodes` through MCP.
-
-### Web UI
-
-The DNS page includes a **FIPS Mesh Panel** showing:
-- Mesh topology
-- Node status
-- Connection health
-
-### MCP Resources
-
-FIPS nodes are exposed as MCP resources:
-
-```json
-{
-  "uri": "bahia://fips/node/node-123",
-  "name": "fips-node-123",
-  "metadata": {
-    "status": "online",
-    "capabilities": ["sign", "verify"]
-  }
-}
-```
-
-## Nostr Event Kinds
-
-| Kind | Name | Description |
-|------|------|-------------|
-| 5941 | DNSZoneCreate | Create/reconcile zone |
-| 5942 | DNSPolicyApply | Apply policy |
-| 5943 | DNSRecordOverride | Override record |
-| 5944 | DNSDriftRemediate | Fix drift |
-| 5945 | DNSBackendRegister | Register backend |
-| 6941 | DNSStatus | Progress updates |
-| 7941-7945 | DNS Results | Terminal results |
-
-## Read Models
-
-| Kind | d-tag | Content |
-|------|-------|---------|
-| 31975 | `zone:<name>` | Zone state |
-| 31976 | `endpoint:<family>:<name>:<env>` | Endpoint state |
-| 31977 | `dnspolicy:<id>` | Policy state |
-| 31978 | `dnsbackend:<id>` | Backend state |
-
-Subscribe for updates:
-```json
-{
-  "kinds": [31976],
-  "#t": ["dns-endpoint"]
-}
-```
-
-## Drift Detection
-
-DNS drift is detected when:
-- Expected records don't match actual
-- Endpoints are missing or extra
-- Health status changes
-
-### Drift remediation
-
-Use `bahia dns drift-remediate [--zone <zone>]` for the CLI path. MCP clients can use `bahia_assistant_dns_drift_remediate` and follow its correlation metadata to the status/result projection.
-
-## Best Practices
-
-1. **Use policies** — Consistent routing behavior
-2. **Monitor health** — Alert on unhealthy endpoints
-3. **Document zones** — Clear naming conventions
-4. **Test failover** — Verify routing under failure
-5. **Secure backends** — Limit backend access
-
-## Troubleshooting
-
-### Endpoint Not Appearing
-
-- Check service health
-- Verify deployment succeeded
-- Check DNS projection enabled
-
-### Zone Sync Failed
-
-- Check backend connectivity
-- Verify credentials
-- Review sync logs
-
-### FIPS Node Offline
-
-- Check network connectivity
-- Verify node configuration
-- Review node logs
+For an end-to-end service hostname flow, see [Managed DNS and HTTPS Routes](../guides/managed-dns-and-https-routes.md).
 
 ## Related
 
-- [Managed DNS and HTTPS Routes](../guides/managed-dns-and-https-routes.md) — Signer-first deployment, automatic internal DNS, and managed public HTTPS
-- [Services](services.md) — Endpoint sources
-- [Workers](workers.md) — Worker endpoints
-- [LLM Routes](llm-routes.md) — LLM endpoints
-
-## Signed DNS intents
-
-Fleet operators can publish `bahia.intent.dns.v1` kind-30900 events for `zone-create`, `zone-update`, `zone-delete`, `endpoint-create`, `endpoint-update`, `endpoint-delete`, `backend-create`, `backend-update`, `backend-delete`, `policy-apply`, `policy-update`, `policy-delete`, `record-set`, `override-retire`, and `drift-remediate`. Create/update intents carry the full desired record; delete intents identify the existing record by `name`, `coordinate`, `ref`, or `id` respectively. Update/delete intents may carry `expected_updated_at` as the canonical record's RFC3339 revision. The daemon uses the durable local registry, reconciles DNS zones and endpoints, publishes one canonical record or tombstone (`deleted=true`) per changed coordinate, and emits a bounded kind-30315 status. Backend registry writes do not provision a connector: the backend must already be configured before a zone may bind to it. CLI drift remediation uses the same signed intent path.
-
-The web console publishes all supported DNS mutations as signed intents; `drift-remediate` uses coordinate `dns-remediate:<zone>` and waits for the accepted kind-30315 status `data` before showing completion.
+- [Services](services.md)
+- [Deployments](deployments.md)
+- [Route Canaries](route-canaries.md)

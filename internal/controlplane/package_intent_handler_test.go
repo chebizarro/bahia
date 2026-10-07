@@ -448,7 +448,7 @@ func TestPackageIntentHandler_ApprovalFlowBoundedRejection(t *testing.T) {
 }
 
 // TestPackageIntentHandler_UntrustedActorDroppedSilently verifies that
-// intents from unknown principals are silently dropped (§2.3), while
+// intents from unknown principals are silently dropped, while
 // known principals get a bounded rejection.
 func TestPackageIntentHandler_UntrustedActorDroppedSilently(t *testing.T) {
 	f := newPkgIntentFixture(t)

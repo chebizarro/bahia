@@ -1,4 +1,4 @@
-.PHONY: build run test race lint lint-arch arch-baseline clean migrate docker docker-compose pstf-soulfactory-coverage build-server build-cli build-relay build-fips-bahia-bridge build-openclaw-soulfactory-sidecar build-openclaw-soulfactory-control build-bahia-event-archive build-metiq-signet-enrollment build-soulfactory-runtime-validate build-bahia-dns-agent build-bahia-migrate dist-bahia-dns-agent dist-bahia-dns-agent-linux-amd64 dist-bahia-dns-agent-linux-arm64 dist-bahia-dns-agent-linux-mips-softfloat
+.PHONY: build run test race lint lint-arch arch-baseline clean migrate docker docker-compose soulfactory-coverage build-server build-cli build-relay build-fips-bahia-bridge build-openclaw-soulfactory-sidecar build-openclaw-soulfactory-control build-bahia-event-archive build-metiq-signet-enrollment build-soulfactory-runtime-validate build-bahia-dns-agent build-bahia-migrate dist-bahia-dns-agent dist-bahia-dns-agent-linux-amd64 dist-bahia-dns-agent-linux-arm64 dist-bahia-dns-agent-linux-mips-softfloat
 
 VERSION_BASE ?= 0.1.0
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "dev")
@@ -81,17 +81,18 @@ test-coverage:
 	go test ./... -coverprofile=coverage.out -count=1
 	go tool cover -html=coverage.out -o coverage.html
 
-pstf-soulfactory-coverage:
-	mkdir -p pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage
-	go test ./internal/soulfactory ./cmd/cli -coverprofile=pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage/go_coverage.out -count=1
-	go tool cover -func=pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage/go_coverage.out > pstf/features/SOUL_FACTORY_PROVISIONING_TRACKING/coverage/go_coverage_summary.txt
+# Soul Factory coverage (Go + web) into the gitignored coverage/ directory.
+soulfactory-coverage:
+	mkdir -p coverage/soulfactory
+	go test ./internal/soulfactory ./cmd/cli -coverprofile=coverage/soulfactory/go_coverage.out -count=1
+	go tool cover -func=coverage/soulfactory/go_coverage.out > coverage/soulfactory/go_coverage_summary.txt
 	cd web && npm run test:unit:coverage:soulfactory
 
 # Lint
 lint: lint-arch
 	golangci-lint run ./...
 
-# Architecture ratchet gates (bahia-irsry.8). Each gate compares against a
+# Architecture ratchet gates. Each gate compares against a
 # checked-in baseline of pre-existing violations and fails only on new ones:
 # legacy kinds outside internal/nostrmigration, direct library relay
 # subscriptions outside the pool/bus, unannotated poll tickers in

@@ -24,7 +24,7 @@ type FamilyApplier func(ctx context.Context, event any) error
 // RelayProjectionCache applies relay-canonical projection events to local cache repositories.
 //
 // Events decoded with their source event (every KindCatalog decoder sets it)
-// are resolved through nostrutil.Lifecycle (C-12, C-13): replaceable and
+// are resolved through nostrutil.Lifecycle: replaceable and
 // addressable state is latest-wins per (kind, pubkey, d) with the lowest-id
 // tie-break, NIP-09 deletions tombstone what they delete and keep it from
 // coming back, and NIP-40 expired events are ignored on arrival and

@@ -9,7 +9,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 )
 
-// retentionClass is how long the sidecar keeps an event, by kind (C-19).
+// retentionClass is how long the sidecar keeps an event, by kind.
 type retentionClass int
 
 const (

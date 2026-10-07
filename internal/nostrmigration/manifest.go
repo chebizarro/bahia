@@ -29,7 +29,7 @@ const (
 	CanonicalNIP78AppData          = 30078
 )
 
-// Retired worker read-model wire kinds (bahia-irsry.9.2). Older producers
+// Retired worker read-model wire kinds. Older producers
 // published worker state on these kinds; current producers publish only 30900
 // cp-state records whose legacy_kind is the matching kinds.CPStateFamilyWorker*
 // discriminator. They are decoded here, and nowhere else, so old events still
@@ -41,7 +41,7 @@ const (
 	retiredWorkerEligibilityPreviewKind = 32003
 )
 
-// Retired addressable audit kinds (bahia-irsry.37). Audits are regular 4903
+// Retired addressable audit kinds. Audits are regular 4903
 // facts; older producers published one addressable kind per audit type in
 // 31000-31024 (31000-31099 reserved), with d=<entity>, so each audit replaced
 // the previous one. The kinds are decoded here, and nowhere else, so old audit
@@ -309,13 +309,13 @@ var constantJustifications = map[string]KindJustification{
 	"OrgRegistry":                    omitted("OrgRegistry", kinds.OrgRegistry, "cp-state-family", "canonical cp-state output for org registry; not a legacy migration input"),
 	"OrgMemberRegistry":              omitted("OrgMemberRegistry", kinds.OrgMemberRegistry, "cp-state-family", "canonical cp-state output for org member registry; not a legacy migration input"),
 	"OrgInviteRegistry":              omitted("OrgInviteRegistry", kinds.OrgInviteRegistry, "cp-state-family", "canonical cp-state output for org invite registry; not a legacy migration input"),
-	"SecretRegistry":                 omitted("SecretRegistry", kinds.SecretRegistry, "canonical-target", "canonical cp-state secret registry output; Phase 3 N1 produces secrets as NIP-44-encrypted 30900 records with this legacy_kind discriminator"),
-	"NotificationChannelRegistry":    omitted("NotificationChannelRegistry", kinds.NotificationChannelRegistry, "canonical-target", "canonical cp-state notification channel registry output; Phase 3 N1 produces channels as NIP-44-encrypted 30900 records with this legacy_kind discriminator"),
-	"OrgKeyEnvelope":                 omitted("OrgKeyEnvelope", kinds.OrgKeyEnvelope, "cp-state-family", "canonical cp-state output for per-org content key envelopes (Phase 3 C1); NIP-44-encrypted OCK wraps distributed to org members via the shared signing/outbox pipeline"),
-	"PaymentRecord":                  omitted("PaymentRecord", kinds.PaymentRecord, "cp-state-family", "canonical cp-state output for payment records (bahia-irsry.60); OCK-encrypted 30900 records published from PaymentService mutation sites"),
-	"SecurityFindingRecord":          omitted("SecurityFindingRecord", kinds.SecurityFindingRecord, "cp-state-family", "canonical cp-state output for individual security findings (bahia-irsry.60); OCK-encrypted 30900 records published from SecurityScanner mutation sites"),
-	"SecurityScheduleRecord":         omitted("SecurityScheduleRecord", kinds.SecurityScheduleRecord, "cp-state-family", "canonical cp-state output for security scan schedules (bahia-irsry.60); OCK-encrypted 30900 records published from PolicyService schedule derivation"),
-	"SecurityFindingDetailRecord":    omitted("SecurityFindingDetailRecord", kinds.SecurityFindingDetailRecord, "cp-state-family", "canonical cp-state output for security finding details (bahia-irsry.60); OCK-encrypted 30900 records, one per finding, with full detail text"),
+	"SecretRegistry":                 omitted("SecretRegistry", kinds.SecretRegistry, "canonical-target", "canonical cp-state secret registry output; the daemon produces secrets as NIP-44-encrypted 30900 records with this legacy_kind discriminator"),
+	"NotificationChannelRegistry":    omitted("NotificationChannelRegistry", kinds.NotificationChannelRegistry, "canonical-target", "canonical cp-state notification channel registry output; the daemon produces channels as NIP-44-encrypted 30900 records with this legacy_kind discriminator"),
+	"OrgKeyEnvelope":                 omitted("OrgKeyEnvelope", kinds.OrgKeyEnvelope, "cp-state-family", "canonical cp-state output for per-org content key envelopes; NIP-44-encrypted OCK wraps distributed to org members via the shared signing/outbox pipeline"),
+	"PaymentRecord":                  omitted("PaymentRecord", kinds.PaymentRecord, "cp-state-family", "canonical cp-state output for payment records; OCK-encrypted 30900 records published from PaymentService mutation sites"),
+	"SecurityFindingRecord":          omitted("SecurityFindingRecord", kinds.SecurityFindingRecord, "cp-state-family", "canonical cp-state output for individual security findings; OCK-encrypted 30900 records published from SecurityScanner mutation sites"),
+	"SecurityScheduleRecord":         omitted("SecurityScheduleRecord", kinds.SecurityScheduleRecord, "cp-state-family", "canonical cp-state output for security scan schedules; OCK-encrypted 30900 records published from PolicyService schedule derivation"),
+	"SecurityFindingDetailRecord":    omitted("SecurityFindingDetailRecord", kinds.SecurityFindingDetailRecord, "cp-state-family", "canonical cp-state output for security finding details; OCK-encrypted 30900 records, one per finding, with full detail text"),
 	"ManagedInstanceHealthRecord":    omitted("ManagedInstanceHealthRecord", kinds.ManagedInstanceHealthRecord, "cp-state-family", "canonical managed instance health state on 30900"),
 	"RouteCanaryRecord":              omitted("RouteCanaryRecord", kinds.RouteCanaryRecord, "cp-state-family", "canonical route canary state on 30900"),
 	"SoulRuntimePolicyRecord":        omitted("SoulRuntimePolicyRecord", kinds.SoulRuntimePolicyRecord, "cp-state-family", "canonical enabled Soul Factory runtime policy on 30900"),

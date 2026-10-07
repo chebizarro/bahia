@@ -53,7 +53,6 @@ func NewLLMRegistryService(
 }
 
 // NewMLBackedLLMRegistryService creates an LLM compatibility facade over the generic ML registry.
-// The legacy constructor remains unchanged so existing LLM behavior can continue during cutover.
 func NewMLBackedLLMRegistryService(ml *MLRegistryService, environments repository.EnvironmentRepository, publisher events.Publisher, logger *zap.Logger) *LLMRegistryService {
 	svc := NewLLMRegistryService(nil, nil, environments, nil, nil, nil, nil, publisher, logger)
 	svc.ml = ml
@@ -67,7 +66,7 @@ func (s *LLMRegistryService) WithMLRegistry(ml *MLRegistryService) *LLMRegistryS
 }
 
 // SetLLMCPStatePublisher configures the canonical cp-state publisher for LLM
-// route state records (Phase 3 L1, bahia-irsry.11.10). After each state
+// route state records. After each state
 // mutation the service calls this function to publish a 30900 record, replacing
 // the projector's reactive handleEvent LLM state leg.
 func (s *LLMRegistryService) SetLLMCPStatePublisher(fn func(ctx context.Context, state *domain.LLMRouteState)) {
@@ -129,7 +128,7 @@ func (s *LLMRegistryService) CreateRoute(ctx context.Context, route *domain.LLMR
 	if err := domain.ValidateLLMHeaderSecretRefs(route.GatewayConfig.Headers, route.GatewayConfig.HeaderSecretRefs, "gateway_config"); err != nil {
 		return err
 	}
-	// The route id is client-minted (bahia-irsry.42): a retry with the same
+	// The route id is client-minted: a retry with the same
 	// id and content replays, the same id with other content conflicts.
 	if route.ID == uuid.Nil {
 		route.ID = domain.NewEntityID()
@@ -967,7 +966,7 @@ func (s *LLMRegistryService) publishStateChanged(ctx context.Context, state *dom
 		data.RunID = state.ActiveRunID.String()
 	}
 	s.publish(ctx, events.EventLLMRouteStateChanged, state.RouteID.String()+":"+state.EnvironmentID.String(), data)
-	// Phase 3 L1: publish canonical 30900 route state record directly from the
+	// publish canonical 30900 route state record directly from the
 	// mutation site, replacing the projector's reactive handleEvent leg.
 	if s.cpState != nil {
 		s.cpState(ctx, state)

@@ -34,9 +34,9 @@ func TestLegacyKindConstClassification(t *testing.T) {
 		{"DNS legacy read-model kind", intConst(kindsPkg, "DNSZoneState", 31975), true, "31975-31978 are legacy wire kinds"},
 		{"re-exported alias of a legacy kind", intConst(adapterPkg, "KindDNSZoneState", 31975), true, "aliases are caught by value"},
 		{"re-exported Legacy alias", intConst(adapterPkg, "KindLegacyWorkerState", 31974), true, "aliases are caught by name"},
-		{"deprecated status kind", intConst(kindsPkg, "DeploymentStatus", 6961), true, "C-44 status families"},
+		{"deprecated status kind", intConst(kindsPkg, "DeploymentStatus", 6961), true, "retired status families"},
 		{"cp-state family discriminator", types.NewConst(token.NoPos, kindsPkg, "CPStateFamilyDNSZone", familyType, constant.MakeInt64(31975)), false,
-			"the sanctioned legacy_kind discriminator contract (bahia-irsry.9)"},
+			"the sanctioned legacy_kind discriminator contract"},
 		{"canonical kind", intConst(kindsPkg, "CASControlState", 30900), false, "canonical"},
 		{"library constant in a legacy range", intConst(libraryPkg, "Something", 31000), false, "only this module's constants"},
 	}

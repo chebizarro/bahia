@@ -1,5 +1,5 @@
 /**
- * Tests for pool-welshman.js (W1-S1).
+ * Tests for pool-welshman.js.
  *
  * Uses welshman's MockAdapter to simulate relay behaviour without a
  * real WebSocket.

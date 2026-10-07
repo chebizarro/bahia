@@ -115,7 +115,7 @@ type nostrMigrationOptions struct {
 // runNostrMigration converts legacy Bahia events recorded in nostr_events to
 // canonical events, signs them with the service key and publishes them. It is
 // resumable (durable cursors) and idempotent (already-migrated records are
-// skipped). The daemon no longer runs it on startup (B-28).
+// skipped). The daemon does not run it on startup.
 func runNostrMigration(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, opts nostrMigrationOptions, stdout, stderr io.Writer) int {
 	privateKey := strings.TrimSpace(cfg.Nostr.PrivateKey)
 	if privateKey == "" && !opts.dryRun {

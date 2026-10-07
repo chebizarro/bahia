@@ -3,12 +3,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 /**
  * Acceptance test for the per-worker Loom job projection.
  *
- * Regression context: the deployed worker detail page previously ignored Loom
- * job requests (kind 5100), status updates (kind 30100), and results
- * (kind 5101) even though those events arrived at the browser relay. These
- * tests replay a realistic failed-job event sequence (request -> failed
- * status -> result with exit code 1) and assert that both the subscription
- * filters and the projection surface the job.
+ * The worker detail page must surface Loom job requests (kind 5100), status
+ * updates (kind 30100), and results (kind 5101) that arrive at the browser
+ * relay. These tests replay a realistic failed-job event sequence (request ->
+ * failed status -> result with exit code 1) and assert that both the
+ * subscription filters and the projection surface the job.
  */
 import {
   workerJobs,

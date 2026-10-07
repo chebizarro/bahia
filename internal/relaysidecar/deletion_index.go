@@ -31,7 +31,7 @@ var deletionIndexMarker = boltcoord.Marker{Bucket: sidecarMetaBucket, Key: delet
 // sidecarTagBucket indexes the tag values the eventstore does not (empty, or
 // longer than tagIndexMaxValue; see boltcoord.Store), so a REQ or COUNT on
 // #a with a relay config coordinate or on an empty #d matches what it should
-// (bahia-irsry.52). Every write and delete goes through eventStore.coords,
+// Every write and delete goes through eventStore.coords,
 // which keeps it in step.
 var sidecarTagBucket = []byte("bahiaSidecarTags")
 
@@ -116,8 +116,8 @@ func (s *eventStore) buildTagIndex(ctx context.Context) error {
 	return nil
 }
 
-// repairCoordinates brings a store written before bahia-irsry.44 up to what
-// writes now maintain, once (bahia-irsry.54): such a store kept every version
+// repairCoordinates brings a store written by an older daemon up to the
+// invariant current writes maintain, once: such a store kept every version
 // of an addressable coordinate whose d is empty or longer than
 // tagIndexMaxValue, and may serve events its stored kind-5 requests delete
 // (applyDeletion missed coordinates longer than the eventstore indexes, and

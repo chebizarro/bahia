@@ -80,7 +80,7 @@ func readGeneratedKindsJS(t *testing.T) string {
 }
 
 // TestGeneratedFrontendCPStateTopicsMatchGo keeps the web's #t filter values
-// equal to the topics the projector stamps (bahia-irsry.9.3).
+// equal to the topics the projector stamps.
 func TestGeneratedFrontendCPStateTopicsMatchGo(t *testing.T) {
 	content := readGeneratedKindsJS(t)
 	block := regexp.MustCompile(`(?s)export const CP_STATE_TOPICS = Object\.freeze\(\{(.*?)\n\}\);`).FindStringSubmatch(content)

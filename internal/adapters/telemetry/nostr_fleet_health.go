@@ -114,7 +114,7 @@ func (p *nostrFleetHealthProjector) observeEvent(_ context.Context, ev *gonostr.
 		return
 	}
 	// A cp-state tombstone withdraws the entity: a route or service removed
-	// from the fleet is no longer counted, not reported as unknown.
+	// from the fleet drops out of the counts; it is not reported as unknown.
 	if kind == kinds.CASControlState && tagValue(ev, "deleted") == "true" {
 		delete(p.entities, key)
 		if ev.CreatedAt.Time().After(p.lastEventAt) {

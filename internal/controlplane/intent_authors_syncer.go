@@ -28,7 +28,7 @@ var errIntentAuthorsChanged = errors.New("intent authors changed during push")
 // Only Bahia-owned sidecar targets receive the push. The syncer never pushes to
 // third-party relays.
 //
-// See design §7.1.
+// See docs/architecture/intents-and-authority.md.
 type IntentAuthorsSyncer struct {
 	trustSet   *TrustSet
 	admin      IntentAuthorsAdmin

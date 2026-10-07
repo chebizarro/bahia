@@ -1,7 +1,7 @@
 /**
  * Auth/session store for NIP-07 extension + NIP-46 Nostr Connect authentication.
  *
- * Phase 4 §6.2: A persisted, signer-verified session counts as authenticated
+ * A persisted, signer-verified session counts as authenticated
  * immediately. No REST probe, no discovery gate, no backendAuthenticated flag.
  *
  * Background signer verification is non-blocking. On first authenticated boot,
@@ -378,7 +378,7 @@ async function backgroundSignerVerify(persisted) {
 }
 
 // ---------------------------------------------------------------------------
-// initializeAuth — §6.2 new auth bootstrap
+// initializeAuth — the auth bootstrap
 // ---------------------------------------------------------------------------
 
 export async function initializeAuth() {
@@ -405,7 +405,7 @@ export async function initializeAuth() {
       if (browser) localStorage.removeItem('bahia_token'); // clean up legacy token
 
       if (persisted) {
-        // §6.2 step 1: persisted session = AUTHENTICATED IMMEDIATELY
+        // persisted session = AUTHENTICATED IMMEDIATELY
         // No REST probe, no discovery gate.
         const capabilities = persisted.authMethod === 'nip46' ? getNip46Capabilities() : getNip07Capabilities();
 
@@ -422,7 +422,7 @@ export async function initializeAuth() {
           error: null
         });
 
-        // Request persistent storage on first authenticated boot (§14 decision 14)
+        // Request persistent storage on first authenticated boot
         if (!persistentStorageRequested) {
           persistentStorageRequested = true;
           requestPersistentStorage().catch(err =>
@@ -430,7 +430,7 @@ export async function initializeAuth() {
           );
         }
 
-        // §6.2 step 2: Background signer verification (non-blocking)
+        // Background signer verification (non-blocking)
         const needsVerification = !persisted.signerVerifiedAt ||
           (Date.now() - new Date(persisted.signerVerifiedAt).getTime()) > SIGNER_VERIFY_EXPIRY_MS;
 
@@ -439,7 +439,7 @@ export async function initializeAuth() {
           backgroundSignerVerify(persisted);
         }
 
-        // Wire NIP-98 for any remaining interim REST calls (Wave 2/3)
+        // Wire NIP-98 for REST calls that still need backend auth
         if (browser) localStorage.removeItem('bahia_token');
 
         return;
@@ -779,7 +779,7 @@ export async function signHttpRequest({ method = 'GET', url }) {
 }
 
 /**
- * For interim REST calls that still need backend auth (Wave 2/3).
+ * For REST calls that still need backend auth.
  * This just wires NIP-98 signing — no /orgs probe.
  */
 export async function authenticateBackend() {

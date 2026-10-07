@@ -50,7 +50,7 @@ export function resultContent(event) {
   return unwrapCommandPayload(parseJsonContent(event, {}));
 }
 
-// Create intents carry a client-minted entity id (bahia-irsry.35). Callers that
+// Create intents carry a client-minted entity id. Callers that
 // may retry should mint it once and pass it in; otherwise one is minted here.
 export async function createService(payload) {
   return mutateIntent('service', 'create', withEntityId(payload));
@@ -126,7 +126,7 @@ export function requestRuntimeAction(op, payload) {
     intentOrgId({ ...payload, org_id: serviceOrgId(payload.service_id) }, null, 'runtime')));
 }
 
-// The route id is client-minted (bahia-irsry.42): pass the same payload.id to
+// The route id is client-minted: pass the same payload.id to
 // retry; one is minted when absent.
 export async function createLLMRoute(payload) {
   const content = withEntityId(payload);
@@ -352,7 +352,7 @@ export function yankPackage(payload) {
     orgId: intentOrgId(payload, null, 'package'), content: payload });
 }
 
-// The policy id is client-minted (bahia-irsry.42): pass the same payload.id to
+// The policy id is client-minted: pass the same payload.id to
 // retry; one is minted when absent.
 export async function createPolicy(payload) {
   return mutateIntent('policy', 'create', withEntityId(payload));

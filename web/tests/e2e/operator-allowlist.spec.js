@@ -1,4 +1,4 @@
-// bahia-fbyo5: the daemon publishes its operator allowlists as fleet-OCK
+// the daemon publishes its operator allowlists as fleet-OCK
 // encrypted cp-state. A session holding the fleet OCK trusts the other
 // authorized operators' documents; one without it keeps trusting only the
 // signed-in key. Relays see neither list.

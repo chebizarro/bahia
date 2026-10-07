@@ -1,286 +1,51 @@
 # Backup
 
-**Backup** in Bahia provides data protection through scheduled backups, verification, and recovery orchestration.
+Bahia models backup repositories, policies, recipes, definitions, runs, restores, verification, and retention as signed control-plane records. Open **Backup** (`/backup`) to configure the system and follow operations.
 
-## Overview
+## Configure backup
 
-Backup features include:
-- **Backup definitions** — What to back up and when
-- **Backup policies** — Retention, verification requirements
-- **Backup repositories** — Where backups are stored
-- **Verification** — Ensure backups are restorable
-- **Restore orchestration** — Managed recovery process
+A usable backup plan combines:
 
-The web console signs kind-`30900` intents for repository, policy, recipe,
-and definition changes and for run, restore, verification, retention, and
-repository-probe requests. These show as pending until a scoped `30315`
-status or newer canonical state arrives. Restore approval and rejection are signed intents too (below).
+- **Repository** — the storage destination and its credential references.
+- **Policy** — schedule, retention, verification, and approval requirements.
+- **Recipe** — the workload-specific commands or adapter behavior.
+- **Definition** — the service/environment resource set governed by the repository, policy, and recipe.
 
-## Signed restore approval
+Credentials stay in the secret store. Published records contain references and redacted operational metadata.
 
-With `backup` enabled by default (unless in `nostr.intent_domains_disabled`), the web console publishes kind `30900` intents with `domain=backup`, `op=restore-approval`, and content containing `restore_id` and `decision` (`approve` or `reject`). Bahia applies the same restore-registry transition used by the legacy approval command, then emits bounded kind `30315` intent status. The web console does not silently fall back to ContextVM if the domain is disabled.
+The MCP registry exposes apply, list, and inspect tools for each resource under both a base name such as `apply_backup_policy` and a `bahia_` alias such as `bahia_apply_backup_policy`. See [MCP Tools](../mcp-tools.md) for the complete names.
 
-## Key Concepts
+## Run and verify
 
-### Backup Definition
+Use the Backup UI or:
 
-A **Backup Definition** specifies what to back up:
+- `request_backup_run` / `bahia_request_backup_run`
+- `request_backup_verification` / `bahia_request_backup_verification`
+- `request_backup_retention` / `bahia_request_backup_retention`
 
-```yaml
-name: "database-daily"
-target:
-  type: "postgresql"
-  connection: "postgres://..."
-schedule: "0 2 * * *"  # Daily at 2 AM
-policy_id: "policy-123"
-repository_id: "repo-456"
-```
-
-### Backup Policy
-
-A **Backup Policy** defines retention and verification:
-
-```yaml
-name: "production-policy"
-retention:
-  daily: 7
-  weekly: 4
-  monthly: 12
-verification:
-  required: true
-  frequency: "weekly"
-```
-
-### Backup Repository
-
-A **Backup Repository** is where backups are stored:
-
-```yaml
-name: "s3-backup-repo"
-type: "s3"
-config:
-  bucket: "company-backups"
-  region: "us-east-1"
-```
-
-## Creating Backups
-
-### Web UI
-
-1. Navigate to **Backup** in the sidebar.
-2. Open **Repositories**, **Policies**, **Recipes**, or **Definitions**.
-3. Use the mutation panel at the top of the section to publish the corresponding signed ContextVM command:
-   - `backup/repository-register`
-   - `backup/policy-apply`
-   - `backup/recipe-apply`
-   - `backup/definition-apply`
-4. Watch the section list and detail pages for projected Nostr read models. The web command response only confirms that Bahia published the canonical backup command event; durable progress and terminal truth are shown by backup status/result projections.
-
-Operational controls are available on list and detail pages:
-- **Run now** on recipes and definitions publishes `backup/run`.
-- **Verify** on backup runs publishes `backup/verification`.
-- **Request restore** on backup runs publishes `backup/restore` and prompts for a restore target.
-- **Enforce retention** on definitions publishes `backup/retention` using the definition repository and policy.
-- **Probe repository** publishes `backup/repository-probe`.
-- **Approve/Reject restore** publishes a signed `backup/restore-approval` intent.
-
-### Request authority
-
-Encrypted backup mutations require the verified ContextVM requester to hold the
-`backups:manage` tenant permission (admin or owner). Bahia still signs the
-canonical downstream command, but its service key is only the delegating signer;
-it is never substituted for the requester.
-
-Each service-signed backup command binds a versioned delegation record containing
-the verified requester pubkey, original ContextVM event ID and kind, tenant ID,
-checked capability, and Bahia service pubkey. The same fields are copied into
-backup provenance metadata so operators can distinguish the requesting actor
-from the publishing service. Private keys, tokens, and credentials are not part
-of the delegation record.
-
-Callers that belong to one tenant granting `backups:manage` may omit
-`tenant_id`. Multi-tenant callers must provide `tenant_id` (or the `org_id`
-compatibility alias); Bahia rejects an omitted or unauthorized tenant rather
-than choosing authority ambiguously. A ContextVM request authored by Bahia's
-own service key is also rejected so service signing power cannot stand in for
-requester authorization.
-
-### CLI and MCP
-
-The current CLI does not register a `bahia backup` group. Use the web UI or signer-first backup operations. In an embedding that explicitly configures external MCP authorization, use `apply_backup_definition` / `bahia_apply_backup_definition`; its schema requires the definition name plus repository, policy, and recipe identities.
-
-## Backup Runs
-
-### Manual trigger
-
-Use `request_backup_run` (or `bahia_request_backup_run`) with a recipe identity and an `idempotency_key`. Use `list_backup_runs` and `inspect_backup_run` for projected run state.
-
-### Run Status
-
-| Status | Description |
-|--------|-------------|
-| `queued` | Waiting to start |
-| `running` | In progress |
-| `succeeded` | Completed successfully |
-| `failed` | Encountered error |
-| `verified` | Verified restorable |
-
-## Verification
-
-Verify backups are restorable:
-
-### Trigger verification
-
-Call `request_backup_verification` or `bahia_request_backup_verification` with `backup_run_id`, an `idempotency_key`, and optional `mode: "kopia_snapshot_verify"`.
-
-### Verification Process
-
-1. Download backup from repository
-2. Restore to test environment
-3. Validate data integrity
-4. Report verification status
-
-### Verification Results
-
-```yaml
-verification:
-  run_id: "run-123"
-  status: "verified"
-  verified_at: "2024-01-15T10:00:00Z"
-  details:
-    tables_checked: 42
-    rows_sampled: 10000
-    integrity: "pass"
-```
+A request acknowledgement means the operation is admitted. Follow the run, verification, or retention record for durable completion. Verification should prove that stored data can be read and checked, not only that an upload command exited successfully.
 
 ## Restore
 
-### Initiating restore
+A restore has its own record and approval state:
 
-Call `request_backup_restore` or `bahia_request_backup_restore` with `backup_run_id`, `restore_target_ref`, and an `idempotency_key`.
+1. Request a restore for a specific backup and destination.
+2. Review the requested scope, overwrite behavior, and target.
+3. Approve or reject it in the UI or with `approve_backup_restore` / `reject_backup_restore`.
+4. Follow the restore record through execution and verification.
 
-### Restore approval
+The web approval control publishes a signed `backup` `restore-approval` intent. It is available when the backup intent domain is enabled. Approval never substitutes for post-restore verification.
 
-Production restores may require approval. Use `approve_backup_restore` or `reject_backup_restore` (and their `bahia_` aliases) with the restore ID and idempotency key.
+## Safety
 
-### Restore status
-
-Use `list_backup_restores` and `inspect_backup_restore`.
-
-## Backup Policies
-
-### Creating policies
-
-Use the web mutation panel or `apply_backup_policy` / `bahia_apply_backup_policy`. The CLI does not register a backup group.
-
-### Retention Rules
-
-```yaml
-retention:
-  daily: 7      # Keep 7 daily backups
-  weekly: 4     # Keep 4 weekly backups
-  monthly: 12   # Keep 12 monthly backups
-  yearly: 3     # Keep 3 yearly backups
-```
-
-### Verification Requirements
-
-```yaml
-verification:
-  required: true
-  frequency: "weekly"  # Verify at least weekly
-  auto_verify: true    # Verify immediately after backup
-```
-
-## Backup Repositories
-
-### Types
-
-| Type | Description |
-|------|-------------|
-| `s3` | Amazon S3 or compatible |
-| `gcs` | Google Cloud Storage |
-| `azure` | Azure Blob Storage |
-| `local` | Local filesystem |
-| `blossom` | Blossom blob storage |
-
-### Creating a repository
-
-Use the web mutation panel or `apply_backup_repository` / `bahia_apply_backup_repository`.
-
-### Repository health
-
-Use `probe_backup_repository` / `bahia_probe_backup_repository` with a repository identity and idempotency key.
-
-## Nostr Event Kinds
-
-| Kind | Name | Description |
-|------|------|-------------|
-| 38400 | BackupRunRequest | Trigger backup |
-| 38401 | BackupVerificationRequest | Verify backup |
-| 38402 | BackupRestoreRequest | Restore backup |
-| 38403 | BackupRestoreApproval | Approve restore |
-| 6981 | BackupRunStatus | Run progress |
-| 6982 | BackupRestoreStatus | Restore progress |
-| 6983 | BackupVerificationStatus | Verification progress |
-| 31310 | BackupRunAttestation | Signed attestation |
-
-## Read Models
-
-| Kind | d-tag | Content |
-|------|-------|---------|
-| 31991 | `backup-definition:<name>` | Definition |
-| 31992 | `backup-policy:<id>` | Policy |
-| 31993 | `backup-repository:<id>` | Repository |
-| 31996 | `backup-run:<id>` | Run state |
-| 31997 | `backup-verification:<id>` | Verification state |
-| 31998 | `backup-restore:<id>` | Restore state |
-
-## Best Practices
-
-1. **Test restores regularly** — Don't assume backups work
-2. **Use policies** — Consistent retention and verification
-3. **Multiple repositories** — Geographic redundancy
-4. **Monitor failures** — Alert on backup issues
-5. **Document recovery** — Know how to restore
-
-## Troubleshooting
-
-### Backup Failed
-
-- Check target connectivity
-- Verify credentials
-- Review backup logs
-- Check repository space
-
-### Verification Failed
-
-- Check restore target availability
-- Verify backup integrity
-- Review verification logs
-
-### Restore Failed
-
-- Verify backup exists
-- Check target permissions
-- Review restore logs
-
-## Relay-policy projection provenance
-
-Signed backup runs export the current validated relay-policy projection into the
-durable run metadata before snapshot execution. The envelope contains only the
-public canonical payload and its event ID, payload hash, author, event/acceptance
-timestamps, source relay, and sync timestamp; credentials and private keys are
-never included.
-
-An approved signer-first backup restore validates the envelope and restores it
-as cached last-known-good state. Cached state remains usable across restart or
-relay outage, but is not marked relay-confirmed until the hydrator receives the
-same or a newer valid canonical event from a relay. A corrupt hash or regressive
-restore fails closed.
+- Test restore procedures on a schedule.
+- Keep repository credentials separate from workload credentials.
+- Require approval for destructive or in-place restores.
+- Set retention from recovery objectives, then monitor retention runs.
+- Treat missing or stale run evidence as unknown.
 
 ## Related
 
-- [Services](services.md) — Backup targets
-- [Workers](workers.md) — Backup execution
-- [Notifications](notifications.md) — Backup alerts
+- [Services](services.md)
+- [Workers](workers.md)
+- [Notifications](notifications.md)

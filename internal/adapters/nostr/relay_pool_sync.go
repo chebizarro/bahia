@@ -11,10 +11,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// Per-relay pool capabilities for inbound sync (bahia-irsry.10.1).
+// Per-relay pool capabilities for inbound sync.
 //
 // SubscribeAllWithEOSE sends the same filters to every relay, which forces one
-// `since` on all of them (C-23). Inbound sync keeps a cursor per (relay,
+// `since` on all of them. Inbound sync keeps a cursor per (relay,
 // filter) instead, so it needs a REQ on one relay at a time, and a NIP-77
 // session against one relay at a time.
 

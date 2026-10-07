@@ -10,8 +10,8 @@ import "strconv"
 // This file is the single sanctioned reference to those numbers for the
 // discriminator contract: producers and consumers name a CPStateFamily
 // instead of the legacy kind constants, and the architecture ratchet
-// (internal/archtest, legacy-kind gate) exempts values of this type. Phase 1
-// (bahia-irsry.9) replaces the numeric discriminator with family ids.
+// (internal/archtest, legacy-kind gate) exempts values of this type: the
+// family id, not the numeric kind, is the sanctioned discriminator.
 type CPStateFamily int
 
 // DNS cp-state families (legacy_kind 31975-31978).
@@ -22,7 +22,7 @@ const (
 	CPStateFamilyDNSBackend  CPStateFamily = DNSBackendState
 )
 
-// Worker cp-state families (bahia-irsry.9.2). 32000-32003 are the retired
+// Worker cp-state families. 32000-32003 are the retired
 // WorkerState* catalog kinds; 32004 names worker cleanup execution, which never
 // had a wire kind. Every worker record is published on 30900 only; the retired
 // wire kinds are decoded solely by internal/nostrmigration.
@@ -34,7 +34,7 @@ const (
 	CPStateFamilyWorkerCleanup     CPStateFamily = 32004
 )
 
-// Worker cp-state coordinates (bahia-irsry.36). Every worker family addresses
+// Worker cp-state coordinates. Every worker family addresses
 // its records under its own "worker:<entity>:" prefix. Relays keep one event
 // per (kind, pubkey, d), and assignment and drain were both keyed by the bare
 // worker pubkey, so each family replaced the other on the relay. Live records
@@ -81,7 +81,7 @@ func (f CPStateFamily) LegacyKind() int { return int(f) }
 // TagValue returns the legacy_kind tag value consumers match on.
 func (f CPStateFamily) TagValue() string { return strconv.Itoa(int(f)) }
 
-// Payment and security cp-state families (bahia-irsry.60). These records are
+// Payment and security cp-state families. These records are
 // confidential (OCK-encrypted) and published through the shared cp-state
 // envelope with the controlStateEnvelope/publishControlState pipeline.
 const (
@@ -96,7 +96,7 @@ const (
 	CPStateFamilyBlossomBlob           CPStateFamily = BlossomBlobRecord
 )
 
-// Security scan execution families (audit B-32). A target record carries the
+// Security scan execution families. A target record carries the
 // scan input and a run record is the signed claim and durable progress of one
 // scan, so the daemon schedules and resumes scans from its local event store
 // instead of SQL leases. Like worker cleanup, these families never had a wire
@@ -107,7 +107,7 @@ const (
 	CPStateFamilySecurityRun    CPStateFamily = 32021
 )
 
-// Adoption binding family (audit B-35). One record per adopted workload binds
+// Adoption binding family. One record per adopted workload binds
 // its runtime fingerprints to the service, environment, deployment unit, build
 // and artifact the adoption published for it, and carries the adoption's
 // durable progress. The daemon resolves an adopted workload's identity and
@@ -137,7 +137,7 @@ func RuntimeObservationDTag(serviceID, environmentID string) string {
 	return "runtime:observation:" + serviceID + ":" + environmentID
 }
 
-// Hive-CI execution families (audit C-48, C-49, bahia-xjdo9). A policy
+// Hive-CI execution families. A policy
 // record is the pipeline policy release admission is checked against, a
 // result record is the daemon's processing state of one signed kind-5402
 // result, an initiation record is the journal of one build initiation (its
@@ -157,7 +157,7 @@ const (
 )
 
 // CPStateFamilySoulFactorySagaRun is the canonical progress record of one
-// governed Soul Factory provisioning saga run (audit C-45): its stage,
+// governed Soul Factory provisioning saga run: its stage,
 // ownership lineage, compensations and current failure, replaced per run so
 // a daemon moved to a fresh host resumes from its local event store instead
 // of a local checkpoint file. Like the security families above it has no
@@ -165,7 +165,7 @@ const (
 const CPStateFamilySoulFactorySagaRun CPStateFamily = 32025
 
 // CPStateFamilySoulFactoryAdapterLedger is the canonical adapter ledger of
-// governed Soul Factory provisioning (bahia-nfc95): one replaceable record
+// governed Soul Factory provisioning: one replaceable record
 // per provisioning request (the resolved request, the Soul projection, the
 // registry identifiers and the per-step resource references the production
 // adapters resume from) and one per reserved agent identity. The records
@@ -175,7 +175,7 @@ const CPStateFamilySoulFactorySagaRun CPStateFamily = 32025
 const CPStateFamilySoulFactoryAdapterLedger CPStateFamily = 32028
 
 // CPStateFamilyOperatorAllowlist is the daemon's published copy of its
-// operator allowlists (bahia-fbyo5): one replaceable record per scope,
+// operator allowlists: one replaceable record per scope,
 // `operators:continuity` from nostr.authorized_pubkeys and
 // `operators:soul-factory` from soul_factory.authorized_pubkeys. The content
 // is fleet-OCK encrypted and the record carries no pubkey in any tag, so a

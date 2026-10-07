@@ -195,11 +195,9 @@ func TestProjectorTreatsIncompletePublishAsQueued(t *testing.T) {
 	require.Equal(t, 2, script.totalCalls(), "one delivery round, one EVENT per relay")
 }
 
-// Phase 3 X1: staticSBOMProjectionSource, testSBOMManifest, and
-// TestProjectorSnapshotRepairUnchangedCreatesNoRowsOrSignatures removed.
 // SBOM events are published from the orchestrator's mutation site; the
-// projector no longer has SBOM projection legs. The system config startup
-// publish dedupe is tested in TestSystemConfigStartupPublishDoesNotRepeat
+// projector has no SBOM projection legs. The system config startup publish
+// dedupe is tested in TestSystemConfigStartupPublishDoesNotRepeat
 // (control_state_dedupe_test.go).
 
 // An event the outbox abandons (the quorum became unreachable) must not stay
@@ -292,9 +290,7 @@ func TestProjectorForgetsProjectionAbandonedByRunner(t *testing.T) {
 func outboxRowCount(t *testing.T, repo *repositorytest.InMemoryNostrEventRepository) int {
 	t.Helper()
 	// Count all outbox-published kinds: cp-state (30900), audit, and SBOM
-	// reference (30078) + availability list (30004). After Phase 3 slices
-	// moved all cp-state families to mutation-site publication, SBOM events
-	// Phase 3 X1: RepublishSnapshot removed. System config records are
+	// reference (30078) + availability list (30004).
 	rows, err := repo.ListByKinds(context.Background(), []int{KindCASControlState, KindCASAudit, 30078, 30004}, 10000)
 	require.NoError(t, err)
 	return len(rows)

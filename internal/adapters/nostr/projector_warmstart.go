@@ -44,10 +44,10 @@ func WithIntentDomains(domains []string) ProjectorOption {
 // If ctx is cancelled before readiness, warm-start is skipped entirely and
 // a warning is logged — it never proceeds on a guess.
 //
-// Phase 3 X1: all domains are now included in intentDomains, so
+// all domains are now included in intentDomains, so
 // every family is warm-started and no legacy snapshot path remains.
 //
-// See design §5.3.
+// See docs/architecture/intents-and-authority.md.
 func (p *Projector) warmStartMigratedDomains(ctx context.Context) {
 	if p.readiness == nil || len(p.intentDomains) == 0 {
 		return

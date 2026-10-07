@@ -27,7 +27,7 @@ import (
 )
 
 // End-to-end tests of the agent's request transport on its local event store
-// (bahia-irsry.10.5): real encrypted ContextVM requests from pkg/client, two
+// real encrypted ContextVM requests from pkg/client, two
 // in-process khatru relays with NIP-77, and the agent's own handlers. Waits
 // are on the transport's per-relay EOSE, on relay storage hooks and on handler
 // calls; nothing sleeps.
@@ -82,7 +82,7 @@ func (c eoseCore) Check(entry zapcore.Entry, checked *zapcore.CheckedEntry) *zap
 }
 
 func (c eoseCore) Write(entry zapcore.Entry, fields []zapcore.Field) error {
-	// The local ContextVM ledger path (bahia-irsry.48 item 1) logs "ContextVM
+	// The local ContextVM ledger path logs "ContextVM
 	// requests caught up" at EOSE; the non-local path logs "relay sent
 	// ContextVM encrypted request EOSE". Match either so the test works
 	// regardless of which path is active.

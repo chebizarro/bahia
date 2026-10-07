@@ -49,7 +49,7 @@ type SecuritySchedulerConfig struct {
 	Now       func() time.Time
 }
 
-// SecurityScheduler dispatches policy-derived periodic scans (audit B-32).
+// SecurityScheduler dispatches policy-derived periodic scans.
 //
 // Everything it acts on is canonical cp-state in the local event store: on
 // each wakeup it re-derives the schedules from the retained policy and target

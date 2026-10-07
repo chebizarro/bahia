@@ -56,7 +56,7 @@ type persistentState struct {
 	Schema      string           `json:"schema"`
 	ZoneSerials map[string]int64 `json:"zone_serials"`
 	// ZoneRequestIDs is the id of the request event applied at each zone's
-	// serial, so equal-serial requests resolve by the lowest id (C-13).
+	// serial, so equal-serial requests resolve by the lowest id.
 	ZoneRequestIDs  map[string]string `json:"zone_request_ids,omitempty"`
 	LastApplySerial int64             `json:"last_apply_serial"`
 	LastApplyAt     string            `json:"last_apply_at"`

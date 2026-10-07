@@ -18,7 +18,7 @@ import (
 
 // ZoneSyncEvent is the content structure of a zone-sync addressable event
 // published by the daemon. The agent subscribes to these instead of receiving
-// ContextVM RPC pushes (C-34).
+// ContextVM RPC pushes.
 type ZoneSyncEvent struct {
 	Zone    domain.DNSZone     `json:"zone"`
 	Records []domain.DNSRecord `json:"records"`
@@ -103,7 +103,7 @@ func (s *ZoneSubscriber) handleEvent(ctx context.Context, ev nostr.Event) error 
 	}
 	sync.Zone.Name = zoneName
 
-	// Use created_at as serial, event ID as tie-breaker (C-13 monotonicity).
+	// Use created_at as serial, event ID as tie-breaker (monotonicity).
 	serial := int64(ev.CreatedAt)
 	eventID := ev.ID.Hex()
 
@@ -113,7 +113,7 @@ func (s *ZoneSubscriber) handleEvent(ctx context.Context, ev nostr.Event) error 
 // ApplyZoneSync applies a zone sync from an event. It mirrors the SyncHandler
 // logic but takes serial and event ID from the event envelope instead of RPC
 // params. The serial monotonicity and "lowest event ID on ties" rules are
-// preserved (C-13).
+// preserved.
 func (a *Agent) ApplyZoneSync(ctx context.Context, zone domain.DNSZone, records []domain.DNSRecord, serial int64, eventID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()

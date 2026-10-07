@@ -572,7 +572,7 @@ func TestLoadRejectsReadOnlyMutablePolicySeedWithActionableGuidance(t *testing.T
 	if err == nil {
 		t.Fatal("Load() error = nil, want read-only seed rejection")
 	}
-	for _, guidance := range []string{"mounted YAML is not writable", "mount it read-write", "writable state path", "unset the legacy"} {
+	for _, guidance := range []string{"mounted YAML is not writable", "mount it read-write", "writable state path", "unset the mutable-policy"} {
 		if !strings.Contains(err.Error(), guidance) {
 			t.Fatalf("Load() error = %q, want actionable guidance %q", err, guidance)
 		}

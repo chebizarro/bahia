@@ -52,7 +52,7 @@ function encryptedEvent(record, created_at = 1) {
 
 beforeEach(() => { mock.events.clear(); mock.listeners.clear(); mock.key = null; });
 
-describe('W2-S3 store queries', () => {
+describe('Store queries', () => {
   it('projects ML and backup latest winners and tombstones by t topic', async () => {
     const ml = await import('../../src/lib/stores/collections/ml.svelte.js');
     const backup = await import('../../src/lib/stores/collections/backup.svelte.js');

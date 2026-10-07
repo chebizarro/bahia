@@ -1,8 +1,7 @@
 // Package boltcoord makes the bolt eventstore (fiatjaf.com/nostr/eventstore/
 // boltdb) answer NIP-01 coordinates, NIP-09 deletions and tag filters for tag
 // values of any length. Both Bahia stores built on it use this package: the
-// relay sidecar's events.bolt and the daemon's local store (bahia-irsry.44,
-// bahia-irsry.51, bahia-irsry.52).
+// relay sidecar's events.bolt and the daemon's local store.
 //
 // The eventstore indexes no tag value that is empty or longer than
 // TagIndexMaxValue bytes, so its tag lookups cannot find such values:

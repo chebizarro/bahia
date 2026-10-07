@@ -13,9 +13,9 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// legacyKindRanges are the deprecated Bahia kind families (audit C-44 and
+// legacyKindRanges are the retired Bahia kind families (see
 // docs/nostr-event-implementation-guide.md): regular-kind request, status and
-// result families, the 31000-31099 audit range, the deprecated 31100-31105
+// result families, the 31000-31099 audit range, the retired 31100-31105
 // command kinds and the 31975-31978 DNS read models superseded by CAS 30900.
 var legacyKindRanges = [][2]int64{
 	{5941, 6006},
@@ -27,8 +27,8 @@ var legacyKindRanges = [][2]int64{
 
 // legacyKindExemptPaths may define or use legacy kinds: the kind registry's
 // declarations, the cp-state family discriminator contract (the single
-// sanctioned reference to the 31975-31978 legacy_kind values until
-// bahia-irsry.9), and the migration package that exists to read old events.
+// sanctioned reference to the 31975-31978 legacy_kind values), and the
+// migration package that exists to read old events.
 var legacyKindExemptPaths = []string{
 	"internal/kinds/kinds.go",
 	"internal/kinds/cp_state_family.go",
@@ -90,7 +90,7 @@ func exemptFromLegacyKindGate(path string) bool {
 }
 
 // TestNoNewLegacyKindUsage bans new references to legacy kind constants and
-// new legacy kind literals outside internal/nostrmigration (C-44).
+// new legacy kind literals outside internal/nostrmigration.
 func TestNoNewLegacyKindUsage(t *testing.T) {
 	found := newViolations()
 	collectLegacyKindUsage(loadModule(t), found)

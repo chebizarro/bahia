@@ -52,7 +52,7 @@ type BootstrapConfig struct {
 	ProjectionAuthors   []string
 	ControlPlaneAuthors []string
 	// SelfAuthors are the daemon's own pubkeys: their events never advance
-	// a live group's resume cursor (B-15).
+	// a live group's resume cursor.
 	SelfAuthors []string
 	// Resume sets the overlap and fresh-cursor lookback of live groups.
 	Resume InboundSyncConfig
@@ -694,7 +694,7 @@ type liveReplayFilter struct {
 
 // liveFilters returns a live group's REQ filters. Replaceable and addressable
 // kinds are replayed in full: they are the state, and the relay keeps only the
-// latest version per coordinate (C-3). Regular kinds resume from the oldest
+// latest version per coordinate. Regular kinds resume from the oldest
 // per-relay cursor less the overlap, or from the lookback window when a relay
 // has no cursor yet; never from "now".
 func (b *Bootstrapper) liveFilters(group ReplayGroup, startedAt time.Time) ([]liveReplayFilter, error) {

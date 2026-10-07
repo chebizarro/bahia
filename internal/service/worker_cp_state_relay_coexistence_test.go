@@ -87,7 +87,7 @@ func projectorWorkerRecord(t *testing.T, author gonostr.SecretKey, legacyKind in
 	return ev
 }
 
-// TestWorkerCPStateFamiliesCoexistOnRelay pins bahia-irsry.36: every worker
+// TestWorkerCPStateFamiliesCoexistOnRelay pins the per-family coordinate contract: every worker
 // family one service author publishes for the same worker (state and cleanup
 // from the control plane; assignment, drain and eligibility from the
 // projector) lives on its own coordinate, so a relay that keeps the latest
@@ -182,7 +182,7 @@ func TestWorkerCPStateFamiliesCoexistOnRelay(t *testing.T) {
 }
 
 // TestWorkerCPStateLegacySharedCoordinateIsIgnored pins the decision for
-// records published before bahia-irsry.36: assignment and drain on the bare
+// records published before per-family coordinates: assignment and drain on the bare
 // worker pubkey shared one coordinate, so a relay kept only whichever came
 // last. That survivor is not decoded; the projector republishes both families
 // on their own coordinates at startup.

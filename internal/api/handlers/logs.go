@@ -175,7 +175,7 @@ func (h *LogHandler) StreamLiveLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start log stream. Prefer resolver-based live logs so runtime targeting follows
-	// the requested environment; fall back to the legacy LogService runtime when no
+	// the requested environment; fall back to the LogService runtime when no
 	// resolver has been wired (primarily for existing tests and callers).
 	var logChan <-chan runtime.LogEntry
 	if h.resolver != nil {

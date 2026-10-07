@@ -220,7 +220,7 @@ type SecurityRepository interface {
 	ListSecurityFindings(ctx context.Context, runID uuid.UUID) ([]domain.SecurityOSVFinding, error)
 	ListSecurityFindingsFiltered(ctx context.Context, filter SecurityFindingFilter) ([]domain.SecurityOSVFinding, error)
 
-	// Schedules mirror canonical security cp-state (audit B-32). There is no
+	// Schedules mirror canonical security cp-state. There is no
 	// claim or lease here: a scheduled scan is claimed by its signed run
 	// record, whose id is derived from the schedule and its due time.
 	UpsertSecurityScanSchedule(ctx context.Context, schedule *domain.SecurityScanSchedule) error

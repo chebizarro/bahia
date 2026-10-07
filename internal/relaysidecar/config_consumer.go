@@ -67,7 +67,7 @@ type configProjectionState struct {
 }
 
 // desiredCoordinate is the desired event currently in force for one
-// coordinate. CreatedAt resolves equal versions by NIP-01 order (C-13).
+// coordinate. CreatedAt resolves equal versions by NIP-01 order.
 // Withdrawn records that the event was deleted (NIP-09) or expired (NIP-40):
 // it keeps the version floor so the same or an older version cannot be
 // accepted again, while a newer version can.
@@ -693,7 +693,7 @@ func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigPro
 	if status != "applied" {
 		content["reason"] = strings.TrimSpace(reason)
 	}
-	// C-22: stable d coordinate per (service, policy, scope) so addressable
+	// stable d coordinate per (service, policy, scope) so addressable
 	// events collapse by NIP-01 replacement instead of growing unbounded.
 	// Status, version and desired-event-id live in tags and content, not in
 	// the d-tag. A 7-day NIP-40 expiration lets the retention sweep clean

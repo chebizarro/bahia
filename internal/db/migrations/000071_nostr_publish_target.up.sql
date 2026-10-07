@@ -1,7 +1,7 @@
 -- Tie each outbound outbox row to the relay pool it is delivered to, and give
 -- terminal delivery failures their own publish state.
 --
--- nostr_events is large (see docs/designs/nostr-event-store-lifecycle.md) and
+-- nostr_events is large (see docs/architecture/postgres-event-store-lifecycle.md) and
 -- this runs at startup, so every statement here is metadata-only or touches
 -- only the pending outbox:
 --   - the column has a constant default (no table rewrite);

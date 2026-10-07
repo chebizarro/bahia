@@ -283,7 +283,16 @@ Use an isolated root for dry-run smoke tests:
 ```bash
 OPENCLAW_SOULFACTORY_ROOT=/tmp/openclaw-soulfactory-test \
 OPENCLAW_SOULFACTORY_DRY_RUN=1 \
-openclaw-soulfactory-control < pstf/features/OPENCLAW_SOULFACTORY_CONTROL_WRAPPER/fixtures/provision-invocation.json
+openclaw-soulfactory-control <<'JSON'
+{
+  "envelope": {},
+  "method": "soulfactory.provision",
+  "agent_id": "agent-smoke",
+  "soul_id": "agent-smoke",
+  "spec_hash": "sha256:smoke",
+  "params": {"identity": {}, "runtime": {}, "permissions": {}, "relay_policy": {}, "workspace": {}, "assets": {}}
+}
+JSON
 ```
 
 Required checks:
@@ -301,16 +310,6 @@ Required checks:
 Run the focused gates:
 
 ```bash
-python3 - <<'PY'
-import json
-from pathlib import Path
-base = Path('pstf/features/OPENCLAW_SOULFACTORY_CONTROL_WRAPPER')
-for path in sorted(base.rglob('*.json')):
-    with path.open() as f:
-        json.load(f)
-    print(path)
-PY
-
 go test ./cmd/openclaw-soulfactory-control ./internal/soulfactory/openclawcontrol ./internal/soulfactory -count=1
 make build-openclaw-soulfactory-control build-openclaw-soulfactory-sidecar
 ```

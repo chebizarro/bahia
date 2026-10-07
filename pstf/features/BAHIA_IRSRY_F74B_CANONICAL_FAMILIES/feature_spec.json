@@ -1,9 +1,0 @@
-{
-  "id": "BAHIA_IRSRY_F74B_CANONICAL_FAMILIES",
-  "issue": "bahia-irsry.74",
-  "slice": "F74b",
-  "intent": "Move package intent/approval, tool provisioning intent/denylist/profile, and notification delivery-log reads to authoritative, signed, bounded, confidential kind-30900 state.",
-  "source_of_truth": "service-authored 30900 addressable events with the five 32030-32034 legacy_kind discriminators and single-letter t topics",
-  "security": "All five families are encrypted under the fleet OCK before publication; relay read auth exposes only ciphertext. Package approval claims remain authoritative in the local single-use admission store.",
-  "boundedness": "Each canonical plaintext is at most 60 KiB. Notification logs are one replaceable latest-50 record per channel with payload/error truncation and oldest-first eviction under the byte budget."
-}

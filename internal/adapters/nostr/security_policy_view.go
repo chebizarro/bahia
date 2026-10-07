@@ -12,7 +12,7 @@ import (
 
 // SecurityPolicyView lists deployment policies from the daemon's own retained
 // policy cp-state in the local event store. Security scan schedules and
-// scan-time policy evaluation are derived from it (audit B-32) instead of
+// scan-time policy evaluation are derived from it instead of
 // enumerating the optional SQL policy index.
 type SecurityPolicyView struct{ history ProjectionHistory }
 

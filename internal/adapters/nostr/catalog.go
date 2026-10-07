@@ -484,7 +484,7 @@ func NewKindCatalog() *KindCatalog {
 		{Name: "fips_snapshot", Kinds: []int{KindFIPSOverlayAdvert}, Snapshot: true, Required: false, Authors: ReplayAuthorsAny},
 		// NIP-09 deletion requests from the trusted control-plane authors,
 		// replayed in full after every other group so they reach the cache
-		// after the events they delete (bahia-irsry.10.1).
+		// after the events they delete.
 		{Name: "deletion_live", Kinds: []int{int(gonostr.KindDeletion)}, Snapshot: false, Required: true, Authors: ReplayAuthorsControlPlane},
 	}
 
@@ -927,7 +927,7 @@ func decodeHiveCIWorkflowResultProjection(ev *gonostr.Event) (*DecodedProjection
 }
 
 // workerCPStateDecoders decode the worker cp-state families by their
-// kinds.CPStateFamily legacy_kind discriminator (bahia-irsry.9.2). Worker
+// kinds.CPStateFamily legacy_kind discriminator. Worker
 // cleanup execution (CPStateFamilyWorkerCleanup) has no daemon-side read model
 // and stays on the state_snapshot no-op decoder.
 var workerCPStateDecoders = map[string]DecodeFunc{
@@ -940,9 +940,8 @@ var workerCPStateDecoders = map[string]DecodeFunc{
 // decodeCPStateProjection routes canonical 30900 cp-state records whose family
 // has a daemon read model to that family's decoder; every other 30900 record
 // keeps the fallback (state_snapshot no-op) decoder. A worker record that is
-// not on its family's coordinate is skipped (nil, nil): before bahia-irsry.36
-// the projector published assignment and drain on the same bare-pubkey d, so a
-// relay kept only whichever family was published last, and that survivor is
+// not on its family's coordinate is skipped (nil, nil): on a shared
+// bare-pubkey d a relay keeps only the newest record, so such a survivor is
 // neither family's current state. The projector republishes both families on
 // their own coordinates at startup.
 func decodeCPStateProjection(fallback DecodeFunc) DecodeFunc {

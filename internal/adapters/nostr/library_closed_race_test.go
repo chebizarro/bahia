@@ -18,7 +18,7 @@ import (
 // closedBurstRelay is a minimal NIP-01 relay that answers every REQ with
 // EOSE, a burst of live EVENTs, and then CLOSED for the same subscription —
 // the frame sequence the relay sidecar emits when a subscriber overflows its
-// queue (bahia-irsry.6). The EVENTs are post-EOSE, so the client dispatches
+// queue. The EVENTs are post-EOSE, so the client dispatches
 // them on goroutines that are not covered by the stored-event wait group and
 // are still in flight when CLOSED tears the subscription down.
 func closedBurstRelay(t *testing.T, burst int) *httptest.Server {
@@ -63,7 +63,7 @@ func closedBurstRelay(t *testing.T, burst int) *httptest.Server {
 }
 
 // TestLibrarySubscriptionClosedWhileEventsInFlight is the regression test for
-// bahia-irsry.17: in the unpatched fiatjaf.com/nostr, Subscription.dispatchEvent
+// in the unpatched fiatjaf.com/nostr, Subscription.dispatchEvent
 // sends on sub.Events while the CLOSED-triggered teardown closes that channel,
 // which the race detector reports and which can panic with "send on closed
 // channel". Run with -race.

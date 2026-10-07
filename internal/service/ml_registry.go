@@ -69,7 +69,7 @@ func NewMLRegistryService(repo repository.MLRegistryRepository, publisher events
 }
 
 // SetMLCPStatePublisher configures the canonical cp-state publisher for ML
-// entities (Phase 3 M1, bahia-irsry.11.12). After each state mutation the
+// entities. After each state mutation the
 // service calls the publisher to emit a 30900 record, replacing the
 // projector's reactive handleEvent ML leg.
 func (s *MLRegistryService) SetMLCPStatePublisher(pub MLCPStatePublisher) {

@@ -1,159 +1,45 @@
 # Notifications
 
-`notification/channel-test` is a gift-wrapped signed request intent. It requires `settings:manage`, and its delivery result appears in bounded `30315` `data`; no channel record is changed by a test. The [D80 fixture](../../../web/tests/fixtures/d80-intent-content.json) shows the wire content.
+**Notifications** (`/notifications`) manages organization-scoped delivery channels. The delivery log is available at `/notifications/log`.
 
-**Notifications** alert an organization about operational events and retain delivery results for investigation.
+## Channels
 
-## Supported channels
+Supported channel types include webhook and Nostr DM delivery. A channel defines its organization, event filters, destination configuration, enabled state, and retry policy.
 
-Bahia currently implements two channel types:
+Create and edit channels in the web app or with the CLI:
 
-| Type | Value | Configuration |
-|---|---|---|
-| Webhook | `webhook` | An HTTPS endpoint, with optional headers or signing secret |
-| Nostr direct message | `nostr_dm` | The recipient's Nostr pubkey |
-
-Email and Slack are not registered channel types. A Slack incoming-webhook URL can be targeted through a generic webhook channel, but Bahia does not provide a separate Slack sender.
-
-The Nostr DM sender is available only when the server has a Nostr private key. Invalid or unsupported channel types fail validation instead of being accepted silently.
-
-## Organization scope and authorization
-
-Encrypted browser channel and log operations belong to an organization. Channel reads require `services:read`, log reads require `logs:read`, and create/update/delete/test require `settings:manage`. ID-based operations resolve the organization from the stored channel and then repeat the read or mutation through an organization-scoped repository method, so a client cannot select another tenant by supplying ownership data.
-
-Channel and recent-log lists include only the union of the requester's organization memberships. An optional `org_id` can narrow channel listing, but only to an organization in that membership set. Creating without `org_id` remains supported for requesters with exactly one membership; requesters with multiple memberships must select one explicitly, and the server verifies both membership and permission before persisting that organization on the channel.
-
-The direct MCP notification handlers do not accept an `org_id` and currently use the server's unqualified notification repository. The standard app also leaves external MCP authorization fail-closed. Do not use these direct tools as a cross-tenant operator surface; prefer the tenant-scoped browser/encrypted operations. See [MCP Tools Reference](../mcp-tools.md#authorization).
-
-## Creating a channel
-
-### Web UI
-
-1. Open **Notifications**.
-2. Select the current organization.
-3. Choose **New Channel**.
-4. Select **Webhook** or **Nostr DM**, enter its configuration and event filter, and save.
-5. Use **Test** before relying on the channel.
-
-The browser performs channel and log operations with encrypted control-plane methods:
-
-- `notifications.channels.list`, `get`, `create`, `update`, `delete`, and `test`
-- `notifications.logs.list`
-
-### MCP
-
-The CLI does not register a `bahia notifications` command. Use the tenant-scoped web UI. The registered direct MCP tools are available only to explicitly authorized embeddings and are not organization-qualified.
-
-```json
-{
-  "tool": "bahia_create_notification_channel",
-  "arguments": {
-    "name": "deployment-alerts",
-    "channel_type": "webhook",
-    "config": {
-      "url": "https://hooks.example.com/bahia"
-    },
-    "event_filter": {
-      "type": "deployment.failed"
-    }
-  }
-}
+```bash
+bahia notifications channels list
+bahia notifications channels get <channel-id>
+bahia notifications channels create --file channel.json
+bahia notifications channels update --file channel.json
+bahia notifications channels delete <channel-id>
 ```
 
-For a Nostr DM channel, use `"channel_type": "nostr_dm"` and provide the recipient pubkey required by the channel configuration.
+MCP provides list/get/create/update/delete/test tools under `bahia_*_notification_channel` names. Channel responses redact webhook URLs, tokens, and other credentials.
 
-## Managing and testing channels
+## Authorization and encryption
 
-The registered channel tools are:
+Channel records are encrypted with the organization's OCK. The signer must be able to unwrap that key and hold the organization permission required by the action. Service-only delivery credentials remain inside the encrypted service payload and are never returned to a browser, CLI, or MCP caller.
 
-| Tool | Purpose |
-|---|---|
-| `bahia_list_notification_channels` | List channels in the caller's organization |
-| `bahia_get_notification_channel` | Read one organization-scoped channel |
-| `bahia_create_notification_channel` | Create a channel |
-| `bahia_update_notification_channel` | Replace channel fields such as config, filter, or enabled state |
-| `bahia_delete_notification_channel` | Delete a channel |
-| `bahia_test_notification_channel` | Deliver a test through that exact channel |
+External MCP calls pass through the platform authorization gate in addition to organization checks. Treat an externally exposed MCP endpoint as an administrative surface.
 
-The channel-test tool submits a `notification/channel-test` intent. A signed accepted status confirms the dispatcher accepted the test delivery; `pending` means the status is not yet visible. A disabled channel or a delivery that cannot be accepted is rejected.
+## Filters and delivery
 
-## Event filters
+Filters select normalized event types such as deployment, policy, security, backup, route, or runtime alerts. A channel test uses the stored configuration without revealing it.
 
-A channel's `event_filter` controls which application events it receives. For example:
-
-```json
-{
-  "type": "security.policy_breached"
-}
-```
-
-Security OSV notifications are breach-only: a new or materially changed breach fingerprint dispatches, while unchanged recurring breaches and clean scans do not.
-
-## Delivery behavior and logs
-
-The dispatcher creates an organization-scoped log record for each attempted notification and then calls the selected sender. Send and log-update failures are returned to the caller rather than converted into success.
-
-Each successful create/update publishes one fleet-OCK-encrypted `30900`
-`notification-log` record at `d=notification:log:<channel UUID>`. It replaces the
-channel's latest 50 attempts, not an ever-growing event per log line. Payloads
-over 512 JSON bytes and errors over 256 characters are truncated in the relay
-read model; the optional database retains the full delivery audit. The oldest
-entries are dropped if the 60 KiB plaintext budget is reached. Channel deletion
-publishes a tombstone on the same coordinate. Direct MCP list/get reads come
-from this bounded signed state; older IDs are not addressable there.
-
-For Nostr DMs, zero relay acceptances count as a delivery failure. For webhooks, connection, TLS, authentication, and non-success response failures remain visible in the log's status and error fields.
-
-Use the Notifications log view or these MCP tools:
-
-| Tool | Purpose |
-|---|---|
-| `bahia_list_notifications` | List recent logs; supports status and event-type filters |
-| `bahia_get_notification` | Read a log by ID while it remains in the bounded canonical window |
-| `bahia_mark_notification_read` | Compatibility mutation that finds a recent log and overwrites its status to `sent` |
-| `bahia_dismiss_notification` | Registered compatibility operation; dismissal is unsupported |
-
-```json
-{
-  "tool": "bahia_list_notifications",
-  "arguments": {
-    "status": "unread",
-    "event_type": "deployment.failed",
-    "limit": 50
-  }
-}
-```
-
-The MCP status filter maps `read` to sent records and `unread` to pending or retrying records. This is a delivery-status compatibility mapping, not a separate user-read receipt. Although dismissal treats logs as immutable audit records, the current mark-read compatibility handler does mutate the stored delivery status to `sent`.
-
-## Sensitive configuration
-
-The CLI can list or get channel metadata with `bahia notifications channels list` and `bahia notifications channels get <channel-uuid>`. These reads use the signed relay state and the operator's NIP-44 signer to unwrap an org or fleet OCK envelope. They never show the service-only `service_inner` credentials. The legacy REST channel reads are no longer mounted.
-
-Channel URLs, headers, and recipient details are sensitive. Browser channel CRUD and channel tests use signed kind-`30900` intents inside NIP-59 gift wraps and require a NIP-44-capable signer. Channel-test results arrive as requester-scoped kind-`30315` status data; delivery history reads bounded fleet-OCK-encrypted notification-log state. Do not publish channel configuration in public Nostr events or logs.
+The delivery log records bounded outcomes and error summaries. MCP exposes `bahia_list_notifications`, `bahia_get_notification`, and `bahia_mark_notification_read`. The log is immutable: `bahia_dismiss_notification` reports that dismissal is unsupported.
 
 ## Troubleshooting
 
-### A channel test fails
-
-- Confirm the channel is enabled.
-- For webhooks, verify outbound connectivity, TLS, credentials, and the endpoint response.
-- For Nostr DMs, verify the server signing key, recipient pubkey, and relay acceptance.
-- Inspect the organization-scoped delivery log for the stored error.
-
-### Expected events do not dispatch
-
-- Confirm the channel's event filter matches the exact event type.
-- Confirm the channel belongs to the active organization.
-- For `security.policy_breached`, confirm the breach is new or materially changed.
+- Confirm the signer can read the organization and channel record.
+- Verify the event type matches the channel filter.
+- Use **Test** to separate destination credentials from event matching.
+- Inspect the delivery log and daemon readiness rather than assuming relay acceptance means delivery.
 
 ## Related
 
-- [Services](services.md) — Notification sources
-- [Deployments](deployments.md) — Deployment outcomes
-- [Security](security.md) — OSV breach notifications
-- [Organizations](organizations.md) — Tenant membership and access
-
-## Managed-instance alerts
-
-Notification channel filters may include `runtime.instance_health_changed`, `runtime.recovery_requested`, `runtime.recovery_completed`, `runtime.recovery_failed`, `runtime.recovery_budget_exhausted`, and `runtime.maintenance_changed`. Recovery/error/budget alerts are immediate. Warning delivery follows the instance policy's minimum interval.
+- [Organizations](organizations.md)
+- [Deployments](deployments.md)
+- [Security](security.md)
+- [Route Canaries](route-canaries.md)

@@ -535,7 +535,7 @@
       }
       // All soul-factory read models (souls, templates, drafts, capabilities) share a
       // single subscription, so call without arguments — passing an options object here
-      // previously leaked into the relay `authors` filter and was rejected as malformed.
+      // leaks into the relay `authors` filter and is rejected as malformed.
       await subscribeToSoulFactoryUpdates();
 	  const resume = resumedProvisioningRequest();
 	  if (resume?.requestId && !requestEventId) {

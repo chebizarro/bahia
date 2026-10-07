@@ -10,7 +10,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Backward-compatible payload enrichment tests (Item 8 — bahia-zu2p.8.7)
+// Backward-compatible payload enrichment tests
 //
 // These tests verify that:
 //   - Legacy (pre-enrichment) payloads decode without error

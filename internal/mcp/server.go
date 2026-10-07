@@ -1674,7 +1674,7 @@ func (s *Server) InvokeTool(ctx context.Context, name string, arguments map[stri
 }
 
 func signerFirstMCPMutationUnavailable(toolName, method string) *ToolResult {
-	return errorResult(fmt.Sprintf("%s is no longer available as a direct registry mutation; publish a signed ContextVM/Nostr %s command with an operator signer instead", toolName, method))
+	return errorResult(fmt.Sprintf("%s is not available as a direct registry mutation; publish a signed ContextVM/Nostr %s command with an operator signer instead", toolName, method))
 }
 
 func normalizePubkeys(pubkeys []string) []string {
@@ -1734,7 +1734,7 @@ func (s *Server) authorizeServicePermission(ctx context.Context, serviceID uuid.
 			svc, err = client.DecodeService(record.Event)
 		}
 	} else if s.registry != nil {
-		// Wave 5 P2 migrates write authorization to the intent path.
+		// Write authorization goes through the intent path.
 		svc, err = s.registry.GetService(ctx, serviceID)
 	}
 	if err != nil || svc == nil || svc.OrgID == uuid.Nil {
@@ -1798,7 +1798,7 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return intentWriteError("error", "", "", "intent processor is not configured"), nil
 	}
 	// Intent-backed writes authenticate their Nostr actor and authorize against
-	// TrustSet inside ProcessInProcess. The legacy MCP operator allowlist must
+	// TrustSet inside ProcessInProcess. The MCP operator allowlist must
 	// not deny an otherwise authorized org member before that check runs.
 	if s.intentProc != nil && isIntentWriteTool(name) {
 		result, _ := s.callIntentWrite(ctx, name, arguments)
@@ -1955,7 +1955,7 @@ func (s *Server) handleCreateService(ctx context.Context, args map[string]interf
 }
 
 // handleCreateEnvironment publishes a signer-first environment/create request
-// under a client-minted environment id (bahia-irsry.42).
+// under a client-minted environment id.
 func (s *Server) handleCreateEnvironment(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	return s.invokeIntentWrite(ctx, "bahia_create_environment", args)
 }
@@ -1970,7 +1970,7 @@ func mcpCreateEntityIDSchema(entity string) map[string]interface{} {
 	}
 }
 
-// mcpCreateEntityID returns a create tool's entity id (bahia-irsry.42): the
+// mcpCreateEntityID returns a create tool's entity id: the
 // caller's `id` argument, which must be a canonical UUIDv7 (or v4), or a
 // freshly minted UUIDv7. The id is part of the derived idempotency key, so a
 // retry that passes back the returned id (and the same arguments) is replayed

@@ -675,7 +675,7 @@ func (s *OpenClawSidecar) HandleControlEvent(ctx context.Context, event *nostr.E
 		}
 		return s.publishOutcome(ctx, event, *request.Envelope, cached.Outcome)
 	}
-	// Runtime idempotency-key contract (bahia-irsry.57):
+	// Runtime idempotency-key contract:
 	//
 	// The sidecar stores a completed result keyed by IdempotencyKey, so a
 	// re-drive with the same key after the original completed replays the

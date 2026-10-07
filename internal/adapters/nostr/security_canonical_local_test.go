@@ -48,7 +48,7 @@ func (c *localSecurityOSV) callCount() int {
 	return c.calls
 }
 
-// localSecurityObservables stands in for the legacy observable publisher. The
+// localSecurityObservables stands in for the security observable publisher. The
 // scanner publishes the "security.scan.completed" audit last, after the run's
 // canonical record is terminal, so completed reports a finished scan.
 type localSecurityObservables struct {
@@ -400,7 +400,7 @@ func TestSecurityCanonicalFindingDetailsAreReassembledAndDeduped(t *testing.T) {
 // A retired run is replaced on its coordinate by a tombstone carrying a
 // NIP-40 expiration: readers drop it at once, the local store keeps one
 // coordinate for it (bounded growth), and the store's expiry prune removes
-// the tombstone once it has expired (bahia-u5whr item 6).
+// the tombstone once it has expired.
 func TestSecurityCanonicalRetiredRunIsTombstonedAndExpires(t *testing.T) {
 	ctx := context.Background()
 	daemon := startLocalHistoryDaemon(t, t.TempDir(), newRelayScript())

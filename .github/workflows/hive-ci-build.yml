@@ -16,8 +16,8 @@ name: Hive CI Build
 #
 # Only the backend control-plane image is included in .hiveci-result.json.
 # The web image is also built and pushed so it is available in Harbor, but
-# multi-artifact Hive CI results are not yet defined.  See runbook §"Durable
-# Path" for the retirement conditions that let this replace deploy-edge.yml.
+# multi-artifact Hive CI results are not yet defined; once they are, this
+# workflow can replace deploy-edge.yml.
 
 on:
   # The durable Hive CI path is triggered by grasp-gitea (kind 5401) and executed

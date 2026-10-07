@@ -65,7 +65,7 @@ func TestRelayFirstRegistryCreateServicePublishesBeforeDatabaseWrite(t *testing.
 		t.Fatalf("service defaults were not applied before publish: runtime=%q branch=%q", published.service.RuntimeType, published.service.DefaultBranch)
 	}
 	// The record carries the service as readers (and so the projector) see
-	// the cached row, not the raw write intent (bahia-irsry.41).
+	// the cached row, not the raw write intent.
 	if repo := published.service.Repository; repo == nil || repo.Source != "manual" || repo.CloneURL != "https://git.example/acme/api.git" {
 		t.Fatalf("published repository = %+v, want the read-normalized manual repository", repo)
 	}

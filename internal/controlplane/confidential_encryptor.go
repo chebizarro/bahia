@@ -14,8 +14,6 @@ import (
 //   - Service-only fields use an additional NIP-44 inner layer to the service pubkey
 //   - All NIP-44 operations go through the signer interface (bunker-compatible)
 //
-// Phase 3 C1.
-//
 // Method signatures use primitive types so that the nostr adapter can define a
 // matching interface (ConfidentialStateEncryptor) without importing this
 // package — Go structural typing handles the match.
@@ -111,10 +109,10 @@ func (e *ConfidentialEncryptor) DecryptServiceInner(ctx context.Context, content
 	})
 }
 
-// DecryptOrgState implements the legacy DecryptOrgState interface used by
-// RelayMemberEventHandler and DecryptMemberContent. It tries the new
-// confidential format; callers with legacy support should try legacy
-// decryptors separately if this returns an error.
+// DecryptOrgState implements the LegacyOrgStateDecryptor interface used by
+// RelayMemberEventHandler and DecryptMemberContent. It decrypts the OCK
+// confidential format only; dual-read callers try the old-format decryptors
+// separately when this returns an error.
 func (e *ConfidentialEncryptor) DecryptOrgState(content string) ([]byte, error) {
 	return e.DecryptConfidential(context.Background(), content, 0, "", "")
 }

@@ -6,7 +6,7 @@
  * verification to nostr-tools and NIP-01 replaceable/addressable rules +
  * NIP-09/NIP-40 to the welshman Repository.
  *
- * Design reference: phase4-web-store-first.md §2.4.
+ * Design reference: docs/architecture/web-store-first.md.
  *
  * @module lib/nostr/ingestion
  */

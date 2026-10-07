@@ -95,7 +95,7 @@ func TestFilterNeedsAuth(t *testing.T) {
 			filter:    nostr.Filter{Kinds: []nostr.Kind{nostr.KindPatch, nostr.KindIssue, nostr.KindReply}},
 			needsAuth: false,
 		},
-		// Kind 30900 topic-based classification (C-21).
+		// Kind 30900 topic-based classification.
 		{
 			name:      "30900 with no #t requires auth (could return any family)",
 			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}},
@@ -381,7 +381,7 @@ func TestReadAuth_NoKinds_RequiresAuth(t *testing.T) {
 }
 
 // TestReadAuth_NIP40Expiry is a build-time check that config-status events
-// carry NIP-40 expiration so old coordinates are swept (C-22).
+// carry NIP-40 expiration so old coordinates are swept.
 func TestConfigStatusEvent_HasExpiration(t *testing.T) {
 	cfg := sidecarTestConfig(t)
 	serviceKey := nostr.Generate()
@@ -443,7 +443,7 @@ func TestConfigStatusEvent_HasExpiration(t *testing.T) {
 }
 
 // TestReadAuth_30900_PublicTopic_ServedAnonymously verifies that an anonymous
-// REQ for a public 30900 topic is served even in enforce mode (C-21).
+// REQ for a public 30900 topic is served even in enforce mode.
 func TestReadAuth_30900_PublicTopic_ServedAnonymously(t *testing.T) {
 	server, _, _ := testSidecarForReadAuth(t, config.ReadAuthModeEnforce)
 	defer closeSidecarTest(t, server)
@@ -458,7 +458,7 @@ func TestReadAuth_30900_PublicTopic_ServedAnonymously(t *testing.T) {
 
 // TestReadAuth_30900_ProtectedTopic_ClosedUnderEnforce verifies that an
 // anonymous REQ for a protected 30900 topic is CLOSED auth-required in enforce
-// mode (C-21).
+// mode.
 func TestReadAuth_30900_ProtectedTopic_ClosedUnderEnforce(t *testing.T) {
 	server, _, _ := testSidecarForReadAuth(t, config.ReadAuthModeEnforce)
 	defer closeSidecarTest(t, server)
@@ -473,7 +473,7 @@ func TestReadAuth_30900_ProtectedTopic_ClosedUnderEnforce(t *testing.T) {
 }
 
 // TestReadAuth_30900_ProtectedTopic_ServedUnderWarn verifies that an anonymous
-// REQ for a protected 30900 topic is served (with log) in warn mode (C-21).
+// REQ for a protected 30900 topic is served (with log) in warn mode.
 func TestReadAuth_30900_ProtectedTopic_ServedUnderWarn(t *testing.T) {
 	server, _, _ := testSidecarForReadAuth(t, config.ReadAuthModeWarn)
 	defer closeSidecarTest(t, server)
@@ -490,7 +490,7 @@ func TestReadAuth_30900_ProtectedTopic_ServedUnderWarn(t *testing.T) {
 // mixing public and protected 30900 topics is rejected as a whole under enforce
 // mode. This is the safest stance: a filter that might return a protected record
 // must be gated. Callers wanting anonymous access to public families should use
-// separate filters scoped by #t (C-21).
+// separate filters scoped by #t.
 func TestReadAuth_30900_MixedTopics_RejectsUnderEnforce(t *testing.T) {
 	server, _, _ := testSidecarForReadAuth(t, config.ReadAuthModeEnforce)
 	defer closeSidecarTest(t, server)
@@ -508,7 +508,7 @@ func TestReadAuth_30900_MixedTopics_RejectsUnderEnforce(t *testing.T) {
 }
 
 // TestReadAuth_30900_AuthenticatedAllowed_ProtectedTopic verifies that an
-// authenticated allowed pubkey can read a protected 30900 topic (C-21).
+// authenticated allowed pubkey can read a protected 30900 topic.
 func TestReadAuth_30900_AuthenticatedAllowed_ProtectedTopic(t *testing.T) {
 	server, adminKey, _ := testSidecarForReadAuth(t, config.ReadAuthModeEnforce)
 	defer closeSidecarTest(t, server)

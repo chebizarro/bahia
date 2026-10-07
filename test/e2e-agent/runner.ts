@@ -2,7 +2,6 @@
  * Main scenario runner for E2E agent tests
  */
 import { TestHarness } from './harness.js';
-import { BahiaAPIDriver } from './drivers/api.js';
 import { PlaywrightDriver } from './drivers/playwright.js';
 import { MCPDriver } from './drivers/mcp.js';
 import { allScenarios, getScenarioByName, getScenariosByTags } from './scenarios/index.js';
@@ -66,7 +65,6 @@ export async function runScenarios(options: RunnerOptions = {}): Promise<RunRepo
   }
 
   const drivers: ScenarioDrivers = {
-    api: new BahiaAPIDriver(harness.getApiUrl()),
     web: new PlaywrightDriver(harness.getWebUrl()),
     mcp: new MCPDriver(),
   };

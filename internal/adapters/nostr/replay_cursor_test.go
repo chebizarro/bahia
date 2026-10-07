@@ -45,7 +45,7 @@ func TestResumeSinceUsesOverlapOrLookbackNeverNow(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	cfg := InboundSyncConfig{ResumeOverlap: 10 * time.Minute, RegularLookback: time.Hour}.normalized()
 	require.EqualValues(t, 1_000_000-600-1, cfg.resumeSince(1_000_000-1, now))
-	require.EqualValues(t, 1_000_000-3600, cfg.resumeSince(0, now), "a fresh filter starts at the lookback window, not now (C-3)")
+	require.EqualValues(t, 1_000_000-3600, cfg.resumeSince(0, now), "a fresh filter starts at the lookback window, not now")
 	require.Zero(t, cfg.resumeSince(300, now), "an overlap reaching past the epoch starts at the beginning")
 
 	full := InboundSyncConfig{ResumeOverlap: time.Minute}

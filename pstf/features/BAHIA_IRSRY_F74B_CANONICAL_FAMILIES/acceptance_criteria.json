@@ -1,9 +1,0 @@
-{
-  "criteria": [
-    {"id":"F74b-1","requirement":"Five reserved 3203x discriminators have distinct t topics, canonical family entries, manifest justifications, web mirrors, and read-auth classifications.","test":"TestControlStateEnvelopeStampsFamilyTopic, TestGeneratedFrontendCPStateTopicsMatchGo, TestFilterNeedsAuth, nostrmigration package tests"},
-    {"id":"F74b-2","requirement":"Successful package intent/claim/approval and signed package-handler mutations publish one confidential canonical state record each, without a second mutation path.","test":"TestF74bPackageIntentAndApprovalMutationPublishing, TestPackageIntentHandlerPublishesSignedTerminalStateOnce"},
-    {"id":"F74b-3","requirement":"Tool intent, denylist, and profile mutations publish once and removals tombstone the live coordinate.","test":"TestF74bToolMutationPublishingAndTombstone, TestF74bToolIntentAndProfileTombstones"},
-    {"id":"F74b-4","requirement":"Notification log create/update/delete publish one bounded, encrypted per-channel window; no unbounded per-log-line coordinates.","test":"TestF74bNotificationRepositoryPublishesOnCreateUpdateDelete, TestF74bNotificationWindowIsBoundedAndTombstoned, TestF74bConfidentialPublisherFailsClosed"},
-    {"id":"F74b-5","requirement":"MCP package, tool, and notification reads use validated local signed state and retain legacy result shapes without a database.","test":"TestF74bMCPStoreReadParityWithoutDatabase, TestCallTool_NotificationLogListAndMarkRead"}
-  ]
-}

@@ -1,4 +1,4 @@
-// Fleet-OCK confidential fixtures for the e2e mock relays (bahia-fbyo5).
+// Fleet-OCK confidential fixtures for the e2e mock relays.
 //
 // They mirror internal/controlplane/org_content_key.go exactly: the fleet
 // scope's content key is wrapped to a member in a kind 30900

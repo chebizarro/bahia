@@ -1,7 +1,5 @@
 # OpenClaw provisioning operations
 
-Task: **bahia-openclaw-rollout-conformance-20260819**
-
 This runbook operates the durable saga and dedicated runtime contract. Supply values through protected environment or files; never put bunker URIs, NIP-46 keys, tokens, private keys, or DM plaintext on a command line, in logs, or in evidence.
 
 ## Deploy
@@ -9,7 +7,7 @@ This runbook operates the durable saga and dedicated runtime contract. Supply va
 1. Verify the release record contains exact Bahia/OpenClaw/Signet/relay image digests and source commits.
 2. Back up database, relay data (the canonical saga-run and adapter-ledger records live there and in the daemon's local event store; the state directory is a cache), Signet enrollment/client-reference state, and per-soul volumes.
 3. Render Compose and verify every promoted image is repository@sha256 with 64 lowercase hexadecimal characters.
-4. Enable one disposable canary only. Keep incumbents and previous release available.
+4. Enable one disposable canary only. Keep incumbents unchanged and retain a tested rollback image.
 5. Gate on Bahia readiness, Signet connectivity, relay NIP-11/AUTH/EOSE, runtime health, real inference, independent encrypted DM round-trip, terminal 7950 plus 31951, and Marjam/SNR reachability.
 6. Record only run/request IDs, public event IDs, one-way resource refs, commits, digests, timestamps, and outcomes.
 
@@ -37,7 +35,7 @@ store; `soul_factory.provisioning_state_dir` holds only the cache and lock files
 It cannot replace the spec, runtime, identity, or credentials. A busy request
 fails with a checkpoint conflict instead of racing provisioning or another
 operator process. Dry runs leave checkpoints and external systems unchanged.
-Pre-upgrade ledgers without captured inputs require replaying the original
+Ledgers without captured inputs require replaying the original
 request before mutation; missing or conflicting inputs never trigger guessed
 recovery.
 
@@ -122,7 +120,7 @@ purges every run whose `retain_until` has passed:
   the agent id to another request leaves the holder's reservation alone), and
   the agent has no live Soul, i.e. `GetSoul` returns nothing or a revoked Soul.
   An active, suspended, provisioning or draft Soul keeps the reservation,
-  because the identity has outlived the request (legacy provisioning, adoption,
+  because the identity has outlived the request (external provisioning, adoption,
   a re-bound agent) and the reservation is what stops a later request from
   minting a second identity for a live agent.
 
@@ -159,9 +157,9 @@ cache. The monitor shares the engine's store, reads durable state on each
 scrape, and does not reconcile or mutate runs. Build labels use Bahia's build version; the instance label uses
 `telemetry.service_name`. No separate `openclaw_saga_store_dir` is required.
 With SoulFactory disabled these gauges are absent, not evidence of healthy runs.
-The historical `openclaw` metric/alert names also cover governed Metiq runs in
+The `openclaw` metric and alert namespace also cover governed Metiq runs in
 this shared store. Stage/readiness gauges describe checkpoint evidence, not live
-Docker health probes. The historical `dm_gate` series means the governed
+Docker health probes. The `dm_gate` series means the governed
 readiness checkpoint completed; it is not a fresh DM probe. For a running run,
 `terminal_projection` records active Soul lineage, not delivery of the separate
 success result. The adapter ledger records that delivery separately, retaining a
@@ -180,4 +178,4 @@ recoverable normal-path failure produces stage-age/retry series and can satisfy
 | BahiaOpenClawRepeatedSignetUnauthorized | Freeze policy changes; compare client public key and policy revision. |
 | BahiaOpenClawCorrelationMismatch | Stop affected run; preserve evidence and investigate lineage. |
 
-For critical alerts preserve the previous release, capture sanitized metrics/logs and public IDs, and avoid destructive host edits. Escalate Marjam changes for separate review.
+For critical alerts preserve the rollback image, capture sanitized metrics/logs and public IDs, and avoid destructive host edits. Escalate Marjam changes for separate review.

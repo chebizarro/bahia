@@ -92,7 +92,7 @@ func TestSeedControlStateMatchesProducerEnvelope(t *testing.T) {
 		}
 		recordID := firstTag(ev, "d")
 		if prefix, worker := kinds.CPStateFamily(legacyKind).WorkerDPrefix(); worker {
-			// Worker families sit on their own coordinate (bahia-irsry.36);
+			// Worker families sit on their own coordinate;
 			// the envelope builder takes the record id and adds the prefix.
 			id, onCoordinate := strings.CutPrefix(recordID, prefix)
 			if !onCoordinate {
@@ -266,8 +266,7 @@ func TestSeedProjectedRecordsDecodeThroughCatalog(t *testing.T) {
 	}
 }
 
-// TestSeedWorkerFamiliesCoexistOnRelay pins bahia-irsry.36 for the seed
-// corpus: no two seeded cp-state (30900) records share a (kind, pubkey, d)
+// TestSeedWorkerFamiliesCoexistOnRelay pins the seed corpus contract: no two seeded cp-state (30900) records share a (kind, pubkey, d)
 // coordinate, so a relay that keeps the latest event per coordinate serves
 // every worker family the corpus seeds.
 func TestSeedWorkerFamiliesCoexistOnRelay(t *testing.T) {
@@ -300,7 +299,7 @@ func TestSeedWorkerFamiliesCoexistOnRelay(t *testing.T) {
 }
 
 // TestSeedAssistantStatusMatchesTopicFilter runs the web assistant store's
-// status REQ shape (bahia-irsry.37): author, kind 30315 and #t only.
+// status REQ shape: author, kind 30315 and #t only.
 func TestSeedAssistantStatusMatchesTopicFilter(t *testing.T) {
 	filter := nostr.Filter{
 		Kinds:   []nostr.Kind{nostr.Kind(kinds.NIP38Status)},

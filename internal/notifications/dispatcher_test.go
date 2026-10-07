@@ -733,7 +733,7 @@ func TestDispatcher_OnChannelChangedUpdatesCache(t *testing.T) {
 	d := NewDispatcher(repo, zap.NewNop())
 	d.RegisterSender(domain.ChannelTypeWebhook, sender)
 
-	// Add a channel via OnChannelChanged (simulating legacy or intent path).
+	// Add a channel via OnChannelChanged (the intent-handler path).
 	chID := uuid.New()
 	ch := &domain.NotificationChannel{
 		ID:          chID,

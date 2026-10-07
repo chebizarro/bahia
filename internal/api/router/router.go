@@ -98,7 +98,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 	// Auth middleware (applied to API routes, not health checks).
 	authMiddleware := routeAuthConfig(deps, authCfg...)
-	// Dependency gates replace the old tier model (§6). Routes whose
+	// Dependency gates replace the old tier model. Routes whose
 	// backing repository is nil (e.g. no Postgres) return 503.
 	dbGate := middleware.RequireRepo(deps.Services)
 	platformAdminGate := platformRoleRBAC(deps, authMiddleware, domain.RoleAdmin)
@@ -190,8 +190,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			}
 
 			// Payment records are canonical cp-state read from the local event
-			// store (audit B-31), so these reads need no PostgreSQL gate: the
-			// service answers from the local store alone (bahia-u5whr).
+			// store, so these reads need no PostgreSQL gate: the
+			// service answers from the local store alone.
 			if deps.Payments != nil {
 				payH := handlers.NewPaymentHandler(deps.Payments)
 				r.Get("/deployments/runs/{id}/cost", payH.GetRunCost)
@@ -218,12 +218,11 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RateLimit(writeLimiter))
 
-			// Tenant orgs (write) — Phase 3 O1 (B-26): REST mutation routes
-			// deleted. Org/member/invite mutations now go through the
-			// encrypted ContextVM path (dual dispatch to intent processor).
-			// Signer-first intent consumers no longer require those REST reads.
+			// Tenant orgs (write): org/member/invite mutations go through
+			// the encrypted ContextVM path (dual dispatch to the intent
+			// processor); no REST mutation routes are mounted.
 
-			// Phase 5 F1: retained — web/src/routes/instance-health/+page.svelte; replaced by bahia-irsry.11.19.
+			// Consumed by web/src/routes/instance-health/+page.svelte.
 			// Managed instance maintenance (write)
 			if instanceHealthH != nil {
 				instanceRBAC := coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)
@@ -231,20 +230,20 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(dbGate, instanceRBAC).Delete("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/maintenance", instanceHealthH.ClearMaintenance)
 			}
 
-			// Phase 5 F1: retained — docs/user-guide/features/artifacts.md curl import; replaced by bahia-irsry.11.19.
+			// Consumed by the docs/user-guide/features/artifacts.md curl import.
 			// SBOM (write compatibility import)
 			if deps.SBOMs != nil && deps.Artifacts != nil && deps.SBOMImporter != nil {
 				sbomH := handlers.NewSBOMHandler(deps.SBOMs, deps.Artifacts, deps.SBOMImporter)
 				r.With(dbGate, coreRBAC(deps, authMiddleware, artifactOrgResolver(deps.Artifacts, deps.Services, "id"), true, domain.PermWriteServices)).Post("/artifacts/{id}/sbom", sbomH.IngestSBOM)
 			}
 
-			// Deprecated policy REST mutations are intentionally not mounted.
-			// Signer-first Nostr policy command kinds retired-kind-retired-kind are the supported replacement.
+			// Policy REST mutations are intentionally not mounted: signer-first
+			// Nostr policy command intents are the supported path.
 
-			// Secrets (write): deleted in Phase 3 N1.
-			// Secret create/update/delete now go through intent publishing (30900).
+			// Secrets (write): create/update/delete go through intent
+			// publishing (30900); no REST write routes are mounted.
 
-			// Phase 5 F1: retained — docs/user-guide/features/souls.md migration workflow; replaced by bahia-irsry.11.19.
+			// Consumed by the docs/user-guide/features/souls.md migration workflow.
 			// Legacy Soul reconciliation is authenticated and dry-run-first.
 			if legacyReconciliationH != nil {
 				r.With(dbGate, platformAdminGate).Post("/soulfactory/legacy-reconciliation/preview", legacyReconciliationH.Preview)
@@ -253,9 +252,9 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 		})
 
-		// Deprecated LLM operational, adoption, and direct runtime REST mutations
-		// are intentionally not mounted. Signer-first Nostr control-plane commands
-		// are the supported replacement for these flows.
+		// LLM operational, adoption, and direct runtime REST mutations are
+		// intentionally not mounted: signer-first Nostr control-plane commands
+		// are the supported path for these flows.
 	})
 
 	return r

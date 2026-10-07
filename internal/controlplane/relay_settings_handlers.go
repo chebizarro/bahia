@@ -271,7 +271,7 @@ func (h *RelaySettingsHandlers) currentState(pubkey string) RelayPolicyState {
 
 // relaySettingsStateTags are the operator policy record's tags: its fixed
 // addressable coordinate, domain/entity/schema, the single-letter
-// t=kinds.RelaySettingsTopic (bahia-irsry.37), status and the requester.
+// t=kinds.RelaySettingsTopic, status and the requester.
 func relaySettingsStateTags(status, requesterPubkey string) nostr.Tags {
 	return nostr.Tags{{kinds.CASControlStateTagD, RelaySettingsDTag}, {kinds.CASControlStateTagDomain, RelaySettingsDomain}, {"entity", "relay-policy"}, {kinds.CASControlStateTagSchema, RelaySettingsSchema}, {"t", kinds.RelaySettingsTopic}, {"status", status}, {"p", requesterPubkey}}
 }

@@ -12,7 +12,7 @@ import (
 // runtime-control request envelope built by BuildRuntimeControlRequestEvent
 // (producer) is matched by the OpenClaw sidecar subscription filter, which
 // selects on tagPubkey + tagSchema + tagMethod. Guards drift of the
-// method/pubkey/schema filter keys now shared via constants (bahia-s7o9).
+// method/pubkey/schema filter keys now shared via constants.
 func TestTagEnvelope_RuntimeControlRequest_MethodFilterRoundTrip(t *testing.T) {
 	const runtimePubkey = "runtime-pubkey-hex"
 	env := RuntimeControlEnvelope{
@@ -48,7 +48,7 @@ func TestTagEnvelope_RuntimeControlRequest_MethodFilterRoundTrip(t *testing.T) {
 	}
 }
 
-// Exact-envelope round-trip tests (bahia-vkeh).
+// Exact-envelope round-trip tests.
 //
 // These guard against producer/consumer tag drift: an event is built by the
 // production Build*Event codec and then matched against the exact subscription

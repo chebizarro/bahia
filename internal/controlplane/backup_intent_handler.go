@@ -92,7 +92,7 @@ type BackupIntentExecutors struct {
 //   - repository-probe: probe a backup repository
 //   - delete: delete an entity (recipe, policy, repository, or definition)
 //
-// See design §7 Wave 4 B1.
+// See docs/architecture/intents-and-authority.md.
 type BackupIntentHandler struct {
 	registry    BackupIntentCRUD
 	definitions BackupIntentDefinitionCRUD

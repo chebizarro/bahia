@@ -13,7 +13,7 @@ import (
 )
 
 // SoulFactory relay I/O runs on the shared relay pool
-// (internal/adapters/nostr.RelayPool, bahia-irsry.10.2). The pool owns the
+// (internal/adapters/nostr.RelayPool). The pool owns the
 // protocol: connections, NIP-42 through the library AuthHandler, per-relay
 // EOSE/CLOSED accounting, CLOSED classification, per-relay re-REQ with a
 // resume cursor, NIP-11 limits and per-relay publish results. RelayClient

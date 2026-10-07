@@ -67,7 +67,7 @@
     queueMicrotask(async () => {
       if (!active) return;
 
-      // Phase 4 W1-S2: Open the event store first so derived stores
+      // Open the event store first so derived stores
       // render from persisted data immediately (before network).
       try {
         await boot();
@@ -84,7 +84,7 @@
         // Cached SoulFactory read models project now (continuity projects on
         // page mount); the relay readers start below, after boot's own REQs.
         initSoulFactoryStoreBinding({ relay: false });
-        // The daemon's fleet-OCK encrypted operator allowlists (bahia-fbyo5):
+        // The daemon's fleet-OCK encrypted operator allowlists:
         // decrypted records widen the trusted operator set below.
         initOperatorAllowlistBinding();
         initOpsWidgetWallBinding();

@@ -727,7 +727,7 @@ type NostrConfig struct {
 
 	// BootstrapOwners maps org UUIDs to the hex pubkey of their bootstrap
 	// owner. Used only when no relay membership events (O1) or Postgres
-	// org_members exist for an org. See design §2.2.
+	// org_members exist for an org. See docs/architecture/intents-and-authority.md.
 	BootstrapOwners map[string]string `koanf:"bootstrap_owners" yaml:"bootstrap_owners" secret:"false"`
 
 	// LocalStore is the daemon's local event store and inbound cursors.
@@ -794,7 +794,7 @@ type RelaySidecarConfig struct {
 	// connection. A subscription that would overflow it is CLOSED so the client
 	// re-subscribes from its cursor, instead of silently missing events.
 	SubscriberQueueSize int `koanf:"subscriber_queue_size" yaml:"subscriber_queue_size" secret:"false"`
-	// Retention is by kind class (C-19). EventRetention caps the age of stored
+	// Retention is by kind class. EventRetention caps the age of stored
 	// regular events that are not RequestRetentionKinds (for example 4903
 	// audit facts); zero, the default, keeps them durably. RequestRetention
 	// bounds RequestRetentionKinds. Replaceable and addressable events and
@@ -810,7 +810,7 @@ type RelaySidecarConfig struct {
 	// being silently truncated, so the client narrows the filter.
 	NegentropyMaxEvents int `koanf:"negentropy_max_events" yaml:"negentropy_max_events" secret:"false"`
 	// ReadAuthMode controls NIP-42 authentication for REQ and COUNT filters
-	// that target non-public kinds or protected cp-state topics (C-21, C-47).
+	// that target non-public kinds or protected cp-state topics.
 	// Values:
 	//   "enforce" - CLOSED auth-required for unauthenticated protected
 	//               REQs and NIP-11 advertises auth_required (default; an
@@ -819,7 +819,7 @@ type RelaySidecarConfig struct {
 	//               for migrations; protected records such as the
 	//               soul-factory-runtime-policy are then readable by anyone
 	//               who can connect.
-	//   "off"     - no read-side auth (pre-C-21 behaviour).
+	//   "off"     - no read-side auth.
 	ReadAuthMode string `koanf:"read_auth_mode" yaml:"read_auth_mode" secret:"false"`
 	// ReadAuthAllowedPubkeys are additional hex pubkeys allowed to read
 	// protected kinds, beyond the admin allowlist, intent authors and the
@@ -845,7 +845,7 @@ const (
 	MaxRelaySidecarNegentropyMaxEvents     = 10_000_000
 )
 
-// Read auth mode values (C-21).
+// Read auth mode values.
 const (
 	ReadAuthModeEnforce = "enforce"
 	ReadAuthModeWarn    = "warn"
@@ -997,9 +997,9 @@ func (c RuntimeEndpointConfig) Empty() bool {
 
 // RuntimeConfig holds runtime targeting settings.
 //
-// The flat fields are retained for backward compatibility with existing
-// runtime.type, runtime.docker_host, and runtime.compose_dir configuration.
-// New installations should prefer runtime.default.* plus
+// The flat fields are compatibility aliases for runtime.type,
+// runtime.docker_host, and runtime.compose_dir configuration.
+// Prefer runtime.default.* plus
 // runtime.environments.<environment-name>.*. Environment variables for nested
 // runtime settings must use double underscores, for example:
 // BAHIA_RUNTIME__DEFAULT__TYPE=compose and
@@ -2256,7 +2256,7 @@ func (c NostrConfig) RelayAuthUnavailableSemantics() string {
 
 // NormalizedReadAuthMode returns the effective read auth mode for the sidecar.
 // Unset and unrecognised values fall back to enforce: a typo must not silently
-// open protected topics (C-47).
+// open protected topics.
 func (c RelaySidecarConfig) NormalizedReadAuthMode() string {
 	mode := strings.ToLower(strings.TrimSpace(c.ReadAuthMode))
 	switch mode {

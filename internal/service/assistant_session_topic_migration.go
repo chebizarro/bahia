@@ -11,8 +11,8 @@ import (
 )
 
 // AssistantSessionTopicMigration is a one-time startup migration that adds the
-// single-letter "t" topic tag to legacy assistant session events published
-// before bahia-irsry.43. NIP-01 relays index only single-letter tags, so the
+// single-letter "t" topic tag to assistant session events published without
+// it. NIP-01 relays index only single-letter tags, so the
 // recovery REQ (which scopes on #t=assistant-session) misses untagged records.
 //
 // The migration enumerates the daemon's local event store completely (a local

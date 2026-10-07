@@ -17,7 +17,7 @@ type OutboxReader interface {
 }
 
 // OutboxRetrier is the optional subset of *localstore.Outbox behind the
-// operator retry tool (bahia-u5whr, §3.7): a failed entry goes back to
+// operator retry tool: a failed entry goes back to
 // pending and the daemon's outbox runner delivers it on its next pass, which
 // clears the coordinate's undelivered marker once the quorum accepts it.
 type OutboxRetrier interface {

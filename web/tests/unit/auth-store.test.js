@@ -1,7 +1,7 @@
 /**
- * Auth store tests — updated for Phase 4 §6.2 auth bootstrap.
+ * Auth store tests for the persisted-session auth bootstrap.
  *
- * Key behavioral changes from pre-Phase 4:
+ * Key behaviors:
  * - No REST probe, no backendAuthenticated, no compatibility flags
  * - Persisted session = authenticated immediately
  * - Background signer verification (non-blocking)
@@ -139,7 +139,7 @@ describe('Auth Store', () => {
       await authModule.initializeAuth();
       const state = authModule.authState;
 
-      // §6.2: persisted session = AUTHENTICATED IMMEDIATELY
+      // persisted session = AUTHENTICATED IMMEDIATELY
       expect(state.status).toBe('authenticated');
       expect(state.pubkey).toBe(session.pubkey);
       expect(state.lastAuthenticatedAt).toBe(session.lastAuthenticatedAt);
@@ -148,7 +148,7 @@ describe('Auth Store', () => {
     });
 
     it('should restore session even if extension is temporarily unavailable', async () => {
-      // §6.2: persisted session trusted immediately; signer verify is background
+      // persisted session trusted immediately; signer verify is background
       const session = {
         pubkey: 'c'.repeat(64),
         relays: {},
@@ -415,7 +415,7 @@ describe('Auth Store', () => {
       nip46Module.detectNip46.mockReturnValue({ available: true, provider: {} });
       await authModule.initializeAuth();
 
-      // §6.2: authenticated immediately, NIP-46 reconnect in background
+      // authenticated immediately, NIP-46 reconnect in background
       expect(authModule.authState.status).toBe('authenticated');
       expect(authModule.authState.authMethod).toBe('nip46');
     });

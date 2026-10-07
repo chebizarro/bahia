@@ -104,15 +104,6 @@ export class Fixer {
           replace: "  async click(selector: string): Promise<void> {\n    const page = this.getPage();\n    await page.waitForSelector(selector, { timeout: 5000, state: 'visible' });\n    await page.click(selector);\n  }",
           reason: diagnostic.message,
         };
-      case 'api_error':
-        return {
-          id: 'api-driver-error-context',
-          description: `Add richer API error context for ${diagnostic.scenario}`,
-          targetFile: 'test/e2e-agent/drivers/api.ts',
-          search: 'throw new Error(`API request failed (${response.status}): ${errorText}`);',
-          replace: 'throw new Error(`API request failed (${response.status}) ${options.method ?? \"GET\"} ${path}: ${errorText}`);',
-          reason: diagnostic.message,
-        };
       default:
         return null;
     }

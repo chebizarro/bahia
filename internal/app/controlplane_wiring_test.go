@@ -80,12 +80,11 @@ func (appWiringBackupResponder) PublishBackupRunResult(context.Context, *domain.
 }
 
 // NOTE: these two tests assert on private Reactor fields by reflection, which
-// is implementation-coupled (tracked in bahia-5iaa6). A 2026-09-19 attempt to
-// replace them with public-API assertions was reverted: the Reactor exposes no
-// behavioural path that observes whether these dependencies were injected, so
-// the replacement passed even with the wiring removed. A vacuous test is worse
-// than a coupled one. Fixing this properly needs an observable seam on the
-// Reactor, not a rewrite of the assertion.
+// is implementation-coupled. The Reactor exposes no behavioural path that
+// observes whether these dependencies were injected, so public-API assertions
+// would pass even with the wiring removed. A vacuous test is worse than a
+// coupled one. Fixing this properly needs an observable seam on the Reactor,
+// not a rewrite of the assertion.
 
 func TestControlPlaneReactorBackupOptionsInjectFinalSliceDependencies(t *testing.T) {
 	backupRegistry := &service.BackupRegistryService{}

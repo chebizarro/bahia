@@ -1,8 +1,6 @@
 # Metiq runtime enablement and validation
 
-Task: **bahia-agent-runtimes-infrastructure-20260810**
-
-This is a Track A artifact and a Track B operator procedure. Running the commands that contact Signet, relays, Bahia, or a runtime is Track B work. Do not migrate incumbents. Marjam and SNR identities, signer custody, runtime state, bindings, and storage remain untouched.
+This procedure enables a dedicated Metiq runtime without changing Marjam or SNR identities, signer custody, runtime state, bindings, or storage. Commands that contact Signet, relays, Bahia, or a runtime are production mutations and require the normal operator approval boundary.
 
 ## Inputs and boundaries
 
@@ -10,7 +8,7 @@ This is a Track A artifact and a Track B operator procedure. Running the command
 - Keep the existing SoulFactory Signet and LLM secret injection unchanged. The enablement overlay contains no secret.
 - Render `deploy/soulfactory/metiq-signet-enrollment.json.template` to a mode-`0600` host file. It contains public keys and protected file paths only. Leave `runtime_pubkey` and `managed_pubkey` empty for a new identity; `enroll` binds both to the public key returned by the protected Signet provisioning handoff. For an existing enrollment, they may remain empty and are recovered from the durable secret-free contract.
 - Store the Signet provisioner credential in the configured host file, owned by the executing UID and mode `0600`. Never export it in a host environment, pass it in argv, print it, or copy it into evidence.
-- Pin the Bahia, Metiq bridge, OpenClaw bridge, Signet, and relay images by `repository@sha256:<64-hex>` before Track B starts.
+- Pin the Bahia, Metiq bridge, OpenClaw bridge, Signet, and relay images by `repository@sha256:<64-hex>` before enablement.
 
 ## Capture the prior configuration
 
@@ -37,7 +35,7 @@ scripts/rehearse_metiq_config_rollback.sh \
 chmod 0444 "$change_dir/rollback-rehearsal.json"
 ```
 
-The command applies candidate and prior copies in an isolated temporary directory, proves byte-for-byte restoration, and emits only SHA-256 digests. This does not restart Bahia or contact infrastructure. Track B repeats the restoration against the real config boundary during the controlled rollback gate.
+The command applies candidate and prior copies in an isolated temporary directory, proves byte-for-byte restoration, and emits only SHA-256 digests. This does not restart Bahia or contact infrastructure. Repeat the restoration against the real config boundary during the controlled rollback gate.
 
 ## Provision the dedicated Metiq Signet identity
 
@@ -68,12 +66,12 @@ metiq-signet-enrollment -config /etc/bahia/metiq-signet-enrollment.json compensa
 
 Revoke/compensate never deletes a valid Signet-custodied identity and never touches OpenClaw or incumbent material. A failed connectivity proof revokes the new exact client but retains the protected one-time handoff and retry-stable client key for inspected recovery.
 
-## Track B enablement gates
+## Enablement gates
 
 1. Capture Marjam and SNR public event IDs and one-way state fingerprints before change.
 2. Confirm Bahia, Signet, relay, OpenClaw, and Metiq health/readiness; confirm all promoted image/source digests.
-3. Install `candidate.yaml` atomically, restart only Bahia, and verify `agent_runtimes=[openclaw,metiq]` plus exact pubkey pins. Do not publish a deployment intent from this Track A session.
-4. Start the Metiq bridge on its dedicated host/container boundary with persistent idempotency/binding state, health/readiness, limits, restart policy, logs, and backup/restore configured by Track B.
+3. Install `candidate.yaml` atomically, restart only Bahia, and verify `agent_runtimes=[openclaw,metiq]` plus exact pubkey pins. Do not publish an unrelated deployment intent during this change.
+4. Start the Metiq bridge on its dedicated host/container boundary with persistent idempotency/binding state, health/readiness, limits, restart policy, logs, and backup/restore configured for production.
 5. Confirm the exact-client Signet policy permits only encrypted-state NIP-78 `30078`, capability `30317`, and correlated runtime-result `38386` signing; then require a fresh signed Metiq `30317` from the pinned runtime pubkey, addressed to the trusted controller and advertising `soulfactory.provision` plus exactly one lifecycle method selected for the disposable test.
 6. Provision only a disposable soul. Capture event IDs for `31952 → 5950 → 38384 → 38386 → 31951/7950`.
 7. Inspect Metiq local state after first provision, exact provision replay, conflicting provision replay, first suspend, exact suspend replay, conflicting suspend replay, fresh-key re-suspend of the already-suspended agent, unsupported direct request, and restart. Require both suspend successes to report `result.state == "suspended"`, require the re-suspend result to report `result.idempotent == true`, and record counts plus one-way binding and process-instance fingerprints only.

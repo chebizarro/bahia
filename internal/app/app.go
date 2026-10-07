@@ -97,7 +97,7 @@ type App struct {
 	localOutbox               *localstore.Outbox
 	reloadMu                  sync.Mutex
 
-	// Phase 3 intent framework (F1).
+	// Intent framework.
 	TrustSet            *controlplane.TrustSet
 	IntentProcessor     *controlplane.IntentProcessor
 	IntentReadiness     *controlplane.ReadinessTracker
@@ -254,7 +254,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	tenantRBAC := newTenantRBAC(orgMemberRepo)
 
-	// Local event store and publish outbox (bahia-irsry.10.1, .10.4). They are
+	// Local event store and publish outbox. They are
 	// present at every tier: the store is the inbound subscriptions' cache,
 	// dedup set and per-(relay, filter) cursors, and the daemon's own outputs;
 	// the outbox holds every event the daemon publishes until its relays
@@ -312,7 +312,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	loomClient := loom.NewClient(cfg.Loom, cfg.Nostr.PrivateKey, relayPool, logger, loomClientOptions...)
 
-	// Image verifier: use Harbor (legacy), or the new multi-registry adapter, or no-op.
+	// Image verifier: Harbor, the multi-registry adapter, or no-op.
 	var verifier service.ImageVerifier
 	var signVerifier controlplane.SignatureVerifier
 	var pipelineRegistryInspector registryAdapter.ImageInspector
@@ -353,7 +353,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Policy service gates both artifact and runtime-release deployment intents.
 	// Its security store is set further down, once the canonical security
-	// publisher exists (audit B-32): it never reads the SQL security tables.
+	// publisher exists: it never reads the SQL security tables.
 	policySvc := service.NewPolicyService(policyRepo, sigRepo, sbomRepo, logger)
 
 	// Registry service.
@@ -388,7 +388,7 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane),
 		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore))
 	// nostr_events for its readers: PostgreSQL when available, else the
-	// local event store (B-12). An event a producer records there as pending
+	// local event store. An event a producer records there as pending
 	// delivery goes to the outbox of its publish target.
 	localOutboxAdmit := func(ctx context.Context, ev nostr.Event, target, entityType string, entityID *uuid.UUID) error {
 		switch target {
@@ -405,7 +405,7 @@ func New(cfg *config.Config) (*App, error) {
 		nostrEventRepo = nostrAdapter.NewLocalEventRepository(localEventStore, localOutboxAdmit)
 	}
 	// Audit writers always use the local event store backed by the local
-	// outbox, even when PostgreSQL is available (bahia-irsry.62). This
+	// outbox, even when PostgreSQL is available. This
 	// decouples audit publishing from PostgreSQL and makes the drain loop
 	// unnecessary; the publisher archives the outcome to PostgreSQL for
 	// its readers, best effort.
@@ -464,7 +464,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	var publicRoutePlanner *service.PublicRoutePlanner
 	var internalRouteBackend *routingAdapter.NginxBackend
-	// bahia-as2bo: edge-route convergence needs the routing provider's API
+	// edge-route convergence needs the routing provider's API
 	// token (edge_routing.api_token_ref). That token is a secret value, which
 	// the canonical secret registry does not carry (it holds references); it
 	// exists only in the PostgreSQL secret store, decrypted with the service
@@ -485,7 +485,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Adopted workload orchestration is wired further down, once the Nostr
-	// projector it publishes through exists (audit B-35). Privileged routes
+	// projector it publishes through exists. Privileged routes
 	// are opt-in; the service stays nil unless its route family is enabled.
 	var adoptionSvc *service.AdoptionService
 	var runtimeApplyLock *service.RuntimeApplyLock
@@ -525,7 +525,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	// Route-canary and managed-instance supervision read their desired set and
 	// their durable progress from the daemon's canonical records in the local
-	// event store (B-33, B-34). They need the service key, never PostgreSQL.
+	// event store. They need the service key, never PostgreSQL.
 	localSupervisionState, supervisionStateErr := service.NewLocalSupervisionState(localEventStore, servicePubkey)
 	supervisionFromLocalState := supervisionStateErr == nil
 	if !supervisionFromLocalState && (cfg.RouteCanaries.Enabled || cfg.Supervision.Enabled) {
@@ -559,7 +559,7 @@ func New(cfg *config.Config) (*App, error) {
 			} else {
 				// The projector mints each route record strictly after the one
 				// the local store holds, and withdraws a deleted route with a
-				// tombstone on its coordinate (bahia-as2bo).
+				// tombstone on its coordinate.
 				routeCanaryProjector.SetLocalState(localSupervisionState)
 				storeOpts = append(storeOpts, service.WithRouteCanaryCanonicalProjector(routeCanaryProjector))
 			}
@@ -666,7 +666,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// One-shot migration: move any pre-upgrade pending PostgreSQL outbox rows
 	// into the local outbox so they are delivered by the local runner. After
-	// this, no PostgreSQL drain loop runs (bahia-irsry.62).
+	// this, no PostgreSQL drain loop runs.
 	if pool != nil {
 		for _, pub := range []*nostrAdapter.Publisher{nostrPub, controlPlanePub} {
 			if n, err := pub.MigratePendingPostgresRows(ctx); err != nil {
@@ -714,7 +714,7 @@ func New(cfg *config.Config) (*App, error) {
 	registerSignetHealthCheck(healthProvider, loomSignetManager)
 	registerUndeliveredHealthCheck(healthProvider, localEventStore)
 	if supervisionApplyLock != nil {
-		// bahia-as2bo: the process-local fallback of the recovery apply lock
+		// the process-local fallback of the recovery apply lock
 		// excludes only this daemon's applies, so it is a degraded condition
 		// operators must see (docs/runbooks/managed-instance-supervision.md).
 		healthProvider.RegisterCheck("supervision_apply_lock", func() HealthCheck {
@@ -823,7 +823,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		return details
 	})
-	// Phase 3 intent framework (F1): TrustSet, IntentProcessor, ReadinessTracker.
+	// Intent framework: TrustSet, IntentProcessor, ReadinessTracker.
 	// These are wired unconditionally; domain handlers register at startup when
 	// their domain is not listed in nostr.intent_domains_disabled.
 	trustSetOpts := []controlplane.TrustSetOption{
@@ -855,9 +855,9 @@ func New(cfg *config.Config) (*App, error) {
 		logger,
 	)
 
-	// Readiness tracked by HealthProvider via ReadinessTracker (§6.2).
+	// Readiness tracked by HealthProvider via ReadinessTracker.
 
-	// Phase 3 intent subscriber (F1): runs when intent domains are enabled.
+	// Intent subscriber: runs when intent domains are enabled.
 	// Author-scoped subscription via TrustSet, feeding the processor, marking
 	// readiness after first catch-up.
 	var intentSubscriber *controlplane.IntentSubscriber
@@ -874,7 +874,7 @@ func New(cfg *config.Config) (*App, error) {
 		bgManager.RegisterWithOptions(intentSubscriber, RunnerRequired(false))
 	}
 
-	// Phase 3 intent authors syncer (F1 §7.1): on startup and whenever the
+	// Intent authors syncer: on startup and whenever the
 	// TrustSet changes, push the current set of intent-permitted pubkeys to
 	// each Bahia-owned sidecar via NIP-86 setintentauthors.
 	var intentAuthorsSyncer *controlplane.IntentAuthorsSyncer
@@ -897,8 +897,8 @@ func New(cfg *config.Config) (*App, error) {
 		}
 	}
 
-	// The legacy nostr_events migration (internal/nostrmigration) is not on
-	// the startup path (B-28): operators run it once with
+	// The nostr_events migration (internal/nostrmigration) is not on
+	// the startup path: operators run it once with
 	// `bahia-migrate nostr` (see docs/user-guide/cli-reference.md).
 	bgManager.RegisterWithOptions(&bootstrapperRunner{
 		bootstrapper:    bootstrapper,
@@ -1056,8 +1056,8 @@ func New(cfg *config.Config) (*App, error) {
 	var dnsAgentHealthReader *dnsAdapter.AgentHealthReader
 	var dnsZoneSyncPublisher *dnsAdapter.DeferredZoneSyncPublisher
 	if cfg.DNS.Enabled {
-		// Phase 3 D1: create agent health reader and deferred publisher for
-		// capability-negotiated backend switching (C-34).
+		// create agent health reader and deferred publisher for
+		// capability-negotiated backend switching.
 		dnsAgentHealthReader = dnsAdapter.NewAgentHealthReader(logger)
 		dnsZoneSyncPublisher = &dnsAdapter.DeferredZoneSyncPublisher{}
 		dnsZones, dnsResolver, dnsBackendClosers, err = buildDNSRuntime(ctx, cfg.DNS, controlPlaneRelays, controlPlaneSigner, servicePubkey, dnsAgentHealthReader, dnsZoneSyncPublisher, logger)
@@ -1100,7 +1100,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		bgManager.RegisterWithOptions(dnsReconciler)
 
-		// Phase 3 D1: subscribe to NIP-38 agent health events so the daemon
+		// subscribe to NIP-38 agent health events so the daemon
 		// reads agent health and capabilities from events instead of RPC.
 		if dnsAgentHealthReader != nil {
 			var agentPubkeys []string
@@ -1143,12 +1143,11 @@ func New(cfg *config.Config) (*App, error) {
 	// the control-plane outbox publisher, so every projection gets an outbox
 	// row and per-relay retry to the control-plane relays.
 	projectorOpts := []nostrAdapter.ProjectorOption{
-		// Phase 3 B1: WithBackupProjectionSource removed. Canonical records
-		// are now published by BackupCanonicalPublisher wired to the registry.
+		// Backup canonical records are published by BackupCanonicalPublisher,
+		// wired to the registry.
 		nostrAdapter.WithMLProjectionSource(mlRegistry),
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
-		// Phase 3 W1: WithWorkerReadModelProjectionSource removed — worker read
-		// models are published directly from the mutation site (bahia-irsry.11.14).
+		// Worker read models are published directly from the mutation site.
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
 	}
 	if dnsProjector != nil {
@@ -1161,11 +1160,10 @@ func New(cfg *config.Config) (*App, error) {
 	if dnsPolicyRepo != nil {
 		projectorOpts = append(projectorOpts, nostrAdapter.WithDNSPolicyProjectionSource(dnsPolicyRepositoryProjectionSource{repo: dnsPolicyRepo}))
 	}
-	// Phase 3 X1: WithSBOMProjectionSource removed. SBOM events are published
-	// from the SBOM orchestrator's mutation site (bahia-irsry.11.17).
-	// Phase 3 X1: warm-start covers ALL cp-state domains. Every domain's
-	// canonical records are now published from mutation sites; warm-start
-	// re-publishes only stale or missing records on restart.
+	// SBOM events are published from the SBOM orchestrator's mutation site.
+	// Warm-start covers ALL cp-state domains: every domain's canonical
+	// records are published from mutation sites, and warm-start re-publishes
+	// only stale or missing records on restart.
 	warmStartDomains := nostrAdapter.CPStateDomains()
 	if len(enabledDomains) == 0 {
 		// No intent subscriber → readiness has no filters. Register and
@@ -1178,7 +1176,7 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithIntentDomains(warmStartDomains),
 	)
 	// The projector's memory of what it published is its own latest events
-	// in the local event store, never PostgreSQL (B-3).
+	// in the local event store, never PostgreSQL.
 	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
 	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePub, projectionHistory, logger, projectorOpts...)
 	controlPlanePub.OnDeliveryAbandoned(nostrProjector.ForgetAbandonedProjection)
@@ -1206,20 +1204,19 @@ func New(cfg *config.Config) (*App, error) {
 	// same coordinates to, built and signed through the projector's own
 	// builders and coordinate state, so both writers emit one record shape
 	// and a projection of an unchanged state is not re-signed. Once the
-	// quorum accepted, the control-plane outbox retries the remaining relays
-	// (bahia-irsry.41).
+	// quorum accepted, the control-plane outbox retries the remaining relays.
 	var relayFirstRegistry *service.RelayFirstRegistry
 	if cfg.Nostr.PublishEnabled || cfg.Mode == "" || cfg.Mode == "full" {
 		statePublisher := nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub)
 		relayFirstRegistry = service.NewRelayFirstRegistry(registry, statePublisher, logger)
-		// Phase 3 S2: wire the cp-state publisher for build/artifact/intent/run
+		// wire the cp-state publisher for build/artifact/intent/run
 		// families so RegistryService publishes canonical state directly from
-		// its mutation methods (bahia-irsry.11.7).
+		// its mutation methods.
 		registry.SetCPStatePublisher(statePublisher)
 		logger.Info("relay-first write path enabled for core registry mutations",
 			zap.String("mode", "full"))
 	}
-	// Phase 3 F3: register environment intent handler when "environment" is
+	// register environment intent handler when "environment" is
 	// enabled by the computed domain set. Uses the relay-first registry (which publishes the
 	// canonical 30900 via PublishBeforeCommit) or falls back to the plain
 	// registry when relay-first is not configured.
@@ -1240,19 +1237,19 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("environment intent handler registered")
 	}
 
-	// Phase 3 S1: wire the reconciler's direct state publisher and tombstone
+	// wire the reconciler's direct state publisher and tombstone
 	// handler so runtime state is published to relays without the projector.
 	if rec != nil && relayFirstRegistry != nil {
 		statePublisher := nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub)
 		rec.SetRuntimeStatePublisher(statePublisher)
 		tombstoneHandler := reconcile.NewStateTombstoneHandler(statePublisher, logger)
 		tombstoneHandler.SetupSubscriptions(publisher)
-		logger.Info("runtime state direct publisher and tombstone handler wired (Phase 3 S1)")
+		logger.Info("runtime state direct publisher and tombstone handler wired")
 	}
 
 	nostrProjector.SetupSubscriptions(publisher)
 
-	// --- Audit B-35: adoption is relay-canonical ---
+	// --- Adoption is relay-canonical ---
 	// Every record an adoption produces is published as signed cp-state
 	// through the projector's outbox before the optional SQL index is
 	// written, and adoption plans from the daemon's canonical records in the
@@ -1308,7 +1305,7 @@ func New(cfg *config.Config) (*App, error) {
 		return check
 	})
 
-	// --- Phase 3 B1: Backup canonical publisher and intent handler ---
+	// --- Backup canonical publisher and intent handler ---
 	// BackupCanonicalPublisher follows the MLCanonicalPublisher pattern: holds
 	// a *Projector reference and publishes through the shared signing/outbox
 	// pipeline. The cpStateFamilies table is the single envelope source.
@@ -1345,9 +1342,9 @@ func New(cfg *config.Config) (*App, error) {
 	// --- end B1 wiring ---
 
 	var dnsCanonicalPub *nostrAdapter.DNSCanonicalPublisher
-	// Phase 3 D1: wire canonical DNS publisher. The reconciler calls this after
+	// wire canonical DNS publisher. The reconciler calls this after
 	// each material reconcile so DNS records publish once per mutation instead
-	// of O(fleet) per projector tick (B-17).
+	// of O(fleet) per projector tick.
 	if dnsReconciler != nil {
 		dnsCanonicalPub = nostrAdapter.NewDNSCanonicalPublisher(nostrProjector, logger)
 		if err := dnsCanonicalPub.HydrateFromStore(ctx); err != nil {
@@ -1359,17 +1356,17 @@ func New(cfg *config.Config) (*App, error) {
 		if dnsZoneSyncPublisher != nil {
 			dnsZoneSyncPublisher.SetDelegate(dnsCanonicalPub)
 		}
-		logger.Info("DNS canonical publisher wired to reconciler (Phase 3 D1)")
+		logger.Info("DNS canonical publisher wired to reconciler")
 	}
 
-	// --- D70 DNS intent registration (kept separate from D69 app wiring) ---
+	// --- DNS intent registration ---
 	if enabledDomains["dns"] && nostrProjector.Enabled() && dnsOperator != nil && dnsCanonicalPub != nil {
 		mutations := &service.DNSMutationService{Zones: dnsZoneRepo, Policies: dnsPolicyRepo, Endpoints: dnsEndpointRepo, Backends: dnsBackendRepo, Canonical: dnsCanonicalPub, Reconciler: dnsOperator.(service.DNSMutationReconciler)}
 		intentProcessor.RegisterHandler("dns", controlplane.NewDNSIntentHandler(dnsOperator, dnsCanonicalPub, mutations))
 	}
-	// --- end D70 DNS intent registration ---
+	// --- end DNS intent registration ---
 
-	// Phase 3 F2: register service domain intent handler.
+	// register service domain intent handler.
 	// Uses the relay-first registry when available (canonical 30900 published
 	// before DB write), falling back to the plain registry.
 	{
@@ -1463,8 +1460,8 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("policy intent handler registered")
 	}
 
-	// Phase 3 L1: LLMRouteStatePublisher for canonical 30900 via PublishBeforeCommit.
-	// Created unconditionally so both the legacy (non-intent) ContextVM path and
+	// LLMRouteStatePublisher for canonical 30900 via PublishBeforeCommit.
+	// Created unconditionally so both the (non-intent) ContextVM path and
 	// the intent handler path use the same sign-and-publish closure.
 	var llmRoutePublisher controlplane.LLMRouteStatePublisher
 	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
@@ -1523,7 +1520,7 @@ func New(cfg *config.Config) (*App, error) {
 		))
 		logger.Info("LLM route intent handler registered")
 	}
-	// Phase 3 P1: register package intent handler, publishing through the
+	// register package intent handler, publishing through the
 	// shared cp-state path (controlStateEnvelope + publishAuthoritative).
 	if enabledDomains["package"] && packageRegistrySvc != nil {
 		packageAuthStore, _ := packageProjection.(repository.PackageAuthorizationStore)
@@ -1546,12 +1543,11 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("package intent handler registered")
 	}
 
-	// Phase 3 C1: unified confidential cp-state crypto (§1.7).
+	// unified confidential cp-state crypto.
 	// Per-org content key (OCK) encrypted with XChaCha20-Poly1305 AEAD.
 	// OCK distributed to org members + service via NIP-44 through signer interface.
-	// Replaces both the O1 sha256-derived key path and the N1 NIP-44 self-encryption.
-	//
-	// Legacy O1 encryptor retained for dual-read during migration.
+	// Records in the older O1 (sha256-derived key) and N1 (NIP-44
+	// self-encryption) formats are read through the dual-read encryptor below.
 	var legacyO1Encryptor *controlplane.OrgStateEncryptorImpl
 	if cfg.Nostr.PrivateKey != "" {
 		orgKeySum := sha256.Sum256([]byte("bahia org state key v1\x00" + strings.TrimSpace(cfg.Nostr.PrivateKey)))
@@ -1564,7 +1560,7 @@ func New(cfg *config.Config) (*App, error) {
 		})
 	}
 
-	// Phase 3 C1: create OCKManager and ConfidentialEncryptor.
+	// create OCKManager and ConfidentialEncryptor.
 	var confidentialEncryptor *controlplane.ConfidentialEncryptor
 	if controlPlaneSigner != nil && servicePubkey != "" {
 		ockHistory := nostrAdapter.NewProjectorOCKEnvelopeHistory(projectionHistory)
@@ -1591,7 +1587,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// SoulFactory is built here, after the confidential encryptor, because
 	// its canonical adapter-ledger records are fleet-OCK encrypted
-	// (bahia-nfc95). Nothing earlier depends on the runtime, and its runners
+	// Nothing earlier depends on the runtime, and its runners
 	// are registered before the background manager starts.
 	soulFactorySeams := soulFactorySagaSeams{Events: localEventStore, Publisher: nostrPub, ServicePubkey: servicePubkey}
 	if confidentialEncryptor != nil {
@@ -1618,7 +1614,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Hourly retention: one housekeeping wakeup for every record whose expiry
 	// no event signals. ContextVM responses need the SQL store; OpenClaw saga
-	// runs and their adapter-ledger records (bahia-fpubg) need only the
+	// runs and their adapter-ledger records need only the
 	// SoulFactory runtime, so the runner is registered whenever either exists.
 	var retentionTasks []RetentionTask
 	if contextVMResponseStore != nil {
@@ -1631,7 +1627,7 @@ func New(cfg *config.Config) (*App, error) {
 		bgManager.RegisterWithOptions(NewRetentionRunner(defaultRetentionInterval, logger, retentionTasks...), RunnerRequired(false))
 	}
 
-	// Phase 3 C1: create encrypted canonical publisher for org state.
+	// create encrypted canonical publisher for org state.
 	var orgCanonicalPub *nostrAdapter.OrgCanonicalPublisher
 	if nostrProjector != nil && confidentialEncryptor != nil {
 		orgCanonicalPub = nostrAdapter.NewOrgCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
@@ -1646,9 +1642,9 @@ func New(cfg *config.Config) (*App, error) {
 		}
 	}
 
-	// Phase 3 O1: register org intent handler when "org" is enabled.
+	// register org intent handler when "org" is enabled.
 	// The handler processes org/member/invite intents and publishes canonical
-	// cp-state through the OrgCanonicalPublisher with encrypted content (§1.7).
+	// cp-state through the OrgCanonicalPublisher with encrypted content.
 	if enabledDomains["org"] && orgRepo != nil && orgMemberRepo != nil && orgInviteRepo != nil {
 		orgHandler := controlplane.NewOrgIntentHandler(controlplane.OrgIntentHandlerConfig{
 			Orgs:      orgRepo,
@@ -1685,7 +1681,7 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("org intent handler registered")
 	}
 
-	// Phase 3 O1: gift-wrapped intent ingress for sensitive domains (§1.7).
+	// gift-wrapped intent ingress for sensitive domains.
 	// Shared by O1 (org) and N1 (secret, notification). Plaintext 30900 intents
 	// for these domains are rejected with a bounded status.
 	var giftWrapIngress *controlplane.IntentGiftWrapIngress
@@ -1699,12 +1695,12 @@ func New(cfg *config.Config) (*App, error) {
 		intentProcessor.SetGiftWrapIngress(giftWrapIngress)
 		logger.Info("gift-wrap intent ingress registered for sensitive domains")
 	}
-	// Phase 3 C1: relay member event handler for TrustSet hydration from
-	// encrypted membership events (§2.5 item 3). Wired for warm-start and
+	// relay member event handler for TrustSet hydration from
+	// encrypted membership events. Wired for warm-start and
 	// live member publishes. Even when Postgres is configured, the relay
 	// source has highest precedence in TrustSet resolution.
-	// Uses the new confidential encryptor with legacy O1 fallback for
-	// dual-read during migration.
+	// Uses the confidential encryptor with an O1-format fallback for
+	// dual-read.
 	var relayMemberEventHandler *controlplane.RelayMemberEventHandler
 	if confidentialEncryptor != nil || legacyO1Encryptor != nil {
 		relayMemberEventHandler = controlplane.NewRelayMemberEventHandler(
@@ -1712,7 +1708,7 @@ func New(cfg *config.Config) (*App, error) {
 		)
 
 		// (ii) Live: after OrgCanonicalPublisher publishes a member record
-		// (both legacy ContextVM and intent paths), feed it through the handler
+		// (both ContextVM and intent paths), feed it through the handler
 		// so TrustSet relay members stay in sync in real time.
 		if orgCanonicalPub != nil {
 			orgCanonicalPub.SetOnMemberPublished(func(ctx context.Context, encryptedContent string, legacyKind int, dTag, topic string) {
@@ -1737,7 +1733,7 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("relay member event handler created and wired for TrustSet hydration")
 	}
 
-	// Phase 3 L1: wire LLM route state cp-state publisher into the registry service
+	// wire LLM route state cp-state publisher into the registry service
 	// so state mutations publish 30900 records directly instead of through the projector.
 	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
 		var llmStatePubMu sync.Mutex
@@ -1809,7 +1805,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 	}
 
-	// Phase 3 M1: wire ML cp-state publisher into registry service so state
+	// wire ML cp-state publisher into registry service so state
 	// mutations publish canonical records directly instead of through the projector.
 	if nostrProjector.Enabled() && mlRegistry != nil {
 		mlCanonicalPub := nostrAdapter.NewMLCanonicalPublisher(nostrProjector, logger)
@@ -1817,14 +1813,14 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Info("ML canonical cp-state publisher wired into registry service")
 	}
 
-	// --- D70 ML intent registration (kept separate from D69 app wiring) ---
+	// --- ML intent registration ---
 	if enabledDomains["ml"] && nostrProjector.Enabled() && mlRegistry != nil {
 		intentProcessor.RegisterHandler("ml", controlplane.NewMLIntentHandler(mlRegistry, registry, workerRepo))
 	}
-	// --- end D70 ML intent registration ---
+	// --- end ML intent registration ---
 
-	// Phase 3 §1.7: Legacy OCK migration — re-publish legacy-format
-	// confidential records under the per-org content key scheme at startup.
+	// LegacyOCKMigrator re-publishes confidential records still in an old
+	// encryption format under the per-org content key scheme at startup.
 	// The migrator runs as a post-warm-start hook on the projector so that
 	// history is up to date from all relays before scanning.
 	if nostrProjector != nil && confidentialEncryptor != nil {
@@ -1911,7 +1907,7 @@ func New(cfg *config.Config) (*App, error) {
 				})
 			}
 		}
-		// bahia-fbyo5: the operator allowlists are fleet-OCK encrypted, so they
+		// the operator allowlists are fleet-OCK encrypted, so they
 		// are only published when the confidential encryptor exists.
 		views := &operationalViewsRunner{
 			publisher: viewPublisher, blossom: blossomClient,
@@ -1993,7 +1989,7 @@ func New(cfg *config.Config) (*App, error) {
 	// The initiator consults ingested runs so a build/request adopts an existing
 	// trusted 5401 for the same (a, commit, workflow) instead of competing.
 	var hiveRunLookup giteaAdapter.WorkflowRunLookup
-	// Audit C-48: signed Hive-CI evidence (5401 runs, 5402 results, 4903
+	// Signed Hive-CI evidence (5401 runs, 5402 results, 4903
 	// release attestations and the workers' 10100 advertisements) is read from
 	// the local event store, and the daemon's own result/policy state is
 	// canonical cp-state published through the outbox. The store needs the
@@ -2053,7 +2049,7 @@ func New(cfg *config.Config) (*App, error) {
 			if controlPlaneSigner == nil {
 				return nil, fmt.Errorf("Hive-CI release registration requires a control-plane audit signer")
 			}
-			// bahia-xjdo9: the accepted-release ledger is canonical cp-state in
+			// the accepted-release ledger is canonical cp-state in
 			// the local event store (CanonicalRepository.CommitAcceptedRelease);
 			// the SQL accepted-release table is an index mirrored afterwards, so
 			// release ingestion needs no database.
@@ -2143,7 +2139,7 @@ func New(cfg *config.Config) (*App, error) {
 				"sql_index": fmt.Sprintf("%t", dbAvailable && pool != nil),
 				// Build initiation resolves repository credentials (secret
 				// values) from the PostgreSQL secret store; without it new
-				// initiations fail closed at that step (bahia-xjdo9).
+				// initiations fail closed at that step.
 				"initiator_credential_store": fmt.Sprintf("%t", secretRepo != nil && secretEncryptor != nil),
 			}}
 		if hiveRepo == nil {
@@ -2153,7 +2149,7 @@ func New(cfg *config.Config) (*App, error) {
 		return check
 	})
 
-	// Audit B-32: security state (targets, run claims, schedules, findings)
+	// Security state (targets, run claims, schedules, findings)
 	// is canonical cp-state. The store publishes first and reads from the
 	// local event store, so it needs the projector and the confidential
 	// encryptor but no database; securityRepo is an optional SQL index.
@@ -2169,7 +2165,7 @@ func New(cfg *config.Config) (*App, error) {
 			// bring the index up to the canonical records. Policies go
 			// first: schedules derive only from published policy cp-state,
 			// so a policy that exists only in SQL would otherwise never be
-			// scheduled (bahia-u5whr).
+			// scheduled.
 			nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
 				if err := policySvc.BackfillCanonicalPolicies(ctx, localOutbox, service.PolicyCanonicalPublisher(policyPublisher)); err != nil {
 					logger.Warn("policy canonical backfill failed; retrying on next start", zap.Error(err))
@@ -2223,7 +2219,7 @@ func New(cfg *config.Config) (*App, error) {
 	// It does not create or redeem Cashu tokens; cashu.enabled live wallet mode
 	// remains fail-closed until mint-backed proof flows are implemented.
 	//
-	// Audit B-31: payment state is canonical cp-state. The service publishes
+	// Payment state is canonical cp-state. The service publishes
 	// first and reads from the local event store, so it needs the projector and
 	// the confidential encryptor but no database; paymentRepo is an optional
 	// SQL index rebuilt from the retained records once the store has caught up.
@@ -2265,7 +2261,7 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	notifDispatcher.SetupSubscriptions(publisher)
 
-	// --- Phase 3 N1: Secret and notification intent handlers ---
+	// --- Secret and notification intent handlers ---
 	// Sensitive domains whose intents arrive as NIP-59 gift wraps (kind 1059)
 	// through the shared gift-wrapped intent ingress (O1; SensitiveDomains
 	// includes "secret" and "notification").
@@ -2296,7 +2292,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Register the notification intent handler when the notification domain is
 	// enabled. The dispatcher's OnChannelChanged method is the event-driven
-	// notifier that replaces DB polling (Phase 3 N1).
+	// channel-change notifier; no DB polling runs.
 	if enabledDomains["notification"] && notifRepo != nil {
 		intentProcessor.RegisterHandler("notification", controlplane.NewNotificationIntentHandler(
 			controlplane.NotificationIntentHandlerConfig{
@@ -2637,7 +2633,7 @@ func New(cfg *config.Config) (*App, error) {
 		if hygieneObservationSource != nil {
 			encryptedRequestTransport.RegisterContextVMResponseHandler(hygieneObservationSource.HandleContextVMResponse)
 		}
-		// Phase 3 O1: wire gift-wrap intent ingress to the existing 1059
+		// wire gift-wrap intent ingress to the existing 1059
 		// subscription. When an unwrapped inner event is kind 30900 with
 		// t=bahia-intent, it is routed to the ingress instead of ContextVM.
 		if giftWrapIngress != nil {
@@ -2667,7 +2663,7 @@ func New(cfg *config.Config) (*App, error) {
 		// mirror initiator is unavailable, so browsers receive a signed,
 		// fail-closed error instead of falling back to credential-bearing flows.
 		var hiveCIBuildStarter controlplane.HiveCIBuildStarter
-		// Audit C-49: the initiation journal (prepared signed events, pinned
+		// The initiation journal (prepared signed events, pinned
 		// job, per-run publisher key in the service-only layer) is a
 		// confidential record in the local event store; the build id is
 		// derived from the signed request. PostgreSQL is an optional index,
@@ -2700,7 +2696,7 @@ func New(cfg *config.Config) (*App, error) {
 			logger.Error("Hive-CI build initiator disabled: the initiation journal needs the Nostr projector and the confidential encryptor",
 				zap.String("reason", "hiveci_initiation_journal_unavailable"))
 		}
-		// bahia-xjdo9: the initiator's only database dependency is credential
+		// the initiator's only database dependency is credential
 		// resolution. The upstream repository credential and the mirror-read
 		// password are secret values, which the canonical secret registry does
 		// not carry (it holds references); they live only in the PostgreSQL
@@ -2825,8 +2821,8 @@ func New(cfg *config.Config) (*App, error) {
 			reactorOpts = append(reactorOpts, controlplane.WithDNSOperator(dnsOperator))
 		}
 		reactorOpts = append(reactorOpts, controlplane.WithWorkerRepository(workerRepo), controlplane.WithWorkerCleanupOrchestrator(workerCleanupOrchestrator))
-		// Phase 3 W1: wire worker read model publisher for direct publication
-		// from mutation sites (bahia-irsry.11.14).
+		// wire worker read model publisher for direct publication
+		// from mutation sites.
 		workerReadModelPublisher := controlplane.NewWorkerReadModelPublisher(
 			controlPlanePool, controlPlaneSigner, workerReadModelSvc, logger)
 		reactorOpts = append(reactorOpts,
@@ -3135,7 +3131,7 @@ func (r *inMemoryProjectionMetaRepo) Upsert(_ context.Context, meta repository.R
 }
 
 // projectionMetaVersion orders metadata like the cache orders projections:
-// later timestamp, then lowest source event id (C-13). Keeping the higher id on
+// later timestamp, then lowest source event id. Keeping the higher id on
 // a same-second tie would let a third version between the two win.
 func projectionMetaVersion(meta repository.RelayProjectionMeta) nostrutil.Version {
 	return nostrutil.Version{CreatedAt: nostr.Timestamp(meta.UpdatedAt.Unix()), ID: meta.SourceEventID}
@@ -3432,9 +3428,7 @@ func setupWorkerPressureSubscriptions(
 
 // setupWorkerReadModelEventSubscriptions wires event-bus subscriptions so that
 // deployment-run and ML-run lifecycle events trigger an immediate worker
-// read-model republish (assignment, drain, eligibility). This replaces the
-// projector's reactive handleEvent cases removed in Phase 3 W1
-// (bahia-irsry.11.14).
+// read-model republish (assignment, drain, eligibility).
 func setupWorkerReadModelEventSubscriptions(
 	pub events.Publisher,
 	workerReadModelPublisher *controlplane.WorkerReadModelPublisher,
@@ -4229,7 +4223,7 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("configuring DNS dnsmasq agent backend %q: %w", ref, err)
 			}
-			// Phase 3 D1 (C-34): wrap with capability-aware backend. When the
+			// wrap with capability-aware backend. When the
 			// agent advertises "zone-subscribe" via NIP-38, use event publish;
 			// otherwise fall back to ContextVM RPC for old agents.
 			var backend dnsAdapter.Backend
@@ -4279,7 +4273,7 @@ func buildDNSRuntime(ctx context.Context, cfg config.DNSConfig, controlPlaneRela
 // agentHealthSubscriber is a BackgroundRunner that subscribes to NIP-38 kind
 // 30315 health status events from DNS agents, feeding them to the
 // AgentHealthReader so the daemon reads agent health and capabilities from
-// events instead of ContextVM Health() RPCs (C-34, Phase 3 D1).
+// events instead of ContextVM Health() RPCs.
 type agentHealthSubscriber struct {
 	pool    *nostrAdapter.RelayPool
 	pubkeys []string
@@ -5181,7 +5175,7 @@ func loadAssistantSessionsWithTimeout(ctx context.Context, repo repository.Nostr
 	seen := map[string]struct{}{}
 	sessions := []domain.AssistantSession{}
 	for _, record := range records {
-		// Only historical v1 sessions seed the read-only legacy cache; v2
+		// Only v1 sessions seed the read-only legacy-session cache; v2
 		// projections are hydrated by the executor's recovery path.
 		if assistantRecordSchema(record.Tags) != domain.AssistantSessionSchema {
 			continue

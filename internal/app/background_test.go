@@ -151,7 +151,7 @@ func (t *testRetentionTask) Retire(_ context.Context, now time.Time) (int64, err
 
 // The retention runner drives every task on each wakeup: the ContextVM
 // response cutoff is now minus the retention, and the saga retention task
-// (bahia-fpubg) is reached on the same ticker even when another task fails.
+// is reached on the same ticker even when another task fails.
 func TestRetentionRunner_DrivesEveryTaskOnOneWakeup(t *testing.T) {
 	pruner := &testContextVMResponsePruner{calls: make(chan time.Time, 1), count: 2}
 	failing := &testRetentionTask{name: "failing", calls: make(chan time.Time, 1), err: errors.New("retire failed")}

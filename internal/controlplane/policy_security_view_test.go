@@ -59,8 +59,8 @@ func policyStateRecord(t *testing.T, policy *domain.DeploymentPolicy, deleted bo
 	return repository.NostrEventRecord{ID: uuid.NewString(), Kind: nostrAdapter.KindCASControlState, Tags: encoded, Content: content, CreatedAt: time.Now().UTC()}
 }
 
-// Security scan schedules are derived from retained policy cp-state (audit
-// B-32), so the view must decode exactly what the policy publisher emits.
+// Security scan schedules are derived from retained policy cp-state, so the
+// view must decode exactly what the policy publisher emits.
 func TestSecurityPolicyViewDecodesPublishedPolicyState(t *testing.T) {
 	envID := uuid.New()
 	now := time.Now().UTC().Truncate(time.Millisecond)

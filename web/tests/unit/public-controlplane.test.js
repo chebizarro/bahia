@@ -78,7 +78,7 @@ describe('public controlplane command helpers', () => {
     }));
   });
 
-  it('mints a client entity id for service and environment creates when absent (bahia-irsry.35)', async () => {
+  it('mints a client entity id for service and environment creates when absent', async () => {
     await api.createService({ org_id: ORG_ID, name: 'api', artifact_repo: 'ghcr.io/example/api' });
     await api.createEnvironment({ org_id: ORG_ID, name: 'staging' });
 
@@ -90,7 +90,7 @@ describe('public controlplane command helpers', () => {
     expect(environmentCall.content.id).not.toBe(serviceCall.content.id);
   });
 
-  it('mints a client entity id for policy and LLM route creates and keeps a supplied one (bahia-irsry.42)', async () => {
+  it('mints a client entity id for policy and LLM route creates and keeps a supplied one', async () => {
     const id = '01920d4e-7b3a-7c3d-9f2e-0123456789ab';
     await api.createPolicy({ org_id: ORG_ID, name: 'sig', rules: [{ type: 'require_signature' }], enforcement: 'block', enabled: true });
     await api.createPolicy({ id, org_id: ORG_ID, name: 'sig', rules: [{ type: 'require_signature' }], enforcement: 'block', enabled: true });

@@ -1,10 +1,9 @@
 /**
  * Demo script showing how to use the scenario library
- * 
+ *
  * Usage:
  *   npm run demo:scenarios
  */
-import { BahiaAPIDriver } from '../drivers/api.js';
 import { PlaywrightDriver } from '../drivers/playwright.js';
 import { MCPDriver } from '../drivers/mcp.js';
 import { printSummary, getSmokeTests, getStats, allScenarios } from './index.js';
@@ -67,7 +66,6 @@ async function main() {
   // Initialize drivers
   console.log('\n📦 Initializing test drivers...');
   const drivers: ScenarioDrivers = {
-    api: new BahiaAPIDriver(API_URL),
     web: new PlaywrightDriver(WEB_URL),
     mcp: new MCPDriver(),
   };
@@ -76,12 +74,13 @@ async function main() {
   console.log('  MCP: (not connected for demo)');
   
   // Health check
-  console.log('\n🏥 API Health Check...');
+  console.log('\n🏥 Daemon Health Check...');
   try {
-    const health = await drivers.api.health();
-    console.log(`  ✅ API is healthy:`, health);
+    const response = await fetch(`${API_URL}/health`);
+    if (!response.ok) throw new Error(`GET /health returned ${response.status}`);
+    console.log(`  ✅ Daemon is healthy:`, await response.json());
   } catch (error) {
-    console.error(`  ❌ API health check failed:`, error);
+    console.error(`  ❌ Daemon health check failed:`, error);
     console.log('\n⚠️  Make sure the Bahia stack is running: docker compose up');
     process.exit(1);
   }

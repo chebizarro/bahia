@@ -95,7 +95,7 @@ func (h *AdoptionIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 	}
 	// The intent id keys the resources minted per request, so re-processing
 	// this intent after a crash or a failed publish resumes onto the same
-	// canonical coordinates (audit B-35).
+	// canonical coordinates.
 	results, err := h.adoption.Import(ctx, service.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: request.ImportAll, OrgID: intent.OrgID, RequestID: intent.IntentID})
 	if results != nil {
 		intent.Result = map[string]any{"imports": dto.AdoptionImportResultResponsesFromService(results)}

@@ -19,8 +19,7 @@ func inboundSyncConfig(store config.NostrLocalStoreConfig) nostrAdapter.InboundS
 
 // inboundSyncConfigScoped is inboundSyncConfig with negentropy upload scoped to
 // the daemon's own service relays. Control-plane events in the local store are
-// not pushed to interop relays that happen to be in the subscription pool
-// (.50 item 4).
+// not pushed to interop relays that happen to be in the subscription pool.
 func inboundSyncConfigScoped(store config.NostrLocalStoreConfig, serviceRelays []string) nostrAdapter.InboundSyncConfig {
 	sync := inboundSyncConfig(store)
 	if sync.NegentropyUpload && len(serviceRelays) > 0 {

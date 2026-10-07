@@ -1,45 +1,27 @@
 # Events
 
-The **Events** route at `/events` is a live inspection view for the Nostr events that drive Bahia's control plane and read models.
+**Events** (`/events`) is a live inspection view of the Nostr events behind Bahia's control plane.
 
-## Loading and recovery
+## What it loads
 
-The browser loads:
+The browser's store-first subscriptions feed the page: the service's canonical `30900` records (up to 1,000 per topic set), the last seven days of `30315` status events (100) and `4903` audit facts (500), SBOM references and availability lists, deletions, worker advertisements (`10100`), and — when configured — trusted ops widgets (`30318`). Subscriptions stay open after EOSE and resume with a one-second overlap after a disconnect; duplicate event ids are suppressed.
 
-- canonical Bahia read-model events, with the configured Bahia service author filter;
-- Loom worker advertisements (kind `10100`);
-- audit, status, and SBOM activity from the last seven days.
-
-Read-model queries are capped at 1,000 events and the recent-activity query at 100. Long-lived subscriptions reconnect with a one-second overlap from the latest valid event timestamp and suppress duplicate event IDs. This makes short disconnects recoverable without presenting the overlap twice.
-
-The relay indicator identifies the current connection and provenance. A connected relay is transport evidence, not authorization for an event: consumers still validate signatures, authors, schemas, and correlation rules.
+The relay indicator shows how many relays have caught up. A connected relay is transport evidence only; every event is still checked for signature, author, and tags before it is accepted.
 
 ## Filtering and inspection
 
-Use the category filter to narrow the list to:
+Filter by category — **All Events**, **Deployments**, **Services**, **LLM Routes**, **Policies**, **SBOM**, **Artifacts** — and choose 25, 50, or 100 rows per page. Columns show time, event type, and entity id; selecting a row opens the full JSON (kind, author, tags, content, timestamps).
 
-- Deployment
-- Service
-- LLM
-- Policy
-- SBOM
-- Artifact
+## Uses
 
-Choose 25, 50, or 100 rows per page. Select an event to open its complete JSON payload, including kind, author, tags, content, and timestamps.
+- Correlate an intent with its `30315` status, the resulting `30900` record, and `4903` audit facts.
+- Confirm an event's author and tags when a page shows unexpected data.
+- Distinguish a relay that has not delivered an event from a projection that never happened.
 
-## Operational use
-
-Use Events to:
-
-1. correlate a request with status, result, audit, or read-model events;
-2. confirm whether a relay-delivered event has the expected author and tags;
-3. inspect durable outcomes after a UI or MCP submission acknowledges only transport;
-4. distinguish missing relay data from a projection or policy failure.
-
-Do not treat the most recent arrival as canonical solely because it arrived last. Replaceable-event ordering, authorized authors, and the domain's correlation rules determine the accepted state.
+The most recent arrival is not automatically canonical: replaceable-event ordering per coordinate and authorized authors decide what is accepted.
 
 ## Related
 
-- [Nostr Integration](../nostr-integration.md) — Event kinds, subscriptions, and replay
-- [Deployments](deployments.md) — Deployment intent and result events
-- [Artifacts](artifacts.md) — Artifact and SBOM events
+- [Nostr Integration](../nostr-integration.md)
+- [Deployments](deployments.md)
+- [Artifacts](artifacts.md)

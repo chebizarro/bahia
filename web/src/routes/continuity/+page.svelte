@@ -117,7 +117,7 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
   </nav>
 
   {#if activeTab !== 'status'}
-    <!-- Operator-signed kinds are trusted from the signed-in key, widened by the daemon's fleet-OCK encrypted operator allowlist when this session can decrypt it (bahia-fbyo5). -->
+    <!-- Operator-signed kinds are trusted from the signed-in key, widened by the daemon's fleet-OCK encrypted operator allowlist when this session can decrypt it. -->
     <p class="operator-scope-note" data-testid="continuity-operator-scope-note">
       {#if authState.status === 'authenticated' && operatorAllowlistAvailable(OPERATOR_ALLOWLIST_SCOPE_CONTINUITY)}
         Topology, requests and simulation show the definitions, requests and heartbeats signed by your key and by the

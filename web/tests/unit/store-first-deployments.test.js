@@ -37,8 +37,8 @@ afterEach(async () => {
   await context.store.close();
 });
 
-describe('W4-S1 deployment views from BahiaEventStore', () => {
-  it('hydrates the six formerly routed families from persisted events before any relay REQ', () => {
+describe('Deployment views from BahiaEventStore', () => {
+  it('hydrates the six store-first families from persisted events before any relay REQ', () => {
     const families = [
       [CP_STATE_TOPICS.LLM_ROUTE, view.llmRoutes],
       [CP_STATE_TOPICS.LLM_STATE, view.llmRouteStates],

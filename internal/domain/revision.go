@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-// Registry revisions (bahia-irsry.53).
+// Registry revisions.
 //
 // A registry row's updated_at is its revision: clients send it back as
 // expected_updated_at, and the relay-first writer signs it into the

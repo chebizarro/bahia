@@ -4,7 +4,7 @@ package domain
 type AssistantPermissionMode string
 
 const (
-	// AssistantPermissionModeReview preserves the legacy human-review posture:
+	// AssistantPermissionModeReview is the human-review posture:
 	// reads may run, but mutation-capable tools require an approval decision.
 	AssistantPermissionModeReview AssistantPermissionMode = "review"
 

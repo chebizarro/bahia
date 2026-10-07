@@ -599,7 +599,7 @@ func TestSupervisionApplyLockSerializesPerEnvironmentAndSurvivesSharedLockOutage
 	require.False(t, withShared.Status().Fallback)
 
 	// The database behind the shared lock is unreachable: recovery proceeds,
-	// and the fallback is observable (bahia-as2bo).
+	// and the fallback is observable.
 	shared.err = errors.New("connection refused")
 	unlock, acquired, err = withShared.TryLock(ctx, environment)
 	require.NoError(t, err)

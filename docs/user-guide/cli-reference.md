@@ -1,653 +1,311 @@
 # CLI Reference
 
-The `bahia` CLI provides relay-backed canonical reads and signer-first operator commands.
+The `bahia` CLI reads canonical state from relays and publishes signed intents. It never talks to the daemon over HTTP.
 
 ## Installation
 
 ```bash
-# From source
 go install github.com/openagentsinc/bahia/cmd/cli@latest
-
-# Or build locally
-cd bahia
-make build
-./bin/bahia --help
+# or
+make build && ./bin/bahia --help
 ```
 
-## Configuration
+## Signer and relays
 
-### Environment Variables
+Every command needs a relay and, for writes and protected reads, a signer.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `BAHIA_NOSTR_KEY_FILE` | File containing a local Nostr private key for signer-first operations | unset |
-| `BAHIA_NOSTR_BUNKER_FILE` / `BAHIA_NOSTR_BUNKER_URI` | File containing, or direct value of, the NIP-46 bunker URI | unset |
-| `BAHIA_NOSTR_BUNKER_RELAYS` | Comma-separated NIP-46 signer relay URLs | unset |
-| `BAHIA_NOSTR_CLIENT_KEY_FILE` | Persistent NIP-46 client private-key file | unset |
-| `BAHIA_NOSTR_CLIENT_PRIVATE_KEY` | Raw persistent NIP-46 client private key | unset |
-| `BAHIA_NOSTR_NSEC` | Nostr private key in `nsec` form | unset |
-| `BAHIA_NOSTR_PRIVATE_KEY` | Raw Nostr private key hex | unset |
-| `BAHIA_NOSTR_RELAYS` | Comma-separated final relay URLs for signer-first operator transport | unset |
-| `BAHIA_NOSTR_BOOTSTRAP_RELAYS` | Comma-separated bootstrap relay seeds used only when final relay sources are absent | unset |
-| `BAHIA_NOSTR_SERVICE_PUBKEY` | Bahia service pubkey for signer-first routing and single-service discovery trust | unset |
-| `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS` | Comma-separated trusted Bahia service pubkeys for bootstrap discovery | unset |
-| `BAHIA_RESULT_TIMEOUT` | Maximum wait for a service/environment intent status (30315) | `30s` |
+| Flag | Environment | Purpose |
+|------|-------------|---------|
+| `--nostr-key-file` | `BAHIA_NOSTR_KEY_FILE`, `BAHIA_NOSTR_NSEC`, `BAHIA_NOSTR_PRIVATE_KEY` | Local private key (`-` reads stdin) |
+| `--nostr-bunker-file` | `BAHIA_NOSTR_BUNKER_FILE`, `BAHIA_NOSTR_BUNKER_URI` | NIP-46 bunker URI |
+| `--nostr-bunker-relay` | `BAHIA_NOSTR_BUNKER_RELAYS` | Signer relay when not in the bunker URI (repeatable) |
+| `--nostr-client-key-file` | `BAHIA_NOSTR_CLIENT_KEY_FILE`, `BAHIA_NOSTR_CLIENT_PRIVATE_KEY` | Persistent NIP-46 client key |
+| `--relay` | `BAHIA_NOSTR_RELAYS` | Relay URL (repeatable; highest priority) |
+| `--bootstrap-relay` | `BAHIA_NOSTR_BOOTSTRAP_RELAYS` | Bootstrap relay for discovery when no `--relay` is given |
+| `--service-pubkey` | `BAHIA_NOSTR_SERVICE_PUBKEY` | Bahia service pubkey (status subscription, run-log fetch, single-service discovery trust) |
+| `--trusted-service-pubkey` | `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS` | Trusted service pubkeys for bootstrap discovery (repeatable) |
+| `--org` | `BAHIA_ORG_ID` | Organization UUID for organization-scoped intents |
+| `--eose-timeout` | `BAHIA_EOSE_TIMEOUT` | Wait for relay EOSE on reads (default `5s`) |
+| `--result-timeout` | `BAHIA_RESULT_TIMEOUT` | Wait for an intent status or ContextVM result (default `30s`) |
+| `--result-retries` | — | `logs run` republish attempts after a timeout (default `2`) |
+| `--encrypted` | — | Gift-wrap the `logs run` request (requires `--service-pubkey`) |
+| `-o, --output` | — | `table` (default), `json`, `yaml` |
 
-## Database migrations (operator command)
+The CLI refuses a configuration that sets both a local key and a bunker, and never generates a throwaway NIP-46 identity. `bahia auth inspect` prints the configured signer's pubkey and npub.
 
-`bahia-migrate` is a separate, database-local command. It loads Bahia's protected
-configuration (`--config`, default `config.yaml`) and never starts the server.
-Use a valid deployment configuration and back up the database before rollback.
+Relay resolution is ordered: `--relay`, then `BAHIA_NOSTR_RELAYS`, then trusted bootstrap discovery, which needs at least one bootstrap relay and one trusted service pubkey (`--trusted-service-pubkey` or `--service-pubkey`).
 
-```bash
-bahia-migrate --config /etc/bahia/config.yaml status
-bahia-migrate --config /etc/bahia/config.yaml up
-bahia-migrate --config /etc/bahia/config.yaml --confirm down
-bahia-migrate --config /etc/bahia/config.yaml --confirm --to 000065_runtime_release_deployment_intents down
-# With a valid config, make migrate runs up; select another action explicitly:
-make migrate MIGRATE_CONFIG=/etc/bahia/config.yaml MIGRATE_ACTION=status
-```
+## How reads work
 
-`status` only reads: it never creates `schema_migrations`, and prints each applied
-**full filename stem** with `applied_at` plus every pending stem. It exits 0 when
-nothing is pending, 2 when migrations are pending, and 1 on error. `up` applies
-pending migrations under the same advisory lock used by server startup.
+Reads subscribe to the service's canonical `30900` records, keep a local event store under `$BAHIA_DATA_DIR/store/<service-pubkey>/` (or `$XDG_DATA_HOME/bahia/store/<service-pubkey>/`), and wait up to `--eose-timeout` for every relay to reach EOSE. When no relay reaches EOSE the command prints a stale-data warning on stderr and still exits 0 with the local result.
 
-`down` requires `--confirm`. Without `--to`, it rolls back exactly the most
-recently applied migration. `--to <stem>` keeps that applied migration and rolls
-back newer applied migrations in reverse application order. By default the
-command also requires each removed migration to be the highest applied filename
-stem; `--force` overrides this ordering check, **not** SQL guards, confirmation,
-or missing-script errors. Each down script and its version-row deletion commit
-in one transaction. A missing `.down.sql` refuses the entire plan before any
-rollback. A failed SQL guard leaves its version row intact. Do not substitute a
-numeric prefix for a stem: seven historic prefixes have multiple migrations.
+Confidential families (organizations, members, secrets metadata, notification channels) are OCK-encrypted on the relay; the CLI unwraps the key envelope with the signer. A non-member sees `not readable with this key` with exit code 0.
 
-### Legacy Nostr event migration (`bahia-migrate nostr`)
+## How writes work
 
-`bahia-migrate nostr` converts legacy Bahia custom events recorded in
-`nostr_events` (`internal/nostrmigration.LegacyKinds()`) into canonical events,
-signs them with `nostr.private_key`, and publishes them. The daemon does not run
-this on startup: re-signing and republishing old rows is not something a
-restart should do (audit B-28).
+Mutations are signed kind `30900` intents (see [Nostr Integration](nostr-integration.md#intents)). The CLI:
 
-```bash
-# Report what would be migrated; signs and publishes nothing.
-bahia-migrate --config /etc/bahia/config.yaml --dry-run nostr
-# Migrate and publish to the sidecar plus nostr.relays (the default target).
-bahia-migrate --config /etc/bahia/config.yaml nostr
-# Publish elsewhere, and also read legacy events back from those relays.
-bahia-migrate --config /etc/bahia/config.yaml --relays wss://relay.example --relay-backfill nostr
-```
+1. builds and signs the intent with a UUIDv7 `intent_id` (`--idempotency-key` to supply your own),
+2. gift-wraps it when the domain is `org`, `secret`, or `notification` (a NIP-44-capable signer is required),
+3. stores the signed event in its local outbox (`$XDG_DATA_HOME/bahia/outbox.bolt` or `~/.local/share/bahia/outbox.bolt`),
+4. subscribes for the status, publishes, and requires at least one relay `OK`,
+5. waits up to `--result-timeout` for the daemon's `30315` intent status.
 
-Run it once per deployment after upgrading from a release that still wrote
-legacy kinds, with the Bahia database reachable. Then run it again only if a
-dry run reports unmigrated records, for example after restoring an old
-database backup. It is resumable (durable cursors in `nostr_events`) and
-idempotent (a record whose canonical output tagged `migrated-from=<id>` exists
-is skipped), so re-running is safe. `--relay-backfill` (default:
-`nostr.legacy_relay_backfill`) also reads legacy kinds from the target relays;
-the hardened sidecar refuses those reads, so point `--relays` at the legacy
-relay when you need it. `--dry-run`, `--relays` and `--relay-backfill` are only
-valid for `nostr`.
+Exit codes: `0` accepted, `1` rejected or conflict, `2` published but no status received (the command prints `intent_id` and `event_id`; inspect with `bahia outbox list`), `3` no relay accepted the event. Retry a timed-out intent with the same `--idempotency-key` rather than minting a new one.
 
-## Authentication
+Updates carry the record's canonical `updated_at` as `expected_updated_at`; on a stale revision the daemon answers `conflict`, so re-read and retry deliberately.
 
-The CLI does not implement interactive `login` commands. The only built-in auth helper is:
+Two operations are confidential request/response calls instead of intents: `logs run` (`deployments/run-logs-get`) and secret reveal (`services/secrets-reveal`, used by the web app). `logs run` waits for its reply subscription to reach EOSE before publishing, then republishes the same keyed request up to `--result-retries` times after each timeout so the daemon can replay its cached response.
+
+## Commands
+
+### auth
 
 ```bash
 bahia auth inspect
 ```
 
-For local signing, use `--nostr-key-file`, `BAHIA_NOSTR_KEY_FILE`, `BAHIA_NOSTR_NSEC`, or `BAHIA_NOSTR_PRIVATE_KEY`.
-
-For NIP-46 remote signing, use `--nostr-bunker-file` (or `BAHIA_NOSTR_BUNKER_FILE` / `BAHIA_NOSTR_BUNKER_URI`), at least one signer relay from the bunker URI, repeatable `--nostr-bunker-relay`, or `BAHIA_NOSTR_BUNKER_RELAYS`, and a persistent client key via `--nostr-client-key-file`, `BAHIA_NOSTR_CLIENT_KEY_FILE`, or `BAHIA_NOSTR_CLIENT_PRIVATE_KEY`. The CLI refuses simultaneous local-key and bunker configuration and does not generate a throwaway NIP-46 identity.
-
-## Nostr-native transport
-
-CLI mutations, including `builds request` and `adopt scan`, publish signed kind `30900` intents through the local outbox and subscribe for kind `30315` status. `builds request` returns the accepted status `data` (including the queued build ID); `adopt scan` renders the bounded, redacted findings page in accepted status `data`. Only `logs run` still uses the keyed ContextVM JSON-RPC request client. `--encrypted` applies to that run-log fetch, wrapping its signed inner request in a NIP-59 kind `1059` gift wrap; sensitive intent domains use their own automatic gift-wrap policy. Reads consume canonical observable/state kinds (`30900`, `4903`, `30315`, `11316`-`11320`, `30002`, `30078`) and standard NIPs.
-
-For service/environment/deployment/runtime writes, the CLI enqueues the signed intent in its local outbox, subscribes before publishing, requires at least one relay OK, and waits up to `--result-timeout` (default `30s`, or `BAHIA_RESULT_TIMEOUT`) for status. Exit codes are 0 accepted, 1 rejected/conflict/superseded, 2 published without status, and 3 no relay accepted. Exit 2 prints `intent_id` and `event_id`; inspect the pending event with `bahia outbox list`. These writes do not use HTTP.
-
-For `logs run`, before publishing, the CLI waits for the reply subscription to reach EOSE on its established relays. Each publish attempt waits up to `--result-timeout` (default `30s`). On timeout it re-subscribes and republishes the same logical request up to `--result-retries` times (default `2`); the stable `d` tag lets Bahia replay its cached idempotent response.
-
-### Troubleshooting: CLI times out but server logs handler completed
-
-For the remaining `logs run` ContextVM request, a handler-completed log does not prove that the ephemeral response reached the subscribed relay. The CLI re-subscribes and republishes the same keyed request after a result timeout; correlate its error fields `method`, `request_event_id`, `d`, `configured_relays`, `subscribed_relays`, `failed_subscriptions`, `published_relays`, `attempts`, and `publish_results` with server logs. For an intent timeout, inspect `bahia outbox list` and retry the same UUIDv7 intent ID rather than creating another request.
-
-Operator relay resolution is deterministic and ordered:
-
-1. Explicit `--relay` values are final and highest priority.
-2. `BAHIA_NOSTR_RELAYS` is next.
-3. Trusted bootstrap discovery is used only when both final relay sources are absent.
-
-Trusted bootstrap discovery requires at least one bootstrap relay (`--bootstrap-relay` or `BAHIA_NOSTR_BOOTSTRAP_RELAYS`) and at least one trusted service pubkey (`--trusted-service-pubkey`, `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS`, or `--service-pubkey` / `BAHIA_NOSTR_SERVICE_PUBKEY`).
-
-## Registered command groups
-
-The current top-level CLI command groups are:
-
-- `auth`
-- `services`
-- `environments`
-- `state`
-- `builds`
-- `artifacts`
-- `dns`
-- `deployments`
-- `adopt`
-- `workers`
-- `logs`
-- `policies`
-- `config`
-- `secrets`
-- `orgs`
-- `notifications`
-- `package`
-- `souls`
-
-Bahia does **not** currently register top-level `llm` or `payments` CLI commands.
-
-## Commands
-
-### Services
-
-`services list` and `services get` read canonical service events from the configured relays by default. Pass `--service-pubkey` (or set `BAHIA_NOSTR_SERVICE_PUBKEY`) and configure a relay with `--relay` or `BAHIA_NOSTR_RELAYS`. Reads reuse a local cursor under `$BAHIA_DATA_DIR/store/<service-pubkey>/` or `$XDG_DATA_HOME/bahia/store/<service-pubkey>/`. The legacy REST read path is no longer mounted.
+### services
 
 ```bash
-# List services
 bahia services list
-bahia services list -o json
+bahia services get <service-id>
+bahia services create --org "$ORG" --name payment-api --artifact-repo ghcr.io/acme/payment-api \
+  --repo-source gitea --repo-coordinate acme/payment-api --clone-url https://git.example/acme/payment-api.git \
+  --ci-provider hiveci --ci-workflow .hive/ci.yaml --runtime-type compose
+bahia services update --org "$ORG" --service <service-id> --name payment-api-v2
 
-# Get service by ID
-bahia services get svc-123
-bahia services get svc-123 -o yaml
-
-# Publish a signed service intent (organization UUID required)
-bahia services create --org "$ORG_UUID" \
-  --name "payment-api" \
-  --artifact-repo "ghcr.io/company/payment-api"
-bahia services update --service <service-uuid> --name "payment-api-v2"
-
-# Direct runtime lifecycle actions (UUIDs and organization required)
-# The same commands are also available under `services actions`.
-bahia services deploy --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID" --artifact "$ARTIFACT_UUID"
-bahia services restart --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID"
-bahia services stop --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID"
+# Direct runtime actions (also `bahia services actions deploy|restart|stop`)
+bahia services deploy  --org "$ORG" --service <service-id> --environment <env-id> [--artifact <artifact-id>]
+bahia services restart --org "$ORG" --service <service-id> --environment <env-id>
+bahia services stop    --org "$ORG" --service <service-id> --environment <env-id>
 ```
 
-### Environments
+`create` accepts `--id` to pin a client-minted UUID so a retried create is idempotent. Direct actions are `runtime` intents authorized by the `deployments:write` role in the organization; the daemon must have `direct_runtime_actions.enabled`.
 
-`environments list` and `environments get` read canonical environment events from relays by default; `get` includes the deployment-unit read model. The legacy REST read path is no longer mounted. Environment create/update publish signed `30900` intents and wait for `30315` status. Updates read the current canonical `30900` record, merge flags into the complete desired state, and include its `updated_at` revision. Deployment-unit helpers use the same canonical read and intent write path; there is no automatic HTTP fallback.
+### app
 
 ```bash
-# Read environments (detail includes deployment_units)
+bahia app onboard --org "$ORG" --name payment-api --artifact-repo ghcr.io/acme/payment-api \
+  --repo-coordinate acme/payment-api --clone-url https://git.example/acme/payment-api.git \
+  --environment production [--policy require-sbom] [--strategy replace] [--runtime-type compose]
+```
+
+Creates the service, its environment, and an optional pipeline policy binding in one workflow; pass `--idempotency-key` to retry after inspecting partial results.
+
+### environments
+
+```bash
 bahia environments list
-bahia environments get <environment-id>
-
-# Create or update an environment from a complete unit-set file
-bahia environments create --org "$ORG_UUID" --name production --units-file units.json
-bahia environments update <environment-id> --units-file units.json
-
-# List explicit units or the marked implicit default
-bahia environments units list <environment-id>
-
-# Create or update one unit using a JSON specification
-bahia environments units create <environment-id> --file unit.json --default-unit-key max
-bahia environments units update <environment-id> max --file unit.json --default-unit-key max
+bahia environments get <environment-id>            # includes deployment units
+bahia environments create --org "$ORG" --name production --units-file units.json
+bahia environments update <environment-id> --units-file units.json --expected-updated-at <rfc3339>
+bahia environments units list   <environment-id>
+bahia environments units create <environment-id> --file unit.json [--default-unit-key max]
+bahia environments units update <environment-id> <key> --file unit.json
 ```
 
-Omitting `--units-file` leaves the unit set unchanged on update. Supplying a file replaces the complete explicit set; use a JSON `[]` to return to the implicit default. Complete-set updates carry the environment's `updated_at` revision. On conflict, the CLI reports the stale revision; re-read and retry deliberately rather than silently rebasing a complete-set mutation. `--default-unit-key` on unit create/update changes targeting in the same transaction; use it when the first explicit unit has a non-`default` key. Unit JSON follows `schemas/deployment_unit.json`.
+`--units-file` replaces the complete explicit unit set (`[]` returns to the implicit default); omitting it on update leaves units unchanged. Unit flags (`--unit-key`, `--unit-runtime-type`, `--unit-endpoint-ref`, `--unit-compose-dir`, `--unit-reconcile-mode`, …) describe a single unit inline; unit JSON follows `schemas/deployment_unit.json`. Environment-level flags cover `--strategy` (`replace`, `blue_green`, `canary`), `--reconcile-mode` and `--default-reconcile-mode` (`observe_only`, `auto_apply`, `approval_required`, `disabled`), `--protected`, `--secret-scope-mode` (`service`, `environment`, `unit`), `--failure-domain-label`, `--runtime-config-file`, and `--loom-worker-selector-file`.
 
-### Builds
-
-The `builds` group provides the signer-first request → follow path without SQL or ad hoc image injection. The service must have a repository coordinate, matching artifact repository, and an opaque repository-credential secret owned by that service. The server-side fleet mirror initiator must be enabled with `hiveci.initiator.enabled`; otherwise `builds request` returns `Gitea mirror and HiveCI build initiation are not configured`.
+### builds and artifacts
 
 ```bash
-# Queue the exact Astillero commit through the governed HiveCI path.
-bahia builds request \
-  --org <organization-uuid> \
-  --service <service-uuid> \
-  --git-ref b13b14fba6e54f008bfa1ba26d716c2ef05c206e \
-  --credential-ref <repository-credential-secret-uuid> \
-  --artifact-repo <registered-service-artifact-repo> \
-  --idempotency-key <uuidv7-intent-id> \
-  --result-timeout 120s
+bahia builds request --org "$ORG" --service <service-id> --git-ref <branch|tag|sha> \
+  --credential-ref <repository-credential-secret-id> --artifact-repo <registered-repo> \
+  [--idempotency-key <uuidv7>] --result-timeout 120s
+bahia builds list --service <service-id> [--limit 20 --offset 0]
+bahia builds get --build <build-id>
 
-# Follow durable build lineage. Production transitions are queued directly to
-# succeeded or failed; Bahia does not currently project an intermediate running state.
-bahia builds list --service <service-uuid>
-bahia builds get --build <build-uuid>
-bahia artifacts list --service <service-uuid>
-bahia artifacts get --artifact <artifact-uuid>
-
-# The daemon registers an artifact from verified HiveCI evidence after success.
-# Follow builds/artifacts get/list until that lineage appears.
-
-# Use the returned artifact ID in the normal reviewed deployment flow.
-bahia deployments preview \
-  --service <service-uuid> \
-  --environment <environment-uuid> \
-  --artifact <artifact-uuid>
-bahia deployments deploy \
-  --service <service-uuid> \
-  --environment <environment-uuid> \
-  --artifact <artifact-uuid> \
-  --expected-desired-state-hash <reviewed-hash>
+bahia artifacts list --service <service-id> [--limit 50 --offset 0]
+bahia artifacts get --artifact <artifact-id>
+bahia artifacts register --service <service-id> --build <build-id> --image-repo <repo> --image-tag <tag> --image-digest sha256:… [--id <uuid>] [--sbom-url …] [--signature-ref …] [--scan-status …] [--metadata-file …]
+bahia artifacts import-observed --service <service-id> --environment <env-id> [--deployment-unit <unit-id>] \
+  --image-repo <repo> --image-tag <tag> --image-digest sha256:<observed-digest>
 ```
 
-First-time mirror creation and ref resolution can exceed the default 30-second status wait, so `--result-timeout 120s` is recommended for the first request. Reusing the same UUIDv7 `--idempotency-key` replays the accepted intent status instead of starting another CI run or registering another build. An intent ID identifies one logical request: do not reuse it with different request fields. The build request derives its organization from the canonical service; if `--org` is set, it must match.
+`builds request` queues a Hive-CI run through the daemon's mirror initiator (`hiveci.initiator.enabled`); the accepted status `data` carries the build ID, and the daemon registers the resulting artifact from signed Hive-CI evidence. The organization is derived from the service; a supplied `--org` must match. First-time mirroring can exceed 30 seconds, so raise `--result-timeout`. `--build-arg` is accepted by the parser but the fleet-local dispatch contract has no build-argument field, so a request with build arguments is rejected before any side effect.
 
-`--build-arg KEY=VALUE` is repeatable and values may contain `=`, but the fleet-local tag-only kind-5401 dispatch contract has no build-argument field. The private-mirror Hive-CI initiator therefore rejects non-empty build arguments before any secret resolution, mirror operation, event publication, or queued-build registration. Omit `--build-arg` for this workflow.
+`import-observed` registers an image that is already running and that the daemon itself observes (digest and `bahia.*` container labels must match) as governed lineage. It is gated by `hiveci.allow_live_artifact_import` (default `false`) and never changes desired state; follow it with a reviewed deployment.
 
-`builds get/list` and `artifacts get/list` read signed `30900` build-registry and artifact-registry records from relays by default, using the same local cursor and stale-EOSE warning policy as service reads. The legacy REST read endpoints are no longer mounted. Operator artifact registration/import publish `30900` intents. Build-result registration is daemon-owned.
-
-Build-result artifact registration is daemon-owned. The CLI intentionally has no
-`builds register-result` command; operator-supplied artifacts instead use
-`artifacts register --id <artifact-uuid> --build <build-uuid> ...` with a
-signed artifact intent. A successful build request alone does not deploy.
-
-### Deployments
+### deployments
 
 ```bash
-# Preview a managed desired state and review its authoritative hash.
-# --compact returns only the hash plus a structural summary for cases where
-# the full preview is too large to deliver over relays. The hash is identical
-# and authoritative in both modes. Environment variable values are never
-# included in the summary (only sorted key names). Compact mode prints a
-# human-readable evidence summary in table format without requiring -o json.
-bahia deployments preview --service svc-123 --environment env-456 --artifact art-789 \
-  --managed-runtime-config-file runtime.json
-bahia deployments preview --service svc-123 --environment env-456 --artifact art-789 \
-  --managed-runtime-config-file runtime.json --compact
-
-# Submit signer-first deployment intent
-bahia deploy --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID" --artifact "$ARTIFACT_UUID"
-
-# Attach managed HTTPS/DNS routing to the current deployed artifact without redeploying it
-bahia deployments route-attach --service svc-123 --environment env-456 \
-  --deployment-unit unit-789 --hostname api.example.com \
-  --upstream-port 8080 --health-path /healthz --internal
-# Internal HTTPS is automatic when configured and zone-allowed; opt out explicitly:
-bahia deployments route-attach --service svc-123 --environment env-456 \
-  --deployment-unit unit-789 --hostname public-only.example.com \
-  --upstream-port 8080 --health-path /healthz --internal=false
-
-# Submit signer-first rollback intent
-bahia rollback --org "$ORG_UUID" --service "$SERVICE_UUID" --environment "$ENV_UUID" --deployment-unit "$UNIT_UUID" --target-artifact "$PRIOR_ARTIFACT_UUID" --supersedes-intent "$CURRENT_INTENT_UUID"
-
-# Approve or reject a pending deployment using its canonical revision
-bahia deployments approve --org "$ORG_UUID" --intent "$INTENT_UUID" --expected-updated-at "$UPDATED_AT"
-bahia deployments reject --org "$ORG_UUID" --intent "$INTENT_UUID" --expected-updated-at "$UPDATED_AT"
+bahia deployments preview --service <service-id> --environment <env-id> --artifact <artifact-id> \
+  [--managed-runtime-config-file runtime.json] [--compact]
+bahia deploy   --org "$ORG" --service <service-id> --environment <env-id> --artifact <artifact-id> \
+  [--deployment-unit <unit-id>] [--expected-desired-state-hash <hash-from-preview>]
+bahia rollback --org "$ORG" --service <service-id> --environment <env-id> --deployment-unit <unit-id> \
+  --target-artifact <prior-artifact-id> --supersedes-intent <current-intent-id>
+bahia deployments approve --org "$ORG" --intent <intent-id> --expected-updated-at <rfc3339>
+bahia deployments reject  --org "$ORG" --intent <intent-id> --expected-updated-at <rfc3339>
+bahia deployments route-attach --service <service-id> --environment <env-id> --deployment-unit <unit-id> \
+  --hostname api.example.com --upstream-port 8080 --health-path /healthz [--internal=false]
 ```
 
-Deployment creation, rollback, approval/rejection, and `services actions deploy/restart/stop` publish signed `30900` intents, not ContextVM requests. They require `--org` and UUID entity IDs; `--idempotency-key` accepts a UUIDv7 for retrying one logical intent. The CLI persists the signed event in its outbox before relay publication, then waits for `30315` status. Exit codes are 0 accepted, 1 rejected/conflict, 2 published without status (inspect `bahia outbox list`), and 3 no relay accepted. These writes do not use HTTP. Configure the daemon's `deployment` and `runtime` intent domains before using them. Deployment preview and route-attach also publish signed `30900` intents. Preview renders the bounded plan and review hash from accepted `30315` status `data`; route-attach may take `--expected-updated-at` for compare-and-set. Both retain UUIDv7 retry keys.
+`bahia deploy` and `bahia rollback` are shorthand for `bahia deployments deploy|rollback`. `preview` returns the authoritative desired-state hash and a bounded plan in the accepted status; `--compact` returns only the hash and a structural summary (environment variable *names* only). `route-attach` plans and applies managed HTTPS routing for the current artifact without redeploying it; internal HTTPS is attached automatically when configured unless `--internal=false`.
 
-### State
+### state
 
 ```bash
-# List desired/observed state
 bahia state list
-bahia state list --output json
-
-# Show drifted services
-bahia state drifted
+bahia state drifted        # records whose drift_status is exactly "drifted"
 ```
 
-These reads use the Bahia service's signed `30900` service-state records by default. Set `--service-pubkey` and `--relay` (or their environment equivalents). `drifted` selects records whose `drift_status` is exactly `drifted`. A missing EOSE prints a stale-data warning to stderr and still exits 0 with the local-store result. The legacy REST read endpoint is no longer mounted.
-
-### DNS
-
-DNS mutations, including drift remediation, publish signed kind-`30900` intents and await scoped kind-`30315` statuses. Configure an operator signer, organization UUID, and relay using the global Nostr options described above.
+### adopt
 
 ```bash
-# Create and reconcile a managed zone
-bahia dns zone-create \
-  --name prod.example \
-  --visibility external \
-  --backend-ref powerdns-prod \
-  --ttl 300
-
-# Apply a nested DNS policy document
-bahia dns policy-apply --file dns-policy.json
-
-# Pin a record, optionally until an RFC3339 timestamp
-bahia dns record-set \
-  --zone prod.example \
-  --name api \
-  --type A \
-  --value 192.0.2.10 \
-  --ttl 60 \
-  --reason "incident pin" \
-  --expires-at 2026-09-04T12:00:00Z
-
-# Retire an existing pin once the projected record is authoritative.
-# Retirement expires the override rather than deleting it, so the row remains
-# as an audit record. It is idempotent: retrying reports the override as
-# already inactive and does not move the recorded retirement time.
-bahia dns override-retire \
-  --override-id 1273e277-dfa7-4459-a452-89598eeca4a2 \
-  --reason "Bahia now projects the zone authoritatively"
-
-# Reconcile one zone or all configured zones
-bahia dns drift-remediate --zone prod.example
-bahia dns drift-remediate
+bahia adopt scan   --target prod=prod-docker [--environment prod=production] [--offset 0 --limit 20]
+bahia adopt import --org "$ORG" --target prod=prod-docker --all
+bahia adopt import --org "$ORG" --target prod=prod-docker --select prod/<container-id>=payment-api
 ```
 
-`dns-policy.json` uses the DNS policy schema, including nested `match` and `action` objects. Unknown fields and invalid policies are rejected before publication:
+Targets are server-managed endpoint references (`alias=endpointRef`); `--raw-target alias=dockerHost` is accepted only when the daemon sets `adoption.allow_raw_docker_hosts`. `scan` returns a redacted findings page (`total_findings`, `next_offset`, `truncated`) in the accepted status; `import` returns an intent ID and candidate count and the imported services appear as canonical records. Both require the signer in `adoption.allowed_pubkeys`.
 
-```json
-{
-  "name": "edge-routing",
-  "rules": [
-    {
-      "match": {"environment": "prod"},
-      "action": {"visibility": "edge", "ttl_override": 60}
-    }
-  ],
-  "enabled": true
-}
-```
-
-### Workers
+### dns
 
 ```bash
-# List workers
+bahia dns zone-create --name prod.example --visibility external --backend-ref powerdns-prod --ttl 300 [--authoritative]
+bahia dns zone-update   --file zone.json
+bahia dns zone-delete   --name prod.example --expected-updated-at <rfc3339>
+bahia dns endpoint-create|endpoint-update --file endpoint.json
+bahia dns endpoint-delete --coordinate <id> --expected-updated-at <rfc3339>
+bahia dns backend-create|backend-update --file backend.json
+bahia dns backend-delete --ref <id> --expected-updated-at <rfc3339>
+bahia dns policy-apply  --file dns-policy.json
+bahia dns policy-update --file dns-policy.json
+bahia dns policy-delete --id <id> --expected-updated-at <rfc3339>
+bahia dns record-set --zone prod.example --name api --type A --value 192.0.2.10 --ttl 60 \
+  --reason "incident pin" [--expires-at 2026-09-04T12:00:00Z]
+bahia dns override-retire --override-id <uuid> --reason "projection is authoritative"
+bahia dns drift-remediate [--zone prod.example]
+```
+
+DNS is fleet-scoped: no `--org` is needed, and the signer must be a fleet operator. `record-set` pins a record as an override; `override-retire` expires it (the row remains as audit and retrying is idempotent). Zone visibility is `internal`, `external`, `edge`, or `mesh`; record types are `A`, `AAAA`, `CNAME`, `SRV`. See [DNS](features/dns.md).
+
+### workers
+
+```bash
 bahia workers list
-
-# Show worker detail
-bahia workers show <64-character-worker-hex-pubkey>
+bahia workers show <worker-pubkey>
+bahia workers cordon|uncordon|drain|undrain|maintenance-enter|maintenance-exit <worker-pubkey> [--reason …]
+bahia workers labels-update <worker-pubkey> --labels '{"gpu":"a100"}'
+bahia workers cleanup <worker-pubkey> [--mode reclaimable_only|aggressive] [--reason …]
+bahia workers cleanup-orphans [--apply]      # dry-run by default
 ```
 
-### Logs
-
-Completed run logs are fetched through the signed, keyed ContextVM request path; the HTTP-only live SSE CLI command has been removed.
+### logs
 
 ```bash
-# Fetch run logs
-bahia logs run <run-uuid> --tail 100
+bahia logs run <run-id> [--tail 100] [--stream stdout|stderr|merged] [--encrypted]
 ```
 
-### Policies
+### policies
 
 ```bash
-# Read policies
 bahia policies list
-bahia policies get <policy-uuid>
-
-# Create a signer-first policy
-bahia policies create \
-  --name require-sbom \
-  --rules '[{"type":"require_sbom"}]' \
-  --enforcement block \
-  --idempotency-key policy-create-require-sbom
+bahia policies get <policy-id>
+bahia policies create --name require-sbom --rules '[{"type":"require_sbom"}]' --enforcement block [--environment <env-id>]
 ```
 
-Policy reads use signed `30900` policy-registry records by default. The legacy REST endpoint is no longer mounted. `get` requires a policy UUID and returns an error when that UUID is absent. The same stale-data warning and successful exit behavior applies when no relay reaches EOSE.
+Policy mutations are fleet-scoped; `--enforcement` is `warn` or `block`.
 
-### Config fabric
+### config
 
 ```bash
-# Sign a validated NIP-51/NIP-78 desired-state request with an operator nsec
-# or NIP-46 bunker and publish directly to relays (per-relay OKs in CLI outbox).
-bahia --relay wss://relay.example --service-pubkey <daemon-pubkey> \
-  config publish --file config-request.json
-
-# Compare desired events with applied/rejected/withdrawn status
-# (WITHDRAWN: the desired event was deleted or expired; the last applied
-# config stays live until a newer version is published)
+bahia --relay wss://relay.example --service-pubkey <daemon-pubkey> config publish --file config-request.json
 bahia --relay wss://relay.example --service-pubkey <daemon-pubkey> config drift
-
-# Republish a prior desired event at the next version
-bahia --relay wss://relay.example --service-pubkey <daemon-pubkey> \
-  config rollback <desired-event-id>
+bahia --relay wss://relay.example --service-pubkey <daemon-pubkey> config rollback <desired-event-id>
 ```
 
-`publish` and `rollback` require `--nostr-key-file`/`BAHIA_NOSTR_NSEC` or a
-NIP-46 bunker signer. The signer must be a configured fleet operator or a
-trusted config author on the relay sidecar. Rollback requires a desired event
-by the same operator retained in the local store or CLI outbox; it copies the
-old policy/list payload and assigns the next version for that operator and
-`(service, policy, scope)` coordinate. Drift reads local desired events and
-the daemon's stable `config-status:<service>:<policy>:<scope>` v3 records;
-`GET /config-fabric/drift` remains available for compatibility. Publish and
-rollback require EOSE from every configured relay before choosing a version;
-drift can still show stale local data with a warning when relays are unavailable.
-The latest v3 status carries the last effective event even while a newer
-desired version is merely accepted, so local drift retains the applied version.
+Config fabric desired state is published directly to relays as NIP-51/NIP-78 events signed by the operator; the daemon answers with `config-status:<service>:<policy>:<scope>` records. `publish` and `rollback` wait for EOSE from every relay before choosing the next version; `drift` compares desired versions with applied, rejected, and withdrawn status and can report stale local data with a warning. `--outbox-path` overrides the CLI outbox used for per-relay OK tracking.
 
-### Secrets
-
-`secrets list` reads OCK-encrypted `30900` secret references from relays by default. It returns metadata only; secret values are never included and remain available only through the authorized ContextVM reveal flow. A NIP-44-capable signer (`--nostr-key-file`/`BAHIA_NOSTR_NSEC`, or a NIP-46 bunker) and the Bahia service pubkey are required. The legacy REST read is no longer mounted.
+### secrets
 
 ```bash
-# List secrets for a service
-bahia secrets list svc-123
-
-# Set a secret
-bahia secrets set svc-123 DATABASE_URL postgres://example
-
-# Delete a secret
-bahia secrets delete svc-123 secret-456
+bahia secrets list <service-id>                                     # metadata only
+bahia secrets set  <service-id> DATABASE_URL postgres://…  [--environment <env-id>]
+bahia secrets set  <service-id> DATABASE_URL --value-file /run/secrets/db   # owner-only absolute path
+bahia secrets delete <service-id> <secret-id>
 ```
 
-### Organizations
+Secret values travel only inside gift-wrapped intents and are never printed by the CLI; reveal is available in the web app.
 
-`orgs list`, `orgs get`, and `orgs members list` read the service's signed `30900` records and unwrap the matching `32010` OCK envelope through the CLI signer. A non-member receives `not readable with this key` with exit code 0, not decrypted org data. The local event-store cursor is reused across reads; missing relay EOSE prints a stale warning while returning cached state. The legacy REST reads are no longer mounted.
+### orgs
 
 ```bash
-# List organizations
 bahia orgs list
-
-# Get organization by ID or name
-bahia orgs get acme-corp
-
-# Create an organization
-bahia orgs create acme-corp --display-name "ACME Corporation"
-
-# List members
-bahia orgs members list org-123
-
-# Add a member
-bahia orgs members add org-123 npub1member... --role deployer
-
-# Remove a member
-bahia orgs members remove org-123 npub1member...
+bahia orgs get <id-or-name>
+bahia orgs create <name> [--display-name "ACME Corporation"]
+bahia orgs delete <org-id>
+bahia orgs members list <org-id>
+bahia orgs members add    <org-id> <pubkey> --role viewer|deployer|admin|owner
+bahia orgs members remove <org-id> <pubkey>
+bahia orgs invites create <org-id> <pubkey> [--role viewer] [--expires-in 72]
+bahia orgs invites delete <org-id> <invite-id>
 ```
 
-### Notification channels
+Creating an organization requires a fleet operator or the organization's configured bootstrap owner.
 
-`notifications channels list` and `notifications channels get <channel-uuid>` read OCK-encrypted channel metadata from relays. Their output omits service-only webhook URLs and credentials, including for fleet-scoped channels. The signer, relay, service pubkey, stale-cache rules are the same as for organization reads.
+### notifications
 
 ```bash
-bahia notifications channels list -o json
-bahia notifications channels get <channel-uuid>
+bahia notifications channels list
+bahia notifications channels get <channel-id>
+bahia notifications channels create --file channel.json     # full document, including confidential config
+bahia notifications channels update --file channel.json
+bahia notifications channels delete <channel-id>
 ```
 
-### Encrypted operator requests with a remote signer
+Reads omit webhook URLs and credentials.
 
-`--encrypted` wraps operator requests in NIP-59 and requires the signer to
-perform NIP-44 only. A Signet/NIP-46 bunker signer therefore works without any
-local key material:
+### package
 
 ```bash
-bahia --nostr-bunker-file /etc/bahia/signer-bunker-url \
-  --service-pubkey <bahia-service-pubkey> \
-  --encrypted \
-  artifacts import-observed --service ... --environment ... \
-  --image-repo ... --image-tag ... --image-digest sha256:...
+bahia package repo apply --name libs --format npm --backend-type nexus --backend-ref nexus-main [--policy '{…}'] [--config '{…}']
+bahia package repo delete --name libs [--force] [--reason …]
+bahia package upload  --repository libs --package widgets --version 1.0.0 --file ./dist/widgets-1.0.0.tgz
+bahia package promote --source-repository libs --target-repository production --package widgets --version 1.0.0 --filename widgets-1.0.0.tgz
+bahia package yank    --repository production --package widgets --version 1.0.0 --filename widgets-1.0.0.tgz --reason "security issue" [--deprecated]
+bahia package drift   --repository production [--include-artifacts]
 ```
 
-Bahia's NIP-59 intent transport never uses NIP-04, so a signer that implements only
-the modern cipher is fully supported. Private key material is never required,
-printed, or passed in argv: the bunker URI is read from a file.
+Formats: `npm`, `pypi`, `conan`, `deb`, `rpm`, `pub`, `go_modules`, `gradle`. Backends: `nexus`, `pulp`, `filesystem_mock`. Repositories may be addressed by `--repository-id` instead of name.
 
-### Importing an already-running image
-
-Bahia governs images that CI attested. When an image is already running but has
-no Bahia artifact — for example a locally built image deployed before its
-release workflow existed — an authorized operator can import it as governed
-lineage. **Never edit the database to bridge missing artifact or build state.**
+### souls
 
 ```bash
-# Import the image Bahia currently observes running for a service
-bahia artifacts import-observed \
-  --service <service-id> \
-  --environment <environment-id> \
-  --deployment-unit <deployment-unit-id> \
-  --image-repo astillero \
-  --image-tag 2729a7c \
-  --image-digest sha256:<observed-manifest-digest>
+bahia souls list [--status active|suspended|revoked] [--limit 50]
+bahia souls get <agent-id>
+bahia souls provision <agent-id> --template "31950:<pubkey>:<identifier>" [--tier lightweight|standard|heavy] [--brief …|--brief-file …] [--follow]
+bahia souls await <request-id>
+bahia souls suspend|resume|redeploy <agent-id>
+bahia souls revoke <agent-id> --reason "…" [--force]
+bahia souls regenerate <agent-id> --brief "…"
+bahia souls templates list [--tier …]
+bahia souls templates get <identifier>
 ```
 
-The digest must match what Bahia itself observes running: the control plane, not
-the operator, is the authority for what exists. The command also verifies the
-observed container's `bahia.service_id`, `bahia.environment_id`, and
-`bahia.deployment_unit_id` labels when present, and refuses if a registry that
-knows the repository reports a different digest.
+`souls` speaks the SoulFactory event contract directly (`5950` requests, `6950`/`7950` progress and results, `1950` actions, `31950`/`31951` templates and Souls) and needs `soul_factory.enabled` on the daemon. `--reply-timeout` (`BAHIA_SOUL_FACTORY_REPLY_TIMEOUT`, default 15m) bounds the wait for a terminal result.
 
-Importing provenance never deploys or promotes it. Desired state is unchanged;
-align it afterwards with a reviewed deployment:
+### outbox
 
 ```bash
-bahia deployments preview --service <service-id> --environment <environment-id> --artifact <artifact-id>
-bahia deployments deploy  --service <service-id> --environment <environment-id> --artifact <artifact-id> \
-  --expected-desired-state-hash <hash-from-preview>
+bahia outbox counts
+bahia outbox list [--state pending|failed|published|all] [--limit 50]
+bahia outbox retry <event-id> | --all
+bahia outbox prune [--max-age 168h] [--confirm]     # dry run without --confirm
+bahia outbox --daemon counts                          # daemon outbox, read-only
 ```
 
-The path is governed by `hiveci.allow_live_artifact_import` (default `false`).
-When it is disabled the command fails before writing anything and names both the
-config key and the Hive CI alternative. Prefer the Hive CI path whenever the
-image came from CI: a signed kind 5402 carrying `BAHIA_ARTIFACT` registers a
-digest-pinned artifact automatically.
+`--daemon` reads the daemon's outbox at `$BAHIA_DATA_DIR/nostr-cache/outbox.bolt`; `--outbox-path` overrides either location. Use `retry` on entries the daemon has abandoned (the `/health` check `canonical_delivery` lists them).
 
-### Package repositories and artifacts
+## Operator tools outside the CLI
 
-```bash
-# Create or update a package repository
-bahia package repo apply \
-  --name libs \
-  --format npm \
-  --backend-ref nexus-main \
-  --backend-type nexus
-
-# Delete a package repository
-bahia package repo delete --name libs
-
-# Upload an artifact
-bahia package upload \
-  --repository libs \
-  --package widgets \
-  --version 1.0.0 \
-  --file ./dist/widgets-1.0.0.tgz
-
-# Promote an artifact
-bahia package promote \
-  --source-repository libs \
-  --target-repository production \
-  --package widgets \
-  --version 1.0.0 \
-  --filename widgets-1.0.0.tgz
-
-# Yank an artifact
-bahia package yank \
-  --repository production \
-  --package widgets \
-  --version 1.0.0 \
-  --filename widgets-1.0.0.tgz \
-  --reason "security issue"
-
-# Trigger drift detection
-bahia package drift --repository production
-```
-
-### Souls
-
-Soul Factory is feature-gated and disabled by default unless Bahia is configured with `BAHIA_SOUL_FACTORY_ENABLED=true`.
-
-```bash
-# List souls
-bahia souls list
-bahia souls list --status active
-
-# Get soul details
-bahia souls get scout
-
-# Provision
-bahia souls provision scout \
-  --template "31950:pubkey:research-agent" \
-  --tier standard \
-  --follow
-
-# Lifecycle
-bahia souls suspend scout --reason "Maintenance"
-bahia souls resume scout
-bahia souls revoke scout --reason "No longer needed"
-bahia souls redeploy scout
-bahia souls regenerate scout --brief "New purpose..."
-
-# Templates
-bahia souls templates list
-bahia souls templates get research-agent
-```
-
-### Adoption
-
-```bash
-# Scan for containers (target syntax is alias=endpointRef)
-bahia adopt scan --org <organization-uuid> --target prod=prod-docker
-
-# Import discovered containers and bind the signed request to an organization
-bahia adopt import --target prod=prod-docker --all --org 11111111-1111-1111-1111-111111111111
-```
-
-`--org` is part of both signed adoption intents. Use the destination organization UUID; it is not client-only display metadata. `adopt scan` reads only the accepted `30315` redacted findings page: use `--offset` and `--limit` (default 20, maximum 100) for bounded pages, and `--idempotency-key` with a UUIDv7 value for safe replay. The status includes `next_offset`, `total_findings`, and `truncated`; it does not include raw runtime secrets or full container metadata. Import's accepted status returns an intent ID and candidate count; inspect canonical imported services for the resulting records.
-
-### Legacy agent Soul adoption report
-
-`soulfactory-legacy-adoption-report` is a separate, read-only planning binary. It reads a sanitized JSON snapshot and writes a deterministic JSON report; it does not contact Docker, Bahia, Signet, or a relay.
-
-```bash
-go run ./cmd/soulfactory-legacy-adoption-report \
-  -input internal/soulfactory/testdata/legacy_adoption_input.json
-```
-
-The command exits `3` if any running agent has multiple authoritative matches or conflicting trusted Soul identity evidence. Container and display names are report context only and never matching evidence. See [Legacy agent Soul adoption plan](../soulfactory-legacy-agent-adoption.md) for the input contract and operator review boundary.
-
-## Output formats
-
-```bash
-# Table (default)
-bahia services list
-
-# JSON
-bahia services list -o json
-
-# YAML
-bahia services get svc-123 -o yaml
-```
-
-## Global flags
-
-| Flag | Description |
-|------|-------------|
-| `--nostr-key-file` | Read a local Nostr private key from a file (use `-` for stdin) |
-| `--nostr-bunker-file` | Read a NIP-46 bunker URI from a file |
-| `--nostr-bunker-relay` | Add a NIP-46 signer relay (repeatable) |
-| `--nostr-client-key-file` | Read the persistent NIP-46 client key from a file |
-| `--relay` | Specify final operator relay (repeatable; highest priority) |
-| `--bootstrap-relay` | Specify bootstrap relay seed for trusted operator discovery (repeatable) |
-| `--service-pubkey` | Specify Bahia service pubkey for routing and single-service discovery trust |
-| `--trusted-service-pubkey` | Specify trusted Bahia service pubkey for bootstrap discovery (repeatable) |
-| `--eose-timeout` | Maximum wait for relay EOSE on Nostr reads (default `5s`; env `BAHIA_EOSE_TIMEOUT`). If no relay reaches EOSE, cached data is printed with a stale warning on stderr and the read exits 0 |
-| `--encrypted` | Encrypt the `logs run` ContextVM request and reply with NIP-59/NIP-44; requires `--service-pubkey` |
-| `--result-timeout` | Maximum wait for a 30315 intent status, or a ContextVM result for `logs run` (default `30s`; intents also support `BAHIA_RESULT_TIMEOUT`) |
-| `--result-retries` | ContextVM `logs run` idempotent re-publishes after a result timeout (default `2`) |
-| `-o, --output` | Output format (`table`, `json`, `yaml`) |
-| `--help` | Show help |
+- `bahia-migrate` (`--config config.yaml`) manages the optional PostgreSQL index: `status` (exit 2 when migrations are pending), `up`, and `down --confirm [--to <stem>] [--force]`. `bahia-migrate nostr [--dry-run] [--relays …] [--relay-backfill]` converts event records stored under non-canonical event kinds in `nostr_events` into canonical events and publishes them; it is resumable and idempotent. `make migrate MIGRATE_CONFIG=… MIGRATE_ACTION=status` wraps the same binary.
+- `soulfactory-legacy-adoption-report -input <snapshot.json>` writes a deterministic report from a sanitized snapshot of running agent containers; it contacts nothing and exits 3 when an agent has conflicting Soul identity evidence.
 
 ## Related
 
-- [Getting Started](getting-started.md) — Setup guide
-- [MCP Tools](mcp-tools.md) — Programmatic access
-- [Nostr Integration](nostr-integration.md) — Event model
+- [Getting Started](getting-started.md)
+- [MCP Tools](mcp-tools.md)
+- [Nostr Integration](nostr-integration.md)

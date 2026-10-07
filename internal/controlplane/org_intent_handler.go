@@ -32,14 +32,14 @@ type OrgCanonicalPublisher interface {
 type OrgMemberChangeCallback func(orgID uuid.UUID)
 
 // OrgIntentHandler processes org/member/invite intents. It is the O1 domain
-// handler for the Phase 3 intent framework.
+// handler for the intent framework.
 //
 // Level-triggered: the newest trusted intent's full desired state wins.
 // Idempotent by intent_id (handled by the intent processor).
 // Authorization is per-operation: fleet-ops for org create, per-org RBAC for
 // everything else (SelfAuthorizingHandler).
 //
-// See design §7 Wave 5 O1 and §10.
+// See docs/architecture/intents-and-authority.md.
 type OrgIntentHandler struct {
 	orgs    repository.OrganizationRepository
 	members repository.OrgMemberRepository
@@ -190,7 +190,7 @@ func (h *OrgIntentHandler) PermissionFor(op string) domain.Permission {
 
 // AuthorizeIntent implements SelfAuthorizingHandler. It checks authorization
 // based on the sub-entity type:
-//   - Org create: actor must be a fleet operator (design §7 Wave 5 O1)
+//   - Org create: actor must be a fleet operator (docs/architecture/intents-and-authority.md)
 //   - Org update/delete: actor must have PermManageSettings in the org
 //   - Member/invite ops: actor must have PermManageMembers in the org
 func (h *OrgIntentHandler) AuthorizeIntent(ctx context.Context, trustSet *TrustSet, intent *Intent) error {
@@ -803,7 +803,7 @@ type MemberEventHistory interface {
 // RelayMemberEventHandler processes encrypted member canonical events from the
 // relay subscription and updates TrustSet relay members accordingly. This is the
 // production path for hydrating TrustSet from the daemon's own published
-// encrypted membership events (design §2.5 item 3).
+// encrypted membership events.
 //
 // Two entry points:
 //   - HandleEncryptedMemberEvent: live, called after OrgCanonicalPublisher
@@ -892,7 +892,7 @@ func (h *RelayMemberEventHandler) HandleEncryptedMemberEvent(ctx context.Context
 
 // HydrateTrustSetFromHistory scans the daemon's own published encrypted member
 // events from history and populates TrustSet relay members. This is the
-// startup path (design §2.5 item 3i): TrustSet is populated before the intent
+// startup path (docs/architecture/intents-and-authority.md): TrustSet is populated before the intent
 // subscriber's author filter is computed, so relay-sourced members are included
 // from the start. Runs once at startup; the live path (HandleEncryptedMemberEvent)
 // keeps it in sync afterwards.

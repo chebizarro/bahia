@@ -573,7 +573,7 @@ func containsAt(s, sub string) bool {
 }
 
 // ===========================================================================
-// Podman Compose factory wiring (bahia-zgov)
+// Podman Compose factory wiring
 // ===========================================================================
 
 func TestNewRuntime_PodmanWithComposeDir_CreatesPodmanComposeRuntime(t *testing.T) {

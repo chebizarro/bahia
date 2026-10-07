@@ -10,7 +10,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
-// TestAssistantStatusCarriesSingleLetterTopic pins bahia-irsry.37: browsers
+// TestAssistantStatusCarriesSingleLetterTopic pins the single-letter topic contract: browsers
 // REQ assistant status by #t=assistant-status (relays index single-letter
 // tags only), so every published status must carry that topic, and the REQ
 // shape the web store sends must match it.

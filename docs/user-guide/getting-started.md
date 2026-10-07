@@ -1,363 +1,146 @@
 # Getting Started with Bahia
 
-This guide walks you through setting up Bahia and deploying your first service.
+This guide takes you from a fresh checkout to a first deployment.
 
 ## Prerequisites
 
-- **Docker** and **Docker Compose** (for quick start)
-- OR: **Go 1.24+** and **PostgreSQL 16+** (for development)
-- A **Nostr keypair** (for signer-first operations)
+- **Docker** and **Docker Compose** for the quick start, or **Go 1.26+** for a local build
+- A **Nostr signer**: a NIP-07 browser extension or a NIP-46 bunker for the web app, and a key file or bunker for the CLI
+- **PostgreSQL 16+** is optional. The daemon keeps its truth on the relays and in its local event store; PostgreSQL is a derived index that enables a few HTTP reads and the OCI proxy.
 
-## Quick Start with Docker Compose
-
-The fastest way to get Bahia running:
+## Quick start with Docker Compose
 
 ```bash
-# Clone the repository
 git clone https://github.com/openagentsinc/bahia.git
 cd bahia
-
-# Start all services
 docker compose up --build
 
-# Verify health
-curl http://localhost:8080/health
-# Expected: {"status":"ok"}
-
-# Open the web UI
+curl http://localhost:8080/health      # {"status":"ok", ...}
 open http://localhost:3000
 ```
 
-This starts:
-- **Bahia API server** on port 8080
-- **Web UI** on port 3000
-- **PostgreSQL** database
-- **Relay sidecar** for Nostr events
+Compose starts the daemon (`:8080`), the relay sidecar (`:3334`), PostgreSQL (`:5432`), and the web app (`:3000`). The web container receives its bootstrap seed — the sidecar URL and the daemon's service pubkey — as `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS` at container start.
 
-## Development Setup
-
-For local development without Docker:
+## Local build
 
 ```bash
-# Install Go dependencies
 make deps
-
-# Set up PostgreSQL and a valid Bahia config (db.host, db.user, db.password,
-# db.name, and db.sslmode must point to that database).
-createdb bahia
-
-# Run SQL migrations only; this does not start the server.
-make migrate MIGRATE_CONFIG=/path/to/valid-config.yaml
-# CI can check for pending migrations without writing to the database:
-make migrate MIGRATE_CONFIG=/path/to/valid-config.yaml MIGRATE_ACTION=status
-
-# Start the development server
-make run-dev
+make build            # bin/bahia-server, bin/bahia, …
+make run-dev          # go run ./cmd/server -config config.yaml
 ```
+
+If you run with PostgreSQL, create the database and apply the schema before the first start: `make migrate MIGRATE_CONFIG=config.yaml` (`MIGRATE_ACTION=status` reports pending migrations without writing).
 
 ## Configuration
 
-Bahia is configured via environment variables or a config file.
-
-All registered kind-30900 intent domains are enabled by default. The optional
-`nostr.intent_domains_disabled` list suppresses processing for named domains;
-it does not restore the retired ContextVM mutation path. Remove an entry to
-re-enable that domain. Relay `OK` confirms publication, not execution; follow
-kind-30315 status and canonical state.
-
-### Essential Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | (required) |
-| `BAHIA_HTTP_ADDR` | API server address | `:8080` |
-| `BAHIA_AUTH_ENABLED` | Enable NIP-98 authentication | `false` |
-| `BAHIA_NOSTR_RELAYS` | Backward-compatible service relay alias | (none) |
-| `BAHIA_NOSTR_SERVICE_RELAYS` | Backend service publish/backfill relays | `BAHIA_NOSTR_RELAYS` |
-| `BAHIA_NOSTR_BROWSER_RELAYS` | Browser-safe bootstrap/read relays | (discovery) |
-| `BAHIA_NOSTR_CONTEXTVM_RELAYS` | Direct ContextVM request/reply relays; when the sidecar is enabled Bahia uses their deduplicated union with the sidecar, falling back to browser relays when absent | browser relays |
-| `BAHIA_NOSTR_RELAY_AUTH_UNAVAILABLE` | Relay AUTH-unavailable behavior; only `exclude_and_fail` is valid | `exclude_and_fail` |
-| `BAHIA_SBOM_CDXGEN_ENABLED` | Enable optional cdxgen executable adapter for repository CycloneDX SBOM generation | `false` |
-| `BAHIA_SBOM_CDXGEN_BINARY_PATH` | Path or executable name for cdxgen when enabled | `cdxgen` |
-| `BAHIA_ASSISTANT_AGENTIC_ENABLED` | Deprecated: only the fallback for `BAHIA_ASSISTANT_DEFAULT_WORKFLOW` (`true` iterative, `false` batch); it never selects an engine | `true` |
-| `BAHIA_ASSISTANT_DEFAULT_WORKFLOW` | Workflow for a new session when the prompt names none: `batch` or `iterative` | derived from `BAHIA_ASSISTANT_AGENTIC_ENABLED` |
-| `BAHIA_ASSISTANT_AGENTIC_TOOL_MODE` | Agentic OpenAI-compatible tool harness: `native` sends provider tool calls; `prompted` injects text tool instructions for models without native function-calling | `native` |
-| `BAHIA_ASSISTANT_LLM_STREAMING` | Enable streaming chat completions for batch proposal generation | `false` |
-
-### Config File (bahia.yaml)
+The daemon reads `-config <file>` (YAML) and then environment variables prefixed `BAHIA_`. `BAHIA_<SECTION>_<FIELD>` maps to `section.field` (`BAHIA_DB_HOST` → `db.host`); use `__` for deeper nesting (`BAHIA_NOSTR__SIDECAR__ENABLED`).
 
 ```yaml
-http:
-  addr: ":8080"
+server:
+  host: "127.0.0.1"          # default
+  port: 8080                 # default
 
-database:
-  url: "postgres://localhost/bahia?sslmode=disable"
+db:                          # optional derived index
+  host: "localhost"
+  port: 5432
+  user: "bahia"
+  password: ""
+  name: "bahia"
+  sslmode: "require"         # default
 
 auth:
-  enabled: true
-  bootstrap_owner_pubkeys:
-    - "your-nostr-pubkey-hex"
+  enabled: true              # NIP-98 on the HTTP surface; default false
+  bootstrap_owner_pubkeys: ["<your-hex-pubkey>"]
 
 nostr:
-  # service_relays is the backend publish/backfill source; relays is only a compatibility alias.
-  service_relays:
-    - "wss://service-relay.example.com"
-  browser_relays:
-    - "wss://sidecar.example.com"
-  # Direct ContextVM request/reply destinations. An enabled sidecar augments this list.
-  contextvm_relays:
-    - "wss://contextvm-relay.example.com"
-  relay_auth_unavailable: "exclude_and_fail"
+  private_key: "<service-hex-key>"
+  relays: ["wss://relay.example.com"]
+  browser_relays: ["wss://relay.example.com"]
+  authorized_pubkeys: ["<fleet-operator-hex-pubkey>"]
+  bootstrap_owners:
+    "11111111-1111-1111-1111-111111111111": "<org-owner-hex-pubkey>"
   sidecar:
-    public_url: "wss://sidecar.example.com"
-
-sbom:
-  cdxgen:
-    # Disabled by default; Syft remains the fallback/default generator.
-    enabled: false
-    binary_path: "cdxgen"
-
-soul_factory:
-  # Durable local identity mapping used by the agent-memory adapter across restarts.
-  agent_memory_task_id_file: "/var/lib/bahia/agent-memory/task-ids.json"
-
-assistant:
-  # The assistant uses the multi-step agentic loop by default in audited permission mode.
-  # If agentic.model/base_url/api_key are omitted, they inherit these legacy llm_* fields.
-  # llm_model is also the batch proposer's model: required when the default workflow
-  # is batch; without it new batch turns are refused (existing drafts can still be approved).
-  llm_base_url: "https://api.openai.com"
-  llm_model: "<assistant-model>"
-  llm_api_key: "<provider-api-key>"
-  agentic:
     enabled: true
-    # native is the default. Use prompted for OpenAI-compatible endpoints whose
-    # models do not implement native tools/function-calling (for example local
-    # llama.cpp-compatible instruction models). In prompted mode Bahia asks for
-    # a fenced tool_call block containing {"name":"<tool name>","arguments":{}}.
-    tool_mode: "native"
-    # Optional overrides; omit these to inherit llm_base_url/llm_model/llm_api_key above.
-    # base_url: "https://api.openai.com"
-    # model: "<agentic-model>"
-    # api_key: "<agentic-api-key>"
-  permissions:
-    mode: "audited"
-  # Batch default (requires llm_model); prefer default_workflow: batch over this flag:
-  # agentic:
-  #   enabled: false
-  # Disabled by default. Enable only for legacy planner providers that emit delta.content
-  # when streaming response_format (json_schema) chat completions.
-  llm_streaming: false
+    listen_addr: "0.0.0.0:3334"
+    public_url: "wss://relay.example.com"
+    data_dir: "/var/lib/bahia/relay-sidecar"
 ```
 
-## Your First Deployment
+Everything a client can read or change goes through the relays, so the two values that matter most are `nostr.private_key` (the service identity) and the relay list. `nostr.authorized_pubkeys` names the fleet operators who may act outside any organization (policies, DNS, workers, ML, tool decisions, fleet rekeys, MCP over HTTP). See [Nostr Integration](nostr-integration.md#relays) for the full relay and sidecar reference, and each feature page for its own section (`adoption`, `direct_runtime_actions`, `dns`, `hiveci`, `llm`, `soul_factory`, `assistant`, `supervision`, `route_canaries`, `virtualization`).
 
-### Step 1: Sign in to the Web UI
+Serialized configuration (JSON, YAML, log fields) is a diagnostic view: credentials, private keys, bunker URIs, and auth headers are masked. Never save such a view back as the operational configuration.
 
-1. Open `http://localhost:3000`
-2. Click **Sign In**
-3. Connect with your Nostr signer (NIP-07 extension or NIP-46 bunker)
+## Your first deployment
 
-A persisted, signer-verified session authenticates immediately. Protected-route roles come from relay membership events, not a REST `/orgs` probe. A route may still require an appropriate role for its actions.
+### 1. Sign in
 
-After sign-in, open the user menu and choose **Edit Profile**, or go directly to `/settings/profile`, to edit your Nostr kind-0 metadata. The profile editor validates fields locally, signs the kind-0 event with the active NIP-07 or NIP-46 signer, publishes to writable Nostr relays from the signer/NIP-65 relay list, and shows the relay OK acceptance/rejection outcomes.
+Open `http://localhost:3000` and click **Sign in with Nostr**. Choose your NIP-07 extension or paste a NIP-46 bunker URI. The session is verified by signature; your roles come from the organization membership records on the relay. **Edit Profile** (`/settings/profile`) publishes your kind-0 metadata through the same signer.
 
-### Step 2: Create a Service
+### 2. Create an organization
 
-A **service** represents an application you want to deploy.
+Every service belongs to an organization. The configured bootstrap owner (or a fleet operator) creates it:
 
-**Via Web UI:**
-1. Navigate to **Services** in the sidebar
-2. Click **New Service**
-3. Fill in:
-   - **Name**: `my-api`
-   - **Repository**: `https://github.com/org/my-api`
-4. Click **Create**
-
-**Via CLI:**
 ```bash
-bahia services create \
-  --name "my-api" \
-  --artifact-repo "ghcr.io/org/my-api"
+bahia --relay wss://relay.example.com --service-pubkey <service-pubkey> \
+  orgs create acme --display-name "ACME"
+bahia orgs members add <org-id> <teammate-pubkey> --role deployer
 ```
 
-This CLI mutation path is transitional and deprecated; the canonical production path is the signer-first Nostr control plane.
+See [Organizations](features/organizations.md).
 
-**Via MCP:**
+### 3. Create a service
+
+In **Services**, use **Create Service**; or:
+
+```bash
+bahia services create --org "$ORG" --name my-api --artifact-repo ghcr.io/acme/my-api \
+  --repo-source gitea --repo-coordinate acme/my-api --clone-url https://git.example/acme/my-api.git
+```
+
 ```json
-{
-  "tool": "bahia_create_service",
-  "arguments": {
-    "name": "my-api",
-    "artifact_repo": "ghcr.io/org/my-api"
-  }
-}
+{"name": "bahia_create_service", "arguments": {"org_id": "<org-uuid>", "name": "my-api", "artifact_repo": "ghcr.io/acme/my-api"}}
 ```
 
-### Step 3: Create an Environment
+All three publish the same signed `service` intent; the web app shows a **pending** badge until the daemon's status and canonical record arrive.
 
-An **environment** is a deployment target like staging or production.
+### 4. Create an environment
 
-**Via Web UI:**
-1. Navigate to **Environments**
-2. Click **New Environment**
-3. Fill in:
-   - **Name**: `staging`
-   - **Slug**: `staging`
-4. Click **Create**
+In **Environments**, use **Create Environment**; or `bahia environments create --org "$ORG" --name staging --unit-runtime-type compose --unit-endpoint-ref <endpoint-ref> --unit-compose-dir /srv/my-api`. An environment names where the service runs (its deployment units) and how changes are reconciled (`observe_only`, `auto_apply`, `approval_required`). See [Environments](features/environments.md).
 
-### Step 4: Register an Artifact
+### 5. Get an artifact
 
-**Artifacts** are container images produced by CI.
+Artifacts are digest-pinned images with provenance. The normal path is a governed build: `bahia builds request --service <id> --git-ref main --credential-ref <secret-id> --artifact-repo ghcr.io/acme/my-api`, after which the daemon registers the artifact from signed Hive-CI evidence. See [Builds](features/builds.md) and [Artifacts](features/artifacts.md).
 
-When your CI pipeline builds an image, register it with Bahia by publishing a signed Nostr `ArtifactRegister` event, or use the Hive-CI bridge for automatic artifact registration from CI events. The legacy REST-backed artifact registration command path is deprecated until the CLI publishes signed Nostr events directly.
+### 6. Deploy
 
-### Step 5: Deploy
+From the service page choose **Deploy**, pick the environment and artifact, review the desired-state preview, and submit. From the CLI:
 
-Create a **deployment intent** to request a deployment:
-
-**Via Web UI:**
-1. Go to **Services** → select your service
-2. Click **Deploy**
-3. Select the environment and artifact
-4. Click **Create Intent**
-
-**Via Nostr:** publish a ContextVM `service/deploy` request as kind `25910` (or encrypted `1059`/`21059`) and follow canonical `30315`, `4903`, and `30900` observables. Legacy `DeployRequest` custom kinds are startup migration inputs only.
-
-### Step 6: Monitor the Deployment
-
-**Via Web UI:**
-- View deployment status on the **Deployments** page
-- Check logs in the deployment run detail view
-
-**Via Nostr:**
-- Subscribe to `30315` (NIP-38 operational status) for progress
-- Subscribe to `4903` for audit/provenance facts
-- Subscribe to `30900` for current service/deployment state
-
-## Understanding the Flow
-
-```
-1. CI builds image → publishes build event
-2. Bahia registers artifact
-3. User creates deployment intent
-4. Policy evaluation (optional approval)
-5. Deployment run executes on worker
-6. Runtime observation confirms state
-7. Canonical observables updated on Nostr (`30900`, `30315`, `4903`)
-```
-
-## Next Steps
-
-- Read [Core Concepts](core-concepts.md) to understand the data model
-- Explore [Services](features/services.md) for advanced configuration
-- Set up [Notifications](features/notifications.md) for alerts
-- Learn about [Nostr Integration](nostr-integration.md) for real-time updates
-
-## Common Issues
-
-### "Connection refused" on localhost:8080
-
-Ensure the server is running:
 ```bash
-docker compose ps
-# or
-make run-dev
+bahia deployments preview --service <service-id> --environment <env-id> --artifact <artifact-id>
+bahia deploy --org "$ORG" --service <service-id> --environment <env-id> --artifact <artifact-id> \
+  --expected-desired-state-hash <hash-from-preview>
 ```
 
-### "Unauthorized" errors
+A protected environment, or a policy with `enforcement: block`, holds the intent for approval (**Deployments → Pending Approvals**, `bahia deployments approve`).
 
-For operator ContextVM adoption and direct-runtime actions, configure the signer
-in both `nostr.authorized_pubkeys` and the relevant `adoption.allowed_pubkeys`
-or `direct_runtime_actions.allowed_pubkeys` list. Empty lists deny access.
-Enabling either surface requires valid 64-character hex scoped pubkeys at config
-load; subject/email-only lists are rejected. See the
-[allowlist upgrade instructions](../adoption-production-rollout.md#allowlist-upgrade-bahia-kppzm)
-before updating an existing deployment.
+### 7. Follow progress
 
-Enable authentication and provide your Nostr pubkey:
-```yaml
-auth:
-  enabled: true
-  bootstrap_owner_pubkeys:
-    - "your-pubkey-hex"
+**Deployments** shows the intent, its run, and run logs. On the relays the same progress is the `30315` status addressed to your pubkey, the `deployment-intent` and `deployment-run` records, and `4903` audit facts; the service's `service-state` record reports the observed artifact and drift once the runtime converges.
+
+## The flow at a glance
+
+```
+operator signs intent ──▶ relay ──▶ daemon validates, authorizes, applies
+                                      │
+                                      ├─▶ 30315 status to the requester
+                                      ├─▶ 30900 canonical records (intent, run, state)
+                                      └─▶ 4903 audit facts
+runtime reconciles ──▶ runtime observation ──▶ service-state (observed vs desired, drift)
 ```
 
-### No relay connection
+## Next steps
 
-Check relay discovery from the server:
-```bash
-curl http://localhost:8080/.well-known/nostr.json
-```
-
-In the web UI, open **Settings → Relays** (`/settings/relays`) to inspect persistent operator relay policy, validate local browser relay URLs, and reconnect the local browser session. Reconnect results explicitly report whether all, some, or no configured local browser relays connected.
-
-See [Troubleshooting](troubleshooting.md) for more solutions.
-
-### Governed virtualization
-
-Persistent VM and Loom execution-plane mutations are opt-in through the
-`virtualization` block in `config.yaml`. Missing dependencies leave mutations
-unavailable. See [VM installation configuration](features/virtual-machines.md#installation-configuration)
-for host/trust bindings, operator identities, immutable images and administrative
-endpoints. Portable verification does not establish live-host readiness.
-
-### Managed-instance supervision
-
-`supervision.enabled` starts local runtime health checks. Recovery is safe by default: `supervision.observe_only` defaults to `true`. Configure `interval`, `memory_threshold`, and explicit `instances`; Bahia-managed desired deployment units are also discovered from durable environment-service state. Each explicit instance identifies its service, environment, deployment unit, exact runtime target, supervisor type, desired-running intent, probe, restart budget, backoff, and warning interval.
-
-### Safe configuration diagnostics
-
-JSON/YAML serialization and Go formatting of configuration structs are diagnostic
-views, not configuration backups: credentials, private keys, complete NIP-46 bunker
-URIs, auth headers, and opaque policy metadata are masked. Configuration loading
-and credential access used by adapters are unchanged. Do not save a diagnostic
-view over the operational configuration, or log individual credential fields or
-raw database connection strings.
-
-Config leaves declare a `secret` classification. New or unclassified leaves are
-masked by default; schema tests require an explicit classification and exercise
-all protected subtrees through JSON, YAML, Go formatting, Zap, and slog. Public
-values must be deliberately classified `secret:"false"`; credential values use
-`secret:"true"`. Environment arrays and webhook URLs have restricted diagnostic
-views via `env_values` and `url`. New secret-bearing subtrees must also pass the
-direct-rendering tests.
-
-Route-canary relay diagnostics additionally replace IP literals and host:port
-endpoints with `[REDACTED_ADDRESS]`. For example, an internal-LAN failure becomes
-`dial tcp [REDACTED_ADDRESS]: connection refused`. The public route, perspective,
-classification, and failure remain visible; REST/operator evidence retains the
-original address detail. This redaction does not change event kinds or schemas.
-
-### Assistant workflow configuration migration
-
-`assistant.default_workflow: batch|iterative` selects the workflow of a new
-session. Both workflows always run through the one unified executor, so an
-explicit per-request workflow wins for a new turn; otherwise the persisted
-session workflow wins; otherwise `default_workflow` wins; when that setting is
-absent, the deprecated `assistant.agentic.enabled` maps to `iterative`/`batch`.
-The flag no longer selects an engine or gates what is constructed. Changing
-config never silently changes an existing session. Batch plan editing remains
-supported.
-
-`assistant.llm_model` is the batch proposer's model. It is required only when
-the effective default workflow is `batch` (`default_workflow: batch`, or
-`agentic.enabled: false` with `default_workflow` unset), the same rule as
-before the unified executor. With an iterative default and no `llm_model` the
-assistant starts with only the iterative workflow available, and the startup
-log line `operator assistant executor initialized` reports
-`available_workflows=[iterative]` and a `batch_unavailable_reason`. On such a
-deployment a new turn that resolves to batch (a prompt requesting
-`workflow: batch`, or a prompt on a session whose persisted workflow is batch)
-is refused with `{status:"failed", step:"workflow_unavailable"}`; it is never
-run as iterative. Everything that needs no proposer still works: approving
-(including an edited, revision-bound approval) or rejecting an existing batch
-draft, cancelling, reconciling and finishing an approved batch run, with the
-usual revision/hash binding, permission policy and command scope. Set
-`llm_model` to offer both workflows whatever the default.
-
-The iterative proposer is always validated when `assistant.enabled=true`: the
-`assistant.agentic.*` provider, model (falling back to `llm_model`; one of the
-two is required), base URL and limits must be valid even when the default is
-`batch`. `nostr.private_key` is required for the encrypted transcript and
-execution checkpoints. See [Operator Assistant](features/operator-assistant.md).
+- [Core Concepts](core-concepts.md) — the data model
+- [CLI Reference](cli-reference.md) — every command and flag
+- [Notifications](features/notifications.md) — alerts for failed deployments and policy breaches
+- [Troubleshooting](troubleshooting.md) — relay, signer, and authorization problems

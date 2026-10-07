@@ -1,6 +1,0 @@
-{
-  "FX68-1": ["web/tests/unit/auth-roles.test.js:does not grant member A's role to signed-in member B", "web/tests/unit/auth-roles.test.js:requires both the coordinate and decrypted member pubkey to match the session"],
-  "FX68-2": ["web/tests/unit/auth-roles.test.js:derives roles from fixture key envelopes and encrypted member records", "web/tests/unit/auth-roles.test.js:isolates roles and removals across orgs with mixed member records"],
-  "FX68-3": ["web/tests/unit/auth-roles.test.js:revokes the current role on a newer encrypted member tombstone", "web/tests/unit/auth-roles.test.js:uses created_at, not query order, for role downgrades"],
-  "FX68-4": ["web/tests/unit/encrypted-domain-stores.test.js:loads org detail and sends member mutations as encrypted operations", "web/tests/e2e/auth-guard-redirect.spec.js:shows a viewer-only org detail despite another decryptable owner record"]
-}

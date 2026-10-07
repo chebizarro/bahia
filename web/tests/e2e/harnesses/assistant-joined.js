@@ -483,8 +483,8 @@ export async function startAssistantJoinedHarness({ skipDashboardBuild = false }
     // the production relay sidecar (both khatru) broadcast ephemeral events but
     // never store them, so the backend's evidence resolver (a REQ by id) cannot
     // find a real downstream request on any Bahia relay. Seeding fabricated
-    // checkpoint state would not exercise the product; see bahia-0hq7t notes.
-    log('reconciliation case not seeded: kind-25910 request evidence is not retained by khatru relays (bahia-0hq7t)');
+    // checkpoint state would not exercise the product.
+    log('reconciliation case not seeded: kind-25910 request evidence is not retained by khatru relays');
     log(`ready: dashboard=${dashboard.url} relay=${relay.wsUrl} backend=http://127.0.0.1:${backendPort} logs=${runDir}`);
     return {
       env,

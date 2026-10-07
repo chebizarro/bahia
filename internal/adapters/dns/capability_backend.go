@@ -14,10 +14,10 @@ type AgentCapabilityChecker interface {
 	IsHealthy(agentPubkey string) bool
 }
 
-// CapabilityAwareDNSBackend wraps a legacy ContextVM RPC backend with an
+// CapabilityAwareDNSBackend wraps a ContextVM RPC backend with an
 // event-publish backend, switching to events for agents that advertise the
-// "zone-subscribe" capability. This enables zero-downtime rolling upgrades:
-// new daemon + old agent uses RPC, new daemon + new agent uses events.
+// "zone-subscribe" capability. Agents without the capability keep using RPC,
+// so daemons and agents can be upgraded independently.
 type CapabilityAwareDNSBackend struct {
 	rpcBackend   Backend // DnsmasqAgentBackend (ContextVM RPC)
 	eventBackend Backend // EventPublishDNSBackend (event publish)
