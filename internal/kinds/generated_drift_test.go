@@ -166,6 +166,28 @@ func TestGeneratedFrontendWorkerCoordinatesMatchGo(t *testing.T) {
 	}
 }
 
+// TestGeneratedFrontendOperatorAllowlistMatchesGo keeps the web's operator
+// allowlist discriminator, topic, coordinate prefix and scopes equal to the
+// ones the daemon publishes (bahia-fbyo5), so the browser decrypts the record
+// on the exact coordinate the AEAD binds.
+func TestGeneratedFrontendOperatorAllowlistMatchesGo(t *testing.T) {
+	jsKinds := parseGeneratedJSKindConstants(t, filepath.Join(repositoryRoot(t), "web", "src", "lib", "nostr", "kinds.gen.js"))
+	if got, ok := jsKinds["OPERATOR_ALLOWLIST_CATALOG_KIND"]; !ok || got != CPStateFamilyOperatorAllowlist.LegacyKind() {
+		t.Fatalf("kinds.gen.js OPERATOR_ALLOWLIST_CATALOG_KIND = %d (present=%t), want %d", got, ok, CPStateFamilyOperatorAllowlist.LegacyKind())
+	}
+	jsStrings := parseGeneratedJSStringConstants(t)
+	for jsName, goValue := range map[string]string{
+		"OPERATOR_ALLOWLIST_TOPIC":              CPStateTopicOperatorAllowlist,
+		"OPERATOR_ALLOWLIST_D_PREFIX":           OperatorAllowlistDPrefix,
+		"OPERATOR_ALLOWLIST_SCOPE_CONTINUITY":   OperatorAllowlistScopeContinuity,
+		"OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY": OperatorAllowlistScopeSoulFactory,
+	} {
+		if got, present := jsStrings[jsName]; !present || got != goValue {
+			t.Fatalf("kinds.gen.js %s = %q (present=%t), want internal/kinds value %q", jsName, got, present, goValue)
+		}
+	}
+}
+
 // TestWorkerDTagGivesEveryWorkerFamilyItsOwnCoordinate pins bahia-irsry.36:
 // the same record id (a worker pubkey) yields a distinct d per worker family,
 // and non-worker families have no worker coordinate.

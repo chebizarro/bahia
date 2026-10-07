@@ -119,8 +119,11 @@ const (
 	CPStateTopicSoulRuntimePolicy        = "soul-factory-runtime-policy"
 	CPStateTopicSoulFactorySagaRun       = "soul-factory-saga-run"
 	CPStateTopicSoulFactoryAdapterLedger = "soul-factory-adapter-ledger"
-	CPStateTopicBlossomAdmin             = "blossom-admin"
-	CPStateTopicBlossomBlob              = "blossom-blob"
+	// CPStateTopicOperatorAllowlist is the fleet-OCK encrypted operator
+	// allowlist family (CPStateFamilyOperatorAllowlist, bahia-fbyo5).
+	CPStateTopicOperatorAllowlist = "operator-allowlist"
+	CPStateTopicBlossomAdmin      = "blossom-admin"
+	CPStateTopicBlossomBlob       = "blossom-blob"
 
 	// Secret and notification channel state topics (Phase 3 N1).
 	CPStateTopicSecretRegistry              = "secret-registry"

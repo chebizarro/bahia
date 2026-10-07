@@ -174,6 +174,40 @@ const CPStateFamilySoulFactorySagaRun CPStateFamily = 32025
 // release ledger. Like the saga-run family it is a 30900 discriminator only.
 const CPStateFamilySoulFactoryAdapterLedger CPStateFamily = 32028
 
+// CPStateFamilyOperatorAllowlist is the daemon's published copy of its
+// operator allowlists (bahia-fbyo5): one replaceable record per scope,
+// `operators:continuity` from nostr.authorized_pubkeys and
+// `operators:soul-factory` from soul_factory.authorized_pubkeys. The content
+// is fleet-OCK encrypted and the record carries no pubkey in any tag, so a
+// browser holding the fleet OCK can trust the other authorized operators'
+// documents without the relay learning who the operators are. Like the
+// families above it has no wire kind of its own: it is a 30900 discriminator
+// only. 32028 is the SoulFactory adapter ledger.
+const CPStateFamilyOperatorAllowlist CPStateFamily = 32029
+
+// Operator allowlist scopes. Each names the daemon config list the record
+// mirrors and the operator-authored kinds it authorizes.
+const (
+	// OperatorAllowlistScopeContinuity mirrors nostr.authorized_pubkeys: the
+	// signers of continuity definitions (31400-31404), failover/recovery
+	// commands (38430/38431) and continuity heartbeats (30315).
+	OperatorAllowlistScopeContinuity = "continuity"
+	// OperatorAllowlistScopeSoulFactory mirrors soul_factory.authorized_pubkeys:
+	// the signers of SoulFactory drafts (31952), actions (1950) and the fleet
+	// configuration (31953).
+	OperatorAllowlistScopeSoulFactory = "soul-factory"
+)
+
+// OperatorAllowlistDPrefix prefixes every operator allowlist coordinate.
+const OperatorAllowlistDPrefix = "operators:"
+
+// OperatorAllowlistDTag is the d of one scope's allowlist record:
+// "operators:<scope>". The scope is public; the pubkeys are only in the
+// encrypted content.
+func OperatorAllowlistDTag(scope string) string {
+	return OperatorAllowlistDPrefix + scope
+}
+
 // FleetOCKScope is the well-known orgID value used for fleet-wide
 // confidential cp-state (payments, security findings/schedules). The OCK
 // for this scope is wrapped to all fleet operators (config authorized_pubkeys

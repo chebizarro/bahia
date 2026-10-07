@@ -14,10 +14,11 @@ import {
   SOUL_RUNTIME_METHODS
 } from '$lib/nostr/client.js';
 import { authState, login, signWithAuth } from '$lib/stores/auth.js';
+import { operatorAllowlistFor, trustedOperatorAuthors } from '$lib/stores/operator-allowlist.svelte.js';
 import { boot, getEventStore, getPool, getRelayUrls, getServicePubkeys, onStoreRefresh } from '$lib/nostr/boot.js';
 import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
 import { createPagedReader } from '$lib/nostr/store-first-backfill.js';
-import { CAS_CONTROL_STATE, CP_STATE_TOPICS } from '$lib/nostr/kinds.gen.js';
+import { CAS_CONTROL_STATE, CP_STATE_TOPICS, OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY } from '$lib/nostr/kinds.gen.js';
 import { soulRuntimePolicy } from '$lib/stores/operational-views.js';
 
 /** @typedef {import('$lib/types/customization').SoulAvatarSpec} SoulAvatarSpec */
@@ -507,7 +508,9 @@ export function attestedSoulFactoryKeys(store = getEventStore(), serviceAuthors 
  *   in its signed runtime policy record.
  * - operator: 31952 drafts, 1950 actions and the 31953 fleet config are
  *   operator documents. The daemon accepts them from
- *   `soul_factory.authorized_pubkeys`, a list the browser cannot verify, so
+ *   `soul_factory.authorized_pubkeys`, which it publishes as the fleet-OCK
+ *   encrypted `operators:soul-factory` record (bahia-fbyo5): a session that
+ *   reads it trusts the listed operators plus the signed-in key; otherwise
  *   only the signed-in key is trusted. 31950 templates are operator input the
  *   controller may also publish: operator and factory keys are both trusted.
  * - runtime: 30317 capabilities are signed by runtime sidecars. Trusted
@@ -519,7 +522,9 @@ export function attestedSoulFactoryKeys(store = getEventStore(), serviceAuthors 
 export function trustedSoulAuthors(store = getEventStore(), serviceAuthors = getServicePubkeys()) {
   const attested = attestedSoulFactoryKeys(store, serviceAuthors);
   const factory = normalizedPubkeys([...serviceAuthors, ...attested.controllers]);
-  const operator = authState.status === 'authenticated' ? normalizedPubkeys([authState.pubkey]) : [];
+  const operator = trustedOperatorAuthors(
+    operatorAllowlistFor(OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY), authState.status === 'authenticated' ? authState.pubkey : ''
+  );
   const soulRuntimes = store && factory.length
     ? store.query({ kinds: [KINDS.AGENT_SOUL], authors: factory }).map((event) => parseSoulEvent(event)?.runtime?.runtime_pubkey)
     : [];

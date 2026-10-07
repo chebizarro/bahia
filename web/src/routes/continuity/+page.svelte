@@ -2,6 +2,8 @@
   import { onMount } from 'svelte';
   import { subscribeToContinuityDashboard } from '$lib/nostr/continuity';
   import { authState } from '$lib/stores/auth.js';
+  import { operatorAllowlistAvailable } from '$lib/stores/operator-allowlist.svelte.js';
+  import { OPERATOR_ALLOWLIST_SCOPE_CONTINUITY } from '$lib/nostr/kinds.gen.js';
 import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
   import SimulationPanel from './SimulationPanel.svelte';
   import TopologyView from './TopologyView.svelte';
@@ -115,9 +117,12 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
   </nav>
 
   {#if activeTab !== 'status'}
-    <!-- The browser cannot verify the daemon's operator allowlist, so operator-signed kinds are trusted from one key only. -->
+    <!-- Operator-signed kinds are trusted from the signed-in key, widened by the daemon's fleet-OCK encrypted operator allowlist when this session can decrypt it (bahia-fbyo5). -->
     <p class="operator-scope-note" data-testid="continuity-operator-scope-note">
-      {#if authState.status === 'authenticated'}
+      {#if authState.status === 'authenticated' && operatorAllowlistAvailable(OPERATOR_ALLOWLIST_SCOPE_CONTINUITY)}
+        Topology, requests and simulation show the definitions, requests and heartbeats signed by your key and by the
+        authorized fleet operators in the Bahia service's operator allowlist. Status includes every operator's changes, because the Bahia service signs it.
+      {:else if authState.status === 'authenticated'}
         Topology, requests and simulation use only the definitions, requests and heartbeats signed by your key.
         Documents published by other fleet operators are not shown here. Status includes every operator's changes, because the Bahia service signs it.
       {:else}
