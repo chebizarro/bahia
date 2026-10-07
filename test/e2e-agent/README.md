@@ -1,211 +1,90 @@
-# E2E Agent Test Harness
+# E2E agent harness
 
-Agent-driven end-to-end testing infrastructure for Bahia. This harness provides programmatic control over the full Bahia stack (postgres, bahia server, web UI) and drivers for testing all three interfaces: REST API, Web UI (Playwright), and MCP.
+`test/e2e-agent` is a TypeScript harness that launches the Bahia
+docker-compose stack (postgres, `bahia` on 8080, web on 3000), drives it
+through three drivers, runs a tagged scenario library, and can hand failures
+to a self-healing loop that proposes fixes. It is independent of the web
+Playwright suites in `web/tests/e2e`.
 
-## Components
+## Layout
 
-### Core Infrastructure
+| Path | Role |
+|---|---|
+| `harness.ts` | `TestHarness`: `docker compose up`/`down`, health-check wait, log retrieval, URL accessors. Runs `docker info` first and exits with `DockerPreflightError` and remediation text if no daemon is reachable |
+| `drivers/api.ts` | `BahiaAPIDriver`: typed `fetch` calls against the daemon's HTTP routes |
+| `drivers/playwright.ts` | `PlaywrightDriver`: browser launch, navigation helpers, screenshots, DOM inspection |
+| `drivers/mcp.ts` | `MCPDriver`: JSON-RPC client for the daemon's MCP endpoint (`tools/list`, `tools/call`) |
+| `scenarios/` | Scenario library (see `scenarios/README.md`) |
+| `runner.ts`, `cli.ts`, `reporter.ts` | Scenario execution, CLI flags, JSON/HTML reports |
+| `diagnostics.ts`, `fixer.ts`, `healing-loop.ts` | Failure diagnosis and the optional fix loop |
+| `check-*.ts`, `smoke-test.ts`, `mcp-config.test.ts` | Standalone checks |
+| `types.ts` | Shared types (`Scenario`, `ScenarioResult`, `TestStepResult`, driver config) |
 
-- **`harness.ts`** - Main orchestration layer
-  - Launches/stops docker-compose stack programmatically
-  - Waits for service health checks
-  - Provides service logs and status
-
-### Drivers
-
-- **`drivers/api.ts`** - REST API driver
-  - Typed methods for all Bahia API endpoints
-  - Services, environments, deployments, artifacts, etc.
-  - Built on native `fetch` for minimal dependencies
-
-- **`drivers/playwright.ts`** - Web UI driver
-  - Playwright-based browser automation
-  - Navigation helpers for Bahia pages
-  - Screenshot and DOM inspection capabilities
-
-- **`drivers/mcp.ts`** - MCP client driver
-  - Connects to Bahia's native HTTP JSON-RPC MCP endpoint (`/mcp` or `/api/v1/mcp`)
-  - Invokes MCP tools for deployment operations
-  - Typed helpers for common Bahia MCP operations
-
-### Types
-
-- **`types.ts`** - Shared TypeScript types
-  - Test results and status
-  - API entities (Service, Environment, etc.)
-  - Driver capabilities
-
-## Installation
+## Setup
 
 ```bash
 cd test/e2e-agent
 npm install
+npm run typecheck          # tsc --noEmit
 ```
 
-## Docker preflight
-
-The smoke harness manages the Bahia docker-compose stack by default. Before it runs `docker compose up`, it verifies that a Docker daemon is reachable with `docker info`. If Docker Desktop or another compatible daemon is not running, the harness exits before scenario execution with `DockerPreflightError` and remediation text.
-
-To resolve the preflight failure:
-
-1. Start Docker Desktop or a compatible Docker daemon.
-2. Verify `docker info` succeeds in the same shell.
-3. Re-run `pnpm test:smoke`.
-
-When `skipStackManagement` is enabled, the harness uses the existing stack and performs HTTP health checks instead of managing docker-compose.
-
-## Usage
-
-### Smoke Test
-
-Run the smoke test to verify all drivers work:
+## Running
 
 ```bash
-npm run smoke
+npm test                   # tsx cli.ts --all
+npm run test:smoke         # tsx cli.ts --tags smoke
+npm run test:json          # machine-readable report
+npm run smoke              # driver smoke test (stack up, API + web + MCP tools/list, stack down)
+npm run scenarios          # print the scenario library summary
+npm run demo
+npm run test:mcp-config
+npm run clean              # docker compose down -v
 ```
 
-This will:
-1. Launch the docker-compose stack
-2. Wait for all services to be healthy
-3. Test REST API operations (create service, environment)
-4. Test Web UI navigation with Playwright
-5. Test MCP tool discovery over `http://localhost:8080/mcp`
-6. Clean up the stack
+`cli.ts` options: `--all`, `--tags <a,b>`, `--scenario <name>` (repeatable),
+`--json`, `--html <path>`, `--continue-on-failure`, `--headed`, `--skip-mcp`,
+`--mcp-url <url>`, `--use-existing-stack`, `--heal`, `--max-iterations <n>`,
+`--approve-fixes`, `--help`.
 
-### Manual Testing
+- The harness manages the stack by default. `--use-existing-stack` skips
+  docker-compose and only performs HTTP health checks against the configured
+  URLs.
+- The MCP URL defaults to `http://localhost:8080/mcp`, derived from
+  `apiBaseUrl`; override with `BAHIA_E2E_MCP_URL` or `--mcp-url`. The daemon
+  mounts MCP at `POST /mcp` (platform-admin authenticated). MCP connection
+  failures are fatal unless `--skip-mcp` is given.
 
-```typescript
-import { TestHarness } from './harness.js';
-import { BahiaAPIDriver } from './drivers/api.js';
-import { PlaywrightDriver } from './drivers/playwright.js';
-
-const harness = new TestHarness();
-
-// Start stack
-await harness.start();
-
-// Use API driver
-const api = new BahiaAPIDriver(harness.getApiUrl());
-const service = await api.createService({
-  name: 'my-app',
-  artifact_repo: 'registry.example.com/my-app',
-  runtime_type: 'docker',
-});
-
-// Use Playwright driver
-const web = new PlaywrightDriver(harness.getWebUrl());
-await web.launch();
-await web.goToServices();
-await web.screenshot('/tmp/services.png');
-await web.close();
-
-// Cleanup
-await harness.cleanup();
-```
-
-### MCP Driver
-
-The MCP driver uses Bahia's native HTTP JSON-RPC MCP endpoint. By default the harness derives `http://localhost:8080/mcp` from `apiBaseUrl`; set `BAHIA_E2E_MCP_URL` or pass `mcpServerUrl` to use `/api/v1/mcp` or an externally managed stack. MCP connection failures are fatal unless the runner is invoked with `--skip-mcp`.
-
-Example usage:
+Harness configuration (`TestHarness` constructor):
 
 ```typescript
-import { MCPDriver } from './drivers/mcp.js';
-
-const mcp = new MCPDriver();
-
-// Connect to Bahia MCP server
-await mcp.connect({
-  serverUrl: harness.getMcpUrl(),
-});
-
-// List available tools
-const tools = await mcp.listTools();
-console.log('Available tools:', tools);
-
-// Call a tool
-const result = await mcp.bahiaListServices();
-console.log('Services:', result);
-
-await mcp.disconnect();
-```
-
-## Configuration
-
-The harness uses sensible defaults but can be configured:
-
-```typescript
-const harness = new TestHarness({
+new TestHarness({
   composeFile: '../../docker-compose.yml',
   projectName: 'bahia-e2e-test',
-  healthCheckTimeout: 60000,  // 60 seconds
-  healthCheckInterval: 2000,  // 2 seconds
+  healthCheckTimeout: 60000,
+  healthCheckInterval: 2000,
   apiBaseUrl: 'http://localhost:8080',
   webBaseUrl: 'http://localhost:3000',
   mcpServerUrl: 'http://localhost:8080/mcp',
 });
 ```
 
-## Architecture
+## What the daemon serves
 
-```
-┌─────────────────────────────────────────┐
-│          Test Harness                   │
-│  (Docker Compose Orchestration)         │
-└──────────┬──────────────────────────────┘
-           │
-           ├─────► Docker Compose Stack
-           │       ├─ postgres:5432
-           │       ├─ bahia:8080 (API + MCP)
-           │       └─ web:3000
-           │
-           ├─────► API Driver ──────► REST API (:8080/api/v1)
-           │
-           ├─────► Playwright Driver ──► Web UI (:3000)
-           │
-           └─────► MCP Driver ──────► MCP HTTP JSON-RPC (:8080/mcp)
-```
-
-## Docker Compose Ports
-
-- **Postgres**: 5432
-- **Bahia API**: 8080
-- **Web UI**: 3000
-
-## Next Steps
-
-This harness is **Item 2** of the E2E testing plan. The remaining items are:
-
-- **Item 3**: Test Scenario Library - Define comprehensive test scenarios
-- **Item 4**: Agent Test Runner - AI agent loop to execute scenarios
-- **Item 5**: Self-Healing Loop - Diagnose failures and submit fixes
+The daemon's HTTP surface is health/readiness/metrics, MCP, deployment and
+live logs, DB-less payment reads, config-fabric drift, the Blossom blob proxy
+and a few HTTP-native routes; entity reads and mutations are relay
+subscriptions and signed intents (`docs/architecture/cli-and-mcp.md`).
+`drivers/api.ts` and the `api`-tagged scenarios still address
+`/api/v1/services`, `/api/v1/environments`, policies, secrets and SSE events,
+which return 404 from the current daemon, so those scenarios fail until the
+driver is rewritten over the MCP tools or `pkg/client`. The `web` and `mcp`
+drivers are the usable paths today.
 
 ## Troubleshooting
 
-### Health check timeout
-
-If services don't become healthy within 60 seconds, check the logs:
-
-```typescript
-const logs = await harness.getLogs('bahia');
-console.log(logs);
-```
-
-### Port conflicts
-
-If ports 5432, 8080, or 3000 are already in use, stop conflicting services:
-
-```bash
-docker ps
-docker stop <container-id>
-```
-
-Or modify the docker-compose.yml port mappings.
-
-### MCP connection issues
-
-The MCP driver requires the Bahia server HTTP endpoint to expose native MCP JSON-RPC. Verify:
-
-1. Bahia MCP server is implemented in `internal/mcp/server.go`
-2. The API router exposes `POST /mcp` or `POST /api/v1/mcp`
-3. `BAHIA_E2E_MCP_URL`, `mcpServerUrl`, or `apiBaseUrl` points to the running Bahia stack
+- **Health check timeout** — `await harness.getLogs('bahia')`.
+- **Port conflicts** — ports 5432, 8080 and 3000 must be free
+  (`docker ps`, `docker stop <id>`), or change the compose port mappings.
+- **MCP connection** — the stack must be up and `BAHIA_E2E_MCP_URL` /
+  `mcpServerUrl` / `apiBaseUrl` must point at it; the endpoint is
+  `POST /mcp` in `internal/api/router/router.go`.

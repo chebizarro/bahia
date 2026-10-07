@@ -1,6 +1,12 @@
 # E2E Test Scenario Library
 
-Comprehensive test scenarios covering all Bahia functionality for agent-driven end-to-end testing.
+Tagged scenarios for the agent-driven harness in `test/e2e-agent`.
+
+The `api`-tagged scenarios (services, environments, deployments, policies,
+secrets) and the SSE `events` scenarios address REST routes the daemon no
+longer serves (see `../README.md`, "What the daemon serves"); they fail until
+rewritten over MCP tools or `pkg/client`. `workers` and the `web`/`mcp`
+scenarios run against the current daemon.
 
 ## Overview
 
@@ -257,12 +263,6 @@ console.log(stats);
 //   crudTests: 15
 // }
 ```
-
-## Next Steps
-
-These scenarios will be used by:
-- **Item 4: Agent Test Runner** - Autonomous execution and reporting
-- **Item 5: Self-Healing Loop** - Failure analysis and fix generation
 
 ## Notes
 
