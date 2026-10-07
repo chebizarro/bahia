@@ -13,13 +13,13 @@ import (
 
 // IntentSubscriber opens a long-lived subscription for kind-30900 events
 // tagged with t=bahia-intent, scoped to trusted author pubkeys from the
-// TrustSet. It uses 's ProcessSync for relay-independent catch-up,
+// TrustSet. It uses Phase 2's ProcessSync for relay-independent catch-up,
 // per-relay cursors, and NIP-77 reconciliation.
 //
 // When the trust set changes, the subscriber restarts with an updated authors
 // list. A 5-second debounce prevents churn from rapid membership changes.
 //
-// See docs/architecture/intents-and-authority.md
+// See design §3.1.
 type IntentSubscriber struct {
 	pool      *nostrAdapter.RelayPool
 	store     *localstore.Store
@@ -153,7 +153,7 @@ func (s *IntentSubscriber) buildFilter() nostr.Filter {
 		Tags:  nostr.TagMap{"t": {"bahia-intent"}},
 	}
 
-	// Author-scoped subscription (docs/architecture/intents-and-authority.md, anti-amplification).
+	// Author-scoped subscription (§3.1, anti-amplification).
 	// When Postgres is the only trust source, we cannot enumerate all
 	// members, so we use an open subscription and rely on the processor
 	// to check permissions.
@@ -188,7 +188,7 @@ func (s *IntentSubscriber) applyEvent(ctx context.Context, ev *nostr.Event) {
 		return
 	}
 
-	// Drop events from untrusted authors silently (docs/architecture/intents-and-authority.md).
+	// Drop events from untrusted authors silently (§2.3).
 	// This is a second check after the author-scoped subscription filter.
 	// Events may arrive despite the filter during trust-set transitions.
 	actor := ev.PubKey.Hex()

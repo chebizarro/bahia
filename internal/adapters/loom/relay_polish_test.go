@@ -56,7 +56,7 @@ func (p eoseFirstPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr
 
 // TestPlaneObserveDoesNotRetryATerminalClosedThatArrivesWithEOSE: when a
 // relay's terminal CLOSED and the aggregate EOSE it causes arrive together,
-// Observe must give up whichever it handles first. The pool
+// Observe must give up whichever it handles first (bahia-irsry.49). The pool
 // records the terminal CLOSED before EndOfStoredEvents closes, so the EOSE
 // branch sees the give-up instead of reconnecting.
 func TestPlaneObserveDoesNotRetryATerminalClosedThatArrivesWithEOSE(t *testing.T) {

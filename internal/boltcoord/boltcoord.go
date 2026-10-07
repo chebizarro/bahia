@@ -1,23 +1,23 @@
 // Package boltcoord makes the bolt eventstore (fiatjaf.com/nostr/eventstore/
 // boltdb) answer NIP-01 coordinates, NIP-09 deletions and tag filters for tag
 // values of any length. Both Bahia stores built on it use this package: the
-// relay sidecar's events.bolt and the daemon's local store (
-// ).
+// relay sidecar's events.bolt and the daemon's local store (bahia-irsry.44,
+// bahia-irsry.51, bahia-irsry.52).
 //
 // The eventstore indexes no tag value that is empty or longer than
 // TagIndexMaxValue bytes, so its tag lookups cannot find such values:
-// - ReplaceEvent finds the versions an event supersedes through #d, so for a
-// d it does not index it supersedes nothing and every version is kept.
-// Versions and Store.Replace match such a d here instead, over the
-// author's events of that kind.
-// - A coordinate is "<kind>:<pubkey>:<d>", already 67 bytes before d, so any
-// d of 30 bytes or more takes it past the limit and an #a lookup for a
-// deletion request naming it finds nothing. DeletionIndex keeps a hashed
-// index of the coordinates stored requests delete instead.
-// - A REQ or COUNT filter on such a value (#a with a relay config
-// coordinate, #d with an empty d) matches nothing. Store keeps a hashed
-// index of those values next to the eventstore's (see tagindex.go) and
-// Store.Query reads filters that name one through it.
+//   - ReplaceEvent finds the versions an event supersedes through #d, so for a
+//     d it does not index it supersedes nothing and every version is kept.
+//     Versions and Store.Replace match such a d here instead, over the
+//     author's events of that kind.
+//   - A coordinate is "<kind>:<pubkey>:<d>", already 67 bytes before d, so any
+//     d of 30 bytes or more takes it past the limit and an #a lookup for a
+//     deletion request naming it finds nothing. DeletionIndex keeps a hashed
+//     index of the coordinates stored requests delete instead.
+//   - A REQ or COUNT filter on such a value (#a with a relay config
+//     coordinate, #d with an empty d) matches nothing. Store keeps a hashed
+//     index of those values next to the eventstore's (see tagindex.go) and
+//     Store.Query reads filters that name one through it.
 package boltcoord
 
 import (

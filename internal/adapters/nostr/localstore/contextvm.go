@@ -1,6 +1,6 @@
 package localstore
 
-// The ContextVM request ledger is the daemon's
+// The ContextVM request ledger (bahia-irsry.10.6, audit C-14) is the daemon's
 // at-most-once guard for ContextVM requests. It sits in this file next to the
 // relay cursors that decide which requests are replayed, so the two are kept
 // or lost together.

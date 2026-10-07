@@ -88,7 +88,7 @@ func (failingAuditRepo) Record(context.Context, *repository.NostrEventRecord) (b
 	return false, errors.New("connection refused")
 }
 
-// a failed audit write does not drop the inbound event; the in-memory
+// B-14: a failed audit write does not drop the inbound event; the in-memory
 // dedupe still stops a relay replay within the process.
 func TestReactorHandlesInboundEventWhenTheAuditWriteFails(t *testing.T) {
 	catalog := nostradapter.NewKindCatalog()

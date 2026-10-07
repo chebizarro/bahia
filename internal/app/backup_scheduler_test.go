@@ -91,7 +91,7 @@ func TestBackupSchedulerRunnerProcessesDueSchedulesOnStartup(t *testing.T) {
 }
 
 // cancelAfterCalls returns a scheduler that cancels its context from inside
-// the nth call. Cancellation happens exactly once (: the old fake
+// the nth call. Cancellation happens exactly once (bahia-fz9gs: the old fake
 // closed a channel on every call from the 4th on, so a 5th tick racing the
 // cancellation panicked), and the runner's return is driven by that call,
 // not by elapsed time.

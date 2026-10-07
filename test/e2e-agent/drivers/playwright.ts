@@ -1,10 +1,10 @@
-/***/
+/**
  * Playwright driver for Bahia Web UI testing
  */
 import { chromium, type Browser, type Page, type BrowserContext } from '@playwright/test';
 import type { DriverCapabilities } from '../types.js';
 
-/***/
+/**
  * PlaywrightDriver provides Web UI automation capabilities
  */
 export class PlaywrightDriver {
@@ -17,7 +17,7 @@ export class PlaywrightDriver {
     this.baseUrl = baseUrl;
   }
 
-  /***/
+  /**
    * Get driver capabilities
    */
   getCapabilities(): DriverCapabilities {
@@ -28,7 +28,7 @@ export class PlaywrightDriver {
     };
   }
 
-  /***/
+  /**
    * Launch browser and navigate to base URL
    */
   async launch(options: { headless?: boolean; slowMo?: number } = {}): Promise<void> {
@@ -45,7 +45,7 @@ export class PlaywrightDriver {
     await this.page.goto(this.baseUrl);
   }
 
-  /***/
+  /**
    * Close browser
    */
   async close(): Promise<void> {
@@ -63,7 +63,7 @@ export class PlaywrightDriver {
     }
   }
 
-  /***/
+  /**
    * Get current page
    */
   getPage(): Page {
@@ -73,7 +73,7 @@ export class PlaywrightDriver {
     return this.page;
   }
 
-  /***/
+  /**
    * Navigate to a path
    */
   async navigateTo(path: string): Promise<void> {
@@ -82,7 +82,7 @@ export class PlaywrightDriver {
     await page.goto(url);
   }
 
-  /***/
+  /**
    * Take a screenshot
    */
   async screenshot(path?: string): Promise<Buffer | string> {
@@ -94,7 +94,7 @@ export class PlaywrightDriver {
     return page.screenshot({ fullPage: true });
   }
 
-  /***/
+  /**
    * Wait for selector to be visible
    */
   async waitForSelector(selector: string, timeout = 5000): Promise<void> {
@@ -102,7 +102,7 @@ export class PlaywrightDriver {
     await page.waitForSelector(selector, { timeout, state: 'visible' });
   }
 
-  /***/
+  /**
    * Click on an element
    */
   async click(selector: string): Promise<void> {
@@ -110,7 +110,7 @@ export class PlaywrightDriver {
     await page.click(selector);
   }
 
-  /***/
+  /**
    * Fill input field
    */
   async fill(selector: string, value: string): Promise<void> {
@@ -118,7 +118,7 @@ export class PlaywrightDriver {
     await page.fill(selector, value);
   }
 
-  /***/
+  /**
    * Get text content of an element
    */
   async getText(selector: string): Promise<string | null> {
@@ -126,7 +126,7 @@ export class PlaywrightDriver {
     return page.textContent(selector);
   }
 
-  /***/
+  /**
    * Check if element exists
    */
   async elementExists(selector: string): Promise<boolean> {
@@ -135,7 +135,7 @@ export class PlaywrightDriver {
     return element !== null;
   }
 
-  /***/
+  /**
    * Wait for navigation
    */
   async waitForNavigation(options: { timeout?: number; url?: string } = {}): Promise<void> {
@@ -143,7 +143,7 @@ export class PlaywrightDriver {
     await page.waitForLoadState('networkidle', { timeout: options.timeout });
   }
 
-  /***/
+  /**
    * Get current URL
    */
   async getCurrentUrl(): Promise<string> {
@@ -151,7 +151,7 @@ export class PlaywrightDriver {
     return page.url();
   }
 
-  /***/
+  /**
    * Execute JavaScript in the browser
    */
   async evaluate<T>(fn: () => T): Promise<T> {
@@ -161,35 +161,35 @@ export class PlaywrightDriver {
 
   // ==================== Bahia-specific helpers ====================
 
-  /***/
+  /**
    * Navigate to services page
    */
   async goToServices(): Promise<void> {
     await this.navigateTo('/services');
   }
 
-  /***/
+  /**
    * Navigate to environments page
    */
   async goToEnvironments(): Promise<void> {
     await this.navigateTo('/environments');
   }
 
-  /***/
+  /**
    * Navigate to deployments page
    */
   async goToDeployments(): Promise<void> {
     await this.navigateTo('/deployments');
   }
 
-  /***/
+  /**
    * Navigate to policies page
    */
   async goToPolicies(): Promise<void> {
     await this.navigateTo('/policies');
   }
 
-  /***/
+  /**
    * Check if dashboard is loaded
    */
   async isDashboardLoaded(): Promise<boolean> {

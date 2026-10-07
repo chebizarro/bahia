@@ -1,11 +1,11 @@
-/***/
+/**
  * Auth/session store for NIP-07 extension + NIP-46 Nostr Connect authentication.
  *
- * §6.2: A persisted, signer-verified session counts as authenticated
+ * Phase 4 §6.2: A persisted, signer-verified session counts as authenticated
  * immediately. No REST probe, no discovery gate, no backendAuthenticated flag.
  *
  * Background signer verification is non-blocking. On first authenticated boot,
- * calls requestPersistentStorage for durable IndexedDB storage.
+ * calls requestPersistentStorage() for durable IndexedDB storage.
  *
  * Roles come from relay membership events in auth-roles.svelte.js, not from
  * a REST /orgs probe.
@@ -271,7 +271,7 @@ let loginInProgress = null;
 let missingSignerToastId = null;
 let stopWatchingNip07Availability = null;
 let signerLifecycleWatcherInstalled = false;
-/** Track whether we've already requested persistent storage this session.*/
+/** Track whether we've already requested persistent storage this session. */
 let persistentStorageRequested = false;
 
 function dismissMissingSignerToast() {
@@ -325,7 +325,7 @@ function ensureSignerAvailabilityWatcher() {
 // Background signer verification (non-blocking)
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Verify the signer still matches the persisted session in the background.
  * Non-blocking — does not prevent rendering.
  */
@@ -439,7 +439,7 @@ export async function initializeAuth() {
           backgroundSignerVerify(persisted);
         }
 
-        // Wire NIP-98 for any remaining interim REST calls
+        // Wire NIP-98 for any remaining interim REST calls (Wave 2/3)
         if (browser) localStorage.removeItem('bahia_token');
 
         return;
@@ -778,8 +778,8 @@ export async function signHttpRequest({ method = 'GET', url }) {
   return `Nostr ${base64Encode(JSON.stringify(signedEvent))}`;
 }
 
-/***/
- * For interim REST calls that still need backend auth.
+/**
+ * For interim REST calls that still need backend auth (Wave 2/3).
  * This just wires NIP-98 signing — no /orgs probe.
  */
 export async function authenticateBackend() {

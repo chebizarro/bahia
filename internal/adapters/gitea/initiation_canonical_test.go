@@ -278,7 +278,7 @@ func TestCanonicalInitiationBackfillsInFlightSQLInitiations(t *testing.T) {
 	req := arcanaStartRequest(credential)
 	relay := newInitiationRelay(t)
 
-	// SQL era: the compatibility store claims and prepares, then the process dies.
+	// SQL era: the legacy store claims and prepares, then the process dies.
 	legacy := NewMemoryInitiationStore()
 	_, err := restartInitiator(t, original, &crashInitiationStore{legacy, StageRequestReady, false}, relay).StartHiveCIBuild(ctx, req)
 	require.ErrorIs(t, err, errSimulatedCrash)

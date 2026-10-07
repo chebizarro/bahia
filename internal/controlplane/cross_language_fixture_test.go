@@ -16,11 +16,11 @@ import (
 
 // TestCrossLanguageFixture generates (and verifies) a deterministic fixture
 // that the JS test suite decrypts, proving both implementations agree on:
-// - AEAD associated-data serialisation order (Go encoding/json = sorted keys)
-// - XChaCha20-Poly1305 encrypt/decrypt
-// - Base64 raw-standard encoding
-// - OCK wrap payload serialisation
-// - Key-envelope d-tag format
+//   - AEAD associated-data serialisation order (Go encoding/json = sorted keys)
+//   - XChaCha20-Poly1305 encrypt/decrypt
+//   - Base64 raw-standard encoding
+//   - OCK wrap payload serialisation
+//   - Key-envelope d-tag format
 //
 // By default the test asserts the committed fixture file matches.
 // Set BAHIA_REGEN_FIXTURE=1 to regenerate the file.

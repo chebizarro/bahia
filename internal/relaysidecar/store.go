@@ -24,9 +24,9 @@ import (
 )
 
 // eventStoreFile is the bbolt database under nostr.sidecar.data_dir. It
-// replaces the hand-rolled events.sqlite table: fiatjaf's eventstore
+// replaces the hand-rolled events.sqlite table (C-20): fiatjaf's eventstore
 // indexes kinds, authors and tags (#e/#p/#d/#a…), so ContextVM, addressable
-// and FIPS lookups not scan the table.
+// and FIPS lookups no longer scan the table.
 const eventStoreFile = "events.bolt"
 
 // Buckets Bahia keeps next to the eventstore's own in the same bbolt file.

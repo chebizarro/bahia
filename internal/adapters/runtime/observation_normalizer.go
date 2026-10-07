@@ -170,7 +170,7 @@ func isSystemEnvVar(key string) bool {
 // ---------------------------------------------------------------------------
 
 // normalizeInspectedPorts converts Docker inspect port bindings into sorted
-// "hostPort:containerPort/proto" strings. Ephemeral host IPs (0.0.0.0,::)
+// "hostPort:containerPort/proto" strings. Ephemeral host IPs (0.0.0.0, ::)
 // are excluded from the normalized form.
 func normalizeInspectedPorts(ports map[string][]dockerPortPublish) []string {
 	if len(ports) == 0 {

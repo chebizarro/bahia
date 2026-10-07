@@ -22,13 +22,13 @@ var errIntentAuthorsChanged = errors.New("intent authors changed during push")
 // The push is idempotent: if the set has not changed since the last successful
 // push to a target, it is skipped. On failure, retries use capped exponential
 // backoff (1s → 2s → 4s → … capped at 60s) indefinitely until the context is
-// cancelled. Warn-level logs and the SyncStatus health detail expose stale
+// cancelled. Warn-level logs and the SyncStatus() health detail expose stale
 // state.
 //
 // Only Bahia-owned sidecar targets receive the push. The syncer never pushes to
 // third-party relays.
 //
-// See docs/architecture/intents-and-authority.md
+// See design §7.1.
 type IntentAuthorsSyncer struct {
 	trustSet   *TrustSet
 	admin      IntentAuthorsAdmin
@@ -42,7 +42,7 @@ type IntentAuthorsSyncer struct {
 	outOfSync bool              // true when at least one target failed
 
 	// pgPubkeys tracks pubkeys discovered through Postgres org membership
-	// mutations. These are merged with TrustSet.AuthorPubkeys when pushing
+	// mutations. These are merged with TrustSet.AuthorPubkeys() when pushing
 	// to sidecars, closing the gap that Postgres members are not enumerable
 	// through the TrustSet alone.
 	pgMu      sync.RWMutex

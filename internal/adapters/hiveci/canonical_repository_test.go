@@ -168,7 +168,7 @@ func ingest(t *testing.T, d *canonicalDaemon, processor ResultProcessor, events 
 	}
 }
 
-// a result whose processing failed is resumed after a restart from the
+// C-48: a result whose processing failed is resumed after a restart from the
 // canonical result state in the local event store. There is no SQL row and no
 // timer: the restarted daemon's one resume pass attempts it, counts the
 // attempt, and the state reflects the outcome.
@@ -232,7 +232,7 @@ func TestPendingResultResumeBoundsAttempts(t *testing.T) {
 	require.NoError(t, resumer.Resume(ctx))
 	require.Equal(t, 3, processor.count(), "a failed result is terminal")
 
-	// there is no retry timer behind the exhausted attempts; the
+	// bahia-xjdo9: there is no retry timer behind the exhausted attempts; the
 	// operator's signer-first build-result action is the contract, so the
 	// bridge may finish a failed result through it.
 	require.NoError(t, d.repo.UpdateResultState(ctx, result.ID.Hex(), domain.HiveCIProcessingStateProcessed))

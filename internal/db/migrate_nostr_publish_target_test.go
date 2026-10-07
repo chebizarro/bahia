@@ -37,7 +37,7 @@ var pendingOnly = regexp.MustCompile(`\bWHERE\b.*\bPUBLISH_STATE = 'PENDING'`)
 var indexBuildOrDrop = regexp.MustCompile(`\b(CREATE|DROP)( UNIQUE)? INDEX\b|\bREINDEX\b`)
 
 // requireStartupSafe enforces the startup-migration rules shared by 000071 and
-// 000072 (docs/architecture/postgres-event-store-lifecycle.md): constraints NOT VALID,
+// 000072 (docs/designs/nostr-event-store-lifecycle.md): constraints NOT VALID,
 // no index builds (those are CONCURRENTLY and out of band), no column
 // rewrites, no deletes, no validation (the online maintenance command does
 // it) and no unscoped UPDATE. droppableIndexes names retired indexes a
@@ -66,7 +66,7 @@ func requireStartupSafe(t *testing.T, statements []string, droppableIndexes ...s
 }
 
 // nostr_events is ~19GB in production and 000071 runs at startup, so it must
-// stay metadata-only (docs/architecture/postgres-event-store-lifecycle.md): constraints
+// stay metadata-only (docs/designs/nostr-event-store-lifecycle.md): constraints
 // NOT VALID, no index builds (those are CONCURRENTLY and out of band), no
 // column rewrites, and no UPDATE outside the pending outbox served by the
 // pending partial index. The Postgres round trip is

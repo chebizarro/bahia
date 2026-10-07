@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ageCapKindCases is the kind table for the age cap:
+// ageCapKindCases is the kind table for the C-11 age cap (bahia-irsry.52):
 // the boundaries of every NIP-01 kind range, and kind 5.
 var ageCapKindCases = map[canonicalnostr.Kind]bool{
 	0: false, 3: false, 10000: false, 10002: false, 19999: false,

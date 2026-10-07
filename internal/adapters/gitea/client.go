@@ -2,12 +2,12 @@
 // Hive-CI build initiation adapter (controlplane.HiveCIBuildStarter).
 //
 // Security invariants:
-// - Source credentials are resolved server-side from opaque secret
-// references and travel only inside HTTPS request bodies to the fleet
-// Gitea API. They never enter Nostr events, logs, process argv, or
-// Docker build args.
-// - All errors returned from this package are scrubbed of resolved
-// credential material before propagation.
+//   - Source credentials are resolved server-side from opaque secret
+//     references and travel only inside HTTPS request bodies to the fleet
+//     Gitea API. They never enter Nostr events, logs, process argv, or
+//     Docker build args.
+//   - All errors returned from this package are scrubbed of resolved
+//     credential material before propagation.
 package gitea
 
 import (

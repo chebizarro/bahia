@@ -13,7 +13,7 @@ import (
 )
 
 // ConfidentialStateEncryptor encrypts and decrypts confidential cp-state
-// records using a per-org content key (OCK). C1 path for
+// records using a per-org content key (OCK). Phase 3 C1 replacement for
 // LegacyOrgStateDecryptor. Org members can decrypt the AEAD layer; service-only
 // fields require an additional NIP-44 decrypt to the service pubkey.
 //
@@ -29,7 +29,7 @@ type ConfidentialStateEncryptor interface {
 	WrapKeyForMember(ctx context.Context, orgID string, pubkey string) error
 }
 
-// LegacyOrgStateDecryptor is the read-only compatibility decryption interface.
+// LegacyOrgStateDecryptor is the read-only legacy decryption interface.
 // Retained during migration so RelayMemberEventHandler can attempt
 // old-format O1 decryption. No encrypt path — all new writes use
 // ConfidentialStateEncryptor.
@@ -45,7 +45,7 @@ type MemberPublishedCallback func(ctx context.Context, encryptedContent string, 
 // OrgCanonicalPublisher publishes canonical cp-state for org, member and invite
 // entities through the shared Projector signing/outbox pipeline. Content is
 // encrypted with a per-org content key (OCK) so org members can decrypt it
-// ( C1, docs/architecture/confidential-state.md).
+// (Phase 3 C1, design §1.7).
 //
 // The outer envelope (d, domain, schema, legacy_kind, deleted, t) from
 // controlStateEnvelope is preserved so coordinates and tombstones still work.
@@ -100,9 +100,9 @@ func (p *OrgCanonicalPublisher) PublishOrg(ctx context.Context, org *domain.Orga
 
 // PublishMember publishes a canonical org member record. Required OCK rotation
 // precedes the canonical record, so a failed rekey cannot commit a revocation:
-// - Deleted member → RotateKey so the removed member cannot decrypt future records.
-// - Added/updated member → WrapKeyForMember so they can read existing records.
-// - Role downgrade (prevRole provided and higher than current) → RotateKey.
+//   - Deleted member → RotateKey so the removed member cannot decrypt future records.
+//   - Added/updated member → WrapKeyForMember so they can read existing records.
+//   - Role downgrade (prevRole provided and higher than current) → RotateKey.
 //
 // prevRole is optional; pass the old role when known (role-change paths in
 // OrgIntentHandler and EncryptedDomainHandlers) so the publisher can detect
@@ -153,7 +153,7 @@ func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domai
 		putRecordTime(content, "joined_at", member.JoinedAt)
 		putRecordTime(content, "updated_at", member.UpdatedAt)
 	}
-	// No p tags — member pubkeys are confidential (docs/architecture/confidential-state.md).
+	// No p tags — member pubkeys are confidential (§1.7).
 	entityID := uuid.NewSHA1(member.OrgID, []byte(member.Pubkey))
 	legacyKind := KindOrgMemberRegistry
 	topic := ""
@@ -191,7 +191,7 @@ func (p *OrgCanonicalPublisher) PublishInvite(ctx context.Context, invite *domai
 		putRecordTime(content, "expires_at", invite.ExpiresAt)
 		putRecordTime(content, "created_at", invite.CreatedAt)
 	}
-	// No p tags — invitee pubkeys are confidential (docs/architecture/confidential-state.md).
+	// No p tags — invitee pubkeys are confidential (§1.7).
 	_, err := p.publishEncrypted(ctx, KindOrgInviteRegistry, invite.ID.String(), deleted, nil, content, "org_invite.projection", &invite.ID, invite.OrgID.String())
 	return err
 }
@@ -210,7 +210,7 @@ func (p *OrgCanonicalPublisher) publishEncrypted(ctx context.Context, legacyKind
 		topic = fam.topic
 	}
 
-	// Org state is confidential (docs/architecture/confidential-state.md): never publish without an
+	// Org state is confidential (design §1.7): never publish without an
 	// encryptor, so there is no plaintext path to a relay.
 	if p.encryptor == nil {
 		return "", fmt.Errorf("confidential encryptor not configured; refusing plaintext publish")
@@ -228,7 +228,7 @@ func (p *OrgCanonicalPublisher) publishEncrypted(ctx context.Context, legacyKind
 }
 
 // orgMemberDTag returns the d-tag coordinate for an org member record:
-// "org:member:<org-id>:<pubkey>", matching the design's membership event model (docs/architecture/intents-and-authority.md).
+// "org:member:<org-id>:<pubkey>", matching the design's membership event model (§2.2).
 func orgMemberDTag(orgID uuid.UUID, pubkey string) string {
 	return "org:member:" + orgID.String() + ":" + pubkey
 }

@@ -1,8 +1,8 @@
-/***/
- * Deprecated facade supports import compatibility.
+/**
+ * Deprecated facade retained for import compatibility.
  *
  * Production Bahia web code must use canonical kind constants plus semantic
- * domain/schema tags from./kinds.gen.js. Old Bahia request/status/result/read-
+ * domain/schema tags from ./kinds.gen.js. Old Bahia request/status/result/read-
  * model kind aliases are intentionally not re-exported here.
  */
 import * as gen from './kinds.gen.js';

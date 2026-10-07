@@ -62,7 +62,7 @@ func TestRelayClientPublishCollectsSlowRelayOKOverTheWire(t *testing.T) {
 }
 
 // TestReactorPublishesOverOneSharedPool: the reactor publishes over its one
-// relay client, not a pool per publish: every publish to its
+// relay client (bahia-irsry.47), not a pool per publish: every publish to its
 // relay set reuses one connection per relay, and the client's quorum (one
 // relay) still applies when the other relay refuses.
 func TestReactorPublishesOverOneSharedPool(t *testing.T) {

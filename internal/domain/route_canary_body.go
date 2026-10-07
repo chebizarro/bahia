@@ -35,7 +35,7 @@ const (
 //
 //	(?s).*"status"\s*:\s*"ok".*
 //
-// where (?s) lets. cross newlines in a pretty-printed JSON document. Because
+// where (?s) lets . cross newlines in a pretty-printed JSON document. Because
 // the body is bounded, the pattern sees at most the prefix of the response the
 // probe reads; a marker beyond that bound is invisible to every assertion.
 //

@@ -33,7 +33,7 @@ const (
 // Bahia publishes DNS endpoint state (live and tombstone) only through the
 // projector's canonical control-state envelope: kind 30900 with domain=dns,
 // schema=bahia.cp-state.v1, legacy_kind=31976, deleted=true|false and
-// t=dns-endpoint. Compatibility kind 31976 is not published, and its
+// t=dns-endpoint. Legacy kind 31976 is no longer published, and its
 // tombstones now land on 30900, so a 31976 subscription would only replay
 // stale endpoints that can never be removed.
 var endpointLegacyKind = kinds.CPStateFamilyDNSEndpoint.TagValue()
@@ -49,7 +49,7 @@ type Config struct {
 	EnvironmentFilter    []string `yaml:"environment_filter"`
 	// StorePath is the local Nostr event store (a rebuildable cache of
 	// endpoint events plus per-relay sync cursors). Empty means
-	//.bahia-fips-bridge.bolt beside HostsPath.
+	// .bahia-fips-bridge.bolt beside HostsPath.
 	StorePath string `yaml:"store_path"`
 }
 
@@ -154,7 +154,7 @@ func (c Config) validate() error {
 }
 
 // Bridge syncs Bahia endpoint events into a local event store and rewrites
-// the managed FIPS hosts section from them.
+// the managed FIPS hosts section from them (bahia-irsry.10.5, C-37).
 //
 // On start it rebuilds its routes from the store, then syncs each relay
 // independently with nostradapter.ProcessSync: a restart fetches only the
@@ -317,7 +317,7 @@ func (b *Bridge) subscriptionFilters() []nostr.Filter {
 	// NIP-09 kind-5 deletions that target DNS endpoint state (kind 30900).
 	// The #k tag scopes to endpoint state; #t does not apply because kind-5
 	// events carry e/a tags, not the target's topic tags. The local store's
-	// SaveEvent already handles the mechanics. ( item 6)
+	// SaveEvent already handles the mechanics. (bahia-irsry.48 item 6)
 	deletionFilter := nostr.Filter{
 		Kinds:   []nostr.Kind{nostr.KindDeletion},
 		Authors: authors,

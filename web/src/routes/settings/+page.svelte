@@ -177,7 +177,7 @@
   </div>
 
   <div class="settings-grid">
-    <!-- Remote signer connection-->
+    <!-- Remote signer connection -->
     <section class="settings-section">
       <h2><ProtectedIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Remote Signer</h2>
       <p class="section-description">
@@ -193,7 +193,7 @@
         <LoadingButton variant="primary" loading={nostrConnectLoading} onclick={connectNostrConnect}>Connect</LoadingButton>
       </div>
 
-      <!-- QR display: show when URI is entered-->
+      <!-- QR display: show when URI is entered -->
       {#if nostrConnectQrDataUrl}
         <div class="qr-section">
           <p class="section-description">Preview of the entered URI as a QR code:</p>
@@ -201,13 +201,13 @@
         </div>
       {/if}
 
-      <!-- QR scanner-->
+      <!-- QR scanner -->
       <div class="qr-scanner-section">
         {#if !scanning}
           <button class="btn-scan icon-button" onclick={startQrScanner}><CameraIcon size={16} strokeWidth={1.75} ariaHidden="true" /> Scan QR Code</button>
         {:else}
           <div class="scanner-wrap">
-            <!-- svelte-ignore a11y_media_has_caption-->
+            <!-- svelte-ignore a11y_media_has_caption -->
             <video bind:this={videoEl} class="scanner-video" playsinline></video>
             <canvas bind:this={canvasEl} class="scanner-canvas" aria-hidden="true"></canvas>
             <button class="btn-scan-stop" onclick={stopQrScanner}>Stop scanning</button>
@@ -221,7 +221,7 @@
       </p>
     </section>
 
-    <!-- Theme Section-->
+    <!-- Theme Section -->
     <section class="settings-section">
       <h2><AppearanceIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Appearance</h2>
       <p class="section-description">Customize the look and feel of the application.</p>
@@ -247,7 +247,7 @@
       </div>
     </section>
 
-    <!-- Operational Settings Section-->
+    <!-- Operational Settings Section -->
     <section class="settings-section">
       <h2><NotificationIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Operational Settings</h2>
       <p class="section-description">
@@ -264,7 +264,7 @@
       </div>
     </section>
 
-    <!-- Server Configuration Section-->
+    <!-- Server Configuration Section -->
     <section class="settings-section">
       <h2><ConfiguredIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Server Configuration</h2>
       <p class="section-description">
@@ -277,7 +277,7 @@
         <div class="error-box">{systemError}</div>
       {/if}
 
-      <!-- Nostr Server Config-->
+      <!-- Nostr Server Config -->
       <div class="config-group">
         <h3>Nostr</h3>
         {#if systemInfo?.nostr?.service_npub}
@@ -314,7 +314,7 @@
         </div>
       </div>
 
-      <!-- Blossom Config-->
+      <!-- Blossom Config -->
       <div class="config-group">
         <h3>Blossom Storage</h3>
         {#if systemInfo?.blossom}
@@ -346,7 +346,7 @@
         {/if}
       </div>
 
-      <!-- OCI Registry Config-->
+      <!-- OCI Registry Config -->
       <div class="config-group">
         <h3>Container Registry</h3>
         {#if systemInfo?.oci}
@@ -370,7 +370,7 @@
         {/if}
       </div>
 
-      <!-- Runtime Config-->
+      <!-- Runtime Config -->
       <div class="config-group">
         <h3>Runtime</h3>
         <div class="config-row">
@@ -385,7 +385,7 @@
         {/if}
       </div>
 
-      <!-- Feature Flags-->
+      <!-- Feature Flags -->
       <div class="config-group">
         <h3>Features</h3>
         {#if featureEntries.length > 0}
@@ -405,7 +405,7 @@
       </div>
     </section>
 
-    <!-- Available Registries Section-->
+    <!-- Available Registries Section -->
     <section class="settings-section">
       <h2><ArtifactIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Available Registries</h2>
       <p class="section-description">
@@ -440,7 +440,7 @@
       {/if}
     </section>
 
-    <!-- Version Section-->
+    <!-- Version Section -->
     <section class="settings-section">
       <h2><ConfiguredIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Versions</h2>
       <p class="section-description">
@@ -611,7 +611,7 @@
     flex: 1;
   }
 
-  /* Theme styles*/
+  /* Theme styles */
   .theme-option {
     display: flex;
     align-items: center;
@@ -650,7 +650,7 @@
     color: white;
   }
 
-  /* Version display styles*/
+  /* Version display styles */
   .version-list {
     display: flex;
     flex-direction: column;
@@ -696,7 +696,7 @@
     letter-spacing: 0.05em;
   }
 
-  /* Config display styles*/
+  /* Config display styles */
   .config-group {
     margin-bottom: 1.5rem;
   }
@@ -754,7 +754,7 @@
     color: var(--primary);
   }
 
-  /* Features grid*/
+  /* Features grid */
   .features-grid {
     display: flex;
     flex-wrap: wrap;
@@ -776,7 +776,7 @@
     color: var(--success);
   }
 
-  /* Registry list*/
+  /* Registry list */
   .registry-list {
     display: flex;
     flex-direction: column;
@@ -849,7 +849,7 @@
     font-family: monospace;
   }
 
-  /* QR styles*/
+  /* QR styles */
   .qr-section {
     margin: 0.75rem 0;
   }

@@ -38,11 +38,11 @@ var hiveCIPolicyNamespace = uuid.MustParse("4f0a7b8e-2d3c-4e5f-9a1b-6c7d8e9f0a1b
 // evidenceQueryLimit bounds how many signed events one read scans.
 const evidenceQueryLimit = 1000
 
-// CanonicalRepository is the Hive-CI store. Signed 5401 runs and
+// CanonicalRepository is the Hive-CI store (audit C-48). Signed 5401 runs and
 // 5402 results are the evidence: they live in the local event store, where the
 // subscriber saves them, and every read decodes the signed event. What the
 // daemon decides about a result (its processing state and retry count), the
-// pipeline policies and the accepted-release ledger are the
+// pipeline policies and the accepted-release ledger (bahia-xjdo9) are the
 // daemon's own canonical records, published through the outbox before the
 // optional SQL index is written. SQL failures are logged and repaired by
 // RebuildIndex; with no database the store is complete.
@@ -534,7 +534,7 @@ func (r *CanonicalRepository) acceptedRelease(ctx context.Context, releaseIdenti
 }
 
 // CommitAcceptedRelease is the atomic accepted-release identity boundary over
-// canonical state. The first attestation accepted for a release
+// canonical state (bahia-xjdo9). The first attestation accepted for a release
 // identity is published as the identity's ledger record; an attestation with
 // the same content digest is an exact replay and commits nothing; one with
 // different content is quarantined as a conflict record and rejected with

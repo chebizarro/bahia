@@ -68,19 +68,19 @@ type FragmentEligibility struct {
 // use service-scoped fragment apply instead of full-project apply.
 //
 // A change is INELIGIBLE when:
-// - depends_on entries changed (could affect ordering/health conditions)
-// - Project-wide network declarations changed
-// - Project-wide volume declarations changed
-// - Project name changed
-// - Service is new (no baseline)
-// - Service is being removed (requires full-project --remove-orphans)
-// - Multiple services changed in the same apply
-// - No baseline render-state exists (first render must be full-project)
+//   - depends_on entries changed (could affect ordering/health conditions)
+//   - Project-wide network declarations changed
+//   - Project-wide volume declarations changed
+//   - Project name changed
+//   - Service is new (no baseline)
+//   - Service is being removed (requires full-project --remove-orphans)
+//   - Multiple services changed in the same apply
+//   - No baseline render-state exists (first render must be full-project)
 //
 // A change IS eligible when:
-// - Only image, env, command, entrypoint, labels, ports, healthcheck,
-// restart policy, or pull policy changed on a single existing service
-// - No cross-service dependency or infrastructure changes
+//   - Only image, env, command, entrypoint, labels, ports, healthcheck,
+//     restart policy, or pull policy changed on a single existing service
+//   - No cross-service dependency or infrastructure changes
 func CheckFragmentEligibility(
 	plan *domain.DesiredEnvironmentPlan,
 	target *domain.DesiredServiceSpec,

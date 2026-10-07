@@ -37,7 +37,7 @@ type initiationSecrets struct {
 }
 
 // CanonicalInitiationStore keeps build initiations as confidential records
-// in the local event store. The build identity is derived from
+// in the local event store (audit C-49). The build identity is derived from
 // the signed source event, so there is nothing to claim: Claim publishes the
 // record of a request the store has not seen and adopts the retained record
 // otherwise, and Advance is a stage compare-and-publish against the retained

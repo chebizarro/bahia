@@ -167,23 +167,23 @@ type legacyAssistantTranslation struct {
 // translateLegacyAssistantApproval implements the v1 approval compatibility
 // rules. Only explicitly migrated v1 targets are eligible:
 //
-// - An edited ModifiedPlan is always refused with
-// approval_contract_upgrade_required before any state is read or touched:
-// the old payload does not bind an edit to a base revision.
-// - An unedited plan-hash approve/reject is translated to a revision-bound v2
-// decision only when the compatibility hash equals the migrated awaiting draft's
-// recorded compatibility hash and that draft is still the unmodified migrated
-// revision.
-// - An action-ID decision is translated only for the unique migrated pending
-// action of a migrated iterative run (a compatibility "cancel" of an action was a
-// rejection and stays one).
-// - A plan-hash cancel is translated to a run cancellation only when it names
-// the migrated current batch run.
-// - v2-native runs require v2 contracts.
+//   - An edited ModifiedPlan is always refused with
+//     approval_contract_upgrade_required before any state is read or touched:
+//     the old payload does not bind an edit to a base revision.
+//   - An unedited plan-hash approve/reject is translated to a revision-bound v2
+//     decision only when the legacy hash equals the migrated awaiting draft's
+//     recorded legacy hash and that draft is still the unmodified migrated
+//     revision.
+//   - An action-ID decision is translated only for the unique migrated pending
+//     action of a migrated iterative run (a legacy "cancel" of an action was a
+//     rejection and stays one).
+//   - A plan-hash cancel is translated to a run cancellation only when it names
+//     the migrated current batch run.
+//   - v2-native runs require v2 contracts.
 //
 // The executor re-validates the translated request's run, proposal revision
 // and hash under its session lock, so a draft that changes between this
-// snapshot and the decision is refused as stale. A redelivered compatibility
+// snapshot and the decision is refused as stale. A redelivered legacy
 // decision that the migrated run already recorded under the same request ID
 // is routed to the executor's durable decision deduplication instead.
 func translateLegacyAssistantApproval(x domain.AssistantExecution, known bool, req domain.AssistantApprovalRequest, requestID string) legacyAssistantTranslation {
@@ -246,7 +246,7 @@ func translateLegacyAssistantApproval(x domain.AssistantExecution, known bool, r
 }
 
 // legacyDecisionRecorded reports whether this migrated run already recorded a
-// decision made by exactly this compatibility request for the same target.
+// decision made by exactly this legacy request for the same target.
 func legacyDecisionRecorded(x domain.AssistantExecution, requestID, planHash, actionID string) bool {
 	if requestID == "" {
 		return false

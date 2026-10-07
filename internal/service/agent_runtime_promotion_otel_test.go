@@ -117,7 +117,7 @@ func TestRuntimePromotionContinuesTraceFromSignedResult(t *testing.T) {
 
 // TestRuntimePromotionSpanCarriesManifestDigest pins the artifact join key. The
 // attribute name must stay identical to loom-worker's
-// OCI_MANIFEST_DIGEST_ATTRIBUTE or the build span and promotion span not
+// OCI_MANIFEST_DIGEST_ATTRIBUTE or the build span and promotion span no longer
 // join on the artifact.
 func TestRuntimePromotionSpanCarriesManifestDigest(t *testing.T) {
 	recorder := newPromotionSpanRecorder(t)

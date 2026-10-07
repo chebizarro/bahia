@@ -9,7 +9,7 @@ import (
 // DNSCanonicalPublisher publishes authoritative DNS state records through the
 // shared builder and outbox. Implementations live in the nostr adapter layer;
 // the reconciler calls them after a material change so canonical records are
-// published once per mutation, not on a timer (D1).
+// published once per mutation, not on a timer (B-17, Phase 3 D1).
 type DNSCanonicalPublisher interface {
 	// PublishEndpoints publishes DNS endpoint state for all current endpoints
 	// and tombstones for any endpoints that have been removed since the last
@@ -30,6 +30,6 @@ type DNSCanonicalPublisher interface {
 
 	// PublishZoneSync publishes the full set of zone records for a zone so
 	// that DNS agents can subscribe instead of receiving ContextVM pushes
-	// (D1).
+	// (C-34, Phase 3 D1).
 	PublishZoneSync(ctx context.Context, zone domain.DNSZone, records []domain.DNSRecord) error
 }

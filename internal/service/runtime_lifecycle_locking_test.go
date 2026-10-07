@@ -353,12 +353,12 @@ func TestLocking_NilLockSkipsLocking(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestConvergence_DeployAndDeployWithStatusUseSameHelper proves that both
-// Deploy and DeployWithStatus invoke the shared deployDesiredState helper,
+// Deploy() and DeployWithStatus() invoke the shared deployDesiredState helper,
 // producing the same runtime calls and state mutations.
 func TestConvergence_DeployAndDeployWithStatusUseSameHelper(t *testing.T) {
 	ctx := context.Background()
 
-	// Run Deploy path.
+	// Run Deploy() path.
 	registryA, svcRepoA, envRepoA, _, artifactRepoA, _, _ := newTestRegistry()
 	stateRepoA := registryA.state.(*mockStateRepo)
 	rtA := &capturingMockRuntime{}
@@ -370,7 +370,7 @@ func TestConvergence_DeployAndDeployWithStatusUseSameHelper(t *testing.T) {
 	svcA, envA, artifactA := seedRuntimeLifecycleFixtures(t, registryA)
 	obsA, errA := lifecycleA.Deploy(ctx, svcA.ID, envA.ID, &artifactA.ID)
 
-	// Run DeployWithStatus path with a status callback.
+	// Run DeployWithStatus() path with a status callback.
 	registryB, svcRepoB, envRepoB, _, artifactRepoB, _, _ := newTestRegistry()
 	stateRepoB := registryB.state.(*mockStateRepo)
 	rtB := &capturingMockRuntime{}

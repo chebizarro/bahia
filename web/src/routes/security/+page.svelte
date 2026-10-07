@@ -320,7 +320,7 @@
     {#if manualScanNotice}<p role="status">{manualScanNotice}</p>{/if}
   </section>
 
-  <!-- Severity Summary Cards-->
+  <!-- Severity Summary Cards -->
   {#if findings.length > 0}
     <div class="severity-summary">
       <div class="severity-card critical">
@@ -352,7 +352,7 @@
     <p role="status">Security records not readable with this key. Sign in as a fleet operator to decrypt them.</p>
   {/if}
 
-  <!-- Tabs-->
+  <!-- Tabs -->
   <div class="tabs">
     <button
       class="tab"
@@ -370,7 +370,7 @@
     </button>
   </div>
 
-  <!-- Findings Tab-->
+  <!-- Findings Tab -->
   {#if activeTab === 'findings'}
     {#if securityState.schedulesError}
       <EmptyState
@@ -442,7 +442,7 @@
     {/if}
   {/if}
 
-  <!-- Schedules Tab-->
+  <!-- Schedules Tab -->
   {#if activeTab === 'schedules'}
     {#if securityState.schedulesError}
       <EmptyState
@@ -488,7 +488,7 @@
     font-size: 0.875rem;
   }
 
-  /* Severity Summary*/
+  /* Severity Summary */
   .severity-summary {
     display: flex;
     gap: 1rem;
@@ -542,7 +542,7 @@
     color: #d1d5db;
   }
 
-  /* Tabs*/
+  /* Tabs */
   .tabs {
     display: flex;
     gap: 0;
@@ -611,7 +611,7 @@
     padding: 0.4rem 0.6rem;
   }
 
-  /* Actions Bar*/
+  /* Actions Bar */
   .actions-bar {
     display: flex;
     align-items: center;
@@ -624,7 +624,7 @@
     color: var(--text-muted);
   }
 
-  /* Severity badges in table*/
+  /* Severity badges in table */
   :global(.severity-badge) {
     display: inline-flex;
     align-items: center;

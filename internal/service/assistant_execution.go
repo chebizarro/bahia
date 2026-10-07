@@ -1589,7 +1589,7 @@ func (e *AssistantExecutionEngine) startObserverLocked(s *assistantEngineSession
 }
 
 // recordObservationLocked persists a terminal downstream event once. A second
-// terminal event, or a replay of the same one, finds the item not
+// terminal event, or a replay of the same one, finds the item no longer
 // waiting and changes nothing.
 func (e *AssistantExecutionEngine) recordObservationLocked(s *assistantEngineSession, runID, workID string, receipt *domain.AsyncToolReceipt, outcome AssistantAsyncObservationOutcome) bool {
 	idx := assistantWorkIndex(s.execution, workID)

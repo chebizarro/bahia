@@ -25,7 +25,7 @@ const (
 	defaultRouteCanaryExpectedStatusMax = 299
 )
 
-// Normalized returns the configuration with unset values handled by defaults.
+// Normalized returns the configuration with unset values replaced by defaults.
 //
 // Defaults are applied here rather than at use sites so an operator reading the
 // effective configuration sees the same values the probes actually use.

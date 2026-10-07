@@ -329,7 +329,7 @@ func endpointTombstone(t *testing.T, pubkey, d, fqdn string, createdAt nostr.Tim
 	return signedStateEvent(t, pubkey, kinds.DNSEndpointState, d, true, string(content), nostr.Tags{{"t", kinds.DNSEndpointTopic}, {"t", "bahia"}, {"dns", fqdn}}, createdAt)
 }
 
-// signedStateEvent mirrors controlStateEnvelope for a DNS compatibility kind.
+// signedStateEvent mirrors controlStateEnvelope for a DNS legacy kind.
 func signedStateEvent(t *testing.T, pubkey string, legacyKind int, d string, deleted bool, content string, extra nostr.Tags, createdAt nostr.Timestamp) *nostr.Event {
 	t.Helper()
 	pubkeyValue, err := nostrutil.PubKeyFromHex(pubkey)

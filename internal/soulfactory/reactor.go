@@ -118,7 +118,7 @@ type ReactorOption func(*Reactor)
 
 // WithProvisioningEngine installs an explicit provisioning engine. Without this
 // option, provisioning and lifecycle requests fail closed instead of using the
-// compatibility partial provisioner.
+// legacy partial provisioner.
 func WithProvisioningEngine(engine ProvisioningEngine) ReactorOption {
 	return func(r *Reactor) {
 		if engine != nil {
@@ -196,7 +196,7 @@ func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *s
 		}
 	}
 	// One pool for the reactor's relay set, shared by its subscription,
-	// reads and publishes.
+	// reads and publishes (bahia-irsry.47).
 	if r.relayClient == nil {
 		if allRelays := normalizeSoulRelays(append(append([]string{}, config.Relays...), config.AdditionalRelays...)); len(allRelays) > 0 {
 			var clientOpts []RelayClientOption

@@ -11,7 +11,7 @@ import (
 )
 
 // A live group's regular kinds resume from per-relay cursors in the local
-// store: a relay that did not send EOSE keeps no cursor, so the
+// store (C-2, B-15): a relay that did not send EOSE keeps no cursor, so the
 // next attempt's single REQ reaches back far enough to catch it up; once
 // every relay has a cursor the REQ starts at the oldest one less the overlap.
 func TestBootstrapperLiveGroupsKeepPerRelayCursorsInTheLocalStore(t *testing.T) {

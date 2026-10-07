@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// entity ids are client-minted and fixed at creation.
+// bahia-irsry.35: entity ids are client-minted and fixed at creation.
 
 func newIdentityTestRegistry(t *testing.T) (*RelayFirstRegistry, *relayFirstServiceRepo, *relayFirstCapturePublisher) {
 	t.Helper()

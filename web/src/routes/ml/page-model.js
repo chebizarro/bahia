@@ -1,4 +1,4 @@
-/***/
+/**
  * Inference page model — helpers for model catalog, endpoint state, placement policy, and deployment views.
  */
 

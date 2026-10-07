@@ -183,7 +183,7 @@ type environmentContent struct {
 	UpdatedAt          string                      `json:"updated_at,omitempty"`
 }
 
-// familyIndex is the lazily-built reverse index from compatibility kind to family info.
+// familyIndex is the lazily-built reverse index from legacy kind to family info.
 var familyIndex map[int]nostrpool.CPStateFamilyInfo
 
 func lookupFamily(legacyKind int) nostrpool.CPStateFamilyInfo {

@@ -406,7 +406,7 @@
   {/if}
 </div>
 
-<!-- Edit Modal-->
+<!-- Edit Modal -->
 <Modal bind:open={editOpen} title="Edit Policy" titleIcon={PolicyIcon} onClose={closeEditModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleEdit(); }} class="edit-form">
     <div class="form-field">
@@ -544,7 +544,7 @@
   </form>
 </Modal>
 
-<!-- Delete Confirmation Dialog-->
+<!-- Delete Confirmation Dialog -->
 <ConfirmDialog
   intentDomain="policy" intentOrgId={policy?.org_id}
   bind:open={deleteOpen}

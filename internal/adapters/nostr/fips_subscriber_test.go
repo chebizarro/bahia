@@ -89,7 +89,7 @@ func TestFIPSSubscriberFilterUsesFixedDTagAndOptionalProtocolNamespace(t *testin
 }
 
 // TestFIPSSubscriberReceivesAdvertsFromAuthRequiredRelay: the subscriber has
-// no AUTH logic of its own. Against a relay that refuses
+// no AUTH logic of its own (bahia-irsry.47). Against a relay that refuses
 // unauthenticated REQs, the pool's AuthHandler authenticates and reissues the
 // REQ on that relay, and the advert reaches the worker repository on the
 // subscriber's first subscription.

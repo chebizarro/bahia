@@ -122,7 +122,7 @@ func validateEndpointTLSMaterial(endpoint config.RuntimeEndpointConfig) error {
 
 // getDockerClient lazily creates a Docker Engine API client from the
 // runtime's endpoint configuration. TLS policy mirrors sdkClientTLSConfig
-// the single source of truth for the SDK executor path.
+// — the single source of truth for the SDK executor path.
 func (r *ComposeRuntime) getDockerClient() (*dockerclient.Client, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

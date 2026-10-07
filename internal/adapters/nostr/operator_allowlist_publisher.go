@@ -14,7 +14,7 @@ import (
 )
 
 // KindOperatorAllowlistRecord is the operator allowlist cp-state family
-// . It is a 30900-only family with no catalog kind.
+// (bahia-fbyo5). It is a 30900-only family with no catalog kind.
 const KindOperatorAllowlistRecord = int(kinds.CPStateFamilyOperatorAllowlist)
 
 // OperatorAllowlistRecord is the plaintext of one operator allowlist record.

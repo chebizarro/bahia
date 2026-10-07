@@ -1,6 +1,6 @@
 import { mintEntityId } from '../entity-id.js';
 
-/** One user action owns one ledger key, including its bounded duplicate retry.*/
+/** One user action owns one ledger key, including its bounded duplicate retry. */
 export async function requestWithIdempotency(options, execute) {
   const requestId = options.requestId || mintEntityId();
   const request = { ...options, requestId };

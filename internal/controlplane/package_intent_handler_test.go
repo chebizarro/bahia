@@ -448,7 +448,7 @@ func TestPackageIntentHandler_ApprovalFlowBoundedRejection(t *testing.T) {
 }
 
 // TestPackageIntentHandler_UntrustedActorDroppedSilently verifies that
-// intents from unknown principals are silently dropped (docs/architecture/intents-and-authority.md), while
+// intents from unknown principals are silently dropped (§2.3), while
 // known principals get a bounded rejection.
 func TestPackageIntentHandler_UntrustedActorDroppedSilently(t *testing.T) {
 	f := newPkgIntentFixture(t)
@@ -526,12 +526,12 @@ func TestPackageIntentHandler_PublishArtifactThenYank(t *testing.T) {
 }
 
 // TestPackageIntentHandler_ProjectorNoLongerPublishesPackages verifies that
-// the projector cpStateFamilies map not contains package entries after
+// the projector cpStateFamilies map no longer contains package entries after
 // the projector leg deletion.
 func TestPackageIntentHandler_ProjectorNoLongerPublishesPackages(t *testing.T) {
 	// The package cpStateFamilies entries have been removed from projector.go.
 	// Verify by checking that canonicalStateDomain returns empty for package kinds.
-	// These kind numbers are the compatibility package registry kinds.
+	// These kind numbers are the legacy package registry kinds.
 	packageKinds := []int{31971, 31972, 31973} // PackageRepositoryRegistry, PackageArtifactRegistry, PackagePromotionRegistry
 	for _, kind := range packageKinds {
 		// The test is in the nostr package; we verify at the intent handler level

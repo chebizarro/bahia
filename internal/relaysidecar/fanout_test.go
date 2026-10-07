@@ -106,7 +106,7 @@ func TestLiveFanoutClosesOnlyOverflowingSubscriptionAndNeverWritesAfterClosed(t 
 	f.dispatch(b(0)) // queue: b0
 	f.dispatch(a(1)) // queue: b0 a1 (full)
 	f.dispatch(a(2)) // overflow -> "a" is CLOSED
-	f.dispatch(a(3)) // "a" is not live: not queued, no second CLOSED
+	f.dispatch(a(3)) // "a" is no longer live: not queued, no second CLOSED
 	releaseOnce.Do(func() { close(release) })
 
 	requireEventFrame(t, nextFrame(t, ctx, frames), "a", a(0))

@@ -1,4 +1,4 @@
-// Client-minted entity ids.
+// Client-minted entity ids (bahia-irsry.35, audit C-40).
 //
 // The author of a create intent fixes the entity's id, which is also the entity
 // segment of its addressable coordinate. Ids are RFC 9562 UUIDs in canonical
@@ -20,7 +20,7 @@ function randomBytes(length) {
   return cryptoApi.getRandomValues(new Uint8Array(length));
 }
 
-/***/
+/**
  * Mint a new entity id (UUIDv7, canonical lowercase).
  * @param {number} [nowMs] Unix time in milliseconds (injectable for tests).
  * @returns {string}
@@ -38,7 +38,7 @@ export function mintEntityId(nowMs = Date.now()) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-/***/
+/**
  * Whether value is an id a create intent may carry: canonical lowercase
  * UUIDv7 (or v4), RFC 9562 variant.
  * @param {unknown} value
@@ -47,7 +47,7 @@ export function isEntityId(value) {
   return typeof value === 'string' && CANONICAL_ENTITY_ID.test(value);
 }
 
-/***/
+/**
  * Return payload with a client-minted id, keeping a valid caller-supplied one.
  * @param {Record<string, any>} [payload]
  * @returns {Record<string, any>}
@@ -62,7 +62,7 @@ export function withEntityId(payload = {}) {
   return { ...payload, id: mintEntityId() };
 }
 
-/***/
+/**
  * Whether a ContextVM error reports an id already used with different content.
  * @param {{ code?: unknown } | null | undefined} error
  */

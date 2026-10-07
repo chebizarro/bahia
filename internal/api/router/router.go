@@ -98,7 +98,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 	// Auth middleware (applied to API routes, not health checks).
 	authMiddleware := routeAuthConfig(deps, authCfg...)
-	// Dependency gates replace the old tier model (docs/architecture/intents-and-authority.md). Routes whose
+	// Dependency gates replace the old tier model (§6). Routes whose
 	// backing repository is nil (e.g. no Postgres) return 503.
 	dbGate := middleware.RequireRepo(deps.Services)
 	platformAdminGate := platformRoleRBAC(deps, authMiddleware, domain.RoleAdmin)
@@ -190,8 +190,8 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			}
 
 			// Payment records are canonical cp-state read from the local event
-			// store, so these reads need no PostgreSQL gate: the
-			// service answers from the local store alone.
+			// store (audit B-31), so these reads need no PostgreSQL gate: the
+			// service answers from the local store alone (bahia-u5whr).
 			if deps.Payments != nil {
 				payH := handlers.NewPaymentHandler(deps.Payments)
 				r.Get("/deployments/runs/{id}/cost", payH.GetRunCost)
@@ -208,7 +208,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			if deps.Blossom != nil {
 				blossomH := handlers.NewBlossomHandler(deps.Blossom)
 				// Blob download is unauthenticated: content-addressable blobs are
-				// publicly verifiable by SH hash and the Blossom server itself
+				// publicly verifiable by SHA-256 hash and the Blossom server itself
 				// may be HTTP-only, requiring this HTTPS proxy to avoid mixed-content.
 				r.Get("/blossom/blob/{hash}", blossomH.DownloadBlob)
 			}
@@ -218,12 +218,12 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RateLimit(writeLimiter))
 
-			// Tenant orgs (write) — O1: REST mutation routes
+			// Tenant orgs (write) — Phase 3 O1 (B-26): REST mutation routes
 			// deleted. Org/member/invite mutations now go through the
 			// encrypted ContextVM path (dual dispatch to intent processor).
-			// Signer-first intent consumers not require those REST reads.
+			// Signer-first intent consumers no longer require those REST reads.
 
-			// F1: retained — web/src/routes/instance-health/+page.svelte; handled by.
+			// Phase 5 F1: retained — web/src/routes/instance-health/+page.svelte; replaced by bahia-irsry.11.19.
 			// Managed instance maintenance (write)
 			if instanceHealthH != nil {
 				instanceRBAC := coreRBAC(deps, authMiddleware, serviceEnvOrgResolver(deps.Services, deps.Environments, "serviceId", "envId"), true)
@@ -231,7 +231,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 				r.With(dbGate, instanceRBAC).Delete("/services/{serviceId}/environments/{envId}/managed-instances/{deploymentUnitId}/maintenance", instanceHealthH.ClearMaintenance)
 			}
 
-			// F1: retained — docs/user-guide/features/artifacts.md curl import; handled by.
+			// Phase 5 F1: retained — docs/user-guide/features/artifacts.md curl import; replaced by bahia-irsry.11.19.
 			// SBOM (write compatibility import)
 			if deps.SBOMs != nil && deps.Artifacts != nil && deps.SBOMImporter != nil {
 				sbomH := handlers.NewSBOMHandler(deps.SBOMs, deps.Artifacts, deps.SBOMImporter)
@@ -241,11 +241,11 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 			// Deprecated policy REST mutations are intentionally not mounted.
 			// Signer-first Nostr policy command kinds retired-kind-retired-kind are the supported replacement.
 
-			// Secrets (write): deleted in N1.
+			// Secrets (write): deleted in Phase 3 N1.
 			// Secret create/update/delete now go through intent publishing (30900).
 
-			// F1: retained — docs/user-guide/features/souls.md migration workflow; handled by.
-			// Compatibility Soul reconciliation is authenticated and dry-run-first.
+			// Phase 5 F1: retained — docs/user-guide/features/souls.md migration workflow; replaced by bahia-irsry.11.19.
+			// Legacy Soul reconciliation is authenticated and dry-run-first.
 			if legacyReconciliationH != nil {
 				r.With(dbGate, platformAdminGate).Post("/soulfactory/legacy-reconciliation/preview", legacyReconciliationH.Preview)
 				r.With(dbGate, platformAdminGate).Post("/soulfactory/legacy-reconciliation/apply", legacyReconciliationH.Apply)
@@ -255,7 +255,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 		// Deprecated LLM operational, adoption, and direct runtime REST mutations
 		// are intentionally not mounted. Signer-first Nostr control-plane commands
-		// are the supported path for these flows.
+		// are the supported replacement for these flows.
 	})
 
 	return r

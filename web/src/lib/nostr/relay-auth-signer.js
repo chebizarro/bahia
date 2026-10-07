@@ -1,4 +1,4 @@
-/***/
+/**
  * NIP-42 relay AUTH signer registry.
  *
  * The Bahia relay sidecar enforces read authentication by default
@@ -16,19 +16,19 @@
  * @module lib/nostr/relay-auth-signer
  */
 
-/** @typedef {(event: object) => Promise<object>} RelayAuthSigner*/
+/** @typedef {(event: object) => Promise<object>} RelayAuthSigner */
 
-/** @type {RelayAuthSigner | null}*/
+/** @type {RelayAuthSigner | null} */
 let current = null;
-/** @type {Set<(signer: RelayAuthSigner | null) => void>}*/
+/** @type {Set<(signer: RelayAuthSigner | null) => void>} */
 const listeners = new Set();
 
-/** @returns {RelayAuthSigner | null}*/
+/** @returns {RelayAuthSigner | null} */
 export function getRelayAuthSigner() {
   return current;
 }
 
-/***/
+/**
  * Publish (or clear, with `null`) the signer the pool answers NIP-42
  * challenges with.
  * @param {RelayAuthSigner | null} signer
@@ -38,10 +38,10 @@ export function setRelayAuthSigner(signer) {
   for (const listener of listeners) listener(current);
 }
 
-/***/
+/**
  * Observe signer changes. Fires immediately with the current value.
  * @param {(signer: RelayAuthSigner | null) => void} listener
- * @returns { => void}
+ * @returns {() => void}
  */
 export function onRelayAuthSigner(listener) {
   listeners.add(listener);
@@ -49,7 +49,7 @@ export function onRelayAuthSigner(listener) {
   return () => listeners.delete(listener);
 }
 
-/** Test-only: forget every listener and the signer.*/
+/** Test-only: forget every listener and the signer. */
 export function resetRelayAuthSigner() {
   current = null;
   listeners.clear();

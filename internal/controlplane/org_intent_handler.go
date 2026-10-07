@@ -32,14 +32,14 @@ type OrgCanonicalPublisher interface {
 type OrgMemberChangeCallback func(orgID uuid.UUID)
 
 // OrgIntentHandler processes org/member/invite intents. It is the O1 domain
-// handler for the intent framework.
+// handler for the Phase 3 intent framework.
 //
 // Level-triggered: the newest trusted intent's full desired state wins.
 // Idempotent by intent_id (handled by the intent processor).
 // Authorization is per-operation: fleet-ops for org create, per-org RBAC for
 // everything else (SelfAuthorizingHandler).
 //
-// See docs/architecture/intents-and-authority.md
+// See design §7 Wave 5 O1 and §10.
 type OrgIntentHandler struct {
 	orgs    repository.OrganizationRepository
 	members repository.OrgMemberRepository
@@ -55,7 +55,7 @@ type OrgIntentHandler struct {
 
 // DecryptMemberContent decrypts an encrypted membership event content string
 // and returns the role for TrustSet hydration. Used by the relay trust source
-// at startup and on live membership events. Compatibility O1 format.
+// at startup and on live membership events. Legacy O1 format.
 func DecryptMemberContent(encryptor interface{ DecryptOrgState(string) ([]byte, error) }, content string) (orgID string, pubkey string, role string, deleted bool, err error) {
 	plaintext, err := encryptor.DecryptOrgState(content)
 	if err != nil {
@@ -65,11 +65,11 @@ func DecryptMemberContent(encryptor interface{ DecryptOrgState(string) ([]byte, 
 }
 
 // DecryptMemberContentConfidential decrypts a member event using the new
-// confidential format (per-org content key), falling back to compatibility O1.
+// confidential format (per-org content key), falling back to legacy O1.
 // legacyKind, dTag, and topic are the record's coordinate identity for AD
 // verification; pass zero values when unknown (e.g. startup hydration from
 // history where the event tags are not readily available — AD check will fail
-// and the function will fall back to compatibility O1).
+// and the function will fall back to legacy O1).
 func DecryptMemberContentConfidential(
 	confidential *ConfidentialEncryptor,
 	legacyO1 interface{ DecryptOrgState(string) ([]byte, error) },
@@ -83,7 +83,7 @@ func DecryptMemberContentConfidential(
 			return parseMemberContentFields(plaintext)
 		}
 	}
-	// Fall back to compatibility O1 format.
+	// Fall back to legacy O1 format.
 	if legacyO1 != nil {
 		return DecryptMemberContent(legacyO1, content)
 	}
@@ -190,9 +190,9 @@ func (h *OrgIntentHandler) PermissionFor(op string) domain.Permission {
 
 // AuthorizeIntent implements SelfAuthorizingHandler. It checks authorization
 // based on the sub-entity type:
-// - Org create: actor must be a fleet operator (docs/architecture/intents-and-authority.md)
-// - Org update/delete: actor must have PermManageSettings in the org
-// - Member/invite ops: actor must have PermManageMembers in the org
+//   - Org create: actor must be a fleet operator (design §7 Wave 5 O1)
+//   - Org update/delete: actor must have PermManageSettings in the org
+//   - Member/invite ops: actor must have PermManageMembers in the org
 func (h *OrgIntentHandler) AuthorizeIntent(ctx context.Context, trustSet *TrustSet, intent *Intent) error {
 	sub := classifyOrgIntent(intent)
 	switch sub {
@@ -803,14 +803,14 @@ type MemberEventHistory interface {
 // RelayMemberEventHandler processes encrypted member canonical events from the
 // relay subscription and updates TrustSet relay members accordingly. This is the
 // production path for hydrating TrustSet from the daemon's own published
-// encrypted membership events (docs/architecture/intents-and-authority.md).
+// encrypted membership events (design §2.5 item 3).
 //
 // Two entry points:
-// - HandleEncryptedMemberEvent: live, called after OrgCanonicalPublisher
-// publishes a member record (both intent and compatibility ContextVM paths).
-// - HydrateTrustSetFromHistory: startup, scans the daemon's own published
-// member events from history and populates TrustSet before the intent
-// subscriber's author filter is computed.
+//   - HandleEncryptedMemberEvent: live, called after OrgCanonicalPublisher
+//     publishes a member record (both intent and legacy ContextVM paths).
+//   - HydrateTrustSetFromHistory: startup, scans the daemon's own published
+//     member events from history and populates TrustSet before the intent
+//     subscriber's author filter is computed.
 type RelayMemberEventHandler struct {
 	confidential *ConfidentialEncryptor
 	legacyO1     interface{ DecryptOrgState(string) ([]byte, error) }
@@ -821,7 +821,7 @@ type RelayMemberEventHandler struct {
 
 // NewRelayMemberEventHandler creates a handler for encrypted relay member
 // events. confidential is the new per-org content key decryptor; legacyO1 is
-// supports dual-read during migration.
+// retained for dual-read during migration.
 func NewRelayMemberEventHandler(
 	confidential *ConfidentialEncryptor,
 	legacyO1 interface{ DecryptOrgState(string) ([]byte, error) },
@@ -842,11 +842,11 @@ func NewRelayMemberEventHandler(
 // then updates TrustSet relay members for the org. If Postgres is configured,
 // it seeds the member list from the repo before applying the committed event;
 // otherwise it merges the event into existing relay state. Supports both the new confidential
-// format and the compatibility O1 format (dual-read during migration).
+// format and the legacy O1 format (dual-read during migration).
 //
 // legacyKind, dTag, and topic are the record's coordinate identity from the
 // signed event tags. Pass zero values when unavailable (the decrypt will fall
-// back to compatibility O1).
+// back to legacy O1).
 func (h *RelayMemberEventHandler) HandleEncryptedMemberEvent(ctx context.Context, content string, legacyKind int, dTag, topic string) error {
 	orgID, pubkey, role, deleted, err := DecryptMemberContentConfidential(
 		h.confidential, h.legacyO1, content, legacyKind, dTag, topic)
@@ -892,7 +892,7 @@ func (h *RelayMemberEventHandler) HandleEncryptedMemberEvent(ctx context.Context
 
 // HydrateTrustSetFromHistory scans the daemon's own published encrypted member
 // events from history and populates TrustSet relay members. This is the
-// startup path (docs/architecture/intents-and-authority.md): TrustSet is populated before the intent
+// startup path (design §2.5 item 3i): TrustSet is populated before the intent
 // subscriber's author filter is computed, so relay-sourced members are included
 // from the start. Runs once at startup; the live path (HandleEncryptedMemberEvent)
 // keeps it in sync afterwards.

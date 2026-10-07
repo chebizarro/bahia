@@ -268,7 +268,7 @@ func TestAssemble_LegacySiblingHydratedFromServiceArtifact(t *testing.T) {
 					ServiceID:         planSiblingSvcID1,
 					EnvironmentID:     planEnvID,
 					DesiredArtifactID: &planArtifactID2,
-					// No DesiredRuntimeState — compatibility.
+					// No DesiredRuntimeState — legacy.
 				},
 			},
 		},
@@ -319,7 +319,7 @@ func TestAssemble_LegacySiblingHydratedFromServiceArtifact(t *testing.T) {
 		t.Fatalf("expected 2 services, got %d", len(plan.Services))
 	}
 
-	// Find the hydrated compatibility sibling.
+	// Find the hydrated legacy sibling.
 	var legacySvc *domain.DesiredServiceSpec
 	for i := range plan.Services {
 		if plan.Services[i].ServiceID == planSiblingSvcID1 {
@@ -354,7 +354,7 @@ func TestAssemble_HydratedSpecPersisted(t *testing.T) {
 					ServiceID:         planSiblingSvcID1,
 					EnvironmentID:     planEnvID,
 					DesiredArtifactID: &planArtifactID2,
-					// Compatibility — no DesiredRuntimeState.
+					// Legacy — no DesiredRuntimeState.
 				},
 			},
 		},
@@ -481,7 +481,7 @@ func TestAssemble_TombstonedServiceExcluded(t *testing.T) {
 					EnvironmentID: planEnvID,
 				},
 				{
-					// Service that not exists in the repository.
+					// Service that no longer exists in the repository.
 					ServiceID:           planDeletedSvcID,
 					EnvironmentID:       planEnvID,
 					DesiredRuntimeState: makeSiblingSpec(planDeletedSvcID, "deleted-svc"),
@@ -722,7 +722,7 @@ func TestAssemble_FirstDeployTargetNotInState(t *testing.T) {
 }
 
 func TestAssemble_LegacySiblingWithNoArtifactExcluded(t *testing.T) {
-	// Compatibility sibling with no DesiredArtifactID — cannot be hydrated.
+	// Legacy sibling with no DesiredArtifactID — cannot be hydrated.
 	loader := &fakeStateLoader{
 		states: map[uuid.UUID][]domain.EnvironmentServiceState{
 			planEnvID: {

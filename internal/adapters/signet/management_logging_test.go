@@ -14,7 +14,7 @@ import (
 
 // TestSignetManagementPoolLogsThroughTheClientLogger: the management pool's
 // relay diagnostics reach the client's slog logger instead of a no-op zap
-// logger. A management relay that refuses connections makes
+// logger (bahia-irsry.49). A management relay that refuses connections makes
 // the pool log the failed subscription before SubscribeAllWithEOSE returns.
 func TestSignetManagementPoolLogsThroughTheClientLogger(t *testing.T) {
 	server := httptest.NewServer(nil)

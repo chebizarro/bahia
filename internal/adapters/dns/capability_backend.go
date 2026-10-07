@@ -14,7 +14,7 @@ type AgentCapabilityChecker interface {
 	IsHealthy(agentPubkey string) bool
 }
 
-// CapabilityAwareDNSBackend wraps a compatibility ContextVM RPC backend with an
+// CapabilityAwareDNSBackend wraps a legacy ContextVM RPC backend with an
 // event-publish backend, switching to events for agents that advertise the
 // "zone-subscribe" capability. This enables zero-downtime rolling upgrades:
 // new daemon + old agent uses RPC, new daemon + new agent uses events.

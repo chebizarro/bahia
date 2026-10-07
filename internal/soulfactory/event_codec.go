@@ -70,7 +70,7 @@ const (
 )
 
 // ParseProvisioningRequestEvent extracts a domain provisioning request from a
-// kind:5950 event. It accepts both the compatibility tag + {brief} shape and additive
+// kind:5950 event. It accepts both the legacy tag + {brief} shape and additive
 // draft/spec-hash fields introduced for runtime-aware provisioning.
 func ParseProvisioningRequestEvent(event *nostr.Event) (*domain.ProvisioningRequest, error) {
 	if event == nil {
@@ -158,7 +158,7 @@ func ParseProvisioningRequestEvent(event *nostr.Event) (*domain.ProvisioningRequ
 }
 
 // ParseSoulActionEvent extracts a lifecycle/customization action from a
-// kind:1950 event. It accepts compatibility {brief} regenerate content and the newer
+// kind:1950 event. It accepts legacy {brief} regenerate content and the newer
 // structured {new_brief, draft_ref, spec_hash, previous_spec_hash, patch} shape.
 func ParseSoulActionEvent(event *nostr.Event) (*domain.SoulAction, error) {
 	if event == nil {
@@ -478,7 +478,7 @@ var supportedMemoryRerankModels = map[string]struct{}{
 }
 
 // ValidateSoulDraftContent validates v2 customization sections that the event
-// codec accepts on kind:31952 drafts. Compatibility/no-schema v1 drafts without v2
+// codec accepts on kind:31952 drafts. Legacy/no-schema v1 drafts without v2
 // customization sections pass unchanged for backward compatibility.
 func ValidateSoulDraftContent(content domain.SoulDraftContent) error {
 	var violations []string

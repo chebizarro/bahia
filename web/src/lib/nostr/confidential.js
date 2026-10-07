@@ -1,9 +1,9 @@
-/***/
+/**
  * Confidential cp-state decryption for the web.
  *
  * Mirrors the Go implementation in:
- * internal/controlplane/org_content_key.go
- * internal/controlplane/confidential_encryptor.go
+ *   internal/controlplane/org_content_key.go
+ *   internal/controlplane/confidential_encryptor.go
  *
  * Uses XChaCha20-Poly1305 (AEAD) with associated data that binds ciphertext
  * to the record's coordinate identity: {schema, key_org, key_ref, key_version,
@@ -17,8 +17,8 @@
  * Service-only fields (service_inner) are NOT decrypted here — the web
  * client must not attempt to decrypt them.
  *
- * Design reference: docs/architecture/confidential-state.md
- * docs/architecture/web-store-first.md §5.3, §5.4
+ * Design reference: phase3-authority-inversion.md §1.7.1
+ *                   phase4-web-store-first.md §5.3, §5.4
  *
  * @module lib/nostr/confidential
  */
@@ -50,7 +50,7 @@ export const NOTIFICATION_CHANNEL_TOPIC = 'notification-channel';
 // base64.RawStdEncoding)
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Decode a raw-standard base64 string (no padding) to Uint8Array.
  * @param {string} b64
  * @returns {Uint8Array}
@@ -66,7 +66,7 @@ function base64Decode(b64) {
   return bytes;
 }
 
-/***/
+/**
  * Encode a Uint8Array to raw-standard base64 (no padding).
  * @param {Uint8Array} bytes
  * @returns {string}
@@ -83,20 +83,20 @@ function base64Encode(bytes) {
 // Envelope parsing
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * @typedef {Object} ConfidentialEnvelope
  * @property {string} schema
  * @property {string} algorithm
  * @property {string} key_org
  * @property {string} key_ref
  * @property {string} key_version
- * @property {string} nonce — base64 (raw standard, no padding)
- * @property {string} ciphertext — base64 (raw standard, no padding)
+ * @property {string} nonce        — base64 (raw standard, no padding)
+ * @property {string} ciphertext   — base64 (raw standard, no padding)
  * @property {Object<string,string>} associated_data
  * @property {string} [service_inner]
  */
 
-/***/
+/**
  * Parse a confidential envelope from JSON content without decrypting.
  * Used for key-org/version lookups.
  *
@@ -112,7 +112,7 @@ export function parseConfidentialEnvelope(content) {
   return envelope;
 }
 
-/***/
+/**
  * Extract org ID and version from a confidential envelope without decrypting.
  *
  * @param {string} content — JSON event content
@@ -131,7 +131,7 @@ export function versionFromEnvelope(content) {
   return { orgID: envelope.key_org, version };
 }
 
-/** Versions referenced by the current, non-deleted confidential records in the event store.*/
+/** Versions referenced by the current, non-deleted confidential records in the event store. */
 export function referencedKeyVersions(events, servicePubkey) {
   const references = new Map();
   for (const event of events) {
@@ -153,7 +153,7 @@ export function referencedKeyVersions(events, servicePubkey) {
 // AEAD associated data — must match Go confidentialAssociatedData byte-for-byte
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Build the AEAD associated data map.
  * Go's encoding/json marshals map[string]string with keys in sorted order.
  * We must produce the exact same JSON bytes.
@@ -174,7 +174,7 @@ function buildAssociatedData(key, recordCtx) {
   };
 }
 
-/***/
+/**
  * Serialize associated data to JSON bytes matching Go's encoding/json
  * (sorted keys).
  *
@@ -192,10 +192,10 @@ function serializeAD(ad) {
   return new TextEncoder().encode(json);
 }
 
-/***/
+/**
  * Verify that the envelope's AD matches the expected AD.
  *
- * @param {Object<string,string>} got — from the envelope
+ * @param {Object<string,string>} got  — from the envelope
  * @param {Object<string,string>} want — rebuilt from verified event tags
  * @throws on mismatch
  */
@@ -212,14 +212,14 @@ function verifyAssociatedData(got, want) {
 // OCK types and helpers
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * @typedef {Object} OrgContentKey
  * @property {string} orgID
  * @property {number} version
- * @property {Uint8Array} key — 32-byte symmetric key
+ * @property {Uint8Array} key  — 32-byte symmetric key
  */
 
-/***/
+/**
  * Build the key reference string for an OCK.
  * @param {string} orgID
  * @returns {string}
@@ -228,7 +228,7 @@ function keyRef(orgID) {
   return 'ock:' + orgID;
 }
 
-/***/
+/**
  * Build the version string for an OCK.
  * @param {number} version
  * @returns {string}
@@ -241,17 +241,17 @@ function keyVersion(version) {
 // OCK wrap payload (NIP-44 plaintext inside key-envelope records)
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * @typedef {Object} OCKWrapPayload
  * @property {string} schema
  * @property {string} org_id
  * @property {string} key_ref
  * @property {number} version
- * @property {string} key — base64 raw standard encoded 32-byte key
+ * @property {string} key       — base64 raw standard encoded 32-byte key
  * @property {string} recipient_pubkey
  */
 
-/***/
+/**
  * Parse and validate an OCK wrap payload from NIP-44-decrypted plaintext.
  *
  * @param {string} plaintext — JSON string
@@ -284,13 +284,13 @@ export function unmarshalOCKWrap(plaintext) {
 // AEAD decrypt
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Decrypt a confidential envelope's org-visible content using the provided OCK.
  *
  * @param {OrgContentKey} ock
- * @param {string} content — JSON event content
+ * @param {string} content      — JSON event content
  * @param {{ legacyKind: number, dTag: string, topic: string }} recordCtx
- * — from the verified signed event's tags (not from the envelope itself)
+ *   — from the verified signed event's tags (not from the envelope itself)
  * @returns {string} decrypted plaintext
  * @throws on schema mismatch, AD mismatch, or AEAD auth failure
  */
@@ -322,7 +322,7 @@ export function decryptConfidentialContent(ock, content, recordCtx) {
   return new TextDecoder().decode(plaintext);
 }
 
-/***/
+/**
  * Check if a string looks like a confidential envelope.
  * @param {string} content
  * @returns {boolean}
@@ -337,7 +337,7 @@ export function isConfidentialEnvelope(content) {
   }
 }
 
-/***/
+/**
  * Parse a key-envelope d-tag to extract org ID, version, and handle.
  * Format: org-key:<orgID>:v<N>:<handle>
  *

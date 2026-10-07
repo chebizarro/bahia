@@ -184,7 +184,7 @@ func TestLogService_FetchRunLogs(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Blossom URLs use SH hashes - create valid-looking ones
+	// Blossom URLs use SHA-256 hashes - create valid-looking ones
 	stdoutHash := blossom.ComputeSHA256([]byte(stdoutContent))
 	stderrHash := blossom.ComputeSHA256([]byte(stderrContent))
 

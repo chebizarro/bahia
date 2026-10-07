@@ -84,7 +84,7 @@
     {/if}
 
     {#if session?.authoritative && session.executionVersion === 2}
-      <!-- Current-run controls scroll on their own so a long plan card never slides under the composer.-->
+      <!-- Current-run controls scroll on their own so a long plan card never slides under the composer. -->
       <section class="current-execution" aria-label="Current assistant run">
       <div class="execution-summary" aria-label="Current assistant execution" data-run-id={session.currentRunId} data-workflow={session.workflow} data-phase={session.phase} data-revision={session.executionRevision} data-submitted-effects={session.submittedEffects} data-uncertain-effects={session.uncertainEffects}>
         <span>{session.workflow} · {session.phase}</span>

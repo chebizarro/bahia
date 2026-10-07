@@ -15,12 +15,12 @@ import (
 
 // --- BackupCanonicalPublisher acceptance tests -------------------------------
 //
-// These tests verify B1 invariants:
-// - One canonical event per material change through the shared path.
-// - D-tag, legacy_kind, and family tags are correct.
-// - Content change after char 64 IS published (no fingerprint truncation).
-// - Runtime observation republish on state change.
-// - Nil inputs handled gracefully.
+// These tests verify Phase 3 B1 invariants:
+//   - One canonical event per material change through the shared path.
+//   - D-tag, legacy_kind, and family tags are correct.
+//   - Content change after char 64 IS published (no fingerprint truncation).
+//   - Runtime observation republish on state change.
+//   - Nil inputs handled gracefully.
 
 func TestBackupCanonicalPublisher_OneEventPerMaterialChange(t *testing.T) {
 	ctx := context.Background()
@@ -391,9 +391,9 @@ func TestBackupRegistryNotifyHookCallsTrigger(t *testing.T) {
 }
 
 func TestBackupCoordinatorTriggerCausesImmediateProcessing(t *testing.T) {
-	// Verify that Trigger causes the coordinator to wake.
+	// Verify that Trigger() causes the coordinator to wake.
 	// We test this by creating a coordinator with a very long poll interval
-	// and verifying that Trigger unblocks the select.
+	// and verifying that Trigger() unblocks the select.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

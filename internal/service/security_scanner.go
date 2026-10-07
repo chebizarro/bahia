@@ -58,7 +58,7 @@ const (
 //
 // DeliveryOutcome reports what the outbox knows about an event id; the
 // scanner reads it after recording a queued event's id, for an outcome the
-// outbox reached before the id was stored.
+// outbox reached before the id was stored (bahia-irsry.40).
 type SecurityVerifiedPublisher interface {
 	PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomadapter.PublishOKResult, error)
 	DeliveryOutcome(ctx context.Context, eventID string) (nostrutil.DeliveryOutcome, error)
@@ -373,7 +373,7 @@ func (s *SecurityScanner) SubmitScan(ctx context.Context, req SecurityScanReques
 		}
 		return nil, err
 	}
-	// The run record is the claim and is already canonical. The compatibility status
+	// The run record is the claim and is already canonical. The legacy status
 	// observable is best effort: failing here would strand an accepted run
 	// that nothing executes until the next restart.
 	if err := s.publishStatus(ctx, run, stored, domain.SecurityScanAccepted, "accepted", ""); err != nil {
@@ -824,7 +824,7 @@ func ignoreLegacySBOMReferenceWrapper(ev *nostr.Event) bool {
 	if err := json.Unmarshal([]byte(ev.Content), &envelope); err != nil {
 		return false
 	}
-	// Migrated compatibility wrappers are not in-toto attestations; they are envelopes
+	// Migrated legacy wrappers are not in-toto attestations; they are envelopes
 	// carrying prior event content under legacy_event and should not be scanned.
 	return envelope.Type == "" && len(envelope.LegacyEvent) > 0
 }

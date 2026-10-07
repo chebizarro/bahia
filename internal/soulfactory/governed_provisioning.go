@@ -135,15 +135,15 @@ type ObservedResource struct {
 // non-terminal steps so adapters can delegate each step to the existing
 // machinery rather than reimplementing it:
 //
-//	StepReserveIdentity reserve-only identity surface (NO key generation)
-//	StepRegisterServiceUnit BahiaIntegration.RegisterSoulAsService + the
-//	 agent environment's deployment unit
-//	StepSelectRuntimeRelease service.AgentRuntimeReleaseService.BindRelease then
-//	 RegistryService.CreateDeploymentIntentForRuntimeRelease /
-//	 SubmitPromotionIntent (#4/#5 release-backed intent)
-//	StepDeployViaBahia RegistryService deployment intent/run + observed
-//	 environment state (deploy precedes activation)
-//	StepVerify* existing Signet/relay/model/OpenClaw readiness verification
+//	StepReserveIdentity       reserve-only identity surface (NO key generation)
+//	StepRegisterServiceUnit   BahiaIntegration.RegisterSoulAsService + the
+//	                          agent environment's deployment unit
+//	StepSelectRuntimeRelease  service.AgentRuntimeReleaseService.BindRelease then
+//	                          RegistryService.CreateDeploymentIntentForRuntimeRelease /
+//	                          SubmitPromotionIntent (#4/#5 release-backed intent)
+//	StepDeployViaBahia        RegistryService deployment intent/run + observed
+//	                          environment state (deploy precedes activation)
+//	StepVerify*               existing Signet/relay/model/OpenClaw readiness verification
 //
 // The port is injected per provisioning run so a production adapter can carry
 // the resolved soul, org, environment, and runtime-release context that the

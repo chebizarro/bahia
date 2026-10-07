@@ -31,7 +31,7 @@ type HealthCheck struct {
 }
 
 // HealthSnapshot is the readiness/liveness state for endpoints. Tier fields
-// are removed — readiness is gated on the ReadinessTracker (docs/architecture/intents-and-authority.md).
+// are removed — readiness is gated on the ReadinessTracker (§6.2).
 type HealthSnapshot struct {
 	Status string
 	Ready  bool
@@ -126,7 +126,7 @@ func (p *HealthProvider) Readiness() HealthSnapshot {
 	snapshot.Checks = append(snapshot.Checks, p.backgroundRunnersCheck())
 
 	// Intent readiness check: the ReadinessTracker must report all filters
-	// synced. This handles tier-based readiness.
+	// synced. This replaces the old tier-based readiness.
 	if p.readiness != nil {
 		progress := p.readiness.Progress()
 		status := HealthStatusPass
@@ -279,7 +279,7 @@ const undeliveredHealthCheckDetailLimit = 10
 
 // registerUndeliveredHealthCheck reports the coordinates whose latest event
 // the publish outbox abandoned after the producer was told it was queued
-// (localstore.Undelivered, docs/architecture/outbox-delivery.md). The state is committed locally and served
+// (localstore.Undelivered, §3.7). The state is committed locally and served
 // by canonical reads, but no relay quorum holds it, so the daemon is degraded
 // (warn), not unready: reads and writes still work, and the next publish of
 // each coordinate, or an operator retry of its failed outbox entry, clears

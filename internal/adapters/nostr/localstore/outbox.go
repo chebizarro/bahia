@@ -20,7 +20,7 @@ import (
 // ErrReadOnly is returned when a write operation is attempted on a read-only outbox.
 var ErrReadOnly = errors.New("outbox is open read-only")
 
-// The daemon's durable publish outbox: signed
+// The daemon's durable publish outbox (bahia-irsry.10.4, audit B-13): signed
 // events waiting for relay acceptance, with each relay's delivery state.
 //
 // Unlike the event store, the outbox is not a cache. A pending entry is the

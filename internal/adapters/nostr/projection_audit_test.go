@@ -26,7 +26,7 @@ func auditEvents(sink *captureProjectionPublisher) []gonostr.Event {
 }
 
 // assertOneAudit returns the single audit fact recorded for eventType and
-// checks the canonical fact shape: regular 4903, no d, no compatibility kind, the
+// checks the canonical fact shape: regular 4903, no d, no legacy kind, the
 // cp-audit topic and a fact id.
 func assertOneAudit(t *testing.T, sink *captureProjectionPublisher, eventType events.EventType) gonostr.Event {
 	t.Helper()
@@ -188,7 +188,7 @@ func TestProjectionAuditFactAbandonedDeliveryAllowsRepublish(t *testing.T) {
 	}
 }
 
-// TestObservationBurstProducesZeroAuditAndDeployProducesOne verifies:
+// TestObservationBurstProducesZeroAuditAndDeployProducesOne verifies B-16:
 // high-frequency observation/sync/state-changed/drift events produce zero
 // 4903 audit facts, while an operator-meaningful discrete mutation (runtime
 // deploy) produces exactly one.

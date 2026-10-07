@@ -20,9 +20,9 @@ import (
 // TestRunnerRelayBackfillPastRelayMaxLimit: the relay backfill stops paging
 // at the first page shorter than BackfillLimit. Against a relay whose NIP-11
 // max_limit is lower, a page capped at max_limit used to look like the last
-// one and the rest of the compatibility history was silently left unmigrated
-// . The shared pool now pages capped answers itself, so every
-// stored compatibility event is migrated.
+// one and the rest of the legacy history was silently left unmigrated
+// (bahia-irsry.49). The shared pool now pages capped answers itself, so every
+// stored legacy event is migrated.
 func TestRunnerRelayBackfillPastRelayMaxLimit(t *testing.T) {
 	const maxLimit, stored = 5, 12
 	relay := khatru.NewRelay()

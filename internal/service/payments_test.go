@@ -322,7 +322,7 @@ func TestHashToken(t *testing.T) {
 	if h1 == h3 {
 		t.Error("different input should produce different hash")
 	}
-	if len(h1) != 64 { // SH hex
+	if len(h1) != 64 { // SHA-256 hex
 		t.Errorf("hash length = %d, want 64", len(h1))
 	}
 }

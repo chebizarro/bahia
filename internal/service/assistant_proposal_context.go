@@ -92,7 +92,7 @@ func (c *AssistantProposalContext) ResolveAssistantScope(_ context.Context, req 
 
 // PrepareTurn expands the prompt against the persisted scope and runs the
 // SessionStart (first turn only) and UserPromptSubmit hooks. A prompt whose
-// expansion not matches the persisted command scope is refused: the
+// expansion no longer matches the persisted command scope is refused: the
 // persisted scope is authoritative.
 func (c *AssistantProposalContext) PrepareTurn(ctx context.Context, req AssistantProposalRequest, firstTurn bool) (AssistantPreparedTurn, error) {
 	prepared := AssistantPreparedTurn{Prompt: strings.TrimSpace(req.Prompt), SelectedRefs: append([]string(nil), req.Scope.SelectedRefs...)}

@@ -48,7 +48,7 @@ type SecretIntentEncryptor interface {
 //
 // Secret REVEAL stays ContextVM — this handler does not decrypt secrets.
 //
-// See docs/architecture/intents-and-authority.md
+// See design §7 Wave 5 N1.
 type SecretIntentHandler struct {
 	registry  SecretIntentCRUD
 	encryptor SecretIntentEncryptor

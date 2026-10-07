@@ -102,7 +102,7 @@ type concordEdition struct {
 //
 // This is a structural fold, not an authorized CORD-04 projection. It does not
 // resolve the owner-rooted Roster or retain exact non-head citation evidence.
-// Rotate refuses operations that would rely on it; receiver-side
+// Rotate refuses operations that would rely on it (bahia-185t0); receiver-side
 // validation cannot justify minting keys or compacting these unverified heads.
 type concordControlFold struct {
 	// heads maps an entity coordinate to its current edition.
@@ -129,8 +129,8 @@ func (f *concordControlFold) head(entity [32]byte) (concordEdition, bool) {
 // concordEditionHash implements CORD-04 §1's edition identity:
 //
 //	sha256( len64(label) || label || entity_id[32] || version_be[8]
-//	 || (prev ? 0x01 || prev[32]: 0x00 || zero[32])
-//	 || len64(content) || content )
+//	        || (prev ? 0x01 || prev[32] : 0x00 || zero[32])
+//	        || len64(content) || content )
 //
 // Every field is fixed-width or length-prefixed, so distinct inputs can never
 // collide, and content is hashed as the exact wire bytes rather than a
@@ -244,7 +244,7 @@ func foldConcordControlPlane(events []*nostr.Event, address nostr.PubKey, convKe
 //
 // The head is the highest version whose held chain is intact (CORD-04 §1). A
 // *gap* is not a break: a compaction prunes an entity's ancestors and re-seats
-// its head alone, so the head's `prev` cites an edition that not exists.
+// its head alone, so the head's `prev` cites an edition that no longer exists.
 // Bahia starts every fold from nothing, which is precisely CORD-04 §1's fresh
 // joiner — it takes the highest head as its baseline rather than treating the
 // dangling `prev` as a gap to refetch. A held pair that *does* adjoin and does
@@ -427,12 +427,12 @@ func (m *concordMembership) fetchConcordControlPlane(
 	return foldConcordControlPlane(plane.Events, address, read.ConversationKey)
 }
 
-// resolveConcordRotationAuthority is the compatibility structural citation lookup,
+// resolveConcordRotationAuthority is the legacy structural citation lookup,
 // not an authority verifier. Rotate permits only its owner/channel-only fast
 // path: the validated owner needs no citation (CORD-04 §1). The other branches
 // cannot prove a Grant's type, member, Roles, current rank or scoped permission,
 // and must remain behind the stage 1 refusal until those checks and the full
-// compaction evidence are implemented.
+// compaction evidence are implemented (bahia-185t0).
 func (m *concordMembership) resolveConcordRotationAuthority(
 	ctx context.Context,
 	community validatedConcordCommunity,
@@ -443,7 +443,7 @@ func (m *concordMembership) resolveConcordRotationAuthority(
 	isOwner := strings.EqualFold(bundle.Owner, rotator.Hex())
 	if isOwner && !needFold {
 		// Nothing on the plane can change an owner's channel rekey, and CORD-04
-		// docs/architecture/intents-and-authority.md wants no citation from them, so the fetch is skipped rather than
+		// §1 wants no citation from them, so the fetch is skipped rather than
 		// made a soft dependency that fails a rotation it cannot affect.
 		return concordAuthorityCitation{}, nil, nil
 	}

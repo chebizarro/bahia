@@ -6,7 +6,7 @@ import (
 )
 
 // storedPager pages one REQ's stored events with `until` when the relay's
-// NIP-11 max_limit capped the REQ's limit below the caller's.
+// NIP-11 max_limit capped the REQ's limit below the caller's (bahia-irsry.49).
 // Without it a caller asking for more than max_limit, and not paging itself,
 // would silently get only the newest max_limit events.
 //

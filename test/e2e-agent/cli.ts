@@ -1,4 +1,4 @@
-/***/
+/**
  * CLI entrypoint for E2E agent runner
  */
 import { writeFile } from 'node:fs/promises';
@@ -113,19 +113,19 @@ Usage:
   tsx cli.ts --scenario "Service CRUD"
 
 Options:
-  --all Run all scenarios
-  --tags <tag[,tag2]> Run scenarios matching all tags
-  --scenario <name> Run specific scenario (repeatable)
-  --json Print machine-readable JSON report
-  --html <path> Write optional HTML report
-  --continue-on-failure Continue after scenario failures
-  --headed Run browser in headed mode
-  --skip-mcp Explicitly skip MCP driver initialization
-  --mcp-url <url> MCP JSON-RPC URL (default: BAHIA_E2E_MCP_URL or http://localhost:8080/mcp)
-  --heal Enable self-healing loop
-  --max-iterations <n> Max healing attempts (default: 3)
-  --approve-fixes Prompt to approve applying each proposed fix
-  --help Show this help
+  --all                     Run all scenarios
+  --tags <tag[,tag2]>       Run scenarios matching all tags
+  --scenario <name>         Run specific scenario (repeatable)
+  --json                    Print machine-readable JSON report
+  --html <path>             Write optional HTML report
+  --continue-on-failure     Continue after scenario failures
+  --headed                  Run browser in headed mode
+  --skip-mcp                Explicitly skip MCP driver initialization
+  --mcp-url <url>           MCP JSON-RPC URL (default: BAHIA_E2E_MCP_URL or http://localhost:8080/mcp)
+  --heal                    Enable self-healing loop
+  --max-iterations <n>      Max healing attempts (default: 3)
+  --approve-fixes           Prompt to approve applying each proposed fix
+  --help                    Show this help
 `);
 }
 

@@ -1,5 +1,5 @@
-<!---->
-  AuthGuard performs the role-based access check described in docs/architecture/web-store-first.md.
+<!--
+  AuthGuard — Phase 4 §6.3: role-based access check.
 
   Replaces the previous REST probe with a reactive role check.
   No spinner, no REST probe, no discovery gate.

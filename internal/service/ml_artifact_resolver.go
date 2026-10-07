@@ -57,7 +57,7 @@ func (s MLArtifactResolverSet) ResolveArtifact(ctx context.Context, input MLArti
 	return resolver.ResolveArtifact(ctx, input)
 }
 
-// NewDefaultMLArtifactResolverSet returns resolvers. SeaweedFS/S3 is fail-closed unless configured.
+// NewDefaultMLArtifactResolverSet returns phase 1/2 resolvers. SeaweedFS/S3 is fail-closed unless configured.
 func NewDefaultMLArtifactResolverSet(httpClient *http.Client, seaweed SeaweedFSResolverConfig) MLArtifactResolverSet {
 	h := &HTTPMLArtifactResolver{Client: httpClient}
 	return MLArtifactResolverSet{

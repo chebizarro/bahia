@@ -62,7 +62,7 @@ func BootstrapLocalDNS(ctx context.Context, store *localstore.Outbox, zones DNSZ
 	return store.PutControlRecord("bootstrap", "dns", []byte("1"))
 }
 
-// BootstrapLocalML imports the compatibility registry without making PostgreSQL a
+// BootstrapLocalML imports the legacy registry without making PostgreSQL a
 // prerequisite for subsequent model, version, or endpoint mutations.
 func BootstrapLocalML(ctx context.Context, store *localstore.Outbox, legacy MLRegistryRepository) error {
 	marker, err := store.GetControlRecord("bootstrap", "ml")

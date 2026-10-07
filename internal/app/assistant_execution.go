@@ -37,8 +37,8 @@ type assistantExecutionDeps struct {
 	RelayConnections assistantRelayConnectionNotifier
 	// LocalStore is the daemon's local event store; startup recovery
 	// enumerates every assistant session from it once Readiness reports the
-	// first relay catch-up complete, after the topic migration
-	// has re-tagged every compatibility session it holds.
+	// first relay catch-up complete (audit C-46), after the topic migration
+	// (bahia-irsry.43) has re-tagged every legacy session it holds.
 	LocalStore service.SupervisionEventStore
 	Readiness  service.SupervisionReadiness
 }
@@ -202,8 +202,8 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 		Logger:          slog.Default(),
 	})
 	recovery := service.NewAssistantSessionRecoveryRunner(orchestrator, service.AssistantSessionRecoveryConfig{PageLimit: 500, ServicePubkey: deps.ServicePubkey, Logger: slog.Default(), Engine: engine, Store: store, Subscriber: deps.Subscriber, LocalStore: deps.LocalStore, Readiness: deps.Readiness})
-	// attach the startup topic migration so recovery re-tags
-	// compatibility assistant session events before querying the relay with #t.
+	// bahia-irsry.43: attach the startup topic migration so recovery re-tags
+	// legacy assistant session events before querying the relay with #t.
 	if deps.LocalStore != nil && deps.Signer != nil && deps.Publisher != nil {
 		recovery.SetTopicMigration(service.NewAssistantSessionTopicMigration(service.AssistantSessionTopicMigrationConfig{
 			LocalStore:    deps.LocalStore,

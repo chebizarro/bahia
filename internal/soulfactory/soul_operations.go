@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// Per-soul operation serialization.
+// Per-soul operation serialization (bahia-irsry.38).
 //
 // Lifecycle actions (kind:1950) and fleet config reloads (kind:31953) both
 // drive a soul's runtime and republish its kind:31951 read model. They run on

@@ -193,7 +193,7 @@ func TestPlaneTransportRejectsOKAndAcknowledgmentFailures(t *testing.T) {
 }
 
 // TestPlaneDiscoverRelayAuthIsThePools: the plane client has no AUTH logic of
-// its own. Over the shared pool, a relay that refuses
+// its own (bahia-irsry.47). Over the shared pool, a relay that refuses
 // unauthenticated REQs is answered by the pool's signer and the REQ reissued
 // on that relay; without a signer the pool's terminal CLOSED fails discovery.
 func TestPlaneDiscoverRelayAuthIsThePools(t *testing.T) {

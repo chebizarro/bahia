@@ -19,7 +19,7 @@ type operationalViewPublisher interface {
 }
 
 // operatorAllowlistPublisher publishes one scope's operator allowlist as a
-// fleet-OCK encrypted record.
+// fleet-OCK encrypted record (bahia-fbyo5).
 type operatorAllowlistPublisher interface {
 	PublishOperatorAllowlist(ctx context.Context, scope string, pubkeys []string) error
 }

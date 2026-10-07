@@ -12,19 +12,19 @@ import (
 
 // PublishBeforeCommit delivers a signed event for a producer that commits its
 // own state only once the publish quorum has accepted the event, such as the
-// relay-first registry. Such a producer abandons its write
+// relay-first registry (bahia-irsry.41). Such a producer abandons its write
 // when the quorum is not met, so nothing may remain queued to be delivered
 // later. The order is therefore reversed from PublishProjection, which makes
 // the event durable before the first round:
 //
-// 1. One round goes to every write relay of this publisher's pool.
-// 2. Below the publish quorum it returns an error and nothing is enqueued.
-// Relays that did accept keep the event, as with any partial publish.
-// 3. At the quorum the event is admitted to the outbox with that round's
-// per-relay results: accepted and permanently rejected relays are
-// recorded as such, and the round is counted. The runner then retries
-// only the relays that have not accepted, with the usual backoff and
-// attempt budget, and the entry settles like any other.
+//  1. One round goes to every write relay of this publisher's pool.
+//  2. Below the publish quorum it returns an error and nothing is enqueued.
+//     Relays that did accept keep the event, as with any partial publish.
+//  3. At the quorum the event is admitted to the outbox with that round's
+//     per-relay results: accepted and permanently rejected relays are
+//     recorded as such, and the round is counted. The runner then retries
+//     only the relays that have not accepted, with the usual backoff and
+//     attempt budget, and the entry settles like any other.
 //
 // A nil error means the quorum accepted and the event is durably tracked. An
 // error after the quorum accepted means the outbox could not record it; the

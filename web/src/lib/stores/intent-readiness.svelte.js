@@ -1,4 +1,4 @@
-/***/
+/**
  * Intent submission readiness.
  *
  * One signal answers "can a signed intent for this domain/record be submitted
@@ -10,30 +10,30 @@
  * accepted locally, shown as pending and delivered by the outbox on reconnect,
  * so an unreachable relay must not disable anything that is ready locally.
  *
- * ready the session can open its intent client (event store, relay seed,
- * signer, service and requester pubkeys) and the org context is
- * resolvable: an org id on the record or form, a fleet-scoped
- * domain, or exactly one organization known to this session.
- * pending not ready yet; the control is disabled with `reason` and becomes
- * ready as soon as local state allows. `waitingOn` says for what:
- * 'session' while sign-in, boot or the client's local stores are
- * still opening; 'organization' while the session knows no
- * organization for an org-scoped intent.
- * neither only the operator can resolve it (signed out, an intent client
- * that cannot open, several organizations, or an empty organization
- * field). The control stays enabled and submitting reports `reason`,
- * the explicit error the intent client raises. When the blocker is
- * known before the operator acts and the page cannot resolve it
- * (`blockedBy: 'signer'`, a signer without NIP-44), the control is
- * disabled with the reason instead, so nothing is typed into a form
- * that cannot submit.
+ *   ready    the session can open its intent client (event store, relay seed,
+ *            signer, service and requester pubkeys) and the org context is
+ *            resolvable: an org id on the record or form, a fleet-scoped
+ *            domain, or exactly one organization known to this session.
+ *   pending  not ready yet; the control is disabled with `reason` and becomes
+ *            ready as soon as local state allows. `waitingOn` says for what:
+ *            'session' while sign-in, boot or the client's local stores are
+ *            still opening; 'organization' while the session knows no
+ *            organization for an org-scoped intent.
+ *   neither  only the operator can resolve it (signed out, an intent client
+ *            that cannot open, several organizations, or an empty organization
+ *            field). The control stays enabled and submitting reports `reason`,
+ *            the explicit error the intent client raises. When the blocker is
+ *            known before the operator acts and the page cannot resolve it
+ *            (`blockedBy: 'signer'`, a signer without NIP-44), the control is
+ *            disabled with the reason instead, so nothing is typed into a form
+ *            that cannot submit.
  *
  * Sensitive domains (organizations, service secrets, notification channels,
  * relay policy; nostr/intent-giftwrap.js) travel gift-wrapped on a transport
  * that opens its own session on submit, so they never wait on the intent
  * client. They need a NIP-44-capable signer (a never-ready state the operator
  * resolves) and the same org context, which stores/sensitive-intents.svelte.js
- * `orgIdFor` resolves from the same candidates, so a control is never
+ * `orgIdFor()` resolves from the same candidates, so a control is never
  * enabled for an intent whose organization the store could not name.
  *
  * Reads only `$state`, so it is reactive inside `$derived` and templates.
@@ -58,7 +58,7 @@ const ready = { ready: true, pending: false, reason: '', waitingOn: '', blockedB
 const waiting = (waitingOn, reason) => ({ ready: false, pending: true, reason, waitingOn, blockedBy: '' });
 const blocked = (reason, blockedBy = '') => ({ ready: false, pending: false, reason, waitingOn: '', blockedBy });
 
-/***/
+/**
  * Every org id the session currently knows: membership roles, held content
  * keys, org records and system discovery.
  */
@@ -67,7 +67,7 @@ export function intentOrgCandidates() {
     currentSystemInfo()?.organization_id];
 }
 
-/***/
+/**
  * The org id a record carries, directly or through the service or LLM route
  * it belongs to. Stores and controls resolve it the same way.
  */
@@ -80,13 +80,13 @@ export function intentRecordOrgId(record) {
   ].find(isIntentOrgId) || '';
 }
 
-/***/
+/**
  * @param {string} domain intent domain, e.g. 'llm' or 'dns'
  * @param {object} [target]
  * @param {string} [target.orgId] org id the form or page already holds
  * @param {object} [target.record] record the intent acts on (org_id, service_id, route_id)
  * @param {boolean} [target.orgField] the control sits beside an organization
- * field, so an unknown organization is the operator's to supply
+ *   field, so an unknown organization is the operator's to supply
  * @returns {{ ready: boolean, pending: boolean, reason: string, waitingOn: '' | 'session' | 'organization', blockedBy: '' | 'signer' }}
  */
 export function intentReadiness(domain, { orgId = '', record = null, orgField = false } = {}) {

@@ -10,11 +10,11 @@ import (
 // ConfidentialEncryptor encrypts and decrypts confidential cp-state records
 // using a per-org content key (OCK). It replaces the previous LegacyOrgStateDecryptor
 // and NIP-44 self-encryption paths with a single scheme where:
-// - Org-visible content is AEAD-encrypted under the OCK (any member can decrypt)
-// - Service-only fields use an additional NIP-44 inner layer to the service pubkey
-// - All NIP-44 operations go through the signer interface (bunker-compatible)
+//   - Org-visible content is AEAD-encrypted under the OCK (any member can decrypt)
+//   - Service-only fields use an additional NIP-44 inner layer to the service pubkey
+//   - All NIP-44 operations go through the signer interface (bunker-compatible)
 //
-// C1.
+// Phase 3 C1.
 //
 // Method signatures use primitive types so that the nostr adapter can define a
 // matching interface (ConfidentialStateEncryptor) without importing this
@@ -111,9 +111,9 @@ func (e *ConfidentialEncryptor) DecryptServiceInner(ctx context.Context, content
 	})
 }
 
-// DecryptOrgState implements the compatibility DecryptOrgState interface used by
+// DecryptOrgState implements the legacy DecryptOrgState interface used by
 // RelayMemberEventHandler and DecryptMemberContent. It tries the new
-// confidential format; callers with compatibility support should try compatibility
+// confidential format; callers with legacy support should try legacy
 // decryptors separately if this returns an error.
 func (e *ConfidentialEncryptor) DecryptOrgState(content string) ([]byte, error) {
 	return e.DecryptConfidential(context.Background(), content, 0, "", "")

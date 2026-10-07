@@ -114,7 +114,7 @@ type ConcordRekeyPublication struct {
 // blobPlaintext builds the fixed-width CORD-06 §1 blob for one recipient.
 //
 // The width declares the form, so the length is checked against the form that
-// was actually built. The 72-byte *base* blob is the compatibility, pre-split shape
+// was actually built. The 72-byte *base* blob is the legacy, pre-split shape
 // (CORD-06 §3) and is never minted: a base rotation without a control pair is
 // an error rather than a silently downgraded epoch.
 func (s concordRekeyScope) blobPlaintext(staff bool) ([]byte, error) {
@@ -308,7 +308,7 @@ func concordChunkRekeyBlobs(blobs []concordRekeyBlob) ([][]concordRekeyBlob, err
 //
 // The `vac` closes CORD-06 §3's Authority requirement: a rotation cites the
 // Grant it acts under like any CORD-04 authority action, so a lagging client
-// never honors a just-demoted admin's rotation. It rides after the frozen docs/architecture/intents-and-authority.md
+// never honors a just-demoted admin's rotation. It rides after the frozen §1
 // tags — additive, so a reader indexing by name is unaffected — and is absent
 // exactly when the owner rotates (CORD-04 §1).
 func (m *concordMembership) buildConcordRekeyRumor(

@@ -38,12 +38,12 @@ var errProductionStateNotFound = errors.New("production provisioning state not f
 // No key material or bunker URI is ever written there.
 //
 // SagaEvents, SagaPublisher and ServicePubkey make the daemon's canonical
-// saga-run records the authority of saga progress: every
+// saga-run records the authority of saga progress (audit C-45): every
 // checkpoint is published as one replaceable cp-state record per run before
 // it is reported durable, and a daemon moved to a fresh host resumes from its
 // local event store. With LedgerEncryptor they likewise make the canonical,
 // fleet-OCK encrypted adapter-ledger records the authority of the production
-// adapters' request and identity state. The StateDir files are
+// adapters' request and identity state (bahia-nfc95). The StateDir files are
 // then only caches. Without any of them both stores are the local file
 // journal alone, which is the configuration tests and a daemon without a
 // service identity run with.

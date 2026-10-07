@@ -13,24 +13,24 @@ import (
 	"go.uber.org/zap"
 )
 
-// Inbound resume cursors.
+// Inbound resume cursors (bahia-irsry.10.1; audit C-2, C-3, B-15).
 //
 // A cursor is kept per (relay, filter hash) in the local event store. It is the
 // newest created_at, clamped to the local clock, among the events that relay
 // delivered for that filter and that were durably stored:
-// - events of one REQ count only once that REQ's EOSE proves the stored
-// history below them complete; after EOSE, live events advance it as they
-// arrive (the rule SoulFactory's resume cursor uses);
-// - the daemon's own events never move it, whatever their created_at;
-// - a future-dated event cannot push it past the local clock;
-// - a REQ during which an event failed to store is never committed, so the
-// event is fetched again on the next resume.
+//   - events of one REQ count only once that REQ's EOSE proves the stored
+//     history below them complete; after EOSE, live events advance it as they
+//     arrive (the rule SoulFactory's resume cursor uses);
+//   - the daemon's own events never move it, whatever their created_at;
+//   - a future-dated event cannot push it past the local clock;
+//   - a REQ during which an event failed to store is never committed, so the
+//     event is fetched again on the next resume.
 //
 // A resume REQ starts at cursor - overlap, so late-propagated and modestly
 // backdated events are still delivered; duplicates are dropped by id against
 // the local store. Replaceable and addressable sets do not rely on cursors at
 // all: they are reconciled in full with NIP-77, or paged in full, on every
-// (re)connect.
+// (re)connect (C-3).
 
 const (
 	// defaultInboundResumeOverlap is how far before a cursor a resume REQ

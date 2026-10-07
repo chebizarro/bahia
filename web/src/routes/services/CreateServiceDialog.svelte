@@ -29,7 +29,7 @@
   let repoPath = $state('');
   let registriesInitialized = $state(false);
 
-  // Client-minted entity id for this create attempt. It is kept
+  // Client-minted entity id for this create attempt (bahia-irsry.35). It is kept
   // across retries of the same form so a retry after a lost reply is idempotent,
   // and re-minted only when the form is reset.
   let createEntityId = mintEntityId();

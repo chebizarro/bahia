@@ -11,14 +11,14 @@ import (
 	"go.uber.org/zap"
 )
 
-// Per-relay pool capabilities for inbound sync.
+// Per-relay pool capabilities for inbound sync (bahia-irsry.10.1).
 //
 // SubscribeAllWithEOSE sends the same filters to every relay, which forces one
-// `since` on all of them. Inbound sync keeps a cursor per (relay,
+// `since` on all of them (C-23). Inbound sync keeps a cursor per (relay,
 // filter) instead, so it needs a REQ on one relay at a time, and a NIP-77
 // session against one relay at a time.
 
-// errRelayNotInPool reports a relay the pool not manages; a per-relay
+// errRelayNotInPool reports a relay the pool no longer manages; a per-relay
 // sync worker stops for good when it sees it.
 var errRelayNotInPool = errors.New("relay is not in the pool")
 
@@ -35,14 +35,14 @@ const negentropyFetchBatch = 50
 // so unlike SubscribeWithOptions the pool does not supervise or reissue it.
 // It uses the same primitives as the merged subscriptions:
 //
-// - reconnectRelay dials the relay if needed, honouring its reconnect
-// backoff, and redials a websocket that died since the last use (the
-// pool now notices a dead socket itself);
-// - the REQ takes one of the relay's NIP-11 max_subscriptions slots, held
-// until ctx ends or the subscription does;
-// - NIP-42 is answered by the connection's AuthHandler; an "auth-required:"
-// CLOSED still ends the REQ, and the caller re-REQs after
-// AuthenticateRelay, which joins that AUTH attempt.
+//   - reconnectRelay dials the relay if needed, honouring its reconnect
+//     backoff, and redials a websocket that died since the last use (the
+//     pool now notices a dead socket itself);
+//   - the REQ takes one of the relay's NIP-11 max_subscriptions slots, held
+//     until ctx ends or the subscription does;
+//   - NIP-42 is answered by the connection's AuthHandler; an "auth-required:"
+//     CLOSED still ends the REQ, and the caller re-REQs after
+//     AuthenticateRelay, which joins that AUTH attempt.
 //
 // filter.Limit is sent as given: the caller pages against relayPageLimit, and
 // capping it here as well could make a full page look short. The subscription

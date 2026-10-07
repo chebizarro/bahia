@@ -2,18 +2,18 @@
 // numbers used by runtime code, migration code, and historical transforms.
 //
 // Production runtime code must prefer Bahia's canonical Nostr-native policy:
-// - ContextVM kind 25910 for mutation intents, optionally wrapped with
-// CEP-4/NIP-59 kind 1059 or 21059.
-// - NIP-38 kind 30315 for operational status.
-// - Kind 30900 for canonical control-plane state projections.
-// - Kind 4903 for audit facts and attestations.
-// - ContextVM discovery kinds 11316-11320 and NIP-51 relay sets kind 30002
-// for bootstrap and capability discovery.
-// - NIP-65 kind 10002 for advisory service relay preferences.
-// - NIP-51 kind 10050 for explicitly configured DM receive relay lists.
-// - NIP-78 kind 30078 for app-specific data.
+//   - ContextVM kind 25910 for mutation intents, optionally wrapped with
+//     CEP-4/NIP-59 kind 1059 or 21059.
+//   - NIP-38 kind 30315 for operational status.
+//   - Kind 30900 for canonical control-plane state projections.
+//   - Kind 4903 for audit facts and attestations.
+//   - ContextVM discovery kinds 11316-11320 and NIP-51 relay sets kind 30002
+//     for bootstrap and capability discovery.
+//   - NIP-65 kind 10002 for advisory service relay preferences.
+//   - NIP-51 kind 10050 for explicitly configured DM receive relay lists.
+//   - NIP-78 kind 30078 for app-specific data.
 //
-// Compatibility request/status/result/read-model constants remain here so migration,
+// Legacy request/status/result/read-model constants remain here so migration,
 // fixtures, and fail-closed compatibility tests can identify old events. They
 // are not permission to publish or subscribe to those kinds in production
 // runtime paths. See docs/nostr-event-implementation-guide.md before adding or
@@ -280,7 +280,7 @@ const (
 )
 
 // =============================================================================
-// Deprecated Compatibility Command Kinds (31100-31105)
+// Deprecated Legacy Command Kinds (31100-31105)
 // =============================================================================
 
 const (
@@ -362,21 +362,21 @@ const (
 )
 
 // Secret and Notification Read-Model Kinds (32008-32009)
-// These are "compatibility kinds" used as keys in cpStateFamilies; the wire kind
+// These are "legacy kinds" used as keys in cpStateFamilies; the wire kind
 // is always 30900 (CASControlState). 32001-32004 are taken by worker families;
 // 32005-32007 are taken by org/member/invite (sibling O1).
 const (
 	SecretRegistry              = 32008
 	NotificationChannelRegistry = 32009
 
-	// Org key-envelope kind ( C1: per-org content key distribution).
+	// Org key-envelope kind (Phase 3 C1: per-org content key distribution).
 	// Key-envelope records wrap the per-org content key (OCK) to individual
 	// org members and the service via NIP-44.
 	OrgKeyEnvelope = 32010
 )
 
 // =============================================================================
-// Compatibility Worker State Kinds (deprecated, for mixed-version compatibility)
+// Legacy Worker State Kinds (deprecated, for mixed-version compatibility)
 // =============================================================================
 
 const (
@@ -467,7 +467,7 @@ const (
 )
 
 // =============================================================================
-// Org Read-Model Kinds (32005-32007) — O1
+// Org Read-Model Kinds (32005-32007) — Phase 3 Wave 5 O1
 // =============================================================================
 
 const (
@@ -477,10 +477,10 @@ const (
 )
 
 // =============================================================================
-// Payment & Security CP-State Kinds (32011-32013) —
+// Payment & Security CP-State Kinds (32011-32013) — bahia-irsry.60
 // =============================================================================
 //
-// These are "compatibility kinds" used as keys in cpStateFamilies; the wire kind
+// These are "legacy kinds" used as keys in cpStateFamilies; the wire kind
 // is always 30900 (CASControlState). Content is OCK-encrypted (confidential)
 // because payment records contain financial data (amounts, mint URLs, token
 // hashes) and security findings contain per-org vulnerability data.

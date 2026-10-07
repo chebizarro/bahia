@@ -82,13 +82,13 @@ var (
 
 // soulFactorySagaSeams are the daemon's local event store, publisher and
 // identity the governed saga publishes and resumes its canonical progress
-// records through.
+// records through (audit C-45).
 type soulFactorySagaSeams struct {
 	Events        saga.EventReader
 	Publisher     saga.EventPublisher
 	ServicePubkey string
 	// LedgerEncryptor encrypts the canonical adapter-ledger records
-	//; nil only when the daemon has no confidential encryptor.
+	// (bahia-nfc95); nil only when the daemon has no confidential encryptor.
 	LedgerEncryptor soulfactory.LedgerEncryptor
 }
 
@@ -122,7 +122,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		return nil, fmt.Errorf("creating SoulFactory Signet client: %w", err)
 	}
 	// One relay pool for SoulFactory's relay set: the reactor's subscription,
-	// reads and publishes and the runtime adapters share it.
+	// reads and publishes and the runtime adapters share it (bahia-irsry.47).
 	var relayClient *soulfactory.RelayClient
 	if len(allRelays) > 0 {
 		relayClient, err = soulfactory.NewRelayClient(allRelays, soulfactory.WithRelaySigner(signer), soulfactory.WithRelayLogger(slogLogger))

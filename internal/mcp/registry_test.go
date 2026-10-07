@@ -248,7 +248,7 @@ func hasString(values []string, want string) bool {
 }
 
 // assistantToolDescriptorMetadata is permission policy keyed by tool name. An
-// entry whose tool not exists is dead policy: it advertises risk, effect
+// entry whose tool no longer exists is dead policy: it advertises risk, effect
 // and resource types for something nothing can call, and it silently survives
 // the deletion of the tool it describes. The existing tests only check the
 // forward direction (every tool has metadata), which is why four orphaned DNS

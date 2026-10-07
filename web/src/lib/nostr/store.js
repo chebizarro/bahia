@@ -1,4 +1,4 @@
-/***/
+/**
  * BahiaEventStore — welshman-backed implementation.
  *
  * Wraps welshman's `Repository` (in-memory, with NIP-01 replaceable/
@@ -6,12 +6,12 @@
  *
  * - IndexedDB persistence (events + cursors) namespaced by service pubkey
  * - NIP-01 addressable tiebreak by lowest id (welshman is last-write-wins
- * on equal created_at; NIP-01 says lowest id wins)
+ *   on equal created_at; NIP-01 says lowest id wins)
  * - LRU-by-size eviction (§2.3)
  * - Single ingestion path with signature verification (§2.4)
  * - Reactive subscriptions for derived stores (§8)
  *
- * Design reference: docs/architecture/web-store-first.md §2, §7, §12.
+ * Design reference: phase4-web-store-first.md §2, §7, §12.
  *
  * @module lib/nostr/store
  */
@@ -28,17 +28,17 @@ const DB_VERSION = 1;
 const EVENTS_STORE = 'events';
 const CURSORS_STORE = 'cursors';
 
-/** Default eviction threshold in bytes (100 MB).*/
+/** Default eviction threshold in bytes (100 MB). */
 const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
 
-/** NIP-40 sweep interval (5 minutes).*/
+/** NIP-40 sweep interval (5 minutes). */
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // IndexedDB helpers
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Open (or create) the namespaced IndexedDB database.
  * @param {string} dbName
  * @returns {Promise<IDBDatabase>}
@@ -63,7 +63,7 @@ function openDatabase(dbName) {
   });
 }
 
-/***/
+/**
  * Load all events from IndexedDB.
  * @param {IDBDatabase} db
  * @returns {Promise<import('./store-interface.js').NostrEvent[]>}
@@ -78,7 +78,7 @@ function loadAllEvents(db) {
   });
 }
 
-/***/
+/**
  * Persist a single event to IndexedDB (put = upsert).
  * @param {IDBDatabase} db
  * @param {import('./store-interface.js').NostrEvent} event
@@ -94,7 +94,7 @@ function putEvent(db, event) {
   });
 }
 
-/***/
+/**
  * Delete an event from IndexedDB by id.
  * @param {IDBDatabase} db
  * @param {string} id
@@ -110,7 +110,7 @@ function deleteEvent(db, id) {
   });
 }
 
-/***/
+/**
  * Delete multiple events from IndexedDB by id.
  * @param {IDBDatabase} db
  * @param {string[]} ids
@@ -129,7 +129,7 @@ function deleteEvents(db, ids) {
   });
 }
 
-/***/
+/**
  * Load all cursors from IndexedDB.
  * @param {IDBDatabase} db
  * @returns {Promise<Map<string, number>>}
@@ -150,7 +150,7 @@ function loadCursors(db) {
   });
 }
 
-/***/
+/**
  * Put a cursor record into IndexedDB.
  * @param {IDBDatabase} db
  * @param {string} key
@@ -167,7 +167,7 @@ function putCursor(db, key, since) {
   });
 }
 
-/***/
+/**
  * Clear all data from the database (events + cursors).
  * @param {IDBDatabase} db
  * @returns {Promise<void>}
@@ -186,7 +186,7 @@ function clearDatabase(db) {
 // Cursor key helper
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Build a composite cursor key from relay URL and filter hash.
  * @param {string} relay
  * @param {string} filterKey
@@ -200,7 +200,7 @@ function cursorKey(relay, filterKey) {
 // Replaceable / addressable helpers
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Check if a kind is replaceable (NIP-01).
  * @param {number} kind
  * @returns {boolean}
@@ -209,7 +209,7 @@ function isReplaceableKind(kind) {
   return kind === 0 || kind === 3 || (kind >= 10000 && kind < 20000);
 }
 
-/***/
+/**
  * Check if a kind is addressable (parameterized replaceable, NIP-01).
  * @param {number} kind
  * @returns {boolean}
@@ -222,30 +222,30 @@ function isAddressableKind(kind) {
 // BahiaEventStore implementation
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Create a BahiaEventStore backed by welshman's Repository + IndexedDB.
  *
  * @param {object} options
  * @param {string} options.servicePubkeyPrefix - 8-char hex prefix for DB namespace
  * @param {number} [options.maxBytes] - Eviction threshold (default 100 MB)
- * @returns {import('./store-interface.js').BahiaEventStore & { repository: Repository, clear: => Promise<void> }}
+ * @returns {import('./store-interface.js').BahiaEventStore & { repository: Repository, clear: () => Promise<void> }}
  */
 export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_MAX_BYTES }) {
   const dbName = `bahia-events-${servicePubkeyPrefix}`;
   const repository = new Repository();
 
-  /** @type {IDBDatabase | null}*/
+  /** @type {IDBDatabase | null} */
   let db = null;
 
-  /** @type {Map<string, number>} cursor key → since*/
+  /** @type {Map<string, number>} cursor key → since */
   const cursors = new Map();
   const deletedIds = new Set();
   const deletedCoordinates = new Map();
 
-  /** @type {number | null}*/
+  /** @type {number | null} */
   let sweepTimer = null;
 
-  /** @type {Array<{ filter: import('./store-interface.js').Filter, cb: import('./store-interface.js').EventCallback }>}*/
+  /** @type {Array<{ filter: import('./store-interface.js').Filter, cb: import('./store-interface.js').EventCallback }>} */
   const subscriptions = [];
 
   // ── Lifecycle ───────────────────────────────────────────────────────
@@ -289,7 +289,7 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     }
   }
 
-  /***/
+  /**
    * Clear the in-memory repository, cursors, and IndexedDB.
    * Useful for testing namespace isolation.
    */
@@ -335,9 +335,9 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     }
 
     // 3. NIP-01 tiebreak: for replaceable/addressable events with the
-    // same created_at, NIP-01 says the event with the lowest id wins.
-    // welshman uses last-write-wins on equal timestamps, so we enforce
-    // the tiebreak here.
+    //    same created_at, NIP-01 says the event with the lowest id wins.
+    //    welshman uses last-write-wins on equal timestamps, so we enforce
+    //    the tiebreak here.
     if (isReplaceableKind(event.kind) || isAddressableKind(event.kind)) {
       const address = getAddress(event);
       const existing = repository.getEvent(address);
@@ -359,8 +359,8 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     }
 
     // 4. Publish to repository (handles NIP-01 replaceable/addressable
-    // latest-wins and NIP-09 deletion). Returns false if the event
-    // is a duplicate or was superseded.
+    //    latest-wins and NIP-09 deletion).  Returns false if the event
+    //    is a duplicate or was superseded.
     const accepted = repository.publish(event);
     if (!accepted) {
       return false;
@@ -369,7 +369,7 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     notify(event);
 
     // 5. Persist to IndexedDB (fire-and-forget; the in-memory repo is
-    // the source of truth, IndexedDB is durable cache)
+    //    the source of truth, IndexedDB is durable cache)
     if (db) {
       putEvent(db, event).catch(err =>
         console.error('[BahiaEventStore] putEvent error:', err)
@@ -545,7 +545,7 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     get count() {
       return repository.eventsById.size;
     },
-    /** Expose the underlying welshman Repository for derived stores.*/
+    /** Expose the underlying welshman Repository for derived stores. */
     repository,
   };
 }

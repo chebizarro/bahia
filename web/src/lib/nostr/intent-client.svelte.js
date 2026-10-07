@@ -137,17 +137,17 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
 let active = null;
 let opening = null;
 
-/***/
+/**
  * Lifecycle of the session intent client, for the submission readiness signal
  * (stores/intent-readiness.svelte.js). Every phase is a local fact; none
  * depends on a relay being connected or caught up.
  *
- * idle the session has not opened a client yet (boot or sign-in
- * still to come)
- * opening its local pending and outbox stores are being opened
- * ready open
- * closed stopped after use; the next submit reopens it on demand
- * unavailable the session cannot sign intents; error says why
+ *   idle         the session has not opened a client yet (boot or sign-in
+ *                still to come)
+ *   opening      its local pending and outbox stores are being opened
+ *   ready        open
+ *   closed       stopped after use; the next submit reopens it on demand
+ *   unavailable  the session cannot sign intents; error says why
  */
 export const intentClientState = $state({ phase: 'idle', error: '' });
 
@@ -189,20 +189,20 @@ async function openCurrentClient() {
   try { return await promise; } finally { opening = null; }
 }
 
-/** Sign and enqueue a full desired-state intent; never wait for daemon completion.*/
+/** Sign and enqueue a full desired-state intent; never wait for daemon completion. */
 export async function publishIntent(request) {
   if (request.domain === 'org') return submitSensitiveIntent(request);
   return (await currentClient()).submit(request);
 }
 
-/** Resolve a request intent from its scoped daemon status, not a ContextVM result.*/
+/** Resolve a request intent from its scoped daemon status, not a ContextVM result. */
 export async function acceptedIntentStatus(submitted, { signal } = {}) {
   if (submitted.sensitive) return waitForSensitiveIntentStatus(submitted, { signal });
   return (await currentClient()).waitForStatus({ coordinate: submitted.coordinate,
     intentId: submitted.intentId, signal });
 }
 
-/** Subscribe before publication so canonical projections cannot outrun request status.*/
+/** Subscribe before publication so canonical projections cannot outrun request status. */
 export async function publishIntentForStatus(request, { signal } = {}) {
   if (request.domain === 'org') {
     if (signal?.aborted) throw signal.reason || new Error('Intent status wait aborted');

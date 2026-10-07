@@ -6,7 +6,7 @@ version: 2
 # repo on stale actions - which is the usual reason hand-pinning rots.
 #
 # Re-pin after adding a new action with:
-# go run github.com/suzuki-shunsuke/pinact/v3/cmd/pinact@latest run
+#   go run github.com/suzuki-shunsuke/pinact/v3/cmd/pinact@latest run
 updates:
   - package-ecosystem: github-actions
     directory: "/"

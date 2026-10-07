@@ -1,7 +1,7 @@
 package kinds
 
 // IsRequestKind returns true for production-accepted Bahia request transport
-// kinds after the startup migration boundary. Compatibility kind-number commands are
+// kinds after the startup migration boundary. Legacy kind-number commands are
 // data-only migration inventory and must not be accepted by production runtime
 // subscribers or sidecar policy.
 func IsRequestKind(kind int) bool {
@@ -34,7 +34,7 @@ func IsCanonicalObservableKind(kind int) bool {
 // IsBahiaProjectionKind returns true if the kind is a Bahia projection kind
 // that should only be published by the service pubkey. After the migration
 // boundary, production projections are canonical state/status/audit/discovery
-// kinds; compatibility per-domain projection constants remain migration-only.
+// kinds; legacy per-domain projection constants remain migration-only.
 func IsBahiaProjectionKind(kind int) bool {
 	return IsCanonicalObservableKind(kind)
 }
@@ -80,7 +80,7 @@ func IsNIP34Kind(kind int) bool {
 }
 
 // IsSoulFactoryKind returns true for the SoulFactory event family Bahia uses
-// as Nostr-native agent lifecycle interop. These are not compatibility Bahia control-
+// as Nostr-native agent lifecycle interop. These are not legacy Bahia control-
 // plane request/status/result/read-model kinds; the web app and SoulFactory
 // reactors exchange them directly through relays with normal REQ/EVENT/EOSE/OK
 // semantics.
@@ -96,9 +96,9 @@ func IsSoulFactoryKind(kind int) bool {
 	}
 }
 
-// IsAuthorScopedReadableRequestKind returns true if the kind is a compatibility
+// IsAuthorScopedReadableRequestKind returns true if the kind is a legacy
 // request kind that may be exposed in migration-only author-scoped reads.
-// Production sidecar policy not exposes these kinds.
+// Production sidecar policy no longer exposes these kinds.
 func IsAuthorScopedReadableRequestKind(kind int) bool {
 	return false
 }
@@ -109,7 +109,7 @@ func IsReadableKind(kind int) bool {
 	return IsCanonicalObservableKind(kind) || IsOpenInteropKind(kind)
 }
 
-// AllRequestKinds returns all compatibility Bahia request kinds for migration tools.
+// AllRequestKinds returns all legacy Bahia request kinds for migration tools.
 func AllRequestKinds() []int {
 	return []int{
 		// DNS requests

@@ -24,7 +24,7 @@ type SBOMAttestationProvider interface {
 
 // SecurityPolicyView lists the live deployment policies from the daemon's
 // retained policy cp-state in the local event store. Security scan schedules
-// and scan-time policy evaluation are derived from it, so they
+// and scan-time policy evaluation are derived from it (audit B-32), so they
 // need no SQL policy repository.
 type SecurityPolicyView interface {
 	ListSecurityPolicies(context.Context) ([]domain.DeploymentPolicy, error)
@@ -690,7 +690,7 @@ func errorsIsNotFound(err error) bool {
 // --- CRUD ---
 
 // CreatePolicy stores a new policy under p.ID, minting a UUIDv7 when the
-// caller supplied none. When an identical policy is already
+// caller supplied none (bahia-irsry.42). When an identical policy is already
 // stored under that id it loads it into p and reports replayed=true: nothing
 // is written again, and callers publish nothing again. The same id with
 // different content is a *domain.EntityIDConflictError.

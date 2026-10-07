@@ -1,19 +1,19 @@
-/***/
+/**
  * Membership-derived roles from the BahiaEventStore.
  *
  * Derives the current user's roles per org by:
- * 1. Discovering key-envelope records (kind 30900, t=org-key-envelope)
- * 2. Trial-decrypting each with the signer's NIP-44 to find the user's OCK
- * 3. Decrypting org-member records using the OCK
- * 4. Extracting only the signed-in member's role
+ *   1. Discovering key-envelope records (kind 30900, t=org-key-envelope)
+ *   2. Trial-decrypting each with the signer's NIP-44 to find the user's OCK
+ *   3. Decrypting org-member records using the OCK
+ *   4. Extracting only the signed-in member's role
  *
  * The OCK is cached in memory only — never persisted to IndexedDB or
  * localStorage (C1-R5).
  *
  * Degrades gracefully when the signer lacks NIP-44 support.
  *
- * Design reference: docs/architecture/web-store-first.md §5, §6.2 step 4.
- * Crypto reference: docs/architecture/confidential-state.md
+ * Design reference: phase4-web-store-first.md §5, §6.2 step 4.
+ * Crypto reference: phase3-authority-inversion.md §1.7.1
  *
  * @module lib/stores/auth-roles
  */
@@ -38,7 +38,7 @@ import {
 // State — Svelte 5 runes ($state)
 // ---------------------------------------------------------------------------
 
-/** @type {Map<string, import('$lib/nostr/confidential.js').OrgContentKey>} orgID:version → OCK*/
+/** @type {Map<string, import('$lib/nostr/confidential.js').OrgContentKey>} orgID:version → OCK */
 const ockCache = new Map();
 const latestVersionByOrg = new Map();
 const retiredVersions = new Set();
@@ -64,7 +64,7 @@ export function onContentKeyChange(callback) {
   return () => contentKeyListeners.delete(callback);
 }
 
-/***/
+/**
  * Organizations whose content key this session holds: orgID → true. A key
  * envelope addressed to the signed-in member is decrypted before the member
  * record that names the role, so this names an organization the session
@@ -80,35 +80,35 @@ function notifyContentKeyChange() {
   for (const callback of contentKeyListeners) callback();
 }
 
-/***/
+/**
  * Per-org role map: orgID → role string.
  * @type {Record<string, string>}
  */
 export const orgRoles = $state({});
 
-/***/
+/**
  * Whether NIP-44 is available on the current signer.
  * null = not yet probed, true = available, false = unavailable.
  */
 export let nip44Available = $state({ value: null });
 
-/***/
+/**
  * Whether role derivation is in progress: the initial pass over the store or a
  * live key-envelope pass whose trial decryption has not finished. While true,
  * `orgRoles` can still gain an organization without the operator.
  */
 export let roleDerivationActive = $state({ value: false });
 
-/***/
+/**
  * Error from the last role derivation attempt, if any.
  */
 export let roleDerivationError = $state({ value: null });
 
 // ---------------------------------------------------------------------------
-// Getters for (boot) and AuthGuard
+// Getters for W1-S2 (boot) and AuthGuard
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Get the set of all roles the current user has across all orgs.
  * @returns {Set<string>}
  */
@@ -116,7 +116,7 @@ export function roles() {
   return new Set(Object.values(orgRoles));
 }
 
-/***/
+/**
  * Check whether the current user has any of the given roles in any org.
  * @param {string[]} requiredRoles
  * @returns {boolean}
@@ -133,7 +133,7 @@ export function hasAnyRole(requiredRoles) {
   return requiredRoles.some(r => currentRoles.has(r));
 }
 
-/***/
+/**
  * Get the user's role for a specific org.
  * @param {string} orgID
  * @returns {string | null}
@@ -146,7 +146,7 @@ export function roleForOrg(orgID) {
 // Subscription cleanup
 // ---------------------------------------------------------------------------
 
-/** @type {Array< => void>}*/
+/** @type {Array<() => void>} */
 let activeUnsubscribes = [];
 let derivationGeneration = 0;
 let derivationPasses = 0;
@@ -156,14 +156,14 @@ function beginDerivationPass() {
   roleDerivationActive.value = true;
 }
 
-/** Passes started by a superseded generation were already discarded by the reset.*/
+/** Passes started by a superseded generation were already discarded by the reset. */
 function endDerivationPass(generation) {
   if (generation !== derivationGeneration) return;
   derivationPasses = Math.max(0, derivationPasses - 1);
   if (derivationPasses === 0) roleDerivationActive.value = false;
 }
 
-/***/
+/**
  * Stop all active store subscriptions and clear cached state.
  * Called on logout or signer change.
  */
@@ -190,12 +190,12 @@ export function stopRoleDerivation() {
 // Core: derive roles from store
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Start role derivation from the BahiaEventStore.
  *
  * @param {object} params
  * @param {import('$lib/nostr/store-interface.js').BahiaEventStore} params.store
- * — the event store to query
+ *   — the event store to query
  * @param {string} params.userPubkey — the current user's hex pubkey
  * @param {string} params.servicePubkey — the daemon's service pubkey
  * @param {object} params.signer — { decryptNip44(senderPubkey, ciphertext): Promise<string> }
@@ -272,7 +272,7 @@ export async function startRoleDerivation({ store, userPubkey, servicePubkey, si
 // Key envelope processing
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Process all key-envelope events in the store to discover the user's OCKs.
  */
 async function processKeyEnvelopes(store, userPubkey, servicePubkey, signer, generation) {
@@ -334,7 +334,7 @@ function reconcileContentKeys(store, servicePubkey) {
 // Member record processing
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Process encrypted org-member records to extract roles.
  */
 function processMemberRecords(store, servicePubkey, userPubkey) {
@@ -420,7 +420,7 @@ function processMemberRecords(store, servicePubkey, userPubkey) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * Get the first value of a specific tag from a Nostr event.
  * @param {import('$lib/nostr/store-interface.js').NostrEvent} event
  * @param {string} tagName

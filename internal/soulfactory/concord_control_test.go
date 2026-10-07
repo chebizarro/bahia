@@ -22,7 +22,7 @@ func TestConcordEditionHashIsByteExact(t *testing.T) {
 	content := []byte(`{"member":"aa","role_ids":[]}`)
 
 	// len64(label) || label || eid[32] || version_be[8]
-	// || (prev ? 0x01 || prev[32]: 0x00 || zero[32]) || len64(content) || content
+	//   || (prev ? 0x01 || prev[32] : 0x00 || zero[32]) || len64(content) || content
 	build := func(version uint64, withPrev bool) string {
 		preimage := binary.BigEndian.AppendUint64(nil, uint64(len(concordEditionLabel)))
 		preimage = append(preimage, []byte(concordEditionLabel)...)
@@ -152,7 +152,7 @@ func TestConcordControlFoldTakesTheChainedHead(t *testing.T) {
 }
 
 // TestConcordControlFoldSuspendsAForkedChain covers the other half of CORD-04
-// docs/architecture/intents-and-authority.md: two adjoining versions that do not link are a fork, and the entity is
+// §1: two adjoining versions that do not link are a fork, and the entity is
 // suspended rather than guessed at. A citation must not name it and a
 // compaction must not seat it.
 func TestConcordControlFoldSuspendsAForkedChain(t *testing.T) {

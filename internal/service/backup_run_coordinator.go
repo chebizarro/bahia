@@ -183,7 +183,7 @@ func (c *BackupRunCoordinator) Name() string { return "backup-run-recovery" }
 
 // Run performs durable worker recovery for stored backup work. Event-driven:
 // wakes on the trigger channel or when the stale-recovery timer fires at the
-// computed next-due time. B1 replaces the fixed 30s polling ticker.
+// computed next-due time. Phase 3 B1 replaces the fixed 30s polling ticker.
 func (c *BackupRunCoordinator) Run(ctx context.Context) error {
 	if err := c.validateDependencies(); err != nil {
 		return err
@@ -224,7 +224,7 @@ func (c *BackupRunCoordinator) Trigger() {
 
 // nextStaleInterval computes how long to wait before the next stale-lease
 // recovery check. New and requeued work wakes the coordinator through
-// Trigger (registry notify hook), so the timer is only a backstop for
+// Trigger() (registry notify hook), so the timer is only a backstop for
 // leases that stop heartbeating: it fires at the earliest running lease's
 // stale deadline, or after StaleRunTimeout when nothing is in flight. A
 // deadline lookup error retries after RecoveryPollInterval.

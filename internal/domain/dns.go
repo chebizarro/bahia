@@ -33,7 +33,7 @@ const (
 	ZoneVisibilityMesh     ZoneVisibility = "mesh"
 )
 
-// DNSRecordType identifies the DNS record families projected in.
+// DNSRecordType identifies the DNS record families projected in Phase 0.
 type DNSRecordType string
 
 const (

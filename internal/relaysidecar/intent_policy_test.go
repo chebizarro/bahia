@@ -111,7 +111,7 @@ func signedIntentEvent(t *testing.T, sk nostr.SecretKey) nostr.Event {
 
 // startSidecarWithAllowlist creates a sidecar whose admin policy restricts
 // writes to the given admin pubkeys. This is necessary for intent author
-// tests: without an allowlist, admits returns true for everyone and the
+// tests: without an allowlist, admits() returns true for everyone and the
 // intent authors set is never exercised.
 func startSidecarWithAllowlist(t *testing.T, adminPubkeys []string) (*Server, string) {
 	t.Helper()

@@ -28,7 +28,7 @@ func newPgEnvironmentRepositoryWithDB(db pgQueryer) *PgEnvironmentRepository {
 const environmentColumns = `id, COALESCE(org_id, '00000000-0000-0000-0000-000000000000'::uuid), name, loom_worker_selector, runtime_config, targeting, deploy_strategy, protected, created_at, updated_at`
 
 func (r *PgEnvironmentRepository) Create(ctx context.Context, env *domain.Environment) error {
-	// The id is normally client-minted; the database never
+	// The id is normally client-minted (bahia-irsry.35); the database never
 	// generates it. Mint only for internal callers that supply none.
 	if env.ID == uuid.Nil {
 		env.ID = domain.NewEntityID()

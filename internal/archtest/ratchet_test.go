@@ -113,7 +113,7 @@ func writeBaseline(t *testing.T, path, name string, counts map[string]int) {
 	}
 	sort.Strings(keys)
 	var b strings.Builder
-	fmt.Fprintf(&b, "# %s architecture ratchet baseline.\n", name)
+	fmt.Fprintf(&b, "# %s architecture ratchet baseline (bahia-irsry.8).\n", name)
 	b.WriteString("# Pre-existing violations only: entries may shrink, never grow.\n")
 	b.WriteString("# Regenerate with: make arch-baseline\n")
 	b.WriteString("# Format: <count>\\t<key>\n")

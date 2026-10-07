@@ -1,5 +1,5 @@
-/***/
- * Operator allowlists published by the daemon.
+/**
+ * Operator allowlists published by the daemon (bahia-fbyo5).
  *
  * The daemon accepts operator-authored documents only from the pubkeys in
  * `nostr.authorized_pubkeys` (continuity definitions, failover/recovery
@@ -33,7 +33,7 @@ import { decryptConfidentialContent, isConfidentialEnvelope, versionFromEnvelope
 import { getEventStore, getServicePubkeys } from '$lib/nostr/boot.js';
 import { contentKeyFor, onContentKeyChange } from './auth-roles.svelte.js';
 
-/** The OCK scope the daemon encrypts the allowlists under (kinds.FleetOCKScope).*/
+/** The OCK scope the daemon encrypts the allowlists under (kinds.FleetOCKScope). */
 export const FLEET_OCK_SCOPE = 'fleet';
 
 export const OPERATOR_ALLOWLIST_SCOPES = Object.freeze([
@@ -41,7 +41,7 @@ export const OPERATOR_ALLOWLIST_SCOPES = Object.freeze([
   OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY
 ]);
 
-/***/
+/**
  * scope → sorted hex pubkeys of the decrypted allowlist, or null when no
  * readable record exists for the scope. Reactive.
  * @type {Record<string, string[] | null>}
@@ -63,7 +63,7 @@ function tagValue(event, name) {
   return undefined;
 }
 
-/***/
+/**
  * Derive one scope's allowlist from the service-signed records in `events`.
  *
  * Pure: `events` are the 30900 t=operator-allowlist events the caller already
@@ -106,7 +106,7 @@ export function deriveOperatorAllowlist(events, scope, { serviceAuthors, keyFor 
   }
 }
 
-/***/
+/**
  * The trusted operator authors for a scope: the decrypted allowlist (when this
  * session can read it) ∪ the signed-in key. Pure.
  * @param {string[] | null} allowlist
@@ -117,24 +117,24 @@ export function trustedOperatorAuthors(allowlist, signedInPubkey) {
   return normalizeOperatorPubkeys([signedInPubkey || '', ...(Array.isArray(allowlist) ? allowlist : [])]);
 }
 
-/** Whether the session currently reads the scope's allowlist.*/
+/** Whether the session currently reads the scope's allowlist. */
 export function operatorAllowlistAvailable(scope) {
   return Array.isArray(operatorAllowlists[scope]);
 }
 
-/** The decrypted allowlist for a scope, or null.*/
+/** The decrypted allowlist for a scope, or null. */
 export function operatorAllowlistFor(scope) {
   return operatorAllowlists[scope];
 }
 
-/** A string that changes whenever any scope's allowlist changes; for effects.*/
+/** A string that changes whenever any scope's allowlist changes; for effects. */
 export function operatorAllowlistSignature() {
   return OPERATOR_ALLOWLIST_SCOPES.map((scope) => `${scope}=${operatorAllowlists[scope]?.join(',') ?? '-'}`).join('|');
 }
 
 const allowlistListeners = new Set();
 
-/** Called after any scope's allowlist changed. Returns the unsubscribe.*/
+/** Called after any scope's allowlist changed. Returns the unsubscribe. */
 export function onOperatorAllowlistChange(callback) {
   allowlistListeners.add(callback);
   return () => allowlistListeners.delete(callback);
@@ -164,7 +164,7 @@ function recompute() {
   if (changed) notifyAllowlistChange();
 }
 
-/***/
+/**
  * Bind the allowlists to the shared store: project the cached records now and
  * re-project when an allowlist record arrives or the session's content keys
  * change. The layout owns this call. Opens no REQ of its own: the record is

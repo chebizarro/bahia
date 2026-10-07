@@ -1,4 +1,4 @@
-/***/
+/**
  * Main scenario runner for E2E agent tests
  */
 import { TestHarness } from './harness.js';

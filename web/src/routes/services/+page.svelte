@@ -29,7 +29,7 @@
   });
 
   function initializeServicesPage() {
-    // Cross-agent stitch: the dashboard historically navigated to
+    // Cross-agent stitch (bahia-2v2k.11): the dashboard historically navigated to
     // /services?create=1 to auto-open this dialog. Runs once from the guarded init
     // effect, so it does not reopen on later reactive updates.
     if (page.url?.searchParams?.get('create')) {
@@ -104,7 +104,7 @@
     { key: 'id', label: 'ID', render: (r) => `<code>${r.id?.slice(0, 8)}...</code>` }
   ]);
 
-  /** @type {'syncing' | 'live' | null}*/
+  /** @type {'syncing' | 'live' | null} */
   const syncBadge = $derived(
     syncStatus.phase === 'syncing' ? 'syncing'
       : syncStatus.phase === 'live' ? 'live'

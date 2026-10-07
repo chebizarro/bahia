@@ -30,7 +30,7 @@ func (s AgentHealthStatus) HasCapability(name string) bool {
 
 // AgentHealthReader subscribes to NIP-38 kind 30315 status events from DNS
 // agents and caches their health and capabilities. The daemon reads this
-// instead of making ContextVM Health RPCs to agents.
+// instead of making ContextVM Health() RPCs to agents (C-34).
 type AgentHealthReader struct {
 	mu     sync.RWMutex
 	agents map[string]*AgentHealthStatus // agentPubkey → status

@@ -69,7 +69,7 @@ func NewMLRegistryService(repo repository.MLRegistryRepository, publisher events
 }
 
 // SetMLCPStatePublisher configures the canonical cp-state publisher for ML
-// entities ( M1). After each state mutation the
+// entities (Phase 3 M1, bahia-irsry.11.12). After each state mutation the
 // service calls the publisher to emit a 30900 record, replacing the
 // projector's reactive handleEvent ML leg.
 func (s *MLRegistryService) SetMLCPStatePublisher(pub MLCPStatePublisher) {
@@ -777,7 +777,7 @@ func (s *MLRegistryService) publishStateChanged(ctx context.Context, state *doma
 }
 
 // LLMBackfillSource is implemented by LLMRegistryService and test fakes. It avoids
-// expanding compatibility repository interfaces while still permitting deterministic backfill.
+// expanding legacy repository interfaces while still permitting deterministic backfill.
 type LLMBackfillSource interface {
 	ListRoutes(ctx context.Context, limit, offset int) ([]domain.LLMRoute, error)
 	ListReleases(ctx context.Context, routeID uuid.UUID, limit, offset int) ([]domain.LLMRelease, error)

@@ -19,7 +19,7 @@ import (
 // direct publish at the mutation site, ensuring each material change publishes
 // exactly once.
 //
-// W1.
+// Phase 3 W1 (bahia-irsry.11.14).
 type WorkerReadModelPublisher struct {
 	publisher NostrEventPublisher
 	signer    nostr.Signer

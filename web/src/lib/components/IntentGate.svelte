@@ -1,4 +1,4 @@
-<!---->
+<!--
   IntentGate — disables the mutation controls it wraps until a signed intent
   for `domain` can be submitted (stores/intent-readiness.svelte.js).
 
@@ -22,17 +22,17 @@
 <script>
   import { intentReadiness } from '$lib/stores/intent-readiness.svelte.js';
 
-  /***/
+  /**
    * @typedef {Object} Props
    * @property {string} domain Intent domain the wrapped controls submit to.
    * @property {string} [orgId] Org id the form or page already holds.
    * @property {object | null} [record] Record the intent acts on; its org id is
-   * resolved the way the stores resolve it (org_id, service_id, route_id).
+   *   resolved the way the stores resolve it (org_id, service_id, route_id).
    * @property {boolean} [orgField] The controls sit beside an organization field.
    * @property {import('svelte').Snippet} [children]
    */
 
-  /** @type {Props}*/
+  /** @type {Props} */
   let { domain, orgId = '', record = null, orgField = false, children } = $props();
 
   const reasonId = $props.id();

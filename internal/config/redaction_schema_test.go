@@ -54,7 +54,7 @@ func TestConfigSchemaRequiresRedactionClassification(t *testing.T) {
 }
 
 // Discover all config subtrees and fill every protected field automatically.
-// Adding a tagged secret to a public subtree must also protect direct
+// Adding a tagged secret to a formerly public subtree must also protect direct
 // rendering of that subtree, including value receivers and pointer receivers.
 func TestEveryProtectedConfigSubtreeRedactsAllRenderers(t *testing.T) {
 	value := reflect.New(reflect.TypeFor[Config]()).Elem()

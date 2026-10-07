@@ -158,8 +158,8 @@ func (r *LocalRouteCanaryRepository) ListState(ctx context.Context) ([]domain.Ro
 	return out, nil
 }
 
-// DeleteState withdraws the route: its canonical state record is handled by
-// a tombstone on the route coordinate first, then the state
+// DeleteState withdraws the route: its canonical state record is replaced by
+// a tombstone on the route coordinate first (bahia-as2bo), then the state
 // written in this process and the index row are forgotten. A failed tombstone
 // publish fails the call and changes nothing, so the caller retries.
 func (r *LocalRouteCanaryRepository) DeleteState(ctx context.Context, key domain.RouteCanaryKey) error {

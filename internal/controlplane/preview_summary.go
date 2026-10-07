@@ -21,7 +21,7 @@ const (
 // DesiredServiceSpec. It omits the full spec and all environment variable
 // values so the payload is small enough to traverse Nostr relays even
 // for production-scale configurations. The DesiredHash remains the sole
-// authoritative identifier — deploy independently rebuilds desired state
+// authoritative identifier — deploy() independently rebuilds desired state
 // and compares against ExpectedDesiredStateHash.
 //
 // Every field is derived from the already-built desiredState. The helper is

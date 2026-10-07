@@ -1,7 +1,7 @@
 // Package localstore is the daemon's per-process Nostr event store: a
 // rebuildable cache of the events its inbound subscriptions received, plus the
-// per-(relay, filter) resume cursors those subscriptions keep (
-// ).
+// per-(relay, filter) resume cursors those subscriptions keep (bahia-irsry.10.1,
+// audit C-2, C-14, B-12, B-15).
 //
 // It is a cache, not a source of truth. Relays are canonical: deleting the file
 // is always safe, and the daemon rebuilds it by syncing from its relays. A file
@@ -19,8 +19,8 @@
 // requester's events it names and keeps them from coming back. Coordinates
 // the eventstore's tag index cannot hold (an empty d, a d or `a` coordinate
 // over 100 bytes) are resolved through package boltcoord, as in the relay
-// sidecar, and so are filters on such tag values, through
-// boltcoord's tag index. Cursors live in a separate bucket of
+// sidecar (bahia-irsry.51), and so are filters on such tag values, through
+// boltcoord's tag index (bahia-irsry.52). Cursors live in a separate bucket of
 // the same file, so the events and the cursors that describe them are deleted
 // together.
 package localstore
@@ -434,7 +434,7 @@ func (s *Store) pagedQuery(filter nostr.Filter, limit int) iter.Seq[nostr.Event]
 
 // PruneRegularEvents deletes stored regular (non-replaceable, non-addressable)
 // events created before cutoff and returns how many it removed. It keeps the
-// store bounded: the replay window of every cursor is far shorter than
+// store bounded (B-12): the replay window of every cursor is far shorter than
 // the retention the caller passes, so a pruned event cannot be redelivered as
 // new by an ordinary resume. NIP-09 deletion requests are kept: they are
 // tombstones for state that never expires, reconciled in full like it.
@@ -460,7 +460,7 @@ func (s *Store) PruneRegularEvents(cutoff time.Time) (int, error) {
 // PruneExpiredEvents deletes stored events of any kind whose NIP-40
 // expiration tag is at or before now, and returns how many it removed. It is
 // what lets a tombstone with an expiration (for example a retired security
-// run) leave the store as it leaves the relay sidecar's
+// run, bahia-u5whr) leave the store as it leaves the relay sidecar's
 // retention sweep; without it, latest-wins coordinates would stay for good.
 // Events without a parsable expiration are kept.
 func (s *Store) PruneExpiredEvents(now time.Time) (int, error) {

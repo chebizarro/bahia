@@ -21,7 +21,7 @@ import (
 // the "fleet" scope: security findings contain per-org vulnerability data and
 // scan schedules contain policy configuration that must not appear in plaintext.
 //
-// It is the canonical security store: targets, runs, schedules
+// It is the canonical security store (audit B-32): targets, runs, schedules
 // and findings are published here before any SQL index is written, and the
 // List methods read them back from the daemon's own retained records in the
 // local event store. A run record on "security:run:<run-id>" is the signed
@@ -30,16 +30,16 @@ import (
 //
 // Each finding is one 30900 record (d="security:finding:<hash>") so no single
 // event exceeds NIP-44's 65,535-byte plaintext limit. This replaces the
-// scanner's chunked 30078 findings path for cp-state consumers — the compatibility
+// scanner's chunked 30078 findings path for cp-state consumers — the legacy
 // chunked path continues to publish for backward compatibility.
 //
 // Schedules are one record per schedule (d="security:schedule:<id>").
 //
-// Warm-start covers the "security" domain automatically via CPStateDomains
+// Warm-start covers the "security" domain automatically via CPStateDomains()
 // since the security cp-state families share it with the scanner's existing
 // summary/status families in the cpStateFamilies table.
 //
-// confidential cp-state for security findings and schedules.
+// bahia-irsry.60: confidential cp-state for security findings and schedules.
 type SecurityCanonicalPublisher struct {
 	projector *Projector
 	encryptor ConfidentialStateEncryptor
@@ -61,7 +61,7 @@ func NewSecurityCanonicalPublisher(projector *Projector, encryptor ConfidentialS
 
 // PublishFinding publishes a single security finding as a confidential 30900
 // cp-state record. One record per finding ensures no single event exceeds
-// NIP-44 limits ( item 1).
+// NIP-44 limits (bahia-irsry.39 item 1).
 func (p *SecurityCanonicalPublisher) PublishFinding(ctx context.Context, finding domain.SecurityOSVFinding) error {
 	if p.projector == nil || !p.projector.Enabled() {
 		return fmt.Errorf("security canonical projector is unavailable")
@@ -362,7 +362,7 @@ func (p *SecurityCanonicalPublisher) PublishRun(ctx context.Context, run *domain
 }
 
 // RetireRun replaces a run record with a tombstone that carries a NIP-40
-// expiration: readers drop the run at once (tombstones are
+// expiration (bahia-u5whr): readers drop the run at once (tombstones are
 // skipped), and the expiration lets the relay sidecar's retention sweep and
 // the local event store's expiry prune remove the coordinate itself, which
 // latest-wins retention would otherwise keep for good. It is the bounded

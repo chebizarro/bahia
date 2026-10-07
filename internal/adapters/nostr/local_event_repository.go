@@ -16,7 +16,7 @@ import (
 
 // LocalEventRepository serves the nostr_events reads and writes of the
 // daemon's PostgreSQL-backed components from the local event store
-// . It replaces the unbounded in-memory
+// (bahia-irsry.10.4, audit B-12). It replaces the unbounded in-memory
 // nostr_events fallback of PostgreSQL-less mode: the store is persistent,
 // collapses replaceable and addressable events to their latest version, and
 // prunes regular events, so it stays bounded and survives restarts.
@@ -24,17 +24,17 @@ import (
 // It stores signed events, not rows: entity labels are not kept (ListByEntity
 // is always empty), and the only publish state a record carries is
 // NostrPublishStateFailed, on an event whose delivery the outbox abandoned
-// (localstore.Undelivered): readers see the daemon's committed
+// (localstore.Undelivered, bahia-u5whr): readers see the daemon's committed
 // state and that relays do not hold it, and the Projector's dedupe does not
 // treat it as delivered. Two kinds of "pending" row are honoured:
-// - a row for a PostgreSQL-drained publish target, which a producer records
-// so that it gets delivered, is handed to the publisher outbox for that
-// target (see WithPendingAdmission);
-// - an archive row of the local outbox (LocalOutboxArchiveTarget) is only
-// stored: the producer publishes it through a Publisher itself.
+//   - a row for a PostgreSQL-drained publish target, which a producer records
+//     so that it gets delivered, is handed to the publisher outbox for that
+//     target (see WithPendingAdmission);
+//   - an archive row of the local outbox (LocalOutboxArchiveTarget) is only
+//     stored: the producer publishes it through a Publisher itself.
 //
 // Authored returns a view limited to some authors, which the Projector uses
-// as its memory of what the daemon published.
+// as its memory of what the daemon published (B-3).
 type LocalEventRepository struct {
 	store   *localstore.Store
 	authors []nostr.PubKey

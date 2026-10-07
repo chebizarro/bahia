@@ -25,7 +25,7 @@ const (
 	dnsReconcileTriggerBuffer                     = 16
 )
 
-// DNSBackend is the narrow zone-snapshot backend interface used by the reconciler.
+// DNSBackend is the narrow zone-snapshot backend interface used by the Phase 0 reconciler.
 type DNSBackend interface {
 	ListRecords(ctx context.Context, zone domain.DNSZone) ([]domain.DNSRecord, error)
 	SyncZone(ctx context.Context, zone domain.DNSZone, records []domain.DNSRecord) error
@@ -103,8 +103,8 @@ func (r *DNSReconciler) SetPersistenceSources(zones DNSZoneSource, overrides DNS
 
 // SetCanonicalPublisher sets the publisher that writes canonical DNS state
 // records (endpoint/zone/backend/policy) through the shared builder and outbox
-// after each reconcile. When set, the projector's DNS legs are not
-// needed ( D1).
+// after each reconcile. When set, the projector's DNS legs are no longer
+// needed (Phase 3 D1).
 func (r *DNSReconciler) SetCanonicalPublisher(pub DNSCanonicalPublisher) {
 	r.canonicalPublisher = pub
 }
@@ -143,7 +143,7 @@ func (r *DNSReconciler) TriggerReconcile() {
 }
 
 // Run blocks until ctx is cancelled, reconciling DNS on each event trigger.
-// The ticker was excluded from D1: reconciliation is driven
+// The ticker was removed in Phase 3 D1 (B-23): reconciliation is driven
 // entirely by bus events (deployment-run-completed, state-changed,
 // runtime-observation) and explicit TriggerReconcile calls.
 func (r *DNSReconciler) Run(ctx context.Context) error {
@@ -284,8 +284,8 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 			r.logger.Warn("DNS backend sync zone failed", zap.String("zone", zone.Name), zap.Error(err))
 			continue
 		}
-		// D1: publish zone sync event so agents subscribe to zone
-		// records instead of relying solely on ContextVM pushes.
+		// Phase 3 D1: publish zone sync event so agents subscribe to zone
+		// records instead of relying solely on ContextVM pushes (C-34).
 		if r.canonicalPublisher != nil {
 			if err := r.canonicalPublisher.PublishZoneSync(ctx, zone, desired); err != nil {
 				r.logger.Warn("publish zone sync event failed", zap.String("zone", zone.Name), zap.Error(err))
@@ -304,7 +304,7 @@ func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
 
 	// Publish canonical DNS endpoint state after reconciliation so consumers
 	// (FIPS bridge, web, DNS agent) receive updated records. This replaces
-	// the projector's publishDNSEndpointSnapshot leg ( fix).
+	// the projector's publishDNSEndpointSnapshot leg (B-17 fix).
 	if r.canonicalPublisher != nil {
 		endpoints, err := r.projector.ListDNSEndpoints(ctx)
 		if err != nil {

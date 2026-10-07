@@ -17,14 +17,14 @@ type ResultProcessor interface {
 }
 
 // PendingResultResumer re-attempts the results whose processing is not
-// finished. It replaces the timer that scanned SQL for them:
+// finished (audit C-48). It replaces the timer that scanned SQL for them:
 // processing is triggered by the arrival of a result, by the arrival of the
 // run an orphaned result waits for, and, through Resume, once per start from
 // the canonical result states the local event store retains. Each attempt is
 // counted on the result's canonical state; past maxAttempts the result is
 // marked failed instead of being attempted again.
 //
-// There is deliberately no backoff timer behind these triggers.
+// There is deliberately no backoff timer behind these triggers (bahia-xjdo9).
 // Every transient cause of a failed attempt already has a signal that ends in
 // one of them: an unreachable PostgreSQL build registry is probed by the
 // database-recovery runner, which restarts the process into Resume; a

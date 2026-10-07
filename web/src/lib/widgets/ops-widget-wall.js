@@ -3,7 +3,7 @@ import { DASHBOARD_WIDGET } from '$lib/nostr/kinds.gen.js';
 import { getOpsWidgetAllowedPubkeys, parseOpsWidgetPublisherAllowlist } from './ops-widget-config.js';
 export { getOpsWidgetAllowedPubkeys, parseOpsWidgetPublisherAllowlist } from './ops-widget-config.js';
 
-/** A store-query read model; the app layout owns its binding, not the widgets route.*/
+/** A store-query read model; the app layout owns its binding, not the widgets route. */
 export function createOpsWidgetWall({
   allowedPubkeys = getOpsWidgetAllowedPubkeys(),
   eventStore = getEventStore,

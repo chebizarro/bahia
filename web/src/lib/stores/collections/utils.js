@@ -53,7 +53,7 @@ export function compareProjectionVersions(left, right) {
 }
 
 // Reduce NIP-01 winners first. Domain timestamps only order distinct relay
-// coordinates that project onto the same logical entity (e.g. compatibility d-tags).
+// coordinates that project onto the same logical entity (e.g. legacy d-tags).
 export function selectProjectedEvent(event, replaceableEvents, id, watermarks) {
   const { accepted, key } = upsertReplaceableEvent(replaceableEvents, event);
   if (!accepted) return null;

@@ -10,7 +10,7 @@ import (
 // response envelope addressed with the shared tagRecipientPubkey ("p") tag is
 // matched by the recipient-scoped subscription filter, which is built with the
 // same constant. Guards producer/consumer drift of the recipient-scoping tag
-// key now that both sides reference tagRecipientPubkey.
+// key now that both sides reference tagRecipientPubkey (bahia-s7o9).
 func TestTagEnvelope_RecipientScopedReply_FilterRoundTrip(t *testing.T) {
 	const servicePubkey = "service-pubkey-hex"
 

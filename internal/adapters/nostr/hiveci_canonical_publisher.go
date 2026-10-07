@@ -15,7 +15,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Hive-CI cp-state families. They are 30900-only families with no
+// Hive-CI cp-state families (audit C-48). They are 30900-only families with no
 // catalog kind.
 const (
 	KindHiveCIPolicyRecord     = int(kinds.CPStateFamilyHiveCIPolicy)
@@ -31,9 +31,9 @@ const (
 )
 
 // HiveCICanonicalPublisher is the canonical store of the daemon's own Hive-CI
-// state: the pipeline policies release admission is checked
+// state (audit C-48): the pipeline policies release admission is checked
 // against, the processing state of each signed workflow result, the build
-// initiation journal and the accepted-release ledger. Records
+// initiation journal and the accepted-release ledger (bahia-xjdo9). Records
 // are fleet-OCK encrypted 30900 cp-state, published through the outbox before
 // any SQL index is written, and read back from the daemon's retained records
 // in the local event store. The signed 5401/5402/4903 evidence itself is not
@@ -170,7 +170,7 @@ type HiveCIInitiationEntry struct {
 func hiveCIInitiationDTag(sourceEventID string) string { return "hiveci:initiation:" + sourceEventID }
 
 // PublishInitiation journals one build initiation on
-// "hiveci:initiation:<source-event-id>". document is fleet-OCK
+// "hiveci:initiation:<source-event-id>" (audit C-49). document is fleet-OCK
 // encrypted; serviceOnly, when non-empty, is additionally NIP-44 encrypted to
 // the service pubkey as the envelope's service_inner, so key material never
 // reaches the relay in plaintext or under the fleet key.
@@ -247,7 +247,7 @@ func hiveCIReleaseConflictDTag(releaseIdentity, conflictingDigest string) string
 }
 
 // PublishAcceptedRelease publishes the daemon's admission of one release on
-// "hiveci:release:<release-identity>". The identity, the
+// "hiveci:release:<release-identity>" (bahia-xjdo9). The identity, the
 // attestation's content digest and the signed events it was accepted from
 // are public tags so a replay is recognised without decrypting; the release
 // itself (its policy snapshot, worker admission and signed evidence) is in

@@ -119,7 +119,7 @@ function cloneJson(value, fallback = {}) {
   return JSON.parse(JSON.stringify(value));
 }
 
-/***/
+/**
  * Build a complete v2 replacement draft from the current kind 31952 content.
  * The edit form only owns a subset of fields, so untouched customization and
  * extension fields must be copied forward rather than silently deleted.

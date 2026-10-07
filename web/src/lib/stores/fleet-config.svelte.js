@@ -71,7 +71,7 @@ export function validateFleetConfigDocument(input) {
   return { valid: errors.length === 0, errors };
 }
 
-/***/
+/**
  * Parse a kind 31953 fleet configuration. `expectedAuthors` is the trusted
  * operator set (a single pubkey or a list): the signed-in operator plus, when
  * this session reads the daemon's `operators:soul-factory` allowlist, the
@@ -159,7 +159,7 @@ export function createFleetConfigStore({
     // trusted operator keys. This only projects the verified local store:
     // cached configuration renders at once and no REQ is opened here. The
     // newest configuration across the trusted operators wins, as it does in
-    // the daemon; a shrinking trusted set drops a configuration it not
+    // the daemon; a shrinking trusted set drops a configuration it no longer
     // covers.
     const refresh = () => {
       const authors = trustedAuthors(author);

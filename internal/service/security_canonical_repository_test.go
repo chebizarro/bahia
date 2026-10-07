@@ -481,7 +481,7 @@ func TestSecurityScanRunsEndToEndWithoutSQLRepository(t *testing.T) {
 	require.Equal(t, 5, runs)
 }
 
-// The run record is the claim. A compatibility status observable that cannot be
+// The run record is the claim. A legacy status observable that cannot be
 // published must not strand the claimed run without an execution.
 func TestSecurityScanExecutesAlthoughLegacyObservablesCannotBePublished(t *testing.T) {
 	ctx := context.Background()

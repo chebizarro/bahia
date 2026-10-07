@@ -14,7 +14,7 @@ import (
 // triggered once at startup (through warm-start comparison, which skips
 // unchanged records) and event-driven when config changes.
 //
-// X1: these records were previously published by RepublishSnapshot's
+// Phase 3 X1: these records were previously published by RepublishSnapshot's
 // publishConfiguredDMRelayListsFromSystemConfig and publishSystemDiscovery.
 type SystemConfigCanonicalPublisher struct {
 	projector *Projector

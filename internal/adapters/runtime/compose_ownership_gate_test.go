@@ -50,7 +50,7 @@ services:
 // Bahia-owned.
 func TestComposeRuntime_Deploy_NonOwnedDirectory(t *testing.T) {
 	dir := t.TempDir()
-	// No.bahia marker — operator-authored directory.
+	// No .bahia marker — operator-authored directory.
 	composeYML := `version: "3"
 services:
   test-svc:
@@ -78,10 +78,10 @@ services:
 }
 
 // TestComposeRuntime_Deploy_MalformedMarker verifies that Deploy fails before
-// any writes when the.bahia marker exists but is malformed.
+// any writes when the .bahia marker exists but is malformed.
 func TestComposeRuntime_Deploy_MalformedMarker(t *testing.T) {
 	dir := t.TempDir()
-	// Create.bahia/ but with invalid render-state.json.
+	// Create .bahia/ but with invalid render-state.json.
 	markerDir := filepath.Join(dir, ".bahia")
 	if err := os.MkdirAll(markerDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestComposeRuntime_Deploy_MissingDirectory(t *testing.T) {
 // proceeds when ownership is granted via explicit config even without markers.
 func TestComposeRuntime_Deploy_ExplicitConfigOverride(t *testing.T) {
 	dir := t.TempDir()
-	// No.bahia marker, but explicit config says it's owned.
+	// No .bahia marker, but explicit config says it's owned.
 	composeYML := `version: "3"
 services:
   test-svc:

@@ -12,7 +12,7 @@ function randomizedTime(now) {
   return now - 60 * (random % 600);
 }
 
-/** NIP-59: signed operator seal containing the unsigned rumor, then ephemeral gift wrap.*/
+/** NIP-59: signed operator seal containing the unsigned rumor, then ephemeral gift wrap. */
 export async function giftWrapIntent(inner, servicePubkey, signer, { now = Math.floor(Date.now() / 1000) } = {}) {
   if (!SENSITIVE_INTENT_DOMAINS.has(inner?.tags?.find(tag => tag[0] === 'domain')?.[1])) {
     throw new Error('Only sensitive intents may be gift-wrapped');

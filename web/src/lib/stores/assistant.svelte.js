@@ -482,9 +482,9 @@ function subscriptionFilters(operatorPubkey, servicePubkey) {
   return [
     { kinds: [ASSISTANT_KINDS.SESSION], authors: [servicePubkey], '#p': [operatorPubkey], '#t': [ASSISTANT_SESSION_TOPIC], limit: SESSION_LIMIT },
     // Assistant status (30315) carries t=assistant-status; the parser checks
-    // the schema locally.
+    // the schema locally (bahia-irsry.37).
     { kinds: [ASSISTANT_KINDS.STATUS], authors: [servicePubkey], '#t': [ASSISTANT_STATUS_TOPIC], since, limit: TRANSCRIPT_LIMIT },
-    // Only single-letter tags are relay-indexed: the service's
+    // Only single-letter tags are relay-indexed (audit A-27): the service's
     // 30316 events addressed to this operator are the transcript; the parser
     // checks the schema locally.
     { kinds: [ASSISTANT_KINDS.TRANSCRIPT], authors: [servicePubkey], '#p': [operatorPubkey], since, limit: TRANSCRIPT_LIMIT }
@@ -826,7 +826,7 @@ export async function publishAssistantActionDecision({ sessionId, runId, actionI
 export async function publishAssistantCancellation({ sessionId, runId, scope = 'run', reason = '', signal } = {}) {
   if (!['run', 'session'].includes(scope)) throw assistantRequestError(INVALID, 'Cancellation scope must be run or session');
   const session = currentV2Session(sessionId, runId);
-  if (!CANCELLABLE_PHASES.includes(session.phase)) throw assistantRequestError(STALE, 'Run cannot be cancelled', 'run_not_cancellable');
+  if (!CANCELLABLE_PHASES.includes(session.phase)) throw assistantRequestError(STALE, 'Run is no longer cancellable', 'run_not_cancellable');
   const content = { contract_version: 2, session_id: sessionId, run_id: runId, scope };
   if (reason) content.reason = reason;
   return assertAssistantRequestAccepted(await requestEncryptedResult({ operation: 'assistant/cancel', payload: content,

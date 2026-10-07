@@ -32,7 +32,7 @@ func openIdentityTestPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// client-minted ids are stored verbatim, and the real
+// bahia-irsry.42: client-minted ids are stored verbatim, and the real
 // constraint names classify a reused id (ErrAlreadyExists, resolved by
 // content upstream) apart from a taken name (ErrConflict).
 func TestPgCreatePathsStoreClientIDsAndClassifyConflicts(t *testing.T) {

@@ -226,7 +226,7 @@
   {#if error}
     <div class="error-state"><WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>{error}</span></div>
   {:else}
-    <!-- Summary Cards-->
+    <!-- Summary Cards -->
     <div class="summary-grid">
       <div class="summary-card">
         <span class="summary-value">{mlModels.length}</span>
@@ -246,7 +246,7 @@
       </div>
     </div>
 
-    <!-- Model Catalog-->
+    <!-- Model Catalog -->
     <MLRegistryMutations models={mlModels} versions={mlModelVersions} endpoints={mlEndpoints} {environments} />
 
     <section class="panel" data-testid="ml-model-catalog">
@@ -321,7 +321,7 @@
       {/if}
     </section>
 
-    <!-- Model Versions (shown when a model is selected)-->
+    <!-- Model Versions (shown when a model is selected) -->
     {#if selectedModelId}
       <section class="panel" data-testid="ml-model-versions">
         <div class="section-header">
@@ -359,7 +359,7 @@
       </section>
     {/if}
 
-    <!-- Inference Endpoints & State-->
+    <!-- Inference Endpoints & State -->
     <section class="panel" data-testid="ml-endpoints">
       <div class="section-header">
         <h2><DeploymentIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Inference Endpoints</h2>
@@ -421,7 +421,7 @@
       {/if}
     </section>
 
-    <!-- Action Forms-->
+    <!-- Action Forms -->
     <IntentGate domain="ml">
     <div class="workflow-grid">
       <section class="panel">
@@ -659,7 +659,7 @@
     background: var(--card-bg);
   }
 
-  /* Summary*/
+  /* Summary */
   .summary-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -685,7 +685,7 @@
     text-transform: uppercase;
   }
 
-  /* Panels*/
+  /* Panels */
   .panel {
     min-width: 0;
     overflow-x: auto;
@@ -708,7 +708,7 @@
     gap: 1rem;
   }
 
-  /* Filters*/
+  /* Filters */
   .filters {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -731,7 +731,7 @@
     font: inherit;
   }
 
-  /* Table*/
+  /* Table */
   .table-scroll {
     overflow-x: auto;
   }
@@ -756,7 +756,7 @@
     font-size: 0.8rem;
   }
 
-  /* Status badge*/
+  /* Status badge */
   .status-badge {
     display: inline-block;
     padding: 0.2rem 0.5rem;
@@ -783,7 +783,7 @@
     color: #f59e0b;
   }
 
-  /* Forms*/
+  /* Forms */
   form {
     display: flex;
     flex-direction: column;
@@ -883,7 +883,7 @@
     font-size: 0.8rem;
   }
 
-  /* Notice*/
+  /* Notice */
   .notice {
     padding: 0.875rem 1rem;
     border-radius: 10px;

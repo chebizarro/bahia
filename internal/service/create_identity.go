@@ -12,11 +12,11 @@ import (
 	"github.com/openagentsinc/bahia/internal/repository"
 )
 
-// resolveCreateByID is the create-path identity rule (/.42,
+// resolveCreateByID is the create-path identity rule (bahia-irsry.35/.42,
 // docs/event-spec.md "Entity identity and coordinates") for one domain:
-// - no entity stored under requested's id: (nil, nil), the caller creates;
-// - an entity with the same content: (stored, nil), an idempotent replay;
-// - an entity with different content: *domain.EntityIDConflictError.
+//   - no entity stored under requested's id: (nil, nil), the caller creates;
+//   - an entity with the same content: (stored, nil), an idempotent replay;
+//   - an entity with different content: *domain.EntityIDConflictError.
 //
 // get loads by id and may report absence as (nil, nil) or
 // repository.ErrNotFound. fingerprint encodes the declared content (no id, no

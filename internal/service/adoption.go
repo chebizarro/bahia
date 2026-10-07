@@ -117,7 +117,7 @@ type AdoptionBackfillMarker interface {
 // AdoptionService scans Docker hosts and imports existing containers into
 // Bahia models.
 //
-// Adoption output is canonical on relays. Each candidate is first
+// Adoption output is canonical on relays (audit B-35). Each candidate is first
 // planned from the daemon's canonical records in the local event store, where
 // every refusal of ambiguous evidence happens and every id is derived from the
 // request, and then published one signed cp-state record at a time through the

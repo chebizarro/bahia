@@ -4,7 +4,7 @@
 -- health_path_not_discriminating is a warning meaning "the route is serving but
 -- the health path proves nothing". Downgrading it to route_ok preserves the
 -- operational fact that the route was up and loses only the caveat, which is
--- the least misleading option available when the value can not be stored.
+-- the least misleading option available when the value can no longer be stored.
 -- Lineage rows are deleted rather than rewritten, because an append-only event
 -- must not be silently restated as something that was never observed.
 

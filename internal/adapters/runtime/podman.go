@@ -22,8 +22,8 @@ type PodmanObserver struct {
 
 // NewPodmanObserver creates a new PodmanObserver.
 // The podmanHost should be a socket path, typically:
-// - Rootless: unix:///run/user/<UID>/podman/podman.sock
-// - Rootful: unix:///run/podman/podman.sock
+//   - Rootless: unix:///run/user/<UID>/podman/podman.sock
+//   - Rootful: unix:///run/podman/podman.sock
 func NewPodmanObserver(podmanHost string, logger *zap.Logger) *PodmanObserver {
 	return &PodmanObserver{
 		DockerObserver: NewDockerObserver(podmanHost, logger),
@@ -49,10 +49,10 @@ func (o *PodmanObserver) SupportsDesiredState() bool { return true }
 // delegates to the Docker implementation, and relabels the result as "podman".
 //
 // Known Podman compatibility constraints checked here:
-// - Docker Compose extensions are rejected (Podman uses podman-compose or
-// its own Compose compatibility, but this adapter targets the Engine API)
-// - KubernetesExtension is rejected (wrong runtime)
-// - Docker Swarm-style networking (overlay driver) is unsupported
+//   - Docker Compose extensions are rejected (Podman uses podman-compose or
+//     its own Compose compatibility, but this adapter targets the Engine API)
+//   - KubernetesExtension is rejected (wrong runtime)
+//   - Docker Swarm-style networking (overlay driver) is unsupported
 func (o *PodmanObserver) ApplyDesiredState(ctx context.Context, req DesiredStateApplyRequest) (*DesiredStateApplyResult, error) {
 	if req.TargetService == nil {
 		return nil, fmt.Errorf("podman apply: target service spec is nil")
@@ -165,15 +165,15 @@ var podmanUnsupportedHostConfig = []string{
 // warnings for configurations that may diverge.
 //
 // Known differences:
-// - Podman does not support Docker's StartInterval field (Docker 25+).
-// The Docker Engine API simply ignores unknown fields, so StartInterval
-// is silently dropped by Podman. We emit a warning.
-// - Podman's StartPeriod implementation is simpler: during the start period,
-// failing health checks do not count toward the failure threshold, but
-// Podman does NOT run probes at a separate startup interval. The health
-// check interval remains constant.
-// - Health check retries and timing may exhibit slight differences due to
-// Podman's conmon-based health check runner vs Docker's built-in checker.
+//   - Podman does not support Docker's StartInterval field (Docker 25+).
+//     The Docker Engine API simply ignores unknown fields, so StartInterval
+//     is silently dropped by Podman. We emit a warning.
+//   - Podman's StartPeriod implementation is simpler: during the start period,
+//     failing health checks do not count toward the failure threshold, but
+//     Podman does NOT run probes at a separate startup interval. The health
+//     check interval remains constant.
+//   - Health check retries and timing may exhibit slight differences due to
+//     Podman's conmon-based health check runner vs Docker's built-in checker.
 func validatePodmanHealthcheck(spec *domain.DesiredServiceSpec) []string {
 	var warnings []string
 
@@ -355,10 +355,10 @@ func (r *PodmanComposeRuntime) Type() domain.RuntimeType {
 
 // detectPodmanComposeBinary detects the best available Compose binary for use
 // with Podman, checking in order:
-// 1. "podman compose" subcommand (Podman 3+ with compose plugin)
-// 2. "docker compose" (works when Podman socket is set as DOCKER_HOST)
-// 3. "podman-compose" (standalone Python tool)
-// 4. Falls back to "docker-compose" (v1 standalone)
+//  1. "podman compose" subcommand (Podman 3+ with compose plugin)
+//  2. "docker compose" (works when Podman socket is set as DOCKER_HOST)
+//  3. "podman-compose" (standalone Python tool)
+//  4. Falls back to "docker-compose" (v1 standalone)
 func detectPodmanComposeBinary() string {
 	// 1. Try "podman compose" subcommand.
 	if _, err := exec.LookPath("podman"); err == nil {

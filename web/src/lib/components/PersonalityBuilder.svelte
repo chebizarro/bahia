@@ -1,7 +1,7 @@
 <script>
   import { createDefaultPersonaSpec, patchCustomizationSection } from '$lib/stores/souls.svelte.js';
 
-  /** @typedef {import('$lib/types/customization').SoulPersonaSpec} SoulPersonaSpec*/
+  /** @typedef {import('$lib/types/customization').SoulPersonaSpec} SoulPersonaSpec */
 
   let {
     value = $bindable(),

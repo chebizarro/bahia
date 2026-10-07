@@ -12,12 +12,12 @@ import (
 
 // pollGatedPaths are the packages where periodic work must be justified: a
 // ticker there is usually a reconciler polling Postgres instead of reacting
-// to relay events.
+// to relay events (B-1, B-23).
 var pollGatedPaths = []string{
 	"internal/service/",
 	"internal/reconcile/",
 	// Daemon background runners: a ticker there is a SQL scan standing in
-	// for an event trigger unless it is annotated housekeeping.
+	// for an event trigger (audit C-48) unless it is annotated housekeeping.
 	"internal/app/",
 }
 

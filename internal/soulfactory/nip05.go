@@ -21,7 +21,7 @@ type NIP05Manager struct {
 // NIP05Config holds NIP-05 manager configuration.
 type NIP05Config struct {
 	Domain       string // Domain for NIP-05 (e.g., sharegap.net)
-	WellKnownDir string // Path to.well-known directory
+	WellKnownDir string // Path to .well-known directory
 }
 
 // NIP05JSON represents the nostr.json file structure.

@@ -43,7 +43,7 @@ type NotificationTestDispatcher interface {
 // NotificationIntentHandler processes kind-30900 intents for the "notification"
 // domain. It handles channel create/update/delete.
 //
-// See docs/architecture/intents-and-authority.md
+// See design §7 Wave 5 N1.
 type NotificationIntentHandler struct {
 	registry       NotificationIntentCRUD
 	publisher      NotificationIntentPublisher

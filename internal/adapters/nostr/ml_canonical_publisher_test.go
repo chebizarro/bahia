@@ -15,11 +15,11 @@ import (
 
 // --- MLCanonicalPublisher acceptance tests -----------------------------------
 //
-// These tests verify M1 invariants:
-// - One canonical event per material change (not per tick).
-// - Zero events for unchanged repeats.
-// - Compatibility path (projector) not publishes ML kinds.
-// - Direct publish from the service layer works end-to-end.
+// These tests verify Phase 3 M1 invariants:
+//   - One canonical event per material change (not per tick).
+//   - Zero events for unchanged repeats.
+//   - Legacy path (projector) no longer publishes ML kinds.
+//   - Direct publish from the service layer works end-to-end.
 
 func TestMLCanonicalPublisher_OneEventPerMaterialChange(t *testing.T) {
 	ctx := context.Background()
@@ -169,7 +169,7 @@ func TestMLCanonicalPublisher_LegacyPathPublishes(t *testing.T) {
 	// When the cp-state publisher is wired into the registry service, the
 	// registry service calls PublishModel after CreateOrUpdateModel. This
 	// test verifies that the publisher works end-to-end outside the projector
-	// event loop, matching the compatibility path behavior of one record per mutation.
+	// event loop, matching the legacy path behavior of one record per mutation.
 	ctx := context.Background()
 
 	source := newFakeProjectionSource()
@@ -217,7 +217,7 @@ func TestProjectorNoLongerPublishesMLFromEvents(t *testing.T) {
 		Data:     map[string]any{"model_id": modelID.String()},
 	})
 
-	// The projector handleEvent not has a case for EventMLModelChanged.
+	// The projector handleEvent no longer has a case for EventMLModelChanged.
 	// If it did, it would forward to the default case (audit-only, no ML publish).
 	records := sink.byKind(KindMLModelRegistry)
 	if len(records) != 0 {

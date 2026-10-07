@@ -17,16 +17,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// --- payment/security cp-state publisher tests ----------------
+// --- bahia-irsry.60 payment/security cp-state publisher tests ----------------
 //
 // Invariants tested:
-// - Publish-on-mutation: each mutation site publishes exactly one 30900 record.
-// - Compatibility path: the original publish path is not disrupted.
-// - Confidentiality: all content passes through EncryptConfidential; no
-// plaintext org data appears in event content; sensitive fields (token_hash,
-// amounts, vulnerability details) are inside the encrypted envelope.
-// - Size bounds: individual finding records stay within NIP-44's 65,535-byte
-// plaintext limit even with large payloads (.39 item 1).
+//   - Publish-on-mutation: each mutation site publishes exactly one 30900 record.
+//   - Legacy path: the original publish path is not disrupted.
+//   - Confidentiality: all content passes through EncryptConfidential; no
+//     plaintext org data appears in event content; sensitive fields (token_hash,
+//     amounts, vulnerability details) are inside the encrypted envelope.
+//   - Size bounds: individual finding records stay within NIP-44's 65,535-byte
+//     plaintext limit even with large payloads (.39 item 1).
 
 // --- Payment Canonical Publisher ---
 

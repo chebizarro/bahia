@@ -9,17 +9,17 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Golden hash fixture tests — lock SH stability across code changes.
+// Golden hash fixture tests — lock SHA-256 stability across code changes.
 //
 // These tests use deterministic JSON inputs with fixed UUIDs and field values.
 // If any golden hash changes, it means canonical serialization has changed,
 // which is a breaking change for drift detection and no-op apply logic.
 //
 // To update after an intentional serialization change:
-// 1. Run the test to get the new hash.
-// 2. Verify the serialization change is intentional.
-// 3. Bump DesiredStateSchemaVersion.
-// 4. Update the golden value.
+//   1. Run the test to get the new hash.
+//   2. Verify the serialization change is intentional.
+//   3. Bump DesiredStateSchemaVersion.
+//   4. Update the golden value.
 // ---------------------------------------------------------------------------
 
 // Deterministic UUIDs used across all golden fixtures.

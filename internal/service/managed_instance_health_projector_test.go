@@ -100,7 +100,7 @@ func TestManagedInstanceHealthProjectorPublishesMaterialObservationHistory(t *te
 	require.Equal(t, "health_observation", managedTagValue(rec.events[2].Tags, "type"))
 }
 
-// the projector's redelivery memory is bounded by the supervised
+// bahia-as2bo: the projector's redelivery memory is bounded by the supervised
 // set and a fixed audit window, not by the number of events it publishes.
 func TestManagedInstanceHealthProjectorDedupeMemoryDoesNotGrowWithEvents(t *testing.T) {
 	start := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)

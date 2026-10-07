@@ -6,7 +6,7 @@ function newer(left, right) {
     (left.created_at === right.created_at && left.id < right.id);
 }
 
-/** A topic-scoped, coordinate-indexed projection of the BahiaEventStore.*/
+/** A topic-scoped, coordinate-indexed projection of the BahiaEventStore. */
 export function createCoreQuery({ topic, target, identity, project = (event, id) => ({ ...contentWithEventMeta(event), id }), sort = sortByNameOrId, logicalNewer = newer }) {
   const coordinates = new Map();
   const eventCoordinates = new Map();

@@ -26,7 +26,7 @@ import (
 type recordingRouteBus struct {
 	syncRouteBus
 	published []events.Event
-	// publishCtxErr is ctx.Err observed at each Publish call.
+	// publishCtxErr is ctx.Err() observed at each Publish call.
 	publishCtxErr []error
 }
 

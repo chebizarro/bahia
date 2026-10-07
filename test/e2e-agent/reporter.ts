@@ -1,4 +1,4 @@
-/***/
+/**
  * Reporting utilities for E2E agent test runner
  */
 import { writeFile } from 'node:fs/promises';

@@ -1,4 +1,4 @@
-/***/
+/**
  * Nostr-based documentation fetching from the BahiaEventStore with link resolution.
  *
  * Reads documentation topics from the relay as NIP-23 long-form content
@@ -13,7 +13,7 @@ import { getDTag, getTagValue, getTagValues } from '$lib/nostr/tags.js';
 import { createReadModelMetadataTracker } from '$lib/nostr/read-model-metadata.js';
 import { getBootstrapSeed } from '$lib/stores/discovery.svelte.js';
 
-/***/
+/**
  * Fetch docs from the event store, then subscribe for historical catch-up.
  * @param {Object} [options]
  * @param {boolean} [options.bypassCache=false] Wait for relay EOSE even if the event store has a snapshot.
@@ -78,11 +78,11 @@ async function fetchDocsEvents({ bypassCache = false } = {}) {
   return result;
 }
 
-/***/
+/**
  * Fetch the documentation catalog from the relay.
  *
  * Returns a structure with topics grouped for display:
- * { topics: Topic[], groups: Group[], count: number }
+ *   { topics: Topic[], groups: Group[], count: number }
  *
  * @param {Object} [options]
  * @param {boolean} [options.bypassCache=false] - Require relay EOSE rather than local history
@@ -105,11 +105,11 @@ export async function fetchDocsCatalog({ bypassCache = false } = {}) {
   };
 }
 
-/***/
+/**
  * Fetch a single documentation topic from the relay.
  *
  * Returns the document with resolved cross-document links:
- * { metadata: Topic, markdown: string, links: DocumentLink[] }
+ *   { metadata: Topic, markdown: string, links: DocumentLink[] }
  *
  * @param {string} topic - Topic slug (d-tag value)
  * @param {Object} [options]
@@ -145,10 +145,10 @@ export async function fetchDoc(topic, { bypassCache = false } = {}) {
 
 const MARKDOWN_LINK_PATTERN = /!?\[[^\]\n]+\]\(([^)\s]+)(?:\s+['"][^)]*['"])?\)/g;
 
-/***/
+/**
  * Convert a relative markdown path to a topic slug.
  * Mirrors the server-side TopicFromPath logic:
- * strip extension, replace / with -, trim parts.
+ *   strip extension, replace / with -, trim parts.
  *
  * @param {string} relPath - e.g. "features/services.md"
  * @returns {string} e.g. "features-services"
@@ -164,7 +164,7 @@ function topicFromPath(relPath) {
     .join('-');
 }
 
-/***/
+/**
  * Check if a link href is an internal markdown reference.
  * @param {string} href
  * @returns {boolean}
@@ -178,7 +178,7 @@ function isInternalMarkdownHref(href) {
   return pathOnly.toLowerCase().endsWith('.md');
 }
 
-/***/
+/**
  * Check if a link href is an external URL.
  * @param {string} href
  * @returns {boolean}
@@ -187,7 +187,7 @@ function isExternalHref(href) {
   return /^(https?:|mailto:)/i.test(href) || href.startsWith('//');
 }
 
-/***/
+/**
  * Resolve all markdown links in a document against the known catalog.
  *
  * @param {string} markdown - Raw markdown content
@@ -216,7 +216,7 @@ function resolveDocumentLinks(markdown, catalog) {
     if (isInternalMarkdownHref(rawHref)) {
       // Strip query/fragment for topic resolution
       const pathOnly = rawHref.split(/[?#]/, 1)[0];
-      // Normalize: remove leading./ or nested../
+      // Normalize: remove leading ./ or nested ../
       const cleaned = pathOnly.replace(/^(\.\/)+/, '');
       const candidateTopic = topicFromPath(cleaned);
 
@@ -241,7 +241,7 @@ function resolveDocumentLinks(markdown, catalog) {
 
 // --- Parsing helpers ---
 
-/***/
+/**
  * Parse a NIP-23 event into a docs topic metadata object.
  * @param {Object} event - Nostr event
  * @returns {Object|null} Topic metadata or null if invalid
@@ -265,7 +265,7 @@ function parseDocTopic(event) {
   };
 }
 
-/***/
+/**
  * Group topics into catalog sections.
  * @param {Array} topics
  * @returns {Array} Groups with category, label, and topics.

@@ -17,7 +17,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// countLegacy counts sink events belonging to a compatibility projection family
+// countLegacy counts sink events belonging to a legacy projection family
 // (matched by the legacy_kind tag), optionally only tombstones.
 func countLegacy(sink *captureProjectionPublisher, legacyKind int, tombstonesOnly bool) int {
 	sink.mu.Lock()
@@ -67,7 +67,7 @@ func TestProjectionUnchangedServiceStateEmitsNoNewEvent(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 
-	// S1: state is not published by RepublishSnapshot; use the
+	// Phase 3 S1: state is no longer published by RepublishSnapshot; use the
 	// test helper that calls through the same dedupe pipeline.
 	for i := 0; i < 3; i++ {
 		if err := projector.publishStateForTest(ctx, &state); err != nil {
@@ -103,7 +103,7 @@ func TestProjectionIgnoresVolatileBookkeepingFields(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 
-	// S1: state is not published by RepublishSnapshot; use the
+	// Phase 3 S1: state is no longer published by RepublishSnapshot; use the
 	// test helper that calls through the same dedupe pipeline.
 	if err := projector.publishStateForTest(ctx, &state); err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestProjectionUnchangedDNSEndpointEmitsNoNewEvent(t *testing.T) {
 
 // TestSystemConfigStartupPublishDoesNotRepeat covers the startup publish path:
 // a second call with nothing changed emits no discovery or DM relay-list
-// events ( X1: handles RepublishSnapshot dedupe test).
+// events (Phase 3 X1: replaces the old RepublishSnapshot dedupe test).
 func TestSystemConfigStartupPublishDoesNotRepeat(t *testing.T) {
 	ctx := context.Background()
 	withProjectorVersionVars(t, "0.1.0", "abcdef1234567890", "")
@@ -531,7 +531,7 @@ func TestProjectionFingerprintIsStableAndStripsVolatileKeys(t *testing.T) {
 
 // TestBackoffRetryTimerFlushesPendingRecords proves that when a publish is
 // suppressed by the shared backoff window, the record is saved and flushed
-// when the backoff timer fires ( X1 event-driven retry).
+// when the backoff timer fires (Phase 3 X1 event-driven retry).
 func TestBackoffRetryTimerFlushesPendingRecords(t *testing.T) {
 	ctx := context.Background()
 	serviceID, envID := uuid.New(), uuid.New()

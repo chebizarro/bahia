@@ -374,7 +374,7 @@ func NewBackupSchedulerRunner(scheduler BackupScheduleProcessor, interval time.D
 
 func (r *BackupSchedulerRunner) Name() string { return "backup-scheduler" }
 
-// Run performs schedule evaluation using a next-due timer. B1 replaces
+// Run performs schedule evaluation using a next-due timer. Phase 3 B1 replaces
 // the fixed 5-minute polling ticker with a timer that fires at the earliest
 // next-due schedule time, falling back to the configured interval as a ceiling.
 func (r *BackupSchedulerRunner) Run(ctx context.Context) error {

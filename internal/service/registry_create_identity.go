@@ -14,15 +14,15 @@ import (
 	"github.com/openagentsinc/bahia/internal/repository"
 )
 
-// Create-path identity.
+// Create-path identity (bahia-irsry.35, C-40).
 //
 // A create intent may carry a client-minted id. The registry mints one only
 // when none is supplied. Because the id is fixed before any write, a retried
 // create is resolved by content:
-// - id free -> create
-// - id taken, same content -> idempotent replay: the stored entity is
-// returned and nothing is written or published again
-// - id taken, different content -> *domain.EntityIDConflictError
+//   - id free                      -> create
+//   - id taken, same content       -> idempotent replay: the stored entity is
+//     returned and nothing is written or published again
+//   - id taken, different content  -> *domain.EntityIDConflictError
 //
 // "Content" is the desired state the create intent declares: every field
 // except the id and the server-stamped timestamps, after the same

@@ -38,7 +38,7 @@ func confidentialStateHash(privateKey, plaintext string) gonostr.Tag {
 }
 
 // publishCanonicalFirst signs one confidential cp-state record for a producer
-// that publishes before it updates any derived index. The
+// that publishes before it updates any derived index (audit B-31, B-32). The
 // record is made durable in the publish outbox before the first relay round,
 // so the caller sees exactly two outcomes: nil (accepted, or queued and being
 // retried per relay) or an error (never admitted, or abandoned). The caller

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// Regression cases for the compatibility-kind classifier. They pin the false
+// Regression cases for the legacy-kind classifier. They pin the false
 // positive found on integration/irsry-wave3 (the "legacy_kind" tag key) and
 // the sanctioned CPStateFamily discriminator exemption.
 func TestLegacyKindConstClassification(t *testing.T) {
@@ -36,7 +36,7 @@ func TestLegacyKindConstClassification(t *testing.T) {
 		{"re-exported Legacy alias", intConst(adapterPkg, "KindLegacyWorkerState", 31974), true, "aliases are caught by name"},
 		{"deprecated status kind", intConst(kindsPkg, "DeploymentStatus", 6961), true, "C-44 status families"},
 		{"cp-state family discriminator", types.NewConst(token.NoPos, kindsPkg, "CPStateFamilyDNSZone", familyType, constant.MakeInt64(31975)), false,
-			"the sanctioned legacy_kind discriminator contract"},
+			"the sanctioned legacy_kind discriminator contract (bahia-irsry.9)"},
 		{"canonical kind", intConst(kindsPkg, "CASControlState", 30900), false, "canonical"},
 		{"library constant in a legacy range", intConst(libraryPkg, "Something", 31000), false, "only this module's constants"},
 	}

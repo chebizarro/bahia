@@ -30,9 +30,9 @@ type GatewayHTTPConfig struct {
 
 // HTTPGatewayRouteManager implements GatewayRouteManager against a small Bahia
 // admin API:
-// - PUT /api/v1/routes/{routeName}
-// - GET /api/v1/routes/{routeName}
-// - DELETE /api/v1/routes/{routeName}
+//   - PUT    /api/v1/routes/{routeName}
+//   - GET    /api/v1/routes/{routeName}
+//   - DELETE /api/v1/routes/{routeName}
 //
 // The request and response body use GatewayRouteSpec-compatible JSON. This
 // keeps Bahia's adapter interface stable while the gateway implementation can

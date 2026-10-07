@@ -25,7 +25,7 @@ func NewPgDeploymentPolicyRepository(pool *pgxpool.Pool) *PgDeploymentPolicyRepo
 }
 
 // Create inserts a new deployment policy.
-// The id is stored verbatim (client-minted); a UUIDv7 is
+// The id is stored verbatim (client-minted, bahia-irsry.42); a UUIDv7 is
 // minted only for callers that supply none. A primary-key hit is
 // ErrAlreadyExists, which the service resolves by content.
 func (r *PgDeploymentPolicyRepository) Create(ctx context.Context, p *domain.DeploymentPolicy) error {

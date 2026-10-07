@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Download downloads a blob by URL and verifies its SH hash.
+// Download downloads a blob by URL and verifies its SHA-256 hash.
 func (c *Client) Download(ctx context.Context, url string) ([]byte, error) {
 	server, expectedHash, err := ParseBlossomURL(url)
 	if err != nil {
@@ -37,7 +37,7 @@ func (c *Client) Download(ctx context.Context, url string) ([]byte, error) {
 	return data, nil
 }
 
-// DownloadByHash downloads a blob by its SH hash, trying all configured servers.
+// DownloadByHash downloads a blob by its SHA-256 hash, trying all configured servers.
 func (c *Client) DownloadByHash(ctx context.Context, hash string) ([]byte, error) {
 	if len(c.servers) == 0 {
 		return nil, fmt.Errorf("no Blossom servers configured")

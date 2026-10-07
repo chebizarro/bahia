@@ -494,7 +494,7 @@ func assertStringSetEqual(t *testing.T, got []string, want []string) {
 }
 
 // ---------------------------------------------------------------------------
-// Backward-compatible decoding tests (Item 8 — )
+// Backward-compatible decoding tests (Item 8 — bahia-zu2p.7.2)
 // ---------------------------------------------------------------------------
 
 func catalogDecode(t *testing.T, catalog *KindCatalog, ev *gonostr.Event) *DecodedProjectionEvent {

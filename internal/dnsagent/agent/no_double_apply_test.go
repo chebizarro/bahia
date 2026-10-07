@@ -9,7 +9,7 @@ import (
 
 // TestNoDoubleApplyRPCThenSubscription proves that when an agent receives both
 // an RPC sync and a subscribed zone sync event for the same serial, the zone
-// is applied exactly once. This is the dual-path convergence guarantee.
+// is applied exactly once. This is the dual-path convergence guarantee (C-34).
 func TestNoDoubleApplyRPCThenSubscription(t *testing.T) {
 	svc := newTestService(t, false)
 	zone := testZone()

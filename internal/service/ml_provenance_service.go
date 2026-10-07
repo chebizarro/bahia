@@ -43,7 +43,7 @@ func NewMLProvenanceService(repo repository.MLRegistryRepository, publisher even
 }
 
 // SetMLCPStatePublisher configures the canonical cp-state publisher for ML
-// provenance entities ( M1).
+// provenance entities (Phase 3 M1).
 func (s *MLProvenanceService) SetMLCPStatePublisher(pub MLCPStatePublisher) {
 	s.cpState = pub
 }
@@ -86,7 +86,7 @@ func (s *MLProvenanceService) RecordProvenanceEdge(ctx context.Context, edge *do
 	return nil
 }
 
-// ValidateModelVersionArtifactMirrors verifies that all artifact mirrors for a model version agree on SH.
+// ValidateModelVersionArtifactMirrors verifies that all artifact mirrors for a model version agree on SHA-256.
 func (s *MLProvenanceService) ValidateModelVersionArtifactMirrors(ctx context.Context, modelVersionID uuid.UUID) error {
 	artifacts, err := s.repo.ListArtifactRefsByModelVersion(ctx, modelVersionID)
 	if err != nil {

@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// The Subscriber's sync engine: one worker per relay
+// The Subscriber's sync engine (bahia-irsry.10.1): one worker per relay
 // catches that relay up and follows it live; one consumer stores, dispatches
 // and keeps cursors. See the Subscriber doc comment for the algorithm and
 // replay_cursor.go for the cursor rules.
@@ -243,7 +243,7 @@ func (s *Subscriber) pruneStore() {
 		s.logger.Info("pruned expired regular events from the local event store", zap.Int("removed", removed))
 	}
 	// NIP-40: expired events of any kind leave the store on the same pass
-	// (retired run tombstones, expired status records).
+	// (retired run tombstones, expired status records; bahia-u5whr).
 	expired, err := s.store.PruneExpiredEvents(s.now())
 	if err != nil {
 		s.logger.Warn("prune expired local events failed", zap.Error(err))
@@ -260,7 +260,7 @@ func (s *Subscriber) pruneStore() {
 // A session that ends without a CLOSED (a dropped connection, a failed
 // catch-up) is resynced with backoff, without limit. A CLOSED goes through
 // the pool's CLOSED policy (closedRetryBudget) per filter, as for the pool's
-// own subscriptions: "auth-required:" authenticates the
+// own subscriptions (bahia-irsry.49): "auth-required:" authenticates the
 // relay and resyncs at once; a policy refusal, a failed AUTH, or a retryable
 // reason more than nostr.closed_retry_budget times in a row gives that filter
 // up on this relay, while its other filters keep syncing. A filter's count
@@ -272,7 +272,7 @@ func (s *Subscriber) pruneStore() {
 // here before the next session's REQs go out. A session can end for a reason
 // other than that CLOSED (the connection dropped, another filter's REQ ended)
 // with the CLOSED still in flight; it still counts, so a flapping relay cannot
-// get a refused filter reissued past its budget.
+// get a refused filter reissued past its budget (bahia-qcw0s).
 func (s *Subscriber) runRelay(ctx context.Context, relayURL string, filters []inboundFilter, out chan<- inboundItem) {
 	backoff := s.newRelayBackoff()
 	ledger := newInboundClosedLedger(s.pool, filters)
@@ -394,7 +394,7 @@ func (l *inboundClosedLedger) closed(hash, reason string) {
 }
 
 // take returns the pending verdicts for filters, in their order, and clears
-// them. A verdict for a filter not synced is dropped.
+// them. A verdict for a filter no longer synced is dropped.
 func (l *inboundClosedLedger) take(filters []inboundFilter) []inboundClosedVerdict {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -507,7 +507,7 @@ const pagingBackdateOverlap = 120
 // fetchPaged delivers every stored event matching base from one relay, newest
 // page first. A page that comes back full is followed by a page bounded with
 // `until` at its oldest event (inclusive; ids already delivered are dropped by
-// the store), so a gap larger than one page is never truncated.
+// the store), so a gap larger than one page is never truncated (C-1).
 //
 // After the last page, a widened-overlap REQ rechecks the paged window to catch
 // events backdated beyond the relay's NIP-01 tolerance and published during

@@ -479,7 +479,7 @@ type RouteCanaryThresholds struct {
 	SuccessThreshold int
 }
 
-// Normalized returns the thresholds with non-positive values handled by safe
+// Normalized returns the thresholds with non-positive values replaced by safe
 // defaults so a partially specified policy can never disable hysteresis.
 func (t RouteCanaryThresholds) Normalized() RouteCanaryThresholds {
 	normalized := t

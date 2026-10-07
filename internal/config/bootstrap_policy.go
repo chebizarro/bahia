@@ -34,7 +34,7 @@ var mutablePolicyBootstrapSeeds = []bootstrapSeed{
 	{[]string{"reconcile", "enabled"}, []string{"BAHIA_RECONCILE__ENABLED", "BAHIA_RECONCILE_ENABLED"}, bootstrapBool},
 }
 
-// seedMutablePolicy persists compatibility environment seeds only for keys absent from
+// seedMutablePolicy persists legacy environment seeds only for keys absent from
 // the mounted YAML document. It returns environment names that must be ignored
 // by the normal koanf environment provider because the file now owns them.
 func seedMutablePolicy(configPath string) (map[string]struct{}, error) {

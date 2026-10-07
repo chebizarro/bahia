@@ -42,7 +42,7 @@ func NewEncryptor(nostrPrivateKey string) (*Encryptor, error) {
 	}
 
 	// Derive an encryption-only key with explicit domain separation. This avoids
-	// reusing SH(privateKey) directly across the identity and data-key domains.
+	// reusing SHA-256(privateKey) directly across the identity and data-key domains.
 	aesKey := make([]byte, 32)
 	reader := hkdf.New(
 		sha256.New,

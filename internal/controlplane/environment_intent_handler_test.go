@@ -452,7 +452,7 @@ func TestEnvironmentIntentHandler_FullPipeline(t *testing.T) {
 
 // --- F3 test: projector does not duplicate intent publication ---
 func TestProjectorNoLongerPublishesEnvironmentRecords(t *testing.T) {
-	// This test verifies that the projector's SetupSubscriptions not
+	// This test verifies that the projector's SetupSubscriptions no longer
 	// includes environment event types. We check the code path by confirming
 	// the handleEvent method does not react to environment events.
 	//
@@ -462,7 +462,7 @@ func TestProjectorNoLongerPublishesEnvironmentRecords(t *testing.T) {
 	// The actual verification is the compile-time build + the removed code.
 	t.Log("Environment bus subscriptions (EventEnvironmentCreated/Updated/Deleted) " +
 		"and the RepublishSnapshot environment loop have been removed from " +
-		"projector.go. This is verified by the build gate.")
+		"projector.go (bahia-irsry.11.4). This is verified by the build gate.")
 }
 
 // --- F3 test: environment intent targeting normalization ---

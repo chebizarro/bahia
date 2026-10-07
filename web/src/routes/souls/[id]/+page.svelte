@@ -344,7 +344,7 @@
     </div>
   {:else if soul}
     <div class="soul-detail">
-      <!-- Hero Section-->
+      <!-- Hero Section -->
       <div class="soul-hero">
         <div class="avatar-large">
           {#if soul.avatarUrl}
@@ -525,21 +525,21 @@
         {/if}
       </section>
       
-      <!-- Info Grid-->
+      <!-- Info Grid -->
       <div class="info-grid">
-        <!-- Identity Section-->
+        <!-- Identity Section -->
         <section class="info-section">
           <h3><IdentityIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Identity</h3>
           <dl>
             <dt>npub</dt>
-            <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_element_to_interactive_role-->
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_element_to_interactive_role -->
             <dd class="copyable" onclick={copyNpub} onkeydown={(event) => handleCopyKeydown(event, copyNpub)} role="button" tabindex="0" title="Click to copy" aria-label="Copy npub">
               <code>{soul.npub || 'N/A'}</code>
               <span class="copy-icon" aria-hidden="true"><CopyIcon size={14} strokeWidth={1.75} /></span>
             </dd>
             
             <dt>Public Key</dt>
-            <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_element_to_interactive_role-->
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_element_to_interactive_role -->
             <dd class="copyable" onclick={copyPubkey} onkeydown={(event) => handleCopyKeydown(event, copyPubkey)} role="button" tabindex="0" title="Click to copy" aria-label="Copy public key">
               <code>{soul.agentPubkey?.slice(0, 16)}...{soul.agentPubkey?.slice(-8) || 'N/A'}</code>
               <span class="copy-icon" aria-hidden="true"><CopyIcon size={14} strokeWidth={1.75} /></span>
@@ -574,7 +574,7 @@
           </dl>
         </section>
         
-        <!-- Infrastructure Section-->
+        <!-- Infrastructure Section -->
         <section class="info-section">
           <h3><WorkspaceIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Infrastructure</h3>
           <dl>
@@ -597,7 +597,7 @@
           </dl>
         </section>
         
-        <!-- Permissions Section-->
+        <!-- Permissions Section -->
         <section class="info-section wide">
           <h3><ProtectedIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Permissions</h3>
           <p class="policy-warning"><strong>Runtime enforcement note:</strong> allowed event kinds are provisioned into Signet policy. Tool grants and approval policy are signed draft intent; the owned OpenClaw wrapper does not yet translate them into tools, MCP, or plugin enforcement.</p>
@@ -634,7 +634,7 @@
           </div>
         </section>
         
-        <!-- Soul Content Section-->
+        <!-- Soul Content Section -->
         <section class="info-section wide">
           <h3><SoulIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Soul Content</h3>
           <div class="soul-content">
@@ -644,7 +644,7 @@
 
         <section class="info-section wide">
           <h3><MemoryIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Activity & History</h3>
-          <!-- Kind 1950 actions are trusted from the signed-in key, widened by the daemon's fleet-OCK encrypted Soul Factory operator allowlist when this session can decrypt it.-->
+          <!-- Kind 1950 actions are trusted from the signed-in key, widened by the daemon's fleet-OCK encrypted Soul Factory operator allowlist when this session can decrypt it (bahia-fbyo5). -->
           <p class="history-muted" data-testid="soul-activity-operator-scope-note">
             {#if operatorAllowlistAvailable(OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY)}
               Actions are listed when signed by your key or by an authorized Soul Factory operator in the Bahia service's operator allowlist. Soul Factory results are shown for every operator.
@@ -782,7 +782,7 @@
     border-color: rgba(239, 68, 68, 0.35);
   }
   
-  /* Hero*/
+  /* Hero */
   .soul-hero {
     display: flex;
     gap: 1.5rem;
@@ -900,7 +900,7 @@
     cursor: not-allowed;
   }
   
-  /* Customization*/
+  /* Customization */
   .customization-shell {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
@@ -1009,7 +1009,7 @@
     font: inherit;
   }
 
-  /* Info Grid*/
+  /* Info Grid */
   .info-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
@@ -1093,7 +1093,7 @@
     opacity: 1;
   }
   
-  /* Permissions*/
+  /* Permissions */
   .policy-warning {
     margin: 0 0 1rem;
     padding: 0.75rem;
@@ -1172,7 +1172,7 @@
     font-style: italic;
   }
   
-  /* Soul Content*/
+  /* Soul Content */
   .soul-content {
     background: var(--bg);
     border-radius: 8px;

@@ -20,7 +20,7 @@ func (v staticPolicyView) ListSecurityPolicies(context.Context) ([]domain.Deploy
 // A policy that exists only in SQL gets its canonical cp-state published by
 // the one-time backfill; one the local store already retains is left alone;
 // the marker makes the backfill run once, and a failed publish leaves it
-// unset so the next start retries ( item 5).
+// unset so the next start retries (bahia-u5whr item 5).
 func TestBackfillCanonicalPoliciesPublishesSQLOnlyPolicies(t *testing.T) {
 	ctx := context.Background()
 	repo := newMockPolicyRepo()

@@ -2,13 +2,13 @@ package domain
 
 import "time"
 
-// Registry revisions.
+// Registry revisions (bahia-irsry.53).
 //
 // A registry row's updated_at is its revision: clients send it back as
 // expected_updated_at, and the relay-first writer signs it into the
 // cp-state record before Postgres stores the row. Postgres timestamptz keeps
 // microseconds, so a revision minted with Go's nanosecond clock would be
-// published with digits the stored row not has, and the token a client
+// published with digits the stored row no longer has, and the token a client
 // read from the relay would never match the database. Every revision is
 // therefore minted, compared and published at RevisionPrecision.
 

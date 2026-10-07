@@ -25,7 +25,7 @@ const (
 
 var seedDNSPolicyID = uuid.MustParse("6d3f2a4e-8c1b-4f7a-9e2d-5b6c7a8d9e01")
 
-// controlStateSeed is one projected read model: the catalog (compatibility) kind and
+// controlStateSeed is one projected read model: the catalog (legacy) kind and
 // record id the projector keys it by, its JSON content, and the family tags
 // the projector appends after the envelope.
 type controlStateSeed struct {

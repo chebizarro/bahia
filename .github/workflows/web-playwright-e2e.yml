@@ -33,7 +33,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      # relay-harness.js spawns `go run./cmd/bahia-test-relay` with a 20 s
+      # relay-harness.js spawns `go run ./cmd/bahia-test-relay` with a 20 s
       # readiness timeout; warm the toolchain, module and build caches first so
       # a cold runner does not spend that budget downloading go1.26 and deps.
       - name: Warm the e2e test relay build

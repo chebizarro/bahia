@@ -33,7 +33,7 @@ type PaymentCanonicalView interface {
 
 // PaymentService manages Cashu payment lifecycle for deployment runs.
 //
-// Payment state is canonical on relays: every mutation mints its
+// Payment state is canonical on relays (audit B-31): every mutation mints its
 // identity up front, publishes the signed cp-state record first, and only then
 // updates the SQL repository, which is an optional index that RebuildIndex can
 // recreate. Reads come from the local event store, so the service works with no
@@ -275,7 +275,7 @@ func (s *PaymentService) publishCPState(ctx context.Context, rec *domain.Payment
 	return nil
 }
 
-// hashToken creates a SH hash of a Cashu token for storage.
+// hashToken creates a SHA-256 hash of a Cashu token for storage.
 func hashToken(tokenData string) string {
 	h := sha256.Sum256([]byte(tokenData))
 	return hex.EncodeToString(h[:])
@@ -284,7 +284,7 @@ func hashToken(tokenData string) string {
 // paymentRecordID keeps the canonical coordinate stable when a caller retries
 // after an unconfirmed publish. The token hash is already the payment's global
 // idempotency key (and is unique in the SQL index), so deriving the UUID from it
-// cannot merge two records that the compatibility store would have accepted.
+// cannot merge two records that the legacy store would have accepted.
 func paymentRecordID(tokenHash string) uuid.UUID {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("bahia:payment:"+tokenHash))
 }

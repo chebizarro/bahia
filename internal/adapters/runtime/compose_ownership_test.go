@@ -9,7 +9,7 @@ import (
 
 func boolPtr(v bool) *bool { return &v }
 
-// helper to create a valid.bahia/render-state.json marker in dir.
+// helper to create a valid .bahia/render-state.json marker in dir.
 func createBahiaMarker(t *testing.T, dir string) {
 	t.Helper()
 	markerDir := filepath.Join(dir, ".bahia")
@@ -76,7 +76,7 @@ func TestValidateComposeOwnership_EmptyDir(t *testing.T) {
 
 func TestValidateComposeOwnership_MalformedMarker_MissingRenderState(t *testing.T) {
 	dir := t.TempDir()
-	// Create.bahia/ directory but no render-state.json
+	// Create .bahia/ directory but no render-state.json
 	if err := os.MkdirAll(filepath.Join(dir, ".bahia"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestValidateComposeOwnership_MalformedMarker_EmptyJSON(t *testing.T) {
 
 func TestValidateComposeOwnership_MalformedMarker_NotADirectory(t *testing.T) {
 	dir := t.TempDir()
-	// Create.bahia as a file, not a directory
+	// Create .bahia as a file, not a directory
 	if err := os.WriteFile(filepath.Join(dir, ".bahia"), []byte("not a dir"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestValidateComposeOwnership_MalformedMarker_NotADirectory(t *testing.T) {
 
 func TestValidateComposeOwnership_NotOwned(t *testing.T) {
 	dir := t.TempDir()
-	// Create a compose file but no.bahia/ marker — operator-authored
+	// Create a compose file but no .bahia/ marker — operator-authored
 	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("version: '3'\nservices: {}"), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -18,7 +18,7 @@ import (
 type AssistantSessionRecoveryConfig struct {
 	// PageLimit bounds one page of the relay inventory query. The inventory
 	// is never truncated to it: pages are requested with `until` until one
-	// comes back short.
+	// comes back short (audit C-46).
 	PageLimit     int
 	ServicePubkey string
 	Logger        *slog.Logger
@@ -82,7 +82,7 @@ func NewAssistantSessionRecoveryRunner(orchestrator *AssistantOrchestrator, cfg 
 }
 
 // SetTopicMigration attaches the startup migration that adds t=assistant-session
-// tags to compatibility records. It runs synchronously before recovery queries the relay.
+// tags to legacy records. It runs synchronously before recovery queries the relay.
 func (r *AssistantSessionRecoveryRunner) SetTopicMigration(m *AssistantSessionTopicMigration) {
 	if r != nil {
 		r.topicMigration = m
@@ -111,7 +111,7 @@ func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
 		r.logger.Warn("assistant recovery skipped: no session inventory source or service pubkey configured")
 		return nil
 	}
-	// re-tag compatibility assistant session events before recovery
+	// bahia-irsry.43: re-tag legacy assistant session events before recovery
 	// queries the relay with #t. The migration reads from the local event
 	// store, adds t=assistant-session to untagged records, and re-publishes
 	// them so the relay indexes them under #t. Idempotent: a no-op once
@@ -202,9 +202,9 @@ func (inv *assistantRecoveryInventory) selected() []assistantRecoverySource {
 }
 
 func assistantRecoveryFilter(author nostr.PubKey) nostr.Filter {
-	// scope on #t (single-letter) instead of #schema
-	// (multi-letter, invisible to NIP-01 relays). Compatibility records published
-	// before.43 are re-tagged by the topic migration that runs synchronously
+	// bahia-irsry.43: scope on #t (single-letter) instead of #schema
+	// (multi-letter, invisible to NIP-01 relays). Legacy records published
+	// before .43 are re-tagged by the topic migration that runs synchronously
 	// before the inventory is read (SetTopicMigration).
 	return nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{author}, Tags: nostr.TagMap{"t": []string{kinds.AssistantSessionTopic}}}
 }

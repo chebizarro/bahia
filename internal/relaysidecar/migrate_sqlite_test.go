@@ -158,7 +158,7 @@ func TestMigrateLegacySQLitePreservesEventsAndIsIdempotent(t *testing.T) {
 	want = append(want, expiring)
 	require.NoError(t, store.Close())
 
-	// Restarting reuses the store and does not import again; the compatibility file
+	// Restarting reuses the store and does not import again; the legacy file
 	// stays as a rollback copy.
 	reopened := openTestEventStore(t, dir)
 	requireStoreHolds(reopened)

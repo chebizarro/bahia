@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// Local event store tests (WithStorePath) against in-process
+// Local event store tests (WithStorePath, bahia-irsry.10.5) against in-process
 // khatru relays with NIP-77. Waits are on Ready and on the resolver's own
 // per-relay catch-up signal; nothing sleeps.
 

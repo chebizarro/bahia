@@ -19,7 +19,7 @@ const relayBusCallerDeadline = 200 * time.Millisecond
 // newSilentKhatruRelay accepts every REQ and never sends EOSE: its stored-event
 // query blocks until the client goes away. It sends no events, so tearing the
 // subscription down at the deadline does not touch the pinned library's
-// dispatch-versus-close race.
+// dispatch-versus-close race (bahia-irsry.17).
 func newSilentKhatruRelay(t *testing.T) string {
 	t.Helper()
 	return newKhatruTestRelay(t, func(relay *khatru.Relay) {

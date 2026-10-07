@@ -15,7 +15,7 @@ import (
 // for intent processing outcomes. The d-tag is scoped to requester and entity
 // coordinate, so at most one status event exists per (requester, entity) pair.
 //
-// See docs/architecture/intents-and-authority.md
+// See design §3.3.
 type IntentStatusPublisher struct {
 	publish func(ctx context.Context, ev nostr.Event) error
 	signer  nostr.Signer
@@ -52,7 +52,7 @@ func (p *IntentStatusPublisher) PublishAcceptedChecked(ctx context.Context, inte
 }
 
 // PublishRejection publishes a "rejected" status for an intent that failed
-// authorization or validation. Only for known principals (docs/architecture/intents-and-authority.md).
+// authorization or validation. Only for known principals (§2.3).
 func (p *IntentStatusPublisher) PublishRejection(ctx context.Context, intent *Intent, reason string) {
 	_ = p.publishStatus(ctx, intent, "rejected", "rejected", reason, nil)
 }
@@ -84,7 +84,7 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 	}
 
 	// Build d-tag: intent-status:<requester-pubkey>:<entity-coordinate>
-	// This bounds growth to one status event per requester per entity (docs/architecture/intents-and-authority.md).
+	// This bounds growth to one status event per requester per entity (§3.3).
 	dTag := fmt.Sprintf("intent-status:%s:%s", intent.Actor, intent.Coordinate)
 
 	expiration := fmt.Sprintf("%d", time.Now().Add(p.statusExpiry).Unix())

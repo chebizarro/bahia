@@ -335,7 +335,7 @@ func (c *PlaneClient) stream(ctx context.Context, endpoint domain.ExecutionPlane
 						// be queued on closed: the pool records a terminal
 						// one before EndOfStoredEvents closes, so GaveUp
 						// keeps this branch from retrying what the closed
-						// branch would give up on. The
+						// branch would give up on (bahia-irsry.49). The
 						// cause names each relay's CLOSED reason.
 						return false, disconnected != nil && sub.GaveUp() == nil, planeError(domain.VMErrorUnavailable, sub.StoredEventsIncomplete(nil))
 					}

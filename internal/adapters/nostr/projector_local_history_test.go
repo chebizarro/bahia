@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// the projector's "already published" memory hydrates from the daemon's
+// B-3: the projector's "already published" memory hydrates from the daemon's
 // own events in the local event store, not from PostgreSQL. There is no
 // nostr_events repository anywhere in these tests.
 
@@ -85,7 +85,7 @@ func TestProjectorHydratesDedupeFromTheLocalStoreAcrossRestart(t *testing.T) {
 }
 
 // A projection abandoned after it was queued stays in the local store flagged
-// undelivered (docs/architecture/outbox-delivery.md): the history reports it as failed, so a restarted
+// undelivered (§3.7): the history reports it as failed, so a restarted
 // projector re-signs that content instead of treating it as published, and
 // the replacement is strictly newer than the flagged event and clears its
 // marker. (An abandonment in the caller's own round is returned to the caller

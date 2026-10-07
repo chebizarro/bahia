@@ -43,7 +43,7 @@ build-bahia-dns-agent:
 
 # Portable static cross-compiles for LAN resolver hosts (see cmd/bahia-dns-agent/README.md).
 # Builds linux-amd64 and linux-arm64. linux-mips-softfloat is deliberately excluded
-# because it always fails today (see ); build it explicitly via
+# because it always fails today (see bahia-1m1ef); build it explicitly via
 # dist-bahia-dns-agent-linux-mips-softfloat once that issue is resolved.
 dist-bahia-dns-agent: dist-bahia-dns-agent-linux-amd64 dist-bahia-dns-agent-linux-arm64
 
@@ -55,7 +55,7 @@ dist-bahia-dns-agent-linux-arm64:
 
 # Known limitation: currently fails because internal/controlplane transitively
 # links modernc.org/sqlite (via internal/adapters/nostr -> internal/adapters/sbom),
-# whose libc has no 32-bit MIPS port. Tracked in beads as; excluded
+# whose libc has no 32-bit MIPS port. Tracked in beads as bahia-1m1ef; excluded
 # from the dist-bahia-dns-agent aggregate until fixed.
 dist-bahia-dns-agent-linux-mips-softfloat:
 	CGO_ENABLED=0 GOOS=linux GOARCH=mips GOMIPS=softfloat go build $(LDFLAGS) -o bin/bahia-dns-agent-linux-mips-softfloat ./cmd/bahia-dns-agent
@@ -92,13 +92,13 @@ soulfactory-coverage:
 lint: lint-arch
 	golangci-lint run ./...
 
-# Architecture ratchet gates. Each gate compares against a
+# Architecture ratchet gates (bahia-irsry.8). Each gate compares against a
 # checked-in baseline of pre-existing violations and fails only on new ones:
-# compatibility kinds outside internal/nostrmigration, direct library relay
+# legacy kinds outside internal/nostrmigration, direct library relay
 # subscriptions outside the pool/bus, unannotated poll tickers in
 # internal/service and internal/reconcile, test-only exported symbols in
 # internal/, the DB-less boot invariants, and web store setInterval /
-# $$lib/api/client.js imports. They also run under `go test./...` and
+# $$lib/api/client.js imports. They also run under `go test ./...` and
 # `pnpm run test:unit`.
 ARCH_GO_GATES = go test ./internal/archtest ./internal/app -run 'TestNoNew|TestArchitecture' -count=1
 ARCH_WEB_GATES = pnpm exec vitest run --config vitest.config.js tests/unit/architecture-gates.test.js
@@ -116,7 +116,7 @@ arch-baseline:
 	git diff --stat -- internal/archtest/testdata web/tests/unit/architecture-gates.baseline.json
 
 # Format. third_party/ holds a vendored upstream module (a separate Go module,
-# so./... targets already skip it); keep formatters from rewriting it too.
+# so ./... targets already skip it); keep formatters from rewriting it too.
 GO_FMT_FILES = $$(find . -name '*.go' -not -path './third_party/*' -not -path './.git/*' -not -path './web/node_modules/*')
 fmt:
 	gofmt -w $(GO_FMT_FILES)

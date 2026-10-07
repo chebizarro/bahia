@@ -14,7 +14,7 @@ const libraryNostrPath = "fiatjaf.com/nostr"
 // relaySubscribeOwners are the only files allowed to open REQs on library
 // relay objects directly: the relay pool. Everything else, SoulFactory
 // included since its bus was retired, goes through RelayPool.Subscribe*, so
-// fixes to EOSE, CLOSED, AUTH and reconnect handling land once.
+// fixes to EOSE, CLOSED, AUTH and reconnect handling land once (C-8, C-35).
 var relaySubscribeOwners = []string{
 	"internal/adapters/nostr/relay_pool",
 }

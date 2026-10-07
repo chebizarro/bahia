@@ -395,13 +395,13 @@ func TestAssistantHandlerLegacyBatchApprovalRunsThroughExecutor(t *testing.T) {
 	if after := f.snapshot(t, "s-migrated"); after.Revision != before.Revision || after.Phase != domain.AssistantExecutionAwaitingApproval || f.tools.count() != 0 {
 		t.Fatalf("refused edit touched state: rev %d->%d phase=%s calls=%d", before.Revision, after.Revision, after.Phase, f.tools.count())
 	}
-	// A wrong compatibility hash is stale.
+	// A wrong legacy hash is stale.
 	res = mustResult(t)(f.adapter.handleApproval(context.Background(), f.request(t, map[string]any{"session_id": "s-migrated", "plan_hash": strings.Repeat("0", 64), "decision": "approve"}, "")))
 	if res["step"] != service.AssistantRefusalStaleApproval || f.tools.count() != 0 {
 		t.Fatalf("wrong legacy hash = %#v", res)
 	}
 
-	// The unedited compatibility approval is converted to a revision-bound v2
+	// The unedited legacy approval is converted to a revision-bound v2
 	// decision and executes exactly the migrated draft once.
 	approve := f.request(t, map[string]any{"session_id": "s-migrated", "plan_hash": legacyHash, "decision": "approve"}, "legacy-approve")
 	res = mustResult(t)(f.adapter.handleApproval(context.Background(), approve))

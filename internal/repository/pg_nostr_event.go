@@ -42,7 +42,7 @@ const (
 )
 
 // NostrPublishTargetLocalPrefix marks archive rows of events whose delivery
-// the daemon's local outbox owns. Their publish_state
+// the daemon's local outbox owns (bahia-irsry.10.4). Their publish_state
 // mirrors the local outcome for PostgreSQL readers (config-fabric drift,
 // virtualization, the failed-row runbook), but no runner drains them and the
 // outbox metrics do not count them: the local outbox does.
@@ -116,7 +116,7 @@ type NostrEventRepository interface {
 // NostrEventOutboxRepository is the durable publish-state extension implemented by
 // repositories that can redeliver outbound audit events.
 //
-// Since the daemon's own publishes are delivered from the
+// Since bahia-irsry.10.4 the daemon's own publishes are delivered from the
 // local outbox (localstore.Outbox). PostgreSQL rows are drained in place: rows
 // written inside a PostgreSQL transaction together with the domain change
 // they audit (registry release registration and promotion), and rows left
@@ -124,14 +124,14 @@ type NostrEventRepository interface {
 // local outbox (LocalOutboxArchiveTarget) only mirror its outcome.
 //
 // Publish-state lifecycle for an outbound event:
-// - pending: at least one configured relay still has to accept it (or the
-// publisher has not finished retrying the relays that have not accepted it).
-// - published (MarkPublished): every relay has settled and the required relay
-// acceptance (all write relays, or the configured quorum) was reached.
-// - failed (AbandonPublish): delivery can not succeed (permanent
-// relay rejections, undecodable row, or the attempt budget ran out). The
-// row leaves the outbox with the terminal reason kept in
-// last_publish_error.
+//   - pending: at least one configured relay still has to accept it (or the
+//     publisher has not finished retrying the relays that have not accepted it).
+//   - published (MarkPublished): every relay has settled and the required relay
+//     acceptance (all write relays, or the configured quorum) was reached.
+//   - failed (AbandonPublish): delivery can no longer succeed (permanent
+//     relay rejections, undecodable row, or the attempt budget ran out). The
+//     row leaves the outbox with the terminal reason kept in
+//     last_publish_error.
 //
 // Every pending row carries a publish target (NostrPublishTarget*); a runner
 // only discovers rows for its own target.

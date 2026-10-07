@@ -33,16 +33,16 @@ var ErrRelayReadIncomplete = nostradapter.ErrStoredEventsIncomplete
 // same stack as production. The script mirrors the endpoint fake the retired
 // relay bus used:
 //
-// - publishResults / publishFn answer each EVENT in order with OK true,
-// OK false + Reason, or, for Error, a dropped connection. Every EVENT is
-// recorded in published.
-// - Each REQ (the pool sends one filter per REQ) is recorded on
-// subscribeCalls and answered by the next fakeRelaySubscription from
-// subscribeQueue: its events become EVENT frames, eose (sent or closed)
-// becomes EOSE, a closed reason becomes CLOSED, and err, or closing
-// events, drops the connection. With autoEOSE every REQ gets EOSE at once.
-// - The relay sends an AUTH challenge when a connection opens; each AUTH
-// frame is recorded on authCalls and answered OK true.
+//   - publishResults / publishFn answer each EVENT in order with OK true,
+//     OK false + Reason, or, for Error, a dropped connection. Every EVENT is
+//     recorded in published.
+//   - Each REQ (the pool sends one filter per REQ) is recorded on
+//     subscribeCalls and answered by the next fakeRelaySubscription from
+//     subscribeQueue: its events become EVENT frames, eose (sent or closed)
+//     becomes EOSE, a closed reason becomes CLOSED, and err, or closing
+//     events, drops the connection. With autoEOSE every REQ gets EOSE at once.
+//   - The relay sends an AUTH challenge when a connection opens; each AUTH
+//     frame is recorded on authCalls and answered OK true.
 type fakeRelayEndpoint struct {
 	t      *testing.T
 	url    string

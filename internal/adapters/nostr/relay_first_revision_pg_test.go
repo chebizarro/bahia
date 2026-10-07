@@ -16,7 +16,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// against PostgreSQL: the revision token a client reads from
+// bahia-irsry.53 against PostgreSQL: the revision token a client reads from
 // the relay-first record is the one the database stored (timestamptz keeps
 // microseconds), so the next revision-checked update with that token
 // succeeds, and the projection of the stored rows is never signed again.

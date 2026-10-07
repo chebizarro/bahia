@@ -42,7 +42,7 @@
   let creating = $state(false);
   let createError = $state(null);
   // Client-minted entity id for this create attempt, reused on retry and
-  // re-minted when the modal is closed.
+  // re-minted when the modal is closed (bahia-irsry.35).
   let createEntityId = mintEntityId();
 
   let createForm = $state({

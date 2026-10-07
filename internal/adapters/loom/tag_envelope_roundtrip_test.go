@@ -10,7 +10,7 @@ import (
 // events carrying the canonical tag keys (tagJobDedup/tagJobEvent/tagJobPubkey)
 // are matched by the exact subscription filters jobStatusFilters builds. This
 // guards against producer/consumer drift of the "d"/"e"/"p" tag keys now that
-// both sides reference the shared constants.
+// both sides reference the shared constants (bahia-s7o9).
 func TestTagEnvelope_JobStatusResult_FilterRoundTrip(t *testing.T) {
 	// clientSK -> clientPubkey is derived inside testClient.
 	client, _, clientPK := testClient(t, nil, "0000000000000000000000000000000000000000000000000000000000000001")

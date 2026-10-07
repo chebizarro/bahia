@@ -25,9 +25,9 @@ func (v staticPaymentView) ListPaymentRecords(context.Context) ([]domain.Payment
 }
 
 // Payment reads are canonical cp-state served from the local event store
-// , so a DB-less router (nil registry and nil Services, which
+// (audit B-31), so a DB-less router (nil registry and nil Services, which
 // turns every PostgreSQL-gated route into a 503) still answers both payment
-// routes from the canonical view.
+// routes from the canonical view (bahia-u5whr).
 func TestPaymentRoutesServeWithoutDatabase(t *testing.T) {
 	runID := uuid.New()
 	payments := service.NewPaymentService(nil, zap.NewNop())

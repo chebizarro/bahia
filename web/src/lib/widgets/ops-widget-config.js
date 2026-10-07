@@ -8,7 +8,7 @@ export function parseOpsWidgetPublisherAllowlist(value) {
   ));
 }
 
-/***/
+/**
  * An injected deployment seed is authoritative, as for relays and service
  * pubkeys (discovery.svelte.js): a seed without widget_pubkeys denies every
  * publisher. Build-time variables are only a local-development/test fallback

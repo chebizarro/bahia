@@ -384,7 +384,7 @@ func TestRetiredWorkerKindsMigrateOntoCPStateTopics(t *testing.T) {
 }
 
 // Migrated worker records land on their family's canonical coordinate
-// , not a per-compatibility-event d: a migrated assignment and drain
+// (bahia-irsry.36), not a per-legacy-event d: a migrated assignment and drain
 // for one worker never share a coordinate, and each competes with the live
 // record on its own family coordinate under NIP-01 replacement.
 func TestRetiredWorkerKindsMigrateOntoFamilyCoordinates(t *testing.T) {
@@ -419,7 +419,7 @@ func TestRetiredWorkerKindsMigrateOntoFamilyCoordinates(t *testing.T) {
 		}
 	}
 
-	// A record that names no worker keeps the per-compatibility-event coordinate.
+	// A record that names no worker keeps the per-legacy-event coordinate.
 	disp, ok := ResolveDisposition(retiredWorkerDrainStatusKind, []byte(`[]`), `{"remaining_assignments":[]}`)
 	require.True(t, ok)
 	ev, err := BuildCanonicalEvent(repository.NostrEventRecord{ID: "legacy-x", Kind: retiredWorkerDrainStatusKind, Content: `{}`, Tags: []byte(`[]`), CreatedAt: time.Unix(1_700_000_000, 0)}, disp)

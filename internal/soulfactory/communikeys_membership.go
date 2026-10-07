@@ -34,7 +34,7 @@ var (
 // profile-list coordinates this controller is authorized to write.
 type CommunikeysCommunity struct {
 	// DefinitionAddress is the exact branch: "32222:<owner>:<communityId>".
-	// A bare pubkey not identifies a community (Communikeys V2 §Identity Model).
+	// A bare pubkey no longer identifies a community (Communikeys V2 §Identity Model).
 	DefinitionAddress string
 	// ListAuthor is the delegated signer that authors the section profile lists.
 	// Under V2 list authors are ordinary real signers referenced by the definition;

@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Architecture ratchet (audit Recommendation 2a): a daemon
+// Architecture ratchet (bahia-irsry.8, audit Recommendation 2a): a daemon
 // with no reachable Postgres must boot, gate nil-repository routes with
 // RequireRepo middleware (503), and never expose a route whose handler would
 // dereference a nil repository.
@@ -86,7 +86,7 @@ func TestArchitectureDBLessDaemonBootGatesNilRepositoryRoutes(t *testing.T) {
 // (and environments and DNS) come from addressable relay state, so the
 // daemon serves them.
 func TestArchitectureServicesVisibleFromRelaysWithNoDB(t *testing.T) {
-	t.Skip("pending DB-less daemon relay-state rebuild coverage")
+	t.Skip("pending bahia-irsry.11: DB-less daemon must rebuild services from relay state (Phase 3 authority inversion)")
 
 	app, err := New(unreachableDatabaseConfig(t, "full"))
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ var dbLessServedRoutes = map[string]bool{
 	"/ready":   true,
 	"/metrics": true,
 	// Payment records are canonical cp-state in the local event store
-	//.
+	// (audit B-31, bahia-u5whr).
 	"/api/v1/payments/history":           true,
 	"/api/v1/deployments/runs/{id}/cost": true,
 }

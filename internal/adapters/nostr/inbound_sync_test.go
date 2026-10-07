@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// End-to-end inbound sync tests against in-process khatru
+// End-to-end inbound sync tests (bahia-irsry.10.1) against in-process khatru
 // relays. Every wait is on a protocol signal surfaced by the subscriber's
 // consumer (EOSE commits, catch-up, handler dispatch) under a deadline; none
 // sleeps.
@@ -297,7 +297,7 @@ func isKindReq(req recordedReq, kind gonostr.Kind) bool {
 	return len(req.filter.Kinds) == 1 && req.filter.Kinds[0] == kind
 }
 
-// a fresh node with an empty store backfills replaceable/addressable
+// C-3: a fresh node with an empty store backfills replaceable/addressable
 // state however old it is (here, 200 days), reconciling it with NIP-77 rather
 // than paging, and never subscribing "from now".
 func TestInboundSyncFreshNodeBackfillsPersistentState(t *testing.T) {
@@ -330,7 +330,7 @@ func TestInboundSyncFreshNodeBackfillsPersistentState(t *testing.T) {
 	require.True(t, run.sub.IsCaughtUp())
 }
 
-// a regular-kind gap larger than one page is fetched completely by
+// C-1: a regular-kind gap larger than one page is fetched completely by
 // paging backwards with `until`, including events that share the page
 // boundary's created_at.
 func TestInboundSyncPagesPastAFullPageWithUntil(t *testing.T) {
@@ -366,7 +366,7 @@ func TestInboundSyncPagesPastAFullPageWithUntil(t *testing.T) {
 	// After paging, a widened-overlap REQ rechecks for backdated events
 	// that may have been published during the paging window (.56 item 4).
 	// Unlimited (Limit==0) regular-kind REQs with a recent Since: 1 is the
-	// live subscription, the other is the paging overlap. Before.56 only
+	// live subscription, the other is the paging overlap. Before .56 only
 	// the live subscription existed.
 	var unlimitedRecent []gonostr.Timestamp
 	for _, req := range relay.recorded() {
@@ -601,7 +601,7 @@ func TestInboundSyncRelayDownDuringBackfillIsCaughtUpIndependently(t *testing.T)
 	require.Equal(t, onDown.CreatedAt, cursor)
 }
 
-// the daemon's own events, stored or live and however new, never
+// B-15: the daemon's own events, stored or live and however new, never
 // advance an inbound cursor; they reach observers but not handlers.
 func TestInboundSyncSelfPublishedEventsDoNotAdvanceCursors(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)

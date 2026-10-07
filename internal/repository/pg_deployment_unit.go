@@ -27,7 +27,7 @@ func newPgDeploymentUnitRepositoryWithDB(db pgQueryer) *PgDeploymentUnitReposito
 
 func (r *PgDeploymentUnitRepository) Create(ctx context.Context, unit *domain.DeploymentUnit) error {
 	// The registry mints unit ids before publishing the environment record
-	//; mint UUIDv7 only for callers that supply none.
+	// (bahia-irsry.53); mint UUIDv7 only for callers that supply none.
 	if unit.ID == uuid.Nil {
 		unit.ID = domain.NewEntityID()
 	}
@@ -206,7 +206,7 @@ func (r *PgDeploymentUnitRepository) DeleteIfUnreferenced(ctx context.Context, i
 }
 
 // ResolveDefault returns the configured explicit default unit when present.
-// It synthesizes the compatibility implicit default only when the normalized default key
+// It synthesizes the legacy implicit default only when the normalized default key
 // is "default" and the environment has no explicit units.
 func (r *PgDeploymentUnitRepository) ResolveDefault(ctx context.Context, env *domain.Environment) (*domain.DeploymentUnit, error) {
 	if env == nil {

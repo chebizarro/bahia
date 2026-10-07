@@ -16,7 +16,7 @@ import (
 )
 
 // TestOperatorRelayAuthIsThePools: the operator client has no AUTH logic of
-// its own. Against a relay that refuses unauthenticated REQs
+// its own (bahia-irsry.47). Against a relay that refuses unauthenticated REQs
 // and EVENTs, the default RelayPool transport answers the relay's NIP-42
 // challenge, reissues the reply REQ on that relay and authenticates the
 // publish. The request is published once and its reply completes it.

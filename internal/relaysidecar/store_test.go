@@ -58,7 +58,7 @@ func saveOrReplace(t *testing.T, store *eventStore, event nostr.Event) {
 	require.NoError(t, store.Save(t.Context(), event))
 }
 
-// TestEventStoreTagIndexedQueries covers: #p, #e, #d, #a and #t filters
+// TestEventStoreTagIndexedQueries covers C-20: #p, #e, #d, #a and #t filters
 // are answered from the eventstore's tag indexes, combined with kinds,
 // authors, since/until and limit, newest first. COUNT uses the same indexes.
 func TestEventStoreTagIndexedQueries(t *testing.T) {
@@ -106,7 +106,7 @@ func TestEventStoreTagIndexedQueries(t *testing.T) {
 	}
 }
 
-// TestEventStoreRetentionByClass covers: request/transport kinds are
+// TestEventStoreRetentionByClass covers C-19: request/transport kinds are
 // swept after the request retention (paging through more than one sweep
 // batch); regular facts are durable by default and swept only under a
 // configured cap; replaceable, addressable and kind-5 events are never

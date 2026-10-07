@@ -41,7 +41,7 @@ func signedWorkerAd(t *testing.T, key nostr.SecretKey, at time.Time) *nostr.Even
 	return ad
 }
 
-// worker admission is decided on the worker's own signed advertisement
+// C-48: worker admission is decided on the worker's own signed advertisement
 // in the local event store. There is no SQL worker row to be missing or stale.
 func TestLocalReleaseEvidenceAdmitsWorkerFromTheLocalStore(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0).UTC()

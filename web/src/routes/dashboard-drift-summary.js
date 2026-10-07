@@ -4,34 +4,34 @@
 // The fields consumed here are projected by the backend state projector
 // (internal/adapters/nostr/projector.go publishState) and surfaced on the
 // deployments state collection (web/src/lib/stores/collections/deployments.svelte.js):
-// drift_status, desired_hash, observed_hash, renderer, target,
-// current_observation_id, desired_artifact_id, desired_intent_id,
-// last_successful_run_id, last_reconciled_at, deployment_unit_id, updated_at.
+//   drift_status, desired_hash, observed_hash, renderer, target,
+//   current_observation_id, desired_artifact_id, desired_intent_id,
+//   last_successful_run_id, last_reconciled_at, deployment_unit_id, updated_at.
 
 function str(value) {
   return value === null || value === undefined ? '' : String(value);
 }
 
-/** Truncate a long content hash for display, keeping the leading characters.*/
+/** Truncate a long content hash for display, keeping the leading characters. */
 export function shortHash(hash, len = 12) {
   const text = str(hash);
   if (!text) return '';
   return text.length <= len ? text : `${text.slice(0, len)}…`;
 }
 
-/***/
+/**
  * Classify why an environment-service state is drifted (or not) using only the
  * fields already present on the state projection.
  *
  * @returns {{
- * status: string,
- * reason: 'in_sync'|'no_observation'|'hash_mismatch'|'reconcile_pending'|'drift_detected'|'unknown',
- * severity: 'success'|'warning'|'error'|'default',
- * headline: string,
- * detail: string,
- * desiredHash: string,
- * observedHash: string,
- * hashesMatch: boolean|null
+ *   status: string,
+ *   reason: 'in_sync'|'no_observation'|'hash_mismatch'|'reconcile_pending'|'drift_detected'|'unknown',
+ *   severity: 'success'|'warning'|'error'|'default',
+ *   headline: string,
+ *   detail: string,
+ *   desiredHash: string,
+ *   observedHash: string,
+ *   hashesMatch: boolean|null
  * }}
  */
 export function summarizeDriftCause(state = {}) {

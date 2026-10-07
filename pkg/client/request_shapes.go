@@ -55,9 +55,9 @@ type ServiceCIConfigRequest struct {
 }
 
 // CreateServiceNostrRequest is the service/create desired-state input shared
-// by the CLI intent builder and compatibility compatibility callers.
+// by the CLI intent builder and legacy compatibility callers.
 type CreateServiceNostrRequest struct {
-	// ID is the client-minted service id: a canonical
+	// ID is the client-minted service id (bahia-irsry.42): a canonical
 	// UUIDv7 (or v4). The CLI mints one when it is empty; reuse it to
 	// target the same entity when retrying a create.
 	ID                   string                       `json:"id,omitempty"`

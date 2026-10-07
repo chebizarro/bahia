@@ -13,7 +13,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// ObserveArtifact reads file-content SH from one immutable repository
+// ObserveArtifact reads file-content SHA-256 from one immutable repository
 // version. It never filters by the expected digest: that would hide a mismatch.
 func (b *Backend) ObserveArtifact(ctx context.Context, repo domain.PackageRepository, artifact domain.PackageArtifact) (result packagebackend.ArtifactObservation, err error) {
 	defer b.ScrubError(&err)

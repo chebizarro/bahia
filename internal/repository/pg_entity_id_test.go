@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Client-minted ids are stored verbatim; the database never
+// Client-minted ids (bahia-irsry.35) are stored verbatim; the database never
 // generates them.
 func TestPgServiceCreateStoresClientSuppliedID(t *testing.T) {
 	mock, err := pgxmock.NewPool()

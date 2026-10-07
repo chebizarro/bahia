@@ -202,7 +202,7 @@
   {/if}
 </div>
 
-<!-- Approve confirmation dialog-->
+<!-- Approve confirmation dialog -->
 <ConfirmDialog
   intentDomain="deployment" intentRecord={actionIntent}
   bind:open={approveOpen}
@@ -221,7 +221,7 @@
   {/if}
 </ConfirmDialog>
 
-<!-- Reject confirmation dialog-->
+<!-- Reject confirmation dialog -->
 <ConfirmDialog
   intentDomain="deployment" intentRecord={actionIntent}
   bind:open={rejectOpen}

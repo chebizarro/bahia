@@ -392,7 +392,7 @@ func TestRouteCanarySupervisorRunWaitsForLocalStoreReadiness(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
-// a route's 30900 record is minted strictly after the record it
+// bahia-as2bo: a route's 30900 record is minted strictly after the record it
 // replaces. Two observations in one second (and an observation in the same
 // second as the record a restarted daemon finds in its store) would otherwise
 // share a created_at, the store and relays would tie-break by event id, and a
@@ -447,7 +447,7 @@ func TestLocalRouteCanarySameSecondObservationsResumeTheLaterOne(t *testing.T) {
 	require.Greater(t, second.publisher.total(), published)
 }
 
-// deleting a route's state publishes a tombstone on the route
+// bahia-as2bo: deleting a route's state publishes a tombstone on the route
 // coordinate, so the withdrawal is canonical: a restarted daemon finds no
 // state, and the first observation after the withdrawal is minted after the
 // tombstone.

@@ -9,7 +9,7 @@ import (
 )
 
 // NostrLocalStoreConfig configures the daemon's local Nostr event store
-// a bbolt file caching the events its inbound
+// (bahia-irsry.10.1): a bbolt file caching the events its inbound
 // subscriptions received, with a resume cursor per (relay, filter). It is a
 // rebuildable cache: deleting the file is safe, and the daemon resyncs it from
 // its relays (replaceable/addressable state in full, regular kinds from
@@ -41,7 +41,7 @@ type NostrLocalStoreConfig struct {
 	WrapBackdateOverlap time.Duration `koanf:"wrap_backdate_overlap" yaml:"wrap_backdate_overlap" secret:"false"`
 	// OutboxPath is the bbolt file of the daemon's publish outbox: signed
 	// events waiting for relay acceptance, with each relay's delivery state
-	//. Unlike Path it is not a cache, so it is a separate
+	// (bahia-irsry.10.4). Unlike Path it is not a cache, so it is a separate
 	// file: deleting it drops events that no relay may hold yet. Empty means
 	// "outbox.bolt" next to Path.
 	OutboxPath string `koanf:"outbox_path" yaml:"outbox_path" secret:"false"`
@@ -58,7 +58,7 @@ func (c NostrLocalStoreConfig) ResolvedOutboxPath() string {
 
 const (
 	// DefaultNostrLocalStorePath is relative to the daemon's working
-	// directory, next to the relay sidecar's default./data/relay-sidecar.
+	// directory, next to the relay sidecar's default ./data/relay-sidecar.
 	DefaultNostrLocalStorePath                = "./data/nostr-cache/daemon.bolt"
 	DefaultNostrLocalStoreResumeOverlap       = 10 * time.Minute
 	DefaultNostrLocalStoreRegularLookback     = 24 * time.Hour

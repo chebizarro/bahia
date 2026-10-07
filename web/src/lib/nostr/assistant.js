@@ -301,7 +301,7 @@ export const ASSISTANT_RESULT_STATUSES = {
   NEEDS_CLARIFICATION: 'needs_clarification'
 };
 
-// Default relays - can be overridden via localStorage or connect parameter
+// Default relays - can be overridden via localStorage or connect() parameter
 
 function getTaggedEventRef(event, marker = 'reply') {
   const tag = (event?.tags || []).find((candidate) =>

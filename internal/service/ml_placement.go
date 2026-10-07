@@ -86,7 +86,7 @@ func (s *MLPlacementService) SelectCandidate(ctx context.Context, req MLPlacemen
 
 // PreviewCandidates returns eligible and rejected ML placement candidates with
 // operator-visible reasons. New placements must only use candidates marked
-// Eligible; rejected entries are supports preview/read-model projection.
+// Eligible; rejected entries are retained for preview/read-model projection.
 func (s *MLPlacementService) PreviewCandidates(ctx context.Context, req MLPlacementRequest) ([]MLPlacementCandidate, error) {
 	if err := validateMLPlacementRequest(req); err != nil {
 		return nil, err

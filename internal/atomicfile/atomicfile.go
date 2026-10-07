@@ -40,7 +40,7 @@ type Snapshot struct {
 	Exists bool
 }
 
-// Capture snapshots path. missingMode supports callers that later restore
+// Capture snapshots path. missingMode is retained for callers that later restore
 // a path which did not exist, matching their previous default-mode behavior.
 func Capture(path string, missingMode fs.FileMode) (Snapshot, error) {
 	data, err := os.ReadFile(path)

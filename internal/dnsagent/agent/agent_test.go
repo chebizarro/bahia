@@ -364,7 +364,7 @@ func appliedRecordValue(t *testing.T, agent *Agent) string {
 	return records[0].Value
 }
 
-// equal-serial syncs from racing backends converge on the lowest
+// C-13: equal-serial syncs from racing backends converge on the lowest
 // request event id, whichever arrives first.
 func TestEqualSerialResolvesByLowestRequestID(t *testing.T) {
 	low := func(t *testing.T) controlplane.ContextVMRequest {
@@ -388,7 +388,7 @@ func TestEqualSerialResolvesByLowestRequestID(t *testing.T) {
 	}
 }
 
-// an expired request (NIP-40) is never applied.
+// C-12: an expired request (NIP-40) is never applied.
 func TestExpiredRequestIsRejected(t *testing.T) {
 	service := newTestService(t, false)
 	now := time.Unix(1_800_000_000, 0)

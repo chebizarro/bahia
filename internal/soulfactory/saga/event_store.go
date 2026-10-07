@@ -21,7 +21,7 @@ import (
 )
 
 // RecordSchema is the schema tag and content discriminator of the canonical
-// saga-run record.
+// saga-run record (audit C-45).
 const RecordSchema = "bahia.state.soulfactory-saga-run.v1"
 
 const (

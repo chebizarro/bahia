@@ -1017,7 +1017,7 @@ func TestMapDesiredSpecToK8sManifest_VolumesWired(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// KubernetesExtension is honored end-to-end (regression for )
+// KubernetesExtension is honored end-to-end (regression for bahia-840y)
 //
 // Prior to the fix, the k8sExtension accessors returned hardcoded defaults and
 // silently discarded every operator-supplied Kubernetes setting. These tests

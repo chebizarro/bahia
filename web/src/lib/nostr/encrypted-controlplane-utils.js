@@ -7,12 +7,12 @@ export const CONTEXTVM_PROGRESS_ACK_WIRE_VERSION = 'contextvm-jsonrpc-v2';
 export const CONTEXTVM_PROGRESS_METHOD = 'notifications/progress';
 export const CONTEXTVM_PROGRESS_STATUS_PROCESSING = 'processing';
 
-/** Size in bytes of the ["EVENT", event] frame a relay receives.*/
+/** Size in bytes of the ["EVENT", event] frame a relay receives. */
 export function relayMessageBytes(event) {
   return new TextEncoder().encode(JSON.stringify(['EVENT', event])).length;
 }
 
-/***/
+/**
  * Refuse, before publishing, a ContextVM request the relay could only drop:
  * Bahia's relay closes the connection on an oversized frame without an OK.
  */

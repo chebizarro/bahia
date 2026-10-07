@@ -26,9 +26,9 @@ export const controlplaneConnection = $state({
   lastEoseAt: null,
   lastEventAt: null,
   reconnects: 0,
-  /** The protected (NIP-42) bootstrap REQ reached EOSE for this session.*/
+  /** The protected (NIP-42) bootstrap REQ reached EOSE for this session. */
   protectedReadsReady: false,
-  /** Last CLOSED reason of the protected bootstrap REQ (e.g. `restricted:`).*/
+  /** Last CLOSED reason of the protected bootstrap REQ (e.g. `restricted:`). */
   protectedReadError: null
 });
 

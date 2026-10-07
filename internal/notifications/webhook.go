@@ -29,9 +29,9 @@ func NewWebhookSender() *WebhookSender {
 
 // Send delivers a notification to the webhook URL configured in the channel.
 // Config keys:
-// - "url" (required): the webhook endpoint
-// - "secret" (optional): HMAC-SHA256 signing secret
-// - "headers" (optional): additional headers map[string]string
+//   - "url" (required): the webhook endpoint
+//   - "secret" (optional): HMAC-SHA256 signing secret
+//   - "headers" (optional): additional headers map[string]string
 func (s *WebhookSender) Send(ctx context.Context, ch *domain.NotificationChannel, eventType string, payload map[string]any) error {
 	url, ok := ch.Config["url"].(string)
 	if !ok || url == "" {

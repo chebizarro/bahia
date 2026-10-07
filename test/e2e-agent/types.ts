@@ -1,13 +1,13 @@
-/***/
+/**
  * Shared types for E2E agent testing infrastructure
  */
 
-/***/
+/**
  * Test result status
  */
 export type TestStatus = 'passed' | 'failed' | 'skipped' | 'error';
 
-/***/
+/**
  * Result of a single test step
  */
 export interface TestStepResult {
@@ -18,7 +18,7 @@ export interface TestStepResult {
   screenshot?: string;
 }
 
-/***/
+/**
  * Result of a test scenario
  */
 export interface TestResult {
@@ -29,7 +29,7 @@ export interface TestResult {
   error?: string;
 }
 
-/***/
+/**
  * Docker Compose service health status
  */
 export interface ServiceHealth {
@@ -38,7 +38,7 @@ export interface ServiceHealth {
   error?: string;
 }
 
-/***/
+/**
  * Test harness configuration
  */
 export interface HarnessConfig {
@@ -49,11 +49,11 @@ export interface HarnessConfig {
   apiBaseUrl?: string;
   webBaseUrl?: string;
   mcpServerUrl?: string;
-  /** If true, skip docker-compose management and use existing stack*/
+  /** If true, skip docker-compose management and use existing stack */
   skipStackManagement?: boolean;
 }
 
-/***/
+/**
  * API response wrapper
  */
 export interface APIResponse<T = unknown> {
@@ -62,7 +62,7 @@ export interface APIResponse<T = unknown> {
   message?: string;
 }
 
-/***/
+/**
  * Service entity (from bahia API)
  */
 export interface Service {
@@ -75,7 +75,7 @@ export interface Service {
   updated_at: string;
 }
 
-/***/
+/**
  * Environment entity (from bahia API)
  */
 export interface Environment {
@@ -87,7 +87,7 @@ export interface Environment {
   updated_at: string;
 }
 
-/***/
+/**
  * MCP tool call request
  */
 export interface MCPToolCall {
@@ -95,7 +95,7 @@ export interface MCPToolCall {
   arguments: Record<string, unknown>;
 }
 
-/***/
+/**
  * MCP tool call result
  */
 export interface MCPToolResult {
@@ -106,7 +106,7 @@ export interface MCPToolResult {
   isError?: boolean;
 }
 
-/***/
+/**
  * Driver capabilities
  */
 export interface DriverCapabilities {
@@ -115,7 +115,7 @@ export interface DriverCapabilities {
   canInspectDOM: boolean;
 }
 
-/***/
+/**
  * Test scenario result
  */
 export interface ScenarioResult {
@@ -127,7 +127,7 @@ export interface ScenarioResult {
   metadata?: Record<string, unknown>;
 }
 
-/***/
+/**
  * Scenario drivers collection
  */
 export interface ScenarioDrivers {
@@ -135,7 +135,7 @@ export interface ScenarioDrivers {
   mcp: import('./drivers/mcp.js').MCPDriver;
 }
 
-/***/
+/**
  * Test scenario definition
  */
 export interface Scenario {

@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// producers that record an event as queued move it to
+// bahia-irsry.40: producers that record an event as queued move it to
 // published when the outbox later delivers it (OnDelivered), and apply an
 // outcome the outbox reached before they had stored the event id.
 

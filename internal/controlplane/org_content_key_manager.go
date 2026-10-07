@@ -60,7 +60,7 @@ type OCKManager struct {
 }
 
 // OCKRotationPendingError prevents new ciphertext under a key whose reader
-// set may not match the canonical membership state.
+// set may no longer match the canonical membership state.
 type OCKRotationPendingError struct{ OrgID string }
 
 func (e *OCKRotationPendingError) Error() string {
@@ -231,7 +231,7 @@ func (m *OCKManager) RotateKey(ctx context.Context, orgID string) (OrgContentKey
 
 // RotateKeyExcluding rotates before a removal's canonical tombstone is
 // published. The relay trust set may still include that member, so the
-// exclusion is mandatory and supports retries.
+// exclusion is mandatory and is retained for retries.
 func (m *OCKManager) RotateKeyExcluding(ctx context.Context, orgID, removedPubkey string) (OrgContentKey, error) {
 	if removedPubkey == "" {
 		return OrgContentKey{}, fmt.Errorf("removed member pubkey is required")
@@ -590,7 +590,7 @@ func (m *OCKManager) wrapAndPublish(ctx context.Context, key OrgContentKey, reci
 	// for current deployment sizes (< 100 members/org). A deterministic
 	// HMAC(conversation_key, org|version) handle would reduce this to O(1)
 	// lookup, but the NIP-44 conversation key is not accessible through the
-	// bunker signer interface (Keyer.Encrypt/Decrypt are black-box).
+	// bunker signer interface (Keyer.Encrypt/Decrypt are black-box). Phase 4
 	// web clients that hold their own key material can compute conversation
 	// keys directly and would benefit from deterministic handles.
 	//

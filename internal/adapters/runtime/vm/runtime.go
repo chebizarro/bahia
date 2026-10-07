@@ -155,7 +155,7 @@ func (r *Runtime) Deploy(ctx context.Context, serviceName, image string, opts De
 	}
 	name := InstanceName(envID, serviceName)
 
-	// Compatibility replace semantics are confined to the same environment and runtime;
+	// Legacy replace semantics are confined to the same environment and runtime;
 	// persistent-resource operations never use this name-scanned path.
 	existing, err := FindInstancesByService(r.instancesDir(), serviceName)
 	if err != nil {

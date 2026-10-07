@@ -71,7 +71,7 @@ type Subscriber struct {
 	releaseAuditor ReleaseIngestAuditor
 	// evidence is the local event store: the verified relay copy of every
 	// signed run, result and release attestation the subscriber admits
-	//. Release admission and retry read it; no SQL mirror is
+	// (audit C-48). Release admission and retry read it; no SQL mirror is
 	// consulted.
 	evidence EvidenceStore
 	now      func() time.Time

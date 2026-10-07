@@ -213,7 +213,7 @@
   });
   // Route canary count for the section heading; RouteCanaryOutages owns the
   // REST read itself (see $lib/components/RouteCanaryOutages.svelte) so this
-  // page stays nostr_native and never imports the compatibility REST client.
+  // page stays nostr_native and never imports the legacy REST client.
   let routeCanaryCount = $state(0);
   // Secret create modal state
   let secretCreateOpen = $state(false);
@@ -1317,7 +1317,7 @@
   {/if}
 </div>
 
-<!-- Edit Modal-->
+<!-- Edit Modal -->
 <Modal bind:open={editOpen} title="Edit Service" titleIcon={ServiceIcon} onClose={closeEditModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleEdit(); }} class="edit-form">
     <div class="form-field">
@@ -1416,7 +1416,7 @@
   </form>
 </Modal>
 
-<!-- Delete Confirmation Dialog-->
+<!-- Delete Confirmation Dialog -->
 <ConfirmDialog
   intentDomain="service" intentOrgId={service?.org_id}
   bind:open={deleteOpen}
@@ -1449,7 +1449,7 @@
   </div>
 </ConfirmDialog>
 
-<!-- Deployment Intent Modal-->
+<!-- Deployment Intent Modal -->
 <Modal bind:open={deployOpen} title="Create Deployment Intent" titleIcon={DeploymentIcon} size="lg" onClose={closeDeployModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleDeploy(); }} class="deploy-form">
     <p class="modal-intro">
@@ -1836,7 +1836,7 @@
   </form>
 </Modal>
 
-<!-- Rollback Modal-->
+<!-- Rollback Modal -->
 <ConfirmDialog
   intentDomain="deployment" intentOrgId={service?.org_id}
   bind:open={rollbackOpen}
@@ -1921,7 +1921,7 @@
   </div>
 </ConfirmDialog>
 
-<!-- Secret Create Modal-->
+<!-- Secret Create Modal -->
 <Modal bind:open={secretCreateOpen} title="Add Secret" titleIcon={ProtectedIcon} onClose={closeSecretCreateModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleSecretCreate(); }} class="secret-form">
     <div class="form-field">
@@ -1975,7 +1975,7 @@
   </form>
 </Modal>
 
-<!-- Secret Update Modal-->
+<!-- Secret Update Modal -->
 <Modal bind:open={secretUpdateOpen} title="Update Secret" titleIcon={ProtectedIcon} onClose={closeSecretUpdateModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleSecretUpdate(); }} class="secret-form">
     <div class="form-field">
@@ -2013,7 +2013,7 @@
   </form>
 </Modal>
 
-<!-- Secret Reveal Warning Modal-->
+<!-- Secret Reveal Warning Modal -->
 <Modal bind:open={secretRevealOpen} title="Reveal Secret Value" titleIcon={ProtectedIcon} onClose={closeSecretRevealModal}>
   <div class="secret-reveal-flow">
     <p class="warning">Warning: this will display the plaintext value for <code>{secretRevealName}</code> on screen.</p>
@@ -2038,7 +2038,7 @@
   </div>
 </Modal>
 
-<!-- Secret Delete Confirmation Dialog-->
+<!-- Secret Delete Confirmation Dialog -->
 <ConfirmDialog
   bind:open={secretDeleteOpen}
   title="Delete Secret"

@@ -38,7 +38,7 @@ const (
 // ManagedInstanceHealthProjector projects internal supervisor events to canonical durable Nostr observables.
 //
 // Its redelivery memory is bounded by the supervised set, not by the number
-// of events published: a replaceable observable (30315 status,
+// of events published (bahia-as2bo): a replaceable observable (30315 status,
 // 30900 state) remembers the managedSlotDedupeLimit most recent fingerprints
 // of its (kind, coordinate) slot, and immutable 4903 audit facts share one
 // FIFO window of managedAuditDedupeLimit fingerprints.

@@ -93,7 +93,7 @@ type HiveCIResultState struct {
 // alone. A failed result is terminal for the daemon but not for the operator:
 // the signer-first build-result action (pipeline.Bridge.RegisterBuildResult)
 // may still finish it, which is the recovery contract once automatic attempts
-// are exhausted.
+// are exhausted (bahia-xjdo9).
 func (s HiveCIProcessingState) Terminal() bool {
 	switch s {
 	case HiveCIProcessingStateProcessed, HiveCIProcessingStateRejected, HiveCIProcessingStateFailed:

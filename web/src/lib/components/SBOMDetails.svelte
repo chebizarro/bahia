@@ -69,7 +69,7 @@
 
   // The SBOM contents can be loaded whenever we have either a Blossom/location
   // URI OR a raw content hash (digest.sha256 / raw_hash). The hash alone is
-  // enough because loadSBOMText prefers the same-origin Blossom proxy
+  // enough because loadSBOMText() prefers the same-origin Blossom proxy
   // (/blossom/blob/<hash>). Gate the "View Contents" button on this so
   // hash-only SBOMs (no location URI) still expose a way to view the file.
   let canViewSBOM = $derived(!!(blossomURI || sbomBlobHash()));
@@ -289,7 +289,7 @@
       message="This artifact does not have an SBOM or it has not been ingested yet"
     />
   {:else}
-    <!-- Attestation Overview-->
+    <!-- Attestation Overview -->
     {#if attestation || sbom}
       <div class="section">
         <div class="section-header">
@@ -393,7 +393,7 @@
       </div>
     {/if}
 
-    <!-- Loaded SBOM Contents-->
+    <!-- Loaded SBOM Contents -->
     {#if rawSBOMError}
       <div class="section">
         <p class="error-message">{rawSBOMError}</p>
@@ -489,7 +489,7 @@
       </div>
     {/if}
 
-    <!-- NTIA Compliance-->
+    <!-- NTIA Compliance -->
     {#if ntiaCompliance}
       <div class="section">
         <div class="section-header">
@@ -528,7 +528,7 @@
       </div>
     {/if}
 
-    <!-- Packages Table (from attestation projection, shown when raw SBOM is not loaded)-->
+    <!-- Packages Table (from attestation projection, shown when raw SBOM is not loaded) -->
     {#if packages.length > 0 && !rawSBOM}
       <div class="section">
         <h3 class="section-title"><ArtifactIcon size={18} strokeWidth={1.75} ariaHidden="true" /> <span>Packages ({packages.length})</span></h3>
@@ -583,7 +583,7 @@
     margin: 0;
   }
 
-  /* Attestation Grid*/
+  /* Attestation Grid */
   .attestation-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -644,7 +644,7 @@
     flex-wrap: wrap;
   }
 
-  /* SBOM viewer*/
+  /* SBOM viewer */
   .sbom-viewer {
     border-color: var(--primary, #3b82f6);
   }
@@ -709,7 +709,7 @@
     border-bottom-color: var(--primary, #3b82f6);
   }
 
-  /* Doc info grid*/
+  /* Doc info grid */
   .doc-info-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -734,7 +734,7 @@
     padding: 1rem 0;
   }
 
-  /* Raw JSON viewer*/
+  /* Raw JSON viewer */
   .raw-json-container {
     max-height: 600px;
     overflow: auto;
@@ -764,7 +764,7 @@
     margin: 0;
   }
 
-  /* NTIA Grid*/
+  /* NTIA Grid */
   .ntia-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

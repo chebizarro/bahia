@@ -1,11 +1,11 @@
-/***/
+/**
  * Single shared Nostr pool backed by welshman.
  *
  * Provides ref-counted long-lived REQs with `since=cursor`, per-relay
  * cursors committed on EOSE/live events, NIP-42 AUTH, and per-relay OK
  * tracking for publishes.
  *
- * Design reference: docs/architecture/web-store-first.md §7 step 5, §12.
+ * Design reference: phase4-web-store-first.md §7 step 5, §12 W1-S1.
  *
  * @module lib/nostr/pool-welshman
  */
@@ -24,7 +24,7 @@ import { isExpired, validateForIngestion } from './ingestion.js';
 // Subscription ref-counting
 // ---------------------------------------------------------------------------
 
-/***/
+/**
  * @typedef {object} ManagedSubscription
  * @property {string} id - Unique subscription id
  * @property {string[]} relays - Relay URLs
@@ -37,35 +37,35 @@ import { isExpired, validateForIngestion } from './ingestion.js';
 
 let subIdCounter = 0;
 
-/***/
+/**
  * Adapter factory signature: given a relay URL and a net context,
- * return an adapter for that relay. Production uses the welshman
+ * return an adapter for that relay.  Production uses the welshman
  * default (WebSocket-backed `SocketAdapter`); alternative environments
  * (unit tests, service workers) can inject a custom factory.
  *
  * @typedef {(url: string, context: import('@welshman/net').AdapterContext) => import('@welshman/net').AbstractAdapter} AdapterFactory
  */
 
-/***/
+/**
  * Create the shared Bahia pool and its management API.
  *
  * @param {object} options
  * @param {import('./store-interface.js').BahiaEventStore & { ingest: (e: any) => boolean, getCursor: (r: string, f: string) => number | null, setCursor: (r: string, f: string, s: number) => void }} options.store
- * The BahiaEventStore to ingest events into.
+ *   The BahiaEventStore to ingest events into.
  * @param {((event: any) => Promise<any>) | null} [options.sign]
- * Signer function for NIP-42 AUTH. May be set later via `setSign`.
+ *   Signer function for NIP-42 AUTH.  May be set later via `setSign()`.
  * @param {AdapterFactory} [options.getAdapter]
- * Custom adapter factory for dependency injection. When omitted,
- * welshman's built-in adapter resolution is used (real WebSocket
- * connections via the pool). Pass a factory that returns a
- * `MockAdapter` for unit tests, or a custom adapter for service
- * workers or other non-browser environments.
+ *   Custom adapter factory for dependency injection.  When omitted,
+ *   welshman's built-in adapter resolution is used (real WebSocket
+ *   connections via the pool).  Pass a factory that returns a
+ *   `MockAdapter` for unit tests, or a custom adapter for service
+ *   workers or other non-browser environments.
  * @returns {BahiaPool}
  */
 export function createBahiaPool({ store, sign = null, getAdapter }) {
   const pool = new Pool();
 
-  /** @type {Map<string, ManagedSubscription>}*/
+  /** @type {Map<string, ManagedSubscription>} */
   const subs = new Map();
   const subsByKey = new Map();
   const relayReadyListeners = new Set();
@@ -74,10 +74,10 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
   const relayStatuses = new Map();
   let configuredRelays = [];
 
-  /** @type {((event: any) => Promise<any>) | null}*/
+  /** @type {((event: any) => Promise<any>) | null} */
   let signFn = sign;
 
-  /***/
+  /**
    * Build the adapter context for welshman request/publish calls.
    * @returns {import('@welshman/net').AdapterContext}
    */
@@ -124,7 +124,7 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
     socketListeners.set(socket, () => { previousCleanup(); socket.auth.off('status', onAuthRequest); });
   });
 
-  /***/
+  /**
    * Update the signer function (e.g. after login).
    *
    * A relay that enforces NIP-42 reads (the Bahia sidecar default) answers a
@@ -196,7 +196,7 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
     return () => relayReadyListeners.delete(registration);
   }
 
-  /***/
+  /**
    * Create a ref-counted subscription.
    *
    * Each call returns an independent handle with its own unsubscribe.
@@ -208,7 +208,7 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
    * @param {import('./store-interface.js').Filter[]} opts.filters
    * @param {string} [opts.filterKey] - Key for cursor tracking
    * @param {(url: string) => void} [opts.onEose]
-   * @returns {{ unsubscribe: => void, id: string }}
+   * @returns {{ unsubscribe: () => void, id: string }}
    */
   function subscribe({ relays, filters, filterKey, onEvent, onEose, onClosed, onAuth, onHealth }) {
     const key = JSON.stringify([[...relays].sort(), filters, filterKey || '']);
@@ -222,7 +222,7 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
     const id = `bahia-sub-${++subIdCounter}`;
     const controller = new AbortController();
 
-    /** @type {ManagedSubscription}*/
+    /** @type {ManagedSubscription} */
     const sub = {
       id,
       relays,
@@ -324,17 +324,17 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
     }
   }
 
-  /***/
+  /**
    * Add a reference to an existing subscription.
    *
-   * 's boot sequence uses this so that multiple views (services,
+   * W1-S2's boot sequence uses this so that multiple views (services,
    * environments, workers, etc.) can share a single underlying REQ for
    * the read-model subscription without duplicating relay traffic.
    * Each view holds its own unsubscribe handle; the REQ is only
    * closed when the last handle unsubscribes.
    *
    * @param {string} id - The subscription id to add a reference to.
-   * @returns {{ unsubscribe: => void } | null} null if not found.
+   * @returns {{ unsubscribe: () => void } | null} null if not found.
    */
   function addRef(id) {
     const sub = subs.get(id);
@@ -343,7 +343,7 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
     return reference(sub);
   }
 
-  /***/
+  /**
    * Publish an event to relays with per-relay OK tracking.
    *
    * @param {object} opts
@@ -363,17 +363,17 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
     return results;
   }
 
-  /***/
+  /**
    * Get the underlying welshman Pool.
    *
-   * Used by boot to check connection state and by W3 outbox
+   * Used by W1-S2 boot to check connection state and by W3 outbox
    * for reconnect-driven retry.
    */
   function getPool() {
     return pool;
   }
 
-  /***/
+  /**
    * Clean up all subscriptions and the pool.
    */
   function destroy() {
@@ -407,6 +407,6 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
   };
 }
 
-/***/
+/**
  * @typedef {ReturnType<typeof createBahiaPool>} BahiaPool
  */

@@ -10,7 +10,7 @@ import (
 
 // bannedFilterKeys are multi-letter tag keys that must not appear in
 // nostr.TagMap REQ-filter constructions because NIP-01 relays only index
-// single-letter tags. Use a "t" topic instead.
+// single-letter tags. Use a "t" topic instead (bahia-irsry.43).
 var bannedFilterKeys = map[string]bool{
 	"schema": true,
 	"domain": true,

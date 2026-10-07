@@ -37,7 +37,7 @@ type concordGroupKey struct {
 // concordHKDF implements CORD-02 A.1:
 //
 //	HKDF-SHA256(ikm = secret, salt = none,
-//	 info = utf8(label) || 0x00 || id[32] || epoch_be[8], len = 32)
+//	            info = utf8(label) || 0x00 || id[32] || epoch_be[8], len = 32)
 //
 // epoch is the only omittable field; suffix carries the A.3 retry counter,
 // which appends after whatever fields are present.

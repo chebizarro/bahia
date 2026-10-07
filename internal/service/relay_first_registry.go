@@ -18,15 +18,15 @@ import (
 // it builds the record with the projector's own builders and shares the
 // projector's per-coordinate created_at floor and dedupe memory, so the
 // relay-first record and the projection of the same state are identical and
-// signed once.
+// signed once (bahia-irsry.41).
 //
 // units is the environment's explicit deployment-unit set as it will be
 // stored (nil or empty: only the implicit default unit), the same set the
-// projector reads back from the cache.
+// projector reads back from the cache (bahia-irsry.53).
 type RelayFirstStatePublisher interface {
 	PublishServiceRegistry(ctx context.Context, svc *domain.Service, deleted bool) error
 	PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment, units []domain.DeploymentUnit, deleted bool) error
-	// S2: build/artifact/deployment canonical state published directly
+	// Phase 3 S2: build/artifact/deployment canonical state published directly
 	// from the mutation site, fingerprint-deduped, outbox-queued.
 	PublishBuildRegistry(ctx context.Context, build *domain.Build, deleted bool) error
 	PublishArtifactRegistry(ctx context.Context, artifact *domain.Artifact, deleted bool) error
@@ -41,7 +41,7 @@ type RelayFirstRegistry struct {
 	logger    *zap.Logger
 	// createLocks serializes check-publish-store for creates of the same id
 	// in this process, so two concurrent creates with one id and different
-	// content cannot both publish to the coordinate.
+	// content cannot both publish to the coordinate (bahia-irsry.35).
 	createLocks [64]sync.Mutex
 }
 
@@ -68,7 +68,7 @@ func (r *RelayFirstRegistry) CreateService(ctx context.Context, svc *domain.Serv
 	// The id (client-minted, or minted here when absent) is fixed before
 	// publication so the relay coordinate and the cached row agree. An
 	// idempotent retry publishes nothing; a conflicting one must not
-	// overwrite the existing coordinate.
+	// overwrite the existing coordinate (bahia-irsry.35).
 	prepareServiceCreate(svc)
 	defer r.lockCreate(svc.ID)()
 	if replay, err := r.delegate.replayServiceCreate(ctx, svc); err != nil || replay {
@@ -450,7 +450,7 @@ func (r *RelayFirstRegistry) ListAllStates(ctx context.Context) ([]domain.Enviro
 	return r.delegate.ListAllStates(ctx)
 }
 
-// --- S2: cp-state publishing helpers ---
+// --- Phase 3 S2: cp-state publishing helpers ---
 
 func (r *RelayFirstRegistry) publishBuildCPState(ctx context.Context, build *domain.Build, deleted bool) {
 	if r.publisher == nil || build == nil {

@@ -12,7 +12,7 @@ import (
 )
 
 // NewPrivateKeySigner builds the canonical signer used by control-plane signing
-// paths from a compatibility hex private key. Empty keys return nil so callers can gate
+// paths from a legacy hex private key. Empty keys return nil so callers can gate
 // startup on signer availability instead of checking raw key strings.
 func NewPrivateKeySigner(privateKeyHex string) (casnostr.Signer, error) {
 	privateKeyHex = strings.TrimSpace(privateKeyHex)

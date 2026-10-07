@@ -49,7 +49,7 @@ func (d *Driver) MeasurePersistent(ctx context.Context, r *vm.PersistentResource
 			return nil, err
 		}
 		// A raw writable copy has no independently verifiable ancestry. Require a
-		// trusted snapshot of its current bytes, not a compatibility image_digest claim.
+		// trusted snapshot of its current bytes, not a legacy image_digest claim.
 		if actual.Digest != base.Digest || actual.Size != base.Size || (kind == domain.VMComponentRootFS && (actual.Key == base.Key || actual.Size != want.Allocation.DiskBytes)) {
 			return nil, vm.ProviderError(domain.VMErrorIntegrity, nil)
 		}

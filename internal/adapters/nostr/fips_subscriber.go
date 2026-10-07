@@ -56,7 +56,7 @@ type FIPSSubscriber struct {
 	handlers            []FIPSWorkerUpdateHandler
 	// lifecycle resolves adverts across relays and reconnects: latest-wins
 	// per (kind, pubkey, d) with the lowest-id tie-break, NIP-09 deletions
-	// and NIP-40 expiration.
+	// and NIP-40 expiration (C-12, C-13).
 	lifecycle *nostrutil.Lifecycle
 
 	mu     sync.Mutex
@@ -174,7 +174,7 @@ func (s *FIPSSubscriber) Stop() {
 // after the subscription ends. It returns a *SubscriptionGaveUpError when the
 // pool gave up on the relays (a policy refusal, failed NIP-42 AUTH or an
 // exhausted CLOSED retry budget): resubscribing would only sidestep that
-// give-up with a fresh budget.
+// give-up with a fresh budget (bahia-irsry.49).
 func (s *FIPSSubscriber) Run(ctx context.Context) error {
 	if s == nil {
 		return fmt.Errorf("fips subscriber is nil")
@@ -286,7 +286,7 @@ func (s *FIPSSubscriber) deletionFilter() gonostr.Filter {
 }
 
 // allowedAuthors moves the allowlist into the REQ so relays don't send
-// adverts the subscriber would drop.
+// adverts the subscriber would drop (C-13).
 func (s *FIPSSubscriber) allowedAuthors() []gonostr.PubKey {
 	if len(s.allowedPubkeys) == 0 {
 		return nil

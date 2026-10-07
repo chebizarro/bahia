@@ -1,4 +1,4 @@
-/***/
+/**
  * Cursor-backed, paged history for store-first read models.
  *
  * The shared pool's `filterKey` cursor only moves a retained REQ's `since`
@@ -33,14 +33,14 @@
  * @param {{ subscribe: Function }} options.pool
  * @param {{ getCursor: Function, setCursor: Function }} options.store
  * @param {string[]} options.relays
- * @param {import('./store-interface.js').Filter[]} options.filters Each must name trusted authors.
- * @param {string} options.key Read-model name; cursors are keyed by it plus the exact filter.
+ * @param {import('./store-interface.js').Filter[]} options.filters  Each must name trusted authors.
+ * @param {string} options.key  Read-model name; cursors are keyed by it plus the exact filter.
  * @param {number} [options.pageSize]
  * @param {number} [options.overlapSeconds]
- * @param { => number} [options.now] Unix seconds.
- * @param {(relay: string, complete: boolean) => void} [options.onEose] History catch-up finished for a relay.
+ * @param {() => number} [options.now]  Unix seconds.
+ * @param {(relay: string, complete: boolean) => void} [options.onEose]  History catch-up finished for a relay.
  * @param {(error: Error, relay: string) => void} [options.onError]
- * @returns { => void} stop
+ * @returns {() => void} stop
  */
 export function subscribeWithPagedBackfill({
   pool,
@@ -179,7 +179,7 @@ export function subscribeWithPagedBackfill({
   };
 }
 
-/***/
+/**
  * Keeps a named read model's paged subscriptions in step with its trusted
  * filter units. A unit is restarted (with fresh cursors) only when its filters
  * change, for example when the signed-in operator or a derived author set does.
@@ -190,13 +190,13 @@ export function subscribeWithPagedBackfill({
  * @param {{ getCursor: Function, setCursor: Function }} options.store
  * @param {string[]} options.relays
  * @param {number} [options.pageSize]
- * @param {(error?: Error) => void} [options.onChange] Catch-up state changed.
+ * @param {(error?: Error) => void} [options.onChange]  Catch-up state changed.
  */
 export function createPagedReader({ name, pool, store, relays, pageSize, onChange = () => {} }) {
-  /** @type {Map<string, { unit: string, stop: => void, states: Map<string, { status: string, reason: string }> }>}*/
+  /** @type {Map<string, { unit: string, stop: () => void, states: Map<string, { status: string, reason: string }> }>} */
   const active = new Map();
 
-  /** @param {{ name: string, filters: import('./store-interface.js').Filter[] }[]} units*/
+  /** @param {{ name: string, filters: import('./store-interface.js').Filter[] }[]} units */
   function sync(units) {
     const wanted = new Map(units
       .filter((unit) => unit.filters.length > 0)
@@ -231,7 +231,7 @@ export function createPagedReader({ name, pool, store, relays, pageSize, onChang
     if (changed) onChange();
   }
 
-  /** Read-model catch-up metadata in the shape pages already consume.*/
+  /** Read-model catch-up metadata in the shape pages already consume. */
   function metadata() {
     const relaySummary = [...active.values()].flatMap((entry) =>
       [...entry.states].map(([relay, state]) => ({ unit: entry.unit, relay, ...state })));

@@ -191,7 +191,7 @@
     <p class="error">{controlplaneConnection.lastError}</p>
   {/if}
 
-  <!-- Event Type Filter-->
+  <!-- Event Type Filter -->
   <div class="filters">
     <div class="filter-field">
       <label for="event-type-filter">Event Type</label>
@@ -294,7 +294,7 @@
   .hint { color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1rem; }
   .error { color: var(--error); font-size: 0.875rem; margin-bottom: 1rem; }
 
-  /* Filters*/
+  /* Filters */
   .filters {
     display: flex;
     align-items: flex-end;
@@ -398,7 +398,7 @@
     text-align: right;
   }
 
-  /* Inline badge styles for table cells*/
+  /* Inline badge styles for table cells */
   :global(.event-type-cell) {
     display: inline-flex;
     align-items: center;

@@ -134,7 +134,7 @@ func (s *RegistryService) ImportObservedArtifact(ctx context.Context, in ImportO
 	if observedRepo := strings.TrimSpace(observation.ObservedImageRepo); observedRepo != "" && !strings.EqualFold(observedRepo, imageRepo) {
 		return nil, fmt.Errorf("image_repo %q does not match the observed running repository %q", imageRepo, observedRepo)
 	}
-	// A stale observation of a container that is not running must not
+	// A stale observation of a container that is no longer running must not
 	// authorize an "observation-verified" import.
 	if observation.HealthStatus == domain.HealthStatusStopped {
 		return nil, fmt.Errorf("latest runtime observation reports the container stopped; Bahia only imports an image it observes running")

@@ -177,11 +177,11 @@ func signedIntentForTest(t *testing.T, sk nostr.SecretKey, orgID string) nostr.E
 }
 
 // TestIntentAuthorsSyncerPushesToSidecar verifies the end-to-end flow:
-// - A TrustSet with a bootstrap owner
-// - An in-process sidecar with an admin endpoint and restricted writes
-// - The syncer pushes the bootstrap owner's pubkey to the sidecar
-// - The owner's intent event is accepted by the sidecar
-// - A non-member's intent event is blocked
+//   - A TrustSet with a bootstrap owner
+//   - An in-process sidecar with an admin endpoint and restricted writes
+//   - The syncer pushes the bootstrap owner's pubkey to the sidecar
+//   - The owner's intent event is accepted by the sidecar
+//   - A non-member's intent event is blocked
 func TestIntentAuthorsSyncerPushesToSidecar(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

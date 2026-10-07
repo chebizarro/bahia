@@ -15,7 +15,7 @@ import (
 
 // --- BackupIntentHandler tests -----------------------------------------------
 //
-// B1 tests: intent handler operations, permission, fleet scope, and
+// Phase 3 B1 tests: intent handler operations, permission, fleet scope, and
 // idempotent intent_id.
 
 func TestBackupIntentHandler_IsFleetScoped(t *testing.T) {

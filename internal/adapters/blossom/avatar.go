@@ -131,7 +131,7 @@ func (c *Client) StoreAvatar(ctx context.Context, data []byte, contentType, fall
 }
 
 // ResolveAvatarRef retrieves avatar bytes for preview from a blossom:<hash> ref,
-// a raw SH hash, or an explicitly trusted HTTP(S) direct URL fallback.
+// a raw SHA-256 hash, or an explicitly trusted HTTP(S) direct URL fallback.
 func (c *Client) ResolveAvatarRef(ctx context.Context, ref string, opts ...AvatarResolveOption) (*AvatarPreview, error) {
 	ref = strings.TrimSpace(ref)
 	resolveOpts := avatarResolveOptions{maxBytes: defaultMaxAvatarBytes}
@@ -186,7 +186,7 @@ func (c *Client) ResolveAvatarRef(ctx context.Context, ref string, opts ...Avata
 	return &AvatarPreview{Ref: ref, URL: ref, ContentType: contentType, Data: data}, nil
 }
 
-// RefFromHash returns the canonical Blossom avatar reference for a SH hash.
+// RefFromHash returns the canonical Blossom avatar reference for a SHA-256 hash.
 func RefFromHash(hash string) string {
 	return AvatarRefPrefix + strings.ToLower(strings.TrimSpace(hash))
 }

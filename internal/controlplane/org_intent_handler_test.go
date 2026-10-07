@@ -1373,7 +1373,7 @@ func TestHydrateTrustSetFromHistory_AuthorizesIntent(t *testing.T) {
 }
 
 func TestLegacyPathMemberPublishUpdatesTrustSet(t *testing.T) {
-	// Item B: member added via the compatibility ContextVM path appears in TrustSet's
+	// Item B: member added via the legacy ContextVM path appears in TrustSet's
 	// relay source with Postgres absent, driven by the onMemberPublished callback.
 	key := OrgStateKey{Ref: "test-key", Version: "v1", Key: make([]byte, 32)}
 	for i := range key.Key {

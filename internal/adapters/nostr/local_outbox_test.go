@@ -15,7 +15,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// The publish outbox without PostgreSQL: in-process khatru
+// The publish outbox without PostgreSQL (bahia-irsry.10.4): in-process khatru
 // relays answer every EVENT with OK, and every wait is on a delivery round
 // (an OK-driven publish call), a delivery hook, or the runner's exit after
 // finishing a round. Nothing sleeps.
@@ -175,7 +175,7 @@ func TestLocalOutboxWithoutPostgresRetriesDownRelayUntilAccepted(t *testing.T) {
 // A permanent rejection ends retries for that relay only; when it leaves the
 // quorum unreachable the first round abandons the event: the caller gets
 // ErrPublishAbandoned, OnDeliveryAbandoned fires, the entry is failed and the
-// event not counts as the daemon's output (the caller was told; docs/architecture/outbox-delivery.md
+// event no longer counts as the daemon's output (the caller was told; §3.7
 // flags only events abandoned after the caller was told they were queued).
 func TestLocalOutboxWithoutPostgresPermanentRejectionAndAbandonment(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)

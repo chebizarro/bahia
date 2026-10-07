@@ -21,7 +21,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Relay-driven bridge tests against in-process khatru
+// Relay-driven bridge tests (bahia-irsry.10.5, C-37) against in-process khatru
 // relays with NIP-77. Every wait is on a hosts write, which the bridge makes
 // only after its first catch-up (EOSE / NIP-77 completion) and then per live
 // change; nothing sleeps.

@@ -20,7 +20,7 @@ import (
 // a deploy driven by this daemon needs the same unreachable lock and cannot
 // be running either.
 //
-// The fallback has one implication operators must know: the
+// The fallback has one implication operators must know (bahia-as2bo): the
 // process-local lock excludes only this daemon's applies. While the shared
 // lock is unreachable, a deploy driven by another daemon that can still reach
 // PostgreSQL is not excluded, so a recovery may restart an instance that

@@ -13,12 +13,12 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// Rebuilding parked operations after a restart.
+// Rebuilding parked operations after a restart (bahia-irsry.38).
 //
 // A parked continuation lives in memory, but the operation it continues is on
 // the relays: parking publishes a kind:6950 awaiting_terminal progress event
 // tagged t=awaitingTerminalTopic, and the operation ends with a kind:7950 (or
-// compatibility 1951) terminal result for the same request. An awaiting_terminal
+// legacy 1951) terminal result for the same request. An awaiting_terminal
 // event without a matching terminal result is an operation still outstanding.
 //
 // At startup the reactor finds those, holds their souls again (in the order

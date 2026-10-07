@@ -198,7 +198,7 @@ func overriddenPolicy() RouteCanaryPolicy {
 	return policy
 }
 
-// TestDeriveRouteCanaryTargetsAppliesOverrideOnlyToItsRoute is the
+// TestDeriveRouteCanaryTargetsAppliesOverrideOnlyToItsRoute is the bahia-6xztt
 // acceptance criterion at the domain layer: one route's override changes that
 // route's targets, from every perspective, and no other route's.
 func TestDeriveRouteCanaryTargetsAppliesOverrideOnlyToItsRoute(t *testing.T) {

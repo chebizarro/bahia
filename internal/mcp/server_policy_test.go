@@ -306,7 +306,7 @@ func TestCallTool_EvaluatePolicyUsesIntentAndPublishesDecision(t *testing.T) {
 	if err != nil || !result.IsError || len(statuses) != 1 {
 		t.Fatalf("non-operator should be rejected: %#v %v statuses=%d", result, err, len(statuses))
 	}
-	args["service_id"] = "" // Compatibility optional context field was allowed to be empty.
+	args["service_id"] = "" // Legacy optional context field was allowed to be empty.
 	args["idempotency_key"] = "eval-empty-service"
 	result, err = f.server.CallTool(f.ctx, "bahia_evaluate_policy", args)
 	if err != nil || result.IsError || len(statuses) != 2 {

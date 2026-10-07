@@ -16,7 +16,7 @@ type ComposeOwnershipReason int
 const (
 	// OwnershipUnknown indicates ownership could not be determined.
 	OwnershipUnknown ComposeOwnershipReason = iota
-	// OwnershipBahiaMarker indicates the.bahia/ marker directory and
+	// OwnershipBahiaMarker indicates the .bahia/ marker directory and
 	// render-state.json metadata file are present and valid.
 	OwnershipBahiaMarker
 	// OwnershipExplicitConfig indicates the runtime config explicitly
@@ -27,7 +27,7 @@ const (
 	OwnershipNotOwned
 	// OwnershipMissingDir indicates the compose_dir path does not exist.
 	OwnershipMissingDir
-	// OwnershipMalformed indicates the.bahia/ marker directory exists but
+	// OwnershipMalformed indicates the .bahia/ marker directory exists but
 	// contains invalid or corrupted metadata.
 	OwnershipMalformed
 )
@@ -60,7 +60,7 @@ type ComposeOwnershipStatus struct {
 	Reason ComposeOwnershipReason
 	// ComposePath is the resolved absolute path to the compose directory.
 	ComposePath string
-	// MarkerPath is the path to the.bahia/ marker directory, if found.
+	// MarkerPath is the path to the .bahia/ marker directory, if found.
 	MarkerPath string
 	// Error holds a non-nil value when ownership validation itself failed.
 	// Errors intentionally omit endpoint secrets and raw Docker host
@@ -72,7 +72,7 @@ type ComposeOwnershipStatus struct {
 // Bahia-owned.
 const bahiaMarkerDir = ".bahia"
 
-// bahiaRenderStateFile is the metadata file inside.bahia/ that records
+// bahiaRenderStateFile is the metadata file inside .bahia/ that records
 // render provenance and state.
 const bahiaRenderStateFile = "render-state.json"
 
@@ -91,14 +91,14 @@ type ComposeOwnershipConfig struct {
 // Bahia-owned and safe for authoritative full-project generation.
 //
 // Resolution order:
-// 1. If cfg.BahiaOwned is explicitly true, ownership is granted regardless
-// of marker state (OwnershipExplicitConfig).
-// 2. If the directory does not exist, OwnershipMissingDir is returned.
-// 3. If.bahia/ marker directory and render-state.json exist and are valid,
-// OwnershipBahiaMarker is returned.
-// 4. If.bahia/ exists but render-state.json is missing or corrupt,
-// OwnershipMalformed is returned.
-// 5. Otherwise OwnershipNotOwned is returned.
+//  1. If cfg.BahiaOwned is explicitly true, ownership is granted regardless
+//     of marker state (OwnershipExplicitConfig).
+//  2. If the directory does not exist, OwnershipMissingDir is returned.
+//  3. If .bahia/ marker directory and render-state.json exist and are valid,
+//     OwnershipBahiaMarker is returned.
+//  4. If .bahia/ exists but render-state.json is missing or corrupt,
+//     OwnershipMalformed is returned.
+//  5. Otherwise OwnershipNotOwned is returned.
 //
 // Errors returned in ComposeOwnershipStatus.Error never include endpoint
 // secrets or raw Docker host values.
@@ -149,7 +149,7 @@ func ValidateComposeOwnership(composeDir string, cfg ComposeOwnershipConfig) Com
 	markerPath := filepath.Join(absDir, bahiaMarkerDir)
 	markerInfo, err := os.Stat(markerPath)
 	if err != nil {
-		// No.bahia/ directory — not owned.
+		// No .bahia/ directory — not owned.
 		return ComposeOwnershipStatus{
 			ComposePath: absDir,
 			Reason:      OwnershipNotOwned,

@@ -60,7 +60,7 @@ func (f *releaseIndexFake) count() int {
 	return f.commits
 }
 
-// the accepted-release ledger is canonical state. A release is
+// bahia-xjdo9: the accepted-release ledger is canonical state. A release is
 // accepted with no database, an exact replay is recognised after a restart
 // from the ledger record in the local event store, and a conflicting
 // attestation for the same identity is quarantined canonically and rejected.

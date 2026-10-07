@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// repository credentials are secret values held only in the
+// bahia-xjdo9: repository credentials are secret values held only in the
 // PostgreSQL secret store, so a daemon without it fails an initiation closed
 // at credential resolution, with no mirror call and no publication, and
 // leaves the journal record claimed. Nothing else in initiation needs the

@@ -371,7 +371,7 @@ func (s *RuntimeLifecycleService) DeployDeploymentUnitWithStatus(
 }
 
 // DeployDesiredStateSnapshot applies a pre-intent unit-aware snapshot without
-// re-entering the compatibility adopted-workload resolution path.
+// re-entering the legacy adopted-workload resolution path.
 func (s *RuntimeLifecycleService) DeployDesiredStateSnapshot(
 	ctx context.Context,
 	serviceID, envID uuid.UUID,
@@ -832,7 +832,7 @@ func (s *RuntimeLifecycleService) resolveForDeploymentUnit(
 		return nil, nil, nil, fmt.Errorf("invalid deployment unit %q: %w", unitCopy.Key, err)
 	}
 	// Explicit Bahia-managed deployment units are provisionable on first deploy;
-	// adopted-workload state guardrails remain in the compatibility environment-only path.
+	// adopted-workload state guardrails remain in the legacy environment-only path.
 	unitResolver, ok := s.resolver.(runtime.DeploymentUnitRuntimeResolver)
 	if !ok {
 		return nil, nil, nil, fmt.Errorf("runtime resolver does not support deployment-unit targets")

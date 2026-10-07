@@ -1,11 +1,11 @@
-/***/
+/**
  * BahiaEventStore — library-agnostic event store interface.
  *
  * All views, derived stores, and the ingestion path code against this
- * interface. The implementation (currently welshman-backed, see store.js)
+ * interface.  The implementation (currently welshman-backed, see store.js)
  * can be swapped without touching consumers.
  *
- * Design reference: docs/architecture/web-store-first.md §1.2, §2, §8.
+ * Design reference: docs/designs/phase4-web-store-first.md §1.2, §2, §8.
  *
  * @module lib/nostr/store-interface
  */
@@ -15,7 +15,7 @@
 // nostr-tools directly for the type alone.
 // ---------------------------------------------------------------------------
 
-/** A verified Nostr event with all NIP-01 fields present.*/
+/** A verified Nostr event with all NIP-01 fields present. */
 export interface NostrEvent {
   id: string;
   pubkey: string;
@@ -26,7 +26,7 @@ export interface NostrEvent {
   sig: string;
 }
 
-/** NIP-01 subscription filter.*/
+/** NIP-01 subscription filter. */
 export interface Filter {
   ids?: string[];
   authors?: string[];
@@ -34,7 +34,7 @@ export interface Filter {
   since?: number;
   until?: number;
   limit?: number;
-  /** Tag filters: keys are "#e", "#p", "#d", "#t", etc.*/
+  /** Tag filters: keys are "#e", "#p", "#d", "#t", etc. */
   [key: `#${string}`]: string[] | undefined;
 }
 
@@ -42,13 +42,13 @@ export interface Filter {
 // Store interface
 // ---------------------------------------------------------------------------
 
-/** Callback for live event subscriptions.*/
+/** Callback for live event subscriptions. */
 export type EventCallback = (event: NostrEvent) => void;
 
-/** Unsubscribe function returned by subscribe.*/
+/** Unsubscribe function returned by subscribe(). */
 export type Unsubscribe = () => void;
 
-/***/
+/**
  * BahiaEventStore — the contract both welshman and applesauce+nostr-idb
  * implementations fulfil.
  *
@@ -59,15 +59,15 @@ export type Unsubscribe = () => void;
 export interface BahiaEventStore {
   // ── Lifecycle ─────────────────────────────────────────────────────────
 
-  /** Open the IndexedDB database and hydrate the in-memory index.*/
+  /** Open the IndexedDB database and hydrate the in-memory index. */
   open(): Promise<void>;
 
-  /** Flush pending writes and close the database.*/
+  /** Flush pending writes and close the database. */
   close(): Promise<void>;
 
   // ── Ingestion ─────────────────────────────────────────────────────────
 
-  /***/
+  /**
    * The single ingestion path (§2.4).
    *
    * 1. Verify signature (reject bad sigs).
@@ -83,10 +83,10 @@ export interface BahiaEventStore {
 
   // ── Query ─────────────────────────────────────────────────────────────
 
-  /** Synchronous snapshot matching a filter.*/
+  /** Synchronous snapshot matching a filter. */
   query(filter: Filter): NostrEvent[];
 
-  /***/
+  /**
    * Subscribe to live changes matching a filter.
    * The callback fires for every newly ingested event that matches.
    * Returns an unsubscribe function.
@@ -95,15 +95,15 @@ export interface BahiaEventStore {
 
   // ── Cursors ───────────────────────────────────────────────────────────
 
-  /** Read the stored `since` cursor for a (relay, filterKey) pair.*/
+  /** Read the stored `since` cursor for a (relay, filterKey) pair. */
   getCursor(relay: string, filterKey: string): number | null;
 
-  /** Persist the `since` cursor for a (relay, filterKey) pair.*/
+  /** Persist the `since` cursor for a (relay, filterKey) pair. */
   setCursor(relay: string, filterKey: string, since: number): void;
 
   // ── NIP-09 deletion ───────────────────────────────────────────────────
 
-  /***/
+  /**
    * Process a kind-5 deletion event.
    *
    * Only applied when the deletion author matches the event author
@@ -113,29 +113,29 @@ export interface BahiaEventStore {
 
   // ── NIP-40 expiry ─────────────────────────────────────────────────────
 
-  /** Sweep events whose `expiration` tag is in the past.*/
+  /** Sweep events whose `expiration` tag is in the past. */
   sweepExpired(): void;
 
   // ── Eviction ──────────────────────────────────────────────────────────
 
-  /***/
+  /**
    * Run LRU-by-size eviction when the database exceeds the configured
-   * threshold. Addressable and replaceable events are never evicted.
+   * threshold.  Addressable and replaceable events are never evicted.
    */
   evict(): Promise<void>;
 
   // ── Stats ─────────────────────────────────────────────────────────────
 
-  /** Number of events currently in the store.*/
+  /** Number of events currently in the store. */
   readonly count: number;
 }
 
 // ---------------------------------------------------------------------------
-// Persistence helper ( calls this on first authenticated boot)
+// Persistence helper (W1-S3 calls this on first authenticated boot)
 // ---------------------------------------------------------------------------
 
-/***/
- * Request durable storage via `navigator.storage.persist`.
+/**
+ * Request durable storage via `navigator.storage.persist()`.
  *
  * Returns whether persistence was granted. Gracefully degrades: if the
  * API is unavailable or the browser denies it, returns false and the

@@ -13,7 +13,7 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// legacyKindRanges are the deprecated Bahia kind families ( and
+// legacyKindRanges are the deprecated Bahia kind families (audit C-44 and
 // docs/nostr-event-implementation-guide.md): regular-kind request, status and
 // result families, the 31000-31099 audit range, the deprecated 31100-31105
 // command kinds and the 31975-31978 DNS read models superseded by CAS 30900.
@@ -25,10 +25,10 @@ var legacyKindRanges = [][2]int64{
 	{31975, 31978},
 }
 
-// legacyKindExemptPaths may define or use compatibility kinds: the kind registry's
+// legacyKindExemptPaths may define or use legacy kinds: the kind registry's
 // declarations, the cp-state family discriminator contract (the single
 // sanctioned reference to the 31975-31978 legacy_kind values until
-// ), and the migration package that exists to read old events.
+// bahia-irsry.9), and the migration package that exists to read old events.
 var legacyKindExemptPaths = []string{
 	"internal/kinds/kinds.go",
 	"internal/kinds/cp_state_family.go",
@@ -37,10 +37,10 @@ var legacyKindExemptPaths = []string{
 
 // cpStateFamilyType is the sanctioned discriminator type: 30900 cp-state
 // records carry legacy_kind=<family> and code names the family through it,
-// which is a contract use, not publishing or subscribing on a compatibility kind.
+// which is a contract use, not publishing or subscribing on a legacy kind.
 const cpStateFamilyType = modulePath + "/internal/kinds.CPStateFamily"
 
-// legacyWord matches "Compatibility" as a CamelCase word in an identifier
+// legacyWord matches "Legacy" as a CamelCase word in an identifier
 // (LegacyWorkerState, KindLegacyWorkerState, SoulFactoryActionLegacyResult).
 var legacyWord = regexp.MustCompile(`(^|[a-z0-9])Legacy([A-Z0-9]|$)`)
 
@@ -54,8 +54,8 @@ func isLegacyKindValue(value int64) bool {
 }
 
 // isLegacyKindConst matches this module's integer constants whose value is in
-// a compatibility range (which also catches re-exported aliases) or whose name marks
-// them as a compatibility kind (the Compatibility* worker kinds share values with live read
+// a legacy range (which also catches re-exported aliases) or whose name marks
+// them as a legacy kind (the Legacy* worker kinds share values with live read
 // models). Non-integer constants, such as the "legacy_kind" tag key
 // CASControlStateTagLegacyKind, are never kinds. Constants of the sanctioned
 // CPStateFamily discriminator type are contract uses and are not flagged.
@@ -89,8 +89,8 @@ func exemptFromLegacyKindGate(path string) bool {
 	return false
 }
 
-// TestNoNewLegacyKindUsage bans new references to compatibility kind constants and
-// new compatibility kind literals outside internal/nostrmigration.
+// TestNoNewLegacyKindUsage bans new references to legacy kind constants and
+// new legacy kind literals outside internal/nostrmigration (C-44).
 func TestNoNewLegacyKindUsage(t *testing.T) {
 	found := newViolations()
 	collectLegacyKindUsage(loadModule(t), found)

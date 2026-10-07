@@ -15,7 +15,7 @@ type ZoneSyncPublisher interface {
 }
 
 // EventPublishDNSBackend implements DNSBackend by publishing zone sync events
-// instead of pushing zones via ContextVM RPC. DNS agents subscribe to
+// instead of pushing zones via ContextVM RPC (C-34). DNS agents subscribe to
 // these events from their local store rather than listening for ContextVM calls.
 type EventPublishDNSBackend struct {
 	publisher ZoneSyncPublisher

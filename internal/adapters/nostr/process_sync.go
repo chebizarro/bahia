@@ -16,19 +16,19 @@ import (
 // ProcessSync runs the daemon's inbound sync engine (inbound_sync.go) for a
 // small standalone process (the DNS agent, the FIPS bridge, pkg/discovery)
 // with filters of its own instead of the daemon's kind and author scopes
-// . It reuses the Subscriber's per-relay workers and its
+// (bahia-irsry.10.5). It reuses the Subscriber's per-relay workers and its
 // consumer unchanged:
 //
-// - every relay is caught up and followed independently, so a relay that
-// is down or behind never holds back the others and catches up on its
-// own when it returns;
-// - replaceable/addressable sets (and ReconcileKinds) are reconciled with
-// NIP-77 against the local store, so a restart fetches only the events
-// the store lacks; regular kinds resume from a per-(relay, filter)
-// cursor that advances only after EOSE;
-// - each event is validated and stored before Apply runs, and Apply runs
-// only for events new to the store: never for a redelivery, another
-// relay's copy, or an event already held from before a restart.
+//   - every relay is caught up and followed independently, so a relay that
+//     is down or behind never holds back the others and catches up on its
+//     own when it returns;
+//   - replaceable/addressable sets (and ReconcileKinds) are reconciled with
+//     NIP-77 against the local store, so a restart fetches only the events
+//     the store lacks; regular kinds resume from a per-(relay, filter)
+//     cursor that advances only after EOSE;
+//   - each event is validated and stored before Apply runs, and Apply runs
+//     only for events new to the store: never for a redelivery, another
+//     relay's copy, or an event already held from before a restart.
 //
 // Because the store holds everything already applied, a consumer rebuilds its
 // in-memory state on start by replaying Store.QueryEvents for its filters

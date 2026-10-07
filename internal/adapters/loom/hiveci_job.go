@@ -25,13 +25,13 @@ type HiveCIJobSpec struct {
 	Repository   string // credential-free HTTPS clone URL
 	Ref          string // immutable commit SHA or branch
 	Workflow     string // workflow file path inside the repository
-	Event        string // act event (push, workflow_dispatch,...)
+	Event        string // act event (push, workflow_dispatch, ...)
 	Actor        string // pubkey recorded as the act actor
 	RunEventID   string // kind-5401 workflow run event id
 	Dependencies []BuildDependency
 }
 
-// HiveCIJobArgs renders the spec argv `run --repo... [--dep name=url@sha]`
+// HiveCIJobArgs renders the spec argv `run --repo ... [--dep name=url@sha]`
 // consumed by loom-ci. Dependencies are validated and sorted exactly as the
 // retired dep tags were, so provenance stays deterministic.
 func HiveCIJobArgs(spec HiveCIJobSpec) ([]string, error) {

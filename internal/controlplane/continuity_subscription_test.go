@@ -127,7 +127,7 @@ func TestContinuityDefinitionsRejectInvalidSignatureAndStandby(t *testing.T) {
 }
 
 func TestContinuityDefinitionsClosedAndCancellationAreNotEOSE(t *testing.T) {
-	// After item 3, the consumer not exits on CLOSED;
+	// After bahia-irsry.48 item 3, the consumer no longer exits on CLOSED;
 	// the relay pool handles AUTH internally. The consumer logs the CLOSED
 	// and continues until Events closes or the context is cancelled.
 	for _, reason := range []string{"blocked: scope rejected", "auth-required: identify"} {

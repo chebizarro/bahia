@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// a Security publication recorded as queued becomes published
+// bahia-irsry.40: a Security publication recorded as queued becomes published
 // when the outbox delivers its event. A pending run becomes published only
 // once none of its publications is pending or failed; a failed_terminal run
 // stays failed. A repeat is a no-op.

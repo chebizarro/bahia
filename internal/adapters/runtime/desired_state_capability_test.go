@@ -174,7 +174,7 @@ func TestSupportedRuntimesReportCapability(t *testing.T) {
 func TestAsDesiredStateApplier(t *testing.T) {
 	docker := NewDockerObserver("unix:///var/run/docker.sock", zap.NewNop())
 
-	// Docker implements DesiredStateApplier and SupportsDesiredState = true.
+	// Docker implements DesiredStateApplier and SupportsDesiredState() = true.
 	applier, supported := AsDesiredStateApplier(docker)
 	if applier == nil {
 		t.Fatal("expected non-nil applier from AsDesiredStateApplier")

@@ -295,7 +295,7 @@ func TestConcordRekeyChunksAtTheBlobCap(t *testing.T) {
 // reader requires: CORD-06 §1 says only "chunk i of n", and a reader that
 // rejects index >= count (openclaw-nostr) drops a 1-based final chunk — which
 // for a single-chunk rotation is the whole rotation, and for an n-chunk one
-// keeps the set forever incomplete, so removal is never concluded (docs/architecture/intents-and-authority.md). The
+// keeps the set forever incomplete, so removal is never concluded (§2). The
 // indices of one rotation must therefore be exactly 0..n-1.
 func TestConcordRekeyChunkIndicesAreZeroBased(t *testing.T) {
 	fixture := newConcordRotationFixture(t, 3)

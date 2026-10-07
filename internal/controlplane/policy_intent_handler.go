@@ -24,7 +24,7 @@ type PolicyCRUD interface {
 
 // PolicyStatePublisher signs and publishes a canonical kind-30900 cp-state
 // record for a deployment policy mutation. The implementation uses
-// PublishBeforeCommit for outbox durability (docs/architecture/intents-and-authority.md).
+// PublishBeforeCommit for outbox durability (design §3.6).
 type PolicyStatePublisher func(ctx context.Context, policy *domain.DeploymentPolicy, deleted bool) error
 
 // PolicyEvaluator preserves the daemon's full signature, SBOM, security-scan,
@@ -42,7 +42,7 @@ type PolicyEvaluator interface {
 // IntentProcessor.RegisterHandler("policy", handler).
 //
 // Policies are fleet-scoped: authorization uses FleetOperatorGate rather than
-// per-org membership (docs/architecture/intents-and-authority.md). The handler implements FleetScopedHandler
+// per-org membership (design §2.4). The handler implements FleetScopedHandler
 // so the intent processor authorizes fleet operators correctly.
 //
 // Revision decision: latest-wins. DeploymentPolicy carries UpdatedAt but has
@@ -50,7 +50,7 @@ type PolicyEvaluator interface {
 // authored). When expected_updated_at is present in the intent content the
 // handler enforces it; otherwise the newest intent wins unconditionally.
 //
-// See docs/architecture/intents-and-authority.md
+// See design §7 Wave 2 S3.
 type PolicyIntentHandler struct {
 	policies PolicyCRUD
 	evaluate PolicyEvaluator
@@ -130,7 +130,7 @@ func (h *PolicyIntentHandler) PermissionFor(_ string) domain.Permission {
 
 // IsFleetScoped implements FleetScopedHandler. Policy mutations are
 // fleet-scoped — authorized via FleetOperatorGate (config pubkeys), not
-// per-org membership (docs/architecture/intents-and-authority.md).
+// per-org membership (design §2.4).
 func (h *PolicyIntentHandler) IsFleetScoped() bool { return true }
 
 // handleCreateOrUpdate reconciles a policy toward the intent's desired state.
@@ -326,7 +326,7 @@ func policyFromIntentContent(intent *Intent) (*domain.DeploymentPolicy, error) {
 }
 
 // mergePolicyOntoExisting applies the intent's desired state fields onto the
-// loaded entity. Every non-zero field replaces the existing one (docs/architecture/intents-and-authority.md).
+// loaded entity. Every non-zero field replaces the existing one (§1.2).
 func mergePolicyOntoExisting(existing, intent *domain.DeploymentPolicy) {
 	if intent.Name != "" {
 		existing.Name = intent.Name

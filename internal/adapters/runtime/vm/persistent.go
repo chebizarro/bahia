@@ -31,7 +31,7 @@ type PersistentResource struct {
 	Components         map[domain.VMComponentKind]string
 }
 
-// PersistentSpec reuses the compatibility image/instance preparation contract without
+// PersistentSpec reuses the legacy image/instance preparation contract without
 // invoking Runtime.Deploy or its replace-on-update semantics.
 type PersistentSpec struct {
 	Instance   InstanceSpec
@@ -233,7 +233,7 @@ func (p *PersistentProvider) readRecord(id uuid.UUID) (*persistentRecord, error)
 			return nil, ProviderError(domain.VMErrorForeign, nil)
 		}
 		return nil, nil
-	} // Compatibility metadata is never mutation authority.
+	} // Legacy metadata is never mutation authority.
 	if r.SchemaVersion != 2 {
 		return nil, ProviderError(domain.VMErrorIntegrity, nil)
 	}

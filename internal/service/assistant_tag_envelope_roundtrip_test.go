@@ -13,7 +13,7 @@ import (
 // matched by the session-recovery subscription filter, which is built with the
 // same constant. Guards producer/consumer drift of the session schema tag key
 // now that assistant_orchestrator (producer) and assistant_session_recovery
-// (consumer) both reference domain.AssistantSessionTagSchema.
+// (consumer) both reference domain.AssistantSessionTagSchema (bahia-s7o9).
 func TestTagEnvelope_AssistantSessionState_FilterRoundTrip(t *testing.T) {
 	// Producer-shaped event (mirrors assistant_orchestrator session-state tags).
 	event := nostr.Event{

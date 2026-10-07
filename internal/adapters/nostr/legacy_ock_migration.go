@@ -11,8 +11,8 @@ import (
 )
 
 // legacyOCKTopicMap maps each confidential cp-state topic to the metadata
-// needed to detect, decrypt, and re-publish compatibility records under the OCK
-// scheme (docs/architecture/confidential-state.md). The keys match the cpStateFamilies topic
+// needed to detect, decrypt, and re-publish legacy records under the OCK
+// scheme (design §1.7 steps 1–8). The keys match the cpStateFamilies topic
 // values for the five confidential families.
 var legacyOCKTopicMap = map[string]legacyOCKTopic{
 	kinds.CPStateTopicOrgRegistry:                 {legacyKind: KindOrgRegistry, decryptKind: legacyDecryptO1},
@@ -39,20 +39,20 @@ type legacyOCKTopic struct {
 	decryptKind legacyDecryptMethod
 }
 
-// LegacyOCKMigrator re-publishes compatibility-format confidential records under
+// LegacyOCKMigrator re-publishes legacy-format confidential records under
 // the per-org content key (OCK) scheme at daemon startup. It implements
-// docs/architecture/confidential-state.md "Migration" steps 1–8 exactly:
+// design §1.7 "Migration" steps 1–8 exactly:
 //
-// 1. Scan projectionHistory.FindByTag for each confidential topic.
-// 2. Try parsing as bahia.confidential.aead.v1 — skip if already migrated.
-// 3. Try compatibility O1 decryptOrgState (org/member/invite) or N1
-// selfDecryptNIP44Legacy (secret/notification).
-// 4. Re-encrypt the plaintext with ConfidentialEncryptor.EncryptConfidential.
-// 5. Re-publish through publishControlState (same coordinate, monotonic created_at).
-// 6. Log progress: "migrated N/M records for topic T".
-// 7. Run at most once per daemon lifetime (in-memory "migration-done" flag).
-// 8. (Post-condition: compatibility decrypt code can be removed once all
-// deployments have run this migration.)
+//  1. Scan projectionHistory.FindByTag for each confidential topic.
+//  2. Try parsing as bahia.confidential.aead.v1 — skip if already migrated.
+//  3. Try legacy O1 decryptOrgState (org/member/invite) or N1
+//     selfDecryptNIP44Legacy (secret/notification).
+//  4. Re-encrypt the plaintext with ConfidentialEncryptor.EncryptConfidential.
+//  5. Re-publish through publishControlState (same coordinate, monotonic created_at).
+//  6. Log progress: "migrated N/M records for topic T".
+//  7. Run at most once per daemon lifetime (in-memory "migration-done" flag).
+//  8. (Post-condition: legacy decrypt code can be removed once all
+//     deployments have run this migration.)
 //
 // The migration is idempotent: records already in the new format are
 // skipped, and re-running publishes the same content on the same
@@ -91,8 +91,8 @@ func NewLegacyOCKMigrator(
 // the history contains the latest records from all relays.
 //
 // The HydrateTrustSetFromHistory call runs before this and already has
-// dual-read support (new format first, compatibility O1 fallback), so it is
-// safe for the first startup after upgrade to read compatibility records.
+// dual-read support (new format first, legacy O1 fallback), so it is
+// safe for the first startup after upgrade to read legacy records.
 func (m *LegacyOCKMigrator) Run(ctx context.Context) {
 	if m == nil {
 		return
@@ -165,7 +165,7 @@ func (m *LegacyOCKMigrator) migrateTopic(ctx context.Context, topic string, meta
 			continue
 		}
 
-		// Step 3: try compatibility decrypt.
+		// Step 3: try legacy decrypt.
 		plaintext, decryptErr := m.tryLegacyDecrypt(rec.Content, meta)
 		if decryptErr != nil {
 			m.logger.Debug("legacy OCK migration: record not in legacy format or decrypt failed",
@@ -232,7 +232,7 @@ func (m *LegacyOCKMigrator) migrateTopic(ctx context.Context, topic string, meta
 	return migrated, skipped, errors
 }
 
-// tryLegacyDecrypt attempts compatibility decryption based on the decrypt method.
+// tryLegacyDecrypt attempts legacy decryption based on the decrypt method.
 func (m *LegacyOCKMigrator) tryLegacyDecrypt(content string, meta legacyOCKTopic) (string, error) {
 	switch meta.decryptKind {
 	case legacyDecryptO1:

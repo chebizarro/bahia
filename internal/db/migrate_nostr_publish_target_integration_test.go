@@ -30,7 +30,7 @@ func readPublishTargetRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 // 000071 up tags pending config-fabric rows for the control-plane runner and
 // widens the publish-state check (NOT VALID, validated online later) without
 // touching indexes; down restores the single-runner schema without leaving any
-// row pending for a runner that not exists, and up applies again cleanly.
+// row pending for a runner that no longer exists, and up applies again cleanly.
 func TestNostrPublishTargetMigrationRoundTrip(t *testing.T) {
 	_, pool := migrationPostgres(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)

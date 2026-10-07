@@ -9,7 +9,7 @@ import (
 // filter, at least one relay has delivered EOSE and reconciliation has
 // completed.
 //
-// See docs/architecture/intents-and-authority.md
+// See design §6.2.
 type ReadinessTracker struct {
 	mu      sync.RWMutex
 	filters map[string]bool // filter-key → ready
@@ -72,7 +72,7 @@ func (r *ReadinessTracker) IsReady() bool {
 
 // Ready returns a channel that is closed when all registered filters have
 // caught up. When no filters are registered the channel is already closed
-// (vacuously ready). Callers should select on this channel and ctx.Done
+// (vacuously ready). Callers should select on this channel and ctx.Done()
 // to wait for readiness without polling.
 func (r *ReadinessTracker) Ready() <-chan struct{} {
 	r.mu.RLock()

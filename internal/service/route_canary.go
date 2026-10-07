@@ -386,7 +386,7 @@ func (s *RouteCanarySupervisor) schedule(coordinate string, due time.Time) {
 	s.nextDue[coordinate] = due
 }
 
-// pruneSchedule forgets routes that are not in desired state, so a route
+// pruneSchedule forgets routes that are no longer in desired state, so a route
 // that is withdrawn and later re-added is probed immediately.
 func (s *RouteCanarySupervisor) pruneSchedule(plans []*domain.DesiredPublicRoutePlan) {
 	current := make(map[string]struct{}, len(plans))

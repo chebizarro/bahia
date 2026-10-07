@@ -21,7 +21,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// These tests cover the single relay stack: NIP-42 through
+// These tests cover the single relay stack (bahia-irsry.10.2): NIP-42 through
 // the pool's AuthHandler, CLOSED classification, per-relay re-REQ and NIP-11
 // limit enforcement.
 
@@ -320,7 +320,7 @@ func TestRelayPoolClosedClassificationStopsRefusalsAndRetriesTransients(t *testi
 // TestRelayPoolNegentropyAuthenticates: a relay that refuses NEG-OPEN with
 // "auth-required:" is reconciled through the pool's signer. The session
 // answers the challenge, re-opens once, and downloads the protected event
-// (see third_party/nostr/BAHIA_PATCHES.md).
+// (bahia-irsry.47; see third_party/nostr/BAHIA_PATCHES.md).
 func TestRelayPoolNegentropyAuthenticates(t *testing.T) {
 	secret := gonostr.Generate()
 	var negOpens atomic.Int32
@@ -438,7 +438,7 @@ func TestRelayPoolRetryableClosedBudgetResetsOnEOSE(t *testing.T) {
 
 // TestRelayPoolReissuesOnlyTheDroppedRelay: one relay's REQ dropping must be
 // reissued on that relay alone, without waiting for every relay to fail
-// , while the other relay keeps streaming on its original REQ.
+// (C-4), while the other relay keeps streaming on its original REQ.
 func TestRelayPoolReissuesOnlyTheDroppedRelay(t *testing.T) {
 	const stable, flaky = "wss://stable.example", "wss://flaky.example"
 	pool := newRelayPoolWithManagedRelays(stable, flaky)
@@ -678,7 +678,7 @@ func TestRelayPoolHoldsREQsBeyondMaxSubscriptions(t *testing.T) {
 }
 
 // TestRelayPoolReconnectsAndReissuesAfterWebsocketDrop is the end-to-end
-// shape of: the relay drops the websocket, the pool redials that relay
+// shape of C-4: the relay drops the websocket, the pool redials that relay
 // and reissues the REQ, and events published afterwards still arrive.
 func TestRelayPoolReconnectsAndReissuesAfterWebsocketDrop(t *testing.T) {
 	relay := newPoolKhatruRelay(t, nil)

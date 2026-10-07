@@ -272,7 +272,7 @@ type SecurityObservablePublication struct {
 	UpdatedAt      time.Time                `json:"updated_at"`
 }
 
-// CanonicalTargetHash returns the SH lower-hex hash of a canonical target key.
+// CanonicalTargetHash returns the SHA-256 lower-hex hash of a canonical target key.
 func CanonicalTargetHash(targetKey string) string {
 	sum := sha256.Sum256([]byte(targetKey))
 	return hex.EncodeToString(sum[:])

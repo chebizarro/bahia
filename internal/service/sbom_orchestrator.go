@@ -32,7 +32,7 @@ const (
 // control-plane outbox, with the error contract of SecurityVerifiedPublisher.
 // DeliveryOutcome reports what the outbox knows about an event id; the
 // orchestrator reads it once a manifest recording a queued reference is
-// stored, for an outcome the outbox reached before that.
+// stored, for an outcome the outbox reached before that (bahia-irsry.40).
 type SBOMVerifiedPublisher interface {
 	PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomadapter.PublishOKResult, error)
 	DeliveryOutcome(ctx context.Context, eventID string) (nostrutil.DeliveryOutcome, error)

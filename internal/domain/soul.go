@@ -30,7 +30,7 @@ const (
 	KindRuntimeControlRequest = 38384
 	KindRuntimeControlResult  = 38386
 
-	// Compatibility lifecycle result alias used by early callers. New lifecycle results use KindProvisioningResult.
+	// Legacy lifecycle result alias used by early callers. New lifecycle results use KindProvisioningResult.
 	KindSoulActionLegacyResult = KindSoulAction + 1
 )
 
@@ -355,7 +355,7 @@ type SoulDraftContent struct {
 	AvatarPrompt string      `json:"avatar_prompt,omitempty"`
 	GeneratedAt  *int64      `json:"generated_at,omitempty"`
 
-	// Structured desired spec fields. Compatibility fields above remain valid for v1 drafts and migration.
+	// Structured desired spec fields. Legacy fields above remain valid for v1 drafts and migration.
 	Identity         SoulIdentitySpec    `json:"identity,omitempty"`
 	Persona          SoulPersonaSpec     `json:"persona,omitempty"`
 	Avatar           SoulAvatarSpec      `json:"avatar,omitempty"`
@@ -456,7 +456,7 @@ func IsLifecycleResultKind(kind int) bool {
 	return kind == KindProvisioningResult || kind == KindSoulActionLegacyResult
 }
 
-// CanonicalLifecycleResultKind maps compatibility lifecycle result aliases to the current result kind.
+// CanonicalLifecycleResultKind maps legacy lifecycle result aliases to the current result kind.
 func CanonicalLifecycleResultKind(kind int) int {
 	if kind == KindSoulActionLegacyResult {
 		return KindProvisioningResult
@@ -492,7 +492,7 @@ func ParseDraftContent(content string) (*SoulDraftContent, error) {
 	return &c, nil
 }
 
-// SchemaVersion returns the explicit draft schema, defaulting compatibility/no-schema drafts to v1.
+// SchemaVersion returns the explicit draft schema, defaulting legacy/no-schema drafts to v1.
 func (c SoulDraftContent) SchemaVersion() string {
 	if strings.TrimSpace(c.Schema) == "" {
 		return SoulFactoryDraftSchemaV1
@@ -530,7 +530,7 @@ func (c SoulDraftContent) HasV2CustomizationSpecs() bool {
 		c.Memory.RetentionDays != 0
 }
 
-// MigrateToLatest returns an additive v2 copy while preserving compatibility v1 fields.
+// MigrateToLatest returns an additive v2 copy while preserving legacy v1 fields.
 func (c SoulDraftContent) MigrateToLatest() SoulDraftContent {
 	migrated := c
 	migrated.Schema = SoulFactoryDraftSchemaLatest

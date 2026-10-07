@@ -21,11 +21,11 @@ type PolicyCanonicalPublisher func(ctx context.Context, policy *domain.Deploymen
 // BackfillCanonicalPolicies publishes, once per local store (marker), the
 // cp-state record of every policy that exists only in the SQL repository.
 // Security scan schedules and scan-time policy evaluation derive from the
-// retained policy cp-state alone (SecurityPolicyView), and policy
+// retained policy cp-state alone (SecurityPolicyView, audit B-32), and policy
 // cp-state is otherwise published only when a policy is mutated through the
 // intent handler, so a pre-inversion policy that was never touched since
 // would have no schedules and no gate until an operator edited it
-// . A policy the canonical view already holds is left alone: a
+// (bahia-u5whr). A policy the canonical view already holds is left alone: a
 // republish would only move its coordinate forward. A failed publish leaves
 // the marker unset so the next start retries the remainder.
 func (s *PolicyService) BackfillCanonicalPolicies(ctx context.Context, marker F74aBackfillMarker, publish PolicyCanonicalPublisher) error {

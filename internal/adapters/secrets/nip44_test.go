@@ -292,7 +292,7 @@ func TestNIP44_LargePayload(t *testing.T) {
 	}
 }
 
-// --- Compatibility compatibility documentation ---
+// --- Legacy compatibility documentation ---
 // The migration from github.com/nbd-wtf/go-nostr to fiatjaf.com/nostr changed
 // the NIP-44 self-encryption conversation key derivation. The old code passed
 // the private key hex as the "recipient" identifier, which produced an incorrect

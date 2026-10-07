@@ -115,7 +115,7 @@ type DockerObserver struct {
 func NewDockerObserver(dockerHost string, logger *zap.Logger) *DockerObserver {
 	observer, err := newDockerObserverWithEndpoint(config.RuntimeEndpointConfig{DockerHost: dockerHost}, logger)
 	if err != nil {
-		// This compatibility constructor cannot return errors. It is only used without
+		// This legacy constructor cannot return errors. It is only used without
 		// TLS material, so retain the historical best-effort behavior.
 		return &DockerObserver{httpClient: &http.Client{Timeout: 10 * time.Second}, host: normalizeDockerHTTPHost(dockerHost, false), logger: logger}
 	}

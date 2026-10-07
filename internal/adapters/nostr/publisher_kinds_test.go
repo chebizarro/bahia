@@ -89,7 +89,7 @@ func TestContinuityPublisherKindConstantsUnique(t *testing.T) {
 }
 
 // The retired 31000-31099 audit kinds are not listed: audit facts are regular
-// 4903 events, so no live kind shares their range.
+// 4903 events (bahia-irsry.9.3), so no live kind shares their range.
 func TestDNSPublisherKindConstantsUnique(t *testing.T) {
 	dnsKinds := map[string]int{
 		"KindDNSZoneState":     KindDNSZoneState,

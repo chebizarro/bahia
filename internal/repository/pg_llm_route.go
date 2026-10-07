@@ -26,7 +26,7 @@ func newPgLLMRouteRepositoryWithDB(db pgQueryer) *PgLLMRouteRepository {
 
 const llmRouteColumns = `id, name, description, gateway_config, default_placement_policy, default_promotion_gate, metadata, created_at, updated_at`
 
-// Create stores route under its client-minted id, minting a
+// Create stores route under its client-minted id (bahia-irsry.42), minting a
 // UUIDv7 only when none is supplied. A primary-key hit is ErrAlreadyExists,
 // which the registry resolves by content; a taken name is ErrConflict.
 func (r *PgLLMRouteRepository) Create(ctx context.Context, route *domain.LLMRoute) error {

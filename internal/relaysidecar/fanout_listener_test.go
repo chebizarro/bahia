@@ -17,7 +17,7 @@ import (
 )
 
 // TestSidecarREQGapEventSavedDuringStoredQueryIsDelivered covers khatru's
-// REQ gap: khatru runs the stored query before it registers
+// REQ gap (bahia-irsry.18): khatru runs the stored query before it registers
 // the live listener, so an event saved in between used to be neither replayed
 // nor delivered live. The test holds the REQ between the two steps, publishes
 // into the gap, and requires the event to arrive exactly once. It also
@@ -94,7 +94,7 @@ func TestSidecarREQGapEventSavedDuringStoredQueryIsDelivered(t *testing.T) {
 	}, counts)
 }
 
-// TestSidecarOverflowCloseRemovesListenerAndCounts: after an
+// TestSidecarOverflowCloseRemovesListenerAndCounts (bahia-irsry.18): after an
 // overflow CLOSED the khatru listener is removed server-side instead of
 // lingering until the client disconnects, the overflow counter is exported on
 // /metrics, and re-REQing the same id afterwards works.

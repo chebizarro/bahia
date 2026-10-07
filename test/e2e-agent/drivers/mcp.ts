@@ -1,4 +1,4 @@
-/***/
+/**
  * MCP HTTP JSON-RPC client driver for Bahia MCP server
  */
 import type { MCPToolCall, MCPToolResult } from '../types.js';
@@ -34,7 +34,7 @@ export interface MCPHTTPConnectionOptions {
   fetchImpl?: typeof fetch;
 }
 
-/***/
+/**
  * MCPDriver provides MCP client functionality for testing Bahia MCP tools.
  * Bahia exposes MCP as HTTP JSON-RPC at POST /mcp.
  */
@@ -45,7 +45,7 @@ export class MCPDriver {
   private connected = false;
   private nextID = 1;
 
-  /***/
+  /**
    * Connect to the Bahia MCP HTTP JSON-RPC endpoint and verify tool discovery.
    */
   async connect(options: MCPHTTPConnectionOptions): Promise<void> {
@@ -69,7 +69,7 @@ export class MCPDriver {
     console.log('✅ Connected to MCP server');
   }
 
-  /***/
+  /**
    * Disconnect from the MCP server.
    */
   async disconnect(): Promise<void> {
@@ -80,7 +80,7 @@ export class MCPDriver {
     console.log('🔌 Disconnected from MCP server');
   }
 
-  /***/
+  /**
    * List available tools.
    */
   async listTools(): Promise<Array<{ name: string; description: string }>> {
@@ -92,7 +92,7 @@ export class MCPDriver {
     }));
   }
 
-  /***/
+  /**
    * Call an MCP tool.
    */
   async callTool(call: MCPToolCall): Promise<MCPToolResult> {
@@ -109,7 +109,7 @@ export class MCPDriver {
     };
   }
 
-  /***/
+  /**
    * Check if connected.
    */
   isConnected(): boolean {
@@ -152,7 +152,7 @@ export class MCPDriver {
     return payload.result;
   }
 
-  /***/
+  /**
    * Ensure client is connected.
    */
   private ensureConnected(): void {
@@ -163,7 +163,7 @@ export class MCPDriver {
 
   // ==================== Bahia-specific helpers ====================
 
-  /***/
+  /**
    * List services via MCP.
    */
   async bahiaListServices(): Promise<MCPToolResult> {
@@ -173,7 +173,7 @@ export class MCPDriver {
     });
   }
 
-  /***/
+  /**
    * Deprecated: direct service creation via MCP now returns a signer-first Nostr migration error.
    */
   async bahiaCreateService(data: {
@@ -188,7 +188,7 @@ export class MCPDriver {
     });
   }
 
-  /***/
+  /**
    * Get service via MCP.
    */
   async bahiaGetService(serviceId: string): Promise<MCPToolResult> {
@@ -198,7 +198,7 @@ export class MCPDriver {
     });
   }
 
-  /***/
+  /**
    * List environments via MCP.
    */
   async bahiaListEnvironments(): Promise<MCPToolResult> {
@@ -208,7 +208,7 @@ export class MCPDriver {
     });
   }
 
-  /***/
+  /**
    * Deprecated: direct environment creation via MCP now returns a signer-first Nostr migration error.
    */
   async bahiaCreateEnvironment(data: {
@@ -222,7 +222,7 @@ export class MCPDriver {
     });
   }
 
-  /***/
+  /**
    * Deploy via MCP.
    */
   async bahiaDeploy(data: {

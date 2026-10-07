@@ -30,12 +30,12 @@
   import { authState, initializeAuth, isAuthenticated, resolveActiveSigner } from '$lib/stores/auth.js';
   import { canAccessRoute } from '$lib/auth/route-access.js';
   import { createVersionReloadWatcher } from '$lib/version-reload.js';
-  /***/
+  /**
    * @typedef {Object} Props
    * @property {import('svelte').Snippet} [children]
    */
 
-  /** @type {Props}*/
+  /** @type {Props} */
   let { children } = $props();
 
   const routeAccess = $derived(
@@ -67,7 +67,7 @@
     queueMicrotask(async () => {
       if (!active) return;
 
-      //: Open the event store first so derived stores
+      // Phase 4 W1-S2: Open the event store first so derived stores
       // render from persisted data immediately (before network).
       try {
         await boot();
@@ -84,7 +84,7 @@
         // Cached SoulFactory read models project now (continuity projects on
         // page mount); the relay readers start below, after boot's own REQs.
         initSoulFactoryStoreBinding({ relay: false });
-        // The daemon's fleet-OCK encrypted operator allowlists:
+        // The daemon's fleet-OCK encrypted operator allowlists (bahia-fbyo5):
         // decrypted records widen the trusted operator set below.
         initOperatorAllowlistBinding();
         initOpsWidgetWallBinding();

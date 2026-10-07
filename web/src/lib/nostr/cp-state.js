@@ -49,7 +49,7 @@ export function controlStateSchema(event, content = null) {
 }
 
 // Worker families address their records under a per-family d prefix
-// (internal/kinds CPStateFamily.WorkerDTag, ): assignment and
+// (internal/kinds CPStateFamily.WorkerDTag, bahia-irsry.36): assignment and
 // drain are both keyed by the worker pubkey, and on one shared d a relay kept
 // only whichever family was published last.
 const WORKER_D_PREFIX_BY_SCHEMA = Object.freeze({
@@ -63,7 +63,7 @@ const WORKER_D_PREFIX_BY_SCHEMA = Object.freeze({
 // workerRecordId returns the id a worker record's d carries after its family's
 // prefix (the worker pubkey; the preview id for eligibility), or '' when the
 // record is not on its family's coordinate: the bare-pubkey d assignment and
-// drain shared before, or a per-event migration d.
+// drain shared before bahia-irsry.36, or a per-event migration d.
 export function workerRecordId(event, content = null) {
   const prefix = WORKER_D_PREFIX_BY_SCHEMA[controlStateSchema(event, content)];
   const d = getTagValue(event, 'd', '');

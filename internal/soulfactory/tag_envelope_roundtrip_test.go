@@ -12,7 +12,7 @@ import (
 // runtime-control request envelope built by BuildRuntimeControlRequestEvent
 // (producer) is matched by the OpenClaw sidecar subscription filter, which
 // selects on tagPubkey + tagSchema + tagMethod. Guards drift of the
-// method/pubkey/schema filter keys now shared via constants.
+// method/pubkey/schema filter keys now shared via constants (bahia-s7o9).
 func TestTagEnvelope_RuntimeControlRequest_MethodFilterRoundTrip(t *testing.T) {
 	const runtimePubkey = "runtime-pubkey-hex"
 	env := RuntimeControlEnvelope{

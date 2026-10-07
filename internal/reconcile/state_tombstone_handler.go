@@ -11,7 +11,7 @@ import (
 // StateTombstoneHandler subscribes to EventEnvironmentServiceStateChanged on
 // the in-process event bus and publishes a cp-state tombstone to relays when
 // the event carries Deleted: true. This replaces the projector's handleEvent
-// state tombstone case ( S1).
+// state tombstone case (Phase 3 S1).
 type StateTombstoneHandler struct {
 	publisher RuntimeStatePublisher
 	logger    *zap.Logger
