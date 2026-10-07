@@ -1,481 +1,135 @@
 # Troubleshooting
 
-Common issues and solutions when using Bahia.
+Symptoms, likely causes, and the checks that resolve them.
 
-## Connection Issues
+## Daemon
 
-### Cannot Connect to API Server
-
-**Symptoms:**
-- "Connection refused" errors
-- Timeouts when accessing `http://localhost:8080`
-
-**Solutions:**
-1. Verify the server is running:
-   ```bash
-   docker compose ps
-   # or
-   ps aux | grep bahia
-   ```
-
-2. Check the server logs:
-   ```bash
-   docker compose logs bahia
-   ```
-
-3. Verify the port is correct:
-   ```bash
-   curl http://localhost:8080/health
-   ```
-
-4. Check firewall rules if accessing remotely.
-
-### Cannot Connect to Relays
-
-**Symptoms:**
-- "WebSocket connection failed"
-- Events not appearing
-- Subscriptions timing out
-
-**Solutions:**
-1. Verify relay URLs in configuration:
-   ```bash
-   curl http://localhost:8080/.well-known/nostr.json
-   ```
-
-2. Test relay connectivity directly:
-   ```bash
-   websocat wss://relay.example.com
-   ```
-
-3. Check relay health in the discovery endpoint.
-
-4. Ensure TLS certificates are valid for wss:// URLs.
-
-## Authentication Issues
-
-### "Unauthorized" Errors
-
-**Symptoms:**
-- 401 responses from API
-- "Unauthorized pubkey" errors
-
-**Solutions:**
-1. Verify authentication is configured correctly:
-   ```yaml
-   auth:
-     enabled: true
-     bootstrap_owner_pubkeys:
-       - "your-pubkey-hex"
-   ```
-
-2. Ensure the selected browser signer is connected and still returns the pubkey stored in the session. For CLI remote signing, confirm the bunker URI, relay pool, and persistent client key file are configured.
-
-3. Check the pubkey is in the appropriate allowlist.
-
-4. Verify NIP-98 token is being sent correctly.
-
-### NIP-07 Not Working
-
-**Symptoms:**
-- "No Nostr extension found"
-- Signing requests hang
-
-**Solutions:**
-1. Verify browser extension is installed (nos2x, Alby, etc.)
-2. Check extension permissions for the site
-3. Ensure `window.nostr` is available:
-   ```javascript
-   console.log(window.nostr)
-   ```
-
-### NIP-46 Connection Failed
-
-**Symptoms:**
-- "Bunker connection failed"
-- Timeout connecting to remote signer
-
-**Solutions:**
-1. Verify bunker URI is correct
-2. Check relay connectivity for the bunker
-3. Ensure the bunker is online and accepting connections
-
-## Deployment Issues
-
-### Deployment Stuck in Pending
-
-**Symptoms:**
-- Intent stays in "pending" status
-- No progress after creation
-
-**Solutions:**
-1. Check whether approval is required in the Deployments UI or with `bahia_get_intent` through MCP.
-
-2. Verify policies by publishing a signed `PolicyEvaluate` event for the artifact and environment, or use a UI flow backed by the Nostr control plane.
-
-3. Check authorized approvers are available.
-
-4. Review environment settings for approval requirements.
-
-### Deployment Failed
-
-**Symptoms:**
-- Run shows "failed" status
-- Error in deployment logs
-
-**Solutions:**
-1. Check the run in the Deployments UI or call `bahia_get_run_logs` through MCP.
-
-2. Verify artifact exists and is pullable:
-   ```bash
-   docker pull registry.example.com/image:tag
-   ```
-
-3. Check worker connectivity:
-   ```bash
-   bahia workers list
-   ```
-
-4. Verify runtime target is accessible.
-
-### Drift Detected
-
-**Symptoms:**
-- State shows "drifted"
-- Observed artifact differs from desired
-
-**Solutions:**
-1. Check what's actually running:
-   ```bash
-   bahia state list --service svc-123
-   ```
-
-2. Deploy to correct the drift by publishing a ContextVM `service/deploy` intent or using a UI flow backed by the Nostr control plane. Legacy `DeployRequest` custom kinds are startup migration inputs only.
-
-3. Investigate why drift occurred (manual changes, crashes, etc.)
-
-4. Consider enabling auto-remediation.
-
-## Worker Issues
-
-### Worker Offline
-
-**Symptoms:**
-- Worker shows "offline" status
-- Deployments queue but don't execute
-
-**Solutions:**
-1. Check worker process is running
-2. Verify relay connectivity from worker
-3. Check worker logs for errors
-4. Restart worker if necessary
-
-### Worker Capability Missing
-
-**Symptoms:**
-- "No worker with capability X"
-- Deployment waiting for worker
-
-**Solutions:**
-1. List workers and capabilities:
-   ```bash
-   bahia workers list
-   ```
-
-2. Ensure a worker has the required capability.
-
-3. Add capability to worker configuration and restart.
-
-## Database Issues
-
-### Migration Failed
-
-**Symptoms:**
-- Server won't start
-- "Migration error" in logs
-
-**Solutions:**
-1. Check database connectivity:
-   ```bash
-   psql $DATABASE_URL -c "SELECT 1"
-   ```
-
-2. Review migration logs for specific errors.
-
-3. Ensure database user has necessary permissions.
-
-4. Try running migrations manually:
-   ```bash
-   make migrate
-   ```
-
-### Data Not Persisting
-
-**Symptoms:**
-- State disappears after restart
-- Events not found
-
-**Solutions:**
-1. Verify DATABASE_URL is set correctly.
-
-2. Check PostgreSQL is persisting data:
-   ```bash
-   docker compose exec postgres psql -U postgres -c "SELECT count(*) FROM services"
-   ```
-
-3. Ensure volume mounts are correct in Docker Compose.
-
-## Nostr Issues
-
-### Events Not Publishing
-
-**Symptoms:**
-- Publish returns error
-- Events don't appear on relay
-
-**Solutions:**
-1. Check relay OK response:
-   - `accepted: true` — published successfully
-   - `accepted: false` — check message for reason
-
-2. Verify event signature is valid.
-
-3. Check rate limits on relay.
-
-4. Ensure relay accepts the event kind.
-
-### Subscriptions Not Receiving Events
-
-**Symptoms:**
-- No events received
-- EOSE never arrives
-
-**Solutions:**
-1. Verify the filter is scoped to canonical observables:
-   ```json
-   {"kinds": [30900, 30315, 4903], "authors": ["<bahia-service-pubkey>"], "#service": ["svc-123"]}
-   ```
-
-2. Check relay has the events (try different relay).
-
-3. Ensure subscription is to correct relay.
-
-4. Verify authors filter matches Bahia service pubkey.
-
-### ContextVM / NIP-44 Operations Failing
-
-**Symptoms:**
-- "Encryption failed" errors
-- ContextVM requests do not receive result events
-
-**Solutions:**
-1. Verify signer supports NIP-44:
-   ```javascript
-   console.log(window.nostr.nip44)
-   ```
-
-2. Check Bahia discovery advertises standard browser/bootstrap or ContextVM relays.
-
-3. Verify correct service pubkey is used.
-
-### Migration App Fails at Startup
-
-**Symptoms:**
-- Startup logs mention legacy-kind migration failure
-- Canonical observables are missing after restart
-- Relay backfill does not complete
-
-**Solutions:**
-1. Verify the Bahia service private key and Nostr publisher are configured for non-dry-run migration.
-2. Check relay connectivity and require `EOSE` for legacy backfill before treating migration as complete.
-3. Rerun startup after fixing configuration. The migration app is idempotent: it skips canonical outputs already tagged with `migrated-from=<legacy_event_id>` and preserves `legacy-kind` metadata.
-4. Keep relay sidecar allowlists in place. The sidecar should route canonical outputs and migration publishes to configured allowlisted relays; do not re-enable legacy live subscribers as a workaround.
-
-## Web UI Issues
-
-### UI Not Loading
-
-**Symptoms:**
-- Blank page
-- JavaScript errors
-
-**Solutions:**
-1. Check browser console for errors.
-
-2. Verify static files are being served.
-
-3. Check API connectivity from browser.
-
-4. Clear browser cache and reload.
-
-### State Not Updating
-
-**Symptoms:**
-- UI shows stale data
-- Changes don't appear
-
-**Solutions:**
-1. Check WebSocket connection to relay.
-
-2. Verify subscriptions are active.
-
-3. Check browser console for errors.
-
-4. Try refreshing the page.
-
-## Performance Issues
-
-### Slow API Responses
-
-**Symptoms:**
-- High latency on requests
-- Timeouts on queries
-
-**Solutions:**
-1. Check database query performance.
-
-2. Review PostgreSQL connection pool settings.
-
-3. Enable query logging to identify slow queries.
-
-4. Consider adding indexes for common queries.
-
-### High Memory Usage
-
-**Symptoms:**
-- OOM errors
-- Server crashes under load
-
-**Solutions:**
-1. Review connection pool sizes.
-
-2. Check for memory leaks in logs.
-
-3. Increase container memory limits.
-
-4. Consider scaling horizontally.
-
-## Security OSV Scanning Issues
-
-### Scan Not Triggering After SBOM Import
-
-**Symptoms:**
-- SBOM imports successfully but no Security scan starts
-- No Security `30315` status events appear
-
-**Solutions:**
-1. Verify Security is enabled in the relevant policy:
-   ```json
-   { "type": "security_osv_scan", "params": { "enabled": true } }
-   ```
-
-2. Confirm SBOM import published `30078` and `30004` events with relay OK acceptance.
-
-3. Check Bahia service logs for Security SBOM subscription status and EOSE processing.
-
-4. Verify relay connectivity and that the Security service can subscribe to `#domain=sbom` filters.
-
-### Security Scan Failed
-
-**Symptoms:**
-- Scan status shows `failed` in `30315` events
-- `4903` audit fact includes error details
-
-**Solutions:**
-1. Check the scan error field for the root cause:
-   - **Payload hash mismatch** — SBOM payload in Blossom storage doesn't match the `30078` reference hash. Re-import or regenerate the SBOM.
-   - **OSV unreachable** — Network issues reaching `api.osv.dev`; retries exhausted. Check outbound HTTP connectivity.
-   - **Invalid request (400)** — Malformed PURL or invalid version combination rejected by OSV. Check SBOM package data quality.
-
-2. For transient failures, request a rescan:
-   ```json
-   { "method": "security/rescan", "params": { "target_key_hash": "<hash>", "force": true } }
-   ```
-
-3. Review `4903` audit facts with `#domain=security` and `type=security-scan` filters.
-
-### Breach Notifications Not Received
-
-**Symptoms:**
-- Policy breach expected but no notification dispatched
-- Notification logs show no `security.policy_breached` events
-
-**Solutions:**
-1. Verify notification channel includes `security.policy_breached` in its event filter.
-
-2. Confirm the breach is new or materially changed — unchanged recurring breaches are intentionally suppressed to avoid alert fatigue.
-
-3. Check organization-scoped delivery logs in the Notifications UI or call `bahia_list_notifications` through MCP.
-
-4. Verify breach was detected by checking `4903` audit facts with `type=security-policy-breach`.
-
-### Policy Blocking Deployments Due to Missing Security Scan
-
-**Symptoms:**
-- Deployment blocked with policy violation
-- No Security scan exists for the artifact
-
-**Solutions:**
-1. Check the `no_scan` policy parameter — if set to `"block"`, deployments will be blocked when no scan exists.
-
-2. During initial rollout, consider using `"warn"` instead of `"block"`:
-   ```json
-   { "type": "security_osv_scan", "params": { "no_scan": "warn" } }
-   ```
-
-3. Trigger an explicit scan via `security/scan` for the artifact's SBOM target.
-
-4. Check `security/schedules-list` for scan freshness state.
-
-## Getting Help
-
-### Logs
-
-Collect logs for debugging:
+### `/health` does not answer
 
 ```bash
-# Docker Compose
-docker compose logs bahia > bahia.log
-docker compose logs postgres > postgres.log
-
-# Systemd
-journalctl -u bahia > bahia.log
+docker compose ps
+docker compose logs bahia
+curl http://localhost:8080/health
 ```
 
-### Debug Mode
+The daemon listens on `server.host:server.port` (default `127.0.0.1:8080`). Inside Compose the host is `0.0.0.0`; outside it, set `BAHIA_SERVER_HOST`.
 
-Enable verbose logging:
+### `/ready` returns 503
+
+`/ready` lists every readiness check with its status:
+
+- `relay_quorum` — fewer healthy relays than `nostr.relay_quorum.*_min_healthy` for the current mode. Check relay URLs, TLS, and NIP-42 credentials.
+- `bootstrap_ready` / `intent_readiness` — the daemon is still replaying its relay filters after start; wait for `all filters synced`.
+- `background_runners` — a required runner stopped; the message names it, the log has the cause.
+- `canonical_delivery` (`warn`) — the publish outbox abandoned records after exhausting retries. The message names the coordinates; run `bahia outbox --daemon list --state failed` and `bahia outbox retry --all`, or call the `bahia_outbox_retry` MCP tool. Fix the relay before retrying or the entries fail again.
+- `intent_authors_sync` — the daemon could not push its trust set to the relay sidecar over NIP-86; operators and members will be refused as writers until it succeeds.
+- Feature checks (`adoption`, `hiveci`, `edge_routing`, `internal_routing`, `security_scanner`, `backup_scheduler`, `payments`, `ock_rotation`, `relay_policy_projection`, `supervision_apply_lock`) report the state of their subsystem and name the configuration they need.
+
+PostgreSQL is not a readiness gate: the daemon keeps serving relay-backed reads without it, and the HTTP routes that need the index answer `503`.
+
+### Log level
 
 ```yaml
-logging:
-  level: debug
+log:
+  level: debug      # BAHIA_LOG_LEVEL=debug
+  format: json
 ```
 
-Or:
+## Relays
+
+### Clients cannot connect or receive nothing
+
+1. Confirm the relay accepts WebSocket connections: `websocat wss://relay.example.com`.
+2. Confirm the client trusts the right service pubkey: canonical records are filtered by `authors`, so a wrong pubkey yields an empty store, not an error. The web app's seed is `PUBLIC_BAHIA_SERVICE_PUBKEYS`; the CLI's is `--service-pubkey`.
+3. Confirm you are subscribing by `#t` topic (`service-state`, `deployment-intent`, …); `domain` and `schema` are not relay-indexed.
+4. If the subscription is CLOSED with `auth-required:`, the topic is protected: authenticate with a pubkey the sidecar admits (fleet operator, organization member, or `read_auth_allowed_pubkeys`). See [relay sidecar](nostr-integration.md#relay-sidecar).
+5. If EOSE never arrives on one relay, the CLI prints a stale-data warning and serves its local store; the web app shows the relay as catching up or degraded. Either is a relay problem, not a data problem.
+
+### Publish is refused
+
+The relay's `OK` message carries the reason:
+
+- `blocked: pubkey is not admitted by the persisted relay policy` — the signer is not a fleet operator, organization member, or relay administrator. Membership propagates to the sidecar through the daemon's intent-author sync; a member added seconds ago may need the next sync.
+- `invalid: created_at too far in the future` / `… in the past` — fix the client clock.
+- `invalid: event has expired` — an `expiration` tag in the past.
+- `auth-required:` — the relay wants NIP-42 and the signer cannot authenticate.
+
+### Intent accepted by the relay but nothing happens
+
+Relay `OK` is delivery, not processing. Wait for the `30315` status addressed to your pubkey (`bahia …` exits `2` and prints the intent and event IDs when it times out). If no status ever arrives:
+
+- the domain is listed in `nostr.intent_domains_disabled`;
+- the daemon is not subscribed to the relay you published to (`nostr.relays` / `contextvm_relays`);
+- the intent is missing a required tag (`d`, `domain`, `intent_id`, `org` for organization-scoped domains) and was dropped at parse time — check the daemon log.
+
+A `rejected` or `conflict` status carries a `reason`; a `conflict` on an update means your `expected_updated_at` is stale — re-read and resubmit.
+
+## Signers
+
+### NIP-07 extension not detected
+
+The web app needs `window.nostr` with `signEvent`, `getPublicKey`, and `nip44` for confidential intents. Install or unlock the extension and reload; some extensions require the site to be allowed first.
+
+### NIP-46 bunker will not connect
+
+- The bunker URI must include at least one relay, or pass it with `--nostr-bunker-relay` (CLI) / the relay field (web).
+- The bunker must approve the client key. The CLI uses a persistent client key from `--nostr-client-key-file`; it never generates a throwaway identity.
+- Confidential domains (`org`, `secret`, `notification`, `relay`) require a NIP-44-capable signer; the control stays disabled and names the missing capability otherwise.
+
+### `access denied` from MCP or `not readable with this key`
+
+MCP over HTTP requires the caller's pubkey in `nostr.authorized_pubkeys` and the platform admin role. A confidential read answers `not readable with this key` when the signer is not a member of the organization (or, for fleet-scope records, not a fleet operator), so no key envelope was wrapped to it.
+
+## Deployments
+
+### Intent stays `pending`
+
+The environment is `protected`, its reconcile mode is `approval_required`, or a `block` policy failed. Approve or reject it under **Deployments → Pending Approvals** or with `bahia deployments approve --intent <id> --expected-updated-at <rfc3339>` (role `deployer` or above).
+
+### Run `failed` or `timeout`
+
+Read the run logs (**Deployments → run**, `bahia logs run <run-id>`, or `bahia_get_run_logs`). Then check that the artifact digest is pullable from the runtime endpoint, that the deployment unit's `endpoint_ref` resolves, and — for worker-executed runs — that an eligible worker is online (`bahia workers list`).
+
+### `drifted`
+
+`bahia state drifted` lists affected services. The observed artifact differs from the desired one: a manual restart with another image, an out-of-band deployment, or a crash loop. Redeploy the desired artifact, or set the environment's reconcile mode to `auto_apply` to let the daemon converge.
+
+### Managed route unhealthy while the service is healthy
+
+Route canaries report `service_healthy_route_broken=true` when the container is fine but the public route fails. Check DNS projection, TLS, and the proxy; see [Route Canaries](features/route-canaries.md).
+
+## Builds and artifacts
+
+- `Gitea mirror and HiveCI build initiation are not configured` — set `hiveci.initiator.enabled` and its mirror settings.
+- `builds request` times out on first use — mirroring a repository can take longer than 30 s; retry with the same `--idempotency-key` and `--result-timeout 120s`.
+- A build succeeded but no artifact appears — the daemon registers artifacts only from signed `5402` results whose publisher is in `hiveci.trusted_loom_worker_pubkeys` / `hiveci.trusted_ci_pubkeys`.
+- `artifacts import-observed` refuses — `hiveci.allow_live_artifact_import` is `false`, or the digest and `bahia.*` labels do not match what the daemon observes.
+
+## Security scans
+
+- A scan did not start after an SBOM import — the scanner watches the SBOM reference and availability events; confirm both were accepted by the relay, then trigger one explicitly from **Security** (a `security` `scan-run` intent).
+- `security.policy_breached` notifications are sent only when a breach fingerprint is new or changed, through a channel subscribed to that event type.
+- A policy blocks for a missing scan — run the scan, wait for the `security-finding` records, then re-evaluate.
+
+## Web app
+
+- **Blank page** — the container did not receive `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` / `PUBLIC_BAHIA_SERVICE_PUBKEYS`; check the browser console for `Documentation publisher not configured` or a bootstrap error.
+- **Stale data** — the page renders the local event store first; the relay indicator shows **Syncing with relays…** until every relay reaches EOSE. Use **Settings → Relays** to reconnect the browser session or add a local override.
+- **Pending badge never clears** — see *Intent accepted by the relay but nothing happens* above.
+
+## Collecting diagnostics
+
 ```bash
-BAHIA_LOG_LEVEL=debug bahia-server
+docker compose logs bahia > bahia.log
+curl -s http://localhost:8080/health
+curl -s http://localhost:8080/ready
+bahia outbox --daemon counts
 ```
 
-### Health Checks
-
-```bash
-# API health
-curl http://localhost:8080/health
-
-# Readiness
-curl http://localhost:8080/ready
-
-# Discovery
-curl http://localhost:8080/.well-known/nostr.json
-```
-
-### Community
-
-- GitHub Issues: Report bugs and feature requests
-- Nostr: Connect with the community
+Configuration printed in logs or exported as JSON/YAML is masked (keys, credentials, bunker URIs) and safe to share.
 
 ## Related
 
-- [Getting Started](getting-started.md) — Setup guide
-- [Core Concepts](core-concepts.md) — Understanding Bahia
-- [Nostr Integration](nostr-integration.md) — Event model
+- [Getting Started](getting-started.md)
+- [Nostr Integration](nostr-integration.md)
+- [CLI Reference](cli-reference.md)

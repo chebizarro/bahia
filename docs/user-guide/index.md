@@ -1,127 +1,101 @@
 # Bahia User Guide
 
-Welcome to Bahia — a deployment and runtime control plane that tracks your builds, deploys your containers, and tells you when something goes wrong.
+Bahia is a Nostr-native deployment and runtime control plane. It tracks governed builds and artifacts, coordinates desired state, observes runtimes, detects drift, and publishes signed operational truth.
 
-## What is Bahia?
-
-Bahia is a **Nostr-native** deployment platform that:
-
-- **Tracks builds and artifacts** — knows which versions exist and where they came from
-- **Manages deployments** — coordinates what should run in which environment
-- **Observes runtime state** — detects drift between desired and actual state
-- **Records operational truth** — publishes events to Nostr for auditability
-- **Provisions AI agents** — manages Soul Factory agent lifecycles (optional)
-
-## Quick Start
+## Quick start
 
 ```bash
-# Start with Docker Compose
 docker compose up --build
-
-# Check health
 curl http://localhost:8080/health
-
-# Open the web UI
 open http://localhost:3000
 ```
 
-## Documentation Overview
+The web deployment requires `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS` so the browser can discover relays and trust the Bahia signer. See [Getting Started](getting-started.md) for configuration and a first deployment.
 
-The same documentation corpus is available in three places:
+## Online documentation
 
-- **Web UI**: Open `/docs` for the browsable catalog, then `/docs/<topic>` for a specific guide such as `/docs/features-services`.
-- **Contextual help**: Product routes with matching guides expose a route-specific docs action, and the assistant composer shows a dismissible documentation reference such as `docs:features-services` before you send a prompt.
-- **MCP**: AI agents can discover docs with `bahia_docs_list`, read topics with `bahia_docs_read`, or read `bahia://docs/<topic>` resources.
+The same catalog is available to people and agents:
 
-The relay-published docs catalog is built from Bahia’s user-guide content. Keep `docs/user-guide/**/*.md` authoritative and do not duplicate user-facing docs in route code or assistant prompts.
+- **Web:** `/docs` lists topics; `/docs/<topic>` reads one topic.
+- **Contextual help:** product routes with a mapped guide add a visible documentation reference.
+- **MCP:** `bahia_docs_list` and `bahia_docs_read`, plus `bahia://docs/<topic>` resources.
 
-### Getting Started
-- [Getting Started](getting-started.md) — Installation, first deployment, initial setup
+`internal/docs` publishes `docs/user-guide/**/*.md` to the relays as kind `30023` with `t=bahia-docs`. Only links to another file in this tree resolve as internal online documentation.
 
-### Core Concepts
-- [Core Concepts](core-concepts.md) — Services, environments, artifacts, and the Nostr model
+## Start here
 
-### Feature Guides
+- [Getting Started](getting-started.md) — install, configure, and deploy
+- [Core Concepts](core-concepts.md) — entities, lifecycle, events, and authorization
+- [CLI Reference](cli-reference.md) — terminal commands and flags
+- [MCP Tools](mcp-tools.md) — agent tools, arguments, authorization, and completion
+- [Nostr Integration](nostr-integration.md) — events, relays, encryption, outbox, and HTTP
+- [Troubleshooting](troubleshooting.md) — readiness, relays, signers, and operations
 
-| Feature | Description |
-|---------|-------------|
-| [Services](features/services.md) | Create and manage deployable applications |
-| [Adoption](features/adoption.md) | Scan existing runtime targets before importing services |
-| [Environments](features/environments.md) | Configure deployment targets (staging, production) |
-| [Deployments](features/deployments.md) | Deploy artifacts with intents, approvals, and runs |
-| [Operator Assistant](features/operator-assistant.md) | Batch plan review/editing and iterative assistant workflows (unified execution contract) |
-| [Virtual Machines](features/virtual-machines.md) | Persistent VMs, execution planes, public queries, approvals and observability |
-| [Artifacts](features/artifacts.md) | Container images and build outputs |
-| [Notifications](features/notifications.md) | Organization-scoped webhook and Nostr DM delivery |
-| [Organizations](features/organizations.md) | Team management and access control |
-| [LLM Routes](features/llm-routes.md) | Manage and deploy LLM inference endpoints (feature-gated; disabled by default) |
-| [ML Models](features/ml-models.md) | AI/ML model registry, recipes, and inference |
-| [Souls](features/souls.md) | AI agent provisioning with Soul Factory (feature-gated; disabled by default) |
-| [Workers](features/workers.md) | Loom workers for deployment execution |
-| [Fleet Health](features/fleet-health.md) | Resource pressure map and cleanup orchestration status |
-| [Route Canaries](features/route-canaries.md) | End-to-end verification and outage detection for managed routes |
-| [Ops Widgets](features/ops-widgets.md) | Trusted live kind-30318 operations widgets rendered by Wheelhouse |
-| [Continuity](features/continuity.md) | Failover readiness, topology, and local simulation |
-| [Events](features/events.md) | Live inspection of Nostr control-plane and read-model events |
-| [Environment States](features/environment-states.md) | Desired-versus-observed state and drift inspection |
-| [Backup](features/backup.md) | Backup definitions, policies, and recovery |
-| [DNS](features/dns.md) | DNS zone and endpoint management (feature-gated; disabled by default) |
-| [Packages](features/packages.md) | Package repository management |
-| [Policies](features/policies.md) | Deployment approval and SBOM policies |
-| [Security](features/security.md) | OSV vulnerability scanning dashboard |
-| [Payments](features/payments.md) | Cost estimation and payment history |
+## Feature guides
 
-### Operator Guides
-- [Managed DNS and HTTPS Routes](guides/managed-dns-and-https-routes.md) — Deploy a service, project internal DNS, and attach a managed public HTTPS route
+| Guide | Product surface |
+|---|---|
+| [Organizations](features/organizations.md) | Tenancy, roles, OCK encryption, and membership |
+| [Services](features/services.md) | Deployable applications, secrets, runtime actions, and routes |
+| [Adoption](features/adoption.md) | Scan and import running containers |
+| [Builds](features/builds.md) | Governed Hive-CI build requests and results |
+| [Artifacts](features/artifacts.md) | Images, provenance, SBOMs, signatures, and scans |
+| [Environments](features/environments.md) | Deployment units, strategy, reconciliation, and protection |
+| [Deployments](features/deployments.md) | Preview, approval, execution, logs, rollback, and observation |
+| [Environment States](features/environment-states.md) | Desired-versus-observed state and drift |
+| [Instance Health](features/instance-health.md) | Runtime supervision, recovery history, and maintenance |
+| [Workers](features/workers.md) | Execution capability, scheduling, lifecycle, and cleanup |
+| [Fleet Health](features/fleet-health.md) | Pressure, cleanup, and fleet operational state |
+| [Route Canaries](features/route-canaries.md) | End-to-end route verification and outage state |
+| [DNS](features/dns.md) | Zones, endpoints, projection, overrides, drift, and mesh |
+| [Packages](features/packages.md) | Repositories, upload, promotion, yank, and drift |
+| [Policies](features/policies.md) | Deployment evidence and enforcement |
+| [Config Fabric](features/config-fabric.md) | Desired/effective service configuration and rollback |
+| [Security](features/security.md) | SBOM vulnerability scanning and policy evidence |
+| [Notifications](features/notifications.md) | Channels, encrypted configuration, and delivery log |
+| [Backup](features/backup.md) | Backup, verification, restore, and retention |
+| [Continuity](features/continuity.md) | Placement, readiness, and failover simulation |
+| [Payments](features/payments.md) | Pricing, estimates, run cost, and payment history |
+| [ML Models](features/ml-models.md) | Model registry, recipes, provenance, and endpoints |
+| [LLM Routes](features/llm-routes.md) | Model-serving routes, releases, deployment, and rollback |
+| [Virtual Machines](features/virtual-machines.md) | Persistent VMs and execution planes |
+| [Souls](features/souls.md) | Soul Factory provisioning and lifecycle |
+| [Operator Assistant](features/operator-assistant.md) | In-product planning, approval, and MCP execution |
+| [Ops Widgets](features/ops-widgets.md) | Trusted live operations widgets |
+| [Events](features/events.md) | Live inspection of verified control-plane events |
+| [Settings](features/settings.md) | Signer, profile, relays, discovery, and fleet configuration |
 
-### Integration & Reference
-- [Nostr Integration](nostr-integration.md) — How Nostr powers the control plane
-- [MCP Tools Reference](mcp-tools.md) — Tools available for AI agents
-- [CLI Reference](cli-reference.md) — Command-line interface guide
-- [Troubleshooting](troubleshooting.md) — Common issues and solutions
+## Operator guides
 
-## Key Concepts at a Glance
+- [Managed DNS and HTTPS Routes](guides/managed-dns-and-https-routes.md) — deploy a service, project DNS, and attach a managed hostname
 
-| Term | What it means |
-|------|---------------|
-| **Service** | An application you deploy |
-| **Environment** | A deployment target (staging, production, etc.) |
-| **Build** | A CI run that produced deployable output |
-| **Artifact** | An immutable container image plus metadata |
-| **Deployment Intent** | A request to deploy an artifact |
-| **Deployment Run** | A concrete execution of a deployment |
-| **Drift** | A mismatch between desired and observed state |
-| **Read Model** | Nostr event reflecting current shared state |
+## Core flow
 
-## Architecture Overview
+```text
+operator signs intent ──▶ relay ──▶ daemon validates and applies
+                                      │
+                                      ├─▶ 30315 intent status
+                                      ├─▶ 30900 canonical state
+                                      └─▶ 4903 audit facts
 
-```
-┌─────────────────┐     ┌──────────────────────────────┐
-│ Browser / CLI   │────▶│ ContextVM discovery (11316-11320) │
-│ / MCP Agent     │     │ + NIP-51 relay sets (30002)      │
-└────────┬────────┘     └──────────────┬───────────────┘
-         │                              │
-         │ signed requests              │ relay discovery
-         ▼                              ▼
-┌────────────────────────────────────────────────────────┐
-│            Nostr Control Plane / Sidecar               │
-│   public requests • status/results • read models       │
-└────────────────────────────────────────────────────────┘
-                          │
-         ┌────────────────┼────────────────┐
-         ▼                ▼                ▼
-    PostgreSQL      OCI / Blossom    Loom Workers
+runtime or worker ──▶ authenticated observation ──▶ desired/observed state and drift
 ```
 
-## Getting Help
+Relay `OK` means publication, not completion. Follow intent status and canonical outcome records.
 
-- **Web UI**: Access the dashboard at `http://localhost:3000`
-- **Docs UI**: Browse documentation at `http://localhost:3000/docs`; internal documentation links stay inside `/docs/<topic>`.
-- **Assistant**: Open the floating assistant on a mapped product route to include a visible, dismissible route docs reference in `selected_refs`.
-- **MCP**: Connect to `/mcp` for AI agent tooling, including `bahia_docs_list` and `bahia_docs_read`.
-- **Nostr**: Subscribe to read models and status events
-- **API Docs**: See [api.md](../api.md) for HTTP reference
+## Data model at a glance
 
----
+| Term | Meaning |
+|---|---|
+| Service | An organization-owned deployable application |
+| Environment | A deployment target with one or more units |
+| Build | A governed CI execution |
+| Artifact | An immutable image and provenance record |
+| Deployment intent | Reviewed desired artifact and target |
+| Deployment run | Concrete execution of an approved intent |
+| Service state | Desired and observed runtime state |
+| Drift | A mismatch or insufficient observation |
+| Canonical record | Service-signed addressable state |
+| Intent | Operator-signed desired change |
 
-*This documentation is designed for both human users (via web) and AI agents (via MCP).*
+The daemon can run without PostgreSQL. When configured, PostgreSQL is a derived index for specific HTTP and operational features; relays and the daemon's local event store remain the state path.

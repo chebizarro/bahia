@@ -1,111 +1,31 @@
 # Continuity
 
-The **Continuity** route at `/continuity` is a read-only operational view of service failover readiness and recovery progress. Its data is reconstructed from signed Nostr events rather than a mutable browser-local source of truth.
+**Continuity** (`/continuity`) is a read-oriented view of service placement, recovery readiness, and failover evidence. Its simulation runs in the browser and does not mutate production.
 
 ## What the page shows
 
-The page has three tabs:
+The page combines trusted topology, service state, worker/runtime availability, and continuity status from the relay-backed browser store. It highlights missing replicas, single failure domains, stale evidence, and operations that need an operator decision.
 
-- **Status** — continuity profiles, current operating state, primary and standby placement, active recovery step, and recent run progress.
-- **Topology** — event-derived failover and recovery relationships, standby count, replication configuration, and heartbeat evidence.
-- **Simulation** — a local what-if assessment of a worker failure using the events already loaded by the page.
+A simulation lets you mark targets unavailable and inspect the resulting coverage. It changes only local UI state.
 
-Simulation does not publish a request or change runtime state. Treat it as planning assistance, not proof that a failover has executed successfully.
+## Trust and confidentiality
 
-The `/continuity` route is not currently included in the browser's protected-prefix list. Its relay-derived view must therefore be treated as visible to anyone who can load the app and relay data. Backend and signed-event authorization still govern mutations; route visibility does not grant failover authority.
+Continuity records are accepted from configured service publishers and from operators in the fleet-OCK-encrypted `operators:continuity` allowlist. The record is addressed by that scope; its member pubkeys are encrypted. Signatures, authors, tags, and replaceable-event ordering are checked before a record enters the view.
 
-## Nostr inputs
+If the signed-in operator cannot unwrap the fleet OCK, the page cannot use the operator allowlist and reports the record as unreadable rather than widening trust.
 
-The view reads current continuity state from canonical events:
+## Reading status
 
-| Kind | Purpose |
-|---|---|
-| `30351` | Continuity status read model |
-| `30353` | Recovery progress read model |
-| `30315` | Heartbeat observation with `domain=continuity` |
-| `31400`–`31404` | Continuity profile, failover policy, standby, replication, and recovery workflow definitions |
-| `30900` | Canonical worker state used in the topology assessment |
+- Wait for relay catch-up before treating an empty view as proof that no record exists.
+- Treat stale observations as unknown.
+- Use canonical service and environment state to confirm whether a failover action completed.
+- Use audit and intent-status evidence to explain rejected or incomplete operations.
 
-The app opens the shared verified `BahiaEventStore` before connecting to relays, so the route renders persisted continuity events immediately and stays usable when relays are unreachable. Rendering never waits for a relay connection or EOSE; relay catch-up only updates a "synced" state. The app layout owns the subscriptions, so navigating away and back does not open another REQ. The readers start at boot and never wait for a relay to connect or reach EOSE; they are only ordered after the app's own boot requests (discovery and the core read model) on the shared connection.
-
-History is read in pages rather than under a fixed event cap. Per relay, one live REQ stays open and stored history is walked backwards one page at a time (`until` + `limit`) until a page comes back empty, so a relay that caps a REQ below the requested page size is still read completely. A per-relay cursor is saved once every page reached EOSE; the next session reads only the gap since that cursor, again in pages. The cursor deliberately trails by five minutes and never passes the browser clock, so clock skew and late-arriving events are re-read instead of skipped. If one second holds more events than a relay returns in a page, NIP-01 cannot page inside that second: older history is still read, but the cursor is not saved and catch-up is reported as incomplete so the next session retries.
-
-## Trusted publishers
-
-The browser puts an `authors` list on every continuity filter and on every read of the local store:
-
-- `30351` status, `30353` recovery progress and `30900` worker state are projections signed by the Bahia service. They are accepted from the service keys in the deployment bootstrap seed (`service_pubkeys`).
-- `31400`–`31404` definitions, `38430`/`38431` failover and recovery requests, and continuity-heartbeat `30315` events are operator-authored. The daemon acts on them only when signed by `nostr.authorized_pubkeys`; a heartbeat's `worker` tag names the observed worker and is not its signing authority. The Bahia service publishes that allowlist as a fleet-OCK encrypted record (kind `30900`, `t=operator-allowlist`, `d=operators:continuity`; see the event guide's "Operator allowlist records"), readable only by fleet operators and bootstrap owners who hold the fleet content key — relays and anyone else see only ciphertext, never the operator pubkeys. When your session can decrypt it, topology, requests and simulation show the definitions, requests and heartbeats signed by your key **and** by the other authorized operators, and the tabs' note says so. When it cannot (no fleet key in this session, the daemon has not published the record, or the list was emptied), the browser accepts these kinds only from the signed-in operator's own key, definitions published by a different operator do not shape your view, and the note says that instead; the service-signed status cards are the same for everyone. Org membership cannot stand in for the allowlist, because the daemon does not accept continuity documents from org members.
-- When nobody is signed in, the route still renders service-authored status and worker state from cache. It does not accept definitions, heartbeats or requests from any signer.
-
-A valid signature proves who signed an event; it does not by itself make that signer trusted.
-
-## Reading status safely
-
-1. Confirm the service has a continuity profile.
-2. Check the primary, active, and standby placements.
-3. Confirm recent heartbeats and replication configuration.
-4. If recovery is active, use the current step and the `30353` progress event to follow it.
-5. Correlate the view with deployment and worker health before taking an operational action.
-
-A displayed definition is desired configuration; status and progress events are the observable evidence of what happened.
-
-## Operator commands and backend hydration
-
-Failover and recovery mutation intent uses ContextVM, not legacy kinds `38430`
-and `38431`. Send a signed kind `25910` JSON-RPC request addressed (`p`) to the
-Bahia service, optionally wrapped in `1059` or `21059`:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "continuity-run-1",
-  "method": "continuity/failover",
-  "params": {
-    "service_key": "api",
-    "target_worker_pubkey": "<32-byte lowercase hex worker public key>",
-    "recipe_name": "switch",
-    "target_profile": "degraded",
-    "idempotency_key": "<stable unique run key>"
-  }
-}
-```
-
-Use `continuity/recovery` with `target_profile: "full"` for recovery. The profile
-and recipe name are optional; the target worker and service key are required.
-`_meta.progressToken` can supply the idempotency key instead. Requester identity
-comes from the authenticated inner event, never `requested_by` in the payload.
-Both methods require `nostr.authorized_pubkeys`; an empty list denies everyone.
-
-The backend loads profiles (`31400`), failover policies (`31401`), replication
-policies (`31403`), and recovery workflows (`31404`) from a long-lived REQ scoped
-to those kinds and the configured operator authors. It discovers the inventory
-from their definitions, so `d` coordinates are not known before backfill. The
-cold rebuild starts from history without a truncating limit or persisted cursor.
-Definitions are applied synchronously; command execution waits for actual EOSE
-from every initially subscribed stream. CLOSED, disconnect, cancellation and
-elapsed time do not count as successful catch-up. The REQ stays open for live
-updates, and replay/older replacements do not mutate the current projection.
-Equal timestamps prefer the lexicographically lower event ID.
-
-Commands execute the selected stored recipe rather than republishing a legacy
-command. Immediate errors include missing recipes and unavailable runtime
-adapters. The JSON-RPC result reports the executor's outcome; durable operational
-truth still comes from signed continuity status/progress observables. Retry with
-the same idempotency key and unchanged params to replay a retained result rather
-than repeat recipe actions. The transport's configured response retention applies;
-this is not a transactional exactly-once guarantee across execution/process crashes.
-
-Standby definitions (`31402`) are deliberately **not ingested by this backend
-runner**. The existing standby handler has no downstream inventory consumer.
-Replication policies and explicit command targets remain the runtime's sources
-of standby selection; adding a second inventory requires an explicit integration
-and authority decision. The browser may still display standby definitions.
-The browser's legacy Requests view is historical, not a command submission path.
+Continuity operations that require daemon-side planning use the registered signed request methods and return an acknowledgement plus canonical outcome records. A missing reply is not proof that nothing happened.
 
 ## Related
 
-- [Deployments](deployments.md) — Rollout and rollback behavior
-- [Workers](workers.md) — Worker availability
-- [Fleet Health](fleet-health.md) — Fleet pressure and health
-- [Nostr Integration](../nostr-integration.md) — Replay and canonical read models
+- [Deployments](deployments.md)
+- [Workers](workers.md)
+- [Fleet Health](fleet-health.md)
+- [Nostr Integration](../nostr-integration.md)

@@ -1,243 +1,29 @@
 # Payments
 
-**Payments** in Bahia track costs for deployment runs, worker usage, and resource consumption.
+**Payments** (`/payments`) shows worker pricing, cost estimates, run cost, and payment history.
 
-## Overview
+## Estimate cost
 
-Payments documentation currently covers the web and MCP surfaces. Bahia does not currently register a top-level `bahia payments` CLI command.
+Use `bahia_estimate_cost` with the worker or capability selection and requested resources. The estimate reports the applicable pricing model and a cost breakdown. It is planning evidence, not a charge guarantee; actual duration and resources determine final run cost.
 
-Payment features include:
-- **Cost estimation** — Predict deployment costs
-- **Usage tracking** — Record actual consumption
-- **Payment history** — View past transactions
-- **Worker pricing** — Per-worker cost models
+`bahia_get_worker_pricing` exposes the worker's advertised pricing data. Do not assume a fixed currency, tier, or unit unless it appears in the signed response.
 
-## Key Concepts
+## Run cost and history
 
-### Cost Estimate
+- `bahia_get_run_cost` returns the canonical cost record for a deployment run.
+- `bahia_get_payment_history` returns the visible payment records.
+- Authenticated HTTP reads are available at `/api/v1/deployments/runs/{id}/cost` and `/api/v1/payments/history` when payment projection is configured. These reads come from the local canonical event store and do not require PostgreSQL.
 
-A **Cost Estimate** predicts deployment cost:
+Payment records are service-authored `30900` records with topic `payment-record` and are encrypted with the fleet OCK. The browser decrypts them in memory through the active signer. A signer without the fleet key sees **not readable with this key**.
 
-```yaml
-service_id: "svc-123"
-environment_id: "env-456"
-worker_pubkey: "npub1worker..."
-estimated_cost:
-  amount: 1000
-  currency: "sats"
-breakdown:
-  base: 500
-  compute_minutes: 300
-  storage_mb: 200
-```
+## Reading results
 
-### Payment Record
+Keep estimate, accrued cost, settlement, and payment status distinct. A completed run can have delayed cost or payment evidence. Missing history is unknown until relays reach EOSE.
 
-A **Payment Record** tracks actual cost:
-
-```yaml
-run_id: "run-789"
-worker_pubkey: "npub1worker..."
-amount: 950
-currency: "sats"
-status: "completed"
-paid_at: "2024-01-15T10:30:00Z"
-```
-
-## Estimating Costs
-
-### Before Deployment
-
-Use the web UI or the `bahia_estimate_cost` MCP tool. The current CLI does not register `bahia payments estimate`.
-
-### MCP Tool
-
-```json
-{
-  "tool": "bahia_estimate_cost",
-  "arguments": {
-    "service_id": "svc-123",
-    "environment_id": "env-456",
-    "artifact_id": "art-789"
-  }
-}
-```
-
-### Estimate Response
-
-```json
-{
-  "estimated_cost": {
-    "amount": 1000,
-    "currency": "sats"
-  },
-  "breakdown": {
-    "base_cost": 500,
-    "compute_minutes": 10,
-    "compute_cost": 300,
-    "storage_mb": 100,
-    "storage_cost": 200
-  },
-  "worker": {
-    "pubkey": "npub1worker...",
-    "pricing_model": "standard"
-  }
-}
-```
-
-## Viewing Costs
-
-### Run Cost
-
-After deployment, use the web UI or the `bahia_get_run_cost` MCP tool. The current CLI does not register `bahia payments cost`.
-
-### Web UI
-
-1. Go to deployment run detail
-2. View **Cost** section
-3. See breakdown and payment status
-
-### MCP Tool
-
-```json
-{
-  "tool": "bahia_get_run_cost",
-  "arguments": {
-    "run_id": "run-789"
-  }
-}
-```
-
-## Payment History
-
-### Web UI
-
-Navigate to **Payments** in the sidebar:
-- View transaction history
-- Filter by worker, date, status
-- See totals and trends
-
-### Web transport and MCP tool
-
-The browser reads fleet payment records from service-authored, addressable kind `30900` events tagged `t=payment-record` (legacy kind `32011`). Records are encrypted with the fleet operator content key. The browser discovers its wrapped key through the signer, decrypts records in memory, and shows **not readable with this key** when the signer has no fleet key. The worker filter and row limit apply locally; browsing history does not call ContextVM or REST.
-
-The MCP tool is a separate authenticated per-tool call; MCP transport does not make this tool an encrypted ContextVM request:
-
-```json
-{
-  "tool": "bahia_get_payment_history",
-  "arguments": {
-    "worker_pubkey": "npub1worker...",
-    "limit": 50
-  }
-}
-```
-
-## Worker Pricing
-
-### Viewing Worker Pricing
-
-Worker pricing is currently exposed through the web UI and payment/read-model surfaces; the current CLI does not register `bahia workers pricing`.
-
-### Pricing Models
-
-Workers can define pricing:
-
-```yaml
-pricing:
-  model: "standard"
-  base_cost: 100        # sats per run
-  per_minute: 10        # sats per minute
-  per_mb_storage: 1     # sats per MB
-  gpu_multiplier: 2.0   # multiplier for GPU tasks
-  currency: "sats"
-```
-
-### Pricing Tiers
-
-| Tier | Description | Typical Rate |
-|------|-------------|--------------|
-| `free` | No charge | 0 sats |
-| `standard` | Normal pricing | 100-500 sats |
-| `premium` | Priority/GPU | 500-2000 sats |
-| `enterprise` | Custom | Negotiated |
-
-## Cost Breakdown
-
-### Compute Costs
-
-Based on execution time:
-- CPU minutes
-- GPU minutes (if applicable)
-- Memory hours
-
-### Storage Costs
-
-Based on data transferred:
-- Image pull size
-- Artifact storage
-- Log storage
-
-### Base Costs
-
-Fixed per-run costs:
-- Job scheduling
-- Infrastructure overhead
-
-## Payment Status
-
-| Status | Description |
-|--------|-------------|
-| `pending` | Awaiting payment |
-| `processing` | Payment in progress |
-| `completed` | Successfully paid |
-| `failed` | Payment failed |
-| `refunded` | Payment reversed |
-
-## Currency
-
-Bahia primarily uses **sats** (satoshis):
-- 1 sat = 0.00000001 BTC
-- Lightning-oriented pricing/history surfaces are documented here
-- Cashu mint-backed token flows are not currently implemented and enabling them fails configuration validation
-
-## Encrypted Operations
-
-Payment data is sensitive:
-- The daemon publishes OCK-encrypted `30900` payment records; plaintext history is not published to relays.
-- Fleet operators need a NIP-44-capable signer to unwrap the fleet content key. Non-operators may see ciphertext but cannot read payment details.
-- The web event store caches encrypted events only; the unwrapped key remains in memory for the signer session.
-
-## Best Practices
-
-1. **Estimate before deploying** — Know costs upfront
-2. **Monitor spending** — Track trends over time
-3. **Choose workers wisely** — Balance cost and capability
-4. **Set budgets** — Alert on spending thresholds
-5. **Review regularly** — Audit payment history
-
-## Troubleshooting
-
-### Cost Higher Than Estimated
-
-- Check actual runtime vs estimated
-- Review storage usage
-- Check for retries/failures
-
-### Payment Failed
-
-- Verify payment method
-- Check worker connectivity
-- Review error details
-
-### Missing History
-
-- Check date range
-- Verify worker filter
-- Ensure encrypted access configured
+If a payment method is unavailable or a settlement fails, the record reports the failure; Bahia does not mark it paid because the workload completed.
 
 ## Related
 
-- [Workers](workers.md) — Worker pricing
-- [Deployments](deployments.md) — Cost sources
-- [Organizations](organizations.md) — Billing scope
+- [Workers](workers.md)
+- [Deployments](deployments.md)
+- [Organizations](organizations.md)

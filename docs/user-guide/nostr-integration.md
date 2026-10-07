@@ -1,1017 +1,141 @@
 # Nostr Integration
 
-The daemon supports the nine D80 intent operations listed in the [D80 wire fixtures](../../web/tests/fixtures/d80-intent-content.json). Sign the exact content with a stable `intent_id`; use a NIP-59 gift wrap for `notification/channel-test` and `relay/policy-set`. A relay `OK` is delivery, while bounded `30315` data is admission or (for channel test) delivery result. Subscribe to the operation's existing canonical outcome family for durable state. Relay settings can already be read by scoped subscription to the service-authored protected `relay-settings:operator` cp-state record, including its full policy content. See [D80 commands](../nostr-commands.md#d80-request-operations-and-desired-state).
+Nostr is Bahia's control plane and source of durable product state. Clients subscribe to signed records, publish signed requests, wait for relay protocol outcomes, and follow domain status and canonical observables.
 
-## Web registry changes
+## Trust boundary
 
-The web app signs service, environment, and policy create/update/delete requests as
-kind `30900` `t=bahia-intent` events. Package promote/yank actions use the same
-intent transport. Select the owning organization when creating a service or
-policy. Updates copy the current canonical RFC3339 `updated_at` string as
-`expected_updated_at` (numeric epochs are rejected). The daemon processes all registered intent domains by default; `nostr.intent_domains_disabled` is a temporary explicit opt-out list.
+- The daemon signs canonical state, status, audit, discovery, and documentation with `nostr.private_key`.
+- Fleet operators are the pubkeys configured in `nostr.authorized_pubkeys`.
+- Organization membership and roles authorize tenant-scoped work.
+- Confidential records use an organization or fleet content key (OCK).
+- Every inbound event is checked for ID, Schnorr signature, author, kind, required tags, timestamp, and content shape before use.
 
-After submission, the browser shows a local **pending** badge and its age. This
-is not a canonical record or a completed operation. The badge clears only after
-the service publishes a matching kind `30315` intent status or a newer canonical
-kind `30900` record for the same coordinate. A conflict or rejection stays
-visible with its reason; re-read canonical state and submit a freshly signed
-intent. Relay `OK` only confirms delivery. If relays are unavailable, the
-browser keeps the intent pending and retries delivery on reconnect or AUTH,
-without a timeout that turns it into a failure.
+## Current event model
 
-A control that publishes a signed intent is disabled until the browser can
-submit that intent. This is decided from local state only: the signed-in
-session, its intent client (event store, relay seed, signer, service and
-requester pubkeys) and the organizations the local event store has revealed. It
-never waits for a relay to be connected or caught up; with every relay
-unreachable an intent that is ready locally is still signed, shown as pending
-and delivered on reconnect.
+| Role | Kind | Author | Addressing |
+|---|---|---|---|
+| Signed intent | `30900` with `t=bahia-intent` | operator | `d=<intent-id>`, `domain`, `intent_id`, optional `org` |
+| Intent status | `30315` | service | requester `p`, intent correlation and bounded status |
+| Canonical state | `30900` with `schema=bahia.cp-state.v1` | service | `t=<topic>` and stable `d` coordinate |
+| Audit fact | `4903` | service | entity and correlation tags |
+| Interactive request | `25910`, optionally wrapped by `1059` or `21059` | requester | registered ContextVM JSON-RPC method |
+| Documentation | `30023` with `t=bahia-docs` | service | `d=<topic>` |
+| Worker advertisement | `10100` | worker | worker pubkey |
+| Discovery | `11316`–`11320`, `30002`, `10002` | service | endpoint and relay-set contracts |
 
-- While the session is still opening, the control is described as
-  **Connecting…**.
-- Fleet-scoped domains (`backup`, `package`, `worker`, `dns`, `ml`, `security`,
-  `sbom`, `relay`) need no organization.
-- Organization-scoped domains use the organization on the record or form, the
-  one owning the record's service or LLM route, or the single organization named
-  by system discovery or the operator's memberships. When the session knows
-  none, the control stays disabled with **No organization is known for this
-  session yet** shown beside it, and enables as soon as local data names one.
-  Form fields stay editable meanwhile.
-- When only the operator can resolve it (several organizations are known, or
-  the form's organization field is empty), the control stays enabled and
-  submitting reports `Select an organization before submitting this intent`.
+Fleet integrations keep their protocol kinds, including Hive-CI workflow evidence and Soul Factory requests/results. Use the feature guide for each interop contract.
 
-Cancel and close controls are never disabled this way.
+## Intents
 
-## Deployment-family signed intents
-
-With `deployment`, `runtime`, `llm`, and `backup` enabled by default, sign a kind `30900` `bahia.intent.<domain>.v1` event for the supported deployment, runtime, LLM deployment/approval, or backup restore-approval operation. Reuse `content.intent_id` for retries and subscribe to bounded kind `30315` status plus the daemon-authored canonical state; a ContextVM receipt or relay `OK` is not durable completion. Disabled domains retain the existing ContextVM mutation path. The [wire fixtures](../../web/tests/fixtures/deployment-intents.json) show every content shape.
-
-## Command availability
-
-Artifact, policy, and tool-approval requests use signed ContextVM messages.
-A submitted receipt means relay acceptance, not execution or completion. Only
-methods in the server's discovery method list are advertised as callable; LLM/ML
-publisher support alone does not establish a mutation consumer. LLM approval
-publishers use `approval/llm-approve` / `approval/llm-reject`, while DNS record writes
-use `dns/record-set`. See the [publisher contract](../nostr-event-implementation-guide.md#artifact-policy-and-approval-publishers).
-
-## Virtualization subscriptions
-
-VM/plane intents use ContextVM 25910; acknowledgments are admission, not execution
-completion. Follow returned signer/coordinates on 30900 state and 4903 audit with
-`domain=virtualization`. Explicit lifecycle classes distinguish persistent VMs
-from both Loom job classes. Schemas are `bahia.state.virtualization.v1` and
-`bahia.audit.virtualization.v1`; no new numeric kind is introduced.
-For destructive desired changes, a second operator uses `vm-operation/approve-plan`
-to obtain `approval_id`, then the original requester admits the exact mutation.
-An approval-only response is not a VM operation. Deployment deletion defaults to
-retaining guest data; explicit `data_disposition=delete` remains two-person approved.
-
-For existing VMs, `persistent-vm/register-adoption` returns `status=registered`
-with a zero-UUID operation ID and no operation coordinate: it is not ownership.
-Follow the separate approved
-`adopt` operation through the usual scoped state/audit subscription. Configuration,
-image lineage and writable storage are remeasured before ownership is installed;
-private measurement details are not broadcast.
-
-Subscribe narrowly by author, state `#d` or audit `#state`, and `#org`. Validate
-IDs/signatures/timestamps/content, deduplicate event IDs, reject older journal
-sequences/generations, retain subscriptions after EOSE and handle CLOSED/AUTH
-plus reconnect. Filters are not confidentiality controls: only safe public DTOs
-are emitted, never bootstrap values, raw evidence or console content.
-[Methods, coordinates and examples](features/virtual-machines.md).
-
-
-Bahia is **Nostr-native** — Nostr events are the primary control plane, not just an audit log.
-
-## Overview
-
-Nostr provides:
-- **Real-time updates** via subscriptions
-- **Cryptographic identity** via keypairs
-- **Decentralized state** via relays
-- **Audit trail** via signed events
-- **Offline resilience** via local caching
-
-## Key Concepts
-
-### Events
-
-Bahia clients now separate private mutation intent from public observable truth. Mutations are ContextVM JSON-RPC requests carried as kind `25910` messages, normally encrypted with ContextVM CEP-4/NIP-59 gift-wrap (`1059` or `21059`). Public reads subscribe to canonical observable/state kinds such as `30900`, `4903`, `30315`, `11316`-`11320`, `30002`, and `30078`.
-
-Maintenance commands are always carried as standards-conformant NIP-59 kind `1059`, and workers return the immediate ContextVM response the same way. Absolute host filesystem paths are visible only after an authorized recipient unwraps the rumor; public audit/status events retain opaque correlation without path details.
-
-```json
-{
-  "kind": 25910,
-  "tags": [["p", "<bahia-service-pubkey>"], ["method", "service/deploy"]],
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"req-123\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"svc-123\",\"_meta\":{\"progressToken\":\"req-123\"}}}"
-}
-```
-
-Operator clients establish the correlated reply subscription before publishing and use per-relay EOSE as the activation barrier. Only relays that actually established subscriptions participate in reply-closure accounting. A result wait is bounded per attempt by `--result-timeout` (default `30s`); timeout causes a fresh subscription and an idempotent re-publish with the same inner `d` tag, up to `--result-retries` retries (default `2`), so Bahia can replay its cached response. `--encrypted` selects NIP-59/NIP-44 transport and requires the service pubkey.
-
-Encrypted operator mode sends a standards-conformant NIP-59 kind `1059` wrapper addressed to the configured Bahia service pubkey. Reply filters select kinds `1059` and `21059` by `#p=<operator-pubkey>` and `#e=<outer-request-id>` without an author filter because wrappers use fresh random keys. After NIP-44 decryption, clients accept only a valid signed inner kind `25910` response authored by the expected service pubkey whose inner `e` tag references the inner request id.
-
-Deployment-unit workflows read through `environment/get-details` with `{"id":"<environment-uuid>"}`. Bahia authorizes the signer for `environments:read` in the owning organization and returns the environment, targeting, revision, and resolved units in the signed ContextVM result, so no HTTP authorization or REST fallback is required. Complete-set changes then use `environment/update` with both `deployment_units` and `expected_updated_at`; stale revisions return JSON-RPC code `-32009` so operators can re-read, remerge, and sign a fresh retry without overwriting concurrent changes.
-
-To add managed HTTPS to an existing deployment, use `service/route-attach` with the service, environment, deployment unit, and provider-neutral `public_route` request. Bahia plans and hashes the route into a new desired-state intent, applies only the `routing` phase, and reports durable progress through the same deployment state, run, status, and audit observables as `service/deploy`. Protected-environment approval remains unchanged.
-
-### Event Categories
-
-| Category | Kind(s) | Purpose |
-|----------|---------|---------|
-| **ContextVM intents** | `25910`, `1059`, `21059` | JSON-RPC mutation requests, responses, and encrypted transport |
-| **ContextVM discovery** | `11316`-`11320` | Server, tools, resources, templates, and prompts announcements |
-| **Canonical state** | `30900`, `30078` | Control-plane state projections and app-specific data |
-| **Canonical audit/status** | `4903`, `30315` | Immutable audit facts and NIP-38 operational statuses |
-| **Collections/relays** | `30002`, `30004` | NIP-51 relay sets, topology, and SBOM availability lists |
-| **Hive-CI interop** | `5401`, `5402` | Durable fleet-local workflow-run and workflow-result events |
-| **SoulFactory interop** | `31950`, `31951`, `31952`, `31953`, `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, `38386` | Direct Nostr agent lifecycle events accepted by the Bahia sidecar as open interop data |
-| **Migration fixtures** | `5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980` excluding documented SoulFactory interop overlaps | Legacy custom kinds retained only for startup migration, historical conversion tests, and fail-closed fixtures |
-
-### Hive-CI self-dispatch
-
-The CLI publishes a signed kind-`30900` `build/request` intent and reads the queued build from accepted `30315` status `data`; the older ContextVM kind-`25910` method remains a dual-dispatch compatibility path until its callers retire. After Bahia resolves and mirrors the source repository, it publishes the CI-bus workflow run as durable kind `5401`, not as another request envelope. The run is tag-only and carries the configured NIP-34 `a` coordinate plus `commit`, `branch`, `trigger`, `triggered-by`, `workflow`, `publisher`, and `t=hive-ci`; the returned `ci_run_id` is the signed 5401 event id used by kind-5402 correlation.
-
-Set `hiveci.initiator.repo_announcement_addr` and include Bahia's service pubkey in `hiveci.trusted_ci_pubkeys`. The latter remains explicit operator trust: Bahia logs `self_issued_run_untrusted` if a self-issued 5401 would be filtered out, but does not auto-trust its key.
-
-Once the 5401 is accepted, Bahia submits a kind-5100 Loom job through the same control-plane relay pool and service signer. It is addressed to a configured `trusted_loom_worker_pubkeys` entry whose signed kind-10100 advertisement lists `loom-ci` as `S` software. The request is loom-protocol shaped: `cmd=loom-ci`, `args=[run --repo <credential-free mirror clone URL> --ref <ref> --workflow <path> --event push --actor <requester> --run <ci_run_id> …]`, and `e=<ci_run_id>`. A dedicated service-scoped read-only mirror credential and the per-run ephemeral 5401 publisher key are delivered only as selected-worker NIP-44 ciphertext in exactly three `secret` tags named `HIVE_CI_GIT_USERNAME`, `HIVE_CI_GIT_PASSWORD`, and `HIVE_CI_NSEC`; evidence contains only the opaque credential reference. It carries no payment tag: this fleet-internal profile uses the worker's requester-pubkey allowlist because Bahia cannot mint Cashu tokens.
-
-Bahia does not implement the Hive-CI per-run ephemeral publisher-key delivery model. It keeps the 5401 `publisher` equal to the service key and accepts the correlated worker-signed 5402 only when that signer is listed in `hiveci.trusted_loom_worker_pubkeys`. Secrets used by any Loom request are NIP-44 encrypted to the selected worker; they are never projected into plaintext tags or command arguments.
-
-Because this interoperable tag-only event has no build-argument field, a private-mirror request with non-empty `build_args` fails before credentials or external side effects. Bahia does not claim unapplied build arguments as provenance.
-
-### SoulFactory/OpenClaw provisioning
-
-SoulFactory is a domain-specific Nostr event flow rather than a REST lifecycle API. New mutation clients publish ContextVM `25910` requests using `soul-factory/provision` or `soul-factory/action`; Bahia retains the original request event id as the lifecycle correlation id.
-
-Saga recovery uses `soul-factory/saga/{inspect,retry,reconcile,safe-abort}` with the original `request_id` and `dry_run` (default true). All four require the fail-closed fleet operator gate; no new Nostr kinds are introduced. See [operator contract](../runbooks/openclaw-provisioning-operations.md#authenticated-saga-recovery).
-
-1. Trusted operators may publish a signed `31953` fleet OpenClaw template; the reactor pins the latest trusted snapshot for subsequent provisions.
-2. Operators publish signed `31952` Soul drafts.
-3. Operators publish signed `25910` `soul-factory/provision` requests whose params contain the existing provisioning schema. Bahia validates them with the SoulFactory parser and adapts them into the staged reactor without changing their correlation identity. Existing signed `5950` requests remain lifecycle interop during contraction.
-4. Bahia publishes correlated `6950` progress, sends scoped `38384` runtime-control events to trusted OpenClaw runtimes, validates `38386` results, publishes the final `31951` Soul read model, and publishes terminal `7950`.
-5. Clients subscribe to scoped `6950`, `7950`, and `31951` events for durable progress/completion. Relay `OK` verifies event acceptance, not runtime completion.
-
-REST routes for SoulFactory provisioning or lifecycle operations are a non-goal. Browser, CLI, MCP, and agent integrations must use signed ContextVM requests and scoped Nostr subscriptions instead of HTTP create/provision/suspend/resume calls. A ContextVM acknowledgment is not terminal completion; provisioning clients follow `30900` state at `soul-factory:provisioning:<request-event-id>` and matching `4903` audit facts, with existing correlated lifecycle events retained during contraction.
-
-## Migrating Existing Deployments to the New Kinds
-
-Bahia includes an offline migration tool, `bahia-migrate nostr` (code in `internal/nostrmigration`), that converts historical Bahia custom events into the canonical ContextVM/canonical observable contract. Operators run it once after upgrading instead of keeping legacy subscribers in the runtime; the daemon does not run it on startup (see [the CLI reference](cli-reference.md#legacy-nostr-event-migration-bahia-migrate-nostr)).
-
-What it converts:
-
-| Legacy input | Canonical output |
-|--------------|------------------|
-| Legacy CRU/request kinds (`5961`-`6006`, `38390`-`38431`) excluding SoulFactory interop `5950`, `1950`, `38384` | ContextVM `25910` methods, or NIP-09 `5` where the operation is deletion |
-| Legacy status/progress kinds (`6961`-`6997`) excluding SoulFactory interop `6950` | `30315`, `4903`, correlated ContextVM responses, or domain observables |
-| Legacy terminal result kinds (`7961`-`7997`) excluding SoulFactory interop `7950`, `1951`, `38386` | ContextVM responses plus `30900` / `4903` / `30315` observables |
-| Legacy read-model/discovery kinds (`31961`-`32003`, `31974`) | `30900`, `30078`, `11316`-`11320`, or `30002` depending on semantics |
-| Legacy audit/activity kinds (`31000`-`31024`, `31310`-`31311`) | `4903` |
-| Legacy encrypted request/result (`5980`, `7980`) | CEP-4 / NIP-59 `1059` or `21059` around ContextVM `25910` |
-
-How it runs:
-
-1. On startup, scan the local Nostr event repository for `LegacyKinds()`.
-2. Optionally backfill legacy events from configured relays and wait for `EOSE`.
-3. Resolve each legacy event to a canonical disposition.
-4. Skip if the target canonical event already exists with `migrated-from=<legacy_event_id>`.
-5. Build a canonical event tagged with `migration=bahia-nostr-native-v1`, `legacy-kind`, `migrated-from`, `schema`, `domain`, and layer metadata.
-6. Sign with the Bahia service private key.
-7. Publish to relays, accepting both fresh relay `OK` and duplicate relay `OK` outcomes as success.
-8. Store the canonical event locally and log the migration summary.
-
-The migration is idempotent and safe to run every startup. Non-dry-run migration requires a configured Nostr publisher and Bahia service private key. If relay backfill does not reach `EOSE`, or if publish/signing fails, fix relay/signing configuration and rerun startup; do not re-enable legacy production subscribers. Relay sidecar behavior is intentionally conservative: migration publishes canonical replacement/status/audit outputs through configured allowlisted relays, while historical inputs remain tagged with `migrated-from` and `legacy-kind` for traceability rather than being treated as live protocol.
-
-### Read Models
-
-**Read models** are replaceable events reflecting current state. New client code should read canonical state from kind `30900` or NIP-78 kind `30078`, with domain and schema tags identifying the projection:
+A kind-`30900` intent is a parameterized replaceable request document:
 
 ```json
 {
   "kind": 30900,
-  "content": {
-    "service_id": "svc-123",
-    "environment_id": "env-456",
-    "desired_artifact": "art-789",
-    "observed_artifact": "art-789",
-    "status": "healthy"
-  },
   "tags": [
-    ["d", "service:svc-123:env-456"],
+    ["d", "0195f2c8-7c31-7c6d-8d18-29bb1d45ab4e"],
+    ["t", "bahia-intent"],
     ["domain", "service"],
-    ["schema", "bahia.service-state.v1"]
-  ]
+    ["op", "create"],
+    ["intent_id", "0195f2c8-7c31-7c6d-8d18-29bb1d45ab4e"],
+    ["org", "11111111-1111-1111-1111-111111111111"],
+    ["p", "<service-pubkey>"]
+  ],
+  "content": "{\"name\":\"api\",\"artifact_repo\":\"ghcr.io/acme/api\"}"
 }
 ```
 
-For `(kind, pubkey, d-tag)`, the **latest event wins**.
+The intent ID is the idempotency key. An exact retry replays the result; different content under the same ID is rejected. Updates include the canonical `updated_at` revision.
 
-Desired-state runtime deploys add metadata to existing ContextVM responses and canonical observables instead of adding new kinds. Compose/Docker status events may include the steps `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, and `projecting`; result/state projections may include `desired_hash`, `renderer`, `target`, revision/apply summaries, and `observation_id`. These fields are optional and backward-compatible. Public relay content is sanitized: secret values, generated Compose env-file contents, raw Docker endpoint URLs, Docker TLS material, bearer credentials, and NIP-98 credentials are not projected.
+A relay `OK` proves that a relay accepted the event. The service's `30315` status reports admission, rejection, or conflict. Durable completion comes from canonical state, audit, and domain outcome records.
 
-The service-state projection carries the non-secret `desired_runtime_state` snapshot, optional deployment-unit UUID, reconciliation backoff time and failure count. It does not publish free-form reconciliation failure messages. CLI state and policy reads sync their `30900` families into a per-service local store, wait for EOSE, and warn while serving stale local data if EOSE is unavailable.
+Organization, secret, and notification intents are gift-wrapped so relays do not see confidential content.
 
-Worker resource-pressure and cleanup projections use the same canonical state layer:
+## Canonical state
 
-| Schema | Domain | Purpose |
-|--------|--------|---------|
-| `bahia.state.worker.v1` | `worker` | Worker scheduling, telemetry, pressure, and capacity-class state. |
-| `bahia.state.worker-cleanup.v1` | `worker` | Cleanup execution lifecycle for Fleet Health and worker remediation history. |
+A canonical record is the newest valid event for one service-author and `d` coordinate. The `t` tag selects a topic such as `service-registry`, `environment-registry`, `deployment-intent`, `deployment-run`, `service-state`, `org-registry`, or a feature-specific family.
 
-A cleanup execution projection is kind `30900` with tags such as `schema=bahia.state.worker-cleanup.v1`, `worker=<worker_pubkey>`, `status=<requested|dispatched|running|completed|failed>`, and `cleanup_mode=<reclaimable_only|aggressive>`. Cleanup mutation intent remains encrypted ContextVM `worker/cleanup`; public cleanup progress is represented by this state projection.
+Readers must:
 
-Managed-route canary outages are projected with `domain=route`. Each route transition publishes a `30315` status and a `30900` state addressed by the route coordinate, plus an immutable `4903` audit fact:
+1. subscribe with the service author, kind, and indexed topic/coordinate tags;
+2. process stored events through EOSE;
+3. keep the subscription open for live events;
+4. deduplicate by event ID;
+5. choose the replaceable winner by Nostr ordering;
+6. apply deletion/tombstone semantics;
+7. reconnect and resubscribe with an overlap.
 
-| Schema | Kind | Purpose |
-|--------|------|---------|
-| `bahia.status.route-canary.v1` | `30315` | Current bounded route health (`healthy`, `degraded`, `unhealthy`, `unknown`). |
-| `bahia.state.route-canary.v1` | `30900` | Current route canary state, including the container status observed at the same instant. |
-| `bahia.audit.route-canary.v1` | `4903` | Outage opened, recovered, or classification changed, with sanitized probe evidence. |
+The web app and CLI keep local event stores and can render cached state before EOSE. They expose catch-up state so cached results are not mistaken for fresh results.
 
-```json
-{
-  "kind": 30900,
-  "tags": [
-    ["d", "route:<service_id>:<environment_id>:<deployment_unit_id|none>:git.example.com"],
-    ["domain", "route"],
-    ["schema", "bahia.state.route-canary.v1"],
-    ["entity", "route-canary"],
-    ["service", "<service_id>"],
-    ["environment", "<environment_id>"],
-    ["hostname", "git.example.com"],
-    ["status", "unhealthy"],
-    ["outage", "open"],
-    ["classification", "upstream_error"],
-    ["perspective", "public_edge"],
-    ["instance_status", "healthy"],
-    ["service_healthy_route_broken", "true"]
-  ]
-}
-```
+## Confidential state and OCK
 
-An open outage is `unhealthy`. A route failing below the open threshold, or reporting a warning such as `tls_expiring` or `health_path_not_discriminating`, is `degraded`. `service_healthy_route_broken=true` means the route is down while the containers behind it are healthy or running: the fault is in the routing layer. To follow route outages, subscribe to the service author with `{"kinds": [30315, 30900, 4903], "#domain": ["route"]}`, process history until `EOSE`, and keep the latest `30900` per `d`.
+Bahia uses the NIP-CAS-0011 content envelope for confidential canonical records. The event keeps public routing fields such as topic, coordinate, organization scope, and key version while encrypting the payload. Key envelopes wrap the current OCK to authorized members.
 
-## Relay Topology
+Organization key rotation excludes removed members. Refounding republishes current records under the current epoch. `strict_revocation` makes removal or downgrade rotate and refound before the membership change commits.
 
-### Sidecar
+Fleet-scoped confidential records use the fleet OCK. Operator allowlists are addressed as `operators:<scope>`; the pubkeys exist only inside encrypted content.
 
-The **relay sidecar** is the primary control-plane relay surface. It is a standalone Khatru Nostr relay HTTP/WebSocket server, not a REST CRUD endpoint: `cmd/relay/main.go` starts it, `internal/relaysidecar/server.go` serves NIP-11 relay metadata over HTTP and Nostr WebSocket traffic on `/` plus the configured `nostr.sidecar.public_url` path such as `/relay`, and operators expose it with `nostr.sidecar.listen_addr` plus any web proxy mapping. The mounted YAML is authoritative for mutable sidecar policy. Legacy sidecar, ContextVM-relay, and reconcile environment values only seed missing keys once; send `SIGHUP` to apply a validated file change without recreating the container.
+## ContextVM
 
-```yaml
-nostr:
-  sidecar:
-    enabled: true
-    listen_addr: "0.0.0.0:3334"
-    public_url: "wss://sidecar.example.com/relay"
-    backend_url: "ws://relay:3334/relay"
-```
+ContextVM JSON-RPC is used for registered interactive operations such as assistant turns, secret reveal, run-log retrieval, virtualization, and feature methods that explicitly expose this transport. Use JSON-RPC `params` and the method's schema. A response is an acknowledgement or bounded result; canonical records remain durable truth.
 
-Browser and API Nostr relay traffic can go through the sidecar. The sidecar accepts every valid signed Nostr event kind and every ordinary NIP-01 subscription filter; it does not use event-kind, author, recipient, or filter-scope allowlists. It stores and broadcasts locally but does not forward accepted events to external relays. The advertised `nostr.browser_relays` / `nostr.sidecar_url` and configured backend/upstream relay sets select routing destinations, not which events those relays accept. Consumers remain responsible for authorizing and interpreting events.
+Do not model ordinary state reads as ContextVM calls. Subscribe to canonical state or use the store-backed CLI/MCP read.
 
-### Relay Policy Sources
+## Relays and discovery
 
-Backend configuration separates relay policy by purpose even when a deployment intentionally reuses the same physical relay URL:
+The service publishes NIP-51 kind-`30002` relay sets named `bahia-browser-v1`, `bahia-contextvm-v1`, and `bahia-service-v1`, plus an advisory NIP-65 kind-`10002` list. Clients start from configured bootstrap relays and trusted service pubkeys, then follow the signed relay sets.
 
-```yaml
-nostr:
-  # Backward-compatible alias for backend/service relays. Do not treat this as browser policy.
-  relays:
-    - "wss://service-relay.example.com"
-  # Canonical backend service publish/backfill source. If absent, nostr.relays is used as a compatibility alias.
-  service_relays:
-    - "wss://service-relay.example.com"
-  # Browser-safe bootstrap/read relays.
-  browser_relays:
-    - "wss://sidecar.example.com"
-  # Direct ContextVM request/reply relays. Bahia subscribes and publishes to the deduplicated union
-  # of these relays and the sidecar when enabled. If absent, browser_relays is used as the direct fallback.
-  contextvm_relays:
-    - "wss://contextvm-relay.example.com"
-  # Fixed behavior when a relay requires NIP-42 AUTH and no signer is available.
-  relay_auth_unavailable: "exclude_and_fail"
-  # REQ reissues after consecutive retryable CLOSED replies, per relay and filter,
-  # before the pool gives up on that relay. EOSE resets the count. 0 or unset = 5; max 100.
-  closed_retry_budget: 5
-```
+The web container receives its runtime seed through `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS`. The CLI uses `--bootstrap-relay` and `--trusted-service-pubkey` or explicit `--relay` and `--service-pubkey`.
 
-Bahia resolves both its ContextVM request-subscription pool and its isolated response-publication pool to the same deduplicated relay union. With `nostr.sidecar.enabled=true`, the preferred sidecar backend URL (or `public_url` when no backend URL is set) augments `nostr.contextvm_relays`; it does not replace them. When `contextvm_relays` is empty, `browser_relays` supplies the direct destinations. This ensures progress acknowledgments and terminal results reach operators subscribed on public ContextVM/browser relays while retaining the local sidecar copy.
+### Relay sidecar
 
-The daemon's `RelayPool` owns NIP-42 AUTH, per-relay re-REQ and CLOSED classification. A relay that answers a REQ with `auth-required:` gets the pool's AUTH and the same REQ again on that relay; `blocked:`, `restricted:`, `invalid:`, `unsupported:`, `pow:` and `mute:` are terminal. An `error:`, `rate-limited:` or unknown CLOSED reason is reissued with backoff up to `nostr.closed_retry_budget` times in a row (an EOSE from the relay resets the count); the next one is terminal, surfaced to subscribers like a policy refusal, and counted by `bahia_nostr_relay_closed_retry_exhausted_total{relay=...}`. NIP-77 negentropy sessions use the same AUTH signer and re-open a refused `NEG-OPEN` once after AUTH.
+The sidecar stores and serves the fleet's events and enforces write policy. `nostr.sidecar.read_auth_mode` defaults to `enforce`; unset or unknown values also resolve to `enforce`. Protected REQ and COUNT filters require NIP-42 AUTH by an admitted fleet operator, organization member, or configured allowed reader. `warn` logs the decision without denying; `off` disables this read gate.
 
-`nostr.relay_auth_unavailable=exclude_and_fail` means auth-required relays without usable credentials are excluded from the current operation, the relay CLOSED/OK reason must remain visible in health/error metadata, and the operation fails deterministically if the remaining relays cannot satisfy its success rule. Bahia must not fall back to REST or a legacy mutation path after a relay accepts signed ContextVM traffic.
+Clients handle `AUTH`, `OK`, `EOSE`, and `CLOSED`. A connection alone is not evidence that a filter caught up or a publish succeeded.
 
-Relay strategy publications for `bahia-browser-v1`, `bahia-contextvm-v1`, `bahia-service-v1`, and the advisory service NIP-65 `10002` list are authored by the configured Bahia service key. Clients validate these events against their configured trusted service pubkey list. Bahia does not ship multi-key publication rotation in this relay-strategy slice; deployments that need automatic dual publishing or signer orchestration require a separate key-management design.
+## Publish outbox
 
-### Optional NIP-86 relay administration
+The daemon stores publish work until the configured relay quorum accepts it. Exhausted entries move to failed state and mark their canonical coordinate undelivered. Readiness reports this as `canonical_delivery` with warning details.
 
-NIP-86 relay administration is an optional relay-owner HTTP management surface for Bahia-owned or Bahia-authorized relays. Bahia exposes it through the Nostr-native operator relay settings control plane: the browser publishes a ContextVM kind `25910` intent such as `settings/relay-admin.call`, Bahia validates the configured target, and only then calls the relay's NIP-86 HTTP endpoint with NIP-98 payload-bound authorization. NIP-86 is never used as Bahia application mutation transport.
-
-NIP-86 relay administration is disabled by default. Configure only Bahia-owned or explicitly Bahia-authorized relay targets; public relays and arbitrary HTTP endpoints are rejected before any NIP-86 request is sent.
-
-```yaml
-nostr:
-  relay_administration:
-    enabled: true
-    # A secret reference resolved by deployment tooling; do not put private-key material in config.
-    administrator_private_key_ref: "secret://relay-admin/sidecar"
-    targets:
-      - ref: "sidecar"
-        relay_url: "wss://sidecar.example.com"
-        # Optional when the HTTP endpoint differs from relay_url converted from wss/ws to https/http.
-        http_url: "https://sidecar.example.com"
-        authorization: "bahia_owned" # or "bahia_authorized"
-        administrator_pubkeys:
-          - "<64-hex-admin-pubkey-authorized-by-the-relay>"
-```
-
-When enabled, Bahia support code may call only NIP-86 relay-owner methods such as `supportedmethods`, `allowpubkey`, `banpubkey`, `allowkind`, `disallowkind`, `changerelayname`, `changerelaydescription`, and IP/event moderation methods. Relay administration URLs must use `wss://` and `https://` except for localhost/loopback development targets. Each HTTP request uses `Content-Type: application/nostr+json+rpc` and a NIP-98 `Authorization: Nostr <event>` header. The signed kind `27235` event includes `u=<relay_url>`, `method=POST`, and the required `payload=<sha256-of-exact-json-body>` tag. The client refuses disabled config, unknown target refs, administrator pubkeys not authorized for that target, non-NIP-86 method names, HTTP status failures, and relay JSON errors.
-
-### Operator relay settings UI
-
-The Settings page separates persistent operator relay policy from local browser-session relay overrides.
-
-Use **Settings → Operator Relay Policy** to add or remove:
-
-- browser/bootstrap relays published as Bahia relay topology,
-- ContextVM request/reply relays,
-- service publish/backfill relays,
-- trusted NIP-66 monitor pubkeys,
-- notification DM receive relays published as NIP-51 kind `10050`, and
-- NIP-86 managed relay targets.
-
-Saving this section publishes a ContextVM kind `25910` intent with method `settings/relay-policy.apply`. Bahia validates the payload, republishes the standard service-signed NIP-51 relay events (`30002` for browser/ContextVM/service and `10050` for explicit notification DM relays), and publishes a canonical relay settings state event (`30900`, `d=relay-settings:operator`, `domain=relay-settings`, `schema=bahia.relay-settings.v1`, `t=relay-settings`) plus an audit event (`4903`). Backend hydration subscribes to every eligible configured relay with a service-author and `#d=relay-settings:operator` filter (domain and schema are checked locally, since relays index only single-letter tags), tracks EOSE per relay, performs a bounded post-EOSE drain, validates the NIP-01 ID/signature/timestamp/tags/payload, and atomically promotes only the deterministic newest valid event.
-
-The last accepted canonical policy is stored as a PostgreSQL server projection with its canonical payload, deterministic hash, event ID, author, event/acceptance timestamps, source relay, and last successful sync. Restart, relay outage, AUTH failure, timeout, parse failure, or zero-event EOSE never converts that projection to an empty policy. Empty policy is valid only when the trusted service explicitly signs an empty canonical payload. The signer-first `settings/relay-policy.get` response exposes `canonical_policy`, `truth_state`, and `server_projection` (availability, provenance, hash, last-sync, and freshness). A missing or unreachable projection dependency reports `unavailable`; a successful read with no accepted head reports `never-configured`. Neither response infers config defaults or synthesizes an empty policy.
-
-Settings renders canonical truth explicitly:
-
-- **Loaded — live** for a validated service-signed relay event,
-- **Loaded — cached** or **Loaded — cached/stale** for the durable last-known-good projection,
-- **Unavailable** when canonical truth cannot be hydrated (the form is labeled as a noncanonical draft rather than blank truth),
-- **Never configured** when the signer-first durable read confirms no accepted head, and
-- **Intentionally empty — explicitly signed** when the accepted canonical event really contains an empty policy.
-
-The truth panel displays safe event ID, policy hash, source relay, and last-sync provenance. Query strings, fragments, credentials, signer URLs, and key material are not displayed or written to browser storage.
-
-The canonical relay event, PostgreSQL server projection, relay discovery cache, and browser emergency override are separate concepts. Background hydration does not mutate shared runtime config, and the browser override does not become persistent policy. If canonical state arrives while an operator has unsaved local edits in Settings, the page preserves those edits and shows explicit **Apply Service Policy** / **Keep Local Edits** actions instead of silently overwriting fields. Apply remains disabled while truth is loading or unavailable. Normal Apply requests carry the expected projection event ID and hash, so the service rejects stale or missing heads instead of accepting a blind replacement. After a definitive unavailable result, the operator may unlock Apply only by checking the audited-replacement confirmation and entering a non-secret change/incident reference. The signed ContextVM request carries that confirmation separately from canonical policy with the fixed reason code `relay_hydration_unavailable`. Bahia rejects false unavailable claims when it can read a head, and publishes a correlated service-signed `4903` replacement-confirmation fact before any canonical mutation; audit publication failure prevents the replacement. Clients still treat the ContextVM response as an acknowledgment; durable truth comes from the validated service-signed event and its server projection.
-
-The **Browser Session Relays** section is labeled **LOCAL / NONCANONICAL**. Its emergency override persists only in that browser profile and never updates service relay sets, ContextVM relays, DM relay lists, NIP-66 monitor trust, or NIP-86 targets. Storage uses the versioned `bahia.browser-relay-override.v2` envelope; compatible legacy arrays and older object shapes migrate in place without losing safe relay values. URLs containing credentials, query parameters, or fragments are rejected from browser persistence.
-
-### Advisory relay metadata and DM relay lists
-
-NIP-11 relay metadata and optional NIP-66 monitor events are advisory inputs only. They may annotate relay health, capability warnings, or operator-facing ranking, but they do not establish Bahia service trust, override trusted service pubkeys, or authorize removal of all configured relays. Missing, malformed, or limiting NIP-11 metadata is surfaced as relay health metadata while the configured relay list remains authoritative.
-
-NIP-66 relay monitor trust is configured explicitly and is empty by default. When configured, browser DNS relay health uses scoped subscriptions for kind `10166` monitor announcements and kind `30166` relay discovery events from those monitor pubkeys only; untrusted monitors and reports for relays outside the configured relay set are ignored.
-
-```yaml
-nostr:
-  browser_relays:
-    - "wss://browser-relay.example.com"
-  trusted_relay_monitor_pubkeys:
-    - "<64-hex-monitor-pubkey>"
-```
-
-NIP-66 monitor tags such as `R=auth`, `R=payment`, `R=writes`, `N=<nip>`, and `rtt-open` are advisory health/capability annotations. They can warn that a configured relay is limiting, but they cannot add relays, remove relays, or make a monitor pubkey a Bahia service identity.
-
-NIP-51 kind `10050` DM relay lists are reserved for explicitly DM-enabled Bahia features and receiving identities. Public browser bootstrap through `bahia-browser-v1` does not imply DM receive readiness, ContextVM relays are not DM relays, and Bahia does not publish DM relay lists by default.
-
-To publish a Bahia service DM receive list for notification DM flows, operators must explicitly enable notifications DM delivery and configure a DM relay list for the service identity:
-
-```yaml
-notifications:
-  enabled: true
-  nostr_dm: true
-nostr:
-  dm_relay_lists:
-    - enabled: true
-      feature: "notifications"
-      identity: "service"
-      relays:
-        - "wss://dm-relay.example.com"
-```
-
-Only `feature: notifications` with `identity: service` is accepted in the current implementation. The relays above are normalized and published as a service-signed kind `10050` event with `relay` tags. They are not copied from `browser_relays`, `contextvm_relays`, or `service_relays`.
-
-The Bahia service key publishes NIP-51 `30002` relay sets for canonical bootstrap and an advisory NIP-65 `10002` relay list for wider Nostr routing. The `10002` list advertises ContextVM request relays as `read` and service publish/backfill relays as `write`; clients must still use ContextVM discovery plus the NIP-51 `30002` relay sets for Bahia bootstrap.
-
-### Repository Relay Hints
-
-NIP-34 repository announcements (`30617`) may include a `relays` tag. Bahia preserves those tag values as repository `relayUrls` in browser selections. Repository announcement discovery itself uses the advertised `nostr.nip34_relays` policy when configured, instead of replacing the global Bahia singleton connection or querying only the browser sidecar.
-
-When a user selects a NIP-34 repository, branch/state lookup for kind `30618` queries that repository's own `relays` tag values first with the scoped filter `{ kinds: [30618], authors: [repo_pubkey], "#d": [repo_identifier] }`.
-
-If no NIP-34 relay policy or repository `relays` tag values are available, Bahia queries the globally connected Bahia read relays as a degraded fallback. Missing repository relay hints surface degraded metadata with reason `missing_repository_relays`. Incomplete `EOSE` remains visible through branch lookup degraded metadata, including relay summary and partial event count. The Bahia sidecar read/write policy accepts NIP-22 comments (`1111`) plus NIP-34 kinds `10317`, `1617`-`1619`, `1621`, `1630`-`1633`, and `30617`-`30618` as open interop data so a sidecar can be used as a NIP-34 relay when deployment policy advertises it.
-
-### Encrypted Request Transport
-
-Sensitive operations use the ContextVM relay policy where available and otherwise the Bahia browser relay set, with encrypted capability gated by discovery metadata:
-
-```yaml
-nostr:
-  contextvm_relays:
-    - "wss://contextvm-relay.example.com"
-  browser_relays:
-    - "wss://browser-relay.example.com"
-```
-
-## Discovery
-
-### Well-Known Endpoint
-
-Bahia publishes discovery metadata:
+Inspect and retry through:
 
 ```bash
-curl https://bahia.example.com/.well-known/nostr.json
+bahia outbox --daemon counts
+bahia outbox --daemon list --state failed
+bahia outbox retry <event-id>
 ```
 
-Returns:
-- Service pubkey
-- Relay URLs
-- Feature flags
-- Control plane kind maps
-
-### Discovery Event
-
-ContextVM kind `11316` is the canonical capability bootstrap. New clients use `11316` plus ContextVM capability announcements (`11317`-`11320`) and NIP-51 relay sets (`30002`). Legacy kind `31974` discovery may appear only as startup migration input or a compatibility fixture.
-
-```json
-{
-  "kind": 11316,
-  "content": {
-    "nostr": {
-      "browser_relays": ["wss://..."],
-      "sidecar_url": "wss://..."
-    },
-    "features": {
-      "relay_read_models": true,
-      "encrypted_nostr_requests": true
-    }
-  }
-}
-```
-
-## Subscribing to Events
-
-### Basic Subscription
-
-```json
-{
-  "kinds": [30900, 30315, 4903],
-  "authors": ["<bahia-service-pubkey>"],
-  "#domain": ["service"],
-  "#service": ["svc-123"]
-}
-```
-
-### Workflow Pattern
-
-1. **Subscribe** with scoped filter
-2. **Process** stored events
-3. **Wait for EOSE** (End of Stored Events)
-4. **Keep open** for realtime updates
-
-### Command Lifecycle Pattern
-
-ContextVM commands use JSON-RPC request/response for private intent acknowledgment, then public canonical events for observable progress and state:
-
-1. Build a JSON-RPC 2.0 request with a Bahia method such as `service/deploy`, `service/route-attach`, `worker/cordon`, `package/promote`, `dns/zone-create`, or `backup/run`.
-2. Encrypt and route it through ContextVM (`25910` inside CEP-4/NIP-59 `1059` or `21059` where supported), tagged to the Bahia service pubkey.
-3. Subscribe for the correlated ContextVM response and for observable state/audit/status kinds (`30900`, `4903`, `30315`, plus `30316` assistant transcript ciphertext for assistant flows and domain-specific standard NIPs) before publishing when possible.
-4. Publish and require at least one relay `OK` with `accepted=true`.
-5. Treat JSON-RPC response status as command acknowledgment only; long-running truth is the canonical observable event stream.
-6. Surface `AUTH`, `CLOSED`, zero-accepted publish, explicit abort, and configured timeout outcomes as distinct failures or degraded waits.
-
-For encrypted backup methods, the verified inner `25910` author is checked
-against tenant RBAC for `backups:manage` before Bahia signs the canonical backup
-command. The service-signed command carries `delegation`, `requester`,
-`request_event`, `request_kind`, `tenant`, and `capability` tags plus an
-equivalent `request_authority` content object. Consumers treat the command
-event pubkey as the publishing/delegating service and the signed delegation as
-the original requester audit identity; a service-key requester, incomplete or
-mismatched delegation, unauthorized tenant, or ambiguous omitted tenant fails
-closed.
-
-### Assistant documentation context
-
-The floating assistant keeps the same encrypted ContextVM operation for prompts: `assistant/prompt` carried as kind `25910` and normally wrapped with CEP-4/NIP-59 where supported. Documentation context does not introduce a relay polling loop, synthetic request/response route, or new Nostr completion signal.
-
-When a page has route documentation metadata, the assistant composer shows a dismissible selected reference such as:
-
-```json
-{
-  "route_context": { "route": "/services", "params": {} },
-  "selected_refs": ["docs:features-services"]
-}
-```
-
-The backend resolves `docs:<topic>` and `bahia://docs/<topic>` references from the central `docs/user-guide` catalog into a bounded `Documentation References` section before calling the assistant model. Missing docs refs are reported in context as unresolved references; they do not convert the prompt into a failed control-plane mutation. If the assistant later performs or follows an operational command, durable progress and terminal truth still come from the canonical observable event stream described above.
-
-When agentic assistant mode is enabled, the prompt still uses `assistant/prompt`. Clients subscribe to service-authored assistant status events (`30315`, `#domain=assistant`) and render the `phase` field for progress such as `tool_call_requested`, `tool_submitted`, `tool_observed`, `approval_required`, and `loop_completed`. Full turn transcript entries are service-authored kind `30316` events tagged with `schema=bahia.assistant-transcript.v1`; their production content is the service-held symmetric-key AEAD envelope described in the event spec, so clients without the key should render envelope metadata rather than pretending to decrypt it.
-
-Action-level approvals are separate from the legacy plan-hash approval flow. When a status event has `phase=approval_required` and an `action_id`, the operator decision is published as `assistant/approval` with params:
-
-```json
-{
-  "session_id": "assistant-session-id",
-  "action_id": "deferred-action-id",
-  "decision": "approve",
-  "reason": "operator-visible reason"
-}
-```
-
-A ContextVM acknowledgment for `assistant/approval` only confirms the decision was accepted for processing. Execution progress and terminal truth still come from scoped subscriptions to `30315`, `30316`, and any domain observables correlated to the downstream action.
-
-### Example: Deployment Follow
-
-Desired-state deploy followers should display optional `step`, `desired_hash`, `renderer`, `target`, and `observation_id` metadata when present, but should not require those fields to conclude whether an event is valid. The ContextVM response is an acknowledgment; completion and convergence still come from the subscribed observable stream.
-
-```javascript
-// Subscribe to deployment events
-const filter = {
-  kinds: [30315, 4903, 30900],
-  "#e": [requestEventId]
-};
-
-relay.subscribe(filter, {
-  onevent: (event) => {
-    if (event.kind === 30315) {
-      // NIP-38 operational status
-      console.log("Status:", event.content);
-    } else if (event.kind === 4903) {
-      // Immutable audit fact
-      console.log("Audit:", event.content);
-    } else if (event.kind === 30900) {
-      // Canonical state projection
-      console.log("State:", event.content);
-    }
-  },
-  oneose: () => {
-    console.log("Historical events loaded");
-  }
-});
-```
-
-## Publishing Events
-
-### Signer-First Operations
-
-Critical operations require signed events:
-
-```javascript
-const event = {
-  kind: 25910,
-  content: JSON.stringify({
-    jsonrpc: "2.0",
-    id: "deploy-svc-123-prod",
-    method: "service/deploy",
-    params: {
-      service_id: "svc-123",
-      environment_id: "env-456",
-      artifact_id: "art-789",
-      _meta: { progressToken: "deploy-svc-123-prod" }
-    }
-  }),
-  tags: [["p", "<bahia-service-pubkey>"], ["method", "service/deploy"]],
-  created_at: Math.floor(Date.now() / 1000)
-};
-
-// Sign with NIP-07
-const signedEvent = await window.nostr.signEvent(event);
-
-// Publish to relay
-const ok = await relay.publish(signedEvent);
-```
-
-### Handling OK Response
-
-```javascript
-relay.publish(event).then(ok => {
-  if (ok.accepted) {
-    console.log("Published:", ok.eventId);
-  } else {
-    console.error("Rejected:", ok.message);
-  }
-});
-```
-
-## Encrypted Events
-
-Sensitive operations use ContextVM JSON-RPC kind `25910`, normally wrapped with CEP-4/NIP-59 random-key gift-wrap (`1059` or `21059`). Legacy encrypted Bahia kinds `5980`/`7980` are startup migration/test fixtures only.
-
-### Wrapped ContextVM request
-
-```json
-{
-  "kind": 1059,
-  "content": "<gift-wrapped kind 25910 ContextVM JSON-RPC request>",
-  "tags": [
-    ["p", "<bahia-service-pubkey>"],
-    ["contextvm", "contextvm-jsonrpc-v1"]
-  ]
-}
-```
-
-### Wrapped ContextVM response
-
-```json
-{
-  "kind": 1059,
-  "content": "<gift-wrapped kind 25910 ContextVM JSON-RPC response>",
-  "tags": [
-    ["p", "<requester-pubkey>"],
-    ["contextvm", "contextvm-jsonrpc-v1"]
-  ]
-}
-```
-
-The unwrapped inner response carries `e=<request-event-id>` with reply marker and `p=<requester-pubkey>`. Long-running completion is observed through canonical kinds `30900`, `4903`, `30315`, `30078`, `30004`, domain NIPs, and NIP-09 kind `5` deletions where applicable.
-
-### Early encrypted ContextVM progress ack
-
-When system discovery advertises `control_plane.capabilities` containing `encrypted_controlplane.progress_ack` and `control_plane.wire_version` equal to `contextvm-jsonrpc-v2`, browser clients use a short ack deadline before the longer work deadline. This discovery wire version describes JSON-RPC payload semantics; the Nostr routing tag value `contextvm-jsonrpc-v1` remains a compatibility discriminator and does not negotiate progress acknowledgements. After routing and requester authorization succeed, but before invoking the domain handler, Bahia publishes a gift-wrapped JSON-RPC notification back to the requester:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "notifications/progress",
-  "params": {
-    "requestId": "<published-request-event-id>",
-    "status": "processing"
-  }
-}
-```
-
-The notification has no `id`, `result`, or `error`. It only confirms that a routed, authorized Bahia service accepted processing; terminal success or failure still comes from the correlated JSON-RPC response and durable canonical observables. Routing mismatches remain silent, and unauthorized requests continue to return the existing `-32001` terminal error without a progress ack.
-
-### Encrypted Operations
-
-- Notifications (channels, logs)
-- Organizations (members, invites)
-- Payments (history)
-- Secrets (create, reveal)
-- Run logs
-- Artifact verification
-- Security OSV/SBOM scans and finding reads
-
-## Route Transport Classes
-
-Bahia route/control-surface transport classification is tracked in PSTF at `pstf/features/BAHIA_NOSTR_AUDIT_PARITY/route_transport_matrix.json`. The matrix is the durable source for distinguishing signer-first Nostr surfaces from compatibility ingress.
-
-| Class | Meaning |
-|-------|---------|
-| `nostr_native` | Route/control surface uses Nostr read models, scoped subscriptions, and signed command events where applicable. |
-| `nostr_request_result_facade` | Route uses signed/encrypted Nostr transport, but wraps domain operations as correlated request/result operations rather than durable domain event semantics. |
-| `rest_to_nostr_bridge` | Browser/API HTTP ingress submits work that the backend publishes as Nostr commands. Treat this as compatibility ingress, not signer-first browser control. |
-| `rest_compatibility` | Legacy or compatibility REST endpoint remains mounted for clients or domain reads/writes. |
-| `http_native` | HTTP is the expected protocol for that surface, such as Blossom/SBOM discovery-style interactions. |
-
-Signer-first route files must not import REST API clients for command submission. The unit guard `web/tests/unit/route-transport-matrix.test.js` fails when a pure `nostr_native` or `nostr_request_result_facade` route adds `$lib/api/*` route imports without an explicit non-signer-first matrix classification.
-
-Current route-level REST client exceptions are matrix-classified artifact Blossom/SBOM HTTP surfaces only. Canonical SBOM relay truth uses `30078` reference app-data and `30004` NIP-51 availability lists; legacy `30079` SBOM indexes are read-only compatibility data. ML import/deploy and continuity status/topology/simulation now use Nostr-backed browser paths.
-
-## SBOM Generation and Import Observables
-
-SBOM mutations are ContextVM intents (`sbom/generate` and `sbom/import`) carried as kind `25910` requests, optionally wrapped in `1059` or `21059`. The JSON-RPC response is only an asynchronous acceptance acknowledgment and includes the idempotency/status coordinate:
-
-```json
-{
-  "accepted": true,
-  "status": "accepted",
-  "run_id": "<idempotencyKey>",
-  "status_d_tag": "sbom:run:<sanitized-idempotencyKey>",
-  "idempotencyKey": "<idempotencyKey>",
-  "observable_kinds": [30315, 4903, 30078, 30004]
-}
-```
-
-Durable truth is observed through scoped subscriptions:
-
-```json
-{
-  "kinds": [30315, 4903, 30078, 30004],
-  "authors": ["<bahia-service-pubkey>"],
-  "#domain": ["sbom"],
-  "#subject_type": ["artifact"],
-  "#subject": ["sha256:<subject-digest>"]
-}
-```
-
-Process historical `EVENT`s, treat `EOSE` as catch-up completion, and keep the subscription open for realtime progress when needed. Generated or imported SBOM payload bytes are stored on Blossom; Nostr events carry references, hashes, status, and audit facts rather than full SBOM payloads. Relay `OK` acceptance is required for the `30078` reference and the `30004` availability list before Bahia marks a manifest published.
-
-Package and repository SBOM requests must identify immutable subjects. If `subject.digest` is omitted, use `subjectLocator`:
-
-```json
-{
-  "subject": { "type": "package" },
-  "subjectLocator": {
-    "package": {
-      "repository_id": "<package-repository-uuid>",
-      "namespace": "@company",
-      "package_name": "utils",
-      "version": "1.2.3",
-      "filename": "utils-1.2.3.tgz",
-      "sha256": "<package-archive-sha256>"
-    }
-  }
-}
-```
-
-```json
-{
-  "subject": { "type": "repository" },
-  "subjectLocator": {
-    "repository": {
-      "repository_url": "https://git.example/company/api.git",
-      "commit": "<40-or-64-hex-git-object-id>"
-    }
-  }
-}
-```
-
-For repository archive snapshots, use `subjectLocator.repository.content_digest` as `sha256:<repository-archive-digest>`. Do not identify package or repository SBOM subjects by mutable names alone.
-
-## Security OSV/SBOM Scan Observables
-
-Security scanning is an event-driven observer of canonical SBOM truth and an explicit ContextVM scan surface. SBOM generation/import still completes on SBOM `30078` references and `30004` availability lists; Security watches those events and publishes separate Security observables after it verifies the referenced payload hash and scans normalized targets.
-
-The daemon's private execution ledger is fleet-OCK encrypted kind `30900` cp-state on `security-target`, `security-run`, `security-schedule`, `security-finding`, and `security-finding-detail` topics. Signed deterministic run records are schedule claims and restart progress; Postgres availability does not gate scans or readiness.
-
-Security ContextVM methods are:
-
-| Method | Use | Completion signal |
-|--------|-----|-------------------|
-| `security/scan` | Request a scan for an SBOM reference, package coordinate, PURL, or Git commit. | Security `30315`/`30900`/`30078`/`4903` observables. |
-| `security/rescan` | Request another scan run for a known target. | New correlated scan status and summary events. |
-| `security/findings-list` | Read persisted finding projections. | Immediate read response only. |
-| `security/schedules-list` | Read policy-derived schedules and freshness state. | Immediate read response only. |
-
-Follow a scan with scoped filters:
-
-```json
-{
-  "kinds": [30315, 30900, 30078, 4903],
-  "authors": ["<bahia-service-pubkey>"],
-  "#domain": ["security"],
-  "#target_key_hash": ["<target-key-hash>"],
-  "#e": ["<contextvm-request-event-id>"]
-}
-```
-
-Security status events use `schema=bahia.status.security-scan.v1`; summaries use `bahia.security.scan-summary.v1` or `bahia.security.target-summary.v1`; normalized finding app-data uses `bahia.security.findings.v1`; audit facts use `bahia.audit.security.v1`. Clients process historical events until `EOSE`, keep subscriptions open for realtime convergence, deduplicate by event id, handle `CLOSED` and `AUTH`, and never poll REST or MCP for scan completion. Relay `OK accepted=true` is required for every Security observable publication.
-
-Policy breach notifications use the existing notification dispatcher with event type `security.policy_breached`. Bahia sends that notification only when a persisted breach fingerprint is new or materially changed; unchanged recurring breaches do not generate duplicate notifications.
-
-## Durability, replay, and retention
-
-Bahia persists signed outbound events before publishing them when the event repository implements the outbox interface. A failed relay publish remains pending and the publisher retries unpublished records in batches of 100 with backoff; success updates the durable publish state. Monitor `bahia_nostr_outbox_depth` together with relay reconnect, re-request, and closed-reason metrics.
-
-The daemon keeps a ContextVM request ledger in its local bbolt store (`nostr.local_store.path`), next to the per-relay request cursors. The ledger, not PostgreSQL, guarantees that a request runs at most once across restarts:
-
-- Every request is claimed by its request event ID (the inner ID of a gift wrap) before its handler runs. A relay replay, a second relay's copy, or a re-wrapped copy of a handled request is never executed again.
-- A request with an idempotency key (`_meta.progressToken`, scoped to requester and method, bound to a fingerprint of the parameters) keeps its terminal response, saved before it is published. A retry, including a new request reusing the key, gets that response replayed under the retry's own JSON-RPC ID. Reusing the key with different parameters is rejected.
-- A request without a key keeps no response, since responses can carry revealed secrets. Its retry gets error `-32011` instead of a second execution.
-- A request whose execution never recorded an outcome (the daemon crashed mid-handler) also gets `-32011` rather than a blind re-run. Reconcile the resulting state before sending a new request.
-
-PostgreSQL response storage, when configured, remains a 24-hour secondary index. Responses recorded there before the ledger existed are adopted on first retry, but correctness no longer depends on it.
-
-Each relay has its own request subscription and cursor. The cursor is the wall-clock time just before the daemon opened that relay's REQ, committed only when that REQ sends `EOSE`. It is never derived from event timestamps. Resume uses `since = cursor - 49h`, because NIP-59 lets senders randomize a gift wrap's outer `created_at` up to two days into the past; the extra hour covers clock skew. During live delivery, a cursor older than 12 hours is refreshed by opening a new REQ, whose `EOSE` commits a new anchor; the old REQ keeps delivering until then.
-
-Requests whose own `created_at` is more than 7 days old are not run. A new or wiped ledger also refuses requests created more than 2 minutes before it existed, so losing the store can drop old requests but never re-runs them.
-
-Only stored `1059` requests are recovered after downtime, and only while a relay retains them. Plain `25910` and the oversized-request `21059` fallback are ephemeral: relays forward them live and never store them, so a request sent while the daemon is down is lost and the client must retry. Durable client-signed intents are Phase 3 (`bahia-irsry.11`), not part of this interactive transport. The standalone DNS agent does not use this ledger. Its own store-backed subscription (`bahia-irsry.10.5`) delivers each stored wrap at most once, and its transport keeps in-memory request dedup and the 2-minute inner-event window. A transport uses one persisted layer or the other, never both.
-
-The sidecar stores accepted non-ephemeral events in a bbolt `fiatjaf.com/nostr/eventstore` with tag indexes, so retained relay history survives process and container restarts. Replaceable and addressable events retain only the newest event for their coordinate. Live ephemeral kinds `25910` and `21059` are broadcast rather than stored by the relay. Kind-5 deletions (NIP-09) remove the author's referenced events and keep them from being re-accepted; NIP-40 `expiration` is honoured.
-
-Backend subscribers resume from the newest persisted cursor with a one-second overlap and suppress duplicate event IDs. Their default catch-up limit is 1,000. Browser long-lived subscriptions use the same one-second overlap principle and preserve each original filter's cap. The Events view separately caps canonical read models at 1,000 and seven-day activity at 100.
-
-The sidecar applies a hard query ceiling through `nostr.sidecar.max_query_limit` (default 2,000), even if a client asks for more; NIP-77 negentropy reconciles a whole filter's set instead (up to `negentropy_max_events`). Retention sweeps run at startup and every 15 minutes. Defaults are:
-
-```yaml
-nostr:
-  sidecar:
-    event_retention: 0s          # regular events (e.g. 4903 audits) are durable; set a duration to cap them
-    request_retention: 24h
-    request_retention_kinds: [25910, 1059, 21059]
-    negentropy_max_events: 1000000
-    max_query_limit: 2000
-```
-
-The retention sweep deletes stored request/transport kinds (in practice gift wrap `1059`) after `request_retention`. Ephemeral kinds (`20000`–`29999`), including `25910` and `21059`, are broadcast-only, are never stored by the sidecar, and are unaffected by retention settings. Replaceable, addressable and kind-5 events are never age-swept. `event_retention` must be `0` or at least `1h`, and `request_retention` at least `1m`.
-
-## Authentication
-
-### NIP-07 (Browser Extension)
-
-```javascript
-const pubkey = await window.nostr.getPublicKey();
-const signed = await window.nostr.signEvent(event);
-```
-
-### NIP-46 (Remote Signer)
-
-```javascript
-const bunker = new BunkerClient("bunker://...");
-await bunker.connect();
-const signed = await bunker.signEvent(event);
-```
-
-### NIP-98 (HTTP Auth)
-
-For HTTP-native endpoints that still require NIP-98 authentication, such as run-log fetch:
-
-```javascript
-const authEvent = {
-  kind: 27235,
-  content: "",
-  tags: [
-    ["u", "https://bahia.example.com/api/v1/deployments/runs/<run-id>/logs"],
-    ["method", "GET"]
-  ]
-};
-const signed = await window.nostr.signEvent(authEvent);
-const header = "Nostr " + btoa(JSON.stringify(signed));
-```
-
-Service and environment mutations use ContextVM JSON-RPC over Nostr directly, not NIP-98-authenticated REST writes.
-
-## Authorization
-
-### Pubkey Allowlists
-
-Operations check pubkey authorization:
-
-| Allowlist | Purpose |
-|-----------|---------|
-| `nostr.authorized_pubkeys` | General operator access |
-| `adoption.allowed_pubkeys` | Runtime adoption |
-| `direct_runtime_actions.allowed_pubkeys` | Deploy/restart/stop |
-
-For adoption and direct-runtime ContextVM methods, the signer must be in **both**
-the global list and the relevant scoped list. Empty lists deny access; the global
-list is not a substitute for a scoped list. Enabling either surface requires at
-least one valid 64-character hex scoped pubkey at config load. Keys are trimmed,
-normalized to lowercase, and deduplicated; matching is case-insensitive.
-Subject/email-only allowlists no longer validate for enabled surfaces.
-Before upgrading an existing configuration, follow the
-[operator allowlist upgrade instructions](../adoption-production-rollout.md#allowlist-upgrade-bahia-kppzm).
-
-### Event Pubkey
-
-Authorization is based on the verified inner ContextVM event `pubkey` after unwrap:
-
-```json
-{
-  "pubkey": "abc123...",  // ← This is checked
-  "kind": 25910,
-  "tags": [["method", "service/deploy"]],
-  ...
-}
-```
-
-## Event Kinds Reference
-
-### Production ContextVM and canonical kinds
-
-| Kind | Purpose |
-|------|---------|
-| 25910 | ContextVM JSON-RPC request/response inner message |
-| 1059 / 21059 | CEP-4/NIP-59 gift-wrap envelopes for ContextVM messages |
-| 11316-11320 | ContextVM discovery and capability announcements |
-| 30002 | NIP-51 relay sets |
-| 30004 | NIP-51 SBOM availability lists |
-| 30078 | NIP-78 app data, including SBOM references and Security findings |
-| 30900 | Canonical control-plane state projection |
-| 4903 | Canonical audit fact |
-| 30315 | NIP-38 operational status |
-| 5 | NIP-09 delete event where Nostr deletion semantics apply |
-
-### Legacy migration inventory
-
-Legacy Bahia-specific request/status/result/read-model ranges (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980`) are migration inventory only, excluding explicitly documented SoulFactory interop kinds `5950`, `6950`, `7950`, `1950`, `1951`, `30317`, `38384`, and `38386` where their numbers overlap those ranges. Production clients must not publish or subscribe to legacy Bahia numbers as live contracts.
-
-## Best Practices
-
-1. **Use scoped filters** — Don't over-subscribe
-2. **Handle EOSE** — Know when historical is done
-3. **Check OK responses** — Verify publish success
-4. **Deduplicate events** — By event ID
-5. **Handle reconnects** — Re-subscribe after disconnect
-6. **Verify signatures** — Don't trust unsigned events
-
-## Troubleshooting
-
-### Not Receiving Events
-
-- Check relay connectivity
-- Verify filter matches
-- Check pubkey authorization
-
-### Publish Rejected
-
-- Check event signature
-- Verify pubkey is authorized
-- Check relay rate limits
-
-### Encryption Failed
-
-- Verify NIP-44 support in signer
-- Check correct recipient pubkey
-- Verify relay accepts encrypted events
+MCP provides `bahia_outbox_status` and `bahia_outbox_retry`. Retry requeues work; it does not claim delivery. A quorum-accepted publish clears the undelivered marker.
+
+## HTTP surface
+
+The daemon mounts HTTP only where HTTP semantics are part of the current product:
+
+| Route | Purpose |
+|---|---|
+| `GET /health`, `GET /ready` | Liveness and readiness |
+| `GET /metrics` | Metrics when configured |
+| `POST /mcp` | Authenticated platform-admin MCP |
+| `/v2` | OCI registry when configured |
+| `GET /api/v1/deployments/runs/{id}/logs` | Stored run logs |
+| `GET /api/v1/services/{id}/environments/{envId}/logs` | Live log stream |
+| `GET /api/v1/deployments/runs/{id}/cost`, `/payments/history` | Canonical payment reads |
+| `GET /api/v1/config-fabric/drift` | Administrative drift read |
+| `GET /api/v1/blossom/blob/{hash}` | Content-addressed blob proxy |
+| `/api/v1/virtualization-hosts`, `/vm-images`, `/persistent-vms`, `/execution-planes`, `/vm-checkpoints`, `/vm-exports`, `/vm-operations` | Authorized virtualization reads |
+| `POST /api/v1/artifacts/{id}/sbom` | Authenticated SBOM import |
+| `POST`/`DELETE .../managed-instances/.../maintenance` | Maintenance override |
+| `POST /api/v1/soulfactory/legacy-reconciliation/{preview,apply}` | Dry-run-first agent reconciliation |
+
+Routes whose backing repository is unavailable return `503`. Payment reads and relay-backed product state do not require PostgreSQL. PostgreSQL is an optional derived index.
+
+## Documentation topics
+
+`internal/docs` publishes every `docs/user-guide/**/*.md` file as kind `30023`. A path such as `features/services.md` becomes topic `features-services` and page `/docs/features-services`. Relative Markdown links resolve only to other files inside the user-guide tree.
 
 ## Related
 
-- [Core Concepts](core-concepts.md) — Data model
-- [MCP Tools](mcp-tools.md) — Tool invocation
-- [Control Planes](../control-planes.md) — Full specification
-
-### Managed-instance health projection
-
-Stage 3 uses existing canonical observable kinds only: `30315` managed-instance status, `30900` current health state, and `4903` recovery/maintenance audit facts. Projection reacts to internal subscriptions and publishes through the verified signed outbox path; it adds no mutation command or polling transport.
-
-Two more `30900` records of the same family carry the state the supervisor resumes after a restart, with or without PostgreSQL: the per-instance recovery ledger (`bahia.state.managed-instance-recovery.v1`, `d=runtime:recovery:<service>:<environment>:<unit>:<target-sha256>`, the restart budget and any pending recovery claim) and the maintenance override (`bahia.state.managed-instance-maintenance.v1`, `d=runtime:maintenance:<...>`, `active=true|false`). Instance-health listings select `bahia.state.managed-instance-health.v1`.
-
-### Shared agent runtime releases
-
-Bahia projects shared verified runtime releases as kind `30315` control state using schema `bahia.agent-runtime-release.v1`. Filter narrowly by `domain=agent-runtime-release` plus `org`/`digest`, or by `domain=agent-service-release` plus `org`/`agent`/`service`. Binding events retain `release_channel`, source event, and previous-binding correlation for exact rollback lookup. They do not represent deployment intent.
-
-
-## D79 operator intents
-
-The daemon accepts signed kind-30900 `build/request`, `adoption/scan`, `tool/approval-response`, and the ML operations listed in [ML Models](features/ml-models.md). Use the domain-specific schema `bahia.intent.<domain>.v1`, a stable `intent_id` tag, and the coordinate/content shapes in the [D79 fixtures](../../web/tests/fixtures/d79-intent-content.json). Build requests require `services:write`; adoption scans require the adoption operator pubkey allowlist; ML and tool decisions require the fleet-operator allowlist. A reused `intent_id` with different content, actor, operation, or coordinate produces a conflict rather than another mutation.
-
-`adoption/scan` is a request, not canonical adoption state. Its requester-scoped kind-30315 acceptance `data` contains redacted findings, `total_findings`, `offset`, `limit`, `next_offset`, and `truncated`. Each page is capped below the status size budget; request the next offset to read more findings. The daemon alone authors queued builds, ML run/deployment records, and approval decisions. ContextVM methods dual-dispatch to the same handlers while those legacy methods remain available.
-
-## Config Fabric status durability
-
-Config Fabric status uses kind `30900`, `domain=config-status`, and
-`schema=cascadia.config.status.v2`, addressed by desired event and phase:
-`config-status:<service>:<policy>:<scope>:<config_event_id>:<status>`.
-Accepted/rejected receipts cannot replace applied evidence. Replay selects the
-highest applied config version and checks its target event ID to determine drift.
-Readers retain v1 compatibility; deploy upgraded readers before v2 publishers.
-See [Config Fabric durable status receipts](../nostr-event-implementation-guide.md#config-fabric-durable-status-receipts)
-for tags, retention trade-offs, subscription scope, and upgrade semantics.
-
-### Verified policy and worker mutations
-
-Policy CRUD/evaluation and worker uncordon/undrain/maintenance-enter execute via
-signed ContextVM requests, using `nostr.authorized_pubkeys` as the required
-operator allowlist. Empty configuration denies all callers. See
-[Policies](features/policies.md#deployment-policy-contextvm-mutations) and
-[Workers](features/workers.md#direct-scheduling-mutations) for request, state
-and failure semantics. A command publisher alone is not proof of a consumer;
-continuity/package/tool-approval gaps remain in the migration verification report.
-
-## Operator assistant v2 contract
-
-The unified assistant contract retains ContextVM `assistant/prompt` and the
-registered `assistant/approval` method, and adds `assistant/cancel` and
-`assistant/reconcile` at activation. New session state uses kind 30900 with
-`bahia.assistant-session.v2`; encrypted immutable execution checkpoints use
-4903 (`domain=assistant`, `type=execution-checkpoint`, schema
-`bahia.audit.assistant-execution-checkpoint.v1`). A ContextVM acknowledgment
-is not evidence that a submitted tool completed. Follow the scoped state and
-audit subscriptions; do not infer failure from EOSE or missing events. The v2
-contract is additive until the unified executor is wired. See
-[Operator Assistant](features/operator-assistant.md).
-
-## MCP read-state families (F74a)
-
-Daemon-authored kind `30900` now carries addressable LLM releases (32015),
-artifact signatures (32016), parsed artifact SBOMs (32017), per-package SBOM
-index records (32018), and latest runtime observations (32019). The numbers
-are `legacy_kind` discriminators, not wire kinds. LLM releases are Fleet-OCK
-encrypted; signature/SBOM supply-chain records are public; runtime observations
-omit arbitrary metadata and are classified protected (NIP-42 enforced; `read_auth_mode` defaults to `enforce`). Live records and
-tombstones use the same coordinate. See the
-[family table](../nostr-event-implementation-guide.md#f74a-mcp-read-families-30900).
-
-## Package, tool, and notification canonical reads
-
-The daemon publishes fleet-OCK-encrypted `30900` state for package intent and
-approval lifecycle (`package-intent`), tool provisioning/policy/profile
-(`tool-provision-intent`, `tool-denylist`, `tool-profile`), and the bounded
-notification delivery log (`notification-log`). Subscribe by `#t` and the
-daemon author; decrypt with an authorized fleet OCK, validate the signature,
-and honor same-coordinate tombstones. The log retains at most the latest 50
-attempts per channel in one replaceable record. See the
-[event guide](../nostr-event-implementation-guide.md#f74b-canonical-fleet-private-state-bahia-irsry74).
-
-## Policy evaluation intent and build ownership (bahia-irsry.77)
-
-For MCP evaluation, use a client-signed `30900` `domain=policy`, `op=evaluate`
-intent with `d=evaluation:<artifact-uuid>:<environment-uuid>` and JSON content
-`{"artifact_id":"<uuid>","environment_id":"<uuid>"}`. The daemon evaluates
-its signature, SBOM, scan, and attestation repositories with the same
-`PolicyService.Evaluate` semantics. It emits a
-requester-scoped, replaceable `30315` status at
-`d=intent-status:<requester-pubkey>:<evaluation-coordinate>`; an accepted
-status has `result=evaluated` and an `evaluation` object. The status payload
-is capped at 16 KiB. A rejected evaluation is not an allow decision.
-
-Build registration and status are daemon-authored from `build/request` and
-trusted Hive-CI `5401`/`5402` evidence. MCP manual build writes are removed;
-F1 removes the compatibility REST writes `POST /builds` and
-`PATCH /builds/{id}/status`.
+- [Core Concepts](core-concepts.md)
+- [CLI Reference](cli-reference.md)
+- [MCP Tools](mcp-tools.md)
+- [Settings](features/settings.md)

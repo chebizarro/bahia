@@ -1,41 +1,34 @@
 # Environment States
 
-The **Environment States** route at `/environment-states` compares desired and observed deployment state across services and environments.
+**Environment States** (`/environment-states`) compares desired and observed deployment state for every service–environment pair.
 
 ## What the page shows
 
-Each row includes:
+Each row joins the `service-state` record with its service and environment definitions: service, environment, deployed artifact, drift status, drift details, and deployment information. Filter by **All**, **Drifted**, or **Unknown**; select the drift cell to open the complete state payload.
 
-- service;
-- environment;
-- deployed artifact;
-- synchronization status;
-- drift details;
-- deployment information.
+`drift_status` values:
 
-Filter the table by **All**, **Drifted**, or **In sync**. Select the Drift cell to inspect the complete state payload in a modal.
+| Value | Meaning |
+|-------|---------|
+| `in_sync` | the observed artifact matches the desired artifact |
+| `drifted` | the observed artifact differs from the desired one |
+| `deploying` | a deployment is converging the environment |
+| `remediation_needed` | drift was detected and the environment's reconcile mode does not auto-apply |
+| `unknown` | no accepted observation yet |
 
-## Data model
-
-The page loads services, environments, and canonical state read models from the browser stores, then joins them for display. The state event is evidence about the service/environment pair; the service and environment definitions provide names and configuration context.
-
-- **In sync** means the accepted observed artifact matches desired state.
-- **Drifted** means the accepted observation does not match desired state.
-- Missing or stale evidence should be investigated rather than interpreted as healthy.
-
-The route is not currently included in the browser's protected-prefix list. Backend and encrypted-operation authorization remain authoritative; route visibility alone does not grant access to mutate state.
+Missing or stale evidence is a reason to investigate, not a sign of health.
 
 ## Investigating drift
 
-1. Filter to **Drifted**.
-2. Open the full state payload and confirm service ID, environment ID, desired artifact, observed artifact, event author, and timestamp.
-3. Check the related deployment run and worker observation.
-4. Resolve the underlying runtime difference or initiate a verified deployment/rollback.
-5. Wait for a new canonical observation before considering the drift resolved.
+1. Filter to **Drifted** and open the state payload: service id, environment id, desired and observed artifact, author, timestamp.
+2. Check the related deployment run and the runtime observation.
+3. Fix the runtime difference, or redeploy / roll back through a reviewed deployment.
+4. Wait for a new observation; the row updates when the next `service-state` record arrives.
+
+`bahia state list` and `bahia state drifted` show the same records from the CLI.
 
 ## Related
 
-- [Environments](environments.md) — Deployment targets
-- [Services](services.md) — Desired service configuration
-- [Deployments](deployments.md) — Runs and rollback
-- [Nostr Integration](../nostr-integration.md) — Canonical read-model semantics
+- [Environments](environments.md)
+- [Deployments](deployments.md)
+- [Core Concepts](../core-concepts.md#runtime-observation-and-drift)

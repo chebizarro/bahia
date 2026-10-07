@@ -1,243 +1,100 @@
 # Managed DNS and HTTPS Routes
 
-This guide documents the signer-first operator flow for making Bahia the central owner of one service hostname across three outputs: external Cloudflare DNS/Tunnel routing, authoritative internal DNS, and internal HTTPS termination. It takes an existing Bahia-managed Docker or Compose service from artifact deployment to a single managed hostname. The service must expose an HTTP health endpoint.
+This guide connects a Bahia-managed service to one hostname across runtime deployment, internal DNS, and managed HTTPS.
 
-The worked example uses **Astillero** in `edge-01-production`:
+## Prerequisites
 
-- public hostname: `astillero.sharegap.net`
-- existing origin: `http://192.168.40.104:18088`
-- health endpoint: `/health`
-- final user URL: `https://astillero.sharegap.net/` (no port)
+- A service, immutable artifact, and environment with an explicit deployment unit.
+- A configured DNS backend and zone policy.
+- `edge_routing.enabled` with its provider credential stored as a secret reference.
+- `internal_routing.enabled` when Bahia serves a LAN vhost.
+- A real application health endpoint.
+- A signer authorized for the service's organization and fleet-scoped DNS actions.
 
-Replace the example UUIDs and image coordinate with values from your environment. Every UUID below is a placeholder; no real credential is shown.
+## 1. Configure DNS and routing
 
-## 1. Configure managed DNS and edge routing
+Map the environment or service to the managed zone. For a local dnsmasq process, configure Bahia's owned include directory and reload command. For a resolver on another host, configure the dnsmasq agent with its pubkey and relays; it accepts signed requests, updates only Bahia-owned include files, and rolls back a failed validation or reload.
 
-Bahia's internal service projection requires a writable DNS backend. This example uses dnsmasq, the deployable internal-LAN backend for mapping `edge-01-production` services into `sharegap.net`; it writes a managed configuration file and runs the configured reload command after an atomic update. The filesystem backend is not deployable because Bahia does not wire the operational activator its snapshots require. Choose dnsmasq, CoreDNS, PowerDNS, or FIPS instead.
+For internal HTTPS, use absolute include and certificate paths. Bahia refuses to overwrite a foreign file at its managed vhost path.
 
-```yaml
-direct_runtime_actions:
-  enabled: true
+See [DNS](../features/dns.md) for backend choices and drift behavior.
 
-dns:
-  enabled: true
-  default_ttl: 300
-  reconcile_interval: 1m
-  zones:
-    - name: sharegap.net
-      visibility: internal
-      backend: lan-dnsmasq
-      ttl: 300
-      authoritative: true
-  backends:
-    lan-dnsmasq:
-      type: dnsmasq
-      dnsmasq_config_dir: /etc/dnsmasq.d
-      dnsmasq_reload_command: systemctl reload dnsmasq
-      dnsmasq_file_prefix: bahia-
-  projection:
-    services: true
-    environment_zones:
-      edge-01-production: sharegap.net
-
-edge_routing:
-  enabled: true
-  provider: cloudflare_tunnel
-  backend_ref: cloudflare-production
-  api_token_ref: 00000000-0000-4000-8000-000000000001
-  account_id: YOUR_CLOUDFLARE_ACCOUNT_ID
-  tunnel_id: YOUR_CLOUDFLARE_TUNNEL_ID
-  verify_timeout: 30s
-  verify_resolver: 1.1.1.1:53
-  zones:
-    - name: sharegap.net
-      zone_id: YOUR_CLOUDFLARE_ZONE_ID
-      allowed_org_ids:
-        - 00000000-0000-4000-8000-000000000002
-      protected: true
-      ttl: 300
-  origins:
-    - deployment_unit_id: 00000000-0000-4000-8000-000000000003
-      host: 192.168.40.104
-      allowed_ports:
-        - 18088
-
-internal_routing:
-  enabled: true
-  provider: nginx
-  include_dir: /etc/nginx/conf.d
-  file_prefix: bahia-
-  test_command: [nginx, -t]
-  reload_command: [nginx, -s, reload]
-  command_env: []
-  cert_file: /etc/letsencrypt/live/astillero.sharegap.net/fullchain.pem
-  key_file: /etc/letsencrypt/live/astillero.sharegap.net/privkey.pem
-  zones:
-    - sharegap.net
-```
-
-When the dnsmasq resolver runs on a **different host** than Bahia — the edge-01/core-01 topology, where core-01 (`192.168.40.1`) is the LAN resolver — use the `dnsmasq_agent` backend instead of `dnsmasq`. Bahia then sends signed ContextVM kind `25910` requests (schema `bahia.dnsagent.v1`) over the configured relays to a `bahia-dns-agent` process on the resolver host; that agent owns only the `bahia-*` include files, applies them atomically under a monotonic serial, and rolls back automatically when a dnsmasq reload fails. Existing manually managed include files on the resolver are never touched.
-
-```yaml
-  backends:
-    lan-dnsmasq:
-      type: dnsmasq_agent
-      agent_pubkey: AGENT_PUBKEY_HEX            # the bahia-dns-agent identity on core-01
-      agent_relays:
-        - wss://relay.sharegap.net              # defaults to control-plane relays when omitted
-      agent_encrypted: true
-      agent_timeout: 30s
-```
-
-Deployment of the agent itself (key generation, allowlist, reload command, migration from manual records, rollback) is covered by the [core-01/edge-01 centralized guards runbook](../../runbooks/core01-dnsmasq-agent.md). Follow its ordered cutover: first enable the authoritative DNS flag and verify the Bahia-owned `local=/sharegap.net/` line before removing the hand-applied guard; then enable `internal_routing` and verify the Bahia-owned vhost before removing the hand-applied nginx vhost. Each guard has an independent rollback. The rest of this guide is identical for both DNS backends.
-
-`api_token_ref` is an opaque SecretRef UUID. Store the Cloudflare API token through Bahia's secret-management path; never put the token itself in this file. `allowed_org_ids` limits which organizations may claim the zone. Each origin allowlists one deployment unit, host, and set of ports; `route-attach` is rejected when a request falls outside those boundaries. A protected zone also requires a protected environment.
-
-Together, this configuration establishes one ownership boundary: the DNS reconciler owns the internal A record and `local=/sharegap.net/` guard, while one signed route plan owns both the external Cloudflare CNAME/Tunnel output and the internal HTTPS vhost for `astillero.sharegap.net`. The desired-state hash covers both route outputs, and composite apply/compensation keeps them coordinated.
-
-`internal_routing` makes the edge-01 LAN vhost part of that same signed route plan. Its include directory and certificate paths must be absolute; the certificate and key must already exist and be readable on edge-01 for startup health and route checks to pass. The shown argv commands are executed without a shell. `command_env` accepts validated `KEY=VALUE` entries for both commands, and diagnostics log only their keys. Unknown keys in this block fail configuration loading. Bahia owns only `/etc/nginx/conf.d/bahia-astillero.sharegap.net.conf`, identified by its header, and refuses to overwrite a foreign collision. It atomically writes the vhost, runs `nginx -t`, then reloads. A test or reload failure restores the exact prior bytes and re-tests/reloads the restored configuration.
-
-### Containerized nginx
-
-For nginx running as a container on the same Docker daemon, name that container in both argv arrays:
-
-```yaml
-test_command: [docker, exec, nginx, nginx, -t]
-reload_command: [docker, exec, nginx, nginx, -s, reload]
-```
-
-For a remote daemon, either encode the endpoint in each argv, such as `["docker", "--host", "tcp://edge-01:2375", "exec", "nginx", "nginx", "-t"]`, or use the same-daemon argv with `command_env: ["DOCKER_HOST=tcp://edge-01:2375"]`. Bahia's image includes `docker-cli`, and the supplied Compose file mounts `/var/run/docker.sock`, so an unqualified Docker command uses the daemon on Bahia's own host. It cannot reach a container on a different daemon merely because the container name is correct.
-
-The internal-routing configuration hash covers the test argv, reload argv, and `command_env`. Changing any of these after an operator reviewed the plan causes apply to reject it as `internal routing configuration changed after review`; run `service/route-attach` again and review the replacement plan before applying it.
-
-`verify_resolver` defaults to the public resolver `1.1.1.1:53`. This is intentional on edge-01: its split-horizon system DNS can resolve the public hostname directly to the LAN origin, which would bypass Cloudflare and could let verification pass even when the public record is absent. Bahia first resolves the hostname through the configured public resolver and then uses that same resolver for the HTTPS connection, while retaining the public hostname for TLS SNI and certificate verification. Set `verify_resolver: system` only when host-resolver behavior is explicitly desired.
-
-The `dns/zone-create`, `dns/policy-apply`, `dns/record-set`, and `dns/drift-remediate` ContextVM methods are registered even before DNS is configured. If `dns.enabled` is false or no DNS runtime is configured, each returns JSON-RPC `-32000` with `DNS orchestration is not enabled; set dns.enabled and configure a backend`. This fail-closed response distinguishes missing configuration from an unavailable method.
-
-After editing the server configuration, send `SIGHUP` to the Bahia server process. The server reloads and validates the candidate configuration, constructs a replacement application, stops the current application only after replacement initialization succeeds, and then starts the replacement. DNS and edge-routing changes therefore become active through **whole-application reconstruction**, not in-place mutation. An invalid candidate leaves the current application running.
-
-## 2. Create or update the service
-
-Configure the CLI with an operator signer. Prefer the NIP-46 remote signer: point the CLI at a file containing the bunker URI with `--nostr-bunker-file` (or `BAHIA_NOSTR_BUNKER_FILE`; `BAHIA_NOSTR_BUNKER_RELAYS` when the signer relay is stored separately). Keep the bunker URI in a file — it can carry a connect secret, so never pass it as a literal flag value or environment dump. A file-backed local key (`--nostr-key-file` / `BAHIA_NOSTR_KEY_FILE`) remains available as a compatibility path. Mutations publish signed ContextVM requests; REST is not the mutation authority.
-
-Create Astillero if it is not registered:
+## 2. Create the service and environment
 
 ```bash
-bahia services create \
-  --name astillero \
-  --artifact-repo registry.example/astillero \
-  --runtime-type compose \
-  --managed-runtime-config-file astillero-runtime.json \
-  --idempotency-key service:create:astillero
+bahia services create --org "$ORG" --name api \
+  --artifact-repo ghcr.io/acme/api --runtime-type compose
+
+bahia environments create --org "$ORG" --name production \
+  --unit-runtime-type compose \
+  --unit-endpoint-ref production-docker \
+  --unit-compose-dir /srv/bahia/api
 ```
 
-Or update the existing service:
+Use returned UUIDs in later commands. Keep the Compose directory dedicated to Bahia-generated content.
+
+## 3. Preview and deploy
 
 ```bash
-bahia services update \
-  --service 00000000-0000-4000-8000-000000000004 \
-  --managed-runtime-config-file astillero-runtime.json \
-  --idempotency-key service:update:astillero
+bahia deployments preview --service "$SERVICE_ID" --environment "$ENV_ID" \
+  --artifact "$ARTIFACT_ID"
+
+bahia deploy --org "$ORG" --service "$SERVICE_ID" --environment "$ENV_ID" \
+  --deployment-unit "$UNIT_ID" --artifact "$ARTIFACT_ID" \
+  --expected-desired-state-hash "$DESIRED_HASH" \
+  --idempotency-key "$INTENT_UUID"
 ```
 
-The environment must already contain the Bahia-managed Docker or Compose deployment unit represented by `deployment_unit_id` in `edge_routing.origins`. Its runtime configuration must expose the application on the allowlisted origin port (`18088` here).
+Wait for the deployment run and service-state observation to confirm the digest is running.
 
-## 3. Deploy the artifact
+## 4. Project DNS
 
-Use the existing signer-first deployment flow with the service, environment, deployment-unit, and artifact IDs returned by Bahia:
+Create the zone and policy if they do not exist:
 
 ```bash
-bahia deployments deploy \
-  --service 00000000-0000-4000-8000-000000000004 \
-  --environment 00000000-0000-4000-8000-000000000005 \
-  --deployment-unit 00000000-0000-4000-8000-000000000003 \
-  --artifact 00000000-0000-4000-8000-000000000006 \
-  --idempotency-key deploy:astillero:artifact
+bahia dns zone-create --name example.com --visibility external \
+  --backend-ref edge-dns --ttl 300
+bahia dns policy-apply --file dns-policy.json
 ```
 
-If policy returns a pending intent, approve it with the same signer-first control plane:
+Runtime observation drives endpoint projection. Confirm the endpoint has the intended hostname and address. If the runtime reports an unresolvable endpoint alias, configure a projection host override.
 
-```bash
-bahia deployments approve \
-  --intent 00000000-0000-4000-8000-000000000007 \
-  --idempotency-key approve:astillero:deploy
-```
-
-Wait for the canonical deployment run/state events to report success; the initial ContextVM response is only an acknowledgment.
-
-## 4. Let Bahia project internal DNS
-
-No DNS mutation command is required for the normal service path. With `dns.projection.services: true`, the `dns-reconciler` reacts to completed deployment runs, environment service-state changes, and runtime observations. A healthy in-sync Astillero observation in `edge-01-production` is mapped by `environment_zones` to `sharegap.net`, producing an A or AAAA record such as:
-
-```text
-astillero.sharegap.net. 300 IN A 10.20.0.88
-```
-
-With `authoritative: true`, the same managed include also contains `local=/sharegap.net/`; the reconciler observes and repairs that guard independently of record drift so unanswered internal query types do not escape to public DNS. The exact address comes from the runtime observation; do not hardcode it in the operator flow. Confirm that `/health` lists the `dns-reconciler` runner and that `/ready` succeeds before relying on the projection:
-
-```bash
-curl -fsS http://127.0.0.1:8080/health
-curl -fsS http://127.0.0.1:8080/ready
-dig @LAN_DNS_SERVER astillero.sharegap.net
-```
-
-## 5. Attach the external HTTPS route
-
-Attach a public route to the **existing deployed service** without redeploying its artifact:
+## 5. Attach HTTPS
 
 ```bash
 bahia deployments route-attach \
-  --service 00000000-0000-4000-8000-000000000004 \
-  --environment 00000000-0000-4000-8000-000000000005 \
-  --deployment-unit 00000000-0000-4000-8000-000000000003 \
-  --hostname astillero.sharegap.net \
-  --upstream-scheme http \
-  --upstream-port 18088 \
-  --health-path /health \
-  --tls managed \
-  --internal \
-  --idempotency-key route:astillero:sharegap
+  --service "$SERVICE_ID" --environment "$ENV_ID" \
+  --deployment-unit "$UNIT_ID" \
+  --hostname api.example.com --upstream-port 8080 \
+  --health-path /healthz
 ```
 
-The route is part of the signed desired-state hash. Bahia executes it as a route-only deployment run, so the current artifact is preserved. If the route policy requires approval, approve the returned intent:
+The command plans and applies the route for the current artifact. When internal routing is configured, Bahia also manages the LAN vhost.
+
+## 6. Verify
+
+Check each layer independently:
 
 ```bash
-bahia deployments approve \
-  --intent 00000000-0000-4000-8000-000000000008 \
-  --idempotency-key approve:astillero:route
+dig api.example.com
+curl --fail --show-error https://api.example.com/healthz
 ```
 
-By default `--internal` is automatic: Bahia includes the internal stanza whenever `internal_routing` is enabled and the hostname is inside an allowed internal zone. Use `--internal=false` only for an explicit opt-out.
+From the LAN, resolve the hostname through the managed internal resolver. From outside, confirm public DNS and the edge path. Route Canaries should report `route_ok` for every configured perspective and the service-state record should remain `in_sync`.
 
-Bahia updates and verifies the managed Cloudflare Tunnel ingress and DNS record first, then writes/tests/reloads the nginx vhost `astillero.sharegap.net -> http://192.168.40.104:18088`. Public DNS resolution and the HTTPS request retry with bounded backoff only until `verify_timeout`; a missing public record is reported separately from an edge HTTP failure. If nginx fails after Cloudflare succeeds, nginx restores its prior file state and the composite withdraws/restores the Cloudflare mutation in reverse order. A rollback plan with a changed internal stanza replaces the owned vhost; a plan with no stanza removes the owned file and reloads nginx. The route-only run fails if compensation cannot complete.
+If the service is healthy but the route is not, inspect DNS projection, certificate selection, provider apply status, and proxy upstream resolution before redeploying the application.
 
-## 6. Verify the result
+## Recovery
 
-```bash
-curl -fsS http://127.0.0.1:8080/ready
-curl -fsS https://astillero.sharegap.net/health
-curl -fsS https://astillero.sharegap.net/
-# Force the LAN edge address to prove split-DNS nginx service independently:
-curl --resolve astillero.sharegap.net:443:192.168.40.104 -fsS https://astillero.sharegap.net/health
-```
+- Retire a manual DNS override when projection becomes authoritative.
+- Roll back a failed route through the route operation's compensation result.
+- Roll back the deployment with an explicit successful artifact when application state is at fault.
+- Preserve the same idempotency key when retrying an uncertain request.
 
-The final user experience is `https://astillero.sharegap.net/` without an exposed port. Apply the same flow to any Bahia-managed Docker or Compose service by changing the service/environment/unit IDs, mapped zone, allowed origin, hostname, and health path.
-
-## Operational boundary
-
-After the one-time manual-guard migration in the linked runbook, steady-state operation has this boundary:
-
-- no direct SQL changes;
-- no manual Docker, Compose, nginx, or cloudflared edits;
-- no manual Cloudflare dashboard changes;
-- no real credentials in configuration or command history.
-
-Use signed Bahia commands and configured SecretRefs so desired state, policy decisions, deployment runs, DNS projection, routing compensation, and audit events remain consistent.
-
-## Related guides
+## Related
 
 - [Services](../features/services.md)
 - [Deployments](../features/deployments.md)
 - [DNS](../features/dns.md)
-- [CLI reference](../cli-reference.md)
-- [core-01/edge-01 centralized guards runbook](../../runbooks/core01-dnsmasq-agent.md)
+- [Route Canaries](../features/route-canaries.md)
+- [CLI Reference](../cli-reference.md)

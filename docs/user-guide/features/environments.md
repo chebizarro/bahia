@@ -1,263 +1,55 @@
 # Environments
 
-`environment/worker-policy-apply` is a fleet-operator desired-state intent on the environment coordinate. It updates the full `runtime_config.worker_policy` in the canonical environment record; use that record's `updated_at` as `expected_updated_at` to detect conflicts. See the [D80 fixture](../../../web/tests/fixtures/d80-intent-content.json).
+An environment defines where and how a service runs. Its deployment units identify concrete runtime targets, while strategy, reconciliation, protection, and secret-scope settings control deployment behavior.
 
-The web environment list and detail views read the local verified event store by the `environment-registry` topic. Runtime state uses the `service-state` topic. Cached data renders without waiting for relay EOSE, and live updates or kind-5 deletions update the view in place. Mutation transport remains unchanged in this phase.
+## Deployment units
 
+Each unit can define a durable key, runtime type, endpoint reference, Compose directory or namespace, ownership mode, reconcile mode, failure-domain label, runtime configuration, and worker selector.
 
-## Typed VM resources
+`deployment_units` is a complete set:
 
-An environment's legacy `vm-qemu`/`vm-firecracker` service adapter is not an
-execution-plane deployment. Typed persistent VMs may reference environment and
-deployment-unit identities while preserving their own resource UUID, lifecycle
-class, desired generation and operation history. Host/quota governance cannot be
-bypassed through a virtualization REST mutation route: only authorized queries
-are exposed there. See [Virtual machines](virtual-machines.md) for the new public
-surface and the C/D service integration gate.
+- omitting it on update leaves the current set unchanged;
+- sending `[]` returns to the implicit default unit;
+- sending a non-empty list replaces the explicit set.
 
+The daemon rejects duplicate keys, ambiguous defaults, invalid endpoint references, and stale `expected_updated_at` revisions.
 
-An **Environment** is a deployment target in Bahia — such as development, staging, or production.
+## Web and CLI
 
-## Overview
-
-Environments define:
-- Where services get deployed
-- What approval policies apply
-- Which runtime targets execute deployments
-- How notifications are routed
-
-## Creating an Environment
-
-Environment creation is signer-first. Bahia web publishes a signed kind-`30900` `environment/create` intent, not a ContextVM or REST request. Requester-scoped `30315` acknowledges the intent; durable environment state and audit facts come from canonical `30900` and `4903` observables.
-
-### Web UI
-
-1. Navigate to **Environments** in the sidebar
-2. Click **New Environment**
-3. Enter the required environment name and any supported targeting, deployment-unit, strategy, or protection settings
-4. Click **Create** to publish the signed Nostr command
-
-### Nostr
-
-Publish a signed `environment/create` kind-`30900` intent. Worker-policy changes use `environment/worker-policy-apply` with the current environment's `updated_at` revision.
-
-## Environment Properties
-
-| Property | Description | Required |
-|----------|-------------|----------|
-| `id` | Environment UUID | Update only |
-| `expected_updated_at` | Revision from the latest environment read; required when update supplies `deployment_units` | Complete-set update only |
-| `org_id` | Organization UUID; authorization is checked before any tenant mutation | Create only |
-| `name` | Display name | Create only |
-| `loom_worker_selector` | Legacy/non-Compose worker-selection object | No |
-| `runtime_config` | Environment-level runtime compatibility settings | No |
-| `targeting` | Typed `default_unit_key`, failure-domain labels, secret scope, and default reconcile policy | No |
-| `reconcile_mode` | `observe_only`, `auto_apply`, `approval_required`, or `disabled` | No |
-| `deployment_units` | Complete desired explicit deployment-unit set | No |
-| `deploy_strategy` | `replace`, `blue_green`, or `canary` | No |
-| `protected` | Enables additional deployment protections | No |
-
-For `environment/update`, omitted fields remain unchanged. `deployment_units` is special: omission preserves the current set, a supplied array replaces the complete explicit set atomically, and `[]` returns the environment to an implicit default unit. An intent that supplies `deployment_units` must include `expected_updated_at` from the latest read; stale revisions fail closed with a conflict status and no registry mutation. If explicit units are supplied, `targeting.default_unit_key` must name one of them.
-
-## Environment Types
-
-### Development
-
-For local or shared development:
-- Auto-deploy enabled
-- No approval required
-- Frequent deployments expected
-
-### Staging
-
-For pre-production testing:
-- May require approval
-- Mirrors production configuration
-- Used for QA and integration testing
-
-### Production
-
-For live traffic:
-- Approval typically required
-- Strict change control
-- Monitored closely
-
-## Runtime Targets
-
-Runtime targets are represented by `targeting` plus `deployment_units`; there is no `runtime_target` property and `loom` is not a deployment-unit runtime type. Each unit accepts `docker`, `compose`, `kubernetes`, or `podman` and follows the schema in `schemas/deployment_unit.json`.
-
-```json
-{
-  "name": "production",
-  "targeting": {
-    "default_unit_key": "max",
-    "failure_domain_labels": {"host": "max"},
-    "secret_scope_mode": "unit",
-    "default_reconcile_mode": "approval_required"
-  },
-  "deployment_units": [
-    {
-      "key": "max",
-      "display_name": "Max Compose",
-      "runtime_type": "compose",
-      "endpoint_ref": "max",
-      "compose_dir": "/srv/bahia/compose/gastown",
-      "network_profile": {},
-      "ownership_mode": "bahia_managed",
-      "reconcile_mode": "approval_required",
-      "runtime_config": {"execution_mode": "sdk"}
-    }
-  ],
-  "deploy_strategy": "replace",
-  "protected": true
-}
-```
-
-`endpoint_ref` names a server-managed endpoint alias; callers do not put raw Docker credentials in the signed payload. `compose_dir` is the Bahia-owned full-project directory on that endpoint. Non-Compose workloads can use `loom_worker_selector` for worker selection.
-
-## Approval Policies
-
-Use the environment or unit reconcile mode to control automated drift remediation. Deployment approval requirements are defined by deployment policies rather than stale `requires_approval` or `approvers` environment properties. See [Policies](policies.md) for details.
-
-## Viewing Environments
-
-### Web UI
-
-The **Environments** page shows:
-- All environments with descriptions
-- Service count per environment
-- Health summary
-
-Click an environment to see:
-- **Deployment Units**: Explicit and implicit runtime boundaries, safe endpoint aliases, Compose directories, ownership, and reconcile modes
-- **Services**: Services deployed here
-- **State**: Current state of all services
-- **History**: Deployment activity
-- **Settings**: Edit environment
-
-Authorized signers can create or edit an explicit Compose unit from the **Deployment Units** section. The browser publishes one revision-guarded `environment/update` containing the complete explicit set; it does not call a deployment-unit CRUD endpoint. Protected environments require a confirmation step and do not permit `auto_apply` from this editor. Endpoint references are aliases only—Docker hosts, TLS files, and credentials are never resolved or displayed in the browser.
-
-### CLI
-
-Environment list/get reads use canonical Nostr events by default, including deployment units in `get`. Configure `--service-pubkey` and `--relay` (or their environment variables); the legacy REST read route is no longer mounted. If EOSE does not arrive before `--eose-timeout`, the CLI prints cached data and warns on stderr.
+Open **Environments** (`/environments`) to create an environment, review its units, and inspect associated state.
 
 ```bash
-# List environments
 bahia environments list
-
-# Get environment details, including explicit units or the marked implicit default
 bahia environments get <environment-id>
-
-# Create or update through signed 30900 intents
-bahia environments create --org "$ORG_UUID" --name production --units-file units.json
-bahia environments update <environment-id> --units-file units.json
-
-# Manage one unit through signed read-merge, complete-set signed updates
+bahia environments create --org "$ORG" --name production --units-file units.json
+bahia environments update <environment-id> --units-file units.json --expected-updated-at <rfc3339>
 bahia environments units list <environment-id>
-bahia environments units create <environment-id> --file unit.json --default-unit-key max
-bahia environments units update <environment-id> max --file unit.json --default-unit-key max
-
-# List state for an environment
-bahia state list --environment production
+bahia environments units create <environment-id> --file unit.json
+bahia environments units update <environment-id> <unit-key> --file unit.json
 ```
 
-### MCP Tool
+Inline unit flags are also available; see `bahia environments create --help`. MCP provides list, get, create, update, and delete tools.
 
-```json
-{
-  "tool": "bahia_list_environments",
-  "arguments": {}
-}
-```
+## Deployment behavior
 
-## Environment State
+- `strategy`: `replace`, `blue_green`, or `canary`.
+- `reconcile_mode`: `observe_only`, `auto_apply`, `approval_required`, or `disabled`.
+- `protected`: requires deployment approval.
+- `secret_scope_mode`: `service`, `environment`, or `unit`.
 
-Query the current state of all services in an environment:
+A deployment preview resolves the selected unit and produces a desired-state hash. If an environment has multiple units, the operator must choose one explicitly.
 
-```bash
-bahia state list --environment production
-```
+## State and drift
 
-Output:
-```
-SERVICE        ARTIFACT    STATUS    DRIFT
-payment-api    v2.1.0     healthy   no
-user-api       v1.5.2     healthy   no
-notification   v3.0.1     drifted   yes
-```
+The service-state record joins desired artifact, observed artifact, deployment status, and drift for each service/environment target. Use **Environment States**, `bahia state list`, or `bahia state drifted` to investigate.
 
-### Drifted Services
+## Virtualization
 
-Find services that have drifted:
-
-```bash
-bahia state drifted --environment production
-```
-
-## Environment Variables
-
-Configure environment-level defaults:
-
-```yaml
-environment_variables:
-  LOG_LEVEL: "info"
-  ENABLE_TRACING: "true"
-```
-
-These are available to all services in the environment.
-
-## Updating Environments
-
-The CLI publishes signer-first kind `30900` environment intents and waits for kind `30315` status. REST `PUT /api/v1/environments/{id}` is no longer accepted. On update, the CLI merges flags into the latest canonical `30900` read model and includes `expected_updated_at`; a conflict requires an explicit re-read and retry. A status timeout exits 2 and leaves the event in `bahia outbox list`; no relay acceptance exits 3.
-
-### Web UI
-
-1. Go to the environment detail page
-2. Click **Edit** for environment properties, or use **Deployment Units** to create/edit an explicit Compose target
-3. For a target, review the unit key, server-managed endpoint alias, dedicated Compose directory, Bahia-managed ownership, execution mode, and reconcile mode
-4. Click **Save Unit** (or confirm the protected-environment summary) to publish the signed intent
-
-If the canonical environment revision changes while a target draft is open, Bahia disables submission and requires the operator to reload and review instead of silently rebasing the signed full set.
-
-### Nostr
-
-Publish a signed `environment/update` intent with `id` and only the fields to change. If `deployment_units` is present, it is the complete desired explicit set, not a patch, and `expected_updated_at` is required. The `environments units` CLI commands obtain environment, targeting, `updated_at`, and resolved units from canonical `30900` state, then publish a full desired-state intent. There is no automatic HTTP fallback or silent retry of a stale complete-set write.
-
-## Deleting Environments
-
-Environments can be deleted when no longer needed by publishing a signed `environment/delete` intent. REST `DELETE /api/v1/environments/{id}` is no longer accepted for signer-first mutations.
-
-**Warning**: You cannot delete an environment that has:
-- Active deployments
-- Running services
-- Pending intents
-
-Remove or stop all services first.
-
-## Canonical Observables
-
-Environment state is published as canonical Nostr observables:
-
-| Kind | Tags | Content |
-|------|------|---------|
-| `30900` | `d`, `domain=environment` or `domain=service`, `schema`, `environment`, optional `service` | Environment registry and service/environment state projections |
-| `30315` | `status`, `environment`, optional `service`, correlation `e` | Operational status and progress |
-| `4903` | requester `p`, resource tags, correlation `e` | Immutable audit facts |
-
-Historical `31961`/`31963` read models are startup migration inputs only.
-
-## Best Practices
-
-1. **Use consistent naming** — `dev`, `staging`, `prod` or `development`, `staging`, `production`
-2. **Require approval for production** — Prevent accidental deployments
-3. **Mirror production in staging** — Catch issues before they hit prod
-4. **Document purpose** — Help team members understand each environment
-5. **Configure notifications** — Alert on deployment failures
+Persistent VM resources use the virtualization query and approval surface. An environment may reference a VM-backed execution plane, but VM lifecycle governance is separate from the environment record. See [Virtual Machines](virtual-machines.md).
 
 ## Related
 
-- [Services](services.md) — Applications to deploy
-- [Environment States](environment-states.md) — Compare desired and observed state
-- [Deployments](deployments.md) — Deployment workflows
-- [Policies](policies.md) — Approval rules
-- [Notifications](notifications.md) — Alert channels
+- [Services](services.md)
+- [Deployments](deployments.md)
+- [Environment States](environment-states.md)
+- [Policies](policies.md)

@@ -1,284 +1,94 @@
 # Core Concepts
 
-This guide explains the fundamental concepts in Bahia and how they work together.
+Bahia is a desired-state control plane for services, their environments, and the artifacts that run in them. This page names the entities, the lifecycle they move through, and the model that ties every client to the same signed truth.
 
-## The Deployment Model
+## The deployment model
 
-Bahia manages deployments through a **desired state** model:
+1. An operator **declares** desired state by signing an intent.
+2. The daemon **validates, authorizes, and applies** it, and publishes the canonical record.
+3. Runtimes and workers **execute** deployment runs.
+4. Runtime observations **report** what is actually running.
+5. The service state record **compares** desired and observed and reports drift; reconciliation corrects it according to the environment's reconcile mode.
 
-1. You declare what **should** be running (desired state)
-2. Workers **apply** the desired state
-3. Observers **report** what's actually running (observed state)
-4. Bahia **detects drift** between desired and observed
-5. Remediation **corrects** drift when configured
+## Entities
 
-## Primary Entities
+### Organization
+
+The tenancy boundary. Services, environments, deployment intents, secrets, and notification channels belong to exactly one organization; membership records on the relay give operators roles in it. Confidential records of an organization are encrypted under its own content key (OCK), which the daemon wraps to each member. See [Organizations](features/organizations.md).
 
 ### Service
 
-A **Service** is an application you deploy — a web API, worker process, or any containerized workload.
-
-```yaml
-# Example service
-name: "payment-api"
-repository: "https://github.com/company/payment-api"
-description: "Handles payment processing"
-tags:
-  team: "payments"
-  criticality: "high"
-```
-
-Key attributes:
-- **name**: Human-readable identifier
-- **repository**: Source code location
-- **tags**: Metadata for filtering and organization
+A deployable application: a name, an artifact repository (the image repository CI pushes to), structured repository metadata (`repo_source`, `repo_coordinate`, `clone_url`, `ci_provider`, `ci_workflow`), a default branch, a runtime type, and optional managed runtime configuration. Secrets are owned by a service and optionally scoped to one environment. See [Services](features/services.md).
 
 ### Environment
 
-An **Environment** is a deployment target — staging, production, edge, etc.
+A deployment target. An environment carries one or more **deployment units** — the concrete place a service instance runs (`runtime_type`, `endpoint_ref`, `compose_dir`, `namespace`, ownership mode) — a deploy strategy (`replace`, `blue_green`, `canary`), a reconcile mode (`observe_only`, `auto_apply`, `approval_required`, `disabled`), a `protected` flag that forces approval, and a secret scope mode. See [Environments](features/environments.md).
 
-```yaml
-# Example environment
-name: "production"
-slug: "prod"
-deployment_target:
-  type: "kubernetes"
-  cluster: "prod-us-east"
-```
+### Build and artifact
 
-Environments can require:
-- **Approval policies** (manual or automated)
-- **Runtime targets** (Kubernetes, Docker, Compose)
-- **Notification channels**
+A **build** is a CI run the daemon learned about from signed Hive-CI evidence (`5401` workflow run, `5402` result) or a `build/request` intent. A successful build yields an **artifact**: an immutable, digest-pinned image with provenance (build, commit, signatures, SBOM, scan status). Artifacts are what deployments reference; names and tags are never trusted on their own. See [Builds](features/builds.md) and [Artifacts](features/artifacts.md).
 
-### Build
+### Deployment intent and run
 
-A **Build** represents a CI workflow execution that produces deployable output.
+A **deployment intent** asks for an artifact to run in an environment (optionally in one deployment unit) and carries the reviewed desired-state hash. Its status moves through `pending` → `approved` or `rejected` → `deploying` → `deployed` or `failed`, and may become `superseded` (a newer intent for the same target) or `rolled_back`. Each approved intent produces one or more **deployment runs** (`queued`, `running`, `succeeded`, `failed`, `cancelled`, `timeout`) with logs. See [Deployments](features/deployments.md).
 
-```yaml
-# Build metadata from CI
-workflow_id: "ci-123"
-commit_sha: "abc123def"
-branch: "main"
-status: "completed"
-```
+### Runtime observation and drift
 
-Bahia integrates with CI systems through:
-- **Hive-CI Bridge** for Hive-CI workflows
-- **Webhook receivers** for other CI systems
-- **Manual registration** via API/CLI
+A **runtime observation** is what the runtime adapter saw: the running image digest, container status, and labels. The **service state** record for a service in an environment holds the desired artifact, the observed artifact, and a `drift_status` of `unknown`, `in_sync`, `drifted`, `deploying`, or `remediation_needed`. Manual restarts, out-of-band deployments, and crashes all surface as drift. See [Environment States](features/environment-states.md).
 
-### Artifact
+### Policy
 
-An **Artifact** is an immutable container image with metadata.
+A fleet-level rule set evaluated against an artifact before it may be deployed into an environment — for example `require_sbom` or a signature requirement — with `enforcement: warn` or `block`. See [Policies](features/policies.md).
 
-```yaml
-# Example artifact
-image: "registry.example.com/payment-api:v2.1.0"
-digest: "sha256:abc123..."
-build_id: "build-456"
-metadata:
-  git_commit: "abc123"
-  build_timestamp: "2024-01-15T10:30:00Z"
-```
+### Worker
 
-Artifacts are immutable — once registered, their digest never changes.
+A Loom worker is an execution node that advertises itself on the relays and runs jobs (deployments, builds, inference). Operators cordon, drain, label, and clean up workers; the scheduler ranks eligible workers per job. See [Workers](features/workers.md).
 
-### Deployment Intent
+## The event model
 
-A **Deployment Intent** is a request to deploy an artifact to an environment.
+Every entity above exists as a service-signed Nostr record, and every change starts as an operator-signed event:
 
-```yaml
-# Deployment intent
-service_id: "svc-123"
-environment_id: "env-456"
-artifact_id: "art-789"
-requested_by: "npub1..."
-status: "pending_approval"
-```
+| Role | Kind | Who signs |
+|------|------|-----------|
+| **Intent** — a desired-state document for one entity coordinate | `30900` with `t=bahia-intent` | operator |
+| **Intent status** — accepted, rejected, or conflict, addressed to the requester | `30315` | service |
+| **Canonical record** — current state of one entity, one per coordinate | `30900` with `schema=bahia.cp-state.v1` | service |
+| **Audit fact** — an immutable event about an entity | `4903` | service |
+| **Confidential request** — secret reveal, run logs, assistant | `25910` in a `1059` gift wrap | operator |
 
-Intents go through a lifecycle:
-1. **Created** → Intent submitted
-2. **Pending Approval** → Waiting for policy/manual approval
-3. **Approved** → Ready to execute
-4. **Executing** → Run in progress
-5. **Completed** / **Failed** → Terminal state
+Properties that follow from this:
 
-### Deployment Run
+- **One truth, many clients.** The web app, CLI, MCP tools, and the operator assistant publish the same intents and read the same records.
+- **Idempotent writes.** Every intent carries a UUIDv7 `intent_id`; a retry with the same ID is replayed, not re-applied.
+- **Optimistic concurrency.** Updates carry the record's `updated_at`; a stale revision is a conflict.
+- **Offline-tolerant reads.** Clients keep a local event store and render it first; relay catch-up is explicit.
+- **Non-repudiation.** Intents and records are signed; relay delivery (`OK`) is never mistaken for completion.
 
-A **Deployment Run** is a concrete execution of a deployment intent.
+Details, including coordinates, topics, and encryption, are in [Nostr Integration](nostr-integration.md).
 
-```yaml
-# Deployment run
-intent_id: "intent-123"
-worker_pubkey: "npub1worker..."
-status: "running"
-started_at: "2024-01-15T10:35:00Z"
-```
+## Authorization
 
-Runs track:
-- Execution status and progress
-- Worker assignment
-- Logs and output
-- Runtime observations
+Authorization is by verified pubkey.
 
-### Runtime Observation
+**Fleet operators** are listed in `nostr.authorized_pubkeys`. They act outside any organization: policies, workers, DNS, ML, tool decisions, security scans, relay policy, fleet-scope rekeys, and MCP over HTTP.
 
-An **Observation** is a snapshot of what's actually running.
+**Organization roles** gate everything that belongs to an organization:
 
-```yaml
-# Runtime observation
-service_id: "svc-123"
-environment_id: "env-456"
-observed_artifact: "art-789"
-container_status: "running"
-observed_at: "2024-01-15T10:40:00Z"
-```
+| Role | Grants |
+|------|--------|
+| `viewer` | read services, environments, deployments, logs, policies |
+| `deployer` | viewer + create and approve deployments |
+| `admin` | deployer + write services, environments, secrets, policies, LLM routes; manage backups; read secrets |
+| `owner` | admin + manage members and settings |
 
-Observations enable drift detection by comparing:
-- **Desired artifact** (from latest successful deployment)
-- **Observed artifact** (from runtime inspection)
+Two scoped lists add further gates: `adoption.allowed_pubkeys` for runtime adoption and `auth.bootstrap_owner_pubkeys` / `nostr.bootstrap_owners` for creating an organization before it has members.
 
-### Drift
+## Surfaces
 
-**Drift** occurs when observed state doesn't match desired state.
-
-Causes of drift:
-- Manual container restarts
-- Out-of-band deployments
-- Container crashes and restarts
-- Configuration changes
-
-Bahia can:
-- **Alert** on drift via notifications
-- **Auto-remediate** drift (when configured)
-- **Track** historical drift events
-
-## Nostr Event Model
-
-Bahia is **Nostr-native** — it uses Nostr events as the primary control plane.
-
-### Event Categories
-
-| Category | Kind(s) | Purpose |
-|----------|---------|---------|
-| **ContextVM intents** | `25910`, optionally wrapped in `1059` or `21059` | Signed JSON-RPC mutation requests, immediate acknowledgments, and encrypted transport |
-| **Canonical state** | `30900`, `30078` | Current control-plane state projections and app-specific data |
-| **Canonical status/audit** | `30315`, `4903` | Operational progress, terminal facts, provenance, and audit |
-| **Assistant transcript** | `30316` | Encrypted assistant transcript entries using a service-held symmetric-key AEAD envelope and key-reference/rotation tags |
-| **Discovery and relays** | `11316`-`11320`, `30002` | ContextVM announcements and NIP-51 relay topology |
-
-Legacy Bahia custom ranges (`5961`-`6006`, `6961`-`6997`, `7961`-`7997`, `31961`-`32003`, `38390`-`38431`, `5980`, `7980`) are startup migration inventory only.
-
-### Canonical Observables
-
-**Canonical observables** are signed Nostr events that reflect durable truth after a ContextVM intent is acknowledged.
-
-```json
-{
-  "kind": 30900,
-  "content": "{\"service_id\":\"svc-123\",\"environment_id\":\"env-456\",\"desired_artifact\":\"art-789\",\"observed_artifact\":\"art-789\",\"status\":\"healthy\"}",
-  "tags": [
-    ["d", "service:svc-123:env-456"],
-    ["domain", "service"],
-    ["schema", "bahia.service-state.v1"],
-    ["service", "svc-123"],
-    ["environment", "env-456"]
-  ]
-}
-```
-
-Benefits of canonical observables:
-- **Real-time updates** via scoped subscriptions
-- **Offline resilience** (cached locally)
-- **Multi-client sync** (all clients see same state)
-- **Audit trail** (events are signed and timestamped)
-
-### Signer-First Operations
-
-Critical operations require **signed ContextVM intents**:
-
-```json
-{
-  "kind": 25910,
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"deploy-svc-123-env-456\",\"method\":\"service/deploy\",\"params\":{\"service_id\":\"svc-123\",\"environment_id\":\"env-456\",\"artifact_id\":\"art-789\"}}",
-  "tags": [
-    ["p", "<bahia-service-pubkey>"],
-    ["method", "service/deploy"],
-    ["service", "svc-123"],
-    ["environment", "env-456"],
-    ["artifact", "art-789"]
-  ]
-}
-```
-
-This ensures:
-- **Non-repudiation** — actions are cryptographically signed
-- **Auditability** — intents and observables are on relays
-- **Authorization** — verified ContextVM pubkeys are checked against allowlists
-
-## Control Planes
-
-Bahia exposes three control-plane surfaces:
-
-### 1. Nostr Relay Sidecar (Primary)
-
-The **primary** control plane for:
-- Real-time state updates
-- ContextVM mutation intents
-- Canonical observable subscriptions
-
-### 2. MCP (Model Context Protocol)
-
-For **AI agent** interactions:
-- Tool discovery at `/mcp`
-- Synchronous tool invocation
-- Nostr correlation metadata for async follow-up
-
-### 3. REST API
-
-A **compatibility** surface for:
-- CRUD operations on registry entities
-- Query and list operations
-- Legacy client support
-
-## Authorization Model
-
-### Pubkey-Based Authorization
-
-Control-plane operations use **Nostr pubkey** authorization:
-
-| Allowlist | Purpose |
-|-----------|---------|
-| `nostr.authorized_pubkeys` | General operator access |
-| `adoption.allowed_pubkeys` | Runtime adoption operations |
-| `direct_runtime_actions.allowed_pubkeys` | Direct deploy/restart/stop |
-| `auth.bootstrap_owner_pubkeys` | Organization creation |
-
-### Organization-Based Access
-
-Within organizations:
-- **Owner** — Full access, can delete org
-- **Admin** — Manage members and settings
-- **Editor** — Create/modify resources
-- **Viewer** — Read-only access
-
-## Encrypted Operations
-
-Sensitive operations use **encrypted ContextVM events**: inner kind `25910` JSON-RPC messages wrapped with CEP-4/NIP-59 `1059` or `21059`. Legacy `5980`/`7980` encrypted request/result events are startup migration inputs only.
-
-- Notification channel configurations
-- Service secrets
-- Payment history
-- Deployment run logs
-
-These events are:
-- Encrypted to the Bahia service pubkey
-- Routed through the relay sidecar/browser relay allowlist advertised by discovery
-- Never published to non-allowlisted public relays
-
-## Next Steps
-
-- Learn about [Services](features/services.md) in detail
-- Understand [Nostr Integration](nostr-integration.md)
-- Explore [MCP Tools](mcp-tools.md) for agent integration
+| Surface | Use |
+|---------|-----|
+| **Web app** | Store-first dashboard over the relays; signs with NIP-07 or NIP-46 |
+| **CLI** (`bahia`) | Scripts and operators; local key or NIP-46 bunker — [CLI Reference](cli-reference.md) |
+| **MCP** | Agents and the operator assistant — [MCP Tools](mcp-tools.md) |
+| **Relays** | Any Nostr client that can sign and subscribe — [Nostr Integration](nostr-integration.md) |
+| **HTTP** | Health, metrics, run logs, blob proxy, a few reads — [HTTP surface](nostr-integration.md#http-surface) |

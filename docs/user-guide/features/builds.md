@@ -1,58 +1,39 @@
-# Private repository builds
+# Builds
 
-The **Builds** page starts and monitors Arcana builds through Bahia's signed ContextVM control plane.
+**Builds** (`/builds`) shows governed build requests and signed Hive-CI results. A successful result can register a deployable artifact.
 
-## Requesting a build
+## Request a build
 
-1. Register the Arcana service with repository coordinate `chebizarro/living-library-forge` and its OCI artifact repository.
-2. Store the private source repository credential as a protected service secret.
-3. Open **Delivery → Builds**, select the service and the secret reference, then enter a branch, tag, or full commit.
-4. Optionally set public `VITE_*` compile-time values and request the build.
-
-The browser sends only the opaque secret ID. It never reads the secret value and does not store credentials in localStorage. Bahia accepts only the Arcana Dockerfile's nine documented public Vite arguments; secret-style Docker build arguments are rejected.
-
-## Source provider configuration
-
-The fleet initiator requires an explicit source provider and never infers one from the clone URL. GitHub keeps token-based migration and may derive its clone URL from the request's `owner/name` coordinate:
-
-```yaml
-hiveci:
-  initiator:
-    enabled: true
-    source_provider: github
-    mirror_read_username: bahia-mirror-reader
-    mirror_read_credential_ref: 22222222-2222-4222-8222-222222222222
+```bash
+bahia builds request --org "$ORG" --service <service-id> --git-ref main \
+  --credential-ref <repository-credential-secret-id> \
+  --artifact-repo ghcr.io/acme/api \
+  --idempotency-key <uuidv7> --result-timeout 120s
 ```
 
-A private Gitea source requires both its credential-free HTTPS clone URL and a non-secret username. Bahia resolves the protected service credential server-side and supplies it to fleet Gitea as the mirror password; it is not embedded in the URL:
+The daemon resolves the service repository metadata and protected credential, prepares the configured source provider, and submits work to Hive-CI. It returns bounded acceptance data including the build ID. Reuse the same idempotency key after a timeout.
 
-```yaml
-hiveci:
-  initiator:
-    enabled: true
-    source_provider: gitea
-    source_clone_url: https://git.example/organization/repository.git
-    source_auth_username: bahia-mirror
-    mirror_read_username: bahia-mirror-reader
-    mirror_read_credential_ref: 22222222-2222-4222-8222-222222222222
+The fleet initiator requires `hiveci.initiator.enabled`, an explicit source provider, and configured mirror/worker trust. Repository credentials are passed to the selected worker without being embedded in clone URLs or public events. The CLI rejects non-empty `--build-arg` values because the fleet dispatch contract has no build-argument field.
+
+## Browse builds
+
+```bash
+bahia builds list --service <service-id> --limit 20 --offset 0
+bahia builds get --build <build-id>
 ```
 
-`source_clone_url` must be an absolute HTTPS URL without user information, query parameters, or fragments. A `github` source URL must use `github.com`. Missing or unsupported provider configuration, missing Gitea clone/username configuration, or an invalid mirror-read secret reference prevents startup and fails closed.
+MCP provides `bahia_list_builds` and `bahia_get_build`. Build creation comes from the signed request and Hive-CI evidence rather than a generic MCP create tool.
 
-`mirror_read_credential_ref` must name a protected secret owned by the service being built. Provision a distinct fleet Gitea account/token with read-only access to the private mirror namespace; do not reuse the upstream migration credential or the fleet Gitea admin token. Bahia resolves that secret before publishing and gives Loom exactly `HIVE_CI_GIT_USERNAME` and `HIVE_CI_GIT_PASSWORD`, NIP-44 encrypted to the capability-selected worker. The clone URL remains credential-free, and queued evidence records only the opaque secret UUID.
+## Artifact registration
 
-## Verified artifact registration
+Bahia accepts workflow run and result evidence only from configured trusted publishers. The result must bind the service, commit, image digest, and relevant build identifiers. A verified successful result creates or updates the build record and registers the artifact. A worker result from an untrusted key is ignored.
 
-A trusted, signed HiveCI result drives the normal artifact flow. Bahia correlates it with the original build, resolves the result's repository and tag through the embedded OCI layout or configured registry, and requires the resolved manifest digest to exactly match the result's full `sha256:` digest. Mutable-only, repository-mismatched, tag/digest-mismatched, and otherwise unverifiable results are refused.
+## Failures
 
-With `hiveci.auto_register_builds: true` (the default), a successful result is registered automatically. If automatic processing is disabled or a verified result is waiting for recovery, **Register verified build artifact** on the successful build sends only the Bahia build ID; the server derives every OCI identifier from the trusted result. Repeating either path returns the same deduplicated artifact.
+If initiation is unavailable, verify the `hiveci` source provider, mirror endpoint, protected secret reference, worker relay reachability, and trusted publisher lists. If a result is visible on a relay but no artifact appears, compare its author and tags with the configured trust boundary.
 
-The build row shows the immutable `repository@sha256:digest` reference, manifest digest, verification source/state, policy and scan state, signature count, SBOM reference, and CI provenance. Only this registered digest becomes a deployment candidate.
+## Related
 
-## Status and logs
-
-Queued, running, succeeded, and failed states come from signed canonical build projections. Bahia records build requests and trusted Hive-CI workflow results, not operator-supplied build rows or status changes. Evidence supplied by HiveCI (log URL and request/run/result event IDs) appears with each build.
-
-## Unavailable fleet boundary
-
-Build initiation requires the fleet Gitea private-mirror and HiveCI runner adapter. If it is not configured, Bahia returns a signed fail-closed error and creates no queued build. Do not work around this by placing source credentials in a ref, clone URL, build argument, Nostr event, or browser storage.
+- [Artifacts](artifacts.md)
+- [Services](services.md)
+- [Workers](workers.md)
