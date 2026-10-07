@@ -131,7 +131,8 @@ func publishConcordInviteToInboxRelay(ctx context.Context, client *RelayClient, 
 		return publishConcordInvite(ctx, client, []string{relay}, event)
 	}
 	inbox, err := NewRelayClient([]string{relay}, WithRelaySigner(client.signer), WithRelayLogger(client.logger),
-		withRelayEventValidator(client.validateEvent), withRelayResubscribeBackoff(client.resubscribeBackoff))
+		withRelayEventValidator(client.validateEvent), withRelayResubscribeBackoff(client.resubscribeBackoff),
+		withRelayAdmission(client.admission))
 	if err != nil {
 		return fmt.Errorf("%s: %w", relay, err)
 	}

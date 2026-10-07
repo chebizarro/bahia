@@ -112,6 +112,18 @@ func withRelayAdmission(admission *nostrout.Admission) RelayClientOption {
 	}
 }
 
+// outbound returns the admission controller that gates this client's
+// publications, never nil: a client assembled without one is still admitted
+// by the process-wide controller rather than left unlimited. Multi-event
+// Concord operations declare themselves on it before their first
+// publication.
+func (c *RelayClient) outbound() *nostrout.Admission {
+	if c != nil && c.admission != nil {
+		return c.admission
+	}
+	return nostrout.Default()
+}
+
 // RelayClient is SoulFactory's handle on a relay pool for one relay set.
 type RelayClient struct {
 	pool   *nostradapter.RelayPool
@@ -250,7 +262,7 @@ func (c *RelayClient) PublishWithResults(ctx context.Context, ev nostr.Event) ([
 	if c == nil || c.pool == nil {
 		return nil, fmt.Errorf("soul factory relay client is not configured")
 	}
-	results, _ := c.publishResults(ctx, ev)
+	results, callErr := c.publishResults(ctx, ev)
 	accepted := countRelayAccepted(results)
 	required := c.requiredAcceptances()
 	failures := relayPublishFailures(results)
@@ -260,6 +272,12 @@ func (c *RelayClient) PublishWithResults(ctx context.Context, ev nostr.Event) ([
 				"event_id", ev.ID.Hex(), "accepted", accepted, "relays", len(c.relays), "failures", strings.Join(failures, "; "))
 		}
 		return results, nil
+	}
+	if len(results) == 0 && callErr != nil {
+		// The pool refused before any relay was contacted (an outbound
+		// admission rejection, for example): preserve the cause so callers
+		// can tell back-pressure from relay rejection.
+		return results, fmt.Errorf("publish via SoulFactory relay client: %w", callErr)
 	}
 	if accepted == 0 {
 		return results, fmt.Errorf("event was not accepted by any relay: %s", strings.Join(failures, "; "))
@@ -280,7 +298,12 @@ func (c *RelayClient) publishResults(ctx context.Context, ev nostr.Event) ([]Rel
 // requires every one of them to accept. The error names the first relay, in
 // the given order, that did not.
 func (c *RelayClient) publishTo(ctx context.Context, relays []string, ev nostr.Event) error {
-	results, _ := c.pool.PublishToRelaysWithResults(ctx, ev, relays)
+	results, callErr := c.pool.PublishToRelaysWithResults(ctx, ev, relays)
+	if len(results) == 0 && callErr != nil {
+		// Refused before any relay was contacted (an outbound admission
+		// rejection, for example): surface the cause unchanged.
+		return fmt.Errorf("publish via SoulFactory relay client: %w", callErr)
+	}
 	byRelay := make(map[string]RelayPublishResult, len(results))
 	for _, result := range results {
 		byRelay[result.RelayURL] = result

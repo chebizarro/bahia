@@ -13,6 +13,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip59"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 )
 
 const concordDirectInviteKind nostr.Kind = 3313
@@ -231,6 +232,22 @@ func (m *concordMembership) Assign(ctx context.Context, recipient string) ([]str
 	if err != nil {
 		return nil, err
 	}
+
+	// Each community costs one logical publication for the community relays
+	// plus one per inbox relay (the inbox is any-sufficient and tried in
+	// order). The batch is declared and admitted as one bounded bulk operation
+	// up front, so it is paced instead of being refused halfway for being
+	// larger than a burst.
+	perCommunity := 1
+	if !inbox.empty() {
+		perCommunity += len(inbox.relays)
+	}
+	op, err := m.relayClient.outbound().BeginOperation(ctx, nostrout.OperationSpec{MaxEvents: perCommunity * len(resolved)})
+	if err != nil {
+		return nil, fmt.Errorf("admit Concord direct invites: %w", err)
+	}
+	defer op.Close()
+	ctx = nostrout.WithOperation(ctx, op)
 
 	assigned := make([]string, 0, len(resolved))
 	for _, community := range resolved {
