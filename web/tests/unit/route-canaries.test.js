@@ -34,7 +34,7 @@ describe('route canary page model', () => {
   it('builds a stable key from the full route coordinate: service, environment, deployment unit, and hostname', () => {
     // perspective is deliberately excluded: it is only the latest worst
     // vantage point and can flip between public_edge/internal_lan across
-    // refreshes, which previously dropped the selection and collided two
+    // refreshes; including it would drop the selection and collide two
     // rows for the same hostname under different deployment units.
     const row = {
       service_id: 'svc',
@@ -107,12 +107,11 @@ describe('route canary page model', () => {
 
   it('renders a closed route with a nonzero failure streak as degraded, not critical or warning, regardless of classification', () => {
     // A closed route with consecutive_failures > 0 is failing but has not yet
-    // crossed the outage threshold. Previously an outage-classified row like
-    // this got a critical badge (matching its classification) even though it
-    // was never counted as an outage anywhere else, and a promoted warning
-    // classification (health_path_not_discriminating under
-    // require_discriminating_health_path) rendered as a plain warning even
-    // though it was actively failing. Both must render as one distinct
+    // crossed the outage threshold. An outage-classified row like this must
+    // not get a critical badge: it is not counted as an outage anywhere
+    // else, and a promoted warning classification
+    // (health_path_not_discriminating under require_discriminating_health_path)
+    // is actively failing, not a plain warning. Both render as one distinct
     // "degraded" state instead.
     for (const classification of [...OUTAGE_CLASSIFICATIONS, ...WARNING_CLASSIFICATIONS]) {
       expect(isRenderedOutage({ classification, open: false, consecutive_failures: 2 }), classification).toBe(false);

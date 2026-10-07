@@ -1,6 +1,6 @@
 /**
  * E2E Test Scenario Library Index
- * 
+ *
  * This module exports all test scenarios with metadata for discovery and execution.
  */
 import type { Scenario } from '../types.js';

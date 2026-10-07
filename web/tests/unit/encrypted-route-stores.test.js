@@ -45,7 +45,7 @@ vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 // Vite's one-time transform of its module graph (@noble/ciphers, kinds.gen.js,
 // confidential.js, ...): ~300ms idle, several seconds on a CPU-starved CI
 // host, all charged to whichever test imports it first and bounded by that
-// test's 5s testTimeout (bahia-0ym3y). Warm the graphs once here, under the
+// test's 5s testTimeout. Warm the graphs once here, under the
 // hook's own timeout; the transform cache survives vi.resetModules(), so the
 // per-test imports are then evaluation only and the tests time nothing but
 // their mocked, promise-driven logic.

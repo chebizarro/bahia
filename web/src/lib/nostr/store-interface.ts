@@ -5,7 +5,7 @@
  * interface.  The implementation (currently welshman-backed, see store.js)
  * can be swapped without touching consumers.
  *
- * Design reference: docs/designs/phase4-web-store-first.md §1.2, §2, §8.
+ * Design reference: docs/architecture/web-store-first.md.
  *
  * @module lib/nostr/store-interface
  */
@@ -52,7 +52,7 @@ export type Unsubscribe = () => void;
  * BahiaEventStore — the contract both welshman and applesauce+nostr-idb
  * implementations fulfil.
  *
- * §2 / §8: query by filter, subscribe to live changes, put/ingest,
+ * The store API: query by filter, subscribe to live changes, put/ingest,
  * delete (NIP-09), expiry sweep (NIP-40), cursor get/set per
  * (relay, filterKey).
  */
@@ -68,7 +68,7 @@ export interface BahiaEventStore {
   // ── Ingestion ─────────────────────────────────────────────────────────
 
   /**
-   * The single ingestion path (§2.4).
+   * The single ingestion path.
    *
    * 1. Verify signature (reject bad sigs).
    * 2. Apply NIP-01 replaceable/addressable latest-wins.
@@ -131,7 +131,7 @@ export interface BahiaEventStore {
 }
 
 // ---------------------------------------------------------------------------
-// Persistence helper (W1-S3 calls this on first authenticated boot)
+// Persistence helper (called on first authenticated boot)
 // ---------------------------------------------------------------------------
 
 /**
@@ -141,7 +141,7 @@ export interface BahiaEventStore {
  * API is unavailable or the browser denies it, returns false and the
  * store operates normally (but may be evicted under storage pressure).
  *
- * Design reference: §2.1, §14 decision 14.
+ * Design reference: docs/architecture/web-store-first.md.
  */
 export async function requestPersistentStorage(): Promise<boolean> {
   try {

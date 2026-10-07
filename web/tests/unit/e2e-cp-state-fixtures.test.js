@@ -1,5 +1,5 @@
 // @vitest-environment node
-// Guards the e2e mock relays against wire-contract drift (bahia-irsry.46): the
+// Guards the e2e mock relays against wire-contract drift: the
 // shared fixture builders must emit what the producers emit and what the web
 // consumers route, and no e2e mock may hand-roll a cp-state record.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -72,9 +72,9 @@ describe('e2e cp-state fixtures', () => {
   });
 });
 
-// Hand-rolled cp-state tags are how the e2e mocks drifted from the #t contract
-// in wave 4: a family schema in the schema tag, a legacy_kind, or the retired
-// domain=controlplane envelope (no producer stamps it).
+// Hand-rolled cp-state tags drift from the #t contract: a family schema in
+// the schema tag, a legacy_kind, or the retired domain=controlplane envelope
+// (no producer stamps it).
 const HAND_ROLLED_CP_STATE = /\[\s*'schema'\s*,\s*'bahia\.(?:registry|state)\.[^']+'\s*\]|\[\s*'legacy_kind'\s*,|\[\s*'domain'\s*,\s*'controlplane'\s*\]/;
 
 function e2eSources(dir) {

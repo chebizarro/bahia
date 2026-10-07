@@ -509,7 +509,7 @@ export function attestedSoulFactoryKeys(store = getEventStore(), serviceAuthors 
  * - operator: 31952 drafts, 1950 actions and the 31953 fleet config are
  *   operator documents. The daemon accepts them from
  *   `soul_factory.authorized_pubkeys`, which it publishes as the fleet-OCK
- *   encrypted `operators:soul-factory` record (bahia-fbyo5): a session that
+ *   encrypted `operators:soul-factory` record: a session that
  *   reads it trusts the listed operators plus the signed-in key; otherwise
  *   only the signed-in key is trusted. 31950 templates are operator input the
  *   controller may also publish: operator and factory keys are both trusted.

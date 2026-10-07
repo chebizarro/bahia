@@ -482,9 +482,9 @@ function subscriptionFilters(operatorPubkey, servicePubkey) {
   return [
     { kinds: [ASSISTANT_KINDS.SESSION], authors: [servicePubkey], '#p': [operatorPubkey], '#t': [ASSISTANT_SESSION_TOPIC], limit: SESSION_LIMIT },
     // Assistant status (30315) carries t=assistant-status; the parser checks
-    // the schema locally (bahia-irsry.37).
+    // the schema locally.
     { kinds: [ASSISTANT_KINDS.STATUS], authors: [servicePubkey], '#t': [ASSISTANT_STATUS_TOPIC], since, limit: TRANSCRIPT_LIMIT },
-    // Only single-letter tags are relay-indexed (audit A-27): the service's
+    // Only single-letter tags are relay-indexed: the service's
     // 30316 events addressed to this operator are the transcript; the parser
     // checks the schema locally.
     { kinds: [ASSISTANT_KINDS.TRANSCRIPT], authors: [servicePubkey], '#p': [operatorPubkey], since, limit: TRANSCRIPT_LIMIT }

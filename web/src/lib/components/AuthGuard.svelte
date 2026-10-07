@@ -1,5 +1,5 @@
 <!--
-  AuthGuard — Phase 4 §6.3: role-based access check.
+  AuthGuard performs the role-based access check (docs/architecture/web-store-first.md).
 
   Replaces the previous REST probe with a reactive role check.
   No spinner, no REST probe, no discovery gate.
@@ -31,7 +31,7 @@
       authState.status === 'authenticating'
   );
 
-  // §6.2: A persisted signer-verified session is authenticated.
+  // A persisted signer-verified session is authenticated.
   // No backendAuthenticated flag — roles come from relay membership events.
   const isAuthorized = $derived(isAuthenticated());
 

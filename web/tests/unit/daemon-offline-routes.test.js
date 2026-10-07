@@ -1,11 +1,7 @@
-// Pending acceptance test for the Nostr-first web tier (audit Recommendation
-// 2b, A-1/A-2). With the daemon's HTTP/ContextVM surface down, a signed-in
-// operator must still get protected routes rendered from relay state. Today
-// route access requires a REST backend session (backendAuthenticated) and
-// REST-derived roles (/orgs), so the layout blocks every protected route.
-//
-// Un-skipped by bahia-irsry.12 (Phase 4, web tier), which derives session and
-// roles from relay events instead of the daemon.
+// Pending acceptance test for the Nostr-first web tier: with the daemon's
+// HTTP/ContextVM surface down, a signed-in operator must still get protected
+// routes rendered from relay state. Un-skipped by bahia-irsry.12, which
+// derives session and roles from relay events instead of the daemon.
 import { describe, it, expect } from 'vitest';
 import { canAccessRoute } from '../../src/lib/auth/route-access.js';
 

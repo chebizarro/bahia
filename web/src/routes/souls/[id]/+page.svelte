@@ -644,7 +644,7 @@
 
         <section class="info-section wide">
           <h3><MemoryIcon size={18} strokeWidth={1.75} ariaHidden="true" /> Activity & History</h3>
-          <!-- Kind 1950 actions are trusted from the signed-in key, widened by the daemon's fleet-OCK encrypted Soul Factory operator allowlist when this session can decrypt it (bahia-fbyo5). -->
+          <!-- Kind 1950 actions are trusted from the signed-in key, widened by the daemon's fleet-OCK encrypted Soul Factory operator allowlist when this session can decrypt it. -->
           <p class="history-muted" data-testid="soul-activity-operator-scope-note">
             {#if operatorAllowlistAvailable(OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY)}
               Actions are listed when signed by your key or by an authorized Soul Factory operator in the Bahia service's operator allowlist. Soul Factory results are shown for every operator.

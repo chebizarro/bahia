@@ -3,7 +3,7 @@ import { installE2EMocks, E2E_SERVICE_PUBKEY } from './helpers.js';
 import { cpStateFixture } from './cp-state-fixtures.js';
 
 /**
- * Phase 4 W1-S2: Store-first boot — services render from IndexedDB
+ * Store-first boot — services render from IndexedDB
  * before any relay connection, then the sync badge transitions to "live"
  * once EOSE is received.
  */
@@ -65,7 +65,7 @@ async function seedIndexedDB(page, events) {
   }, { dbName: DB_NAME, events });
 }
 
-test.describe('Store-first boot (Phase 4 W1-S2)', () => {
+test.describe('Store-first boot', () => {
   test('services render from IndexedDB before relay connects', async ({ page }) => {
     const seededServices = [
       makeServiceEvent({ id: 'svc-cached-1', name: 'Cached Alpha' }),

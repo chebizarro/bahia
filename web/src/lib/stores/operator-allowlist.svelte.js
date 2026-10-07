@@ -1,5 +1,5 @@
 /**
- * Operator allowlists published by the daemon (bahia-fbyo5).
+ * Operator allowlists published by the daemon.
  *
  * The daemon accepts operator-authored documents only from the pubkeys in
  * `nostr.authorized_pubkeys` (continuity definitions, failover/recovery

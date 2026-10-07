@@ -122,7 +122,7 @@ test('shows permission denied when user lacks required route role', async ({ pag
 });
 
 test('allows authenticated users to access routes with no role requirement', async ({ page }) => {
-  // §6.2: authenticated = persisted signer-verified session, no REST probe.
+  // authenticated = persisted signer-verified session, no REST probe.
   // /orgs has no role requirement, so authenticated users can access it directly.
   await installE2EMocks(page, {
     authenticated: true,
@@ -136,7 +136,7 @@ test('allows authenticated users to access routes with no role requirement', asy
 });
 
 test('renders protected route immediately for authenticated user without backend probe', async ({ page }) => {
-  // §6.2: No REST probe, no /api/v1/orgs call — auth is from persisted session + relay roles.
+  // No REST probe, no /api/v1/orgs call — auth is from persisted session + relay roles.
   let apiProbeCount = 0;
 
   await installE2EMocks(page, {

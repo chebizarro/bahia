@@ -4,7 +4,7 @@ import { E2E_SERVICE_PUBKEY, TEST_PUBKEY, e2eTestPubkey, installE2EMocks } from 
 const now = Math.floor(Date.now() / 1000);
 const untrusted = e2eTestPubkey('untrusted-continuity-souls');
 
-// Kinds owned by the continuity and SoulFactory read models (A-35/A-36).
+// Kinds owned by the continuity and SoulFactory read models.
 const READ_MODEL_KINDS = [30351, 30353, 31400, 31401, 31402, 31403, 31404, 38430, 38431,
   31950, 31951, 31952, 31953, 1950, 1951, 6950, 7950, 30317];
 

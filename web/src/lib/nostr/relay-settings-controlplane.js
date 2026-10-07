@@ -181,7 +181,7 @@ export function compareRelayPolicyTruthCandidates(candidate, current) {
 // single-letter tags: domain and schema are checked locally in
 // parseRelayPolicyStateEvent, never sent as #domain/#schema. The record also
 // carries t=relay-settings, but #t would AND with #d and miss a policy
-// retained from before the topic was stamped (bahia-irsry.37).
+// retained from before the topic was stamped.
 export function relayPolicyReadModelFilter({ servicePubkey, since, limit = 10 } = {}) {
   const filter = {
     kinds: [CASCADIA_CONTROLPLANE_STATE],

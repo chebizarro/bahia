@@ -29,7 +29,7 @@ const initial = [
   ...goFixture.records.map(confidential)
 ];
 
-test.describe('W2-S3 store-first views', () => {
+test.describe('Store-first views', () => {
   test.beforeEach(async ({ page }) => { await installE2EMocks(page, { nostrEvents: initial }); });
 
   test('activity, backup, ML, SBOM, payments and security render without read-path spinners', async ({ page }) => {

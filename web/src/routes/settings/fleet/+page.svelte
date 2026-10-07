@@ -171,7 +171,7 @@
   {#if authState.status !== 'authenticated'}
     <div class="status error">Sign in with a trusted Soul Factory operator key before publishing.</div>
   {:else}
-    <!-- Kind 31953 is trusted from the signed-in key, widened by the daemon's fleet-OCK encrypted Soul Factory operator allowlist when this session can decrypt it (bahia-fbyo5). -->
+    <!-- Kind 31953 is trusted from the signed-in key, widened by the daemon's fleet-OCK encrypted Soul Factory operator allowlist when this session can decrypt it. -->
     <p class="muted" data-testid="fleet-operator-scope-note">
       {#if operatorAllowlistAvailable(OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY)}
         The newest fleet configuration signed by your key or by an authorized Soul Factory operator in the Bahia service's operator allowlist is shown.

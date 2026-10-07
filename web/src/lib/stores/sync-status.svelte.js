@@ -4,7 +4,7 @@
  * Tracks the connection lifecycle: idle → syncing → live.
  * EOSE is a badge ("syncing…" → "live"), never a render gate.
  *
- * Design reference: phase4-web-store-first.md §7 step 6, §12 W1-S2.
+ * Design reference: docs/architecture/web-store-first.md.
  *
  * @module lib/stores/sync-status
  */

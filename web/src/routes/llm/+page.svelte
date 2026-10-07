@@ -56,8 +56,7 @@
   let decisionSubmitting = $state('');
 
   // Client-minted route id for the current create attempt: reused when a
-  // failed create is resubmitted, re-minted once a route was created
-  // (bahia-irsry.42).
+  // failed create is resubmitted, re-minted once a route was created.
   let routeEntityId = mintEntityId();
   let routeForm = $state({
     name: '',

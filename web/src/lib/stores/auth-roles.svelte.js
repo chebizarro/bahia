@@ -12,8 +12,8 @@
  *
  * Degrades gracefully when the signer lacks NIP-44 support.
  *
- * Design reference: phase4-web-store-first.md §5, §6.2 step 4.
- * Crypto reference: phase3-authority-inversion.md §1.7.1
+ * Design reference: docs/architecture/web-store-first.md.
+ * Crypto reference: docs/architecture/confidential-state.md
  *
  * @module lib/stores/auth-roles
  */

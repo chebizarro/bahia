@@ -15,7 +15,7 @@ const apiRouteImportPattern = /(?:from\s+|import\s*\(\s*)['"]\$lib\/api\/[^'"]+[
 const apiRouteImportScanPattern = /(?:from\s+|import\s*\(\s*)['"](\$lib\/api\/[^'"]+)['"]/g;
 const mandatoryEntryIds = [
   'dashboard-read-models',
-  'orgs-encrypted-crud-facade',
+  'orgs-ock-cp-state',
   'payments-encrypted-history',
   'notifications-encrypted-config-log',
   'services-public-controlplane',
@@ -88,8 +88,8 @@ function routeFileClasses() {
   return byFile;
 }
 
-describe('BAHIA_NOSTR_AUDIT_PARITY route transport matrix', () => {
-  it('uses only the shared orchestration taxonomy and covers every audited route/control surface', () => {
+describe('route transport matrix', () => {
+  it('uses only the shared taxonomy and covers every route/control surface', () => {
     expect(matrix.taxonomy).toEqual([
       'nostr_native',
       'nostr_request_result_facade',
@@ -106,8 +106,7 @@ describe('BAHIA_NOSTR_AUDIT_PARITY route transport matrix', () => {
 
     for (const entry of matrix.entries) {
       expect(allowedClasses.has(entry.transport_class), `${entry.id} has a valid transport_class`).toBe(true);
-      expect(entry.evidence?.length, `${entry.id} records repository-backed evidence`).toBeGreaterThan(0);
-      expect(entry.pstf_status, `${entry.id} records PSTF status`).toBeTruthy();
+      expect(entry.evidence?.length, `${entry.id} describes its current transport`).toBeGreaterThan(0);
     }
   });
 
@@ -141,18 +140,18 @@ describe('BAHIA_NOSTR_AUDIT_PARITY route transport matrix', () => {
     }
   });
 
-  it('records completed org and ML domain ingress decisions', () => {
-    const orgs = matrix.entries.find((entry) => entry.id === 'orgs-encrypted-crud-facade');
-    expect(orgs.transport_class).toBe('nostr_request_result_facade');
-    expect(orgs.pstf_status).toBe('decision_recorded_2026-06-02');
-    expect(orgs.resolved_by_beads).toEqual(['bahia-sv0j']);
-    expect(orgs.evidence.join(' ')).toMatch(/encrypted request\/result facade|25910/);
-    expect(orgs.evidence.join(' ')).toMatch(/without public org read-model projection|not nostr_native read models/);
+  it('pins the org and ML domain transports', () => {
+    const orgs = matrix.entries.find((entry) => entry.id === 'orgs-ock-cp-state');
+    expect(orgs.transport_class).toBe('nostr_native');
+    expect(orgs.evidence.join(' ')).toMatch(/OCK/);
+    expect(orgs.evidence.join(' ')).toMatch(/signed org-domain intents/);
+    for (const file of orgs.route_files) {
+      const source = readFileSync(resolve(repoRoot, file), 'utf8');
+      expect(source, `${file} must not import REST clients`).not.toMatch(apiRouteImportPattern);
+    }
 
     const ml = matrix.entries.find((entry) => entry.id === 'ml-nostr-controlplane');
     expect(ml.transport_class).toBe('nostr_native');
-    expect(ml.pstf_status).toBe('resolved_by_bahia-gkg7');
-    expect(ml.resolved_by_beads).toEqual(['bahia-jxm3', 'bahia-gkg7']);
     expect(ml.rest_import_policy).toBe('forbidden_for_browser_command_ingress');
     expect(ml.evidence.join(' ')).toMatch(/ml\/model-import|ml\/inference-deploy/);
 
@@ -161,9 +160,6 @@ describe('BAHIA_NOSTR_AUDIT_PARITY route transport matrix', () => {
     expect(mlPin.route_files).toEqual(['web/src/routes/ml/+page.svelte']);
     expect(mlPin.evidence.join(' ')).toMatch(/ml\/pin signed intent.*canonical endpoint revision/);
 
-    const orgDocs = readFileSync(resolve(repoRoot, 'docs/user-guide/features/organizations.md'), 'utf8');
-    expect(orgDocs).toContain('encrypted request/result facade');
-    expect(orgDocs).toContain('durable org state remains repository-backed');
     const mlPage = readFileSync(resolve(repoRoot, 'web/src/routes/ml/+page.svelte'), 'utf8');
     expect(mlPage).toContain('ml/model-import');
     expect(mlPage).toContain('ml/inference-deploy');

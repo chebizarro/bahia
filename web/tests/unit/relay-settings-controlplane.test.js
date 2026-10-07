@@ -132,7 +132,7 @@ describe('relay settings control-plane helpers', () => {
   });
 
   it('builds a scoped canonical relay-settings read-model filter', () => {
-    // Relays index single-letter tags only (bahia-irsry.37): the exact
+    // Relays index single-letter tags only: the exact
     // coordinate is named by #d; domain and schema are checked locally.
     expect(relaySettings.relayPolicyReadModelFilter({ servicePubkey: 'A'.repeat(64), since: 123 })).toEqual({
       kinds: [30900],

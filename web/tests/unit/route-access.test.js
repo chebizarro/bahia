@@ -1,5 +1,5 @@
 /**
- * Route access tests — updated for Phase 4 §6.3.
+ * Route access tests.
  *
  * No backendAuthenticated, no REST compatibility flags.
  * Roles come from auth-roles.svelte.js (hasAnyRole).

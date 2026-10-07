@@ -1,5 +1,5 @@
 /**
- * Route access control — Phase 4 §6.3.
+ * Route access control (docs/architecture/web-store-first.md).
  *
  * No longer depends on backendAuthenticated or REST compatibility flags.
  * Roles come from relay membership events (auth-roles.svelte.js).
@@ -97,7 +97,7 @@ export function getRouteAccess(pathname) {
 
 /**
  * Check if a user can access a route.
- * §6.2: authenticated = persisted signer-verified session (no backendAuthenticated).
+ * Authenticated = persisted signer-verified session (no backendAuthenticated).
  * Roles come from relay membership events.
  */
 export function canAccessRoute({ pathname, authState, isAuthenticated }) {

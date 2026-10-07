@@ -29,7 +29,7 @@
   });
 
   function initializeServicesPage() {
-    // Cross-agent stitch (bahia-2v2k.11): the dashboard historically navigated to
+    // Cross-agent stitch: the dashboard navigates to
     // /services?create=1 to auto-open this dialog. Runs once from the guarded init
     // effect, so it does not reopen on later reactive updates.
     if (page.url?.searchParams?.get('create')) {

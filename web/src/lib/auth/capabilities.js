@@ -1,4 +1,5 @@
-// supportsDirectNip98Auth deleted — §6.2: no REST discovery gate.
+// Auth capability checks read the daemon's system-info features; there is
+// no REST discovery gate.
 
 export function supportsNativeMCPTransport(systemInfo) {
   return Boolean(systemInfo?.features?.mcp_transport);

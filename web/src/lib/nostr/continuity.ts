@@ -129,7 +129,7 @@ function newestFirst(left: ContinuityNostrEvent, right: ContinuityNostrEvent): n
 //   continuity heartbeats are operator-authored. The daemon acts on them only
 //   when signed by `nostr.authorized_pubkeys` (worker identity is data inside a
 //   heartbeat, not its signing authority). The daemon publishes that list as
-//   the fleet-OCK encrypted `operators:continuity` record (bahia-fbyo5), so a
+//   the fleet-OCK encrypted `operators:continuity` record, so a
 //   session holding the fleet OCK trusts the listed operators plus the
 //   signed-in key; a session without it trusts exactly one operator: the
 //   signed-in key. The service-signed 30351/30353 status is shown whoever
