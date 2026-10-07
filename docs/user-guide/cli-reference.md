@@ -301,7 +301,7 @@ bahia outbox --daemon counts                          # daemon outbox, read-only
 
 ## Operator tools outside the CLI
 
-- `bahia-migrate` (`--config config.yaml`) manages the optional PostgreSQL index: `status` (exit 2 when migrations are pending), `up`, and `down --confirm [--to <stem>] [--force]`. `bahia-migrate nostr [--dry-run] [--relays …] [--relay-backfill]` converts event records written under Bahia's pre-canonical event kinds in `nostr_events` into canonical events and publishes them; it is resumable and idempotent. `make migrate MIGRATE_CONFIG=… MIGRATE_ACTION=status` wraps the same binary.
+- `bahia-migrate` (`--config config.yaml`) manages the optional PostgreSQL index: `status` (exit 2 when migrations are pending), `up`, and `down --confirm [--to <stem>] [--force]`. `bahia-migrate nostr [--dry-run] [--relays …] [--relay-backfill]` converts event records stored under non-canonical event kinds in `nostr_events` into canonical events and publishes them; it is resumable and idempotent. `make migrate MIGRATE_CONFIG=… MIGRATE_ACTION=status` wraps the same binary.
 - `soulfactory-legacy-adoption-report -input <snapshot.json>` writes a deterministic report from a sanitized snapshot of running agent containers; it contacts nothing and exits 3 when an agent has conflicting Soul identity evidence.
 
 ## Related

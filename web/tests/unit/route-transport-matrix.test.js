@@ -162,8 +162,8 @@ describe('BAHIA_NOSTR_AUDIT_PARITY route transport matrix', () => {
     expect(mlPin.evidence.join(' ')).toMatch(/ml\/pin signed intent.*canonical endpoint revision/);
 
     const orgDocs = readFileSync(resolve(repoRoot, 'docs/user-guide/features/organizations.md'), 'utf8');
-    expect(orgDocs).toContain('encrypted request/result facade');
-    expect(orgDocs).toContain('durable org state remains repository-backed');
+    expect(orgDocs).toContain('NIP-CAS-0011');
+    expect(orgDocs).toContain('operators:<scope>');
     const mlPage = readFileSync(resolve(repoRoot, 'web/src/routes/ml/+page.svelte'), 'utf8');
     expect(mlPage).toContain('ml/model-import');
     expect(mlPage).toContain('ml/inference-deploy');

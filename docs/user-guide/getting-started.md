@@ -4,7 +4,7 @@ This guide takes you from a fresh checkout to a first deployment.
 
 ## Prerequisites
 
-- **Docker** and **Docker Compose** for the quick start, or **Go 1.24+** for a local build
+- **Docker** and **Docker Compose** for the quick start, or **Go 1.26+** for a local build
 - A **Nostr signer**: a NIP-07 browser extension or a NIP-46 bunker for the web app, and a key file or bunker for the CLI
 - **PostgreSQL 16+** is optional. The daemon keeps its truth on the relays and in its local event store; PostgreSQL is a derived index that enables a few HTTP reads and the OCI proxy.
 
