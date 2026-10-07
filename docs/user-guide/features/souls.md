@@ -1,409 +1,65 @@
-# Souls (AI Agents)
+# Souls
 
-**Souls** in Bahia are AI agents provisioned through Soul Factory with cryptographic identities, personalities, and full infrastructure.
+A Soul is the signed identity and runtime specification for an AI agent. Soul Factory provisions, observes, and controls agents when `soul_factory.enabled` is true.
 
-## Overview
+## Web and CLI
 
-Soul Factory provides:
-- **LLM-driven generation** — Personalities from templates or custom prompts
-- **Nostr-native identity** — NIP-46 bunker-backed keypairs
-- **Full infrastructure** — Avatar, memory, workspace, deployment
-- **Lifecycle management** — Suspend, resume, revoke, regenerate
-
-## Key Concepts
-
-### Soul
-
-A **Soul** is a fully provisioned AI agent:
-
-```yaml
-agent_id: "scout"
-name: "Scout"
-pubkey: "npub1scout..."
-status: "active"
-tier: "standard"
-personality:
-  brief: "A research agent that investigates topics..."
-  voice: "curious, thorough, analytical"
-```
-
-### Template
-
-A **Template** provides a starting point:
-
-```yaml
-name: "research-agent"
-brief: "Investigates topics and synthesizes findings"
-tier: "standard"
-permissions:
-  - web_search
-  - file_read
-```
-
-### Tiers
-
-| Tier | Description | Use Case |
-|------|-------------|----------|
-| `lightweight` | Minimal resources | Simple tasks, monitoring |
-| `standard` | Balanced | Most use cases |
-| `heavy` | Maximum resources | Complex, multi-step work |
-
-## Provisioning Souls
-
-### Web UI
-
-1. Navigate to **Souls** in the sidebar
-2. Click **New Soul** (or use the Soul Designer)
-3. Choose:
-   - **Template**: Select a pre-made template, or
-   - **Custom Brief**: Write your own personality brief
-4. Configure:
-   - **Agent ID**: Unique identifier
-   - **Name**: Display name
-   - **Tier**: Resource allocation
-5. Click **Provision**
-6. Monitor provisioning progress
-
-### CLI
+Use **Souls** (`/souls`) to browse templates and agents, provision a Soul, and run lifecycle actions.
 
 ```bash
-# From template
-bahia souls provision scout \
-  --template "31950:pubkey:research-agent" \
-  --name "Scout" \
-  --tier standard \
-  --follow
-
-# Custom brief
-bahia souls provision codebot \
-  --name "CodeBot" \
-  --brief "A code review specialist focused on security and performance" \
-  --tier heavy \
-  --follow
-
-# From brief file
-bahia souls provision reviewer \
-  --name "Code Reviewer" \
-  --brief-file ./agent-brief.md \
-  --follow
-```
-
-### Signer-first control plane
-
-Bahia does not currently expose `soul_factory_*` MCP tools. Provisioning flows use the web UI, the `bahia souls` CLI, or signer-first Nostr control-plane operations.
-
-## Provisioning Steps
-
-Soul Factory executes 8 steps:
-
-1. **Generate** — LLM creates SOUL.md, IDENTITY.md, permissions
-2. **Signet** — Registers keypair with NIP-46 bunker
-3. **Avatar** — Generates avatar image via FLUX/ComfyUI
-4. **Profile** — Publishes Nostr profile (kind:0)
-5. **Qdrant** — Creates vector memory collection
-6. **Memory** — Seeds initial context
-7. **Workspace** — Initializes git repository
-8. **Deploy** — Registers with Bahia, publishes soul event
-
-## Viewing Souls
-
-### Web UI
-
-The **Souls** page (Soul Gallery) shows:
-- All provisioned souls
-- Status indicators
-- Quick actions
-
-Click a soul to see:
-- **Identity**: Name, pubkey, avatar
-- **Personality**: Brief, voice, traits
-- **Infrastructure**: Memory, workspace
-- **Permissions**: What the agent can do
-- **Status**: Active, suspended, revoked
-
-### CLI
-
-```bash
-# List souls
-bahia souls list
 bahia souls list --status active
-
-# Get soul details
 bahia souls get scout
-bahia souls get scout -o yaml
-```
-
-### CLI and web views
-
-Use the Soul Gallery in the web UI or the `bahia souls list` / `bahia souls get` CLI commands to inspect souls. Bahia does not currently expose `soul_factory_list_souls` or `soul_factory_get_soul` MCP tools.
-
-## Lifecycle Actions
-
-### Suspend
-
-Temporarily disable a soul:
-
-```bash
-bahia souls suspend scout --reason "Maintenance"
-```
-
-Suspend/resume/revoke/redeploy/regenerate operations currently use the web UI, the `bahia souls` CLI, or signer-first Nostr flows rather than `soul_factory_action` MCP tools.
-
-### Resume
-
-Reactivate a suspended soul:
-
-```bash
+bahia souls provision scout --template "31950:<publisher-pubkey>:research-agent" --tier standard --follow
+bahia souls await <request-id>
+bahia souls suspend scout --reason "maintenance"
 bahia souls resume scout
-```
-
-### Revoke
-
-Permanently disable (cannot be undone):
-
-```bash
-bahia souls revoke scout --reason "No longer needed"
-```
-
-### Redeploy
-
-Redeploy the soul's infrastructure:
-
-```bash
 bahia souls redeploy scout
-```
-
-### Regenerate
-
-Regenerate with a new brief:
-
-```bash
-bahia souls regenerate scout \
-  --brief "Updated purpose and behavior..."
-```
-
-The current MCP server does not register a `soul_factory_regenerate` tool. Use the verified CLI command above or the signer-first Soul Factory lifecycle methods supported by the configured runtime.
-
-## Templates
-
-### Listing Templates
-
-```bash
+bahia souls regenerate scout --brief "Research and summarize operational evidence"
+bahia souls revoke scout --reason "retired"
 bahia souls templates list
-```
-
-### Built-in Templates
-
-| Template | Description |
-|----------|-------------|
-| `research-agent` | Investigates topics, synthesizes findings |
-| `code-reviewer` | Reviews code for quality and security |
-| `monitor-agent` | Monitors systems, alerts on issues |
-| `coordinator-agent` | Orchestrates other agents |
-| `assistant-agent` | General-purpose assistant |
-| `builder-agent` | Builds and deploys software |
-
-### Getting Template Details
-
-```bash
 bahia souls templates get research-agent
 ```
 
-## Nostr Event Kinds
+The public MCP registry does not expose Soul Factory lifecycle tools. Use the web app, `bahia souls`, or the Soul Factory Nostr contract.
 
-| Kind | Name | Description |
-|------|------|-------------|
-| 31950 | SoulTemplate | Template definitions |
-| 31951 | AgentSoul | Provisioned agent |
-| 31952 | SoulDraft | Work-in-progress soul |
-| 31953 | SoulFleetConfig | Trusted fleet-wide OpenClaw template (`d=soulfactory-fleet-config/v1`) |
-| 5950 | ProvisioningRequest | DVM provisioning request |
-| 6950 | ProvisioningStatus | Progress updates |
-| 7950 | ProvisioningResult | Final result |
-| 1950 | SoulAction | Lifecycle actions |
-| 1951 | SoulAction legacy result | Backward-compatible lifecycle result alias |
-| 30317 | RuntimeCapability | Runtime capability announcement |
-| 38384 | RuntimeControlRequest | Runtime-directed control request |
-| 38386 | RuntimeControlResult | Runtime-directed result |
+## Event contract
 
-## Browser store-first reads and trusted publishers
+| Kind | Purpose |
+|---|---|
+| `31950` | Addressable Soul template |
+| `31951` | Addressable provisioned Soul |
+| `31952` | Soul draft |
+| `31953` | Fleet-wide OpenClaw configuration |
+| `5950` | Provisioning request |
+| `6950` | Provisioning progress |
+| `7950` | Provisioning result |
+| `1950` | Lifecycle action |
 
-The app layout owns one SoulFactory reader backed by the shared verified `BahiaEventStore`. Soul Gallery, Soul details, Soul edit and **Settings → OpenClaw Fleet** read that local store, render cached rows with no loading gate, and update as the store changes. Rendering never waits for a relay connection or EOSE, and returning to those routes does not open another REQ: pages only read the local store, and the layout starts the relay reader at boot without waiting for any relay. A Soul that is not in the local store yet is reported as "not found" only after relay catch-up has finished.
-
-Soul activity is read from local events. The layout reader catches up the trusted history in pages with a saved per-relay cursor, so histories larger than 1,000 events are read completely (see [Continuity](continuity.md) for how paging and cursors work).
-
-Every relay filter and every local read carries an author list:
-
-- `31951` Souls and their `6950`/`7950`/`1951` lifecycle history are signed by the SoulFactory controller. Trusted controllers are the service keys in the deployment bootstrap seed (`service_pubkeys`) plus the controller the Bahia service attests: the daemon publishes its resolved controller key as `controller_pubkeys` in the service-signed runtime policy record (`30900`, `t=soul-factory-runtime-policy`). A deployment whose controller is a separate Signet key therefore needs no extra web configuration.
-- `31952` drafts, `1950` actions and the `31953` fleet configuration are operator documents. They are accepted from the signed-in operator's own key and, when the session can decrypt the service's fleet-OCK encrypted `operators:soul-factory` allowlist record, from the other operators in `soul_factory.authorized_pubkeys`.
-- `31950` templates are accepted from the signed-in operator and from trusted controllers.
-- `30317` runtime capabilities are accepted from the runtime keys the service attests (`runtime_pubkeys` in the same policy record, mirroring `soul_factory.runtime_pubkeys`) from runtime keys named by an already-trusted `31951` Soul, and from the trusted controller and service keys themselves. A capability event can never add its own signer to the trusted set. If `soul_factory.runtime_pubkeys` is not configured and no Soul exists yet, no runtime is trusted and the New Soul form offers no runtime target: pin the runtime keys in the daemon configuration.
-
-The runtime policy record is plaintext (not OCK-encrypted). On the Bahia relay sidecar its topic is a protected read: `nostr.sidecar.read_auth_mode` defaults to `enforce`, so only NIP-42-authenticated readers the sidecar admits — the Bahia service key, relay administrators, the fleet operators and org members the daemon syncs as intent authors, and `read_auth_allowed_pubkeys` — can read it; the browser authenticates with your signer, so attested keys become available once you are signed in. An operator who opts out with `read_auth_mode: warn` or `off`, and any other relay the service publishes to, applies no such rule. Treat the controller and pinned runtime public keys in this record as disclosed to anyone who can read that topic. See `docs/relay-sidecar.md` ("Read authentication").
-
-### Other operators' documents
-
-The daemon decides who may author drafts, actions and the fleet configuration from `soul_factory.authorized_pubkeys`, and publishes that list as a fleet-OCK encrypted record (kind `30900`, `t=operator-allowlist`, `d=operators:soul-factory`; see the event guide's "Operator allowlist records"). Only fleet operators and bootstrap owners holding the fleet content key can read it; relays never see the operator pubkeys. When your session reads it, the Soul detail's activity list and the fleet configuration page show documents signed by your key and by the other authorized operators — the fleet configuration page shows the newest configuration across them, exactly the one the daemon applies — and the notes on those views say so. Without it (no fleet key in this session, or the record is missing or tombstoned because the Soul Factory is disabled or the list is empty), only documents signed by your own key are shown and the notes say that instead. Org membership cannot stand in for the allowlist: fleet operators are not org members and org roles do not authorize SoulFactory documents.
-
-The runtime-capability set is also intersected with the service-authored runtime policy before controls are enabled. Valid signatures from other authors remain stored only if another trusted subscription needs them; they are never projected into SoulFactory views.
-
-## Fleet-wide OpenClaw configuration
-
-Open **Settings → OpenClaw Fleet** at `/settings/fleet` to edit and publish the parameterized-replaceable kind `31953` document. The event content uses `soulfactory-fleet-config/v1` and contains an allowlisted OpenClaw `template` plus optional `defaults` for model, CLI bindings, and reproducible `plugin-id=install-source` requirements. Secret-shaped string fields must use `${VAR}` placeholders.
-
-During provisioning, the reactor selects the newest valid event signed by a pubkey in `soul_factory.authorized_pubkeys`. The OpenClaw wrapper deep-merges fleet template → per-agent runtime/relay settings → wrapper-owned workspace, account binding, Nostr enablement, and file-backed secrets. The three `OPENCLAW_SOULFACTORY_DEFAULT_*` variables remain fallbacks when the fleet document omits their corresponding defaults.
-
-Replacing kind `31953` also reconciles active OpenClaw souls automatically. The reactor skips souls whose kind `31951` read model already records the new fleet revision, applies the new template with bounded per-soul `soulfactory.config.reload` calls, publishes soul-scoped kind `6950` progress and kind `7950` terminal events, and rolls an individual runtime back to its recorded prior fleet revision on failure. Successful kind `31951` events carry a `fleet-revision` tag with the applied kind `31953` event ID.
-
-## Per-agent runtime customization
-
-The new-soul Runtime panel accepts an optional agent LLM model. Leave it blank to inherit the model from the fleet snapshot pinned for that provisioning request, then from the wrapper environment fallback. Entering a value writes `runtime.model` into the signed draft and passes that override to OpenClaw's `agents add --model` flow.
-
-For dedicated OpenClaw agents, provision-time rendering deep-merges the draft's memory settings into `agents.defaults.memorySearch` and its voice mapping into the OpenClaw TTS section. Embedding provider/model, retrieval limits and threshold, auto-index/session behavior, and native reranking intent override overlapping fleet values. Retention days and the selected reranker model remain in Bahia's normalized runtime metadata when OpenClaw has no corresponding native key.
-
-The creation wizard is explicit about controls that do not have an interactive runtime path:
-
-- Browser-local avatar files cannot be attached because Bahia has no durable web Blossom-upload endpoint. Use a durable `blossom:` or HTTPS asset reference; the UI never saves `blob:` URLs.
-- Generate Avatar and Play Sample are disabled unless the page has a runtime dispatcher. Their configuration is still saved to the draft and applied during provisioning.
-- Reindex is available only on a deployed soul and completes only when runtime progress/result events confirm it.
-- Tool grants and approval policy are signed control-plane intent. The owned OpenClaw wrapper does not currently translate them into OpenClaw tools, MCP, or plugin enforcement.
-
-## Nostr-First Provisioning Flow
-
-Soul creation is signer-first and event-driven:
-
-1. The browser/operator signs a `31952` Soul draft containing the desired identity, runtime target, relay policy, permissions, workspace, assets, and `spec_hash`.
-2. The browser/operator signs a ContextVM `25910` request using `soul-factory/provision`; params use the existing `soulfactory-provisioning/v1` schema. Bahia preserves the request event id for correlation and adapts the request into the staged SoulFactory reactor. Existing `5950` publishers remain supported as lifecycle interop during contraction.
-3. Bahia SoulFactory publishes `6950` progress, sends scoped runtime control kind `38384` events to OpenClaw, validates correlated `38386` runtime results, publishes final `31951`, and then publishes terminal `7950`.
-4. Clients subscribe to the correlated Nostr events for durable truth. A ContextVM or MCP acknowledgment is not completion.
-
-REST provisioning and lifecycle routes are intentionally not part of SoulFactory. Do not integrate against a REST create/provision/suspend/resume path; use signed Nostr events and scoped subscriptions.
-
-The Bahia sidecar relay accepts every valid Nostr event kind without a numerical allowlist. Browser routes such as `/souls/new` can query `31950`, `31951`, `31952`, and `30317` through the sidecar, and operators/runtimes can publish correlated SoulFactory request, progress, and result events through the same relay boundary when their signatures and event IDs are valid.
-
-## Provisioning recovery
-
-Provisioning persists its resolved request and saga checkpoints under
-`soul_factory.provisioning_state_dir`; `/metrics` reads that same store. Inline
-requests must include `runtime.runtime_release_id` for a verified Bahia release.
-Fleet operators can use `soul-factory/saga/inspect`, `/retry`, `/reconcile`, and
-`/safe-abort` (all under the `soul-factory/saga` prefix). Each takes the original
-`request_id` and optional `dry_run` (defaults to true). All four fail closed unless
-the signed requester is in `nostr.authorized_pubkeys`; mutations require explicit
-`dry_run:false`. See [authenticated saga recovery](../../runbooks/openclaw-provisioning-operations.md#authenticated-saga-recovery)
-for restart behavior, legacy ledgers, and non-destructive compensation limits.
-
-
-On restart, the Soul Factory reactor backfills one globally newest provisioning request and one globally newest lifecycle action, not every workflow missed during downtime, then keeps its subscription open for new events. Terminal results are checked idempotently so those replays do not duplicate completed work.
-
-The same startup subscription backfills up to 100 runtime-control results and continues following new results. A late successful result can complete the public projection from a persisted checkpoint without repeating Signet identity creation, avatar generation, memory/workspace setup, or runtime provisioning. Recovery checkpoints do not expose the Signet bunker URI or raw signing material. Operators should not treat the one-request/one-action backfill as exhaustive recovery for multiple concurrent missed workflows.
-
-## Agent Self-Provisioning
-
-Agents can provision other agents through the signer-first Soul Factory flow. Use the same web, CLI, or Nostr provisioning surfaces described above; Bahia does not currently expose a `soul_factory_provision` MCP tool.
-
-## Configuration
-
-The app-level Soul Factory reactor is disabled by default. Enable it only with explicit Nostr relays, a real Signet bunker URI, authorized requester pubkeys, and LLM settings:
-
-```yaml
-soul_factory:
-  enabled: true
-  agent_runtimes:
-    - openclaw
-  runtime_pubkeys:
-    openclaw:
-      - "<64-char OpenClaw runtime pubkey>"
-  relays:
-    - wss://relay.example.com
-  additional_relays:
-    - wss://private-relay.example.com
-  nip29_groups: # optional; controller-signed membership assignments for new souls
-    - relay: wss://groups.example.com
-      id: fleet-ops
-    - relay: wss://groups.example.com
-      id: fleet-dev
-  communikeys_communities: # optional; Communikeys V2 section membership grants for new souls
-    - definition_address: "32222:<owner-pubkey>:<community-id>" # exact community branch
-      list_author: "<64-char Signet/controller pubkey>" # delegated profile-list signer
-      purposes: [general, apps, chat] # section-purpose tokens, not display names
-  concord_communities: # optional; CORD-05 Direct Invites for encrypted backup communities
-    - community_id: "<64-char self-certifying Concord community id>"
-      invite_bundle_env: "FLEET_CONCORD_INVITE" # or invite_bundle_file / invite_bundle_sealed_file (absolute paths)
-  authorized_pubkeys:
-    - "<64-char requester pubkey>"
-  soul_factory_pubkey: "<64-char Signet/controller pubkey>"
-  signet_bunker_uri: "bunker://..."
-  startup_timeout: 15s
-  llm_base_url: "https://llm.example.com" # API origin; Bahia appends /v1/messages
-  llm_model: "soul-model"
-  llm_api_key: "${SOUL_FACTORY_LLM_API_KEY}"
-  llm_timeout: 120s
-  workspace_gitea_url: "https://git.example.com" # optional; enables workspace repo generation
-  workspace_private_key_ref: "secret://souls/openclaw/nostr-private-key"
-  workspace_agent_memory_mcp_url_ref: "config://souls/agent-memory-mcp-url"
-  workspace_gateway_port: 18780
-```
-
-When enabled, Bahia starts a Nostr-native Soul Factory reactor and one generic adapter for every `agent_runtimes` entry. `runtime_pubkeys` can pin each target to exact capability/result signing identities; production multi-runtime enablement pins every enabled runtime so an unknown signed `30317` cannot become eligible. Provisioning and lifecycle work remains event-driven through Nostr; Bahia does not add REST provisioning or lifecycle routes for Soul Factory. See the [Metiq runtime enablement runbook](../../runbooks/metiq-runtime-enablement.md) for the protected config, Signet enrollment, live validation, evidence, and rollback procedure.
-
-When `nip29_groups` is configured, provisioning uses the Signet-custodied Soul Factory controller to authenticate with each group relay and publish a NIP-29 `put-user` event after the new identity is minted. Every relay must acknowledge the assignment or provisioning fails closed. The new soul never receives or handles raw signing-key material.
-
-When `communikeys_communities` is configured, each entry names an exact Communikeys V2 community branch by its definition address (`32222:<owner>:<communityId>`) plus the delegated list author — the Signet/controller key that signs the section profile lists. The community ID is opaque and is never a signer; the controller is an ordinary delegated signer referenced by the definition, not the community identity. During Signet provisioning, Bahia loads the owner-signed definition, verifies each computed `30000:<listAuthor>:<communityId>-<purpose>[.<shard>]` coordinate is referenced inside a definition `content` section, reads each exact delegated-author list through EOSE, preserves its tags and content, adds the new soul's `p` tag, republishes the replacement with the controller, and requires relay `OK`. Provisioning fails closed on missing definitions, unreferenced coordinates, missing lists, list-author mismatches, AUTH failure, or rejection. Badges remain engagement-only and never grant Communikeys write access.
-
-When `concord_communities` is configured, each entry references CORD-05 CommunityInvite JSON through either an environment-variable name or an absolute mounted-secret file path; Bahia does not accept inline `community_root` or channel keys. Bahia verifies the bundle's self-certifying `community_id`, current control/channel material, size and relay bounds, then uses the Signet-held staff identity to NIP-44-encrypt a kind-`3313` rumor and sign its kind-`13` seal. A single-use key signs the outer kind-`1059` wrap with `p=<new soul>` and `k=3313`. Every bundle relay must also be configured as a SoulFactory relay; Bahia authenticates and publishes to that declared set, and every relay must return an accepted `OK` or provisioning aborts. Bahia additionally resolves the recipient's giftwrap inbox per CORD-05 §6 — their kind-`10050` DM relay list when one exists, their NIP-65 read relays otherwise — and publishes there too, requiring at least one inbox relay to accept. A freshly provisioned agent has published neither list yet, so its invite rides the community relays alone. The agent's Concord client must watch at least one of those relays. A delivered Direct Invite cannot be revoked; removing accidental access requires CORD-06 key rotation/refounding.
-
-`invite_bundle_sealed_file` keeps material in Signet-backed custody, opened through the bunker at use time. **`RotateConcordCommunity` currently permits only a validated owner's named Private-Channel rekey. All non-owner rotations and all Refoundings (even the owner's) are refused before minting keys, writing custody, or publishing.** A permitted rekey publishes Rekey Blobs and Direct Invites to surviving recipients. During this containment, non-owner staff cannot rotate out a compromised member, and communities without owner access lose their usable rotation path; community-wide cryptographic removal is unavailable even to the owner. This does not make a compromised community safe. See [refused operations and operator escalation](../../soul-factory.md#cord-04-authority-containment).
-
-For OpenClaw command-driver deployments, the packaged local wrapper currently supports `soulfactory.provision`, `soulfactory.update`, `soulfactory.persona.update`, `soulfactory.config.reload`, `soulfactory.memory.reindex`, and `soulfactory.revoke`. Full updates require optimistic spec-hash checks and accept either a canonical replacement spec or a merge patch over the persisted prior resolved spec. The sidecar advertises that conservative method set by default; operators can override it with `-methods` or `OPENCLAW_SOULFACTORY_METHODS` only when the configured command really implements additional runtime-control methods. Non-dry-run provisioning uses `OPENCLAW_SOULFACTORY_RUNTIME_MODE=per-agent-compose` (the default) to reconcile a dedicated, ownership-labelled gateway with an immutable image digest, pinned source commit, resource limits, health check, persistent config/workspace mounts, file-backed secrets, explicit Nostr plugin allowlist, and exact account binding. Shared `existing-container` provisioning is rejected so incumbent gateways are never mutated.
-
-The OpenClaw sidecar stores its trusted controller set in a mounted policy file beside its idempotency state. Deployment configuration may seed the file once, but subsequent controller authorization changes use signed ContextVM `soulfactory.controller.grant` and `soulfactory.controller.revoke` events or a SIGHUP reload of persisted state; no restart or environment edit is required. The sidecar signing key must be supplied through `OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE`, never as a value-bearing environment variable.
-
-If `workspace_gitea_url` is set, generated OpenClaw workspace config uses the configured SoulFactory/OpenClaw runtime-control relays, Signet/controller pubkey, LLM model, and secret/config references above. Workspace repository publication is a separate NIP-34/ngit operation: ngit publication relays are required independently from OpenClaw runtime-control relays and are not treated as generic control-plane substitutes. Bahia fails configuration or workspace generation explicitly when required values are missing or pubkeys are not 64-character hex strings; it does not write placeholder relays, controllers, inline private keys, fake MCP URLs, or silently substitute OpenClaw control relays for missing ngit publication relays in production workspace files.
-
-## Legacy Runtime Reconciliation
-
-Platform administrators can reconcile an active kind-`31951` Soul that already has an exact running runtime but lacks `bahia_service_id`. The supported HTTP surface is dry-run-first:
-
-- `POST /api/v1/soulfactory/legacy-reconciliation/preview` reloads the current authoritative Soul and returns its linked, unlinked, ambiguous, or orphaned classification.
-- `POST /api/v1/soulfactory/legacy-reconciliation/apply` accepts that exact classification plus `approval_ref`. The NIP-98 signed request body binds the authenticated operator to the agent ID, link action, Soul event ID, content hash, matched evidence, and reviewed placement.
-
-Both endpoints require an authenticated NIP-98 platform administrator and fail closed when HTTP authentication is disabled. Apply creates or reuses the canonical service and one adopted, observe-only deployment unit, records the exact supplied runtime configuration, and publishes a superseding kind-`31951` that only adds `bahia_service_id`. It does not publish kind `25910`, deploy, restart, re-key, or change mounts, grants, ACLs, or custody. Live runtime evidence and reviewed placement must be supplied in the request; ambiguous, orphaned, stale, forged, or mismatched input is refused.
+Provisioning subscribes for progress and results before publishing the request. A result must match the request and a trusted Soul Factory publisher. Lifecycle actions do not become complete merely because a relay accepted them.
 
 ## Authorization
 
-Provisioning requires configured requester pubkeys in `soul_factory.authorized_pubkeys`. Use 64-character hex Nostr pubkeys, not npub strings, in server config.
+The configured Soul Factory operator keys define who may act. The browser also reads the fleet-OCK-encrypted `operators:soul-factory` record; an operator not present in that record is not trusted to author fleet configuration.
 
-## Best Practices
+The **OpenClaw Fleet** settings page publishes kind `31953` configuration with the active signer and reports each relay's `OK` result. New provisions use the newest trusted document; existing Souls reconcile according to the fleet rollout view.
 
-1. **Start with templates** — Customize from working examples
-2. **Be specific in briefs** — Clear purpose leads to better behavior
-3. **Use appropriate tiers** — Don't over-provision
-4. **Monitor active souls** — Check for issues
-5. **Suspend before revoke** — Allow for recovery
+## Provisioning and recovery
 
-## Troubleshooting
+Provisioning creates the signed Soul, prepares runtime state, deploys the agent, and publishes progress. Interrupted work resumes from its durable ledger and canonical events. Inspect the latest progress/result and runtime evidence before retrying with the same request identity.
 
-### Provisioning Fails at Signet
+Runtime reconciliation is available to platform administrators through dry-run-first endpoints at `/api/v1/soulfactory/legacy-reconciliation/preview` and `/apply`. Preview classifications must be reviewed and bound into the apply request. These endpoints do not infer identity from container names alone.
 
-Check `GET /ready` and find `signet-soulfactory`. Its `state`, `last_error`, `last_attempt`, and `last_success` fields distinguish an unattempted connection, an active outage, and recovery. Bahia remains live and retries automatically; signing-required operations fail explicitly while disconnected. After the bunker or NIP-46 relay recovers, readiness returns from degraded to healthy without a restart and the reactor replays queued provisioning history. Also verify the configured bunker URI/private-key inputs used by your deployment. The current CLI does not register `bahia auth login`.
+## Safety
 
-### Avatar Generation Fails
-
-Interactive generation requires a configured runtime avatar provider; check ComfyUI/Lemmy availability and the runtime's advertised methods. Browser file upload is intentionally disabled until a durable web Blossom upload endpoint is configured, so use a durable `blossom:` or HTTPS avatar reference instead.
-
-### Soul Not Appearing
-
-Souls are published to relays. Check:
-- Relay connectivity
-- Soul status (may still be provisioning)
-
-### Status Not Syncing
-
-Ensure Bahia integration is configured correctly.
+- Use an addressable template coordinate, not a display label.
+- Keep runtime credentials in protected secrets.
+- Treat revoke as destructive; use suspend for reversible maintenance.
+- Verify the trusted publisher and relay catch-up before diagnosing a missing Soul.
+- Use the fleet configuration page for shared runtime policy, not per-agent ad hoc edits.
 
 ## Related
 
-- [Workers](workers.md) — Soul execution hosts
-- [Services](services.md) — Soul deployments
-- [Nostr Integration](../nostr-integration.md) — Event model
+- [Workers](workers.md)
+- [Services](services.md)
+- [Settings](settings.md)
+- [Nostr Integration](../nostr-integration.md)

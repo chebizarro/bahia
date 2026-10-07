@@ -1,225 +1,57 @@
 # Organizations
 
-**Organizations** in Bahia provide team management, access control, and resource ownership.
+Organizations are Bahia's tenancy boundary. Services, environments, deployments, secrets, notification channels, and their confidential state belong to an organization.
 
-## Overview
+## Roles
 
-Organizations enable:
-- **Team collaboration** — Multiple users working together
-- **Access control** — Role-based permissions
-- **Resource ownership** — Services, environments, policies belong to orgs
+| Role | Access |
+|---|---|
+| `viewer` | Read organization resources |
+| `deployer` | Viewer access plus deployment submission and approval |
+| `admin` | Deployer access plus resource, secret, policy, and channel administration |
+| `owner` | Admin access plus membership and organization settings |
 
-## Creating Organizations
+The daemon authorizes the verified signer for every action. UI visibility does not grant a role.
 
-### Web UI
+## Create and manage
 
-The Organizations web route is protected by signer-first authentication and currently requires backend REST compatibility auth. If the backend does not advertise `direct_nostr_http_auth`, the page fails closed with a compatibility message and does not issue organization REST requests.
-
-1. Navigate to **Organizations** in the sidebar
-2. Click **New Organization**
-3. Fill in:
-   - **Name**: Unique org identifier (e.g., `acme-corp`)
-   - **Display Name**: Human-readable name (e.g., "ACME Corporation")
-4. Click **Create**
-
-### CLI
+Open **Orgs** (`/orgs`) or use:
 
 ```bash
-bahia orgs create acme-corp --display-name "ACME Corporation"
-bahia orgs list --service-pubkey <bahia-service-pubkey> --relay wss://<relay>
-bahia orgs get acme-corp --service-pubkey <bahia-service-pubkey> --relay wss://<relay>
-bahia orgs members list <org-uuid> --service-pubkey <bahia-service-pubkey> --relay wss://<relay>
-```
-
-CLI reads use the operator's NIP-44 signer to unwrap the org content key from signed relay key envelopes. Configure `--nostr-key-file` or a NIP-46 bunker signer. A key without membership cannot decrypt the org record and receives `not readable with this key` without a command error. The compatibility REST read path is no longer mounted.
-
-### Encrypted request/result flow
-
-Bahia does not currently expose `bahia_org_*` MCP tools. Organization operations use encrypted Nostr request/result messages instead.
-
-## Organization Roles
-
-| Role | Permissions |
-|------|-------------|
-| **owner** | Full access, can delete org, manage all members |
-| **admin** | Manage members, settings, all resources |
-| **deployer** | Create and manage deployment-related resources |
-| **viewer** | Read-only access to org resources |
-
-### Role Hierarchy
-
-```
-owner > admin > deployer > viewer
-```
-
-Higher roles inherit all lower role permissions.
-
-The web derives role-gated access only from the signed-in pubkey's current
-org-member record. A member's role change or removal updates those affordances;
-other members' roles shown in the organization member list never grant access.
-
-## Managing Members
-
-### Rekeying confidential state
-
-An owner or admin can request the signed `org/rekey` intent (`bahia.intent.org.v1`) with `{"org_id":"<org UUID>","reason":"<optional string>"}`. It rotates the org content key and republishes the current confidential records on their existing coordinates. The resulting intent status reports `data.key_version` and `data.records_republished`. A failed batch reports rejection; records not yet republished remain readable with their previous key version.
-
-Organization state includes `strict_revocation`, default `false`. Setting it to `true` makes member removal or role downgrade automatically run the same republish after key rotation. Otherwise those changes only rotate the key, and historical records stay on older versions. Fleet operators may request the same operation for `org_id="fleet"` to refound fleet-scoped confidential state.
-
-Removal and role downgrade rotate the key **before** publishing the membership change. If rotation fails, the intent is rejected and the member/role is unchanged; retry the intent after recovery. Other confidential writes for that org return `OCKRotationPendingError` while rotation is pending. Readiness reports a degraded `ock_rotation` check with `org <id>: confidential publishes withheld pending key rotation`; liveness and the ability to submit repair intents remain available.
-
-Later confidential publish requests retry a pending rotation after an exponential cooldown (1 second up to 1 minute), without background polling. An explicit membership/rekey retry attempts rotation immediately. Recovery clears the write guard but does not replay the rejected membership intent. Failed add-member wraps use the same event-driven cooldown without blocking other writes, and re-check current membership before delivery.
-
-The guard is process-local. Existing key-envelope history has opaque recipient handles and no service-readable recipient roster, so restart recovery cannot reliably compare the old epoch's recipients to current membership. This change does not retrofit that history format or claim to detect pre-existing stale epochs. For strict revocation, refounding also finishes before the membership event is committed. A failed refounding leaves membership unchanged; retry the intent to finish records still on their previous epoch.
-
-### Adding Members
-
-**Via Web UI:**
-1. Go to organization detail
-2. Click **Members** tab
-3. Click **Invite Member**
-4. Enter pubkey and role
-5. Click **Send Invite**
-
-**Via CLI:**
-```bash
-bahia orgs members add org-123 npub1newmember... --role deployer
-```
-
-### Accepting Invites
-
-Members can accept pending encrypted invites from the Organizations page in the web UI. The current CLI does not expose an `orgs invites` subcommand.
-
-### Updating Member Roles
-
-The current CLI does not expose a dedicated member-role update subcommand. Role changes should use the encrypted web flow or the underlying encrypted request/result operations.
-
-### Removing Members
-
-```bash
-bahia orgs members remove org-123 npub1member...
-```
-
-## Viewing Organizations
-
-### Web UI
-
-The **Organizations** page shows:
-- Orgs you belong to
-- Your role in each org
-- Pending invites
-
-Click an org to see:
-- **Overview**: Org info and stats
-- **Members**: Current members and roles
-- **Invites**: Pending invitations
-- **Settings**: Edit org (admins+)
-
-### CLI
-
-```bash
-# List orgs you belong to
 bahia orgs list
-
-# Get org details
-bahia orgs get acme-corp
-
-# List members
-bahia orgs members list org-123
+bahia orgs get <id-or-name>
+bahia orgs create acme --display-name "ACME"
+bahia orgs members list <org-id>
+bahia orgs members add <org-id> <pubkey> --role deployer
+bahia orgs members remove <org-id> <pubkey>
+bahia orgs invites create <org-id> <pubkey> --role viewer --expires-in 72
+bahia orgs invites delete <org-id> <invite-id>
+bahia orgs delete <org-id>
 ```
 
-## Organization Resources
+Creating an organization requires a fleet operator or its configured bootstrap owner. Membership and invite records are signed canonical state; invite acceptance and role changes are checked against the current organization.
 
-Resources can be scoped to organizations:
+## Confidential state and OCK
 
-### Services
+Bahia encrypts organization-confidential records with an organization content key (OCK) using the NIP-CAS-0011 envelope. The daemon wraps the current OCK to each authorized member's pubkey. A signer without a valid envelope sees **not readable with this key** rather than plaintext or an empty substitute.
 
-```bash
-bahia services create \
-  --name "payment-api" \
-  --artifact-repo "ghcr.io/company/payment-api"
-```
+Membership removal rotates the key while excluding the removed member. **Refounding** republishes current confidential records under the current key epoch so authorized members converge on one readable version.
 
-### Environments
+`strict_revocation` defaults to `false`. When enabled, member removal or role downgrade rotates and refounds before the membership change is committed. If refounding fails, the membership change fails and can be retried. Without strict revocation, rotation protects newly published state while existing ciphertext remains encrypted under its recorded epoch.
 
-```bash
-bahia environments create \
-  --name "production" \
-  --strategy replace \
-  --protected
-```
+Fleet-confidential state uses the fleet OCK. Scoped operator allowlists are encrypted canonical records addressed as `operators:<scope>`, such as `operators:continuity` and `operators:soul-factory`.
 
-### Policies
+## Safety
 
-Policy creation is signer-first. Publish a ContextVM `policy/create` command scoped to the organization, or use transitional REST policy mutations when the control-plane command publisher is configured. Policy mutation routes require the `policies:write` permission, granted to admin and owner roles.
-
-## Access Control
-
-### Resource Visibility
-
-| Resource | Visibility |
-|----------|------------|
-| Services | Org members only |
-| Environments | Org members only |
-| Artifacts | Service org members |
-| Deployments | Service org members |
-| Policies | Org members only |
-| Notifications | Org admins+ |
-
-### Action Permissions
-
-| Action | Required Role |
-|--------|---------------|
-| View resources | viewer+ |
-| Create services | deployer+ |
-| Deploy | deployer+ |
-| Manage policies | admin+ (`policies:write`) |
-| Manage LLM routes | admin+ (`llm_routes:write`) |
-| Manage members | admin+ |
-| Delete org | owner |
-
-## Deleting Organizations
-
-Organization deletion is part of the encrypted request/result facade. The current CLI does not expose `bahia orgs delete`, so use the authenticated web flow or the underlying encrypted `orgs.delete` operation when your deployment enables it.
-
-## Encrypted Request/Result Facade
-
-Organization operations use the **encrypted request/result facade** over Nostr events (`5980` requests and `7980` terminal results):
-
-- The browser signs and encrypts a scoped org operation such as `orgs.create`, `orgs.list`, `orgs.detail`, `orgs.create_invite`, `orgs.accept_invite`, `orgs.update_member_role`, or `orgs.remove_member`.
-- Bahia decrypts the request, validates the requester, applies RBAC/repository changes, and publishes an encrypted terminal result correlated to the request event id.
-- Member lists, invites, and org CRUD responses are not public Nostr read models; durable org state remains repository-backed and is returned only through encrypted request/result responses.
-- The UI treats relay `OK`, `AUTH`, `CLOSED`, and encrypted terminal result outcomes according to the shared request/result lifecycle contract.
-
-This requires a NIP-44 capable signer and configured encrypted relay/service pubkey settings.
-
-## Best Practices
-
-1. **Use meaningful names** — Help members identify orgs
-2. **Principle of least privilege** — Start with viewer, elevate as needed
-3. **Regular audits** — Review member list periodically
-4. **Document roles** — Clarify who can do what
-5. **Don't over-share ownership** — Limit owners to trusted admins
-
-## Troubleshooting
-
-### Can't Create Org
-
-- Verify your pubkey is in `auth.bootstrap_owner_pubkeys`
-- Check NIP-44 signer capability
-
-### Invite Not Received
-
-- Invites are encrypted — check encrypted relay connectivity
-- Verify pubkey is correct
-
-### Permission Denied
-
-- Check your role in the org
-- Verify resource belongs to your org
+- Use owner sparingly and admin for routine administration.
+- Verify a member's hex pubkey out of band.
+- Enable strict revocation where removing historical read access is required.
+- Wait for the new membership and key-envelope records before assuming a role change is visible on every relay.
+- Retry with the same intent ID after a timeout.
 
 ## Related
 
-- [Services](services.md) — Org-owned resources
-- [Policies](policies.md) — Org access policies
-- [Notifications](notifications.md) — Org alerts
+- [Services](services.md)
+- [Notifications](notifications.md)
+- [Policies](policies.md)
+- [Nostr Integration](../nostr-integration.md)

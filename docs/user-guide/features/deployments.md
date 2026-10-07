@@ -1,348 +1,62 @@
 # Deployments
 
-## Persistent VM deployments
+A deployment declares which immutable artifact should run for a service, environment, and optional deployment unit. Bahia separates the reviewed intent, the execution run, and the runtime observation.
 
-Typed persistent VMs use the separate `persistent-vm/*` ContextVM surface and
-`/api/v1/persistent-vms` read-only compatibility route. They do not change existing
-deployment-run handlers or invoke legacy replace-all `Deploy`. C/D admission
-adapters enforce exact identity, generation, idempotency and destructive approval;
-unwired adapters fail unavailable. Admission is not completion: follow the
-returned VM/operation coordinates on canonical state and audit events.
-See [Virtual machines](virtual-machines.md) for safe public connections and scope.
+## Workflow
 
+1. **Preview** resolves the service, environment, unit, secrets, policies, and managed runtime configuration. It returns a bounded plan and desired-state hash.
+2. **Submit** publishes a signed deployment intent containing the reviewed hash.
+3. **Evaluate** applies policy and protected-environment rules.
+4. **Approve or reject** when review is required.
+5. **Run** executes through the selected runtime or worker.
+6. **Observe** compares the running digest with desired state and publishes drift.
 
-**Deployments** in Bahia follow an intent-based workflow: you declare what you want deployed, policies are evaluated, and workers execute the deployment.
+Relay acceptance is not deployment completion. Follow the correlated `30315` status, the canonical deployment-intent and deployment-run records, and the service-state observation.
 
-## Signed deployment intents
+## Web
 
-By default, operators publish a signed kind `30900` intent with `domain=deployment`, schema `bahia.intent.deployment.v1`, an org tag, and a UUIDv7 `intent_id`. `create` supplies `service_id`, `environment_id`, and `artifact_id`; `rollback` supplies those service/environment IDs plus `target_artifact_id` (or `target_run_id`) and `supersedes_intent_id`. `approve` and `reject` supply `deployment_intent_id` and should include the canonical intent's `expected_updated_at` revision. Create/rollback require `deployments:write`; decisions require `deployments:approve`.
+Use **Deployments** (`/deployments`) for intents and runs, **Pending Approvals** (`/deployments/pending`) for review, and the run detail page for status and logs. The deployment wizard requires an explicit unit when an environment has multiple units.
 
-`runtime` intents use `deploy`, `restart`, or `stop` with `service_id` and `environment_id`; only deploy may include `artifact_id`. They require `deployments:write`. Both the CLI and the web console publish these signed intents and follow the bounded kind `30315` intent status and the daemon-authored deployment/run/state records (the web shows them as pending until one arrives). Neither client silently falls back to ContextVM when an intent domain is disabled; relay `OK` does not prove execution, and an opted-out domain may produce no status.
+Managed Compose deploys render only into a Bahia-owned Compose directory, validate the staged project, and apply the complete project. Bahia refuses an unowned directory. Secret values may exist in generated runtime files but are excluded from events, summaries, logs, and observations.
 
-## Deployment Workflow
-
-```
-Intent Created → Policy Evaluation → Approval (if needed) → Run Execution → Observation
-```
-
-### 1. Deployment Intent
-
-A **Deployment Intent** is a request to deploy an artifact:
-
-```yaml
-service_id: "svc-123"
-environment_id: "env-456"
-artifact_id: "art-789"
-requested_by: "npub1user..."
-reason: "Deploy new feature X"
-```
-
-### 2. Policy Evaluation
-
-Bahia evaluates policies:
-- SBOM requirements
-- Test coverage
-- Security scans
-- Custom rules
-
-### 3. Approval
-
-If policies or environment require approval:
-- Manual approval by authorized pubkey
-- Or automated approval if all policies pass
-
-### 4. Deployment Run
-
-A **Deployment Run** executes the intent:
-- Worker picks up the job
-- Pulls container image
-- Applies to runtime
-- Reports progress
-
-### 5. Runtime Observation
-
-After deployment:
-- Workers observe what's running
-- State is compared to desired
-- Drift is detected if mismatch
-
-## Desired-State Runtime Behavior
-
-For Compose and Docker runtimes, deploy and rollback flows build a canonical desired-state snapshot and hash before apply. Bahia persists the snapshot on the deployment intent, stores apply metadata on the deployment run, records the latest desired runtime state on the service/environment row, and compares it with normalized runtime observations for drift.
-
-Compose desired-state deploys require a Bahia-owned Compose directory. Bahia renders the whole managed project for the environment or deployment unit into `docker-compose.yml`, generated `.bahia/env/<service-key>.env` files, and `.bahia/render-state.json`, validates the staged project, then applies with full-project `up -d --remove-orphans`. Unknown, operator-authored, or explicitly non-owned directories are blocked before file writes unless a valid Bahia render marker proves prior ownership or an operator has set `bahia_owned: true` after confirming the directory is dedicated to Bahia generation.
-
-Docker desired-state deploys use Bahia labels and `desired_hash` to decide whether the existing managed container already matches the requested state. A matching hash is a no-op apply followed by observation; a hash mismatch triggers pull per policy, prerequisite network/volume ensure, replacement container create/start, and observation. Endpoint connection material remains server-managed through runtime endpoint aliases; public deployment events expose IDs, hashes, and target keys, not raw Docker hosts or TLS credentials.
-
-Generated Compose env files may contain resolved secret values because Docker Compose needs them at apply time. They are written only under the Bahia-owned generated layout and are not included in Nostr events, apply metadata summaries, logs, or normalized observations. Desired-state and observation JSON store redacted secret refs or key-presence metadata only.
-
-Kubernetes desired-state apply and Compose per-service fragments are deferred. Until those follow-up slices land, Kubernetes remains outside the Compose/Docker desired-state behavior and Compose uses the authoritative full-project output.
-
-## Deployment SBOMs
-
-Deployment subjects can be covered by SBOM manifests when the deployment intent has a stable desired-state hash. Bahia uses that desired hash as the deployment subject digest, then follows the same canonical SBOM flow as artifacts and packages: generate/import payload bytes, store them on Blossom, publish a `30078` SBOM reference, publish/replace the deployment-scoped `30004` availability list, and emit `30315` status plus `4903` audit observables.
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "sbom-deployment-intent-123",
-  "method": "sbom/generate",
-  "params": {
-    "idempotencyKey": "sbom-deployment-intent-123",
-    "subject": { "type": "deployment", "id": "intent-123" },
-    "source": { "kind": "directory", "locator": "<rendered-desired-state-dir>" },
-    "formats": ["spdx"],
-    "generator": "syft",
-    "storage": "blossom"
-  }
-}
-```
-
-If the deployment intent has no desired-state hash, provide an explicit `subject.digest` or resolve the deployment state first.
-
-## Creating Deployments
-
-### Web UI
-
-For a Compose service:
-
-1. Go to **Services** and select the service, then click **Deploy**.
-2. Select the environment, an explicit deployment unit when the environment is ambiguous, and a registered artifact with a full immutable `sha256` digest.
-3. In **Public route**, leave the deployment private or configure Bahia-managed HTTPS.
-4. In **Service**, enter the Compose service name, port mappings, command arguments, and literal non-secret environment values.
-5. In **Configuration**, select service secrets by opaque reference and choose the environment variable name for each. Secret values are never placed in the signed payload or desired-state preview.
-6. In **Reliability**, configure the HTTP `GET` healthcheck, restart policy, volumes, and CPU/memory limits.
-7. In **Review & sign**, review the accepted bounded plan summary, SHA-256 desired-state hash, policy summary, and cost estimate. The full desired-state diff is not published in the public status.
-8. Click **Sign & submit idempotently**. Submission is enabled only on this final step after successful preview without policy blockers. The browser signer first persists the reviewed managed configuration with `service/update`, then signs a `deployment/create` intent with that exact displayed hash as `expected_desired_state_hash`.
-
-For an Arcana-ready deployment, operators can enter a `8080:8080` port mapping and enable `GET /healthz` on port `8080`; these are operator-entered values, not product-specific defaults in the generic wizard.
-
-Bahia requires `expected_desired_state_hash` for managed deploy requests, rebuilds the desired state after the signed update, and rejects the deploy if its hash differs from the reviewed hash. Runtime apply recomputes the canonical hash again and fails before mutation if it differs from the signed intent. Passing policy continues through the existing protected-environment approval flow; policy blockers prevent submission.
-
-For a single explicit unit, the wizard selects its durable ID automatically. For multiple units, even the environment default is not auto-selected: the operator must choose a unit explicitly. The browser shows only the unit's `endpoint_ref` alias; it never resolves or displays the Docker host, TLS certificate paths, keys, or credentials. Runtime conflicts, missing Bahia-managed ownership, missing endpoint aliases, missing durable unit IDs, and mutable or unregistered artifacts block preview and intent creation with a clear error.
-
-
-### CLI and MCP
-
-Deployment intent creation is signer-first. The CLI and the web console publish signed kind-`30900` deployment intents, wait for scoped kind `30315` status and canonical observables for durable progress; the CLI keeps the signed event in its outbox for inspection or retry. CLI preview and route-attach also publish `deployment/preview` and `deployment/route-attach` intents. Preview displays only the bounded, non-secret plan and review hash from accepted `30315` status `data`; it cannot retrieve the full desired state from status. Route-attach supports an optional `--expected-updated-at` compare-and-set revision. MCP and agent flows may still use ContextVM JSON-RPC methods over Nostr kind `25910` (or encrypted `1059`/`21059` wrappers) during migration. Transitional REST `POST /api/v1/deployments/intents` is available when a control-plane command publisher is configured; it publishes the same signed `service/deploy` command, requires relay `OK` acceptance through the publisher receipt, and returns `202` command metadata instead of a synchronous deployment-intent domain object.
-
-### Nostr intent preview
-
-The browser signs `deployment/preview` at `deployment-preview:<service-id>:<environment-id>` with the selected IDs, managed runtime configuration, `compact=true`, and a fresh `intent_id`. It waits for the correlated, service-authored kind-30315 accepted status. The bounded `data` contains `desired_state_hash`, non-secret `desired_state_summary`, route approval flag, and policy summary; it does not contain a full desired-state snapshot or secret values. A rejected status displays its reason. The browser then signs the service update and deployment create intent with the reviewed hash. Relay `OK` confirms publication, not preview acceptance or deployment completion.
-
-## Monitoring Deployments
-
-### Web UI
-
-The **Deployments** page is linkable at `/deployments/<intent-id>`. One aggregate follows the signed request without leaving the deployment UI and shows:
-
-- policy decision and approval/rejection status;
-- explicit deployment-unit key and safe endpoint alias;
-- immutable artifact digest and reviewed desired-state hash;
-- persisted execution phases and links to each run's redacted stdout/stderr;
-- safe failure code/message, runtime health, observed digest/hash, drift, reconciliation time, and completion; and
-- the explicit previous healthy artifact used by rollback.
-
-Relay updates may arrive late or repeat after reconnect. The dashboard merges intent, run, and service/environment projections by logical identity and domain `updated_at`, with relay timestamp and event ID as deterministic tie-breakers. Corrected service-state coordinates include both service and environment, and logical tombstone watermarks prevent stale replay from resurrecting deleted state.
-
-### CLI
-
-The current CLI does not register `bahia deployments list`, `bahia deployments get`, or `bahia deployments logs` commands. Use `bahia state list` / `bahia state drifted` for current state views and `bahia logs run <run-id>` for run logs. State reads sync signed service-state `30900` records into a per-service local store; `drifted` means `drift_status=drifted`, matching the former REST filter. The public record includes the non-secret desired runtime snapshot, reconciliation backoff time, and failure count, but not free-form failure messages. The legacy REST read route is no longer mounted. Without EOSE, the CLI warns and renders stale local state with exit 0.
-
-### Nostr Subscriptions
-
-Subscribe to canonical deployment observables:
-
-```json
-{
-  "kinds": [30315, 4903, 30900],
-  "authors": ["<bahia-service-pubkey>"],
-  "#service": ["svc-123"],
-  "#environment": ["env-456"]
-}
-```
-
-- **30315**: NIP-38 operational status and progress, including desired-state steps such as `building_desired_state`, `locking_environment`, `rendering`, `applying`, `observing`, and `projecting`
-- **4903**: immutable audit/provenance facts
-- **30900**: current desired/observed deployment state, with optional sanitized `desired_hash`, renderer/target, revision/apply, and `observation_id` metadata
-
-Add `#e=<ContextVM request event id>` when the emitted observable includes request correlation.
-
-## Approving Deployments
-
-When an intent requires approval:
-
-### Web UI
-
-1. Go to **Deployments** → **Pending**
-2. Review the intent details
-3. Click **Approve** or **Reject**
-
-### CLI and MCP
-
-CLI approval and rejection publish signed kind `30900` deployment intents with `deployment_intent_id` and the canonical `expected_updated_at` revision; use `bahia deployments approve|reject --org <uuid> --intent <uuid> --expected-updated-at <RFC3339>`. They wait for kind `30315` status. MCP still uses the legacy signer-first ContextVM approval methods during migration and fails closed without a publisher.
-
-### Nostr
-
-Publish a ContextVM approval request:
-
-```json
-{
-  "kind": 25910,
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"approve-intent-123\",\"method\":\"approval/approve\",\"params\":{\"intent_id\":\"intent-123\",\"decision\":\"approve\",\"_meta\":{\"progressToken\":\"approve-intent-123\"}}}",
-  "tags": [
-    ["p", "<bahia-service-pubkey>"],
-    ["method", "approval/approve"],
-    ["intent", "intent-123"]
-  ]
-}
-```
-
-## Rollbacks
-
-Roll back to a previous artifact:
-
-### Web UI
-
-1. Open the failed deployment's linkable detail page.
-2. Review the displayed prior deployed artifact and immutable digest.
-3. Click **Rollback**. Bahia creates a fresh desired-state intent for that explicit artifact, carries any existing signed public-route plan into the rollback hash, evaluates current policy, and requests approval again when the environment is protected.
-
-### Nostr
-
-Rollback is signer-first. The CLI publishes a kind `30900` deployment/rollback intent with explicit target and superseded intent IDs; it never uses HTTP fallback. The legacy `POST /api/v1/rollback` REST mutation has been removed. The following ContextVM `service/rollback` example applies only to legacy clients that have not migrated:
-
-```json
-{
-  "kind": 25910,
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"rollback-svc-123-env-456\",\"method\":\"service/rollback\",\"params\":{\"service_id\":\"svc-123\",\"environment_id\":\"env-456\",\"deployment_unit_id\":\"unit-max\",\"target_artifact_id\":\"art-previous\",\"supersedes_intent_id\":\"intent-failed\",\"_meta\":{\"progressToken\":\"rollback-svc-123-env-456\"}}}",
-  "tags": [
-    ["p", "<bahia-service-pubkey>"],
-    ["method", "service/rollback"],
-    ["service", "svc-123"],
-    ["environment", "env-456"],
-    ["unit", "unit-max"],
-    ["artifact", "art-previous"],
-    ["intent", "intent-failed"]
-  ]
-}
-```
-
-The target must be an explicit, previously successful artifact for the same service, environment, and deployment unit. This creates a new canonical desired-state intent; it never reuses the legacy force-approved rollback path.
-
-### MCP
-
-Use the same signer-first `service/rollback` ContextVM payload with an explicit target. Do not use registry helpers that infer history or force approval.
-
-## Rollout safety and verified rollback
-
-Canary and blue/green strategies require a runtime traffic controller. Bahia fails the rollout when the runtime cannot shift traffic, or when a follow-up read does not confirm the requested canary weight, blue/green primary slot, or restored rollback target. It does not treat an in-memory percentage change as production traffic movement.
-
-Health gates evaluate consecutive unhealthy observations. Observer errors count as unhealthy samples and fail the rollout when the configured failure threshold is reached; an unavailable observer is not converted into a healthy result.
-
-The rollout plan records the previous artifact and traffic state before it begins. If rollback is required, Bahia restores the previous artifact, restores or switches traffic to the previous primary, observes runtime health and artifact identity, performs cleanup, and persists the final state. A run is marked `rolled_back` only after that verification and persistence succeed. A failed verification publishes `rollout.rollback_failed` and leaves an explicit failure instead of claiming recovery.
-
-## Deployment States
-
-| State | Description |
-|-------|-------------|
-| `pending` | Intent created, awaiting policy/approval |
-| `approved` | Ready to execute |
-| `rejected` | Rejected by policy or approver |
-| `queued` | Waiting for available worker |
-| `running` | Execution in progress |
-| `completed` | Successfully deployed |
-| `failed` | Deployment failed |
-| `cancelled` | Manually cancelled |
-
-## Run Logs
-
-Deployment runs capture logs:
-
-### Web UI
-
-1. Open a deployment and select **View phases & logs** for a run.
-2. Select stdout or stderr after the run reaches a terminal state.
-3. Bahia decrypts all retained versions of the desired state's referenced secrets and redacts them from both complete streams before applying tail limits or stream selection. If redaction dependencies or retained versions are unavailable, log retrieval fails closed.
-
-### CLI
+## CLI
 
 ```bash
-bahia logs run run-456 --tail 100
+bahia deployments preview --service <service-id> --environment <env-id> --artifact <artifact-id>
+bahia deploy --org "$ORG" --service <service-id> --environment <env-id> \
+  --artifact <artifact-id> --expected-desired-state-hash <hash>
+bahia deployments approve --org "$ORG" --intent <intent-id> --expected-updated-at <rfc3339>
+bahia deployments reject  --org "$ORG" --intent <intent-id> --expected-updated-at <rfc3339>
+bahia state list
+bahia state drifted
+bahia logs run <run-id> --tail 100
 ```
 
-### MCP Tool
+`bahia rollback` creates a new desired-state intent for an explicit successful artifact and identifies the intent it supersedes. `bahia deployments route-attach` attaches managed HTTPS to a current deployment.
 
-Logs are accessed via encrypted request (sensitive data):
+## MCP
 
-```json
-{
-  "tool": "bahia_get_run_logs",
-  "arguments": {
-    "run_id": "run-456"
-  }
-}
-```
+Deployment tools include `bahia_deploy`, `bahia_rollback`, intent list/get/approve/reject tools, run list/get/create/complete tools, status, and run-log retrieval. A `pending` tool result is successful admission, not final convergence.
 
-## Deployment History
+## Approval and policy
 
-Use the service detail page and the Deployments UI for deployment history. The current CLI does not register `bahia deployments list` history commands.
+An environment marked `protected`, a reconcile mode of `approval_required`, or a blocking policy can hold a deployment. Approval is bound to the current intent revision. Re-read after a conflict and approve the current `updated_at`; do not reuse stale review evidence.
 
-## Canonical Observables
+## Logs and HTTP
 
-Deployment state is published as canonical Nostr observables:
-
-| Kind | Tags | Content |
-|------|------|---------|
-| `30900` | `d`, `domain=deployment` or `domain=service`, `schema`, `service`, `environment`, optional `intent`/`run` | Current intent, run, and service/environment state projections |
-| `30315` | `status`, `service`, `environment`, optional `intent`/`run`, correlation `e` | Progress and operational status |
-| `4903` | requester `p`, resource tags, correlation `e` | Audit, policy, approval, and deployment facts |
-
-Historical `31961`/`31967`/`31968`, `6961`, and `7961` events are startup migration inputs only. Desired-state metadata is additive on the canonical observable contract and does not revive those legacy live subscriptions.
-
-## Best Practices
-
-1. **Always provide a reason** — Helps with auditing and debugging
-2. **Review before approving** — Check artifact changes
-3. **Monitor after deployment** — Watch for drift or errors
-4. **Use policies** — Automate safety checks
-5. **Keep artifacts immutable** — Never modify deployed images
+The CLI and `bahia_get_run_logs` use the governed run-log surface. The daemon also mounts authenticated HTTP reads for stored run logs and live service/environment logs when their dependencies are configured.
 
 ## Troubleshooting
 
-### Deployment Stuck in Pending
-
-- Check if approval is required
-- Verify policies are passing
-- Ensure authorized approvers are available
-
-### Deployment Failed
-
-- Check run logs for errors
-- Verify artifact exists and is pullable
-- Check worker connectivity
-
-### Drift After Deployment
-
-- Observation may be delayed
-- Check runtime target health
-- Verify container is running
-
-## Relay-policy rollout invariant
-
-Production Bahia rollouts capture the hydrated relay-policy event ID, payload
-hash, author, and event timestamp from the structured readiness check before
-changing images. Post-rollout readiness must expose the same valid projection or
-a newer event. Absence, an older event, or a same-timestamp event/hash mismatch
-fails the gate and restores the previous digest-pinned Compose state.
-
-Production image references use `repository@sha256:<digest>`; tags are build
-handles only. Backend and web images also carry OCI source, revision, and version
-labels so the running artifact can be tied to its source commit.
+- **Pending:** inspect policy evaluation and the protected/reconcile settings.
+- **Failed:** inspect run logs, artifact pull access, endpoint resolution, and worker eligibility.
+- **Drifted:** compare desired and observed digests, then redeploy or use the configured reconciliation mode.
+- **No status after relay OK:** use the intent and event IDs to inspect the outbox and status subscription.
 
 ## Related
 
-- [Services](services.md) — What you deploy
-- [Artifacts](artifacts.md) — What you deploy
-- [Policies](policies.md) — Approval rules
-- [Workers](workers.md) — Execution agents
+- [Services](services.md)
+- [Environments](environments.md)
+- [Artifacts](artifacts.md)
+- [Policies](policies.md)
+- [Environment States](environment-states.md)

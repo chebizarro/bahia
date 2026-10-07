@@ -1,312 +1,51 @@
 # Workers
 
-## Execution-plane capability evidence
+Workers are execution nodes that advertise capabilities, pricing, and availability and receive governed work. Bahia separates worker-authored capability evidence from service-authored scheduling and lifecycle state.
 
-`execution-plane/list|get` exposes public desired/probe metadata for the explicit
-`loom_firecracker_job_microvm` and `loom_qemu_job_domain` classes. Bahia manages
-plane package/config/image pins and capacity; Loom still owns each job VM.
-Expected capabilities and a historical probe-success flag are not scheduling
-grants. D owns fresh authenticated capability contributions, expiry and retraction;
-failed or stale probes remove eligibility. Windows QEMU job capability is never
-advertised, and unavailable plane administration never falls back to host shells.
-[Virtual machines and execution planes](virtual-machines.md) documents the
-queries, metrics and fail-closed mutation integration gate.
+## Discovery and state
 
+Loom workers publish advertisements as kind `10100`. Bahia accepts advertisements only from known worker pubkeys and verifies their signatures and freshness. Service-authored `30900` records hold worker state, assignments, drain progress, eligibility decisions, and operator labels.
 
-**Workers** in Bahia execute deployments, run ML inference, and perform operational tasks. They are typically Loom workers with Nostr identities.
-
-## Overview
-
-Workers provide:
-- **Deployment execution** — Pull images, apply to runtimes
-- **Runtime observation** — Report what's actually running
-- **ML inference hosting** — Serve model endpoints
-- **Task execution** — Run recipes, scripts, jobs
-
-## Key Concepts
-
-### Worker
-
-A **Worker** is an agent identified by its Nostr pubkey:
-
-```yaml
-pubkey: "npub1worker..."
-name: "prod-worker-1"
-status: "online"
-capabilities:
-  - docker
-  - kubernetes
-  - vllm
-hardware:
-  cpu_cores: 32
-  memory_gb: 128
-  gpu: "NVIDIA A100"
-```
-
-### Worker Status
-
-| Status | Description |
-|--------|-------------|
-| `online` | Connected and available |
-| `offline` | Not connected |
-| `busy` | Currently executing a task |
-| `draining` | Finishing current work, not accepting new |
-
-### Capabilities
-
-Workers declare what they can do:
-
-| Capability | Description |
-|------------|-------------|
-| `docker` | Docker container deployment |
-| `kubernetes` | Kubernetes deployment |
-| `compose` | Docker Compose |
-| `vllm` | vLLM inference |
-| `onnx` | ONNX runtime |
-| `rknn` | Rockchip NPU |
-
-## Viewing Workers
-
-### Web UI
-
-Navigate to **Workers** in the sidebar:
-- View all registered workers
-- See status and capabilities
-- Check current tasks
-- Request local cleanup through the cleanup mode dialog
-
-The worker list and Loom job timeline render immediately from the local verified
-Nostr event store, including when relays are temporarily unavailable. Relay
-updates change the view live; the sync indicator reports catch-up separately
-instead of blocking the list. Worker advertisements are authored by the workers
-themselves, while Bahia worker-state and scheduling records are service-authored.
-
-Navigate to **Fleet Health** for the dedicated resource-pressure view:
-- See the fleet weather map grouped by capacity class
-- Review cleanup history and active cleanup status
-- Open cleanup remediation for workers with cleanup recommendations
-
-Click a worker to see:
-- **Overview**: Status, capabilities, hardware
-- **Tasks**: Current and recent tasks
-- **Pricing**: Cost per task (if configured)
-- **Logs**: Recent activity
-
-### CLI
+Open **Workers** (`/workers`) or use:
 
 ```bash
-# List workers
 bahia workers list
-
-# Show worker details
-bahia workers show <64-character-worker-hex-pubkey>
+bahia workers show <worker-pubkey>
 ```
 
-The CLI reads canonical service-authored worker state, assignment, drain, and eligibility families from `30900` events. It also subscribes to worker-authored advertisements using the known worker pubkeys as the author filter. Configure `--service-pubkey` and `--relay` (or their environment equivalents). Reads use a local cursor; without relay EOSE, cached results carry a warning and exit 0. The legacy REST read path is no longer mounted.
+Without relay EOSE, the CLI displays its cached snapshot with a stale-data warning.
 
-### MCP Tool
-
-```json
-{
-  "tool": "bahia_list_workers",
-  "arguments": {}
-}
-```
-
-```json
-{
-  "tool": "bahia_get_worker",
-  "arguments": {
-    "worker_pubkey": "npub1worker..."
-  }
-}
-```
-
-## Worker Selection
-
-When creating a deployment:
-
-1. **Automatic** — Bahia selects based on capabilities and availability
-2. **Preferred** — Suggest workers, fall back if unavailable
-3. **Required** — Must use specified worker(s)
-
-### Configuration
-
-```yaml
-deployment:
-  worker_selection:
-    mode: "preferred"
-    workers:
-      - "npub1worker1..."
-      - "npub1worker2..."
-    capabilities_required:
-      - "kubernetes"
-```
-
-## Worker Pricing
-
-Workers can have pricing for task execution. The current CLI does not register `bahia workers pricing`; view pricing through the web UI and payment/read-model surfaces.
-
-```yaml
-pricing:
-  base_cost: 0.01  # per task
-  per_minute: 0.001
-  gpu_multiplier: 2.0
-  currency: "sats"
-```
-
-### Cost Estimation
-
-Before deployment, use the web UI or the `bahia_estimate_cost` MCP tool to compare worker-sensitive deployment costs.
-
-## Worker Registration
-
-Workers self-register via Nostr:
-
-### Loom Worker Setup
+## Operator controls
 
 ```bash
-# Install Loom worker
-loom-worker install
-
-# Configure
-loom-worker config \
-  --relays wss://relay.example.com \
-  --bahia-pubkey npub1bahia...
-
-# Start
-loom-worker start
+bahia workers cordon <worker-pubkey> --reason "maintenance"
+bahia workers drain <worker-pubkey> --reason "kernel update"
+bahia workers maintenance-enter <worker-pubkey> --reason "host work"
+bahia workers labels-update <worker-pubkey> --labels '{"gpu":"a100"}'
+bahia workers cleanup <worker-pubkey> --mode reclaimable_only
 ```
 
-### Registration Event
+Matching uncordon, undrain, and maintenance-exit commands restore eligibility when current capability evidence permits it. Signed worker intents remain pending until correlated status or newer canonical state arrives.
 
-Workers publish capability announcements:
+MCP exposes worker list/get, lifecycle controls, label update, eligibility preview, assignment reads, drain-status reads, pricing, and cost estimation. See [MCP Tools](../mcp-tools.md).
 
-```json
-{
-  "kind": 10100,
-  "content": {
-    "capabilities": ["docker", "kubernetes"],
-    "hardware": {
-      "cpu_cores": 32,
-      "memory_gb": 128
-    }
-  },
-  "tags": [
-    ["t", "loom-worker"]
-  ]
-}
-```
+## Scheduling
 
-## Worker Commands
+The scheduler filters by required capabilities, labels, runtime, maintenance, cordon/drain state, capacity, and freshness. Desired capability labels are not proof of capability; authenticated worker evidence is required. An offline or stale worker is ineligible.
 
-### MCP Tools for Worker Management
+Assignments are individually addressable and idempotent. Draining stops new assignments and tracks outstanding work; it does not claim that running work disappeared.
 
-```json
-{
-  "tool": "bahia_worker_drain",
-  "arguments": {
-    "worker_pubkey": "npub1worker..."
-  }
-}
-```
+## Pricing
 
-```json
-{
-  "tool": "bahia_worker_undrain",
-  "arguments": {
-    "worker_pubkey": "npub1worker..."
-  }
-}
-```
+Worker pricing is signed advertised data. `bahia_get_worker_pricing` and `bahia_estimate_cost` expose it. Review the returned currency, unit, and resource basis instead of assuming a fixed price model.
 
-### Nostr events
+## Health
 
-The web worker actions—cordon/uncordon, drain/undrain, maintenance enter/exit, labels update, and cleanup—publish signed kind-`30900` worker intents. They remain pending until scoped `30315` status or newer canonical state arrives. Historical `5976`/`6976`/`7976` tool-provision events are migration inputs, not the current production transport.
-
-## Read Models
-
-Worker state is published as Nostr events:
-
-| Kind | Content |
-|------|---------|
-| 10100 | Loom worker advertisement and capabilities |
-| 30900 | Canonical projected worker state |
-
-Subscribe to kind `10100` for Loom advertisements:
-
-```json
-{
-  "kinds": [10100]
-}
-```
-
-Kind `31989` is a legacy ML runtime-capability profile, not the Loom worker advertisement kind.
-
-## Health Monitoring
-
-### Heartbeats
-
-Workers send periodic heartbeats:
-- Update online status
-- Report current load
-- Announce availability changes
-
-### Notifications
-
-Configure an organization-scoped webhook or Nostr DM channel for the worker event types emitted by your deployment. See [Notifications](notifications.md); Slack is not a distinct Bahia channel type.
-
-## Best Practices
-
-1. **Run multiple workers** — Redundancy and load distribution
-2. **Match capabilities to needs** — GPU workers for ML
-3. **Monitor health** — Alert on offline workers
-4. **Plan capacity** — Ensure workers for expected load
-5. **Secure workers** — Limit network access
-
-## Troubleshooting
-
-### Worker Offline
-
-- Check network connectivity
-- Verify relay connection
-- Check worker process running
-- Review worker logs
-
-### Task Stuck
-
-- Check worker status
-- Review task logs
-- Verify worker has required capability
-
-### Capability Missing
-
-- Update worker configuration
-- Restart worker to re-announce
-- Verify required software installed
+Worker advertisements and health evidence have bounded freshness. Investigate relay connectivity, signer identity, and capability filters when a worker disappears. For resource pressure and cleanup, see [Fleet Health](fleet-health.md).
 
 ## Related
 
-- [Deployments](deployments.md) — Worker execution
-- [ML Models](ml-models.md) — ML inference hosting
-- [Payments](payments.md) — Worker costs
-
-### Direct scheduling mutations
-
-`worker/uncordon`, `worker/undrain`, and `worker/maintenance-enter` now execute
-the scheduling transition directly rather than republishing the same request.
-They require the verified caller to be in `nostr.authorized_pubkeys`; empty
-operator configuration denies all calls. Supply a lowercase hexadecimal
-`worker_pubkey` and `idempotency_key` (or `_meta.progressToken`). Conflicting
-worker/idempotency tags and invalid transitions (including disabled workers)
-are rejected before writes.
-
-Success means the repository was updated and a signed canonical worker state
-event was accepted by at least one relay. The transport returns one correlated
-result and handles encrypted replies and replay. Publication failure after a
-storage update is an error, not a successful acknowledgment. Other worker
-forwarding handlers were not converted by this adjudication.
-
-## Signed worker operator intents
-
-Fleet operators can publish `bahia.intent.worker.v1` kind-30900 intents at `d=worker:<pubkey>` for cordon/uncordon, drain/undrain, maintenance enter/exit, labels update, and cleanup. Every worker intent carries `worker_pubkey`, the target `scheduling_state`, and the full desired `labels` map, so the newest retained intent is sufficient after an offline catch-up. Cleanup intents additionally carry `cleanup_mode`. The daemon applies the existing operator action path and emits canonical worker state/read models plus bounded kind-30315 status. ContextVM methods dual-dispatch to this path while the domain is enabled.
+- [Deployments](deployments.md)
+- [ML Models](ml-models.md)
+- [Payments](payments.md)
+- [Fleet Health](fleet-health.md)

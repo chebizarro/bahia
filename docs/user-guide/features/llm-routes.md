@@ -1,288 +1,43 @@
 # LLM Routes
 
-**LLM Routes** in Bahia manage and deploy large language model inference endpoints.
+**LLM** (`/llm`) manages model-serving routes, immutable releases, environment deployments, approvals, rollback, and observed serving state. Enable the feature with `llm.enabled` and configure its adapter and protected credentials.
 
-## Overview
+## Routes and releases
 
-LLM Routes are feature-gated and disabled by default unless Bahia is configured with `BAHIA_LLM_ENABLED=true`.
+A route names the stable inference endpoint and its routing policy. A release pins the model reference and serving configuration used by a deployment. Secret-backed request headers are stored as secret references; values are resolved only at apply time and are not published in route records.
 
-LLM Routes provide:
-- **Model registry** — Track LLM versions and configurations
-- **Release management** — Immutable versioned releases
-- **Deployment workflow** — Deploy with approvals
-- **State tracking** — Monitor active deployments
+MCP provides:
 
-The web console signs kind-`30900` intents for route creation, release
-registration, deployment, rollback, approval, and rejection. A pending badge
-remains until the service publishes a matching `30315` intent status or newer
-canonical state; relay acceptance alone does not mean the mutation succeeded.
+- Routes: `bahia_llm_list_routes`, `bahia_llm_create_route`, `bahia_llm_update_route`
+- Releases: `bahia_llm_register_release`, `bahia_llm_list_releases`
+- Operations: `bahia_llm_deploy`, `bahia_llm_approve_deployment`, `bahia_llm_reject_deployment`, `bahia_llm_rollback`
+- Assistant receipts: `bahia_assistant_llm_deploy`, `bahia_assistant_llm_approve_deployment`, `bahia_assistant_llm_rollback`
 
-## Gateway administration credentials
+The web controls publish signed LLM intents and follow bounded intent status plus canonical route, release, deployment, and observation records.
 
-Production gateway-manager credentials should be mounted as files rather than
-written into Bahia's configuration:
+## Deployment
 
-```yaml
-llm:
-  enabled: true
-  default_gateway_ref: fleet
-  gateways:
-    fleet:
-      type: http
-      base_url: http://bahia-litellm-adapter:8790
-      auth_token_file: /run/secrets/bahia-litellm-adapter-token
-      timeout: 10s
-```
+1. Create a route.
+2. Register a release with an immutable model reference.
+3. Select an environment and submit a deployment.
+4. Approve it when the environment or policy requires review.
+5. Follow observed serving state and drift.
 
-`auth_token_file` must be an absolute path. Bahia reads it once during startup,
-trims surrounding whitespace, and fails startup if the file is missing or
-empty. `auth_token` remains available for compatibility, but the two settings
-are mutually exclusive.
+An accepted request is not proof that the gateway serves the release. Confirm the canonical deployment state and an observation from the configured adapter. Rollback selects a known release for the same route and environment.
 
-## Signed deployment operations
+## Gateway credentials
 
-With `llm` enabled by default (unless in `nostr.intent_domains_disabled`), fleet operators can publish kind `30900` LLM intents: `deploy` (`route_id`, `environment_id`, `release_id`), `rollback` (`route_id`, `environment_id`), and `approve`/`reject` (`deployment_intent_id`, preferably with `expected_updated_at`). Bahia uses the same LLM registry transitions as the legacy operator path and reports admission through bounded kind `30315` intent status. Disabling the domain rejects these intents; it does not restore a ContextVM mutation path.
-
-## Key Concepts
-
-### Route
-
-A **Route** is an LLM inference endpoint definition:
-
-```yaml
-name: "gpt4-proxy"
-description: "GPT-4 API proxy route"
-model_family: "openai"
-```
-
-### Release
-
-A **Release** is an immutable, versioned configuration:
-
-```yaml
-route_id: "route-123"
-version: "v1.2.0"
-config:
-  model: "gpt-4-turbo"
-  max_tokens: 4096
-  temperature: 0.7
-```
-
-External releases can optionally set the LiteLLM provider-native model identifier
-in the **LiteLLM provider model** field. Bahia stores it as
-`metadata.litellm_model`; the LiteLLM adapter uses it instead of constructing an
-OpenAI-compatible `api_base` backend. For example, an OpenRouter release can use:
-
-```text
-openrouter/anthropic/claude-sonnet-4
-```
-
-Leave the field blank for Routstr and other OpenAI-compatible base URL backends.
-
-### Secret-backed request headers
-
-Route releases can define literal `headers` and secret references in `header_secret_refs`. External health probes use the corresponding `health_headers` and `health_header_secret_refs` fields. The same header name cannot appear as both a literal and a secret reference.
-
-Bahia resolves secret references only while applying a release or probing health, records the resolution in audit data, and persists the reference rather than plaintext. In the web release form, use the **Authorization secret UUID** and **Health authorization secret UUID** controls instead of pasting bearer tokens into route metadata.
-
-### Deployment
-
-Deploying a release to an environment makes it live.
-
-## Creating LLM Routes
-
-### Web UI and CLI
-
-LLM route creation is a signer-first ContextVM operation. Clients publish `llm/route-create` as Nostr kind `25910`, usually inside encrypted `1059`/`21059` when the payload is sensitive, and follow canonical observables for durable truth. Transitional REST `POST /api/v1/llm/routes` is available only when LLM is enabled, operational REST is enabled, authentication is enabled, a non-empty operator allowlist is configured, and a control-plane command publisher is configured. Even then it publishes the signed `llm/route-create` command, verifies relay `OK` acceptance, and returns a `202` command receipt rather than a synchronous route domain object.
-
-### MCP Tool
-
-```json
-{
-  "tool": "bahia_llm_create_route",
-  "arguments": {
-    "name": "gpt4-proxy",
-    "model_family": "openai"
-  }
-}
-```
-
-Returns Nostr correlation metadata:
-```json
-{
-  "request_event_id": "...",
-  "method": "llm/route-create",
-  "observable_kinds": [30900, 30315, 4903],
-  "route_id": "route-123"
-}
-```
-
-## Creating Releases
-
-### Web UI and CLI
-
-LLM release registration is a signer-first ContextVM operation. Use `llm/release-register` and follow `30900`, `30315`, and `4903` observables scoped by route and release.
-
-### MCP Tool
-
-```json
-{
-  "tool": "bahia_llm_register_release",
-  "arguments": {
-    "route_id": "route-123",
-    "version": "v1.2.0",
-    "config": {
-      "model": "gpt-4-turbo",
-      "max_tokens": 4096
-    }
-  }
-}
-```
-
-## Deploying LLM Routes
-
-### Web UI
-
-1. Go to route detail
-2. Select a release
-3. Click **Deploy**
-4. Choose environment
-5. Click **Create Deployment**
-
-The current CLI does not register a top-level `bahia llm` command. Use the web UI, MCP tools, or signer-first Nostr flows instead.
-
-### MCP Tool
-
-```json
-{
-  "tool": "bahia_llm_deploy",
-  "arguments": {
-    "route_id": "route-123",
-    "release_id": "release-456",
-    "environment_id": "env-789"
-  }
-}
-```
-
-### Legacy Nostr (ContextVM)
-
-Legacy clients that have not migrated to signed kind-`30900` intents may still publish a ContextVM `llm/deploy` request. The web console does not use this path:
-
-```json
-{
-  "kind": 25910,
-  "content": "{\"jsonrpc\":\"2.0\",\"id\":\"llm-deploy-route-123-env-789\",\"method\":\"llm/deploy\",\"params\":{\"route_id\":\"route-123\",\"release_id\":\"release-456\",\"environment_id\":\"env-789\",\"_meta\":{\"progressToken\":\"llm-deploy-route-123-env-789\"}}}",
-  "tags": [
-    ["p", "<bahia-service-pubkey>"],
-    ["method", "llm/deploy"],
-    ["route", "route-123"],
-    ["release", "release-456"],
-    ["environment", "env-789"]
-  ]
-}
-```
-
-## Approving LLM Deployments
-
-If the environment requires approval:
-
-### Web UI
-
-1. Go to **LLM** → **Pending Approvals**
-2. Review deployment details
-3. Click **Approve** or **Reject**
-
-The current CLI does not register `bahia llm approve` or `bahia llm reject`. Use the web UI, MCP tools, or signer-first Nostr approval/rejection flows instead.
-
-### Nostr
-
-The web console publishes signed kind-`30900` `llm/approve` or `llm/reject` intents and follows scoped `30315` status and canonical observables. Legacy clients may still use ContextVM `llm/approve` or `llm/reject`.
-
-## Rolling Back
-
-### Web UI
-
-1. Go to route detail
-2. Find previous successful deployment
-3. Click **Rollback to this release**
-
-The current CLI does not register a top-level `bahia llm rollback` command. Use the web UI, MCP tools, or signer-first Nostr flows instead.
-
-### MCP Tool
-
-```json
-{
-  "tool": "bahia_llm_rollback",
-  "arguments": {
-    "route_id": "route-123",
-    "environment_id": "env-789"
-  }
-}
-```
-
-## Viewing LLM State
-
-Use the web UI, MCP tools, and canonical Nostr observables for current LLM route state. The current CLI does not register `bahia llm state`, `bahia llm routes`, or `bahia llm releases` commands.
-
-## Canonical Observables
-
-LLM state is published as canonical Nostr observables:
-
-| Kind | Tags | Content |
-|------|------|---------|
-| `30900` | `d`, `domain=llm`, `schema`, `route`, optional `environment`/`release` | Route registry, release, and route/environment state projections |
-| `30315` | `status`, `route`, optional `environment`/`release`/`intent`, correlation `e` | Deployment progress and operational status |
-| `4903` | requester `p`, resource tags, correlation `e` | Audit, approval, and provenance facts |
-
-Subscribe for real-time updates:
-
-```json
-{
-  "kinds": [30900, 30315, 4903],
-  "authors": ["<bahia-service-pubkey>"],
-  "#route": ["route-123"]
-}
-```
-
-## Nostr Methods and Kinds
-
-| Surface | Contract | Description |
-|---------|----------|-------------|
-| Web mutation intent | Signed `30900` | Route creation, release registration, deploy, approve, reject, rollback |
-| Legacy client mutation | ContextVM `25910` (`1059`/`21059` when encrypted) | Existing `llm/*` methods for non-migrated clients |
-| Observable state | `30900` | Route, release, and route/environment projections |
-| Observable status/audit | `30315`, `4903` | Progress, approvals, terminal facts, and provenance |
-
-Historical `5971`-`5975`, `6973`, `7971`-`7973`, and `31964`/`31965` events are startup migration inputs only.
-
-## Best Practices
-
-1. **Version releases semantically** — Use semver (v1.2.3)
-2. **Document changes** — Note what changed in each release
-3. **Test before production** — Deploy to staging first
-4. **Monitor after deployment** — Check for errors
-5. **Use approvals for production** — Prevent accidental deploys
+Configure adapter administration through secret-backed files or references. Do not place gateway admin tokens or provider API keys in route content, release metadata, or browser configuration. If the adapter is unavailable, deployment status remains failed or pending according to the returned evidence; Bahia does not invent serving state.
 
 ## Troubleshooting
 
-### Route Not Deploying
-
-- Check release exists
-- Verify environment ID
-- Check approval status
-
-### Drift Detected
-
-- Worker may have restarted
-- Check runtime connectivity
-- Manual intervention may be needed
+- **No routes:** verify `llm.enabled` and relay catch-up.
+- **Deployment pending:** check approval and adapter connectivity.
+- **Drift:** compare desired release with the observed route state.
+- **Unauthorized:** confirm fleet/operator and organization permissions for the route's environment.
 
 ## Related
 
-- [Environments](environments.md) — Deployment targets
-- [Workers](workers.md) — LLM execution hosts
-- [ML Models](ml-models.md) — Generic AI/ML models
-
-## Canonical MCP reads
-
-`bahia_llm_list_releases` reads the daemon's canonical `30900` release family (`t=llm-release`). Release configuration is Fleet-OCK encrypted; the daemon decrypts it for authorized MCP callers.
+- [Environments](environments.md)
+- [ML Models](ml-models.md)
+- [Policies](policies.md)

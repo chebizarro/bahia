@@ -1,102 +1,32 @@
 # Fleet Health
 
-Fleet Health is Bahia's resource-pressure operations view. It turns worker telemetry, admission posture, and cleanup lifecycle state into a single fleet map so operators can decide whether to deploy, clean up, cordon, or investigate.
+**Fleet Health** (`/fleet-health`) summarizes runtime pressure, cleanup candidates, cleanup executions, and operational state across the fleet.
 
 ## What it shows
 
-Open **Operations → Fleet Health** in the web app.
+The page combines trusted worker observations and service-authored control-plane records. It shows pressure by target, reclaimable resources, cleanup mode, recent cleanup results, and health summaries. Missing or stale evidence is unknown, not healthy.
 
-The page contains:
+Workers return scan candidates and pressure measurements only for a Bahia-authored request addressed to that worker. Bahia checks the authenticated response author, request event tag, and JSON-RPC correlation ID before accepting it.
 
-- **Fleet weather map** — workers grouped into pressure lanes:
-  - `blocked`: normal deployments should be denied.
-  - `cleanup_only`: cleanup is required before normal placement.
-  - `reduced`: deploy cautiously and preserve continuity reserve.
-  - `open`: normal scheduling capacity.
-- **Topology pressure cards** — each worker card shows liveness, capacity class, pressure level, recommended action, dominant pressure signal, telemetry chips, assignment count, and active cleanup state.
-- **Cleanup status/history** — durable cleanup execution state projected from Bahia cleanup orchestration events.
-- **Action rail** — prioritized blocked, cleanup-needed, and missing-telemetry workers.
+## Cleanup
 
-## Cleanup mode flow
+A cleanup preview identifies reclaimable images, containers, volumes, or other supported resources without changing the target. Applying cleanup creates a governed operation whose scope and mode are visible in status and audit records.
 
-Fleet Health and Workers both use the same cleanup dialog.
-
-Available modes:
-
-| Mode | Use when | Behavior |
-|------|----------|----------|
-| `reclaimable_only` | Normal storage pressure remediation | Prunes reclaimable local runtime material while preserving Bahia protected refs. |
-| `aggressive` | Operator-approved deeper cleanup | Requires explicit confirmation and still preserves continuity and standby artifacts protected by Bahia policy. |
-
-Submitting the dialog publishes an encrypted ContextVM `worker/cleanup` intent. The ContextVM response is only an acknowledgment. Durable progress comes from Nostr cleanup state projections.
-
-## Nostr state
-
-Fleet Health consumes:
-
-- Loom worker advertisements, kind `10100`, for host telemetry and capability state.
-- Bahia canonical state, kind `30900`, schema `bahia.state.worker.v1`, for worker scheduling and pressure projections.
-- Bahia canonical state, kind `30900`, schema `bahia.state.worker-cleanup.v1`, for cleanup lifecycle history.
-
-Cleanup state tags include:
-
-```json
-[
-  ["d", "worker:cleanup:<worker-pubkey>:<loom-job-or-start-time>"],
-  ["domain", "worker"],
-  ["schema", "bahia.state.worker-cleanup.v1"],
-  ["worker", "<worker-pubkey>"],
-  ["status", "completed"],
-  ["cleanup_mode", "reclaimable_only"]
-]
+```bash
+bahia workers cleanup <worker-pubkey> --mode reclaimable_only --reason "capacity pressure"
+bahia workers cleanup-orphans
+bahia workers cleanup-orphans --apply
 ```
 
-Cleanup state content includes `cleanup_id`, `worker_pubkey`, `cleanup_mode`, `reason`, `loom_job_id`, `protected_refs`, `target_free_gb`, `status`, `capacity_rejected`, `error`, `started_at`, `completed_at`, and `updated_at`.
-
-## Fleet hygiene policy
-
-The optional hygiene runner is configured with an enable flag, policy file, interval, and worker scope. Policy files use schema `hygiene/v1` and require absolute `scan_roots` and `protected_paths`. Defaults are 85% disk pressure, 90% inode pressure, and 14-day retention.
-
-Tier-one automation may quarantine duplicate or cruft material and run garbage collection when enabled by policy. Relocation and purge remain operator-controlled tier-two actions; Bahia does not perform them automatically.
-
-Scan candidates and pressure measurements arrive as canonical JSON-RPC results in the worker's NIP-59-wrapped ContextVM kind-25910 response. Bahia accepts an observation only when the authenticated inner author is the worker targeted by the exact Bahia-authored request rumor and both the response `e` tag and JSON-RPC id match that request. Scan and pressure freshness are evaluated independently against the reconcile pass start time.
-
-Canonical scan results may declare `truncated=true` when the worker's bounded candidate cap elides findings. Bahia records the observation but suppresses all candidate quarantine from that partial list; an independently valid pressure observation may still trigger policy-authorized garbage collection.
+Use aggressive mode only after reviewing the candidate set. Cleanup is not a substitute for retention policy or managed ownership.
 
 ## Metrics and alerts
 
-Fleet telemetry exports these operator-facing gauges:
+Fleet health metrics report the current projected state by domain and status. Alert on sustained unhealthy or unknown counts, repeated cleanup failures, stale worker advertisements, and relay delivery warnings. Confirm an alert against canonical relay records before treating a single in-memory metric as complete evidence.
 
-- `bahia_worker_capacity_class_workers{class="open|reduced|cleanup_only|blocked"}`
-- `bahia_worker_telemetry_freshness_workers{state="fresh|stale|absent"}`
-- `bahia_worker_heartbeat_lag_seconds{worker="..."}`
-- `bahia_worker_pressure_recommendations{action="none|cleanup_recommended|operator_intervention"}`
-- `bahia_fleet_health_drift_states{status="..."}`
-- `bahia_fleet_health_drift_age_seconds_max`
-- `bahia_fleet_health_drift_stuck`
-- `bahia_fleet_health_services{health="..."}`
-- `bahia_fleet_health_entities`
-- `bahia_fleet_health_nostr_entities{domain="...",status="healthy|degraded|unhealthy|unknown"}`
-- `bahia_fleet_health_nostr_heartbeat_lag_seconds{entity="..."}`
-- `bahia_fleet_health_projector_subscription_active`
-- `bahia_fleet_health_projector_caught_up`
-- `bahia_fleet_health_projector_last_event_timestamp_seconds`
-- `bahia_fleet_health_projector_last_ingested_timestamp_seconds`
-- `bahia_fleet_health_projector_relay_closed_total`
-- `bahia_fleet_health_projector_errors_total`
+## Related
 
-The `nostr` gauges are projected directly from validated, persisted relay events of kinds `30315`, `30316`, `30317`, `30900`, and `4903`. Relay subscription and catch-up gauges deliberately remain separate from subject-health gauges: losing the relay says the observer is impaired, not that every observed agent or service failed. Labels are fixed domains and normalized health states; heartbeat entities use fixed-width signer pubkeys, and event content and coordinates are never exported as labels.
-
-The fixed `domain` label values are `agent`, `worker`, `service`, `deployment`, `runtime`, `route`, `relay`, and `control_plane`. The `route` domain counts managed-route canary state: one entity per route coordinate, projected from the route canary `30315` status and `30900` state. So `bahia_fleet_health_nostr_entities{domain="route",status="unhealthy"}` is the number of open route outages, and `status="degraded"` counts routes failing below the outage threshold or carrying a warning such as an expiring certificate. Route outages are counted separately from the `runtime` domain of the containers behind them. A route can be `unhealthy` while its container is `healthy`, which is the service-up, route-down condition described in [Route Canaries](route-canaries.md). Route `4903` audit facts are transition history and do not add route entities.
-
-Bahia's own observables count too. The projector observes every validated, persisted event, including relay echoes of events this Bahia instance published. Because it sees every delivery (relay echoes, reconnect overlap, and one copy per relay), redelivering an event never moves a gauge or counter: entity state only changes for a newer event, and `bahia_fleet_health_projector_errors_total` counts each rejected event ID once. The projection is held in memory and is not replayed from relay history on restart, so after a restart subject gauges fill in as new observables arrive - for domains where state is republished on every observation. That does not hold for the `route` domain: route state is published only on transitions and in-memory dedupe suppresses redelivery, so an already-open route outage is not re-published merely because the projector restarted, and its gauge will not recount it until the route next changes state. A follow-up is filed to close this restart gap.
-
-Only node, process, and GPU exporters are scraped directly. Semantic fleet state must arrive through signed Nostr observables rather than polling Bahia's database read models.
-
-Use the shipped WS6 alert rules and Grafana dashboards to interpret these metrics together; a single pressure gauge is a scheduling signal, not proof of host failure.
-
-## Operational model
-
-Bahia owns pressure intelligence, admission policy, cleanup recommendations, and orchestration. Workers own local execution: image pruning, stopped container cleanup, cache eviction, log vacuuming, and runtime-local storage management.
-
-Fleet Health intentionally does not SSH into hosts or expose arbitrary shell execution. Cleanup is requested through Bahia's Nostr-native mutation path and verified through canonical observables.
+- [Workers](workers.md)
+- [Instance Health](instance-health.md)
+- [Route Canaries](route-canaries.md)
+- [Troubleshooting](../troubleshooting.md)
