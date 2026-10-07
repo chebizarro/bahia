@@ -71,6 +71,32 @@ redelivery paths), and a flagged coordinate does not make the daemon unready —
 the state is committed and served locally, and operators need the daemon up to
 act on it.
 
+## Outbound admission
+
+Every delivery round crosses the process-wide outbound admission controller
+(`internal/nostrout`; [runbook](../runbooks/nostr-outbound-admission.md))
+before relay I/O. Admission refusal — a lane, aggregate, or per-relay wire
+budget, the shared rate-limit circuit breaker, the operator kill switch, or
+controller capacity — **skips** the round:
+
+- A skipped round does not count against the bounded attempt budget, does not
+  write per-relay state, and cannot abandon the entry or set an undelivered
+  marker. Admission is back-pressure, not abandonment: a kill switch left on
+  for a day leaves entries pending for a day, and delivery resumes where it
+  stopped when the gate lifts.
+- The round is rescheduled about one second out, jittered, so a restart's
+  hydration of a large pending outbox cannot resynchronize into a burst when
+  capacity returns.
+- A process-wide gate (kill switch, open circuit, exhausted capacity) stops
+  the whole redelivery pass at the first refusal; a lane budget refusal only
+  skips the affected entries, because another lane may still have capacity.
+- `PublishBeforeCommit` keeps its reversed order: a refused round queues
+  nothing, the caller gets an error, and the producer commits nothing.
+
+Abandonment therefore still means exactly what it always meant — permanent
+relay rejections or a spent attempt budget — and both remain relay-reported
+outcomes, never controller-side ones.
+
 ## Operator surfaces
 
 | Surface | Purpose |

@@ -39,6 +39,17 @@ must report the same full `commit` embedded in the source image. A missing,
 `dev`, short, or mismatched commit fails deployment. Preserve the previous
 binary until relay reconnection and one encrypted DNS request/response pass.
 
+The agent's publications (health status, DNS requests) cross the same
+process-wide outbound admission controller as the Bahia server, with the same
+bounded defaults: per-lane and aggregate event budgets, a per-relay wire
+budget, a shared rate-limit circuit breaker, and duplicate suppression.
+`healthz` reports the controller's content-free counters under
+`outbound_admission`. For the emergency kill switch, point
+`BAHIA_NOSTR_OUTBOUND_KILL_SWITCH_FILE` at a root-controlled local file and
+write `stop` into it; the agent rejects every new publication before relay
+I/O while that content is present, and an unreadable configured file fails
+closed. See `docs/runbooks/nostr-outbound-admission.md`.
+
 ## OpenWrt (procd)
 
 Use [`bahia-dns-agent.init`](bahia-dns-agent.init). OpenWrt's default dnsmasq
