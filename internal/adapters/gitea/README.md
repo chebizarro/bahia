@@ -44,7 +44,7 @@ guarantee with explicit uncertainty, not a distributed transaction or a
 guarantee of eventual completion. Do not mint a different request to bypass an
 unknown outcome; restore/inspect the original relay evidence first.
 
-## Credential boundary (bahia-xjdo9)
+## Credential boundary
 
 Initiation has exactly one database dependency: resolving the upstream
 repository credential (`CredentialRef`) and the fleet mirror-read password

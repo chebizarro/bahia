@@ -35,7 +35,7 @@ detects drift, and records every change as relay-verifiable evidence.
 
 The architecture ratchet (`make lint-arch`, also run by `go test ./...` and
 `pnpm run test:unit`; see [ratchets](architecture/ratchets.md)) enforces
-these: no legacy kind numbers outside
+these: no retired catalog-kind literals outside
 `internal/nostrmigration`, no direct library relay subscriptions outside the
 relay pool and SoulFactory bus, no unannotated poll tickers in
 `internal/service`/`internal/reconcile`, no test-only exports in `internal/`,
@@ -123,9 +123,9 @@ and supports NIP-45 COUNT and NIP-77 negentropy. Details:
 
 The daemon starts without PostgreSQL (`postgres cache unavailable; continuing
 with relay-first reduced tier`): it serves health and readiness, discovery,
-the relay-only families above, MCP store reads and ContextVM RPC. Families
-whose index is PostgreSQL are unavailable until it is reachable; HTTP routes
-backed by those repositories answer `503`. A `database-recovery` runner
+the relay-only families above and ContextVM RPC. The HTTP MCP endpoint and
+families whose index is PostgreSQL are unavailable until the database is
+reachable; dependency-gated HTTP routes answer `503`. A `database-recovery` runner
 reconnects when PostgreSQL returns.
 
 ### Operating modes

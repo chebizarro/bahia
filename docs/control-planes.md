@@ -11,7 +11,7 @@ the HTTP routes are in the [HTTP reference](api.md); the relay sidecar in
 | Surface | Transport | Used by | Writes | Reads |
 |---|---|---|---|---|
 | Relay subscriptions | NIP-01 REQ against the relay sidecar and configured relays | web, CLI, MCP, the daemon, agents | — | all canonical state, status, audit, discovery |
-| Signed intents | kind `30900` `t=bahia-intent` published to the ContextVM relay set | web, CLI (`bahia …` mutation commands), MCP tools (in-process) | every mutation | — |
+| Signed intents | kind `30900` `t=bahia-intent` published to the ContextVM relay set | web, CLI (`bahia …` mutation commands), MCP tools (in-process) | control-plane entity mutations | — |
 | ContextVM RPC | kind `25910` gift-wrapped to the service pubkey | web (secret reveal, assistant), CLI (`bahia logs run`) | — | secret reveal, run-log fetch, assistant turns |
 | MCP | JSON-RPC over HTTP at `POST /mcp` | agents and tooling with an NIP-98 signer | intent tools (signed in-process by the caller's key) | store-read tools answered from the daemon's local event store |
 | HTTP | `GET /health`, `GET /ready`, `/metrics`, `/v2/*` (OCI), a small set of `/api/v1` routes | probes, Docker clients, browsers downloading blobs, operators | SBOM ingest, maintenance windows, legacy-agent reconciliation | virtualization resources, logs, payments, config-fabric drift, Blossom blobs |
@@ -52,7 +52,7 @@ several purposes, but each purpose has its own configuration key, its own
 |---|---|---|---|
 | Browser bootstrap and read models | `nostr.browser_relays` | `30002` `d=bahia-browser-v1` | public read models; required when the sidecar is enabled |
 | Intents and ContextVM | `nostr.contextvm_relays` (falls back to browser relays) plus the sidecar URL | `30002` `d=bahia-contextvm-v1`; `10002` `read` entries | where the daemon subscribes for intents and RPC and publishes replies |
-| Service publication and backfill | `nostr.service_relays` (`nostr.relays` is the same list under its older key) | `30002` `d=bahia-service-v1`; `10002` `write` entries | where the daemon's own records go beyond the sidecar |
+| Service publication and backfill | `nostr.service_relays` (`nostr.relays` supplies the list when this key is empty) | `30002` `d=bahia-service-v1`; `10002` `write` entries | where the daemon's own records go beyond the sidecar |
 | Sidecar | `nostr.sidecar.backend_url` (daemon side), `nostr.sidecar.public_url` (clients) | — | the daemon publishes canonical observables to the sidecar pool |
 | Loom workers | `loom.relays` | — | worker advertisements, job requests, status and results |
 | NIP-34 repositories | `nostr.nip34_relays` plus the repository's own `30617` relay hints | — | repository operations prefer the repository's hints |

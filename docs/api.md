@@ -4,9 +4,9 @@ The daemon listens on `server.host:server.port` (default `127.0.0.1:8080`).
 HTTP is one narrow surface of Bahia: health and readiness probes, Prometheus
 metrics, the OCI distribution API, MCP over HTTP, and a small set of
 `/api/v1` routes for things that are HTTP-native (streamed logs, blob
-downloads, an SBOM upload) or operator-authenticated maintenance. Everything
-else — every create, update and delete, and every read of control-plane
-state — goes over Nostr ([control planes](control-planes.md),
+downloads and an SBOM upload), operator maintenance, payment reads and
+virtualization projections. Control-plane entity mutations and the primary
+state-read path use Nostr ([control planes](control-planes.md),
 [event specification](event-spec.md)).
 
 The routing table is `internal/api/router/router.go`; any route not listed
@@ -18,7 +18,8 @@ here, including every other method on a listed path, returns `404`.
   `/api/v1` route require `Authorization: Nostr <base64 NIP-98 event>`.
   `Bearer` tokens are rejected with `401`. Every `/api/v1` caller must be a
   bootstrap owner (`auth.bootstrap_owner_pubkeys`) or a member of at least
-  one organization. Routes marked *admin* additionally require the `admin`
+  one organization. Virtualization handlers always require an authenticated
+  principal and tenant authorization, even when global HTTP auth is disabled. Routes marked *admin* additionally require the `admin`
   platform role in an organization; routes marked *org* require membership
   in the resource's organization (and the listed permission).
 - Per-IP rate limits: 100 requests/minute on read routes, 30/minute on write
@@ -49,7 +50,7 @@ health should probe `/health`; traffic gates should probe `/ready`.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/mcp` | NIP-98, *admin*, *db* | MCP JSON-RPC (`tools/list`, `tools/call`, `resources/*`, `prompts/*`). Intent tools sign a `30900` intent with the caller's identity and return `{"status","intent_id","event_id","status_kind","status_coordinate",…}`; store-read tools answer from the local event store |
+| POST | `/mcp` | NIP-98 when enabled, *admin*, *db* | MCP JSON-RPC (`tools/list`, `tools/call`, `resources/*`, `prompts/*`). Intent tools sign a `30900` intent with the caller's identity and return `{"status","intent_id","event_id","status_kind","status_coordinate",…}`; store-read tools answer from the local event store |
 
 Tool names and arguments: [MCP tools reference](user-guide/mcp-tools.md).
 
@@ -77,7 +78,7 @@ resolved from NIP-98 (`Authorization: Nostr …`), HTTP Basic for
 | GET | `/api/v1/deployments/runs/{id}/cost` | NIP-98 | Cost of a run from the daemon's canonical payment records (no PostgreSQL needed) |
 | GET | `/api/v1/payments/history` | NIP-98 | Payment records. Query `worker` (required), `limit` (default 50, max 250) |
 | GET | `/api/v1/config-fabric/drift` | NIP-98, *admin*, *db* | Desired versus applied Config Fabric status per target |
-| GET | `/api/v1/blossom/blob/{hash}` | NIP-98 | Proxy download of a content-addressed Blossom blob (lets an HTTPS page fetch from an HTTP Blossom server). Mounted when `blossom.enabled` |
+| GET | `/api/v1/blossom/blob/{hash}` | NIP-98 when enabled | Proxy download of a content-addressed Blossom blob (lets an HTTPS page fetch from an HTTP Blossom server). Mounted when `blossom.enabled` |
 
 ### Writes
 

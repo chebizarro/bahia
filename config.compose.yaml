@@ -15,6 +15,7 @@ nostr:
     event_retention: 0s # regular events (e.g. 4903 audits) are durable; set a duration to cap them
     request_retention: 24h
     max_query_limit: 2000
+    read_auth_mode: enforce # NIP-42 for protected kinds/topics; code default is enforce
 
 reconcile:
   enabled: true

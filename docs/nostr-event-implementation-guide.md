@@ -50,7 +50,7 @@ A new kind number requires a written justification that its relay behaviour
 
 1. **Constants, not literals.** Kinds and topics come from `internal/kinds`
    (and `cascadia-go` for Cascadia kinds). The architecture ratchet
-   (`make lint-arch`) rejects numeric legacy kinds outside
+   (`make lint-arch`) rejects retired catalog-kind literals outside
    `internal/nostrmigration`.
 2. **A `#t` topic** on every new `30900` family, live records and tombstones
    alike, and a public/protected classification in

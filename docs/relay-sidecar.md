@@ -159,13 +159,11 @@ events and `EOSE`.
   one process per `data_dir`; a second one fails after two seconds with
   `is another relay process using this data_dir?`. A `SIGHUP` reload shares
   the open database between the outgoing and replacement runtime.
-- A `data_dir` that still holds an `events.sqlite` from an earlier store
-  format is imported once at startup before the relay serves traffic
-  (`relay sidecar importing legacy SQLite event store` … `imported` with
-  `rows`, `imported`, `already_present`, `skipped_invalid`,
-  `skipped_oversize`). The result is recorded in `events.bolt`; the SQLite
-  file is left in place and can be deleted once the new store has served a
-  retention cycle.
+- When `data_dir/events.sqlite` is present, startup imports it once before the
+  relay serves traffic. The summary reports `rows`, `imported`,
+  `already_present`, `skipped_invalid` and `skipped_oversize`. Imported rows
+  are recorded in `events.bolt`; the SQLite source remains in place so the
+  operator can retain or remove it after verifying the bbolt store.
 - Queries use indexes on kind, author, kind+author, `created_at` and
   single-letter tags; `COUNT` uses the same indexes. Tag values the
   eventstore does not index (empty, or longer than 100 bytes, such as `#a`

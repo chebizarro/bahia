@@ -506,19 +506,18 @@ rationale is in [entity identity](architecture/entity-identity.md).
 - Do not poll HTTP or MCP for completion of anything that has a canonical
   observable.
 
-## 12. Historical event conversion (`bahia-migrate nostr`)
+## 12. Event-store import (`bahia-migrate nostr`)
 
-`bahia-migrate nostr` (`internal/nostrmigration`) converts events of retired
-Bahia kinds found in the local event store — and, with
-`nostr.legacy_relay_backfill: true`, on an external relay — into canonical
-events tagged `migration=bahia-nostr-native-v1`, `legacy-kind`,
-`migrated-from=<source event id>`, `schema`, `domain` and layer metadata,
+`bahia-migrate nostr` (`internal/nostrmigration`) converts recognized source events found in the local event store — and, with
+`nostr.legacy_relay_backfill: true`, on an explicitly configured import relay —
+into canonical events tagged `migration=bahia-nostr-native-v1`,
+`legacy-kind`, `migrated-from=<source event id>`, `schema`, `domain` and layer metadata,
 signed with the service key and published to the configured relays. It skips
 targets that already carry `migrated-from` for the source, requires `EOSE`
 from any backfill relay and treats accepted or duplicate `OK` as success. It
 is idempotent; operators run it explicitly (the daemon never runs it) when
 they import an event store produced by another Bahia installation. See the
-[CLI reference](user-guide/cli-reference.md#legacy-nostr-event-migration-bahia-migrate-nostr).
+[CLI reference](user-guide/cli-reference.md).
 
 ## 13. In-process event types
 

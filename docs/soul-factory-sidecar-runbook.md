@@ -29,7 +29,7 @@ Pass this file through:
 -private-key-file /etc/bahia/soulfactory/sidecar.key
 ```
 
-`OPENCLAW_SOULFACTORY_PRIVATE_KEY` is rejected as deprecated; the error points to `OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE`. `SOULFACTORY_SIDECAR_NSEC` is not a recognized variable.
+Use `OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE`. Inline `OPENCLAW_SOULFACTORY_PRIVATE_KEY` and `SOULFACTORY_SIDECAR_NSEC` are rejected.
 
 ## 3. Configure the control wrapper
 
