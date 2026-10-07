@@ -22,6 +22,8 @@ import { controlStateSchema, workerRecordId } from '$lib/nostr/cp-state.js';
 import { getEventStore, getPool, getRelayUrls, getServicePubkeys, onStoreRefresh } from '$lib/nostr/boot.js';
 import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
 import { authState } from '$lib/stores/auth.js';
+import { operatorAllowlistFor, trustedOperatorAuthors } from '$lib/stores/operator-allowlist.svelte.js';
+import { OPERATOR_ALLOWLIST_SCOPE_CONTINUITY } from '$lib/nostr/kinds.gen.js';
 import { createPagedReader } from '$lib/nostr/store-first-backfill.js';
 import type { ContinuityAssessmentDTO, ContinuityRunDTO, ContinuityServiceStatusDTO } from '$lib/types/continuity';
 
@@ -126,14 +128,17 @@ function newestFirst(left: ContinuityNostrEvent, right: ContinuityNostrEvent): n
 // - 31400-31404 definitions, 38430/38431 failover/recovery commands and 30315
 //   continuity heartbeats are operator-authored. The daemon acts on them only
 //   when signed by `nostr.authorized_pubkeys` (worker identity is data inside a
-//   heartbeat, not its signing authority). The browser has no service-signed
-//   copy of that allowlist, so it trusts exactly one operator: the signed-in
-//   key. Another operator's definitions therefore do not shape this view; the
-//   service-signed 30351/30353 status does, whoever defined the service.
+//   heartbeat, not its signing authority). The daemon publishes that list as
+//   the fleet-OCK encrypted `operators:continuity` record (bahia-fbyo5), so a
+//   session holding the fleet OCK trusts the listed operators plus the
+//   signed-in key; a session without it trusts exactly one operator: the
+//   signed-in key. The service-signed 30351/30353 status is shown whoever
+//   defined the service.
 export function trustedContinuityAuthors(serviceAuthors = getServicePubkeys()) {
+  const signedIn = authState.status === 'authenticated' ? authState.pubkey || '' : '';
   return {
     serviceAuthors: normalizedPubkeys(serviceAuthors),
-    operatorAuthors: authState.status === 'authenticated' ? normalizedPubkeys([authState.pubkey || '']) : []
+    operatorAuthors: trustedOperatorAuthors(operatorAllowlistFor(OPERATOR_ALLOWLIST_SCOPE_CONTINUITY), signedIn)
   };
 }
 

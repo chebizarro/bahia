@@ -3,25 +3,48 @@ import { RELAY_OPERATOR_PUBKEY, RELAY_SERVICE_PUBKEY, signE2EEvent } from './e2e
 
 const tagValue = (event, name) => event.tags.find(tag => tag[0] === name)?.[1] || '';
 
-/** Subscribe before the UI action, then resolve only on a verified relay EVENT. */
+/**
+ * Subscribe before the UI action, then resolve only on a verified relay EVENT.
+ *
+ * Intents (`t=bahia-intent`) are a protected topic: with the test relay on the
+ * sidecar's default `read-auth=enforce` the first REQ is answered with an
+ * AUTH challenge and `CLOSED auth-required:`. The observer then authenticates
+ * as the relay's admitted service identity and issues the REQ again, exactly
+ * as a daemon-side subscriber would.
+ */
 export async function observeSignedIntent(relay, { kind = 30900, domain } = {}) {
   const connection = await Relay.connect(relay.wsUrl);
   let resolveIntent;
   let rejectIntent;
   let settled = false;
+  let authenticated = false;
+  let subscription;
   const event = new Promise((resolve, reject) => { resolveIntent = resolve; rejectIntent = reject; });
-  const subscription = connection.subscribe([{ kinds: [kind], ...(kind === 30900
+  const filter = { kinds: [kind], ...(kind === 30900
     ? { authors: [RELAY_OPERATOR_PUBKEY], '#t': ['bahia-intent'] } : {}),
-  ...(domain && kind === 30900 ? { '#domain': [domain] } : {}) }], {
-    onevent: candidate => {
-      if (!verifyEvent(candidate) || (domain && tagValue(candidate, 'domain') !== domain)) return;
-      settled = true;
-      resolveIntent(candidate);
-      subscription.close();
-    },
-    onclose: reason => { if (!settled) rejectIntent(new Error(`Intent subscription closed: ${reason}`)); }
-  });
-  return { event, close: () => { subscription.close(); connection.close(); } };
+  ...(domain && kind === 30900 ? { '#domain': [domain] } : {}) };
+  const subscribe = () => {
+    subscription = connection.subscribe([filter], {
+      onevent: candidate => {
+        if (!verifyEvent(candidate) || (domain && tagValue(candidate, 'domain') !== domain)) return;
+        settled = true;
+        resolveIntent(candidate);
+        subscription.close();
+      },
+      onclose: reason => {
+        if (settled) return;
+        if (/^auth-required:/i.test(reason) && !authenticated) {
+          authenticated = true;
+          connection.auth(template => Promise.resolve(signE2EEvent({ ...template, pubkey: RELAY_SERVICE_PUBKEY })))
+            .then(subscribe, error => rejectIntent(new Error(`Intent observer AUTH failed: ${error?.message || error}`)));
+          return;
+        }
+        rejectIntent(new Error(`Intent subscription closed: ${reason}`));
+      }
+    });
+  };
+  subscribe();
+  return { event, close: () => { subscription?.close(); connection.close(); } };
 }
 
 /** Publish a signed fixture and require a positive relay OK. */

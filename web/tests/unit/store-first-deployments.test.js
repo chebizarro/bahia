@@ -85,9 +85,9 @@ describe('W4-S1 deployment views from BahiaEventStore', () => {
     await vi.waitFor(() => expect(view.deploymentIntents).toEqual([expect.objectContaining({ id: 'intent-1', status: 'approved' })]));
   });
 
-  it('uses a single service-scoped read-model REQ that includes migrated topics', () => {
+  it('uses one public service-scoped read-model REQ that includes migrated topics (plus the protected REQ)', () => {
     subscriptions.initStoreFirstSubscriptions();
-    expect(context.pool.subscribe).toHaveBeenCalledTimes(1);
+    expect(context.pool.subscribe).toHaveBeenCalledTimes(2);
     const [{ filters }] = context.pool.subscribe.mock.calls[0];
     const stateFilter = filters.find((filter) => filter.kinds.includes(CAS_CONTROL_STATE));
     expect(stateFilter.authors).toEqual([servicePubkey]);

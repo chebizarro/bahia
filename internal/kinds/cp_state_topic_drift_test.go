@@ -66,6 +66,7 @@ var goCPStateTopics = map[string]string{
 	"SOUL_RUNTIME_POLICY":        CPStateTopicSoulRuntimePolicy,
 	"BLOSSOM_ADMIN":              CPStateTopicBlossomAdmin,
 	"BLOSSOM_BLOB":               CPStateTopicBlossomBlob,
+	"OPERATOR_ALLOWLIST":         CPStateTopicOperatorAllowlist,
 }
 
 func readGeneratedKindsJS(t *testing.T) string {

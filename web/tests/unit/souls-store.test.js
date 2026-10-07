@@ -337,6 +337,36 @@ describe('Souls Store', () => {
       expect(byKind(KINDS.SOUL_TEMPLATE).at(-1)).toEqual([service, operator]);
     });
 
+    // bahia-fbyo5: the daemon's decrypted `operators:soul-factory` allowlist
+    // widens the operator unit to the other authorized operators; without it
+    // (no record, no fleet OCK) only the signed-in key is trusted.
+    it('trusts the allowlisted Soul Factory operators plus the signed-in key once the allowlist is readable', async () => {
+      const allowlistModule = await import('../../src/lib/stores/operator-allowlist.svelte.js');
+      const otherOperator = 'f'.repeat(64);
+      bootMock.store.events.push(
+        event(KINDS.SOUL_DRAFT, 'draft-mine', operator),
+        event(KINDS.SOUL_DRAFT, 'draft-theirs', otherOperator),
+        event(KINDS.SOUL_DRAFT, 'draft-stranger', stranger)
+      );
+      signIn();
+      await startSoulFactory();
+      expect(soulsModule.trustedSoulAuthors().operator).toEqual([operator]);
+      expect(soulsModule.drafts.map((row) => row.id || row.agentId || row.draftId)).toHaveLength(1);
+
+      allowlistModule.operatorAllowlists['soul-factory'] = [otherOperator, operator];
+      soulsModule.reprojectSoulFactoryForOperator();
+      expect(soulsModule.trustedSoulAuthors().operator).toEqual([operator, otherOperator]);
+      expect(soulsModule.drafts).toHaveLength(2);
+      const byKind = (kind) => requestedFilters().filter((filter) => filter.kinds.includes(kind)).map((filter) => filter.authors);
+      expect(byKind(KINDS.SOUL_DRAFT).at(-1)).toEqual([operator, otherOperator]);
+      expect(byKind(KINDS.SOUL_ACTION).at(-1)).toEqual([operator, otherOperator]);
+
+      allowlistModule.operatorAllowlists['soul-factory'] = null;
+      soulsModule.reprojectSoulFactoryForOperator();
+      expect(soulsModule.trustedSoulAuthors().operator).toEqual([operator]);
+      expect(soulsModule.drafts).toHaveLength(1);
+    });
+
     it('trusts a controller and pinned runtime keys only when a seeded service key attests them', async () => {
       bootMock.store.events.push(
         policy({ agent_runtimes: ['openclaw'], controller_pubkeys: [controller], runtime_pubkeys: { openclaw: [runtimeKey] } }),

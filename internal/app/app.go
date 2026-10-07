@@ -1911,11 +1911,20 @@ func New(cfg *config.Config) (*App, error) {
 				})
 			}
 		}
-		bgManager.RegisterWithOptions(&operationalViewsRunner{
+		// bahia-fbyo5: the operator allowlists are fleet-OCK encrypted, so they
+		// are only published when the confidential encryptor exists.
+		views := &operationalViewsRunner{
 			publisher: viewPublisher, blossom: blossomClient,
 			policy: soulRuntimePolicy(cfg.SoulFactory, soulFactoryRuntime),
 			owners: owners, logger: logger,
-		}, RunnerRequired(false))
+		}
+		if confidentialEncryptor != nil {
+			views.allowlists = nostrAdapter.NewOperatorAllowlistPublisher(nostrProjector, confidentialEncryptor, logger)
+			views.allowlistSets = operatorAllowlistSets(cfg)
+		} else {
+			logger.Warn("operator allowlist records not published: confidential encryptor unavailable")
+		}
+		bgManager.RegisterWithOptions(views, RunnerRequired(false))
 	}
 	var runLogService *runtime.LogService
 	var sbomOrchestrator *service.SBOMOrchestrator

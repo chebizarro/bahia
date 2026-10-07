@@ -303,7 +303,7 @@ signatures (32016), parsed artifact SBOMs (32017), one package per indexed
 record (32018), and latest runtime observations (32019). These are
 `legacy_kind` discriminators, not wire kinds. Release content is Fleet-OCK
 encrypted; signature/SBOM data is public; runtime observations omit arbitrary
-metadata and are classified protected (NIP-42 enforced in `read_auth_mode=enforce`). Live records and tombstones share their
+metadata and are classified protected (NIP-42 enforced; `read_auth_mode` defaults to `enforce`). Live records and tombstones share their
 addressable coordinates. See the
 [family table](nostr-event-implementation-guide.md#f74a-mcp-read-families-30900).
 

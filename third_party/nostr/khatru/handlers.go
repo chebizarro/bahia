@@ -277,6 +277,22 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 
+					// Bahia patch: a filter refused by OnCount answers CLOSED with
+					// the reason (NIP-45 allows CLOSED for a rejected COUNT) instead
+					// of a NOTICE followed by a misleading COUNT 0, and an
+					// "auth-required:" reason also issues the NIP-42 challenge,
+					// mirroring REQ.
+					if nil != rl.OnCount {
+						if rejecting, msg := rl.OnCount(ctx, env.Filter); rejecting {
+							reason := nostr.NormalizeOKMessage(msg, "blocked")
+							if strings.HasPrefix(reason, "auth-required:") {
+								RequestAuth(ctx)
+							}
+							ws.WriteJSON(nostr.ClosedEnvelope{SubscriptionID: env.SubscriptionID, Reason: reason})
+							return
+						}
+					}
+
 					var total uint32
 					var hll *hyperloglog.HyperLogLog
 

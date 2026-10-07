@@ -33,6 +33,7 @@ import {
   getCapabilities as getNip46Capabilities
 } from '$lib/nostr/nip46.js';
 import { normalizeRelayUrl, uniqueRelays } from '$lib/nostr/pool-utils.js';
+import { setRelayAuthSigner } from '$lib/nostr/relay-auth-signer.js';
 import { requestPersistentStorage } from '$lib/nostr/store-interface.js';
 import { stopRoleDerivation } from './auth-roles.svelte.js';
 
@@ -82,6 +83,10 @@ export function currentUser() {
 
 function updateAuthState(patch) {
   Object.assign(authState, patch);
+  // The relay sidecar requires NIP-42 for protected topics by default; the
+  // pool must be able to answer its AUTH challenge from the moment a session
+  // exists (persisted or fresh), and must stop once it ends.
+  setRelayAuthSigner(authState.status === 'authenticated' ? signWithAuth : null);
 }
 
 function transitionToAuthError(error) {
@@ -95,6 +100,7 @@ function transitionToAuthError(error) {
     capabilities: resolveAvailabilityCapabilities(extensionAvailable, nip46Available),
     error: error?.message || String(error)
   });
+  setRelayAuthSigner(null);
   resetEncryptedSignerProbe();
 }
 
@@ -616,6 +622,7 @@ export function logout() {
     nip46Available: authState.nip46Available,
     capabilities: authState.extensionAvailable ? getNip07Capabilities() : authState.nip46Available ? getNip46Capabilities() : {}
   });
+  setRelayAuthSigner(null);
   resetEncryptedSignerProbe();
 }
 

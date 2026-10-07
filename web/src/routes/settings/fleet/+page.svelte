@@ -3,6 +3,8 @@
   import LoadingButton from '$lib/components/LoadingButton.svelte';
   import { toast } from '$lib/components/toast.js';
   import { authState } from '$lib/stores/auth.js';
+  import { operatorAllowlistAvailable } from '$lib/stores/operator-allowlist.svelte.js';
+  import { OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY } from '$lib/nostr/kinds.gen.js';
   import {
     fleetRolloutStore,
     summarizeFleetRollout
@@ -169,9 +171,13 @@
   {#if authState.status !== 'authenticated'}
     <div class="status error">Sign in with a trusted Soul Factory operator key before publishing.</div>
   {:else}
-    <!-- The browser cannot verify soul_factory.authorized_pubkeys, so only the signed-in key is trusted for kind 31953. -->
+    <!-- Kind 31953 is trusted from the signed-in key, widened by the daemon's fleet-OCK encrypted Soul Factory operator allowlist when this session can decrypt it (bahia-fbyo5). -->
     <p class="muted" data-testid="fleet-operator-scope-note">
-      Only the fleet configuration signed by your key is shown. A configuration published by another operator is not shown here.
+      {#if operatorAllowlistAvailable(OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY)}
+        The newest fleet configuration signed by your key or by an authorized Soul Factory operator in the Bahia service's operator allowlist is shown.
+      {:else}
+        Only the fleet configuration signed by your key is shown. A configuration published by another operator is not shown here.
+      {/if}
     </p>
   {/if}
   {#if storeState.loading}<div class="status">Loading the latest operator-authored fleet document…</div>{/if}

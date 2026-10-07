@@ -984,7 +984,7 @@ artifact signatures (32016), parsed artifact SBOMs (32017), per-package SBOM
 index records (32018), and latest runtime observations (32019). The numbers
 are `legacy_kind` discriminators, not wire kinds. LLM releases are Fleet-OCK
 encrypted; signature/SBOM supply-chain records are public; runtime observations
-omit arbitrary metadata and are classified protected (NIP-42 enforced in `read_auth_mode=enforce`). Live records and
+omit arbitrary metadata and are classified protected (NIP-42 enforced; `read_auth_mode` defaults to `enforce`). Live records and
 tombstones use the same coordinate. See the
 [family table](../nostr-event-implementation-guide.md#f74a-mcp-read-families-30900).
 

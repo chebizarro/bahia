@@ -23,6 +23,7 @@ const mockPool = vi.hoisted(() => {
     subscribe: vi.fn().mockReturnValue(() => {}),
     addRef: vi.fn().mockReturnValue(() => {}),
     publishEvent: vi.fn().mockResolvedValue(undefined),
+    setSign: vi.fn(),
     destroy: vi.fn(),
   };
   return { createBahiaPool: vi.fn(() => pool), pool };
@@ -55,11 +56,13 @@ vi.mock('../../src/lib/nostr/relay-nip11.js', () => ({
 }));
 
 describe('boot.js', () => {
-  let boot, shutdown, getEventStore, getPool, getServicePubkey, getServicePubkeys, getRelayUrls, prefetchRelayLimits, onStoreRefresh, flushBatch;
+  let boot, shutdown, getEventStore, getPool, getServicePubkey, getServicePubkeys, getRelayUrls, prefetchRelayLimits, onStoreRefresh, flushBatch, setRelayAuthSigner;
 
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    ({ setRelayAuthSigner } = await import('../../src/lib/nostr/relay-auth-signer.js'));
+    setRelayAuthSigner(null);
     const mod = await import('../../src/lib/nostr/boot.js');
     boot = mod.boot;
     shutdown = mod.shutdown;
@@ -86,8 +89,22 @@ describe('boot.js', () => {
     expect(mockStore.store.open).toHaveBeenCalledOnce();
     expect(mockPool.createBahiaPool).toHaveBeenCalledWith({
       store: mockStore.store,
+      sign: null,
     });
     expect(mockRelayLimits.resolve).not.toHaveBeenCalled();
+  });
+
+  it('hands the relay-auth signer to the pool at creation and on every later change', async () => {
+    const signer = vi.fn();
+    setRelayAuthSigner(signer);
+    await boot();
+    expect(mockPool.createBahiaPool).toHaveBeenCalledWith({ store: mockStore.store, sign: signer });
+    expect(mockPool.pool.setSign).toHaveBeenLastCalledWith(signer);
+    setRelayAuthSigner(null);
+    expect(mockPool.pool.setSign).toHaveBeenLastCalledWith(null);
+    const later = vi.fn();
+    setRelayAuthSigner(later);
+    expect(mockPool.pool.setSign).toHaveBeenLastCalledWith(later);
   });
 
   it('prefetches NIP-11 once after boot without waiting for metadata', async () => {

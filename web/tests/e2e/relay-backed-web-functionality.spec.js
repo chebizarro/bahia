@@ -17,7 +17,12 @@ function attachRelayRuntimeErrorGuards(page) {
 
 test.describe.serial('relay-backed Bahia web functionality', () => {
   test.beforeAll(async () => {
-    relay = await startBahiaTestRelay();
+    // The relay runs the sidecar's production read policy (the harness
+    // default, spelled out here): protected topics (config-status,
+    // soul-factory-runtime-policy, audit, SBOM, Soul Factory kinds, ...)
+    // answer an unauthenticated REQ with CLOSED auth-required, so every page
+    // below must complete NIP-42 AUTH with the signed-in operator's key.
+    relay = await startBahiaTestRelay({ readAuth: 'enforce' });
   });
 
   test.afterAll(async () => {

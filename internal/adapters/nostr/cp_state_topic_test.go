@@ -88,6 +88,7 @@ var cpStateTopicsByFamily = map[int]string{
 	kinds.RouteCanaryRecord:                          kinds.CPStateTopicRouteCanary,
 	kinds.SoulRuntimePolicyRecord:                    kinds.CPStateTopicSoulRuntimePolicy,
 	int(kinds.CPStateFamilySoulFactoryAdapterLedger): kinds.CPStateTopicSoulFactoryAdapterLedger,
+	int(kinds.CPStateFamilyOperatorAllowlist):        kinds.CPStateTopicOperatorAllowlist,
 	kinds.BlossomAdminRecord:                         kinds.CPStateTopicBlossomAdmin,
 	kinds.BlossomBlobRecord:                          kinds.CPStateTopicBlossomBlob,
 }

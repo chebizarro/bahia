@@ -22,6 +22,7 @@
   import { initSBOMStoreBinding, teardownSBOMStoreBinding } from '$lib/stores/collections/sbom.svelte.js';
   import { initContinuityStoreBinding, reprojectContinuityForOperator, teardownContinuityStoreBinding } from '$lib/nostr/continuity';
   import { initSoulFactoryStoreBinding, reprojectSoulFactoryForOperator, teardownSoulFactoryStoreBinding } from '$lib/stores/souls.svelte.js';
+  import { initOperatorAllowlistBinding, operatorAllowlistSignature, teardownOperatorAllowlistBinding } from '$lib/stores/operator-allowlist.svelte.js';
   import { initOpsWidgetWallBinding, teardownOpsWidgetWallBinding } from '$lib/widgets/ops-widget-wall.js';
   import { eagerRelayConnect } from '$lib/stores/system.svelte.js';
   import { bootstrapAssistant, disconnectAssistant } from '$lib/stores/assistant.svelte.js';
@@ -83,6 +84,9 @@
         // Cached SoulFactory read models project now (continuity projects on
         // page mount); the relay readers start below, after boot's own REQs.
         initSoulFactoryStoreBinding({ relay: false });
+        // The daemon's fleet-OCK encrypted operator allowlists (bahia-fbyo5):
+        // decrypted records widen the trusted operator set below.
+        initOperatorAllowlistBinding();
         initOpsWidgetWallBinding();
       } catch (err) {
         console.warn('[layout] boot() failed:', err);
@@ -125,6 +129,7 @@
       teardownSBOMStoreBinding();
       teardownContinuityStoreBinding();
       teardownSoulFactoryStoreBinding();
+      teardownOperatorAllowlistBinding();
       teardownOpsWidgetWallBinding();
       stopRoleDerivation();
       disconnectControlplane();
@@ -133,19 +138,22 @@
   });
 
   // Starts the continuity and SoulFactory relay readers once boot has issued
-  // its own REQs, and re-syncs them whenever the signed-in operator (a trusted
-  // author for operator-signed kinds) changes.
+  // its own REQs, and re-syncs them whenever the trusted operator set (the
+  // signed-in operator plus the decrypted operator allowlists) changes.
   $effect(() => {
     void (authState.status === 'authenticated' ? authState.pubkey : '');
+    void operatorAllowlistSignature();
     if (!eventStoreReady || !historyReadersStarted) return;
     untrack(() => { initContinuityStoreBinding(); initSoulFactoryStoreBinding(); });
   });
 
-  // The signed-in operator is a trusted author for operator-signed kinds, so
-  // cached views are re-projected as soon as the session resolves — not gated
-  // on the readers above, which wait for the core REQs to be issued.
+  // The trusted operator set decides which operator-signed kinds are shown, so
+  // cached views are re-projected as soon as the session resolves or an
+  // allowlist becomes readable — not gated on the readers above, which wait
+  // for the core REQs to be issued.
   $effect(() => {
     void (authState.status === 'authenticated' ? authState.pubkey : '');
+    void operatorAllowlistSignature();
     if (!eventStoreReady) return;
     untrack(() => { reprojectContinuityForOperator(); reprojectSoulFactoryForOperator(); });
   });

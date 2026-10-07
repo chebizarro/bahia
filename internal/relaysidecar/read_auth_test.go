@@ -32,10 +32,16 @@ func TestIsPublicKind(t *testing.T) {
 		{"NIP-34 issue", nostr.KindIssue, true},
 		{"NIP-34 repo", nostr.KindRepositoryAnnouncement, true},
 		{"relay discovery", nostr.KindRelayDiscovery, true},
+		{"relay set discovery (30002, bootstrap)", nostr.Kind(kinds.RelaySetDiscovery), true},
+		{"NIP-17 DM relay list (10050)", nostr.KindDMRelayList, true},
+		{"NIP-38 status (30315)", nostr.Kind(kinds.NIP38Status), true},
 
 		// Protected kinds
 		{"CAS control state (30900)", nostr.Kind(30900), false},
 		{"application specific data (30078)", nostr.KindApplicationSpecificData, false},
+		{"CAS audit (4903)", nostr.Kind(kinds.CASAudit), false},
+		{"gift wrap (1059)", nostr.KindGiftWrap, false},
+		{"SoulFactory agent soul (31951)", nostr.Kind(kinds.SoulFactoryAgentSoul), false},
 		{"regular event", nostr.Kind(1), false},
 		{"text note", nostr.KindTextNote, false},
 		{"config status", nostr.Kind(30900), false},
@@ -98,6 +104,11 @@ func TestFilterNeedsAuth(t *testing.T) {
 		{
 			name:      "30900 with public topic is open",
 			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.DNSEndpointTopic}}},
+			needsAuth: false,
+		},
+		{
+			name:      "DNS agent zone sync is public like the other DNS topics",
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{"dns-zone-sync"}}},
 			needsAuth: false,
 		},
 		{
