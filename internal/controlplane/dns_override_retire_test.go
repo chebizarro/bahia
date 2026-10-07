@@ -12,7 +12,7 @@ import (
 
 // retirableOverrideStore is a minimal DNSPersistenceOperator stand-in whose
 // override read path mirrors the production SQL predicate
-// "expires_at IS NULL OR expires_at > now()", so retirement is observed exactly
+// "expires_at IS NULL OR expires_at > now", so retirement is observed exactly
 // as the reconciler would observe it.
 type retirableOverrideStore struct {
 	*recordingDNSOperator

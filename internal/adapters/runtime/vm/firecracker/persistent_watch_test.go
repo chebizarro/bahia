@@ -16,9 +16,9 @@ import (
 )
 
 // TestWatchPersistentFiresChangedOnHealthTransition verifies that the
-// fsnotify-based health re-probe fires changed() when the API socket state
+// fsnotify-based health re-probe fires changed when the API socket state
 // transitions (e.g. the VMM pauses), not just when the process exits.
-// This is the event-driven re-probe required by .40 item 5 / .63.
+// This is the event-driven re-probe required by.40 item 5 /.63.
 func TestWatchPersistentFiresChangedOnHealthTransition(t *testing.T) {
 	root, err := os.MkdirTemp("/tmp", "fcw-")
 	if err != nil {
@@ -73,7 +73,7 @@ func TestWatchPersistentFiresChangedOnHealthTransition(t *testing.T) {
 		})
 	}()
 
-	// Wait for the initial changed() call that WatchPersistent fires
+	// Wait for the initial changed call that WatchPersistent fires
 	// right after setup.
 	deadline := time.After(5 * time.Second)
 	for changeCount.Load() < 1 {
@@ -96,7 +96,7 @@ func TestWatchPersistentFiresChangedOnHealthTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait for the health-transition changed() call.
+	// Wait for the health-transition changed call.
 	deadline = time.After(5 * time.Second)
 	for changeCount.Load() <= initialCount {
 		select {
@@ -120,7 +120,7 @@ func TestWatchPersistentFiresChangedOnHealthTransition(t *testing.T) {
 }
 
 // TestWatchPersistentStillFiresOnProcessExit confirms that the enhanced
-// watcher still fires changed() when the process exits (regression guard).
+// watcher still fires changed when the process exits (regression guard).
 func TestWatchPersistentStillFiresOnProcessExit(t *testing.T) {
 	root, err := os.MkdirTemp("/tmp", "fcw-")
 	if err != nil {
@@ -169,7 +169,7 @@ func TestWatchPersistentStillFiresOnProcessExit(t *testing.T) {
 		})
 	}()
 
-	// Wait for initial changed().
+	// Wait for initial changed.
 	deadline := time.After(5 * time.Second)
 	for changeCount.Load() < 1 {
 		select {
@@ -186,7 +186,7 @@ func TestWatchPersistentStillFiresOnProcessExit(t *testing.T) {
 	procs.exitByMarker(socket)
 	close(procs.exit)
 
-	// Wait for exit-triggered changed().
+	// Wait for exit-triggered changed.
 	select {
 	case err := <-watchDone:
 		if err != nil {

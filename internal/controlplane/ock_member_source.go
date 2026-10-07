@@ -23,7 +23,7 @@ func NewTrustSetMemberSource(trustSet *TrustSet, members repository.OrgMemberRep
 
 // OrgMemberPubkeys returns the pubkeys of all current members for an org.
 // For the special "fleet" scope, it returns fleet operators and bootstrap
-// owners from the TrustSet (bahia-irsry.60). For real org IDs it uses
+// owners from the TrustSet. For real org IDs it uses
 // relay-sourced members first (highest priority), falling back to Postgres.
 func (s *TrustSetMemberSource) OrgMemberPubkeys(ctx context.Context, orgID string) ([]string, error) {
 	// Fleet scope: return fleet operators + bootstrap owners so the

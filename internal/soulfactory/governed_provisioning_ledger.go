@@ -24,7 +24,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/soulfactory/saga"
 )
 
-// The adapter ledger (bahia-nfc95) is the production adapters' durable state
+// The adapter ledger is the production adapters' durable state
 // of governed provisioning: per request, the resolved immutable input, the
 // Soul projection, the registry identifiers and the per-step resource
 // references a replay re-inspects; per agent id, the identity reservation
@@ -748,7 +748,7 @@ type soulLookup func(ctx context.Context, agentID string) (*domain.AgentSoul, er
 // alone. And it is retired only when no Soul projection of the agent id is
 // live, that is GetSoul returns nothing or a revoked Soul: an identity
 // outlives its request whenever the agent exists outside the governed path
-// (legacy provisioning, adoption) or was re-bound after the run ended, and
+// (compatibility provisioning, adoption) or was re-bound after the run ended, and
 // the reservation is what keeps a later request from minting a second
 // identity for that live agent. A Soul read that fails, or no Soul seam at
 // all, keeps the reservation: releasing an agent id is never done blind.

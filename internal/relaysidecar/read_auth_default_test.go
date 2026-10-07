@@ -17,8 +17,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// startDefaultReadAuthSidecar starts a sidecar on config.Defaults() without
-// touching read_auth_mode, so the test pins the shipped default (C-47).
+// startDefaultReadAuthSidecar starts a sidecar on config.Defaults without
+// touching read_auth_mode, so the test pins the shipped default.
 func startDefaultReadAuthSidecar(t *testing.T) (serviceKey, adminKey, allowedKey nostr.SecretKey, relayURL string, server *Server) {
 	t.Helper()
 	serviceKey, adminKey, allowedKey = nostr.Generate(), nostr.Generate(), nostr.Generate()
@@ -107,7 +107,7 @@ func authenticate(c *rawRelayClient, challenge string, key nostr.SecretKey) {
 	}
 }
 
-// TestReadAuthDefaultEnforcesOverWebsocket (bahia-amv53, audit C-47): on the
+// TestReadAuthDefaultEnforcesOverWebsocket: on the
 // shipped default config the sidecar refuses unauthenticated REQ and COUNT on
 // a protected topic with CLOSED "auth-required:" and a NIP-42 challenge,
 // serves them to an authenticated admitted pubkey, answers an authenticated

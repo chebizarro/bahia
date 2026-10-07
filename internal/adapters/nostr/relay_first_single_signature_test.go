@@ -17,7 +17,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// bahia-irsry.53: the relay-first registry mints created_at/updated_at (and
+// the relay-first registry mints created_at/updated_at (and
 // explicit deployment-unit ids) before it publishes, and the cache keeps
 // them, so every create and update is signed exactly once: the projection
 // of the stored row is the relay-first record. Environment records carry the

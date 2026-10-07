@@ -39,7 +39,7 @@ const (
 	VirtualizationTagJournal    = "journal"
 )
 
-// Worker cp-state contract (bahia-irsry.9.2): worker records are canonical
+// Worker cp-state contract: worker records are canonical
 // 30900 cp-state (schema CASControlStateSchema, legacy_kind CPStateFamilyWorker*,
 // deleted) in domain WorkerDomain, and live records and tombstones both carry
 // the family's single-letter "t" topic so REQs scope on #t, not #domain/#schema.
@@ -52,7 +52,7 @@ const (
 	WorkerCleanupTopic     = "worker-cleanup"
 )
 
-// Assistant and relay-settings topics (bahia-irsry.37). NIP-01 relays index
+// Assistant and relay-settings topics. NIP-01 relays index
 // single-letter tags only, so these records carry a "t" topic and REQs scope on
 // #t (or on an exact #d coordinate) rather than #schema, #domain or #session.
 const (
@@ -75,12 +75,12 @@ func AssistantTranscriptSessionTopic(sessionID string) string {
 }
 
 // CPStateTopic* are the single-letter "t" topics the projector's
-// controlStateEnvelope stamps on every canonical cp-state record (bahia-irsry.9.3,
-// audit A-27). The value is "<domain>-<entity>" of the record family, the same
+// controlStateEnvelope stamps on every canonical cp-state record (
+// ). The value is "<domain>-<entity>" of the record family, the same
 // rule the DNS*Topic values above follow. NIP-01 relays index single-letter
 // tags only, so consumers scope 30900 REQs with #t instead of #domain/#schema.
-// The worker families' topics ("worker-state", "worker-assignment", ...) are
-// declared with the worker contract (bahia-irsry.9.2), not here.
+// The worker families' topics ("worker-state", "worker-assignment",...) are
+// declared with the worker contract, not here.
 const (
 	CPStateTopicServiceState             = "service-state"
 	CPStateTopicServiceRegistry          = "service-registry"
@@ -120,19 +120,19 @@ const (
 	CPStateTopicSoulFactorySagaRun       = "soul-factory-saga-run"
 	CPStateTopicSoulFactoryAdapterLedger = "soul-factory-adapter-ledger"
 	// CPStateTopicOperatorAllowlist is the fleet-OCK encrypted operator
-	// allowlist family (CPStateFamilyOperatorAllowlist, bahia-fbyo5).
+	// allowlist family (CPStateFamilyOperatorAllowlist).
 	CPStateTopicOperatorAllowlist = "operator-allowlist"
 	CPStateTopicBlossomAdmin      = "blossom-admin"
 	CPStateTopicBlossomBlob       = "blossom-blob"
 
-	// Secret and notification channel state topics (Phase 3 N1).
+	// Secret and notification channel state topics ( N1).
 	CPStateTopicSecretRegistry              = "secret-registry"
 	CPStateTopicNotificationChannelRegistry = "notification-channel"
 )
 
 // CPAudit* describe the projector's append-only audit facts: regular kind
 // 4903 events (never addressable, no d tag) correlated to the entity's state
-// coordinate and deduplicated per source fact (audit C-16).
+// coordinate and deduplicated per source fact.
 const (
 	// CPAuditTopic is the single-letter "t" topic on every projected audit fact.
 	CPAuditTopic = "cp-audit"
@@ -143,7 +143,7 @@ const (
 	CPAuditTagFact = "fact"
 )
 
-// Org cp-state topics (Phase 3 Wave 5 O1).
+// Org cp-state topics ( O1).
 const (
 	CPStateTopicOrgRegistry       = "org-registry"
 	CPStateTopicOrgMemberRegistry = "org-member"
@@ -151,16 +151,16 @@ const (
 	CPStateTopicOrgKeyEnvelope    = "org-key-envelope"
 )
 
-// Assistant session-state topic (bahia-irsry.43). NIP-01 relays index
+// Assistant session-state topic. NIP-01 relays index
 // single-letter tags only, so the recovery subscription and web session
 // filter scope on #t instead of #schema.
 const AssistantSessionTopic = "assistant-session"
 
-// Security and SBOM observable topics (bahia-irsry.43). These records are
+// Security and SBOM observable topics. These records are
 // published outside the cp-state envelope (the security scanner and SBOM
 // publisher sign them directly), so they carry their own "t" topics rather
 // than inheriting one from controlStateEnvelope.
-// Continuity heartbeat observation topic (bahia-irsry.43). The heartbeat
+// Continuity heartbeat observation topic. The heartbeat
 // producer stamps this on 30315 observations so the web client can scope
 // with #t instead of #domain.
 const ContinuityHeartbeatTopic = "continuity-heartbeat"
@@ -174,7 +174,7 @@ const (
 	SBOMAvailabilityTopic   = "sbom-availability"
 )
 
-// Payment and security cp-state topics (bahia-irsry.60). These records are
+// Payment and security cp-state topics. These records are
 // published through controlStateEnvelope as confidential cp-state (OCK-
 // encrypted) so only org members and the daemon can decrypt them.
 const (
@@ -184,10 +184,10 @@ const (
 	CPStateTopicSecurityFindingDetail = "security-finding-detail"
 	CPStateTopicSecurityTarget        = "security-target"
 	CPStateTopicSecurityRun           = "security-run"
-	// CPStateTopicAdoptionBinding is the adoption binding family (audit B-35).
+	// CPStateTopicAdoptionBinding is the adoption binding family.
 	CPStateTopicAdoptionBinding = "adoption-binding"
 
-	// Hive-CI execution state (audit C-48, C-49), fleet-OCK encrypted.
+	// Hive-CI execution state, fleet-OCK encrypted.
 	CPStateTopicHiveCIPolicy     = "hiveci-policy"
 	CPStateTopicHiveCIResult     = "hiveci-result"
 	CPStateTopicHiveCIInitiation = "hiveci-initiation"

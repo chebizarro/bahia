@@ -1,6 +1,6 @@
 // Command bahia-migrate performs explicit database migration operations without
 // starting the Bahia server: SQL schema migrations (status, up, down) and the
-// one-off conversion of legacy Bahia nostr_events to canonical events (nostr).
+// one-off conversion of compatibility Bahia nostr_events to canonical events (nostr).
 package main
 
 import (
@@ -112,10 +112,10 @@ type nostrMigrationOptions struct {
 	relayBackfill bool
 }
 
-// runNostrMigration converts legacy Bahia events recorded in nostr_events to
+// runNostrMigration converts compatibility Bahia events recorded in nostr_events to
 // canonical events, signs them with the service key and publishes them. It is
 // resumable (durable cursors) and idempotent (already-migrated records are
-// skipped). The daemon no longer runs it on startup (B-28).
+// skipped). The daemon not runs it on startup.
 func runNostrMigration(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, opts nostrMigrationOptions, stdout, stderr io.Writer) int {
 	privateKey := strings.TrimSpace(cfg.Nostr.PrivateKey)
 	if privateKey == "" && !opts.dryRun {

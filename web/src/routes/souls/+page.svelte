@@ -53,7 +53,7 @@
     </a>
   </header>
   
-  <!-- Stats Cards -->
+  <!-- Stats Cards-->
   <div class="stats-grid">
     <Card title="Total Souls" titleIcon={SoulIcon} value={soulCounts().total} />
     <Card title="Active" titleIcon={SuccessIcon} value={soulCounts().active} status="success" />
@@ -62,7 +62,7 @@
     <Card title="Runtime Targets" titleIcon={SuccessIcon} value={runtimeCapabilities.filter((capability) => capability.compatible).length} />
   </div>
 
-  <!-- Saved drafts -->
+  <!-- Saved drafts-->
   {#if savedDrafts.length > 0}
     <section class="drafts-section">
       <div class="drafts-header">
@@ -90,7 +90,7 @@
     </section>
   {/if}
 
-  <!-- Filters -->
+  <!-- Filters-->
   <div class="filters">
     <div class="filter-tabs">
       {#each SOUL_STATUS_FILTERS as option}
@@ -113,7 +113,7 @@
     </div>
   </div>
   
-  <!-- Error -->
+  <!-- Error-->
   {#if error.value}
     <div class="error-banner">
       <WarningIcon size={18} strokeWidth={1.75} ariaHidden="true" />
@@ -121,7 +121,7 @@
     </div>
   {/if}
   
-  <!-- Loading -->
+  <!-- Loading-->
   {#if loading.souls}
     <div class="loading">
       <div class="spinner"></div>
@@ -140,7 +140,7 @@
       {/if}
     </div>
   {:else}
-    <!-- Soul Grid -->
+    <!-- Soul Grid-->
     <div class="souls-grid">
       {#each filteredSouls as soul (soul.agentId)}
         <SoulCard {soul} />

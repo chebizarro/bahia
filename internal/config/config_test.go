@@ -1204,7 +1204,7 @@ func TestDBConfigDSN_SpecialCharacters(t *testing.T) {
 }
 
 func TestLoadFromEnvVars(t *testing.T) {
-	// Set env vars using single-underscore convention (matches .env.example).
+	// Set env vars using single-underscore convention (matches.env.example).
 	envs := map[string]string{
 		"BAHIA_DB_HOST":                               "envhost",
 		"BAHIA_DB_PORT":                               "9999",

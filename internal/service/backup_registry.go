@@ -24,7 +24,7 @@ const (
 // BackupCanonicalPublisher publishes canonical 30900 cp-state records after
 // backup entity mutations. When set on the registry, each state change
 // automatically publishes the corresponding record. This replaces the
-// projector backup legs deleted in Phase 3 B1.
+// projector backup legs deleted in B1.
 type BackupCanonicalPublisher interface {
 	PublishRecipe(ctx context.Context, recipe *domain.BackupRecipe) error
 	PublishPolicy(ctx context.Context, policy *domain.BackupPolicy) error
@@ -465,7 +465,7 @@ func (s *BackupRegistryService) publishVerificationChanged(ctx context.Context, 
 	}
 }
 
-// UpsertBackupDefinition delegates to the repository. Phase 3 B1: exposes the
+// UpsertBackupDefinition delegates to the repository. B1: exposes the
 // definition upsert through the registry service so the intent handler can use
 // a single interface for all backup entity types.
 func (s *BackupRegistryService) UpsertBackupDefinition(ctx context.Context, definition *domain.BackupDefinition) error {

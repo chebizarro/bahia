@@ -347,9 +347,9 @@ func TestReleaseWorkflowRunReplayDispatchesOnlyOnce(t *testing.T) {
 }
 
 func TestSubscribeAuthRequiredClosedIsLoggedWithoutConsumerRetry(t *testing.T) {
-	// After bahia-irsry.48 item 3, NIP-42 AUTH is handled by the relay pool
+	// After item 3, NIP-42 AUTH is handled by the relay pool
 	// internally (authenticateLiveRelay + closedRetryBudget). The consumer
-	// no longer calls AuthenticateRelay or resubscribes itself — it just
+	// not calls AuthenticateRelay or resubscribes itself — it just
 	// logs the CLOSED reason and continues processing events from the
 	// merged subscription until Events closes.
 	repo := newTestHiveRepo()
@@ -411,8 +411,8 @@ func TestConsumeSubscriptionHandlesEOSEAndNonAuthClosedDeterministically(t *test
 	})
 
 	require.NoError(t, err)
-	// NIP-42 AUTH is handled by the relay pool internally (bahia-irsry.48 item 3);
-	// the consumer no longer performs its own AUTH retry.
+	// NIP-42 AUTH is handled by the relay pool internally ( item 3);
+	// the consumer not performs its own AUTH retry.
 }
 
 func TestRequiredTagParsing(t *testing.T) {

@@ -206,7 +206,7 @@
 </script>
 
 <div class="rule-builder">
-  <!-- Current Rules List -->
+  <!-- Current Rules List-->
   <div class="rules-list">
     {#if rules.length === 0}
       <p class="no-rules">No rules configured. Add rules to define policy requirements.</p>
@@ -244,16 +244,16 @@
     {/if}
   </div>
 
-  <!-- Add Rule Button -->
+  <!-- Add Rule Button-->
   <button type="button" class="add-rule-btn" onclick={openAddModal} {disabled}>
     + Add Rule
   </button>
 
-  <!-- Add Rule Modal -->
+  <!-- Add Rule Modal-->
   {#if showAddModal}
-    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions-->
     <div class="modal-backdrop" onclick={closeAddModal}>
-      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions-->
       <div class="modal" onclick={(e) => e.stopPropagation()}>
         <div class="modal-header">
           <h3>Add Policy Rule</h3>
@@ -262,7 +262,7 @@
         
         <div class="modal-content">
           {#if !selectedCategory}
-            <!-- Category Selection -->
+            <!-- Category Selection-->
             <p class="step-hint">Select a category:</p>
             <div class="category-list">
               {#each ruleCategories as category}
@@ -277,7 +277,7 @@
               {/each}
             </div>
           {:else if !selectedRuleType}
-            <!-- Rule Type Selection -->
+            <!-- Rule Type Selection-->
             <button type="button" class="back-btn" onclick={() => selectedCategory = null}>
               ← Back to categories
             </button>
@@ -295,7 +295,7 @@
               {/each}
             </div>
           {:else}
-            <!-- Parameter Configuration -->
+            <!-- Parameter Configuration-->
             <button type="button" class="back-btn" onclick={() => selectedRuleType = null}>
               ← Back to rules
             </button>
@@ -484,7 +484,7 @@
     cursor: not-allowed;
   }
 
-  /* Modal */
+  /* Modal*/
   .modal-backdrop {
     position: fixed;
     inset: 0;
@@ -603,7 +603,7 @@
     color: var(--text-muted);
   }
 
-  /* Param Config */
+  /* Param Config*/
   .param-config h4 {
     margin: 0 0 0.25rem;
     font-size: 1rem;

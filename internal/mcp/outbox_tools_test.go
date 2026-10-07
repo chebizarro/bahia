@@ -80,7 +80,7 @@ func TestOutboxStatusNilOutbox(t *testing.T) {
 }
 
 // A real local outbox file: a failed entry retried through the tool goes
-// back to pending for the daemon's runner (bahia-u5whr, §3.7).
+// back to pending for the daemon's runner (docs/architecture/outbox-delivery.md).
 func TestOutboxRetryRequeuesFailedEntry(t *testing.T) {
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
 	require.NoError(t, err)

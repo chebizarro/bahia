@@ -14,7 +14,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// Tests for bahia-irsry.38: parked-operation rebuild after a restart, overflow
+// Tests for: parked-operation rebuild after a restart, overflow
 // that never strands a soul, late rollback follow-up progress, and per-soul
 // serialization of lifecycle actions and fleet reloads. None waits on a clock:
 // late results are delivered as events, and Run-based waits end on a publish.

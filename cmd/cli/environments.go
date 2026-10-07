@@ -735,7 +735,7 @@ func stringPointer(value string) *string {
 }
 
 // cliCreateEntityID returns the client-minted id a create command signs
-// (bahia-irsry.42): --id when given (a canonical UUIDv7 or v4), otherwise a
+// --id when given (a canonical UUIDv7 or v4), otherwise a
 // fresh UUIDv7. A minted id is reported on stderr before anything is
 // published, so a create that timed out can be retried with --id and is then
 // replayed instead of creating a second entity.

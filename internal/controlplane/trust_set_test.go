@@ -133,7 +133,7 @@ func TestTrustSet_RelayMembersOverrideBootstrapOwner(t *testing.T) {
 		memberPK: domain.RoleAdmin,
 	})
 
-	// Relay source wins: bootstrap owner no longer has permissions.
+	// Relay source wins: bootstrap owner not has permissions.
 	assert.False(t, ts.HasPermission(ctx, orgID, ownerPK, domain.PermManageMembers))
 	// But the relay member does.
 	assert.True(t, ts.HasPermission(ctx, orgID, memberPK, domain.PermWriteServices))

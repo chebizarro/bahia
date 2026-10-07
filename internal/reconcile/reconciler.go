@@ -452,8 +452,8 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		if driftDetected {
 			r.publishDriftDetected(ctx, currentState, svc, env, driftExtra)
 		}
-		// Phase 3 S1: publish the canonical cp-state record directly to relays
-		// so the projector no longer re-projects it from bus events.
+		// S1: publish the canonical cp-state record directly to relays
+		// so the projector not re-projects it from bus events.
 		r.publishStateToRelay(ctx, currentState, obs)
 	}
 	if newDrift == domain.DriftStatusDrifted && mode == domain.ReconcileModeAutoApply {
@@ -495,7 +495,7 @@ func (r *Reconciler) repairStuckRouteOnlyState(ctx context.Context, currentState
 	if err := r.state.Upsert(ctx, state); err != nil {
 		return false, err
 	}
-	// Phase 3 S1: publish the repaired state directly to relays.
+	// S1: publish the repaired state directly to relays.
 	r.publishStateToRelay(ctx, state, nil)
 	r.publisher.Publish(ctx, events.Event{
 		Type:     events.EventEnvironmentServiceStateChanged,
@@ -667,7 +667,7 @@ func (r *Reconciler) driftStatusForMode(mode domain.ReconcileMode) domain.DriftS
 func (r *Reconciler) digestFallbackStatus(desiredDigest, observedDigest string, health domain.HealthStatus, mode domain.ReconcileMode) domain.DriftStatus {
 	// "starting" keeps its existing observe-only verdict here on purpose. This
 	// weaker digest-only path has no desired-state hash, and flapping it would
-	// change convergence for every legacy observe-only environment. The incident
+	// change convergence for every compatibility observe-only environment. The incident
 	// this gate addresses is caught upstream: a crash-looping container now
 	// observes as unhealthy, which this function already reports as drifted.
 	status := domain.ArtifactDigestDriftStatus(desiredDigest, observedDigest, health, domain.DriftStatusInSync)

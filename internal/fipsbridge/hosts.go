@@ -13,7 +13,7 @@ import (
 
 const defaultHostsFileMode os.FileMode = 0o644
 
-// HostEntry maps a .fips alias to a Nostr npub identity.
+// HostEntry maps a.fips alias to a Nostr npub identity.
 type HostEntry struct {
 	Name string
 	Npub string

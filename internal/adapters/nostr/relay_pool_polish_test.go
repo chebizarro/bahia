@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Relay-stack polish (bahia-irsry.49): terminal CLOSEDs recorded in stored
+// Relay-stack polish: terminal CLOSEDs recorded in stored
 // outcomes, the CLOSED retry budget across consumers, and max_limit paging.
 // Every wait is on a protocol signal under a deadline; none sleeps.
 

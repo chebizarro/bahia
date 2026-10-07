@@ -42,7 +42,7 @@ func NewNostrDMSender(relayPool *nostrAdapter.RelayPool, privateKey string, logg
 
 // Send delivers a notification as an encrypted Nostr DM (Kind 4 with NIP-44).
 // Config keys:
-//   - "pubkey" (required): recipient's Nostr public key (hex)
+// - "pubkey" (required): recipient's Nostr public key (hex)
 func (s *NostrDMSender) Send(ctx context.Context, ch *domain.NotificationChannel, eventType string, payload map[string]any) error {
 	if s == nil || s.publish == nil {
 		return fmt.Errorf("nostr DM relay publisher is not configured")

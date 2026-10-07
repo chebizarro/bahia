@@ -24,8 +24,8 @@ func (r supervisionContractResolver) Resolve(*domain.Service, *domain.Environmen
 }
 
 // TestSupervisionSourcesReadRelayFirstRecords pins the contract between the
-// cp-state record builders and the supervisors' local-store sources (B-33,
-// B-34): the records the daemon publishes for a service, its environment and
+// cp-state record builders and the supervisors' local-store sources (
+// ): the records the daemon publishes for a service, its environment and
 // its desired state are exactly what route-canary and managed-instance
 // supervision enumerate, with no repository in between.
 func TestSupervisionSourcesReadRelayFirstRecords(t *testing.T) {

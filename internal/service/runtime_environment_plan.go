@@ -52,16 +52,16 @@ type deploymentUnitLister interface {
 // EnvironmentPlanAssembler loads all managed services in an environment and
 // produces a DesiredEnvironmentPlan. It handles three service categories:
 //
-//  1. Target service — the service being actively deployed; its spec is
-//     provided by the caller (freshly built).
-//  2. Siblings with stored desired state — their DesiredRuntimeState is
-//     loaded directly from the EnvironmentServiceState row.
-//  3. Legacy siblings — siblings that predate the desired-state model and
-//     have no stored DesiredRuntimeState. These are hydrated by rebuilding
-//     the spec from service/artifact/runtime config via DesiredStateBuilder,
-//     then persisted opportunistically so future renders find them.
+// 1. Target service — the service being actively deployed; its spec is
+// provided by the caller (freshly built).
+// 2. Siblings with stored desired state — their DesiredRuntimeState is
+// loaded directly from the EnvironmentServiceState row.
+// 3. Compatibility siblings — siblings that predate the desired-state model and
+// have no stored DesiredRuntimeState. These are hydrated by rebuilding
+// the spec from service/artifact/runtime config via DesiredStateBuilder,
+// then persisted opportunistically so future renders find them.
 //
-// Deleted or tombstoned services (whose Service record no longer exists in
+// Deleted or tombstoned services (whose Service record not exists in
 // the repository) are silently excluded from the plan.
 type EnvironmentPlanAssembler struct {
 	stateLoader envServiceStateLoader
@@ -179,7 +179,7 @@ func (a *EnvironmentPlanAssembler) Assemble(
 			continue
 		}
 
-		// Legacy sibling — hydrate from service/artifact/runtime config.
+		// Compatibility sibling — hydrate from service/artifact/runtime config.
 		spec, err := a.hydrateLegacySibling(ctx, svc, &state)
 		if err != nil {
 			a.logger.Warn("failed to hydrate legacy sibling; excluding from plan",

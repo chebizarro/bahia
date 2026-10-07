@@ -27,7 +27,7 @@ import (
 // Operations: repository-apply, repository-delete, publish, promote, yank,
 // drift-detect.
 //
-// See design §7 Wave 4 P1 and §10.
+// See docs/architecture/intents-and-authority.md
 type PackageIntentHandler struct {
 	packageService *service.PackageRegistryService
 	projection     repository.PackageControlPlaneRepository
@@ -137,7 +137,7 @@ func (h *PackageIntentHandler) PermissionFor(_ string) domain.Permission {
 func (h *PackageIntentHandler) IsFleetScoped() bool { return true }
 
 // handleRepositoryApply creates or updates a package repository. This gives
-// repository-apply a real consumer: previously it was wired to a legacy kind
+// repository-apply a real consumer: previously it was wired to a compatibility kind
 // (KindPackageRepositoryApply) that had no production subscription.
 func (h *PackageIntentHandler) handleRepositoryApply(ctx context.Context, intent *Intent) error {
 	repo, err := packageRepoFromIntentContent(intent)

@@ -10,7 +10,7 @@ const testReleaseTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
 
 func TestOCIManifestDigestAttributeMatchesLoomWorker(t *testing.T) {
 	// loom-worker src/telemetry/job-lifecycle.ts:
-	//   export const OCI_MANIFEST_DIGEST_ATTRIBUTE = "oci.manifest.digest";
+	// export const OCI_MANIFEST_DIGEST_ATTRIBUTE = "oci.manifest.digest";
 	// The two must stay byte-identical for the build span and the promotion
 	// span to join on the artifact.
 	if OCIManifestDigestAttribute != "oci.manifest.digest" {

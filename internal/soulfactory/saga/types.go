@@ -38,15 +38,15 @@ const (
 
 // forwardStages is the exact governed provisioning order for a new agent:
 //
-//	identity_reserved        reserve identity/spec only (no key lifecycle)
-//	service_registered       register the Bahia service and its deployment unit
-//	release_selected         select and bind a verified runtime release
-//	runtime_allocated        deploy through Bahia
-//	signer_enrolled          configure and verify identity
-//	nostr_configured         configure and verify relay
-//	llm_verified             verify the model/inference path
-//	dm_verified              verify readiness
-//	running                  publish the active kind-31951 Soul (last, gated)
+//	identity_reserved reserve identity/spec only (no key lifecycle)
+//	service_registered register the Bahia service and its deployment unit
+//	release_selected select and bind a verified runtime release
+//	runtime_allocated deploy through Bahia
+//	signer_enrolled configure and verify identity
+//	nostr_configured configure and verify relay
+//	llm_verified verify the model/inference path
+//	dm_verified verify readiness
+//	running publish the active kind-31951 Soul (last, gated)
 //
 // Bahia deployment therefore always precedes Soul Factory activation.
 var forwardStages = []Stage{

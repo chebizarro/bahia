@@ -6,7 +6,7 @@
   } from '$lib/stores/souls.svelte.js';
   import { KINDS } from '$lib/nostr/client.js';
 
-  /** @typedef {import('$lib/types/customization').SoulVoiceSpec} SoulVoiceSpec */
+  /** @typedef {import('$lib/types/customization').SoulVoiceSpec} SoulVoiceSpec*/
 
   let {
     value = $bindable(),
@@ -56,7 +56,7 @@
   const canPlay = $derived(hasSampleDispatcher && !disabled && !playing && !hasValidationErrors);
 
   function patch(updates) {
-    /** @type {SoulVoiceSpec} */
+    /** @type {SoulVoiceSpec}*/
     const next = createDefaultVoiceSpec({
       ...(value || {}),
       ...updates

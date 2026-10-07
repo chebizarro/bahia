@@ -4,30 +4,30 @@
 --
 -- This script is the manual/operator complement to the config-driven
 -- policy seeding that runs at Bahia startup when hiveci.policies is
--- configured.  Use it for:
+-- configured. Use it for:
 --
---   1. Bootstrapping a policy before the app config is deployed
---   2. Inspecting existing policies and workflow runs
---   3. Ad-hoc policy creation outside the config lifecycle
+-- 1. Bootstrapping a policy before the app config is deployed
+-- 2. Inspecting existing policies and workflow runs
+-- 3. Ad-hoc policy creation outside the config lifecycle
 --
 -- The config-driven path (preferred):
 -- ------------------------------------
 -- Add to bahia.yml (or equivalent env vars):
 --
---   hiveci:
---     enabled: true
---     policies:
---       - repo_coordinate: "30617:<pubkey>:chebizarro/bahia"
---         workflow_path: ".gitea/workflows/release.yml"
---         service_name: bahia
---         environment_name: edge-01
---         metadata:
---           workflow_digest: "<sha256-hex>"
---           policy_digest: "<signed-policy-digest>"
---           review_policy: "<signed-review-policy>"
---           source_repo_identity: "<gitea-host/org/repo>"
---           release_image_repository: "<harbor-host/project/repo>"
---           release_attestors: ["<release-attestor-pubkey>"]
+-- hiveci:
+-- enabled: true
+-- policies:
+-- - repo_coordinate: "30617:<pubkey>:chebizarro/bahia"
+-- workflow_path: ".gitea/workflows/release.yml"
+-- service_name: bahia
+-- environment_name: edge-01
+-- metadata:
+-- workflow_digest: "<sha256-hex>"
+-- policy_digest: "<signed-policy-digest>"
+-- review_policy: "<signed-review-policy>"
+-- source_repo_identity: "<gitea-host/org/repo>"
+-- release_image_repository: "<harbor-host/project/repo>"
+-- release_attestors: ["<release-attestor-pubkey>"]
 --
 -- Bahia resolves service/environment by name and idempotently ensures
 -- the policy row exists on every startup.
@@ -36,39 +36,39 @@
 -- --------------------------
 -- From the edge-01 host:
 --
---   REPO_COORD="30617:<grasp-gitea-pubkey>:chebizarro/bahia"
---   SERVICE_NAME="bahia"
---   ENV_NAME="edge-01"
---   WORKFLOW_DIGEST="<sha256-hex-from-5401>"
---   POLICY_DIGEST="<policy-digest-from-5401>"
---   REVIEW_POLICY="<review-policy-from-5401>"
---   SOURCE_REPO="<gitea-host/org/repo>"
---   IMAGE_REPO="<harbor-host/project/repo>"
---   RELEASE_ATTESTOR="<release-attestor-pubkey>"
---   PREVIOUS_DIGEST="sha256:<currently-staged-manifest>"
---   HEALTH_PATH="/health"
---   READINESS_PATH="/ready"
+-- REPO_COORD="30617:<grasp-gitea-pubkey>:chebizarro/bahia"
+-- SERVICE_NAME="bahia"
+-- ENV_NAME="edge-01"
+-- WORKFLOW_DIGEST="<sha256-hex-from-5401>"
+-- POLICY_DIGEST="<policy-digest-from-5401>"
+-- REVIEW_POLICY="<review-policy-from-5401>"
+-- SOURCE_REPO="<gitea-host/org/repo>"
+-- IMAGE_REPO="<harbor-host/project/repo>"
+-- RELEASE_ATTESTOR="<release-attestor-pubkey>"
+-- PREVIOUS_DIGEST="sha256:<currently-staged-manifest>"
+-- HEALTH_PATH="/health"
+-- READINESS_PATH="/ready"
 --
---   sed -e "s|:REPO_COORDINATE:|$REPO_COORD|g" \
---       -e "s|:SERVICE_NAME:|$SERVICE_NAME|g" \
---       -e "s|:ENV_NAME:|$ENV_NAME|g" \
---       -e "s|:WORKFLOW_DIGEST:|$WORKFLOW_DIGEST|g" \
---       -e "s|:POLICY_DIGEST:|$POLICY_DIGEST|g" \
---       -e "s|:REVIEW_POLICY:|$REVIEW_POLICY|g" \
---       -e "s|:SOURCE_REPO:|$SOURCE_REPO|g" \
---       -e "s|:IMAGE_REPO:|$IMAGE_REPO|g" \
---       -e "s|:RELEASE_ATTESTOR:|$RELEASE_ATTESTOR|g" \
---       -e "s|:PREVIOUS_DIGEST:|$PREVIOUS_DIGEST|g" \
---       -e "s|:HEALTH_PATH:|$HEALTH_PATH|g" \
---       -e "s|:READINESS_PATH:|$READINESS_PATH|g" \
---     scripts/seed_hiveci_pipeline_policy.sql \
---     | docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
---         exec -T postgres psql -U bahia -d bahia
+-- sed -e "s|:REPO_COORDINATE:|$REPO_COORD|g" \
+-- -e "s|:SERVICE_NAME:|$SERVICE_NAME|g" \
+-- -e "s|:ENV_NAME:|$ENV_NAME|g" \
+-- -e "s|:WORKFLOW_DIGEST:|$WORKFLOW_DIGEST|g" \
+-- -e "s|:POLICY_DIGEST:|$POLICY_DIGEST|g" \
+-- -e "s|:REVIEW_POLICY:|$REVIEW_POLICY|g" \
+-- -e "s|:SOURCE_REPO:|$SOURCE_REPO|g" \
+-- -e "s|:IMAGE_REPO:|$IMAGE_REPO|g" \
+-- -e "s|:RELEASE_ATTESTOR:|$RELEASE_ATTESTOR|g" \
+-- -e "s|:PREVIOUS_DIGEST:|$PREVIOUS_DIGEST|g" \
+-- -e "s|:HEALTH_PATH:|$HEALTH_PATH|g" \
+-- -e "s|:READINESS_PATH:|$READINESS_PATH|g" \
+-- scripts/seed_hiveci_pipeline_policy.sql \
+-- | docker compose -f /srv/data/bahia-controlplane/docker-compose.yml \
+-- exec -T postgres psql -U bahia -d bahia
 --
 -- All parameters are substituted via sed; no psql \set variables needed.
 --
 -- Idempotency: INSERT uses a NOT EXISTS guard with COALESCE on
--- branch_pattern to handle NULLs.  Safe to run multiple times.
+-- branch_pattern to handle NULLs. Safe to run multiple times.
 
 -- ============================================================
 -- Step 0: discover repo coordinates from ingested 5401 events
@@ -110,18 +110,18 @@ ORDER BY p.created_at;
 -- Step 3: reconcile or insert the policy row (idempotent)
 --
 -- Placeholders:
---   :REPO_COORDINATE:  — NIP-34 repo coordinate from Step 0
---   :SERVICE_NAME:     — Bahia service name (default: bahia)
---   :ENV_NAME:         — Target environment name (default: edge-01)
---   :WORKFLOW_DIGEST:   — Exact workflow digest from signed kind-5401
---   :POLICY_DIGEST:     — Exact repository policy digest from signed kind-5401
---   :REVIEW_POLICY:     — Exact review policy from signed kind-5401
---   :SOURCE_REPO:       — Exact source repository identity from signed kind-5401
---   :IMAGE_REPO:        — Fully-qualified Harbor release repository
---   :RELEASE_ATTESTOR:  — Authorized release-attestor pubkey
---   :PREVIOUS_DIGEST:   — Immutable manifest allowed as rollback predecessor
---   :HEALTH_PATH:       — Concrete HTTP health endpoint path
---   :READINESS_PATH:    — Concrete HTTP readiness endpoint path
+--:REPO_COORDINATE: — NIP-34 repo coordinate from Step 0
+--:SERVICE_NAME: — Bahia service name (default: bahia)
+--:ENV_NAME: — Target environment name (default: edge-01)
+--:WORKFLOW_DIGEST: — Exact workflow digest from signed kind-5401
+--:POLICY_DIGEST: — Exact repository policy digest from signed kind-5401
+--:REVIEW_POLICY: — Exact review policy from signed kind-5401
+--:SOURCE_REPO: — Exact source repository identity from signed kind-5401
+--:IMAGE_REPO: — Fully-qualified Harbor release repository
+--:RELEASE_ATTESTOR: — Authorized release-attestor pubkey
+--:PREVIOUS_DIGEST: — Immutable manifest allowed as rollback predecessor
+--:HEALTH_PATH: — Concrete HTTP health endpoint path
+--:READINESS_PATH: — Concrete HTTP readiness endpoint path
 -- ============================================================
 WITH resolved_target AS (
     SELECT

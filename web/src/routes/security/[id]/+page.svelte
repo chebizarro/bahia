@@ -171,7 +171,7 @@
     {/if}
   </div>
 
-  <!-- Severity Summary -->
+  <!-- Severity Summary-->
   {#if findings.length > 0}
     <div class="severity-summary">
       <div class="severity-card critical">
@@ -198,7 +198,7 @@
     </div>
   {/if}
 
-  <!-- Findings Table -->
+  <!-- Findings Table-->
   {#if error}
     <EmptyState
       iconComponent={ErrorIcon}
@@ -252,7 +252,7 @@
     font-family: monospace;
   }
 
-  /* Severity Summary */
+  /* Severity Summary*/
   .severity-summary {
     display: flex;
     gap: 1rem;
@@ -301,7 +301,7 @@
     color: #d9f99d;
   }
 
-  /* Meta bar */
+  /* Meta bar*/
   .meta-bar {
     display: flex;
     gap: 2rem;
@@ -316,7 +316,7 @@
     color: var(--text);
   }
 
-  /* Table links */
+  /* Table links*/
   :global(.osv-link) {
     color: var(--primary);
     text-decoration: none;

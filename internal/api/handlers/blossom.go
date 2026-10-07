@@ -17,7 +17,7 @@ func NewBlossomHandler(client *blossom.Client) *BlossomHandler {
 	return &BlossomHandler{client: client}
 }
 
-// DownloadBlob proxies a Blossom blob download by SHA-256 hash.
+// DownloadBlob proxies a Blossom blob download by SH hash.
 // The backend fetches from configured Blossom servers (which may use internal
 // HTTP addresses) and streams the content back over the HTTPS API, avoiding
 // mixed-content browser errors.

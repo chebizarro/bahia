@@ -67,7 +67,7 @@ type configProjectionState struct {
 }
 
 // desiredCoordinate is the desired event currently in force for one
-// coordinate. CreatedAt resolves equal versions by NIP-01 order (C-13).
+// coordinate. CreatedAt resolves equal versions by NIP-01 order.
 // Withdrawn records that the event was deleted (NIP-09) or expired (NIP-40):
 // it keeps the version floor so the same or an older version cannot be
 // accepted again, while a newer version can.
@@ -278,7 +278,7 @@ func (c *ConfigConsumer) Handle(ctx context.Context, event nostr.Event) error {
 	return c.publishStatus(ctx, projection, event.ID.Hex(), "accepted", "")
 }
 
-// withdraw handles a desired coordinate whose event the store no longer holds
+// withdraw handles a desired coordinate whose event the store not holds
 // because its author deleted it (NIP-09) or it expired (NIP-40). key is the
 // store's replaceable key ("<kind>:<author>:<d>"). Pending activations of the
 // event are dropped and a "withdrawn" status is published. The relay keeps
@@ -693,7 +693,7 @@ func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigPro
 	if status != "applied" {
 		content["reason"] = strings.TrimSpace(reason)
 	}
-	// C-22: stable d coordinate per (service, policy, scope) so addressable
+	// stable d coordinate per (service, policy, scope) so addressable
 	// events collapse by NIP-01 replacement instead of growing unbounded.
 	// Status, version and desired-event-id live in tags and content, not in
 	// the d-tag. A 7-day NIP-40 expiration lets the retention sweep clean
@@ -732,7 +732,7 @@ func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigPro
 		createdAt += 2
 	}
 	// NIP-40 expiry uses wall-clock time so the sweep can clean old status
-	// events even when the consumer's now() is overridden for testing.
+	// events even when the consumer's now is overridden for testing.
 	expiry := nostr.Timestamp(time.Now().Add(7 * 24 * time.Hour).Unix())
 	event := nostr.Event{
 		Kind:      configStatusKind,

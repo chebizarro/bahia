@@ -5,7 +5,7 @@
 -- VALID and nothing scans the tables under ACCESS EXCLUSIVE.
 --
 -- idx_security_observable_publications_retry is deliberately not rebuilt: it
--- only served the Security retry loop removed in irsry.28/.29, the code this
+-- only served the Security retry loop excluded from irsry.28/.29, the code this
 -- rollback returns to never reads it, and building it would block writes to
 -- security_observable_publications for the duration of the build. Publications
 -- that 000072 moved to failed_terminal stay terminal: nothing would retry them.

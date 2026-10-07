@@ -58,7 +58,7 @@ func TestGeneratedFrontendKindsMatchCanonicalGoKinds(t *testing.T) {
 	}
 }
 
-// TestKindCatalogDefinesNoWorkerStateWireKinds guards C-43: worker read models
+// TestKindCatalogDefinesNoWorkerStateWireKinds guards: worker read models
 // are 30900 cp-state records whose family is a CPStateFamily discriminator, so
 // the kind catalog must not reintroduce 32000-32004 as publishable kinds.
 func TestKindCatalogDefinesNoWorkerStateWireKinds(t *testing.T) {
@@ -145,7 +145,7 @@ func TestGeneratedFrontendWorkerTopicsMatchGo(t *testing.T) {
 }
 
 // TestGeneratedFrontendWorkerCoordinatesMatchGo keeps the web's worker d
-// prefixes equal to the canonical worker d builder's (bahia-irsry.36), so web
+// prefixes equal to the canonical worker d builder's, so web
 // consumers read the record id off the same coordinate producers publish on.
 func TestGeneratedFrontendWorkerCoordinatesMatchGo(t *testing.T) {
 	jsStrings := parseGeneratedJSStringConstants(t)
@@ -168,7 +168,7 @@ func TestGeneratedFrontendWorkerCoordinatesMatchGo(t *testing.T) {
 
 // TestGeneratedFrontendOperatorAllowlistMatchesGo keeps the web's operator
 // allowlist discriminator, topic, coordinate prefix and scopes equal to the
-// ones the daemon publishes (bahia-fbyo5), so the browser decrypts the record
+// ones the daemon publishes, so the browser decrypts the record
 // on the exact coordinate the AEAD binds.
 func TestGeneratedFrontendOperatorAllowlistMatchesGo(t *testing.T) {
 	jsKinds := parseGeneratedJSKindConstants(t, filepath.Join(repositoryRoot(t), "web", "src", "lib", "nostr", "kinds.gen.js"))
@@ -188,7 +188,7 @@ func TestGeneratedFrontendOperatorAllowlistMatchesGo(t *testing.T) {
 	}
 }
 
-// TestWorkerDTagGivesEveryWorkerFamilyItsOwnCoordinate pins bahia-irsry.36:
+// TestWorkerDTagGivesEveryWorkerFamilyItsOwnCoordinate pins:
 // the same record id (a worker pubkey) yields a distinct d per worker family,
 // and non-worker families have no worker coordinate.
 func TestWorkerDTagGivesEveryWorkerFamilyItsOwnCoordinate(t *testing.T) {
@@ -226,7 +226,7 @@ func mustWorkerDTag(t *testing.T, family CPStateFamily, id string) string {
 
 // TestGeneratedFrontendAssistantAndRelaySettingsTopicsMatchGo keeps the web's
 // single-letter topics for assistant transcript/status and relay settings
-// equal to the ones the producers stamp (bahia-irsry.37).
+// equal to the ones the producers stamp.
 func TestGeneratedFrontendAssistantAndRelaySettingsTopicsMatchGo(t *testing.T) {
 	jsStrings := parseGeneratedJSStringConstants(t)
 	for jsName, goValue := range map[string]string{
@@ -244,7 +244,7 @@ func TestGeneratedFrontendAssistantAndRelaySettingsTopicsMatchGo(t *testing.T) {
 	}
 }
 
-// TestRetiredAuditKindsAreNotDeclared guards bahia-irsry.37: the retired
+// TestRetiredAuditKindsAreNotDeclared guards: the retired
 // addressable audit kinds 31000-31099 are decoded only by
 // internal/nostrmigration, so neither kinds.go nor kinds.gen.js declares them.
 func TestRetiredAuditKindsAreNotDeclared(t *testing.T) {

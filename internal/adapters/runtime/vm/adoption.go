@@ -18,7 +18,7 @@ import (
 )
 
 // AdoptionDriver verifies provider semantics and returns the immutable source
-// paths of writable images. A filename, legacy record, or marker is not proof.
+// paths of writable images. A filename, compatibility record, or marker is not proof.
 type AdoptionDriver interface {
 	MeasurePersistent(context.Context, *PersistentResource, domain.PersistentVMDeployment, *Release) (*AdoptionProof, error)
 }

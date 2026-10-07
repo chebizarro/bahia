@@ -163,7 +163,7 @@ func ReadInstanceMetadata(instanceDir string) (*InstanceMetadata, error) {
 }
 
 // FindInstancesByService scans the instances directory for instances whose
-// recorded service name matches. Ambiguous legacy matches are refused rather
+// recorded service name matches. Ambiguous compatibility matches are refused rather
 // than authorizing a mutation against whichever instance is newest. A missing instances
 // directory yields an empty result.
 func FindInstancesByService(instancesDir, serviceName string) ([]*InstanceMetadata, error) {

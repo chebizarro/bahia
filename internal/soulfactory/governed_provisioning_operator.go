@@ -82,7 +82,7 @@ func (p *ProductionGovernedProvisioner) prepareRequest(ctx context.Context, req 
 
 func (p *ProductionGovernedProvisioner) governedForState(state *productionProvisioningState) (*GovernedProvisioner, error) {
 	if state.Request == nil || state.Resolved == nil {
-		return nil, errors.New("provisioning inputs unavailable; replay the original provisioning request before operating this legacy run")
+		return nil, errors.New("provisioning inputs unavailable; replay the original provisioning request before operating this run")
 	}
 	resolved := state.Resolved
 	if state.Request.EventID != state.RequestID || resolved.AgentID != state.AgentID || resolved.SpecHash != state.SpecHash || resolved.Runtime.Target != state.Runtime {

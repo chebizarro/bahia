@@ -1,6 +1,6 @@
 package mcp
 
-// AssistantAsyncToolRequestMethods lists legacy ContextVM methods for uncertain
+// AssistantAsyncToolRequestMethods lists compatibility ContextVM methods for uncertain
 // assistant dispatch reconciliation. Every remaining async tool uses durable
 // intent processor evidence instead.
 func AssistantAsyncToolRequestMethods() map[string][]string {

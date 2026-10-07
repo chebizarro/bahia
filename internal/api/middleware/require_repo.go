@@ -10,7 +10,7 @@ import (
 
 // RequireRepo returns middleware that responds with 503 when the dependency is
 // nil. Routes whose backing repository is absent (e.g. because Postgres is not
-// configured) must be unreachable, not panic-prone. This replaces the old
+// configured) must be unreachable, not panic-prone. This handles
 // ModePolicy/TierGate.
 func RequireRepo(dep any) func(http.Handler) http.Handler {
 	if isNilDep(dep) {

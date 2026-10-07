@@ -14,7 +14,7 @@ func TestIsRequestKind(t *testing.T) {
 		{"ContextVM message", ContextVMMessage, true},
 		{"ContextVM gift wrap", ContextVMGiftWrap, true},
 		{"ContextVM ephemeral gift wrap", ContextVMEphemeralGiftWrap, true},
-		// Legacy request kind-number commands are migration inventory only.
+		// Compatibility request kind-number commands are migration inventory only.
 		{"DNS zone create", DNSZoneCreateRequest, false},
 		{"Deploy request", DeployRequest, false},
 		{"Service action", ServiceAction, false},
@@ -76,7 +76,7 @@ func TestIsBahiaProjectionKind(t *testing.T) {
 		{"Bahia identity", BahiaIdentityDefinition, true},
 		{"Bahia replay checkpoint", BahiaReplayCheckpoint, true},
 		{"Bahia readiness status", BahiaReadinessStatus, true},
-		// Legacy runtime projections remain migration-only and are not canonical observable projections.
+		// Compatibility runtime projections remain migration-only and are not canonical observable projections.
 		{"DNS operation status", DNSOperationStatus, false},
 		{"DNS zone create result", DNSZoneCreateResult, false},
 		{"Deployment status", DeploymentStatus, false},
@@ -189,7 +189,7 @@ func TestIsReadableKind(t *testing.T) {
 		{"SoulFactory fleet config", SoulFactoryFleetConfig, true},
 		{"SoulFactory runtime capability", SoulFactoryRuntimeCapability, true},
 		{"SoulFactory runtime result", SoulFactoryRuntimeResult, true},
-		// Legacy runtime kinds and requests are not readable after the migration boundary.
+		// Compatibility runtime kinds and requests are not readable after the migration boundary.
 		{"DNS operation status", DNSOperationStatus, false},
 		{"Service registry", ServiceRegistry, false},
 		{"Retired worker state kind", CPStateFamilyWorkerState.LegacyKind(), false},
@@ -209,7 +209,7 @@ func TestIsReadableKind(t *testing.T) {
 }
 
 func TestDNSKindsCompleteness(t *testing.T) {
-	// Legacy DNS request helpers are inventory data only and must not imply
+	// Compatibility DNS request helpers are inventory data only and must not imply
 	// production runtime request acceptance.
 	requestKinds := DNSRequestKinds()
 	for _, kind := range requestKinds {
@@ -231,7 +231,7 @@ func TestDNSKindsCompleteness(t *testing.T) {
 }
 
 func TestBackupKindsCompleteness(t *testing.T) {
-	// Legacy backup request helpers are inventory data only and must not imply
+	// Compatibility backup request helpers are inventory data only and must not imply
 	// production runtime request acceptance.
 	for _, kind := range BackupRequestKinds() {
 		if IsRequestKind(kind) {

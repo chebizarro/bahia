@@ -1,4 +1,4 @@
-/**
+/***/
  * Branch detection utilities using @nostr-git/core
  * Fetches repo state events (NIP-34 kind 30618) to extract branch information
  */
@@ -9,7 +9,7 @@ import { uniqueRelays } from './pool-utils.js';
 
 const REPO_STATE_KIND = KINDS.REPOSITORY_STATE;
 
-/**
+/***/
  * Parse branches from a repo state event's tags
  * @param {Object} event - The repo state event
  * @returns {{ branches: string[], defaultBranch: string | null }}
@@ -71,7 +71,7 @@ function parseRepoStateBranches(event) {
   return { branches, defaultBranch };
 }
 
-/**
+/***/
  * Parse repository coordinate to extract pubkey and identifier
  * Format: "30617:pubkey:identifier"
  * @param {string} repoCoordinate
@@ -95,7 +95,7 @@ function parseRepoCoordinate(repoCoordinate) {
   return { pubkey, identifier };
 }
 
-/**
+/***/
  * Fetch branches for a NIP-34 repository
  * @param {string} repoCoordinate - Repository coordinate (30617:pubkey:identifier)
  * @param {Object} options
@@ -202,7 +202,7 @@ export async function fetchRepoBranches(repoCoordinate, { timeout = 5000, relayU
   });
 }
 
-/**
+/***/
  * Check if a repository selection is a NIP-34 Nostr repository
  * @param {Object} selection - Repository selection object
  * @returns {boolean}

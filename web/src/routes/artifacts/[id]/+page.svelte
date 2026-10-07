@@ -567,7 +567,7 @@ import Table from '$lib/components/Table.svelte';
 
     <OperationalActivity items={liveArtifactOperations} title="Live artifact activity" />
 
-    <!-- Tabs -->
+    <!-- Tabs-->
     <div class="tabs">
       <button 
         class="tab" 
@@ -592,17 +592,17 @@ import Table from '$lib/components/Table.svelte';
       </button>
     </div>
 
-    <!-- Tab Content -->
+    <!-- Tab Content-->
     <div class="tab-content">
       {#if activeTab === 'overview'}
-        <!-- Overview Tab -->
+        <!-- Overview Tab-->
         <div class="overview-grid">
           <Card title="Name" titleIcon={ArtifactIcon} value={displayName} />
           <Card title="Type" titleIcon={TypeIcon} value={artifactTypeLabel(artifact)} />
           <Card title="Version" titleIcon={VersionIcon} value={displayVersion} />
           <Card title="Size" titleIcon={ArtifactIcon} value={formatBytes(artifact.size_bytes)} />
           <Card title="Signature" titleIcon={hasVerifiedSig ? SuccessIcon : WarningIcon} value={hasVerifiedSig ? 'Verified' : signatures.length > 0 ? 'Needs verification' : 'Not signed'} />
-          <!-- Digest card: small font, middle-truncated, tooltip + copy on click -->
+          <!-- Digest card: small font, middle-truncated, tooltip + copy on click-->
           {#if artifact.digest || artifact.image_digest}
             {@const fullDigest = artifact.digest || artifact.image_digest}
             <div class="card digest-card">
@@ -674,7 +674,7 @@ import Table from '$lib/components/Table.svelte';
         </section>
 
       {:else if activeTab === 'sbom'}
-        <!-- SBOM Tab -->
+        <!-- SBOM Tab-->
         <IntentGate domain="sbom">
         <section class="sbom-section">
           <div class="section-header">
@@ -763,7 +763,7 @@ import Table from '$lib/components/Table.svelte';
         </IntentGate>
 
       {:else if activeTab === 'signatures'}
-        <!-- Signatures Tab -->
+        <!-- Signatures Tab-->
         <IntentGate domain="artifact" record={artifact}>
         <section class="signatures-section">
           <div class="section-header">
@@ -886,7 +886,7 @@ import Table from '$lib/components/Table.svelte';
     margin: 0 0 1rem;
   }
 
-  /* Tabs */
+  /* Tabs*/
   .tabs {
     display: flex;
     gap: 0.5rem;
@@ -916,12 +916,12 @@ import Table from '$lib/components/Table.svelte';
     border-bottom-color: var(--primary);
   }
 
-  /* Tab Content */
+  /* Tab Content*/
   .tab-content {
     min-height: 300px;
   }
 
-  /* Overview Tab */
+  /* Overview Tab*/
   .overview-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1064,7 +1064,7 @@ import Table from '$lib/components/Table.svelte';
     text-decoration: underline;
   }
 
-  /* SBOM and Signatures Sections */
+  /* SBOM and Signatures Sections*/
   .sbom-section,
   .signatures-section {
     background: var(--card-bg);

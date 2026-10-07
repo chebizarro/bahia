@@ -1,6 +1,6 @@
-/**
+/***/
  * E2E Test Scenario Library Index
- * 
+ *
  * This module exports all test scenarios with metadata for discovery and execution.
  */
 import type { Scenario } from '../types.js';
@@ -10,7 +10,7 @@ import type { Scenario } from '../types.js';
 // UI and the MCP endpoint, never daemon REST routes.
 import { eventScenarios } from './events.js';
 
-/**
+/***/
  * Scenario category metadata
  */
 export interface ScenarioCategory {
@@ -19,7 +19,7 @@ export interface ScenarioCategory {
   scenarios: Scenario[];
 }
 
-/**
+/***/
  * All scenario categories
  */
 export const categories: ScenarioCategory[] = [
@@ -30,54 +30,54 @@ export const categories: ScenarioCategory[] = [
   },
 ];
 
-/**
+/***/
  * All scenarios flattened
  */
 export const allScenarios: Scenario[] = categories.flatMap(c => c.scenarios);
 
-/**
+/***/
  * Get scenarios by tag
  */
 export function getScenariosByTag(tag: string): Scenario[] {
   return allScenarios.filter(s => s.tags.includes(tag));
 }
 
-/**
+/***/
  * Get scenarios by multiple tags (AND logic)
  */
 export function getScenariosByTags(tags: string[]): Scenario[] {
   return allScenarios.filter(s => tags.every(tag => s.tags.includes(tag)));
 }
 
-/**
+/***/
  * Get scenario by name
  */
 export function getScenarioByName(name: string): Scenario | undefined {
   return allScenarios.find(s => s.name === name);
 }
 
-/**
+/***/
  * Get smoke test scenarios (quick sanity checks)
  */
 export function getSmokeTests(): Scenario[] {
   return getScenariosByTag('smoke');
 }
 
-/**
+/***/
  * Get integration test scenarios (multi-step workflows)
  */
 export function getIntegrationTests(): Scenario[] {
   return getScenariosByTag('integration');
 }
 
-/**
+/***/
  * Get all CRUD scenarios
  */
 export function getCRUDTests(): Scenario[] {
   return getScenariosByTag('crud');
 }
 
-/**
+/***/
  * Scenario library statistics
  */
 export function getStats() {
@@ -99,7 +99,7 @@ export function getStats() {
   };
 }
 
-/**
+/***/
  * Print scenario library summary
  */
 export function printSummary(): void {

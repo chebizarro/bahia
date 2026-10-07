@@ -51,7 +51,7 @@
   // with open={true} so the count matches what the heading claims.
   // RouteCanaryOutages owns the REST read itself (see
   // $lib/components/RouteCanaryOutages.svelte) so this page stays
-  // nostr_native and never imports the legacy REST client.
+  // nostr_native and never imports the compatibility REST client.
   let routeCanaryCount = $state(0);
 
   // Service detail dialog
@@ -504,7 +504,7 @@
   {/if}
 </div>
 
-<!-- Service Detail Dialog -->
+<!-- Service Detail Dialog-->
 <Modal bind:open={serviceDialogOpen} title="Service Detail" titleIcon={ServiceIcon} onClose={closeServiceDialog}>
   {#if selectedService}
     <div class="svc-detail">
@@ -521,7 +521,7 @@
   {/if}
 </Modal>
 
-<!-- Placement Policy Modal -->
+<!-- Placement Policy Modal-->
 <Modal bind:open={placementOpen} title="Edit Worker Placement Policy" titleIcon={ServiceIcon} onClose={closePlacementModal}>
   <form onsubmit={(event) => { event.preventDefault(); handlePlacementPolicyApply(); }} class="edit-form">
     <div class="form-field">
@@ -583,7 +583,7 @@
   </form>
 </Modal>
 
-<!-- Edit Modal -->
+<!-- Edit Modal-->
 <Modal bind:open={editOpen} title="Edit Environment" titleIcon={EnvironmentIcon} onClose={closeEditModal}>
   <form onsubmit={(event) => { event.preventDefault(); handleEdit(); }} class="edit-form">
     <div class="form-field">
@@ -673,7 +673,7 @@
   </form>
 </Modal>
 
-<!-- Delete Confirmation Dialog -->
+<!-- Delete Confirmation Dialog-->
 <ConfirmDialog
   intentDomain="environment" intentOrgId={environment?.org_id}
   bind:open={deleteOpen}

@@ -1,4 +1,4 @@
--- Additive, provider-neutral virtualization resources. No legacy table is altered.
+-- Additive, provider-neutral virtualization resources. No compatibility table is altered.
 CREATE FUNCTION vm_control_plane_classes(value JSONB, ephemeral BOOLEAN) RETURNS BOOLEAN
 LANGUAGE SQL IMMUTABLE STRICT AS $$
  SELECT jsonb_typeof(value) = 'array' AND jsonb_array_length(value) > 0

@@ -131,7 +131,7 @@ func sprintCalls(calls []mockCall) string {
 func setupExplicitOwnedDirNoMetadata(t *testing.T) (string, *ComposeRuntime) {
 	t.Helper()
 	dir := t.TempDir()
-	// Create .bahia/ dir so fragment writes can land there, but no render-state.json.
+	// Create.bahia/ dir so fragment writes can land there, but no render-state.json.
 	if err := os.MkdirAll(filepath.Join(dir, ".bahia"), 0o755); err != nil {
 		t.Fatalf("create .bahia dir: %v", err)
 	}
@@ -148,7 +148,7 @@ func setupExplicitOwnedDirNoMetadata(t *testing.T) (string, *ComposeRuntime) {
 
 func TestLoadRenderMetadata_Missing(t *testing.T) {
 	dir := t.TempDir()
-	// No .bahia/ directory and no render-state.json.
+	// No.bahia/ directory and no render-state.json.
 	metadata, err := LoadRenderMetadata(dir)
 	if err != nil {
 		t.Fatalf("expected nil error for missing file, got: %v", err)

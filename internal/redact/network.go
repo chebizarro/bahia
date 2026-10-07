@@ -26,7 +26,7 @@ func NetworkAddresses(text string) string {
 				return Address + token[len(candidate):]
 			}
 			// Transport errors commonly append a colon, prose a full stop.
-			// Try the intact token first so IPv6 addresses ending in :: survive.
+			// Try the intact token first so IPv6 addresses ending in:: survive.
 			if !strings.HasSuffix(candidate, ":") && !strings.HasSuffix(candidate, ".") && !strings.HasSuffix(candidate, "-") {
 				return token
 			}

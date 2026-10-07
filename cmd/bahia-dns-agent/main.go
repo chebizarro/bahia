@@ -110,9 +110,9 @@ func run(args []string) error {
 	service.RegisterHandlers(transport)
 	pool.Connect(ctx)
 
-	// Phase 3 D1: zone sync subscriber — subscribe to zone-sync events from
+	// D1: zone sync subscriber — subscribe to zone-sync events from
 	// the daemon's pubkey and apply them locally. Runs alongside the existing
-	// ContextVM transport until the subscription path is proven (C-34).
+	// ContextVM transport until the subscription path is proven.
 	zoneSyncEvents := make(chan nostr.Event, 64)
 	zoneSyncSub := &nostradapter.StoreBackedSubscriber{
 		Pool:           pool,
@@ -167,9 +167,9 @@ func run(args []string) error {
 		}
 	}()
 
-	// Phase 3 D1: health status publisher — publish NIP-38 kind 30315 events
+	// D1: health status publisher — publish NIP-38 kind 30315 events
 	// with NIP-40 expiry so the daemon can read agent health from events
-	// instead of ContextVM Health() RPC.
+	// instead of ContextVM Health RPC.
 	agentSigner, signerErr := controlplane.NewPrivateKeySigner(normalizedKey)
 	if signerErr == nil {
 		healthPub := dnsagent.NewHealthPublisher(dnsagent.HealthPublisherConfig{
@@ -215,7 +215,7 @@ func run(args []string) error {
 }
 
 // newRequestTransport wires the agent's ContextVM request transport to the
-// relays using the ContextVM request ledger (bahia-irsry.48 item 1). The
+// relays using the ContextVM request ledger ( item 1). The
 // ledger keeps per-relay cursors and request claims in bbolt, so restart
 // idempotency and downtime recovery do not need Postgres. Events are
 // subscribed through the raw relay pool, not StoreBackedSubscriber, because

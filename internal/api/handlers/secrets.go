@@ -21,9 +21,9 @@ func NewSecretHandler(repo repository.SecretRepository, encryptor *secrets.Encry
 	return &SecretHandler{repo: repo, encryptor: encryptor}
 }
 
-// requireEncryptor: deleted in Phase 3 N1 (no longer needed without Create/Update).
+// requireEncryptor: deleted in N1 (not needed without Create/Update).
 
-// createSecretRequest: deleted in Phase 3 N1 (no longer needed).
+// createSecretRequest: deleted in N1 (not needed).
 
 // secretRefResponse is the API response for a secret (never includes the value).
 type secretRefResponse struct {
@@ -56,7 +56,7 @@ func toSecretRefResponse(ref domain.SecretRef) secretRefResponse {
 	return resp
 }
 
-// Create: deleted in Phase 3 N1 — secret mutations go through intent publishing.
+// Create: deleted in N1 — secret mutations go through intent publishing.
 
 // List handles GET /services/{id}/secrets.
 func (h *SecretHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +83,6 @@ func (h *SecretHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": refs})
 }
 
-// Delete: deleted in Phase 3 N1 — secret mutations go through intent publishing.
+// Delete: deleted in N1 — secret mutations go through intent publishing.
 
-// Update: deleted in Phase 3 N1 — secret mutations go through intent publishing.
+// Update: deleted in N1 — secret mutations go through intent publishing.

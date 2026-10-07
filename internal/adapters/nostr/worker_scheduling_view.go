@@ -10,9 +10,9 @@ import (
 )
 
 // WorkerSchedulingView reads a worker's operator scheduling state (active,
-// cordoned, draining, ...) from the daemon's retained worker-state record in
+// cordoned, draining,...) from the daemon's retained worker-state record in
 // the local event store. It lets worker admission honour an operator's cordon
-// without a SQL worker row (audit C-48).
+// without a SQL worker row.
 type WorkerSchedulingView struct {
 	history ProjectionHistory
 }

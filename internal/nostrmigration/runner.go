@@ -287,7 +287,7 @@ func (r *Runner) migrateRelayPage(ctx context.Context, summary *Summary, until *
 // relayPageTruncated fails a backfill page that a relay could not serve in
 // full: the pool pages answers past a relay's NIP-11 max_limit, but more
 // events sharing one created_at than a page holds cannot be paged, and
-// skipping them would leave legacy events unmigrated.
+// skipping them would leave compatibility events unmigrated.
 func (r *Runner) relayPageTruncated(merged *nostrAdapter.MergedSubscription) error {
 	for _, outcome := range merged.StoredOutcomes() {
 		if outcome.Truncated {

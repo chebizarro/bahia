@@ -10,7 +10,7 @@ export function teardownServiceStoreBinding() { query.unbind(); }
 export function resetServices() { query.reset(); }
 export function refreshServices() { query.flush(); }
 
-// Retained only for the Wave 3 ContextVM mutation acknowledgement path.
+// Retained only for the ContextVM mutation acknowledgement path.
 export function upsertServiceProjection(service) {
   const id = service?.id;
   if (!id) return;

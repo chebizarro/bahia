@@ -27,7 +27,7 @@ func newPgServiceRepositoryWithDB(db pgQueryer) *PgServiceRepository {
 }
 
 func (r *PgServiceRepository) Create(ctx context.Context, svc *domain.Service) error {
-	// The id is normally client-minted (bahia-irsry.35); the database never
+	// The id is normally client-minted; the database never
 	// generates it. Mint only for internal callers that supply none.
 	if svc.ID == uuid.Nil {
 		svc.ID = domain.NewEntityID()

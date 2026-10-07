@@ -8,18 +8,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// Entity identity (bahia-irsry.35, audit C-40, RC-1).
+// Entity identity.
 //
 // An entity's id is fixed by whoever authors its create intent, not by
 // Postgres. The id is an RFC 9562 UUID in canonical lowercase form. New
 // writers mint UUIDv7 (time-ordered, 74 random bits); a create intent may also
-// carry a UUIDv4, which is what legacy rows and crypto.randomUUID produce.
+// carry a UUIDv4, which is what compatibility rows and crypto.randomUUID produce.
 // The id is the addressable coordinate's entity segment, so every existing
 // `<prefix>:<uuid>` (or bare `<uuid>`) coordinate stays valid unchanged.
 // Uniqueness of natural keys such as (org, name) is a constraint the
 // authoritative index enforces; it is never the identity. See
 // docs/event-spec.md "Entity identity and coordinates" and
-// docs/designs/decision-client-minted-entity-ids.md.
+// docs/architecture/entity-identity.md.
 
 var (
 	// ErrInvalidEntityID rejects a client-supplied id that is not a

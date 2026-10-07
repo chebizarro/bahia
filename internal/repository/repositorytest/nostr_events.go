@@ -1,6 +1,6 @@
 // Package repositorytest holds in-memory doubles of repository interfaces for
 // tests. Production code must not use it: the daemon's in-memory nostr_events
-// fallback was removed (bahia-irsry.10.4, audit B-12), and PostgreSQL-less mode
+// fallback was removed, and PostgreSQL-less mode
 // reads the local event store instead (nostr.LocalEventRepository).
 package repositorytest
 

@@ -1,7 +1,7 @@
 package controlplane
 
-// ContextVM requests over the daemon's local store (bahia-irsry.10.6, audit
-// C-14, B-25).
+// ContextVM requests over the daemon's local store (audit
+//).
 //
 // Each configured relay gets its own request subscription and its own cursor
 // in the local store. Every request is claimed in a local ledger before its
@@ -41,15 +41,15 @@ package controlplane
 // floor - 49h, which bounds the replay after long downtime.
 //
 // Dedup. Three keys, all in one bbolt transaction with the claim:
-//   - The delivered event id (the outer wrap). A relay replay or a second
-//     relay's copy is skipped silently. Every event on the subscription is
-//     marked, including responses and rejected requests, so a restart
-//     neither re-dispatches nor re-answers them.
-//   - The request event id (the inner id). A re-wrapped copy of a handled
-//     request is never executed again.
-//   - The idempotency key (requester, method, progressToken), bound to a
-//     params fingerprint. A new request reusing a key is never executed
-//     again either; reusing it with other params is a conflict.
+// - The delivered event id (the outer wrap). A relay replay or a second
+// relay's copy is skipped silently. Every event on the subscription is
+// marked, including responses and rejected requests, so a restart
+// neither re-dispatches nor re-answers them.
+// - The request event id (the inner id). A re-wrapped copy of a handled
+// request is never executed again.
+// - The idempotency key (requester, method, progressToken), bound to a
+// params fingerprint. A new request reusing a key is never executed
+// again either; reusing it with other params is a conflict.
 //
 // A completed keyed request's terminal response is kept, saved before it is
 // published, and replayed with the retry's own JSON-RPC id. An unkeyed request
@@ -63,7 +63,7 @@ package controlplane
 // Plaintext 25910 and the oversized-request 21059 fallback are ephemeral:
 // relays forward them live and never store them, so a request sent while the
 // daemon is down is lost and the client must retry. Durable desired-state
-// intents are Phase 3 (bahia-irsry.11). This transport does not pretend to
+// intents are. This transport does not pretend to
 // make ephemeral RPC durable.
 
 import (
@@ -160,7 +160,7 @@ func (l *contextVMLocalState) innerFloor(now time.Time) nostr.Timestamp {
 // pruneLocked drops ledger entries and regular events (gift wraps) older than
 // anything the floor accepts or a resume can fetch. The caller holds
 // processMu. This bounds the DNS agent's gift-wrap store growth on long
-// uptimes (bahia-irsry.48 item 6): entries older than the age floor are
+// uptimes ( item 6): entries older than the age floor are
 // evicted event-driven at EOSE commits, not on a ticker.
 func (l *contextVMLocalState) pruneLocked(now time.Time, logger *zap.Logger) {
 	if !l.lastPrune.IsZero() && now.Sub(l.lastPrune) < contextVMLedgerPruneInterval {
@@ -512,7 +512,7 @@ func (f *contextVMRelayFollower) subscribe(ctx context.Context, anchor nostr.Tim
 // first EOSE. The pool transparently reissues the REQ after a dropped
 // connection or a retryable CLOSED; those reissued REQs' EOSEs carry a
 // Reissued flag and a fresh anchor that is committed as a cursor, keeping
-// it up to date without a periodic re-anchor REQ (bahia-irsry.48 item 4).
+// it up to date without a periodic re-anchor REQ ( item 4).
 func (f *contextVMRelayFollower) follow(ctx context.Context, sub *nostrpool.MergedSubscription, anchor nostr.Timestamp) error {
 	events, eoses, closes := sub.Events, sub.RelayEOSE, sub.Closed
 	local := &f.t.contextVMLocal

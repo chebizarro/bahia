@@ -9,8 +9,8 @@ import (
 
 // ReadinessWaiter gates the warm-start on the intent subscriber's first
 // EOSE catch-up. In production, *controlplane.ReadinessTracker satisfies
-// this interface. The channel-based Ready() method avoids polling: the
-// warm-start selects on Ready() and ctx.Done().
+// this interface. The channel-based Ready method avoids polling: the
+// warm-start selects on Ready and ctx.Done.
 type ReadinessWaiter interface {
 	// Ready returns a channel that is closed when all preconditions are met.
 	// If no preconditions exist the channel is already closed.
@@ -33,21 +33,21 @@ func WithIntentDomains(domains []string) ProjectorOption {
 
 // warmStartMigratedDomains runs warm-start comparison for
 // domains listed in intentDomains. It:
-//  1. Waits for the intent subscriber's first catch-up (EOSE + NIP-77) via
-//     the ReadinessWaiter channel — no polling, no timeout-as-completion.
-//  2. Hydrates the fingerprint cache from the daemon's own published history
-//     so that unchanged coordinates are recognised and not re-signed.
-//  3. Compares history records against the cache: any record present in history
-//     but absent from the cache (e.g. an abandoned outbox publish) is
-//     re-published. Records already in the cache are skipped.
+// 1. Waits for the intent subscriber's first catch-up (EOSE + NIP-77) via
+// the ReadinessWaiter channel — no polling, no timeout-as-completion.
+// 2. Hydrates the fingerprint cache from the daemon's own published history
+// so that unchanged coordinates are recognised and not re-signed.
+// 3. Compares history records against the cache: any record present in history
+// but absent from the cache (e.g. an abandoned outbox publish) is
+// re-published. Records already in the cache are skipped.
 //
 // If ctx is cancelled before readiness, warm-start is skipped entirely and
 // a warning is logged — it never proceeds on a guess.
 //
-// Phase 3 X1: all domains are now included in intentDomains, so
-// every family is warm-started and no legacy snapshot path remains.
+// X1: all domains are now included in intentDomains, so
+// every family is warm-started and no compatibility snapshot path remains.
 //
-// See design §5.3.
+// See docs/architecture/intents-and-authority.md
 func (p *Projector) warmStartMigratedDomains(ctx context.Context) {
 	if p.readiness == nil || len(p.intentDomains) == 0 {
 		return

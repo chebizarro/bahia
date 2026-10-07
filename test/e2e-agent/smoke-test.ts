@@ -1,6 +1,6 @@
-/**
+/***/
  * Smoke test for E2E agent test harness
- * 
+ *
  * This script verifies that the harness, the Playwright driver and the MCP
  * driver can connect and perform basic operations against the Bahia stack.
  */

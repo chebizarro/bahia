@@ -128,7 +128,7 @@ const (
 	AssistantWorkUncertain        AssistantWorkState = "uncertain"
 	// AssistantWorkAbandoned is terminal: an operator attested that uncertain
 	// work cannot be reconciled. It claims neither success nor failure of the
-	// side effect, only that its outcome is unknown and no longer tracked.
+	// side effect, only that its outcome is unknown and not tracked.
 	AssistantWorkAbandoned AssistantWorkState = "abandoned"
 )
 
@@ -378,7 +378,7 @@ type AssistantReconciliationRequest struct {
 
 // AssistantBatchApprovalHashInput is the complete v2 hash envelope. The
 // canonical bytes are RFC 8785 JSON over this exact field set, including null
-// AllowedTools and an empty steps array. Hash is lowercase SHA-256 hex.
+// AllowedTools and an empty steps array. Hash is lowercase SH hex.
 type AssistantBatchApprovalHashInput struct {
 	Version    int                    `json:"version"`
 	SessionID  string                 `json:"session_id"`

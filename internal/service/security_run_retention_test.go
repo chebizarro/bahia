@@ -13,7 +13,7 @@ import (
 
 // Per target, only terminal runs beyond the newest securityRunsRetainedPerTarget
 // are retired; active runs and targets within the cap are untouched, and a
-// repeated prune retires nothing more (bahia-u5whr item 6).
+// repeated prune retires nothing more ( item 6).
 func TestPruneSecurityScanRunsRetiresTerminalRunsBeyondPerTargetRetention(t *testing.T) {
 	ctx := context.Background()
 	canonical := newMemoryCanonicalSecurityStore()

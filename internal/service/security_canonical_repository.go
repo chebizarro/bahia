@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// SecurityCanonicalStore is the canonical security state (audit B-32): signed,
+// SecurityCanonicalStore is the canonical security state: signed,
 // replaceable cp-state records admitted to the durable publish outbox and read
 // back from the daemon's own retained events in the local event store. A
 // Publish method returns nil once the record is accepted or durably queued and
@@ -345,8 +345,8 @@ func (r *CanonicalSecurityRepository) MarkSecurityScanRunStarted(ctx context.Con
 }
 
 // CompleteSecurityScanRun publishes the run's terminal record. The scanner
-// calls it again for the same run when only the publish state of its legacy
-// observables changes, so a terminal run may be replaced by itself.
+// calls it again for the same run when only the publish state of its compatibility
+// observables changes, so a terminal run may be handled by itself.
 func (r *CanonicalSecurityRepository) CompleteSecurityScanRun(ctx context.Context, run *domain.SecurityScanRun) error {
 	if err := r.available(); err != nil {
 		return err
@@ -1044,7 +1044,7 @@ func (r *CanonicalSecurityRepository) backfillTarget(ctx context.Context, target
 
 // Run retention ----------------------------------------------------------------
 
-// Run records are one coordinate per run (bahia-u5whr item 6). Latest-wins
+// Run records are one coordinate per run ( item 6). Latest-wins
 // retention never sweeps a coordinate, so growth is bounded here: per target,
 // the newest securityRunsRetainedPerTarget terminal runs are kept (the breach
 // lifecycle compares a run with the target's previous terminal run, and the

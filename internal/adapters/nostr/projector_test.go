@@ -777,16 +777,16 @@ func TestProjectorSystemDiscoveryFailsWhenNIP65RelayPreferencesHaveNoAcceptedRel
 	assertNoPublishedKind(t, sink, kinds.NIP65RelayList)
 }
 
-// Phase 3 M1: TestProjectorPublishesMLReadModelSnapshot removed — ML projection
+// M1: TestProjectorPublishesMLReadModelSnapshot removed — ML projection
 // (models, versions, endpoints, states, provenance, capabilities) is now
 // published directly from the mutation site via MLCanonicalPublisher.
 // See ml_canonical_publisher_test.go for the replacement tests.
 
-// TestProjectorPublishesAuditAndReadModelsForRepresentativeMutations removed: projector no longer handles
+// TestProjectorPublishesAuditAndReadModelsForRepresentativeMutations removed: projector not handles
 // build/artifact/intent/run cp-state publication — moved to RegistryService
-// (bahia-irsry.11.7, Phase 3 S2).
+// (S2).
 
-// Phase 3 L1: TestProjectorRepublishesLLMRouteAndState removed —
+// L1: TestProjectorRepublishesLLMRouteAndState removed —
 // LLM projection is now handled outside the projector.
 
 func TestProjectorPublishesLLMAuditFromRunEvent(t *testing.T) {
@@ -798,9 +798,9 @@ func TestProjectorPublishesLLMAuditFromRunEvent(t *testing.T) {
 	projector := newTestProjector(projectorTestConfig(), source, sink, nil, zap.NewNop())
 	projector.handleEvent(ctx, events.Event{Type: events.EventLLMDeploymentRunCompleted, EntityID: runID.String(), Data: events.ResourceData{RunID: runID.String()}})
 
-	// Phase 3 L1: projector still publishes audit events for LLM, but no longer
+	// L1: projector still publishes audit events for LLM, but not
 	// publishes LLM state (that is now done by the LLM registry service directly).
-	// Phase 3 X1 B-16: EventLLMDeploymentRunStatusChanged removed from audit
+	// X1: EventLLMDeploymentRunStatusChanged removed from audit
 	// (observation/state-changed); EventLLMDeploymentRunCompleted is the
 	// discrete mutation boundary event.
 	audit := assertOneAudit(t, sink, events.EventLLMDeploymentRunCompleted)
@@ -854,13 +854,13 @@ func (s *fakeDNSPolicyProjectionSource) ListEnabledDNSPolicies(context.Context) 
 
 // TestProjectorPublishesDNSAuditEvents verifies that DNS endpoint
 // registered/deregistered events produce audit facts, while DNS sync/drift
-// events do not (B-16: observation/sync events removed from audit set).
+// events do not (: observation/sync events removed from audit set).
 func TestProjectorPublishesDNSAuditEvents(t *testing.T) {
 	ctx := context.Background()
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 
-	// DNS sync/drift events should produce zero audit facts (B-16).
+	// DNS sync/drift events should produce zero audit facts.
 	projector.handleEvent(ctx, events.Event{Type: eventDNSZoneSynced, EntityID: "prod.cascadia", Data: map[string]any{"zone": "prod.cascadia", "backend_ref": "fs-primary"}})
 	projector.handleEvent(ctx, events.Event{Type: eventDNSRecordChanged, EntityID: "api.prod.cascadia", Data: map[string]any{"zone": "prod.cascadia", "fqdn": "api.prod.cascadia", "record_type": "A", "operation": "add"}})
 	projector.handleEvent(ctx, events.Event{Type: eventDNSDriftDetected, EntityID: "prod.cascadia", Data: map[string]any{"zone": "prod.cascadia", "backend_ref": "fs-primary"}})
@@ -1321,21 +1321,21 @@ func stateKeyForTest(serviceID, envID uuid.UUID) string {
 	return serviceID.String() + ":" + envID.String()
 }
 
-// Phase 3 S2: TestProjectorIntentRegistryCarriesDesiredHash,
+// S2: TestProjectorIntentRegistryCarriesDesiredHash,
 // TestProjectorRunRegistryCarriesApplyMetadata, and
 // TestProjectorRunRegistryOmitsApplyMetadataWhenNil removed — projector no
 // longer handles build/artifact/intent/run cp-state publication; moved to
-// RegistryService and tested in relay_first_state_test.go (bahia-irsry.11.7).
+// RegistryService and tested in relay_first_state_test.go.
 //
-// Phase 3 S1: TestProjectorStateCarriesDesiredStateMetadata,
+// S1: TestProjectorStateCarriesDesiredStateMetadata,
 // TestProjectorStateOmitsDesiredMetadataWhenAbsent, and
 // TestProjectorStateSecretPlaintextNeverProjected removed — state is published
-// by the reconciler; tested via projector_state_helpers_test.go (bahia-irsry.11.6).
+// by the reconciler; tested via projector_state_helpers_test.go.
 
-// Phase 3 W1: TestRunEventRefreshesWorkerReadModelImmediately removed — the
-// projector no longer handles deployment run events for worker read-model
+// W1: TestRunEventRefreshesWorkerReadModelImmediately removed — the
+// projector not handles deployment run events for worker read-model
 // refresh. Worker read models are published directly from the mutation site
-// and via event-bus subscriptions wired in app.go (bahia-irsry.11.14).
+// and via event-bus subscriptions wired in app.go.
 // See TestWorkerReadModelPublisher_* in the controlplane package for the
 // replacement coverage.
 func TestProjectorRunEventDoesNotPublishWorkerReadModels(t *testing.T) {
@@ -1362,7 +1362,7 @@ func TestProjectorRunEventDoesNotPublishWorkerReadModels(t *testing.T) {
 	})
 
 	// The projector must NOT publish any worker read-model records — that
-	// responsibility has moved to WorkerReadModelPublisher (Phase 3 W1).
+	// responsibility has moved to WorkerReadModelPublisher ( W1).
 	for _, kind := range []int{KindWorkerAssignmentState, KindWorkerDrainStatus} {
 		if got := sink.byKind(kind); len(got) != 0 {
 			t.Fatalf("projector published %d records for kind %d on run event, want 0 (W1 migration)", len(got), kind)

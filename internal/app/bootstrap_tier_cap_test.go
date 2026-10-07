@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// B-10 (bahia-irsry.3) is now closed by deletion: the tier model is gone.
+// is now closed by deletion: the tier model is gone.
 // RequireRepo middleware gates nil-repository routes with 503.
 
 func TestRequireRepoGatesNilDependencies(t *testing.T) {
@@ -60,7 +60,7 @@ func findBootstrapperRunner(t *testing.T, app *App) *bootstrapperRunner {
 	return nil
 }
 
-// B-28: the legacy nostr_events migration re-signs and republishes events,
+// the compatibility nostr_events migration re-signs and republishes events,
 // so it runs offline (bahia-migrate nostr), never on the daemon startup path.
 func TestNewDoesNotRegisterNostrMigrationOnStartup(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)

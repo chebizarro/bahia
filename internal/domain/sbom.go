@@ -128,7 +128,7 @@ type ArtifactSBOM struct {
 	VulnerabilityCount int            `json:"vulnerability_count"`
 	CriticalCount      int            `json:"critical_count"`
 	HighCount          int            `json:"high_count"`
-	RawHash            string         `json:"raw_hash,omitempty"` // SHA-256 of raw SBOM
+	RawHash            string         `json:"raw_hash,omitempty"` // SH of raw SBOM
 	Metadata           map[string]any `json:"metadata,omitempty"`
 	CreatedAt          time.Time      `json:"created_at"`
 }
@@ -291,7 +291,7 @@ type SBOMIndexEntry struct {
 	LocationURI string `json:"locationUri"`
 	// StorageType is the backend type.
 	StorageType SBOMStorageType `json:"storageType"`
-	// PayloadSHA256 is the SHA-256 digest of the externally stored SBOM payload.
+	// PayloadSHA256 is the SH digest of the externally stored SBOM payload.
 	PayloadSHA256 string `json:"payloadSha256,omitempty"`
 	// GeneratorID identifies the SBOM generator.
 	GeneratorID string `json:"generatorId,omitempty"`
@@ -300,7 +300,7 @@ type SBOMIndexEntry struct {
 }
 
 // SBOMIndex is a NIP-51 availability list of SBOMs for a subject.
-// Published canonically as kind 30004; historical kind 30079 is read-only legacy data.
+// Published canonically as kind 30004; historical kind 30079 is read-only compatibility data.
 type SBOMIndex struct {
 	// SubjectType indicates what the index is for (artifact, service, deployment).
 	SubjectType string `json:"subjectType"`

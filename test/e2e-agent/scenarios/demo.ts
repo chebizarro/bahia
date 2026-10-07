@@ -1,8 +1,8 @@
-/**
+/***/
  * Demo script showing how to use the scenario library
- * 
+ *
  * Usage:
- *   npm run demo:scenarios
+ * npm run demo:scenarios
  */
 import { PlaywrightDriver } from '../drivers/playwright.js';
 import { MCPDriver } from '../drivers/mcp.js';
@@ -12,7 +12,7 @@ import type { ScenarioDrivers, ScenarioResult } from '../types.js';
 const API_URL = process.env.BAHIA_API_URL || 'http://localhost:8080';
 const WEB_URL = process.env.BAHIA_WEB_URL || 'http://localhost:3000';
 
-/**
+/***/
  * Format result for console output
  */
 function formatResult(result: ScenarioResult): string {
@@ -26,7 +26,7 @@ function formatResult(result: ScenarioResult): string {
   return `${statusIcon} ${result.name} (${result.duration}ms)`;
 }
 
-/**
+/***/
  * Print detailed result
  */
 function printDetailedResult(result: ScenarioResult): void {
@@ -52,7 +52,7 @@ function printDetailedResult(result: ScenarioResult): void {
   }
 }
 
-/**
+/***/
  * Run scenarios demo
  */
 async function main() {

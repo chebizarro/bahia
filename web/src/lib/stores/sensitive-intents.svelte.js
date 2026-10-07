@@ -17,9 +17,9 @@ export function sensitiveMutationBlocker() {
   return sensitiveIntentBlocker(authState.capabilities);
 }
 
-/**
+/***/
  * The organization a sensitive intent acts on, resolved exactly the way
- * `intentReadiness()` decides a sensitive control is ready: the record's own
+ * `intentReadiness` decides a sensitive control is ready: the record's own
  * org id, the org of the service it belongs to, or the one organization this
  * session knows. Throws the explicit error only in the never-ready state
  * (several organizations, none known), which the readiness signal reports too.
@@ -99,7 +99,7 @@ function ensureSession() {
   return sessionOpening;
 }
 
-/** Restore redacted pending metadata and resume status/outbox subscriptions. */
+/** Restore redacted pending metadata and resume status/outbox subscriptions.*/
 export async function initializeSensitiveIntents() {
   await ensureSession();
 }
@@ -119,7 +119,7 @@ export async function submitSensitiveIntent({ domain, op, coordinate, orgId, con
   return { id: coordinate, coordinate, intentId: signedIntentId, pending: true, sensitive: true };
 }
 
-/** Resolve a gift-wrapped intent only from its signed, correlated daemon status. */
+/** Resolve a gift-wrapped intent only from its signed, correlated daemon status.*/
 export async function waitForSensitiveIntentStatus({ coordinate, intentId }, { signal } = {}) {
   const { pending } = await ensureSession();
   const requester = authState.pubkey;

@@ -15,7 +15,7 @@ type DNSReconcileAdapter interface {
 	ReconcileAll(ctx context.Context) error
 }
 
-// ContinuityDNSCutoverService connects continuity transitions to DNS mutation.
+// ContinuityDNSActivationService connects continuity transitions to DNS mutation.
 type ContinuityDNSCutoverService struct {
 	dnsReconciler DNSReconcileAdapter
 	publisher     events.Publisher
@@ -26,7 +26,7 @@ type ContinuityDNSCutoverService struct {
 	seenRuns     map[string]struct{}
 }
 
-// NewContinuityDNSCutoverService subscribes continuity events to DNS reconciliation.
+// NewContinuityDNSActivationService subscribes continuity events to DNS reconciliation.
 func NewContinuityDNSCutoverService(pub events.Publisher, dnsReconciler DNSReconcileAdapter, logger *zap.Logger) *ContinuityDNSCutoverService {
 	if logger == nil {
 		logger = zap.NewNop()

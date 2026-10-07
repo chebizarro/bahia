@@ -217,7 +217,7 @@ func TestAssistantSessionTopicMigrationSkipsOtherAuthors(t *testing.T) {
 }
 
 // TestAssistantSessionTopicMigrationMigratesMoreThanFiveHundred proves the
-// enumeration is complete: with more untagged legacy records than the old
+// enumeration is complete: with more untagged compatibility records than the old
 // bounded query returned, every one is migrated, including the oldest, and
 // nothing is migrated twice.
 func TestAssistantSessionTopicMigrationMigratesMoreThanFiveHundred(t *testing.T) {

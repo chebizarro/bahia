@@ -112,7 +112,7 @@ services:
 func setupComposeDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	// Create .bahia/ marker with render-state.json so it looks Bahia-owned.
+	// Create.bahia/ marker with render-state.json so it looks Bahia-owned.
 	bahiaDir := filepath.Join(dir, ".bahia")
 	if err := os.MkdirAll(bahiaDir, 0o755); err != nil {
 		t.Fatalf("create .bahia dir: %v", err)
@@ -357,7 +357,7 @@ func TestComposeStagingManager_StageAndValidate_StagingLayout(t *testing.T) {
 
 	absDir, _ := filepath.Abs(dir)
 
-	// Staging dir should be under .bahia/staging/.
+	// Staging dir should be under.bahia/staging/.
 	expectedStagingDir := filepath.Join(absDir, ".bahia", "staging")
 	if staged.StagingDir != expectedStagingDir {
 		t.Errorf("staging dir: want %s, got %s", expectedStagingDir, staged.StagingDir)
@@ -373,12 +373,12 @@ func TestComposeStagingManager_StageAndValidate_StagingLayout(t *testing.T) {
 		t.Errorf("live compose file path wrong: %s", staged.LiveComposeFile)
 	}
 
-	// Live metadata should be under .bahia/.
+	// Live metadata should be under.bahia/.
 	if staged.LiveMetadataFile != filepath.Join(absDir, ".bahia", "render-state.json") {
 		t.Errorf("live metadata path wrong: %s", staged.LiveMetadataFile)
 	}
 
-	// Live env file should be under .bahia/env/.
+	// Live env file should be under.bahia/env/.
 	if staged.LiveEnvFiles["web"] != filepath.Join(absDir, ".bahia", "env", "web.env") {
 		t.Errorf("live env file path wrong: %s", staged.LiveEnvFiles["web"])
 	}
@@ -632,7 +632,7 @@ func TestComposeStagingManager_FullWorkflow(t *testing.T) {
 		t.Error("staging dir should be removed after promote")
 	}
 
-	// The .bahia/ marker should still exist (it's the parent, not staging).
+	// The.bahia/ marker should still exist (it's the parent, not staging).
 	bahiaDir := filepath.Join(dir, ".bahia")
 	if _, statErr := os.Stat(bahiaDir); os.IsNotExist(statErr) {
 		t.Error(".bahia/ marker dir should still exist after promote")

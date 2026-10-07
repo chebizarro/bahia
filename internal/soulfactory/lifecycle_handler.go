@@ -37,7 +37,7 @@ type LifecycleEngine interface {
 // SoulFactory orchestrator for lifecycle/customization requests: it parses the
 // request, authorizes it, deduplicates replays, publishes 6950 progress, invokes
 // an execution engine, publishes the 31951 read model when needed, and publishes
-// canonical 7950 terminal results. The 1951 legacy result alias is optional and
+// canonical 7950 terminal results. The 1951 compatibility result alias is optional and
 // migration-only.
 type LifecycleHandler struct {
 	reactor          *Reactor
@@ -142,17 +142,17 @@ func (h *LifecycleHandler) deferredAction(event *nostr.Event, action *domain.Sou
 // awaiting_terminal. It does not go through the soul gate: the stuck operation
 // holds the soul, and the abandon releases it. The sequence is:
 //
-//  1. Authorize the abandon.
-//  2. Look up the soul and confirm it is held.
-//  3. Replace the parked operation's resume with a record-only callback: a
-//     late result is logged and published as progress but NOT applied.
-//  4. Force-release the soul's hold, so deferred work proceeds.
-//  5. Publish the abandoned terminal result.
+// 1. Authorize the abandon.
+// 2. Look up the soul and confirm it is held.
+// 3. Replace the parked operation's resume with a record-only callback: a
+// late result is logged and published as progress but NOT applied.
+// 4. Force-release the soul's hold, so deferred work proceeds.
+// 5. Publish the abandoned terminal result.
 //
 // Event contract (kind:1950):
 //
 //	tags: ["soul", "<parameterized coordinate>"], ["action", "abandon"]
-//	      optional: ["reason", "<operator reason>"]
+//	 optional: ["reason", "<operator reason>"]
 //	authorization: the signing pubkey must be in Config.AuthorizedPubkeys.
 func (h *LifecycleHandler) handleAbandon(ctx context.Context, event *nostr.Event, action *domain.SoulAction, agentID string) error {
 	logger := h.logger.With("event_id", event.ID, "action", action.Action, "agent_id", agentID)

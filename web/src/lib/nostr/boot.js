@@ -1,4 +1,4 @@
-/**
+/***/
  * Store-first boot sequence.
  *
  * 1. Read deploy seed (service_pubkeys, relay_urls).
@@ -7,9 +7,9 @@
  * 4. The store-first subscription connects the pool in background.
  * 5. EOSE transitions sync-status from "syncing" to "live" (badge, not gate).
  * 6. Events ingested by the pool go into the BahiaEventStore; derived stores
- *    consume only that store.
+ * consume only that store.
  *
- * Design reference: phase4-web-store-first.md §7, §12 W1-S2.
+ * Design reference: docs/architecture/web-store-first.md §7, §12.
  *
  * @module lib/nostr/boot
  */
@@ -26,20 +26,20 @@ import { getBootstrapSeed } from '../stores/discovery.svelte.js';
 // Module-level singletons
 // ---------------------------------------------------------------------------
 
-/** @type {ReturnType<typeof createBahiaEventStore> | null} */
+/** @type {ReturnType<typeof createBahiaEventStore> | null}*/
 let _store = null;
 
-/** @type {ReturnType<typeof createBahiaPool> | null} */
+/** @type {ReturnType<typeof createBahiaPool> | null}*/
 let _pool = null;
 
-/** Service pubkeys from the deployment seed; the first remains the store namespace. */
+/** Service pubkeys from the deployment seed; the first remains the store namespace.*/
 let _servicePubkey = '';
 let _servicePubkeys = /** @type {string[]} */ ([]);
 
-/** Relay URLs from the deploy seed. */
+/** Relay URLs from the deploy seed.*/
 let _relayUrls = /** @type {string[]} */ ([]);
 
-/** Unsubscribe from relay-auth signer changes. */
+/** Unsubscribe from relay-auth signer changes.*/
 let _signerUnsubscribe = /** @type {(() => void) | null} */ (null);
 
 let _relayLimitsPrefetched = false;
@@ -48,20 +48,20 @@ let _relayLimitsPrefetched = false;
 // Animation-frame batched collection refresh (§7 step 7)
 // ---------------------------------------------------------------------------
 
-/** @type {Set<() => void>} */
+/** @type {Set< => void>}*/
 const _refreshCallbacks = new Set();
 
-/** @type {number | null} */
+/** @type {number | null}*/
 let _rafId = null;
 let _dirty = false;
 let _storeUnsubscribe = null;
 
-/**
+/***/
  * Register a callback to be called when the store has new events.
  * Coalesced per animation frame — fires at most once per frame.
  *
- * @param {() => void} cb
- * @returns {() => void} Unsubscribe function.
+ * @param { => void} cb
+ * @returns { => void} Unsubscribe function.
  */
 export function onStoreRefresh(cb) {
   _refreshCallbacks.add(cb);
@@ -86,7 +86,7 @@ function _flushRefresh() {
   }
 }
 
-/** Synchronously flush any scheduled refresh (for tests). */
+/** Synchronously flush any scheduled refresh (for tests).*/
 export function flushBatch() {
   if (_rafId !== null && typeof cancelAnimationFrame === 'function') {
     cancelAnimationFrame(_rafId);
@@ -99,17 +99,17 @@ export function flushBatch() {
 // Public accessors
 // ---------------------------------------------------------------------------
 
-/** @returns {ReturnType<typeof createBahiaEventStore> | null} */
+/** @returns {ReturnType<typeof createBahiaEventStore> | null}*/
 export function getEventStore() { return _store; }
 
-/** @returns {ReturnType<typeof createBahiaPool> | null} */
+/** @returns {ReturnType<typeof createBahiaPool> | null}*/
 export function getPool() { return _pool; }
 
 export function getServicePubkey() { return _servicePubkey; }
 export function getServicePubkeys() { return [..._servicePubkeys]; }
 export function getRelayUrls() { return [..._relayUrls]; }
 
-/** Start the one-shot NIP-11 lookup after an authenticated session is available. */
+/** Start the one-shot NIP-11 lookup after an authenticated session is available.*/
 export function prefetchRelayLimits() {
   if (!_pool || _relayLimitsPrefetched) return;
   const relays = _relayUrls.map(toWebSocketUrl).filter(Boolean);
@@ -122,15 +122,15 @@ export function prefetchRelayLimits() {
 // Boot
 // ---------------------------------------------------------------------------
 
-/** @type {Promise<void> | null} */
+/** @type {Promise<void> | null}*/
 let _bootPromise = null;
 
-/**
+/***/
  * Open the event store so views can render immediately from persisted data.
  * Idempotent — subsequent calls return the same promise.
  *
  * Does NOT connect to relays or start subscriptions. The store-first
- * `bootstrapControlplane()` handles that, using getEventStore()/getPool().
+ * `bootstrapControlplane` handles that, using getEventStore/getPool.
  *
  * @param {object} [options]
  * @param {ReturnType<typeof createBahiaEventStore>} [options.store] - DI

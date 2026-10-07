@@ -1,4 +1,4 @@
-/**
+/***/
  * Nostr sidecar control-plane verification scenarios.
  */
 import type { Scenario, ScenarioResult, ScenarioDrivers, TestStepResult } from '../types.js';

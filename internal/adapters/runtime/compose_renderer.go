@@ -24,12 +24,12 @@ type RenderResult struct {
 	// ComposeYAML is the canonical docker-compose.yml content.
 	ComposeYAML []byte
 
-	// EnvMaterial maps service keys to their generated .env file content.
+	// EnvMaterial maps service keys to their generated.env file content.
 	// Secret values are included here (for writing to protected env files)
 	// but are NEVER included in metadata or logs.
 	EnvMaterial map[string]string
 
-	// Metadata records render provenance and state for .bahia/render-state.json.
+	// Metadata records render provenance and state for.bahia/render-state.json.
 	Metadata RenderMetadata
 }
 
@@ -77,11 +77,11 @@ func NewComposeRenderer() *ComposeRenderer {
 // canonical Compose YAML, generated env material, and render metadata.
 //
 // The renderer:
-//   - Sorts services deterministically by StableServiceKey
-//   - Uses explicit Compose project name
-//   - Renders all service fields from the desired-state contracts
-//   - Omits secret values from metadata and logs
-//   - Produces stable, reproducible output for golden test comparison
+// - Sorts services deterministically by StableServiceKey
+// - Uses explicit Compose project name
+// - Renders all service fields from the desired-state contracts
+// - Omits secret values from metadata and logs
+// - Produces stable, reproducible output for golden test comparison
 func (r *ComposeRenderer) RenderEnvironmentPlan(ctx context.Context, plan *domain.DesiredEnvironmentPlan) (*RenderResult, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("compose renderer: plan is nil")
@@ -365,7 +365,7 @@ func (r *ComposeRenderer) buildComposeService(svc domain.DesiredServiceSpec) com
 // Env material generation
 // ---------------------------------------------------------------------------
 
-// buildEnvMaterial generates .env file content for each service, keyed by
+// buildEnvMaterial generates.env file content for each service, keyed by
 // stable service key. This includes resolved secret refs (for file writing)
 // and literal env vars. The caller is responsible for writing these to
 // protected files; they are NEVER included in metadata or logs.
@@ -719,7 +719,7 @@ func sortedCopy(s []string) []string {
 }
 
 // MetadataJSON serializes RenderMetadata to indented JSON, suitable for
-// writing to .bahia/render-state.json. Secret values are never present
+// writing to.bahia/render-state.json. Secret values are never present
 // in the metadata structure by design.
 func (m *RenderMetadata) MetadataJSON() ([]byte, error) {
 	return json.MarshalIndent(m, "", "  ")

@@ -24,7 +24,7 @@ type PersistentVMConfig struct {
 }
 
 // NewPersistentVMProvider is the C/E composition constructor. It is independent
-// of legacy Deploy, so persistent updates never invoke replace-on-deploy.
+// of compatibility Deploy, so persistent updates never invoke replace-on-deploy.
 func NewPersistentVMProvider(cfg PersistentVMConfig, logger *zap.Logger) (domain.PersistentVMProvider, error) {
 	if cfg.Provider.VerifyImage == nil {
 		return nil, fmt.Errorf("persistent VM provider requires a trusted image provenance verifier")

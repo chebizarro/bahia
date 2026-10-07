@@ -1,4 +1,4 @@
-/**
+/***/
  * Test harness for launching and managing the Bahia docker-compose stack
  */
 import { exec } from 'child_process';
@@ -64,7 +64,7 @@ export async function assertDockerDaemonAvailable(): Promise<void> {
   }
 }
 
-/**
+/***/
  * Default configuration
  */
 const DEFAULT_CONFIG: Required<HarnessConfig> = {
@@ -78,7 +78,7 @@ const DEFAULT_CONFIG: Required<HarnessConfig> = {
   skipStackManagement: false, // if true, use existing stack instead of managing docker-compose
 };
 
-/**
+/***/
  * TestHarness manages the docker-compose stack lifecycle
  */
 export class TestHarness {
@@ -93,7 +93,7 @@ export class TestHarness {
     };
   }
 
-  /**
+  /***/
    * Start the docker-compose stack (or verify existing stack if skipStackManagement is true)
    */
   async start(): Promise<void> {
@@ -126,7 +126,7 @@ export class TestHarness {
     }
   }
 
-  /**
+  /***/
    * Stop the docker-compose stack
    */
   async stop(): Promise<void> {
@@ -153,7 +153,7 @@ export class TestHarness {
     }
   }
 
-  /**
+  /***/
    * Clean up: stop stack and remove volumes
    */
   async cleanup(): Promise<void> {
@@ -180,7 +180,7 @@ export class TestHarness {
     }
   }
 
-  /**
+  /***/
    * Wait for all services to be healthy
    */
   private async waitForHealth(): Promise<void> {
@@ -208,7 +208,7 @@ export class TestHarness {
     throw new Error('Timeout waiting for services to be healthy');
   }
 
-  /**
+  /***/
    * Check health via HTTP endpoints (for external stack)
    */
   private async checkHealthViaHttp(): Promise<ServiceHealth[]> {
@@ -249,7 +249,7 @@ export class TestHarness {
     return results;
   }
 
-  /**
+  /***/
    * Check health status of all services
    */
   async checkHealth(): Promise<ServiceHealth[]> {
@@ -288,7 +288,7 @@ export class TestHarness {
     return results;
   }
 
-  /**
+  /***/
    * Get service logs
    */
   async getLogs(service?: string): Promise<string> {
@@ -299,35 +299,35 @@ export class TestHarness {
     return stdout;
   }
 
-  /**
+  /***/
    * Get API base URL
    */
   getApiUrl(): string {
     return this.config.apiBaseUrl;
   }
 
-  /**
+  /***/
    * Get Web UI base URL
    */
   getWebUrl(): string {
     return this.config.webBaseUrl;
   }
 
-  /**
+  /***/
    * Get MCP JSON-RPC endpoint URL
    */
   getMcpUrl(): string {
     return process.env.BAHIA_E2E_MCP_URL ?? this.config.mcpServerUrl;
   }
 
-  /**
+  /***/
    * Check if harness is running
    */
   isStackRunning(): boolean {
     return this.isRunning;
   }
 
-  /**
+  /***/
    * Sleep helper
    */
   private sleep(ms: number): Promise<void> {

@@ -432,7 +432,7 @@ func TestResolverNIP11MetadataIsAdvisoryForMissingMalformedAndLimitingRelays(t *
 
 // The pool answers "auth-required:" itself (AUTH, then reissue on that
 // relay), so a CLOSED reaching the resolver is only logged: it neither
-// authenticates nor tears the subscription down (C-5).
+// authenticates nor tears the subscription down.
 func TestResolverLeavesAuthRequiredClosedToThePool(t *testing.T) {
 	resolver := New([]string{"wss://relay.example.test"}, "author")
 	closed := make(chan nostradapter.RelayClosed, 1)
@@ -521,7 +521,7 @@ func endpointTombstoneEvent(t *testing.T, secretKey, coordinate, fqdn string, cr
 	return signedEnvelopeEvent(t, secretKey, kinds.DNSEndpointState, coordinate, true, string(content), tags, createdAt)
 }
 
-// signedEnvelopeEvent mirrors controlStateEnvelope for a DNS legacy kind.
+// signedEnvelopeEvent mirrors controlStateEnvelope for a DNS compatibility kind.
 func signedEnvelopeEvent(t *testing.T, secretKey string, legacyKind int, d string, deleted bool, content string, extra nostr.Tags, createdAt nostr.Timestamp) *nostr.Event {
 	t.Helper()
 	tags := nostr.Tags{
@@ -623,8 +623,8 @@ func (p *fakeRelayPool) Close() {
 // TestResolverEventStreamCloseDoesNotMarkReady proves that when the event
 // stream closes (relay disconnect / timeout) without an EndOfStoredEvents
 // signal, the resolver does NOT mark itself as ready. This verifies the
-// fix from .30: only a real EOSE counts as completion, not channel close
-// or context timeout. (.40 item 4, .63 verification)
+// fix from.30: only a real EOSE counts as completion, not channel close
+// or context timeout. (.40 item 4,.63 verification)
 func TestResolverEventStreamCloseDoesNotMarkReady(t *testing.T) {
 	secretKey, pubkey := generatedResolverKeyPair(t)
 	resolver := New([]string{"wss://relay.example.test"}, pubkey)

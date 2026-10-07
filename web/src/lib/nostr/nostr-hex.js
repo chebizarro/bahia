@@ -8,7 +8,7 @@ export function ensureHexPubkey(pubkey, field) {
   }
 }
 
-/**
+/***/
  * Ellipsize a long hex pubkey (or any long identifier) for compact display,
  * e.g. `npub`/hex requesters in tables. Keeps the leading and trailing
  * characters so the value stays recognizable while fitting a table cell.

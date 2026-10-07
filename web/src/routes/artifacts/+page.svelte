@@ -309,7 +309,7 @@
 
   <OperationalActivity items={artifactOperations} title="Live artifact and build activity" />
 
-  <!-- Tabs -->
+  <!-- Tabs-->
   <div class="tabs">
     <button
       class="tab"
@@ -329,7 +329,7 @@
     </button>
   </div>
 
-  <!-- Registry Tab -->
+  <!-- Registry Tab-->
   {#if activeTab === 'registry'}
     {#if registryLoading}
       <p class="loading">Loading registry artifacts...</p>
@@ -344,9 +344,9 @@
     {/if}
   {/if}
 
-  <!-- Blossom Tab -->
+  <!-- Blossom Tab-->
   {#if activeTab === 'blossom'}
-    <!-- Server Status -->
+    <!-- Server Status-->
     {#if blossomServers.length > 0}
       <div class="server-status">
         <span class="server-label">Servers:</span>
@@ -370,7 +370,7 @@
       </div>
     {/if}
 
-    <!-- Filters over daemon-published Blossom metadata. -->
+    <!-- Filters over daemon-published Blossom metadata.-->
     <div class="filters">
       <div class="filter-group">
         <label for="pubkey-filter">Published Owner Pubkey:</label>
@@ -451,7 +451,7 @@
     text-align: center;
   }
 
-  /* Tabs */
+  /* Tabs*/
   .tabs {
     display: flex;
     gap: 0;
@@ -480,7 +480,7 @@
     border-bottom-color: var(--primary);
   }
 
-  /* Server Status */
+  /* Server Status*/
   .server-status {
     display: flex;
     align-items: center;
@@ -514,7 +514,7 @@
     color: #fca5a5;
   }
 
-  /* Filters */
+  /* Filters*/
   .filters {
     display: flex;
     gap: 1.5rem;
@@ -565,7 +565,7 @@
     opacity: 0.9;
   }
 
-  /* Table cell styles */
+  /* Table cell styles*/
   :global(.badge-cell) {
     display: inline-flex;
     align-items: center;

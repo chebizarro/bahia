@@ -52,7 +52,7 @@
   // option is disabled; approving or rejecting an existing batch draft is not
   // affected (that never starts a new turn).
   const batchAvailable = $derived(assistantWorkflowAvailable('batch'));
-  // "Keep" a persisted workflow the deployment can no longer start would be
+  // "Keep" a persisted workflow the deployment can not start would be
   // refused, so the effective request falls back to iterative.
   const keptWorkflowUnavailable = $derived(Boolean(session?.workflow && !assistantWorkflowAvailable(session.workflow)));
   const requestWorkflow = $derived(workflow || (keptWorkflowUnavailable ? 'iterative' : ''));

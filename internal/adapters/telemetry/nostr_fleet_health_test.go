@@ -171,7 +171,7 @@ func TestNostrFleetHealthCountsRouteOutagesAsDistinctDomain(t *testing.T) {
 		t.Fatalf("recovered route not reflected: %#v", snapshot.Entities)
 	}
 
-	// A withdrawn route (30900 tombstone on its coordinate, bahia-as2bo) is no
+	// A withdrawn route (30900 tombstone on its coordinate) is no
 	// longer a route, not an unknown one; a stale tombstone changes nothing.
 	observe(kinds.CASControlState, 300, gonostr.Tags{{"d", broken}, {"domain", "route"}, {"deleted", "true"}})
 	observe(kinds.CASControlState, 50, gonostr.Tags{{"d", "route:svc:env:none:ok.example.test"}, {"domain", "route"}, {"deleted", "true"}})

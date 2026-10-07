@@ -45,8 +45,8 @@ type ArtifactSignature struct {
 	CreatedAt          time.Time                   `json:"created_at"`
 }
 
-// NormalizeVerificationStatus keeps the legacy Verified boolean derived from VerificationStatus.
-// Empty statuses are backfilled from legacy fields for compatibility with existing callers/tests.
+// NormalizeVerificationStatus keeps the compatibility Verified boolean derived from VerificationStatus.
+// Empty statuses are backfilled from compatibility fields for compatibility with existing callers/tests.
 func (s *ArtifactSignature) NormalizeVerificationStatus() {
 	switch s.VerificationStatus {
 	case SignatureStatusVerified:

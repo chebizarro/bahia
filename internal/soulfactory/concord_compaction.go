@@ -69,7 +69,7 @@ type ConcordGuestbookSnapshot struct {
 // plaintext (CORD-02 §5) precisely so this re-encryption preserves the original
 // authors' signatures. This alone does not supply authority: exact non-head
 // Grant citations can be lost. Rotate refuses Refounding until that evidence
-// and candidate eligibility are reliable (bahia-185t0). CORD-04 §1's fresh-joiner
+// and candidate eligibility are reliable. CORD-04 §1's fresh-joiner
 // exception permits a dangling `prev`, not unchecked authority.
 //
 // Publication is idempotent in CORD-06 §3's resumable sense: re-running
@@ -130,7 +130,7 @@ func (m *concordMembership) republishConcordCompaction(
 
 // rewrapConcordEdition re-encrypts one folded head under a new epoch. The seal
 // is carried verbatim — its signature is the whole point of the plaintext form
-// — and only the wrap around it is fresh.
+// and only the wrap around it is fresh.
 func rewrapConcordEdition(edition concordEdition, signer concordGroupKey, readKey [32]byte, at nostr.Timestamp) (nostr.Event, error) {
 	sealJSON := edition.seal.String()
 	// NIP-44 hard-caps plaintext at 65,535 bytes and libraries are lenient

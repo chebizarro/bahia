@@ -1,4 +1,4 @@
-# relay_subscribe architecture ratchet baseline (bahia-irsry.8).
+# relay_subscribe architecture ratchet baseline.
 # Pre-existing violations only: entries may shrink, never grow.
 # Regenerate with: make arch-baseline
 # Format: <count>\t<key>

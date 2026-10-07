@@ -1,4 +1,4 @@
-/**
+/***/
  * Fix proposal and application utilities for E2E self-healing
  */
 import { readFile, writeFile } from 'node:fs/promises';

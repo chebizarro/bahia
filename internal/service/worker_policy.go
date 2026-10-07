@@ -430,10 +430,10 @@ func scorePreferred(w domain.Worker) (float64, string) {
 
 // scoreReputation scores workers based on their job history and performance.
 // Score components:
-//   - Success rate (0-100): 50% weight
-//   - Response time (relative to peers): 25% weight
-//   - Worker experience (job count): 15% weight
-//   - Availability (low queue depth): 10% weight
+// - Success rate (0-100): 50% weight
+// - Response time (relative to peers): 25% weight
+// - Worker experience (job count): 15% weight
+// - Availability (low queue depth): 10% weight
 func (s *WorkerPolicyService) scoreReputation(w domain.Worker, policy WorkerPolicy) (float64, string) {
 	if s.jobStats == nil {
 		// No stats tracker configured - fall back to neutral score

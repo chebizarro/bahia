@@ -29,14 +29,14 @@ var ErrNoTerminalResult = errors.New("no terminal result observed")
 // failure. Terminal replies are durable, regular Nostr events tagged with the
 // request id, so a result published later is not lost:
 //
-//   - NostrClient: call AwaitProvisioningResult (with the same receipt) or
-//     AwaitSoulActionResult (with RequestID) again. The new subscription's
-//     stored-event backfill returns the result if it has been published.
-//   - Runtime provisioning: Reactor.Run subscribes to kind:38386 results and
-//     handleLateRuntimeResult projects a late provisioning success.
-//   - Runtime lifecycle actions and fleet config reloads: the operation is
-//     parked as awaiting_terminal, never rolled back on the timeout alone, and
-//     the late result is reconciled through runtimeResultWaiters.
+// - NostrClient: call AwaitProvisioningResult (with the same receipt) or
+// AwaitSoulActionResult (with RequestID) again. The new subscription's
+// stored-event backfill returns the result if it has been published.
+// - Runtime provisioning: Reactor.Run subscribes to kind:38386 results and
+// handleLateRuntimeResult projects a late provisioning success.
+// - Runtime lifecycle actions and fleet config reloads: the operation is
+// parked as awaiting_terminal, never rolled back on the timeout alone, and
+// the late result is reconciled through runtimeResultWaiters.
 type NoTerminalResultError struct {
 	// RequestID is the published request's event id.
 	RequestID string

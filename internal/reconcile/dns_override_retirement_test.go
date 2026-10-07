@@ -43,7 +43,7 @@ func TestRetiredOverrideRestoresProjectedRecord(t *testing.T) {
 		t.Fatalf("active override should own the record, got source %q", got)
 	}
 
-	// Retired override: ListByZone no longer returns it, so no overrides apply.
+	// Retired override: ListByZone not returns it, so no overrides apply.
 	afterRetirement := applyDNSRecordOverrides(zone, append([]domain.DNSRecord(nil), projected...), nil)
 	if len(afterRetirement) != 1 {
 		t.Fatalf("projected record must survive retirement, got %d records", len(afterRetirement))

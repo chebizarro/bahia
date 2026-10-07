@@ -114,7 +114,7 @@ func TestConfigConsumerPublishesStatusesConcurrently(t *testing.T) {
 	}
 	require.Equal(t, 1, appliedVersionForTest(consumer, secret.Public().Hex(), "membership"))
 
-	// C-22: stable d-tag means only the terminal (applied) status survives
+	// stable d-tag means only the terminal (applied) status survives
 	// NIP-01 replacement in the store. The applied event has created_at + 1,
 	// so it always wins.
 	var stored []nostr.Event
@@ -126,7 +126,7 @@ func TestConfigConsumerPublishesStatusesConcurrently(t *testing.T) {
 	require.Equal(t, "applied", statusNameForTest(t, stored[0]))
 }
 
-// C-22: stable d-tags mean only the terminal status survives NIP-01
+// stable d-tags mean only the terminal status survives NIP-01
 // replacement. The applied event always wins because it has created_at + 1
 // relative to accepted. Both relay arrival orders must retain applied truth.
 func TestConfigStatusAppliedSurvivesReplay(t *testing.T) {
@@ -145,7 +145,7 @@ func TestConfigStatusAppliedSurvivesReplay(t *testing.T) {
 			consumer.processPending(t.Context())
 			require.Equal(t, 1, appliedVersionForTest(consumer, secret.Public().Hex(), "membership"))
 			require.Len(t, pair, 2)
-			// C-22: applied has created_at + 1, so it has a later timestamp.
+			// applied has created_at + 1, so it has a later timestamp.
 			require.Equal(t, pair[0].CreatedAt+1, pair[1].CreatedAt, "applied event must have later created_at")
 			t.Logf("status d-tags: accepted=%s applied=%s", pair[0].Tags.GetD(), pair[1].Tags.GetD())
 			// Both share the same stable d-tag.
@@ -176,7 +176,7 @@ func TestConfigStatusAppliedSurvivesReplay(t *testing.T) {
 			for event := range server.store.Query(t.Context(), nostr.Filter{Kinds: []nostr.Kind{configStatusKind}}, 10) {
 				stored = append(stored, event)
 			}
-			// C-22: only the terminal (applied) survives NIP-01 replacement.
+			// only the terminal (applied) survives NIP-01 replacement.
 			require.Len(t, stored, 1, "stable d-tag: only applied survives")
 			require.Equal(t, "applied", statusNameForTest(t, stored[0]))
 			// Restart the durable store, then build a fresh production replay reader.
@@ -272,7 +272,7 @@ func TestConfigStatusAppliedVersionsSurviveReplay(t *testing.T) {
 			})
 			var desired nostr.Event
 			for version := 1; version <= 2; version++ {
-				// C-22: advance c.now() between versions so later status
+				// advance c.now between versions so later status
 				// events win NIP-01 replacement on the shared stable d-tag.
 				ts := int64(1790200000 + 200*(version-1))
 				consumer.now = func() time.Time { return time.Unix(ts, 0) }
@@ -306,7 +306,7 @@ func TestConfigStatusAppliedVersionsSurviveReplay(t *testing.T) {
 
 			// Later progress, rejection of a duplicate, and a delayed old applied
 			// receipt must not erase or demote the effective version.
-			// C-22: delayed old receipts have lower timestamps than the current
+			// delayed old receipts have lower timestamps than the current
 			// version's applied event, so NIP-01 replacement protects newer truth.
 			consumer.now = func() time.Time { return time.Unix(1790200100, 0) }
 			old := configStatusDesiredForTest(t, secret, 1, 0)
@@ -319,7 +319,7 @@ func TestConfigStatusAppliedVersionsSurviveReplay(t *testing.T) {
 			require.ErrorContains(t, consumer.Handle(t.Context(), desired), "does not advance desired version")
 			assertApplied(desired, false)
 
-			// C-22: v3 accepted (higher timestamp) replaces v2 applied in the
+			// v3 accepted (higher timestamp) replaces v2 applied in the
 			// store via NIP-01 replacement. Drift is true because no applied
 			// event for v3 exists yet — accepted is not evidence of activation.
 			consumer.now = func() time.Time { return time.Unix(1790200400, 0) }
@@ -383,13 +383,13 @@ func TestConfigStatusMixedSchemaReplay(t *testing.T) {
 	}
 	assertReplay(old, false)
 
-	// C-22: advance c.now() so v2 status events have strictly higher
-	// created_at and win NIP-01 replacement over the legacy v1 event.
+	// advance c.now so v2 status events have strictly higher
+	// created_at and win NIP-01 replacement over the compatibility v1 event.
 	consumer.now = func() time.Time { return time.Unix(1790200200, 0) }
 	next := configStatusDesiredForTest(t, secret, 2, 0)
 	require.NoError(t, server.store.Replace(t.Context(), next))
 	require.NoError(t, consumer.Handle(t.Context(), next))
-	// C-22: v2 accepted (ts=1790200200) replaces v1 legacy (ts=1790200001)
+	// v2 accepted (ts=1790200200) replaces v1 compatibility (ts=1790200001)
 	// in the store. No applied event for v2 yet → drift is true.
 	replay := service.NewConfigFabricService(configStatusReplayRepository{store: server.store}, nil, nil)
 	drift, err := replay.ListDrift(t.Context())
@@ -399,8 +399,8 @@ func TestConfigStatusMixedSchemaReplay(t *testing.T) {
 	consumer.processPending(t.Context())
 	assertReplay(next, false)
 
-	// A stale legacy receipt arriving late must not overwrite newer truth.
-	// C-22: legacy.CreatedAt + 100 is still lower than v2 applied's
+	// A stale compatibility receipt arriving late must not overwrite newer truth.
+	// compatibility.CreatedAt + 100 is still lower than v2 applied's
 	// timestamp, so NIP-01 replacement rejects it.
 	legacy.CreatedAt += 100
 	require.NoError(t, consumer.signer.Sign(t.Context(), &legacy))

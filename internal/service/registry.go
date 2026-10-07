@@ -63,7 +63,7 @@ type RegistryService struct {
 }
 
 // BuildDeployStatePublisher publishes the canonical cp-state record for
-// build/artifact/deployment-intent/deployment-run entities. Phase 3 S2:
+// build/artifact/deployment-intent/deployment-run entities. S2:
 // the mutation site publishes directly, fingerprint-deduped, through the
 // outbox. internal/adapters/nostr.RelayFirstStatePublisher implements this.
 type BuildDeployStatePublisher interface {
@@ -122,7 +122,7 @@ func WithDeploymentApprovalPolicy(policy DeploymentApprovalPolicy) RegistryOptio
 }
 
 // WithCPStatePublisher configures the canonical cp-state publisher for
-// build/artifact/deployment-intent/deployment-run records (Phase 3 S2).
+// build/artifact/deployment-intent/deployment-run records ( S2).
 func WithCPStatePublisher(pub BuildDeployStatePublisher) RegistryOption {
 	return func(s *RegistryService) {
 		s.cpState = pub
@@ -192,7 +192,7 @@ func NewRegistryService(
 // SetCPStatePublisher configures the canonical cp-state publisher for
 // build/artifact/deployment-intent/deployment-run records after construction.
 // This is needed because the publisher depends on the Projector, which is
-// created after RegistryService (Phase 3 S2, bahia-irsry.11.7).
+// created after RegistryService ( S2).
 func (s *RegistryService) SetCPStatePublisher(pub BuildDeployStatePublisher) {
 	s.cpState = pub
 }
@@ -202,7 +202,7 @@ func (s *RegistryService) SetCPStatePublisher(pub BuildDeployStatePublisher) {
 // CreateService stores a new service under svc.ID, minting a UUIDv7 when the
 // caller supplied none. A retry with the same id and content is an idempotent
 // no-op that loads the stored service into svc; the same id with different
-// content returns *domain.EntityIDConflictError (bahia-irsry.35).
+// content returns *domain.EntityIDConflictError.
 func (s *RegistryService) CreateService(ctx context.Context, svc *domain.Service) error {
 	if svc == nil {
 		return fmt.Errorf("service is nil")
@@ -279,7 +279,7 @@ func (s *RegistryService) UpdateService(ctx context.Context, svc *domain.Service
 
 // prepareServiceUpdate applies write normalization and mints the update's
 // revision, so a relay-first record signed before the write carries the
-// revision the repository then stores (bahia-irsry.53).
+// revision the repository then stores.
 func prepareServiceUpdate(svc *domain.Service) {
 	normalizeServiceRepositoryForWrite(svc)
 	svc.UpdatedAt = domain.NextRevisionTime(svc.UpdatedAt)
@@ -631,7 +631,7 @@ func (s *RegistryService) UpdateEnvironmentWithDeploymentUnits(ctx context.Conte
 // stores (domain.NextRevisionTime) and the row is staged before publishing, so
 // the canonical relay event carries exactly the stored revision; otherwise the
 // next complete-set mutation would read a token from the relay that the
-// database never matches (bahia-irsry.53).
+// database never matches.
 func (s *RegistryService) updateEnvironmentWithDeploymentUnits(
 	ctx context.Context,
 	env *domain.Environment,
@@ -774,7 +774,7 @@ func prepareEnvironmentCreate(env *domain.Environment, units []*domain.Deploymen
 // ListEnvironmentDeploymentUnits returns the environment's persisted explicit
 // deployment units (none when it only has its implicit default unit). It is
 // the unit source of the environment-registry record both writers build
-// (bahia-irsry.53).
+// .
 func (s *RegistryService) ListEnvironmentDeploymentUnits(ctx context.Context, environmentID uuid.UUID) ([]domain.DeploymentUnit, error) {
 	if s.txExecutor == nil {
 		return nil, nil
@@ -1336,7 +1336,7 @@ func (s *RegistryService) publishArtifactRegistered(ctx context.Context, artifac
 	s.publishArtifactCPState(ctx, artifact)
 }
 
-// --- Phase 3 S2: canonical cp-state publishing ---
+// --- S2: canonical cp-state publishing ---
 
 func (s *RegistryService) publishBuildCPState(ctx context.Context, build *domain.Build) {
 	if s.cpState == nil || build == nil {

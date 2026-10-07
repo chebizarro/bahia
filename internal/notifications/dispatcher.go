@@ -22,7 +22,7 @@ type Sender interface {
 
 // Dispatcher routes events to matching notification channels.
 //
-// Phase 3 N1: the dispatcher maintains an in-memory channel cache that is
+// N1: the dispatcher maintains an in-memory channel cache that is
 // updated event-driven by the intent handler's OnChannelChanged callback.
 // The initial load from the DB happens lazily on first dispatch; after that
 // the cache is authoritative and the DB is not polled.
@@ -31,7 +31,7 @@ type Dispatcher struct {
 	senders map[domain.ChannelType]Sender
 	logger  *zap.Logger
 
-	// Event-driven channel cache (Phase 3 N1).
+	// Event-driven channel cache ( N1).
 	channelMu     sync.RWMutex
 	channelCache  map[uuid.UUID]*domain.NotificationChannel
 	cacheHydrated bool
@@ -102,7 +102,7 @@ func (d *Dispatcher) SetupSubscriptions(pub events.Publisher) {
 
 // dispatch sends a notification to all matching enabled channels.
 //
-// Phase 3 N1: uses the in-memory channel cache instead of polling the DB.
+// N1: uses the in-memory channel cache instead of polling the DB.
 // The cache is hydrated lazily on first call and updated event-driven by
 // OnChannelChanged.
 func (d *Dispatcher) dispatch(ctx context.Context, eventType string, payload map[string]any) error {
@@ -179,7 +179,7 @@ func (d *Dispatcher) enabledChannels(ctx context.Context) []domain.NotificationC
 
 // OnChannelChanged updates the in-memory channel cache when a channel is
 // created, updated, or deleted via the intent handler. This is the event-driven
-// path that replaces DB polling (Phase 3 N1).
+// path that replaces DB polling ( N1).
 func (d *Dispatcher) OnChannelChanged(ch *domain.NotificationChannel, deleted bool) {
 	d.channelMu.Lock()
 	defer d.channelMu.Unlock()

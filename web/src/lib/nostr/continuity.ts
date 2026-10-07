@@ -124,16 +124,16 @@ function newestFirst(left: ContinuityNostrEvent, right: ContinuityNostrEvent): n
 
 // Trusted-author policy by kind. Nothing here is read without `authors`.
 // - 30351 continuity status, 30353 recovery progress and 30900 worker state are
-//   projections the Bahia service signs: every deployment-seeded service key.
+// projections the Bahia service signs: every deployment-seeded service key.
 // - 31400-31404 definitions, 38430/38431 failover/recovery commands and 30315
-//   continuity heartbeats are operator-authored. The daemon acts on them only
-//   when signed by `nostr.authorized_pubkeys` (worker identity is data inside a
-//   heartbeat, not its signing authority). The daemon publishes that list as
-//   the fleet-OCK encrypted `operators:continuity` record (bahia-fbyo5), so a
-//   session holding the fleet OCK trusts the listed operators plus the
-//   signed-in key; a session without it trusts exactly one operator: the
-//   signed-in key. The service-signed 30351/30353 status is shown whoever
-//   defined the service.
+// continuity heartbeats are operator-authored. The daemon acts on them only
+// when signed by `nostr.authorized_pubkeys` (worker identity is data inside a
+// heartbeat, not its signing authority). The daemon publishes that list as
+// the fleet-OCK encrypted `operators:continuity` record, so a
+// session holding the fleet OCK trusts the listed operators plus the
+// signed-in key; a session without it trusts exactly one operator: the
+// signed-in key. The service-signed 30351/30353 status is shown whoever
+// defined the service.
 export function trustedContinuityAuthors(serviceAuthors = getServicePubkeys()) {
   const signedIn = authState.status === 'authenticated' ? authState.pubkey || '' : '';
   return {
@@ -142,7 +142,7 @@ export function trustedContinuityAuthors(serviceAuthors = getServicePubkeys()) {
   };
 }
 
-/** The subscription units; each is one live REQ and one paged history walk. */
+/** The subscription units; each is one live REQ and one paged history walk.*/
 export function continuityFilterUnits({ serviceAuthors = [], operatorAuthors = [] }: {
   serviceAuthors?: string[]; operatorAuthors?: string[];
 } = {}) {
@@ -217,7 +217,7 @@ export function reprojectContinuityForOperator() {
   for (const listener of dashboardListeners) listener();
 }
 
-/** Relay catch-up state of the continuity reader (a badge, never a render gate). */
+/** Relay catch-up state of the continuity reader (a badge, never a render gate).*/
 export function continuityCatchup() {
   return binding?.reader.metadata() ?? { complete: false, settled: false, degraded: null, relaySummary: [] };
 }
@@ -270,7 +270,7 @@ function continuityDashboardSnapshot(events: ContinuityNostrEvent[]) {
 
 const dashboardListeners = new Set<() => void>();
 
-/** Project the shared store for a page. Resolves once the cached view is delivered. */
+/** Project the shared store for a page. Resolves once the cached view is delivered.*/
 export async function subscribeToContinuityDashboard({ onUpdate }: {
   onUpdate?: (snapshot: ReturnType<typeof continuityDashboardSnapshot>) => void;
   onError?: (error: Error) => void;

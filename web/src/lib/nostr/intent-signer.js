@@ -23,7 +23,7 @@ function updatedAt(record) {
   return content?.updated_at ?? record.updated_at;
 }
 
-/** Build the unsigned event produced by Go's IntentPublisher.BuildIntentEvent. */
+/** Build the unsigned event produced by Go's IntentPublisher.BuildIntentEvent.*/
 export function buildIntentEvent({ domain, op = 'update', coordinate, orgId, content = {}, intentId = mintEntityId(),
   currentRecord, expectedUpdatedAt, createdAt = Math.floor(Date.now() / 1000), pubkey, schema } = {}) {
   if (!domain || !coordinate || !orgId || !intentId) throw new Error('Intent requires domain, coordinate, orgId and intentId');
@@ -69,7 +69,7 @@ export function buildIntentEvent({ domain, op = 'update', coordinate, orgId, con
   return event;
 }
 
-/** NIP-07, NIP-46 and the test signer all expose getPublicKey/signEvent. */
+/** NIP-07, NIP-46 and the test signer all expose getPublicKey/signEvent.*/
 export async function signIntent(request, signer) {
   if (!signer?.getPublicKey || !signer?.signEvent) throw new Error('An active Nostr signer is required');
   const pubkey = await signer.getPublicKey();

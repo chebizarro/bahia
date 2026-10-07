@@ -60,7 +60,7 @@ func policyStateRecord(t *testing.T, policy *domain.DeploymentPolicy, deleted bo
 }
 
 // Security scan schedules are derived from retained policy cp-state (audit
-// B-32), so the view must decode exactly what the policy publisher emits.
+// ), so the view must decode exactly what the policy publisher emits.
 func TestSecurityPolicyViewDecodesPublishedPolicyState(t *testing.T) {
 	envID := uuid.New()
 	now := time.Now().UTC().Truncate(time.Millisecond)

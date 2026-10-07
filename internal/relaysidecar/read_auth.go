@@ -15,7 +15,7 @@ import (
 )
 
 // readAuthPolicy implements NIP-42 read-side authentication for the sidecar
-// relay (C-21). Non-public kinds — and protected cp-state topics within kind
+// relay. Non-public kinds — and protected cp-state topics within kind
 // 30900 — require the requester to have authenticated via NIP-42 and be in the
 // allowed reader set.
 //
@@ -26,16 +26,16 @@ import (
 // as protected (it could return any family).
 //
 // Allowed readers:
-//   - admin allowlist pubkeys (NIP-86)
-//   - intent authors (TrustSet-derived, from setintentauthors)
-//   - the daemon's service pubkey
-//   - configured ReadAuthAllowedPubkeys (fleet operators)
+// - admin allowlist pubkeys (NIP-86)
+// - intent authors (TrustSet-derived, from setintentauthors)
+// - the daemon's service pubkey
+// - configured ReadAuthAllowedPubkeys (fleet operators)
 //
 // The mode controls behaviour:
-//   - "enforce": CLOSED auth-required for unauthenticated protected-kind REQs
-//     and COUNTs; NIP-11 advertises auth_required (default, C-47)
-//   - "warn":    log but allow (explicit migration opt-out)
-//   - "off":     no read-side auth (pre-C-21 behaviour)
+// - "enforce": CLOSED auth-required for unauthenticated protected-kind REQs
+// and COUNTs; NIP-11 advertises auth_required (default)
+// - "warn": log but allow (explicit migration opt-out)
+// - "off": no read-side auth (pre- behaviour)
 //
 // Readers that only need public topics (FIPS bridge, DNS agent zone reads,
 // CLI state reads, the web's pre-login bootstrap) are unaffected by enforce.
@@ -79,7 +79,7 @@ func newReadAuthPolicy(cfg config.RelaySidecarConfig, admission *policy, logger 
 // publicKinds are non-30900 kinds that remain readable without authentication.
 // These are standard Nostr discovery/profile/status kinds and open interop
 // kinds. Anything else (30078 app data, 4903 audit, 1059 gift wraps, the
-// SoulFactory and loom families, ...) requires NIP-42 regardless of topic.
+// SoulFactory and loom families,...) requires NIP-42 regardless of topic.
 var publicKinds = func() []nostr.Kind {
 	return []nostr.Kind{
 		nostr.KindProfileMetadata,           // 0: profiles
@@ -105,75 +105,75 @@ var publicKindRanges = [][2]nostr.Kind{
 // publicCPStateTopics are cp-state 30900 topics readable without NIP-42 auth.
 //
 // Classification rationale — a topic is public when:
-//   - an anonymous reader needs it (FIPS bridge, CLI NostrClient, web bootstrap), OR
-//   - the content is always encrypted (OCK), so relay-level read auth is redundant, OR
-//   - it is a supply-chain attestation consumed by external verifiers.
+// - an anonymous reader needs it (FIPS bridge, CLI NostrClient, web bootstrap), OR
+// - the content is always encrypted (OCK), so relay-level read auth is redundant, OR
+// - it is a supply-chain attestation consumed by external verifiers.
 //
 // A topic is protected when:
-//   - it contains sensitive operational detail (security findings, secrets), OR
-//   - it is operator-only config (relay-settings, config-status), OR
-//   - it contains private conversation content (assistant transcripts).
+// - it contains sensitive operational detail (security findings, secrets), OR
+// - it is operator-only config (relay-settings, config-status), OR
+// - it contains private conversation content (assistant transcripts).
 //
 // Per-topic decisions:
 //
 //	dns-endpoint, dns-zone, dns-zone-sync, dns-policy, dns-backend — PUBLIC:
-//	  FIPS bridge reads anonymously; pkg/discovery WithPrivateKey is optional;
-//	  web pre-login bootstrap reads these for the DNS dashboard; the DNS agent
-//	  applies dns-zone-sync with a key the sidecar need not admit.
+//	 FIPS bridge reads anonymously; pkg/discovery WithPrivateKey is optional;
+//	 web pre-login bootstrap reads these for the DNS dashboard; the DNS agent
+//	 applies dns-zone-sync with a key the sidecar need not admit.
 //
 //	service-state, service-registry, environment-registry — PUBLIC:
-//	  CLI NostrClient (pkg/client) reads anonymously (no WithPrivateKey in its pool);
-//	  web pre-login bootstrap reads these for the services dashboard.
+//	 CLI NostrClient (pkg/client) reads anonymously (no WithPrivateKey in its pool);
+//	 web pre-login bootstrap reads these for the services dashboard.
 //
 //	artifact-registry, build-registry, deployment-intent, deployment-run,
 //	policy-registry, package-repository, package-artifact, package-promotion — PUBLIC:
-//	  Web pre-login bootstrap reads all of these for fleet dashboards.
+//	 Web pre-login bootstrap reads all of these for fleet dashboards.
 //
 //	worker-state, worker-assignment, worker-drain, worker-eligibility,
 //	worker-cleanup — PUBLIC:
-//	  Web pre-login bootstrap reads worker state; loom worker adverts are open interop.
+//	 Web pre-login bootstrap reads worker state; loom worker adverts are open interop.
 //
 //	sbom-reference, sbom-availability — PUBLIC (as 30900 topics):
-//	  Supply-chain attestations consumed by the security scanner and external verifiers.
-//	  The 30078/30004 SBOM documents stay behind kind-level auth because 30078
-//	  also carries operator config documents.
+//	 Supply-chain attestations consumed by the security scanner and external verifiers.
+//	 The 30078/30004 SBOM documents stay behind kind-level auth because 30078
+//	 also carries operator config documents.
 //
 //	security-scan-status, security-summary — PUBLIC:
-//	  Observable security posture, no detailed vulnerability data.
+//	 Observable security posture, no detailed vulnerability data.
 //
 //	assistant-status — PUBLIC (and kind 30315 NIP-38 status is a public kind):
-//	  Worker health/adverts; web pre-login reads these.
+//	 Worker health/adverts; web pre-login reads these.
 //
 //	continuity-heartbeat — PUBLIC:
-//	  Monitoring observable, web pre-login bootstrap.
+//	 Monitoring observable, web pre-login bootstrap.
 //
 //	org-registry, org-member, org-invite, org-key-envelope — PUBLIC:
-//	  Content is OCK-encrypted; the ciphertext envelope is not sensitive.
-//	  Relay-level read auth is redundant for encrypted content.
+//	 Content is OCK-encrypted; the ciphertext envelope is not sensitive.
+//	 Relay-level read auth is redundant for encrypted content.
 //
 //	secret-registry, notification-channel — PUBLIC:
-//	  Content is OCK-encrypted; same rationale as org families.
+//	 Content is OCK-encrypted; same rationale as org families.
 //
 //	llm-route, llm-state — PUBLIC:
-//	  Web pre-login bootstrap reads LLM routing state.
+//	 Web pre-login bootstrap reads LLM routing state.
 //
 //	backup-*, ml-* — PUBLIC:
-//	  Web pre-login bootstrap reads all cp-state topics via controlplaneStateTopics().
+//	 Web pre-login bootstrap reads all cp-state topics via controlplaneStateTopics.
 //
 //	security-findings, security-audit — PROTECTED:
-//	  Detailed vulnerability data and audit logs; sensitive.
+//	 Detailed vulnerability data and audit logs; sensitive.
 //
 //	assistant-transcript — PROTECTED:
-//	  Private conversation content.
+//	 Private conversation content.
 //
 //	relay-settings — PROTECTED:
-//	  Operator relay policy, admin-only.
+//	 Operator relay policy, admin-only.
 //
 //	config-status — PROTECTED:
-//	  Config-fabric operator state, admin-only.
+//	 Config-fabric operator state, admin-only.
 //
 //	assistant-session — PROTECTED:
-//	  Session recovery data, private.
+//	 Session recovery data, private.
 var publicCPStateTopics = map[string]bool{
 	// DNS — anonymous readers (FIPS bridge, pkg/discovery). dns-zone-sync is
 	// the per-zone record set the DNS agent subscribes to with its own key
@@ -250,7 +250,7 @@ var publicCPStateTopics = map[string]bool{
 	kinds.CPStateTopicSecretRegistry:              true,
 	kinds.CPStateTopicNotificationChannelRegistry: true,
 
-	// B2 families (bahia-irsry.60): payment records and security findings/
+	// B2 families: payment records and security findings/
 	// schedules/finding-details are OCK-encrypted (fleet scope); ciphertext only.
 	kinds.CPStateTopicPaymentRecord:         true,
 	kinds.CPStateTopicSecurityFinding:       true,
@@ -275,17 +275,17 @@ var publicCPStateTopics = map[string]bool{
 	kinds.CPStateTopicNotificationLog:     true,
 
 	// Protected topics (NOT in this map):
-	//   security-findings, security-audit — detailed vulnerability data
-	//   assistant-transcript — private conversation content
-	//   assistant-session — session recovery data
-	//   soul-factory-saga-run — governed provisioning saga progress (C-45)
-	//   soul-factory-adapter-ledger — governed provisioning adapter ledger,
-	//     fleet-OCK ciphertext (bahia-nfc95)
-	//   soul-factory-runtime-policy — plaintext controller and pinned runtime
-	//     pubkeys (bahia-amv53)
-	//   runtime-observation — runtime observations (F74a)
-	//   relay-settings — operator relay policy
-	//   config-status — config-fabric state (admin-only)
+	// security-findings, security-audit — detailed vulnerability data
+	// assistant-transcript — private conversation content
+	// assistant-session — session recovery data
+	// soul-factory-saga-run — governed provisioning saga progress
+	// soul-factory-adapter-ledger — governed provisioning adapter ledger,
+	// fleet-OCK ciphertext
+	// soul-factory-runtime-policy — plaintext controller and pinned runtime
+	// pubkeys
+	// runtime-observation — runtime observations (F74a)
+	// relay-settings — operator relay policy
+	// config-status — config-fabric state (admin-only)
 }
 
 // isPublicKind reports whether the kind is always readable without auth.
@@ -373,7 +373,7 @@ func (r *readAuthPolicy) checkReadAuth(ctx context.Context, filter nostr.Filter)
 }
 
 // isAllowedReader reports whether pubkey is permitted to read protected kinds.
-// Unlike the write-side admin.admits() which is open when the allowlist is
+// Unlike the write-side admin.admits which is open when the allowlist is
 // empty, read auth requires the pubkey to be explicitly listed in one of the
 // allowed sets.
 func (r *readAuthPolicy) isAllowedReader(pubkey string) bool {
@@ -396,7 +396,7 @@ func (r *readAuthPolicy) isAllowedReader(pubkey string) bool {
 }
 
 // isAdminOrAllowed checks if the pubkey is an administrator or in the explicit
-// allowed pubkey list. Unlike admin.admits(), this does NOT open to all when
+// allowed pubkey list. Unlike admin.admits, this does NOT open to all when
 // the allowlist is empty — read auth is deny-by-default.
 func (r *readAuthPolicy) isAdminOrAllowed(pubkey string) bool {
 	r.admission.admin.mu.RLock()

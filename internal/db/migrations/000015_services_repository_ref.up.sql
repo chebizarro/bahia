@@ -2,7 +2,7 @@
 ALTER TABLE services
   ADD COLUMN IF NOT EXISTS repository JSONB;
 
--- Backfill legacy rows with repo_url into repository object
+-- Backfill compatibility rows with repo_url into repository object
 UPDATE services
 SET repository = jsonb_build_object(
   'source', 'manual',

@@ -61,23 +61,23 @@ const STATE_TOPICS = Object.freeze([
   KEY_ENVELOPE_TOPIC
 ]);
 
-/**
+/***/
  * Bootstrap runs as two REQs because the relay sidecar enforces NIP-42 reads
  * by default (`read_auth_mode: enforce`, internal/relaysidecar/read_auth.go)
  * and khatru refuses a whole REQ when any one filter is protected:
  *
  * - PUBLIC: cp-state topics the sidecar classifies public (fleet state,
- *   workers, backup/ML, OCK-encrypted org/secret families, sanitized
- *   health), NIP-38 status and the service's deletions. Served to anyone, so
- *   the pre-login dashboards hydrate and reach EOSE.
+ * workers, backup/ML, OCK-encrypted org/secret families, sanitized
+ * health), NIP-38 status and the service's deletions. Served to anyone, so
+ * the pre-login dashboards hydrate and reach EOSE.
  * - PROTECTED: config-status, the soul-factory runtime policy, config-fabric
- *   documents (30000/30078), audit (4903), SBOM documents (30078/30004),
- *   backup attestations and dashboard widgets. The sidecar answers an
- *   unauthenticated socket with an AUTH challenge and `CLOSED
- *   auth-required:`; welshman's auth buffer withholds that refusal and
- *   replays the REQ once the signed-in operator's signer (installed by the
- *   auth store) completes AUTH. An authenticated pubkey the sidecar does not
- *   admit gets `CLOSED restricted:` and only the public read models.
+ * documents (30000/30078), audit (4903), SBOM documents (30078/30004),
+ * backup attestations and dashboard widgets. The sidecar answers an
+ * unauthenticated socket with an AUTH challenge and `CLOSED
+ * auth-required:`; welshman's auth buffer withholds that refusal and
+ * replays the REQ once the signed-in operator's signer (installed by the
+ * auth store) completes AUTH. An authenticated pubkey the sidecar does not
+ * admit gets `CLOSED restricted:` and only the public read models.
  */
 let handles = [];
 
@@ -105,16 +105,16 @@ function protectedFilters(servicePubkey, recent, widgetAuthors) {
   ];
 }
 
-/** Filters of the bootstrap REQ that needs no NIP-42 (exported for tests). */
+/** Filters of the bootstrap REQ that needs no NIP-42 (exported for tests).*/
 export function storeFirstPublicFilters(servicePubkey, recent) { return publicFilters(servicePubkey, recent); }
-/** Filters of the bootstrap REQ the sidecar serves only to admitted, authenticated readers (exported for tests). */
+/** Filters of the bootstrap REQ the sidecar serves only to admitted, authenticated readers (exported for tests).*/
 export function storeFirstProtectedFilters(servicePubkey, recent, widgetAuthors = []) { return protectedFilters(servicePubkey, recent, widgetAuthors); }
 
-/**
+/***/
  * @param {object} handlers pool handlers; `onEose`, `onClosed`, `onEvent` and
- *   `onHealth` receive the subscription scope (`'public' | 'protected'`) as
- *   their last argument so callers can keep bootstrap completion on the
- *   public REQ and report protected-read refusals separately.
+ * `onHealth` receive the subscription scope (`'public' | 'protected'`) as
+ * their last argument so callers can keep bootstrap completion on the
+ * public REQ and report protected-read refusals separately.
  */
 export function initStoreFirstSubscriptions(handlers = {}) {
   if (handles.length) return handles[0];

@@ -1,5 +1,5 @@
 // Package client provides Bahia API clients. NostrClient reads fleet state
-// from relays via a per-process local event store (Phase 5 N1).
+// from relays via a per-process local event store ( N1).
 package client
 
 import (

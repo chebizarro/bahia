@@ -279,7 +279,7 @@ func TestAdapterLedgerStaleFileVersusRecordPrecedence(t *testing.T) {
 	require.Equal(t, uint64(1), upgraded.Version)
 	require.Len(t, host.ledgerRecords(t, ledgerRequestDTag(legacyID)), 1)
 
-	// A legacy reservation file is honoured the same way.
+	// A compatibility reservation file is honoured the same way.
 	spec := ledgerSpec(legacyID)
 	require.NoError(t, writeProductionJSON(ledger.reservationPath(spec.AgentID), &productionIdentityReservation{
 		Schema: productionReservationSchema, AgentID: spec.AgentID, SpecHash: spec.SpecHash, RequestID: legacyID, RunID: spec.RunID, CreatedAt: time.Now().UTC(),

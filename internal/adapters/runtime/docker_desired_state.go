@@ -42,8 +42,8 @@ func BahiaContainerName(spec *domain.DesiredServiceSpec) string {
 // matching.
 //
 // Lookup order:
-//  1. Filter by bahia.service_id + bahia.environment_id labels
-//  2. Fall back to container name matching via BahiaContainerName
+// 1. Filter by bahia.service_id + bahia.environment_id labels
+// 2. Fall back to container name matching via BahiaContainerName
 //
 // Returns nil (no error) when no managed container is found.
 func FindBahiaManagedContainer(ctx context.Context, observer *DockerObserver, spec *domain.DesiredServiceSpec) (*DockerContainer, error) {
@@ -208,13 +208,13 @@ func MapDesiredSpecToContainerConfig(spec *domain.DesiredServiceSpec, secrets ma
 
 // buildDockerLabels returns the full label map for a container. It includes
 // all labels from the spec (which already contain Bahia labels injected by
-// the builder) plus the bahia.service label used by legacy lookup.
+// the builder) plus the bahia.service label used by compatibility lookup.
 func buildDockerLabels(spec *domain.DesiredServiceSpec) map[string]string {
 	labels := make(map[string]string, len(spec.Labels)+1)
 	for k, v := range spec.Labels {
 		labels[k] = v
 	}
-	// Ensure legacy lookup label is present.
+	// Ensure compatibility lookup label is present.
 	if _, ok := labels["bahia.service"]; !ok {
 		labels["bahia.service"] = spec.StableServiceKey
 	}
@@ -388,10 +388,10 @@ func buildDockerNetworkingConfig(spec *domain.DesiredServiceSpec) map[string]any
 // desired spec's pull policy and the current desired hash comparison.
 //
 // Pull policies:
-//   - "always": always pull
-//   - "never": never pull
-//   - "if-not-present" (default): pull only when the image might have changed
-//     (i.e., hashes differ or no existing container)
+// - "always": always pull
+// - "never": never pull
+// - "if-not-present" (default): pull only when the image might have changed
+// (i.e., hashes differ or no existing container)
 func ShouldPullImage(spec *domain.DesiredServiceSpec, existingDesiredHash string) bool {
 	policy := strings.ToLower(strings.TrimSpace(spec.PullPolicy))
 	switch policy {

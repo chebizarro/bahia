@@ -115,7 +115,7 @@ func NewClient(cfg Config, logger *slog.Logger) *Client {
 
 // SetUploadObserver wires canonical metadata publication after each successful
 // upload. A publication failure is returned to the caller; the blob itself is
-// already stored, and retrying the same SHA-256 upload is idempotent.
+// already stored, and retrying the same SH upload is idempotent.
 func (c *Client) SetUploadObserver(observer func(context.Context, BlobDescriptor) error) {
 	c.observeUpload = observer
 }
@@ -207,19 +207,19 @@ func (c *Client) recordDownload(server string, success bool) {
 	}
 }
 
-// ComputeSHA256 computes the SHA-256 hash of data.
+// ComputeSHA256 computes the SH hash of data.
 func ComputeSHA256(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
 }
 
-// VerifySHA256 verifies that data matches the expected SHA-256 hash.
+// VerifySHA256 verifies that data matches the expected SH hash.
 func VerifySHA256(data []byte, expected string) bool {
 	actual := ComputeSHA256(data)
 	return strings.EqualFold(actual, expected)
 }
 
-// ParseBlossomURL extracts the SHA-256 hash from a Blossom URL.
+// ParseBlossomURL extracts the SH hash from a Blossom URL.
 // Blossom URLs have the format: https://server.com/{sha256}[.ext]
 func ParseBlossomURL(url string) (server, hash string, err error) {
 	// Find the last path segment
@@ -236,7 +236,7 @@ func ParseBlossomURL(url string) (server, hash string, err error) {
 		hashPart = hashPart[:dot]
 	}
 
-	// Validate it's a 64-char hex string (SHA-256)
+	// Validate it's a 64-char hex string (SH)
 	if len(hashPart) != 64 {
 		return "", "", fmt.Errorf("invalid hash length in URL: %s", url)
 	}

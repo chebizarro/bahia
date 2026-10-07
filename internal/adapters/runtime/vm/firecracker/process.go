@@ -37,7 +37,7 @@ type StartVMMRequest struct {
 // The real implementation is Linux-only (/proc-based identity checks);
 // tests substitute a fake so the package runs anywhere.
 // PersistentProcessManager adds fail-closed inspection and kernel exit events.
-// Legacy process-manager implementations remain source compatible.
+// Compatibility process-manager implementations remain source compatible.
 type PersistentProcessManager interface {
 	ProcessManager
 	InspectProcess(context.Context, VMMIdentity, string) (bool, error)

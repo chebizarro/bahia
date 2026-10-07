@@ -163,7 +163,7 @@ func TestAssistantRuntimeApprovalBindsExactIterativeWorkAndBatchNeedsApproval(t 
 	if _, err := r.PrepareWork(context.Background(), x, autonomous); err != nil {
 		t.Fatalf("iterative autonomy changed: %v", err)
 	}
-	// ...but the same call in a batch still requires plan approval.
+	//...but the same call in a batch still requires plan approval.
 	batch := x
 	batch.Workflow = domain.AssistantWorkflowBatch
 	batch.Proposal = &domain.AssistantProposalRevision{ProposalID: "p", Revision: 1, Hash: "h"}

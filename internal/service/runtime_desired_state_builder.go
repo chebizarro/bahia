@@ -58,7 +58,7 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 	imageRef := imageRefForArtifact(input.Artifact)
 
 	// Resolve process fields from the persisted managed definition, falling
-	// back to adopted workload metadata only for legacy adopted services.
+	// back to adopted workload metadata only for compatibility adopted services.
 	var (
 		command        []string
 		entrypoint     []string
@@ -138,7 +138,7 @@ func (b *DesiredStateBuilder) Build(input BuildInput) (*domain.DesiredServiceSpe
 	}
 
 	// Build secret refs — never include plaintext. Managed services select an
-	// explicit subset by opaque ID; adopted services retain the legacy all-effective behavior.
+	// explicit subset by opaque ID; adopted services retain the compatibility all-effective behavior.
 	secretRefs := make([]domain.DesiredSecretRef, 0, len(input.Secrets))
 	if managed != nil {
 		secretsByID := make(map[uuid.UUID]domain.ServiceSecret, len(input.Secrets))
@@ -298,7 +298,7 @@ func desiredHealthcheck(input *domain.ManagedHTTPHealthcheck) *domain.Healthchec
 	}
 	return &domain.HealthcheckConfig{
 		// Use the IPv4 loopback literal. Minimal container images commonly map
-		// localhost to ::1 first, while applications may intentionally bind only
+		// localhost to::1 first, while applications may intentionally bind only
 		// 0.0.0.0; that combination produces a false unhealthy result even though
 		// the service is listening and reachable over IPv4.
 		Test:        []string{"CMD", "wget", "-q", "--spider", fmt.Sprintf("http://127.0.0.1:%d%s", input.Port, input.Path)},

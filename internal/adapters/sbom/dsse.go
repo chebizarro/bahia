@@ -19,7 +19,7 @@ import (
 
 const DSSEPayloadTypeInToto = "application/vnd.in-toto+json"
 
-// AttestationSigner signs the SHA-256 digest of a DSSE pre-authentication
+// AttestationSigner signs the SH digest of a DSSE pre-authentication
 // encoding and identifies the verification key placed in the envelope.
 type AttestationSigner interface {
 	KeyID() string

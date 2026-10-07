@@ -21,12 +21,12 @@ import { createPagedReader } from '$lib/nostr/store-first-backfill.js';
 import { CAS_CONTROL_STATE, CP_STATE_TOPICS, OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY } from '$lib/nostr/kinds.gen.js';
 import { soulRuntimePolicy } from '$lib/stores/operational-views.js';
 
-/** @typedef {import('$lib/types/customization').SoulAvatarSpec} SoulAvatarSpec */
-/** @typedef {import('$lib/types/customization').SoulDraftContentV2} SoulDraftContentV2 */
-/** @typedef {import('$lib/types/customization').SoulDraftDiffEntry} SoulDraftDiffEntry */
-/** @typedef {import('$lib/types/customization').SoulMemorySpec} SoulMemorySpec */
-/** @typedef {import('$lib/types/customization').SoulPersonaSpec} SoulPersonaSpec */
-/** @typedef {import('$lib/types/customization').SoulVoiceSpec} SoulVoiceSpec */
+/** @typedef {import('$lib/types/customization').SoulAvatarSpec} SoulAvatarSpec*/
+/** @typedef {import('$lib/types/customization').SoulDraftContentV2} SoulDraftContentV2*/
+/** @typedef {import('$lib/types/customization').SoulDraftDiffEntry} SoulDraftDiffEntry*/
+/** @typedef {import('$lib/types/customization').SoulMemorySpec} SoulMemorySpec*/
+/** @typedef {import('$lib/types/customization').SoulPersonaSpec} SoulPersonaSpec*/
+/** @typedef {import('$lib/types/customization').SoulVoiceSpec} SoulVoiceSpec*/
 
 export const SOUL_DRAFT_SCHEMA_V2 = 'soulfactory-draft/v2';
 
@@ -223,7 +223,7 @@ export async function refreshServerAgentRuntimes() {
   }
 }
 
-/**
+/***/
  * Methods advertised by the newest compatible live capability for a runtime
  * target. When runtimePubkey is known, pubkey-matching capabilities win over
  * target-level ones. Returns null when no compatible capability is observed so
@@ -280,7 +280,7 @@ const newestFirst = (a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0
 const templateSort = (a, b) => (a.name || a.identifier || '').localeCompare(b.name || b.identifier || '');
 const capabilitySort = (a, b) => (a.runtime || '').localeCompare(b.runtime || '') || newestFirst(a, b);
 
-/** @returns {SoulAvatarSpec} */
+/** @returns {SoulAvatarSpec}*/
 export function createDefaultAvatarSpec(overrides = {}) {
   return {
     generation: {
@@ -299,7 +299,7 @@ export function createDefaultAvatarSpec(overrides = {}) {
   };
 }
 
-/** @returns {SoulVoiceSpec} */
+/** @returns {SoulVoiceSpec}*/
 export function createDefaultVoiceSpec(overrides = {}) {
   return {
     provider: 'openai',
@@ -319,7 +319,7 @@ export function createDefaultVoiceSpec(overrides = {}) {
   };
 }
 
-/** @returns {SoulMemorySpec} */
+/** @returns {SoulMemorySpec}*/
 export function createDefaultMemorySpec(overrides = {}) {
   return {
     embedding_provider: 'openai',
@@ -355,7 +355,7 @@ export function normalizeProvisioningMemorySpec(memory = {}) {
   return normalized;
 }
 
-/** @returns {SoulPersonaSpec} */
+/** @returns {SoulPersonaSpec}*/
 export function createDefaultPersonaSpec(overrides = {}) {
   return {
     traits: [],
@@ -440,7 +440,7 @@ function isPlainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** @returns {SoulDraftDiffEntry[]} */
+/** @returns {SoulDraftDiffEntry[]}*/
 export function diffDraftContent(before = {}, after = {}, prefix = '') {
   const changes = [];
   const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
@@ -478,7 +478,7 @@ function normalizedPubkeys(values = []) {
     .filter((value) => HEX_PUBKEY.test(value)))].sort();
 }
 
-/**
+/***/
  * SoulFactory keys the Bahia service vouches for. The service-signed runtime
  * policy record (30900, t=soul-factory-runtime-policy) may name the
  * controller that signs Souls and the runtime keys pinned in
@@ -500,24 +500,24 @@ export function attestedSoulFactoryKeys(store = getEventStore(), serviceAuthors 
   };
 }
 
-/**
+/***/
  * Trusted-author policy by kind. No SoulFactory kind is read without `authors`.
  * - factory: 31951 authoritative Souls and their 6950/7950/1951 lifecycle
- *   history are signed by the SoulFactory controller. Trusted controllers are
- *   the deployment-seeded service keys plus any controller the service attests
- *   in its signed runtime policy record.
+ * history are signed by the SoulFactory controller. Trusted controllers are
+ * the deployment-seeded service keys plus any controller the service attests
+ * in its signed runtime policy record.
  * - operator: 31952 drafts, 1950 actions and the 31953 fleet config are
- *   operator documents. The daemon accepts them from
- *   `soul_factory.authorized_pubkeys`, which it publishes as the fleet-OCK
- *   encrypted `operators:soul-factory` record (bahia-fbyo5): a session that
- *   reads it trusts the listed operators plus the signed-in key; otherwise
- *   only the signed-in key is trusted. 31950 templates are operator input the
- *   controller may also publish: operator and factory keys are both trusted.
+ * operator documents. The daemon accepts them from
+ * `soul_factory.authorized_pubkeys`, which it publishes as the fleet-OCK
+ * encrypted `operators:soul-factory` record: a session that
+ * reads it trusts the listed operators plus the signed-in key; otherwise
+ * only the signed-in key is trusted. 31950 templates are operator input the
+ * controller may also publish: operator and factory keys are both trusted.
  * - runtime: 30317 capabilities are signed by runtime sidecars. Trusted
- *   runtime keys are those the service attests (its pinned
- *   `runtime_pubkeys`), those named by an already-trusted 31951 Soul, and the
- *   factory keys themselves, which could vouch for any runtime anyway. A
- *   self-signed capability can never introduce its own key.
+ * runtime keys are those the service attests (its pinned
+ * `runtime_pubkeys`), those named by an already-trusted 31951 Soul, and the
+ * factory keys themselves, which could vouch for any runtime anyway. A
+ * self-signed capability can never introduce its own key.
  */
 export function trustedSoulAuthors(store = getEventStore(), serviceAuthors = getServicePubkeys()) {
   const attested = attestedSoulFactoryKeys(store, serviceAuthors);
@@ -531,7 +531,7 @@ export function trustedSoulAuthors(store = getEventStore(), serviceAuthors = get
   return { factory, operator, runtime: normalizedPubkeys([...factory, ...attested.runtimes, ...soulRuntimes]) };
 }
 
-/** The subscription units; each is one live REQ and one paged history walk. */
+/** The subscription units; each is one live REQ and one paged history walk.*/
 export function soulFilterUnits(authors = trustedSoulAuthors()) {
   const templateAuthors = normalizedPubkeys([...authors.factory, ...authors.operator]);
   return [
@@ -597,7 +597,7 @@ function publishSoulCatchupMetadata(caught) {
   for (const waiter of [...soulListeners]) waiter();
 }
 
-/**
+/***/
  * Bind the SoulFactory read models to the shared store and project the cache
  * at once. With `relay` (the default) also start, or re-sync, the app-lifetime
  * relay reader; once started it stays on until teardown. The layout owns that
@@ -649,7 +649,7 @@ export function teardownSoulFactoryStoreBinding() {
   stopPolicyRefresh = null;
 }
 
-/**
+/***/
  * Page entry point, kept for existing consumers: resolves once the cached read
  * models are projected. It does not wait for a relay and opens no REQ of its
  * own, so calling it on every navigation is free.
@@ -659,12 +659,12 @@ export async function subscribeToSoulFactoryUpdates() {
   initSoulFactoryStoreBinding({ relay: false });
 }
 
-/** Kept for existing consumers. The reader belongs to the app lifecycle. */
+/** Kept for existing consumers. The reader belongs to the app lifecycle.*/
 export function unsubscribeFromSoulUpdates() {}
 
 const soulListeners = new Set();
 
-/**
+/***/
  * Resolve a Soul by agent id: at once when it is cached, otherwise when it
  * arrives, or with null once every relay finished catch-up without it. Abort
  * the signal to stop waiting (for example when the page unmounts).
@@ -765,7 +765,7 @@ function parseRunResultEvent(event) {
 }
 
 // Track a provisioning or lifecycle run. Terminal state comes only from explicit 7950
-// (or legacy 1951 migration alias) result events, never from EOSE, CLOSED, or local time.
+// (or compatibility 1951 migration alias) result events, never from EOSE, CLOSED, or local time.
 export function trackLifecycleRun(requestEventId, {
   type = 'provisioning', action = '', expectedAuthor = '', reconciliationTimeoutMs = 30000,
   onProgress, onComplete, onError
@@ -1325,7 +1325,7 @@ function soulHistoryRows(events, soul, limit) {
   return attachHistoryMetadata(rows, soulBinding?.reader.metadata() || CATCHING_UP);
 }
 
-/** Read a Soul's activity from the local store. Catch-up state rides on the result. */
+/** Read a Soul's activity from the local store. Catch-up state rides on the result.*/
 export async function fetchSoulHistory(soul, { limit = 50 } = {}) {
   if (!soul?.agentId) return [];
   await subscribeToSoulFactoryUpdates();
@@ -1336,7 +1336,7 @@ export async function fetchSoulHistory(soul, { limit = 50 } = {}) {
   return history;
 }
 
-/**
+/***/
  * Follow a Soul's activity: delivers the cached history at once, then again
  * whenever its events or the relay catch-up state change.
  */

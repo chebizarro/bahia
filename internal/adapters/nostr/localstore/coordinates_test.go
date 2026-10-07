@@ -14,7 +14,7 @@ import (
 )
 
 // The bolt eventstore indexes no tag value that is empty or longer than 100
-// bytes (bahia-irsry.51), so its #d and #a lookups cannot find such
+// bytes, so its #d and #a lookups cannot find such
 // coordinates. These cases cover both sides of that limit: a d the index
 // holds, a d it holds inside a coordinate it does not (any d of 30 bytes or
 // more), a d it does not hold, and the empty d of a missing or empty tag and
@@ -161,7 +161,7 @@ func TestSaveEventAppliesNIP09OnlyToTheRequestersOwnEvents(t *testing.T) {
 }
 
 // writeAsBeforeTheIndex stores events the way the store did before
-// bahia-irsry.51: straight through the eventstore, with ReplaceEvent for
+// straight through the eventstore, with ReplaceEvent for
 // state (which keeps every version of a d it does not index) and no NIP-09.
 func writeAsBeforeTheIndex(t *testing.T, path string, events ...nostr.Event) {
 	t.Helper()

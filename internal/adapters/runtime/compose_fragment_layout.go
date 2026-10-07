@@ -12,7 +12,7 @@ import (
 // Fragment directory layout constants
 // ---------------------------------------------------------------------------
 
-// bahiaFragmentsDir is the subdirectory under .bahia/ where per-service
+// bahiaFragmentsDir is the subdirectory under.bahia/ where per-service
 // fragment overlay files are written.
 const bahiaFragmentsDir = "fragments"
 
@@ -25,12 +25,14 @@ const bahiaFragmentsDir = "fragments"
 // Fragment file layout under the compose directory:
 //
 //	<compose_dir>/
-//	  docker-compose.yml                    # Full project (source of truth)
-//	  .bahia/
-//	    render-state.json                   # Full project metadata
-//	    env/<service-key>.env               # Per-service env files
-//	    fragments/
-//	      <service-key>.yml                 # Per-service fragment (for eligible changes)
+//	 docker-compose.yml # Full project (source of truth)
+//
+// .bahia/
+//
+//	render-state.json # Full project metadata
+//	env/<service-key>.env # Per-service env files
+//	fragments/
+//	<service-key>.yml # Per-service fragment (for eligible changes)
 type FragmentLayout struct {
 	// FragmentDir is the directory for fragment files: <compose_dir>/.bahia/fragments/
 	FragmentDir string
@@ -81,9 +83,9 @@ func NewComposeFragmentRenderer() *ComposeFragmentRenderer {
 // RenderServiceFragment renders a single-service Compose fragment YAML.
 //
 // The fragment contains:
-//   - The project name (must match the full project for correct merge semantics)
-//   - A single service definition built by the same logic as the full renderer
-//   - NO top-level network or volume declarations (those are project-wide)
+// - The project name (must match the full project for correct merge semantics)
+// - A single service definition built by the same logic as the full renderer
+// - NO top-level network or volume declarations (those are project-wide)
 //
 // The caller is responsible for writing the returned YAML to the path given by
 // FragmentLayout.FragmentFile.

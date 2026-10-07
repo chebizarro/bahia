@@ -210,17 +210,17 @@ type KubernetesExtension struct {
 // extension so K8s specs carry a stable (possibly empty) extension. Recognized
 // runtime_config keys match the KubernetesExtension JSON tags:
 //
-//	replicas           -> Replicas          (integer)
-//	service_type       -> ServiceType       (string: ClusterIP|NodePort|LoadBalancer)
-//	service_ports      -> ServicePorts      ([]object)
-//	resource_limits    -> ResourceLimits    (object: cpu, memory)
-//	resource_requests  -> ResourceRequests  (object: cpu, memory)
-//	liveness_probe     -> LivenessProbe     (object)
-//	readiness_probe    -> ReadinessProbe    (object)
-//	node_selector      -> NodeSelector      (map[string]string)
-//	annotations        -> Annotations       (map[string]string)
-//	tolerations        -> Tolerations       ([]object)
-//	image_pull_secrets -> ImagePullSecrets  ([]string)
+//	replicas -> Replicas (integer)
+//	service_type -> ServiceType (string: ClusterIP|NodePort|LoadBalancer)
+//	service_ports -> ServicePorts ([]object)
+//	resource_limits -> ResourceLimits (object: cpu, memory)
+//	resource_requests -> ResourceRequests (object: cpu, memory)
+//	liveness_probe -> LivenessProbe (object)
+//	readiness_probe -> ReadinessProbe (object)
+//	node_selector -> NodeSelector (map[string]string)
+//	annotations -> Annotations (map[string]string)
+//	tolerations -> Tolerations ([]object)
+//	image_pull_secrets -> ImagePullSecrets ([]string)
 //
 // Unknown/absent keys and malformed shapes leave the corresponding field at its
 // zero value. The constructor is intentionally best-effort because it cannot
@@ -588,7 +588,7 @@ type DesiredServiceSpec struct {
 	ArtifactID        uuid.UUID   `json:"artifact_id"`
 
 	// StableServiceKey is the normalized runtime name derived from
-	// Service.RuntimeTargetName(). It is safe for Compose service names,
+	// Service.RuntimeTargetName. It is safe for Compose service names,
 	// Docker container names, and filesystem paths.
 	StableServiceKey string `json:"stable_service_key"`
 

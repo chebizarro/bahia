@@ -56,7 +56,7 @@ type IntentPublisherConfig struct {
 
 // IntentPublisher builds, signs, publishes, and tracks 30900 intent events.
 // It waits for the daemon's bounded 30315 intent-status and maps the outcome
-// to exit codes per Phase 5 §2.2.
+// to exit codes per docs/architecture/cli-and-mcp.md.
 type IntentPublisher struct {
 	signer           nostr.Signer
 	cipher           contextVMCipherSigner // non-nil when signer supports NIP-44
@@ -268,7 +268,7 @@ func (p *IntentPublisher) BuildIntentEvent(req PublishIntentRequest) (nostr.Even
 		return nostr.Event{}, fmt.Errorf("marshal intent content: %w", err)
 	}
 
-	// Topic tag: the domain with underscores replaced by hyphens.
+	// Topic tag: the domain with underscores handled by hyphens.
 	topicTag := req.Domain
 	if strings.Contains(topicTag, "_") {
 		topicTag = strings.ReplaceAll(topicTag, "_", "-")

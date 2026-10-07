@@ -10,10 +10,10 @@ import (
 )
 
 // TestNoNewTestOnlyExports fails when an exported internal/ symbol is used by
-// tests but by no production code (B-24). Such code looks shipped while
+// tests but by no production code. Such code looks shipped while
 // nothing runs it, and it becomes the template later regressions copy
-// (ProjectorSource, B-2; relay_first_extended.go, B-7; RelayPool.Subscribe,
-// C-8). Symbols with no references at all are out of scope here.
+// (ProjectorSource,; relay_first_extended.go,; RelayPool.Subscribe,
+// ). Symbols with no references at all are out of scope here.
 //
 // Methods whose name matches a method of any interface in the program are
 // skipped, because interface dispatch does not show up as a direct use.
@@ -108,7 +108,7 @@ func declaredInProductionFile(fset *token.FileSet, obj types.Object) bool {
 
 // collectInterfaceMethodNames gathers method names of every interface type
 // declared in the loaded packages and everything they import, including the
-// standard library (String, Error, ServeHTTP, MarshalJSON, ...).
+// standard library (String, Error, ServeHTTP, MarshalJSON,...).
 func collectInterfaceMethodNames(pkgs []*packages.Package) map[string]bool {
 	names := map[string]bool{}
 	seen := map[*types.Package]bool{}

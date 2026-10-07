@@ -71,9 +71,9 @@ func (r *FleetConfigReconciler) Reconcile(ctx context.Context, snapshot *FleetCo
 	// latest-update, and the soul listing are atomic. The lock is released
 	// before per-soul fan-out so the fleet lock is not held across runtime
 	// calls and deferred lifecycle work that the soul gate runs inline after
-	// a fleet operation finishes (bahia-irsry.57). Per-soul ordering is
+	// a fleet operation finishes. Per-soul ordering is
 	// already guaranteed by soulOperationGate; revision ordering is preserved
-	// because the re-drive reads latestRevision() and a newer revision's
+	// because the re-drive reads latestRevision and a newer revision's
 	// per-soul work is deferred behind an older one's by the gate.
 	r.mu.Lock()
 	if latest := r.latestRevision(); latest != nil && fleetSnapshotBefore(snapshot, latest) {

@@ -64,7 +64,7 @@ func (d *Driver) WatchPersistent(ctx context.Context, id uuid.UUID, changed func
 }
 
 // watchLoop multiplexes process exit and fsnotify health events. It fires
-// changed() on any state transition (process exit, API socket modification,
+// changed on any state transition (process exit, API socket modification,
 // console.log write) so the app layer re-inspects and reconciles.
 func (d *Driver) watchLoop(ctx context.Context, marker string, exit ProcessExit, watcher *fsnotify.Watcher, changed func()) error {
 	exitCh := make(chan error, 1)
@@ -79,7 +79,7 @@ func (d *Driver) watchLoop(ctx context.Context, marker string, exit ProcessExit,
 		fsErrors = watcher.Errors
 	}
 
-	// Track the last known API state to fire changed() only on transitions,
+	// Track the last known API state to fire changed only on transitions,
 	// not on every console.log write. The initial state is "running" since
 	// we verified that in WatchPersistent before entering the loop.
 	lastState := domain.VMRuntimeRunning

@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Audit B-31/B-32: payments and security are canonical cp-state domains, so a
+// /: payments and security are canonical cp-state domains, so a
 // daemon with no reachable Postgres must still wire them (publish first, read
 // from the local event store) and say so in its health report. A missing
 // database must neither fail the checks nor mark the domains unavailable.

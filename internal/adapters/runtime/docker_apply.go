@@ -17,10 +17,10 @@ import (
 // runtime state. It implements the DesiredStateApplier interface.
 //
 // Flow:
-//  1. Find existing Bahia-managed container via labels or name
-//  2. If found and desired hash matches (and pull policy allows), return no-op
-//  3. Otherwise: ensure networks/volumes, pull image, stop/remove old, create new, start
-//  4. Partial failures return explicit errors — no silent fallback
+// 1. Find existing Bahia-managed container via labels or name
+// 2. If found and desired hash matches (and pull policy allows), return no-op
+// 3. Otherwise: ensure networks/volumes, pull image, stop/remove old, create new, start
+// 4. Partial failures return explicit errors — no silent fallback
 func (o *DockerObserver) ApplyDesiredState(ctx context.Context, req DesiredStateApplyRequest) (*DesiredStateApplyResult, error) {
 	if req.TargetService == nil {
 		return nil, fmt.Errorf("docker apply: target service spec is nil")
@@ -293,7 +293,7 @@ func collectVolumeSpecs(spec *domain.DesiredServiceSpec) []domain.VolumeSpec {
 		if vol == "" {
 			continue
 		}
-		// Named volumes don't start with / or . — they are "name:/container/path".
+		// Named volumes don't start with / or. — they are "name:/container/path".
 		parts := strings.SplitN(vol, ":", 2)
 		if len(parts) < 2 {
 			continue

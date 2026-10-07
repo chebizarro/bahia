@@ -309,7 +309,7 @@
   bind:open={deleteDialogOpen}
   title="Delete notification channel"
   titleIcon={WarningIcon}
-  message={deleteTarget ? `Delete ${deleteTarget.name}? Delivery history remains, but this channel can no longer receive notifications.` : ''}
+  message={deleteTarget ? `Delete ${deleteTarget.name}? Delivery history remains, but this channel cannot receive notifications.` : ''}
   confirmLabel="Delete channel"
   variant="danger"
   intentDomain="notification"

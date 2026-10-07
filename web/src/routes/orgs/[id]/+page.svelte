@@ -415,7 +415,7 @@
   {/if}
 {/if}
 
-<!-- Invite Modal -->
+<!-- Invite Modal-->
 {#if showInviteModal}
   <Modal bind:open={showInviteModal} title="Invite Member" titleIcon={OrganizationIcon} onClose={() => showInviteModal = false}>
     <form onsubmit={(event) => { event.preventDefault(); sendInvite(); }}>
@@ -439,7 +439,7 @@
   </Modal>
 {/if}
 
-<!-- Delete Confirmation -->
+<!-- Delete Confirmation-->
 {#if showDeleteConfirm}
   <ConfirmDialog
     bind:open={showDeleteConfirm}

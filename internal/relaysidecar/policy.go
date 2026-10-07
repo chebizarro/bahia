@@ -67,7 +67,7 @@ func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, stri
 		return true, "invalid: event has expired (NIP-40)"
 	}
 	if p.admin != nil && event.PubKey.Hex() != p.servicePubkey && !p.admin.admits(event.PubKey.Hex()) {
-		// Intent write policy (§7.1): kind 30900 + t=bahia-intent events from
+		// Intent write policy (docs/architecture/intents-and-authority.md): kind 30900 + t=bahia-intent events from
 		// pubkeys in the intentAuthors set are admitted even when not on the
 		// general admin allowlist. The daemon updates intentAuthors via the
 		// NIP-86 setintentauthors method as its TrustSet changes. Non-intent

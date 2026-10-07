@@ -22,7 +22,7 @@ type SecretOrgResolver interface {
 // the shared builder and outbox. Secret values are NEVER included in the
 // published event — only the SecretRef metadata (name, version, scope).
 //
-// Phase 3 C1: uses the unified confidential encryption path with per-org
+// C1: uses the unified confidential encryption path with per-org
 // content key. The metadata is encrypted under the OCK so org members can see
 // which secrets exist; actual secret values remain service-only.
 type SecretCanonicalPublisher struct {

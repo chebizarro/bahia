@@ -2,21 +2,21 @@ name: Hive CI Build
 
 # This workflow is the Hive CI durable path counterpart to deploy-edge.yml.
 # It is executed by hive-ci-runner via nektos/act when grasp-gitea publishes
-# a kind 5401 event for pushes to master.  It builds images, pushes them to
-# Harbor, resolves the pushed manifest digest, and writes .hiveci-result.json
+# a kind 5401 event for pushes to master. It builds images, pushes them to
+# Harbor, resolves the pushed manifest digest, and writes.hiveci-result.json
 # so hive-ci-runner can include image metadata in the kind 5402 result event.
 #
 # Bahia's pipeline bridge (internal/pipeline/bridge.go) reads image_repo,
 # image_tag, and image_digest from the 5402 event (tags or JSON body) and
-# registers a durable artifact.  Missing any of these three fields leaves the
+# registers a durable artifact. Missing any of these three fields leaves the
 # result in artifact_pending state.
 #
-# The .hiveci-result.json schema uses camelCase to match the runner contract;
+# The.hiveci-result.json schema uses camelCase to match the runner contract;
 # the subscriber also accepts snake_case Nostr tags as a fallback.
 #
-# Only the backend control-plane image is included in .hiveci-result.json.
+# Only the backend control-plane image is included in.hiveci-result.json.
 # The web image is also built and pushed so it is available in Harbor, but
-# multi-artifact Hive CI results are not yet defined.  See runbook §"Durable
+# multi-artifact Hive CI results are not yet defined. See runbook §"Durable
 # Path" for the retirement conditions that let this replace deploy-edge.yml.
 
 on:
@@ -111,7 +111,7 @@ jobs:
 
           # Primary: read RepoDigests populated by docker push
           raw=$(docker inspect \
-            --format='{{index .RepoDigests 0}}' \
+            --format='{{index.RepoDigests 0}}' \
             "${IMAGE_REPO}:${tag}" 2>/dev/null || true)
 
           # Fallback: crane digest (available in some Hive CI runner images)

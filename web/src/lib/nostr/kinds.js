@@ -1,4 +1,4 @@
-/**
+/***/
  * Production web Nostr kind compatibility facade.
  *
  * Bahia control-plane runtime uses canonical constants from kinds.gen.js and

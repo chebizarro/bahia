@@ -308,7 +308,7 @@ func runOutbox(t *testing.T, d *localHistoryDaemon, maxAttempts int) (stop func(
 // from the canonical view, flagged undelivered on its coordinate, the outbox
 // entry stays failed, and the SQL index agrees with the canonical read. An
 // operator retry of the entry that reaches the quorum clears the flag
-// (bahia-u5whr, §3.7).
+// (docs/architecture/outbox-delivery.md).
 func TestPaymentCanonicalQueuedThenAbandonedRecordStaysReadableAndFlagged(t *testing.T) {
 	ctx := context.Background()
 	runID := uuid.New()

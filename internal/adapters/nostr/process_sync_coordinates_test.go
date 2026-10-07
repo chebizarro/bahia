@@ -13,7 +13,7 @@ import (
 )
 
 // ProcessSync over coordinates the bolt eventstore does not index
-// (bahia-irsry.51): an empty d, a d over 100 bytes, and `a` coordinates over
+// an empty d, a d over 100 bytes, and `a` coordinates over
 // 100 bytes. Each case restarts the process against a second relay that holds
 // a different version, as a lagging relay does, and checks what reaches Apply
 // and what the store replays to a consumer hydrating on start.

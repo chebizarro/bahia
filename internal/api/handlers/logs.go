@@ -50,8 +50,8 @@ func NewLogHandlerWithResolver(
 // GetRunLogs retrieves logs for a completed deployment run.
 // GET /deployments/runs/{id}/logs
 // Query params:
-//   - tail: number of lines from end (default: all)
-//   - stream: "stdout", "stderr", or "merged" (default: merged)
+// - tail: number of lines from end (default: all)
+// - stream: "stdout", "stderr", or "merged" (default: merged)
 func (h *LogHandler) GetRunLogs(w http.ResponseWriter, r *http.Request) {
 	if !requireMember(w, r) {
 		return
@@ -115,8 +115,8 @@ func (h *LogHandler) GetRunLogs(w http.ResponseWriter, r *http.Request) {
 // StreamLiveLogs streams live container logs via SSE.
 // GET /services/{id}/environments/{envId}/logs
 // Query params:
-//   - tail: number of historical lines (default: 100)
-//   - follow: whether to stream continuously (default: false)
+// - tail: number of historical lines (default: 100)
+// - follow: whether to stream continuously (default: false)
 func (h *LogHandler) StreamLiveLogs(w http.ResponseWriter, r *http.Request) {
 	if !requireMember(w, r) {
 		return
@@ -175,7 +175,7 @@ func (h *LogHandler) StreamLiveLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start log stream. Prefer resolver-based live logs so runtime targeting follows
-	// the requested environment; fall back to the legacy LogService runtime when no
+	// the requested environment; fall back to the compatibility LogService runtime when no
 	// resolver has been wired (primarily for existing tests and callers).
 	var logChan <-chan runtime.LogEntry
 	if h.resolver != nil {

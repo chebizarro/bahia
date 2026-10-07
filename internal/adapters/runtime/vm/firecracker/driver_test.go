@@ -138,7 +138,7 @@ func (f *fakeProcs) killCount() int {
 }
 
 // shortTempDir returns a short-path temp dir; unix socket paths (macOS
-// limit: 104 bytes) derived from t.TempDir() test names can exceed it.
+// limit: 104 bytes) derived from t.TempDir test names can exceed it.
 func shortTempDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "fcdrv")

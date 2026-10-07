@@ -1,4 +1,4 @@
-/**
+/***/
  * Control-plane kind lists for Nostr subscriptions.
  * Re-exports from the canonical kinds.gen.js module.
  */

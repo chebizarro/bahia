@@ -14,24 +14,24 @@ import (
 // Compose Fragment Safety Tests
 //
 // These tests verify the safety invariants that the fragment optimization
-// (bahia-zu2p.9.3) must preserve. They test the CONTRACT, not the
+// must preserve. They test the CONTRACT, not the
 // implementation, so they pass regardless of whether the fragment applier
 // has landed.
 //
 // Safety guarantees verified:
 //
-//   1. Full project remains the source of truth — the full docker-compose.yml
-//      is always updated even when fragments are used.
-//   2. No fragment without a baseline — the first render always uses
-//      full-project apply.
-//   3. Dependency changes require full-project apply.
-//   4. Network declaration changes require full-project apply.
-//   5. Volume declaration changes require full-project apply.
-//   6. Project name changes require full-project apply.
-//   7. Service removal requires full-project apply with --remove-orphans.
-//   8. New service additions require full-project apply.
-//   9. Fragments never contain plaintext secret values.
-//  10. Fragment project name matches the full project name.
+// 1. Full project remains the source of truth — the full docker-compose.yml
+// is always updated even when fragments are used.
+// 2. No fragment without a baseline — the first render always uses
+// full-project apply.
+// 3. Dependency changes require full-project apply.
+// 4. Network declaration changes require full-project apply.
+// 5. Volume declaration changes require full-project apply.
+// 6. Project name changes require full-project apply.
+// 7. Service removal requires full-project apply with --remove-orphans.
+// 8. New service additions require full-project apply.
+// 9. Fragments never contain plaintext secret values.
+// 10. Fragment project name matches the full project name.
 //
 // Each eligibility assertion below calls the production CheckFragmentEligibility
 // (compose_fragment_eligibility.go) with a real rendered baseline and asserts
@@ -86,7 +86,7 @@ func TestFragmentSafety_FullProjectRemainsSourceOfTruth(t *testing.T) {
 	// TODO(bahia-zu2p.9.3): When fragment apply is implemented, extend this
 	// test to verify that applying a service-scoped fragment also writes an
 	// updated full docker-compose.yml alongside the fragment file under
-	// .bahia/fragments/ to prevent project drift.
+	//.bahia/fragments/ to prevent project drift.
 }
 
 // ---------------------------------------------------------------------------
@@ -551,7 +551,7 @@ func TestFragmentSafety_NewServiceRequiresFullProject(t *testing.T) {
 // files do not contain plaintext secret values.
 func TestFragmentSafety_SecretRedactionInFragments(t *testing.T) {
 	renderer := NewComposeRenderer()
-	// testPlan() includes SecretRefs for DB_PASSWORD, API_KEY, SESSION_SECRET.
+	// testPlan includes SecretRefs for DB_PASSWORD, API_KEY, SESSION_SECRET.
 	plan := testPlan()
 
 	result, err := renderer.RenderEnvironmentPlan(context.Background(), plan)
@@ -561,7 +561,7 @@ func TestFragmentSafety_SecretRedactionInFragments(t *testing.T) {
 
 	// Contract: secret env var names must NEVER appear in rendered Compose YAML
 	// or render metadata. This applies to the full project and — critically —
-	// to any fragment YAML generated under .bahia/fragments/: fragments are
+	// to any fragment YAML generated under.bahia/fragments/: fragments are
 	// deployed directly to Compose and must not expose secrets.
 	yaml := string(result.ComposeYAML)
 	secretVars := []string{"DB_PASSWORD", "API_KEY", "SESSION_SECRET"}
@@ -583,7 +583,7 @@ func TestFragmentSafety_SecretRedactionInFragments(t *testing.T) {
 	}
 
 	// Env material must use REDACTED placeholders for all secret-backed vars.
-	// The env material is written to protected .bahia/env/ files; it must use
+	// The env material is written to protected.bahia/env/ files; it must use
 	// the canonical REDACTED placeholder format, never plaintext.
 	for svcKey, envContent := range result.EnvMaterial {
 		for _, s := range secretVars {
@@ -594,7 +594,7 @@ func TestFragmentSafety_SecretRedactionInFragments(t *testing.T) {
 	}
 
 	// TODO(bahia-zu2p.9.3): When fragment file writing is implemented,
-	// additionally verify that fragment YAML files under .bahia/fragments/
+	// additionally verify that fragment YAML files under.bahia/fragments/
 	// do not contain secret env var names or plaintext values.
 }
 
@@ -606,7 +606,7 @@ func TestFragmentSafety_SecretRedactionInFragments(t *testing.T) {
 // YAML includes the same project name as the full project.
 func TestFragmentSafety_FragmentPreservesProjectName(t *testing.T) {
 	renderer := NewComposeRenderer()
-	// testPlan() specifies "bahia-production" as the explicit project name.
+	// testPlan specifies "bahia-production" as the explicit project name.
 	plan := testPlan()
 
 	result, err := renderer.RenderEnvironmentPlan(context.Background(), plan)
@@ -629,13 +629,13 @@ func TestFragmentSafety_FragmentPreservesProjectName(t *testing.T) {
 		t.Errorf("rendered YAML must contain 'name: %s': project name must be explicit, not derived from the directory basename", projectName)
 	}
 
-	// Verify the expected project name from testPlan().
+	// Verify the expected project name from testPlan.
 	if result.Metadata.ProjectName != "bahia-production" {
 		t.Errorf("expected project name 'bahia-production' from testPlan(), got %q", result.Metadata.ProjectName)
 	}
 
 	// TODO(bahia-zu2p.9.3): When fragment file writing is implemented,
-	// additionally verify that each fragment YAML under .bahia/fragments/<svc>.yml
+	// additionally verify that each fragment YAML under.bahia/fragments/<svc>.yml
 	// includes 'name: <projectName>' matching the full project so that
 	// `docker compose --project-directory <dir> up -d --no-deps <svc>` applies
 	// the fragment to the correct project scope.

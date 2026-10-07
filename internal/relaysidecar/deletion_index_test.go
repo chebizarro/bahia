@@ -40,7 +40,7 @@ func authorVersions(t *testing.T, store *eventStore, kind nostr.Kind, author nos
 	return storeIDs(t, store, nostr.Filter{Kinds: []nostr.Kind{kind}, Authors: []nostr.PubKey{author}})
 }
 
-// TestEventStoreNIP09HoldsForCoordinatesOfAnyLength (bahia-irsry.44): for
+// TestEventStoreNIP09HoldsForCoordinatesOfAnyLength: for
 // every coordinate length, an `a` request deletes the stored versions, the
 // relay never re-accepts a deleted version (whether the request arrives after
 // the event or before it), and newer versions still replace older ones.
@@ -160,7 +160,7 @@ func TestEventStoreSweptDeletionRequestReleasesItsCoordinate(t *testing.T) {
 	require.NoError(t, store.Replace(t.Context(), state))
 }
 
-// TestSidecarNIP09LongCoordinateTombstonesOverWebsocket (bahia-irsry.44): over
+// TestSidecarNIP09LongCoordinateTombstonesOverWebsocket: over
 // a real websocket, for short and long coordinates and for `e` references, a
 // deleted event is refused on re-publish (OK false, NIP-09) and absent from
 // REQ results, whether the deletion request arrives after the event or before
@@ -218,7 +218,7 @@ func TestSidecarNIP09LongCoordinateTombstonesOverWebsocket(t *testing.T) {
 	}
 }
 
-// TestSidecarAgeCapSparesStateKinds covers the write side of C-11 over a real
+// TestSidecarAgeCapSparesStateKinds covers the write side of over a real
 // websocket: replaceable and addressable events and deletion requests older
 // than a year are accepted and served, while regular and ephemeral events
 // that old are still refused.
@@ -252,7 +252,7 @@ func TestSidecarAgeCapSparesStateKinds(t *testing.T) {
 	client.publish(signedStoreEvent(t, alice, 1, nostr.Now()-nostr.Timestamp((maxEventAge-time.Hour).Seconds()), nil, "recent enough"))
 }
 
-// TestSidecarPolicyAppliesTheSharedAgeCap (bahia-irsry.52): the sidecar's
+// TestSidecarPolicyAppliesTheSharedAgeCap: the sidecar's
 // write policy refuses a two-year-old event exactly when nostrutil.AgeCapped
 // caps its kind, the rule the daemon's ValidateInboundEvent applies too.
 func TestSidecarPolicyAppliesTheSharedAgeCap(t *testing.T) {

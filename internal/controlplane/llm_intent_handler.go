@@ -29,7 +29,7 @@ type LLMRouteCRUD interface {
 
 // LLMRouteStatePublisher signs and publishes a canonical kind-30900 cp-state
 // record for an LLM route mutation. The implementation uses
-// PublishBeforeCommit for outbox durability (design §3.6).
+// PublishBeforeCommit for outbox durability (docs/architecture/intents-and-authority.md).
 type LLMRouteStatePublisher func(ctx context.Context, route *domain.LLMRoute, deleted bool) error
 
 // LLMRouteIntentHandler processes kind-30900 intents for the "llm" domain.
@@ -49,7 +49,7 @@ type LLMRouteStatePublisher func(ctx context.Context, route *domain.LLMRoute, de
 // is present in the intent content the handler enforces it; otherwise the
 // newest intent wins unconditionally.
 //
-// See design §7 Wave 3 L1.
+// See docs/architecture/intents-and-authority.md
 type LLMRouteIntentHandler struct {
 	routes  LLMRouteCRUD
 	publish LLMRouteStatePublisher
@@ -596,7 +596,7 @@ func llmReleaseFromIntentContent(intent *Intent) (*domain.LLMRelease, error) {
 }
 
 // mergeLLMRouteOntoExisting applies the intent's desired state fields onto the
-// loaded entity. Every non-zero field replaces the existing one (§1.2).
+// loaded entity. Every non-zero field replaces the existing one (docs/architecture/intents-and-authority.md).
 func mergeLLMRouteOntoExisting(existing, intent *domain.LLMRoute) {
 	if intent.Name != "" {
 		existing.Name = intent.Name

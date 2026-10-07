@@ -181,7 +181,7 @@ export function compareRelayPolicyTruthCandidates(candidate, current) {
 // single-letter tags: domain and schema are checked locally in
 // parseRelayPolicyStateEvent, never sent as #domain/#schema. The record also
 // carries t=relay-settings, but #t would AND with #d and miss a policy
-// retained from before the topic was stamped (bahia-irsry.37).
+// retained from before the topic was stamped.
 export function relayPolicyReadModelFilter({ servicePubkey, since, limit = 10 } = {}) {
   const filter = {
     kinds: [CASCADIA_CONTROLPLANE_STATE],
@@ -295,32 +295,32 @@ export async function applyRelayPolicy({ policy, expectedProjection = null, repl
   return submitSensitiveIntent(relayPolicyIntent(payload, null, null, FLEET_INTENT_ORG_ID));
 }
 
-/**
+/***/
  * Guard that deduplicates async projection hydration calls per key.
  *
- * Once acquired for a key, subsequent acquire() calls with the same key
+ * Once acquired for a key, subsequent acquire calls with the same key
  * return false — whether the original call is still in flight or already
- * completed.  On error, release() re-opens the key for retry.  reset()
+ * completed. On error, release re-opens the key for retry. reset
  * clears the guard entirely (e.g. on identity/key change).
  */
 export function createProjectionHydrationGuard() {
   let activeKey = '';
   return {
-    /** Returns true and locks the key if hydration should proceed; false if already acquired. */
+    /** Returns true and locks the key if hydration should proceed; false if already acquired.*/
     acquire(key) {
       if (!key || activeKey === key) return false;
       activeKey = key;
       return true;
     },
-    /** Releases the guard for the given key (call on error to allow retry). */
+    /** Releases the guard for the given key (call on error to allow retry).*/
     release(key) {
       if (activeKey === key) activeKey = '';
     },
-    /** Clears the guard entirely (call on identity/key change). */
+    /** Clears the guard entirely (call on identity/key change).*/
     reset() {
       activeKey = '';
     },
-    /** The currently guarded key (empty string when idle). */
+    /** The currently guarded key (empty string when idle).*/
     get currentKey() {
       return activeKey;
     }

@@ -24,7 +24,7 @@ var (
 )
 
 // declaredMetrics returns every bahia_ metric family this package exposes through
-// either the legacy HELP declarations or the configured OTel Prometheus reader.
+// either the compatibility HELP declarations or the configured OTel Prometheus reader.
 func declaredMetrics(t *testing.T) []string {
 	t.Helper()
 	// Scoped to this package on purpose: the catalog's bahia_ section documents
@@ -107,7 +107,7 @@ func TestMetricsCatalogIsCurrent(t *testing.T) {
 	}
 }
 
-// An alert naming a metric that no longer exists never fires. That is a worse
+// An alert naming a metric that not exists never fires. That is a worse
 // failure than a noisy alert, because it looks like health.
 func TestAlertRulesOnlyReferenceKnownMetrics(t *testing.T) {
 	data, err := os.ReadFile(filepath.Clean(alertsRelPath))

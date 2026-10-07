@@ -21,7 +21,7 @@ export function createBoundedEventIdSet(capacity = MAX_SEEN_EVENT_IDS) {
   };
 }
 
-/**
+/***/
  * @typedef {Object} PoolReadModelMetadata
  * @property {boolean} complete True only when every expected/observed relay reached EOSE.
  * @property {Object|null} degraded Incomplete/degraded read details, or null for complete history.
@@ -66,7 +66,7 @@ function normalizeRelayForState(relay) {
   return typeof relay === 'string' && relay.trim() ? relay.trim().replace(/\/+$/, '') : 'unknown';
 }
 
-/**
+/***/
  * Tracks pool subscription callback state for EOSE-authoritative historical reads.
  * CLOSED/AUTH before EOSE produces an explicit incomplete metadata contract;
  * EOSE remains the only successful completion signal.

@@ -23,7 +23,7 @@ function transaction(db, mode, action) {
   });
 }
 
-/** Delivery only: daemon acceptance is resolved by 30315/canonical state, not relay OK. */
+/** Delivery only: daemon acceptance is resolved by 30315/canonical state, not relay OK.*/
 export function createIntentOutbox({ namespace, pool, relays, onStateChange = () => {} }) {
   if (!namespace || !pool || !relays?.length) throw new Error('Outbox needs namespace, pool and relays');
   const entries = new Map();

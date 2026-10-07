@@ -590,7 +590,7 @@ func assistantTranscriptAssociatedData(payload domain.AssistantTranscriptPayload
 }
 
 // assistantTranscriptDTag is the deterministic coordinate of one transcript
-// message (audit C-41): <schema>:<session>:msg:<logical id>, or
+// message: <schema>:<session>:msg:<logical id>, or
 // <schema>:<session>:seq:<sequence> for a message without a logical id. A
 // retried publish of the same message lands on the same addressable
 // coordinate and replaces the earlier copy instead of adding a duplicate. The

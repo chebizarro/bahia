@@ -11,12 +11,12 @@ import (
 )
 
 // AssistantSessionTopicMigration is a one-time startup migration that adds the
-// single-letter "t" topic tag to legacy assistant session events published
-// before bahia-irsry.43. NIP-01 relays index only single-letter tags, so the
+// single-letter "t" topic tag to compatibility assistant session events published
+// before. NIP-01 relays index only single-letter tags, so the
 // recovery REQ (which scopes on #t=assistant-session) misses untagged records.
 //
 // The migration enumerates the daemon's local event store completely (a local
-// query with no page limit, not a relay REQ), selects legacy records
+// query with no page limit, not a relay REQ), selects compatibility records
 // client-side, and re-publishes each one with the tag added. It is idempotent:
 // a no-op once no untagged records remain. No persistent flag is needed.
 type AssistantSessionTopicMigration struct {
@@ -30,7 +30,7 @@ type AssistantSessionTopicMigration struct {
 // AssistantSessionTopicMigrationConfig holds the wiring for the migration.
 type AssistantSessionTopicMigrationConfig struct {
 	// LocalStore is the daemon's local event store. Its QueryEvents pages to
-	// completion, so every legacy record is migrated however many there are.
+	// completion, so every compatibility record is migrated however many there are.
 	LocalStore    SupervisionEventStore
 	Signer        nostr.Signer
 	Publisher     AssistantEventPublisher
@@ -69,7 +69,7 @@ func (m *AssistantSessionTopicMigration) Run(ctx context.Context) error {
 
 	// Enumerate every assistant session record the daemon authored, with no
 	// limit: the local store pages to completion. Schema and topic are
-	// selected client-side (no multi-letter tag filter), so legacy v1 and v2
+	// selected client-side (no multi-letter tag filter), so compatibility v1 and v2
 	// records are found alike.
 	scanned, migrated := 0, 0
 	for ev := range m.local.QueryEvents(nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{author}}) {
@@ -123,7 +123,7 @@ func (m *AssistantSessionTopicMigration) republishWithTopic(ctx context.Context,
 
 	ev := nostr.Event{
 		Kind: legacy.Kind,
-		// Bump created_at by 1 second so the relay replaces the old event.
+		// Bump created_at by 1 second so the relay handles event.
 		CreatedAt: legacy.CreatedAt + 1,
 		Tags:      newTags,
 		Content:   legacy.Content,

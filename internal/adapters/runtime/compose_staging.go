@@ -18,11 +18,11 @@ import (
 // Staging layout constants
 // ---------------------------------------------------------------------------
 
-// bahiaStagingDir is the subdirectory under .bahia/ where staged files are
+// bahiaStagingDir is the subdirectory under.bahia/ where staged files are
 // written before validation and promotion.
 const bahiaStagingDir = "staging"
 
-// bahiaEnvDir is the subdirectory under .bahia/ for generated .env files.
+// bahiaEnvDir is the subdirectory under.bahia/ for generated.env files.
 const bahiaEnvDir = "env"
 
 // composeFileName is the canonical generated Compose file name.
@@ -44,7 +44,7 @@ type StagedFiles struct {
 	// ComposeFile is the staged docker-compose.yml path.
 	ComposeFile string
 
-	// EnvFiles maps service keys to their staged .env file paths.
+	// EnvFiles maps service keys to their staged.env file paths.
 	EnvFiles map[string]string
 
 	// MetadataFile is the staged render-state.json path.
@@ -53,7 +53,7 @@ type StagedFiles struct {
 	// LiveComposeFile is the target live docker-compose.yml path.
 	LiveComposeFile string
 
-	// LiveEnvFiles maps service keys to their target live .env file paths.
+	// LiveEnvFiles maps service keys to their target live.env file paths.
 	LiveEnvFiles map[string]string
 
 	// LiveMetadataFile is the target live render-state.json path.
@@ -124,7 +124,7 @@ func NewComposeStagingManagerWithRunner(logger *zap.Logger, runner CommandRunner
 
 // Stage writes the rendered Compose output to a staging directory under
 // .bahia/staging/. The caller must validate the returned staged files through
-// a ComposeExecutor before Promote().
+// a ComposeExecutor before Promote.
 func (m *ComposeStagingManager) Stage(ctx context.Context, composeDir string, result *RenderResult) (*StagedFiles, error) {
 	_ = ctx
 	if result == nil {
@@ -162,7 +162,7 @@ func (m *ComposeStagingManager) Stage(ctx context.Context, composeDir string, re
 
 	// Stage env files.
 	// Compose resolves relative env_file paths from the directory containing
-	// the Compose file. Mirror the live .bahia/env layout inside staging so the
+	// the Compose file. Mirror the live.bahia/env layout inside staging so the
 	// exact promoted YAML validates before it can replace the live project.
 	stagingEnvDir := filepath.Join(staged.StagingDir, bahiaMarkerDir, bahiaEnvDir)
 	if len(result.EnvMaterial) > 0 {
@@ -247,12 +247,12 @@ func (m *ComposeStagingManager) validate(ctx context.Context, staged *StagedFile
 // It requires that StageAndValidate was called successfully (Validated=true).
 //
 // The promotion strategy:
-//  1. Ensure live directories exist (.bahia/, .bahia/env/)
-//  2. Rename staged files to live locations (atomic on same filesystem)
-//  3. Clean up the staging directory
+// 1. Ensure live directories exist (.bahia/,.bahia/env/)
+// 2. Rename staged files to live locations (atomic on same filesystem)
+// 3. Clean up the staging directory
 //
 // If any step fails, previously promoted files remain in place (best-effort
-// atomicity). The caller should inspect errors and may call Rollback() if
+// atomicity). The caller should inspect errors and may call Rollback if
 // partial promotion is unacceptable.
 func (m *ComposeStagingManager) Promote(ctx context.Context, staged *StagedFiles) error {
 	if staged == nil {

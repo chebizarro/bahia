@@ -19,7 +19,7 @@ type NotificationOrgResolver interface {
 // NotificationCanonicalPublisher publishes authoritative notification channel
 // state records through the shared builder and outbox.
 //
-// Phase 3 C1: uses the unified confidential encryption path with per-org
+// C1: uses the unified confidential encryption path with per-org
 // content key. Channel metadata (name, type, event filter, enabled status) is
 // in the org-visible AEAD layer so members can see channel configuration.
 // Sensitive config (webhook URLs, secrets, credentials) is in the service_inner

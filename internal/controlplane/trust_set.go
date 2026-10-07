@@ -13,15 +13,15 @@ import (
 // TrustSet resolves authorization across multiple orgs with pluggable sources.
 //
 // Resolution order for HasPermission(orgID, pubkey, permission):
-//  1. If relay membership events exist for orgID, use them exclusively.
-//  2. Else if Postgres is configured, delegate to auth.RBAC.CheckPermission.
-//  3. Else if pubkey is a bootstrapOwner for orgID, grant owner-level permission.
+// 1. If relay membership events exist for orgID, use them exclusively.
+// 2. Else if Postgres is configured, delegate to auth.RBAC.CheckPermission.
+// 3. Else if pubkey is a bootstrapOwner for orgID, grant owner-level permission.
 //
 // Fleet operators (fleetOps) are never implicit org members. They authorize
 // only fleet-scoped operations through FleetOperatorGate, unchanged from
 // today's reactor gate.
 //
-// See design §2.2.
+// See docs/architecture/intents-and-authority.md
 type TrustSet struct {
 	mu sync.RWMutex
 	// Per-org membership from relay events (highest priority). Populated by

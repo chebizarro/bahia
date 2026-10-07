@@ -27,7 +27,7 @@ type ConcordRotation struct {
 	// Recipients are the surviving members, as 32-byte lowercase hex pubkeys.
 	Recipients []string
 	// Staff names the survivors holding a Control-writing permission (CORD-04
-	// §3). Only they receive the next epoch's control_root in their base Rekey
+	// docs/architecture/intents-and-authority.md). Only they receive the next epoch's control_root in their base Rekey
 	// Blob (CORD-06 §1), so every entry must also appear in Recipients.
 	Staff []string
 	// DirectInvites narrows the CORD-05 §6 handoff to the survivors Soul
@@ -63,7 +63,7 @@ type ConcordRotationReceipt struct {
 	Staff          []string                  `json:"staff,omitempty"`
 	Rekeys         []ConcordRekeyPublication `json:"rekeys,omitempty"`
 	// Compaction and GuestbookSnapshot are set by a Refounding only (CORD-06
-	// §3). The snapshot is best-effort, so it may be present and carry an Error
+	// docs/architecture/intents-and-authority.md). The snapshot is best-effort, so it may be present and carry an Error
 	// on a Refounding that otherwise succeeded.
 	Compaction        *ConcordCompaction        `json:"compaction,omitempty"`
 	GuestbookSnapshot *ConcordGuestbookSnapshot `json:"guestbook_snapshot,omitempty"`
@@ -169,7 +169,7 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 		return nil, err
 	}
 
-	// Stage 1 containment (bahia-185t0): source.resolve validated the owner's
+	// Stage 1 containment: source.resolve validated the owner's
 	// binding to community_id. Only that owner's channel-only rekey needs no
 	// roster evidence. The structural fold below proves neither a delegate's
 	// authority nor the eligibility of the heads a Refounding would copy.
@@ -553,7 +553,7 @@ func normalizeConcordStaff(staff []string, recipients []string) ([]string, error
 }
 
 // normalizeConcordDirectInvites resolves who additionally receives a CORD-05
-// §6 Direct Invite. An empty list means every survivor, the fleet-provisioned
+// docs/architecture/intents-and-authority.md Direct Invite. An empty list means every survivor, the fleet-provisioned
 // case; a narrower one still leaves the omitted survivors converging from
 // their Rekey Blobs alone (CORD-06 §1).
 func normalizeConcordDirectInvites(directInvites []string, recipients []string) ([]string, error) {

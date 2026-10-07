@@ -16,7 +16,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// These tests pin B-18 / B-19 (bahia-irsry.1, .2): a deletion is only real if
+// These tests pin / (.2): a deletion is only real if
 // the relay's newest event on the live record's addressable coordinate
 // (kind, pubkey, d) is the tombstone. They assert against a relay fake with
 // NIP-01 addressable replacement semantics rather than against the local
@@ -157,7 +157,7 @@ func assertNoLegacyDNSKinds(t *testing.T, relay *replaceableRelay) {
 	}
 }
 
-// TestServiceStateTombstoneSharesLiveCoordinate pins B-19: the bus-driven
+// TestServiceStateTombstoneSharesLiveCoordinate pins: the bus-driven
 // service-state tombstone uses d=service:<sid>:environment:<eid>, the live d.
 // The tombstone follows the live publish within the same second, so this also
 // proves created_at is bumped past the live event instead of tying with it.
@@ -176,7 +176,7 @@ func TestServiceStateTombstoneSharesLiveCoordinate(t *testing.T) {
 		t.Fatalf("live d = %q, want %q", eventDTag(live), want)
 	}
 
-	// Phase 3 S1: state tombstones are now published by the reconciler's
+	// S1: state tombstones are now published by the reconciler's
 	// StateTombstoneHandler; use the test helper for projector-level tests.
 	if err := projector.publishStateTombstoneForTest(ctx, events.ResourceData{ServiceID: serviceID.String(), EnvironmentID: envID.String(), Deleted: true}); err != nil {
 		t.Fatalf("publish tombstone: %v", err)
@@ -193,7 +193,7 @@ func TestLLMRouteStateTombstoneSharesLiveCoordinate(t *testing.T) {
 	relay := newReplaceableRelay()
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), relay, newMemoryNostrEventRepo(), zap.NewNop())
 
-	// Phase 3 L1: LLM publish methods moved out of projector; use publishControlState directly.
+	// L1: LLM publish methods moved out of projector; use publishControlState directly.
 	dTag := fmt.Sprintf("%s:%s", routeID, envID)
 	if err := projector.publishControlState(ctx, KindLLMRouteState, dTag, false, nil, `{"route_id":"`+routeID.String()+`"}`, "llm_route_state", nil); err != nil {
 		t.Fatalf("publish LLM route state: %v", err)

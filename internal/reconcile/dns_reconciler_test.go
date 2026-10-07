@@ -596,7 +596,7 @@ func assertRecordChange(t *testing.T, events []events.Event, operation, fqdn, ol
 // TestRule3LegacyPathPublishesCanonicalEndpoints verifies that, with no intent
 // domains enabled (the default), a service or environment state change still
 // produces canonical DNS endpoint records through the DNSCanonicalPublisher.
-// This is review rule 3: deleting projector legs must not regress the legacy
+// This is review rule 3: deleting projector legs must not regress the compatibility
 // path which publishes one canonical record per mutation.
 func TestRule3LegacyPathPublishesCanonicalEndpoints(t *testing.T) {
 	projector, zone, expectedRecords := testReconcilerProjector()
@@ -614,7 +614,7 @@ func TestRule3LegacyPathPublishesCanonicalEndpoints(t *testing.T) {
 	ctx := context.Background()
 
 	// Simulate an environment-service state change event (the trigger that
-	// fires when a deployment or convergence occurs on the legacy path).
+	// fires when a deployment or convergence occurs on the compatibility path).
 	handler := busPub.handlers[events.EventEnvironmentServiceStateChanged]
 	if handler == nil {
 		t.Fatal("no subscription handler for EventEnvironmentServiceStateChanged")
@@ -622,7 +622,7 @@ func TestRule3LegacyPathPublishesCanonicalEndpoints(t *testing.T) {
 	handler(ctx, events.Event{Type: events.EventEnvironmentServiceStateChanged})
 
 	// The trigger should have signalled the reconciler's channel. Drain it
-	// and run reconciliation manually (we're not running the Run() loop).
+	// and run reconciliation manually (we're not running the Run loop).
 	select {
 	case <-reconciler.triggerCh:
 	default:

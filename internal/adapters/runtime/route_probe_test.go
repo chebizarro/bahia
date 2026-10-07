@@ -168,7 +168,7 @@ func TestProbeRouteResolveToPinsTheDialAddress(t *testing.T) {
 	target := domain.RouteCanaryTarget{
 		Perspective: domain.RouteCanaryPerspectiveInternalLAN,
 		Scheme:      "http",
-		// A hostname in the reserved .invalid TLD, which must never resolve.
+		// A hostname in the reserved.invalid TLD, which must never resolve.
 		Hostname:          "git.canary.invalid",
 		Port:              port,
 		Path:              "/healthz",

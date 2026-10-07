@@ -29,7 +29,7 @@ const (
 	CanonicalNIP78AppData          = 30078
 )
 
-// Retired worker read-model wire kinds (bahia-irsry.9.2). Older producers
+// Retired worker read-model wire kinds. Older producers
 // published worker state on these kinds; current producers publish only 30900
 // cp-state records whose legacy_kind is the matching kinds.CPStateFamilyWorker*
 // discriminator. They are decoded here, and nowhere else, so old events still
@@ -41,7 +41,7 @@ const (
 	retiredWorkerEligibilityPreviewKind = 32003
 )
 
-// Retired addressable audit kinds (bahia-irsry.37). Audits are regular 4903
+// Retired addressable audit kinds. Audits are regular 4903
 // facts; older producers published one addressable kind per audit type in
 // 31000-31024 (31000-31099 reserved), with d=<entity>, so each audit replaced
 // the previous one. The kinds are decoded here, and nowhere else, so old audit
@@ -78,7 +78,7 @@ type Disposition struct {
 	Topic string
 	// WorkerFamily is set for worker read models. Their migrated record is
 	// addressed on the family's canonical coordinate (kinds.CPStateFamily
-	// WorkerDTag) rather than a per-legacy-event d, so it competes with the
+	// WorkerDTag) rather than a per-compatibility-event d, so it competes with the
 	// live record under NIP-01 replacement and never shadows current state.
 	WorkerFamily kinds.CPStateFamily
 }
@@ -96,9 +96,9 @@ func (d Disposition) DTag(legacyEventID string) string {
 
 // workerDTag returns the canonical family coordinate for a migrated worker
 // record: the family's d prefix plus the record id (the preview id for
-// eligibility, otherwise the worker pubkey) read from the legacy content or
+// eligibility, otherwise the worker pubkey) read from the compatibility content or
 // its worker tag. It returns false for non-worker dispositions and for records
-// that name no id, which keep the per-legacy-event d.
+// that name no id, which keep the per-compatibility-event d.
 func (d Disposition) workerDTag(content map[string]any, legacyTagsJSON []byte) (string, bool) {
 	if d.WorkerFamily == 0 {
 		return "", false
@@ -173,7 +173,7 @@ func Lookup(kind int) (Disposition, bool) {
 	return d, ok
 }
 
-// KindJustification records why a kind constant is not present as a legacy
+// KindJustification records why a kind constant is not present as a compatibility
 // migration input, or why a duplicate numeric alias needs event-aware handling.
 type KindJustification struct {
 	Name     string
@@ -183,7 +183,7 @@ type KindJustification struct {
 }
 
 // ConstantJustification returns manifest coverage for kind constants that are
-// intentionally not migrated by kind number. It also documents duplicate legacy
+// intentionally not migrated by kind number. It also documents duplicate compatibility
 // aliases whose numeric value is shared with another migration disposition.
 func ConstantJustification(name string, kind int) (KindJustification, bool) {
 	j, ok := constantJustifications[name]
@@ -201,12 +201,12 @@ func JustifiedConstantOmissions() map[string]KindJustification {
 	return out
 }
 
-// ResolveDisposition applies manifest coverage to a concrete legacy event. Most
-// legacy kinds are resolved solely by kind number. The four legacy worker
+// ResolveDisposition applies manifest coverage to a concrete compatibility event. Most
+// compatibility kinds are resolved solely by kind number. The four compatibility worker
 // read-model aliases reused kind numbers that later became system/backup
 // projections, so worker-shaped tags/content are resolved to worker schemas.
 // Kind 30002 is likewise shared with Bahia's canonical NIP-51 topology events;
-// those canonical d-tags must never be fed back through legacy translation.
+// those canonical d-tags must never be fed back through compatibility translation.
 // Otherwise the primary kind-number disposition remains in force.
 func ResolveDisposition(kind int, tagsJSON []byte, content string) (Disposition, bool) {
 	if kind == kinds.RelaySetDiscovery && hasCanonicalRelaySetDTag(tagsJSON) {

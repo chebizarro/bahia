@@ -418,8 +418,8 @@ type AssistantConfig struct {
 	LLMBaseURL string `koanf:"llm_base_url" yaml:"llm_base_url" secret:"false"`
 	LLMModel   string `koanf:"llm_model" yaml:"llm_model" secret:"false"`
 	LLMAPIKey  string `koanf:"llm_api_key" yaml:"llm_api_key" secret:"true"`
-	// LLMStreaming controls whether the legacy planner uses streaming chat completions.
-	// When false (the default), the legacy planner uses non-streaming chat completions;
+	// LLMStreaming controls whether the compatibility planner uses streaming chat completions.
+	// When false (the default), the compatibility planner uses non-streaming chat completions;
 	// some OpenAI-compatible providers do not emit delta.content for streamed
 	// response_format (json_schema) outputs, so streaming is opt-in per provider.
 	LLMStreaming bool `koanf:"llm_streaming" yaml:"llm_streaming" secret:"false"`
@@ -694,9 +694,9 @@ type NostrConfig struct {
 	// PublishQuorum is the caller-facing success threshold for daemon
 	// publishes: how many configured write relays must accept an event (OK
 	// true or duplicate) before a publish call returns success.
-	//   - 1 (the default; 0/unset means the same): at least one relay.
-	//   - N > 1: at least N relays (capped at the number of write relays).
-	//   - -1 (PublishQuorumAllRelays): every configured write relay.
+	// - 1 (the default; 0/unset means the same): at least one relay.
+	// - N > 1: at least N relays (capped at the number of write relays).
+	// - -1 (PublishQuorumAllRelays): every configured write relay.
 	// It does not change delivery tracking: the outbox row stays pending, and
 	// relays that have not accepted keep being retried, until every write
 	// relay has accepted or reached a terminal state (permanent rejection or
@@ -727,7 +727,7 @@ type NostrConfig struct {
 
 	// BootstrapOwners maps org UUIDs to the hex pubkey of their bootstrap
 	// owner. Used only when no relay membership events (O1) or Postgres
-	// org_members exist for an org. See design §2.2.
+	// org_members exist for an org. See docs/architecture/intents-and-authority.md
 	BootstrapOwners map[string]string `koanf:"bootstrap_owners" yaml:"bootstrap_owners" secret:"false"`
 
 	// LocalStore is the daemon's local event store and inbound cursors.
@@ -794,7 +794,7 @@ type RelaySidecarConfig struct {
 	// connection. A subscription that would overflow it is CLOSED so the client
 	// re-subscribes from its cursor, instead of silently missing events.
 	SubscriberQueueSize int `koanf:"subscriber_queue_size" yaml:"subscriber_queue_size" secret:"false"`
-	// Retention is by kind class (C-19). EventRetention caps the age of stored
+	// Retention is by kind class. EventRetention caps the age of stored
 	// regular events that are not RequestRetentionKinds (for example 4903
 	// audit facts); zero, the default, keeps them durably. RequestRetention
 	// bounds RequestRetentionKinds. Replaceable and addressable events and
@@ -810,16 +810,16 @@ type RelaySidecarConfig struct {
 	// being silently truncated, so the client narrows the filter.
 	NegentropyMaxEvents int `koanf:"negentropy_max_events" yaml:"negentropy_max_events" secret:"false"`
 	// ReadAuthMode controls NIP-42 authentication for REQ and COUNT filters
-	// that target non-public kinds or protected cp-state topics (C-21, C-47).
+	// that target non-public kinds or protected cp-state topics.
 	// Values:
-	//   "enforce" - CLOSED auth-required for unauthenticated protected
-	//               REQs and NIP-11 advertises auth_required (default; an
-	//               empty or unknown value normalises to this).
-	//   "warn"    - log but allow unauthenticated reads. Explicit opt-out
-	//               for migrations; protected records such as the
-	//               soul-factory-runtime-policy are then readable by anyone
-	//               who can connect.
-	//   "off"     - no read-side auth (pre-C-21 behaviour).
+	// "enforce" - CLOSED auth-required for unauthenticated protected
+	// REQs and NIP-11 advertises auth_required (default; an
+	// empty or unknown value normalises to this).
+	// "warn" - log but allow unauthenticated reads. Explicit opt-out
+	// for migrations; protected records such as the
+	// soul-factory-runtime-policy are then readable by anyone
+	// who can connect.
+	// "off" - no read-side auth (pre- behaviour).
 	ReadAuthMode string `koanf:"read_auth_mode" yaml:"read_auth_mode" secret:"false"`
 	// ReadAuthAllowedPubkeys are additional hex pubkeys allowed to read
 	// protected kinds, beyond the admin allowlist, intent authors and the
@@ -845,7 +845,7 @@ const (
 	MaxRelaySidecarNegentropyMaxEvents     = 10_000_000
 )
 
-// Read auth mode values (C-21).
+// Read auth mode values.
 const (
 	ReadAuthModeEnforce = "enforce"
 	ReadAuthModeWarn    = "warn"
@@ -997,7 +997,7 @@ func (c RuntimeEndpointConfig) Empty() bool {
 
 // RuntimeConfig holds runtime targeting settings.
 //
-// The flat fields are retained for backward compatibility with existing
+// The flat fields are supports backward compatibility with existing
 // runtime.type, runtime.docker_host, and runtime.compose_dir configuration.
 // New installations should prefer runtime.default.* plus
 // runtime.environments.<environment-name>.*. Environment variables for nested
@@ -1005,7 +1005,7 @@ func (c RuntimeEndpointConfig) Empty() bool {
 // BAHIA_RUNTIME__DEFAULT__TYPE=compose and
 // BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR=/srv/bahia/prod.
 type RuntimeConfig struct {
-	// Legacy flat fields.
+	// Compatibility flat fields.
 	Type          string          `koanf:"type" secret:"false"`
 	DockerHost    string          `koanf:"docker_host" secret:"false"`
 	ComposeDir    string          `koanf:"compose_dir" secret:"false"`
@@ -2256,7 +2256,7 @@ func (c NostrConfig) RelayAuthUnavailableSemantics() string {
 
 // NormalizedReadAuthMode returns the effective read auth mode for the sidecar.
 // Unset and unrecognised values fall back to enforce: a typo must not silently
-// open protected topics (C-47).
+// open protected topics.
 func (c RelaySidecarConfig) NormalizedReadAuthMode() string {
 	mode := strings.ToLower(strings.TrimSpace(c.ReadAuthMode))
 	switch mode {

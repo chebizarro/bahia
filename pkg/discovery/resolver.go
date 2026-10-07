@@ -22,7 +22,7 @@ import (
 // Bahia publishes DNS endpoint state (live and tombstone) only through the
 // projector's canonical control-state envelope: kind 30900 with domain=dns,
 // schema=bahia.cp-state.v1, legacy_kind=31976, deleted=true|false and
-// t=dns-endpoint. Legacy kind 31976 is no longer published and its tombstones
+// t=dns-endpoint. Compatibility kind 31976 is not published and its tombstones
 // land on 30900, so the resolver reads 30900 only.
 var endpointLegacyKind = kinds.CPStateFamilyDNSEndpoint.TagValue()
 
@@ -115,7 +115,7 @@ func WithPrivateKey(privateKeyHex string) Option {
 }
 
 // WithStorePath keeps endpoint events and per-relay sync cursors in a local
-// bbolt event store at path (bahia-irsry.10.5). Start then restores endpoints
+// bbolt event store at path. Start then restores endpoints
 // from the store before any relay answers, and syncs each relay on its own:
 // replaceable endpoint state is reconciled with NIP-77 where the relay
 // supports it, so a restart downloads only the events the store lacks, and a
@@ -694,7 +694,7 @@ func (r *Resolver) endpointFilter() nostr.Filter {
 // endpoint state only; #t does not apply because kind-5 events carry e/a
 // tags, not the target's topic tags. The local store's SaveEvent already
 // handles the mechanics (indexing the deletion, removing targeted events),
-// so receiving the event is sufficient. (bahia-irsry.48 item 6)
+// so receiving the event is sufficient. ( item 6)
 func (r *Resolver) deletionFilter() nostr.Filter {
 	return nostr.Filter{
 		Kinds:   []nostr.Kind{nostr.KindDeletion},

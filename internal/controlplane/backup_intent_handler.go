@@ -80,19 +80,19 @@ type BackupIntentExecutors struct {
 // per-org membership.
 //
 // Operations (intent op tag):
-//   - recipe-apply: create/update a backup recipe
-//   - policy-apply: create/update a backup policy
-//   - repository-register: create/update a backup repository
-//   - definition-apply: create/update a backup definition
-//   - run: request a backup run
-//   - restore: request a backup restore
-//   - restore-approval: approve/reject a pending restore
-//   - verification: request a backup verification
-//   - retention: request a retention run
-//   - repository-probe: probe a backup repository
-//   - delete: delete an entity (recipe, policy, repository, or definition)
+// - recipe-apply: create/update a backup recipe
+// - policy-apply: create/update a backup policy
+// - repository-register: create/update a backup repository
+// - definition-apply: create/update a backup definition
+// - run: request a backup run
+// - restore: request a backup restore
+// - restore-approval: approve/reject a pending restore
+// - verification: request a backup verification
+// - retention: request a retention run
+// - repository-probe: probe a backup repository
+// - delete: delete an entity (recipe, policy, repository, or definition)
 //
-// See design §7 Wave 4 B1.
+// See docs/architecture/intents-and-authority.md
 type BackupIntentHandler struct {
 	registry    BackupIntentCRUD
 	definitions BackupIntentDefinitionCRUD

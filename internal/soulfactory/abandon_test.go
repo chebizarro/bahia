@@ -14,7 +14,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// Tests for bahia-irsry.57: operator abandon, late result after abandon,
+// Tests for: operator abandon, late result after abandon,
 // unauthorized abandon rejection, async deferred fleet work ordering,
 // restart-rebuild durability, and rejection when the operation is not parked.
 

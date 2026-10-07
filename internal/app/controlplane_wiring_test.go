@@ -80,7 +80,7 @@ func (appWiringBackupResponder) PublishBackupRunResult(context.Context, *domain.
 }
 
 // NOTE: these two tests assert on private Reactor fields by reflection, which
-// is implementation-coupled (tracked in bahia-5iaa6). A 2026-09-19 attempt to
+// is implementation-coupled (tracked in ). A 2026-09-19 attempt to
 // replace them with public-API assertions was reverted: the Reactor exposes no
 // behavioural path that observes whether these dependencies were injected, so
 // the replacement passed even with the wiring removed. A vacuous test is worse

@@ -7,7 +7,7 @@
   } from '$lib/stores/souls.svelte.js';
   import { KINDS } from '$lib/nostr/client.js';
 
-  /** @typedef {import('$lib/types/customization').SoulMemorySpec} SoulMemorySpec */
+  /** @typedef {import('$lib/types/customization').SoulMemorySpec} SoulMemorySpec*/
 
   let {
     value = $bindable(),

@@ -21,15 +21,15 @@ import (
 //
 // Each mutation (RecordPayment, MarkPaymentSent, RecordChange) publishes
 // exactly one 30900 record before the service touches its SQL index (audit
-// B-31). The d-tag is "payment:<id>" so each payment has a unique relay
+// ). The d-tag is "payment:<id>" so each payment has a unique relay
 // coordinate and a status transition replaces it. Warm-start covers the
-// "payment" domain automatically via CPStateDomains().
+// "payment" domain automatically via CPStateDomains.
 //
 // The publisher is also the service's read view: ListPaymentRecords decodes
 // the daemon's own retained records from the local event store, so payment
 // history needs no SQL repository.
 //
-// bahia-irsry.60: confidential cp-state for payments.
+// confidential cp-state for payments.
 type PaymentCanonicalPublisher struct {
 	projector *Projector
 	encryptor ConfidentialStateEncryptor

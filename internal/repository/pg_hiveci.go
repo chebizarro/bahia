@@ -508,7 +508,7 @@ func (r *PgHiveCIRepository) GetPolicyByRepoAndWorkflow(ctx context.Context, rep
 
 func (r *PgHiveCIRepository) EnsurePipelinePolicy(ctx context.Context, policy domain.HiveCIPipelinePolicy) error {
 	// Reconcile config-owned policy state in place, or insert it when absent.
-	// This lets upgrades replace formerly permissive metadata with mandatory
+	// This lets upgrades replace permissive metadata with mandatory
 	// release constraints. COALESCE preserves NULL branch-pattern equality.
 	metadata := policy.Metadata
 	if metadata == nil {

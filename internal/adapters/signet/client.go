@@ -63,16 +63,16 @@ const (
 // Client communicates with Signet via NIP-46.
 //
 // Two relay stacks, by protocol:
-//   - NIP-46 RPC (connect, sign, NIP-44, per-agent bunkers) runs on pool, a
-//     library nostr.Pool, because nip46.ConnectBunker and BunkerClient take
-//     one and own its kind-24133 request/response subscription. That is the
-//     library's NIP-46 client, not a Bahia relay consumer.
-//   - Signet's ContextVM management plane (NIP-59 gift-wrapped JSON-RPC,
-//     callManagement) is a Bahia REQ/EVENT exchange and runs on the shared
-//     RelayPool: supervised per-relay REQ, CLOSED classification and NIP-42.
-//     Its pool lives as long as one bunker connection and authenticates as
-//     the provisioner through that bunker, the identity the gift-wrapped
-//     replies are addressed to.
+// - NIP-46 RPC (connect, sign, NIP-44, per-agent bunkers) runs on pool, a
+// library nostr.Pool, because nip46.ConnectBunker and BunkerClient take
+// one and own its kind-24133 request/response subscription. That is the
+// library's NIP-46 client, not a Bahia relay consumer.
+// - Signet's ContextVM management plane (NIP-59 gift-wrapped JSON-RPC,
+// callManagement) is a Bahia REQ/EVENT exchange and runs on the shared
+// RelayPool: supervised per-relay REQ, CLOSED classification and NIP-42.
+// Its pool lives as long as one bunker connection and authenticates as
+// the provisioner through that bunker, the identity the gift-wrapped
+// replies are addressed to.
 type Client struct {
 	bunkerURI         string
 	relays            []string
@@ -116,7 +116,7 @@ type Config struct {
 	Relays            []string      // Backup relays if not in URI
 	ClientSecretKey   string        // Optional: persistent client key (generated if empty)
 	RequireReal       bool          // When true, missing/unreachable bunker is a hard error
-	AllowMock         bool          // Legacy explicit test/dev-only mock mode; production callers should prefer RequireReal=true
+	AllowMock         bool          // Compatibility explicit test/dev-only mock mode; production callers should prefer RequireReal=true
 	ConnectTimeout    time.Duration // Bounds each connection attempt without becoming the successful connection lifetime
 	SignTimeout       time.Duration // Deprecated: caller context controls signing lifetime
 	ClosedRetryBudget int           // nostr.closed_retry_budget for the management pool; 0 keeps the pool default

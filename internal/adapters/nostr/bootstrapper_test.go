@@ -220,7 +220,7 @@ func TestBootstrapperTimeoutNamesBlockingRelaysInProgress(t *testing.T) {
 }
 
 // An empty fleet is synced, not failed: every required group reached EOSE
-// with no stored events, so the requested tier is ready (bahia-irsry.20).
+// with no stored events, so the requested tier is ready.
 func TestBootstrapperEmptyFleetWithEOSEBecomesReady(t *testing.T) {
 	catalog := testBootstrapCatalog()
 	setBootstrapSubscribeScript(t, map[int]scriptedBootstrapSubscription{

@@ -127,7 +127,7 @@ func (b *CloudflareBackend) Check(ctx context.Context, plan *domain.DesiredPubli
 		return err
 	}
 	ownership := cloudflareOwnershipMarker(plan.DNS.SourceCoordinate)
-	// Do not match the raw coordinate as a legacy marker: Cloudflare rejected every
+	// Do not match the raw coordinate as a compatibility marker: Cloudflare rejected every
 	// pre-fix apply because those 123-character comments exceeded its 100-character limit.
 	owned := false
 	for _, record := range records {

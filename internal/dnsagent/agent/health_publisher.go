@@ -16,7 +16,7 @@ const KindUserStatus = nostr.Kind(30315)
 
 // HealthPublisher periodically publishes the agent's health status as NIP-38
 // kind 30315 events with NIP-40 expiration. The daemon can subscribe to these
-// instead of polling via ContextVM Health() RPC.
+// instead of polling via ContextVM Health RPC.
 type HealthPublisher struct {
 	agent    *Agent
 	signer   nostr.Signer
@@ -104,7 +104,7 @@ func (h *HealthPublisher) publishOnce(ctx context.Context) error {
 			{"t", "bahia"},
 			{"t", "dns-agent-health"},
 			// Advertise zone-subscribe capability so the daemon can choose
-			// event-based zone sync instead of ContextVM RPC (C-34).
+			// event-based zone sync instead of ContextVM RPC.
 			{"capability", CapabilityZoneSubscribe, CapabilityZoneSubscribeVersion},
 			// NIP-40 expiration: event becomes invalid after this time.
 			{"expiration", strconv.FormatInt(expiresAt.Unix(), 10)},

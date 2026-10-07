@@ -19,7 +19,7 @@ import (
 // DNSCanonicalPublisher publishes authoritative DNS state records through the
 // shared builder and outbox. It replaces the projector's DNS snapshot legs
 // (publishDNSEndpointSnapshot, publishDNSZoneSnapshot, etc.) that previously
-// ran on a 10-minute timer and on ~40 bus event types (B-17).
+// ran on a 10-minute timer and on ~40 bus event types.
 //
 // The reconciler calls this after each material reconcile, so each canonical
 // record is published once per mutation instead of O(fleet) per tick.
@@ -327,7 +327,7 @@ func (p *DNSCanonicalPublisher) HydrateFromStore(ctx context.Context) error {
 
 // PublishZoneSync publishes a zone sync event carrying the full set of DNS
 // records for a zone. The agent subscribes to these events instead of
-// receiving ContextVM RPC pushes (C-34). The created_at timestamp serves as
+// receiving ContextVM RPC pushes. The created_at timestamp serves as
 // the serial; the event ID is the tie-breaker for equal serials.
 func (p *DNSCanonicalPublisher) PublishZoneSync(ctx context.Context, zone domain.DNSZone, records []domain.DNSRecord) error {
 	if p.projector == nil || !p.projector.Enabled() {

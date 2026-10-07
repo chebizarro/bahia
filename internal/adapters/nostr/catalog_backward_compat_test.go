@@ -10,20 +10,20 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Backward-compatible payload enrichment tests (Item 8 — bahia-zu2p.8.7)
+// Backward-compatible payload enrichment tests (Item 8 — )
 //
 // These tests verify that:
-//   - Legacy (pre-enrichment) payloads decode without error
-//   - New enriched payloads include enrichment fields
-//   - Decoders tolerate missing optional enrichment fields
-//   - Decoders tolerate unknown future fields (forward compat)
-//   - Event kinds and d-tag semantics are unchanged
-//   - Replaceable event identity (pubkey+kind+d) is preserved
+// - Compatibility (pre-enrichment) payloads decode without error
+// - New enriched payloads include enrichment fields
+// - Decoders tolerate missing optional enrichment fields
+// - Decoders tolerate unknown future fields (forward compat)
+// - Event kinds and d-tag semantics are unchanged
+// - Replaceable event identity (pubkey+kind+d) is preserved
 // ---------------------------------------------------------------------------
 
 // --- Golden payload fixtures ------------------------------------------------
 
-// goldenLegacy returns a map of kind → (dtag, legacy JSON content, tags) for
+// goldenLegacy returns a map of kind → (dtag, compatibility JSON content, tags) for
 // pre-enrichment payloads that existing consumers already process.
 func goldenLegacyPayloads() map[int]goldenPayload {
 	now := "2026-05-01T00:00:00Z"
@@ -121,7 +121,7 @@ type goldenPayload struct {
 	enrichedFields map[string]string // key → expected value for enrichment fields
 }
 
-// --- Test: Legacy payloads decode without error -----------------------------
+// --- Test: Compatibility payloads decode without error -----------------------------
 
 func TestBackwardCompat_LegacyPayloadsDecodeWithoutError(t *testing.T) {
 	catalog := NewKindCatalog()
@@ -544,7 +544,7 @@ func TestBackwardCompat_ReplaceableDTagSemantics(t *testing.T) {
 
 // --- Test: Golden payload format round-trip ----------------------------------
 
-// TestBackwardCompat_GoldenPayloadRoundTrip verifies that golden legacy and
+// TestBackwardCompat_GoldenPayloadRoundTrip verifies that golden compatibility and
 // enriched payloads can be decoded and re-serialized without losing known
 // fields. This catches struct tag regressions.
 func TestBackwardCompat_GoldenPayloadRoundTrip(t *testing.T) {
@@ -634,7 +634,7 @@ func TestBackwardCompat_GoldenPayloadRoundTrip(t *testing.T) {
 	})
 }
 
-// --- Test: Enrichment is purely additive — legacy family assignment unchanged
+// --- Test: Enrichment is purely additive — compatibility family assignment unchanged
 
 func TestBackwardCompat_FamilyAssignmentUnchanged(t *testing.T) {
 	catalog := NewKindCatalog()
@@ -672,14 +672,14 @@ func TestBackwardCompat_FamilyAssignmentUnchanged(t *testing.T) {
 	}
 }
 
-// --- Test: Mixed legacy+enriched stream processed in sequence ----------------
+// --- Test: Mixed compatibility+enriched stream processed in sequence ----------------
 
 func TestBackwardCompat_MixedLegacyAndEnrichedStream(t *testing.T) {
 	catalog := NewKindCatalog()
 
 	// Simulate a relay stream where old and new events arrive interleaved.
 	// This is the real-world scenario: some projectors haven't upgraded yet
-	// and publish legacy payloads, while upgraded ones publish enriched.
+	// and publish compatibility payloads, while upgraded ones publish enriched.
 	legacyState := goldenLegacyPayloads()[KindServiceState]
 	enrichedState := goldenEnrichedPayloads()[KindServiceState]
 
@@ -707,7 +707,7 @@ func TestBackwardCompat_MixedLegacyAndEnrichedStream(t *testing.T) {
 		t.Fatalf("enriched event in mixed stream missing desired_hash")
 	}
 
-	// The first (legacy) event should have empty enrichment fields
+	// The first (compatibility) event should have empty enrichment fields
 	legacyDecoded := catalogDecode(t, catalog, events[0])
 	if legacyDecoded.State.DesiredHash != "" {
 		t.Fatalf("legacy event in mixed stream should have empty desired_hash, got %q", legacyDecoded.State.DesiredHash)

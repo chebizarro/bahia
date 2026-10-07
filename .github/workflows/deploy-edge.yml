@@ -134,23 +134,23 @@ jobs:
           test -w "$RELEASE_ROOT"
           test -w "$CONTROLPLANE_ROOT/backups"
           python3 scripts/edge_image_admission.py verify-revision \
-            --repo . \
+            --repo. \
             --revision "$RELEASE_REVISION"
 
       - name: Seed web runtime environment into host compose
         # Order matters: this runs AFTER the read-only preflight and BEFORE any
         # image build, compose backup, image swap, or `up`.
-        #   1. Inject the runtime bootstrap seed (`${PUBLIC_BAHIA_*}` /
-        #      `${PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS:-}` references) into the HOST
-        #      compose file's web.environment. Text-preserving and idempotent: only
-        #      missing keys are added, existing values are never rewritten, and the
-        #      file is left untouched when nothing is missing or the web service is
-        #      absent (non-zero exit).
-        #   2. Render the seeded file and gate on the result. Job-level values reach
-        #      Compose interpolation here, so a host that lacked the keys passes once
-        #      injection succeeds; a blank/missing value still fails before any stack
-        #      change. The deploy step's backup is taken later, so the rollback file
-        #      also carries the seed.
+        # 1. Inject the runtime bootstrap seed (`${PUBLIC_BAHIA_*}` /
+        # `${PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS:-}` references) into the HOST
+        # compose file's web.environment. Text-preserving and idempotent: only
+        # missing keys are added, existing values are never rewritten, and the
+        # file is left untouched when nothing is missing or the web service is
+        # absent (non-zero exit).
+        # 2. Render the seeded file and gate on the result. Job-level values reach
+        # Compose interpolation here, so a host that lacked the keys passes once
+        # injection succeeds; a blank/missing value still fails before any stack
+        # change. The deploy step's backup is taken later, so the rollback file
+        # also carries the seed.
         run: |
           set -euo pipefail
 
@@ -174,7 +174,7 @@ jobs:
             --build-arg VERSION="0.1.0-$RELEASE_REVISION" \
             -t "local/bahia-controlplane-bahia:$tag" .
           python3 scripts/edge_image_admission.py verify-image \
-            --repo . \
+            --repo. \
             --image "local/bahia-controlplane-bahia:$tag" \
             --expected-revision "$RELEASE_REVISION"
 
@@ -215,7 +215,7 @@ jobs:
           python3 scripts/relay_policy_rollout_gate.py capture --url "$ready_url" --baseline "$baseline"
           cp "$COMPOSE_FILE" "$backup"
           python3 scripts/edge_image_admission.py sanitize-rollback \
-            --repo . \
+            --repo. \
             --source "$backup" \
             --output "$rollback" \
             --safe-bahia-image "$SAFE_ROLLBACK_BAHIA_IMAGE"

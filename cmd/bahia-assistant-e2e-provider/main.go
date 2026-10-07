@@ -5,10 +5,10 @@
 // and OpenAIAgentClient (iterative loop) use, and answers only the two
 // fixture prompts it publishes on GET /fixtures:
 //
-//   - the batch prompt always yields the same three-step read-only plan over
-//     the backend's real bahia_assistant_dns_* tools;
-//   - the iterative prompt is held open until the caller goes away, so the
-//     run stays in `proposing` until the operator cancels it.
+// - the batch prompt always yields the same three-step read-only plan over
+// the backend's real bahia_assistant_dns_* tools;
+// - the iterative prompt is held open until the caller goes away, so the
+// run stays in `proposing` until the operator cancels it.
 //
 // Any other request is refused so an unexpected model call fails loudly
 // instead of being answered with invented content.

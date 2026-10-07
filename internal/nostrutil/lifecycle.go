@@ -12,18 +12,18 @@ import (
 	"fiatjaf.com/nostr/nip40"
 )
 
-// This file is the one place Go consumers resolve event state (C-11, C-12 and
-// C-13 in docs/investigations/nostr-first-architecture-audit-2026-09-29.md):
+// This file is the one place Go consumers resolve event state (and
+// in docs/architecture/event-lifecycle.md):
 //
-//   - NIP-01 replaceable and addressable events: per (kind, pubkey, d) the
-//     latest created_at wins, and on equal created_at the lowest id wins.
-//   - NIP-09 deletion requests (kind 5): an `e` reference deletes that id when
-//     the requester is its author; an `a` reference deletes every version of
-//     the requester's coordinate up to the request's created_at. Deleted
-//     events never come back, whichever order the request and the target
-//     arrive in.
-//   - NIP-40 expiration: an expired event is ignored on arrival, and a live
-//     event is dropped when its expiration passes.
+// - NIP-01 replaceable and addressable events: per (kind, pubkey, d) the
+// latest created_at wins, and on equal created_at the lowest id wins.
+// - NIP-09 deletion requests (kind 5): an `e` reference deletes that id when
+// the requester is its author; an `a` reference deletes every version of
+// the requester's coordinate up to the request's created_at. Deleted
+// events never come back, whichever order the request and the target
+// arrive in.
+// - NIP-40 expiration: an expired event is ignored on arrival, and a live
+// event is dropped when its expiration passes.
 
 // Address is the NIP-01 coordinate of a replaceable or addressable event.
 // Plain replaceable kinds (0, 3, 10000-19999) have an empty D.
@@ -45,7 +45,7 @@ func IsStateKind(kind canonicalnostr.Kind) bool {
 }
 
 // MaxEventAge bounds how old an event of an AgeCapped kind may be when a
-// Bahia consumer or relay admits it (C-11): a year-old one-shot fact, request
+// Bahia consumer or relay admits it: a year-old one-shot fact, request
 // or command is a replay, not news, and the cap keeps replay protection and
 // dedup memory bounded.
 const MaxEventAge = 365 * 24 * time.Hour

@@ -21,7 +21,7 @@ export const FLEET_CAPACITY_LANES = Object.freeze([
 // Lane used purely for the fleet weather map grouping. Workers that have not
 // reported telemetry are routed to the dedicated no_telemetry lane so they do
 // not masquerade as a real capacity posture (e.g. Caution). This is kept
-// separate from workerCapacityClass()/recommendedAction() so the action-rail
+// separate from workerCapacityClass/recommendedAction so the action-rail
 // classification is unaffected.
 export function fleetNodeLane(worker) {
   return hasWorkerTelemetry(worker) ? workerCapacityClass(worker) : 'no_telemetry';

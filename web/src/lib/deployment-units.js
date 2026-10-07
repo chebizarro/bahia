@@ -154,7 +154,7 @@ export function buildDeploymentUnitSetUpdate(environment, { originalKey = '', fo
   });
 
   if (original && !matched) {
-    throw new Error(`Deployment unit "${original}" is no longer present. Refresh and review the latest target set.`);
+    throw new Error(`Deployment unit "${original}" is missing. Refresh and review the latest target set.`);
   }
 
   if (!original) {
@@ -187,7 +187,7 @@ export function deploymentTargetIssue(service, environment, deploymentUnitId = '
   let unit = null;
   if (selectedId) {
     unit = explicit.find((candidate) => text(candidate.id) === selectedId) || null;
-    if (!unit) return 'The selected deployment unit is no longer available. Select a current target.';
+    if (!unit) return 'The selected deployment unit is unavailable. Select a current target.';
   } else if (explicit.length === 1) {
     unit = explicit[0];
   } else if (units.length === 1) {

@@ -489,7 +489,7 @@ func (d *Driver) AdoptOrphans(ctx context.Context) error {
 		}
 		if _, err := os.Stat(filepath.Join(dir, ownershipFile)); err == nil {
 			// Persistent v2 resources are recovered by exact-resource inspection, never
-			// by the legacy name-scanned registry cleanup path.
+			// by the compatibility name-scanned registry cleanup path.
 			continue
 		}
 		if err := d.VerifyLegacy(ctx, name, uuid.Nil); err != nil {

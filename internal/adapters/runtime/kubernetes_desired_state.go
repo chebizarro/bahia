@@ -496,8 +496,8 @@ func buildK8sContainerPorts(ports []string) []map[string]any {
 // k8sVolumeMapping holds the parallel pod-spec volumes and container
 // volumeMounts entries derived from a spec's Volumes slice.
 type k8sVolumeMapping struct {
-	Volumes      []map[string]any // pod spec .spec.volumes entries
-	VolumeMounts []map[string]any // container .volumeMounts entries
+	Volumes      []map[string]any // pod spec.spec.volumes entries
+	VolumeMounts []map[string]any // container.volumeMounts entries
 }
 
 // buildK8sVolumeMappings converts Docker-style volume specs into hostPath
@@ -689,14 +689,14 @@ func (k *KubernetesRuntime) SupportsDesiredState() bool { return true }
 // desired runtime state using kubectl apply.
 //
 // Flow:
-//  1. Validate request (nil spec check)
-//  2. Resolve namespace: KubernetesExtension.Namespace or k.kubeNamespace
-//  3. Find existing Bahia-managed Deployment via label selector
-//  4. Hash match + non-always pull policy → no-op return
-//  5. DryRun → preview result without mutation
-//  6. Generate K8s Deployment (+ optional Service) manifests
-//  7. kubectl apply -f - (JSON on stdin) for each manifest
-//  8. Return DesiredStateApplyResult with renderer="kubernetes"
+// 1. Validate request (nil spec check)
+// 2. Resolve namespace: KubernetesExtension.Namespace or k.kubeNamespace
+// 3. Find existing Bahia-managed Deployment via label selector
+// 4. Hash match + non-always pull policy → no-op return
+// 5. DryRun → preview result without mutation
+// 6. Generate K8s Deployment (+ optional Service) manifests
+// 7. kubectl apply -f - (JSON on stdin) for each manifest
+// 8. Return DesiredStateApplyResult with renderer="kubernetes"
 func (k *KubernetesRuntime) ApplyDesiredState(ctx context.Context, req DesiredStateApplyRequest) (*DesiredStateApplyResult, error) {
 	if req.TargetService == nil {
 		return nil, fmt.Errorf("kubernetes apply: target service spec is nil")

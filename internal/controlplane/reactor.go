@@ -26,10 +26,10 @@ import (
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
-// Legacy Bahia control-plane kind aliases retained for direct handler tests and
+// Compatibility Bahia control-plane kind aliases supports direct handler tests and
 // migration rejection. Production subscriptions use ContextVM/canonical kinds.
 const (
-	// Legacy request kind aliases
+	// Compatibility request kind aliases
 	KindDeployRequest            = nostrpool.KindControlPlaneDeployRequest            // Request to deploy a service
 	KindRollbackRequest          = nostrpool.KindControlPlaneRollbackRequest          // Request to rollback a service
 	KindServiceAction            = nostrpool.KindControlPlaneServiceAction            // Lifecycle action (scale, restart, stop)
@@ -72,7 +72,7 @@ const (
 	KindWorkerCleanupRequest     = nostrpool.KindControlPlaneWorkerCleanupRequest     // Request worker cleanup
 
 	// Generic AI/ML command/result kinds (38390-38399). Their separation from the
-	// retired legacy DVM allocation is historical; fleet-local Loom, Hive-CI, and
+	// retired compatibility DVM allocation is historical; fleet-local Loom, Hive-CI, and
 	// SoulFactory kinds within 5000-7000 are explicit independent protocols.
 	KindMLRecipeRunRequest            = nostrpool.KindMLRecipeRunRequest            // Request a generic ML recipe run
 	KindMLInferenceDeployRequest      = nostrpool.KindMLInferenceDeployRequest      // Request inference endpoint deployment
@@ -85,7 +85,7 @@ const (
 	KindMLInferenceRollbackResult     = nostrpool.KindMLInferenceRollbackResult     // Rollback terminal result
 	KindMLModelImportResult           = nostrpool.KindMLModelImportResult           // Model/model-version import terminal result
 
-	// Legacy status kind aliases
+	// Compatibility status kind aliases
 	KindDeploymentStatus    = nostrpool.KindControlPlaneDeploymentStatus    // Deployment progress updates
 	KindServiceStatus       = nostrpool.KindControlPlaneServiceStatus       // Service health/state updates
 	KindActionStatus        = nostrpool.KindControlPlaneActionStatus        // Service action progress updates
@@ -93,7 +93,7 @@ const (
 	KindToolProvisionStatus = nostrpool.KindControlPlaneToolProvisionStatus // Bahia → Agent (progress)
 	KindAdoptionStatus      = nostrpool.KindControlPlaneAdoptionStatus      // Adoption scan/import progress updates
 
-	// Legacy result kind aliases
+	// Compatibility result kind aliases
 	KindDeploymentResult         = nostrpool.KindControlPlaneDeploymentResult         // Final deployment result
 	KindActionResult             = nostrpool.KindControlPlaneActionResult             // Result of a service action
 	KindServiceCreateResult      = nostrpool.KindControlPlaneServiceCreateResult      // Service creation result
@@ -219,7 +219,7 @@ type DeploymentRun struct {
 	CompletedAt     *time.Time
 }
 
-// ReactorOption configures optional reactor dependencies without breaking the legacy constructor shape.
+// ReactorOption configures optional reactor dependencies without breaking the compatibility constructor shape.
 type ReactorOption func(*Reactor)
 
 // WithLLMRegistry enables LLM Nostr lifecycle request handling.
@@ -565,7 +565,7 @@ func (r *Reactor) auditInboundEvent(ctx context.Context, event *nostr.Event) boo
 		ReceivedAt: time.Now().UTC(),
 	})
 	if err != nil {
-		// The audit table is an archive, not the dedupe authority (B-14): a
+		// The audit table is an archive, not the dedupe authority: a
 		// database error must not make the reactor deaf to its relays. The
 		// in-memory dedupe still stops relay replays within this process.
 		r.logger.Warn("failed to audit inbound control-plane event; handling it anyway", "event_id", event.ID.Hex(), "kind", int(event.Kind), "error", err)
@@ -578,7 +578,7 @@ func (r *Reactor) auditInboundEvent(ctx context.Context, event *nostr.Event) boo
 	return true
 }
 
-// handleEvent audits and tracks canonical runtime replay events. Legacy
+// handleEvent audits and tracks canonical runtime replay events. Compatibility
 // Bahia command/status/result/read-model kind-number flows are rejected after
 // the startup migration boundary; operator commands use the signed intent
 // processor instead of this production reactor subscription.
@@ -1326,7 +1326,7 @@ func (r *Reactor) GetRun(requestEventID string) *DeploymentRun {
 	return r.runs[requestEventID]
 }
 
-// ObservationRequest represents a legacy observation submission payload.
+// ObservationRequest represents a compatibility observation submission payload.
 type ObservationRequest struct {
 	ServiceID           uuid.UUID `json:"service_id"`
 	EnvironmentID       uuid.UUID `json:"environment_id"`

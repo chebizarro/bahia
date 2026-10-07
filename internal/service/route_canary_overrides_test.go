@@ -124,7 +124,7 @@ func (s *scheduledCanarySupervisor) expectCounts(t *testing.T, when string, fast
 }
 
 // TestSupervisorProbesEachRouteOnItsOwnInterval is the interval half of the
-// bahia-6xztt acceptance criterion: a route overridden to 15s is probed every
+// acceptance criterion: a route overridden to 15s is probed every
 // 15s while a neighbouring route stays on the 60s fleet-wide interval.
 func TestSupervisorProbesEachRouteOnItsOwnInterval(t *testing.T) {
 	h := newScheduledCanarySupervisor(t)
@@ -255,7 +255,7 @@ func TestSupervisorReprobesAfterWallClockStepsBackwards(t *testing.T) {
 }
 
 // TestSupervisorAppliesStatusOverrideOnlyToItsRoute is the expectation half of
-// the bahia-6xztt acceptance criterion for periodic probing: a route with a
+// the acceptance criterion for periodic probing: a route with a
 // non-2xx health contract is healthy on its own terms, while the same response
 // from a route on fleet-wide policy is still a failure.
 func TestSupervisorAppliesStatusOverrideOnlyToItsRoute(t *testing.T) {

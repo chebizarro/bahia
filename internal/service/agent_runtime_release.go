@@ -18,7 +18,7 @@ var (
 	runtimeReleaseDigest      = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
-// AgentRuntimeReleaseService is the Wave B interface for registering one
+// AgentRuntimeReleaseService is the interface for registering one
 // verified runtime digest once, binding it to multiple agents, and resolving
 // the exact prior binding for rollback.
 type AgentRuntimeReleaseService struct {

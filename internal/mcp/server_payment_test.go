@@ -166,8 +166,8 @@ func newTestMCPPaymentServer(t *testing.T) (*Server, *testPaymentRepo, uuid.UUID
 
 	paymentRepo := newTestPaymentRepo()
 	paymentSvc := service.NewPaymentService(paymentRepo, zap.NewNop())
-	// The payment service reads canonical state, never SQL (audit B-31). The
-	// legacy parity baseline serves the fixture rows through that view.
+	// The payment service reads canonical state, never SQL. The
+	// compatibility parity baseline serves the fixture rows through that view.
 	paymentSvc.SetCanonicalView(testPaymentFixtureView{repo: paymentRepo})
 	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{Payments: paymentSvc})
 	return server, paymentRepo, runID, workerPubkey

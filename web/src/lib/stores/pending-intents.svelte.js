@@ -3,7 +3,7 @@ const STORE = 'pending_intents';
 function tag(event, name) { return event?.tags?.find(t => t[0] === name)?.[1]; }
 function key(coordinate, intentId) { return `${coordinate}\u0000${intentId}`; }
 
-/** Merge UI-only desired state beside canonical rows without changing the store. */
+/** Merge UI-only desired state beside canonical rows without changing the store.*/
 export function mergeWithPending(canonical, pending, domain) {
   const rows = new Map(canonical.map(row => [String(row.id), row]));
   for (const intent of pending) {
@@ -35,7 +35,7 @@ function transact(db, mode, action) {
   });
 }
 
-/** Locally persisted, UI-only overlay; canonical state is never modified. */
+/** Locally persisted, UI-only overlay; canonical state is never modified.*/
 export function createPendingIntents({ namespace, servicePubkey, requesterPubkey, now = () => Date.now() }) {
   if (!namespace || !servicePubkey || !requesterPubkey) throw new Error('Pending intents need namespace, service and requester pubkeys');
   let db;

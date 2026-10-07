@@ -2,14 +2,14 @@ package nostr
 
 // This test exercises the exact production assembly path that app.go uses:
 //
-//     projectorOpts = append(projectorOpts,
-//         WithReadinessTracker(intentReadiness),
-//         WithIntentDomains(cfg.Nostr.IntentDomains),
-//     )
-//     NewProjector(cfg, source, publisher, history, logger, projectorOpts...)
+// projectorOpts = append(projectorOpts,
+// WithReadinessTracker(intentReadiness),
+// WithIntentDomains(cfg.Nostr.IntentDomains),
+// )
+// NewProjector(cfg, source, publisher, history, logger, projectorOpts...)
 //
 // It uses a ReadinessWaiter that mirrors controlplane.ReadinessTracker's
-// channel-based Ready() contract (register filter, mark ready → channel
+// channel-based Ready contract (register filter, mark ready → channel
 // closes). The test cannot import controlplane directly due to the circular
 // import (controlplane → adapters/nostr), but ReadinessTracker satisfies
 // ReadinessWaiter, so the contract is identical.
@@ -18,8 +18,8 @@ package nostr
 // history repository, mirroring the intent handler's PublishBeforeCommit path.
 //
 // Assertions:
-//   - Zero projector publishes for migrated domains when relay holds current state
-//   - Exactly one re-publish for a deliberately stale (abandoned) record
+// - Zero projector publishes for migrated domains when relay holds current state
+// - Exactly one re-publish for a deliberately stale (abandoned) record
 
 import (
 	"context"
@@ -105,7 +105,7 @@ func TestProductionAssemblyWarmStartZeroPublishAndStaleRepublish(t *testing.T) {
 		t.Errorf("zero-publish restart: expected 0 service publishes, got %d", n)
 	}
 
-	// Phase 2: introduce a stale record and restart.
+	// introduce a stale record and restart.
 	markRecordFailed(t, repo, "domain", "service", svcIDs[2].String())
 
 	readiness2 := newTrackerReadiness("intent-30900")

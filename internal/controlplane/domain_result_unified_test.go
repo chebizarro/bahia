@@ -210,7 +210,7 @@ func TestPublishFailureIsLogged(t *testing.T) {
 }
 
 // TestDomainPublishResultNoLongerReturnsError verifies that the domain publish
-// functions no longer return error values — the chosen contract is (a): helpers
+// functions not return error values — the chosen contract is (a): helpers
 // log internally and return nothing.
 
 // failingNostrPublisher always returns an error from Publish.

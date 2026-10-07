@@ -1,12 +1,12 @@
-/**
+/***/
  * Single ingestion path for all Nostr events entering the BahiaEventStore.
  *
  * Every event — from relay subscription, cache hydration, or local intent
- * creation — flows through `ingestEvent()`.  It delegates signature
+ * creation — flows through `ingestEvent`. It delegates signature
  * verification to nostr-tools and NIP-01 replaceable/addressable rules +
  * NIP-09/NIP-40 to the welshman Repository.
  *
- * Design reference: phase4-web-store-first.md §2.4.
+ * Design reference: docs/architecture/web-store-first.md §2.4.
  *
  * @module lib/nostr/ingestion
  */
@@ -19,10 +19,10 @@ import { verifyEvent } from 'nostr-tools';
 
 const HEX_64 = /^[0-9a-f]{64}$/;
 
-/**
+/***/
  * Strip the nostr-tools `verifiedSymbol` from an event so the signature
- * is actually re-checked.  Object spread (`{ ...event }`) copies the
- * symbol, which short-circuits `verifyEvent()` — a corrupted copy of a
+ * is actually re-checked. Object spread (`{...event }`) copies the
+ * symbol, which short-circuits `verifyEvent` — a corrupted copy of a
  * valid event would pass without this.
  *
  * @param {object} event
@@ -38,7 +38,7 @@ function stripVerifiedCache(event) {
   return event;
 }
 
-/**
+/***/
  * Lightweight structural + signature check.
  *
  * Synchronous — `verifyEvent` from nostr-tools ≥ 2.x uses the
@@ -82,7 +82,7 @@ export function validateForIngestion(event) {
   return { valid: true };
 }
 
-/**
+/***/
  * Get the `expiration` tag value (NIP-40) from an event, if present.
  * @param {import('./store-interface.js').NostrEvent} event
  * @returns {number | null} Unix timestamp, or null if no expiration tag.
@@ -97,10 +97,10 @@ export function getExpiration(event) {
   return null;
 }
 
-/**
+/***/
  * Check whether an event is expired per NIP-40.
  * @param {import('./store-interface.js').NostrEvent} event
- * @param {number} [now] - Current unix timestamp (defaults to Date.now()/1000).
+ * @param {number} [now] - Current unix timestamp (defaults to Date.now/1000).
  * @returns {boolean}
  */
 export function isExpired(event, now) {

@@ -81,7 +81,7 @@ export const OPERATION_STATUS_KINDS = Object.freeze([
   WORKER_STATUS
 ]);
 
-// These two legacy reply slots are part of the documented 7971-7979
+// These two compatibility reply slots are part of the documented 7971-7979
 // subscription range but do not have generated symbolic names.
 const LLM_DEPLOYMENT_APPROVAL_RESULT = 7974;
 const LLM_ROLLBACK_RESULT = 7975;
@@ -510,7 +510,7 @@ function commonPatch(event, content) {
   };
 }
 
-/** Addressable ML request: keyed by its signed request event id for result correlation. */
+/** Addressable ML request: keyed by its signed request event id for result correlation.*/
 function projectOperationRequest(event) {
   if (!event?.id) return false;
 
@@ -529,7 +529,7 @@ function projectOperationRequest(event) {
   }, event, 'request');
 }
 
-/** Operational 69xx status: correlated by the request event id in the `e` tag. */
+/** Operational 69xx status: correlated by the request event id in the `e` tag.*/
 function projectOperationStatus(event) {
   const requestEventId = getTagValue(event, 'e');
   if (!requestEventId) return false;
@@ -552,7 +552,7 @@ function projectOperationStatus(event) {
   }, event, 'status');
 }
 
-/** Operational 79xx result: terminal and correlated by the request `e` tag. */
+/** Operational 79xx result: terminal and correlated by the request `e` tag.*/
 function projectOperationResult(event) {
   const requestEventId = getTagValue(event, 'e');
   if (!requestEventId) return false;
@@ -585,7 +585,7 @@ function projectOperationResult(event) {
   }, event, 'result');
 }
 
-/** Hive-CI 5401 run: it is the request-side event and is keyed by its own id. */
+/** Hive-CI 5401 run: it is the request-side event and is keyed by its own id.*/
 function projectHiveCIWorkflowRun(event) {
   const requestEventId = event?.id;
   const publisherPubkey = getTagValue(event, 'publisher');
@@ -613,7 +613,7 @@ function projectHiveCIWorkflowRun(event) {
   return changed;
 }
 
-/** Hive-CI 5402 result: terminal and correlated to its 5401 run by `e`. */
+/** Hive-CI 5402 result: terminal and correlated to its 5401 run by `e`.*/
 function projectHiveCIWorkflowResult(event) {
   const requestEventId = getTagValue(event, 'e');
   if (!requestEventId) return false;

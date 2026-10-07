@@ -145,7 +145,7 @@ func (s *fakeSignet) answerManagement(gift nostr.Event) (nostr.Event, error) {
 }
 
 // TestSignetManagementRunsOnRelayPoolWithRecipientAuth: management calls run
-// on the shared RelayPool (bahia-irsry.47). The relay is an inbox that serves
+// on the shared RelayPool. The relay is an inbox that serves
 // gift wraps only to their authenticated recipient, so the reply REQ succeeds
 // only because the pool answers NIP-42 as the provisioner, through the
 // bunker. The pool belongs to one bunker connection: after the connection

@@ -35,7 +35,7 @@ type intentWrite struct {
 }
 
 // invokeIntentWrite makes direct handler calls obey the same pipeline as CallTool.
-// There is no legacy publisher fallback when the processor is unavailable.
+// There is no compatibility publisher fallback when the processor is unavailable.
 func (s *Server) invokeIntentWrite(ctx context.Context, name string, args map[string]interface{}) (*ToolResult, error) {
 	if result, ok := s.callIntentWrite(ctx, name, args); ok {
 		return result, nil

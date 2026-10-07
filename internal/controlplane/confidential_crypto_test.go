@@ -604,14 +604,14 @@ func TestTrustSetHydrationWithNewFormat(t *testing.T) {
 func TestOldFormatMigrationDualRead(t *testing.T) {
 	ctx := context.Background()
 
-	// Set up a legacy O1 encryptor.
+	// Set up a compatibility O1 encryptor.
 	legacyKey := OrgStateKey{Ref: "test-key", Version: "v1", Key: make([]byte, 32)}
 	for i := range legacyKey.Key {
 		legacyKey.Key[i] = byte(i)
 	}
 	legacyEncryptor := NewOrgStateEncryptor(StaticOrgStateKeyProvider{Key: legacyKey})
 
-	// Encrypt member content with the legacy O1 format.
+	// Encrypt member content with the compatibility O1 format.
 	memberContent, _ := json.Marshal(map[string]interface{}{
 		"org_id": "test-org-migrate", "pubkey": "member-pk", "role": "admin", "deleted": false,
 	})
@@ -620,11 +620,11 @@ func TestOldFormatMigrationDualRead(t *testing.T) {
 		t.Fatalf("legacy encrypt: %v", err)
 	}
 
-	// Set up a new confidential encryptor — it will fail to decrypt the legacy format.
+	// Set up a new confidential encryptor — it will fail to decrypt the compatibility format.
 	manager, _, _ := newTestOCKManager(t, nil)
 	confidentialEnc := NewConfidentialEncryptor(manager, nil)
 
-	// The dual-read function should fall back to the legacy O1 decryptor.
+	// The dual-read function should fall back to the compatibility O1 decryptor.
 	orgID, pubkey, role, deleted, err := DecryptMemberContentConfidential(
 		confidentialEnc, legacyEncryptor, legacyEncrypted, 0, "", "")
 	if err != nil {
@@ -815,7 +815,7 @@ func TestProductionPathRemoveMemberRotation(t *testing.T) {
 	signer := newTestKeySigner(t, serviceKeyHex)
 	servicePubkey := pubkeyFromHex(t, serviceKeyHex)
 
-	// Phase 1: both members are present.
+	// both members are present.
 	trustSet := NewTrustSet(nil, nil)
 	trustSet.SetRelayMembers("test-org-rotation", map[string]domain.Role{
 		memberAPubkey: domain.RoleAdmin,
@@ -855,14 +855,14 @@ func TestProductionPathRemoveMemberRotation(t *testing.T) {
 		t.Fatalf("member B should decrypt pre-rotation: %v", err)
 	}
 
-	// Phase 2: remove member B — update TrustSet and rotate.
+	// remove member B — update TrustSet and rotate.
 	trustSet.SetRelayMembers(orgID, map[string]domain.Role{
 		memberAPubkey: domain.RoleAdmin,
 	})
 
 	// Simulate OrgIntentHandler.triggerKeyRotation → ConfidentialEncryptor.RotateKey.
 	// In production, the callback receives the org UUID and calls RotateKey with
-	// orgID.String(). Here we call RotateKey directly with the orgID string.
+	// orgID.String. Here we call RotateKey directly with the orgID string.
 	if err := encryptor.RotateKey(ctx, orgID); err != nil {
 		t.Fatalf("rotation failed: %v", err)
 	}
@@ -980,7 +980,7 @@ func findMemberEnvelopeForVersion(t *testing.T, ctx context.Context, envelopes [
 	return OrgContentKey{}
 }
 
-// --- Test 14: Legacy EncryptedDomainHandlers path — add member wraps OCK ---
+// --- Test 14: Compatibility EncryptedDomainHandlers path — add member wraps OCK ---
 
 // lifecycleTrackingPublisher records key lifecycle calls made by the publisher.
 type lifecycleTrackingPublisher struct {

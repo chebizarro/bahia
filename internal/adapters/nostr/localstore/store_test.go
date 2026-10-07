@@ -176,7 +176,7 @@ func TestPruneRegularEventsKeepsReplaceableState(t *testing.T) {
 
 // NIP-40: an event whose expiration has passed is pruned whatever its kind
 // (addressable tombstones included), one that has not, or carries no
-// expiration, is kept (bahia-u5whr).
+// expiration, is kept.
 func TestPruneExpiredEventsHonoursNIP40OnEveryKind(t *testing.T) {
 	store, _ := openTemp(t)
 	sk := nostr.Generate()

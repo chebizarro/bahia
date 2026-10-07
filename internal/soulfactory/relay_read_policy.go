@@ -17,45 +17,45 @@ import (
 // one. The zero value is RelayReadComplete: partial reads fail closed.
 //
 // Every SoulFactory relay client read names its policy explicitly. Decision table
-// (bahia-irsry.27):
+// :
 //
-//	Caller                                       Read                          Policy          Why
-//	-------------------------------------------  ----------------------------  --------------  ------------------------------------------------
-//	Reactor.GetSoul                              31951 latest by d-tag         Complete        Feeds read-modify-write (lifecycle actions, full
-//	                                                                                           provisioner, late-runtime projection), saga
-//	                                                                                           observation and bootstrap absence checks; a
-//	                                                                                           stale soul republished is a lost update.
-//	Reactor.correlatedRuntimeRecoveryState       38384 / 5950 by event id      AllIDs          Ids are content-addressed and signed: a found
-//	                                                                                           event is the event. Absence still fails closed.
-//	Reactor.findExistingProvisioningResult       7950 by e-tag (idempotency)   Found           A found authoritative result is final. Absence
-//	                                                                                           would re-run provisioning, so it needs every relay.
-//	LifecycleHandler.findExistingTerminalResult  7950 / legacy by e-tag        Found           Same idempotency argument as above.
-//	Reactor.listFleetReconcileSouls              31951 fan-out                 Complete        Reconcile republishes each soul; a missing or
-//	                                                                                           stale soul is skipped or overwritten.
-//	Reactor.getFleetConfigRevision               fleet config by event id      AllIDs          Content-addressed revision lookup.
-//	Reactor.getProvisioningFleetConfig           fleet config latest           Complete        Carries auth/tools/mcp/hooks/plugins policy; a
-//	                                                                                           stale revision baked into a new agent is not
-//	                                                                                           repaired until the next revision is published.
-//	Reactor.getProvisioningDraft                 31952 latest by ref or id     LatestQuorum    Operator-authored input; newest of a majority.
-//	Reactor.getProvisioningTemplate              template latest by ref        LatestQuorum    Operator-authored input; newest of a majority.
-//	communikeysMembership.latestDefinition       Communikeys definition        Complete        Authority for a membership grant.
-//	communikeysMembership.latestProfileList      Communikeys profile list      Complete        Read-modify-write of a membership list: a stale
-//	                                                                                           base silently revokes newer members.
-//	concordMembership.resolveConcordInbox        10050 / 10002 latest          LatestQuorum    Routing lookup of replaceable relay lists.
-//	concordMembership.fetchConcordControlPlane   Control Plane giftwraps       Complete        Folds grants and revocations (authority check).
-//	NostrClient.ListSouls/GetSoul/ListTemplates  display reads (CLI, MCP)      LatestQuorum    Display only; actions are decided by the
-//	                                                                                           factory's own complete reads.
-//	runtimeControlAdapter.DiscoverCapabilities   30317 latest                  LatestQuorum    Freshness is bounded by MaxCapabilityAge and the
-//	                                                                                           runtime enforces its own controller trust.
-//	runtimeControlAdapter runtime relay list     10002 latest                  LatestQuorum    Routing only; a missed result surfaces as
-//	                                                                                           *NoTerminalResultError.
-//	RelayRuntimeValidationEventSource.LoadEvents events by id                  AllIDs          Validation judges exactly the named events.
-//	OpenClaw sidecar readiness                   live REQ backfill             Complete        Controller trust and revocations; readiness
-//	                                                                                           stays false until every relay sends EOSE.
-//	Reactor.Run request backfill                 live REQ backfill             (continue)      Not a read: realtime processing continues and a
-//	                                                                                           late relay's stored requests still arrive on the
-//	                                                                                           same subscription; handlers are idempotent.
-//	NIP29Membership                              writes only                   n/a
+//	Caller Read Policy Why
+//	------------------------------------------- ---------------------------- -------------- ------------------------------------------------
+//	Reactor.GetSoul 31951 latest by d-tag Complete Feeds read-modify-write (lifecycle actions, full
+//	 provisioner, late-runtime projection), saga
+//	 observation and bootstrap absence checks; a
+//	 stale soul republished is a lost update.
+//	Reactor.correlatedRuntimeRecoveryState 38384 / 5950 by event id AllIDs Ids are content-addressed and signed: a found
+//	 event is the event. Absence still fails closed.
+//	Reactor.findExistingProvisioningResult 7950 by e-tag (idempotency) Found A found authoritative result is final. Absence
+//	 would re-run provisioning, so it needs every relay.
+//	LifecycleHandler.findExistingTerminalResult 7950 / compatibility by e-tag Found Same idempotency argument as above.
+//	Reactor.listFleetReconcileSouls 31951 fan-out Complete Reconcile republishes each soul; a missing or
+//	 stale soul is skipped or overwritten.
+//	Reactor.getFleetConfigRevision fleet config by event id AllIDs Content-addressed revision lookup.
+//	Reactor.getProvisioningFleetConfig fleet config latest Complete Carries auth/tools/mcp/hooks/plugins policy; a
+//	 stale revision baked into a new agent is not
+//	 repaired until the next revision is published.
+//	Reactor.getProvisioningDraft 31952 latest by ref or id LatestQuorum Operator-authored input; newest of a majority.
+//	Reactor.getProvisioningTemplate template latest by ref LatestQuorum Operator-authored input; newest of a majority.
+//	communikeysMembership.latestDefinition Communikeys definition Complete Authority for a membership grant.
+//	communikeysMembership.latestProfileList Communikeys profile list Complete Read-modify-write of a membership list: a stale
+//	 base silently revokes newer members.
+//	concordMembership.resolveConcordInbox 10050 / 10002 latest LatestQuorum Routing lookup of replaceable relay lists.
+//	concordMembership.fetchConcordControlPlane Control Plane giftwraps Complete Folds grants and revocations (authority check).
+//	NostrClient.ListSouls/GetSoul/ListTemplates display reads (CLI, MCP) LatestQuorum Display only; actions are decided by the
+//	 factory's own complete reads.
+//	runtimeControlAdapter.DiscoverCapabilities 30317 latest LatestQuorum Freshness is bounded by MaxCapabilityAge and the
+//	 runtime enforces its own controller trust.
+//	runtimeControlAdapter runtime relay list 10002 latest LatestQuorum Routing only; a missed result surfaces as
+//	 *NoTerminalResultError.
+//	RelayRuntimeValidationEventSource.LoadEvents events by id AllIDs Validation judges exactly the named events.
+//	OpenClaw sidecar readiness live REQ backfill Complete Controller trust and revocations; readiness
+//	 stays false until every relay sends EOSE.
+//	Reactor.Run request backfill live REQ backfill (continue) Not a read: realtime processing continues and a
+//	 late relay's stored requests still arrive on the
+//	 same subscription; handlers are idempotent.
+//	NIP29Membership writes only n/a
 //
 // Accepted partial reads are logged at Warn and counted in the
 // bahia.soulfactory.relay_read.partial metric with outcome=accepted; rejected

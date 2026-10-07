@@ -20,7 +20,7 @@ type ServiceReader interface {
 }
 
 // ServiceIntentHandler processes service create/update/delete intents.
-// It is the reference F2 domain handler for the Phase 3 intent framework.
+// It is the reference F2 domain handler for the intent framework.
 //
 // Level-triggered: the newest trusted intent's full desired state wins.
 // An update on a cold daemon (no prior create seen) creates the service.
@@ -28,7 +28,7 @@ type ServiceReader interface {
 // and the existing relay-first PublishBeforeCommit semantics (the
 // RegistryMutationBackend publishes before the DB write).
 //
-// See design §7 Wave 1 F2 and §10.
+// See docs/architecture/intents-and-authority.md
 type ServiceIntentHandler struct {
 	registry RegistryMutationBackend
 	reader   ServiceReader
@@ -78,7 +78,7 @@ func (h *ServiceIntentHandler) PermissionFor(_ string) domain.Permission {
 
 // handleCreateOrUpdate reconciles a service toward the intent's desired state.
 // Level-triggered: if the entity doesn't exist, it is created regardless of
-// whether the op tag says "create" or "update" (design §1.2).
+// whether the op tag says "create" or "update" (docs/architecture/intents-and-authority.md).
 func (h *ServiceIntentHandler) handleCreateOrUpdate(ctx context.Context, intent *Intent) error {
 	svc, err := serviceFromIntentContent(intent)
 	if err != nil {
@@ -284,7 +284,7 @@ func serviceFromIntentContent(intent *Intent) (*domain.Service, error) {
 }
 
 // mergeServiceOntoExisting applies the intent's desired state fields onto the
-// loaded entity. The intent carries the complete desired state (§1.2), so
+// loaded entity. The intent carries the complete desired state (docs/architecture/intents-and-authority.md), so
 // every field replaces the existing one, including explicit empty values.
 func mergeServiceOntoExisting(existing, intent *domain.Service) {
 	existing.Name = intent.Name

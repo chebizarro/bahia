@@ -21,16 +21,16 @@ import (
 // --remove-orphans` against the unit-owned project.
 //
 // Key design decisions:
-//   - Unit-owned full-project apply: the target deployment unit is rendered and
-//     applied as a single Compose project. No per-service image substitution or
-//     service-scoped `up` commands.
-//   - No <SERVICE>_IMAGE mutation: image references come from the rendered
-//     Compose YAML, not environment variable overrides.
-//   - No unconditional --force-recreate: Compose computes minimal changes
-//     from the rendered project diff.
-//   - Pull policy is forwarded as --pull <policy> to `docker compose up`.
-//   - Fragment optimisation: when eligibility passes, a service-scoped fragment
-//     overlay is applied first. The full-project path is always the fallback.
+// - Unit-owned full-project apply: the target deployment unit is rendered and
+// applied as a single Compose project. No per-service image substitution or
+// service-scoped `up` commands.
+// - No <SERVICE>_IMAGE mutation: image references come from the rendered
+// Compose YAML, not environment variable overrides.
+// - No unconditional --force-recreate: Compose computes minimal changes
+// from the rendered project diff.
+// - Pull policy is forwarded as --pull <policy> to `docker compose up`.
+// - Fragment optimisation: when eligibility passes, a service-scoped fragment
+// overlay is applied first. The full-project path is always the fallback.
 type ComposeDesiredStateApplier struct {
 	runtime  *ComposeRuntime
 	renderer *ComposeRenderer
@@ -49,7 +49,7 @@ type ComposeDesiredStateApplier struct {
 	) *FragmentEligibility
 
 	// fragmentRendererFn is the function used to render a service fragment.
-	// When nil NewComposeFragmentRenderer().RenderServiceFragment is used.
+	// When nil NewComposeFragmentRenderer.RenderServiceFragment is used.
 	// Override in tests to inject synthetic fragment YAML.
 	fragmentRendererFn func(projectName string, svc domain.DesiredServiceSpec) (*FragmentLayout, error)
 }
@@ -100,14 +100,14 @@ func NewComposeDesiredStateApplierWithRunner(rt *ComposeRuntime, runner CommandR
 // ApplyDesiredState converges the Compose project to match the desired
 // environment plan. The flow is:
 //
-//  1. Validate ownership of the unit-owned compose directory.
-//  2. Select and render the target deployment unit into canonical Compose YAML.
-//  3. Stage rendered files under .bahia/staging/.
-//  4. Validate staged output through the ComposeExecutor control seam.
-//  5. Atomically promote staged files to live locations.
-//  6. Run `docker compose --project-directory <dir> up -d --remove-orphans`
-//     with pull policy.
-//  7. Return apply result with resource names and observation hints.
+// 1. Validate ownership of the unit-owned compose directory.
+// 2. Select and render the target deployment unit into canonical Compose YAML.
+// 3. Stage rendered files under.bahia/staging/.
+// 4. Validate staged output through the ComposeExecutor control seam.
+// 5. Atomically promote staged files to live locations.
+// 6. Run `docker compose --project-directory <dir> up -d --remove-orphans`
+// with pull policy.
+// 7. Return apply result with resource names and observation hints.
 //
 // Secrets from req.Secrets are NOT injected into the Compose YAML or env
 // material at this stage — secret resolution happens at the env-file level

@@ -4,13 +4,13 @@
 -- previously-used release as a duplicate, silently dropped by ON CONFLICT.
 --
 -- New semantics:
---   * source_event_id is the idempotency key (already UNIQUE).
---   * A source-event-fresh promotion always appends a new binding, even when
---     it re-uses a prior release_id.
---   * Concurrent producers cannot fork the chain — the linear-history indexes
---     enforce at most one binding per (agent, service, channel) that either
---     starts the chain (previous_binding_id IS NULL) or descends from any
---     given prior head (previous_binding_id = X).
+-- * source_event_id is the idempotency key (already UNIQUE).
+-- * A source-event-fresh promotion always appends a new binding, even when
+-- it re-uses a prior release_id.
+-- * Concurrent producers cannot fork the chain — the linear-history indexes
+-- enforce at most one binding per (agent, service, channel) that either
+-- starts the chain (previous_binding_id IS NULL) or descends from any
+-- given prior head (previous_binding_id = X).
 DO $$
 DECLARE cname text;
 BEGIN

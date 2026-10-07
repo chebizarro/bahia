@@ -18,10 +18,10 @@ import (
 // Compose Renderer / Apply Safety Tests
 //
 // These tests verify four safety guarantees:
-//   1. Render determinism   — same input always produces identical output
-//   2. Staging isolation    — failures never corrupt live files
-//   3. Validation-before-promote — unvalidated staged files cannot be promoted
-//   4. No --force-recreate  — compose up never uses --force-recreate
+// 1. Render determinism — same input always produces identical output
+// 2. Staging isolation — failures never corrupt live files
+// 3. Validation-before-promote — unvalidated staged files cannot be promoted
+// 4. No --force-recreate — compose up never uses --force-recreate
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
@@ -324,7 +324,7 @@ func TestSafety_StagingIsolation_ApplierRollsBackOnValidationFailure(t *testing.
 // ---------------------------------------------------------------------------
 
 // TestSafety_ValidationBeforePromote_CannotPromoteUnvalidated verifies
-// that Promote() refuses to proceed when Validated is false.
+// that Promote refuses to proceed when Validated is false.
 func TestSafety_ValidationBeforePromote_CannotPromoteUnvalidated(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	mgr := NewComposeStagingManagerWithRunner(logger, successRunner())
@@ -640,9 +640,9 @@ func TestSafety_ErrorPath_ApplierNilTarget(t *testing.T) {
 }
 
 // TestSafety_ErrorPath_OwnershipBlocksApply verifies that apply is blocked
-// without .bahia ownership marker, and no commands are executed.
+// without.bahia ownership marker, and no commands are executed.
 func TestSafety_ErrorPath_OwnershipBlocksApply(t *testing.T) {
-	dir := t.TempDir() // No .bahia marker.
+	dir := t.TempDir() // No.bahia marker.
 	runner := allSuccessRunner()
 	applier := newTestApplier(t, dir, runner)
 

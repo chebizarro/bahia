@@ -58,11 +58,11 @@ type DriftObserver interface {
 // the service is in_sync, drifted, or unknown.
 //
 // Drift rules:
-//   - unknown: observation unavailable (observer error, nil observation, or
-//     missing normalized state/hash)
-//   - drifted: desired hash differs from observed hash
-//   - in_sync: hashes match AND health is acceptable (healthy or starting)
-//   - drifted: hashes match but health is unacceptable (unhealthy, stopped, unknown)
+// - unknown: observation unavailable (observer error, nil observation, or
+// missing normalized state/hash)
+// - drifted: desired hash differs from observed hash
+// - in_sync: hashes match AND health is acceptable (healthy or starting)
+// - drifted: hashes match but health is unacceptable (unhealthy, stopped, unknown)
 //
 // Observation failures are not returned as errors — they produce an "unknown"
 // drift state. Only programming errors (nil spec) return errors.

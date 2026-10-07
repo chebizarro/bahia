@@ -50,7 +50,7 @@ func (r *NotifyingOrgMemberRepository) UpdateRole(ctx context.Context, orgID uui
 	}
 	// Role changes do not affect the intent authors set (the sidecar admits
 	// by pubkey, the intent processor checks permission by role), but we
-	// notify so the syncer can re-push in case AuthorPubkeys() changed.
+	// notify so the syncer can re-push in case AuthorPubkeys changed.
 	r.syncer.Notify()
 	return nil
 }

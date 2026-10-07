@@ -18,7 +18,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // LoadRenderMetadata reads and parses the render-state.json from a compose
-// directory's .bahia/ marker directory.
+// directory's.bahia/ marker directory.
 //
 // Returns (nil, nil) when the file does not exist — this indicates a first
 // render and the caller should fall through to the full-project path.
@@ -47,10 +47,10 @@ func LoadRenderMetadata(composeDir string) (*RenderMetadata, error) {
 // the full-project `docker compose up -d --remove-orphans`.
 //
 // Return semantics:
-//   - (result, nil)  → fragment apply succeeded; return this result to the caller.
-//   - (nil, nil)     → fragment path not taken (ineligible, no baseline, or any
-//     non-fatal soft failure); caller should fall through to full-project apply.
-//   - (nil, err)     → hard failure; caller logs and falls through to full-project.
+// - (result, nil) → fragment apply succeeded; return this result to the caller.
+// - (nil, nil) → fragment path not taken (ineligible, no baseline, or any
+// non-fatal soft failure); caller should fall through to full-project apply.
+// - (nil, err) → hard failure; caller logs and falls through to full-project.
 //
 // The fragment apply NEVER blocks the full-project path — any problem silently
 // falls through via (nil, nil).
@@ -122,7 +122,7 @@ func (a *ComposeDesiredStateApplier) tryFragmentApply(
 		return nil, nil
 	}
 
-	// --- Step 4: Write fragment to .bahia/fragments/<service-key>.yml ---
+	// --- Step 4: Write fragment to.bahia/fragments/<service-key>.yml ---
 	// NewFragmentLayout provides canonical filesystem paths; the rendered YAML
 	// comes from the renderer result's FragmentYAML field.
 	layout := NewFragmentLayout(composeDir, serviceKey)

@@ -1,7 +1,7 @@
-/**
- * Route access control — Phase 4 §6.3.
+/***/
+ * Route access control — §6.3.
  *
- * No longer depends on backendAuthenticated or REST compatibility flags.
+ * not depends on backendAuthenticated or REST compatibility flags.
  * Roles come from relay membership events (auth-roles.svelte.js).
  * Authentication is a persisted signer-verified session.
  */
@@ -95,7 +95,7 @@ export function getRouteAccess(pathname) {
   };
 }
 
-/**
+/***/
  * Check if a user can access a route.
  * §6.2: authenticated = persisted signer-verified session (no backendAuthenticated).
  * Roles come from relay membership events.

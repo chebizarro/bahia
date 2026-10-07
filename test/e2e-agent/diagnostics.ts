@@ -1,4 +1,4 @@
-/**
+/***/
  * Failure diagnostics for E2E agent test runs
  */
 import type { RunReport } from './reporter.js';

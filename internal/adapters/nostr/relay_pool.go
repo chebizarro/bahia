@@ -162,8 +162,8 @@ func defaultReconnectBackoff() *Backoff {
 type RelayPoolOption func(*RelayPool)
 
 // WithPrivateKey sets the private key for NIP-42 AUTH.
-// The key should be hex-encoded. When set, AuthenticateRelay() can be called
-// to respond to auth-required errors detected via PublishResult.IsAuthRequired().
+// The key should be hex-encoded. When set, AuthenticateRelay can be called
+// to respond to auth-required errors detected via PublishResult.IsAuthRequired.
 func WithPrivateKey(privateKeyHex string) RelayPoolOption {
 	return func(p *RelayPool) { p.privateKey = privateKeyHex }
 }
@@ -219,7 +219,7 @@ type RelayPoolReconfigureResult struct {
 }
 
 // NewRelayPool creates a relay pool for the given URLs.
-// Call Connect() to establish connections and Close() when done.
+// Call Connect to establish connections and Close when done.
 func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *RelayPool {
 	normalizedURLs := normalizeRelayURLs(urls)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -919,7 +919,7 @@ type RelayEOSE struct {
 	// Reissued is true when this EOSE comes from a REQ the pool reissued
 	// after a dropped connection or a retryable CLOSED, not the subscription's
 	// initial REQ. Consumers that track cursors can commit a fresh anchor at
-	// a reissued EOSE without a periodic re-anchor REQ (bahia-irsry.48 item 4).
+	// a reissued EOSE without a periodic re-anchor REQ ( item 4).
 	Reissued bool
 	// ReissuedAt, when Reissued, is the wall-clock time taken just before
 	// the reissued REQ was opened: the cursor anchor for the reissue.
@@ -970,7 +970,7 @@ func (m *MergedSubscription) PendingEOSE() []string {
 // terminal subscription without EOSE is not sufficient bootstrap evidence.
 func (m *MergedSubscription) HasRealEOSE() bool {
 	if m == nil || m.active == nil {
-		// Synthetic and legacy merged subscriptions close their aggregate EOSE
+		// Synthetic and compatibility merged subscriptions close their aggregate EOSE
 		// channel only when their caller has supplied EOSE semantics.
 		return true
 	}
@@ -1203,15 +1203,15 @@ func (p *RelayPool) SubscribeAllWithEOSE(ctx context.Context, filters []nostr.Fi
 // max_filters is never exceeded), and each (relay, filter) REQ is supervised
 // on its own until ctx ends or the subscription is closed:
 //
-//   - CLOSED "auth-required:" answers the relay's NIP-42 challenge (the
-//     pool's AuthHandler, or a join of its attempt) and reissues that REQ at
-//     once. It is surfaced on Closed only when AUTH is impossible or fails.
-//   - CLOSED "blocked:", "restricted:", "invalid:" and other policy refusals
-//     (see ClassifyClosedReason) stop that REQ for good: surfaced with
-//     Terminal set, never retried.
-//   - CLOSED "error:", "rate-limited:" or an unknown reason, and a dropped
-//     connection, reissue that REQ on that relay only, after a backoff and a
-//     reconnect. Other relays are unaffected.
+// - CLOSED "auth-required:" answers the relay's NIP-42 challenge (the
+// pool's AuthHandler, or a join of its attempt) and reissues that REQ at
+// once. It is surfaced on Closed only when AUTH is impossible or fails.
+// - CLOSED "blocked:", "restricted:", "invalid:" and other policy refusals
+// (see ClassifyClosedReason) stop that REQ for good: surfaced with
+// Terminal set, never retried.
+// - CLOSED "error:", "rate-limited:" or an unknown reason, and a dropped
+// connection, reissue that REQ on that relay only, after a backoff and a
+// reconnect. Other relays are unaffected.
 //
 // Events closes once every REQ has stopped for good or the subscription ends;
 // GaveUp then tells a refusal from a relay leaving the pool.
@@ -2735,7 +2735,7 @@ func (p *RelayPool) authenticateRelayAhead(ctx context.Context, mr *managedRelay
 }
 
 // AuthenticateRelay sends a NIP-42 AUTH response to a specific relay.
-// Call this after receiving an auth-required error (PublishResult.IsAuthRequired()).
+// Call this after receiving an auth-required error (PublishResult.IsAuthRequired).
 // Returns an error if no private key is configured or auth fails.
 func (p *RelayPool) AuthenticateRelay(ctx context.Context, relayURL string) error {
 	if !p.hasAuthSigner() {

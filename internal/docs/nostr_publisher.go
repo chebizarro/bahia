@@ -28,7 +28,7 @@ type NostrEventPublisher interface {
 // kind 30023 is an addressable event, the relay automatically replaces older
 // versions when a newer event with the same (pubkey, kind, d) triple arrives.
 //
-// A SHA-256 content hash is included as a "content-hash" tag. On each sync the
+// A SH content hash is included as a "content-hash" tag. On each sync the
 // publisher queries the relay for existing docs events, compares hashes, and
 // skips unchanged topics to avoid unnecessary relay writes.
 type NostrDocsPublisher struct {
@@ -211,7 +211,7 @@ func (p *NostrDocsPublisher) fetchExistingHashes(ctx context.Context) map[string
 	return hashes
 }
 
-// contentHash returns the hex-encoded SHA-256 hash of the content.
+// contentHash returns the hex-encoded SH hash of the content.
 func contentHash(content string) string {
 	h := sha256.Sum256([]byte(content))
 	return fmt.Sprintf("%x", h[:])

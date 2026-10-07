@@ -17,7 +17,7 @@ import (
 )
 
 // FullProvisioner orchestrates the complete agent provisioning workflow.
-// This is the Phase 2/3 implementation with all integrations including bahia.
+// This is the implementation with all integrations including bahia.
 type workspaceInitializer interface {
 	InitWorkspace(context.Context, *domain.AgentSoul) (string, error)
 }

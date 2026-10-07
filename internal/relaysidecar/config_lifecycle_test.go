@@ -64,7 +64,7 @@ func awaitStatus(t *testing.T, ctx context.Context, statuses chan nostr.Event, s
 	}
 }
 
-// C-13: two desired events claiming one version resolve like NIP-01
+// two desired events claiming one version resolve like NIP-01
 // replacement (lowest id on equal created_at), whatever order they arrive in.
 func TestConfigConsumerEqualVersionResolvesByLowestID(t *testing.T) {
 	secret := nostr.SecretKey{1}
@@ -94,7 +94,7 @@ func TestConfigConsumerRejectsExpiredDesiredEvent(t *testing.T) {
 	require.Empty(t, got)
 }
 
-// C-12: a NIP-09 deletion of the desired event withdraws it, its pending
+// a NIP-09 deletion of the desired event withdraws it, its pending
 // activation never runs, and the deleted event cannot come back.
 func TestSidecarConfigDeletionWithdrawsDesiredWithoutResurrection(t *testing.T) {
 	for _, ref := range []string{"e", "a"} {
@@ -129,7 +129,7 @@ func TestSidecarConfigDeletionWithdrawsDesiredWithoutResurrection(t *testing.T) 
 	}
 }
 
-// C-12: a desired event is withdrawn when its NIP-40 expiration passes, at
+// a desired event is withdrawn when its NIP-40 expiration passes, at
 // that moment rather than at the next retention sweep.
 func TestSidecarConfigExpirationWithdrawsDesired(t *testing.T) {
 	server, secret := configStatusServerForTest(t)

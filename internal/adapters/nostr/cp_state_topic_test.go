@@ -15,7 +15,7 @@ import (
 )
 
 // cpStateTopicsByFamily is every cp-state family's declared "t" topic. The
-// worker values are declared with the worker contract (bahia-irsry.9.2).
+// worker values are declared with the worker contract.
 var cpStateTopicsByFamily = map[int]string{
 	KindServiceState:                                 kinds.CPStateTopicServiceState,
 	KindServiceRegistry:                              kinds.CPStateTopicServiceRegistry,
@@ -174,7 +174,7 @@ func TestProjectedControlStateCarriesFamilyTopic(t *testing.T) {
 			return projector.publishControlState(ctx, KindServiceState, serviceStateDTag(serviceID, envID), true, tags, contentJSON, "state.projection", &serviceID)
 		},
 		func() error {
-			// Phase 3 D1: DNS publish methods moved to DNSCanonicalPublisher;
+			// D1: DNS publish methods moved to DNSCanonicalPublisher;
 			// use publishControlState directly for the envelope topic test.
 			content, _ := json.Marshal(map[string]any{"deleted": false, "name": "prod.cascadia", "backend_ref": "fs"})
 			tags := gonostr.Tags{{"zone", "prod.cascadia"}, {"backend", "fs"}, {"t", "bahia"}}

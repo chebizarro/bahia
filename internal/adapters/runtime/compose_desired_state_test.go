@@ -679,7 +679,7 @@ func TestComposeDesiredStateApplier_NilTargetService(t *testing.T) {
 }
 
 func TestComposeDesiredStateApplier_OwnershipFailure(t *testing.T) {
-	// Use a directory without .bahia/ marker — ownership check should fail.
+	// Use a directory without.bahia/ marker — ownership check should fail.
 	dir := t.TempDir()
 	runner := allSuccessRunner()
 	applier := newTestApplier(t, dir, runner)

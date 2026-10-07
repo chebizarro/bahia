@@ -36,7 +36,7 @@ func (*DNSIntentHandler) PermissionFor(string) domain.Permission { return domain
 func (*DNSIntentHandler) IsFleetScoped() bool                    { return true }
 
 func (h *DNSIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
-	// Create and legacy override operations do not consume revision tokens.
+	// Create and compatibility override operations do not consume revision tokens.
 	if intent.ExpectedUpdatedAt != nil && (intent.Op == "zone-create" || intent.Op == "policy-apply" || intent.Op == "record-set" || intent.Op == "override-retire" || intent.Op == "drift-remediate") {
 		return fmt.Errorf("expected_updated_at is not supported for DNS %s", intent.Op)
 	}

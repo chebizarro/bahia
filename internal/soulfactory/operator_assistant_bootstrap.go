@@ -30,7 +30,7 @@ type OperatorAssistantIdentity struct {
 
 // EnsureOperatorAssistantSoul ensures the managed operator assistant identity exists.
 // Signet finding (2026-05-16): internal/adapters/signet/client.go exposes SignAs,
-// which can sign arbitrary nostr.Event values for provisioned agents. Phase 1 still
+// which can sign arbitrary nostr.Event values for provisioned agents. still
 // uses the service-signed fallback for downstream command events and attaches
 // ["agent", "bahia-operator-assistant"] for attribution; the soul key is identity
 // metadata until arbitrary-kind bunker signing is validated end-to-end.

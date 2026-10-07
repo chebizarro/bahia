@@ -23,10 +23,10 @@ import (
 //
 // Semantics mirror the CLIComposeExecutor command lines:
 //
-//   - Validate            ≙ docker compose -f <staged> config -q
-//   - Up                  ≙ docker compose up -d --remove-orphans [--pull <policy>]
-//   - ValidateWithFragment ≙ docker compose -f <main> -f <fragment> config -q
-//   - UpService           ≙ docker compose -f <main> -f <fragment> up -d --no-deps [--pull <policy>] <svc>
+// - Validate ≙ docker compose -f <staged> config -q
+// - Up ≙ docker compose up -d --remove-orphans [--pull <policy>]
+// - ValidateWithFragment ≙ docker compose -f <main> -f <fragment> config -q
+// - UpService ≙ docker compose -f <main> -f <fragment> up -d --no-deps [--pull <policy>] <svc>
 //
 // The SDK returns rich Go errors instead of process stdout/stderr, so the
 // stdout/stderr return values are always empty strings.

@@ -1,4 +1,4 @@
-/**
+/***/
  * Generated Bahia web Nostr event kind constants.
  *
  * This module mirrors internal/kinds/kinds.go for drift detection while keeping
@@ -416,7 +416,7 @@ export const WORKER_DRAIN_STATUS_TOPIC = 'worker-drain';
 export const WORKER_ELIGIBILITY_PREVIEW_TOPIC = 'worker-eligibility';
 export const WORKER_CLEANUP_EXECUTION_TOPIC = 'worker-cleanup';
 export const WORKER_STATE_TOPICS = Object.freeze([WORKER_STATE_TOPIC, WORKER_ASSIGNMENT_STATE_TOPIC, WORKER_DRAIN_STATUS_TOPIC, WORKER_ELIGIBILITY_PREVIEW_TOPIC, WORKER_CLEANUP_EXECUTION_TOPIC]);
-// Worker cp-state coordinates (internal/kinds Worker*DPrefix, bahia-irsry.36).
+// Worker cp-state coordinates (internal/kinds Worker*DPrefix, ).
 // Each family addresses its records under its own d prefix, so assignment and
 // drain for one worker never share an addressable (kind, pubkey, d) coordinate.
 export const WORKER_STATE_D_PREFIX = 'worker:state:';
@@ -425,7 +425,7 @@ export const WORKER_DRAIN_STATUS_D_PREFIX = 'worker:drain:';
 export const WORKER_ELIGIBILITY_PREVIEW_D_PREFIX = 'worker:eligibility:';
 export const WORKER_CLEANUP_EXECUTION_D_PREFIX = 'worker:cleanup:';
 // Operator allowlist cp-state family (internal/kinds CPStateFamilyOperatorAllowlist,
-// bahia-fbyo5): fleet-OCK encrypted copies of the daemon's operator allowlists,
+// ): fleet-OCK encrypted copies of the daemon's operator allowlists,
 // one record per scope on 'operators:<scope>'.
 export const OPERATOR_ALLOWLIST_CATALOG_KIND = 32029;
 export const OPERATOR_ALLOWLIST_TOPIC = 'operator-allowlist';
@@ -433,21 +433,21 @@ export const OPERATOR_ALLOWLIST_D_PREFIX = 'operators:';
 export const OPERATOR_ALLOWLIST_SCOPE_CONTINUITY = 'continuity';
 export const OPERATOR_ALLOWLIST_SCOPE_SOUL_FACTORY = 'soul-factory';
 // Assistant and relay-settings single-letter t topics (internal/kinds
-// Assistant*Topic, RelaySettingsTopic; bahia-irsry.37).
+// Assistant*Topic, RelaySettingsTopic; ).
 export const ASSISTANT_TRANSCRIPT_TOPIC = 'assistant-transcript';
 export const ASSISTANT_TRANSCRIPT_SESSION_TOPIC_PREFIX = 'assistant-transcript:';
 export const ASSISTANT_STATUS_TOPIC = 'assistant-status';
 export const RELAY_SETTINGS_TOPIC = 'relay-settings';
-// Assistant session-state topic (bahia-irsry.43).
+// Assistant session-state topic.
 export const ASSISTANT_SESSION_TOPIC = 'assistant-session';
-// Security and SBOM observable topics (bahia-irsry.43).
+// Security and SBOM observable topics.
 export const SECURITY_SCAN_STATUS_TOPIC = 'security-scan-status';
 export const SECURITY_SUMMARY_TOPIC = 'security-summary';
 export const SECURITY_FINDINGS_TOPIC = 'security-findings';
 export const SECURITY_AUDIT_TOPIC = 'security-audit';
 export const SBOM_REFERENCE_TOPIC = 'sbom-reference';
 export const SBOM_AVAILABILITY_TOPIC = 'sbom-availability';
-// Release attestation topic (bahia-irsry.43).
+// Release attestation topic.
 export const RELEASE_ATTESTATION_TOPIC = 'release-attestation';
 export const CONTINUITY_HEARTBEAT_TOPIC = 'continuity-heartbeat';
 export const DNS_STATE_SCHEMA_BY_LEGACY_KIND = Object.freeze({
@@ -466,7 +466,7 @@ export const BAHIA_SBOM_INDEX_SCHEMA = 'bahia.sbom.index.v1';
 export const BAHIA_AUDIT_SCHEMA = 'bahia.audit.v1';
 
 // Single-letter t topics the projector stamps on every canonical cp-state
-// record (internal/kinds/tags.go CPStateTopic*, bahia-irsry.9.3): the family's
+// record (internal/kinds/tags.go CPStateTopic*, ): the family's
 // "<domain>-<entity>". Relays index single-letter tags only, so 30900 REQs
 // filter on #t rather than #domain/#schema. DNS and worker topics are
 // declared with their own families.
@@ -531,7 +531,7 @@ export const CP_STATE_TOPICS = Object.freeze({
 });
 
 // Family schema -> t topic for the cp-state families the web routes. The
-// worker values mirror the worker contract's topics (bahia-irsry.9.2).
+// worker values mirror the worker contract's topics.
 export const CP_STATE_TOPIC_BY_SCHEMA = Object.freeze({
   [BAHIA_STATE_SCHEMAS.SERVICE_STATE]: CP_STATE_TOPICS.SERVICE_STATE,
   [BAHIA_STATE_SCHEMAS.SERVICE_REGISTRY]: CP_STATE_TOPICS.SERVICE_REGISTRY,

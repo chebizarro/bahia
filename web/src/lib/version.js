@@ -1,4 +1,4 @@
-/* global __BAHIA_WEB_BASE_VERSION__, __BAHIA_WEB_COMMIT__, __BAHIA_WEB_VERSION__ */
+/* global __BAHIA_WEB_BASE_VERSION__, __BAHIA_WEB_COMMIT__, __BAHIA_WEB_VERSION__*/
 
 function definedString(value) {
   return typeof value === 'string' ? value.trim() : '';

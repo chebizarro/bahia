@@ -91,10 +91,10 @@ func TestValidateInboundEventRejectsInvalidEvents(t *testing.T) {
 	}
 }
 
-// C-11: replaceable and addressable state and deletion requests keep their
+// replaceable and addressable state and deletion requests keep their
 // force however old they are; regular and ephemeral events stay capped. The
 // rule is nostrutil.AgeCapped, shared with the relay sidecar's write policy
-// (bahia-irsry.52).
+// .
 func TestValidateInboundEventAgeCapAppliesOnlyToRegularKinds(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	old := now.Add(-InboundEventMaxPastAge - 30*24*time.Hour)
@@ -111,7 +111,7 @@ func TestValidateInboundEventAgeCapAppliesOnlyToRegularKinds(t *testing.T) {
 	require.Equal(t, nostrutil.MaxEventAge, InboundEventMaxPastAge)
 }
 
-// C-12: expired events (NIP-40) are dropped at the trust boundary.
+// expired events (NIP-40) are dropped at the trust boundary.
 func TestValidateInboundEventRejectsExpiredEvents(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	withExpiration := func(expiresAt time.Time) *gonostr.Event {

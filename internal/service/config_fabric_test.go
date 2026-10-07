@@ -464,7 +464,7 @@ func TestConfigFabricStatusCoordinatesAndTargetBinding(t *testing.T) {
 	}
 }
 
-// bahia-irsry.45: a consumer withdraws a deleted or expired desired event and
+// a consumer withdraws a deleted or expired desired event and
 // keeps the last applied config live. The drift view reports the withdrawal
 // against the current desired event only, and keeps the applied version.
 func TestConfigFabricDriftReportsWithdrawnDesiredEvent(t *testing.T) {

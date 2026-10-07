@@ -24,18 +24,18 @@ type AgentModelEventHandler func(AgentModelEvent)
 // AgentModelRequest is the canonical cross-provider model request.
 //
 // Message threading contract:
-//   - User/system/assistant text is represented by domain.AssistantAgentMessage
-//     Content blocks using the domain.AssistantAgentContentText/JSON types.
-//   - A model turn that asks for multiple tools is represented by one assistant
-//     message with ToolCalls containing every domain.AssistantAgentToolCall in
-//     that turn; adapters serialize this to provider-native multi-call fields.
-//   - Each tool result is represented by a subsequent role=tool message whose
-//     ToolCallID matches exactly one previous tool-call ID and whose Observation
-//     is the canonical domain.AssistantToolObservation. This preserves ordering
-//     and lets providers that require one tool-result message per call serialize
-//     the same transcript deterministically.
-//   - Adapters must not invent provider-specific message structs outside their
-//     transport layer; durable transcript storage uses the domain types above.
+// - User/system/assistant text is represented by domain.AssistantAgentMessage
+// Content blocks using the domain.AssistantAgentContentText/JSON types.
+// - A model turn that asks for multiple tools is represented by one assistant
+// message with ToolCalls containing every domain.AssistantAgentToolCall in
+// that turn; adapters serialize this to provider-native multi-call fields.
+// - Each tool result is represented by a subsequent role=tool message whose
+// ToolCallID matches exactly one previous tool-call ID and whose Observation
+// is the canonical domain.AssistantToolObservation. This preserves ordering
+// and lets providers that require one tool-result message per call serialize
+// the same transcript deterministically.
+// - Adapters must not invent provider-specific message structs outside their
+// transport layer; durable transcript storage uses the domain types above.
 type AgentModelRequest struct {
 	Model       string
 	Messages    []domain.AssistantAgentMessage
