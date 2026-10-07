@@ -210,3 +210,64 @@ func TestPublisherRestartHydrationCannotBurst(t *testing.T) {
 	default:
 	}
 }
+
+// TestPublisherWireRefusalRoundsDoNotConsumeAttemptBudget: once a relay's
+// wire budget is spent, later rounds are refused per frame by the controller
+// and reach no relay; like a whole-call refusal they never count against the
+// attempt budget, and the entry delivers normally once the pressure lifts.
+func TestPublisherWireRefusalRoundsDoNotConsumeAttemptBudget(t *testing.T) {
+	ctx := context.Background()
+	generous := nostrout.PurposeBudget{RatePerMinute: 600_000, Burst: 100_000}
+	admission := nostrout.New(nostrout.Config{
+		Aggregate:         generous,
+		PurposeBudgets:    generousAdmissionLanes(),
+		RelayWire:         nostrout.PurposeBudget{RatePerMinute: 60, Burst: 1},
+		RelayWirePriority: generous,
+	})
+	repo := newSignalingOutbox()
+	publisher, frames := newAdmissionTestPublisher(t, admission, repo, relayA)
+	publisher.maxAttempts = 2
+
+	first := testSignedEvent("wire-first")
+	_, err := publisher.PublishSignedEventWithResults(ctx, first)
+	require.NoError(t, err, "the first frame fits the single wire token")
+	require.Equal(t, int32(1), frames.Load())
+	require.Equal(t, first.ID.Hex(), receive(t, repo.published, "first event published"))
+
+	second := testSignedEvent("wire-second")
+	_, err = publisher.PublishSignedEventWithResults(ctx, second)
+	require.ErrorIs(t, err, ErrPublishIncomplete, "the wire-refused event stays queued")
+	require.Equal(t, int32(1), frames.Load(), "no frame may reach the relay while its wire budget is spent")
+
+	d, _ := publisher.trackDelivery(*second, 0)
+	for range 3 {
+		d.mu.Lock()
+		report := publisher.deliverRound(ctx, d)
+		d.mu.Unlock()
+		require.True(t, report.admissionRefused)
+		require.False(t, report.admissionHalt, "a per-relay wire budget is not a process-wide gate")
+		require.False(t, report.settled)
+		require.Zero(t, d.rounds)
+	}
+	require.Equal(t, int32(1), frames.Load())
+	entry, found, err := publisher.localOutbox.Get(second.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, localstore.OutboxPending, entry.State)
+	require.Zero(t, entry.Rounds, "wire refusals never count against the attempt budget")
+
+	// Pressure lifts: the same entry delivers on the next round.
+	publisher.pool.outboundAdmission = nostrout.New(nostrout.Config{
+		Aggregate:         generous,
+		PurposeBudgets:    generousAdmissionLanes(),
+		RelayWire:         generous,
+		RelayWirePriority: generous,
+	})
+	d.mu.Lock()
+	report := publisher.deliverRound(ctx, d)
+	d.mu.Unlock()
+	require.True(t, report.delivered)
+	require.Equal(t, 1, d.rounds)
+	require.Equal(t, int32(2), frames.Load())
+	require.Equal(t, second.ID.Hex(), receive(t, repo.published, "entry published once the wire budget lifted"))
+}

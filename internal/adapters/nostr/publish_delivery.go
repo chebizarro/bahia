@@ -53,6 +53,26 @@ func admissionRetryDelay() time.Duration {
 	return time.Second + time.Duration(rand.Int64N(int64(time.Second)))
 }
 
+// allAdmissionRefusals reports whether every result of a round is a
+// controller-side frame refusal (a per-relay wire budget, or a kill switch or
+// breaker that closed after the publication was admitted): no frame reached
+// any relay, so the round learned nothing and must not count. global reports
+// that at least one refusal came from a process-wide gate.
+func allAdmissionRefusals(results []PublishResult) (all bool, global bool) {
+	if len(results) == 0 {
+		return false, false
+	}
+	for _, result := range results {
+		if result.Error == nil || result.Reason != "" || !isAdmissionRejection(result.Error) {
+			return false, false
+		}
+		if isAdmissionHalt(result.Error) {
+			global = true
+		}
+	}
+	return true, global
+}
+
 // defaultMaxPublishAttempts bounds how many delivery rounds an outbound event
 // gets before the relays that still have not accepted it are given up on. With
 // DefaultBackoff (1s doubling to 2m) this is roughly 50 minutes of retrying.
@@ -394,20 +414,35 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 		}
 	}
 	var (
-		countable     bool
-		backoffUntil  time.Time
-		rateLimited   bool
-		admissionGone bool
+		countable       bool
+		backoffUntil    time.Time
+		rateLimited     bool
+		admissionGone   bool
+		admissionGlobal bool
 	)
-	if callErr != nil && len(results) == 0 && len(targets) > 0 && isAdmissionRejection(callErr) {
-		// The controller refused before any relay was contacted: nothing was
-		// learned about any relay, so applyRound does not run, the round does
-		// not count, and the event stays pending with its per-relay state
-		// untouched. Admission refusal is back-pressure, never abandonment.
+	switch {
+	case callErr != nil && len(results) == 0 && len(targets) > 0 && isAdmissionRejection(callErr):
+		// The controller refused the whole publication before any relay was
+		// contacted: nothing was learned about any relay, so applyRound does
+		// not run, the round does not count, and the event stays pending with
+		// its per-relay state untouched. Admission refusal is back-pressure,
+		// never abandonment.
 		admissionGone = true
+		admissionGlobal = isAdmissionHalt(callErr)
 		backoffUntil = p.now().Add(admissionRetryDelay())
-	} else {
+	default:
 		countable, backoffUntil, rateLimited = d.applyRound(targets, results, callErr)
+		if countable {
+			// Every frame of the round was refused by the controller (a
+			// per-relay wire budget, or a gate that closed after the
+			// publication was admitted): still nothing reached any relay.
+			if all, global := allAdmissionRefusals(results); all {
+				countable = false
+				admissionGone = true
+				admissionGlobal = global
+				backoffUntil = p.now().Add(admissionRetryDelay())
+			}
+		}
 	}
 	skipped := !countable
 	if !skipped {
@@ -438,7 +473,7 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 		settled:          settled,
 		rateLimited:      rateLimited,
 		admissionRefused: admissionGone,
-		admissionHalt:    admissionGone && isAdmissionHalt(callErr),
+		admissionHalt:    admissionGone && admissionGlobal,
 	}
 	if !delivered {
 		report.err = &PublishIncompleteError{EventID: eventID, Accepted: accepted, Required: required, Detail: detail}
