@@ -756,3 +756,18 @@ func TestConcurrentPublishersCannotExceedSharedBurst(t *testing.T) {
 	require.Equal(t, uint64(10), a.Metrics().WireAttempts)
 	require.Zero(t, a.Metrics().ActivePublications)
 }
+
+// TestReportRateLimitedOpensSharedBreaker covers relay rate-limit feedback
+// that arrives outside a publication (a subscription CLOSED or a NOTICE
+// frame): it opens the same process-wide breaker a rate-limited OK opens,
+// and a nil controller is safe.
+func TestReportRateLimitedOpensSharedBreaker(t *testing.T) {
+	a, _ := newTestAdmission(testConfig())
+	var nilAdmission *Admission
+	nilAdmission.ReportRateLimited() // must not panic
+
+	a.ReportRateLimited()
+	require.Equal(t, uint64(1), a.Metrics().RelayRateLimited)
+	_, err := a.Begin(context.Background(), signedEvent(t, 1), []string{relayA})
+	require.ErrorIs(t, err, ErrCircuitOpen, "CLOSED/NOTICE rate-limit feedback must gate publications")
+}

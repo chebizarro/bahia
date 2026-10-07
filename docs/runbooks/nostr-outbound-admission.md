@@ -83,11 +83,12 @@ event to the same relay are refused with `already in flight`.
 
 ## Circuit breaker
 
-Any `rate-limited:` response opens a process-wide breaker with exponential
-backoff (2s doubling to 60s, plus up to 20% jitter). While open, ordinary
-publications fail with `circuit breaker open` before relay I/O. A late success
-from a publication admitted before a newer rate limit cannot close that newer
-circuit.
+Any `rate-limited:` relay feedback opens a process-wide breaker with
+exponential backoff (2s doubling to 60s, plus up to 20% jitter): a publish
+OK=false reason, a subscription CLOSED classified by the pool's CLOSED
+policy, or a NOTICE frame. While open, ordinary publications fail with
+`circuit breaker open` before relay I/O. A late success from a publication
+admitted before a newer rate limit cannot close that newer circuit.
 
 ## Multi-event operations
 

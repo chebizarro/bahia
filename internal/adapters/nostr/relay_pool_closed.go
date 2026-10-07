@@ -3,6 +3,8 @@ package nostr
 import (
 	"errors"
 	"strings"
+
+	"github.com/openagentsinc/bahia/internal/nostrout"
 )
 
 // closedRetryBudget applies the pool's CLOSED policy (ClassifyClosedReason,
@@ -14,10 +16,14 @@ type closedRetryBudget struct {
 	max         int
 	retryable   int
 	authRetried bool
+	// admission, when set, receives relay rate-limit feedback: a CLOSED
+	// whose reason carries the rate-limited: prefix opens the process-wide
+	// publication circuit breaker exactly like a rate-limited publish OK.
+	admission *nostrout.Admission
 }
 
 func (p *RelayPool) newClosedRetryBudget() *closedRetryBudget {
-	return &closedRetryBudget{max: p.maxRetryableClosedRetries}
+	return &closedRetryBudget{max: p.maxRetryableClosedRetries, admission: p.outboundAdmission}
 }
 
 // served records an EOSE: the relay serves the filter, so the count of
@@ -43,6 +49,9 @@ type closedVerdict struct {
 // after a successful AUTH, retrying cannot help. A retryable reason is
 // reissued at most max times in a row.
 func (b *closedRetryBudget) closed(reason string) closedVerdict {
+	if b.admission != nil && IsRateLimitedReason(reason) {
+		b.admission.ReportRateLimited()
+	}
 	switch action := ClassifyClosedReason(reason); action {
 	case ClosedAuthenticate:
 		if b.authRetried {

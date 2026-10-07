@@ -2684,6 +2684,12 @@ func (p *RelayPool) buildRelayOptions(relayURL string) nostr.RelayOptions {
 			zap.String("relay", relayURL),
 			zap.String("notice", notice),
 		)
+		// A rate-limited NOTICE is relay-wide back-pressure feedback: it
+		// opens the shared publication circuit breaker like a rate-limited
+		// OK or CLOSED.
+		if IsRateLimitedReason(notice) {
+			p.outboundAdmission.ReportRateLimited()
+		}
 	}}
 	if p.hasAuthSigner() {
 		opts.AuthHandler = func(ctx context.Context, _ *nostr.Relay, event *nostr.Event) error {

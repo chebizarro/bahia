@@ -204,3 +204,31 @@ func TestConcurrentPoolPublishersCannotExceedSharedBudget(t *testing.T) {
 	require.Greater(t, frames.Load(), int32(0))
 	require.LessOrEqual(t, shared.Metrics().Admitted, uint64(4))
 }
+
+// TestRateLimitedClosedAndNoticeOpenSharedCircuit: relay rate-limit feedback
+// from a subscription CLOSED or a NOTICE frame opens the same process-wide
+// breaker a rate-limited publish OK opens, and no EVENT frame is sent while
+// it is open.
+func TestRateLimitedClosedAndNoticeOpenSharedCircuit(t *testing.T) {
+	admission := newIsolatedTestAdmission()
+	pool := connectedTestPool(t, admission, "wss://feedback.example")
+	var frames atomic.Int32
+	setPublishOnRelayForTest(t, func(*gonostr.Relay, context.Context, gonostr.Event) error {
+		frames.Add(1)
+		return nil
+	})
+
+	verdict := pool.newClosedRetryBudget().closed("rate-limited: too many REQs")
+	require.Equal(t, ClosedRetry, verdict.Action)
+	require.Equal(t, uint64(1), admission.Metrics().RelayRateLimited)
+
+	opts := pool.buildRelayOptions("wss://feedback.example")
+	opts.NoticeHandler(nil, "rate-limited: slow down")
+	require.Equal(t, uint64(2), admission.Metrics().RelayRateLimited)
+
+	ev := gonostr.Event{Kind: 1, Content: "gated", CreatedAt: gonostr.Now()}
+	require.NoError(t, ev.Sign(gonostr.Generate()))
+	_, err := pool.PublishWithResults(t.Context(), ev)
+	require.ErrorIs(t, err, nostrout.ErrCircuitOpen)
+	require.Zero(t, frames.Load(), "an open breaker must stop every EVENT frame")
+}

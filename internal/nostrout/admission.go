@@ -714,6 +714,20 @@ func (a *Admission) waitLocked(ctx context.Context, deadline time.Time, try func
 	}
 }
 
+// ReportRateLimited opens or extends the shared circuit breaker for relay
+// rate-limit feedback that arrives outside a publication result: a
+// subscription CLOSED or a NOTICE frame whose message carries the
+// rate-limited: prefix. It is safe to call concurrently and after Close of
+// any publication.
+func (a *Admission) ReportRateLimited() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.openBreakerLocked(a.clock.Now())
+}
+
 // Metrics returns content-free counters.
 func (a *Admission) Metrics() Metrics {
 	if a == nil {
