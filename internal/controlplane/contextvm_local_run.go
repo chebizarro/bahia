@@ -1,7 +1,6 @@
 package controlplane
 
-// ContextVM requests over the daemon's local store (bahia-irsry.10.6, audit
-// C-14, B-25).
+// ContextVM requests over the daemon's local store.
 //
 // Each configured relay gets its own request subscription and its own cursor
 // in the local store. Every request is claimed in a local ledger before its
@@ -63,8 +62,8 @@ package controlplane
 // Plaintext 25910 and the oversized-request 21059 fallback are ephemeral:
 // relays forward them live and never store them, so a request sent while the
 // daemon is down is lost and the client must retry. Durable desired-state
-// intents are Phase 3 (bahia-irsry.11). This transport does not pretend to
-// make ephemeral RPC durable.
+// intents ride the signed 30900 intent path. This transport does not
+// pretend to make ephemeral RPC durable.
 
 import (
 	"context"
@@ -160,7 +159,7 @@ func (l *contextVMLocalState) innerFloor(now time.Time) nostr.Timestamp {
 // pruneLocked drops ledger entries and regular events (gift wraps) older than
 // anything the floor accepts or a resume can fetch. The caller holds
 // processMu. This bounds the DNS agent's gift-wrap store growth on long
-// uptimes (bahia-irsry.48 item 6): entries older than the age floor are
+// uptimes: entries older than the age floor are
 // evicted event-driven at EOSE commits, not on a ticker.
 func (l *contextVMLocalState) pruneLocked(now time.Time, logger *zap.Logger) {
 	if !l.lastPrune.IsZero() && now.Sub(l.lastPrune) < contextVMLedgerPruneInterval {
@@ -512,7 +511,7 @@ func (f *contextVMRelayFollower) subscribe(ctx context.Context, anchor nostr.Tim
 // first EOSE. The pool transparently reissues the REQ after a dropped
 // connection or a retryable CLOSED; those reissued REQs' EOSEs carry a
 // Reissued flag and a fresh anchor that is committed as a cursor, keeping
-// it up to date without a periodic re-anchor REQ (bahia-irsry.48 item 4).
+// it up to date without a periodic re-anchor REQ.
 func (f *contextVMRelayFollower) follow(ctx context.Context, sub *nostrpool.MergedSubscription, anchor nostr.Timestamp) error {
 	events, eoses, closes := sub.Events, sub.RelayEOSE, sub.Closed
 	local := &f.t.contextVMLocal

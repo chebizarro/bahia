@@ -12,12 +12,11 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
-// Phase 3 W1: fakeWorkerReadModelSource removed — worker assignment/drain
-// read models are published directly from the mutation site via
-// WorkerReadModelPublisher (bahia-irsry.11.14). The coordinate-isolation
+// Worker assignment/drain read models are published directly from the
+// mutation site via WorkerReadModelPublisher. The coordinate-isolation
 // test below uses publishReplaceableJSON directly.
 
-// TestProjectorWorkerFamiliesCoexistOnRelay pins bahia-irsry.36 against a relay
+// TestProjectorWorkerFamiliesCoexistOnRelay verifies against a relay
 // with NIP-01 addressable replacement: the projector's assignment and drain
 // records for one worker (and a worker-state or eligibility record built by
 // the same envelope) sit on distinct coordinates, so the relay serves every
@@ -77,7 +76,7 @@ func TestProjectorWorkerFamiliesCoexistOnRelay(t *testing.T) {
 // TestCatalogKeysWorkerRecordsByFamilyCoordinate: the catalog reads a worker
 // record's id off its family coordinate when content and tags omit it, and
 // skips a record that is not on its family's coordinate (the bare-pubkey d
-// assignment and drain shared before bahia-irsry.36).
+// that assignment and drain shared before per-family coordinates).
 func TestCatalogKeysWorkerRecordsByFamilyCoordinate(t *testing.T) {
 	workerPubkey := strings.Repeat("cd", 32)
 	decode, ok := NewKindCatalog().Decoder(KindCASControlState)

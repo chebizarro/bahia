@@ -337,7 +337,7 @@ describe('Souls Store', () => {
       expect(byKind(KINDS.SOUL_TEMPLATE).at(-1)).toEqual([service, operator]);
     });
 
-    // bahia-fbyo5: the daemon's decrypted `operators:soul-factory` allowlist
+    // the daemon's decrypted `operators:soul-factory` allowlist
     // widens the operator unit to the other authorized operators; without it
     // (no record, no fleet OCK) only the signed-in key is trusted.
     it('trusts the allowlisted Soul Factory operators plus the signed-in key once the allowlist is readable', async () => {

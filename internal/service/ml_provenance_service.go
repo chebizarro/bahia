@@ -43,7 +43,7 @@ func NewMLProvenanceService(repo repository.MLRegistryRepository, publisher even
 }
 
 // SetMLCPStatePublisher configures the canonical cp-state publisher for ML
-// provenance entities (Phase 3 M1).
+// provenance entities.
 func (s *MLProvenanceService) SetMLCPStatePublisher(pub MLCPStatePublisher) {
 	s.cpState = pub
 }

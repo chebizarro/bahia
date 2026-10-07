@@ -1,5 +1,5 @@
 /**
- * Tests for BahiaEventStore (W1-S1).
+ * Tests for BahiaEventStore.
  *
  * Covers:
  * - Persistence across "reload" (re-open the DB)

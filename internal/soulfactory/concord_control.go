@@ -427,7 +427,7 @@ func (m *concordMembership) fetchConcordControlPlane(
 	return foldConcordControlPlane(plane.Events, address, read.ConversationKey)
 }
 
-// resolveConcordRotationAuthority is the legacy structural citation lookup,
+// resolveConcordRotationAuthority is a structural citation lookup,
 // not an authority verifier. Rotate permits only its owner/channel-only fast
 // path: the validated owner needs no citation (CORD-04 §1). The other branches
 // cannot prove a Grant's type, member, Roles, current rank or scoped permission,

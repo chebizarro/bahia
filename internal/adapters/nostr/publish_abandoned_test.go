@@ -125,7 +125,7 @@ func TestSettledAbandonedDeliveryReportsAbandonedToLateCaller(t *testing.T) {
 	require.NoError(t, event.Sign(gonostr.Generate()))
 
 	// The event must be in the local outbox before deliverRound can persist
-	// its outcome (bahia-irsry.62: local outbox is the required ledger).
+	// its outcome (local outbox is the required ledger).
 	_, err := publisher.localOutbox.Enqueue(localstore.OutboxEntry{Event: *event, Target: publisher.target, EnqueuedAt: publisher.now()})
 	require.NoError(t, err)
 

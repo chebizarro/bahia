@@ -1,5 +1,5 @@
-// Producer-shaped control-plane fixtures for the e2e mock relays (bahia-irsry.37,
-// .46). They mirror what the daemon publishes, so a mock cannot drift from the
+// Producer-shaped control-plane fixtures for the e2e mock relays. They mirror
+// what the daemon publishes, so a mock cannot drift from the
 // wire contract the web REQs on:
 //
 //   - cp-state records: canonical kind 30900 in the projector's envelope

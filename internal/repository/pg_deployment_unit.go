@@ -26,8 +26,8 @@ func newPgDeploymentUnitRepositoryWithDB(db pgQueryer) *PgDeploymentUnitReposito
 }
 
 func (r *PgDeploymentUnitRepository) Create(ctx context.Context, unit *domain.DeploymentUnit) error {
-	// The registry mints unit ids before publishing the environment record
-	// (bahia-irsry.53); mint UUIDv7 only for callers that supply none.
+	// The registry mints unit ids before publishing the environment record;
+	// mint UUIDv7 only for callers that supply none.
 	if unit.ID == uuid.Nil {
 		unit.ID = domain.NewEntityID()
 	}

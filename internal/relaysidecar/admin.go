@@ -501,7 +501,7 @@ func (s *Server) handleNIP86(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if request.Method == "setintentauthors" {
-		// Phase 3 F1 (§7.1): the daemon sends the current set of pubkeys
+		// the daemon sends the current set of pubkeys
 		// that may publish intent events (kind 30900 + t=bahia-intent).
 		// Params is a flat list of hex pubkey strings.
 		pubkeys := make([]string, 0, len(request.Params))

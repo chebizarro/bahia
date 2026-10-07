@@ -49,7 +49,7 @@ func main() {
 	var args repeatedFlag
 	relays := flag.String("relays", strutil.Env("SOULFACTORY_RELAYS", ""), "comma-separated OpenClaw runtime/control relays for capability, request, and result events; not ngit repository publication relays")
 	privateKeyFile := flag.String("private-key-file", strutil.Env("OPENCLAW_SOULFACTORY_PRIVATE_KEY_FILE", ""), "file containing the OpenClaw sidecar Nostr private key")
-	trustedControllers := flag.String("trusted-controller-pubkeys", strutil.Env("SOULFACTORY_CONTROLLER_PUBKEYS", ""), "legacy comma-separated one-time seed used only when persisted controller policy is absent")
+	trustedControllers := flag.String("trusted-controller-pubkeys", strutil.Env("SOULFACTORY_CONTROLLER_PUBKEYS", ""), "comma-separated one-time seed used only when persisted controller policy is absent")
 	controllerPolicyPath := flag.String("controller-policy-file", strutil.Env("OPENCLAW_SOULFACTORY_CONTROLLER_POLICY_FILE", ""), "persisted SoulFactory controller policy file; defaults beside the idempotency store")
 	identifier := flag.String("identifier", strutil.Env("OPENCLAW_SOULFACTORY_IDENTIFIER", "openclaw-soulfactory-sidecar"), "kind:30317 d-tag identifier")
 	command := flag.String("command", strutil.Env("OPENCLAW_SOULFACTORY_COMMAND", ""), "local OpenClaw control command; receives invocation JSON on stdin and returns outcome JSON on stdout")
@@ -101,7 +101,7 @@ func main() {
 		os.Exit(1)
 	}
 	if seeded {
-		slog.Info("seeded persisted SoulFactory controller policy from legacy configuration")
+		slog.Info("seeded persisted SoulFactory controller policy from environment configuration")
 	}
 	store, err := soulfactory.NewFileOpenClawIdempotencyStore(*storePath)
 	if err != nil {

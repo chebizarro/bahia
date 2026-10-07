@@ -8,7 +8,7 @@ import (
 )
 
 // workerCPStateEnvelope builds the canonical cp-state tags every worker record
-// carries (bahia-irsry.9.2): kind 30900, schema bahia.cp-state.v1, the family's
+// carries: kind 30900, schema bahia.cp-state.v1, the family's
 // CPStateFamily discriminator in legacy_kind, deleted, and the family's
 // single-letter t topic so relays can index the REQ. Live records and
 // tombstones for one d share this envelope, so a tombstone replaces the live

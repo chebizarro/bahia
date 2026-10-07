@@ -118,7 +118,7 @@ async function installAssistantAgenticHarness(page, { discovery = systemInfo } =
           // Producer shape: assistant status carries t=assistant-status, the
           // single-letter topic the store REQs on, and transcript messages
           // carry t=assistant-transcript plus the per-session topic the
-          // daemon replays by (bahia-irsry.37).
+          // daemon replays by.
           ...(kind === KIND_SESSION ? [["t", "assistant-session"]] : []),
           ...(kind === KIND_STATUS ? [["t", "assistant-status"]] : []),
           ...(kind === KIND_TRANSCRIPT ? [['t', 'assistant-transcript'], ['t', `assistant-transcript:${sessionId}`]] : []),

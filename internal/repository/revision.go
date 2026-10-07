@@ -6,7 +6,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// Registry revisions (bahia-irsry.53). The registry mints a row's
+// Registry revisions. The registry mints a row's
 // created_at/updated_at before the relay-first writer signs its cp-state
 // record, so the repository must store those values rather than stamp its
 // own; otherwise the projection of the stored row differs from the signed

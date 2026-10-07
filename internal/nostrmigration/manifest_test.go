@@ -383,8 +383,8 @@ func TestRetiredWorkerKindsMigrateOntoCPStateTopics(t *testing.T) {
 	require.Equal(t, kinds.WorkerStateTopic, alias.Topic)
 }
 
-// Migrated worker records land on their family's canonical coordinate
-// (bahia-irsry.36), not a per-legacy-event d: a migrated assignment and drain
+// Migrated worker records land on their family's canonical coordinate,
+// not a per-event d: a migrated assignment and drain
 // for one worker never share a coordinate, and each competes with the live
 // record on its own family coordinate under NIP-01 replacement.
 func TestRetiredWorkerKindsMigrateOntoFamilyCoordinates(t *testing.T) {

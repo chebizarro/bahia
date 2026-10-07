@@ -90,7 +90,7 @@ func TestConfigFabricPublishAcceptedReceipt(t *testing.T) {
 
 // TestConfigFabricListDriftWithDeliveryQuery verifies that ListDrift consults
 // the delivery query when the NostrEventRecord carries no PublishState
-// (non-Postgres mode, bahia-irsry.61). An abandoned version is excluded from
+// (non-Postgres mode). An abandoned version is excluded from
 // desired state; a pending version is kept.
 func TestConfigFabricListDriftWithDeliveryQuery(t *testing.T) {
 	ctx := context.Background()
@@ -223,7 +223,7 @@ func setPublishState(t *testing.T, repo *repositorytest.InMemoryNostrEventReposi
 
 // TestConfigFabricListDriftWithoutPostgres verifies that a daemon with no
 // Postgres connection computes ListDrift correctly from the delivery query
-// alone (bahia-irsry.61). The local event store does not preserve PublishState
+// alone. The local event store does not preserve PublishState
 // on read-back, so isDesiredAbandoned falls through to the delivery query.
 // This uses a statelessPublishRepo wrapper that strips PublishState, matching
 // the production LocalEventRepository behaviour.

@@ -54,7 +54,7 @@ type DomainHandler interface {
 // whether the pubkey appears in TrustSet.FleetOps() instead of calling
 // TrustSet.HasPermission. This is required for domains like deployment
 // policies where the authorized principals are fleet operators who are
-// explicitly NOT org members (design §2.2/§2.4).
+// explicitly NOT org members.
 type FleetScopedHandler interface {
 	IsFleetScoped() bool
 }
@@ -69,7 +69,7 @@ type FleetScopedOperationHandler interface {
 // implementations may satisfy when the default per-org RBAC or fleet-scoped
 // authorization is insufficient. The org domain needs this because org-create
 // uses fleet-ops/bootstrap-owner auth while member/invite operations use
-// per-org RBAC (design §2.2, §7 Wave 5 O1).
+// per-org RBAC (docs/architecture/intents-and-authority.md).
 //
 // When the intent processor detects that a handler implements this interface,
 // it delegates authorization to AuthorizeIntent instead of the default
@@ -119,7 +119,7 @@ type IntentProcessorConfig struct {
 }
 
 // IntentProcessor is the pipeline for signed relay and in-process MCP intents.
-// See design §3.2 for the seven processing steps.
+// See docs/architecture/intents-and-authority.md for the seven processing steps.
 type IntentProcessor struct {
 	mu       sync.RWMutex
 	handlers map[string]DomainHandler
@@ -174,7 +174,7 @@ func (p *IntentProcessor) Handler(domain string) DomainHandler {
 }
 
 // ProcessRelayIntent handles an intent arriving from the relay subscription.
-// Untrusted authors are dropped silently (§2.3). Known principals lacking
+// Untrusted authors are dropped silently. Known principals lacking
 // permission get a bounded rejection status.
 func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Event) error {
 	intent, err := ParseIntent(ev)
@@ -192,7 +192,7 @@ func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Even
 	}
 	intent.Actor = ev.PubKey.Hex()
 
-	// Reject plaintext intents for sensitive domains (§1.7).
+	// Reject plaintext intents for sensitive domains.
 	if p.giftWrapIngress != nil && p.giftWrapIngress.RejectPlaintextSensitiveIntent(ctx, intent) {
 		return fmt.Errorf("plaintext intent rejected for sensitive domain %q", intent.Domain)
 	}
@@ -277,7 +277,7 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	// Step 3: Authorize.
 	// SelfAuthorizingHandler: the handler does its own authorization (e.g. the
 	// org domain has per-operation auth: fleet-ops for org create, per-org RBAC
-	// for member/invite ops). See design §2.2, §7 Wave 5 O1.
+	// for member/invite ops). See docs/architecture/intents-and-authority.md.
 	if sa, ok := handler.(SelfAuthorizingHandler); ok {
 		if err := sa.AuthorizeIntent(ctx, p.trustSet, intent); err != nil {
 			p.logger.Info("self-authorizing handler rejected intent",
@@ -298,7 +298,7 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 			authorized = p.isFleetOperator(intent.Actor)
 		} else if fs, ok := handler.(FleetScopedHandler); ok && fs.IsFleetScoped() {
 			// Fleet-scoped domain: check fleet operator identity instead of
-			// per-org RBAC. Fleet operators are NOT org members (§2.2).
+			// per-org RBAC. Fleet operators are NOT org members.
 			authorized = p.isFleetOperator(intent.Actor)
 		} else {
 			authorized = p.trustSet.HasPermission(ctx, intent.OrgID, intent.Actor, perm)
@@ -316,7 +316,7 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 				}
 				return fmt.Errorf("insufficient permission: %s", perm)
 			}
-			// Unknown relay author → silent drop (§2.3). An in-process
+			// Unknown relay author → silent drop. An in-process
 			// caller already has a transport identity and must get a refusal.
 			if inProcess {
 				return fmt.Errorf("untrusted intent actor %q", intent.Actor)
@@ -659,9 +659,9 @@ func IntentDomainEnabled(enabledDomains []string, domain string) bool {
 var RegisteredIntentDomains = []string{
 	"service", "environment", "policy", "package", "backup", "llm", "ml",
 	"dns", "worker", "deployment", "runtime", "org", "secret", "notification",
-	"artifact", "adoption", // D76 (bahia-irsry.76)
-	"build", "tool", // D79 (bahia-irsry.79)
-	"security", "sbom", "relay", // D80 (bahia-irsry.80)
+	"artifact", "adoption",
+	"build", "tool",
+	"security", "sbom", "relay",
 }
 
 // BuildEnabledDomains enables every registered domain except explicit opt-outs.

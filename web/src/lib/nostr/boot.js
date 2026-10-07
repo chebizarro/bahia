@@ -9,7 +9,7 @@
  * 6. Events ingested by the pool go into the BahiaEventStore; derived stores
  *    consume only that store.
  *
- * Design reference: phase4-web-store-first.md §7, §12 W1-S2.
+ * Design reference: docs/architecture/web-store-first.md.
  *
  * @module lib/nostr/boot
  */
@@ -45,7 +45,7 @@ let _signerUnsubscribe = /** @type {(() => void) | null} */ (null);
 let _relayLimitsPrefetched = false;
 
 // ---------------------------------------------------------------------------
-// Animation-frame batched collection refresh (§7 step 7)
+// Animation-frame batched collection refresh
 // ---------------------------------------------------------------------------
 
 /** @type {Set<() => void>} */

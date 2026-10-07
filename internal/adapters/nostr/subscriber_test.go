@@ -256,7 +256,7 @@ func TestSubscriberBuildSubscriptionFiltersOmitsLegacyCommandKinds(t *testing.T)
 	require.Empty(t, open.Authors)
 }
 
-// B-14: a failed PostgreSQL archive write does not hold back handling. The
+// a failed PostgreSQL archive write does not hold back handling. The
 // local store alone decides that the event is new, so its handlers run once,
 // and a redelivery is a duplicate even though the archive never got it.
 func TestSubscriberHandleEventRunsHandlersWhenTheArchiveWriteFails(t *testing.T) {
@@ -415,7 +415,7 @@ func TestSubscriberHandleEventDropsInvalidBeforePersistenceAndDispatch(t *testin
 	require.Equal(t, 0, repo.inserted)
 }
 
-// C-14: the local store is the idempotency gate, so a restarted subscriber
+// the local store is the idempotency gate, so a restarted subscriber
 // with no Postgres (here no audit repository at all) does not re-run handlers
 // for events it already handled, while observers still see the redelivery.
 func TestSubscriberHandleEventDedupsAgainstTheLocalStoreAcrossRestarts(t *testing.T) {

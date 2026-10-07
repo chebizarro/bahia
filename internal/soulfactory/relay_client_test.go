@@ -326,7 +326,7 @@ func TestRelayClientClosedAuthRequiredIsHandledWhenEventsClosesFirst(t *testing.
 // once. The relay library dispatches each EVENT frame on its own goroutine,
 // so a subscriber sees a relay's events in no guaranteed order; the test
 // therefore waits for EOSE (every stored event is forwarded before it) and
-// counts copies per ID instead of relying on arrival order (bahia-rvpw2).
+// counts copies per ID instead of relying on arrival order.
 func TestRelayClientDeduplicatesDuplicateEvents(t *testing.T) {
 	signer := newFakeSigner(t)
 	first, second := newFakeRelayEndpoint(t), newFakeRelayEndpoint(t)

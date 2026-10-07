@@ -13,7 +13,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// Rebuilding parked operations after a restart (bahia-irsry.38).
+// Rebuilding parked operations after a restart.
 //
 // A parked continuation lives in memory, but the operation it continues is on
 // the relays: parking publishes a kind:6950 awaiting_terminal progress event

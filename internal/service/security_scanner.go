@@ -58,7 +58,7 @@ const (
 //
 // DeliveryOutcome reports what the outbox knows about an event id; the
 // scanner reads it after recording a queued event's id, for an outcome the
-// outbox reached before the id was stored (bahia-irsry.40).
+// outbox reached before the id was stored.
 type SecurityVerifiedPublisher interface {
 	PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomadapter.PublishOKResult, error)
 	DeliveryOutcome(ctx context.Context, eventID string) (nostrutil.DeliveryOutcome, error)

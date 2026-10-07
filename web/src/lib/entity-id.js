@@ -1,4 +1,4 @@
-// Client-minted entity ids (bahia-irsry.35, audit C-40).
+// Client-minted entity ids.
 //
 // The author of a create intent fixes the entity's id, which is also the entity
 // segment of its addressable coordinate. Ids are RFC 9562 UUIDs in canonical

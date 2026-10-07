@@ -21,7 +21,7 @@ import (
 // only fleet-scoped operations through FleetOperatorGate, unchanged from
 // today's reactor gate.
 //
-// See design §2.2.
+// See docs/architecture/intents-and-authority.md.
 type TrustSet struct {
 	mu sync.RWMutex
 	// Per-org membership from relay events (highest priority). Populated by

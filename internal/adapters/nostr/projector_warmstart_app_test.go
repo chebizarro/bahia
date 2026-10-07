@@ -105,7 +105,7 @@ func TestProductionAssemblyWarmStartZeroPublishAndStaleRepublish(t *testing.T) {
 		t.Errorf("zero-publish restart: expected 0 service publishes, got %d", n)
 	}
 
-	// Phase 2: introduce a stale record and restart.
+	// introduce a stale record and restart.
 	markRecordFailed(t, repo, "domain", "service", svcIDs[2].String())
 
 	readiness2 := newTrackerReadiness("intent-30900")

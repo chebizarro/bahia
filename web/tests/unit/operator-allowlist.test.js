@@ -34,7 +34,7 @@ function record(options) {
   return { ...fixture, id: options.id || fixture.id };
 }
 
-describe('operator allowlist derivation (bahia-fbyo5)', () => {
+describe('operator allowlist derivation', () => {
   it('no record → signed-in key only', () => {
     expect(deriveOperatorAllowlist([], 'continuity', { serviceAuthors: [SERVICE], keyFor: holder })).toBeNull();
     expect(trustedOperatorAuthors(null, ME)).toEqual([ME]);

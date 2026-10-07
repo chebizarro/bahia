@@ -35,7 +35,7 @@ type bootstrapFakeRelay struct {
 	// a bootstrapTestRelayMaxLimit query cap, then sends EOSE.
 	store []gonostr.Event
 	// ignoreAuthors makes the relay return events regardless of the
-	// filter's authors, like a misbehaving or legacy relay.
+	// filter's authors, like a misbehaving or out-of-date relay.
 	ignoreAuthors bool
 	// closeWith, when set, makes a store relay answer every REQ with this
 	// CLOSED reason instead of events and EOSE.

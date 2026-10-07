@@ -10,10 +10,9 @@ import (
 )
 
 // TestNoNewTestOnlyExports fails when an exported internal/ symbol is used by
-// tests but by no production code (B-24). Such code looks shipped while
-// nothing runs it, and it becomes the template later regressions copy
-// (ProjectorSource, B-2; relay_first_extended.go, B-7; RelayPool.Subscribe,
-// C-8). Symbols with no references at all are out of scope here.
+// tests but by no production code. Such code looks shipped while
+// nothing runs it, and it becomes the template later regressions copy.
+// Symbols with no references at all are out of scope here.
 //
 // Methods whose name matches a method of any interface in the program are
 // skipped, because interface dispatch does not show up as a direct use.

@@ -92,7 +92,7 @@ soulfactory-coverage:
 lint: lint-arch
 	golangci-lint run ./...
 
-# Architecture ratchet gates (bahia-irsry.8). Each gate compares against a
+# Architecture ratchet gates. Each gate compares against a
 # checked-in baseline of pre-existing violations and fails only on new ones:
 # legacy kinds outside internal/nostrmigration, direct library relay
 # subscriptions outside the pool/bus, unannotated poll tickers in

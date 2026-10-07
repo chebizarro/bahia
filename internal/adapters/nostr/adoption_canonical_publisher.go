@@ -14,7 +14,7 @@ import (
 
 // AdoptionCanonicalPublisher publishes every record an adoption produces as
 // signed canonical cp-state, before the adoption service updates any derived
-// index (audit B-35): the adoption binding, the environment registry record
+// index: the adoption binding, the environment registry record
 // with its deployment units, the service registry record, the build and
 // artifact registry records, the imported secret references, the runtime
 // observation and the service state.

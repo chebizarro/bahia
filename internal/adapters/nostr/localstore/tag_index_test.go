@@ -59,7 +59,7 @@ func requireLocalTagFilters(t *testing.T, store *Store, f localTagFixture, alice
 	}
 }
 
-// TestQueryEventsMatchesEmptyAndLongTagValues (bahia-irsry.52): QueryEvents
+// TestQueryEventsMatchesEmptyAndLongTagValues: QueryEvents
 // filters on tag values the eventstore does not index (empty, or over 100
 // bytes) match the events that carry them, through the local tag index, and
 // follow replacement and deletion.

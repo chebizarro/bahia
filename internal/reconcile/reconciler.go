@@ -452,8 +452,8 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		if driftDetected {
 			r.publishDriftDetected(ctx, currentState, svc, env, driftExtra)
 		}
-		// Phase 3 S1: publish the canonical cp-state record directly to relays
-		// so the projector no longer re-projects it from bus events.
+		// Publish the canonical cp-state record directly to relays; the
+		// projector does not re-project it from bus events.
 		r.publishStateToRelay(ctx, currentState, obs)
 	}
 	if newDrift == domain.DriftStatusDrifted && mode == domain.ReconcileModeAutoApply {
@@ -495,7 +495,7 @@ func (r *Reconciler) repairStuckRouteOnlyState(ctx context.Context, currentState
 	if err := r.state.Upsert(ctx, state); err != nil {
 		return false, err
 	}
-	// Phase 3 S1: publish the repaired state directly to relays.
+	// Publish the repaired state directly to relays.
 	r.publishStateToRelay(ctx, state, nil)
 	r.publisher.Publish(ctx, events.Event{
 		Type:     events.EventEnvironmentServiceStateChanged,

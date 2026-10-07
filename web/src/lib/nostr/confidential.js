@@ -17,8 +17,8 @@
  * Service-only fields (service_inner) are NOT decrypted here — the web
  * client must not attempt to decrypt them.
  *
- * Design reference: phase3-authority-inversion.md §1.7.1
- *                   phase4-web-store-first.md §5.3, §5.4
+ * Design reference: docs/architecture/confidential-state.md
+ *                   docs/architecture/web-store-first.md
  *
  * @module lib/nostr/confidential
  */

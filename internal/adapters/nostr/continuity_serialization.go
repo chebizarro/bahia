@@ -373,7 +373,7 @@ func EncodeHeartbeatObservationEvent(obs domain.HeartbeatObservation) (gonostr.E
 	}
 	if obs.ExpiresAfter > 0 {
 		// NIP-40: relays and generic clients drop the heartbeat once it is
-		// stale, instead of a Bahia-only expires_after_ms sweep (audit C-42).
+		// stale, instead of a Bahia-only expires_after_ms sweep.
 		// Rounded up to whole seconds so a heartbeat never expires early.
 		ttl := gonostr.Timestamp((obs.ExpiresAfter + time.Second - 1) / time.Second)
 		event.Tags = append(event.Tags, gonostr.Tag{"expiration", strconv.FormatInt(int64(event.CreatedAt+ttl), 10)})
@@ -382,8 +382,8 @@ func EncodeHeartbeatObservationEvent(obs domain.HeartbeatObservation) (gonostr.E
 }
 
 // heartbeatExpiresAfter is the heartbeat's freshness window: the NIP-40
-// expiration relative to created_at, else the legacy expires_after_ms tag
-// that heartbeats from producers predating NIP-40 carry.
+// expiration relative to created_at, else the expires_after_ms tag carried
+// by heartbeats from producers that do not set NIP-40 expiration.
 func heartbeatExpiresAfter(event *gonostr.Event) (time.Duration, error) {
 	if raw := continuityTagValue(event.Tags, "expiration"); raw != "" {
 		expiration, err := strconv.ParseInt(raw, 10, 64)

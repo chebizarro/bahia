@@ -67,8 +67,8 @@ func TestProjectionUnchangedServiceStateEmitsNoNewEvent(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 
-	// Phase 3 S1: state is no longer published by RepublishSnapshot; use the
-	// test helper that calls through the same dedupe pipeline.
+	// publishStateForTest calls through the same dedupe pipeline as the
+	// mutation-site publishers.
 	for i := 0; i < 3; i++ {
 		if err := projector.publishStateForTest(ctx, &state); err != nil {
 			t.Fatalf("publish %d: %v", i, err)
@@ -103,8 +103,8 @@ func TestProjectionIgnoresVolatileBookkeepingFields(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
 
-	// Phase 3 S1: state is no longer published by RepublishSnapshot; use the
-	// test helper that calls through the same dedupe pipeline.
+	// publishStateForTest calls through the same dedupe pipeline as the
+	// mutation-site publishers.
 	if err := projector.publishStateForTest(ctx, &state); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestProjectionUnchangedDNSEndpointEmitsNoNewEvent(t *testing.T) {
 
 // TestSystemConfigStartupPublishDoesNotRepeat covers the startup publish path:
 // a second call with nothing changed emits no discovery or DM relay-list
-// events (Phase 3 X1: replaces the old RepublishSnapshot dedupe test).
+// events (replaces the old RepublishSnapshot dedupe test).
 func TestSystemConfigStartupPublishDoesNotRepeat(t *testing.T) {
 	ctx := context.Background()
 	withProjectorVersionVars(t, "0.1.0", "abcdef1234567890", "")
@@ -531,7 +531,7 @@ func TestProjectionFingerprintIsStableAndStripsVolatileKeys(t *testing.T) {
 
 // TestBackoffRetryTimerFlushesPendingRecords proves that when a publish is
 // suppressed by the shared backoff window, the record is saved and flushed
-// when the backoff timer fires (Phase 3 X1 event-driven retry).
+// when the backoff timer fires (event-driven retry).
 func TestBackoffRetryTimerFlushesPendingRecords(t *testing.T) {
 	ctx := context.Background()
 	serviceID, envID := uuid.New(), uuid.New()

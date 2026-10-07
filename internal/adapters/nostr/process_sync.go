@@ -16,7 +16,7 @@ import (
 // ProcessSync runs the daemon's inbound sync engine (inbound_sync.go) for a
 // small standalone process (the DNS agent, the FIPS bridge, pkg/discovery)
 // with filters of its own instead of the daemon's kind and author scopes
-// (bahia-irsry.10.5). It reuses the Subscriber's per-relay workers and its
+// It reuses the Subscriber's per-relay workers and its
 // consumer unchanged:
 //
 //   - every relay is caught up and followed independently, so a relay that

@@ -7,11 +7,11 @@
  * - IndexedDB persistence (events + cursors) namespaced by service pubkey
  * - NIP-01 addressable tiebreak by lowest id (welshman is last-write-wins
  *   on equal created_at; NIP-01 says lowest id wins)
- * - LRU-by-size eviction (§2.3)
- * - Single ingestion path with signature verification (§2.4)
- * - Reactive subscriptions for derived stores (§8)
+ * - LRU-by-size eviction
+ * - Single ingestion path with signature verification
+ * - Reactive subscriptions for derived stores
  *
- * Design reference: phase4-web-store-first.md §2, §7, §12.
+ * Design reference: docs/architecture/web-store-first.md.
  *
  * @module lib/nostr/store
  */

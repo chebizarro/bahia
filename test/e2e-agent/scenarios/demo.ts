@@ -1,6 +1,6 @@
 /**
  * Demo script showing how to use the scenario library
- * 
+ *
  * Usage:
  *   npm run demo:scenarios
  */

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderComponent, tick } from './utils/svelte-component-test';
 
-// Mounted environments page (bahia-irsry.42): the create modal mints one
+// Mounted environments page: the create modal mints one
 // UUIDv7 per create attempt, sends it in environment/create, reuses it when
 // the create is retried, and mints a fresh one for the next environment.
 
@@ -77,7 +77,7 @@ async function submit(target) {
   await settle();
 }
 
-describe('environments page create modal client-minted entity id (bahia-irsry.42)', () => {
+describe('environments page create modal client-minted entity id', () => {
   beforeEach(() => {
     createEnvironmentMock.mockReset();
     loadEnvironmentsMock.mockClear();

@@ -256,7 +256,7 @@ func buildIDFromIntentEvent(sourceEventID string) uuid.UUID {
 // BuildIDForSourceEvent is the canonical build identity of a signed
 // build/request: the request intent event id, namespaced. Every daemon, and
 // every replay, derives the same id from the same signed request, so the
-// build needs no claim to be named (audit C-49).
+// build needs no claim to be named.
 func BuildIDForSourceEvent(sourceEventID string) uuid.UUID {
 	return uuid.NewSHA1(buildIntentRequestNamespace, []byte(strings.TrimSpace(sourceEventID)))
 }

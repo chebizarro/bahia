@@ -27,7 +27,7 @@ type admittedEvent struct {
 	id, target, entityType string
 }
 
-// B-12: without PostgreSQL the nostr_events readers and writers use the local
+// without PostgreSQL the nostr_events readers and writers use the local
 // event store; it persists across a reopen (the old in-memory map did not).
 func TestLocalEventRepositoryRecordsReadsAndPersists(t *testing.T) {
 	ctx := context.Background()

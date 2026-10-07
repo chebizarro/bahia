@@ -307,8 +307,7 @@ func runOutbox(t *testing.T, d *localHistoryDaemon, maxAttempts int) (stop func(
 // written) and later abandoned by the outbox is not lost: it stays readable
 // from the canonical view, flagged undelivered on its coordinate, the outbox
 // entry stays failed, and the SQL index agrees with the canonical read. An
-// operator retry of the entry that reaches the quorum clears the flag
-// (bahia-u5whr, §3.7).
+// operator retry of the entry that reaches the quorum clears the flag.
 func TestPaymentCanonicalQueuedThenAbandonedRecordStaysReadableAndFlagged(t *testing.T) {
 	ctx := context.Background()
 	runID := uuid.New()

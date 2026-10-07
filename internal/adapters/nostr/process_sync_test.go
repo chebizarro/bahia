@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// ProcessSync tests (bahia-irsry.10.5) against in-process khatru relays. Waits
+// ProcessSync tests against in-process khatru relays. Waits
 // are on CaughtUp/RelayCaughtUp, which the consumer raises from EOSE and
 // NIP-77 completion; nothing sleeps.
 

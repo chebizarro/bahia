@@ -13,8 +13,8 @@ import (
 
 // undeliveredBucket holds one Undelivered record per coordinate whose latest
 // event produced by this daemon was abandoned by the publish outbox. It is
-// the store-side half of the abandoned-delivery contract (bahia-u5whr, design
-// doc §3.7): the event itself stays in the store so canonical reads keep
+// the store-side half of the abandoned-delivery contract: the event itself
+// stays in the store so canonical reads keep
 // answering with the state the daemon committed to, and the marker tells
 // readers and the readiness endpoint that relays do not hold it.
 var undeliveredBucket = []byte("bahiaLocalUndelivered")

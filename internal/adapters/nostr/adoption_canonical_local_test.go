@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Audit B-35: adoption output is relay-canonical. These tests run the
+// Adoption output is relay-canonical. These tests run the
 // adoption service against a real local event store and the control-plane
 // outbox the way app.go wires them, with no SQL repository at all unless a
 // test adds one as the optional index.

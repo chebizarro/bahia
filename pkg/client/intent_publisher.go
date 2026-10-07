@@ -56,7 +56,7 @@ type IntentPublisherConfig struct {
 
 // IntentPublisher builds, signs, publishes, and tracks 30900 intent events.
 // It waits for the daemon's bounded 30315 intent-status and maps the outcome
-// to exit codes per Phase 5 §2.2.
+// to exit codes per docs/architecture/cli-and-mcp.md.
 type IntentPublisher struct {
 	signer           nostr.Signer
 	cipher           contextVMCipherSigner // non-nil when signer supports NIP-44

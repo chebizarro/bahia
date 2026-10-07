@@ -134,7 +134,7 @@ describe('fleet config store', () => {
     expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
-  // bahia-fbyo5: with the daemon's `operators:soul-factory` allowlist readable,
+  // with the daemon's `operators:soul-factory` allowlist readable,
   // the newest configuration across the authorized operators is shown, as the
   // daemon applies it; without it only the signed-in key's configuration is.
   it('projects the newest configuration across the trusted operator set and re-projects when the allowlist changes', () => {

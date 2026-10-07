@@ -394,7 +394,7 @@ describe('assistant store', () => {
     const service = controlplaneMock.controlplaneConnection.servicePubkey;
     const statusFilter = nostrMock.subscribeWithRecovery.mock.calls.at(-1)[0]
       .find((filter) => filter.kinds.includes(ASSISTANT_KINDS.STATUS));
-    // bahia-irsry.37: relays index single-letter tags only.
+    // relays index single-letter tags only.
     expect(statusFilter).toMatchObject({ authors: [service], '#t': [ASSISTANT_STATUS_TOPIC] });
     expect(Object.keys(statusFilter).filter((key) => key.startsWith('#') && key.length > 2)).toEqual([]);
     // Tags as internal/service AssistantStatusEventPublisher stamps them.

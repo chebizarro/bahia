@@ -11,7 +11,7 @@ import (
 )
 
 // A live group's regular kinds resume from per-relay cursors in the local
-// store (C-2, B-15): a relay that did not send EOSE keeps no cursor, so the
+// store: a relay that did not send EOSE keeps no cursor, so the
 // next attempt's single REQ reaches back far enough to catch it up; once
 // every relay has a cursor the REQ starts at the oldest one less the overlap.
 func TestBootstrapperLiveGroupsKeepPerRelayCursorsInTheLocalStore(t *testing.T) {
@@ -45,7 +45,7 @@ func TestBootstrapperLiveGroupsKeepPerRelayCursorsInTheLocalStore(t *testing.T) 
 	}
 
 	require.NoError(t, bootstrapper.attemptBootstrap(ctx))
-	require.InDelta(t, float64(now-3600), float64(lastSince(up)), 5, "a fresh node starts at the lookback window, not now (C-3)")
+	require.InDelta(t, float64(now-3600), float64(lastSince(up)), 5, "a fresh node starts at the lookback window, not now")
 	require.Equal(t, newer.CreatedAt, cursor(up))
 	require.Zero(t, cursor(refusing), "a relay that CLOSED the REQ gets no cursor")
 

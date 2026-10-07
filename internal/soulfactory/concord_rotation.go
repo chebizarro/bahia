@@ -169,7 +169,7 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 		return nil, err
 	}
 
-	// Stage 1 containment (bahia-185t0): source.resolve validated the owner's
+	// Stage 1 containment: source.resolve validated the owner's
 	// binding to community_id. Only that owner's channel-only rekey needs no
 	// roster evidence. The structural fold below proves neither a delegate's
 	// authority nor the eligibility of the heads a Refounding would copy.

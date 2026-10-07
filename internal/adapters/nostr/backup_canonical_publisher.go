@@ -13,9 +13,7 @@ import (
 )
 
 // BackupCanonicalPublisher publishes authoritative backup state records through
-// the shared builder and outbox. It replaces the projector's backup snapshot
-// legs (deleted in Phase 3 B1) and the hand-rolled envelope closure that was
-// rejected in review.
+// the shared builder and outbox.
 //
 // Follows the MLCanonicalPublisher pattern: holds a *Projector reference and
 // calls publishReplaceableJSON / publishControlState for each entity type,

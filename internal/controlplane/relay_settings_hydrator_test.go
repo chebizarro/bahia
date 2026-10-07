@@ -95,7 +95,7 @@ func TestRelaySettingsHydratorFilterIsScopedToCanonicalState(t *testing.T) {
 	if len(filter.Authors) != 1 || filter.Authors[0].Hex() != servicePubkey {
 		t.Fatalf("unexpected filter authors: %#v", filter.Authors)
 	}
-	// Relays index single-letter tags only (bahia-irsry.37): the REQ names the
+	// Relays index single-letter tags only: the REQ names the
 	// exact coordinate by #d and sends no #domain/#schema.
 	if len(filter.Tags) != 1 || len(filter.Tags[kinds.CASControlStateTagD]) != 1 || filter.Tags[kinds.CASControlStateTagD][0] != RelaySettingsDTag {
 		t.Fatalf("relay settings filter tags = %#v, want only #d=[%s]", filter.Tags, RelaySettingsDTag)
@@ -526,7 +526,7 @@ func TestRelaySettingsHydratorPromotionFailureAuthAndTimeoutRetainHead(t *testin
 	if h.handleEvent(context.Background(), newer) {
 		t.Fatal("failed persistence must not promote")
 	}
-	// NIP-42 AUTH is handled by the relay pool internally (bahia-irsry.48 item 3);
+	// NIP-42 AUTH is handled by the relay pool internally;
 	// the consumer no longer performs its own AUTH retry.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

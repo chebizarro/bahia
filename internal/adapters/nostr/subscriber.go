@@ -63,22 +63,22 @@ type IngestionObserver interface {
 }
 
 // Subscriber keeps the daemon's inbound subscriptions in sync with every relay
-// in its pool (bahia-irsry.10.1). It implements app.BackgroundRunner.
+// in its pool. It implements app.BackgroundRunner.
 //
 // Each relay is synced independently, so a relay that is down or behind never
-// holds back, or is hidden by, the others (C-23):
+// holds back, or is hidden by, the others:
 //   - catch-up: each replaceable/addressable filter is reconciled in full with
 //     NIP-77, falling back to paged REQs when the relay refuses (NEG-ERR) or
 //     does not speak NIP-77; each regular-kind filter is paged from that
 //     relay's cursor less the overlap (from a lookback window on a fresh
-//     node, never from "now", C-3), backwards with `until` whenever a page
-//     comes back full, so a large gap is never truncated (C-1);
+//     node, never from "now"), backwards with `until` whenever a page
+//     comes back full, so a large gap is never truncated;
 //   - live: one REQ per filter from the catch-up start less the overlap.
 //
 // A dropped relay is caught up again the same way on reconnect. Events from all
 // relays go through one consumer, which deduplicates them by id against the
-// local event store so replay after a restart does not depend on Postgres
-// (C-14), and which keeps the per-(relay, filter) cursors (see
+// local event store so replay after a restart does not depend on Postgres,
+// and which keeps the per-(relay, filter) cursors (see
 // replay_cursor.go).
 //
 // NIP-42 is answered by the pool's connection AuthHandler. A CLOSED ends the
@@ -91,7 +91,7 @@ type Subscriber struct {
 	pool *RelayPool
 	// archive is the optional PostgreSQL nostr_events table, written best
 	// effort: it never decides whether an event is new or whether handlers
-	// run (B-14).
+	// run.
 	archive                *postgresArchive
 	store                  *localstore.Store
 	kinds                  []int
@@ -169,7 +169,7 @@ func WithLocalStore(store *localstore.Store) SubscriberOption {
 // WithSelfAuthors declares the daemon's own pubkeys. Their events reach
 // observers but never handlers, and never advance an inbound cursor: the
 // daemon's clock and publish timing say nothing about what other authors'
-// events a relay has delivered (B-15).
+// events a relay has delivered.
 func WithSelfAuthors(pubkeys ...string) SubscriberOption {
 	return func(s *Subscriber) {
 		for _, pubkey := range pubkeys {
@@ -268,7 +268,7 @@ const (
 // the idempotency gate: handlers run only for an event new to it, so neither
 // overlap replay, nor another relay's copy, nor a restart re-runs side
 // effects. The PostgreSQL archive is written best effort and decides nothing,
-// so a database outage does not make the daemon deaf to its relays (B-14).
+// so a database outage does not make the daemon deaf to its relays.
 func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) ingestOutcome {
 	if err := ValidateInboundEvent(ev, s.now(), InboundEventMaxFutureSkew); err != nil {
 		eventID := ""

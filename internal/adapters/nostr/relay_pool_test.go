@@ -91,7 +91,7 @@ func TestRelayPool_HealthSnapshotReturnsPerRelayStatus(t *testing.T) {
 
 // The tests below pin MergedSubscription semantics through the production
 // SubscribeAllWithEOSE path. They replace tests of the deleted, test-only
-// mergeSubscriptions/mergeRelaySubscriptions helpers (C-8, bahia-irsry.8).
+// mergeSubscriptions/mergeRelaySubscriptions helpers.
 
 func subscribeAllWithTestSubscriptions(t *testing.T, relayURLs ...string) (*MergedSubscription, map[string]*gonostr.Subscription) {
 	t.Helper()

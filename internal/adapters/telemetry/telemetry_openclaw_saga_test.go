@@ -12,7 +12,7 @@ import (
 )
 
 // TestMetricsHandlerAppendsOpenClawSagaExporter mirrors the app wiring for
-// bahia-tqndf: a saga Monitor over a FileStore is registered through
+// a saga Monitor over a FileStore is registered through
 // SetOpenClawSagaExporter, and its bahia_openclaw_provisioning_* gauges must
 // render on the /metrics scrape the BahiaOpenClaw* alert rules target.
 func TestMetricsHandlerAppendsOpenClawSagaExporter(t *testing.T) {

@@ -12,8 +12,8 @@ import (
 	"fiatjaf.com/nostr/nip40"
 )
 
-// This file is the one place Go consumers resolve event state (C-11, C-12 and
-// C-13 in docs/investigations/nostr-first-architecture-audit-2026-09-29.md):
+// This file is the one place Go consumers resolve event state (see
+// docs/architecture/event-lifecycle.md):
 //
 //   - NIP-01 replaceable and addressable events: per (kind, pubkey, d) the
 //     latest created_at wins, and on equal created_at the lowest id wins.
@@ -45,7 +45,7 @@ func IsStateKind(kind canonicalnostr.Kind) bool {
 }
 
 // MaxEventAge bounds how old an event of an AgeCapped kind may be when a
-// Bahia consumer or relay admits it (C-11): a year-old one-shot fact, request
+// Bahia consumer or relay admits it: a year-old one-shot fact, request
 // or command is a replay, not news, and the cap keeps replay protection and
 // dedup memory bounded.
 const MaxEventAge = 365 * 24 * time.Hour

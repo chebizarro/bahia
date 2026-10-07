@@ -186,7 +186,7 @@ func TestConfigConsumerActivatesSameCoordinateInVersionOrder(t *testing.T) {
 	dir := t.TempDir()
 
 	// Sign both events up front: event.Sign trips a known checkptr bug in the
-	// nostr library under -race (bahia-4fz4z), so it must stay off the raced path.
+	// nostr library under -race, so it must stay off the raced path.
 	eventV1 := buildConfigEvent(t, sk, "relay-sidecar", configRelaySchema, 1, nostr.Tags{})
 	eventV2 := buildConfigEvent(t, sk, "relay-sidecar", configRelaySchema, 2, nostr.Tags{})
 
@@ -247,7 +247,7 @@ func TestConfigConsumerFailedActivationLeavesAppliedBehind(t *testing.T) {
 	sk := nostr.Generate()
 	author := sk.Public().Hex()
 	// Sign before Start: event.Sign trips a known checkptr bug in the nostr
-	// library under -race (bahia-4fz4z), so it must stay off the raced path.
+	// library under -race, so it must stay off the raced path.
 	event := membershipEvent(t, sk, nostr.Tags{{"p", author}})
 
 	attempts := make(chan error, 2)

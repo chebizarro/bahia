@@ -135,8 +135,8 @@ func (c *BackupRestoreCoordinator) validateDependencies() error {
 func (c *BackupRestoreCoordinator) Name() string { return "backup-restore-recovery" }
 
 // Run performs durable worker recovery for stored restore work. Event-driven:
-// wakes on the trigger channel or when the stale-recovery timer fires.
-// Phase 3 B1 replaces the fixed 30s polling ticker.
+// wakes on the trigger channel or when the stale-recovery timer fires; no
+// polling ticker runs.
 func (c *BackupRestoreCoordinator) Run(ctx context.Context) error {
 	if err := c.validateDependencies(); err != nil {
 		return err

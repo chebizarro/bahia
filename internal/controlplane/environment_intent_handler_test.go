@@ -462,7 +462,7 @@ func TestProjectorNoLongerPublishesEnvironmentRecords(t *testing.T) {
 	// The actual verification is the compile-time build + the removed code.
 	t.Log("Environment bus subscriptions (EventEnvironmentCreated/Updated/Deleted) " +
 		"and the RepublishSnapshot environment loop have been removed from " +
-		"projector.go (bahia-irsry.11.4). This is verified by the build gate.")
+		"projector.go. This is verified by the build gate.")
 }
 
 // --- F3 test: environment intent targeting normalization ---

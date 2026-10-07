@@ -42,7 +42,7 @@ const (
 )
 
 // NostrPublishTargetLocalPrefix marks archive rows of events whose delivery
-// the daemon's local outbox owns (bahia-irsry.10.4). Their publish_state
+// the daemon's local outbox owns. Their publish_state
 // mirrors the local outcome for PostgreSQL readers (config-fabric drift,
 // virtualization, the failed-row runbook), but no runner drains them and the
 // outbox metrics do not count them: the local outbox does.
@@ -116,7 +116,7 @@ type NostrEventRepository interface {
 // NostrEventOutboxRepository is the durable publish-state extension implemented by
 // repositories that can redeliver outbound audit events.
 //
-// Since bahia-irsry.10.4 the daemon's own publishes are delivered from the
+// The daemon's own publishes are delivered from the
 // local outbox (localstore.Outbox). PostgreSQL rows are drained in place: rows
 // written inside a PostgreSQL transaction together with the domain change
 // they audit (registry release registration and promotion), and rows left

@@ -5,7 +5,7 @@
  * cursors committed on EOSE/live events, NIP-42 AUTH, and per-relay OK
  * tracking for publishes.
  *
- * Design reference: phase4-web-store-first.md §7 step 5, §12 W1-S1.
+ * Design reference: docs/architecture/web-store-first.md.
  *
  * @module lib/nostr/pool-welshman
  */
@@ -327,7 +327,7 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
   /**
    * Add a reference to an existing subscription.
    *
-   * W1-S2's boot sequence uses this so that multiple views (services,
+   * The boot sequence uses this so that multiple views (services,
    * environments, workers, etc.) can share a single underlying REQ for
    * the read-model subscription without duplicating relay traffic.
    * Each view holds its own unsubscribe handle; the REQ is only
@@ -366,7 +366,7 @@ export function createBahiaPool({ store, sign = null, getAdapter }) {
   /**
    * Get the underlying welshman Pool.
    *
-   * Used by W1-S2 boot to check connection state and by W3 outbox
+   * Used by boot to check connection state and by the outbox
    * for reconnect-driven retry.
    */
   function getPool() {

@@ -33,9 +33,9 @@ func TestMLProtocolNamespaces(t *testing.T) {
 			t.Fatalf("AI/ML legacy command/result kind[%d]=%d, want %d", i, kind, want)
 		}
 		if kind >= 5000 && kind <= 7000 {
-			// This preserves the historical AI/ML namespace separation from the retired
-			// legacy DVM allocation. Loom, Hive-CI, and SoulFactory are explicit fleet-local exceptions.
-			t.Fatalf("AI/ML command/result kind %d unexpectedly entered the retired legacy DVM allocation", kind)
+			// This preserves the AI/ML namespace separation from the retired
+			// DVM allocation range. Loom, Hive-CI, and SoulFactory are explicit fleet-local exceptions.
+			t.Fatalf("AI/ML command/result kind %d unexpectedly entered the retired DVM allocation range", kind)
 		}
 	}
 

@@ -50,7 +50,7 @@ func migrateLegacySQLite(ctx context.Context, store *eventStore, dataDir string,
 	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
 		return result, nil
 	} else if err != nil {
-		return result, fmt.Errorf("stat legacy relay sidecar store %s: %w", source, err)
+		return result, fmt.Errorf("stat SQLite relay sidecar store %s: %w", source, err)
 	}
 	backend := store.backend()
 	var done bool
@@ -64,16 +64,16 @@ func migrateLegacySQLite(ctx context.Context, store *eventStore, dataDir string,
 		return result, nil
 	}
 	result.Skipped = false
-	logger.Info("relay sidecar importing legacy SQLite event store", zap.String("source", source))
+	logger.Info("relay sidecar importing SQLite event store", zap.String("source", source))
 
 	db, err := sql.Open("sqlite", source+"?_pragma=busy_timeout%3d30000")
 	if err != nil {
-		return result, fmt.Errorf("open legacy relay sidecar store %s: %w", source, err)
+		return result, fmt.Errorf("open SQLite relay sidecar store %s: %w", source, err)
 	}
 	defer func() { _ = db.Close() }()
 	var tables int
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'events'`).Scan(&tables); err != nil {
-		return result, fmt.Errorf("inspect legacy relay sidecar store %s: %w", source, err)
+		return result, fmt.Errorf("inspect SQLite relay sidecar store %s: %w", source, err)
 	}
 
 	// One fsync per event would make a large import take hours. Sync once at
@@ -107,9 +107,9 @@ func migrateLegacySQLite(ctx context.Context, store *eventStore, dataDir string,
 		zap.Int("skipped_oversize", result.SkippedOversize),
 	}
 	if result.SkippedInvalid > 0 || result.SkippedOversize > 0 {
-		logger.Warn("relay sidecar imported legacy SQLite store with skipped events; the source file is kept", fields...)
+		logger.Warn("relay sidecar imported SQLite store with skipped events; the source file is kept", fields...)
 	} else {
-		logger.Info("relay sidecar imported legacy SQLite store; the source file is kept as a rollback copy", fields...)
+		logger.Info("relay sidecar imported SQLite store; the source file is kept as a rollback copy", fields...)
 	}
 	return result, nil
 }
@@ -119,7 +119,7 @@ func importSQLiteRows(ctx context.Context, db *sql.DB, store *eventStore, result
 	// coordinate, latest-wins replacement ends on the newest.
 	rows, err := db.QueryContext(ctx, `SELECT event_json FROM events ORDER BY created_at ASC, id ASC`)
 	if err != nil {
-		return fmt.Errorf("read legacy relay sidecar events: %w", err)
+		return fmt.Errorf("read SQLite relay sidecar events: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -129,7 +129,7 @@ func importSQLiteRows(ctx context.Context, db *sql.DB, store *eventStore, result
 		result.Rows++
 		var encoded []byte
 		if err := rows.Scan(&encoded); err != nil {
-			return fmt.Errorf("scan legacy relay sidecar event: %w", err)
+			return fmt.Errorf("scan SQLite relay sidecar event: %w", err)
 		}
 		var event nostr.Event
 		if json.Unmarshal(encoded, &event) != nil || !event.CheckID() || event.Kind.IsEphemeral() {
@@ -145,12 +145,12 @@ func importSQLiteRows(ctx context.Context, db *sql.DB, store *eventStore, result
 			if err := store.replace(event); errors.Is(err, eventstore.ErrDupEvent) {
 				stored = false
 			} else if err != nil {
-				return fmt.Errorf("import legacy relay event %s: %w", event.ID.Hex(), err)
+				return fmt.Errorf("import SQLite relay event %s: %w", event.ID.Hex(), err)
 			}
 		} else if err := store.coords().Save(event); errors.Is(err, eventstore.ErrDupEvent) {
 			stored = false
 		} else if err != nil {
-			return fmt.Errorf("import legacy relay event %s: %w", event.ID.Hex(), err)
+			return fmt.Errorf("import SQLite relay event %s: %w", event.ID.Hex(), err)
 		}
 		if !stored {
 			result.AlreadyPresent++
@@ -167,7 +167,7 @@ func importSQLiteRows(ctx context.Context, db *sql.DB, store *eventStore, result
 		result.Imported++
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read legacy relay sidecar events: %w", err)
+		return fmt.Errorf("read SQLite relay sidecar events: %w", err)
 	}
 	return nil
 }

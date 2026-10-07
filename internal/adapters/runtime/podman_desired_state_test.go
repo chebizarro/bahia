@@ -480,7 +480,7 @@ func TestPodmanApplyDesiredState_PropagatesEnvironmentRevision(t *testing.T) {
 }
 
 // ===========================================================================
-// Health check startup probe validation (bahia-gk4o)
+// Health check startup probe validation
 // ===========================================================================
 
 func TestValidatePodmanHealthcheck_NoHealthcheck(t *testing.T) {
@@ -602,7 +602,7 @@ func TestPodmanApplyDesiredState_HealthcheckWarnings_PropagateToResult(t *testin
 }
 
 // ===========================================================================
-// Rootless cgroup resource limit validation (bahia-4iba)
+// Rootless cgroup resource limit validation
 // ===========================================================================
 
 func TestValidatePodmanRootlessResources_RootfulMode_NoWarnings(t *testing.T) {

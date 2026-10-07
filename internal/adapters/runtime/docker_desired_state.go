@@ -208,13 +208,13 @@ func MapDesiredSpecToContainerConfig(spec *domain.DesiredServiceSpec, secrets ma
 
 // buildDockerLabels returns the full label map for a container. It includes
 // all labels from the spec (which already contain Bahia labels injected by
-// the builder) plus the bahia.service label used by legacy lookup.
+// the builder) plus the bahia.service label used by label-based container lookup.
 func buildDockerLabels(spec *domain.DesiredServiceSpec) map[string]string {
 	labels := make(map[string]string, len(spec.Labels)+1)
 	for k, v := range spec.Labels {
 		labels[k] = v
 	}
-	// Ensure legacy lookup label is present.
+	// Ensure the lookup label is present.
 	if _, ok := labels["bahia.service"]; !ok {
 		labels["bahia.service"] = spec.StableServiceKey
 	}

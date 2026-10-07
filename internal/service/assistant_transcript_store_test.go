@@ -101,8 +101,8 @@ func TestAssistantTranscriptStoreReplayOrdersAndDedupes(t *testing.T) {
 	if records[1].Payload.Sequence != 2 || messageText(records[1].Payload.Message) != "second" {
 		t.Fatalf("second replay record = %+v", records[1].Payload)
 	}
-	// The replay REQ scopes the session by its single-letter topic only
-	// (bahia-irsry.37); relays do not index #schema/#domain/#session.
+	// The replay REQ scopes the session by its single-letter topic only;
+	// relays do not index #schema/#domain/#session.
 	filter := subscriber.lastFilter(t)
 	for key := range filter.Tags {
 		if len(key) != 1 {
@@ -368,8 +368,8 @@ func TestAssistantTranscriptAppendOnceIsIdempotentAndDedupeIsOrderIndependent(t 
 	}
 }
 
-// A retried publish of one message targets the same addressable coordinate
-// (audit C-41), so the relay keeps a single copy: the d tag is derived from
+// A retried publish of one message targets the same addressable coordinate,
+// so the relay keeps a single copy: the d tag is derived from
 // (session, logical id), or (session, sequence) without a logical id, and
 // never from a random value.
 func TestAssistantTranscriptRetryReusesDeterministicCoordinate(t *testing.T) {

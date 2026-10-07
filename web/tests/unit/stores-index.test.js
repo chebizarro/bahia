@@ -67,7 +67,7 @@ describe('Global Stores (index.js)', () => {
     }
   });
 
-  it('does not export the retired loadAll or SSE-style subscription aliases', () => {
+  it('does not export loadAll or SSE-style subscription aliases', () => {
     expect(storesModule.loadAll).toBeUndefined();
     expect(storesModule.subscribeToEvents).toBeUndefined();
     expect(storesModule.unsubscribeFromEvents).toBeUndefined();

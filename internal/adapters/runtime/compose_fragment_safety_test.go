@@ -14,7 +14,7 @@ import (
 // Compose Fragment Safety Tests
 //
 // These tests verify the safety invariants that the fragment optimization
-// (bahia-zu2p.9.3) must preserve. They test the CONTRACT, not the
+// must preserve. They test the CONTRACT, not the
 // implementation, so they pass regardless of whether the fragment applier
 // has landed.
 //

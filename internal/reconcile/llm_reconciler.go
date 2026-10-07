@@ -17,7 +17,7 @@ import (
 // LLMRouteReconciler observes LLM backend/gateway state and repairs gateway drift.
 // It is event-driven: it subscribes to LLM route state and observation events
 // via the bus publisher, calling ReconcileOnce on each relevant event instead of
-// polling on a ticker (Phase 3 L1, bahia-irsry.11.10).
+// polling on a ticker.
 type LLMRouteReconciler struct {
 	registry          *service.LLMRegistryService
 	environments      repository.EnvironmentRepository

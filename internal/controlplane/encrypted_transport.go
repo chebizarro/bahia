@@ -46,8 +46,8 @@ const (
 	KindContextVMMessage                  = kinds.ContextVMMessage
 	KindContextVMGiftWrap                 = kinds.ContextVMGiftWrap
 	KindContextVMEphemeralWrap            = kinds.ContextVMEphemeralGiftWrap
-	// Deprecated compatibility aliases retained for callers/tests that still name
-	// the old encrypted transport API. They resolve to canonical ContextVM kinds;
+	// Compatibility aliases for callers/tests that still name the old
+	// encrypted transport API. They resolve to canonical ContextVM kinds;
 	// production subscriptions do not accept legacy Bahia encrypted events.
 	KindEncryptedRequest = KindContextVMGiftWrap
 	KindEncryptedResult  = KindContextVMMessage
@@ -83,7 +83,8 @@ type EncryptedRequestSubscriber interface {
 	WaitForTopologyChange(ctx context.Context) error
 }
 
-// EncryptedRequestEnvelope is the deprecated encrypted request payload shape.
+// EncryptedRequestEnvelope is the encrypted request payload shape behind the
+// KindEncryptedRequest compatibility alias.
 type EncryptedRequestEnvelope struct {
 	Version         string          `json:"version"`
 	Operation       string          `json:"operation"`
@@ -91,7 +92,8 @@ type EncryptedRequestEnvelope struct {
 	Payload         json.RawMessage `json:"payload"`
 }
 
-// EncryptedResultEnvelope is the deprecated encrypted result payload shape.
+// EncryptedResultEnvelope is the encrypted result payload shape behind the
+// KindEncryptedResult compatibility alias.
 type EncryptedResultEnvelope struct {
 	Version        string       `json:"version"`
 	RequestEventID string       `json:"request_event_id"`
@@ -401,7 +403,7 @@ func WithContextVMResponseStore(store repository.ContextVMResponseStore, ttl tim
 // WithContextVMLocalStore keeps the request ledger (claims, keyed responses,
 // processed deliveries) and the per-relay request cursors in the daemon's local
 // store, so restart idempotency and downtime recovery do not depend on
-// Postgres (bahia-irsry.10.6). See contextvm_local_run.go.
+// Postgres. See contextvm_local_run.go.
 func WithContextVMLocalStore(store *localstore.Store) EncryptedRequestTransportOption {
 	return func(transport *EncryptedRequestTransport) { transport.contextVMLocal.store = store }
 }
@@ -650,9 +652,9 @@ func (t *EncryptedRequestTransport) handleEventSince(ctx context.Context, event 
 		t.handleContextVMEventSince(ctx, event, innerSince)
 		return
 	}
-	// Legacy Bahia encrypted request/result events are no longer accepted by
-	// production runtime. ContextVM message and wrapper kinds above
-	// are the only active encrypted control-plane transport.
+	// Legacy Bahia encrypted request/result events are not accepted by
+	// production runtime: the ContextVM message and wrapper kinds above are
+	// the only encrypted control-plane transport.
 }
 
 func (t *EncryptedRequestTransport) HandleContextVMEvent(ctx context.Context, outer *nostr.Event) {
@@ -692,7 +694,7 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 			return
 		}
 	}
-	// Phase 3 O1: if the unwrapped inner event is a kind 30900 intent
+	// if the unwrapped inner event is a kind 30900 intent
 	// (t=bahia-intent), route it to the gift-wrap intent ingress instead
 	// of ContextVM dispatch. This reuses the existing 1059 subscription.
 	if inner != nil && t.giftWrapIntentIngress != nil && IsIntentEvent(inner) {
@@ -924,11 +926,11 @@ func (t *EncryptedRequestTransport) unwrapContextVMEvent(ctx context.Context, ev
 	if t.responder == nil {
 		return nil, "", fmt.Errorf("ContextVM responder is not configured")
 	}
-	// Both wrap kinds accept the NIP-59 and the legacy direct-encryption
-	// envelope: a client sends a request that is too large for a stored 1059
-	// as 21059 in whichever envelope it uses. This shared ingress also
-	// receives worker JSON-RPC responses; fp-5l35 owns response-role dispatch
-	// and fp-20aa owns maintenance consumption.
+	// Both wrap kinds accept the NIP-59 and the direct-encryption envelope:
+	// a client sends a request that is too large for a stored 1059 as 21059
+	// in whichever envelope it uses. This shared ingress also receives worker
+	// JSON-RPC responses; response-role dispatch and maintenance consumption
+	// are handled downstream.
 	return cascontextvm.UnwrapAny(ctx, t.responder.signer, event)
 }
 

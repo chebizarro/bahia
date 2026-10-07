@@ -463,7 +463,7 @@ func TestAdapterLedgerBoundsAndFailsClosed(t *testing.T) {
 	require.Equal(t, nostr.Timestamp(10), replaces)
 }
 
-// The retention pass (bahia-fpubg): a terminal run past its retain_until is
+// The retention pass: a terminal run past its retain_until is
 // purged with its request record, and its identity reservation is released
 // only when the run reserved the agent id and no Soul of the agent is live.
 // Unexpired, recoverable and running runs are untouched; a failed Soul read

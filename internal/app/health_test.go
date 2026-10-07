@@ -235,7 +235,7 @@ func TestOCKRotationDegradesReadinessUntilRecovery(t *testing.T) {
 
 // A coordinate the outbox abandoned after its producer was told it was queued
 // degrades readiness (warn, still ready) until a publish of it reaches the
-// quorum (bahia-u5whr, §3.7).
+// quorum.
 func TestUndeliveredCanonicalStateDegradesReadinessUntilDelivered(t *testing.T) {
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "daemon.bolt"))
 	require.NoError(t, err)
