@@ -94,9 +94,10 @@ bahia services list
 bahia environments list
 bahia state list
 bahia state drifted
-bahia deploy --service <id> --environment <id> --artifact <id>
-bahia rollback --service <id> --environment <id> --deployment-unit <unit-id> \
-  --target-artifact <previous-artifact-id> --supersedes-intent <current-intent-id>
+bahia deploy --org <org-id> --service <id> --environment <id> --artifact <id>
+bahia rollback --org <org-id> --service <id> --environment <id> \
+  --deployment-unit <unit-id> --target-artifact <previous-artifact-id> \
+  --supersedes-intent <current-intent-id>
 bahia outbox list
 ```
 

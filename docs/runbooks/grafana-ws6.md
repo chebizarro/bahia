@@ -20,5 +20,5 @@ Validate the dashboard metric contract with:
 go test ./internal/adapters/telemetry -run TestGrafanaFleetHealthDashboardReferencesCataloguedMetrics
 ```
 
-OwnAuth/Grafana SSO remains under `fp-own`/`fp-46`; this bundle neither configures
+Grafana SSO (OwnAuth) is out of scope for this bundle; it neither configures
 nor bypasses authentication.
