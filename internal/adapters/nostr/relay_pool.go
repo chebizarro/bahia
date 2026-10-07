@@ -16,6 +16,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip11"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"go.uber.org/zap"
 )
 
@@ -46,6 +47,9 @@ type RelayPool struct {
 	authSigner          nostr.Signer
 	authSignFunc        func(context.Context, *nostr.Event) error
 	connectRelay        func(context.Context, string, nostr.RelayOptions) (*nostr.Relay, error)
+	// outboundAdmission is the fail-closed publication controller shared by
+	// every gateway in the process (see internal/nostrout).
+	outboundAdmission *OutboundAdmission
 	// now and newReconnectBackoff pace reconnects to failing relays; both are
 	// replaceable in tests.
 	now                 func() time.Time
@@ -158,6 +162,11 @@ func defaultReconnectBackoff() *Backoff {
 	return &Backoff{Initial: time.Second, Max: time.Minute, Multiplier: 2, Jitter: 0.2}
 }
 
+// defaultOutboundAdmission resolves the controller for pools that were not
+// given one. It is the process-wide controller; this package's tests replace
+// it to isolate unrelated cases from each other's budget.
+var defaultOutboundAdmission = nostrout.Default
+
 // RelayPoolOption configures a RelayPool.
 type RelayPoolOption func(*RelayPool)
 
@@ -206,6 +215,19 @@ func WithAuthSignFunc(sign func(context.Context, *nostr.Event) error) RelayPoolO
 	return func(p *RelayPool) { p.authSignFunc = sign }
 }
 
+// WithOutboundAdmission injects the fail-closed publication controller. Pools
+// default to the process-wide controller; passing nil keeps that default, so
+// there is no option for unlimited publication.
+func WithOutboundAdmission(admission *OutboundAdmission) RelayPoolOption {
+	return func(p *RelayPool) {
+		if admission != nil {
+			p.outboundAdmission = admission
+			return
+		}
+		p.outboundAdmission = defaultOutboundAdmission()
+	}
+}
+
 // RelayPoolReconfigureResult describes an in-place relay topology update.
 type RelayPoolReconfigureResult struct {
 	Changed               bool
@@ -234,6 +256,7 @@ func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *R
 		ctx:                       ctx,
 		cancel:                    cancel,
 		connectRelay:              nostr.RelayConnect,
+		outboundAdmission:         defaultOutboundAdmission(),
 		now:                       time.Now,
 		newReconnectBackoff:       defaultReconnectBackoff,
 		connectTimeout:            defaultRelayConnectTimeout,
@@ -607,6 +630,15 @@ func (p *RelayPool) PublishWithResults(ctx context.Context, ev nostr.Event) ([]P
 // pool are ignored and produce no result. The topology lock is only held to
 // snapshot the target relays, never during the sends, so a slow relay cannot
 // hold up reconfiguration; a relay retired mid-send fails that send.
+//
+// Every publication is admitted by the process-wide outbound controller before
+// any relay I/O: one logical-event token for the fan-out (or one bulk-lane slot
+// when ctx carries a nostrout operation, which is paced rather than refused),
+// one per-relay wire token immediately before each EVENT frame — including a
+// NIP-42 AUTH retry — and every relay outcome feeds the shared circuit breaker
+// and receipt cache. Destinations that recently accepted this exact signed
+// event are answered from the receipt cache with a duplicate result and no
+// frame. An admission refusal returns before any relay is contacted.
 func (p *RelayPool) PublishToRelaysWithResults(ctx context.Context, ev nostr.Event, relayURLs []string) ([]PublishResult, error) {
 	p.mu.RLock()
 	relays := p.orderedRelaysLocked()
@@ -621,14 +653,47 @@ func (p *RelayPool) PublishToRelaysWithResults(ctx context.Context, ev nostr.Eve
 		}
 		relays = selected
 	}
+	if len(relays) == 0 {
+		return nil, nil
+	}
+
+	urls := make([]string, 0, len(relays))
+	for _, mr := range relays {
+		urls = append(urls, mr.url)
+	}
+	var (
+		pub *nostrout.Publication
+		err error
+	)
+	if op := nostrout.OperationFromContext(ctx); op != nil {
+		pub, err = op.Begin(ctx, ev, urls)
+	} else {
+		pub, err = p.outboundAdmission.Begin(ctx, ev, urls)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer pub.Close()
 
 	results := make([]PublishResult, len(relays))
-	var wg sync.WaitGroup
+	cached := pub.CachedResults()
+	pending := make([]int, 0, len(relays))
 	for i, mr := range relays {
+		if pub.NeedsRelay(mr.url) {
+			pending = append(pending, i)
+			continue
+		}
+		results[i] = cachedPublishResult(cached, mr.url)
+	}
+	var wg sync.WaitGroup
+	for _, i := range pending {
+		mr := relays[i]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = p.publishToRelayWithResult(ctx, mr, ev)
+			result := p.publishToRelayWithResult(ctx, mr, ev, pub)
+			pub.Observe(result)
+			results[i] = result
 		}()
 	}
 	wg.Wait()
@@ -636,13 +701,27 @@ func (p *RelayPool) PublishToRelaysWithResults(ctx context.Context, ev nostr.Eve
 	return results, aggregatePublishResultsError(results)
 }
 
-// PublishResult contains the outcome of a publish attempt.
-type PublishResult struct {
-	RelayURL string
-	Accepted bool
-	Reason   string // rejection reason if not accepted
-	Error    error  // transport/connection error (nil if relay responded)
+// cachedPublishResult finds the synthesized duplicate receipt Begin produced
+// for a destination that already accepted this exact signed event. Begin
+// guarantees one for every relay it did not admit for sending.
+func cachedPublishResult(cached []PublishResult, url string) PublishResult {
+	normalized := nostrout.NormalizeRelayURL(url)
+	for _, result := range cached {
+		if result.RelayURL == normalized {
+			return result
+		}
+	}
+	return PublishResult{RelayURL: url, Cached: true, Reason: "duplicate: suppressed locally"}
 }
+
+// OutboundAdmissionMetrics returns content-free process publication counters.
+func (p *RelayPool) OutboundAdmissionMetrics() OutboundAdmissionMetrics {
+	return p.outboundAdmission.Metrics()
+}
+
+// PublishResult contains the outcome of a publish attempt. It is the shared
+// outbound result type so admission can observe every gateway's outcomes.
+type PublishResult = nostrout.Result
 
 // IsAuthRequiredReason returns true if a relay protocol reason requires authentication.
 func IsAuthRequiredReason(reason string) bool {
@@ -684,33 +763,21 @@ func IsDuplicateReason(reason string) bool {
 	return strings.HasPrefix(reason, "duplicate:")
 }
 
-// IsAuthRequired returns true if the relay requires authentication.
-func (r PublishResult) IsAuthRequired() bool {
-	return IsAuthRequiredReason(r.Reason)
-}
-
-// IsRateLimited returns true if the relay is rate-limiting.
-func (r PublishResult) IsRateLimited() bool {
-	return IsRateLimitedReason(r.Reason)
-}
-
-// IsBlocked returns true if the event was blocked by relay policy.
-func (r PublishResult) IsBlocked() bool {
-	return IsBlockedReason(r.Reason)
-}
-
-// IsDuplicate returns true if the relay already has this event.
-func (r PublishResult) IsDuplicate() bool {
-	return IsDuplicateReason(r.Reason)
-}
-
-func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRelay, ev nostr.Event) PublishResult {
+func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRelay, ev nostr.Event, pub *nostrout.Publication) PublishResult {
 	result := PublishResult{RelayURL: mr.url}
 
 	// Reconnect if needed; a relay in reconnect backoff fails fast.
 	relay, err := p.reconnectRelay(ctx, mr)
 	if err != nil {
 		result.Error = fmt.Errorf("reconnecting to %s: %w", mr.url, err)
+		return result
+	}
+
+	// Admission is charged here — after any reconnect and immediately before
+	// the frame — so a slow reconnect cannot accumulate permits that later
+	// send together, and a kill switch or breaker that opened meanwhile wins.
+	if err := pub.BeforeAttempt(ctx, mr.url); err != nil {
+		result.Error = err
 		return result
 	}
 
@@ -726,6 +793,11 @@ func (p *RelayPool) publishToRelayWithResult(ctx context.Context, mr *managedRel
 				// AuthHandler attempt is running or done; Auth joins it (or
 				// answers the challenge) and reports the AUTH OK.
 				authErr := p.authenticateLiveRelay(ctx, mr, relay)
+				if authErr == nil {
+					// The retry is a second EVENT frame on the wire and needs
+					// its own per-relay admission.
+					authErr = pub.BeforeAttempt(ctx, mr.url)
+				}
 				if authErr == nil {
 					err = publishOnRelay(relay, ctx, ev)
 					if err == nil {
