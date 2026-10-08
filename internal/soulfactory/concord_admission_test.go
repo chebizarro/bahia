@@ -69,11 +69,12 @@ func TestConcordPublicationsArePacedByOperationInsteadOfRejected(t *testing.T) {
 }
 
 // TestConcordAuthRetryIsAdmittedAsSecondFrame: a gift wrap uses the priority
-// wire share, so a NIP-42 AUTH retry — a second EVENT frame — needs its own
-// admission and is refused when the reserved share is spent.
+// wire share, and so does the AUTH frame that answers the relay's challenge.
+// With room for exactly those two frames, the retried EVENT frame — the third
+// — needs its own admission and is refused when the reserved share is spent.
 func TestConcordAuthRetryIsAdmittedAsSecondFrame(t *testing.T) {
 	admission := nostrout.New(nostrout.Config{
-		RelayWirePriority: nostrout.PurposeBudget{RatePerMinute: 1, Burst: 1},
+		RelayWirePriority: nostrout.PurposeBudget{RatePerMinute: 1, Burst: 2},
 	})
 	endpoint := newFakeRelayEndpoint(t)
 	endpoint.publishResults = []RelayPublishResult{{Reason: "auth-required: sign in"}}
@@ -93,6 +94,7 @@ func TestConcordAuthRetryIsAdmittedAsSecondFrame(t *testing.T) {
 	default:
 		t.Fatal("expected the relay challenge to be answered before the refused retry")
 	}
+	require.Equal(t, uint64(1), admission.Metrics().AuthAdmitted, "the answered challenge spent one AUTH permit")
 }
 
 // TestConcordReplayOfAcceptedWrapSendsNoFrame: the receipt cache answers a
