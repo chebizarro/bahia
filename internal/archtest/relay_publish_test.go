@@ -21,9 +21,15 @@ import (
 //     cascadia-go — call, method value, or method expression, under any import
 //     alias — including uses through the nostr.Publisher/nostr.QuerierPublisher
 //     interfaces, and Bahia's own raw-send seam (the publishOnRelay var);
-//   - AUTH frames: (*nostr.Relay).Auth, which additionally must be called
-//     with the pool's admission-wrapped signer (authSignerFor), so a permit
-//     is provably charged before the library writes the frame;
+//   - AUTH frames: (*nostr.Relay).Auth is confined to the single pool
+//     helper that constructs the admission-wrapped signer internally and
+//     takes no signer parameter; the helper, the wrapped-signer constructor,
+//     and the bare signer are each confined to their callers, so no alias,
+//     variable, closure, or conditional can substitute an unwrapped signer;
+//   - raw relay handles: the nostr.Relay type name and the RelayConnect/
+//     NewRelay constructors outside the pool gateway files, which stops a
+//     raw relay from being smuggled into a local interface (the
+//     worker-orphan-cleanup bypass shape);
 //   - raw frame writes: (*nostr.Relay).Write / WriteWithError, and raw
 //     websocket dials/writes (github.com/coder/websocket), which could carry
 //     any frame;
@@ -63,12 +69,29 @@ var relayFrameGuardRules = map[string][]string{
 	"(fiatjaf.com/nostr.Publisher).Publish": {
 		modulePath + "/internal/adapters/nostr|(*RelayPool).downloadNegentropyItems",
 	},
-	// AUTH frames: the pool's three NIP-42 entry points, each of which must
-	// pass the admission-wrapped signer (enforced by authCallAdmitted).
+	// AUTH frames: exactly one declaration writes them. It takes no signer
+	// parameter — it constructs the admission-wrapped signer internally — so
+	// no call site can substitute an unwrapped one.
 	"(*fiatjaf.com/nostr.Relay).Auth": {
+		modulePath + "/internal/adapters/nostr|(*RelayPool).authOnRelay",
+	},
+	// The signer chain is confined too: authOnRelay is callable only by the
+	// three NIP-42 entry points; the admission-wrapped signer is constructed
+	// only by authOnRelay and the connection AuthHandler wiring; and the bare
+	// (uncharged) signer is reachable only from the wrapper. A conditional,
+	// alias, variable, or method value that smuggles a bare signer into any
+	// of these hops fails on that hop's own rule.
+	"(*" + modulePath + "/internal/adapters/nostr.RelayPool).authOnRelay": {
 		modulePath + "/internal/adapters/nostr|(*RelayPool).authenticateLiveRelay",
 		modulePath + "/internal/adapters/nostr|(*RelayPool).authenticateRelayAhead",
 		modulePath + "/internal/adapters/nostr|(*RelayPool).AuthenticateRelay",
+	},
+	"(*" + modulePath + "/internal/adapters/nostr.RelayPool).authSignerFor": {
+		modulePath + "/internal/adapters/nostr|(*RelayPool).buildRelayOptions",
+		modulePath + "/internal/adapters/nostr|(*RelayPool).authOnRelay",
+	},
+	"(*" + modulePath + "/internal/adapters/nostr.RelayPool).signAuthEvent": {
+		modulePath + "/internal/adapters/nostr|(*RelayPool).authSignerFor",
 	},
 	// NIP-77 sessions: only the pool's per-relay reconcile, which uploads
 	// through paced admission operations.
@@ -82,9 +105,27 @@ const (
 	nip77PackagePath     = "fiatjaf.com/nostr/nip77"
 	websocketPackagePath = "github.com/coder/websocket"
 	cascadiaGoModulePath = "git.sharegap.net/cascadia/cascadia-go"
-	bahiaNostrAdapter    = modulePath + "/internal/adapters/nostr"
-	authSignerForMethod  = "(*" + bahiaNostrAdapter + ".RelayPool).authSignerFor"
+	libraryNostrRelayKey = "fiatjaf.com/nostr.Relay (raw relay handle)"
 )
+
+// rawRelayOwnerFiles are the only production files that may obtain or hold a
+// raw *nostr.Relay: the pool's connection plumbing and its NIP-77 session
+// gateway. Everywhere else a raw relay could publish around admission — for
+// example through a local interface it satisfies (the worker-orphan-cleanup
+// bypass) — so the relay constructors and the Relay type name itself are
+// guarded: code that never touches a raw relay value cannot smuggle one into
+// an interface, a closure, or a helper. Reads (REQ/CLOSE/COUNT) on pool-owned
+// connections remain governed by the relay_subscribe ratchet.
+var rawRelayOwnerFiles = []string{
+	"internal/adapters/nostr/relay_pool.go",
+	"internal/adapters/nostr/relay_pool_sync.go",
+}
+
+// rawRelayConstructors are the library entry points that produce a *nostr.Relay.
+var rawRelayConstructors = map[string]bool{
+	"fiatjaf.com/nostr.RelayConnect": true,
+	"fiatjaf.com/nostr.NewRelay":     true,
+}
 
 // rawFramePublishPackages define EVENT publication outside Bahia's admission
 // layer.
@@ -118,19 +159,28 @@ func guardedFrameSymbol(obj types.Object) (string, bool) {
 			return "", false
 		}
 		path := o.Pkg().Path()
+		full := o.FullName()
 		switch {
 		case inPackage(path, nip46PackagePath):
-			return o.FullName(), true
+			return full, true
 		case inPackage(path, nip77PackagePath):
-			return o.FullName(), true
+			return full, true
 		case inPackage(path, websocketPackagePath) &&
 			(o.Name() == "Dial" || strings.HasPrefix(o.Name(), "Write")):
-			return o.FullName(), true
+			return full, true
 		case path == "fiatjaf.com/nostr" && o.Type().(*types.Signature).Recv() != nil &&
 			(o.Name() == "Auth" || o.Name() == "Write" || o.Name() == "WriteWithError"):
-			return o.FullName(), true
+			return full, true
+		case rawRelayConstructors[full]:
+			return libraryNostrRelayKey, true
 		case strings.HasPrefix(o.Name(), "Publish") && inRawFramePublishPackage(path):
-			return o.FullName(), true
+			return full, true
+		case relayFrameGuardRules[full] != nil:
+			return full, true
+		}
+	case *types.TypeName:
+		if o.Pkg() != nil && o.Pkg().Path() == "fiatjaf.com/nostr" && o.Name() == "Relay" {
+			return libraryNostrRelayKey, true
 		}
 	case *types.Var:
 		if o.Parent() == o.Pkg().Scope() {
@@ -152,10 +202,9 @@ func nip46SiteAllowed(site string) bool {
 
 type frameGuardUse struct {
 	site   string
+	file   string
 	symbol string
 	pos    token.Position
-	node   ast.Node
-	info   *types.Info
 }
 
 func frameUseAllowed(use frameGuardUse) bool {
@@ -164,40 +213,20 @@ func frameUseAllowed(use frameGuardUse) bool {
 		strings.Contains(use.symbol, "(*"+nip46PackagePath+".") {
 		return nip46SiteAllowed(use.site)
 	}
+	if use.symbol == libraryNostrRelayKey {
+		for _, owner := range rawRelayOwnerFiles {
+			if use.file == owner {
+				return true
+			}
+		}
+		return false
+	}
 	for _, site := range relayFrameGuardRules[use.symbol] {
 		if site == use.site {
 			return true
 		}
 	}
 	return false
-}
-
-// authCallAdmitted proves a (*Relay).Auth call site passes the pool's
-// admission-wrapped signer, so the AUTH frame's permit is charged immediately
-// before the library writes it. A bare signer (the pre-fix shape) fails here.
-func authCallAdmitted(use frameGuardUse) bool {
-	call, ok := use.node.(*ast.CallExpr)
-	if !ok {
-		return false // method value/expression: cannot prove the argument
-	}
-	if len(call.Args) < 2 {
-		return false
-	}
-	wrapped, ok := call.Args[1].(*ast.CallExpr)
-	if !ok {
-		return false
-	}
-	var funIdent *ast.Ident
-	switch fun := wrapped.Fun.(type) {
-	case *ast.Ident:
-		funIdent = fun
-	case *ast.SelectorExpr:
-		funIdent = fun.Sel
-	default:
-		return false
-	}
-	obj, ok := use.info.Uses[funIdent].(*types.Func)
-	return ok && obj.FullName() == authSignerForMethod
 }
 
 func collectRawRelayFrameWrites(pkgs []*packages.Package, found *violations) {
@@ -215,16 +244,8 @@ func collectRawRelayFrameWrites(pkgs []*packages.Package, found *violations) {
 					return true
 				}
 				pos := pkg.Fset.Position(ident.Pos())
-				if !frameUseAllowed(frameGuardUse{site: site, symbol: symbol}) {
+				if !frameUseAllowed(frameGuardUse{site: site, symbol: symbol, file: path}) {
 					found.add(symbol+" @ "+site, pos)
-					return true
-				}
-				if symbol == "(*fiatjaf.com/nostr.Relay).Auth" {
-					if call, ok := findEnclosingCall(node, decl); ok {
-						if !authCallAdmitted(frameGuardUse{site: site, symbol: symbol, node: call, info: pkg.TypesInfo}) {
-							found.add(symbol+" without the admission-wrapped signer @ "+site, pos)
-						}
-					}
 				}
 				return true
 			})
@@ -325,7 +346,7 @@ func TestNoNewDirectLibraryRelayPublications(t *testing.T) {
 						return true
 					}
 					if symbol, guarded := guardedFrameSymbol(pkg.TypesInfo.Uses[ident]); guarded {
-						if frameUseAllowed(frameGuardUse{site: site, symbol: symbol}) {
+						if frameUseAllowed(frameGuardUse{site: site, symbol: symbol, file: relPath(pkg.Fset.Position(ident.Pos()).Filename)}) {
 							seen[symbol+" @ "+site] = true
 						}
 					}
@@ -384,6 +405,7 @@ func TestRelayPublishGuardDetectsDisguisedBypasses(t *testing.T) {
 		"fiatjaf.com/nostr/nip46.ConnectBunker",
 		"(*fiatjaf.com/nostr/nip46.BunkerClient).GetPublicKey",
 		"(*fiatjaf.com/nostr.Relay).Auth",
+		libraryNostrRelayKey,
 		"(*fiatjaf.com/nostr.Relay).Write",
 		"(*fiatjaf.com/nostr.Relay).WriteWithError",
 		"fiatjaf.com/nostr/nip77.NegentropySyncWithOptions",

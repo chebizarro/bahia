@@ -69,3 +69,4 @@ __pycache__/
 
 # Local Claude Code session permissions
 .claude/settings.local.json
+/cli

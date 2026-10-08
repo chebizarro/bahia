@@ -1,14 +1,80 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"iter"
 	"strings"
+	"time"
 
 	canonicalnostr "fiatjaf.com/nostr"
 
+	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 )
+
+// poolOrphanRelay adapts one relay's admission-gated pool to
+// controlplane.WorkerOrphanRelay. Reads run as a bounded stored-event
+// subscription; deletions publish through the pool gateway, so every EVENT
+// frame takes its outbound admission permit (budgets, shared circuit breaker,
+// kill switch) immediately before it is written — a raw library relay is
+// never obtained here.
+type poolOrphanRelay struct {
+	pool    *nostrpool.RelayPool
+	timeout time.Duration
+}
+
+func (r *poolOrphanRelay) QueryEvents(filter canonicalnostr.Filter) iter.Seq[canonicalnostr.Event] {
+	return func(yield func(canonicalnostr.Event) bool) {
+		ctx, cancel := context.WithTimeout(context.Background(), r.timeout)
+		defer cancel()
+		sub, err := r.pool.SubscribeAllWithEOSE(ctx, []canonicalnostr.Filter{filter})
+		if err != nil {
+			return
+		}
+		defer sub.Close()
+		for {
+			select {
+			case ev, ok := <-sub.Events:
+				if !ok {
+					return
+				}
+				if ev != nil && !yield(*ev) {
+					return
+				}
+			case <-sub.EndOfStoredEvents:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func (r *poolOrphanRelay) Publish(ctx context.Context, event canonicalnostr.Event) error {
+	_, err := r.pool.PublishWithResults(ctx, event)
+	return err
+}
+
+// cleanupRelayFactory connects one relay for the cleanup and returns its
+// gateway handle with a close function. It is a var so tests can exercise the
+// command without a live relay; production always builds the pool adapter.
+var cleanupRelayFactory = func(ctx context.Context, cmd *cobra.Command, relayURL string) (controlplane.WorkerOrphanRelay, func(), error) {
+	pool := nostrpool.NewRelayPool([]string{relayURL}, zap.NewNop())
+	pool.Connect(ctx)
+	if pool.ConnectedCount() == 0 {
+		pool.Close()
+		return nil, nil, fmt.Errorf("relay did not connect")
+	}
+	timeout, err := readEOSETimeout(cmd)
+	if err != nil {
+		pool.Close()
+		return nil, nil, err
+	}
+	return &poolOrphanRelay{pool: pool, timeout: timeout}, pool.Close, nil
+}
 
 func workersCleanupOrphansCommand() *cobra.Command {
 	var apply bool
@@ -92,14 +158,14 @@ var runWorkersCleanupOrphans = func(cmd *cobra.Command, dryRun bool) error {
 	}
 
 	for _, relayURL := range relays {
-		relay, err := canonicalnostr.RelayConnect(ctx, relayURL, canonicalnostr.RelayOptions{})
+		relay, closeRelay, err := cleanupRelayFactory(ctx, cmd, relayURL)
 		if err != nil {
 			fmt.Fprintf(out, "WARN: could not connect to %s: %v\n", relayURL, err)
 			continue
 		}
 
 		results, err := controlplane.CleanupOrphanedWorkerRecords(ctx, relay, signer, dryRun)
-		relay.Close()
+		closeRelay()
 		if err != nil {
 			return fmt.Errorf("cleanup on %s: %w", relayURL, err)
 		}

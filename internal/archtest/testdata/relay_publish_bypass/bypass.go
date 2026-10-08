@@ -94,3 +94,47 @@ func RawWebsocketWrite(ctx context.Context, url string, frame []byte) error {
 	defer conn.CloseNow()
 	return conn.Write(ctx, websocket.MessageText, frame)
 }
+
+// localOrphanRelay hides a raw relay behind a local interface: the publish
+// call resolves to the interface method, invisible to a symbol scan of the
+// library — only the raw-relay acquisition betrays it.
+type localOrphanRelay interface {
+	Publish(ctx context.Context, ev gn.Event) error
+}
+
+// OrphanCleanupShape reproduces the worker-orphan-cleanup bypass: obtain a
+// raw relay, hide it behind a local interface, publish through the interface.
+func OrphanCleanupShape(ctx context.Context, url string, ev gn.Event) error {
+	r, err := gn.RelayConnect(ctx, url, gn.RelayOptions{})
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	var iface localOrphanRelay = r
+	return iface.Publish(ctx, ev)
+}
+
+// RawRelayParameter holds a raw relay handle in a signature outside the
+// gateway files.
+func RawRelayParameter(ctx context.Context, r *gn.Relay, ev gn.Event) error {
+	return r.Publish(ctx, ev)
+}
+
+// AuthViaVariable passes the signer through a variable instead of an inline
+// call, defeating any argument-shape check on Relay.Auth.
+func AuthViaVariable(ctx context.Context, r *gn.Relay, sk gn.SecretKey) error {
+	sign := func(_ context.Context, ev *gn.Event) error { return ev.Sign(sk) }
+	return r.Auth(ctx, sign)
+}
+
+// AuthViaConditional selects the signer at runtime: an argument-shape check
+// sees a plausible call, but the frame may be written unadmitted.
+func AuthViaConditional(ctx context.Context, r *gn.Relay, sk gn.SecretKey, admitted bool) error {
+	wrapped := func(_ context.Context, ev *gn.Event) error { return ev.Sign(sk) }
+	bare := func(_ context.Context, ev *gn.Event) error { return ev.Sign(sk) }
+	sign := bare
+	if admitted {
+		sign = wrapped
+	}
+	return r.Auth(ctx, sign)
+}

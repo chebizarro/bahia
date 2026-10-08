@@ -2743,6 +2743,15 @@ func (p *RelayPool) authSignerFor(relayURL string) func(context.Context, *nostr.
 	}
 }
 
+// authOnRelay is the only declaration that hands a signer to the library's
+// Relay.Auth, and therefore the only one that can put an AUTH frame on the
+// wire. It takes no signer parameter: the admission-wrapped signer is
+// constructed here, so no caller can substitute an unwrapped one (enforced by
+// the internal/archtest relay_publish guard).
+func (p *RelayPool) authOnRelay(ctx context.Context, relay *nostr.Relay, relayURL string) error {
+	return relay.Auth(ctx, p.authSignerFor(relayURL))
+}
+
 // authenticateLiveRelay completes NIP-42 on relay, the connection that just
 // answered "auth-required:" (mr's current one when nil).
 func (p *RelayPool) authenticateLiveRelay(ctx context.Context, mr *managedRelay, relay *nostr.Relay) error {
@@ -2755,7 +2764,7 @@ func (p *RelayPool) authenticateLiveRelay(ctx context.Context, mr *managedRelay,
 			return err
 		}
 	}
-	return relay.Auth(ctx, p.authSignerFor(mr.url))
+	return p.authOnRelay(ctx, relay, mr.url)
 }
 
 // authBarrierFilter asks for nothing. The relay's answer to it (EOSE or
@@ -2815,7 +2824,7 @@ func (p *RelayPool) authenticateRelayAhead(ctx context.Context, mr *managedRelay
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	}
-	err = relay.Auth(ctx, p.authSignerFor(mr.url))
+	err = p.authOnRelay(ctx, relay, mr.url)
 	switch {
 	case err == nil:
 		return nil
@@ -2860,7 +2869,7 @@ func (p *RelayPool) AuthenticateRelay(ctx context.Context, relayURL string) erro
 	}
 
 	p.logger.Info("sending NIP-42 AUTH", zap.String("relay", relayURL))
-	return relay.Auth(ctx, p.authSignerFor(relayURL))
+	return p.authOnRelay(ctx, relay, relayURL)
 }
 
 // Close disconnects all relays, subscriptions, and reconnection work.
