@@ -3,13 +3,19 @@ package negentropy
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"sync"
 	"unsafe"
 
 	"fiatjaf.com/nostr"
 )
+
+// errNegentropyReleased aborts a Reconcile whose session was released while
+// it was emitting ids (Bahia patch, see BAHIA_PATCHES.md).
+var errNegentropyReleased = errors.New("negentropy session released")
 
 const (
 	ProtocolVersion byte = 0x61 // version 1
@@ -30,6 +36,10 @@ type Negentropy struct {
 
 	Haves    chan nostr.ID
 	HaveNots chan nostr.ID
+
+	// done is closed by Release (Bahia patch, see BAHIA_PATCHES.md).
+	done        chan struct{}
+	releaseOnce sync.Once
 }
 
 type BoundReader struct {
@@ -50,6 +60,7 @@ func New(storage Storage, frameSizeLimit int, up, down bool) *Negentropy {
 	n := &Negentropy{
 		storage:        storage,
 		frameSizeLimit: frameSizeLimit,
+		done:           make(chan struct{}),
 	}
 
 	if up {
@@ -60,6 +71,36 @@ func New(storage Storage, frameSizeLimit int, up, down bool) *Negentropy {
 	}
 
 	return n
+}
+
+// Release frees any Reconcile producer blocked emitting to Haves/HaveNots
+// (Bahia patch, see BAHIA_PATCHES.md). A session consumer may stop reading
+// when its session ends — timeout, NEG-ERR, or caller cancellation — while
+// the channels are closed only by a reconcile that completes; a blocked
+// emit would otherwise wedge the relay read loop forever. Release is
+// idempotent and safe to call while a Reconcile is in flight; the released
+// Reconcile returns errNegentropyReleased.
+func (n *Negentropy) Release() {
+	n.releaseOnce.Do(func() {
+		if n.done != nil {
+			close(n.done)
+		}
+	})
+}
+
+// emit hands one id to the session consumer, returning false when the
+// session was released before the id was accepted (Bahia patch).
+func (n *Negentropy) emit(ch chan nostr.ID, id nostr.ID) bool {
+	if n.done == nil {
+		ch <- id
+		return true
+	}
+	select {
+	case ch <- id:
+		return true
+	case <-n.done:
+		return false
+	}
 }
 
 func (n *Negentropy) String() string {
@@ -211,7 +252,9 @@ func (n *Negentropy) reconcileAux(reader *bytes.Reader) ([]byte, error) {
 					if n.Haves != nil {
 						// if we have and they don't, notify client
 						if n.isClient {
-							n.Haves <- item.ID
+							if !n.emit(n.Haves, item.ID) {
+								return nil, errNegentropyReleased
+							}
 						}
 					}
 				}
@@ -221,7 +264,9 @@ func (n *Negentropy) reconcileAux(reader *bytes.Reader) ([]byte, error) {
 				// notify client of what they have and we don't
 				for id := range theirItems {
 					// skip empty strings here because those were marked to be excluded as such in the previous step
-					n.HaveNots <- id
+					if !n.emit(n.HaveNots, id) {
+						return nil, errNegentropyReleased
+					}
 				}
 
 				// client got list of ids, it's done, skip

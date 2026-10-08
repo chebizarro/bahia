@@ -226,15 +226,28 @@ func (p *RelayPool) downloadNegentropyItems(ctx context.Context, dir nip77.Direc
 func (p *RelayPool) uploadNegentropyItems(ctx context.Context, dir nip77.Direction, relay *nostr.Relay) {
 	ids := make([]nostr.ID, 0, negentropyFetchBatch)
 	seen := make(map[nostr.ID]struct{})
-	for id := range dir.Items {
-		if ctx.Err() != nil {
+	drained := false
+	for !drained {
+		select {
+		case <-ctx.Done():
+			// The session ended — timeout, NEG-ERR, or caller cancellation;
+			// negentropySyncRelay cancels the session context when it
+			// returns — and the library closes Items only when a reconcile
+			// completes. Ranging blindly would leak this handler on every
+			// aborted session; the events stay local and the convergent
+			// protocol resumes at the next session.
 			return
+		case id, ok := <-dir.Items:
+			if !ok {
+				drained = true
+				break
+			}
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
 		}
-		if _, dup := seen[id]; dup {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
 	}
 	if len(ids) == 0 {
 		return

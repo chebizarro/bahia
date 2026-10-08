@@ -438,3 +438,26 @@ the NIP-42 challenge first when the reason is `auth-required:`, exactly as the
 REQ branch does. The read-auth sidecar relies on this so an unauthenticated
 COUNT on a protected topic is reported as `auth-required:` rather than 0.
 Covered by `internal/relaysidecar/read_auth_default_test.go`.
+
+## NIP-77 session producer/consumer release (nip77/nip77.go, nip77/negentropy/negentropy.go, bahia-outbound-admission)
+
+`NegentropySyncWithOptions` closes the `Haves`/`HaveNots` id channels only
+when a `Reconcile` completes. A session that ends in NEG-ERR, a timeout, or a
+caller cancellation returns without closing them, so a consumer ranging the
+channel blindly blocks forever (the Bahia upload handler leaked a goroutine
+per aborted session), and a consumer that exits first leaves `Reconcile`
+blocked forever on a full channel emit, wedging the relay read loop. Two
+complementary changes:
+
+- `negentropy.Negentropy` gains a `done` channel: `emit` selects on it, and
+  the idempotent `Release()` closes it, aborting an in-flight `Reconcile`
+  with `errNegentropyReleased`. `NegentropySyncWithOptions` defers
+  `neg.Release()`, so producers are freed on every session exit path.
+- The Bahia consumers (`moveNegentropyItems`/`uploadNegentropyItems`/
+  `downloadNegentropyItems` in `internal/adapters/nostr/relay_pool_sync.go`)
+  receive `Items` in a `select` against the session context, which
+  `negentropySyncRelay` cancels when it returns for any reason.
+
+Covered by `TestReleaseFreesBlockedEmit` (nip77/negentropy) and
+`TestNegentropyUploadReturnsWhenSessionEnds`
+(`internal/adapters/nostr/relay_frame_admission_test.go`).

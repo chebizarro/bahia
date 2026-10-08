@@ -61,6 +61,11 @@ func NegentropySyncWithOptions(
 
 	vec := vector.New()
 	neg := negentropy.New(vec, 60_000, source != nil, target != nil)
+	// Release blocked id producers when the session ends for any reason
+	// (completion, NEG-ERR, timeout, cancellation): the consumer may stop
+	// reading before a reconcile closes the channels (Bahia patch, see
+	// BAHIA_PATCHES.md).
+	defer neg.Release()
 
 	// fill our local vector and build the NEG-OPEN before dialing, so the
 	// frame handler below never sees a session that is still being set up

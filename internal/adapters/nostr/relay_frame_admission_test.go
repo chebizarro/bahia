@@ -254,3 +254,36 @@ func TestNegentropyUploadStopsAtKillSwitch(t *testing.T) {
 	require.Zero(t, admission.Metrics().OperationsStarted)
 	require.Greater(t, admission.Metrics().KillSwitchRejected, uint64(0))
 }
+
+// TestNegentropyUploadReturnsWhenSessionEnds reproduces the aborted-session
+// leak: the library closes dir.Items only when a reconcile completes, so a
+// session that times out, ends in NEG-ERR, or is canceled leaves the channel
+// open with nothing more arriving. The upload handler must return promptly
+// when the session context ends — negentropySyncRelay cancels it on every
+// exit path — instead of blocking forever on the channel.
+func TestNegentropyUploadReturnsWhenSessionEnds(t *testing.T) {
+	generous := nostrout.PurposeBudget{RatePerMinute: 600_000, Burst: 100_000}
+	admission := nostrout.New(nostrout.Config{
+		Aggregate:         generous,
+		PurposeBudgets:    generousAdmissionLanes(),
+		RelayWire:         generous,
+		RelayWirePriority: generous,
+	})
+	pool, source, relay, frames, _ := negentropyUploadSetup(t, 1, admission)
+
+	stalled := make(chan gonostr.ID) // a dead session: nothing arrives, never closes
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		pool.uploadNegentropyItems(ctx, nip77Direction(source, relay, stalled), relay)
+	}()
+
+	cancel() // exactly what negentropySyncRelay's defer does when the session ends
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("upload handler blocked on a dead session's Items channel")
+	}
+	require.Zero(t, frames.Load(), "an aborted session uploads nothing")
+}
