@@ -1,60 +1,129 @@
-Description: khatru: register live listeners before stored queries
+Description: khatru: policy check, then live listeners, then stored queries
 
-Khatru runs a REQ filter's stored query before it registers the live
-listener. A client CLOSE arriving during the (possibly slow) stored
-query finds nothing to remove, and the listener lingers until
-disconnect. Fix: register all listeners before running stored queries;
-clean up listeners on filter rejection.
+Khatru handles every websocket message on its own goroutine and used to run
+a REQ filter's stored query before registering its live listener. An event
+saved while the query ran was therefore neither replayed (the query had
+passed its point) nor broadcast (the listener did not exist yet): a live
+subscriber missed it forever even though its publisher got OK true. A client
+CLOSE arriving during a slow query also found nothing to remove, and the
+listener lingered until disconnect.
 
-Note: this changes the ordering assumption that some server
-implementations may depend on (e.g. gap-buffer mechanisms that
-expect the listener to be added after the query). Such implementations
-need to be updated to handle the new ordering.
+Fix: restructure the REQ branch into three phases and split handleRequest
+into checkRequest + queryStoredEvents:
 
+1. run the OnRequest acceptance policy for every filter, so a rejected REQ
+   never registers a listener, not even transiently (a policy that gates
+   reads, e.g. NIP-42 auth-required, must not expose events while the
+   rejection is still being written);
+2. register every live listener, still skipping ids-only filters;
+3. run every stored query, then write EOSE.
+
+An event saved during a query is now broadcast to the registered listener
+and may also be emitted by the query's replay: clients deduplicate
+duplicates per NIP-01. Servers with their own gap-buffer mechanism keyed to
+the old ordering (listener added after the query) need to be updated; see
+Bahia's internal/relaysidecar/fanout.go adaptation (drain moved to the end
+of the query iterator).
+
+Applied to Bahia's vendored copy; regression test:
+khatru/listener_before_query_bahia_test.go
+(TestListenerIsRegisteredBeforeTheStoredQuery, deterministic via a
+QueryStored hook that publishes inside the query window).
+
+diff --git a/khatru/handlers.go b/khatru/handlers.go
+index 1720fe62..897abe78 100644
 --- a/khatru/handlers.go
 +++ b/khatru/handlers.go
-@@ -299,20 +299,30 @@
- 				case *nostr.ReqEnvelope:
- 					rl.removeListenerId(ws, env.SubscriptionID)
- 
- 					// a context just for the "stored events" request handler
- 					reqCtx, cancelReqCtx := context.WithCancelCause(ctx)
- 
+@@ -321,10 +321,20 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
  					// expose subscription id in the context
  					reqCtx = context.WithValue(reqCtx, subscriptionIdKey, env.SubscriptionID)
  
 -					// handle each filter separately -- dispatching events as they're loaded from databases
-+					// Register all live listeners BEFORE running stored queries.
-+					// This ensures a CLOSE arriving during a (possibly slow)
-+					// QueryStored call finds the listener and removes it,
-+					// instead of leaving it until disconnect.
-+					for _, filter := range env.Filters {
-+						if filter.IDs == nil {
-+							// a query that is just a bunch of "ids": [...] will not add listeners.
-+							rl.addListener(ws, env.SubscriptionID, filter, cancelReqCtx)
-+						}
-+					}
-+
-+					// handle each filter separately -- dispatching events as they're loaded
++					// Bahia patch (listener-before-query, see BAHIA_PATCHES.md and
++					// upstream-patches/0004): three phases per REQ. First run the
++					// acceptance policy for every filter, so a rejected REQ never
++					// registers a listener. Then register every live listener, and
++					// only then run the stored queries: khatru handles each message
++					// on its own goroutine, so with the old query-then-listen order
++					// an event saved while a (possibly slow) query ran was neither
++					// replayed nor broadcast, and a live subscriber missed it
++					// forever even though its publisher got OK true. A CLOSE
++					// arriving during a query now also finds the listener and
++					// removes it. An event both replayed and broadcast is a
++					// duplicate the client deduplicates.
  					for _, filter := range env.Filters {
- 						err := rl.handleRequest(reqCtx, env.SubscriptionID, ws, filter)
- 						if err != nil {
+-						err := rl.handleRequest(reqCtx, env.SubscriptionID, ws, filter)
+-						if err != nil {
++						if err := rl.checkRequest(reqCtx, filter); err != nil {
  							// fail everything if any filter is rejected
  							reason := err.Error()
  							if strings.HasPrefix(reason, "auth-required:") {
- 								RequestAuth(ctx)
- 							}
+@@ -333,13 +343,19 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
  							ws.WriteJSON(nostr.ClosedEnvelope{SubscriptionID: env.SubscriptionID, Reason: reason})
-+							// clean up listeners we registered above
-+							rl.removeListenerId(ws, env.SubscriptionID)
  							cancelReqCtx(errors.New("filter rejected"))
  							return
 -						} else if filter.IDs == nil {
--							// a query that is just a bunch of "ids": [...] will not add listeners.
--							// is this a bug? maybe, but I don't think anyone is listening for an ID
--							// that hasn't been published yet anywhere -- if yes we can change later
--							rl.addListener(ws, env.SubscriptionID, filter, cancelReqCtx)
++						}
++					}
++					for _, filter := range env.Filters {
++						if filter.IDs == nil {
+ 							// a query that is just a bunch of "ids": [...] will not add listeners.
+ 							// is this a bug? maybe, but I don't think anyone is listening for an ID
+ 							// that hasn't been published yet anywhere -- if yes we can change later
+ 							rl.addListener(ws, env.SubscriptionID, filter, cancelReqCtx)
  						}
  					}
++					for _, filter := range env.Filters {
++						rl.queryStoredEvents(reqCtx, env.SubscriptionID, ws, filter)
++					}
  
  					ws.WriteJSON(nostr.EOSEEnvelope{SubscriptionID: env.SubscriptionID})
+ 				case *nostr.CloseEnvelope:
+diff --git a/khatru/responding.go b/khatru/responding.go
+index 7eaa73bc..5584dbfc 100644
+--- a/khatru/responding.go
++++ b/khatru/responding.go
+@@ -8,7 +8,12 @@ import (
+ 	"fiatjaf.com/nostr/nip45/hyperloglog"
+ )
+ 
+-func (rl *Relay) handleRequest(ctx context.Context, id string, ws *WebSocket, filter nostr.Filter) error {
++// checkRequest runs the REQ filter acceptance policy (OnRequest) and returns
++// the rejection reason, if any. Bahia patch (listener-before-query, see
++// BAHIA_PATCHES.md): the policy for every filter of a REQ runs before any live
++// listener is registered and before any stored query runs, so a rejected REQ
++// never exposes a listener, even transiently.
++func (rl *Relay) checkRequest(ctx context.Context, filter nostr.Filter) error {
+ 	// then check if we'll reject this filter (we apply this after overwriting
+ 	// because we may, for example, remove some things from the incoming filters
+ 	// that we know we don't support, and then if the end result is an empty
+@@ -18,10 +23,19 @@ func (rl *Relay) handleRequest(ctx context.Context, id string, ws *WebSocket, fi
+ 			return errors.New(nostr.NormalizeOKMessage(msg, "blocked"))
+ 		}
+ 	}
++	return nil
++}
+ 
++// queryStoredEvents dispatches one filter's stored events as they're loaded
++// from the database. Bahia patch (listener-before-query): it runs after the
++// filter's live listener was registered, so an event saved while the query
++// runs is broadcast to the subscription instead of falling into a gap where
++// it is neither replayed nor broadcast. An event that ends up both replayed
++// and broadcast is a duplicate the client deduplicates.
++func (rl *Relay) queryStoredEvents(ctx context.Context, id string, ws *WebSocket, filter nostr.Filter) {
+ 	if filter.LimitZero {
+ 		// don't do any queries, just subscribe to future events
+-		return nil
++		return
+ 	}
+ 
+ 	// run the function to query events
+@@ -32,8 +46,6 @@ func (rl *Relay) handleRequest(ctx context.Context, id string, ws *WebSocket, fi
+ 			}
+ 		}
+ 	}
+-
+-	return nil
+ }
+ 
+ func (rl *Relay) handleCountRequest(ctx context.Context, ws *WebSocket, filter nostr.Filter) uint32 {

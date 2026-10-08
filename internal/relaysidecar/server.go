@@ -144,9 +144,12 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	fanout.install(relay)
 
 	relay.OnEvent = pol.acceptEvent
-	// Khatru runs a REQ filter's stored query before it registers the live
-	// listener. beginRequest starts buffering live matches before the query, so
-	// an event saved in between is still delivered (see pendingListener).
+	// Bahia's vendored khatru registers a REQ's live listener before the stored
+	// query runs (BAHIA_PATCHES.md, listener-before-query), so an event saved
+	// while the query runs is broadcast; beginRequest starts buffering live
+	// matches when the filter is accepted, and the drain at the end of the query
+	// deduplicates them against the replay, so every event is delivered exactly
+	// once (see pendingListener).
 	relay.OnRequest = func(ctx context.Context, filter nostr.Filter) (bool, string) {
 		if reject, msg := pol.acceptFilter(ctx, filter); reject {
 			return reject, msg

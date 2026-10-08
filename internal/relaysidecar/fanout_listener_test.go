@@ -37,14 +37,21 @@ func TestSidecarREQGapEventSavedDuringStoredQueryIsDelivered(t *testing.T) {
 	relay.QueryStored = func(qctx context.Context, filter nostr.Filter) iter.Seq[nostr.Event] {
 		events := storedQuery(qctx, filter)
 		return func(yield func(nostr.Event) bool) {
+			gap := khatru.GetSubscriptionID(qctx) == "gap"
+			inside := false
 			for event := range events {
+				if gap && !inside {
+					inside = true
+					// Hold inside the stored query, after its first event: the
+					// listener is registered (listener-before-query) and the
+					// fanout is buffering live matches, while the query's
+					// replay and its deduplicating drain are still ahead.
+					close(queried)
+					<-release
+				}
 				if !yield(event) {
 					return
 				}
-			}
-			if khatru.GetSubscriptionID(qctx) == "gap" {
-				close(queried) // the gap: query finished, listener not yet added
-				<-release
 			}
 		}
 	}
@@ -192,9 +199,10 @@ func TestSidecarOverflowCloseRemovesListenerAndCounts(t *testing.T) {
 }
 
 // TestLiveFanoutRemovesListenersOfClosedREQs: a listener khatru adds for a REQ
-// that was already closed (its context cancelled while the stored query ran),
-// or for a later filter of a subscription that already overflowed, is removed
-// server-side and never delivers. A REQ whose gap buffer overflowed is CLOSED.
+// that was already closed (its context cancelled before or while the stored
+// query ran), or for a later filter of a subscription that already overflowed,
+// is removed server-side and never delivers. A REQ whose buffer overflowed is
+// CLOSED when its stored query ends.
 func TestLiveFanoutRemovesListenersOfClosedREQs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), fanoutTestTimeout)
 	defer cancel()
@@ -232,14 +240,16 @@ func TestLiveFanoutRemovesListenersOfClosedREQs(t *testing.T) {
 	f.listenerAdded(ws, 7, "closed", kind1)
 	require.Equal(t, []int{7}, nextRemoval())
 
-	// 2. the gap buffer overflowed: CLOSED, then its listener is removed
+	// 2. the gap buffer overflowed: the drain at the end of the stored query
+	//    CLOSES the subscription, then its listener is removed
 	full := &pendingListener{ctx: ctx, filter: kind1}
 	setPending("gapfull", full)
+	f.listenerAdded(ws, 8, "gapfull", kind1) // listener-before-query: live first
 	for i := range 3 {
 		event := fanoutTestEvent(1, i)
-		f.dispatch(event)
+		f.dispatch(event) // buffered, not queued; the third overflows
 	}
-	f.listenerAdded(ws, 8, "gapfull", kind1)
+	f.finishPending(ws, "gapfull", full) // the stored query ends
 	closed, ok := nextFrame(t, ctx, frames).(nostr.ClosedEnvelope)
 	require.True(t, ok)
 	require.Equal(t, "gapfull", closed.SubscriptionID)

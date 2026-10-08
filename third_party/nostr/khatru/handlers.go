@@ -321,10 +321,20 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 					// expose subscription id in the context
 					reqCtx = context.WithValue(reqCtx, subscriptionIdKey, env.SubscriptionID)
 
-					// handle each filter separately -- dispatching events as they're loaded from databases
+					// Bahia patch (listener-before-query, see BAHIA_PATCHES.md and
+					// upstream-patches/0004): three phases per REQ. First run the
+					// acceptance policy for every filter, so a rejected REQ never
+					// registers a listener. Then register every live listener, and
+					// only then run the stored queries: khatru handles each message
+					// on its own goroutine, so with the old query-then-listen order
+					// an event saved while a (possibly slow) query ran was neither
+					// replayed nor broadcast, and a live subscriber missed it
+					// forever even though its publisher got OK true. A CLOSE
+					// arriving during a query now also finds the listener and
+					// removes it. An event both replayed and broadcast is a
+					// duplicate the client deduplicates.
 					for _, filter := range env.Filters {
-						err := rl.handleRequest(reqCtx, env.SubscriptionID, ws, filter)
-						if err != nil {
+						if err := rl.checkRequest(reqCtx, filter); err != nil {
 							// fail everything if any filter is rejected
 							reason := err.Error()
 							if strings.HasPrefix(reason, "auth-required:") {
@@ -333,12 +343,18 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 							ws.WriteJSON(nostr.ClosedEnvelope{SubscriptionID: env.SubscriptionID, Reason: reason})
 							cancelReqCtx(errors.New("filter rejected"))
 							return
-						} else if filter.IDs == nil {
+						}
+					}
+					for _, filter := range env.Filters {
+						if filter.IDs == nil {
 							// a query that is just a bunch of "ids": [...] will not add listeners.
 							// is this a bug? maybe, but I don't think anyone is listening for an ID
 							// that hasn't been published yet anywhere -- if yes we can change later
 							rl.addListener(ws, env.SubscriptionID, filter, cancelReqCtx)
 						}
+					}
+					for _, filter := range env.Filters {
+						rl.queryStoredEvents(reqCtx, env.SubscriptionID, ws, filter)
 					}
 
 					ws.WriteJSON(nostr.EOSEEnvelope{SubscriptionID: env.SubscriptionID})

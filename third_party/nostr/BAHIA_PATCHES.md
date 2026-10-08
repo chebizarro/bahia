@@ -81,10 +81,11 @@ and, per NIP-01, don't send `CLOSE` for a subscription the relay closed.
 
 Test: `khatru/listener_remove_test.go`.
 
-Not patched here (handled in `internal/relaysidecar/fanout.go`): khatru runs
-a filter's stored query before it registers the live listener, which leaves a
-gap. The sidecar closes it with `OnRequest` + `QueryStored` hooks. A natural
-upstream fix is to register the listener, or buffer, before `QueryStored`.
+Since patched (see "khatru: listener-before-query" below): khatru used to run
+a filter's stored query before it registered the live listener, which left a
+gap. The sidecar closed it for itself with `OnRequest` + `QueryStored` hooks,
+and the vendored khatru now registers the listener before the query; the
+sidecar's hooks deduplicate the resulting replay/broadcast overlap.
 
 ## nip77: NEG-ERR label (bahia-irsry.9.1)
 
@@ -358,30 +359,76 @@ No dedicated test: the existing `TestCountAfterTeardownIsDropped` covers the
 post-teardown path, and `TestCount` (upstream, needs a public relay) covers the
 happy path. The race window is eliminated by construction.
 
-## khatru: listener-before-query (NOT APPLIED — bahia-irsry.26)
+## khatru: listener-before-query (APPLIED — bahia-irsry.26, bahia-admission-ci-flakes)
 
-Khatru registers a REQ's live listener AFTER its stored query, leaving a gap
-where a client CLOSE finds nothing to remove and the listener lingers until
-disconnect. The natural upstream fix is to register the listener before the
-stored query, which this wave prototyped and tested.
+Khatru handled each websocket message on its own goroutine and registered a
+REQ's live listener AFTER the filter's stored query ran. Two consequences:
 
-**Not applied to Bahia's vendored copy**: the relay sidecar's `pendingListener`
-mechanism deduplicates events delivered by both the stored query and the live
-listener, and it assumes the original ordering (listener after query). Changing
-khatru to listener-before-query causes duplicates (the stored query returns
-an event, and the now-active live listener delivers it again during the query).
-Adapting the sidecar would require a per-subscription stored-ID set with
-cross-goroutine synchronization, which is complex and error-prone.
+- **Permanent event loss (production bug)**: an event saved while the query
+  ran was neither replayed (the query had passed its point) nor broadcast (the
+  listener did not exist yet). The publisher got OK true; a live subscriber
+  never saw the event. On a 2-vCPU CI host the REQ goroutine is preempted
+  between the query and `addListener` for hundreds of milliseconds, which is
+  exactly when a publish racing the REQ lands. This surfaced as
+  `TestRelayPoolPagesPastNIP11MaxLimit/limit_beyond_the_history` hanging until
+  the package deadline: the event published after the paged answer was stored
+  (publish returned Accepted) but never reached the merged subscription,
+  because the pool's live follow-up REQ was being processed while the publish
+  landed in the gap. Every bare-khatru relay had this window; the relay
+  sidecar had closed it for itself with the `pendingListener` hooks (below),
+  but any other khatru user — including Bahia's test relays and any service
+  embedding khatru directly — was exposed.
+- **CLOSE during a slow query** found no listener to remove, so it lingered
+  until disconnect.
 
-The sidecar already handles both issues:
-- **Gap closing**: `beginRequest` / `trackStored` / `listenerAdded` buffer and
-  deduplicate events that match during the gap.
-- **CLOSE during query**: `listenerAdded` checks `pending.ctx.Err()` and
-  schedules removal if the REQ was already canceled.
+The fix (prepared as `upstream-patches/0004-khatru-listener-before-query.patch`,
+extended here to be policy-first) restructures the REQ branch of
+`khatru/handlers.go` into three phases, and splits `handleRequest`
+(`khatru/responding.go`) into `checkRequest` + `queryStoredEvents`:
 
-An upstream patch for listener-before-query is prepared in
-`third_party/nostr/upstream-patches/` for submission when the sidecar's
-dedup can be simplified, or when upstream adopts it.
+1. run the `OnRequest` acceptance policy for **every** filter, so a rejected
+   REQ never registers a listener — not even transiently. (The originally
+   prepared patch registered listeners before the policy ran, which would have
+   briefly exposed a live listener for a filter the read-auth sidecar is about
+   to refuse with `auth-required:`.)
+2. register every live listener (`addListener`), including the
+   `cancelReqCtx` binding, exactly as before, still skipping ids-only filters.
+3. run every stored query (`queryStoredEvents`), then write EOSE.
+
+An event saved during a query is now broadcast to the registered listener and
+may also be emitted by the query's replay: clients deduplicate duplicates per
+NIP-01 (Bahia's `RelayPool` merged subscriptions deduplicate by event id).
+
+**Relay sidecar adaptation** (`internal/relaysidecar/fanout.go`): the
+`pendingListener` dedup assumed the old ordering (it drained in
+`OnListenerAdded`, i.e. after the query). With listener-before-query the drain
+moved to the end of the query itself:
+
+- `beginRequest` (from `OnRequest`, phase 1) opens the buffer as before, and
+  now skips `LimitZero` filters, which run no query and would never drain.
+- `dispatch` gives the buffer precedence while a REQ's query runs: a match is
+  buffered instead of queued, so the drain can deduplicate it against the
+  replay (`recordStored`/`unseen`), keeping delivery exactly-once.
+- `trackStored` drains via `finishPending` when the query's iterator ends
+  (including early termination on a failed websocket write or a cancelled
+  context); `listenerAdded` no longer drains, and only registers the live
+  subscription (keeping the cancelled-REQ `scheduleRemoval` guard, which now
+  also covers a CLOSE racing between phase 1 and phase 2).
+- `listenerRemoved` discards a removed subscription's buffer so it can never
+  drain into a later REQ reusing the id.
+
+Tests: `khatru/listener_before_query_bahia_test.go`
+(`TestListenerIsRegisteredBeforeTheStoredQuery` — a `QueryStored` hook
+publishes on a second connection and waits for its OK inside the query window,
+then replays nothing, so delivery is only possible through a listener
+registered before the query; it fails deterministically on the unpatched
+ordering), and the relay sidecar's
+`TestSidecarREQGapEventSavedDuringStoredQueryIsDelivered` (exactly-once
+delivery across replay, buffer and live paths; its hold now sits inside the
+query iteration) plus `TestLiveFanoutRemovesListenersOfClosedREQs` (buffer
+overflow CLOSEs at the drain). End to end, the pool-level
+`TestRelayPoolPagesPastNIP11MaxLimit` exercises the paged-answer follow-up
+race that exposed the bug.
 
 ## NIP-42 AUTH state (bahia-irsry.10.2) — verified
 

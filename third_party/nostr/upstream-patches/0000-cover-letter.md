@@ -40,22 +40,29 @@ is dropped. Move initialization into `PrepareSubscription` via an unexported
 
 ### 0004: khatru listener-before-query
 
-Khatru registers a REQ's live listener AFTER its stored query. A client CLOSE
-arriving during the (possibly slow) query finds nothing to remove, and the
-listener lingers until disconnect. Fix: register all listeners before running
-stored queries; clean up on filter rejection.
+Khatru registers a REQ's live listener AFTER its stored query, and handles
+every message on its own goroutine. An event saved while the query runs is
+neither replayed nor broadcast: a live subscriber misses it forever even
+though its publisher got OK true. A client CLOSE arriving during the (possibly
+slow) query also finds nothing to remove, and the listener lingers until
+disconnect. Fix: run the acceptance policy for every filter first (a rejected
+REQ must never expose a listener, even transiently), then register all
+listeners, then run the stored queries. Events both replayed and broadcast are
+duplicates the client deduplicates, as NIP-01 already allows.
 
-**Status**: NOT applied to Bahia's vendored copy. The relay sidecar's
-`pendingListener` dedup mechanism assumes the original ordering and breaks with
-listener-before-query (stored query results dispatched live during the query
-cause duplicates). Prepared as a standalone patch for upstream submission, where
-the `pendingListener` interaction does not apply.
+**Status**: Applied to Bahia's vendored copy, extended to the policy-first
+three-phase form (see BAHIA_PATCHES.md, "khatru: listener-before-query"). The
+relay sidecar's `pendingListener` dedup was adapted to the new ordering: its
+drain moved from `OnListenerAdded` to the end of the query iterator
+(`finishPending`), keeping delivery exactly-once. Regression test:
+`khatru/listener_before_query_bahia_test.go`.
 
 ## Submission
 
 Wait for upstream activity in `subscription.go` / `relay.go` / `khatru/handlers.go`
 to avoid unnecessary conflicts. Patches 0001–0003 are independent; 0004 depends
-on the server not having its own gap-buffer mechanism.
+on the server not having its own gap-buffer mechanism (Bahia's relay sidecar
+had one; it was adapted to the new ordering when 0004 was applied).
 
 ### 0005: slicestore reads without the lock
 

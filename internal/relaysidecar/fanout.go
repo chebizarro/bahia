@@ -49,13 +49,17 @@ func (s *liveSubscription) matches(event nostr.Event) bool {
 	return false
 }
 
-// pendingListener closes khatru's REQ gap. Khatru runs a filter's stored query
-// first and registers its live listener afterwards, so an event saved in
-// between would be neither replayed nor delivered live. The fanout registers a
-// pendingListener from OnRequest, before the stored query starts, and buffers
-// every live event that matches while the query runs. When khatru adds the
-// listener, the buffered events the stored query did not already emit are
-// queued ahead of any later live event.
+// pendingListener makes a REQ's stored phase exactly-once. Bahia's vendored
+// khatru registers the live listener before the stored query runs (see
+// third_party/nostr/BAHIA_PATCHES.md, listener-before-query), so an event
+// saved while the query runs is broadcast to the subscription and may also be
+// emitted by the query's own replay. The fanout registers a pendingListener
+// from OnRequest, when the filter is accepted, and while it exists dispatch
+// buffers matching events instead of queueing them. When the query's iterator
+// ends, finishPending queues the buffered events the replay did not already
+// emit, ahead of any later live event, so every event is delivered exactly
+// once. The buffer also covers the window between the filter's acceptance and
+// its listener registration.
 type pendingListener struct {
 	ctx    context.Context // the REQ context khatru passes to OnRequest and QueryStored
 	filter nostr.Filter
@@ -237,13 +241,18 @@ func (f *liveFanout) connection(ws *khatru.WebSocket) *liveConnection {
 	return conn
 }
 
-// beginRequest runs from OnRequest after the filter is accepted and before
-// khatru's stored query for it, and starts buffering live matches for the
-// listener khatru will add once the query ends. Khatru processes a REQ's
-// filters one after another, so at most one is pending per subscription id.
+// beginRequest runs from OnRequest after the filter is accepted, before khatru
+// registers its listener and runs its stored query, and starts buffering live
+// matches for the subscription. Khatru checks every filter of a REQ before it
+// queries any, so at most one is pending per subscription id at query time.
 func (f *liveFanout) beginRequest(ctx context.Context, filter nostr.Filter) {
 	if filter.IDs != nil {
 		return // khatru never adds a live listener for an ids filter
+	}
+	if filter.LimitZero {
+		// khatru runs no stored query for a limit-0 filter, so nothing would
+		// ever drain a buffer; the live listener alone delivers every match.
+		return
 	}
 	ws := khatru.GetConnection(ctx)
 	id := khatru.GetSubscriptionID(ctx)
@@ -255,19 +264,60 @@ func (f *liveFanout) beginRequest(ctx context.Context, filter nostr.Filter) {
 	f.connection(ws).pending[id] = &pendingListener{ctx: ctx, filter: filter}
 }
 
-// trackStored records the ids a REQ's stored query emits, so that events
-// buffered by beginRequest that the query also returned aren't sent twice.
+// trackStored records the ids a REQ's stored query emits and drains the REQ's
+// buffer when the query ends, so that events buffered while the query ran
+// that it did not already emit are delivered exactly once. The drain also runs
+// when the consumer stops early (a failed websocket write) or the query ends
+// on a cancelled context.
 func (f *liveFanout) trackStored(ctx context.Context, events iter.Seq[nostr.Event]) iter.Seq[nostr.Event] {
+	ws := khatru.GetConnection(ctx)
+	id := khatru.GetSubscriptionID(ctx)
 	pending := f.pendingFor(ctx)
 	if pending == nil {
 		return events
 	}
 	return func(yield func(nostr.Event) bool) {
+		defer f.finishPending(ws, id, pending)
 		for event := range events {
 			pending.recordStored(event.ID)
 			if !yield(event) {
 				return
 			}
+		}
+	}
+}
+
+// finishPending drains one REQ's buffer at the end of its stored query: what
+// matched while the query ran and was not emitted by the query itself is
+// queued for the now-live subscription. It runs under f.mu, excluding
+// dispatch, so the drained events precede every later live event for the
+// subscription.
+func (f *liveFanout) finishPending(ws *khatru.WebSocket, id string, pending *pendingListener) {
+	if ws == nil || id == "" {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	conn := f.conns[ws]
+	if conn == nil || conn.pending[id] != pending {
+		return // closed or replaced while the query ran
+	}
+	delete(conn.pending, id)
+	sub := conn.subs[id]
+	if sub == nil || sub.state.Load() != subscriptionLive {
+		return // the subscription was CLOSED while its query ran
+	}
+	events, overflowed := pending.unseen()
+	if overflowed {
+		f.overflow(conn, sub, nil)
+		return
+	}
+	for _, event := range events {
+		select {
+		case conn.queue <- liveDelivery{sub: sub, event: event}:
+		default:
+			f.overflow(conn, sub, event)
+			return
 		}
 	}
 }
@@ -290,6 +340,10 @@ func (f *liveFanout) pendingFor(ctx context.Context) *pendingListener {
 	return nil
 }
 
+// listenerAdded registers one filter's live subscription. Bahia's vendored
+// khatru registers listeners before the stored queries run, so the REQ's
+// pendingListener is still waiting for its query here; the drain happens in
+// finishPending when the query's iterator ends, not in this hook.
 func (f *liveFanout) listenerAdded(ws *khatru.WebSocket, ssid int, id string, filter nostr.Filter) {
 	if ws == nil {
 		return
@@ -297,12 +351,11 @@ func (f *liveFanout) listenerAdded(ws *khatru.WebSocket, ssid int, id string, fi
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	conn := f.connection(ws)
-	pending := conn.pending[id]
-	delete(conn.pending, id)
-	if pending != nil && pending.ctx.Err() != nil {
-		// The REQ was closed while its stored query ran (by our own overflow
-		// CLOSED, a client CLOSE or a replacing REQ), yet khatru still registers
-		// the listener. It must never deliver: remove it.
+	if pending := conn.pending[id]; pending != nil && pending.ctx.Err() != nil {
+		// The REQ was closed before khatru registered its listener (by our own
+		// overflow CLOSED, a client CLOSE or a replacing REQ), yet khatru still
+		// adds it. It must never deliver: drop its buffer and remove it.
+		delete(conn.pending, id)
 		conn.scheduleRemoval(ssid)
 		return
 	}
@@ -316,27 +369,6 @@ func (f *liveFanout) listenerAdded(ws *khatru.WebSocket, ssid int, id string, fi
 		return
 	}
 	sub.filters[ssid] = filter
-	if pending == nil {
-		return
-	}
-	// Queue what matched during the stored query. dispatch is excluded by mu,
-	// so these precede every later live event for the subscription.
-	events, overflowed := pending.unseen()
-	if overflowed {
-		f.overflow(conn, sub, nil)
-		return
-	}
-	for _, event := range events {
-		if !filter.Matches(*event) {
-			continue // the pending entry belonged to a concurrent REQ reusing the id
-		}
-		select {
-		case conn.queue <- liveDelivery{sub: sub, event: event}:
-		default:
-			f.overflow(conn, sub, event)
-			return
-		}
-	}
 }
 
 func (f *liveFanout) listenerRemoved(ws *khatru.WebSocket, ssid int, id string, _ nostr.Filter) {
@@ -356,43 +388,46 @@ func (f *liveFanout) listenerRemoved(ws *khatru.WebSocket, ssid int, id string, 
 	delete(sub.filters, ssid)
 	if len(sub.filters) == 0 {
 		// Queued deliveries for this subscription are discarded by the writer.
-		// A later REQ that reuses the id gets a fresh entry.
+		// A later REQ that reuses the id gets a fresh entry, and a buffer the
+		// closed REQ left behind must never drain into it.
 		sub.state.Store(subscriptionRemoved)
 		delete(conn.subs, id)
+		delete(conn.pending, id)
 	}
 }
 
-// dispatch queues event for every live subscription it matches, and buffers it
-// for every REQ whose stored query is still running. It never blocks, so the
-// publisher's OK is not held up by any subscriber.
+// dispatch queues event for every live subscription it matches. While a REQ's
+// stored query runs, its buffer takes precedence for the events that match
+// its filter: they are buffered instead of queued, so the drain at the end of
+// the query can deduplicate them against the query's own replay and deliver
+// each event exactly once. dispatch never blocks, so the publisher's OK is not
+// held up by any subscriber.
 func (f *liveFanout) dispatch(event nostr.Event) {
 	shared := &event
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	for _, conn := range f.conns {
-		var reached map[string]struct{}
+		var buffered map[string]struct{}
+		for id, pending := range conn.pending {
+			if pending.filter.Matches(event) {
+				pending.buffer(shared, f.queueSize)
+				if buffered == nil {
+					buffered = make(map[string]struct{}, 1)
+				}
+				buffered[id] = struct{}{}
+			}
+		}
 		for _, sub := range conn.subs {
 			if sub.state.Load() != subscriptionLive || !sub.matches(event) {
 				continue
 			}
-			if len(conn.pending) > 0 {
-				if reached == nil {
-					reached = make(map[string]struct{}, 1)
-				}
-				reached[sub.id] = struct{}{}
+			if _, held := buffered[sub.id]; held {
+				continue // its query is running: the drain delivers it once
 			}
 			select {
 			case conn.queue <- liveDelivery{sub: sub, event: shared}:
 			default:
 				f.overflow(conn, sub, shared)
-			}
-		}
-		for id, pending := range conn.pending {
-			if _, done := reached[id]; done {
-				continue // an earlier filter of the same REQ already has it live
-			}
-			if pending.filter.Matches(event) {
-				pending.buffer(shared, f.queueSize)
 			}
 		}
 	}
