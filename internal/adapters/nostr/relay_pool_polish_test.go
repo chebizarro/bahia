@@ -104,14 +104,23 @@ func TestRelayPoolGaveUpAfterEOSEWhenTheBudgetRunsOut(t *testing.T) {
 // with the test's own message rather than the binary's panic, and only by
 // test end when there is no deadline. Every wait in the tests that use it is
 // on a protocol signal, so no fixed wall-clock budget is needed, and a loaded
-// package run (-race, -count=N, a busy host) cannot consume one.
+// package run (-race, -count=N, a busy host) cannot consume one. A per-test
+// cap keeps one hung test from burning the whole package budget: these tests
+// take well under a second even loaded, so the cap only ever fires on a hang,
+// and the remaining tests keep a live deadline instead of failing instantly
+// on an expired one.
 func testDeadlineContext(t *testing.T) context.Context {
 	t.Helper()
-	deadline, ok := t.Deadline()
-	if !ok {
+	const perTestCap = 2 * time.Minute
+	deadline := time.Now().Add(perTestCap)
+	if testDeadline, ok := t.Deadline(); ok {
+		if capped := testDeadline.Add(-5 * time.Second); capped.Before(deadline) {
+			deadline = capped
+		}
+	} else {
 		return t.Context()
 	}
-	ctx, cancel := context.WithDeadline(t.Context(), deadline.Add(-5*time.Second))
+	ctx, cancel := context.WithDeadline(t.Context(), deadline)
 	t.Cleanup(cancel)
 	return ctx
 }

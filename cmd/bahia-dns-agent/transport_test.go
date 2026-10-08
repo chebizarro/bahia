@@ -210,15 +210,24 @@ func (f *agentFixture) requestHealth(t *testing.T, requestID string, relays ...*
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
+	requestErr := make(chan error, 1)
 	t.Cleanup(func() { cancel(); <-done; client.Close() })
 	go func() {
 		defer close(done)
-		_, _ = client.Request(ctx, protocol.MethodHealth, protocol.HealthParams{Schema: protocol.Schema}, nostr.Tags{{"d", requestID}}, nil)
+		_, err := client.Request(ctx, protocol.MethodHealth, protocol.HealthParams{Schema: protocol.Schema}, nostr.Tags{{"d", requestID}}, nil)
+		if err != nil {
+			requestErr <- err
+		}
 	}()
 	select {
 	case <-relays[0].wraps:
 	case <-time.After(agentTestTimeout):
-		t.Fatal("request wrap was not stored")
+		select {
+		case err := <-requestErr:
+			t.Fatalf("request wrap was not stored: the request failed: %v", err)
+		default:
+			t.Fatal("request wrap was not stored")
+		}
 	}
 }
 

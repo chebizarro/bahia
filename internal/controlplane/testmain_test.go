@@ -1,36 +1,19 @@
-package app
+package controlplane
 
 import (
-	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/openagentsinc/bahia/internal/nostrout"
 )
 
-// testLocalStoreDir holds the local Nostr event store of every App the tests
-// build, so the default relative path never lands in the source tree.
-var testLocalStoreDir string
-
+// TestMain isolates this package's tests from the production outbound
+// admission budgets: tests here publish through relay pools that share the
+// process-wide controller, whose per-process budgets a test binary can
+// exhaust and turn into order-dependent refusals.
 func TestMain(m *testing.M) {
-	// Isolate the package's tests from the production outbound admission
-	// budgets: Apps built here publish through relay pools that share the
-	// process-wide controller (see generousTestAdmission below).
 	nostrout.InitDefault(generousTestAdmission())
-	dir, err := os.MkdirTemp("", "bahia-app-test-")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	testLocalStoreDir = dir
-	code := m.Run()
-	_ = os.RemoveAll(dir)
-	os.Exit(code)
-}
-
-func testLocalStorePath() string {
-	return filepath.Join(testLocalStoreDir, "daemon.bolt")
+	os.Exit(m.Run())
 }
 
 // generousTestAdmission is this test binary's process-wide outbound admission

@@ -367,13 +367,14 @@ func fastRelayBackoff() *nostradapter.Backoff {
 	return &nostradapter.Backoff{Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2}
 }
 
-// generousTestAdmission keeps unrelated SoulFactory tests from sharing the
-// process-wide production budget, which would make them order-dependent.
+// generousTestAdmissionConfig keeps unrelated SoulFactory tests from sharing
+// the process-wide production budget, which would make them order-dependent.
 // Admission behavior is still exercised for real; tests that assert budgets
-// inject tight controllers.
-func generousTestAdmission() *nostrout.Admission {
+// inject tight controllers. TestMain installs it as the process default for
+// reactors and clients built without an explicit controller.
+func generousTestAdmissionConfig() nostrout.Config {
 	generous := nostrout.PurposeBudget{RatePerMinute: 600_000, Burst: 100_000}
-	return nostrout.New(nostrout.Config{
+	return nostrout.Config{
 		Aggregate: generous,
 		PurposeBudgets: map[nostrout.Purpose]nostrout.PurposeBudget{
 			nostrout.PurposePriority: generous,
@@ -386,7 +387,11 @@ func generousTestAdmission() *nostrout.Admission {
 		RelayWirePriority:     generous,
 		MaxActivePublications: 100_000,
 		MaxRelayIdentities:    100_000,
-	})
+	}
+}
+
+func generousTestAdmission() *nostrout.Admission {
+	return nostrout.New(generousTestAdmissionConfig())
 }
 
 // newRelayClientFromEndpoints returns a RelayClient over the fake relays.
