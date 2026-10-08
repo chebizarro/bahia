@@ -587,7 +587,9 @@ func TestRelayPoolReconfigureRelayURLsReplacesChangedTopology(t *testing.T) {
 }
 
 func newRelayPoolWithManagedRelays(urls ...string) *RelayPool {
-	pool := NewRelayPool(urls, zap.NewNop())
+	// A fresh generous controller per pool: tests that script rate-limited
+	// CLOSEDs or OKs must not open the shared breaker for later cases.
+	pool := NewRelayPool(urls, zap.NewNop(), WithOutboundAdmission(newIsolatedTestAdmission()))
 	for _, url := range pool.URLs() {
 		pool.relays[url] = &managedRelay{url: url}
 	}

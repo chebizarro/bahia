@@ -2692,11 +2692,17 @@ func (p *RelayPool) buildRelayOptions(relayURL string) nostr.RelayOptions {
 		}
 	}}
 	if p.hasAuthSigner() {
+		authSigner := p.authSignerFor(relayURL)
 		opts.AuthHandler = func(ctx context.Context, _ *nostr.Relay, event *nostr.Event) error {
-			return p.signAuthEvent(ctx, event)
+			return authSigner(ctx, event)
 		}
 		opts.AuthResultHandler = func(_ *nostr.Relay, err error) {
 			if err != nil {
+				if reason, ok := publishRejectionReason(err); ok && IsRateLimitedReason(reason) {
+					// A rate-limited AUTH answer is relay-wide back-pressure
+					// feedback: it opens the shared publication breaker.
+					p.outboundAdmission.ReportRateLimited()
+				}
 				p.logger.Warn("NIP-42 AUTH failed", zap.String("relay", relayURL), zap.Error(err))
 				p.recordRelayError(relayURL, "auth-failed: "+err.Error())
 				return
@@ -2722,6 +2728,21 @@ func (p *RelayPool) signAuthEvent(ctx context.Context, event *nostr.Event) error
 	}
 }
 
+// authSignerFor returns the NIP-42 signer for one relay. The library calls
+// the signer immediately before it writes the AUTH frame, so this is where
+// the frame takes its admission permit — one priority-lane token and one of
+// the relay's reserved priority wire tokens — and a refusal (budget, kill
+// switch, open breaker) fails the AUTH attempt closed with no frame on the
+// wire. Joined AUTH attempts do not re-sign and are not charged twice.
+func (p *RelayPool) authSignerFor(relayURL string) func(context.Context, *nostr.Event) error {
+	return func(ctx context.Context, event *nostr.Event) error {
+		if err := p.outboundAdmission.AdmitAuth(ctx, relayURL); err != nil {
+			return err
+		}
+		return p.signAuthEvent(ctx, event)
+	}
+}
+
 // authenticateLiveRelay completes NIP-42 on relay, the connection that just
 // answered "auth-required:" (mr's current one when nil).
 func (p *RelayPool) authenticateLiveRelay(ctx context.Context, mr *managedRelay, relay *nostr.Relay) error {
@@ -2734,7 +2755,7 @@ func (p *RelayPool) authenticateLiveRelay(ctx context.Context, mr *managedRelay,
 			return err
 		}
 	}
-	return relay.Auth(ctx, p.signAuthEvent)
+	return relay.Auth(ctx, p.authSignerFor(mr.url))
 }
 
 // authBarrierFilter asks for nothing. The relay's answer to it (EOSE or
@@ -2794,7 +2815,7 @@ func (p *RelayPool) authenticateRelayAhead(ctx context.Context, mr *managedRelay
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	}
-	err = relay.Auth(ctx, p.signAuthEvent)
+	err = relay.Auth(ctx, p.authSignerFor(mr.url))
 	switch {
 	case err == nil:
 		return nil
@@ -2839,7 +2860,7 @@ func (p *RelayPool) AuthenticateRelay(ctx context.Context, relayURL string) erro
 	}
 
 	p.logger.Info("sending NIP-42 AUTH", zap.String("relay", relayURL))
-	return relay.Auth(ctx, p.signAuthEvent)
+	return relay.Auth(ctx, p.authSignerFor(relayURL))
 }
 
 // Close disconnects all relays, subscriptions, and reconnection work.

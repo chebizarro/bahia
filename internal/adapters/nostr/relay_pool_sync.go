@@ -8,6 +8,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip77"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"go.uber.org/zap"
 )
 
@@ -152,11 +153,31 @@ func (p *RelayPool) negentropySyncRelay(ctx context.Context, relayURL string, fi
 	return err
 }
 
+// maxNegentropyUploadChunk is how many events one paced admission operation
+// declares for a NIP-77 upload. It matches the controller's per-operation
+// ceiling; a larger reconcile is uploaded as consecutive operations, and a
+// session whose context ends first simply resumes at the next one — NIP-77
+// reconciliation is convergent.
+const maxNegentropyUploadChunk = 2048
+
 // moveNegentropyItems copies the events whose ids a NIP-77 session reports
-// missing on one side from the other side, in batches. Unlike
-// nip77.SyncEventsFromIDs it returns when ctx ends: a refused or abandoned
-// session never closes dir.Items.
+// missing on one side from the other side. The download direction (To is the
+// local target) publishes straight into the local pipeline; the upload
+// direction (To is the session's raw relay connection) crosses the outbound
+// admission gateway like every other EVENT frame.
 func (p *RelayPool) moveNegentropyItems(ctx context.Context, dir nip77.Direction) {
+	if relay, ok := dir.To.(*nostr.Relay); ok {
+		p.uploadNegentropyItems(ctx, dir, relay)
+		return
+	}
+	p.downloadNegentropyItems(ctx, dir)
+}
+
+// downloadNegentropyItems stores events the relay has and the local store
+// lacks, in batches. Unlike nip77.SyncEventsFromIDs it returns when ctx ends:
+// a refused or abandoned session never closes dir.Items. dir.To is the local
+// sync target — never a relay — so no outbound frame is written here.
+func (p *RelayPool) downloadNegentropyItems(ctx context.Context, dir nip77.Direction) {
 	batch := make([]nostr.ID, 0, negentropyFetchBatch)
 	seen := make(map[nostr.ID]struct{})
 	flush := func() {
@@ -191,4 +212,89 @@ func (p *RelayPool) moveNegentropyItems(ctx context.Context, dir nip77.Direction
 			}
 		}
 	}
+}
+
+// uploadNegentropyItems publishes local-only events to the session's relay
+// through the outbound admission gateway: the missing ids are collected
+// first, then uploaded as consecutive bounded bulk operations, so a large
+// reconcile is paced by the bulk lane and can never burst the aggregate or
+// the relay's wire budget. Every frame is charged immediately before it is
+// written on the session connection, and every outcome feeds the shared
+// breaker and receipt cache. The kill switch, an open circuit, and the
+// session context interrupt the upload; the events stay local and the next
+// session resumes where this one stopped.
+func (p *RelayPool) uploadNegentropyItems(ctx context.Context, dir nip77.Direction, relay *nostr.Relay) {
+	ids := make([]nostr.ID, 0, negentropyFetchBatch)
+	seen := make(map[nostr.ID]struct{})
+	for id := range dir.Items {
+		if ctx.Err() != nil {
+			return
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	for start := 0; start < len(ids); start += maxNegentropyUploadChunk {
+		if ctx.Err() != nil {
+			return
+		}
+		chunk := ids[start:min(start+maxNegentropyUploadChunk, len(ids))]
+		op, err := p.outboundAdmission.BeginOperation(ctx, nostrout.OperationSpec{MaxEvents: len(chunk)})
+		if err != nil {
+			p.logger.Warn("negentropy upload refused by outbound admission",
+				zap.String("relay", relay.URL),
+				zap.Int("events", len(chunk)),
+				zap.Error(err))
+			return
+		}
+		p.uploadNegentropyChunk(ctx, op, dir.From, relay, chunk)
+		op.Close()
+	}
+}
+
+// uploadNegentropyChunk paces one declared operation's events through the
+// gateway, querying the local side in fetch batches.
+func (p *RelayPool) uploadNegentropyChunk(ctx context.Context, op *nostrout.Operation, from nostr.Querier, relay *nostr.Relay, chunk []nostr.ID) {
+	for start := 0; start < len(chunk); start += negentropyFetchBatch {
+		if ctx.Err() != nil {
+			return
+		}
+		batch := chunk[start:min(start+negentropyFetchBatch, len(chunk))]
+		for ev := range from.QueryEvents(nostr.Filter{IDs: batch}) {
+			if err := p.publishAdmittedToSessionRelay(ctx, op, relay, ev); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				p.logger.Debug("negentropy upload rejected",
+					zap.String("relay", relay.URL),
+					zap.String("event_id", ev.ID.Hex()),
+					zap.Error(err))
+			}
+		}
+	}
+}
+
+// publishAdmittedToSessionRelay writes one EVENT frame on a NIP-77 session
+// connection under the operation's bulk permit and the relay's wire budget,
+// with the same receipt and breaker accounting as a pool publication.
+func (p *RelayPool) publishAdmittedToSessionRelay(ctx context.Context, op *nostrout.Operation, relay *nostr.Relay, ev nostr.Event) error {
+	pub, err := op.Begin(ctx, ev, []string{relay.URL})
+	if err != nil {
+		return err
+	}
+	defer pub.Close()
+	if !pub.NeedsRelay(relay.URL) {
+		return nil // this relay already accepted this exact signed event
+	}
+	if err := pub.BeforeAttempt(ctx, relay.URL); err != nil {
+		return err
+	}
+	err = publishOnRelay(relay, ctx, ev)
+	pub.Observe(nostrout.ResultFromPublishError(relay.URL, err))
+	return err
 }

@@ -343,7 +343,7 @@ func TestRelayPoolNegentropyAuthenticates(t *testing.T) {
 	local := wrappers.StorePublisher{Store: &slicestore.SliceStore{}, MaxLimit: 100}
 	require.NoError(t, local.Init())
 	var authOK atomic.Int32
-	pool := NewRelayPool([]string{relay.url}, zap.NewNop(), WithAuthSignFunc(func(_ context.Context, event *gonostr.Event) error {
+	pool := NewRelayPool([]string{relay.url}, zap.NewNop(), WithOutboundAdmission(newIsolatedTestAdmission()), WithAuthSignFunc(func(_ context.Context, event *gonostr.Event) error {
 		authOK.Add(1)
 		return event.Sign(secret)
 	}))

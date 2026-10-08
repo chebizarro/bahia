@@ -13,22 +13,38 @@ controller immediately before every frame:
 | Gateway | Traffic |
 |---|---|
 | `RelayPool.PublishWithResults` / `PublishToRelaysWithResults` | projections and canonical-first publishes, control-plane results and intent statuses, DNS requests and the standalone DNS agent health publisher, outbox delivery and redelivery, migrations and imports, HiveCI/Gitea journals, release and telemetry adapters, Loom, SoulFactory relay clients (publications, Concord invites, rekeys), and the Signet management plane |
+| RelayPool NIP-42 AUTH (`authSignerFor`) | every AUTH frame from every connection: the pool's AuthHandler, publish-path AUTH retries, `AuthenticateRelay`/`AuthenticateRelays`, inbound-sync re-AUTH, NIP-77 session connections, and the Signet management pool |
+| NIP-77 upload (`uploadNegentropyItems`) | local-only events a negentropy reconcile pushes to a relay, paced through bounded bulk operations on the session connection |
 | `nostrout.Bunker` | every NIP-46 signer RPC (the Signet client and its per-agent bunkers, SoulFactory enrollment verifiers) |
 
-NIP-42 AUTH frames are not EVENT publications and are not budgeted, but the
-EVENT frame an AUTH retry resends is charged a second per-relay wire token.
+A NIP-42 AUTH frame takes its own permit immediately before the library
+writes it: one priority-lane token and one of the relay's reserved priority
+wire tokens (`AdmitAuth`). AUTH belongs to the reserved priority share
+because it unlocks delivery of exactly the traffic that share protects —
+inbox relays serve gift-wrapped operator results only to their authenticated
+recipient — and its bounded burst caps AUTH storms from relays that
+re-challenge every connection. A refused permit fails the AUTH attempt
+closed; the publish or subscription surfaces a retryable authentication
+failure. A rate-limited AUTH answer feeds the shared breaker like any other
+rate-limit feedback. The EVENT frame an AUTH retry resends is charged a
+second per-relay wire token. REQ, CLOSE and COUNT frames are reads and are
+not publications.
 
 Standalone Bahia-derived agents (for example `bahia-dns-agent`) publish
 through the same relay-pool gateway and get the same bounded process default.
 
-CI enforces this with a zero-bypass type-aware ratchet
+CI enforces this with a zero-bypass, frame-level type-aware ratchet
 (`internal/archtest/relay_publish_test.go`, baseline
-`internal/archtest/testdata/relay_publish.baseline`): any use of a `Publish*`
-function or method from `fiatjaf.com/nostr` or `cascadia-go` — call, method
-value, or method expression, under any import alias — and any NIP-46 client
-symbol outside `internal/nostrout/bunker.go` fails the build. The baseline is
-empty and must stay empty. Do not widen the owners; route new traffic through
-the gateway.
+`internal/archtest/testdata/relay_publish.baseline`): any production use of a
+`Publish*` function or method from `fiatjaf.com/nostr` or `cascadia-go`
+(including through the `nostr.Publisher` interfaces), `(*Relay).Auth`, the
+raw frame writers `(*Relay).Write`/`WriteWithError`, raw websocket
+dials/writes, NIP-46 client symbols, or NIP-77 session helpers must be an
+exact approved declaration site, and every `(*Relay).Auth` call must
+provably pass the admission-wrapped signer. The baseline is empty and must
+stay empty; stale allowlist entries fail. Do not widen the allowlist; route
+new traffic through the gateway. Reads (REQ/CLOSE/COUNT) are covered by the
+`relay_subscribe` ratchet instead.
 
 ## Budgets
 
@@ -92,11 +108,15 @@ admitted before a newer rate limit cannot close that newer circuit.
 
 ## Multi-event operations
 
-Concord rotations and Direct Invite batches are admitted as one bounded
-operation before their first irreversible step (the custody write). Once
-active, their events are paced through the bulk lane and wait for an open
-circuit to close, instead of failing halfway because the operation is larger
-than a burst.
+Concord rotations, Direct Invite batches, and NIP-77 reconcile uploads are
+admitted as one bounded operation before their first irreversible step (the
+custody write for a rotation; the first uploaded frame for a reconcile).
+Once active, their events are paced through the bulk lane and wait for an
+open circuit to close, instead of failing halfway because the operation is
+larger than a burst. A negentropy upload larger than one operation's 2048
+event ceiling continues in consecutive operations, and a session whose
+timeout ends first simply resumes at the next session — NIP-77
+reconciliation is convergent.
 
 - One operation is active per process; up to 8 wait in FIFO order for at most
   30 seconds, then fail with `queue full` or `wait expired`.
@@ -154,9 +174,9 @@ Do not use the kill switch as ordinary flow control.
 The `nostr_outbound_admission` health check fails while the kill switch is
 active and warns while the breaker is open or after budget rejections. Its
 content-free details include attempted, admitted, budget/circuit/kill-switch/
-in-flight/capacity/queue rejections, wire attempts and rejections, opaque
-(NIP-46) admissions, operation state, active publications, and relay
-rate-limit responses. It never reports event bodies, tags, keys, or relay
+in-flight/capacity/queue rejections, wire attempts and rejections, AUTH
+admissions, opaque (NIP-46) admissions, operation state, active
+publications, and relay rate-limit responses. It never reports event bodies, tags, keys, or relay
 credentials. The standalone DNS agent reports the same counters in its
 `/healthz` payload under `outbound_admission`.
 

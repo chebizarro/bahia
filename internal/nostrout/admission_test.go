@@ -771,3 +771,68 @@ func TestReportRateLimitedOpensSharedBreaker(t *testing.T) {
 	_, err := a.Begin(context.Background(), signedEvent(t, 1), []string{relayA})
 	require.ErrorIs(t, err, ErrCircuitOpen, "CLOSED/NOTICE rate-limit feedback must gate publications")
 }
+
+// TestAdmitAuthStormIsBoundedByPriorityShare: a relay that keeps demanding
+// AUTH (or flaps and re-challenges every connection) cannot pull unbounded
+// AUTH frames — the priority lane and the relay's reserved priority wire
+// share bound the storm, refusals spend nothing, and the frames that are
+// admitted still interleave with priority publications.
+func TestAdmitAuthStormIsBoundedByPriorityShare(t *testing.T) {
+	cfg := testConfig()
+	cfg.PurposeBudgets[PurposePriority] = PurposeBudget{RatePerMinute: 60, Burst: 3}
+	cfg.RelayWirePriority = PurposeBudget{RatePerMinute: 60, Burst: 3}
+	a, clk := newTestAdmission(cfg)
+
+	for i := range 3 {
+		require.NoError(t, a.AdmitAuth(context.Background(), relayA), "auth %d within the reserved burst", i)
+	}
+	err := a.AdmitAuth(context.Background(), relayA)
+	require.ErrorIs(t, err, ErrBudgetExceeded, "the fourth AUTH in the burst window must fail closed")
+	require.Contains(t, err.Error(), "AUTH wire budget")
+	require.Equal(t, uint64(3), a.Metrics().AuthAdmitted)
+	require.Equal(t, uint64(3), a.Metrics().WireAttempts)
+
+	// A refusal spends nothing: after exactly one token refills, one AUTH
+	// and no more fits the window.
+	clk.Advance(time.Second)
+	require.NoError(t, a.AdmitAuth(context.Background(), relayA))
+	require.ErrorIs(t, a.AdmitAuth(context.Background(), relayA), ErrBudgetExceeded)
+
+	// The wire share is per relay: another flapping connection to a second
+	// relay has its own reserved burst, but the shared priority lane is now
+	// spent, so the lane bounds the storm process-wide.
+	require.ErrorIs(t, a.AdmitAuth(context.Background(), relayB), ErrBudgetExceeded)
+}
+
+// TestAdmitAuthFailsClosedOnKillSwitchAndBreaker: the AUTH permit obeys the
+// process-wide gates before any I/O, like every other frame.
+func TestAdmitAuthFailsClosedOnKillSwitchAndBreaker(t *testing.T) {
+	a, _ := newTestAdmission(testConfig())
+	var nilAdmission *Admission
+	require.ErrorIs(t, nilAdmission.AdmitAuth(context.Background(), relayA), ErrNotConfigured)
+	require.ErrorIs(t, a.AdmitAuth(context.Background(), ""), ErrNoDestinations)
+
+	a.ReportRateLimited()
+	require.ErrorIs(t, a.AdmitAuth(context.Background(), relayA), ErrCircuitOpen)
+
+	dir := t.TempDir()
+	path := dir + "/stop"
+	require.NoError(t, os.WriteFile(path, []byte("stop"), 0o600))
+	killed := newWithClock(Config{KillSwitchFile: path}, newFakeClock())
+	require.ErrorIs(t, killed.AdmitAuth(context.Background(), relayA), ErrKillSwitch)
+}
+
+// TestAdmitAuthCompetesWithPriorityPublications: AUTH frames draw from the
+// same reserved priority share as tombstones and gift wraps, so an AUTH
+// storm cannot starve into existence — and cannot be starved by — unbounded
+// traffic from either side; both are bounded by one budget.
+func TestAdmitAuthCompetesWithPriorityPublications(t *testing.T) {
+	cfg := testConfig()
+	cfg.PurposeBudgets[PurposePriority] = PurposeBudget{RatePerMinute: 60, Burst: 2}
+	a, _ := newTestAdmission(cfg)
+
+	require.NoError(t, a.AdmitAuth(context.Background(), relayA))
+	require.NoError(t, publishOnce(t, a, signedEvent(t, 5), []string{relayA}, accepted))
+	require.ErrorIs(t, a.AdmitAuth(context.Background(), relayA), ErrBudgetExceeded,
+		"a tombstone consumed the last priority token; the AUTH storm waits for a refill")
+}

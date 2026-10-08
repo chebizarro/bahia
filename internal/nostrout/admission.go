@@ -181,6 +181,7 @@ type Metrics struct {
 	QueueRejected      uint64    `json:"queue_rejected"`
 	WireAttempts       uint64    `json:"wire_attempts"`
 	WireRejected       uint64    `json:"wire_rejected"`
+	AuthAdmitted       uint64    `json:"auth_admitted"`
 	OpaqueAdmitted     uint64    `json:"opaque_admitted"`
 	OperationsStarted  uint64    `json:"operations_started"`
 	OperationsQueued   int       `json:"operations_queued"`
@@ -712,6 +713,62 @@ func (a *Admission) waitLocked(ctx context.Context, deadline time.Time, try func
 		}
 		a.mu.Lock()
 	}
+}
+
+// AdmitAuth charges one NIP-42 AUTH frame to relayURL immediately before the
+// frame is written. AUTH is not an EVENT publication, but it is a relay frame
+// a hostile or flapping relay can demand without bound, so it needs a permit:
+// one priority-lane token and one of the relay's reserved priority wire
+// tokens. The priority share is the right home — AUTH unlocks delivery of
+// exactly the traffic that share reserves (inbox relays serve gift-wrapped
+// operator results only to their authenticated recipient), and its bounded
+// burst caps AUTH storms: when the share is spent the attempt fails closed
+// and the caller surfaces a retryable authentication failure instead of
+// writing the frame. The kill switch and an open breaker refuse AUTH before
+// any I/O like every other frame.
+func (a *Admission) AdmitAuth(ctx context.Context, relayURL string) error {
+	if a == nil {
+		return ErrNotConfigured
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	relay := NormalizeRelayURL(relayURL)
+	if relay == "" {
+		return ErrNoDestinations
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := a.killSwitchLocked(); err != nil {
+		return err
+	}
+	now := a.clock.Now()
+	if a.breakerWaitLocked(now) > 0 {
+		return a.circuitErrorLocked()
+	}
+	rb, err := a.relayBucketLocked(now, relay)
+	if err != nil {
+		return err
+	}
+	// Fail fast, and spend nothing on a refusal: check both buckets, then
+	// consume both under the same lock hold.
+	wire := rb.forPurpose(PurposePriority)
+	laneWait := max(a.aggregate.wait(now), a.lanes[PurposePriority].wait(now))
+	wireWait := wire.wait(now)
+	if laneWait > 0 || wireWait > 0 {
+		if wireWait > 0 {
+			a.metrics.WireRejected++
+			return fmt.Errorf("%w: relay %s AUTH wire budget", ErrBudgetExceeded, relay)
+		}
+		a.metrics.BudgetRejected++
+		return ErrBudgetExceeded
+	}
+	a.aggregate.tokens--
+	a.lanes[PurposePriority].tokens--
+	wire.tokens--
+	a.metrics.WireAttempts++
+	a.metrics.AuthAdmitted++
+	return nil
 }
 
 // ReportRateLimited opens or extends the shared circuit breaker for relay
