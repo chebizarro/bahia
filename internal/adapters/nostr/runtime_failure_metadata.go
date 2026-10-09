@@ -113,12 +113,22 @@ func publicObservedHost(raw string) string {
 	if len(raw) > 253 {
 		return ""
 	}
-	for _, ch := range raw {
-		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-			(ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '_' ||
-			ch == ':' || ch == '[' || ch == ']') {
+	if net.ParseIP(raw) != nil {
+		return raw
+	}
+	if strings.Contains(raw, ":") {
+		host, port, err := net.SplitHostPort(raw)
+		if err != nil || !publicHostName(host) {
 			return ""
 		}
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 {
+			return ""
+		}
+		return net.JoinHostPort(host, port)
+	}
+	if !publicHostName(raw) {
+		return ""
 	}
 	return raw
 }

@@ -91,9 +91,10 @@ func TestRuntimeStateRecordInvalidObservedHealthIsUnknown(t *testing.T) {
 }
 
 func TestPublicObservedHostRejectsMalformedAuthorityPort(t *testing.T) {
-	for _, raw := range []string{"https://token:secret", "tcp://host:credential", "https://host:99999", "https://host:"} {
+	for _, raw := range []string{"https://token:secret", "tcp://host:credential", "https://host:99999", "https://host:", "API_KEY:mysecret", "token:secret"} {
 		require.Empty(t, publicObservedHost(raw), raw)
 	}
+	require.Equal(t, "docker.example:2376", publicObservedHost("docker.example:2376"))
 	require.Equal(t, "https://docker.example:2376", publicObservedHost("https://user:secret@docker.example:2376/private?token=other"))
 	require.Equal(t, "https://[::1]:2376", publicObservedHost("https://user:secret@[::1]:2376/private"))
 }
