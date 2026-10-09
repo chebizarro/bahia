@@ -76,9 +76,14 @@ Each invocation reads a bounded page. If `next_after` is nonempty, save that
 token and pass it as `--after <token>` on the next invocation for the same
 target. The token carries the cumulative conflict count; a later page with no
 new conflicts is **not** a clean scan if earlier pages reported conflicts.
-Keep all `conflict` lines for operator reconciliation. `next_after` empty means
-only that this read-only scan reached the end of the selected target, not that
-any event was delivered.
+Keep all `conflict` lines for operator reconciliation. The cursor is **not** a
+snapshot: an insert or update ordered behind it during the scan can be missed.
+For an exhaustive inventory, stop all SQL writers for the whole census. If
+writers remain active, repeat the census from the beginning (omit `--after`)
+and reconcile changed counts and rows; no single moving scan proves the backlog
+is exhausted. `next_after` empty means only that this pass found no later row
+at query time, not that the target has no pending rows or any event was
+delivered.
 
 There is no apply mode. PostgreSQL does not retain per-relay OK state, even
 when `publish_attempts=0`. Moving a drainable entry into bbolt before claiming

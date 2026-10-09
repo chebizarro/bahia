@@ -26,15 +26,13 @@ const (
 	NostrPublishStateFailed = "failed"
 )
 
-// Publish targets name the relay set a pending outbox row must be delivered
-// to. Each target is drained by exactly one publisher runner, bound to the
-// relay pool for that target, so a row is only ever retried to the relays of
-// the pool it was written for. The target is a logical pool name rather than
-// a URL list: relay topology is reconfigurable at runtime, and a row follows
-// its pool's current write relays.
+// Publish targets identify the intended relay pool for outbound rows. Local
+// outbox entries are drained by the runner for their target; legacy pending
+// PostgreSQL rows are not drained automatically. A target is a logical pool
+// name, not a durable snapshot of relay URLs: relay policy can reconfigure it.
 const (
 	// NostrPublishTargetDefault is the daemon's interop relay pool. It is the
-	// empty string so rows written before targets existed keep their runner.
+	// empty string so rows written before targets existed retain their label.
 	NostrPublishTargetDefault = ""
 	// NostrPublishTargetControlPlane is the control-plane relay pool (docs,
 	// SBOM, config-fabric).
@@ -55,13 +53,13 @@ func LocalOutboxArchiveTarget(target string) string {
 }
 
 // IsLocalOutboxArchiveTarget reports whether a row is an archive row of the
-// local outbox rather than a row the PostgreSQL outbox drains.
+// local outbox rather than a legacy PostgreSQL pending row.
 func IsLocalOutboxArchiveTarget(target string) bool {
 	return strings.HasPrefix(target, NostrPublishTargetLocalPrefix)
 }
 
-// drainedOutboxRows restricts a query to rows the PostgreSQL outbox delivers
-// (written by transactional producers or before the local outbox existed).
+// drainedOutboxRows is the legacy SQL-row predicate used by inventory and
+// metrics. Despite its historical name, no runner drains these rows.
 const drainedOutboxRows = `publish_target NOT LIKE 'local:%'`
 
 // NostrEventRecord represents a row in the nostr_events audit table.
@@ -245,6 +243,8 @@ func (r *PgNostrEventRepository) ListUnpublished(ctx context.Context, limit int)
 // after the keyset cursor, oldest first. It walks the partial
 // idx_nostr_events_publish_outbox (received_at, id) WHERE pending index and
 // filters publish_target on that small row set; no target index is needed.
+// This is a moving keyset scan, not a snapshot: concurrent inserts or updates
+// behind the cursor can be missed by an inventory pass.
 func (r *PgNostrEventRepository) ListUnpublishedAfter(ctx context.Context, target string, after *NostrOutboxCursor, limit int) ([]NostrEventRecord, error) {
 	if limit <= 0 {
 		limit = 100
@@ -267,8 +267,9 @@ func (r *PgNostrEventRepository) ListUnpublishedAfter(ctx context.Context, targe
 	return scanNostrEventRows(rows)
 }
 
-// CountUnpublished returns the depth of the PostgreSQL outbox: pending rows it
-// drains, not archive rows of the local outbox.
+// CountUnpublished counts legacy PostgreSQL pending rows, not local-outbox
+// archive rows. These rows require operator review; the daemon does not drain
+// them automatically.
 func (r *PgNostrEventRepository) CountUnpublished(ctx context.Context) (int64, error) {
 	var count int64
 	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM nostr_events WHERE publish_state = $1 AND `+drainedOutboxRows, NostrPublishStatePending).Scan(&count); err != nil {
