@@ -8,14 +8,17 @@ v1 projection in [the event specification](../event-spec.md#virtualization).
 
 ## Authority and wire shape
 
-An operator registers or updates an author-minted UUIDv7 resource by signing
-an inner kind-`30900` intent with `domain=virtualization`,
+An operator registers or updates an author-minted UUIDv7 resource by creating
+a kind-`30900` **unsigned NIP-59 rumor** with `domain=virtualization`,
 `schema=bahia.intent.virtualization-resource.v2`, `op=register|update|delete`,
 `t=bahia-intent`, `t=virtualization`, `intent_id=<uuidv7>`, and
 `d=virtualization-resource:<kind>:<resource-id>:<intent-id>`. The **entire**
-signed inner event is NIP-59 `1059` gift-wrapped to the service key; only the
-outer `p=<service-pubkey>` is relay-indexable. The inner content is strict,
-size-bounded JSON (unknown fields and trailing data rejected):
+rumor is bound to the operator by a **signed NIP-59 seal**, then stored as a
+`1059` gift wrap to the service key; only the outer `p=<service-pubkey>` is
+relay-indexable. A signed inner event is not a valid NIP-59 rumor in Bahia:
+`IntentGiftWrapIngress.UnwrapIntent` explicitly rejects a nonzero rumor
+signature. The inner content is strict, size-bounded JSON (unknown fields
+and trailing data rejected):
 
 ```json
 {
@@ -32,20 +35,41 @@ size-bounded JSON (unknown fields and trailing data rejected):
 
 `register` requires generation 0 and no predecessor. `update`/`delete`
 require the exact current **service-signed v2** state event ID, generation and
-`expected_state_digest`; the new `resource_version` is exactly predecessor
-version + 1. The
-new generation is exactly predecessor generation + 1 (generation 1 on
-registration). The
-request's digest is SHA-256 of domain-separated, RFC 8785 canonical JSON of
+`expected_state_digest`; the new `resource_version` and generation are each
+exactly predecessor + 1 (both start at 1 on registration). The request's
+digest is SHA-256 of domain-separated, RFC 8785 canonical JSON of
 `{schema, op, org_id, resource_kind, resource_id, resource_version,
 descriptor, execution_spec}`. It is checked *after* unwrapping and never a
 public tag.
-The signed event's `org` tag, if retained by the shared parser, must equal
-content `org_id`; neither it nor resource IDs escape in outer tags. A request
-is only eligible after its exact wrap and signed inner event are durably
-observed from the relay subscription; an in-process/SQL request is not an
-equivalent authorization. NIP-40 expiration limits new admission, not replay
-of an already accepted operation.
+The rumor's `org` tag, if retained by the shared parser, must equal content
+`org_id`; neither it nor resource IDs escape in outer tags. The ingress must
+introduce a v2-only `VerifiedWrappedVirtualizationIntent` provenance object
+created **only** after `nip59.GiftUnwrap` verifies outer ID/signature, recipient,
+seal signature, seal-author/rumor-author binding and rumor ID. It carries the
+outer ID, rumor ID, verified seal author and immutable rumor bytes into a
+dedicated v2 validator; the validator does **not** call v1
+`validateVirtualizationOperationIntent` or pretend the rumor has a Schnorr
+signature. Trust-set and org RBAC checks use the verified seal author, and
+reject any mismatch with the rumor pubkey or body. Neither
+`ProcessUnwrappedIntent`'s signed-inner branch nor direct `ProcessInProcess`
+admits v2. A request is eligible only after its exact wrap is durably observed
+from the relay subscription; an in-process/SQL request is not equivalent
+authorization. NIP-40 expiration limits new admission, not replay of an
+already accepted operation.
+
+The full serialized rumor is capped at **16,384 bytes before wrapping** and
+the final stored `1059` ciphertext at **60,000 bytes**, below the relay's
+65,535-byte content limit after both NIP-44 padding layers. Reject before
+publish if either bound fails; never substitute ephemeral `21059`, which
+cannot be replayed after a crash. Bound `components` to 32 entries,
+`bootstrap` and `image_pins` to 16 each, labels to 32 bounded key/value
+pairs, and UTF-8 reason to 512 bytes; fixed-length SHA-256 digests and UUIDs
+only, with no arbitrary provider JSON. Apply the same size checks to v2
+operation and approval rumors, and test actual Go and web wrappers at the
+limits rather than assuming plaintext size predicts ciphertext size.
+The service also bounds each resulting OCK-plus-`service_inner` state event
+content to 60,000 bytes before signing; overlong state is rejected, not
+fragmented into an incomplete executable record.
 
 `descriptor` is an allowlisted **org-readable** summary: kind, provider class,
 host/image/deployment references, desired power, capacity, digests and
@@ -68,7 +92,7 @@ observations cannot alter desired resource bytes.
 The v2 `execution_spec` schema is a discriminated union, not the JSON of a
 repository model with observation and diagnostic fields:
 
-| Kind | Required service-only snapshot (all IDs/ref values validated against the signed org) |
+| Kind | Required service-only snapshot (all IDs/ref values validated against the seal-authenticated org) |
 |---|---|
 | `host` | `installation_id`, `provider`, `execution_location`, `management_endpoint_ref`, `trust_policy_ref`, enabled/lifecycle classes, architecture, capacity/quota and operation limits. Its provider URI, paths, network names and binary remain local installation policy. |
 | `image` | `manifest_digest`, format/architecture/OS/firmware, exact component `{kind, storage_ref, digest, size_bytes}` array, release ref, provenance event ID/signer and allowed profiles. Revalidate the signed provenance event, not a cached `verified` boolean. |
@@ -88,37 +112,72 @@ Allocate its unused `32xxx` family number at implementation time, register
 v1 `d` values. Tags carry only family/topic/schema, opaque coordinate and
 `deleted`; no `org`, `p`, generation, digest, provider, host, image, approval
 or journal tags. OCK-encrypt `{descriptor, org_id, resource_version,
-generation, resource_digest, request_event_id, previous_state_event_id,
+generation, resource_digest, request_rumor_id, request_outer_id, previous_state_event_id,
 deleted}` with the **org OCK** and AEAD associated data from the verified
 event's family, `d` and `t`. Place the exact `execution_spec` plus the same
 identity/version/digest/request binding in `service_inner`, NIP-44-encrypted
 to the service key. The OCK is wrapped to current org members and service;
 they can read metadata, but only the service can recover execution inputs.
 Existing OCK envelopes expose `key_org` and version in ciphertext metadata;
-this contract does not claim that the scope itself is hidden from relays.
+the **accepted relay-visible metadata budget** is therefore: service pubkey,
+outer wrap size/time and ephemeral author for requests; for state, family
+topic/resource kind, UUIDv7 resource or operation ID (including its minting
+time), service author, OCK `key_org` UUID and key epoch, ciphertext length,
+and `deleted` boolean. No provider class, host/image refs, action, reason,
+resource digest/version/generation, operator identity or approval ID appears
+in plaintext tags/content. The OCK scheme does **not** hide org identity from
+relays; stronger org/coordinate unlinkability requires a separately versioned
+key-routing and coordinate design, not a claim that v2 already provides it.
 Refounding and key rotation must re-encrypt **both** layers without changing
 resource version or digest; failure to recover the inner layer is not a
 reason to execute from SQL or a v1 DTO.
 
-For operations, extend the signed, wrapped request to
+For operations, extend the seal-authenticated, wrapped request to
 `schema=bahia.intent.virtualization.v2` with immutable
-`operation_id=<uuidv7>`, `resource_state_event_id`, `resource_version`,
-`resource_digest`, `expected_generation`, `action`, `idempotency_key`
-(`intent_id`), bounded reason, and exact approval event/digest if applicable.
+`org_id`, `operation_id=<uuidv7>`, `resource_state_event_id`,
+`resource_version`, `resource_digest`, `expected_generation`, `action`,
+`idempotency_key` (`intent_id`), bounded reason, expiry and action-specific
+options. Its **request digest**, distinct from the resource-content digest,
+is SHA-256 of `bahia:virtualization-operation-request:v2` plus RFC 8785 JSON
+of **the full validated rumor envelope** (kind, `created_at`, `d`, `t`,
+`domain`, `schema`, `op`, `org`, `intent_id`), every strict content field
+including reason/options/expiry, and the verified seal-author pubkey,
+omitting only the digest field itself. The service
+recomputes it and records the rumor ID and digest together; duplicate
+`operation_id`/`intent_id` with differing full digest is a conflict.
 It must name an ACKed, non-tombstoned v2 resource state and match its decrypted
 identity and authorized org. A separate service-signed, OCK-encrypted
 `virtualization-operation-v2` state family at
-`d=virtualization-v2:operation:<operation-id>` binds request event ID,
-resource state event ID/digest/version, action, approval, phase, stable
+`d=virtualization-v2:operation:<operation-id>` binds rumor ID and request
+digest, resource state event ID/digest/version, action, approval, phase, stable
 provider correlation ID, fence epoch and sanitized outcome. No provider
 effect occurs merely because a `30315` intent status says `accepted`.
-Destructive actions require independent two-person approval bound to this
-exact request digest and action; v1's start/stop/reboot allowlist is not
-silently widened.
+Destructive actions require a **separate** seal-authenticated kind-`30900`
+`approve` rumor (`domain=virtualization`,
+`schema=bahia.intent.virtualization-approval.v2`, `op=approve`,
+`intent_id=<approval-uuidv7>`,
+`d=virtualization-approval:<approval-id>`, `t=bahia-intent`,
+`t=virtualization`) with `org_id`, `operation_id`, exact operation rumor ID and request
+digest, resource state event ID/digest, action, decision, approver pubkey,
+approval UUIDv7 and expiry. Its **approval digest** is SHA-256 of
+`bahia:virtualization-operation-approval:v2` plus RFC 8785 JSON of its
+complete validated rumor envelope, all strict content fields except the
+digest itself, and the verified seal-author pubkey. The daemon recomputes
+both digests,
+requires the independently verified seal author to equal `approver_pubkey`
+and **differ** from the request seal author, and checks each signer's current
+org permission and the appropriate VM-operator/approval tier at admission
+and again before effect. The approval
+must be observed from relay ingress and its own immutable ID/digest recorded
+in accepted operation state; neither a claimed `approval_id` in the request
+nor one principal using two wraps satisfies two-person approval. A rejected,
+expired, stale-resource or superseded approval cannot authorize execution.
+v1's start/stop/reboot allowlist is not silently widened.
 
 ## Acceptance, ordering and execution fence
 
-The service first validates NIP-01 ID/signature, inner/outer binding,
+The service first validates outer and seal NIP-01 IDs/signatures, rumor ID and
+seal-author binding,
 authorization (`PermWriteDeployments` **and** installation VM-operator policy),
 schema, UUIDs, predecessor, digest, OCK and service-inner recoverability.
 It signs the new resource state or accepted operation state into the local
@@ -150,21 +209,33 @@ ID. An operation ID maps to one request digest and one provider correlation
 ID forever; replay attaches/inspects before retry and cannot dispatch a
 different action or input snapshot under that ID.
 
-**Fencing is an additional, non-relay precondition.** v2 may initially execute
-only `VMExecutionLocal` on an installation with one configured host owner and
-an exclusive, process-lifetime host-local lock held through child-process
-join. Effect subprocesses must inherit the lock or be terminated with their
-supervisor so an orphan cannot continue a mutation after lock release. The
-lock is not a PostgreSQL advisory lock. On crash/restart the new
-holder inspects the provider ownership marker and operation correlation ID
-before any retry. Remote hosts, two installations targeting one provider, or
-automatic failover stay unavailable until a linearizable host/provider fence
-issues a monotonic epoch and the provider rejects every stale epoch before
-**each** side effect; the epoch must be bound in the signed operation state
-and ownership marker. A relay claim or time-based lease by itself is not
-this fence. Host admission must prove the local installation identity matches
-the canonical identity and the operator-approved host policy; otherwise no
-effect. A `flock` alone cannot fence a second host with independent storage.
+**One writer is an admission and signing precondition, not just an executor
+lock.** Before v2 ingress is admitted, the daemon acquires an exclusive
+installation-wide virtualization writer fence. It holds that fence across
+EOSE-complete latest-state/predecessor check, per-coordinate serialization,
+signature creation, durable outbox insertion, exact relay-quorum ACK and any
+provider effect through terminal-state ACK. Pending/abandoned delivery blocks
+a successor sign/effect on that coordinate; on restart a new holder first
+replays outbox and relay state and resolves ambiguity before admission. No
+second daemon may use the service signer to create a competing virtualization
+successor during this interval. A relay winner or `30315` status cannot repair
+two independently signed successors.
+
+The initial enforceable topology is one local installation with sole custody
+of the service signing key and an exclusive process-lifetime installation
+lock, plus a host-local effect lock for `VMExecutionLocal`. Effect subprocesses
+must inherit the host lock or be terminated with their supervisor so an orphan
+cannot continue a mutation after lock release. Neither lock is a PostgreSQL
+advisory lock. On crash/restart the new holder inspects the provider ownership
+marker and operation correlation ID before any retry. Remote hosts, copied
+service keys, two installations targeting one provider, or automatic failover
+stay unavailable until **one linearizable epoch fence gates both signing and
+provider work**: the signer refuses stale epochs and the provider rejects a
+stale epoch before each side effect. That epoch is bound in signed operation
+state and ownership marker. A relay claim or time-based lease alone is not
+this fence. Host admission must prove local installation identity matches
+canonical identity and approved policy; otherwise no effect. `flock` alone
+cannot fence a second host with independent storage.
 
 Persist phase transitions (`accepted`, `prepared`, `executing`, `observed`,
 terminal) as signed operation states through the outbox before advancing a
@@ -197,7 +268,10 @@ proofs):
    `internal/adapters/nostr/{projector,control_state_contract}.go`,
    `web/src/lib/nostr/kinds.gen.js`, `docs/event-spec.md`, and confidential
    client readers. Add strict v2 structs/validators in `internal/domain/` and
-   `internal/controlplane/virtualization_intent_handler.go`; keep v1 refusal.
+   a provenance-preserving v2 route in
+   `internal/controlplane/{intent_giftwrap_ingress,intent_processor,virtualization_intent_handler}.go`
+   and `encrypted_transport.go`; keep v1 refusal and the signed-inner route
+   separate. Enforce both pre-wrap and stored-wrap size bounds in Go and web.
 2. **Acceptance and receipts:** use `internal/controlplane/confidential_encryptor.go`
    and `internal/adapters/nostr/publisher.go` for encrypted state creation;
    add exact, retention-pinned delivery verification and EOSE-aware replay
@@ -206,19 +280,28 @@ proofs):
 3. **Fenced executor:** replace SQL admission in
    `internal/app/virtualization{,_admission,_runtime,_config}.go` and
    `internal/service/persistent_vm_service.go` with a canonical resource and
-   operation store; add host-local lifetime lock/provider marker enforcement
-   in `internal/adapters/runtime/vm/`. Re-enable only the actions whose
-   input, approval and idempotency contracts are complete.
+   operation store; gate predecessor validation and the signer under the same
+   installation writer fence, then add host-local lifetime lock/provider
+   marker enforcement in `internal/adapters/runtime/vm/`. Re-enable only
+   actions whose input, approval and idempotency contracts are complete.
 4. **Governed migration:** implement a separate explicit CLI path under
    `cmd/bahia-migrate/`; keep `internal/readmodel/virtualization.go` and
    `internal/repository/pg_virtualization.go` disconnected from production
    publication. The CLI emits an inventory and operator-signing material,
    never service-signed v2 state from a SQL row.
 
-Tests must cover forged/duplicate wraps, wrong org/author, stale predecessor,
+Tests must cover forged/duplicate wraps, signed-rumor rejection, forged
+seal-author proof, wrong org/author, stale predecessor,
 equal-time NIP-01 ties, OCK rotation/refounding and unavailable service-inner,
-plaintext-tag/body leak scans, missing/partial/abandoned/pruned ACKs,
-multi-relay EOSE handoff, crash at every outbox/provider phase, same-host
+plaintext-tag/body leak scans, maximum component counts and actual nested-wrap
+size, missing/partial/abandoned/pruned ACKs, multi-relay EOSE handoff,
+backdated `1059` (up to NIP-59's six hours) delivered after a newer cursor
+across restart within the existing twelve-hour `ProcessSync.ReconcileKinds`
+window (NIP-77 and paged fallback), backdated live-only
+REQ delivery and outer-ID/rumor-ID dedupe in
+`internal/adapters/nostr/process_sync_test.go` and
+`internal/controlplane/intent_giftwrap_web_fixture_test.go`; crash at every
+predecessor/sign/outbox/provider phase, same-host
 contending daemons, stale fence epoch, tombstone/replay, DB absent/unavailable,
 and SQL-only/divergent cutover. Keep `TestNoAutomaticSQLToCanonicalPromotion`,
 `TestNoNewTestOnlyExports`, kind/drift tests and `make lint-arch` green.
