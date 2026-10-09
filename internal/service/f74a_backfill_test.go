@@ -163,7 +163,7 @@ func (p *f74aBackfillPub) PublishRuntimeObservation(context.Context, *domain.Run
 }
 func f74aID(n byte) uuid.UUID { var id uuid.UUID; id[15] = n; return id }
 func f74aRunner(marker *f74aMemoryMarker, source *f74aSource, pub *f74aBackfillPub) *F74aBackfillRunner {
-	return NewF74aBackfillRunner(F74aBackfillConfig{Marker: marker, Source: source, Publisher: pub, Pending: func(context.Context) (int64, error) { return 0, nil }, Rate: 1000000000})
+	return NewF74aBackfillRunner(F74aBackfillConfig{Marker: marker, Source: source, Publisher: pub, Pending: func(context.Context) (int64, error) { return 0, nil }, SemanticDelivered: func(context.Context, *domain.SBOMPackage) (bool, error) { return true, nil }, Rate: 1000000000})
 }
 func readF74aProgress(t *testing.T, marker *f74aMemoryMarker) F74aBackfillProgress {
 	t.Helper()
@@ -232,7 +232,7 @@ func TestF74aBackfillDirtyGenerationRestartsKeysetPass(t *testing.T) {
 	pub.onPublish = func() {
 		if len(pub.calls) == 1 {
 			source.releases = append([]domain.LLMRelease{{ID: f74aID(1)}}, source.releases...)
-			if err := runner.MarkDirty(false); err != nil {
+			if err := runner.markDirty(false); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -266,32 +266,43 @@ func TestF74aBackfillAdmissionCountErrorNeverBypasses(t *testing.T) {
 		t.Fatal("completed without outbox admission")
 	}
 }
-func TestF74aLivePublisherMarksActivePassAndFailure(t *testing.T) {
+func TestF74aLegacyTombstoneRequiresRelayAcceptedSemantic(t *testing.T) {
 	marker := &f74aMemoryMarker{}
-	source := &f74aSource{}
+	pkg := domain.SBOMPackage{ID: f74aID(1)}
+	source := &f74aSource{semantic: []domain.SBOMPackage{pkg}, legacy: []domain.SBOMPackage{pkg}}
 	pub := &f74aBackfillPub{}
 	runner := f74aRunner(marker, source, pub)
-	live := F74aLivePublisher{Publisher: pub, Runner: runner}
-	if err := live.PublishLLMRelease(context.Background(), &domain.LLMRelease{ID: f74aID(1)}); err != nil {
+	accepted := false
+	runner.cfg.SemanticDelivered = func(context.Context, *domain.SBOMPackage) (bool, error) { return accepted, nil }
+	if err := runner.RunMigration(context.Background()); err == nil {
+		t.Fatal("pending semantic was treated as relay accepted")
+	}
+	if got := pub.calls; len(got) != 1 || got[0] != "semantic" {
+		t.Fatalf("premature tombstone: %v", got)
+	}
+	if readF74aProgress(t, marker).Completed {
+		t.Fatal("completed on pending semantic")
+	}
+	accepted = true
+	if err := runner.RunMigration(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if p := readF74aProgress(t, marker); p.Generation != 1 {
-		t.Fatalf("active pass not dirtied: %+v", p)
+	if got := pub.calls; len(got) != 2 || got[1] != "legacy" {
+		t.Fatalf("late acceptance did not permit tombstone: %v", got)
 	}
-	if err := runner.runPass(context.Background()); err != nil {
-		t.Fatal(err)
+}
+
+func TestF74aCompletionRequiresSemanticProofEvenWithoutLegacy(t *testing.T) {
+	marker := &f74aMemoryMarker{}
+	source := &f74aSource{semantic: []domain.SBOMPackage{{ID: f74aID(1)}}}
+	pub := &f74aBackfillPub{}
+	runner := f74aRunner(marker, source, pub)
+	runner.cfg.SemanticDelivered = func(context.Context, *domain.SBOMPackage) (bool, error) { return false, nil }
+	if err := runner.RunMigration(context.Background()); err == nil {
+		t.Fatal("missing proof completed migration")
 	}
-	if err := live.PublishLLMRelease(context.Background(), &domain.LLMRelease{ID: f74aID(2)}); err != nil {
-		t.Fatal(err)
-	}
-	if p := readF74aProgress(t, marker); p.Generation != 1 || !p.Completed {
-		t.Fatalf("successful live write invalidated completed pass: %+v", p)
-	}
-	if err := live.MarkBackfillDirty(); err != nil {
-		t.Fatal(err)
-	}
-	if p := readF74aProgress(t, marker); p.Generation != 2 || p.Completed {
-		t.Fatalf("failure did not invalidate completed pass: %+v", p)
+	if readF74aProgress(t, marker).Completed {
+		t.Fatal("complete marker set without relay proof")
 	}
 }
 
@@ -380,5 +391,24 @@ func TestF74aBackfillAdmissionUsesHighLowHysteresis(t *testing.T) {
 	}
 	if calls != 3 || paused || runner.Snapshot().Pending != 1499 || runner.Snapshot().Paused {
 		t.Fatalf("admission calls=%d paused=%t snapshot=%+v", calls, paused, runner.Snapshot())
+	}
+}
+
+func TestF74aOldCompletedMarkerWithoutRelayProofReplaysSemanticPhase(t *testing.T) {
+	raw, _ := json.Marshal(F74aBackfillProgress{Phase: "complete", Completed: true, Generation: 2, PassGeneration: 2})
+	marker := &f74aMemoryMarker{value: raw}
+	pkg := domain.SBOMPackage{ID: f74aID(1)}
+	source := &f74aSource{semantic: []domain.SBOMPackage{pkg}, legacy: []domain.SBOMPackage{pkg}}
+	pub := &f74aBackfillPub{}
+	runner := f74aRunner(marker, source, pub)
+	runner.cfg.SemanticDelivered = func(context.Context, *domain.SBOMPackage) (bool, error) { return false, nil }
+	if err := runner.RunMigration(context.Background()); err == nil {
+		t.Fatal("old unproven marker was trusted")
+	}
+	if len(pub.calls) != 1 || pub.calls[0] != "semantic" {
+		t.Fatalf("old marker did not replay semantic before tombstone: %v", pub.calls)
+	}
+	if readF74aProgress(t, marker).Completed {
+		t.Fatal("old marker remained complete")
 	}
 }

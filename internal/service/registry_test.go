@@ -1252,10 +1252,8 @@ func TestRecordObservationStartingDoesNotClaimInSync(t *testing.T) {
 	}
 }
 
-func TestRecordObservationDelayedProjectionCannotRegressCurrentState(t *testing.T) {
+func TestRecordObservationDelayedWriteCannotRegressCurrentState(t *testing.T) {
 	registry, _, _, _, _, _, _, _, stateRepo := newTestRegistryAll()
-	capture := &f74aPublishCapture{}
-	registry.SetObservationCPStatePublisher(capture)
 	ctx := context.Background()
 	svc, env := seedServiceAndEnv(t, registry)
 	stateRepo.states[stateKey(svc.ID, env.ID)] = &domain.EnvironmentServiceState{
@@ -1285,9 +1283,6 @@ func TestRecordObservationDelayedProjectionCannotRegressCurrentState(t *testing.
 	}
 	if state.DriftStatus != domain.DriftStatusInSync {
 		t.Fatalf("delayed observation regressed drift to %q", state.DriftStatus)
-	}
-	if capture.observations != 1 {
-		t.Fatalf("latest observation published %d times, want once", capture.observations)
 	}
 }
 

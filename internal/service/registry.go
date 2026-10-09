@@ -58,7 +58,6 @@ type RegistryService struct {
 	allowLiveArtifactImport         bool
 	publisher                       events.Publisher
 	cpState                         BuildDeployStatePublisher
-	observationCPState              RuntimeObservationStatePublisher
 	logger                          *zap.Logger
 }
 
@@ -71,14 +70,6 @@ type BuildDeployStatePublisher interface {
 	PublishArtifactRegistry(ctx context.Context, artifact *domain.Artifact, deleted bool) error
 	PublishDeploymentIntentRegistry(ctx context.Context, intent *domain.DeploymentIntent, deleted bool) error
 	PublishDeploymentRunRegistry(ctx context.Context, run *domain.DeploymentRun, deleted bool) error
-}
-
-type RuntimeObservationStatePublisher interface {
-	PublishRuntimeObservation(context.Context, *domain.RuntimeObservation) error
-}
-
-func (s *RegistryService) SetObservationCPStatePublisher(pub RuntimeObservationStatePublisher) {
-	s.observationCPState = pub
 }
 
 // ServiceRepository returns the underlying ServiceRepository. Used by
@@ -2417,11 +2408,6 @@ func (s *RegistryService) RecordObservation(ctx context.Context, obs *domain.Run
 	})
 	if !advanced {
 		return nil
-	}
-	if s.observationCPState != nil {
-		if err := s.observationCPState.PublishRuntimeObservation(ctx, obs); err != nil {
-			s.logger.Warn("publish runtime observation cp-state failed", zap.Error(err))
-		}
 	}
 	if state.DriftStatus != domain.DriftStatusInSync && state.DriftStatus != previousDrift {
 		if desiredDigest == "" && state.DesiredArtifactID != nil {

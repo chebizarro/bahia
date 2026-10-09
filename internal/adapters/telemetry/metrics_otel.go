@@ -57,8 +57,6 @@ type appMetricInstruments struct {
 	nostrRelayClosedRetryExhausted metric.Int64Counter
 	nostrOutboxDepth               metric.Int64Gauge
 	nostrOutboxFailed              metric.Int64Gauge
-	f74aBackfill                   metric.Int64Gauge
-	f74aBackfillPhase              metric.Int64Gauge
 	nostrEventStoreBytes           metric.Int64Gauge
 	nostrEventStoreRows            metric.Int64Gauge
 	nostrEventStoreOldest          metric.Int64Gauge
@@ -157,8 +155,6 @@ func newAppMetricInstruments(provider metric.MeterProvider) (*appMetricInstrumen
 		nostrRelayClosedRetryExhausted: b.int64Counter("bahia_nostr_relay_closed_retry_exhausted_total", "Subscriptions abandoned after retryable CLOSED budget"),
 		nostrOutboxDepth:               b.int64Gauge("bahia_nostr_outbox_depth", "Unpublished events in the durable Nostr publish outbox"),
 		nostrOutboxFailed:              b.int64Gauge("bahia_nostr_outbox_failed", nostrOutboxFailedHelp),
-		f74aBackfill:                   b.int64Gauge("bahia_f74a_backfill", "F74a backfill status by bounded metric name"),
-		f74aBackfillPhase:              b.int64Gauge("bahia_f74a_backfill_phase", "F74a backfill phase index; complete is 6"),
 		nostrEventStoreBytes:           b.int64Gauge("bahia_nostr_event_store_bytes", "PostgreSQL Nostr event relation bytes by component"),
 		nostrEventStoreRows:            b.int64Gauge("bahia_nostr_event_store_rows", "Estimated PostgreSQL Nostr event rows by state"),
 		nostrEventStoreOldest:          b.int64Gauge("bahia_nostr_event_store_oldest_hot_timestamp_seconds", "Oldest eligible hot Nostr event Unix timestamp; zero until the online archive index exists"),

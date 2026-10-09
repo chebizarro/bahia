@@ -9,7 +9,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/repository"
-	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -21,7 +20,6 @@ type nostrTransportMetricsRunner struct {
 	localOutbox localOutboxCounter
 	pgOutbox    repository.NostrEventOutboxRepository
 	storage     nostrEventStorageStatsSource
-	f74a        *service.F74aBackfillRunner
 	pools       []*nostrAdapter.RelayPool
 	interval    time.Duration
 	logger      *zap.Logger
@@ -99,10 +97,6 @@ func (r *nostrTransportMetricsRunner) setStorageSource(source nostrEventStorageS
 	r.storage = source
 }
 
-func (r *nostrTransportMetricsRunner) setF74aBackfillSource(source *service.F74aBackfillRunner) {
-	r.f74a = source
-}
-
 func (r *nostrTransportMetricsRunner) Name() string { return "nostr-transport-metrics" }
 
 func (r *nostrTransportMetricsRunner) Run(ctx context.Context) error {
@@ -123,10 +117,6 @@ func (r *nostrTransportMetricsRunner) Run(ctx context.Context) error {
 func (r *nostrTransportMetricsRunner) refresh(ctx context.Context) {
 	if r.metrics == nil {
 		return
-	}
-	if r.f74a != nil {
-		s := r.f74a.Snapshot()
-		r.metrics.SetF74aBackfill(telemetry.F74aBackfillMetrics{Phase: s.Phase, Visited: s.Visited, Staged: s.Staged, Failures: s.Failures, Retries: s.Retries, Pending: s.Pending, Paused: s.Paused, Generation: s.Generation, Completed: s.Completed, UpdatedAt: s.UpdatedAt})
 	}
 	type relayMetrics struct {
 		healthy, degraded                               bool

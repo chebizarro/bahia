@@ -27,6 +27,7 @@ import (
 const usage = "usage: bahia-migrate [--config path] [--confirm] [--force] [--to stem] status|up|down\n" +
 	"       bahia-migrate [--config path] [--cutoff RFC3339] f74a-census\n" +
 	"       bahia-migrate [--config path] --cutoff RFC3339 f74a-compact (read-only dry run)\n" +
+	"       bahia-migrate [--config path] --confirm-quiesced f74a-import (stop daemon and all SQL writers first)\n" +
 	"       bahia-migrate [--config path] [--dry-run] [--relays url,...] [--relay-backfill] nostr"
 
 func main() {
@@ -52,6 +53,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "config.yaml", "Bahia configuration file")
 	confirm := flags.Bool("confirm", false, "confirm destructive down migration")
+	confirmQuiesced := flags.Bool("confirm-quiesced", false, "confirm all daemon and SQL writers are stopped for f74a-import")
 	cutoffText := flags.String("cutoff", "", "F74a census/compaction UTC cutoff in RFC3339 format")
 	force := flags.Bool("force", false, "allow down across out-of-order applied history")
 	to := flags.String("to", "", "full filename stem to retain when running down")
@@ -75,6 +77,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if action == "f74a-compact" && *confirm {
 		return reportError(stderr, "confirmed F74a compaction is disabled: concurrent backdated observations can turn dry-run candidates into material transitions")
+	}
+	if action == "f74a-import" && !*confirmQuiesced {
+		return reportError(stderr, "f74a-import requires --confirm-quiesced; stop all daemon and SQL writers first")
+	}
+	if action != "f74a-import" && *confirmQuiesced {
+		return reportError(stderr, "--confirm-quiesced is only valid for f74a-import")
 	}
 	if action != "down" && *confirm {
 		return reportError(stderr, "--confirm is only valid for down")
@@ -117,6 +125,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return reportError(stderr, "%v", cfg.DB.RedactError(err))
 	}
 	defer pool.Close()
+	if action == "f74a-import" {
+		return runF74aImport(ctx, cfg, pool, stdout, stderr)
+	}
 	if action == "f74a-census" || action == "f74a-compact" {
 		return runF74aMaintenance(ctx, pool, action, cutoff, stdout, stderr)
 	}
@@ -132,7 +143,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func isAction(value string) bool {
 	switch value {
-	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact":
+	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact", "f74a-import":
 		return true
 	default:
 		return false

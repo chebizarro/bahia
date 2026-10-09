@@ -55,15 +55,21 @@ type F74aBackfillPublisher interface {
 // F74aOutboxCountFunc adapts the durable outbox's count result without coupling service to bbolt.
 type F74aOutboxCountFunc func(context.Context) (int64, error)
 
+// F74aSemanticDeliveryProof must prove the current semantic coordinate was
+// accepted by the relay publish quorum. Missing or pruned local evidence is
+// not proof; an operator must sync retained relay state before retrying.
+type F74aSemanticDeliveryProof func(context.Context, *domain.SBOMPackage) (bool, error)
+
 type F74aBackfillConfig struct {
-	Marker    F74aProgressStore
-	Source    F74aBackfillSource
-	Publisher F74aBackfillPublisher
-	Pending   F74aOutboxCountFunc
-	Ready     <-chan struct{}
-	Rate      int
-	HighWater int64
-	LowWater  int64
+	Marker            F74aProgressStore
+	Source            F74aBackfillSource
+	Publisher         F74aBackfillPublisher
+	Pending           F74aOutboxCountFunc
+	SemanticDelivered F74aSemanticDeliveryProof
+	Ready             <-chan struct{}
+	Rate              int
+	HighWater         int64
+	LowWater          int64
 }
 
 type F74aBackfillProgress struct {
@@ -73,6 +79,7 @@ type F74aBackfillProgress struct {
 	Generation     uint64                     `json:"generation"`
 	PassGeneration uint64                     `json:"pass_generation"`
 	Completed      bool                       `json:"completed"`
+	RelayVerified  bool                       `json:"relay_verified"`
 	UpdatedAt      time.Time                  `json:"updated_at"`
 }
 
@@ -96,6 +103,14 @@ func decodeF74aProgress(raw []byte) (F74aBackfillProgress, error) {
 	if !valid {
 		return p, fmt.Errorf("invalid F74a phase %q", p.Phase)
 	}
+	// Markers written before relay-visibility gating are not completion proof.
+	if p.Completed && !p.RelayVerified {
+		p.Completed = false
+		p.Phase = "semantic_packages"
+		p.Cursor = uuid.Nil
+		p.StateCursor = repository.F74aStateCursor{}
+		p.PassGeneration = p.Generation
+	}
 	if p.Completed && p.Phase != "complete" {
 		return p, errors.New("completed F74a progress has incomplete phase")
 	}
@@ -114,7 +129,7 @@ type F74aBackfillSnapshot struct {
 	Phase      string
 	Cursor     string
 	Visited    uint64
-	Staged     uint64
+	Processed  uint64
 	Failures   uint64
 	Retries    uint64
 	Pending    int64
@@ -168,7 +183,7 @@ func (r *F74aBackfillRunner) recordVisit() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.snapshot.Visited++
-	r.snapshot.Staged++
+	r.snapshot.Processed++
 	r.snapshot.LastError = ""
 }
 
@@ -226,9 +241,9 @@ func (r *F74aBackfillRunner) load() (F74aBackfillProgress, error) {
 	return p, err
 }
 
-// MarkDirty is called after each live PostgreSQL commit while a pass is active.
-// force also invalidates a completed marker when publication failed after commit.
-func (r *F74aBackfillRunner) MarkDirty(force bool) error {
+// MarkDirty invalidates a pass if an operator detects a concurrent legacy write.
+// Normal daemon writes never call this migration-only method.
+func (r *F74aBackfillRunner) markDirty(force bool) error {
 	_, err := r.update(func(p *F74aBackfillProgress) error {
 		if !p.Completed || force {
 			p.Generation++
@@ -250,6 +265,23 @@ func (r *F74aBackfillRunner) MarkDirty(force bool) error {
 
 // Run keeps the repair worker alive for post-completion live-publication
 // failures. Cancellation stops at an item boundary; progress remains durable.
+// RunMigration executes one explicit, resumable operator pass and propagates
+// errors. It never runs on normal daemon startup.
+func (r *F74aBackfillRunner) RunMigration(ctx context.Context) error {
+	if r == nil || r.cfg.Marker == nil || r.cfg.Source == nil || r.cfg.Publisher == nil || r.cfg.Pending == nil || r.cfg.SemanticDelivered == nil {
+		return errors.New("F74a migration requires marker, source, publisher, outbox count and semantic delivery proof")
+	}
+	p, err := r.load()
+	if err != nil || p.Completed {
+		return err
+	}
+	if err = r.runPass(ctx); err != nil {
+		r.setError(err)
+		return err
+	}
+	return nil
+}
+
 func (r *F74aBackfillRunner) Run(ctx context.Context) error {
 	if r == nil || r.cfg.Marker == nil || r.cfg.Source == nil || r.cfg.Publisher == nil || r.cfg.Pending == nil {
 		return errors.New("F74a runner requires marker, source, publisher and outbox count")
@@ -353,6 +385,9 @@ func (r *F74aBackfillRunner) runPass(ctx context.Context) error {
 			return nil
 		}
 		if p.Phase == "complete" {
+			if err := r.verifySemanticPackages(ctx); err != nil {
+				return err
+			}
 			next, err := r.update(func(current *F74aBackfillProgress) error {
 				if current.Phase != "complete" {
 					return nil
@@ -365,6 +400,7 @@ func (r *F74aBackfillRunner) runPass(ctx context.Context) error {
 					return nil
 				}
 				current.Completed = true
+				current.RelayVerified = true
 				return nil
 			})
 			if err != nil {
@@ -478,7 +514,12 @@ func (r *F74aBackfillRunner) page(ctx context.Context, p F74aBackfillProgress, l
 		}
 		for i := range items {
 			item := &items[i]
-			if err := publish(item.ID, repository.F74aStateCursor{}, func() error { return r.cfg.Publisher.PublishLegacySBOMPackageTombstone(ctx, item) }); err != nil {
+			if err := publish(item.ID, repository.F74aStateCursor{}, func() error {
+				if err := r.requireSemanticDelivery(ctx, item); err != nil {
+					return err
+				}
+				return r.cfg.Publisher.PublishLegacySBOMPackageTombstone(ctx, item)
+			}); err != nil {
 				return len(items), err
 			}
 		}
@@ -501,42 +542,40 @@ func (r *F74aBackfillRunner) page(ctx context.Context, p F74aBackfillProgress, l
 	}
 }
 
-// F74aLivePublisher marks active keyset passes before publishing a committed
-// live write. The backfill uses the unwrapped publisher to avoid self-dirtying.
-type F74aLivePublisher struct {
-	Publisher F74aBackfillPublisher
-	Runner    *F74aBackfillRunner
+// requireSemanticDelivery never treats local staging, a pending attempt, or a
+// late OK as a relay-visible replacement for a legacy UUID coordinate.
+func (r *F74aBackfillRunner) requireSemanticDelivery(ctx context.Context, pkg *domain.SBOMPackage) error {
+	if r.cfg.SemanticDelivered == nil {
+		return errors.New("F74a semantic relay delivery proof is not configured")
+	}
+	accepted, err := r.cfg.SemanticDelivered(ctx, pkg)
+	if err != nil {
+		return err
+	}
+	if !accepted {
+		return fmt.Errorf("F74a semantic package %s lacks relay delivery proof", pkg.ID)
+	}
+	return nil
 }
 
-func (p F74aLivePublisher) before() error            { return p.Runner.MarkDirty(false) }
-func (p F74aLivePublisher) MarkBackfillDirty() error { return p.Runner.MarkDirty(true) }
-func (p F74aLivePublisher) PublishLLMRelease(ctx context.Context, x *domain.LLMRelease) error {
-	if err := p.before(); err != nil {
-		return err
+// verifySemanticPackages also covers migrations without legacy UUID records.
+// A pruned outbox and lost cache cannot establish completion without an EOSE
+// relay sync, so an absent proof fails closed.
+func (r *F74aBackfillRunner) verifySemanticPackages(ctx context.Context) error {
+	var cursor uuid.UUID
+	for {
+		items, err := r.cfg.Source.ListSemanticPackagesAfter(ctx, cursor, f74aBackfillPageSize)
+		if err != nil {
+			return err
+		}
+		for i := range items {
+			if err := r.requireSemanticDelivery(ctx, &items[i]); err != nil {
+				return err
+			}
+			cursor = items[i].ID
+		}
+		if len(items) < f74aBackfillPageSize {
+			return nil
+		}
 	}
-	return p.Publisher.PublishLLMRelease(ctx, x)
-}
-func (p F74aLivePublisher) PublishArtifactSignature(ctx context.Context, x *domain.ArtifactSignature) error {
-	if err := p.before(); err != nil {
-		return err
-	}
-	return p.Publisher.PublishArtifactSignature(ctx, x)
-}
-func (p F74aLivePublisher) PublishArtifactSBOM(ctx context.Context, x *domain.ArtifactSBOM) error {
-	if err := p.before(); err != nil {
-		return err
-	}
-	return p.Publisher.PublishArtifactSBOM(ctx, x)
-}
-func (p F74aLivePublisher) PublishSBOMPackage(ctx context.Context, x *domain.SBOMPackage) error {
-	if err := p.before(); err != nil {
-		return err
-	}
-	return p.Publisher.PublishSBOMPackage(ctx, x)
-}
-func (p F74aLivePublisher) PublishRuntimeObservation(ctx context.Context, x *domain.RuntimeObservation) error {
-	if err := p.before(); err != nil {
-		return err
-	}
-	return p.Publisher.PublishRuntimeObservation(ctx, x)
 }

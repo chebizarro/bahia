@@ -18,18 +18,17 @@ import (
 
 // LLMRegistryService owns canonical DB-first lifecycle state for LLM routes.
 type LLMRegistryService struct {
-	routes         repository.LLMRouteRepository
-	releases       repository.LLMReleaseRepository
-	environments   repository.EnvironmentRepository
-	intents        repository.LLMDeploymentIntentRepository
-	runs           repository.LLMDeploymentRunRepository
-	observations   repository.LLMRouteObservationRepository
-	state          repository.LLMRouteStateRepository
-	ml             *MLRegistryService
-	cpState        func(ctx context.Context, state *domain.LLMRouteState)
-	releaseCPState LLMReleaseStatePublisher
-	publisher      events.Publisher
-	logger         *zap.Logger
+	routes       repository.LLMRouteRepository
+	releases     repository.LLMReleaseRepository
+	environments repository.EnvironmentRepository
+	intents      repository.LLMDeploymentIntentRepository
+	runs         repository.LLMDeploymentRunRepository
+	observations repository.LLMRouteObservationRepository
+	state        repository.LLMRouteStateRepository
+	ml           *MLRegistryService
+	cpState      func(ctx context.Context, state *domain.LLMRouteState)
+	publisher    events.Publisher
+	logger       *zap.Logger
 }
 
 func NewLLMRegistryService(
@@ -71,23 +70,6 @@ func (s *LLMRegistryService) WithMLRegistry(ml *MLRegistryService) *LLMRegistryS
 // the projector's reactive handleEvent LLM state leg.
 func (s *LLMRegistryService) SetLLMCPStatePublisher(fn func(ctx context.Context, state *domain.LLMRouteState)) {
 	s.cpState = fn
-}
-
-type LLMReleaseStatePublisher interface {
-	PublishLLMRelease(context.Context, *domain.LLMRelease) error
-}
-
-func (s *LLMRegistryService) SetReleaseCPStatePublisher(pub LLMReleaseStatePublisher) {
-	s.releaseCPState = pub
-}
-
-func (s *LLMRegistryService) publishReleaseCPState(ctx context.Context, release *domain.LLMRelease) {
-	if s.releaseCPState == nil {
-		return
-	}
-	if err := s.releaseCPState.PublishLLMRelease(ctx, release); err != nil {
-		s.logger.Warn("publish LLM release cp-state failed", zap.Error(err))
-	}
 }
 
 func (s *LLMRegistryService) mlBacked() bool {
@@ -255,7 +237,6 @@ func (s *LLMRegistryService) CreateRelease(ctx context.Context, release *domain.
 		}
 		release.ID = version.ID
 		release.CreatedAt = version.CreatedAt
-		s.publishReleaseCPState(ctx, release)
 		return nil
 	}
 	if release == nil {
@@ -274,7 +255,6 @@ func (s *LLMRegistryService) CreateRelease(ctx context.Context, release *domain.
 	if err := s.releases.Create(ctx, release); err != nil {
 		return err
 	}
-	s.publishReleaseCPState(ctx, release)
 	s.publish(ctx, events.EventLLMReleaseRegistered, release.ID.String(), events.ResourceData{RouteID: release.RouteID.String(), ReleaseID: release.ID.String()})
 	return nil
 }

@@ -675,20 +675,6 @@ func New(cfg *config.Config) (*App, error) {
 		telemetryProvider.SetFleetHealthSources(workerRepo, stateRepo)
 	}
 
-	// One-shot migration: move any pre-upgrade pending PostgreSQL outbox rows
-	// into the local outbox so they are delivered by the local runner. After
-	// this, no PostgreSQL drain loop runs.
-	if pool != nil {
-		for _, pub := range []*nostrAdapter.Publisher{nostrPub, controlPlanePub} {
-			if n, err := pub.MigratePendingPostgresRows(ctx); err != nil {
-				logger.Error("migrate pending PostgreSQL outbox rows", zap.String("target", pub.Target()), zap.Error(err))
-			} else if n > 0 {
-				logger.Info("migrated pending PostgreSQL outbox rows to local outbox",
-					zap.String("target", pub.Target()), zap.Int("count", n))
-			}
-		}
-	}
-
 	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
 	bgManager.RegisterWithOptions(nostrPub)
@@ -1786,65 +1772,6 @@ func New(cfg *config.Config) (*App, error) {
 				logger.Warn("publish LLM route state cp-state failed", zap.Error(err))
 			}
 		})
-	}
-	var f74aRunner *service.F74aBackfillRunner
-	// F74a backfill is an optional, durable background runner. Its health
-	// warns while incomplete but does not hold HTTP readiness behind a SQL scan.
-	if nostrProjector != nil && nostrProjector.Enabled() {
-		bridge := &f74aDirtyMarkerBridge{}
-		f74aCanonical := nostrAdapter.NewF74aCanonicalPublisher(nostrProjector, confidentialEncryptor, bridge)
-		var livePublisher service.F74aLivePublisher
-		if dbAvailable && pool != nil {
-			f74aWarm := make(chan struct{})
-			nostrProjector.AddPostWarmStartHook(func(context.Context) { close(f74aWarm) })
-			runner := service.NewF74aBackfillRunner(service.F74aBackfillConfig{
-				Marker: localOutbox, Source: repository.NewPgF74aBackfillSource(pool),
-				Publisher: f74aCanonical,
-				Ready:     f74aWarm,
-				Pending: func(ctx context.Context) (int64, error) {
-					counts, err := localOutbox.Counts()
-					if err != nil {
-						return 0, err
-					}
-					pending := counts.Pending
-					if pgOutbox, ok := pgNostrEventRepo.(repository.NostrEventOutboxRepository); ok {
-						legacyPending, err := pgOutbox.CountUnpublished(ctx)
-						if err != nil {
-							return 0, err
-						}
-						pending += legacyPending
-					}
-					return pending, nil
-				},
-			})
-			f74aRunner = runner
-			bridge.runner = runner
-			livePublisher = service.F74aLivePublisher{Publisher: f74aCanonical, Runner: runner}
-			bgManager.RegisterWithOptions(runner, RunnerRequired(false))
-			registerF74aBackfillHealthCheck(healthProvider, runner)
-		} else {
-			bridge.skip = true
-			healthProvider.RegisterCheck("f74a_backfill", func() HealthCheck {
-				return HealthCheck{Name: "f74a_backfill", Status: HealthStatusPass, Message: "PostgreSQL unavailable; relay canonical state remains authoritative"}
-			})
-		}
-		var live service.F74aBackfillPublisher = f74aCanonical
-		if livePublisher.Runner != nil {
-			live = f74aLiveBackfillPublisher{F74aLivePublisher: livePublisher, tombstone: f74aCanonical}
-		}
-		if llmRegistry != nil {
-			llmRegistry.SetReleaseCPStatePublisher(live)
-		}
-		registry.SetObservationCPStatePublisher(live)
-		if sigRepo != nil {
-			sigRepo = service.NewCanonicalSignatureRepository(sigRepo, live, logger)
-		}
-		if sbomRepo != nil {
-			sbomRepo = service.NewCanonicalSBOMRepository(sbomRepo, live, logger)
-		}
-		if sbomManifestRepo != nil && sbomRepo != nil {
-			sbomManifestRepo = service.NewCanonicalSBOMManifestRepository(sbomManifestRepo, sbomRepo, live, logger)
-		}
 	}
 
 	// wire ML cp-state publisher into registry service so state
@@ -2963,9 +2890,6 @@ func New(cfg *config.Config) (*App, error) {
 	)
 	if pool != nil {
 		nostrTransportMetrics.setStorageSource(repository.NewPgNostrEventArchiveRepository(pool))
-	}
-	if f74aRunner != nil {
-		nostrTransportMetrics.setF74aBackfillSource(f74aRunner)
 	}
 	bgManager.RegisterWithOptions(nostrTransportMetrics, RunnerRequired(false))
 

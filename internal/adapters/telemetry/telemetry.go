@@ -138,7 +138,6 @@ type Metrics struct {
 	NostrRelayClosedRetryExhausted map[string]int64            // key: relay_url
 	NostrOutboxDepth               int64
 	NostrOutboxFailed              int64 // -1 until the failed-row index exists
-	F74aBackfill                   F74aBackfillMetrics
 	NostrEventStoreTotalBytes      int64
 	NostrEventStoreHeapBytes       int64
 	NostrEventStoreIndexBytes      int64
@@ -1381,8 +1380,6 @@ func (p *Provider) legacyMetricsHandler() http.HandlerFunc {
 		writer.printf("# HELP bahia_nostr_outbox_failed %s\n", nostrOutboxFailedHelp)
 		writer.println("# TYPE bahia_nostr_outbox_failed gauge")
 		writer.printf("bahia_nostr_outbox_failed %d\n", m.NostrOutboxFailed)
-
-		renderF74aBackfillMetrics(writer, m.F74aBackfill)
 
 		writer.println("# HELP bahia_nostr_event_store_bytes PostgreSQL Nostr event relation bytes by component")
 		writer.println("# TYPE bahia_nostr_event_store_bytes gauge")

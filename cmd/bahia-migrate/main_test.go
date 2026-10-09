@@ -56,3 +56,26 @@ func TestF74aCompactIsReadOnlyEvenWithConfirm(t *testing.T) {
 	require.Equal(t, 1, run(context.Background(), []string{"f74a-compact"}, &output, &errors))
 	require.Contains(t, errors.String(), "requires --cutoff")
 }
+
+func TestF74aImportRequiresExplicitQuiescenceInEitherArgumentOrder(t *testing.T) {
+	for _, args := range [][]string{{"f74a-import"}, {"--config", "missing.yaml", "f74a-import"}} {
+		var output, errors bytes.Buffer
+		require.Equal(t, 1, run(context.Background(), args, &output, &errors))
+		require.Contains(t, errors.String(), "requires --confirm-quiesced")
+	}
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	for _, args := range [][]string{{"f74a-import", "--confirm-quiesced", "--config", missing}, {"--config", missing, "--confirm-quiesced", "f74a-import"}} {
+		var output, errors bytes.Buffer
+		require.Equal(t, 1, run(context.Background(), args, &output, &errors))
+		require.NotContains(t, errors.String(), "unknown migration action")
+		require.Contains(t, errors.String(), "loading Bahia config")
+	}
+}
+
+func TestF74aImportRelaysFollowControlPlanePolicy(t *testing.T) {
+	cfg := config.NostrConfig{Relays: []string{"wss://interop.example"}, ContextVMRelays: []string{"wss://cp.example"}}
+	require.Equal(t, []string{"wss://cp.example"}, f74aControlPlaneRelays(cfg))
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.BackendURL = "ws://sidecar.internal"
+	require.Equal(t, []string{"ws://sidecar.internal"}, f74aControlPlaneRelays(cfg))
+}
