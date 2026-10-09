@@ -42,4 +42,4 @@ Replace the PostgreSQL advisory `RuntimeApplyLock` for this path with a non-Post
 
 ## Unresolved gates
 
-The operator-intent-to-`30900` signed linkage, complete membership generation/readiness proof, secret-value backend and rotation pin, non-PostgreSQL fence shared by manual and automatic paths, cross-daemon fencing mechanism, runtime applied-revision/partial-effect marker, and result-event contract require concrete implementation decisions. Until all four are evidenced by tests, the nil deployer and operator-facing `auto_apply: suspended` health state remain the correct behavior.
+The operator-intent-to-`30900` signed linkage, complete membership generation/readiness proof, secret-value backend and rotation pin, non-PostgreSQL fence shared by manual and automatic paths, cross-daemon fencing mechanism, runtime applied-revision/partial-effect marker, and result-event contract require concrete implementation decisions. Until these are evidenced by tests, the nil deployer and operator-facing `auto_apply: suspended` health state remain the correct behavior.
