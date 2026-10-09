@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -199,4 +200,41 @@ func TestBackupPausedRefusalRequiresValidSignedRequest(t *testing.T) {
 	reactor.handleBackupRunRequest(t.Context(), unauthorized)
 	reactor.handleBackupRunRequest(t.Context(), unauthorized)
 	require.Empty(t, capture.events, "unauthorized request caused a service-signed refusal")
+}
+
+func TestBackupPausedRefusalRequiresWellFormedPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		kind    int
+		content string
+		invoke  func(*Reactor, context.Context, *nostr.Event)
+	}{
+		{"run/malformed-json", KindBackupRunRequest, `{`, (*Reactor).handleBackupRunRequest},
+		{"run/missing-recipe", KindBackupRunRequest, `{}`, (*Reactor).handleBackupRunRequest},
+		{"run/invalid-recipe-id", KindBackupRunRequest, `{"recipe_id":"not-a-uuid"}`, (*Reactor).handleBackupRunRequest},
+		{"run/invalid-recipe-coordinate", KindBackupRunRequest, `{"recipe":"invalid"}`, (*Reactor).handleBackupRunRequest},
+		{"restore/malformed-json", KindBackupRestoreRequest, `{`, (*Reactor).handleBackupRestoreRequest},
+		{"restore/missing-fields", KindBackupRestoreRequest, `{}`, (*Reactor).handleBackupRestoreRequest},
+		{"restore/invalid-run-id", KindBackupRestoreRequest, `{"backup_run_id":"not-a-uuid","restore_target_ref":"fs:/restore"}`, (*Reactor).handleBackupRestoreRequest},
+		{"retention/malformed-json", KindBackupRetentionEnforce, `{`, (*Reactor).handleBackupRetentionRequest},
+		{"retention/missing-fields", KindBackupRetentionEnforce, `{}`, (*Reactor).handleBackupRetentionRequest},
+		{"retention/invalid-repository-id", KindBackupRetentionEnforce, `{"repository_id":"not-a-uuid","policy_id":"00000000-0000-0000-0000-000000000001"}`, (*Reactor).handleBackupRetentionRequest},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := nostr.Generate().Hex()
+			actor := testNostrPubKeyHexFromPrivateKey(t, key)
+			signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
+			require.NoError(t, err)
+			capture := &captureNostrPublisher{published: 1}
+			registry, _ := newBackupRequestRegistryFixture()
+			reactor := NewReactor(Config{AuthorizedPubkeys: []string{actor}}, nil, nil, signer, zap.NewNop(), WithControlPlanePublisher(capture))
+			reactor.backupRegistry = registry
+			request := signedLLMRequest(t, key, tt.kind, tt.content, nostr.Tags{{"d", "invalid:payload"}})
+			tt.invoke(reactor, t.Context(), request)
+			tt.invoke(reactor, t.Context(), request)
+			require.Empty(t, capture.events, "invalid payload caused a service-signed refusal")
+			require.Zero(t, registry.sqlCalls, "invalid payload reached SQL")
+		})
+	}
 }

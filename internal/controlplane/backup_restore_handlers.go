@@ -9,6 +9,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
 )
 
 type BackupRestoreControlPlaneExecutor interface {
@@ -27,6 +28,14 @@ type backupRestoreRequest struct {
 
 func (r *Reactor) handleBackupRestoreRequest(ctx context.Context, event *nostr.Event) {
 	if !r.authorizeBackupPausedRequest(ctx, event) {
+		return
+	}
+	req, err := parseBackupRestoreRequest(event)
+	if err == nil {
+		_, err = uuid.Parse(req.BackupRunID)
+	}
+	if err != nil {
+		r.zapLog.Warn("dropping invalid backup restore request without signing a refusal", zap.String("request_event_id", event.ID.Hex()), zap.Error(err))
 		return
 	}
 	r.publishPausedBackupRequest(ctx, event, KindBackupRestoreResult, "backup restore request intake is paused until canonical acceptance receipts are available")

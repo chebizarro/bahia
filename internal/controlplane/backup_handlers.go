@@ -32,6 +32,17 @@ func (r *Reactor) handleBackupRunRequest(ctx context.Context, event *nostr.Event
 	if !r.authorizeBackupPausedRequest(ctx, event) {
 		return
 	}
+	req, err := parseBackupRunRequest(event)
+	if err == nil && req.RecipeID != "" {
+		_, err = uuid.Parse(req.RecipeID)
+	}
+	if err == nil && req.RecipeID == "" {
+		_, _, err = parseBackupRecipeCoordinate(req.Recipe)
+	}
+	if err != nil {
+		r.zapLog.Warn("dropping invalid backup run request without signing a refusal", zap.String("request_event_id", event.ID.Hex()), zap.Error(err))
+		return
+	}
 	r.publishPausedBackupRequest(ctx, event, KindBackupRunResult, "backup run request intake is paused until canonical acceptance receipts are available")
 }
 

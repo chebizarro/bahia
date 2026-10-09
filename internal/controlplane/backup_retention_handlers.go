@@ -9,6 +9,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"go.uber.org/zap"
 )
 
 type BackupRetentionControlPlaneExecutor interface {
@@ -28,6 +29,17 @@ type backupRetentionRequest struct {
 
 func (r *Reactor) handleBackupRetentionRequest(ctx context.Context, event *nostr.Event) {
 	if !r.authorizeBackupPausedRequest(ctx, event) {
+		return
+	}
+	req, err := parseBackupRetentionRequest(event)
+	if err == nil {
+		_, err = uuid.Parse(req.RepositoryID)
+	}
+	if err == nil {
+		_, err = uuid.Parse(req.PolicyID)
+	}
+	if err != nil {
+		r.zapLog.Warn("dropping invalid backup retention request without signing a refusal", zap.String("request_event_id", event.ID.Hex()), zap.Error(err))
 		return
 	}
 	r.publishPausedBackupRequest(ctx, event, KindBackupRetentionResult, "backup retention request intake is paused until canonical acceptance receipts are available")
