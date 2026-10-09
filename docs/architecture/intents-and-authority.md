@@ -238,11 +238,13 @@ The durable admission record retains the exact signed event and relay-policy
 quorum proof after the settled delivery row is pruned; a separate
 processed-intent cache marker never substitutes for it. The delivery callback
 wakes a status reconciler, which signs and durably queues one final kind-30315
-`accepted` result only after that ACK. Startup reconciliation covers a crash
-between settlement and status staging; provisional pending relay statuses are
-not emitted. Outbox exhaustion is not proof that no relay holds the staged
-event: a failed row remains pinned, emits no false refusal, and can retry the
-same signed event ID. Replay of the same signed request is idempotent, while another
+`accepted` result only after that run-state ACK. The accepted status remains
+pinned for same-ID retry until its own control-plane relay-quorum ACK; MCP
+replay reports `accepted` only after both proofs. Startup reconciliation
+covers a crash between settlement and status staging; provisional pending
+relay statuses are not emitted. Outbox exhaustion is not proof that no relay
+holds the staged event: a failed row remains pinned, emits no false refusal,
+and can retry the same signed event ID. Replay of the same signed request is idempotent, while another
 request using its intent ID or run coordinate is rejected without replacing
 the first request's status. No backup execution starts
 from this queued state: canonical credential resolution and step checkpoint
@@ -260,9 +262,11 @@ and the exact configuration snapshot. Repositories with a credential profile
 also require an immutable credential-version ID in the snapshot. A version ID
 is a binding, not proof that a secret can be recovered; canonical credential
 resolution and execution checkpoint recovery are still required before a run
-may execute. The daemon emits a pending status for staged delivery and an
-accepted status only when the same signed request is replayed after quorum
-delivery; the canonical queued run state is independently observable on relays.
+may execute. MCP initially reports `pending` for staged delivery; there is no
+provisional pending relay status. After run-state quorum delivery, the daemon
+stages the final accepted status without requiring a request replay. MCP
+reports acceptance only after that status also reaches relay quorum; the
+canonical queued run state is independently observable on relays.
 
 LLM release-register, deploy, rollback, approve and reject intents are also
 refused while canonical publication or execution is unavailable. Before the

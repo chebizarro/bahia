@@ -2,8 +2,10 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -24,6 +26,7 @@ type BackupRunStatusReconciler struct {
 	events     *localstore.Store
 	logger     *zap.Logger
 	wake       chan struct{}
+	lastError  atomic.Value
 }
 
 func NewBackupRunStatusReconciler(outbox *localstore.Outbox, status *IntentStatusPublisher, statusTarget string, statusWake func(), events *localstore.Store, logger *zap.Logger) (*BackupRunStatusReconciler, error) {
@@ -33,10 +36,20 @@ func NewBackupRunStatusReconciler(outbox *localstore.Outbox, status *IntentStatu
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &BackupRunStatusReconciler{outbox: outbox, status: status, target: statusTarget, statusWake: statusWake, events: events, logger: logger.Named("backup-run-status"), wake: make(chan struct{}, 1)}, nil
+	r := &BackupRunStatusReconciler{outbox: outbox, status: status, target: statusTarget, statusWake: statusWake, events: events, logger: logger.Named("backup-run-status"), wake: make(chan struct{}, 1)}
+	r.lastError.Store("")
+	return r, nil
 }
 
 func (r *BackupRunStatusReconciler) Name() string { return "backup-run-status" }
+
+func (r *BackupRunStatusReconciler) LastError() string {
+	if r == nil {
+		return "backup run status reconciler is unavailable"
+	}
+	value, _ := r.lastError.Load().(string)
+	return value
+}
 
 func (r *BackupRunStatusReconciler) Notify(ev nostr.Event) {
 	if ev.Kind != nostr.Kind(kinds.CASControlState) || backupReceiptTag(ev.Tags, "t") != kinds.CPStateTopicBackupRun {
@@ -83,21 +96,29 @@ func (r *BackupRunStatusReconciler) ReconcileOnce(ctx context.Context) error {
 		return fmt.Errorf("backup run status reconciler is unavailable")
 	}
 	var after string
+	var failures []error
 	for {
 		if err := ctx.Err(); err != nil {
+			r.lastError.Store(err.Error())
 			return err
 		}
 		records, next, err := r.outbox.ListBackupRunAdmissionsNeedingStatus(after, 100)
 		if err != nil {
-			return err
+			failures = append(failures, err)
 		}
 		for _, record := range records {
 			if err := r.reconcileRecord(ctx, record); err != nil {
-				return fmt.Errorf("backup run %s final status: %w", record.IntentID, err)
+				failures = append(failures, fmt.Errorf("backup run %s final status: %w", record.IntentID, err))
 			}
 		}
 		if next == "" {
-			return nil
+			result := errors.Join(failures...)
+			if result != nil {
+				r.lastError.Store(result.Error())
+			} else {
+				r.lastError.Store("")
+			}
+			return result
 		}
 		after = next
 	}
@@ -119,7 +140,7 @@ func (r *BackupRunStatusReconciler) reconcileRecord(ctx context.Context, record 
 		Event: &nostr.Event{ID: requestID}, StatusData: map[string]any{
 			"run_id": strings.TrimPrefix(current.Coordinate, "backup-run:"), "state_event_id": current.StateEventID, "execution": "paused",
 		}}
-	event, err := r.status.buildStatusEvent(ctx, intent, "accepted", "applied", "", nil)
+	event, err := r.status.buildStatusEventWithExpiry(ctx, intent, "accepted", "applied", "", nil, 0)
 	if err != nil {
 		return err
 	}

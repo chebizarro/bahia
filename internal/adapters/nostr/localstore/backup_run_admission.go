@@ -3,6 +3,7 @@ package localstore
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,16 +17,18 @@ import (
 // and the first service-signed run state. It remains after settled outbox
 // entries are pruned; the event itself remains canonical on relays.
 type BackupRunAdmission struct {
-	IntentID       string `json:"intent_id"`
-	Coordinate     string `json:"coordinate"`
-	RequestEventID string `json:"request_event_id"`
-	StateEventID   string `json:"state_event_id"`
-	Target         string `json:"target"`
-	Actor          string `json:"actor"`
-	ServicePubkey  string `json:"service_pubkey"`
-	Delivered      bool   `json:"delivered"`
-	StatusEventID  string `json:"status_event_id,omitempty"`
-	StatusOutcome  string `json:"status_outcome,omitempty"`
+	IntentID        string `json:"intent_id"`
+	Coordinate      string `json:"coordinate"`
+	RequestEventID  string `json:"request_event_id"`
+	StateEventID    string `json:"state_event_id"`
+	Target          string `json:"target"`
+	Actor           string `json:"actor"`
+	ServicePubkey   string `json:"service_pubkey"`
+	Delivered       bool   `json:"delivered"`
+	StatusEventID   string `json:"status_event_id,omitempty"`
+	StatusTarget    string `json:"status_target,omitempty"`
+	StatusOutcome   string `json:"status_outcome,omitempty"`
+	StatusDelivered bool   `json:"status_delivered,omitempty"`
 }
 
 // GetBackupRunAdmission reports an exact replay or a key conflict. The
@@ -69,6 +72,24 @@ func (o *Outbox) GetBackupRunAdmission(intentID, coordinate, requestEventID stri
 					return fmt.Errorf("backup run admission lacks exact relay quorum proof")
 				}
 			}
+			if record.StatusDelivered {
+				if !record.Delivered || record.StatusOutcome != "accepted" {
+					return fmt.Errorf("backup run accepted status lacks admitted run")
+				}
+				id, err := nostr.IDFromHex(record.StatusEventID)
+				if err != nil {
+					return fmt.Errorf("backup run accepted status id is invalid: %w", err)
+				}
+				var proof DeliveryProof
+				raw := tx.Bucket(outboxDeliveryProofsBucket).Get(id[:])
+				if raw == nil || json.Unmarshal(raw, &proof) != nil || !proof.ValidFor(proof.Event, record.StatusTarget) ||
+					proof.Event.ID != id || proof.Event.PubKey.Hex() != record.ServicePubkey ||
+					!isBackupRunAcceptedStatusEvent(proof.Event) ||
+					outboxTag(proof.Event.Tags, "d") != "intent-status:"+record.Actor+":"+record.Coordinate ||
+					string(tx.Bucket(backupRunStatusEventsBucket).Get([]byte(record.StatusEventID))) != intentID {
+					return fmt.Errorf("backup run accepted status lacks exact relay quorum proof")
+				}
+			}
 			result = &record
 			return nil
 		}
@@ -78,6 +99,24 @@ func (o *Outbox) GetBackupRunAdmission(intentID, coordinate, requestEventID stri
 		return nil
 	})
 	return result, err
+}
+
+// HasBackupRunAdmissionCoordinate is the status publisher's fail-closed guard
+// against overwriting an admitted coordinate with a later generic rejection.
+func (o *Outbox) HasBackupRunAdmissionCoordinate(coordinate string) (bool, error) {
+	if o == nil || o.shared == nil {
+		return false, fmt.Errorf("backup run admission outbox is unavailable")
+	}
+	var found bool
+	err := o.shared.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(backupRunCoordsBucket)
+		if bucket == nil {
+			return fmt.Errorf("backup run admission coordinate index is unavailable")
+		}
+		found = bucket.Get([]byte(coordinate)) != nil
+		return nil
+	})
+	return found, err
 }
 
 // EnqueueBackupRun atomically stages the signed state and its immutable
@@ -212,6 +251,40 @@ func updateBackupRunAdmissionDelivery(tx *bbolt.Tx, entry OutboxEntry) error {
 	return intents.Put(intentID, encoded)
 }
 
+func updateBackupRunStatusDelivery(tx *bbolt.Tx, entry OutboxEntry) error {
+	statusEvents := tx.Bucket(backupRunStatusEventsBucket)
+	if statusEvents == nil {
+		return nil
+	}
+	intentID := statusEvents.Get([]byte(entry.Event.ID.Hex()))
+	if intentID == nil || !entry.Delivered {
+		return nil
+	}
+	intents := tx.Bucket(backupRunIntentsBucket)
+	var record BackupRunAdmission
+	if raw := intents.Get(intentID); raw == nil || json.Unmarshal(raw, &record) != nil {
+		return fmt.Errorf("backup run admission for accepted status is unavailable")
+	}
+	if record.StatusEventID != entry.Event.ID.Hex() || record.StatusTarget != entry.Target ||
+		!record.Delivered || record.StatusOutcome != "accepted" {
+		return fmt.Errorf("backup run accepted status index is inconsistent")
+	}
+	if record.StatusDelivered {
+		return nil
+	}
+	var proof DeliveryProof
+	raw := tx.Bucket(outboxDeliveryProofsBucket).Get(entry.Event.ID[:])
+	if raw == nil || json.Unmarshal(raw, &proof) != nil || !proof.ValidFor(entry.Event, entry.Target) {
+		return fmt.Errorf("backup run accepted status requires exact publisher relay quorum proof")
+	}
+	record.StatusDelivered = true
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return intents.Put(intentID, encoded)
+}
+
 func oneBackupRunTag(tags nostr.Tags, key, want string) bool {
 	count := 0
 	for _, tag := range tags {
@@ -225,24 +298,37 @@ func oneBackupRunTag(tags nostr.Tags, key, want string) bool {
 	return count == 1
 }
 
+func hasBackupRunTag(tags nostr.Tags, key string) bool {
+	for _, tag := range tags {
+		if len(tag) > 0 && tag[0] == key {
+			return true
+		}
+	}
+	return false
+}
+
 // backupRunAdmissionUnresolved pins the only signed copy of a staged run
 // through ordinary published/failed row retention. An outbox failure is not
 // proof that no relay holds the event, so it cannot be pruned or rejected.
 func backupRunAdmissionUnresolved(tx *bbolt.Tx, eventID nostr.ID) (bool, error) {
 	events := tx.Bucket(backupRunEventsBucket)
-	if events == nil {
-		return false, nil
+	statusEvents := tx.Bucket(backupRunStatusEventsBucket)
+	if events == nil || statusEvents == nil {
+		return true, fmt.Errorf("backup run admission indexes are unavailable")
 	}
 	intentID := events.Get([]byte(eventID.Hex()))
 	if intentID == nil {
-		return false, nil
+		intentID = statusEvents.Get([]byte(eventID.Hex()))
+		if intentID == nil {
+			return false, nil
+		}
 	}
 	bucket := tx.Bucket(backupRunIntentsBucket)
 	var record BackupRunAdmission
 	if raw := bucket.Get(intentID); raw == nil || json.Unmarshal(raw, &record) != nil {
 		return true, fmt.Errorf("backup run admission is unavailable")
 	}
-	return !record.Delivered || record.StatusEventID == "", nil
+	return !record.StatusDelivered, nil
 }
 
 // ListBackupRunAdmissionsNeedingStatus scans durable admission outcomes. A
@@ -257,6 +343,7 @@ func (o *Outbox) ListBackupRunAdmissionsNeedingStatus(after string, limit int) (
 	}
 	var records []BackupRunAdmission
 	var next string
+	var decodeErr error
 	err := o.shared.db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(backupRunIntentsBucket)
 		if bucket == nil {
@@ -276,7 +363,8 @@ func (o *Outbox) ListBackupRunAdmissionsNeedingStatus(after string, limit int) (
 			next = string(key)
 			var record BackupRunAdmission
 			if err := json.Unmarshal(raw, &record); err != nil {
-				return fmt.Errorf("decode backup run admission %q: %w", key, err)
+				decodeErr = errors.Join(decodeErr, fmt.Errorf("decode backup run admission %q: %w", key, err))
+				continue
 			}
 			if record.Delivered && record.StatusEventID == "" {
 				records = append(records, record)
@@ -287,7 +375,7 @@ func (o *Outbox) ListBackupRunAdmissionsNeedingStatus(after string, limit int) (
 		}
 		return nil
 	})
-	return records, next, err
+	return records, next, errors.Join(err, decodeErr)
 }
 
 // StageBackupRunAcceptedStatus atomically records exactly one service-signed
@@ -300,10 +388,13 @@ func (o *Outbox) StageBackupRunAcceptedStatus(record BackupRunAdmission, event n
 	if !event.CheckID() || !event.VerifySignature() || event.Kind != 30315 ||
 		event.PubKey.Hex() != record.ServicePubkey ||
 		!oneBackupRunTag(event.Tags, "d", "intent-status:"+record.Actor+":"+record.Coordinate) ||
+		!oneBackupRunTag(event.Tags, "domain", "intent") ||
+		!oneBackupRunTag(event.Tags, "t", "intent-status") ||
 		!oneBackupRunTag(event.Tags, "status", "accepted") ||
 		!oneBackupRunTag(event.Tags, "intent_id", record.IntentID) ||
 		!oneBackupRunTag(event.Tags, "p", record.Actor) ||
-		!oneBackupRunTag(event.Tags, "e", record.RequestEventID) {
+		!oneBackupRunTag(event.Tags, "e", record.RequestEventID) ||
+		hasBackupRunTag(event.Tags, "expiration") {
 		return "", false, fmt.Errorf("backup run terminal status requires exact signed request correlation")
 	}
 	var content struct {
@@ -364,7 +455,11 @@ func (o *Outbox) StageBackupRunAcceptedStatus(record BackupRunAdmission, event n
 				return err
 			}
 		}
+		if err := tx.Bucket(backupRunStatusEventsBucket).Put([]byte(event.ID.Hex()), []byte(current.IntentID)); err != nil {
+			return err
+		}
 		current.StatusEventID = event.ID.Hex()
+		current.StatusTarget = target
 		current.StatusOutcome = "accepted"
 		raw, err := json.Marshal(current)
 		if err != nil {

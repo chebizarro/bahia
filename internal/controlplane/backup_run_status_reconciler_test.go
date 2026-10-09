@@ -16,6 +16,10 @@ import (
 )
 
 func stageStatusTestRun(t *testing.T, outbox *localstore.Outbox, service nostr.SecretKey) (localstore.BackupRunAdmission, nostr.Event) {
+	return stageStatusTestRunWithID(t, outbox, service, "intent-"+uuid.NewString())
+}
+
+func stageStatusTestRunWithID(t *testing.T, outbox *localstore.Outbox, service nostr.SecretKey, intentID string) (localstore.BackupRunAdmission, nostr.Event) {
 	t.Helper()
 	actor := nostr.Generate().Public().Hex()
 	coordinate := "backup-run:" + uuid.NewString()
@@ -25,7 +29,7 @@ func stageStatusTestRun(t *testing.T, outbox *localstore.Outbox, service nostr.S
 		{"schema", kinds.CASControlStateSchema}, {"legacy_kind", "31996"}, {"deleted", "false"},
 	}, Content: `{"deleted":false}`}
 	require.NoError(t, event.Sign(service))
-	record, inserted, err := outbox.EnqueueBackupRun(localstore.OutboxEntry{Event: event, Target: "control-plane"}, "intent-"+uuid.NewString(), coordinate, requestID, actor)
+	record, inserted, err := outbox.EnqueueBackupRun(localstore.OutboxEntry{Event: event, Target: "control-plane"}, intentID, coordinate, requestID, actor)
 	require.NoError(t, err)
 	require.True(t, inserted)
 	return record, event
@@ -71,7 +75,7 @@ func TestBackupRunFinalStatusRequiresExactQuorumAndSurvivesPruneRestart(t *testi
 	require.NoError(t, outbox.Close())
 	outbox, err = localstore.OpenOutbox(path)
 	require.NoError(t, err)
-	defer outbox.Close()
+	defer func() { _ = outbox.Close() }()
 	reconciler = testBackupStatusReconciler(t, outbox, service, &wakes)
 	require.NoError(t, reconciler.ReconcileOnce(t.Context()))
 	require.Equal(t, 1, wakes)
@@ -79,6 +83,7 @@ func TestBackupRunFinalStatusRequiresExactQuorumAndSurvivesPruneRestart(t *testi
 	require.NoError(t, err)
 	require.True(t, current.Delivered)
 	require.Equal(t, "accepted", current.StatusOutcome)
+	require.False(t, current.StatusDelivered, "durable queueing is not status relay acceptance")
 	statusID, err := nostr.IDFromHex(current.StatusEventID)
 	require.NoError(t, err)
 	statusEntry, found, err := outbox.Get(statusID)
@@ -87,6 +92,7 @@ func TestBackupRunFinalStatusRequiresExactQuorumAndSurvivesPruneRestart(t *testi
 	require.Equal(t, localstore.OutboxPending, statusEntry.State)
 	require.Equal(t, "accepted", backupReceiptTag(statusEntry.Event.Tags, "status"))
 	require.Equal(t, record.RequestEventID, backupReceiptTag(statusEntry.Event.Tags, "e"))
+	require.Empty(t, backupReceiptTag(statusEntry.Event.Tags, "expiration"), "the pinned same-ID retry must not expire")
 	var content map[string]any
 	require.NoError(t, json.Unmarshal([]byte(statusEntry.Event.Content), &content))
 	require.Equal(t, "applied", content["result"])
@@ -96,7 +102,44 @@ func TestBackupRunFinalStatusRequiresExactQuorumAndSurvivesPruneRestart(t *testi
 	require.NoError(t, err)
 	_, found, err = outbox.Get(state.ID)
 	require.NoError(t, err)
-	require.False(t, found, "exact delivery proof survives prunable settled row")
+	require.True(t, found, "run state stays pinned until accepted status reaches quorum")
+	_, err = outbox.CommitPublisherRound(statusID, localstore.OutboxRound{Target: "", State: localstore.OutboxFailed,
+		Relays: map[string]localstore.RelayDelivery{"wss://status.example": {Rejected: "blocked"}}, At: time.Now().Add(-48 * time.Hour)})
+	require.NoError(t, err)
+	_, err = outbox.Prune(time.Now().Add(-24*time.Hour), time.Now().Add(-24*time.Hour))
+	require.NoError(t, err)
+	statusEntry, found, err = outbox.Get(statusID)
+	require.NoError(t, err)
+	require.True(t, found, "failed accepted status keeps its exact signed event for retry")
+	require.NoError(t, outbox.Close())
+	outbox, err = localstore.OpenOutbox(path)
+	require.NoError(t, err)
+	reconciler = testBackupStatusReconciler(t, outbox, service, &wakes)
+	require.NoError(t, reconciler.ReconcileOnce(t.Context()))
+	require.Equal(t, 1, wakes, "restart cannot sign a replacement status after refusal")
+	_, err = outbox.Retry(statusID)
+	require.NoError(t, err)
+	_, err = outbox.CommitRound(statusID, localstore.OutboxRound{Target: "", Delivered: true, State: localstore.OutboxPublished,
+		Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://status.example"}, Required: 1}, Relays: map[string]localstore.RelayDelivery{"wss://status.example": {Accepted: true}}})
+	require.ErrorContains(t, err, "publisher path")
+	_, err = outbox.CommitPublisherRound(statusID, localstore.OutboxRound{Target: "", Delivered: true, State: localstore.OutboxPublished,
+		Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://status.example"}, Required: 1}, Relays: map[string]localstore.RelayDelivery{"wss://status.example": {Accepted: true}}, At: time.Now().Add(-48 * time.Hour)})
+	require.NoError(t, err)
+	current, err = outbox.GetBackupRunAdmission(record.IntentID, record.Coordinate, record.RequestEventID)
+	require.NoError(t, err)
+	require.True(t, current.StatusDelivered)
+	proof, found, err := outbox.GetDeliveryProof(statusID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, proof.ValidFor(statusEntry.Event, ""))
+	_, err = outbox.Prune(time.Now().Add(-24*time.Hour), time.Now().Add(-24*time.Hour))
+	require.NoError(t, err)
+	_, found, err = outbox.Get(state.ID)
+	require.NoError(t, err)
+	require.False(t, found, "exact run delivery proof survives settled row pruning")
+	_, found, err = outbox.Get(statusID)
+	require.NoError(t, err)
+	require.False(t, found, "exact status delivery proof survives settled row pruning")
 	require.NoError(t, reconciler.ReconcileOnce(t.Context()))
 	require.Equal(t, 1, wakes)
 }
@@ -135,4 +178,61 @@ func TestBackupRunOutboxRefusalNeverSignsFalseStatusAndPinsSameEvent(t *testing.
 	current, err = outbox.GetBackupRunAdmission(record.IntentID, record.Coordinate, record.RequestEventID)
 	require.NoError(t, err)
 	require.Equal(t, "accepted", current.StatusOutcome)
+}
+
+func TestAdmittedBackupCoordinateCannotPublishLaterGenericStatus(t *testing.T) {
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	service := nostr.Generate()
+	record, _ := stageStatusTestRun(t, outbox, service)
+	signer, err := NewPrivateKeySigner(service.Hex())
+	require.NoError(t, err)
+	statuses := &statusCollector{}
+	publisher := NewIntentStatusPublisher(statuses.publish, signer, zap.NewNop())
+	publisher.SetBackupRunAdmissionGuard(outbox.HasBackupRunAdmissionCoordinate)
+	requestID, err := nostr.IDFromHex(record.RequestEventID)
+	require.NoError(t, err)
+	intent := &Intent{IntentID: record.IntentID, Actor: record.Actor, Coordinate: record.Coordinate, Event: &nostr.Event{ID: requestID}}
+	require.ErrorContains(t, publisher.PublishRejectionChecked(t.Context(), intent, "permission revoked"), "immutable admission outcome")
+	require.ErrorContains(t, publisher.PublishAcceptedChecked(t.Context(), intent), "immutable admission outcome")
+	require.Empty(t, statuses.events, "preauthorization and validation paths share the guarded publisher")
+	intent.Coordinate = "backup-run:" + uuid.NewString()
+	require.NoError(t, publisher.PublishRejectionChecked(t.Context(), intent, "invalid request"))
+	require.Len(t, statuses.events, 1, "an unadmitted request can still receive a bounded refusal")
+}
+
+func TestBackupStatusReconciliationContinuesAfterEarlierBadAdmission(t *testing.T) {
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	wrongSigner, service := nostr.Generate(), nostr.Generate()
+	bad, badEvent := stageStatusTestRunWithID(t, outbox, wrongSigner, "intent-a")
+	good, goodEvent := stageStatusTestRunWithID(t, outbox, service, "intent-z")
+	policy := localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1}
+	for _, event := range []nostr.Event{badEvent, goodEvent} {
+		_, err = outbox.CommitPublisherRound(event.ID, localstore.OutboxRound{Target: "control-plane", State: localstore.OutboxPublished,
+			Delivered: true, Policy: policy, Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}})
+		require.NoError(t, err)
+	}
+	wakes := 0
+	reconciler := testBackupStatusReconciler(t, outbox, service, &wakes)
+	err = reconciler.ReconcileOnce(t.Context())
+	require.ErrorContains(t, err, "intent-a")
+	require.NotEmpty(t, reconciler.LastError(), "the failure remains visible for health and retry")
+	badCurrent, err := outbox.GetBackupRunAdmission(bad.IntentID, bad.Coordinate, bad.RequestEventID)
+	require.NoError(t, err)
+	require.Empty(t, badCurrent.StatusEventID)
+	goodCurrent, err := outbox.GetBackupRunAdmission(good.IntentID, good.Coordinate, good.RequestEventID)
+	require.NoError(t, err)
+	require.NotEmpty(t, goodCurrent.StatusEventID, "later ACKed records cannot starve behind one failure")
+	require.Equal(t, 1, wakes)
+	signer, err := NewPrivateKeySigner(wrongSigner.Hex())
+	require.NoError(t, err)
+	reconciler.status = NewIntentStatusPublisher(func(context.Context, nostr.Event) error { return nil }, signer, zap.NewNop())
+	require.NoError(t, reconciler.ReconcileOnce(t.Context()))
+	require.Empty(t, reconciler.LastError())
+	badCurrent, err = outbox.GetBackupRunAdmission(bad.IntentID, bad.Coordinate, bad.RequestEventID)
+	require.NoError(t, err)
+	require.NotEmpty(t, badCurrent.StatusEventID)
 }

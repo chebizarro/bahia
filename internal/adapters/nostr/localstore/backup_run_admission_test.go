@@ -9,7 +9,37 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/bbolt"
 )
+
+func TestBackupRunAdmissionScanSkipsMalformedRecordWithoutStarvingLaterACK(t *testing.T) {
+	outbox, err := OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	service := nostr.Generate()
+	coordinate := "backup-run:" + uuid.NewString()
+	requestID := nostr.Generate().Public().Hex()
+	event := nostr.Event{Kind: nostr.Kind(kinds.CASControlState), CreatedAt: nostr.Now(), Tags: nostr.Tags{
+		{"d", coordinate}, {"t", kinds.CPStateTopicBackupRun}, {"domain", "backup"},
+		{"schema", kinds.CASControlStateSchema}, {"legacy_kind", "31996"}, {"deleted", "false"},
+	}}
+	require.NoError(t, event.Sign(service))
+	_, inserted, err := outbox.EnqueueBackupRun(OutboxEntry{Event: event, Target: "control-plane"}, "intent-z", coordinate, requestID, nostr.Generate().Public().Hex())
+	require.NoError(t, err)
+	require.True(t, inserted)
+	policy := DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1}
+	_, err = outbox.CommitPublisherRound(event.ID, OutboxRound{Target: "control-plane", Delivered: true, State: OutboxPublished, Policy: policy,
+		Relays: map[string]RelayDelivery{"wss://relay.example": {Accepted: true}}})
+	require.NoError(t, err)
+	require.NoError(t, outbox.shared.db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(backupRunIntentsBucket).Put([]byte("intent-a"), []byte("{malformed"))
+	}))
+	records, next, err := outbox.ListBackupRunAdmissionsNeedingStatus("", 100)
+	require.ErrorContains(t, err, "intent-a")
+	require.Empty(t, next)
+	require.Len(t, records, 1)
+	require.Equal(t, "intent-z", records[0].IntentID)
+}
 
 func TestBackupRunAdmissionCommitsEventAndIdentityAtomically(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.db")

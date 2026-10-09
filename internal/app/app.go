@@ -903,6 +903,7 @@ func New(cfg *config.Config) (*App, error) {
 			controlPlaneSigner,
 			logger,
 		)
+		intentStatus.SetBackupRunAdmissionGuard(localOutbox.HasBackupRunAdmissionCoordinate)
 	}
 	intentProcessor := controlplane.NewIntentProcessor(
 		trustSet, localEventStore, intentStatus,
@@ -1309,13 +1310,21 @@ func New(cfg *config.Config) (*App, error) {
 	backupCanonical.SetRuntimeObservationSource(backupRegistry)
 	backupRegistry.SetCanonicalPublisher(backupCanonical)
 	if enabledDomains["backup"] && intentStatus != nil && nostrPub != nil {
-		backupStatus, err := controlplane.NewBackupRunStatusReconciler(localOutbox, intentStatus, nostrPub.Target(), nostrPub.Wake, localEventStore, logger)
+		backupStatus, err := controlplane.NewBackupRunStatusReconciler(localOutbox, intentStatus, controlPlanePub.Target(), controlPlanePub.Wake, localEventStore, logger)
 		if err != nil {
 			return nil, fmt.Errorf("configure backup run status reconciliation: %w", err)
 		}
 		controlPlanePub.OnDelivered(backupStatus.Notify)
 		controlPlanePub.OnDeliveryAbandoned(backupStatus.Notify)
 		bgManager.RegisterWithOptions(backupStatus)
+		healthProvider.RegisterCheck("backup_run_status", func() HealthCheck {
+			if backupStatus.LastError() != "" {
+				return HealthCheck{Name: "backup_run_status", Status: HealthStatusWarn,
+					Message: "backup run accepted-status reconciliation is delayed"}
+			}
+			return HealthCheck{Name: "backup_run_status", Status: HealthStatusPass,
+				Message: "backup run accepted-status reconciliation is available"}
+		})
 	}
 	backupRunReceipts, backupReceiptErr := controlplane.NewLocalBackupRunReceipts(localEventStore, localOutbox, servicePubkey)
 	if backupReceiptErr != nil {

@@ -51,10 +51,11 @@ For a staged backup run, the publisher's verified quorum round also updates
 the durable admission record. The final signed accepted intent status is
 enqueued in a separate atomic transaction after that outcome; a startup pass
 repairs a crash between the two transactions without signing a second status.
-A staged run state without that durable status pins its outbox row through
-ordinary pruning, including after the delivery attempt budget is exhausted.
-The same signed event may be retried; exhaustion alone never signs a rejection
-because one relay may already hold the event.
+Both the run state and accepted status remain pinned through ordinary pruning
+until the status itself has an exact publisher relay-quorum proof. Failed rows
+can retry the same signed event ID. Exhaustion alone never signs a rejection
+because one relay may already hold the event; MCP reports acceptance only
+after both the run and final-status proofs exist.
 
 ## Abandonment: two cases, decided by who was told
 

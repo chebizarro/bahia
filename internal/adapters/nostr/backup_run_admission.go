@@ -27,7 +27,7 @@ func (p *BackupCanonicalPublisher) LookupRunAdmission(ctx context.Context, inten
 	if err != nil || record == nil {
 		return "", false, false, err
 	}
-	return record.StateEventID, true, record.Delivered && record.StatusOutcome == "accepted" && record.StatusEventID != "", nil
+	return record.StateEventID, true, record.Delivered && record.StatusDelivered && record.StatusOutcome == "accepted", nil
 }
 
 // StageRunAdmission signs and persists the first queued run state together

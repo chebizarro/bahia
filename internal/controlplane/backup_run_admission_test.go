@@ -28,7 +28,7 @@ func (s testBackupRunAdmission) LookupRunAdmission(_ context.Context, intentID, 
 	if err != nil || entry == nil {
 		return "", false, false, err
 	}
-	return entry.StateEventID, true, entry.Delivered && entry.StatusEventID != "", nil
+	return entry.StateEventID, true, entry.Delivered && entry.StatusDelivered, nil
 }
 
 func (s testBackupRunAdmission) StageRunAdmission(_ context.Context, intentID, requestID string, run *domain.BackupRun) (string, error) {
@@ -151,6 +151,15 @@ func TestBackupRunAdmissionPendingUntilACKThenAcceptedOnReplay(t *testing.T) {
 		NewIntentStatusPublisher(statuses.publish, signer, zap.NewNop()), "", func() {}, nil, zap.NewNop())
 	require.NoError(t, err)
 	require.NoError(t, statusReconciler.ReconcileOnce(t.Context()))
+	process()
+	require.False(t, processor.IsProcessed(first.IntentID), "queued accepted status is not yet an ACKed result")
+	staged, err := outbox.GetBackupRunAdmission(first.IntentID, first.Coordinate, request.ID.Hex())
+	require.NoError(t, err)
+	statusID, err := nostr.IDFromHex(staged.StatusEventID)
+	require.NoError(t, err)
+	_, err = outbox.CommitPublisherRound(statusID, localstore.OutboxRound{Target: "", Rounds: 1, Delivered: true, State: localstore.OutboxPublished,
+		Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://status.example"}, Required: 1}, Relays: map[string]localstore.RelayDelivery{"wss://status.example": {Accepted: true}}})
+	require.NoError(t, err)
 	accepted := process()
 	require.True(t, processor.IsProcessed(first.IntentID))
 	require.Empty(t, statuses.events, "replay must not mint a duplicate accepted status")

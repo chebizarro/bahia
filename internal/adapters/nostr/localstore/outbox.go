@@ -43,16 +43,17 @@ const (
 )
 
 var (
-	outboxEntriesBucket        = []byte("bahiaOutboxEntries")
-	outboxPendingBucket        = []byte("bahiaOutboxPending")
-	outboxPublishedBucket      = []byte("bahiaOutboxPublished")
-	outboxFailedBucket         = []byte("bahiaOutboxFailed")
-	outboxCoordinatesBucket    = []byte("bahiaOutboxCoordinatesV1")
-	outboxCoordinatesReady     = []byte("index-ready")
-	outboxDeliveryProofsBucket = []byte("bahiaOutboxDeliveryProofsV1")
-	backupRunIntentsBucket     = []byte("bahiaBackupRunIntentsV1")
-	backupRunCoordsBucket      = []byte("bahiaBackupRunCoordinatesV1")
-	backupRunEventsBucket      = []byte("bahiaBackupRunEventsV1")
+	outboxEntriesBucket         = []byte("bahiaOutboxEntries")
+	outboxPendingBucket         = []byte("bahiaOutboxPending")
+	outboxPublishedBucket       = []byte("bahiaOutboxPublished")
+	outboxFailedBucket          = []byte("bahiaOutboxFailed")
+	outboxCoordinatesBucket     = []byte("bahiaOutboxCoordinatesV1")
+	outboxCoordinatesReady      = []byte("index-ready")
+	outboxDeliveryProofsBucket  = []byte("bahiaOutboxDeliveryProofsV1")
+	backupRunIntentsBucket      = []byte("bahiaBackupRunIntentsV1")
+	backupRunCoordsBucket       = []byte("bahiaBackupRunCoordinatesV1")
+	backupRunEventsBucket       = []byte("bahiaBackupRunEventsV1")
+	backupRunStatusEventsBucket = []byte("bahiaBackupRunStatusEventsV1")
 )
 
 // DeliveryPolicy is the publisher's write-relay policy at the instant the
@@ -248,7 +249,7 @@ func openOutboxDB(path string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket, outboxDeliveryProofsBucket, backupRunIntentsBucket, backupRunCoordsBucket, backupRunEventsBucket} {
+		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket, outboxDeliveryProofsBucket, backupRunIntentsBucket, backupRunCoordsBucket, backupRunEventsBucket, backupRunStatusEventsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -666,7 +667,7 @@ func (o *Outbox) commitRound(id nostr.ID, round OutboxRound, recordProof bool) (
 		if err := json.Unmarshal(raw, &stored); err != nil {
 			return fmt.Errorf("decode outbox entry %s: %w", id.Hex(), err)
 		}
-		if !recordProof && isProofEligibleEvent(stored.Event) {
+		if !recordProof && isProofEligibleForRound(tx, stored.Event) {
 			return errors.New("canonical delivery rounds require the publisher path")
 		}
 		if recordProof && round.Target != stored.Target {
@@ -677,7 +678,10 @@ func (o *Outbox) commitRound(id nostr.ID, round OutboxRound, recordProof bool) (
 			at = time.Now().UTC()
 		}
 		if stored.State != OutboxPending {
-			return recordPublisherProof(tx, stored, round, at, recordProof)
+			if err := recordPublisherProof(tx, stored, round, at, recordProof); err != nil {
+				return err
+			}
+			return updateBackupRunStatusDelivery(tx, stored)
 		}
 		stored.Relays = mergeRelayDeliveries(stored.Relays, round.Relays)
 		stored.Rounds = max(stored.Rounds, round.Rounds)
@@ -710,7 +714,10 @@ func (o *Outbox) commitRound(id nostr.ID, round OutboxRound, recordProof bool) (
 		if err := recordPublisherProof(tx, stored, round, at, recordProof); err != nil {
 			return err
 		}
-		return updateBackupRunAdmissionDelivery(tx, stored)
+		if err := updateBackupRunAdmissionDelivery(tx, stored); err != nil {
+			return err
+		}
+		return updateBackupRunStatusDelivery(tx, stored)
 	})
 	if err != nil {
 		return OutboxEntry{}, fmt.Errorf("commit outbox round for %s: %w", id.Hex(), err)
@@ -719,7 +726,7 @@ func (o *Outbox) commitRound(id nostr.ID, round OutboxRound, recordProof bool) (
 }
 
 func recordPublisherProof(tx *bbolt.Tx, entry OutboxEntry, round OutboxRound, at time.Time, publisherRound bool) error {
-	if !publisherRound || !round.Delivered || !isProofEligibleEvent(entry.Event) {
+	if !publisherRound || !round.Delivered || !isProofEligibleForRound(tx, entry.Event) {
 		return nil
 	}
 	proofs := tx.Bucket(outboxDeliveryProofsBucket)
@@ -730,7 +737,7 @@ func recordPublisherProof(tx *bbolt.Tx, entry OutboxEntry, round OutboxRound, at
 	proofEntry.Relays = round.Relays
 	proof, ok := canonicalDeliveryProof(proofEntry, round.Policy, at)
 	if !ok {
-		return fmt.Errorf("canonical config %s publisher round lacks verified target quorum", entry.Event.ID.Hex())
+		return fmt.Errorf("canonical event %s publisher round lacks verified target quorum", entry.Event.ID.Hex())
 	}
 	raw, err := json.Marshal(proof)
 	if err != nil {
@@ -739,9 +746,14 @@ func recordPublisherProof(tx *bbolt.Tx, entry OutboxEntry, round OutboxRound, at
 	return proofs.Put(entry.Event.ID[:], raw)
 }
 
+func isProofEligibleForRound(tx *bbolt.Tx, ev nostr.Event) bool {
+	return isProofEligibleEvent(ev) ||
+		(isBackupRunAcceptedStatusEvent(ev) && tx.Bucket(backupRunStatusEventsBucket).Get([]byte(ev.ID.Hex())) != nil)
+}
+
 func canonicalDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time.Time) (DeliveryProof, bool) {
 	ev := entry.Event
-	if !isProofEligibleEvent(ev) || !ev.CheckID() || !ev.VerifySignature() || outboxTag(ev.Tags, "d") == "" {
+	if !(isProofEligibleEvent(ev) || isBackupRunAcceptedStatusEvent(ev)) || !ev.CheckID() || !ev.VerifySignature() || outboxTag(ev.Tags, "d") == "" {
 		return DeliveryProof{}, false
 	}
 	relayOK := make(map[string]bool, len(policy.WriteRelays))
@@ -781,6 +793,12 @@ func isBackupRunStateEvent(ev nostr.Event) bool {
 		outboxTag(ev.Tags, "t") == kinds.CPStateTopicBackupRun &&
 		outboxTag(ev.Tags, "legacy_kind") == fmt.Sprint(kinds.BackupRunState) &&
 		outboxTag(ev.Tags, "deleted") == "false"
+}
+
+func isBackupRunAcceptedStatusEvent(ev nostr.Event) bool {
+	return ev.Kind == 30315 && outboxTag(ev.Tags, "domain") == "intent" &&
+		outboxTag(ev.Tags, "t") == "intent-status" && outboxTag(ev.Tags, "status") == "accepted" &&
+		strings.HasPrefix(outboxTag(ev.Tags, "d"), "intent-status:")
 }
 
 func outboxTag(tags nostr.Tags, key string) string {

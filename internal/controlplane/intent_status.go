@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -21,7 +22,16 @@ type IntentStatusPublisher struct {
 	signer  nostr.Signer
 	logger  *zap.Logger
 	// statusExpiry is the NIP-40 expiration duration (default 7 days).
-	statusExpiry time.Duration
+	statusExpiry         time.Duration
+	backupAdmissionGuard func(string) (bool, error)
+}
+
+// SetBackupRunAdmissionGuard prevents generic validation or authorization
+// statuses from replacing the immutable outcome of an admitted run coordinate.
+func (p *IntentStatusPublisher) SetBackupRunAdmissionGuard(guard func(string) (bool, error)) {
+	if p != nil {
+		p.backupAdmissionGuard = guard
+	}
 }
 
 // NewIntentStatusPublisher creates a status publisher. The publish function
@@ -91,6 +101,18 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 	if p == nil || p.publish == nil || p.signer == nil || intent == nil {
 		return nil
 	}
+	if strings.HasPrefix(intent.Coordinate, "backup-run:") {
+		if p.backupAdmissionGuard == nil {
+			return fmt.Errorf("backup run admission guard is unavailable")
+		}
+		admitted, err := p.backupAdmissionGuard(intent.Coordinate)
+		if err != nil {
+			return fmt.Errorf("backup run admission guard: %w", err)
+		}
+		if admitted {
+			return fmt.Errorf("backup run coordinate has an immutable admission outcome")
+		}
+	}
 	ev, err := p.buildStatusEvent(ctx, intent, status, result, reason, evaluation)
 	if err != nil {
 		return err
@@ -106,6 +128,10 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 }
 
 func (p *IntentStatusPublisher) buildStatusEvent(ctx context.Context, intent *Intent, status, result, reason string, evaluation *domain.PolicyEvaluation) (nostr.Event, error) {
+	return p.buildStatusEventWithExpiry(ctx, intent, status, result, reason, evaluation, p.statusExpiry)
+}
+
+func (p *IntentStatusPublisher) buildStatusEventWithExpiry(ctx context.Context, intent *Intent, status, result, reason string, evaluation *domain.PolicyEvaluation, expiry time.Duration) (nostr.Event, error) {
 	if p == nil || p.signer == nil || intent == nil {
 		return nostr.Event{}, fmt.Errorf("intent status signer is not configured")
 	}
@@ -113,8 +139,6 @@ func (p *IntentStatusPublisher) buildStatusEvent(ctx context.Context, intent *In
 	// Build d-tag: intent-status:<requester-pubkey>:<entity-coordinate>
 	// This bounds growth to one status event per requester per entity.
 	dTag := fmt.Sprintf("intent-status:%s:%s", intent.Actor, intent.Coordinate)
-
-	expiration := fmt.Sprintf("%d", time.Now().Add(p.statusExpiry).Unix())
 
 	content := map[string]interface{}{
 		"intent_id":  intent.IntentID,
@@ -157,9 +181,11 @@ func (p *IntentStatusPublisher) buildStatusEvent(ctx context.Context, intent *In
 			{"t", "intent-status"},
 			{"p", intent.Actor},
 			{"intent_id", intent.IntentID},
-			{"expiration", expiration},
 		},
 		Content: string(contentJSON),
+	}
+	if expiry > 0 {
+		ev.Tags = append(ev.Tags, nostr.Tag{"expiration", fmt.Sprintf("%d", time.Now().Add(expiry).Unix())})
 	}
 
 	// Add event reference if the intent has an event.
