@@ -35,6 +35,7 @@ var sqlSourcedStartupCalls = map[string]string{
 	"NewBackupRetentionCoordinator":  "backupRegistry",
 	"NewBackupSchedulerRunner":       "backupScheduler",
 	"NewToolProvisioningCoordinator": "toolProvisionRepo",
+	"loadAssistantSessions":          "nostrEventRepo",
 }
 
 func TestNoAutomaticSQLToCanonicalPromotion(t *testing.T) {
