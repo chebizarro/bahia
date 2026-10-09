@@ -29,8 +29,8 @@ The problem is broader than transition classification:
   `ListByServiceEnv` read only `runtime_observations`. Removing a row changes
   reconciliation, registry ordering, and historical-read semantics unless all
   those reads have a transparent archive path. `UpsertObservation` compares
-  current and incoming rows in that table; `DeleteIfUnreferenced` checks it
-  before deleting a deployment unit.
+  current and incoming rows in that table; an archive-to-unit foreign key and
+  an immutable retired-unit row retain placement identity for hot restore.
 - The state foreign key points at `runtime_observations`, not an archive. A
   later state link to an archived row would fail unless that row is restored
   into the hot table *inside the linking transaction*.

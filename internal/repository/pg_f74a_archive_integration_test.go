@@ -4,7 +4,6 @@ package repository_test
 
 import (
 	"context"
-	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -322,7 +321,7 @@ func TestF74aArchivePreservesHistoryAndRehydratesDelayedLink(t *testing.T) {
 	require.Equal(t, *archived, *archivedAfterCascade)
 }
 
-func TestF74aArchivedAuditRowDoesNotPinDeploymentUnit(t *testing.T) {
+func TestF74aArchivedAuditRowRetainsImmutableDeploymentUnitTombstone(t *testing.T) {
 	pool, _ := f74aArchiveDatabase(t)
 	ctx := t.Context()
 	serviceID, environmentID, unitID := uuid.New(), uuid.New(), uuid.New()
@@ -361,36 +360,98 @@ func TestF74aArchivedAuditRowDoesNotPinDeploymentUnit(t *testing.T) {
 	require.Equal(t, 1, batch.Archived)
 	_, err = pool.Exec(ctx, `DELETE FROM runtime_observations WHERE id=$1`, first)
 	require.NoError(t, err)
-	require.NoError(t, unitRepo.DeleteIfUnreferenced(ctx, unitID),
-		"an immutable audit row is not a live deployment reference")
-	var unitExists bool
-	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM deployment_units WHERE id=$1)`, unitID).Scan(&unitExists))
-	require.False(t, unitExists)
+	_, err = pool.Exec(ctx, `DELETE FROM deployment_units WHERE id=$1`, unitID)
+	require.Error(t, err, "archive FK must protect unit identity even from direct SQL")
+	require.NoError(t, unitRepo.DeleteIfUnreferenced(ctx, unitID))
+	var retiredAt time.Time
+	require.NoError(t, pool.QueryRow(ctx, `SELECT retired_at FROM deployment_units WHERE id=$1`, unitID).Scan(&retiredAt))
+	require.False(t, retiredAt.IsZero())
+	active, err := unitRepo.GetByID(ctx, unitID)
+	require.NoError(t, err)
+	require.Nil(t, active)
+	active, err = unitRepo.GetByEnvironmentKey(ctx, environmentID, "unit")
+	require.NoError(t, err)
+	require.Nil(t, active)
+	listed, err := unitRepo.ListByEnvironment(ctx, environmentID)
+	require.NoError(t, err)
+	require.Empty(t, listed)
+	_, err = pool.Exec(ctx, `UPDATE deployment_units SET unit_key='changed' WHERE id=$1`, unitID)
+	require.ErrorContains(t, err, "immutable")
+	_, err = pool.Exec(ctx, `DELETE FROM deployment_units WHERE id=$1`, unitID)
+	require.ErrorContains(t, err, "immutable")
+	_, err = pool.Exec(ctx, `DELETE FROM environments WHERE id=$1`, environmentID)
+	require.Error(t, err, "environment cascade must not destroy a referenced unit tombstone")
+	var environmentExists bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM environments WHERE id=$1)`, environmentID).Scan(&environmentExists))
+	require.True(t, environmentExists)
+	newUnitID := uuid.New()
+	_, err = pool.Exec(ctx, `INSERT INTO deployment_units
+		(id,environment_id,unit_key,runtime_type,reconcile_mode,ownership_mode)
+		VALUES ($1,$2,'unit','docker','observe_only','external')`, newUnitID, environmentID)
+	require.NoError(t, err, "a retired key may be reused by an active unit")
 	archived, err := archiveRepo.GetArchivedByID(ctx, archivedID)
 	require.NoError(t, err)
 	require.NotNil(t, archived)
 	require.Equal(t, &unitID, archived.Observation.DeploymentUnitID,
 		"archive must retain the original placement identity after unit deletion")
-	assertMissingUnitFK := func(err error) {
-		t.Helper()
-		require.Error(t, err)
-		var pgErr *pgconn.PgError
-		require.True(t, errors.As(err, &pgErr))
-		require.Equal(t, "23503", pgErr.Code, "identity-preserving hot restore must fail closed")
-	}
-	assertMissingUnitFK(archiveRepo.RestoreByID(ctx, archivedID))
+	require.NoError(t, archiveRepo.RestoreByID(ctx, archivedID))
 	_, err = pool.Exec(ctx, `INSERT INTO environment_service_state(service_id,environment_id,current_observation_id)
 		VALUES ($1,$2,$3)`, serviceID, environmentID, archivedID)
-	assertMissingUnitFK(err)
+	require.NoError(t, err)
 	var hotCount, stateCount int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, archivedID).Scan(&hotCount))
-	require.Zero(t, hotCount)
+	require.Equal(t, 1, hotCount)
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM environment_service_state
 		WHERE service_id=$1 AND environment_id=$2`, serviceID, environmentID).Scan(&stateCount))
-	require.Zero(t, stateCount)
+	require.Equal(t, 1, stateCount)
 	retained, err := archiveRepo.GetArchivedByID(ctx, archivedID)
 	require.NoError(t, err)
 	require.Equal(t, *archived, *retained)
+	_, err = db.Down(ctx, pool, zap.NewNop(), db.DownOptions{Confirm: true})
+	require.ErrorContains(t, err, "cannot roll back F74a unit tombstones")
+}
+
+func TestF74aUnitTombstoneMigrationRejectsOrphanArchive(t *testing.T) {
+	pool, _ := f74aArchiveDatabase(t)
+	ctx := t.Context()
+	rolled, err := db.Down(ctx, pool, zap.NewNop(), db.DownOptions{Confirm: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"000077_f74a_unit_tombstones"}, rolled)
+	serviceID, environmentID, unitID := uuid.New(), uuid.New(), uuid.New()
+	_, err = pool.Exec(ctx, `INSERT INTO services(id,name,artifact_repo) VALUES ($1,$2,'archive-test')`, serviceID, "orphan-"+serviceID.String())
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO environments(id,name) VALUES ($1,$2)`, environmentID, "orphan-"+environmentID.String())
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO deployment_units
+		(id,environment_id,unit_key,runtime_type,reconcile_mode,ownership_mode)
+		VALUES ($1,$2,'unit','docker','observe_only','external')`, unitID, environmentID)
+	require.NoError(t, err)
+	base := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
+	for _, hour := range []int{1, 3} {
+		obs := &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: environmentID,
+			DeploymentUnitID: &unitID, ObservedImageDigest: "sha256:aaaa", ObservedImageRepo: "registry.example/test",
+			ObservedContainerID: "container", ObservedHost: "host", ObservedVersion: "v1",
+			HealthStatus: "healthy", Source: "runtime", Metadata: map[string]any{},
+			ObservedAt: base.Add(time.Duration(hour) * time.Hour)}
+		require.NoError(t, repository.NewPgRuntimeObservationRepository(pool).Create(ctx, obs))
+	}
+	archiveRepo := repository.NewPgF74aObservationArchiveRepository(pool)
+	run, err := archiveRepo.StartRun(ctx, base.Add(24*time.Hour), 2)
+	require.NoError(t, err)
+	batch, err := archiveRepo.ArchiveNextBatch(ctx, run.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1, batch.Archived)
+	_, err = pool.Exec(ctx, `DELETE FROM runtime_observations WHERE deployment_unit_id=$1`, unitID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `DELETE FROM deployment_units WHERE id=$1`, unitID)
+	require.NoError(t, err, "pre-migration schema allowed orphaning the archive")
+	err = db.Migrate(ctx, pool, zap.NewNop())
+	require.ErrorContains(t, err, "deployment-unit orphans")
+	var applied, archived int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations WHERE version='000077_f74a_unit_tombstones'`).Scan(&applied))
+	require.Zero(t, applied, "failed migration must roll back atomically")
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observation_archive WHERE deployment_unit_id=$1`, unitID).Scan(&archived))
+	require.Equal(t, 1, archived, "failed migration must not erase history")
 }
 
 func TestF74aBackdatedInsertAndArchiveBothLockOrders(t *testing.T) {

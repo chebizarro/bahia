@@ -50,7 +50,7 @@ func TestSecurityRetireFailedRetryableMigrationRoundTrip(t *testing.T) {
 	toBefore072 := DownOptions{Confirm: true, To: "000071_nostr_publish_target"}
 	rolled, err := Down(ctx, pool, logger, toBefore072)
 	require.NoError(t, err)
-	require.Equal(t, []string{"000076_f74a_observation_archive", "000075_org_strict_revocation", "000074_ml_model_version_revision", "000073_sbom_pending_publication", "000072_security_retire_failed_retryable"}, rolled)
+	require.Equal(t, []string{"000077_f74a_unit_tombstones", "000076_f74a_observation_archive", "000075_org_strict_revocation", "000074_ml_model_version_revision", "000073_sbom_pending_publication", "000072_security_retire_failed_retryable"}, rolled)
 	var exists bool
 	require.NoError(t, pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, securityRetryIndex).Scan(&exists))
 	require.False(t, exists, "the rollback does not rebuild the retired index")
@@ -118,7 +118,7 @@ func TestSecurityRetireFailedRetryableMigrationRoundTrip(t *testing.T) {
 
 	rolled, err = Down(ctx, pool, logger, toBefore072)
 	require.NoError(t, err)
-	require.Equal(t, []string{"000076_f74a_observation_archive", "000075_org_strict_revocation", "000074_ml_model_version_revision", "000073_sbom_pending_publication", "000072_security_retire_failed_retryable"}, rolled)
+	require.Equal(t, []string{"000077_f74a_unit_tombstones", "000076_f74a_observation_archive", "000075_org_strict_revocation", "000074_ml_model_version_revision", "000073_sbom_pending_publication", "000072_security_retire_failed_retryable"}, rolled)
 	for _, name := range []string{"security_observable_publications_publish_state_check", "security_scan_runs_publish_state_check"} {
 		require.False(t, securityConstraintValidated(t, ctx, pool, name), "rollback restores %s NOT VALID", name)
 	}

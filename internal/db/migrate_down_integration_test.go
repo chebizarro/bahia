@@ -70,6 +70,9 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	// guard is the latest below.
 	rolled, err := Down(ctx, pool, logger, DownOptions{Confirm: true})
 	require.NoError(t, err)
+	require.Equal(t, []string{"000077_f74a_unit_tombstones"}, rolled)
+	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true})
+	require.NoError(t, err)
 	require.Equal(t, []string{"000076_f74a_observation_archive"}, rolled)
 	var archiveExists bool
 	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('runtime_observation_archive') IS NOT NULL").Scan(&archiveExists))
@@ -135,7 +138,7 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true, To: "000065_runtime_release_deployment_intents"})
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"000076_f74a_observation_archive", "000075_org_strict_revocation",
+		"000077_f74a_unit_tombstones", "000076_f74a_observation_archive", "000075_org_strict_revocation",
 		"000074_ml_model_version_revision",
 		"000073_sbom_pending_publication", "000072_security_retire_failed_retryable",
 		"000071_nostr_publish_target", "000070_hiveci_initiations", "000069_package_authorization",
@@ -166,7 +169,7 @@ func TestMigrationDownMissingAndAtomicFailure(t *testing.T) {
 	require.Equal(t, len(migrationVersions(t)), count)
 
 	files = migrationFileCopy(t)
-	files["migrations/000076_f74a_observation_archive.down.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE down_failure_marker (id int); SELECT 1/0;")}
+	files["migrations/000077_f74a_unit_tombstones.down.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE down_failure_marker (id int); SELECT 1/0;")}
 	_, err = downWithFS(ctx, pool, logger, files, DownOptions{Confirm: true})
 	var pgErr *pgconn.PgError
 	require.ErrorAs(t, err, &pgErr)
@@ -174,7 +177,7 @@ func TestMigrationDownMissingAndAtomicFailure(t *testing.T) {
 	var exists bool
 	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('down_failure_marker') IS NOT NULL").Scan(&exists))
 	require.False(t, exists, "failed down SQL must roll back its DDL")
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000076_f74a_observation_archive'").Scan(&count))
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000077_f74a_unit_tombstones'").Scan(&count))
 	require.Equal(t, 1, count)
 }
 

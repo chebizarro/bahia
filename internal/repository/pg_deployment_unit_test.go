@@ -45,7 +45,7 @@ func TestPgDeploymentUnitRepositoryCreateAndGet(t *testing.T) {
 	configJSON, err := json.Marshal(runtimeConfig)
 	require.NoError(t, err)
 	now := time.Now().UTC()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + deploymentUnitColumns + " FROM deployment_units WHERE id = $1")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + deploymentUnitColumns + " FROM deployment_units WHERE id = $1 AND retired_at IS NULL")).
 		WithArgs(unitID).
 		WillReturnRows(pgxmock.NewRows(splitColumns(deploymentUnitColumns)).AddRow(
 			unitID, envID, "default", "Default", domain.RuntimeTypeCompose, "prod-docker", "/srv/bahia/compose/prod", "", []byte(`{"zone":"a"}`), domain.ReconcileModeObserveOnly,
@@ -93,9 +93,9 @@ func TestPgDeploymentUnitRepositoryUpdateAndProtectedDelete(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	require.NoError(t, repo.Update(context.Background(), unit))
 
-	mock.ExpectExec("DELETE FROM deployment_units").
+	mock.ExpectExec("UPDATE deployment_units du SET retired_at").
 		WithArgs(unitID).
-		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectQuery("SELECT EXISTS").
 		WithArgs(unitID).
 		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(true))

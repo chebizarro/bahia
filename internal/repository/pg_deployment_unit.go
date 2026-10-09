@@ -82,7 +82,7 @@ func (r *PgDeploymentUnitRepository) scanUnit(row pgx.Row) (*domain.DeploymentUn
 }
 
 func (r *PgDeploymentUnitRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.DeploymentUnit, error) {
-	unit, err := r.scanUnit(r.pool.QueryRow(ctx, `SELECT `+deploymentUnitColumns+` FROM deployment_units WHERE id = $1`, id))
+	unit, err := r.scanUnit(r.pool.QueryRow(ctx, `SELECT `+deploymentUnitColumns+` FROM deployment_units WHERE id = $1 AND retired_at IS NULL`, id))
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -95,7 +95,7 @@ func (r *PgDeploymentUnitRepository) GetByID(ctx context.Context, id uuid.UUID) 
 func (r *PgDeploymentUnitRepository) GetByEnvironmentKey(ctx context.Context, environmentID uuid.UUID, key string) (*domain.DeploymentUnit, error) {
 	unit, err := r.scanUnit(r.pool.QueryRow(ctx, `
 		SELECT `+deploymentUnitColumns+` FROM deployment_units
-		WHERE environment_id = $1 AND unit_key = $2
+		WHERE environment_id = $1 AND unit_key = $2 AND retired_at IS NULL
 	`, environmentID, key))
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -122,7 +122,7 @@ func (r *PgDeploymentUnitRepository) listByEnvironment(ctx context.Context, envi
 	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT `+deploymentUnitColumns+` FROM deployment_units
-		WHERE environment_id = $1
+		WHERE environment_id = $1 AND retired_at IS NULL
 		ORDER BY unit_key`+lockClause, environmentID)
 	if err != nil {
 		return nil, fmt.Errorf("listing deployment units: %w", err)
@@ -165,7 +165,7 @@ func (r *PgDeploymentUnitRepository) Update(ctx context.Context, unit *domain.De
 		SET unit_key=$2, display_name=$3, runtime_type=$4, endpoint_ref=$5, compose_dir=$6,
 		    namespace=$7, network_profile=$8, reconcile_mode=$9, ownership_mode=$10,
 		    runtime_config=$11, updated_at=$12
-		WHERE id=$1 AND environment_id=$13
+		WHERE id=$1 AND environment_id=$13 AND retired_at IS NULL
 	`, unit.ID, unit.Key, unit.DisplayName, unit.RuntimeType, unit.EndpointRef, unit.ComposeDir,
 		unit.Namespace, networkProfileJSON, unit.ReconcileMode, unit.OwnershipMode, runtimeConfigJSON,
 		unit.UpdatedAt, unit.EnvironmentID)
@@ -178,20 +178,20 @@ func (r *PgDeploymentUnitRepository) Update(ctx context.Context, unit *domain.De
 	return nil
 }
 
-// DeleteIfUnreferenced protects live state, runs, intents, and hot observations.
-// Immutable archived observations retain historical unit IDs but do not pin a
-// deployment unit's live lifecycle.
+// DeleteIfUnreferenced retires a unit without removing its historical FK target.
+// Only active units participate in environment targeting; the retired row is
+// immutable and remains available to rehydrate an archived observation.
 func (r *PgDeploymentUnitRepository) DeleteIfUnreferenced(ctx context.Context, id uuid.UUID) error {
 	cmd, err := r.pool.Exec(ctx, `
-		DELETE FROM deployment_units du
-		WHERE du.id = $1
+		UPDATE deployment_units du SET retired_at = now()
+		WHERE du.id = $1 AND du.retired_at IS NULL
 		  AND NOT EXISTS (SELECT 1 FROM environment_service_state WHERE deployment_unit_id = du.id)
 		  AND NOT EXISTS (SELECT 1 FROM deployment_runs WHERE deployment_unit_id = du.id)
 		  AND NOT EXISTS (SELECT 1 FROM deployment_intents WHERE deployment_unit_id = du.id)
 		  AND NOT EXISTS (SELECT 1 FROM runtime_observations WHERE deployment_unit_id = du.id)
 	`, id)
 	if err != nil {
-		return fmt.Errorf("deleting deployment unit: %w", err)
+		return fmt.Errorf("retiring deployment unit: %w", err)
 	}
 	if cmd.RowsAffected() > 0 {
 		return nil
@@ -199,10 +199,10 @@ func (r *PgDeploymentUnitRepository) DeleteIfUnreferenced(ctx context.Context, i
 
 	var exists bool
 	if err := r.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM deployment_units WHERE id = $1)`, id).Scan(&exists); err != nil {
-		return fmt.Errorf("checking deployment unit after protected delete: %w", err)
+		return fmt.Errorf("checking deployment unit after protected retirement: %w", err)
 	}
 	if !exists {
-		return fmt.Errorf("deleting deployment unit %s: %w", id, ErrNotFound)
+		return fmt.Errorf("retiring deployment unit %s: %w", id, ErrNotFound)
 	}
 	return fmt.Errorf("deployment unit %s is referenced by durable deployment state: %w", id, ErrConflict)
 }
