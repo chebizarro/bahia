@@ -21,7 +21,9 @@ Legacy SQL-only state requires a separately governed migration with a dry-run ce
 
 The opt-in repository test starts and removes its own `postgres:16-alpine`
 container. It migrates an empty index, populates derived service rows, and
-records a valid signed SQL-only pending event through the repository API. It
+records a signed SQL-only pending service-registry event, with the production
+cp-state envelope and a service payload decoded by the projection catalog,
+through the repository API. It
 boots the application with PostgreSQL absent, empty, populated, divergent,
 and slow to answer the startup handshake. A proxy then makes the same
 divergent index reachable for a recovery probe. For each case it checks the

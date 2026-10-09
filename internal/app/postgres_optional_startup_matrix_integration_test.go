@@ -24,6 +24,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/db"
@@ -88,8 +89,8 @@ func TestOptionalPostgresStartupAndRecoveryMatrix(t *testing.T) {
 	require.NoError(t, db.Migrate(ctx, pool, zap.NewNop()))
 
 	key := nostr.Generate()
-	sqlOnly := signedMatrixEvent(t, key, "sql-only")
-	localOnly := signedMatrixEvent(t, key, "local-pending")
+	sqlOnly := signedMatrixEvent(t, key, uuid.New(), "sql-only")
+	localOnly := signedMatrixEvent(t, key, uuid.New(), "local-pending")
 	closedPort := func() int {
 		listener, listenErr := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, listenErr)
@@ -204,6 +205,14 @@ func TestOptionalPostgresStartupAndRecoveryMatrix(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, recorded)
+	sqlRecord, err := repository.NewPgNostrEventRepository(pool).GetByID(ctx, sqlOnly.ID.Hex())
+	require.NoError(t, err)
+	require.NotNil(t, sqlRecord)
+	require.Equal(t, sqlOnly.ID.Hex(), sqlRecord.ID)
+	require.Equal(t, sqlOnly.PubKey.Hex(), sqlRecord.PubKey)
+	require.Equal(t, hex.EncodeToString(sqlOnly.Sig[:]), sqlRecord.Sig)
+	require.Equal(t, repository.NostrPublishStatePending, sqlRecord.PublishState)
+	require.Equal(t, repository.NostrPublishTargetControlPlane, sqlRecord.PublishTarget)
 	assertBoot("divergent-sql-only-pending", dbCfg, true, nil)
 	var pendingSQL int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM nostr_events WHERE id=$1 AND publish_state='pending'`, sqlOnly.ID.Hex()).Scan(&pendingSQL))
@@ -281,16 +290,59 @@ func TestOptionalPostgresStartupAndRecoveryMatrix(t *testing.T) {
 	})
 }
 
-func signedMatrixEvent(t *testing.T, key nostr.SecretKey, coordinate string) nostr.Event {
+func signedMatrixEvent(t *testing.T, key nostr.SecretKey, serviceID uuid.UUID, name string) nostr.Event {
 	t.Helper()
-	event := nostr.Event{Kind: nostr.Kind(kinds.CASControlState), CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{{"d", coordinate}, {"t", kinds.CPStateTopicServiceRegistry},
-			{kinds.CASControlStateTagSchema, kinds.CASControlStateSchema}},
-		Content: fmt.Sprintf(`{"coordinate":%q}`, coordinate)}
+	wireKind, tags := nostrAdapter.ControlStateEnvelope(kinds.ServiceRegistry, serviceID.String(), false)
+	require.Equal(t, kinds.CASControlState, wireKind)
+	tags = append(tags, nostr.Tag{"name", name}, nostr.Tag{"runtime", "docker"})
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	content, err := json.Marshal(map[string]any{
+		"deleted": false, "id": serviceID.String(), "name": name,
+		"repo_url": "", "artifact_repo": "registry.example/matrix",
+		"default_branch": "main", "runtime_type": "docker",
+		"created_at": now.Format(time.RFC3339Nano), "updated_at": now.Format(time.RFC3339Nano),
+	})
+	require.NoError(t, err)
+	event := nostr.Event{Kind: nostr.Kind(wireKind), CreatedAt: nostr.Now(), Tags: tags, Content: string(content)}
 	var raw [32]byte
 	decoded, err := hex.DecodeString(key.Hex())
 	require.NoError(t, err)
 	copy(raw[:], decoded)
 	require.NoError(t, event.Sign(raw))
+	require.True(t, event.CheckID(), "NIP-01 ID must hash the signed body")
+	require.True(t, event.VerifySignature(), "fixture must carry a valid service signature")
+	require.Equal(t, key.Public(), event.PubKey)
+	fields := map[string]string{}
+	for _, tag := range event.Tags {
+		if len(tag) > 1 {
+			fields[tag[0]] = tag[1]
+		}
+	}
+	for tag, want := range map[string]string{
+		"d": serviceID.String(), "domain": "service", "schema": kinds.CASControlStateSchema,
+		"legacy_kind": strconv.Itoa(kinds.ServiceRegistry), "deleted": "false",
+		"t": kinds.CPStateTopicServiceRegistry, "name": name, "runtime": "docker",
+	} {
+		require.Equal(t, want, fields[tag], "production service-registry tag %s", tag)
+	}
+	var payload struct {
+		ID           uuid.UUID `json:"id"`
+		Name         string    `json:"name"`
+		ArtifactRepo string    `json:"artifact_repo"`
+		Deleted      bool      `json:"deleted"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(event.Content), &payload))
+	require.Equal(t, serviceID, payload.ID)
+	require.Equal(t, name, payload.Name)
+	require.Equal(t, "registry.example/matrix", payload.ArtifactRepo)
+	require.False(t, payload.Deleted)
+	decode, ok := nostrAdapter.NewKindCatalog().Decoder(kinds.ServiceRegistry)
+	require.True(t, ok)
+	projection, err := decode(&event)
+	require.NoError(t, err)
+	require.NotNil(t, projection)
+	require.NotNil(t, projection.Service)
+	require.Equal(t, serviceID.String(), projection.Service.ID)
+	require.Equal(t, name, projection.Service.Name)
 	return event
 }
