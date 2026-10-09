@@ -15,13 +15,16 @@ MCP provides:
 
 The web controls publish signed LLM intents and follow bounded intent status plus canonical route, release, deployment, and observation records.
 
-**Provisioning is paused.** All seven MCP/assistant lifecycle tools refuse
-before submitting an intent because a transport principal is not an operator
-signature. The web's genuine operator-signed relay intent is accepted for
+**Release registration and provisioning are paused.** All eight MCP/assistant
+release/lifecycle tools refuse before submitting an intent because a transport
+principal is not an operator signature. The web's genuine operator-signed relay
+intent is accepted for
 validation and receives an explicit paused rejection; it does not create a
-deployment, approval, or rollback. The canonical execution snapshot and
-restart-safe effect fence are not yet available. Do not treat an old SQL
-deployment row or a local-only request event as authorization to provision.
+release, deployment, approval, or rollback. Release registration needs an
+encrypted canonical release record and durable relay receipt before success
+can be reported. Provisioning needs a canonical execution snapshot and
+restart-safe effect fence. Do not treat an old SQL deployment row or a
+local-only request event as authorization to provision.
 
 ## Deployment
 

@@ -28,14 +28,51 @@ func signedLLMLifecycleIntentWithID(t *testing.T, key nostr.SecretKey, id uuid.U
 	encoded, err := json.Marshal(payload)
 	require.NoError(t, err)
 	event := &nostr.Event{Kind: 30900, CreatedAt: nostr.Timestamp(createdAt.Unix()), Content: string(encoded), Tags: nostr.Tags{
-		{"d", coordinate}, {"t", "bahia-intent"}, {"domain", "llm"}, {"op", op},
-		{"schema", "bahia.intent.llm.v1"}, {"intent_id", id.String()}, {"org", testOrgID().String()},
+		{"d", coordinate}, {"domain", "llm"}, {"schema", "bahia.intent.llm.v1"},
+		{"t", "bahia-intent"}, {"t", "llm"}, {"op", op},
+		{"org", testOrgID().String()}, {"intent_id", id.String()},
 	}}
 	require.NoError(t, event.Sign(key))
 	intent, err := ParseIntent(event)
 	require.NoError(t, err)
 	intent.Actor = key.Public().Hex()
 	return intent
+}
+
+func TestLLMPublisherTopicsBindExactIntentAndDomain(t *testing.T) {
+	key := nostr.Generate()
+	route, env := uuid.New(), uuid.New()
+	base := signedLLMLifecycleIntent(t, key, "deploy", route.String()+":"+env.String(),
+		map[string]any{"route_id": route.String(), "environment_id": env.String(), "release_id": uuid.NewString()}, time.Now().Add(-time.Minute))
+	require.NoError(t, validateLLMLifecycleSignedRequest(base), "web and Go publisher emit both required t tags")
+	for _, tc := range []struct {
+		name   string
+		change func(nostr.Tags) nostr.Tags
+	}{
+		{"duplicate intent topic", func(tags nostr.Tags) nostr.Tags { return append(tags, nostr.Tag{"t", "bahia-intent"}) }},
+		{"duplicate domain topic", func(tags nostr.Tags) nostr.Tags { return append(tags, nostr.Tag{"t", "llm"}) }},
+		{"unknown topic", func(tags nostr.Tags) nostr.Tags { return append(tags, nostr.Tag{"t", "other"}) }},
+		{"missing domain topic", func(tags nostr.Tags) nostr.Tags {
+			out := make(nostr.Tags, 0, len(tags))
+			for _, tag := range tags {
+				if len(tag) > 1 && tag[0] == "t" && tag[1] == "llm" {
+					continue
+				}
+				out = append(out, tag)
+			}
+			return out
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event := *base.Event
+			event.Tags = tc.change(append(nostr.Tags(nil), base.Event.Tags...))
+			require.NoError(t, event.Sign(key))
+			parsed, err := ParseIntent(&event)
+			require.NoError(t, err)
+			parsed.Actor = key.Public().Hex()
+			require.ErrorContains(t, validateLLMLifecycleSignedRequest(parsed), "envelope differs")
+		})
+	}
 }
 
 func TestLLMLifecycleSignedAdmissionRejectsFabricatedAndDivergentRequests(t *testing.T) {
@@ -150,4 +187,62 @@ func TestLLMLifecycleCrossDomainProcessedMarkerCannotBypassPausedRefusal(t *test
 	require.Equal(t, "rejected", tagValueNostr(statuses.events[1].Tags, "status"))
 	require.Zero(t, registry.creates)
 	require.Equal(t, "test", processor.ProcessedIntent(id.String()).Domain, "paused LLM request must not replace a prior receipt")
+}
+
+func TestLLMReleaseRegistrationRequiresSignedObservationAndNeverWritesSQL(t *testing.T) {
+	key := nostr.Generate()
+	store := openTestStore(t)
+	statuses := &statusCollector{}
+	registry := &llmDeploymentIntentRegistryTest{}
+	processor := NewIntentProcessor(NewTrustSet([]string{key.Public().Hex()}, zap.NewNop(),
+		WithBootstrapOwners(map[string]string{testOrgID().String(): key.Public().Hex()})), store,
+		NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()),
+		IntentProcessorConfig{EnabledDomains: map[string]bool{"test": true, "llm": true}}, zap.NewNop())
+	processor.RegisterHandler("test", &testDomainHandler{})
+	processor.RegisterHandler("llm", NewLLMRouteIntentHandler(LLMRouteIntentHandlerConfig{Routes: registry}))
+	id, err := uuid.NewV7()
+	require.NoError(t, err)
+	prior := &Intent{Domain: "test", Op: "create", OrgID: testOrgID(), Actor: key.Public().Hex(),
+		IntentID: id.String(), Coordinate: "other-family", Content: map[string]any{"id": "other-family"}}
+	require.NoError(t, processor.ProcessInProcess(t.Context(), prior))
+	previousStatuses := len(statuses.events)
+	releaseID, routeID := uuid.New(), uuid.New()
+	request := signedLLMLifecycleIntentWithID(t, key, id, "release-register", "llm-release:"+releaseID.String(),
+		map[string]any{"id": releaseID.String(), "route_id": routeID.String(), "version": "v1", "model_ref": "hf://example/chat",
+			"model_source": "huggingface", "backend_preferences": []string{"external_api"},
+			"external_backend": map[string]any{"base_url": "https://llm.example"}}, time.Now().Add(-time.Minute))
+	require.NoError(t, validateLLMLifecycleSignedRequest(request))
+	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), request), "not observed")
+	require.Len(t, statuses.events, previousStatuses, "unobserved request must not induce a signed outcome")
+	require.Zero(t, registry.releases)
+	_, err = store.SaveEvent(*request.Event)
+	require.NoError(t, err)
+	for range 2 {
+		require.ErrorContains(t, processor.ProcessInProcess(t.Context(), request), "LLM release registration paused")
+		require.Equal(t, "rejected", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
+		require.Zero(t, registry.releases, "a replay marker must not authorize SQL release creation")
+	}
+	require.ErrorContains(t, processor.ProcessRelayIntent(t.Context(), request.Event), "LLM release registration paused")
+	require.Equal(t, "rejected", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
+	require.Zero(t, registry.releases)
+	require.Equal(t, "test", processor.ProcessedIntent(id.String()).Domain)
+}
+
+func TestLLMReleaseRegistrationRejectsUnboundSignedContent(t *testing.T) {
+	key := nostr.Generate()
+	releaseID, routeID := uuid.New(), uuid.New()
+	for _, tc := range []struct {
+		name, coordinate string
+		content          map[string]any
+		want             string
+	}{
+		{"release id differs", "llm-release:" + uuid.NewString(), map[string]any{"id": releaseID.String(), "route_id": routeID.String()}, "coordinate"},
+		{"missing route", "llm-release:" + releaseID.String(), map[string]any{"id": releaseID.String()}, "coordinate"},
+		{"injected outcome", "llm-release:" + releaseID.String(), map[string]any{"id": releaseID.String(), "route_id": routeID.String(), "status": "registered"}, "non-request field"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := signedLLMLifecycleIntent(t, key, "release-register", tc.coordinate, tc.content, time.Now().Add(-time.Minute))
+			require.ErrorContains(t, validateLLMLifecycleSignedRequest(request), tc.want)
+		})
+	}
 }

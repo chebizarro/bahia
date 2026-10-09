@@ -367,7 +367,7 @@ func TestLLMLifecycleMCPRefusesUnsignedTransportIntent(t *testing.T) {
 	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: actor, PubKey: actor, Method: auth.MethodNIP98})
 	args := map[string]any{"route_id": uuid.NewString(), "environment_id": uuid.NewString(), "release_id": uuid.NewString(),
 		"intent_id": uuid.NewString(), "org_id": uuid.NewString(), "decision": "approve", "idempotency_key": "llm-pre-submission-refusal"}
-	for _, name := range []string{"bahia_llm_deploy", "bahia_llm_rollback", "bahia_llm_approve_deployment", "bahia_llm_reject_deployment"} {
+	for _, name := range []string{"bahia_llm_register_release", "bahia_llm_deploy", "bahia_llm_rollback", "bahia_llm_approve_deployment", "bahia_llm_reject_deployment"} {
 		t.Run(name, func(t *testing.T) {
 			result, err := server.CallTool(ctx, name, args)
 			require.NoError(t, err)

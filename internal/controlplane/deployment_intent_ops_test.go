@@ -15,8 +15,8 @@ import (
 )
 
 type llmDeploymentIntentRegistryTest struct {
-	intents                                   map[uuid.UUID]*domain.LLMDeploymentIntent
-	creates, rollbacks, approvals, rejections int
+	intents                                             map[uuid.UUID]*domain.LLMDeploymentIntent
+	creates, rollbacks, approvals, rejections, releases int
 }
 
 func (r *llmDeploymentIntentRegistryTest) CreateRoute(context.Context, *domain.LLMRoute) error {
@@ -29,6 +29,7 @@ func (r *llmDeploymentIntentRegistryTest) UpdateRoute(context.Context, *domain.L
 	return nil
 }
 func (r *llmDeploymentIntentRegistryTest) CreateRelease(context.Context, *domain.LLMRelease) error {
+	r.releases++
 	return nil
 }
 func (r *llmDeploymentIntentRegistryTest) CreateDeploymentIntent(_ context.Context, intent *domain.LLMDeploymentIntent) error {

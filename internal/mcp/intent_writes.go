@@ -196,7 +196,7 @@ func (s *Server) callIntentWrite(ctx context.Context, name string, args map[stri
 
 func isLLMLifecycleMCPTool(name string) bool {
 	switch name {
-	case "bahia_llm_deploy", "bahia_assistant_llm_deploy", "bahia_llm_rollback", "bahia_assistant_llm_rollback",
+	case "bahia_llm_register_release", "bahia_llm_deploy", "bahia_assistant_llm_deploy", "bahia_llm_rollback", "bahia_assistant_llm_rollback",
 		"bahia_llm_approve_deployment", "bahia_llm_reject_deployment", "bahia_assistant_llm_approve_deployment":
 		return true
 	default:

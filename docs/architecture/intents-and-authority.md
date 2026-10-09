@@ -250,18 +250,25 @@ resolution, atomic acceptance and execution checkpoint recovery are still
 required before a new run may execute. Current run intake therefore continues
 to reject even a complete signed request without an ACKed run-state receipt.
 
-LLM deploy, rollback, approve and reject intents are also refused while their
-canonical executor is unavailable. Before the daemon signs a paused outcome,
-the request must be a valid operator-signed `30900` event observed by the local
+LLM release-register, deploy, rollback, approve and reject intents are also
+refused while canonical publication or execution is unavailable. Before the
+daemon signs a paused outcome, the request must be a valid operator-signed
+`30900` event observed by the local
 relay-synced event store. Its actor, UUIDv7 idempotency key, route/environment/
 release selection or decision target, content, and coordinate must agree with
 the signed envelope. This proves request identity for refusal only; a local
-event is not a relay ACK or an accepted provisioning receipt. The SQL-based
-LLM coordinator is not started by the app and cannot be enabled until a
-canonical, immutable execution snapshot and restart-safe effect fence exist.
-MCP and assistant LLM lifecycle tools refuse before dispatch rather than
-manufacturing an unsigned event from an authenticated transport principal;
-operators submit the signed Nostr intent directly.
+event is not a relay ACK or an accepted provisioning receipt. Release
+registration must first publish an encrypted canonical release record,
+durably observe the relay ACK, and bind that record to the signed request
+before reporting success; a SQL release row or a route-state update alone is
+not a release receipt. The SQL-based LLM coordinator is not started by the app
+and cannot be enabled until a canonical, immutable execution snapshot and
+restart-safe effect fence exist. The snapshot must bind canonical route,
+release, and environment revisions, the required secret versions, and a
+replay-safe effect checkpoint. MCP and assistant LLM release/lifecycle tools
+refuse before dispatch rather than manufacturing an unsigned event from an
+authenticated transport principal; operators submit the signed Nostr intent
+directly.
 
 ### 3.5 Canonical state and who signs it
 

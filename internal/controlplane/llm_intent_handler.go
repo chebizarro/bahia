@@ -19,7 +19,6 @@ type LLMRouteCRUD interface {
 	CreateRoute(ctx context.Context, route *domain.LLMRoute) error
 	GetRoute(ctx context.Context, id uuid.UUID) (*domain.LLMRoute, error)
 	UpdateRoute(ctx context.Context, route *domain.LLMRoute) error
-	CreateRelease(ctx context.Context, release *domain.LLMRelease) error
 	CreateDeploymentIntent(ctx context.Context, intent *domain.LLMDeploymentIntent) error
 	GetDeploymentIntent(ctx context.Context, id uuid.UUID) (*domain.LLMDeploymentIntent, error)
 	ApproveDeploymentIntent(ctx context.Context, id uuid.UUID) error
@@ -100,6 +99,9 @@ func (h *LLMRouteIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 			return fmt.Errorf("LLM deployment paused: %s", h.deploymentUnavailableReason)
 		}
 	}
+	if intent.Op == "release-register" {
+		return fmt.Errorf("LLM release registration paused: canonical-first encrypted release publication and local relay receipt are unavailable")
+	}
 	switch intent.Op {
 	case "deploy":
 		return h.handleDeploymentCreate(ctx, intent)
@@ -107,8 +109,6 @@ func (h *LLMRouteIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 		return h.handleDeploymentRollback(ctx, intent)
 	case "approve", "reject":
 		return h.handleDeploymentDecision(ctx, intent)
-	case "release-register":
-		return h.handleReleaseRegister(ctx, intent)
 	case "delete":
 		return h.handleDelete(ctx, intent)
 	default:
@@ -297,38 +297,6 @@ func (h *LLMRouteIntentHandler) handleDelete(ctx context.Context, intent *Intent
 
 	h.logger.Info("LLM route deleted via intent",
 		zap.String("route_id", id.String()),
-		zap.String("intent_id", intent.IntentID),
-	)
-	return nil
-}
-
-// handleReleaseRegister processes a release-register intent.
-func (h *LLMRouteIntentHandler) handleReleaseRegister(ctx context.Context, intent *Intent) error {
-	release, err := llmReleaseFromIntentContent(intent)
-	if err != nil {
-		return fmt.Errorf("parse LLM release intent content: %w", err)
-	}
-
-	if err := h.routes.CreateRelease(ctx, release); err != nil {
-		return fmt.Errorf("register LLM release: %w", err)
-	}
-
-	// After registering the release, publish the updated route registry record
-	// so the relay has the latest route metadata.
-	route, _ := h.routes.GetRoute(ctx, release.RouteID)
-	if route != nil && h.publish != nil {
-		if err := h.publish(ctx, route, false); err != nil {
-			h.logger.Warn("LLM release registered but route publication failed",
-				zap.String("route_id", release.RouteID.String()),
-				zap.String("release_id", release.ID.String()),
-				zap.Error(err),
-			)
-		}
-	}
-
-	h.logger.Info("LLM release registered via intent",
-		zap.String("route_id", release.RouteID.String()),
-		zap.String("release_id", release.ID.String()),
 		zap.String("intent_id", intent.IntentID),
 	)
 	return nil

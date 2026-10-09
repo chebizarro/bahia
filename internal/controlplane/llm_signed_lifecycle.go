@@ -17,7 +17,7 @@ func isLLMLifecycleIntent(intent *Intent) bool {
 		return false
 	}
 	switch intent.Op {
-	case "deploy", "rollback", "approve", "reject":
+	case "deploy", "rollback", "approve", "reject", "release-register":
 		return true
 	default:
 		return false
@@ -45,7 +45,7 @@ func validateLLMLifecycleSignedRequest(intent *Intent) error {
 		!llmTagExactlyOnce(intent.Event.Tags, "schema", "bahia.intent.llm.v1") ||
 		!llmTagExactlyOnce(intent.Event.Tags, "org", intent.OrgID.String()) ||
 		!llmTagExactlyOnce(intent.Event.Tags, "intent_id", intent.IntentID) ||
-		!llmTagExactlyOnce(intent.Event.Tags, "t", "bahia-intent") {
+		!llmTopicsValid(intent.Event.Tags) {
 		return fmt.Errorf("LLM lifecycle envelope differs from the signed operator request")
 	}
 	if id, err := uuid.Parse(intent.IntentID); err != nil || id.Version() != 7 {
@@ -75,6 +75,14 @@ func validateLLMLifecycleSignedRequest(intent *Intent) error {
 		id, idErr := uuid.Parse(firstIntentString(intent.Content, "deployment_intent_id"))
 		if idErr != nil || id == uuid.Nil || intent.Coordinate != id.String() {
 			return fmt.Errorf("LLM decision coordinate does not bind deployment intent")
+		}
+	case "release-register":
+		for _, field := range []string{"id", "route_id", "version", "model_ref", "model_source", "model_revision", "estimated_vram_gb", "backend_preferences", "runtime_backend", "external_backend", "placement_policy", "promotion_gate", "metadata"} {
+			allowed[field] = true
+		}
+		release, releaseErr := llmReleaseFromIntentContent(intent)
+		if releaseErr != nil || release.ID == uuid.Nil || release.RouteID == uuid.Nil || intent.Coordinate != "llm-release:"+release.ID.String() {
+			return fmt.Errorf("LLM release coordinate does not bind release and route")
 		}
 	}
 	if contentID, ok := intent.Content["intent_id"]; ok && contentID != intent.IntentID {
@@ -109,6 +117,27 @@ func llmTagExactlyOnce(tags nostr.Tags, key, value string) bool {
 		}
 	}
 	return count == 1
+}
+
+func llmTopicsValid(tags nostr.Tags) bool {
+	intentTopic, domainTopic := 0, 0
+	for _, tag := range tags {
+		if len(tag) == 0 || tag[0] != "t" {
+			continue
+		}
+		if len(tag) != 2 {
+			return false
+		}
+		switch tag[1] {
+		case "bahia-intent":
+			intentTopic++
+		case "llm":
+			domainTopic++
+		default:
+			return false
+		}
+	}
+	return intentTopic == 1 && domainTopic == 1
 }
 
 func llmRequestObserved(intent *Intent, events interface {
