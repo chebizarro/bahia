@@ -753,6 +753,17 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	if !dbAvailable {
 		bgManager.RegisterWithOptions(newDatabaseRecoveryRunner(cfg.DB, 30*time.Second, logger), RunnerRequired(false))
+		healthProvider.RegisterCheck("postgres_index", func() HealthCheck {
+			check := HealthCheck{Name: "postgres_index", Status: HealthStatusWarn,
+				Message: "optional PostgreSQL index is not attached; SQL-backed routes remain unavailable"}
+			for _, status := range bgManager.RunnerStatuses() {
+				if status.Name == "database-recovery" && !status.StartedAt.IsZero() && !status.Running && status.LastError == nil {
+					check.Message = "PostgreSQL migration recovered; SQL-backed routes attach on a subsequent daemon start"
+					break
+				}
+			}
+			return check
+		})
 	}
 
 	catalog := nostrAdapter.NewKindCatalog()
@@ -2392,6 +2403,8 @@ func New(cfg *config.Config) (*App, error) {
 		if externalErr != nil {
 			return nil, externalErr
 		}
+		// Historical sessions are resolved from validated relay events on demand.
+		// PostgreSQL is a derived index and must not seed assistant authority.
 		assistantExecution, err := buildAssistantExecution(assistantExecutionDeps{
 			Config:           cfg,
 			MCPServer:        mcpServer,
@@ -2405,7 +2418,6 @@ func New(cfg *config.Config) (*App, error) {
 			ServicePubkey:    servicePubkey,
 			Transcript:       transcriptStore,
 			KeyProvider:      transcriptKeys,
-			InitialSessions:  loadAssistantSessions(ctx, nostrEventRepo, logger),
 			ExternalMCP:      externalMCP,
 			RelayConnections: controlPlanePool,
 			LocalStore:       localEventStore,
@@ -3022,15 +3034,46 @@ func configuredSupervisionSpecs(cfg config.SupervisionConfig, logger *zap.Logger
 	return result, nil
 }
 
+// Two seconds admits an ordinary local PostgreSQL handshake and an already
+// migrated index while bounding the optional index's effect on HTTP startup.
+const defaultOptionalDatabaseStartupBudget = 2 * time.Second
+
 func connectOptionalDatabase(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*pgxpool.Pool, bool) {
-	pool, err := dbConnect(ctx, cfg.DB, logger)
+	// All production DB operations honor the caller's context. A bounded
+	// migration-lock cleanup also uses this budget when cancellation occurs.
+	budget := cfg.DB.StartupProbeTimeout
+	if budget <= 0 {
+		budget = defaultOptionalDatabaseStartupBudget
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	pool, err := dbConnect(probeCtx, cfg.DB, logger)
+	if probeCtx.Err() != nil {
+		if pool != nil {
+			pool.Close()
+		}
+		logger.Warn("postgres cache startup budget expired; continuing with relay-first reduced tier", zap.Error(probeCtx.Err()))
+		return nil, false
+	}
 	if err != nil {
+		if pool != nil {
+			pool.Close()
+		}
 		logger.Warn("postgres cache unavailable; continuing with relay-first reduced tier", zap.Error(cfg.DB.RedactError(err)))
 		return nil, false
 	}
-	if err := dbMigrate(ctx, pool, logger); err != nil {
-		pool.Close()
+	if err := dbMigrate(probeCtx, pool, logger); err != nil {
+		if pool != nil {
+			pool.Close()
+		}
 		logger.Warn("postgres cache migration failed; continuing with relay-first reduced tier", zap.Error(err))
+		return nil, false
+	}
+	if err := probeCtx.Err(); err != nil {
+		if pool != nil {
+			pool.Close()
+		}
+		logger.Warn("postgres cache startup budget expired; continuing with relay-first reduced tier", zap.Error(err))
 		return nil, false
 	}
 	return pool, true
@@ -5047,65 +5090,6 @@ func bootstrapOperatorAssistant(cfg *config.Config, relays []string, logger *zap
 		Name: "operator-assistant", AttemptTimeout: cfg.Assistant.SignetConnectTimeout, Logger: slogLogger,
 	})
 	return identity, manager, &operatorAssistantBootstrapRunner{signer: signetClient, reactor: soulReactor, logger: logger}, signetClient
-}
-
-const assistantSessionStartupTimeout = 5 * time.Second
-
-func loadAssistantSessions(ctx context.Context, repo repository.NostrEventRepository, logger *zap.Logger) []domain.AssistantSession {
-	return loadAssistantSessionsWithTimeout(ctx, repo, logger, assistantSessionStartupTimeout)
-}
-
-func loadAssistantSessionsWithTimeout(ctx context.Context, repo repository.NostrEventRepository, logger *zap.Logger, timeout time.Duration) []domain.AssistantSession {
-	if repo == nil {
-		return nil
-	}
-	loadCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	records, err := repo.ListByKind(loadCtx, domain.KindAssistantSessionState, 500)
-	if err != nil {
-		if logger != nil {
-			logger.Warn("failed to load assistant session read models", zap.Error(err))
-		}
-		return nil
-	}
-	seen := map[string]struct{}{}
-	sessions := []domain.AssistantSession{}
-	for _, record := range records {
-		// Only v1 sessions seed the read-only legacy-session cache; v2
-		// projections are hydrated by the executor's recovery path.
-		if assistantRecordSchema(record.Tags) != domain.AssistantSessionSchema {
-			continue
-		}
-		var session domain.AssistantSession
-		if err := json.Unmarshal([]byte(record.Content), &session); err != nil {
-			if logger != nil {
-				logger.Warn("failed to parse assistant session read model", zap.String("event_id", record.ID), zap.Error(err))
-			}
-			continue
-		}
-		if session.SessionID == "" {
-			continue
-		}
-		if _, ok := seen[session.SessionID]; ok {
-			continue
-		}
-		seen[session.SessionID] = struct{}{}
-		sessions = append(sessions, session)
-	}
-	return sessions
-}
-
-func assistantRecordSchema(raw json.RawMessage) string {
-	var tags [][]string
-	if len(raw) == 0 || json.Unmarshal(raw, &tags) != nil {
-		return ""
-	}
-	for _, tag := range tags {
-		if len(tag) >= 2 && tag[0] == domain.AssistantSessionTagSchema {
-			return tag[1]
-		}
-	}
-	return ""
 }
 
 // controlplaneRunner adapts the controlplane.Reactor to the BackgroundRunner interface.

@@ -311,7 +311,7 @@ func TestStartBackgroundRunnersReportsRestartRequest(t *testing.T) {
 	manager.Wait()
 }
 
-func TestDatabaseRecoveryRunnerRequestsRestartAfterRecovery(t *testing.T) {
+func TestDatabaseRecoveryRunnerCompletesWithoutRestartAfterRecovery(t *testing.T) {
 	t.Helper()
 
 	var attempts atomic.Int32
@@ -333,7 +333,7 @@ func TestDatabaseRecoveryRunnerRequestsRestartAfterRecovery(t *testing.T) {
 
 	runner := newDatabaseRecoveryRunner(config.DBConfig{}, 5*time.Millisecond, zap.NewNop())
 	err := runner.Run(context.Background())
-	require.ErrorIs(t, err, errBackgroundRestartRequired)
+	require.NoError(t, err)
 	require.GreaterOrEqual(t, attempts.Load(), int32(2))
 }
 

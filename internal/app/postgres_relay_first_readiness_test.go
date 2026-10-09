@@ -16,6 +16,7 @@ func TestDatabaseLossLeavesRecoveryOutsideCoreReadiness(t *testing.T) {
 	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
 	require.Nil(t, app.DB)
+	requireCheckStatus(t, app.Health.Readiness().Checks, "postgres_index", HealthStatusWarn)
 
 	found := false
 	for _, status := range app.Background.RunnerStatuses() {

@@ -236,8 +236,15 @@ reconciliation finished (`controlplane.ReadinessTracker`). `GET /ready` returns
 503 while any readiness check fails — `intent_readiness` reports "filters
 syncing" until then, alongside `relay_quorum`, `bootstrap_ready` and
 `background_runners` — and 200 once all pass. Postgres availability does not affect
-readiness. A daemon that holds committed state no relay has accepted stays
-ready but reports `canonical_delivery = warn` — see
+readiness. The optional connection and migration probe has a configurable
+two-second startup budget (`db.startup_probe_timeout`, capped at five seconds);
+if it does not finish, the daemon starts in relay-first reduced mode
+and a non-required background runner retries PostgreSQL migration without
+restarting the process. SQL-backed capabilities attach on a subsequent daemon
+start when the cache is promptly available. Historical assistant sessions are
+resolved from validated relay events on demand, not from PostgreSQL rows. A
+daemon that holds committed state no relay has accepted stays ready but reports
+`canonical_delivery = warn` — see
 [outbox delivery](outbox-delivery.md).
 
 ## 4. Config-fabric events

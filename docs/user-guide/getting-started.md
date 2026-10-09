@@ -47,6 +47,7 @@ db:                          # optional derived index
   password: ""
   name: "bahia"
   sslmode: "require"         # default
+  startup_probe_timeout: 2s  # optional SQL connect/migration startup budget; max 5s (0 uses default)
 
 auth:
   enabled: true              # NIP-98 on the HTTP surface; default false

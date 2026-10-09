@@ -59,6 +59,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.DB.SSLMode != "require" {
 		t.Errorf("expected default SSL mode require, got %s", cfg.DB.SSLMode)
 	}
+	if cfg.DB.StartupProbeTimeout != 2*time.Second {
+		t.Errorf("expected default DB startup probe timeout 2s, got %s", cfg.DB.StartupProbeTimeout)
+	}
 
 	if cfg.Reconcile.Interval != 60*time.Second {
 		t.Errorf("expected default reconcile interval 60s, got %s", cfg.Reconcile.Interval)
@@ -127,6 +130,16 @@ func TestDefaults(t *testing.T) {
 	}
 	if cfg.Loom.CanonicalProjection.AllowRawKeyDev {
 		t.Error("expected Loom raw-key projection compatibility disabled by default")
+	}
+}
+
+func TestDatabaseStartupProbeTimeoutBounds(t *testing.T) {
+	for _, invalid := range []time.Duration{-time.Millisecond, 6 * time.Second} {
+		cfg := Defaults()
+		cfg.DB.StartupProbeTimeout = invalid
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "db.startup_probe_timeout") {
+			t.Fatalf("startup probe timeout %s: got error %v", invalid, err)
+		}
 	}
 }
 

@@ -26,6 +26,7 @@ db:
   max_open_conns: 25
   max_idle_conns: 5
   conn_max_lifetime: 5m
+  startup_probe_timeout: 2s
 
 nostr:
   private_key: ""                 # nsec or 64-hex service key; inject as a secret

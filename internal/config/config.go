@@ -605,15 +605,16 @@ type ServerConfig struct {
 
 // DBConfig holds PostgreSQL connection settings.
 type DBConfig struct {
-	Host            string        `koanf:"host" secret:"false"`
-	Port            int           `koanf:"port" secret:"false"`
-	User            string        `koanf:"user" secret:"false"`
-	Password        string        `koanf:"password" secret:"true"`
-	Name            string        `koanf:"name" secret:"false"`
-	SSLMode         string        `koanf:"sslmode" secret:"false"`
-	MaxOpenConns    int           `koanf:"max_open_conns" secret:"false"`
-	MaxIdleConns    int           `koanf:"max_idle_conns" secret:"false"`
-	ConnMaxLifetime time.Duration `koanf:"conn_max_lifetime" secret:"false"`
+	Host                string        `koanf:"host" secret:"false"`
+	Port                int           `koanf:"port" secret:"false"`
+	User                string        `koanf:"user" secret:"false"`
+	Password            string        `koanf:"password" secret:"true"`
+	Name                string        `koanf:"name" secret:"false"`
+	SSLMode             string        `koanf:"sslmode" secret:"false"`
+	MaxOpenConns        int           `koanf:"max_open_conns" secret:"false"`
+	MaxIdleConns        int           `koanf:"max_idle_conns" secret:"false"`
+	ConnMaxLifetime     time.Duration `koanf:"conn_max_lifetime" secret:"false"`
+	StartupProbeTimeout time.Duration `koanf:"startup_probe_timeout" secret:"false"`
 }
 
 // DSN returns a PostgreSQL connection string with properly escaped components.
@@ -1459,15 +1460,16 @@ func Defaults() *Config {
 			ShutdownTimeout: 15 * time.Second,
 		},
 		DB: DBConfig{
-			Host:            "localhost",
-			Port:            5432,
-			User:            "bahia",
-			Password:        "",
-			Name:            "bahia",
-			SSLMode:         "require",
-			MaxOpenConns:    25,
-			MaxIdleConns:    5,
-			ConnMaxLifetime: 5 * time.Minute,
+			Host:                "localhost",
+			Port:                5432,
+			User:                "bahia",
+			Password:            "",
+			Name:                "bahia",
+			SSLMode:             "require",
+			MaxOpenConns:        25,
+			MaxIdleConns:        5,
+			ConnMaxLifetime:     5 * time.Minute,
+			StartupProbeTimeout: 2 * time.Second,
 		},
 		Harbor: HarborConfig{
 			URL:      "https://harbor.example.com",
@@ -1881,6 +1883,9 @@ func rejectRemovedEncryptedRequestKeys(k *koanf.Koanf) error {
 }
 
 func (c *Config) validate() error {
+	if c.DB.StartupProbeTimeout < 0 || c.DB.StartupProbeTimeout > 5*time.Second {
+		return fmt.Errorf("config validation failed: db.startup_probe_timeout must be between 0 and 5s")
+	}
 	if err := c.Virtualization.Validate(); err != nil {
 		return err
 	}
