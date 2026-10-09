@@ -108,6 +108,10 @@ func (f *failingIndex) IncrementResultRetry(context.Context, string, time.Time) 
 	f.count()
 	return 0, errors.New("database unavailable")
 }
+func (f *failingIndex) RestoreResultRetry(context.Context, domain.HiveCIWorkflowResult, int, time.Time) (bool, error) {
+	f.count()
+	return false, errors.New("database unavailable")
+}
 
 func (f *failingIndex) EnsurePipelinePolicy(context.Context, domain.HiveCIPipelinePolicy) error {
 	f.count()

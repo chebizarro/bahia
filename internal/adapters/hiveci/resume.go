@@ -2,6 +2,7 @@ package hiveci
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -90,12 +91,28 @@ func (r *PendingResultResumer) attempt(ctx context.Context, result domain.HiveCI
 	if result.RetryCount >= r.maxAttempts {
 		return r.repo.MarkResultFailed(ctx, result.ResultEventID, "max retries exceeded")
 	}
-	attempt, err := r.repo.IncrementResultRetry(ctx, result.ResultEventID, r.now())
+	at := r.now().Truncate(time.Microsecond)
+	attempt, err := r.repo.IncrementResultRetry(ctx, result.ResultEventID, at)
+	if canceled := ctx.Err(); canceled != nil {
+		// A publish may have committed even when it returned cancellation. Use
+		// the expected reservation when no count was returned, and compensate
+		// using a short context independent of the invalidated policy pass.
+		if attempt == 0 {
+			attempt = result.RetryCount + 1
+		}
+		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		restored, restoreErr := r.repo.RestoreResultRetry(restoreCtx, result, attempt, at)
+		if restoreErr != nil {
+			return errors.Join(canceled, fmt.Errorf("restore canceled Hive-CI result retry %s: %w", result.ResultEventID, restoreErr))
+		}
+		if err == nil && !restored {
+			return errors.Join(canceled, fmt.Errorf("canceled Hive-CI result retry %s was not restored", result.ResultEventID))
+		}
+		return canceled
+	}
 	if err != nil {
 		return fmt.Errorf("count Hive-CI result attempt %s: %w", result.ResultEventID, err)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
 	}
 	if err := r.processor.ProcessResult(ctx, result.ResultEventID); err != nil {
 		r.logger.Warn("resumed Hive-CI result processing failed", zap.String("result_event_id", result.ResultEventID), zap.Int("attempt", attempt), zap.Error(err))

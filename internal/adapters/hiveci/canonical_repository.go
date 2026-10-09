@@ -398,6 +398,30 @@ func (r *CanonicalRepository) IncrementResultRetry(ctx context.Context, eventID 
 	return state.RetryCount, nil
 }
 
+func (r *CanonicalRepository) RestoreResultRetry(ctx context.Context, previous domain.HiveCIWorkflowResult, attempt int, at time.Time) (bool, error) {
+	if err := r.available(); err != nil {
+		return false, err
+	}
+	restored := false
+	_, err := r.updateResultState(ctx, previous.ResultEventID, func(state *domain.HiveCIResultState) bool {
+		if state.RetryCount != attempt || state.LastRetryAt == nil || !state.LastRetryAt.Equal(at) || state.ProcessingState != previous.ProcessingState {
+			return false
+		}
+		state.RetryCount = previous.RetryCount
+		state.LastRetryAt = previous.LastRetryAt
+		restored = true
+		return true
+	})
+	if err != nil {
+		return false, err
+	}
+	if restored && r.index != nil {
+		_, indexErr := r.index.RestoreResultRetry(ctx, previous, attempt, at)
+		r.mirror("result retry restoration", indexErr)
+	}
+	return restored, nil
+}
+
 func (r *CanonicalRepository) MarkResultFailed(ctx context.Context, eventID, reason string) error {
 	if err := r.available(); err != nil {
 		return err

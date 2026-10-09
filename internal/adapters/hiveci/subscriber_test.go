@@ -154,6 +154,9 @@ func (r *testHiveRepo) UpdateResultState(_ context.Context, _ string, _ domain.H
 func (r *testHiveRepo) IncrementResultRetry(_ context.Context, _ string, _ time.Time) (int, error) {
 	return 0, nil
 }
+func (r *testHiveRepo) RestoreResultRetry(context.Context, domain.HiveCIWorkflowResult, int, time.Time) (bool, error) {
+	return false, nil
+}
 func (r *testHiveRepo) MarkResultFailed(_ context.Context, _, _ string) error {
 	return nil
 }

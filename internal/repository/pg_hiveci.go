@@ -448,6 +448,23 @@ func (r *PgHiveCIRepository) IncrementResultRetry(ctx context.Context, eventID s
 	return retryCount, nil
 }
 
+func (r *PgHiveCIRepository) RestoreResultRetry(ctx context.Context, previous domain.HiveCIWorkflowResult, attempt int, at time.Time) (bool, error) {
+	command, err := r.pool.Exec(ctx, `
+		UPDATE hiveci_workflow_results
+		SET retry_count = $2,
+		    last_retry_at = $3,
+		    updated_at = now()
+		WHERE result_event_id = $1
+		  AND retry_count = $4
+		  AND last_retry_at = $5
+		  AND processing_state = $6
+	`, previous.ResultEventID, previous.RetryCount, previous.LastRetryAt, attempt, at, previous.ProcessingState)
+	if err != nil {
+		return false, fmt.Errorf("restoring hiveci result retry: %w", err)
+	}
+	return command.RowsAffected() == 1, nil
+}
+
 func (r *PgHiveCIRepository) MarkResultFailed(ctx context.Context, eventID, reason string) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE hiveci_workflow_results

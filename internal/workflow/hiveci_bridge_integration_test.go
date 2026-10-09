@@ -52,6 +52,9 @@ func (r *hiveCIBridgeRepo) UpdateResultState(context.Context, string, domain.Hiv
 func (r *hiveCIBridgeRepo) IncrementResultRetry(context.Context, string, time.Time) (int, error) {
 	return 0, nil
 }
+func (r *hiveCIBridgeRepo) RestoreResultRetry(context.Context, domain.HiveCIWorkflowResult, int, time.Time) (bool, error) {
+	return false, nil
+}
 func (r *hiveCIBridgeRepo) MarkResultFailed(context.Context, string, string) error { return nil }
 func (r *hiveCIBridgeRepo) ListPolicies(context.Context) ([]domain.HiveCIPipelinePolicy, error) {
 	return nil, nil

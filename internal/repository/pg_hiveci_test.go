@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,6 +11,30 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/pashagolub/pgxmock/v5"
 )
+
+func TestPgHiveCIRepositoryRestoreResultRetryIsConditional(t *testing.T) {
+	ctx := context.Background()
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new mock pool: %v", err)
+	}
+	defer mock.Close()
+	repo := &PgHiveCIRepository{pool: mock}
+	previous := domain.HiveCIWorkflowResult{ResultEventID: "result-1", ProcessingState: domain.HiveCIProcessingStatePendingResult}
+	at := time.Unix(1_800_000_000, 123000000).UTC()
+	for _, affected := range []int{1, 0} {
+		mock.ExpectExec("UPDATE hiveci_workflow_results").
+			WithArgs(previous.ResultEventID, previous.RetryCount, previous.LastRetryAt, 1, at, previous.ProcessingState).
+			WillReturnResult(pgconn.NewCommandTag(fmt.Sprintf("UPDATE %d", affected)))
+		restored, err := repo.RestoreResultRetry(ctx, previous, 1, at)
+		if err != nil || restored != (affected == 1) {
+			t.Fatalf("restore result retry: restored=%v err=%v", restored, err)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestPgHiveCIRepository_GetLatestResultByRunEventID(t *testing.T) {
 	ctx := context.Background()

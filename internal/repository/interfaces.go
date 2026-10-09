@@ -518,6 +518,10 @@ type HiveCIRepository interface {
 	ListOrphanedResultsByRun(ctx context.Context, runEventID string) ([]domain.HiveCIWorkflowResult, error)
 	UpdateResultState(ctx context.Context, eventID string, newState domain.HiveCIProcessingState) error
 	IncrementResultRetry(ctx context.Context, eventID string, at time.Time) (int, error)
+	// RestoreResultRetry compensates a reservation cancelled before processing.
+	// It only restores the prior values if count, timestamp and state still
+	// match the reservation, so a newer attempt is never overwritten.
+	RestoreResultRetry(ctx context.Context, previous domain.HiveCIWorkflowResult, attempt int, at time.Time) (bool, error)
 	MarkResultFailed(ctx context.Context, eventID, reason string) error
 	ListPolicies(ctx context.Context) ([]domain.HiveCIPipelinePolicy, error)
 	GetPolicyByRepoAndWorkflow(ctx context.Context, repo, workflow string) (*domain.HiveCIPipelinePolicy, error)

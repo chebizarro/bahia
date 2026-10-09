@@ -116,6 +116,9 @@ func (m *mockHiveRepo) UpdateResultState(_ context.Context, eventID string, newS
 func (m *mockHiveRepo) IncrementResultRetry(_ context.Context, _ string, _ time.Time) (int, error) {
 	return 0, nil
 }
+func (m *mockHiveRepo) RestoreResultRetry(context.Context, domain.HiveCIWorkflowResult, int, time.Time) (bool, error) {
+	return false, nil
+}
 func (m *mockHiveRepo) MarkResultFailed(_ context.Context, eventID, _ string) error {
 	m.updated[eventID] = domain.HiveCIProcessingStateFailed
 	return nil
