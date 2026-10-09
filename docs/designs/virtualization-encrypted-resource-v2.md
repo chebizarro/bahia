@@ -28,6 +28,8 @@ and trailing data rejected):
   "resource_id": "<uuidv7>", "expected_generation": 0,
   "expected_state_event_id": null, "expected_state_digest": null,
   "resource_version": 1, "resource_digest": "sha256:<hex>",
+  "resource_request_digest": "sha256:<hex>",
+  "cleanup_operation_id": null,
   "descriptor": {}, "execution_spec": {},
   "operator_reason": "<bounded text>"
 }
@@ -40,7 +42,14 @@ exactly predecessor + 1 (both start at 1 on registration). The request's
 digest is SHA-256 of domain-separated, RFC 8785 canonical JSON of
 `{schema, op, org_id, resource_kind, resource_id, resource_version,
 descriptor, execution_spec}`. It is checked *after* unwrapping and never a
-public tag.
+public tag. Separately, `resource_request_digest` is SHA-256 of
+`bahia:virtualization-resource-request:v2` plus RFC 8785 JSON of the full
+validated rumor envelope (kind, `created_at`, `d`, `t`, `domain`, `schema`,
+`op`, `org`, `intent_id`), **every** strict content field including predecessor,
+reason and `cleanup_operation_id`, and the verified seal-author pubkey,
+omitting only `resource_request_digest` itself. The daemon recomputes both;
+the content digest is not a substitute for authorization. A delete requires a
+fresh UUIDv7 `cleanup_operation_id`; register/update require null.
 The rumor's `org` tag, if retained by the shared parser, must equal content
 `org_id`; neither it nor resource IDs escape in outer tags. The ingress must
 introduce a v2-only `VerifiedWrappedVirtualizationIntent` provenance object
@@ -56,6 +65,21 @@ admits v2. A request is eligible only after its exact wrap is durably observed
 from the relay subscription; an in-process/SQL request is not equivalent
 authorization. NIP-40 expiration limits new admission, not replay of an
 already accepted operation.
+
+Stored-wrap recovery uses the daemon's per-relay EOSE-committed wall-clock
+cursor (captured before opening its REQ), **not** the outer `created_at`:
+NIP-59 permits up to **48 hours** of
+outer backdating. The v2 `1059` REQ `since` floor is the committed cursor
+minus at least the production `contextVMDefaultWrapBackdateOverlap` of
+**49 hours**, increased if configured sender-clock skew plus timestamp
+rounding exceeds the default one-hour allowance. Reject a configured overlap
+below that bound before enabling v2 ingress. If v2 instead consumes
+`ProcessSync.ReconcileKinds`, its complete ID reconciliation (NIP-77 or
+paged full fallback) and live-only REQ must retain that same floor until
+EOSE; the twelve-hour test fixture is not a production recovery bound.
+On cold ledger loss, do not replay an old rumor merely because its backdated
+wrap reappears: apply the request-age floor and exact outer-ID/rumor-ID claim
+rules from `contextvm_local_run.go` before admission.
 
 The full serialized rumor is capped at **16,384 bytes before wrapping** and
 the final stored `1059` ciphertext at **60,000 bytes**, below the relay's
@@ -99,10 +123,16 @@ repository model with observation and diagnostic fields:
 | `persistent_vm` | Exact `VMResourceIdentity`, host/image IDs and pinned image manifest digest, desired power, allocation, storage-pool ref, network/passthrough refs, firmware/TPM, config digest, bootstrap `{target_key, secret_id, secret_version}` bindings, maintenance/checkpoint/access policy. Resolve secret versions at effect time or fail; no secret bytes enter the event. |
 | `execution_plane` | Host ID, worker pubkey, management endpoint ref/author, package digest/provenance, configuration revision/network/secret-version bindings, pinned image IDs/digests, capacity/concurrency, desired lifecycle classes/capabilities/state and probe policy. |
 
-`delete` retains the signed predecessor identity and digest, but carries no
-new provider inputs (`descriptor` and `execution_spec` are empty); the daemon
-obtains cleanup inputs from the ACKed
-predecessor and refuses if that snapshot cannot be decrypted.
+`delete` retains the exact ACKed predecessor state event ID and digest, but
+carries no new provider inputs (`descriptor` and `execution_spec` are empty).
+The daemon obtains cleanup inputs only from that decryptable predecessor.
+Deletion is destructive even when cleanup is expected to be a no-op: the
+request needs an independent second operator's approval bound to its exact
+rumor ID, full `resource_request_digest`, predecessor event ID/digest,
+`cleanup_operation_id`, resource kind/id and `action=delete_and_cleanup`.
+Both signers must still hold the required org/VM-operator and destructive
+approval permissions immediately before cleanup. An approval for another
+generation, resource or request is never reusable.
 
 The daemon writes service-signed, addressable kind-`30900` v2 resource state
 through the local outbox, using a **new** `CPStateFamily` discriminator and
@@ -112,8 +142,9 @@ Allocate its unused `32xxx` family number at implementation time, register
 v1 `d` values. Tags carry only family/topic/schema, opaque coordinate and
 `deleted`; no `org`, `p`, generation, digest, provider, host, image, approval
 or journal tags. OCK-encrypt `{descriptor, org_id, resource_version,
-generation, resource_digest, request_rumor_id, request_outer_id, previous_state_event_id,
-deleted}` with the **org OCK** and AEAD associated data from the verified
+generation, resource_digest, request_rumor_id, resource_request_digest,
+request_outer_id, previous_state_event_id, approval_rumor_id,
+approval_digest, deleted}` with the **org OCK** and AEAD associated data from the verified
 event's family, `d` and `t`. Place the exact `execution_spec` plus the same
 identity/version/digest/request binding in `service_inner`, NIP-44-encrypted
 to the service key. The OCK is wrapped to current org members and service;
@@ -152,26 +183,26 @@ identity and authorized org. A separate service-signed, OCK-encrypted
 digest, resource state event ID/digest/version, action, approval, phase, stable
 provider correlation ID, fence epoch and sanitized outcome. No provider
 effect occurs merely because a `30315` intent status says `accepted`.
-Destructive actions require a **separate** seal-authenticated kind-`30900`
-`approve` rumor (`domain=virtualization`,
+Destructive operation actions **and every resource delete** require a separate
+seal-authenticated kind-`30900` `approve` rumor (`domain=virtualization`,
 `schema=bahia.intent.virtualization-approval.v2`, `op=approve`,
-`intent_id=<approval-uuidv7>`,
-`d=virtualization-approval:<approval-id>`, `t=bahia-intent`,
-`t=virtualization`) with `org_id`, `operation_id`, exact operation rumor ID and request
-digest, resource state event ID/digest, action, decision, approver pubkey,
-approval UUIDv7 and expiry. Its **approval digest** is SHA-256 of
-`bahia:virtualization-operation-approval:v2` plus RFC 8785 JSON of its
-complete validated rumor envelope, all strict content fields except the
-digest itself, and the verified seal-author pubkey. The daemon recomputes
-both digests,
-requires the independently verified seal author to equal `approver_pubkey`
-and **differ** from the request seal author, and checks each signer's current
-org permission and the appropriate VM-operator/approval tier at admission
-and again before effect. The approval
-must be observed from relay ingress and its own immutable ID/digest recorded
-in accepted operation state; neither a claimed `approval_id` in the request
-nor one principal using two wraps satisfies two-person approval. A rejected,
-expired, stale-resource or superseded approval cannot authorize execution.
+`intent_id=<approval-uuidv7>`, `d=virtualization-approval:<approval-id>`,
+`t=bahia-intent`, `t=virtualization`). Its strict content binds `org_id`,
+`target_type=operation|resource_delete`, `operation_id` (the cleanup ID for
+deletion), exact target rumor ID and full target request digest, predecessor
+resource state event ID/digest, resource kind/id, exact action, decision,
+approver pubkey, approval UUIDv7 and expiry. Its **approval digest** is
+SHA-256 of `bahia:virtualization-operation-approval:v2` plus RFC 8785 JSON
+of the complete validated rumor envelope, all strict content fields except
+the digest itself, and the verified seal-author pubkey. The daemon recomputes
+both digests, requires the independently verified seal author to equal
+`approver_pubkey` and **differ** from the request seal author, and checks
+both signers' current org permission and VM-operator/destructive-approval
+tier at admission and again before effect. The approval must be observed
+from relay ingress and its immutable rumor ID/digest recorded in accepted
+operation state; neither a claimed `approval_id` nor one principal using two
+wraps satisfies two-person approval. A rejected, expired, stale-resource or
+superseded approval cannot authorize execution.
 v1's start/stop/reboot allowlist is not silently widened.
 
 ## Acceptance, ordering and execution fence
@@ -185,11 +216,12 @@ outbox. A provider effect needs the **exact** current state event's retained
 control-plane outbox row with `Delivered=true`, quorum satisfied, at least one
 relay `OK accepted`, matching signed event ID/author/target, and no failed or
 undelivered marker. `ErrPublishIncomplete`, a local event, a SQL row, a
-`30315`, and one `OK` without quorum are not acceptance. Pin the delivery
-receipt until the resource is superseded/tombstoned or the operation reaches
-a durable terminal state; a predecessor still referenced by a nonterminal
-operation stays pinned even after replacement. Ordinary outbox pruning must
-not erase proof.
+`30315`, and one `OK` without quorum are not acceptance. Pin the exact
+delivery receipt while any admitted operation references that resource
+version. For deletion, pin the **ACKed predecessor event and its receipt
+through both cleanup terminal-state ACK and tombstone ACK**; tombstone
+publication alone must not release it. Ordinary outbox pruning must not
+erase proof.
 After a daemon move, reconstruct delivery proof only from per-relay
 observations of that exact signed event through long-lived subscriptions
 that have reached EOSE on the required configured write-relay quorum; an
@@ -202,12 +234,20 @@ digest then enforce semantic monotonicity. Because relays do **not** provide
 compare-and-swap, two daemons signing competing successors is forbidden by
 the execution topology, not resolved by choosing whichever relay event won.
 An out-of-order, equal-version-different-digest, missing predecessor, or
-cross-org state is a conflict. A tombstone is the next encrypted version on
-the same coordinate, never NIP-09; its receipt and provider cleanup phase
-remain independently auditable. No later intent may reuse a deleted resource
-ID. An operation ID maps to one request digest and one provider correlation
-ID forever; replay attaches/inspects before retry and cannot dispatch a
-different action or input snapshot under that ID.
+cross-org state is a conflict. For delete, after verifying both independent
+signers and the ACKed predecessor, publish an `accepted` cleanup operation
+state binding exact delete rumor ID/full request digest, approval rumor
+ID/digest, predecessor event ID/digest and stable provider correlation ID;
+wait for its ACK before cleanup. Reattach/inspect on replay. Only after a
+verified cleanup result and terminal operation-state ACK may the daemon sign
+the next encrypted version on the resource coordinate as a tombstone; wait
+for **its** ACK before releasing the predecessor pin. If terminal or
+tombstone delivery fails, block new effects and retain predecessor proof;
+do not retry cleanup blindly. The tombstone is never NIP-09 and records the
+exact delete/approval/cleanup binding. No later intent may reuse a deleted
+resource ID. An operation ID maps to one request digest and one provider
+correlation ID forever; replay cannot dispatch a different action or input
+snapshot under that ID.
 
 **One writer is an admission and signing precondition, not just an executor
 lock.** Before v2 ingress is admitted, the daemon acquires an exclusive
@@ -295,12 +335,15 @@ seal-author proof, wrong org/author, stale predecessor,
 equal-time NIP-01 ties, OCK rotation/refounding and unavailable service-inner,
 plaintext-tag/body leak scans, maximum component counts and actual nested-wrap
 size, missing/partial/abandoned/pruned ACKs, multi-relay EOSE handoff,
-backdated `1059` (up to NIP-59's six hours) delivered after a newer cursor
-across restart within the existing twelve-hour `ProcessSync.ReconcileKinds`
-window (NIP-77 and paged fallback), backdated live-only
-REQ delivery and outer-ID/rumor-ID dedupe in
+`1059` backdated **48 hours** and published after a newer cursor, then
+delivered across restart and reconnect under the 49-hour-plus-skew overlap;
+test per-relay EOSE cursors and, if using `ProcessSync.ReconcileKinds`, both
+NIP-77 and paged fallback plus its live-only REQ. Test outer-ID/rumor-ID
+dedupe in `internal/controlplane/contextvm_local_run_test.go`,
 `internal/adapters/nostr/process_sync_test.go` and
-`internal/controlplane/intent_giftwrap_web_fixture_test.go`; crash at every
+`internal/controlplane/intent_giftwrap_web_fixture_test.go`; test a forged
+delete approval, stale predecessor, lost receipt after tombstone publication,
+and cleanup crash/replay before terminal ACK; crash at every
 predecessor/sign/outbox/provider phase, same-host
 contending daemons, stale fence epoch, tombstone/replay, DB absent/unavailable,
 and SQL-only/divergent cutover. Keep `TestNoAutomaticSQLToCanonicalPromotion`,
