@@ -400,6 +400,13 @@ func (p *Projector) publishControlState(ctx context.Context, legacyKind int, id 
 	return p.publishSigned(ctx, wireKind, append(baseTags, tags...), content, entityType, entityID)
 }
 
+// publishControlStateOnce is for replayable migration tombstones whose exact
+// signed record may already be retained in the local outbox after a crash.
+func (p *Projector) publishControlStateOnce(ctx context.Context, legacyKind int, id string, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
+	wireKind, baseTags := controlStateEnvelope(legacyKind, id, true)
+	return p.publishSignedWithTombstoneDedupe(ctx, wireKind, append(baseTags, tags...), content, entityType, entityID, true)
+}
+
 // controlStateEnvelope is the single coordinate builder for projected
 // replaceable state. It returns the wire kind and the envelope tags (d, domain,
 // schema, legacy_kind, deleted, and the family's single-letter t topic) for the

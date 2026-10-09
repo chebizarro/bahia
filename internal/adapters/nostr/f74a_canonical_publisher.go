@@ -2,6 +2,9 @@ package nostr
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -131,19 +134,61 @@ func (p *F74aCanonicalPublisher) PublishArtifactSBOMState(ctx context.Context, s
 	return p.publish(ctx, KindArtifactSBOMRegistry, "artifact:sbom:"+sbom.ID.String(), deleted, false,
 		gonostr.Tags{{"artifact_id", sbom.ArtifactID.String()}}, value, "artifact_sbom.projection", &sbom.ID)
 }
+
+// SBOMPackageDTag identifies a package by its immutable semantic fields. Each
+// field is length-prefixed so embedded separators and empty strings cannot
+// alias another tuple. Package row IDs remain in record content, not in the
+// coordinate. SQL NULL values are represented by the domain's empty strings.
+func SBOMPackageDTag(pkg *domain.SBOMPackage) string {
+	h := sha256.New()
+	_, _ = h.Write(pkg.SBOMID[:])
+	for _, field := range [...]string{pkg.Name, pkg.Version, pkg.Ecosystem, pkg.License, pkg.PURL, pkg.CPE} {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(field)))
+		_, _ = h.Write(length[:])
+		_, _ = h.Write([]byte(field))
+	}
+	return "artifact:sbom-package:v2:" + hex.EncodeToString(h.Sum(nil))
+}
+
 func (p *F74aCanonicalPublisher) PublishSBOMPackage(ctx context.Context, pkg *domain.SBOMPackage) error {
 	return p.PublishSBOMPackageState(ctx, pkg, false)
 }
 func (p *F74aCanonicalPublisher) PublishSBOMPackageState(ctx context.Context, pkg *domain.SBOMPackage, deleted bool) error {
-	if pkg == nil || pkg.ID == uuid.Nil {
-		return fmt.Errorf("SBOM package ID is required")
+	if pkg == nil || pkg.ID == uuid.Nil || pkg.SBOMID == uuid.Nil {
+		return fmt.Errorf("SBOM package and SBOM IDs are required")
 	}
 	value := any(pkg)
 	if deleted {
 		value = map[string]any{"id": pkg.ID, "deleted": true}
 	}
-	return p.publish(ctx, KindSBOMPackageRegistry, "artifact:sbom-package:"+pkg.ID.String(), deleted, false,
+	return p.publish(ctx, KindSBOMPackageRegistry, SBOMPackageDTag(pkg), deleted, false,
 		gonostr.Tags{{"sbom_id", pkg.SBOMID.String()}}, value, "sbom_package.projection", &pkg.ID)
+}
+
+// PublishLegacySBOMPackageTombstone retires one historical UUID-coordinate
+// record after its semantic representative has been staged. Distinct old row
+// IDs need distinct tombstones; this method never deletes the v2 coordinate.
+func (p *F74aCanonicalPublisher) PublishLegacySBOMPackageTombstone(ctx context.Context, pkg *domain.SBOMPackage) (err error) {
+	if p != nil && p.marker != nil {
+		defer func() {
+			if err != nil {
+				err = errors.Join(err, p.MarkBackfillDirty())
+			}
+		}()
+	}
+	if pkg == nil || pkg.ID == uuid.Nil || pkg.SBOMID == uuid.Nil {
+		return fmt.Errorf("SBOM package and SBOM IDs are required")
+	}
+	if p == nil || p.projector == nil || !p.projector.Enabled() {
+		return nil
+	}
+	content, err := json.Marshal(map[string]any{"id": pkg.ID, "deleted": true})
+	if err != nil {
+		return fmt.Errorf("marshal legacy SBOM package tombstone: %w", err)
+	}
+	return p.projector.publishControlStateOnce(ctx, KindSBOMPackageRegistry, "artifact:sbom-package:"+pkg.ID.String(),
+		gonostr.Tags{{"sbom_id", pkg.SBOMID.String()}}, string(content), "sbom_package.projection", &pkg.ID)
 }
 func (p *F74aCanonicalPublisher) PublishRuntimeObservation(ctx context.Context, obs *domain.RuntimeObservation) error {
 	return p.PublishRuntimeObservationState(ctx, obs, false)

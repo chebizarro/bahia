@@ -28,8 +28,9 @@ import (
 // publish the outbox could not queue opens one bounded, jittered backoff shared
 // by the whole projector path. Relay-level failures are not the projector's
 // concern: the outbox publisher keeps the signed event and retries each relay.
-// Tombstones and real changes are never suppressed, and the append-only audit
-// log is never deduplicated.
+// Normal tombstones and real changes are never suppressed; explicitly replayable
+// migration tombstones may dedupe against durable retained state. The append-only
+// audit log is never deduplicated.
 
 // ErrProjectorBackoff is returned when a publish is skipped because the shared
 // projector backoff window is open after a publish that was not queued.
@@ -551,6 +552,13 @@ func (p *Projector) flushPendingRetries() {
 // rejection backoff, and per-family metrics, then delegates the actual
 // sign+publish+record to publishSignedDirect.
 func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) error {
+	return p.publishSignedWithTombstoneDedupe(ctx, kind, tags, content, entityType, entityID, false)
+}
+
+// publishSignedWithTombstoneDedupe permits an explicit migration tombstone to
+// be retried after a cursor crash without signing a second queued event. Normal
+// delete writers keep their existing behavior: a repeated delete still emits.
+func (p *Projector) publishSignedWithTombstoneDedupe(ctx context.Context, kind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID, dedupeTombstone bool) error {
 	wireKind := int(canonicalKind(kind))
 	family := projectionFamily(wireKind, tags)
 	s := p.projection()
@@ -567,14 +575,14 @@ func (p *Projector) publishSigned(ctx context.Context, kind int, tags gonostr.Ta
 		// a cold cache would re-sign every unchanged coordinate. Tombstones are
 		// never deduped, so they do not depend on the cache and must not be
 		// held back by a retained-state read failure.
-		if err := p.hydrateProjectionCache(ctx, wireKind); err != nil && !isTombstoneTags(tags) {
+		if err := p.hydrateProjectionCache(ctx, wireKind); err != nil && (!isTombstoneTags(tags) || dedupeTombstone) {
 			return err
 		}
 		contended, unlock = p.lockProjectionKey(key)
 	}
 	defer unlock()
 
-	if dedupable && !isTombstoneTags(tags) && p.projectionUnchanged(key, fingerprint) {
+	if dedupable && (!isTombstoneTags(tags) || dedupeTombstone) && p.projectionUnchanged(key, fingerprint) {
 		if contended {
 			s.count(family, func(m *ProjectionFamilyMetrics) { m.Coalesced++ })
 		} else {

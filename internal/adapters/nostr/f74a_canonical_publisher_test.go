@@ -2,6 +2,8 @@ package nostr
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,9 +12,11 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -35,7 +39,7 @@ func TestF74aCanonicalFamiliesPublishAndTombstone(t *testing.T) {
 		{KindLLMReleaseRegistry, kinds.CPStateTopicLLMRelease, "llm:release:" + release.ID.String(), func() error { return pub.PublishLLMRelease(ctx, release) }, func() error { return pub.PublishLLMReleaseState(ctx, release, true) }},
 		{KindArtifactSignatureRegistry, kinds.CPStateTopicArtifactSignature, "artifact:signature:" + sig.ID.String(), func() error { return pub.PublishArtifactSignature(ctx, sig) }, func() error { return pub.PublishArtifactSignatureState(ctx, sig, true) }},
 		{KindArtifactSBOMRegistry, kinds.CPStateTopicArtifactSBOM, "artifact:sbom:" + sbom.ID.String(), func() error { return pub.PublishArtifactSBOM(ctx, sbom) }, func() error { return pub.PublishArtifactSBOMState(ctx, sbom, true) }},
-		{KindSBOMPackageRegistry, kinds.CPStateTopicSBOMPackage, "artifact:sbom-package:" + pkg.ID.String(), func() error { return pub.PublishSBOMPackage(ctx, pkg) }, func() error { return pub.PublishSBOMPackageState(ctx, pkg, true) }},
+		{KindSBOMPackageRegistry, kinds.CPStateTopicSBOMPackage, SBOMPackageDTag(pkg), func() error { return pub.PublishSBOMPackage(ctx, pkg) }, func() error { return pub.PublishSBOMPackageState(ctx, pkg, true) }},
 		{KindRuntimeObservationState, kinds.CPStateTopicRuntimeObservation, "runtime:observation:" + obs.ServiceID.String() + ":" + obs.EnvironmentID.String(), func() error { return pub.PublishRuntimeObservation(ctx, obs) }, func() error { return pub.PublishRuntimeObservationState(ctx, obs, true) }},
 	}
 	for _, tc := range cases {
@@ -129,4 +133,127 @@ func TestF74aPublishFailureSchedulesStartupRepair(t *testing.T) {
 	if len(sink.byKind(KindCASControlState)) != 0 {
 		t.Fatal("oversized state entered outbox")
 	}
+}
+
+func TestSBOMPackageDTagUsesExactSemanticTuple(t *testing.T) {
+	sbomID := uuid.MustParse("00112233-4455-6677-8899-aabbccddeeff")
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: sbomID, Name: "a\x00b", Version: "1", Ecosystem: "npm", PURL: "pkg:npm/a@1"}
+	const want = "artifact:sbom-package:v2:a5384b95ec21d7455455180e1954a98b05c5099dcb484a84773e6fa48431877b"
+	require.Equal(t, want, SBOMPackageDTag(pkg))
+	copy := *pkg
+	copy.ID = uuid.New()
+	require.Equal(t, want, SBOMPackageDTag(&copy), "database row identity must not affect the coordinate")
+	changes := []func(*domain.SBOMPackage){
+		func(p *domain.SBOMPackage) { p.SBOMID = uuid.New() },
+		func(p *domain.SBOMPackage) { p.Name = "a" },
+		func(p *domain.SBOMPackage) { p.Version = "2" },
+		func(p *domain.SBOMPackage) { p.Ecosystem = "go" },
+		func(p *domain.SBOMPackage) { p.License = "MIT" },
+		func(p *domain.SBOMPackage) { p.PURL = "pkg:npm/b@1" },
+		func(p *domain.SBOMPackage) { p.CPE = "cpe:/a:test" },
+	}
+	for _, change := range changes {
+		copy = *pkg
+		change(&copy)
+		require.NotEqual(t, want, SBOMPackageDTag(&copy))
+	}
+	copy = *pkg
+	copy.Name, copy.Version = "a", "b\x001"
+	require.NotEqual(t, want, SBOMPackageDTag(&copy), "field boundaries must be unambiguous")
+}
+
+func TestF74aLegacyPackageTombstoneUsesOldCoordinate(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repositorytest.NewInMemoryNostrEventRepository(), zap.NewNop())
+	pub := NewF74aCanonicalPublisher(projector, nil)
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module", Version: "1"}
+	require.NoError(t, pub.PublishSBOMPackage(ctx, pkg))
+	require.NoError(t, pub.PublishLegacySBOMPackageTombstone(ctx, pkg))
+	all := sink.byKind(KindCASControlState)
+	require.Len(t, all, 2)
+	require.True(t, hasTag(all[0].Tags, "d", SBOMPackageDTag(pkg)))
+	require.True(t, hasTag(all[0].Tags, "deleted", "false"))
+	require.True(t, hasTag(all[1].Tags, "d", "artifact:sbom-package:"+pkg.ID.String()))
+	require.True(t, hasTag(all[1].Tags, "deleted", "true"))
+	require.Equal(t, all[0].PubKey, all[1].PubKey)
+	require.Equal(t, all[0].Kind, all[1].Kind)
+	require.NotEqual(t, eventDTag(all[0]), eventDTag(all[1]))
+}
+
+func TestF74aQueuedSemanticPackageAndLegacyTombstoneDedupeAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	script := newRelayScript()
+	script.setDown(cpRelayA, true)
+	script.setDown(cpRelayB, true)
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module", Version: "1"}
+
+	first := startLocalHistoryDaemon(t, dir, script)
+	firstPub := NewF74aCanonicalPublisher(first.projector, nil)
+	require.NoError(t, firstPub.PublishSBOMPackage(ctx, pkg))
+	require.NoError(t, firstPub.PublishSBOMPackage(ctx, pkg))
+	counts, err := first.outbox.Counts()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), counts.Pending)
+	require.NoError(t, firstPub.PublishLegacySBOMPackageTombstone(ctx, pkg))
+	require.NoError(t, firstPub.PublishLegacySBOMPackageTombstone(ctx, pkg))
+	counts, err = first.outbox.Counts()
+	require.NoError(t, err)
+	require.Equal(t, int64(2), counts.Pending)
+	first.close()
+
+	restarted := startLocalHistoryDaemon(t, dir, script)
+	restartedPub := NewF74aCanonicalPublisher(restarted.projector, nil)
+	require.NoError(t, restartedPub.PublishSBOMPackage(ctx, pkg))
+	require.NoError(t, restartedPub.PublishLegacySBOMPackageTombstone(ctx, pkg))
+	counts, err = restarted.outbox.Counts()
+	require.NoError(t, err)
+	require.Equal(t, int64(2), counts.Pending, "cursor replay must not add signed pending events")
+	require.Equal(t, 4, script.totalCalls(), "each distinct coordinate was attempted against two relays once")
+	pending, err := restarted.outbox.ListPending("control-plane", nil, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 2)
+	for _, entry := range pending {
+		require.Equal(t, localstore.OutboxPending, entry.State)
+	}
+}
+
+func TestF74aSemanticPackageChangedRepresentativeReplacesWithNewerEvent(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repositorytest.NewInMemoryNostrEventRepository(), zap.NewNop())
+	pub := NewF74aCanonicalPublisher(projector, nil)
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module", Version: "1"}
+	require.NoError(t, pub.PublishSBOMPackage(ctx, pkg))
+	otherRow := *pkg
+	otherRow.ID = uuid.New()
+	require.NoError(t, pub.PublishSBOMPackage(ctx, &otherRow))
+	events := sink.byKind(KindCASControlState)
+	require.Len(t, events, 2)
+	require.Equal(t, eventDTag(events[0]), eventDTag(events[1]))
+	require.Greater(t, events[1].CreatedAt, events[0].CreatedAt)
+	var content domain.SBOMPackage
+	require.NoError(t, json.Unmarshal([]byte(events[1].Content), &content))
+	require.Equal(t, otherRow.ID, content.ID, "representative row identity remains visible in content")
+}
+
+func TestF74aLegacyTombstoneRefusalIsNotReportedAsStaged(t *testing.T) {
+	ctx := context.Background()
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	script := newRelayScript()
+	projector, _ := newOutboxProjector(t, repo, script, newFakeProjectionSource())
+	marker := &f74aDirtyMarker{}
+	pub := NewF74aCanonicalPublisher(projector, nil, marker)
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module"}
+	require.NoError(t, pub.PublishSBOMPackage(ctx, pkg))
+	script.mu.Lock()
+	script.reject[cpRelayA] = "blocked: legacy cleanup rejected"
+	script.reject[cpRelayB] = "blocked: legacy cleanup rejected"
+	script.mu.Unlock()
+	err := pub.PublishLegacySBOMPackageTombstone(ctx, pkg)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrPublishAbandoned))
+	require.Equal(t, "dirty", marker.value)
+	require.Equal(t, 1, marker.writes)
 }
