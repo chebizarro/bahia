@@ -17,6 +17,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -31,7 +32,9 @@ func TestF74aReceiptSurvivesSettledOutboxPruneAndRestart(t *testing.T) {
 	event.Tags[1][1] = "" + itoa(nostradapter.KindSBOMPackageRegistry)
 	event.ID[0] = 1
 	ledger := f74aDeliveryLedger{store: outbox}
-	require.NoError(t, ledger.stage(event))
+	hash, err := f74aSourceHash(pkg)
+	require.NoError(t, err)
+	require.NoError(t, ledger.stageWithHash(event, hash))
 	accepted, err := ledger.prove(context.Background(), "semantic_packages", pkg)
 	require.NoError(t, err)
 	require.False(t, accepted)
@@ -68,9 +71,11 @@ func TestF74aReceiptNewPendingAndRefusalInvalidateOldAcceptance(t *testing.T) {
 	}
 	ledger := f74aDeliveryLedger{store: outbox}
 	old, newer := makeEvent(1), makeEvent(2)
-	require.NoError(t, ledger.stage(old))
+	hash, err := f74aSourceHash(pkg)
+	require.NoError(t, err)
+	require.NoError(t, ledger.stageWithHash(old, hash))
 	require.NoError(t, ledger.accepted(old))
-	require.NoError(t, ledger.stage(newer))
+	require.NoError(t, ledger.stageWithHash(newer, hash))
 	ok, err := ledger.prove(context.Background(), "semantic_packages", pkg)
 	require.NoError(t, err)
 	require.False(t, ok)
@@ -82,6 +87,29 @@ func TestF74aReceiptNewPendingAndRefusalInvalidateOldAcceptance(t *testing.T) {
 	ok, err = ledger.prove(context.Background(), "semantic_packages", pkg)
 	require.NoError(t, err)
 	require.False(t, ok)
+}
+
+func TestF74aAcceptedCoordinateDoesNotProveChangedSourceContent(t *testing.T) {
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module", Version: "1"}
+	event := gonostr.Event{Kind: gonostr.Kind(nostradapter.KindCASControlState), Tags: gonostr.Tags{{"d", nostradapter.SBOMPackageDTag(pkg)}, {"legacy_kind", itoa(nostradapter.KindSBOMPackageRegistry)}, {"deleted", "false"}}}
+	event.ID[0] = 1
+	ledger := f74aDeliveryLedger{store: outbox}
+	hash, err := f74aSourceHash(pkg)
+	require.NoError(t, err)
+	require.NoError(t, ledger.stageWithHash(event, hash))
+	require.NoError(t, ledger.accepted(event))
+	proved, err := ledger.prove(context.Background(), "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.True(t, proved)
+	changed := *pkg
+	changed.ID = uuid.New() // same semantic coordinate, different SQL source row
+	require.Equal(t, nostradapter.SBOMPackageDTag(pkg), nostradapter.SBOMPackageDTag(&changed))
+	proved, err = ledger.prove(context.Background(), "semantic_packages", &changed)
+	require.NoError(t, err)
+	require.False(t, proved)
 }
 
 func TestF74aOwnerOnlyFleetRecipientCanDecrypt(t *testing.T) {
@@ -167,4 +195,70 @@ func TestF74aOCKEnvelopesMustAllBeQuorumAccepted(t *testing.T) {
 	ready, err = ledger.proveOCK(ctx, outbox, 3)
 	require.NoError(t, err)
 	require.False(t, ready)
+}
+
+// The tracked publisher must promote Publisher's package-coordinate retained
+// lookup. The local event cache is deliberately empty: only the signed outbox
+// row survived the simulated enqueue-before-cache crash.
+func TestF74aTrackedPublisherHydratesOutboxOnlyCoordinate(t *testing.T) {
+	ctx := context.Background()
+	key := "0000000000000000000000000000000000000000000000000000000000000001"
+	secret, err := gonostr.SecretKeyFromHex(key)
+	require.NoError(t, err)
+	cfg := config.NostrConfig{PrivateKey: key, PublishEnabled: true}
+	original := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module", Version: "1"}
+	capture := &f74aProjectionCapture{}
+	seed := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), capture, nil, zap.NewNop())
+	require.NoError(t, nostradapter.NewF74aCanonicalPublisher(seed, nil).PublishSBOMPackage(ctx, original))
+	require.Len(t, capture.events, 1)
+	held := capture.events[0]
+	held.CreatedAt = gonostr.Now() + 3600
+	require.NoError(t, held.Sign(secret))
+	dir := t.TempDir()
+	outbox, err := localstore.OpenOutbox(filepath.Join(dir, "outbox.bolt"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	store, err := localstore.Open(filepath.Join(dir, "events.bolt"))
+	require.NoError(t, err)
+	defer store.Close()
+	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: held, Target: repository.NostrPublishTargetControlPlane})
+	require.NoError(t, err)
+	raw := nostradapter.NewPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostradapter.WithLocalOutbox(outbox, store))
+	defer raw.Close()
+	ledger := f74aDeliveryLedger{store: outbox, author: secret.Public()}
+	history := nostradapter.NewLocalEventRepository(store, nil).Authored(secret.Public().Hex())
+	wrapped := f74aTrackedPublisher{Publisher: raw, ledger: ledger}
+	restarted := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), wrapped, history, zap.NewNop())
+	canonical := nostradapter.NewF74aCanonicalPublisher(restarted, nil)
+	require.NoError(t, canonical.PublishSBOMPackage(ctx, original), "unchanged row must reuse held signed event")
+	counts, err := outbox.Counts()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), counts.Pending)
+	changed := *original
+	changed.ID = uuid.New()                                                       // same semantic coordinate, changed payload
+	_ = (f74aRecordPublisher{inner: canonical}).PublishSBOMPackage(ctx, &changed) // no relay in fixture
+	entries, err := outbox.ListEntries([]string{localstore.OutboxPending, localstore.OutboxPublished, localstore.OutboxFailed}, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 2, "changed row must enqueue a new signed event")
+	var newer gonostr.Event
+	for _, entry := range entries {
+		if entry.Event.ID != held.ID {
+			newer = entry.Event
+		}
+	}
+	require.NotEqual(t, gonostr.ZeroID, newer.ID)
+	require.Greater(t, int64(newer.CreatedAt), int64(held.CreatedAt), "new event must supersede outbox-only retained timestamp")
+	receipt, found, err := ledger.receipt(nostradapter.KindSBOMPackageRegistry, nostradapter.SBOMPackageDTag(&changed))
+	require.NoError(t, err)
+	require.True(t, found)
+	changedHash, err := f74aSourceHash(&changed)
+	require.NoError(t, err)
+	require.Equal(t, changedHash, receipt.SourceHash, "signed event must retain the exact SQL source-row digest")
+}
+
+type f74aProjectionCapture struct{ events []gonostr.Event }
+
+func (c *f74aProjectionCapture) PublishProjection(_ context.Context, ev gonostr.Event, _ string, _ *uuid.UUID) error {
+	c.events = append(c.events, ev)
+	return nil
 }

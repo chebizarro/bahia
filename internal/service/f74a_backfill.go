@@ -287,6 +287,10 @@ func (r *F74aBackfillRunner) RunMigration(ctx context.Context) error {
 		}
 	}
 	if p.Completed {
+		if err := r.verifyAllRecords(ctx); err != nil {
+			r.setError(err)
+			return errors.Join(err, r.reopenAfterFailedVerification())
+		}
 		return nil
 	}
 	if err = r.runPass(ctx); err != nil {
@@ -294,6 +298,19 @@ func (r *F74aBackfillRunner) RunMigration(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (r *F74aBackfillRunner) reopenAfterFailedVerification() error {
+	_, err := r.update(func(current *F74aBackfillProgress) error {
+		current.Phase = f74aPhases[0]
+		current.Cursor = uuid.Nil
+		current.StateCursor = repository.F74aStateCursor{}
+		current.PassGeneration = current.Generation
+		current.Completed = false
+		current.RelayVerified = false
+		return nil
+	})
+	return err
 }
 
 func waitF74a(ctx context.Context, d time.Duration) bool {
@@ -355,16 +372,7 @@ func (r *F74aBackfillRunner) runPass(ctx context.Context) error {
 		}
 		if p.Phase == "complete" {
 			if err := r.verifyAllRecords(ctx); err != nil {
-				_, resetErr := r.update(func(current *F74aBackfillProgress) error {
-					if current.Phase == "complete" {
-						current.Phase = f74aPhases[0]
-						current.Cursor = uuid.Nil
-						current.StateCursor = repository.F74aStateCursor{}
-						current.PassGeneration = current.Generation
-					}
-					return nil
-				})
-				return errors.Join(err, resetErr)
+				return errors.Join(err, r.reopenAfterFailedVerification())
 			}
 			next, err := r.update(func(current *F74aBackfillProgress) error {
 				if current.Phase != "complete" {

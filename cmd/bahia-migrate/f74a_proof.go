@@ -19,6 +19,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -37,6 +38,7 @@ type f74aReceipt struct {
 	Failed     bool   `json:"failed,omitempty"`
 	Deleted    bool   `json:"deleted"`
 	OCKVersion int    `json:"ock_version,omitempty"`
+	SourceHash string `json:"source_hash,omitempty"`
 }
 
 type f74aReceiptStore interface {
@@ -47,6 +49,24 @@ type f74aReceiptStore interface {
 type f74aDeliveryLedger struct {
 	store  f74aReceiptStore
 	author gonostr.PubKey
+}
+
+type f74aSourceHashKey struct{}
+
+func f74aSourceHash(item any) (string, error) {
+	raw, err := json.Marshal(item)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+func f74aRecordContext(ctx context.Context, item any) (context.Context, error) {
+	hash, err := f74aSourceHash(item)
+	if err != nil {
+		return nil, err
+	}
+	return context.WithValue(ctx, f74aSourceHashKey{}, hash), nil
 }
 
 func f74aEventTag(ev gonostr.Event, key string) string {
@@ -60,7 +80,7 @@ func f74aEventTag(ev gonostr.Event, key string) string {
 func f74aReceiptKey(author gonostr.PubKey, kind int, d string) string {
 	return fmt.Sprintf("%s:%d:%s", author.Hex(), kind, d)
 }
-func (l f74aDeliveryLedger) mutate(ev gonostr.Event, accepted bool, stage bool) error {
+func (l f74aDeliveryLedger) mutate(ev gonostr.Event, accepted bool, stage bool, sourceHash string) error {
 	if ev.PubKey != l.author || int(ev.Kind) != nostradapter.KindCASControlState {
 		return nil
 	}
@@ -91,7 +111,10 @@ func (l f74aDeliveryLedger) mutate(ev gonostr.Event, accepted bool, stage bool) 
 		if stage && current.EventID == id {
 			return raw, nil
 		}
-		next := f74aReceipt{EventID: id, Accepted: accepted, Failed: !stage && !accepted, Deleted: f74aEventTag(ev, "deleted") == "true"}
+		next := f74aReceipt{EventID: id, Accepted: accepted, Failed: !stage && !accepted, Deleted: f74aEventTag(ev, "deleted") == "true", SourceHash: current.SourceHash}
+		if stage && kind != nostradapter.KindOrgKeyEnvelope {
+			next.SourceHash = sourceHash
+		}
 		if kind == nostradapter.KindLLMReleaseRegistry {
 			_, version, err := controlplane.VersionFromEnvelope(ev.Content)
 			if err != nil {
@@ -103,9 +126,12 @@ func (l f74aDeliveryLedger) mutate(ev gonostr.Event, accepted bool, stage bool) 
 	})
 	return err
 }
-func (l f74aDeliveryLedger) stage(ev gonostr.Event) error     { return l.mutate(ev, false, true) }
-func (l f74aDeliveryLedger) accepted(ev gonostr.Event) error  { return l.mutate(ev, true, false) }
-func (l f74aDeliveryLedger) abandoned(ev gonostr.Event) error { return l.mutate(ev, false, false) }
+func (l f74aDeliveryLedger) stage(ev gonostr.Event) error { return l.stageWithHash(ev, "") }
+func (l f74aDeliveryLedger) stageWithHash(ev gonostr.Event, hash string) error {
+	return l.mutate(ev, false, true, hash)
+}
+func (l f74aDeliveryLedger) accepted(ev gonostr.Event) error  { return l.mutate(ev, true, false, "") }
+func (l f74aDeliveryLedger) abandoned(ev gonostr.Event) error { return l.mutate(ev, false, false, "") }
 func (l f74aDeliveryLedger) receipt(kind int, d string) (f74aReceipt, bool, error) {
 	raw, err := l.store.GetControlRecord(f74aReceiptFamily, f74aReceiptKey(l.author, kind, d))
 	if err != nil {
@@ -160,7 +186,11 @@ func (l f74aDeliveryLedger) prove(ctx context.Context, phase string, item any) (
 	if err != nil || !found {
 		return false, err
 	}
-	if rec.Deleted != deleted {
+	hash, err := f74aSourceHash(item)
+	if err != nil {
+		return false, err
+	}
+	if rec.SourceHash != hash || rec.Deleted != deleted {
 		return false, nil
 	}
 	return rec.Accepted, nil
@@ -170,18 +200,68 @@ func (l f74aDeliveryLedger) prove(ctx context.Context, phase string, item any) (
 // the real publisher; an old accepted receipt cannot satisfy a newer pending
 // replacement on the same coordinate.
 type f74aTrackedPublisher struct {
-	inner  *nostradapter.Publisher
+	*nostradapter.Publisher
 	ledger f74aDeliveryLedger
 }
 
 func (p f74aTrackedPublisher) PublishProjection(ctx context.Context, ev gonostr.Event, entityType string, entityID *uuid.UUID) error {
-	if err := p.ledger.stage(ev); err != nil {
+	hash, _ := ctx.Value(f74aSourceHashKey{}).(string)
+	if err := p.ledger.stageWithHash(ev, hash); err != nil {
 		return err
 	}
-	return p.inner.PublishProjection(ctx, ev, entityType, entityID)
+	return p.Publisher.PublishProjection(ctx, ev, entityType, entityID)
 }
 
 var _ nostradapter.ProjectionPublisher = f74aTrackedPublisher{}
+
+// The source-row digest flows only through this explicit import boundary. It
+// binds the signed receipt to the row observed by the bounded SQL page.
+type f74aRecordPublisher struct{ inner service.F74aBackfillPublisher }
+
+func (p f74aRecordPublisher) PublishLLMRelease(ctx context.Context, x *domain.LLMRelease) error {
+	c, err := f74aRecordContext(ctx, x)
+	if err != nil {
+		return err
+	}
+	return p.inner.PublishLLMRelease(c, x)
+}
+func (p f74aRecordPublisher) PublishArtifactSignature(ctx context.Context, x *domain.ArtifactSignature) error {
+	c, err := f74aRecordContext(ctx, x)
+	if err != nil {
+		return err
+	}
+	return p.inner.PublishArtifactSignature(c, x)
+}
+func (p f74aRecordPublisher) PublishArtifactSBOM(ctx context.Context, x *domain.ArtifactSBOM) error {
+	c, err := f74aRecordContext(ctx, x)
+	if err != nil {
+		return err
+	}
+	return p.inner.PublishArtifactSBOM(c, x)
+}
+func (p f74aRecordPublisher) PublishSBOMPackage(ctx context.Context, x *domain.SBOMPackage) error {
+	c, err := f74aRecordContext(ctx, x)
+	if err != nil {
+		return err
+	}
+	return p.inner.PublishSBOMPackage(c, x)
+}
+func (p f74aRecordPublisher) PublishLegacySBOMPackageTombstone(ctx context.Context, x *domain.SBOMPackage) error {
+	c, err := f74aRecordContext(ctx, x)
+	if err != nil {
+		return err
+	}
+	return p.inner.PublishLegacySBOMPackageTombstone(c, x)
+}
+func (p f74aRecordPublisher) PublishRuntimeObservation(ctx context.Context, x *domain.RuntimeObservation) error {
+	c, err := f74aRecordContext(ctx, x)
+	if err != nil {
+		return err
+	}
+	return p.inner.PublishRuntimeObservation(c, x)
+}
+
+var _ service.F74aBackfillPublisher = f74aRecordPublisher{}
 
 const f74aOCKManifestFamily = "f74a-import-ock-v1"
 

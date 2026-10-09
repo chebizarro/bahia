@@ -481,3 +481,36 @@ func TestF74aCompletedMarkerCannotCrossSigningAuthor(t *testing.T) {
 		t.Fatalf("wrong author marker: %+v", p)
 	}
 }
+
+func TestF74aCompletedMarkerRechecksSourceAndReopensOnChange(t *testing.T) {
+	raw, _ := json.Marshal(F74aBackfillProgress{Phase: "complete", Completed: true, RelayVerified: true, ProofVersion: 2, Author: "same"})
+	marker := &f74aMemoryMarker{value: raw}
+	source := &f74aSource{releases: []domain.LLMRelease{{ID: f74aID(1)}}}
+	pub := &f74aBackfillPub{}
+	runner := f74aRunner(marker, source, pub)
+	runner.cfg.Author = "same"
+	accepted := false
+	runner.cfg.Delivered = func(_ context.Context, phase string, _ any) (bool, error) {
+		if phase != "releases" {
+			t.Fatalf("unexpected proof phase %s", phase)
+		}
+		return accepted, nil
+	}
+	if err := runner.RunMigration(context.Background()); err == nil {
+		t.Fatal("completed marker trusted after source changed")
+	}
+	p := readF74aProgress(t, marker)
+	if p.Completed || p.RelayVerified || p.Phase != "releases" || p.Cursor != uuid.Nil {
+		t.Fatalf("changed source did not reopen import: %+v", p)
+	}
+	if len(pub.calls) != 0 {
+		t.Fatalf("verification unexpectedly published: %v", pub.calls)
+	}
+	accepted = true
+	if err := runner.RunMigration(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !readF74aProgress(t, marker).Completed {
+		t.Fatal("verified retry did not complete")
+	}
+}

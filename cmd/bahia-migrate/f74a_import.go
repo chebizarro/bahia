@@ -85,7 +85,7 @@ func runF74aImport(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, 
 		repository.NewPgRuntimeObservationRepository(pool), repository.NewPgEnvironmentServiceStateRepository(pool),
 		nil, nil, logger)
 	history := nostradapter.NewLocalEventRepository(store, nil).Authored(author.Hex())
-	projector := nostradapter.NewProjector(cfg.Nostr, registry, f74aTrackedPublisher{inner: pub, ledger: ledger}, history, logger)
+	projector := nostradapter.NewProjector(cfg.Nostr, registry, f74aTrackedPublisher{Publisher: pub, ledger: ledger}, history, logger)
 	pub.OnDeliveryAbandoned(projector.ForgetAbandonedProjection)
 	if !projector.Enabled() {
 		return reportError(stderr, "f74a-import could not enable canonical projector")
@@ -134,7 +134,7 @@ func runF74aImport(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, 
 	}
 	canonical := nostradapter.NewF74aCanonicalPublisher(projector, controlplane.NewConfidentialEncryptor(ock, logger))
 	runner := service.NewF74aBackfillRunner(service.F74aBackfillConfig{
-		Marker: outbox, Source: source, Publisher: canonical, Author: author.Hex(),
+		Marker: outbox, Source: source, Publisher: f74aRecordPublisher{inner: canonical}, Author: author.Hex(),
 		Pending: func(context.Context) (int64, error) { counts, err := outbox.Counts(); return counts.Pending, err },
 		SemanticDelivered: func(ctx context.Context, pkg *domain.SBOMPackage) (bool, error) {
 			return ledger.prove(ctx, "semantic_packages", pkg)
