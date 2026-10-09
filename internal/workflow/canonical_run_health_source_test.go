@@ -21,6 +21,14 @@ func canonicalRunRecord(t *testing.T, run domain.DeploymentRun, author string, d
 	t.Helper()
 	content, err := json.Marshal(run)
 	require.NoError(t, err)
+	if run.DeploymentUnitID == nil {
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(content, &payload))
+		// deploymentRunRegistryRecord writes an empty string for a nil unit.
+		payload["deployment_unit_id"] = ""
+		content, err = json.Marshal(payload)
+		require.NoError(t, err)
+	}
 	tags, err := json.Marshal(nostr.Tags{
 		{"d", run.ID.String()}, {"t", kinds.CPStateTopicDeploymentRun},
 		{kinds.CASControlStateTagSchema, kinds.CASControlStateSchema},
@@ -71,7 +79,7 @@ func TestCanonicalRunHealthSourceRejectsMalformedServiceRecord(t *testing.T) {
 func TestStaleRunDetectorFailsClosedWithoutLoomCatchup(t *testing.T) {
 	ctx := context.Background()
 	at := time.Now().Add(-time.Hour).UTC()
-	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-old", Status: domain.RunStatusRunning, CreatedAt: at, UpdatedAt: at}
+	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-old", WorkerPubkey: "worker-1", Status: domain.RunStatusRunning, CreatedAt: at, UpdatedAt: at}
 	repo := repositorytest.NewInMemoryNostrEventRepository()
 	_, err := repo.Record(ctx, canonicalRunRecord(t, run, "service", false))
 	require.NoError(t, err)
@@ -89,7 +97,7 @@ func TestStaleRunDetectorFailsClosedWithoutLoomCatchup(t *testing.T) {
 func TestStaleRunDetectorDoesNotPublishBeforeLoomEOSE(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	at := time.Now().Add(-time.Hour).UTC()
-	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-old", Status: domain.RunStatusRunning, CreatedAt: at, UpdatedAt: at}
+	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-old", WorkerPubkey: "worker-1", Status: domain.RunStatusRunning, CreatedAt: at, UpdatedAt: at}
 	repo := repositorytest.NewInMemoryNostrEventRepository()
 	_, err := repo.Record(ctx, canonicalRunRecord(t, run, "service", false))
 	require.NoError(t, err)
@@ -117,7 +125,7 @@ func TestStaleRunDetectorRunsFromCanonicalRecordAfterBothCatchups(t *testing.T) 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	at := time.Now().Add(-time.Hour).UTC()
-	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-old", Status: domain.RunStatusRunning, CreatedAt: at, UpdatedAt: at}
+	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-old", WorkerPubkey: "worker-1", Status: domain.RunStatusRunning, CreatedAt: at, UpdatedAt: at}
 	repo := repositorytest.NewInMemoryNostrEventRepository()
 	_, err := repo.Record(ctx, canonicalRunRecord(t, run, "service", false))
 	require.NoError(t, err)

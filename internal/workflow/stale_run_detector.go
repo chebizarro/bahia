@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/loom"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
@@ -171,7 +173,7 @@ func (d *StaleRunDetector) check(ctx context.Context) error {
 			delete(d.active, run.ID)
 		}
 
-		latest, err := d.latestLoomStatus(ctx, run.LoomJobID)
+		latest, err := d.latestLoomStatus(ctx, run)
 		if err != nil {
 			checkErrors = append(checkErrors, fmt.Errorf("run %s: %w", run.ID, err))
 			continue
@@ -288,15 +290,69 @@ func (d *StaleRunDetector) hydrateActiveSignals(ctx context.Context) error {
 	return nil
 }
 
-func (d *StaleRunDetector) latestLoomStatus(ctx context.Context, loomJobID string) (*repository.NostrEventRecord, error) {
-	records, err := d.events.FindByTag(ctx, "e", loomJobID, []int{kinds.LoomJobStatusUpdate}, 1)
+const loomStatusCandidateLimit = 1001
+
+func (d *StaleRunDetector) latestLoomStatus(ctx context.Context, run domain.DeploymentRun) (*repository.NostrEventRecord, error) {
+	if strings.TrimSpace(run.WorkerPubkey) == "" {
+		return nil, fmt.Errorf("deployment run %s has no expected Loom worker pubkey", run.ID)
+	}
+	records, err := d.events.FindByTag(ctx, "e", run.LoomJobID, []int{kinds.LoomJobStatusUpdate}, loomStatusCandidateLimit)
 	if err != nil {
-		return nil, fmt.Errorf("find latest Loom kind-30100 status: %w", err)
+		return nil, fmt.Errorf("find Loom kind-30100 status: %w", err)
 	}
-	if len(records) == 0 {
-		return nil, nil
+	if len(records) == loomStatusCandidateLimit {
+		return nil, fmt.Errorf("Loom kind-30100 status candidate scan exceeds %d records for run %s", loomStatusCandidateLimit-1, run.ID)
 	}
-	return &records[0], nil
+	var latest *repository.NostrEventRecord
+	for i := range records {
+		record := &records[i]
+		if !strings.EqualFold(record.PubKey, run.WorkerPubkey) || !validLoomStatusRecord(*record, run.LoomJobID) {
+			continue
+		}
+		if latest == nil || record.CreatedAt.After(latest.CreatedAt) ||
+			(record.CreatedAt.Equal(latest.CreatedAt) && record.ID < latest.ID) {
+			latest = record
+		}
+	}
+	return latest, nil
+}
+
+func validLoomStatusRecord(record repository.NostrEventRecord, jobID string) bool {
+	if record.Kind != kinds.LoomJobStatusUpdate {
+		return false
+	}
+	var tags [][]string
+	if err := json.Unmarshal(record.Tags, &tags); err != nil {
+		return false
+	}
+	values := make(map[string]string, len(tags))
+	for _, tag := range tags {
+		if len(tag) < 2 {
+			continue
+		}
+		switch tag[0] {
+		case "d", "e", "p", "status", "progress":
+			if _, duplicate := values[tag[0]]; duplicate {
+				return false
+			}
+			values[tag[0]] = tag[1]
+		}
+	}
+	if values["d"] != jobID || values["e"] != jobID || values["p"] == "" {
+		return false
+	}
+	switch values["status"] {
+	case loom.StatusQueued, loom.StatusRunning, loom.StatusCompleted,
+		loom.StatusFailed, loom.StatusCancelled, loom.StatusTimeout:
+	default:
+		return false
+	}
+	if progress, ok := values["progress"]; ok {
+		if _, err := strconv.Atoi(progress); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (d *StaleRunDetector) publishHealth(

@@ -79,12 +79,13 @@ func TestStaleRunDetectorPublishesReplaceableStaleAndRecoveredOnStatusResume(t *
 	now := time.Date(2026, 7, 30, 18, 0, 0, 0, time.UTC)
 	startedAt := now.Add(-10 * time.Minute)
 	run := domain.DeploymentRun{
-		ID:        uuid.New(),
-		LoomJobID: "loom-job-event-id",
-		Status:    domain.RunStatusRunning,
-		StartedAt: &startedAt,
-		CreatedAt: startedAt,
-		UpdatedAt: startedAt,
+		ID:           uuid.New(),
+		LoomJobID:    "loom-job-event-id",
+		WorkerPubkey: "worker-1",
+		Status:       domain.RunStatusRunning,
+		StartedAt:    &startedAt,
+		CreatedAt:    startedAt,
+		UpdatedAt:    startedAt,
 	}
 	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}
 	audit := repositorytest.NewInMemoryNostrEventRepository()
@@ -103,10 +104,11 @@ func TestStaleRunDetectorPublishesReplaceableStaleAndRecoveredOnStatusResume(t *
 	require.Len(t, published.snapshot(), 1)
 
 	statusAt := now.Add(-time.Minute)
-	tags, err := json.Marshal(nostr.Tags{{"d", run.LoomJobID}, {"e", run.LoomJobID}, {"status", "running"}})
+	tags, err := json.Marshal(nostr.Tags{{"d", run.LoomJobID}, {"e", run.LoomJobID}, {"p", "client-1"}, {"status", "running"}})
 	require.NoError(t, err)
 	_, err = audit.Record(ctx, &repository.NostrEventRecord{
 		ID:         "loom-status-1",
+		PubKey:     "worker-1",
 		Kind:       kinds.LoomJobStatusUpdate,
 		Tags:       tags,
 		CreatedAt:  statusAt,
@@ -130,12 +132,13 @@ func TestStaleRunDetectorPublishesRecoveredWhenRunBecomesTerminal(t *testing.T) 
 	now := time.Date(2026, 7, 30, 19, 0, 0, 0, time.UTC)
 	startedAt := now.Add(-20 * time.Minute)
 	run := domain.DeploymentRun{
-		ID:        uuid.New(),
-		LoomJobID: "loom-terminal-job",
-		Status:    domain.RunStatusQueued,
-		StartedAt: &startedAt,
-		CreatedAt: startedAt,
-		UpdatedAt: startedAt,
+		ID:           uuid.New(),
+		LoomJobID:    "loom-terminal-job",
+		WorkerPubkey: "worker-1",
+		Status:       domain.RunStatusQueued,
+		StartedAt:    &startedAt,
+		CreatedAt:    startedAt,
+		UpdatedAt:    startedAt,
 	}
 	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}
 	published := &staleRunPublisherFake{}
@@ -209,14 +212,14 @@ func TestStaleRunDetectorIgnoresFreshAndNonLoomRuns(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 30, 20, 0, 0, 0, time.UTC)
 	startedAt := now.Add(-10 * time.Minute)
-	loomRun := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "fresh-job", Status: domain.RunStatusRunning, StartedAt: &startedAt, CreatedAt: startedAt}
+	loomRun := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "fresh-job", WorkerPubkey: "worker-1", Status: domain.RunStatusRunning, StartedAt: &startedAt, CreatedAt: startedAt}
 	directRun := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "runtime:direct", Status: domain.RunStatusRunning, StartedAt: &startedAt, CreatedAt: startedAt}
 	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{loomRun.ID: loomRun, directRun.ID: directRun}}
 	audit := repositorytest.NewInMemoryNostrEventRepository()
 	statusAt := now.Add(-time.Minute)
-	tags, err := json.Marshal(nostr.Tags{{"e", loomRun.LoomJobID}})
+	tags, err := json.Marshal(nostr.Tags{{"d", loomRun.LoomJobID}, {"e", loomRun.LoomJobID}, {"p", "client-1"}, {"status", "running"}})
 	require.NoError(t, err)
-	_, err = audit.Record(ctx, &repository.NostrEventRecord{ID: "fresh-status", Kind: kinds.LoomJobStatusUpdate, Tags: tags, CreatedAt: statusAt, ReceivedAt: statusAt})
+	_, err = audit.Record(ctx, &repository.NostrEventRecord{ID: "fresh-status", PubKey: "worker-1", Kind: kinds.LoomJobStatusUpdate, Tags: tags, CreatedAt: statusAt, ReceivedAt: statusAt})
 	require.NoError(t, err)
 	published := &staleRunPublisherFake{}
 	detector := NewStaleRunDetector(runs, audit, published, 5*time.Minute, zap.NewNop())
@@ -228,7 +231,7 @@ func TestStaleRunDetectorIgnoresFreshAndNonLoomRuns(t *testing.T) {
 
 func TestStaleRunDetectorRunStopsWithContext(t *testing.T) {
 	now := time.Now().UTC()
-	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "job", Status: domain.RunStatusRunning, StartedAt: &now, CreatedAt: now}
+	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "job", WorkerPubkey: "worker-1", Status: domain.RunStatusRunning, StartedAt: &now, CreatedAt: now}
 	detector := NewStaleRunDetector(
 		&staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}},
 		repositorytest.NewInMemoryNostrEventRepository(),
@@ -282,7 +285,7 @@ func TestStaleRunDetectorTreatsQueuedPublishAsKept(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 30, 18, 0, 0, 0, time.UTC)
 	startedAt := now.Add(-10 * time.Minute)
-	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-job-queued", Status: domain.RunStatusRunning, StartedAt: &startedAt, CreatedAt: startedAt, UpdatedAt: startedAt}
+	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-job-queued", WorkerPubkey: "worker-1", Status: domain.RunStatusRunning, StartedAt: &startedAt, CreatedAt: startedAt, UpdatedAt: startedAt}
 	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}
 	published := &staleRunPublisherFake{err: fmt.Errorf("relay down: %w", nostrutil.ErrPublishIncomplete)}
 	detector := NewStaleRunDetector(runs, repositorytest.NewInMemoryNostrEventRepository(), published, 5*time.Minute, zap.NewNop())
@@ -291,4 +294,55 @@ func TestStaleRunDetectorTreatsQueuedPublishAsKept(t *testing.T) {
 	require.NoError(t, detector.check(ctx), "a queued publish is not a failed transition")
 	require.NoError(t, detector.check(ctx))
 	require.Len(t, published.snapshot(), 1, "the queued stale signal must not be re-signed")
+}
+
+func recordLoomStatusForHealthTest(t *testing.T, repo *repositorytest.InMemoryNostrEventRepository, jobID, worker, d, status string, at time.Time) {
+	t.Helper()
+	tags, err := json.Marshal(nostr.Tags{{"d", d}, {"e", jobID}, {"p", "client-1"}, {"status", status}})
+	require.NoError(t, err)
+	_, err = repo.Record(context.Background(), &repository.NostrEventRecord{
+		ID: uuid.NewString(), Kind: kinds.LoomJobStatusUpdate, PubKey: worker,
+		Tags: tags, CreatedAt: at, ReceivedAt: at,
+	})
+	require.NoError(t, err)
+}
+
+func TestStaleRunDetectorForeignAndMalformedLoomStatusCannotMaskStaleness(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 30, 21, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-10 * time.Minute)
+	run := domain.DeploymentRun{
+		ID: uuid.New(), LoomJobID: "job-1", WorkerPubkey: "worker-1",
+		Status: domain.RunStatusRunning, StartedAt: &startedAt, CreatedAt: startedAt,
+	}
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	recordLoomStatusForHealthTest(t, repo, run.LoomJobID, run.WorkerPubkey, run.LoomJobID, "running", now.Add(-8*time.Minute))
+	recordLoomStatusForHealthTest(t, repo, run.LoomJobID, "foreign-worker", run.LoomJobID, "running", now.Add(-time.Minute))
+	recordLoomStatusForHealthTest(t, repo, run.LoomJobID, run.WorkerPubkey, "wrong-coordinate", "running", now.Add(-30*time.Second))
+	recordLoomStatusForHealthTest(t, repo, run.LoomJobID, run.WorkerPubkey, run.LoomJobID, "not-a-loom-status", now.Add(-20*time.Second))
+	published := &staleRunPublisherFake{}
+	detector := NewStaleRunDetector(&staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}, repo, published, 5*time.Minute, zap.NewNop())
+	detector.now = func() time.Time { return now }
+	require.NoError(t, detector.check(ctx))
+	events := published.snapshot()
+	require.Len(t, events, 1)
+	assertStaleRunHealthEvent(t, events[0], run, "stale", "loom_status_missing")
+	require.Equal(t, now.Add(-3*time.Minute).Unix(), events[0].CreatedAt.Time().Unix())
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(events[0].Content), &payload))
+	require.Equal(t, now.Add(-8*time.Minute).Format(time.RFC3339), payload["last_loom_status_at"])
+}
+
+func TestStaleRunDetectorWithoutExpectedWorkerDoesNotPublish(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 30, 22, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-10 * time.Minute)
+	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "job-1", Status: domain.RunStatusRunning, StartedAt: &startedAt, CreatedAt: startedAt}
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	recordLoomStatusForHealthTest(t, repo, run.LoomJobID, "unknown-worker", run.LoomJobID, "running", now.Add(-time.Minute))
+	published := &staleRunPublisherFake{}
+	detector := NewStaleRunDetector(&staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}, repo, published, 5*time.Minute, zap.NewNop())
+	detector.now = func() time.Time { return now }
+	require.ErrorContains(t, detector.check(ctx), "no expected Loom worker pubkey")
+	require.Empty(t, published.snapshot())
 }

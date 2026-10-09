@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -117,8 +118,21 @@ func (s *CanonicalRunHealthSource) decode(record repository.NostrEventRecord) (*
 	if values[kinds.CASControlStateTagDeleted] != "false" {
 		return nil, false, fmt.Errorf("invalid canonical deployment-run deletion tag %s", record.ID)
 	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(record.Content), &payload); err != nil {
+		return nil, false, fmt.Errorf("decode canonical deployment-run %s: %w", record.ID, err)
+	}
+	// The canonical registry producer represents an absent unit as "", while
+	// DeploymentRun uses a UUID pointer. Normalize only that producer shape.
+	if bytes.Equal(bytes.TrimSpace(payload["deployment_unit_id"]), []byte(`""`)) {
+		payload["deployment_unit_id"] = json.RawMessage("null")
+	}
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false, fmt.Errorf("normalize canonical deployment-run %s: %w", record.ID, err)
+	}
 	var run domain.DeploymentRun
-	if err := json.Unmarshal([]byte(record.Content), &run); err != nil {
+	if err := json.Unmarshal(normalized, &run); err != nil {
 		return nil, false, fmt.Errorf("decode canonical deployment-run %s: %w", record.ID, err)
 	}
 	if run.ID != id || values["run"] != id.String() || run.CreatedAt.IsZero() ||
