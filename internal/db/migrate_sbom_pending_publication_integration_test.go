@@ -27,9 +27,9 @@ func TestSBOMPendingPublicationMigrationRoundTrip(t *testing.T) {
 	_, err := pool.Exec(ctx, `UPDATE sbom_manifests SET publish_state = 'bogus' WHERE subject_id = 'pending-subject'`)
 	require.ErrorContains(t, err, "sbom_manifests_publish_state_check")
 
-	rolled, err := Down(ctx, pool, logger, DownOptions{Confirm: true})
+	rolled, err := Down(ctx, pool, logger, DownOptions{Confirm: true, To: "000072_security_retire_failed_retryable"})
 	require.NoError(t, err)
-	require.Equal(t, []string{"000073_sbom_pending_publication"}, rolled)
+	require.Equal(t, []string{"000076_f74a_observation_archive", "000075_org_strict_revocation", "000074_ml_model_version_revision", "000073_sbom_pending_publication"}, rolled)
 	require.Equal(t, "published", manifestState(t, ctx, pool, "pending-subject"))
 	require.Equal(t, "published", manifestState(t, ctx, pool, "published-subject"))
 	_, err = pool.Exec(ctx, `UPDATE sbom_manifests SET publish_state = 'pending' WHERE subject_id = 'published-subject'`)

@@ -62,14 +62,32 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	_, err := Down(ctx, pool, logger, DownOptions{})
 	require.ErrorContains(t, err, "confirmation")
 
-	// 000073 (SBOM pending publication) is the newest migration, then 000072
-	// (Security failed_retryable retired) and 000071 (outbox publish target +
-	// failed state). Their data round trips are covered by
+	// Unwind the archive schema, org revocation, and model-version revision
+	// before the 000073–000071 data-migration round trips. Those are covered by
 	// TestSBOMPendingPublicationMigrationRoundTrip,
 	// TestSecurityRetireFailedRetryableMigrationRoundTrip and
 	// TestNostrPublishTargetMigrationRoundTrip; roll them back so 000070's
 	// guard is the latest below.
 	rolled, err := Down(ctx, pool, logger, DownOptions{Confirm: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"000076_f74a_observation_archive"}, rolled)
+	var archiveExists bool
+	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('runtime_observation_archive') IS NOT NULL").Scan(&archiveExists))
+	require.False(t, archiveExists)
+	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"000075_org_strict_revocation"}, rolled)
+	var columnExists bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema=current_schema() AND table_name='organizations' AND column_name='strict_revocation')`).Scan(&columnExists))
+	require.False(t, columnExists)
+	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"000074_ml_model_version_revision"}, rolled)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema=current_schema() AND table_name='ml_model_versions' AND column_name='updated_at')`).Scan(&columnExists))
+	require.False(t, columnExists)
+	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true})
 	require.NoError(t, err)
 	require.Equal(t, []string{"000073_sbom_pending_publication"}, rolled)
 	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true})
@@ -100,6 +118,14 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = $1", rolled[0]).Scan(&count))
 	require.Zero(t, count)
 	require.NoError(t, Migrate(ctx, pool, logger))
+	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('runtime_observation_archive') IS NOT NULL").Scan(&archiveExists))
+	require.True(t, archiveExists)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema=current_schema() AND table_name='organizations' AND column_name='strict_revocation')`).Scan(&columnExists))
+	require.True(t, columnExists)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_schema=current_schema() AND table_name='ml_model_versions' AND column_name='updated_at')`).Scan(&columnExists))
+	require.True(t, columnExists)
 	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('hiveci_initiations') IS NOT NULL").Scan(&exists))
 	require.True(t, exists)
 	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = $1", rolled[0]).Scan(&count))
@@ -109,6 +135,8 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true, To: "000065_runtime_release_deployment_intents"})
 	require.NoError(t, err)
 	require.Equal(t, []string{
+		"000076_f74a_observation_archive", "000075_org_strict_revocation",
+		"000074_ml_model_version_revision",
 		"000073_sbom_pending_publication", "000072_security_retire_failed_retryable",
 		"000071_nostr_publish_target", "000070_hiveci_initiations", "000069_package_authorization",
 		"000068_relay_projection_wire_time", "000067_vm_measured_adoption", "000066_vm_control_plane",
@@ -138,7 +166,7 @@ func TestMigrationDownMissingAndAtomicFailure(t *testing.T) {
 	require.Equal(t, len(migrationVersions(t)), count)
 
 	files = migrationFileCopy(t)
-	files["migrations/000073_sbom_pending_publication.down.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE down_failure_marker (id int); SELECT 1/0;")}
+	files["migrations/000076_f74a_observation_archive.down.sql"] = &fstest.MapFile{Data: []byte("CREATE TABLE down_failure_marker (id int); SELECT 1/0;")}
 	_, err = downWithFS(ctx, pool, logger, files, DownOptions{Confirm: true})
 	var pgErr *pgconn.PgError
 	require.ErrorAs(t, err, &pgErr)
@@ -146,7 +174,7 @@ func TestMigrationDownMissingAndAtomicFailure(t *testing.T) {
 	var exists bool
 	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('down_failure_marker') IS NOT NULL").Scan(&exists))
 	require.False(t, exists, "failed down SQL must roll back its DDL")
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000073_sbom_pending_publication'").Scan(&count))
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000076_f74a_observation_archive'").Scan(&count))
 	require.Equal(t, 1, count)
 }
 
@@ -215,6 +243,6 @@ func TestMigrationDownSharesStartupLock(t *testing.T) {
 	cancelWait()
 	require.ErrorIs(t, <-result, context.Canceled)
 	var count int
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000073_sbom_pending_publication'").Scan(&count))
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = '000076_f74a_observation_archive'").Scan(&count))
 	require.Equal(t, 1, count)
 }
