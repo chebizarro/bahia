@@ -4,12 +4,14 @@ package repository_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/db"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -318,4 +320,205 @@ func TestF74aArchivePreservesHistoryAndRehydratesDelayedLink(t *testing.T) {
 	archivedAfterCascade, err := archiveRepo.GetArchivedByID(ctx, a3.ID)
 	require.NoError(t, err)
 	require.Equal(t, *archived, *archivedAfterCascade)
+}
+
+func TestF74aArchivedAuditRowDoesNotPinDeploymentUnit(t *testing.T) {
+	pool, _ := f74aArchiveDatabase(t)
+	ctx := t.Context()
+	serviceID, environmentID, unitID := uuid.New(), uuid.New(), uuid.New()
+	_, err := pool.Exec(ctx, `INSERT INTO services(id,name,artifact_repo) VALUES ($1,$2,'archive-test')`, serviceID, "unit-"+serviceID.String())
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO environments(id,name) VALUES ($1,$2)`, environmentID, "unit-"+environmentID.String())
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO deployment_units
+		(id,environment_id,unit_key,runtime_type,reconcile_mode,ownership_mode)
+		VALUES ($1,$2,'unit','docker','observe_only','external')`, unitID, environmentID)
+	require.NoError(t, err)
+	base := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
+	obsRepo := repository.NewPgRuntimeObservationRepository(pool)
+	var first, archivedID uuid.UUID
+	for _, hour := range []int{1, 3} {
+		obs := &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: environmentID,
+			DeploymentUnitID: &unitID, ObservedImageDigest: "sha256:aaaa", ObservedImageRepo: "registry.example/test",
+			ObservedContainerID: "container", ObservedHost: "host", ObservedVersion: "v1",
+			HealthStatus: "healthy", Source: "runtime", Metadata: map[string]any{},
+			ObservedAt: base.Add(time.Duration(hour) * time.Hour)}
+		require.NoError(t, obsRepo.Create(ctx, obs))
+		if hour == 1 {
+			first = obs.ID
+		} else {
+			archivedID = obs.ID
+		}
+	}
+	unitRepo := repository.NewPgDeploymentUnitRepository(pool)
+	require.ErrorIs(t, unitRepo.DeleteIfUnreferenced(ctx, unitID), repository.ErrConflict,
+		"a live hot observation must protect its deployment unit")
+	archiveRepo := repository.NewPgF74aObservationArchiveRepository(pool)
+	run, err := archiveRepo.StartRun(ctx, base.Add(24*time.Hour), 2)
+	require.NoError(t, err)
+	batch, err := archiveRepo.ArchiveNextBatch(ctx, run.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1, batch.Archived)
+	_, err = pool.Exec(ctx, `DELETE FROM runtime_observations WHERE id=$1`, first)
+	require.NoError(t, err)
+	require.NoError(t, unitRepo.DeleteIfUnreferenced(ctx, unitID),
+		"an immutable audit row is not a live deployment reference")
+	var unitExists bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM deployment_units WHERE id=$1)`, unitID).Scan(&unitExists))
+	require.False(t, unitExists)
+	archived, err := archiveRepo.GetArchivedByID(ctx, archivedID)
+	require.NoError(t, err)
+	require.NotNil(t, archived)
+	require.Equal(t, &unitID, archived.Observation.DeploymentUnitID,
+		"archive must retain the original placement identity after unit deletion")
+	assertMissingUnitFK := func(err error) {
+		t.Helper()
+		require.Error(t, err)
+		var pgErr *pgconn.PgError
+		require.True(t, errors.As(err, &pgErr))
+		require.Equal(t, "23503", pgErr.Code, "identity-preserving hot restore must fail closed")
+	}
+	assertMissingUnitFK(archiveRepo.RestoreByID(ctx, archivedID))
+	_, err = pool.Exec(ctx, `INSERT INTO environment_service_state(service_id,environment_id,current_observation_id)
+		VALUES ($1,$2,$3)`, serviceID, environmentID, archivedID)
+	assertMissingUnitFK(err)
+	var hotCount, stateCount int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, archivedID).Scan(&hotCount))
+	require.Zero(t, hotCount)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM environment_service_state
+		WHERE service_id=$1 AND environment_id=$2`, serviceID, environmentID).Scan(&stateCount))
+	require.Zero(t, stateCount)
+	retained, err := archiveRepo.GetArchivedByID(ctx, archivedID)
+	require.NoError(t, err)
+	require.Equal(t, *archived, *retained)
+}
+
+func TestF74aBackdatedInsertAndArchiveBothLockOrders(t *testing.T) {
+	for _, order := range []string{"insert-first", "archive-first"} {
+		t.Run(order, func(t *testing.T) {
+			pool, schema := f74aArchiveDatabase(t)
+			ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+			defer cancel()
+			serviceID, environmentID := uuid.New(), uuid.New()
+			_, err := pool.Exec(ctx, `INSERT INTO services(id,name,artifact_repo) VALUES ($1,$2,'archive-test')`, serviceID, "backdate-"+serviceID.String())
+			require.NoError(t, err)
+			_, err = pool.Exec(ctx, `INSERT INTO environments(id,name) VALUES ($1,$2)`, environmentID, "backdate-"+environmentID.String())
+			require.NoError(t, err)
+			base := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
+			obsRepo := repository.NewPgRuntimeObservationRepository(pool)
+			a1, a3 := uuid.New(), uuid.New()
+			insert := func(exec interface {
+				Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+			}, id uuid.UUID, hour, minute int, digest string) error {
+				_, err := exec.Exec(ctx, `INSERT INTO runtime_observations
+					(id,service_id,environment_id,observed_image_digest,observed_image_repo,observed_container_id,
+					 observed_host,observed_version,health_status,source,metadata,observed_at)
+					VALUES ($1,$2,$3,$4,'registry.example/test','container','host','v1','healthy','runtime','{}',$5)`,
+					id, serviceID, environmentID, digest, base.Add(time.Duration(hour)*time.Hour+time.Duration(minute)*time.Minute))
+				return err
+			}
+			require.NoError(t, insert(pool, a1, 1, 0, "sha256:aaaa"))
+			require.NoError(t, insert(pool, a3, 3, 0, "sha256:aaaa"))
+			archiveRepo := repository.NewPgF74aObservationArchiveRepository(pool)
+			run, err := archiveRepo.StartRun(ctx, base.Add(24*time.Hour), 2)
+			require.NoError(t, err)
+			b2 := uuid.New()
+			moveDone := make(chan struct {
+				batch repository.F74aArchiveBatch
+				err   error
+			}, 1)
+			insertDone := make(chan error, 1)
+			if order == "insert-first" {
+				writeTx, err := pool.Begin(ctx)
+				require.NoError(t, err)
+				defer func() { _ = writeTx.Rollback(context.Background()) }()
+				require.NoError(t, insert(writeTx, b2, 2, 0, "sha256:bbbb"))
+				go func() {
+					batch, moveErr := archiveRepo.ArchiveNextBatch(ctx, run.ID)
+					moveDone <- struct {
+						batch repository.F74aArchiveBatch
+						err   error
+					}{batch, moveErr}
+				}()
+				waitF74aAdvisoryWaiters(t, ctx, pool, 1)
+				require.NoError(t, writeTx.Commit(ctx))
+			} else {
+				_, err = pool.Exec(ctx, `CREATE FUNCTION f74a_test_pause_archive() RETURNS trigger LANGUAGE plpgsql AS $$
+					BEGIN PERFORM pg_advisory_xact_lock(740197); RETURN NEW; END $$`)
+				require.NoError(t, err)
+				_, err = pool.Exec(ctx, `CREATE TRIGGER f74a_test_pause BEFORE INSERT ON runtime_observation_archive
+					FOR EACH ROW EXECUTE FUNCTION f74a_test_pause_archive()`)
+				require.NoError(t, err)
+				pauseTx, err := pool.Begin(ctx)
+				require.NoError(t, err)
+				defer func() { _ = pauseTx.Rollback(context.Background()) }()
+				_, err = pauseTx.Exec(ctx, `SELECT pg_advisory_xact_lock(740197)`)
+				require.NoError(t, err)
+				go func() {
+					batch, moveErr := archiveRepo.ArchiveNextBatch(ctx, run.ID)
+					moveDone <- struct {
+						batch repository.F74aArchiveBatch
+						err   error
+					}{batch, moveErr}
+				}()
+				waitF74aAdvisoryWaiters(t, ctx, pool, 1)
+				go func() { insertDone <- insert(pool, b2, 2, 0, "sha256:bbbb") }()
+				waitF74aAdvisoryWaiters(t, ctx, pool, 2)
+				require.NoError(t, pauseTx.Commit(ctx))
+			}
+			moved := <-moveDone
+			require.NoError(t, moved.err)
+			if order == "insert-first" {
+				require.Zero(t, moved.batch.Archived)
+			} else {
+				require.Equal(t, 1, moved.batch.Archived)
+				require.NoError(t, <-insertDone)
+			}
+			// The first cursor cannot see a write behind it. Completion only means
+			// that pass has exhausted its cursor, not that retention is authorized.
+			end, err := archiveRepo.ArchiveNextBatch(ctx, run.ID)
+			require.NoError(t, err)
+			require.True(t, end.Complete)
+			var b2Hot int
+			require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, b2).Scan(&b2Hot))
+			require.Equal(t, 1, b2Hot)
+			var a3Archived int
+			require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observation_archive WHERE id=$1`, a3).Scan(&a3Archived))
+			if order == "insert-first" {
+				require.Zero(t, a3Archived)
+			} else {
+				require.Equal(t, 1, a3Archived)
+			}
+			// A late duplicate also lands behind the first cursor. A new pass at
+			// the original cutoff must examine and archive it exactly once.
+			b25 := uuid.New()
+			require.NoError(t, insert(pool, b25, 2, 30, "sha256:bbbb"))
+			restartConfig, err := pgxpool.ParseConfig(os.Getenv("BAHIA_MIGRATE_TEST_DATABASE_URL"))
+			require.NoError(t, err)
+			restartConfig.ConnConfig.RuntimeParams["search_path"] = schema + ",public"
+			restartedPool, err := pgxpool.NewWithConfig(ctx, restartConfig)
+			require.NoError(t, err)
+			defer restartedPool.Close()
+			restartedArchive := repository.NewPgF74aObservationArchiveRepository(restartedPool)
+			secondRun, err := restartedArchive.StartRun(ctx, run.Cutoff, 4)
+			require.NoError(t, err)
+			second, err := restartedArchive.ArchiveNextBatch(ctx, secondRun.ID)
+			require.NoError(t, err)
+			require.Equal(t, 1, second.Archived)
+			archiveOfB25, err := archiveRepo.GetArchivedByID(ctx, b25)
+			require.NoError(t, err)
+			require.NotNil(t, archiveOfB25)
+			var b25Hot int
+			require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, b25).Scan(&b25Hot))
+			require.Zero(t, b25Hot)
+			history, err := obsRepo.ListByServiceEnv(ctx, serviceID, environmentID, 10)
+			require.NoError(t, err)
+			require.Len(t, history, 4)
+			require.Equal(t, []uuid.UUID{a3, b25, b2, a1}, []uuid.UUID{history[0].ID, history[1].ID, history[2].ID, history[3].ID})
+			census, err := repository.CensusF74a(ctx, pool, run.Cutoff)
+			require.NoError(t, err)
+			require.EqualValues(t, 3, census.MaterialRuns)
+			require.EqualValues(t, 1, census.SuppressibleObservations)
+		})
+	}
 }

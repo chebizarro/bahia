@@ -178,7 +178,9 @@ func (r *PgDeploymentUnitRepository) Update(ctx context.Context, unit *domain.De
 	return nil
 }
 
-// DeleteIfUnreferenced removes a unit only when no durable state, run, intent, or observation refers to it.
+// DeleteIfUnreferenced protects live state, runs, intents, and hot observations.
+// Immutable archived observations retain historical unit IDs but do not pin a
+// deployment unit's live lifecycle.
 func (r *PgDeploymentUnitRepository) DeleteIfUnreferenced(ctx context.Context, id uuid.UUID) error {
 	cmd, err := r.pool.Exec(ctx, `
 		DELETE FROM deployment_units du
@@ -187,7 +189,6 @@ func (r *PgDeploymentUnitRepository) DeleteIfUnreferenced(ctx context.Context, i
 		  AND NOT EXISTS (SELECT 1 FROM deployment_runs WHERE deployment_unit_id = du.id)
 		  AND NOT EXISTS (SELECT 1 FROM deployment_intents WHERE deployment_unit_id = du.id)
 		  AND NOT EXISTS (SELECT 1 FROM runtime_observations WHERE deployment_unit_id = du.id)
-		  AND NOT EXISTS (SELECT 1 FROM runtime_observation_archive WHERE deployment_unit_id = du.id)
 	`, id)
 	if err != nil {
 		return fmt.Errorf("deleting deployment unit: %w", err)

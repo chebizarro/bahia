@@ -18,14 +18,14 @@ type F74aArchiveRun struct {
 	BatchSize     int
 	ExaminedCount int64
 	ArchivedCount int64
-	Complete      bool
+	Complete      bool // This pass exhausted its cursor; later backdated writes require another pass.
 }
 
 type F74aArchiveBatch struct {
 	ID       uuid.UUID
 	Examined int
 	Archived int
-	Complete bool
+	Complete bool // Not a retention seal or deletion authorization.
 }
 
 type F74aArchivedObservation struct {
@@ -56,8 +56,8 @@ func (r *PgF74aObservationArchiveRepository) StartRun(ctx context.Context, cutof
 }
 
 // ArchiveNextBatch commits the archive copy, equality check, hot deletion, and
-// journal cursor together. Per-ID advisory locks precede hot row locks; the
-// state-link trigger takes the same lock before restoring/FK validation.
+// journal cursor together. Coordinate then ID advisory locks precede hot row
+// locks; insert and state-link triggers take the same order.
 func (r *PgF74aObservationArchiveRepository) ArchiveNextBatch(ctx context.Context, runID uuid.UUID) (F74aArchiveBatch, error) {
 	var batch F74aArchiveBatch
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
@@ -121,6 +121,9 @@ func (r *PgF74aObservationArchiveRepository) ArchiveNextBatch(ctx context.Contex
 		if err := ctx.Err(); err != nil {
 			return batch, err
 		}
+		if _, err := tx.Exec(ctx, `SELECT f74a_lock_observation_coordinate($1,$2)`, k.service, k.env); err != nil {
+			return batch, err
+		}
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text,7401))`, k.id); err != nil {
 			return batch, err
 		}
@@ -130,6 +133,9 @@ func (r *PgF74aObservationArchiveRepository) ArchiveNextBatch(ctx context.Contex
 		}
 		if err != nil {
 			return batch, fmt.Errorf("locking observation %s: %w", k.id, err)
+		}
+		if obs.ServiceID != k.service || obs.EnvironmentID != k.env || !obs.ObservedAt.Equal(k.at) {
+			continue
 		}
 		if !obs.ObservedAt.Before(cutoff) {
 			continue
@@ -278,13 +284,21 @@ func (r *PgF74aObservationArchiveRepository) RestoreByID(ctx context.Context, id
 		return err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
+	var serviceID, environmentID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT service_id,environment_id FROM runtime_observation_archive WHERE id=$1`, id).
+		Scan(&serviceID, &environmentID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `SELECT f74a_lock_observation_coordinate($1,$2)`, serviceID, environmentID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1::text,7401))`, id); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO runtime_observations (`+obsColumns+`)
 		SELECT `+obsColumns+` FROM runtime_observation_archive WHERE id=$1 ON CONFLICT (id) DO NOTHING`, id)
 	if err != nil {
-		return err
+		return fmt.Errorf("restoring observation %s without changing immutable archive identity: %w", id, err)
 	}
 	var valid bool
 	err = tx.QueryRow(ctx, `SELECT f74a_observation_digest(to_jsonb(h),h.observed_at)=a.row_digest

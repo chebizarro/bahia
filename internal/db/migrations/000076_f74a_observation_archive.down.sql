@@ -19,3 +19,4 @@ DROP TABLE f74a_observation_compaction_runs;
 DROP FUNCTION f74a_guard_archive_run();
 DROP INDEX idx_runtime_observations_ordered;
 DROP FUNCTION f74a_observation_digest(JSONB, TIMESTAMPTZ);
+DROP FUNCTION f74a_lock_observation_coordinate(UUID, UUID);

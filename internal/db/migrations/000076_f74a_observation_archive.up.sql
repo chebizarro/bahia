@@ -56,7 +56,6 @@ CREATE TABLE runtime_observation_archive (
 
 CREATE INDEX idx_runtime_observations_ordered ON runtime_observations(service_id, environment_id, observed_at, id);
 CREATE INDEX idx_runtime_observation_archive_ordered ON runtime_observation_archive(service_id, environment_id, observed_at, id);
-CREATE INDEX idx_runtime_observation_archive_unit ON runtime_observation_archive(deployment_unit_id) WHERE deployment_unit_id IS NOT NULL;
 
 -- Exclude provenance and normalize the only timestamp to UTC epoch microseconds.
 -- JSONB has a canonical persisted representation; this digest covers every
@@ -65,6 +64,13 @@ CREATE FUNCTION f74a_observation_digest(row_value JSONB, observed_time TIMESTAMP
 RETURNS BYTEA LANGUAGE sql IMMUTABLE STRICT AS $$
   SELECT digest(convert_to((row_value - 'archive_batch_id' - 'archived_at' - 'row_digest' - 'observed_at'
     || jsonb_build_object('observed_at_epoch_us', extract(epoch FROM observed_time) * 1000000))::text, 'UTF8'), 'sha256')
+$$;
+
+-- Writers and the mover serialize material-neighbor decisions by coordinate.
+-- Hash collisions only add contention; they cannot weaken mutual exclusion.
+CREATE FUNCTION f74a_lock_observation_coordinate(service_id UUID, environment_id UUID)
+RETURNS void LANGUAGE sql VOLATILE STRICT AS $$
+  SELECT pg_advisory_xact_lock(hashtextextended(service_id::text || ':' || environment_id::text, 7402))
 $$;
 
 CREATE FUNCTION f74a_archive_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -96,8 +102,11 @@ FOR EACH ROW EXECUTE FUNCTION f74a_check_archive_insert();
 CREATE FUNCTION f74a_check_hot_against_archive() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE archived_digest BYTEA;
 BEGIN
-  -- This is also the lock used by the mover and state-link rehydration.
-  PERFORM pg_advisory_xact_lock(hashtextextended(NEW.id::text, 7401));
+  IF TG_OP = 'INSERT' THEN
+    PERFORM f74a_lock_observation_coordinate(NEW.service_id, NEW.environment_id);
+    -- The mover and state-link rehydration take the same coordinate/ID order.
+    PERFORM pg_advisory_xact_lock(hashtextextended(NEW.id::text, 7401));
+  END IF;
   SELECT row_digest INTO archived_digest FROM runtime_observation_archive WHERE id = NEW.id;
   IF FOUND AND archived_digest <> f74a_observation_digest(to_jsonb(NEW), NEW.observed_at) THEN
     RAISE EXCEPTION 'observation % conflicts with immutable archive value', NEW.id;
@@ -110,8 +119,14 @@ FOR EACH ROW EXECUTE FUNCTION f74a_check_hot_against_archive();
 CREATE FUNCTION f74a_rehydrate_state_observation() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE archived_digest BYTEA;
 DECLARE hot_digest BYTEA;
+DECLARE target_service UUID;
+DECLARE target_environment UUID;
 BEGIN
   IF NEW.current_observation_id IS NULL THEN RETURN NEW; END IF;
+  SELECT service_id, environment_id INTO target_service, target_environment
+  FROM runtime_observation_history WHERE id = NEW.current_observation_id;
+  IF NOT FOUND THEN RETURN NEW; END IF;
+  PERFORM f74a_lock_observation_coordinate(target_service, target_environment);
   PERFORM pg_advisory_xact_lock(hashtextextended(NEW.current_observation_id::text, 7401));
   SELECT row_digest INTO archived_digest FROM runtime_observation_archive WHERE id = NEW.current_observation_id;
   IF NOT FOUND THEN RETURN NEW; END IF;
