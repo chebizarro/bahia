@@ -77,7 +77,7 @@ func backupToolDescription(name string) string {
 	case "probe_backup_repository":
 		return "Publish a Nostr-native backup repository probe request and return correlation metadata"
 	case "request_backup_run":
-		return "Publish a Nostr-native backup run request and return correlation metadata"
+		return "Submit an operator-signed, relay-observed backup run intent; execution remains paused until canonical recovery is available"
 	case "request_backup_verification":
 		return "Publish a Nostr-native backup verification request and return correlation metadata"
 	case "request_backup_restore":
@@ -164,8 +164,8 @@ func backupToolSchema(name string) map[string]interface{} {
 		props["repository_id"] = stringProp
 		props["repository"] = stringProp
 	case "request_backup_run":
-		props["recipe_id"] = stringProp
-		props["recipe"] = stringProp
+		props = map[string]interface{}{"signed_intent_event": objectProp}
+		required = []string{"signed_intent_event"}
 	case "request_backup_verification":
 		props["backup_run_id"] = stringProp
 		props["mode"] = map[string]interface{}{"type": "string", "enum": []string{string(domain.BackupVerificationKopiaSnapshotVerify)}}
@@ -208,7 +208,7 @@ func backupToolSchema(name string) map[string]interface{} {
 	case "inspect_backup_definition":
 		props = map[string]interface{}{"definition_id": stringProp, "name": stringProp}
 	}
-	if backupToolPublishesCommand(name) {
+	if backupToolPublishesCommand(name) && name != "request_backup_run" {
 		required = append(required, "idempotency_key")
 	}
 	schema := map[string]interface{}{"type": "object", "properties": props}

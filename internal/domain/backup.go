@@ -225,12 +225,16 @@ func BackupDefinitionMaintenanceWindowTimeZone(definition *BackupDefinition) str
 // service-signed registry events. Event IDs identify immutable versions; the
 // local outbox must prove relay ACK for each version before intake can proceed.
 type BackupExecutionSnapshot struct {
-	RecipeEventID     string           `json:"recipe_event_id"`
-	RepositoryEventID string           `json:"repository_event_id"`
-	PolicyEventID     string           `json:"policy_event_id,omitempty"`
-	Recipe            BackupRecipe     `json:"recipe"`
-	Repository        BackupRepository `json:"repository"`
-	Policy            *BackupPolicy    `json:"policy,omitempty"`
+	RecipeEventID     string `json:"recipe_event_id"`
+	RepositoryEventID string `json:"repository_event_id"`
+	PolicyEventID     string `json:"policy_event_id,omitempty"`
+	// CredentialVersionID pins the immutable secret version behind a repository
+	// credential profile. A profile name alone may resolve to a different secret
+	// after restart and cannot authorize execution.
+	CredentialVersionID *uuid.UUID       `json:"credential_version_id,omitempty"`
+	Recipe              BackupRecipe     `json:"recipe"`
+	Repository          BackupRepository `json:"repository"`
+	Policy              *BackupPolicy    `json:"policy,omitempty"`
 }
 
 // BackupRun is the durable control-plane record for a backup request.

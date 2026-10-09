@@ -404,6 +404,13 @@ func validateBackupExecutionSnapshot(requested, receipt *domain.BackupRun) error
 		snapshot.RecipeEventID == "" || snapshot.RepositoryEventID == "" {
 		return fmt.Errorf("execution snapshot conflicts with signed run inputs")
 	}
+	if strings.TrimSpace(snapshot.Repository.CredentialProfile) != "" {
+		if snapshot.CredentialVersionID == nil || *snapshot.CredentialVersionID == uuid.Nil {
+			return fmt.Errorf("execution snapshot requires an immutable credential version for the repository profile")
+		}
+	} else if snapshot.CredentialVersionID != nil {
+		return fmt.Errorf("execution snapshot credential version has no repository profile")
+	}
 	if snapshot.Policy == nil {
 		if requested.PolicyID != nil || snapshot.PolicyEventID != "" {
 			return fmt.Errorf("execution snapshot policy is incomplete")

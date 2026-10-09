@@ -227,12 +227,18 @@ an acceptance receipt. Even an ACKed prior run is not resumed by this reader;
 the executor still lacks canonical recipe, repository, policy, and step
 checkpoint recovery.
 The reader compares the run's immutable request fields with the signed
-operator intent and rejects absent or divergent execution inputs. The current
-MCP `request_backup_run` payload signs `id`, `recipe_id`, and metadata, but
-does not bind `repository_id`, `policy_id`, `backend`, `target_ref`, or
-`verification_mode`; an ACKed run state therefore cannot establish complete
-MCP request-to-execution equivalence. Canonical acceptance must bind the
-resolved configuration before execution can resume.
+operator intent and rejects absent or divergent execution inputs. MCP
+`request_backup_run` does not mint an unsigned in-process intent: it requires
+the complete NIP-01 operator-signed event and observes that exact event in
+the local relay subscription before handing it to the intent processor.
+The signed payload binds run UUIDv7, recipe, repository, policy, backend,
+target, verification mode, immutable service-signed configuration event IDs,
+and the exact configuration snapshot. Repositories with a credential profile
+also require an immutable credential-version ID in the snapshot. A version ID
+is a binding, not proof that a secret can be recovered; canonical credential
+resolution, atomic acceptance and execution checkpoint recovery are still
+required before a new run may execute. Current run intake therefore continues
+to reject even a complete signed request without an ACKed run-state receipt.
 
 ### 3.5 Canonical state and who signs it
 

@@ -54,6 +54,9 @@ func (s *Server) callIntentWrite(ctx context.Context, name string, args map[stri
 	if !isIntentWriteTool(name) {
 		return nil, false
 	}
+	if backupToolBaseName(name) == "request_backup_run" {
+		return s.callSignedBackupRun(ctx, args), true
+	}
 	principal := auth.GetPrincipal(ctx)
 	if principal == nil || !principal.IsAuthenticated() {
 		return intentWriteError("rejected", "", "", "authentication required"), true
@@ -1180,31 +1183,6 @@ func (s *Server) backupIntentWrite(ctx context.Context, name string, args map[st
 		if w.content["repository"] == nil {
 			w.content["repository"] = w.content["name"]
 		}
-	case "request_backup_run":
-		recipeID, e := optionalUUIDArgStrict(args, "recipe_id")
-		if e != nil {
-			return w, e
-		}
-		if recipeID == uuid.Nil {
-			recipeName := firstNonEmpty(stringArg(args, "recipe"), stringArg(args, "name"))
-			if recipeName == "" {
-				return w, fmt.Errorf("recipe_id or recipe is required")
-			}
-			record, e := s.readStateOne(ctx, nostrpool.KindBackupRecipeRegistry, "name", recipeName)
-			if e != nil {
-				return w, e
-			}
-			if record == nil {
-				return w, fmt.Errorf("canonical backup recipe %q not found", recipeName)
-			}
-			recipeID, e = uuid.Parse(stringFromRecord(record.Fields, "id"))
-			if e != nil {
-				return w, e
-			}
-		}
-		run := domain.BackupRun{ID: id, RecipeID: recipeID, Metadata: anyMapFromArg(args["metadata"])}
-		w.op, w.coordinate, w.family, w.stateKey, w.stateValue = "run", "backup-run:"+id.String(), nostrpool.KindBackupRunState, "id", id.String()
-		w.content, err = typedIntentContent(run)
 	case "request_backup_verification":
 		runID, e := parseRequiredUUIDArg(args, "backup_run_id")
 		if e != nil {
@@ -1254,7 +1232,7 @@ func (s *Server) backupIntentWrite(ctx context.Context, name string, args map[st
 
 func describeIntentWriteTools(tools []Tool) []Tool {
 	for i := range tools {
-		if !isIntentWriteTool(tools[i].Name) || strings.HasPrefix(tools[i].Name, "bahia_assistant_") {
+		if !isIntentWriteTool(tools[i].Name) || strings.HasPrefix(tools[i].Name, "bahia_assistant_") || backupToolBaseName(tools[i].Name) == "request_backup_run" {
 			continue
 		}
 		tools[i].Description = "Apply a kind-30900 intent in-process; returns canonical state when visible or pending correlation"
