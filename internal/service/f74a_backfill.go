@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -144,14 +145,18 @@ func BootstrapF74aCanonical(ctx context.Context, c F74aBackfillConfig) error {
 			return err
 		}
 		for _, state := range states {
-			obs, err := c.Observations.GetLatest(ctx, state.ServiceID, state.EnvironmentID)
+			if state.CurrentObservationID == nil {
+				continue
+			}
+			obs, err := c.Observations.GetByID(ctx, *state.CurrentObservationID)
 			if err != nil {
 				return err
 			}
-			if obs != nil {
-				if err := c.Publisher.PublishRuntimeObservation(ctx, obs); err != nil {
-					return err
-				}
+			if obs == nil || obs.ServiceID != state.ServiceID || obs.EnvironmentID != state.EnvironmentID {
+				return fmt.Errorf("state-linked runtime observation %s has invalid coordinate", *state.CurrentObservationID)
+			}
+			if err := c.Publisher.PublishRuntimeObservation(ctx, obs); err != nil {
+				return err
 			}
 		}
 	}

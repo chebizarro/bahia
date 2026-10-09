@@ -169,6 +169,9 @@ func (r *PgSBOMRepository) UpdateCompatibilityVulnerabilityCounts(ctx context.Co
 }
 
 func (r *PgSBOMRepository) ProjectManifest(ctx context.Context, manifest *domain.SBOMManifest, packages []domain.SBOMManifestPackage) (retErr error) {
+	if manifest.Subject.Type == domain.SBOMSubjectArtifact && strings.TrimSpace(manifest.PayloadSHA256) == "" {
+		return fmt.Errorf("artifact SBOM manifest payload SHA-256 is required")
+	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning SBOM manifest projection: %w", err)
@@ -198,18 +201,14 @@ func (r *PgSBOMRepository) ProjectManifest(ctx context.Context, manifest *domain
 		if err := createArtifactCompatibilitySBOM(ctx, tx, artifactSBOM); err != nil {
 			return err
 		}
-		artifactPackages := make([]domain.SBOMPackage, len(packages))
-		for i, pkg := range packages {
-			artifactPackages[i] = domain.SBOMPackage{
-				SBOMID:    artifactSBOM.ID,
-				Name:      pkg.Name,
-				Version:   pkg.Version,
-				Ecosystem: pkg.Ecosystem,
-				License:   pkg.License,
-				PURL:      pkg.PURL,
-				CPE:       pkg.CPE,
-			}
+		// The raw-hash upsert above serializes concurrent projections of the same
+		// SBOM. Read its committed package set while holding that row lock so a
+		// repeated manifest import does not append new compatibility identities.
+		existing, err := artifactPackageKeys(ctx, tx, artifactSBOM.ID)
+		if err != nil {
+			return err
 		}
+		artifactPackages := newArtifactPackages(artifactSBOM.ID, packages, existing)
 		if err := createArtifactPackages(ctx, tx, artifactPackages); err != nil {
 			return err
 		}
@@ -447,6 +446,51 @@ func createArtifactPackages(ctx context.Context, db sbomQuerier, packages []doma
 		}
 	}
 	return br.Close()
+}
+
+type artifactPackageKey struct {
+	name, version, ecosystem, license, purl, cpe string
+}
+
+func packageKey(name, version, ecosystem, license, purl, cpe string) artifactPackageKey {
+	return artifactPackageKey{name, version, ecosystem, license, purl, cpe}
+}
+
+func newArtifactPackages(sbomID uuid.UUID, packages []domain.SBOMManifestPackage, existing map[artifactPackageKey]struct{}) []domain.SBOMPackage {
+	out := make([]domain.SBOMPackage, 0, len(packages))
+	for _, pkg := range packages {
+		key := packageKey(pkg.Name, pkg.Version, pkg.Ecosystem, pkg.License, pkg.PURL, pkg.CPE)
+		if _, ok := existing[key]; ok {
+			continue
+		}
+		existing[key] = struct{}{}
+		out = append(out, domain.SBOMPackage{
+			SBOMID: sbomID, Name: pkg.Name, Version: pkg.Version,
+			Ecosystem: pkg.Ecosystem, License: pkg.License, PURL: pkg.PURL, CPE: pkg.CPE,
+		})
+	}
+	return out
+}
+
+func artifactPackageKeys(ctx context.Context, db sbomQuerier, sbomID uuid.UUID) (map[artifactPackageKey]struct{}, error) {
+	rows, err := db.Query(ctx, `SELECT name, version, COALESCE(ecosystem, ''), COALESCE(license, ''),
+		COALESCE(purl, ''), COALESCE(cpe, '') FROM sbom_packages WHERE sbom_id = $1`, sbomID)
+	if err != nil {
+		return nil, fmt.Errorf("listing existing artifact SBOM packages: %w", err)
+	}
+	defer rows.Close()
+	keys := make(map[artifactPackageKey]struct{})
+	for rows.Next() {
+		var key artifactPackageKey
+		if err := rows.Scan(&key.name, &key.version, &key.ecosystem, &key.license, &key.purl, &key.cpe); err != nil {
+			return nil, fmt.Errorf("scanning existing artifact SBOM package: %w", err)
+		}
+		keys[key] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading existing artifact SBOM packages: %w", err)
+	}
+	return keys, nil
 }
 
 func createManifest(ctx context.Context, db sbomQuerier, manifest *domain.SBOMManifest) error {

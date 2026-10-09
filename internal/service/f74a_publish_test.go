@@ -15,6 +15,7 @@ import (
 type f74aPublishCapture struct {
 	releases, signatures, sboms, packages, observations int
 	lastRelease                                         domain.LLMRelease
+	lastObservation                                     domain.RuntimeObservation
 }
 
 func (c *f74aPublishCapture) PublishLLMRelease(_ context.Context, release *domain.LLMRelease) error {
@@ -34,8 +35,9 @@ func (c *f74aPublishCapture) PublishSBOMPackage(context.Context, *domain.SBOMPac
 	c.packages++
 	return nil
 }
-func (c *f74aPublishCapture) PublishRuntimeObservation(context.Context, *domain.RuntimeObservation) error {
+func (c *f74aPublishCapture) PublishRuntimeObservation(_ context.Context, obs *domain.RuntimeObservation) error {
 	c.observations++
+	c.lastObservation = *obs
 	return nil
 }
 

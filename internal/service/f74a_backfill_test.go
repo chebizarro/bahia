@@ -106,11 +106,14 @@ type f74aBackfillObservations struct {
 	obs domain.RuntimeObservation
 }
 
-func (s f74aBackfillObservations) GetLatest(_ context.Context, svc, env uuid.UUID) (*domain.RuntimeObservation, error) {
-	if svc == s.obs.ServiceID && env == s.obs.EnvironmentID {
+func (s f74aBackfillObservations) GetByID(_ context.Context, id uuid.UUID) (*domain.RuntimeObservation, error) {
+	if id == s.obs.ID {
 		return &s.obs, nil
 	}
 	return nil, nil
+}
+func (f74aBackfillObservations) GetLatest(context.Context, uuid.UUID, uuid.UUID) (*domain.RuntimeObservation, error) {
+	panic("backfill must use the state-linked observation, not the latest row")
 }
 
 type f74aFailingBackfillPub struct{ *f74aPublishCapture }
@@ -124,6 +127,7 @@ func TestF74aBackfillOnceAndRetryAfterFailureDBLess(t *testing.T) {
 	marker := &f74aMemoryMarker{value: []byte("dirty")}
 	capture := &f74aPublishCapture{}
 	svcID, envID, artifactID, sbomID, routeID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	observationID := uuid.New()
 	cfg := F74aBackfillConfig{
 		Marker: marker, Publisher: capture,
 		LLM:          f74aBackfillLLM{route: domain.LLMRoute{ID: routeID}, release: domain.LLMRelease{ID: uuid.New(), RouteID: routeID}},
@@ -131,8 +135,8 @@ func TestF74aBackfillOnceAndRetryAfterFailureDBLess(t *testing.T) {
 		Artifacts:    f74aBackfillArtifacts{svc: svcID, artifact: domain.Artifact{ID: artifactID, ServiceID: svcID}},
 		Signatures:   f74aBackfillSignatures{sig: domain.ArtifactSignature{ID: uuid.New(), ArtifactID: artifactID}},
 		SBOMs:        f74aBackfillSBOMs{sbom: domain.ArtifactSBOM{ID: sbomID, ArtifactID: artifactID}, pkg: domain.SBOMPackage{ID: uuid.New(), SBOMID: sbomID}},
-		States:       f74aBackfillStates{state: domain.EnvironmentServiceState{ServiceID: svcID, EnvironmentID: envID}},
-		Observations: f74aBackfillObservations{obs: domain.RuntimeObservation{ID: uuid.New(), ServiceID: svcID, EnvironmentID: envID}},
+		States:       f74aBackfillStates{state: domain.EnvironmentServiceState{ServiceID: svcID, EnvironmentID: envID, CurrentObservationID: &observationID}},
+		Observations: f74aBackfillObservations{obs: domain.RuntimeObservation{ID: observationID, ServiceID: svcID, EnvironmentID: envID}},
 	}
 	cfg.Publisher = f74aFailingBackfillPub{capture}
 	if err := BootstrapF74aCanonical(ctx, cfg); err == nil {
@@ -148,10 +152,53 @@ func TestF74aBackfillOnceAndRetryAfterFailureDBLess(t *testing.T) {
 	if capture.releases != 2 || capture.signatures != 2 || capture.sboms != 2 || capture.packages != 1 || capture.observations != 1 || marker.writes != 1 {
 		t.Fatalf("unexpected backfill counts: %+v marker=%d", capture, marker.writes)
 	}
+	if capture.lastObservation.ID != observationID {
+		t.Fatal("backfill did not publish the state-linked observation")
+	}
 	if err := BootstrapF74aCanonical(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
 	if marker.writes != 1 || capture.packages != 1 {
 		t.Fatal("completed backfill ran twice")
+	}
+}
+
+func TestF74aBackfillDoesNotPublishUnlinkedObservation(t *testing.T) {
+	svcID, envID := uuid.New(), uuid.New()
+	marker := &f74aMemoryMarker{}
+	capture := &f74aPublishCapture{}
+	cfg := F74aBackfillConfig{
+		Marker: marker, Publisher: capture,
+		States: f74aBackfillStates{state: domain.EnvironmentServiceState{ServiceID: svcID, EnvironmentID: envID}},
+		Observations: f74aBackfillObservations{obs: domain.RuntimeObservation{
+			ID: uuid.New(), ServiceID: svcID, EnvironmentID: envID,
+		}},
+	}
+	if err := BootstrapF74aCanonical(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if capture.observations != 0 || marker.writes != 1 {
+		t.Fatalf("unlinked observation published or marker missing: %+v marker=%d", capture, marker.writes)
+	}
+}
+
+func TestF74aBackfillRejectsMismatchedLinkedObservation(t *testing.T) {
+	observationID := uuid.New()
+	marker := &f74aMemoryMarker{}
+	capture := &f74aPublishCapture{}
+	cfg := F74aBackfillConfig{
+		Marker: marker, Publisher: capture,
+		States: f74aBackfillStates{state: domain.EnvironmentServiceState{
+			ServiceID: uuid.New(), EnvironmentID: uuid.New(), CurrentObservationID: &observationID,
+		}},
+		Observations: f74aBackfillObservations{obs: domain.RuntimeObservation{
+			ID: observationID, ServiceID: uuid.New(), EnvironmentID: uuid.New(),
+		}},
+	}
+	if err := BootstrapF74aCanonical(context.Background(), cfg); err == nil {
+		t.Fatal("mismatched linked observation must fail the backfill")
+	}
+	if capture.observations != 0 || marker.writes != 0 {
+		t.Fatal("invalid linked observation published or completion marker written")
 	}
 }
