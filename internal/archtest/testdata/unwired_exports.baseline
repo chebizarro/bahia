@@ -1,9 +1,16 @@
 # unwired_exports architecture ratchet baseline (bahia-irsry.8).
-# Pre-existing violations only: entries may shrink, never grow.
+# Pre-existing violations only: this one-time quarantine records de-wired existing symbols; future entries may shrink, never grow.
+# 2026-10-09 quarantine: 38 previously shipped exports became test-only when SQL-authoritative startup/workflow wiring was disabled; declarations were not newly added.
+# Restore or retire them under bahia-4f10q.1 (virtualization), bahia-4f10q.2 (backup/LLM/workflow), and bahia-4f10q.3 (governed legacy SQL import).
+# These exact-key entries are not permission to add exports or re-enable SQL authority; remove each entry when its canonical path is restored or retired.
 # Regenerate with: make arch-baseline
 # Format: <count>\t<key>
 1	internal/adapters/agentmemory.Client.GetAgentContext
 1	internal/adapters/alerting.NewDispatcher
+1	internal/adapters/backup.NewKopiaBackend
+1	internal/adapters/backup.NewPgBackend
+1	internal/adapters/backup.NewQdrantBackend
+1	internal/adapters/backup.NewVeleroBackend
 1	internal/adapters/backup.WithKopiaFileParallelism
 1	internal/adapters/backup.WithKopiaParallelism
 1	internal/adapters/backup.WithPgStagingDir
@@ -22,6 +29,7 @@
 1	internal/adapters/cashu.Wallet.Initialize
 1	internal/adapters/cashu.Wallet.ReceiveToken
 1	internal/adapters/dns.NewFilesystemBackendWithActivator
+1	internal/adapters/gitea.CanonicalInitiationStore.BackfillFromIndex
 1	internal/adapters/gitea.NewMemoryInitiationStore
 1	internal/adapters/llm.AvatarGenerator.GenerateAsync
 1	internal/adapters/llm.AvatarGenerator.GenerateDefault
@@ -31,6 +39,10 @@
 1	internal/adapters/llm.AvatarProviderReplicate
 1	internal/adapters/llm.AvatarStylePresetByID
 1	internal/adapters/llm.IsContextTooLarge
+1	internal/adapters/llm.NewExternalAPIProvisioner
+1	internal/adapters/llm.NewHTTPGatewayRouteManager
+1	internal/adapters/llm.NewRuntimeProvisioner
+1	internal/adapters/llm.WithExternalAPISecretResolver
 1	internal/adapters/llm.WithHTTPClient
 1	internal/adapters/llm.WithRuntimeFactory
 1	internal/adapters/nostr.DecodeBahiaIdentity
@@ -129,13 +141,17 @@
 1	internal/adapters/telemetry.Metrics.SetLoomJobsInflight
 1	internal/adapters/telemetry.Metrics.SetWorkersActive
 1	internal/adapters/telemetry.Metrics.SetWorkersTotal
+1	internal/adapters/telemetry.NewVirtualizationCollector
 1	internal/adapters/telemetry.Provider.LoggerProvider
 1	internal/adapters/telemetry.VirtualizationEvidence
 1	internal/api/middleware.ParseStatusBucket
 1	internal/api/middleware.RequireOperator
 1	internal/api/middleware.RequireRole
 1	internal/api/router.New
+1	internal/app.BackupSchedulerRunner.Trigger
 1	internal/app.HealthProvider.Liveness
+1	internal/app.NewBackupSchedulerRunner
+1	internal/app.NewVirtualization
 1	internal/auth.Middleware
 1	internal/auth.NIP05Resolver.CacheSize
 1	internal/auth.NIP05Resolver.LookupByIdentifier
@@ -199,10 +215,13 @@
 1	internal/controlplane.KindToolProvisionStatus
 1	internal/controlplane.KindWorkerCleanupRequest
 1	internal/controlplane.MaintenanceCommandPublisher.PublishPurge
+1	internal/controlplane.NewBackupRunResponder
 1	internal/controlplane.ReadinessTracker.IsReady
 1	internal/controlplane.RelaySettingsHydrator.IsCaughtUp
 1	internal/controlplane.WithBackupDefinitionRegistry
 1	internal/controlplane.WithBackupRepositoryProbeExecutor
+1	internal/controlplane.WithBackupRunExecutor
+1	internal/controlplane.WithBackupRunResponder
 1	internal/controlplane.WithBackupVerificationExecutor
 1	internal/controlplane.WithContextVMResultRetry
 1	internal/controlplane.WithControlPlanePublisher
@@ -242,6 +261,7 @@
 1	internal/mcp.Server.AssistantToolRegistry
 1	internal/nostrmigration.ConstantJustification
 1	internal/notifications.Dispatcher.RetryFailed
+1	internal/readmodel.NewVirtualizationProjector
 1	internal/reconcile.NewRemediator
 1	internal/reconcile.PersistentVMReconciler.AcceptObservation
 1	internal/reconcile.Remediator.GetAttempts
@@ -257,15 +277,19 @@
 1	internal/repository.PgOCIRepository.GetUpload
 1	internal/repository.PgOCIRepository.MarkUploadFailed
 1	internal/repository.PgOCIRepository.UpdateUploadOffset
+1	internal/repository.PgToolProvisioningRepository.ApplyToolApprovalDecision
 1	internal/repository.RelayPolicyProjectionShouldReplace
 1	internal/repository/repositorytest.NewInMemoryNostrEventRepository
 1	internal/rollout.NewExecutor
+1	internal/service.AdoptionService.BackfillFromIndex
 1	internal/service.AgentRuntimePromotionService.HandleRepositoryStateTrigger
 1	internal/service.Assess
 1	internal/service.BackupPlacementService.ValidatePlacement
+1	internal/service.BackupRegistryService.ApplyBackupRestoreApproval
 1	internal/service.BackupSchedulerService.PauseSchedule
 1	internal/service.BackupSchedulerService.ResumeSchedule
 1	internal/service.BackupSchedulerService.SetScheduleEnabled
+1	internal/service.CanonicalSecurityRepository.BackfillFromIndex
 1	internal/service.ContinuityGraph.AssessAll
 1	internal/service.ContinuityGraph.AssessService
 1	internal/service.ContinuityGraph.SimulateFailure
@@ -273,7 +297,9 @@
 1	internal/service.JobStatsTracker.RecordJobCompletion
 1	internal/service.LLMParityReport.OK
 1	internal/service.LLMProvisioningCoordinator.ProcessOnce
+1	internal/service.LLMProvisioningCoordinator.SetupSubscriptions
 1	internal/service.LLMRegistryService.ListRouteStates
+1	internal/service.LocalManagedInstanceState.BackfillFromIndex
 1	internal/service.MLProvenanceService.RegisterArtifactRef
 1	internal/service.MLProvenanceService.ValidateModelVersionArtifactMirrors
 1	internal/service.MLRecipeCoordinator.ResumeRecipeRun
@@ -281,12 +307,18 @@
 1	internal/service.MLRegistryService.CheckLLMCompatibilityParity
 1	internal/service.MustBackupBackendResolver
 1	internal/service.NewBackupPlacementService
+1	internal/service.NewBackupRestoreCoordinator
+1	internal/service.NewBackupRetentionCoordinator
+1	internal/service.NewBackupRunCoordinator
+1	internal/service.NewBackupSchedulerService
 1	internal/service.NewBudgetPolicyService
 1	internal/service.NewContinuityDNSCutoverService
 1	internal/service.NewContinuityGraph
 1	internal/service.NewDefaultMLArtifactResolverSet
 1	internal/service.NewInMemoryPowerAwareOrchestrator
 1	internal/service.NewJobStatsTracker
+1	internal/service.NewLLMPlacementService
+1	internal/service.NewLLMProvisioningCoordinator
 1	internal/service.NewMLInferenceProvisioningCoordinator
 1	internal/service.NewMLProvenanceService
 1	internal/service.NewMLRecipeCoordinator
@@ -303,6 +335,7 @@
 1	internal/service.PersistentVMService.PlanOperation
 1	internal/service.PersistentVMService.RegisterCheckpoint
 1	internal/service.PersistentVMService.RegisterCloneTarget
+1	internal/service.PolicyService.BackfillCanonicalPolicies
 1	internal/service.RecordRKNNConversionProvenance
 1	internal/service.RouteCanarySupervisor.EvaluateOnce
 1	internal/service.StaticBackupBackendResolver.Kinds
@@ -314,10 +347,13 @@
 1	internal/service.WithAttestationProvider
 1	internal/service.WithBackupRestoreCoordinatorConfig
 1	internal/service.WithBackupRestoreHealthCheck
+1	internal/service.WithBackupRestoreResponder
 1	internal/service.WithBackupRetentionCoordinatorConfig
 1	internal/service.WithBackupRetentionHealthCheck
+1	internal/service.WithBackupRetentionResponder
 1	internal/service.WithBackupRunCoordinatorConfig
 1	internal/service.WithBackupRunHealthCheck
+1	internal/service.WithBackupRunResponder
 1	internal/service.WithBackupSchedulerClock
 1	internal/service.WithContinuityDNSAdapter
 1	internal/service.WithContinuityHeartbeatWaiter
@@ -325,11 +361,15 @@
 1	internal/service.WithContinuityRuntimeAdapter
 1	internal/service.WithContinuityStorageAdapter
 1	internal/service.WithContinuityWakeAdapter
+1	internal/service.WithLLMPromotionLock
+1	internal/service.WithLLMProvisioningResponder
 1	internal/service.WithMLInferenceProvisioningConfig
 1	internal/service.WithMLInferenceProvisioningGateway
 1	internal/service.WithMLInferenceProvisioningResponder
 1	internal/service.WithMLRecipeCoordinatorConfig
 1	internal/service.WithMLRecipeResponder
+1	internal/service.WithRelayPolicyProjectionBackup
+1	internal/service.WithRelayPolicyProjectionRestore
 1	internal/service.WithSBOMAsyncResultObserver
 1	internal/service.WithSBOMAsyncRunnerQueueDepth
 1	internal/service.WithTrustedGenerators
@@ -353,4 +393,5 @@
 1	internal/soulfactory.StatusSyncHandler.RegisterSoul
 1	internal/soulfactory.VoiceProviderRegistry.SetCacheTTL
 1	internal/soulfactory.WithProvisioningEngine
+1	internal/workflow.StaleRunDetector.SetLoomStatusReadiness
 1	internal/workflow.WithDeploymentLoomClient
