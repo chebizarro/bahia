@@ -195,8 +195,8 @@ func (r *agentRun) stop(t *testing.T) {
 }
 
 // requestHealth sends one encrypted health request through relays and returns
-// once a relay has stored its gift wrap; the reply is not awaited.
-func (f *agentFixture) requestHealth(t *testing.T, requestID string, relays ...*agentTestRelay) {
+// once a relay has stored its gift wrap. The caller must check the result.
+func (f *agentFixture) requestHealth(t *testing.T, requestID string, relays ...*agentTestRelay) <-chan error {
 	t.Helper()
 	urls := make([]string, 0, len(relays))
 	for _, relay := range relays {
@@ -210,15 +210,31 @@ func (f *agentFixture) requestHealth(t *testing.T, requestID string, relays ...*
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
+	result := make(chan error, 1)
 	t.Cleanup(func() { cancel(); <-done; client.Close() })
 	go func() {
 		defer close(done)
-		_, _ = client.Request(ctx, protocol.MethodHealth, protocol.HealthParams{Schema: protocol.Schema}, nostr.Tags{{"d", requestID}}, nil)
+		_, requestErr := client.Request(ctx, protocol.MethodHealth, protocol.HealthParams{Schema: protocol.Schema}, nostr.Tags{{"d", requestID}}, nil)
+		result <- requestErr
 	}()
 	select {
 	case <-relays[0].wraps:
+		return result
+	case err := <-result:
+		t.Fatalf("request completed before gift wrap was stored: %v", err)
 	case <-time.After(agentTestTimeout):
 		t.Fatal("request wrap was not stored")
+	}
+	return nil
+}
+
+func waitRequestHealth(t *testing.T, result <-chan error) {
+	t.Helper()
+	select {
+	case err := <-result:
+		require.NoError(t, err)
+	case <-time.After(agentTestTimeout):
+		t.Fatal("request did not return a health response")
 	}
 }
 
@@ -247,8 +263,9 @@ func TestAgentTransportRestartNeitherRefetchesNorRehandlesRequests(t *testing.T)
 
 	run := f.start(t, storePath, a, b)
 	run.waitCaughtUp(t, a.url, b.url)
-	f.requestHealth(t, "health-1", a, b)
+	requestResult := f.requestHealth(t, "health-1", a, b)
 	f.waitHandled(t)
+	waitRequestHealth(t, requestResult)
 	run.stop(t)
 	f.requireNoneHandled(t)
 
@@ -276,13 +293,14 @@ func TestAgentTransportRelayDownDuringBackfillCatchesUpOnItsOwn(t *testing.T) {
 
 	// A request reaches only b while the agent is stopped, and b is down when
 	// the agent comes back.
-	f.requestHealth(t, "health-b", b)
+	requestResult := f.requestHealth(t, "health-b", b)
 	b.down.Store(true)
 	run = f.start(t, storePath, a, b)
 	run.waitCaughtUp(t, a.url)
 	f.requireNoneHandled(t)
 	b.down.Store(false)
 	f.waitHandled(t)
+	waitRequestHealth(t, requestResult)
 	run.waitCaughtUp(t, b.url)
 	run.stop(t)
 }
