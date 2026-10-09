@@ -789,8 +789,8 @@ func (p *Publisher) redeliverDue(ctx context.Context) (rateLimited bool) {
 // It reports whether the page was full, meaning more follow its cursor.
 //
 // The local outbox is a required dependency; this is the only discovery
-// path. Pending rows in the PostgreSQL outbox table are moved to the local
-// outbox only through the explicit bahia-migrate operator action.
+// path. Legacy PostgreSQL pending rows are not imported by this runner;
+// bahia-migrate exposes only a read-only inventory of them.
 func (p *Publisher) discoverPending(ctx context.Context) (bool, error) {
 	return p.discoverLocal(ctx)
 }

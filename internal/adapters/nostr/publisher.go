@@ -118,8 +118,8 @@ const (
 //
 // The local outbox is a required dependency: the constructor panics when a
 // publisher that can run (redelivery-enabled) is built without one. Pending
-// rows in the PostgreSQL outbox table require an explicit operator-confirmed
-// transfer; startup and reconnect never import them.
+// rows in the PostgreSQL outbox table are not imported by startup or
+// reconnect; the operator inventory is read-only.
 //
 // Every outbox entry a Publisher writes carries its publish target (see
 // WithPublishTarget), and its Run only discovers entries for that target, so

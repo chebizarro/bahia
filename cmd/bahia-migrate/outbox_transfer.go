@@ -2,125 +2,110 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
-	"path/filepath"
-	"reflect"
-	"strings"
+	"time"
 
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
-	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
-	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/repository"
 )
 
-// This operator action never connects to a relay or signs an event. SQL rows
-// with recorded attempts have unknown per-relay acceptance and cannot be
-// represented faithfully by a new local outbox entry. Even zero attempts do
-// not prove no relay accepted before a process crash; explicit confirmation
-// allows replay of the exact signed ID without fabricating acceptance state.
+// outbox-transfer is deliberately read-only. PostgreSQL cannot prove prior
+// per-relay acceptance, and a SQL-to-bbolt handoff cannot be made atomic by
+// enqueueing a drainable entry before a conditional SQL update.
 type outboxTransferOptions struct {
-	target          string
-	apply           bool
-	confirmedPath   string
-	confirmedRelays string
-	maxRows         int
-	maxPending      int64
+	target  string
+	after   string
+	maxRows int
 }
 
-type outboxTransferSource interface {
+type outboxInventorySource interface {
 	ListUnpublishedAfter(context.Context, string, *repository.NostrOutboxCursor, int) ([]repository.NostrEventRecord, error)
-	TransferUnattemptedToLocalOutbox(context.Context, string, string) (bool, error)
 }
 
-func runOutboxTransfer(ctx context.Context, cfg *config.Config, source outboxTransferSource, opts outboxTransferOptions, stdout, stderr io.Writer) int {
+type outboxInventoryCursor struct {
+	Target     string    `json:"target"`
+	ReceivedAt time.Time `json:"received_at"`
+	ID         string    `json:"id"`
+	Conflicts  int       `json:"conflicts"`
+}
+
+func decodeOutboxInventoryCursor(token, target string) (*outboxInventoryCursor, error) {
+	if token == "" {
+		return nil, nil
+	}
+	if len(token) > 2048 {
+		return nil, fmt.Errorf("invalid --after token: too long")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --after token: %w", err)
+	}
+	var cursor outboxInventoryCursor
+	if err := json.Unmarshal(raw, &cursor); err != nil {
+		return nil, fmt.Errorf("invalid --after token: %w", err)
+	}
+	if cursor.Target != target || cursor.ReceivedAt.IsZero() || cursor.ID == "" || cursor.Conflicts < 0 {
+		return nil, fmt.Errorf("--after token does not match a valid %q inventory cursor", target)
+	}
+	return &cursor, nil
+}
+func encodeOutboxInventoryCursor(cursor outboxInventoryCursor) (string, error) {
+	raw, err := json.Marshal(cursor)
+	if err != nil {
+		return "", fmt.Errorf("encode inventory cursor: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func runOutboxTransfer(ctx context.Context, source outboxInventorySource, opts outboxTransferOptions, stdout, stderr io.Writer) int {
 	target := repository.NostrPublishTargetDefault
-	relays := outboxInteropRelays(cfg)
 	if opts.target == "control-plane" {
 		target = repository.NostrPublishTargetControlPlane
-		relays = f74aControlPlaneRelays(cfg.Nostr)
 	}
-	if len(relays) == 0 {
-		return reportError(stderr, "outbox-transfer needs configured relays for selected target")
-	}
-	path, err := filepath.Abs(cfg.Nostr.LocalStore.ResolvedOutboxPath())
-	if err != nil {
-		return reportError(stderr, "resolve outbox path: %v", err)
-	}
-	if _, err := fmt.Fprintf(stdout, "source_target=%s outbox=%s relays=%s mode=%s\n", opts.target, path, strings.Join(relays, ","), map[bool]string{true: "apply", false: "inventory"}[opts.apply]); err != nil {
-		return 1
-	}
-	if opts.apply {
-		if _, err := fmt.Fprintln(stdout, "warning: PostgreSQL has no per-relay OK state; replay keeps the signed ID but cannot preserve unknown prior acceptance"); err != nil {
-			return 1
-		}
-	}
-	if opts.apply && opts.confirmedRelays != strings.Join(relays, ",") {
-		return reportError(stderr, "confirmed relays do not match configured target relays %s", strings.Join(relays, ","))
-	}
-	if opts.apply && opts.confirmedPath != path {
-		return reportError(stderr, "confirmed outbox path does not match configured path %s", path)
-	}
-	var outbox *localstore.Outbox
-	if opts.apply {
-		outbox, err = localstore.OpenOutbox(path)
-		if err != nil {
-			return reportError(stderr, "open exclusive daemon outbox (stop daemon first): %v", err)
-		}
-		defer outbox.Close()
-		if moved := outbox.MovedAside(); moved != "" {
-			return reportError(stderr, "outbox corruption moved %s aside; recover it before transfer", moved)
-		}
-	}
-	stats, err := transferOutboxRows(ctx, source, outbox, target, opts, stdout)
+	cursor, err := decodeOutboxInventoryCursor(opts.after, target)
 	if err != nil {
 		return reportError(stderr, "outbox-transfer: %v", err)
 	}
-	if _, err := fmt.Fprintf(stdout, "inspected=%d replay_candidates=%d transferred=%d conflicts=%d remaining_after_cursor=%t\n", stats.inspected, stats.replayCandidates, stats.transferred, stats.conflicts, stats.more); err != nil {
+	stats, err := inventoryOutboxRows(ctx, source, target, cursor, opts.maxRows, stdout)
+	if err != nil {
+		return reportError(stderr, "outbox-transfer inventory: %v", err)
+	}
+	if _, err := fmt.Fprintf(stdout, "window_inspected=%d window_conflicts=%d cumulative_conflicts=%d signed_unattempted=%d next_after=%s\n", stats.inspected, stats.conflicts, stats.cumulativeConflicts, stats.signedUnattempted, stats.nextAfter); err != nil {
 		return 1
 	}
-	if stats.conflicts != 0 {
-		return reportError(stderr, "%d conflicting SQL rows require operator reconciliation; no attempted row was transferred", stats.conflicts)
+	if _, err := fmt.Fprintln(stdout, "read-only inventory: no row was enqueued, re-targeted, or published; no page proves prior relay acceptance"); err != nil {
+		return 1
+	}
+	if stats.cumulativeConflicts > 0 {
+		return reportError(stderr, "outbox-transfer inventory includes %d conflicts across supplied cursor chain", stats.cumulativeConflicts)
 	}
 	return 0
 }
 
-type transferStats struct {
-	inspected, replayCandidates, transferred, conflicts int
-	more                                                bool
+type outboxInventoryStats struct {
+	inspected, conflicts, cumulativeConflicts, signedUnattempted int
+	nextAfter                                                    string
 }
 
-func transferOutboxRows(ctx context.Context, source outboxTransferSource, outbox *localstore.Outbox, target string, opts outboxTransferOptions, output io.Writer) (transferStats, error) {
-	var stats transferStats
+func inventoryOutboxRows(ctx context.Context, source outboxInventorySource, target string, after *outboxInventoryCursor, maxRows int, output io.Writer) (outboxInventoryStats, error) {
+	var stats outboxInventoryStats
 	var cursor *repository.NostrOutboxCursor
-	if outbox != nil {
-		saved, err := outbox.LoadTransferCursor(target)
-		if err != nil {
-			return stats, err
-		}
-		if saved != nil {
-			cursor = &repository.NostrOutboxCursor{ReceivedAt: saved.ReceivedAt, ID: saved.ID}
-		}
+	if after != nil {
+		cursor = &repository.NostrOutboxCursor{ReceivedAt: after.ReceivedAt, ID: after.ID}
+		stats.cumulativeConflicts = after.Conflicts
 	}
 	const pageSize = 100
-	for stats.inspected < opts.maxRows {
+	for stats.inspected < maxRows {
 		limit := pageSize
-		if left := opts.maxRows - stats.inspected; left < limit {
-			limit = left
+		if remaining := maxRows - stats.inspected; remaining < limit {
+			limit = remaining
 		}
 		rows, err := source.ListUnpublishedAfter(ctx, target, cursor, limit)
 		if err != nil {
 			return stats, err
-		}
-		if len(rows) == 0 {
-			if outbox != nil {
-				// At end, wrap on the next run so previously reported conflicts and
-				// rows inserted after the saved cursor remain visible.
-				if err := outbox.SaveTransferCursor(target, nil); err != nil {
-					return stats, err
-				}
-			}
-			return stats, nil
 		}
 		for _, row := range rows {
 			if err := ctx.Err(); err != nil {
@@ -128,8 +113,7 @@ func transferOutboxRows(ctx context.Context, source outboxTransferSource, outbox
 			}
 			stats.inspected++
 			reason := ""
-			ev, err := nostradapter.SignedEventFromRecord(row)
-			if err != nil {
+			if _, err := nostradapter.SignedEventFromRecord(row); err != nil {
 				reason = err.Error()
 			}
 			if row.PublishAttempts != 0 || row.LastPublishError != "" {
@@ -138,98 +122,27 @@ func transferOutboxRows(ctx context.Context, source outboxTransferSource, outbox
 			if row.PublishTarget != target || row.PublishState != repository.NostrPublishStatePending {
 				reason = "source state or target changed"
 			}
-			if reason == "" {
-				stats.replayCandidates++
-			}
-			if reason == "" && outbox != nil {
-				counts, err := outbox.Counts()
-				if err != nil {
-					return stats, err
-				}
-				existing, found, err := outbox.Get(ev.ID)
-				if err != nil {
-					return stats, err
-				}
-				if found {
-					if existing.Target != target || !reflect.DeepEqual(existing.Event, ev) || existing.State != localstore.OutboxPending {
-						reason = "local event ID conflicts with source or is already settled"
-					}
-				} else if counts.Pending >= opts.maxPending {
-					return stats, fmt.Errorf("local pending admission cap %d reached before event %s", opts.maxPending, row.ID)
-				} else {
-					entry := localstore.OutboxEntry{Event: ev, Target: target, EntityType: row.EntityType, EnqueuedAt: row.ReceivedAt}
-					if row.EntityID != nil {
-						entry.EntityID = row.EntityID.String()
-					}
-					if _, err := outbox.Enqueue(entry); err != nil {
-						return stats, err
-					}
-				}
-				if reason == "" {
-					changed, err := source.TransferUnattemptedToLocalOutbox(ctx, row.ID, target)
-					if err != nil {
-						return stats, err
-					}
-					if !changed {
-						return stats, fmt.Errorf("source row %s changed after local admission; reconcile before retry", row.ID)
-					}
-					stats.transferred++
-				}
-			}
 			if reason != "" {
 				stats.conflicts++
+				stats.cumulativeConflicts++
 				if _, err := fmt.Fprintf(output, "conflict event_id=%s reason=%s\n", row.ID, reason); err != nil {
 					return stats, err
 				}
+			} else {
+				stats.signedUnattempted++
 			}
 			cursor = &repository.NostrOutboxCursor{ReceivedAt: row.ReceivedAt, ID: row.ID}
-			if outbox != nil {
-				if err := outbox.SaveTransferCursor(target, &localstore.TransferCursor{ReceivedAt: row.ReceivedAt, ID: row.ID}); err != nil {
-					return stats, err
-				}
-			}
 		}
 		if len(rows) < limit {
-			if outbox != nil {
-				if err := outbox.SaveTransferCursor(target, nil); err != nil {
-					return stats, err
-				}
-			}
 			return stats, nil
 		}
 	}
-	stats.more = true
+	if cursor != nil {
+		token, err := encodeOutboxInventoryCursor(outboxInventoryCursor{Target: target, ReceivedAt: cursor.ReceivedAt, ID: cursor.ID, Conflicts: stats.cumulativeConflicts})
+		if err != nil {
+			return stats, err
+		}
+		stats.nextAfter = token
+	}
 	return stats, nil
-}
-
-// outboxInteropRelays mirrors the daemon's default-target pool policy. The
-// confirmation must describe the pool that will drain the transferred entry.
-func outboxInteropRelays(cfg *config.Config) []string {
-	var relays []string
-	add := func(url string) {
-		url = strings.TrimSpace(url)
-		if url == "" {
-			return
-		}
-		for _, existing := range relays {
-			if existing == url {
-				return
-			}
-		}
-		relays = append(relays, url)
-	}
-	if cfg.Nostr.Sidecar.Enabled {
-		for _, url := range f74aControlPlaneRelays(cfg.Nostr) {
-			add(url)
-		}
-	}
-	if !cfg.Nostr.Sidecar.Enabled || !cfg.Nostr.Sidecar.MirrorExternal {
-		for _, url := range cfg.Nostr.Relays {
-			add(url)
-		}
-	}
-	for _, url := range cfg.Loom.Relays {
-		add(url)
-	}
-	return relays
 }

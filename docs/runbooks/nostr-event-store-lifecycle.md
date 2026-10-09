@@ -72,25 +72,22 @@ bahia-migrate outbox-transfer --config "$CONFIG" --target default
 bahia-migrate outbox-transfer --config "$CONFIG" --target control-plane
 ```
 
-Each invocation reads a bounded window; inspect `conflict` lines and
-`remaining_after_cursor`. To apply a transfer, stop the daemon and all SQL
-writers, back up the local outbox, verify its configured absolute path and
-target relay URLs, then run:
+Each invocation reads a bounded page. If `next_after` is nonempty, save that
+token and pass it as `--after <token>` on the next invocation for the same
+target. The token carries the cumulative conflict count; a later page with no
+new conflicts is **not** a clean scan if earlier pages reported conflicts.
+Keep all `conflict` lines for operator reconciliation. `next_after` empty means
+only that this read-only scan reached the end of the selected target, not that
+any event was delivered.
 
-```sh
-bahia-migrate outbox-transfer --config "$CONFIG" --target default \
-  --apply --confirm-quiesced --confirm-unknown-relay-state \
-  --confirm-outbox-path "$ABSOLUTE_OUTBOX_PATH" \
-  --confirm-relays "$EXACT_CONFIGURED_RELAY_URLS"
-```
-
-The command never signs or sends an
-event. It requeues only an intact signed event with no *recorded* SQL attempts,
-retaining its ID and signature; the explicit confirmation acknowledges that
-unrecorded prior relay acceptance remains unknown. Rows with recorded attempts,
-invalid signatures, or conflicting local IDs stay in PostgreSQL for manual
-reconciliation. Do not start the daemon until every reported conflict has been
-resolved and the intended transfer is complete.
+There is no apply mode. PostgreSQL does not retain per-relay OK state, even
+when `publish_attempts=0`. Moving a drainable entry into bbolt before claiming
+its SQL row could publish an event whose SQL claim failed; claiming SQL first
+could strand an event absent from the local outbox. The daemon's effective
+relay pool can also be changed by durable relay-policy state after static
+configuration is loaded. Do not manually reset, re-sign, or re-target these
+rows based only on this inventory; a separately designed crash-safe transfer
+procedure is required.
 
 See [WS6 alerts](ws6-alerts.md#bahianostroutboxfailed) for response guidance.
 

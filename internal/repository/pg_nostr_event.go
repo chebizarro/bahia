@@ -117,11 +117,10 @@ type NostrEventRepository interface {
 // repositories that can redeliver outbound audit events.
 //
 // The daemon's own publishes are delivered from the
-// local outbox (localstore.Outbox). PostgreSQL rows are drained in place: rows
-// written inside a PostgreSQL transaction together with the domain change
-// they audit (registry release registration and promotion), and rows left
-// pending by a daemon that predates the local outbox. Archive rows of the
-// local outbox (LocalOutboxArchiveTarget) only mirror its outcome.
+// local outbox (localstore.Outbox). Legacy PostgreSQL pending rows are not
+// drained by normal startup or reconnect; operators can inventory them with
+// bahia-migrate. Archive rows of the local outbox
+// (LocalOutboxArchiveTarget) only mirror its outcome.
 //
 // Publish-state lifecycle for an outbound event:
 //   - pending: at least one configured relay still has to accept it (or the
@@ -133,12 +132,11 @@ type NostrEventRepository interface {
 //     row leaves the outbox with the terminal reason kept in
 //     last_publish_error.
 //
-// Every pending row carries a publish target (NostrPublishTarget*); a runner
-// only discovers rows for its own target.
+// Every pending row carries a publish target (NostrPublishTarget*). The
+// inventory filters by that target; only local outbox runners deliver.
 type NostrEventOutboxRepository interface {
 	NostrEventRepository
-	// ListUnpublished returns pending rows for every drained target, oldest
-	// first.
+	// ListUnpublished returns legacy pending rows across targets, oldest first.
 	ListUnpublished(ctx context.Context, limit int) ([]NostrEventRecord, error)
 	// ListUnpublishedAfter returns pending rows for target strictly after the
 	// cursor in (received_at, id) order; a nil cursor starts at the oldest
@@ -354,21 +352,6 @@ func (r *PgNostrEventRepository) AbandonPublish(ctx context.Context, id, reason 
 		return fmt.Errorf("abandoning nostr event %s publish: %w", id, err)
 	}
 	return nil
-}
-
-// TransferUnattemptedToLocalOutbox re-targets only an unchanged, unattempted
-// pending row after its exact signed event is durable in the local outbox.
-// The affected-row result detects a concurrent SQL writer or changed source row.
-func (r *PgNostrEventRepository) TransferUnattemptedToLocalOutbox(ctx context.Context, id, target string) (bool, error) {
-	tag, err := r.pool.Exec(ctx, `
-  UPDATE nostr_events SET publish_target = 'local:' || publish_target
-  WHERE id = $1 AND publish_target = $2 AND publish_state = $3
-    AND publish_attempts = 0 AND last_publish_error = ''`,
-		id, target, NostrPublishStatePending)
-	if err != nil {
-		return false, fmt.Errorf("transfer nostr event %s to local outbox: %w", id, err)
-	}
-	return tag.RowsAffected() == 1, nil
 }
 
 // FindLatestByKindPubkeyDTag returns the newest event with the same kind, pubkey, and Nostr d tag.

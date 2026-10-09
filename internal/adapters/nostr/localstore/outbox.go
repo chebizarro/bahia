@@ -42,13 +42,12 @@ const (
 )
 
 var (
-	outboxEntriesBucket         = []byte("bahiaOutboxEntries")
-	outboxPendingBucket         = []byte("bahiaOutboxPending")
-	outboxPublishedBucket       = []byte("bahiaOutboxPublished")
-	outboxFailedBucket          = []byte("bahiaOutboxFailed")
-	outboxCoordinatesBucket     = []byte("bahiaOutboxCoordinatesV1")
-	outboxCoordinatesReady      = []byte("index-ready")
-	outboxTransferCursorsBucket = []byte("bahiaOutboxTransferCursorsV1")
+	outboxEntriesBucket     = []byte("bahiaOutboxEntries")
+	outboxPendingBucket     = []byte("bahiaOutboxPending")
+	outboxPublishedBucket   = []byte("bahiaOutboxPublished")
+	outboxFailedBucket      = []byte("bahiaOutboxFailed")
+	outboxCoordinatesBucket = []byte("bahiaOutboxCoordinatesV1")
+	outboxCoordinatesReady  = []byte("index-ready")
 )
 
 // OutboxEntry is one outbound event and its delivery state.
@@ -100,51 +99,6 @@ type OutboxRound struct {
 	State  string
 	Detail string
 	At     time.Time
-}
-
-// TransferCursor is the durable keyset position of an explicit legacy SQL
-// outbox transfer. It is scoped to one publish target and this outbox file.
-type TransferCursor struct {
-	ReceivedAt time.Time `json:"received_at"`
-	ID         string    `json:"id"`
-}
-
-func transferCursorKey(target string) []byte { return append([]byte{0}, target...) }
-
-// LoadTransferCursor returns the last SQL row inspected for this target.
-func (o *Outbox) LoadTransferCursor(target string) (*TransferCursor, error) {
-	var cursor *TransferCursor
-	err := o.shared.db.View(func(tx *bbolt.Tx) error {
-		raw := tx.Bucket(outboxTransferCursorsBucket).Get(transferCursorKey(target))
-		if raw == nil {
-			return nil
-		}
-		cursor = new(TransferCursor)
-		return json.Unmarshal(raw, cursor)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("load transfer cursor: %w", err)
-	}
-	return cursor, nil
-}
-
-// SaveTransferCursor commits progress only after the source row was either
-// transferred or reported as a conflict. A nil cursor restarts inventory.
-func (o *Outbox) SaveTransferCursor(target string, cursor *TransferCursor) error {
-	if o.shared.readOnly {
-		return ErrReadOnly
-	}
-	return o.shared.db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(outboxTransferCursorsBucket)
-		if cursor == nil {
-			return bucket.Delete(transferCursorKey(target))
-		}
-		raw, err := json.Marshal(cursor)
-		if err != nil {
-			return err
-		}
-		return bucket.Put(transferCursorKey(target), raw)
-	})
 }
 
 // Outbox is one handle to an outbox file. Handles opened on the same path in
@@ -238,7 +192,7 @@ func openOutboxDB(path string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket, outboxTransferCursorsBucket} {
+		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
