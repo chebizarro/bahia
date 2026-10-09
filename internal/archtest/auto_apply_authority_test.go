@@ -4,7 +4,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -12,22 +14,42 @@ import (
 // interface. Only a separate executor with canonical authorization, an effect
 // fence, and durable replay may replace the startup suspension.
 func TestSQLRuntimeLifecycleCannotAutoRemediate(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(repoRoot(t), "internal/service/runtime_lifecycle.go"), nil, 0)
+	set := token.NewFileSet()
+	packages, err := parser.ParseDir(set, filepath.Join(repoRoot(t), "internal/service"), func(info os.FileInfo) bool {
+		return strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go")
+	}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, decl := range file.Decls {
-		method, ok := decl.(*ast.FuncDecl)
-		if !ok || method.Name.Name != "AutoRemediateDesiredState" || method.Recv == nil {
-			continue
-		}
-		for _, field := range method.Recv.List {
-			if receiver, ok := field.Type.(*ast.StarExpr); ok {
-				if name, ok := receiver.X.(*ast.Ident); ok && name.Name == "RuntimeLifecycleService" {
-					t.Fatal("SQL-backed RuntimeLifecycleService must not implement auto-remediation")
+	servicePackage, ok := packages["service"]
+	if !ok {
+		t.Fatal("internal/service package not found")
+	}
+	for _, file := range servicePackage.Files {
+		for _, decl := range file.Decls {
+			method, ok := decl.(*ast.FuncDecl)
+			if !ok || method.Name.Name != "AutoRemediateDesiredState" || method.Recv == nil {
+				continue
+			}
+			for _, field := range method.Recv.List {
+				if runtimeLifecycleReceiver(field.Type) {
+					t.Errorf("%s: SQL-backed RuntimeLifecycleService must not implement auto-remediation", set.Position(method.Pos()))
 				}
 			}
 		}
+	}
+}
+
+func runtimeLifecycleReceiver(expr ast.Expr) bool {
+	switch receiver := expr.(type) {
+	case *ast.Ident:
+		return receiver.Name == "RuntimeLifecycleService"
+	case *ast.StarExpr:
+		return runtimeLifecycleReceiver(receiver.X)
+	case *ast.ParenExpr:
+		return runtimeLifecycleReceiver(receiver.X)
+	default:
+		return false
 	}
 }
 
