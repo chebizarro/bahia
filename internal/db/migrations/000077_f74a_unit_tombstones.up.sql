@@ -19,16 +19,13 @@ CREATE UNIQUE INDEX deployment_units_active_environment_key
 CREATE FUNCTION f74a_guard_retired_unit() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF OLD.retired_at IS NOT NULL THEN
-    IF TG_OP = 'DELETE' THEN
-      RAISE EXCEPTION 'retired deployment unit % is immutable', OLD.id;
-    END IF;
     IF NEW IS DISTINCT FROM OLD THEN
       RAISE EXCEPTION 'retired deployment unit % is immutable', OLD.id;
     END IF;
   END IF;
-  RETURN COALESCE(NEW, OLD);
+  RETURN NEW;
 END $$;
-CREATE TRIGGER f74a_retired_unit_immutable BEFORE UPDATE OR DELETE ON deployment_units
+CREATE TRIGGER f74a_retired_unit_immutable BEFORE UPDATE ON deployment_units
   FOR EACH ROW EXECUTE FUNCTION f74a_guard_retired_unit();
 
 ALTER TABLE runtime_observation_archive ADD CONSTRAINT fk_f74a_archive_deployment_unit

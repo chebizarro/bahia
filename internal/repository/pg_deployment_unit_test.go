@@ -93,6 +93,9 @@ func TestPgDeploymentUnitRepositoryUpdateAndProtectedDelete(t *testing.T) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	require.NoError(t, repo.Update(context.Background(), unit))
 
+	mock.ExpectExec("DELETE FROM deployment_units").
+		WithArgs(unitID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectExec("UPDATE deployment_units du SET retired_at").
 		WithArgs(unitID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))

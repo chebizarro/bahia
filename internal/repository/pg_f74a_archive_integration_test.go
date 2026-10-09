@@ -378,7 +378,7 @@ func TestF74aArchivedAuditRowRetainsImmutableDeploymentUnitTombstone(t *testing.
 	_, err = pool.Exec(ctx, `UPDATE deployment_units SET unit_key='changed' WHERE id=$1`, unitID)
 	require.ErrorContains(t, err, "immutable")
 	_, err = pool.Exec(ctx, `DELETE FROM deployment_units WHERE id=$1`, unitID)
-	require.ErrorContains(t, err, "immutable")
+	require.Error(t, err, "archive FK must keep the retired row")
 	_, err = pool.Exec(ctx, `DELETE FROM environments WHERE id=$1`, environmentID)
 	require.Error(t, err, "environment cascade must not destroy a referenced unit tombstone")
 	var environmentExists bool
@@ -452,6 +452,74 @@ func TestF74aUnitTombstoneMigrationRejectsOrphanArchive(t *testing.T) {
 	require.Zero(t, applied, "failed migration must roll back atomically")
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observation_archive WHERE deployment_unit_id=$1`, unitID).Scan(&archived))
 	require.Equal(t, 1, archived, "failed migration must not erase history")
+}
+
+func TestF74aUnitWithoutArchiveDoesNotRetainParent(t *testing.T) {
+	pool, _ := f74aArchiveDatabase(t)
+	ctx := t.Context()
+	environmentID, unitID := uuid.New(), uuid.New()
+	_, err := pool.Exec(ctx, `INSERT INTO environments(id,name) VALUES ($1,$2)`, environmentID, "empty-"+environmentID.String())
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO deployment_units
+		(id,environment_id,unit_key,runtime_type,reconcile_mode,ownership_mode)
+		VALUES ($1,$2,'unit','docker','observe_only','external')`, unitID, environmentID)
+	require.NoError(t, err)
+	require.NoError(t, repository.NewPgDeploymentUnitRepository(pool).DeleteIfUnreferenced(ctx, unitID))
+	var unitExists bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM deployment_units WHERE id=$1)`, unitID).Scan(&unitExists))
+	require.False(t, unitExists, "no archived identity requires a tombstone")
+	_, err = pool.Exec(ctx, `DELETE FROM environments WHERE id=$1`, environmentID)
+	require.NoError(t, err, "unreferenced parent remains deletable")
+}
+
+func TestF74aUnitTombstoneMigrationUpgradesPopulatedArchive(t *testing.T) {
+	pool, _ := f74aArchiveDatabase(t)
+	ctx := t.Context()
+	rolled, err := db.Down(ctx, pool, zap.NewNop(), db.DownOptions{Confirm: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"000077_f74a_unit_tombstones"}, rolled)
+	serviceID, environmentID, unitID := uuid.New(), uuid.New(), uuid.New()
+	_, err = pool.Exec(ctx, `INSERT INTO services(id,name,artifact_repo) VALUES ($1,$2,'archive-test')`, serviceID, "upgrade-"+serviceID.String())
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO environments(id,name) VALUES ($1,$2)`, environmentID, "upgrade-"+environmentID.String())
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO deployment_units
+		(id,environment_id,unit_key,runtime_type,reconcile_mode,ownership_mode)
+		VALUES ($1,$2,'unit','docker','observe_only','external')`, unitID, environmentID)
+	require.NoError(t, err)
+	base := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Microsecond)
+	var hotID, archivedID uuid.UUID
+	for _, hour := range []int{1, 3} {
+		obs := &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: environmentID,
+			DeploymentUnitID: &unitID, ObservedImageDigest: "sha256:aaaa", ObservedImageRepo: "registry.example/test",
+			ObservedContainerID: "container", ObservedHost: "host", ObservedVersion: "v1",
+			HealthStatus: "healthy", Source: "runtime", Metadata: map[string]any{},
+			ObservedAt: base.Add(time.Duration(hour) * time.Hour)}
+		require.NoError(t, repository.NewPgRuntimeObservationRepository(pool).Create(ctx, obs))
+		if hour == 1 {
+			hotID = obs.ID
+		} else {
+			archivedID = obs.ID
+		}
+	}
+	archiveRepo := repository.NewPgF74aObservationArchiveRepository(pool)
+	run, err := archiveRepo.StartRun(ctx, base.Add(24*time.Hour), 2)
+	require.NoError(t, err)
+	batch, err := archiveRepo.ArchiveNextBatch(ctx, run.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1, batch.Archived)
+	_, err = pool.Exec(ctx, `DELETE FROM runtime_observations WHERE id=$1`, hotID)
+	require.NoError(t, err)
+	require.NoError(t, db.Migrate(ctx, pool, zap.NewNop()), "valid populated v76 archive must upgrade")
+	var validated bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT convalidated FROM pg_constraint
+		WHERE conname='fk_f74a_archive_deployment_unit' AND connamespace=current_schema()::regnamespace`).Scan(&validated))
+	require.True(t, validated)
+	require.NoError(t, repository.NewPgDeploymentUnitRepository(pool).DeleteIfUnreferenced(ctx, unitID))
+	require.NoError(t, archiveRepo.RestoreByID(ctx, archivedID))
+	var restoredUnitID uuid.UUID
+	require.NoError(t, pool.QueryRow(ctx, `SELECT deployment_unit_id FROM runtime_observations WHERE id=$1`, archivedID).Scan(&restoredUnitID))
+	require.Equal(t, unitID, restoredUnitID)
 }
 
 func TestF74aBackdatedInsertAndArchiveBothLockOrders(t *testing.T) {

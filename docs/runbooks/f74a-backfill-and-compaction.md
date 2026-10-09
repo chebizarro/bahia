@@ -24,9 +24,10 @@ multiple kinds of inbound and outbound events and has its own
 substitute manually authored production SQL for the commands below.
 
 Archived observations keep their original deployment-unit identity. Removing
-an active unit retires it into an immutable PostgreSQL tombstone; active unit
-lookups omit it, while an archived observation can still be restored with its
-original foreign key. The archive-to-unit foreign key rejects environment
+an active unit with archived observations retires it into an immutable
+PostgreSQL tombstone; a unit without archived history is deleted. Active unit
+lookups omit retired units, while an archived observation can still be restored
+with its original foreign key. The archive-to-unit foreign key rejects environment
 deletion that would cascade through a referenced unit. If migration reports
 orphan archived unit IDs, stop and restore the original unit rows and their
 parent environments from a verified backup; do not invent replacement unit

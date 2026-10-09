@@ -178,20 +178,35 @@ func (r *PgDeploymentUnitRepository) Update(ctx context.Context, unit *domain.De
 	return nil
 }
 
-// DeleteIfUnreferenced retires a unit without removing its historical FK target.
-// Only active units participate in environment targeting; the retired row is
-// immutable and remains available to rehydrate an archived observation.
+// DeleteIfUnreferenced retains a tombstone only when archive history needs the
+// unit as an FK target. Units without archived observations can be removed.
 func (r *PgDeploymentUnitRepository) DeleteIfUnreferenced(ctx context.Context, id uuid.UUID) error {
 	cmd, err := r.pool.Exec(ctx, `
-		UPDATE deployment_units du SET retired_at = now()
+		DELETE FROM deployment_units du
 		WHERE du.id = $1 AND du.retired_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM runtime_observation_archive WHERE deployment_unit_id = du.id)
 		  AND NOT EXISTS (SELECT 1 FROM environment_service_state WHERE deployment_unit_id = du.id)
 		  AND NOT EXISTS (SELECT 1 FROM deployment_runs WHERE deployment_unit_id = du.id)
 		  AND NOT EXISTS (SELECT 1 FROM deployment_intents WHERE deployment_unit_id = du.id)
 		  AND NOT EXISTS (SELECT 1 FROM runtime_observations WHERE deployment_unit_id = du.id)
 	`, id)
 	if err != nil {
-		return fmt.Errorf("retiring deployment unit: %w", err)
+		return fmt.Errorf("deleting unreferenced deployment unit: %w", err)
+	}
+	if cmd.RowsAffected() > 0 {
+		return nil
+	}
+	cmd, err = r.pool.Exec(ctx, `
+		UPDATE deployment_units du SET retired_at = now()
+		WHERE du.id = $1 AND du.retired_at IS NULL
+		  AND EXISTS (SELECT 1 FROM runtime_observation_archive WHERE deployment_unit_id = du.id)
+		  AND NOT EXISTS (SELECT 1 FROM environment_service_state WHERE deployment_unit_id = du.id)
+		  AND NOT EXISTS (SELECT 1 FROM deployment_runs WHERE deployment_unit_id = du.id)
+		  AND NOT EXISTS (SELECT 1 FROM deployment_intents WHERE deployment_unit_id = du.id)
+		  AND NOT EXISTS (SELECT 1 FROM runtime_observations WHERE deployment_unit_id = du.id)
+	`, id)
+	if err != nil {
+		return fmt.Errorf("retiring archive-referenced deployment unit: %w", err)
 	}
 	if cmd.RowsAffected() > 0 {
 		return nil
