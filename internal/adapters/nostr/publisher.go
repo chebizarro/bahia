@@ -113,8 +113,10 @@ const (
 // counted round commits each relay's state, so a restart resumes exactly where
 // delivery stopped without resending to relays that already accepted. No
 // PostgreSQL write gates a publish. When PostgreSQL is configured (eventRepo),
-// each event is also archived to nostr_events with its outcome mirrored, best
-// effort, for the PostgreSQL-backed readers.
+// ordinary events are also archived to nostr_events with outcomes mirrored,
+// best effort. EnqueueSignedEvent is the exception: proof-sensitive health
+// assertions are admitted to the local outbox/cache only, so optional archive
+// I/O cannot hold a revocable relay-proof lease.
 //
 // The local outbox is a required dependency: the constructor panics when a
 // publisher that can run (redelivery-enabled) is built without one. Pending
@@ -536,10 +538,12 @@ func (p *Publisher) PublishSignedEvent(ctx context.Context, ev *nostr.Event) err
 	return err
 }
 
-// EnqueueSignedEvent signs and durably admits an event without inline relay
-// delivery. A proof-sensitive producer can hold its causal read lease across
-// this bounded local admission; the publisher runner handles delivery after
-// the lease is released.
+// EnqueueSignedEvent signs and durably admits an event to the local outbox
+// without inline relay or optional PostgreSQL archive I/O. It is reserved for
+// proof-sensitive health assertions: the caller may hold a revocable relay
+// proof across local admission without waiting for the independent runner.
+// The local outbox and event cache retain the status; the optional PostgreSQL
+// archive deliberately does not receive this proof-sensitive event.
 func (p *Publisher) EnqueueSignedEvent(ctx context.Context, ev *nostr.Event) error {
 	if p == nil || ev == nil || !p.redeliveryEnabled() {
 		return fmt.Errorf("nostr signed event queue is not configured")
@@ -547,10 +551,21 @@ func (p *Publisher) EnqueueSignedEvent(ctx context.Context, ev *nostr.Event) err
 	if p.privateKey == "" {
 		return fmt.Errorf("nostr publisher private key not configured")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := signEventWithPrivateKeyHex(ev, p.privateKey); err != nil {
 		return err
 	}
-	return p.Enqueue(ctx, *ev, signedEventAuditLabel(*ev), nil)
+	if !ev.CheckID() || !ev.VerifySignature() {
+		return fmt.Errorf("nostr event %s has an invalid id or signature", ev.ID.Hex())
+	}
+	if err := p.enqueueLocalOutbox(*ev, signedEventAuditLabel(*ev), nil, nil); err != nil {
+		return err
+	}
+	p.keepOwnEvent(*ev)
+	p.nudge()
+	return nil
 }
 
 // PublishSignedEventWithResults signs and publishes an arbitrary Nostr event,
@@ -702,17 +717,8 @@ func (p *Publisher) Enqueue(ctx context.Context, ev nostr.Event, entityType stri
 func (p *Publisher) admit(ctx context.Context, ev nostr.Event, entityType string, entityID *uuid.UUID, prior *outboxDelivery) error {
 	switch {
 	case p.localOutbox != nil:
-		entry := localstore.OutboxEntry{Event: ev, Target: p.target, EntityType: entityType, EnqueuedAt: p.now()}
-		if entityID != nil {
-			entry.EntityID = entityID.String()
-		}
-		if prior != nil {
-			entry.Rounds = prior.rounds
-			entry.Delivered = prior.delivered
-			entry.Relays = prior.relayDeliveries()
-		}
-		if _, err := p.localOutbox.Enqueue(entry); err != nil {
-			return fmt.Errorf("persist signed nostr event before publish: %w", err)
+		if err := p.enqueueLocalOutbox(ev, entityType, entityID, prior); err != nil {
+			return err
 		}
 		p.keepOwnEvent(ev)
 		p.archive.write(ctx, "outbound event", ev.ID.Hex(), func(ctx context.Context, repo repository.NostrEventRepository) error {
@@ -728,6 +734,25 @@ func (p *Publisher) admit(ctx context.Context, ev nostr.Event, entityType string
 		if _, err := p.eventRepo.Record(ctx, rec); err != nil {
 			return fmt.Errorf("persist signed nostr event before publish: %w", err)
 		}
+	}
+	return nil
+}
+
+func (p *Publisher) enqueueLocalOutbox(ev nostr.Event, entityType string, entityID *uuid.UUID, prior *outboxDelivery) error {
+	if p.localOutbox == nil {
+		return fmt.Errorf("nostr publisher has no local outbox")
+	}
+	entry := localstore.OutboxEntry{Event: ev, Target: p.target, EntityType: entityType, EnqueuedAt: p.now()}
+	if entityID != nil {
+		entry.EntityID = entityID.String()
+	}
+	if prior != nil {
+		entry.Rounds = prior.rounds
+		entry.Delivered = prior.delivered
+		entry.Relays = prior.relayDeliveries()
+	}
+	if _, err := p.localOutbox.Enqueue(entry); err != nil {
+		return fmt.Errorf("persist signed nostr event before publish: %w", err)
 	}
 	return nil
 }

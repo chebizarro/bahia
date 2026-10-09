@@ -17,6 +17,7 @@ import (
 	"fiatjaf.com/nostr/eventstore/boltdb"
 	"fiatjaf.com/nostr/khatru"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -754,6 +755,13 @@ func TestLoomStatusProofLeasePinsAdmissionAgainstInvalidation(t *testing.T) {
 	run.waitCaughtUp(t, ctx, relay.url, 1)
 	run.waitLive(t, ctx, relay.url, 1)
 	require.True(t, run.sub.LoomStatusComplete())
+	archive := &blockingArchiveRepo{called: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(archive.release) })
+	outbox := openDeliveryTestOutbox(t)
+	publisher := NewPublisher(config.NostrConfig{PrivateKey: gonostr.Generate().Hex(), PublishEnabled: true},
+		pool, archive, zap.NewNop(), WithLocalOutbox(outbox, nil))
+	event := &gonostr.Event{Kind: gonostr.Kind(KindNIP38Status), CreatedAt: gonostr.Now(),
+		Tags: gonostr.Tags{{"d", "run-1"}, {"t", "deployment.run.health"}}, Content: `{"state":"stale"}`}
 
 	entered, release := make(chan struct{}), make(chan struct{})
 	admitted := make(chan error, 1)
@@ -761,7 +769,7 @@ func TestLoomStatusProofLeasePinsAdmissionAgainstInvalidation(t *testing.T) {
 		admitted <- run.sub.WithLoomStatusProof(func() error {
 			close(entered)
 			<-release // local outbox admission has not linearized yet
-			return nil
+			return publisher.EnqueueSignedEvent(ctx, event)
 		})
 	}()
 	select {
@@ -795,6 +803,15 @@ func TestLoomStatusProofLeasePinsAdmissionAgainstInvalidation(t *testing.T) {
 		require.NoError(t, err)
 	case <-ctx.Done():
 		t.Fatal("admission did not finish")
+	}
+	entry, found, err := outbox.Get(event.ID)
+	require.NoError(t, err)
+	require.True(t, found, "signed event must be durable before proof lease releases")
+	require.Equal(t, localstore.OutboxPending, entry.State)
+	select {
+	case <-archive.called:
+		t.Fatal("proof-sensitive admission called the blocking PostgreSQL archive")
+	default:
 	}
 	select {
 	case <-reconfigured:

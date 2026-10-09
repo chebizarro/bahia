@@ -31,6 +31,18 @@ type fakePublishResponse struct {
 	err     error
 }
 
+type blockingArchiveRepo struct {
+	repository.NostrEventRepository
+	called  chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingArchiveRepo) Record(_ context.Context, _ *repository.NostrEventRecord) (bool, error) {
+	close(r.called)
+	<-r.release
+	return true, nil
+}
+
 func (f *fakeOutboxRelayPool) PublishWithResults(ctx context.Context, ev gonostr.Event, _ []string) ([]PublishResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -118,10 +130,12 @@ func TestPublisherSignedEventUsesDurableOutboxPath(t *testing.T) {
 
 func TestPublisherEnqueueSignedEventDoesNotPublishInsideProofLease(t *testing.T) {
 	outbox := openDeliveryTestOutbox(t)
+	archive := &blockingArchiveRepo{called: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(archive.release) })
 	publisher := NewPublisher(
 		config.NostrConfig{PrivateKey: gonostr.Generate().Hex(), PublishEnabled: true},
 		NewRelayPool(nil, zap.NewNop()),
-		nil,
+		archive,
 		zap.NewNop(),
 		WithLocalOutbox(outbox, nil),
 	)
@@ -130,7 +144,21 @@ func TestPublisherEnqueueSignedEventDoesNotPublishInsideProofLease(t *testing.T)
 		return nil, nil
 	}
 	event := &gonostr.Event{Kind: gonostr.Kind(KindNIP38Status), CreatedAt: gonostr.Now(), Tags: gonostr.Tags{{"d", "run-1"}, {"t", "deployment.run.health"}}, Content: `{"state":"stale"}`}
-	require.NoError(t, publisher.EnqueueSignedEvent(context.Background(), event))
+	done := make(chan error, 1)
+	go func() { done <- publisher.EnqueueSignedEvent(context.Background(), event) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-archive.called:
+		t.Fatal("optional PostgreSQL archive write ran inside proof-sensitive admission")
+	case <-time.After(time.Second):
+		t.Fatal("local signed admission blocked on archive/network I/O")
+	}
+	select {
+	case <-archive.called:
+		t.Fatal("proof-sensitive event unexpectedly reached optional archive")
+	default:
+	}
 	require.True(t, event.CheckID())
 	require.True(t, event.VerifySignature())
 	entry, found, err := outbox.Get(event.ID)
