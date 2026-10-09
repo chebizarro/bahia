@@ -113,6 +113,9 @@ func (s *Server) ResolveAssistantIntentReceipt(name, actor, key, eventID string)
 	if s == nil || s.intentProc == nil || !isAssistantIntentTool(name) {
 		return nil, fmt.Errorf("assistant intent processor is not configured")
 	}
+	if isLLMLifecycleMCPTool(name) {
+		return nil, fmt.Errorf("LLM assistant receipt recovery is unavailable: a processed marker is not canonical provisioning evidence")
+	}
 	intentID, err := mcpIntentID(name, strings.ToLower(strings.TrimSpace(actor)), map[string]any{"idempotency_key": key})
 	if err != nil {
 		return nil, err

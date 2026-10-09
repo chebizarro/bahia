@@ -73,18 +73,27 @@ func NewLLMRouteIntentHandler(cfg LLMRouteIntentHandlerConfig) *LLMRouteIntentHa
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	reason := strings.TrimSpace(cfg.DeploymentUnavailableReason)
+	if reason == "" {
+		reason = "canonical provisioning executor is unavailable"
+	}
 	return &LLMRouteIntentHandler{
 		routes:                      cfg.Routes,
 		publish:                     cfg.Publish,
 		status:                      cfg.Status,
 		logger:                      logger.Named("llm-intent"),
-		deploymentUnavailableReason: cfg.DeploymentUnavailableReason,
+		deploymentUnavailableReason: reason,
 	}
 }
 
 // HandleIntent processes a single LLM intent. The processor has already
 // deduplicated, validated, and authorized the intent.
 func (h *LLMRouteIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
+	if isLLMLifecycleIntent(intent) {
+		if err := validateLLMLifecycleSignedRequest(intent); err != nil {
+			return err
+		}
+	}
 	if h.deploymentUnavailableReason != "" {
 		switch intent.Op {
 		case "deploy", "rollback", "approve", "reject":

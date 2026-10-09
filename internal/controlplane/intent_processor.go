@@ -181,6 +181,9 @@ func (p *IntentProcessor) Handler(domain string) DomainHandler {
 func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Event) error {
 	intent, err := ParseIntent(ev)
 	if err != nil {
+		if isLLMLifecycleIntent(intent) {
+			return err
+		}
 		if intent != nil && p.trustSet.IsKnownPrincipal(ev.PubKey.Hex()) && p.status != nil {
 			intent.Actor = ev.PubKey.Hex()
 			p.status.PublishRejection(ctx, intent, err.Error())
@@ -193,6 +196,11 @@ func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Even
 		return nil // silent drop for malformed events
 	}
 	intent.Actor = ev.PubKey.Hex()
+	if isLLMLifecycleIntent(intent) {
+		if err := p.validateLLMLifecycleAdmission(intent); err != nil {
+			return err
+		}
+	}
 
 	// Reject plaintext intents for sensitive domains.
 	if p.giftWrapIngress != nil && p.giftWrapIngress.RejectPlaintextSensitiveIntent(ctx, intent) {
@@ -206,6 +214,14 @@ func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Even
 // and idempotency store as signed relay intents. The caller must already be
 // authenticated and authorized; Actor identifies that caller, not the daemon.
 func (p *IntentProcessor) ProcessInProcess(ctx context.Context, intent *Intent) error {
+	if intent == nil {
+		return fmt.Errorf("intent is required")
+	}
+	if isLLMLifecycleIntent(intent) {
+		if err := p.validateLLMLifecycleAdmission(intent); err != nil {
+			return err
+		}
+	}
 	if intent != nil && intent.Domain == "tool" && intent.Op == "approval-response" {
 		if err := validateToolApprovalSignedEnvelope(intent); err != nil {
 			return err
@@ -222,6 +238,16 @@ func (p *IntentProcessor) ProcessInProcess(ctx context.Context, intent *Intent) 
 		intent.ExpectedUpdatedAt = revision
 	}
 	return p.process(ctx, intent, true)
+}
+
+func (p *IntentProcessor) validateLLMLifecycleAdmission(intent *Intent) error {
+	if err := validateLLMLifecycleSignedRequest(intent); err != nil {
+		return err
+	}
+	if !llmRequestObserved(intent, p.store) {
+		return fmt.Errorf("LLM lifecycle request is not observed in the local relay event store")
+	}
+	return nil
 }
 
 func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess bool) error {
@@ -246,10 +272,10 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	}
 
 	// Step 1: Deduplicate by intent_id.
-	// Virtualization is suspended and never marks an intent processed. Even if
-	// another domain used the same ID, its receipt cannot admit VM work or
-	// turn this request into an accepted replay.
-	if intent.Domain != kinds.VirtualizationDomain && !(intent.Domain == "tool" && intent.Op == "approval-response") && p.isProcessed(intent.IntentID) {
+	// Virtualization and LLM lifecycle are suspended and never mark an intent
+	// processed. Even if another domain used the same ID, its receipt cannot
+	// turn one of these requests into an accepted replay.
+	if intent.Domain != kinds.VirtualizationDomain && !isLLMLifecycleIntent(intent) && !(intent.Domain == "tool" && intent.Op == "approval-response") && p.isProcessed(intent.IntentID) {
 		record := p.ProcessedIntent(intent.IntentID)
 		if requiresStrictIntentReplay(intent) && record != nil && (record.Actor != intent.Actor || record.Domain != intent.Domain || record.Op != intent.Op || record.Coordinate != intent.Coordinate || (record.ContentHash != "" && record.ContentHash != intentContentHash(intent.Content))) {
 			err := &intentReplayConflictError{intentID: intent.IntentID}

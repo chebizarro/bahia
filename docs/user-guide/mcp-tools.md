@@ -79,6 +79,16 @@ Channel reads and write results redact credentials and webhook URLs. The deliver
 
 `bahia_llm_list_routes`, `bahia_llm_create_route`, `bahia_llm_update_route`, `bahia_llm_register_release`, `bahia_llm_list_releases`, `bahia_llm_deploy`, `bahia_llm_approve_deployment`, `bahia_llm_reject_deployment`, `bahia_llm_rollback`; assistant receipts `bahia_assistant_llm_deploy`, `bahia_assistant_llm_approve_deployment`, `bahia_assistant_llm_rollback`.
 
+The seven LLM lifecycle tools in that list (deploy, rollback, approve, reject,
+and the three assistant variants) currently refuse before dispatch. MCP
+transport authentication cannot sign an operator's Nostr event on their
+behalf. Submit a genuine operator-signed `30900` LLM intent through a relay;
+the daemon validates its local observation and returns a paused rejection
+until canonical provisioning recovery is available. No assistant receipt or
+service-signed outcome is issued for an MCP-generated unsigned request.
+Historical assistant processed markers do not restore an LLM receipt while
+canonical provisioning is paused.
+
 ### ML models and inference
 
 - Commands: `bahia_ml_import_model`, `bahia_ml_run_recipe`, `bahia_ml_deploy`, `bahia_ml_rollback`

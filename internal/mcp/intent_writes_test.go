@@ -309,7 +309,7 @@ func TestMCPPackageIntentReturnsCanonicalRepositoryAndArtifact(t *testing.T) {
 	require.Equal(t, 2, handler.calls)
 }
 
-func TestAssistantServiceAndLLMUseInProcessIntents(t *testing.T) {
+func TestAssistantServiceUsesInProcessIntents(t *testing.T) {
 	for _, tc := range []struct {
 		name, domain string
 		args         func(orgID, serviceID, environmentID uuid.UUID) map[string]any
@@ -319,15 +319,6 @@ func TestAssistantServiceAndLLMUseInProcessIntents(t *testing.T) {
 		}},
 		{"bahia_assistant_service_rollback", "deployment", func(_, svc, env uuid.UUID) map[string]any {
 			return map[string]any{"service_id": svc.String(), "environment_id": env.String(), "supersedes_intent_id": uuid.NewString(), "target_artifact_id": uuid.NewString()}
-		}},
-		{"bahia_assistant_llm_deploy", "llm", func(_, _, env uuid.UUID) map[string]any {
-			return map[string]any{"route_id": uuid.NewString(), "environment_id": env.String(), "release_id": uuid.NewString()}
-		}},
-		{"bahia_assistant_llm_rollback", "llm", func(_, _, env uuid.UUID) map[string]any {
-			return map[string]any{"route_id": uuid.NewString(), "environment_id": env.String()}
-		}},
-		{"bahia_assistant_llm_approve_deployment", "llm", func(org, _, _ uuid.UUID) map[string]any {
-			return map[string]any{"intent_id": uuid.NewString(), "org_id": org.String(), "decision": "approve"}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -360,6 +351,56 @@ func TestAssistantServiceAndLLMUseInProcessIntents(t *testing.T) {
 			require.Equal(t, first.RequestEventID, proven.RequestEventID)
 			_, err = server.ResolveAssistantIntentReceipt(tc.name, actor, "assistant-work-key", strings.Repeat("0", 64))
 			require.Error(t, err)
+		})
+	}
+}
+
+func TestLLMLifecycleMCPRefusesUnsignedTransportIntent(t *testing.T) {
+	actor := nostr.Generate().Public().Hex()
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{AuthorizedPubkeys: []string{actor}})
+	canonical := attachCanonicalMCPFixture(t, server)
+	handler := &mcpIntentHandler{}
+	processor := controlplane.NewIntentProcessor(controlplane.NewTrustSet([]string{actor}, zap.NewNop()), canonical.store, nil,
+		controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{"llm": true}}, zap.NewNop())
+	processor.RegisterHandler("llm", handler)
+	server.intentProc = processor
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: actor, PubKey: actor, Method: auth.MethodNIP98})
+	args := map[string]any{"route_id": uuid.NewString(), "environment_id": uuid.NewString(), "release_id": uuid.NewString(),
+		"intent_id": uuid.NewString(), "org_id": uuid.NewString(), "decision": "approve", "idempotency_key": "llm-pre-submission-refusal"}
+	for _, name := range []string{"bahia_llm_deploy", "bahia_llm_rollback", "bahia_llm_approve_deployment", "bahia_llm_reject_deployment"} {
+		t.Run(name, func(t *testing.T) {
+			result, err := server.CallTool(ctx, name, args)
+			require.NoError(t, err)
+			require.True(t, result.IsError)
+			payload := mcpIntentResult(t, result)
+			require.Equal(t, "rejected", payload["status"])
+			require.Empty(t, payload["event_id"])
+			require.Contains(t, payload["reason"], "operator-signed relay intent")
+			require.Zero(t, handler.calls)
+		})
+	}
+	for _, name := range []string{"bahia_assistant_llm_deploy", "bahia_assistant_llm_rollback", "bahia_assistant_llm_approve_deployment"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := server.InvokeAssistantAsyncTool(ctx, name, args)
+			require.ErrorIs(t, err, ErrToolCallUnauthorized)
+			require.ErrorContains(t, err, "operator-signed relay intent")
+			require.Zero(t, handler.calls)
+
+			intentID, err := mcpIntentID(name, actor, args)
+			require.NoError(t, err)
+			oldEventID := strings.Repeat("a", 64)
+			encoded, err := json.Marshal(controlplane.ProcessedIntentRecord{
+				Actor: actor, Domain: "llm", Op: "deploy", Coordinate: "old-sql-route", EventID: oldEventID,
+			})
+			require.NoError(t, err)
+			marker := nostr.Event{Kind: 30078, CreatedAt: nostr.Now(), Tags: nostr.Tags{
+				{"d", "intent-processed:" + intentID}, {"intent_id", intentID},
+			}, Content: string(encoded)}
+			marker.ID = marker.GetID()
+			_, err = canonical.store.SaveEvent(marker)
+			require.NoError(t, err)
+			_, err = server.ResolveAssistantIntentReceipt(name, actor, "llm-pre-submission-refusal", oldEventID)
+			require.ErrorContains(t, err, "receipt recovery is unavailable")
 		})
 	}
 }

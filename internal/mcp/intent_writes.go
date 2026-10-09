@@ -65,6 +65,9 @@ func (s *Server) callIntentWrite(ctx context.Context, name string, args map[stri
 	if _, err := nostr.PubKeyFromHex(actor); err != nil {
 		return intentWriteError("rejected", "", "", "MCP write requires an authenticated Nostr pubkey"), true
 	}
+	if isLLMLifecycleMCPTool(name) {
+		return intentWriteError("rejected", "", "", "LLM lifecycle requires an operator-signed relay intent; MCP cannot create one from transport identity"), true
+	}
 	intentID, err := mcpIntentID(name, actor, args)
 	if err != nil {
 		return intentWriteError("rejected", "", "", err.Error()), true
@@ -189,6 +192,16 @@ func (s *Server) callIntentWrite(ctx context.Context, name string, args map[stri
 
 	toolResult, _ := jsonResult(result)
 	return toolResult, true
+}
+
+func isLLMLifecycleMCPTool(name string) bool {
+	switch name {
+	case "bahia_llm_deploy", "bahia_assistant_llm_deploy", "bahia_llm_rollback", "bahia_assistant_llm_rollback",
+		"bahia_llm_approve_deployment", "bahia_llm_reject_deployment", "bahia_assistant_llm_approve_deployment":
+		return true
+	default:
+		return false
+	}
 }
 
 // A request is accepted only after its signed, scoped NIP-38 outcome is

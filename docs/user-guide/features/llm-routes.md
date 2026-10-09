@@ -15,13 +15,20 @@ MCP provides:
 
 The web controls publish signed LLM intents and follow bounded intent status plus canonical route, release, deployment, and observation records.
 
+**Provisioning is paused.** All seven MCP/assistant lifecycle tools refuse
+before submitting an intent because a transport principal is not an operator
+signature. The web's genuine operator-signed relay intent is accepted for
+validation and receives an explicit paused rejection; it does not create a
+deployment, approval, or rollback. The canonical execution snapshot and
+restart-safe effect fence are not yet available. Do not treat an old SQL
+deployment row or a local-only request event as authorization to provision.
+
 ## Deployment
 
-1. Create a route.
-2. Register a release with an immutable model reference.
-3. Select an environment and submit a deployment.
-4. Approve it when the environment or policy requires review.
-5. Follow observed serving state and drift.
+Once provisioning is restored, the workflow is to create a route, register a
+release with an immutable model reference, select an environment, submit a
+signed deployment, approve it when required, and follow observed serving state
+and drift. These steps do not describe a currently executable deployment path.
 
 An accepted request is not proof that the gateway serves the release. Confirm the canonical deployment state and an observation from the configured adapter. Rollback selects a known release for the same route and environment.
 
