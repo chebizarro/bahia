@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -106,4 +108,38 @@ func TestLocalEventRepositoryAdmitsPendingRowsToTheOutbox(t *testing.T) {
 	pending.PublishState = repository.NostrPublishStatePending
 	_, err = unrouted.Record(ctx, pending)
 	require.ErrorContains(t, err, "no outbox", "a pending row is never silently left undelivered")
+}
+
+func TestLocalEventRepositoryLatestByCoordinateIsAuthorScopedAndReportsAbandonment(t *testing.T) {
+	ctx := context.Background()
+	store := openTestLocalStore(t, filepath.Join(t.TempDir(), "daemon.bolt"))
+	repo := NewLocalEventRepository(store, nil)
+	self, foreign := gonostr.Generate(), gonostr.Generate()
+	d := "artifact:sbom-package:v2:coordinate-test"
+	now := gonostr.Now()
+	own, ownEvent := localRepoRecord(t, self, KindCASControlState, now-1, gonostr.Tags{{"d", d}, {"legacy_kind", strconv.Itoa(KindSBOMPackageRegistry)}})
+	other, _ := localRepoRecord(t, foreign, KindCASControlState, now, gonostr.Tags{{"d", d}, {"legacy_kind", strconv.Itoa(KindSBOMPackageRegistry)}})
+	_, err := repo.Record(ctx, own)
+	require.NoError(t, err)
+	_, err = repo.Record(ctx, other)
+	require.NoError(t, err)
+
+	scoped := repo.Authored(self.Public().Hex())
+	got, err := scoped.LatestByCoordinate(ctx, KindCASControlState, d)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, own.ID, got.ID)
+	absent, err := scoped.LatestByCoordinate(ctx, KindCASControlState, d+":absent")
+	require.NoError(t, err)
+	require.Nil(t, absent)
+
+	_, err = store.MarkUndelivered(ownEvent, "blocked: refused", time.Now())
+	require.NoError(t, err)
+	got, err = scoped.LatestByCoordinate(ctx, KindCASControlState, d)
+	require.NoError(t, err)
+	require.Equal(t, repository.NostrPublishStateFailed, got.PublishState)
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = scoped.LatestByCoordinate(cancelled, KindCASControlState, d)
+	require.ErrorIs(t, err, context.Canceled)
 }

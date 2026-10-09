@@ -42,10 +42,12 @@ const (
 )
 
 var (
-	outboxEntriesBucket   = []byte("bahiaOutboxEntries")
-	outboxPendingBucket   = []byte("bahiaOutboxPending")
-	outboxPublishedBucket = []byte("bahiaOutboxPublished")
-	outboxFailedBucket    = []byte("bahiaOutboxFailed")
+	outboxEntriesBucket     = []byte("bahiaOutboxEntries")
+	outboxPendingBucket     = []byte("bahiaOutboxPending")
+	outboxPublishedBucket   = []byte("bahiaOutboxPublished")
+	outboxFailedBucket      = []byte("bahiaOutboxFailed")
+	outboxCoordinatesBucket = []byte("bahiaOutboxCoordinatesV1")
+	outboxCoordinatesReady  = []byte("index-ready")
 )
 
 // OutboxEntry is one outbound event and its delivery state.
@@ -190,10 +192,29 @@ func openOutboxDB(path string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket} {
+		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
+		}
+		coordinates := tx.Bucket(outboxCoordinatesBucket)
+		if coordinates.Get(outboxCoordinatesReady) == nil {
+			// Upgrade an existing outbox in one transaction. The cursor keeps
+			// memory bounded while every retained package event, including one
+			// queued before this index existed, becomes addressable before open.
+			cursor := tx.Bucket(outboxEntriesBucket).Cursor()
+			for _, raw := cursor.First(); raw != nil; _, raw = cursor.Next() {
+				var entry OutboxEntry
+				if err := json.Unmarshal(raw, &entry); err != nil {
+					return fmt.Errorf("index retained outbox entry: %w", err)
+				}
+				if key := outboxCoordinateKey(entry.Target, entry.Event); key != nil {
+					if err := coordinates.Put(key, nil); err != nil {
+						return err
+					}
+				}
+			}
+			return coordinates.Put(outboxCoordinatesReady, []byte{1})
 		}
 		return nil
 	})
@@ -224,6 +245,81 @@ func (o *Outbox) Close() error {
 		o.closeErr = o.shared.db.Close()
 	})
 	return o.closeErr
+}
+
+// outboxCoordinatePrefix identifies one package addressable coordinate in one
+// publish target. Its event suffix orders newest created_at first, then lowest
+// id on ties, matching NIP-01 replacement. The index is updated atomically
+// with entries and pruned with them; it never stores event payloads.
+func outboxCoordinatePrefix(target string, kind nostr.Kind, author nostr.PubKey, d string) []byte {
+	key := make([]byte, 0, 12+len(target)+len(d)+len(author))
+	var length [4]byte
+	binary.BigEndian.PutUint32(length[:], uint32(len(target)))
+	key = append(key, length[:]...)
+	key = append(key, target...)
+	binary.BigEndian.PutUint32(length[:], uint32(kind))
+	key = append(key, length[:]...)
+	key = append(key, author[:]...)
+	binary.BigEndian.PutUint32(length[:], uint32(len(d)))
+	key = append(key, length[:]...)
+	return append(key, d...)
+}
+
+func outboxCoordinateKey(target string, ev nostr.Event) []byte {
+	if !ev.Kind.IsAddressable() {
+		return nil
+	}
+	var d string
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "d" {
+			d = tag[1]
+			break
+		}
+	}
+	if !strings.HasPrefix(d, "artifact:sbom-package:") {
+		return nil
+	}
+	key := outboxCoordinatePrefix(target, ev.Kind, ev.PubKey, d)
+	var newest [8]byte
+	binary.BigEndian.PutUint64(newest[:], ^uint64(ev.CreatedAt))
+	key = append(key, newest[:]...)
+	return append(key, ev.ID[:]...)
+}
+
+// LatestByCoordinate reads the newest unpruned signed package event on one
+// target and addressable coordinate. It includes pending entries, which are the durable
+// source of truth if a crash happened after enqueue but before the event-store
+// cache received the event.
+func (o *Outbox) LatestByCoordinate(target string, kind nostr.Kind, author nostr.PubKey, d string) (OutboxEntry, bool, error) {
+	prefix := outboxCoordinatePrefix(target, kind, author, d)
+	var entry OutboxEntry
+	found := false
+	err := o.shared.db.View(func(tx *bbolt.Tx) error {
+		index := tx.Bucket(outboxCoordinatesBucket)
+		if index == nil {
+			return nil
+		}
+		key, _ := index.Cursor().Seek(prefix)
+		if !bytes.HasPrefix(key, prefix) {
+			return nil
+		}
+		raw := tx.Bucket(outboxEntriesBucket).Get(key[len(key)-len(nostr.ID{}):])
+		if raw == nil {
+			return fmt.Errorf("outbox coordinate index references a missing event")
+		}
+		if err := json.Unmarshal(raw, &entry); err != nil {
+			return fmt.Errorf("decode outbox coordinate event: %w", err)
+		}
+		if !bytes.Equal(outboxCoordinateKey(entry.Target, entry.Event), key) {
+			return fmt.Errorf("outbox coordinate index does not match its event")
+		}
+		found = true
+		return nil
+	})
+	if err != nil {
+		return OutboxEntry{}, false, fmt.Errorf("read outbox coordinate %d:%s: %w", kind, d, err)
+	}
+	return entry, found, nil
 }
 
 // Enqueue stores entry as pending and reports whether it was new. An entry
@@ -259,7 +355,13 @@ func (o *Outbox) Enqueue(entry OutboxEntry) (bool, error) {
 			return err
 		}
 		inserted = true
-		return tx.Bucket(outboxPendingBucket).Put(pendingKey(entry.Target, entry.EnqueuedAt, entry.Event.ID), nil)
+		if err := tx.Bucket(outboxPendingBucket).Put(pendingKey(entry.Target, entry.EnqueuedAt, entry.Event.ID), nil); err != nil {
+			return err
+		}
+		if key := outboxCoordinateKey(entry.Target, entry.Event); key != nil {
+			return tx.Bucket(outboxCoordinatesBucket).Put(key, nil)
+		}
+		return nil
 	})
 	if err != nil {
 		return false, fmt.Errorf("enqueue outbox entry %s: %w", entry.Event.ID.Hex(), err)
@@ -520,6 +622,18 @@ func (o *Outbox) Prune(publishedBefore, failedBefore time.Time) (int, error) {
 			for _, key := range expired {
 				if err := index.Delete(key); err != nil {
 					return err
+				}
+				raw := entries.Get(key[8:])
+				if raw != nil {
+					var entry OutboxEntry
+					if err := json.Unmarshal(raw, &entry); err != nil {
+						return fmt.Errorf("decode outbox entry for pruning: %w", err)
+					}
+					if coordinate := outboxCoordinateKey(entry.Target, entry.Event); coordinate != nil {
+						if err := tx.Bucket(outboxCoordinatesBucket).Delete(coordinate); err != nil {
+							return err
+						}
+					}
 				}
 				if err := entries.Delete(key[8:]); err != nil {
 					return err

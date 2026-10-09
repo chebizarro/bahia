@@ -591,6 +591,38 @@ func (p *Publisher) PublishProjection(ctx context.Context, ev nostr.Event, entit
 	return attempt.err
 }
 
+// latestRetainedCoordinate reads the durable outbox entry alongside the
+// event-store cache. Enqueue and the cache write are separate operations;
+// after a crash between them, the outbox is the only copy of the signed event.
+func (p *Publisher) latestRetainedCoordinate(ctx context.Context, kind int, author, d string) (*repository.NostrEventRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if p == nil || p.localOutbox == nil {
+		return nil, nil
+	}
+	pubkey, err := nostr.PubKeyFromHex(author)
+	if err != nil {
+		return nil, fmt.Errorf("decode projection author: %w", err)
+	}
+	entry, found, err := p.localOutbox.LatestByCoordinate(p.target, nostr.Kind(kind), pubkey, d)
+	if err != nil || !found {
+		return nil, err
+	}
+	record := localEventRecord(entry.Event)
+	switch entry.State {
+	case localstore.OutboxPending:
+		record.PublishState = repository.NostrPublishStatePending
+	case localstore.OutboxPublished:
+		record.PublishState = repository.NostrPublishStatePublished
+	case localstore.OutboxFailed:
+		record.PublishState = repository.NostrPublishStateFailed
+	default:
+		return nil, fmt.Errorf("retained projection coordinate has unknown outbox state %q", entry.State)
+	}
+	return &record, nil
+}
+
 // enqueueAndDeliver makes a signed event durable in this publisher's outbox
 // (before the first relay attempt) and runs the first delivery round.
 // Admission is idempotent by event id: re-enqueueing an event that is already

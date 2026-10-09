@@ -224,6 +224,13 @@ type ProjectionHistory interface {
 	FindByTag(ctx context.Context, tagName, tagValue string, kinds []int, limit int) ([]repository.NostrEventRecord, error)
 }
 
+// ProjectionCoordinateHistory provides a bounded read of one retained
+// addressable coordinate. The daemon's author-scoped local event store
+// implements it; broad ListByKind hydration has a finite kind-wide horizon.
+type ProjectionCoordinateHistory interface {
+	LatestByCoordinate(ctx context.Context, kind int, d string) (*repository.NostrEventRecord, error)
+}
+
 // NewProjector creates a canonical Nostr read-model projector. history may be
 // nil, in which case the dedupe cache starts cold.
 func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher ProjectionPublisher, history ProjectionHistory, logger *zap.Logger, opts ...ProjectorOption) *Projector {

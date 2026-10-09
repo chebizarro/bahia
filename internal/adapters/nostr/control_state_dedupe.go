@@ -331,6 +331,77 @@ func (p *Projector) nextProjectionCreatedAt(key projectionKey) gonostr.Timestamp
 	return now
 }
 
+func newerProjectionRecord(candidate, current *repository.NostrEventRecord) bool {
+	if candidate == nil {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	if !candidate.CreatedAt.Equal(current.CreatedAt) {
+		return candidate.CreatedAt.After(current.CreatedAt)
+	}
+	return candidate.ID < current.ID
+}
+
+// hydrateProjectionCoordinate bypasses the kind-wide hydration horizon for
+// package migration records. The local store resolves #d through its index,
+// including a pending signed event whose relay delivery has not finished.
+func (p *Projector) hydrateProjectionCoordinate(ctx context.Context, key projectionKey, history ProjectionCoordinateHistory) error {
+	record, err := history.LatestByCoordinate(ctx, key.wireKind, key.d)
+	if err != nil {
+		return fmt.Errorf("hydrate projection coordinate %d:%s: %w", key.wireKind, key.d, err)
+	}
+	if retained, ok := p.publisher.(interface {
+		latestRetainedCoordinate(context.Context, int, string, string) (*repository.NostrEventRecord, error)
+	}); ok {
+		author, deriveErr := publicKeyHexFromPrivateKeyHex(p.privateKey)
+		if deriveErr != nil {
+			return fmt.Errorf("derive projection author: %w", deriveErr)
+		}
+		outboxRecord, lookupErr := retained.latestRetainedCoordinate(ctx, key.wireKind, author, key.d)
+		if lookupErr != nil {
+			return fmt.Errorf("hydrate outbox coordinate %d:%s: %w", key.wireKind, key.d, lookupErr)
+		}
+		if newerProjectionRecord(outboxRecord, record) {
+			record = outboxRecord
+		}
+	}
+	if record == nil {
+		return nil
+	}
+	if record.Kind != key.wireKind || record.PubKey == "" {
+		return fmt.Errorf("invalid retained projection coordinate %d:%s", key.wireKind, key.d)
+	}
+	if p.privateKey != "" {
+		pubkey, err := publicKeyHexFromPrivateKeyHex(p.privateKey)
+		if err != nil {
+			return fmt.Errorf("derive projection author: %w", err)
+		}
+		if record.PubKey != pubkey {
+			return nil
+		}
+	}
+	tags := recordTags(*record)
+	if projectionKeyOf(record.Kind, tags) != key {
+		return fmt.Errorf("retained projection coordinate mismatch for %d:%s", key.wireKind, key.d)
+	}
+	createdAt := gonostr.Timestamp(record.CreatedAt.Unix())
+	s := p.projection()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if createdAt < s.createdAt[key] {
+		return nil
+	}
+	s.createdAt[key] = createdAt
+	if record.PublishState == repository.NostrPublishStateFailed {
+		delete(s.published, key)
+	} else {
+		s.published[key] = projectionFingerprint(record.Kind, tags, record.Content)
+	}
+	return nil
+}
+
 // hydrateProjectionCache warms the dedupe cache for one wire kind from the
 // projection history so an unchanged coordinate is not re-signed merely
 // because the process restarted. Newest record per coordinate wins; only this
@@ -572,11 +643,21 @@ func (p *Projector) publishSignedWithTombstoneDedupe(ctx context.Context, kind i
 		key = projectionKeyOf(wireKind, tags)
 		fingerprint = projectionFingerprint(wireKind, tags, content)
 		// Fail closed on unavailable retained state for dedupable projections:
-		// a cold cache would re-sign every unchanged coordinate. Tombstones are
-		// never deduped, so they do not depend on the cache and must not be
-		// held back by a retained-state read failure.
-		if err := p.hydrateProjectionCache(ctx, wireKind); err != nil && (!isTombstoneTags(tags) || dedupeTombstone) {
-			return err
+		// a cold cache would re-sign every unchanged coordinate. Normal
+		// tombstones are not deduped and need not wait for a retained-state
+		// read; replayable migration tombstones do.
+		var hydrateErr error
+		if tagValue(tags, "legacy_kind") == strconv.Itoa(KindSBOMPackageRegistry) {
+			if coordinateHistory, ok := p.history.(ProjectionCoordinateHistory); ok {
+				hydrateErr = p.hydrateProjectionCoordinate(ctx, key, coordinateHistory)
+			} else {
+				hydrateErr = p.hydrateProjectionCache(ctx, wireKind)
+			}
+		} else {
+			hydrateErr = p.hydrateProjectionCache(ctx, wireKind)
+		}
+		if hydrateErr != nil && (!isTombstoneTags(tags) || dedupeTombstone) {
+			return hydrateErr
 		}
 		contended, unlock = p.lockProjectionKey(key)
 	}

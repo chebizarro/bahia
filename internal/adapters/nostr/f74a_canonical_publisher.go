@@ -139,6 +139,8 @@ func (p *F74aCanonicalPublisher) PublishArtifactSBOMState(ctx context.Context, s
 // field is length-prefixed so embedded separators and empty strings cannot
 // alias another tuple. Package row IDs remain in record content, not in the
 // coordinate. SQL NULL values are represented by the domain's empty strings.
+// Backfill and live writers must use the same representative row ID in content;
+// a changed ID is a changed record and correctly replaces the coordinate.
 func SBOMPackageDTag(pkg *domain.SBOMPackage) string {
 	h := sha256.New()
 	_, _ = h.Write(pkg.SBOMID[:])

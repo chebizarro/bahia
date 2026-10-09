@@ -7,6 +7,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/bbolt"
 )
 
 func openTempOutbox(t *testing.T) (*Outbox, string) {
@@ -186,4 +187,95 @@ func TestOutboxListFailedReturnsFailedEntriesOldestFirst(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, one, 1)
 	require.Equal(t, a.ID, one[0].Event.ID)
+}
+
+func TestOutboxLatestByCoordinateUsesDurableIndexAndPrunesAtomically(t *testing.T) {
+	outbox, path := openTempOutbox(t)
+	key := nostr.Generate()
+	author := key.Public()
+	now := nostr.Now()
+	d := "artifact:sbom-package:v2:fixture"
+	old := signed(t, key, nostr.Kind(30900), now-1, nostr.Tags{{"d", d}}, `{"id":"old"}`)
+	newer := signed(t, key, nostr.Kind(30900), now, nostr.Tags{{"d", d}}, `{"id":"new"}`)
+	other := signed(t, key, nostr.Kind(30900), now+1, nostr.Tags{{"d", d + ":other"}}, `{"id":"other"}`)
+	for _, ev := range []nostr.Event{old, newer, other} {
+		_, err := outbox.Enqueue(OutboxEntry{Event: ev, Target: "control-plane"})
+		require.NoError(t, err)
+	}
+	entry, found, err := outbox.LatestByCoordinate("control-plane", 30900, author, d)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, newer.ID, entry.Event.ID)
+	_, found, err = outbox.LatestByCoordinate("other-target", 30900, author, d)
+	require.NoError(t, err)
+	require.False(t, found)
+	_, found, err = outbox.LatestByCoordinate("control-plane", 30900, nostr.Generate().Public(), d)
+	require.NoError(t, err)
+	require.False(t, found)
+
+	settledAt := time.Now().UTC()
+	_, err = outbox.CommitRound(newer.ID, OutboxRound{State: OutboxFailed, At: settledAt})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Close())
+	reopened, err := OpenOutbox(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+	entry, found, err = reopened.LatestByCoordinate("control-plane", 30900, author, d)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, newer.ID, entry.Event.ID)
+	require.Equal(t, OutboxFailed, entry.State)
+
+	removed, err := reopened.Prune(settledAt.Add(time.Second), settledAt.Add(time.Second))
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	entry, found, err = reopened.LatestByCoordinate("control-plane", 30900, author, d)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, old.ID, entry.Event.ID, "pruning newest entry reveals earlier retained coordinate")
+}
+
+func TestOutboxLatestByCoordinateBreaksTimestampTiesByLowestID(t *testing.T) {
+	outbox, _ := openTempOutbox(t)
+	key := nostr.Generate()
+	d := "artifact:sbom-package:v2:tie"
+	at := nostr.Now()
+	a := signed(t, key, 30900, at, nostr.Tags{{"d", d}}, `{"id":"a"}`)
+	b := signed(t, key, 30900, at, nostr.Tags{{"d", d}}, `{"id":"b"}`)
+	for _, ev := range []nostr.Event{a, b} {
+		_, err := outbox.Enqueue(OutboxEntry{Event: ev, Target: "control-plane"})
+		require.NoError(t, err)
+	}
+	entry, found, err := outbox.LatestByCoordinate("control-plane", 30900, key.Public(), d)
+	require.NoError(t, err)
+	require.True(t, found)
+	want := a.ID
+	if b.ID.Hex() < a.ID.Hex() {
+		want = b.ID
+	}
+	require.Equal(t, want, entry.Event.ID)
+}
+
+func TestOutboxOpenBackfillsCoordinateIndexForPreIndexEntries(t *testing.T) {
+	outbox, path := openTempOutbox(t)
+	key := nostr.Generate()
+	d := "artifact:sbom-package:v2:upgrade"
+	ev := signed(t, key, 30900, nostr.Now(), nostr.Tags{{"d", d}}, `{"id":"package"}`)
+	_, err := outbox.Enqueue(OutboxEntry{Event: ev, Target: "control-plane"})
+	require.NoError(t, err)
+	// Older outbox files contain the durable entry and pending index, but
+	// neither the package-coordinate bucket nor its completion marker.
+	require.NoError(t, outbox.shared.db.Update(func(tx *bbolt.Tx) error {
+		return tx.DeleteBucket(outboxCoordinatesBucket)
+	}))
+	require.NoError(t, outbox.Close())
+
+	reopened, err := OpenOutbox(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reopened.Close() })
+	entry, found, err := reopened.LatestByCoordinate("control-plane", 30900, key.Public(), d)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, ev.ID, entry.Event.ID)
+	require.Equal(t, OutboxPending, entry.State)
 }

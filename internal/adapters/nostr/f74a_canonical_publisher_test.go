@@ -15,6 +15,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -181,6 +182,24 @@ func TestF74aLegacyPackageTombstoneUsesOldCoordinate(t *testing.T) {
 	require.NotEqual(t, eventDTag(all[0]), eventDTag(all[1]))
 }
 
+// A kind-wide hydration result can omit an older pending package coordinate
+// once the daemon holds more than projectionHydrateLimit other 30900 records.
+// The direct coordinate read must be used instead of that capped result.
+type packageCoordinateOnlyHistory struct {
+	ProjectionHistory
+	coordinate ProjectionCoordinateHistory
+	listCalls  int
+}
+
+func (h *packageCoordinateOnlyHistory) ListByKind(context.Context, int, int) ([]repository.NostrEventRecord, error) {
+	h.listCalls++
+	return nil, errors.New("kind-wide history is outside the bounded package replay path")
+}
+
+func (h *packageCoordinateOnlyHistory) LatestByCoordinate(ctx context.Context, kind int, d string) (*repository.NostrEventRecord, error) {
+	return h.coordinate.LatestByCoordinate(ctx, kind, d)
+}
+
 func TestF74aQueuedSemanticPackageAndLegacyTombstoneDedupeAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -201,15 +220,24 @@ func TestF74aQueuedSemanticPackageAndLegacyTombstoneDedupeAcrossRestart(t *testi
 	counts, err = first.outbox.Counts()
 	require.NoError(t, err)
 	require.Equal(t, int64(2), counts.Pending)
+	for ev := range first.store.QueryEvents(gonostr.Filter{Kinds: []gonostr.Kind{KindCASControlState}, Tags: gonostr.TagMap{"d": {"artifact:sbom-package:" + pkg.ID.String()}}, Limit: 1}) {
+		require.NoError(t, first.store.DeleteEvent(ev.ID), "the retained tombstone must survive a missing event-store cache record")
+	}
 	first.close()
 
 	restarted := startLocalHistoryDaemon(t, dir, script)
+	history := &packageCoordinateOnlyHistory{
+		ProjectionHistory: restarted.projector.history,
+		coordinate:        restarted.projector.history.(ProjectionCoordinateHistory),
+	}
+	restarted.projector.history = history
 	restartedPub := NewF74aCanonicalPublisher(restarted.projector, nil)
 	require.NoError(t, restartedPub.PublishSBOMPackage(ctx, pkg))
 	require.NoError(t, restartedPub.PublishLegacySBOMPackageTombstone(ctx, pkg))
 	counts, err = restarted.outbox.Counts()
 	require.NoError(t, err)
 	require.Equal(t, int64(2), counts.Pending, "cursor replay must not add signed pending events")
+	require.Zero(t, history.listCalls, "package replay must not read a capped kind-wide horizon")
 	require.Equal(t, 4, script.totalCalls(), "each distinct coordinate was attempted against two relays once")
 	pending, err := restarted.outbox.ListPending("control-plane", nil, 10)
 	require.NoError(t, err)
@@ -236,6 +264,8 @@ func TestF74aSemanticPackageChangedRepresentativeReplacesWithNewerEvent(t *testi
 	var content domain.SBOMPackage
 	require.NoError(t, json.Unmarshal([]byte(events[1].Content), &content))
 	require.Equal(t, otherRow.ID, content.ID, "representative row identity remains visible in content")
+	require.NoError(t, pub.PublishSBOMPackage(ctx, &otherRow))
+	require.Len(t, sink.byKind(KindCASControlState), 2, "a live import normalized to the same representative does not re-sign")
 }
 
 func TestF74aLegacyTombstoneRefusalIsNotReportedAsStaged(t *testing.T) {
@@ -256,4 +286,50 @@ func TestF74aLegacyTombstoneRefusalIsNotReportedAsStaged(t *testing.T) {
 	require.True(t, errors.Is(err, ErrPublishAbandoned))
 	require.Equal(t, "dirty", marker.value)
 	require.Equal(t, 1, marker.writes)
+}
+
+func TestF74aPendingPackageSurvivesCrashBeforeEventStoreCacheWrite(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	script := newRelayScript()
+	script.setDown(cpRelayA, true)
+	script.setDown(cpRelayB, true)
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module"}
+	first := startLocalHistoryDaemon(t, dir, script)
+	require.NoError(t, NewF74aCanonicalPublisher(first.projector, nil).PublishSBOMPackage(ctx, pkg))
+	var held gonostr.Event
+	for ev := range first.store.QueryEvents(gonostr.Filter{Kinds: []gonostr.Kind{KindCASControlState}, Tags: gonostr.TagMap{"d": {SBOMPackageDTag(pkg)}}, Limit: 1}) {
+		held = ev
+	}
+	require.NotEqual(t, gonostr.ZeroID, held.ID)
+	require.NoError(t, first.store.DeleteEvent(held.ID), "simulate crash after outbox commit and before cache write")
+	first.close()
+
+	restarted := startLocalHistoryDaemon(t, dir, script)
+	require.NoError(t, NewF74aCanonicalPublisher(restarted.projector, nil).PublishSBOMPackage(ctx, pkg))
+	counts, err := restarted.outbox.Counts()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), counts.Pending)
+	require.Equal(t, 2, script.totalCalls(), "restart must not sign or send a second event")
+}
+
+func TestF74aPackageDedupeAfterPublishedOutboxEntryPruned(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	script := newRelayScript()
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module"}
+	first := startLocalHistoryDaemon(t, dir, script)
+	require.NoError(t, NewF74aCanonicalPublisher(first.projector, nil).PublishSBOMPackage(ctx, pkg))
+	require.Equal(t, 2, script.totalCalls())
+	removed, err := first.outbox.Prune(time.Now().Add(time.Hour), time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, 1, removed, "only settled entries may be pruned")
+	first.close()
+
+	restarted := startLocalHistoryDaemon(t, dir, script)
+	require.NoError(t, NewF74aCanonicalPublisher(restarted.projector, nil).PublishSBOMPackage(ctx, pkg))
+	require.Equal(t, 2, script.totalCalls(), "the retained local event prevents re-signing after outbox pruning")
+	counts, err := restarted.outbox.Counts()
+	require.NoError(t, err)
+	require.Zero(t, counts.Pending)
 }

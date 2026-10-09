@@ -114,6 +114,33 @@ func (r *LocalEventRepository) GetByID(_ context.Context, id string) (*repositor
 	return nil, nil
 }
 
+// LatestByCoordinate reads only one addressable coordinate through the local
+// store's indexed #d query. The author-scoped view prevents another signer
+// from satisfying the daemon projector's dedupe check. An undelivered marker
+// read error is propagated so abandoned output cannot look delivered.
+func (r *LocalEventRepository) LatestByCoordinate(ctx context.Context, kind int, d string) (*repository.NostrEventRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kind)}, Tags: nostr.TagMap{"d": {d}}, Limit: 1}
+	if len(r.authors) > 0 {
+		filter.Authors = r.authors
+	}
+	for ev := range r.store.QueryEvents(filter) {
+		if !r.authored(ev) {
+			continue
+		}
+		rec := localEventRecord(ev)
+		if _, found, err := r.store.Undelivered(ev); err != nil {
+			return nil, fmt.Errorf("read delivery state for coordinate %d:%s: %w", kind, d, err)
+		} else if found {
+			rec.PublishState = repository.NostrPublishStateFailed
+		}
+		return &rec, nil
+	}
+	return nil, ctx.Err()
+}
+
 // ListByKind returns the newest stored events of kind (limit <= 0 means 50).
 func (r *LocalEventRepository) ListByKind(ctx context.Context, kind int, limit int) ([]repository.NostrEventRecord, error) {
 	return r.ListByKinds(ctx, []int{kind}, defaultLimit(limit, 50))
