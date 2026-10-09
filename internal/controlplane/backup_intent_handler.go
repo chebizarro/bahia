@@ -353,17 +353,17 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 			!backupRunMetadataContains(receipt.Metadata, requested.Metadata) {
 			return fmt.Errorf("backup run request intake paused: execution inputs conflict with the signed request")
 		}
-		if requested.ExecutionSnapshot != nil || receipt.ExecutionSnapshot != nil {
-			if err := validateBackupExecutionSnapshot(requested, receipt); err != nil {
-				return fmt.Errorf("backup run request intake paused: %w", err)
-			}
-			proof, ok := h.runReceipts.(backupExecutionConfigProof)
-			if !ok {
-				return fmt.Errorf("backup run request intake paused: canonical configuration proof is unavailable")
-			}
-			if err := proof.VerifyBackupExecutionConfig(ctx, requested.ExecutionSnapshot); err != nil {
-				return fmt.Errorf("backup run request intake paused: %w", err)
-			}
+		// Legacy run states remain inspectable, but never establish execution
+		// eligibility without the exact signed and ACK-proven config version.
+		if err := validateBackupExecutionSnapshot(requested, receipt); err != nil {
+			return fmt.Errorf("backup run request intake paused: %w", err)
+		}
+		proof, ok := h.runReceipts.(backupExecutionConfigProof)
+		if !ok {
+			return fmt.Errorf("backup run request intake paused: canonical configuration proof is unavailable")
+		}
+		if err := proof.VerifyBackupExecutionConfig(ctx, requested.ExecutionSnapshot); err != nil {
+			return fmt.Errorf("backup run request intake paused: %w", err)
 		}
 		if receipt.Status == domain.RunStatusQueued || receipt.Status == domain.RunStatusRunning {
 			return fmt.Errorf("backup run request intake paused: an ACKed canonical run is %s but canonical execution recovery is unavailable", receipt.Status)

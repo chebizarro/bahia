@@ -44,6 +44,16 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 		require.NoError(t, err)
 	}
 	require.ErrorContains(t, proof.VerifyBackupExecutionConfig(t.Context(), snapshot), "no ACKed relay delivery receipt")
+	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: recipeEvent, Target: "control-plane"})
+	require.NoError(t, err)
+	_, err = outbox.CommitRound(recipeEvent.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Rejected: "denied"}}, State: localstore.OutboxPending})
+	require.NoError(t, err)
+	require.ErrorContains(t, proof.VerifyBackupExecutionConfig(t.Context(), snapshot), "no ACKed relay delivery receipt", "a delivery flag without relay OK is not quorum proof")
+	_, err = outbox.CommitRound(recipeEvent.ID, localstore.OutboxRound{Rounds: 2, Delivered: false,
+		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPending})
+	require.NoError(t, err)
+	require.ErrorContains(t, proof.VerifyBackupExecutionConfig(t.Context(), snapshot), "no ACKed relay delivery receipt", "one OK without the publisher's delivered/quorum marker is insufficient")
 	for _, ev := range []nostr.Event{recipeEvent, repoEvent, policyEvent} {
 		_, err = outbox.Enqueue(localstore.OutboxEntry{Event: ev, Target: "control-plane"})
 		require.NoError(t, err)
@@ -51,6 +61,17 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 		require.NoError(t, err)
 	}
 	require.NoError(t, proof.VerifyBackupExecutionConfig(t.Context(), snapshot))
+	foreign := configSnapshotEvent(t, nostr.Generate(), kinds.BackupRepositoryRegistry, kinds.CPStateTopicBackupRepository, nostradapter.BackupRepositoryDTag(repo.ID), repoTags, repoContent)
+	_, err = events.SaveEvent(foreign)
+	require.NoError(t, err)
+	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: foreign, Target: "control-plane"})
+	require.NoError(t, err)
+	_, err = outbox.CommitRound(foreign.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
+	require.NoError(t, err)
+	wrongAuthor := *snapshot
+	wrongAuthor.RepositoryEventID = foreign.ID.Hex()
+	require.ErrorContains(t, proof.VerifyBackupExecutionConfig(t.Context(), &wrongAuthor), "invalid signed envelope", "an ACKed foreign author cannot supply the config version")
 	requestKey := nostr.Generate()
 	request := backupReceiptRequest(t, requestKey)
 	var requested map[string]any

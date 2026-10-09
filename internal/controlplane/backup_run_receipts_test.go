@@ -148,14 +148,14 @@ func TestBackupIntentRunReceiptIsReadOnlyAndStillRejects(t *testing.T) {
 	intent, err := ParseIntent(&request)
 	require.NoError(t, err)
 	intent.Actor = request.PubKey.Hex()
-	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "ACKed canonical run is queued")
+	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "execution snapshot is missing")
 	statuses := &statusCollector{}
 	processor := NewIntentProcessor(NewTrustSet([]string{request.PubKey.Hex()}, zap.NewNop()), openTestStore(t),
 		NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()),
 		IntentProcessorConfig{EnabledDomains: map[string]bool{"backup": true}}, zap.NewNop())
 	processor.RegisterHandler("backup", handler)
-	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), intent), "ACKed canonical run is queued")
-	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), intent), "ACKed canonical run is queued")
+	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), intent), "execution snapshot is missing")
+	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), intent), "execution snapshot is missing")
 	require.Len(t, statuses.events, 2, "duplicate requests remain rejected rather than becoming accepted markers")
 	require.Equal(t, "rejected", backupReceiptTag(statuses.events[0].Tags, "status"))
 	require.Equal(t, "rejected", backupReceiptTag(statuses.events[1].Tags, "status"))
@@ -181,7 +181,7 @@ func TestBackupIntentRunReceiptIsReadOnlyAndStillRejects(t *testing.T) {
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
 	require.NoError(t, err)
 	intent.Content["recipe_id"] = run.RecipeID.String()
-	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "ACKed canonical terminal run exists")
+	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "execution snapshot is missing")
 	require.Zero(t, registry.workflowCreates)
 }
 
