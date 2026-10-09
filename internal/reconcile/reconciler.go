@@ -2,7 +2,9 @@
 package reconcile
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -225,6 +227,7 @@ func (r *Reconciler) reconcileMode(env *domain.Environment, unit *domain.Deploym
 }
 
 func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.EnvironmentServiceState) error {
+	previousFailureMetadata, _ := json.Marshal(currentState.ReconcileFailureMetadata)
 	// Active deployments remain excluded from runtime observation. Once a full
 	// deployment has succeeded, however, its terminal health verdict may still
 	// be "starting". Let the normal observation path resume so the unit can
@@ -494,6 +497,13 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		// Publish the canonical cp-state record directly to relays; the
 		// projector does not re-project it from bus events.
 		r.publishStateToRelay(ctx, currentState, persistedObservation)
+	} else {
+		failureMetadata, _ := json.Marshal(currentState.ReconcileFailureMetadata)
+		if !bytes.Equal(previousFailureMetadata, failureMetadata) {
+			// Diagnostics such as starting_since are durable canonical state even
+			// when the runtime sample and drift verdict remain unchanged.
+			r.publishStateToRelay(ctx, currentState, persistedObservation)
+		}
 	}
 	if newDrift == domain.DriftStatusDrifted && mode == domain.ReconcileModeAutoApply {
 		return r.autoApplyDesiredState(ctx, currentState)
@@ -530,12 +540,22 @@ func (r *Reconciler) repairStuckRouteOnlyState(ctx context.Context, currentState
 	if state == nil || state.DriftStatus != domain.DriftStatusDeploying || state.DesiredIntentID == nil || *state.DesiredIntentID != intent.ID {
 		return false, nil
 	}
+	var linkedObservation *domain.RuntimeObservation
+	if r.statePublisher != nil && state.CurrentObservationID != nil {
+		linkedObservation, err = r.observations.GetByID(ctx, *state.CurrentObservationID)
+		if err != nil {
+			return false, fmt.Errorf("reading route-only linked runtime observation: %w", err)
+		}
+		if linkedObservation == nil || linkedObservation.ServiceID != state.ServiceID || linkedObservation.EnvironmentID != state.EnvironmentID {
+			return false, fmt.Errorf("route-only linked runtime observation %s is absent or mismatched", *state.CurrentObservationID)
+		}
+	}
 	state.DriftStatus = domain.DriftStatusInSync
 	if err := r.state.Upsert(ctx, state); err != nil {
 		return false, err
 	}
 	// Publish the repaired state directly to relays.
-	r.publishStateToRelay(ctx, state, nil)
+	r.publishStateToRelay(ctx, state, linkedObservation)
 	r.publisher.Publish(ctx, events.Event{
 		Type:     events.EventEnvironmentServiceStateChanged,
 		EntityID: state.ServiceID.String() + ":" + state.EnvironmentID.String(),

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
@@ -87,6 +88,11 @@ func tagValue(tags gonostr.Tags, key string) string {
 		}
 	}
 	return ""
+}
+
+func signedTagMatchesIfPresent(tags gonostr.Tags, key, expected string) bool {
+	value := tagValue(tags, key)
+	return value == "" || value == expected
 }
 
 type canonicalRecord[T any] struct {
@@ -371,16 +377,22 @@ func (s *CanonicalRuntimeSource) GetInferenceEndpoint(ctx context.Context, id uu
 		if json.Unmarshal([]byte(ev.Content), &endpoint) != nil || endpoint.ID != id {
 			continue
 		}
-		env, err := s.environment(ctx, endpoint.EnvironmentID)
-		if err != nil {
-			return nil, err
-		}
-		if env == nil {
+		// The environment may have been renamed since this event was signed.
+		// Validate the event's own immutable coordinate and content identity;
+		// never reinterpret it using a mutable current registry name.
+		d := tagValue(ev.Tags, "d")
+		if endpoint.EnvironmentID == uuid.Nil || endpoint.Name == "" ||
+			!strings.HasPrefix(d, "endpoint:"+endpoint.Name+":") ||
+			strings.TrimPrefix(d, "endpoint:"+endpoint.Name+":") == "" ||
+			!signedTagMatchesIfPresent(ev.Tags, "endpoint", d) ||
+			!signedTagMatchesIfPresent(ev.Tags, "endpoint_id", id.String()) ||
+			!signedTagMatchesIfPresent(ev.Tags, "environment_id", endpoint.EnvironmentID.String()) ||
+			!signedTagMatchesIfPresent(ev.Tags, "name", endpoint.Name) ||
+			!signedTagMatchesIfPresent(ev.Tags, "environment", strings.TrimPrefix(d, "endpoint:"+endpoint.Name+":")) {
 			continue
 		}
-		d := "endpoint:" + endpoint.Name + ":" + env.Name
 		rec, ok := decodeCanonical[domain.MLInferenceEndpoint](ev, d)
-		if ok {
+		if ok && rec.Value.ID == id && rec.Value.EnvironmentID == endpoint.EnvironmentID && rec.Value.Name == endpoint.Name {
 			if rec.Deleted {
 				return nil, nil
 			}
@@ -405,14 +417,18 @@ func (s *CanonicalRuntimeSource) ListInferenceStates(ctx context.Context) ([]dom
 		if err != nil {
 			return nil, err
 		}
-		env, err := s.environment(ctx, state.EnvironmentID)
-		if err != nil {
-			return nil, err
-		}
-		if endpoint == nil || env == nil {
+		if endpoint == nil || endpoint.EnvironmentID != state.EnvironmentID {
 			continue
 		}
-		d := "endpoint-state:" + endpoint.Name + ":" + env.Name
+		d := tagValue(ev.Tags, "d")
+		if !strings.HasPrefix(d, "endpoint-state:"+endpoint.Name+":") ||
+			strings.TrimPrefix(d, "endpoint-state:"+endpoint.Name+":") == "" ||
+			!signedTagMatchesIfPresent(ev.Tags, "endpoint", "endpoint:"+endpoint.Name+":"+strings.TrimPrefix(d, "endpoint-state:"+endpoint.Name+":")) ||
+			!signedTagMatchesIfPresent(ev.Tags, "endpoint_id", state.EndpointID.String()) ||
+			!signedTagMatchesIfPresent(ev.Tags, "environment_id", state.EnvironmentID.String()) ||
+			!signedTagMatchesIfPresent(ev.Tags, "environment", strings.TrimPrefix(d, "endpoint-state:"+endpoint.Name+":")) {
+			continue
+		}
 		rec, ok := decodeCanonical[domain.MLInferenceState](ev, d)
 		if ok && !rec.Deleted && rec.Value.EndpointID == state.EndpointID && rec.Value.EnvironmentID == state.EnvironmentID {
 			out = append(out, rec.Value)

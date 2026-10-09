@@ -27,6 +27,18 @@ func saveCanonicalRuntimeEvent(t *testing.T, store *localstore.Store, key gonost
 	return event
 }
 
+func saveCanonicalRuntimeJSON(t *testing.T, store *localstore.Store, key gonostr.SecretKey, kind int, coordinate string, value any, at gonostr.Timestamp) {
+	t.Helper()
+	content, err := json.Marshal(value)
+	require.NoError(t, err)
+	var fields map[string]any
+	require.NoError(t, json.Unmarshal(content, &fields))
+	fields["deleted"] = false
+	content, err = json.Marshal(fields)
+	require.NoError(t, err)
+	saveCanonicalRuntimeEvent(t, store, key, kind, coordinate, false, string(content), at, nil)
+}
+
 func canonicalRuntimeFixture(t *testing.T, store *localstore.Store, key gonostr.SecretKey, serviceID, envID uuid.UUID, desiredHash, host string) {
 	t.Helper()
 	service := domain.Service{ID: serviceID, Name: "canonical-api", RuntimeType: domain.RuntimeTypeDocker}
@@ -174,21 +186,183 @@ func TestCanonicalDNSProjectionPreservesLLMMLAndWorkerFamilies(t *testing.T) {
 	assertEndpoint(t, endpoints, domain.DNSEndpointFamilyWorker, "worker-one", "10.0.0.40")
 }
 
+func TestCanonicalMLProjectionSurvivesEnvironmentRenameAndRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "events.bolt")
+	store, err := localstore.Open(path)
+	require.NoError(t, err)
+	key := gonostr.Generate()
+	envID, endpointID := uuid.New(), uuid.New()
+	saveCanonicalRuntimeJSON(t, store, key, kinds.EnvironmentRegistry, envID.String(),
+		domain.Environment{ID: envID, Name: "prod"}, 100)
+	endpoint := domain.MLInferenceEndpoint{ID: endpointID, Name: "embedding", EnvironmentID: envID}
+	state := domain.MLInferenceState{EndpointID: endpointID, EnvironmentID: envID,
+		BackendHealth: domain.HealthStatusHealthy, BackendEndpoint: "http://10.0.0.30:8080"}
+	saveCanonicalRuntimeJSON(t, store, key, kinds.MLInferenceEndpointRegistry, "endpoint:embedding:prod", endpoint, 101)
+	saveCanonicalRuntimeJSON(t, store, key, kinds.MLInferenceEndpointState, "endpoint-state:embedding:prod", state, 102)
+	// A newer signed environment name does not rewrite the signed endpoint
+	// coordinate. Malformed coordinates with the same content ID stay ignored.
+	saveCanonicalRuntimeJSON(t, store, key, kinds.EnvironmentRegistry, envID.String(),
+		domain.Environment{ID: envID, Name: "production"}, 103)
+	saveCanonicalRuntimeJSON(t, store, key, kinds.MLInferenceEndpointRegistry, "endpoint:wrong:prod", endpoint, 104)
+	saveCanonicalRuntimeJSON(t, store, key, kinds.MLInferenceEndpointState, "endpoint-state:wrong:prod", state, 105)
+	require.NoError(t, store.Close())
+	store, err = localstore.Open(path)
+	require.NoError(t, err)
+	defer store.Close()
+	source, err := NewCanonicalRuntimeSource(store, key.Public().Hex())
+	require.NoError(t, err)
+	gotEndpoint, err := source.GetInferenceEndpoint(ctx, endpointID)
+	require.NoError(t, err)
+	require.NotNil(t, gotEndpoint)
+	require.Equal(t, "embedding", gotEndpoint.Name)
+	gotStates, err := source.ListInferenceStates(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []domain.MLInferenceState{state}, gotStates)
+	services, environments, states, observations, _ := CanonicalRuntimeRepositories(source, nil, nil, nil, nil, nil)
+	cfg := testDNSConfig()
+	cfg.Projection.EnvironmentZones["production"] = "prod.example"
+	projector := NewDNSProjector(services, environments, states, observations, source, source, source, cfg, zap.NewNop())
+	endpoints, err := projector.ListDNSEndpoints(ctx)
+	require.NoError(t, err)
+	require.Len(t, endpoints, 1)
+	assertEndpoint(t, endpoints, domain.DNSEndpointFamilyML, "embedding", "10.0.0.30")
+}
+
 type storingRuntimeStatePublisher struct {
 	t     *testing.T
 	store *localstore.Store
 	key   gonostr.SecretKey
 	count int
+	at    gonostr.Timestamp
 }
 
 func (p *storingRuntimeStatePublisher) PublishState(_ context.Context, state *domain.EnvironmentServiceState, obs *domain.RuntimeObservation) error {
 	p.count++
 	tags, content := nostrAdapter.RuntimeStateRecord(state, obs)
-	saveCanonicalRuntimeEvent(p.t, p.store, p.key, kinds.ServiceState, nostrAdapter.ServiceStateDTag(state.ServiceID, state.EnvironmentID), false, content, gonostr.Timestamp(200+p.count), tags)
+	at := p.at
+	if at == 0 {
+		at = 200
+	}
+	saveCanonicalRuntimeEvent(p.t, p.store, p.key, kinds.ServiceState, nostrAdapter.ServiceStateDTag(state.ServiceID, state.EnvironmentID), false, content, at+gonostr.Timestamp(p.count), tags)
 	return nil
 }
 func (p *storingRuntimeStatePublisher) PublishStateTombstone(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
+}
+
+func TestCanonicalStartingMarkerPersistsAcrossCyclesAndRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "events.bolt")
+	store, err := localstore.Open(path)
+	require.NoError(t, err)
+	key := gonostr.Generate()
+	serviceID, envID := uuid.New(), uuid.New()
+	canonicalRuntimeFixture(t, store, key, serviceID, envID, "", "")
+	startingObservation := &domain.RuntimeObservation{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: envID,
+		NormalizedHash: "canonical-hash", HealthStatus: domain.HealthStatusStarting,
+		Source: "mock", ObservedAt: time.Unix(100, 0).UTC()}
+	initial := &domain.EnvironmentServiceState{ServiceID: serviceID, EnvironmentID: envID,
+		CurrentObservationID: &startingObservation.ID, DesiredHash: "canonical-hash", DriftStatus: domain.DriftStatusUnknown}
+	tags, content := nostrAdapter.RuntimeStateRecord(initial, startingObservation)
+	saveCanonicalRuntimeEvent(t, store, key, kinds.ServiceState, nostrAdapter.ServiceStateDTag(serviceID, envID), false, content, 101, tags)
+	source, err := NewCanonicalRuntimeSource(store, key.Public().Hex())
+	require.NoError(t, err)
+	build := func(pub RuntimeStatePublisher) *Reconciler {
+		services, environments, states, observations, units := CanonicalRuntimeRepositories(source, nil, nil, nil, nil, nil)
+		r := NewReconciler(services, environments, nil, units, observations, states,
+			&mockRuntimeResolver{rt: &mockRuntime{observeNormHash: "canonical-hash", observeHealth: domain.HealthStatusStarting}},
+			&mockPublisher{}, time.Minute, zap.NewNop())
+		r.SetRuntimeStatePublisher(pub)
+		return r
+	}
+	pub := &storingRuntimeStatePublisher{t: t, store: store, key: key}
+	current, err := source.state(ctx, serviceID, envID)
+	require.NoError(t, err)
+	require.NoError(t, build(pub).reconcileOne(ctx, &current.EnvironmentServiceState))
+	require.Equal(t, 1, pub.count, "starting_since must be signed even when only diagnostics changed")
+	first, err := source.state(ctx, serviceID, envID)
+	require.NoError(t, err)
+	marker, ok := first.ReconcileFailureMetadata[startingSinceKey].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, marker)
+	require.Equal(t, domain.DriftStatusUnknown, first.DriftStatus)
+	require.NoError(t, build(pub).reconcileOne(ctx, &first.EnvironmentServiceState))
+	require.Equal(t, 1, pub.count, "unchanged starting sample must not re-sign")
+	second, err := source.state(ctx, serviceID, envID)
+	require.NoError(t, err)
+	require.Equal(t, marker, second.ReconcileFailureMetadata[startingSinceKey])
+	// Advance the signed marker rather than sleeping ten minutes. It models a
+	// daemon restart after the same starting episode has exceeded its budget.
+	second.ReconcileFailureMetadata[startingSinceKey] = time.Now().Add(-11 * time.Minute).UTC().Format(time.RFC3339)
+	linked, err := source.observation(ctx, serviceID, envID)
+	require.NoError(t, err)
+	tags, content = nostrAdapter.RuntimeStateRecord(&second.EnvironmentServiceState, linked)
+	saveCanonicalRuntimeEvent(t, store, key, kinds.ServiceState, nostrAdapter.ServiceStateDTag(serviceID, envID), false, content, 300, tags)
+	require.NoError(t, store.Close())
+	store, err = localstore.Open(path)
+	require.NoError(t, err)
+	defer store.Close()
+	source, err = NewCanonicalRuntimeSource(store, key.Public().Hex())
+	require.NoError(t, err)
+	restarted := &storingRuntimeStatePublisher{t: t, store: store, key: key, at: 400}
+	current, err = source.state(ctx, serviceID, envID)
+	require.NoError(t, err)
+	require.NoError(t, build(restarted).reconcileOne(ctx, &current.EnvironmentServiceState))
+	require.Equal(t, 1, restarted.count)
+	failed, err := source.state(ctx, serviceID, envID)
+	require.NoError(t, err)
+	require.Equal(t, domain.DriftStatusDrifted, failed.DriftStatus)
+	require.Contains(t, failed.ReconcileFailureMetadata[unhealthyEvidenceKey], "did not become healthy")
+}
+
+func TestCanonicalRouteOnlyRepairRetainsDNSObservationAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "events.bolt")
+	store, err := localstore.Open(path)
+	require.NoError(t, err)
+	key := gonostr.Generate()
+	serviceID, envID, intentID, runID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	canonicalRuntimeFixture(t, store, key, serviceID, envID, "hash", "10.0.0.10")
+	source, err := NewCanonicalRuntimeSource(store, key.Public().Hex())
+	require.NoError(t, err)
+	current, err := source.state(ctx, serviceID, envID)
+	require.NoError(t, err)
+	linked, err := source.observation(ctx, serviceID, envID)
+	require.NoError(t, err)
+	current.DesiredIntentID = &intentID
+	current.LastSuccessfulRunID = &runID
+	current.DriftStatus = domain.DriftStatusDeploying
+	tags, content := nostrAdapter.RuntimeStateRecord(&current.EnvironmentServiceState, linked)
+	saveCanonicalRuntimeEvent(t, store, key, kinds.ServiceState, nostrAdapter.ServiceStateDTag(serviceID, envID), false, content, 102, tags)
+	saveCanonicalRuntimeJSON(t, store, key, kinds.DeploymentIntentRegistry, intentID.String(),
+		domain.DeploymentIntent{ID: intentID, ServiceID: serviceID, EnvironmentID: envID, Status: domain.IntentStatusDeployed}, 103)
+	saveCanonicalRuntimeJSON(t, store, key, kinds.DeploymentRunRegistry, runID.String(),
+		domain.DeploymentRun{ID: runID, DeploymentIntentID: intentID, LoomJobID: domain.RouteOnlyDeploymentRunLoomJobID,
+			Status: domain.RunStatusSucceeded, CreatedAt: time.Now().UTC()}, 104)
+	services, environments, states, observations, units := CanonicalRuntimeRepositories(source, nil, nil, nil, nil, nil)
+	_, intents, runs := CanonicalRuntimeHistory(source)
+	pub := &storingRuntimeStatePublisher{t: t, store: store, key: key}
+	r := NewReconciler(services, environments, nil, units, observations, states, nil, &mockPublisher{}, time.Minute, zap.NewNop(), WithDeploymentHistory(intents, runs))
+	r.SetRuntimeStatePublisher(pub)
+	require.NoError(t, r.reconcileOne(ctx, &current.EnvironmentServiceState))
+	require.Equal(t, 1, pub.count)
+	project := func(source *CanonicalRuntimeSource) {
+		services, environments, states, observations, _ := CanonicalRuntimeRepositories(source, nil, nil, nil, nil, nil)
+		projector := NewDNSProjector(services, environments, states, observations, source, source, source, testDNSConfig(), zap.NewNop())
+		endpoints, err := projector.ListDNSEndpoints(ctx)
+		require.NoError(t, err)
+		require.Len(t, endpoints, 1)
+		assertEndpoint(t, endpoints, domain.DNSEndpointFamilyService, "canonical-api", "10.0.0.10")
+	}
+	project(source)
+	require.NoError(t, store.Close())
+	store, err = localstore.Open(path)
+	require.NoError(t, err)
+	defer store.Close()
+	source, err = NewCanonicalRuntimeSource(store, key.Public().Hex())
+	require.NoError(t, err)
+	project(source)
 }
 
 func TestCanonicalRuntimeReconcileDoesNotSignFromDivergentSQLAndDedupesRestart(t *testing.T) {
