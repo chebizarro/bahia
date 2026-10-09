@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -58,12 +59,15 @@ func (r *PgRuntimeObservationRepository) Create(ctx context.Context, obs *domain
 func (r *PgRuntimeObservationRepository) scanObs(row pgx.Row) (*domain.RuntimeObservation, error) {
 	obs := &domain.RuntimeObservation{}
 	var metaJSON, normalizedStateJSON []byte
-	err := row.Scan(&obs.ID, &obs.ServiceID, &obs.EnvironmentID, &obs.DeploymentUnitID, &obs.ObservedImageDigest, &obs.ObservedImageRepo,
-		&obs.ObservedContainerID, &obs.ObservedHost, &obs.ObservedVersion, &obs.HealthStatus, &obs.Source, &metaJSON,
-		&normalizedStateJSON, &obs.NormalizedHash, &obs.ObservedAt)
+	var imageRepo, containerID, host, version, normalizedHash sql.NullString
+	err := row.Scan(&obs.ID, &obs.ServiceID, &obs.EnvironmentID, &obs.DeploymentUnitID, &obs.ObservedImageDigest, &imageRepo,
+		&containerID, &host, &version, &obs.HealthStatus, &obs.Source, &metaJSON,
+		&normalizedStateJSON, &normalizedHash, &obs.ObservedAt)
 	if err != nil {
 		return nil, err
 	}
+	obs.ObservedImageRepo, obs.ObservedContainerID, obs.ObservedHost = imageRepo.String, containerID.String, host.String
+	obs.ObservedVersion, obs.NormalizedHash = version.String, normalizedHash.String
 	if err := unmarshalJSON(metaJSON, &obs.Metadata, "observation metadata"); err != nil {
 		return nil, err
 	}
@@ -77,7 +81,7 @@ func (r *PgRuntimeObservationRepository) scanObs(row pgx.Row) (*domain.RuntimeOb
 }
 
 func (r *PgRuntimeObservationRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.RuntimeObservation, error) {
-	row := r.pool.QueryRow(ctx, `SELECT `+obsColumns+` FROM runtime_observations WHERE id = $1`, id)
+	row := r.pool.QueryRow(ctx, `SELECT `+obsColumns+` FROM runtime_observation_history WHERE id = $1`, id)
 	obs, err := r.scanObs(row)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -90,9 +94,9 @@ func (r *PgRuntimeObservationRepository) GetByID(ctx context.Context, id uuid.UU
 
 func (r *PgRuntimeObservationRepository) GetLatest(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT `+obsColumns+` FROM runtime_observations
+		SELECT `+obsColumns+` FROM runtime_observation_history
 		WHERE service_id = $1 AND environment_id = $2
-		ORDER BY observed_at DESC LIMIT 1
+		ORDER BY observed_at DESC, id DESC LIMIT 1
 	`, serviceID, envID)
 	obs, err := r.scanObs(row)
 	if err != nil {
@@ -106,9 +110,9 @@ func (r *PgRuntimeObservationRepository) GetLatest(ctx context.Context, serviceI
 
 func (r *PgRuntimeObservationRepository) ListByServiceEnv(ctx context.Context, serviceID, envID uuid.UUID, limit int) ([]domain.RuntimeObservation, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT `+obsColumns+` FROM runtime_observations
+		SELECT `+obsColumns+` FROM runtime_observation_history
 		WHERE service_id = $1 AND environment_id = $2
-		ORDER BY observed_at DESC LIMIT $3
+		ORDER BY observed_at DESC, id DESC LIMIT $3
 	`, serviceID, envID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("listing observations: %w", err)
@@ -119,11 +123,14 @@ func (r *PgRuntimeObservationRepository) ListByServiceEnv(ctx context.Context, s
 	for rows.Next() {
 		var obs domain.RuntimeObservation
 		var metaJSON, normalizedStateJSON []byte
-		if err := rows.Scan(&obs.ID, &obs.ServiceID, &obs.EnvironmentID, &obs.DeploymentUnitID, &obs.ObservedImageDigest, &obs.ObservedImageRepo,
-			&obs.ObservedContainerID, &obs.ObservedHost, &obs.ObservedVersion, &obs.HealthStatus, &obs.Source, &metaJSON,
-			&normalizedStateJSON, &obs.NormalizedHash, &obs.ObservedAt); err != nil {
+		var imageRepo, containerID, host, version, normalizedHash sql.NullString
+		if err := rows.Scan(&obs.ID, &obs.ServiceID, &obs.EnvironmentID, &obs.DeploymentUnitID, &obs.ObservedImageDigest, &imageRepo,
+			&containerID, &host, &version, &obs.HealthStatus, &obs.Source, &metaJSON,
+			&normalizedStateJSON, &normalizedHash, &obs.ObservedAt); err != nil {
 			return nil, fmt.Errorf("scanning observation: %w", err)
 		}
+		obs.ObservedImageRepo, obs.ObservedContainerID, obs.ObservedHost = imageRepo.String, containerID.String, host.String
+		obs.ObservedVersion, obs.NormalizedHash = version.String, normalizedHash.String
 		if err := unmarshalJSON(metaJSON, &obs.Metadata, "observation metadata"); err != nil {
 			return nil, fmt.Errorf("reading observation %s: %w", obs.ID, err)
 		}

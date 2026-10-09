@@ -403,7 +403,7 @@ func TestPgRuntimeObservationRepository_NormalizedStateRoundTrip(t *testing.T) {
 	normalizedJSON, _ := json.Marshal(normalized)
 	now := time.Now().UTC()
 
-	mock.ExpectQuery("SELECT .+ FROM runtime_observations").
+	mock.ExpectQuery("SELECT .+ FROM runtime_observation_history").
 		WithArgs(svcID, envID).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "service_id", "environment_id", "deployment_unit_id", "observed_image_digest", "observed_image_repo",
@@ -426,7 +426,7 @@ func TestPgRuntimeObservationRepository_NormalizedStateRoundTrip(t *testing.T) {
 
 	// The persisted state link must resolve the exact observation even when a
 	// newer, unlinked row exists after an interrupted reconciliation.
-	mock.ExpectQuery("SELECT .+ FROM runtime_observations WHERE id =").
+	mock.ExpectQuery("SELECT .+ FROM runtime_observation_history WHERE id =").
 		WithArgs(obs.ID).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"id", "service_id", "environment_id", "deployment_unit_id", "observed_image_digest", "observed_image_repo",

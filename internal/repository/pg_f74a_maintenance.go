@@ -36,7 +36,7 @@ const f74aObservationSelect = `SELECT o.id, o.service_id, o.environment_id,
 	o.health_status, o.source, o.metadata, o.normalized_state,
 	COALESCE(o.normalized_hash, ''), o.observed_at,
 	EXISTS(SELECT 1 FROM environment_service_state s WHERE s.current_observation_id = o.id)
-	FROM runtime_observations o`
+	FROM runtime_observation_history o`
 
 const f74aObservationScan = f74aObservationSelect + ` ORDER BY o.service_id, o.environment_id, o.observed_at, o.id`
 

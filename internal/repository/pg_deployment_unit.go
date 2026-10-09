@@ -187,6 +187,7 @@ func (r *PgDeploymentUnitRepository) DeleteIfUnreferenced(ctx context.Context, i
 		  AND NOT EXISTS (SELECT 1 FROM deployment_runs WHERE deployment_unit_id = du.id)
 		  AND NOT EXISTS (SELECT 1 FROM deployment_intents WHERE deployment_unit_id = du.id)
 		  AND NOT EXISTS (SELECT 1 FROM runtime_observations WHERE deployment_unit_id = du.id)
+		  AND NOT EXISTS (SELECT 1 FROM runtime_observation_archive WHERE deployment_unit_id = du.id)
 	`, id)
 	if err != nil {
 		return fmt.Errorf("deleting deployment unit: %w", err)
