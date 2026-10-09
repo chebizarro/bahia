@@ -1,10 +1,15 @@
 # F74a backfill and observation compaction
 
-This procedure verifies the derived PostgreSQL source, canonical F74a
-publication, and safe removal of redundant historical runtime samples. It
-applies only to a Bahia image whose `bahia-migrate` binary exposes
-`f74a-census` and `f74a-compact`. If either action or its safety flags are
-absent, stop: the older image cannot perform this procedure. PostgreSQL is a
+This procedure verifies the derived PostgreSQL source and canonical F74a
+publication, and measures potential redundant historical runtime samples.
+**Confirmed deletion and live compaction are not available.** The shipped
+`f74a-census` and `f74a-compact --cutoff` actions are read-only;
+`f74a-compact --confirm` is rejected. There is no `--batch-size` or
+`--backup-id` flag. Do not use another tool or manual SQL to bypass this
+guard. The deletion and rollback acceptance gate remains blocked until a
+concurrency-safe implementation is reviewed and shipped. This runbook
+applies only to a Bahia image exposing both read-only actions. If either
+action is absent, stop: the older image cannot perform this procedure. PostgreSQL is a
 derived index; preserve the service key, relay-held canonical records, and
 local event store/outbox when backing up or restoring the daemon.
 
@@ -39,9 +44,9 @@ and material transitions from suppressible no-op samples. Do not equate 1.5
 million observations with 1.5 million canonical publications: only the
 state-linked current observation for each state is a backfill source. Check
 that the reported cutoff is exactly the requested cutoff. Investigate any
-foreign-key or coordinate mismatch before compacting.
+foreign-key or coordinate mismatch before interpreting a dry-run estimate.
 
-## 2. Back up and prove restore before deletion
+## 2. Rehearse backup and restore
 
 Take a consistent, verified backup through the approved PostgreSQL backup
 control plane, and back up Bahia's local event store and outbox through their
@@ -56,41 +61,27 @@ and material transitions to the source receipt. Confirm the restored daemon
 uses a staging key and isolated relays, or leave it stopped; never let a
 restored production key publish concurrently with the live authority.
 
-## 3. Rehearse dry-run and bounded deletion
+## 3. Run the read-only compaction estimate
 
-On the restored staging database, run the dry run. `f74a-compact` does not
-delete unless `--confirm` and `--backup-id` are both present.
-
-```sh
-bahia-migrate f74a-compact --config "$STAGING_CONFIG" \
-  --cutoff "$CUTOFF" --batch-size 250
-```
-
-The dry run must identify eligible **unlinked, older no-op observation
-samples** only, retain the first row of every material run, retain every
-state-linked row, and retain all rows newer than the cutoff. It also reports
-duplicate packages, but package physical deletion is disabled. Record the
-proposed count, cutoff, batch size, and a sample of preserved forensic
-transitions. An unexpected count, an absent cutoff, or a proposed state-link
-deletion is a stop condition.
-
-Use the immutable backup reference obtained in step 2, not an arbitrary
-free-text approval token. Run confirmed batches only in the isolated restore
-first; monitor transaction duration, database I/O/WAL, errors, and outbox
-health. Re-run the same command after an interrupted batch to verify that it
-is idempotent and advances only past committed deletes.
+On the restored staging database, run only the read-only estimate:
 
 ```sh
-bahia-migrate f74a-compact --config "$STAGING_CONFIG" \
-  --cutoff "$CUTOFF" --batch-size 250 \
-  --confirm --backup-id "$BACKUP_ID"
-bahia-migrate f74a-census --config "$STAGING_CONFIG" --cutoff "$CUTOFF"
+bahia-migrate f74a-compact --config "$STAGING_CONFIG" --cutoff "$CUTOFF"
 ```
 
-Compare before/after counts and sampled state links. Restore the original
-backup **again** into a separate isolated database, then repeat the baseline
-census and sampled checks. This second restore proves rollback from the
-compacted state. A missing or failed second restore blocks live deletion.
+The result identifies potential **unlinked, older no-op observation
+samples** while preserving the first row of every material run, every
+state-linked row, and rows newer than the cutoff. It also reports duplicate
+packages; package physical deletion is disabled. Record the estimated count,
+cutoff, and a sample of preserved forensic transitions. An unexpected count,
+an absent cutoff, or a proposed state-link deletion is a stop condition.
+
+There is no executable confirmed-deletion command. Concurrent backdated
+observations can invalidate a dry-run decision, so neither this estimate nor
+a backup authorizes deletion. Confirmed batching, post-deletion census, and
+a second restore from the same backup remain **unmet acceptance checks**.
+They require a separately reviewed, concurrency-safe implementation and an
+isolated staging rehearsal before any live compaction is permitted.
 
 ## 4. Exercise the scaled integration fixture
 
@@ -135,13 +126,14 @@ boundaries without replacing relays with a mock:
    converge without duplicate semantic coordinates.
 4. Write a new package/state transition while the pass is active. Confirm
    the dirty generation forces a complete recheck before completion.
-5. Rehearse the backup, isolated restore, dry run, confirmed batches, second
-   restore, and count comparison from steps 2–3 using the candidate image.
+5. Rehearse the backup, isolated restore, and read-only estimate from
+   steps 2–3. Record confirmed batching, post-deletion census, and rollback
+   from a compacted backup as blocked, not passed.
 
 Record which checks were observed and which could not run. Do not mark the
 F74a rollout accepted or production-ready from a skipped fixture, an
 unavailable staging environment, a queued-but-unacknowledged outbox event, or
-an unproved restore. Before live compaction, require operator approval based
-on the recorded backup and restore evidence; use the same fixed cutoff and
-bounded command sequence, and stop on any failed batch or changed retention
-estimate.
+an unproved restore. **Live compaction is blocked** even if all read-only
+checks pass. Its future gate requires concurrency-safe deletion, confirmed
+bounded batches on an isolated restore, post-deletion census, a second
+restore proving rollback, and explicit operator approval.
