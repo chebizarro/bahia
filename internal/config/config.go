@@ -1188,9 +1188,9 @@ type OCIServiceAccountConfig struct {
 	RepoPrefixes []string `koanf:"repo_prefixes" secret:"false"` // e.g. cascadia/
 }
 
-// HiveCIPolicyConfig declares a pipeline policy to ensure exists at startup.
-// Policies are matched by (repo_coordinate, workflow_path, service_name,
-// environment_name); if a matching row already exists it is left untouched.
+// HiveCIPolicyConfig declares a pipeline policy resolved after relay catch-up.
+// Service and environment names must match unambiguous canonical local records;
+// an unchanged policy is not re-signed on each restart.
 type HiveCIPolicyConfig struct {
 	RepoCoordinate    string                        `koanf:"repo_coordinate" yaml:"repo_coordinate" secret:"false"`
 	WorkflowPath      string                        `koanf:"workflow_path" yaml:"workflow_path" secret:"false"`

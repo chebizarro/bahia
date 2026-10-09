@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -1951,6 +1952,7 @@ func New(cfg *config.Config) (*App, error) {
 	// Hive-CI repository is an optional index rebuilt from canonical state.
 	var hiveRepo *hiveciAdapter.CanonicalRepository
 	var hiveCanonical *nostrAdapter.HiveCICanonicalPublisher
+	var hivePolicyReady atomic.Bool
 	switch {
 	case !shouldRegisterHiveCIRunners(cfg.HiveCI):
 		logger.Warn("Hive-CI release ingestion is disabled; signed 5401/5402 events will not be consumed",
@@ -1966,6 +1968,7 @@ func New(cfg *config.Config) (*App, error) {
 		hiveCanonical = nostrAdapter.NewHiveCICanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
 		hiveRepo = hiveciAdapter.NewCanonicalRepository(localEventStore, hiveCanonical, hiveIndex, cfg.HiveCI.TrustedCIPubkeys, logger)
 		hiveRunLookup = hiveRepo
+		var hiveResultMu sync.Mutex
 		bridge := pipeline.NewBridge(
 			hiveRepo, serviceRepo, buildRepo, artifactRepo, intentRepo, envRepo,
 			ociRepo, pipelineRegistryInspector, registry,
@@ -1985,6 +1988,12 @@ func New(cfg *config.Config) (*App, error) {
 		buildResultRegistrar = bridge
 		// Wrap bridge.ProcessResult to match the ResultConsumer signature (no error return).
 		onResult := func(ctx context.Context, resultEventID string) {
+			hiveResultMu.Lock()
+			defer hiveResultMu.Unlock()
+			if !hivePolicyReady.Load() {
+				logger.Debug("Hive-CI result retained until canonical policy hydration", zap.String("result_event_id", resultEventID))
+				return
+			}
 			if err := bridge.ProcessResult(ctx, resultEventID); err != nil {
 				logger.Error("bridge process result failed", zap.String("result_event_id", resultEventID), zap.Error(err))
 			}
@@ -2058,13 +2067,20 @@ func New(cfg *config.Config) (*App, error) {
 		// canonical result states the store retains.
 		resumer := hiveciAdapter.NewPendingResultResumer(hiveRepo, bridge, cfg.HiveCI.MaxRetries, logger)
 		hiveSeed := func(ctx context.Context) {
+			if err := ensureConfiguredHiveCIPipelinePolicies(ctx, cfg.HiveCI.Policies, service.NewLocalAdoptionView(localSupervisionState), hiveRepo); err != nil {
+				logger.Error("Hive-CI config policies not available from canonical state; pending results remain deferred", zap.Error(err))
+				return
+			}
+			hiveResultMu.Lock()
+			hivePolicyReady.Store(true)
+			if err := resumer.Resume(ctx); err != nil {
+				logger.Warn("Hive-CI pending result resume finished with errors", zap.Error(err))
+			}
+			hiveResultMu.Unlock()
 			if hiveIndex != nil {
 				if err := hiveRepo.RebuildIndex(ctx); err != nil {
 					logger.Warn("Hive-CI SQL index rebuild failed", zap.Error(err))
 				}
-			}
-			if err := resumer.Resume(ctx); err != nil {
-				logger.Warn("Hive-CI pending result resume finished with errors", zap.Error(err))
 			}
 		}
 		nostrProjector.AddPostWarmStartHook(hiveSeed)
@@ -2090,6 +2106,10 @@ func New(cfg *config.Config) (*App, error) {
 		if hiveRepo == nil {
 			check.Message = "Hive-CI ingestion disabled: it needs hiveci.enabled, the Nostr projector and the confidential encryptor"
 			check.Details["availability"] = "unavailable"
+		} else if !hivePolicyReady.Load() {
+			check.Status = HealthStatusWarn
+			check.Message = "Hive-CI results held until canonical policy hydration succeeds"
+			check.Details["availability"] = "policy_pending"
 		}
 		return check
 	})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -467,8 +468,8 @@ func (r *CanonicalRepository) GetPolicyByRepoAndWorkflow(ctx context.Context, re
 }
 
 // EnsurePipelinePolicy publishes the policy, keeping the id of the canonical
-// record (or, before one exists, of the SQL-era row) for the same key so
-// releases accepted under it keep referring to it.
+// record for the same key so releases accepted under it keep referring to it.
+// The optional SQL index is never read to create canonical policy state.
 func (r *CanonicalRepository) EnsurePipelinePolicy(ctx context.Context, policy domain.HiveCIPipelinePolicy) error {
 	if err := r.available(); err != nil {
 		return err
@@ -488,19 +489,10 @@ func (r *CanonicalRepository) EnsurePipelinePolicy(ctx context.Context, policy d
 	for _, existing := range retained {
 		if policyKeyOf(existing) == key {
 			policy.ID, policy.CreatedAt = existing.ID, existing.CreatedAt
-			break
-		}
-	}
-	if policy.ID == uuid.Nil && r.index != nil {
-		indexed, err := r.index.ListPolicies(ctx)
-		if err != nil {
-			r.logger.Warn("Hive-CI SQL policy index unreadable; deriving policy id", zap.Error(err))
-		}
-		for _, existing := range indexed {
-			if policyKeyOf(existing) == key {
-				policy.ID, policy.CreatedAt = existing.ID, existing.CreatedAt
-				break
+			if policy.Enabled == existing.Enabled && reflect.DeepEqual(policy.Metadata, existing.Metadata) {
+				return nil
 			}
+			break
 		}
 	}
 	if policy.ID == uuid.Nil {
