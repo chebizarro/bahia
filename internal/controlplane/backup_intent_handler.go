@@ -97,6 +97,7 @@ type BackupIntentHandler struct {
 	registry    BackupIntentCRUD
 	definitions BackupIntentDefinitionCRUD
 	publisher   BackupIntentPublisher
+	runReceipts BackupRunReceiptReader
 	executors   BackupIntentExecutors
 	status      *IntentStatusPublisher
 	logger      *zap.Logger
@@ -107,6 +108,7 @@ type BackupIntentHandlerConfig struct {
 	Registry    BackupIntentCRUD
 	Definitions BackupIntentDefinitionCRUD
 	Publisher   BackupIntentPublisher
+	RunReceipts BackupRunReceiptReader
 	Executors   BackupIntentExecutors
 	Status      *IntentStatusPublisher
 	Logger      *zap.Logger
@@ -122,6 +124,7 @@ func NewBackupIntentHandler(cfg BackupIntentHandlerConfig) *BackupIntentHandler 
 		registry:    cfg.Registry,
 		definitions: cfg.Definitions,
 		publisher:   cfg.Publisher,
+		runReceipts: cfg.RunReceipts,
 		executors:   cfg.Executors,
 		status:      cfg.Status,
 		logger:      logger.Named("backup-intent"),
@@ -313,8 +316,31 @@ func (h *BackupIntentHandler) handleDefinitionApply(ctx context.Context, intent 
 
 // --- Daemon-triggered handlers (run, restore, verification, retention) ---
 
-func (h *BackupIntentHandler) handleRun(_ context.Context, _ *Intent) error {
-	return fmt.Errorf("backup run request intake paused: canonical acceptance receipts are unavailable")
+func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) error {
+	if h.runReceipts == nil {
+		return fmt.Errorf("backup run request intake paused: canonical acceptance receipts are unavailable")
+	}
+	requested, err := backupRunFromIntentContent(intent)
+	if err != nil || requested.ID == uuid.Nil {
+		return fmt.Errorf("backup run request intake paused: a valid run id is required")
+	}
+	receipt, err := h.runReceipts.GetBackupRunReceipt(ctx, requested.ID)
+	if err != nil {
+		return fmt.Errorf("backup run request intake paused: %w", err)
+	}
+	if receipt != nil {
+		if intent.Event == nil || !intent.Event.CheckID() || !intent.Event.VerifySignature() ||
+			receipt.RequestedBy != intent.Actor || receipt.RequestKind != int(intent.Event.Kind) ||
+			receipt.RequestEventID != intent.Event.ID.Hex() || receipt.RequestDTag != intent.Coordinate ||
+			receipt.RecipeID != requested.RecipeID {
+			return fmt.Errorf("backup run request intake paused: run id conflicts with an ACKed canonical request")
+		}
+		if receipt.Status == domain.RunStatusQueued || receipt.Status == domain.RunStatusRunning {
+			return fmt.Errorf("backup run request intake paused: an ACKed canonical run is %s but canonical execution recovery is unavailable", receipt.Status)
+		}
+		return fmt.Errorf("backup run request intake paused: an ACKed canonical terminal run exists but request replay remains unavailable")
+	}
+	return fmt.Errorf("backup run request intake paused: no ACKed canonical run-state receipt exists")
 }
 
 func (h *BackupIntentHandler) handleRestore(_ context.Context, _ *Intent) error {

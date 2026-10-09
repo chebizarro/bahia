@@ -23,7 +23,7 @@ Use the Backup UI or:
 - `request_backup_verification` / `bahia_request_backup_verification`
 - `request_backup_retention` / `bahia_request_backup_retention`
 
-A request acknowledgement means the operation is admitted. Follow the run, verification, or retention record for durable completion. Verification should prove that stored data can be read and checked, not only that an upload command exited successfully.
+Run and retention request intake is unavailable while canonical execution recovery is suspended. A signed intent receives a rejection, not an admission, even if an old PostgreSQL run row exists. The daemon can inspect an existing backup-run state only when its service signature and retained control-plane outbox relay ACK both verify; a local-only, queued, or missing delivery record is not an acceptance receipt. This inspection does not execute or resume a run. Verification should prove that stored data can be read and checked, not only that an upload command exited successfully.
 
 ## Restore
 
@@ -34,7 +34,7 @@ A restore has its own record and approval state:
 3. Approve or reject it in the UI or with `approve_backup_restore` / `reject_backup_restore`.
 4. Follow the restore record through execution and verification.
 
-The web approval control publishes a signed `backup` `restore-approval` intent. It is available when the backup intent domain is enabled. Approval never substitutes for post-restore verification.
+The web approval control publishes a signed `backup` `restore-approval` intent when the backup intent domain is enabled. Restore request and approval intake currently reject while atomic canonical execution inputs and recovery are unavailable. Approval never substitutes for post-restore verification.
 
 ## Safety
 

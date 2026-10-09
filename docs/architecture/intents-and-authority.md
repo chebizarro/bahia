@@ -218,6 +218,15 @@ step 6 replays the intent on restart: creates resolve by id
 (`resolveCreateByID`), deployments compare the runtime's desired hash, DNS
 applies by serial, backup job ids are UUIDv7.
 
+Backup run request intake rejects while canonical execution recovery is
+unavailable. Its receipt reader examines service-signed kind-30900 backup-run
+state and requires the exact event's retained control-plane outbox entry to
+record relay quorum delivery and at least one accepted relay. A local event,
+pending outbox entry, absent/pruned delivery record, or PostgreSQL row is not
+an acceptance receipt. Even an ACKed prior run is not resumed by this reader;
+the executor still lacks canonical recipe, repository, policy, and step
+checkpoint recovery.
+
 ### 3.5 Canonical state and who signs it
 
 The **daemon signs canonical state**; the client's intent is a request. The

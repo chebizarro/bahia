@@ -1293,6 +1293,10 @@ func New(cfg *config.Config) (*App, error) {
 	backupCanonical.SetRunVerifier(backupRegistry)
 	backupCanonical.SetRuntimeObservationSource(backupRegistry)
 	backupRegistry.SetCanonicalPublisher(backupCanonical)
+	backupRunReceipts, backupReceiptErr := controlplane.NewLocalBackupRunReceipts(localEventStore, localOutbox, servicePubkey)
+	if backupReceiptErr != nil {
+		logger.Warn("backup run canonical receipt reader unavailable", zap.Error(backupReceiptErr))
+	}
 	// Register the intent handler when the backup domain is enabled.
 	if enabledDomains["backup"] && backupRegistry != nil {
 		intentProcessor.RegisterHandler("backup", controlplane.NewBackupIntentHandler(
@@ -1300,6 +1304,7 @@ func New(cfg *config.Config) (*App, error) {
 				Registry:    backupRegistry,
 				Definitions: backupRegistry,
 				Publisher:   backupCanonical,
+				RunReceipts: backupRunReceipts,
 				Status:      intentStatus,
 				Logger:      logger,
 			},
