@@ -68,6 +68,12 @@ func (r *Reactor) handleBackupRestoreRequest(ctx context.Context, event *nostr.E
 		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "restore_create_error", err.Error())
 		return
 	}
+	if !created {
+		if err := backupRestoreDuplicateMatches(createdRestore, restore, false); err != nil {
+			r.logger.Warn("backup restore duplicate refused", "error", err, "request_event_id", restore.RequestEventID)
+		}
+		return
+	}
 	if r.backupRestoreResponder != nil {
 		step := "queued"
 		message := "backup restore queued"
@@ -75,17 +81,7 @@ func (r *Reactor) handleBackupRestoreRequest(ctx context.Context, event *nostr.E
 			step = "pending_approval"
 			message = "backup restore pending approval"
 		}
-		if !created {
-			step = "duplicate"
-			message = "backup restore request already accepted for this requester and d tag"
-		}
 		_ = r.backupRestoreResponder.PublishBackupRestoreStatus(ctx, createdRestore, step, message)
-	}
-	if !created {
-		if backupRestoreTerminal(createdRestore) && r.backupRestoreResponder != nil {
-			_ = r.backupRestoreResponder.PublishBackupRestoreResult(ctx, createdRestore, "backup restore already completed")
-		}
-		return
 	}
 	if createdRestore.ApprovalStatus == domain.BackupApprovalPending {
 		return

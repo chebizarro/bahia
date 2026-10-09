@@ -88,8 +88,8 @@ func TestHandleBackupRunRequestIsIdempotentByRequesterKindAndDTag(t *testing.T) 
 	if len(registry.runs) != 1 {
 		t.Fatalf("runs = %d, want 1", len(registry.runs))
 	}
-	if got := responder.statusSteps; len(got) != 2 || got[1] != "duplicate" {
-		t.Fatalf("status steps = %#v, want queued then duplicate", got)
+	if got := responder.statusSteps; len(got) != 1 || got[0] != "queued" {
+		t.Fatalf("status steps = %#v, want only the original queued status; SQL replay is not outcome authority", got)
 	}
 }
 
@@ -492,19 +492,24 @@ func (e *recordingBackupRepositoryProbeExecutor) ProcessBackupRepositoryProbe(_ 
 	return nil
 }
 
-type recordingBackupRunResponder struct{ statusSteps []string }
+type recordingBackupRunResponder struct {
+	statusSteps []string
+	results     int
+}
 
 func (r *recordingBackupRunResponder) PublishBackupRunStatus(_ context.Context, _ *domain.BackupRun, step, _ string) error {
 	r.statusSteps = append(r.statusSteps, step)
 	return nil
 }
 func (r *recordingBackupRunResponder) PublishBackupRunResult(context.Context, *domain.BackupRun, *domain.BackupVerificationRecord, string) error {
+	r.results++
 	return nil
 }
 
 type recordingBackupRestoreResponder struct {
 	statusSteps []string
 	approvals   []bool
+	results     int
 }
 
 func (r *recordingBackupRestoreResponder) PublishBackupRestoreStatus(_ context.Context, _ *domain.BackupRestoreRun, step, _ string) error {
@@ -512,6 +517,7 @@ func (r *recordingBackupRestoreResponder) PublishBackupRestoreStatus(_ context.C
 	return nil
 }
 func (r *recordingBackupRestoreResponder) PublishBackupRestoreResult(context.Context, *domain.BackupRestoreRun, string) error {
+	r.results++
 	return nil
 }
 func (r *recordingBackupRestoreResponder) PublishBackupRestoreApprovalResult(_ context.Context, _ *domain.BackupRestoreRun, approved bool, _ bool, _ string) error {
@@ -519,13 +525,17 @@ func (r *recordingBackupRestoreResponder) PublishBackupRestoreApprovalResult(_ c
 	return nil
 }
 
-type recordingBackupRetentionResponder struct{ statusSteps []string }
+type recordingBackupRetentionResponder struct {
+	statusSteps []string
+	results     int
+}
 
 func (r *recordingBackupRetentionResponder) PublishBackupRetentionStatus(_ context.Context, _ *domain.BackupRetentionRun, step, _ string) error {
 	r.statusSteps = append(r.statusSteps, step)
 	return nil
 }
 func (r *recordingBackupRetentionResponder) PublishBackupRetentionResult(context.Context, *domain.BackupRetentionRun, string) error {
+	r.results++
 	return nil
 }
 

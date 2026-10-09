@@ -96,20 +96,23 @@ func TestBackupIntentHandler_RunIdempotent(t *testing.T) {
 	})
 
 	runID := uuid.New()
+	recipeID := uuid.New()
+	repositoryID := uuid.New()
+	sourceEvent := &gonostr.Event{}
 	// Pre-create the run to simulate idempotent re-delivery.
-	registry.runs[runID] = &domain.BackupRun{ID: runID, RecipeID: uuid.New(), RepositoryID: uuid.New(), Status: domain.RunStatusQueued, Backend: domain.BackupBackendKopia}
+	registry.runs[runID] = &domain.BackupRun{ID: runID, RecipeID: recipeID, RepositoryID: repositoryID, RequestedBy: "npub1test", RequestEventID: sourceEvent.ID.Hex(), Status: domain.RunStatusQueued, Backend: domain.BackupBackendKopia}
 	registry.runCreatedAlready[runID] = true
 
 	intent := &Intent{
 		Op: "run",
 		Content: map[string]any{
 			"id":            runID.String(),
-			"recipe_id":     uuid.New().String(),
-			"repository_id": uuid.New().String(),
+			"recipe_id":     recipeID.String(),
+			"repository_id": repositoryID.String(),
 			"backend":       "kopia",
 		},
 		Actor: "npub1test",
-		Event: &gonostr.Event{},
+		Event: sourceEvent,
 	}
 
 	// Should succeed without error (idempotent).
@@ -201,27 +204,31 @@ func TestBackupIntentHandler_Delete(t *testing.T) {
 // --- Test helpers ---
 
 type fakeBackupIntentRegistry struct {
-	recipes           map[uuid.UUID]*domain.BackupRecipe
-	policies          map[uuid.UUID]*domain.BackupPolicy
-	repositories      map[uuid.UUID]*domain.BackupRepository
-	runs              map[uuid.UUID]*domain.BackupRun
-	runCreatedAlready map[uuid.UUID]bool
-	restores          map[uuid.UUID]*domain.BackupRestoreRun
-	verifications     map[uuid.UUID]*domain.BackupVerificationRecord
-	retentionRuns     map[uuid.UUID]*domain.BackupRetentionRun
-	restoreApprovals  int
+	recipes                 map[uuid.UUID]*domain.BackupRecipe
+	policies                map[uuid.UUID]*domain.BackupPolicy
+	repositories            map[uuid.UUID]*domain.BackupRepository
+	runs                    map[uuid.UUID]*domain.BackupRun
+	runCreatedAlready       map[uuid.UUID]bool
+	restores                map[uuid.UUID]*domain.BackupRestoreRun
+	restoreCreatedAlready   map[uuid.UUID]bool
+	verifications           map[uuid.UUID]*domain.BackupVerificationRecord
+	retentionRuns           map[uuid.UUID]*domain.BackupRetentionRun
+	retentionCreatedAlready map[uuid.UUID]bool
+	restoreApprovals        int
 }
 
 func newFakeBackupIntentRegistry() *fakeBackupIntentRegistry {
 	return &fakeBackupIntentRegistry{
-		recipes:           make(map[uuid.UUID]*domain.BackupRecipe),
-		policies:          make(map[uuid.UUID]*domain.BackupPolicy),
-		repositories:      make(map[uuid.UUID]*domain.BackupRepository),
-		runs:              make(map[uuid.UUID]*domain.BackupRun),
-		runCreatedAlready: make(map[uuid.UUID]bool),
-		restores:          make(map[uuid.UUID]*domain.BackupRestoreRun),
-		verifications:     make(map[uuid.UUID]*domain.BackupVerificationRecord),
-		retentionRuns:     make(map[uuid.UUID]*domain.BackupRetentionRun),
+		recipes:                 make(map[uuid.UUID]*domain.BackupRecipe),
+		policies:                make(map[uuid.UUID]*domain.BackupPolicy),
+		repositories:            make(map[uuid.UUID]*domain.BackupRepository),
+		runs:                    make(map[uuid.UUID]*domain.BackupRun),
+		runCreatedAlready:       make(map[uuid.UUID]bool),
+		restores:                make(map[uuid.UUID]*domain.BackupRestoreRun),
+		restoreCreatedAlready:   make(map[uuid.UUID]bool),
+		verifications:           make(map[uuid.UUID]*domain.BackupVerificationRecord),
+		retentionRuns:           make(map[uuid.UUID]*domain.BackupRetentionRun),
+		retentionCreatedAlready: make(map[uuid.UUID]bool),
 	}
 }
 
@@ -295,6 +302,9 @@ func (r *fakeBackupIntentRegistry) GetBackupRun(_ context.Context, id uuid.UUID)
 }
 
 func (r *fakeBackupIntentRegistry) CreateBackupRestoreIfAbsent(_ context.Context, restore *domain.BackupRestoreRun) (*domain.BackupRestoreRun, bool, error) {
+	if r.restoreCreatedAlready[restore.ID] {
+		return r.restores[restore.ID], false, nil
+	}
 	r.restores[restore.ID] = restore
 	return restore, true, nil
 }
@@ -312,6 +322,9 @@ func (r *fakeBackupIntentRegistry) RecordBackupVerification(_ context.Context, r
 }
 
 func (r *fakeBackupIntentRegistry) CreateBackupRetentionRunIfAbsent(_ context.Context, run *domain.BackupRetentionRun) (*domain.BackupRetentionRun, bool, error) {
+	if r.retentionCreatedAlready[run.ID] {
+		return r.retentionRuns[run.ID], false, nil
+	}
 	r.retentionRuns[run.ID] = run
 	return run, true, nil
 }

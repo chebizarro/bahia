@@ -76,20 +76,14 @@ func (r *Reactor) handleBackupRetentionRequest(ctx context.Context, event *nostr
 		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "retention_create_error", err.Error())
 		return
 	}
-	if r.backupRetentionResponder != nil {
-		step := "queued"
-		message := "backup retention enforcement queued"
-		if !created {
-			step = "duplicate"
-			message = "backup retention request already accepted for this requester and d tag"
-		}
-		_ = r.backupRetentionResponder.PublishBackupRetentionStatus(ctx, createdRun, step, message)
-	}
 	if !created {
-		if backupRetentionTerminal(createdRun) && r.backupRetentionResponder != nil {
-			_ = r.backupRetentionResponder.PublishBackupRetentionResult(ctx, createdRun, "backup retention already completed")
+		if err := backupRetentionDuplicateMatches(createdRun, run, false); err != nil {
+			r.logger.Warn("backup retention duplicate refused", "error", err, "request_event_id", run.RequestEventID)
 		}
 		return
+	}
+	if r.backupRetentionResponder != nil {
+		_ = r.backupRetentionResponder.PublishBackupRetentionStatus(ctx, createdRun, "queued", "backup retention enforcement queued")
 	}
 	go func(runID uuid.UUID) {
 		if err := r.backupRetentionExecutor.ProcessBackupRetentionRun(ctx, runID); err != nil {
@@ -120,8 +114,4 @@ func parseBackupRetentionRequest(event *nostr.Event) (*backupRetentionRequest, e
 	req.RepositoryID = strings.TrimSpace(req.RepositoryID)
 	req.PolicyID = strings.TrimSpace(req.PolicyID)
 	return &req, nil
-}
-
-func backupRetentionTerminal(run *domain.BackupRetentionRun) bool {
-	return run != nil && (run.Status == domain.RunStatusSucceeded || run.Status == domain.RunStatusFailed || run.Status == domain.RunStatusCancelled || run.Status == domain.RunStatusTimeout)
 }

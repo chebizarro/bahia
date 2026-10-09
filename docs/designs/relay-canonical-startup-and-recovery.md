@@ -85,6 +85,10 @@ differs, leave the row pending with an operator-visible refusal; do not mint a
 new service receipt from SQL metadata. Tests must race approval against SQL
 mutation, inject fabricated rows and mismatched metadata, and prove zero
 executor calls and signed outcomes for every refusal.
+Direct signed backup requests also refuse a coordinate collision unless the
+stored run's source event and effect inputs still match the incoming request.
+Duplicate rows are not a source for re-signing mutable progress or terminal
+outcomes; those must be replayed from canonical events.
 
 For each family, deterministic acceptance tests inject canonical EVENT and
 EOSE (including duplicates and divergent SQL), restart after acceptance,

@@ -20,7 +20,6 @@ type backupRunRegistry interface {
 	GetRepository(ctx context.Context, id uuid.UUID) (*domain.BackupRepository, error)
 	GetPolicy(ctx context.Context, id uuid.UUID) (*domain.BackupPolicy, error)
 	CreateBackupRunIfAbsent(ctx context.Context, run *domain.BackupRun) (*domain.BackupRun, bool, error)
-	GetBackupVerificationByRunID(ctx context.Context, runID uuid.UUID) (*domain.BackupVerificationRecord, error)
 }
 
 type backupRunRequest struct {
@@ -98,21 +97,16 @@ func (r *Reactor) handleBackupRunRequest(ctx context.Context, event *nostr.Event
 		r.publishBackupRequestFailure(ctx, event, "failed", "run_create_error", err.Error())
 		return
 	}
-	if r.backupResponder != nil {
-		step := "queued"
-		message := "backup run queued"
-		if !created {
-			step = "duplicate"
-			message = "backup run request already accepted for this requester and d tag"
-		}
-		_ = r.backupResponder.PublishBackupRunStatus(ctx, createdRun, step, message)
-	}
 	if !created {
-		if backupRunTerminal(createdRun) && r.backupResponder != nil {
-			verification, _ := r.backupRegistry.GetBackupVerificationByRunID(ctx, createdRun.ID)
-			_ = r.backupResponder.PublishBackupRunResult(ctx, createdRun, verification, "backup run already completed")
+		if err := backupRunDuplicateMatches(createdRun, run, false); err != nil {
+			r.logger.Warn("backup run duplicate refused", "error", err, "request_event_id", run.RequestEventID)
 		}
+		// The retained row's mutable status is not canonical outcome evidence.
+		// Do not re-sign a status or terminal result from it on replay.
 		return
+	}
+	if r.backupResponder != nil {
+		_ = r.backupResponder.PublishBackupRunStatus(ctx, createdRun, "queued", "backup run queued")
 	}
 	go func(runID uuid.UUID) {
 		if err := r.backupExecutor.ProcessBackupRun(ctx, runID); err != nil {
@@ -393,10 +387,6 @@ func backupVerificationMode(recipe *domain.BackupRecipe, policy *domain.BackupPo
 		return string(recipe.VerificationMode)
 	}
 	return ""
-}
-
-func backupRunTerminal(run *domain.BackupRun) bool {
-	return run != nil && (run.Status == domain.RunStatusSucceeded || run.Status == domain.RunStatusFailed || run.Status == domain.RunStatusCancelled || run.Status == domain.RunStatusTimeout)
 }
 
 func (r *Reactor) publishBackupRequestFailure(ctx context.Context, requestEvent *nostr.Event, status, code, message string) {

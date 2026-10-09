@@ -318,6 +318,7 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 	if err != nil {
 		return fmt.Errorf("parse run from intent: %w", err)
 	}
+	authorID := run.ID != uuid.Nil
 	if run.ID == uuid.Nil {
 		run.ID = domain.NewEntityID()
 	}
@@ -331,6 +332,9 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 		return fmt.Errorf("create backup run: %w", err)
 	}
 	if !isNew {
+		if err := backupRunDuplicateMatches(created, run, authorID); err != nil {
+			return &intentStateConflictError{message: err.Error()}
+		}
 		h.logger.Info("backup run already exists, skipping", zap.String("run_id", created.ID.String()))
 		return nil
 	}
@@ -351,6 +355,7 @@ func (h *BackupIntentHandler) handleRestore(ctx context.Context, intent *Intent)
 	if err != nil {
 		return fmt.Errorf("parse restore from intent: %w", err)
 	}
+	authorID := restore.ID != uuid.Nil
 	if restore.ID == uuid.Nil {
 		restore.ID = domain.NewEntityID()
 	}
@@ -364,6 +369,9 @@ func (h *BackupIntentHandler) handleRestore(ctx context.Context, intent *Intent)
 		return fmt.Errorf("create backup restore: %w", err)
 	}
 	if !isNew {
+		if err := backupRestoreDuplicateMatches(created, restore, authorID); err != nil {
+			return &intentStateConflictError{message: err.Error()}
+		}
 		h.logger.Info("backup restore already exists, skipping", zap.String("restore_id", created.ID.String()))
 		return nil
 	}
@@ -410,6 +418,7 @@ func (h *BackupIntentHandler) handleRetention(ctx context.Context, intent *Inten
 	if err != nil {
 		return fmt.Errorf("parse retention from intent: %w", err)
 	}
+	authorID := run.ID != uuid.Nil
 	if run.ID == uuid.Nil {
 		run.ID = domain.NewEntityID()
 	}
@@ -423,6 +432,9 @@ func (h *BackupIntentHandler) handleRetention(ctx context.Context, intent *Inten
 		return fmt.Errorf("create backup retention run: %w", err)
 	}
 	if !isNew {
+		if err := backupRetentionDuplicateMatches(created, run, authorID); err != nil {
+			return &intentStateConflictError{message: err.Error()}
+		}
 		h.logger.Info("backup retention run already exists, skipping", zap.String("retention_run_id", created.ID.String()))
 		return nil
 	}
