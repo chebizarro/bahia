@@ -47,21 +47,50 @@ All returned booleans must be true before canary export.
 The local publish outbox (`nostr.local_store.outbox_path`, default
 `outbox.bolt` beside the local event store) is authoritative delivery state,
 not a cache. Back it up with the daemon data and never delete it while pending
-entries exist. PostgreSQL `nostr_events` also holds transaction-bound audit
-outbox rows and may hold undelivered imported rows; the publisher drains those
-in place. Rows whose `publish_target` starts with `local:` mirror the local
-outbox outcome and are never drained from PostgreSQL.
+entries exist. Normal daemon startup and reconnect do **not** drain legacy
+PostgreSQL `nostr_events` pending rows. Rows whose `publish_target` starts with
+`local:` are archive mirrors of local-outbox events, not SQL delivery work.
 
-- `bahia_nostr_outbox_depth` combines pending local entries with pending
-  PostgreSQL-drained rows.
-- `bahia_nostr_outbox_failed` combines abandoned local entries with failed
-  PostgreSQL-drained rows. PostgreSQL failed rows are counted only after
+- `bahia_nostr_outbox_depth` includes pending local entries and legacy pending
+  PostgreSQL rows. A positive SQL contribution is backlog requiring operator
+  review; it does not prove the daemon is delivering those rows.
+- `bahia_nostr_outbox_failed` includes abandoned local entries and failed
+  PostgreSQL rows. PostgreSQL failed rows are counted only after
   `ensure-indexes` creates `idx_nostr_events_publish_failed`.
 - Local per-relay acceptance is durable, so restart resends only to relays that
-  have not accepted. PostgreSQL-drained rows may be resent after restart;
-  relay `OK duplicate:` responses count as acceptance.
+  have not accepted. PostgreSQL records no per-relay OK state. Even a row with
+  `publish_attempts=0` may have reached a relay before the old process crashed;
+  never infer that no relay accepted it.
 - A terminal failure is never reset to pending. Correct the relay policy or
   event and reproduce the content as a new signed event.
+
+To inventory legacy signed-outbox rows without writing, run the action for
+each target:
+
+```sh
+bahia-migrate outbox-transfer --config "$CONFIG" --target default
+bahia-migrate outbox-transfer --config "$CONFIG" --target control-plane
+```
+
+Each invocation reads a bounded window; inspect `conflict` lines and
+`remaining_after_cursor`. To apply a transfer, stop the daemon and all SQL
+writers, back up the local outbox, verify its configured absolute path and
+target relay URLs, then run:
+
+```sh
+bahia-migrate outbox-transfer --config "$CONFIG" --target default \
+  --apply --confirm-quiesced --confirm-unknown-relay-state \
+  --confirm-outbox-path "$ABSOLUTE_OUTBOX_PATH" \
+  --confirm-relays "$EXACT_CONFIGURED_RELAY_URLS"
+```
+
+The command never signs or sends an
+event. It requeues only an intact signed event with no *recorded* SQL attempts,
+retaining its ID and signature; the explicit confirmation acknowledges that
+unrecorded prior relay acceptance remains unknown. Rows with recorded attempts,
+invalid signatures, or conflicting local IDs stay in PostgreSQL for manual
+reconciliation. Do not start the daemon until every reported conflict has been
+resolved and the intended transfer is complete.
 
 See [WS6 alerts](ws6-alerts.md#bahianostroutboxfailed) for response guidance.
 

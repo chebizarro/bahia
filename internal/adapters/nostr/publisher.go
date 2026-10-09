@@ -118,8 +118,8 @@ const (
 //
 // The local outbox is a required dependency: the constructor panics when a
 // publisher that can run (redelivery-enabled) is built without one. Pending
-// rows in the PostgreSQL outbox table are moved
-// to the local outbox by MigratePendingPostgresRows at startup.
+// rows in the PostgreSQL outbox table require an explicit operator-confirmed
+// transfer; startup and reconnect never import them.
 //
 // Every outbox entry a Publisher writes carries its publish target (see
 // WithPublishTarget), and its Run only discovers entries for that target, so
@@ -133,9 +133,8 @@ type Publisher struct {
 	// eventRepo is the optional PostgreSQL nostr_events table. Without a local
 	// outbox it is the outbox itself; with one it is a best-effort archive.
 	eventRepo repository.NostrEventRepository
-	// outboxRepo is eventRepo's publish-state extension. It is not drained
-	// at runtime: MigratePendingPostgresRows moves any pending rows it holds
-	// to the local outbox at startup.
+	// outboxRepo is eventRepo's publish-state extension for archive lookup.
+	// It is never drained at runtime.
 	outboxRepo repository.NostrEventOutboxRepository
 	// localOutbox owns the delivery of every event this publisher is asked
 	// to publish. Required for redelivery-enabled publishers.
@@ -416,6 +415,19 @@ func eventFromNostrRecord(rec repository.NostrEventRecord) (nostr.Event, error) 
 	ev.Kind = canonicalKind(rec.Kind)
 	ev.Content = rec.Content
 	ev.CreatedAt = nostr.Timestamp(rec.CreatedAt.Unix())
+	return ev, nil
+}
+
+// SignedEventFromRecord reconstructs an exact legacy signed event. It never
+// signs or changes the event; malformed IDs or signatures block transfer.
+func SignedEventFromRecord(rec repository.NostrEventRecord) (nostr.Event, error) {
+	ev, err := eventFromNostrRecord(rec)
+	if err != nil {
+		return nostr.Event{}, err
+	}
+	if !ev.CheckID() || !ev.VerifySignature() {
+		return nostr.Event{}, fmt.Errorf("invalid signed event %s", rec.ID)
+	}
 	return ev, nil
 }
 

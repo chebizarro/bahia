@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/db"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -150,4 +151,47 @@ func TestPgNostrEventCountPublishFailedAfterEnsureIndexes(t *testing.T) {
 		require.NoError(t, pool.QueryRow(ctx, `SELECT convalidated FROM pg_constraint WHERE conname = $1`, name).Scan(&validated))
 		require.True(t, validated, "ensure-indexes validates the 000072 check %s", name)
 	}
+}
+
+// A transfer update must not hide a row whose SQL writer has already
+// recorded an attempt or whose target changed after the inventory page.
+func TestPgNostrEventTransferRequiresUnattemptedMatchingTarget(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	require.NoError(t, err)
+	defer pool.Close()
+	require.NoError(t, db.Migrate(ctx, pool, zap.NewNop()))
+	repo := repository.NewPgNostrEventRepository(pool)
+	id := "transfer-" + uuid.NewString()
+	now := time.Now().UTC()
+	_, err = repo.Record(ctx, &repository.NostrEventRecord{ID: id, Kind: 30078, PubKey: "pub", Sig: "sig", Content: "{}", CreatedAt: now, ReceivedAt: now, PublishState: repository.NostrPublishStatePending, PublishTarget: repository.NostrPublishTargetControlPlane})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM nostr_events WHERE id=$1`, id) })
+	changed, err := repo.TransferUnattemptedToLocalOutbox(ctx, id, repository.NostrPublishTargetDefault)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.NoError(t, repo.RecordPublishFailure(ctx, id, "relay timeout"))
+	changed, err = repo.TransferUnattemptedToLocalOutbox(ctx, id, repository.NostrPublishTargetControlPlane)
+	require.NoError(t, err)
+	require.False(t, changed)
+	row, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, repository.NostrPublishTargetControlPlane, row.PublishTarget)
+	freshID := "transfer-" + uuid.NewString()
+	_, err = repo.Record(ctx, &repository.NostrEventRecord{ID: freshID, Kind: 30078, PubKey: "pub", Sig: "sig", Content: "{}", CreatedAt: now, ReceivedAt: now, PublishState: repository.NostrPublishStatePending, PublishTarget: repository.NostrPublishTargetControlPlane})
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM nostr_events WHERE id=$1`, freshID) })
+	changed, err = repo.TransferUnattemptedToLocalOutbox(ctx, freshID, repository.NostrPublishTargetControlPlane)
+	require.NoError(t, err)
+	require.True(t, changed)
+	changed, err = repo.TransferUnattemptedToLocalOutbox(ctx, freshID, repository.NostrPublishTargetControlPlane)
+	require.NoError(t, err)
+	require.False(t, changed)
+	row, err = repo.GetByID(ctx, freshID)
+	require.NoError(t, err)
+	require.Equal(t, repository.LocalOutboxArchiveTarget(repository.NostrPublishTargetControlPlane), row.PublishTarget)
 }

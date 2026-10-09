@@ -28,6 +28,7 @@ const usage = "usage: bahia-migrate [--config path] [--confirm] [--force] [--to 
 	"       bahia-migrate [--config path] [--cutoff RFC3339] f74a-census\n" +
 	"       bahia-migrate [--config path] --cutoff RFC3339 f74a-compact (read-only dry run)\n" +
 	"       bahia-migrate [--config path] --confirm-quiesced f74a-import (stop daemon and all SQL writers first)\n" +
+	"       bahia-migrate [--config path] --target default|control-plane [--apply --confirm-quiesced --confirm-unknown-relay-state --confirm-outbox-path path --confirm-relays url,...] outbox-transfer\n" +
 	"       bahia-migrate [--config path] [--dry-run] [--relays url,...] [--relay-backfill] nostr"
 
 func main() {
@@ -58,6 +59,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	force := flags.Bool("force", false, "allow down across out-of-order applied history")
 	to := flags.String("to", "", "full filename stem to retain when running down")
 	dryRun := flags.Bool("dry-run", false, "nostr: report what would be migrated without signing or publishing")
+	transferTarget := flags.String("target", "", "outbox-transfer: explicit source publish target (default or control-plane)")
+	applyTransfer := flags.Bool("apply", false, "outbox-transfer: apply transfer (default is read-only inventory)")
+	confirmOutboxPath := flags.String("confirm-outbox-path", "", "outbox-transfer: exact resolved daemon outbox path to confirm")
+	confirmRelays := flags.String("confirm-relays", "", "outbox-transfer: exact configured target relay URLs to confirm")
+	confirmUnknown := flags.Bool("confirm-unknown-relay-state", false, "outbox-transfer: accept that SQL cannot prove which relays previously accepted an event")
+	maxRows := flags.Int("max-rows", 1000, "outbox-transfer: maximum SQL rows inspected in this invocation (1..10000)")
+	maxPending := flags.Int64("max-pending", 10000, "outbox-transfer: maximum pending local entries admitted (1..100000)")
 	relays := flags.String("relays", "", "nostr: comma-separated relays to publish to (default: sidecar plus nostr.relays)")
 	relayBackfill := flags.Bool("relay-backfill", false, "nostr: also read legacy events back from the relays (default: nostr.legacy_relay_backfill)")
 	action := ""
@@ -81,8 +89,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if action == "f74a-import" && !*confirmQuiesced {
 		return reportError(stderr, "f74a-import requires --confirm-quiesced; stop all daemon and SQL writers first")
 	}
-	if action != "f74a-import" && *confirmQuiesced {
-		return reportError(stderr, "--confirm-quiesced is only valid for f74a-import")
+	if action != "f74a-import" && action != "outbox-transfer" && *confirmQuiesced {
+		return reportError(stderr, "--confirm-quiesced is only valid for f74a-import or outbox-transfer")
 	}
 	if action != "down" && *confirm {
 		return reportError(stderr, "--confirm is only valid for down")
@@ -92,6 +100,23 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if action != "nostr" && (*dryRun || *relays != "" || *relayBackfill) {
 		return reportError(stderr, "--dry-run, --relays and --relay-backfill are only valid for nostr")
+	}
+	if action != "outbox-transfer" && (*transferTarget != "" || *applyTransfer || *confirmOutboxPath != "" || *confirmRelays != "" || *confirmUnknown || *maxRows != 1000 || *maxPending != 10000) {
+		return reportError(stderr, "outbox transfer flags are only valid for outbox-transfer")
+	}
+	if action == "outbox-transfer" {
+		if *transferTarget != "default" && *transferTarget != "control-plane" {
+			return reportError(stderr, "outbox-transfer requires --target default|control-plane")
+		}
+		if *maxRows < 1 || *maxRows > 10000 || *maxPending < 1 || *maxPending > 100000 {
+			return reportError(stderr, "outbox-transfer bounds are out of range")
+		}
+		if *applyTransfer && (!*confirmQuiesced || *confirmOutboxPath == "" || *confirmRelays == "" || !*confirmUnknown) {
+			return reportError(stderr, "outbox-transfer --apply requires --confirm-quiesced, --confirm-unknown-relay-state, --confirm-outbox-path and --confirm-relays")
+		}
+		if !*applyTransfer && (*confirmQuiesced || *confirmOutboxPath != "" || *confirmRelays != "" || *confirmUnknown) {
+			return reportError(stderr, "outbox-transfer confirmations require --apply")
+		}
 	}
 	if action != "f74a-census" && action != "f74a-compact" && *cutoffText != "" {
 		return reportError(stderr, "--cutoff is only valid for F74a actions")
@@ -125,6 +150,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return reportError(stderr, "%v", cfg.DB.RedactError(err))
 	}
 	defer pool.Close()
+	if action == "outbox-transfer" {
+		return runOutboxTransfer(ctx, cfg, repository.NewPgNostrEventRepository(pool), outboxTransferOptions{target: *transferTarget, apply: *applyTransfer, confirmedPath: *confirmOutboxPath, confirmedRelays: *confirmRelays, maxRows: *maxRows, maxPending: *maxPending}, stdout, stderr)
+	}
 	if action == "f74a-import" {
 		return runF74aImport(ctx, cfg, pool, stdout, stderr)
 	}
@@ -143,7 +171,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func isAction(value string) bool {
 	switch value {
-	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact", "f74a-import":
+	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact", "f74a-import", "outbox-transfer":
 		return true
 	default:
 		return false

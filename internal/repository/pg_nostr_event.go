@@ -356,22 +356,19 @@ func (r *PgNostrEventRepository) AbandonPublish(ctx context.Context, id, reason 
 	return nil
 }
 
-// MigrateToLocalOutbox re-targets a pending row so the local outbox owns its
-// delivery: publish_target becomes "local:<original-target>" and the row drops
-// out of the PostgreSQL drain (drainedOutboxRows excludes "local:" rows). The
-// UPDATE only touches rows still in the pending state, so calling it twice is
-// idempotent. The local outbox's eventual outcome is mirrored back through
-// the archive layer (MarkPublished/AbandonPublish).
-func (r *PgNostrEventRepository) MigrateToLocalOutbox(ctx context.Context, id string) error {
-	_, err := r.pool.Exec(ctx, `
-		UPDATE nostr_events
-		SET publish_target = 'local:' || publish_target
-		WHERE id = $1 AND publish_state = $2 AND `+drainedOutboxRows,
-		id, NostrPublishStatePending)
+// TransferUnattemptedToLocalOutbox re-targets only an unchanged, unattempted
+// pending row after its exact signed event is durable in the local outbox.
+// The affected-row result detects a concurrent SQL writer or changed source row.
+func (r *PgNostrEventRepository) TransferUnattemptedToLocalOutbox(ctx context.Context, id, target string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+  UPDATE nostr_events SET publish_target = 'local:' || publish_target
+  WHERE id = $1 AND publish_target = $2 AND publish_state = $3
+    AND publish_attempts = 0 AND last_publish_error = ''`,
+		id, target, NostrPublishStatePending)
 	if err != nil {
-		return fmt.Errorf("migrate nostr event %s to local outbox: %w", id, err)
+		return false, fmt.Errorf("transfer nostr event %s to local outbox: %w", id, err)
 	}
-	return nil
+	return tag.RowsAffected() == 1, nil
 }
 
 // FindLatestByKindPubkeyDTag returns the newest event with the same kind, pubkey, and Nostr d tag.
