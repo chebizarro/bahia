@@ -23,10 +23,11 @@ import (
 // The BackupRegistryService calls this after each material mutation, so each
 // canonical record is published once per change instead of O(fleet) per tick.
 type BackupCanonicalPublisher struct {
-	projector    *Projector
-	runAdmission *Publisher
-	runVerifier  backupRunVerificationLookup
-	logger       *zap.Logger
+	projector      *Projector
+	runAdmission   *Publisher
+	runPendingWake func()
+	runVerifier    backupRunVerificationLookup
+	logger         *zap.Logger
 
 	// Runtime observation debounce.
 	runtimeObsMu       sync.Mutex
@@ -41,6 +42,8 @@ type BackupCanonicalPublisher struct {
 func (p *BackupCanonicalPublisher) SetRunAdmissionPublisher(publisher *Publisher) {
 	p.runAdmission = publisher
 }
+
+func (p *BackupCanonicalPublisher) SetRunPendingWake(wake func()) { p.runPendingWake = wake }
 
 // backupRunVerificationLookup looks up verification for a run.
 type backupRunVerificationLookup interface {

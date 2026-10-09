@@ -43,19 +43,22 @@ const (
 )
 
 var (
-	outboxEntriesBucket         = []byte("bahiaOutboxEntries")
-	outboxPendingBucket         = []byte("bahiaOutboxPending")
-	outboxPublishedBucket       = []byte("bahiaOutboxPublished")
-	outboxFailedBucket          = []byte("bahiaOutboxFailed")
-	outboxCoordinatesBucket     = []byte("bahiaOutboxCoordinatesV1")
-	outboxCoordinatesReady      = []byte("index-ready")
-	outboxDeliveryProofsBucket  = []byte("bahiaOutboxDeliveryProofsV1")
-	backupRunIntentsBucket      = []byte("bahiaBackupRunIntentsV1")
-	backupRunCoordsBucket       = []byte("bahiaBackupRunCoordinatesV1")
-	backupRunEventsBucket       = []byte("bahiaBackupRunEventsV1")
-	backupRunStatusEventsBucket = []byte("bahiaBackupRunStatusEventsV1")
-	backupRunStatusClockBucket  = []byte("bahiaBackupRunStatusClockV1")
-	backupRunStatusClockReady   = []byte("index-ready")
+	outboxEntriesBucket          = []byte("bahiaOutboxEntries")
+	outboxPendingBucket          = []byte("bahiaOutboxPending")
+	outboxPublishedBucket        = []byte("bahiaOutboxPublished")
+	outboxFailedBucket           = []byte("bahiaOutboxFailed")
+	outboxCoordinatesBucket      = []byte("bahiaOutboxCoordinatesV1")
+	outboxCoordinatesReady       = []byte("index-ready")
+	outboxDeliveryProofsBucket   = []byte("bahiaOutboxDeliveryProofsV1")
+	backupRunIntentsBucket       = []byte("bahiaBackupRunIntentsV1")
+	backupRunCoordsBucket        = []byte("bahiaBackupRunCoordinatesV1")
+	backupRunEventsBucket        = []byte("bahiaBackupRunEventsV1")
+	backupRunStatusEventsBucket  = []byte("bahiaBackupRunStatusEventsV1")
+	backupRunStatusClockBucket   = []byte("bahiaBackupRunStatusClockV1")
+	backupRunStatusClockReady    = []byte("index-ready")
+	backupRunPendingBucket       = []byte("bahiaBackupRunPendingV1")
+	backupRunPendingCoordsBucket = []byte("bahiaBackupRunPendingCoordinatesV1")
+	backupRunPendingEventsBucket = []byte("bahiaBackupRunPendingEventsV1")
 )
 
 // DeliveryPolicy is the publisher's write-relay policy at the instant the
@@ -254,7 +257,7 @@ func openOutboxDB(path string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket, outboxDeliveryProofsBucket, backupRunIntentsBucket, backupRunCoordsBucket, backupRunEventsBucket, backupRunStatusEventsBucket, backupRunStatusClockBucket} {
+		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket, outboxDeliveryProofsBucket, backupRunIntentsBucket, backupRunCoordsBucket, backupRunEventsBucket, backupRunStatusEventsBucket, backupRunStatusClockBucket, backupRunPendingBucket, backupRunPendingCoordsBucket, backupRunPendingEventsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}

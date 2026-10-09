@@ -46,6 +46,16 @@ func (s testBackupRunAdmission) StageRunAdmission(_ context.Context, intentID, r
 	return entry.StateEventID, err
 }
 
+func (s testBackupRunAdmission) LookupPendingRun(_ context.Context, intentID, coordinate, requestID string) (*localstore.BackupRunPending, error) {
+	return s.outbox.GetBackupRunPending(intentID, coordinate, requestID)
+}
+
+func (s testBackupRunAdmission) StagePendingRun(_ context.Context, intentID, coordinate string, event nostr.Event, actor string, expiresAt time.Time) (*localstore.BackupRunPending, error) {
+	record, _, err := s.outbox.PutBackupRunPending(localstore.BackupRunPending{IntentID: intentID, Coordinate: coordinate, RequestEvent: event,
+		Actor: actor, ServicePubkey: s.key.Public().Hex(), ReceivedAt: time.Now().UTC(), ExpiresAt: expiresAt})
+	return record, err
+}
+
 func backupReceiptEventForAdmission(key nostr.SecretKey, run *domain.BackupRun) (nostr.Event, error) {
 	tags, content := nostradapter.BackupRunStateRecord(run, nil)
 	wireKind, envelope := nostradapter.ControlStateEnvelope(kinds.BackupRunState, nostradapter.BackupRunDTag(run.ID), false)
@@ -53,7 +63,7 @@ func backupReceiptEventForAdmission(key nostr.SecretKey, run *domain.BackupRun) 
 	return event, event.Sign(key)
 }
 
-func TestBackupRunAdmissionPendingUntilACKThenAcceptedOnReplay(t *testing.T) {
+func TestBackupRunAdmissionRetainsSignedPendingRequestAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
 	eventPath, outboxPath := filepath.Join(dir, "events.db"), filepath.Join(dir, "outbox.db")
 	events, err := localstore.Open(eventPath)
@@ -100,100 +110,45 @@ func TestBackupRunAdmissionPendingUntilACKThenAcceptedOnReplay(t *testing.T) {
 		processor := NewIntentProcessor(NewTrustSet([]string{operatorKey.Public().Hex()}, zap.NewNop()), openTestStore(t),
 			NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()),
 			IntentProcessorConfig{EnabledDomains: map[string]bool{"backup": true}}, zap.NewNop())
+		admission := testBackupRunAdmission{events: events, outbox: outbox, key: serviceKey}
 		processor.RegisterHandler("backup", NewBackupIntentHandler(BackupIntentHandlerConfig{
-			RunReceipts: reader, RunAdmission: testBackupRunAdmission{events: events, outbox: outbox, key: serviceKey}, Logger: zap.NewNop(),
+			RunReceipts: reader, RunAdmission: admission, RunPending: admission, Logger: zap.NewNop(),
 		}))
 		return processor
 	}
-	processor := newProcessor()
-	process := func() *Intent {
+	process := func(processor *IntentProcessor) *Intent {
 		intent, err := ParseIntent(&request)
 		require.NoError(t, err)
 		intent.Actor = operatorKey.Public().Hex()
 		require.NoError(t, processor.ProcessInProcess(t.Context(), intent))
 		return intent
 	}
-	first := process()
-	require.Empty(t, statuses.events, "provisional status must not race the final ACK result")
+	processor := newProcessor()
+	first := process(processor)
+	require.Empty(t, statuses.events, "pending is not a relay status")
 	require.False(t, processor.IsProcessed(first.IntentID))
-	stateID, ok := first.Result["state_event_id"].(string)
-	require.True(t, ok)
-	require.NotEmpty(t, stateID)
+	require.Equal(t, request.ID.Hex(), first.Result["request_event_id"])
+	require.NotContains(t, first.Result, "state_event_id")
+	pending, err := outbox.GetBackupRunPending(first.IntentID, first.Coordinate, request.ID.Hex())
+	require.NoError(t, err)
+	require.Equal(t, localstore.BackupRunPendingState, pending.State)
+	require.Equal(t, request.ID, pending.RequestEvent.ID)
+	admission, err := outbox.GetBackupRunAdmission(first.IntentID, first.Coordinate, request.ID.Hex())
+	require.NoError(t, err)
+	require.Nil(t, admission, "no service-signed state can exist before history and fence proof")
 	require.NoError(t, events.Close())
 	require.NoError(t, outbox.Close())
-	require.NoError(t, os.Remove(eventPath), "the inbound cache is rebuildable, unlike the admission outbox")
+	require.NoError(t, os.Remove(eventPath), "the inbound cache is rebuildable, unlike the pending inbox")
 	events, err = localstore.Open(eventPath)
 	require.NoError(t, err)
 	outbox, err = localstore.OpenOutbox(outboxPath)
 	require.NoError(t, err)
 	processor = newProcessor()
-	second := process()
-	require.Equal(t, stateID, second.Result["state_event_id"])
+	second := process(processor)
+	require.Equal(t, first.Result, second.Result)
 	require.Empty(t, statuses.events)
-	id, err := nostr.IDFromHex(stateID)
+	require.NoError(t, outbox.RecordBackupRunPendingAttempt(first.IntentID, request.ID.Hex(), pending.ExpiresAt, time.Time{}, "missing complete proof"))
+	refused, err := outbox.GetBackupRunPending(first.IntentID, first.Coordinate, request.ID.Hex())
 	require.NoError(t, err)
-	_, err = outbox.CommitPublisherRound(id, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: false, State: localstore.OutboxFailed,
-		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Rejected: "blocked"}}})
-	require.NoError(t, err)
-	process()
-	require.False(t, processor.IsProcessed(first.IntentID), "a refused relay cannot accept a run")
-	require.Empty(t, statuses.events, "provisional status must not race the final ACK result")
-	_, err = outbox.Retry(id)
-	require.NoError(t, err)
-	_, err = outbox.CommitPublisherRound(id, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: true, State: localstore.OutboxPending,
-		Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://second.example"}, Required: 1}, Relays: map[string]localstore.RelayDelivery{"wss://second.example": {Accepted: true}}})
-	require.NoError(t, err)
-	process()
-	require.False(t, processor.IsProcessed(first.IntentID), "run ACK without a durable accepted status is still pending")
-	signer, err := NewPrivateKeySigner(serviceKey.Hex())
-	require.NoError(t, err)
-	statusReconciler, err := NewBackupRunStatusReconciler(outbox,
-		NewIntentStatusPublisher(statuses.publish, signer, zap.NewNop()), "", func() {}, nil, zap.NewNop())
-	require.NoError(t, err)
-	require.NoError(t, statusReconciler.ReconcileOnce(t.Context()))
-	process()
-	require.False(t, processor.IsProcessed(first.IntentID), "queued accepted status is not yet an ACKed result")
-	staged, err := outbox.GetBackupRunAdmission(first.IntentID, first.Coordinate, request.ID.Hex())
-	require.NoError(t, err)
-	statusID, err := nostr.IDFromHex(staged.StatusEventID)
-	require.NoError(t, err)
-	_, err = outbox.CommitPublisherRound(statusID, localstore.OutboxRound{Target: "", Rounds: 1, Delivered: true, State: localstore.OutboxPublished,
-		Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://status.example"}, Required: 1}, Relays: map[string]localstore.RelayDelivery{"wss://status.example": {Accepted: true}}})
-	require.NoError(t, err)
-	accepted := process()
-	require.True(t, processor.IsProcessed(first.IntentID))
-	require.Empty(t, statuses.events, "replay must not mint a duplicate accepted status")
-	require.Equal(t, stateID, accepted.Result["state_event_id"])
-	conflicting := request
-	conflicting.Tags = make(nostr.Tags, len(request.Tags))
-	for i, tag := range request.Tags {
-		conflicting.Tags[i] = append(nostr.Tag(nil), tag...)
-	}
-	for i := range conflicting.Tags {
-		if conflicting.Tags[i][0] == "intent_id" {
-			conflicting.Tags[i][1] = "different-intent"
-		}
-	}
-	require.NoError(t, conflicting.Sign(operatorKey))
-	conflictIntent, err := ParseIntent(&conflicting)
-	require.NoError(t, err)
-	conflictIntent.Actor = operatorKey.Public().Hex()
-	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), conflictIntent), "coordinate already belongs")
-	require.False(t, processor.IsProcessed(conflictIntent.IntentID))
-	conflicting = request
-	conflicting.Content += " "
-	require.NoError(t, conflicting.Sign(operatorKey))
-	conflictIntent, err = ParseIntent(&conflicting)
-	require.NoError(t, err)
-	conflictIntent.Actor = operatorKey.Public().Hex()
-	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), conflictIntent), "intent id conflicts")
-	_, err = outbox.CommitPublisherRound(id, localstore.OutboxRound{Target: "control-plane", Rounds: 3, Delivered: true, State: localstore.OutboxPublished})
-	require.NoError(t, err)
-	process()
-	require.Empty(t, statuses.events, "replay must not mint a duplicate accepted status")
-	// The immutable admission is still authoritative after delivery-row pruning.
-	_, err = outbox.Prune(time.Now().Add(time.Hour), time.Now().Add(time.Hour))
-	require.NoError(t, err)
-	process()
-	require.Empty(t, statuses.events, "replay must not mint a duplicate accepted status")
+	require.Equal(t, localstore.BackupRunRefusedState, refused.State)
 }

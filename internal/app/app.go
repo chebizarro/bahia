@@ -1306,6 +1306,21 @@ func New(cfg *config.Config) (*App, error) {
 	// pipeline. The cpStateFamilies table is the single envelope source.
 	backupCanonical := nostrAdapter.NewBackupCanonicalPublisher(nostrProjector, logger)
 	backupCanonical.SetRunAdmissionPublisher(controlPlanePub)
+	if enabledDomains["backup"] && localEventStore != nil {
+		backupHistory, err := nostrAdapter.NewBackupRunHistoryRunner(localOutbox, controlPlanePool, localEventStore, logger)
+		if err != nil {
+			return nil, fmt.Errorf("configure backup run history: %w", err)
+		}
+		backupCanonical.SetRunPendingWake(backupHistory.Wake)
+		bgManager.RegisterWithOptions(backupHistory, RunnerRequired(false))
+		healthProvider.RegisterCheck("backup_run_history", func() HealthCheck {
+			message := "backup run admission paused: cross-process signer fence unavailable"
+			if last := backupHistory.LastError(); last != "" {
+				message += "; " + last
+			}
+			return HealthCheck{Name: "backup_run_history", Status: HealthStatusWarn, Message: message}
+		})
+	}
 	backupCanonical.SetRunVerifier(backupRegistry)
 	backupCanonical.SetRuntimeObservationSource(backupRegistry)
 	backupRegistry.SetCanonicalPublisher(backupCanonical)
@@ -1339,6 +1354,7 @@ func New(cfg *config.Config) (*App, error) {
 				Publisher:    backupCanonical,
 				RunReceipts:  backupRunReceipts,
 				RunAdmission: backupCanonical,
+				RunPending:   backupCanonical,
 				Status:       intentStatus,
 				Logger:       logger,
 			},

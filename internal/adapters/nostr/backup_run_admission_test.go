@@ -15,7 +15,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestBackupRunAdmissionStagesCanonicalStateWithoutPublishingInline(t *testing.T) {
+func TestBackupRunAdmissionRequiresCrossProcessFence(t *testing.T) {
 	dir := t.TempDir()
 	events, err := localstore.Open(filepath.Join(dir, "events.db"))
 	require.NoError(t, err)
@@ -39,30 +39,9 @@ func TestBackupRunAdmissionStagesCanonicalStateWithoutPublishingInline(t *testin
 		Backend: domain.BackupBackendKopia, TargetRef: "/data", VerificationMode: domain.BackupVerificationNone,
 		VerificationStatus: domain.BackupVerificationPending, CreatedAt: now, UpdatedAt: now}
 	stateID, err := canonical.StageRunAdmission(t.Context(), "intent-1", requestID, run)
+	require.Empty(t, stateID)
+	require.ErrorContains(t, err, "cross-process service-key signer fence unavailable")
+	_, found, _, err := canonical.LookupRunAdmission(t.Context(), "intent-1", coordinate, requestID)
 	require.NoError(t, err)
-	id, err := nostr.IDFromHex(stateID)
-	require.NoError(t, err)
-	entry, found, err := outbox.Get(id)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, localstore.OutboxPending, entry.State)
-	require.Equal(t, repository.NostrPublishTargetControlPlane, entry.Target)
-	require.Equal(t, nostr.Kind(kinds.CASControlState), entry.Event.Kind)
-	require.Equal(t, serviceKey.Public(), entry.Event.PubKey)
-	require.True(t, entry.Event.CheckID())
-	require.True(t, entry.Event.VerifySignature())
-	require.Equal(t, coordinate, tagValue(entry.Event.Tags, "d"))
-	require.Equal(t, kinds.CPStateTopicBackupRun, tagValue(entry.Event.Tags, "t"))
-	require.Equal(t, "31996", tagValue(entry.Event.Tags, "legacy_kind"))
-	require.Contains(t, entry.Event.Content, requestID)
-	lookupID, found, delivered, err := canonical.LookupRunAdmission(t.Context(), "intent-1", coordinate, requestID)
-	require.NoError(t, err)
-	require.True(t, found)
-	require.False(t, delivered)
-	require.Equal(t, stateID, lookupID)
-	replayID, err := canonical.StageRunAdmission(t.Context(), "intent-1", requestID, run)
-	require.NoError(t, err)
-	require.Equal(t, stateID, replayID, "re-signing on replay cannot create a second canonical event")
-	_, err = canonical.StageRunAdmission(t.Context(), "intent-2", requestID, run)
-	require.ErrorContains(t, err, "coordinate already belongs")
+	require.False(t, found, "no service-signed state may exist without a writer fence")
 }

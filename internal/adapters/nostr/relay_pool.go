@@ -88,8 +88,11 @@ type managedRelay struct {
 	url       string
 	relay     *nostr.Relay
 	connected bool
-	lastErr   error
-	mu        sync.Mutex
+	// connectionEpoch changes on every successful websocket dial. A history
+	// EOSE from a prior connection cannot prove the current relay view.
+	connectionEpoch uint64
+	lastErr         error
+	mu              sync.Mutex
 
 	// dialing is non-nil while a connect is in flight and is closed when it
 	// finishes; concurrent callers wait for that outcome instead of dialing
@@ -598,6 +601,7 @@ func (p *RelayPool) finishDial(ctx context.Context, mr *managedRelay, done chan 
 	}
 	mr.relay = relay
 	mr.connected = true
+	mr.connectionEpoch++
 	mr.lastErr = nil
 	mr.retryAt = time.Time{}
 	if mr.reconnectBackoff != nil {

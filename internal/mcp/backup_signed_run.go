@@ -36,7 +36,7 @@ func (s *Server) callSignedBackupRun(ctx context.Context, args map[string]interf
 	if err := json.Unmarshal(encoded, &event); err != nil {
 		return intentWriteError("rejected", "", "", "invalid signed intent event")
 	}
-	intent, err := controlplane.ValidateSignedBackupRunRequest(&event, actor)
+	intent, err := controlplane.ParseSignedBackupRunRequestForReplay(&event, actor)
 	if err != nil {
 		return intentWriteError("rejected", "", event.ID.Hex(), err.Error())
 	}
@@ -61,10 +61,10 @@ func (s *Server) callSignedBackupRun(ctx context.Context, args map[string]interf
 		return intentWriteError("rejected", intent.IntentID, event.ID.Hex(), err.Error())
 	}
 	if s.intentProc.ProcessedIntent(intent.IntentID) == nil {
-		if _, staged := intent.Result["state_event_id"].(string); !staged {
-			return intentWriteError("rejected", intent.IntentID, event.ID.Hex(), "signed request was not staged by the intent processor")
+		if _, durable := intent.Result["run_id"].(string); !durable {
+			return intentWriteError("rejected", intent.IntentID, event.ID.Hex(), "signed request was not durably queued by the intent processor")
 		}
-		result, _ := jsonResult(map[string]any{"status": "pending", "intent_id": intent.IntentID, "event_id": event.ID.Hex(), "state_event_id": intent.Result["state_event_id"]})
+		result, _ := jsonResult(map[string]any{"status": "pending", "intent_id": intent.IntentID, "event_id": event.ID.Hex(), "run_id": intent.Result["run_id"]})
 		return result
 	}
 	result, _ := jsonResult(map[string]any{"status": "accepted", "intent_id": intent.IntentID, "event_id": event.ID.Hex(), "state_event_id": intent.Result["state_event_id"]})

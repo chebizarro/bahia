@@ -12,6 +12,7 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
@@ -34,8 +35,16 @@ type BackupRunAdmissionWriter interface {
 	StageRunAdmission(context.Context, string, string, *domain.BackupRun) (string, error)
 }
 
-// ErrBackupRunPending means the signed run is durably staged but not yet
-// accepted by the configured relay quorum. It is not an accepted intent.
+// BackupRunPendingWriter records the signed operator request before any
+// relay-history I/O. The asynchronous worker owns history; it cannot sign a
+// run until a separate cross-process service-key fence is configured.
+type BackupRunPendingWriter interface {
+	LookupPendingRun(context.Context, string, string, string) (*localstore.BackupRunPending, error)
+	StagePendingRun(context.Context, string, string, gonostr.Event, string, time.Time) (*localstore.BackupRunPending, error)
+}
+
+// ErrBackupRunPending means the operator-signed request is durably queued but
+// no service-signed run state or accepted outcome exists yet.
 var ErrBackupRunPending = errors.New("backup run state is pending relay acceptance")
 
 // ErrBackupRunAdmissionConflict preserves the existing request's final status
@@ -118,6 +127,7 @@ type BackupIntentHandler struct {
 	publisher    BackupIntentPublisher
 	runReceipts  BackupRunReceiptReader
 	runAdmission BackupRunAdmissionWriter
+	runPending   BackupRunPendingWriter
 	executors    BackupIntentExecutors
 	status       *IntentStatusPublisher
 	logger       *zap.Logger
@@ -130,6 +140,7 @@ type BackupIntentHandlerConfig struct {
 	Publisher    BackupIntentPublisher
 	RunReceipts  BackupRunReceiptReader
 	RunAdmission BackupRunAdmissionWriter
+	RunPending   BackupRunPendingWriter
 	Executors    BackupIntentExecutors
 	Status       *IntentStatusPublisher
 	Logger       *zap.Logger
@@ -147,6 +158,7 @@ func NewBackupIntentHandler(cfg BackupIntentHandlerConfig) *BackupIntentHandler 
 		publisher:    cfg.Publisher,
 		runReceipts:  cfg.RunReceipts,
 		runAdmission: cfg.RunAdmission,
+		runPending:   cfg.RunPending,
 		executors:    cfg.Executors,
 		status:       cfg.Status,
 		logger:       logger.Named("backup-intent"),
@@ -339,7 +351,7 @@ func (h *BackupIntentHandler) handleDefinitionApply(ctx context.Context, intent 
 // --- Daemon-triggered handlers (run, restore, verification, retention) ---
 
 func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) error {
-	if h.runAdmission == nil || h.runReceipts == nil {
+	if h.runAdmission == nil || h.runPending == nil || h.runReceipts == nil {
 		return fmt.Errorf("backup run request intake paused: canonical acceptance is unavailable")
 	}
 	if intent == nil || intent.Event == nil || !intent.Event.CheckID() || !intent.Event.VerifySignature() ||
@@ -368,7 +380,18 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 		}
 		return nil
 	}
-	if _, err := validateSignedBackupRunRequest(intent.Event, intent.Actor, time.Now().UTC()); err != nil {
+	pending, err := h.runPending.LookupPendingRun(ctx, intent.IntentID, intent.Coordinate, requestID)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrBackupRunAdmissionConflict, err)
+	}
+	if pending != nil {
+		if pending.State == localstore.BackupRunRefusedState {
+			return fmt.Errorf("%w: signed request expired without complete relay-history and signer proof", ErrBackupRunAdmissionConflict)
+		}
+		intent.Result = map[string]any{"run_id": requested.ID.String(), "request_event_id": requestID, "execution": "paused"}
+		return ErrBackupRunPending
+	}
+	if _, err := ValidateSignedBackupRunRequest(intent.Event, intent.Actor); err != nil {
 		return fmt.Errorf("backup run request is invalid: %w", err)
 	}
 	if err := validateBackupExecutionSnapshot(requested, requested); err != nil {
@@ -388,22 +411,14 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 	if prior != nil {
 		return fmt.Errorf("backup run request intake paused: run id already has an ACKed canonical state without an admission record")
 	}
-	now := time.Now().UTC()
-	requested.RequestedBy = intent.Actor
-	requested.RequestEventID = requestID
-	requested.RequestKind = int(intent.Event.Kind)
-	requested.RequestDTag = intent.Coordinate
-	requested.Status = domain.RunStatusQueued
-	requested.VerificationStatus = domain.BackupVerificationPending
-	requested.CreatedAt, requested.UpdatedAt = now, now
-	if err := domain.ValidateBackupRun(requested); err != nil {
-		return fmt.Errorf("backup run request is invalid: %w", err)
-	}
-	stateID, err = h.runAdmission.StageRunAdmission(ctx, intent.IntentID, requestID, requested)
+	expiresAt, err := signedBackupRunExpiration(intent.Event)
 	if err != nil {
-		return fmt.Errorf("stage backup run admission: %w", err)
+		return fmt.Errorf("backup run request expiration: %w", err)
 	}
-	intent.Result = map[string]any{"run_id": requested.ID.String(), "state_event_id": stateID, "execution": "paused"}
+	if _, err := h.runPending.StagePendingRun(ctx, intent.IntentID, intent.Coordinate, *intent.Event, intent.Actor, expiresAt); err != nil {
+		return fmt.Errorf("stage signed backup run pending request: %w", err)
+	}
+	intent.Result = map[string]any{"run_id": requested.ID.String(), "request_event_id": requestID, "execution": "paused"}
 	return ErrBackupRunPending
 }
 
