@@ -269,8 +269,20 @@ func TestF74aArchivePreservesHistoryAndRehydratesDelayedLink(t *testing.T) {
 
 	// A write behind the committed cursor turns archived A@t3 into the return
 	// transition; union history and census must recover A→B→A immediately.
+	bad := makeObs(2, "sha256:bbbb")
+	missingUnit := uuid.New()
+	bad.DeploymentUnitID = &missingUnit
+	require.Error(t, obsRepo.Create(ctx, bad), "failed insert must roll back successor rehydration")
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, a3.ID).Scan(&hotCount))
+	require.Zero(t, hotCount)
 	b2 := makeObs(2, "sha256:bbbb")
 	require.NoError(t, obsRepo.Create(ctx, b2))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, a3.ID).Scan(&hotCount))
+	require.Equal(t, 1, hotCount, "backdated material predecessor must rehydrate its archived successor before commit")
+	var rehydratedDigest bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT f74a_observation_digest(to_jsonb(h),h.observed_at)=a.row_digest
+		FROM runtime_observations h JOIN runtime_observation_archive a USING (id) WHERE h.id=$1`, a3.ID).Scan(&rehydratedDigest))
+	require.True(t, rehydratedDigest)
 	restarted, err := pgxpool.ParseConfig(os.Getenv("BAHIA_MIGRATE_TEST_DATABASE_URL"))
 	require.NoError(t, err)
 	restarted.ConnConfig.RuntimeParams["search_path"] = schema + ",public"
@@ -407,6 +419,9 @@ func TestF74aArchivedAuditRowRetainsImmutableDeploymentUnitTombstone(t *testing.
 	retained, err := archiveRepo.GetArchivedByID(ctx, archivedID)
 	require.NoError(t, err)
 	require.Equal(t, *archived, *retained)
+	rolled, err := db.Down(ctx, pool, zap.NewNop(), db.DownOptions{Confirm: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"000078_f74a_backdated_successor"}, rolled)
 	_, err = db.Down(ctx, pool, zap.NewNop(), db.DownOptions{Confirm: true})
 	require.ErrorContains(t, err, "cannot roll back F74a unit tombstones")
 }
@@ -415,6 +430,9 @@ func TestF74aUnitTombstoneMigrationRejectsOrphanArchive(t *testing.T) {
 	pool, _ := f74aArchiveDatabase(t)
 	ctx := t.Context()
 	rolled, err := db.Down(ctx, pool, zap.NewNop(), db.DownOptions{Confirm: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"000078_f74a_backdated_successor"}, rolled)
+	rolled, err = db.Down(ctx, pool, zap.NewNop(), db.DownOptions{Confirm: true})
 	require.NoError(t, err)
 	require.Equal(t, []string{"000077_f74a_unit_tombstones"}, rolled)
 	serviceID, environmentID, unitID := uuid.New(), uuid.New(), uuid.New()
@@ -476,6 +494,9 @@ func TestF74aUnitTombstoneMigrationUpgradesPopulatedArchive(t *testing.T) {
 	pool, _ := f74aArchiveDatabase(t)
 	ctx := t.Context()
 	rolled, err := db.Down(ctx, pool, zap.NewNop(), db.DownOptions{Confirm: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"000078_f74a_backdated_successor"}, rolled)
+	rolled, err = db.Down(ctx, pool, zap.NewNop(), db.DownOptions{Confirm: true})
 	require.NoError(t, err)
 	require.Equal(t, []string{"000077_f74a_unit_tombstones"}, rolled)
 	serviceID, environmentID, unitID := uuid.New(), uuid.New(), uuid.New()

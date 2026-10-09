@@ -1,0 +1,2 @@
+DROP TRIGGER f74a_backdated_successor_hot ON runtime_observations;
+DROP FUNCTION f74a_rehydrate_backdated_successor();

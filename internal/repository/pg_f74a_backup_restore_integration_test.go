@@ -229,6 +229,9 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 		require.NoError(t, getErr)
 		require.Equal(t, original, restored, "committed rehydration must not change archived ID, digest or provenance")
 	}
+	rolled, err := db.Down(ctx, target, zap.NewNop(), db.DownOptions{Confirm: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"000078_f74a_backdated_successor"}, rolled)
 	_, err = db.Down(ctx, target, zap.NewNop(), db.DownOptions{Confirm: true})
 	require.ErrorContains(t, err, "cannot roll back F74a unit tombstones")
 }
