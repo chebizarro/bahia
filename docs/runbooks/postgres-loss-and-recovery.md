@@ -16,3 +16,21 @@ PostgreSQL is an optional derived index. The daemon's control-plane truth is the
 3. Recheck `/ready` and `canonical_delivery`; SQL recovery alone is not proof of relay catch-up or outbox acceptance. Confirm no unexpected increase in canonical coordinates, service-key signatures or local outbox entries merely because the restored database contains extra rows.
 
 Legacy SQL-only state requires a separately governed migration with a dry-run census, stable semantic coordinates, admission limits, durable progress, crash/retry proof, and independent status. Do not trigger such a migration by restarting the daemon, reconnecting PostgreSQL, or manually changing SQL publish flags. The [startup source audit](../analysis/postgres-startup-source-audit.md) identifies the code paths that must be absent before this runbook is an acceptance proof.
+
+## Paused workflow recovery
+
+`/health` reports `backup_recovery`, `backup_scheduler`,
+`llm_provisioning_recovery`, and `tool_provisioning_recovery` as warnings.
+Automatic recovery and scheduled dispatch for these families are disabled:
+their stored SQL queues and schedules are not signed-intent authority. LLM
+gateway route repair is also paused because its desired state is SQL-backed.
+Do not clear or manually advance the rows. Preserve PostgreSQL and the
+relay/local event store, inventory the affected run ids and source event ids,
+and compare each against retained validated signed intents and canonical
+outcomes. Direct signed backup and tool intent handling remains available, but
+a queued row without matching canonical provenance must not be replayed. The
+[paused recovery is a release blocker](../designs/relay-canonical-startup-and-recovery.md#workflow-recovery-authority),
+not a successful workflow recovery. The
+[workflow recovery design](../designs/relay-canonical-startup-and-recovery.md#workflow-recovery-authority)
+defines the durable replay and restart evidence required to enable these
+runners.

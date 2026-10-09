@@ -1019,18 +1019,8 @@ func New(cfg *config.Config) (*App, error) {
 	backupCoordinator := service.NewBackupRunCoordinator(backupRegistry, backupResolver, logger, backupRunOptions...)
 	backupRestoreCoordinator := service.NewBackupRestoreCoordinator(backupRegistry, backupResolver, logger, backupRestoreOptions...)
 	backupRetentionCoordinator := service.NewBackupRetentionCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRetentionResponder(backupRetentionResponder))
-	bgManager.RegisterWithOptions(backupCoordinator)
-	bgManager.RegisterWithOptions(backupRestoreCoordinator)
-	bgManager.RegisterWithOptions(backupRetentionCoordinator)
-
-	backupScheduler := service.NewBackupSchedulerService(backupRegistry, logger,
-		service.WithBackupSchedulerIdentity(servicePubkey),
-	)
-	backupSchedulerRunner := NewBackupSchedulerRunner(backupScheduler, 0, logger)
-	bgManager.RegisterWithOptions(backupSchedulerRunner)
-	healthProvider.RegisterCheck("backup_scheduler", func() HealthCheck {
-		return HealthCheck{Name: "backup_scheduler", Status: HealthStatusPass, Message: "backup scheduler runner registered"}
-	})
+	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "backup_recovery", "backup run, restore and retention recovery require canonical signed-intent replay")
+	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "backup_scheduler", "scheduled backups require canonical schedule and dispatch provenance")
 	logger.Info("backup control plane registered", zap.String("backend", string(domain.BackupBackendKopia)))
 
 	// Generic AI/ML registry foundation. Bucket-B keeps this additive and keeps
@@ -1047,7 +1037,6 @@ func New(cfg *config.Config) (*App, error) {
 
 	// LLM provisioning control plane.
 	var llmRegistry *service.LLMRegistryService
-	var llmResponder *controlplane.LLMResponder
 	if cfg.LLM.Enabled {
 		llmRouteRepo := repository.NewPgLLMRouteRepository(pool)
 		llmReleaseRepo := repository.NewPgLLMReleaseRepository(pool)
@@ -1056,39 +1045,7 @@ func New(cfg *config.Config) (*App, error) {
 		llmObsRepo := repository.NewPgLLMRouteObservationRepository(pool)
 		llmStateRepo := repository.NewPgLLMRouteStateRepository(pool)
 		llmRegistry = service.NewLLMRegistryService(llmRouteRepo, llmReleaseRepo, envRepo, llmIntentRepo, llmRunRepo, llmObsRepo, llmStateRepo, publisher, logger)
-
-		gatewayHTTPConfig, err := llmGatewayHTTPConfig(cfg.LLM)
-		if err != nil {
-			return nil, fmt.Errorf("resolving LLM gateway authentication: %w", err)
-		}
-		gatewayManager := llmadapter.NewHTTPGatewayRouteManager(gatewayHTTPConfig, nil)
-		provisioners := llmadapter.StaticProvisionerResolver{}
-		llmSecretResolver := secretsAdapter.NewResolver(secretRepo, secretEncryptor)
-		externalProvisioner := llmadapter.NewExternalAPIProvisioner(nil, llmadapter.WithExternalAPISecretResolver(llmSecretResolver))
-		provisioners[domain.LLMBackendKindExternalAPI] = externalProvisioner
-		for _, kind := range []domain.LLMBackendKind{domain.LLMBackendKindVLLM, domain.LLMBackendKindOllama, domain.LLMBackendKindLlamaCPP} {
-			p, err := llmadapter.NewRuntimeProvisioner(kind, cfg.Runtime, logger)
-			if err != nil {
-				return nil, fmt.Errorf("creating LLM runtime provisioner %s: %w", kind, err)
-			}
-			provisioners[kind] = p
-		}
-		placementSvc := service.NewLLMPlacementService(workerRepo, logger, service.WithLLMPlacementPressureThresholds(pressureThresholds))
-		coordOpts := []service.LLMProvisioningCoordinatorOption{
-			service.WithLLMCoordinatorRecoveryIntervals(cfg.LLM.RecoveryPollInterval, cfg.LLM.StaleRunTimeout),
-			service.WithLLMPromotionLock(service.NewPGLLMPromotionLock(pool, logger)),
-			service.WithLLMSecretResolver(llmSecretResolver),
-		}
-		if controlPlaneSigner != nil && controlPlanePool != nil {
-			llmResponder = controlplane.NewLLMResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)
-			coordOpts = append(coordOpts, service.WithLLMProvisioningResponder(llmResponder))
-		}
-		llmCoordinator := service.NewLLMProvisioningCoordinator(llmRegistry, envRepo, llmRunRepo, placementSvc, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger, coordOpts...)
-		llmCoordinator.SetupSubscriptions(publisher)
-		llmReconciler := reconcile.NewLLMRouteReconciler(llmRegistry, envRepo, provisioners, gatewayManager, cfg.LLM.DefaultGatewayRef, logger, reconcile.WithLLMRouteSecretResolver(llmSecretResolver))
-		llmReconciler.SetupSubscriptions(publisher)
-		bgManager.RegisterWithOptions(llmCoordinator)
-		bgManager.RegisterWithOptions(llmReconciler)
+		registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "llm_provisioning_recovery", "LLM provisioning and gateway route repair require canonical signed-intent and desired-state replay")
 		logger.Info("LLM control plane enabled", zap.String("default_gateway_ref", cfg.LLM.DefaultGatewayRef))
 	}
 
@@ -1353,14 +1310,6 @@ func New(cfg *config.Config) (*App, error) {
 	backupCanonical.SetRunVerifier(backupRegistry)
 	backupCanonical.SetRuntimeObservationSource(backupRegistry)
 	backupRegistry.SetCanonicalPublisher(backupCanonical)
-	// Notifier hook: wire Trigger() on coordinators after every registry
-	// mutation so coordinators wake immediately on new/requeued work.
-	backupRegistry.SetNotifyHook(func() {
-		backupCoordinator.Trigger()
-		backupRestoreCoordinator.Trigger()
-		backupRetentionCoordinator.Trigger()
-		backupSchedulerRunner.Trigger()
-	})
 	// Register the intent handler when the backup domain is enabled.
 	if enabledDomains["backup"] && backupRegistry != nil {
 		intentProcessor.RegisterHandler("backup", controlplane.NewBackupIntentHandler(
@@ -2324,9 +2273,7 @@ func New(cfg *config.Config) (*App, error) {
 		logger,
 		service.ToolProvisioningConfig{BaseImageRef: "", TargetRegistry: cfg.Registry.URL, TargetRepo: "tools/swarmstr", InstallerVersion: "v1"},
 	)
-	// Explicit recovery for stranded stored intents; newly arrived tool requests
-	// enter through ContextVM and are handled by the event-driven transport path.
-	bgManager.RegisterWithOptions(toolCoordinator)
+	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "tool_provisioning_recovery", "tool provisioning recovery requires canonical signed-intent replay")
 
 	// MCP (Model Context Protocol) server for AI agent integration.
 

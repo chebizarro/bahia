@@ -117,6 +117,57 @@ func TestBackupIntentHandler_RunIdempotent(t *testing.T) {
 	}
 }
 
+type recordingBackupRunExecutor struct{ started chan uuid.UUID }
+
+func (e recordingBackupRunExecutor) ProcessBackupRun(_ context.Context, id uuid.UUID) error {
+	e.started <- id
+	return nil
+}
+
+func TestBackupIntentHandler_DirectRunDoesNotDrainStoredRows(t *testing.T) {
+	registry := newFakeBackupIntentRegistry()
+	orphanID := uuid.New()
+	registry.runs[orphanID] = &domain.BackupRun{ID: orphanID, Status: domain.RunStatusQueued}
+	executor := recordingBackupRunExecutor{started: make(chan uuid.UUID, 2)}
+	h := NewBackupIntentHandler(BackupIntentHandlerConfig{
+		Registry:  registry,
+		Executors: BackupIntentExecutors{RunExecutor: executor},
+		Logger:    zap.NewNop(),
+	})
+	runID := uuid.New()
+	intent := &Intent{
+		Op: "run",
+		Content: map[string]any{
+			"id":            runID.String(),
+			"recipe_id":     uuid.New().String(),
+			"repository_id": uuid.New().String(),
+			"backend":       "kopia",
+		},
+		Actor: "operator",
+		Event: &gonostr.Event{},
+	}
+	if err := h.HandleIntent(context.Background(), intent); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-executor.started:
+		if got != runID {
+			t.Fatalf("executed stored row %s instead of intent run %s", got, runID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("direct intent did not execute")
+	}
+	registry.runCreatedAlready[runID] = true
+	if err := h.HandleIntent(context.Background(), intent); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-executor.started:
+		t.Fatalf("duplicate intent executed run %s", got)
+	default:
+	}
+}
+
 func TestBackupIntentHandler_Delete(t *testing.T) {
 	registry := newFakeBackupIntentRegistry()
 	publisher := &fakeBackupIntentPublisher{}

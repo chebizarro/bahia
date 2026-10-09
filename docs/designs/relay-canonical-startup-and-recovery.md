@@ -49,6 +49,38 @@ also needs an explicit retirement or tightly governed bootstrap compatibility
 decision: a divergent index must not grant authority that canonical membership
 does not. This is an authorization boundary, not a reason to block core startup.
 
+## Workflow recovery authority
+
+The daemon does not register the SQL-scanning backup run, restore, retention,
+schedule, LLM provisioning and route repair, or tool provisioning recovery runners. Health reports
+each paused family as degraded and warns operators that retained SQL work must
+not be replayed without signed-intent provenance. This does not erase queued
+rows. Backup and tool requests delivered through their signed intent handlers
+can still execute directly; automatic schedule dispatch and LLM provisioning
+remain unavailable until their canonical intake and recovery sources exist.
+This pause is a **release blocker for the affected features**, not a completed
+recovery replacement or evidence that persisted work will finish after restart.
+
+Recovery requires a durable per-workflow record linking the validated source
+intent event id and intent id to a stable run id, external job id/idempotency
+key, accepted/running/terminal status, and last completed step. Backup
+definitions and schedules also need canonical coordinates and a signed dispatch
+intent tied to the schedule version and due instant; a SQL `next_run_at` is not
+authorization. LLM and tool requests must be reconstructed from retained signed
+intents, not their PostgreSQL `queued` or `approved` rows. Replay must wait for
+family catch-up, resolve latest-winner/tombstone state, deduplicate by event and
+intent id, then reattach by stable external id before executing any missing
+step. Progress must enter the local outbox before PostgreSQL projection.
+
+For each family, deterministic acceptance tests inject canonical EVENT and
+EOSE (including duplicates and divergent SQL), restart after acceptance,
+external dispatch, progress publication and terminal publication, and assert
+one external job and one semantic outcome. Repeat with PostgreSQL absent,
+empty and populated by SQL-only rows: only the canonical case may execute.
+Inject relay OK refusal, AUTH and CLOSED and verify the work stays visibly
+degraded instead of advancing the SQL queue. Test two daemons against the same
+intent with canonical fencing or enforce an explicit single-writer topology.
+
 ## Implementation order
 
 1. **Stop boot authority first.** Remove all automatic SQL-to-canonical
