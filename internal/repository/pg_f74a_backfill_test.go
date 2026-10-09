@@ -65,23 +65,43 @@ func TestF74aObservationRunScanPreservesFirstMaterialAndLinkedRows(t *testing.T)
 		rows.AddRow(ids[i], serviceID, envID, nil, digest, "repo", "container", "host", "v1", "healthy", "runtime", []byte(`{}`), nil, "", base.Add(time.Duration(i)*time.Hour), i == 2)
 	}
 	mock.ExpectQuery("SELECT o.id").WillReturnRows(rows)
-	var candidates []uuid.UUID
-	total, linked, material, suppressible, err := scanF74aRuns(context.Background(), mock, base.Add(24*time.Hour), func(id uuid.UUID) error {
-		candidates = append(candidates, id)
-		return nil
-	})
+	total, linked, material, suppressible, err := scanF74aRuns(context.Background(), mock, base.Add(24*time.Hour))
 	require.NoError(t, err)
 	require.EqualValues(t, 4, total)
 	require.EqualValues(t, 1, linked)
 	require.EqualValues(t, 2, material)
 	require.EqualValues(t, 1, suppressible)
-	require.Equal(t, []uuid.UUID{ids[1]}, candidates)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestF74aCompactionGuardRejectsMissingBackupAndUnboundedBatch(t *testing.T) {
-	_, err := CompactF74aObservations(context.Background(), nil, time.Now().Add(-time.Hour), 1, " ", nil)
-	require.ErrorContains(t, err, "backup reference")
-	_, err = CompactF74aObservations(context.Background(), nil, time.Now().Add(-time.Hour), F74aPageLimit+1, "backup-verified", nil)
-	require.ErrorContains(t, err, "batch size")
+// A dry-run candidate can become a real A→B→A transition after a backdated
+// insert. This is why the CLI has no confirmed deletion path.
+func TestF74aDryRunReclassifiesBackdatedMaterialTransition(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	serviceID, envID := uuid.New(), uuid.New()
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	makeRows := func(withBackdated bool) *pgxmock.Rows {
+		rows := pgxmock.NewRows([]string{"id", "service", "env", "unit", "digest", "repo", "container", "host", "version", "health", "source", "metadata", "normalized", "hash", "at", "linked"})
+		add := func(digest string, hour int) {
+			rows.AddRow(uuid.New(), serviceID, envID, nil, "sha256:"+strings.Repeat(digest, 64), "repo", "container", "host", "v1", "healthy", "runtime", []byte(`{}`), nil, "", base.Add(time.Duration(hour)*time.Hour), false)
+		}
+		add("a", 1)
+		if withBackdated {
+			add("b", 2)
+		}
+		add("a", 3)
+		return rows
+	}
+	mock.ExpectQuery("SELECT o.id").WillReturnRows(makeRows(false))
+	_, _, _, before, err := scanF74aRuns(context.Background(), mock, base.Add(24*time.Hour))
+	require.NoError(t, err)
+	require.EqualValues(t, 1, before)
+	mock.ExpectQuery("SELECT o.id").WillReturnRows(makeRows(true))
+	_, _, material, after, err := scanF74aRuns(context.Background(), mock, base.Add(24*time.Hour))
+	require.NoError(t, err)
+	require.EqualValues(t, 3, material)
+	require.Zero(t, after)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

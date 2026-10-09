@@ -20,6 +20,8 @@ type F74aStateCursor struct {
 
 // PgF74aBackfillSource reads only the derived PostgreSQL families needed by
 // the canonical backfill. Cursors are exclusive; a nil UUID starts a family.
+// Pages are not a consistent snapshot: live inserts with IDs behind a cursor
+// require the caller's durable dirty-generation/restart pass before completion.
 type PgF74aBackfillSource struct{ pool pgQueryer }
 
 func NewPgF74aBackfillSource(pool *pgxpool.Pool) *PgF74aBackfillSource {
@@ -96,7 +98,8 @@ func (r *PgF74aBackfillSource) ListSBOMsAfter(ctx context.Context, after uuid.UU
 
 // ListSemanticPackagesAfter returns the lowest UUID for each exact package
 // coordinate. SQL NULL and Go empty string have the same coordinate, matching
-// the canonical publisher. The anti-join is indexed by the semantic key.
+// the canonical publisher. The existing SBOM index narrows the anti-join;
+// production-scale query plans remain unverified without an online index path.
 func (r *PgF74aBackfillSource) ListSemanticPackagesAfter(ctx context.Context, after uuid.UUID, limit int) ([]domain.SBOMPackage, error) {
 	limit, err := f74aLimit(limit)
 	if err != nil {

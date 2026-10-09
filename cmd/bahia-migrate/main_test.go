@@ -43,18 +43,16 @@ func TestDefaultMigrationRelaysPreferSidecarThenInteropRelays(t *testing.T) {
 	require.Equal(t, []string{"wss://sidecar.internal", "wss://interop.example"}, defaultMigrationRelays(cfg))
 }
 
-func TestF74aCompactRequiresFrozenCutoffAndVerifiedBackupReference(t *testing.T) {
-	for _, tc := range []struct {
-		args     []string
-		expected string
-	}{
-		{[]string{"f74a-compact"}, "requires --cutoff"},
-		{[]string{"f74a-compact", "--cutoff", "not-a-time"}, "invalid --cutoff"},
-		{[]string{"f74a-compact", "--cutoff", "2026-10-01T00:00:00Z", "--confirm"}, "requires --backup-id"},
-		{[]string{"f74a-compact", "--cutoff", "2026-10-01T00:00:00Z", "--batch-size", "251"}, "--batch-size must"},
+func TestF74aCompactIsReadOnlyEvenWithConfirm(t *testing.T) {
+	for _, args := range [][]string{
+		{"f74a-compact", "--confirm"},
+		{"f74a-compact", "--cutoff", "2026-10-01T00:00:00Z", "--confirm"},
 	} {
 		var output, errors bytes.Buffer
-		require.Equal(t, 1, run(context.Background(), tc.args, &output, &errors))
-		require.Contains(t, errors.String(), tc.expected)
+		require.Equal(t, 1, run(context.Background(), args, &output, &errors))
+		require.Contains(t, errors.String(), "confirmed F74a compaction is disabled")
 	}
+	var output, errors bytes.Buffer
+	require.Equal(t, 1, run(context.Background(), []string{"f74a-compact"}, &output, &errors))
+	require.Contains(t, errors.String(), "requires --cutoff")
 }
