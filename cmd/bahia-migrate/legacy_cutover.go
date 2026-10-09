@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -20,12 +22,14 @@ type legacyFamily struct {
 	tables []string
 }
 
+// security_osv_vulnerability_cache is fetched external reference data, not
+// an intent, finding, or publication ledger. It is explicitly excluded.
 var legacyFamilies = []legacyFamily{
 	{"dns", []string{"dns_policies", "dns_zones", "dns_record_overrides"}},
 	{"ml", []string{"ml_models", "ml_model_versions", "ml_artifact_refs", "ml_provenance_edges", "ml_recipes", "ml_recipe_runs", "ml_inference_endpoints", "ml_deployment_intents", "ml_deployment_runs", "ml_inference_observations", "ml_inference_state", "ml_evaluation_specs", "ml_evaluation_runs"}},
 	{"adoption", []string{"adopted_runtime_identity"}},
 	{"hive-ci", []string{"hiveci_workflow_runs", "hiveci_workflow_results", "hiveci_pipeline_policies", "hiveci_accepted_releases", "hiveci_release_conflicts"}},
-	{"security", []string{"security_scan_targets", "security_scan_runs", "security_target_latest", "security_findings", "security_scan_schedules", "security_policy_breaches"}},
+	{"security", []string{"security_scan_targets", "security_scan_runs", "security_target_latest", "security_findings", "security_scan_schedules", "security_policy_breaches", "security_observable_publications"}},
 	{"policy", []string{"deployment_policies"}},
 	{"initiation", []string{"hiveci_initiations"}},
 	{"managed-instance", []string{"managed_instance_health", "managed_instance_health_events", "managed_instance_recovery_attempts", "managed_instance_overrides"}},
@@ -33,6 +37,27 @@ var legacyFamilies = []legacyFamily{
 
 const legacyCutoverMarkerFamily = "migration"
 const legacyCutoverMarkerID = "legacy-sql-empty-cutover-v1"
+
+func verifyCutoverOutboxPath(configured, supplied string) (string, error) {
+	if !filepath.IsAbs(configured) {
+		return "", fmt.Errorf("configured daemon outbox path %q is relative; configure an absolute nostr.local_store.outbox_path (or absolute local_store.path)", configured)
+	}
+	if !filepath.IsAbs(supplied) {
+		return "", fmt.Errorf("--outbox-path %q must be absolute", supplied)
+	}
+	configured, supplied = filepath.Clean(configured), filepath.Clean(supplied)
+	if configured != supplied {
+		return "", fmt.Errorf("--outbox-path %q does not match configured daemon outbox %q", supplied, configured)
+	}
+	info, err := os.Lstat(supplied)
+	if err != nil {
+		return "", fmt.Errorf("stat daemon outbox: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return "", fmt.Errorf("daemon outbox must be an existing nonempty regular file")
+	}
+	return supplied, nil
+}
 
 type legacyCount struct {
 	Family string `json:"family"`
@@ -172,14 +197,11 @@ func runLegacyCutover(ctx context.Context, pool *pgxpool.Pool, outboxPath string
 	if !report.EligibleForEmptySeal {
 		return reportError(stderr, "legacy-cutover blocked: nonempty or unproven SQL state; no migration primitives invoked and no marker written")
 	}
-	outbox, err := localstore.OpenOutbox(outboxPath)
+	outbox, err := localstore.OpenExistingOutboxStrict(outboxPath)
 	if err != nil {
-		return reportError(stderr, "legacy-cutover requires exclusive local outbox (stop daemon first): %v", err)
+		return reportError(stderr, "legacy-cutover requires intact exclusive local outbox (stop daemon first): %v", err)
 	}
 	defer outbox.Close()
-	if moved := outbox.MovedAside(); moved != "" {
-		return reportError(stderr, "legacy-cutover outbox corruption moved %s aside; no marker written", moved)
-	}
 	existing, err := outbox.GetControlRecord(legacyCutoverMarkerFamily, legacyCutoverMarkerID)
 	if err != nil {
 		return reportError(stderr, "legacy-cutover read marker: %v", err)

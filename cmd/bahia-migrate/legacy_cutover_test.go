@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,9 +44,38 @@ func TestLegacyCutoverCensusEmptyIsEligibleButDoesNotAssertMigration(t *testing.
 		require.False(t, names[count.Table], "duplicate table %s", count.Table)
 		names[count.Table] = true
 	}
-	for _, table := range []string{"dns_zones", "ml_models", "adopted_runtime_identity", "hiveci_pipeline_policies", "security_scan_targets", "deployment_policies", "hiveci_initiations", "managed_instance_health"} {
+	for _, table := range []string{"dns_zones", "ml_models", "adopted_runtime_identity", "hiveci_pipeline_policies", "security_scan_targets", "security_observable_publications", "deployment_policies", "hiveci_initiations", "managed_instance_health"} {
 		require.True(t, names[table], "missing family table %s", table)
 	}
+	require.False(t, names["security_osv_vulnerability_cache"], "fetched OSV reference cache is not a cutover source")
+}
+
+func TestLegacyCutoverSecurityPublicationLedgerBlocksSeal(t *testing.T) {
+	report, err := censusLegacy(context.Background(), &fakeLegacyCounter{counts: map[string]int64{"security_observable_publications": 1}}, time.Now())
+	require.NoError(t, err)
+	require.Equal(t, []string{"security"}, report.BlockedFamilies)
+	require.False(t, report.EligibleForEmptySeal)
+	require.False(t, validEmptyCutoverMarker(report))
+}
+
+func TestVerifyCutoverOutboxPathRequiresExistingAbsoluteDaemonPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.bolt")
+	_, err := verifyCutoverOutboxPath(path, path)
+	require.ErrorContains(t, err, "stat daemon outbox")
+	require.NoError(t, os.WriteFile(path, []byte("existing"), 0o600))
+	verified, err := verifyCutoverOutboxPath(path, path)
+	require.NoError(t, err)
+	require.Equal(t, path, verified)
+	_, err = verifyCutoverOutboxPath("relative/outbox.bolt", path)
+	require.ErrorContains(t, err, "relative")
+	_, err = verifyCutoverOutboxPath(path, "relative/outbox.bolt")
+	require.ErrorContains(t, err, "must be absolute")
+	_, err = verifyCutoverOutboxPath(path, filepath.Join(filepath.Dir(path), "other.bolt"))
+	require.ErrorContains(t, err, "does not match")
+	link := filepath.Join(filepath.Dir(path), "link.bolt")
+	require.NoError(t, os.Symlink(path, link))
+	_, err = verifyCutoverOutboxPath(link, link)
+	require.ErrorContains(t, err, "regular file")
 }
 
 func TestLegacyCutoverCensusBlocksNonemptyFamiliesAndSignedOutbox(t *testing.T) {
@@ -80,7 +111,7 @@ func TestLegacyCutoverCensusFailsClosedOnMissingTableOrCancellation(t *testing.T
 }
 
 func TestLegacyCutoverCommandRecognizedAndSealFlagScoped(t *testing.T) {
-	for _, args := range [][]string{{"legacy-cutover", "--config", "missing.yaml"}, {"--config", "missing.yaml", "--confirm-quiesced", "legacy-cutover"}} {
+	for _, args := range [][]string{{"legacy-cutover", "--config", "missing.yaml"}, {"--config", "missing.yaml", "--confirm-quiesced", "--outbox-path", "/absolute/outbox.bolt", "legacy-cutover"}} {
 		var out, stderr bytes.Buffer
 		require.Equal(t, 1, run(context.Background(), args, &out, &stderr))
 		require.NotContains(t, stderr.String(), "unknown migration action")
@@ -89,4 +120,7 @@ func TestLegacyCutoverCommandRecognizedAndSealFlagScoped(t *testing.T) {
 	var out, stderr bytes.Buffer
 	require.Equal(t, 1, run(context.Background(), []string{"status", "--confirm-quiesced"}, &out, &stderr))
 	require.True(t, strings.Contains(stderr.String(), "only valid for f74a-import or legacy-cutover"))
+	stderr.Reset()
+	require.Equal(t, 1, run(context.Background(), []string{"legacy-cutover", "--confirm-quiesced"}, &out, &stderr))
+	require.Contains(t, stderr.String(), "requires --outbox-path")
 }

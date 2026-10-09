@@ -28,7 +28,7 @@ const usage = "usage: bahia-migrate [--config path] [--confirm] [--force] [--to 
 	"       bahia-migrate [--config path] [--cutoff RFC3339] f74a-census\n" +
 	"       bahia-migrate [--config path] --cutoff RFC3339 f74a-compact (read-only dry run)\n" +
 	"       bahia-migrate [--config path] --confirm-quiesced f74a-import (stop daemon and all SQL writers first)\n" +
-	"       bahia-migrate [--config path] [--confirm-quiesced] legacy-cutover (census; seal only when empty)\n" +
+	"       bahia-migrate [--config path] [--confirm-quiesced --outbox-path /absolute/daemon/outbox.bolt] legacy-cutover (census; seal only when empty)\n" +
 	"       bahia-migrate [--config path] --target default|control-plane [--after token] [--max-rows n] outbox-transfer (read-only inventory)\n" +
 	"       bahia-migrate [--config path] [--dry-run] [--relays url,...] [--relay-backfill] nostr"
 
@@ -56,6 +56,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	configPath := flags.String("config", "config.yaml", "Bahia configuration file")
 	confirm := flags.Bool("confirm", false, "confirm destructive down migration")
 	confirmQuiesced := flags.Bool("confirm-quiesced", false, "confirm all daemon and SQL writers are stopped for offline cutover")
+	cutoverOutbox := flags.String("outbox-path", "", "legacy-cutover seal: absolute daemon outbox path, matching configured path")
 	cutoffText := flags.String("cutoff", "", "F74a census/compaction UTC cutoff in RFC3339 format")
 	force := flags.Bool("force", false, "allow down across out-of-order applied history")
 	to := flags.String("to", "", "full filename stem to retain when running down")
@@ -88,6 +89,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if action != "f74a-import" && action != "legacy-cutover" && *confirmQuiesced {
 		return reportError(stderr, "--confirm-quiesced is only valid for f74a-import or legacy-cutover")
+	}
+	if *cutoverOutbox != "" && (action != "legacy-cutover" || !*confirmQuiesced) {
+		return reportError(stderr, "--outbox-path is only valid with --confirm-quiesced legacy-cutover")
+	}
+	if action == "legacy-cutover" && *confirmQuiesced && *cutoverOutbox == "" {
+		return reportError(stderr, "legacy-cutover seal requires --outbox-path with the daemon's absolute outbox path")
 	}
 	if action != "down" && *confirm {
 		return reportError(stderr, "--confirm is only valid for down")
@@ -132,9 +139,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if action == "down" && !*confirm {
 		return reportError(stderr, "down requires --confirm")
 	}
-	cfg, err := config.Load(*configPath)
+	loadConfig := config.Load
+	if action == "legacy-cutover" {
+		loadConfig = config.LoadReadOnly
+	}
+	cfg, err := loadConfig(*configPath)
 	if err != nil {
 		return reportError(stderr, "loading Bahia config: %v", err)
+	}
+	if action == "legacy-cutover" && *confirmQuiesced {
+		*cutoverOutbox, err = verifyCutoverOutboxPath(cfg.Nostr.LocalStore.ResolvedOutboxPath(), *cutoverOutbox)
+		if err != nil {
+			return reportError(stderr, "legacy-cutover outbox path: %v", err)
+		}
 	}
 	pool, err := db.Connect(ctx, cfg.DB, zap.NewNop())
 	if err != nil {
@@ -148,7 +165,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runF74aImport(ctx, cfg, pool, stdout, stderr)
 	}
 	if action == "legacy-cutover" {
-		return runLegacyCutover(ctx, pool, cfg.Nostr.LocalStore.ResolvedOutboxPath(), *confirmQuiesced, stdout, stderr)
+		return runLegacyCutover(ctx, pool, *cutoverOutbox, *confirmQuiesced, stdout, stderr)
 	}
 	if action == "f74a-census" || action == "f74a-compact" {
 		return runF74aMaintenance(ctx, pool, action, cutoff, stdout, stderr)

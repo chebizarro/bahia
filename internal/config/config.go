@@ -1668,9 +1668,25 @@ func Defaults() *Config {
 // BAHIA_RUNTIME__DEFAULT__TYPE or
 // BAHIA_RUNTIME__ENVIRONMENTS__production__COMPOSE_DIR.
 func Load(configPath string) (*Config, error) {
+	return load(configPath, true)
+}
+
+// LoadReadOnly validates the effective config without persisting mutable-policy
+// environment seeds. It fails when those seeds would rewrite the YAML.
+func LoadReadOnly(configPath string) (*Config, error) {
+	return load(configPath, false)
+}
+
+func load(configPath string, persistBootstrap bool) (*Config, error) {
 	k := koanf.New(".")
 	cfg := Defaults()
-	protectedMutableEnv, err := seedMutablePolicy(configPath)
+	var protectedMutableEnv map[string]struct{}
+	var err error
+	if persistBootstrap {
+		protectedMutableEnv, err = seedMutablePolicy(configPath)
+	} else {
+		protectedMutableEnv, err = inspectMutablePolicySeeds(configPath)
+	}
 	if err != nil {
 		return nil, err
 	}

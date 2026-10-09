@@ -162,6 +162,35 @@ func OpenOutbox(path string) (*Outbox, error) {
 	return &Outbox{shared: shared}, nil
 }
 
+// OpenExistingOutboxStrict takes the daemon outbox's exclusive lock without
+// creating, upgrading, renaming, or replacing the file. Offline cutover tools
+// use it because even a corrupt outbox may hold the only signed copy of an
+// event; an automatic repair would destroy cutover evidence.
+func OpenExistingOutboxStrict(path string) (*Outbox, error) {
+	if !filepath.IsAbs(path) {
+		return nil, errors.New("strict outbox path must be absolute")
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat existing outbox %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return nil, fmt.Errorf("existing outbox %s must be a nonempty regular file (no symlinks)", path)
+	}
+	openOutboxes.Lock()
+	defer openOutboxes.Unlock()
+	if openOutboxes.byPath[path] != nil {
+		return nil, fmt.Errorf("outbox %s is already open in this process", path)
+	}
+	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: openTimeout})
+	if err != nil {
+		return nil, fmt.Errorf("open existing outbox %s without repair: %w", path, err)
+	}
+	shared := &sharedOutbox{path: path, db: db, refs: 1}
+	openOutboxes.byPath[path] = shared
+	return &Outbox{shared: shared}, nil
+}
+
 // OpenOutboxReadOnly opens the outbox at path in read-only mode with a
 // timeout. It never creates the file or acquires a write lock, making it safe
 // for concurrent reads against another process's outbox (e.g. the CLI

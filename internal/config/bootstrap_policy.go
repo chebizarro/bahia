@@ -38,6 +38,16 @@ var mutablePolicyBootstrapSeeds = []bootstrapSeed{
 // the mounted YAML document. It returns environment names that must be ignored
 // by the normal koanf environment provider because the file now owns them.
 func seedMutablePolicy(configPath string) (map[string]struct{}, error) {
+	return loadMutablePolicySeeds(configPath, true)
+}
+
+// inspectMutablePolicySeeds never rewrites a mounted config. If environment
+// bootstrap would change it, offline read-only commands fail instead.
+func inspectMutablePolicySeeds(configPath string) (map[string]struct{}, error) {
+	return loadMutablePolicySeeds(configPath, false)
+}
+
+func loadMutablePolicySeeds(configPath string, persist bool) (map[string]struct{}, error) {
 	protected := make(map[string]struct{})
 	if strings.TrimSpace(configPath) == "" {
 		return protected, nil
@@ -76,6 +86,9 @@ func seedMutablePolicy(configPath string) (map[string]struct{}, error) {
 	}
 
 	if changed {
+		if !persist {
+			return nil, fmt.Errorf("read-only config load refuses mutable-policy bootstrap; unset its environment seeds or persist them before running the census")
+		}
 		encoded, err := yaml.Marshal(&document)
 		if err != nil {
 			return nil, fmt.Errorf("encoding bootstrapped config: %w", err)

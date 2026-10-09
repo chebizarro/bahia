@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -566,6 +567,22 @@ func TestLoadMutableSidecarEnvironmentSeedsOnceAndPersists(t *testing.T) {
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
 		t.Fatalf("config mode changed: info=%v err=%v", info, err)
+	}
+}
+
+func TestLoadReadOnlyNeverBootstrapsMutablePolicy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte("dev_mode: true\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BAHIA_NOSTR__SIDECAR__ENABLED", "true")
+	if _, err := LoadReadOnly(path); err == nil || !strings.Contains(err.Error(), "read-only config load refuses mutable-policy bootstrap") {
+		t.Fatalf("LoadReadOnly error = %v, want bootstrap refusal", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, original) {
+		t.Fatalf("LoadReadOnly mutated config: %q, err=%v", got, err)
 	}
 }
 
