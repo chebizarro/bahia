@@ -260,7 +260,7 @@ func verifyProductionRelayPath(ctx context.Context, t *testing.T) {
 			accepted = true
 			continue
 		}
-		if result.IsAuthRequired() {
+		if nostradapter.IsAuthRequiredReason(result.Reason) {
 			t.Fatalf("relay %s requires AUTH but verification key was not accepted: %s", result.RelayURL, result.Reason)
 		}
 		if result.Reason != "" || result.Error != nil {

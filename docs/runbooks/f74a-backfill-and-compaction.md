@@ -1,0 +1,147 @@
+# F74a backfill and observation compaction
+
+This procedure verifies the derived PostgreSQL source, canonical F74a
+publication, and safe removal of redundant historical runtime samples. It
+applies only to a Bahia image whose `bahia-migrate` binary exposes
+`f74a-census` and `f74a-compact`. If either action or its safety flags are
+absent, stop: the older image cannot perform this procedure. PostgreSQL is a
+derived index; preserve the service key, relay-held canonical records, and
+local event store/outbox when backing up or restoring the daemon.
+
+This procedure never archives or deletes `nostr_events`. That table contains
+multiple kinds of inbound and outbound events and has its own
+[event-store lifecycle](nostr-event-store-lifecycle.md) procedure. Do not
+substitute manually authored production SQL for the commands below.
+
+## 1. Establish a baseline
+
+Use the candidate image and record its digest, Bahia commit, schema version,
+service-key identity, deployment topology, and relay set. Confirm that only
+one authority for this signing key/local outbox runs the backfill. Record
+`/health`, `/ready`, `canonical_delivery`, outbox pending/failed counts,
+relay acceptance/refusal state, and process RSS before work begins. A ready
+HTTP response means the daemon serves traffic; it does not prove that F74a
+backfill completed or that relays accepted every staged event.
+
+Choose one UTC cutoff and keep it unchanged through the rehearsal. A cutoff
+is a boundary for eligibility, not permission to delete every older row.
+
+```sh
+CUTOFF=2026-10-01T00:00:00Z
+CONFIG=/etc/bahia/config.yaml
+bahia-migrate f74a-census --config "$CONFIG" --cutoff "$CUTOFF"
+```
+
+Capture the structured census result and command exit status. Distinguish
+physical package rows from distinct semantic package coordinates and
+duplicates; historical observations from state-linked current observations;
+and material transitions from suppressible no-op samples. Do not equate 1.5
+million observations with 1.5 million canonical publications: only the
+state-linked current observation for each state is a backfill source. Check
+that the reported cutoff is exactly the requested cutoff. Investigate any
+foreign-key or coordinate mismatch before compacting.
+
+## 2. Back up and prove restore before deletion
+
+Take a consistent, verified backup through the approved PostgreSQL backup
+control plane, and back up Bahia's local event store and outbox through their
+normal durable-volume procedure. Record the immutable backup reference,
+backup completion receipt, cryptographic digest, retained object/version, and
+the exact database/schema identity. A backup job merely reporting success is
+not a restore proof.
+
+Restore that backup to an isolated staging database. Run `f74a-census` there
+with the same cutoff and compare counts and a sample of retained state links
+and material transitions to the source receipt. Confirm the restored daemon
+uses a staging key and isolated relays, or leave it stopped; never let a
+restored production key publish concurrently with the live authority.
+
+## 3. Rehearse dry-run and bounded deletion
+
+On the restored staging database, run the dry run. `f74a-compact` does not
+delete unless `--confirm` and `--backup-id` are both present.
+
+```sh
+bahia-migrate f74a-compact --config "$STAGING_CONFIG" \
+  --cutoff "$CUTOFF" --batch-size 250
+```
+
+The dry run must identify eligible **unlinked, older no-op observation
+samples** only, retain the first row of every material run, retain every
+state-linked row, and retain all rows newer than the cutoff. It also reports
+duplicate packages, but package physical deletion is disabled. Record the
+proposed count, cutoff, batch size, and a sample of preserved forensic
+transitions. An unexpected count, an absent cutoff, or a proposed state-link
+deletion is a stop condition.
+
+Use the immutable backup reference obtained in step 2, not an arbitrary
+free-text approval token. Run confirmed batches only in the isolated restore
+first; monitor transaction duration, database I/O/WAL, errors, and outbox
+health. Re-run the same command after an interrupted batch to verify that it
+is idempotent and advances only past committed deletes.
+
+```sh
+bahia-migrate f74a-compact --config "$STAGING_CONFIG" \
+  --cutoff "$CUTOFF" --batch-size 250 \
+  --confirm --backup-id "$BACKUP_ID"
+bahia-migrate f74a-census --config "$STAGING_CONFIG" --cutoff "$CUTOFF"
+```
+
+Compare before/after counts and sampled state links. Restore the original
+backup **again** into a separate isolated database, then repeat the baseline
+census and sampled checks. This second restore proves rollback from the
+compacted state. A missing or failed second restore blocks live deletion.
+
+## 4. Exercise the scaled integration fixture
+
+Use a dedicated disposable PostgreSQL database with enough disk and WAL
+capacity for 20,000 package rows and 1,500,000 observations. The fixture
+migrates that database, inserts two physical rows per semantic package, links
+one current observation, verifies counts and a bounded state-linked query,
+and rolls back its data transaction. Migration changes are not rolled back.
+
+```sh
+BAHIA_F74A_SCALE_DATABASE_URL="$DISPOSABLE_DATABASE_URL" \
+BAHIA_F74A_SCALE_CONFIRM=disposable \
+go test -tags=integration ./test/integration \
+  -run '^TestF74aScaleFixture$' -count=1 -v
+```
+
+The fixture validates **data shape**, not throughput, memory ceilings, relay
+ACKs, or compaction correctness. Capture its runtime, database size/WAL,
+query plans for the candidate repository's package and state-linked
+observation keyset reads, and peak process RSS. A skip without the two
+explicit environment variables is not a pass.
+
+## 5. Docker/staging soak and restart proof
+
+Use the real candidate image and the scaled fixture in isolated staging. This
+is an external acceptance gate, not a conclusion from a unit test. Record a
+single evidence bundle containing image digest, schema version, dataset
+counts, timings, peak RSS, outbox high-water mark, canonical-coordinate
+counts, health transitions, and relay `OK` outcomes. Exercise these
+boundaries without replacing relays with a mock:
+
+1. Start with the scaled source and verify `/ready` is available without
+   waiting for the entire backfill. Health must distinguish a pending F74a
+   pass from a completed canonical-family pass.
+2. Interrupt and restart during each keyset phase, including after an event
+   is durably queued but before the cursor advances. Confirm resumed cursors,
+   unchanged semantic queued cardinality on retry, and eventual relay
+   acceptance. Distinct legacy-coordinate tombstones count separately.
+3. Cause relay refusal, authorization challenge, and a pending-outbox
+   admission pause. A refusal must not be reported as acceptance or advance
+   completion; after recovery, delivery and the completion marker must
+   converge without duplicate semantic coordinates.
+4. Write a new package/state transition while the pass is active. Confirm
+   the dirty generation forces a complete recheck before completion.
+5. Rehearse the backup, isolated restore, dry run, confirmed batches, second
+   restore, and count comparison from steps 2–3 using the candidate image.
+
+Record which checks were observed and which could not run. Do not mark the
+F74a rollout accepted or production-ready from a skipped fixture, an
+unavailable staging environment, a queued-but-unacknowledged outbox event, or
+an unproved restore. Before live compaction, require operator approval based
+on the recorded backup and restore evidence; use the same fixed cutoff and
+bounded command sequence, and stop on any failed batch or changed retention
+estimate.
