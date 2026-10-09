@@ -57,6 +57,15 @@ func (p *IntentStatusPublisher) PublishRejection(ctx context.Context, intent *In
 	_ = p.publishStatus(ctx, intent, "rejected", "rejected", reason, nil)
 }
 
+// PublishRejectionChecked reports failed admission to the caller so a
+// suspended request can be retried without ever manufacturing acceptance.
+func (p *IntentStatusPublisher) PublishRejectionChecked(ctx context.Context, intent *Intent, reason string) error {
+	if p == nil || p.publish == nil || p.signer == nil {
+		return fmt.Errorf("intent rejection status publisher is not configured")
+	}
+	return p.publishStatus(ctx, intent, "rejected", "rejected", reason, nil)
+}
+
 // PublishConflict publishes a "conflict" status for a stale expected_updated_at.
 func (p *IntentStatusPublisher) PublishConflict(ctx context.Context, intent *Intent) {
 	_ = p.publishStatus(ctx, intent, "conflict", "revision_conflict", "stale expected_updated_at", nil)

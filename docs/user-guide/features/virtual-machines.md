@@ -14,8 +14,10 @@ interface after signed-intent cutover, not currently usable endpoints.
 
 Operator-signed `30900` requests in the `virtualization` domain are checked
 for signature, organization permission, and exact operation/resource binding,
-then receive a rejected `30315` status. A relay `OK` does not authorize a
-provider action. No accepted operation, provider execution or canonical
+then remain refused; the daemon attempts a rejected `30315` status. If status
+delivery fails, a later replay can reattempt refusal but cannot accept the
+request. A relay `OK` does not authorize a provider action. No accepted
+operation, provider execution or canonical
 virtualization state is inferred from the legacy SQL journal.
 
 The PostgreSQL journal is retained but is not replayed into signed state or

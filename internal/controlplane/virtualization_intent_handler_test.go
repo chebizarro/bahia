@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -80,6 +81,62 @@ func TestVirtualizationIntentRefusesValidRequestWithoutCanonicalExecutor(t *test
 	require.Len(t, statuses, 2)
 	require.False(t, processor.IsProcessed(intent.IntentID))
 	require.Equal(t, domain.PermWriteDeployments, NewVirtualizationIntentHandler().PermissionFor("request"))
+}
+
+func TestVirtualizationIntentCannotInheritAnotherDomainsProcessedID(t *testing.T) {
+	actor := nostr.Generate()
+	org := uuid.New()
+	request := virtualizationOperationRequest{OperationID: uuid.Must(uuid.NewV7()), ResourceID: uuid.New(), ResourceKind: domain.PersistentVMResource, Action: domain.VMOperationStart, ExpectedGeneration: 1, IdempotencyKey: uuid.Must(uuid.NewV7()).String(), Reason: "operator requested start"}
+	ev := virtualizationSignedRequest(t, actor, org, request)
+	store := openTestStore(t)
+	trust := NewTrustSet(nil, zap.NewNop(), WithBootstrapOwners(map[string]string{org.String(): actor.Public().Hex()}))
+	prior := NewIntentProcessor(trust, store, nil, IntentProcessorConfig{EnabledDomains: map[string]bool{"test": true}}, zap.NewNop())
+	prior.RegisterHandler("test", &testDomainHandler{})
+	other := testIntent(t, "create", "unrelated")
+	other.Actor, other.OrgID, other.IntentID = actor.Public().Hex(), org, request.IdempotencyKey
+	require.NoError(t, prior.ProcessInProcess(t.Context(), other))
+	require.Equal(t, "test", prior.ProcessedIntent(request.IdempotencyKey).Domain)
+	var statuses []nostr.Event
+	status := NewIntentStatusPublisher(func(_ context.Context, event nostr.Event) error {
+		statuses = append(statuses, event)
+		return nil
+	}, keyer.NewPlainKeySigner(nostr.Generate()), zap.NewNop())
+	processor := NewIntentProcessor(trust, store, status, IntentProcessorConfig{EnabledDomains: map[string]bool{"virtualization": true}}, zap.NewNop())
+	processor.RegisterHandler("virtualization", NewVirtualizationIntentHandler())
+	require.ErrorIs(t, processor.ProcessRelayIntent(t.Context(), ev), readmodel.ErrVirtualizationUnavailable)
+	require.Len(t, statuses, 1)
+	require.Equal(t, "rejected", extractTag(statuses[0], "status"))
+	require.Equal(t, "test", processor.ProcessedIntent(request.IdempotencyKey).Domain,
+		"virtualization refusal does not overwrite another domain's marker")
+}
+
+func TestVirtualizationRejectionPublicationFailureRemainsRetryable(t *testing.T) {
+	actor := nostr.Generate()
+	org := uuid.New()
+	request := virtualizationOperationRequest{OperationID: uuid.Must(uuid.NewV7()), ResourceID: uuid.New(), ResourceKind: domain.PersistentVMResource, Action: domain.VMOperationStart, ExpectedGeneration: 1, IdempotencyKey: uuid.Must(uuid.NewV7()).String(), Reason: "operator requested start"}
+	ev := virtualizationSignedRequest(t, actor, org, request)
+	store := openTestStore(t)
+	trust := NewTrustSet(nil, zap.NewNop(), WithBootstrapOwners(map[string]string{org.String(): actor.Public().Hex()}))
+	signer := keyer.NewPlainKeySigner(nostr.Generate())
+	failed := errors.New("outbox unavailable")
+	status := NewIntentStatusPublisher(func(context.Context, nostr.Event) error { return failed }, signer, zap.NewNop())
+	processor := NewIntentProcessor(trust, store, status, IntentProcessorConfig{EnabledDomains: map[string]bool{"virtualization": true}}, zap.NewNop())
+	processor.RegisterHandler("virtualization", NewVirtualizationIntentHandler())
+	err := processor.ProcessRelayIntent(t.Context(), ev)
+	require.ErrorIs(t, err, readmodel.ErrVirtualizationUnavailable)
+	require.ErrorIs(t, err, failed)
+	require.False(t, processor.IsProcessed(request.IdempotencyKey))
+	var retried []nostr.Event
+	status = NewIntentStatusPublisher(func(_ context.Context, event nostr.Event) error {
+		retried = append(retried, event)
+		return nil
+	}, signer, zap.NewNop())
+	processor = NewIntentProcessor(trust, store, status, IntentProcessorConfig{EnabledDomains: map[string]bool{"virtualization": true}}, zap.NewNop())
+	processor.RegisterHandler("virtualization", NewVirtualizationIntentHandler())
+	require.ErrorIs(t, processor.ProcessRelayIntent(t.Context(), ev), readmodel.ErrVirtualizationUnavailable)
+	require.Len(t, retried, 1)
+	require.Equal(t, "rejected", extractTag(retried[0], "status"))
+	require.False(t, processor.IsProcessed(request.IdempotencyKey))
 }
 
 func TestVirtualizationIntentRejectsUnboundOrForgedRequests(t *testing.T) {

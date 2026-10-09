@@ -50,8 +50,9 @@ The intent ID is the idempotency key. An exact retry replays the result; differe
 A relay `OK` proves that a relay accepted the event. The service's `30315` status reports admission, rejection, or conflict. Durable completion comes from canonical state, audit, and domain outcome records.
 
 Virtualization `request` intents use `t=virtualization` and
-`d=vm-operation:<operation_id>`. They receive a rejected status while the
+`d=vm-operation:<operation_id>`. They remain refused while the
 canonical operation executor is unavailable; a relay `OK` does not start a VM.
+The daemon attempts a rejected status, but its delivery is not guaranteed.
 
 Organization, secret, and notification intents are gift-wrapped so relays do not see confidential content.
 

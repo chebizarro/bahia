@@ -323,7 +323,7 @@ func vmCreate(ctx context.Context, q pgQueryer, kind domain.VirtualizationResour
 	if err := vmValidate(value); err != nil {
 		return err
 	}
-	if err := vmReferences(ctx, q, value); err != nil {
+	if err := vmReferences(ctx, q, value, nil); err != nil {
 		return err
 	}
 	table, err := vmTable(kind)
@@ -406,7 +406,8 @@ func vmUpdate[T any](ctx context.Context, q pgQueryer, kind domain.Virtualizatio
 	if err = vmValidate(v); err != nil {
 		return err
 	}
-	if err = vmReferences(ctx, q, v); err != nil {
+	priorVM, _ := any(old).(*domain.PersistentVMDeployment)
+	if err = vmReferences(ctx, q, v, priorVM); err != nil {
 		return err
 	}
 	if kind == domain.PersistentVMResource {
@@ -481,7 +482,7 @@ func vmArtifactTransition(a, b domain.VMArtifactState) bool {
 	}
 	return false
 }
-func vmReferences(ctx context.Context, q pgQueryer, value any) error {
+func vmReferences(ctx context.Context, q pgQueryer, value any, priorVM *domain.PersistentVMDeployment) error {
 	switch v := value.(type) {
 	case *domain.VirtualizationHost:
 		var c domain.VMCapacity
@@ -518,7 +519,11 @@ func vmReferences(ctx context.Context, q pgQueryer, value any) error {
 		}
 		if v.DeploymentUnitID != nil {
 			var ok bool
-			if err = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM deployment_units WHERE id=$1 AND environment_id=$2 AND retired_at IS NULL)`, *v.DeploymentUnitID, *v.EnvironmentID).Scan(&ok); err != nil {
+			unchangedTarget := priorVM != nil && priorVM.OrgID == v.OrgID &&
+				reflect.DeepEqual(priorVM.ServiceID, v.ServiceID) &&
+				reflect.DeepEqual(priorVM.EnvironmentID, v.EnvironmentID) &&
+				reflect.DeepEqual(priorVM.DeploymentUnitID, v.DeploymentUnitID)
+			if err = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM deployment_units WHERE id=$1 AND environment_id=$2 AND (retired_at IS NULL OR $3))`, *v.DeploymentUnitID, *v.EnvironmentID, unchangedTarget).Scan(&ok); err != nil {
 				return err
 			}
 			if !ok {

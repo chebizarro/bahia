@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
 
@@ -234,7 +235,10 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	}
 
 	// Step 1: Deduplicate by intent_id.
-	if p.isProcessed(intent.IntentID) {
+	// Virtualization is suspended and never marks an intent processed. Even if
+	// another domain used the same ID, its receipt cannot admit VM work or
+	// turn this request into an accepted replay.
+	if intent.Domain != kinds.VirtualizationDomain && p.isProcessed(intent.IntentID) {
 		record := p.ProcessedIntent(intent.IntentID)
 		if requiresStrictIntentReplay(intent) && record != nil && (record.Actor != intent.Actor || record.Domain != intent.Domain || record.Op != intent.Op || record.Coordinate != intent.Coordinate || (record.ContentHash != "" && record.ContentHash != intentContentHash(intent.Content))) {
 			err := &intentReplayConflictError{intentID: intent.IntentID}
@@ -339,6 +343,15 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 			zap.String("intent_id", intent.IntentID),
 			zap.Error(err),
 		)
+		if intent.Domain == kinds.VirtualizationDomain {
+			if p.status == nil {
+				return fmt.Errorf("%w: rejection status publisher is unavailable", err)
+			}
+			if statusErr := p.status.PublishRejectionChecked(ctx, intent, err.Error()); statusErr != nil {
+				return fmt.Errorf("%w: rejection status publication failed: %w", err, statusErr)
+			}
+			return err
+		}
 		if p.status != nil {
 			if IsRevisionConflict(err) {
 				if _, stateConflict := err.(*intentStateConflictError); stateConflict {

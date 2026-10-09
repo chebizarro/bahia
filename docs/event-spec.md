@@ -353,9 +353,11 @@ content binds `operation_id` (UUIDv7), `resource_id`,
 `resource_kind=persistent_vm`, `action` (`start`, `graceful_stop`, or `reboot`),
 `expected_generation`, `idempotency_key` equal to `intent_id`, and a reason.
 The daemon checks the signature, tenant permission, envelope and content
-binding, then returns a `rejected` `30315` status while canonical commit and
-restart-safe execution are unavailable. A relay `OK` is not operation
-acceptance; no SQL journal row authorizes execution or state publication.
+binding, then refuses the operation while canonical commit and restart-safe
+execution are unavailable. It attempts a `rejected` `30315` status; a status
+publication failure leaves the request unaccepted, and a later replay can
+reattempt the refusal. A relay `OK` is not operation acceptance; no SQL
+journal row authorizes execution or state publication.
 
 `schema=bahia.state.virtualization.v1`, `d=<resource-prefix>:<uuid>`, tags
 `domain=virtualization`, `entity`, `org`, `generation`, `sequence`,
