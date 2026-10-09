@@ -187,6 +187,37 @@ func TestBackupConfigPrecommitBelowQuorumHasNoAdmissionOrProof(t *testing.T) {
 	require.False(t, found)
 }
 
+func TestBackupConfigDuplicatePrecommitCannotSucceedBeforeProofCommit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	relay := startSyncTestRelay(t, syncTestRelayOptions{})
+	pool := newSyncTestPool(relay)
+	defer pool.Close()
+	key := gonostr.Generate()
+	h := newLocalOutboxHarness(t, t.TempDir(), pool, key.Hex(), 0,
+		WithPublishTarget(repository.NostrPublishTargetControlPlane))
+	ev := gonostr.Event{Kind: gonostr.Kind(kinds.CASControlState), CreatedAt: gonostr.Now(),
+		Tags:    gonostr.Tags{{"d", "backup-recipe:duplicate"}, {"t", kinds.CPStateTopicBackupRecipe}, {"domain", "backup"}},
+		Content: `{"deleted":false}`}
+	require.NoError(t, ev.Sign(key))
+	first, created := h.pub.trackDelivery(ev, 0)
+	require.True(t, created, "the first publisher is in flight before durable admission")
+	require.ErrorContains(t, h.pub.PublishBeforeCommit(ctx, ev, "backup-recipe", nil), "without durable quorum proof")
+	_, found, err := h.outbox.Get(ev.ID)
+	require.NoError(t, err)
+	require.False(t, found, "the duplicate's relay OK did not become a durable commit")
+	h.pub.forgetDelivery(first)
+	require.NoError(t, h.pub.PublishBeforeCommit(ctx, ev, "backup-recipe", nil))
+	proof, found, err := h.outbox.GetDeliveryProof(ev.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, proof.ValidFor(ev, repository.NostrPublishTargetControlPlane))
+	tracked, created := h.pub.trackDelivery(ev, 0)
+	require.True(t, created)
+	require.NoError(t, h.pub.PublishBeforeCommit(ctx, ev, "backup-recipe", nil), "a duplicate may succeed only after exact proof is durable")
+	h.pub.forgetDelivery(tracked)
+}
+
 func rejectEvents(relay *syncTestRelay, reason string) {
 	relay.relay.OnEvent = func(context.Context, gonostr.Event) (bool, string) { return true, reason }
 }

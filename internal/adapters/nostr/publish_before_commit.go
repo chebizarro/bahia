@@ -69,7 +69,16 @@ func (p *Publisher) PublishBeforeCommit(ctx context.Context, ev nostr.Event, ent
 	p.deliveriesMu.Lock()
 	if _, tracked := p.deliveries[eventID]; tracked {
 		p.deliveriesMu.Unlock()
-		return nil
+		if p.localOutbox != nil {
+			proof, found, err := p.localOutbox.GetDeliveryProof(ev.ID)
+			if err != nil {
+				return fmt.Errorf("nostr event %s duplicate delivery proof: %w", eventID, err)
+			}
+			if found && proof.ValidFor(ev, p.target) {
+				return nil
+			}
+		}
+		return fmt.Errorf("nostr event %s is already publishing without durable quorum proof", eventID)
 	}
 	p.deliveries[eventID] = d
 	p.deliveriesMu.Unlock()
