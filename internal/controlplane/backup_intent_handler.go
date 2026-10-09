@@ -353,12 +353,70 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 			!backupRunMetadataContains(receipt.Metadata, requested.Metadata) {
 			return fmt.Errorf("backup run request intake paused: execution inputs conflict with the signed request")
 		}
+		if requested.ExecutionSnapshot != nil || receipt.ExecutionSnapshot != nil {
+			if err := validateBackupExecutionSnapshot(requested, receipt); err != nil {
+				return fmt.Errorf("backup run request intake paused: %w", err)
+			}
+			proof, ok := h.runReceipts.(backupExecutionConfigProof)
+			if !ok {
+				return fmt.Errorf("backup run request intake paused: canonical configuration proof is unavailable")
+			}
+			if err := proof.VerifyBackupExecutionConfig(ctx, requested.ExecutionSnapshot); err != nil {
+				return fmt.Errorf("backup run request intake paused: %w", err)
+			}
+		}
 		if receipt.Status == domain.RunStatusQueued || receipt.Status == domain.RunStatusRunning {
 			return fmt.Errorf("backup run request intake paused: an ACKed canonical run is %s but canonical execution recovery is unavailable", receipt.Status)
 		}
 		return fmt.Errorf("backup run request intake paused: an ACKed canonical terminal run exists but request replay remains unavailable")
 	}
 	return fmt.Errorf("backup run request intake paused: no ACKed canonical run-state receipt exists")
+}
+
+// validateBackupExecutionSnapshot rejects any drift between the operator's
+// signed request, the service's ACKed run state, and the config tuple itself.
+func validateBackupExecutionSnapshot(requested, receipt *domain.BackupRun) error {
+	if requested.ExecutionSnapshot == nil || receipt.ExecutionSnapshot == nil {
+		return fmt.Errorf("execution snapshot is missing from the signed request or run receipt")
+	}
+	snapshot := requested.ExecutionSnapshot
+	recipe, repository := snapshot.Recipe, snapshot.Repository
+	if err := domain.ValidateBackupRecipe(&recipe); err != nil {
+		return fmt.Errorf("execution snapshot recipe is invalid: %w", err)
+	}
+	if err := domain.ValidateBackupRepository(&repository); err != nil {
+		return fmt.Errorf("execution snapshot repository is invalid: %w", err)
+	}
+	if snapshot.Policy != nil {
+		policy := *snapshot.Policy
+		if err := domain.ValidateBackupPolicy(&policy); err != nil {
+			return fmt.Errorf("execution snapshot policy is invalid: %w", err)
+		}
+		if policy.RequireVerification && policy.VerificationMode != requested.VerificationMode {
+			return fmt.Errorf("execution snapshot verification conflicts with policy")
+		}
+	}
+	if snapshot.Recipe.ID != requested.RecipeID || snapshot.Repository.ID != requested.RepositoryID ||
+		snapshot.Recipe.RepositoryID != snapshot.Repository.ID || snapshot.Recipe.Backend != requested.Backend ||
+		snapshot.Repository.Backend != requested.Backend || snapshot.Recipe.TargetRef != requested.TargetRef ||
+		snapshot.Recipe.VerificationMode != requested.VerificationMode ||
+		!backupRunPolicyEqual(snapshot.Recipe.PolicyID, requested.PolicyID) ||
+		snapshot.RecipeEventID == "" || snapshot.RepositoryEventID == "" {
+		return fmt.Errorf("execution snapshot conflicts with signed run inputs")
+	}
+	if snapshot.Policy == nil {
+		if requested.PolicyID != nil || snapshot.PolicyEventID != "" {
+			return fmt.Errorf("execution snapshot policy is incomplete")
+		}
+	} else if requested.PolicyID == nil || snapshot.Policy.ID != *requested.PolicyID || snapshot.PolicyEventID == "" {
+		return fmt.Errorf("execution snapshot policy conflicts with signed run inputs")
+	}
+	left, leftErr := json.Marshal(snapshot)
+	right, rightErr := json.Marshal(receipt.ExecutionSnapshot)
+	if leftErr != nil || rightErr != nil || !bytes.Equal(left, right) {
+		return fmt.Errorf("execution snapshot conflicts with the ACKed run receipt")
+	}
+	return nil
 }
 
 func backupRunContentEqual(a, b map[string]any) bool {

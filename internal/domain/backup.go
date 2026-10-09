@@ -221,10 +221,23 @@ func BackupDefinitionMaintenanceWindowTimeZone(definition *BackupDefinition) str
 	return ""
 }
 
+// BackupExecutionSnapshot binds the exact operator-signed execution inputs to
+// service-signed registry events. Event IDs identify immutable versions; the
+// local outbox must prove relay ACK for each version before intake can proceed.
+type BackupExecutionSnapshot struct {
+	RecipeEventID     string           `json:"recipe_event_id"`
+	RepositoryEventID string           `json:"repository_event_id"`
+	PolicyEventID     string           `json:"policy_event_id,omitempty"`
+	Recipe            BackupRecipe     `json:"recipe"`
+	Repository        BackupRepository `json:"repository"`
+	Policy            *BackupPolicy    `json:"policy,omitempty"`
+}
+
 // BackupRun is the durable control-plane record for a backup request.
 type BackupRun struct {
 	ID                        uuid.UUID                `json:"id"`
 	RecipeID                  uuid.UUID                `json:"recipe_id"`
+	ExecutionSnapshot         *BackupExecutionSnapshot `json:"execution_snapshot,omitempty"`
 	RepositoryID              uuid.UUID                `json:"repository_id"`
 	PolicyID                  *uuid.UUID               `json:"policy_id,omitempty"`
 	RequestedBy               string                   `json:"requested_by"`

@@ -167,6 +167,7 @@ func BackupRunStateRecord(run *domain.BackupRun, verification *domain.BackupVeri
 		"deleted":                     false,
 		"id":                          run.ID.String(),
 		"recipe_id":                   run.RecipeID.String(),
+		"execution_snapshot":          run.ExecutionSnapshot,
 		"repository_id":               run.RepositoryID.String(),
 		"policy_id":                   backupUUIDStringPtr(run.PolicyID),
 		"requested_by":                run.RequestedBy,

@@ -1,10 +1,12 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"iter"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -21,6 +23,12 @@ import (
 // alone is not proof of acceptance.
 type BackupRunReceiptReader interface {
 	GetBackupRunReceipt(context.Context, uuid.UUID) (*domain.BackupRun, error)
+}
+
+// backupExecutionConfigProof is deliberately implemented only by the local
+// signed-event/relay-ACK reader, never by SQL or an in-memory registry.
+type backupExecutionConfigProof interface {
+	VerifyBackupExecutionConfig(context.Context, *domain.BackupExecutionSnapshot) error
 }
 
 type backupRunEventStore interface {
@@ -108,6 +116,85 @@ func (s *localBackupRunReceipts) GetBackupRunReceipt(ctx context.Context, id uui
 		return &run, nil
 	}
 	return nil, nil
+}
+
+func (s *localBackupRunReceipts) VerifyBackupExecutionConfig(ctx context.Context, snapshot *domain.BackupExecutionSnapshot) error {
+	if snapshot == nil {
+		return fmt.Errorf("execution snapshot is missing")
+	}
+	for _, source := range []struct {
+		id     string
+		topic  string
+		legacy int
+		dtag   string
+		want   any
+	}{
+		{snapshot.RecipeEventID, kinds.CPStateTopicBackupRecipe, kinds.BackupRecipeRegistry, "backup-recipe:" + snapshot.Recipe.ID.String(), snapshot.Recipe},
+		{snapshot.RepositoryEventID, kinds.CPStateTopicBackupRepository, kinds.BackupRepositoryRegistry, "backup-repository:" + snapshot.Repository.ID.String(), snapshot.Repository},
+	} {
+		if err := s.verifyBackupConfigEvent(ctx, source.id, source.topic, source.legacy, source.dtag, source.want); err != nil {
+			return err
+		}
+	}
+	if snapshot.Policy != nil {
+		if err := s.verifyBackupConfigEvent(ctx, snapshot.PolicyEventID, kinds.CPStateTopicBackupPolicy, kinds.BackupPolicyRegistry, "backup-policy:"+snapshot.Policy.ID.String(), snapshot.Policy); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *localBackupRunReceipts) verifyBackupConfigEvent(ctx context.Context, idHex, topic string, legacy int, dtag string, want any) error {
+	id, err := nostr.IDFromHex(idHex)
+	if err != nil {
+		return fmt.Errorf("backup config %s has invalid event id: %w", dtag, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for ev := range s.events.QueryEvents(nostr.Filter{IDs: []nostr.ID{id}, Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Authors: []nostr.PubKey{s.author}}) {
+		if ev.ID != id || ev.PubKey != s.author || !ev.CheckID() || !ev.VerifySignature() ||
+			backupReceiptTag(ev.Tags, "d") != dtag || backupReceiptTag(ev.Tags, "t") != topic ||
+			backupReceiptTag(ev.Tags, "domain") != "backup" || backupReceiptTag(ev.Tags, "schema") != kinds.CASControlStateSchema ||
+			backupReceiptTag(ev.Tags, "legacy_kind") != strconv.Itoa(legacy) || backupReceiptTag(ev.Tags, "deleted") != "false" {
+			return fmt.Errorf("backup config %s has invalid signed envelope", dtag)
+		}
+		var envelope struct {
+			Deleted *bool `json:"deleted"`
+		}
+		if json.Unmarshal([]byte(ev.Content), &envelope) != nil || envelope.Deleted == nil || *envelope.Deleted {
+			return fmt.Errorf("backup config %s has invalid content", dtag)
+		}
+		canonical, err := json.Marshal(want)
+		if err != nil {
+			return err
+		}
+		actual := reflect.New(reflect.TypeOf(want))
+		if actual.Elem().Kind() == reflect.Pointer {
+			actual = reflect.New(actual.Elem().Type().Elem())
+		}
+		if err := json.Unmarshal([]byte(ev.Content), actual.Interface()); err != nil {
+			return fmt.Errorf("backup config %s has invalid content: %w", dtag, err)
+		}
+		decoded, err := json.Marshal(actual.Elem().Interface())
+		if err != nil || !bytes.Equal(canonical, decoded) {
+			return fmt.Errorf("backup config %s differs from signed execution snapshot", dtag)
+		}
+		entry, found, err := s.delivery.Get(id)
+		if err != nil {
+			return fmt.Errorf("backup config %s relay delivery receipt: %w", dtag, err)
+		}
+		acked := false
+		for _, relay := range entry.Relays {
+			acked = acked || relay.Accepted
+		}
+		if !found || entry.Target != repository.NostrPublishTargetControlPlane || !entry.Delivered || !acked ||
+			entry.Event.ID != id || entry.Event.PubKey != s.author || !entry.Event.CheckID() || !entry.Event.VerifySignature() {
+			return fmt.Errorf("backup config %s has no ACKed relay delivery receipt", dtag)
+		}
+		return nil
+	}
+	return fmt.Errorf("backup config %s signed event is unavailable", dtag)
 }
 
 func backupReceiptTag(tags nostr.Tags, key string) string {
