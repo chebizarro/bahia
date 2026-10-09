@@ -146,6 +146,9 @@ type sharedOutbox struct {
 	refs      int
 	readOnly  bool
 	movedFrom string
+	// Serializes backup admission with generic status publication through
+	// its relay round. All handles in this process share this lock.
+	backupRunStatusMu sync.Mutex
 }
 
 var openOutboxes = struct {

@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,6 +15,57 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestBackupRejectionReservesTimestampBeforePublisherRelayCall(t *testing.T) {
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	service := nostr.Generate()
+	signer, err := NewPrivateKeySigner(service.Hex())
+	require.NoError(t, err)
+	actor := nostr.Generate().Public().Hex()
+	coordinate := "backup-run:" + uuid.NewString()
+	requestID, err := nostr.IDFromHex(nostr.Generate().Public().Hex())
+	require.NoError(t, err)
+	intent := &Intent{IntentID: "intent-rejected", Actor: actor, Coordinate: coordinate, Event: &nostr.Event{ID: requestID}}
+	relayFailure := errors.New("relay accepted but durable publisher outcome was lost")
+	publisher := NewIntentStatusPublisher(func(_ context.Context, event nostr.Event) error {
+		floor, err := outbox.BackupRunStatusTimestampFloor(service.Public().Hex(), actor, coordinate)
+		require.NoError(t, err)
+		require.Equal(t, event.CreatedAt, floor, "the signed event must be reserved before the relay send")
+		return relayFailure
+	}, signer, zap.NewNop())
+	publisher.SetBackupRunStatusGate(outbox.PublishUnadmittedBackupRunStatus)
+	require.ErrorIs(t, publisher.PublishRejectionChecked(t.Context(), intent, "invalid request"), relayFailure)
+	floor, err := outbox.BackupRunStatusTimestampFloor(service.Public().Hex(), actor, coordinate)
+	require.NoError(t, err)
+	require.NotZero(t, floor, "publisher failure cannot roll back the pre-relay floor")
+	state := nostr.Event{Kind: nostr.Kind(kinds.CASControlState), CreatedAt: nostr.Now(), Tags: nostr.Tags{
+		{"d", coordinate}, {"t", kinds.CPStateTopicBackupRun}, {"domain", "backup"},
+		{"schema", kinds.CASControlStateSchema}, {"legacy_kind", "31996"}, {"deleted", "false"},
+	}, Content: `{"deleted":false}`}
+	require.NoError(t, state.Sign(service))
+	record, inserted, err := outbox.EnqueueBackupRun(localstore.OutboxEntry{Event: state, Target: "control-plane"}, intent.IntentID, coordinate, requestID.Hex(), actor)
+	require.NoError(t, err)
+	require.True(t, inserted)
+	policy := localstore.DeliveryPolicy{WriteRelays: []string{"wss://control.example"}, Required: 1}
+	_, err = outbox.CommitPublisherRound(state.ID, localstore.OutboxRound{Target: "control-plane", State: localstore.OutboxPublished, Delivered: true,
+		Policy: policy, Relays: map[string]localstore.RelayDelivery{"wss://control.example": {Accepted: true}}})
+	require.NoError(t, err)
+	wakes := 0
+	reconciler, err := NewBackupRunStatusReconciler(outbox, publisher, "operator-relays", func() { wakes++ }, nil, zap.NewNop())
+	require.NoError(t, err)
+	require.NoError(t, reconciler.ReconcileOnce(t.Context()))
+	require.Equal(t, 1, wakes)
+	current, err := outbox.GetBackupRunAdmission(record.IntentID, record.Coordinate, record.RequestEventID)
+	require.NoError(t, err)
+	statusID, err := nostr.IDFromHex(current.StatusEventID)
+	require.NoError(t, err)
+	accepted, found, err := outbox.Get(statusID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Greater(t, accepted.Event.CreatedAt, floor, "accepted status must beat a rejection sent to a relay before outbox loss")
+}
 
 func stageStatusTestRun(t *testing.T, outbox *localstore.Outbox, service nostr.SecretKey) (localstore.BackupRunAdmission, nostr.Event) {
 	return stageStatusTestRunWithID(t, outbox, service, "intent-"+uuid.NewString())
@@ -255,7 +307,7 @@ func TestAdmittedBackupCoordinateCannotPublishLaterGenericStatus(t *testing.T) {
 	require.NoError(t, err)
 	statuses := &statusCollector{}
 	publisher := NewIntentStatusPublisher(statuses.publish, signer, zap.NewNop())
-	publisher.SetBackupRunAdmissionGuard(outbox.HasBackupRunAdmissionCoordinate)
+	publisher.SetBackupRunStatusGate(outbox.PublishUnadmittedBackupRunStatus)
 	requestID, err := nostr.IDFromHex(record.RequestEventID)
 	require.NoError(t, err)
 	intent := &Intent{IntentID: record.IntentID, Actor: record.Actor, Coordinate: record.Coordinate, Event: &nostr.Event{ID: requestID}}

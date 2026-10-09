@@ -1,6 +1,7 @@
 package localstore
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -11,6 +12,63 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/bbolt"
 )
+
+func TestBackupRunStatusPublicationReservesBeforeRelayAndSerializesAdmission(t *testing.T) {
+	outbox, _ := openTempOutbox(t)
+	service := nostr.Generate()
+	actor := nostr.Generate().Public().Hex()
+	coordinate := "backup-run:" + uuid.NewString()
+	status := signed(t, service, 30315, nostr.Now(), nostr.Tags{
+		{"d", "intent-status:" + actor + ":" + coordinate}, {"domain", "intent"},
+		{"t", "intent-status"}, {"status", "rejected"}, {"p", actor},
+	}, `{"result":"rejected"}`)
+	relayEntered := make(chan struct{})
+	releaseRelay := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(releaseRelay)
+		}
+	}()
+	gateDone := make(chan error, 1)
+	go func() {
+		gateDone <- outbox.PublishUnadmittedBackupRunStatus(coordinate, status, func() error {
+			close(relayEntered)
+			<-releaseRelay
+			return errors.New("relay accepted but outbox admission failed")
+		})
+	}()
+	<-relayEntered
+	floor, err := outbox.BackupRunStatusTimestampFloor(service.Public().Hex(), actor, coordinate)
+	require.NoError(t, err)
+	require.Equal(t, status.CreatedAt, floor, "timestamp must be durable before relay I/O")
+	if outbox.shared.backupRunStatusMu.TryLock() {
+		outbox.shared.backupRunStatusMu.Unlock()
+		t.Fatal("run admission could pass an in-flight status publication")
+	}
+	requestID := nostr.Generate().Public().Hex()
+	state := signed(t, service, nostr.Kind(kinds.CASControlState), nostr.Now(), nostr.Tags{
+		{"d", coordinate}, {"t", kinds.CPStateTopicBackupRun}, {"domain", "backup"},
+		{"schema", kinds.CASControlStateSchema}, {"legacy_kind", "31996"}, {"deleted", "false"},
+	}, `{"deleted":false}`)
+	admissionDone := make(chan error, 1)
+	go func() {
+		_, _, err := outbox.EnqueueBackupRun(OutboxEntry{Event: state, Target: "control-plane"}, "intent-race", coordinate, requestID, actor)
+		admissionDone <- err
+	}()
+	close(releaseRelay)
+	released = true
+	require.ErrorContains(t, <-gateDone, "outbox admission failed")
+	require.NoError(t, <-admissionDone)
+	floor, err = outbox.BackupRunStatusTimestampFloor(service.Public().Hex(), actor, coordinate)
+	require.NoError(t, err)
+	require.Equal(t, status.CreatedAt, floor, "a failed post-relay outbox write cannot erase the ordering reservation")
+	published := false
+	later := signed(t, service, 30315, status.CreatedAt+1, status.Tags, `{"result":"rejected"}`)
+	err = outbox.PublishUnadmittedBackupRunStatus(coordinate, later, func() error { published = true; return nil })
+	require.ErrorContains(t, err, "immutable admission outcome")
+	require.False(t, published, "an admitted coordinate must not be published after the lock is released")
+}
 
 func TestBackupRunAdmissionScanSkipsMalformedRecordWithoutStarvingLaterACK(t *testing.T) {
 	outbox, err := OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))

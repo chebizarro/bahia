@@ -248,7 +248,11 @@ and can retry the same signed event ID. Replay of the same signed request is ide
 request using its intent ID or run coordinate is rejected without replacing
 the first request's status. The accepted status uses a durable timestamp floor
 above any earlier service status on the same NIP-01 coordinate, so a
-same-second pre-admission rejection cannot win by event-ID tie-break. No backup execution starts
+same-second pre-admission rejection cannot win by event-ID tie-break. Generic
+backup-run status publication reserves its timestamp before operator-relay I/O
+under the same admission lock used to stage the run; a relay success followed
+by outbox failure cannot escape the timestamp floor, and a later rejection
+cannot race past an admitted coordinate. No backup execution starts
 from this queued state: canonical credential resolution and step checkpoint
 recovery are not available.
 

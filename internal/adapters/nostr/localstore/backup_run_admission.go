@@ -101,22 +101,41 @@ func (o *Outbox) GetBackupRunAdmission(intentID, coordinate, requestEventID stri
 	return result, err
 }
 
-// HasBackupRunAdmissionCoordinate is the status publisher's fail-closed guard
-// against overwriting an admitted coordinate with a later generic rejection.
-func (o *Outbox) HasBackupRunAdmissionCoordinate(coordinate string) (bool, error) {
-	if o == nil || o.shared == nil {
-		return false, fmt.Errorf("backup run admission outbox is unavailable")
+// PublishUnadmittedBackupRunStatus prevents an in-flight generic rejection
+// from racing a newly staged run. It reserves the signed status timestamp
+// before relay I/O, so even a relay success followed by outbox failure cannot
+// leave the later accepted result tied or older on the NIP-01 coordinate.
+func (o *Outbox) PublishUnadmittedBackupRunStatus(coordinate string, event nostr.Event, publish func() error) error {
+	if o == nil || o.shared == nil || o.shared.readOnly || publish == nil || !strings.HasPrefix(coordinate, "backup-run:") {
+		return fmt.Errorf("backup run status publication requires a writable outbox and run coordinate")
 	}
-	var found bool
-	err := o.shared.db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(backupRunCoordsBucket)
-		if bucket == nil {
+	if backupRunStatusEventClockKey(event) == nil ||
+		outboxTag(event.Tags, "d") != "intent-status:"+outboxTag(event.Tags, "p")+":"+coordinate {
+		return fmt.Errorf("backup run status publication requires an exact signed coordinate")
+	}
+	o.shared.backupRunStatusMu.Lock()
+	defer o.shared.backupRunStatusMu.Unlock()
+	if err := o.shared.db.Update(func(tx *bbolt.Tx) error {
+		coords := tx.Bucket(backupRunCoordsBucket)
+		if coords == nil {
 			return fmt.Errorf("backup run admission coordinate index is unavailable")
 		}
-		found = bucket.Get([]byte(coordinate)) != nil
-		return nil
-	})
-	return found, err
+		if coords.Get([]byte(coordinate)) != nil {
+			return fmt.Errorf("backup run coordinate has an immutable admission outcome")
+		}
+		key := backupRunStatusEventClockKey(event)
+		floor, err := backupRunStatusTimestampFloor(tx, key)
+		if err != nil {
+			return err
+		}
+		if event.CreatedAt <= floor {
+			return fmt.Errorf("backup run status is not newer than the durable coordinate floor")
+		}
+		return recordBackupRunStatusTimestamp(tx, event)
+	}); err != nil {
+		return err
+	}
+	return publish()
 }
 
 // BackupRunStatusTimestampFloor is the durable NIP-01 replacement floor for
@@ -183,6 +202,8 @@ func (o *Outbox) EnqueueBackupRun(entry OutboxEntry, intentID, coordinate, reque
 		return BackupRunAdmission{}, false, err
 	}
 	inserted := false
+	o.shared.backupRunStatusMu.Lock()
+	defer o.shared.backupRunStatusMu.Unlock()
 	err = o.shared.db.Update(func(tx *bbolt.Tx) error {
 		intents := tx.Bucket(backupRunIntentsBucket)
 		coords := tx.Bucket(backupRunCoordsBucket)

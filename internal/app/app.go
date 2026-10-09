@@ -903,7 +903,7 @@ func New(cfg *config.Config) (*App, error) {
 			controlPlaneSigner,
 			logger,
 		)
-		intentStatus.SetBackupRunAdmissionGuard(localOutbox.HasBackupRunAdmissionCoordinate)
+		intentStatus.SetBackupRunStatusGate(localOutbox.PublishUnadmittedBackupRunStatus)
 	}
 	intentProcessor := controlplane.NewIntentProcessor(
 		trustSet, localEventStore, intentStatus,

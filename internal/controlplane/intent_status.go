@@ -22,15 +22,15 @@ type IntentStatusPublisher struct {
 	signer  nostr.Signer
 	logger  *zap.Logger
 	// statusExpiry is the NIP-40 expiration duration (default 7 days).
-	statusExpiry         time.Duration
-	backupAdmissionGuard func(string) (bool, error)
+	statusExpiry        time.Duration
+	backupRunStatusGate func(string, nostr.Event, func() error) error
 }
 
-// SetBackupRunAdmissionGuard prevents generic validation or authorization
-// statuses from replacing the immutable outcome of an admitted run coordinate.
-func (p *IntentStatusPublisher) SetBackupRunAdmissionGuard(guard func(string) (bool, error)) {
+// SetBackupRunStatusGate serializes generic backup status publication with
+// run admission and reserves the signed timestamp before relay I/O.
+func (p *IntentStatusPublisher) SetBackupRunStatusGate(gate func(string, nostr.Event, func() error) error) {
 	if p != nil {
-		p.backupAdmissionGuard = guard
+		p.backupRunStatusGate = gate
 	}
 }
 
@@ -101,30 +101,27 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 	if p == nil || p.publish == nil || p.signer == nil || intent == nil {
 		return nil
 	}
-	if strings.HasPrefix(intent.Coordinate, "backup-run:") {
-		if p.backupAdmissionGuard == nil {
-			return fmt.Errorf("backup run admission guard is unavailable")
-		}
-		admitted, err := p.backupAdmissionGuard(intent.Coordinate)
-		if err != nil {
-			return fmt.Errorf("backup run admission guard: %w", err)
-		}
-		if admitted {
-			return fmt.Errorf("backup run coordinate has an immutable admission outcome")
-		}
-	}
 	ev, err := p.buildStatusEvent(ctx, intent, status, result, reason, evaluation)
 	if err != nil {
 		return err
 	}
-	if err := p.publish(ctx, ev); err != nil {
-		p.logger.Warn("failed to publish intent status event",
-			zap.String("intent_id", intent.IntentID),
-			zap.Error(err),
-		)
-		return err
+	publish := func() error {
+		if err := p.publish(ctx, ev); err != nil {
+			p.logger.Warn("failed to publish intent status event",
+				zap.String("intent_id", intent.IntentID),
+				zap.Error(err),
+			)
+			return err
+		}
+		return nil
 	}
-	return nil
+	if strings.HasPrefix(intent.Coordinate, "backup-run:") {
+		if p.backupRunStatusGate == nil {
+			return fmt.Errorf("backup run status gate is unavailable")
+		}
+		return p.backupRunStatusGate(intent.Coordinate, ev, publish)
+	}
+	return publish()
 }
 
 func (p *IntentStatusPublisher) buildStatusEvent(ctx context.Context, intent *Intent, status, result, reason string, evaluation *domain.PolicyEvaluation) (nostr.Event, error) {
