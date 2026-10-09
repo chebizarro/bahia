@@ -42,3 +42,19 @@ func TestDefaultMigrationRelaysPreferSidecarThenInteropRelays(t *testing.T) {
 	cfg.Sidecar.BackendURL = "wss://sidecar.internal"
 	require.Equal(t, []string{"wss://sidecar.internal", "wss://interop.example"}, defaultMigrationRelays(cfg))
 }
+
+func TestF74aCompactRequiresFrozenCutoffAndVerifiedBackupReference(t *testing.T) {
+	for _, tc := range []struct {
+		args     []string
+		expected string
+	}{
+		{[]string{"f74a-compact"}, "requires --cutoff"},
+		{[]string{"f74a-compact", "--cutoff", "not-a-time"}, "invalid --cutoff"},
+		{[]string{"f74a-compact", "--cutoff", "2026-10-01T00:00:00Z", "--confirm"}, "requires --backup-id"},
+		{[]string{"f74a-compact", "--cutoff", "2026-10-01T00:00:00Z", "--batch-size", "251"}, "--batch-size must"},
+	} {
+		var output, errors bytes.Buffer
+		require.Equal(t, 1, run(context.Background(), tc.args, &output, &errors))
+		require.Contains(t, errors.String(), tc.expected)
+	}
+}

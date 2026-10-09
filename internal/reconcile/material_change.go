@@ -78,40 +78,11 @@ func materialStateOf(state *domain.EnvironmentServiceState, obs *domain.RuntimeO
 // observedHashOf mirrors the reconciler's own observation-hash resolution so
 // the fingerprint and the drift decision never disagree about what was seen.
 func observedHashOf(obs *domain.RuntimeObservation) string {
-	if obs == nil {
-		return ""
-	}
-	if obs.NormalizedState != nil && obs.NormalizedState.ObservationHash != "" {
-		return obs.NormalizedState.ObservationHash
-	}
-	return obs.NormalizedHash
+	return domain.RuntimeObservationHash(obs)
 }
 
-// observationMateriallyChanged excludes the sampling timestamp, generated ID,
-// and diagnostic metadata. Runtime identity, placement, image, health, and
-// normalized configuration remain durable forensic transitions.
 func observationMateriallyChanged(previous, current *domain.RuntimeObservation) bool {
-	if previous == nil || current == nil {
-		return previous != current
-	}
-	return uuidPtrString(previous.DeploymentUnitID) != uuidPtrString(current.DeploymentUnitID) ||
-		previous.ObservedImageRepo != current.ObservedImageRepo ||
-		domain.NormalizeImageDigest(previous.ObservedImageDigest) != domain.NormalizeImageDigest(current.ObservedImageDigest) ||
-		previous.ObservedContainerID != current.ObservedContainerID ||
-		previous.ObservedHost != current.ObservedHost ||
-		previous.ObservedVersion != current.ObservedVersion ||
-		previous.HealthStatus != current.HealthStatus ||
-		previous.Source != current.Source ||
-		observedHashOf(previous) != observedHashOf(current) ||
-		normalizedObservationContentHash(previous) != normalizedObservationContentHash(current)
-}
-
-func normalizedObservationContentHash(obs *domain.RuntimeObservation) string {
-	if obs.NormalizedState == nil {
-		return ""
-	}
-	normalized := *obs.NormalizedState
-	return normalized.ComputeObservationHash()
+	return domain.RuntimeObservationMateriallyChanged(previous, current)
 }
 
 // diff reports whether b differs materially from a and returns the sorted,

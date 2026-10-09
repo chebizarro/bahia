@@ -41,3 +41,22 @@ func TestProjectManifestRejectsArtifactWithoutPayloadHash(t *testing.T) {
 	err := repo.ProjectManifest(context.Background(), manifest, nil)
 	require.ErrorContains(t, err, "payload SHA-256 is required")
 }
+
+func TestCreatePackagesReusesHistoricalRepresentativeID(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	defer mock.Close()
+	sbomID, prior := uuid.New(), uuid.New()
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT id FROM artifact_sboms WHERE id = ").WithArgs(sbomID).
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow(sbomID))
+	mock.ExpectQuery("SELECT id, name, version, COALESCE").WithArgs(sbomID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "version", "ecosystem", "license", "purl", "cpe"}).
+			AddRow(prior, "existing", "1", "", "", "", ""))
+	mock.ExpectCommit()
+	packages := []domain.SBOMPackage{{SBOMID: sbomID, Name: "existing", Version: "1"}}
+	repo := &PgSBOMRepository{pool: mock}
+	require.NoError(t, repo.CreatePackages(context.Background(), packages))
+	require.Equal(t, prior, packages[0].ID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

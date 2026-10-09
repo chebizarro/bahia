@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -90,8 +91,61 @@ func (r *PgSBOMRepository) GetSBOMByHash(ctx context.Context, rawHash string) (*
 }
 
 // CreatePackages batch-inserts SBOM package records.
-func (r *PgSBOMRepository) CreatePackages(ctx context.Context, packages []domain.SBOMPackage) error {
-	return createArtifactPackages(ctx, r.pool, packages)
+func (r *PgSBOMRepository) CreatePackages(ctx context.Context, packages []domain.SBOMPackage) (retErr error) {
+	if len(packages) == 0 {
+		return nil
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning artifact package insertion: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			retErr = errors.Join(retErr, tx.Rollback(context.Background()))
+		}
+	}()
+	groups := make(map[uuid.UUID][]int)
+	for i := range packages {
+		groups[packages[i].SBOMID] = append(groups[packages[i].SBOMID], i)
+	}
+	ids := make([]uuid.UUID, 0, len(groups))
+	for id := range groups {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
+	for _, sbomID := range ids {
+		var locked uuid.UUID
+		if err := tx.QueryRow(ctx, `SELECT id FROM artifact_sboms WHERE id = $1 FOR UPDATE`, sbomID).Scan(&locked); err != nil {
+			return fmt.Errorf("locking artifact SBOM %s for package insert: %w", sbomID, err)
+		}
+		existing, err := artifactPackageRepresentatives(ctx, tx, sbomID)
+		if err != nil {
+			return err
+		}
+		pending := make([]domain.SBOMPackage, 0, len(groups[sbomID]))
+		for _, i := range groups[sbomID] {
+			pkg := &packages[i]
+			key := packageKey(pkg.Name, pkg.Version, pkg.Ecosystem, pkg.License, pkg.PURL, pkg.CPE)
+			if prior, ok := existing[key]; ok {
+				pkg.ID = prior
+				continue
+			}
+			if pkg.ID == uuid.Nil {
+				pkg.ID = uuid.New()
+			}
+			existing[key] = pkg.ID
+			pending = append(pending, *pkg)
+		}
+		if err := createArtifactPackages(ctx, tx, pending); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing artifact package insertion: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 // ListPackagesBySBOM returns all packages in an SBOM.
@@ -470,6 +524,27 @@ func newArtifactPackages(sbomID uuid.UUID, packages []domain.SBOMManifestPackage
 		})
 	}
 	return out
+}
+
+func artifactPackageRepresentatives(ctx context.Context, db sbomQuerier, sbomID uuid.UUID) (map[artifactPackageKey]uuid.UUID, error) {
+	rows, err := db.Query(ctx, `SELECT id, name, version, COALESCE(ecosystem, ''), COALESCE(license, ''),
+		COALESCE(purl, ''), COALESCE(cpe, '') FROM sbom_packages WHERE sbom_id = $1 ORDER BY id`, sbomID)
+	if err != nil {
+		return nil, fmt.Errorf("listing artifact SBOM package representatives: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[artifactPackageKey]uuid.UUID)
+	for rows.Next() {
+		var id uuid.UUID
+		var key artifactPackageKey
+		if err := rows.Scan(&id, &key.name, &key.version, &key.ecosystem, &key.license, &key.purl, &key.cpe); err != nil {
+			return nil, err
+		}
+		if _, ok := out[key]; !ok {
+			out[key] = id
+		}
+	}
+	return out, rows.Err()
 }
 
 func artifactPackageKeys(ctx context.Context, db sbomQuerier, sbomID uuid.UUID) (map[artifactPackageKey]struct{}, error) {

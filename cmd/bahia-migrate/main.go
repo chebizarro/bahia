@@ -12,7 +12,9 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -24,6 +26,8 @@ import (
 )
 
 const usage = "usage: bahia-migrate [--config path] [--confirm] [--force] [--to stem] status|up|down\n" +
+	"       bahia-migrate [--config path] [--cutoff RFC3339] f74a-census\n" +
+	"       bahia-migrate [--config path] --cutoff RFC3339 [--batch-size 1..250] [--confirm --backup-id reference] f74a-compact\n" +
 	"       bahia-migrate [--config path] [--dry-run] [--relays url,...] [--relay-backfill] nostr"
 
 func main() {
@@ -48,7 +52,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("bahia-migrate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "config.yaml", "Bahia configuration file")
-	confirm := flags.Bool("confirm", false, "confirm destructive down migration")
+	confirm := flags.Bool("confirm", false, "confirm destructive down migration or F74a observation compaction")
+	cutoffText := flags.String("cutoff", "", "F74a census/compaction UTC cutoff in RFC3339 format")
+	batchSize := flags.Int("batch-size", 250, "F74a compaction delete batch size (1..250)")
+	backupID := flags.String("backup-id", "", "reference to a verified restorable backup required for confirmed F74a compaction")
 	force := flags.Bool("force", false, "allow down across out-of-order applied history")
 	to := flags.String("to", "", "full filename stem to retain when running down")
 	dryRun := flags.Bool("dry-run", false, "nostr: report what would be migrated without signing or publishing")
@@ -69,11 +76,46 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if !isAction(action) {
 		return reportError(stderr, "unknown migration action %q", action)
 	}
-	if action != "down" && (*confirm || *force || *to != "") {
-		return reportError(stderr, "--confirm, --force and --to are only valid for down")
+	if action != "down" && action != "f74a-compact" && *confirm {
+		return reportError(stderr, "--confirm is only valid for down or f74a-compact")
+	}
+	if action != "down" && (*force || *to != "") {
+		return reportError(stderr, "--force and --to are only valid for down")
 	}
 	if action != "nostr" && (*dryRun || *relays != "" || *relayBackfill) {
 		return reportError(stderr, "--dry-run, --relays and --relay-backfill are only valid for nostr")
+	}
+	if action != "f74a-census" && action != "f74a-compact" && *cutoffText != "" {
+		return reportError(stderr, "--cutoff is only valid for F74a actions")
+	}
+	if action != "f74a-compact" && (*batchSize != 250 || *backupID != "") {
+		return reportError(stderr, "--batch-size and --backup-id are only valid for f74a-compact")
+	}
+	var cutoff time.Time
+	if *cutoffText != "" {
+		var parseErr error
+		cutoff, parseErr = time.Parse(time.RFC3339, *cutoffText)
+		if parseErr != nil {
+			return reportError(stderr, "invalid --cutoff: %v", parseErr)
+		}
+		cutoff = cutoff.UTC()
+	}
+	if action == "f74a-compact" {
+		if cutoff.IsZero() {
+			return reportError(stderr, "f74a-compact requires --cutoff")
+		}
+		if !cutoff.Before(time.Now().UTC()) {
+			return reportError(stderr, "f74a-compact requires a past --cutoff")
+		}
+		if *batchSize < 1 || *batchSize > repository.F74aPageLimit {
+			return reportError(stderr, "--batch-size must be between 1 and %d", repository.F74aPageLimit)
+		}
+		if *confirm && strings.TrimSpace(*backupID) == "" {
+			return reportError(stderr, "confirmed f74a-compact requires --backup-id for a verified restorable backup")
+		}
+		if !*confirm && *backupID != "" {
+			return reportError(stderr, "--backup-id requires --confirm")
+		}
 	}
 	if action == "down" && !*confirm {
 		return reportError(stderr, "down requires --confirm")
@@ -87,6 +129,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return reportError(stderr, "%v", cfg.DB.RedactError(err))
 	}
 	defer pool.Close()
+	if action == "f74a-census" || action == "f74a-compact" {
+		return runF74aMaintenance(ctx, pool, action, cutoff, *batchSize, *confirm, *backupID, stdout, stderr)
+	}
 	if action == "nostr" {
 		return runNostrMigration(ctx, cfg, pool, nostrMigrationOptions{
 			dryRun:        *dryRun,
@@ -99,7 +144,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func isAction(value string) bool {
 	switch value {
-	case "status", "up", "down", "nostr":
+	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact":
 		return true
 	default:
 		return false
@@ -230,4 +275,64 @@ func runAction(ctx context.Context, pool *pgxpool.Pool, action string, down db.D
 	default:
 		return reportError(stderr, "invalid migration action")
 	}
+}
+
+// runF74aMaintenance never touches nostr_events or package rows. Package
+// compaction remains disabled until semantic publication and legacy tombstones
+// have been durably staged and independently verified.
+func runF74aMaintenance(ctx context.Context, pool *pgxpool.Pool, action string, cutoff time.Time, batchSize int, confirm bool, backupID string, stdout, stderr io.Writer) int {
+	census, err := repository.CensusF74a(ctx, pool, cutoff)
+	if err != nil {
+		return reportError(stderr, "F74a census: %v", err)
+	}
+	for _, item := range []struct {
+		name  string
+		value any
+	}{
+		{"cutoff", census.Cutoff.Format(time.RFC3339Nano)},
+		{"observations", census.Observations},
+		{"state_linked_observations", census.LinkedObservations},
+		{"unlinked_observations", census.UnlinkedObservations},
+		{"material_observation_runs", census.MaterialRuns},
+		{"suppressible_observations_before_cutoff", census.SuppressibleObservations},
+		{"package_rows", census.PackageRows},
+		{"semantic_packages", census.SemanticPackages},
+		{"duplicate_package_rows", census.DuplicatePackages},
+		{"legacy_package_coordinates_to_tombstone", census.LegacyPackageCoordinates},
+		{"releases", census.Releases},
+		{"signatures", census.Signatures},
+		{"sboms", census.SBOMs},
+		{"estimated_f74a_publications", census.EstimatedPublications},
+		{"outbox_pending", "unavailable_without_local_store"},
+		{"outbox_failed", "unavailable_without_local_store"},
+	} {
+		if _, err := fmt.Fprintf(stdout, "%s\t%v\n", item.name, item.value); err != nil {
+			return reportError(stderr, "writing F74a census: %v", err)
+		}
+	}
+	if action == "f74a-census" {
+		return 0
+	}
+	if _, err := fmt.Fprintln(stdout, "package_deletion\tdisabled_pending_semantic_tombstone_proof"); err != nil {
+		return reportError(stderr, "writing F74a compaction status: %v", err)
+	}
+	if !confirm {
+		if _, err := fmt.Fprintln(stdout, "observation_deletion\tdry_run"); err != nil {
+			return reportError(stderr, "writing F74a dry run: %v", err)
+		}
+		return 0
+	}
+	var batch int
+	deleted, err := repository.CompactF74aObservations(ctx, pool, cutoff, batchSize, backupID, func(ids []uuid.UUID) error {
+		batch++
+		_, err := fmt.Fprintf(stdout, "deleted_batch\t%d\tcount=%d\tids=%v\n", batch, len(ids), ids)
+		return err
+	})
+	if err != nil {
+		return reportError(stderr, "F74a compaction stopped after %d committed observation deletions: %v", deleted, err)
+	}
+	if _, err := fmt.Fprintf(stdout, "deleted_observations\t%d\n", deleted); err != nil {
+		return reportError(stderr, "writing F74a result: %v", err)
+	}
+	return 0
 }
