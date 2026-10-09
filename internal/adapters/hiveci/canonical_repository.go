@@ -1,10 +1,11 @@
 package hiveci
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -489,7 +490,7 @@ func (r *CanonicalRepository) EnsurePipelinePolicy(ctx context.Context, policy d
 	for _, existing := range retained {
 		if policyKeyOf(existing) == key {
 			policy.ID, policy.CreatedAt = existing.ID, existing.CreatedAt
-			if policy.Enabled == existing.Enabled && reflect.DeepEqual(policy.Metadata, existing.Metadata) {
+			if policy.Enabled == existing.Enabled && samePolicyMetadata(policy.Metadata, existing.Metadata) {
 				return nil
 			}
 			break
@@ -509,6 +510,12 @@ func (r *CanonicalRepository) EnsurePipelinePolicy(ctx context.Context, policy d
 		r.mirror("policy", r.index.EnsurePipelinePolicy(ctx, policy))
 	}
 	return nil
+}
+
+func samePolicyMetadata(a, b map[string]any) bool {
+	left, leftErr := json.Marshal(a)
+	right, rightErr := json.Marshal(b)
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
 }
 
 // Accepted releases -------------------------------------------------------------

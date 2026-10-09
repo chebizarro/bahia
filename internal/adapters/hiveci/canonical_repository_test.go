@@ -212,6 +212,33 @@ func TestPendingResultResumesAfterRestartWithoutSQL(t *testing.T) {
 	require.Equal(t, 2, processor.count(), "a processed result is not attempted again")
 }
 
+func TestEnsurePipelinePolicyNumericMetadataDoesNotRepublishAfterJSONRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	d := startCanonicalDaemon(t, t.TempDir(), nil, nil)
+	firstTime := time.Unix(1_800_000_000, 0).UTC()
+	d.repo.now = func() time.Time { return firstTime }
+	policy := domain.HiveCIPipelinePolicy{
+		RepoCoordinate: "30617:author:api", WorkflowPath: ".hive-ci/build.yml",
+		ServiceID: uuid.New(), EnvironmentID: uuid.New(), Enabled: true,
+		Metadata: map[string]any{"attempts": int64(3), "limits": map[string]any{"cpu": 1}},
+	}
+	require.NoError(t, d.repo.EnsurePipelinePolicy(ctx, policy))
+	first, err := d.repo.ListPolicies(ctx)
+	require.NoError(t, err)
+	require.Len(t, first, 1)
+	before, err := d.outbox.Counts()
+	require.NoError(t, err)
+	d.repo.now = func() time.Time { return firstTime.Add(time.Hour) }
+	require.NoError(t, d.repo.EnsurePipelinePolicy(ctx, policy))
+	second, err := d.repo.ListPolicies(ctx)
+	require.NoError(t, err)
+	require.Len(t, second, 1)
+	require.Equal(t, first[0].UpdatedAt, second[0].UpdatedAt, "unchanged numeric metadata must not re-sign the policy")
+	after, err := d.outbox.Counts()
+	require.NoError(t, err)
+	require.Equal(t, before, after, "JSON-decoded float64 values must compare equal to configured integers")
+}
+
 // A result that keeps failing is attempted at most maxAttempts times across
 // restarts, then marked failed instead of being attempted forever.
 func TestPendingResultResumeBoundsAttempts(t *testing.T) {

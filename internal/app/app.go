@@ -1953,6 +1953,7 @@ func New(cfg *config.Config) (*App, error) {
 	var hiveRepo *hiveciAdapter.CanonicalRepository
 	var hiveCanonical *nostrAdapter.HiveCICanonicalPublisher
 	var hivePolicyReady atomic.Bool
+	var hivePolicyHydrator *hiveCIPolicyHydrator
 	switch {
 	case !shouldRegisterHiveCIRunners(cfg.HiveCI):
 		logger.Warn("Hive-CI release ingestion is disabled; signed 5401/5402 events will not be consumed",
@@ -2066,24 +2067,30 @@ func New(cfg *config.Config) (*App, error) {
 		// when it arrives, when its run arrives, and once per start from the
 		// canonical result states the store retains.
 		resumer := hiveciAdapter.NewPendingResultResumer(hiveRepo, bridge, cfg.HiveCI.MaxRetries, logger)
-		hiveSeed := func(ctx context.Context) {
-			if err := ensureConfiguredHiveCIPipelinePolicies(ctx, cfg.HiveCI.Policies, service.NewLocalAdoptionView(localSupervisionState), hiveRepo); err != nil {
-				logger.Error("Hive-CI config policies not available from canonical state; pending results remain deferred", zap.Error(err))
-				return
-			}
-			hiveResultMu.Lock()
-			hivePolicyReady.Store(true)
-			if err := resumer.Resume(ctx); err != nil {
-				logger.Warn("Hive-CI pending result resume finished with errors", zap.Error(err))
-			}
-			hiveResultMu.Unlock()
+		hivePolicyHydrator = newHiveCIPolicyHydrator(&hivePolicyReady,
+			func(ctx context.Context) error {
+				return ensureConfiguredHiveCIPipelinePolicies(ctx, cfg.HiveCI.Policies, service.NewLocalAdoptionView(localSupervisionState), hiveRepo)
+			},
+			func(ctx context.Context, resume bool) {
+				hiveResultMu.Lock()
+				defer hiveResultMu.Unlock()
+				hivePolicyReady.Store(true)
+				if resume {
+					if err := resumer.Resume(ctx); err != nil {
+						logger.Warn("Hive-CI pending result resume finished with errors", zap.Error(err))
+					}
+				}
+			}, logger)
+		bgManager.RegisterWithOptions(hivePolicyHydrator, RunnerRequired(false))
+		controlPlanePub.OnDelivered(func(ev nostr.Event) { hivePolicyHydrator.ObserveEntity(&ev, servicePubkey) })
+		nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+			hivePolicyHydrator.Start()
 			if hiveIndex != nil {
 				if err := hiveRepo.RebuildIndex(ctx); err != nil {
 					logger.Warn("Hive-CI SQL index rebuild failed", zap.Error(err))
 				}
 			}
-		}
-		nostrProjector.AddPostWarmStartHook(hiveSeed)
+		})
 
 		logger.Info("hive-ci bridge enabled",
 			zap.Strings("subscription_relays", relayURLs),
@@ -2434,6 +2441,9 @@ func New(cfg *config.Config) (*App, error) {
 		// projection cache live, as the bootstrapper's deletion group does.
 		nostrAdapter.WithDeletionAuthors(controlPlaneAuthors),
 		nostrAdapter.WithObserver(bootstrapper.ApplyDeletion),
+		nostrAdapter.WithObserver(func(_ context.Context, ev *nostr.Event) {
+			hivePolicyHydrator.ObserveEntity(ev, servicePubkey)
+		}),
 		nostrAdapter.WithHandler(nostrProcessor.Handle),
 		nostrAdapter.WithObserver(telemetryProvider.ObserveNostrEvent),
 		nostrAdapter.WithIngestionObserver(telemetryProvider),
