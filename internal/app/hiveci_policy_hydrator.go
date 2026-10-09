@@ -21,9 +21,11 @@ type hiveCIPolicyHydrator struct {
 	started      chan struct{}
 	changed      chan struct{}
 	startOnce    sync.Once
+	stateMu      sync.Mutex
 	ready        *atomic.Bool
 	generation   atomic.Uint64
 	resumeNeeded atomic.Bool
+	activeCancel context.CancelFunc
 	attempt      func(context.Context) error
 	activate     func(context.Context, bool)
 	retryAfter   func(time.Duration) <-chan time.Time
@@ -52,10 +54,14 @@ func (h *hiveCIPolicyHydrator) Signal() {
 	if h == nil {
 		return
 	}
-	if !h.ready.Swap(false) {
-		h.resumeNeeded.Store(true)
-	}
+	h.stateMu.Lock()
+	h.ready.Store(false)
+	h.resumeNeeded.Store(true)
 	h.generation.Add(1)
+	if h.activeCancel != nil {
+		h.activeCancel()
+	}
+	h.stateMu.Unlock()
 	select {
 	case h.changed <- struct{}{}:
 	default:
@@ -112,13 +118,22 @@ func (h *hiveCIPolicyHydrator) Run(ctx context.Context) error {
 			} else {
 				attempts = 0
 				retry = nil
+				h.stateMu.Lock()
 				if h.generation.Load() == generation {
+					activationCtx, cancel := context.WithCancel(ctx)
+					h.activeCancel = cancel
 					resume := h.resumeNeeded.Swap(false)
+					h.ready.Store(true)
+					h.stateMu.Unlock()
 					if h.activate != nil {
-						h.activate(ctx, resume)
-					} else {
-						h.ready.Store(true)
+						h.activate(activationCtx, resume)
 					}
+					h.stateMu.Lock()
+					h.activeCancel = nil
+					h.stateMu.Unlock()
+					cancel()
+				} else {
+					h.stateMu.Unlock()
 				}
 			}
 			pending = false

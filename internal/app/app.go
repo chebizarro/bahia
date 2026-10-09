@@ -2074,9 +2074,11 @@ func New(cfg *config.Config) (*App, error) {
 			func(ctx context.Context, resume bool) {
 				hiveResultMu.Lock()
 				defer hiveResultMu.Unlock()
-				hivePolicyReady.Store(true)
+				if ctx.Err() != nil {
+					return
+				}
 				if resume {
-					if err := resumer.Resume(ctx); err != nil {
+					if err := resumer.Resume(ctx); err != nil && ctx.Err() == nil {
 						logger.Warn("Hive-CI pending result resume finished with errors", zap.Error(err))
 					}
 				}

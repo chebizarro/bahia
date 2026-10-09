@@ -61,12 +61,18 @@ func (r *PendingResultResumer) Resume(ctx context.Context) error {
 	if r == nil || r.repo == nil || r.processor == nil {
 		return fmt.Errorf("Hive-CI result resumer is not configured")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	pending, err := r.repo.ListPendingResults(ctx)
 	if err != nil {
 		return fmt.Errorf("list pending Hive-CI results: %w", err)
 	}
 	var first error
 	for _, result := range pending {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if result.ProcessingState == domain.HiveCIProcessingStatePendingRun {
 			continue
 		}
@@ -78,12 +84,18 @@ func (r *PendingResultResumer) Resume(ctx context.Context) error {
 }
 
 func (r *PendingResultResumer) attempt(ctx context.Context, result domain.HiveCIWorkflowResult) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if result.RetryCount >= r.maxAttempts {
 		return r.repo.MarkResultFailed(ctx, result.ResultEventID, "max retries exceeded")
 	}
 	attempt, err := r.repo.IncrementResultRetry(ctx, result.ResultEventID, r.now())
 	if err != nil {
 		return fmt.Errorf("count Hive-CI result attempt %s: %w", result.ResultEventID, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := r.processor.ProcessResult(ctx, result.ResultEventID); err != nil {
 		r.logger.Warn("resumed Hive-CI result processing failed", zap.String("result_event_id", result.ResultEventID), zap.Int("attempt", attempt), zap.Error(err))
