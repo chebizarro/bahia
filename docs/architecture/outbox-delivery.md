@@ -29,7 +29,9 @@ and deployment-policy registry `30900` events, the outbox also records a
 non-prunable delivery proof in the same transaction as
 the publisher's verified quorum-reaching round. `PublishProjection`
 admits the exact signed event before relay I/O. `PublishBeforeCommit` makes its
-relay attempt before admission and is not suitable for a crash-safe import.
+relay attempt before admission (including live policy mutations) and is not
+suitable for a crash-safe import. A policy proof therefore does not imply that
+its producer used outbox-first admission.
 Its quorum outcomes are admitted and then committed before it reports success;
 a crash between those operations leaves a retryable row without acceptance
 proof. Generic enqueue and round calls cannot mint a proof.

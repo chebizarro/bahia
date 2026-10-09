@@ -405,7 +405,7 @@ func TestLocalOutboxWithoutPostgresRestartResumesPendingDeliveries(t *testing.T)
 	require.True(t, b.has(ev.ID))
 }
 
-func TestDeploymentPolicyProjectionIsOutboxFirstAndReceiptGated(t *testing.T) {
+func TestDeploymentPolicyPrecommitPublicationRecordsReceiptOnlyAfterQuorum(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
 	defer cancel()
 	up := startSyncTestRelay(t, syncTestRelayOptions{})
@@ -420,16 +420,21 @@ func TestDeploymentPolicyProjectionIsOutboxFirstAndReceiptGated(t *testing.T) {
 		Tags:    gonostr.Tags{{"d", "policy-id"}, {"t", kinds.CPStateTopicPolicyRegistry}, {"domain", "policy"}},
 		Content: `{"id":"policy-id","deleted":false}`}
 	require.NoError(t, ev.Sign(key))
-	err := h.pub.PublishProjection(ctx, ev, "deployment-policy", nil)
-	require.ErrorIs(t, err, ErrPublishIncomplete)
-	entry := h.entry(t, ev.ID)
-	require.Equal(t, localstore.OutboxPending, entry.State)
-	_, found, err := h.outbox.GetDeliveryProof(ev.ID)
+	err := h.pub.PublishBeforeCommit(ctx, ev, "policy", nil)
+	require.ErrorContains(t, err, "not queued")
+	_, found, err := h.outbox.Get(ev.ID)
+	require.NoError(t, err)
+	require.False(t, found, "current app callback does not admit a partial policy publish")
+	_, found, err = h.outbox.GetDeliveryProof(ev.ID)
 	require.NoError(t, err)
 	require.False(t, found)
 	down.down.Store(false)
-	require.NoError(t, h.pub.PublishProjection(ctx, ev, "deployment-policy", nil))
-	proof, found, err := h.outbox.GetDeliveryProof(ev.ID)
+	freshPool := newSyncTestPool(up, down)
+	defer freshPool.Close()
+	fresh := newLocalOutboxHarness(t, t.TempDir(), freshPool, key.Hex(), config.PublishQuorumAllRelays,
+		WithPublishTarget(repository.NostrPublishTargetControlPlane))
+	require.NoError(t, fresh.pub.PublishBeforeCommit(ctx, ev, "policy", nil))
+	proof, found, err := fresh.outbox.GetDeliveryProof(ev.ID)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.True(t, proof.ValidFor(ev, repository.NostrPublishTargetControlPlane))
