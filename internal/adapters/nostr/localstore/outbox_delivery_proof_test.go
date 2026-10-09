@@ -159,3 +159,44 @@ func TestUnverifiedOutboxCallsCannotMintBackupConfigProof(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, found, "stored untrusted OKs cannot augment a publisher round")
 }
+
+func TestDeploymentPolicyProofRequiresVerifiedRoundAndSurvivesPrune(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.bolt")
+	outbox, err := OpenOutbox(path)
+	require.NoError(t, err)
+	ev := signed(t, nostr.Generate(), nostr.Kind(kinds.CASControlState), nostr.Now(), nostr.Tags{
+		{"d", "policy-id"}, {"t", kinds.CPStateTopicPolicyRegistry}, {"domain", "policy"},
+	}, `{"id":"policy-id","deleted":false}`)
+	_, err = outbox.Enqueue(OutboxEntry{Event: ev, Target: "control-plane"})
+	require.NoError(t, err)
+	_, found, err := outbox.GetDeliveryProof(ev.ID)
+	require.NoError(t, err)
+	require.False(t, found)
+	require.NoError(t, outbox.Close())
+	outbox, err = OpenOutbox(path)
+	require.NoError(t, err)
+	pending, err := outbox.ListPending("control-plane", nil, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "a crash after admission retains the exact signed event")
+	require.Equal(t, ev.ID, pending[0].Event.ID)
+	policy := DeliveryPolicy{WriteRelays: []string{"wss://a", "wss://b"}, Required: 2}
+	_, err = outbox.CommitPublisherRound(ev.ID, OutboxRound{Target: "control-plane", Delivered: true, State: OutboxPending, Policy: policy,
+		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}}})
+	require.ErrorContains(t, err, "lacks verified target quorum")
+	_, err = outbox.CommitPublisherRound(ev.ID, OutboxRound{Target: "control-plane", Delivered: true, State: OutboxPublished, Policy: policy,
+		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}, "wss://b": {Accepted: true}}, At: time.Now().UTC().Add(-48 * time.Hour)})
+	require.NoError(t, err)
+	_, err = outbox.Prune(time.Now().Add(-24*time.Hour), time.Now().Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.NoError(t, outbox.Close())
+	outbox, err = OpenOutbox(path)
+	require.NoError(t, err)
+	defer outbox.Close()
+	proof, found, err := outbox.GetDeliveryProof(ev.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, proof.ValidFor(ev, "control-plane"))
+	mutated := ev
+	mutated.Content = `{"id":"different"}`
+	require.False(t, proof.ValidFor(mutated, "control-plane"))
+}

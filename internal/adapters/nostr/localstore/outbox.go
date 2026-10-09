@@ -59,7 +59,7 @@ type DeliveryPolicy struct {
 	Required    int      `json:"required"`
 }
 
-// DeliveryProof retains the exact signed backup-config event and the relay
+// DeliveryProof retains the exact signed canonical event and the relay
 // outcomes that satisfied its historical publish policy after its outbox row
 // is pruned. An absent proof is not evidence of delivery.
 type DeliveryProof struct {
@@ -463,7 +463,7 @@ func (o *Outbox) Get(id nostr.ID) (OutboxEntry, bool, error) {
 	return entry, found, nil
 }
 
-// GetDeliveryProof reads a non-prunable quorum receipt for a backup config
+// GetDeliveryProof reads a non-prunable quorum receipt for a canonical config
 // event. Rows predating this proof format are deliberately not backfilled from
 // an outbox Delivered bit: that bit lacks the target relay policy.
 func (o *Outbox) GetDeliveryProof(id nostr.ID) (DeliveryProof, bool, error) {
@@ -492,7 +492,8 @@ func (o *Outbox) GetDeliveryProof(id nostr.ID) (DeliveryProof, bool, error) {
 // that an earlier publication met quorum.
 func (p DeliveryProof) ValidFor(event nostr.Event, target string) bool {
 	if p.Target != target || p.Event.ID != event.ID || p.Event.PubKey != event.PubKey ||
-		p.Event.Sig != event.Sig || !p.Event.CheckID() || !p.Event.VerifySignature() ||
+		p.Event.Sig != event.Sig || !event.CheckID() || !event.VerifySignature() ||
+		!p.Event.CheckID() || !p.Event.VerifySignature() ||
 		p.AcceptedAt.IsZero() || p.Policy.Required < 1 ||
 		p.Policy.Required > len(p.Policy.WriteRelays) || len(p.RelayOK) != len(p.Policy.WriteRelays) {
 		return false
@@ -712,7 +713,7 @@ func (o *Outbox) commitRound(id nostr.ID, round OutboxRound, recordProof bool) (
 }
 
 func recordPublisherProof(tx *bbolt.Tx, entry OutboxEntry, round OutboxRound, at time.Time, publisherRound bool) error {
-	if !publisherRound || !round.Delivered || !isBackupConfigEvent(entry.Event) {
+	if !publisherRound || !round.Delivered || !isProofEligibleEvent(entry.Event) {
 		return nil
 	}
 	proofs := tx.Bucket(outboxDeliveryProofsBucket)
@@ -721,9 +722,9 @@ func recordPublisherProof(tx *bbolt.Tx, entry OutboxEntry, round OutboxRound, at
 	}
 	proofEntry := entry
 	proofEntry.Relays = round.Relays
-	proof, ok := backupConfigDeliveryProof(proofEntry, round.Policy, at)
+	proof, ok := canonicalDeliveryProof(proofEntry, round.Policy, at)
 	if !ok {
-		return fmt.Errorf("backup config %s publisher round lacks verified target quorum", entry.Event.ID.Hex())
+		return fmt.Errorf("canonical config %s publisher round lacks verified target quorum", entry.Event.ID.Hex())
 	}
 	raw, err := json.Marshal(proof)
 	if err != nil {
@@ -732,9 +733,9 @@ func recordPublisherProof(tx *bbolt.Tx, entry OutboxEntry, round OutboxRound, at
 	return proofs.Put(entry.Event.ID[:], raw)
 }
 
-func backupConfigDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time.Time) (DeliveryProof, bool) {
+func canonicalDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time.Time) (DeliveryProof, bool) {
 	ev := entry.Event
-	if !isBackupConfigEvent(ev) || !ev.CheckID() || !ev.VerifySignature() || outboxTag(ev.Tags, "d") == "" {
+	if !isProofEligibleEvent(ev) || !ev.CheckID() || !ev.VerifySignature() || outboxTag(ev.Tags, "d") == "" {
 		return DeliveryProof{}, false
 	}
 	relayOK := make(map[string]bool, len(policy.WriteRelays))
@@ -743,6 +744,17 @@ func backupConfigDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time
 	}
 	proof := DeliveryProof{Event: ev, Target: entry.Target, Policy: policy, RelayOK: relayOK, AcceptedAt: at}
 	return proof, proof.ValidFor(ev, entry.Target)
+}
+
+func isProofEligibleEvent(ev nostr.Event) bool {
+	return isBackupConfigEvent(ev) || isDeploymentPolicyEvent(ev)
+}
+
+func isDeploymentPolicyEvent(ev nostr.Event) bool {
+	return ev.Kind == nostr.Kind(kinds.CASControlState) &&
+		outboxTag(ev.Tags, "domain") == "policy" &&
+		outboxTag(ev.Tags, "t") == kinds.CPStateTopicPolicyRegistry &&
+		outboxTag(ev.Tags, "d") != ""
 }
 
 func isBackupConfigEvent(ev nostr.Event) bool {

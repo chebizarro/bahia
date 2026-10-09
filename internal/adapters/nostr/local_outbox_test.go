@@ -404,3 +404,35 @@ func TestLocalOutboxWithoutPostgresRestartResumesPendingDeliveries(t *testing.T)
 	require.Equal(t, localstore.OutboxPublished, entry.State)
 	require.True(t, b.has(ev.ID))
 }
+
+func TestDeploymentPolicyProjectionIsOutboxFirstAndReceiptGated(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	up := startSyncTestRelay(t, syncTestRelayOptions{})
+	down := startSyncTestRelay(t, syncTestRelayOptions{})
+	down.down.Store(true)
+	pool := newSyncTestPool(up, down)
+	defer pool.Close()
+	key := gonostr.Generate()
+	h := newLocalOutboxHarness(t, t.TempDir(), pool, key.Hex(), config.PublishQuorumAllRelays,
+		WithPublishTarget(repository.NostrPublishTargetControlPlane))
+	ev := gonostr.Event{Kind: gonostr.Kind(kinds.CASControlState), CreatedAt: gonostr.Now(),
+		Tags:    gonostr.Tags{{"d", "policy-id"}, {"t", kinds.CPStateTopicPolicyRegistry}, {"domain", "policy"}},
+		Content: `{"id":"policy-id","deleted":false}`}
+	require.NoError(t, ev.Sign(key))
+	err := h.pub.PublishProjection(ctx, ev, "deployment-policy", nil)
+	require.ErrorIs(t, err, ErrPublishIncomplete)
+	entry := h.entry(t, ev.ID)
+	require.Equal(t, localstore.OutboxPending, entry.State)
+	_, found, err := h.outbox.GetDeliveryProof(ev.ID)
+	require.NoError(t, err)
+	require.False(t, found)
+	down.down.Store(false)
+	require.NoError(t, h.pub.PublishProjection(ctx, ev, "deployment-policy", nil))
+	proof, found, err := h.outbox.GetDeliveryProof(ev.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, proof.ValidFor(ev, repository.NostrPublishTargetControlPlane))
+	require.ElementsMatch(t, []string{up.url, down.url}, proof.Policy.WriteRelays)
+	require.Equal(t, 2, proof.Policy.Required)
+}

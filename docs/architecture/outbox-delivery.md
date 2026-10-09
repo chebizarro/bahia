@@ -9,7 +9,7 @@ payments and security.
 
 ## Durable publish
 
-- `Publisher.PublishBeforeCommit` writes the signed event to the outbox first;
+- `Publisher.PublishProjection` writes the signed event to the outbox first;
   per-relay `OK` tracking is persisted, so a publish interrupted mid-delivery
   resumes exactly where it stopped after a restart.
 - The caller-facing publish calls (`PublishSignedEventWithResults`,
@@ -24,12 +24,15 @@ payments and security.
   attempt budget is spent. Abandoned entries are terminal `failed` rows,
   retained for `failedOutboxRetention` (7 days) with their reason.
 
-For service-signed backup recipe, repository, and policy `30900` events, the
-outbox also records a non-prunable delivery proof in the same transaction as
-the publisher's verified quorum-reaching round. `PublishBeforeCommit` first
-enqueues its relay outcomes, then commits that verified round before reporting
-success; a crash between those operations leaves a retryable row without
-acceptance proof. Generic enqueue and round calls cannot mint a proof.
+For service-signed backup recipe, repository, and policy `30900` events,
+and deployment-policy registry `30900` events, the outbox also records a
+non-prunable delivery proof in the same transaction as
+the publisher's verified quorum-reaching round. `PublishProjection`
+admits the exact signed event before relay I/O. `PublishBeforeCommit` makes its
+relay attempt before admission and is not suitable for a crash-safe import.
+Its quorum outcomes are admitted and then committed before it reports success;
+a crash between those operations leaves a retryable row without acceptance
+proof. Generic enqueue and round calls cannot mint a proof.
 It pins the exact signed event, publish target, configured write-relay set,
 required quorum, and each relay's accepted `OK`. Backup execution-snapshot
 validation requires this proof and checks the signed event retained in it;
