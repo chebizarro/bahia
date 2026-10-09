@@ -28,6 +28,7 @@ const usage = "usage: bahia-migrate [--config path] [--confirm] [--force] [--to 
 	"       bahia-migrate [--config path] [--cutoff RFC3339] f74a-census\n" +
 	"       bahia-migrate [--config path] --cutoff RFC3339 f74a-compact (read-only dry run)\n" +
 	"       bahia-migrate [--config path] --confirm-quiesced f74a-import (stop daemon and all SQL writers first)\n" +
+	"       bahia-migrate [--config path] [--confirm-quiesced] legacy-cutover (census; seal only when empty)\n" +
 	"       bahia-migrate [--config path] --target default|control-plane [--after token] [--max-rows n] outbox-transfer (read-only inventory)\n" +
 	"       bahia-migrate [--config path] [--dry-run] [--relays url,...] [--relay-backfill] nostr"
 
@@ -54,7 +55,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "config.yaml", "Bahia configuration file")
 	confirm := flags.Bool("confirm", false, "confirm destructive down migration")
-	confirmQuiesced := flags.Bool("confirm-quiesced", false, "confirm all daemon and SQL writers are stopped for f74a-import")
+	confirmQuiesced := flags.Bool("confirm-quiesced", false, "confirm all daemon and SQL writers are stopped for offline cutover")
 	cutoffText := flags.String("cutoff", "", "F74a census/compaction UTC cutoff in RFC3339 format")
 	force := flags.Bool("force", false, "allow down across out-of-order applied history")
 	to := flags.String("to", "", "full filename stem to retain when running down")
@@ -85,8 +86,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if action == "f74a-import" && !*confirmQuiesced {
 		return reportError(stderr, "f74a-import requires --confirm-quiesced; stop all daemon and SQL writers first")
 	}
-	if action != "f74a-import" && *confirmQuiesced {
-		return reportError(stderr, "--confirm-quiesced is only valid for f74a-import")
+	if action != "f74a-import" && action != "legacy-cutover" && *confirmQuiesced {
+		return reportError(stderr, "--confirm-quiesced is only valid for f74a-import or legacy-cutover")
 	}
 	if action != "down" && *confirm {
 		return reportError(stderr, "--confirm is only valid for down")
@@ -146,6 +147,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if action == "f74a-import" {
 		return runF74aImport(ctx, cfg, pool, stdout, stderr)
 	}
+	if action == "legacy-cutover" {
+		return runLegacyCutover(ctx, pool, cfg.Nostr.LocalStore.ResolvedOutboxPath(), *confirmQuiesced, stdout, stderr)
+	}
 	if action == "f74a-census" || action == "f74a-compact" {
 		return runF74aMaintenance(ctx, pool, action, cutoff, stdout, stderr)
 	}
@@ -161,7 +165,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func isAction(value string) bool {
 	switch value {
-	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact", "f74a-import", "outbox-transfer":
+	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact", "f74a-import", "legacy-cutover", "outbox-transfer":
 		return true
 	default:
 		return false
