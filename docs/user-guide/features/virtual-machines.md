@@ -12,6 +12,12 @@ so calls return the transport's method-unregistered error rather than a
 virtualization acknowledgment. The method tables below describe the intended
 interface after signed-intent cutover, not currently usable endpoints.
 
+Operator-signed `30900` requests in the `virtualization` domain are checked
+for signature, organization permission, and exact operation/resource binding,
+then receive a rejected `30315` status. A relay `OK` does not authorize a
+provider action. No accepted operation, provider execution or canonical
+virtualization state is inferred from the legacy SQL journal.
+
 The PostgreSQL journal is retained but is not replayed into signed state or
 audit events at startup. When PostgreSQL or virtualization is
 configured, `/ready` reports `virtualization_canonical_recovery=warn` without

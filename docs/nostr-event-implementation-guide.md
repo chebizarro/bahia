@@ -87,6 +87,12 @@ A new kind number requires a written justification that its relay behaviour
 
 ## Interop exceptions
 
+Virtualization `30900` requests use `t=virtualization` and an
+operation-specific `d` coordinate, but their current disposition is rejection:
+neither a PostgreSQL journal row nor a provider observation is canonical
+authorization or a restart-safe commit outcome. See the
+[virtualization contract](event-spec.md#virtualization).
+
 - **Hive-CI.** `build/request` is an intent, but the CI bus is Hive-CI's own
   durable `5401`/`5402`; Bahia's self-dispatch publishes a tag-only `5401`
   with a per-run ephemeral `publisher` key and targets a Loom `5100` job

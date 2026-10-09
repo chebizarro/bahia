@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -16,8 +17,40 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/readmodel"
 	"github.com/stretchr/testify/require"
 )
+
+func TestVirtualizationSignedIntentIngressRemainsSuspended(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+	cfg := intentSubscriberTestConfig(t)
+	actor := nostr.Generate()
+	org := uuid.New()
+	cfg.Nostr.AuthorizedPubkeys = []string{actor.Public().Hex()}
+	cfg.Nostr.BootstrapOwners = map[string]string{org.String(): actor.Public().Hex()}
+	app, err := New(cfg)
+	require.NoError(t, err)
+	defer syncTestLogger(t, app.Logger)
+	defer closeRelayPools(app.relayPools...)
+	require.IsType(t, &controlplane.VirtualizationIntentHandler{}, app.IntentProcessor.Handler("virtualization"))
+	operationID, resourceID, intentID := uuid.Must(uuid.NewV7()), uuid.New(), uuid.Must(uuid.NewV7())
+	content, err := json.Marshal(map[string]any{
+		"operation_id": operationID, "resource_id": resourceID, "resource_kind": domain.PersistentVMResource,
+		"action": domain.VMOperationStart, "expected_generation": 1,
+		"idempotency_key": intentID.String(), "reason": "operator requested start",
+	})
+	require.NoError(t, err)
+	event := &nostr.Event{Kind: 30900, CreatedAt: nostr.Now(), Tags: nostr.Tags{
+		{"d", "vm-operation:" + operationID.String()}, {"domain", "virtualization"},
+		{"schema", "bahia.intent.virtualization.v1"}, {"op", "request"},
+		{"org", org.String()}, {"intent_id", intentID.String()},
+		{"t", "bahia-intent"}, {"t", "virtualization"},
+	}, Content: string(content)}
+	require.NoError(t, event.Sign(actor))
+	require.ErrorIs(t, app.IntentProcessor.ProcessRelayIntent(t.Context(), event), readmodel.ErrVirtualizationUnavailable)
+	require.False(t, app.IntentProcessor.IsProcessed(intentID.String()))
+}
 
 // testDomainHandler is a mock DomainHandler that records the intents it
 // receives, for verifying the wiring in app-level tests.

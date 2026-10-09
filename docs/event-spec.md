@@ -345,6 +345,18 @@ drift. When a desired document is deleted or expires the consumer publishes
 
 ### Virtualization
 
+Operator-signed operation requests use kind `30900`, `t=bahia-intent`,
+`t=virtualization`, `domain=virtualization`,
+`schema=bahia.intent.virtualization.v1`, `op=request`, an `org` UUID,
+`intent_id=<uuidv7>`, and `d=vm-operation:<operation_id>`. The complete
+content binds `operation_id` (UUIDv7), `resource_id`,
+`resource_kind=persistent_vm`, `action` (`start`, `graceful_stop`, or `reboot`),
+`expected_generation`, `idempotency_key` equal to `intent_id`, and a reason.
+The daemon checks the signature, tenant permission, envelope and content
+binding, then returns a `rejected` `30315` status while canonical commit and
+restart-safe execution are unavailable. A relay `OK` is not operation
+acceptance; no SQL journal row authorizes execution or state publication.
+
 `schema=bahia.state.virtualization.v1`, `d=<resource-prefix>:<uuid>`, tags
 `domain=virtualization`, `entity`, `org`, `generation`, `sequence`,
 `lifecycle_class`, and `journal=<org>:<sequence>:state`. Content is the public
@@ -353,7 +365,8 @@ DTO only: `schema`, `sequence`, `change_type`, `occurred_at`, optional
 console content, host path or credential bundle is projected. Audit facts use
 `schema=bahia.audit.virtualization.v1`, `state=<coordinate>`, `type`,
 `protected=true` and `journal=…:audit`. Consumers enforce journal
-sequence/generation ordering in addition to NIP-01.
+sequence/generation ordering in addition to NIP-01 for previously signed
+records. The SQL-journal projector does not publish new state or audit.
 
 ## 6. Operational status (`30315`)
 

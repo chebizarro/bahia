@@ -26,6 +26,10 @@ entity. The web, the CLI and MCP all end in a signed `30900` intent; the
 daemon's reply is a bounded `30315` status; the durable outcome is the
 canonical record a REQ returns.
 
+Virtualization operation intents have a signed `30900` ingress but are
+rejected until canonical commit and restart-safe provider replay exist. The
+legacy PostgreSQL-backed ContextVM and HTTP paths remain suspended.
+
 ### How a write completes
 
 1. The client mints the entity id (UUIDv7) and signs the intent with its own

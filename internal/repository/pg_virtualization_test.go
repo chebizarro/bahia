@@ -73,6 +73,28 @@ func vmPGDeployment(h *domain.VirtualizationHost, i *domain.VMImage) *domain.Per
 	v.Identity = domain.VMResourceIdentity{InstallationID: h.InstallationID, OrgID: h.OrgID, HostID: h.ID, DeploymentID: v.ID, Provider: h.Provider, ProviderResourceID: uuid.New(), LifecycleClass: domain.VMLifecyclePersistent}
 	return v
 }
+
+func TestVMControlPlaneRejectsRetiredDeploymentUnitTarget(t *testing.T) {
+	pool, repo := vmPostgres(t)
+	_, _, vm := vmPGFixtures(t, pool, repo)
+	ctx := t.Context()
+	serviceID, environmentID, unitID := uuid.New(), uuid.New(), uuid.New()
+	_, err := pool.Exec(ctx, `INSERT INTO services(id,org_id,name,artifact_repo) VALUES ($1,$2,$3,'vm-test')`, serviceID, vm.OrgID, serviceID.String())
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO environments(id,org_id,name) VALUES ($1,$2,$3)`, environmentID, vm.OrgID, environmentID.String())
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO deployment_units(id,environment_id,unit_key,runtime_type,reconcile_mode,ownership_mode)
+		VALUES ($1,$2,'vm','docker','observe_only','bahia_managed')`, unitID, environmentID)
+	require.NoError(t, err)
+	vm.ServiceID, vm.EnvironmentID, vm.DeploymentUnitID = &serviceID, &environmentID, &unitID
+	vm.Identity.DeploymentUnitID = &unitID
+	require.NoError(t, vmReferences(ctx, pool, vm), "active unit remains a valid target")
+	_, err = pool.Exec(ctx, `UPDATE deployment_units SET retired_at=now() WHERE id=$1`, unitID)
+	require.NoError(t, err)
+	require.ErrorIs(t, vmReferences(ctx, pool, vm), domain.ErrInvalidValue,
+		"retired unit remains a historical FK target but cannot admit new VM linkage")
+}
+
 func vmPGReservation(v *domain.PersistentVMDeployment) domain.VMCapacityReservation {
 	return domain.VMCapacityReservation{ID: uuid.New(), OrgID: v.OrgID, HostID: v.HostID, ResourceID: v.ID, ResourceKind: domain.PersistentVMResource, LifecycleClass: v.LifecycleClass, Capacity: v.Allocation}
 }

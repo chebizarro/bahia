@@ -30,6 +30,7 @@ const (
 	DNSBackendTopic  = "dns-backend"
 
 	VirtualizationDomain        = "virtualization"
+	VirtualizationIntentSchema  = "bahia.intent.virtualization.v1"
 	VirtualizationStateSchema   = "bahia.state.virtualization.v1"
 	VirtualizationAuditSchema   = "bahia.audit.virtualization.v1"
 	VirtualizationTagOrg        = "org"

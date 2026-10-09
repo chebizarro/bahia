@@ -661,7 +661,7 @@ var RegisteredIntentDomains = []string{
 	"dns", "worker", "deployment", "runtime", "org", "secret", "notification",
 	"artifact", "adoption",
 	"build", "tool",
-	"security", "sbom", "relay",
+	"security", "sbom", "relay", "virtualization",
 }
 
 // BuildEnabledDomains enables every registered domain except explicit opt-outs.

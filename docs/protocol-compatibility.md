@@ -20,6 +20,8 @@ topic constants are in `internal/kinds`.
 Clients must verify event IDs/signatures, apply NIP-01 replacement rules,
 deduplicate by event ID, process stored events through `EOSE`, remain subscribed
 for live events, handle `AUTH` and `CLOSED`, and check every publish `OK`.
+The `virtualization` intent domain emits rejection status only; it does not
+convert an operator-signed request or a SQL journal row into provider work.
 
 ## Supported NIPs
 

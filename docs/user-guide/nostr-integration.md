@@ -49,6 +49,10 @@ The intent ID is the idempotency key. An exact retry replays the result; differe
 
 A relay `OK` proves that a relay accepted the event. The service's `30315` status reports admission, rejection, or conflict. Durable completion comes from canonical state, audit, and domain outcome records.
 
+Virtualization `request` intents use `t=virtualization` and
+`d=vm-operation:<operation_id>`. They receive a rejected status while the
+canonical operation executor is unavailable; a relay `OK` does not start a VM.
+
 Organization, secret, and notification intents are gift-wrapped so relays do not see confidential content.
 
 ## Canonical state
@@ -77,7 +81,7 @@ Fleet-scoped confidential records use the fleet OCK. Operator allowlists are add
 
 ## ContextVM
 
-ContextVM JSON-RPC is used for registered interactive operations such as assistant turns, secret reveal, run-log retrieval, virtualization, and feature methods that explicitly expose this transport. Use JSON-RPC `params` and the method's schema. A response is an acknowledgement or bounded result; canonical records remain durable truth.
+ContextVM JSON-RPC is used for registered interactive operations such as assistant turns, secret reveal, and run-log retrieval. Virtualization ContextVM methods are not registered while the feature is suspended. Use JSON-RPC `params` and the method's schema. A response is an acknowledgement or bounded result; canonical records remain durable truth.
 
 Do not model ordinary state reads as ContextVM calls. Subscribe to canonical state or use the store-backed CLI/MCP read.
 

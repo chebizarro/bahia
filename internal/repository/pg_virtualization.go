@@ -518,7 +518,7 @@ func vmReferences(ctx context.Context, q pgQueryer, value any) error {
 		}
 		if v.DeploymentUnitID != nil {
 			var ok bool
-			if err = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM deployment_units WHERE id=$1 AND environment_id=$2)`, *v.DeploymentUnitID, *v.EnvironmentID).Scan(&ok); err != nil {
+			if err = q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM deployment_units WHERE id=$1 AND environment_id=$2 AND retired_at IS NULL)`, *v.DeploymentUnitID, *v.EnvironmentID).Scan(&ok); err != nil {
 				return err
 			}
 			if !ok {

@@ -1285,6 +1285,12 @@ func New(cfg *config.Config) (*App, error) {
 		return check
 	})
 
+	// Virtualization requests enter the signed intent pipeline for explicit
+	// rejection; the SQL-backed projector and provider remain disconnected.
+	if enabledDomains["virtualization"] {
+		intentProcessor.RegisterHandler("virtualization", controlplane.NewVirtualizationIntentHandler())
+	}
+
 	// --- Backup canonical publisher and intent handler ---
 	// BackupCanonicalPublisher follows the MLCanonicalPublisher pattern: holds
 	// a *Projector reference and publishes through the shared signing/outbox
