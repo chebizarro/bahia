@@ -73,7 +73,7 @@ func runOutboxTransfer(ctx context.Context, source outboxInventorySource, opts o
 	if err != nil {
 		return reportError(stderr, "outbox-transfer inventory: %v", err)
 	}
-	if _, err := fmt.Fprintf(stdout, "window_inspected=%d window_conflicts=%d cumulative_conflicts=%d signed_unattempted=%d next_after=%s\n", stats.inspected, stats.conflicts, stats.cumulativeConflicts, stats.signedUnattempted, stats.nextAfter); err != nil {
+	if _, err := fmt.Fprintf(stdout, "window_inspected=%d window_conflicts=%d cumulative_conflicts=%d signed_unattempted=%d prior_relay_acceptance=unknown next_after=%s\n", stats.inspected, stats.conflicts, stats.cumulativeConflicts, stats.signedUnattempted, stats.nextAfter); err != nil {
 		return 1
 	}
 	if _, err := fmt.Fprintln(stdout, "read-only inventory: no row was enqueued, re-targeted, or published; no page proves prior relay acceptance"); err != nil {
@@ -130,6 +130,9 @@ func inventoryOutboxRows(ctx context.Context, source outboxInventorySource, targ
 				}
 			} else {
 				stats.signedUnattempted++
+				if _, err := fmt.Fprintf(output, "signed_unattempted event_id=%s prior_relay_acceptance=unknown\n", row.ID); err != nil {
+					return stats, err
+				}
 			}
 			cursor = &repository.NostrOutboxCursor{ReceivedAt: row.ReceivedAt, ID: row.ID}
 		}

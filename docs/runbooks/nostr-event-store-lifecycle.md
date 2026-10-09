@@ -90,14 +90,36 @@ is exhausted. `next_after` empty means only that this pass found no later row
 at query time, not that the target has no pending rows or any event was
 delivered.
 
-There is no apply mode. PostgreSQL does not retain per-relay OK state, even
-when `publish_attempts=0`. Moving a drainable entry into bbolt before claiming
-its SQL row could publish an event whose SQL claim failed; claiming SQL first
-could strand an event absent from the local outbox. The daemon's effective
-relay pool can also be changed by durable relay-policy state after static
-configuration is loaded. Do not manually reset, re-sign, or re-target these
-rows based only on this inventory; a separately designed crash-safe transfer
-procedure is required.
+`--apply` fails before opening PostgreSQL or the local outbox. Every
+`signed_unattempted` line reports `prior_relay_acceptance=unknown`: zero
+recorded attempts does **not** imply zero relay acceptances. Replaying the
+same intact signed event ID may be necessary, and a relay's duplicate `OK`
+can establish acceptance on that replay; this inventory never records a
+fictional earlier `OK`. Invalid signatures, recorded attempts/errors, and
+source-state changes remain conflicts rather than transferable rows.
+
+### Transfer activation safety boundary
+
+The following is a protocol requirement, **not an available procedure**. It
+must be implemented and verified before transfer activation can be enabled.
+The current command cannot enforce the first or fourth boundary, so it stays
+read-only.
+
+| Boundary | Required durable result | Crash or refusal handling |
+|---|---|---|
+| Fence old SQL delivery and policy writers | Every process capable of publishing a fetched SQL row is stopped, its in-flight deliveries have settled, and no process can restart under the old ownership protocol. The daemon outbox is opened strictly and exclusively. A mere SQL advisory lock or `--confirm-quiesced` assertion does not fence older publishers that do not honor it. | Refuse activation if the fence cannot be attested; a conditional SQL update cannot undo a relay send already in flight. |
+| Stage exact signed event in bbolt | Validate NIP-01 ID/signature and source tuple, then persist a non-drainable record outside the pending index. Reject an ID already held by the local outbox unless ownership and byte-for-byte identity are reconciled. | A failed SQL claim leaves only this inert stage; daemon restart cannot publish it. |
+| Claim SQL ownership | Conditionally re-target only the unchanged pending source row to `local:<target>`; do not set `published`, increment attempts, or invent relay results. After ambiguous commit, re-read the exact row and accept only positive ownership proof. | If the claim fails or differs, leave the stage inert and report the conflict. A committed claim with an inert stage is repaired by an explicit restart of the transfer tool. |
+| Confirm effective relay topology | Compare the chosen target against the daemon's **effective durable** relay-policy snapshot, including runtime reconfiguration, not just `config.yaml`; freeze changes across claim and activation. Preserve the target for delivery without assuming any past relay accepted. | Missing, stale, or changed policy proof blocks activation. A static-config URL comparison is insufficient. |
+| Activate in one bbolt transaction | Insert one pending local entry and mark the stage activated atomically, preserving exact ID, signature, target, and an empty per-relay acceptance map. Retain the activation marker beyond ordinary settled-entry pruning. | A crash before commit remains inert and repairable; a crash after commit cannot enqueue again. Replays and duplicate `OK`s are handled by the normal outbox. |
+
+An operator must explicitly acknowledge unknown prior relay state and the
+possibility of same-ID replay before a future implementation claims a row.
+Attempted rows, terminal failures, malformed signatures, local-ID collisions,
+and moving-cursor disagreements need separate reconciliation; they are never
+silently skipped into an activation batch. The bounded `--after` cursor is
+inventory progress only, not ownership or a durable activation checkpoint.
+Do not manually reset, re-sign, or re-target rows based on this inventory.
 
 See [WS6 alerts](ws6-alerts.md#bahianostroutboxfailed) for response guidance.
 

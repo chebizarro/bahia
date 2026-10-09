@@ -90,12 +90,17 @@ func TestOutboxInventoryIsReadOnlyAndFlagsRejectApply(t *testing.T) {
 	require.Contains(t, output.String(), "read-only inventory")
 	require.Equal(t, repository.NostrPublishStatePending, source.rows[0].PublishState)
 	require.Equal(t, "", source.rows[0].PublishTarget)
-	for _, args := range [][]string{{"outbox-transfer"}, {"outbox-transfer", "--target", "default", "--apply"}, {"outbox-transfer", "--target", "default", "--confirm-quiesced"}} {
+	for _, args := range [][]string{{"outbox-transfer"}, {"outbox-transfer", "--target", "default", "--confirm-quiesced"}} {
 		output.Reset()
 		errors.Reset()
 		require.Equal(t, 1, run(context.Background(), args, &output, &errors))
-		require.True(t, strings.Contains(errors.String(), "requires --target") || strings.Contains(errors.String(), "flag provided but not defined") || strings.Contains(errors.String(), "only valid for f74a-import"))
+		require.True(t, strings.Contains(errors.String(), "requires --target") || strings.Contains(errors.String(), "only valid for f74a-import"))
 	}
+	output.Reset()
+	errors.Reset()
+	require.Equal(t, 1, run(context.Background(), []string{"outbox-transfer", "--target", "default", "--apply"}, &output, &errors))
+	require.Contains(t, errors.String(), "--apply is disabled")
+	require.Contains(t, errors.String(), "no row was claimed or enqueued")
 }
 func TestOutboxInventoryReportsRecordedAttemptsAndBadSignature(t *testing.T) {
 	at := time.Unix(1700000000, 0).UTC()
@@ -123,6 +128,21 @@ func TestOutboxInventoryCrashBeforeSQLAttemptCounterUpdateIsStillReadOnly(t *tes
 	code := runOutboxTransfer(context.Background(), source, outboxTransferOptions{target: "default", maxRows: 10}, &output, &errors)
 	require.Zero(t, code)
 	require.Contains(t, output.String(), "signed_unattempted=1")
+	require.Contains(t, output.String(), "signed_unattempted event_id="+row.ID+" prior_relay_acceptance=unknown")
+	require.Contains(t, output.String(), "prior_relay_acceptance=unknown")
 	require.Contains(t, output.String(), "no page proves prior relay acceptance")
 	require.Equal(t, row, source.rows[0], "inventory must not change SQL ownership or signature")
+}
+
+func TestOutboxTransferApplyRefusesBeforeOpeningSources(t *testing.T) {
+	for _, args := range [][]string{
+		{"outbox-transfer", "--config", "/nonexistent/bahia-transfer.yaml", "--target", "default", "--apply"},
+		{"outbox-transfer", "--config", "/nonexistent/bahia-transfer.yaml", "--target", "control-plane", "--after", "stale", "--apply"},
+	} {
+		var stdout, stderr bytes.Buffer
+		require.Equal(t, 1, run(context.Background(), args, &stdout, &stderr))
+		require.Empty(t, stdout.String())
+		require.Contains(t, stderr.String(), "--apply is disabled")
+		require.NotContains(t, stderr.String(), "loading Bahia config")
+	}
 }

@@ -29,7 +29,7 @@ const usage = "usage: bahia-migrate [--config path] [--confirm] [--force] [--to 
 	"       bahia-migrate [--config path] --cutoff RFC3339 f74a-compact (read-only dry run)\n" +
 	"       bahia-migrate [--config path] --confirm-quiesced f74a-import (stop daemon and all SQL writers first)\n" +
 	"       bahia-migrate [--config path] [--confirm-quiesced --outbox-path /absolute/daemon/outbox.bolt] legacy-cutover (census; seal only when empty)\n" +
-	"       bahia-migrate [--config path] --target default|control-plane [--after token] [--max-rows n] outbox-transfer (read-only inventory)\n" +
+	"       bahia-migrate [--config path] --target default|control-plane [--after token] [--max-rows n] outbox-transfer (read-only inventory; --apply is disabled)\n" +
 	"       bahia-migrate [--config path] [--dry-run] [--relays url,...] [--relay-backfill] nostr"
 
 func main() {
@@ -64,6 +64,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	transferTarget := flags.String("target", "", "outbox-transfer: source publish target to inventory (default or control-plane)")
 	transferAfter := flags.String("after", "", "outbox-transfer: continuation token printed by a prior inventory page")
 	maxRows := flags.Int("max-rows", 1000, "outbox-transfer: maximum SQL rows inspected (1..10000)")
+	transferApply := flags.Bool("apply", false, "outbox-transfer: disabled until a fenced, crash-safe ownership protocol is available")
 	relays := flags.String("relays", "", "nostr: comma-separated relays to publish to (default: sidecar plus nostr.relays)")
 	relayBackfill := flags.Bool("relay-backfill", false, "nostr: also read legacy events back from the relays (default: nostr.legacy_relay_backfill)")
 	action := ""
@@ -80,6 +81,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if !isAction(action) {
 		return reportError(stderr, "unknown migration action %q", action)
+	}
+	if *transferApply {
+		if action != "outbox-transfer" {
+			return reportError(stderr, "--apply is only recognized for outbox-transfer")
+		}
+		return reportError(stderr, "outbox-transfer --apply is disabled: SQL publisher quiescence and effective durable relay policy cannot be proven by this command; no row was claimed or enqueued")
 	}
 	if action == "f74a-compact" && *confirm {
 		return reportError(stderr, "confirmed F74a compaction is disabled: concurrent backdated observations can turn dry-run candidates into material transitions")
