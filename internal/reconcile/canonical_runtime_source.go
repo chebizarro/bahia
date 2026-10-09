@@ -201,6 +201,7 @@ func (s *CanonicalRuntimeSource) unit(ctx context.Context, id uuid.UUID) (*domai
 	if err != nil {
 		return nil, err
 	}
+	var found *domain.DeploymentUnit
 	for _, ev := range events {
 		var head struct {
 			ID uuid.UUID `json:"id"`
@@ -214,12 +215,18 @@ func (s *CanonicalRuntimeSource) unit(ctx context.Context, id uuid.UUID) (*domai
 		}
 		for _, unit := range rec.Value.DeploymentUnits {
 			if unit.ID == id {
+				if unit.EnvironmentID != uuid.Nil && unit.EnvironmentID != head.ID {
+					return nil, fmt.Errorf("canonical deployment unit %s declares a different environment than its signed registry coordinate", id)
+				}
+				if found != nil {
+					return nil, fmt.Errorf("canonical deployment unit %s is present more than once in signed environment state", id)
+				}
 				unit.EnvironmentID = head.ID
-				return &unit, nil
+				found = &unit
 			}
 		}
 	}
-	return nil, nil
+	return found, nil
 }
 
 type canonicalState struct {

@@ -39,6 +39,48 @@ func saveCanonicalRuntimeJSON(t *testing.T, store *localstore.Store, key gonostr
 	saveCanonicalRuntimeEvent(t, store, key, kind, coordinate, false, string(content), at, nil)
 }
 
+func TestCanonicalDeploymentUnitRejectsAmbiguousSignedEnvironmentBinding(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		units []domain.DeploymentUnit
+		other bool
+		want  string
+	}{
+		{name: "single signed unit", units: []domain.DeploymentUnit{{Key: "web"}}},
+		{name: "conflicting embedded environment", units: []domain.DeploymentUnit{{Key: "web", EnvironmentID: uuid.New()}}, want: "different environment"},
+		{name: "duplicate in same environment", units: []domain.DeploymentUnit{{Key: "web"}, {Key: "worker"}}, want: "more than once"},
+		{name: "duplicate across environments", units: []domain.DeploymentUnit{{Key: "web"}}, other: true, want: "more than once"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, err := localstore.Open(filepath.Join(t.TempDir(), "events.bolt"))
+			require.NoError(t, err)
+			defer store.Close()
+			key := gonostr.Generate()
+			unitID, envID, otherEnvID := uuid.New(), uuid.New(), uuid.New()
+			for i := range tc.units {
+				tc.units[i].ID = unitID
+			}
+			saveCanonicalRuntimeJSON(t, store, key, kinds.EnvironmentRegistry, envID.String(),
+				canonicalEnvironment{Environment: domain.Environment{ID: envID, Name: "prod"}, DeploymentUnits: tc.units}, 100)
+			if tc.other {
+				saveCanonicalRuntimeJSON(t, store, key, kinds.EnvironmentRegistry, otherEnvID.String(),
+					canonicalEnvironment{Environment: domain.Environment{ID: otherEnvID, Name: "other"}, DeploymentUnits: []domain.DeploymentUnit{{ID: unitID, Key: "web"}}}, 101)
+			}
+			source, err := NewCanonicalRuntimeSource(store, key.Public().Hex())
+			require.NoError(t, err)
+			unit, err := (canonicalUnits{source: source}).GetByID(ctx, unitID)
+			if tc.want != "" {
+				require.ErrorContains(t, err, tc.want)
+				require.Nil(t, unit)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, envID, unit.EnvironmentID)
+		})
+	}
+}
+
 func canonicalRuntimeFixture(t *testing.T, store *localstore.Store, key gonostr.SecretKey, serviceID, envID uuid.UUID, desiredHash, host string) {
 	t.Helper()
 	service := domain.Service{ID: serviceID, Name: "canonical-api", RuntimeType: domain.RuntimeTypeDocker}
