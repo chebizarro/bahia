@@ -101,8 +101,10 @@ func TestHandleBackupRestoreRequiresApprovalBeforeExecutor(t *testing.T) {
 	sourceRun := registry.addRestoreEligibleRun()
 	executor := &recordingBackupRestoreExecutor{calls: make(chan uuid.UUID, 1)}
 	responder := &recordingBackupRestoreResponder{}
-	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop())
+	serviceKey := nostr.Generate().Hex()
+	signer, _ := NewPrivateKeySigner(serviceKey)
+	store := openTestStore(t)
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithCanonicalWorkflowEvents(store))
 	reactor.backupRegistry = registry
 	reactor.backupRestoreExecutor = executor
 	reactor.backupRestoreResponder = responder
@@ -122,6 +124,7 @@ func TestHandleBackupRestoreRequiresApprovalBeforeExecutor(t *testing.T) {
 	for id := range registry.restores {
 		restoreID = id
 	}
+	retainTestRestoreAcceptance(t, store, request, serviceKey, registry.restores[restoreID])
 	approval := signedLLMRequest(t, requestKey, KindBackupRestoreApproval, fmt.Sprintf(`{"restore_id":"%s","approved":true,"message":"operator-approved"}`, restoreID), nostr.Tags{{"d", "approve:restore:daily:prod"}, {"restore_id", restoreID.String()}, {"decision", "approved"}})
 
 	reactor.handleBackupRestoreApproval(ctx, approval)
@@ -680,6 +683,10 @@ func (r *backupRequestRegistry) CreateBackupRestoreIfAbsent(_ context.Context, r
 	r.restores[cp.ID] = &cp
 	r.restoreCoords[key] = cp.ID
 	return &cp, true, nil
+}
+
+func (r *backupRequestRegistry) GetBackupRestore(_ context.Context, id uuid.UUID) (*domain.BackupRestoreRun, error) {
+	return r.restores[id], nil
 }
 
 func (r *backupRequestRegistry) ApplyBackupRestoreApproval(_ context.Context, restoreID uuid.UUID, approved bool, approvalEventID, approvedBy, message string, reasonParts ...any) (*domain.BackupRestoreRun, bool, error) {

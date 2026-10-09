@@ -51,18 +51,20 @@ type LLMRouteStatePublisher func(ctx context.Context, route *domain.LLMRoute, de
 //
 // See docs/architecture/intents-and-authority.md.
 type LLMRouteIntentHandler struct {
-	routes  LLMRouteCRUD
-	publish LLMRouteStatePublisher
-	status  *IntentStatusPublisher
-	logger  *zap.Logger
+	routes                      LLMRouteCRUD
+	publish                     LLMRouteStatePublisher
+	status                      *IntentStatusPublisher
+	logger                      *zap.Logger
+	deploymentUnavailableReason string
 }
 
 // LLMRouteIntentHandlerConfig configures the LLM route intent handler.
 type LLMRouteIntentHandlerConfig struct {
-	Routes  LLMRouteCRUD
-	Publish LLMRouteStatePublisher
-	Status  *IntentStatusPublisher
-	Logger  *zap.Logger
+	Routes                      LLMRouteCRUD
+	Publish                     LLMRouteStatePublisher
+	Status                      *IntentStatusPublisher
+	Logger                      *zap.Logger
+	DeploymentUnavailableReason string
 }
 
 // NewLLMRouteIntentHandler constructs the handler.
@@ -72,16 +74,23 @@ func NewLLMRouteIntentHandler(cfg LLMRouteIntentHandlerConfig) *LLMRouteIntentHa
 		logger = zap.NewNop()
 	}
 	return &LLMRouteIntentHandler{
-		routes:  cfg.Routes,
-		publish: cfg.Publish,
-		status:  cfg.Status,
-		logger:  logger.Named("llm-intent"),
+		routes:                      cfg.Routes,
+		publish:                     cfg.Publish,
+		status:                      cfg.Status,
+		logger:                      logger.Named("llm-intent"),
+		deploymentUnavailableReason: cfg.DeploymentUnavailableReason,
 	}
 }
 
 // HandleIntent processes a single LLM intent. The processor has already
 // deduplicated, validated, and authorized the intent.
 func (h *LLMRouteIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
+	if h.deploymentUnavailableReason != "" {
+		switch intent.Op {
+		case "deploy", "rollback", "approve", "reject":
+			return fmt.Errorf("LLM deployment unavailable: %s", h.deploymentUnavailableReason)
+		}
+	}
 	switch intent.Op {
 	case "deploy":
 		return h.handleDeploymentCreate(ctx, intent)

@@ -1314,9 +1314,19 @@ func New(cfg *config.Config) (*App, error) {
 	if enabledDomains["backup"] && backupRegistry != nil {
 		intentProcessor.RegisterHandler("backup", controlplane.NewBackupIntentHandler(
 			controlplane.BackupIntentHandlerConfig{
-				Registry:    backupRegistry,
-				Definitions: backupRegistry,
-				Publisher:   backupCanonical,
+				Registry:        backupRegistry,
+				Definitions:     backupRegistry,
+				Publisher:       backupCanonical,
+				CanonicalEvents: localEventStore,
+				ServicePubkey:   servicePubkey,
+				OriginalRequestAuthorized: func(pubkey string) bool {
+					for _, operator := range trustSet.FleetOps() {
+						if operator == pubkey {
+							return true
+						}
+					}
+					return false
+				},
 				Executors: controlplane.BackupIntentExecutors{
 					RunExecutor:       backupCoordinator,
 					RestoreExecutor:   backupRestoreCoordinator,
@@ -1501,10 +1511,11 @@ func New(cfg *config.Config) (*App, error) {
 	if enabledDomains["llm"] && llmRegistry != nil {
 		intentProcessor.RegisterHandler("llm", controlplane.NewLLMRouteIntentHandler(
 			controlplane.LLMRouteIntentHandlerConfig{
-				Routes:  llmRegistry,
-				Publish: llmRoutePublisher,
-				Status:  intentStatus,
-				Logger:  logger,
+				Routes:                      llmRegistry,
+				Publish:                     llmRoutePublisher,
+				Status:                      intentStatus,
+				Logger:                      logger,
+				DeploymentUnavailableReason: "LLM deployment execution is paused until canonical signed-intent recovery is available",
 			},
 		))
 		logger.Info("LLM route intent handler registered")
@@ -2755,6 +2766,7 @@ func New(cfg *config.Config) (*App, error) {
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
 			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)),
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),
+			controlplane.WithCanonicalWorkflowEvents(localEventStore),
 			controlplane.WithMLRegistry(mlRegistry),
 		}, nostrEventRepo)
 		if assistantOrchestrator != nil {

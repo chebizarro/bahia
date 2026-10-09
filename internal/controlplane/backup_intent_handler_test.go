@@ -366,8 +366,24 @@ func TestBackupIntentHandler_RestoreApproval(t *testing.T) {
 	ctx := context.Background()
 	id := uuid.New()
 	registry := newFakeBackupIntentRegistry()
-	registry.restores[id] = &domain.BackupRestoreRun{ID: id, ApprovalStatus: domain.BackupApprovalPending, UpdatedAt: time.Unix(1790985600, 0).UTC()}
-	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{Registry: registry, Logger: zap.NewNop()})
+	backupRunID := uuid.New()
+	requesterKey := gonostr.Generate().Hex()
+	request := signedLLMRequest(t, requesterKey, KindCASControlState,
+		fmt.Sprintf(`{"id":%q,"backup_run_id":%q,"restore_target_ref":"fs:/restore"}`, id.String(), backupRunID.String()),
+		gonostr.Tags{{"t", "bahia-intent"}, {"d", "restore:" + id.String()}, {"domain", "backup"}, {"op", "restore"}, {"intent_id", "restore-creation"}, {"org", testOrgID().String()}},
+	)
+	registry.restores[id] = &domain.BackupRestoreRun{
+		ID: id, BackupRunID: backupRunID, RestoreTargetRef: "fs:/restore",
+		RequestedBy: request.PubKey.Hex(), RequestEventID: request.ID.Hex(),
+		RequestKind: int(request.Kind), RequestDTag: "restore:" + id.String(),
+		ApprovalStatus: domain.BackupApprovalPending, UpdatedAt: time.Unix(1790985600, 0).UTC(),
+	}
+	store := openTestStore(t)
+	retainTestWorkflowEvent(t, store, request)
+	unauthorizedOriginal := NewBackupIntentHandler(BackupIntentHandlerConfig{Registry: registry, CanonicalEvents: store, OriginalRequestAuthorized: func(string) bool { return false }, Logger: zap.NewNop()})
+	require.Error(t, unauthorizedOriginal.HandleIntent(ctx, &Intent{Op: "restore-approval", Content: map[string]any{"restore_id": id.String(), "decision": "approve"}}))
+	require.Zero(t, registry.restoreApprovals)
+	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{Registry: registry, CanonicalEvents: store, OriginalRequestAuthorized: func(pubkey string) bool { return pubkey == request.PubKey.Hex() }, Logger: zap.NewNop()})
 	statuses := &statusCollector{}
 	proc := NewIntentProcessor(NewTrustSet([]string{testPubkey}, zap.NewNop(), WithBootstrapOwners(map[string]string{testOrgID().String(): "0000000000000000000000000000000000000000000000000000000000000001"})), openTestStore(t), NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()), IntentProcessorConfig{EnabledDomains: map[string]bool{"backup": true}}, zap.NewNop())
 	proc.RegisterHandler("backup", handler)

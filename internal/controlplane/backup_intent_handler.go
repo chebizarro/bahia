@@ -94,22 +94,28 @@ type BackupIntentExecutors struct {
 //
 // See docs/architecture/intents-and-authority.md.
 type BackupIntentHandler struct {
-	registry    BackupIntentCRUD
-	definitions BackupIntentDefinitionCRUD
-	publisher   BackupIntentPublisher
-	executors   BackupIntentExecutors
-	status      *IntentStatusPublisher
-	logger      *zap.Logger
+	registry                  BackupIntentCRUD
+	definitions               BackupIntentDefinitionCRUD
+	publisher                 BackupIntentPublisher
+	executors                 BackupIntentExecutors
+	canonicalEvents           CanonicalWorkflowEvents
+	servicePubkey             string
+	originalRequestAuthorized func(string) bool
+	status                    *IntentStatusPublisher
+	logger                    *zap.Logger
 }
 
 // BackupIntentHandlerConfig configures the backup intent handler.
 type BackupIntentHandlerConfig struct {
-	Registry    BackupIntentCRUD
-	Definitions BackupIntentDefinitionCRUD
-	Publisher   BackupIntentPublisher
-	Executors   BackupIntentExecutors
-	Status      *IntentStatusPublisher
-	Logger      *zap.Logger
+	Registry                  BackupIntentCRUD
+	Definitions               BackupIntentDefinitionCRUD
+	Publisher                 BackupIntentPublisher
+	Executors                 BackupIntentExecutors
+	CanonicalEvents           CanonicalWorkflowEvents
+	ServicePubkey             string
+	OriginalRequestAuthorized func(string) bool
+	Status                    *IntentStatusPublisher
+	Logger                    *zap.Logger
 }
 
 // NewBackupIntentHandler constructs the handler.
@@ -119,12 +125,15 @@ func NewBackupIntentHandler(cfg BackupIntentHandlerConfig) *BackupIntentHandler 
 		logger = zap.NewNop()
 	}
 	return &BackupIntentHandler{
-		registry:    cfg.Registry,
-		definitions: cfg.Definitions,
-		publisher:   cfg.Publisher,
-		executors:   cfg.Executors,
-		status:      cfg.Status,
-		logger:      logger.Named("backup-intent"),
+		registry:                  cfg.Registry,
+		definitions:               cfg.Definitions,
+		publisher:                 cfg.Publisher,
+		executors:                 cfg.Executors,
+		canonicalEvents:           cfg.CanonicalEvents,
+		servicePubkey:             cfg.ServicePubkey,
+		originalRequestAuthorized: cfg.OriginalRequestAuthorized,
+		status:                    cfg.Status,
+		logger:                    logger.Named("backup-intent"),
 	}
 }
 
@@ -383,14 +392,14 @@ func (h *BackupIntentHandler) handleRestoreApproval(ctx context.Context, intent 
 	if err != nil || restoreID == uuid.Nil {
 		return fmt.Errorf("restore_id must be a UUID")
 	}
+	current, err := h.registry.GetBackupRestore(ctx, restoreID)
+	if err != nil {
+		return err
+	}
+	if err := verifyBackupRestoreApprovalSource(h.canonicalEvents, h.servicePubkey, current, h.originalRequestAuthorized); err != nil {
+		return fmt.Errorf("backup restore approval paused without canonical request provenance: %w", err)
+	}
 	if intent.ExpectedUpdatedAt != nil {
-		current, err := h.registry.GetBackupRestore(ctx, restoreID)
-		if err != nil {
-			return err
-		}
-		if current == nil {
-			return fmt.Errorf("backup restore %s not found", restoreID)
-		}
 		expected := *intent.ExpectedUpdatedAt
 		if !intent.RevisionMatches(current.UpdatedAt) {
 			return &revisionConflictError{entityID: restoreID, expected: expected, actual: current.UpdatedAt}
@@ -418,6 +427,9 @@ func (h *BackupIntentHandler) handleRestoreApproval(ctx context.Context, intent 
 	restore, changed, err := approvals.ApplyBackupRestoreApproval(ctx, restoreID, approved, eventID, intent.Actor, firstIntentString(intent.Content, "message"), firstIntentString(intent.Content, "reason_code"), reason)
 	if err != nil {
 		return fmt.Errorf("apply backup restore approval: %w", err)
+	}
+	if err := verifyBackupRestoreApprovalSource(h.canonicalEvents, h.servicePubkey, restore, h.originalRequestAuthorized); err != nil {
+		return fmt.Errorf("backup restore approval result paused after row change: %w", err)
 	}
 	if changed && approved && restore != nil && restore.ApprovalStatus == domain.BackupApprovalApproved && !backupRestoreTerminal(restore) && h.executors.RestoreExecutor != nil {
 		go func() {

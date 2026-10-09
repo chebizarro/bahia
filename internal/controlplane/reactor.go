@@ -168,6 +168,7 @@ type Reactor struct {
 	mlExecutor                    MLInferenceControlPlaneExecutor
 	mlRecipeExecutor              MLRecipeControlPlaneExecutor
 	nostrEvents                   repository.NostrEventRepository
+	canonicalWorkflowEvents       CanonicalWorkflowEvents
 	assistantOrchestrator         *service.AssistantOrchestrator
 	dnsOperator                   DNSControlPlaneOperator
 	backupRegistry                backupRunRegistry
@@ -327,6 +328,10 @@ func WithNostrEventRepository(repo repository.NostrEventRepository) ReactorOptio
 			r.workerStatePublisher.ConfigureAudit(repo, r.zapLog)
 		}
 	}
+}
+
+func WithCanonicalWorkflowEvents(source CanonicalWorkflowEvents) ReactorOption {
+	return func(r *Reactor) { r.canonicalWorkflowEvents = source }
 }
 
 // WithKindCatalog configures the replay group catalog used for cursor tracking.
@@ -739,6 +744,17 @@ func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.E
 	if req.Action != "approve" && req.Action != "reject" {
 		return fmt.Errorf("invalid action")
 	}
+	stored, err := r.toolProvisioning.GetIntent(ctx, intentID)
+	if err != nil {
+		return fmt.Errorf("load tool provisioning intent: %w", err)
+	}
+	servicePubkey, err := r.workflowServicePubkey(ctx)
+	if err != nil {
+		return err
+	}
+	if err := verifyToolApprovalSource(r.canonicalWorkflowEvents, servicePubkey, stored, r.isAuthorized); err != nil {
+		return fmt.Errorf("tool approval refused without canonical request provenance: %w", err)
+	}
 	decision := domain.ToolProvisionStatusRejected
 	if req.Action == "approve" {
 		decision = domain.ToolProvisionStatusApproved
@@ -746,6 +762,9 @@ func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.E
 	intent, err := decisionRepository.ApplyToolApprovalDecision(ctx, intentID, decision, event.PubKey.Hex(), time.Now().UTC())
 	if err != nil {
 		return fmt.Errorf("apply tool approval decision: %w", err)
+	}
+	if err := verifyToolApprovalSource(r.canonicalWorkflowEvents, servicePubkey, intent, r.isAuthorized); err != nil {
+		return fmt.Errorf("tool approval result refused after row change: %w", err)
 	}
 	if err := r.toolProvisioning.LogApproval(ctx, intent.ID, req.Action, event.PubKey.Hex(), req.Reason); err != nil {
 		logger.Warn("failed to log tool approval action", zap.Error(err))

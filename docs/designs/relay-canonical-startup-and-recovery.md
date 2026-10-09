@@ -60,6 +60,15 @@ can still execute directly; automatic schedule dispatch and LLM provisioning
 remain unavailable until their canonical intake and recovery sources exist.
 This pause is a **release blocker for the affected features**, not a completed
 recovery replacement or evidence that persisted work will finish after restart.
+Live LLM deploy, rollback and approval intents are rejected while no canonical
+executor exists. Backup restore and tool approval paths require the validated
+original signed request in the local event store. For daemon-minted row ids,
+they also require a service-signed acceptance record binding that request to
+the stored restore or tool intent id; an author-minted restore id in the signed
+intent supplies that binding directly.
+Absent or mismatched proof leaves the row pending and prevents execution or a
+workflow-result publication. The acceptance record must be relay-hydrated into
+the local store; a PostgreSQL audit row or copied event-id field is not proof.
 
 Recovery requires a durable per-workflow record linking the validated source
 intent event id and intent id to a stable run id, external job id/idempotency

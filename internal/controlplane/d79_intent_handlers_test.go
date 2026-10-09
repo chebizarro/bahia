@@ -292,18 +292,10 @@ func TestD79ToolApprovalRejectIntent(t *testing.T) {
 	intent := d70Intent("tool", "approval-response", "tool-approval:"+id.String(), actor,
 		map[string]any{"intent_id": id.String(), "action": "reject", "reason": "operator reviewed"})
 	intent.Event = event
-	require.NoError(t, p.ProcessInProcess(t.Context(), intent))
-	require.Equal(t, "accepted", tagValueNostr(statuses.events[0].Tags, "status"))
+	require.ErrorContains(t, p.ProcessInProcess(t.Context(), intent), "workflow service signer is unavailable")
+	require.Equal(t, "rejected", tagValueNostr(statuses.events[0].Tags, "status"))
 	_, applied, logs, state := repo.counts()
-	require.Equal(t, 1, applied)
-	require.Equal(t, 1, logs)
-	require.Equal(t, domain.ToolProvisionStatusRejected, state)
-	require.NoError(t, p.ProcessInProcess(t.Context(), intent))
-	_, applied, logs, _ = repo.counts()
-	require.Equal(t, 1, applied)
-	require.Equal(t, 1, logs)
-	conflict := *intent
-	conflict.Content = map[string]any{"intent_id": id.String(), "action": "approve", "reason": "different"}
-	require.Error(t, p.ProcessInProcess(t.Context(), &conflict))
-	require.Equal(t, "conflict", tagValueNostr(statuses.events[len(statuses.events)-1].Tags, "status"))
+	require.Zero(t, applied)
+	require.Zero(t, logs)
+	require.Equal(t, domain.ToolProvisionStatusAwaitingApproval, state)
 }

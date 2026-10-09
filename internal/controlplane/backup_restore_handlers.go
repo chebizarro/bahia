@@ -136,9 +136,33 @@ func (r *Reactor) handleBackupRestoreApproval(ctx context.Context, event *nostr.
 		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "validation_error", "restore_id must be a UUID")
 		return
 	}
+	lookup, ok := r.backupRegistry.(interface {
+		GetBackupRestore(context.Context, uuid.UUID) (*domain.BackupRestoreRun, error)
+	})
+	if !ok {
+		r.logger.Warn("backup restore approval paused: canonical provenance lookup is unavailable")
+		return
+	}
+	stored, err := lookup.GetBackupRestore(ctx, restoreID)
+	if err != nil {
+		r.logger.Warn("backup restore approval paused: restore lookup failed", "restore_id", restoreID.String(), "error", err)
+		return
+	}
+	servicePubkey, err := r.workflowServicePubkey(ctx)
+	if err == nil {
+		err = verifyBackupRestoreApprovalSource(r.canonicalWorkflowEvents, servicePubkey, stored, r.isAuthorized)
+	}
+	if err != nil {
+		r.logger.Warn("backup restore approval paused: canonical request provenance is unavailable", "restore_id", restoreID.String(), "error", err)
+		return
+	}
 	restore, changed, err := registry.ApplyBackupRestoreApproval(ctx, restoreID, *req.Approved, event.ID.Hex(), backupRequestActor(event), req.Message, req.ReasonCode, req.Reason)
 	if err != nil {
 		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreApprovalResult, "failed", "restore_approval_error", err.Error())
+		return
+	}
+	if err := verifyBackupRestoreApprovalSource(r.canonicalWorkflowEvents, servicePubkey, restore, r.isAuthorized); err != nil {
+		r.logger.Warn("backup restore approval result paused: canonical request provenance changed", "restore_id", restoreID.String(), "error", err)
 		return
 	}
 	if approvalResponder, ok := r.backupRestoreResponder.(backupRestoreApprovalResponder); ok {
