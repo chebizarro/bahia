@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -110,6 +112,66 @@ func TestF74aAcceptedCoordinateDoesNotProveChangedSourceContent(t *testing.T) {
 	proved, err = ledger.prove(context.Background(), "semantic_packages", &changed)
 	require.NoError(t, err)
 	require.False(t, proved)
+}
+
+func TestF74aObservationMetadataChangeKeepsAcceptedProjectionProof(t *testing.T) {
+	ctx := context.Background()
+	key := "0000000000000000000000000000000000000000000000000000000000000001"
+	secret, err := gonostr.SecretKeyFromHex(key)
+	require.NoError(t, err)
+	cfg := config.NostrConfig{PrivateKey: key, PublishEnabled: true}
+	obs := &domain.RuntimeObservation{
+		ID: uuid.New(), ServiceID: uuid.New(), EnvironmentID: uuid.New(),
+		ObservedImageDigest: "sha256:old", ObservedContainerID: "container", ObservedAt: time.Now().UTC(),
+		Metadata: map[string]any{"password": "old secret"},
+	}
+	capture := &f74aProjectionCapture{}
+	seed := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), capture, nil, zap.NewNop())
+	require.NoError(t, nostradapter.NewF74aCanonicalPublisher(seed, nil).PublishRuntimeObservation(ctx, obs))
+	require.Len(t, capture.events, 1)
+	event := capture.events[0]
+	hash, err := f74aSourceHash(obs)
+	require.NoError(t, err)
+	var published map[string]any
+	require.NoError(t, json.Unmarshal([]byte(event.Content), &published))
+	delete(published, "observed_at") // the projector excludes this volatile field from its fingerprint
+	publishedJSON, err := json.Marshal(published)
+	require.NoError(t, err)
+	publishedDigest := sha256.Sum256(publishedJSON)
+	require.Equal(t, hex.EncodeToString(publishedDigest[:]), hash, "receipt digest must match the actual published record")
+	dir := t.TempDir()
+	outbox, err := localstore.OpenOutbox(filepath.Join(dir, "outbox.bolt"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	store, err := localstore.Open(filepath.Join(dir, "events.bolt"))
+	require.NoError(t, err)
+	defer store.Close()
+	_, err = store.SaveEvent(event)
+	require.NoError(t, err)
+	ledger := f74aDeliveryLedger{store: outbox, author: secret.Public()}
+	require.NoError(t, ledger.stageWithHash(event, hash))
+	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: event, Target: repository.NostrPublishTargetControlPlane})
+	require.NoError(t, err)
+	_, err = outbox.CommitRound(event.ID, localstore.OutboxRound{Delivered: true, State: localstore.OutboxPublished, At: time.Now()})
+	require.NoError(t, err)
+	require.NoError(t, ledger.accepted(event))
+	changed := *obs
+	changed.Metadata = map[string]any{"password": "new secret"}
+	changed.ObservedHost = "sql-only-host"
+	changed.ObservedAt = changed.ObservedAt.Add(time.Minute)
+	restartedPub := nostradapter.NewPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
+		nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostradapter.WithLocalOutbox(outbox, store))
+	defer restartedPub.Close()
+	history := nostradapter.NewLocalEventRepository(store, nil).Authored(secret.Public().Hex())
+	restarted := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), f74aTrackedPublisher{Publisher: restartedPub, ledger: ledger}, history, zap.NewNop())
+	recordPub := f74aRecordPublisher{inner: nostradapter.NewF74aCanonicalPublisher(restarted, nil)}
+	require.NoError(t, recordPub.PublishRuntimeObservation(ctx, &changed))
+	entries, err := outbox.ListEntries([]string{localstore.OutboxPending, localstore.OutboxPublished, localstore.OutboxFailed}, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "SQL-only metadata must not create another relay event")
+	proved, err := ledger.prove(ctx, "observations", &changed)
+	require.NoError(t, err)
+	require.True(t, proved, "metadata-only change must retain durable relay proof")
 }
 
 func TestF74aOwnerOnlyFleetRecipientCanDecrypt(t *testing.T) {

@@ -54,6 +54,17 @@ type f74aDeliveryLedger struct {
 type f74aSourceHashKey struct{}
 
 func f74aSourceHash(item any) (string, error) {
+	// Runtime observation metadata and other SQL-only columns are deliberately
+	// absent from the canonical event, and the projector ignores observed_at
+	// when deduplicating. Hash only its stable published fields so SQL-only and
+	// timestamp-only updates do not invalidate an accepted relay projection.
+	if obs, ok := item.(*domain.RuntimeObservation); ok {
+		item = map[string]any{
+			"id": obs.ID.String(), "service_id": obs.ServiceID.String(), "environment_id": obs.EnvironmentID.String(),
+			"observed_image_digest": obs.ObservedImageDigest, "observed_container_id": obs.ObservedContainerID,
+			"health_status": obs.HealthStatus,
+		}
+	}
 	raw, err := json.Marshal(item)
 	if err != nil {
 		return "", err
