@@ -296,6 +296,22 @@ type f74aOCKManifest struct {
 	Coordinates []string `json:"coordinates"`
 }
 
+func f74aDistinctOCKManifestEntries(m f74aOCKManifest) error {
+	for _, entries := range [][]string{m.Recipients, m.Coordinates} {
+		seen := make(map[string]struct{}, len(entries))
+		for _, entry := range entries {
+			if entry == "" {
+				return errors.New("fleet OCK manifest contains an empty recipient or coordinate")
+			}
+			if _, duplicate := seen[entry]; duplicate {
+				return fmt.Errorf("fleet OCK manifest duplicates recipient or coordinate %q", entry)
+			}
+			seen[entry] = struct{}{}
+		}
+	}
+	return nil
+}
+
 type f74aOCKManifestStore interface {
 	f74aReceiptStore
 	PutControlRecord(string, string, []byte) error
@@ -358,6 +374,11 @@ func f74aPrepareOCK(ctx context.Context, store f74aOCKManifestStore, manager *co
 	if err != nil {
 		return m, err
 	}
+	if m.Version > 0 {
+		if err := f74aDistinctOCKManifestEntries(m); err != nil {
+			return m, err
+		}
+	}
 	if m.Version > 0 && m.KeyHash != "" && slices.Equal(m.Recipients, recipients) && len(m.Coordinates) == len(recipients) {
 		refused := false
 		ledger := f74aDeliveryLedger{store: store, author: author}
@@ -394,6 +415,9 @@ func f74aPrepareOCK(ctx context.Context, store f74aOCKManifestStore, manager *co
 	}
 	sum := sha256.Sum256(key.Key[:])
 	m = f74aOCKManifest{Version: key.Version, KeyHash: hex.EncodeToString(sum[:]), Recipients: recipients, Coordinates: coords}
+	if err := f74aDistinctOCKManifestEntries(m); err != nil {
+		return m, err
+	}
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return m, err
@@ -409,6 +433,9 @@ func (l f74aDeliveryLedger) proveOCK(ctx context.Context, store f74aOCKManifestS
 		return false, err
 	}
 	if m.Version != version || m.KeyHash == "" || len(m.Coordinates) == 0 || len(m.Coordinates) != len(m.Recipients) {
+		return false, nil
+	}
+	if err := f74aDistinctOCKManifestEntries(m); err != nil {
 		return false, nil
 	}
 	prefix := fmt.Sprintf("org-key:%s:v%d:", kinds.FleetOCKScope, version)

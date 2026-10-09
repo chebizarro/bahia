@@ -317,6 +317,20 @@ func TestF74aOCKEnvelopesMustAllBeQuorumAccepted(t *testing.T) {
 	ready, err = ledger.proveOCK(ctx, outbox, 3)
 	require.NoError(t, err)
 	require.True(t, ready)
+	for _, malformed := range []f74aOCKManifest{
+		{Version: 3, KeyHash: "hash", Recipients: []string{"service", "owner"}, Coordinates: []string{ds[0], ds[0]}},
+		{Version: 3, KeyHash: "hash", Recipients: []string{"service", "service"}, Coordinates: ds},
+	} {
+		duplicate, err := json.Marshal(malformed)
+		require.NoError(t, err)
+		require.NoError(t, outbox.PutControlRecord(f74aOCKManifestFamily, f74aOCKManifestID(gonostr.PubKey{}), duplicate))
+		ready, err = ledger.proveOCK(ctx, outbox, 3)
+		require.NoError(t, err)
+		require.False(t, ready, "one accepted envelope must not prove multiple recipients")
+		_, err = f74aPrepareOCK(ctx, outbox, nil, nil, malformed.Recipients, gonostr.PubKey{})
+		require.ErrorContains(t, err, "duplicates", "restart must reject a malformed manifest before rotating")
+	}
+	require.NoError(t, outbox.PutControlRecord(f74aOCKManifestFamily, f74aOCKManifestID(gonostr.PubKey{}), raw))
 	newer := makeEvent(3, ds[1])
 	require.NoError(t, ledger.stage(newer))
 	require.NoError(t, ledger.accepted(owner)) // superseded late callback cannot satisfy newer event
