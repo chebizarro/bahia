@@ -702,15 +702,21 @@ func New(cfg *config.Config) (*App, error) {
 	if securityRepo != nil {
 		bgManager.RegisterWithOptions(NewOSVVulnerabilityCacheCleanupRunner(securityRepo, defaultOSVVulnerabilityCacheCleanupInterval, logger))
 	}
+	var staleRunDetector *workflow.StaleRunDetector
 	if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-		if staleRunSource, ok := runRepo.(workflow.DeploymentRunHealthSource); ok {
-			bgManager.RegisterWithOptions(
-				workflow.NewStaleRunDetector(staleRunSource, nostrEventRepo, nostrPub, cfg.Nostr.StaleRunAfter, logger),
-				RunnerRequired(false),
-			)
-		}
+		staleRunSource := workflow.NewCanonicalRunHealthSource(auditEventRepo, servicePubkey)
+		staleRunDetector = workflow.NewStaleRunDetector(staleRunSource, auditEventRepo, nostrPub, cfg.Nostr.StaleRunAfter, logger)
+		staleRunDetector.SetCanonicalAuthor(servicePubkey)
+		bgManager.RegisterWithOptions(staleRunDetector, RunnerRequired(false))
+		logger.Warn("deployment-run stale health suspended: Loom kind-30100 catch-up is not configured")
 	}
 	healthProvider := NewHealthProvider(nil, bgManager)
+	if staleRunDetector != nil {
+		healthProvider.RegisterCheck("deployment_run_health", func() HealthCheck {
+			return HealthCheck{Name: "deployment_run_health", Status: HealthStatusWarn,
+				Message: "stale-run publication suspended until independent Loom kind-30100 EOSE catch-up is configured"}
+		})
+	}
 	healthProvider.SetRelayQuorumConfig(RelayQuorumConfig{
 		FullMinHealthy:      cfg.Nostr.RelayQuorum.FullMinHealthy,
 		DegradedMinHealthy:  cfg.Nostr.RelayQuorum.DegradedMinHealthy,
@@ -839,8 +845,11 @@ func New(cfg *config.Config) (*App, error) {
 	if rec != nil {
 		rec.SetCanonicalReadiness(bootstrapper.ReadySignal())
 	}
-	// Supervisors act on the local event store only after its first relay
-	// catch-up.
+	// Supervisors and stale-run health act on the local event store only after
+	// its first relay catch-up.
+	if staleRunDetector != nil {
+		staleRunDetector.SetReadiness(bootstrapper.ReadySignal())
+	}
 	if routeCanarySupervisor != nil {
 		routeCanarySupervisor.SetReadiness(bootstrapper)
 	}

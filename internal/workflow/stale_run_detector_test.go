@@ -236,6 +236,9 @@ func TestStaleRunDetectorRunStopsWithContext(t *testing.T) {
 		2*time.Second,
 		zap.NewNop(),
 	)
+	loomReady := make(chan struct{})
+	close(loomReady)
+	detector.SetLoomStatusReadiness(loomReady)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- detector.Run(ctx) }()

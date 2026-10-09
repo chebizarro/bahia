@@ -52,6 +52,7 @@ The CLI and `bahia_get_run_logs` use the governed run-log surface. The daemon al
 - **Failed:** inspect run logs, artifact pull access, endpoint resolution, and worker eligibility.
 - **Drifted:** compare desired and observed digests, then redeploy or use the configured reconciliation mode.
 - **No status after relay OK:** use the intent and event IDs to inspect the outbox and status subscription.
+- **`deployment_run_health` warns:** stale-run health publication is suspended because kind-30100 Loom status history has no independent EOSE catch-up barrier. Read the canonical deployment-run record and Loom status stream directly; absence of a stale-health event is not evidence that the run is healthy.
 
 ## Related
 

@@ -25,7 +25,7 @@ const (
 )
 
 // DeploymentRunHealthSource is the deployment-run registry surface used by the
-// stale-run detector. PostgreSQL-backed deployment run repositories implement it.
+// stale-run detector. Normal daemon wiring supplies retained local cp-state.
 type DeploymentRunHealthSource interface {
 	ListNonTerminal(context.Context) ([]domain.DeploymentRun, error)
 	GetByID(context.Context, uuid.UUID) (*domain.DeploymentRun, error)
@@ -54,6 +54,9 @@ type StaleRunDetector struct {
 	now           func() time.Time
 	active        map[uuid.UUID]staleRunSignal
 	hydrated      bool
+	ready         <-chan struct{}
+	loomReady     <-chan struct{}
+	author        string
 }
 
 func NewStaleRunDetector(
@@ -84,8 +87,33 @@ func NewStaleRunDetector(
 // Name implements app.BackgroundRunner.
 func (d *StaleRunDetector) Name() string { return "deployment-run-stale-detector" }
 
-// Run performs an immediate check, then continues until application shutdown.
+// SetReadiness defers status publication until run cp-state catch-up completes.
+func (d *StaleRunDetector) SetReadiness(ready <-chan struct{}) { d.ready = ready }
+
+// SetLoomStatusReadiness requires an independent kind-30100 EOSE barrier.
+// General bootstrap readiness does not include the optional Loom status group.
+func (d *StaleRunDetector) SetLoomStatusReadiness(ready <-chan struct{}) { d.loomReady = ready }
+
+// SetCanonicalAuthor limits retained health transitions to this service signer.
+func (d *StaleRunDetector) SetCanonicalAuthor(author string) { d.author = author }
+
+// Run checks only after both run and Loom status history have caught up.
 func (d *StaleRunDetector) Run(ctx context.Context) error {
+	if d.loomReady == nil {
+		return fmt.Errorf("deployment-run health unavailable: Loom kind-30100 catch-up is not configured")
+	}
+	if d.ready != nil {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-d.ready:
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-d.loomReady:
+	}
 	d.checkAndLog(ctx)
 	ticker := time.NewTicker(d.checkInterval)
 	defer ticker.Stop()
@@ -226,6 +254,9 @@ func (d *StaleRunDetector) hydrateActiveSignals(ctx context.Context) error {
 	}
 	seen := make(map[uuid.UUID]struct{})
 	for _, record := range records {
+		if d.author != "" && record.PubKey != d.author {
+			continue
+		}
 		var payload struct {
 			Schema           string `json:"schema"`
 			RunID            string `json:"run_id"`
