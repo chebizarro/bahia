@@ -95,8 +95,13 @@ delivered.
 recorded attempts does **not** imply zero relay acceptances. Replaying the
 same intact signed event ID may be necessary, and a relay's duplicate `OK`
 can establish acceptance on that replay; this inventory never records a
-fictional earlier `OK`. Invalid signatures, recorded attempts/errors, and
-source-state changes remain conflicts rather than transferable rows.
+fictional earlier `OK`. Invalid signatures and recorded attempts/errors in
+rows returned by the query are reported as conflicts. The query selects only
+rows pending for the requested target; a state or target change before a page
+query can remove a row from the result rather than produce a conflict. A row
+inserted or moved behind the keyset cursor can likewise be missed by that
+pass. Inventory is not a source-state lock or an exhaustive census while SQL
+writers remain active.
 
 ### Transfer activation safety boundary
 
