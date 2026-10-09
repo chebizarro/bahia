@@ -89,6 +89,28 @@ and material transitions to the source receipt. Confirm the restored daemon
 uses a staging key and isolated relays, or leave it stopped; never let a
 restored production key publish concurrently with the live authority.
 
+The repository's isolated PostgreSQL 16 rehearsal exercises the archive schema
+and repository on a disposable Docker container. It creates a unit with two
+archived observations, retires the unit, rehydrates one state-linked observation,
+then takes a custom-format `pg_dump`. It first forces a `pg_restore
+--single-transaction` collision and checks that no partial archive remains;
+it then restores into the clean database and compares archived IDs, row digests,
+original unit foreign keys, retired-unit status, hot-row presence, and state
+links. On the restored copy it rolls back an attempted rehydration, then commits
+one and verifies the archive remains unchanged.
+
+```sh
+BAHIA_F74A_RESTORE_CONFIRM=disposable \
+  go test -tags=integration ./internal/repository \
+  -run '^TestF74aPostgres16BackupRestoreAfterUnitRetirement$' -count=1 -v
+```
+
+Docker must be available and able to run `postgres:16-alpine`. The test owns
+and removes its container and databases; it does not accept a production URL.
+Capture the test exit status and printed dump SHA-256 digest. This repository
+proof does not substitute for a receipt from the approved backup control plane,
+an isolated restore of actual operational data, or the staging checks below.
+
 ## 3. Run the read-only compaction estimate
 
 On the restored staging database, run only the read-only estimate:
