@@ -752,7 +752,13 @@ func (p *Publisher) enqueueLocalOutbox(ev nostr.Event, entityType string, entity
 		entry.Policy = prior.policy
 		entry.Relays = prior.relayDeliveries()
 	}
-	if _, err := p.localOutbox.Enqueue(entry); err != nil {
+	var err error
+	if prior != nil && prior.delivered {
+		_, err = p.localOutbox.EnqueuePublisherDelivery(entry)
+	} else {
+		_, err = p.localOutbox.Enqueue(entry)
+	}
+	if err != nil {
 		return fmt.Errorf("persist signed nostr event before publish: %w", err)
 	}
 	return nil

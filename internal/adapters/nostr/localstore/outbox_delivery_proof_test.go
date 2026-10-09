@@ -25,14 +25,17 @@ func TestBackupConfigDeliveryProofRequiresHistoricalTargetQuorum(t *testing.T) {
 	_, err := outbox.Enqueue(OutboxEntry{Event: ev, Target: "control-plane"})
 	require.NoError(t, err)
 	policy := DeliveryPolicy{WriteRelays: []string{"wss://a", "wss://b"}, Required: 2}
-	_, err = outbox.CommitRound(ev.ID, OutboxRound{Delivered: true, State: OutboxPending, Policy: policy,
+	_, err = outbox.CommitPublisherRound(ev.ID, OutboxRound{Target: "control-plane", State: OutboxPending, Policy: policy,
 		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}}})
 	require.NoError(t, err)
 	_, found, err := outbox.GetDeliveryProof(ev.ID)
 	require.NoError(t, err)
 	require.False(t, found, "a Delivered bit and one OK cannot satisfy a two-relay policy")
-	_, err = outbox.CommitRound(ev.ID, OutboxRound{Delivered: true, State: OutboxPublished, Policy: policy,
-		Relays: map[string]RelayDelivery{"wss://b": {Accepted: true}}})
+	_, err = outbox.CommitPublisherRound(ev.ID, OutboxRound{Target: "control-plane", Delivered: true, State: OutboxPending, Policy: policy,
+		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}}})
+	require.ErrorContains(t, err, "lacks verified target quorum")
+	_, err = outbox.CommitPublisherRound(ev.ID, OutboxRound{Target: "control-plane", Delivered: true, State: OutboxPublished, Policy: policy,
+		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}, "wss://b": {Accepted: true}}})
 	require.NoError(t, err)
 	proof, found, err := outbox.GetDeliveryProof(ev.ID)
 	require.NoError(t, err)
@@ -66,14 +69,26 @@ func TestBackupConfigDeliveryProofSurvivesPruneAndRestart(t *testing.T) {
 	require.NoError(t, err)
 	ev := backupConfigProofEvent(t)
 	policy := DeliveryPolicy{WriteRelays: []string{"wss://a", "wss://b"}, Required: 1}
-	_, err = outbox.Enqueue(OutboxEntry{Event: ev, Target: "control-plane", Delivered: true,
+	_, err = outbox.EnqueuePublisherDelivery(OutboxEntry{Event: ev, Target: "control-plane", Delivered: true,
 		Policy: policy, Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}, "wss://b": {LastError: "down"}}})
+	require.NoError(t, err)
+	_, found, err := outbox.GetDeliveryProof(ev.ID)
+	require.NoError(t, err)
+	require.False(t, found, "pre-commit enqueue alone cannot mint proof")
+	require.NoError(t, outbox.Close())
+	outbox, err = OpenOutbox(path)
+	require.NoError(t, err)
+	pending, err := outbox.ListPending("control-plane", nil, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "a crash before proof commit leaves the event retryable")
+	_, err = outbox.CommitPublisherRound(ev.ID, OutboxRound{Target: "control-plane", Delivered: true, State: OutboxPending, Policy: policy,
+		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}}})
 	require.NoError(t, err)
 	proof, found, err := outbox.GetDeliveryProof(ev.ID)
 	require.NoError(t, err)
-	require.True(t, found, "a quorum reached before enqueue is recorded with enqueue")
+	require.True(t, found, "only the publisher's verified round records proof")
 	require.True(t, proof.ValidFor(ev, "control-plane"))
-	_, err = outbox.CommitRound(ev.ID, OutboxRound{State: OutboxPublished, Delivered: true, Policy: policy,
+	_, err = outbox.CommitPublisherRound(ev.ID, OutboxRound{Target: "control-plane", State: OutboxPublished, Delivered: true, Policy: policy,
 		Relays: map[string]RelayDelivery{"wss://b": {Accepted: true}}, At: time.Now().UTC().Add(-48 * time.Hour)})
 	require.NoError(t, err)
 	removed, err := outbox.Prune(time.Now().Add(-24*time.Hour), time.Now().Add(-24*time.Hour))
@@ -108,10 +123,39 @@ func TestBackupConfigDeliveryProofRefusesLegacyPolicyFreeRows(t *testing.T) {
 	ev := backupConfigProofEvent(t)
 	_, err := outbox.Enqueue(OutboxEntry{Event: ev, Target: "control-plane"})
 	require.NoError(t, err)
-	_, err = outbox.CommitRound(ev.ID, OutboxRound{Delivered: true, State: OutboxPublished,
+	_, err = outbox.CommitPublisherRound(ev.ID, OutboxRound{Target: "control-plane", Delivered: true, State: OutboxPublished,
 		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}}})
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "lacks verified target quorum")
 	_, found, err := outbox.GetDeliveryProof(ev.ID)
 	require.NoError(t, err)
 	require.False(t, found, "legacy rows do not identify the quorum policy and cannot be imported as proof")
+}
+
+func TestUnverifiedOutboxCallsCannotMintBackupConfigProof(t *testing.T) {
+	outbox, _ := openTempOutbox(t)
+	ev := backupConfigProofEvent(t)
+	policy := DeliveryPolicy{WriteRelays: []string{"wss://a", "wss://b"}, Required: 2}
+	_, err := outbox.Enqueue(OutboxEntry{Event: ev, Target: "control-plane", Delivered: true, Policy: policy,
+		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}, "wss://b": {Accepted: true}}})
+	require.ErrorContains(t, err, "unverified outbox enqueue")
+	_, found, err := outbox.Get(ev.ID)
+	require.NoError(t, err)
+	require.False(t, found)
+	_, err = outbox.Enqueue(OutboxEntry{Event: ev, Target: "control-plane"})
+	require.NoError(t, err)
+	_, err = outbox.CommitRound(ev.ID, OutboxRound{Delivered: true, Policy: policy, State: OutboxPending,
+		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}, "wss://b": {Accepted: true}}})
+	require.ErrorContains(t, err, "require the publisher path")
+	_, found, err = outbox.GetDeliveryProof(ev.ID)
+	require.NoError(t, err)
+	require.False(t, found, "generic CommitRound cannot record fabricated OKs")
+	_, err = outbox.CommitPublisherRound(ev.ID, OutboxRound{Target: "default", Delivered: true, Policy: policy, State: OutboxPending,
+		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}, "wss://b": {Accepted: true}}})
+	require.ErrorContains(t, err, "differs from outbox target")
+	_, err = outbox.CommitPublisherRound(ev.ID, OutboxRound{Target: "control-plane", Delivered: true, Policy: policy, State: OutboxPending,
+		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}}})
+	require.ErrorContains(t, err, "lacks verified target quorum")
+	_, found, err = outbox.GetDeliveryProof(ev.ID)
+	require.NoError(t, err)
+	require.False(t, found, "stored untrusted OKs cannot augment a publisher round")
 }

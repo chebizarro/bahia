@@ -163,6 +163,30 @@ func TestBackupConfigProofPinsRealPublisherQuorumOnBothAdmissionPaths(t *testing
 	require.ElementsMatch(t, []string{up.url, down.url}, proof.Policy.WriteRelays)
 }
 
+func TestBackupConfigPrecommitBelowQuorumHasNoAdmissionOrProof(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	up := startSyncTestRelay(t, syncTestRelayOptions{})
+	down := startSyncTestRelay(t, syncTestRelayOptions{})
+	down.down.Store(true)
+	pool := newSyncTestPool(up, down)
+	defer pool.Close()
+	key := gonostr.Generate()
+	h := newLocalOutboxHarness(t, t.TempDir(), pool, key.Hex(), config.PublishQuorumAllRelays,
+		WithPublishTarget(repository.NostrPublishTargetControlPlane))
+	ev := gonostr.Event{Kind: gonostr.Kind(kinds.CASControlState), CreatedAt: gonostr.Now(),
+		Tags:    gonostr.Tags{{"d", "backup-recipe:unaccepted"}, {"t", kinds.CPStateTopicBackupRecipe}, {"domain", "backup"}},
+		Content: `{"deleted":false}`}
+	require.NoError(t, ev.Sign(key))
+	require.ErrorContains(t, h.pub.PublishBeforeCommit(ctx, ev, "backup-recipe", nil), "not queued")
+	_, found, err := h.outbox.Get(ev.ID)
+	require.NoError(t, err)
+	require.False(t, found)
+	_, found, err = h.outbox.GetDeliveryProof(ev.ID)
+	require.NoError(t, err)
+	require.False(t, found)
+}
+
 func rejectEvents(relay *syncTestRelay, reason string) {
 	relay.relay.OnEvent = func(context.Context, gonostr.Event) (bool, string) { return true, reason }
 }

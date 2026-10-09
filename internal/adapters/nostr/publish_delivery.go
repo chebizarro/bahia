@@ -613,8 +613,8 @@ func (p *Publisher) persistRound(ctx context.Context, d *outboxDelivery, deliver
 		case settled:
 			state = localstore.OutboxFailed
 		}
-		if _, err := p.localOutbox.CommitRound(d.event.ID, localstore.OutboxRound{
-			Rounds: d.rounds, Relays: d.relayDeliveries(), Delivered: delivered, Policy: policy, State: state, Detail: detail, At: now,
+		if _, err := p.localOutbox.CommitPublisherRound(d.event.ID, localstore.OutboxRound{
+			Target: p.target, Rounds: d.rounds, Relays: d.relayDeliveries(), Delivered: delivered, Policy: policy, State: state, Detail: detail, At: now,
 		}); err != nil {
 			return err
 		}

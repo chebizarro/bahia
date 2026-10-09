@@ -112,6 +112,8 @@ type OutboxCursor struct {
 
 // OutboxRound is the outcome of one delivery round, committed atomically.
 type OutboxRound struct {
+	// Target binds verified publisher outcomes to the entry's relay pool.
+	Target    string
 	Rounds    int
 	Relays    map[string]RelayDelivery
 	Delivered bool
@@ -373,10 +375,31 @@ func (o *Outbox) LatestByCoordinate(target string, kind nostr.Kind, author nostr
 	return entry, found, nil
 }
 
-// Enqueue stores entry as pending and reports whether it was new. An entry
+// Enqueue stores an undelivered entry as pending and reports whether it was new.
+// Caller-supplied delivery state is refused; only Publisher's verified
+// pre-commit path may admit a row containing relay outcomes.
+// An entry
 // whose event id is already held, in any state, is left untouched: the same
 // signed event is never queued twice.
 func (o *Outbox) Enqueue(entry OutboxEntry) (bool, error) {
+	if entry.Delivered || entry.Rounds != 0 || len(entry.Relays) != 0 || len(entry.Policy.WriteRelays) != 0 || entry.Policy.Required != 0 {
+		return false, errors.New("unverified outbox enqueue cannot contain delivery state")
+	}
+	return o.enqueue(entry)
+}
+
+// EnqueuePublisherDelivery retains the publisher's already-verified relay
+// outcomes after PublishBeforeCommit reached quorum. Enqueue itself cannot
+// mint or retain those outcomes. This admission still creates no proof: the
+// publisher must commit its verified round before reporting success.
+func (o *Outbox) EnqueuePublisherDelivery(entry OutboxEntry) (bool, error) {
+	if !entry.Delivered {
+		return false, errors.New("publisher delivery enqueue requires a reached quorum")
+	}
+	return o.enqueue(entry)
+}
+
+func (o *Outbox) enqueue(entry OutboxEntry) (bool, error) {
 	if o.shared.readOnly {
 		return false, ErrReadOnly
 	}
@@ -412,15 +435,6 @@ func (o *Outbox) Enqueue(entry OutboxEntry) (bool, error) {
 		if key := outboxCoordinateKey(entry.Target, entry.Event); key != nil {
 			if err := tx.Bucket(outboxCoordinatesBucket).Put(key, nil); err != nil {
 				return err
-			}
-		}
-		if entry.Delivered {
-			if proof, ok := backupConfigDeliveryProof(entry, entry.Policy, entry.EnqueuedAt); ok {
-				rawProof, err := json.Marshal(proof)
-				if err != nil {
-					return fmt.Errorf("encode outbox delivery proof %s: %w", entry.Event.ID.Hex(), err)
-				}
-				return tx.Bucket(outboxDeliveryProofsBucket).Put(entry.Event.ID[:], rawProof)
 			}
 		}
 		return nil
@@ -615,12 +629,26 @@ func (o *Outbox) ListEntries(states []string, limit int) ([]OutboxEntry, error) 
 	return out, nil
 }
 
-// CommitRound records a delivery round for id and returns the stored entry.
+// CommitRound records an untrusted delivery round for id and returns the stored
+// entry. It cannot mint a backup-config quorum proof from caller-supplied flags.
 // Several deliveries of one entry may overlap (an inline publish and a
 // runner, or the outgoing and incoming App during a reload), so the commit
 // merges instead of overwriting: a relay that accepted or rejected stays so,
 // the round count never decreases, and a settled entry is never reopened.
 func (o *Outbox) CommitRound(id nostr.ID, round OutboxRound) (OutboxEntry, error) {
+	return o.commitRound(id, round, false)
+}
+
+// CommitPublisherRound records a round observed by Publisher's relay pool.
+// Only that verified OK path may request backup-config proof creation. NIP-01
+// OK frames are unsigned, so the trusted boundary is the publisher's relay
+// transport and its verified per-relay PublishResult, not arbitrary callers
+// of Enqueue or CommitRound.
+func (o *Outbox) CommitPublisherRound(id nostr.ID, round OutboxRound) (OutboxEntry, error) {
+	return o.commitRound(id, round, true)
+}
+
+func (o *Outbox) commitRound(id nostr.ID, round OutboxRound, recordProof bool) (OutboxEntry, error) {
 	if o.shared.readOnly {
 		return OutboxEntry{}, ErrReadOnly
 	}
@@ -634,8 +662,18 @@ func (o *Outbox) CommitRound(id nostr.ID, round OutboxRound) (OutboxEntry, error
 		if err := json.Unmarshal(raw, &stored); err != nil {
 			return fmt.Errorf("decode outbox entry %s: %w", id.Hex(), err)
 		}
+		if !recordProof && isBackupConfigEvent(stored.Event) {
+			return errors.New("backup config delivery rounds require the publisher path")
+		}
+		if recordProof && round.Target != stored.Target {
+			return fmt.Errorf("publisher round target %q differs from outbox target %q", round.Target, stored.Target)
+		}
+		at := round.At.UTC()
+		if at.IsZero() {
+			at = time.Now().UTC()
+		}
 		if stored.State != OutboxPending {
-			return nil
+			return recordPublisherProof(tx, stored, round, at, recordProof)
 		}
 		stored.Relays = mergeRelayDeliveries(stored.Relays, round.Relays)
 		stored.Rounds = max(stored.Rounds, round.Rounds)
@@ -644,10 +682,6 @@ func (o *Outbox) CommitRound(id nostr.ID, round OutboxRound) (OutboxEntry, error
 			stored.Policy = round.Policy
 		}
 		stored.LastError = round.Detail
-		at := round.At.UTC()
-		if at.IsZero() {
-			at = time.Now().UTC()
-		}
 		switch round.State {
 		case "", OutboxPending:
 		case OutboxPublished, OutboxFailed:
@@ -669,17 +703,7 @@ func (o *Outbox) CommitRound(id nostr.ID, round OutboxRound) (OutboxEntry, error
 		if err := entries.Put(id[:], encoded); err != nil {
 			return err
 		}
-		proofs := tx.Bucket(outboxDeliveryProofsBucket)
-		if stored.Delivered && proofs.Get(id[:]) == nil {
-			if proof, ok := backupConfigDeliveryProof(stored, round.Policy, at); ok {
-				rawProof, err := json.Marshal(proof)
-				if err != nil {
-					return fmt.Errorf("encode outbox delivery proof %s: %w", id.Hex(), err)
-				}
-				return proofs.Put(id[:], rawProof)
-			}
-		}
-		return nil
+		return recordPublisherProof(tx, stored, round, at, recordProof)
 	})
 	if err != nil {
 		return OutboxEntry{}, fmt.Errorf("commit outbox round for %s: %w", id.Hex(), err)
@@ -687,15 +711,30 @@ func (o *Outbox) CommitRound(id nostr.ID, round OutboxRound) (OutboxEntry, error
 	return stored, nil
 }
 
+func recordPublisherProof(tx *bbolt.Tx, entry OutboxEntry, round OutboxRound, at time.Time, publisherRound bool) error {
+	if !publisherRound || !round.Delivered || !isBackupConfigEvent(entry.Event) {
+		return nil
+	}
+	proofs := tx.Bucket(outboxDeliveryProofsBucket)
+	if proofs.Get(entry.Event.ID[:]) != nil {
+		return nil
+	}
+	proofEntry := entry
+	proofEntry.Relays = round.Relays
+	proof, ok := backupConfigDeliveryProof(proofEntry, round.Policy, at)
+	if !ok {
+		return fmt.Errorf("backup config %s publisher round lacks verified target quorum", entry.Event.ID.Hex())
+	}
+	raw, err := json.Marshal(proof)
+	if err != nil {
+		return fmt.Errorf("encode outbox delivery proof %s: %w", entry.Event.ID.Hex(), err)
+	}
+	return proofs.Put(entry.Event.ID[:], raw)
+}
+
 func backupConfigDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time.Time) (DeliveryProof, bool) {
 	ev := entry.Event
-	if ev.Kind != nostr.Kind(kinds.CASControlState) || !ev.CheckID() || !ev.VerifySignature() ||
-		outboxTag(ev.Tags, "domain") != "backup" || outboxTag(ev.Tags, "d") == "" {
-		return DeliveryProof{}, false
-	}
-	switch outboxTag(ev.Tags, "t") {
-	case kinds.CPStateTopicBackupRecipe, kinds.CPStateTopicBackupRepository, kinds.CPStateTopicBackupPolicy:
-	default:
+	if !isBackupConfigEvent(ev) || !ev.CheckID() || !ev.VerifySignature() || outboxTag(ev.Tags, "d") == "" {
 		return DeliveryProof{}, false
 	}
 	relayOK := make(map[string]bool, len(policy.WriteRelays))
@@ -704,6 +743,18 @@ func backupConfigDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time
 	}
 	proof := DeliveryProof{Event: ev, Target: entry.Target, Policy: policy, RelayOK: relayOK, AcceptedAt: at}
 	return proof, proof.ValidFor(ev, entry.Target)
+}
+
+func isBackupConfigEvent(ev nostr.Event) bool {
+	if ev.Kind != nostr.Kind(kinds.CASControlState) || outboxTag(ev.Tags, "domain") != "backup" {
+		return false
+	}
+	switch outboxTag(ev.Tags, "t") {
+	case kinds.CPStateTopicBackupRecipe, kinds.CPStateTopicBackupRepository, kinds.CPStateTopicBackupPolicy:
+		return true
+	default:
+		return false
+	}
 }
 
 func outboxTag(tags nostr.Tags, key string) string {

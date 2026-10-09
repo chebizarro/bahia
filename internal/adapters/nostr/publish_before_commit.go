@@ -8,7 +8,6 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
-	"go.uber.org/zap"
 )
 
 // PublishBeforeCommit delivers a signed event for a producer that commits its
@@ -83,13 +82,11 @@ func (p *Publisher) PublishBeforeCommit(ctx context.Context, ev nostr.Event, ent
 		return fmt.Errorf("nostr event %s accepted by %d relays but not recorded for redelivery: %w", eventID, accepted, err)
 	}
 	settled := len(d.retryableRelays(configured)) == 0
-	if settled {
-		if err := p.persistRound(ctx, d, true, true, false, detail, d.policy); err != nil {
-			// The entry stays pending; the runner's next round settles it
-			// without contacting any relay.
-			p.logger.Warn("failed to settle a fully delivered nostr event", zap.String("event_id", eventID), zap.Error(err))
-			settled = false
-		}
+	if err := p.persistRound(ctx, d, true, settled, false, detail, d.policy); err != nil {
+		// The enqueued event remains retryable, but the caller must not commit
+		// producer state until the quorum proof is durable.
+		p.forgetDelivery(d)
+		return fmt.Errorf("nostr event %s reached quorum but delivery proof was not recorded: %w", eventID, err)
 	}
 	d.settled = settled
 	d.reportedDelivered = true

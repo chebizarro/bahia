@@ -46,18 +46,18 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 	require.ErrorContains(t, proof.VerifyBackupExecutionConfig(t.Context(), snapshot), "no ACKed relay delivery receipt")
 	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: recipeEvent, Target: "control-plane"})
 	require.NoError(t, err)
-	_, err = outbox.CommitRound(recipeEvent.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+	_, err = outbox.CommitPublisherRound(recipeEvent.ID, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: true,
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Rejected: "denied"}}, State: localstore.OutboxPending})
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "lacks verified target quorum")
 	require.ErrorContains(t, proof.VerifyBackupExecutionConfig(t.Context(), snapshot), "no ACKed relay delivery receipt", "a delivery flag without relay OK is not quorum proof")
-	_, err = outbox.CommitRound(recipeEvent.ID, localstore.OutboxRound{Rounds: 2, Delivered: false,
+	_, err = outbox.CommitPublisherRound(recipeEvent.ID, localstore.OutboxRound{Target: "control-plane", Rounds: 2, Delivered: false,
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPending})
 	require.NoError(t, err)
 	require.ErrorContains(t, proof.VerifyBackupExecutionConfig(t.Context(), snapshot), "no ACKed relay delivery receipt", "one OK without the publisher's delivered/quorum marker is insufficient")
 	for _, ev := range []nostr.Event{recipeEvent, repoEvent, policyEvent} {
 		_, err = outbox.Enqueue(localstore.OutboxEntry{Event: ev, Target: "control-plane"})
 		require.NoError(t, err)
-		_, err = outbox.CommitRound(ev.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+		_, err = outbox.CommitPublisherRound(ev.ID, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: true,
 			Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1},
 			Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
 		require.NoError(t, err)
@@ -68,7 +68,7 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 	require.NoError(t, err)
 	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: foreign, Target: "control-plane"})
 	require.NoError(t, err)
-	_, err = outbox.CommitRound(foreign.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+	_, err = outbox.CommitPublisherRound(foreign.ID, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: true,
 		Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1},
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
 	require.NoError(t, err)
@@ -175,10 +175,10 @@ func TestBackupExecutionSnapshotRefusesQueuedPartialAndPrunedRejection(t *testin
 			policy := localstore.DeliveryPolicy{WriteRelays: []string{"wss://a", "wss://b"}, Required: 2}
 			switch state {
 			case "partial":
-				_, err = outbox.CommitRound(ev.ID, localstore.OutboxRound{Policy: policy, State: localstore.OutboxPending,
+				_, err = outbox.CommitPublisherRound(ev.ID, localstore.OutboxRound{Target: "control-plane", Policy: policy, State: localstore.OutboxPending,
 					Relays: map[string]localstore.RelayDelivery{"wss://a": {Accepted: true}}})
 			case "refused":
-				_, err = outbox.CommitRound(ev.ID, localstore.OutboxRound{Policy: policy, State: localstore.OutboxFailed,
+				_, err = outbox.CommitPublisherRound(ev.ID, localstore.OutboxRound{Target: "control-plane", Policy: policy, State: localstore.OutboxFailed,
 					Relays: map[string]localstore.RelayDelivery{"wss://a": {Accepted: true}, "wss://b": {Rejected: "blocked: denied"}}})
 			}
 			require.NoError(t, err)

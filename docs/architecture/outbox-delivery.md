@@ -26,7 +26,10 @@ payments and security.
 
 For service-signed backup recipe, repository, and policy `30900` events, the
 outbox also records a non-prunable delivery proof in the same transaction as
-the quorum-reaching round (or the enqueue following `PublishBeforeCommit`).
+the publisher's verified quorum-reaching round. `PublishBeforeCommit` first
+enqueues its relay outcomes, then commits that verified round before reporting
+success; a crash between those operations leaves a retryable row without
+acceptance proof. Generic enqueue and round calls cannot mint a proof.
 It pins the exact signed event, publish target, configured write-relay set,
 required quorum, and each relay's accepted `OK`. Backup execution-snapshot
 validation requires this proof and checks the signed event retained in it;
