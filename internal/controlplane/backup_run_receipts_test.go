@@ -1,6 +1,8 @@
 package controlplane
 
 import (
+	"context"
+	"encoding/json"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -143,15 +145,15 @@ func TestBackupIntentRunReceiptIsReadOnlyAndStillRejects(t *testing.T) {
 	registry := newFakeBackupIntentRegistry()
 	registry.runs[run.ID] = &domain.BackupRun{ID: run.ID, Status: domain.RunStatusSucceeded}
 	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{Registry: registry, RunReceipts: reader, Logger: zap.NewNop()})
-	intent := &Intent{Op: "run", Actor: request.PubKey.Hex(), Coordinate: run.RequestDTag, Event: &request,
-		Content: map[string]any{"id": run.ID.String(), "recipe_id": run.RecipeID.String()}}
+	intent, err := ParseIntent(&request)
+	require.NoError(t, err)
+	intent.Actor = request.PubKey.Hex()
 	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "ACKed canonical run is queued")
 	statuses := &statusCollector{}
 	processor := NewIntentProcessor(NewTrustSet([]string{request.PubKey.Hex()}, zap.NewNop()), openTestStore(t),
 		NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()),
 		IntentProcessorConfig{EnabledDomains: map[string]bool{"backup": true}}, zap.NewNop())
 	processor.RegisterHandler("backup", handler)
-	intent.Domain, intent.OrgID, intent.IntentID = "backup", testOrgID(), "backup-run-receipt-refusal"
 	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), intent), "ACKed canonical run is queued")
 	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), intent), "ACKed canonical run is queued")
 	require.Len(t, statuses.events, 2, "duplicate requests remain rejected rather than becoming accepted markers")
@@ -162,9 +164,9 @@ func TestBackupIntentRunReceiptIsReadOnlyAndStillRejects(t *testing.T) {
 	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "conflicts with an ACKed canonical request")
 	require.Zero(t, registry.workflowCreates, "SQL-only or divergent rows cannot drive intake")
 
-	missing := &Intent{Op: "run", Actor: request.PubKey.Hex(), Coordinate: run.RequestDTag, Event: &request,
-		Content: map[string]any{"id": uuid.NewString(), "recipe_id": run.RecipeID.String()}}
-	require.ErrorContains(t, handler.HandleIntent(t.Context(), missing), "no ACKed canonical run-state receipt")
+	missing := *intent
+	missing.Content = map[string]any{"id": uuid.NewString(), "recipe_id": run.RecipeID.String()}
+	require.ErrorContains(t, handler.HandleIntent(t.Context(), &missing), "no ACKed canonical run-state receipt")
 	require.Zero(t, registry.workflowCreates)
 
 	run.Status = domain.RunStatusSucceeded
@@ -183,18 +185,95 @@ func TestBackupIntentRunReceiptIsReadOnlyAndStillRejects(t *testing.T) {
 	require.Zero(t, registry.workflowCreates)
 }
 
+type staticBackupRunReceipt struct{ run domain.BackupRun }
+
+func (r staticBackupRunReceipt) GetBackupRunReceipt(_ context.Context, _ uuid.UUID) (*domain.BackupRun, error) {
+	return &r.run, nil
+}
+
+func TestBackupIntentRunReceiptBindsSignedExecutionInputs(t *testing.T) {
+	request := backupReceiptRequest(t, nostr.Generate())
+	base := backupReceiptRun(request, domain.RunStatusQueued)
+	for _, tc := range []struct {
+		name   string
+		change func(*domain.BackupRun)
+	}{
+		{"repository", func(run *domain.BackupRun) { run.RepositoryID = uuid.New() }},
+		{"policy", func(run *domain.BackupRun) { id := uuid.New(); run.PolicyID = &id }},
+		{"backend", func(run *domain.BackupRun) { run.Backend = domain.BackupBackendPgDump }},
+		{"target", func(run *domain.BackupRun) { run.TargetRef = "/different" }},
+		{"verification", func(run *domain.BackupRun) { run.VerificationMode = domain.BackupVerificationKopiaSnapshotVerify }},
+		{"metadata", func(run *domain.BackupRun) { run.Metadata = map[string]any{"source": "different"} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := base
+			tc.change(&run)
+			intent, err := ParseIntent(&request)
+			require.NoError(t, err)
+			intent.Actor = request.PubKey.Hex()
+			handler := NewBackupIntentHandler(BackupIntentHandlerConfig{RunReceipts: staticBackupRunReceipt{run}, Logger: zap.NewNop()})
+			require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "execution inputs conflict with the signed request")
+		})
+	}
+	intent, err := ParseIntent(&request)
+	require.NoError(t, err)
+	intent.Actor = request.PubKey.Hex()
+	intent.Content["target_ref"] = "/different"
+	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{RunReceipts: staticBackupRunReceipt{base}, Logger: zap.NewNop()})
+	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "request fields do not match the signed intent")
+}
+
+func TestBackupIntentRunReceiptRejectsUnboundMCPExecutionInputs(t *testing.T) {
+	key := nostr.Generate()
+	request := backupReceiptRequest(t, key)
+	var content map[string]any
+	require.NoError(t, json.Unmarshal([]byte(request.Content), &content))
+	delete(content, "repository_id")
+	delete(content, "policy_id")
+	delete(content, "backend")
+	delete(content, "target_ref")
+	delete(content, "verification_mode")
+	encoded, err := json.Marshal(content)
+	require.NoError(t, err)
+	request.Content = string(encoded)
+	require.NoError(t, request.Sign(key))
+	run := backupReceiptRun(request, domain.RunStatusQueued)
+	run.RepositoryID = uuid.New()
+	run.Backend = domain.BackupBackendKopia
+	run.TargetRef = "/data"
+	run.VerificationMode = domain.BackupVerificationNone
+	intent, err := ParseIntent(&request)
+	require.NoError(t, err)
+	intent.Actor = request.PubKey.Hex()
+	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{RunReceipts: staticBackupRunReceipt{run}, Logger: zap.NewNop()})
+	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "execution inputs are not bound in the signed request")
+}
+
 func backupReceiptRequest(t *testing.T, key nostr.SecretKey) nostr.Event {
 	t.Helper()
-	event := nostr.Event{Kind: nostr.Kind(kinds.CASControlState), CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "backup-run-request:test"}}, Content: `{}`}
+	content, err := json.Marshal(map[string]any{
+		"id": uuid.NewString(), "recipe_id": uuid.NewString(), "repository_id": uuid.NewString(),
+		"policy_id": uuid.NewString(), "backend": domain.BackupBackendKopia, "target_ref": "/data",
+		"verification_mode": domain.BackupVerificationNone, "metadata": map[string]any{"source": "test"},
+	})
+	require.NoError(t, err)
+	event := nostr.Event{Kind: nostr.Kind(kinds.CASControlState), CreatedAt: nostr.Now(), Tags: nostr.Tags{
+		{"d", "backup-run-request:test"}, {"t", "bahia-intent"}, {"domain", "backup"}, {"op", "run"},
+		{"schema", "bahia.intent.v1"}, {"intent_id", "backup-run-receipt-refusal"}, {"org", testOrgID().String()},
+	}, Content: string(content)}
 	require.NoError(t, event.Sign(key))
 	return event
 }
 
 func backupReceiptRun(request nostr.Event, status domain.DeploymentRunStatus) domain.BackupRun {
-	return domain.BackupRun{ID: uuid.New(), RecipeID: uuid.New(), RepositoryID: uuid.New(), RequestedBy: request.PubKey.Hex(),
-		RequestEventID: request.ID.Hex(), RequestKind: int(request.Kind), RequestDTag: backupReceiptTag(request.Tags, "d"),
-		Status: status, Backend: domain.BackupBackendKopia, TargetRef: "/data", VerificationStatus: domain.BackupVerificationPending,
-		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	var run domain.BackupRun
+	if err := json.Unmarshal([]byte(request.Content), &run); err != nil {
+		panic(err)
+	}
+	run.RequestedBy, run.RequestEventID, run.RequestKind, run.RequestDTag = request.PubKey.Hex(), request.ID.Hex(), int(request.Kind), backupReceiptTag(request.Tags, "d")
+	run.Status, run.VerificationStatus = status, domain.BackupVerificationPending
+	run.CreatedAt, run.UpdatedAt = time.Now().UTC(), time.Now().UTC()
+	return run
 }
 
 func backupReceiptEvent(t *testing.T, key nostr.SecretKey, run domain.BackupRun) nostr.Event {

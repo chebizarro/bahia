@@ -226,6 +226,13 @@ pending outbox entry, absent/pruned delivery record, or PostgreSQL row is not
 an acceptance receipt. Even an ACKed prior run is not resumed by this reader;
 the executor still lacks canonical recipe, repository, policy, and step
 checkpoint recovery.
+The reader compares the run's immutable request fields with the signed
+operator intent and rejects absent or divergent execution inputs. The current
+MCP `request_backup_run` payload signs `id`, `recipe_id`, and metadata, but
+does not bind `repository_id`, `policy_id`, `backend`, `target_ref`, or
+`verification_mode`; an ACKed run state therefore cannot establish complete
+MCP request-to-execution equivalence. Canonical acceptance must bind the
+resolved configuration before execution can resume.
 
 ### 3.5 Canonical state and who signs it
 

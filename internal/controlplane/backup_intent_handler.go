@@ -1,9 +1,11 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -335,12 +337,56 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 			receipt.RecipeID != requested.RecipeID {
 			return fmt.Errorf("backup run request intake paused: run id conflicts with an ACKed canonical request")
 		}
+		signed, err := ParseIntent(intent.Event)
+		if err != nil || signed.Domain != "backup" || signed.Op != "run" || signed.Coordinate != intent.Coordinate ||
+			signed.IntentID != intent.IntentID || signed.OrgID != intent.OrgID || intent.Event.PubKey.Hex() != intent.Actor ||
+			!backupRunContentEqual(signed.Content, intent.Content) {
+			return fmt.Errorf("backup run request intake paused: request fields do not match the signed intent")
+		}
+		if requested.RepositoryID == uuid.Nil || requested.Backend == "" || strings.TrimSpace(requested.TargetRef) == "" ||
+			requested.VerificationMode == "" || (requested.PolicyID == nil && receipt.PolicyID != nil) {
+			return fmt.Errorf("backup run request intake paused: execution inputs are not bound in the signed request")
+		}
+		if receipt.RepositoryID != requested.RepositoryID || receipt.Backend != requested.Backend ||
+			receipt.TargetRef != requested.TargetRef || receipt.VerificationMode != requested.VerificationMode ||
+			!backupRunPolicyEqual(receipt.PolicyID, requested.PolicyID) ||
+			!backupRunMetadataContains(receipt.Metadata, requested.Metadata) {
+			return fmt.Errorf("backup run request intake paused: execution inputs conflict with the signed request")
+		}
 		if receipt.Status == domain.RunStatusQueued || receipt.Status == domain.RunStatusRunning {
 			return fmt.Errorf("backup run request intake paused: an ACKed canonical run is %s but canonical execution recovery is unavailable", receipt.Status)
 		}
 		return fmt.Errorf("backup run request intake paused: an ACKed canonical terminal run exists but request replay remains unavailable")
 	}
 	return fmt.Errorf("backup run request intake paused: no ACKed canonical run-state receipt exists")
+}
+
+func backupRunContentEqual(a, b map[string]any) bool {
+	left, leftErr := json.Marshal(a)
+	right, rightErr := json.Marshal(b)
+	return leftErr == nil && rightErr == nil && bytes.Equal(left, right)
+}
+
+func backupRunPolicyEqual(a, b *uuid.UUID) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func backupRunMetadataContains(actual, requested map[string]any) bool {
+	for key, want := range requested {
+		got, ok := actual[key]
+		if !ok {
+			return false
+		}
+		encodedGot, gotErr := json.Marshal(got)
+		encodedWant, wantErr := json.Marshal(want)
+		if gotErr != nil || wantErr != nil || !bytes.Equal(encodedGot, encodedWant) {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *BackupIntentHandler) handleRestore(_ context.Context, _ *Intent) error {
