@@ -206,7 +206,6 @@ func New(cfg *config.Config) (*App, error) {
 	var workerRepo repository.WorkerRepository
 	var paymentRepo repository.PaymentRecordRepository
 	var sbomRepo repository.SBOMRepository
-	var f74aSBOMBackfill service.F74aSBOMBackfillSource
 	var sbomManifestRepo repository.SBOMManifestRepository
 	var securityRepo repository.SecurityRepository
 	var sigRepo repository.ArtifactSignatureRepository
@@ -244,7 +243,6 @@ func New(cfg *config.Config) (*App, error) {
 		paymentRepo = repository.NewPgPaymentRecordRepository(pool)
 		pgSBOMRepo := repository.NewPgSBOMRepository(pool)
 		sbomRepo = pgSBOMRepo
-		f74aSBOMBackfill = pgSBOMRepo
 		sbomManifestRepo = pgSBOMRepo
 		securityRepo = repository.NewPgSecurityRepository(pool)
 		sigRepo = repository.NewPgArtifactSignatureRepository(pool)
@@ -1789,35 +1787,63 @@ func New(cfg *config.Config) (*App, error) {
 			}
 		})
 	}
-	// F74a: separate wiring block for release, signature, artifact-SBOM and
-	// latest runtime-observation families. Each writer keeps its existing DB path.
+	var f74aRunner *service.F74aBackfillRunner
+	// F74a backfill is an optional, durable background runner. Its health
+	// warns while incomplete but does not hold HTTP readiness behind a SQL scan.
 	if nostrProjector != nil && nostrProjector.Enabled() {
-		f74aCanonical := nostrAdapter.NewF74aCanonicalPublisher(nostrProjector, confidentialEncryptor, localOutbox)
-		if llmRegistry != nil {
-			llmRegistry.SetReleaseCPStatePublisher(f74aCanonical)
+		bridge := &f74aDirtyMarkerBridge{}
+		f74aCanonical := nostrAdapter.NewF74aCanonicalPublisher(nostrProjector, confidentialEncryptor, bridge)
+		var livePublisher service.F74aLivePublisher
+		if dbAvailable && pool != nil {
+			f74aWarm := make(chan struct{})
+			nostrProjector.AddPostWarmStartHook(func(context.Context) { close(f74aWarm) })
+			runner := service.NewF74aBackfillRunner(service.F74aBackfillConfig{
+				Marker: localOutbox, Source: repository.NewPgF74aBackfillSource(pool),
+				Publisher: f74aCanonical,
+				Ready:     f74aWarm,
+				Pending: func(ctx context.Context) (int64, error) {
+					counts, err := localOutbox.Counts()
+					if err != nil {
+						return 0, err
+					}
+					pending := counts.Pending
+					if pgOutbox, ok := pgNostrEventRepo.(repository.NostrEventOutboxRepository); ok {
+						legacyPending, err := pgOutbox.CountUnpublished(ctx)
+						if err != nil {
+							return 0, err
+						}
+						pending += legacyPending
+					}
+					return pending, nil
+				},
+			})
+			f74aRunner = runner
+			bridge.runner = runner
+			livePublisher = service.F74aLivePublisher{Publisher: f74aCanonical, Runner: runner}
+			bgManager.RegisterWithOptions(runner, RunnerRequired(false))
+			registerF74aBackfillHealthCheck(healthProvider, runner)
+		} else {
+			bridge.skip = true
+			healthProvider.RegisterCheck("f74a_backfill", func() HealthCheck {
+				return HealthCheck{Name: "f74a_backfill", Status: HealthStatusPass, Message: "PostgreSQL unavailable; relay canonical state remains authoritative"}
+			})
 		}
-		registry.SetObservationCPStatePublisher(f74aCanonical)
+		var live service.F74aBackfillPublisher = f74aCanonical
+		if livePublisher.Runner != nil {
+			live = f74aLiveBackfillPublisher{F74aLivePublisher: livePublisher, tombstone: f74aCanonical}
+		}
+		if llmRegistry != nil {
+			llmRegistry.SetReleaseCPStatePublisher(live)
+		}
+		registry.SetObservationCPStatePublisher(live)
 		if sigRepo != nil {
-			sigRepo = service.NewCanonicalSignatureRepository(sigRepo, f74aCanonical, logger)
+			sigRepo = service.NewCanonicalSignatureRepository(sigRepo, live, logger)
 		}
 		if sbomRepo != nil {
-			sbomRepo = service.NewCanonicalSBOMRepository(sbomRepo, f74aCanonical, logger)
+			sbomRepo = service.NewCanonicalSBOMRepository(sbomRepo, live, logger)
 		}
 		if sbomManifestRepo != nil && sbomRepo != nil {
-			sbomManifestRepo = service.NewCanonicalSBOMManifestRepository(sbomManifestRepo, sbomRepo, f74aCanonical, logger)
-		}
-		if dbAvailable && pool != nil {
-			var llmBackfill service.F74aReleaseLister
-			if llmRegistry != nil {
-				llmBackfill = llmRegistry
-			}
-			if err := service.BootstrapF74aCanonical(ctx, service.F74aBackfillConfig{
-				Marker: localOutbox, Publisher: f74aCanonical, LLM: llmBackfill,
-				Services: serviceRepo, Artifacts: artifactRepo, Signatures: sigRepo,
-				SBOMs: f74aSBOMBackfill, Observations: obsRepo, States: stateRepo,
-			}); err != nil {
-				return nil, fmt.Errorf("backfill F74a canonical state: %w", err)
-			}
+			sbomManifestRepo = service.NewCanonicalSBOMManifestRepository(sbomManifestRepo, sbomRepo, live, logger)
 		}
 	}
 
@@ -2937,6 +2963,9 @@ func New(cfg *config.Config) (*App, error) {
 	)
 	if pool != nil {
 		nostrTransportMetrics.setStorageSource(repository.NewPgNostrEventArchiveRepository(pool))
+	}
+	if f74aRunner != nil {
+		nostrTransportMetrics.setF74aBackfillSource(f74aRunner)
 	}
 	bgManager.RegisterWithOptions(nostrTransportMetrics, RunnerRequired(false))
 
