@@ -2,6 +2,11 @@
 
 This procedure verifies the derived PostgreSQL source and canonical F74a
 publication, and measures potential redundant historical runtime samples.
+Normal daemon startup and PostgreSQL reconnect do not launch a legacy F74a
+import. A populated SQL index does not authorize canonical publication. Run
+any legacy import only through an explicit, separately admitted migration
+command after a dry-run census; if the candidate image lacks that governed
+command, stop rather than using daemon restart as a substitute.
 **Confirmed deletion and live compaction are not available.** The shipped
 `f74a-census` and `f74a-compact --cutoff` actions are read-only;
 `f74a-compact --confirm` is rejected. There is no `--batch-size` or
@@ -113,10 +118,11 @@ counts, timings, peak RSS, outbox high-water mark, canonical-coordinate
 counts, health transitions, and relay `OK` outcomes. Exercise these
 boundaries without replacing relays with a mock:
 
-1. Start with the scaled source and verify `/ready` is available without
-   waiting for the entire backfill. Health must distinguish a pending F74a
-   pass from a completed canonical-family pass.
-2. Interrupt and restart during each keyset phase, including after an event
+1. Start the daemon with the scaled SQL source and verify `/ready` and
+   canonical publication count do not depend on its cardinality. Observe
+   migration progress through the explicit command's independent status,
+   not daemon readiness.
+2. Interrupt and restart the explicit migration during each keyset phase, including after an event
    is durably queued but before the cursor advances. Confirm resumed cursors,
    unchanged semantic queued cardinality on retry, and eventual relay
    acceptance. Distinct legacy-coordinate tombstones count separately.

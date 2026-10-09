@@ -170,21 +170,9 @@ func (s *ManagedInstanceSupervisor) SetReadiness(readiness SupervisionReadiness)
 	s.readiness = readiness
 }
 
-// managedInstanceStateBackfiller is a state that can publish canonical records
-// for what a deployment recorded only in SQL before they existed.
-type managedInstanceStateBackfiller interface {
-	BackfillFromIndex(context.Context) error
-}
-
 func (s *ManagedInstanceSupervisor) Run(ctx context.Context) error {
 	if err := waitForSupervisionReadiness(ctx, s.readiness); err != nil {
 		return nil
-	}
-	if backfiller, ok := s.repo.(managedInstanceStateBackfiller); ok {
-		// Best effort: an unreachable index must not delay supervision.
-		if err := backfiller.BackfillFromIndex(ctx); err != nil {
-			s.logger.Warn("managed instance state backfill from the SQL index did not complete", zap.Error(err))
-		}
 	}
 	if err := s.EvaluateOnce(ctx); err != nil {
 		s.logger.Warn("managed instance evaluation failed", zap.Error(err))

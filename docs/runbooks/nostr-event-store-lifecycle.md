@@ -47,18 +47,23 @@ All returned booleans must be true before canary export.
 The local publish outbox (`nostr.local_store.outbox_path`, default
 `outbox.bolt` beside the local event store) is authoritative delivery state,
 not a cache. Back it up with the daemon data and never delete it while pending
-entries exist. Normal daemon startup and reconnect do **not** drain legacy
-PostgreSQL `nostr_events` pending rows. Rows whose `publish_target` starts with
-`local:` are archive mirrors of local-outbox events, not SQL delivery work.
+entries exist. PostgreSQL `nostr_events` also holds transaction-bound audit
+outbox rows and may hold undelivered legacy rows. A daemon restart does not
+import or drain those SQL rows into the local outbox; neither does reconnect.
+Preserve them for an explicit, reviewed recovery operation; do not make
+PostgreSQL the source of a new canonical publish. Rows whose `publish_target`
+starts with `local:` mirror local-outbox events, not SQL delivery work.
 
-- `bahia_nostr_outbox_depth` includes pending local entries and legacy pending
-  PostgreSQL rows. A positive SQL contribution is backlog requiring operator
-  review; it does not prove the daemon is delivering those rows.
-- `bahia_nostr_outbox_failed` includes abandoned local entries and failed
+- `bahia_nostr_outbox_depth` combines pending local entries with pending
+  PostgreSQL rows, including legacy rows not automatically delivered after
+  restart. A positive SQL contribution requires operator review; the combined
+  count is not evidence that the daemon will deliver every counted row.
+- `bahia_nostr_outbox_failed` combines abandoned local entries with failed
   PostgreSQL rows. PostgreSQL failed rows are counted only after
   `ensure-indexes` creates `idx_nostr_events_publish_failed`.
 - Local per-relay acceptance is durable, so restart resends only to relays that
-  have not accepted. PostgreSQL records no per-relay OK state. Even a row with
+  have not accepted; relay `OK duplicate:` responses count as acceptance.
+  PostgreSQL records no per-relay OK state. Even a row with
   `publish_attempts=0` may have reached a relay before the old process crashed;
   never infer that no relay accepted it.
 - A terminal failure is never reset to pending. Correct the relay policy or

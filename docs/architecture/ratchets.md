@@ -21,6 +21,7 @@ Run all gates with `make lint-arch`. They also run as part of
 | `TestArchitectureContextVMMethodConstants` | Any `ContextVMMethod*` constant other than `services/secrets-reveal` and `deployments/run-logs-get`, or registration outside the assistant handlers, encrypted route handlers, encrypted transport and DNS-agent fallback. Mutations are intents | none (closed set) |
 | `TestLegacyKindConstClassification` | Drift between the kind catalog and the legacy classification used by the legacy-kind gate | none |
 | `TestArchitectureDBLessDaemonBootGatesNilRepositoryRoutes` (`internal/app`) | A daemon with an unreachable database must boot, and every database-backed route must sit behind the DB gate | none |
+| `TestNoAutomaticSQLToCanonicalPromotion` | Daemon construction, database recovery and managed-instance runner startup cannot call SQL-to-canonical backfills, import SQL outbox rows, or wire PG-backed reconciliation/queue runners that publish signed state. The constructor checks identify current PostgreSQL-backed argument names; the same abstractions may be fed canonical local/relay views instead. See the [source audit](../analysis/postgres-startup-source-audit.md) | none (zero violations required) |
 
 `internal/kinds` adds the contract tests that keep the kind catalog, topics,
 coordinates and the generated web constants (`kinds.gen.js`) in step, and
