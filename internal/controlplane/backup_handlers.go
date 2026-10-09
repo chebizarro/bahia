@@ -34,7 +34,7 @@ func (r *Reactor) handleBackupRunRequest(ctx context.Context, event *nostr.Event
 	}
 	req, err := parseBackupRunRequest(event)
 	if err == nil && req.RecipeID != "" {
-		_, err = uuid.Parse(req.RecipeID)
+		err = validateBackupRequestUUID("recipe_id", req.RecipeID)
 	}
 	if err == nil && req.RecipeID == "" {
 		_, _, err = parseBackupRecipeCoordinate(req.Recipe)
@@ -44,6 +44,17 @@ func (r *Reactor) handleBackupRunRequest(ctx context.Context, event *nostr.Event
 		return
 	}
 	r.publishPausedBackupRequest(ctx, event, KindBackupRunResult, "backup run request intake is paused until canonical acceptance receipts are available")
+}
+
+func validateBackupRequestUUID(field, value string) error {
+	id, err := uuid.Parse(value)
+	if err != nil {
+		return fmt.Errorf("%s: %w", field, err)
+	}
+	if id == uuid.Nil {
+		return fmt.Errorf("%s must not be a nil UUID", field)
+	}
+	return nil
 }
 
 func (r *Reactor) authorizeBackupCommandRequest(ctx context.Context, event *nostr.Event, step string, resultKind int) bool {

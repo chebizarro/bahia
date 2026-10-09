@@ -212,13 +212,17 @@ func TestBackupPausedRefusalRequiresWellFormedPayload(t *testing.T) {
 		{"run/malformed-json", KindBackupRunRequest, `{`, (*Reactor).handleBackupRunRequest},
 		{"run/missing-recipe", KindBackupRunRequest, `{}`, (*Reactor).handleBackupRunRequest},
 		{"run/invalid-recipe-id", KindBackupRunRequest, `{"recipe_id":"not-a-uuid"}`, (*Reactor).handleBackupRunRequest},
+		{"run/nil-recipe-id", KindBackupRunRequest, `{"recipe_id":"00000000-0000-0000-0000-000000000000"}`, (*Reactor).handleBackupRunRequest},
 		{"run/invalid-recipe-coordinate", KindBackupRunRequest, `{"recipe":"invalid"}`, (*Reactor).handleBackupRunRequest},
 		{"restore/malformed-json", KindBackupRestoreRequest, `{`, (*Reactor).handleBackupRestoreRequest},
 		{"restore/missing-fields", KindBackupRestoreRequest, `{}`, (*Reactor).handleBackupRestoreRequest},
 		{"restore/invalid-run-id", KindBackupRestoreRequest, `{"backup_run_id":"not-a-uuid","restore_target_ref":"fs:/restore"}`, (*Reactor).handleBackupRestoreRequest},
+		{"restore/nil-run-id", KindBackupRestoreRequest, `{"backup_run_id":"00000000-0000-0000-0000-000000000000","restore_target_ref":"fs:/restore"}`, (*Reactor).handleBackupRestoreRequest},
 		{"retention/malformed-json", KindBackupRetentionEnforce, `{`, (*Reactor).handleBackupRetentionRequest},
 		{"retention/missing-fields", KindBackupRetentionEnforce, `{}`, (*Reactor).handleBackupRetentionRequest},
 		{"retention/invalid-repository-id", KindBackupRetentionEnforce, `{"repository_id":"not-a-uuid","policy_id":"00000000-0000-0000-0000-000000000001"}`, (*Reactor).handleBackupRetentionRequest},
+		{"retention/nil-repository-id", KindBackupRetentionEnforce, `{"repository_id":"00000000-0000-0000-0000-000000000000","policy_id":"00000000-0000-0000-0000-000000000001"}`, (*Reactor).handleBackupRetentionRequest},
+		{"retention/nil-policy-id", KindBackupRetentionEnforce, `{"repository_id":"00000000-0000-0000-0000-000000000001","policy_id":"00000000-0000-0000-0000-000000000000"}`, (*Reactor).handleBackupRetentionRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

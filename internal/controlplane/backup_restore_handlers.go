@@ -32,7 +32,7 @@ func (r *Reactor) handleBackupRestoreRequest(ctx context.Context, event *nostr.E
 	}
 	req, err := parseBackupRestoreRequest(event)
 	if err == nil {
-		_, err = uuid.Parse(req.BackupRunID)
+		err = validateBackupRequestUUID("backup_run_id", req.BackupRunID)
 	}
 	if err != nil {
 		r.zapLog.Warn("dropping invalid backup restore request without signing a refusal", zap.String("request_event_id", event.ID.Hex()), zap.Error(err))

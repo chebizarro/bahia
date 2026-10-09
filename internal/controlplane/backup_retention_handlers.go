@@ -33,10 +33,10 @@ func (r *Reactor) handleBackupRetentionRequest(ctx context.Context, event *nostr
 	}
 	req, err := parseBackupRetentionRequest(event)
 	if err == nil {
-		_, err = uuid.Parse(req.RepositoryID)
+		err = validateBackupRequestUUID("repository_id", req.RepositoryID)
 	}
 	if err == nil {
-		_, err = uuid.Parse(req.PolicyID)
+		err = validateBackupRequestUUID("policy_id", req.PolicyID)
 	}
 	if err != nil {
 		r.zapLog.Warn("dropping invalid backup retention request without signing a refusal", zap.String("request_event_id", event.ID.Hex()), zap.Error(err))
