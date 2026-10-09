@@ -174,6 +174,72 @@ func TestF74aObservationMetadataChangeKeepsAcceptedProjectionProof(t *testing.T)
 	require.True(t, proved, "metadata-only change must retain durable relay proof")
 }
 
+func TestF74aLegacyTombstoneIgnoresMutablePackageFields(t *testing.T) {
+	ctx := context.Background()
+	key := "0000000000000000000000000000000000000000000000000000000000000001"
+	secret, err := gonostr.SecretKeyFromHex(key)
+	require.NoError(t, err)
+	cfg := config.NostrConfig{PrivateKey: key, PublishEnabled: true}
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "old", Version: "1"}
+	dir := t.TempDir()
+	outbox, err := localstore.OpenOutbox(filepath.Join(dir, "outbox.bolt"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	store, err := localstore.Open(filepath.Join(dir, "events.bolt"))
+	require.NoError(t, err)
+	defer store.Close()
+	ledger := f74aDeliveryLedger{store: outbox, author: secret.Public()}
+	history := nostradapter.NewLocalEventRepository(store, nil).Authored(secret.Public().Hex())
+	initialPub := nostradapter.NewPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
+		nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostradapter.WithLocalOutbox(outbox, store))
+	defer initialPub.Close()
+	initial := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), f74aTrackedPublisher{Publisher: initialPub, ledger: ledger}, history, zap.NewNop())
+	recordPub := f74aRecordPublisher{inner: nostradapter.NewF74aCanonicalPublisher(initial, nil)}
+	require.NoError(t, recordPub.PublishLegacySBOMPackageTombstone(ctx, pkg))
+	entries, err := outbox.ListEntries([]string{localstore.OutboxPending, localstore.OutboxPublished, localstore.OutboxFailed}, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	event := entries[0].Event
+	var published struct {
+		ID      uuid.UUID `json:"id"`
+		Deleted bool      `json:"deleted"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(event.Content), &published))
+	require.True(t, published.Deleted)
+	require.Equal(t, pkg.ID, published.ID)
+	require.Equal(t, pkg.SBOMID.String(), f74aEventTag(event, "sbom_id"))
+	hash, err := f74aSourceHash(f74aLegacyTombstoneIdentity(pkg))
+	require.NoError(t, err)
+	publishedHash, err := f74aSourceHash(map[string]any{"id": published.ID, "sbom_id": f74aEventTag(event, "sbom_id")})
+	require.NoError(t, err)
+	require.Equal(t, publishedHash, hash, "receipt must bind only the signed tombstone content and tag")
+	receipt, found, err := ledger.receipt(nostradapter.KindSBOMPackageRegistry, "artifact:sbom-package:"+pkg.ID.String())
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, hash, receipt.SourceHash, "import publisher must stage the tombstone identity")
+	_, err = outbox.CommitRound(event.ID, localstore.OutboxRound{Delivered: true, State: localstore.OutboxPublished, At: time.Now()})
+	require.NoError(t, err)
+	require.NoError(t, ledger.accepted(event))
+	changed := *pkg
+	changed.Name, changed.Version, changed.PURL = "new", "2", "pkg:example/new@2"
+	restartedPub := nostradapter.NewPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
+		nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostradapter.WithLocalOutbox(outbox, store))
+	defer restartedPub.Close()
+	restarted := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), f74aTrackedPublisher{Publisher: restartedPub, ledger: ledger}, history, zap.NewNop())
+	recordPub = f74aRecordPublisher{inner: nostradapter.NewF74aCanonicalPublisher(restarted, nil)}
+	require.NoError(t, recordPub.PublishLegacySBOMPackageTombstone(ctx, &changed))
+	entries, err = outbox.ListEntries([]string{localstore.OutboxPending, localstore.OutboxPublished, localstore.OutboxFailed}, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "unchanged UUID tombstone must reuse the accepted signed event")
+	proved, err := ledger.prove(ctx, "legacy_packages", &changed)
+	require.NoError(t, err)
+	require.True(t, proved, "changed semantic fields must not invalidate the UUID tombstone proof")
+	changed.SBOMID = uuid.New()
+	proved, err = ledger.prove(ctx, "legacy_packages", &changed)
+	require.NoError(t, err)
+	require.False(t, proved, "changed published SBOM tag must invalidate the proof")
+}
+
 func TestF74aOwnerOnlyFleetRecipientCanDecrypt(t *testing.T) {
 	ctx := context.Background()
 	serviceKey := "0000000000000000000000000000000000000000000000000000000000000001"

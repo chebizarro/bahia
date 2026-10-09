@@ -72,6 +72,13 @@ func f74aSourceHash(item any) (string, error) {
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
 }
+
+// The UUID-coordinate tombstone publishes only the row ID and SBOM tag.
+// Semantic package fields have their own v2 coordinate and delivery proof.
+func f74aLegacyTombstoneIdentity(pkg *domain.SBOMPackage) map[string]any {
+	return map[string]any{"id": pkg.ID, "sbom_id": pkg.SBOMID}
+}
+
 func f74aRecordContext(ctx context.Context, item any) (context.Context, error) {
 	hash, err := f74aSourceHash(item)
 	if err != nil {
@@ -197,7 +204,11 @@ func (l f74aDeliveryLedger) prove(ctx context.Context, phase string, item any) (
 	if err != nil || !found {
 		return false, err
 	}
-	hash, err := f74aSourceHash(item)
+	hashInput := item
+	if deleted {
+		hashInput = f74aLegacyTombstoneIdentity(item.(*domain.SBOMPackage))
+	}
+	hash, err := f74aSourceHash(hashInput)
 	if err != nil {
 		return false, err
 	}
@@ -258,7 +269,7 @@ func (p f74aRecordPublisher) PublishSBOMPackage(ctx context.Context, x *domain.S
 	return p.inner.PublishSBOMPackage(c, x)
 }
 func (p f74aRecordPublisher) PublishLegacySBOMPackageTombstone(ctx context.Context, x *domain.SBOMPackage) error {
-	c, err := f74aRecordContext(ctx, x)
+	c, err := f74aRecordContext(ctx, f74aLegacyTombstoneIdentity(x))
 	if err != nil {
 		return err
 	}
