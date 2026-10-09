@@ -283,14 +283,8 @@ func New(cfg *config.Config) (*App, error) {
 		logger.Error("local Nostr publish outbox was unreadable and was moved aside; events still pending in it were not delivered",
 			zap.String("moved_to", aside))
 	}
-	if err := repository.BootstrapLocalDNS(ctx, localOutbox, dnsZoneRepo, dnsPolicyRepo, dnsRecordOverrideRepo); err != nil {
-		_ = localOutbox.Close()
-		_ = localEventStore.Close()
-		return nil, fmt.Errorf("bootstrapping local DNS registry: %w", err)
-	}
-	// DNS and ML desired registry records live in the durable local store. The
-	// optional PostgreSQL repositories only seed pre-migration data; they are
-	// not a write prerequisite for these mutations.
+	// DNS and ML desired registry records live in the durable local store.
+	// PostgreSQL is a derived index and must not seed canonical state at boot.
 	dnsZoneRepo = repository.NewLocalDNSZoneRepository(localOutbox)
 	dnsPolicyRepo = repository.NewLocalDNSPolicyRepository(localOutbox)
 	dnsRecordOverrideRepo = repository.NewLocalDNSRecordOverrideRepository(localOutbox)
@@ -991,9 +985,6 @@ func New(cfg *config.Config) (*App, error) {
 	if dbAvailable {
 		pgMLRegistryRepo = repository.NewPgMLRegistryRepository(pool)
 	}
-	if err := repository.BootstrapLocalML(ctx, localOutbox, pgMLRegistryRepo); err != nil {
-		return nil, fmt.Errorf("bootstrapping local ML registry: %w", err)
-	}
 	mlRegistryRepo := repository.NewLocalMLRegistryRepository(localOutbox, pgMLRegistryRepo)
 	mlRegistry := service.NewMLRegistryService(mlRegistryRepo, publisher, logger, service.WithMLEnvironmentRepository(envRepo))
 	workerReadModelSvc := service.NewWorkerReadModelService(workerRepo, registry, mlRegistry, workerPolicySvc, service.NewMLPlacementService(workerRepo, logger, service.WithMLPlacementPressureThresholds(pressureThresholds)), logger)
@@ -1278,14 +1269,8 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		adoptionSvc = service.NewAdoptionService(adoptionCanonical, service.NewLocalAdoptionView(localSupervisionState), publisher, logger, adoptionOptions...)
 		if dbAvailable && pool != nil {
-			// Once the local store has caught up with the relays: publish a
-			// binding for every SQL-era adopted identity (once), then bring
-			// the index up to the canonical records.
 			adoptionIndex := adoptionSvc
 			nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
-				if err := adoptionIndex.BackfillFromIndex(ctx, localOutbox); err != nil {
-					logger.Warn("adoption binding backfill failed; retrying on next start", zap.Error(err))
-				}
 				if err := adoptionIndex.RebuildIndex(ctx); err != nil {
 					logger.Warn("adoption SQL index rebuild failed", zap.Error(err))
 				}
@@ -2070,18 +2055,9 @@ func New(cfg *config.Config) (*App, error) {
 
 		// Pending results are not scanned on a timer: a result is processed
 		// when it arrives, when its run arrives, and once per start from the
-		// canonical result states the store retains. Config-declared pipeline
-		// policies are seeded after the SQL-era backfill so a policy that
-		// already has an id keeps it.
+		// canonical result states the store retains.
 		resumer := hiveciAdapter.NewPendingResultResumer(hiveRepo, bridge, cfg.HiveCI.MaxRetries, logger)
-		policies := cfg.HiveCI.Policies
 		hiveSeed := func(ctx context.Context) {
-			if hiveIndex != nil {
-				if err := hiveRepo.BackfillFromIndex(ctx, localOutbox); err != nil {
-					logger.Warn("Hive-CI canonical backfill failed; retrying on next start", zap.Error(err))
-				}
-			}
-			seedHiveCIPipelinePolicies(ctx, policies, serviceRepo, envRepo, hiveRepo, logger)
 			if hiveIndex != nil {
 				if err := hiveRepo.RebuildIndex(ctx); err != nil {
 					logger.Warn("Hive-CI SQL index rebuild failed", zap.Error(err))
@@ -2129,19 +2105,7 @@ func New(cfg *config.Config) (*App, error) {
 		policySvc.SetSecurityRepository(canonicalSecurity)
 		policySvc.SetCanonicalPolicyView(nostrAdapter.NewSecurityPolicyView(projectionHistory))
 		if securityRepo != nil {
-			// Once the local store has caught up with the relays: publish
-			// SQL-era state that has no canonical record yet (once), then
-			// bring the index up to the canonical records. Policies go
-			// first: schedules derive only from published policy cp-state,
-			// so a policy that exists only in SQL would otherwise never be
-			// scheduled.
 			nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
-				if err := policySvc.BackfillCanonicalPolicies(ctx, localOutbox, service.PolicyCanonicalPublisher(policyPublisher)); err != nil {
-					logger.Warn("policy canonical backfill failed; retrying on next start", zap.Error(err))
-				}
-				if err := canonicalSecurity.BackfillFromIndex(ctx, localOutbox); err != nil {
-					logger.Warn("security canonical backfill failed; retrying on next start", zap.Error(err))
-				}
 				if err := canonicalSecurity.RebuildIndex(ctx); err != nil {
 					logger.Warn("security SQL index rebuild failed", zap.Error(err))
 				}
@@ -2635,9 +2599,8 @@ func New(cfg *config.Config) (*App, error) {
 		// The initiation journal (prepared signed events, pinned
 		// job, per-run publisher key in the service-only layer) is a
 		// confidential record in the local event store; the build id is
-		// derived from the signed request. PostgreSQL is an optional index,
-		// backfilled once from SQL-era in-flight initiations and rebuilt
-		// from the journal after warm start.
+		// derived from the signed request. PostgreSQL is an optional index
+		// rebuilt from the journal after warm start.
 		var initiationStore giteaAdapter.InitiationStore
 		if nostrProjector != nil && confidentialEncryptor != nil {
 			journal := hiveCanonical
@@ -2651,9 +2614,6 @@ func New(cfg *config.Config) (*App, error) {
 			canonicalInitiations := giteaAdapter.NewCanonicalInitiationStore(journal, initiationIndex, logger)
 			if initiationIndex != nil {
 				nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
-					if err := canonicalInitiations.BackfillFromIndex(ctx, localOutbox); err != nil {
-						logger.Warn("Hive-CI initiation journal backfill failed; retrying on next start", zap.Error(err))
-					}
 					if err := canonicalInitiations.RebuildIndex(ctx); err != nil {
 						logger.Warn("Hive-CI initiation SQL index rebuild failed", zap.Error(err))
 					}
@@ -4292,71 +4252,6 @@ func subscribeAgentHealth(ctx context.Context, pool *nostrAdapter.RelayPool, age
 
 func shouldRegisterHiveCIRunners(cfg config.HiveCIConfig) bool {
 	return cfg.Enabled
-}
-
-// seedHiveCIPipelinePolicies publishes the config-declared pipeline policies
-// idempotently. Service and environment names resolve through their
-// repositories, so it needs the database; without one, policies come from the
-// retained canonical records.
-func seedHiveCIPipelinePolicies(ctx context.Context, policies []config.HiveCIPolicyConfig, serviceRepo repository.ServiceRepository, envRepo repository.EnvironmentRepository, hiveRepo repository.HiveCIRepository, logger *zap.Logger) {
-	if len(policies) == 0 {
-		return
-	}
-	if serviceRepo == nil || envRepo == nil {
-		logger.Warn("hiveci policies not seeded: service and environment repositories are unavailable", zap.Int("pipeline_policies", len(policies)))
-		return
-	}
-	for i, pc := range policies {
-		if pc.RepoCoordinate == "" || pc.WorkflowPath == "" || pc.ServiceName == "" || pc.EnvironmentName == "" {
-			logger.Warn("skipping incomplete hiveci policy config",
-				zap.Int("index", i),
-				zap.String("repo_coordinate", pc.RepoCoordinate),
-				zap.String("workflow_path", pc.WorkflowPath),
-				zap.String("service_name", pc.ServiceName),
-				zap.String("environment_name", pc.EnvironmentName),
-			)
-			continue
-		}
-		svc, err := serviceRepo.GetByName(ctx, pc.ServiceName)
-		if err != nil || svc == nil {
-			logger.Warn("hiveci policy: service not found, skipping",
-				zap.String("service_name", pc.ServiceName), zap.Error(err))
-			continue
-		}
-		env, err := envRepo.GetByName(ctx, pc.EnvironmentName)
-		if err != nil || env == nil {
-			logger.Warn("hiveci policy: environment not found, skipping",
-				zap.String("environment_name", pc.EnvironmentName), zap.Error(err))
-			continue
-		}
-		enabled := true
-		if pc.Enabled != nil {
-			enabled = *pc.Enabled
-		}
-		policy := domain.HiveCIPipelinePolicy{
-			RepoCoordinate: pc.RepoCoordinate,
-			WorkflowPath:   pc.WorkflowPath,
-			BranchPattern:  pc.BranchPattern,
-			ServiceID:      svc.ID,
-			EnvironmentID:  env.ID,
-			Enabled:        enabled,
-			Metadata:       pc.Metadata,
-		}
-		if err := hiveRepo.EnsurePipelinePolicy(ctx, policy); err != nil {
-			logger.Error("failed to ensure hiveci pipeline policy",
-				zap.String("repo_coordinate", pc.RepoCoordinate),
-				zap.String("workflow_path", pc.WorkflowPath),
-				zap.Error(err),
-			)
-		} else {
-			logger.Info("hiveci pipeline policy ensured",
-				zap.String("repo_coordinate", pc.RepoCoordinate),
-				zap.String("workflow_path", pc.WorkflowPath),
-				zap.String("service", pc.ServiceName),
-				zap.String("environment", pc.EnvironmentName),
-			)
-		}
-	}
 }
 
 func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
