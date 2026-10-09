@@ -15,6 +15,7 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -39,6 +40,7 @@ type f74aReceipt struct {
 	Deleted    bool   `json:"deleted"`
 	OCKVersion int    `json:"ock_version,omitempty"`
 	SourceHash string `json:"source_hash,omitempty"`
+	PolicyID   string `json:"policy_id,omitempty"`
 }
 
 type f74aReceiptStore interface {
@@ -47,8 +49,87 @@ type f74aReceiptStore interface {
 }
 
 type f74aDeliveryLedger struct {
-	store  f74aReceiptStore
-	author gonostr.PubKey
+	store    f74aReceiptStore
+	author   gonostr.PubKey
+	policyID string
+	outbox   *localstore.Outbox
+	events   *localstore.Store
+	reverify func(context.Context, gonostr.Event) (bool, error)
+}
+
+// f74aPolicyID identifies the effective write set and success threshold, not
+// the order in which an operator listed equivalent relays.
+func f74aPolicyID(author gonostr.PubKey, relays []string, quorum int) (string, error) {
+	if quorum < config.PublishQuorumAllRelays {
+		return "", fmt.Errorf("F74a relay policy has invalid publish quorum %d", quorum)
+	}
+	seen := make(map[string]bool, len(relays))
+	urls := make([]string, 0, len(relays))
+	for _, relay := range relays {
+		url := gonostr.NormalizeURL(relay)
+		if url == "" {
+			return "", fmt.Errorf("F74a relay policy contains an invalid URL %q", relay)
+		}
+		if !seen[url] {
+			seen[url] = true
+			urls = append(urls, url)
+		}
+	}
+	if len(urls) == 0 {
+		return "", errors.New("F74a relay policy has no write relays")
+	}
+	slices.Sort(urls)
+	required := quorum
+	if required == config.PublishQuorumAllRelays {
+		required = len(urls)
+	} else if required <= 0 {
+		required = config.PublishQuorumDefault
+	}
+	required = min(required, len(urls))
+	raw, err := json.Marshal(struct {
+		Author   string   `json:"author"`
+		Relays   []string `json:"relays"`
+		Required int      `json:"required"`
+	}{author.Hex(), urls, required})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func f74aReverifySignedEvent(ctx context.Context, ev gonostr.Event, relays []string, quorum int, publish func(context.Context, gonostr.Event, []string) ([]nostradapter.PublishResult, error)) (bool, error) {
+	allowed := make(map[string]bool, len(relays))
+	for _, relay := range relays {
+		allowed[gonostr.NormalizeURL(relay)] = true
+	}
+	required := quorum
+	if required == config.PublishQuorumAllRelays {
+		required = len(allowed)
+	} else if required <= 0 {
+		required = config.PublishQuorumDefault
+	}
+	required = min(required, len(allowed))
+	if required < 1 {
+		return false, errors.New("F74a re-verification requires write relays")
+	}
+	results, publishErr := publish(ctx, ev, relays)
+	seen := make(map[string]bool, len(results))
+	accepted := 0
+	for _, result := range results {
+		url := gonostr.NormalizeURL(result.RelayURL)
+		if !allowed[url] || seen[url] {
+			continue
+		}
+		seen[url] = true
+		if result.Succeeded() {
+			accepted++
+		}
+	}
+	if accepted < required {
+		return false, fmt.Errorf("F74a event %s re-verification accepted by %d of %d required relays: %v", ev.ID.Hex(), accepted, required, publishErr)
+	}
+	return true, nil
 }
 
 type f74aSourceHashKey struct{}
@@ -116,6 +197,34 @@ func (l f74aDeliveryLedger) mutate(ev gonostr.Event, accepted bool, stage bool, 
 		return nil
 	}
 	id := fmt.Sprintf("%x", ev.ID[:])
+	if accepted && l.policyID != "" {
+		if l.outbox == nil {
+			return errors.New("F74a delivery receipt requires the durable outbox")
+		}
+		entry, found, err := l.outbox.Get(ev.ID)
+		if err != nil {
+			return err
+		}
+		if !found || !entry.Delivered || entry.Target != "control-plane" {
+			return fmt.Errorf("F74a event %s lacks a durable control-plane quorum round", id)
+		}
+		if entry.Policy.Required < 1 || entry.Policy.Required > len(entry.Policy.WriteRelays) {
+			return fmt.Errorf("F74a event %s has no valid historical quorum", id)
+		}
+		actual, err := f74aPolicyID(l.author, entry.Policy.WriteRelays, entry.Policy.Required)
+		if err != nil || actual != l.policyID {
+			return fmt.Errorf("F74a event %s was accepted under a different or unknown relay policy", id)
+		}
+		acceptedRelays := 0
+		for _, relay := range entry.Policy.WriteRelays {
+			if entry.Relays[relay].Accepted {
+				acceptedRelays++
+			}
+		}
+		if acceptedRelays < entry.Policy.Required {
+			return fmt.Errorf("F74a event %s lacks persisted per-relay quorum ACKs", id)
+		}
+	}
 	_, err = l.store.UpdateControlRecord(f74aReceiptFamily, f74aReceiptKey(l.author, kind, d), func(raw []byte) ([]byte, error) {
 		var current f74aReceipt
 		if len(raw) > 0 {
@@ -129,7 +238,18 @@ func (l f74aDeliveryLedger) mutate(ev gonostr.Event, accepted bool, stage bool, 
 		if stage && current.EventID == id {
 			return raw, nil
 		}
-		next := f74aReceipt{EventID: id, Accepted: accepted, Failed: !stage && !accepted, Deleted: f74aEventTag(ev, "deleted") == "true", SourceHash: current.SourceHash}
+		if accepted && current.EventID == id && current.PolicyID != l.policyID {
+			// A resumed outbox round may count historical per-relay ACKs.
+			// Only an explicit fresh publish may upgrade the policy scope.
+			return raw, nil
+		}
+		next := f74aReceipt{EventID: id, Accepted: accepted, Failed: !stage && !accepted, Deleted: f74aEventTag(ev, "deleted") == "true", SourceHash: current.SourceHash, PolicyID: current.PolicyID}
+		if accepted {
+			next.PolicyID = l.policyID
+		}
+		if stage && current.EventID != id {
+			next.PolicyID = l.policyID
+		}
 		if stage && kind != nostradapter.KindOrgKeyEnvelope {
 			next.SourceHash = sourceHash
 		}
@@ -143,6 +263,69 @@ func (l f74aDeliveryLedger) mutate(ev gonostr.Event, accepted bool, stage bool, 
 		return json.Marshal(next)
 	})
 	return err
+}
+
+// A policy-unscoped or differently scoped ACK is never upgraded by inspection
+// of historical flags. Only a new publish of the exact signed event can do so.
+func (l f74aDeliveryLedger) proveReceipt(ctx context.Context, kind int, d string, rec f74aReceipt) (bool, error) {
+	if rec.Failed {
+		return false, nil
+	}
+	if l.policyID == "" {
+		return false, errors.New("F74a delivery proof has no effective relay policy")
+	}
+	if rec.PolicyID == l.policyID {
+		return rec.Accepted, nil
+	}
+	if l.reverify == nil || l.outbox == nil {
+		return false, nil
+	}
+	id, err := gonostr.IDFromHex(rec.EventID)
+	if err != nil {
+		return false, nil
+	}
+	var ev gonostr.Event
+	entry, found, err := l.outbox.Get(id)
+	if err != nil {
+		return false, err
+	}
+	if found {
+		ev = entry.Event
+	}
+	if !rec.Accepted && (!found || !entry.Delivered) {
+		return false, nil
+	}
+	if ev.ID != id && l.events != nil {
+		for retained := range l.events.QueryEvents(gonostr.Filter{IDs: []gonostr.ID{id}}) {
+			ev = retained
+			break
+		}
+	}
+	if ev.ID != id {
+		return false, fmt.Errorf("F74a event %s is not retained for relay-policy re-verification", rec.EventID)
+	}
+	if !ev.CheckID() || !ev.VerifySignature() || ev.PubKey != l.author || int(ev.Kind) != nostradapter.KindCASControlState ||
+		f74aEventTag(ev, "d") != d || f74aEventTag(ev, "legacy_kind") != strconv.Itoa(kind) ||
+		(f74aEventTag(ev, "deleted") == "true") != rec.Deleted {
+		return false, fmt.Errorf("F74a event %s cannot be re-verified: signed coordinate differs from receipt", rec.EventID)
+	}
+	ok, err := l.reverify(ctx, ev)
+	if err != nil || !ok {
+		return false, err
+	}
+	_, err = l.store.UpdateControlRecord(f74aReceiptFamily, f74aReceiptKey(l.author, kind, d), func(raw []byte) ([]byte, error) {
+		var current f74aReceipt
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return nil, err
+		}
+		if current.EventID != rec.EventID || current.SourceHash != rec.SourceHash || current.Deleted != rec.Deleted || current.Accepted != rec.Accepted || current.Failed {
+			return nil, errors.New("F74a receipt changed during relay-policy re-verification")
+		}
+		current.Accepted = true
+		current.PolicyID = l.policyID
+		return json.Marshal(current)
+	})
+	return err == nil, err
 }
 func (l f74aDeliveryLedger) stage(ev gonostr.Event) error { return l.stageWithHash(ev, "") }
 func (l f74aDeliveryLedger) stageWithHash(ev gonostr.Event, hash string) error {
@@ -215,7 +398,7 @@ func (l f74aDeliveryLedger) prove(ctx context.Context, phase string, item any) (
 	if rec.SourceHash != hash || rec.Deleted != deleted {
 		return false, nil
 	}
-	return rec.Accepted, nil
+	return l.proveReceipt(ctx, kind, d, rec)
 }
 
 // f74aTrackedPublisher journals the signed coordinate before handing it to
@@ -294,6 +477,7 @@ type f74aOCKManifest struct {
 	KeyHash     string   `json:"key_hash"`
 	Recipients  []string `json:"recipients"`
 	Coordinates []string `json:"coordinates"`
+	PolicyID    string   `json:"policy_id,omitempty"`
 }
 
 func f74aDistinctOCKManifestEntries(m f74aOCKManifest) error {
@@ -369,7 +553,7 @@ func f74aLoadOCKManifest(store f74aOCKManifestStore, author gonostr.PubKey) (f74
 	err = json.Unmarshal(raw, &m)
 	return m, err
 }
-func f74aPrepareOCK(ctx context.Context, store f74aOCKManifestStore, manager *controlplane.OCKManager, wraps *f74aEnvelopePublisher, recipients []string, author gonostr.PubKey) (f74aOCKManifest, error) {
+func f74aPrepareOCK(ctx context.Context, store f74aOCKManifestStore, manager *controlplane.OCKManager, wraps *f74aEnvelopePublisher, recipients []string, author gonostr.PubKey, policyID string) (f74aOCKManifest, error) {
 	m, err := f74aLoadOCKManifest(store, author)
 	if err != nil {
 		return m, err
@@ -381,7 +565,7 @@ func f74aPrepareOCK(ctx context.Context, store f74aOCKManifestStore, manager *co
 	}
 	if m.Version > 0 && m.KeyHash != "" && slices.Equal(m.Recipients, recipients) && len(m.Coordinates) == len(recipients) {
 		refused := false
-		ledger := f74aDeliveryLedger{store: store, author: author}
+		ledger := f74aDeliveryLedger{store: store, author: author, policyID: policyID}
 		for _, d := range m.Coordinates {
 			receipt, found, err := ledger.receipt(nostradapter.KindOrgKeyEnvelope, d)
 			if err != nil {
@@ -414,7 +598,7 @@ func f74aPrepareOCK(ctx context.Context, store f74aOCKManifestStore, manager *co
 		}
 	}
 	sum := sha256.Sum256(key.Key[:])
-	m = f74aOCKManifest{Version: key.Version, KeyHash: hex.EncodeToString(sum[:]), Recipients: recipients, Coordinates: coords}
+	m = f74aOCKManifest{Version: key.Version, KeyHash: hex.EncodeToString(sum[:]), Recipients: recipients, Coordinates: coords, PolicyID: policyID}
 	if err := f74aDistinctOCKManifestEntries(m); err != nil {
 		return m, err
 	}
@@ -447,8 +631,22 @@ func (l f74aDeliveryLedger) proveOCK(ctx context.Context, store f74aOCKManifestS
 		if err != nil {
 			return false, err
 		}
-		if !found || !rec.Accepted || rec.Deleted {
+		if !found || rec.Deleted {
 			return false, nil
+		}
+		accepted, err := l.proveReceipt(ctx, nostradapter.KindOrgKeyEnvelope, d, rec)
+		if err != nil || !accepted {
+			return false, err
+		}
+	}
+	if m.PolicyID != l.policyID {
+		m.PolicyID = l.policyID
+		raw, err := json.Marshal(m)
+		if err != nil {
+			return false, err
+		}
+		if err := store.PutControlRecord(f74aOCKManifestFamily, f74aOCKManifestID(l.author), raw); err != nil {
+			return false, err
 		}
 	}
 	return true, nil

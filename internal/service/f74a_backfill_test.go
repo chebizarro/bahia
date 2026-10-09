@@ -175,6 +175,53 @@ func readF74aProgress(t *testing.T, marker *f74aMemoryMarker) F74aBackfillProgre
 	return p
 }
 
+func TestF74aCompletedMarkerIsScopedToRelayPolicy(t *testing.T) {
+	ctx := context.Background()
+	marker := &f74aMemoryMarker{}
+	source := &f74aSource{signatures: []domain.ArtifactSignature{{ID: f74aID(1)}}}
+	pub := &f74aBackfillPub{}
+	runner := f74aRunner(marker, source, pub)
+	runner.cfg.PolicyID = "policy-a"
+	runner.cfg.Author = "signer-a"
+	if err := runner.RunMigration(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p := readF74aProgress(t, marker); !p.Completed || p.PolicyID != "policy-a" {
+		t.Fatalf("marker not scoped: %+v", p)
+	}
+	source.visits = nil
+	runner = f74aRunner(marker, source, pub)
+	runner.cfg.PolicyID = "policy-b"
+	runner.cfg.Author = "signer-a"
+	runner.cfg.Delivered = func(context.Context, string, any) (bool, error) { return false, nil }
+	if err := runner.RunMigration(ctx); err == nil {
+		t.Fatal("changed policy reused completed marker")
+	}
+	if p := readF74aProgress(t, marker); p.Completed || p.PolicyID != "policy-b" {
+		t.Fatalf("marker did not reopen: %+v", p)
+	}
+	if len(source.visits) == 0 {
+		t.Fatal("policy change did not restart verification pass")
+	}
+
+	legacy := F74aBackfillProgress{Phase: "complete", Completed: true, RelayVerified: true, ProofVersion: 2, Author: "signer-a"}
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker.value = raw
+	runner = f74aRunner(marker, source, pub)
+	runner.cfg.PolicyID = "policy-b"
+	runner.cfg.Author = "signer-a"
+	runner.cfg.Delivered = func(context.Context, string, any) (bool, error) { return false, nil }
+	if err := runner.RunMigration(ctx); err == nil {
+		t.Fatal("legacy unscoped marker reused completion")
+	}
+	if readF74aProgress(t, marker).Completed {
+		t.Fatal("legacy unscoped marker remained complete")
+	}
+}
+
 func TestF74aBackfillStagesSemanticBeforeLegacyAndV2OnlyAfterAll(t *testing.T) {
 	marker := &f74aMemoryMarker{value: []byte(`{"phase":"releases"}`)}
 	source := &f74aSource{releases: []domain.LLMRelease{{ID: f74aID(1)}}, signatures: []domain.ArtifactSignature{{ID: f74aID(2)}}, sboms: []domain.ArtifactSBOM{{ID: f74aID(3)}}, semantic: []domain.SBOMPackage{{ID: f74aID(4)}}, legacy: []domain.SBOMPackage{{ID: f74aID(4)}, {ID: f74aID(5)}}, observations: []domain.RuntimeObservation{{ID: f74aID(6), ServiceID: f74aID(7), EnvironmentID: f74aID(8)}}}

@@ -72,6 +72,7 @@ type F74aBackfillConfig struct {
 	SemanticDelivered F74aSemanticDeliveryProof
 	Delivered         F74aDeliveryProof
 	Author            string
+	PolicyID          string
 	Rate              int
 	HighWater         int64
 	LowWater          int64
@@ -87,6 +88,7 @@ type F74aBackfillProgress struct {
 	RelayVerified  bool                       `json:"relay_verified"`
 	ProofVersion   int                        `json:"proof_version"`
 	Author         string                     `json:"author,omitempty"`
+	PolicyID       string                     `json:"policy_id,omitempty"`
 	UpdatedAt      time.Time                  `json:"updated_at"`
 }
 
@@ -218,6 +220,9 @@ func (r *F74aBackfillRunner) update(fn func(*F74aBackfillProgress) error) (F74aB
 		if r.cfg.Author != "" {
 			p.Author = r.cfg.Author
 		}
+		if r.cfg.PolicyID != "" {
+			p.PolicyID = r.cfg.PolicyID
+		}
 		p.UpdatedAt = time.Now().UTC()
 		encoded, err := json.Marshal(p)
 		if err == nil {
@@ -271,7 +276,7 @@ func (r *F74aBackfillRunner) RunMigration(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if r.cfg.Author != "" && p.Author != r.cfg.Author {
+	if (r.cfg.Author != "" && p.Author != r.cfg.Author) || (r.cfg.PolicyID != "" && p.PolicyID != r.cfg.PolicyID) {
 		p, err = r.update(func(current *F74aBackfillProgress) error {
 			current.Phase = f74aPhases[0]
 			current.Cursor = uuid.Nil
@@ -280,6 +285,7 @@ func (r *F74aBackfillRunner) RunMigration(ctx context.Context) error {
 			current.RelayVerified = false
 			current.PassGeneration = current.Generation
 			current.Author = r.cfg.Author
+			current.PolicyID = r.cfg.PolicyID
 			return nil
 		})
 		if err != nil {

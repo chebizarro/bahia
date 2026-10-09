@@ -24,6 +24,25 @@ import (
 	"go.uber.org/zap"
 )
 
+func f74aTestLedger(t *testing.T, outbox *localstore.Outbox, author gonostr.PubKey) f74aDeliveryLedger {
+	t.Helper()
+	id, err := f74aPolicyID(author, []string{"wss://relay.example"}, 1)
+	require.NoError(t, err)
+	return f74aDeliveryLedger{store: outbox, outbox: outbox, author: author, policyID: id}
+}
+
+func f74aTestACK(t *testing.T, outbox *localstore.Outbox, ev gonostr.Event) {
+	f74aTestACKAt(t, outbox, ev, time.Now())
+}
+
+func f74aTestACKAt(t *testing.T, outbox *localstore.Outbox, ev gonostr.Event, at time.Time) {
+	t.Helper()
+	_, err := outbox.Enqueue(localstore.OutboxEntry{Event: ev, Target: repository.NostrPublishTargetControlPlane})
+	require.NoError(t, err)
+	_, err = outbox.CommitPublisherRound(ev.ID, localstore.OutboxRound{Target: repository.NostrPublishTargetControlPlane, Delivered: true, State: localstore.OutboxPublished, At: at, Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1}, Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}})
+	require.NoError(t, err)
+}
+
 func TestF74aReceiptSurvivesSettledOutboxPruneAndRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.bolt")
 	outbox, err := localstore.OpenOutbox(path)
@@ -33,7 +52,7 @@ func TestF74aReceiptSurvivesSettledOutboxPruneAndRestart(t *testing.T) {
 	event := gonostr.Event{Kind: gonostr.Kind(nostradapter.KindCASControlState), CreatedAt: gonostr.Now(), Tags: gonostr.Tags{{"d", d}, {"legacy_kind", ""}, {"deleted", "false"}}}
 	event.Tags[1][1] = "" + itoa(nostradapter.KindSBOMPackageRegistry)
 	event.ID[0] = 1
-	ledger := f74aDeliveryLedger{store: outbox}
+	ledger := f74aTestLedger(t, outbox, gonostr.PubKey{})
 	hash, err := f74aSourceHash(pkg)
 	require.NoError(t, err)
 	require.NoError(t, ledger.stageWithHash(event, hash))
@@ -42,8 +61,7 @@ func TestF74aReceiptSurvivesSettledOutboxPruneAndRestart(t *testing.T) {
 	require.False(t, accepted)
 	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: event, Target: repository.NostrPublishTargetControlPlane, EnqueuedAt: time.Now().Add(-26 * time.Hour)})
 	require.NoError(t, err)
-	_, err = outbox.CommitRound(event.ID, localstore.OutboxRound{Delivered: true, State: localstore.OutboxPublished, At: time.Now().Add(-25 * time.Hour)})
-	require.NoError(t, err)
+	f74aTestACKAt(t, outbox, event, time.Now().Add(-25*time.Hour))
 	require.NoError(t, ledger.accepted(event))
 	removed, err := outbox.Prune(time.Now().Add(-24*time.Hour), time.Now().Add(-7*24*time.Hour))
 	require.NoError(t, err)
@@ -55,7 +73,7 @@ func TestF74aReceiptSurvivesSettledOutboxPruneAndRestart(t *testing.T) {
 	reopened, err := localstore.OpenOutbox(path)
 	require.NoError(t, err)
 	defer reopened.Close()
-	ledger = f74aDeliveryLedger{store: reopened}
+	ledger = f74aTestLedger(t, reopened, gonostr.PubKey{})
 	accepted, err = ledger.prove(context.Background(), "semantic_packages", pkg)
 	require.NoError(t, err)
 	require.True(t, accepted)
@@ -71,11 +89,12 @@ func TestF74aReceiptNewPendingAndRefusalInvalidateOldAcceptance(t *testing.T) {
 		ev.ID[0] = id
 		return ev
 	}
-	ledger := f74aDeliveryLedger{store: outbox}
+	ledger := f74aTestLedger(t, outbox, gonostr.PubKey{})
 	old, newer := makeEvent(1), makeEvent(2)
 	hash, err := f74aSourceHash(pkg)
 	require.NoError(t, err)
 	require.NoError(t, ledger.stageWithHash(old, hash))
+	f74aTestACK(t, outbox, old)
 	require.NoError(t, ledger.accepted(old))
 	require.NoError(t, ledger.stageWithHash(newer, hash))
 	ok, err := ledger.prove(context.Background(), "semantic_packages", pkg)
@@ -98,10 +117,11 @@ func TestF74aAcceptedCoordinateDoesNotProveChangedSourceContent(t *testing.T) {
 	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module", Version: "1"}
 	event := gonostr.Event{Kind: gonostr.Kind(nostradapter.KindCASControlState), Tags: gonostr.Tags{{"d", nostradapter.SBOMPackageDTag(pkg)}, {"legacy_kind", itoa(nostradapter.KindSBOMPackageRegistry)}, {"deleted", "false"}}}
 	event.ID[0] = 1
-	ledger := f74aDeliveryLedger{store: outbox}
+	ledger := f74aTestLedger(t, outbox, gonostr.PubKey{})
 	hash, err := f74aSourceHash(pkg)
 	require.NoError(t, err)
 	require.NoError(t, ledger.stageWithHash(event, hash))
+	f74aTestACK(t, outbox, event)
 	require.NoError(t, ledger.accepted(event))
 	proved, err := ledger.prove(context.Background(), "semantic_packages", pkg)
 	require.NoError(t, err)
@@ -148,12 +168,11 @@ func TestF74aObservationMetadataChangeKeepsAcceptedProjectionProof(t *testing.T)
 	defer store.Close()
 	_, err = store.SaveEvent(event)
 	require.NoError(t, err)
-	ledger := f74aDeliveryLedger{store: outbox, author: secret.Public()}
+	ledger := f74aTestLedger(t, outbox, secret.Public())
 	require.NoError(t, ledger.stageWithHash(event, hash))
 	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: event, Target: repository.NostrPublishTargetControlPlane})
 	require.NoError(t, err)
-	_, err = outbox.CommitRound(event.ID, localstore.OutboxRound{Delivered: true, State: localstore.OutboxPublished, At: time.Now()})
-	require.NoError(t, err)
+	f74aTestACK(t, outbox, event)
 	require.NoError(t, ledger.accepted(event))
 	changed := *obs
 	changed.Metadata = map[string]any{"password": "new secret"}
@@ -188,7 +207,7 @@ func TestF74aLegacyTombstoneIgnoresMutablePackageFields(t *testing.T) {
 	store, err := localstore.Open(filepath.Join(dir, "events.bolt"))
 	require.NoError(t, err)
 	defer store.Close()
-	ledger := f74aDeliveryLedger{store: outbox, author: secret.Public()}
+	ledger := f74aTestLedger(t, outbox, secret.Public())
 	history := nostradapter.NewLocalEventRepository(store, nil).Authored(secret.Public().Hex())
 	initialPub := nostradapter.NewPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
 		nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostradapter.WithLocalOutbox(outbox, store))
@@ -217,8 +236,7 @@ func TestF74aLegacyTombstoneIgnoresMutablePackageFields(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, hash, receipt.SourceHash, "import publisher must stage the tombstone identity")
-	_, err = outbox.CommitRound(event.ID, localstore.OutboxRound{Delivered: true, State: localstore.OutboxPublished, At: time.Now()})
-	require.NoError(t, err)
+	f74aTestACK(t, outbox, event)
 	require.NoError(t, ledger.accepted(event))
 	changed := *pkg
 	changed.Name, changed.Version, changed.PURL = "new", "2", "pkg:example/new@2"
@@ -291,7 +309,7 @@ func TestF74aOCKEnvelopesMustAllBeQuorumAccepted(t *testing.T) {
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
 	require.NoError(t, err)
 	defer outbox.Close()
-	ledger := f74aDeliveryLedger{store: outbox}
+	ledger := f74aTestLedger(t, outbox, gonostr.PubKey{})
 	ds := []string{"org-key:fleet:v3:service", "org-key:fleet:v3:owner"}
 	manifest := f74aOCKManifest{Version: 3, KeyHash: "hash", Recipients: []string{"service", "owner"}, Coordinates: ds}
 	raw, err := json.Marshal(manifest)
@@ -304,12 +322,14 @@ func TestF74aOCKEnvelopesMustAllBeQuorumAccepted(t *testing.T) {
 	}
 	service, owner := makeEvent(1, ds[0]), makeEvent(2, ds[1])
 	require.NoError(t, ledger.stage(service))
+	f74aTestACK(t, outbox, service)
 	require.NoError(t, ledger.accepted(service))
 	require.NoError(t, ledger.stage(owner))
 	ready, err := ledger.proveOCK(ctx, outbox, 3)
 	require.NoError(t, err)
 	require.False(t, ready)
 	require.NoError(t, ledger.abandoned(owner))
+	f74aTestACK(t, outbox, owner)
 	ready, err = ledger.proveOCK(ctx, outbox, 3)
 	require.NoError(t, err)
 	require.False(t, ready)
@@ -327,7 +347,7 @@ func TestF74aOCKEnvelopesMustAllBeQuorumAccepted(t *testing.T) {
 		ready, err = ledger.proveOCK(ctx, outbox, 3)
 		require.NoError(t, err)
 		require.False(t, ready, "one accepted envelope must not prove multiple recipients")
-		_, err = f74aPrepareOCK(ctx, outbox, nil, nil, malformed.Recipients, gonostr.PubKey{})
+		_, err = f74aPrepareOCK(ctx, outbox, nil, nil, malformed.Recipients, gonostr.PubKey{}, "")
 		require.ErrorContains(t, err, "duplicates", "restart must reject a malformed manifest before rotating")
 	}
 	require.NoError(t, outbox.PutControlRecord(f74aOCKManifestFamily, f74aOCKManifestID(gonostr.PubKey{}), raw))
@@ -367,7 +387,7 @@ func TestF74aTrackedPublisherHydratesOutboxOnlyCoordinate(t *testing.T) {
 	require.NoError(t, err)
 	raw := nostradapter.NewPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostradapter.WithLocalOutbox(outbox, store))
 	defer raw.Close()
-	ledger := f74aDeliveryLedger{store: outbox, author: secret.Public()}
+	ledger := f74aTestLedger(t, outbox, secret.Public())
 	history := nostradapter.NewLocalEventRepository(store, nil).Authored(secret.Public().Hex())
 	wrapped := f74aTrackedPublisher{Publisher: raw, ledger: ledger}
 	restarted := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), wrapped, history, zap.NewNop())
@@ -403,4 +423,233 @@ type f74aProjectionCapture struct{ events []gonostr.Event }
 func (c *f74aProjectionCapture) PublishProjection(_ context.Context, ev gonostr.Event, _ string, _ *uuid.UUID) error {
 	c.events = append(c.events, ev)
 	return nil
+}
+
+func TestF74aPolicyScopedReceiptRestartReverificationAndRefusal(t *testing.T) {
+	ctx := context.Background()
+	secret, err := gonostr.SecretKeyFromHex("0000000000000000000000000000000000000000000000000000000000000001")
+	require.NoError(t, err)
+	oldPolicy, err := f74aPolicyID(secret.Public(), []string{"wss://a.example", "wss://b.example"}, 1)
+	require.NoError(t, err)
+	reordered, err := f74aPolicyID(secret.Public(), []string{"wss://b.example", "wss://a.example"}, 1)
+	require.NoError(t, err)
+	require.Equal(t, oldPolicy, reordered)
+	newPolicy, err := f74aPolicyID(secret.Public(), []string{"wss://a.example", "wss://c.example"}, 1)
+	require.NoError(t, err)
+	require.NotEqual(t, oldPolicy, newPolicy)
+	newQuorum, err := f74aPolicyID(secret.Public(), []string{"wss://a.example", "wss://b.example"}, 2)
+	require.NoError(t, err)
+	require.NotEqual(t, oldPolicy, newQuorum)
+	other, err := gonostr.SecretKeyFromHex("0000000000000000000000000000000000000000000000000000000000000002")
+	require.NoError(t, err)
+	otherSigner, err := f74aPolicyID(other.Public(), []string{"wss://a.example", "wss://b.example"}, 1)
+	require.NoError(t, err)
+	require.NotEqual(t, oldPolicy, otherSigner)
+
+	dir := t.TempDir()
+	outboxPath := filepath.Join(dir, "outbox.bolt")
+	eventsPath := filepath.Join(dir, "events.bolt")
+	outbox, err := localstore.OpenOutbox(outboxPath)
+	require.NoError(t, err)
+	events, err := localstore.Open(eventsPath)
+	require.NoError(t, err)
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module"}
+	ev := gonostr.Event{Kind: gonostr.Kind(nostradapter.KindCASControlState), CreatedAt: gonostr.Now(), Tags: gonostr.Tags{{"d", nostradapter.SBOMPackageDTag(pkg)}, {"legacy_kind", itoa(nostradapter.KindSBOMPackageRegistry)}, {"deleted", "false"}}, Content: "{}"}
+	require.NoError(t, ev.Sign(secret))
+	_, err = events.SaveEvent(ev)
+	require.NoError(t, err)
+	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: ev, Target: repository.NostrPublishTargetControlPlane, EnqueuedAt: time.Now().Add(-26 * time.Hour)})
+	require.NoError(t, err)
+	ledger := f74aDeliveryLedger{store: outbox, outbox: outbox, events: events, author: secret.Public(), policyID: oldPolicy}
+	hash, err := f74aSourceHash(pkg)
+	require.NoError(t, err)
+	require.NoError(t, ledger.stageWithHash(ev, hash))
+	_, err = outbox.CommitPublisherRound(ev.ID, localstore.OutboxRound{Target: repository.NostrPublishTargetControlPlane, Delivered: true, State: localstore.OutboxPublished, At: time.Now().Add(-25 * time.Hour), Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://a.example", "wss://b.example"}, Required: 1}, Relays: map[string]localstore.RelayDelivery{"wss://a.example": {Accepted: true}}})
+	require.NoError(t, err)
+	require.NoError(t, ledger.accepted(ev))
+	proved, err := ledger.prove(ctx, "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.True(t, proved)
+	removed, err := outbox.Prune(time.Now().Add(-24*time.Hour), time.Now().Add(-7*24*time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	require.NoError(t, outbox.Close())
+	require.NoError(t, events.Close())
+	outbox, err = localstore.OpenOutbox(outboxPath)
+	require.NoError(t, err)
+	defer outbox.Close()
+	events, err = localstore.Open(eventsPath)
+	require.NoError(t, err)
+	defer events.Close()
+	ledger = f74aDeliveryLedger{store: outbox, outbox: outbox, events: events, author: secret.Public(), policyID: reordered}
+	proved, err = ledger.prove(ctx, "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.True(t, proved, "relay ordering alone must not invalidate durable proof")
+	ledger.policyID = newPolicy
+	proved, err = ledger.prove(ctx, "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.False(t, proved, "old policy ACKs must not prove new policy")
+	attempts := 0
+	ledger.reverify = func(_ context.Context, got gonostr.Event) (bool, error) {
+		attempts++
+		require.Equal(t, ev.ID, got.ID)
+		return false, fmt.Errorf("relay refused")
+	}
+	proved, err = ledger.prove(ctx, "semantic_packages", pkg)
+	require.ErrorContains(t, err, "relay refused")
+	require.False(t, proved)
+	ledger.reverify = func(_ context.Context, got gonostr.Event) (bool, error) {
+		attempts++
+		require.Equal(t, ev.ID, got.ID)
+		return true, nil
+	}
+	proved, err = ledger.prove(ctx, "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.True(t, proved)
+	require.Equal(t, 2, attempts)
+	proved, err = ledger.prove(ctx, "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.True(t, proved)
+	require.Equal(t, 2, attempts, "reverification proof must survive subsequent reads")
+
+	rec, found, err := ledger.receipt(nostradapter.KindSBOMPackageRegistry, nostradapter.SBOMPackageDTag(pkg))
+	require.NoError(t, err)
+	require.True(t, found)
+	rec.PolicyID = "" // historical unscoped record
+	raw, err := json.Marshal(rec)
+	require.NoError(t, err)
+	require.NoError(t, outbox.PutControlRecord(f74aReceiptFamily, f74aReceiptKey(secret.Public(), nostradapter.KindSBOMPackageRegistry, nostradapter.SBOMPackageDTag(pkg)), raw))
+	ledger.reverify = nil
+	proved, err = ledger.prove(ctx, "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.False(t, proved, "legacy unscoped receipts are not completion proof")
+	ledger.reverify = func(context.Context, gonostr.Event) (bool, error) { attempts++; return true, nil }
+	proved, err = ledger.prove(ctx, "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.True(t, proved, "legacy receipt may be upgraded only by fresh signed-event ACK")
+	rec.PolicyID = ""
+	raw, err = json.Marshal(rec)
+	require.NoError(t, err)
+	require.NoError(t, outbox.PutControlRecord(f74aReceiptFamily, f74aReceiptKey(secret.Public(), nostradapter.KindSBOMPackageRegistry, nostradapter.SBOMPackageDTag(pkg)), raw))
+	require.NoError(t, events.DeleteEvent(ev.ID))
+	proved, err = ledger.prove(ctx, "semantic_packages", pkg)
+	require.ErrorContains(t, err, "not retained for relay-policy re-verification")
+	require.False(t, proved)
+}
+
+func TestF74aPolicyReverificationRequiresCurrentRelayQuorum(t *testing.T) {
+	ctx := context.Background()
+	ev := gonostr.Event{}
+	relays := []string{"wss://a.example", "wss://b.example"}
+	refused := func(_ context.Context, _ gonostr.Event, got []string) ([]nostradapter.PublishResult, error) {
+		require.Equal(t, relays, got)
+		return []nostradapter.PublishResult{{RelayURL: relays[0], Accepted: true}, {RelayURL: relays[1], Reason: "blocked: policy"}}, nil
+	}
+	proved, err := f74aReverifySignedEvent(ctx, ev, relays, 2, refused)
+	require.ErrorContains(t, err, "1 of 2")
+	require.False(t, proved)
+	proved, err = f74aReverifySignedEvent(ctx, ev, relays, 1, refused)
+	require.NoError(t, err)
+	require.True(t, proved)
+	duplicate := func(_ context.Context, _ gonostr.Event, _ []string) ([]nostradapter.PublishResult, error) {
+		return []nostradapter.PublishResult{{RelayURL: relays[0], Reason: "duplicate: already have this"}, {RelayURL: relays[1], Accepted: true}}, nil
+	}
+	proved, err = f74aReverifySignedEvent(ctx, ev, relays, 2, duplicate)
+	require.NoError(t, err)
+	require.True(t, proved)
+	outside := func(_ context.Context, _ gonostr.Event, _ []string) ([]nostradapter.PublishResult, error) {
+		return []nostradapter.PublishResult{{RelayURL: "wss://other.example", Accepted: true}}, nil
+	}
+	proved, err = f74aReverifySignedEvent(ctx, ev, relays, 1, outside)
+	require.Error(t, err)
+	require.False(t, proved)
+}
+
+func TestF74aPendingReceiptCannotInheritHistoricalACKOnPolicyChange(t *testing.T) {
+	ctx := context.Background()
+	secret, err := gonostr.SecretKeyFromHex("0000000000000000000000000000000000000000000000000000000000000001")
+	require.NoError(t, err)
+	oldPolicy, err := f74aPolicyID(secret.Public(), []string{"wss://old.example"}, 1)
+	require.NoError(t, err)
+	newPolicy, err := f74aPolicyID(secret.Public(), []string{"wss://new.example"}, 1)
+	require.NoError(t, err)
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "pending"}
+	ev := gonostr.Event{Kind: gonostr.Kind(nostradapter.KindCASControlState), CreatedAt: gonostr.Now(), Tags: gonostr.Tags{{"d", nostradapter.SBOMPackageDTag(pkg)}, {"legacy_kind", itoa(nostradapter.KindSBOMPackageRegistry)}, {"deleted", "false"}}, Content: "{}"}
+	require.NoError(t, ev.Sign(secret))
+	hash, err := f74aSourceHash(pkg)
+	require.NoError(t, err)
+	oldLedger := f74aDeliveryLedger{store: outbox, outbox: outbox, author: secret.Public(), policyID: oldPolicy}
+	require.NoError(t, oldLedger.stageWithHash(ev, hash))
+	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: ev, Target: repository.NostrPublishTargetControlPlane})
+	require.NoError(t, err)
+	// A resumed publisher can count a historical relay ACK in its new round.
+	_, err = outbox.CommitPublisherRound(ev.ID, localstore.OutboxRound{Target: repository.NostrPublishTargetControlPlane, Delivered: true, State: localstore.OutboxPublished, Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://new.example"}, Required: 1}, Relays: map[string]localstore.RelayDelivery{"wss://new.example": {Accepted: true}}})
+	require.NoError(t, err)
+	ledger := f74aDeliveryLedger{store: outbox, outbox: outbox, author: secret.Public(), policyID: newPolicy}
+	require.NoError(t, ledger.accepted(ev))
+	proved, err := ledger.prove(ctx, "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.False(t, proved, "resumed callback cannot upgrade a staged receipt from another policy")
+	ledger.reverify = func(_ context.Context, got gonostr.Event) (bool, error) {
+		require.Equal(t, ev.ID, got.ID)
+		return true, nil
+	}
+	proved, err = ledger.prove(ctx, "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.True(t, proved)
+}
+
+func TestF74aOCKManifestReverifiesEveryEnvelopeAfterPolicyChange(t *testing.T) {
+	ctx := context.Background()
+	secret, err := gonostr.SecretKeyFromHex("0000000000000000000000000000000000000000000000000000000000000001")
+	require.NoError(t, err)
+	oldPolicy, err := f74aPolicyID(secret.Public(), []string{"wss://old.example"}, 1)
+	require.NoError(t, err)
+	newPolicy, err := f74aPolicyID(secret.Public(), []string{"wss://new.example"}, 1)
+	require.NoError(t, err)
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	ledger := f74aDeliveryLedger{store: outbox, outbox: outbox, author: secret.Public(), policyID: oldPolicy}
+	ds := []string{"org-key:fleet:v3:service", "org-key:fleet:v3:owner"}
+	manifest := f74aOCKManifest{Version: 3, KeyHash: "hash", Recipients: []string{"service", "owner"}, Coordinates: ds, PolicyID: oldPolicy}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, outbox.PutControlRecord(f74aOCKManifestFamily, f74aOCKManifestID(secret.Public()), raw))
+	for _, d := range ds {
+		ev := gonostr.Event{Kind: gonostr.Kind(nostradapter.KindCASControlState), CreatedAt: gonostr.Now(), Tags: gonostr.Tags{{"d", d}, {"legacy_kind", itoa(nostradapter.KindOrgKeyEnvelope)}, {"deleted", "false"}}, Content: d}
+		require.NoError(t, ev.Sign(secret))
+		_, err := outbox.Enqueue(localstore.OutboxEntry{Event: ev, Target: repository.NostrPublishTargetControlPlane})
+		require.NoError(t, err)
+		require.NoError(t, ledger.stage(ev))
+		_, err = outbox.CommitPublisherRound(ev.ID, localstore.OutboxRound{Target: repository.NostrPublishTargetControlPlane, Delivered: true, State: localstore.OutboxPublished, Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://old.example"}, Required: 1}, Relays: map[string]localstore.RelayDelivery{"wss://old.example": {Accepted: true}}})
+		require.NoError(t, err)
+		require.NoError(t, ledger.accepted(ev))
+	}
+	ready, err := ledger.proveOCK(ctx, outbox, 3)
+	require.NoError(t, err)
+	require.True(t, ready)
+	ledger.policyID = newPolicy
+	ledger.reverify = func(context.Context, gonostr.Event) (bool, error) { return false, fmt.Errorf("new relay refused") }
+	ready, err = ledger.proveOCK(ctx, outbox, 3)
+	require.ErrorContains(t, err, "new relay refused")
+	require.False(t, ready)
+	stored, err := f74aLoadOCKManifest(outbox, secret.Public())
+	require.NoError(t, err)
+	require.Equal(t, oldPolicy, stored.PolicyID, "refusal must not upgrade OCK manifest")
+	verified := make(map[string]bool)
+	ledger.reverify = func(_ context.Context, ev gonostr.Event) (bool, error) {
+		verified[f74aEventTag(ev, "d")] = true
+		return true, nil
+	}
+	ready, err = ledger.proveOCK(ctx, outbox, 3)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Len(t, verified, 2)
+	stored, err = f74aLoadOCKManifest(outbox, secret.Public())
+	require.NoError(t, err)
+	require.Equal(t, newPolicy, stored.PolicyID)
 }

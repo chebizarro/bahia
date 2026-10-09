@@ -7,6 +7,19 @@ import. A populated SQL index does not authorize canonical publication. Run
 any legacy import only through an explicit, separately admitted migration
 command after a dry-run census; if the candidate image lacks that governed
 command, stop rather than using daemon restart as a substitute.
+
+The explicit `bahia-migrate --config "$CONFIG" --confirm-quiesced f74a-import`
+requires the daemon and all SQL writers to be stopped. It uses the daemon's
+exclusive local event store and outbox. Its completion marker, F74a delivery
+receipts, and fleet OCK manifest are scoped to the service signer, effective
+control-plane write-relay set, and publish quorum. Relay ordering does not
+change that scope. Changing the write set or quorum reopens completion and
+requires fresh relay `OK` proof for the retained signed events; historical
+ACK flags alone do not suffice. A policy-unscoped legacy receipt is not proof.
+If the signed event is no longer retained, or a current relay refuses it,
+the import remains incomplete. Restore the original local event store/outbox
+from a verified backup or resolve the relay refusal before retrying; do not
+edit the receipt or completion marker to bypass verification.
 **Confirmed deletion and live compaction are not available.** The shipped
 `f74a-census` and `f74a-compact --cutoff` actions are read-only;
 `f74a-compact --confirm` is rejected. There is no `--batch-size` or

@@ -38,6 +38,10 @@ func runF74aImport(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, 
 	if len(relays) == 0 {
 		return reportError(stderr, "f74a-import requires control-plane relays")
 	}
+	policyID, err := f74aPolicyID(author, relays, cfg.Nostr.PublishQuorum)
+	if err != nil {
+		return reportError(stderr, "f74a-import relay policy: %v", err)
+	}
 	logger, err := zap.NewProduction()
 	if err != nil {
 		return reportError(stderr, "creating logger: %v", err)
@@ -62,7 +66,10 @@ func runF74aImport(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, 
 	pub := nostradapter.NewPublisher(cfg.Nostr, poolRelays, nil, logger,
 		nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane),
 		nostradapter.WithLocalOutbox(outbox, store))
-	ledger := f74aDeliveryLedger{store: outbox, author: author}
+	ledger := f74aDeliveryLedger{store: outbox, author: author, policyID: policyID, outbox: outbox, events: store}
+	ledger.reverify = func(ctx context.Context, ev gonostr.Event) (bool, error) {
+		return f74aReverifySignedEvent(ctx, ev, relays, cfg.Nostr.PublishQuorum, poolRelays.PublishToRelaysWithResults)
+	}
 	pub.OnDelivered(func(ev gonostr.Event) {
 		if err := ledger.accepted(ev); err != nil {
 			logger.Error("persist F74a relay acceptance", zap.Error(err))
@@ -112,7 +119,7 @@ func runF74aImport(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, 
 		if err != nil {
 			return reportError(stderr, "read fleet OCK recipients: %v", err)
 		}
-		manifest, err := f74aPrepareOCK(ctx, outbox, ock, wraps, recipients, author)
+		manifest, err := f74aPrepareOCK(ctx, outbox, ock, wraps, recipients, author, policyID)
 		if err != nil {
 			return reportError(stderr, "prepare F74a fleet OCK: %v", err)
 		}
@@ -151,6 +158,7 @@ func runF74aImport(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, 
 			}
 			return ledger.proveOCK(ctx, outbox, rec.OCKVersion)
 		},
+		PolicyID: policyID,
 	})
 	if err := runner.RunMigration(ctx); err != nil {
 		snap := runner.Snapshot()
