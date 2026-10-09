@@ -739,7 +739,9 @@ func RuntimeStateRecord(state *domain.EnvironmentServiceState, observation *doma
 	observedHash := ""
 	if observation != nil {
 		content["observation_id"] = observation.ID.String()
-		content["observed_host"] = observation.ObservedHost
+		if host := publicObservedHost(observation.ObservedHost); host != "" {
+			content["observed_host"] = host
+		}
 		content["observed_container_id"] = observation.ObservedContainerID
 		content["observed_image_repo"] = observation.ObservedImageRepo
 		content["observed_version"] = observation.ObservedVersion
@@ -751,7 +753,11 @@ func RuntimeStateRecord(state *domain.EnvironmentServiceState, observation *doma
 		if observedHash == "" {
 			observedHash = observation.NormalizedHash
 		}
-		content["health_status"] = string(observation.HealthStatus)
+		if health := string(observation.HealthStatus); publicRuntimeHealth(health) {
+			content["health_status"] = health
+		} else {
+			content["health_status"] = string(domain.HealthStatusUnknown)
+		}
 		content["observed_image_digest"] = observation.ObservedImageDigest
 		content["observed_at"] = formatTime(observation.ObservedAt)
 	}

@@ -2,6 +2,9 @@ package nostr
 
 import (
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -66,11 +69,74 @@ func publicRuntimeFailureMetadata(raw map[string]any) map[string]any {
 
 func publicRuntimeHealth(value string) bool {
 	switch domain.HealthStatus(value) {
-	case domain.HealthStatusUnknown, domain.HealthStatusStarting, domain.HealthStatusHealthy, domain.HealthStatusUnhealthy:
+	case domain.HealthStatusUnknown, domain.HealthStatusStarting, domain.HealthStatusHealthy, domain.HealthStatusUnhealthy, domain.HealthStatusStopped:
 		return true
 	default:
 		return false
 	}
+}
+
+// publicObservedHost keeps only a transport endpoint's scheme and host, never
+// URL userinfo, path, query, or fragment. Plain runtime endpoint labels are
+// retained only when they are simple identifiers rather than free-form text.
+func publicObservedHost(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		switch parsed.Scheme {
+		case "http", "https", "tcp":
+			host := parsed.Hostname()
+			if host == "" || !publicHostName(host) {
+				return ""
+			}
+			port := parsed.Port()
+			if port != "" {
+				number, err := strconv.Atoi(port)
+				if err != nil || number < 1 || number > 65535 {
+					return ""
+				}
+				return parsed.Scheme + "://" + net.JoinHostPort(host, port)
+			}
+			if strings.HasSuffix(parsed.Host, ":") {
+				return ""
+			}
+			if strings.Contains(host, ":") {
+				return parsed.Scheme + "://[" + host + "]"
+			}
+			return parsed.Scheme + "://" + host
+		}
+		return ""
+	}
+	if len(raw) > 253 {
+		return ""
+	}
+	for _, ch := range raw {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+			(ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '_' ||
+			ch == ':' || ch == '[' || ch == ']') {
+			return ""
+		}
+	}
+	return raw
+}
+
+func publicHostName(host string) bool {
+	if strings.Contains(host, ":") {
+		return net.ParseIP(host) != nil
+	}
+	if len(host) == 0 || len(host) > 253 {
+		return false
+	}
+	for _, ch := range host {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+			(ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func publicRuntimeEvidence(raw string) string {
