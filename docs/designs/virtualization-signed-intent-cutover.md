@@ -1,9 +1,11 @@
 # Virtualization signed-intent cutover
 
-Normal daemon assembly keeps virtualization unavailable. It does not construct
+Normal daemon assembly and `NewVirtualization` both keep virtualization unavailable,
+even when every legacy dependency is supplied. Neither constructs
 its PostgreSQL journal projector or runtime, does not serve SQL-backed
 virtualization reads, and reports `virtualization_canonical_recovery=warn`
-when PostgreSQL or a virtualization provider is configured. Existing SQL
+when PostgreSQL or a virtualization provider is configured, even if PostgreSQL
+is unreachable. Existing SQL
 journal rows are preserved; they are not instructions to sign state or audit
 events. Previously signed events in the local outbox remain subject to the
 ordinary outbox recovery contract.

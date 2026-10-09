@@ -4,9 +4,16 @@ Bahia exposes typed virtualization hosts, immutable VM images, persistent VMs, e
 
 ## Availability
 
-Virtualization reads and mutations currently return unavailable during normal
-daemon operation. The PostgreSQL journal is retained but is not replayed into
-signed state or audit events at startup. When PostgreSQL or virtualization is
+Virtualization is suspended during normal daemon operation. Authorized HTTP
+read routes return the generic `503 virtualization unavailable` response when
+the database gate permits the route; with PostgreSQL unavailable, the database
+gate can return `503` first. Virtualization ContextVM methods are not registered,
+so calls return the transport's method-unregistered error rather than a
+virtualization acknowledgment. The method tables below describe the intended
+interface after signed-intent cutover, not currently usable endpoints.
+
+The PostgreSQL journal is retained but is not replayed into signed state or
+audit events at startup. When PostgreSQL or virtualization is
 configured, `/ready` reports `virtualization_canonical_recovery=warn` without
 blocking core relay readiness. Previously signed local outbox entries still
 follow ordinary outbox recovery. An operator-controlled, signed-intent cutover
@@ -46,7 +53,7 @@ Public DTOs separate desired power, observed runtime, drift, ownership, and gues
 
 ## Mutations and approval
 
-Registered ContextVM methods include `vm-image/register`, `persistent-vm/create`, `persistent-vm/register-adoption`, `persistent-vm/update`, `persistent-vm/operate`, `execution-plane/create`, `execution-plane/update`, `execution-plane/reconcile`, and `vm-operation/approve`, `approve-plan`, or `cancel`.
+The suspended ContextVM mutation interface is intended to include `vm-image/register`, `persistent-vm/create`, `persistent-vm/register-adoption`, `persistent-vm/update`, `persistent-vm/operate`, `execution-plane/create`, `execution-plane/update`, `execution-plane/reconcile`, and `vm-operation/approve`, `approve-plan`, or `cancel`.
 
 Writes require organization `deployments:write`, an allowed operator, current generation, and an idempotency key. Destructive or capacity-changing operations use a second authorized operator. The approval binds the exact request, resource generation, provider fingerprint, requester, and reason; it is single-use.
 

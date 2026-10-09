@@ -8,6 +8,7 @@ import (
 
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/auth"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/readmodel"
@@ -41,50 +42,20 @@ type Virtualization struct {
 	mu            sync.Mutex
 }
 
+// NewVirtualization deliberately leaves every legacy SQL-backed adapter
+// disconnected. A complete dependency set is not proof of a canonical signed
+// intent source; re-enabling it would let journal rows authorize publication.
 func NewVirtualization(deps VirtualizationDependencies) (*Virtualization, error) {
-	v := &Virtualization{organizations: deps.Organizations}
-	if deps.Repository == nil || deps.Store == nil || deps.Publisher == nil || deps.Bus == nil || deps.Organizations == nil || deps.CanonicalAuthor == "" {
-		// A partial assembly must not expose the SQL index as a read model or
-		// leave mutation adapters reachable without a canonical recovery source.
-		v.Handlers = &controlplane.VirtualizationHandlers{RBAC: deps.RBAC, CanonicalAuthor: deps.CanonicalAuthor}
-		return v, nil
-	}
-	v.Query = readmodel.VirtualizationQuery{Repository: deps.Repository}
-	v.Handlers = &controlplane.VirtualizationHandlers{Query: v.Query, RBAC: deps.RBAC, Persistent: deps.PersistentVM, Planes: deps.ExecutionPlane, CanonicalAuthor: deps.CanonicalAuthor}
-	p, err := readmodel.NewVirtualizationProjector(deps.Repository, deps.Store, deps.Publisher, deps.CanonicalAuthor)
-	if err != nil {
-		return nil, err
-	}
-	subscriber, ok := deps.Bus.(events.ErrorSubscriber)
-	if !ok {
-		p.Close()
-		return nil, readmodel.ErrVirtualizationUnavailable
-	}
-	if err := p.Subscribe(subscriber); err != nil {
-		p.Close()
-		return nil, err
-	}
-	if deps.Services != nil {
-		r, err := newVirtualizationRuntime(deps, *deps.Services)
-		if err != nil {
-			p.Close()
-			return nil, err
-		}
-		v.runtime = r
-		if r.vmService != nil {
-			deps.PersistentVM = vmAdmission{r}
-		}
-		if r.planeService != nil {
-			deps.ExecutionPlane = planeAdmission{r}
-		}
-		v.Handlers.Persistent, v.Handlers.Planes = deps.PersistentVM, deps.ExecutionPlane
-	}
-	v.Metrics = telemetry.NewVirtualizationCollector(deps.Repository, deps.Organizations)
-	v.Metrics.Subscribe(subscriber)
-	v.Projector = p
-	v.Handlers.ProjectionReady = true
-	v.Handlers.ProjectionAvailable = p.Available
-	return v, nil
+	return &Virtualization{
+		Handlers: &controlplane.VirtualizationHandlers{RBAC: deps.RBAC, CanonicalAuthor: deps.CanonicalAuthor},
+	}, nil
+}
+
+// virtualizationSuspensionRelevant uses configuration, not database connection
+// success: a failed PostgreSQL connection must not hide the suspension warning.
+func virtualizationSuspensionRelevant(cfg *config.Config, dbAvailable bool) bool {
+	return dbAvailable || cfg.DB.Host != "" || cfg.DB.Name != "" ||
+		cfg.Virtualization.PersistentVM.Enabled || len(cfg.Virtualization.PlaneEndpoints) > 0
 }
 
 // registerVirtualizationSuspendedHealth reports the missing signed-intent

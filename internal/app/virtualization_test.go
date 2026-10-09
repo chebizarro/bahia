@@ -8,17 +8,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"testing/synctest"
-	"time"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/auth"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
-	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/readmodel"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
@@ -108,73 +106,6 @@ func (p vmAppPublisher) PublishSignedEvent(ctx context.Context, e *nostr.Event) 
 	return err
 }
 
-type vmAppService struct {
-	repo *vmAppRepo
-	bus  events.Publisher
-}
-
-func (s vmAppService) MutatePersistentVM(ctx context.Context, p controlplane.VirtualizationPrincipal, _ string, m controlplane.VirtualizationMutation) (controlplane.VirtualizationAdmission, error) {
-	v := domain.PersistentVMDeployment{VirtualizationResourceMeta: domain.VirtualizationResourceMeta{SchemaVersion: 1, ID: m.ID, OrgID: p.OrgID, Generation: 1}, LifecycleClass: domain.VMLifecyclePersistent, Provider: domain.VMProviderLibvirt, Purpose: domain.VMPurposeDesktop, DesiredPower: domain.VMDesiredRunning}
-	document, _ := json.Marshal(v)
-	s.repo.mu.Lock()
-	s.repo.change = &repository.VirtualizationResourceChange{SchemaVersion: 1, Sequence: 1, OrgID: p.OrgID, ResourceKind: domain.PersistentVMResource, ResourceID: m.ID, Generation: 1, ChangeType: "created", Document: document, OccurredAt: time.Now()}
-	s.repo.mu.Unlock()
-	s.bus.Publish(ctx, events.Event{Type: events.EventVirtualizationResourceChanged, Data: events.VirtualizationChange{OrgID: p.OrgID.String(), ResourceID: m.ID.String()}})
-	return controlplane.VirtualizationAdmission{ResourceID: m.ID, OperationID: uuid.New(), Generation: 1}, nil
-}
-func TestVirtualizationCompositionAdmissionProjectionAndShutdown(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		org, id := uuid.New(), uuid.New()
-		repo := &vmAppRepo{}
-		bus := events.NewInProcessPublisher(zap.NewNop())
-		signer := keyer.NewPlainKeySigner([32]byte{2})
-		key, err := signer.GetPublicKey(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		store := &vmAppStore{InMemoryNostrEventRepository: repositorytest.NewInMemoryNostrEventRepository(), checkpoint: make(chan struct{}, 1)}
-		v, err := NewVirtualization(VirtualizationDependencies{Repository: repo, PersistentVM: vmAppService{repo, bus}, RBAC: auth.NewRBAC(vmAppMembers{org}), Bus: bus, Store: store, Publisher: vmAppPublisher{store, signer}, Organizations: vmAppOrganizations{org}, CanonicalAuthor: key.Hex()})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer v.Close()
-		done := make(chan error, 1)
-		go func() { done <- v.Run(ctx) }()
-		// Live bus projection can checkpoint before Run finishes startup recovery.
-		// Wait for Run's steady-state cancellation wait before admitting the mutation.
-		synctest.Wait()
-		select {
-		case err := <-done:
-			t.Fatalf("Run exited before admission: %v", err)
-		default:
-		}
-		payload, _ := json.Marshal(controlplane.VirtualizationMutation{OrgID: org, ID: id})
-		response, err := v.Handlers.Handle(ctx, "persistent-vm/create", controlplane.ContextVMRequest{Event: &nostr.Event{PubKey: key}, RPC: controlplane.ContextVMJSONRPCRequest{Params: payload}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if response.(controlplane.VirtualizationAcknowledgment).StateDTag != "persistent-vm:"+id.String() {
-			t.Fatal(response)
-		}
-		<-store.checkpoint
-		states, err := store.ListByKind(ctx, kinds.CASControlState, 100)
-		if err != nil || len(states) != 1 {
-			t.Fatalf("projection %d %v", len(states), err)
-		}
-		if !strings.Contains(states[0].Content, id.String()) {
-			t.Fatal("projection identity")
-		}
-		cancel()
-		if err := <-done; err != nil {
-			t.Fatal(err)
-		}
-		if err := v.Projector.Recover(context.Background(), org); !errors.Is(err, context.Canceled) {
-			t.Fatal(err)
-		}
-	})
-}
 func TestVirtualizationCompositionMissingDependenciesFailClosed(t *testing.T) {
 	v, err := NewVirtualization(VirtualizationDependencies{})
 	if err != nil {
@@ -223,6 +154,7 @@ func TestVirtualizationIncompleteCanonicalAssemblyRejectsSQLBeforeSideEffects(t 
 		{name: "postgres absent", store: true, publisher: true},
 		{name: "postgres divergent", journal: true, publisher: true},
 		{name: "local outbox interrupted", journal: true, store: true},
+		{name: "all legacy dependencies supplied", journal: true, store: true, publisher: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := &vmAppRepo{}
@@ -254,7 +186,7 @@ func TestVirtualizationIncompleteCanonicalAssemblyRejectsSQLBeforeSideEffects(t 
 			}
 			defer v.Close()
 			if v.Projector != nil || v.Handlers.ProjectionReady {
-				t.Fatal("partial SQL assembly became available")
+				t.Fatal("legacy SQL assembly became available")
 			}
 			payload, err := json.Marshal(controlplane.VirtualizationMutation{OrgID: org, ID: id})
 			if err != nil {
@@ -299,5 +231,25 @@ func TestVirtualizationSuspensionIsVisibleButDoesNotGateCoreReadiness(t *testing
 	}
 	if !found {
 		t.Fatal("missing virtualization suspension warning")
+	}
+}
+
+func TestVirtualizationSuspensionUsesConfigurationWhenPostgresUnavailable(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cfg       config.Config
+		available bool
+		want      bool
+	}{
+		{name: "postgres configured but absent", cfg: config.Config{DB: config.DBConfig{Host: "db.internal", Name: "bahia"}}, want: true},
+		{name: "virtualization configured without postgres", cfg: config.Config{Virtualization: config.VirtualizationConfig{PersistentVM: config.PersistentVMConfig{Enabled: true}}}, want: true},
+		{name: "postgres available", available: true, want: true},
+		{name: "no postgres or virtualization", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := virtualizationSuspensionRelevant(&tc.cfg, tc.available); got != tc.want {
+				t.Fatalf("warning relevant = %t, want %t", got, tc.want)
+			}
+		})
 	}
 }

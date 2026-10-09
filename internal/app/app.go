@@ -1851,7 +1851,7 @@ func New(cfg *config.Config) (*App, error) {
 	if err := cfg.Virtualization.Validate(); err != nil {
 		return nil, fmt.Errorf("configure virtualization: %w", err)
 	}
-	if dbAvailable || cfg.Virtualization.PersistentVM.Enabled || len(cfg.Virtualization.PlaneEndpoints) > 0 {
+	if virtualizationSuspensionRelevant(cfg, dbAvailable) {
 		logger.Warn("virtualization suspended: canonical signed-intent recovery is unavailable")
 		registerVirtualizationSuspendedHealth(healthProvider)
 	}
