@@ -3,6 +3,8 @@ package nostr
 import (
 	"context"
 	"encoding/json"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -111,6 +113,17 @@ type Subscriber struct {
 	// caughtUp is set once every relay has either finished its first
 	// catch-up or failed its first attempt, and at least one finished.
 	caughtUp atomic.Bool
+
+	// The Loom proof is deliberately stricter than caughtUp. A status absence
+	// is actionable only while every configured relay's persisted 30100 stream
+	// has completed both catch-up and its live REQ's EOSE.
+	loomRelays     []string
+	loomProofMu    sync.RWMutex
+	loomProof      map[string]uint64
+	loomRunning    bool
+	loomSubscribed bool
+	loomReady      chan struct{}
+	loomReadyOnce  sync.Once
 }
 
 // AuthorizedAuthorScopes configures operator pubkeys by control-plane scope.
@@ -126,6 +139,14 @@ type SubscriberOption func(*Subscriber)
 // WithKinds overrides the default set of inbound event kinds.
 func WithKinds(kinds []int) SubscriberOption {
 	return func(s *Subscriber) { s.kinds = kinds }
+}
+
+// WithLoomStatusRelays declares the worker-status publication boundary. An
+// empty boundary cannot prove absence, even if other interop relays answer.
+func WithLoomStatusRelays(relays []string) SubscriberOption {
+	return func(s *Subscriber) {
+		s.loomRelays = normalizeRelayURLs(relays)
+	}
 }
 
 // WithHandler adds a callback invoked for each received event.
@@ -233,6 +254,7 @@ func NewSubscriber(
 		sync:            DefaultInboundSyncConfig(),
 		now:             func() time.Time { return time.Now().UTC() },
 		newRelayBackoff: DefaultBackoff,
+		loomReady:       make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -249,6 +271,45 @@ func (s *Subscriber) Name() string { return "nostr-subscriber" }
 // either caught up or failed its first attempt, and at least one caught up.
 func (s *Subscriber) IsCaughtUp() bool {
 	return s.caughtUp.Load()
+}
+
+// LoomStatusReadySignal closes on the first complete 30100 catch-up. Unlike
+// this one-shot wakeup, LoomStatusComplete must be checked before every use:
+// a relay can drop, refuse a REQ, or join the configured set later.
+func (s *Subscriber) LoomStatusReadySignal() <-chan struct{} { return s.loomReady }
+
+// LoomStatusComplete proves that the configured Loom publication relays and
+// every current interop relay completed durable 30100 replay and live EOSE.
+// The broader set is conservative: worker status published to any relay in
+// the shared Loom client pool cannot be hidden by one unavailable relay.
+func (s *Subscriber) LoomStatusComplete() bool {
+	if s == nil || s.pool == nil || len(s.loomRelays) == 0 || !slices.Contains(s.kinds, KindLoomJobStatusUpdate) {
+		return false
+	}
+	configured := s.pool.URLs()
+	if len(configured) == 0 {
+		return false
+	}
+	set := make(map[string]struct{}, len(configured))
+	for _, relay := range configured {
+		set[relay] = struct{}{}
+	}
+	for _, relay := range s.loomRelays {
+		if _, ok := set[relay]; !ok {
+			return false
+		}
+	}
+	s.loomProofMu.RLock()
+	defer s.loomProofMu.RUnlock()
+	if !s.loomRunning || !s.loomSubscribed {
+		return false
+	}
+	for _, relay := range configured {
+		if epoch := s.pool.RelayEpoch(relay); epoch == 0 || s.loomProof[relay] != epoch {
+			return false
+		}
+	}
+	return true
 }
 
 type ingestOutcome int

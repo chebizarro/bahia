@@ -382,7 +382,12 @@ state replacement. Besides intent status (§3):
   `t=deployment.run.health`, `d=<run-uuid>`, `e=<loom-job-id>`,
   `status=stale|recovered`; content `bahia.deployment-run-health.v1`. A run
   is stale after `nostr.stale_run_after` (default `5m`) without a Loom
-  `30100` status.
+  `30100` status. Publication requires an explicit `loom.relays` worker-status
+  boundary and a fresh, durable `30100` catch-up plus live EOSE from every
+  configured interop relay. A dropped/refused relay, storage failure, relay
+  topology change, or incomplete same-second replay suspends publication
+  until the affected relay catches up again; prior EOSE readiness is not
+  reusable after restart.
 - **Security scans**: `domain=security`, `schema=bahia.status.security-scan.v1`,
   `d=security:scan:<run_id>`, `run`, `target_type`, `target_key_hash`,
   `status` ∈ `accepted|queued|running|completed|failed|cancelled|degraded`.

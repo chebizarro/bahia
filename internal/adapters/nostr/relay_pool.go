@@ -40,13 +40,16 @@ type RelayPool struct {
 	relayInfoCache      map[string]*nip11.RelayInformationDocument // NIP-11 info cache
 	health              *RelayHealthTracker
 	urls                []string
-	logger              *zap.Logger
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	privateKey          string // hex-encoded private key for NIP-42 AUTH (optional)
-	authSigner          nostr.Signer
-	authSignFunc        func(context.Context, *nostr.Event) error
-	connectRelay        func(context.Context, string, nostr.RelayOptions) (*nostr.Relay, error)
+	// relayEpoch changes when a URL is removed and re-added. A historical
+	// EOSE from the retired incarnation cannot prove the new subscription.
+	relayEpoch   map[string]uint64
+	logger       *zap.Logger
+	ctx          context.Context
+	cancel       context.CancelFunc
+	privateKey   string // hex-encoded private key for NIP-42 AUTH (optional)
+	authSigner   nostr.Signer
+	authSignFunc func(context.Context, *nostr.Event) error
+	connectRelay func(context.Context, string, nostr.RelayOptions) (*nostr.Relay, error)
 	// outboundAdmission is the fail-closed publication controller shared by
 	// every gateway in the process (see internal/nostrout).
 	outboundAdmission *nostrout.Admission
@@ -252,6 +255,7 @@ func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *R
 		relayInfoCache:            make(map[string]*nip11.RelayInformationDocument),
 		health:                    NewRelayHealthTracker(),
 		urls:                      normalizedURLs,
+		relayEpoch:                make(map[string]uint64, len(normalizedURLs)),
 		logger:                    logger,
 		ctx:                       ctx,
 		cancel:                    cancel,
@@ -267,6 +271,7 @@ func NewRelayPool(urls []string, logger *zap.Logger, opts ...RelayPoolOption) *R
 		relayInfoTimeout:          defaultRelayInfoTimeout,
 	}
 	for _, url := range normalizedURLs {
+		p.relayEpoch[url] = 1
 		p.health.GetOrCreate(url)
 		// Relays are held from the start and dialed on first use (or by
 		// Connect), so a publish or subscription before Connect still
@@ -334,6 +339,7 @@ func (p *RelayPool) ReconfigureRelayURLsContext(ctx context.Context, urls []stri
 		if _, exists := p.relays[url]; exists {
 			continue
 		}
+		p.relayEpoch[url]++
 		if retired, exists := p.retiredRelays[url]; exists {
 			p.relays[url] = retired
 			delete(p.retiredRelays, url)
@@ -2546,6 +2552,17 @@ func (p *RelayPool) URLs() []string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return cloneRelayURLs(p.urls)
+}
+
+// RelayEpoch identifies one configured URL's current topology incarnation.
+// Zero means that URL is no longer configured.
+func (p *RelayPool) RelayEpoch(relayURL string) uint64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if _, configured := p.relays[relayURL]; !configured {
+		return 0
+	}
+	return p.relayEpoch[relayURL]
 }
 
 // FetchRelayInfo fetches NIP-11 relay information document for the given relay URL.

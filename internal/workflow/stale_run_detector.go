@@ -58,6 +58,7 @@ type StaleRunDetector struct {
 	hydrated      bool
 	ready         <-chan struct{}
 	loomReady     <-chan struct{}
+	loomComplete  func() bool
 	author        string
 }
 
@@ -96,12 +97,25 @@ func (d *StaleRunDetector) SetReadiness(ready <-chan struct{}) { d.ready = ready
 // General bootstrap readiness does not include the optional Loom status group.
 func (d *StaleRunDetector) SetLoomStatusReadiness(ready <-chan struct{}) { d.loomReady = ready }
 
+// SetLoomStatusCompleteness supplies the revocable proof. A closed readiness
+// channel only wakes the detector; it cannot authorize later publications
+// after a relay drops or the configured relay set changes.
+func (d *StaleRunDetector) SetLoomStatusCompleteness(complete func() bool) {
+	d.loomComplete = complete
+}
+
+// LoomStatusComplete reports whether a signed stale-run transition may be
+// considered. It is evaluated anew before every scan, not latched at boot.
+func (d *StaleRunDetector) LoomStatusComplete() bool {
+	return d != nil && d.loomComplete != nil && d.loomComplete()
+}
+
 // SetCanonicalAuthor limits retained health transitions to this service signer.
 func (d *StaleRunDetector) SetCanonicalAuthor(author string) { d.author = author }
 
 // Run checks only after both run and Loom status history have caught up.
 func (d *StaleRunDetector) Run(ctx context.Context) error {
-	if d.loomReady == nil {
+	if d.loomReady == nil || d.loomComplete == nil {
 		return fmt.Errorf("deployment-run health unavailable: Loom kind-30100 catch-up is not configured")
 	}
 	if d.ready != nil {
@@ -130,6 +144,9 @@ func (d *StaleRunDetector) Run(ctx context.Context) error {
 }
 
 func (d *StaleRunDetector) checkAndLog(ctx context.Context) {
+	if !d.LoomStatusComplete() {
+		return
+	}
 	if err := d.check(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		d.logger.Warn("deployment run stale-status check failed", zap.Error(err))
 	}

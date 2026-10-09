@@ -704,13 +704,21 @@ func New(cfg *config.Config) (*App, error) {
 		staleRunDetector = workflow.NewStaleRunDetector(staleRunSource, auditEventRepo, nostrPub, cfg.Nostr.StaleRunAfter, logger)
 		staleRunDetector.SetCanonicalAuthor(servicePubkey)
 		bgManager.RegisterWithOptions(staleRunDetector, RunnerRequired(false))
-		logger.Warn("deployment-run stale health suspended: Loom kind-30100 catch-up is not configured")
+		logger.Info("deployment-run stale health awaits durable Loom kind-30100 catch-up on every configured relay")
 	}
 	healthProvider := NewHealthProvider(nil, bgManager)
 	if staleRunDetector != nil {
 		healthProvider.RegisterCheck("deployment_run_health", func() HealthCheck {
+			if staleRunDetector.LoomStatusComplete() {
+				return HealthCheck{Name: "deployment_run_health", Status: HealthStatusPass,
+					Message: "Loom kind-30100 status history and live subscriptions complete on configured relays"}
+			}
+			if len(cfg.Loom.Relays) == 0 {
+				return HealthCheck{Name: "deployment_run_health", Status: HealthStatusWarn,
+					Message: "stale-run publication suspended: loom.relays must define the worker status relay boundary"}
+			}
 			return HealthCheck{Name: "deployment_run_health", Status: HealthStatusWarn,
-				Message: "stale-run publication suspended until independent Loom kind-30100 EOSE catch-up is configured"}
+				Message: "stale-run publication suspended until every configured relay durably catches up Loom kind-30100 and its live REQ reaches EOSE"}
 		})
 	}
 	healthProvider.SetRelayQuorumConfig(RelayQuorumConfig{
@@ -2409,6 +2417,7 @@ func New(cfg *config.Config) (*App, error) {
 	// Nostr inbound subscriber: listens for Hive-CI, Loom, and Bahia events.
 	nostrSub := nostrAdapter.NewSubscriber(relayPool, pgNostrEventRepo, logger,
 		nostrAdapter.WithLocalStore(localEventStore),
+		nostrAdapter.WithLoomStatusRelays(cfg.Loom.Relays),
 		nostrAdapter.WithSelfAuthors(servicePubkey),
 		nostrAdapter.WithInboundSync(inboundSyncConfigScoped(cfg.Nostr.LocalStore, cfg.Nostr.ServiceRelays)),
 		// NIP-09 deletions from the control-plane authors reach the
@@ -2423,6 +2432,10 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithIngestionObserver(telemetryProvider),
 		nostrAdapter.WithAuthorizedAuthorScopes(controlPlaneSubscriberAuthorScopes(cfg, assistantIdentity)),
 	)
+	if staleRunDetector != nil {
+		staleRunDetector.SetLoomStatusReadiness(nostrSub.LoomStatusReadySignal())
+		staleRunDetector.SetLoomStatusCompleteness(nostrSub.LoomStatusComplete)
+	}
 	bgManager.RegisterWithOptions(nostrSub)
 
 	// NIP-23 docs publisher: syncs user-guide documentation to the sidecar relay

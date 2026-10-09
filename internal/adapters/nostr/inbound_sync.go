@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,24 @@ func (s *Subscriber) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	s.loomProofMu.Lock()
+	s.loomProof = make(map[string]uint64)
+	s.loomRunning = true
+	s.loomSubscribed = false
+	for _, filter := range filters {
+		for _, kind := range filter.filter.Kinds {
+			if int(kind) == KindLoomJobStatusUpdate && filter.persistent {
+				s.loomSubscribed = true
+			}
+		}
+	}
+	s.loomProofMu.Unlock()
+	defer func() {
+		s.loomProofMu.Lock()
+		s.loomRunning = false
+		clear(s.loomProof)
+		s.loomProofMu.Unlock()
+	}()
 	s.caughtUp.Store(false)
 	for _, observer := range s.ingestionObservers {
 		observer.ObserveSubscriptionStart()
@@ -104,7 +123,12 @@ func (s *Subscriber) Run(ctx context.Context) error {
 			// and start any newly configured relays.
 			startRelays()
 		case item := <-inbound:
-			s.consume(runCtx, item, tracker, progress)
+			s.consume(runCtx, item, tracker, progress, len(filters))
+			if item.op == opRelayGone {
+				// A relay removed and re-added before this item was consumed
+				// still needs a worker for its new topology incarnation.
+				startRelays()
+			}
 			if item.op == opRelayGaveUp && everyRelayGaveUp(progress) {
 				s.logger.Error("every relay refused the inbound subscription for good; inbound sync is idle until the relay set changes",
 					zap.Strings("relays", s.pool.URLs()))
@@ -124,6 +148,12 @@ func (s *Subscriber) Run(ctx context.Context) error {
 type relayProgress struct {
 	caughtUp bool
 	failed   bool
+	epoch    uint64
+	// live records which filters have answered EOSE on the live REQ opened
+	// after catch-up. Catch-up EOSE alone leaves a delivery gap.
+	live      map[string]bool
+	liveReady bool
+	dirty     bool
 	// gaveUp is set once the relay refused every filter for good; its
 	// worker has stopped.
 	gaveUp bool
@@ -155,6 +185,7 @@ const (
 type inboundItem struct {
 	op     inboundOp
 	relay  string
+	epoch  uint64
 	key    cursorKey
 	ev     *nostr.Event
 	floor  nostr.Timestamp
@@ -170,40 +201,97 @@ func sendInbound(ctx context.Context, out chan<- inboundItem, item inboundItem) 
 	}
 }
 
-func (s *Subscriber) consume(ctx context.Context, item inboundItem, tracker *cursorTracker, progress map[string]relayProgress) {
+func (s *Subscriber) consume(ctx context.Context, item inboundItem, tracker *cursorTracker, progress map[string]relayProgress, filterCount int) {
 	switch item.op {
 	case opEvent:
-		switch s.handleEvent(ctx, item.ev) {
+		outcome := s.handleEvent(ctx, item.ev)
+		switch outcome {
 		case ingestRejected:
 		case ingestFailed:
 			tracker.observe(item.key, item.ev, false)
+			state := progress[item.relay]
+			state.dirty = true
+			state.liveReady = false
+			progress[item.relay] = state
+			s.updateLoomProof(item.relay, state)
 		default:
 			tracker.observe(item.key, item.ev, true)
 		}
 	case opBegin:
 		tracker.begin(item.key)
+		state := progress[item.relay]
+		if state.caughtUp {
+			if state.live == nil {
+				state.live = make(map[string]bool, filterCount)
+			}
+			state.live[item.key.hash] = false
+			state.liveReady = false
+			progress[item.relay] = state
+			s.updateLoomProof(item.relay, state)
+		}
 	case opCommit:
 		tracker.commit(item.key, item.floor)
+		state := progress[item.relay]
+		if _, begun := state.live[item.key.hash]; begun && state.caughtUp {
+			state.live[item.key.hash] = true
+			state.liveReady = !state.dirty && len(state.live) == filterCount
+			for _, answered := range state.live {
+				state.liveReady = state.liveReady && answered
+			}
+			progress[item.relay] = state
+			s.updateLoomProof(item.relay, state)
+		}
 	case opCaughtUp:
 		state := progress[item.relay]
 		state.caughtUp = true
+		state.epoch = item.epoch
+		state.failed = false
+		state.live = nil
+		state.liveReady = false
 		progress[item.relay] = state
 		s.logger.Info("relay caught up", zap.String("relay", item.relay))
 		s.updateCaughtUp(progress)
+		s.updateLoomProof(item.relay, state)
 	case opRelayFailed:
 		state := progress[item.relay]
 		state.failed = true
+		state.caughtUp = false
+		state.live = nil
+		state.liveReady = false
+		state.dirty = false
 		progress[item.relay] = state
 		s.updateCaughtUp(progress)
+		s.updateLoomProof(item.relay, state)
 	case opRelayGone:
 		delete(progress, item.relay)
 		s.updateCaughtUp(progress)
+		s.updateLoomProof(item.relay, relayProgress{})
 	case opRelayGaveUp:
 		state := progress[item.relay]
 		state.failed = true
 		state.gaveUp = true
+		state.caughtUp = false
+		state.liveReady = false
 		progress[item.relay] = state
 		s.updateCaughtUp(progress)
+		s.updateLoomProof(item.relay, state)
+	}
+}
+
+func (s *Subscriber) updateLoomProof(relayURL string, state relayProgress) {
+	s.loomProofMu.Lock()
+	if !s.loomRunning {
+		s.loomProofMu.Unlock()
+		return
+	}
+	if state.liveReady && !state.failed && !state.gaveUp && !state.dirty {
+		s.loomProof[relayURL] = state.epoch
+	} else {
+		delete(s.loomProof, relayURL)
+	}
+	s.loomProofMu.Unlock()
+	if s.LoomStatusComplete() {
+		s.loomReadyOnce.Do(func() { close(s.loomReady) })
 	}
 }
 
@@ -278,7 +366,7 @@ func (s *Subscriber) runRelay(ctx context.Context, relayURL string, filters []in
 	ledger := newInboundClosedLedger(s.pool, filters)
 	active := filters
 	for {
-		caughtUp, err := s.syncRelay(ctx, relayURL, active, out, backoff, ledger)
+		_, err := s.syncRelay(ctx, relayURL, active, out, backoff, ledger)
 		if ctx.Err() != nil {
 			return
 		}
@@ -287,6 +375,9 @@ func (s *Subscriber) runRelay(ctx context.Context, relayURL string, filters []in
 			sendInbound(ctx, out, inboundItem{op: opRelayGone, relay: relayURL})
 			return
 		}
+		// An EOSE in an earlier REQ generation is no longer a live proof once
+		// that session ends, even if it had completed catch-up.
+		sendInbound(ctx, out, inboundItem{op: opRelayFailed, relay: relayURL})
 		immediate := false
 		for _, closed := range ledger.take(active) {
 			action := closed.Action
@@ -316,9 +407,6 @@ func (s *Subscriber) runRelay(ctx context.Context, relayURL string, filters []in
 				sendInbound(ctx, out, inboundItem{op: opRelayGaveUp, relay: relayURL, reason: closed.reason})
 				return
 			}
-		}
-		if !caughtUp {
-			sendInbound(ctx, out, inboundItem{op: opRelayFailed, relay: relayURL})
 		}
 		if !immediate {
 			delay := backoff.Next()
@@ -424,6 +512,7 @@ func withoutInboundFilter(filters []inboundFilter, hash string) []inboundFilter 
 // told each filter whose catch-up committed and each CLOSED a REQ observed.
 func (s *Subscriber) syncRelay(ctx context.Context, relayURL string, filters []inboundFilter, out chan<- inboundItem, backoff *Backoff, ledger *inboundClosedLedger) (bool, error) {
 	sessionStart := s.now()
+	epoch := s.pool.RelayEpoch(relayURL)
 	s.refreshRelayInfo(ctx, relayURL)
 	for _, filter := range filters {
 		if err := s.catchUp(ctx, relayURL, filter, sessionStart, out, ledger); err != nil {
@@ -431,7 +520,7 @@ func (s *Subscriber) syncRelay(ctx context.Context, relayURL string, filters []i
 		}
 		ledger.served(filter.hash)
 	}
-	if !sendInbound(ctx, out, inboundItem{op: opCaughtUp, relay: relayURL}) {
+	if !sendInbound(ctx, out, inboundItem{op: opCaughtUp, relay: relayURL, epoch: epoch}) {
 		return true, ctx.Err()
 	}
 	backoff.Reset()
@@ -531,6 +620,9 @@ func (s *Subscriber) fetchPaged(ctx context.Context, relayURL string, key cursor
 		paged = true
 		next := oldest
 		if until != 0 && next >= until {
+			if slices.Contains(base.Kinds, nostr.Kind(KindLoomJobStatusUpdate)) {
+				return fmt.Errorf("Loom kind-30100 replay on %s cannot prove completeness: more than %d events share created_at %d", relayURL, limit, next)
+			}
 			// NIP-01 cannot page within one second: more than a page of
 			// events share this created_at. Step past it, loudly.
 			s.logger.Warn("more events share one created_at than a relay page holds; some are skipped",

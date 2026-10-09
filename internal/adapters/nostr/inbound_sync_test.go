@@ -600,6 +600,149 @@ func TestInboundSyncRelayDownDuringBackfillIsCaughtUpIndependently(t *testing.T)
 	require.Equal(t, onDown.CreatedAt, cursor)
 }
 
+func TestLoomStatusProofRequiresEveryConfiguredRelayAndLiveEOSE(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	up := startSyncTestRelay(t, syncTestRelayOptions{})
+	down := startSyncTestRelay(t, syncTestRelayOptions{})
+	down.down.Store(true)
+	status := syncTestEvent(t, gonostr.Generate(), gonostr.Kind(KindLoomJobStatusUpdate),
+		gonostr.Now()-gonostr.Timestamp((48*time.Hour)/time.Second),
+		gonostr.Tags{{"d", "job-1"}, {"e", "job-1"}, {"p", "client"}, {"status", "running"}}, "")
+	down.add(t, status)
+	pool := newSyncTestPool(up, down)
+	store := openTestLocalStore(t, "")
+	run := startSyncRun(t, pool, store, nil, syncTestConfig(),
+		WithKinds([]int{KindLoomJobStatusUpdate}), WithLoomStatusRelays([]string{up.url, down.url}))
+	run.waitCaughtUp(t, ctx, up.url, 1)
+	run.waitLive(t, ctx, up.url, 1)
+	require.False(t, run.sub.LoomStatusComplete(), "one relay's EOSE cannot prove another relay's absence")
+	select {
+	case <-run.sub.LoomStatusReadySignal():
+		t.Fatal("incomplete relay set signalled Loom status readiness")
+	default:
+	}
+
+	down.down.Store(false)
+	run.waitCaughtUp(t, ctx, down.url, 1)
+	run.waitLive(t, ctx, down.url, 1)
+	select {
+	case <-run.sub.LoomStatusReadySignal():
+	case <-ctx.Done():
+		t.Fatal("all relays reached live EOSE without Loom status readiness")
+	}
+	require.True(t, run.sub.LoomStatusComplete())
+	stored, err := NewLocalEventRepository(store, nil).GetByID(ctx, status.ID.Hex())
+	require.NoError(t, err)
+	require.NotNil(t, stored, "the relay-only worker status must be durable before readiness")
+
+	pool.ReconfigureRelayURLs([]string{up.url})
+	require.False(t, run.sub.LoomStatusComplete(), "removing a Loom publication relay revokes proof")
+	pool.ReconfigureRelayURLs([]string{up.url, down.url})
+	require.False(t, run.sub.LoomStatusComplete(), "a re-added URL must not inherit its old EOSE")
+	run.waitCaughtUp(t, ctx, down.url, 2)
+	run.waitLive(t, ctx, down.url, 2)
+	require.True(t, run.sub.LoomStatusComplete(), "the new relay incarnation can prove a fresh EOSE")
+
+	down.down.Store(true)
+	mr, err := pool.managedRelayFor(down.url)
+	require.NoError(t, err)
+	mr.mu.Lock()
+	connection := mr.relay
+	mr.mu.Unlock()
+	require.NoError(t, connection.Close())
+	for run.sub.LoomStatusComplete() {
+		select {
+		case <-run.changed:
+		case <-ctx.Done():
+			t.Fatal("relay disconnect did not revoke Loom status proof")
+		}
+	}
+	down.down.Store(false)
+	run.waitCaughtUp(t, ctx, down.url, 3)
+	run.waitLive(t, ctx, down.url, 3)
+	require.True(t, run.sub.LoomStatusComplete(), "reconnect requires fresh durable replay and live EOSE")
+
+	run.stop()
+	require.False(t, run.sub.LoomStatusComplete(), "stopped subscriptions cannot retain proof")
+	restarted := NewSubscriber(pool, nil, zap.NewNop(), WithLocalStore(store),
+		WithKinds([]int{KindLoomJobStatusUpdate}), WithLoomStatusRelays([]string{up.url, down.url}),
+		WithInboundSync(syncTestConfig()))
+	require.False(t, restarted.LoomStatusComplete(), "durable events alone do not replace a fresh relay EOSE")
+	restartCtx, stopRestart := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- restarted.Run(restartCtx) }()
+	select {
+	case <-restarted.LoomStatusReadySignal():
+	case <-ctx.Done():
+		stopRestart()
+		t.Fatal("restarted subscriber did not establish a fresh Loom EOSE proof")
+	}
+	require.True(t, restarted.LoomStatusComplete())
+	stopRestart()
+	require.NoError(t, <-done)
+	require.False(t, restarted.LoomStatusComplete())
+}
+
+func TestLoomStatusProofNeedsExplicitWorkerRelayBoundary(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	relay := startSyncTestRelay(t, syncTestRelayOptions{})
+	run := startSyncRun(t, newSyncTestPool(relay), openTestLocalStore(t, ""), nil, syncTestConfig(),
+		WithKinds([]int{KindLoomJobStatusUpdate}))
+	run.waitCaughtUp(t, ctx, relay.url, 1)
+	run.waitLive(t, ctx, relay.url, 1)
+	require.False(t, run.sub.LoomStatusComplete(), "ambient interop relays are not a Loom publication policy")
+
+	misconfigured := startSyncRun(t, newSyncTestPool(relay), openTestLocalStore(t, ""), nil, syncTestConfig(),
+		WithKinds([]int{KindLoomJobStatusUpdate}), WithLoomStatusRelays([]string{"wss://missing-worker-relay.example"}))
+	misconfigured.waitCaughtUp(t, ctx, relay.url, 1)
+	misconfigured.waitLive(t, ctx, relay.url, 1)
+	require.False(t, misconfigured.sub.LoomStatusComplete(), "a missing worker relay cannot be replaced by an ambient relay")
+}
+
+func TestLoomStatusProofRejectsRelayRefusal(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	up := startSyncTestRelay(t, syncTestRelayOptions{})
+	refused := startSyncTestRelay(t, syncTestRelayOptions{})
+	refused.relay.OnRequest = func(context.Context, gonostr.Filter) (bool, string) {
+		return true, "blocked: worker status subscription refused"
+	}
+	run := startSyncRun(t, newSyncTestPool(up, refused), openTestLocalStore(t, ""), nil, syncTestConfig(),
+		WithKinds([]int{KindLoomJobStatusUpdate}), WithLoomStatusRelays([]string{up.url, refused.url}))
+	run.waitCaughtUp(t, ctx, up.url, 1)
+	run.waitLive(t, ctx, up.url, 1)
+	run.waitCount(t, ctx, "terminal Loom REQ refusal", 1, func(item inboundItem) bool {
+		return item.op == opRelayGaveUp && item.relay == refused.url
+	})
+	require.False(t, run.sub.LoomStatusComplete())
+	select {
+	case <-run.sub.LoomStatusReadySignal():
+		t.Fatal("terminal CLOSED must not count as EOSE")
+	default:
+	}
+}
+
+func TestLoomStatusProofRejectsUnpageableSameSecondHistory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	relay := startSyncTestRelay(t, syncTestRelayOptions{})
+	worker := gonostr.Generate()
+	at := gonostr.Now() - 60
+	for i := range 6 {
+		job := "job-" + strconv.Itoa(i)
+		relay.add(t, syncTestEvent(t, worker, gonostr.Kind(KindLoomJobStatusUpdate), at,
+			gonostr.Tags{{"d", job}, {"e", job}, {"p", "client"}, {"status", "running"}}, ""))
+	}
+	run := startSyncRun(t, newSyncTestPool(relay), openTestLocalStore(t, ""), nil, syncTestConfig(),
+		WithKinds([]int{KindLoomJobStatusUpdate}), WithLoomStatusRelays([]string{relay.url}))
+	run.waitCount(t, ctx, "unpageable Loom status history refusal", 1, func(item inboundItem) bool {
+		return item.op == opRelayFailed && item.relay == relay.url
+	})
+	require.False(t, run.sub.LoomStatusComplete(), "skipping same-second events cannot count as complete history")
+}
+
 // the daemon's own events, stored or live and however new, never
 // advance an inbound cursor; they reach observers but not handlers.
 func TestInboundSyncSelfPublishedEventsDoNotAdvanceCursors(t *testing.T) {

@@ -165,6 +165,40 @@ func TestStaleRunDetectorPublishesRecoveredWhenRunBecomesTerminal(t *testing.T) 
 	require.Len(t, published.snapshot(), 2)
 }
 
+func TestStaleRunDetectorRevokedLoomProofSuspendsTransitions(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 30, 20, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-20 * time.Minute)
+	run := domain.DeploymentRun{
+		ID: uuid.New(), LoomJobID: "loom-proof-job", WorkerPubkey: "worker-1",
+		Status: domain.RunStatusRunning, StartedAt: &startedAt,
+		CreatedAt: startedAt, UpdatedAt: startedAt,
+	}
+	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}
+	published := &staleRunPublisherFake{}
+	detector := NewStaleRunDetector(runs, repositorytest.NewInMemoryNostrEventRepository(), published, 5*time.Minute, zap.NewNop())
+	detector.now = func() time.Time { return now }
+	complete := false
+	detector.SetLoomStatusCompleteness(func() bool { return complete })
+	detector.checkAndLog(ctx)
+	require.Empty(t, published.snapshot())
+	complete = true
+	detector.checkAndLog(ctx)
+	require.Len(t, published.snapshot(), 1)
+
+	finishedAt := now.Add(time.Minute)
+	run.Status = domain.RunStatusSucceeded
+	run.FinishedAt = &finishedAt
+	run.UpdatedAt = finishedAt
+	runs.put(run)
+	complete = false
+	detector.checkAndLog(ctx)
+	require.Len(t, published.snapshot(), 1, "a lost relay proof cannot authorize recovery publication")
+	complete = true
+	detector.checkAndLog(ctx)
+	require.Len(t, published.snapshot(), 2)
+}
+
 func TestStaleRunDetectorRecoversPersistedStaleSignalAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 30, 19, 30, 0, 0, time.UTC)
@@ -242,6 +276,7 @@ func TestStaleRunDetectorRunStopsWithContext(t *testing.T) {
 	loomReady := make(chan struct{})
 	close(loomReady)
 	detector.SetLoomStatusReadiness(loomReady)
+	detector.SetLoomStatusCompleteness(func() bool { return true })
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- detector.Run(ctx) }()
