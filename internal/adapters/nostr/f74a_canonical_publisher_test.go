@@ -333,3 +333,77 @@ func TestF74aPackageDedupeAfterPublishedOutboxEntryPruned(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, counts.Pending)
 }
+
+func TestF74aFailedOutboxWinsEqualIDUnmarkedLocalEventAfterCrash(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	script := newRelayScript()
+	script.setDown(cpRelayA, true)
+	script.setDown(cpRelayB, true)
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module"}
+	first := startLocalHistoryDaemon(t, dir, script)
+	require.NoError(t, NewF74aCanonicalPublisher(first.projector, nil).PublishSBOMPackage(ctx, pkg))
+	pending, err := first.outbox.ListPending("control-plane", nil, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	original := pending[0].Event
+	_, err = first.outbox.CommitRound(original.ID, localstore.OutboxRound{
+		State: localstore.OutboxFailed, Detail: "blocked: rejected", At: time.Now(),
+	})
+	require.NoError(t, err)
+	// Simulate a crash before markOwnEventUndelivered writes its marker.
+	local, err := first.projector.history.(ProjectionCoordinateHistory).LatestByCoordinate(ctx, KindCASControlState, SBOMPackageDTag(pkg))
+	require.NoError(t, err)
+	require.NotNil(t, local)
+	require.Equal(t, original.ID.Hex(), local.ID)
+	require.NotEqual(t, repository.NostrPublishStateFailed, local.PublishState)
+	first.close()
+
+	script.setDown(cpRelayA, false)
+	script.setDown(cpRelayB, false)
+	restarted := startLocalHistoryDaemon(t, dir, script)
+	require.NoError(t, NewF74aCanonicalPublisher(restarted.projector, nil).PublishSBOMPackage(ctx, pkg))
+	require.Equal(t, 4, script.totalCalls(), "failed delivery must be re-signed and sent after restart")
+	latest, err := restarted.projector.history.(ProjectionCoordinateHistory).LatestByCoordinate(ctx, KindCASControlState, SBOMPackageDTag(pkg))
+	require.NoError(t, err)
+	require.NotNil(t, latest)
+	require.NotEqual(t, original.ID.Hex(), latest.ID)
+	require.True(t, latest.CreatedAt.After(original.CreatedAt.Time()))
+}
+
+func TestF74aMigrationTombstoneBackoffReplayKeepsDedupe(t *testing.T) {
+	ctx := context.Background()
+	sink := &captureProjectionPublisher{}
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repositorytest.NewInMemoryNostrEventRepository(), zap.NewNop())
+	pub := NewF74aCanonicalPublisher(projector, nil)
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module"}
+	clock := time.Unix(1_800_000_000, 0).UTC()
+	state := projector.projection()
+	state.now = func() time.Time { return clock }
+	state.backoffMu.Lock()
+	state.retryAfter = clock.Add(time.Hour)
+	state.backoffMu.Unlock()
+	require.ErrorIs(t, pub.PublishLegacySBOMPackageTombstone(ctx, pkg), ErrProjectorBackoff)
+	state.mu.Lock()
+	require.Len(t, state.pendingRetries, 1)
+	for _, pending := range state.pendingRetries {
+		require.True(t, pending.dedupeTombstone)
+	}
+	state.mu.Unlock()
+
+	clock = clock.Add(2 * time.Hour)
+	require.NoError(t, pub.PublishLegacySBOMPackageTombstone(ctx, pkg), "trigger signs tombstone before saved retry flushes")
+	projector.flushPendingRetries()
+	require.Len(t, sink.byKind(KindCASControlState), 1, "queued retry must not re-sign the same migration tombstone")
+}
+
+func TestNewerProjectionRecordPreservesNIP01OrderButUsesOutboxStateForSameID(t *testing.T) {
+	at := time.Unix(1_800_000_000, 0).UTC()
+	current := &repository.NostrEventRecord{ID: "b", CreatedAt: at}
+	sameFailed := &repository.NostrEventRecord{ID: "b", CreatedAt: at, PublishState: repository.NostrPublishStateFailed}
+	require.True(t, newerProjectionRecord(sameFailed, current), "delivery state of same signed event comes from outbox")
+	require.False(t, newerProjectionRecord(&repository.NostrEventRecord{ID: "a", CreatedAt: at.Add(-time.Second)}, current))
+	require.False(t, newerProjectionRecord(&repository.NostrEventRecord{ID: "b", CreatedAt: at.Add(-time.Second)}, current))
+	require.True(t, newerProjectionRecord(&repository.NostrEventRecord{ID: "z", CreatedAt: at.Add(time.Second)}, current))
+	require.True(t, newerProjectionRecord(&repository.NostrEventRecord{ID: "a", CreatedAt: at}, current), "lowest ID wins timestamp tie")
+}

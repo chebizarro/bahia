@@ -85,11 +85,12 @@ type projectionKey struct {
 // The map is keyed by projectionKey so only the latest state per coordinate
 // is retained (bounded memory).
 type pendingRetryArgs struct {
-	kind       int
-	tags       gonostr.Tags
-	content    string
-	entityType string
-	entityID   *uuid.UUID
+	kind            int
+	tags            gonostr.Tags
+	content         string
+	entityType      string
+	entityID        *uuid.UUID
+	dedupeTombstone bool
 }
 
 // ProjectionFamilyMetrics are per-family publish counters. They are exposed
@@ -341,6 +342,11 @@ func newerProjectionRecord(candidate, current *repository.NostrEventRecord) bool
 	if !candidate.CreatedAt.Equal(current.CreatedAt) {
 		return candidate.CreatedAt.After(current.CreatedAt)
 	}
+	if candidate.ID == current.ID {
+		// The outbox is authoritative for delivery state of this signed event.
+		// It may have failed before the local store marked it undelivered.
+		return true
+	}
 	return candidate.ID < current.ID
 }
 
@@ -564,7 +570,7 @@ func (p *Projector) resetProjectionBackoff() {
 // savePendingRetry stores the publish arguments for a coordinate suppressed
 // by the shared backoff window. The map is keyed by projectionKey so only the
 // latest state per coordinate is retained (bounded memory).
-func (p *Projector) savePendingRetry(key projectionKey, kind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID) {
+func (p *Projector) savePendingRetry(key projectionKey, kind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID, dedupeTombstone bool) {
 	s := p.projection()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -572,11 +578,12 @@ func (p *Projector) savePendingRetry(key projectionKey, kind int, tags gonostr.T
 		s.pendingRetries = map[projectionKey]pendingRetryArgs{}
 	}
 	s.pendingRetries[key] = pendingRetryArgs{
-		kind:       kind,
-		tags:       tags,
-		content:    content,
-		entityType: entityType,
-		entityID:   entityID,
+		kind:            kind,
+		tags:            tags,
+		content:         content,
+		entityType:      entityType,
+		entityID:        entityID,
+		dedupeTombstone: dedupeTombstone,
 	}
 }
 
@@ -613,7 +620,7 @@ func (p *Projector) flushPendingRetries() {
 
 	ctx := context.Background()
 	for _, args := range pending {
-		_ = p.publishSigned(ctx, args.kind, args.tags, args.content, args.entityType, args.entityID)
+		_ = p.publishSignedWithTombstoneDedupe(ctx, args.kind, args.tags, args.content, args.entityType, args.entityID, args.dedupeTombstone)
 	}
 }
 
@@ -676,7 +683,7 @@ func (p *Projector) publishSignedWithTombstoneDedupe(ctx context.Context, kind i
 	if p.projectionBackoffActive() {
 		s.count(family, func(m *ProjectionFamilyMetrics) { m.Backoff++ })
 		if dedupable {
-			p.savePendingRetry(key, kind, tags, content, entityType, entityID)
+			p.savePendingRetry(key, kind, tags, content, entityType, entityID, dedupeTombstone)
 		}
 		return ErrProjectorBackoff
 	}
