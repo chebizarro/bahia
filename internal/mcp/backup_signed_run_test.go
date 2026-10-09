@@ -3,12 +3,15 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -99,5 +102,73 @@ func TestMCPBackupRunRequiresRelayObservedOperatorSignature(t *testing.T) {
 		require.True(t, result.IsError)
 		require.Contains(t, mcpIntentResult(t, result)["reason"], "intent outcome status publisher is not configured")
 	}
+	require.False(t, processor.IsProcessed(intent.IntentID))
+}
+
+type retainedBackupPendingForMCP struct{ outbox *localstore.Outbox }
+
+func (r retainedBackupPendingForMCP) LookupRunAdmission(_ context.Context, intentID, coordinate, eventID string) (string, bool, bool, error) {
+	entry, err := r.outbox.GetBackupRunAdmission(intentID, coordinate, eventID)
+	if err != nil || entry == nil {
+		return "", false, false, err
+	}
+	return entry.StateEventID, true, entry.Delivered && entry.StatusDelivered, nil
+}
+func (r retainedBackupPendingForMCP) StageRunAdmission(context.Context, string, string, *domain.BackupRun) (string, error) {
+	return "", fmt.Errorf("admission disabled")
+}
+func (r retainedBackupPendingForMCP) LookupPendingRun(_ context.Context, intentID, coordinate, eventID string) (*localstore.BackupRunPending, error) {
+	return r.outbox.GetBackupRunPending(intentID, coordinate, eventID)
+}
+func (r retainedBackupPendingForMCP) StagePendingRun(context.Context, string, string, nostr.Event, string, time.Time) (*localstore.BackupRunPending, error) {
+	return nil, fmt.Errorf("intake disabled")
+}
+func (r retainedBackupPendingForMCP) GetBackupRunReceipt(context.Context, uuid.UUID) (*domain.BackupRun, error) {
+	return nil, nil
+}
+
+func TestMCPBackupRunRetainedPendingCannotClaimPendingWhileIntakePaused(t *testing.T) {
+	operator, service := nostr.Generate(), nostr.Generate()
+	event := signedMCPBackupRunEvent(t, operator)
+	intent, err := controlplane.ParseIntent(&event)
+	require.NoError(t, err)
+	store := testStateStore(t)
+	_, err = store.SaveEvent(event)
+	require.NoError(t, err)
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	var expiresAt time.Time
+	for _, tag := range event.Tags {
+		if len(tag) == 2 && tag[0] == "expiration" {
+			seconds, parseErr := strconv.ParseInt(tag[1], 10, 64)
+			require.NoError(t, parseErr)
+			expiresAt = time.Unix(seconds, 0).UTC()
+		}
+	}
+	_, inserted, err := outbox.PutBackupRunPending(localstore.BackupRunPending{
+		IntentID: intent.IntentID, Coordinate: intent.Coordinate, RequestEvent: event,
+		Actor: operator.Public().Hex(), ServicePubkey: service.Public().Hex(),
+		ReceivedAt: time.Now().UTC(), ExpiresAt: expiresAt,
+	})
+	require.NoError(t, err)
+	require.True(t, inserted)
+	deps := retainedBackupPendingForMCP{outbox: outbox}
+	signer, err := controlplane.NewPrivateKeySigner(service.Hex())
+	require.NoError(t, err)
+	status := controlplane.NewIntentStatusPublisher(func(context.Context, nostr.Event) error { return nil }, signer, zap.NewNop())
+	processor := controlplane.NewIntentProcessor(controlplane.NewTrustSet([]string{operator.Public().Hex()}, zap.NewNop()), store, status,
+		controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{"backup": true}}, zap.NewNop())
+	processor.RegisterHandler("backup", controlplane.NewBackupIntentHandler(controlplane.BackupIntentHandlerConfig{
+		RunAdmission: deps, RunPending: deps, RunReceipts: deps, Logger: zap.NewNop(),
+	}))
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	server.stateStore, server.intentProc = store, processor
+	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "operator", PubKey: operator.Public().Hex(), Method: auth.MethodNIP98})
+	result, err := server.CallTool(ctx, "request_backup_run", signedEventArgs(t, event))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	require.Equal(t, "rejected", mcpIntentResult(t, result)["status"])
+	require.Contains(t, mcpIntentResult(t, result)["reason"], "terminal signed status settlement is unavailable")
 	require.False(t, processor.IsProcessed(intent.IntentID))
 }

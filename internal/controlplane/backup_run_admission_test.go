@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -117,12 +118,11 @@ func TestBackupRunAdmissionRetainsSignedPendingRequestAcrossRestart(t *testing.T
 		}))
 		return processor
 	}
-	process := func(processor *IntentProcessor) *Intent {
+	process := func(processor *IntentProcessor) (*Intent, error) {
 		intent, err := ParseIntent(&request)
 		require.NoError(t, err)
 		intent.Actor = operatorKey.Public().Hex()
-		require.NoError(t, processor.ProcessInProcess(t.Context(), intent))
-		return intent
+		return intent, processor.ProcessInProcess(t.Context(), intent)
 	}
 	parsed, err := ParseIntent(&request)
 	require.NoError(t, err)
@@ -145,11 +145,11 @@ func TestBackupRunAdmissionRetainsSignedPendingRequestAcrossRestart(t *testing.T
 	require.NoError(t, err)
 	require.True(t, inserted)
 	processor := newProcessor()
-	first := process(processor)
-	require.Empty(t, statuses.events, "pending is not a relay status")
+	first, processErr := process(processor)
+	require.ErrorContains(t, processErr, "terminal signed status settlement is unavailable")
+	require.Empty(t, statuses.events, "retained pending cannot publish a conflicting status")
 	require.False(t, processor.IsProcessed(first.IntentID))
-	require.Equal(t, request.ID.Hex(), first.Result["request_event_id"])
-	require.NotContains(t, first.Result, "state_event_id")
+	require.Nil(t, first.Result, "retained pending cannot be reported as pending")
 	pending, err := outbox.GetBackupRunPending(first.IntentID, first.Coordinate, request.ID.Hex())
 	require.NoError(t, err)
 	require.Equal(t, localstore.BackupRunPendingState, pending.State)
@@ -165,13 +165,17 @@ func TestBackupRunAdmissionRetainsSignedPendingRequestAcrossRestart(t *testing.T
 	outbox, err = localstore.OpenOutbox(outboxPath)
 	require.NoError(t, err)
 	processor = newProcessor()
-	second := process(processor)
-	require.Equal(t, first.Result, second.Result)
+	second, processErr := process(processor)
+	require.ErrorContains(t, processErr, "terminal signed status settlement is unavailable")
+	require.Nil(t, second.Result)
 	require.Empty(t, statuses.events)
 	require.NoError(t, outbox.RecordBackupRunPendingAttempt(first.IntentID, request.ID.Hex(), pending.ExpiresAt, time.Time{}, "missing complete proof"))
 	refused, err := outbox.GetBackupRunPending(first.IntentID, first.Coordinate, request.ID.Hex())
 	require.NoError(t, err)
 	require.Equal(t, localstore.BackupRunRefusedState, refused.State)
+	_, processErr = process(processor)
+	require.ErrorContains(t, processErr, "expired")
+	require.Empty(t, statuses.events)
 }
 
 func TestBackupRunExpiredPendingReplayCannotReportPending(t *testing.T) {
@@ -204,4 +208,27 @@ func TestBackupRunExpiredPendingReplayCannotReportPending(t *testing.T) {
 	require.ErrorIs(t, err, ErrBackupRunAdmissionConflict)
 	require.ErrorContains(t, err, "expired")
 	require.Nil(t, intent.Result, "expired replay cannot return pending to a one-shot client")
+}
+
+type settledBackupAdmissionLookup struct{ stateID string }
+
+func (s settledBackupAdmissionLookup) LookupRunAdmission(context.Context, string, string, string) (string, bool, bool, error) {
+	return s.stateID, true, true, nil
+}
+func (s settledBackupAdmissionLookup) StageRunAdmission(context.Context, string, string, *domain.BackupRun) (string, error) {
+	return "", fmt.Errorf("unexpected stage")
+}
+
+func TestBackupRunPausedIntakePreservesAlreadyACKedAdmissionReplay(t *testing.T) {
+	operator := nostr.Generate()
+	request := signedBackupRunFixture(t, operator, nil)
+	intent, err := ParseIntent(&request)
+	require.NoError(t, err)
+	intent.Actor = operator.Public().Hex()
+	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{
+		RunAdmission: settledBackupAdmissionLookup{stateID: "settled-state-id"},
+		RunPending:   testBackupRunAdmission{}, RunReceipts: &localBackupRunReceipts{}, Logger: zap.NewNop(),
+	})
+	require.NoError(t, handler.handleRun(t.Context(), intent))
+	require.Equal(t, "settled-state-id", intent.Result["state_event_id"])
 }
