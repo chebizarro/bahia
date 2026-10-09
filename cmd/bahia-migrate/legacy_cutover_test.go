@@ -36,6 +36,7 @@ func TestLegacyCutoverCensusEmptyIsEligibleButDoesNotAssertMigration(t *testing.
 	require.True(t, validEmptyCutoverMarker(report))
 	require.Equal(t, at, report.CheckedAt)
 	require.Empty(t, report.BlockedFamilies)
+	require.NotNil(t, report.Blockers, "JSON must expose an empty array, not null")
 	require.Len(t, counter.seen, len(report.Counts)+2)
 	require.Equal(t, "nostr_events_pending", counter.seen[len(counter.seen)-2])
 	require.Equal(t, "nostr_events_failed", counter.seen[len(counter.seen)-1])
@@ -44,7 +45,7 @@ func TestLegacyCutoverCensusEmptyIsEligibleButDoesNotAssertMigration(t *testing.
 		require.False(t, names[count.Table], "duplicate table %s", count.Table)
 		names[count.Table] = true
 	}
-	for _, table := range []string{"dns_zones", "ml_models", "adopted_runtime_identity", "hiveci_pipeline_policies", "security_scan_targets", "security_observable_publications", "deployment_policies", "hiveci_initiations", "managed_instance_health"} {
+	for _, table := range []string{"dns_zones", "ml_models", "adopted_runtime_identity", "org_ownership_repair", "hiveci_pipeline_policies", "security_scan_targets", "security_observable_publications", "deployment_policies", "hiveci_initiations", "managed_instance_health"} {
 		require.True(t, names[table], "missing family table %s", table)
 	}
 	require.False(t, names["security_osv_vulnerability_cache"], "fetched OSV reference cache is not a cutover source")
@@ -54,6 +55,7 @@ func TestLegacyCutoverSecurityPublicationLedgerBlocksSeal(t *testing.T) {
 	report, err := censusLegacy(context.Background(), &fakeLegacyCounter{counts: map[string]int64{"security_observable_publications": 1}}, time.Now())
 	require.NoError(t, err)
 	require.Equal(t, []string{"security"}, report.BlockedFamilies)
+	require.Equal(t, []legacyBlocker{{Source: "security_observable_publications", Rows: 1}}, report.Blockers)
 	require.False(t, report.EligibleForEmptySeal)
 	require.False(t, validEmptyCutoverMarker(report))
 }
@@ -80,7 +82,7 @@ func TestVerifyCutoverOutboxPathRequiresExistingAbsoluteDaemonPath(t *testing.T)
 
 func TestLegacyCutoverCensusBlocksNonemptyFamiliesAndSignedOutbox(t *testing.T) {
 	counter := &fakeLegacyCounter{counts: map[string]int64{
-		"dns_zones": 3, "ml_models": 2, "nostr_events_pending": 1,
+		"dns_zones": 3, "ml_models": 2, "nostr_events_pending": 1, "nostr_events_failed": 4,
 	}}
 	report, err := censusLegacy(context.Background(), counter, time.Now())
 	require.NoError(t, err)
@@ -88,7 +90,22 @@ func TestLegacyCutoverCensusBlocksNonemptyFamiliesAndSignedOutbox(t *testing.T) 
 	require.False(t, validEmptyCutoverMarker(report))
 	require.Equal(t, []string{"dns", "ml"}, report.BlockedFamilies)
 	require.Equal(t, int64(1), report.PendingSignedOutbox)
+	require.Equal(t, int64(4), report.FailedSignedOutbox)
+	require.Equal(t, []legacyBlocker{
+		{Source: "dns_zones", Rows: 3},
+		{Source: "ml_models", Rows: 2},
+		{Source: "nostr_events/pending", Rows: 1},
+		{Source: "nostr_events/failed", Rows: 4},
+	}, report.Blockers)
 	require.Len(t, counter.seen, len(report.Counts)+2, "do not stop scanning after first blocker")
+}
+
+func TestLegacyCutoverOwnershipRepairLedgerBlocksEmptySeal(t *testing.T) {
+	report, err := censusLegacy(context.Background(), &fakeLegacyCounter{counts: map[string]int64{"org_ownership_repair": 2}}, time.Now())
+	require.NoError(t, err)
+	require.Equal(t, []string{"adoption"}, report.BlockedFamilies)
+	require.Equal(t, []legacyBlocker{{Source: "org_ownership_repair", Rows: 2}}, report.Blockers)
+	require.False(t, validEmptyCutoverMarker(report))
 }
 
 func TestLegacyCutoverRejectsIncompleteOrForgedMarker(t *testing.T) {
@@ -96,6 +113,19 @@ func TestLegacyCutoverRejectsIncompleteOrForgedMarker(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, validEmptyCutoverMarker(report))
 	report.Counts = report.Counts[:len(report.Counts)-1]
+	require.False(t, validEmptyCutoverMarker(report))
+}
+
+func TestLegacyCutoverRejectsMarkerWithoutOwnershipRepairCount(t *testing.T) {
+	report, err := censusLegacy(context.Background(), &fakeLegacyCounter{counts: map[string]int64{}}, time.Now())
+	require.NoError(t, err)
+	require.True(t, validEmptyCutoverMarker(report))
+	for i, count := range report.Counts {
+		if count.Table == "org_ownership_repair" {
+			report.Counts = append(report.Counts[:i], report.Counts[i+1:]...)
+			break
+		}
+	}
 	require.False(t, validEmptyCutoverMarker(report))
 }
 

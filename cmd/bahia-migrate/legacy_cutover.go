@@ -27,7 +27,7 @@ type legacyFamily struct {
 var legacyFamilies = []legacyFamily{
 	{"dns", []string{"dns_policies", "dns_zones", "dns_record_overrides"}},
 	{"ml", []string{"ml_models", "ml_model_versions", "ml_artifact_refs", "ml_provenance_edges", "ml_recipes", "ml_recipe_runs", "ml_inference_endpoints", "ml_deployment_intents", "ml_deployment_runs", "ml_inference_observations", "ml_inference_state", "ml_evaluation_specs", "ml_evaluation_runs"}},
-	{"adoption", []string{"adopted_runtime_identity"}},
+	{"adoption", []string{"adopted_runtime_identity", "org_ownership_repair"}},
 	{"hive-ci", []string{"hiveci_workflow_runs", "hiveci_workflow_results", "hiveci_pipeline_policies", "hiveci_accepted_releases", "hiveci_release_conflicts"}},
 	{"security", []string{"security_scan_targets", "security_scan_runs", "security_target_latest", "security_findings", "security_scan_schedules", "security_policy_breaches", "security_observable_publications"}},
 	{"policy", []string{"deployment_policies"}},
@@ -65,12 +65,18 @@ type legacyCount struct {
 	Rows   int64  `json:"rows"`
 }
 
+type legacyBlocker struct {
+	Source string `json:"source"`
+	Rows   int64  `json:"rows"`
+}
+
 type legacyCutoverReport struct {
-	Version             int           `json:"version"`
-	CheckedAt           time.Time     `json:"checked_at"`
-	Counts              []legacyCount `json:"counts"`
-	BlockedFamilies     []string      `json:"blocked_families"`
-	PendingSignedOutbox int64         `json:"pending_signed_outbox"`
+	Version             int             `json:"version"`
+	CheckedAt           time.Time       `json:"checked_at"`
+	Counts              []legacyCount   `json:"counts"`
+	BlockedFamilies     []string        `json:"blocked_families"`
+	Blockers            []legacyBlocker `json:"blockers"`
+	PendingSignedOutbox int64           `json:"pending_signed_outbox"`
 	// Failed rows may represent an abandoned signed event. They remain a
 	// separate operator decision; this command never claims them.
 	FailedSignedOutbox   int64 `json:"failed_signed_outbox"`
@@ -79,7 +85,7 @@ type legacyCutoverReport struct {
 
 func validEmptyCutoverMarker(report legacyCutoverReport) bool {
 	if report.Version != 1 || report.CheckedAt.IsZero() || !report.EligibleForEmptySeal ||
-		len(report.BlockedFamilies) != 0 || report.PendingSignedOutbox != 0 || report.FailedSignedOutbox != 0 {
+		len(report.BlockedFamilies) != 0 || len(report.Blockers) != 0 || report.PendingSignedOutbox != 0 || report.FailedSignedOutbox != 0 {
 		return false
 	}
 	want := 0
@@ -118,7 +124,10 @@ func (c pgLegacyCounter) Count(ctx context.Context, table string) (int64, error)
 }
 
 func censusLegacy(ctx context.Context, counter legacyCounter, now time.Time) (legacyCutoverReport, error) {
-	report := legacyCutoverReport{Version: 1, CheckedAt: now.UTC(), EligibleForEmptySeal: true}
+	report := legacyCutoverReport{
+		Version: 1, CheckedAt: now.UTC(), EligibleForEmptySeal: true,
+		Counts: []legacyCount{}, BlockedFamilies: []string{}, Blockers: []legacyBlocker{},
+	}
 	for _, family := range legacyFamilies {
 		blocked := false
 		for _, table := range family.tables {
@@ -136,6 +145,9 @@ func censusLegacy(ctx context.Context, counter legacyCounter, now time.Time) (le
 				return report, fmt.Errorf("negative count for %s", table)
 			}
 			report.Counts = append(report.Counts, legacyCount{Family: family.name, Table: table, Rows: rows})
+			if rows != 0 {
+				report.Blockers = append(report.Blockers, legacyBlocker{Source: table, Rows: rows})
+			}
 			blocked = blocked || rows != 0
 		}
 		if blocked {
@@ -160,6 +172,12 @@ func censusLegacy(ctx context.Context, counter legacyCounter, now time.Time) (le
 	}
 	if report.PendingSignedOutbox != 0 || report.FailedSignedOutbox != 0 {
 		report.EligibleForEmptySeal = false
+	}
+	if report.PendingSignedOutbox != 0 {
+		report.Blockers = append(report.Blockers, legacyBlocker{Source: "nostr_events/pending", Rows: report.PendingSignedOutbox})
+	}
+	if report.FailedSignedOutbox != 0 {
+		report.Blockers = append(report.Blockers, legacyBlocker{Source: "nostr_events/failed", Rows: report.FailedSignedOutbox})
 	}
 	return report, nil
 }
@@ -188,9 +206,8 @@ func runLegacyCutover(ctx context.Context, pool *pgxpool.Pool, outboxPath string
 		return 1
 	}
 	if !confirmQuiesced {
-		_, err = fmt.Fprintln(stdout, "dry-run only: no SQL rows, local records, or relay events changed; --confirm-quiesced can seal an empty inventory only")
-		if err != nil {
-			return 1
+		if !report.EligibleForEmptySeal {
+			return reportError(stderr, "legacy-cutover blocked: nonempty or unproven SQL state; see JSON blockers; no marker written")
 		}
 		return 0
 	}
@@ -211,7 +228,7 @@ func runLegacyCutover(ctx context.Context, pool *pgxpool.Pool, outboxPath string
 		if err := json.Unmarshal(existing, &previous); err != nil || !validEmptyCutoverMarker(previous) {
 			return reportError(stderr, "legacy-cutover existing marker is invalid; no overwrite")
 		}
-		_, err = fmt.Fprintln(stdout, "empty-state cutover already sealed; current SQL census is still empty")
+		_, err = fmt.Fprintln(stderr, "empty-state cutover already sealed; current SQL census is still empty")
 		if err != nil {
 			return 1
 		}
@@ -220,7 +237,7 @@ func runLegacyCutover(ctx context.Context, pool *pgxpool.Pool, outboxPath string
 	if err := outbox.PutControlRecord(legacyCutoverMarkerFamily, legacyCutoverMarkerID, encoded); err != nil {
 		return reportError(stderr, "legacy-cutover write marker: %v", err)
 	}
-	if _, err := fmt.Fprintln(stdout, "empty-state cutover sealed locally; this is not proof of migration or relay delivery"); err != nil {
+	if _, err := fmt.Fprintln(stderr, "empty-state cutover sealed locally; this is not proof of migration or relay delivery"); err != nil {
 		return 1
 	}
 	return 0

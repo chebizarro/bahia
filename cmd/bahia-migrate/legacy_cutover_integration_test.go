@@ -46,7 +46,7 @@ func TestLegacyCutoverPostgresCensusBlocksSecurityPublicationLedger(t *testing.T
 	var output, errors bytes.Buffer
 	require.Zero(t, runLegacyCutover(ctx, pool, "", false, &output, &errors), errors.String())
 	var empty legacyCutoverReport
-	require.NoError(t, json.Unmarshal(bytes.SplitN(output.Bytes(), []byte("\ndry-run only:"), 2)[0], &empty))
+	require.NoError(t, json.Unmarshal(output.Bytes(), &empty))
 	require.True(t, empty.EligibleForEmptySeal)
 	require.True(t, validEmptyCutoverMarker(empty))
 	_, err = pool.Exec(ctx, `INSERT INTO security_observable_publications (observable_type, event_kind, d_tag, schema, publish_state)
@@ -54,10 +54,12 @@ func TestLegacyCutoverPostgresCensusBlocksSecurityPublicationLedger(t *testing.T
 	require.NoError(t, err)
 	output.Reset()
 	errors.Reset()
-	require.Zero(t, runLegacyCutover(ctx, pool, "", false, &output, &errors), errors.String())
+	require.Equal(t, 1, runLegacyCutover(ctx, pool, "", false, &output, &errors))
+	require.Contains(t, errors.String(), "legacy-cutover blocked")
 	var blocked legacyCutoverReport
-	require.NoError(t, json.Unmarshal(bytes.SplitN(output.Bytes(), []byte("\ndry-run only:"), 2)[0], &blocked))
+	require.NoError(t, json.Unmarshal(output.Bytes(), &blocked))
 	require.False(t, blocked.EligibleForEmptySeal)
 	require.Equal(t, []string{"security"}, blocked.BlockedFamilies)
+	require.Equal(t, []legacyBlocker{{Source: "security_observable_publications", Rows: 1}}, blocked.Blockers)
 	require.False(t, validEmptyCutoverMarker(blocked))
 }

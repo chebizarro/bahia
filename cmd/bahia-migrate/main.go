@@ -28,7 +28,7 @@ const usage = "usage: bahia-migrate [--config path] [--confirm] [--force] [--to 
 	"       bahia-migrate [--config path] [--cutoff RFC3339] f74a-census\n" +
 	"       bahia-migrate [--config path] --cutoff RFC3339 f74a-compact (read-only dry run)\n" +
 	"       bahia-migrate [--config path] --confirm-quiesced f74a-import (stop daemon and all SQL writers first)\n" +
-	"       bahia-migrate [--config path] [--confirm-quiesced --outbox-path /absolute/daemon/outbox.bolt] legacy-cutover (census; seal only when empty)\n" +
+	"       bahia-migrate [--config path] [--confirm-quiesced --outbox-path /absolute/daemon/outbox.bolt] legacy-cutover (read-only census fails when blocked; seal only when empty)\n" +
 	"       bahia-migrate [--config path] --target default|control-plane [--after token] [--max-rows n] outbox-transfer (read-only inventory; --apply is disabled)\n" +
 	"       bahia-migrate [--config path] [--dry-run] [--relays url,...] [--relay-backfill] nostr"
 
