@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/db"
 	"go.uber.org/zap"
 )
 
@@ -51,6 +52,9 @@ func (r *databaseRecoveryRunner) Run(ctx context.Context) error {
 }
 
 func (r *databaseRecoveryRunner) tryRecover(ctx context.Context) bool {
+	if db.CanceledPoolCleanupPending() {
+		return false
+	}
 	attemptCtx, cancel := context.WithTimeout(ctx, databaseRecoveryAttemptTimeout)
 	defer cancel()
 	pool, err := dbConnect(attemptCtx, r.cfg, r.logger)

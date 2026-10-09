@@ -756,6 +756,10 @@ func New(cfg *config.Config) (*App, error) {
 		healthProvider.RegisterCheck("postgres_index", func() HealthCheck {
 			check := HealthCheck{Name: "postgres_index", Status: HealthStatusWarn,
 				Message: "optional PostgreSQL index is not attached; SQL-backed routes remain unavailable"}
+			if db.CanceledPoolCleanupPending() {
+				check.Message = "optional PostgreSQL index is not attached; canceled connection cleanup is pending"
+				return check
+			}
 			for _, status := range bgManager.RunnerStatuses() {
 				if status.Name == "database-recovery" && !status.StartedAt.IsZero() && !status.Running && status.LastError == nil {
 					check.Message = "PostgreSQL migration recovered; SQL-backed routes attach on a subsequent daemon start"
@@ -3038,9 +3042,20 @@ func configuredSupervisionSpecs(cfg config.SupervisionConfig, logger *zap.Logger
 // migrated index while bounding the optional index's effect on HTTP startup.
 const defaultOptionalDatabaseStartupBudget = 2 * time.Second
 
+var optionalDatabaseProbeInFlight atomic.Bool
+
 func connectOptionalDatabase(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*pgxpool.Pool, bool) {
 	// All production DB operations honor the caller's context. A bounded
 	// migration-lock cleanup also uses this budget when cancellation occurs.
+	if !optionalDatabaseProbeInFlight.CompareAndSwap(false, true) {
+		logger.Warn("postgres startup probe already in progress; continuing with relay-first reduced tier")
+		return nil, false
+	}
+	defer optionalDatabaseProbeInFlight.Store(false)
+	if db.CanceledPoolCleanupPending() {
+		logger.Warn("previous postgres pool cleanup is still pending; continuing with relay-first reduced tier")
+		return nil, false
+	}
 	budget := cfg.DB.StartupProbeTimeout
 	if budget <= 0 {
 		budget = defaultOptionalDatabaseStartupBudget
@@ -3049,9 +3064,7 @@ func connectOptionalDatabase(ctx context.Context, cfg *config.Config, logger *za
 	defer cancel()
 	pool, err := dbConnect(probeCtx, cfg.DB, logger)
 	if probeCtx.Err() != nil {
-		if pool != nil {
-			pool.Close()
-		}
+		db.CloseCanceledPool(pool, logger)
 		logger.Warn("postgres cache startup budget expired; continuing with relay-first reduced tier", zap.Error(probeCtx.Err()))
 		return nil, false
 	}
@@ -3062,7 +3075,13 @@ func connectOptionalDatabase(ctx context.Context, cfg *config.Config, logger *za
 		logger.Warn("postgres cache unavailable; continuing with relay-first reduced tier", zap.Error(cfg.DB.RedactError(err)))
 		return nil, false
 	}
-	if err := dbMigrate(probeCtx, pool, logger); err != nil {
+	err = dbMigrate(probeCtx, pool, logger)
+	if probeCtx.Err() != nil {
+		db.CloseCanceledPool(pool, logger)
+		logger.Warn("postgres cache startup budget expired during migration; continuing with relay-first reduced tier", zap.Error(probeCtx.Err()))
+		return nil, false
+	}
+	if err != nil {
 		if pool != nil {
 			pool.Close()
 		}
@@ -3070,9 +3089,7 @@ func connectOptionalDatabase(ctx context.Context, cfg *config.Config, logger *za
 		return nil, false
 	}
 	if err := probeCtx.Err(); err != nil {
-		if pool != nil {
-			pool.Close()
-		}
+		db.CloseCanceledPool(pool, logger)
 		logger.Warn("postgres cache startup budget expired; continuing with relay-first reduced tier", zap.Error(err))
 		return nil, false
 	}

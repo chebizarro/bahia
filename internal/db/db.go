@@ -4,6 +4,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,6 +13,30 @@ import (
 )
 
 var parsePoolConfig = pgxpool.ParseConfig
+
+var canceledPoolCleanups atomic.Int32
+
+// CanceledPoolCleanupPending reports whether pgx is still closing a pool
+// after a canceled operation. A caller can avoid starting another optional
+// connection while the previous transport is being torn down.
+func CanceledPoolCleanupPending() bool { return canceledPoolCleanups.Load() != 0 }
+
+// CloseCanceledPool releases a pool whose in-flight pgx operation was
+// canceled. pgx bounds canceled-query transport cleanup to 15 seconds, but
+// Pool.Close waits for it; keep that driver cleanup off readiness.
+func CloseCanceledPool(pool *pgxpool.Pool, logger *zap.Logger) {
+	if pool == nil {
+		return
+	}
+	canceledPoolCleanups.Add(1)
+	go func() {
+		defer canceledPoolCleanups.Add(-1)
+		pool.Close()
+		if logger != nil {
+			logger.Debug("canceled postgres pool cleanup complete")
+		}
+	}()
+}
 
 // Connect creates a new PostgreSQL connection pool.
 func Connect(ctx context.Context, cfg config.DBConfig, logger *zap.Logger) (*pgxpool.Pool, error) {
@@ -34,7 +59,11 @@ func Connect(ctx context.Context, cfg config.DBConfig, logger *zap.Logger) (*pgx
 	defer cancel()
 
 	if err := pool.Ping(pingCtx); err != nil {
-		pool.Close()
+		if pingCtx.Err() != nil {
+			CloseCanceledPool(pool, logger)
+		} else {
+			pool.Close()
+		}
 		return nil, fmt.Errorf("pinging database: %w", cfg.RedactError(err))
 	}
 

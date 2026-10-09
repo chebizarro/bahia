@@ -243,6 +243,9 @@ and a non-required background runner retries PostgreSQL migration without
 restarting the process. SQL-backed capabilities attach on a subsequent daemon
 start when the cache is promptly available. Historical assistant sessions are
 resolved from validated relay events on demand, not from PostgreSQL rows. A
+cancelled PostgreSQL query may leave pgx transport cleanup running for up to
+15 seconds in the background; startup and recovery probes skip while that
+cleanup is pending. `postgres_index` reports this without failing readiness. A
 daemon that holds committed state no relay has accepted stays ready but reports
 `canonical_delivery = warn` — see
 [outbox delivery](outbox-delivery.md).
