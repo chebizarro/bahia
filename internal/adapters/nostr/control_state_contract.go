@@ -733,7 +733,14 @@ func RuntimeStateRecord(state *domain.EnvironmentServiceState, observation *doma
 	}
 	observedHash := ""
 	if observation != nil {
+		content["observation_id"] = observation.ID.String()
+		content["observed_host"] = observation.ObservedHost
+		content["observed_container_id"] = observation.ObservedContainerID
+		content["observed_image_repo"] = observation.ObservedImageRepo
+		content["observed_version"] = observation.ObservedVersion
+		content["observation_source"] = observation.Source
 		if observation.NormalizedState != nil {
+			content["normalized_state"] = observation.NormalizedState
 			observedHash = observation.NormalizedState.ObservationHash
 		}
 		if observedHash == "" {

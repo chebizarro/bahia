@@ -529,6 +529,22 @@ func New(cfg *config.Config) (*App, error) {
 			servicePubkey = secret.Public().Hex()
 		}
 	}
+	// Runtime and DNS reconciliation may observe a PostgreSQL index, but must
+	// never read desired state from it. A missing service signer leaves these
+	// canonical views empty rather than promoting SQL rows at startup.
+	var runtimeServiceRead repository.ServiceRepository
+	var runtimeEnvironmentRead repository.EnvironmentRepository
+	var runtimeStateRead repository.EnvironmentServiceStateRepository
+	var runtimeObservationRead repository.RuntimeObservationRepository
+	var runtimeUnitRead repository.DeploymentUnitRepository
+	var canonicalRuntime *reconcile.CanonicalRuntimeSource
+	if source, sourceErr := reconcile.NewCanonicalRuntimeSource(localEventStore, servicePubkey); sourceErr == nil {
+		canonicalRuntime = source
+		runtimeServiceRead, runtimeEnvironmentRead, runtimeStateRead, runtimeObservationRead, runtimeUnitRead =
+			reconcile.CanonicalRuntimeRepositories(source, serviceRepo, envRepo, stateRepo, obsRepo, deploymentUnitRepo)
+	} else {
+		logger.Warn("runtime and service DNS projection have no canonical service signer", zap.Error(sourceErr))
+	}
 	// Route-canary and managed-instance supervision read their desired set and
 	// their durable progress from the daemon's canonical records in the local
 	// event store. They need the service key, never PostgreSQL.
@@ -621,17 +637,17 @@ func New(cfg *config.Config) (*App, error) {
 	// Reconciler (created here but started in Run() with the lifecycle context).
 	var rec *reconcile.Reconciler
 	if cfg.Reconcile.Enabled {
-		reconcilerOpts := []reconcile.Option{
-			reconcile.WithDeploymentHistory(intentRepo, runRepo),
+		if runtimeStateRead != nil {
+			canonicalArtifacts, canonicalIntents, canonicalRuns := reconcile.CanonicalRuntimeHistory(canonicalRuntime)
+			// Do not wire RuntimeLifecycleService for auto_apply here: that
+			// service still loads deployment inputs from the SQL index.
+			rec = reconcile.NewReconciler(
+				runtimeServiceRead, runtimeEnvironmentRead, canonicalArtifacts, runtimeUnitRead, runtimeObservationRead, runtimeStateRead,
+				runtimeResolver, publisher, cfg.Reconcile.Interval, logger,
+				reconcile.WithDeploymentHistory(canonicalIntents, canonicalRuns),
+				reconcile.WithAutoRemediationDeployer(nil),
+			)
 		}
-		if runtimeLifecycleSvc != nil {
-			reconcilerOpts = append(reconcilerOpts, reconcile.WithAutoRemediationDeployer(runtimeLifecycleSvc))
-		}
-		rec = reconcile.NewReconciler(
-			serviceRepo, envRepo, artifactRepo, deploymentUnitRepo, obsRepo, stateRepo,
-			runtimeResolver, publisher, cfg.Reconcile.Interval, logger,
-			reconcilerOpts...,
-		)
 	}
 
 	var managedInstanceSupervisor *service.ManagedInstanceSupervisor
@@ -706,6 +722,19 @@ func New(cfg *config.Config) (*App, error) {
 	healthProvider.RegisterCheck("nostr_outbound_admission", func() HealthCheck {
 		return nostrOutboundAdmissionCheck(outboundAdmission)
 	})
+	if cfg.Reconcile.Enabled {
+		healthProvider.RegisterCheck("runtime_reconciliation", func() HealthCheck {
+			if rec == nil {
+				return HealthCheck{Name: "runtime_reconciliation", Status: HealthStatusWarn,
+					Message: "runtime observation is suspended: no canonical service signer is available; PostgreSQL will not be used as a fallback",
+					Details: map[string]string{"desired_source": "relay/local cp-state", "observation": "suspended", "auto_apply": "suspended", "sql_authority": "disabled"}}
+			}
+			return HealthCheck{Name: "runtime_reconciliation", Status: HealthStatusWarn,
+				Message: "canonical runtime observation is enabled; auto_apply remediation is suspended until the deploy lifecycle reads canonical inputs instead of PostgreSQL",
+				Details: map[string]string{"desired_source": "relay/local cp-state", "auto_apply": "suspended", "sql_authority": "disabled"}}
+		})
+		logger.Warn("runtime auto_apply remediation suspended until its deploy lifecycle no longer reads PostgreSQL desired state")
+	}
 	registerSignetHealthCheck(healthProvider, loomSignetManager)
 	registerUndeliveredHealthCheck(healthProvider, localEventStore)
 	if supervisionApplyLock != nil {
@@ -807,6 +836,9 @@ func New(cfg *config.Config) (*App, error) {
 		SelfAuthors:         compactBootstrapAuthors([]string{servicePubkey}),
 		Resume:              inboundSyncConfigScoped(cfg.Nostr.LocalStore, cfg.Nostr.ServiceRelays),
 	})
+	if rec != nil {
+		rec.SetCanonicalReadiness(bootstrapper.ReadySignal())
+	}
 	// Supervisors act on the local event store only after its first relay
 	// catch-up.
 	if routeCanarySupervisor != nil {
@@ -1083,7 +1115,7 @@ func New(cfg *config.Config) (*App, error) {
 			}
 			dnsZones = persistedZones
 		}
-		dnsProjector = reconcile.NewDNSProjector(serviceRepo, envRepo, stateRepo, obsRepo, llmRegistry, mlRegistry, workerRepo, cfg.DNS, logger)
+		dnsProjector = reconcile.NewDNSProjector(runtimeServiceRead, runtimeEnvironmentRead, runtimeStateRead, runtimeObservationRead, canonicalRuntime, canonicalRuntime, canonicalRuntime, cfg.DNS, logger)
 		dnsProjector.SetManualEndpointSource(dnsEndpointRepo)
 		dnsProjector.SetZoneSource(dnsZoneRepo)
 		dnsProjector.SetContinuityStatusReader(continuityDNSStatusReader{reader: continuityStatusStore})
@@ -1091,6 +1123,7 @@ func New(cfg *config.Config) (*App, error) {
 			dnsProjector.SetPolicySource(policySource)
 		}
 		dnsReconciler = reconcile.NewDNSReconciler(dnsProjector, dnsZones, dnsResolverBridge{resolver: dnsResolver}, cfg.DNS.ReconcileInterval, logger)
+		dnsReconciler.SetCanonicalReadiness(bootstrapper.ReadySignal())
 		dnsReconciler.SetPublisher(publisher)
 		dnsReconciler.SetPersistenceSources(dnsZoneRepo, dnsRecordOverrideRepo)
 		dnsReconciler.SetupSubscriptions(publisher)

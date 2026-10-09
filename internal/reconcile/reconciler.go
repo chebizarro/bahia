@@ -49,6 +49,13 @@ type Reconciler struct {
 	// reconcile stops treating it as progress. Zero selects the default.
 	startingTimeout time.Duration
 	statePublisher  RuntimeStatePublisher
+	canonicalReady  <-chan struct{}
+}
+
+// SetCanonicalReadiness delays side-effecting runtime reconciliation until
+// the first relay/local catch-up has completed.
+func (r *Reconciler) SetCanonicalReadiness(ready <-chan struct{}) {
+	r.canonicalReady = ready
 }
 
 // WithStartingTimeout bounds how long a deploying unit may report "starting"
@@ -116,6 +123,13 @@ func NewReconciler(
 // Run starts the reconciliation loop. It blocks until the context is cancelled.
 func (r *Reconciler) Run(ctx context.Context) {
 	r.logger.Info("reconciler started", zap.Duration("interval", r.interval))
+	if r.canonicalReady != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.canonicalReady:
+		}
+	}
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 
@@ -704,7 +718,10 @@ func (r *Reconciler) digestFallbackStatus(desiredDigest, observedDigest string, 
 
 func (r *Reconciler) autoApplyDesiredState(ctx context.Context, currentState *domain.EnvironmentServiceState) error {
 	if r.deployer == nil {
-		return r.recordReconcileFailure(ctx, currentState, "auto_apply_unavailable", "runtime lifecycle desired-state deploy helper is unavailable")
+		// A missing canonical-input deploy lifecycle is an explicit suspension,
+		// not a retryable SQL-index failure. Keep publishing observed drift but
+		// never consult a derived desired row or simulate remediation progress.
+		return nil
 	}
 	_, err := r.deployer.AutoRemediateDesiredState(ctx, currentState.ServiceID, currentState.EnvironmentID, nil)
 	if err == nil {

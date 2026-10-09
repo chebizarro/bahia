@@ -47,6 +47,15 @@ func TestNewStartsEmergencyModeWithoutDatabase(t *testing.T) {
 
 	require.Nil(t, app.DB)
 	require.NotNil(t, app.Health)
+	require.NotNil(t, app.Reconciler)
+	checks := app.Health.Readiness().Checks
+	var autoApplyWarning bool
+	for _, check := range checks {
+		if check.Name == "runtime_reconciliation" {
+			autoApplyWarning = check.Status == HealthStatusWarn && check.Details["auto_apply"] == "suspended"
+		}
+	}
+	require.True(t, autoApplyWarning, "operators must see the auto_apply safety hold")
 }
 
 func TestNewWiresDBLessRouteAndManagedSupervision(t *testing.T) {

@@ -74,6 +74,13 @@ type DNSReconciler struct {
 	runMu              sync.Mutex
 	authoritySyncs     map[string]dnsAuthoritySyncState
 	emptySyncRefusals  map[string]domain.DNSZone
+	canonicalReady     <-chan struct{}
+}
+
+// SetCanonicalReadiness prevents an incomplete local snapshot from changing
+// backend zones or publishing endpoint state before the first relay catch-up.
+func (r *DNSReconciler) SetCanonicalReadiness(ready <-chan struct{}) {
+	r.canonicalReady = ready
 }
 
 func NewDNSReconciler(projector *DNSProjector, zones []domain.DNSZone, resolver DNSBackendResolver, interval time.Duration, logger *zap.Logger, publisher ...events.Publisher) *DNSReconciler {
@@ -147,6 +154,13 @@ func (r *DNSReconciler) TriggerReconcile() {
 // state-changed, runtime-observation) and explicit TriggerReconcile calls;
 // no ticker runs.
 func (r *DNSReconciler) Run(ctx context.Context) error {
+	if r.canonicalReady != nil {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-r.canonicalReady:
+		}
+	}
 	// Initial reconcile on startup.
 	if err := r.ReconcileOnce(ctx); err != nil && ctx.Err() == nil {
 		r.logger.Warn("DNS reconcile failed", zap.Error(err))
@@ -186,6 +200,13 @@ func (r *DNSReconciler) waitForDebounce(ctx context.Context) bool {
 }
 
 func (r *DNSReconciler) ReconcileOnce(ctx context.Context) error {
+	if r.canonicalReady != nil {
+		select {
+		case <-r.canonicalReady:
+		default:
+			return fmt.Errorf("DNS canonical state has not completed relay catch-up")
+		}
+	}
 	r.runMu.Lock()
 	defer r.runMu.Unlock()
 

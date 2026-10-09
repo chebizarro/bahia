@@ -9,6 +9,7 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -82,6 +83,29 @@ func TestProjectorHydratesDedupeFromTheLocalStoreAcrossRestart(t *testing.T) {
 	require.Equal(t, 2, script.totalCalls(), "unchanged state is not re-signed after a restart")
 	require.Equal(t, int64(1), restarted.projector.ProjectionMetrics()["service/state"].Deduped)
 	require.Equal(t, published, script.sent(cpRelayA)[0])
+}
+
+func TestRuntimeStateOutboxDedupeUsesCanonicalObservationAcrossRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	script := newRelayScript()
+	serviceID, envID := uuid.New(), uuid.New()
+	obsID := uuid.New()
+	state := &domain.EnvironmentServiceState{ServiceID: serviceID, EnvironmentID: envID, DesiredHash: "canonical-hash", DriftStatus: domain.DriftStatusInSync, CurrentObservationID: &obsID}
+	observation := &domain.RuntimeObservation{ID: obsID, ServiceID: serviceID, EnvironmentID: envID,
+		ObservedHost: "10.0.0.10", ObservedContainerID: "container-a", NormalizedHash: "canonical-hash",
+		HealthStatus: domain.HealthStatusHealthy, Source: "runtime", ObservedAt: time.Unix(100, 0).UTC()}
+	first := startLocalHistoryDaemon(t, dir, script)
+	publisher := NewRelayFirstStatePublisher(first.projector, first.publisher)
+	require.NoError(t, publisher.PublishState(ctx, state, observation))
+	require.Equal(t, 2, script.totalCalls())
+	require.NoError(t, publisher.PublishState(ctx, state, observation))
+	require.Equal(t, 2, script.totalCalls(), "repeat state must not enqueue another signed event")
+	first.close()
+	restarted := startLocalHistoryDaemon(t, dir, script)
+	publisher = NewRelayFirstStatePublisher(restarted.projector, restarted.publisher)
+	require.NoError(t, publisher.PublishState(ctx, state, observation))
+	require.Equal(t, 2, script.totalCalls(), "restart must dedupe against retained local canonical state")
 }
 
 // A projection abandoned after it was queued stays in the local store flagged
