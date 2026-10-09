@@ -17,6 +17,35 @@ PostgreSQL is an optional derived index. The daemon's control-plane truth is the
 
 Legacy SQL-only state requires a separately governed migration with a dry-run census, stable semantic coordinates, admission limits, durable progress, crash/retry proof, and independent status. Do not trigger such a migration by restarting the daemon, reconnecting PostgreSQL, or manually changing SQL publish flags. The [startup source audit](../analysis/postgres-startup-source-audit.md) identifies the code paths that must be absent before this runbook is an acceptance proof.
 
+## Disposable startup and reconnect matrix
+
+The opt-in repository test starts and removes its own `postgres:16-alpine`
+container. It migrates an empty index, populates derived service rows, and
+records a valid signed SQL-only pending event through the repository API. It
+boots the application with PostgreSQL absent, empty, populated, divergent,
+and slow to answer the startup handshake. A proxy then makes the same
+divergent index reachable for a recovery probe. For each case it checks the
+startup duration, bounded `/health` and `/ready` responses, unchanged core
+readiness checks, and the actual local bbolt event store and publish outbox:
+the SQL-only event must never appear there, while a distinct local signed
+pending event remains intact. The recovery probe must not import the SQL row.
+
+```sh
+BAHIA_OPTIONAL_PG_MATRIX_CONFIRM=disposable \
+  go test -tags=integration ./internal/app \
+  -run '^TestOptionalPostgresStartupAndRecoveryMatrix$' -count=1 -v
+go test ./internal/adapters/nostr \
+  -run '^TestLocalOutboxWithoutPostgresRestartResumesPendingDeliveries$' -count=1 -v
+```
+
+The second test proves that the local outbox actually resumes delivery to a
+relay after restart without PostgreSQL. The matrix itself uses no relays, so
+its `/ready` response remains relay-gated; it proves PostgreSQL does not alter
+that core decision, **not** that relay catch-up completed. Record the matrix's
+per-case timings and both test exit statuses. Exact-image, exact-digest Docker
+and staging soak with real relay `EOSE`/`OK` outcomes, production-scale SQL
+cardinality, and process RSS remains a separate unverified acceptance gate.
+
 ## Paused workflow recovery
 
 `/ready` reports `backup_recovery`, `backup_scheduler`,
