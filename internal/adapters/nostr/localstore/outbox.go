@@ -667,7 +667,7 @@ func (o *Outbox) commitRound(id nostr.ID, round OutboxRound, recordProof bool) (
 			return fmt.Errorf("decode outbox entry %s: %w", id.Hex(), err)
 		}
 		if !recordProof && isProofEligibleEvent(stored.Event) {
-			return errors.New("canonical config delivery rounds require the publisher path")
+			return errors.New("canonical delivery rounds require the publisher path")
 		}
 		if recordProof && round.Target != stored.Target {
 			return fmt.Errorf("publisher round target %q differs from outbox target %q", round.Target, stored.Target)
@@ -753,7 +753,7 @@ func canonicalDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time.Ti
 }
 
 func isProofEligibleEvent(ev nostr.Event) bool {
-	return isBackupConfigEvent(ev) || isDeploymentPolicyEvent(ev)
+	return isBackupConfigEvent(ev) || isBackupRunStateEvent(ev) || isDeploymentPolicyEvent(ev)
 }
 
 func isDeploymentPolicyEvent(ev nostr.Event) bool {
@@ -773,6 +773,14 @@ func isBackupConfigEvent(ev nostr.Event) bool {
 	default:
 		return false
 	}
+}
+
+func isBackupRunStateEvent(ev nostr.Event) bool {
+	return ev.Kind == nostr.Kind(kinds.CASControlState) &&
+		outboxTag(ev.Tags, "domain") == "backup" &&
+		outboxTag(ev.Tags, "t") == kinds.CPStateTopicBackupRun &&
+		outboxTag(ev.Tags, "legacy_kind") == fmt.Sprint(kinds.BackupRunState) &&
+		outboxTag(ev.Tags, "deleted") == "false"
 }
 
 func outboxTag(tags nostr.Tags, key string) string {
@@ -850,6 +858,15 @@ func (o *Outbox) Prune(publishedBefore, failedBefore time.Time) (int, error) {
 				expired = append(expired, bytes.Clone(key))
 			}
 			for _, key := range expired {
+				var id nostr.ID
+				copy(id[:], key[8:])
+				pinned, err := backupRunAdmissionUnresolved(tx, id)
+				if err != nil {
+					return err
+				}
+				if pinned {
+					continue
+				}
 				if err := index.Delete(key); err != nil {
 					return err
 				}
@@ -951,6 +968,8 @@ func (o *Outbox) RetryAllFailed() (int, error) {
 			if err := json.Unmarshal(raw, &entry); err != nil {
 				return fmt.Errorf("decode outbox entry %x: %w", id, err)
 			}
+			var eid nostr.ID
+			copy(eid[:], id)
 			if err := failedIdx.Delete(key); err != nil {
 				return err
 			}
@@ -967,8 +986,6 @@ func (o *Outbox) RetryAllFailed() (int, error) {
 			if err := entries.Put(id, encoded); err != nil {
 				return err
 			}
-			var eid nostr.ID
-			copy(eid[:], id)
 			if err := pendingIdx.Put(pendingKey(entry.Target, entry.EnqueuedAt, eid), nil); err != nil {
 				return err
 			}

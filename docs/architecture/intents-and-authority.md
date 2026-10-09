@@ -234,11 +234,17 @@ ACK. The service then signs a queued kind-30900 `backup-run` state
 (`legacy_kind=31996`) and commits it with the request ID, intent ID, and run
 coordinate in one outbox transaction. The request remains **pending**, not
 accepted, until the outbox records quorum delivery with an accepted relay.
-The durable admission record retains that ACK fact after the settled delivery
-row is pruned; a separate processed-intent cache marker never substitutes for
-it. Replay of the same signed request is idempotent, while another request
-using its intent ID or run coordinate is rejected. A refused or partial relay
-delivery cannot emit an accepted intent status. No backup execution starts
+The durable admission record retains the exact signed event and relay-policy
+quorum proof after the settled delivery row is pruned; a separate
+processed-intent cache marker never substitutes for it. The delivery callback
+wakes a status reconciler, which signs and durably queues one final kind-30315
+`accepted` result only after that ACK. Startup reconciliation covers a crash
+between settlement and status staging; provisional pending relay statuses are
+not emitted. Outbox exhaustion is not proof that no relay holds the staged
+event: a failed row remains pinned, emits no false refusal, and can retry the
+same signed event ID. Replay of the same signed request is idempotent, while another
+request using its intent ID or run coordinate is rejected without replacing
+the first request's status. No backup execution starts
 from this queued state: canonical credential resolution and step checkpoint
 recovery are not available.
 

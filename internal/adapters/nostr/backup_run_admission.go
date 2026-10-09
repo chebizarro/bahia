@@ -27,7 +27,7 @@ func (p *BackupCanonicalPublisher) LookupRunAdmission(ctx context.Context, inten
 	if err != nil || record == nil {
 		return "", false, false, err
 	}
-	return record.StateEventID, true, record.Delivered, nil
+	return record.StateEventID, true, record.Delivered && record.StatusOutcome == "accepted" && record.StatusEventID != "", nil
 }
 
 // StageRunAdmission signs and persists the first queued run state together
@@ -56,7 +56,7 @@ func (p *BackupCanonicalPublisher) StageRunAdmission(ctx context.Context, intent
 	if err := signEventWithPrivateKeyHex(&event, p.projector.privateKey); err != nil {
 		return "", fmt.Errorf("sign backup run admission: %w", err)
 	}
-	stateID, inserted, err := p.runAdmission.stageBackupRun(ctx, event, intentID, run.RequestDTag, requestEventID, run.ID)
+	stateID, inserted, err := p.runAdmission.stageBackupRun(ctx, event, intentID, run.RequestDTag, requestEventID, run.RequestedBy, run.ID)
 	if err != nil {
 		return "", err
 	}
@@ -66,13 +66,13 @@ func (p *BackupCanonicalPublisher) StageRunAdmission(ctx context.Context, intent
 	return stateID, nil
 }
 
-func (p *Publisher) stageBackupRun(ctx context.Context, event gonostr.Event, intentID, coordinate, requestEventID string, runID uuid.UUID) (string, bool, error) {
+func (p *Publisher) stageBackupRun(ctx context.Context, event gonostr.Event, intentID, coordinate, requestEventID, actor string, runID uuid.UUID) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
 	}
 	record, inserted, err := p.localOutbox.EnqueueBackupRun(localstore.OutboxEntry{
 		Event: event, Target: p.target, EntityType: "backup_run.admission", EntityID: runID.String(), EnqueuedAt: p.now(),
-	}, intentID, coordinate, requestEventID)
+	}, intentID, coordinate, requestEventID, actor)
 	if err != nil {
 		return "", false, err
 	}

@@ -28,7 +28,7 @@ func (s testBackupRunAdmission) LookupRunAdmission(_ context.Context, intentID, 
 	if err != nil || entry == nil {
 		return "", false, false, err
 	}
-	return entry.StateEventID, true, entry.Delivered, nil
+	return entry.StateEventID, true, entry.Delivered && entry.StatusEventID != "", nil
 }
 
 func (s testBackupRunAdmission) StageRunAdmission(_ context.Context, intentID, requestID string, run *domain.BackupRun) (string, error) {
@@ -36,7 +36,7 @@ func (s testBackupRunAdmission) StageRunAdmission(_ context.Context, intentID, r
 	if err != nil {
 		return "", err
 	}
-	entry, inserted, err := s.outbox.EnqueueBackupRun(localstore.OutboxEntry{Event: event, Target: "control-plane"}, intentID, run.RequestDTag, requestID)
+	entry, inserted, err := s.outbox.EnqueueBackupRun(localstore.OutboxEntry{Event: event, Target: "control-plane"}, intentID, run.RequestDTag, requestID, run.RequestedBy)
 	if err != nil {
 		return "", err
 	}
@@ -89,8 +89,8 @@ func TestBackupRunAdmissionPendingUntilACKThenAcceptedOnReplay(t *testing.T) {
 		require.NoError(t, err)
 		_, err = outbox.Enqueue(localstore.OutboxEntry{Event: ev, Target: "control-plane"})
 		require.NoError(t, err)
-		_, err = outbox.CommitRound(ev.ID, localstore.OutboxRound{Rounds: 1, Delivered: true, State: localstore.OutboxPublished,
-			Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}})
+		_, err = outbox.CommitPublisherRound(ev.ID, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: true, State: localstore.OutboxPublished,
+			Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1}, Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}})
 		require.NoError(t, err)
 	}
 	statuses := &statusCollector{}
@@ -114,7 +114,7 @@ func TestBackupRunAdmissionPendingUntilACKThenAcceptedOnReplay(t *testing.T) {
 		return intent
 	}
 	first := process()
-	require.Equal(t, "pending", backupReceiptTag(statuses.events[len(statuses.events)-1].Tags, "status"))
+	require.Empty(t, statuses.events, "provisional status must not race the final ACK result")
 	require.False(t, processor.IsProcessed(first.IntentID))
 	stateID, ok := first.Result["state_event_id"].(string)
 	require.True(t, ok)
@@ -129,23 +129,31 @@ func TestBackupRunAdmissionPendingUntilACKThenAcceptedOnReplay(t *testing.T) {
 	processor = newProcessor()
 	second := process()
 	require.Equal(t, stateID, second.Result["state_event_id"])
-	require.Len(t, statuses.events, 2)
+	require.Empty(t, statuses.events)
 	id, err := nostr.IDFromHex(stateID)
 	require.NoError(t, err)
-	_, err = outbox.CommitRound(id, localstore.OutboxRound{Rounds: 1, Delivered: false, State: localstore.OutboxFailed,
+	_, err = outbox.CommitPublisherRound(id, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: false, State: localstore.OutboxFailed,
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Rejected: "blocked"}}})
 	require.NoError(t, err)
 	process()
 	require.False(t, processor.IsProcessed(first.IntentID), "a refused relay cannot accept a run")
-	require.Equal(t, "pending", backupReceiptTag(statuses.events[len(statuses.events)-1].Tags, "status"))
+	require.Empty(t, statuses.events, "provisional status must not race the final ACK result")
 	_, err = outbox.Retry(id)
 	require.NoError(t, err)
-	_, err = outbox.CommitRound(id, localstore.OutboxRound{Rounds: 1, Delivered: true, State: localstore.OutboxPending,
-		Relays: map[string]localstore.RelayDelivery{"wss://second.example": {Accepted: true}}})
+	_, err = outbox.CommitPublisherRound(id, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: true, State: localstore.OutboxPending,
+		Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://second.example"}, Required: 1}, Relays: map[string]localstore.RelayDelivery{"wss://second.example": {Accepted: true}}})
 	require.NoError(t, err)
+	process()
+	require.False(t, processor.IsProcessed(first.IntentID), "run ACK without a durable accepted status is still pending")
+	signer, err := NewPrivateKeySigner(serviceKey.Hex())
+	require.NoError(t, err)
+	statusReconciler, err := NewBackupRunStatusReconciler(outbox,
+		NewIntentStatusPublisher(statuses.publish, signer, zap.NewNop()), "", func() {}, nil, zap.NewNop())
+	require.NoError(t, err)
+	require.NoError(t, statusReconciler.ReconcileOnce(t.Context()))
 	accepted := process()
 	require.True(t, processor.IsProcessed(first.IntentID))
-	require.Equal(t, "accepted", backupReceiptTag(statuses.events[len(statuses.events)-1].Tags, "status"))
+	require.Empty(t, statuses.events, "replay must not mint a duplicate accepted status")
 	require.Equal(t, stateID, accepted.Result["state_event_id"])
 	conflicting := request
 	conflicting.Tags = make(nostr.Tags, len(request.Tags))
@@ -170,13 +178,13 @@ func TestBackupRunAdmissionPendingUntilACKThenAcceptedOnReplay(t *testing.T) {
 	require.NoError(t, err)
 	conflictIntent.Actor = operatorKey.Public().Hex()
 	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), conflictIntent), "intent id conflicts")
-	_, err = outbox.CommitRound(id, localstore.OutboxRound{Rounds: 3, Delivered: true, State: localstore.OutboxPublished})
+	_, err = outbox.CommitPublisherRound(id, localstore.OutboxRound{Target: "control-plane", Rounds: 3, Delivered: true, State: localstore.OutboxPublished})
 	require.NoError(t, err)
 	process()
-	require.Equal(t, "accepted", backupReceiptTag(statuses.events[len(statuses.events)-1].Tags, "status"))
+	require.Empty(t, statuses.events, "replay must not mint a duplicate accepted status")
 	// The immutable admission is still authoritative after delivery-row pruning.
 	_, err = outbox.Prune(time.Now().Add(time.Hour), time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	process()
-	require.Equal(t, "accepted", backupReceiptTag(statuses.events[len(statuses.events)-1].Tags, "status"))
+	require.Empty(t, statuses.events, "replay must not mint a duplicate accepted status")
 }

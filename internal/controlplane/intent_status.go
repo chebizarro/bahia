@@ -51,15 +51,6 @@ func (p *IntentStatusPublisher) PublishAcceptedChecked(ctx context.Context, inte
 	return p.publishStatus(ctx, intent, "accepted", "applied", "", nil)
 }
 
-// PublishPendingChecked reports durable local staging without claiming relay
-// acceptance. The same request can be replayed after the run-state quorum ACK.
-func (p *IntentStatusPublisher) PublishPendingChecked(ctx context.Context, intent *Intent) error {
-	if p == nil || p.publish == nil || p.signer == nil {
-		return fmt.Errorf("intent pending status publisher is not configured")
-	}
-	return p.publishStatus(ctx, intent, "pending", "relay_delivery_pending", "", nil)
-}
-
 // PublishRejection publishes a "rejected" status for an intent that failed
 // authorization or validation. Only for known principals.
 func (p *IntentStatusPublisher) PublishRejection(ctx context.Context, intent *Intent, reason string) {
@@ -97,8 +88,26 @@ func (p *IntentStatusPublisher) PublishAcceptedEvaluation(ctx context.Context, i
 }
 
 func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Intent, status, result, reason string, evaluation *domain.PolicyEvaluation) error {
-	if p.publish == nil || p.signer == nil || intent == nil {
+	if p == nil || p.publish == nil || p.signer == nil || intent == nil {
 		return nil
+	}
+	ev, err := p.buildStatusEvent(ctx, intent, status, result, reason, evaluation)
+	if err != nil {
+		return err
+	}
+	if err := p.publish(ctx, ev); err != nil {
+		p.logger.Warn("failed to publish intent status event",
+			zap.String("intent_id", intent.IntentID),
+			zap.Error(err),
+		)
+		return err
+	}
+	return nil
+}
+
+func (p *IntentStatusPublisher) buildStatusEvent(ctx context.Context, intent *Intent, status, result, reason string, evaluation *domain.PolicyEvaluation) (nostr.Event, error) {
+	if p == nil || p.signer == nil || intent == nil {
+		return nostr.Event{}, fmt.Errorf("intent status signer is not configured")
 	}
 
 	// Build d-tag: intent-status:<requester-pubkey>:<entity-coordinate>
@@ -131,11 +140,11 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 	contentJSON, err := json.Marshal(content)
 	if err != nil {
 		p.logger.Warn("failed to marshal intent status content", zap.Error(err))
-		return err
+		return nostr.Event{}, err
 	}
 
 	if evaluation != nil && len(contentJSON) > 16*1024 {
-		return fmt.Errorf("intent evaluation exceeds 16 KiB status limit")
+		return nostr.Event{}, fmt.Errorf("intent evaluation exceeds 16 KiB status limit")
 	}
 
 	ev := nostr.Event{
@@ -163,15 +172,7 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 			zap.String("intent_id", intent.IntentID),
 			zap.Error(err),
 		)
-		return err
+		return nostr.Event{}, err
 	}
-
-	if err := p.publish(ctx, ev); err != nil {
-		p.logger.Warn("failed to publish intent status event",
-			zap.String("intent_id", intent.IntentID),
-			zap.Error(err),
-		)
-		return err
-	}
-	return nil
+	return ev, nil
 }

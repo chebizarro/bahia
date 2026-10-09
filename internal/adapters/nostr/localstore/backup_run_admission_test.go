@@ -27,7 +27,7 @@ func TestBackupRunAdmissionCommitsEventAndIdentityAtomically(t *testing.T) {
 	}, Content: `{"deleted":false}`}
 	require.NoError(t, event.Sign(key))
 	entry := OutboxEntry{Event: event, Target: "control-plane"}
-	admission, inserted, err := outbox.EnqueueBackupRun(entry, "intent-1", coordinate, requestID)
+	admission, inserted, err := outbox.EnqueueBackupRun(entry, "intent-1", coordinate, requestID, request.Public().Hex())
 	require.NoError(t, err)
 	require.True(t, inserted)
 	require.Equal(t, event.ID.Hex(), admission.StateEventID)
@@ -41,19 +41,19 @@ func TestBackupRunAdmissionCommitsEventAndIdentityAtomically(t *testing.T) {
 	second := event
 	second.CreatedAt++
 	require.NoError(t, second.Sign(key))
-	admission, inserted, err = outbox.EnqueueBackupRun(OutboxEntry{Event: second, Target: "control-plane"}, "intent-1", coordinate, requestID)
+	admission, inserted, err = outbox.EnqueueBackupRun(OutboxEntry{Event: second, Target: "control-plane"}, "intent-1", coordinate, requestID, request.Public().Hex())
 	require.NoError(t, err)
 	require.False(t, inserted)
 	require.Equal(t, event.ID.Hex(), admission.StateEventID)
 	_, found, err = outbox.Get(second.ID)
 	require.NoError(t, err)
 	require.False(t, found)
-	_, _, err = outbox.EnqueueBackupRun(OutboxEntry{Event: second, Target: "control-plane"}, "intent-1", coordinate, nostr.Generate().Public().Hex())
+	_, _, err = outbox.EnqueueBackupRun(OutboxEntry{Event: second, Target: "control-plane"}, "intent-1", coordinate, nostr.Generate().Public().Hex(), request.Public().Hex())
 	require.ErrorContains(t, err, "conflicts")
-	_, _, err = outbox.EnqueueBackupRun(OutboxEntry{Event: second, Target: "control-plane"}, "intent-2", coordinate, requestID)
+	_, _, err = outbox.EnqueueBackupRun(OutboxEntry{Event: second, Target: "control-plane"}, "intent-2", coordinate, requestID, nostr.Generate().Public().Hex())
 	require.ErrorContains(t, err, "coordinate already belongs")
 
-	_, err = outbox.CommitRound(event.ID, OutboxRound{Rounds: 1, Delivered: false, State: OutboxFailed,
+	_, err = outbox.CommitPublisherRound(event.ID, OutboxRound{Target: "control-plane", Rounds: 1, Delivered: false, State: OutboxFailed,
 		Relays: map[string]RelayDelivery{"wss://relay.example": {Rejected: "blocked"}}})
 	require.NoError(t, err)
 	prior, err := outbox.GetBackupRunAdmission("intent-1", coordinate, requestID)
@@ -63,7 +63,7 @@ func TestBackupRunAdmissionCommitsEventAndIdentityAtomically(t *testing.T) {
 	require.NoError(t, err)
 	_, found, err = outbox.Get(event.ID)
 	require.NoError(t, err)
-	require.False(t, found)
+	require.True(t, found, "an unaccepted staged run pins its exact signed event")
 	prior, err = outbox.GetBackupRunAdmission("intent-1", coordinate, requestID)
 	require.NoError(t, err)
 	require.Equal(t, event.ID.Hex(), prior.StateEventID, "delivery pruning must not free the run identity")
@@ -89,25 +89,33 @@ func TestBackupRunAdmissionRequiresQuorumAndRetainsACKAfterPrune(t *testing.T) {
 		{"schema", kinds.CASControlStateSchema}, {"legacy_kind", "31996"}, {"deleted", "false"},
 	}}
 	require.NoError(t, event.Sign(key))
-	_, inserted, err := outbox.EnqueueBackupRun(OutboxEntry{Event: event, Target: "control-plane"}, "intent-1", coordinate, requestID)
+	_, inserted, err := outbox.EnqueueBackupRun(OutboxEntry{Event: event, Target: "control-plane"}, "intent-1", coordinate, requestID, nostr.Generate().Public().Hex())
 	require.NoError(t, err)
 	require.True(t, inserted)
-	_, err = outbox.CommitRound(event.ID, OutboxRound{Rounds: 1, Delivered: false, State: OutboxPending,
+	policy := DeliveryPolicy{WriteRelays: []string{"wss://a.example", "wss://b.example"}, Required: 2}
+	_, err = outbox.CommitPublisherRound(event.ID, OutboxRound{Target: "control-plane", Rounds: 1, Delivered: false, State: OutboxPending, Policy: policy,
 		Relays: map[string]RelayDelivery{"wss://a.example": {Accepted: true}}})
 	require.NoError(t, err)
 	prior, err := outbox.GetBackupRunAdmission("intent-1", coordinate, requestID)
 	require.NoError(t, err)
 	require.False(t, prior.Delivered, "one relay OK below the configured quorum is not acceptance")
-	_, err = outbox.CommitRound(event.ID, OutboxRound{Rounds: 2, Delivered: true, State: OutboxPending,
-		Relays: map[string]RelayDelivery{"wss://b.example": {Accepted: true}}})
+	_, err = outbox.CommitRound(event.ID, OutboxRound{Rounds: 2, Delivered: true, State: OutboxPending, Policy: policy,
+		Relays: map[string]RelayDelivery{"wss://a.example": {Accepted: true}, "wss://b.example": {Accepted: true}}})
+	require.ErrorContains(t, err, "publisher path", "caller-supplied ACK flags cannot admit a run")
+	_, err = outbox.CommitPublisherRound(event.ID, OutboxRound{Target: "control-plane", Rounds: 2, Delivered: true, State: OutboxPending, Policy: policy,
+		Relays: map[string]RelayDelivery{"wss://a.example": {Accepted: true}, "wss://b.example": {Accepted: true}}})
 	require.NoError(t, err)
 	prior, err = outbox.GetBackupRunAdmission("intent-1", coordinate, requestID)
 	require.NoError(t, err)
 	require.True(t, prior.Delivered, "the persisted quorum marker and accepted relay together admit the run")
-	_, err = outbox.CommitRound(event.ID, OutboxRound{Rounds: 3, Delivered: true, State: OutboxPublished})
+	_, err = outbox.CommitPublisherRound(event.ID, OutboxRound{Target: "control-plane", Rounds: 3, Delivered: true, State: OutboxPublished, Policy: policy,
+		Relays: map[string]RelayDelivery{"wss://a.example": {Accepted: true}, "wss://b.example": {Accepted: true}}})
 	require.NoError(t, err)
 	_, err = outbox.Prune(time.Now().Add(time.Hour), time.Now().Add(time.Hour))
 	require.NoError(t, err)
+	_, found, err := outbox.Get(event.ID)
+	require.NoError(t, err)
+	require.True(t, found, "ACKed run stays pinned until final status is durable")
 	prior, err = outbox.GetBackupRunAdmission("intent-1", coordinate, requestID)
 	require.NoError(t, err)
 	require.True(t, prior.Delivered)
@@ -120,7 +128,7 @@ func TestBackupRunAdmissionRejectsWrongEnvelopeWithoutMutation(t *testing.T) {
 	key := nostr.Generate()
 	event := nostr.Event{Kind: 30900, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "backup-run:bad"}, {"t", "other"}, {"legacy_kind", "31996"}, {"deleted", "false"}}}
 	require.NoError(t, event.Sign(key))
-	_, _, err = outbox.EnqueueBackupRun(OutboxEntry{Event: event, Target: "control-plane"}, "intent-1", "backup-run:bad", nostr.Generate().Public().Hex())
+	_, _, err = outbox.EnqueueBackupRun(OutboxEntry{Event: event, Target: "control-plane"}, "intent-1", "backup-run:bad", nostr.Generate().Public().Hex(), nostr.Generate().Public().Hex())
 	require.ErrorContains(t, err, "canonical run-state")
 	prior, err := outbox.GetBackupRunAdmission("intent-1", "backup-run:bad", nostr.Generate().Public().Hex())
 	require.NoError(t, err)

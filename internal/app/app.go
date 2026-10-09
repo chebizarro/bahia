@@ -1308,6 +1308,15 @@ func New(cfg *config.Config) (*App, error) {
 	backupCanonical.SetRunVerifier(backupRegistry)
 	backupCanonical.SetRuntimeObservationSource(backupRegistry)
 	backupRegistry.SetCanonicalPublisher(backupCanonical)
+	if enabledDomains["backup"] && intentStatus != nil && nostrPub != nil {
+		backupStatus, err := controlplane.NewBackupRunStatusReconciler(localOutbox, intentStatus, nostrPub.Target(), nostrPub.Wake, localEventStore, logger)
+		if err != nil {
+			return nil, fmt.Errorf("configure backup run status reconciliation: %w", err)
+		}
+		controlPlanePub.OnDelivered(backupStatus.Notify)
+		controlPlanePub.OnDeliveryAbandoned(backupStatus.Notify)
+		bgManager.RegisterWithOptions(backupStatus)
+	}
 	backupRunReceipts, backupReceiptErr := controlplane.NewLocalBackupRunReceipts(localEventStore, localOutbox, servicePubkey)
 	if backupReceiptErr != nil {
 		logger.Warn("backup run canonical receipt reader unavailable", zap.Error(backupReceiptErr))

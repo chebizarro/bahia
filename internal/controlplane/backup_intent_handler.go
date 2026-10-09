@@ -38,6 +38,10 @@ type BackupRunAdmissionWriter interface {
 // accepted by the configured relay quorum. It is not an accepted intent.
 var ErrBackupRunPending = errors.New("backup run state is pending relay acceptance")
 
+// ErrBackupRunAdmissionConflict preserves the existing request's final status
+// when another signed request attempts to claim its immutable run identity.
+var ErrBackupRunAdmissionConflict = errors.New("backup run admission conflict")
+
 // BackupIntentCRUD is the read/write contract the backup intent handler uses
 // for level-triggered reconciliation. service.BackupRegistryService satisfies
 // the config entity methods; the definition registry extends it.
@@ -355,7 +359,7 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 	requestID := intent.Event.ID.Hex()
 	stateID, found, delivered, err := h.runAdmission.LookupRunAdmission(ctx, intent.IntentID, intent.Coordinate, requestID)
 	if err != nil {
-		return fmt.Errorf("backup run admission conflict: %w", err)
+		return fmt.Errorf("%w: %v", ErrBackupRunAdmissionConflict, err)
 	}
 	if found {
 		intent.Result = map[string]any{"run_id": requested.ID.String(), "state_event_id": stateID, "execution": "paused"}

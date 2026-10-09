@@ -23,7 +23,7 @@ Use the Backup UI or:
 - `request_backup_verification` / `bahia_request_backup_verification`
 - `request_backup_retention` / `bahia_request_backup_retention`
 
-A complete operator-signed run request whose exact recipe, repository, and policy versions have durable exact-event relay-quorum proofs stages a service-signed queued run state in the control-plane outbox. The response remains **pending** until that state receives a relay quorum ACK. A refused or partial delivery is not accepted; a PostgreSQL run row is never admission evidence. Backup execution remains paused: a queued run does not launch work or imply that repository credentials can be recovered. Retention request intake remains unavailable. Verification should prove that stored data can be read and checked, not only that an upload command exited successfully.
+A complete operator-signed run request whose exact recipe, repository, and policy versions have durable exact-event relay-quorum proofs stages a service-signed queued run state in the control-plane outbox. An initial MCP response is **pending**; the daemon emits one signed accepted intent status only after the run state reaches relay quorum, without requiring a replay. A refused or partial delivery remains pending with the same signed event pinned for operator retry; it is not accepted; a PostgreSQL run row is never admission evidence. Backup execution remains paused: a queued run does not launch work or imply that repository credentials can be recovered. Retention request intake remains unavailable. Verification should prove that stored data can be read and checked, not only that an upload command exited successfully.
 
 ## Restore
 

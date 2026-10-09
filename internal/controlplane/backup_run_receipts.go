@@ -101,17 +101,11 @@ func (s *localBackupRunReceipts) GetBackupRunReceipt(ctx context.Context, id uui
 			domain.ValidateBackupRun(&run) != nil {
 			return nil, fmt.Errorf("backup run %s has inconsistent canonical content", id)
 		}
-		entry, found, err := s.delivery.Get(ev.ID)
+		proof, found, err := s.delivery.GetDeliveryProof(ev.ID)
 		if err != nil {
 			return nil, fmt.Errorf("backup run %s relay delivery receipt: %w", id, err)
 		}
-		acked := false
-		for _, relay := range entry.Relays {
-			acked = acked || relay.Accepted
-		}
-		if !found || entry.Target != repository.NostrPublishTargetControlPlane || !entry.Delivered || !acked ||
-			entry.Event.ID != ev.ID || entry.Event.PubKey != s.author ||
-			!entry.Event.CheckID() || !entry.Event.VerifySignature() {
+		if !found || !proof.ValidFor(ev, repository.NostrPublishTargetControlPlane) || proof.Event.PubKey != s.author {
 			return nil, fmt.Errorf("backup run %s has no ACKed relay delivery receipt", id)
 		}
 		return &run, nil

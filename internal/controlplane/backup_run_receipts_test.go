@@ -49,12 +49,12 @@ func TestLocalBackupRunReceiptsRequireSignedACKAndSurviveRestart(t *testing.T) {
 	require.NoError(t, err)
 	_, err = reader.GetBackupRunReceipt(t.Context(), run.ID)
 	require.ErrorContains(t, err, "no ACKed relay delivery receipt", "queued delivery is not accepted")
-	_, err = outbox.CommitRound(event.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+	_, err = outbox.CommitPublisherRound(event.ID, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: false, Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1},
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Rejected: "blocked"}}, State: localstore.OutboxPending})
 	require.NoError(t, err)
 	_, err = reader.GetBackupRunReceipt(t.Context(), run.ID)
 	require.ErrorContains(t, err, "no ACKed relay delivery receipt", "a delivery flag without an accepted relay is ambiguous")
-	_, err = outbox.CommitRound(event.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+	_, err = outbox.CommitPublisherRound(event.ID, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: true, Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1},
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
 	require.NoError(t, err)
 	record, err = reader.GetBackupRunReceipt(t.Context(), run.ID)
@@ -111,9 +111,13 @@ func TestLocalBackupRunReceiptsRejectTamperedAndMismatchedState(t *testing.T) {
 			}
 			_, err = outbox.Enqueue(localstore.OutboxEntry{Event: event, Target: target})
 			require.NoError(t, err)
-			_, err = outbox.CommitRound(event.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+			_, err = outbox.CommitPublisherRound(event.ID, localstore.OutboxRound{Target: target, Rounds: 1, Delivered: true, Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1},
 				Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
-			require.NoError(t, err)
+			if variant == "tampered content" {
+				require.ErrorContains(t, err, "lacks verified target quorum")
+			} else {
+				require.NoError(t, err)
+			}
 			reader, err := NewLocalBackupRunReceipts(events, outbox, secret.Public().Hex())
 			require.NoError(t, err)
 			got, err := reader.GetBackupRunReceipt(t.Context(), run.ID)
@@ -143,7 +147,7 @@ func TestBackupIntakeWithoutAdmissionWriterRefusesRegardlessOfSQL(t *testing.T) 
 	require.NoError(t, err)
 	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: receipt, Target: "control-plane"})
 	require.NoError(t, err)
-	_, err = outbox.CommitRound(receipt.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+	_, err = outbox.CommitPublisherRound(receipt.ID, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: true, Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1},
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
 	require.NoError(t, err)
 	reader, err := NewLocalBackupRunReceipts(events, outbox, serviceKey.Public().Hex())
@@ -183,7 +187,7 @@ func TestBackupIntakeWithoutAdmissionWriterRefusesRegardlessOfSQL(t *testing.T) 
 	require.NoError(t, err)
 	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: terminal, Target: "control-plane"})
 	require.NoError(t, err)
-	_, err = outbox.CommitRound(terminal.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+	_, err = outbox.CommitPublisherRound(terminal.ID, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: true, Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1},
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
 	require.NoError(t, err)
 	intent.Content["recipe_id"] = run.RecipeID.String()

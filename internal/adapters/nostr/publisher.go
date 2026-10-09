@@ -400,6 +400,10 @@ func (p *Publisher) nudge() {
 	}
 }
 
+// Wake asks the outbox runner to discover newly staged entries. It performs
+// no relay I/O and is safe to call from another publisher's delivery callback.
+func (p *Publisher) Wake() { p.nudge() }
+
 func eventFromNostrRecord(rec repository.NostrEventRecord) (nostr.Event, error) {
 	var ev nostr.Event
 	if err := decodeEventHex(ev.ID[:], rec.ID, "id"); err != nil {

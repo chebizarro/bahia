@@ -376,10 +376,15 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	// has seen prior events for this coordinate.
 	if err := handler.HandleIntent(ctx, intent); err != nil {
 		if errors.Is(err, ErrBackupRunPending) && intent.Domain == "backup" && intent.Op == "run" {
-			if p.status == nil {
-				return fmt.Errorf("backup run pending status publisher is unavailable")
-			}
-			return p.status.PublishPendingChecked(ctx, intent)
+			// The delivery reconciler owns the sole final 30315 result. A
+			// provisional replaceable status could arrive after acceptance and
+			// overwrite it when both events share a one-second Nostr timestamp.
+			return nil
+		}
+		if errors.Is(err, ErrBackupRunAdmissionConflict) && intent.Domain == "backup" && intent.Op == "run" {
+			// The existing admission's requester/coordinate status must not be
+			// replaced by a conflicting request's rejection.
+			return err
 		}
 		p.logger.Warn("intent handler failed",
 			zap.String("domain", intent.Domain),
@@ -427,6 +432,11 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 
 	// Step 6: Mark processed (idempotency).
 	p.markProcessed(intent)
+	if intent.Domain == "backup" && intent.Op == "run" {
+		// The ACK-settlement reconciler has already staged the one final
+		// status. A replay must not sign another replaceable 30315.
+		return nil
+	}
 	if requiresStrictIntentReplay(intent) {
 		return p.status.PublishAcceptedChecked(ctx, intent)
 	}

@@ -92,7 +92,7 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 	require.NoError(t, err)
 	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: runEvent, Target: "control-plane"})
 	require.NoError(t, err)
-	_, err = outbox.CommitRound(runEvent.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+	_, err = outbox.CommitPublisherRound(runEvent.ID, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: true, Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1},
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
 	require.NoError(t, err)
 	storedRun, err := reader.GetBackupRunReceipt(t.Context(), run.ID)

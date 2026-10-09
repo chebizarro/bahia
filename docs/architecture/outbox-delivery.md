@@ -29,16 +29,15 @@ payments and security.
   pruned. A pending or failed entry does not produce an accepted run intent;
   the same signed request can be replayed after delivery to report acceptance.
 
-For service-signed backup recipe, repository, and policy `30900` events,
+For service-signed backup recipe, repository, policy, and run-state `30900` events,
 and deployment-policy registry `30900` events, the outbox also records a
 non-prunable delivery proof in the same transaction as
-the publisher's verified quorum-reaching round. `PublishProjection`
-admits the exact signed event before relay I/O. `PublishBeforeCommit` makes its
-relay attempt before admission (including live policy mutations) and is not
-suitable for a crash-safe import. A policy proof therefore does not imply that
-its producer used outbox-first admission.
-Its quorum outcomes are admitted and then committed before it reports success;
-a crash between those operations leaves a retryable row without acceptance
+the publisher's verified quorum-reaching round. `PublishProjection` and
+`EnqueueBackupRun` admit exact signed events before relay I/O.
+`PublishBeforeCommit` makes its relay attempt before admission and is not
+suitable for a crash-safe import; a policy proof therefore does not imply
+outbox-first admission. Verified quorum outcomes are committed before success
+is reported; a crash before commit leaves a retryable row without acceptance
 proof. Generic enqueue and round calls cannot mint a proof.
 It pins the exact signed event, publish target, configured write-relay set,
 required quorum, and each relay's accepted `OK`. Backup execution-snapshot
@@ -48,6 +47,14 @@ Older rows without policy provenance are not promoted into proofs and refuse
 backup acceptance even if their event cache entry remains. The proof's signed
 event also preserves a pinned older config version when the replaceable local
 event cache has moved to a newer version.
+For a staged backup run, the publisher's verified quorum round also updates
+the durable admission record. The final signed accepted intent status is
+enqueued in a separate atomic transaction after that outcome; a startup pass
+repairs a crash between the two transactions without signing a second status.
+A staged run state without that durable status pins its outbox row through
+ordinary pruning, including after the delivery attempt budget is exhausted.
+The same signed event may be retried; exhaustion alone never signs a rejection
+because one relay may already hold the event.
 
 ## Abandonment: two cases, decided by who was told
 
