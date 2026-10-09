@@ -25,10 +25,23 @@ type materialHarness struct {
 	obsRepo          *mockObservationRepo
 	rt               *mockRuntime
 	publisher        *mockPublisher
+	statePublisher   *countingRuntimeStatePublisher
 	services         *mockServiceRepo
 	envs             *mockEnvironmentRepo
 	artifacts        *mockArtifactRepo
 	units            *mockDeploymentUnitRepo
+}
+
+type countingRuntimeStatePublisher struct {
+	records int
+}
+
+func (p *countingRuntimeStatePublisher) PublishState(_ context.Context, _ *domain.EnvironmentServiceState, _ *domain.RuntimeObservation) error {
+	p.records++
+	return nil
+}
+func (p *countingRuntimeStatePublisher) PublishStateTombstone(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
 }
 
 func newMaterialHarness(t *testing.T, initial domain.DriftStatus) *materialHarness {
@@ -36,10 +49,11 @@ func newMaterialHarness(t *testing.T, initial domain.DriftStatus) *materialHarne
 	serviceID, envID := uuid.New(), uuid.New()
 	h := &materialHarness{
 		serviceID: serviceID, envID: envID, stateKey: stateMapKey(serviceID, envID),
-		obsRepo:   &mockObservationRepo{},
-		rt:        &mockRuntime{observeNormHash: materialDesiredHash, observeHealth: domain.HealthStatusHealthy},
-		publisher: &mockPublisher{},
-		services:  &mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api"}}},
+		obsRepo:        &mockObservationRepo{},
+		rt:             &mockRuntime{observeNormHash: materialDesiredHash, observeHealth: domain.HealthStatusHealthy},
+		publisher:      &mockPublisher{},
+		statePublisher: &countingRuntimeStatePublisher{},
+		services:       &mockServiceRepo{services: map[uuid.UUID]*domain.Service{serviceID: {ID: serviceID, Name: "api"}}},
 		envs: &mockEnvironmentRepo{envs: map[uuid.UUID]*domain.Environment{envID: {
 			ID: envID, Name: "prod", Targeting: domain.EnvironmentTargeting{DefaultReconcileMode: domain.ReconcileModeObserveOnly},
 		}}},
@@ -70,8 +84,10 @@ func (h *materialHarness) seedObservedBaseline(t *testing.T) {
 // reconciler builds a Reconciler over the harness. Calling it again simulates
 // a process restart: new instance, same persisted repos.
 func (h *materialHarness) reconciler() *Reconciler {
-	return NewReconciler(h.services, h.envs, h.artifacts, h.units, h.obsRepo, h.stateRepo,
+	r := NewReconciler(h.services, h.envs, h.artifacts, h.units, h.obsRepo, h.stateRepo,
 		&mockRuntimeResolver{rt: h.rt}, h.publisher, time.Minute, zap.NewNop())
+	r.SetRuntimeStatePublisher(h.statePublisher)
+	return r
 }
 
 func (h *materialHarness) pass(t *testing.T, r *Reconciler) {
@@ -110,7 +126,7 @@ func (h *materialHarness) lastStateChanged(t *testing.T) events.ResourceData {
 
 // TestReconcilerRepeatedUnchangedHealthyObservationsEmitZeroEvents is the core
 // P0 regression: a steady in_sync unit reconciled repeatedly must update its
-// bookkeeping and emit NO state-changed or drift events.
+// bookkeeping without growing observation history or emitting events.
 func TestReconcilerRepeatedUnchangedHealthyObservationsEmitZeroEvents(t *testing.T) {
 	h := newMaterialHarness(t, domain.DriftStatusInSync)
 	h.seedObservedBaseline(t)
@@ -127,13 +143,13 @@ func TestReconcilerRepeatedUnchangedHealthyObservationsEmitZeroEvents(t *testing
 			firstObservationID = *state.CurrentObservationID
 		}
 	}
-	// Observation linkage rotates every pass — that is bookkeeping, not a change.
-	require.NotEqual(t, firstObservationID, *h.stateRepo.states[h.stateKey].CurrentObservationID)
-	// passes new observations plus the one seeded baseline observation.
-	require.Len(t, h.obsRepo.observations, passes+1)
+	// The persisted link remains stable across repeated no-op samples.
+	require.Equal(t, firstObservationID, *h.stateRepo.states[h.stateKey].CurrentObservationID)
+	require.Len(t, h.obsRepo.observations, 1)
 	stateChanged, drift := h.counts()
 	require.Zero(t, stateChanged, "unchanged observations must not emit state-changed events")
 	require.Zero(t, drift, "unchanged observations must not emit drift events")
+	require.Zero(t, h.statePublisher.records, "unchanged observations must not publish canonical state")
 }
 
 // TestReconcilerDriftEnterAndExitEmitExactlyOneEventEach proves a real drift
@@ -169,6 +185,7 @@ func TestReconcilerDriftEnterAndExitEmitExactlyOneEventEach(t *testing.T) {
 	stateChanged, drift = h.counts()
 	require.Equal(t, 1, stateChanged, "steady drift must not repeat state-changed")
 	require.Equal(t, 1, drift, "steady drift must not repeat drift.detected")
+	require.Len(t, h.obsRepo.observations, 2, "only baseline and drift entry are retained")
 
 	// Exit drift: observed hash converges again.
 	h.rt.observeNormHash = materialDesiredHash
@@ -177,6 +194,7 @@ func TestReconcilerDriftEnterAndExitEmitExactlyOneEventEach(t *testing.T) {
 	stateChanged, drift = h.counts()
 	require.Equal(t, 2, stateChanged, "drift exit emits exactly one more state-changed")
 	require.Equal(t, 1, drift, "drift exit must not emit a drift.detected")
+	require.Len(t, h.obsRepo.observations, 3, "drift exit retains one more observation")
 	data = h.lastStateChanged(t)
 	require.Equal(t, string(domain.DriftStatusDrifted), data.PreviousDriftStatus)
 	require.Equal(t, string(domain.DriftStatusInSync), data.DriftStatus)
@@ -202,10 +220,64 @@ func TestReconcilerHealthTransitionEmitsExactlyOneEventWithReason(t *testing.T) 
 	h.pass(t, r)
 	stateChanged, _ = h.counts()
 	require.Equal(t, 1, stateChanged)
+	require.Len(t, h.obsRepo.observations, 2, "repeated unhealthy samples must not grow history")
+}
+
+func TestReconcilerContainerRestartRetainsAndPublishesObservation(t *testing.T) {
+	h := newMaterialHarness(t, domain.DriftStatusInSync)
+	h.seedObservedBaseline(t)
+	h.obsRepo.observations[0].ObservedContainerID = "container-1"
+	h.rt.observeContainerID = "container-2"
+	oldID := h.obsRepo.observations[0].ID
+	r := h.reconciler()
+	h.pass(t, r)
+
+	require.Len(t, h.obsRepo.observations, 2)
+	require.NotEqual(t, oldID, *h.stateRepo.states[h.stateKey].CurrentObservationID)
+	stateChanged, drift := h.counts()
+	require.Equal(t, 1, stateChanged, "container restart must reach downstream state subscribers")
+	require.Zero(t, drift)
+	require.Contains(t, strings.Split(h.lastStateChanged(t).ChangeReason, ","), changeReasonRuntimeObservation)
+	require.Equal(t, 1, h.statePublisher.records, "retained restart must publish canonical state")
+
+	h.pass(t, r)
+	require.Len(t, h.obsRepo.observations, 2, "unchanged restarted container must not create another row")
+	stateChanged, _ = h.counts()
+	require.Equal(t, 1, stateChanged)
+	require.Equal(t, 1, h.statePublisher.records)
+}
+
+func TestReconcilerStateWriteRetryReusesUnlinkedObservation(t *testing.T) {
+	h := newMaterialHarness(t, domain.DriftStatusDrifted)
+	h.seedObservedBaseline(t)
+	h.obsRepo.observations[0].HealthStatus = domain.HealthStatusUnhealthy
+	h.rt.observeHealth = domain.HealthStatusStopped
+	linkedID := h.obsRepo.observations[0].ID
+	persistedState := *h.stateRepo.states[h.stateKey]
+	h.stateRepo.upsertErr = errors.New("state write failed")
+
+	err := h.reconciler().reconcileOne(context.Background(), h.stateRepo.states[h.stateKey])
+	require.ErrorIs(t, err, h.stateRepo.upsertErr)
+	require.Len(t, h.obsRepo.observations, 2, "material observation is durable before state update")
+	stateChanged, _ := h.counts()
+	require.Zero(t, stateChanged, "failed state update must not publish")
+	require.Zero(t, h.statePublisher.records)
+
+	// Rehydrate the prior persisted state, as a process restart does after the
+	// in-memory state object was mutated by the failed pass.
+	h.stateRepo.states[h.stateKey] = &persistedState
+	h.stateRepo.upsertErr = nil
+	h.pass(t, h.reconciler())
+	require.Len(t, h.obsRepo.observations, 2, "retry must reuse the unlinked row")
+	require.NotEqual(t, linkedID, *h.stateRepo.states[h.stateKey].CurrentObservationID)
+	stateChanged, _ = h.counts()
+	require.Equal(t, 1, stateChanged, "retry must publish the missed transition")
+	require.Contains(t, strings.Split(h.lastStateChanged(t).ChangeReason, ","), changeReasonHealth)
+	require.Equal(t, 1, h.statePublisher.records, "retry must publish canonical state")
 }
 
 // TestReconcilerNoOpObservationsStaySuppressedAcrossRestart proves the
-// baseline is derived from PERSISTED state + latest observation, so a process
+// baseline is derived from PERSISTED state + its linked observation, so a process
 // restart does not re-emit events for an unchanged unit.
 func TestReconcilerNoOpObservationsStaySuppressedAcrossRestart(t *testing.T) {
 	h := newMaterialHarness(t, domain.DriftStatusInSync)
@@ -223,6 +295,7 @@ func TestReconcilerNoOpObservationsStaySuppressedAcrossRestart(t *testing.T) {
 	stateChanged, drift = h.counts()
 	require.Zero(t, stateChanged, "restart must not re-emit for an unchanged unit")
 	require.Zero(t, drift)
+	require.Len(t, h.obsRepo.observations, 1, "restart must reuse the persisted observation")
 }
 
 // TestReconcilerFirstObservationOnUnknownStateEmitsOneEvent proves the very
@@ -278,7 +351,11 @@ func TestReconcilerBaselineReadFailureDoesNotManufactureTransition(t *testing.T)
 			stateChanged, drift = h.counts()
 			require.Equal(t, tc.wantAfterRetry, stateChanged)
 			require.Zero(t, drift)
-			require.Len(t, h.obsRepo.observations, observationsBefore+1)
+			wantObservations := observationsBefore + 1
+			if tc.seedBaseline {
+				wantObservations = observationsBefore
+			}
+			require.Len(t, h.obsRepo.observations, wantObservations)
 			require.NotNil(t, h.stateRepo.states[h.stateKey].CurrentObservationID)
 			h.pass(t, r)
 			stateChanged, drift = h.counts()
@@ -286,6 +363,41 @@ func TestReconcilerBaselineReadFailureDoesNotManufactureTransition(t *testing.T)
 			require.Zero(t, drift)
 		})
 	}
+}
+
+func TestObservationMateriallyChanged(t *testing.T) {
+	unitID := uuid.New()
+	previous := &domain.RuntimeObservation{
+		ID: uuid.New(), DeploymentUnitID: &unitID,
+		ObservedImageRepo: "example/api", ObservedImageDigest: "sha256:abc",
+		ObservedContainerID: "container-1", ObservedHost: "node-1", ObservedVersion: "v1",
+		HealthStatus: domain.HealthStatusHealthy, Source: "compose", NormalizedHash: "config-1",
+		ObservedAt: time.Now().UTC(), Metadata: map[string]any{"sample": 1},
+	}
+	sample := *previous
+	sample.ID = uuid.New()
+	sample.ObservedAt = sample.ObservedAt.Add(time.Minute)
+	sample.Metadata = map[string]any{"sample": 2}
+	require.False(t, observationMateriallyChanged(previous, &sample), "sampling fields must not grow history")
+
+	for _, tc := range []struct {
+		name   string
+		change func(*domain.RuntimeObservation)
+	}{
+		{"container restart", func(o *domain.RuntimeObservation) { o.ObservedContainerID = "container-2" }},
+		{"health transition", func(o *domain.RuntimeObservation) { o.HealthStatus = domain.HealthStatusUnhealthy }},
+		{"configuration transition", func(o *domain.RuntimeObservation) { o.NormalizedHash = "config-2" }},
+		{"host migration", func(o *domain.RuntimeObservation) { o.ObservedHost = "node-2" }},
+		{"source transition", func(o *domain.RuntimeObservation) { o.Source = "docker" }},
+		{"deployment unit transition", func(o *domain.RuntimeObservation) { id := uuid.New(); o.DeploymentUnitID = &id }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := sample
+			tc.change(&changed)
+			require.True(t, observationMateriallyChanged(previous, &changed))
+		})
+	}
+	require.True(t, observationMateriallyChanged(nil, &sample), "first observation must be retained")
 }
 
 // TestMaterialStateDiffIgnoresBookkeepingAndIsDeterministic unit-tests the

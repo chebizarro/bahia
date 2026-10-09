@@ -35,6 +35,16 @@ func (m *mockObservationRepo) Create(_ context.Context, obs *domain.RuntimeObser
 	return nil
 }
 
+func (m *mockObservationRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.RuntimeObservation, error) {
+	for i := range m.observations {
+		if m.observations[i].ID == id {
+			obs := m.observations[i]
+			return &obs, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *mockObservationRepo) GetLatest(_ context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
 	if m.getLatestErr != nil {
 		return nil, m.getLatestErr
@@ -464,8 +474,8 @@ func TestReconcilerDigestMatchStartingRemainsObservable(t *testing.T) {
 			t.Fatalf("pass %d drift status = %q, want in_sync", pass, got)
 		}
 	}
-	if len(observations.observations) != 2 {
-		t.Fatalf("observation count = %d, want 2", len(observations.observations))
+	if len(observations.observations) != 1 {
+		t.Fatalf("observation count = %d, want 1 material observation", len(observations.observations))
 	}
 }
 

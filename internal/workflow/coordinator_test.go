@@ -347,6 +347,9 @@ func (m *stubObsRepo) Create(_ context.Context, obs *domain.RuntimeObservation) 
 	}
 	return nil
 }
+func (m *stubObsRepo) GetByID(context.Context, uuid.UUID) (*domain.RuntimeObservation, error) {
+	return nil, nil
+}
 func (m *stubObsRepo) GetLatest(_ context.Context, _, _ uuid.UUID) (*domain.RuntimeObservation, error) {
 	return nil, nil
 }

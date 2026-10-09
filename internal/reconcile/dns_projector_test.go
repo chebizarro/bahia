@@ -1110,6 +1110,14 @@ type fakeObservationRepo struct {
 }
 
 func (r *fakeObservationRepo) Create(context.Context, *domain.RuntimeObservation) error { return nil }
+func (r *fakeObservationRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.RuntimeObservation, error) {
+	for _, obs := range r.latest {
+		if obs != nil && obs.ID == id {
+			return obs, nil
+		}
+	}
+	return nil, nil
+}
 func (r *fakeObservationRepo) GetLatest(_ context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
 	return r.latest[dnsTestStateKey(serviceID, envID)], nil
 }

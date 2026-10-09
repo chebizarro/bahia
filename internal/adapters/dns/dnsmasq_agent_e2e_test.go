@@ -639,6 +639,12 @@ func (r *e2eStateRepo) ListAll(context.Context) ([]domain.EnvironmentServiceStat
 type e2eObservationRepo struct{ latest *domain.RuntimeObservation }
 
 func (r *e2eObservationRepo) Create(context.Context, *domain.RuntimeObservation) error { return nil }
+func (r *e2eObservationRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.RuntimeObservation, error) {
+	if r.latest != nil && r.latest.ID == id {
+		return r.latest, nil
+	}
+	return nil, nil
+}
 func (r *e2eObservationRepo) GetLatest(context.Context, uuid.UUID, uuid.UUID) (*domain.RuntimeObservation, error) {
 	return r.latest, nil
 }

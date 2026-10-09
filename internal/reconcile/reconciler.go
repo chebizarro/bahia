@@ -287,14 +287,27 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 
 	obs.DeploymentUnitID = currentState.DeploymentUnitID
 
-	// Capture the material baseline from the persisted state and its latest
-	// observation BEFORE this pass mutates anything, so the post-pass comparison
-	// detects only real transitions. Volatile bookkeeping (timestamps, the
-	// rotating observation ID, backoff counters, diagnostics metadata) is
-	// excluded by construction — see materialStateOf.
-	previousObservation, err := r.observations.GetLatest(ctx, currentState.ServiceID, currentState.EnvironmentID)
+	// The state link, not the newest row, is the delivered material baseline.
+	// A failed state write can leave an unlinked observation behind; that row
+	// may be reused on retry, but must not hide the missed transition.
+	latestObservation, err := r.observations.GetLatest(ctx, currentState.ServiceID, currentState.EnvironmentID)
 	if err != nil {
-		return fmt.Errorf("reading previous runtime observation: %w", err)
+		return fmt.Errorf("reading latest runtime observation: %w", err)
+	}
+	var previousObservation *domain.RuntimeObservation
+	if currentState.CurrentObservationID != nil {
+		if latestObservation != nil && latestObservation.ID == *currentState.CurrentObservationID {
+			previousObservation = latestObservation
+		} else {
+			previousObservation, err = r.observations.GetByID(ctx, *currentState.CurrentObservationID)
+			if err != nil {
+				return fmt.Errorf("reading linked runtime observation: %w", err)
+			}
+			if previousObservation != nil &&
+				(previousObservation.ServiceID != currentState.ServiceID || previousObservation.EnvironmentID != currentState.EnvironmentID) {
+				return fmt.Errorf("linked runtime observation %s belongs to another service or environment", previousObservation.ID)
+			}
+		}
 	}
 	previousMaterial := materialStateOf(currentState, previousObservation)
 
@@ -307,11 +320,6 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 	noteDrift := func(extra map[string]string) {
 		driftDetected = true
 		driftExtra = extra
-	}
-
-	// Record the observation.
-	if err := r.observations.Create(ctx, obs); err != nil {
-		return err
 	}
 
 	// Determine drift status.
@@ -405,9 +413,21 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		}
 	}
 
+	// Keep the persisted observation link for an unchanged sample. A new row is
+	// required only when runtime identity, health, image, or configuration has
+	// materially changed; bookkeeping samples must not grow history.
+	persistedObservation := obs
+	if observationMateriallyChanged(latestObservation, obs) {
+		if err := r.observations.Create(ctx, obs); err != nil {
+			return err
+		}
+	} else {
+		persistedObservation = latestObservation
+	}
+
 	// Update state.
 	now := time.Now().UTC()
-	currentState.CurrentObservationID = &obs.ID
+	currentState.CurrentObservationID = &persistedObservation.ID
 	currentState.DriftStatus = newDrift
 	currentState.LastReconciledAt = &now
 	if newDrift == domain.DriftStatusInSync {
@@ -429,15 +449,20 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 			Status: currentState.DriftStatus, PreviousStatus: previousDrift, Branch: decisionBranch,
 			DesiredHash: desiredHash, ObservedHash: observedHash,
 			DesiredDigest: desiredDigest, ObservedDigest: observedDigest,
-			Health: obs.HealthStatus, ObservationID: obs.ID, Source: obs.Source,
+			Health: obs.HealthStatus, ObservationID: persistedObservation.ID, Source: obs.Source,
 		})
 	}
 	// Emit exactly one state-changed event — and the deferred drift event —
 	// only for a REAL material transition. Unchanged observations updated the
 	// bookkeeping above but produce zero events, which is what stops the
 	// projector fan-out amplification at its source.
-	newMaterial := materialStateOf(currentState, obs)
-	if changed, reasons := previousMaterial.diff(newMaterial); changed {
+	newMaterial := materialStateOf(currentState, persistedObservation)
+	changed, reasons := previousMaterial.diff(newMaterial)
+	if observationMateriallyChanged(previousObservation, persistedObservation) {
+		changed = true
+		reasons = append(reasons, changeReasonRuntimeObservation)
+	}
+	if changed {
 		r.publisher.Publish(ctx, events.Event{
 			Type:     events.EventEnvironmentServiceStateChanged,
 			EntityID: currentState.ServiceID.String() + ":" + currentState.EnvironmentID.String(),
@@ -454,7 +479,7 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		}
 		// Publish the canonical cp-state record directly to relays; the
 		// projector does not re-project it from bus events.
-		r.publishStateToRelay(ctx, currentState, obs)
+		r.publishStateToRelay(ctx, currentState, persistedObservation)
 	}
 	if newDrift == domain.DriftStatusDrifted && mode == domain.ReconcileModeAutoApply {
 		return r.autoApplyDesiredState(ctx, currentState)

@@ -204,7 +204,8 @@ func (*mockIntentRepo) UpdateDesiredState(context.Context, uuid.UUID, *domain.De
 }
 
 type mockStateRepo struct {
-	states map[string]*domain.EnvironmentServiceState
+	states    map[string]*domain.EnvironmentServiceState
+	upsertErr error
 }
 
 func stateMapKey(serviceID, envID uuid.UUID) string {
@@ -212,6 +213,9 @@ func stateMapKey(serviceID, envID uuid.UUID) string {
 }
 
 func (m *mockStateRepo) Upsert(_ context.Context, s *domain.EnvironmentServiceState) error {
+	if m.upsertErr != nil {
+		return m.upsertErr
+	}
 	key := stateMapKey(s.ServiceID, s.EnvironmentID)
 	m.states[key] = s
 	return nil
@@ -253,15 +257,16 @@ func (m *mockStateRepo) ListAll(_ context.Context) ([]domain.EnvironmentServiceS
 }
 
 type mockRuntime struct {
-	mu              sync.Mutex
-	deployed        []string
-	deployedOpts    []runtime.DeployOptions
-	undeployed      []string
-	deployErr       error
-	undeployErr     error
-	observeDigest   string
-	observeNormHash string
-	observeHealth   domain.HealthStatus
+	mu                 sync.Mutex
+	deployed           []string
+	deployedOpts       []runtime.DeployOptions
+	undeployed         []string
+	deployErr          error
+	undeployErr        error
+	observeDigest      string
+	observeNormHash    string
+	observeHealth      domain.HealthStatus
+	observeContainerID string
 }
 
 func (m *mockRuntime) Type() domain.RuntimeType {
@@ -272,6 +277,7 @@ func (m *mockRuntime) Observe(_ context.Context, serviceID, envID uuid.UUID, ser
 	m.mu.Lock()
 	digest := m.observeDigest
 	health := m.observeHealth
+	containerID := m.observeContainerID
 	m.mu.Unlock()
 	if health == "" {
 		health = domain.HealthStatusHealthy
@@ -280,6 +286,7 @@ func (m *mockRuntime) Observe(_ context.Context, serviceID, envID uuid.UUID, ser
 		ServiceID:           serviceID,
 		EnvironmentID:       envID,
 		ObservedImageDigest: digest,
+		ObservedContainerID: containerID,
 		NormalizedHash:      m.observeNormHash,
 		HealthStatus:        health,
 		Source:              "mock",

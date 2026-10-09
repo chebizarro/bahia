@@ -401,6 +401,9 @@ func (m *mockObsRepo) Create(_ context.Context, obs *domain.RuntimeObservation) 
 	m.observations[obs.ID] = obs
 	return nil
 }
+func (m *mockObsRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.RuntimeObservation, error) {
+	return m.observations[id], nil
+}
 func (m *mockObsRepo) GetLatest(_ context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
 	var latest *domain.RuntimeObservation
 	for _, obs := range m.observations {

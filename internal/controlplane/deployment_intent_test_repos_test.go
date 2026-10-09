@@ -222,6 +222,9 @@ func (r *testDeploymentRunRepo) UpdateStatus(_ context.Context, id uuid.UUID, st
 type testObservationRepo struct{}
 
 func (r *testObservationRepo) Create(context.Context, *domain.RuntimeObservation) error { return nil }
+func (r *testObservationRepo) GetByID(context.Context, uuid.UUID) (*domain.RuntimeObservation, error) {
+	return nil, nil
+}
 func (r *testObservationRepo) GetLatest(context.Context, uuid.UUID, uuid.UUID) (*domain.RuntimeObservation, error) {
 	return nil, nil
 }

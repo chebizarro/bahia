@@ -109,6 +109,15 @@ func (r *testRuntimeObservationRepo) Create(_ context.Context, obs *domain.Runti
 	return nil
 }
 
+func (r *testRuntimeObservationRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.RuntimeObservation, error) {
+	for _, obs := range r.observations {
+		if obs.ID == id {
+			return obs, nil
+		}
+	}
+	return nil, nil
+}
+
 func (r *testRuntimeObservationRepo) GetLatest(_ context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
 	obs := r.observations[observationKey(serviceID, envID)]
 	if obs == nil {

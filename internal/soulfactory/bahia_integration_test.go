@@ -586,6 +586,17 @@ func (m *sfMockObservationRepo) Create(_ context.Context, obs *domain.RuntimeObs
 	m.observations[key] = append(m.observations[key], *obs)
 	return nil
 }
+func (m *sfMockObservationRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.RuntimeObservation, error) {
+	for _, observations := range m.observations {
+		for i := range observations {
+			if observations[i].ID == id {
+				obs := observations[i]
+				return &obs, nil
+			}
+		}
+	}
+	return nil, nil
+}
 func (m *sfMockObservationRepo) GetLatest(_ context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
 	return latestObservation(m, serviceID, envID), nil
 }

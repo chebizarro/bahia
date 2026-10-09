@@ -424,6 +424,24 @@ func TestPgRuntimeObservationRepository_NormalizedStateRoundTrip(t *testing.T) {
 	assert.Equal(t, []string{"DB_PASSWORD"}, got.NormalizedState.SecretEnvKeys)
 	assert.Equal(t, "true", got.NormalizedState.BahiaLabels["bahia.managed"])
 
+	// The persisted state link must resolve the exact observation even when a
+	// newer, unlinked row exists after an interrupted reconciliation.
+	mock.ExpectQuery("SELECT .+ FROM runtime_observations WHERE id =").
+		WithArgs(obs.ID).
+		WillReturnRows(pgxmock.NewRows([]string{
+			"id", "service_id", "environment_id", "deployment_unit_id", "observed_image_digest", "observed_image_repo",
+			"observed_container_id", "observed_host", "observed_version", "health_status", "source",
+			"metadata", "normalized_state", "normalized_hash", "observed_at",
+		}).AddRow(
+			obs.ID, svcID, envID, nil, "sha256:deadbeef", "registry.example.com/my-service",
+			"container-abc", "worker-1", "v1.2.3", "healthy", "compose",
+			[]byte(`{}`), normalizedJSON, normalized.ObservationHash, now,
+		))
+	linked, err := repo.GetByID(context.Background(), obs.ID)
+	require.NoError(t, err)
+	require.NotNil(t, linked)
+	assert.Equal(t, obs.ID, linked.ID)
+
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

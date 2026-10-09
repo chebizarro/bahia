@@ -55,6 +55,8 @@ A service deployment can attach a managed hostname. The route plan binds the ser
 
 Runtime supervision publishes managed instance health, recovery attempts, and maintenance state. See [Instance Health](instance-health.md).
 
+Reconciliation retains a runtime observation when the service is first observed or its runtime identity, placement, image, health, or normalized configuration changes. A retained transition publishes a state-change record even if health remains the same. Repeated samples with only a new timestamp or diagnostic metadata update the reconciliation bookkeeping without adding observation history or publishing another state-change event. The current observation link continues to identify the last retained sample.
+
 ## Related
 
 - [Builds](builds.md)

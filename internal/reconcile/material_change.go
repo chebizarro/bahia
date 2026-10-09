@@ -45,6 +45,7 @@ const (
 	changeReasonHealth              = "health"
 	changeReasonObservedHash        = "observed_hash"
 	changeReasonObservedImageDigest = "observed_digest"
+	changeReasonRuntimeObservation  = "runtime_observation"
 )
 
 // materialStateOf builds the semantic projection of state + observation.
@@ -84,6 +85,33 @@ func observedHashOf(obs *domain.RuntimeObservation) string {
 		return obs.NormalizedState.ObservationHash
 	}
 	return obs.NormalizedHash
+}
+
+// observationMateriallyChanged excludes the sampling timestamp, generated ID,
+// and diagnostic metadata. Runtime identity, placement, image, health, and
+// normalized configuration remain durable forensic transitions.
+func observationMateriallyChanged(previous, current *domain.RuntimeObservation) bool {
+	if previous == nil || current == nil {
+		return previous != current
+	}
+	return uuidPtrString(previous.DeploymentUnitID) != uuidPtrString(current.DeploymentUnitID) ||
+		previous.ObservedImageRepo != current.ObservedImageRepo ||
+		domain.NormalizeImageDigest(previous.ObservedImageDigest) != domain.NormalizeImageDigest(current.ObservedImageDigest) ||
+		previous.ObservedContainerID != current.ObservedContainerID ||
+		previous.ObservedHost != current.ObservedHost ||
+		previous.ObservedVersion != current.ObservedVersion ||
+		previous.HealthStatus != current.HealthStatus ||
+		previous.Source != current.Source ||
+		observedHashOf(previous) != observedHashOf(current) ||
+		normalizedObservationContentHash(previous) != normalizedObservationContentHash(current)
+}
+
+func normalizedObservationContentHash(obs *domain.RuntimeObservation) string {
+	if obs.NormalizedState == nil {
+		return ""
+	}
+	normalized := *obs.NormalizedState
+	return normalized.ComputeObservationHash()
 }
 
 // diff reports whether b differs materially from a and returns the sorted,
@@ -130,6 +158,7 @@ func (a materialState) diff(b materialState) (bool, []string) {
 // changeReasonString renders the sorted reasons as the stable comma-joined
 // value carried on the event.
 func changeReasonString(reasons []string) string {
+	sort.Strings(reasons)
 	return strings.Join(reasons, ",")
 }
 

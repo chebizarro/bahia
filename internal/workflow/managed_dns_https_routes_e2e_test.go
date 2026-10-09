@@ -229,6 +229,12 @@ type managedRouteObservationRepo struct {
 func (r managedRouteObservationRepo) Create(context.Context, *domain.RuntimeObservation) error {
 	return nil
 }
+func (r managedRouteObservationRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.RuntimeObservation, error) {
+	if r.observation != nil && r.observation.ID == id {
+		return r.observation, nil
+	}
+	return nil, nil
+}
 func (r managedRouteObservationRepo) GetLatest(context.Context, uuid.UUID, uuid.UUID) (*domain.RuntimeObservation, error) {
 	return r.observation, nil
 }

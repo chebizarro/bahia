@@ -76,6 +76,18 @@ func (r *PgRuntimeObservationRepository) scanObs(row pgx.Row) (*domain.RuntimeOb
 	return obs, nil
 }
 
+func (r *PgRuntimeObservationRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain.RuntimeObservation, error) {
+	row := r.pool.QueryRow(ctx, `SELECT `+obsColumns+` FROM runtime_observations WHERE id = $1`, id)
+	obs, err := r.scanObs(row)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("querying runtime observation %s: %w", id, err)
+	}
+	return obs, nil
+}
+
 func (r *PgRuntimeObservationRepository) GetLatest(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT `+obsColumns+` FROM runtime_observations

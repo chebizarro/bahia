@@ -87,6 +87,7 @@ type DeploymentRunRepository interface {
 // RuntimeObservationRepository manages runtime observation records.
 type RuntimeObservationRepository interface {
 	Create(ctx context.Context, obs *domain.RuntimeObservation) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.RuntimeObservation, error)
 	GetLatest(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error)
 	ListByServiceEnv(ctx context.Context, serviceID, envID uuid.UUID, limit int) ([]domain.RuntimeObservation, error)
 }
