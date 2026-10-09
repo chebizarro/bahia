@@ -105,7 +105,7 @@ Record overrides may return `pending` until the endpoint projection is visible. 
 
 ### Tool provisioning
 
-`bahia_tool_provision_request`, `bahia_tool_provision_status`, `bahia_tool_provision_approve`, `bahia_tool_provision_reject`, `bahia_tool_profile_get`, `bahia_tool_denylist_list`, `bahia_tool_denylist_add`, `bahia_tool_denylist_remove`. Approve and reject publish `tool/approval-response` with the provisioning `intent_id` and a non-empty `reason`.
+`bahia_tool_provision_request`, `bahia_tool_provision_status`, `bahia_tool_provision_approve`, `bahia_tool_provision_reject`, `bahia_tool_profile_get`, `bahia_tool_denylist_list`, `bahia_tool_denylist_add`, `bahia_tool_denylist_remove`. Tool provisioning and approval execution are suspended. Approve and reject do not turn SQL provisioning rows into authority: the daemon refuses an unsigned MCP-generated event, and even an operator-signed `tool/approval-response` intent receives a rejected `30315` status. No tool image build or deploy follows that status.
 
 ### Backup
 

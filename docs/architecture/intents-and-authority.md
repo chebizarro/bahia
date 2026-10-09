@@ -213,6 +213,14 @@ handler cannot be left out of default-on processing. Registered domains:
 domain is processed by default; `nostr.intent_domains_disabled` opts specific
 domains out.
 
+The `tool/approval-response` handler accepts only an operator-signed `30900`
+envelope whose actor, coordinate, operation, idempotency key, and content match
+the signature. It returns a checked, service-signed rejection status; it does
+not read or mutate a SQL provisioning row or dispatch a build. MCP's locally
+constructed event identity is not an operator signature and cannot authorize
+tool effects. Tool approval stays suspended until a canonical request receipt
+and restart-safe effect commit bind the approved inputs to the operator event.
+
 Side effects must be idempotent, because a crash between the side effect and
 step 6 replays the intent on restart: creates resolve by id
 (`resolveCreateByID`), deployments compare the runtime's desired hash, DNS

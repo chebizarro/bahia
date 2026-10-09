@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -284,19 +285,26 @@ func TestD79AdoptionScanOversizedFindingAdvancesBoundedPage(t *testing.T) {
 
 func TestD79ToolApprovalIntentPausedWithoutSQLMutation(t *testing.T) {
 	actor := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	for _, source := range []string{"sql-only", "signed-request"} {
+	for _, source := range []string{"sql-only", "sql-row-with-event-id"} {
 		t.Run(source, func(t *testing.T) {
 			id := uuid.New()
 			repo := newAtomicToolApprovalRepo(id, domain.ToolProvisionStatusAwaitingApproval)
 			repo.intent.ResolvedTools = []domain.ResolvedTool{{Name: "malicious-package", Version: "1", Manager: "apt", Source: "sql-overridden-source"}}
-			if source == "signed-request" {
+			if source == "sql-row-with-event-id" {
 				repo.intent.NostrEventID = strings.Repeat("a", 64)
 			}
 			reactor := NewReactor(Config{AuthorizedPubkeys: []string{actor}}, nil, nil, nil, zap.NewNop(), WithToolProvisioningRepository(repo))
 			p, statuses := d70Processor(t, "tool", actor, NewToolIntentHandler(reactor))
-			event := toolApprovalEvent(t, testRequesterKey, "approve-d79-"+source, id, "approve")
-			intent := d70Intent("tool", "approval-response", "tool-approval:"+id.String(), actor, map[string]any{"intent_id": id.String(), "action": "approve"})
-			intent.Event = event
+			intentID := uuid.NewString()
+			content := fmt.Sprintf(`{"intent_id":%q,"action":"approve","reason":"operator reviewed"}`, id.String())
+			event := signedLLMRequest(t, testRequesterKey, 30900, content, nostr.Tags{
+				{"d", "tool-approval:" + id.String()}, {"domain", "tool"}, {"op", "approval-response"},
+				{"schema", "bahia.intent.tool.v1"}, {"org", testOrgID().String()},
+				{"intent_id", intentID}, {"t", "bahia-intent"},
+			})
+			intent, err := ParseIntent(event)
+			require.NoError(t, err)
+			intent.Actor = actor
 			require.ErrorContains(t, p.ProcessInProcess(t.Context(), intent), "tool approval paused")
 			require.Equal(t, "rejected", tagValueNostr(statuses.events[0].Tags, "status"))
 			calls, applied, logs, status := repo.counts()

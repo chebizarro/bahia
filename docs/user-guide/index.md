@@ -49,6 +49,7 @@ The same catalog is available to people and agents:
 | [Route Canaries](features/route-canaries.md) | End-to-end route verification and outage state |
 | [DNS](features/dns.md) | Zones, endpoints, projection, overrides, drift, and mesh |
 | [Packages](features/packages.md) | Repositories, upload, promotion, yank, and drift |
+| [Tool Provisioning](features/tool-provisioning.md) | Signed approval boundary and suspended execution |
 | [Policies](features/policies.md) | Deployment evidence and enforcement |
 | [Config Fabric](features/config-fabric.md) | Desired/effective service configuration and rollback |
 | [Security](features/security.md) | SBOM vulnerability scanning and policy evidence |

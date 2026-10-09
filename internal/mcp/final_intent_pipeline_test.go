@@ -259,6 +259,12 @@ type finalToolApprovalRepo struct {
 	writes int
 }
 
+func (r *finalToolApprovalRepo) CreateIntent(_ context.Context, intent *domain.ToolProvisionIntent) error {
+	r.intent = intent
+	r.writes++
+	return nil
+}
+
 func (r *finalToolApprovalRepo) ApplyToolApprovalDecision(_ context.Context, id uuid.UUID, status domain.ToolProvisionStatus, actor string, when time.Time) (*domain.ToolProvisionIntent, error) {
 	if r.intent == nil || r.intent.ID != id {
 		return nil, repository.ErrNotFound
@@ -296,10 +302,14 @@ func TestFinalMCPToolApprovalRealHandlerPipeline(t *testing.T) {
 				require.True(t, result.IsError, "%v", body)
 				require.Equal(t, "rejected", body["status"])
 				if mode != "rejected" {
-					require.Contains(t, body["reason"], "tool approval paused")
+					require.Contains(t, body["reason"], "operator signature is missing")
 				}
 				require.Zero(t, repo.writes, "SQL-only approval row must remain pending")
 				require.Equal(t, domain.ToolProvisionStatusAwaitingApproval, repo.intent.Status)
+				require.False(t, f.server.intentProc.IsProcessed("paused-"+tool))
+				for range f.canonical.store.QueryEvents(nostr.Filter{Kinds: []nostr.Kind{30315}}) {
+					t.Fatal("unsigned MCP tool approval induced a service-signed status")
+				}
 				if mode == "replay" {
 					again, err := f.server.CallTool(ctx, tool, args)
 					require.NoError(t, err)
@@ -309,6 +319,25 @@ func TestFinalMCPToolApprovalRealHandlerPipeline(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestFinalMCPToolProvisionRequestDoesNotCreateSQLAuthority(t *testing.T) {
+	f := newFinalIntentFixture(t, "tool", "accepted")
+	repo := &finalToolApprovalRepo{}
+	f.server.toolProvisioning = repo
+	result, err := f.server.CallTool(f.ctx, "bahia_tool_provision_request", map[string]any{
+		"service_id": uuid.NewString(), "environment_id": uuid.NewString(), "reason": "reviewed",
+		"tools": []map[string]string{{"name": "curl", "manager": "apt", "version": "latest"}},
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	require.Len(t, result.Content, 1)
+	require.Contains(t, result.Content[0].Text, "tool provisioning request paused")
+	require.Zero(t, repo.writes)
+	require.Nil(t, repo.intent)
+	for range f.canonical.store.QueryEvents(nostr.Filter{Kinds: []nostr.Kind{30315}}) {
+		t.Fatal("unsigned MCP tool provision request induced a service-signed status")
 	}
 }
 

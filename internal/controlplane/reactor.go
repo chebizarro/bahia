@@ -655,68 +655,10 @@ func summarizePolicyBlockReason(evaluation *domain.PolicyEvaluation) string {
 	return "deployment blocked by policy evaluation"
 }
 
-func (r *Reactor) handleToolProvisionRequest(ctx context.Context, event *nostr.Event) error {
-	logger := r.zapLog.With(zap.String("event_id", event.ID.Hex()), zap.String("requester", event.PubKey.Hex()), zap.Int("kind", int(event.Kind)))
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.logPublishError(r.publishError(ctx, event, "unauthorized", "requester not in authorized list"))
-		return fmt.Errorf("unauthorized requester")
+func (r *Reactor) handleToolApprovalResponse(_ context.Context, event *nostr.Event) error {
+	if event == nil || !event.CheckID() || !event.VerifySignature() || !r.isAuthorized(event.PubKey.Hex()) {
+		return fmt.Errorf("tool approval requires an authorized operator-signed event")
 	}
-	if r.toolProvisioning == nil {
-		r.logPublishError(r.publishError(ctx, event, "tool_provisioning_unavailable", "tool provisioning repository not configured"))
-		return fmt.Errorf("tool provisioning repository not configured")
-	}
-	var req struct {
-		ServiceID     string               `json:"service_id"`
-		EnvironmentID string               `json:"environment_id"`
-		Operation     string               `json:"operation"`
-		Tools         []domain.ToolRequest `json:"tools"`
-		Reason        string               `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		r.logPublishError(r.publishError(ctx, event, "parse_error", err.Error()))
-		return fmt.Errorf("parse tool provisioning request: %w", err)
-	}
-	serviceID, err := uuid.Parse(req.ServiceID)
-	if err != nil {
-		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid service_id: %v", err)))
-		return err
-	}
-	envID, err := uuid.Parse(req.EnvironmentID)
-	if err != nil {
-		r.logPublishError(r.publishError(ctx, event, "validation_error", fmt.Sprintf("invalid environment_id: %v", err)))
-		return err
-	}
-	if len(req.Tools) == 0 {
-		r.logPublishError(r.publishError(ctx, event, "validation_error", "tools are required"))
-		return fmt.Errorf("empty tools")
-	}
-	intent := &domain.ToolProvisionIntent{
-		ID:              uuid.New(),
-		ServiceID:       serviceID,
-		EnvironmentID:   envID,
-		RequestedTools:  req.Tools,
-		Status:          domain.ToolProvisionStatusPending,
-		NostrEventID:    event.ID.Hex(),
-		RequesterPubkey: event.PubKey.Hex(),
-		CreatedAt:       time.Now().UTC(),
-	}
-	if err := r.toolProvisioning.CreateIntent(ctx, intent); err != nil {
-		r.logPublishError(r.publishError(ctx, event, "intent_error", err.Error()))
-		return fmt.Errorf("create tool provisioning intent: %w", err)
-	}
-	if r.toolResponder != nil {
-		_ = r.toolResponder.PublishStatus(ctx, event, intent, "queued", "Tool provisioning intent accepted and queued")
-	}
-	logger.Info("tool provisioning request accepted", zap.String("intent_id", intent.ID.String()), zap.String("operation", req.Operation), zap.String("reason", req.Reason), zap.Int("tool_count", len(req.Tools)))
-	if r.toolCoordinator != nil {
-		if err := r.toolCoordinator.ProcessIntent(ctx, intent.ID); err != nil {
-			logger.Error("processing tool provisioning intent failed", zap.String("intent_id", intent.ID.String()), zap.Error(err))
-		}
-	}
-	return nil
-}
-
-func (r *Reactor) handleToolApprovalResponse(_ context.Context, _ *nostr.Event) error {
 	r.zapLog.Warn("tool approval paused: SQL-derived resolved tools cannot be bound atomically to a signed request")
 	return fmt.Errorf("tool approval paused: canonical execution inputs and atomic approval are unavailable")
 }

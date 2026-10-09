@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -205,6 +206,11 @@ func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Even
 // and idempotency store as signed relay intents. The caller must already be
 // authenticated and authorized; Actor identifies that caller, not the daemon.
 func (p *IntentProcessor) ProcessInProcess(ctx context.Context, intent *Intent) error {
+	if intent != nil && intent.Domain == "tool" && intent.Op == "approval-response" {
+		if err := validateToolApprovalSignedEnvelope(intent); err != nil {
+			return err
+		}
+	}
 	if raw, ok := intent.Content["expected_updated_at"]; ok {
 		revision, err := parseIntentRevision(raw)
 		if err != nil {
@@ -230,6 +236,11 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		)
 		return nil
 	}
+	if intent.Domain == "tool" && intent.Op == "approval-response" {
+		if err := validateToolApprovalSignedEnvelope(intent); err != nil {
+			return err
+		}
+	}
 	if requiresStrictIntentReplay(intent) && (p.status == nil || p.status.publish == nil || p.status.signer == nil) {
 		return fmt.Errorf("intent outcome status publisher is not configured")
 	}
@@ -238,7 +249,7 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	// Virtualization is suspended and never marks an intent processed. Even if
 	// another domain used the same ID, its receipt cannot admit VM work or
 	// turn this request into an accepted replay.
-	if intent.Domain != kinds.VirtualizationDomain && p.isProcessed(intent.IntentID) {
+	if intent.Domain != kinds.VirtualizationDomain && !(intent.Domain == "tool" && intent.Op == "approval-response") && p.isProcessed(intent.IntentID) {
 		record := p.ProcessedIntent(intent.IntentID)
 		if requiresStrictIntentReplay(intent) && record != nil && (record.Actor != intent.Actor || record.Domain != intent.Domain || record.Op != intent.Op || record.Coordinate != intent.Coordinate || (record.ContentHash != "" && record.ContentHash != intentContentHash(intent.Content))) {
 			err := &intentReplayConflictError{intentID: intent.IntentID}
@@ -343,7 +354,12 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 			zap.String("intent_id", intent.IntentID),
 			zap.Error(err),
 		)
-		if intent.Domain == kinds.VirtualizationDomain {
+		// An unsigned or mismatched MCP envelope is not a tool request. Do
+		// not let it induce a daemon-signed status that cites a fabricated ID.
+		if intent.Domain == "tool" && errors.Is(err, errToolApprovalAuthority) {
+			return err
+		}
+		if intent.Domain == kinds.VirtualizationDomain || (intent.Domain == "tool" && intent.Op == "approval-response") {
 			if p.status == nil {
 				return fmt.Errorf("%w: rejection status publisher is unavailable", err)
 			}

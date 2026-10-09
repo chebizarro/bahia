@@ -18,7 +18,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -2381,90 +2380,8 @@ func (s *Server) handleDeleteSecret(ctx context.Context, args map[string]interfa
 	return jsonResult(result)
 }
 
-func (s *Server) handleToolProvisionRequest(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.toolProvisioning == nil {
-		return errorResult("tool provisioning tools are not configured"), nil
-	}
-
-	serviceID, err := parseRequiredUUIDArg(args, "service_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	environmentID, err := parseRequiredUUIDArg(args, "environment_id")
-	if err != nil {
-		return errorResult(err.Error()), nil
-	}
-	reason, _ := args["reason"].(string)
-	if strings.TrimSpace(reason) == "" {
-		return errorResult("reason is required"), nil
-	}
-
-	toolsRaw, ok := args["tools"]
-	if !ok {
-		return errorResult("tools is required"), nil
-	}
-	toolsJSON, err := json.Marshal(toolsRaw)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid tools: %v", err)), nil
-	}
-	var tools []domain.ToolRequest
-	if err := json.Unmarshal(toolsJSON, &tools); err != nil {
-		return errorResult(fmt.Sprintf("invalid tools: %v", err)), nil
-	}
-	if len(tools) == 0 {
-		return errorResult("at least one tool is required"), nil
-	}
-	for _, t := range tools {
-		if strings.TrimSpace(t.Name) == "" || strings.TrimSpace(t.Manager) == "" {
-			return errorResult("each tool requires name and manager"), nil
-		}
-	}
-
-	requester, _ := args["requester"].(string)
-	if requester == "" {
-		requester = "mcp"
-	}
-	intent := &domain.ToolProvisionIntent{
-		ID:               uuid.New(),
-		ServiceID:        serviceID,
-		EnvironmentID:    environmentID,
-		RequestedTools:   tools,
-		Status:           domain.ToolProvisionStatusAwaitingApproval,
-		ApprovalRequired: true,
-		ApprovalFlags:    []string{"manual_review_required", reason},
-		RequesterPubkey:  requester,
-		CreatedAt:        time.Now().UTC(),
-	}
-	if err := s.toolProvisioning.CreateIntent(ctx, intent); err != nil {
-		return errorResult(fmt.Sprintf("failed to create tool provision intent: %v", err)), nil
-	}
-
-	if s.notificationDisp != nil {
-		serviceName := ""
-		if svc, svcErr := s.registry.GetService(ctx, serviceID); svcErr == nil && svc != nil {
-			serviceName = svc.Name
-		}
-		baseURL := "http://localhost:7777"
-		payload := map[string]any{
-			"intent_id":     intent.ID,
-			"service_id":    intent.ServiceID,
-			"service_name":  serviceName,
-			"requester":     intent.RequesterPubkey,
-			"tools":         intent.RequestedTools,
-			"flags":         intent.ApprovalFlags,
-			"security_scan": intent.SecurityScanResults,
-			"approve_url":   fmt.Sprintf("%s/tools/%s/approve", baseURL, intent.ID),
-			"reject_url":    fmt.Sprintf("%s/tools/%s/reject", baseURL, intent.ID),
-		}
-		if err := s.notificationDisp.Dispatch(ctx, string(events.EventToolProvisionApprovalRequired), payload); err != nil {
-			s.logger.Error("tool provisioning approval notification failed", zap.String("intent_id", intent.ID.String()), zap.Error(err))
-		}
-	}
-
-	return jsonResult(map[string]interface{}{
-		"status": "created",
-		"intent": toolProvisionIntentToMap(intent),
-	})
+func (s *Server) handleToolProvisionRequest(_ context.Context, _ map[string]interface{}) (*ToolResult, error) {
+	return errorResult("tool provisioning request paused: operator-signed canonical request acceptance and restart-safe effect commit are unavailable"), nil
 }
 
 func (s *Server) handleToolDenylistAdd(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
