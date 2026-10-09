@@ -42,11 +42,15 @@ type Virtualization struct {
 }
 
 func NewVirtualization(deps VirtualizationDependencies) (*Virtualization, error) {
-	v := &Virtualization{Query: readmodel.VirtualizationQuery{Repository: deps.Repository}, organizations: deps.Organizations}
-	v.Handlers = &controlplane.VirtualizationHandlers{Query: v.Query, RBAC: deps.RBAC, Persistent: deps.PersistentVM, Planes: deps.ExecutionPlane, CanonicalAuthor: deps.CanonicalAuthor}
+	v := &Virtualization{organizations: deps.Organizations}
 	if deps.Repository == nil || deps.Store == nil || deps.Publisher == nil || deps.Bus == nil || deps.Organizations == nil || deps.CanonicalAuthor == "" {
+		// A partial assembly must not expose the SQL index as a read model or
+		// leave mutation adapters reachable without a canonical recovery source.
+		v.Handlers = &controlplane.VirtualizationHandlers{RBAC: deps.RBAC, CanonicalAuthor: deps.CanonicalAuthor}
 		return v, nil
 	}
+	v.Query = readmodel.VirtualizationQuery{Repository: deps.Repository}
+	v.Handlers = &controlplane.VirtualizationHandlers{Query: v.Query, RBAC: deps.RBAC, Persistent: deps.PersistentVM, Planes: deps.ExecutionPlane, CanonicalAuthor: deps.CanonicalAuthor}
 	p, err := readmodel.NewVirtualizationProjector(deps.Repository, deps.Store, deps.Publisher, deps.CanonicalAuthor)
 	if err != nil {
 		return nil, err
@@ -82,6 +86,16 @@ func NewVirtualization(deps VirtualizationDependencies) (*Virtualization, error)
 	v.Handlers.ProjectionAvailable = p.Available
 	return v, nil
 }
+
+// registerVirtualizationSuspendedHealth reports the missing signed-intent
+// recovery source without making optional PostgreSQL state a core readiness gate.
+func registerVirtualizationSuspendedHealth(provider *HealthProvider) {
+	provider.RegisterCheck("virtualization_canonical_recovery", func() HealthCheck {
+		return HealthCheck{Name: "virtualization_canonical_recovery", Status: HealthStatusWarn,
+			Message: "virtualization admission and projection suspended until signed-intent recovery replaces the PostgreSQL journal"}
+	})
+}
+
 func (v *Virtualization) Name() string { return "virtualization-projection" }
 func (v *Virtualization) Run(ctx context.Context) error {
 	if v.Projector == nil {

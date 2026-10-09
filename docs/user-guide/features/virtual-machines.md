@@ -2,6 +2,16 @@
 
 Bahia exposes typed virtualization hosts, immutable VM images, persistent VMs, execution planes, checkpoints, exports, and operations. The `virtualization` configuration is opt-in.
 
+## Availability
+
+Virtualization reads and mutations currently return unavailable during normal
+daemon operation. The PostgreSQL journal is retained but is not replayed into
+signed state or audit events at startup. When PostgreSQL or virtualization is
+configured, `/ready` reports `virtualization_canonical_recovery=warn` without
+blocking core relay readiness. Previously signed local outbox entries still
+follow ordinary outbox recovery. An operator-controlled, signed-intent cutover
+must complete before this feature is re-enabled.
+
 ## Lifecycle boundary
 
 - `persistent_vm` resources are governed by Bahia.
