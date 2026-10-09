@@ -59,6 +59,20 @@ func TestDeployDoesNotConvergeWhileRuntimeUnhealthy(t *testing.T) {
 	}
 }
 
+func TestUnhealthyEvidenceNeverCopiesRuntimeStatusText(t *testing.T) {
+	state := &domain.EnvironmentServiceState{ReconcileFailureMetadata: map[string]any{"docker_status": "old credential-like runtime diagnostic"}}
+	obs := &domain.RuntimeObservation{HealthStatus: domain.HealthStatusUnhealthy, Metadata: map[string]any{
+		"docker_state": "token=super-secret-value", "docker_status": "credential-like runtime diagnostic",
+	}}
+	recordUnhealthyEvidence(state, obs, "desired configuration is applied but the runtime is unhealthy; the deployment is not healthy")
+	if _, ok := state.ReconcileFailureMetadata["docker_status"]; ok {
+		t.Fatalf("runtime status leaked into canonical diagnostics: %#v", state.ReconcileFailureMetadata)
+	}
+	if _, ok := state.ReconcileFailureMetadata["docker_state"]; ok {
+		t.Fatalf("runtime state leaked into canonical diagnostics: %#v", state.ReconcileFailureMetadata)
+	}
+}
+
 // TestHealthyDeployStillConverges guards against over-correction.
 func TestHealthyDeployStillConverges(t *testing.T) {
 	reconciler, stateRepo, stateKey := newHealthGateReconciler(t, domain.HealthStatusHealthy)

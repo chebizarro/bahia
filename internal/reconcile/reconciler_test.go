@@ -710,7 +710,7 @@ func TestReconcilerAutoApplyFailureKeepsDesiredStateAndBacksOff(t *testing.T) {
 	envID := uuid.New()
 	artifactID := uuid.New()
 	stateKey := stateMapKey(serviceID, envID)
-	deployer := &mockAutoRemediationDeployer{err: fmt.Errorf("apply failed")}
+	deployer := &mockAutoRemediationDeployer{err: fmt.Errorf("apply failed: credential-like runtime diagnostic")}
 
 	stateRepo := &mockStateRepo{states: map[string]*domain.EnvironmentServiceState{
 		stateKey: {ServiceID: serviceID, EnvironmentID: envID, DesiredArtifactID: &artifactID, DesiredHash: "sha256:desired-state"},
@@ -738,6 +738,8 @@ func TestReconcilerAutoApplyFailureKeepsDesiredStateAndBacksOff(t *testing.T) {
 	require.NotNil(t, updated.ReconcileBackoffUntil)
 	require.Equal(t, 1, updated.ReconcileConsecutiveFailures)
 	require.Equal(t, "auto_apply_failed", updated.ReconcileFailureMetadata["reason"])
+	require.Equal(t, "automatic desired-state application failed", updated.ReconcileFailureMetadata["message"])
+	require.NotContains(t, fmt.Sprint(updated.ReconcileFailureMetadata), "credential-like runtime diagnostic")
 }
 
 func TestReconcilerExplicitDeploymentUnitUsesUnitRuntime(t *testing.T) {

@@ -700,20 +700,16 @@ func (r *Reconciler) recordStartingTimeout(state *domain.EnvironmentServiceState
 		zap.String("evidence", evidence))
 }
 
-// recordUnhealthyEvidence stores why a unit is not converging, including the raw
-// runtime verdict, so operators can read the cause from normal state output
-// instead of inspecting the database or the container host.
+// recordUnhealthyEvidence stores a bounded verdict, not provider status text.
+// Runtime metadata can contain credentials and must not enter signed state.
 func recordUnhealthyEvidence(state *domain.EnvironmentServiceState, obs *domain.RuntimeObservation, reason string) {
 	if state.ReconcileFailureMetadata == nil {
 		state.ReconcileFailureMetadata = map[string]any{}
 	}
+	delete(state.ReconcileFailureMetadata, "docker_state")
+	delete(state.ReconcileFailureMetadata, "docker_status")
 	state.ReconcileFailureMetadata[unhealthyEvidenceKey] = reason
 	state.ReconcileFailureMetadata["observed_health"] = string(obs.HealthStatus)
-	for _, key := range []string{"docker_state", "docker_status"} {
-		if value, ok := obs.Metadata[key]; ok {
-			state.ReconcileFailureMetadata[key] = value
-		}
-	}
 }
 
 func (r *Reconciler) driftStatusForMode(mode domain.ReconcileMode) domain.DriftStatus {
@@ -751,10 +747,10 @@ func (r *Reconciler) autoApplyDesiredState(ctx context.Context, currentState *do
 	if errors.Is(err, runtimeService.ErrEnvironmentApplyLockContended) {
 		reason = "environment_apply_lock_contended"
 	}
-	return r.recordReconcileFailure(ctx, currentState, reason, err.Error())
+	return r.recordReconcileFailure(ctx, currentState, reason)
 }
 
-func (r *Reconciler) recordReconcileFailure(ctx context.Context, currentState *domain.EnvironmentServiceState, reason, message string) error {
+func (r *Reconciler) recordReconcileFailure(ctx context.Context, currentState *domain.EnvironmentServiceState, reason string) error {
 	failureCount := currentState.ReconcileConsecutiveFailures + 1
 	backoff := r.reconcileBackoff(failureCount)
 	now := time.Now().UTC()
@@ -763,7 +759,7 @@ func (r *Reconciler) recordReconcileFailure(ctx context.Context, currentState *d
 	currentState.ReconcileBackoffUntil = &backoffUntil
 	currentState.ReconcileFailureMetadata = map[string]any{
 		"reason":        reason,
-		"message":       message,
+		"message":       "automatic desired-state application failed",
 		"failed_at":     now.Format(time.RFC3339Nano),
 		"backoff":       backoff.String(),
 		"failure_count": failureCount,

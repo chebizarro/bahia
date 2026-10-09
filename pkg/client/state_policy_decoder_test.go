@@ -38,9 +38,14 @@ func TestDecodeStateProducerRoundTrip(t *testing.T) {
 	got, err := DecodeState(ev)
 	require.NoError(t, err)
 	require.Equal(t, &state, got)
-	state.ReconcileFailureMetadata = map[string]any{"message": "credential-like runtime diagnostic"}
-	_, publicContent := nostradapter.RuntimeStateRecord(&state, nil)
+	state.ReconcileFailureMetadata = map[string]any{"message": "credential-like runtime diagnostic", "starting_since": "2026-10-03T10:00:00Z"}
+	publicTags, publicContent := nostradapter.RuntimeStateRecord(&state, nil)
 	require.NotContains(t, publicContent, "credential-like runtime diagnostic")
+	publicEvent := signedStatePolicyRecord(t, nostr.Generate(), kinds.ServiceState, dTag, false, publicTags, publicContent)
+	publicState, err := DecodeState(publicEvent)
+	require.NoError(t, err)
+	require.Equal(t, "2026-10-03T10:00:00Z", publicState.ReconcileFailureMetadata["starting_since"])
+	require.Equal(t, "automatic desired-state application failed", publicState.ReconcileFailureMetadata["message"])
 	var legacy map[string]any
 	require.NoError(t, json.Unmarshal([]byte(content), &legacy))
 	legacy["deployment_unit_id"] = ""

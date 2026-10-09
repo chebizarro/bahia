@@ -714,7 +714,9 @@ func RuntimeStateRecord(state *domain.EnvironmentServiceState, observation *doma
 		content["reconcile_consecutive_failures"] = state.ReconcileConsecutiveFailures
 	}
 	if len(state.ReconcileFailureMetadata) > 0 {
-		content["reconcile_failure_metadata"] = state.ReconcileFailureMetadata
+		if safe := publicRuntimeFailureMetadata(state.ReconcileFailureMetadata); len(safe) > 0 {
+			content["reconcile_failure_metadata"] = safe
+		}
 	}
 	if state.DesiredArtifactID != nil {
 		content["desired_artifact_id"] = state.DesiredArtifactID.String()
