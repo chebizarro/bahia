@@ -398,14 +398,6 @@ func (s *RuntimeLifecycleService) DeployDesiredStateSnapshot(
 	return s.deployDesiredState(ctx, serviceID, envID, artifactID, unit, desiredState, statusFn, true)
 }
 
-// AutoRemediateDesiredState applies the currently persisted desired artifact for
-// scheduled reconciliation. It uses the same desired-state deploy helper as user
-// deploys, but attempts the environment apply lock without blocking so active
-// user operations preempt scheduled remediation.
-func (s *RuntimeLifecycleService) AutoRemediateDesiredState(ctx context.Context, serviceID, envID uuid.UUID, statusFn DeployStatusCallback) (*domain.RuntimeObservation, error) {
-	return s.deployDesiredState(ctx, serviceID, envID, nil, nil, nil, statusFn, false)
-}
-
 // deployDesiredState is the shared internal deploy helper used by deployment requests,
 // direct runtime action=deploy, and rollback-to-artifact. It acquires the environment
 // apply lock, builds deploy options, applies through the runtime adapter, observes,

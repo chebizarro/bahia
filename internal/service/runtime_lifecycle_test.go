@@ -960,34 +960,6 @@ func (m *orderingMockRuntime) Deploy(ctx context.Context, serviceName, image str
 	return nil
 }
 
-func TestRuntimeLifecycleAutoRemediationDoesNotBlockBehindActiveUserApply(t *testing.T) {
-	ctx := context.Background()
-	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
-	stateRepo := registry.state.(*mockStateRepo)
-	rt := &lifecycleMockRuntime{}
-	lock := newInMemoryApplyLock()
-	lifecycle := NewRuntimeLifecycleService(
-		registry, svcRepo, envRepo, artifactRepo, stateRepo,
-		&mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop(),
-		WithRuntimeApplyLock(lock),
-	)
-	svc, env, _ := seedRuntimeLifecycleFixtures(t, registry)
-
-	unlock, err := lock.Lock(ctx, env.ID)
-	if err != nil {
-		t.Fatalf("lock setup failed: %v", err)
-	}
-	defer unlock()
-
-	_, err = lifecycle.AutoRemediateDesiredState(ctx, svc.ID, env.ID, nil)
-	if !errors.Is(err, ErrEnvironmentApplyLockContended) {
-		t.Fatalf("expected lock contention, got %v", err)
-	}
-	if len(rt.deployed) != 0 {
-		t.Fatalf("auto-remediation deployed despite active user lock: %#v", rt.deployed)
-	}
-}
-
 func TestRuntimeLifecycleDispatchesCorrectly(t *testing.T) {
 	ctx := context.Background()
 	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
