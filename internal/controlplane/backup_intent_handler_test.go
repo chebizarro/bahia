@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -88,90 +87,6 @@ func TestBackupIntentHandler_RecipeApply(t *testing.T) {
 	}
 }
 
-func TestBackupIntentHandler_RunIdempotent(t *testing.T) {
-	registry := newFakeBackupIntentRegistry()
-	h := NewBackupIntentHandler(BackupIntentHandlerConfig{
-		Registry: registry,
-		Logger:   zap.NewNop(),
-	})
-
-	runID := uuid.New()
-	recipeID := uuid.New()
-	repositoryID := uuid.New()
-	sourceEvent := &gonostr.Event{}
-	// Pre-create the run to simulate idempotent re-delivery.
-	registry.runs[runID] = &domain.BackupRun{ID: runID, RecipeID: recipeID, RepositoryID: repositoryID, RequestedBy: "npub1test", RequestEventID: sourceEvent.ID.Hex(), Status: domain.RunStatusQueued, Backend: domain.BackupBackendKopia}
-	registry.runCreatedAlready[runID] = true
-
-	intent := &Intent{
-		Op: "run",
-		Content: map[string]any{
-			"id":            runID.String(),
-			"recipe_id":     recipeID.String(),
-			"repository_id": repositoryID.String(),
-			"backend":       "kopia",
-		},
-		Actor: "npub1test",
-		Event: sourceEvent,
-	}
-
-	// Should succeed without error (idempotent).
-	if err := h.HandleIntent(context.Background(), intent); err != nil {
-		t.Fatalf("HandleIntent (idempotent): %v", err)
-	}
-}
-
-type recordingBackupRunExecutor struct{ started chan uuid.UUID }
-
-func (e recordingBackupRunExecutor) ProcessBackupRun(_ context.Context, id uuid.UUID) error {
-	e.started <- id
-	return nil
-}
-
-func TestBackupIntentHandler_DirectRunDoesNotDrainStoredRows(t *testing.T) {
-	registry := newFakeBackupIntentRegistry()
-	orphanID := uuid.New()
-	registry.runs[orphanID] = &domain.BackupRun{ID: orphanID, Status: domain.RunStatusQueued}
-	executor := recordingBackupRunExecutor{started: make(chan uuid.UUID, 2)}
-	h := NewBackupIntentHandler(BackupIntentHandlerConfig{
-		Registry:  registry,
-		Executors: BackupIntentExecutors{RunExecutor: executor},
-		Logger:    zap.NewNop(),
-	})
-	runID := uuid.New()
-	intent := &Intent{
-		Op: "run",
-		Content: map[string]any{
-			"id":            runID.String(),
-			"recipe_id":     uuid.New().String(),
-			"repository_id": uuid.New().String(),
-			"backend":       "kopia",
-		},
-		Actor: "operator",
-		Event: &gonostr.Event{},
-	}
-	if err := h.HandleIntent(context.Background(), intent); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case got := <-executor.started:
-		if got != runID {
-			t.Fatalf("executed stored row %s instead of intent run %s", got, runID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("direct intent did not execute")
-	}
-	registry.runCreatedAlready[runID] = true
-	if err := h.HandleIntent(context.Background(), intent); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case got := <-executor.started:
-		t.Fatalf("duplicate intent executed run %s", got)
-	default:
-	}
-}
-
 func TestBackupIntentHandler_Delete(t *testing.T) {
 	registry := newFakeBackupIntentRegistry()
 	publisher := &fakeBackupIntentPublisher{}
@@ -204,31 +119,26 @@ func TestBackupIntentHandler_Delete(t *testing.T) {
 // --- Test helpers ---
 
 type fakeBackupIntentRegistry struct {
-	recipes                 map[uuid.UUID]*domain.BackupRecipe
-	policies                map[uuid.UUID]*domain.BackupPolicy
-	repositories            map[uuid.UUID]*domain.BackupRepository
-	runs                    map[uuid.UUID]*domain.BackupRun
-	runCreatedAlready       map[uuid.UUID]bool
-	restores                map[uuid.UUID]*domain.BackupRestoreRun
-	restoreCreatedAlready   map[uuid.UUID]bool
-	verifications           map[uuid.UUID]*domain.BackupVerificationRecord
-	retentionRuns           map[uuid.UUID]*domain.BackupRetentionRun
-	retentionCreatedAlready map[uuid.UUID]bool
-	restoreApprovals        int
+	workflowCreates  int
+	recipes          map[uuid.UUID]*domain.BackupRecipe
+	policies         map[uuid.UUID]*domain.BackupPolicy
+	repositories     map[uuid.UUID]*domain.BackupRepository
+	runs             map[uuid.UUID]*domain.BackupRun
+	restores         map[uuid.UUID]*domain.BackupRestoreRun
+	verifications    map[uuid.UUID]*domain.BackupVerificationRecord
+	retentionRuns    map[uuid.UUID]*domain.BackupRetentionRun
+	restoreApprovals int
 }
 
 func newFakeBackupIntentRegistry() *fakeBackupIntentRegistry {
 	return &fakeBackupIntentRegistry{
-		recipes:                 make(map[uuid.UUID]*domain.BackupRecipe),
-		policies:                make(map[uuid.UUID]*domain.BackupPolicy),
-		repositories:            make(map[uuid.UUID]*domain.BackupRepository),
-		runs:                    make(map[uuid.UUID]*domain.BackupRun),
-		runCreatedAlready:       make(map[uuid.UUID]bool),
-		restores:                make(map[uuid.UUID]*domain.BackupRestoreRun),
-		restoreCreatedAlready:   make(map[uuid.UUID]bool),
-		verifications:           make(map[uuid.UUID]*domain.BackupVerificationRecord),
-		retentionRuns:           make(map[uuid.UUID]*domain.BackupRetentionRun),
-		retentionCreatedAlready: make(map[uuid.UUID]bool),
+		recipes:       make(map[uuid.UUID]*domain.BackupRecipe),
+		policies:      make(map[uuid.UUID]*domain.BackupPolicy),
+		repositories:  make(map[uuid.UUID]*domain.BackupRepository),
+		runs:          make(map[uuid.UUID]*domain.BackupRun),
+		restores:      make(map[uuid.UUID]*domain.BackupRestoreRun),
+		verifications: make(map[uuid.UUID]*domain.BackupVerificationRecord),
+		retentionRuns: make(map[uuid.UUID]*domain.BackupRetentionRun),
 	}
 }
 
@@ -287,9 +197,7 @@ func (r *fakeBackupIntentRegistry) GetPolicyByName(_ context.Context, name strin
 }
 
 func (r *fakeBackupIntentRegistry) CreateBackupRunIfAbsent(_ context.Context, run *domain.BackupRun) (*domain.BackupRun, bool, error) {
-	if r.runCreatedAlready[run.ID] {
-		return r.runs[run.ID], false, nil
-	}
+	r.workflowCreates++
 	r.runs[run.ID] = run
 	return run, true, nil
 }
@@ -302,9 +210,7 @@ func (r *fakeBackupIntentRegistry) GetBackupRun(_ context.Context, id uuid.UUID)
 }
 
 func (r *fakeBackupIntentRegistry) CreateBackupRestoreIfAbsent(_ context.Context, restore *domain.BackupRestoreRun) (*domain.BackupRestoreRun, bool, error) {
-	if r.restoreCreatedAlready[restore.ID] {
-		return r.restores[restore.ID], false, nil
-	}
+	r.workflowCreates++
 	r.restores[restore.ID] = restore
 	return restore, true, nil
 }
@@ -322,9 +228,7 @@ func (r *fakeBackupIntentRegistry) RecordBackupVerification(_ context.Context, r
 }
 
 func (r *fakeBackupIntentRegistry) CreateBackupRetentionRunIfAbsent(_ context.Context, run *domain.BackupRetentionRun) (*domain.BackupRetentionRun, bool, error) {
-	if r.retentionCreatedAlready[run.ID] {
-		return r.retentionRuns[run.ID], false, nil
-	}
+	r.workflowCreates++
 	r.retentionRuns[run.ID] = run
 	return run, true, nil
 }

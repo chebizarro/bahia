@@ -27,69 +27,10 @@ type backupRetentionRequest struct {
 }
 
 func (r *Reactor) handleBackupRetentionRequest(ctx context.Context, event *nostr.Event) {
-	if !r.authorizeBackupCommandRequest(ctx, event, "backup_retention", KindBackupRetentionResult) {
+	if !r.authorizeBackupPausedRequest(ctx, event) {
 		return
 	}
-	registry, ok := r.backupRegistry.(backupRetentionRegistry)
-	if !ok {
-		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "backup_retention_unavailable", "backup retention registry is not configured")
-		return
-	}
-	if r.backupRetentionExecutor == nil {
-		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "backup_retention_coordinator_unavailable", "backup retention coordinator is not configured")
-		return
-	}
-	req, err := parseBackupRetentionRequest(event)
-	if err != nil {
-		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "parse_error", err.Error())
-		return
-	}
-	repositoryID, err := uuid.Parse(req.RepositoryID)
-	if err != nil {
-		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "validation_error", "repository_id must be a UUID")
-		return
-	}
-	policyID, err := uuid.Parse(req.PolicyID)
-	if err != nil {
-		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "validation_error", "policy_id must be a UUID")
-		return
-	}
-	run := &domain.BackupRetentionRun{
-		ID:             uuid.New(),
-		RepositoryID:   repositoryID,
-		PolicyID:       &policyID,
-		RequestedBy:    backupRequestActor(event),
-		RequestEventID: event.ID.Hex(),
-		RequestKind:    int(event.Kind),
-		RequestDTag:    tagValueNostr(event.Tags, "d"),
-		Status:         domain.RunStatusQueued,
-		DryRun:         req.DryRun,
-		Metadata: backupNostrMetadata(event, req.Metadata, map[string]any{
-			"nostr_request_command": "backup_retention",
-			"nostr_repository_id":   repositoryID.String(),
-			"nostr_policy_id":       policyID.String(),
-			"nostr_dry_run":         req.DryRun,
-		}),
-	}
-	createdRun, created, err := registry.CreateBackupRetentionRunIfAbsent(ctx, run)
-	if err != nil {
-		r.publishBackupCommandFailure(ctx, event, KindBackupRetentionResult, "failed", "retention_create_error", err.Error())
-		return
-	}
-	if !created {
-		if err := backupRetentionDuplicateMatches(createdRun, run, false); err != nil {
-			r.logger.Warn("backup retention duplicate refused", "error", err, "request_event_id", run.RequestEventID)
-		}
-		return
-	}
-	if r.backupRetentionResponder != nil {
-		_ = r.backupRetentionResponder.PublishBackupRetentionStatus(ctx, createdRun, "queued", "backup retention enforcement queued")
-	}
-	go func(runID uuid.UUID) {
-		if err := r.backupRetentionExecutor.ProcessBackupRetentionRun(ctx, runID); err != nil {
-			r.logger.Warn("backup retention executor failed", "run_id", runID.String(), "error", err)
-		}
-	}(createdRun.ID)
+	r.publishPausedBackupRequest(ctx, event, KindBackupRetentionResult, "backup retention request intake is paused until canonical acceptance receipts are available")
 }
 
 func parseBackupRetentionRequest(event *nostr.Event) (*backupRetentionRequest, error) {

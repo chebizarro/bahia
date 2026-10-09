@@ -313,77 +313,12 @@ func (h *BackupIntentHandler) handleDefinitionApply(ctx context.Context, intent 
 
 // --- Daemon-triggered handlers (run, restore, verification, retention) ---
 
-func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) error {
-	run, err := backupRunFromIntentContent(intent)
-	if err != nil {
-		return fmt.Errorf("parse run from intent: %w", err)
-	}
-	authorID := run.ID != uuid.Nil
-	if run.ID == uuid.Nil {
-		run.ID = domain.NewEntityID()
-	}
-	run.RequestedBy = intent.Actor
-	run.RequestEventID = intent.Event.ID.Hex()
-	run.RequestKind = int(intent.Event.Kind)
-	run.RequestDTag = string(intent.Coordinate)
-
-	created, isNew, err := h.registry.CreateBackupRunIfAbsent(ctx, run)
-	if err != nil {
-		return fmt.Errorf("create backup run: %w", err)
-	}
-	if !isNew {
-		if err := backupRunDuplicateMatches(created, run, authorID); err != nil {
-			return &intentStateConflictError{message: err.Error()}
-		}
-		h.logger.Info("backup run already exists, skipping", zap.String("run_id", created.ID.String()))
-		return nil
-	}
-
-	// Trigger execution in background (event-driven, not polling).
-	if h.executors.RunExecutor != nil {
-		go func() {
-			if err := h.executors.RunExecutor.ProcessBackupRun(context.Background(), created.ID); err != nil {
-				h.logger.Warn("backup run execution failed", zap.String("run_id", created.ID.String()), zap.Error(err))
-			}
-		}()
-	}
-	return nil
+func (h *BackupIntentHandler) handleRun(_ context.Context, _ *Intent) error {
+	return fmt.Errorf("backup run request intake paused: canonical acceptance receipts are unavailable")
 }
 
-func (h *BackupIntentHandler) handleRestore(ctx context.Context, intent *Intent) error {
-	restore, err := backupRestoreFromIntentContent(intent)
-	if err != nil {
-		return fmt.Errorf("parse restore from intent: %w", err)
-	}
-	authorID := restore.ID != uuid.Nil
-	if restore.ID == uuid.Nil {
-		restore.ID = domain.NewEntityID()
-	}
-	restore.RequestedBy = intent.Actor
-	restore.RequestEventID = intent.Event.ID.Hex()
-	restore.RequestKind = int(intent.Event.Kind)
-	restore.RequestDTag = string(intent.Coordinate)
-
-	created, isNew, err := h.registry.CreateBackupRestoreIfAbsent(ctx, restore)
-	if err != nil {
-		return fmt.Errorf("create backup restore: %w", err)
-	}
-	if !isNew {
-		if err := backupRestoreDuplicateMatches(created, restore, authorID); err != nil {
-			return &intentStateConflictError{message: err.Error()}
-		}
-		h.logger.Info("backup restore already exists, skipping", zap.String("restore_id", created.ID.String()))
-		return nil
-	}
-
-	if h.executors.RestoreExecutor != nil {
-		go func() {
-			if err := h.executors.RestoreExecutor.ProcessBackupRestore(context.Background(), created.ID); err != nil {
-				h.logger.Warn("backup restore execution failed", zap.String("restore_id", created.ID.String()), zap.Error(err))
-			}
-		}()
-	}
-	return nil
+func (h *BackupIntentHandler) handleRestore(_ context.Context, _ *Intent) error {
+	return fmt.Errorf("backup restore request intake paused: canonical acceptance receipts are unavailable")
 }
 
 func (h *BackupIntentHandler) handleRestoreApproval(_ context.Context, _ *Intent) error {
@@ -413,40 +348,8 @@ func (h *BackupIntentHandler) handleVerification(ctx context.Context, intent *In
 	return nil
 }
 
-func (h *BackupIntentHandler) handleRetention(ctx context.Context, intent *Intent) error {
-	run, err := backupRetentionFromIntentContent(intent)
-	if err != nil {
-		return fmt.Errorf("parse retention from intent: %w", err)
-	}
-	authorID := run.ID != uuid.Nil
-	if run.ID == uuid.Nil {
-		run.ID = domain.NewEntityID()
-	}
-	run.RequestedBy = intent.Actor
-	run.RequestEventID = intent.Event.ID.Hex()
-	run.RequestKind = int(intent.Event.Kind)
-	run.RequestDTag = string(intent.Coordinate)
-
-	created, isNew, err := h.registry.CreateBackupRetentionRunIfAbsent(ctx, run)
-	if err != nil {
-		return fmt.Errorf("create backup retention run: %w", err)
-	}
-	if !isNew {
-		if err := backupRetentionDuplicateMatches(created, run, authorID); err != nil {
-			return &intentStateConflictError{message: err.Error()}
-		}
-		h.logger.Info("backup retention run already exists, skipping", zap.String("retention_run_id", created.ID.String()))
-		return nil
-	}
-
-	if h.executors.RetentionExecutor != nil {
-		go func() {
-			if err := h.executors.RetentionExecutor.ProcessBackupRetentionRun(context.Background(), created.ID); err != nil {
-				h.logger.Warn("backup retention execution failed", zap.String("retention_run_id", created.ID.String()), zap.Error(err))
-			}
-		}()
-	}
-	return nil
+func (h *BackupIntentHandler) handleRetention(_ context.Context, _ *Intent) error {
+	return fmt.Errorf("backup retention request intake paused: canonical acceptance receipts are unavailable")
 }
 
 func (h *BackupIntentHandler) handleRepositoryProbe(ctx context.Context, intent *Intent) error {

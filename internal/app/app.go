@@ -24,7 +24,6 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	backupAdapter "github.com/openagentsinc/bahia/internal/adapters/backup"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/build"
 	dnsAdapter "github.com/openagentsinc/bahia/internal/adapters/dns"
@@ -1003,23 +1002,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	backupRegistryRepo := repository.NewPgBackupControlPlaneRepository(pool)
 	backupRegistry := service.NewBackupRegistryService(backupRegistryRepo, publisher, logger)
-	backupResponder := controlplane.NewBackupRunResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
-	backupRestoreResponder := controlplane.NewBackupRestoreResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
-	backupRetentionResponder := controlplane.NewBackupRetentionResponder(controlPlanePool, controlPlaneSigner, backupRegistry, nostrEventRepo, logger)
-	backupResolver, err := service.NewStaticBackupBackendResolver(backupAdapter.NewKopiaBackend(), backupAdapter.NewVeleroBackend(), backupAdapter.NewPgBackend(), backupAdapter.NewQdrantBackend())
-	if err != nil {
-		return nil, fmt.Errorf("configuring backup backend resolver: %w", err)
-	}
-	backupRunOptions := []service.BackupRunCoordinatorOption{service.WithBackupRunResponder(backupResponder)}
-	backupRestoreOptions := []service.BackupRestoreCoordinatorOption{service.WithBackupRestoreResponder(backupRestoreResponder)}
-	if relayPolicyBackupRepo, ok := relayPolicyProjectionRepo.(repository.RelayPolicyProjectionBackupRepository); ok && servicePubkey != "" {
-		backupRunOptions = append(backupRunOptions, service.WithRelayPolicyProjectionBackup(relayPolicyBackupRepo, servicePubkey))
-		backupRestoreOptions = append(backupRestoreOptions, service.WithRelayPolicyProjectionRestore(relayPolicyBackupRepo, servicePubkey))
-	}
-	backupCoordinator := service.NewBackupRunCoordinator(backupRegistry, backupResolver, logger, backupRunOptions...)
-	backupRestoreCoordinator := service.NewBackupRestoreCoordinator(backupRegistry, backupResolver, logger, backupRestoreOptions...)
-	backupRetentionCoordinator := service.NewBackupRetentionCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRetentionResponder(backupRetentionResponder))
-	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "backup_recovery", "backup run, restore and retention recovery require canonical signed-intent replay; restore approvals are paused until atomic canonical execution is available")
+	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "backup_recovery", "backup run, restore and retention request intake, approvals, and recovery are paused until durable canonical acceptance receipts and atomic execution inputs are available")
 	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "backup_scheduler", "scheduled backups require canonical schedule and dispatch provenance")
 	logger.Info("backup control plane registered", zap.String("backend", string(domain.BackupBackendKopia)))
 
@@ -1317,13 +1300,8 @@ func New(cfg *config.Config) (*App, error) {
 				Registry:    backupRegistry,
 				Definitions: backupRegistry,
 				Publisher:   backupCanonical,
-				Executors: controlplane.BackupIntentExecutors{
-					RunExecutor:       backupCoordinator,
-					RestoreExecutor:   backupRestoreCoordinator,
-					RetentionExecutor: backupRetentionCoordinator,
-				},
-				Status: intentStatus,
-				Logger: logger,
+				Status:      intentStatus,
+				Logger:      logger,
 			},
 		))
 		logger.Info("backup intent handler registered")
@@ -2747,12 +2725,6 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		reactorOpts := appendControlPlaneAuditOption([]controlplane.ReactorOption{
 			controlplane.WithBackupRegistry(backupRegistry),
-			controlplane.WithBackupRunExecutor(backupCoordinator),
-			controlplane.WithBackupRunResponder(backupResponder),
-			controlplane.WithBackupRestoreExecutor(backupRestoreCoordinator),
-			controlplane.WithBackupRestoreResponder(backupRestoreResponder),
-			controlplane.WithBackupRetentionExecutor(backupRetentionCoordinator),
-			controlplane.WithBackupRetentionResponder(backupRetentionResponder),
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
 			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)),
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),

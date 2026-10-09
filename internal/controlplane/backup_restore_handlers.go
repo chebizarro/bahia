@@ -26,71 +26,10 @@ type backupRestoreRequest struct {
 }
 
 func (r *Reactor) handleBackupRestoreRequest(ctx context.Context, event *nostr.Event) {
-	if !r.authorizeBackupCommandRequest(ctx, event, "backup_restore", KindBackupRestoreResult) {
+	if !r.authorizeBackupPausedRequest(ctx, event) {
 		return
 	}
-	registry, ok := r.backupRegistry.(backupRestoreRegistry)
-	if !ok {
-		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "backup_restore_unavailable", "backup restore registry is not configured")
-		return
-	}
-	if r.backupRestoreExecutor == nil {
-		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "backup_restore_coordinator_unavailable", "backup restore coordinator is not configured")
-		return
-	}
-	req, err := parseBackupRestoreRequest(event)
-	if err != nil {
-		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "parse_error", err.Error())
-		return
-	}
-	backupRunID, err := uuid.Parse(req.BackupRunID)
-	if err != nil {
-		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "validation_error", "backup_run_id must be a UUID")
-		return
-	}
-	restore := &domain.BackupRestoreRun{
-		ID:               uuid.New(),
-		BackupRunID:      backupRunID,
-		RestoreTargetRef: req.RestoreTargetRef,
-		RequestedBy:      backupRequestActor(event),
-		RequestEventID:   event.ID.Hex(),
-		RequestKind:      int(event.Kind),
-		RequestDTag:      tagValueNostr(event.Tags, "d"),
-		Status:           domain.RunStatusQueued,
-		Metadata: backupNostrMetadata(event, req.Metadata, map[string]any{
-			"nostr_request_command": "backup_restore",
-			"nostr_backup_run_id":   backupRunID.String(),
-			"nostr_restore_target":  req.RestoreTargetRef,
-		}),
-	}
-	createdRestore, created, err := registry.CreateBackupRestoreIfAbsent(ctx, restore)
-	if err != nil {
-		r.publishBackupCommandFailure(ctx, event, KindBackupRestoreResult, "failed", "restore_create_error", err.Error())
-		return
-	}
-	if !created {
-		if err := backupRestoreDuplicateMatches(createdRestore, restore, false); err != nil {
-			r.logger.Warn("backup restore duplicate refused", "error", err, "request_event_id", restore.RequestEventID)
-		}
-		return
-	}
-	if r.backupRestoreResponder != nil {
-		step := "queued"
-		message := "backup restore queued"
-		if createdRestore.ApprovalStatus == domain.BackupApprovalPending {
-			step = "pending_approval"
-			message = "backup restore pending approval"
-		}
-		_ = r.backupRestoreResponder.PublishBackupRestoreStatus(ctx, createdRestore, step, message)
-	}
-	if createdRestore.ApprovalStatus == domain.BackupApprovalPending {
-		return
-	}
-	go func(restoreID uuid.UUID) {
-		if err := r.backupRestoreExecutor.ProcessBackupRestore(ctx, restoreID); err != nil {
-			r.logger.Warn("backup restore executor failed", "restore_id", restoreID.String(), "error", err)
-		}
-	}(createdRestore.ID)
+	r.publishPausedBackupRequest(ctx, event, KindBackupRestoreResult, "backup restore request intake is paused until canonical acceptance receipts are available")
 }
 
 func (r *Reactor) handleBackupRestoreApproval(_ context.Context, _ *nostr.Event) {

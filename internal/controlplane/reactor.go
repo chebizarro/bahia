@@ -184,8 +184,11 @@ type Reactor struct {
 	workerStatePublisher          *WorkerStatePublisher
 	workerReadModelPublisher      *WorkerReadModelPublisher
 
-	mu   sync.Mutex
-	runs map[string]*DeploymentRun // requestEventID -> run
+	mu                   sync.Mutex
+	runs                 map[string]*DeploymentRun // requestEventID -> run
+	pausedBackupSeen     map[string]struct{}
+	pausedBackupOrder    []string
+	pausedBackupInflight sync.Map
 
 	mlWorkCh chan mlWork
 }
@@ -388,19 +391,20 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 	}
 
 	r := &Reactor{
-		config:          config,
-		pool:            pool,
-		publisher:       pool,
-		registry:        registry,
-		signer:          signer,
-		logger:          slog.Default().With("component", "controlplane"),
-		zapLog:          zapLog,
-		dedup:           nostrpool.NewEventDeduplicator(10000),
-		backoff:         nostrpool.DefaultBackoff(),
-		eventBus:        &events.NoopPublisher{},
-		lastSeenByGroup: make(map[string]nostr.Timestamp),
-		runs:            make(map[string]*DeploymentRun),
-		mlWorkCh:        make(chan mlWork, 32),
+		config:           config,
+		pool:             pool,
+		publisher:        pool,
+		registry:         registry,
+		signer:           signer,
+		logger:           slog.Default().With("component", "controlplane"),
+		zapLog:           zapLog,
+		dedup:            nostrpool.NewEventDeduplicator(10000),
+		backoff:          nostrpool.DefaultBackoff(),
+		eventBus:         &events.NoopPublisher{},
+		lastSeenByGroup:  make(map[string]nostr.Timestamp),
+		runs:             make(map[string]*DeploymentRun),
+		pausedBackupSeen: make(map[string]struct{}),
+		mlWorkCh:         make(chan mlWork, 32),
 	}
 	r.workerStatePublisher = NewWorkerStatePublisher(r.publisher, r.signer)
 	for _, opt := range opts {

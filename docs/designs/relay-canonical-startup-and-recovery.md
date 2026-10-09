@@ -55,13 +55,15 @@ The daemon does not register the SQL-scanning backup run, restore, retention,
 schedule, LLM provisioning and route repair, or tool provisioning recovery runners. Health reports
 each paused family as degraded and warns operators that retained SQL work must
 not be replayed without signed-intent provenance. This does not erase queued
-rows. Backup and tool requests delivered through their signed request handlers
-can still be admitted directly. Backup restore and tool manual approvals are
-paused even for otherwise valid requests: SQL-derived restore metadata and
-resolved tool packages can change execution inputs after the signed request,
-and the existing approval mutation can publish before a second provenance
-check. Automatic schedule dispatch and LLM provisioning remain unavailable
-until their canonical intake and recovery sources exist.
+rows. Backup run, restore, and retention request intake and restore approval
+are paused even for otherwise valid signed requests: a SQL-only coordinate
+collision cannot be distinguished from a canonical replay without a retained
+acceptance receipt, and SQL-derived execution inputs can change after the
+request. Legacy Nostr requests receive a deterministic, request-correlated
+paused rejection; kind-30900 intents receive a rejected intent status before
+any SQL lookup. Tool request handling remains available, but manual tool
+approval is paused. Automatic schedule dispatch and LLM provisioning remain
+unavailable until their canonical intake and recovery sources exist.
 This pause is a **release blocker for the affected features**, not a completed
 recovery replacement or evidence that persisted work will finish after restart.
 
@@ -85,10 +87,11 @@ differs, leave the row pending with an operator-visible refusal; do not mint a
 new service receipt from SQL metadata. Tests must race approval against SQL
 mutation, inject fabricated rows and mismatched metadata, and prove zero
 executor calls and signed outcomes for every refusal.
-Direct signed backup requests also refuse a coordinate collision unless the
-stored run's source event and effect inputs still match the incoming request.
-Duplicate rows are not a source for re-signing mutable progress or terminal
-outcomes; those must be replayed from canonical events.
+Backup request intake must not resume merely because a SQL row copies the
+signed event id or effect inputs. The canonical acceptance receipt must bind
+the request to the durable run id and immutable execution inputs; duplicate
+delivery must replay that receipt and canonical outcome, never re-sign mutable
+SQL progress or terminal state.
 
 For each family, deterministic acceptance tests inject canonical EVENT and
 EOSE (including duplicates and divergent SQL), restart after acceptance,

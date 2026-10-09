@@ -15,90 +15,11 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestHandleBackupRunRequestCreatesDurableRunAndInvokesExecutor(t *testing.T) {
-	ctx := context.Background()
-	requestKey := nostr.Generate().Hex()
-	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
-	registry, recipe := newBackupRequestRegistryFixture()
-	executor := &recordingBackupExecutor{calls: make(chan uuid.UUID, 1)}
-	responder := &recordingBackupRunResponder{}
-	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
-	if err != nil {
-		t.Fatalf("create signer: %v", err)
-	}
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop())
-	reactor.backupRegistry = registry
-	reactor.backupExecutor = executor
-	reactor.backupResponder = responder
-	request := signedLLMRequest(t, requestKey, KindBackupRunRequest, `{"recipe":"recipe:daily:v1","metadata":{"site":"dc1"}}`, nostr.Tags{{"d", "backup:daily:prod"}, {"recipe", "recipe:daily:v1"}, {"site", "dc1"}})
-
-	reactor.handleBackupRunRequest(ctx, request)
-
-	select {
-	case runID := <-executor.calls:
-		run := registry.runs[runID]
-		if run == nil {
-			t.Fatalf("executor got run %s but registry has no run", runID)
-		}
-		if run.RecipeID != recipe.ID || run.RequestEventID != request.ID.Hex() || run.RequestDTag != "backup:daily:prod" {
-			t.Fatalf("unexpected run: %#v", run)
-		}
-		if run.Metadata["nostr_request_pubkey"] != requestPubkey || run.Metadata["nostr_recipe_coord"] != "recipe:daily:v1" {
-			t.Fatalf("missing Nostr metadata: %#v", run.Metadata)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("backup executor was not invoked")
-	}
-	if len(registry.runs) != 1 {
-		t.Fatalf("runs = %d, want 1", len(registry.runs))
-	}
-	if got := responder.statusSteps; len(got) != 1 || got[0] != "queued" {
-		t.Fatalf("status steps = %#v, want queued", got)
-	}
-}
-
-func TestHandleBackupRunRequestIsIdempotentByRequesterKindAndDTag(t *testing.T) {
-	ctx := context.Background()
-	requestKey := nostr.Generate().Hex()
-	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
-	registry, _ := newBackupRequestRegistryFixture()
-	executor := &recordingBackupExecutor{calls: make(chan uuid.UUID, 2)}
-	responder := &recordingBackupRunResponder{}
-	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop())
-	reactor.backupRegistry = registry
-	reactor.backupExecutor = executor
-	reactor.backupResponder = responder
-	first := signedLLMRequest(t, requestKey, KindBackupRunRequest, `{"recipe":"recipe:daily:v1"}`, nostr.Tags{{"d", "backup:daily:prod"}, {"recipe", "recipe:daily:v1"}})
-	second := signedLLMRequest(t, requestKey, KindBackupRunRequest, `{"recipe":"recipe:daily:v1"}`, nostr.Tags{{"d", "backup:daily:prod"}, {"recipe", "recipe:daily:v1"}})
-
-	reactor.handleBackupRunRequest(ctx, first)
-	select {
-	case <-executor.calls:
-	case <-time.After(time.Second):
-		t.Fatal("first backup executor call missing")
-	}
-	reactor.handleBackupRunRequest(ctx, second)
-
-	select {
-	case runID := <-executor.calls:
-		t.Fatalf("duplicate request invoked executor for run %s", runID)
-	default:
-	}
-	if len(registry.runs) != 1 {
-		t.Fatalf("runs = %d, want 1", len(registry.runs))
-	}
-	if got := responder.statusSteps; len(got) != 1 || got[0] != "queued" {
-		t.Fatalf("status steps = %#v, want only the original queued status; SQL replay is not outcome authority", got)
-	}
-}
-
 func TestHandleBackupRestoreApprovalPausedBeforeExecutorOrPublication(t *testing.T) {
 	ctx := context.Background()
 	requestKey := nostr.Generate().Hex()
 	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
 	registry, _ := newBackupRequestRegistryFixture()
-	sourceRun := registry.addRestoreEligibleRun()
 	executor := &recordingBackupRestoreExecutor{calls: make(chan uuid.UUID, 1)}
 	responder := &recordingBackupRestoreResponder{}
 	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
@@ -106,34 +27,29 @@ func TestHandleBackupRestoreApprovalPausedBeforeExecutorOrPublication(t *testing
 	reactor.backupRegistry = registry
 	reactor.backupRestoreExecutor = executor
 	reactor.backupRestoreResponder = responder
-	request := signedLLMRequest(t, requestKey, KindBackupRestoreRequest, fmt.Sprintf(`{"backup_run_id":"%s","restore_target_ref":"fs:/restore"}`, sourceRun.ID), nostr.Tags{{"d", "restore:daily:prod"}, {"backup_run_id", sourceRun.ID.String()}, {"target", "fs:/restore"}})
-	reactor.handleBackupRestoreRequest(ctx, request)
-	if len(registry.restores) != 1 || len(responder.statusSteps) != 1 || responder.statusSteps[0] != "pending_approval" {
-		t.Fatalf("signed request not retained pending approval: restores=%d steps=%v", len(registry.restores), responder.statusSteps)
-	}
-	for id, restore := range registry.restores {
-		restore.Metadata["kopia_restore_source"] = "sql-overridden-source"
-		restore.Metadata["velero_backup_name"] = "sql-overridden-name"
-		approval := signedLLMRequest(t, requestKey, KindBackupRestoreApproval, fmt.Sprintf(`{"restore_id":"%s","approved":true}`, id), nostr.Tags{{"d", "approve:restore:daily:prod"}, {"restore_id", id.String()}, {"decision", "approved"}})
+	for _, source := range []string{"signed-request", "sql-only"} {
+		id := uuid.New()
+		restore := &domain.BackupRestoreRun{ID: id, ApprovalStatus: domain.BackupApprovalPending, Metadata: map[string]any{"kopia_restore_source": "sql-overridden-source"}}
+		if source == "signed-request" {
+			original := signedLLMRequest(t, requestKey, KindBackupRestoreRequest, fmt.Sprintf(`{"backup_run_id":%q,"restore_target_ref":"fs:/restore"}`, uuid.New()), nostr.Tags{{"d", "original:restore"}})
+			restore.RequestEventID = original.ID.Hex()
+			restore.RequestKind = KindBackupRestoreRequest
+			restore.RequestedBy = requestPubkey
+		}
+		registry.restores[id] = restore
+		approval := signedLLMRequest(t, requestKey, KindBackupRestoreApproval, fmt.Sprintf(`{"restore_id":%q,"approved":true}`, id), nostr.Tags{{"d", "approve:" + source}, {"restore_id", id.String()}, {"decision", "approved"}})
 		reactor.handleBackupRestoreApproval(ctx, approval)
 		if restore.ApprovalStatus != domain.BackupApprovalPending || restore.ApprovalEventID != "" {
-			t.Fatalf("approval mutated pending restore: %#v", restore)
+			t.Fatalf("approval mutated %s restore: %#v", source, restore)
 		}
-	}
-	fabricatedID := uuid.New()
-	registry.restores[fabricatedID] = &domain.BackupRestoreRun{ID: fabricatedID, ApprovalStatus: domain.BackupApprovalPending, Metadata: map[string]any{"kopia_restore_source": "sql-only"}}
-	fabricated := signedLLMRequest(t, requestKey, KindBackupRestoreApproval, fmt.Sprintf(`{"restore_id":"%s","approved":true}`, fabricatedID), nostr.Tags{{"d", "approve:sql-only"}, {"restore_id", fabricatedID.String()}, {"decision", "approved"}})
-	reactor.handleBackupRestoreApproval(ctx, fabricated)
-	if registry.restores[fabricatedID].ApprovalStatus != domain.BackupApprovalPending {
-		t.Fatal("SQL-only restore was approved")
 	}
 	select {
 	case id := <-executor.calls:
 		t.Fatalf("restore executor invoked for %s", id)
 	default:
 	}
-	if len(responder.approvals) != 0 || len(responder.statusSteps) != 1 {
-		t.Fatalf("approval published an outcome: approvals=%v status=%v", responder.approvals, responder.statusSteps)
+	if len(responder.approvals) != 0 || len(responder.statusSteps) != 0 || responder.results != 0 {
+		t.Fatalf("approval published an outcome: %#v", responder)
 	}
 }
 
@@ -358,38 +274,6 @@ func TestHandleBackupVerificationRequestRecordsPendingVerificationAndInvokesExec
 	assertSignedEvent(t, capture.events[0])
 }
 
-func TestHandleBackupRetentionRequestCreatesDurableRunAndInvokesExecutor(t *testing.T) {
-	ctx := context.Background()
-	requestKey := nostr.Generate().Hex()
-	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
-	registry, _ := newBackupRequestRegistryFixture()
-	executor := &recordingBackupRetentionExecutor{calls: make(chan uuid.UUID, 1)}
-	responder := &recordingBackupRetentionResponder{}
-	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop())
-	reactor.backupRegistry = registry
-	reactor.backupRetentionExecutor = executor
-	reactor.backupRetentionResponder = responder
-	policyID := registry.firstPolicyID()
-	repoID := registry.firstRepositoryID()
-	request := signedLLMRequest(t, requestKey, KindBackupRetentionEnforce, fmt.Sprintf(`{"repository_id":"%s","policy_id":"%s","dry_run":true}`, repoID, policyID), nostr.Tags{{"d", "retention:primary:dry-run"}, {"repository_id", repoID.String()}, {"policy_id", policyID.String()}})
-
-	reactor.handleBackupRetentionRequest(ctx, request)
-
-	select {
-	case runID := <-executor.calls:
-		run := registry.retentionRuns[runID]
-		if run == nil || !run.DryRun || run.RepositoryID != repoID || *run.PolicyID != policyID {
-			t.Fatalf("unexpected retention run: %#v", run)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("retention executor was not invoked")
-	}
-	if got := responder.statusSteps; len(got) != 1 || got[0] != "queued" {
-		t.Fatalf("retention status steps = %#v, want queued", got)
-	}
-}
-
 func TestBackupRequestKindsAreOmittedFromRuntimeSubscription(t *testing.T) {
 	since := nostr.Now()
 	operatorPubkey := testNostrPubKeyHexFromPrivateKey(t, nostr.Generate().Hex())
@@ -540,6 +424,7 @@ func (r *recordingBackupRetentionResponder) PublishBackupRetentionResult(context
 }
 
 type backupRequestRegistry struct {
+	sqlCalls        int
 	recipes         map[uuid.UUID]*domain.BackupRecipe
 	repositories    map[uuid.UUID]*domain.BackupRepository
 	policies        map[uuid.UUID]*domain.BackupPolicy
@@ -565,9 +450,11 @@ func newBackupRequestRegistryFixture() (*backupRequestRegistry, *domain.BackupRe
 }
 
 func (r *backupRequestRegistry) GetRecipe(_ context.Context, id uuid.UUID) (*domain.BackupRecipe, error) {
+	r.sqlCalls++
 	return r.recipes[id], nil
 }
 func (r *backupRequestRegistry) GetRecipeByNameVersion(_ context.Context, name, version string) (*domain.BackupRecipe, error) {
+	r.sqlCalls++
 	for _, recipe := range r.recipes {
 		if recipe.Name == name && recipe.Version == version {
 			return recipe, nil
@@ -576,6 +463,7 @@ func (r *backupRequestRegistry) GetRecipeByNameVersion(_ context.Context, name, 
 	return nil, nil
 }
 func (r *backupRequestRegistry) GetRepository(_ context.Context, id uuid.UUID) (*domain.BackupRepository, error) {
+	r.sqlCalls++
 	return r.repositories[id], nil
 }
 func (r *backupRequestRegistry) GetRepositoryByName(_ context.Context, name string) (*domain.BackupRepository, error) {
@@ -593,6 +481,7 @@ func (r *backupRequestRegistry) CreateOrUpdateRepository(_ context.Context, repo
 	return nil
 }
 func (r *backupRequestRegistry) GetPolicy(_ context.Context, id uuid.UUID) (*domain.BackupPolicy, error) {
+	r.sqlCalls++
 	return r.policies[id], nil
 }
 func (r *backupRequestRegistry) GetPolicyByName(_ context.Context, name string) (*domain.BackupPolicy, error) {
@@ -641,9 +530,11 @@ func (r *backupRequestRegistry) GetBackupDefinitionByName(_ context.Context, nam
 	return r.definitionByName(name), nil
 }
 func (r *backupRequestRegistry) GetBackupRun(_ context.Context, id uuid.UUID) (*domain.BackupRun, error) {
+	r.sqlCalls++
 	return r.runs[id], nil
 }
 func (r *backupRequestRegistry) CreateBackupRunIfAbsent(_ context.Context, run *domain.BackupRun) (*domain.BackupRun, bool, error) {
+	r.sqlCalls++
 	key := backupCoordinate(run.RequestedBy, run.RequestKind, run.RequestDTag)
 	if existingID, ok := r.coordinates[key]; ok {
 		return r.runs[existingID], false, nil
@@ -669,6 +560,7 @@ func (r *backupRequestRegistry) RecordBackupVerification(_ context.Context, reco
 }
 
 func (r *backupRequestRegistry) CreateBackupRestoreIfAbsent(_ context.Context, restore *domain.BackupRestoreRun) (*domain.BackupRestoreRun, bool, error) {
+	r.sqlCalls++
 	key := backupCoordinate(restore.RequestedBy, restore.RequestKind, restore.RequestDTag)
 	if existingID, ok := r.restoreCoords[key]; ok {
 		return r.restores[existingID], false, nil
@@ -711,6 +603,7 @@ func (r *backupRequestRegistry) ApplyBackupRestoreApproval(_ context.Context, re
 }
 
 func (r *backupRequestRegistry) CreateBackupRetentionRunIfAbsent(_ context.Context, run *domain.BackupRetentionRun) (*domain.BackupRetentionRun, bool, error) {
+	r.sqlCalls++
 	key := backupCoordinate(run.RequestedBy, run.RequestKind, run.RequestDTag)
 	if existingID, ok := r.retentionCoords[key]; ok {
 		return r.retentionRuns[existingID], false, nil

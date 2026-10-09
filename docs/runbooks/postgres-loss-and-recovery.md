@@ -27,13 +27,15 @@ gateway route repair is also paused because its desired state is SQL-backed.
 Do not clear or manually advance the rows. Preserve PostgreSQL and the
 relay/local event store, inventory the affected run ids and source event ids,
 and compare each against retained validated signed intents and canonical
-outcomes. Direct signed backup request creation and tool request handling remain available.
-Restore and tool manual approvals are paused, including for otherwise valid
-requests: SQL-resolved execution inputs cannot yet be causally bound to the
-original signed request and atomically committed before publication. Treat this
-as a release blocker; do not edit SQL approval rows or manually invoke the
-executor. A queued row without matching canonical provenance must not be
-replayed. The
+outcomes. Backup run, restore, and retention request intake and restore
+approval are paused, including for valid signed requests; legacy Nostr
+requests receive a request-correlated paused rejection and kind-30900 intents
+receive a rejected status. Tool request handling remains available, but
+manual tool approval is paused. SQL-resolved execution inputs cannot yet be
+causally bound to the original signed request and atomically committed before
+publication. Treat the lost backup capability as a release blocker; do not
+edit SQL rows or manually invoke executors. A queued row without matching
+canonical provenance must not be replayed. The
 [paused recovery is a release blocker](../designs/relay-canonical-startup-and-recovery.md#workflow-recovery-authority),
 not a successful workflow recovery. The
 [workflow recovery design](../designs/relay-canonical-startup-and-recovery.md#workflow-recovery-authority)

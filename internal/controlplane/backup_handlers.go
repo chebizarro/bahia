@@ -29,97 +29,44 @@ type backupRunRequest struct {
 }
 
 func (r *Reactor) handleBackupRunRequest(ctx context.Context, event *nostr.Event) {
-	if !r.authorizeBackupRequest(ctx, event, "backup_run") {
+	if !r.authorizeBackupPausedRequest(ctx, event) {
 		return
 	}
-	if r.backupExecutor == nil {
-		r.publishBackupRequestFailure(ctx, event, "failed", "backup_coordinator_unavailable", "backup run coordinator is not configured")
-		return
-	}
-	req, err := parseBackupRunRequest(event)
-	if err != nil {
-		r.publishBackupRequestFailure(ctx, event, "failed", "parse_error", err.Error())
-		return
-	}
-	recipe, err := r.resolveBackupRecipe(ctx, req.RecipeID, req.Recipe)
-	if err != nil {
-		r.publishBackupRequestFailure(ctx, event, "failed", "recipe_resolution_error", err.Error())
-		return
-	}
-	repositoryRecord, err := r.backupRegistry.GetRepository(ctx, recipe.RepositoryID)
-	if err != nil || repositoryRecord == nil {
-		if err == nil {
-			err = fmt.Errorf("backup repository %s not found", recipe.RepositoryID)
-		}
-		r.publishBackupRequestFailure(ctx, event, "failed", "repository_resolution_error", err.Error())
-		return
-	}
-	var policy *domain.BackupPolicy
-	if recipe.PolicyID != nil {
-		policy, err = r.backupRegistry.GetPolicy(ctx, *recipe.PolicyID)
-		if err != nil || policy == nil {
-			if err == nil {
-				err = fmt.Errorf("backup policy %s not found", *recipe.PolicyID)
-			}
-			r.publishBackupRequestFailure(ctx, event, "failed", "policy_resolution_error", err.Error())
-			return
-		}
-	}
-	run := &domain.BackupRun{
-		ID:                 uuid.New(),
-		RecipeID:           recipe.ID,
-		RepositoryID:       recipe.RepositoryID,
-		RequestedBy:        backupRequestActor(event),
-		RequestEventID:     event.ID.Hex(),
-		RequestKind:        int(event.Kind),
-		RequestDTag:        tagValueNostr(event.Tags, "d"),
-		Status:             domain.RunStatusQueued,
-		Backend:            recipe.Backend,
-		TargetRef:          recipe.TargetRef,
-		VerificationStatus: domain.BackupVerificationPending,
-		Metadata: backupNostrMetadata(event, req.Metadata, map[string]any{
-			"nostr_request_command": "backup_run",
-			"nostr_recipe_coord":    firstNonEmpty(req.Recipe, tagValueNostr(event.Tags, "recipe"), backupRecipeCoordinate(recipe)),
-			"nostr_repository_name": repositoryRecord.Name,
-			"nostr_repository_id":   repositoryRecord.ID.String(),
-			"nostr_policy_name":     backupPolicyName(policy),
-			"nostr_backend":         string(recipe.Backend),
-			"nostr_target_ref":      recipe.TargetRef,
-			"verification_required": policy != nil && policy.RequireVerification,
-			"verification_mode":     backupVerificationMode(recipe, policy),
-		}),
-	}
-	if recipe.PolicyID != nil {
-		run.PolicyID = recipe.PolicyID
-	}
-	createdRun, created, err := r.backupRegistry.CreateBackupRunIfAbsent(ctx, run)
-	if err != nil {
-		r.publishBackupRequestFailure(ctx, event, "failed", "run_create_error", err.Error())
-		return
-	}
-	if !created {
-		if err := backupRunDuplicateMatches(createdRun, run, false); err != nil {
-			r.logger.Warn("backup run duplicate refused", "error", err, "request_event_id", run.RequestEventID)
-		}
-		// The retained row's mutable status is not canonical outcome evidence.
-		// Do not re-sign a status or terminal result from it on replay.
-		return
-	}
-	if r.backupResponder != nil {
-		_ = r.backupResponder.PublishBackupRunStatus(ctx, createdRun, "queued", "backup run queued")
-	}
-	go func(runID uuid.UUID) {
-		if err := r.backupExecutor.ProcessBackupRun(ctx, runID); err != nil {
-			r.logger.Warn("backup run executor failed", "run_id", runID.String(), "error", err)
-		}
-	}(createdRun.ID)
-}
-
-func (r *Reactor) authorizeBackupRequest(ctx context.Context, event *nostr.Event, step string) bool {
-	return r.authorizeBackupCommandRequest(ctx, event, step, KindBackupRunResult)
+	r.publishPausedBackupRequest(ctx, event, KindBackupRunResult, "backup run request intake is paused until canonical acceptance receipts are available")
 }
 
 func (r *Reactor) authorizeBackupCommandRequest(ctx context.Context, event *nostr.Event, step string, resultKind int) bool {
+	if !r.authorizeBackupCommandIdentity(ctx, event, resultKind) {
+		return false
+	}
+	if r.backupRegistry == nil {
+		r.publishBackupCommandFailure(ctx, event, resultKind, "failed", step+"_unavailable", "backup registry is not configured")
+		return false
+	}
+	return true
+}
+
+func (r *Reactor) authorizeBackupPausedRequest(ctx context.Context, event *nostr.Event) bool {
+	if event == nil || !event.CheckID() || !event.VerifySignature() {
+		r.zapLog.Warn("dropping invalid backup request without signing a refusal")
+		return false
+	}
+	if tagValueNostr(event.Tags, "d") == "" {
+		r.zapLog.Warn("dropping backup request without addressable coordinate", zap.String("request_event_id", event.ID.Hex()))
+		return false
+	}
+	authority, delegated, err := backupRequestAuthorityFromEvent(event)
+	if err == nil {
+		err = r.validateBackupIssuer(ctx, event, authority, delegated)
+	}
+	if err != nil || !r.isAuthorized(authority.RequesterPubkey) {
+		r.zapLog.Warn("dropping unauthorized backup request without signing a refusal", zap.String("request_event_id", event.ID.Hex()), zap.Error(err))
+		return false
+	}
+	return true
+}
+
+func (r *Reactor) authorizeBackupCommandIdentity(ctx context.Context, event *nostr.Event, resultKind int) bool {
 	if event == nil {
 		return false
 	}
@@ -138,10 +85,6 @@ func (r *Reactor) authorizeBackupCommandRequest(ctx context.Context, event *nost
 	}
 	if !r.isAuthorized(authority.RequesterPubkey) {
 		r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "unauthorized", "requester not in authorized list")
-		return false
-	}
-	if r.backupRegistry == nil {
-		r.publishBackupCommandFailure(ctx, event, resultKind, "failed", step+"_unavailable", "backup registry is not configured")
 		return false
 	}
 	return true
@@ -393,7 +336,49 @@ func (r *Reactor) publishBackupRequestFailure(ctx context.Context, requestEvent 
 	r.publishBackupCommandFailure(ctx, requestEvent, KindBackupRunResult, status, code, message)
 }
 
-func (r *Reactor) publishBackupCommandFailure(ctx context.Context, requestEvent *nostr.Event, resultKind int, status, code, message string) {
+func (r *Reactor) publishPausedBackupRequest(ctx context.Context, requestEvent *nostr.Event, resultKind int, message string) {
+	if requestEvent == nil {
+		return
+	}
+	key := fmt.Sprintf("%d:%s", resultKind, requestEvent.ID.Hex())
+	r.mu.Lock()
+	_, alreadyPublished := r.pausedBackupSeen[key]
+	r.mu.Unlock()
+	if alreadyPublished {
+		return
+	}
+	if _, inFlight := r.pausedBackupInflight.LoadOrStore(key, struct{}{}); inFlight {
+		return
+	}
+	defer r.pausedBackupInflight.Delete(key)
+	// A previous in-flight publisher may have completed between the first
+	// check and claiming this key.
+	r.mu.Lock()
+	_, alreadyPublished = r.pausedBackupSeen[key]
+	r.mu.Unlock()
+	if alreadyPublished {
+		return
+	}
+	r.zapLog.Warn("backup request intake paused", zap.String("request_event_id", requestEvent.ID.Hex()), zap.String("reason", message))
+	if !r.publishBackupCommandFailure(ctx, requestEvent, resultKind, "rejected", "backup_request_paused", message) {
+		return
+	}
+	r.mu.Lock()
+	if r.pausedBackupSeen == nil {
+		r.pausedBackupSeen = make(map[string]struct{})
+	}
+	if _, seen := r.pausedBackupSeen[key]; !seen {
+		r.pausedBackupSeen[key] = struct{}{}
+		r.pausedBackupOrder = append(r.pausedBackupOrder, key)
+		if len(r.pausedBackupOrder) > 10000 {
+			delete(r.pausedBackupSeen, r.pausedBackupOrder[0])
+			r.pausedBackupOrder = r.pausedBackupOrder[1:]
+		}
+	}
+	r.mu.Unlock()
+}
+
+func (r *Reactor) publishBackupCommandFailure(ctx context.Context, requestEvent *nostr.Event, resultKind int, status, code, message string) bool {
 	requestEventID := requestEvent.ID.Hex()
 	requestPubkey := requestEvent.PubKey.Hex()
 	content := map[string]any{"request_event_id": requestEventID, "status": status, "message": message}
@@ -403,14 +388,23 @@ func (r *Reactor) publishBackupCommandFailure(ctx context.Context, requestEvent 
 	body, _ := json.Marshal(content)
 	tags := nostr.Tags{{"d", "result:" + requestEventID}, {"e", requestEventID, "", "reply"}, {"p", requestPubkey}, {"status", status}, {"result", code}}
 	tags = appendBackupRequestTags(tags, requestEvent)
-	event := &nostr.Event{Kind: nostr.Kind(resultKind), CreatedAt: nostr.Now(), Tags: dedupeTags(tags), Content: string(body)}
+	createdAt := nostr.Now()
+	if code == "backup_request_paused" {
+		// Replaying the same signed request after a restart must not mint a
+		// fresh signed outcome. Relay and outbox dedup use this stable event ID.
+		createdAt = requestEvent.CreatedAt
+	}
+	event := &nostr.Event{Kind: nostr.Kind(resultKind), CreatedAt: createdAt, Tags: dedupeTags(tags), Content: string(body)}
 	if err := r.signEvent(ctx, event); err != nil {
 		r.zapLog.Warn("sign backup command result failed", zap.Error(err))
-		return
+		return false
 	}
-	if _, err := r.publishEvent(ctx, event); err != nil {
+	published, err := r.publishEvent(ctx, event)
+	if err != nil {
 		r.zapLog.Warn("publish backup command result failed", zap.Error(err))
+		return false
 	}
+	return published > 0
 }
 
 func appendBackupRequestTags(tags nostr.Tags, requestEvent *nostr.Event) nostr.Tags {
