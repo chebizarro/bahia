@@ -749,6 +749,7 @@ func (p *Publisher) enqueueLocalOutbox(ev nostr.Event, entityType string, entity
 	if prior != nil {
 		entry.Rounds = prior.rounds
 		entry.Delivered = prior.delivered
+		entry.Policy = prior.policy
 		entry.Relays = prior.relayDeliveries()
 	}
 	if _, err := p.localOutbox.Enqueue(entry); err != nil {

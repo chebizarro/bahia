@@ -10,7 +10,9 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -38,7 +40,7 @@ type localOutboxHarness struct {
 
 // newLocalOutboxHarness builds a publisher with no PostgreSQL over the outbox
 // and event store files under dir, publishing to pool with the given quorum.
-func newLocalOutboxHarness(t *testing.T, dir string, pool *RelayPool, key string, quorum int) *localOutboxHarness {
+func newLocalOutboxHarness(t *testing.T, dir string, pool *RelayPool, key string, quorum int, extra ...PublisherOption) *localOutboxHarness {
 	t.Helper()
 	outbox, err := localstore.OpenOutbox(filepath.Join(dir, "outbox.bolt"))
 	require.NoError(t, err)
@@ -51,8 +53,8 @@ func newLocalOutboxHarness(t *testing.T, dir string, pool *RelayPool, key string
 		delivered: make(chan gonostr.Event, 16),
 		abandoned: make(chan gonostr.Event, 16),
 	}
-	h.pub = NewPublisher(config.NostrConfig{PrivateKey: key, PublishEnabled: true, PublishQuorum: quorum}, pool, nil, zap.NewNop(),
-		WithLocalOutbox(outbox, store))
+	opts := append([]PublisherOption{WithLocalOutbox(outbox, store)}, extra...)
+	h.pub = NewPublisher(config.NostrConfig{PrivateKey: key, PublishEnabled: true, PublishQuorum: quorum}, pool, nil, zap.NewNop(), opts...)
 	h.pub.newBackoff = func() *Backoff { return &Backoff{Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2} }
 	publish := h.pub.publishFn
 	h.pub.publishFn = func(ctx context.Context, ev gonostr.Event, urls []string) ([]PublishResult, error) {
@@ -120,6 +122,45 @@ func (h *localOutboxHarness) storeHolds(id gonostr.ID) bool {
 
 func localOutboxEvent(content string) *gonostr.Event {
 	return &gonostr.Event{Kind: KindCASAudit, CreatedAt: gonostr.Now(), Tags: gonostr.Tags{{"t", "outbox-test"}}, Content: content}
+}
+
+func TestBackupConfigProofPinsRealPublisherQuorumOnBothAdmissionPaths(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	up := startSyncTestRelay(t, syncTestRelayOptions{})
+	down := startSyncTestRelay(t, syncTestRelayOptions{})
+	down.down.Store(true)
+	pool := newSyncTestPool(up, down)
+	defer pool.Close()
+	key := gonostr.Generate()
+	h := newLocalOutboxHarness(t, t.TempDir(), pool, key.Hex(), 0,
+		WithPublishTarget(repository.NostrPublishTargetControlPlane))
+	newConfig := func(d string) gonostr.Event {
+		return gonostr.Event{Kind: gonostr.Kind(kinds.CASControlState), CreatedAt: gonostr.Now(),
+			Tags:    gonostr.Tags{{"d", d}, {"t", kinds.CPStateTopicBackupRecipe}, {"domain", "backup"}},
+			Content: `{"deleted":false}`}
+	}
+
+	ordinary := newConfig("backup-recipe:ordinary")
+	_, err := h.pub.PublishSignedEventWithResults(ctx, &ordinary)
+	require.NoError(t, err)
+	proof, found, err := h.outbox.GetDeliveryProof(ordinary.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, proof.ValidFor(ordinary, repository.NostrPublishTargetControlPlane))
+	require.Equal(t, 1, proof.Policy.Required)
+	require.ElementsMatch(t, []string{up.url, down.url}, proof.Policy.WriteRelays)
+	require.True(t, proof.RelayOK[up.url])
+	require.False(t, proof.RelayOK[down.url])
+
+	precommit := newConfig("backup-recipe:precommit")
+	require.NoError(t, precommit.Sign(key))
+	require.NoError(t, h.pub.PublishBeforeCommit(ctx, precommit, "backup-recipe", nil))
+	proof, found, err = h.outbox.GetDeliveryProof(precommit.ID)
+	require.NoError(t, err)
+	require.True(t, found, "pre-commit quorum is pinned with enqueue even while another relay remains pending")
+	require.True(t, proof.ValidFor(precommit, repository.NostrPublishTargetControlPlane))
+	require.ElementsMatch(t, []string{up.url, down.url}, proof.Policy.WriteRelays)
 }
 
 func rejectEvents(relay *syncTestRelay, reason string) {

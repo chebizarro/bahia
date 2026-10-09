@@ -218,6 +218,9 @@ type outboxDelivery struct {
 	backoff   *Backoff
 	settled   bool
 	delivered bool
+	// policy is pinned for a PublishBeforeCommit round that reached quorum
+	// before its event was admitted to the outbox.
+	policy localstore.DeliveryPolicy
 	// reportedDelivered is set once OnDelivered handlers saw the event.
 	reportedDelivered bool
 	// callerWaiting is set while the round whose outcome the publishing
@@ -483,7 +486,8 @@ func (p *Publisher) deliverRound(ctx context.Context, d *outboxDelivery) deliver
 	if !skipped || settled {
 		// A skipped round records nothing: the durable round count is the
 		// budget.
-		persistErr = p.persistRound(ctx, d, delivered, settled, exhausted, detail)
+		persistErr = p.persistRound(ctx, d, delivered, settled, exhausted, detail,
+			localstore.DeliveryPolicy{WriteRelays: configured, Required: required})
 	}
 	if persistErr != nil {
 		// Keep the delivery open so the next round retries the bookkeeping;
@@ -594,7 +598,7 @@ func (d *outboxDelivery) applyRound(targets []string, results []PublishResult, c
 // local outbox, every relay's state is committed with it, so a restart resumes
 // without resending to relays that already accepted; once the entry settles,
 // its outcome is mirrored to the PostgreSQL archive, best effort.
-func (p *Publisher) persistRound(ctx context.Context, d *outboxDelivery, delivered, settled, exhausted bool, detail string) error {
+func (p *Publisher) persistRound(ctx context.Context, d *outboxDelivery, delivered, settled, exhausted bool, detail string, policy localstore.DeliveryPolicy) error {
 	eventID := d.event.ID.Hex()
 	now := p.now().UTC()
 	if settled && !delivered {
@@ -610,7 +614,7 @@ func (p *Publisher) persistRound(ctx context.Context, d *outboxDelivery, deliver
 			state = localstore.OutboxFailed
 		}
 		if _, err := p.localOutbox.CommitRound(d.event.ID, localstore.OutboxRound{
-			Rounds: d.rounds, Relays: d.relayDeliveries(), Delivered: delivered, State: state, Detail: detail, At: now,
+			Rounds: d.rounds, Relays: d.relayDeliveries(), Delivered: delivered, Policy: policy, State: state, Detail: detail, At: now,
 		}); err != nil {
 			return err
 		}

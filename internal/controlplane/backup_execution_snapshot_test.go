@@ -57,7 +57,9 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 	for _, ev := range []nostr.Event{recipeEvent, repoEvent, policyEvent} {
 		_, err = outbox.Enqueue(localstore.OutboxEntry{Event: ev, Target: "control-plane"})
 		require.NoError(t, err)
-		_, err = outbox.CommitRound(ev.ID, localstore.OutboxRound{Rounds: 1, Delivered: true, Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
+		_, err = outbox.CommitRound(ev.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+			Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1},
+			Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
 		require.NoError(t, err)
 	}
 	require.NoError(t, proof.VerifyBackupExecutionConfig(t.Context(), snapshot))
@@ -67,6 +69,7 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: foreign, Target: "control-plane"})
 	require.NoError(t, err)
 	_, err = outbox.CommitRound(foreign.ID, localstore.OutboxRound{Rounds: 1, Delivered: true,
+		Policy: localstore.DeliveryPolicy{WriteRelays: []string{"wss://relay.example"}, Required: 1},
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
 	require.NoError(t, err)
 	wrongAuthor := *snapshot
@@ -107,6 +110,14 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 	changed = *snapshot
 	changed.PolicyEventID = uuid.NewString()
 	require.Error(t, proof.VerifyBackupExecutionConfig(t.Context(), &changed))
+	removed, err := outbox.Prune(time.Now().Add(time.Hour), time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.Positive(t, removed)
+	_, found, err := outbox.Get(recipeEvent.ID)
+	require.NoError(t, err)
+	require.False(t, found, "config proof must not depend on the prunable outbox row")
+	require.NoError(t, events.DeleteEvent(recipeEvent.ID))
+	require.NoError(t, proof.VerifyBackupExecutionConfig(t.Context(), snapshot))
 	require.NoError(t, events.Close())
 	require.NoError(t, outbox.Close())
 	events, err = localstore.Open(filepath.Join(dir, "events.db"))
@@ -141,6 +152,48 @@ func TestBackupExecutionSnapshotRejectsRequestReceiptDrift(t *testing.T) {
 	intent.Actor = request.PubKey.Hex()
 	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{RunReceipts: staticBackupRunReceipt{run: run}, Logger: zap.NewNop()})
 	require.Error(t, handler.HandleIntent(t.Context(), intent), "unsigned or unproven snapshot cannot enable execution")
+}
+
+func TestBackupExecutionSnapshotRefusesQueuedPartialAndPrunedRejection(t *testing.T) {
+	for _, state := range []string{"queued", "partial", "refused"} {
+		t.Run(state, func(t *testing.T) {
+			path := t.TempDir()
+			events, err := localstore.Open(filepath.Join(path, "events.db"))
+			require.NoError(t, err)
+			defer events.Close()
+			outbox, err := localstore.OpenOutbox(filepath.Join(path, "outbox.db"))
+			require.NoError(t, err)
+			defer outbox.Close()
+			key := nostr.Generate()
+			recipe := domain.BackupRecipe{ID: uuid.New(), Name: "recipe", Version: "1", Backend: domain.BackupBackendKopia, RepositoryID: uuid.New(), TargetRef: "/data", VerificationMode: domain.BackupVerificationNone}
+			tags, content := nostradapter.BackupRecipeRegistryRecord(&recipe, false)
+			ev := configSnapshotEvent(t, key, kinds.BackupRecipeRegistry, kinds.CPStateTopicBackupRecipe, nostradapter.BackupRecipeDTag(recipe.ID), tags, content)
+			_, err = events.SaveEvent(ev)
+			require.NoError(t, err)
+			_, err = outbox.Enqueue(localstore.OutboxEntry{Event: ev, Target: "control-plane"})
+			require.NoError(t, err)
+			policy := localstore.DeliveryPolicy{WriteRelays: []string{"wss://a", "wss://b"}, Required: 2}
+			switch state {
+			case "partial":
+				_, err = outbox.CommitRound(ev.ID, localstore.OutboxRound{Policy: policy, State: localstore.OutboxPending,
+					Relays: map[string]localstore.RelayDelivery{"wss://a": {Accepted: true}}})
+			case "refused":
+				_, err = outbox.CommitRound(ev.ID, localstore.OutboxRound{Policy: policy, State: localstore.OutboxFailed,
+					Relays: map[string]localstore.RelayDelivery{"wss://a": {Accepted: true}, "wss://b": {Rejected: "blocked: denied"}}})
+			}
+			require.NoError(t, err)
+			_, err = outbox.Prune(time.Now().Add(time.Hour), time.Now().Add(time.Hour))
+			require.NoError(t, err)
+			proof, found, err := outbox.GetDeliveryProof(ev.ID)
+			require.NoError(t, err)
+			require.False(t, found, "an undelivered event cannot leave a durable acceptance proof")
+			require.Empty(t, proof)
+			reader, err := NewLocalBackupRunReceipts(events, outbox, key.Public().Hex())
+			require.NoError(t, err)
+			snapshot := &domain.BackupExecutionSnapshot{RecipeEventID: ev.ID.Hex(), Recipe: recipe}
+			require.ErrorContains(t, reader.(backupExecutionConfigProof).VerifyBackupExecutionConfig(t.Context(), snapshot), "no ACKed relay delivery receipt")
+		})
+	}
 }
 
 func configSnapshotEvent(t *testing.T, key nostr.SecretKey, legacy int, topic, dtag string, tags nostr.Tags, content string) nostr.Event {

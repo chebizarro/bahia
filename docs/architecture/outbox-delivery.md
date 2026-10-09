@@ -24,6 +24,18 @@ payments and security.
   attempt budget is spent. Abandoned entries are terminal `failed` rows,
   retained for `failedOutboxRetention` (7 days) with their reason.
 
+For service-signed backup recipe, repository, and policy `30900` events, the
+outbox also records a non-prunable delivery proof in the same transaction as
+the quorum-reaching round (or the enqueue following `PublishBeforeCommit`).
+It pins the exact signed event, publish target, configured write-relay set,
+required quorum, and each relay's accepted `OK`. Backup execution-snapshot
+validation requires this proof and checks the signed event retained in it;
+the prunable published row and a bare `Delivered` flag are insufficient.
+Older rows without policy provenance are not promoted into proofs and refuse
+backup acceptance even if their event cache entry remains. The proof's signed
+event also preserves a pinned older config version when the replaceable local
+event cache has moved to a newer version.
+
 ## Abandonment: two cases, decided by who was told
 
 1. **Abandoned in the caller's round.** The caller receives

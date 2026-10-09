@@ -37,6 +37,7 @@ type backupRunEventStore interface {
 
 type backupRunDeliveryStore interface {
 	Get(nostr.ID) (localstore.OutboxEntry, bool, error)
+	GetDeliveryProof(nostr.ID) (localstore.DeliveryProof, bool, error)
 }
 
 type localBackupRunReceipts struct {
@@ -152,49 +153,42 @@ func (s *localBackupRunReceipts) verifyBackupConfigEvent(ctx context.Context, id
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	for ev := range s.events.QueryEvents(nostr.Filter{IDs: []nostr.ID{id}, Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Authors: []nostr.PubKey{s.author}}) {
-		if ev.ID != id || ev.PubKey != s.author || !ev.CheckID() || !ev.VerifySignature() ||
-			backupReceiptTag(ev.Tags, "d") != dtag || backupReceiptTag(ev.Tags, "t") != topic ||
-			backupReceiptTag(ev.Tags, "domain") != "backup" || backupReceiptTag(ev.Tags, "schema") != kinds.CASControlStateSchema ||
-			backupReceiptTag(ev.Tags, "legacy_kind") != strconv.Itoa(legacy) || backupReceiptTag(ev.Tags, "deleted") != "false" {
-			return fmt.Errorf("backup config %s has invalid signed envelope", dtag)
-		}
-		var envelope struct {
-			Deleted *bool `json:"deleted"`
-		}
-		if json.Unmarshal([]byte(ev.Content), &envelope) != nil || envelope.Deleted == nil || *envelope.Deleted {
-			return fmt.Errorf("backup config %s has invalid content", dtag)
-		}
-		canonical, err := json.Marshal(want)
-		if err != nil {
-			return err
-		}
-		actual := reflect.New(reflect.TypeOf(want))
-		if actual.Elem().Kind() == reflect.Pointer {
-			actual = reflect.New(actual.Elem().Type().Elem())
-		}
-		if err := json.Unmarshal([]byte(ev.Content), actual.Interface()); err != nil {
-			return fmt.Errorf("backup config %s has invalid content: %w", dtag, err)
-		}
-		decoded, err := json.Marshal(actual.Elem().Interface())
-		if err != nil || !bytes.Equal(canonical, decoded) {
-			return fmt.Errorf("backup config %s differs from signed execution snapshot", dtag)
-		}
-		entry, found, err := s.delivery.Get(id)
-		if err != nil {
-			return fmt.Errorf("backup config %s relay delivery receipt: %w", dtag, err)
-		}
-		acked := false
-		for _, relay := range entry.Relays {
-			acked = acked || relay.Accepted
-		}
-		if !found || entry.Target != repository.NostrPublishTargetControlPlane || !entry.Delivered || !acked ||
-			entry.Event.ID != id || entry.Event.PubKey != s.author || !entry.Event.CheckID() || !entry.Event.VerifySignature() {
-			return fmt.Errorf("backup config %s has no ACKed relay delivery receipt", dtag)
-		}
-		return nil
+	proof, found, err := s.delivery.GetDeliveryProof(id)
+	if err != nil {
+		return fmt.Errorf("backup config %s relay delivery receipt: %w", dtag, err)
 	}
-	return fmt.Errorf("backup config %s signed event is unavailable", dtag)
+	if !found || !proof.ValidFor(proof.Event, repository.NostrPublishTargetControlPlane) {
+		return fmt.Errorf("backup config %s has no ACKed relay delivery receipt", dtag)
+	}
+	ev := proof.Event
+	if ev.ID != id || ev.PubKey != s.author || ev.Kind != nostr.Kind(kinds.CASControlState) ||
+		backupReceiptTag(ev.Tags, "d") != dtag || backupReceiptTag(ev.Tags, "t") != topic ||
+		backupReceiptTag(ev.Tags, "domain") != "backup" || backupReceiptTag(ev.Tags, "schema") != kinds.CASControlStateSchema ||
+		backupReceiptTag(ev.Tags, "legacy_kind") != strconv.Itoa(legacy) || backupReceiptTag(ev.Tags, "deleted") != "false" {
+		return fmt.Errorf("backup config %s has invalid signed envelope", dtag)
+	}
+	var envelope struct {
+		Deleted *bool `json:"deleted"`
+	}
+	if json.Unmarshal([]byte(ev.Content), &envelope) != nil || envelope.Deleted == nil || *envelope.Deleted {
+		return fmt.Errorf("backup config %s has invalid content", dtag)
+	}
+	canonical, err := json.Marshal(want)
+	if err != nil {
+		return err
+	}
+	actual := reflect.New(reflect.TypeOf(want))
+	if actual.Elem().Kind() == reflect.Pointer {
+		actual = reflect.New(actual.Elem().Type().Elem())
+	}
+	if err := json.Unmarshal([]byte(ev.Content), actual.Interface()); err != nil {
+		return fmt.Errorf("backup config %s has invalid content: %w", dtag, err)
+	}
+	decoded, err := json.Marshal(actual.Elem().Interface())
+	if err != nil || !bytes.Equal(canonical, decoded) {
+		return fmt.Errorf("backup config %s differs from signed execution snapshot", dtag)
+	}
+	return nil
 }
 
 func backupReceiptTag(tags nostr.Tags, key string) string {

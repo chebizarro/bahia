@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.etcd.io/bbolt"
 )
 
@@ -42,13 +43,32 @@ const (
 )
 
 var (
-	outboxEntriesBucket     = []byte("bahiaOutboxEntries")
-	outboxPendingBucket     = []byte("bahiaOutboxPending")
-	outboxPublishedBucket   = []byte("bahiaOutboxPublished")
-	outboxFailedBucket      = []byte("bahiaOutboxFailed")
-	outboxCoordinatesBucket = []byte("bahiaOutboxCoordinatesV1")
-	outboxCoordinatesReady  = []byte("index-ready")
+	outboxEntriesBucket        = []byte("bahiaOutboxEntries")
+	outboxPendingBucket        = []byte("bahiaOutboxPending")
+	outboxPublishedBucket      = []byte("bahiaOutboxPublished")
+	outboxFailedBucket         = []byte("bahiaOutboxFailed")
+	outboxCoordinatesBucket    = []byte("bahiaOutboxCoordinatesV1")
+	outboxCoordinatesReady     = []byte("index-ready")
+	outboxDeliveryProofsBucket = []byte("bahiaOutboxDeliveryProofsV1")
 )
+
+// DeliveryPolicy is the publisher's write-relay policy at the instant the
+// event reached quorum. It is not inferred from a later relay configuration.
+type DeliveryPolicy struct {
+	WriteRelays []string `json:"write_relays"`
+	Required    int      `json:"required"`
+}
+
+// DeliveryProof retains the exact signed backup-config event and the relay
+// outcomes that satisfied its historical publish policy after its outbox row
+// is pruned. An absent proof is not evidence of delivery.
+type DeliveryProof struct {
+	Event      nostr.Event     `json:"event"`
+	Target     string          `json:"target"`
+	Policy     DeliveryPolicy  `json:"policy"`
+	RelayOK    map[string]bool `json:"relay_ok"`
+	AcceptedAt time.Time       `json:"accepted_at"`
+}
 
 // OutboxEntry is one outbound event and its delivery state.
 type OutboxEntry struct {
@@ -65,6 +85,7 @@ type OutboxEntry struct {
 	// Delivered is set once the caller's publish quorum accepted the event,
 	// which can happen long before the entry settles.
 	Delivered bool                     `json:"delivered,omitempty"`
+	Policy    DeliveryPolicy           `json:"policy,omitzero"`
 	LastError string                   `json:"last_error,omitempty"`
 	SettledAt time.Time                `json:"settled_at,omitzero"`
 	Relays    map[string]RelayDelivery `json:"relays,omitempty"`
@@ -94,6 +115,7 @@ type OutboxRound struct {
 	Rounds    int
 	Relays    map[string]RelayDelivery
 	Delivered bool
+	Policy    DeliveryPolicy
 	// State is OutboxPending while relays remain to be retried, else the
 	// terminal state.
 	State  string
@@ -221,7 +243,7 @@ func openOutboxDB(path string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket} {
+		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket, outboxDeliveryProofsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -388,7 +410,18 @@ func (o *Outbox) Enqueue(entry OutboxEntry) (bool, error) {
 			return err
 		}
 		if key := outboxCoordinateKey(entry.Target, entry.Event); key != nil {
-			return tx.Bucket(outboxCoordinatesBucket).Put(key, nil)
+			if err := tx.Bucket(outboxCoordinatesBucket).Put(key, nil); err != nil {
+				return err
+			}
+		}
+		if entry.Delivered {
+			if proof, ok := backupConfigDeliveryProof(entry, entry.Policy, entry.EnqueuedAt); ok {
+				rawProof, err := json.Marshal(proof)
+				if err != nil {
+					return fmt.Errorf("encode outbox delivery proof %s: %w", entry.Event.ID.Hex(), err)
+				}
+				return tx.Bucket(outboxDeliveryProofsBucket).Put(entry.Event.ID[:], rawProof)
+			}
 		}
 		return nil
 	})
@@ -414,6 +447,61 @@ func (o *Outbox) Get(id nostr.ID) (OutboxEntry, bool, error) {
 		return OutboxEntry{}, false, fmt.Errorf("read outbox entry %s: %w", id.Hex(), err)
 	}
 	return entry, found, nil
+}
+
+// GetDeliveryProof reads a non-prunable quorum receipt for a backup config
+// event. Rows predating this proof format are deliberately not backfilled from
+// an outbox Delivered bit: that bit lacks the target relay policy.
+func (o *Outbox) GetDeliveryProof(id nostr.ID) (DeliveryProof, bool, error) {
+	var proof DeliveryProof
+	found := false
+	err := o.shared.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(outboxDeliveryProofsBucket)
+		if bucket == nil {
+			return nil
+		}
+		raw := bucket.Get(id[:])
+		if raw == nil {
+			return nil
+		}
+		found = true
+		return json.Unmarshal(raw, &proof)
+	})
+	if err != nil {
+		return DeliveryProof{}, false, fmt.Errorf("read outbox delivery proof %s: %w", id.Hex(), err)
+	}
+	return proof, found, nil
+}
+
+// ValidFor checks the exact signed event, target, historical relay policy and
+// per-relay OK set. It never treats the current relay configuration as proof
+// that an earlier publication met quorum.
+func (p DeliveryProof) ValidFor(event nostr.Event, target string) bool {
+	if p.Target != target || p.Event.ID != event.ID || p.Event.PubKey != event.PubKey ||
+		p.Event.Sig != event.Sig || !p.Event.CheckID() || !p.Event.VerifySignature() ||
+		p.AcceptedAt.IsZero() || p.Policy.Required < 1 ||
+		p.Policy.Required > len(p.Policy.WriteRelays) || len(p.RelayOK) != len(p.Policy.WriteRelays) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(p.Policy.WriteRelays))
+	accepted := 0
+	for _, relay := range p.Policy.WriteRelays {
+		if relay == "" {
+			return false
+		}
+		if _, duplicate := seen[relay]; duplicate {
+			return false
+		}
+		seen[relay] = struct{}{}
+		ok, exists := p.RelayOK[relay]
+		if !exists {
+			return false
+		}
+		if ok {
+			accepted++
+		}
+	}
+	return accepted >= p.Policy.Required
 }
 
 // ListPending returns up to limit pending entries of target strictly after
@@ -552,6 +640,9 @@ func (o *Outbox) CommitRound(id nostr.ID, round OutboxRound) (OutboxEntry, error
 		stored.Relays = mergeRelayDeliveries(stored.Relays, round.Relays)
 		stored.Rounds = max(stored.Rounds, round.Rounds)
 		stored.Delivered = stored.Delivered || round.Delivered
+		if round.Delivered && len(round.Policy.WriteRelays) > 0 {
+			stored.Policy = round.Policy
+		}
 		stored.LastError = round.Detail
 		at := round.At.UTC()
 		if at.IsZero() {
@@ -575,12 +666,53 @@ func (o *Outbox) CommitRound(id nostr.ID, round OutboxRound) (OutboxEntry, error
 		if err != nil {
 			return fmt.Errorf("encode outbox entry %s: %w", id.Hex(), err)
 		}
-		return entries.Put(id[:], encoded)
+		if err := entries.Put(id[:], encoded); err != nil {
+			return err
+		}
+		proofs := tx.Bucket(outboxDeliveryProofsBucket)
+		if stored.Delivered && proofs.Get(id[:]) == nil {
+			if proof, ok := backupConfigDeliveryProof(stored, round.Policy, at); ok {
+				rawProof, err := json.Marshal(proof)
+				if err != nil {
+					return fmt.Errorf("encode outbox delivery proof %s: %w", id.Hex(), err)
+				}
+				return proofs.Put(id[:], rawProof)
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return OutboxEntry{}, fmt.Errorf("commit outbox round for %s: %w", id.Hex(), err)
 	}
 	return stored, nil
+}
+
+func backupConfigDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time.Time) (DeliveryProof, bool) {
+	ev := entry.Event
+	if ev.Kind != nostr.Kind(kinds.CASControlState) || !ev.CheckID() || !ev.VerifySignature() ||
+		outboxTag(ev.Tags, "domain") != "backup" || outboxTag(ev.Tags, "d") == "" {
+		return DeliveryProof{}, false
+	}
+	switch outboxTag(ev.Tags, "t") {
+	case kinds.CPStateTopicBackupRecipe, kinds.CPStateTopicBackupRepository, kinds.CPStateTopicBackupPolicy:
+	default:
+		return DeliveryProof{}, false
+	}
+	relayOK := make(map[string]bool, len(policy.WriteRelays))
+	for _, relay := range policy.WriteRelays {
+		relayOK[relay] = entry.Relays[relay].Accepted
+	}
+	proof := DeliveryProof{Event: ev, Target: entry.Target, Policy: policy, RelayOK: relayOK, AcceptedAt: at}
+	return proof, proof.ValidFor(ev, entry.Target)
+}
+
+func outboxTag(tags nostr.Tags, key string) string {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key {
+			return tag[1]
+		}
+	}
+	return ""
 }
 
 func mergeRelayDeliveries(stored, incoming map[string]RelayDelivery) map[string]RelayDelivery {

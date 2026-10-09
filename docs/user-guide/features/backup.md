@@ -23,7 +23,7 @@ Use the Backup UI or:
 - `request_backup_verification` / `bahia_request_backup_verification`
 - `request_backup_retention` / `bahia_request_backup_retention`
 
-Run and retention request intake is unavailable while canonical execution recovery is suspended. A signed intent receives a rejection, not an admission, even if an old PostgreSQL run row exists. The daemon can inspect an existing backup-run state only when its service signature and retained control-plane outbox relay ACK both verify; a local-only, queued, or missing delivery record is not an acceptance receipt. This inspection does not execute or resume a run. Verification should prove that stored data can be read and checked, not only that an upload command exited successfully.
+Run and retention request intake is unavailable while canonical execution recovery is suspended. A signed intent receives a rejection, not an admission, even if an old PostgreSQL run row exists. The daemon can inspect an existing backup-run state only when its service signature and retained control-plane outbox relay ACK both verify; a local-only, queued, or missing delivery record is not an acceptance receipt. Backup execution snapshots additionally require durable, exact-event relay-quorum proof for each signed recipe, repository, and policy version; a pruned outbox row does not erase that proof, but an older version without proof is refused. This inspection does not execute or resume a run. Verification should prove that stored data can be read and checked, not only that an upload command exited successfully.
 
 ## Restore
 

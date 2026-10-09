@@ -7,6 +7,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"go.uber.org/zap"
 )
 
@@ -75,6 +76,7 @@ func (p *Publisher) PublishBeforeCommit(ctx context.Context, ev nostr.Event, ent
 	p.deliveriesMu.Unlock()
 
 	d.delivered = true
+	d.policy = localstore.DeliveryPolicy{WriteRelays: configured, Required: required}
 	d.quorumReached.Store(true)
 	if err := p.admit(ctx, ev, entityType, entityID, d); err != nil {
 		p.forgetDelivery(d)
@@ -82,7 +84,7 @@ func (p *Publisher) PublishBeforeCommit(ctx context.Context, ev nostr.Event, ent
 	}
 	settled := len(d.retryableRelays(configured)) == 0
 	if settled {
-		if err := p.persistRound(ctx, d, true, true, false, detail); err != nil {
+		if err := p.persistRound(ctx, d, true, true, false, detail, d.policy); err != nil {
 			// The entry stays pending; the runner's next round settles it
 			// without contacting any relay.
 			p.logger.Warn("failed to settle a fully delivered nostr event", zap.String("event_id", eventID), zap.Error(err))
