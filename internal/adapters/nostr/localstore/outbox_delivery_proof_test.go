@@ -180,6 +180,20 @@ func TestDeploymentPolicyProofRequiresVerifiedRoundAndSurvivesPrune(t *testing.T
 	require.Len(t, pending, 1, "a crash after admission retains the exact signed event")
 	require.Equal(t, ev.ID, pending[0].Event.ID)
 	policy := DeliveryPolicy{WriteRelays: []string{"wss://a", "wss://b"}, Required: 2}
+	_, err = outbox.CommitRound(ev.ID, OutboxRound{Delivered: true, State: OutboxPending, Policy: policy,
+		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}, "wss://b": {Accepted: true}}})
+	require.ErrorContains(t, err, "require the publisher path")
+	require.NoError(t, outbox.Close())
+	outbox, err = OpenOutbox(path)
+	require.NoError(t, err)
+	pending, err = outbox.ListPending("control-plane", nil, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.Empty(t, pending[0].Relays, "forged OKs must not survive restart for publisher discovery")
+	require.False(t, pending[0].Delivered)
+	_, found, err = outbox.GetDeliveryProof(ev.ID)
+	require.NoError(t, err)
+	require.False(t, found)
 	_, err = outbox.CommitPublisherRound(ev.ID, OutboxRound{Target: "control-plane", Delivered: true, State: OutboxPending, Policy: policy,
 		Relays: map[string]RelayDelivery{"wss://a": {Accepted: true}}})
 	require.ErrorContains(t, err, "lacks verified target quorum")

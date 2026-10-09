@@ -631,7 +631,7 @@ func (o *Outbox) ListEntries(states []string, limit int) ([]OutboxEntry, error) 
 }
 
 // CommitRound records an untrusted delivery round for id and returns the stored
-// entry. It cannot mint a backup-config quorum proof from caller-supplied flags.
+// entry. It cannot mint a canonical quorum proof from caller-supplied flags.
 // Several deliveries of one entry may overlap (an inline publish and a
 // runner, or the outgoing and incoming App during a reload), so the commit
 // merges instead of overwriting: a relay that accepted or rejected stays so,
@@ -641,7 +641,7 @@ func (o *Outbox) CommitRound(id nostr.ID, round OutboxRound) (OutboxEntry, error
 }
 
 // CommitPublisherRound records a round observed by Publisher's relay pool.
-// Only that verified OK path may request backup-config proof creation. NIP-01
+// Only that verified OK path may request canonical proof creation. NIP-01
 // OK frames are unsigned, so the trusted boundary is the publisher's relay
 // transport and its verified per-relay PublishResult, not arbitrary callers
 // of Enqueue or CommitRound.
@@ -663,8 +663,8 @@ func (o *Outbox) commitRound(id nostr.ID, round OutboxRound, recordProof bool) (
 		if err := json.Unmarshal(raw, &stored); err != nil {
 			return fmt.Errorf("decode outbox entry %s: %w", id.Hex(), err)
 		}
-		if !recordProof && isBackupConfigEvent(stored.Event) {
-			return errors.New("backup config delivery rounds require the publisher path")
+		if !recordProof && isProofEligibleEvent(stored.Event) {
+			return errors.New("canonical config delivery rounds require the publisher path")
 		}
 		if recordProof && round.Target != stored.Target {
 			return fmt.Errorf("publisher round target %q differs from outbox target %q", round.Target, stored.Target)
