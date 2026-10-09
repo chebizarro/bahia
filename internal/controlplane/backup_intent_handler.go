@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -24,6 +26,17 @@ type BackupIntentPublisher interface {
 	PublishDefinition(ctx context.Context, def *domain.BackupDefinition) error
 	PublishDeleted(ctx context.Context, legacyKind int, dTag string, tags gonostr.Tags, content string, entityType string, entityID *uuid.UUID) error
 }
+
+// BackupRunAdmissionWriter persists the initial service-signed run state and
+// request identity in one local outbox transaction. It never starts a backup.
+type BackupRunAdmissionWriter interface {
+	LookupRunAdmission(context.Context, string, string, string) (string, bool, bool, error)
+	StageRunAdmission(context.Context, string, string, *domain.BackupRun) (string, error)
+}
+
+// ErrBackupRunPending means the signed run is durably staged but not yet
+// accepted by the configured relay quorum. It is not an accepted intent.
+var ErrBackupRunPending = errors.New("backup run state is pending relay acceptance")
 
 // BackupIntentCRUD is the read/write contract the backup intent handler uses
 // for level-triggered reconciliation. service.BackupRegistryService satisfies
@@ -96,24 +109,26 @@ type BackupIntentExecutors struct {
 //
 // See docs/architecture/intents-and-authority.md.
 type BackupIntentHandler struct {
-	registry    BackupIntentCRUD
-	definitions BackupIntentDefinitionCRUD
-	publisher   BackupIntentPublisher
-	runReceipts BackupRunReceiptReader
-	executors   BackupIntentExecutors
-	status      *IntentStatusPublisher
-	logger      *zap.Logger
+	registry     BackupIntentCRUD
+	definitions  BackupIntentDefinitionCRUD
+	publisher    BackupIntentPublisher
+	runReceipts  BackupRunReceiptReader
+	runAdmission BackupRunAdmissionWriter
+	executors    BackupIntentExecutors
+	status       *IntentStatusPublisher
+	logger       *zap.Logger
 }
 
 // BackupIntentHandlerConfig configures the backup intent handler.
 type BackupIntentHandlerConfig struct {
-	Registry    BackupIntentCRUD
-	Definitions BackupIntentDefinitionCRUD
-	Publisher   BackupIntentPublisher
-	RunReceipts BackupRunReceiptReader
-	Executors   BackupIntentExecutors
-	Status      *IntentStatusPublisher
-	Logger      *zap.Logger
+	Registry     BackupIntentCRUD
+	Definitions  BackupIntentDefinitionCRUD
+	Publisher    BackupIntentPublisher
+	RunReceipts  BackupRunReceiptReader
+	RunAdmission BackupRunAdmissionWriter
+	Executors    BackupIntentExecutors
+	Status       *IntentStatusPublisher
+	Logger       *zap.Logger
 }
 
 // NewBackupIntentHandler constructs the handler.
@@ -123,13 +138,14 @@ func NewBackupIntentHandler(cfg BackupIntentHandlerConfig) *BackupIntentHandler 
 		logger = zap.NewNop()
 	}
 	return &BackupIntentHandler{
-		registry:    cfg.Registry,
-		definitions: cfg.Definitions,
-		publisher:   cfg.Publisher,
-		runReceipts: cfg.RunReceipts,
-		executors:   cfg.Executors,
-		status:      cfg.Status,
-		logger:      logger.Named("backup-intent"),
+		registry:     cfg.Registry,
+		definitions:  cfg.Definitions,
+		publisher:    cfg.Publisher,
+		runReceipts:  cfg.RunReceipts,
+		runAdmission: cfg.RunAdmission,
+		executors:    cfg.Executors,
+		status:       cfg.Status,
+		logger:       logger.Named("backup-intent"),
 	}
 }
 
@@ -319,58 +335,72 @@ func (h *BackupIntentHandler) handleDefinitionApply(ctx context.Context, intent 
 // --- Daemon-triggered handlers (run, restore, verification, retention) ---
 
 func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) error {
-	if h.runReceipts == nil {
-		return fmt.Errorf("backup run request intake paused: canonical acceptance receipts are unavailable")
+	if h.runAdmission == nil || h.runReceipts == nil {
+		return fmt.Errorf("backup run request intake paused: canonical acceptance is unavailable")
 	}
-	requested, err := backupRunFromIntentContent(intent)
-	if err != nil || requested.ID == uuid.Nil {
-		return fmt.Errorf("backup run request intake paused: a valid run id is required")
+	if intent == nil || intent.Event == nil || !intent.Event.CheckID() || !intent.Event.VerifySignature() ||
+		intent.Event.PubKey.Hex() != intent.Actor {
+		return fmt.Errorf("backup run request intake requires an operator-signed event")
 	}
-	receipt, err := h.runReceipts.GetBackupRunReceipt(ctx, requested.ID)
+	signed, err := ParseIntent(intent.Event)
+	if err != nil || signed.Domain != "backup" || signed.Op != "run" || signed.Coordinate != intent.Coordinate ||
+		signed.IntentID != intent.IntentID || signed.OrgID != intent.OrgID ||
+		!backupRunContentEqual(signed.Content, intent.Content) {
+		return fmt.Errorf("backup run request fields do not match the signed intent")
+	}
+	requested, err := backupRunFromIntentContent(signed)
+	if err != nil || requested.ID == uuid.Nil || intent.Coordinate != "backup-run:"+requested.ID.String() {
+		return fmt.Errorf("backup run request requires an author-minted run coordinate")
+	}
+	requestID := intent.Event.ID.Hex()
+	stateID, found, delivered, err := h.runAdmission.LookupRunAdmission(ctx, intent.IntentID, intent.Coordinate, requestID)
+	if err != nil {
+		return fmt.Errorf("backup run admission conflict: %w", err)
+	}
+	if found {
+		intent.Result = map[string]any{"run_id": requested.ID.String(), "state_event_id": stateID, "execution": "paused"}
+		if !delivered {
+			return ErrBackupRunPending
+		}
+		return nil
+	}
+	if _, err := validateSignedBackupRunRequest(intent.Event, intent.Actor, time.Now().UTC()); err != nil {
+		return fmt.Errorf("backup run request is invalid: %w", err)
+	}
+	if err := validateBackupExecutionSnapshot(requested, requested); err != nil {
+		return fmt.Errorf("backup run request intake paused: %w", err)
+	}
+	proof, ok := h.runReceipts.(backupExecutionConfigProof)
+	if !ok {
+		return fmt.Errorf("backup run request intake paused: canonical configuration proof is unavailable")
+	}
+	if err := proof.VerifyBackupExecutionConfig(ctx, requested.ExecutionSnapshot); err != nil {
+		return fmt.Errorf("backup run request intake paused: %w", err)
+	}
+	prior, err := h.runReceipts.GetBackupRunReceipt(ctx, requested.ID)
 	if err != nil {
 		return fmt.Errorf("backup run request intake paused: %w", err)
 	}
-	if receipt != nil {
-		if intent.Event == nil || !intent.Event.CheckID() || !intent.Event.VerifySignature() ||
-			receipt.RequestedBy != intent.Actor || receipt.RequestKind != int(intent.Event.Kind) ||
-			receipt.RequestEventID != intent.Event.ID.Hex() || receipt.RequestDTag != intent.Coordinate ||
-			receipt.RecipeID != requested.RecipeID {
-			return fmt.Errorf("backup run request intake paused: run id conflicts with an ACKed canonical request")
-		}
-		signed, err := ParseIntent(intent.Event)
-		if err != nil || signed.Domain != "backup" || signed.Op != "run" || signed.Coordinate != intent.Coordinate ||
-			signed.IntentID != intent.IntentID || signed.OrgID != intent.OrgID || intent.Event.PubKey.Hex() != intent.Actor ||
-			!backupRunContentEqual(signed.Content, intent.Content) {
-			return fmt.Errorf("backup run request intake paused: request fields do not match the signed intent")
-		}
-		if requested.RepositoryID == uuid.Nil || requested.Backend == "" || strings.TrimSpace(requested.TargetRef) == "" ||
-			requested.VerificationMode == "" || (requested.PolicyID == nil && receipt.PolicyID != nil) {
-			return fmt.Errorf("backup run request intake paused: execution inputs are not bound in the signed request")
-		}
-		if receipt.RepositoryID != requested.RepositoryID || receipt.Backend != requested.Backend ||
-			receipt.TargetRef != requested.TargetRef || receipt.VerificationMode != requested.VerificationMode ||
-			!backupRunPolicyEqual(receipt.PolicyID, requested.PolicyID) ||
-			!backupRunMetadataContains(receipt.Metadata, requested.Metadata) {
-			return fmt.Errorf("backup run request intake paused: execution inputs conflict with the signed request")
-		}
-		// Legacy run states remain inspectable, but never establish execution
-		// eligibility without the exact signed and ACK-proven config version.
-		if err := validateBackupExecutionSnapshot(requested, receipt); err != nil {
-			return fmt.Errorf("backup run request intake paused: %w", err)
-		}
-		proof, ok := h.runReceipts.(backupExecutionConfigProof)
-		if !ok {
-			return fmt.Errorf("backup run request intake paused: canonical configuration proof is unavailable")
-		}
-		if err := proof.VerifyBackupExecutionConfig(ctx, requested.ExecutionSnapshot); err != nil {
-			return fmt.Errorf("backup run request intake paused: %w", err)
-		}
-		if receipt.Status == domain.RunStatusQueued || receipt.Status == domain.RunStatusRunning {
-			return fmt.Errorf("backup run request intake paused: an ACKed canonical run is %s but canonical execution recovery is unavailable", receipt.Status)
-		}
-		return fmt.Errorf("backup run request intake paused: an ACKed canonical terminal run exists but request replay remains unavailable")
+	if prior != nil {
+		return fmt.Errorf("backup run request intake paused: run id already has an ACKed canonical state without an admission record")
 	}
-	return fmt.Errorf("backup run request intake paused: no ACKed canonical run-state receipt exists")
+	now := time.Now().UTC()
+	requested.RequestedBy = intent.Actor
+	requested.RequestEventID = requestID
+	requested.RequestKind = int(intent.Event.Kind)
+	requested.RequestDTag = intent.Coordinate
+	requested.Status = domain.RunStatusQueued
+	requested.VerificationStatus = domain.BackupVerificationPending
+	requested.CreatedAt, requested.UpdatedAt = now, now
+	if err := domain.ValidateBackupRun(requested); err != nil {
+		return fmt.Errorf("backup run request is invalid: %w", err)
+	}
+	stateID, err = h.runAdmission.StageRunAdmission(ctx, intent.IntentID, requestID, requested)
+	if err != nil {
+		return fmt.Errorf("stage backup run admission: %w", err)
+	}
+	intent.Result = map[string]any{"run_id": requested.ID.String(), "state_event_id": stateID, "execution": "paused"}
+	return ErrBackupRunPending
 }
 
 // validateBackupExecutionSnapshot rejects any drift between the operator's
@@ -437,21 +467,6 @@ func backupRunPolicyEqual(a, b *uuid.UUID) bool {
 		return a == nil && b == nil
 	}
 	return *a == *b
-}
-
-func backupRunMetadataContains(actual, requested map[string]any) bool {
-	for key, want := range requested {
-		got, ok := actual[key]
-		if !ok {
-			return false
-		}
-		encodedGot, gotErr := json.Marshal(got)
-		encodedWant, wantErr := json.Marshal(want)
-		if gotErr != nil || wantErr != nil || !bytes.Equal(encodedGot, encodedWant) {
-			return false
-		}
-	}
-	return true
 }
 
 func (h *BackupIntentHandler) handleRestore(_ context.Context, _ *Intent) error {

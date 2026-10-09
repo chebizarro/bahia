@@ -13,7 +13,8 @@ import (
 // callSignedBackupRun only hands a signed operator event already present in
 // the local event store to the intent processor. Local observation is not a
 // relay OK/ACK or delivery quorum; MCP cannot infer canonical acceptance from
-// this check and the backup handler still refuses execution.
+// this check. Admission remains pending until the service-signed run state is
+// delivered, and backup execution remains disabled.
 func (s *Server) callSignedBackupRun(ctx context.Context, args map[string]interface{}) *ToolResult {
 	principal := auth.GetPrincipal(ctx)
 	if principal == nil || !principal.IsAuthenticated() {
@@ -56,12 +57,16 @@ func (s *Server) callSignedBackupRun(ctx context.Context, args map[string]interf
 		(prior.Actor != actor || prior.Domain != "backup" || prior.Op != "run" || prior.Coordinate != intent.Coordinate || prior.EventID != event.ID.Hex()) {
 		return intentWriteError("conflict", intent.IntentID, event.ID.Hex(), "idempotency key belongs to another signed backup request")
 	}
-	if err := s.intentProc.ProcessRelayIntent(ctx, &event); err != nil {
+	if err := s.intentProc.ProcessInProcess(ctx, intent); err != nil {
 		return intentWriteError("rejected", intent.IntentID, event.ID.Hex(), err.Error())
 	}
 	if s.intentProc.ProcessedIntent(intent.IntentID) == nil {
-		return intentWriteError("rejected", intent.IntentID, event.ID.Hex(), "signed request was not accepted by the intent processor")
+		if _, staged := intent.Result["state_event_id"].(string); !staged {
+			return intentWriteError("rejected", intent.IntentID, event.ID.Hex(), "signed request was not staged by the intent processor")
+		}
+		result, _ := jsonResult(map[string]any{"status": "pending", "intent_id": intent.IntentID, "event_id": event.ID.Hex(), "state_event_id": intent.Result["state_event_id"]})
+		return result
 	}
-	result, _ := jsonResult(map[string]any{"status": "pending", "intent_id": intent.IntentID, "event_id": event.ID.Hex()})
+	result, _ := jsonResult(map[string]any{"status": "accepted", "intent_id": intent.IntentID, "event_id": event.ID.Hex(), "state_event_id": intent.Result["state_event_id"]})
 	return result
 }

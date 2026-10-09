@@ -102,7 +102,7 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 	require.NoError(t, err)
 	intent.Actor = request.PubKey.Hex()
 	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{RunReceipts: reader, Logger: zap.NewNop()})
-	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "canonical execution recovery is unavailable")
+	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "canonical acceptance is unavailable")
 	changed := *snapshot
 	changed.Repository = repo
 	changed.Repository.RepositoryURI = "file:/attacker"

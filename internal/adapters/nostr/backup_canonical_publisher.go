@@ -23,9 +23,10 @@ import (
 // The BackupRegistryService calls this after each material mutation, so each
 // canonical record is published once per change instead of O(fleet) per tick.
 type BackupCanonicalPublisher struct {
-	projector   *Projector
-	runVerifier backupRunVerificationLookup
-	logger      *zap.Logger
+	projector    *Projector
+	runAdmission *Publisher
+	runVerifier  backupRunVerificationLookup
+	logger       *zap.Logger
 
 	// Runtime observation debounce.
 	runtimeObsMu       sync.Mutex
@@ -33,6 +34,12 @@ type BackupCanonicalPublisher struct {
 	runtimeObsDebounce time.Duration
 	runtimeObsSource   BackupRuntimeObservationSource
 	staleTimeout       time.Duration
+}
+
+// SetRunAdmissionPublisher binds durable run admission to the control-plane
+// outbox, independently of the SQL-backed backup registry projector.
+func (p *BackupCanonicalPublisher) SetRunAdmissionPublisher(publisher *Publisher) {
+	p.runAdmission = publisher
 }
 
 // backupRunVerificationLookup looks up verification for a run.

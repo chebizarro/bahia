@@ -273,9 +273,9 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 
 	// Step 1: Deduplicate by intent_id.
 	// Virtualization and LLM lifecycle are suspended and never mark an intent
-	// processed. Even if another domain used the same ID, its receipt cannot
-	// turn one of these requests into an accepted replay.
-	if intent.Domain != kinds.VirtualizationDomain && !isLLMLifecycleIntent(intent) && !(intent.Domain == "tool" && intent.Op == "approval-response") && p.isProcessed(intent.IntentID) {
+	// processed. Backup run replay is decided by the immutable outbox admission
+	// keys, not this separate processed cache.
+	if intent.Domain != kinds.VirtualizationDomain && !isLLMLifecycleIntent(intent) && !(intent.Domain == "backup" && intent.Op == "run") && !(intent.Domain == "tool" && intent.Op == "approval-response") && p.isProcessed(intent.IntentID) {
 		record := p.ProcessedIntent(intent.IntentID)
 		if requiresStrictIntentReplay(intent) && record != nil && (record.Actor != intent.Actor || record.Domain != intent.Domain || record.Op != intent.Op || record.Coordinate != intent.Coordinate || (record.ContentHash != "" && record.ContentHash != intentContentHash(intent.Content))) {
 			err := &intentReplayConflictError{intentID: intent.IntentID}
@@ -375,6 +375,12 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	// full desired state and reconciles the entity, regardless of whether it
 	// has seen prior events for this coordinate.
 	if err := handler.HandleIntent(ctx, intent); err != nil {
+		if errors.Is(err, ErrBackupRunPending) && intent.Domain == "backup" && intent.Op == "run" {
+			if p.status == nil {
+				return fmt.Errorf("backup run pending status publisher is unavailable")
+			}
+			return p.status.PublishPendingChecked(ctx, intent)
+		}
 		p.logger.Warn("intent handler failed",
 			zap.String("domain", intent.Domain),
 			zap.String("intent_id", intent.IntentID),
@@ -557,6 +563,8 @@ func intentContentHash(content map[string]any) string {
 
 func requiresStrictIntentReplay(intent *Intent) bool {
 	switch intent.Domain {
+	case "backup":
+		return intent.Op == "run"
 	case "org":
 		return intent.Op == "rekey"
 	case "build":

@@ -1010,7 +1010,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	backupRegistryRepo := repository.NewPgBackupControlPlaneRepository(pool)
 	backupRegistry := service.NewBackupRegistryService(backupRegistryRepo, publisher, logger)
-	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "backup_recovery", "backup run, restore and retention request intake, approvals, and recovery are paused until durable canonical acceptance receipts and atomic execution inputs are available")
+	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "backup_recovery", "backup run execution, restore and retention request intake, approvals, and recovery are paused until canonical credentials and execution checkpoints are available")
 	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "backup_scheduler", "scheduled backups require canonical schedule and dispatch provenance")
 	logger.Info("backup control plane registered", zap.String("backend", string(domain.BackupBackendKopia)))
 
@@ -1304,6 +1304,7 @@ func New(cfg *config.Config) (*App, error) {
 	// a *Projector reference and publishes through the shared signing/outbox
 	// pipeline. The cpStateFamilies table is the single envelope source.
 	backupCanonical := nostrAdapter.NewBackupCanonicalPublisher(nostrProjector, logger)
+	backupCanonical.SetRunAdmissionPublisher(controlPlanePub)
 	backupCanonical.SetRunVerifier(backupRegistry)
 	backupCanonical.SetRuntimeObservationSource(backupRegistry)
 	backupRegistry.SetCanonicalPublisher(backupCanonical)
@@ -1315,12 +1316,13 @@ func New(cfg *config.Config) (*App, error) {
 	if enabledDomains["backup"] && backupRegistry != nil {
 		intentProcessor.RegisterHandler("backup", controlplane.NewBackupIntentHandler(
 			controlplane.BackupIntentHandlerConfig{
-				Registry:    backupRegistry,
-				Definitions: backupRegistry,
-				Publisher:   backupCanonical,
-				RunReceipts: backupRunReceipts,
-				Status:      intentStatus,
-				Logger:      logger,
+				Registry:     backupRegistry,
+				Definitions:  backupRegistry,
+				Publisher:    backupCanonical,
+				RunReceipts:  backupRunReceipts,
+				RunAdmission: backupCanonical,
+				Status:       intentStatus,
+				Logger:       logger,
 			},
 		))
 		logger.Info("backup intent handler registered")

@@ -51,6 +51,15 @@ func (p *IntentStatusPublisher) PublishAcceptedChecked(ctx context.Context, inte
 	return p.publishStatus(ctx, intent, "accepted", "applied", "", nil)
 }
 
+// PublishPendingChecked reports durable local staging without claiming relay
+// acceptance. The same request can be replayed after the run-state quorum ACK.
+func (p *IntentStatusPublisher) PublishPendingChecked(ctx context.Context, intent *Intent) error {
+	if p == nil || p.publish == nil || p.signer == nil {
+		return fmt.Errorf("intent pending status publisher is not configured")
+	}
+	return p.publishStatus(ctx, intent, "pending", "relay_delivery_pending", "", nil)
+}
+
 // PublishRejection publishes a "rejected" status for an intent that failed
 // authorization or validation. Only for known principals.
 func (p *IntentStatusPublisher) PublishRejection(ctx context.Context, intent *Intent, reason string) {
@@ -109,9 +118,9 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 	if evaluation != nil {
 		content["evaluation"] = evaluation
 	}
-	if status == "accepted" && len(intent.StatusData) != 0 {
+	if (status == "accepted" || status == "pending") && len(intent.StatusData) != 0 {
 		content["data"] = intent.StatusData
-	} else if status == "accepted" && len(intent.Result) != 0 {
+	} else if (status == "accepted" || status == "pending") && len(intent.Result) != 0 {
 		content["data"] = intent.Result
 	} else if status == "rejected" && len(intent.StatusData) != 0 {
 		// A handler that got part of the way (adoption's per-resource

@@ -18,6 +18,12 @@ import (
 	"go.uber.org/zap"
 )
 
+type staticBackupRunReceipt struct{ run domain.BackupRun }
+
+func (r staticBackupRunReceipt) GetBackupRunReceipt(_ context.Context, _ uuid.UUID) (*domain.BackupRun, error) {
+	return &r.run, nil
+}
+
 func TestLocalBackupRunReceiptsRequireSignedACKAndSurviveRestart(t *testing.T) {
 	dir := t.TempDir()
 	eventPath, outboxPath := filepath.Join(dir, "events.db"), filepath.Join(dir, "outbox.db")
@@ -122,7 +128,7 @@ func TestLocalBackupRunReceiptsRejectTamperedAndMismatchedState(t *testing.T) {
 	}
 }
 
-func TestBackupIntentRunReceiptIsReadOnlyAndStillRejects(t *testing.T) {
+func TestBackupIntakeWithoutAdmissionWriterRefusesRegardlessOfSQL(t *testing.T) {
 	serviceKey := nostr.Generate()
 	request := backupReceiptRequest(t, nostr.Generate())
 	run := backupReceiptRun(request, domain.RunStatusQueued)
@@ -148,25 +154,25 @@ func TestBackupIntentRunReceiptIsReadOnlyAndStillRejects(t *testing.T) {
 	intent, err := ParseIntent(&request)
 	require.NoError(t, err)
 	intent.Actor = request.PubKey.Hex()
-	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "execution snapshot is missing")
+	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "canonical acceptance is unavailable")
 	statuses := &statusCollector{}
 	processor := NewIntentProcessor(NewTrustSet([]string{request.PubKey.Hex()}, zap.NewNop()), openTestStore(t),
 		NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()),
 		IntentProcessorConfig{EnabledDomains: map[string]bool{"backup": true}}, zap.NewNop())
 	processor.RegisterHandler("backup", handler)
-	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), intent), "execution snapshot is missing")
-	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), intent), "execution snapshot is missing")
+	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), intent), "canonical acceptance is unavailable")
+	require.ErrorContains(t, processor.ProcessInProcess(t.Context(), intent), "canonical acceptance is unavailable")
 	require.Len(t, statuses.events, 2, "duplicate requests remain rejected rather than becoming accepted markers")
 	require.Equal(t, "rejected", backupReceiptTag(statuses.events[0].Tags, "status"))
 	require.Equal(t, "rejected", backupReceiptTag(statuses.events[1].Tags, "status"))
 	require.False(t, processor.IsProcessed(intent.IntentID), "a refusal must not become an accepted replay marker")
 	intent.Content["recipe_id"] = uuid.NewString()
-	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "conflicts with an ACKed canonical request")
+	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "canonical acceptance is unavailable")
 	require.Zero(t, registry.workflowCreates, "SQL-only or divergent rows cannot drive intake")
 
 	missing := *intent
 	missing.Content = map[string]any{"id": uuid.NewString(), "recipe_id": run.RecipeID.String()}
-	require.ErrorContains(t, handler.HandleIntent(t.Context(), &missing), "no ACKed canonical run-state receipt")
+	require.ErrorContains(t, handler.HandleIntent(t.Context(), &missing), "canonical acceptance is unavailable")
 	require.Zero(t, registry.workflowCreates)
 
 	run.Status = domain.RunStatusSucceeded
@@ -181,72 +187,8 @@ func TestBackupIntentRunReceiptIsReadOnlyAndStillRejects(t *testing.T) {
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPublished})
 	require.NoError(t, err)
 	intent.Content["recipe_id"] = run.RecipeID.String()
-	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "execution snapshot is missing")
+	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "canonical acceptance is unavailable")
 	require.Zero(t, registry.workflowCreates)
-}
-
-type staticBackupRunReceipt struct{ run domain.BackupRun }
-
-func (r staticBackupRunReceipt) GetBackupRunReceipt(_ context.Context, _ uuid.UUID) (*domain.BackupRun, error) {
-	return &r.run, nil
-}
-
-func TestBackupIntentRunReceiptBindsSignedExecutionInputs(t *testing.T) {
-	request := backupReceiptRequest(t, nostr.Generate())
-	base := backupReceiptRun(request, domain.RunStatusQueued)
-	for _, tc := range []struct {
-		name   string
-		change func(*domain.BackupRun)
-	}{
-		{"repository", func(run *domain.BackupRun) { run.RepositoryID = uuid.New() }},
-		{"policy", func(run *domain.BackupRun) { id := uuid.New(); run.PolicyID = &id }},
-		{"backend", func(run *domain.BackupRun) { run.Backend = domain.BackupBackendPgDump }},
-		{"target", func(run *domain.BackupRun) { run.TargetRef = "/different" }},
-		{"verification", func(run *domain.BackupRun) { run.VerificationMode = domain.BackupVerificationKopiaSnapshotVerify }},
-		{"metadata", func(run *domain.BackupRun) { run.Metadata = map[string]any{"source": "different"} }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			run := base
-			tc.change(&run)
-			intent, err := ParseIntent(&request)
-			require.NoError(t, err)
-			intent.Actor = request.PubKey.Hex()
-			handler := NewBackupIntentHandler(BackupIntentHandlerConfig{RunReceipts: staticBackupRunReceipt{run}, Logger: zap.NewNop()})
-			require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "execution inputs conflict with the signed request")
-		})
-	}
-	intent, err := ParseIntent(&request)
-	require.NoError(t, err)
-	intent.Actor = request.PubKey.Hex()
-	intent.Content["target_ref"] = "/different"
-	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{RunReceipts: staticBackupRunReceipt{base}, Logger: zap.NewNop()})
-	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "request fields do not match the signed intent")
-}
-
-func TestBackupIntentRunReceiptRejectsUnboundMCPExecutionInputs(t *testing.T) {
-	key := nostr.Generate()
-	request := backupReceiptRequest(t, key)
-	var content map[string]any
-	require.NoError(t, json.Unmarshal([]byte(request.Content), &content))
-	delete(content, "repository_id")
-	delete(content, "policy_id")
-	delete(content, "backend")
-	delete(content, "target_ref")
-	delete(content, "verification_mode")
-	encoded, err := json.Marshal(content)
-	require.NoError(t, err)
-	request.Content = string(encoded)
-	require.NoError(t, request.Sign(key))
-	run := backupReceiptRun(request, domain.RunStatusQueued)
-	run.RepositoryID = uuid.New()
-	run.Backend = domain.BackupBackendKopia
-	run.TargetRef = "/data"
-	run.VerificationMode = domain.BackupVerificationNone
-	intent, err := ParseIntent(&request)
-	require.NoError(t, err)
-	intent.Actor = request.PubKey.Hex()
-	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{RunReceipts: staticBackupRunReceipt{run}, Logger: zap.NewNop()})
-	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "execution inputs are not bound in the signed request")
 }
 
 func backupReceiptRequest(t *testing.T, key nostr.SecretKey) nostr.Event {

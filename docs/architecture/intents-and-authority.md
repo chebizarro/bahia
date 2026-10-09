@@ -226,16 +226,23 @@ step 6 replays the intent on restart: creates resolve by id
 (`resolveCreateByID`), deployments compare the runtime's desired hash, DNS
 applies by serial, backup job ids are UUIDv7.
 
-Backup run request intake rejects while canonical execution recovery is
-unavailable. Its receipt reader examines service-signed kind-30900 backup-run
-state and requires the exact event's retained control-plane outbox entry to
-record relay quorum delivery and at least one accepted relay. A local event,
-pending outbox entry, absent/pruned delivery record, or PostgreSQL row is not
-an acceptance receipt. Even an ACKed prior run is not resumed by this reader;
-the executor still lacks canonical recipe, repository, policy, and step
-checkpoint recovery.
-The reader compares the run's immutable request fields with the signed
-operator intent and rejects absent or divergent execution inputs. MCP
+Backup run request intake accepts only a fresh, complete operator-signed run
+intent with an author-minted UUIDv7 and an exact, immutable execution snapshot.
+Before staging a run, the daemon verifies that each referenced service-signed
+recipe, repository, and policy version has its own control-plane relay quorum
+ACK. The service then signs a queued kind-30900 `backup-run` state
+(`legacy_kind=31996`) and commits it with the request ID, intent ID, and run
+coordinate in one outbox transaction. The request remains **pending**, not
+accepted, until the outbox records quorum delivery with an accepted relay.
+The durable admission record retains that ACK fact after the settled delivery
+row is pruned; a separate processed-intent cache marker never substitutes for
+it. Replay of the same signed request is idempotent, while another request
+using its intent ID or run coordinate is rejected. A refused or partial relay
+delivery cannot emit an accepted intent status. No backup execution starts
+from this queued state: canonical credential resolution and step checkpoint
+recovery are not available.
+
+MCP
 `request_backup_run` does not mint an unsigned in-process intent: it requires
 the complete NIP-01 operator-signed event with a NIP-40 expiration no more
 than 15 minutes after creation, and observes that exact event in the local
@@ -246,9 +253,10 @@ target, verification mode, immutable service-signed configuration event IDs,
 and the exact configuration snapshot. Repositories with a credential profile
 also require an immutable credential-version ID in the snapshot. A version ID
 is a binding, not proof that a secret can be recovered; canonical credential
-resolution, atomic acceptance and execution checkpoint recovery are still
-required before a new run may execute. Current run intake therefore continues
-to reject even a complete signed request without an ACKed run-state receipt.
+resolution and execution checkpoint recovery are still required before a run
+may execute. The daemon emits a pending status for staged delivery and an
+accepted status only when the same signed request is replayed after quorum
+delivery; the canonical queued run state is independently observable on relays.
 
 LLM release-register, deploy, rollback, approve and reject intents are also
 refused while canonical publication or execution is unavailable. Before the

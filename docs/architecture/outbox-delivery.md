@@ -23,6 +23,11 @@ payments and security.
   (permanent `blocked:` / `invalid:` / `pow:` rejections) or when the bounded
   attempt budget is spent. Abandoned entries are terminal `failed` rows,
   retained for `failedOutboxRetention` (7 days) with their reason.
+- Backup-run intake stages its initial service-signed state and immutable
+  request keys in one outbox transaction. Its separate admission record keeps
+  the exact state event ID and quorum-ACK result after a settled entry is
+  pruned. A pending or failed entry does not produce an accepted run intent;
+  the same signed request can be replayed after delivery to report acceptance.
 
 For service-signed backup recipe, repository, and policy `30900` events,
 and deployment-policy registry `30900` events, the outbox also records a

@@ -50,6 +50,9 @@ var (
 	outboxCoordinatesBucket    = []byte("bahiaOutboxCoordinatesV1")
 	outboxCoordinatesReady     = []byte("index-ready")
 	outboxDeliveryProofsBucket = []byte("bahiaOutboxDeliveryProofsV1")
+	backupRunIntentsBucket     = []byte("bahiaBackupRunIntentsV1")
+	backupRunCoordsBucket      = []byte("bahiaBackupRunCoordinatesV1")
+	backupRunEventsBucket      = []byte("bahiaBackupRunEventsV1")
 )
 
 // DeliveryPolicy is the publisher's write-relay policy at the instant the
@@ -245,7 +248,7 @@ func openOutboxDB(path string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket, outboxDeliveryProofsBucket} {
+		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket, outboxDeliveryProofsBucket, backupRunIntentsBucket, backupRunCoordsBucket, backupRunEventsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -704,7 +707,10 @@ func (o *Outbox) commitRound(id nostr.ID, round OutboxRound, recordProof bool) (
 		if err := entries.Put(id[:], encoded); err != nil {
 			return err
 		}
-		return recordPublisherProof(tx, stored, round, at, recordProof)
+		if err := recordPublisherProof(tx, stored, round, at, recordProof); err != nil {
+			return err
+		}
+		return updateBackupRunAdmissionDelivery(tx, stored)
 	})
 	if err != nil {
 		return OutboxEntry{}, fmt.Errorf("commit outbox round for %s: %w", id.Hex(), err)

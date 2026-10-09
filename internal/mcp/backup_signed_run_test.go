@@ -97,7 +97,7 @@ func TestMCPBackupRunRequiresRelayObservedOperatorSignature(t *testing.T) {
 		result, err := server.CallTool(ctx, "request_backup_run", args)
 		require.NoError(t, err)
 		require.True(t, result.IsError)
-		require.Contains(t, mcpIntentResult(t, result)["reason"], "canonical acceptance receipts are unavailable")
+		require.Contains(t, mcpIntentResult(t, result)["reason"], "intent outcome status publisher is not configured")
 	}
 	require.False(t, processor.IsProcessed(intent.IntentID))
 }
