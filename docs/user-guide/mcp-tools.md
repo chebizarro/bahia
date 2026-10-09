@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Bahia exposes a Model Context Protocol (MCP) server for agents. It is the same control plane the CLI and web app use: reads come from the daemon's local copy of the canonical relay state, and writes are signed kind-`30900` intents applied in-process. `tools/list` on the running server is the authority for the exact set; this page documents the full registry.
+Bahia exposes a Model Context Protocol (MCP) server for agents. It is the same control plane the CLI and web app use: reads come from the daemon's local copy of the canonical relay state, and most writes use kind-`30900` intents applied in-process. Backup-run requests are an exception: MCP requires the operator's actual signed event. `tools/list` on the running server is the authority for the exact set; this page documents the full registry.
 
 ## Connecting
 
@@ -23,7 +23,7 @@ Tool failures are returned as MCP content with `isError: true`; malformed JSON-R
 
 ## Writes
 
-Write tools build a `30900` intent on the caller's behalf, run it through the daemon's intent processor, and return a JSON result with `intent_id`, `event_id`, and `status`:
+Most write tools build a `30900` intent on the caller's behalf, run it through the daemon's intent processor, and return a JSON result with `intent_id`, `event_id`, and `status`:
 
 | `status` | Meaning |
 |----------|---------|
@@ -117,6 +117,10 @@ Each backup operation is registered under a base name and a `bahia_`-prefixed al
 - inspect: `inspect_backup_repository`, `inspect_backup_policy`, `inspect_backup_recipe`, `inspect_backup_definition`, `inspect_backup_run`, `inspect_backup_restore`, `inspect_backup_retention_run`
 
 Aliases: `bahia_apply_backup_repository`, `bahia_apply_backup_policy`, `bahia_apply_backup_recipe`, `bahia_apply_backup_definition`, `bahia_probe_backup_repository`, `bahia_request_backup_run`, `bahia_request_backup_verification`, `bahia_request_backup_restore`, `bahia_approve_backup_restore`, `bahia_reject_backup_restore`, `bahia_request_backup_retention`, `bahia_list_backup_repositories`, `bahia_list_backup_policies`, `bahia_list_backup_recipes`, `bahia_list_backup_definitions`, `bahia_list_backup_runs`, `bahia_list_backup_restores`, `bahia_list_backup_retention_runs`, `bahia_inspect_backup_repository`, `bahia_inspect_backup_policy`, `bahia_inspect_backup_recipe`, `bahia_inspect_backup_definition`, `bahia_inspect_backup_run`, `bahia_inspect_backup_restore`, `bahia_inspect_backup_retention_run`.
+
+`request_backup_run` / `bahia_request_backup_run` requires one argument, `signed_intent_event`: the complete NIP-01 event object signed by the same operator pubkey used for MCP NIP-98 authentication. The event must be kind `30900`, `domain=backup`, `op=run`, with a UUIDv7 run `id`, `d=backup-run:<id>`, a stable `intent_id`, and the complete resolved run inputs: recipe, repository, policy (if any), backend, target, verification mode, and `execution_snapshot`. The snapshot must contain the service-signed recipe/repository/policy event IDs and exact definitions; a repository credential profile requires a `credential_version_id` UUID. Do not put secret values in the request. Add exactly one signed NIP-40 `expiration` tag after `created_at` and no more than 15 minutes later. Requests older than 15 minutes or past expiration are rejected; the normal inbound future-clock-skew limit applies.
+
+Publish the signed event to a relay first, then use `signed_intent_event` if an MCP handoff is needed. MCP requires the exact event to be visible in the daemon's local relay-synced store. **Local visibility is not a relay `OK`, delivery quorum, or backup-run acceptance receipt.** The daemon still refuses new backup execution until atomic canonical acceptance and crash-safe recovery are implemented. The old `recipe_id`/`recipe`-only MCP request and MCP `idempotency_key` are not accepted for this tool; reuse the same signed event and `intent_id` for retries.
 
 ### Outbox
 

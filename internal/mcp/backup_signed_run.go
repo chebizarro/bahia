@@ -10,9 +10,10 @@ import (
 	"github.com/openagentsinc/bahia/internal/controlplane"
 )
 
-// callSignedBackupRun only hands a relay-observed operator event to the
-// existing intent processor. MCP cannot mint an operator signature or infer
-// relay acceptance from an HTTP request.
+// callSignedBackupRun only hands a signed operator event already present in
+// the local event store to the intent processor. Local observation is not a
+// relay OK/ACK or delivery quorum; MCP cannot infer canonical acceptance from
+// this check and the backup handler still refuses execution.
 func (s *Server) callSignedBackupRun(ctx context.Context, args map[string]interface{}) *ToolResult {
 	principal := auth.GetPrincipal(ctx)
 	if principal == nil || !principal.IsAuthenticated() {
@@ -49,7 +50,7 @@ func (s *Server) callSignedBackupRun(ctx context.Context, args map[string]interf
 		}
 	}
 	if !observed {
-		return intentWriteError("rejected", intent.IntentID, event.ID.Hex(), "signed request is not present in the local relay subscription; publish it to the relay first")
+		return intentWriteError("rejected", intent.IntentID, event.ID.Hex(), "signed request is not present in the local relay-synced event store; publish it to the relay first")
 	}
 	if prior := s.intentProc.ProcessedIntent(intent.IntentID); prior != nil &&
 		(prior.Actor != actor || prior.Domain != "backup" || prior.Op != "run" || prior.Coordinate != intent.Coordinate || prior.EventID != event.ID.Hex()) {

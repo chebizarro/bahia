@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,13 +11,42 @@ import (
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 )
 
+const backupRunRequestValidity = 15 * time.Minute
+
 // ValidateSignedBackupRunRequest checks a complete operator-authored run
 // request before it enters the intent processor. It does not establish relay
 // acceptance or authorize execution; those require canonical receipts and a
 // recoverable executor commit protocol.
 func ValidateSignedBackupRunRequest(event *nostr.Event, actor string) (*Intent, error) {
-	if err := nostradapter.ValidateInboundEvent(event, time.Now().UTC(), nostradapter.InboundEventMaxFutureSkew); err != nil {
+	return validateSignedBackupRunRequest(event, actor, time.Now().UTC())
+}
+
+func validateSignedBackupRunRequest(event *nostr.Event, actor string, now time.Time) (*Intent, error) {
+	if err := nostradapter.ValidateInboundEvent(event, now, nostradapter.InboundEventMaxFutureSkew); err != nil {
 		return nil, fmt.Errorf("invalid signed backup request: %w", err)
+	}
+	created := event.CreatedAt.Time()
+	if now.Sub(created) > backupRunRequestValidity {
+		return nil, fmt.Errorf("signed backup request is older than the 15-minute intake window")
+	}
+	var expires time.Time
+	seenExpiration := false
+	for _, tag := range event.Tags {
+		if len(tag) == 0 || tag[0] != "expiration" {
+			continue
+		}
+		if seenExpiration || len(tag) != 2 {
+			return nil, fmt.Errorf("signed backup request requires exactly one NIP-40 expiration tag")
+		}
+		seenExpiration = true
+		seconds, err := strconv.ParseInt(tag[1], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("signed backup request has an invalid NIP-40 expiration: %w", err)
+		}
+		expires = time.Unix(seconds, 0).UTC()
+	}
+	if !seenExpiration || !expires.After(created) || expires.After(created.Add(backupRunRequestValidity)) || !now.Before(expires) {
+		return nil, fmt.Errorf("signed backup request needs an unexpired NIP-40 expiration within 15 minutes of creation")
 	}
 	if event.PubKey.Hex() != actor {
 		return nil, fmt.Errorf("signed backup request author differs from authenticated operator")

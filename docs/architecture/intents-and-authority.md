@@ -229,8 +229,10 @@ checkpoint recovery.
 The reader compares the run's immutable request fields with the signed
 operator intent and rejects absent or divergent execution inputs. MCP
 `request_backup_run` does not mint an unsigned in-process intent: it requires
-the complete NIP-01 operator-signed event and observes that exact event in
-the local relay subscription before handing it to the intent processor.
+the complete NIP-01 operator-signed event with a NIP-40 expiration no more
+than 15 minutes after creation, and observes that exact event in the local
+relay-synced event store before handing it to the intent processor. Local
+observation is not a relay `OK`, delivery quorum, or acceptance receipt.
 The signed payload binds run UUIDv7, recipe, repository, policy, backend,
 target, verification mode, immutable service-signed configuration event IDs,
 and the exact configuration snapshot. Repositories with a credential profile

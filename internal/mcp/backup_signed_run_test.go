@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ func signedMCPBackupRunEvent(t *testing.T, key nostr.SecretKey) nostr.Event {
 	}}
 	event, err := (&client.IntentPublisher{}).BuildIntentEvent(req)
 	require.NoError(t, err)
+	event.Tags = append(event.Tags, nostr.Tag{"expiration", strconv.FormatInt(time.Now().UTC().Add(15*time.Minute).Unix(), 10)})
 	require.NoError(t, event.Sign(key))
 	return event
 }
@@ -72,7 +74,7 @@ func TestMCPBackupRunRequiresRelayObservedOperatorSignature(t *testing.T) {
 	missing, err := server.CallTool(ctx, "request_backup_run", args)
 	require.NoError(t, err)
 	require.True(t, missing.IsError)
-	require.Contains(t, mcpIntentResult(t, missing)["reason"], "local relay subscription")
+	require.Contains(t, mcpIntentResult(t, missing)["reason"], "local relay-synced event store")
 	require.False(t, processor.IsProcessed(intent.IntentID))
 
 	tampered := event
