@@ -2435,6 +2435,7 @@ func New(cfg *config.Config) (*App, error) {
 	if staleRunDetector != nil {
 		staleRunDetector.SetLoomStatusReadiness(nostrSub.LoomStatusReadySignal())
 		staleRunDetector.SetLoomStatusCompleteness(nostrSub.LoomStatusComplete)
+		staleRunDetector.SetLoomStatusProof(nostrSub.WithLoomStatusProof)
 	}
 	bgManager.RegisterWithOptions(nostrSub)
 

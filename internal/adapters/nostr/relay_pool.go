@@ -29,6 +29,9 @@ import (
 // is not held while dialing (see ensureRelayConnected).
 type RelayPool struct {
 	mu sync.RWMutex
+	// topologyProofMu serializes a guarded local outbox admission with relay
+	// set changes without holding mu across that admission.
+	topologyProofMu sync.RWMutex
 	// subscriptionsMu is deliberately separate from mu so subscription
 	// bookkeeping never waits on topology changes.
 	subscriptionsMu     sync.Mutex
@@ -301,6 +304,7 @@ func (p *RelayPool) ReconfigureRelayURLsContext(ctx context.Context, urls []stri
 	defer p.reconfigureMu.Unlock()
 
 	nextURLs := normalizeRelayURLs(urls)
+	p.topologyProofMu.Lock()
 	p.mu.Lock()
 	previousURLs := cloneRelayURLs(p.urls)
 	if sameRelayURLOrder(previousURLs, nextURLs) {
@@ -310,6 +314,7 @@ func (p *RelayPool) ReconfigureRelayURLsContext(ctx context.Context, urls []stri
 			CurrentURLs:  cloneRelayURLs(p.urls),
 		}
 		p.mu.Unlock()
+		p.topologyProofMu.Unlock()
 		return result
 	}
 
@@ -360,6 +365,7 @@ func (p *RelayPool) ReconfigureRelayURLsContext(ctx context.Context, urls []stri
 		addedRelays[url] = p.relays[url]
 	}
 	p.mu.Unlock()
+	p.topologyProofMu.Unlock()
 
 	result := RelayPoolReconfigureResult{
 		Changed:             true,
@@ -2563,6 +2569,22 @@ func (p *RelayPool) RelayEpoch(relayURL string) uint64 {
 		return 0
 	}
 	return p.relayEpoch[relayURL]
+}
+
+// withStableTopology holds the topology proof fence while fn observes a
+// snapshot and performs a local, non-network admission. Reconfiguration
+// cannot invalidate that snapshot before fn returns.
+func (p *RelayPool) withStableTopology(fn func([]string, map[string]uint64) error) error {
+	p.topologyProofMu.RLock()
+	defer p.topologyProofMu.RUnlock()
+	p.mu.RLock()
+	urls := cloneRelayURLs(p.urls)
+	epochs := make(map[string]uint64, len(urls))
+	for _, url := range urls {
+		epochs[url] = p.relayEpoch[url]
+	}
+	p.mu.RUnlock()
+	return fn(urls, epochs)
 }
 
 // FetchRelayInfo fetches NIP-11 relay information document for the given relay URL.

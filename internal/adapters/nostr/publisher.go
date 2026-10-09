@@ -536,6 +536,23 @@ func (p *Publisher) PublishSignedEvent(ctx context.Context, ev *nostr.Event) err
 	return err
 }
 
+// EnqueueSignedEvent signs and durably admits an event without inline relay
+// delivery. A proof-sensitive producer can hold its causal read lease across
+// this bounded local admission; the publisher runner handles delivery after
+// the lease is released.
+func (p *Publisher) EnqueueSignedEvent(ctx context.Context, ev *nostr.Event) error {
+	if p == nil || ev == nil || !p.redeliveryEnabled() {
+		return fmt.Errorf("nostr signed event queue is not configured")
+	}
+	if p.privateKey == "" {
+		return fmt.Errorf("nostr publisher private key not configured")
+	}
+	if err := signEventWithPrivateKeyHex(ev, p.privateKey); err != nil {
+		return err
+	}
+	return p.Enqueue(ctx, *ev, signedEventAuditLabel(*ev), nil)
+}
+
 // PublishSignedEventWithResults signs and publishes an arbitrary Nostr event,
 // returning per-relay publish outcomes from the underlying relay pool. When an
 // outbox repository is configured, the signed event is durable before the first

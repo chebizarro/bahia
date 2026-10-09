@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +109,7 @@ func TestStaleRunDetectorDoesNotPublishBeforeLoomEOSE(t *testing.T) {
 	detector.SetReadiness(ready)
 	detector.SetLoomStatusReadiness(make(chan struct{}))
 	detector.SetLoomStatusCompleteness(func() bool { return false })
+	detector.SetLoomStatusProof(func(func() error) error { return fmt.Errorf("proof unavailable") })
 	done := make(chan error, 1)
 	go func() { done <- detector.Run(ctx) }()
 	cancel()
@@ -117,7 +119,7 @@ func TestStaleRunDetectorDoesNotPublishBeforeLoomEOSE(t *testing.T) {
 
 type staleRunPublishSignal struct{ published chan nostr.Event }
 
-func (p staleRunPublishSignal) PublishSignedEvent(_ context.Context, event *nostr.Event) error {
+func (p staleRunPublishSignal) EnqueueSignedEvent(_ context.Context, event *nostr.Event) error {
 	p.published <- *event
 	return nil
 }
@@ -139,6 +141,7 @@ func TestStaleRunDetectorRunsFromCanonicalRecordAfterBothCatchups(t *testing.T) 
 	detector.SetReadiness(runReady)
 	detector.SetLoomStatusReadiness(loomReady)
 	detector.SetLoomStatusCompleteness(func() bool { return true })
+	detector.SetLoomStatusProof(func(admit func() error) error { return admit() })
 	done := make(chan error, 1)
 	go func() { done <- detector.Run(ctx) }()
 	event := <-published

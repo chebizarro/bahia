@@ -14,7 +14,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/loom"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
-	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
@@ -33,10 +32,10 @@ type DeploymentRunHealthSource interface {
 	GetByID(context.Context, uuid.UUID) (*domain.DeploymentRun, error)
 }
 
-// StaleRunEventPublisher publishes the detector's replaceable status events.
-// The application supplies the outbox-backed Nostr Publisher.
+// StaleRunEventPublisher durably queues signed replaceable status events.
+// Inline network delivery cannot run while a revocable relay proof is pinned.
 type StaleRunEventPublisher interface {
-	PublishSignedEvent(context.Context, *nostr.Event) error
+	EnqueueSignedEvent(context.Context, *nostr.Event) error
 }
 
 type staleRunSignal struct {
@@ -59,6 +58,7 @@ type StaleRunDetector struct {
 	ready         <-chan struct{}
 	loomReady     <-chan struct{}
 	loomComplete  func() bool
+	loomWithProof func(func() error) error
 	author        string
 }
 
@@ -104,6 +104,12 @@ func (d *StaleRunDetector) SetLoomStatusCompleteness(complete func() bool) {
 	d.loomComplete = complete
 }
 
+// SetLoomStatusProof pins the revocable relay proof across one durable queue
+// admission. The callback must not perform network delivery while pinned.
+func (d *StaleRunDetector) SetLoomStatusProof(withProof func(func() error) error) {
+	d.loomWithProof = withProof
+}
+
 // LoomStatusComplete reports whether a signed stale-run transition may be
 // considered. It is evaluated anew before every scan, not latched at boot.
 func (d *StaleRunDetector) LoomStatusComplete() bool {
@@ -115,7 +121,7 @@ func (d *StaleRunDetector) SetCanonicalAuthor(author string) { d.author = author
 
 // Run checks only after both run and Loom status history have caught up.
 func (d *StaleRunDetector) Run(ctx context.Context) error {
-	if d.loomReady == nil || d.loomComplete == nil {
+	if d.loomReady == nil || d.loomComplete == nil || d.loomWithProof == nil {
 		return fmt.Errorf("deployment-run health unavailable: Loom kind-30100 catch-up is not configured")
 	}
 	if d.ready != nil {
@@ -186,6 +192,7 @@ func (d *StaleRunDetector) check(ctx context.Context) error {
 			}
 			if err := d.publishHealth(ctx, run, "recovered", "loom_job_changed", active.lastStatusAt, transitionAt); err != nil {
 				checkErrors = append(checkErrors, err)
+				continue
 			}
 			delete(d.active, run.ID)
 		}
@@ -217,6 +224,7 @@ func (d *StaleRunDetector) check(ctx context.Context) error {
 				}
 				if err := d.publishHealth(ctx, run, "recovered", reason, lastStatusAt, transitionAt); err != nil {
 					checkErrors = append(checkErrors, err)
+					continue
 				}
 				delete(d.active, run.ID)
 			}
@@ -228,10 +236,9 @@ func (d *StaleRunDetector) check(ctx context.Context) error {
 
 		if err := d.publishHealth(ctx, run, "stale", "loom_status_missing", lastStatusAt, staleAt); err != nil {
 			checkErrors = append(checkErrors, err)
+			continue
 		}
-		// The production publisher persists before attempting relay delivery. Track
-		// the transition even when the immediate relay attempt fails so the outbox
-		// retry owns redelivery and the detector does not enqueue periodic duplicates.
+		// A successful queue admission is durable and the outbox owns delivery.
 		d.active[run.ID] = staleRunSignal{
 			loomJobID:    run.LoomJobID,
 			lastStatusAt: lastStatusAt,
@@ -259,6 +266,7 @@ func (d *StaleRunDetector) check(ctx context.Context) error {
 		}
 		if err := d.publishHealth(ctx, *run, "recovered", "run_terminal", active.lastStatusAt, transitionAt); err != nil {
 			checkErrors = append(checkErrors, err)
+			continue
 		}
 		delete(d.active, runID)
 	}
@@ -413,9 +421,10 @@ func (d *StaleRunDetector) publishHealth(
 		},
 		Content: string(content),
 	}
-	// A queued publish (nostrutil.ErrPublishIncomplete) is kept and retried by
-	// the outbox, so it is not a failure of this transition.
-	if err := d.publisher.PublishSignedEvent(ctx, event); err != nil && !nostrutil.IsPublishQueued(err) {
+	if d.loomWithProof == nil {
+		return fmt.Errorf("publish %s health for deployment run %s: Loom status proof lease is not configured", state, run.ID)
+	}
+	if err := d.loomWithProof(func() error { return d.publisher.EnqueueSignedEvent(ctx, event) }); err != nil {
 		return fmt.Errorf("publish %s health for deployment run %s: %w", state, run.ID, err)
 	}
 	return nil

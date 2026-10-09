@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
-	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
 	"github.com/stretchr/testify/require"
@@ -20,11 +19,15 @@ import (
 )
 
 type staleRunSourceFake struct {
-	mu   sync.Mutex
-	runs map[uuid.UUID]domain.DeploymentRun
+	mu     sync.Mutex
+	runs   map[uuid.UUID]domain.DeploymentRun
+	onList func()
 }
 
 func (f *staleRunSourceFake) ListNonTerminal(context.Context) ([]domain.DeploymentRun, error) {
+	if f.onList != nil {
+		f.onList()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var runs []domain.DeploymentRun
@@ -56,16 +59,21 @@ func (f *staleRunSourceFake) put(run domain.DeploymentRun) {
 type staleRunPublisherFake struct {
 	mu     sync.Mutex
 	events []nostr.Event
-	// err is returned after the event is recorded, as the outbox publisher
-	// does for a durably queued event.
-	err error
+	err    error
 }
 
-func (f *staleRunPublisherFake) PublishSignedEvent(_ context.Context, event *nostr.Event) error {
+func (f *staleRunPublisherFake) EnqueueSignedEvent(_ context.Context, event *nostr.Event) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.events = append(f.events, *event)
+	if f.err == nil {
+		f.events = append(f.events, *event)
+	}
 	return f.err
+}
+
+func allowStaleRunProof(d *StaleRunDetector) {
+	d.SetLoomStatusCompleteness(func() bool { return true })
+	d.SetLoomStatusProof(func(admit func() error) error { return admit() })
 }
 
 func (f *staleRunPublisherFake) snapshot() []nostr.Event {
@@ -92,6 +100,7 @@ func TestStaleRunDetectorPublishesReplaceableStaleAndRecoveredOnStatusResume(t *
 	published := &staleRunPublisherFake{}
 	detector := NewStaleRunDetector(runs, audit, published, 5*time.Minute, zap.NewNop())
 	detector.now = func() time.Time { return now }
+	allowStaleRunProof(detector)
 
 	require.NoError(t, detector.check(ctx))
 	events := published.snapshot()
@@ -144,6 +153,7 @@ func TestStaleRunDetectorPublishesRecoveredWhenRunBecomesTerminal(t *testing.T) 
 	published := &staleRunPublisherFake{}
 	detector := NewStaleRunDetector(runs, repositorytest.NewInMemoryNostrEventRepository(), published, 5*time.Minute, zap.NewNop())
 	detector.now = func() time.Time { return now }
+	allowStaleRunProof(detector)
 
 	require.NoError(t, detector.check(ctx))
 	require.Len(t, published.snapshot(), 1)
@@ -180,6 +190,12 @@ func TestStaleRunDetectorRevokedLoomProofSuspendsTransitions(t *testing.T) {
 	detector.now = func() time.Time { return now }
 	complete := false
 	detector.SetLoomStatusCompleteness(func() bool { return complete })
+	detector.SetLoomStatusProof(func(admit func() error) error {
+		if !complete {
+			return fmt.Errorf("proof revoked")
+		}
+		return admit()
+	})
 	detector.checkAndLog(ctx)
 	require.Empty(t, published.snapshot())
 	complete = true
@@ -197,6 +213,54 @@ func TestStaleRunDetectorRevokedLoomProofSuspendsTransitions(t *testing.T) {
 	complete = true
 	detector.checkAndLog(ctx)
 	require.Len(t, published.snapshot(), 2)
+}
+
+func TestStaleRunDetectorRevocationDuringScanPreventsAdmission(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 30, 20, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-20 * time.Minute)
+	run := domain.DeploymentRun{
+		ID: uuid.New(), LoomJobID: "loom-midscan-job", WorkerPubkey: "worker-1",
+		Status: domain.RunStatusRunning, StartedAt: &startedAt,
+		CreatedAt: startedAt, UpdatedAt: startedAt,
+	}
+	entered, resume := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}, onList: func() {
+		once.Do(func() { close(entered); <-resume })
+	}}
+	published := &staleRunPublisherFake{}
+	detector := NewStaleRunDetector(runs, repositorytest.NewInMemoryNostrEventRepository(), published, 5*time.Minute, zap.NewNop())
+	detector.now = func() time.Time { return now }
+	var proofMu sync.RWMutex
+	proved := true
+	detector.SetLoomStatusCompleteness(func() bool {
+		proofMu.RLock()
+		defer proofMu.RUnlock()
+		return proved
+	})
+	detector.SetLoomStatusProof(func(admit func() error) error {
+		proofMu.RLock()
+		defer proofMu.RUnlock()
+		if !proved {
+			return fmt.Errorf("proof revoked during scan")
+		}
+		return admit()
+	})
+	done := make(chan struct{})
+	go func() { detector.checkAndLog(ctx); close(done) }()
+	<-entered
+	proofMu.Lock()
+	proved = false
+	proofMu.Unlock()
+	close(resume)
+	<-done
+	require.Empty(t, published.snapshot(), "a pre-scan boolean cannot authorize a later transition")
+	proofMu.Lock()
+	proved = true
+	proofMu.Unlock()
+	detector.checkAndLog(ctx)
+	require.Len(t, published.snapshot(), 1, "the denied transition remains eligible after proof returns")
 }
 
 func TestStaleRunDetectorRecoversPersistedStaleSignalAfterRestart(t *testing.T) {
@@ -235,6 +299,7 @@ func TestStaleRunDetectorRecoversPersistedStaleSignalAfterRestart(t *testing.T) 
 	published := &staleRunPublisherFake{}
 	detector := NewStaleRunDetector(runs, audit, published, 5*time.Minute, zap.NewNop())
 	detector.now = func() time.Time { return now }
+	allowStaleRunProof(detector)
 	require.NoError(t, detector.check(ctx))
 
 	events := published.snapshot()
@@ -258,6 +323,7 @@ func TestStaleRunDetectorIgnoresFreshAndNonLoomRuns(t *testing.T) {
 	published := &staleRunPublisherFake{}
 	detector := NewStaleRunDetector(runs, audit, published, 5*time.Minute, zap.NewNop())
 	detector.now = func() time.Time { return now }
+	allowStaleRunProof(detector)
 
 	require.NoError(t, detector.check(ctx))
 	require.Empty(t, published.snapshot())
@@ -277,6 +343,7 @@ func TestStaleRunDetectorRunStopsWithContext(t *testing.T) {
 	close(loomReady)
 	detector.SetLoomStatusReadiness(loomReady)
 	detector.SetLoomStatusCompleteness(func() bool { return true })
+	detector.SetLoomStatusProof(func(admit func() error) error { return admit() })
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- detector.Run(ctx) }()
@@ -314,21 +381,27 @@ func tagValue(event nostr.Event, name string) string {
 	return ""
 }
 
-// A health event below the publish quorum is durably queued and retried by the
-// outbox: the check succeeds and later ticks do not re-sign it.
-func TestStaleRunDetectorTreatsQueuedPublishAsKept(t *testing.T) {
+// A failed local queue admission is not a transition and must be retried.
+func TestStaleRunDetectorRetriesFailedQueueAdmission(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 30, 18, 0, 0, 0, time.UTC)
 	startedAt := now.Add(-10 * time.Minute)
 	run := domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-job-queued", WorkerPubkey: "worker-1", Status: domain.RunStatusRunning, StartedAt: &startedAt, CreatedAt: startedAt, UpdatedAt: startedAt}
 	runs := &staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}
-	published := &staleRunPublisherFake{err: fmt.Errorf("relay down: %w", nostrutil.ErrPublishIncomplete)}
+	published := &staleRunPublisherFake{err: fmt.Errorf("outbox unavailable")}
 	detector := NewStaleRunDetector(runs, repositorytest.NewInMemoryNostrEventRepository(), published, 5*time.Minute, zap.NewNop())
 	detector.now = func() time.Time { return now }
+	allowStaleRunProof(detector)
 
-	require.NoError(t, detector.check(ctx), "a queued publish is not a failed transition")
+	require.Error(t, detector.check(ctx))
+	require.Empty(t, published.snapshot())
+	published.mu.Lock()
+	published.err = nil
+	published.mu.Unlock()
 	require.NoError(t, detector.check(ctx))
-	require.Len(t, published.snapshot(), 1, "the queued stale signal must not be re-signed")
+	require.Len(t, published.snapshot(), 1)
+	require.NoError(t, detector.check(ctx))
+	require.Len(t, published.snapshot(), 1)
 }
 
 func recordLoomStatusForHealthTest(t *testing.T, repo *repositorytest.InMemoryNostrEventRepository, jobID, worker, d, status string, at time.Time) {
@@ -358,6 +431,7 @@ func TestStaleRunDetectorForeignAndMalformedLoomStatusCannotMaskStaleness(t *tes
 	published := &staleRunPublisherFake{}
 	detector := NewStaleRunDetector(&staleRunSourceFake{runs: map[uuid.UUID]domain.DeploymentRun{run.ID: run}}, repo, published, 5*time.Minute, zap.NewNop())
 	detector.now = func() time.Time { return now }
+	allowStaleRunProof(detector)
 	require.NoError(t, detector.check(ctx))
 	events := published.snapshot()
 	require.Len(t, events, 1)

@@ -3,6 +3,7 @@ package nostr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -122,6 +123,7 @@ type Subscriber struct {
 	loomProof      map[string]uint64
 	loomRunning    bool
 	loomSubscribed bool
+	loomFilters    map[string]struct{}
 	loomReady      chan struct{}
 	loomReadyOnce  sync.Once
 }
@@ -283,10 +285,46 @@ func (s *Subscriber) LoomStatusReadySignal() <-chan struct{} { return s.loomRead
 // The broader set is conservative: worker status published to any relay in
 // the shared Loom client pool cannot be hidden by one unavailable relay.
 func (s *Subscriber) LoomStatusComplete() bool {
-	if s == nil || s.pool == nil || len(s.loomRelays) == 0 || !slices.Contains(s.kinds, KindLoomJobStatusUpdate) {
+	if s == nil || s.pool == nil {
 		return false
 	}
-	configured := s.pool.URLs()
+	complete := false
+	_ = s.pool.withStableTopology(func(configured []string, epochs map[string]uint64) error {
+		s.loomProofMu.RLock()
+		complete = s.loomStatusCompleteLocked(configured, epochs)
+		s.loomProofMu.RUnlock()
+		return nil
+	})
+	return complete
+}
+
+// ErrLoomStatusProofIncomplete means no signed absence assertion may be
+// admitted while one worker-status relay is unproved.
+var ErrLoomStatusProofIncomplete = errors.New("Loom kind-30100 relay completeness proof unavailable")
+
+// WithLoomStatusProof pins both the relay topology and the subscriber's
+// revocable EOSE proof across a local outbox admission. admit must not perform
+// relay/network I/O: it is the linearization point for one signed transition.
+func (s *Subscriber) WithLoomStatusProof(admit func() error) error {
+	if s == nil || s.pool == nil || admit == nil {
+		return ErrLoomStatusProofIncomplete
+	}
+	return s.pool.withStableTopology(func(configured []string, epochs map[string]uint64) error {
+		s.loomProofMu.RLock()
+		defer s.loomProofMu.RUnlock()
+		if !s.loomStatusCompleteLocked(configured, epochs) {
+			return ErrLoomStatusProofIncomplete
+		}
+		return admit()
+	})
+}
+
+// loomStatusCompleteLocked requires loomProofMu; epochs and configured are a
+// stable topology snapshot held by the pool's proof fence.
+func (s *Subscriber) loomStatusCompleteLocked(configured []string, epochs map[string]uint64) bool {
+	if len(s.loomRelays) == 0 || !slices.Contains(s.kinds, KindLoomJobStatusUpdate) {
+		return false
+	}
 	if len(configured) == 0 {
 		return false
 	}
@@ -299,13 +337,11 @@ func (s *Subscriber) LoomStatusComplete() bool {
 			return false
 		}
 	}
-	s.loomProofMu.RLock()
-	defer s.loomProofMu.RUnlock()
 	if !s.loomRunning || !s.loomSubscribed {
 		return false
 	}
 	for _, relay := range configured {
-		if epoch := s.pool.RelayEpoch(relay); epoch == 0 || s.loomProof[relay] != epoch {
+		if epoch := epochs[relay]; epoch == 0 || s.loomProof[relay] != epoch {
 			return false
 		}
 	}

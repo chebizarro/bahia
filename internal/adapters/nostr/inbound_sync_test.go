@@ -724,6 +724,92 @@ func TestLoomStatusProofRejectsRelayRefusal(t *testing.T) {
 	}
 }
 
+func TestLoomStatusProofSurvivesUnrelatedFilterRefusal(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	relay := startSyncTestRelay(t, syncTestRelayOptions{})
+	relay.relay.OnRequest = func(_ context.Context, filter gonostr.Filter) (bool, string) {
+		if slices.Contains(filter.Kinds, gonostr.Kind(KindCASAudit)) {
+			return true, "blocked: unrelated audit subscription refused"
+		}
+		return false, ""
+	}
+	run := startSyncRun(t, newSyncTestPool(relay), openTestLocalStore(t, ""), nil, syncTestConfig(),
+		WithKinds([]int{KindLoomJobStatusUpdate, KindCASAudit}), WithLoomStatusRelays([]string{relay.url}))
+	select {
+	case <-run.sub.LoomStatusReadySignal():
+	case <-ctx.Done():
+		t.Fatal("unrelated audit CLOSED permanently blocked complete Loom status REQ")
+	}
+	require.True(t, run.sub.LoomStatusComplete())
+}
+
+func TestLoomStatusProofLeasePinsAdmissionAgainstInvalidation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
+	defer cancel()
+	relay := startSyncTestRelay(t, syncTestRelayOptions{})
+	pool := newSyncTestPool(relay)
+	run := startSyncRun(t, pool, openTestLocalStore(t, ""), nil, syncTestConfig(),
+		WithKinds([]int{KindLoomJobStatusUpdate}), WithLoomStatusRelays([]string{relay.url}))
+	run.waitCaughtUp(t, ctx, relay.url, 1)
+	run.waitLive(t, ctx, relay.url, 1)
+	require.True(t, run.sub.LoomStatusComplete())
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	admitted := make(chan error, 1)
+	go func() {
+		admitted <- run.sub.WithLoomStatusProof(func() error {
+			close(entered)
+			<-release // local outbox admission has not linearized yet
+			return nil
+		})
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("proof lease was not acquired")
+	}
+	require.False(t, pool.topologyProofMu.TryLock(), "topology invalidation cannot pass an in-flight admission")
+	require.False(t, run.sub.loomProofMu.TryLock(), "EOSE invalidation cannot pass an in-flight admission")
+
+	reconfigured := make(chan RelayPoolReconfigureResult, 1)
+	go func() { reconfigured <- pool.ReconfigureRelayURLs([]string{}) }()
+	invalidated := make(chan struct{})
+	go func() {
+		run.sub.updateLoomProof(relay.url, relayProgress{failed: true})
+		close(invalidated)
+	}()
+	select {
+	case <-reconfigured:
+		t.Fatal("relay-set change crossed a held proof lease")
+	default:
+	}
+	select {
+	case <-invalidated:
+		t.Fatal("relay failure crossed a held proof lease")
+	default:
+	}
+	close(release)
+	select {
+	case err := <-admitted:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("admission did not finish")
+	}
+	select {
+	case <-reconfigured:
+	case <-ctx.Done():
+		t.Fatal("reconfiguration did not finish after admission")
+	}
+	select {
+	case <-invalidated:
+	case <-ctx.Done():
+		t.Fatal("relay failure did not invalidate proof after admission")
+	}
+	require.False(t, run.sub.LoomStatusComplete())
+	require.ErrorIs(t, run.sub.WithLoomStatusProof(func() error { t.Fatal("unproved admission"); return nil }), ErrLoomStatusProofIncomplete)
+}
+
 func TestLoomStatusProofRejectsUnpageableSameSecondHistory(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), syncTestTimeout)
 	defer cancel()

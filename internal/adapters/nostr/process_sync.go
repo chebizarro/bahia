@@ -166,7 +166,7 @@ func (p *ProcessSync) Run(ctx context.Context, filters []nostr.Filter) error {
 		case <-runCtx.Done():
 			return nil
 		case item := <-items:
-			worker.consume(runCtx, item, tracker, progress, len(inbound))
+			worker.consume(runCtx, item, tracker, progress)
 			switch item.op {
 			case opCaughtUp:
 				if p.RelayCaughtUp != nil {

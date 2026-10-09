@@ -39,10 +39,12 @@ func (s *Subscriber) Run(ctx context.Context) error {
 	s.loomProof = make(map[string]uint64)
 	s.loomRunning = true
 	s.loomSubscribed = false
+	s.loomFilters = make(map[string]struct{})
 	for _, filter := range filters {
 		for _, kind := range filter.filter.Kinds {
 			if int(kind) == KindLoomJobStatusUpdate && filter.persistent {
 				s.loomSubscribed = true
+				s.loomFilters[filter.hash] = struct{}{}
 			}
 		}
 	}
@@ -123,7 +125,7 @@ func (s *Subscriber) Run(ctx context.Context) error {
 			// and start any newly configured relays.
 			startRelays()
 		case item := <-inbound:
-			s.consume(runCtx, item, tracker, progress, len(filters))
+			s.consume(runCtx, item, tracker, progress)
 			if item.op == opRelayGone {
 				// A relay removed and re-added before this item was consumed
 				// still needs a worker for its new topology incarnation.
@@ -201,7 +203,7 @@ func sendInbound(ctx context.Context, out chan<- inboundItem, item inboundItem) 
 	}
 }
 
-func (s *Subscriber) consume(ctx context.Context, item inboundItem, tracker *cursorTracker, progress map[string]relayProgress, filterCount int) {
+func (s *Subscriber) consume(ctx context.Context, item inboundItem, tracker *cursorTracker, progress map[string]relayProgress) {
 	switch item.op {
 	case opEvent:
 		outcome := s.handleEvent(ctx, item.ev)
@@ -209,20 +211,22 @@ func (s *Subscriber) consume(ctx context.Context, item inboundItem, tracker *cur
 		case ingestRejected:
 		case ingestFailed:
 			tracker.observe(item.key, item.ev, false)
-			state := progress[item.relay]
-			state.dirty = true
-			state.liveReady = false
-			progress[item.relay] = state
-			s.updateLoomProof(item.relay, state)
+			if _, statusFilter := s.loomFilters[item.key.hash]; statusFilter {
+				state := progress[item.relay]
+				state.dirty = true
+				state.liveReady = false
+				progress[item.relay] = state
+				s.updateLoomProof(item.relay, state)
+			}
 		default:
 			tracker.observe(item.key, item.ev, true)
 		}
 	case opBegin:
 		tracker.begin(item.key)
 		state := progress[item.relay]
-		if state.caughtUp {
+		if _, statusFilter := s.loomFilters[item.key.hash]; statusFilter && state.caughtUp {
 			if state.live == nil {
-				state.live = make(map[string]bool, filterCount)
+				state.live = make(map[string]bool, len(s.loomFilters))
 			}
 			state.live[item.key.hash] = false
 			state.liveReady = false
@@ -234,7 +238,7 @@ func (s *Subscriber) consume(ctx context.Context, item inboundItem, tracker *cur
 		state := progress[item.relay]
 		if _, begun := state.live[item.key.hash]; begun && state.caughtUp {
 			state.live[item.key.hash] = true
-			state.liveReady = !state.dirty && len(state.live) == filterCount
+			state.liveReady = !state.dirty && len(state.live) == len(s.loomFilters)
 			for _, answered := range state.live {
 				state.liveReady = state.liveReady && answered
 			}

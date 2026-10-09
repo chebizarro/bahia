@@ -116,6 +116,30 @@ func TestPublisherSignedEventUsesDurableOutboxPath(t *testing.T) {
 	require.NotNil(t, rec.PublishedAt)
 }
 
+func TestPublisherEnqueueSignedEventDoesNotPublishInsideProofLease(t *testing.T) {
+	outbox := openDeliveryTestOutbox(t)
+	publisher := NewPublisher(
+		config.NostrConfig{PrivateKey: gonostr.Generate().Hex(), PublishEnabled: true},
+		NewRelayPool(nil, zap.NewNop()),
+		nil,
+		zap.NewNop(),
+		WithLocalOutbox(outbox, nil),
+	)
+	publisher.publishFn = func(context.Context, gonostr.Event, []string) ([]PublishResult, error) {
+		t.Fatal("network publish must happen after the proof lease releases")
+		return nil, nil
+	}
+	event := &gonostr.Event{Kind: gonostr.Kind(KindNIP38Status), CreatedAt: gonostr.Now(), Tags: gonostr.Tags{{"d", "run-1"}, {"t", "deployment.run.health"}}, Content: `{"state":"stale"}`}
+	require.NoError(t, publisher.EnqueueSignedEvent(context.Background(), event))
+	require.True(t, event.CheckID())
+	require.True(t, event.VerifySignature())
+	entry, found, err := outbox.Get(event.ID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, localstore.OutboxPending, entry.State)
+	require.Equal(t, "deployment.run.health", entry.EntityType)
+}
+
 func TestPublisherPersistsFailedPublishAndBackgroundRetriesRateLimit(t *testing.T) {
 	ctx := context.Background()
 	repo := repositorytest.NewInMemoryNostrEventRepository()
