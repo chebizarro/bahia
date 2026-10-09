@@ -285,7 +285,28 @@ func TestFinalMCPToolApprovalRealHandlerPipeline(t *testing.T) {
 				f.publishState(t, nostrpool.KindToolProvisionIntentState, repo.intent, "tool-intent:"+id.String())
 				reactor := controlplane.NewReactor(controlplane.Config{AuthorizedPubkeys: []string{f.actor}}, nil, nil, nil, zap.NewNop(), controlplane.WithToolProvisioningRepository(repo))
 				f.server.intentProc.RegisterHandler("tool", controlplane.NewToolIntentHandler(reactor))
-				f.exercise(t, mode, tool, map[string]any{"intent_id": id.String(), "reason": "reviewed"}, func() int { return repo.writes })
+				args := map[string]any{"intent_id": id.String(), "reason": "reviewed", "idempotency_key": "paused-" + tool}
+				ctx := f.ctx
+				if mode == "rejected" {
+					ctx = f.strangerCtx
+				}
+				result, err := f.server.CallTool(ctx, tool, args)
+				require.NoError(t, err)
+				body := mcpIntentResult(t, result)
+				require.True(t, result.IsError, "%v", body)
+				require.Equal(t, "rejected", body["status"])
+				if mode != "rejected" {
+					require.Contains(t, body["reason"], "tool approval paused")
+				}
+				require.Zero(t, repo.writes, "SQL-only approval row must remain pending")
+				require.Equal(t, domain.ToolProvisionStatusAwaitingApproval, repo.intent.Status)
+				if mode == "replay" {
+					again, err := f.server.CallTool(ctx, tool, args)
+					require.NoError(t, err)
+					require.True(t, again.IsError)
+					require.Equal(t, "rejected", mcpIntentResult(t, again)["status"])
+					require.Zero(t, repo.writes)
+				}
 			})
 		}
 	}

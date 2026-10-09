@@ -168,7 +168,6 @@ type Reactor struct {
 	mlExecutor                    MLInferenceControlPlaneExecutor
 	mlRecipeExecutor              MLRecipeControlPlaneExecutor
 	nostrEvents                   repository.NostrEventRepository
-	canonicalWorkflowEvents       CanonicalWorkflowEvents
 	assistantOrchestrator         *service.AssistantOrchestrator
 	dnsOperator                   DNSControlPlaneOperator
 	backupRegistry                backupRunRegistry
@@ -328,10 +327,6 @@ func WithNostrEventRepository(repo repository.NostrEventRepository) ReactorOptio
 			r.workerStatePublisher.ConfigureAudit(repo, r.zapLog)
 		}
 	}
-}
-
-func WithCanonicalWorkflowEvents(source CanonicalWorkflowEvents) ReactorOption {
-	return func(r *Reactor) { r.canonicalWorkflowEvents = source }
 }
 
 // WithKindCatalog configures the replay group catalog used for cursor tracking.
@@ -717,79 +712,9 @@ func (r *Reactor) handleToolProvisionRequest(ctx context.Context, event *nostr.E
 	return nil
 }
 
-func (r *Reactor) handleToolApprovalResponse(ctx context.Context, event *nostr.Event) error {
-	logger := r.zapLog.With(zap.String("event_id", event.ID.Hex()), zap.String("operator", event.PubKey.Hex()), zap.Int("kind", int(event.Kind)))
-	if !r.isAuthorized(event.PubKey.Hex()) {
-		return fmt.Errorf("unauthorized operator")
-	}
-	if r.toolProvisioning == nil {
-		return fmt.Errorf("tool provisioning repository not configured")
-	}
-	decisionRepository, ok := r.toolProvisioning.(toolApprovalDecisionRepository)
-	if !ok {
-		return fmt.Errorf("tool provisioning repository does not support atomic approval decisions")
-	}
-	var req struct {
-		IntentID string `json:"intent_id"`
-		Action   string `json:"action"`
-		Reason   string `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(event.Content), &req); err != nil {
-		return fmt.Errorf("parse tool approval response: %w", err)
-	}
-	intentID, err := uuid.Parse(req.IntentID)
-	if err != nil {
-		return fmt.Errorf("invalid intent_id: %w", err)
-	}
-	if req.Action != "approve" && req.Action != "reject" {
-		return fmt.Errorf("invalid action")
-	}
-	stored, err := r.toolProvisioning.GetIntent(ctx, intentID)
-	if err != nil {
-		return fmt.Errorf("load tool provisioning intent: %w", err)
-	}
-	servicePubkey, err := r.workflowServicePubkey(ctx)
-	if err != nil {
-		return err
-	}
-	if err := verifyToolApprovalSource(r.canonicalWorkflowEvents, servicePubkey, stored, r.isAuthorized); err != nil {
-		return fmt.Errorf("tool approval refused without canonical request provenance: %w", err)
-	}
-	decision := domain.ToolProvisionStatusRejected
-	if req.Action == "approve" {
-		decision = domain.ToolProvisionStatusApproved
-	}
-	intent, err := decisionRepository.ApplyToolApprovalDecision(ctx, intentID, decision, event.PubKey.Hex(), time.Now().UTC())
-	if err != nil {
-		return fmt.Errorf("apply tool approval decision: %w", err)
-	}
-	if err := verifyToolApprovalSource(r.canonicalWorkflowEvents, servicePubkey, intent, r.isAuthorized); err != nil {
-		return fmt.Errorf("tool approval result refused after row change: %w", err)
-	}
-	if err := r.toolProvisioning.LogApproval(ctx, intent.ID, req.Action, event.PubKey.Hex(), req.Reason); err != nil {
-		logger.Warn("failed to log tool approval action", zap.Error(err))
-	}
-	if req.Action == "approve" {
-		logger.Info("tool provisioning approved and queued", zap.String("intent_id", intent.ID.String()))
-		if r.toolCoordinator != nil {
-			if err := r.toolCoordinator.ProcessApprovedIntent(ctx, intent.ID); err != nil {
-				logger.Error("processing approved tool intent failed", zap.Error(err))
-			}
-		}
-	} else {
-		logger.Info("tool provisioning rejected", zap.String("intent_id", intent.ID.String()))
-	}
-	if r.toolResponder != nil {
-		requestEventID, idErr := nostr.IDFromHex(strings.TrimSpace(intent.NostrEventID))
-		requestPubkey, pubkeyErr := nostr.PubKeyFromHex(strings.TrimSpace(intent.RequesterPubkey))
-		if idErr != nil || pubkeyErr != nil {
-			logger.Warn("tool approval result publish skipped: invalid original request metadata", zap.String("id_error", fmt.Sprint(idErr)), zap.String("pubkey_error", fmt.Sprint(pubkeyErr)))
-		} else {
-			requestEvent := &nostr.Event{ID: requestEventID, PubKey: requestPubkey}
-			_ = r.toolResponder.PublishResult(ctx, requestEvent, intent, req.Action == "approve", req.Reason)
-		}
-	}
-	return nil
+func (r *Reactor) handleToolApprovalResponse(_ context.Context, _ *nostr.Event) error {
+	r.zapLog.Warn("tool approval paused: SQL-derived resolved tools cannot be bound atomically to a signed request")
+	return fmt.Errorf("tool approval paused: canonical execution inputs and atomic approval are unavailable")
 }
 
 func tagValueNostr(tags nostr.Tags, key string) string {

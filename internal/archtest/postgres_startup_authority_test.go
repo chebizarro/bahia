@@ -26,16 +26,22 @@ var sqlPromotionCalls = map[string]bool{
 // views. These argument names identify the current PostgreSQL-backed assembly,
 // rather than banning the reconciler or coordinator abstraction itself.
 var sqlSourcedStartupCalls = map[string]string{
-	"NewReconciler":                  "stateRepo",
-	"NewDNSProjector":                "stateRepo",
-	"NewStaleRunDetector":            "nostrEventRepo",
-	"NewLLMProvisioningCoordinator":  "llmRunRepo",
-	"NewBackupRunCoordinator":        "backupRegistry",
-	"NewBackupRestoreCoordinator":    "backupRegistry",
-	"NewBackupRetentionCoordinator":  "backupRegistry",
-	"NewBackupSchedulerRunner":       "backupScheduler",
-	"NewToolProvisioningCoordinator": "toolProvisionRepo",
-	"loadAssistantSessions":          "nostrEventRepo",
+	"NewReconciler":                 "stateRepo",
+	"NewDNSProjector":               "stateRepo",
+	"NewStaleRunDetector":           "nostrEventRepo",
+	"NewLLMProvisioningCoordinator": "llmRunRepo",
+	"NewBackupSchedulerRunner":      "backupScheduler",
+	"loadAssistantSessions":         "nostrEventRepo",
+}
+
+// These coordinators may serve freshly validated signed requests, but their
+// Run/recovery methods must never be invoked or registered at startup while
+// their repositories are SQL-backed.
+var directIntentCoordinators = map[string]bool{
+	"backupCoordinator":          true,
+	"backupRestoreCoordinator":   true,
+	"backupRetentionCoordinator": true,
+	"toolCoordinator":            true,
 }
 
 func TestNoAutomaticSQLToCanonicalPromotion(t *testing.T) {
@@ -73,6 +79,9 @@ func TestNoAutomaticSQLToCanonicalPromotion(t *testing.T) {
 						return true
 					}
 					name := startupCallName(call.Fun)
+					if entry.path == "internal/app/app.go" && startsSQLWorkflowRecovery(call) {
+						t.Errorf("%s: SQL-backed workflow coordinator is invoked or registered for recovery at daemon startup", set.Position(call.Pos()))
+					}
 					if sqlPromotionCalls[name] || (entry.path == "internal/app/db_recovery.go" && strings.HasPrefix(name, "Publish")) {
 						t.Errorf("%s: %s is forbidden in normal daemon startup/recovery", set.Position(call.Pos()), name)
 					}
@@ -86,6 +95,63 @@ func TestNoAutomaticSQLToCanonicalPromotion(t *testing.T) {
 			}
 			if !found {
 				t.Fatalf("startup function %s not found in %s", entry.function, entry.path)
+			}
+		})
+	}
+}
+
+func startsSQLWorkflowRecovery(call *ast.CallExpr) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	if coordinator, ok := selector.X.(*ast.Ident); ok && directIntentCoordinators[coordinator.Name] {
+		switch selector.Sel.Name {
+		case "Run", "ProcessOnce", "ProcessPendingIntents", "Trigger":
+			return true
+		}
+	}
+	switch selector.Sel.Name {
+	case "Register", "RegisterWithOptions":
+		for _, arg := range call.Args {
+			found := false
+			ast.Inspect(arg, func(node ast.Node) bool {
+				if coordinator, ok := node.(*ast.Ident); ok && directIntentCoordinators[coordinator.Name] {
+					found = true
+				}
+				return true
+			})
+			if found {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestSQLWorkflowRecoveryRatchetDistinguishesDirectHandlers(t *testing.T) {
+	for _, tc := range []struct {
+		expr      string
+		forbidden bool
+	}{
+		{"service.NewBackupRunCoordinator(backupRegistry, backupResolver, logger)", false},
+		{"controlplane.WithBackupRunExecutor(backupCoordinator)", false},
+		{"bgManager.RegisterWithOptions(backupCoordinator)", true},
+		{"bgManager.Register(&recoveryRunner{coordinator: toolCoordinator})", true},
+		{"backupRestoreCoordinator.Run(ctx)", true},
+		{"toolCoordinator.ProcessPendingIntents(ctx)", true},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			expr, err := parser.ParseExpr(tc.expr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			call, ok := expr.(*ast.CallExpr)
+			if !ok {
+				t.Fatalf("%q is not a call", tc.expr)
+			}
+			if got := startsSQLWorkflowRecovery(call); got != tc.forbidden {
+				t.Fatalf("startsSQLWorkflowRecovery(%q) = %t, want %t", tc.expr, got, tc.forbidden)
 			}
 		})
 	}

@@ -1019,7 +1019,7 @@ func New(cfg *config.Config) (*App, error) {
 	backupCoordinator := service.NewBackupRunCoordinator(backupRegistry, backupResolver, logger, backupRunOptions...)
 	backupRestoreCoordinator := service.NewBackupRestoreCoordinator(backupRegistry, backupResolver, logger, backupRestoreOptions...)
 	backupRetentionCoordinator := service.NewBackupRetentionCoordinator(backupRegistry, backupResolver, logger, service.WithBackupRetentionResponder(backupRetentionResponder))
-	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "backup_recovery", "backup run, restore and retention recovery require canonical signed-intent replay")
+	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "backup_recovery", "backup run, restore and retention recovery require canonical signed-intent replay; restore approvals are paused until atomic canonical execution is available")
 	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "backup_scheduler", "scheduled backups require canonical schedule and dispatch provenance")
 	logger.Info("backup control plane registered", zap.String("backend", string(domain.BackupBackendKopia)))
 
@@ -1314,19 +1314,9 @@ func New(cfg *config.Config) (*App, error) {
 	if enabledDomains["backup"] && backupRegistry != nil {
 		intentProcessor.RegisterHandler("backup", controlplane.NewBackupIntentHandler(
 			controlplane.BackupIntentHandlerConfig{
-				Registry:        backupRegistry,
-				Definitions:     backupRegistry,
-				Publisher:       backupCanonical,
-				CanonicalEvents: localEventStore,
-				ServicePubkey:   servicePubkey,
-				OriginalRequestAuthorized: func(pubkey string) bool {
-					for _, operator := range trustSet.FleetOps() {
-						if operator == pubkey {
-							return true
-						}
-					}
-					return false
-				},
+				Registry:    backupRegistry,
+				Definitions: backupRegistry,
+				Publisher:   backupCanonical,
 				Executors: controlplane.BackupIntentExecutors{
 					RunExecutor:       backupCoordinator,
 					RestoreExecutor:   backupRestoreCoordinator,
@@ -1511,11 +1501,11 @@ func New(cfg *config.Config) (*App, error) {
 	if enabledDomains["llm"] && llmRegistry != nil {
 		intentProcessor.RegisterHandler("llm", controlplane.NewLLMRouteIntentHandler(
 			controlplane.LLMRouteIntentHandlerConfig{
+				DeploymentUnavailableReason: "LLM deployment execution is paused until canonical signed-intent recovery is available",
 				Routes:                      llmRegistry,
 				Publish:                     llmRoutePublisher,
 				Status:                      intentStatus,
 				Logger:                      logger,
-				DeploymentUnavailableReason: "LLM deployment execution is paused until canonical signed-intent recovery is available",
 			},
 		))
 		logger.Info("LLM route intent handler registered")
@@ -2284,7 +2274,7 @@ func New(cfg *config.Config) (*App, error) {
 		logger,
 		service.ToolProvisioningConfig{BaseImageRef: "", TargetRegistry: cfg.Registry.URL, TargetRepo: "tools/swarmstr", InstallerVersion: "v1"},
 	)
-	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "tool_provisioning_recovery", "tool provisioning recovery requires canonical signed-intent replay")
+	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "tool_provisioning_recovery", "tool provisioning recovery requires canonical signed-intent replay; manual approvals are paused until atomic canonical execution is available")
 
 	// MCP (Model Context Protocol) server for AI agent integration.
 
@@ -2766,7 +2756,6 @@ func New(cfg *config.Config) (*App, error) {
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
 			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)),
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),
-			controlplane.WithCanonicalWorkflowEvents(localEventStore),
 			controlplane.WithMLRegistry(mlRegistry),
 		}, nostrEventRepo)
 		if assistantOrchestrator != nil {

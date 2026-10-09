@@ -94,28 +94,22 @@ type BackupIntentExecutors struct {
 //
 // See docs/architecture/intents-and-authority.md.
 type BackupIntentHandler struct {
-	registry                  BackupIntentCRUD
-	definitions               BackupIntentDefinitionCRUD
-	publisher                 BackupIntentPublisher
-	executors                 BackupIntentExecutors
-	canonicalEvents           CanonicalWorkflowEvents
-	servicePubkey             string
-	originalRequestAuthorized func(string) bool
-	status                    *IntentStatusPublisher
-	logger                    *zap.Logger
+	registry    BackupIntentCRUD
+	definitions BackupIntentDefinitionCRUD
+	publisher   BackupIntentPublisher
+	executors   BackupIntentExecutors
+	status      *IntentStatusPublisher
+	logger      *zap.Logger
 }
 
 // BackupIntentHandlerConfig configures the backup intent handler.
 type BackupIntentHandlerConfig struct {
-	Registry                  BackupIntentCRUD
-	Definitions               BackupIntentDefinitionCRUD
-	Publisher                 BackupIntentPublisher
-	Executors                 BackupIntentExecutors
-	CanonicalEvents           CanonicalWorkflowEvents
-	ServicePubkey             string
-	OriginalRequestAuthorized func(string) bool
-	Status                    *IntentStatusPublisher
-	Logger                    *zap.Logger
+	Registry    BackupIntentCRUD
+	Definitions BackupIntentDefinitionCRUD
+	Publisher   BackupIntentPublisher
+	Executors   BackupIntentExecutors
+	Status      *IntentStatusPublisher
+	Logger      *zap.Logger
 }
 
 // NewBackupIntentHandler constructs the handler.
@@ -125,15 +119,12 @@ func NewBackupIntentHandler(cfg BackupIntentHandlerConfig) *BackupIntentHandler 
 		logger = zap.NewNop()
 	}
 	return &BackupIntentHandler{
-		registry:                  cfg.Registry,
-		definitions:               cfg.Definitions,
-		publisher:                 cfg.Publisher,
-		executors:                 cfg.Executors,
-		canonicalEvents:           cfg.CanonicalEvents,
-		servicePubkey:             cfg.ServicePubkey,
-		originalRequestAuthorized: cfg.OriginalRequestAuthorized,
-		status:                    cfg.Status,
-		logger:                    logger.Named("backup-intent"),
+		registry:    cfg.Registry,
+		definitions: cfg.Definitions,
+		publisher:   cfg.Publisher,
+		executors:   cfg.Executors,
+		status:      cfg.Status,
+		logger:      logger.Named("backup-intent"),
 	}
 }
 
@@ -387,58 +378,8 @@ func (h *BackupIntentHandler) handleRestore(ctx context.Context, intent *Intent)
 	return nil
 }
 
-func (h *BackupIntentHandler) handleRestoreApproval(ctx context.Context, intent *Intent) error {
-	restoreID, err := uuid.Parse(firstIntentString(intent.Content, "restore_id"))
-	if err != nil || restoreID == uuid.Nil {
-		return fmt.Errorf("restore_id must be a UUID")
-	}
-	current, err := h.registry.GetBackupRestore(ctx, restoreID)
-	if err != nil {
-		return err
-	}
-	if err := verifyBackupRestoreApprovalSource(h.canonicalEvents, h.servicePubkey, current, h.originalRequestAuthorized); err != nil {
-		return fmt.Errorf("backup restore approval paused without canonical request provenance: %w", err)
-	}
-	if intent.ExpectedUpdatedAt != nil {
-		expected := *intent.ExpectedUpdatedAt
-		if !intent.RevisionMatches(current.UpdatedAt) {
-			return &revisionConflictError{entityID: restoreID, expected: expected, actual: current.UpdatedAt}
-		}
-	}
-	var approvedPtr *bool
-	if value, ok := intent.Content["approved"].(bool); ok {
-		approvedPtr = &value
-	}
-	approved, _, err := normalizeBackupApprovalDecision(approvedPtr, firstIntentString(intent.Content, "decision"))
-	if err != nil {
-		return err
-	}
-	eventID := intent.IntentID
-	if intent.Event != nil {
-		eventID = intent.Event.ID.Hex()
-	}
-	reason, _ := intent.Content["reason"].(map[string]any)
-	approvals, ok := h.registry.(interface {
-		ApplyBackupRestoreApproval(context.Context, uuid.UUID, bool, string, string, string, ...any) (*domain.BackupRestoreRun, bool, error)
-	})
-	if !ok {
-		return fmt.Errorf("backup restore approval registry is not configured")
-	}
-	restore, changed, err := approvals.ApplyBackupRestoreApproval(ctx, restoreID, approved, eventID, intent.Actor, firstIntentString(intent.Content, "message"), firstIntentString(intent.Content, "reason_code"), reason)
-	if err != nil {
-		return fmt.Errorf("apply backup restore approval: %w", err)
-	}
-	if err := verifyBackupRestoreApprovalSource(h.canonicalEvents, h.servicePubkey, restore, h.originalRequestAuthorized); err != nil {
-		return fmt.Errorf("backup restore approval result paused after row change: %w", err)
-	}
-	if changed && approved && restore != nil && restore.ApprovalStatus == domain.BackupApprovalApproved && !backupRestoreTerminal(restore) && h.executors.RestoreExecutor != nil {
-		go func() {
-			if err := h.executors.RestoreExecutor.ProcessBackupRestore(context.Background(), restore.ID); err != nil {
-				h.logger.Warn("backup restore execution failed", zap.String("restore_id", restore.ID.String()), zap.Error(err))
-			}
-		}()
-	}
-	return nil
+func (h *BackupIntentHandler) handleRestoreApproval(_ context.Context, _ *Intent) error {
+	return fmt.Errorf("backup restore approval paused: canonical execution inputs and atomic approval are unavailable")
 }
 
 func (h *BackupIntentHandler) handleVerification(ctx context.Context, intent *Intent) error {

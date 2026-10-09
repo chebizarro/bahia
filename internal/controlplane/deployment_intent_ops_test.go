@@ -105,23 +105,6 @@ func TestLLMDeploymentIntentOperations(t *testing.T) {
 	}
 }
 
-func TestLLMDeployIntakeRejectsWhenExecutorPaused(t *testing.T) {
-	registry := &llmDeploymentIntentRegistryTest{}
-	statuses := &statusCollector{}
-	processor := NewIntentProcessor(NewTrustSet([]string{testPubkey}, zap.NewNop()), openTestStore(t), NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()), IntentProcessorConfig{EnabledDomains: map[string]bool{"llm": true}}, zap.NewNop())
-	processor.RegisterHandler("llm", NewLLMRouteIntentHandler(LLMRouteIntentHandlerConfig{
-		Routes: registry, Logger: zap.NewNop(), DeploymentUnavailableReason: "canonical LLM execution is paused",
-	}))
-	intent := &Intent{Domain: "llm", Op: "deploy", OrgID: testOrgID(), IntentID: "llm-paused-deploy", Coordinate: uuid.New().String(), Actor: testPubkey, Content: map[string]any{
-		"route_id": uuid.New().String(), "environment_id": uuid.New().String(), "release_id": uuid.New().String(),
-	}}
-	err := processor.ProcessInProcess(context.Background(), intent)
-	require.ErrorContains(t, err, "canonical LLM execution is paused")
-	require.Zero(t, registry.creates)
-	require.Len(t, statuses.events, 1)
-	require.Equal(t, "rejected", tagValueNostr(statuses.events[0].Tags, "status"))
-}
-
 type runtimeIntentResourcesTest struct {
 	service     *domain.Service
 	environment *domain.Environment
@@ -381,4 +364,16 @@ func TestDeploymentRollbackIntentFromPriorRunPublishesCanonicalOnce(t *testing.T
 	require.Error(t, fixture.processor.ProcessInProcess(ctx, &denied))
 	require.Equal(t, 1, fixture.canonical.intents)
 	require.Equal(t, "rejected", tagValueNostr(fixture.statuses.events[2].Tags, "status"))
+}
+
+func TestLLMDeployIntakeRejectsWhenExecutorPaused(t *testing.T) {
+	reg := &llmDeploymentIntentRegistryTest{}
+	statuses := &statusCollector{}
+	proc := NewIntentProcessor(NewTrustSet([]string{testPubkey}, zap.NewNop()), openTestStore(t), NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()), IntentProcessorConfig{EnabledDomains: map[string]bool{"llm": true}}, zap.NewNop())
+	proc.RegisterHandler("llm", NewLLMRouteIntentHandler(LLMRouteIntentHandlerConfig{Routes: reg, DeploymentUnavailableReason: "canonical executor unavailable", Logger: zap.NewNop()}))
+	intent := &Intent{Domain: "llm", Op: "deploy", OrgID: testOrgID(), IntentID: "llm-paused-deploy", Coordinate: uuid.NewString(), Actor: testPubkey, Content: map[string]any{"route_id": uuid.NewString(), "environment_id": uuid.NewString(), "release_id": uuid.NewString()}}
+	require.ErrorContains(t, proc.ProcessInProcess(t.Context(), intent), "LLM deployment paused")
+	require.Zero(t, reg.creates)
+	require.Len(t, statuses.events, 1)
+	require.Equal(t, "rejected", tagValueNostr(statuses.events[0].Tags, "status"))
 }

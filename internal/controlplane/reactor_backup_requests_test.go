@@ -93,7 +93,7 @@ func TestHandleBackupRunRequestIsIdempotentByRequesterKindAndDTag(t *testing.T) 
 	}
 }
 
-func TestHandleBackupRestoreRequiresApprovalBeforeExecutor(t *testing.T) {
+func TestHandleBackupRestoreApprovalPausedBeforeExecutorOrPublication(t *testing.T) {
 	ctx := context.Background()
 	requestKey := nostr.Generate().Hex()
 	requestPubkey := testNostrPubKeyHexFromPrivateKey(t, requestKey)
@@ -101,44 +101,39 @@ func TestHandleBackupRestoreRequiresApprovalBeforeExecutor(t *testing.T) {
 	sourceRun := registry.addRestoreEligibleRun()
 	executor := &recordingBackupRestoreExecutor{calls: make(chan uuid.UUID, 1)}
 	responder := &recordingBackupRestoreResponder{}
-	serviceKey := nostr.Generate().Hex()
-	signer, _ := NewPrivateKeySigner(serviceKey)
-	store := openTestStore(t)
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop(), WithCanonicalWorkflowEvents(store))
+	signer, _ := NewPrivateKeySigner(nostr.Generate().Hex())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{requestPubkey}}, nil, nil, signer, zap.NewNop())
 	reactor.backupRegistry = registry
 	reactor.backupRestoreExecutor = executor
 	reactor.backupRestoreResponder = responder
 	request := signedLLMRequest(t, requestKey, KindBackupRestoreRequest, fmt.Sprintf(`{"backup_run_id":"%s","restore_target_ref":"fs:/restore"}`, sourceRun.ID), nostr.Tags{{"d", "restore:daily:prod"}, {"backup_run_id", sourceRun.ID.String()}, {"target", "fs:/restore"}})
-
 	reactor.handleBackupRestoreRequest(ctx, request)
-
+	if len(registry.restores) != 1 || len(responder.statusSteps) != 1 || responder.statusSteps[0] != "pending_approval" {
+		t.Fatalf("signed request not retained pending approval: restores=%d steps=%v", len(registry.restores), responder.statusSteps)
+	}
+	for id, restore := range registry.restores {
+		restore.Metadata["kopia_restore_source"] = "sql-overridden-source"
+		restore.Metadata["velero_backup_name"] = "sql-overridden-name"
+		approval := signedLLMRequest(t, requestKey, KindBackupRestoreApproval, fmt.Sprintf(`{"restore_id":"%s","approved":true}`, id), nostr.Tags{{"d", "approve:restore:daily:prod"}, {"restore_id", id.String()}, {"decision", "approved"}})
+		reactor.handleBackupRestoreApproval(ctx, approval)
+		if restore.ApprovalStatus != domain.BackupApprovalPending || restore.ApprovalEventID != "" {
+			t.Fatalf("approval mutated pending restore: %#v", restore)
+		}
+	}
+	fabricatedID := uuid.New()
+	registry.restores[fabricatedID] = &domain.BackupRestoreRun{ID: fabricatedID, ApprovalStatus: domain.BackupApprovalPending, Metadata: map[string]any{"kopia_restore_source": "sql-only"}}
+	fabricated := signedLLMRequest(t, requestKey, KindBackupRestoreApproval, fmt.Sprintf(`{"restore_id":"%s","approved":true}`, fabricatedID), nostr.Tags{{"d", "approve:sql-only"}, {"restore_id", fabricatedID.String()}, {"decision", "approved"}})
+	reactor.handleBackupRestoreApproval(ctx, fabricated)
+	if registry.restores[fabricatedID].ApprovalStatus != domain.BackupApprovalPending {
+		t.Fatal("SQL-only restore was approved")
+	}
 	select {
-	case runID := <-executor.calls:
-		t.Fatalf("restore executor invoked before approval for %s", runID)
+	case id := <-executor.calls:
+		t.Fatalf("restore executor invoked for %s", id)
 	default:
 	}
-	if got := responder.statusSteps; len(got) != 1 || got[0] != "pending_approval" {
-		t.Fatalf("restore status steps = %#v, want pending_approval", got)
-	}
-	var restoreID uuid.UUID
-	for id := range registry.restores {
-		restoreID = id
-	}
-	retainTestRestoreAcceptance(t, store, request, serviceKey, registry.restores[restoreID])
-	approval := signedLLMRequest(t, requestKey, KindBackupRestoreApproval, fmt.Sprintf(`{"restore_id":"%s","approved":true,"message":"operator-approved"}`, restoreID), nostr.Tags{{"d", "approve:restore:daily:prod"}, {"restore_id", restoreID.String()}, {"decision", "approved"}})
-
-	reactor.handleBackupRestoreApproval(ctx, approval)
-
-	select {
-	case got := <-executor.calls:
-		if got != restoreID {
-			t.Fatalf("executor restore id = %s, want %s", got, restoreID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("restore executor was not invoked after approval")
-	}
-	if len(responder.approvals) != 1 || !responder.approvals[0] {
-		t.Fatalf("approval results = %#v, want approved", responder.approvals)
+	if len(responder.approvals) != 0 || len(responder.statusSteps) != 1 {
+		t.Fatalf("approval published an outcome: approvals=%v status=%v", responder.approvals, responder.statusSteps)
 	}
 }
 
@@ -683,10 +678,6 @@ func (r *backupRequestRegistry) CreateBackupRestoreIfAbsent(_ context.Context, r
 	r.restores[cp.ID] = &cp
 	r.restoreCoords[key] = cp.ID
 	return &cp, true, nil
-}
-
-func (r *backupRequestRegistry) GetBackupRestore(_ context.Context, id uuid.UUID) (*domain.BackupRestoreRun, error) {
-	return r.restores[id], nil
 }
 
 func (r *backupRequestRegistry) ApplyBackupRestoreApproval(_ context.Context, restoreID uuid.UUID, approved bool, approvalEventID, approvedBy, message string, reasonParts ...any) (*domain.BackupRestoreRun, bool, error) {

@@ -282,20 +282,28 @@ func TestD79AdoptionScanOversizedFindingAdvancesBoundedPage(t *testing.T) {
 	require.Equal(t, false, second.Result["truncated"])
 }
 
-func TestD79ToolApprovalRejectIntent(t *testing.T) {
+func TestD79ToolApprovalIntentPausedWithoutSQLMutation(t *testing.T) {
 	actor := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
-	id := uuid.New()
-	repo := newAtomicToolApprovalRepo(id, domain.ToolProvisionStatusAwaitingApproval)
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{actor}}, nil, nil, nil, zap.NewNop(), WithToolProvisioningRepository(repo))
-	p, statuses := d70Processor(t, "tool", actor, NewToolIntentHandler(reactor))
-	event := toolApprovalEvent(t, testRequesterKey, "reject-d79", id, "reject")
-	intent := d70Intent("tool", "approval-response", "tool-approval:"+id.String(), actor,
-		map[string]any{"intent_id": id.String(), "action": "reject", "reason": "operator reviewed"})
-	intent.Event = event
-	require.ErrorContains(t, p.ProcessInProcess(t.Context(), intent), "workflow service signer is unavailable")
-	require.Equal(t, "rejected", tagValueNostr(statuses.events[0].Tags, "status"))
-	_, applied, logs, state := repo.counts()
-	require.Zero(t, applied)
-	require.Zero(t, logs)
-	require.Equal(t, domain.ToolProvisionStatusAwaitingApproval, state)
+	for _, source := range []string{"sql-only", "signed-request"} {
+		t.Run(source, func(t *testing.T) {
+			id := uuid.New()
+			repo := newAtomicToolApprovalRepo(id, domain.ToolProvisionStatusAwaitingApproval)
+			repo.intent.ResolvedTools = []domain.ResolvedTool{{Name: "malicious-package", Version: "1", Manager: "apt", Source: "sql-overridden-source"}}
+			if source == "signed-request" {
+				repo.intent.NostrEventID = strings.Repeat("a", 64)
+			}
+			reactor := NewReactor(Config{AuthorizedPubkeys: []string{actor}}, nil, nil, nil, zap.NewNop(), WithToolProvisioningRepository(repo))
+			p, statuses := d70Processor(t, "tool", actor, NewToolIntentHandler(reactor))
+			event := toolApprovalEvent(t, testRequesterKey, "approve-d79-"+source, id, "approve")
+			intent := d70Intent("tool", "approval-response", "tool-approval:"+id.String(), actor, map[string]any{"intent_id": id.String(), "action": "approve"})
+			intent.Event = event
+			require.ErrorContains(t, p.ProcessInProcess(t.Context(), intent), "tool approval paused")
+			require.Equal(t, "rejected", tagValueNostr(statuses.events[0].Tags, "status"))
+			calls, applied, logs, status := repo.counts()
+			require.Zero(t, calls)
+			require.Zero(t, applied)
+			require.Zero(t, logs)
+			require.Equal(t, domain.ToolProvisionStatusAwaitingApproval, status)
+		})
+	}
 }

@@ -27,11 +27,13 @@ gateway route repair is also paused because its desired state is SQL-backed.
 Do not clear or manually advance the rows. Preserve PostgreSQL and the
 relay/local event store, inventory the affected run ids and source event ids,
 and compare each against retained validated signed intents and canonical
-outcomes. Direct signed backup and tool intent handling remains available, but
-a queued row without matching canonical provenance must not be replayed. The
-restore/tool approval paths also pause when the original signed request or a
-required service-signed acceptance record is absent locally. Live LLM deployment and
-approval requests receive an explicit refusal while execution is paused. The
+outcomes. Direct signed backup request creation and tool request handling remain available.
+Restore and tool manual approvals are paused, including for otherwise valid
+requests: SQL-resolved execution inputs cannot yet be causally bound to the
+original signed request and atomically committed before publication. Treat this
+as a release blocker; do not edit SQL approval rows or manually invoke the
+executor. A queued row without matching canonical provenance must not be
+replayed. The
 [paused recovery is a release blocker](../designs/relay-canonical-startup-and-recovery.md#workflow-recovery-authority),
 not a successful workflow recovery. The
 [workflow recovery design](../designs/relay-canonical-startup-and-recovery.md#workflow-recovery-authority)

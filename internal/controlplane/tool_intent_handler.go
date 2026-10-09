@@ -3,26 +3,19 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/openagentsinc/bahia/internal/repository"
 )
-
-type toolApprovalDecisionRepository interface {
-	ApplyToolApprovalDecision(context.Context, uuid.UUID, domain.ToolProvisionStatus, string, time.Time) (*domain.ToolProvisionIntent, error)
-}
 
 type toolApprovalProcessor interface {
 	ProcessIntent(context.Context, uuid.UUID) error
 	ProcessApprovedIntent(context.Context, uuid.UUID) error
 }
 
-// ToolIntentHandler applies a single-use approval decision from a signed intent.
-// The reactor method owns approval logging, processing and result publication.
+// ToolIntentHandler validates approval intents before the reactor's explicit
+// fail-closed refusal; SQL-derived execution inputs are not authoritative.
 type ToolIntentHandler struct{ reactor *Reactor }
 
 func NewToolIntentHandler(reactor *Reactor) *ToolIntentHandler {
@@ -66,13 +59,5 @@ func (h *ToolIntentHandler) HandleIntent(ctx context.Context, intent *Intent) er
 	}
 	event := *intent.Event
 	event.Content = string(raw)
-	if err := h.reactor.handleToolApprovalResponse(ctx, &event); err != nil {
-		if errors.Is(err, repository.ErrConflict) {
-			return &intentStateConflictError{message: "tool approval decision conflicts with current provisioning state"}
-		}
-		return err
-	}
-	intent.StatusData = map[string]any{"provisioning_intent_id": decision.IntentID.String(), "action": decision.Action}
-	intent.Result = intent.StatusData
-	return nil
+	return h.reactor.handleToolApprovalResponse(ctx, &event)
 }

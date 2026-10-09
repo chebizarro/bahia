@@ -88,7 +88,7 @@ func (h *LLMRouteIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 	if h.deploymentUnavailableReason != "" {
 		switch intent.Op {
 		case "deploy", "rollback", "approve", "reject":
-			return fmt.Errorf("LLM deployment unavailable: %s", h.deploymentUnavailableReason)
+			return fmt.Errorf("LLM deployment paused: %s", h.deploymentUnavailableReason)
 		}
 	}
 	switch intent.Op {

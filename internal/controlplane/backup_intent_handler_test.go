@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -362,56 +363,27 @@ func (r *fakeBackupIntentRegistry) ApplyBackupRestoreApproval(_ context.Context,
 	return restore, true, nil
 }
 
-func TestBackupIntentHandler_RestoreApproval(t *testing.T) {
-	ctx := context.Background()
-	id := uuid.New()
-	registry := newFakeBackupIntentRegistry()
-	backupRunID := uuid.New()
-	requesterKey := gonostr.Generate().Hex()
-	request := signedLLMRequest(t, requesterKey, KindCASControlState,
-		fmt.Sprintf(`{"id":%q,"backup_run_id":%q,"restore_target_ref":"fs:/restore"}`, id.String(), backupRunID.String()),
-		gonostr.Tags{{"t", "bahia-intent"}, {"d", "restore:" + id.String()}, {"domain", "backup"}, {"op", "restore"}, {"intent_id", "restore-creation"}, {"org", testOrgID().String()}},
-	)
-	registry.restores[id] = &domain.BackupRestoreRun{
-		ID: id, BackupRunID: backupRunID, RestoreTargetRef: "fs:/restore",
-		RequestedBy: request.PubKey.Hex(), RequestEventID: request.ID.Hex(),
-		RequestKind: int(request.Kind), RequestDTag: "restore:" + id.String(),
-		ApprovalStatus: domain.BackupApprovalPending, UpdatedAt: time.Unix(1790985600, 0).UTC(),
+func TestBackupIntentHandler_RestoreApprovalPausedBeforeMutation(t *testing.T) {
+	for _, source := range []string{"sql-only", "signed-request"} {
+		t.Run(source, func(t *testing.T) {
+			id := uuid.New()
+			registry := newFakeBackupIntentRegistry()
+			restore := &domain.BackupRestoreRun{
+				ID: id, ApprovalStatus: domain.BackupApprovalPending,
+				Metadata: map[string]any{"kopia_restore_source": "sql-overridden-source", "velero_backup_name": "sql-overridden-name"},
+			}
+			if source == "signed-request" {
+				restore.RequestEventID = strings.Repeat("a", 64)
+				restore.RequestKind = int(KindBackupRestoreRequest)
+			}
+			registry.restores[id] = restore
+			handler := NewBackupIntentHandler(BackupIntentHandlerConfig{Registry: registry, Logger: zap.NewNop()})
+			for _, decision := range []string{"approve", "reject"} {
+				intent := &Intent{Domain: "backup", Op: "restore-approval", OrgID: testOrgID(), Actor: testPubkey, IntentID: "approval-" + decision, Coordinate: id.String(), Content: map[string]any{"restore_id": id.String(), "decision": decision}}
+				require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "approval paused")
+				require.Zero(t, registry.restoreApprovals)
+				require.Equal(t, domain.BackupApprovalPending, restore.ApprovalStatus)
+			}
+		})
 	}
-	store := openTestStore(t)
-	retainTestWorkflowEvent(t, store, request)
-	unauthorizedOriginal := NewBackupIntentHandler(BackupIntentHandlerConfig{Registry: registry, CanonicalEvents: store, OriginalRequestAuthorized: func(string) bool { return false }, Logger: zap.NewNop()})
-	require.Error(t, unauthorizedOriginal.HandleIntent(ctx, &Intent{Op: "restore-approval", Content: map[string]any{"restore_id": id.String(), "decision": "approve"}}))
-	require.Zero(t, registry.restoreApprovals)
-	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{Registry: registry, CanonicalEvents: store, OriginalRequestAuthorized: func(pubkey string) bool { return pubkey == request.PubKey.Hex() }, Logger: zap.NewNop()})
-	statuses := &statusCollector{}
-	proc := NewIntentProcessor(NewTrustSet([]string{testPubkey}, zap.NewNop(), WithBootstrapOwners(map[string]string{testOrgID().String(): "0000000000000000000000000000000000000000000000000000000000000001"})), openTestStore(t), NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()), IntentProcessorConfig{EnabledDomains: map[string]bool{"backup": true}}, zap.NewNop())
-	proc.RegisterHandler("backup", handler)
-	intent := &Intent{Domain: "backup", Op: "restore-approval", OrgID: testOrgID(), Actor: testPubkey, IntentID: "restore-approval-1", Coordinate: id.String(), Content: map[string]any{"restore_id": id.String(), "decision": "approve"}}
-	require.NoError(t, proc.ProcessInProcess(ctx, intent))
-	require.Equal(t, 1, registry.restoreApprovals)
-	require.Equal(t, domain.BackupApprovalApproved, registry.restores[id].ApprovalStatus)
-	require.Len(t, statuses.events, 1)
-	require.NoError(t, proc.ProcessInProcess(ctx, intent))
-	require.Equal(t, 1, registry.restoreApprovals)
-	stale := *intent
-	stale.IntentID = "restore-approval-stale"
-	revision := time.Unix(1790985500, 0).UTC()
-	stale.ExpectedUpdatedAt = &revision
-	require.Error(t, proc.ProcessInProcess(ctx, &stale))
-	require.Equal(t, "conflict", tagValueNostr(statuses.events[1].Tags, "status"))
-	require.Equal(t, 1, registry.restoreApprovals)
-	matching := *intent
-	matching.IntentID = "restore-approval-matching"
-	matching.Content = map[string]any{"restore_id": id.String(), "decision": "approve",
-		"expected_updated_at": registry.restores[id].UpdatedAt.Format(time.RFC3339Nano)}
-	require.NoError(t, proc.ProcessInProcess(ctx, &matching))
-	require.Equal(t, "accepted", tagValueNostr(statuses.events[2].Tags, "status"))
-	require.Equal(t, 2, registry.restoreApprovals)
-	denied := *intent
-	denied.IntentID = "restore-approval-denied"
-	denied.Actor = "0000000000000000000000000000000000000000000000000000000000000001"
-	require.Error(t, proc.ProcessInProcess(ctx, &denied))
-	require.Equal(t, "rejected", tagValueNostr(statuses.events[3].Tags, "status"))
-	require.Equal(t, 2, registry.restoreApprovals)
 }

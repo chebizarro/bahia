@@ -55,20 +55,15 @@ The daemon does not register the SQL-scanning backup run, restore, retention,
 schedule, LLM provisioning and route repair, or tool provisioning recovery runners. Health reports
 each paused family as degraded and warns operators that retained SQL work must
 not be replayed without signed-intent provenance. This does not erase queued
-rows. Backup and tool requests delivered through their signed intent handlers
-can still execute directly; automatic schedule dispatch and LLM provisioning
-remain unavailable until their canonical intake and recovery sources exist.
+rows. Backup and tool requests delivered through their signed request handlers
+can still be admitted directly. Backup restore and tool manual approvals are
+paused even for otherwise valid requests: SQL-derived restore metadata and
+resolved tool packages can change execution inputs after the signed request,
+and the existing approval mutation can publish before a second provenance
+check. Automatic schedule dispatch and LLM provisioning remain unavailable
+until their canonical intake and recovery sources exist.
 This pause is a **release blocker for the affected features**, not a completed
 recovery replacement or evidence that persisted work will finish after restart.
-Live LLM deploy, rollback and approval intents are rejected while no canonical
-executor exists. Backup restore and tool approval paths require the validated
-original signed request in the local event store. For daemon-minted row ids,
-they also require a service-signed acceptance record binding that request to
-the stored restore or tool intent id; an author-minted restore id in the signed
-intent supplies that binding directly.
-Absent or mismatched proof leaves the row pending and prevents execution or a
-workflow-result publication. The acceptance record must be relay-hydrated into
-the local store; a PostgreSQL audit row or copied event-id field is not proof.
 
 Recovery requires a durable per-workflow record linking the validated source
 intent event id and intent id to a stable run id, external job id/idempotency
@@ -80,6 +75,16 @@ intents, not their PostgreSQL `queued` or `approved` rows. Replay must wait for
 family catch-up, resolve latest-winner/tombstone state, deduplicate by event and
 intent id, then reattach by stable external id before executing any missing
 step. Progress must enter the local outbox before PostgreSQL projection.
+
+Approval restoration additionally requires a retained, validated original
+request event (not merely an ID copied into SQL), canonical binding of every
+effect-bearing input including restore source and resolved tool package/source,
+and an atomic compare-and-commit of request, approval, execution inputs and
+outbox outcome. If the original request cannot be recovered or any input
+differs, leave the row pending with an operator-visible refusal; do not mint a
+new service receipt from SQL metadata. Tests must race approval against SQL
+mutation, inject fabricated rows and mismatched metadata, and prove zero
+executor calls and signed outcomes for every refusal.
 
 For each family, deterministic acceptance tests inject canonical EVENT and
 EOSE (including duplicates and divergent SQL), restart after acceptance,

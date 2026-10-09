@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
-	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -19,74 +19,6 @@ type toolProvisioningRepoFake struct {
 	updates      []domain.ToolProvisionStatus
 	denylist     []domain.ToolDenylistEntry
 	listStatuses [][]domain.ToolProvisionStatus
-}
-
-type approvalToolRepo struct {
-	*toolProvisioningRepoFake
-	applied int
-}
-
-func (r *approvalToolRepo) ApplyToolApprovalDecision(_ context.Context, id uuid.UUID, status domain.ToolProvisionStatus, _ string, _ time.Time) (*domain.ToolProvisionIntent, error) {
-	r.applied++
-	if r.intent == nil || r.intent.ID != id {
-		return nil, fmt.Errorf("tool intent missing")
-	}
-	r.intent.Status = status
-	return r.intent, nil
-}
-
-type recordingToolApprovalProcessor struct{ approved int }
-
-func (*recordingToolApprovalProcessor) ProcessIntent(context.Context, uuid.UUID) error { return nil }
-func (p *recordingToolApprovalProcessor) ProcessApprovedIntent(context.Context, uuid.UUID) error {
-	p.approved++
-	return nil
-}
-
-func TestToolApprovalRequiresCanonicalRequestAndAcceptance(t *testing.T) {
-	requesterKey := nostr.Generate().Hex()
-	operatorKey := nostr.Generate().Hex()
-	serviceKey := nostr.Generate().Hex()
-	serviceSigner, err := NewPrivateKeySigner(serviceKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	serviceID, envID, intentID := uuid.New(), uuid.New(), uuid.New()
-	tools := []domain.ToolRequest{{Manager: "apt", Name: "curl", Version: "latest"}}
-	requestBody, _ := json.Marshal(map[string]any{"service_id": serviceID.String(), "environment_id": envID.String(), "tools": tools})
-	request := signedLLMRequest(t, requesterKey, KindToolProvisionRequest, string(requestBody), nil)
-	row := &domain.ToolProvisionIntent{ID: intentID, ServiceID: serviceID, EnvironmentID: envID, RequestedTools: tools, Status: domain.ToolProvisionStatusAwaitingApproval, ApprovalRequired: true, NostrEventID: request.ID.Hex(), RequesterPubkey: request.PubKey.Hex()}
-	repo := &approvalToolRepo{toolProvisioningRepoFake: &toolProvisioningRepoFake{intent: row}}
-	processor := &recordingToolApprovalProcessor{}
-	responses := &captureNostrPublisher{published: 1}
-	store := openTestStore(t)
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{request.PubKey.Hex(), testNostrPubKeyHexFromPrivateKey(t, operatorKey)}}, nil, nil, serviceSigner, zap.NewNop(), WithCanonicalWorkflowEvents(store), WithToolProvisioningRepository(repo), WithToolResponder(NewToolResponder(responses, serviceSigner, zap.NewNop(), nil)))
-	reactor.toolCoordinator = processor
-	approval := signedLLMRequest(t, operatorKey, KindToolApprovalResponse, fmt.Sprintf(`{"intent_id":%q,"action":"approve"}`, intentID.String()), nil)
-	if err := reactor.handleToolApprovalResponse(context.Background(), approval); err == nil {
-		t.Fatal("SQL-only awaiting-approval row was accepted")
-	}
-	if repo.applied != 0 || processor.approved != 0 || len(responses.events) != 0 {
-		t.Fatal("SQL-only row caused approval, execution, or publication")
-	}
-	retainTestWorkflowEvent(t, store, request)
-	if err := reactor.handleToolApprovalResponse(context.Background(), approval); err == nil {
-		t.Fatal("signed request without service acceptance was accepted")
-	}
-	receiptBody, _ := json.Marshal(map[string]any{"intent_id": intentID.String(), "service_id": serviceID.String(), "environment_id": envID.String(), "step": "queued"})
-	receipt := signedLLMRequest(t, serviceKey, KindCASControlState, string(receiptBody), nostr.Tags{{"d", "tool-provisioning:" + intentID.String()}, {"e", request.ID.Hex()}, {"intent", intentID.String()}})
-	retainTestWorkflowEvent(t, store, receipt)
-	row.RequestedTools = []domain.ToolRequest{{Manager: "apt", Name: "different", Version: "latest"}}
-	if err := reactor.handleToolApprovalResponse(context.Background(), approval); err == nil {
-		t.Fatal("mismatched SQL request payload was accepted")
-	}
-	row.RequestedTools = tools
-	if err := reactor.handleToolApprovalResponse(context.Background(), approval); err != nil {
-		t.Fatalf("valid signed request and acceptance refused: %v", err)
-	}
-	if repo.applied != 1 || processor.approved != 1 || len(responses.events) != 1 {
-		t.Fatalf("valid approval results: applied=%d executed=%d published=%d", repo.applied, processor.approved, len(responses.events))
-	}
 }
 
 func (r *toolProvisioningRepoFake) CreateIntent(_ context.Context, intent *domain.ToolProvisionIntent) error {
@@ -209,5 +141,43 @@ func TestHandleToolProvisionRequestProcessesIntentFromEvent(t *testing.T) {
 	}
 	if len(repo.listStatuses) != 0 {
 		t.Fatalf("handler should not use repository polling/listing to discover the new intent, got calls: %#v", repo.listStatuses)
+	}
+}
+
+func TestHandleToolApprovalResponsePausedBeforeSQLOrPublication(t *testing.T) {
+	actorKey := nostr.Generate().Hex()
+	actor := testNostrPubKeyHexFromPrivateKey(t, actorKey)
+	for _, source := range []string{"sql-only", "signed-request"} {
+		t.Run(source, func(t *testing.T) {
+			id := uuid.New()
+			repo := newAtomicToolApprovalRepo(id, domain.ToolProvisionStatusAwaitingApproval)
+			capture := &captureNostrPublisher{}
+			reactor := NewReactor(Config{AuthorizedPubkeys: []string{actor}}, nil, nil, nil, zap.NewNop(),
+				WithToolProvisioningRepository(repo), WithControlPlanePublisher(capture))
+			if source == "signed-request" {
+				// Create the row through the direct signed-request handler first.
+				request := signedLLMRequest(t, actorKey, KindToolProvisionRequest,
+					fmt.Sprintf(`{"service_id":%q,"environment_id":%q,"operation":"install","tools":[{"manager":"apt","name":"curl","version":"latest"}]}`, uuid.NewString(), uuid.NewString()), nil)
+				if err := reactor.handleToolProvisionRequest(t.Context(), request); err != nil {
+					t.Fatalf("signed tool request: %v", err)
+				}
+				id = repo.intent.ID
+				repo.intent.Status = domain.ToolProvisionStatusAwaitingApproval
+			}
+			// A later SQL edit to resolution must not redirect the build.
+			repo.intent.ResolvedTools = []domain.ResolvedTool{{Name: "sql-package", Manager: "apt", Source: "sql-source"}}
+			approval := toolApprovalEvent(t, actorKey, "approval-"+source, id, "approve")
+			err := reactor.handleToolApprovalResponse(t.Context(), approval)
+			if err == nil || !strings.Contains(err.Error(), "tool approval paused") {
+				t.Fatalf("expected paused refusal, got %v", err)
+			}
+			calls, applied, logs, status := repo.counts()
+			if calls != 0 || applied != 0 || logs != 0 || status != domain.ToolProvisionStatusAwaitingApproval {
+				t.Fatalf("approval mutated SQL: calls=%d applied=%d logs=%d status=%s", calls, applied, logs, status)
+			}
+			if len(capture.events) != 0 {
+				t.Fatalf("approval published %d events", len(capture.events))
+			}
+		})
 	}
 }
