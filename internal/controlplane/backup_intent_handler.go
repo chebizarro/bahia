@@ -43,6 +43,11 @@ type BackupRunPendingWriter interface {
 	StagePendingRun(context.Context, string, string, gonostr.Event, string, time.Time) (*localstore.BackupRunPending, error)
 }
 
+// New async intake remains paused until terminal signed-status settlement is
+// implemented; history/retry groundwork must not promise an immortal pending
+// outcome to operators.
+const backupRunAsyncIntakeEnabled = false
+
 // ErrBackupRunPending means the operator-signed request is durably queued but
 // no service-signed run state or accepted outcome exists yet.
 var ErrBackupRunPending = errors.New("backup run state is pending relay acceptance")
@@ -385,7 +390,7 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 		return fmt.Errorf("%w: %v", ErrBackupRunAdmissionConflict, err)
 	}
 	if pending != nil {
-		if pending.State == localstore.BackupRunRefusedState {
+		if pending.State == localstore.BackupRunRefusedState || !time.Now().UTC().Before(pending.ExpiresAt) {
 			return fmt.Errorf("%w: signed request expired without complete relay-history and signer proof", ErrBackupRunAdmissionConflict)
 		}
 		intent.Result = map[string]any{"run_id": requested.ID.String(), "request_event_id": requestID, "execution": "paused"}
@@ -414,6 +419,11 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 	expiresAt, err := signedBackupRunExpiration(intent.Event)
 	if err != nil {
 		return fmt.Errorf("backup run request expiration: %w", err)
+	}
+	// Do not promise an asynchronously pending outcome until terminal expiry can
+	// be settled through a durable, ACK-tracked signed 30315 refusal.
+	if !backupRunAsyncIntakeEnabled {
+		return fmt.Errorf("backup run request intake paused: terminal signed status settlement is unavailable")
 	}
 	if _, err := h.runPending.StagePendingRun(ctx, intent.IntentID, intent.Coordinate, *intent.Event, intent.Actor, expiresAt); err != nil {
 		return fmt.Errorf("stage signed backup run pending request: %w", err)

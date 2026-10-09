@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -123,6 +124,26 @@ func TestBackupRunAdmissionRetainsSignedPendingRequestAcrossRestart(t *testing.T
 		require.NoError(t, processor.ProcessInProcess(t.Context(), intent))
 		return intent
 	}
+	parsed, err := ParseIntent(&request)
+	require.NoError(t, err)
+	fresh := newProcessor()
+	parsed.Actor = operatorKey.Public().Hex()
+	require.ErrorContains(t, fresh.ProcessInProcess(t.Context(), parsed), "terminal signed status settlement is unavailable")
+	unadmitted, err := outbox.GetBackupRunPending(parsed.IntentID, parsed.Coordinate, request.ID.Hex())
+	require.NoError(t, err)
+	require.Nil(t, unadmitted, "paused intake cannot promise an unsatisfiable pending outcome")
+	statuses.mu.Lock()
+	statuses.events = nil
+	statuses.mu.Unlock()
+	expiresAt, err := signedBackupRunExpiration(&request)
+	require.NoError(t, err)
+	_, inserted, err := outbox.PutBackupRunPending(localstore.BackupRunPending{
+		IntentID: parsed.IntentID, Coordinate: parsed.Coordinate, RequestEvent: request,
+		Actor: operatorKey.Public().Hex(), ServicePubkey: serviceKey.Public().Hex(),
+		ReceivedAt: time.Now().UTC(), ExpiresAt: expiresAt,
+	})
+	require.NoError(t, err)
+	require.True(t, inserted)
 	processor := newProcessor()
 	first := process(processor)
 	require.Empty(t, statuses.events, "pending is not a relay status")
@@ -151,4 +172,36 @@ func TestBackupRunAdmissionRetainsSignedPendingRequestAcrossRestart(t *testing.T
 	refused, err := outbox.GetBackupRunPending(first.IntentID, first.Coordinate, request.ID.Hex())
 	require.NoError(t, err)
 	require.Equal(t, localstore.BackupRunRefusedState, refused.State)
+}
+
+func TestBackupRunExpiredPendingReplayCannotReportPending(t *testing.T) {
+	operator, service := nostr.Generate(), nostr.Generate()
+	request := signedBackupRunFixture(t, operator, nil)
+	now := time.Now().UTC().Truncate(time.Second)
+	request.CreatedAt = nostr.Timestamp(now.Add(-12 * time.Minute).Unix())
+	for i := range request.Tags {
+		if len(request.Tags[i]) > 0 && request.Tags[i][0] == "expiration" {
+			request.Tags[i][1] = strconv.FormatInt(now.Add(-2*time.Minute).Unix(), 10)
+		}
+	}
+	require.NoError(t, request.Sign(operator))
+	intent, err := ParseIntent(&request)
+	require.NoError(t, err)
+	intent.Actor = operator.Public().Hex()
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	_, inserted, err := outbox.PutBackupRunPending(localstore.BackupRunPending{
+		IntentID: intent.IntentID, Coordinate: intent.Coordinate, RequestEvent: request,
+		Actor: intent.Actor, ServicePubkey: service.Public().Hex(),
+		ReceivedAt: now.Add(-11 * time.Minute), ExpiresAt: now.Add(-2 * time.Minute),
+	})
+	require.NoError(t, err)
+	require.True(t, inserted)
+	admission := testBackupRunAdmission{outbox: outbox, key: service}
+	handler := NewBackupIntentHandler(BackupIntentHandlerConfig{RunAdmission: admission, RunPending: admission, RunReceipts: &localBackupRunReceipts{}, Logger: zap.NewNop()})
+	err = handler.handleRun(t.Context(), intent)
+	require.ErrorIs(t, err, ErrBackupRunAdmissionConflict)
+	require.ErrorContains(t, err, "expired")
+	require.Nil(t, intent.Result, "expired replay cannot return pending to a one-shot client")
 }

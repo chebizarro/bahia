@@ -193,3 +193,82 @@ func TestBackupRunHistoryLocalPreledgerCoordinateVetoesEmptyRelay(t *testing.T) 
 	require.ErrorContains(t, err, "already exists in local relay cache")
 	require.Empty(t, relay.requests(), "a known coordinate need not issue a relay REQ")
 }
+
+func TestBackupRunHistoryProofRejectsTerminalCLOSEDAfterEOSE(t *testing.T) {
+	closeREQ := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") == "application/nostr+json" {
+			w.Header().Set("Content-Type", "application/nostr+json")
+			_, _ = w.Write([]byte(`{"name":"history","limitation":{"max_limit":20}}`))
+			return
+		}
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		for {
+			_, msg, err := conn.Read(r.Context())
+			if err != nil {
+				return
+			}
+			var frame []json.RawMessage
+			if json.Unmarshal(msg, &frame) != nil || len(frame) < 2 {
+				continue
+			}
+			var verb string
+			_ = json.Unmarshal(frame[0], &verb)
+			if verb != "REQ" {
+				continue
+			}
+			if err := conn.Write(r.Context(), websocket.MessageText, []byte(`["EOSE",`+string(frame[1])+`]`)); err != nil {
+				return
+			}
+			select {
+			case <-closeREQ:
+			case <-r.Context().Done():
+				return
+			}
+			_ = conn.Write(r.Context(), websocket.MessageText, []byte(`["CLOSED",`+string(frame[1])+`,"blocked: policy refusal"]`))
+			return
+		}
+	}))
+	defer server.Close()
+	pool := NewRelayPool([]string{"ws" + strings.TrimPrefix(server.URL, "http")}, zap.NewNop())
+	defer pool.Close()
+	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	proof, err := pool.InspectBackupRunHistory(ctx, store, gonostr.Generate().Public(), "backup-run:closed-after-eose")
+	require.NoError(t, err)
+	defer proof.Close()
+	require.NoError(t, proof.StillCurrent())
+	close(closeREQ)
+	select {
+	case closed := <-proof.sub.Closed:
+		require.True(t, closed.Terminal)
+	case <-ctx.Done():
+		t.Fatal("terminal CLOSED was not observed")
+	}
+	require.ErrorIs(t, proof.sub.GaveUp(), ErrSubscriptionGaveUp)
+	require.ErrorContains(t, proof.StillCurrent(), "gave up")
+}
+
+func TestBackupRunHistoryProofAndCancellationAfterEOSENeverPass(t *testing.T) {
+	relay := newNIP11LimitRelay(t, map[string]int{"max_limit": 20})
+	pool := NewRelayPool([]string{relay.url}, zap.NewNop())
+	defer pool.Close()
+	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	proof, err := pool.InspectBackupRunHistory(ctx, store, gonostr.Generate().Public(), "backup-run:cancel-after-eose")
+	require.NoError(t, err)
+	defer proof.Close()
+	require.NoError(t, proof.StillCurrent())
+	cancel()
+	require.ErrorContains(t, proof.StillCurrent(), "context expired")
+	require.ErrorIs(t, backupRunHistoryCanceled(proof.sub, context.Canceled), context.Canceled)
+}

@@ -101,13 +101,13 @@ func (r *BackupRunHistoryRunner) ReconcileOnce(ctx context.Context) (time.Time, 
 				}
 				attemptCtx, cancel := context.WithDeadline(ctx, deadline)
 				proof, err = r.inspect(attemptCtx, r.store, service, record.Coordinate)
-				cancel()
-			}
-			if proof != nil {
-				if currentErr := proof.StillCurrent(); currentErr != nil {
-					err = currentErr
+				if proof != nil {
+					if currentErr := proof.StillCurrent(); currentErr != nil {
+						err = currentErr
+					}
+					proof.Close()
 				}
-				proof.Close()
+				cancel()
 			}
 			if err == nil {
 				err = fmt.Errorf("cross-process service-key signer fence is unavailable")

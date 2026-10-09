@@ -33,6 +33,7 @@ type BackupRunHistoryProof struct {
 
 	pool   *RelayPool
 	store  BackupRunHistoryStore
+	ctx    context.Context
 	sub    *MergedSubscription
 	cancel context.CancelFunc
 	once   sync.Once
@@ -59,6 +60,20 @@ func (proof *BackupRunHistoryProof) Close() {
 func (proof *BackupRunHistoryProof) StillCurrent() error {
 	if proof == nil || proof.pool == nil || proof.sub == nil || proof.closed.Load() {
 		return fmt.Errorf("backup run history proof is unavailable or closed")
+	}
+	if proof.ctx == nil || proof.ctx.Err() != nil {
+		return fmt.Errorf("backup run history proof context expired")
+	}
+	if err := proof.sub.GaveUp(); err != nil {
+		return fmt.Errorf("backup run history subscription gave up: %w", err)
+	}
+	select {
+	case closed, open := <-proof.sub.Closed:
+		if !open {
+			return fmt.Errorf("backup run history subscription closed")
+		}
+		return fmt.Errorf("backup run history subscription CLOSED at %s: %s", closed.RelayURL, closed.Reason)
+	default:
 	}
 	if !slices.Equal(proof.RelayURLs, proof.pool.URLs()) {
 		return fmt.Errorf("backup run history relay topology changed")
@@ -87,6 +102,20 @@ drained:
 	}
 	if !proof.sub.AllRelaysReachedEOSE() || proof.sub.StoredEventsIncomplete(nil) != nil {
 		return fmt.Errorf("backup run history proof lost complete relay EOSE")
+	}
+	if err := proof.ctx.Err(); err != nil {
+		return fmt.Errorf("backup run history proof context expired: %w", err)
+	}
+	if err := proof.sub.GaveUp(); err != nil {
+		return fmt.Errorf("backup run history subscription gave up: %w", err)
+	}
+	select {
+	case closed, open := <-proof.sub.Closed:
+		if !open {
+			return fmt.Errorf("backup run history subscription closed")
+		}
+		return fmt.Errorf("backup run history subscription CLOSED at %s: %s", closed.RelayURL, closed.Reason)
+	default:
 	}
 	return nil
 }
@@ -219,7 +248,7 @@ func (p *RelayPool) InspectBackupRunHistory(ctx context.Context, store BackupRun
 			}
 			proof := &BackupRunHistoryProof{ServicePubkey: service, Coordinate: coordinate, RelayURLs: urls,
 				TopologyEpoch: topology, ConnectionEpoch: connections, ObservedAt: time.Now().UTC(),
-				pool: p, store: store, sub: sub, cancel: cancel}
+				pool: p, store: store, ctx: ctx, sub: sub, cancel: cancel}
 			if err := proof.StillCurrent(); err != nil {
 				return nil, err
 			}
@@ -230,7 +259,16 @@ func (p *RelayPool) InspectBackupRunHistory(ctx context.Context, store BackupRun
 					p.recycleBackupHistoryRelay(outcome.RelayURL, p.backupHistoryConnectionEpoch(outcome.RelayURL))
 				}
 			}
-			return nil, sub.StoredEventsIncomplete(ctx.Err())
+			return nil, backupRunHistoryCanceled(sub, ctx.Err())
 		}
 	}
+}
+
+// backupRunHistoryCanceled never treats an already completed EOSE as a
+// successful result when cancellation wins the select race.
+func backupRunHistoryCanceled(sub *MergedSubscription, cause error) error {
+	if incomplete := sub.StoredEventsIncomplete(cause); incomplete != nil {
+		return incomplete
+	}
+	return fmt.Errorf("backup run history context expired after EOSE: %w", cause)
 }
