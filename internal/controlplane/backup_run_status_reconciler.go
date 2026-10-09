@@ -140,7 +140,16 @@ func (r *BackupRunStatusReconciler) reconcileRecord(ctx context.Context, record 
 		Event: &nostr.Event{ID: requestID}, StatusData: map[string]any{
 			"run_id": strings.TrimPrefix(current.Coordinate, "backup-run:"), "state_event_id": current.StateEventID, "execution": "paused",
 		}}
-	event, err := r.status.buildStatusEventWithExpiry(ctx, intent, "accepted", "applied", "", nil, 0)
+	floor, err := r.outbox.BackupRunStatusTimestampFloor(current.ServicePubkey, current.Actor, current.Coordinate)
+	if err != nil {
+		return err
+	}
+	now := nostr.Now()
+	createdAt := max(now, floor+1)
+	if createdAt > now+30 {
+		return fmt.Errorf("backup run accepted status waits for prior coordinate timestamp %d", floor)
+	}
+	event, err := r.status.buildStatusEventWithExpiryAt(ctx, intent, "accepted", "applied", "", nil, 0, createdAt)
 	if err != nil {
 		return err
 	}

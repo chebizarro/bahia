@@ -239,14 +239,16 @@ quorum proof after the settled delivery row is pruned; a separate
 processed-intent cache marker never substitutes for it. The delivery callback
 wakes a status reconciler, which signs and durably queues one final kind-30315
 `accepted` result only after that run-state ACK. The accepted status remains
-pinned for same-ID retry until its own control-plane relay-quorum ACK; MCP
+pinned for same-ID retry until its own operator-relay quorum ACK; MCP
 replay reports `accepted` only after both proofs. Startup reconciliation
 covers a crash between settlement and status staging; provisional pending
 relay statuses are not emitted. Outbox exhaustion is not proof that no relay
 holds the staged event: a failed row remains pinned, emits no false refusal,
 and can retry the same signed event ID. Replay of the same signed request is idempotent, while another
 request using its intent ID or run coordinate is rejected without replacing
-the first request's status. No backup execution starts
+the first request's status. The accepted status uses a durable timestamp floor
+above any earlier service status on the same NIP-01 coordinate, so a
+same-second pre-admission rejection cannot win by event-ID tie-break. No backup execution starts
 from this queued state: canonical credential resolution and step checkpoint
 recovery are not available.
 

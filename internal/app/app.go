@@ -1310,7 +1310,7 @@ func New(cfg *config.Config) (*App, error) {
 	backupCanonical.SetRuntimeObservationSource(backupRegistry)
 	backupRegistry.SetCanonicalPublisher(backupCanonical)
 	if enabledDomains["backup"] && intentStatus != nil && nostrPub != nil {
-		backupStatus, err := controlplane.NewBackupRunStatusReconciler(localOutbox, intentStatus, controlPlanePub.Target(), controlPlanePub.Wake, localEventStore, logger)
+		backupStatus, err := controlplane.NewBackupRunStatusReconciler(localOutbox, intentStatus, nostrPub.Target(), nostrPub.Wake, localEventStore, logger)
 		if err != nil {
 			return nil, fmt.Errorf("configure backup run status reconciliation: %w", err)
 		}

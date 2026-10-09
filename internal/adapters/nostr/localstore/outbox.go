@@ -54,6 +54,8 @@ var (
 	backupRunCoordsBucket       = []byte("bahiaBackupRunCoordinatesV1")
 	backupRunEventsBucket       = []byte("bahiaBackupRunEventsV1")
 	backupRunStatusEventsBucket = []byte("bahiaBackupRunStatusEventsV1")
+	backupRunStatusClockBucket  = []byte("bahiaBackupRunStatusClockV1")
+	backupRunStatusClockReady   = []byte("index-ready")
 )
 
 // DeliveryPolicy is the publisher's write-relay policy at the instant the
@@ -249,8 +251,24 @@ func openOutboxDB(path string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket, outboxDeliveryProofsBucket, backupRunIntentsBucket, backupRunCoordsBucket, backupRunEventsBucket, backupRunStatusEventsBucket} {
+		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket, outboxDeliveryProofsBucket, backupRunIntentsBucket, backupRunCoordsBucket, backupRunEventsBucket, backupRunStatusEventsBucket, backupRunStatusClockBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		statusClock := tx.Bucket(backupRunStatusClockBucket)
+		if statusClock.Get(backupRunStatusClockReady) == nil {
+			cursor := tx.Bucket(outboxEntriesBucket).Cursor()
+			for _, raw := cursor.First(); raw != nil; _, raw = cursor.Next() {
+				var entry OutboxEntry
+				if err := json.Unmarshal(raw, &entry); err != nil {
+					return fmt.Errorf("index retained backup status: %w", err)
+				}
+				if err := recordBackupRunStatusTimestamp(tx, entry.Event); err != nil {
+					return err
+				}
+			}
+			if err := statusClock.Put(backupRunStatusClockReady, []byte{1}); err != nil {
 				return err
 			}
 		}
@@ -430,6 +448,9 @@ func (o *Outbox) enqueue(entry OutboxEntry) (bool, error) {
 			return nil
 		}
 		if err := entries.Put(entry.Event.ID[:], raw); err != nil {
+			return err
+		}
+		if err := recordBackupRunStatusTimestamp(tx, entry.Event); err != nil {
 			return err
 		}
 		inserted = true
@@ -799,6 +820,58 @@ func isBackupRunAcceptedStatusEvent(ev nostr.Event) bool {
 	return ev.Kind == 30315 && outboxTag(ev.Tags, "domain") == "intent" &&
 		outboxTag(ev.Tags, "t") == "intent-status" && outboxTag(ev.Tags, "status") == "accepted" &&
 		strings.HasPrefix(outboxTag(ev.Tags, "d"), "intent-status:")
+}
+
+func backupRunStatusClockKey(pubkey nostr.PubKey, actor, coordinate string) []byte {
+	key := make([]byte, 0, len(pubkey)+len(actor)+len(coordinate)+len("intent-status::"))
+	key = append(key, pubkey[:]...)
+	key = append(key, "intent-status:"+actor+":"+coordinate...)
+	return key
+}
+
+func backupRunStatusEventClockKey(ev nostr.Event) []byte {
+	if ev.Kind != 30315 || outboxTag(ev.Tags, "domain") != "intent" ||
+		outboxTag(ev.Tags, "t") != "intent-status" || !ev.CheckID() || !ev.VerifySignature() {
+		return nil
+	}
+	actor := outboxTag(ev.Tags, "p")
+	coordinate, ok := strings.CutPrefix(outboxTag(ev.Tags, "d"), "intent-status:"+actor+":")
+	if actor == "" || !ok || !strings.HasPrefix(coordinate, "backup-run:") {
+		return nil
+	}
+	return backupRunStatusClockKey(ev.PubKey, actor, coordinate)
+}
+
+func backupRunStatusTimestampFloor(tx *bbolt.Tx, key []byte) (nostr.Timestamp, error) {
+	bucket := tx.Bucket(backupRunStatusClockBucket)
+	if bucket == nil {
+		return 0, fmt.Errorf("backup run status clock is unavailable")
+	}
+	raw := bucket.Get(key)
+	if raw == nil {
+		return 0, nil
+	}
+	if len(raw) != 8 {
+		return 0, fmt.Errorf("backup run status clock is malformed")
+	}
+	return nostr.Timestamp(binary.BigEndian.Uint64(raw)), nil
+}
+
+func recordBackupRunStatusTimestamp(tx *bbolt.Tx, ev nostr.Event) error {
+	key := backupRunStatusEventClockKey(ev)
+	if key == nil {
+		return nil
+	}
+	prior, err := backupRunStatusTimestampFloor(tx, key)
+	if err != nil {
+		return err
+	}
+	if ev.CreatedAt <= prior {
+		return nil
+	}
+	var value [8]byte
+	binary.BigEndian.PutUint64(value[:], uint64(ev.CreatedAt))
+	return tx.Bucket(backupRunStatusClockBucket).Put(key, value[:])
 }
 
 func outboxTag(tags nostr.Tags, key string) string {

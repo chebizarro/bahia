@@ -180,6 +180,71 @@ func TestBackupRunOutboxRefusalNeverSignsFalseStatusAndPinsSameEvent(t *testing.
 	require.Equal(t, "accepted", current.StatusOutcome)
 }
 
+func TestBackupAcceptedStatusUsesOperatorRelaysAndBeatsSameSecondRejection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.db")
+	outbox, err := localstore.OpenOutbox(path)
+	require.NoError(t, err)
+	service := nostr.Generate()
+	record, state := stageStatusTestRun(t, outbox, service)
+	signer, err := NewPrivateKeySigner(service.Hex())
+	require.NoError(t, err)
+	status := NewIntentStatusPublisher(func(context.Context, nostr.Event) error { return nil }, signer, zap.NewNop())
+	requestID, err := nostr.IDFromHex(record.RequestEventID)
+	require.NoError(t, err)
+	intent := &Intent{IntentID: record.IntentID, Actor: record.Actor, Coordinate: record.Coordinate, Event: &nostr.Event{ID: requestID}}
+	rejectedAt := nostr.Now()
+	rejected, err := status.buildStatusEventWithExpiryAt(t.Context(), intent, "rejected", "rejected", "invalid before admission", nil, time.Hour, rejectedAt)
+	require.NoError(t, err)
+	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: rejected, Target: "operator-relays"})
+	require.NoError(t, err)
+	_, err = outbox.CommitRound(rejected.ID, localstore.OutboxRound{Target: "operator-relays", State: localstore.OutboxPublished, At: time.Now().Add(-48 * time.Hour)})
+	require.NoError(t, err)
+	_, err = outbox.Prune(time.Now().Add(-24*time.Hour), time.Now().Add(-24*time.Hour))
+	require.NoError(t, err)
+	require.NoError(t, outbox.Close())
+	outbox, err = localstore.OpenOutbox(path)
+	require.NoError(t, err)
+	defer outbox.Close()
+	floor, err := outbox.BackupRunStatusTimestampFloor(record.ServicePubkey, record.Actor, record.Coordinate)
+	require.NoError(t, err)
+	require.Equal(t, rejectedAt, floor, "pruning and restart cannot forget a relay-visible rejection")
+	policy := localstore.DeliveryPolicy{WriteRelays: []string{"wss://control.example"}, Required: 1}
+	_, err = outbox.CommitPublisherRound(state.ID, localstore.OutboxRound{Target: "control-plane", State: localstore.OutboxPublished, Delivered: true,
+		Policy: policy, Relays: map[string]localstore.RelayDelivery{"wss://control.example": {Accepted: true}}})
+	require.NoError(t, err)
+	wakes := 0
+	reconciler, err := NewBackupRunStatusReconciler(outbox, status, "operator-relays", func() { wakes++ }, nil, zap.NewNop())
+	require.NoError(t, err)
+	stale := *intent
+	stale.StatusData = map[string]any{"run_id": record.Coordinate[len("backup-run:"):], "state_event_id": record.StateEventID, "execution": "paused"}
+	tied, err := status.buildStatusEventWithExpiryAt(t.Context(), &stale, "accepted", "applied", "", nil, 0, rejectedAt)
+	require.NoError(t, err)
+	_, _, err = outbox.StageBackupRunAcceptedStatus(record, tied, "operator-relays")
+	require.ErrorContains(t, err, "not newer than the durable coordinate floor")
+	require.NoError(t, reconciler.ReconcileOnce(t.Context()))
+	require.Equal(t, 1, wakes)
+	current, err := outbox.GetBackupRunAdmission(record.IntentID, record.Coordinate, record.RequestEventID)
+	require.NoError(t, err)
+	statusID, err := nostr.IDFromHex(current.StatusEventID)
+	require.NoError(t, err)
+	accepted, found, err := outbox.Get(statusID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "operator-relays", accepted.Target, "the CLI-observed relay topology must carry final status")
+	require.Equal(t, backupReceiptTag(rejected.Tags, "d"), backupReceiptTag(accepted.Event.Tags, "d"))
+	require.Greater(t, accepted.Event.CreatedAt, rejected.CreatedAt, "NIP-01 must select accepted regardless of event ID tie-break")
+	_, err = outbox.CommitPublisherRound(statusID, localstore.OutboxRound{Target: "control-plane", State: localstore.OutboxPublished, Delivered: true,
+		Policy: policy, Relays: map[string]localstore.RelayDelivery{"wss://control.example": {Accepted: true}}})
+	require.ErrorContains(t, err, "differs from outbox target")
+	operatorPolicy := localstore.DeliveryPolicy{WriteRelays: []string{"wss://operator.example"}, Required: 1}
+	_, err = outbox.CommitPublisherRound(statusID, localstore.OutboxRound{Target: "operator-relays", State: localstore.OutboxPublished, Delivered: true,
+		Policy: operatorPolicy, Relays: map[string]localstore.RelayDelivery{"wss://operator.example": {Accepted: true}}})
+	require.NoError(t, err)
+	current, err = outbox.GetBackupRunAdmission(record.IntentID, record.Coordinate, record.RequestEventID)
+	require.NoError(t, err)
+	require.True(t, current.StatusDelivered)
+}
+
 func TestAdmittedBackupCoordinateCannotPublishLaterGenericStatus(t *testing.T) {
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)

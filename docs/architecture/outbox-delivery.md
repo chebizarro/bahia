@@ -52,7 +52,7 @@ the durable admission record. The final signed accepted intent status is
 enqueued in a separate atomic transaction after that outcome; a startup pass
 repairs a crash between the two transactions without signing a second status.
 Both the run state and accepted status remain pinned through ordinary pruning
-until the status itself has an exact publisher relay-quorum proof. Failed rows
+until the status itself has an exact operator-relay publisher-quorum proof. Failed rows
 can retry the same signed event ID. Exhaustion alone never signs a rejection
 because one relay may already hold the event; MCP reports acceptance only
 after both the run and final-status proofs exist.

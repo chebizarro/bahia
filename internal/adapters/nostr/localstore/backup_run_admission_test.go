@@ -41,6 +41,34 @@ func TestBackupRunAdmissionScanSkipsMalformedRecordWithoutStarvingLaterACK(t *te
 	require.Equal(t, "intent-z", records[0].IntentID)
 }
 
+func TestBackupRunStatusClockBackfillsRetainedStatusOnUpgrade(t *testing.T) {
+	outbox, path := openTempOutbox(t)
+	service := nostr.Generate()
+	actor := nostr.Generate().Public().Hex()
+	coordinate := "backup-run:" + uuid.NewString()
+	createdAt := nostr.Now()
+	event := signed(t, service, 30315, createdAt, nostr.Tags{
+		{"d", "intent-status:" + actor + ":" + coordinate}, {"domain", "intent"},
+		{"t", "intent-status"}, {"status", "rejected"}, {"p", actor},
+	}, `{"result":"rejected"}`)
+	_, err := outbox.Enqueue(OutboxEntry{Event: event, Target: "operator-relays"})
+	require.NoError(t, err)
+	require.NoError(t, outbox.shared.db.Update(func(tx *bbolt.Tx) error {
+		if err := tx.DeleteBucket(backupRunStatusClockBucket); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucket(backupRunStatusClockBucket)
+		return err
+	}))
+	require.NoError(t, outbox.Close())
+	reopened, err := OpenOutbox(path)
+	require.NoError(t, err)
+	defer reopened.Close()
+	floor, err := reopened.BackupRunStatusTimestampFloor(service.Public().Hex(), actor, coordinate)
+	require.NoError(t, err)
+	require.Equal(t, createdAt, floor)
+}
+
 func TestBackupRunAdmissionCommitsEventAndIdentityAtomically(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "outbox.db")
 	outbox, err := OpenOutbox(path)

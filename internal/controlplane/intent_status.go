@@ -132,6 +132,10 @@ func (p *IntentStatusPublisher) buildStatusEvent(ctx context.Context, intent *In
 }
 
 func (p *IntentStatusPublisher) buildStatusEventWithExpiry(ctx context.Context, intent *Intent, status, result, reason string, evaluation *domain.PolicyEvaluation, expiry time.Duration) (nostr.Event, error) {
+	return p.buildStatusEventWithExpiryAt(ctx, intent, status, result, reason, evaluation, expiry, nostr.Now())
+}
+
+func (p *IntentStatusPublisher) buildStatusEventWithExpiryAt(ctx context.Context, intent *Intent, status, result, reason string, evaluation *domain.PolicyEvaluation, expiry time.Duration, createdAt nostr.Timestamp) (nostr.Event, error) {
 	if p == nil || p.signer == nil || intent == nil {
 		return nostr.Event{}, fmt.Errorf("intent status signer is not configured")
 	}
@@ -173,7 +177,7 @@ func (p *IntentStatusPublisher) buildStatusEventWithExpiry(ctx context.Context, 
 
 	ev := nostr.Event{
 		Kind:      30315,
-		CreatedAt: nostr.Now(),
+		CreatedAt: createdAt,
 		Tags: nostr.Tags{
 			{"d", dTag},
 			{"domain", "intent"},

@@ -119,6 +119,29 @@ func (o *Outbox) HasBackupRunAdmissionCoordinate(coordinate string) (bool, error
 	return found, err
 }
 
+// BackupRunStatusTimestampFloor is the durable NIP-01 replacement floor for
+// this service, requester, and run coordinate. Retained status outbox rows
+// seed it on upgrade; pruning a settled row does not lower it.
+func (o *Outbox) BackupRunStatusTimestampFloor(servicePubkey, actor, coordinate string) (nostr.Timestamp, error) {
+	if o == nil || o.shared == nil || !strings.HasPrefix(coordinate, "backup-run:") {
+		return 0, fmt.Errorf("backup run status clock requires an outbox and run coordinate")
+	}
+	pubkey, err := nostr.PubKeyFromHex(servicePubkey)
+	if err != nil {
+		return 0, fmt.Errorf("backup run status clock service pubkey: %w", err)
+	}
+	if _, err := nostr.PubKeyFromHex(actor); err != nil {
+		return 0, fmt.Errorf("backup run status clock actor pubkey: %w", err)
+	}
+	var floor nostr.Timestamp
+	err = o.shared.db.View(func(tx *bbolt.Tx) error {
+		var err error
+		floor, err = backupRunStatusTimestampFloor(tx, backupRunStatusClockKey(pubkey, actor, coordinate))
+		return err
+	})
+	return floor, err
+}
+
 // EnqueueBackupRun atomically stages the signed state and its immutable
 // request keys. A crash cannot leave a processed request without the event to
 // deliver, or a queued event without the admission keys needed for replay.
@@ -441,6 +464,13 @@ func (o *Outbox) StageBackupRunAcceptedStatus(record BackupRunAdmission, event n
 		if !current.Delivered {
 			return fmt.Errorf("backup run admission has no matching terminal relay outcome")
 		}
+		floor, err := backupRunStatusTimestampFloor(tx, backupRunStatusClockKey(event.PubKey, current.Actor, current.Coordinate))
+		if err != nil {
+			return err
+		}
+		if event.CreatedAt <= floor {
+			return fmt.Errorf("backup run accepted status is not newer than the durable coordinate floor")
+		}
 		if tx.Bucket(outboxEntriesBucket).Get(event.ID[:]) != nil {
 			return fmt.Errorf("backup run terminal status event id already exists")
 		}
@@ -456,6 +486,9 @@ func (o *Outbox) StageBackupRunAcceptedStatus(record BackupRunAdmission, event n
 			}
 		}
 		if err := tx.Bucket(backupRunStatusEventsBucket).Put([]byte(event.ID.Hex()), []byte(current.IntentID)); err != nil {
+			return err
+		}
+		if err := recordBackupRunStatusTimestamp(tx, event); err != nil {
 			return err
 		}
 		current.StatusEventID = event.ID.Hex()
