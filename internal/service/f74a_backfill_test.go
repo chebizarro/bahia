@@ -163,7 +163,7 @@ func (p *f74aBackfillPub) PublishRuntimeObservation(context.Context, *domain.Run
 }
 func f74aID(n byte) uuid.UUID { var id uuid.UUID; id[15] = n; return id }
 func f74aRunner(marker *f74aMemoryMarker, source *f74aSource, pub *f74aBackfillPub) *F74aBackfillRunner {
-	return NewF74aBackfillRunner(F74aBackfillConfig{Marker: marker, Source: source, Publisher: pub, Pending: func(context.Context) (int64, error) { return 0, nil }, SemanticDelivered: func(context.Context, *domain.SBOMPackage) (bool, error) { return true, nil }, Rate: 1000000000})
+	return NewF74aBackfillRunner(F74aBackfillConfig{Marker: marker, Source: source, Publisher: pub, Pending: func(context.Context) (int64, error) { return 0, nil }, SemanticDelivered: func(context.Context, *domain.SBOMPackage) (bool, error) { return true, nil }, Delivered: func(context.Context, string, any) (bool, error) { return true, nil }, Rate: 1000000000})
 }
 func readF74aProgress(t *testing.T, marker *f74aMemoryMarker) F74aBackfillProgress {
 	t.Helper()
@@ -338,29 +338,11 @@ func TestF74aBackfillCrashAfterPublishBeforeCursorReplaysItem(t *testing.T) {
 	// second call reuses a queued signed event instead of enqueuing a duplicate.
 }
 
-func TestF74aBackfillWaitsForEOSEGateWithoutBlockingCaller(t *testing.T) {
-	marker := &f74aMemoryMarker{}
-	source := &f74aSource{releases: []domain.LLMRelease{{ID: f74aID(1)}}}
-	pub := &f74aBackfillPub{}
-	ready := make(chan struct{})
-	runner := NewF74aBackfillRunner(F74aBackfillConfig{Marker: marker, Source: source, Publisher: pub, Pending: func(context.Context) (int64, error) { return 0, nil }, Ready: ready, Rate: 1000000000})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- runner.Run(ctx) }()
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if len(source.visits) != 0 || len(pub.calls) != 0 {
-		t.Fatal("runner scanned before EOSE gate")
-	}
-}
-
 func TestF74aCompletionCASDoesNotSealReopenedPhase(t *testing.T) {
-	original, _ := json.Marshal(F74aBackfillProgress{Phase: "complete", Generation: 5, PassGeneration: 5})
+	original, _ := json.Marshal(F74aBackfillProgress{Phase: "complete", Generation: 5, PassGeneration: 5, ProofVersion: 2})
 	marker := &f74aMemoryMarker{value: original}
 	marker.mutateBefore = func(_ []byte) []byte {
-		reopened, _ := json.Marshal(F74aBackfillProgress{Phase: "releases", Generation: 6, PassGeneration: 6})
+		reopened, _ := json.Marshal(F74aBackfillProgress{Phase: "releases", Generation: 6, PassGeneration: 6, ProofVersion: 2})
 		return reopened
 	}
 	runner := f74aRunner(marker, &f74aSource{}, &f74aBackfillPub{})
@@ -410,5 +392,92 @@ func TestF74aOldCompletedMarkerWithoutRelayProofReplaysSemanticPhase(t *testing.
 	}
 	if readF74aProgress(t, marker).Completed {
 		t.Fatal("old marker remained complete")
+	}
+}
+
+func TestF74aEachFamilyRequiresDurableRelayProofBeforeCursor(t *testing.T) {
+	cases := []struct {
+		name   string
+		source f74aSource
+		phase  string
+	}{
+		{"release", f74aSource{releases: []domain.LLMRelease{{ID: f74aID(1)}}}, "releases"},
+		{"signature", f74aSource{signatures: []domain.ArtifactSignature{{ID: f74aID(1)}}}, "signatures"},
+		{"sbom", f74aSource{sboms: []domain.ArtifactSBOM{{ID: f74aID(1)}}}, "sboms"},
+		{"semantic", f74aSource{semantic: []domain.SBOMPackage{{ID: f74aID(1)}}}, "semantic_packages"},
+		{"legacy", f74aSource{legacy: []domain.SBOMPackage{{ID: f74aID(1)}}}, "legacy_packages"},
+		{"observation", f74aSource{observations: []domain.RuntimeObservation{{ID: f74aID(1), ServiceID: f74aID(2), EnvironmentID: f74aID(3)}}}, "observations"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			marker := &f74aMemoryMarker{}
+			pub := &f74aBackfillPub{}
+			source := tc.source
+			runner := f74aRunner(marker, &source, pub)
+			accepted := false
+			runner.cfg.Delivered = func(_ context.Context, phase string, _ any) (bool, error) {
+				if phase != tc.phase {
+					t.Fatalf("unexpected proof phase %s", phase)
+				}
+				return accepted, nil
+			}
+			if err := runner.RunMigration(context.Background()); err == nil {
+				t.Fatal("pending delivery advanced cursor")
+			}
+			p, err := runner.load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.Completed || p.Phase != tc.phase || p.Cursor != uuid.Nil || p.StateCursor.ServiceID != uuid.Nil {
+				t.Fatalf("cursor advanced without proof: %+v", p)
+			}
+			accepted = true
+			if err := runner.RunMigration(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !readF74aProgress(t, marker).Completed {
+				t.Fatal("accepted retry did not complete")
+			}
+		})
+	}
+}
+
+func TestF74aCompletionRechecksBehindCursorWithoutDirtySignal(t *testing.T) {
+	marker := &f74aMemoryMarker{}
+	source := &f74aSource{releases: []domain.LLMRelease{{ID: f74aID(2)}}}
+	pub := &f74aBackfillPub{}
+	runner := f74aRunner(marker, source, pub)
+	pub.onPublish = func() {
+		if len(pub.calls) == 1 {
+			source.releases = append([]domain.LLMRelease{{ID: f74aID(1)}}, source.releases...)
+		}
+	}
+	runner.cfg.Delivered = func(_ context.Context, _ string, item any) (bool, error) {
+		return item.(*domain.LLMRelease).ID != f74aID(1), nil
+	}
+	if err := runner.RunMigration(context.Background()); err == nil {
+		t.Fatal("behind-cursor row was not checked at completion")
+	}
+	if readF74aProgress(t, marker).Completed {
+		t.Fatal("completed with unproved behind-cursor row")
+	}
+}
+
+func TestF74aCompletedMarkerCannotCrossSigningAuthor(t *testing.T) {
+	raw, _ := json.Marshal(F74aBackfillProgress{Phase: "complete", Completed: true, RelayVerified: true, ProofVersion: 2, Author: "old"})
+	marker := &f74aMemoryMarker{value: raw}
+	source := &f74aSource{releases: []domain.LLMRelease{{ID: f74aID(1)}}}
+	pub := &f74aBackfillPub{}
+	runner := f74aRunner(marker, source, pub)
+	runner.cfg.Author = "new"
+	if err := runner.RunMigration(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(pub.calls) != 1 || pub.calls[0] != "release" {
+		t.Fatalf("old author's completion skipped new signer: %v", pub.calls)
+	}
+	p := readF74aProgress(t, marker)
+	if !p.Completed || p.Author != "new" {
+		t.Fatalf("wrong author marker: %+v", p)
 	}
 }

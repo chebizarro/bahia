@@ -1,0 +1,170 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"testing"
+	"time"
+
+	gonostr "fiatjaf.com/nostr"
+	"github.com/google/uuid"
+	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
+	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/controlplane"
+	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+)
+
+func TestF74aReceiptSurvivesSettledOutboxPruneAndRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.bolt")
+	outbox, err := localstore.OpenOutbox(path)
+	require.NoError(t, err)
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "pkg"}
+	d := nostradapter.SBOMPackageDTag(pkg)
+	event := gonostr.Event{Kind: gonostr.Kind(nostradapter.KindCASControlState), CreatedAt: gonostr.Now(), Tags: gonostr.Tags{{"d", d}, {"legacy_kind", ""}, {"deleted", "false"}}}
+	event.Tags[1][1] = "" + itoa(nostradapter.KindSBOMPackageRegistry)
+	event.ID[0] = 1
+	ledger := f74aDeliveryLedger{store: outbox}
+	require.NoError(t, ledger.stage(event))
+	accepted, err := ledger.prove(context.Background(), "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.False(t, accepted)
+	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: event, Target: repository.NostrPublishTargetControlPlane, EnqueuedAt: time.Now().Add(-26 * time.Hour)})
+	require.NoError(t, err)
+	_, err = outbox.CommitRound(event.ID, localstore.OutboxRound{Delivered: true, State: localstore.OutboxPublished, At: time.Now().Add(-25 * time.Hour)})
+	require.NoError(t, err)
+	require.NoError(t, ledger.accepted(event))
+	removed, err := outbox.Prune(time.Now().Add(-24*time.Hour), time.Now().Add(-7*24*time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	_, found, err := outbox.Get(event.ID)
+	require.NoError(t, err)
+	require.False(t, found)
+	require.NoError(t, outbox.Close())
+	reopened, err := localstore.OpenOutbox(path)
+	require.NoError(t, err)
+	defer reopened.Close()
+	ledger = f74aDeliveryLedger{store: reopened}
+	accepted, err = ledger.prove(context.Background(), "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.True(t, accepted)
+}
+
+func TestF74aReceiptNewPendingAndRefusalInvalidateOldAcceptance(t *testing.T) {
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New()}
+	makeEvent := func(id byte) gonostr.Event {
+		ev := gonostr.Event{Kind: gonostr.Kind(nostradapter.KindCASControlState), Tags: gonostr.Tags{{"d", nostradapter.SBOMPackageDTag(pkg)}, {"legacy_kind", itoa(nostradapter.KindSBOMPackageRegistry)}, {"deleted", "false"}}}
+		ev.ID[0] = id
+		return ev
+	}
+	ledger := f74aDeliveryLedger{store: outbox}
+	old, newer := makeEvent(1), makeEvent(2)
+	require.NoError(t, ledger.stage(old))
+	require.NoError(t, ledger.accepted(old))
+	require.NoError(t, ledger.stage(newer))
+	ok, err := ledger.prove(context.Background(), "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.NoError(t, ledger.accepted(old)) // late ACK for superseded event
+	ok, err = ledger.prove(context.Background(), "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.NoError(t, ledger.abandoned(newer))
+	ok, err = ledger.prove(context.Background(), "semantic_packages", pkg)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestF74aOwnerOnlyFleetRecipientCanDecrypt(t *testing.T) {
+	ctx := context.Background()
+	serviceKey := "0000000000000000000000000000000000000000000000000000000000000001"
+	ownerKey := "0000000000000000000000000000000000000000000000000000000000000002"
+	serviceSecret, err := gonostr.SecretKeyFromHex(serviceKey)
+	require.NoError(t, err)
+	ownerSecret, err := gonostr.SecretKeyFromHex(ownerKey)
+	require.NoError(t, err)
+	ownerPK := ownerSecret.Public().Hex()
+	trust := f74aMigrationTrustSet(config.NostrConfig{BootstrapOwners: map[string]string{"org": ownerPK}}, zap.NewNop())
+	members := controlplane.NewTrustSetMemberSource(trust, nil)
+	recipients, err := f74aRecipients(ctx, serviceSecret.Public().Hex(), members)
+	require.NoError(t, err)
+	require.Contains(t, recipients, ownerPK)
+	serviceSigner, err := controlplane.NewPrivateKeySigner(serviceKey)
+	require.NoError(t, err)
+	ownerSigner, err := controlplane.NewPrivateKeySigner(ownerKey)
+	require.NoError(t, err)
+	envelope := &f74aCaptureEnvelope{}
+	manager := controlplane.NewOCKManager(controlplane.OCKManagerConfig{Signer: serviceSigner, ServicePubkey: serviceSecret.Public().Hex(), Publisher: envelope, Members: members, Logger: zap.NewNop()})
+	key, err := manager.RotateKey(ctx, kinds.FleetOCKScope)
+	require.NoError(t, err)
+	var recovered controlplane.OrgContentKey
+	for _, content := range envelope.contents {
+		plain, err := ownerSigner.Decrypt(ctx, content, serviceSecret.Public())
+		if err != nil {
+			continue
+		}
+		candidate, recipient, err := controlplane.UnmarshalOCKWrap([]byte(plain))
+		if err == nil && recipient == ownerPK {
+			recovered = candidate
+			break
+		}
+	}
+	require.Equal(t, key.Version, recovered.Version)
+	require.Equal(t, key.Key, recovered.Key)
+}
+
+type f74aCaptureEnvelope struct{ contents []string }
+
+func (c *f74aCaptureEnvelope) PublishKeyEnvelope(_ context.Context, _ string, content string) error {
+	c.contents = append(c.contents, content)
+	return nil
+}
+func itoa(v int) string { return fmt.Sprintf("%d", v) }
+
+func TestF74aOCKEnvelopesMustAllBeQuorumAccepted(t *testing.T) {
+	ctx := context.Background()
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	ledger := f74aDeliveryLedger{store: outbox}
+	ds := []string{"org-key:fleet:v3:service", "org-key:fleet:v3:owner"}
+	manifest := f74aOCKManifest{Version: 3, KeyHash: "hash", Recipients: []string{"service", "owner"}, Coordinates: ds}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, outbox.PutControlRecord(f74aOCKManifestFamily, f74aOCKManifestID(gonostr.PubKey{}), raw))
+	makeEvent := func(id byte, d string) gonostr.Event {
+		ev := gonostr.Event{Kind: gonostr.Kind(nostradapter.KindCASControlState), Tags: gonostr.Tags{{"d", d}, {"legacy_kind", itoa(nostradapter.KindOrgKeyEnvelope)}, {"deleted", "false"}}}
+		ev.ID[0] = id
+		return ev
+	}
+	service, owner := makeEvent(1, ds[0]), makeEvent(2, ds[1])
+	require.NoError(t, ledger.stage(service))
+	require.NoError(t, ledger.accepted(service))
+	require.NoError(t, ledger.stage(owner))
+	ready, err := ledger.proveOCK(ctx, outbox, 3)
+	require.NoError(t, err)
+	require.False(t, ready)
+	require.NoError(t, ledger.abandoned(owner))
+	ready, err = ledger.proveOCK(ctx, outbox, 3)
+	require.NoError(t, err)
+	require.False(t, ready)
+	require.NoError(t, ledger.accepted(owner)) // late valid quorum acceptance
+	ready, err = ledger.proveOCK(ctx, outbox, 3)
+	require.NoError(t, err)
+	require.True(t, ready)
+	newer := makeEvent(3, ds[1])
+	require.NoError(t, ledger.stage(newer))
+	require.NoError(t, ledger.accepted(owner)) // superseded late callback cannot satisfy newer event
+	ready, err = ledger.proveOCK(ctx, outbox, 3)
+	require.NoError(t, err)
+	require.False(t, ready)
+}

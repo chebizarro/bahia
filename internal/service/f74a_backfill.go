@@ -56,9 +56,13 @@ type F74aBackfillPublisher interface {
 type F74aOutboxCountFunc func(context.Context) (int64, error)
 
 // F74aSemanticDeliveryProof must prove the current semantic coordinate was
-// accepted by the relay publish quorum. Missing or pruned local evidence is
-// not proof; an operator must sync retained relay state before retrying.
+// accepted by the relay publish quorum. The command retains delivery receipts
+// in control records so settled outbox pruning does not erase proof.
 type F74aSemanticDeliveryProof func(context.Context, *domain.SBOMPackage) (bool, error)
+
+// F74aDeliveryProof requires a durable quorum-accepted receipt for the exact
+// family coordinate before its cursor advances.
+type F74aDeliveryProof func(context.Context, string, any) (bool, error)
 
 type F74aBackfillConfig struct {
 	Marker            F74aProgressStore
@@ -66,7 +70,8 @@ type F74aBackfillConfig struct {
 	Publisher         F74aBackfillPublisher
 	Pending           F74aOutboxCountFunc
 	SemanticDelivered F74aSemanticDeliveryProof
-	Ready             <-chan struct{}
+	Delivered         F74aDeliveryProof
+	Author            string
 	Rate              int
 	HighWater         int64
 	LowWater          int64
@@ -80,6 +85,8 @@ type F74aBackfillProgress struct {
 	PassGeneration uint64                     `json:"pass_generation"`
 	Completed      bool                       `json:"completed"`
 	RelayVerified  bool                       `json:"relay_verified"`
+	ProofVersion   int                        `json:"proof_version"`
+	Author         string                     `json:"author,omitempty"`
 	UpdatedAt      time.Time                  `json:"updated_at"`
 }
 
@@ -104,9 +111,9 @@ func decodeF74aProgress(raw []byte) (F74aBackfillProgress, error) {
 		return p, fmt.Errorf("invalid F74a phase %q", p.Phase)
 	}
 	// Markers written before relay-visibility gating are not completion proof.
-	if p.Completed && !p.RelayVerified {
+	if p.ProofVersion < 2 || (p.Completed && !p.RelayVerified) {
 		p.Completed = false
-		p.Phase = "semantic_packages"
+		p.Phase = f74aPhases[0]
 		p.Cursor = uuid.Nil
 		p.StateCursor = repository.F74aStateCursor{}
 		p.PassGeneration = p.Generation
@@ -121,7 +128,6 @@ func decodeF74aProgress(raw []byte) (F74aBackfillProgress, error) {
 // means locally staged or deduplicated, never a relay acknowledgment.
 type F74aBackfillRunner struct {
 	cfg      F74aBackfillConfig
-	wake     chan struct{}
 	mu       sync.RWMutex
 	snapshot F74aBackfillSnapshot
 }
@@ -131,7 +137,6 @@ type F74aBackfillSnapshot struct {
 	Visited    uint64
 	Processed  uint64
 	Failures   uint64
-	Retries    uint64
 	Pending    int64
 	Paused     bool
 	Generation uint64
@@ -153,9 +158,8 @@ func NewF74aBackfillRunner(cfg F74aBackfillConfig) *F74aBackfillRunner {
 			cfg.LowWater = cfg.HighWater - 1
 		}
 	}
-	return &F74aBackfillRunner{cfg: cfg, wake: make(chan struct{}, 1), snapshot: F74aBackfillSnapshot{Phase: "pending"}}
+	return &F74aBackfillRunner{cfg: cfg, snapshot: F74aBackfillSnapshot{Phase: "pending"}}
 }
-func (r *F74aBackfillRunner) Name() string { return "f74a_backfill" }
 func (r *F74aBackfillRunner) Snapshot() F74aBackfillSnapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -200,13 +204,6 @@ func (r *F74aBackfillRunner) setAdmission(pending int64, paused bool, err error)
 	}
 }
 
-func (r *F74aBackfillRunner) trigger() {
-	select {
-	case r.wake <- struct{}{}:
-	default:
-	}
-}
-
 func (r *F74aBackfillRunner) update(fn func(*F74aBackfillProgress) error) (F74aBackfillProgress, error) {
 	var next F74aBackfillProgress
 	_, err := r.cfg.Marker.UpdateControlRecord(f74aProgressFamily, f74aProgressID, func(raw []byte) ([]byte, error) {
@@ -216,6 +213,10 @@ func (r *F74aBackfillRunner) update(fn func(*F74aBackfillProgress) error) (F74aB
 		}
 		if err = fn(&p); err != nil {
 			return nil, err
+		}
+		p.ProofVersion = 2
+		if r.cfg.Author != "" {
+			p.Author = r.cfg.Author
 		}
 		p.UpdatedAt = time.Now().UTC()
 		encoded, err := json.Marshal(p)
@@ -257,23 +258,36 @@ func (r *F74aBackfillRunner) markDirty(force bool) error {
 		}
 		return nil
 	})
-	if err == nil {
-		r.trigger()
-	}
 	return err
 }
 
-// Run keeps the repair worker alive for post-completion live-publication
-// failures. Cancellation stops at an item boundary; progress remains durable.
 // RunMigration executes one explicit, resumable operator pass and propagates
 // errors. It never runs on normal daemon startup.
 func (r *F74aBackfillRunner) RunMigration(ctx context.Context) error {
-	if r == nil || r.cfg.Marker == nil || r.cfg.Source == nil || r.cfg.Publisher == nil || r.cfg.Pending == nil || r.cfg.SemanticDelivered == nil {
-		return errors.New("F74a migration requires marker, source, publisher, outbox count and semantic delivery proof")
+	if r == nil || r.cfg.Marker == nil || r.cfg.Source == nil || r.cfg.Publisher == nil || r.cfg.Pending == nil || r.cfg.SemanticDelivered == nil || r.cfg.Delivered == nil {
+		return errors.New("F74a migration requires marker, source, publisher, outbox count and delivery proofs")
 	}
 	p, err := r.load()
-	if err != nil || p.Completed {
+	if err != nil {
 		return err
+	}
+	if r.cfg.Author != "" && p.Author != r.cfg.Author {
+		p, err = r.update(func(current *F74aBackfillProgress) error {
+			current.Phase = f74aPhases[0]
+			current.Cursor = uuid.Nil
+			current.StateCursor = repository.F74aStateCursor{}
+			current.Completed = false
+			current.RelayVerified = false
+			current.PassGeneration = current.Generation
+			current.Author = r.cfg.Author
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	if p.Completed {
+		return nil
 	}
 	if err = r.runPass(ctx); err != nil {
 		r.setError(err)
@@ -282,51 +296,6 @@ func (r *F74aBackfillRunner) RunMigration(ctx context.Context) error {
 	return nil
 }
 
-func (r *F74aBackfillRunner) Run(ctx context.Context) error {
-	if r == nil || r.cfg.Marker == nil || r.cfg.Source == nil || r.cfg.Publisher == nil || r.cfg.Pending == nil {
-		return errors.New("F74a runner requires marker, source, publisher and outbox count")
-	}
-	if r.cfg.Ready != nil {
-		select {
-		case <-r.cfg.Ready:
-		case <-ctx.Done():
-			return nil
-		}
-	}
-	backoff := time.Second
-	for ctx.Err() == nil {
-		p, err := r.load()
-		if err == nil && !p.Completed {
-			err = r.runPass(ctx)
-		}
-		if ctx.Err() != nil {
-			return nil
-		}
-		if err != nil {
-			r.setError(err)
-			r.mu.Lock()
-			r.snapshot.Retries++
-			r.mu.Unlock()
-			if !waitF74a(ctx, backoff) {
-				return nil
-			}
-			if backoff < 30*time.Second {
-				backoff *= 2
-				if backoff > 30*time.Second {
-					backoff = 30 * time.Second
-				}
-			}
-			continue
-		}
-		backoff = time.Second
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-r.wake:
-		}
-	}
-	return nil
-}
 func waitF74a(ctx context.Context, d time.Duration) bool {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -385,8 +354,17 @@ func (r *F74aBackfillRunner) runPass(ctx context.Context) error {
 			return nil
 		}
 		if p.Phase == "complete" {
-			if err := r.verifySemanticPackages(ctx); err != nil {
-				return err
+			if err := r.verifyAllRecords(ctx); err != nil {
+				_, resetErr := r.update(func(current *F74aBackfillProgress) error {
+					if current.Phase == "complete" {
+						current.Phase = f74aPhases[0]
+						current.Cursor = uuid.Nil
+						current.StateCursor = repository.F74aStateCursor{}
+						current.PassGeneration = current.Generation
+					}
+					return nil
+				})
+				return errors.Join(err, resetErr)
 			}
 			next, err := r.update(func(current *F74aBackfillProgress) error {
 				if current.Phase != "complete" {
@@ -438,11 +416,14 @@ func (r *F74aBackfillRunner) runPass(ctx context.Context) error {
 	return ctx.Err()
 }
 func (r *F74aBackfillRunner) page(ctx context.Context, p F74aBackfillProgress, last *time.Time, paused *bool) (int, error) {
-	publish := func(id uuid.UUID, state repository.F74aStateCursor, fn func() error) error {
+	publish := func(id uuid.UUID, state repository.F74aStateCursor, item any, fn func() error) error {
 		if err := r.admit(ctx, last, paused); err != nil {
 			return err
 		}
 		if err := fn(); err != nil {
+			return err
+		}
+		if err := r.requireDelivery(ctx, p.Phase, item); err != nil {
 			return err
 		}
 		_, err := r.update(func(current *F74aBackfillProgress) error {
@@ -466,7 +447,7 @@ func (r *F74aBackfillRunner) page(ctx context.Context, p F74aBackfillProgress, l
 		}
 		for i := range items {
 			item := &items[i]
-			if err := publish(item.ID, repository.F74aStateCursor{}, func() error { return r.cfg.Publisher.PublishLLMRelease(ctx, item) }); err != nil {
+			if err := publish(item.ID, repository.F74aStateCursor{}, item, func() error { return r.cfg.Publisher.PublishLLMRelease(ctx, item) }); err != nil {
 				return len(items), err
 			}
 		}
@@ -478,7 +459,7 @@ func (r *F74aBackfillRunner) page(ctx context.Context, p F74aBackfillProgress, l
 		}
 		for i := range items {
 			item := &items[i]
-			if err := publish(item.ID, repository.F74aStateCursor{}, func() error { return r.cfg.Publisher.PublishArtifactSignature(ctx, item) }); err != nil {
+			if err := publish(item.ID, repository.F74aStateCursor{}, item, func() error { return r.cfg.Publisher.PublishArtifactSignature(ctx, item) }); err != nil {
 				return len(items), err
 			}
 		}
@@ -490,7 +471,7 @@ func (r *F74aBackfillRunner) page(ctx context.Context, p F74aBackfillProgress, l
 		}
 		for i := range items {
 			item := &items[i]
-			if err := publish(item.ID, repository.F74aStateCursor{}, func() error { return r.cfg.Publisher.PublishArtifactSBOM(ctx, item) }); err != nil {
+			if err := publish(item.ID, repository.F74aStateCursor{}, item, func() error { return r.cfg.Publisher.PublishArtifactSBOM(ctx, item) }); err != nil {
 				return len(items), err
 			}
 		}
@@ -502,7 +483,7 @@ func (r *F74aBackfillRunner) page(ctx context.Context, p F74aBackfillProgress, l
 		}
 		for i := range items {
 			item := &items[i]
-			if err := publish(item.ID, repository.F74aStateCursor{}, func() error { return r.cfg.Publisher.PublishSBOMPackage(ctx, item) }); err != nil {
+			if err := publish(item.ID, repository.F74aStateCursor{}, item, func() error { return r.cfg.Publisher.PublishSBOMPackage(ctx, item) }); err != nil {
 				return len(items), err
 			}
 		}
@@ -514,7 +495,7 @@ func (r *F74aBackfillRunner) page(ctx context.Context, p F74aBackfillProgress, l
 		}
 		for i := range items {
 			item := &items[i]
-			if err := publish(item.ID, repository.F74aStateCursor{}, func() error {
+			if err := publish(item.ID, repository.F74aStateCursor{}, item, func() error {
 				if err := r.requireSemanticDelivery(ctx, item); err != nil {
 					return err
 				}
@@ -532,7 +513,7 @@ func (r *F74aBackfillRunner) page(ctx context.Context, p F74aBackfillProgress, l
 		for i := range items {
 			item := &items[i]
 			state := repository.F74aStateCursor{ServiceID: item.ServiceID, EnvironmentID: item.EnvironmentID}
-			if err := publish(uuid.Nil, state, func() error { return r.cfg.Publisher.PublishRuntimeObservation(ctx, item) }); err != nil {
+			if err := publish(uuid.Nil, state, item, func() error { return r.cfg.Publisher.PublishRuntimeObservation(ctx, item) }); err != nil {
 				return len(items), err
 			}
 		}
@@ -558,24 +539,82 @@ func (r *F74aBackfillRunner) requireSemanticDelivery(ctx context.Context, pkg *d
 	return nil
 }
 
-// verifySemanticPackages also covers migrations without legacy UUID records.
-// A pruned outbox and lost cache cannot establish completion without an EOSE
-// relay sync, so an absent proof fails closed.
-func (r *F74aBackfillRunner) verifySemanticPackages(ctx context.Context) error {
+// verifyAllRecords rechecks the source at completion, including rows skipped by
+// an older cursor or written behind a UUID cursor. Explicit operators must
+// quiesce SQL writers; a separate change journal is needed for live writes.
+func verifyF74aUUIDRecords[T any](ctx context.Context, list func(context.Context, uuid.UUID, int) ([]T, error), id func(*T) uuid.UUID, check func(*T) error) error {
 	var cursor uuid.UUID
 	for {
-		items, err := r.cfg.Source.ListSemanticPackagesAfter(ctx, cursor, f74aBackfillPageSize)
+		items, err := list(ctx, cursor, f74aBackfillPageSize)
 		if err != nil {
 			return err
 		}
 		for i := range items {
-			if err := r.requireSemanticDelivery(ctx, &items[i]); err != nil {
+			if err := check(&items[i]); err != nil {
 				return err
 			}
-			cursor = items[i].ID
+			cursor = id(&items[i])
 		}
 		if len(items) < f74aBackfillPageSize {
 			return nil
 		}
 	}
+}
+
+func (r *F74aBackfillRunner) verifyAllRecords(ctx context.Context) error {
+	if err := verifyF74aUUIDRecords(ctx, r.cfg.Source.ListReleasesAfter, func(x *domain.LLMRelease) uuid.UUID { return x.ID }, func(x *domain.LLMRelease) error { return r.requireDelivery(ctx, "releases", x) }); err != nil {
+		return err
+	}
+	if err := verifyF74aUUIDRecords(ctx, r.cfg.Source.ListSignaturesAfter, func(x *domain.ArtifactSignature) uuid.UUID { return x.ID }, func(x *domain.ArtifactSignature) error { return r.requireDelivery(ctx, "signatures", x) }); err != nil {
+		return err
+	}
+	if err := verifyF74aUUIDRecords(ctx, r.cfg.Source.ListSBOMsAfter, func(x *domain.ArtifactSBOM) uuid.UUID { return x.ID }, func(x *domain.ArtifactSBOM) error { return r.requireDelivery(ctx, "sboms", x) }); err != nil {
+		return err
+	}
+	if err := verifyF74aUUIDRecords(ctx, r.cfg.Source.ListSemanticPackagesAfter, func(x *domain.SBOMPackage) uuid.UUID { return x.ID }, func(x *domain.SBOMPackage) error {
+		if err := r.requireSemanticDelivery(ctx, x); err != nil {
+			return err
+		}
+		return r.requireDelivery(ctx, "semantic_packages", x)
+	}); err != nil {
+		return err
+	}
+	if err := verifyF74aUUIDRecords(ctx, r.cfg.Source.ListLegacyPackagesAfter, func(x *domain.SBOMPackage) uuid.UUID { return x.ID }, func(x *domain.SBOMPackage) error {
+		if err := r.requireSemanticDelivery(ctx, x); err != nil {
+			return err
+		}
+		return r.requireDelivery(ctx, "legacy_packages", x)
+	}); err != nil {
+		return err
+	}
+	var cursor repository.F74aStateCursor
+	for {
+		items, err := r.cfg.Source.ListLinkedObservationsAfter(ctx, cursor, f74aBackfillPageSize)
+		if err != nil {
+			return err
+		}
+		for i := range items {
+			if err := r.requireDelivery(ctx, "observations", &items[i]); err != nil {
+				return err
+			}
+			cursor = repository.F74aStateCursor{ServiceID: items[i].ServiceID, EnvironmentID: items[i].EnvironmentID}
+		}
+		if len(items) < f74aBackfillPageSize {
+			return nil
+		}
+	}
+}
+
+func (r *F74aBackfillRunner) requireDelivery(ctx context.Context, phase string, item any) error {
+	if r.cfg.Delivered == nil {
+		return errors.New("F74a durable delivery proof is not configured")
+	}
+	accepted, err := r.cfg.Delivered(ctx, phase, item)
+	if err != nil {
+		return err
+	}
+	if !accepted {
+		return fmt.Errorf("F74a %s record lacks durable relay quorum proof", phase)
+	}
+	return nil
 }
