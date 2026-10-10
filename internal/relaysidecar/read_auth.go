@@ -117,7 +117,7 @@ var publicKindRanges = [][2]nostr.Kind{
 // Per-topic decisions:
 //
 //	dns-endpoint, dns-zone, dns-zone-sync, dns-policy, dns-backend — PUBLIC:
-//	  FIPS bridge reads anonymously; pkg/discovery WithPrivateKey is optional;
+//	  FIPS bridge reads anonymously; pkg/discovery WithAuthSigner is optional;
 //	  web pre-login bootstrap reads these for the DNS dashboard; the DNS agent
 //	  applies dns-zone-sync with a key the sidecar need not admit.
 //

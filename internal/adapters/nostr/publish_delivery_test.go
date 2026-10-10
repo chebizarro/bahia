@@ -129,7 +129,7 @@ func receive[T any](t *testing.T, ch <-chan T, what string) T {
 func newDeliveryTestPublisher(t *testing.T, repo repository.NostrEventRepository, relays *scriptedRelays, quorum int, urls ...string) *Publisher {
 	t.Helper()
 	outbox := openDeliveryTestOutbox(t)
-	publisher := NewPublisher(
+	publisher := newKeyedTestPublisher(
 		config.NostrConfig{PrivateKey: gonostr.Generate().Hex(), PublishEnabled: true, PublishQuorum: quorum},
 		NewRelayPool(nil, zap.NewNop()),
 		repo,
@@ -430,7 +430,7 @@ func TestPublisherRunnerDiscoversPendingRowsPastABlockedPage(t *testing.T) {
 
 	// Two entries enqueued pending by another producer (no inline publish).
 	for i, ev := range []*gonostr.Event{stuck, fresh} {
-		require.NoError(t, signEventWithPrivateKeyHex(ev, publisher.privateKey))
+		require.NoError(t, publisher.signer.SignEvent(context.Background(), ev))
 		_, err := publisher.localOutbox.Enqueue(localstore.OutboxEntry{
 			Event:      *ev,
 			Target:     publisher.target,

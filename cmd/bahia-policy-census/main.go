@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
@@ -92,6 +93,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, "valid service private key is required for signed author and relay AUTH: %v", err)
 	}
+	authSigner := keyer.NewPlainKeySigner(secret)
 	var urls []string
 	seen := map[string]bool{}
 	for _, raw := range strings.Split(*relayList, ",") {
@@ -136,7 +138,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return fail(stderr, "expand durable projection discovery hints: %v", err)
 		}
 	}
-	bootstrapPool := nostradapter.NewRelayPool(bootstrap, zap.NewNop(), nostradapter.WithPrivateKey(secret.Hex()))
+	bootstrapPool := nostradapter.NewRelayPool(bootstrap, zap.NewNop(), nostradapter.WithAuthSigner(authSigner))
 	defer bootstrapPool.Close()
 	bootstrapPool.Connect(ctx)
 	initialHead, err := controlplane.ReadCanonicalRelayPolicyHead(ctx, bootstrapPool, secret.Public())
@@ -157,7 +159,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, "expand canonical policy discovery relays: %v", err)
 	}
-	discoveryPool := nostradapter.NewRelayPool(discovery, zap.NewNop(), nostradapter.WithPrivateKey(secret.Hex()))
+	discoveryPool := nostradapter.NewRelayPool(discovery, zap.NewNop(), nostradapter.WithAuthSigner(authSigner))
 	defer discoveryPool.Close()
 	discoveryPool.Connect(ctx)
 	discoveryHead, err := controlplane.ReadCanonicalRelayPolicyHead(ctx, discoveryPool, secret.Public())
@@ -167,7 +169,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if discoveryHead.EventID != initialHead.EventID {
 		return fail(stderr, "canonical relay policy changed across discovery relays")
 	}
-	pool := nostradapter.NewRelayPool(effective, zap.NewNop(), nostradapter.WithPrivateKey(secret.Hex()))
+	pool := nostradapter.NewRelayPool(effective, zap.NewNop(), nostradapter.WithAuthSigner(authSigner))
 	defer pool.Close()
 	pool.Connect(ctx)
 	effectiveHead, err := controlplane.ReadCanonicalRelayPolicyHead(ctx, pool, secret.Public())

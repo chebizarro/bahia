@@ -22,7 +22,7 @@ func TestSubmitJobCreatesSpanAndStampsTraceparent(t *testing.T) {
 
 	pool := &submitRelayPool{}
 	client := &Client{
-		pool: pool, privateKey: nostrutil.GeneratePrivateKeyHex(),
+		pool: pool, signer: testKeyer(nostrutil.GeneratePrivateKeyHex()),
 		submittedWorkers: make(map[string]string), logger: zap.NewNop(),
 	}
 	if _, err := client.SubmitJob(t.Context(), JobRequest{Type: "build", Service: "api"}); err != nil {

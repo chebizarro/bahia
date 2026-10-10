@@ -5,9 +5,11 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 // confidentialStateHashTag carries a keyed digest of a confidential record's
@@ -29,12 +31,29 @@ const confidentialStateHashDomain = "bahia/confidential-state-hash/v1"
 // projector dedupe randomized OCK ciphertext without exposing a guessable hash
 // of sensitive payment or vulnerability data in a public tag: only the daemon
 // can recompute it, and it changes whenever the plaintext does.
-func confidentialStateHash(privateKey, plaintext string) gonostr.Tag {
-	derive := hmac.New(sha256.New, []byte(privateKey))
-	derive.Write([]byte(confidentialStateHashDomain))
-	mac := hmac.New(sha256.New, derive.Sum(nil))
+func confidentialStateHash(key []byte, plaintext string) gonostr.Tag {
+	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(stableContent(plaintext, false)))
 	return gonostr.Tag{confidentialStateHashTag, hex.EncodeToString(mac.Sum(nil))}
+}
+
+// deriveConfidentialStateHashKey derives the v1 digest key from the raw
+// service key text. No signer can compute it, so it exists only in local mode.
+func deriveConfidentialStateHashKey(privateKey string) []byte {
+	derive := hmac.New(sha256.New, []byte(privateKey))
+	derive.Write([]byte(confidentialStateHashDomain))
+	return derive.Sum(nil)
+}
+
+// confidentialStateHashKeyFor returns the digest key for signer, or an error
+// wrapping nostrutil.ErrServiceKeyMaterialRequired when the signer keeps its
+// key out of process (blocked on bahia-cd0wr.4.x).
+func confidentialStateHashKeyFor(signer gonostr.Signer) ([]byte, error) {
+	material, err := nostrutil.RequireServiceKeyMaterial(signer, "confidential-state dedupe digest")
+	if err != nil {
+		return nil, err
+	}
+	return deriveConfidentialStateHashKey(material), nil
 }
 
 // publishCanonicalFirst signs one confidential cp-state record for a producer
@@ -55,7 +74,13 @@ func (p *Projector) publishCanonicalFirst(ctx context.Context, legacyKind int, i
 	all := make(gonostr.Tags, 0, len(baseTags)+len(tags)+1)
 	all = append(all, baseTags...)
 	all = append(all, tags...)
-	all = append(all, confidentialStateHash(p.privateKey, plaintext))
+	if len(p.confidentialStateHashKey) == 0 {
+		if p.confidentialStateHashErr != nil {
+			return fmt.Errorf("publish confidential %s: %w", entityType, p.confidentialStateHashErr)
+		}
+		return fmt.Errorf("publish confidential %s: confidential state hash key is unavailable", entityType)
+	}
+	all = append(all, confidentialStateHash(p.confidentialStateHashKey, plaintext))
 	key := projectionKeyOf(wireKind, all)
 	fingerprint := projectionFingerprint(wireKind, all, ciphertext)
 	// Retained state only sharpens the dedupe and the created_at floor; a

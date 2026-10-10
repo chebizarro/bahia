@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/slicestore"
+	"fiatjaf.com/nostr/keyer"
 	"fiatjaf.com/nostr/khatru"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"go.uber.org/zap"
@@ -56,7 +57,7 @@ func TestOperatorRelayAuthIsThePools(t *testing.T) {
 	t.Cleanup(server.Close)
 	relayURL := "ws" + strings.TrimPrefix(server.URL, "http")
 
-	pool := nostrpool.NewRelayPool([]string{relayURL}, zap.NewNop(), nostrpool.WithPrivateKey(requestKey.Hex()))
+	pool := nostrpool.NewRelayPool([]string{relayURL}, zap.NewNop(), nostrpool.WithAuthSigner(keyer.NewPlainKeySigner(requestKey)))
 	client := newTestOperatorClient(t, requestKey.Hex(), &relayPoolOperatorTransport{pool: pool})
 	t.Cleanup(pool.Close)
 	client.relays = []string{relayURL}

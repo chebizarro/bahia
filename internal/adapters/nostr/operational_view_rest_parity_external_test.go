@@ -17,6 +17,7 @@ import (
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -47,7 +48,7 @@ func TestOperationalViewProjectionMatchesSource(t *testing.T) {
 	cfg.SoulFactory.AgentRuntimes = []string{"openclaw", "metiq"}
 
 	sink := &paritySink{}
-	projector := nostradapter.NewProjector(config.NostrConfig{PrivateKey: strings.Repeat("1", 64), PublishEnabled: true}, &paritySource{}, sink, nil, zap.NewNop())
+	projector := nostradapter.NewProjector(config.NostrConfig{PublishEnabled: true}, &paritySource{}, sink, nil, zap.NewNop(), localServiceSigner(t))
 	require.True(t, projector.Enabled())
 	publisher := nostradapter.NewOperationalViewPublisher(projector, parityEncryptor{})
 	require.NoError(t, publisher.PublishSoulRuntimePolicy(context.Background(), nostradapter.SoulRuntimePolicy{AgentRuntimes: cfg.SoulFactory.AgentRuntimes}))
@@ -112,4 +113,15 @@ func TestOperationalViewProjectionMatchesSource(t *testing.T) {
 	require.NoError(t, json.Unmarshal(plaintext, &blobState))
 	require.Equal(t, owner, blobState.Pubkey)
 	require.Equal(t, blobs[0], blobState.BlobDescriptor)
+}
+
+// localServiceSigner injects the local-mode service Keyer a deployed daemon
+// builds from nostr.private_key.
+func localServiceSigner(t *testing.T) nostradapter.ProjectorOption {
+	t.Helper()
+	signer, err := nostrutil.NewLocalKeyer(strings.Repeat("1", 64))
+	require.NoError(t, err)
+	pubkey, err := signer.GetPublicKey(context.Background())
+	require.NoError(t, err)
+	return nostradapter.WithProjectorSigner(signer, pubkey.Hex())
 }

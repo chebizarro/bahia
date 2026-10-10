@@ -173,13 +173,6 @@ func (m *LegacyOCKMigrator) runChecked(ctx context.Context) (LegacyOCKMigrationR
 		return report, fmt.Errorf("legacy OCK migration requires enabled projector, encryptor, and local history")
 	}
 	servicePubkey := m.projector.servicePubkey
-	if servicePubkey == "" && m.projector.privateKey != "" {
-		var err error
-		servicePubkey, err = publicKeyHexFromPrivateKeyHex(m.projector.privateKey)
-		if err != nil {
-			return report, fmt.Errorf("resolve service pubkey: %w", err)
-		}
-	}
 	if servicePubkey == "" {
 		return report, fmt.Errorf("legacy OCK migration requires pinned service pubkey")
 	}

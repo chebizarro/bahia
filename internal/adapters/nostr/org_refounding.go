@@ -43,9 +43,9 @@ func (p *OrgCanonicalPublisher) refoundCurrent(ctx context.Context, orgID string
 	if !ok {
 		return "", 0, fmt.Errorf("confidential encryptor cannot report current key version")
 	}
-	servicePubkey, err := publicKeyHexFromPrivateKeyHex(p.projector.privateKey)
-	if err != nil {
-		return "", 0, fmt.Errorf("resolve service publisher: %w", err)
+	servicePubkey := p.projector.servicePubkey
+	if servicePubkey == "" {
+		return "", 0, fmt.Errorf("resolve service publisher: projector has no service identity")
 	}
 	version, err = versions.CurrentKeyVersion(ctx, orgID)
 	if err != nil {

@@ -38,14 +38,14 @@ func startLocalHistoryDaemon(t *testing.T, dir string, script *relayScript) *loc
 		_ = outbox.Close()
 		_ = store.Close()
 	})
-	publisher := NewPublisher(projectorTestConfig(), NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
+	publisher := newKeyedTestPublisher(projectorTestConfig(), NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
 		WithPublishTarget(repository.NostrPublishTargetControlPlane), WithLocalOutbox(outbox, store))
 	publisher.publishFn = script.publish
 	publisher.relayURLs = func() []string { return []string{cpRelayA, cpRelayB} }
 	servicePubkey, err := publicKeyHexFromPrivateKeyHex(projectorTestConfig().PrivateKey)
 	require.NoError(t, err)
 	history := NewLocalEventRepository(store, nil).Authored(servicePubkey)
-	projector := NewProjector(projectorTestConfig(), newFakeProjectionSource(), publisher, history, zap.NewNop())
+	projector := newKeyedTestProjector(projectorTestConfig(), newFakeProjectionSource(), publisher, history, zap.NewNop())
 	publisher.OnDeliveryAbandoned(projector.ForgetAbandonedProjection)
 	return &localHistoryDaemon{projector: projector, publisher: publisher, store: store, outbox: outbox}
 }

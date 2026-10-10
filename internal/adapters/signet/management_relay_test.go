@@ -14,6 +14,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/slicestore"
+	"fiatjaf.com/nostr/keyer"
 	"fiatjaf.com/nostr/khatru"
 	"fiatjaf.com/nostr/nip44"
 	"fiatjaf.com/nostr/nip46"
@@ -41,7 +42,7 @@ func startFakeSignet(t *testing.T, ctx context.Context, relayURL string) *fakeSi
 	t.Helper()
 	key := nostr.Generate()
 	s := &fakeSignet{key: key, signer: nip46.NewStaticKeySigner(key)}
-	s.pool = nostrpool.NewRelayPool([]string{relayURL}, zap.NewNop(), nostrpool.WithPrivateKey(key.Hex()), nostrpool.WithOutboundAdmission(generousTestAdmission()))
+	s.pool = nostrpool.NewRelayPool([]string{relayURL}, zap.NewNop(), nostrpool.WithAuthSigner(keyer.NewPlainKeySigner(key)), nostrpool.WithOutboundAdmission(generousTestAdmission()))
 	t.Cleanup(s.pool.Close)
 	sub, err := s.pool.SubscribeWithOptions(ctx, []nostr.Filter{
 		{Kinds: []nostr.Kind{nostr.KindNostrConnect}, Tags: nostr.TagMap{"p": []string{key.Public().Hex()}}},

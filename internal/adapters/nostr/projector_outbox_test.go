@@ -92,7 +92,7 @@ func (s *relayScript) totalCalls() int {
 func newOutboxProjector(t *testing.T, repo *repositorytest.InMemoryNostrEventRepository, script *relayScript, source *fakeProjectionSource, opts ...ProjectorOption) (*Projector, *Publisher) {
 	t.Helper()
 	outbox := openDeliveryTestOutbox(t)
-	publisher := NewPublisher(projectorTestConfig(), NewRelayPool(nil, zap.NewNop()), repo, zap.NewNop(),
+	publisher := newKeyedTestPublisher(projectorTestConfig(), NewRelayPool(nil, zap.NewNop()), repo, zap.NewNop(),
 		WithPublishTarget(repository.NostrPublishTargetControlPlane), WithLocalOutbox(outbox, nil))
 	publisher.publishFn = script.publish
 	publisher.relayURLs = func() []string { return []string{cpRelayA, cpRelayB} }
@@ -100,7 +100,7 @@ func newOutboxProjector(t *testing.T, repo *repositorytest.InMemoryNostrEventRep
 		return &Backoff{Initial: time.Millisecond, Max: time.Millisecond, Multiplier: 1}
 	}
 	publisher.idleInterval = time.Millisecond
-	projector := NewProjector(projectorTestConfig(), source, publisher, repo, zap.NewNop(), opts...)
+	projector := newKeyedTestProjector(projectorTestConfig(), source, publisher, repo, zap.NewNop(), opts...)
 	publisher.OnDeliveryAbandoned(projector.ForgetAbandonedProjection)
 	return projector, publisher
 }

@@ -2,7 +2,6 @@ package nostr
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -10,7 +9,6 @@ import (
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
-	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -317,29 +315,6 @@ func TestRelayPoolSubscribeAllWithEOSEAuthRequiredFailureRecordsMergedMetadata(t
 	require.Equal(t, "auth-unavailable: auth-required: sign in before replay: no signer configured for NIP-42 AUTH", snapshot.Relays[0].LastError)
 }
 
-func TestNewPublisherConfiguresPrivateKeyForRelayAuth(t *testing.T) {
-	privateKey := gonostr.Generate().Hex()
-	publisher := NewPublisher(config.NostrConfig{PrivateKey: privateKey, PublishEnabled: true}, nil, nil, zap.NewNop(), WithLocalOutbox(openDeliveryTestOutbox(t), nil))
-	require.NotNil(t, publisher)
-	require.NotNil(t, publisher.Pool())
-
-	// Behavioural: sign an event with the configured key and verify
-	// the resulting event carries the correct pubkey derived from the secret.
-	ev := gonostr.Event{
-		Kind:      canonicalKind(1),
-		Content:   "test-auth-event",
-		CreatedAt: gonostr.Now(),
-	}
-	require.NoError(t, signEventWithPrivateKeyHex(&ev, privateKey))
-
-	skBytes, err := hex.DecodeString(privateKey)
-	require.NoError(t, err)
-	var sk [32]byte
-	copy(sk[:], skBytes)
-	expectedPubkey := gonostr.GetPublicKey(sk)
-	require.Equal(t, expectedPubkey.Hex(), ev.PubKey.Hex(), "event must be signed by the configured private key")
-}
-
 func TestNewRelayPoolNormalizesAndDeduplicatesConfiguredURLs(t *testing.T) {
 	pool := NewRelayPool([]string{
 		" https://Relay.Example/path/ ",
@@ -361,7 +336,7 @@ func TestRelayPoolURLsReturnsImmutableSnapshot(t *testing.T) {
 }
 
 func TestRelayPoolAuthenticateRelayNormalizesRelayURLForLookup(t *testing.T) {
-	pool := NewRelayPool([]string{"https://Relay.Example/"}, zap.NewNop(), WithPrivateKey(gonostr.Generate().Hex()))
+	pool := NewRelayPool([]string{"https://Relay.Example/"}, zap.NewNop(), WithAuthSigner(mustLocalKeyer(gonostr.Generate().Hex())))
 
 	// Add relay to pool via Connect with a failing connectRelay so it exists
 	// but is not connected — verifying URL normalisation in the error message.

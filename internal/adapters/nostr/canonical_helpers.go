@@ -1,8 +1,6 @@
 package nostr
 
 import (
-	"fmt"
-
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
@@ -33,17 +31,6 @@ func eventKindInt(ev *gonostr.Event) int {
 		return 0
 	}
 	return int(ev.Kind)
-}
-
-func signEventWithPrivateKeyHex(ev *gonostr.Event, privateKeyHex string) error {
-	if err := nostrutil.SignEventWithHexKey(ev, privateKeyHex); err != nil {
-		return fmt.Errorf("signing nostr event: %w", err)
-	}
-	return nil
-}
-
-func publicKeyHexFromPrivateKeyHex(privateKeyHex string) (string, error) {
-	return nostrutil.PublicKeyHexFromPrivateKeyHex(privateKeyHex)
 }
 
 func filterKindsFromInts(kinds []int) []gonostr.Kind {

@@ -41,7 +41,7 @@ func newAdmissionTestPublisher(t *testing.T, admission *nostrout.Admission, repo
 		return nil
 	})
 	pool := connectedTestPool(t, admission, urls...)
-	publisher := NewPublisher(
+	publisher := newKeyedTestPublisher(
 		config.NostrConfig{PrivateKey: gonostr.Generate().Hex(), PublishEnabled: true},
 		pool,
 		repo,

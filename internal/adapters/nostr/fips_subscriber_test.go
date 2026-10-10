@@ -105,7 +105,7 @@ func TestFIPSSubscriberReceivesAdvertsFromAuthRequiredRelay(t *testing.T) {
 		fipsTestWorkerRepo: newFIPSTestWorkerRepo(&domain.Worker{PubKey: eventPubKeyHex(ev), Name: "worker-a"}),
 		upserted:           make(chan domain.Worker, 4),
 	}
-	pool := NewRelayPool([]string{relay.url}, zap.NewNop(), WithPrivateKey(testNostrPrivateKey))
+	pool := NewRelayPool([]string{relay.url}, zap.NewNop(), WithAuthSigner(mustLocalKeyer(testNostrPrivateKey)))
 	fastResubscribeBackoff(pool)
 	defer pool.Close()
 	subscriber := NewFIPSSubscriber(pool, repo, zap.NewNop())

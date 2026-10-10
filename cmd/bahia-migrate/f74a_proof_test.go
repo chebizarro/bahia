@@ -18,6 +18,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/stretchr/testify/require"
@@ -146,7 +147,7 @@ func TestF74aObservationMetadataChangeKeepsAcceptedProjectionProof(t *testing.T)
 		Metadata: map[string]any{"password": "old secret"},
 	}
 	capture := &f74aProjectionCapture{}
-	seed := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), capture, nil, zap.NewNop())
+	seed := newF74aTestProjector(cfg, (*service.RegistryService)(nil), capture, nil, zap.NewNop())
 	require.NoError(t, nostradapter.NewF74aCanonicalPublisher(seed, nil).PublishRuntimeObservation(ctx, obs))
 	require.Len(t, capture.events, 1)
 	event := capture.events[0]
@@ -178,11 +179,11 @@ func TestF74aObservationMetadataChangeKeepsAcceptedProjectionProof(t *testing.T)
 	changed.Metadata = map[string]any{"password": "new secret"}
 	changed.ObservedHost = "sql-only-host"
 	changed.ObservedAt = changed.ObservedAt.Add(time.Minute)
-	restartedPub := nostradapter.NewPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
+	restartedPub := newF74aTestPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
 		nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostradapter.WithLocalOutbox(outbox, store))
 	defer restartedPub.Close()
 	history := nostradapter.NewLocalEventRepository(store, nil).Authored(secret.Public().Hex())
-	restarted := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), f74aTrackedPublisher{Publisher: restartedPub, ledger: ledger}, history, zap.NewNop())
+	restarted := newF74aTestProjector(cfg, (*service.RegistryService)(nil), f74aTrackedPublisher{Publisher: restartedPub, ledger: ledger}, history, zap.NewNop())
 	recordPub := f74aRecordPublisher{inner: nostradapter.NewF74aCanonicalPublisher(restarted, nil)}
 	require.NoError(t, recordPub.PublishRuntimeObservation(ctx, &changed))
 	entries, err := outbox.ListEntries([]string{localstore.OutboxPending, localstore.OutboxPublished, localstore.OutboxFailed}, 10)
@@ -209,10 +210,10 @@ func TestF74aLegacyTombstoneIgnoresMutablePackageFields(t *testing.T) {
 	defer store.Close()
 	ledger := f74aTestLedger(t, outbox, secret.Public())
 	history := nostradapter.NewLocalEventRepository(store, nil).Authored(secret.Public().Hex())
-	initialPub := nostradapter.NewPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
+	initialPub := newF74aTestPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
 		nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostradapter.WithLocalOutbox(outbox, store))
 	defer initialPub.Close()
-	initial := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), f74aTrackedPublisher{Publisher: initialPub, ledger: ledger}, history, zap.NewNop())
+	initial := newF74aTestProjector(cfg, (*service.RegistryService)(nil), f74aTrackedPublisher{Publisher: initialPub, ledger: ledger}, history, zap.NewNop())
 	recordPub := f74aRecordPublisher{inner: nostradapter.NewF74aCanonicalPublisher(initial, nil)}
 	require.NoError(t, recordPub.PublishLegacySBOMPackageTombstone(ctx, pkg))
 	entries, err := outbox.ListEntries([]string{localstore.OutboxPending, localstore.OutboxPublished, localstore.OutboxFailed}, 10)
@@ -240,10 +241,10 @@ func TestF74aLegacyTombstoneIgnoresMutablePackageFields(t *testing.T) {
 	require.NoError(t, ledger.accepted(event))
 	changed := *pkg
 	changed.Name, changed.Version, changed.PURL = "new", "2", "pkg:example/new@2"
-	restartedPub := nostradapter.NewPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
+	restartedPub := newF74aTestPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
 		nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostradapter.WithLocalOutbox(outbox, store))
 	defer restartedPub.Close()
-	restarted := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), f74aTrackedPublisher{Publisher: restartedPub, ledger: ledger}, history, zap.NewNop())
+	restarted := newF74aTestProjector(cfg, (*service.RegistryService)(nil), f74aTrackedPublisher{Publisher: restartedPub, ledger: ledger}, history, zap.NewNop())
 	recordPub = f74aRecordPublisher{inner: nostradapter.NewF74aCanonicalPublisher(restarted, nil)}
 	require.NoError(t, recordPub.PublishLegacySBOMPackageTombstone(ctx, &changed))
 	entries, err = outbox.ListEntries([]string{localstore.OutboxPending, localstore.OutboxPublished, localstore.OutboxFailed}, 10)
@@ -370,7 +371,7 @@ func TestF74aTrackedPublisherHydratesOutboxOnlyCoordinate(t *testing.T) {
 	cfg := config.NostrConfig{PrivateKey: key, PublishEnabled: true}
 	original := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module", Version: "1"}
 	capture := &f74aProjectionCapture{}
-	seed := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), capture, nil, zap.NewNop())
+	seed := newF74aTestProjector(cfg, (*service.RegistryService)(nil), capture, nil, zap.NewNop())
 	require.NoError(t, nostradapter.NewF74aCanonicalPublisher(seed, nil).PublishSBOMPackage(ctx, original))
 	require.Len(t, capture.events, 1)
 	held := capture.events[0]
@@ -385,12 +386,12 @@ func TestF74aTrackedPublisherHydratesOutboxOnlyCoordinate(t *testing.T) {
 	defer store.Close()
 	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: held, Target: repository.NostrPublishTargetControlPlane})
 	require.NoError(t, err)
-	raw := nostradapter.NewPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostradapter.WithLocalOutbox(outbox, store))
+	raw := newF74aTestPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostradapter.WithLocalOutbox(outbox, store))
 	defer raw.Close()
 	ledger := f74aTestLedger(t, outbox, secret.Public())
 	history := nostradapter.NewLocalEventRepository(store, nil).Authored(secret.Public().Hex())
 	wrapped := f74aTrackedPublisher{Publisher: raw, ledger: ledger}
-	restarted := nostradapter.NewProjector(cfg, (*service.RegistryService)(nil), wrapped, history, zap.NewNop())
+	restarted := newF74aTestProjector(cfg, (*service.RegistryService)(nil), wrapped, history, zap.NewNop())
 	canonical := nostradapter.NewF74aCanonicalPublisher(restarted, nil)
 	require.NoError(t, canonical.PublishSBOMPackage(ctx, original), "unchanged row must reuse held signed event")
 	counts, err := outbox.Counts()
@@ -652,4 +653,24 @@ func TestF74aOCKManifestReverifiesEveryEnvelopeAfterPolicyChange(t *testing.T) {
 	stored, err = f74aLoadOCKManifest(outbox, secret.Public())
 	require.NoError(t, err)
 	require.Equal(t, newPolicy, stored.PolicyID)
+}
+
+// newF74aTestProjector and newF74aTestPublisher sign as the fixture's local
+// service key through an injected Keyer, as runF74aImport does.
+func newF74aTestProjector(cfg config.NostrConfig, source nostradapter.ProjectionSource, publisher nostradapter.ProjectionPublisher, history nostradapter.ProjectionHistory, logger *zap.Logger, opts ...nostradapter.ProjectorOption) *nostradapter.Projector {
+	signer := mustF74aTestKeyer(cfg)
+	pubkey, _ := signer.GetPublicKey(context.Background())
+	return nostradapter.NewProjector(cfg, source, publisher, history, logger, append([]nostradapter.ProjectorOption{nostradapter.WithProjectorSigner(signer, pubkey.Hex())}, opts...)...)
+}
+
+func newF74aTestPublisher(cfg config.NostrConfig, pool *nostradapter.RelayPool, repo repository.NostrEventRepository, logger *zap.Logger, opts ...nostradapter.PublisherOption) *nostradapter.Publisher {
+	return nostradapter.NewPublisher(cfg, pool, repo, logger, append([]nostradapter.PublisherOption{nostradapter.WithPublisherSigner(mustF74aTestKeyer(cfg))}, opts...)...)
+}
+
+func mustF74aTestKeyer(cfg config.NostrConfig) nostrutil.LocalKeyer {
+	signer, err := nostrutil.NewLocalKeyer(cfg.PrivateKey)
+	if err != nil {
+		panic(err)
+	}
+	return signer
 }

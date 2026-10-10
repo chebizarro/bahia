@@ -147,13 +147,13 @@ func New(cfg *config.Config) (*App, error) {
 	continuityStatusStore := service.NewInMemoryContinuityStatusStore()
 	continuityRecipeExecutor := service.NewContinuityRecipeExecutor(publisher, service.WithContinuityRecipeLogger(logger))
 
-	controlPlaneSigner, err := controlplane.NewPrivateKeySigner(cfg.Nostr.PrivateKey)
+	serviceKeyer, err := newServiceKeyer(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("configuring control-plane signer: %w", err)
+		return nil, fmt.Errorf("configuring service signer: %w", err)
 	}
 	servicePubkey := ""
-	if controlPlaneSigner != nil {
-		pubkey, err := controlPlaneSigner.GetPublicKey(ctx)
+	if serviceKeyer != nil {
+		pubkey, err := serviceKeyer.GetPublicKey(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("resolving service signer pubkey: %w", err)
 		}
@@ -169,7 +169,7 @@ func New(cfg *config.Config) (*App, error) {
 	// docs/runbooks/nostr-outbound-admission.md).
 	outboundAdmission := nostrout.InitDefault(nostrOutboundAdmissionConfig(cfg.Nostr.Outbound))
 	poolOptions := []nostrAdapter.RelayPoolOption{
-		nostrAdapter.WithAuthSigner(controlPlaneSigner),
+		nostrAdapter.WithAuthSigner(serviceKeyer),
 		nostrAdapter.WithOutboundAdmission(outboundAdmission),
 		closedRetryBudgetOption(cfg.Nostr),
 	}
@@ -325,7 +325,7 @@ func New(cfg *config.Config) (*App, error) {
 	if loomCanonicalSigner != nil {
 		loomClientOptions = append(loomClientOptions, loom.WithCanonicalSigner(loomCanonicalSigner))
 	}
-	loomClient := loom.NewClient(cfg.Loom, cfg.Nostr.PrivateKey, relayPool, logger, loomClientOptions...)
+	loomClient := loom.NewClient(cfg.Loom, serviceKeyer, relayPool, logger, loomClientOptions...)
 
 	// Image verifier: Harbor, the multi-registry adapter, or no-op.
 	var verifier service.ImageVerifier
@@ -395,14 +395,14 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, pgNostrEventRepo, logger,
 		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore),
-		nostrAdapter.WithPublisherSigner(controlPlaneSigner))
+		nostrAdapter.WithPublisherSigner(serviceKeyer))
 	// Control-plane outbox publisher shared by the read-model projector, docs,
 	// SBOM and config-fabric. Its entries carry the control-plane publish
 	// target and its own runner retries them, so they are never redelivered to
 	// the interop relays.
 	controlPlanePub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, pgNostrEventRepo, logger,
 		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane),
-		nostrAdapter.WithPublisherSigner(controlPlaneSigner),
+		nostrAdapter.WithPublisherSigner(serviceKeyer),
 		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore))
 	// nostr_events for its readers: PostgreSQL when available, else the
 	// local event store. An event a producer records there as pending
@@ -428,15 +428,12 @@ func New(cfg *config.Config) (*App, error) {
 	// its readers, best effort.
 	auditEventRepo := nostrAdapter.NewLocalEventRepository(localEventStore, localOutboxAdmit)
 
-	hiveCIJobClient := loom.NewClient(
-		cfg.Loom, cfg.Nostr.PrivateKey, controlPlanePool, logger,
-		loom.WithWorkerRepo(workerRepo), loom.WithJobSigner(controlPlaneSigner),
-	)
+	hiveCIJobClient := loom.NewClient(cfg.Loom, serviceKeyer, controlPlanePool, logger, loom.WithWorkerRepo(workerRepo))
 	var continuityProjectionPublisher service.ContinuityNostrPublishFunc
-	if controlPlanePool != nil && controlPlaneSigner != nil {
+	if controlPlanePool != nil && serviceKeyer != nil {
 		continuityProjectionPublisher = func(ctx context.Context, kind int, tags nostr.Tags, content string) error {
 			ev := &nostr.Event{Kind: nostr.Kind(kind), CreatedAt: nostr.Now(), Tags: tags, Content: content}
-			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, ev); err != nil {
+			if err := controlplane.SignGoNostrEvent(ctx, serviceKeyer, ev); err != nil {
 				return fmt.Errorf("sign continuity projection event: %w", err)
 			}
 			published, err := controlPlanePool.Publish(ctx, *ev)
@@ -452,9 +449,9 @@ func New(cfg *config.Config) (*App, error) {
 	service.NewContinuityStatusProjector(publisher, continuityStatusStore, continuityProjectionPublisher, logger)
 
 	pressureMonitor := service.NewWorkerPressureMonitor()
-	workerStatePublisher := controlplane.NewWorkerStatePublisher(controlPlanePool, controlPlaneSigner)
+	workerStatePublisher := controlplane.NewWorkerStatePublisher(controlPlanePool, serviceKeyer)
 	workerStatePublisher.ConfigureAudit(nostrEventRepo, logger)
-	workerCleanupStatePublisher := controlplane.NewWorkerCleanupStatePublisher(controlPlanePool, controlPlaneSigner)
+	workerCleanupStatePublisher := controlplane.NewWorkerCleanupStatePublisher(controlPlanePool, serviceKeyer)
 	workerCleanupStatePublisher.ConfigureAudit(nostrEventRepo, logger)
 
 	// Worker policy service for environment-specific worker selection.
@@ -465,14 +462,20 @@ func New(cfg *config.Config) (*App, error) {
 	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger, runtimeRegistryAuth)
 	logger.Info("runtime resolver initialized", zap.String("default_type", cfg.Runtime.Type))
 
-	// Secret encryptor (uses Bahia's Nostr key for at-rest encryption).
+	// Secret encryptor: its AES key is HKDF-derived from the raw service key,
+	// so without in-process key material every operation fails with
+	// nostrutil.ErrServiceKeyMaterialRequired (bahia-cd0wr.4.7).
 	var secretEncryptor *secretsAdapter.Encryptor
-	if cfg.Nostr.PrivateKey != "" {
-		secretEncryptor, err = secretsAdapter.NewEncryptor(cfg.Nostr.PrivateKey)
+	if serviceKeyer != nil {
+		secretEncryptor, err = secretsAdapter.NewServiceEncryptor(serviceKeyer)
 		if err != nil {
 			return nil, fmt.Errorf("configuring secret encryption: %w", err)
 		}
-		logger.Info("secrets encryption enabled")
+		if blocked := secretEncryptor.Unavailable(); blocked != nil {
+			logger.Warn("service secret store blocked: every secret read and write fails until the raw-key migration lands", zap.Error(blocked))
+		} else {
+			logger.Info("secrets encryption enabled")
+		}
 	}
 
 	var publicRoutePlanner *service.PublicRoutePlanner
@@ -566,7 +569,7 @@ func New(cfg *config.Config) (*App, error) {
 		// daemon resumes outage state from, and makes a route outage visible to
 		// Nostr consumers and fleet-health telemetry.
 		var routeCanaryProjector *service.RouteCanaryProjector
-		if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
+		if cfg.Nostr.PublishEnabled && serviceKeyer != nil {
 			routeCanaryProjector, err = service.NewRouteCanaryProjector(publisher, nostrPub, logger)
 			if err != nil {
 				return nil, fmt.Errorf("configuring route canary projector: %w", err)
@@ -704,7 +707,7 @@ func New(cfg *config.Config) (*App, error) {
 		bgManager.RegisterWithOptions(NewOSVVulnerabilityCacheCleanupRunner(securityRepo, defaultOSVVulnerabilityCacheCleanupInterval, logger))
 	}
 	var staleRunDetector *workflow.StaleRunDetector
-	if cfg.Nostr.PublishEnabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
+	if cfg.Nostr.PublishEnabled && serviceKeyer != nil {
 		staleRunSource := workflow.NewCanonicalRunHealthSource(auditEventRepo, servicePubkey)
 		staleRunDetector = workflow.NewStaleRunDetector(staleRunSource, auditEventRepo, nostrPub, cfg.Nostr.StaleRunAfter, logger)
 		staleRunDetector.SetCanonicalAuthor(servicePubkey)
@@ -902,12 +905,12 @@ func New(cfg *config.Config) (*App, error) {
 		intentReadiness.RegisterFilter("intent-30900")
 	}
 	var intentStatus *controlplane.IntentStatusPublisher
-	if nostrPub != nil && controlPlaneSigner != nil {
+	if nostrPub != nil && serviceKeyer != nil {
 		intentStatus = controlplane.NewIntentStatusPublisher(
 			func(ctx context.Context, ev nostr.Event) error {
 				return nostrPub.PublishBeforeCommit(ctx, ev, "intent-status", nil)
 			},
-			controlPlaneSigner,
+			serviceKeyer,
 			logger,
 		)
 		intentStatus.SetBackupRunStatusGate(localOutbox.PublishUnadmittedBackupRunStatus)
@@ -1061,7 +1064,7 @@ func New(cfg *config.Config) (*App, error) {
 		// capability-negotiated backend switching.
 		dnsAgentHealthReader = dnsAdapter.NewAgentHealthReader(logger)
 		dnsZoneSyncPublisher = &dnsAdapter.DeferredZoneSyncPublisher{}
-		dnsZones, dnsResolver, dnsBackendClosers, err = buildDNSRuntime(ctx, cfg.DNS, controlPlaneRelays, controlPlaneSigner, servicePubkey, dnsAgentHealthReader, dnsZoneSyncPublisher, logger)
+		dnsZones, dnsResolver, dnsBackendClosers, err = buildDNSRuntime(ctx, cfg.DNS, controlPlaneRelays, serviceKeyer, servicePubkey, dnsAgentHealthReader, dnsZoneSyncPublisher, logger)
 		if err != nil {
 			return nil, err
 		}
@@ -1174,7 +1177,7 @@ func New(cfg *config.Config) (*App, error) {
 		intentReadiness.MarkFilterReady("authoritative-warmstart")
 	}
 	projectorOpts = append(projectorOpts,
-		nostrAdapter.WithProjectorSigner(controlPlaneSigner, servicePubkey),
+		nostrAdapter.WithProjectorSigner(serviceKeyer, servicePubkey),
 		nostrAdapter.WithReadinessTracker(intentReadiness),
 		nostrAdapter.WithIntentDomains(warmStartDomains),
 	)
@@ -1430,7 +1433,7 @@ func New(cfg *config.Config) (*App, error) {
 	// PolicyStatePublisher emits canonical 30900 records via PublishBeforeCommit.
 	// Fingerprint dedupe prevents duplicate publishes for the same entity revision.
 	var policyPublisher controlplane.PolicyStatePublisher
-	if nostrPub != nil && controlPlaneSigner != nil {
+	if nostrPub != nil && serviceKeyer != nil {
 		var policyPubMu sync.Mutex
 		policyFingerprints := make(map[string]struct{})
 		policyLastPublishedAt := make(map[uuid.UUID]nostr.Timestamp)
@@ -1470,7 +1473,7 @@ func New(cfg *config.Config) (*App, error) {
 				Tags:      tags,
 				Content:   recordContent,
 			}
-			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, &ev); err != nil {
+			if err := controlplane.SignGoNostrEvent(ctx, serviceKeyer, &ev); err != nil {
 				return fmt.Errorf("sign policy state event: %w", err)
 			}
 			return nostrPub.PublishBeforeCommit(ctx, ev, "policy", &policy.ID)
@@ -1494,7 +1497,7 @@ func New(cfg *config.Config) (*App, error) {
 	// Created unconditionally so both the (non-intent) ContextVM path and
 	// the intent handler path use the same sign-and-publish closure.
 	var llmRoutePublisher controlplane.LLMRouteStatePublisher
-	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
+	if nostrPub != nil && serviceKeyer != nil && llmRegistry != nil {
 		var llmPubMu sync.Mutex
 		llmFingerprints := make(map[string]struct{})
 		llmLastPublishedAt := make(map[uuid.UUID]nostr.Timestamp)
@@ -1532,7 +1535,7 @@ func New(cfg *config.Config) (*App, error) {
 				Tags:      tags,
 				Content:   recordContent,
 			}
-			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, &ev); err != nil {
+			if err := controlplane.SignGoNostrEvent(ctx, serviceKeyer, &ev); err != nil {
 				return fmt.Errorf("sign LLM route state event: %w", err)
 			}
 			return nostrPub.PublishBeforeCommit(ctx, ev, "llm_route", &route.ID)
@@ -1579,26 +1582,19 @@ func New(cfg *config.Config) (*App, error) {
 	// OCK distributed to org members + service via NIP-44 through signer interface.
 	// Records in the older O1 (sha256-derived key) and N1 (NIP-44
 	// self-encryption) formats are read through the dual-read encryptor below.
-	var legacyO1Encryptor *controlplane.OrgStateEncryptorImpl
-	if cfg.Nostr.PrivateKey != "" {
-		orgKeySum := sha256.Sum256([]byte("bahia org state key v1\x00" + strings.TrimSpace(cfg.Nostr.PrivateKey)))
-		legacyO1Encryptor = controlplane.NewOrgStateEncryptor(controlplane.StaticOrgStateKeyProvider{
-			Key: controlplane.OrgStateKey{
-				Ref:     "org-state/service-nostr-key",
-				Version: "v1",
-				Key:     orgKeySum[:],
-			},
-		})
+	legacyO1Encryptor, legacyO1Blocked := legacyO1OrgStateDecryptor(serviceKeyer)
+	if legacyO1Blocked != nil {
+		logger.Warn("legacy O1 org-state reads blocked: O1 records fail until the raw-key migration lands", zap.Error(legacyO1Blocked))
 	}
 
 	// create OCKManager and ConfidentialEncryptor.
 	var confidentialEncryptor *controlplane.ConfidentialEncryptor
 	var ockManager *controlplane.OCKManager
-	if controlPlaneSigner != nil && servicePubkey != "" {
+	if serviceKeyer != nil && servicePubkey != "" {
 		ockHistory := nostrAdapter.NewProjectorOCKEnvelopeHistory(projectionHistory)
 		ockMemberSource := controlplane.NewTrustSetMemberSource(trustSet, orgMemberRepo)
 		ockManager = controlplane.NewOCKManager(controlplane.OCKManagerConfig{
-			Signer:        controlPlaneSigner,
+			Signer:        serviceKeyer,
 			ServicePubkey: servicePubkey,
 			Publisher:     nostrProjector, // implements OCKEnvelopePublisher via structural typing
 			History:       ockHistory,     // implements OCKEnvelopeHistory via structural typing
@@ -1717,9 +1713,9 @@ func New(cfg *config.Config) (*App, error) {
 	// Shared by O1 (org) and N1 (secret, notification). Plaintext 30900 intents
 	// for these domains are rejected with a bounded status.
 	var giftWrapIngress *controlplane.IntentGiftWrapIngress
-	if controlPlaneSigner != nil {
+	if serviceKeyer != nil {
 		giftWrapIngress = controlplane.NewIntentGiftWrapIngress(controlplane.IntentGiftWrapIngressConfig{
-			Signer:           controlPlaneSigner,
+			Signer:           serviceKeyer,
 			Processor:        intentProcessor,
 			SensitiveDomains: []string{"org", "secret", "notification", "relay"},
 			Logger:           logger,
@@ -1767,7 +1763,7 @@ func New(cfg *config.Config) (*App, error) {
 
 	// wire LLM route state cp-state publisher into the registry service
 	// so state mutations publish 30900 records directly instead of through the projector.
-	if nostrPub != nil && controlPlaneSigner != nil && llmRegistry != nil {
+	if nostrPub != nil && serviceKeyer != nil && llmRegistry != nil {
 		var llmStatePubMu sync.Mutex
 		llmStateFingerprints := make(map[string]struct{})
 		llmRegistry.SetLLMCPStatePublisher(func(ctx context.Context, state *domain.LLMRouteState) {
@@ -1796,7 +1792,7 @@ func New(cfg *config.Config) (*App, error) {
 				Tags:      tags,
 				Content:   recordContent,
 			}
-			if err := controlplane.SignGoNostrEvent(ctx, controlPlaneSigner, &ev); err != nil {
+			if err := controlplane.SignGoNostrEvent(ctx, serviceKeyer, &ev); err != nil {
 				logger.Warn("sign LLM route state event failed", zap.Error(err))
 				return
 			}
@@ -1858,12 +1854,16 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Blossom client wiring (used for artifact storage and browsing).
 	var blossomClient *blossom.Client
+	blossomAuth, err := blossomSigner(cfg.Blossom)
+	if err != nil {
+		return nil, err
+	}
 	blossomCfg := blossom.Config{
-		Servers:       cfg.Blossom.Servers,
-		MaxRetries:    cfg.Blossom.MaxRetries,
-		RetryDelay:    cfg.Blossom.RetryDelay,
-		Timeout:       cfg.Blossom.Timeout,
-		PrivateKeyHex: cfg.Blossom.PrivateKey,
+		Servers:    cfg.Blossom.Servers,
+		MaxRetries: cfg.Blossom.MaxRetries,
+		RetryDelay: cfg.Blossom.RetryDelay,
+		Timeout:    cfg.Blossom.Timeout,
+		Signer:     blossomAuth,
 	}
 	if len(blossomCfg.Servers) == 0 && cfg.Blossom.URL != "" {
 		blossomCfg.Servers = []string{cfg.Blossom.URL}
@@ -1876,12 +1876,12 @@ func New(cfg *config.Config) (*App, error) {
 	// Blossom startup observation; daemon-owned uploads publish at their site.
 	if nostrProjector != nil && nostrProjector.Enabled() {
 		viewPublisher := nostrAdapter.NewOperationalViewPublisher(nostrProjector, confidentialEncryptor)
-		owners := append([]string{blossomOwnerKey(cfg.Blossom.PrivateKey)}, cfg.Nostr.AuthorizedPubkeys...)
+		owners := append([]string{blossomOwnerKey(blossomAuth)}, cfg.Nostr.AuthorizedPubkeys...)
 		for _, owner := range cfg.Nostr.BootstrapOwners {
 			owners = append(owners, owner)
 		}
 		if blossomClient != nil && confidentialEncryptor != nil {
-			owner := blossomOwnerKey(cfg.Blossom.PrivateKey)
+			owner := blossomOwnerKey(blossomAuth)
 			if owner != "" {
 				blossomClient.SetUploadObserver(func(ctx context.Context, descriptor blossom.BlobDescriptor) error {
 					return viewPublisher.PublishBlossomBlob(ctx, owner, descriptor)
@@ -1914,7 +1914,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		sbomStorageResolver = sbomAdapter.NewStorageResolver(blossomClient, nil, nil, slog.Default())
 		// SBOM attestations are standard Nostr events signed by the service key.
-		if controlPlaneSigner == nil {
+		if serviceKeyer == nil {
 			return nil, fmt.Errorf("configure SBOM attestation signer: nostr.private_key is required")
 		}
 		sbomOrchestrator = service.NewSBOMOrchestrator(service.SBOMOrchestratorConfig{
@@ -1923,7 +1923,7 @@ func New(cfg *config.Config) (*App, error) {
 			Repo:              sbomManifestRepo,
 			Publisher:         sbomPublishAdapter{publisher: controlPlanePub},
 			Subscriber:        sbomAvailabilityRelaySubscriber{pool: controlPlanePool},
-			AttestationSigner: controlPlaneSigner,
+			AttestationSigner: serviceKeyer,
 			Resolver: service.SBOMSubjectResolver{
 				Artifacts:   artifactRepo,
 				Deployments: intentRepo,
@@ -2036,14 +2036,14 @@ func New(cfg *config.Config) (*App, error) {
 			if ociSvc == nil {
 				return nil, fmt.Errorf("Hive-CI release registration requires Bahia OCI registry evidence resolution")
 			}
-			if controlPlaneSigner == nil {
+			if serviceKeyer == nil {
 				return nil, fmt.Errorf("Hive-CI release registration requires a control-plane audit signer")
 			}
 			// the accepted-release ledger is canonical cp-state in
 			// the local event store (CanonicalRepository.CommitAcceptedRelease);
 			// the SQL accepted-release table is an index mirrored afterwards, so
 			// release ingestion needs no database.
-			releaseAudit := hiveciAdapter.NewRegistrationAudit(controlPlaneSigner, auditEventRepo)
+			releaseAudit := hiveciAdapter.NewRegistrationAudit(serviceKeyer, auditEventRepo)
 			releaseEvidence := hiveciAdapter.NewLocalReleaseEvidence(
 				localEventStore, hiveRepo, nostrAdapter.NewWorkerSchedulingView(projectionHistory),
 				hiveciAdapter.NewOCIReleaseObjectResolver(ociSvc, pipelineRegistryInspector), pressureThresholds,
@@ -2243,9 +2243,8 @@ func New(cfg *config.Config) (*App, error) {
 	notifRepo := nostrAdapter.NewCanonicalNotificationRepository(repository.NewPgNotificationRepository(pool), f74bCanonical)
 	notifDispatcher := notifications.NewDispatcher(notifRepo, logger)
 	notifDispatcher.RegisterSender(domain.ChannelTypeWebhook, notifications.NewWebhookSender())
-	if cfg.Nostr.PrivateKey != "" {
-		notifDispatcher.RegisterSender(domain.ChannelTypeNostrDM,
-			notifications.NewNostrDMSender(relayPool, cfg.Nostr.PrivateKey, logger, controlPlaneSigner))
+	if serviceKeyer != nil {
+		notifDispatcher.RegisterSender(domain.ChannelTypeNostrDM, notifications.NewNostrDMSender(relayPool, serviceKeyer, logger))
 	}
 	notifDispatcher.SetupSubscriptions(publisher)
 
@@ -2311,7 +2310,7 @@ func New(cfg *config.Config) (*App, error) {
 		toolSecurity,
 		toolBuilder,
 		defaultRuntime,
-		controlplane.NewToolResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo),
+		controlplane.NewToolResponder(controlPlanePool, serviceKeyer, logger, nostrEventRepo),
 		notifDispatcher,
 		logger,
 		service.ToolProvisioningConfig{BaseImageRef: "", TargetRegistry: cfg.Registry.URL, TargetRepo: "tools/swarmstr", InstallerVersion: "v1"},
@@ -2324,7 +2323,7 @@ func New(cfg *config.Config) (*App, error) {
 	// convergence via the per-host maintenance driver.
 	var hygieneObservationSource *reconcile.ContextVMHygieneObservationSource
 	if cfg.Hygiene.Enabled {
-		if controlPlaneSigner == nil || controlPlanePool == nil || len(controlPlaneRelays) == 0 {
+		if serviceKeyer == nil || controlPlanePool == nil || len(controlPlaneRelays) == 0 {
 			logger.Warn("hygiene reconciler enabled but control-plane Nostr publishing is not configured; skipping")
 		} else if hygienePolicy, err := loadHygienePolicy(cfg.Hygiene.PolicyPath); err != nil {
 			return nil, fmt.Errorf("load hygiene policy: %w", err)
@@ -2333,7 +2332,7 @@ func New(cfg *config.Config) (*App, error) {
 			if err != nil {
 				return nil, fmt.Errorf("hygiene observation source: %w", err)
 			}
-			maintenancePublisher := controlplane.NewMaintenanceCommandPublisher(controlPlanePool, controlPlaneSigner, hygieneObservationSource)
+			maintenancePublisher := controlplane.NewMaintenanceCommandPublisher(controlPlanePool, serviceKeyer, hygieneObservationSource)
 			hygieneReconciler, err := reconcile.NewHygieneReconciler(hygienePolicy, cfg.Hygiene.Workers, maintenancePublisher, hygieneObservationSource, telemetryProvider.GetMetrics(), cfg.Hygiene.Interval, publisher, logger)
 			if err != nil {
 				return nil, fmt.Errorf("hygiene reconciler: %w", err)
@@ -2362,7 +2361,7 @@ func New(cfg *config.Config) (*App, error) {
 	var assistantIdentity service.AssistantIdentity
 	var configFabricSigner service.ConfigFabricSigner
 	if cfg.Assistant.Enabled {
-		identity, assistantSignetManager, assistantBootstrapRunner, operatorSigner := bootstrapOperatorAssistant(cfg, controlPlaneRelays, logger)
+		identity, assistantSignetManager, assistantBootstrapRunner, operatorSigner := bootstrapOperatorAssistant(cfg, servicePubkey, controlPlaneRelays, logger)
 		configFabricSigner = operatorSigner
 		if assistantSignetManager != nil {
 			bgManager.RegisterWithOptions(assistantSignetManager, RunnerRequired(false))
@@ -2378,12 +2377,6 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		assistantPublisher := &auditedNostrPublisher{delegate: controlPlanePool, repo: nostrEventRepo, logger: logger}
 		assistantSubscriber := assistantRelaySubscriber{pool: controlPlanePool}
-		servicePubkey := ""
-		if strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-			if secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); err == nil {
-				servicePubkey = secret.Public().Hex()
-			}
-		}
 		transcriptKeys, err := assistantTranscriptKeyProviderForStartup(ctx, cfg, servicePubkey, controlPlaneRelays)
 		if err != nil {
 			return nil, err
@@ -2391,7 +2384,7 @@ func New(cfg *config.Config) (*App, error) {
 		transcriptStore := service.NewAssistantTranscriptStore(service.AssistantTranscriptStoreConfig{
 			Publisher:     assistantPublisher,
 			Subscriber:    assistantSubscriber,
-			Signer:        controlPlaneSigner,
+			Signer:        serviceKeyer,
 			Identity:      identity,
 			KeyProvider:   transcriptKeys,
 			ServicePubkey: servicePubkey,
@@ -2426,7 +2419,7 @@ func New(cfg *config.Config) (*App, error) {
 			ModelClient:      modelClient,
 			Publisher:        assistantPublisher,
 			Subscriber:       assistantSubscriber,
-			Signer:           controlPlaneSigner,
+			Signer:           serviceKeyer,
 			Identity:         identity,
 			ServicePubkey:    servicePubkey,
 			Transcript:       transcriptStore,
@@ -2475,7 +2468,7 @@ func New(cfg *config.Config) (*App, error) {
 		nostrAdapter.WithHandler(nostrProcessor.Handle),
 		nostrAdapter.WithObserver(telemetryProvider.ObserveNostrEvent),
 		nostrAdapter.WithIngestionObserver(telemetryProvider),
-		nostrAdapter.WithAuthorizedAuthorScopes(controlPlaneSubscriberAuthorScopes(cfg, assistantIdentity)),
+		nostrAdapter.WithAuthorizedAuthorScopes(controlPlaneSubscriberAuthorScopes(cfg, servicePubkey, assistantIdentity)),
 	)
 	if staleRunDetector != nil {
 		staleRunDetector.SetLoomStatusReadiness(nostrSub.LoomStatusReadySignal())
@@ -2487,7 +2480,7 @@ func New(cfg *config.Config) (*App, error) {
 	// NIP-23 docs publisher: syncs user-guide documentation to the sidecar relay
 	// (or control-plane relays) as long-form content. Uses controlPlanePool so
 	// docs land on the same relay set the browser reads from.
-	if controlPlanePool != nil && cfg.Nostr.PublishEnabled && cfg.Nostr.PrivateKey != "" {
+	if controlPlanePool != nil && cfg.Nostr.PublishEnabled && serviceKeyer != nil {
 		userDocsForNostr := docs.New(docs.DefaultBasePath)
 		var docsQuerier docs.NostrDocsQuerier
 		if servicePubkey != "" {
@@ -2561,7 +2554,7 @@ func New(cfg *config.Config) (*App, error) {
 		)
 	}
 
-	releasePromotionAudit := controlplane.NewSignedReleasePromotionAudit(controlPlaneSigner, auditEventRepo)
+	releasePromotionAudit := controlplane.NewSignedReleasePromotionAudit(serviceKeyer, auditEventRepo)
 	releasePromotionAuthorizer := controlplane.NewReleasePromotionAuthorizer(registry, releasePromotionAudit)
 	serviceDeploymentConfig := controlplane.EncryptedServiceHandlersConfig{
 		Registry:          registry,
@@ -2604,16 +2597,16 @@ func New(cfg *config.Config) (*App, error) {
 		ServicePubkey: servicePubkey, Logger: logger, ConfigFabric: configFabricSvc,
 		FleetOperatorGate: controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys),
 	})
-	relaySettingsHandlers.SetPublisher(contextVMResponsePool, controlPlaneSigner)
-	if enabledDomains["relay"] && controlPlaneSigner != nil && relayPolicyProjectionRepo != nil {
+	relaySettingsHandlers.SetPublisher(contextVMResponsePool, serviceKeyer)
+	if enabledDomains["relay"] && serviceKeyer != nil && relayPolicyProjectionRepo != nil {
 		intentProcessor.RegisterHandler("relay", controlplane.NewRelayPolicyIntentHandler(relaySettingsHandlers))
 	}
 	// --- end D80 registrations ---
 
 	var encryptedRequestTransport *controlplane.EncryptedRequestTransport
 	// Encrypted request/result event runtime for sensitive browser route migrations.
-	if len(contextVMRequestRelays) > 0 && controlPlaneSigner != nil && cfg.Nostr.PrivateKey != "" {
-		responder := controlplane.NewEncryptedResponder(contextVMResponsePool, controlPlaneSigner, cfg.Nostr.PrivateKey, logger)
+	if len(contextVMRequestRelays) > 0 && serviceKeyer != nil {
+		responder := controlplane.NewEncryptedResponder(contextVMResponsePool, serviceKeyer, logger)
 		transportOptions := []controlplane.EncryptedRequestTransportOption{
 			controlplane.WithContextVMLocalStore(localEventStore),
 			controlplane.WithContextVMLocalStoreConfig(controlplane.ContextVMLocalConfig{
@@ -2713,7 +2706,7 @@ func New(cfg *config.Config) (*App, error) {
 				giteaAdapter.NewAPIClient(cfg.HiveCI.Initiator.GiteaBaseURL, cfg.HiveCI.Initiator.GiteaToken, nil),
 				credentialResolver,
 				controlPlanePool,
-				controlPlaneSigner,
+				serviceKeyer,
 				initiationStore,
 				giteaAdapter.InitiatorConfig{
 					GiteaBaseURL:                  cfg.HiveCI.Initiator.GiteaBaseURL,
@@ -2767,11 +2760,10 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Nostr control plane reactor for event-driven deployment operations.
-	if len(controlPlaneRelays) > 0 && controlPlaneSigner != nil {
+	if len(controlPlaneRelays) > 0 && serviceKeyer != nil {
 		reactorConfig := controlplane.Config{
 			Relays:                         controlPlaneRelays,
-			PrivateKey:                     cfg.Nostr.PrivateKey,
-			AuthorizedPubkeys:              controlPlaneAuthorizedPubkeys(cfg, assistantIdentity),
+			AuthorizedPubkeys:              controlPlaneAuthorizedPubkeys(cfg, servicePubkey, assistantIdentity),
 			AdoptionAuthorizedPubkeys:      cfg.Adoption.AllowedPubkeys,
 			DirectRuntimeAuthorizedPubkeys: cfg.DirectRuntime.AllowedPubkeys,
 		}
@@ -2796,7 +2788,7 @@ func New(cfg *config.Config) (*App, error) {
 		reactorOpts := appendControlPlaneAuditOption([]controlplane.ReactorOption{
 			controlplane.WithBackupRegistry(backupRegistry),
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
-			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, controlPlaneSigner, logger, nostrEventRepo)),
+			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, serviceKeyer, logger, nostrEventRepo)),
 			controlplane.WithToolProvisioningCoordinator(toolCoordinator),
 			controlplane.WithMLRegistry(mlRegistry),
 		}, nostrEventRepo)
@@ -2810,14 +2802,14 @@ func New(cfg *config.Config) (*App, error) {
 		// wire worker read model publisher for direct publication
 		// from mutation sites.
 		workerReadModelPublisher := controlplane.NewWorkerReadModelPublisher(
-			controlPlanePool, controlPlaneSigner, workerReadModelSvc, logger)
+			controlPlanePool, serviceKeyer, workerReadModelSvc, logger)
 		reactorOpts = append(reactorOpts,
 			controlplane.WithWorkerReadModelPublisher(workerReadModelPublisher))
 		setupWorkerReadModelEventSubscriptions(publisher, workerReadModelPublisher, registry, mlRegistry, logger)
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
 		}
-		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, controlPlaneSigner, logger, reactorOpts...)
+		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, serviceKeyer, logger, reactorOpts...)
 		if enabledDomains["tool"] {
 			intentProcessor.RegisterHandler("tool", controlplane.NewToolIntentHandler(reactor))
 		}
@@ -4706,7 +4698,7 @@ func configureAuthorizationMCPDeps(deps *mcp.ServerDeps, cfg *config.Config, rba
 	deps.AuthorizedPubkeys = cfg.Nostr.AuthorizedPubkeys
 }
 
-func controlPlaneSubscriberAuthorScopes(cfg *config.Config, assistant service.AssistantIdentity) nostrAdapter.AuthorizedAuthorScopes {
+func controlPlaneSubscriberAuthorScopes(cfg *config.Config, servicePubkey string, assistant service.AssistantIdentity) nostrAdapter.AuthorizedAuthorScopes {
 	var adoption []string
 	var directRuntime []string
 	if cfg != nil {
@@ -4714,13 +4706,13 @@ func controlPlaneSubscriberAuthorScopes(cfg *config.Config, assistant service.As
 		directRuntime = cfg.DirectRuntime.AllowedPubkeys
 	}
 	return nostrAdapter.AuthorizedAuthorScopes{
-		Default:       controlPlaneAuthorizedPubkeys(cfg, assistant),
+		Default:       controlPlaneAuthorizedPubkeys(cfg, servicePubkey, assistant),
 		Adoption:      adoption,
 		DirectRuntime: directRuntime,
 	}
 }
 
-func controlPlaneAuthorizedPubkeys(cfg *config.Config, assistant service.AssistantIdentity) []string {
+func controlPlaneAuthorizedPubkeys(cfg *config.Config, servicePubkey string, assistant service.AssistantIdentity) []string {
 	seen := map[string]struct{}{}
 	out := []string{}
 	add := func(pubkey string) {
@@ -4738,10 +4730,8 @@ func controlPlaneAuthorizedPubkeys(cfg *config.Config, assistant service.Assista
 		for _, pubkey := range cfg.Nostr.AuthorizedPubkeys {
 			add(pubkey)
 		}
-		if cfg.Assistant.Enabled && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-			if secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); err == nil {
-				add(secret.Public().Hex())
-			}
+		if cfg.Assistant.Enabled {
+			add(servicePubkey)
 		}
 	}
 	add(assistant.Pubkey)
@@ -4992,7 +4982,8 @@ func assistantTranscriptKeyProvider(cfg *config.Config) (service.AssistantTransc
 		privateKey = strings.TrimSpace(cfg.Nostr.PrivateKey)
 	}
 	if privateKey == "" {
-		return nil, fmt.Errorf("assistant transcript and checkpoint key requires nostr.private_key when assistant.enabled=true")
+		// SHA-256 over the nsec: no signer can serve it (bahia-cd0wr.4.8).
+		return nil, fmt.Errorf("assistant transcript and checkpoint key requires nostr.private_key when assistant.enabled=true: %w", nostrutil.ErrServiceKeyMaterialRequired)
 	}
 	sum := sha256.Sum256([]byte("bahia assistant transcript key v1\x00" + privateKey))
 	return service.StaticAssistantTranscriptKeyProvider{Key: service.AssistantTranscriptKey{
@@ -5095,13 +5086,8 @@ func (r *operatorAssistantBootstrapRunner) Run(ctx context.Context) error {
 	}
 }
 
-func bootstrapOperatorAssistant(cfg *config.Config, relays []string, logger *zap.Logger) (service.AssistantIdentity, *signetAdapter.ConnectionManager, BackgroundRunner, service.ConfigFabricSigner) {
-	identity := service.AssistantIdentity{AgentID: soulfactory.OperatorAssistantAgentID}
-	if cfg != nil && strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-		if secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); err == nil {
-			identity.Pubkey = secret.Public().Hex()
-		}
-	}
+func bootstrapOperatorAssistant(cfg *config.Config, servicePubkey string, relays []string, logger *zap.Logger) (service.AssistantIdentity, *signetAdapter.ConnectionManager, BackgroundRunner, service.ConfigFabricSigner) {
+	identity := service.AssistantIdentity{AgentID: soulfactory.OperatorAssistantAgentID, Pubkey: servicePubkey}
 	if cfg == nil || (!cfg.DevMode && !cfg.Assistant.SignetAllowMock && strings.TrimSpace(cfg.Assistant.SignetBunkerURI) == "") {
 		return identity, nil, nil, nil
 	}
@@ -5138,6 +5124,11 @@ func buildRelayAdminClient(ctx context.Context, cfg *config.Config, secretRepo r
 		logger.Warn("nip-86 relay administration disabled because administrator private key could not be resolved", zap.Error(err))
 		return nil
 	}
+	adminSigner, err := nostrutil.NewLocalKeyer(privateKey)
+	if err != nil {
+		logger.Warn("nip-86 relay administration disabled because the administrator private key is invalid", zap.Error(err))
+		return nil
+	}
 	targets := make([]relayadmin.Target, 0, len(cfg.Nostr.RelayAdministration.Targets))
 	for _, target := range cfg.Nostr.RelayAdministration.Targets {
 		targets = append(targets, relayadmin.Target{
@@ -5148,10 +5139,10 @@ func buildRelayAdminClient(ctx context.Context, cfg *config.Config, secretRepo r
 		})
 	}
 	client, err := relayadmin.NewClient(relayadmin.Config{
-		Enabled:       true,
-		PrivateKeyHex: strings.TrimSpace(privateKey),
-		Targets:       targets,
-		HTTPClient:    &http.Client{Timeout: 30 * time.Second},
+		Enabled:    true,
+		Signer:     adminSigner,
+		Targets:    targets,
+		HTTPClient: &http.Client{Timeout: 30 * time.Second},
 	})
 	if err != nil {
 		logger.Warn("nip-86 relay administration disabled because client validation failed", zap.Error(err))
@@ -5424,12 +5415,17 @@ func buildIntentAuthorsSyncer(ctx context.Context, cfg *config.Config, trustSet 
 		logger.Warn("intent authors syncer disabled: administrator private key could not be resolved", zap.Error(err))
 		return nil
 	}
+	adminSigner, err := nostrutil.NewLocalKeyer(privateKey)
+	if err != nil {
+		logger.Warn("intent authors syncer disabled: administrator private key is invalid", zap.Error(err))
+		return nil
+	}
 
 	client, err := relayadmin.NewClient(relayadmin.Config{
-		Enabled:       true,
-		PrivateKeyHex: strings.TrimSpace(privateKey),
-		Targets:       bahiaOwnedTargets,
-		HTTPClient:    &http.Client{Timeout: 30 * time.Second},
+		Enabled:    true,
+		Signer:     adminSigner,
+		Targets:    bahiaOwnedTargets,
+		HTTPClient: &http.Client{Timeout: 30 * time.Second},
 	})
 	if err != nil {
 		logger.Warn("intent authors syncer disabled: relay admin client validation failed", zap.Error(err))

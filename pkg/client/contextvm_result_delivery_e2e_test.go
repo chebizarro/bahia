@@ -122,10 +122,9 @@ func newContextVMResultDeliveryHarness(t *testing.T, encrypted, dropFirstTermina
 	t.Helper()
 	operatorPrivateKey := nostr.Generate().Hex()
 	serviceSecret := nostr.Generate()
-	servicePrivateKey := serviceSecret.Hex()
 	serviceKeyer := keyer.NewPlainKeySigner(serviceSecret)
 	relay := &contextVME2ERelayTransport{relays: append([]contextVME2ERelay(nil), relays...), servicePubkey: serviceSecret.Public().Hex(), dropFirstTerminal: dropFirstTerminal}
-	responder := controlplane.NewEncryptedResponder(relay, serviceKeyer, servicePrivateKey, zap.NewNop())
+	responder := controlplane.NewEncryptedResponder(relay, serviceKeyer, zap.NewNop())
 	server := controlplane.NewEncryptedRequestTransport(nil, responder, []string{mustOperatorTestPubKey(t, operatorPrivateKey)}, zap.NewNop())
 	relay.server = server
 

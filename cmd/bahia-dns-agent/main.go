@@ -107,7 +107,11 @@ func run(args []string) error {
 		return fmt.Errorf("open DNS agent event store: %w", err)
 	}
 	defer store.Close()
-	pool := nostradapter.NewRelayPool(cfg.RelayURLs, logger, nostradapter.WithPrivateKey(normalizedKey))
+	agentKeyer, err := nostrutil.NewLocalKeyer(normalizedKey)
+	if err != nil {
+		return fmt.Errorf("configure DNS agent key: %w", err)
+	}
+	pool := nostradapter.NewRelayPool(cfg.RelayURLs, logger, nostradapter.WithAuthSigner(agentKeyer))
 	defer pool.Close()
 	transport, err := newRequestTransport(pool, store, normalizedKey, cfg.AuthorizedPubkey, logger)
 	if err != nil {
@@ -232,7 +236,7 @@ func newRequestTransport(pool *nostradapter.RelayPool, store *localstore.Store, 
 	if err != nil {
 		return nil, fmt.Errorf("create DNS agent signer: %w", err)
 	}
-	responder := controlplane.NewEncryptedResponder(pool, signer, privateKey, logger)
+	responder := controlplane.NewEncryptedResponder(pool, signer, logger)
 	return controlplane.NewEncryptedRequestTransport(pool, responder, []string{authorizedPubkey}, logger,
 		controlplane.WithContextVMLocalStore(store),
 	), nil

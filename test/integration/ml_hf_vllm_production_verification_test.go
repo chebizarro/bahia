@@ -17,6 +17,7 @@ import (
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"go.uber.org/zap"
 )
@@ -210,7 +211,7 @@ func verifyProductionRelayPath(ctx context.Context, t *testing.T) {
 		t.Fatalf("parse relay verification private key: %v", err)
 	}
 	pubkey := secret.Public()
-	pool := nostradapter.NewRelayPool(splitCSV(os.Getenv("BAHIA_ML_RELAY_URLS")), zap.NewNop(), nostradapter.WithPrivateKey(privateKey))
+	pool := nostradapter.NewRelayPool(splitCSV(os.Getenv("BAHIA_ML_RELAY_URLS")), zap.NewNop(), nostradapter.WithAuthSigner(keyer.NewPlainKeySigner(gonostr.MustSecretKeyFromHex(privateKey))))
 	defer pool.Close()
 
 	for _, relayURL := range pool.URLs() {
@@ -286,7 +287,7 @@ func verifyProductionRelayPath(ctx context.Context, t *testing.T) {
 
 func verifySingleRelayReadback(ctx context.Context, t *testing.T, relayURL string, privateKey string, event gonostr.Event, filter gonostr.Filter) {
 	t.Helper()
-	pool := nostradapter.NewRelayPool([]string{relayURL}, zap.NewNop(), nostradapter.WithPrivateKey(privateKey))
+	pool := nostradapter.NewRelayPool([]string{relayURL}, zap.NewNop(), nostradapter.WithAuthSigner(keyer.NewPlainKeySigner(gonostr.MustSecretKeyFromHex(privateKey))))
 	defer pool.Close()
 	pool.Connect(ctx)
 	if pool.ConnectedCount() != 1 {

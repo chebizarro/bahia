@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	"github.com/openagentsinc/bahia/internal/events"
 
 	"github.com/google/uuid"
@@ -379,8 +380,8 @@ func TestNostrDMSenderRejectsZeroRelayPublication(t *testing.T) {
 	}
 	recipient := secret.Public().Hex()
 	sender := &NostrDMSender{
-		privateKey: privateKey,
-		logger:     zap.NewNop(),
+		signer: keyer.NewPlainKeySigner(secret),
+		logger: zap.NewNop(),
 		publish: func(context.Context, nostr.Event) (int, error) {
 			return 0, nil
 		},

@@ -30,10 +30,7 @@ func (p *BackupCanonicalPublisher) StagePendingRun(ctx context.Context, intentID
 		p.runAdmission.localOutbox == nil || p.runAdmission.target != repository.NostrPublishTargetControlPlane {
 		return nil, fmt.Errorf("backup run pending inbox or service identity is unavailable")
 	}
-	servicePubkey, err := publicKeyHexFromPrivateKeyHex(p.projector.privateKey)
-	if err != nil {
-		return nil, err
-	}
+	servicePubkey := p.projector.servicePubkey
 	record, inserted, err := p.runAdmission.localOutbox.PutBackupRunPending(localstore.BackupRunPending{
 		IntentID: intentID, Coordinate: coordinate, RequestEvent: event, Actor: actor,
 		ServicePubkey: servicePubkey, ReceivedAt: time.Now().UTC(), ExpiresAt: expiresAt,

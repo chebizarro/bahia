@@ -107,10 +107,11 @@ func WithServiceKeys(pubkeys ...string) Option {
 	}
 }
 
-// WithPrivateKey configures the resolver to answer NIP-42 AUTH challenges from relays.
-func WithPrivateKey(privateKeyHex string) Option {
+// WithAuthSigner configures the resolver to answer NIP-42 AUTH challenges
+// from relays with signer.
+func WithAuthSigner(signer nostr.Signer) Option {
 	return func(r *Resolver) {
-		r.privateKey = strings.TrimSpace(privateKeyHex)
+		r.authSigner = signer
 	}
 }
 
@@ -136,7 +137,7 @@ type relayPool interface {
 	Close()
 }
 
-type relayPoolFactory func([]string, *zap.Logger, string) relayPool
+type relayPoolFactory func([]string, *zap.Logger, nostr.Signer) relayPool
 
 // Resolver maintains a live cache of DNS endpoints from Bahia's canonical kind
 // 30900 DNS endpoint state, in memory or (WithStorePath) backed by a local
@@ -151,7 +152,7 @@ type Resolver struct {
 	authorSet    map[string]struct{}
 
 	logger     *zap.Logger
-	privateKey string
+	authSigner nostr.Signer
 	// storePath enables the local event store (WithStorePath); store is the
 	// open handle while started.
 	storePath   string
@@ -252,7 +253,7 @@ func (r *Resolver) Start(ctx context.Context) error {
 		return nil
 	}
 
-	pool := r.poolFactory(r.relayURLs, r.logger, r.privateKey)
+	pool := r.poolFactory(r.relayURLs, r.logger, r.authSigner)
 	if r.storePath != "" {
 		if _, ok := pool.(*nostradapter.RelayPool); !ok {
 			pool.Close()
@@ -393,10 +394,10 @@ func (r *Resolver) RelayMetadata() map[string]RelayAdvisoryMetadata {
 	return out
 }
 
-func newRelayPool(relayURLs []string, logger *zap.Logger, privateKey string) relayPool {
+func newRelayPool(relayURLs []string, logger *zap.Logger, authSigner nostr.Signer) relayPool {
 	opts := []nostradapter.RelayPoolOption(nil)
-	if privateKey != "" {
-		opts = append(opts, nostradapter.WithPrivateKey(privateKey))
+	if authSigner != nil {
+		opts = append(opts, nostradapter.WithAuthSigner(authSigner))
 	}
 	return nostradapter.NewRelayPool(relayURLs, logger, opts...)
 }
@@ -446,8 +447,8 @@ func (r *Resolver) prepareRelays(ctx context.Context, pool relayPool) {
 			continue
 		}
 		r.logger.Info("relay NIP-11 metadata loaded", zap.String("relay", relayURL), zap.String("name", metadata.Name), zap.Ints("supported_nips", metadata.SupportedNIPs), zap.Strings("warnings", metadata.Warnings))
-		if metadata.Limitations.AuthRequired && r.privateKey == "" {
-			r.logger.Warn("relay metadata requires NIP-42 AUTH but resolver has no private key", zap.String("relay", relayURL))
+		if metadata.Limitations.AuthRequired && r.authSigner == nil {
+			r.logger.Warn("relay metadata requires NIP-42 AUTH but resolver has no AUTH signer", zap.String("relay", relayURL))
 		}
 	}
 	pool.Connect(ctx)

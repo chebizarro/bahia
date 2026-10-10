@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/stretchr/testify/require"
@@ -20,7 +21,7 @@ func TestDefaultIntentSubscriberColdRelayBecomesReady(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	// Intents (t=bahia-intent) are a protected topic on the default sidecar
 	// config; the daemon pool answers the NIP-42 challenge with the service key.
-	pool := nostrAdapter.NewRelayPool([]string{h.wsURL}, zap.NewNop(), nostrAdapter.WithPrivateKey(h.serviceKey.Hex()))
+	pool := nostrAdapter.NewRelayPool([]string{h.wsURL}, zap.NewNop(), nostrAdapter.WithAuthSigner(keyer.NewPlainKeySigner(h.serviceKey)))
 	t.Cleanup(pool.Close)
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()

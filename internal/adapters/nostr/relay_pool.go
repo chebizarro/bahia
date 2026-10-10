@@ -49,7 +49,6 @@ type RelayPool struct {
 	logger       *zap.Logger
 	ctx          context.Context
 	cancel       context.CancelFunc
-	privateKey   string // hex-encoded private key for NIP-42 AUTH (optional)
 	authSigner   nostr.Signer
 	authSignFunc func(context.Context, *nostr.Event) error
 	connectRelay func(context.Context, string, nostr.RelayOptions) (*nostr.Relay, error)
@@ -179,15 +178,10 @@ var defaultOutboundAdmission = nostrout.Default
 // RelayPoolOption configures a RelayPool.
 type RelayPoolOption func(*RelayPool)
 
-// WithPrivateKey sets the private key for NIP-42 AUTH.
-// The key should be hex-encoded. When set, AuthenticateRelay() can be called
-// to respond to auth-required errors detected via PublishResult.IsAuthRequired().
-func WithPrivateKey(privateKeyHex string) RelayPoolOption {
-	return func(p *RelayPool) { p.privateKey = privateKeyHex }
-}
-
-// WithAuthSigner sets a signer for NIP-42 AUTH without requiring local
-// identity key material. It is intended for remote signers such as NIP-46.
+// WithAuthSigner sets the signer that answers NIP-42 AUTH challenges: the
+// injected service Keyer (local, NIP-46 or NIP-55L). When set,
+// AuthenticateRelay() can be called to respond to auth-required errors
+// detected via PublishResult.IsAuthRequired().
 func WithAuthSigner(signer nostr.Signer) RelayPoolOption {
 	return func(p *RelayPool) { p.authSigner = signer }
 }
@@ -2757,7 +2751,7 @@ func (p *RelayPool) buildRelayOptions(relayURL string) nostr.RelayOptions {
 }
 
 func (p *RelayPool) hasAuthSigner() bool {
-	return p.privateKey != "" || p.authSigner != nil || p.authSignFunc != nil
+	return p.authSigner != nil || p.authSignFunc != nil
 }
 
 func (p *RelayPool) signAuthEvent(ctx context.Context, event *nostr.Event) error {
@@ -2767,7 +2761,7 @@ func (p *RelayPool) signAuthEvent(ctx context.Context, event *nostr.Event) error
 	case p.authSigner != nil:
 		return p.authSigner.SignEvent(ctx, event)
 	default:
-		return signEventWithPrivateKeyHex(event, p.privateKey)
+		return errors.New("nostr relay pool has no NIP-42 AUTH signer")
 	}
 }
 

@@ -758,7 +758,7 @@ func TestLoomStatusProofLeasePinsAdmissionAgainstInvalidation(t *testing.T) {
 	archive := &blockingArchiveRepo{called: make(chan struct{}), release: make(chan struct{})}
 	t.Cleanup(func() { close(archive.release) })
 	outbox := openDeliveryTestOutbox(t)
-	publisher := NewPublisher(config.NostrConfig{PrivateKey: gonostr.Generate().Hex(), PublishEnabled: true},
+	publisher := newKeyedTestPublisher(config.NostrConfig{PrivateKey: gonostr.Generate().Hex(), PublishEnabled: true},
 		pool, archive, zap.NewNop(), WithLocalOutbox(outbox, nil))
 	event := &gonostr.Event{Kind: gonostr.Kind(KindNIP38Status), CreatedAt: gonostr.Now(),
 		Tags: gonostr.Tags{{"d", "run-1"}, {"t", "deployment.run.health"}}, Content: `{"state":"stale"}`}
@@ -899,7 +899,7 @@ func TestInboundSyncCatchesUpAnAuthRequiredRelayThroughThePoolAuthHandler(t *tes
 	}
 	ev := syncTestEvent(t, gonostr.Generate(), syncTestRegularKind, gonostr.Now()-60, nil, "behind NIP-42")
 	relay.add(t, ev)
-	pool := NewRelayPool([]string{relay.url}, zap.NewNop(), WithPrivateKey(gonostr.Generate().Hex()))
+	pool := NewRelayPool([]string{relay.url}, zap.NewNop(), WithAuthSigner(mustLocalKeyer(gonostr.Generate().Hex())))
 	pool.newReconnectBackoff = fastTestBackoff
 	defer pool.Close()
 

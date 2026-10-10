@@ -14,15 +14,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"fiatjaf.com/nostr"
 )
 
 // Config holds Blossom client configuration.
 type Config struct {
-	Servers       []string      // List of Blossom server URLs for redundancy
-	MaxRetries    int           // Max retries per server (default: 3)
-	RetryDelay    time.Duration // Delay between retries (default: 1s)
-	Timeout       time.Duration // HTTP timeout (default: 30s)
-	PrivateKeyHex string        // Nostr private key for auth (optional for public reads)
+	Servers    []string      // List of Blossom server URLs for redundancy
+	MaxRetries int           // Max retries per server (default: 3)
+	RetryDelay time.Duration // Delay between retries (default: 1s)
+	Timeout    time.Duration // HTTP timeout (default: 30s)
+	Signer     nostr.Signer  // BUD-11 auth signer (optional for public reads)
 }
 
 // Client is a Blossom media server client with multi-server redundancy.
@@ -31,7 +33,7 @@ type Client struct {
 	maxRetries    int
 	retryDelay    time.Duration
 	httpClient    *http.Client
-	privateKey    string
+	signer        nostr.Signer
 	observeUpload func(context.Context, BlobDescriptor) error
 	logger        *slog.Logger
 
@@ -107,9 +109,9 @@ func NewClient(cfg Config, logger *slog.Logger) *Client {
 		httpClient: &http.Client{
 			Timeout: cfg.Timeout,
 		},
-		privateKey: cfg.PrivateKeyHex,
-		logger:     logger,
-		stats:      make(map[string]*serverStats),
+		signer: cfg.Signer,
+		logger: logger,
+		stats:  make(map[string]*serverStats),
 	}
 }
 
@@ -164,7 +166,7 @@ func (c *Client) checkServer(ctx context.Context, server string) error {
 }
 
 func (c *Client) applyAuthHeader(ctx context.Context, req *http.Request, method, payloadHash string) error {
-	if c.privateKey == "" {
+	if c.signer == nil {
 		return nil
 	}
 	authHeader, err := c.createAuthHeader(ctx, req.URL.String(), method, payloadHash)

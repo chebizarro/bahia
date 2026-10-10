@@ -43,10 +43,7 @@ func TestPublishMemberRotationFailurePreventsCanonicalRecord(t *testing.T) {
 				org := uuid.New()
 				sink := &captureProjectionPublisher{}
 				projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
-				pubkey, err := publicKeyHexFromPrivateKeyHex(projector.privateKey)
-				if err != nil {
-					t.Fatal(err)
-				}
+				pubkey := projector.servicePubkey
 				projector.history = &fakeProjectionHistory{records: map[string][]repository.NostrEventRecord{
 					"t:" + kinds.CPStateTopicOrgRegistry: {refoundingRecord(t, pubkey, org.String(), "v1", org.String(), kinds.CPStateTopicOrgRegistry, "")},
 				}}
@@ -107,10 +104,7 @@ func TestPublishMemberStrictRefoundingFailurePreservesMembership(t *testing.T) {
 		}
 		return sink.Publish(ctx, event)
 	}), nil, zap.NewNop())
-	pubkey, err := publicKeyHexFromPrivateKeyHex(projector.privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pubkey := projector.servicePubkey
 	projector.history = &fakeProjectionHistory{records: map[string][]repository.NostrEventRecord{
 		"t:" + kinds.CPStateTopicOrgRegistry: {refoundingRecord(t, pubkey, org.String(), "v1", org.String(), kinds.CPStateTopicOrgRegistry, "")},
 	}}
@@ -170,10 +164,7 @@ func TestOrgRefoundingRepublishesTwoOldVersionsOnSameCoordinates(t *testing.T) {
 	other := uuid.New().String()
 	sink := &captureProjectionPublisher{}
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
-	pubkey, err := publicKeyHexFromPrivateKeyHex(projector.privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pubkey := projector.servicePubkey
 	history := &fakeProjectionHistory{records: map[string][]repository.NostrEventRecord{
 		"t:" + kinds.CPStateTopicOrgMemberRegistry: {
 			refoundingRecord(t, pubkey, org, "v2", "member-1", kinds.CPStateTopicOrgMemberRegistry, ""),
@@ -229,10 +220,7 @@ func TestOrgPublishMemberStrictRevocationToggle(t *testing.T) {
 				org := uuid.New()
 				sink := &captureProjectionPublisher{}
 				projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
-				pubkey, err := publicKeyHexFromPrivateKeyHex(projector.privateKey)
-				if err != nil {
-					t.Fatal(err)
-				}
+				pubkey := projector.servicePubkey
 				projector.history = &fakeProjectionHistory{records: map[string][]repository.NostrEventRecord{
 					"t:" + kinds.CPStateTopicOrgRegistry: {refoundingRecord(t, pubkey, org.String(), "v1", org.String(), kinds.CPStateTopicOrgRegistry, "")},
 				}}
@@ -264,10 +252,7 @@ func TestOrgRefoundingReplacesStoredCoordinate(t *testing.T) {
 	sink := &captureProjectionPublisher{}
 	repo := NewLocalEventRepository(openTestLocalStore(t, ""), nil)
 	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, repo, zap.NewNop())
-	pubkey, err := publicKeyHexFromPrivateKeyHex(projector.privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pubkey := projector.servicePubkey
 	projector.history = repo.Authored(pubkey)
 	encryptor := &refoundingEncryptor{version: 1}
 	content, err := encryptor.EncryptConfidential(ctx, org, []byte(`{"id":"record"}`), KindOrgRegistry, org, kinds.CPStateTopicOrgRegistry, nil)

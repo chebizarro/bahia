@@ -82,7 +82,7 @@ func (h *relayFirstHarness) republishRegistrySnapshot(t *testing.T) {
 // relay, sink, and no outbox: PublishBeforeCommit's round goes to sink.
 func newRelayFirstTestPublisher(sink *captureProjectionPublisher) *Publisher {
 	const relayURL = "wss://relay-first.test"
-	publisher := NewPublisher(config.NostrConfig{PrivateKey: projectorTestPrivateKey}, NewRelayPool([]string{relayURL}, zap.NewNop()), nil, zap.NewNop())
+	publisher := newKeyedTestPublisher(config.NostrConfig{PrivateKey: projectorTestPrivateKey}, NewRelayPool([]string{relayURL}, zap.NewNop()), nil, zap.NewNop())
 	publisher.publishFn = func(ctx context.Context, ev gonostr.Event, urls []string) ([]PublishResult, error) {
 		accepted, err := sink.Publish(ctx, ev)
 		return []PublishResult{{RelayURL: relayURL, Accepted: accepted > 0, Error: err}}, nil

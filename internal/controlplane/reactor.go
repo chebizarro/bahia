@@ -128,9 +128,6 @@ type Config struct {
 	Relays []string
 	// AdditionalRelays is the supplemental relay URL list for draft/provisioning events.
 	AdditionalRelays []string
-	// PrivateKey is the hex-encoded key used only when this reactor must create
-	// its own relay pool with NIP-42 AUTH support. Event signing uses Signer.
-	PrivateKey string
 	// AuthorizedPubkeys is the list of pubkeys allowed to submit requests.
 	AuthorizedPubkeys []string
 	// AdoptionAuthorizedPubkeys is the adoption-specific operator allowlist.
@@ -369,8 +366,8 @@ func WithDNSOperator(op DNSControlPlaneOperator) ReactorOption {
 
 // NewReactor creates a new Bahia control plane reactor.
 // If pool is nil, a new pool will be created from the config relays.
-// signer is required for event signing. If pool is nil, config.PrivateKey is
-// only used to configure relay AUTH on the created pool.
+// signer is the injected service Keyer: it signs every reactor event and, when
+// pool is nil, answers NIP-42 AUTH on the created pool.
 func NewReactor(config Config, registry *service.RegistryService, pool *nostrpool.RelayPool, signer nostr.Signer, zapLog *zap.Logger, opts ...ReactorOption) *Reactor {
 	if zapLog == nil {
 		zapLog = zap.NewNop()
@@ -379,8 +376,8 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 	// Use provided pool or create a new one
 	if pool == nil {
 		poolOpts := []nostrpool.RelayPoolOption{}
-		if config.PrivateKey != "" {
-			poolOpts = append(poolOpts, nostrpool.WithPrivateKey(config.PrivateKey))
+		if signer != nil {
+			poolOpts = append(poolOpts, nostrpool.WithAuthSigner(signer))
 		}
 
 		// Copy slices to avoid mutating config's backing array
