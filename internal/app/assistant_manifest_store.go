@@ -109,14 +109,24 @@ func loadAssistantWrappedKeyManifest(path string) (AssistantWrappedKeyManifest, 
 	if err := unix.Fstat(fd, &info); err != nil {
 		return AssistantWrappedKeyManifest{}, fmt.Errorf("stat assistant key manifest: %w", err)
 	}
-	if info.Mode&unix.S_IFMT != unix.S_IFREG || info.Mode&0777 != 0600 || info.Nlink != 1 || info.Uid != uint32(os.Geteuid()) || info.Size <= 0 || info.Size > maxAssistantManifestBytes {
-		return AssistantWrappedKeyManifest{}, errors.New("assistant key manifest is not a singly linked bounded private regular file owned by this user")
+	if info.Mode&unix.S_IFMT != unix.S_IFREG || info.Mode&0777 != 0600 || info.Uid != uint32(os.Geteuid()) || info.Size <= 0 || info.Size > maxAssistantManifestBytes {
+		return AssistantWrappedKeyManifest{}, errors.New("assistant key manifest is not a bounded private regular file owned by this user")
+	}
+	if info.Nlink == 2 {
+		if err := recoverAssistantManifestTempLink(dir, fd, &info); err != nil {
+			return AssistantWrappedKeyManifest{}, err
+		}
+	} else if info.Nlink != 1 {
+		return AssistantWrappedKeyManifest{}, errors.New("assistant key manifest has unrecognized hard links")
 	}
 	encoded, err := io.ReadAll(io.LimitReader(f, maxAssistantManifestBytes+1))
 	if err != nil || len(encoded) > maxAssistantManifestBytes {
 		return AssistantWrappedKeyManifest{}, errors.New("assistant key manifest read failed or exceeded size bound")
 	}
 	if err := verifyAssistantManifestDirPinned(path, dir); err != nil {
+		return AssistantWrappedKeyManifest{}, err
+	}
+	if err := verifyAssistantManifestFinalName(dir, name, &info); err != nil {
 		return AssistantWrappedKeyManifest{}, err
 	}
 	var fields map[string]json.RawMessage
@@ -148,6 +158,72 @@ func loadAssistantWrappedKeyManifest(path string) (AssistantWrappedKeyManifest, 
 		return AssistantWrappedKeyManifest{}, err
 	}
 	return manifest, nil
+}
+
+// recoverAssistantManifestTempLink accepts only the exact crash window after
+// the final hard link was synced but before the generated temp name was
+// removed. A second link outside this private directory, or a different temp
+// inode, is not recoverable evidence and remains a hard failure.
+func recoverAssistantManifestTempLink(dir *os.File, finalFD int, final *unix.Stat_t) error {
+	entries, err := dir.ReadDir(-1)
+	if err != nil {
+		return fmt.Errorf("scan assistant key temp aliases: %w", err)
+	}
+	matching := ""
+	for _, entry := range entries {
+		name := entry.Name()
+		const prefix = ".assistant-key-manifest-"
+		if !strings.HasPrefix(name, prefix) || len(name) != len(prefix)+32 {
+			continue
+		}
+		if _, err := hex.DecodeString(strings.TrimPrefix(name, prefix)); err != nil {
+			continue
+		}
+		candidateFD, err := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return fmt.Errorf("open assistant key recovery alias: %w", err)
+		}
+		var candidate unix.Stat_t
+		statErr := unix.Fstat(candidateFD, &candidate)
+		unix.Close(candidateFD)
+		if statErr != nil {
+			return fmt.Errorf("stat assistant key recovery alias: %w", statErr)
+		}
+		if candidate.Dev != final.Dev || candidate.Ino != final.Ino {
+			continue
+		}
+		if candidate.Mode&unix.S_IFMT != unix.S_IFREG || candidate.Mode&0777 != 0600 || candidate.Uid != uint32(os.Geteuid()) || candidate.Nlink != 2 || matching != "" {
+			return errors.New("assistant key recovery alias is not the unique private temp link")
+		}
+		matching = name
+	}
+	if matching == "" {
+		return errors.New("assistant key manifest has an unrecognized second hard link")
+	}
+	if err := unix.Unlinkat(int(dir.Fd()), matching, 0); err != nil {
+		return fmt.Errorf("remove assistant key crash-window temp alias: %w", err)
+	}
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("sync assistant key recovery cleanup: %w", err)
+	}
+	var current unix.Stat_t
+	if err := unix.Fstat(finalFD, &current); err != nil || current.Dev != final.Dev || current.Ino != final.Ino || current.Nlink != 1 {
+		return errors.New("assistant key manifest did not become singly linked after recovery")
+	}
+	return nil
+}
+
+func verifyAssistantManifestFinalName(dir *os.File, name string, opened *unix.Stat_t) error {
+	fd, err := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("reopen assistant key final name: %w", err)
+	}
+	defer unix.Close(fd)
+	var current unix.Stat_t
+	if err := unix.Fstat(fd, &current); err != nil || current.Dev != opened.Dev || current.Ino != opened.Ino || current.Nlink != 1 {
+		return errors.New("assistant key final name changed during read")
+	}
+	return nil
 }
 
 func openTrustedAssistantManifestDir(path string) (*os.File, string, error) {

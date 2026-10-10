@@ -142,8 +142,10 @@ available.
 `assistant_manifest_store.go` stores one manifest in an existing private
 filesystem directory: a synced `0600` temp file is linked to the final path
 without replacement, then the directory is synced. Operations pin the owner-
-private directory handle; symlinked ancestors and multi-linked manifests are
-rejected. Missing, corrupt, loose-permission or wrong-generation files fail
+private directory handle; symlinked ancestors and unrecognized hard links are
+rejected. If a crash leaves exactly one generated same-inode temp hard link,
+restart removes that verified alias, syncs the directory and then loads the
+committed file. Missing, corrupt, loose-permission or wrong-generation files fail
 closed. A caller must retain the
 v2 generation pin independently to detect rollback to a different valid file.
 The manifest opener is **read-only**: `ActiveTranscriptKey` rejects new writes.

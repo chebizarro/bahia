@@ -125,18 +125,30 @@ func TestAssistantManifestStoreCrashMissingCorruptAndInsecure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A linked but not yet cleaned up temp remains readable on restart.
-	if err := os.Link(path, filepath.Join(filepath.Dir(path), ".assistant-key-manifest-linked")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadAssistantWrappedKeyManifest(path); err == nil {
-		t.Fatal("multi-linked manifest accepted before temp cleanup")
-	}
-	if err := os.Remove(filepath.Join(filepath.Dir(path), ".assistant-key-manifest-linked")); err != nil {
+	// A crash after the final link's directory sync but before temp cleanup
+	// leaves exactly one generated same-inode temp alias. Restart removes it.
+	tempAlias := filepath.Join(filepath.Dir(path), ".assistant-key-manifest-0123456789abcdef0123456789abcdef")
+	if err := os.Link(path, tempAlias); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loadAssistantWrappedKeyManifest(path); err != nil {
+		t.Fatalf("committed crash-window manifest was not recovered: %v", err)
+	}
+	if _, err := os.Lstat(tempAlias); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recovered temp alias still exists: %v", err)
+	}
+	if _, err := loadAssistantWrappedKeyManifest(path); err != nil {
 		t.Fatalf("committed manifest unreadable after cleanup: %v", err)
+	}
+	unknownAlias := filepath.Join(filepath.Dir(path), "external-alias")
+	if err := os.Link(path, unknownAlias); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadAssistantWrappedKeyManifest(path); err == nil {
+		t.Fatal("unrecognized external hard link accepted")
+	}
+	if err := os.Remove(unknownAlias); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
 		t.Fatal(err)
