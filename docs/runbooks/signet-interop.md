@@ -1,14 +1,16 @@
-# Live Signet standard NIP-46 interop proof
+# Live NIP-46 service signer interop proof (Signet as the bunker)
 
 **A passing disposable run is not activation authorization.**
 
-This is an opt-in, **live NIP-46** test of Bahia's fenced Signet service
-signer (`sign_event`, `nip44_encrypt`, `nip44_decrypt`, `nip44_encrypt_b64`),
-event-signed SBOM attestations, and the read-only wrapped-key assistant
-startup path, against a real `signetd`. It does not activate remote signing
-in Bahia, deploy a daemon, or remove a service key. Its only target is a
-disposable, synthetic Signet identity on a private loopback relay. Bahia owns
-the runner; Signet is an input.
+This is an opt-in, **live NIP-46** test of Bahia's service signer
+(`servicesigner.Open` with `nostr.signer.method=nip46`: `get_public_key`,
+`sign_event`, `nip44_encrypt`, `nip44_decrypt`, `nip44_encrypt_b64`,
+`nip44_decrypt_b64`), event-signed SBOM attestations, and the read-only
+wrapped-key assistant startup path, against a real `signetd`. Signet is only
+the bunker under test; Bahia uses nothing Signet-specific. The run does not
+deploy a daemon or remove a service key. Its only target is a disposable,
+synthetic identity on a private loopback relay. Bahia owns the runner; Signet
+is an input.
 
 ## Run it
 
@@ -43,28 +45,32 @@ the Bahia and Signet commits. Runner guard tests (no daemon):
    with a fresh SQLCipher store, a random DB key, and synthetic bunker and
    provisioner keys, all in a mode-`0700` temporary directory that is
    removed on exit. The identity policy allows only `connect`,
-   `get_public_key`, `sign_event`, `nip44_encrypt`, `nip44_decrypt` and
-   `nip44_encrypt_b64`.
+   `get_public_key`, `sign_event`, `nip44_encrypt`, `nip44_decrypt`,
+   `nip44_encrypt_b64` and `nip44_decrypt_b64`.
 2. Adopts a synthetic service key through the provisioner-authenticated
    `signetctl adopt-existing` path (secret on stdin) and checks the pairing
    URI pins the bunker pubkey and only the loopback relay.
 3. `signetctl writer-acquire <agent> <first-client-pubkey>` (no TTL), then
-   runs `TestLiveSignetAssignedWriterSigns`: the first client pairs and signs.
+   runs `TestLiveNIP46AssignedWriterSigns`: Bahia opens its service signer
+   with the first client key and signs.
 4. `signetctl reissue-connect --out` mints a second one-time connect secret
    (written `0600`), and `writer-acquire` reassigns the writer to a second,
-   single-use client key. Runs `TestLiveSignetStandardNIP46ServiceSigner`:
-   the writer checks the pinned service pubkey, signs an event, round-trips
-   text and binary NIP-44 (each result cross-checked with a local NIP-44
+   single-use client key. Runs `TestLiveNIP46ServiceSigner`: opening with a
+   wrong `nostr.public_key` fails; the writer's signer reports the pinned
+   service pubkey, signs an event, round-trips text and binary NIP-44 in both
+   directions (each result cross-checked with a local NIP-44
    implementation), and signs and verifies an SBOM attestation event. The
-   displaced first client then reconnects through its existing pairing and
-   sends `sign_event` and every NIP-44 method; each requires an empty result,
-   a decrypted NIP-46 remote-error response (not a transport/context error),
-   and a still-live bunker ping.
+   displaced first client still opens (the identity is public) but
+   `sign_event` and every NIP-44 method are refused with a decrypted NIP-46
+   remote error, never reported as unsupported, and the request event is
+   unchanged; the writer still signs afterwards, and a signer whose context
+   ended refuses locally.
 5. Compiles the app test binary and runs
-   `TestLiveAssistantWrappedStartupHistoricalReads` through the writer, with
-   the synthetic service secret supplied **only on stdin**. It proves
-   historical transcript and checkpoint reads, no raw-key fallback or new
-   writes, and bootstrap client closure.
+   `TestLiveAssistantWrappedStartupHistoricalReads` through the NIP-46 service
+   signer, with the synthetic service secret supplied **only on stdin** (only
+   to create the legacy v1 key and the manifest). It proves historical
+   transcript and checkpoint reads through both the shared signer and the
+   startup path, and no raw-key fallback or new writes.
 
 A test counts only if `go test -json` (or `go tool test2json` for the app
 binary) shows exactly one Run and one Pass for that named test; an exit-zero
@@ -93,8 +99,8 @@ provisioned yourself, use the same shape in a non-repository file:
 
 ```bash
 BAHIA_SIGNET_INTEROP_CONFIG=/path/outside/repo/fixture.json \
-  go test -tags signetinterop ./internal/adapters/signet \
-  -run '^TestLiveSignetStandardNIP46ServiceSigner$' -count=1 -v
+  go test -tags signetinterop ./internal/servicesigner \
+  -run '^TestLiveNIP46ServiceSigner$' -count=1 -v
 ```
 
 Each bunker URI must pin `expected_bunker_pubkey` and have exactly one `ws://`
@@ -106,6 +112,6 @@ single-use). Local URI validation errors never echo the URI or secret.
 
 This proof does not certify the daemon binary beyond the pinned source
 commit, or prove Signet restart or revocation behavior. A passing run is not
-authorization to enable Bahia's remote signer or remove its raw key. Bahia
-still requires `nostr.private_key` and the raw control-plane signer; the
-wrapped assistant mode is read-only and does not remove those dependencies.
+authorization to remove a production service key. Configuring a remote
+signer is described in [`service-signer.md`](service-signer.md); the wrapped
+assistant mode remains read-only.

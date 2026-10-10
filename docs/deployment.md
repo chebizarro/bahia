@@ -56,6 +56,7 @@ Important defaults:
 | `db.password`, `db.sslmode` | empty, `require` |
 | `nostr.publish_enabled`, `publish_quorum` | `true`, `1` |
 | `nostr.closed_retry_budget` | `5` |
+| `nostr.signer.method` | empty = `local` when `nostr.private_key` is set; `nip46` or `nip55l` keep the service key in a remote signer, see the [service signer runbook](runbooks/service-signer.md) |
 | `nostr.outbound.kill_switch_file` | empty (also `BAHIA_NOSTR_OUTBOUND_KILL_SWITCH_FILE`) |
 | `nostr.outbound` budgets | aggregate `45`/min burst `15`; per-relay wire `40`/min burst `13` + priority share `15`/`5`; see the [outbound admission runbook](runbooks/nostr-outbound-admission.md) |
 | `nostr.relay_auth_unavailable` | `exclude_and_fail` |

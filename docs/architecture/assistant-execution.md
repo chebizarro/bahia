@@ -134,7 +134,7 @@ one `AssistantTranscriptKeyProvider`. The deployed v1 provider derives its
 XChaCha20 key from `nostr.private_key`. An offline transition primitive in
 `internal/app/assistant_wrapped_keys.go` obtains exactly that v1 key from the
 matching service configuration, generates a random versioned v2 key, and
-NIP-44-wraps both through the writer-fenced Signet service signer. The wrapped
+NIP-44-wraps both through the service signer (`nostr.signer`). The wrapped
 manifest retains the service pubkey and exact key identities; immutable v1
 relay events can be read after the nsec is removed only if the v1 wrap remains
 available.
@@ -151,16 +151,14 @@ v2 generation pin independently to detect rollback to a different valid file.
 The manifest opener is **read-only**: `ActiveTranscriptKey` rejects new writes.
 Assistant startup defaults to the deployed v1 provider. Explicit
 `assistant.wrapped_keys.mode=wrapped_read_only` instead requires a local
-manifest path, independently pinned v2 generation, real Signet bunker URI,
-dedicated NIP-46 owner key that Signet has assigned as the identity's writer
-(`agent/writer-acquire`); startup carries no lease epoch or expiry and checks
-only that the owner key differs from the service key. Startup validates the
-manifest, connects to Signet, unwraps both keys under the existing service
-pubkey, then closes the bootstrap connection. It never falls back to the raw
-key provider in this mode. Transcript and checkpoint reads are available,
-but assistant work that needs a new encrypted event fails closed; this mode
-is not a fully functional assistant or service-key cutover. The daemon still
-requires `nostr.private_key` and its raw control-plane signer for other paths;
-selecting this read-only mode does not remove or replace either. Writer activation
+manifest path, an independently pinned v2 generation and a configured service
+signer (any `nostr.signer` method; see
+[`service-signer.md`](service-signer.md)). Startup validates the manifest and
+unwraps both keys through the service signer under the existing service
+pubkey. It never falls back to the raw key provider in this mode, and a
+remote signer requires it, because `legacy_v1` derives keys from the raw
+nsec. Transcript and checkpoint reads are available, but assistant work that
+needs a new encrypted event fails closed; this mode is not a fully functional
+assistant. Writer activation
 requires a create-once provisioned generation and complete transcript and
 checkpoint read-write restart tests.
