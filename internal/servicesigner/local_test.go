@@ -86,7 +86,7 @@ func TestOpenNIP55LUsesInjectedConstructorAndVerifiesIdentity(t *testing.T) {
 	signer, err := Open(t.Context(), cfg, Options{NewNIP55L: func(_ context.Context, c NIP55LConfig) (nostr.Keyer, error) { got = c; return stub, nil }})
 	require.NoError(t, err)
 	require.Same(t, stub, signer)
-	require.Equal(t, NIP55LConfig{ServicePubkey: testService.Public(), AppID: "bahia", BusAddress: "unix:path=/tmp/bus", CallTimeout: defaultTimeout}, got)
+	require.Equal(t, NIP55LConfig{ServicePubkey: testService.Public(), AppID: "bahia", BusAddress: "unix:path=/tmp/bus", CallTimeout: defaultNIP55LTimeout}, got)
 
 	wrong := &stubKeyer{pubkey: testClient.Public()}
 	_, err = Open(t.Context(), cfg, Options{NewNIP55L: func(context.Context, NIP55LConfig) (nostr.Keyer, error) { return wrong, nil }})

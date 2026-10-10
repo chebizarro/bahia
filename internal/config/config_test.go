@@ -2687,8 +2687,14 @@ func TestSecretDependentFeatureValidationRequiresNostrPrivateKey(t *testing.T) {
 		cfg.Auth.Enabled = true
 		cfg.Adoption.Enabled = true
 		cfg.Adoption.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
-		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "service signer (nostr.private_key or nostr.signer) is required when adoption.enabled=true") {
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "adoption.enabled=true requires the local service signer") {
 			t.Fatalf("validate error = %v, want nostr private key requirement", err)
+		}
+		// A remote signer cannot serve the raw-key-derived secret store.
+		cfg.Nostr.PublicKey = strings.Repeat("cd", 32)
+		cfg.Nostr.Signer.Method = NostrSignerNIP55L
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "adoption.enabled=true requires the local service signer") || !strings.Contains(err.Error(), "bahia-cd0wr.4.7") {
+			t.Fatalf("remote signer validate error = %v, want local signer requirement", err)
 		}
 	})
 
@@ -2697,8 +2703,13 @@ func TestSecretDependentFeatureValidationRequiresNostrPrivateKey(t *testing.T) {
 		cfg.Auth.Enabled = true
 		cfg.DirectRuntime.Enabled = true
 		cfg.DirectRuntime.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
-		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "service signer (nostr.private_key or nostr.signer) is required when direct_runtime_actions.enabled=true") {
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "direct_runtime_actions.enabled=true requires the local service signer") {
 			t.Fatalf("validate error = %v, want nostr private key requirement", err)
+		}
+		cfg.Nostr.PublicKey = strings.Repeat("cd", 32)
+		cfg.Nostr.Signer.Method = NostrSignerNIP55L
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "direct_runtime_actions.enabled=true requires the local service signer") {
+			t.Fatalf("remote signer validate error = %v, want local signer requirement", err)
 		}
 	})
 }

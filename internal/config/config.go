@@ -2103,8 +2103,10 @@ func (c *Config) validate() error {
 		if err := validateSignerFirstOperatorAllowlist("adoption", &c.Adoption.OperatorAccessConfig); err != nil {
 			return err
 		}
-		if !c.Nostr.HasServiceIdentity() {
-			return fmt.Errorf("config validation failed: a service signer (nostr.private_key or nostr.signer) is required when adoption.enabled=true because adopted workload secret import requires encryption")
+		if c.Nostr.ServiceSignerMethod() != NostrSignerLocal {
+			// The secret store's key is HKDF-derived from the raw service key
+			// until bahia-cd0wr.4.7 lands, so a remote signer cannot serve it.
+			return fmt.Errorf("config validation failed: adoption.enabled=true requires the local service signer (nostr.private_key) because adopted workload secret import requires encryption and the secret store is still keyed from the raw service key (bahia-cd0wr.4.7)")
 		}
 	}
 	for name, endpoint := range c.Runtime.Endpoints {
@@ -2128,8 +2130,10 @@ func (c *Config) validate() error {
 		if err := validateSignerFirstOperatorAllowlist("direct_runtime_actions", &c.DirectRuntime.OperatorAccessConfig); err != nil {
 			return err
 		}
-		if !c.Nostr.HasServiceIdentity() {
-			return fmt.Errorf("config validation failed: a service signer (nostr.private_key or nostr.signer) is required when direct_runtime_actions.enabled=true because runtime secret handling requires encryption")
+		if c.Nostr.ServiceSignerMethod() != NostrSignerLocal {
+			// The secret store's key is HKDF-derived from the raw service key
+			// until bahia-cd0wr.4.7 lands, so a remote signer cannot serve it.
+			return fmt.Errorf("config validation failed: direct_runtime_actions.enabled=true requires the local service signer (nostr.private_key) because runtime secret handling requires encryption and the secret store is still keyed from the raw service key (bahia-cd0wr.4.7)")
 		}
 	}
 	if c.OCI.Enabled {

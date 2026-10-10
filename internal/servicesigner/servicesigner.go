@@ -28,7 +28,10 @@ var _ BinaryCipher = nostrutil.LocalKeyer{}
 // nostr.private_key nor nostr.signer.method is set.
 var ErrNotConfigured = errors.New("no service signer configured (nostr.private_key or nostr.signer)")
 
-const defaultTimeout = 30 * time.Second
+const (
+	defaultTimeout       = 30 * time.Second
+	defaultNIP55LTimeout = 330 * time.Second
+)
 
 // BinaryCipher is the optional binary-safe NIP-44 capability. NIP-46 carries
 // params as JSON strings, so arbitrary bytes cannot ride Encrypt/Decrypt;
@@ -65,9 +68,15 @@ type Options struct {
 // when it is unset). A mismatch is fatal: it would silently change Bahia's
 // identity. A remote signer's session lives as long as ctx.
 func Open(ctx context.Context, cfg config.NostrConfig, opts Options) (nostr.Keyer, error) {
+	method := cfg.ServiceSignerMethod()
 	timeout := cfg.Signer.Timeout
 	if timeout <= 0 {
 		timeout = defaultTimeout
+		if method == config.NostrSignerNIP55L {
+			// Unvalidated configs (tools, tests) still honour the NIP-55L
+			// approval window.
+			timeout = defaultNIP55LTimeout
+		}
 	}
 	var expected nostr.PubKey
 	if cfg.PublicKey != "" {
@@ -77,7 +86,6 @@ func Open(ctx context.Context, cfg config.NostrConfig, opts Options) (nostr.Keye
 		}
 		expected = pubkey
 	}
-	method := cfg.ServiceSignerMethod()
 	if method != "" && method != config.NostrSignerLocal && expected == nostr.ZeroPK {
 		return nil, fmt.Errorf("nostr.signer.method=%s requires nostr.public_key", method)
 	}
