@@ -31,9 +31,18 @@ verifier can authenticate an independent attestor claim for this exact
 PostgreSQL database, but it cannot verify live backup object retention,
 revocation, or credential recovery before each deletion batch. Generic `backup_runs` and `backup_restores` records can describe
 unrelated workload targets; their success is not a database backup receipt.
-The deletion gate remains blocked until the attestor is operational and
-current object custody and credential recovery can be independently rechecked
-in a transactional, restart-safe bounded deletion path. This runbook
+Migration `000081_f74a_confirmed_deletion_seam` adds a private, restartable
+keyset batch/journal seam for already archived hot observations. The seam
+rechecks the archive payload digest, state link, material predecessor, receipt
+identity and physical PostgreSQL identity in each transaction; failed batch
+work rolls back with its cursor. It asks an independent live backup authority
+before work and again before commit. There is deliberately **no production
+implementer or CLI caller**: a signed receipt and local file hash do not prove
+live retention, revocation or credential recovery, and a non-fenced status
+check could race revocation after its last response. `--confirm` remains
+refused before SQL connection. The deletion gate remains blocked until an
+independently operated authority can provide fenced custody/revocation and
+credential-recovery evidence through each commit. This runbook
 applies only to a Bahia image exposing both read-only actions. If either
 action is absent, stop: the older image cannot perform this procedure. PostgreSQL is a
 derived index; preserve the service key, relay-held canonical records, and

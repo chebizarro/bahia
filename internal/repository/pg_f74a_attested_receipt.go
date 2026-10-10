@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -82,6 +83,7 @@ type F74aAttestedBackupReceipt struct {
 
 type F74aReceiptVerification struct {
 	ReceiptID          uuid.UUID
+	ReceiptSHA256      string
 	SourceDatabase     F74aDatabaseIdentity
 	Cutoff             time.Time
 	InventorySHA256    string
@@ -161,8 +163,9 @@ func VerifyF74aAttestedReceipt(ctx context.Context, pool *pgxpool.Pool, pinnedAt
 	if inventory.InventorySHA256 != p.SourceInventorySHA256 {
 		return out, fmt.Errorf("F74a attested receipt inventory differs from connected database")
 	}
+	receiptDigest := sha256.Sum256(receiptJSON)
 	return F74aReceiptVerification{
-		ReceiptID: p.ReceiptID, SourceDatabase: identity, Cutoff: p.Cutoff,
+		ReceiptID: p.ReceiptID, ReceiptSHA256: hex.EncodeToString(receiptDigest[:]), SourceDatabase: identity, Cutoff: p.Cutoff,
 		InventorySHA256: inventory.InventorySHA256,
 		BackupObjectRef: p.BackupObjectRef, BackupObjectSHA256: p.BackupObjectSHA256, ExpiresAt: p.ExpiresAt,
 	}, nil
