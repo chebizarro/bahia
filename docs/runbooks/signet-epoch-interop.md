@@ -11,7 +11,7 @@ identity or copy an existing service nsec into this fixture.
 ## Fixture prerequisites
 
 1. Build and run one Signet daemon from commit
-   `d097cea2219a3784ccf011d1e9bf94f9fb7f8ce2` with a fresh, disposable
+   `21eef0c050e426b158488214ed23f4e93bbd7169` with a fresh, disposable
    encrypted store and a private loopback-IP Nostr relay. Record the build commit;
    the test config's `signet_commit` is an operator assertion, not binary
    attestation. See Signet's `signet/docs/WRITER_EPOCH_CUTOVER.md` for its
@@ -30,7 +30,7 @@ identity or copy an existing service nsec into this fixture.
    test runs.
 4. Put the following JSON in a **non-repository** file with mode `0600`.
    The bunker URI must pin the expected service pubkey and have exactly one
-   `ws://` or `wss://` relay at a loopback IP literal (`127.0.0.1` or `::1`),
+   `ws://` or `wss://` relay at a loopback IP literal,
    with an explicit port. DNS names, non-loopback addresses and additional
    relay endpoints are rejected before any connection. Its owner key and
    bunker URI are sensitive even though the service key is
@@ -39,7 +39,7 @@ identity or copy an existing service nsec into this fixture.
 ```json
 {
   "disposable": true,
-  "signet_commit": "d097cea2219a3784ccf011d1e9bf94f9fb7f8ce2",
+  "signet_commit": "21eef0c050e426b158488214ed23f4e93bbd7169",
   "bunker_uri": "bunker://<disposable-service-pubkey>?relay=ws%3A%2F%2F127.0.0.1%3A<private-port>",
   "owner_secret_key_hex": "<dedicated-disposable-NIP46-owner-hex>",
   "expected_service_pubkey": "<same-disposable-service-pubkey-hex>",

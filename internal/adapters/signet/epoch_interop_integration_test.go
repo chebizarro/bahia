@@ -35,7 +35,7 @@ type epochInteropFixture struct {
 	ExpiresAt             string `json:"expires_at"`
 }
 
-const expectedInteropSignetCommit = "d097cea2219a3784ccf011d1e9bf94f9fb7f8ce2"
+const expectedInteropSignetCommit = "21eef0c050e426b158488214ed23f4e93bbd7169"
 
 func loadEpochInteropFixture(t *testing.T) (epochInteropFixture, time.Time) {
 	t.Helper()
