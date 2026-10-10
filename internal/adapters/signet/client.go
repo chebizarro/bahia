@@ -510,6 +510,9 @@ func (c *Client) Sign(ctx context.Context, event *nostr.Event) error {
 // NIP44Encrypt encrypts plaintext to a recipient using the Signet-held staff key.
 // In production the private key remains inside the NIP-46 bunker.
 func (c *Client) NIP44Encrypt(ctx context.Context, recipient nostr.PubKey, plaintext string) (string, error) {
+	if c.epochSigner != nil {
+		return c.epochSigner.Encrypt(ctx, plaintext, recipient)
+	}
 	c.mu.Lock()
 	connected := c.connected
 	mockMode := c.allowMock && c.bunkerURI == ""
@@ -560,6 +563,9 @@ func (c *Client) NIP44Encrypt(ctx context.Context, recipient nostr.PubKey, plain
 // A bunker without the method fails the call rather than returning a payload
 // over mangled bytes, so an out-of-date Signet degrades to a loud error.
 func (c *Client) NIP44EncryptBytes(ctx context.Context, recipient nostr.PubKey, plaintext []byte) (string, error) {
+	if c.epochSigner != nil {
+		return c.epochSigner.EncryptBytes(ctx, plaintext, recipient)
+	}
 	c.mu.Lock()
 	connected := c.connected
 	mockMode := c.allowMock && c.bunkerURI == ""
@@ -611,6 +617,9 @@ func (c *Client) NIP44EncryptBytes(ctx context.Context, recipient nostr.PubKey, 
 // Concord invite material ciphertext at rest: the private key never leaves the
 // NIP-46 bunker in production.
 func (c *Client) NIP44Decrypt(ctx context.Context, counterparty nostr.PubKey, ciphertext string) (string, error) {
+	if c.epochSigner != nil {
+		return c.epochSigner.Decrypt(ctx, ciphertext, counterparty)
+	}
 	c.mu.Lock()
 	connected := c.connected
 	mockMode := c.allowMock && c.bunkerURI == ""
