@@ -96,6 +96,20 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, "bind audit relays to canonical policy: %v", err)
 	}
+	discovery, err := controlplane.PolicyCensusHydrationRelaysForState(bootstrap, initialHead.State)
+	if err != nil {
+		return fail(stderr, "expand canonical policy discovery relays: %v", err)
+	}
+	discoveryPool := nostradapter.NewRelayPool(discovery, zap.NewNop(), nostradapter.WithPrivateKey(secret.Hex()))
+	defer discoveryPool.Close()
+	discoveryPool.Connect(ctx)
+	discoveryHead, err := controlplane.ReadCanonicalRelayPolicyHead(ctx, discoveryPool, secret.Public())
+	if err != nil {
+		return fail(stderr, "verify canonical relay policy on expanded discovery relays: %v", err)
+	}
+	if discoveryHead.EventID != initialHead.EventID {
+		return fail(stderr, "canonical relay policy changed across discovery relays")
+	}
 	pool := nostradapter.NewRelayPool(effective, zap.NewNop(), nostradapter.WithPrivateKey(secret.Hex()))
 	defer pool.Close()
 	pool.Connect(ctx)
@@ -145,12 +159,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		report.Rows = append(report.Rows, policyCensusRow{ID: id.String(), Status: "relay-present-sql-skipped", EventIDs: result.EventIDs})
 	}
-	lastHead, err := controlplane.ReadCanonicalRelayPolicyHead(ctx, pool, secret.Public())
-	if err != nil {
-		return fail(stderr, "reverify canonical relay policy before report: %v", err)
-	}
-	if lastHead.EventID != initialHead.EventID {
-		return fail(stderr, "canonical relay policy changed during census; no report")
+	if err := controlplane.RecheckCanonicalRelayPolicyHead(ctx, discoveryPool, secret.Public(), initialHead.EventID); err != nil {
+		return fail(stderr, "reverify canonical relay policy on all discovery relays before report: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fail(stderr, "commit read-only SQL snapshot: %v", err)

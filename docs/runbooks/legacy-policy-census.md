@@ -18,14 +18,17 @@ selected relay holds the coordinate. It never certifies absence: the underlying
 Nostr transport can discard invalid EVENT frames before the census observes
 them, so EOSE without a valid coordinate fails closed with no JSON report.
 The command reads the signed canonical `RelayPolicyState` from every
-configured bootstrap control-plane relay and requires the same event head on
-every derived effective relay. The derived set follows daemon sidecar-backend
+daemon hydration candidate: configured sidecar backend/public, ContextVM,
+browser, service, generic, and NIP-34 relays, plus relays advertised by the
+signed state. It requires the same event head on every candidate and every
+derived effective control-plane relay. The derived set follows daemon sidecar-backend
 precedence, then canonical ContextVM relays, then canonical service relays.
 `--relays` must exactly match that set; a different or missing signed policy
 head, incomplete EOSE, or absent effective topology aborts without a report.
 The output includes `relay_policy_event_id` and marks the set
-`signed-canonical-policy-verified`. The command rechecks the head before
-reporting. This is a bounded read observation, not a lease against later
+`signed-canonical-policy-verified`. The command rechecks the head across the
+entire discovery set before reporting, including relays outside the effective
+control-plane publish set. This is a bounded read observation, not a lease against later
 changes. It does not fence old SQL publishers or stage SQL rows in the outbox.
 Do not treat its output as a cutover or import receipt.
 

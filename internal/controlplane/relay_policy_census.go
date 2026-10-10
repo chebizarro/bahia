@@ -18,16 +18,51 @@ type CanonicalRelayPolicyHead struct {
 	State   RelayPolicyState
 }
 
-// PolicyCensusBootstrapRelays returns the daemon's initial control-plane
-// read set. A missing set is not filled by an operator-supplied URL.
+// PolicyCensusBootstrapRelays mirrors the daemon's initial relay-policy
+// hydration candidates. A missing set is not filled by operator input.
 func PolicyCensusBootstrapRelays(cfg config.NostrConfig) ([]string, error) {
+	var candidates []string
 	if cfg.Sidecar.Enabled {
-		if cfg.Sidecar.BackendURL == "" {
-			return nil, fmt.Errorf("enabled sidecar has no backend relay URL")
+		if cfg.Sidecar.BackendURL == "" || cfg.Sidecar.PublicURL == "" {
+			return nil, fmt.Errorf("enabled sidecar has no complete backend/public relay URLs")
 		}
-		return policyCensusRelaySet([]string{cfg.Sidecar.BackendURL})
+		candidates = append(candidates, cfg.Sidecar.BackendURL, cfg.Sidecar.PublicURL)
 	}
-	return policyCensusRelaySet(cfg.ContextVMRelayPolicyRelays())
+	for _, group := range [][]string{cfg.ContextVMRelays, cfg.BrowserRelays, cfg.ServiceRelays, cfg.Relays, cfg.NIP34Relays} {
+		candidates = append(candidates, group...)
+	}
+	return policyCensusRelayUnion(candidates)
+}
+
+// PolicyCensusHydrationRelaysForState mirrors the daemon's second-stage
+// discovery expansion after it observes signed canonical relay settings.
+func PolicyCensusHydrationRelaysForState(configured []string, state RelayPolicyState) ([]string, error) {
+	candidates := append([]string(nil), configured...)
+	for _, group := range [][]string{state.ContextVMRelays, state.BrowserRelays, state.ServiceRelays, state.NIP34Relays} {
+		candidates = append(candidates, group...)
+	}
+	return policyCensusRelayUnion(candidates)
+}
+
+func policyCensusRelayUnion(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, fmt.Errorf("relay policy discovery has no relays")
+	}
+	seen := make(map[string]struct{}, len(values))
+	urls := make([]string, 0, len(values))
+	for _, value := range values {
+		url := nostr.NormalizeURL(value)
+		if url == "" {
+			return nil, fmt.Errorf("relay policy discovery contains invalid URL %q", value)
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		urls = append(urls, url)
+	}
+	slices.Sort(urls)
+	return urls, nil
 }
 
 // PolicyCensusEffectiveRelays applies the daemon's control-plane topology
@@ -35,7 +70,7 @@ func PolicyCensusBootstrapRelays(cfg config.NostrConfig) ([]string, error) {
 // topology is refused rather than falling back to an unproven config value.
 func PolicyCensusEffectiveRelays(cfg config.NostrConfig, state RelayPolicyState) ([]string, error) {
 	if cfg.Sidecar.Enabled {
-		return PolicyCensusBootstrapRelays(cfg)
+		return policyCensusRelaySet([]string{cfg.Sidecar.BackendURL})
 	}
 	if len(state.ContextVMRelays) > 0 {
 		return policyCensusRelaySet(state.ContextVMRelays)
@@ -107,6 +142,22 @@ func ReadCanonicalRelayPolicyHead(ctx context.Context, pool *nostradapter.RelayP
 		head = one
 	}
 	return head, nil
+}
+
+// RecheckCanonicalRelayPolicyHead refuses a policy that moved on any relay in
+// the discovery set during an offline census.
+func RecheckCanonicalRelayPolicyHead(ctx context.Context, pool *nostradapter.RelayPool, author nostr.PubKey, eventID string) error {
+	if eventID == "" {
+		return fmt.Errorf("expected signed relay policy event id is required")
+	}
+	head, err := ReadCanonicalRelayPolicyHead(ctx, pool, author)
+	if err != nil {
+		return err
+	}
+	if head.EventID != eventID {
+		return fmt.Errorf("canonical relay policy changed during census: %s -> %s", eventID, head.EventID)
+	}
+	return nil
 }
 
 func readCanonicalRelayPolicyFromRelay(ctx context.Context, pool *nostradapter.RelayPool, relay string, author nostr.PubKey) (CanonicalRelayPolicyHead, error) {

@@ -25,10 +25,10 @@ func TestPolicyCensusEffectiveRelaysFollowSidecarAndCanonicalPrecedence(t *testi
 	state := RelayPolicyState{Schema: RelaySettingsSchema, ContextVMRelays: []string{"wss://canonical-context.example"}, ServiceRelays: []string{"wss://canonical-service.example"}}
 	bootstrap, err := PolicyCensusBootstrapRelays(cfg)
 	require.NoError(t, err)
-	require.Equal(t, []string{"wss://sidecar-internal.example"}, bootstrap)
+	require.Equal(t, []string{"wss://configured.example", "wss://sidecar-internal.example", "wss://sidecar-public.example"}, bootstrap)
 	effective, err := PolicyCensusEffectiveRelays(cfg, state)
 	require.NoError(t, err)
-	require.Equal(t, bootstrap, effective, "sidecar backend has control-plane precedence")
+	require.Equal(t, []string{"wss://sidecar-internal.example"}, effective, "sidecar backend has control-plane precedence")
 	cfg.Sidecar.Enabled = false
 	bootstrap, err = PolicyCensusBootstrapRelays(cfg)
 	require.NoError(t, err)
@@ -52,6 +52,12 @@ func TestPolicyCensusEffectiveRelaysFollowSidecarAndCanonicalPrecedence(t *testi
 
 func censusRelay(t *testing.T, events ...gonostr.Event) string {
 	t.Helper()
+	url, _ := censusRelayHandle(t, events...)
+	return url
+}
+
+func censusRelayHandle(t *testing.T, events ...gonostr.Event) (string, *khatru.Relay) {
+	t.Helper()
 	relay := khatru.NewRelay()
 	store := &slicestore.SliceStore{}
 	require.NoError(t, store.Init())
@@ -63,7 +69,7 @@ func censusRelay(t *testing.T, events ...gonostr.Event) string {
 	}
 	server := httptest.NewServer(relay)
 	t.Cleanup(server.Close)
-	return gonostr.NormalizeURL("ws" + strings.TrimPrefix(server.URL, "http"))
+	return gonostr.NormalizeURL("ws" + strings.TrimPrefix(server.URL, "http")), relay
 }
 
 func TestReadCanonicalRelayPolicyHeadRequiresSameSignedHeadEverywhere(t *testing.T) {
@@ -101,4 +107,41 @@ func TestReadCanonicalRelayPolicyHeadRefusesMissingOrDisagreeingRelay(t *testing
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestPolicyCensusDiscoveryUnionAndMovingBootstrapHead(t *testing.T) {
+	contextURL, contextRelay := censusRelayHandle(t)
+	browserURL, browserRelay := censusRelayHandle(t)
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = false
+	cfg.ContextVMRelays = []string{contextURL}
+	cfg.BrowserRelays = []string{browserURL}
+	cfg.ServiceRelays = []string{contextURL}
+	cfg.NIP34Relays = []string{browserURL}
+	configured, err := PolicyCensusBootstrapRelays(cfg)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{contextURL, browserURL}, configured,
+		"configured browser/NIP34 candidates must not be omitted from daemon hydration")
+	state := RelayPolicyState{Schema: RelaySettingsSchema, ContextVMRelays: []string{contextURL}, BrowserRelays: []string{browserURL}, ServiceRelays: []string{"wss://new-service.example"}}
+	expanded, err := PolicyCensusHydrationRelaysForState(configured, state)
+	require.NoError(t, err)
+	require.Contains(t, expanded, "wss://new-service.example")
+	old := signedRelaySettingsStateEvent(t, time.Now().UTC().Add(-2*time.Minute), state)
+	_, err = contextRelay.AddEvent(t.Context(), *old)
+	require.NoError(t, err)
+	_, err = browserRelay.AddEvent(t.Context(), *old)
+	require.NoError(t, err)
+	pool := nostradapter.NewRelayPool(configured, zap.NewNop())
+	defer pool.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	head, err := ReadCanonicalRelayPolicyHead(ctx, pool, old.PubKey)
+	require.NoError(t, err)
+	require.Equal(t, old.ID.Hex(), head.EventID)
+	state.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	newer := signedRelaySettingsStateEvent(t, time.Now().UTC().Add(-time.Minute), state)
+	_, err = browserRelay.AddEvent(t.Context(), *newer)
+	require.NoError(t, err)
+	require.Error(t, RecheckCanonicalRelayPolicyHead(ctx, pool, old.PubKey, old.ID.Hex()),
+		"a changed head on a bootstrap-only relay must block the final report")
 }
