@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// interopFixture is written by scripts/signet-interop/run_live_signet.py. It
+// interopFixture is written by scripts/signet_live_interop.py. It
 // names only disposable synthetic identities on a loopback relay. The writer
 // is the client key currently assigned with agent/writer-acquire; the
 // displaced writer was assigned first and then replaced.

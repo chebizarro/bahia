@@ -40,7 +40,7 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 	if err != nil {
 		t.Fatal("read disposable fixture")
 	}
-	// Written by scripts/signet-interop/run_live_signet.py. The writer is the
+	// Written by scripts/signet_live_interop.py. The writer is the
 	// client key currently assigned with agent/writer-acquire.
 	var fixture struct {
 		Disposable            bool   `json:"disposable"`

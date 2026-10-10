@@ -56,5 +56,5 @@ subscription. The writer pubkey must differ from both the service pubkey and
 every Signet provisioner pubkey.
 
 Unit tests use a fake RPC session. The live proof against a real `signetd` is
-`scripts/signet-interop/run_live_signet.py`; see
+`scripts/signet_live_interop.py`; see
 [`docs/runbooks/signet-interop.md`](../runbooks/signet-interop.md).
