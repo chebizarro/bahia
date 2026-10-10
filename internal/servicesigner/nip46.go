@@ -79,15 +79,11 @@ func openNIP46(ctx context.Context, signer config.NostrSignerConfig, expected no
 }
 
 func nip46ClientSecret(signer config.NostrSignerConfig) (nostr.SecretKey, error) {
-	raw := signer.ClientSecretKey
-	if signer.ClientSecretKeyFile != "" {
-		loaded, err := config.LoadPrivateKey(signer.ClientSecretKeyFile, "")
-		if err != nil {
-			return nostr.SecretKey{}, fmt.Errorf("read nostr.signer.client_secret_key_file: %w", err)
-		}
-		raw = loaded
+	resolved, err := ResolveClientKeyFile(config.NostrConfig{Signer: signer})
+	if err != nil {
+		return nostr.SecretKey{}, err
 	}
-	secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(raw))
+	secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(resolved.Signer.ClientSecretKey))
 	if err != nil || secret == (nostr.SecretKey{}) {
 		return nostr.SecretKey{}, errors.New("dedicated NIP-46 client key must be a 64-character hex secret key")
 	}

@@ -8,7 +8,9 @@ signer selected by `nostr.signer` through `servicesigner.Open` (see
 that signs, answers NIP-42 AUTH or NIP-44s as the service. No consumer takes a
 hex key. In a remote signer mode (NIP-46 bunker, NIP-55L) there is no raw
 private key in the process. The signer session lives until shutdown, after
-every signing component has stopped.
+every signing component has stopped; a config reload with an unchanged
+signer keeps the same session (see
+[service-signer.md#reload](service-signer.md#reload)).
 
 Local mode uses `nostrutil.LocalKeyer`: an in-process key signer that also
 exposes the optional `nostrutil.ServiceKeyMaterialHolder` capability (the
@@ -38,7 +40,8 @@ separate identity that keeps a local key by design.
 
 | Consumer | Class | Now |
 |---|---|---|
-| `internal/servicesigner/servicesigner.go` `Open`, called only by `internal/app/service_keyer.go` `newServiceKeyer` | seam | the only daemon read of `nostr.private_key` |
+| `internal/servicesigner/servicesigner.go` `Open`, called only by `internal/app/service_keyer.go` `newServiceKeyer` | seam | the only daemon read of `nostr.private_key` that builds a signer |
+| `internal/servicesigner/same.go` `SameSigner` | seam (reload) | compares the key text to decide whether a reload keeps the running session; never signs or derives |
 | `internal/app/app.go:172` relay pools (NIP-42 AUTH) | a | `WithAuthSigner(serviceKeyer)`; `RelayPool.WithPrivateKey` deleted |
 | `internal/adapters/nostr/publisher.go:949` publishers | a | `WithPublisherSigner`; enabled only with a signer |
 | `internal/adapters/nostr/projector.go:1493` projector (+ `backup_run_admission`, `dns_canonical_publisher`, `legacy_ock_migration`, `org_refounding`, `projector_warmstart`, `control_state_dedupe`) | a | `WithProjectorSigner(keyer, pubkey)`; pubkey pinned, never re-derived |

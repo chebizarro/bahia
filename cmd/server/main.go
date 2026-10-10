@@ -39,7 +39,10 @@ type serverSignalSource struct {
 
 type serverDependencies struct {
 	loadConfig     func(string) (*config.Config, error)
-	newApplication func(*config.Config) (serverApplication, error)
+	// newApplication builds an application. On reload, running is the
+	// application the candidate will replace, so it can take over resources
+	// such as an unchanged service signer session; it is nil at startup.
+	newApplication func(cfg *config.Config, running serverApplication) (serverApplication, error)
 	newSignals     func() serverSignalSource
 	logf           func(string, ...any)
 }
@@ -47,8 +50,9 @@ type serverDependencies struct {
 func run(configPath string) error {
 	return runWithDependencies(configPath, serverDependencies{
 		loadConfig: config.Load,
-		newApplication: func(cfg *config.Config) (serverApplication, error) {
-			return app.New(cfg)
+		newApplication: func(cfg *config.Config, running serverApplication) (serverApplication, error) {
+			current, _ := running.(*app.App)
+			return app.New(cfg, app.Replacing(current))
 		},
 		newSignals: productionSignalSource,
 		logf:       log.Printf,
@@ -74,7 +78,7 @@ func runWithDependencies(configPath string, deps serverDependencies) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	application, err := deps.newApplication(cfg)
+	application, err := deps.newApplication(cfg, nil)
 	if err != nil {
 		return fmt.Errorf("initialize application: %w", err)
 	}
@@ -119,7 +123,7 @@ func runWithDependencies(configPath string, deps serverDependencies) error {
 						continue
 					}
 				}
-				candidate, initErr := deps.newApplication(candidateConfig)
+				candidate, initErr := deps.newApplication(candidateConfig, application)
 				if initErr != nil {
 					logf("config reload initialization rejected; keeping current application: %v", initErr)
 					continue

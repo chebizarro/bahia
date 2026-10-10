@@ -131,11 +131,12 @@ func TestAssistantWrappedStartupUsesConfiguredServiceSigner(t *testing.T) {
 	}
 	// Startup opens the configured (here: local) service signer once and
 	// injects it.
-	serviceKeyer, closeServiceKeyer, err := newServiceKeyer(cfg, nil, nil)
+	signer, closeServiceKeyer, err := newServiceKeyer(cfg, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closeServiceKeyer()
+	serviceKeyer := signer.Keyer()
 	if _, err := assistantTranscriptKeyProviderWithSigner(ctx, cfg, serviceKeyer); err != nil {
 		t.Fatalf("configured local service signer = %v", err)
 	}
@@ -157,7 +158,7 @@ func TestAssistantWrappedStartupUsesConfiguredServiceSigner(t *testing.T) {
 	// A remote signer that cannot be reached fails startup at the service
 	// signer seam; the raw-key provider is never consulted.
 	cfg.Nostr = config.NostrConfig{PublicKey: wrapper.pubkey.Hex(), Signer: config.NostrSignerConfig{Method: config.NostrSignerNIP46, BunkerURI: "bunker://" + strings.Repeat("3", 64) + "?relay=ws%3A%2F%2F127.0.0.1%3A1", ClientSecretKey: strings.Repeat("2", 64), Timeout: 200 * time.Millisecond}}
-	if _, _, err := newServiceKeyer(cfg, nil, nil); err == nil || !strings.Contains(err.Error(), "open nip46 service signer") {
+	if _, _, err := newServiceKeyer(cfg, nil, nil, nil); err == nil || !strings.Contains(err.Error(), "open nip46 service signer") {
 		t.Fatalf("unreachable NIP-46 service signer = %v", err)
 	}
 }

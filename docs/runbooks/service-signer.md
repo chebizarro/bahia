@@ -127,5 +127,12 @@ release you deploy.
 
 To move the writer to a new Bahia deployment, generate a new client key and
 `writer-acquire` it; the old deployment's requests are then refused.
+
+A config reload (`SIGHUP`) keeps the running signer session when
+`nostr.signer`, the service key settings and the client key file's content
+are unchanged. Rotating the client key (inline, or new content in
+`client_secret_key_file`) opens a session with the new key, and the old
+session closes when the replaced application stops; see
+[Reload](../architecture/service-signer.md#reload).
 `scripts/signet_live_interop.py` exercises exactly this flow against a
 disposable `signetd`; see [`signet-interop.md`](signet-interop.md).

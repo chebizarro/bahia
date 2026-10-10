@@ -92,6 +92,7 @@ type App struct {
 	RelayFirstRegistry        *service.RelayFirstRegistry
 	SoulFactory               *soulfactory.Reactor
 	soulFactoryCloser         func() error
+	serviceSigner             *serviceSigner
 	closeServiceKeyer         func()
 	hiveCIInitiator           *giteaAdapter.Initiator
 	localEventStore           *localstore.Store
@@ -122,8 +123,32 @@ func newSBOMGeneratorRegistry(cfg config.SBOMConfig) (*sbomAdapter.GeneratorRegi
 	return sbomAdapter.NewGeneratorRegistry(sbomAdapter.NewSyftGenerator(), cdxgen)
 }
 
+// Option configures New.
+type Option func(*options)
+
+type options struct {
+	replacing *App
+}
+
+// Replacing builds a reload candidate for the running application. The
+// candidate reuses running's service signer session when its signer config is
+// unchanged (servicesigner.SameSigner); otherwise it opens its own. A nil
+// running application is ignored.
+func Replacing(running *App) Option {
+	return func(o *options) { o.replacing = running }
+}
+
 // New creates and wires together all application components.
-func New(cfg *config.Config) (*App, error) {
+func New(cfg *config.Config, opts ...Option) (*App, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	var runningSigner *serviceSigner
+	if o.replacing != nil {
+		runningSigner = o.replacing.serviceSigner
+	}
+
 	// Logger.
 	var logger *zap.Logger
 	var err error
@@ -155,10 +180,11 @@ func New(cfg *config.Config) (*App, error) {
 	// docs/runbooks/nostr-outbound-admission.md).
 	outboundAdmission := nostrout.InitDefault(nostrOutboundAdmissionConfig(cfg.Nostr.Outbound))
 
-	serviceKeyer, closeServiceKeyer, err := newServiceKeyer(cfg, outboundAdmission, logger)
+	signerSession, closeServiceKeyer, err := newServiceKeyer(cfg, outboundAdmission, logger, runningSigner)
 	if err != nil {
 		return nil, fmt.Errorf("configuring service signer: %w", err)
 	}
+	serviceKeyer := signerSession.Keyer()
 	serviceKeyerOwned := false
 	defer func() {
 		if !serviceKeyerOwned {
@@ -2936,6 +2962,7 @@ func New(cfg *config.Config) (*App, error) {
 		RelayFirstRegistry:        relayFirstRegistry,
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),
 		soulFactoryCloser:         soulFactoryCloserFromRuntime(soulFactoryRuntime),
+		serviceSigner:             signerSession,
 		closeServiceKeyer:         closeServiceKeyer,
 		hiveCIInitiator:           hiveCIInitiator,
 		localEventStore:           localEventStore,
@@ -3764,7 +3791,8 @@ func (a *App) RunContext(ctx context.Context) error {
 			a.Logger.Warn("local Nostr publish outbox close failed", zap.Error(err))
 		}
 	}
-	// The service signer closes after every component that signs with it.
+	// The service signer is released after every component that signs with
+	// it; the session closes unless a replacement application still holds it.
 	if a.closeServiceKeyer != nil {
 		a.closeServiceKeyer()
 	}
