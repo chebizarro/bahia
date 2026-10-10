@@ -56,5 +56,5 @@ separate identity that keeps a local key by design.
 | `internal/adapters/nostr/confidential_dedupe.go:51` state_hash HMAC | b | `publishCanonicalFirst` returns the sentinel |
 | `internal/app/app.go:4979` assistant transcript key, `assistant_wrapped_keys.go:68` | b (4.8) | wraps the sentinel; signature fixed by the factory slice |
 | `cmd/bahia-policy-census`, `cmd/bahia-migrate` (`f74a_import`, `nostr`), `cmd/cli` (`config_fabric`, confidential reads, `soulfactory`), `cmd/bahia-dns-agent`, `cmd/openclaw-soulfactory-sidecar`, `cmd/bahia-test-relay`, `internal/nostrmigration` | c | offline/operator tools or separate identities; AUTH via a local signer |
-| `internal/relaysidecar/policy.go:42`, `server.go:132,189` | pending (bahia-cd0wr.3.5) | separate relay process; sign/pubkey-only, needs the factory in `cmd/relay` |
+| `internal/relaysidecar/server.go` NIP-11 pubkey, admission, config acks | a | `New(ctx, cfg, signer, log)`; `cmd/relay` opens the signer through `servicesigner.Open` and owns it across `SIGHUP` reloads |
 | `internal/adapters/signet`, `internal/soulfactory/signet_enrollment.go` | n/a | NIP-46 *client* transport keys, not the service key |
