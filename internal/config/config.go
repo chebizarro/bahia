@@ -448,12 +448,9 @@ type AssistantConfig struct {
 // AssistantWrappedKeysConfig selects a read-only historical key source. It
 // never authorizes new assistant transcript or checkpoint writes.
 type AssistantWrappedKeysConfig struct {
-	Mode                 string        `koanf:"mode" yaml:"mode" secret:"false"`
-	ManifestPath         string        `koanf:"manifest_path" yaml:"manifest_path" secret:"false"`
-	ExpectedGeneration   string        `koanf:"expected_generation" yaml:"expected_generation" secret:"false"`
-	SignetBunkerURI      string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
-	OwnerClientSecretKey string        `koanf:"owner_client_secret_key" yaml:"owner_client_secret_key" secret:"true"`
-	ConnectTimeout       time.Duration `koanf:"connect_timeout" yaml:"connect_timeout" secret:"false"`
+	Mode               string `koanf:"mode" yaml:"mode" secret:"false"`
+	ManifestPath       string `koanf:"manifest_path" yaml:"manifest_path" secret:"false"`
+	ExpectedGeneration string `koanf:"expected_generation" yaml:"expected_generation" secret:"false"`
 }
 
 // AssistantExtensionSourceConfig points the assistant at directories that hold
@@ -676,7 +673,15 @@ const RelayAuthUnavailableExcludeAndFail = "exclude_and_fail"
 
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
-	PrivateKey    string   `koanf:"private_key" secret:"true"`
+	PrivateKey string `koanf:"private_key" secret:"true"`
+	// PublicKey pins Bahia's service identity (64-char hex). Required with a
+	// remote nostr.signer.method; with a local key it is optional and, when
+	// set, must match nostr.private_key. Startup fails if the signer reports
+	// any other pubkey.
+	PublicKey string `koanf:"public_key" yaml:"public_key" secret:"false"`
+	// Signer selects how the service identity signs and NIP-44-encrypts.
+	Signer NostrSignerConfig `koanf:"signer" yaml:"signer"`
+
 	Relays        []string `koanf:"relays" secret:"false"`
 	ServiceRelays []string `koanf:"service_relays" secret:"false"`
 	BrowserRelays []string `koanf:"browser_relays" secret:"false"`
@@ -751,6 +756,134 @@ type NostrConfig struct {
 	// every Bahia publisher crosses before relay I/O (internal/nostrout;
 	// docs/runbooks/nostr-outbound-admission.md).
 	Outbound NostrOutboundConfig `koanf:"outbound" yaml:"outbound"`
+}
+
+// Service signer methods accepted by nostr.signer.method.
+const (
+	// NostrSignerLocal signs with nostr.private_key held in process memory.
+	NostrSignerLocal = "local"
+	// NostrSignerNIP46 delegates to any NIP-46 bunker through a dedicated
+	// client key.
+	NostrSignerNIP46 = "nip46"
+	// NostrSignerNIP55L delegates to a local NIP-55L signer over D-Bus.
+	NostrSignerNIP55L = "nip55l"
+
+	defaultNostrSignerTimeout = 30 * time.Second
+	defaultNostrSignerAppID   = "bahia"
+)
+
+// NostrSignerConfig selects the service identity's signer. Exactly one custody
+// mode is active: a remote method never coexists with nostr.private_key.
+type NostrSignerConfig struct {
+	// Method is local, nip46 or nip55l. Empty means local when
+	// nostr.private_key is set and no service identity otherwise.
+	Method string `koanf:"method" yaml:"method" secret:"false"`
+	// BunkerURI is a bunker:// URI or NIP-05 name (nip46 only).
+	BunkerURI string `koanf:"bunker_uri" yaml:"bunker_uri" secret:"true"`
+	// ClientSecretKey is Bahia's dedicated NIP-46 client key (64-char hex,
+	// nip46 only). It must differ from the service key. ClientSecretKeyFile
+	// is the mounted-file alternative; exactly one is set.
+	ClientSecretKey     string                  `koanf:"client_secret_key" yaml:"client_secret_key" secret:"true"`
+	ClientSecretKeyFile string                  `koanf:"client_secret_key_file" yaml:"client_secret_key_file" secret:"false"`
+	NIP55L              NostrSignerNIP55LConfig `koanf:"nip55l" yaml:"nip55l"`
+	// Timeout bounds connecting to the signer and each signer request.
+	// Zero uses 30s.
+	Timeout time.Duration `koanf:"timeout" yaml:"timeout" secret:"false"`
+}
+
+// NostrSignerNIP55LConfig addresses a NIP-55L D-Bus signer (nip55l only).
+type NostrSignerNIP55LConfig struct {
+	// BusAddress is a D-Bus address; empty uses the session bus.
+	BusAddress string `koanf:"bus_address" yaml:"bus_address" secret:"false"`
+	// AppID identifies Bahia to the signer's approval policy. Empty uses bahia.
+	AppID string `koanf:"app_id" yaml:"app_id" secret:"false"`
+}
+
+// ServiceSignerMethod is the effective service signer method, or "" when no
+// service identity is configured.
+func (n NostrConfig) ServiceSignerMethod() string {
+	if method := strings.ToLower(strings.TrimSpace(n.Signer.Method)); method != "" {
+		return method
+	}
+	if strings.TrimSpace(n.PrivateKey) != "" {
+		return NostrSignerLocal
+	}
+	return ""
+}
+
+// HasServiceIdentity reports whether a service signer is configured.
+func (n NostrConfig) HasServiceIdentity() bool { return n.ServiceSignerMethod() != "" }
+
+func (n *NostrConfig) validateServiceSigner() error {
+	signer := &n.Signer
+	signer.Method = strings.ToLower(strings.TrimSpace(signer.Method))
+	signer.BunkerURI = strings.TrimSpace(signer.BunkerURI)
+	signer.ClientSecretKey = strings.ToLower(strings.TrimSpace(signer.ClientSecretKey))
+	signer.ClientSecretKeyFile = strings.TrimSpace(signer.ClientSecretKeyFile)
+	signer.NIP55L.BusAddress = strings.TrimSpace(signer.NIP55L.BusAddress)
+	signer.NIP55L.AppID = strings.TrimSpace(signer.NIP55L.AppID)
+	n.PublicKey = strings.ToLower(strings.TrimSpace(n.PublicKey))
+	if signer.Timeout < 0 {
+		return fmt.Errorf("config validation failed: nostr.signer.timeout must not be negative")
+	}
+	if signer.Timeout == 0 {
+		signer.Timeout = defaultNostrSignerTimeout
+	}
+	if n.PublicKey != "" && !isHexKey(n.PublicKey) {
+		return fmt.Errorf("config validation failed: nostr.public_key must be 64 hex characters")
+	}
+	nip46Set := signer.BunkerURI != "" || signer.ClientSecretKey != "" || signer.ClientSecretKeyFile != ""
+	nip55lSet := signer.NIP55L != (NostrSignerNIP55LConfig{})
+	switch signer.Method {
+	case "", NostrSignerLocal:
+		if nip46Set || nip55lSet {
+			return fmt.Errorf("config validation failed: nostr.signer remote settings require nostr.signer.method nip46 or nip55l")
+		}
+		if signer.Method == NostrSignerLocal && strings.TrimSpace(n.PrivateKey) == "" {
+			return fmt.Errorf("config validation failed: nostr.signer.method=local requires nostr.private_key")
+		}
+		return nil
+	case NostrSignerNIP46:
+		if nip55lSet {
+			return fmt.Errorf("config validation failed: nostr.signer.nip55l settings require nostr.signer.method=nip55l")
+		}
+		if signer.BunkerURI == "" {
+			return fmt.Errorf("config validation failed: nostr.signer.method=nip46 requires nostr.signer.bunker_uri")
+		}
+		if (signer.ClientSecretKey == "") == (signer.ClientSecretKeyFile == "") {
+			return fmt.Errorf("config validation failed: nostr.signer.method=nip46 requires exactly one of nostr.signer.client_secret_key or nostr.signer.client_secret_key_file")
+		}
+		if signer.ClientSecretKey != "" && !isHexKey(signer.ClientSecretKey) {
+			return fmt.Errorf("config validation failed: nostr.signer.client_secret_key must be 64 hex characters")
+		}
+		if signer.ClientSecretKeyFile != "" && !filepath.IsAbs(signer.ClientSecretKeyFile) {
+			return fmt.Errorf("config validation failed: nostr.signer.client_secret_key_file must be an absolute path")
+		}
+	case NostrSignerNIP55L:
+		if nip46Set {
+			return fmt.Errorf("config validation failed: nostr.signer bunker and client key settings require nostr.signer.method=nip46")
+		}
+		if signer.NIP55L.AppID == "" {
+			signer.NIP55L.AppID = defaultNostrSignerAppID
+		}
+	default:
+		return fmt.Errorf("config validation failed: nostr.signer.method must be one of local, nip46, nip55l")
+	}
+	if strings.TrimSpace(n.PrivateKey) != "" {
+		return fmt.Errorf("config validation failed: nostr.private_key must not be set with nostr.signer.method=%s; the remote signer holds the service key", signer.Method)
+	}
+	if n.PublicKey == "" {
+		return fmt.Errorf("config validation failed: nostr.signer.method=%s requires nostr.public_key to pin the service identity", signer.Method)
+	}
+	return nil
+}
+
+func isHexKey(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 // NostrOutboundConfig bounds the process-wide outbound Nostr admission
@@ -1730,6 +1863,12 @@ func load(configPath string, persistBootstrap bool) (*Config, error) {
 		if strings.HasPrefix(key, "nostr_outbound_") {
 			return "nostr.outbound." + strings.TrimPrefix(key, "nostr_outbound_")
 		}
+		if strings.HasPrefix(key, "nostr_signer_nip55l_") {
+			return "nostr.signer.nip55l." + strings.TrimPrefix(key, "nostr_signer_nip55l_")
+		}
+		if strings.HasPrefix(key, "nostr_signer_") {
+			return "nostr.signer." + strings.TrimPrefix(key, "nostr_signer_")
+		}
 		if strings.HasPrefix(key, "soul_factory_") {
 			return "soul_factory." + strings.TrimPrefix(key, "soul_factory_")
 		}
@@ -1769,6 +1908,9 @@ func load(configPath string, persistBootstrap bool) (*Config, error) {
 		return nil, err
 	}
 	if err := rejectRemovedEncryptedRequestKeys(k); err != nil {
+		return nil, err
+	}
+	if err := rejectRemovedWrappedKeySignerKeys(k); err != nil {
 		return nil, err
 	}
 	if err := rejectUnknownInternalRoutingKeys(k); err != nil {
@@ -1911,6 +2053,18 @@ func rejectRemovedEncryptedRequestKeys(k *koanf.Koanf) error {
 	return nil
 }
 
+// rejectRemovedWrappedKeySignerKeys refuses the per-feature Signet settings
+// nostr.signer replaced, so a stale deployment cannot silently run with a
+// different signer than the one its operator configured.
+func rejectRemovedWrappedKeySignerKeys(k *koanf.Koanf) error {
+	for _, key := range []string{"signet_bunker_uri", "owner_client_secret_key", "connect_timeout"} {
+		if k.Exists("assistant.wrapped_keys." + key) {
+			return fmt.Errorf("config validation failed: assistant.wrapped_keys.%s has been removed; wrapped keys use the service signer configured in nostr.signer", key)
+		}
+	}
+	return nil
+}
+
 func (c *Config) validate() error {
 	if c.DB.StartupProbeTimeout < 0 || c.DB.StartupProbeTimeout > 5*time.Second {
 		return fmt.Errorf("config validation failed: db.startup_probe_timeout must be between 0 and 5s")
@@ -1939,8 +2093,8 @@ func (c *Config) validate() error {
 		if err := validateSignerFirstOperatorAllowlist("adoption", &c.Adoption.OperatorAccessConfig); err != nil {
 			return err
 		}
-		if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
-			return fmt.Errorf("config validation failed: nostr.private_key is required when adoption.enabled=true because adopted workload secret import requires encryption")
+		if !c.Nostr.HasServiceIdentity() {
+			return fmt.Errorf("config validation failed: a service signer (nostr.private_key or nostr.signer) is required when adoption.enabled=true because adopted workload secret import requires encryption")
 		}
 	}
 	for name, endpoint := range c.Runtime.Endpoints {
@@ -1964,8 +2118,8 @@ func (c *Config) validate() error {
 		if err := validateSignerFirstOperatorAllowlist("direct_runtime_actions", &c.DirectRuntime.OperatorAccessConfig); err != nil {
 			return err
 		}
-		if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
-			return fmt.Errorf("config validation failed: nostr.private_key is required when direct_runtime_actions.enabled=true because runtime secret handling requires encryption")
+		if !c.Nostr.HasServiceIdentity() {
+			return fmt.Errorf("config validation failed: a service signer (nostr.private_key or nostr.signer) is required when direct_runtime_actions.enabled=true because runtime secret handling requires encryption")
 		}
 	}
 	if c.OCI.Enabled {
@@ -2113,6 +2267,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateRelayAdministration(); err != nil {
+		return err
+	}
+	if err := c.Nostr.validateServiceSigner(); err != nil {
 		return err
 	}
 	c.normalizeNostrRelays()
@@ -2596,11 +2753,11 @@ func (c *Config) validateAssistant() error {
 	switch wrapped.Mode {
 	case "legacy_v1":
 	case "wrapped_read_only":
-		if !assistant.Enabled || strings.TrimSpace(wrapped.ManifestPath) == "" || strings.TrimSpace(wrapped.ExpectedGeneration) == "" || strings.TrimSpace(wrapped.SignetBunkerURI) == "" || strings.TrimSpace(wrapped.OwnerClientSecretKey) == "" {
-			return fmt.Errorf("config validation failed: assistant.wrapped_keys read-only mode requires enabled assistant, manifest path, generation pin, real Signet bunker and dedicated owner key")
+		if !assistant.Enabled || strings.TrimSpace(wrapped.ManifestPath) == "" || strings.TrimSpace(wrapped.ExpectedGeneration) == "" || !c.Nostr.HasServiceIdentity() {
+			return fmt.Errorf("config validation failed: assistant.wrapped_keys read-only mode requires enabled assistant, manifest path, generation pin and a service signer (nostr.signer)")
 		}
-		if !filepath.IsAbs(wrapped.ManifestPath) || filepath.Clean(wrapped.ManifestPath) != wrapped.ManifestPath || wrapped.ConnectTimeout < 0 {
-			return fmt.Errorf("config validation failed: assistant.wrapped_keys manifest path must be absolute and clean and connect timeout non-negative")
+		if !filepath.IsAbs(wrapped.ManifestPath) || filepath.Clean(wrapped.ManifestPath) != wrapped.ManifestPath {
+			return fmt.Errorf("config validation failed: assistant.wrapped_keys manifest path must be absolute and clean")
 		}
 	default:
 		return fmt.Errorf("config validation failed: assistant.wrapped_keys.mode must be legacy_v1 or wrapped_read_only")
@@ -2725,8 +2882,13 @@ func (c *Config) validateAssistant() error {
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return fmt.Errorf("config validation failed: assistant.llm_base_url must be a valid URL")
 	}
-	if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
-		return fmt.Errorf("config validation failed: nostr.private_key is required when assistant.enabled=true")
+	if !c.Nostr.HasServiceIdentity() {
+		return fmt.Errorf("config validation failed: a service signer (nostr.private_key or nostr.signer) is required when assistant.enabled=true")
+	}
+	// legacy_v1 derives transcript keys from the raw service nsec, which a
+	// remote signer never exposes.
+	if c.Nostr.ServiceSignerMethod() != NostrSignerLocal && assistant.WrappedKeys.Mode != "wrapped_read_only" {
+		return fmt.Errorf("config validation failed: assistant.wrapped_keys.mode=wrapped_read_only is required when assistant.enabled=true with a remote nostr.signer.method")
 	}
 	if agentic.Provider != "openai_compatible" && agentic.Provider != "anthropic" {
 		return fmt.Errorf("config validation failed: assistant.agentic.provider must be one of openai_compatible, anthropic")
@@ -3759,8 +3921,8 @@ func (c *Config) validateDMRelayLists() error {
 		if list.Identity != DMRelayListIdentityService {
 			return fmt.Errorf("config validation failed: nostr.dm_relay_lists[%d].identity %q is not supported; only %q can be signed by Bahia", i, list.Identity, DMRelayListIdentityService)
 		}
-		if strings.TrimSpace(c.Nostr.PrivateKey) == "" {
-			return fmt.Errorf("config validation failed: nostr.private_key is required to publish nostr.dm_relay_lists[%d]", i)
+		if !c.Nostr.HasServiceIdentity() {
+			return fmt.Errorf("config validation failed: a service signer (nostr.private_key or nostr.signer) is required to publish nostr.dm_relay_lists[%d]", i)
 		}
 		if len(list.Relays) == 0 {
 			return fmt.Errorf("config validation failed: nostr.dm_relay_lists[%d].relays requires at least one DM receive relay", i)

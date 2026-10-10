@@ -2130,7 +2130,7 @@ func TestNostrDMRelayListValidationRequiresDMEnabledFeature(t *testing.T) {
 				cfg.Notifications.NostrDM = true
 				cfg.Nostr.DMRelayLists = []DMRelayListConfig{{Enabled: true, Feature: DMRelayListFeatureNotifications, Identity: DMRelayListIdentityService, Relays: []string{"wss://dm.example"}}}
 			},
-			want: "nostr.private_key is required",
+			want: "a service signer (nostr.private_key or nostr.signer) is required",
 		},
 	}
 	for _, tt := range tests {
@@ -2687,7 +2687,7 @@ func TestSecretDependentFeatureValidationRequiresNostrPrivateKey(t *testing.T) {
 		cfg.Auth.Enabled = true
 		cfg.Adoption.Enabled = true
 		cfg.Adoption.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
-		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.private_key is required when adoption.enabled=true") {
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "service signer (nostr.private_key or nostr.signer) is required when adoption.enabled=true") {
 			t.Fatalf("validate error = %v, want nostr private key requirement", err)
 		}
 	})
@@ -2697,7 +2697,7 @@ func TestSecretDependentFeatureValidationRequiresNostrPrivateKey(t *testing.T) {
 		cfg.Auth.Enabled = true
 		cfg.DirectRuntime.Enabled = true
 		cfg.DirectRuntime.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
-		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "nostr.private_key is required when direct_runtime_actions.enabled=true") {
+		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "service signer (nostr.private_key or nostr.signer) is required when direct_runtime_actions.enabled=true") {
 			t.Fatalf("validate error = %v, want nostr private key requirement", err)
 		}
 	})

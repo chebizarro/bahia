@@ -2,14 +2,14 @@ package app
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
-	"github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -102,12 +102,13 @@ func TestAssistantWrappedStartupNeverFallsBackOnMissingManifest(t *testing.T) {
 	}
 }
 
-// The Signet fence is "this dedicated client key is the assigned writer";
-// startup carries no lease epoch or expiry and only pins the identities.
-func TestAssistantWrappedStartupRequiresOnlyDistinctDedicatedOwnerKey(t *testing.T) {
+// Wrapped startup unwraps through whatever service signer nostr.signer
+// selects. It carries no Signet-specific settings, and a signer failure never
+// falls back to the raw-key provider.
+func TestAssistantWrappedStartupUsesConfiguredServiceSigner(t *testing.T) {
 	ctx := t.Context()
 	wrapper := assistantWrapFixture(t)
-	cfg := &config.Config{Nostr: config.NostrConfig{PrivateKey: strings.Repeat("1", 64)}}
+	cfg := &config.Config{Nostr: config.NostrConfig{PrivateKey: wrapper.secret.Hex()}}
 	manifest, err := createAssistantWrappedKeyManifest(ctx, wrapper, wrapper.pubkey, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -123,28 +124,34 @@ func TestAssistantWrappedStartupRequiresOnlyDistinctDedicatedOwnerKey(t *testing
 	if err := persistAssistantWrappedKeyManifest(ctx, wrapper, wrapper.pubkey, path, manifest); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Assistant.WrappedKeys = config.AssistantWrappedKeysConfig{Mode: "wrapped_read_only", ManifestPath: path, ExpectedGeneration: manifest.Active.Version, SignetBunkerURI: "bunker://" + strings.Repeat("3", 64) + "?relay=ws://127.0.0.1:1"}
-	errStop := errors.New("stop before network")
-	var requested []signet.Config
-	newClient := func(options signet.Config) (*signet.Client, error) {
-		requested = append(requested, options)
-		return nil, errStop
+	cfg.Assistant.WrappedKeys = config.AssistantWrappedKeysConfig{Mode: "wrapped_read_only", ManifestPath: path, ExpectedGeneration: manifest.Active.Version}
+
+	if _, err := assistantTranscriptKeyProviderWithSigner(ctx, cfg, wrapper); err != nil {
+		t.Fatalf("injected service signer = %v", err)
+	}
+	// The startup shim opens the configured (here: local) service signer.
+	if _, err := assistantTranscriptKeyProviderForStartup(ctx, cfg, "", nil); err != nil {
+		t.Fatalf("configured local service signer = %v", err)
+	}
+	if _, err := assistantTranscriptKeyProviderWithSigner(ctx, cfg, nil); err == nil {
+		t.Fatal("wrapped startup without a service signer succeeded")
+	}
+	refused := wrapper
+	refused.denied = true
+	if _, err := assistantTranscriptKeyProviderWithSigner(ctx, cfg, refused); err == nil {
+		t.Fatal("refusing service signer fell back to another key source")
+	}
+	other := assistantWrapFixture(t)
+	other.secret = nostr.MustSecretKeyFromHex(strings.Repeat("2", 64))
+	other.pubkey = other.secret.Public()
+	if _, err := assistantTranscriptKeyProviderWithSigner(ctx, cfg, other); err == nil {
+		t.Fatal("manifest opened under a different service identity")
 	}
 
-	cfg.Assistant.WrappedKeys.OwnerClientSecretKey = wrapper.secret.Hex()
-	if _, err := assistantTranscriptKeyProviderForStartupWithClient(ctx, cfg, wrapper.pubkey.Hex(), nil, newClient); err == nil || !strings.Contains(err.Error(), "distinct dedicated") {
-		t.Fatalf("service key reused as Signet owner key = %v", err)
-	}
-	if len(requested) != 0 {
-		t.Fatal("Signet client constructed for a non-dedicated owner key")
-	}
-
-	owner := strings.Repeat("2", 64)
-	cfg.Assistant.WrappedKeys.OwnerClientSecretKey = owner
-	if _, err := assistantTranscriptKeyProviderForStartupWithClient(ctx, cfg, wrapper.pubkey.Hex(), nil, newClient); !errors.Is(err, errStop) {
-		t.Fatalf("startup without any lease state = %v, want to reach Signet client construction", err)
-	}
-	if len(requested) != 1 || requested[0].ClientSecretKey != owner || requested[0].ExpectedServicePubkey != wrapper.pubkey.Hex() || !requested[0].RequireReal || requested[0].AllowMock {
-		t.Fatalf("fenced Signet client options = %+v", requested)
+	// A remote signer that cannot be reached fails startup; it never
+	// reaches the raw-key provider.
+	cfg.Nostr = config.NostrConfig{PublicKey: wrapper.pubkey.Hex(), Signer: config.NostrSignerConfig{Method: config.NostrSignerNIP46, BunkerURI: "bunker://" + strings.Repeat("3", 64) + "?relay=ws%3A%2F%2F127.0.0.1%3A1", ClientSecretKey: strings.Repeat("2", 64), Timeout: 200 * time.Millisecond}}
+	if _, err := assistantTranscriptKeyProviderForStartup(ctx, cfg, "", nil); err == nil || !strings.Contains(err.Error(), "open service signer") {
+		t.Fatalf("unreachable NIP-46 service signer = %v", err)
 	}
 }
