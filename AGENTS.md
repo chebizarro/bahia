@@ -159,6 +159,11 @@ assigns you a worktree, stay in it, commit there, and do not merge, rebase or
 push other branches; the orchestrator integrates and runs the full gate.
 Otherwise push your branch and report the commit hashes.
 
+Once a branch's changes are merged into `master`, remove its worktree and
+delete the branch (`git worktree remove ../bahia-worktrees/<name>` and
+`git branch -d <branch>`) — do not leave merged worktrees or stale branches
+sitting around.
+
 ### Implementation standard
 
 Before changing code: run `bd prime`, inspect the relevant code and tests,
