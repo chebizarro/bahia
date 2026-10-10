@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"fiatjaf.com/nostr"
@@ -15,8 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This test uses session-local TEMP tables, never the database's permanent
-// service-secret tables. Supply a disposable PostgreSQL 16 database URL.
+// This test creates and drops a dedicated schema, including the real 000080
+// wrapped-key migration. Supply a disposable PostgreSQL 16 database URL.
 func TestRekeyStoredSecretsPG16(t *testing.T) {
 	dsn := os.Getenv("BAHIA_REKEY_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -29,16 +30,27 @@ func TestRekeyStoredSecretsPG16(t *testing.T) {
 	var version int
 	require.NoError(t, conn.QueryRow(ctx, `SELECT current_setting('server_version_num')::integer`).Scan(&version))
 	require.GreaterOrEqual(t, version, 160000)
-	_, err = conn.Exec(ctx, `CREATE TEMP TABLE service_secrets (
+	schema := "bahia_rekey_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	identifier := pgx.Identifier{schema}.Sanitize()
+	_, err = conn.Exec(ctx, `CREATE SCHEMA `+identifier)
+	require.NoError(t, err)
+	defer func() {
+		_, dropErr := conn.Exec(ctx, `DROP SCHEMA `+identifier+` CASCADE`)
+		require.NoError(t, dropErr)
+	}()
+	_, err = conn.Exec(ctx, `SET search_path TO `+identifier)
+	require.NoError(t, err)
+	_, err = conn.Exec(ctx, `CREATE TABLE service_secrets (
 		id uuid PRIMARY KEY, version integer NOT NULL, encrypted_value bytea NOT NULL,
 		encryption_method varchar(20) NOT NULL);
-		CREATE TEMP TABLE secret_versions (
+		CREATE TABLE secret_versions (
 		id uuid PRIMARY KEY, secret_id uuid NOT NULL, version integer NOT NULL,
 		encrypted_value bytea NOT NULL, encryption_method varchar(20) NOT NULL);
-		CREATE TEMP TABLE service_secret_data_keys (
-		id uuid PRIMARY KEY, service_pubkey char(64) NOT NULL, wrapped_key text NOT NULL,
-		created_at timestamptz NOT NULL DEFAULT now());
 	`)
+	require.NoError(t, err)
+	migration, err := os.ReadFile("../../db/migrations/000080_service_secret_data_keys.up.sql")
+	require.NoError(t, err)
+	_, err = conn.Exec(ctx, string(migration))
 	require.NoError(t, err)
 	serviceKey := nostr.Generate()
 	legacy, err := NewEncryptor(serviceKey.Hex())
@@ -70,7 +82,7 @@ func TestRekeyStoredSecretsPG16(t *testing.T) {
 	require.Equal(t, rekeyReport{Secrets: 1, Versions: 2}, report)
 	var wrapped WrappedDataKey
 	var pubkeyHex string
-	require.NoError(t, conn.QueryRow(ctx, `SELECT id,service_pubkey,wrapped_key FROM service_secret_data_keys`).Scan(&wrapped.ID, &pubkeyHex, &wrapped.WrappedHex))
+	require.NoError(t, conn.QueryRow(ctx, `SELECT id,service_pubkey,wrapped_key FROM service_secret_data_keys`).Scan(&wrapped.ID, &pubkeyHex, &wrapped.WrappedCiphertext))
 	require.Equal(t, serviceKey.Public().Hex(), pubkeyHex)
 	wrapped.ServiceKey = serviceKey.Public()
 	opened, err := openWrappedDataKey(ctx, keyer, wrapped, serviceKey.Public())

@@ -3,6 +3,7 @@ package secrets
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"fiatjaf.com/nostr"
@@ -63,4 +64,33 @@ func TestVersionedDataKeyRoundTripAndIdentityBinding(t *testing.T) {
 	require.Error(t, err)
 	_, err = openWrappedDataKey(context.Background(), keyer, wrapped, nostr.Generate().Public())
 	require.Error(t, err)
+}
+
+func TestWrappedDataKeyRejectsEnvelopeSubstitution(t *testing.T) {
+	ctx := context.Background()
+	keyer := localWrapKeyer{key: nostr.Generate()}
+	service := keyer.key.Public()
+	first, _, err := newWrappedDataKey(ctx, keyer, service)
+	require.NoError(t, err)
+	second, _, err := newWrappedDataKey(ctx, keyer, service)
+	require.NoError(t, err)
+
+	// SQL row substitution must not cause the first key to be accepted under
+	// the second row's UUID, even though both use the same NIP-44 identity.
+	second.WrappedCiphertext = first.WrappedCiphertext
+	_, err = openWrappedDataKey(ctx, keyer, second, service)
+	require.ErrorContains(t, err, "identity mismatch")
+
+	for _, envelope := range []string{
+		"bahia/unrelated-purpose/v2|" + first.ID.String() + "|" + service.Hex() + "|" + strings.Repeat("a", 64),
+		dataKeyWrapPurpose + "|" + first.ID.String() + "|" + nostr.Generate().Public().Hex() + "|" + strings.Repeat("a", 64),
+		strings.Repeat("a", 64), // Legacy bare-key plaintext is not a v2 envelope.
+	} {
+		ciphertext, encryptErr := keyer.Encrypt(ctx, envelope, service)
+		require.NoError(t, encryptErr)
+		candidate := first
+		candidate.WrappedCiphertext = ciphertext
+		_, err = openWrappedDataKey(ctx, keyer, candidate, service)
+		require.Error(t, err)
+	}
 }

@@ -90,7 +90,7 @@ func rekeyStoredSecrets(ctx context.Context, conn *pgx.Conn, legacy legacySecret
 	if err != nil {
 		return rekeyReport{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO service_secret_data_keys (id, service_pubkey, wrapped_key) VALUES ($1,$2,$3)`, wrapped.ID, service.Hex(), wrapped.WrappedHex); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO service_secret_data_keys (id, service_pubkey, wrapped_key) VALUES ($1,$2,$3)`, wrapped.ID, service.Hex(), wrapped.WrappedCiphertext); err != nil {
 		return rekeyReport{}, errors.New("store wrapped service-secret data key")
 	}
 	for _, row := range history {

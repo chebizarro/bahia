@@ -25,7 +25,7 @@ func loadSoleWrappedDataKey(ctx context.Context, conn *pgx.Conn, keyer nostr.Key
 		rows.Close()
 		return nil, errors.New("wrapped service-secret data key missing")
 	}
-	if err := rows.Scan(&wrapped.ID, &pubkeyHex, &wrapped.WrappedHex); err != nil {
+	if err := rows.Scan(&wrapped.ID, &pubkeyHex, &wrapped.WrappedCiphertext); err != nil {
 		rows.Close()
 		return nil, errors.New("scan wrapped service-secret data key")
 	}

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -17,13 +18,15 @@ import (
 
 const dataKeyCipherVersion byte = 2
 const maxServiceSecretBytes = 1 << 20
+const dataKeyWrapPurpose = "bahia/service-secret-data-key/v2"
 
 // WrappedDataKey is a random AES key wrapped to the existing service pubkey.
-// WrappedHex is NIP-44 ciphertext over exactly 64 lowercase hex characters.
+// WrappedCiphertext is NIP-44 ciphertext over a purpose- and identity-bound key
+// envelope, not over a bare AES key.
 type WrappedDataKey struct {
-	ID         uuid.UUID
-	ServiceKey nostr.PubKey
-	WrappedHex string
+	ID                uuid.UUID
+	ServiceKey        nostr.PubKey
+	WrappedCiphertext string
 }
 
 // DataKey is an in-memory v2 secret key; the caller controls its lifetime.
@@ -46,27 +49,36 @@ func newWrappedDataKey(ctx context.Context, keyer nostr.Keyer, service nostr.Pub
 	if _, err := io.ReadFull(rand.Reader, key.key[:]); err != nil {
 		return WrappedDataKey{}, nil, errors.New("generate random service-secret data key")
 	}
-	wrapped, err := keyer.Encrypt(ctx, hex.EncodeToString(key.key[:]), service)
+	plainEnvelope := dataKeyWrapPurpose + "|" + key.id.String() + "|" + service.Hex() + "|" + hex.EncodeToString(key.key[:])
+	wrapped, err := keyer.Encrypt(ctx, plainEnvelope, service)
 	if err != nil || wrapped == "" {
 		return WrappedDataKey{}, nil, errors.New("fenced service-secret data-key wrap failed")
 	}
-	return WrappedDataKey{ID: key.id, ServiceKey: service, WrappedHex: wrapped}, key, nil
+	return WrappedDataKey{ID: key.id, ServiceKey: service, WrappedCiphertext: wrapped}, key, nil
 }
 
 func openWrappedDataKey(ctx context.Context, keyer nostr.Keyer, wrapped WrappedDataKey, expected nostr.PubKey) (*DataKey, error) {
-	if keyer == nil || expected == nostr.ZeroPK || wrapped.ServiceKey != expected || wrapped.ID == uuid.Nil || wrapped.WrappedHex == "" {
+	if keyer == nil || expected == nostr.ZeroPK || wrapped.ServiceKey != expected || wrapped.ID == uuid.Nil || wrapped.WrappedCiphertext == "" {
 		return nil, errors.New("invalid wrapped service-secret data key")
 	}
 	actual, err := keyer.GetPublicKey(ctx)
 	if err != nil || actual != expected {
 		return nil, errors.New("service keyer pubkey does not match existing service pubkey")
 	}
-	plainHex, err := keyer.Decrypt(ctx, wrapped.WrappedHex, expected)
+	plainEnvelope, err := keyer.Decrypt(ctx, wrapped.WrappedCiphertext, expected)
 	if err != nil {
 		return nil, errors.New("fenced service-secret data-key unwrap failed")
 	}
-	plain, err := hex.DecodeString(plainHex)
-	if err != nil || len(plain) != 32 || hex.EncodeToString(plain) != plainHex {
+	const envelopeLen = len(dataKeyWrapPurpose) + 1 + 36 + 1 + 64 + 1 + 64
+	if len(plainEnvelope) != envelopeLen {
+		return nil, errors.New("invalid unwrapped service-secret data-key envelope")
+	}
+	parts := strings.Split(plainEnvelope, "|")
+	if len(parts) != 4 || parts[0] != dataKeyWrapPurpose || parts[1] != wrapped.ID.String() || parts[2] != expected.Hex() {
+		return nil, errors.New("unwrapped service-secret data-key identity mismatch")
+	}
+	plain, err := hex.DecodeString(parts[3])
+	if err != nil || len(plain) != 32 || hex.EncodeToString(plain) != parts[3] {
 		return nil, errors.New("malformed unwrapped service-secret data key")
 	}
 	key := &DataKey{id: wrapped.ID}

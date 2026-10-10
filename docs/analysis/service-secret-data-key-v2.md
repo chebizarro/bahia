@@ -16,7 +16,9 @@ flag cannot prove compatibility.
   **the existing service pubkey**; only the wrapper is stored in SQL. Tests
   use a disposable synthetic keyer. A future production caller must pass the
   epoch-fenced Signet keyer; no caller is wired in this commit. Signet does
-  not derive this data key or perform arbitrary AES operations.
+  not derive this data key or perform arbitrary AES operations. The encrypted
+  plaintext envelope binds the purpose/domain, key UUID and service pubkey to
+  the key bytes; unwrapping rejects SQL row and cross-purpose substitution.
 - `aes256gcm-v2` ciphertext contains a version byte, key UUID, random GCM
   nonce and tag. GCM AAD binds secret UUID, version and key UUID. Retained
   `secret_versions` and current `service_secrets` are transformed together.
@@ -55,5 +57,6 @@ BAHIA_REKEY_TEST_DATABASE_URL='postgres://.../disposable_db' \
   go test -tags integration ./internal/adapters/secrets -run '^TestRekeyStoredSecretsPG16$' -count=1
 ```
 
-The test creates session-local temporary tables and checks row bounds,
-rollback, historical/current value continuity, and idempotency refusal.
+The test creates and drops a dedicated schema, executes the real migration
+000080 up SQL for the wrapped-key table, and checks row bounds, rollback,
+historical/current value continuity, and idempotency refusal.
