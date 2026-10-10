@@ -244,6 +244,36 @@ type canonicalState struct {
 	ObservedAt          time.Time                     `json:"observed_at"`
 }
 
+func validateCanonicalDesiredState(state *domain.EnvironmentServiceState) error {
+	spec := state.DesiredRuntimeState
+	if spec == nil {
+		return nil
+	}
+	if spec.ServiceID != state.ServiceID || spec.EnvironmentID != state.EnvironmentID ||
+		state.DesiredArtifactID == nil || spec.ArtifactID != *state.DesiredArtifactID ||
+		(spec.DeploymentUnitID == nil) != (state.DeploymentUnitID == nil) ||
+		(spec.DeploymentUnitID != nil && *spec.DeploymentUnitID != *state.DeploymentUnitID) {
+		return fmt.Errorf("canonical desired runtime state identity differs from service state")
+	}
+	if state.DesiredHash == "" || spec.DesiredHash != state.DesiredHash {
+		return fmt.Errorf("canonical desired runtime state hash differs from service state")
+	}
+	// ComputeDesiredHash normalizes/sorts fields in place. Copy the signed body
+	// before recomputing so validation never changes the projected state.
+	wire, err := json.Marshal(spec)
+	if err != nil {
+		return fmt.Errorf("encode canonical desired runtime state: %w", err)
+	}
+	var copy domain.DesiredServiceSpec
+	if err := json.Unmarshal(wire, &copy); err != nil {
+		return fmt.Errorf("decode canonical desired runtime state: %w", err)
+	}
+	if copy.ComputeDesiredHash() != state.DesiredHash {
+		return fmt.Errorf("canonical desired runtime state body does not match its hash")
+	}
+	return nil
+}
+
 func (s *CanonicalRuntimeSource) states(ctx context.Context) ([]domain.EnvironmentServiceState, error) {
 	events, err := s.records(ctx, kinds.ServiceState, "")
 	if err != nil {
@@ -261,6 +291,9 @@ func (s *CanonicalRuntimeSource) states(ctx context.Context) ([]domain.Environme
 		d := kinds.ServiceStateDTag(head.ServiceID.String(), head.EnvironmentID.String())
 		rec, ok := decodeCanonical[canonicalState](ev, d)
 		if ok && !rec.Deleted && rec.Value.ServiceID == head.ServiceID && rec.Value.EnvironmentID == head.EnvironmentID {
+			if err := validateCanonicalDesiredState(&rec.Value.EnvironmentServiceState); err != nil {
+				return nil, fmt.Errorf("reading canonical service state %s: %w", d, err)
+			}
 			out = append(out, rec.Value.EnvironmentServiceState)
 		}
 	}
@@ -281,6 +314,9 @@ func (s *CanonicalRuntimeSource) state(ctx context.Context, serviceID, envID uui
 		if ok && rec.Value.ServiceID == serviceID && rec.Value.EnvironmentID == envID {
 			if rec.Deleted {
 				return nil, nil
+			}
+			if err := validateCanonicalDesiredState(&rec.Value.EnvironmentServiceState); err != nil {
+				return nil, fmt.Errorf("reading canonical service state %s: %w", d, err)
 			}
 			return &rec.Value, nil
 		}

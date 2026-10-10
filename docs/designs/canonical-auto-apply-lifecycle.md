@@ -1,6 +1,6 @@
 # Canonical auto-apply lifecycle (`bahia-4f10q.2`)
 
-Status: implementation design; `auto_apply` remains suspended. This document does not authorize wiring `RuntimeLifecycleService` into the reconciler. The production canonical unit reader rejects duplicate unit IDs and conflicting embedded environment bindings in signed environment records, but this read validation is not an apply authorization or replay fence.
+Status: implementation design; `auto_apply` remains suspended. This document does not authorize wiring `RuntimeLifecycleService` into the reconciler. Production canonical readers reject duplicate unit IDs, conflicting environment bindings, and embedded desired specs whose recomputed body hash or service/environment/artifact/unit identity differs from the signed service-state record. These read validations are not operator-intent authorization, secret-version binding, or an apply/replay fence.
 
 ## Current seam and invariant
 

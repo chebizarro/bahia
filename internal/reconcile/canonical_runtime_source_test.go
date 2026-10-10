@@ -39,6 +39,65 @@ func saveCanonicalRuntimeJSON(t *testing.T, store *localstore.Store, key gonostr
 	saveCanonicalRuntimeEvent(t, store, key, kind, coordinate, false, string(content), at, nil)
 }
 
+func TestCanonicalServiceStateRejectsDivergentSignedDesiredSpec(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*domain.EnvironmentServiceState)
+		want   string
+	}{
+		{name: "valid signed state"},
+		{name: "body hash", change: func(s *domain.EnvironmentServiceState) { s.DesiredRuntimeState.ImageRef = "tampered-image" }, want: "body does not match"},
+		{name: "outer hash", change: func(s *domain.EnvironmentServiceState) { s.DesiredHash = "sha256:other" }, want: "hash differs"},
+		{name: "service identity", change: func(s *domain.EnvironmentServiceState) { s.DesiredRuntimeState.ServiceID = uuid.New() }, want: "identity differs"},
+		{name: "environment identity", change: func(s *domain.EnvironmentServiceState) { s.DesiredRuntimeState.EnvironmentID = uuid.New() }, want: "identity differs"},
+		{name: "artifact identity", change: func(s *domain.EnvironmentServiceState) { id := uuid.New(); s.DesiredArtifactID = &id }, want: "identity differs"},
+		{name: "unit identity", change: func(s *domain.EnvironmentServiceState) { id := uuid.New(); s.DeploymentUnitID = &id }, want: "identity differs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "events.bolt")
+			store, err := localstore.Open(path)
+			require.NoError(t, err)
+			key := gonostr.Generate()
+			serviceID, envID, artifactID, unitID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+			spec := &domain.DesiredServiceSpec{SchemaVersion: "4", ServiceID: serviceID, EnvironmentID: envID,
+				ArtifactID: artifactID, DeploymentUnitID: &unitID, DeploymentUnitKey: "web",
+				StableServiceKey: "api", ImageRef: "registry.example/api@sha256:abc"}
+			spec.ComputeDesiredHash()
+			state := &domain.EnvironmentServiceState{ServiceID: serviceID, EnvironmentID: envID,
+				DesiredArtifactID: &artifactID, DeploymentUnitID: &unitID,
+				DesiredRuntimeState: spec, DesiredHash: spec.DesiredHash}
+			if tc.change != nil {
+				tc.change(state)
+			}
+			tags, content := nostrAdapter.RuntimeStateRecord(state, nil)
+			saveCanonicalRuntimeEvent(t, store, key, kinds.ServiceState,
+				nostrAdapter.ServiceStateDTag(serviceID, envID), false, content, 100, tags)
+			require.NoError(t, store.Close())
+			store, err = localstore.Open(path)
+			require.NoError(t, err)
+			defer store.Close()
+			source, err := NewCanonicalRuntimeSource(store, key.Public().Hex())
+			require.NoError(t, err)
+			// Even a correct SQL projection cannot repair contradictory signed
+			// desired inputs or authorize effects from them.
+			states := canonicalStates{EnvironmentServiceStateRepository: &fakeStateRepo{states: []domain.EnvironmentServiceState{*state}}, source: source}
+			got, err := states.Get(context.Background(), serviceID, envID)
+			if tc.want == "" {
+				require.NoError(t, err)
+				require.Equal(t, spec.DesiredHash, got.DesiredHash)
+				all, err := states.ListAll(context.Background())
+				require.NoError(t, err)
+				require.Len(t, all, 1)
+				return
+			}
+			require.ErrorContains(t, err, tc.want)
+			require.Nil(t, got)
+			_, err = states.ListAll(context.Background())
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
 func TestCanonicalDeploymentUnitRejectsAmbiguousSignedEnvironmentBinding(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
