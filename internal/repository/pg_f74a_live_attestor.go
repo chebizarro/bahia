@@ -31,7 +31,6 @@ type f74aLiveAttestorProof struct {
 	receipt  []byte
 	endpoint string
 	client   *http.Client
-	runID    uuid.UUID
 }
 
 type f74aLiveGrantRequest struct {
@@ -66,7 +65,7 @@ type f74aLiveGrantPayload struct {
 	HoldUntilExplicitRelease     bool                 `json:"hold_until_explicit_release"`
 }
 
-func newF74aLiveAttestorProof(pool *pgxpool.Pool, pin string, receipt []byte, endpoint string, client *http.Client, runID uuid.UUID) (*f74aLiveAttestorProof, error) {
+func newF74aLiveAttestorProof(pool *pgxpool.Pool, pin string, receipt []byte, endpoint string, client *http.Client) (*f74aLiveAttestorProof, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" {
 		return nil, fmt.Errorf("F74a live attestor endpoint must be an HTTPS URL without credentials or query")
@@ -78,16 +77,16 @@ func newF74aLiveAttestorProof(pool *pgxpool.Pool, pin string, receipt []byte, en
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &f74aLiveAttestorProof{pool: pool, pin: pin, receipt: bytes.Clone(receipt), endpoint: endpoint, client: client, runID: runID}, nil
+	return &f74aLiveAttestorProof{pool: pool, pin: pin, receipt: bytes.Clone(receipt), endpoint: endpoint, client: client}, nil
 }
 
-func (p *f74aLiveAttestorProof) proveCurrentF74aBackup(ctx context.Context) (F74aReceiptVerification, error) {
+func (p *f74aLiveAttestorProof) proveCurrentF74aBackup(ctx context.Context, runID uuid.UUID) (F74aReceiptVerification, error) {
 	var proof F74aReceiptVerification
 	var err error
-	if p.runID == uuid.Nil {
+	if runID == uuid.Nil {
 		proof, err = VerifyF74aAttestedReceipt(ctx, p.pool, p.pin, p.receipt)
 	} else {
-		proof, err = verifyF74aAttestedReceiptForDeletionRun(ctx, p.pool, p.pin, p.receipt, p.runID)
+		proof, err = verifyF74aAttestedReceiptForDeletionRun(ctx, p.pool, p.pin, p.receipt, runID)
 	}
 	if err != nil {
 		return F74aReceiptVerification{}, fmt.Errorf("F74a signed restore receipt is not current: %w", err)
@@ -98,7 +97,7 @@ func (p *f74aLiveAttestorProof) proveCurrentF74aBackup(ctx context.Context) (F74
 	}
 	request := f74aLiveGrantRequest{
 		Nonce: hex.EncodeToString(nonce[:]), ReceiptID: proof.ReceiptID, ReceiptSHA256: proof.ReceiptSHA256,
-		RunID: p.runID, SourceDatabase: proof.SourceDatabase, Cutoff: proof.Cutoff,
+		RunID: runID, SourceDatabase: proof.SourceDatabase, Cutoff: proof.Cutoff,
 		SourceInventorySHA256: proof.InventorySHA256, BackupObjectRef: proof.BackupObjectRef,
 		BackupObjectSHA256: proof.BackupObjectSHA256,
 	}

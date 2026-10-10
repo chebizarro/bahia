@@ -84,9 +84,9 @@ func TestF74aLiveAttestorRequiresHTTPSAndIndependentPin(t *testing.T) {
 	require.NoError(t, err)
 	pool := &pgxpool.Pool{}
 	for _, endpoint := range []string{"http://authority.example/grant", "https://user:secret@authority.example/grant", "https://authority.example/grant?token=secret"} {
-		_, err := newF74aLiveAttestorProof(pool, hex.EncodeToString(public), []byte("receipt"), endpoint, nil, uuid.Nil)
+		_, err := newF74aLiveAttestorProof(pool, hex.EncodeToString(public), []byte("receipt"), endpoint, nil)
 		require.Error(t, err)
 	}
-	_, err = newF74aLiveAttestorProof(pool, "", []byte("receipt"), "https://authority.example/grant", nil, uuid.Nil)
+	_, err = newF74aLiveAttestorProof(pool, "", []byte("receipt"), "https://authority.example/grant", nil)
 	require.Error(t, err)
 }

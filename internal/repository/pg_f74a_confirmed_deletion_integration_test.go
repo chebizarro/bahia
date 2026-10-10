@@ -29,14 +29,13 @@ type f74aTestSignedProof struct {
 	pool    *pgxpool.Pool
 	pin     string
 	receipt []byte
-	runID   uuid.UUID
 }
 
-func (p *f74aTestSignedProof) proveCurrentF74aBackup(ctx context.Context) (F74aReceiptVerification, error) {
-	if p.runID == uuid.Nil {
+func (p *f74aTestSignedProof) proveCurrentF74aBackup(ctx context.Context, runID uuid.UUID) (F74aReceiptVerification, error) {
+	if runID == uuid.Nil {
 		return VerifyF74aAttestedReceipt(ctx, p.pool, p.pin, p.receipt)
 	}
-	return verifyF74aAttestedReceiptForDeletionRun(ctx, p.pool, p.pin, p.receipt, p.runID)
+	return verifyF74aAttestedReceiptForDeletionRun(ctx, p.pool, p.pin, p.receipt, runID)
 }
 
 type f74aTestBatchProof struct {
@@ -46,7 +45,7 @@ type f74aTestBatchProof struct {
 	failOnCall int
 }
 
-func (p *f74aTestBatchProof) proveCurrentF74aBackup(context.Context) (F74aReceiptVerification, error) {
+func (p *f74aTestBatchProof) proveCurrentF74aBackup(context.Context, uuid.UUID) (F74aReceiptVerification, error) {
 	p.calls++
 	if p.fail || p.calls == p.failOnCall {
 		return F74aReceiptVerification{}, fmt.Errorf("independent backup authority unavailable")
@@ -370,13 +369,12 @@ func TestF74aConfirmedDeletionPG16SignedReceiptReconcilesAfterRestart(t *testing
 	require.NoError(t, err)
 	pin := hex.EncodeToString(pub)
 	attestor := &f74aTestSignedProof{pool: pool, pin: pin, receipt: receipt}
-	verified, err := attestor.proveCurrentF74aBackup(ctx)
+	verified, err := attestor.proveCurrentF74aBackup(ctx, uuid.Nil)
 	require.NoError(t, err)
 	require.Equal(t, initial.InventorySHA256, verified.InventorySHA256)
 	repo := newPgF74aConfirmedDeletionRepository(pool)
 	run, err := repo.startRun(ctx, attestor, 1)
 	require.NoError(t, err)
-	attestor.runID = run.ID
 	first, err := repo.nextBatch(ctx, run.ID, attestor)
 	require.NoError(t, err)
 	require.Equal(t, 1, first.Deleted)
@@ -389,13 +387,13 @@ func TestF74aConfirmedDeletionPG16SignedReceiptReconcilesAfterRestart(t *testing
 	require.Equal(t, initial.HotCandidates, reconciled.HotCandidates)
 	// No in-memory state is needed: a new provider and repository read the
 	// immutable journal and validate the exact signed receipt after restart.
-	restartedProof := &f74aTestSignedProof{pool: pool, pin: pin, receipt: receipt, runID: run.ID}
-	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	restartedProof := &f74aTestSignedProof{pool: pool, pin: pin, receipt: receipt}
+	_, err = restartedProof.proveCurrentF74aBackup(ctx, run.ID)
 	require.NoError(t, err)
 	second, err := newPgF74aConfirmedDeletionRepository(pool).nextBatch(ctx, run.ID, restartedProof)
 	require.NoError(t, err)
 	require.Equal(t, 1, second.Deleted)
-	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	_, err = restartedProof.proveCurrentF74aBackup(ctx, run.ID)
 	require.NoError(t, err)
 	var items int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM f74a_confirmed_deletion_items WHERE run_id=$1`, run.ID).Scan(&items))
@@ -415,7 +413,7 @@ func TestF74aConfirmedDeletionPG16SignedReceiptReconcilesAfterRestart(t *testing
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `ALTER TABLE f74a_confirmed_deletion_items ENABLE TRIGGER f74a_confirmed_deletion_item_immutable`)
 	require.NoError(t, err)
-	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	_, err = restartedProof.proveCurrentF74aBackup(ctx, run.ID)
 	require.ErrorContains(t, err, "deletion provenance differs")
 	_, err = pool.Exec(ctx, `ALTER TABLE f74a_confirmed_deletion_items DISABLE TRIGGER f74a_confirmed_deletion_item_immutable`)
 	require.NoError(t, err)
@@ -424,13 +422,13 @@ func TestF74aConfirmedDeletionPG16SignedReceiptReconcilesAfterRestart(t *testing
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `ALTER TABLE f74a_confirmed_deletion_items ENABLE TRIGGER f74a_confirmed_deletion_item_immutable`)
 	require.NoError(t, err)
-	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	_, err = restartedProof.proveCurrentF74aBackup(ctx, run.ID)
 	require.NoError(t, err)
 	// A hot row removed outside the journal cannot be laundered into the
 	// original signed inventory by this run's reconciliation.
 	_, err = pool.Exec(ctx, `DELETE FROM runtime_observations WHERE id=$1`, ids[0])
 	require.NoError(t, err)
-	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	_, err = restartedProof.proveCurrentF74aBackup(ctx, run.ID)
 	require.ErrorContains(t, err, "inventory differs")
 }
 
@@ -508,12 +506,12 @@ func TestF74aConfirmedDeletionPG16LiveAttestorRollbackAndRestart(t *testing.T) {
 	}))
 	defer server.Close()
 	pin := hex.EncodeToString(public)
-	proof, err := newF74aLiveAttestorProof(pool, pin, receipt, server.URL, server.Client(), uuid.Nil)
+	proof, err := newF74aLiveAttestorProof(pool, pin, receipt, server.URL, server.Client())
 	require.NoError(t, err)
 	repo := newPgF74aConfirmedDeletionRepository(pool)
 	run, err := repo.startRun(ctx, proof, 1)
 	require.NoError(t, err)
-	proof, err = newF74aLiveAttestorProof(pool, pin, receipt, server.URL, server.Client(), run.ID)
+	proof, err = newF74aLiveAttestorProof(pool, pin, receipt, server.URL, server.Client())
 	require.NoError(t, err)
 	first, err := repo.nextBatch(ctx, run.ID, proof)
 	require.NoError(t, err)
@@ -548,7 +546,7 @@ func TestF74aConfirmedDeletionPG16LiveAttestorRollbackAndRestart(t *testing.T) {
 	mode = "valid"
 	// The new provider has no cached grant; it must re-check the same signed
 	// receipt against committed deletion provenance and request a fresh nonce.
-	restarted, err := newF74aLiveAttestorProof(pool, pin, receipt, server.URL, server.Client(), run.ID)
+	restarted, err := newF74aLiveAttestorProof(pool, pin, receipt, server.URL, server.Client())
 	require.NoError(t, err)
 	second, err := newPgF74aConfirmedDeletionRepository(pool).nextBatch(ctx, run.ID, restarted)
 	require.NoError(t, err)
