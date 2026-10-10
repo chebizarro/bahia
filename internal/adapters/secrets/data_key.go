@@ -35,6 +35,16 @@ type DataKey struct {
 	key [32]byte
 }
 
+// NewRandomDataKey creates an in-memory key. It must be wrapped to the
+// existing service pubkey before any ciphertext sealed with it is persisted.
+func NewRandomDataKey() (*DataKey, error) {
+	key := &DataKey{id: uuid.New()}
+	if _, err := io.ReadFull(rand.Reader, key.key[:]); err != nil {
+		return nil, errors.New("generate random service-secret data key")
+	}
+	return key, nil
+}
+
 // This keyer seam is package-private until a production Signet-fenced caller
 // can be wired without creating an adapter import cycle.
 func newWrappedDataKey(ctx context.Context, keyer nostr.Keyer, service nostr.PubKey) (WrappedDataKey, *DataKey, error) {
@@ -45,9 +55,9 @@ func newWrappedDataKey(ctx context.Context, keyer nostr.Keyer, service nostr.Pub
 	if err != nil || actual != service {
 		return WrappedDataKey{}, nil, errors.New("service keyer pubkey does not match existing service pubkey")
 	}
-	key := &DataKey{id: uuid.New()}
-	if _, err := io.ReadFull(rand.Reader, key.key[:]); err != nil {
-		return WrappedDataKey{}, nil, errors.New("generate random service-secret data key")
+	key, err := NewRandomDataKey()
+	if err != nil {
+		return WrappedDataKey{}, nil, err
 	}
 	plainEnvelope := dataKeyWrapPurpose + "|" + key.id.String() + "|" + service.Hex() + "|" + hex.EncodeToString(key.key[:])
 	wrapped, err := keyer.Encrypt(ctx, plainEnvelope, service)

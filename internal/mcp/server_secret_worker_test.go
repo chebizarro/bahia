@@ -10,6 +10,7 @@ import (
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -78,7 +79,16 @@ func (r *testSecretRepo) ListEffective(_ context.Context, serviceID, envID uuid.
 }
 
 func (r *testSecretRepo) Update(_ context.Context, s *domain.ServiceSecret) error {
+	current, ok := r.secrets[s.ID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	if s.Version != current.Version {
+		return repository.ErrConflict
+	}
 	copy := *s
+	copy.Version++ // PgSecretRepository increments only after matching current version.
+	s.Version = copy.Version
 	r.secrets[s.ID] = &copy
 	return nil
 }
@@ -225,6 +235,19 @@ func TestCallTool_SecretCRUD(t *testing.T) {
 	if plaintext != "postgres://user:new-pass@example/db" {
 		t.Fatalf("secret decrypted value was not updated")
 	}
+	secondUpdate, err := server.CallTool(ctx, "bahia_update_secret", map[string]interface{}{
+		"secret_id": secretID.String(),
+		"value":     "postgres://user:third-pass@example/db",
+	})
+	if err != nil || secondUpdate.IsError {
+		t.Fatalf("second update after optimistic version increment failed: %v, %#v", err, secondUpdate)
+	}
+	if version := int(decodeResultMap(t, secondUpdate)["version"].(float64)); version != 3 {
+		t.Fatalf("second update returned version %d, want 3", version)
+	}
+	if repo.secrets[secretID].Version != 3 {
+		t.Fatal("persisted secret version drifted after consecutive updates")
+	}
 
 	deleteRes, err := server.CallTool(ctx, "bahia_delete_secret", map[string]interface{}{"secret_id": secretID.String()})
 	if err != nil {
@@ -235,6 +258,61 @@ func TestCallTool_SecretCRUD(t *testing.T) {
 	}
 	if _, ok := repo.secrets[secretID]; ok {
 		t.Fatalf("secret was not deleted")
+	}
+}
+
+func TestCallTool_UpdateSecretRefusesV2AndUnknownWithoutMutation(t *testing.T) {
+	ctx := authorizedMCPContext()
+	server, repo, _ := newTestMCPSecretServer(t)
+	for _, method := range []domain.EncryptionMethod{domain.EncryptionAES256V2, "unknown"} {
+		t.Run(string(method), func(t *testing.T) {
+			id := uuid.New()
+			original := &domain.ServiceSecret{
+				ID: id, ServiceID: uuid.New(), Name: "TOKEN", Version: 4,
+				EncryptedValue: []byte("existing-ciphertext"), EncryptionMethod: method,
+				UpdatedAt: time.Unix(123, 0),
+			}
+			repo.secrets[id] = original
+			const proposed = "new-sensitive-value"
+			result, err := server.CallTool(ctx, "bahia_update_secret", map[string]interface{}{
+				"secret_id": id.String(), "value": proposed,
+			})
+			if err != nil || result == nil || !result.IsError {
+				t.Fatalf("expected update refusal, err=%v result=%#v", err, result)
+			}
+			if strings.Contains(result.Content[0].Text, proposed) {
+				t.Fatal("update refusal leaked proposed plaintext")
+			}
+			stored := repo.secrets[id]
+			if stored != original || stored.Version != 4 || stored.EncryptionMethod != method ||
+				string(stored.EncryptedValue) != "existing-ciphertext" || !stored.UpdatedAt.Equal(time.Unix(123, 0)) {
+				t.Fatal("refused update mutated stored secret")
+			}
+		})
+	}
+}
+
+func TestCallTool_UpdateLegacyNIP44RelabelsReplacementAsAES(t *testing.T) {
+	ctx := authorizedMCPContext()
+	server, repo, encryptor := newTestMCPSecretServer(t)
+	id := uuid.New()
+	repo.secrets[id] = &domain.ServiceSecret{
+		ID: id, ServiceID: uuid.New(), Name: "TOKEN", Version: 1,
+		EncryptedValue: []byte("legacy-nip44-ciphertext"), EncryptionMethod: domain.EncryptionNIP44,
+	}
+	result, err := server.CallTool(ctx, "bahia_update_secret", map[string]interface{}{
+		"secret_id": id.String(), "value": "replacement",
+	})
+	if err != nil || result == nil || result.IsError {
+		t.Fatalf("legacy update failed, err=%v result=%#v", err, result)
+	}
+	stored := repo.secrets[id]
+	if stored.Version != 2 || stored.EncryptionMethod != domain.EncryptionAES256 {
+		t.Fatalf("legacy replacement has wrong version/method: %d %q", stored.Version, stored.EncryptionMethod)
+	}
+	plain, err := encryptor.Decrypt(stored.EncryptedValue, stored.EncryptionMethod)
+	if err != nil || plain != "replacement" {
+		t.Fatal("legacy replacement is not readable with its stored method")
 	}
 }
 

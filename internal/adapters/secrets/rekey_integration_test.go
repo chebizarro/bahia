@@ -116,6 +116,18 @@ func TestRekeyStoredSecretsPG16(t *testing.T) {
 	plain, err := opened.Open(id, 2, current)
 	require.NoError(t, err)
 	require.Equal(t, []byte("current private value"), plain)
+	// Re-open through a new SQL connection instead of relying on the migration
+	// transaction's in-memory key; this is the restart-readability gate.
+	restarted, err := pgx.Connect(ctx, dsn)
+	require.NoError(t, err)
+	_, err = restarted.Exec(ctx, `SET search_path TO `+identifier)
+	require.NoError(t, err)
+	restartedKey, err := loadSoleWrappedDataKey(ctx, restarted, keyer, serviceKey.Public())
+	require.NoError(t, err)
+	restartedPlain, err := restartedKey.Open(id, 2, current)
+	require.NoError(t, err)
+	require.Equal(t, []byte("current private value"), restartedPlain)
+	require.NoError(t, restarted.Close(ctx))
 	require.False(t, bytes.Equal(newer, current))
 	_, err = rekeyStoredSecrets(ctx, conn, legacy, keyer, serviceKey.Public(), 2)
 	require.ErrorContains(t, err, "not fresh")

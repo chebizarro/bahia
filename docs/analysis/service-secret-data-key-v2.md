@@ -2,12 +2,14 @@
 
 **No production rekey command is included or enabled.** This change adds a
 package-private offline transformer exercised by disposable PG16 tests and a
-raw-key-free package-private v2 resolver, but does not replace every production secret
-reader or writer. Current app startup still constructs the legacy raw-key
-`Encryptor`; direct control-plane and runtime consumers also decrypt through
-it. Running the transformer before those paths are changed would make
-migrated secrets unreadable to the deployed daemon. A self-asserted operator
-flag cannot prove compatibility.
+raw-key-free package-private v2 resolver, but does not replace every production
+secret reader or writer. The secret-intent handler can seal identity-bound v2
+creates and updates when explicitly given a data key and fenced service keyer;
+runtime deployment and encrypted-route readers accept a v2-only decryptor.
+App startup does not supply those dependencies and still constructs the legacy
+raw-key `Encryptor`. Running the transformer before every remaining path is
+changed would make migrated secrets unreadable. A self-asserted operator flag
+cannot prove compatibility.
 
 ## Format and invariants
 
@@ -36,7 +38,7 @@ flag cannot prove compatibility.
    including direct control-plane/runtime consumers, and prove remote mode
    cannot fall back to a raw nsec. That work is **not** in this slice.
 2. Independently back up and verify the database, inventory all rows, and
-   stop the daemon and every SQL writer. The command performs no backup.
+   stop the daemon and every SQL writer. No backup or runner is included.
 3. Have a live, unexpired WriterLease for a dedicated Signet owner and the
    existing service pubkey. Keep the legacy nsec only in an isolated offline
    environment; never put it in arguments, logs or the remote runtime.
@@ -45,10 +47,17 @@ flag cannot prove compatibility.
    post-migration verification. No such runner exists in this commit. The
    package-private transformer refuses a second key generation.
 
-The command does not sign, publish, change app signer mode, migrate assistant
-transcripts/checkpoints, migrate confidential-state HMAC, or erase the legacy
-nsec. Those are separate cutover blockers. The DSSE and NIP-44 Signet interop
-gate and complete raw-key-crypto census remain independent prerequisites.
+No runner signs, publishes, changes app signer mode, migrates assistant
+transcripts/checkpoints, migrates confidential-state HMAC, or erases the legacy
+nsec. The remaining concrete service-secret blockers are `internal/app/app.go`
+(raw signer/secret-encryptor construction and dependency injection),
+`internal/mcp/server.go` (direct AES create/update), `internal/service/adoption.go`
+(direct AES import), `internal/adapters/secrets/resolver.go` plus its package,
+edge-route, relay-admin and intent-author consumers, and the Gitea initiation
+credential store (`internal/adapters/gitea/initiation_store.go`). The current
+control-plane secret intent path stores client NIP-44 as-is unless the v2
+dependencies are explicitly supplied. The DSSE and NIP-44 Signet interop gate
+and complete raw-key-crypto census remain independent prerequisites.
 
 Disposable PostgreSQL 16 integration gate:
 
@@ -59,4 +68,5 @@ BAHIA_REKEY_TEST_DATABASE_URL='postgres://.../disposable_db' \
 
 The test creates and drops a dedicated schema, executes the real migration
 000080 up SQL for the wrapped-key table, and checks row bounds, rollback,
-historical/current value continuity, and idempotency refusal.
+historical/current value continuity, restart readability through a second SQL
+connection, and idempotency refusal.

@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
@@ -50,20 +52,26 @@ type SecretIntentEncryptor interface {
 //
 // See docs/architecture/intents-and-authority.md.
 type SecretIntentHandler struct {
-	registry  SecretIntentCRUD
-	encryptor SecretIntentEncryptor
-	publisher SecretIntentPublisher
-	status    *IntentStatusPublisher
-	logger    *zap.Logger
+	registry      SecretIntentCRUD
+	encryptor     SecretIntentEncryptor
+	versionedKey  *secrets.DataKey
+	serviceKeyer  nostr.Keyer
+	servicePubkey nostr.PubKey
+	publisher     SecretIntentPublisher
+	status        *IntentStatusPublisher
+	logger        *zap.Logger
 }
 
 // SecretIntentHandlerConfig configures the secret intent handler.
 type SecretIntentHandlerConfig struct {
-	Registry  SecretIntentCRUD
-	Encryptor SecretIntentEncryptor
-	Publisher SecretIntentPublisher
-	Status    *IntentStatusPublisher
-	Logger    *zap.Logger
+	Registry      SecretIntentCRUD
+	Encryptor     SecretIntentEncryptor
+	VersionedKey  *secrets.DataKey
+	ServiceKeyer  nostr.Keyer
+	ServicePubkey nostr.PubKey
+	Publisher     SecretIntentPublisher
+	Status        *IntentStatusPublisher
+	Logger        *zap.Logger
 }
 
 // NewSecretIntentHandler constructs the handler.
@@ -73,11 +81,14 @@ func NewSecretIntentHandler(cfg SecretIntentHandlerConfig) *SecretIntentHandler 
 		logger = zap.NewNop()
 	}
 	return &SecretIntentHandler{
-		registry:  cfg.Registry,
-		encryptor: cfg.Encryptor,
-		publisher: cfg.Publisher,
-		status:    cfg.Status,
-		logger:    logger.Named("secret-intent"),
+		registry:      cfg.Registry,
+		encryptor:     cfg.Encryptor,
+		versionedKey:  cfg.VersionedKey,
+		serviceKeyer:  cfg.ServiceKeyer,
+		servicePubkey: cfg.ServicePubkey,
+		publisher:     cfg.Publisher,
+		status:        cfg.Status,
+		logger:        logger.Named("secret-intent"),
 	}
 }
 
@@ -104,20 +115,29 @@ func (h *SecretIntentHandler) handleCreateOrUpdate(ctx context.Context, intent *
 		return fmt.Errorf("parse secret intent content: %w", err)
 	}
 
-	// The encrypted_value in the intent content is the NIP-44-encrypted
-	// secret value (encrypted by the client to the daemon's service pubkey).
-	// Store it as-is; never decrypt for storage.
-	if len(parsed.EncryptedValue) == 0 {
-		// Encrypt plaintext supplied by an in-process MCP caller.
+	// Level-triggered: try to load existing.
+	existing, err := h.registry.GetByID(ctx, parsed.ID)
+	if err != nil {
+		return fmt.Errorf("look up secret before writing: %w", err)
+	}
+	targetVersion := 1
+	if existing != nil {
+		if existing.Version <= 0 || existing.Version == int(^uint(0)>>1) {
+			return fmt.Errorf("current secret version is invalid")
+		}
+		targetVersion = existing.Version + 1
+	}
+	if h.versionedKey != nil {
+		if err := h.sealVersionedIntentValue(ctx, intent, parsed, targetVersion); err != nil {
+			return err
+		}
+	} else if len(parsed.EncryptedValue) == 0 {
+		// Legacy local mode encrypts plaintext supplied by an in-process caller.
 		if plaintext, ok := intent.Content["value"].(string); ok && plaintext != "" {
 			if h.encryptor == nil {
 				return fmt.Errorf("secret value encryption is not configured")
 			}
-			method := parsed.EncryptionMethod
-			if method == "" {
-				method = domain.EncryptionNIP44
-			}
-			encrypted, encErr := h.encryptor.Encrypt(plaintext, method)
+			encrypted, encErr := h.encryptor.Encrypt(plaintext, parsed.EncryptionMethod)
 			if encErr != nil {
 				return fmt.Errorf("failed to encrypt secret value: %w", encErr)
 			}
@@ -127,14 +147,12 @@ func (h *SecretIntentHandler) handleCreateOrUpdate(ctx context.Context, intent *
 		}
 	}
 
-	// Level-triggered: try to load existing.
-	existing, _ := h.registry.GetByID(ctx, parsed.ID)
 	if existing == nil {
 		if intent.ExpectedUpdatedAt != nil {
 			return &revisionConflictError{entityType: "secret", entityID: parsed.ID, expected: *intent.ExpectedUpdatedAt}
 		}
 		// Create.
-		if parsed.Version == 0 {
+		if h.versionedKey != nil || parsed.Version == 0 {
 			parsed.Version = 1
 		}
 		now := time.Now().UTC()
@@ -178,6 +196,47 @@ func (h *SecretIntentHandler) handleCreateOrUpdate(ctx context.Context, intent *
 		zap.String("secret_id", parsed.ID.String()),
 		zap.String("intent_id", intent.IntentID),
 	)
+	return nil
+}
+
+func (h *SecretIntentHandler) sealVersionedIntentValue(ctx context.Context, intent *Intent, parsed *domain.ServiceSecret, version int) error {
+	if h.serviceKeyer == nil || h.servicePubkey == nostr.ZeroPK {
+		return fmt.Errorf("versioned service-secret writer is not configured")
+	}
+	actual, err := h.serviceKeyer.GetPublicKey(ctx)
+	if err != nil || actual != h.servicePubkey {
+		return fmt.Errorf("fenced service key is unavailable or changed")
+	}
+	value, hasPlaintext := intent.Content["value"].(string)
+	hasCiphertext := len(parsed.EncryptedValue) > 0
+	if hasCiphertext == hasPlaintext || hasPlaintext && value == "" {
+		return fmt.Errorf("exactly one nonempty secret value representation is required")
+	}
+	var plaintext string
+	if hasPlaintext {
+		if parsed.EncryptionMethod != domain.EncryptionNIP44 && parsed.EncryptionMethod != domain.EncryptionAES256 {
+			return fmt.Errorf("unsupported plaintext secret input method")
+		}
+		plaintext = value
+	} else {
+		if parsed.EncryptionMethod != domain.EncryptionNIP44 {
+			return fmt.Errorf("encrypted secret input must be NIP-44 to the existing service pubkey")
+		}
+		plaintext, err = h.serviceKeyer.Decrypt(ctx, string(parsed.EncryptedValue), h.servicePubkey)
+		if err != nil || plaintext == "" {
+			return fmt.Errorf("fenced client secret decrypt failed")
+		}
+	}
+	sealed, err := h.versionedKey.Seal(parsed.ID, version, []byte(plaintext))
+	if err != nil {
+		return fmt.Errorf("versioned service-secret seal failed")
+	}
+	actual, err = h.serviceKeyer.GetPublicKey(ctx)
+	if err != nil || actual != h.servicePubkey {
+		return fmt.Errorf("fenced service key became unavailable during secret seal")
+	}
+	parsed.EncryptedValue = sealed
+	parsed.EncryptionMethod = domain.EncryptionAES256V2
 	return nil
 }
 
