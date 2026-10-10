@@ -119,9 +119,14 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 		t.Fatal("wrapped startup through the shared service signer failed")
 	}
 	closeSigner()
-	// Startup as app.go runs it today: open the configured signer, read the
-	// manifest, close the signer.
-	provider, err := assistantTranscriptKeyProviderForStartup(ctx, runtime, "", nil)
+	// Startup as app.go runs it: open the configured service signer once
+	// through the startup seam and inject it.
+	serviceKeyer, closeServiceKeyer, err := newServiceKeyer(runtime, nil, nil)
+	if err != nil {
+		t.Fatal("startup seam cannot open the NIP-46 service signer")
+	}
+	defer closeServiceKeyer()
+	provider, err := assistantTranscriptKeyProviderWithSigner(ctx, runtime, serviceKeyer)
 	if err != nil {
 		t.Fatal("real assistant wrapped startup failed")
 	}
@@ -142,13 +147,13 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 		t.Fatal("wrapped startup permitted transcript write")
 	}
 	runtime.Assistant.WrappedKeys.ExpectedGeneration = "v2-wrong"
-	if _, err := assistantTranscriptKeyProviderForStartup(ctx, runtime, "", nil); err == nil {
+	if _, err := assistantTranscriptKeyProviderWithSigner(ctx, runtime, serviceKeyer); err == nil {
 		t.Fatal("wrong generation fell back to raw key")
 	}
 	runtime.Assistant.WrappedKeys.ExpectedGeneration = manifest.Active.Version
 	expired, expiredCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer expiredCancel()
-	if _, err := assistantTranscriptKeyProviderForStartup(expired, runtime, "", nil); err == nil {
+	if _, err := assistantTranscriptKeyProviderWithSigner(expired, runtime, serviceKeyer); err == nil {
 		t.Fatal("expired startup context succeeded")
 	}
 }

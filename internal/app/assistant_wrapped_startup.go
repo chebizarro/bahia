@@ -8,28 +8,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/service"
-	"github.com/openagentsinc/bahia/internal/servicesigner"
 )
-
-// assistantTranscriptKeyProviderForStartup keeps the call shape app.go uses
-// today. Wrapped mode opens the configured service signer only for the
-// startup read and closes it on return.
-//
-// Integration: once app.go holds the shared service keyer, it calls
-// assistantTranscriptKeyProviderWithSigner with that keyer and this shim is
-// deleted.
-func assistantTranscriptKeyProviderForStartup(ctx context.Context, cfg *config.Config, _ string, _ []string) (service.AssistantTranscriptKeyProvider, error) {
-	if !assistantWrappedKeysSelected(cfg) {
-		return assistantTranscriptKeyProviderWithSigner(ctx, cfg, nil)
-	}
-	signerCtx, closeSigner := context.WithCancel(ctx)
-	defer closeSigner()
-	signer, err := servicesigner.Open(signerCtx, cfg.Nostr, servicesigner.Options{})
-	if err != nil {
-		return nil, fmt.Errorf("open service signer for assistant wrapped keys: %w", err)
-	}
-	return assistantTranscriptKeyProviderWithSigner(ctx, cfg, signer)
-}
 
 func assistantWrappedKeysSelected(cfg *config.Config) bool {
 	return cfg != nil && cfg.Assistant.WrappedKeys.Mode != "" && cfg.Assistant.WrappedKeys.Mode != "legacy_v1"

@@ -20,14 +20,19 @@ import (
 
 func TestServiceKeyerLocalModeKeepsIdentity(t *testing.T) {
 	cfg := config.Defaults()
-	if k, err := newServiceKeyer(cfg); err != nil || k != nil {
+	if k, _, err := newServiceKeyer(cfg, nil, nil); err != nil || k != nil {
 		t.Fatalf("unset key: newServiceKeyer = %v, %v; want nil, nil", k, err)
 	}
 	secret := nostr.Generate()
 	cfg.Nostr.PrivateKey = secret.Hex()
-	serviceKeyer, err := newServiceKeyer(cfg)
+	serviceKeyer, closeServiceKeyer, err := newServiceKeyer(cfg, nil, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	defer closeServiceKeyer()
+	// Local mode must keep the raw-key derivations working byte for byte.
+	if _, err := nostrutil.RequireServiceKeyMaterial(serviceKeyer, "test"); err != nil {
+		t.Fatalf("local service keyer lacks key material: %v", err)
 	}
 	pubkey, _ := serviceKeyer.GetPublicKey(context.Background())
 	if pubkey != secret.Public() {
@@ -38,7 +43,7 @@ func TestServiceKeyerLocalModeKeepsIdentity(t *testing.T) {
 		t.Fatalf("local signature invalid: %v", err)
 	}
 	cfg.Nostr.PrivateKey = "not-hex"
-	if _, err := newServiceKeyer(cfg); err == nil || strings.Contains(err.Error(), "not-hex") {
+	if _, _, err := newServiceKeyer(cfg, nil, nil); err == nil || strings.Contains(err.Error(), "not-hex") {
 		t.Fatalf("invalid key error = %v; must fail without echoing the key", err)
 	}
 }

@@ -19,7 +19,7 @@ func TestAssistantWrappedStartupHistoricalStoreReadsFailClosed(t *testing.T) {
 	ctx := context.Background()
 	wrapper := assistantWrapFixture(t)
 	cfg := &config.Config{Nostr: config.NostrConfig{PrivateKey: strings.Repeat("1", 64)}}
-	legacy, err := assistantTranscriptKeyProviderForStartup(ctx, cfg, wrapper.pubkey.Hex(), nil)
+	legacy, err := assistantTranscriptKeyProviderWithSigner(ctx, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestAssistantWrappedStartupNeverFallsBackOnMissingManifest(t *testing.T) {
 	cfg.Assistant.WrappedKeys.Mode = "wrapped_read_only"
 	cfg.Assistant.WrappedKeys.ManifestPath = filepath.Join(dir, "missing.json")
 	cfg.Assistant.WrappedKeys.ExpectedGeneration = "v2-pinned"
-	if _, err := assistantTranscriptKeyProviderForStartup(t.Context(), cfg, wrapper.pubkey.Hex(), nil); err == nil {
+	if _, err := assistantTranscriptKeyProviderWithSigner(t.Context(), cfg, wrapper); err == nil {
 		t.Fatal("missing wrapped manifest silently selected the raw-key provider")
 	}
 }
@@ -129,8 +129,14 @@ func TestAssistantWrappedStartupUsesConfiguredServiceSigner(t *testing.T) {
 	if _, err := assistantTranscriptKeyProviderWithSigner(ctx, cfg, wrapper); err != nil {
 		t.Fatalf("injected service signer = %v", err)
 	}
-	// The startup shim opens the configured (here: local) service signer.
-	if _, err := assistantTranscriptKeyProviderForStartup(ctx, cfg, "", nil); err != nil {
+	// Startup opens the configured (here: local) service signer once and
+	// injects it.
+	serviceKeyer, closeServiceKeyer, err := newServiceKeyer(cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeServiceKeyer()
+	if _, err := assistantTranscriptKeyProviderWithSigner(ctx, cfg, serviceKeyer); err != nil {
 		t.Fatalf("configured local service signer = %v", err)
 	}
 	if _, err := assistantTranscriptKeyProviderWithSigner(ctx, cfg, nil); err == nil {
@@ -148,10 +154,10 @@ func TestAssistantWrappedStartupUsesConfiguredServiceSigner(t *testing.T) {
 		t.Fatal("manifest opened under a different service identity")
 	}
 
-	// A remote signer that cannot be reached fails startup; it never
-	// reaches the raw-key provider.
+	// A remote signer that cannot be reached fails startup at the service
+	// signer seam; the raw-key provider is never consulted.
 	cfg.Nostr = config.NostrConfig{PublicKey: wrapper.pubkey.Hex(), Signer: config.NostrSignerConfig{Method: config.NostrSignerNIP46, BunkerURI: "bunker://" + strings.Repeat("3", 64) + "?relay=ws%3A%2F%2F127.0.0.1%3A1", ClientSecretKey: strings.Repeat("2", 64), Timeout: 200 * time.Millisecond}}
-	if _, err := assistantTranscriptKeyProviderForStartup(ctx, cfg, "", nil); err == nil || !strings.Contains(err.Error(), "open service signer") {
+	if _, _, err := newServiceKeyer(cfg, nil, nil); err == nil || !strings.Contains(err.Error(), "open nip46 service signer") {
 		t.Fatalf("unreachable NIP-46 service signer = %v", err)
 	}
 }

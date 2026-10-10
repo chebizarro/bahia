@@ -43,7 +43,7 @@ func TestLoadNIP55LSignerFromEnvDefaultsAppID(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 	got := cfg.Nostr.Signer
-	if got.NIP55L.BusAddress != "unix:path=/run/user/1000/bus" || got.NIP55L.AppID != "bahia" || got.Timeout != 30*time.Second {
+	if got.NIP55L.BusAddress != "unix:path=/run/user/1000/bus" || got.NIP55L.AppID != "bahia" || got.Timeout != 330*time.Second {
 		t.Fatalf("nip55l config = %+v", got)
 	}
 }
@@ -90,7 +90,12 @@ func TestServiceSignerValidation(t *testing.T) {
 		}, want: "require nostr.signer.method=nip46"},
 		"remote fields, no method": {mutate: func(n *NostrConfig) { n.PrivateKey = local; n.Signer.BunkerURI = testBunkerURI }, want: "require nostr.signer.method nip46 or nip55l"},
 		"malformed pubkey":         {mutate: func(n *NostrConfig) { nip46(n); n.PublicKey = "npub1x" }, want: "nostr.public_key must be 64 hex"},
-		"negative timeout":         {mutate: func(n *NostrConfig) { nip46(n); n.Signer.Timeout = -time.Second }, want: "must not be negative"},
+		"nip55l short timeout": {mutate: func(n *NostrConfig) {
+			n.PublicKey = testServicePubkey
+			n.Signer.Method = NostrSignerNIP55L
+			n.Signer.Timeout = 30 * time.Second
+		}, want: "at least 5m0s for nostr.signer.method=nip55l"},
+		"negative timeout": {mutate: func(n *NostrConfig) { nip46(n); n.Signer.Timeout = -time.Second }, want: "must not be negative"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var n NostrConfig

@@ -21,7 +21,7 @@ signer instead.
 | `nostr.signer.client_secret_key_file` | `BAHIA_NOSTR_SIGNER_CLIENT_SECRET_KEY_FILE` | Absolute path to a file holding that key instead (≤ 4 KiB). |
 | `nostr.signer.nip55l.bus_address` | `BAHIA_NOSTR_SIGNER_NIP55L_BUS_ADDRESS` | D-Bus address; empty = session bus (`nip55l`). |
 | `nostr.signer.nip55l.app_id` | `BAHIA_NOSTR_SIGNER_NIP55L_APP_ID` | Application id shown to the signer's approval policy; default `bahia`. |
-| `nostr.signer.timeout` | `BAHIA_NOSTR_SIGNER_TIMEOUT` | Bounds connecting and each signer request; default `30s`. |
+| `nostr.signer.timeout` | `BAHIA_NOSTR_SIGNER_TIMEOUT` | Bounds connecting and each signer request; default `30s`. For `nip55l` the default is `330s` and the minimum `300s`, because a signer approval may wait up to 300 s. |
 
 Startup rejects: an unknown method; a remote method together with
 `nostr.private_key` (mixed custody); a remote method without

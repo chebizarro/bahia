@@ -1,6 +1,7 @@
 package nostrutil
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -50,11 +51,32 @@ func NewLocalKeyer(privateKeyHex string) (LocalKeyer, error) {
 	}
 	var secret [32]byte
 	copy(secret[:], decoded)
+	if secret == ([32]byte{}) {
+		return LocalKeyer{}, errors.New("nostr private key must not be zero")
+	}
 	return LocalKeyer{KeySigner: keyer.NewPlainKeySigner(secret), material: privateKeyHex}, nil
 }
 
 // ServiceKeyMaterial implements ServiceKeyMaterialHolder.
 func (k LocalKeyer) ServiceKeyMaterial() string { return k.material }
+
+// EncryptBytes NIP-44-encrypts the exact bytes: a Go string carries them
+// verbatim, so only remote transports need an encoding.
+func (k LocalKeyer) EncryptBytes(ctx context.Context, plaintext []byte, recipient canonicalnostr.PubKey) (string, error) {
+	if len(plaintext) == 0 {
+		return "", errors.New("NIP-44 plaintext must not be empty")
+	}
+	return k.Encrypt(ctx, string(plaintext), recipient)
+}
+
+// DecryptBytes is the binary-safe counterpart of Decrypt.
+func (k LocalKeyer) DecryptBytes(ctx context.Context, ciphertext string, sender canonicalnostr.PubKey) ([]byte, error) {
+	plaintext, err := k.Decrypt(ctx, ciphertext, sender)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(plaintext), nil
+}
 
 // RequireServiceKeyMaterial returns the in-process service key material of
 // signer, or an error wrapping ErrServiceKeyMaterialRequired that names

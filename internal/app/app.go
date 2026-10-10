@@ -92,6 +92,7 @@ type App struct {
 	RelayFirstRegistry        *service.RelayFirstRegistry
 	SoulFactory               *soulfactory.Reactor
 	soulFactoryCloser         func() error
+	closeServiceKeyer         func()
 	hiveCIInitiator           *giteaAdapter.Initiator
 	localEventStore           *localstore.Store
 	localOutbox               *localstore.Outbox
@@ -147,10 +148,23 @@ func New(cfg *config.Config) (*App, error) {
 	continuityStatusStore := service.NewInMemoryContinuityStatusStore()
 	continuityRecipeExecutor := service.NewContinuityRecipeExecutor(publisher, service.WithContinuityRecipeLogger(logger))
 
-	serviceKeyer, err := newServiceKeyer(cfg)
+	// One process-wide controller gates every outbound EVENT: the relay
+	// pools, the Signet clients, the SoulFactory relay clients, and the NIP-46
+	// service signer RPCs all resolve to the same instance. It is initialized
+	// before the service signer, whose NIP-46 requests it admits (see
+	// docs/runbooks/nostr-outbound-admission.md).
+	outboundAdmission := nostrout.InitDefault(nostrOutboundAdmissionConfig(cfg.Nostr.Outbound))
+
+	serviceKeyer, closeServiceKeyer, err := newServiceKeyer(cfg, outboundAdmission, nil)
 	if err != nil {
 		return nil, fmt.Errorf("configuring service signer: %w", err)
 	}
+	serviceKeyerOwned := false
+	defer func() {
+		if !serviceKeyerOwned {
+			closeServiceKeyer()
+		}
+	}()
 	servicePubkey := ""
 	if serviceKeyer != nil {
 		pubkey, err := serviceKeyer.GetPublicKey(ctx)
@@ -161,13 +175,6 @@ func New(cfg *config.Config) (*App, error) {
 	}
 
 	// Relay pools are initialized before the optional database cache.
-	//
-	// One process-wide controller gates every outbound EVENT: these pools,
-	// the Signet clients, the SoulFactory relay clients, and the NIP-46
-	// signer RPCs all resolve to the same instance. It is initialized here,
-	// before any gateway exists, from nostr.outbound (see
-	// docs/runbooks/nostr-outbound-admission.md).
-	outboundAdmission := nostrout.InitDefault(nostrOutboundAdmissionConfig(cfg.Nostr.Outbound))
 	poolOptions := []nostrAdapter.RelayPoolOption{
 		nostrAdapter.WithAuthSigner(serviceKeyer),
 		nostrAdapter.WithOutboundAdmission(outboundAdmission),
@@ -2377,7 +2384,7 @@ func New(cfg *config.Config) (*App, error) {
 		}
 		assistantPublisher := &auditedNostrPublisher{delegate: controlPlanePool, repo: nostrEventRepo, logger: logger}
 		assistantSubscriber := assistantRelaySubscriber{pool: controlPlanePool}
-		transcriptKeys, err := assistantTranscriptKeyProviderForStartup(ctx, cfg, servicePubkey, controlPlaneRelays)
+		transcriptKeys, err := assistantTranscriptKeyProviderWithSigner(ctx, cfg, serviceKeyer)
 		if err != nil {
 			return nil, err
 		}
@@ -2929,12 +2936,14 @@ func New(cfg *config.Config) (*App, error) {
 		RelayFirstRegistry:        relayFirstRegistry,
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),
 		soulFactoryCloser:         soulFactoryCloserFromRuntime(soulFactoryRuntime),
+		closeServiceKeyer:         closeServiceKeyer,
 		hiveCIInitiator:           hiveCIInitiator,
 		localEventStore:           localEventStore,
 		localOutbox:               localOutbox,
 	}
 	soulFactoryRuntimeReleased = true
 	localNostrReleased = true
+	serviceKeyerOwned = true
 	return application, nil
 }
 
@@ -3754,6 +3763,10 @@ func (a *App) RunContext(ctx context.Context) error {
 		if err := a.localOutbox.Close(); err != nil {
 			a.Logger.Warn("local Nostr publish outbox close failed", zap.Error(err))
 		}
+	}
+	// The service signer closes after every component that signs with it.
+	if a.closeServiceKeyer != nil {
+		a.closeServiceKeyer()
 	}
 
 	if a.DB != nil {

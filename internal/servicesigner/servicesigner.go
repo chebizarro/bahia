@@ -17,7 +17,12 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/nostrout"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
+
+// The local signer must be nostrutil.LocalKeyer: legacy raw-key derivations
+// find their key material through its ServiceKeyMaterialHolder capability.
+var _ BinaryCipher = nostrutil.LocalKeyer{}
 
 // ErrNotConfigured reports that no service identity is configured: neither
 // nostr.private_key nor nostr.signer.method is set.
@@ -83,7 +88,7 @@ func Open(ctx context.Context, cfg config.NostrConfig, opts Options) (nostr.Keye
 	case "":
 		return nil, ErrNotConfigured
 	case config.NostrSignerLocal:
-		signer, err = newLocalKeyer(cfg.PrivateKey)
+		signer, err = nostrutil.NewLocalKeyer(cfg.PrivateKey)
 	case config.NostrSignerNIP46:
 		logger := opts.Logger
 		if logger == nil {

@@ -47,7 +47,7 @@ func TestOpenLocalRejectsMismatchedPinAndMalformedKey(t *testing.T) {
 	_, err := Open(t.Context(), config.NostrConfig{PrivateKey: testService.Hex(), PublicKey: testClient.Public().Hex()}, Options{})
 	require.ErrorContains(t, err, "differs from configured service pubkey")
 	_, err = Open(t.Context(), config.NostrConfig{PrivateKey: "nsec1notahexkey"}, Options{})
-	require.ErrorContains(t, err, "64-character hex")
+	require.ErrorContains(t, err, "not valid hex")
 	require.NotContains(t, err.Error(), "nsec1notahexkey")
 }
 

@@ -31,7 +31,9 @@ import (
 // that no longer matches a real read. Route new consumers through the
 // injected Keyer instead of widening it.
 var serviceKeyReadAllowlist = map[string]string{
-	"internal/app/service_keyer.go|newServiceKeyer": "seam",
+	// The service signer factory builds the local signer; the startup seam
+	// internal/app/service_keyer.go is its only production caller.
+	"internal/servicesigner/servicesigner.go|Open": "seam",
 	// (b) assistant transcript key = SHA-256 over the nsec; signature fixed by
 	// assistant_wrapped_startup.go/assistant_wrapped_keys.go (bahia-cd0wr.4.8).
 	"internal/app/app.go|assistantTranscriptKeyProvider": "(b) bahia-cd0wr.4.8",

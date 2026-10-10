@@ -769,7 +769,11 @@ const (
 	NostrSignerNIP55L = "nip55l"
 
 	defaultNostrSignerTimeout = 30 * time.Second
-	defaultNostrSignerAppID   = "bahia"
+	// NIP-55L approvals may wait up to 300 s for the user, so its request
+	// bound must exceed that window (docs/proposals/55L.md).
+	defaultNostrSignerNIP55LTimeout = 330 * time.Second
+	minNostrSignerNIP55LTimeout     = 300 * time.Second
+	defaultNostrSignerAppID         = "bahia"
 )
 
 // NostrSignerConfig selects the service identity's signer. Exactly one custody
@@ -787,7 +791,7 @@ type NostrSignerConfig struct {
 	ClientSecretKeyFile string                  `koanf:"client_secret_key_file" yaml:"client_secret_key_file" secret:"false"`
 	NIP55L              NostrSignerNIP55LConfig `koanf:"nip55l" yaml:"nip55l"`
 	// Timeout bounds connecting to the signer and each signer request.
-	// Zero uses 30s.
+	// Zero uses 30s, or 330s for nip55l, whose minimum is 300s.
 	Timeout time.Duration `koanf:"timeout" yaml:"timeout" secret:"false"`
 }
 
@@ -828,6 +832,9 @@ func (n *NostrConfig) validateServiceSigner() error {
 	}
 	if signer.Timeout == 0 {
 		signer.Timeout = defaultNostrSignerTimeout
+		if signer.Method == NostrSignerNIP55L {
+			signer.Timeout = defaultNostrSignerNIP55LTimeout
+		}
 	}
 	if n.PublicKey != "" && !isHexKey(n.PublicKey) {
 		return fmt.Errorf("config validation failed: nostr.public_key must be 64 hex characters")
@@ -865,6 +872,9 @@ func (n *NostrConfig) validateServiceSigner() error {
 		}
 		if signer.NIP55L.AppID == "" {
 			signer.NIP55L.AppID = defaultNostrSignerAppID
+		}
+		if signer.Timeout < minNostrSignerNIP55LTimeout {
+			return fmt.Errorf("config validation failed: nostr.signer.timeout must be at least %s for nostr.signer.method=nip55l (signer approvals may take 300s)", minNostrSignerNIP55LTimeout)
 		}
 	default:
 		return fmt.Errorf("config validation failed: nostr.signer.method must be one of local, nip46, nip55l")

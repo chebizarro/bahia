@@ -2,14 +2,18 @@
 
 Bahia's service identity is a single `nostr.Keyer` (fiatjaf.com/nostr:
 `SignEvent`, `GetPublicKey`, NIP-44 `Encrypt`/`Decrypt`). Startup builds it
-once in `internal/app/service_keyer.go` (`newServiceKeyer`) and injects it into
-every consumer that signs, answers NIP-42 AUTH or NIP-44s as the service. No
-consumer takes a hex key. In a remote signer mode (NIP-46 bunker, NIP-55L)
-there is no raw private key in the process.
+once in `internal/app/service_keyer.go` (`newServiceKeyer`), which opens the
+signer selected by `nostr.signer` through `servicesigner.Open` (see
+[service-signer.md](service-signer.md)), and injects it into every consumer
+that signs, answers NIP-42 AUTH or NIP-44s as the service. No consumer takes a
+hex key. In a remote signer mode (NIP-46 bunker, NIP-55L) there is no raw
+private key in the process. The signer session lives until shutdown, after
+every signing component has stopped.
 
 Local mode uses `nostrutil.LocalKeyer`: an in-process key signer that also
 exposes the optional `nostrutil.ServiceKeyMaterialHolder` capability (the
-configured key text, verbatim). Remote keyers do not.
+configured key text, verbatim) and binary NIP-44. Remote keyers do not hold
+key material.
 
 ## Raw-key derivations fail closed
 
@@ -34,7 +38,7 @@ separate identity that keeps a local key by design.
 
 | Consumer | Class | Now |
 |---|---|---|
-| `internal/app/service_keyer.go:25` `newServiceKeyer` | seam | the only daemon read of `nostr.private_key` |
+| `internal/servicesigner/servicesigner.go` `Open`, called only by `internal/app/service_keyer.go` `newServiceKeyer` | seam | the only daemon read of `nostr.private_key` |
 | `internal/app/app.go:172` relay pools (NIP-42 AUTH) | a | `WithAuthSigner(serviceKeyer)`; `RelayPool.WithPrivateKey` deleted |
 | `internal/adapters/nostr/publisher.go:949` publishers | a | `WithPublisherSigner`; enabled only with a signer |
 | `internal/adapters/nostr/projector.go:1493` projector (+ `backup_run_admission`, `dns_canonical_publisher`, `legacy_ock_migration`, `org_refounding`, `projector_warmstart`, `control_state_dedupe`) | a | `WithProjectorSigner(keyer, pubkey)`; pubkey pinned, never re-derived |
