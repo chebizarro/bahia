@@ -151,7 +151,11 @@ signed `backup_object_ref` is a local `file:///absolute/path`, add
 bytes through SHA-256 under the F74a deadline. The option fails closed for a
 missing, changed, unreadable, expired, or non-local object, and reports
 `backup_object_hash_verified true` only when the observed digest matches the
-signed digest. It uses bounded memory but reads the entire object. Do not
+signed digest. It uses bounded memory but reads the entire object. It
+rejects FIFOs and final symlinks before reading; the timeout is checked
+before opening and between regular-file reads, but it cannot interrupt a
+kernel open, stat, or read stalled on a pathological or failed filesystem
+mount. Do not
 substitute an operator-provided path: the path comes from the signed receipt.
 
 This is a **read-only point-in-time verification**, not deletion admission.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sys/unix"
 )
 
 // VerifyF74aLocalBackupObject checks actual bytes at a signed file:// object
@@ -32,14 +33,23 @@ func VerifyF74aLocalBackupObject(ctx context.Context, proof F74aReceiptVerificat
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	file, err := os.Open(u.Path)
+	// A blocking os.Open can hang forever on a FIFO (including a symlink to
+	// one), before the context can be checked. Open nonblocking, reject a final
+	// symlink, and classify the opened descriptor before any read.
+	fd, err := unix.Open(u.Path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return 0, fmt.Errorf("F74a backup object cannot be opened")
 	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		_ = unix.Close(fd)
+		return 0, fmt.Errorf("F74a backup object is not a regular readable file")
+	}
+	file := os.NewFile(uintptr(fd), "f74a-backup-object")
 	defer file.Close()
 	before, err := file.Stat()
-	if err != nil || !before.Mode().IsRegular() {
-		return 0, fmt.Errorf("F74a backup object is not a regular readable file")
+	if err != nil {
+		return 0, fmt.Errorf("F74a backup object cannot be stated")
 	}
 	hash := sha256.New()
 	buffer := make([]byte, 64*1024)
