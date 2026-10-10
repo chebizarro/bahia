@@ -24,7 +24,6 @@ func startDefaultReadAuthSidecar(t *testing.T) (serviceKey, adminKey, allowedKey
 	serviceKey, adminKey, allowedKey = nostr.Generate(), nostr.Generate(), nostr.Generate()
 	cfg := config.Defaults().Nostr
 	cfg.Sidecar.DataDir = t.TempDir()
-	cfg.PrivateKey = serviceKey.Hex()
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.AdministratorPubkeys = []string{adminKey.Public().Hex()}
@@ -32,7 +31,7 @@ func startDefaultReadAuthSidecar(t *testing.T) (serviceKey, adminKey, allowedKey
 	cfg.Sidecar.ReadAuthAllowedPubkeys = []string{allowedKey.Public().Hex()}
 	require.Equal(t, config.ReadAuthModeEnforce, cfg.Sidecar.NormalizedReadAuthMode(), "the shipped default must be enforce")
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, serviceKey), zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close()) })
 	httpServer := httptest.NewServer(server.Handler())

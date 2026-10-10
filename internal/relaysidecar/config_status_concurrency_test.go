@@ -25,12 +25,11 @@ func (f configStatusPublisherFunc) Publish(ctx context.Context, event nostr.Even
 func TestConfigConsumerPublishesStatusesConcurrently(t *testing.T) {
 	secret := nostr.Generate()
 	cfg := sidecarTestConfig(t)
-	cfg.PrivateKey = secret.Hex()
 	cfg.Sidecar.ServiceID = "relay-sidecar-test"
 	cfg.Sidecar.Scope = "edge"
 	cfg.Sidecar.ConfigProjectionPath = filepath.Join(t.TempDir(), "projection.json")
 	cfg.Sidecar.ConfigTrustedPubkeys = []string{secret.Public().Hex()}
-	server, err := New(cfg, nil)
+	server, err := New(t.Context(), cfg, localSigner(t, secret), nil)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, server.store.Close()) }()
 	consumer := server.consumer
@@ -228,12 +227,11 @@ func configStatusServerForTest(t *testing.T) (*Server, nostr.SecretKey) {
 	t.Helper()
 	secret := nostr.SecretKey{1}
 	cfg := sidecarTestConfig(t)
-	cfg.PrivateKey = secret.Hex()
 	cfg.Sidecar.ServiceID = "relay-sidecar-test"
 	cfg.Sidecar.Scope = "prod"
 	cfg.Sidecar.ConfigProjectionPath = filepath.Join(t.TempDir(), "projection.json")
 	cfg.Sidecar.ConfigTrustedPubkeys = []string{secret.Public().Hex()}
-	server, err := New(cfg, nil)
+	server, err := New(t.Context(), cfg, localSigner(t, secret), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.store.Close()) })
 	server.consumer.now = func() time.Time { return time.Unix(1790200000, 0) }

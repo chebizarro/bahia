@@ -7,10 +7,27 @@ admits, serves public topics to anyone and protected topics to authenticated,
 admitted readers, and keeps regular events durably. It does not federate; the
 daemon publishes to any further relays itself.
 
-`cmd/relay/main.go` loads the configuration and runs
-`relaysidecar.New(...)`. The relay is mounted on `/` and on the path of
+`cmd/relay/main.go` loads the configuration, opens the service signer and
+runs `relaysidecar.New(...)`. The relay is mounted on `/` and on the path of
 `nostr.sidecar.public_url` (for example `/relay`), so a reverse proxy can
 expose a single path to browsers.
+
+## Service identity
+
+The sidecar runs as Bahia's service identity and reads the same `nostr.signer`
+settings as the daemon (`local`, `nip46` or `nip55l`; see
+[`runbooks/service-signer.md`](runbooks/service-signer.md)). The signer's
+pubkey is the NIP-11 `pubkey`, is always admitted to write and to read
+protected topics, and signs the config-status acknowledgements. Startup fails
+when no signer is configured, it cannot be opened, or it reports a pubkey
+other than `nostr.public_key`; the sidecar never runs without its identity.
+
+A `SIGHUP` keeps the open signer session when the reloaded `nostr.signer`,
+`nostr.public_key` and `nostr.private_key` are unchanged. When they change,
+the new signer is opened first; the old one is closed only after the
+replacement runtime has taken over, and a signer that fails to open leaves
+the running sidecar untouched. On shutdown the signer is closed after the
+relay and its config workers have stopped.
 
 ## Configuration
 
@@ -133,7 +150,7 @@ What is protected is decided per filter in
   `1617`–`1633`. Audit `4903`, app data `30078`, gift wraps, the SoulFactory
   and Loom families, documentation `30023` and intents therefore need AUTH.
 
-Admitted readers are the service pubkey (`nostr.private_key`), NIP-86
+Admitted readers are the service pubkey (the `nostr.signer` identity), NIP-86
 administrators and allowed pubkeys, the intent-author set, and
 `read_auth_allowed_pubkeys`. Any service that subscribes to a protected topic
 with its own key must be listed: a separate SoulFactory controller key,

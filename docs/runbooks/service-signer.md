@@ -36,6 +36,17 @@ Wrapped assistant keys use the service signer. With a remote method the
 assistant requires `assistant.wrapped_keys.mode=wrapped_read_only`, because
 `legacy_v1` derives transcript keys from the raw service key.
 
+## Relay sidecar
+
+`bahia-relay` opens the service signer from the same settings, so give it the
+same `nostr.public_key` and `nostr.signer` values as `bahia-server` (the
+shared `config.yaml` in Docker Compose does this). With `nip46` it connects to
+the bunker as the same dedicated client key, so a single-writer bunker sees
+one writer; its requests pass the process's outbound admission like the
+daemon's. With `nip55l` it needs access to the same D-Bus. It does not start
+without a service signer. A `SIGHUP` that leaves these settings unchanged
+keeps its signer session; see [`relay-sidecar.md`](../relay-sidecar.md#service-identity).
+
 ## Local key
 
 Today's behaviour; no change is needed:

@@ -17,6 +17,7 @@ import (
 	"fiatjaf.com/nostr/keyer"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/relaysidecar"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -123,13 +124,14 @@ func startSidecarTestHarness(t *testing.T, adminKey nostr.SecretKey) sidecarTest
 	require.NoError(t, err)
 	serviceKey := nostr.Generate()
 	sidecarCfg := config.Defaults().Nostr
-	sidecarCfg.PrivateKey = serviceKey.Hex()
 	sidecarCfg.Sidecar.DataDir = dataDir
 	sidecarCfg.Sidecar.Enabled = true
 	sidecarCfg.Sidecar.PublicURL = "ws://" + listener.Addr().String()
 	sidecarCfg.Sidecar.AdministratorPubkeys = []string{adminKey.Public().Hex()}
 	sidecarCfg.Sidecar.AdminPolicyPath = policyPath
-	sidecar, err := relaysidecar.New(sidecarCfg, zap.NewNop())
+	serviceSigner, err := nostrutil.NewLocalKeyer(serviceKey.Hex())
+	require.NoError(t, err)
+	sidecar, err := relaysidecar.New(t.Context(), sidecarCfg, serviceSigner, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sidecar.Close() })
 

@@ -48,10 +48,9 @@ var serviceKeyReadAllowlist = map[string]string{
 	"cmd/bahia-migrate/f74a_import.go|runF74aImport": "(c)",
 	"cmd/bahia-migrate/main.go|runNostrMigration":    "(c)",
 	"internal/config/config.go|":                     "config",
-	// Separate relay-sidecar process: NIP-11 pubkey and config-ack signing are
-	// sign-only, pending the signer factory in cmd/relay (bahia-cd0wr.3.5).
-	"internal/relaysidecar/policy.go|newPolicy": "pending bahia-cd0wr.3.5",
-	"internal/relaysidecar/server.go|New":       "pending bahia-cd0wr.3.5",
+	// The relay sidecar's reload compares signer configs; it moves to
+	// servicesigner.SameSigner at integration (bahia-cd0wr.3.7).
+	"cmd/relay/main.go|sameServiceSigner": "pending bahia-cd0wr.3.7",
 }
 
 func TestServiceKeyReadsConfined(t *testing.T) {

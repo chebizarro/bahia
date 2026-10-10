@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/relaysidecar"
 	"go.uber.org/zap"
 )
@@ -55,10 +56,13 @@ func startContextVMSidecarHarness(t *testing.T, ctx context.Context) *contextVMS
 	}
 	cfg := config.Defaults().Nostr
 	cfg.Sidecar.DataDir = t.TempDir()
-	cfg.PrivateKey = testServiceKey
 	cfg.Sidecar.PublicURL = "ws://" + listener.Addr().String()
 	cfg.Sidecar.ReadAuthAllowedPubkeys = []string{requesterPubkey}
-	sidecar, err := relaysidecar.New(cfg, zap.NewNop())
+	serviceSigner, err := nostrutil.NewLocalKeyer(testServiceKey)
+	if err != nil {
+		t.Fatalf("service signer: %v", err)
+	}
+	sidecar, err := relaysidecar.New(t.Context(), cfg, serviceSigner, zap.NewNop())
 	if err != nil {
 		t.Fatalf("start sidecar: %v", err)
 	}

@@ -2,6 +2,7 @@ package relaysidecar
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"log"
@@ -23,11 +24,11 @@ import (
 
 const retentionSweepInterval = 15 * time.Minute
 
-// Server wraps the Khatru relay used by Bahia's local sidecar topology.
-type relayConfigSigner struct{ secret nostr.SecretKey }
+// configAckSigner signs config-consumer acknowledgements as the service.
+type configAckSigner struct{ signer nostr.Signer }
 
-func (s relayConfigSigner) Sign(_ context.Context, event *nostr.Event) error {
-	return event.Sign(s.secret)
+func (s configAckSigner) Sign(ctx context.Context, event *nostr.Event) error {
+	return s.signer.SignEvent(ctx, event)
 }
 
 type relayConfigPublisher struct{ relay *khatru.Relay }
@@ -39,6 +40,7 @@ func (p relayConfigPublisher) Publish(ctx context.Context, event nostr.Event) (i
 	return 1, nil
 }
 
+// Server wraps the Khatru relay used by Bahia's local sidecar topology.
 type Server struct {
 	cfg         config.RelaySidecarConfig
 	relay       *khatru.Relay
@@ -64,8 +66,22 @@ type sweepCounters struct {
 	expired, request, regular atomic.Uint64
 }
 
-// New creates a Khatru sidecar relay backed by durable storage.
-func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
+// New creates a Khatru sidecar relay backed by durable storage. signer is the
+// service identity (servicesigner.Open in cmd/relay): its pubkey is the NIP-11
+// pubkey and is always admitted to write and read, and it signs config-consumer
+// acknowledgements. The caller owns the signer and closes it after the server
+// stops.
+func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, logger *zap.Logger) (*Server, error) {
+	if signer == nil {
+		return nil, errors.New("relay sidecar requires the service signer (nostr.signer or nostr.private_key)")
+	}
+	servicePubkey, err := signer.GetPublicKey(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read relay sidecar service pubkey: %w", err)
+	}
+	if servicePubkey == nostr.ZeroPK {
+		return nil, errors.New("relay sidecar service signer reported no pubkey")
+	}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -83,10 +99,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	}
 	retention := newRetentionPolicy(nostrCfg.Sidecar)
 
-	pol, err := newPolicy(nostrCfg)
-	if err != nil {
-		return nil, err
-	}
+	pol := newPolicy(servicePubkey)
 	admin, err := openAdminPolicy(nostrCfg.Sidecar)
 	if err != nil {
 		return nil, err
@@ -128,13 +141,7 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 		return info
 	}
 	relay.Negentropy = true
-
-	if servicePubkey, ok, err := deriveFiatjafPubkey(nostrCfg.PrivateKey); err != nil {
-		return nil, err
-	} else if ok {
-		pk := servicePubkey
-		relay.Info.PubKey = &pk
-	}
+	relay.Info.PubKey = &servicePubkey
 
 	// Khatru broadcasts to matching subscribers synchronously, before it sends
 	// the publisher's OK. The fanout disables that path and delivers through
@@ -186,20 +193,11 @@ func New(nostrCfg config.NostrConfig, logger *zap.Logger) (*Server, error) {
 	// author desired config. Explicit sidecar authors remain supported.
 	configAuthors := append(append([]string(nil), nostrCfg.Sidecar.ConfigTrustedPubkeys...), nostrCfg.AuthorizedPubkeys...)
 	if len(configAuthors) > 0 && nostrCfg.Sidecar.ConfigProjectionPath != "" {
-		secret, ok, err := parseFiatjafSecret(nostrCfg.PrivateKey)
-		if err != nil {
-			_ = store.Close()
-			return nil, err
-		}
-		if !ok {
-			_ = store.Close()
-			return nil, fmt.Errorf("nostr.private_key is required when relay-sidecar config trusted authors are configured")
-		}
 		consumer, err = NewConfigConsumer(ConfigConsumerConfig{
 			ServiceID: nostrCfg.Sidecar.ServiceID, Scope: nostrCfg.Sidecar.Scope,
 			ProjectionPath: nostrCfg.Sidecar.ConfigProjectionPath,
 			TrustedAuthors: configAuthors,
-			Signer:         relayConfigSigner{secret: secret}, Publisher: relayConfigPublisher{relay: relay},
+			Signer:         configAckSigner{signer: signer}, Publisher: relayConfigPublisher{relay: relay},
 			Apply: func(projection ConfigProjection) error {
 				if err := admin.applyConfigProjection(projection); err != nil {
 					return err

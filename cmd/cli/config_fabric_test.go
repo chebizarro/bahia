@@ -15,6 +15,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/relaysidecar"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/stretchr/testify/require"
@@ -29,7 +30,6 @@ func TestConfigCLIProducesOperatorSignedEventsAndRollsBackFromOutbox(t *testing.
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	serviceKey, operator := nostr.Generate(), nostr.Generate()
 	cfg := config.Defaults().Nostr
-	cfg.PrivateKey = serviceKey.Hex()
 	cfg.Sidecar.DataDir = t.TempDir()
 	cfg.Sidecar.ReadAuthMode = config.ReadAuthModeOff
 	cfg.Sidecar.ServiceID = "relay-sidecar-test"
@@ -37,7 +37,9 @@ func TestConfigCLIProducesOperatorSignedEventsAndRollsBackFromOutbox(t *testing.
 	cfg.Sidecar.ConfigProjectionPath = filepath.Join(t.TempDir(), "projection.json")
 	cfg.Sidecar.ListenAddr = "127.0.0.1:0"
 	cfg.AuthorizedPubkeys = []string{operator.Public().Hex()}
-	relay, err := relaysidecar.New(cfg, nil)
+	serviceSigner, err := nostrutil.NewLocalKeyer(serviceKey.Hex())
+	require.NoError(t, err)
+	relay, err := relaysidecar.New(t.Context(), cfg, serviceSigner, nil)
 	require.NoError(t, err)
 	server := httptest.NewServer(relay.Handler())
 	runCtx, stop := context.WithCancel(context.Background())
