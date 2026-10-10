@@ -140,6 +140,9 @@ func (m *LegacyOCKMigrator) RunChecked(ctx context.Context) (LegacyOCKMigrationR
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return LegacyOCKMigrationReport{}, fmt.Errorf("legacy OCK migration interrupted: %w", err)
+	}
 	if m.completed {
 		return cloneLegacyOCKMigrationReport(m.lastReport), nil
 	}
@@ -241,6 +244,10 @@ func (m *LegacyOCKMigrator) migrateTopic(ctx context.Context, topic string, meta
 			fail(rec.ID, fmt.Sprintf("legacy decrypt or format: %v", err))
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			fail(rec.ID, fmt.Sprintf("interrupted after legacy decrypt: %v", err))
+			break
+		}
 		dTag := extractDTagFromRecord(rec)
 		if dTag == "" {
 			fail(rec.ID, "missing d-tag")
@@ -255,6 +262,10 @@ func (m *LegacyOCKMigrator) migrateTopic(ctx context.Context, topic string, meta
 		if err != nil {
 			fail(rec.ID, fmt.Sprintf("re-encrypt: %v", err))
 			continue
+		}
+		if err := ctx.Err(); err != nil {
+			fail(rec.ID, fmt.Sprintf("interrupted before re-publish: %v", err))
+			break
 		}
 		if err := m.projector.publishControlState(ctx, meta.legacyKind, dTag, false, nil, encrypted, "legacy_ock_migration", nil); err != nil {
 			fail(rec.ID, fmt.Sprintf("re-publish: %v", err))

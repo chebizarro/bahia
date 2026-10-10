@@ -22,6 +22,7 @@ import (
 type fakeConfidentialEncryptor struct {
 	encrypted map[string]string // orgID:content → encrypted
 	calls     int
+	onEncrypt func()
 }
 
 func (f *fakeConfidentialEncryptor) EncryptConfidential(_ context.Context, orgID string, plaintext []byte, legacyKind int, dTag, topic string, _ []byte) (string, error) {
@@ -30,6 +31,9 @@ func (f *fakeConfidentialEncryptor) EncryptConfidential(_ context.Context, orgID
 	result := fmt.Sprintf(`{"schema":%q,"key_org":%q,"ciphertext":"migrated-%d"}`,
 		confidentialAEADV1Schema, orgID, f.calls)
 	f.encrypted[key] = result
+	if f.onEncrypt != nil {
+		f.onEncrypt()
+	}
 	return result, nil
 }
 
@@ -48,14 +52,22 @@ func (f *fakeConfidentialEncryptor) WrapKeyForMember(_ context.Context, _, _ str
 }
 
 type testLegacyN1Decryptor struct {
-	keyer  gonostr.Keyer
-	pubkey gonostr.PubKey
-	err    error
-	calls  int
+	keyer     gonostr.Keyer
+	pubkey    gonostr.PubKey
+	err       error
+	calls     int
+	onDecrypt func()
+	plaintext string
 }
 
 func (d *testLegacyN1Decryptor) ServiceDecrypt(ctx context.Context, content string) (string, error) {
 	d.calls++
+	if d.onDecrypt != nil {
+		d.onDecrypt()
+	}
+	if d.plaintext != "" {
+		return d.plaintext, nil
+	}
 	if d.err != nil {
 		return "", d.err
 	}
@@ -249,6 +261,46 @@ func TestLegacyOCKMigrator_N1CanceledBeforeKeyer(t *testing.T) {
 	cancel()
 	if _, err := m.tryLegacyDecrypt(ctx, "ciphertext", legacyOCKTopic{decryptKind: legacyDecryptN1}); err == nil || n1.calls != 0 {
 		t.Fatalf("canceled N1 invoked Keyer: calls=%d err=%v", n1.calls, err)
+	}
+}
+
+func TestLegacyOCKMigrator_CancellationAfterN1DecryptPreventsPublish(t *testing.T) {
+	key := "0000000000000000000000000000000000000000000000000000000000000001"
+	pubkey, _ := publicKeyHexFromPrivateKeyHex(key)
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	topic := kinds.CPStateTopicSecretRegistry
+	history := &fakeProjectionHistory{records: map[string][]repository.NostrEventRecord{
+		"t:" + topic: {makeRecord("cancel-after-decrypt", pubkey, "legacy-ciphertext", "secret-1", topic)},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	n1 := &testLegacyN1Decryptor{onDecrypt: cancel, plaintext: fmt.Sprintf(`{"org_id":%q}`, orgID)}
+	publisher := &fakeProjectionPublisher{}
+	encryptor := &fakeConfidentialEncryptor{encrypted: map[string]string{}}
+	m := NewLegacyOCKMigrator(&Projector{enabled: true, privateKey: key, servicePubkey: pubkey,
+		history: history, publisher: publisher, logger: zap.NewNop()}, encryptor, nil, n1, nil)
+	report, err := m.RunChecked(ctx)
+	if err == nil || report.Complete || report.Topics[topic].Failed != 1 || n1.calls != 1 || encryptor.calls != 0 || len(publisher.published) != 0 {
+		t.Fatalf("canceled decrypt published: %+v, %v, encryptions=%d publishes=%d", report, err, encryptor.calls, len(publisher.published))
+	}
+}
+
+func TestLegacyOCKMigrator_CancellationAfterEncryptPreventsPublish(t *testing.T) {
+	key := "0000000000000000000000000000000000000000000000000000000000000001"
+	pubkey, _ := publicKeyHexFromPrivateKeyHex(key)
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	topic := kinds.CPStateTopicSecretRegistry
+	history := &fakeProjectionHistory{records: map[string][]repository.NostrEventRecord{
+		"t:" + topic: {makeRecord("cancel-after-encrypt", pubkey, "legacy-ciphertext", "secret-1", topic)},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	n1 := &testLegacyN1Decryptor{plaintext: fmt.Sprintf(`{"org_id":%q}`, orgID)}
+	publisher := &fakeProjectionPublisher{}
+	encryptor := &fakeConfidentialEncryptor{encrypted: map[string]string{}, onEncrypt: cancel}
+	m := NewLegacyOCKMigrator(&Projector{enabled: true, privateKey: key, servicePubkey: pubkey,
+		history: history, publisher: publisher, logger: zap.NewNop()}, encryptor, nil, n1, nil)
+	report, err := m.RunChecked(ctx)
+	if err == nil || report.Complete || report.Topics[topic].Failed != 1 || encryptor.calls != 1 || len(publisher.published) != 0 {
+		t.Fatalf("canceled re-encrypt published: %+v, %v, publishes=%d", report, err, len(publisher.published))
 	}
 }
 
