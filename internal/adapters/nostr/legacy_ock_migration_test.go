@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	gonostr "fiatjaf.com/nostr"
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -54,10 +56,16 @@ func (f *fakeLegacyO1Decryptor) DecryptOrgState(content string) ([]byte, error) 
 }
 
 type fakeProjectionHistory struct {
-	records map[string][]repository.NostrEventRecord // "tagName:tagValue" → records
+	records        map[string][]repository.NostrEventRecord // "tagName:tagValue" → records
+	err            error
+	requestedLimit int
 }
 
-func (h *fakeProjectionHistory) FindByTag(_ context.Context, tagName, tagValue string, _ []int, _ int) ([]repository.NostrEventRecord, error) {
+func (h *fakeProjectionHistory) FindByTag(_ context.Context, tagName, tagValue string, _ []int, limit int) ([]repository.NostrEventRecord, error) {
+	h.requestedLimit = limit
+	if h.err != nil {
+		return nil, h.err
+	}
 	key := tagName + ":" + tagValue
 	return h.records[key], nil
 }
@@ -68,6 +76,12 @@ func (h *fakeProjectionHistory) ListByKind(_ context.Context, _ int, _ int) ([]r
 
 type fakeProjectionPublisher struct {
 	published []publishedRecord
+	err       error
+}
+
+func (p *fakeProjectionPublisher) PublishProjection(_ context.Context, ev gonostr.Event, _ string, _ *uuid.UUID) error {
+	p.published = append(p.published, publishedRecord{kind: int(ev.Kind), content: ev.Content})
+	return p.err
 }
 
 type publishedRecord struct {
@@ -99,8 +113,8 @@ func legacyO1Content(orgID, pubkey, role string) string {
 }
 
 func newFormatContent(orgID string) string {
-	return fmt.Sprintf(`{"schema":%q,"key_org":%q,"ciphertext":"already-migrated"}`,
-		confidentialAEADV1Schema, orgID)
+	return fmt.Sprintf(`{"schema":%q,"algorithm":"xchacha20-poly1305","key_org":%q,"key_ref":"ock:%s","key_version":"v1","nonce":"nonce","ciphertext":"already-migrated","associated_data":{"schema":%q}}`,
+		confidentialAEADV1Schema, orgID, orgID, confidentialAEADV1Schema)
 }
 
 // --- tests ---
@@ -143,7 +157,7 @@ func TestLegacyOCKMigrator_MigratesLegacyO1Records(t *testing.T) {
 	// Use a deterministic keypair so servicePubkey is known.
 	// Private key 0x01 → pubkey = generator point (79BE...) in compressed form.
 	// For simplicity, just use a fixed pubkey that matches the test.
-	servicePubkey := "test-service-pubkey"
+	servicePubkey, _ := publicKeyHexFromPrivateKeyHex("0000000000000000000000000000000000000000000000000000000000000001")
 
 	history := &fakeProjectionHistory{
 		records: map[string][]repository.NostrEventRecord{
@@ -162,16 +176,24 @@ func TestLegacyOCKMigrator_MigratesLegacyO1Records(t *testing.T) {
 
 	encryptor := &fakeConfidentialEncryptor{encrypted: map[string]string{}}
 
-	// Use a projector with an empty private key so it doesn't filter by
-	// service pubkey (treats all records as own).
+	publisher := &fakeProjectionPublisher{}
 	projector := &Projector{
-		enabled: true,
-		history: history,
-		logger:  zap.NewNop(),
+		privateKey:    "0000000000000000000000000000000000000000000000000000000000000001",
+		servicePubkey: servicePubkey,
+		enabled:       true,
+		history:       history,
+		publisher:     publisher,
+		logger:        zap.NewNop(),
 	}
 
 	migrator := NewLegacyOCKMigrator(projector, encryptor, legacyO1, nil)
-	migrator.Run(context.Background())
+	report, err := migrator.RunChecked(context.Background())
+	if err != nil || !report.Complete || report.Topics[kinds.CPStateTopicOrgRegistry].Migrated != 1 {
+		t.Fatalf("unexpected migration result: report=%+v err=%v", report, err)
+	}
+	if len(publisher.published) != 1 {
+		t.Fatalf("published %d events, want 1", len(publisher.published))
+	}
 
 	if encryptor.calls != 1 {
 		t.Errorf("expected 1 encrypt call for legacy record, got %d", encryptor.calls)
@@ -235,13 +257,101 @@ func TestLegacyOCKMigrator_NilSafe(t *testing.T) {
 	migrator.Run(context.Background())
 }
 
+func TestLegacyOCKMigrator_CheckedPublishFailure(t *testing.T) {
+	key := "0000000000000000000000000000000000000000000000000000000000000001"
+	pubkey, _ := publicKeyHexFromPrivateKeyHex(key)
+	topic := kinds.CPStateTopicOrgRegistry
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	content := `{"schema":"bahia.org-state.aead.v1"}`
+	history := &fakeProjectionHistory{records: map[string][]repository.NostrEventRecord{
+		"t:" + topic: {makeRecord("publish-fails", pubkey, content, orgID, topic)},
+	}}
+	publisher := &fakeProjectionPublisher{err: fmt.Errorf("relay rejected publish")}
+	m := NewLegacyOCKMigrator(&Projector{enabled: true, privateKey: key, servicePubkey: pubkey,
+		history: history, publisher: publisher, logger: zap.NewNop()},
+		&fakeConfidentialEncryptor{encrypted: map[string]string{}},
+		&fakeLegacyO1Decryptor{plaintext: map[string][]byte{content: []byte(fmt.Sprintf(`{"id":%q}`, orgID))}}, nil)
+	report, err := m.RunChecked(context.Background())
+	if err == nil || report.Complete || report.Topics[topic].Failed != 1 || report.Topics[topic].Migrated != 0 {
+		t.Fatalf("failed publish certified: %+v, %v", report, err)
+	}
+}
+
+func TestLegacyOCKMigrator_CheckedFailureAccounting(t *testing.T) {
+	key := "0000000000000000000000000000000000000000000000000000000000000001"
+	pubkey, _ := publicKeyHexFromPrivateKeyHex(key)
+	topic := kinds.CPStateTopicOrgRegistry
+	history := &fakeProjectionHistory{records: map[string][]repository.NostrEventRecord{
+		"t:" + topic: {
+			makeRecord("unreadable", pubkey, `{"schema":"bahia.org-state.aead.v1"}`, "org-1", topic),
+			makeRecord("foreign", "another-author", `{"schema":"bahia.org-state.aead.v1"}`, "org-2", topic),
+		},
+	}}
+	m := NewLegacyOCKMigrator(&Projector{enabled: true, privateKey: key, servicePubkey: pubkey, history: history, logger: zap.NewNop()},
+		&fakeConfidentialEncryptor{encrypted: map[string]string{}}, &fakeLegacyO1Decryptor{}, nil)
+	report, err := m.RunChecked(context.Background())
+	if err == nil || report.Complete {
+		t.Fatalf("unreadable record certified: %+v, %v", report, err)
+	}
+	stats := report.Topics[topic]
+	if stats.Scanned != 2 || stats.ForeignAuthor != 1 || stats.Failed != 1 || len(report.Failures) != 1 || report.Failures[0].EventID != "unreadable" {
+		t.Fatalf("incorrect accounting: %+v", report)
+	}
+	second, secondErr := m.RunChecked(context.Background())
+	if secondErr == nil || second.Complete || len(second.Failures) != 1 {
+		t.Fatalf("second attempt hid failure: %+v, %v", second, secondErr)
+	}
+}
+
+func TestLegacyOCKMigrator_CheckedPrerequisitesAndCancellation(t *testing.T) {
+	var nilMigrator *LegacyOCKMigrator
+	if report, err := nilMigrator.RunChecked(context.Background()); err == nil || report.Complete {
+		t.Fatalf("nil migrator certified: %+v", report)
+	}
+	m := NewLegacyOCKMigrator(&Projector{enabled: true, history: &fakeProjectionHistory{}},
+		&fakeConfidentialEncryptor{encrypted: map[string]string{}}, nil, nil)
+	if report, err := m.RunChecked(context.Background()); err == nil || report.Complete {
+		t.Fatalf("missing service identity certified: %+v", report)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	m = NewLegacyOCKMigrator(&Projector{enabled: true, servicePubkey: "service", history: &fakeProjectionHistory{}},
+		&fakeConfidentialEncryptor{encrypted: map[string]string{}}, nil, nil)
+	if report, err := m.RunChecked(ctx); err == nil || report.Complete {
+		t.Fatalf("cancelled scan certified: %+v", report)
+	}
+}
+
+func TestLegacyOCKMigrator_CheckedQueryAndBoundedLimit(t *testing.T) {
+	key := "0000000000000000000000000000000000000000000000000000000000000001"
+	pubkey, _ := publicKeyHexFromPrivateKeyHex(key)
+	topic := kinds.CPStateTopicOrgRegistry
+	for _, tc := range []struct {
+		name    string
+		history *fakeProjectionHistory
+	}{
+		{"query error", &fakeProjectionHistory{err: fmt.Errorf("store unavailable")}},
+		{"full page", &fakeProjectionHistory{records: map[string][]repository.NostrEventRecord{"t:" + topic: make([]repository.NostrEventRecord, legacyOCKScanLimit)}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewLegacyOCKMigrator(&Projector{enabled: true, servicePubkey: pubkey, history: tc.history, logger: zap.NewNop()},
+				&fakeConfidentialEncryptor{encrypted: map[string]string{}}, nil, nil)
+			report, err := m.RunChecked(context.Background())
+			if err == nil || report.Complete || len(report.Failures) == 0 || tc.history.requestedLimit != legacyOCKScanLimit {
+				t.Fatalf("unproven scan certified or unbounded: %+v, %v", report, err)
+			}
+		})
+	}
+}
+
 func TestIsConfidentialAEADV1(t *testing.T) {
 	tests := []struct {
 		name    string
 		content string
 		want    bool
 	}{
-		{"new format", fmt.Sprintf(`{"schema":%q}`, confidentialAEADV1Schema), true},
+		{"new format", newFormatContent("org-1"), true},
+		{"schema-only is incomplete", fmt.Sprintf(`{"schema":%q}`, confidentialAEADV1Schema), false},
 		{"legacy O1", `{"schema":"bahia.org-state.aead.v1"}`, false},
 		{"empty", `{}`, false},
 		{"invalid json", `not json`, false},

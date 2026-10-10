@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync/atomic"
+	"sort"
+	"sync"
 
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
@@ -39,37 +40,25 @@ type legacyOCKTopic struct {
 	decryptKind legacyDecryptMethod
 }
 
-// LegacyOCKMigrator re-publishes confidential records that are still in an
-// old encryption format under the per-org content key (OCK) scheme at daemon
-// startup. It implements
-// docs/architecture/confidential-state.md "Migration" steps 1–8 exactly:
-//
-//  1. Scan projectionHistory.FindByTag for each confidential topic.
-//  2. Try parsing as bahia.confidential.aead.v1 — skip if already migrated.
-//  3. Try O1 decryptOrgState (org/member/invite) or N1
-//     selfDecryptNIP44Legacy (secret/notification).
-//  4. Re-encrypt the plaintext with ConfidentialEncryptor.EncryptConfidential.
-//  5. Re-publish through publishControlState (same coordinate, monotonic created_at).
-//  6. Log progress: "migrated N/M records for topic T".
-//  7. Run at most once per daemon lifetime (in-memory "migration-done" flag).
-//  8. (The old-format decrypt code is required until every deployment has
-//     run this migration.)
-//
-// The migration is idempotent: records already in the new format are
-// skipped, and re-running publishes the same content on the same
-// coordinate, which the relay's addressable-event replacement deduplicates.
+// LegacyOCKMigrator re-publishes the retained, service-authored records of
+// five confidential cp-state families under the per-org content key. It is
+// registered at warm start, after EOSE. RunChecked accounts for every returned
+// record and refuses to certify skipped failures or a full bounded page.
+// It does not certify remote relay inventory or authorize raw-key removal.
 type LegacyOCKMigrator struct {
 	projector *Projector
 	encryptor ConfidentialStateEncryptor
 	legacyO1  LegacyOrgStateDecryptor
 	logger    *zap.Logger
 
-	done atomic.Bool
+	mu         sync.Mutex
+	attempted  bool
+	lastReport LegacyOCKMigrationReport
+	lastErr    error
 }
 
-// NewLegacyOCKMigrator creates a migrator. All parameters are required;
-// if any are nil, Run returns early without error (the daemon may not
-// have confidential crypto configured).
+// NewLegacyOCKMigrator creates a migrator. Missing dependencies are reported
+// as an incomplete attempt by RunChecked.
 func NewLegacyOCKMigrator(
 	projector *Projector,
 	encryptor ConfidentialStateEncryptor,
@@ -87,150 +76,168 @@ func NewLegacyOCKMigrator(
 	}
 }
 
-// Run executes the migration at most once per daemon lifetime.
-// It should be called after warm-start readiness (EOSE received) so that
-// the history contains the latest records from all relays.
-//
-// The HydrateTrustSetFromHistory call runs before this and already has
-// dual-read support (OCK format first, O1 fallback), so it can read
-// records in either format.
+// LegacyOCKMigrationFailure identifies a record or topic that could not be
+// certified. Content and plaintext are deliberately absent.
+type LegacyOCKMigrationFailure struct {
+	Topic   string
+	EventID string
+	Reason  string
+}
+
+// LegacyOCKMigrationTopicReport accounts for every returned record in a topic.
+// ForeignAuthor records are not part of the service identity's migration.
+type LegacyOCKMigrationTopicReport struct {
+	Scanned        int
+	ForeignAuthor  int
+	AlreadyCurrent int
+	Migrated       int
+	Failed         int
+}
+
+// LegacyOCKMigrationReport is only a bounded local-history result. Complete
+// never proves that relays, older stores, or unpublished outboxes lack legacy
+// records, nor that a durably queued publish has reached relay quorum. It must
+// not be used alone to authorize service-key removal.
+type LegacyOCKMigrationReport struct {
+	Topics   map[string]LegacyOCKMigrationTopicReport
+	Failures []LegacyOCKMigrationFailure
+	Complete bool
+}
+
+const legacyOCKScanLimit = 10000
+
+// Run preserves the existing post-warm-start hook. Unlike the old log-only
+// runner it surfaces an incomplete local scan as an error-level log.
 func (m *LegacyOCKMigrator) Run(ctx context.Context) {
+	report, err := m.RunChecked(ctx)
 	if m == nil {
 		return
 	}
-	// Step 7: at most once per daemon lifetime.
-	if !m.done.CompareAndSwap(false, true) {
+	if err != nil {
+		m.logger.Error("legacy OCK migration incomplete", zap.Error(err),
+			zap.Any("topics", report.Topics), zap.Any("failures", report.Failures))
 		return
 	}
-	if m.projector == nil || !m.projector.Enabled() || m.encryptor == nil {
-		m.logger.Info("legacy OCK migration skipped: projector or encryptor not configured")
-		return
-	}
-	if m.projector.history == nil {
-		m.logger.Info("legacy OCK migration skipped: no projection history available")
-		return
-	}
-
-	totalMigrated := 0
-	totalSkipped := 0
-	totalErrors := 0
-	for topic, meta := range legacyOCKTopicMap {
-		if ctx.Err() != nil {
-			m.logger.Warn("legacy OCK migration interrupted", zap.Error(ctx.Err()))
-			return
-		}
-		migrated, skipped, errors := m.migrateTopic(ctx, topic, meta)
-		totalMigrated += migrated
-		totalSkipped += skipped
-		totalErrors += errors
-	}
-	m.logger.Info("legacy OCK migration complete",
-		zap.Int("migrated", totalMigrated),
-		zap.Int("skipped", totalSkipped),
-		zap.Int("errors", totalErrors))
+	m.logger.Info("legacy OCK migration local scan complete", zap.Any("topics", report.Topics))
 }
 
-// migrateTopic processes one confidential topic. Returns counts of
-// migrated, skipped, and errored records.
-func (m *LegacyOCKMigrator) migrateTopic(ctx context.Context, topic string, meta legacyOCKTopic) (migrated, skipped, errors int) {
-	// Step 1: scan history for records with this topic tag.
-	records, err := m.projector.history.FindByTag(ctx, "t", topic, nil, 10000)
+// RunChecked performs one migration attempt per migrator lifetime, returning
+// the same result on subsequent calls rather than silently claiming success.
+// A successful result certifies only the bounded, author-scoped local history
+// presented by ProjectionHistory after warm-start, not remote relay history.
+func (m *LegacyOCKMigrator) RunChecked(ctx context.Context) (LegacyOCKMigrationReport, error) {
+	if m == nil {
+		return LegacyOCKMigrationReport{}, fmt.Errorf("legacy OCK migrator is nil")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.attempted {
+		return m.lastReport, m.lastErr
+	}
+	m.attempted = true
+	report, err := m.runChecked(ctx)
+	m.lastReport, m.lastErr = report, err
+	return report, err
+}
+
+func (m *LegacyOCKMigrator) runChecked(ctx context.Context) (LegacyOCKMigrationReport, error) {
+	report := LegacyOCKMigrationReport{Topics: make(map[string]LegacyOCKMigrationTopicReport, len(legacyOCKTopicMap))}
+	if err := ctx.Err(); err != nil {
+		return report, fmt.Errorf("legacy OCK migration interrupted: %w", err)
+	}
+	if m.projector == nil || !m.projector.Enabled() || m.encryptor == nil || m.projector.history == nil {
+		return report, fmt.Errorf("legacy OCK migration requires enabled projector, encryptor, and local history")
+	}
+	servicePubkey := m.projector.servicePubkey
+	if servicePubkey == "" && m.projector.privateKey != "" {
+		var err error
+		servicePubkey, err = publicKeyHexFromPrivateKeyHex(m.projector.privateKey)
+		if err != nil {
+			return report, fmt.Errorf("resolve service pubkey: %w", err)
+		}
+	}
+	if servicePubkey == "" {
+		return report, fmt.Errorf("legacy OCK migration requires pinned service pubkey")
+	}
+	topics := legacyOCKMigrationTopics()
+	sort.Strings(topics)
+	for _, topic := range topics {
+		if err := ctx.Err(); err != nil {
+			return report, fmt.Errorf("legacy OCK migration interrupted: %w", err)
+		}
+		stats, failures := m.migrateTopic(ctx, topic, legacyOCKTopicMap[topic], servicePubkey)
+		report.Topics[topic] = stats
+		report.Failures = append(report.Failures, failures...)
+	}
+	if err := ctx.Err(); err != nil {
+		return report, fmt.Errorf("legacy OCK migration interrupted: %w", err)
+	}
+	if len(report.Failures) != 0 {
+		return report, fmt.Errorf("legacy OCK migration incomplete: %d failures", len(report.Failures))
+	}
+	report.Complete = true
+	return report, nil
+}
+
+// migrateTopic scans one confidential family. A full page is ambiguous and
+// therefore cannot be certified; it is not processed or treated as complete.
+func (m *LegacyOCKMigrator) migrateTopic(ctx context.Context, topic string, meta legacyOCKTopic, servicePubkey string) (LegacyOCKMigrationTopicReport, []LegacyOCKMigrationFailure) {
+	stats := LegacyOCKMigrationTopicReport{}
+	failures := []LegacyOCKMigrationFailure{}
+	fail := func(eventID, reason string) {
+		stats.Failed++
+		failures = append(failures, LegacyOCKMigrationFailure{Topic: topic, EventID: eventID, Reason: reason})
+	}
+	records, err := m.projector.history.FindByTag(ctx, "t", topic, []int{KindCASControlState}, legacyOCKScanLimit)
 	if err != nil {
-		m.logger.Warn("legacy OCK migration: failed to query history",
-			zap.String("topic", topic), zap.Error(err))
-		return 0, 0, 1
+		fail("", fmt.Sprintf("history query: %v", err))
+		return stats, failures
 	}
-	if len(records) == 0 {
-		return 0, 0, 0
+	stats.Scanned = len(records)
+	if len(records) >= legacyOCKScanLimit {
+		fail("", "history scan reached bounded limit; older records are unproven")
+		return stats, failures
 	}
-
-	servicePubkey := ""
-	if m.projector.privateKey != "" {
-		if derived, derivErr := publicKeyHexFromPrivateKeyHex(m.projector.privateKey); derivErr == nil {
-			servicePubkey = derived
-		}
-	}
-
 	for _, rec := range records {
-		if ctx.Err() != nil {
-			return migrated, skipped, errors
+		if err := ctx.Err(); err != nil {
+			fail(rec.ID, fmt.Sprintf("interrupted: %v", err))
+			break
 		}
-		// Only process the daemon's own records.
-		if servicePubkey != "" && rec.PubKey != servicePubkey {
+		if rec.PubKey != servicePubkey {
+			stats.ForeignAuthor++
 			continue
 		}
-
-		// Step 2: try parsing as new format. If it succeeds, skip.
 		if isConfidentialAEADV1(rec.Content) {
-			skipped++
+			stats.AlreadyCurrent++
 			continue
 		}
-
-		// Step 3: try old-format decrypt.
-		plaintext, decryptErr := m.tryLegacyDecrypt(rec.Content, meta)
-		if decryptErr != nil {
-			m.logger.Debug("legacy OCK migration: record not in legacy format or decrypt failed",
-				zap.String("topic", topic), zap.String("event_id", rec.ID),
-				zap.Error(decryptErr))
-			skipped++
+		plaintext, err := m.tryLegacyDecrypt(rec.Content, meta)
+		if err != nil {
+			fail(rec.ID, fmt.Sprintf("legacy decrypt or format: %v", err))
 			continue
 		}
-
-		// Extract the d-tag from the record's tags.
 		dTag := extractDTagFromRecord(rec)
 		if dTag == "" {
-			m.logger.Warn("legacy OCK migration: record missing d-tag",
-				zap.String("topic", topic), zap.String("event_id", rec.ID))
-			errors++
+			fail(rec.ID, "missing d-tag")
 			continue
 		}
-
-		// Extract orgID from the decrypted plaintext for OCK scoping.
 		orgID := extractOrgIDFromPlaintext(plaintext)
 		if orgID == "" {
-			m.logger.Warn("legacy OCK migration: cannot determine org_id from decrypted content",
-				zap.String("topic", topic), zap.String("event_id", rec.ID))
-			errors++
+			fail(rec.ID, "missing org_id in decrypted content")
 			continue
 		}
-
-		// Step 4: re-encrypt with ConfidentialEncryptor.
-		encrypted, encryptErr := m.encryptor.EncryptConfidential(
-			ctx, orgID, []byte(plaintext), meta.legacyKind, dTag, topic, nil)
-		if encryptErr != nil {
-			m.logger.Warn("legacy OCK migration: re-encrypt failed",
-				zap.String("topic", topic), zap.String("event_id", rec.ID),
-				zap.Error(encryptErr))
-			errors++
+		encrypted, err := m.encryptor.EncryptConfidential(ctx, orgID, []byte(plaintext), meta.legacyKind, dTag, topic, nil)
+		if err != nil {
+			fail(rec.ID, fmt.Sprintf("re-encrypt: %v", err))
 			continue
 		}
-
-		// Step 5: re-publish through publishControlState (same coordinate).
-		// publishControlState takes the raw id and creates the d-tag via
-		// controlStateEnvelope → canonicalStateDTag, which for non-worker
-		// kinds returns the id unchanged. The dTag from history IS the id.
-		if publishErr := m.projector.publishControlState(
-			ctx, meta.legacyKind, dTag, false, nil, encrypted,
-			"legacy_ock_migration", nil,
-		); publishErr != nil {
-			m.logger.Warn("legacy OCK migration: re-publish failed",
-				zap.String("topic", topic), zap.String("event_id", rec.ID),
-				zap.Error(publishErr))
-			errors++
+		if err := m.projector.publishControlState(ctx, meta.legacyKind, dTag, false, nil, encrypted, "legacy_ock_migration", nil); err != nil {
+			fail(rec.ID, fmt.Sprintf("re-publish: %v", err))
 			continue
 		}
-		migrated++
+		stats.Migrated++
 	}
-
-	// Step 6: log progress.
-	m.logger.Info(fmt.Sprintf("legacy OCK migration: migrated %d/%d records for topic %s",
-		migrated, len(records), topic),
-		zap.String("topic", topic),
-		zap.Int("total", len(records)),
-		zap.Int("migrated", migrated),
-		zap.Int("skipped", skipped),
-		zap.Int("errors", errors))
-	return migrated, skipped, errors
+	return stats, failures
 }
 
 // tryLegacyDecrypt attempts old-format decryption based on the decrypt method.
@@ -256,16 +263,27 @@ func (m *LegacyOCKMigrator) tryLegacyDecrypt(content string, meta legacyOCKTopic
 	}
 }
 
-// isConfidentialAEADV1 checks whether content is already in the new
-// bahia.confidential.aead.v1 format by parsing just the schema field.
+// isConfidentialAEADV1 recognizes a structurally complete OCK envelope.
+// This is format classification, not an AEAD authentication or relay proof.
 func isConfidentialAEADV1(content string) bool {
-	var probe struct {
-		Schema string `json:"schema"`
+	var envelope struct {
+		Schema         string            `json:"schema"`
+		Algorithm      string            `json:"algorithm"`
+		KeyOrg         string            `json:"key_org"`
+		KeyRef         string            `json:"key_ref"`
+		KeyVersion     string            `json:"key_version"`
+		Nonce          string            `json:"nonce"`
+		Ciphertext     string            `json:"ciphertext"`
+		AssociatedData map[string]string `json:"associated_data"`
 	}
-	if err := json.Unmarshal([]byte(content), &probe); err != nil {
+	if err := json.Unmarshal([]byte(content), &envelope); err != nil {
 		return false
 	}
-	return probe.Schema == confidentialAEADV1Schema
+	return envelope.Schema == confidentialAEADV1Schema &&
+		envelope.Algorithm == "xchacha20-poly1305" &&
+		envelope.KeyOrg != "" && envelope.KeyRef == "ock:"+envelope.KeyOrg &&
+		envelope.KeyVersion != "" && envelope.Nonce != "" && envelope.Ciphertext != "" &&
+		len(envelope.AssociatedData) != 0
 }
 
 // extractOrgIDFromPlaintext extracts the org_id field from decrypted

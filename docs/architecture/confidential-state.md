@@ -151,3 +151,18 @@ material per device** — and keep the `30900` coordinates and store-first reads
 - Threshold Schnorr (FROSTR) is the wrong tool for member reads (every read
   becomes an online ceremony); it is the right tool for custody of the service
   signing key, tracked separately.
+
+## Legacy record re-encryption
+
+After relay warm-start, the daemon scans the retained, service-authored
+org, member, invite, secret and notification-channel cp-state families and
+re-publishes records still using O1 or N1 encryption under the OCK envelope.
+The checked migration result accounts for each local record and fails if a
+query is truncated, a record cannot be decrypted or re-published, or the
+service identity is unavailable. The startup hook logs an incomplete result
+as an error rather than declaring success.
+
+A successful checked result covers only the bounded local retained history.
+It does not prove older relay or backup inventory is empty, and an outbox-queued
+publish may not yet have reached relay quorum. It is not a key-erasure or
+remote-signer cutover authorization.
