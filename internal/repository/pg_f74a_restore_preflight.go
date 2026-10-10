@@ -23,6 +23,8 @@ type F74aRestorePreflight struct {
 	DatabaseName       string
 	Cutoff             time.Time
 	SchemaVersions     int64
+	ArchiveRuns        int64
+	ArchiveBatches     int64
 	Observations       int64
 	ArchivedRows       int64
 	LinkedObservations int64
@@ -79,12 +81,27 @@ func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 			break
 		}
 	}
+	for _, journal := range []struct {
+		table string
+		count *int64
+	}{
+		{"f74a_observation_compaction_runs", &out.ArchiveRuns},
+		{"f74a_observation_archive_batches", &out.ArchiveBatches},
+	} {
+		if err := hashF74aJournal(ctx, tx, h, journal.table, journal.count); err != nil {
+			return out, err
+		}
+	}
 	var cursor *uuid.UUID
 	for {
 		rows, err := tx.Query(ctx, `SELECT o.id,
 			f74a_observation_digest(to_jsonb(o),o.observed_at), a.row_digest,
+			CASE WHEN a.id IS NOT NULL THEN f74a_observation_digest(to_jsonb(a),a.observed_at) END,
 			h.id IS NOT NULL, a.archive_batch_id, a.archived_at,
-			EXISTS (SELECT 1 FROM environment_service_state s WHERE s.current_observation_id=o.id),
+			(SELECT count(*) FROM environment_service_state s WHERE s.current_observation_id=o.id),
+			(SELECT COALESCE(jsonb_agg(jsonb_build_array(s.service_id,s.environment_id)
+			 ORDER BY s.service_id,s.environment_id),'[]'::jsonb)::text
+			 FROM environment_service_state s WHERE s.current_observation_id=o.id),
 			o.deployment_unit_id, u.id IS NOT NULL, u.retired_at
 			FROM runtime_observation_history o
 			LEFT JOIN runtime_observation_archive a ON a.id=o.id
@@ -97,15 +114,17 @@ func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 		read := 0
 		for rows.Next() {
 			var id uuid.UUID
-			var actual, archived []byte
-			var hot, linked, unitExists bool
+			var actual, archived, archivedActual []byte
+			var hot, unitExists bool
+			var linkCount int64
+			var links string
 			var unitID, archiveBatchID *uuid.UUID
 			var archivedAt, retiredAt *time.Time
-			if err := rows.Scan(&id, &actual, &archived, &hot, &archiveBatchID, &archivedAt, &linked, &unitID, &unitExists, &retiredAt); err != nil {
+			if err := rows.Scan(&id, &actual, &archived, &archivedActual, &hot, &archiveBatchID, &archivedAt, &linkCount, &links, &unitID, &unitExists, &retiredAt); err != nil {
 				rows.Close()
 				return out, err
 			}
-			if len(actual) != sha256.Size || (archived != nil && (len(archived) != sha256.Size || !bytes.Equal(actual, archived))) {
+			if len(actual) != sha256.Size || (archived != nil && (len(archived) != sha256.Size || !bytes.Equal(archivedActual, archived) || !bytes.Equal(actual, archivedActual))) {
 				rows.Close()
 				return out, fmt.Errorf("F74a observation %s differs from immutable archive digest", id)
 			}
@@ -117,7 +136,7 @@ func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 				rows.Close()
 				return out, fmt.Errorf("F74a observation %s has an orphan deployment unit", id)
 			}
-			if linked && !hot {
+			if linkCount > 0 && !hot {
 				rows.Close()
 				return out, fmt.Errorf("F74a state-linked observation %s is absent from hot storage", id)
 			}
@@ -133,10 +152,11 @@ func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 			if hot {
 				flags |= 2
 			}
-			if linked {
+			if linkCount > 0 {
 				flags |= 4
 				out.LinkedObservations++
 			}
+			writeF74aPreflightField(h, []byte(links))
 			if unitID != nil {
 				flags |= 8
 				writeF74aPreflightField(h, unitID[:])
@@ -180,4 +200,41 @@ func writeF74aPreflightField(h hash.Hash, value []byte) {
 	binary.BigEndian.PutUint64(length[:], uint64(len(value)))
 	_, _ = h.Write(length[:])
 	_, _ = h.Write(value)
+}
+
+// Journal rows are hashed independently of the archive references so a
+// missing or changed run/batch cannot be hidden by unchanged observation IDs.
+func hashF74aJournal(ctx context.Context, tx pgx.Tx, h hash.Hash, table string, count *int64) error {
+	writeF74aPreflightField(h, []byte(table))
+	var cursor *uuid.UUID
+	for {
+		query := fmt.Sprintf(`SELECT id,to_jsonb(j)::text FROM %s j
+			WHERE ($1::uuid IS NULL OR id > $1) ORDER BY id LIMIT $2`, table)
+		rows, err := tx.Query(ctx, query, cursor, f74aPreflightPageSize)
+		if err != nil {
+			return fmt.Errorf("reading F74a %s inventory: %w", table, err)
+		}
+		read := 0
+		for rows.Next() {
+			var id uuid.UUID
+			var payload string
+			if err := rows.Scan(&id, &payload); err != nil {
+				rows.Close()
+				return err
+			}
+			writeF74aPreflightField(h, id[:])
+			writeF74aPreflightField(h, []byte(payload))
+			*count++
+			cursor = &id
+			read++
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if read < f74aPreflightPageSize {
+			return nil
+		}
+	}
 }

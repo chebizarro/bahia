@@ -210,6 +210,46 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 	sourcePreflight.DatabaseName, restoredPreflight.DatabaseName = "", ""
 	require.Equal(t, sourcePreflight, restoredPreflight, "isolated restore inventory must match source snapshot")
 
+	// A hot copy can mask tampering of the archived payload in the history
+	// view. Verify the archive value independently, even when the hot ID exists.
+	_, err = target.Exec(ctx, `ALTER TABLE runtime_observation_archive DISABLE TRIGGER f74a_archive_no_update`)
+	require.NoError(t, err)
+	_, err = target.Exec(ctx, `UPDATE runtime_observation_archive SET metadata=metadata || '{"tampered":true}'::jsonb WHERE id=$1`, ids[1])
+	require.NoError(t, err)
+	_, err = target.Exec(ctx, `ALTER TABLE runtime_observation_archive ENABLE TRIGGER f74a_archive_no_update`)
+	require.NoError(t, err)
+	_, err = repository.PreflightF74aRestore(ctx, target, sourcePreflight.Cutoff)
+	require.ErrorContains(t, err, "differs from immutable archive digest")
+	_, err = target.Exec(ctx, `ALTER TABLE runtime_observation_archive DISABLE TRIGGER f74a_archive_no_update`)
+	require.NoError(t, err)
+	_, err = target.Exec(ctx, `UPDATE runtime_observation_archive SET metadata=metadata - 'tampered' WHERE id=$1`, ids[1])
+	require.NoError(t, err)
+	_, err = target.Exec(ctx, `ALTER TABLE runtime_observation_archive ENABLE TRIGGER f74a_archive_no_update`)
+	require.NoError(t, err)
+
+	// Moving the same observation link to another state row preserves the
+	// boolean "linked" bit; the inventory must still detect its identity.
+	otherServiceID := uuid.New()
+	_, err = target.Exec(ctx, `INSERT INTO services(id,name,artifact_repo) VALUES ($1,$2,'archive-test')`,
+		otherServiceID, "moved-link-"+otherServiceID.String())
+	require.NoError(t, err)
+	_, err = target.Exec(ctx, `UPDATE environment_service_state SET service_id=$1 WHERE service_id=$2 AND environment_id=$3`,
+		otherServiceID, serviceID, environmentID)
+	require.NoError(t, err)
+	movedPreflight, err := repository.PreflightF74aRestore(ctx, target, sourcePreflight.Cutoff)
+	require.NoError(t, err)
+	require.Equal(t, sourcePreflight.LinkedObservations, movedPreflight.LinkedObservations)
+	require.NotEqual(t, sourcePreflight.InventorySHA256, movedPreflight.InventorySHA256)
+	_, err = target.Exec(ctx, `UPDATE environment_service_state SET service_id=$1 WHERE service_id=$2 AND environment_id=$3`,
+		serviceID, otherServiceID, environmentID)
+	require.NoError(t, err)
+	_, err = target.Exec(ctx, `DELETE FROM services WHERE id=$1`, otherServiceID)
+	require.NoError(t, err)
+	restoredPreflight, err = repository.PreflightF74aRestore(ctx, target, sourcePreflight.Cutoff)
+	require.NoError(t, err)
+	restoredPreflight.DatabaseName = ""
+	require.Equal(t, sourcePreflight, restoredPreflight)
+
 	// Aborting rehydration does not change the restored receipt. A committed
 	// restore retains the immutable archive and moves the state link by ID.
 	tx, err := target.Begin(ctx)

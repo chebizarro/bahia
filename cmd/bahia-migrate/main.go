@@ -188,7 +188,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runLegacyCutover(ctx, pool, *cutoverOutbox, *confirmQuiesced, stdout, stderr)
 	}
 	if action == "f74a-restore-preflight" {
-		return runF74aRestorePreflight(ctx, pool, cutoff, stdout, stderr)
+		return runF74aRestorePreflight(ctx, pool, cutoff, cfg.DB.RedactError, stdout, stderr)
 	}
 	if action == "f74a-census" || action == "f74a-compact" {
 		return runF74aMaintenance(ctx, pool, action, cutoff, stdout, stderr)
@@ -385,10 +385,10 @@ func runF74aMaintenance(ctx context.Context, pool *pgxpool.Pool, action string, 
 
 // runF74aRestorePreflight emits only an unauthenticated inventory. A matching
 // digest from another connection is not a signed backup/restore receipt.
-func runF74aRestorePreflight(ctx context.Context, pool *pgxpool.Pool, cutoff time.Time, stdout, stderr io.Writer) int {
+func runF74aRestorePreflight(ctx context.Context, pool *pgxpool.Pool, cutoff time.Time, redact func(error) error, stdout, stderr io.Writer) int {
 	result, err := repository.PreflightF74aRestore(ctx, pool, cutoff)
 	if err != nil {
-		return reportError(stderr, "F74a restore preflight: %v", err)
+		return reportError(stderr, "F74a restore preflight: %v", redact(err))
 	}
 	for _, item := range []struct {
 		name  string
@@ -397,6 +397,8 @@ func runF74aRestorePreflight(ctx context.Context, pool *pgxpool.Pool, cutoff tim
 		{"database_name_diagnostic_only", result.DatabaseName},
 		{"cutoff", result.Cutoff.Format(time.RFC3339Nano)},
 		{"schema_versions", result.SchemaVersions},
+		{"archive_runs", result.ArchiveRuns},
+		{"archive_batches", result.ArchiveBatches},
 		{"observations", result.Observations},
 		{"archived_rows", result.ArchivedRows},
 		{"state_linked_observations", result.LinkedObservations},
