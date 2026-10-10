@@ -2,20 +2,23 @@
 
 package nip55l
 
-// Opt-in test against a real org.nostr.Signer (the nostrc reference
-// nostr-signer-daemon or grotto-daemon). It is not run by default.
+// Opt-in test against a real org.nostr.Signer you run yourself (Grotto, or
+// the nostrc reference nostr-signer-daemon on your session bus). It is not
+// run by default. For a reproducible, isolated run against the reference
+// daemon (private bus, throwaway keys, no real keyring) use
+// scripts/nip55l_live_test.sh, which drives live_provisioned_test.go.
 //
 // Setup:
-//  1. Run the signer on the session bus (or a private bus) holding the key
-//     for NIP55L_LIVE_PUBKEY in its keystore (libsecret / Keychain). The
-//     reference daemon reads NOSTR_SIGNER_SECKEY_HEX only for the empty
-//     ("active") selector, and this Keyer always sends the 64-hex selector,
-//     so an env-only key is not enough: store it with StoreKey (daemon run
-//     with NOSTR_SIGNER_ALLOW_KEY_MUTATIONS=1) or through Grotto.
+//  1. The signer must hold the key for NIP55L_LIVE_PUBKEY as a stored
+//     identity (Grotto, or StoreKey with the daemon run with
+//     NOSTR_SIGNER_ALLOW_KEY_MUTATIONS=1). A key given only through
+//     NOSTR_SIGNER_SECKEY_HEX is not enough: the reference daemon signs with
+//     it for a hex or npub selector, but ListIdentities does not list it, so
+//     New refuses it with ErrIdentityNotFound.
 //  2. Approve the prompts, or pre-grant this test's principal in
 //     $XDG_CONFIG_HOME/gnostr/signer-grants.ini for the kinds event,
-//     nip44_encrypt and nip44_decrypt (on macOS the principal is
-//     claimed:bahia).
+//     nip44_encrypt and nip44_decrypt (on macOS the bus reports no caller
+//     PIDs, so the principal is claimed:bahia).
 //  3. NIP55L_LIVE_PUBKEY=<npub or hex> [NIP55L_LIVE_BUS_ADDRESS=<addr>] \
 //     go test -tags nip55llive -run TestLiveSigner -count=1 -timeout 20m \
 //     ./internal/adapters/nip55l
