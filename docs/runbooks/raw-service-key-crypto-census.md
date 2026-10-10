@@ -22,13 +22,18 @@ exit and **no partial report**. Increase the bound only after reviewing the
 database size and execution budget.
 
 The report counts SQL-visible `service_secrets` and `secret_versions` by
-encryption method; service-authored confidential cp-state OCK, legacy O1 and
-NIP-44-shaped legacy N1 records; assistant transcripts and checkpoints by
-recorded key reference/version; confidential `state_hash` tags; and signed
-SBOM reference events by embedded key ID. `unknown` means the row cannot be
-classified from bounded metadata. A NIP-44 shape or key reference does **not**
-prove that the existing service key can decrypt the record. The command does
-not inspect external SBOM blobs.
+encryption method; **all** service-authored kind-30900 OCK and legacy O1/N1
+records (including operator allowlists, payments, security, and SoulFactory);
+the separate NIP-44 `service_inner` layers; opaque org-key-envelope NIP-44
+wrap candidates; assistant transcripts and checkpoints by recorded key
+reference/version; confidential `state_hash` tags; and signed SBOM reference
+events by embedded key ID. Other kind-30900 records are counted under
+`cp_state_unclassified`, never silently discarded. `unknown` means the row
+cannot be classified from bounded metadata. A NIP-44 shape, key reference,
+or embedded DSSE key ID does **not** prove that the existing service key can
+decrypt or sign. Org-key-envelope recipients are opaque, so counting wraps
+does not prove that a service copy exists. The command does not inspect
+external SBOM blobs.
 
 **Every family remains `unproven` even when its SQL count is zero.**
 `nostr_events` is a derived index, whereas relays are canonical. The command

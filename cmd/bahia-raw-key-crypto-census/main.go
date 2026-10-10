@@ -157,9 +157,11 @@ func census(ctx context.Context, q queryer, pubkey string, maxRows int) (report,
 		}
 		r.Families[name] = f
 	}
-	for _, name := range []string{"confidential_cp_state", "assistant_transcripts", "assistant_checkpoints", "confidential_state_hash", "sbom_dsse_references"} {
+	for _, name := range []string{"confidential_cp_state", "confidential_service_inner", "ock_key_envelopes", "cp_state_unclassified", "assistant_transcripts", "assistant_checkpoints", "confidential_state_hash", "sbom_dsse_references"} {
 		r.Families[name] = newFamily("SQL may omit canonical/local records and does not prove cryptographic access")
 	}
+	r.Families["ock_key_envelopes"].Blockers = append(r.Families["ock_key_envelopes"].Blockers, "NIP-44 OCK wrap recipient is opaque; SQL cannot prove the service copy is present")
+	r.Families["cp_state_unclassified"].Blockers = append(r.Families["cp_state_unclassified"].Blockers, "all other service-authored cp-state is counted here; undiscovered encrypted families cannot be assumed absent")
 	rows, err := q.Query(ctx, `SELECT kind, left(content, $3), octet_length(content), left(tags::text, $3), octet_length(tags::text)
 		FROM nostr_events WHERE pubkey = $1 AND kind IN (30900, 30316, 4903, 30078)
 		ORDER BY id LIMIT $2`, pubkey, maxRows+1, maxMetadataBytes)
@@ -208,52 +210,7 @@ func classifyEvent(r *report, kind int, content string, contentSize int, tagJSON
 	topic := tagValue(tags, "t")
 	switch kind {
 	case 30900:
-		legacy := map[string]string{"org-registry": "o1", "org-member": "o1", "org-invite": "o1", "secret-registry": "n1", "notification-channel": "n1"}
-		_, confidentialTopic := legacy[topic]
-		hash := tagValue(tags, "state_hash")
-		if confidentialTopic || hash != "" {
-			h := r.Families["confidential_state_hash"]
-			h.SQLRows++
-			if len(hash) == 64 && isHex(hash) {
-				h.Classes["legacy_unversioned_tag"]++
-			} else if hash == "" {
-				h.Classes["absent"]++
-			} else {
-				h.Unknown++
-			}
-		}
-		if !confidentialTopic {
-			return
-		}
-		f := r.Families["confidential_cp_state"]
-		f.SQLRows++
-		var env struct {
-			Schema     string `json:"schema"`
-			KeyRef     string `json:"key_ref"`
-			KeyVersion string `json:"key_version"`
-		}
-		if json.Unmarshal([]byte(content), &env) == nil {
-			switch env.Schema {
-			case "bahia.confidential.aead.v1":
-				if env.KeyRef != "" && env.KeyVersion != "" {
-					f.Classes["ock"]++
-				} else {
-					f.Unknown++
-				}
-			case "bahia.org-state.aead.v1":
-				if legacy[topic] == "o1" && env.KeyRef != "" {
-					f.Classes["legacy_o1"]++
-				} else {
-					f.Unknown++
-				}
-			default:
-				f.Unknown++
-			}
-		} else if legacy[topic] == "n1" && nip44Shape(content) {
-			f.Classes["legacy_n1_candidate"]++
-		} else {
-			f.Unknown++
-		}
+		classifyCPState(r, topic, content, tags)
 	case 30316, 4903:
 		name := familyForKind(kind)
 		f := r.Families[name]
@@ -308,10 +265,84 @@ func classifyEvent(r *report, kind int, content string, contentSize int, tagJSON
 	}
 }
 
+func classifyCPState(r *report, topic, content string, tags [][]string) {
+	legacy := map[string]string{"org-registry": "o1", "org-member": "o1", "org-invite": "o1", "secret-registry": "n1", "notification-channel": "n1"}
+	_, legacyTopic := legacy[topic]
+	hash := tagValue(tags, "state_hash")
+	if legacyTopic || hash != "" {
+		h := r.Families["confidential_state_hash"]
+		h.SQLRows++
+		if len(hash) == 64 && isHex(hash) {
+			h.Classes["legacy_unversioned_tag"]++
+		} else if hash == "" {
+			h.Classes["absent"]++
+		} else {
+			h.Unknown++
+		}
+	}
+	if topic == "org-key-envelope" {
+		f := r.Families["ock_key_envelopes"]
+		f.SQLRows++
+		if nip44Shape(content) {
+			f.Classes["nip44_wrap_candidate"]++
+		} else {
+			f.Unknown++
+		}
+		return
+	}
+	var env struct {
+		Schema       string `json:"schema"`
+		KeyRef       string `json:"key_ref"`
+		KeyVersion   string `json:"key_version"`
+		ServiceInner string `json:"service_inner"`
+	}
+	if json.Unmarshal([]byte(content), &env) == nil && env.Schema != "" {
+		switch env.Schema {
+		case "bahia.confidential.aead.v1":
+			f := r.Families["confidential_cp_state"]
+			f.SQLRows++
+			if env.KeyRef != "" && env.KeyVersion != "" {
+				f.Classes["ock"]++
+			} else {
+				f.Unknown++
+			}
+			inner := r.Families["confidential_service_inner"]
+			inner.SQLRows++
+			if env.ServiceInner == "" {
+				inner.Classes["absent"]++
+			} else if nip44Shape(env.ServiceInner) {
+				inner.Classes["nip44_candidate"]++
+			} else {
+				inner.Unknown++
+			}
+		case "bahia.org-state.aead.v1":
+			f := r.Families["confidential_cp_state"]
+			f.SQLRows++
+			if legacy[topic] == "o1" && env.KeyRef != "" {
+				f.Classes["legacy_o1"]++
+			} else {
+				f.Unknown++
+			}
+		default:
+			f := r.Families["cp_state_unclassified"]
+			f.SQLRows++
+			f.Unknown++
+		}
+	} else if legacy[topic] == "n1" && nip44Shape(content) {
+		f := r.Families["confidential_cp_state"]
+		f.SQLRows++
+		f.Classes["legacy_n1_candidate"]++
+	} else {
+		f := r.Families["cp_state_unclassified"]
+		f.SQLRows++
+		f.Unknown++
+	}
+}
+
 func familyForKind(kind int) string {
 	switch kind {
 	case 30900:
-		return "confidential_cp_state"
+		return "cp_state_unclassified"
 	case 30316:
 		return "assistant_transcripts"
 	case 4903:

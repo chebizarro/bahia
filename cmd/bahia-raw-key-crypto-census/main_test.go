@@ -102,7 +102,7 @@ func TestCensusExcessAndMissingTableFailWithoutPartialReport(t *testing.T) {
 
 func TestClassifyLegacyAndUnknown(t *testing.T) {
 	r := report{Families: map[string]*family{}}
-	for _, name := range []string{"confidential_cp_state", "assistant_transcripts", "assistant_checkpoints", "confidential_state_hash", "sbom_dsse_references"} {
+	for _, name := range []string{"confidential_cp_state", "confidential_service_inner", "ock_key_envelopes", "cp_state_unclassified", "assistant_transcripts", "assistant_checkpoints", "confidential_state_hash", "sbom_dsse_references"} {
 		r.Families[name] = newFamily("unproven")
 	}
 	o1 := `{"schema":"bahia.org-state.aead.v1","key_ref":"org-state/service-nostr-key"}`
@@ -113,7 +113,37 @@ func TestClassifyLegacyAndUnknown(t *testing.T) {
 	classifyEvent(&r, 30900, n1, len(n1), n1Tags, len(n1Tags))
 	classifyEvent(&r, 30900, "not-nip44", 9, n1Tags, len(n1Tags))
 	classifyEvent(&r, 4903, `{}`, 2, `[]`, 2)
-	if r.Families["confidential_cp_state"].Classes["legacy_o1"] != 1 || r.Families["confidential_cp_state"].Classes["legacy_n1_candidate"] != 1 || r.Families["confidential_cp_state"].Unknown != 1 || r.Families["assistant_checkpoints"].Unknown != 1 {
+	if r.Families["confidential_cp_state"].Classes["legacy_o1"] != 1 || r.Families["confidential_cp_state"].Classes["legacy_n1_candidate"] != 1 || r.Families["cp_state_unclassified"].Unknown != 1 || r.Families["assistant_checkpoints"].Unknown != 1 {
 		t.Fatalf("bad legacy classification: %+v", r.Families)
+	}
+}
+
+func TestCensusCoversAllOCKTopicsInnerAndOpaqueKeyWraps(t *testing.T) {
+	r := report{ServicePubkey: testPubkey, Families: map[string]*family{}}
+	for _, name := range []string{"confidential_cp_state", "confidential_service_inner", "ock_key_envelopes", "cp_state_unclassified", "assistant_transcripts", "assistant_checkpoints", "confidential_state_hash", "sbom_dsse_references"} {
+		r.Families[name] = newFamily("unproven")
+	}
+	nip44 := base64.StdEncoding.EncodeToString(append([]byte{2}, make([]byte, 98)...))
+	for _, topic := range []string{"operator-allowlist", "payment-record", "security-finding-detail", "soul-factory-adapter-ledger", "notification-channel"} {
+		content := `{"schema":"bahia.confidential.aead.v1","key_ref":"ock/fleet","key_version":"1","service_inner":"` + nip44 + `"}`
+		tags := `[["t","` + topic + `"]]`
+		classifyEvent(&r, 30900, content, len(content), tags, len(tags))
+	}
+	wrapTags := `[["t","org-key-envelope"]]`
+	classifyEvent(&r, 30900, nip44, len(nip44), wrapTags, len(wrapTags))
+	if r.Families["confidential_cp_state"].Classes["ock"] != 5 || r.Families["confidential_service_inner"].Classes["nip44_candidate"] != 5 || r.Families["ock_key_envelopes"].Classes["nip44_wrap_candidate"] != 1 {
+		t.Fatalf("missed OCK/inner/key-wrap: %+v", r.Families)
+	}
+	if r.Families["ock_key_envelopes"].Status != "unproven" {
+		t.Fatal("opaque key wrap treated as proven")
+	}
+	unknownTags := `[["t","new-sensitive-family"]]`
+	classifyEvent(&r, 30900, `{ "schema": "future.crypto.v2" }`, 32, unknownTags, len(unknownTags))
+	if r.Families["cp_state_unclassified"].Unknown != 1 {
+		t.Fatal("unknown kind-30900 family vanished")
+	}
+	classifyEvent(&r, 30900, "oversized", maxMetadataBytes+1, unknownTags, len(unknownTags))
+	if r.Families["cp_state_unclassified"].Unknown != 2 {
+		t.Fatal("oversized kind-30900 family vanished")
 	}
 }
