@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -116,5 +117,31 @@ func TestResolverResolveSecretWithAuditAuditsDecryptFailureWithoutPlaintext(t *t
 	}
 	if repo.audits[0].Outcome != domain.SecretAccessOutcomeFailure || repo.audits[0].Error == "" {
 		t.Fatalf("expected failed audit with safe error, got %#v", repo.audits[0])
+	}
+}
+
+func TestDataKeyResolverReadsOnlyMigratedRows(t *testing.T) {
+	keyer := localWrapKeyer{key: nostr.Generate()}
+	_, key, err := newWrappedDataKey(context.Background(), keyer, keyer.key.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	sealed, err := key.Seal(id, 7, []byte("v2 private value"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := &auditSecretRepo{
+		secret:  &domain.ServiceSecret{ID: id, ServiceID: uuid.New(), Name: "TOKEN", Version: 7},
+		version: &domain.SecretVersion{ID: uuid.New(), SecretID: id, Version: 7, EncryptedValue: sealed, EncryptionMethod: domain.EncryptionAES256V2},
+	}
+	value, err := newDataKeyResolver(repo, key).ResolveSecret(context.Background(), id.String())
+	if err != nil || value != "v2 private value" {
+		t.Fatalf("v2 resolve failed: %v", err)
+	}
+	repo.version.EncryptionMethod = domain.EncryptionAES256
+	value, err = newDataKeyResolver(repo, key).ResolveSecret(context.Background(), id.String())
+	if err == nil || value != "" {
+		t.Fatal("raw-key-free resolver accepted legacy row")
 	}
 }
