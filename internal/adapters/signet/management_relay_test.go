@@ -26,11 +26,12 @@ var errNotARequest = errors.New("not a management request")
 // fakeSignet is an in-process Signet: a NIP-46 bunker and its gift-wrapped
 // ContextVM management plane, both served over a RelayPool.
 type fakeSignet struct {
-	key     nostr.SecretKey
-	signer  nip46.StaticKeySigner
-	pool    *nostrpool.RelayPool
-	mu      sync.Mutex
-	methods []string
+	key        nostr.SecretKey
+	signer     nip46.StaticKeySigner
+	pool       *nostrpool.RelayPool
+	mu         sync.Mutex
+	methods    []string
+	signEvents int
 }
 
 func startFakeSignet(t *testing.T, ctx context.Context, relayURL string) *fakeSignet {
@@ -58,7 +59,13 @@ func startFakeSignet(t *testing.T, ctx context.Context, relayURL string) *fakeSi
 			var err error
 			switch ev.Kind {
 			case nostr.KindNostrConnect:
-				_, _, reply, err = s.signer.HandleRequest(ctx, *ev)
+				var request nip46.Request
+				request, _, reply, err = s.signer.HandleRequest(ctx, *ev)
+				if request.Method == "sign_event" {
+					s.mu.Lock()
+					s.signEvents++
+					s.mu.Unlock()
+				}
 			case signetKindGiftWrap:
 				reply, err = s.answerManagement(*ev)
 			default:
@@ -74,6 +81,12 @@ func startFakeSignet(t *testing.T, ctx context.Context, relayURL string) *fakeSi
 
 func (s *fakeSignet) bunkerURI(relayURL string) string {
 	return "bunker://" + s.key.Public().Hex() + "?relay=" + url.QueryEscape(relayURL)
+}
+
+func (s *fakeSignet) seenSignEvents() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.signEvents
 }
 
 func (s *fakeSignet) seenMethods() []string {
@@ -214,5 +227,73 @@ func TestSignetManagementRunsOnRelayPoolWithRecipientAuth(t *testing.T) {
 		if reader != provisioner {
 			t.Fatalf("gift wraps read as %s, want the provisioner %s", reader, provisioner)
 		}
+	}
+}
+
+// A fenced service key cannot sign the management pool's NIP-42 AUTH or
+// management seals. Epoch mode uses its dedicated owner client key for both,
+// and the reply subscription authenticates as that same gift-wrap recipient.
+func TestSignetEpochManagementUsesDedicatedClientForRecipientAuth(t *testing.T) {
+	relay := khatru.NewRelay()
+	store := &slicestore.SliceStore{}
+	if err := store.Init(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	relay.UseEventstore(store, 500)
+	var authMu sync.Mutex
+	var refused int
+	var giftReaders []string
+	relay.OnRequest = func(ctx context.Context, filter nostr.Filter) (bool, string) {
+		if !slices.Contains(filter.Kinds, signetKindGiftWrap) {
+			return false, ""
+		}
+		authed, ok := khatru.GetAuthed(ctx)
+		authMu.Lock()
+		defer authMu.Unlock()
+		if !ok || !slices.Equal(filter.Tags["p"], []string{authed.Hex()}) {
+			refused++
+			return true, "auth-required: gift wraps are served to their recipient"
+		}
+		giftReaders = append(giftReaders, authed.Hex())
+		return false, ""
+	}
+	server := httptest.NewServer(relay)
+	t.Cleanup(server.Close)
+	relayURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	signet := startFakeSignet(t, ctx, relayURL)
+	owner := nostr.Generate()
+	client, err := NewClient(Config{
+		BunkerURI: signet.bunkerURI(relayURL), ClientSecretKey: owner.Hex(), RequireReal: true,
+		OutboundAdmission: generousTestAdmission(), ExpectedServicePubkey: signet.key.Public().Hex(),
+		EpochLease: func(context.Context) (WriterLease, error) {
+			return WriterLease{Epoch: 1, OwnerPubkey: owner.Public(), ExpiresAt: time.Now().Add(time.Hour)}, nil
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err := client.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RevokeAgent(ctx, nostr.Generate().Public().Hex()); err != nil {
+		t.Fatal(err)
+	}
+	if got := signet.seenMethods(); len(got) != 1 || got[0] != "agent/revoke" {
+		t.Fatalf("Signet saw %v", got)
+	}
+	if got := signet.seenSignEvents(); got != 0 {
+		t.Fatalf("fenced bunker received %d legacy sign_event requests", got)
+	}
+	authMu.Lock()
+	defer authMu.Unlock()
+	if refused == 0 {
+		t.Fatal("relay never challenged unauthenticated management REQ")
+	}
+	if !slices.Contains(giftReaders, owner.Public().Hex()) {
+		t.Fatalf("gift-wrap readers = %v, want owner %s", giftReaders, owner.Public().Hex())
 	}
 }

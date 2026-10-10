@@ -44,6 +44,11 @@ or regressed local epochs and connection changes. The local lease snapshot is
 only an attempt gate: Signet must verify the authenticated client and current
 writer epoch atomically for every signature. Lease acquisition and renewal do
 not run in the daemon, and the adapter is not selected by application startup.
+In epoch mode, Signet management NIP-59 requests and NIP-42 AUTH use the
+dedicated owner client identity, and management replies are addressed to that
+client pubkey. Management relays must allow that authenticated author to read
+its own `#p` gift wraps; the legacy bunker-backed management identity is
+unchanged.
 
 Event signing is separate from operations requiring raw key material. DM
 NIP-44 conversation-key derivation, legacy secret encryption and derivation,
