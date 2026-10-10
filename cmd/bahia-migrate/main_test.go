@@ -63,7 +63,7 @@ func TestF74aReadOnlyActionsNeverSeedMountedConfig(t *testing.T) {
 	original := []byte("dev_mode: true\n")
 	require.NoError(t, os.WriteFile(path, original, 0o600))
 	t.Setenv("BAHIA_NOSTR__SIDECAR__ENABLED", "true")
-	for _, action := range []string{"f74a-census", "f74a-compact"} {
+	for _, action := range []string{"f74a-census", "f74a-compact", "f74a-restore-preflight"} {
 		t.Run(action, func(t *testing.T) {
 			var output, errors bytes.Buffer
 			require.Equal(t, 1, run(context.Background(), []string{action, "--config", path, "--cutoff", "2026-10-01T00:00:00Z"}, &output, &errors))
@@ -79,6 +79,7 @@ func TestF74aReadOnlyDeadlineValidation(t *testing.T) {
 	for _, args := range [][]string{
 		{"f74a-census", "--f74a-timeout", "0s"},
 		{"f74a-compact", "--cutoff", "2026-10-01T00:00:00Z", "--f74a-timeout", "25h"},
+		{"f74a-restore-preflight", "--cutoff", "2026-10-01T00:00:00Z", "--f74a-timeout", "25h"},
 	} {
 		var output, errors bytes.Buffer
 		require.Equal(t, 1, run(context.Background(), args, &output, &errors))
@@ -110,4 +111,15 @@ func TestF74aImportRelaysFollowControlPlanePolicy(t *testing.T) {
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.BackendURL = "ws://sidecar.internal"
 	require.Equal(t, []string{"ws://sidecar.internal"}, f74aControlPlaneRelays(cfg))
+}
+
+func TestF74aRestorePreflightCannotConfirmDeletion(t *testing.T) {
+	for _, args := range [][]string{
+		{"f74a-restore-preflight", "--confirm", "--cutoff", "2026-10-01T00:00:00Z"},
+		{"f74a-restore-preflight"},
+	} {
+		var output, errors bytes.Buffer
+		require.Equal(t, 1, run(context.Background(), args, &output, &errors))
+		require.Empty(t, output.String())
+	}
 }

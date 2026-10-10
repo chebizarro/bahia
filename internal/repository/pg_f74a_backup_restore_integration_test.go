@@ -145,7 +145,21 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 		require.NoError(t, rows.Err())
 		return receipt
 	}
+	// Cross a keyset boundary so the inventory cannot silently omit a later page.
+	_, err = source.Exec(ctx, `INSERT INTO runtime_observations
+		(id,service_id,environment_id,deployment_unit_id,observed_image_digest,observed_image_repo,
+		 observed_container_id,observed_host,observed_version,health_status,source,metadata,normalized_state,normalized_hash,observed_at)
+		SELECT gen_random_uuid(),o.service_id,o.environment_id,o.deployment_unit_id,o.observed_image_digest,
+		 o.observed_image_repo,o.observed_container_id,o.observed_host,o.observed_version,o.health_status,
+		 o.source,o.metadata,o.normalized_state,o.normalized_hash,o.observed_at + INTERVAL '2 hours' + n * INTERVAL '1 millisecond'
+		FROM runtime_observations o CROSS JOIN generate_series(1,501) n WHERE o.id=$1`, ids[1])
+	require.NoError(t, err)
 	sourceReceipt := loadReceipt(source)
+	sourcePreflight, err := repository.PreflightF74aRestore(ctx, source, base.Add(24*time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, int64(2), sourcePreflight.ArchivedRows)
+	require.Equal(t, int64(503), sourcePreflight.Observations)
+	require.NotEmpty(t, sourcePreflight.InventorySHA256)
 	require.Len(t, sourceReceipt, 2)
 	var linked, archivedOnly int
 	for _, entry := range sourceReceipt {
@@ -190,6 +204,11 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 		"--single-transaction", "--exit-on-error", "/tmp/f74a.dump")
 	require.NoError(t, err)
 	require.Equal(t, sourceReceipt, loadReceipt(target), "restored IDs, digests, unit FK, retirement and state link must match source")
+	restoredPreflight, err := repository.PreflightF74aRestore(ctx, target, sourcePreflight.Cutoff)
+	require.NoError(t, err)
+	require.NotEqual(t, sourcePreflight.DatabaseName, restoredPreflight.DatabaseName)
+	sourcePreflight.DatabaseName, restoredPreflight.DatabaseName = "", ""
+	require.Equal(t, sourcePreflight, restoredPreflight, "isolated restore inventory must match source snapshot")
 
 	// Aborting rehydration does not change the restored receipt. A committed
 	// restore retains the immutable archive and moves the state link by ID.
@@ -222,6 +241,9 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 	var archivedCount int
 	require.NoError(t, target.QueryRow(ctx, `SELECT count(*) FROM runtime_observation_archive WHERE id=ANY($1)`, ids[1:]).Scan(&archivedCount))
 	require.Equal(t, 2, archivedCount)
+	changedPreflight, err := repository.PreflightF74aRestore(ctx, target, sourcePreflight.Cutoff)
+	require.NoError(t, err)
+	require.NotEqual(t, sourcePreflight.InventorySHA256, changedPreflight.InventorySHA256, "changed state link must alter inventory")
 	for _, id := range ids[1:] {
 		original, getErr := archive.GetArchivedByID(ctx, id)
 		require.NoError(t, getErr)

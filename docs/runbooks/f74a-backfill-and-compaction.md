@@ -21,7 +21,7 @@ the import remains incomplete. Restore the original local event store/outbox
 from a verified backup or resolve the relay refusal before retrying; do not
 edit the receipt or completion marker to bypass verification.
 **Confirmed deletion and live compaction are not available.** The shipped
-`f74a-census` and `f74a-compact --cutoff` actions are read-only;
+`f74a-census`, `f74a-compact --cutoff`, and `f74a-restore-preflight --cutoff` actions are read-only;
 `f74a-compact --confirm` is rejected. There is no `--batch-size` or
 `--backup-id` flag. Do not use another tool or manual SQL to bypass this
 guard. The archive repository has bounded, transactionally checked batches
@@ -92,7 +92,28 @@ backup completion receipt, cryptographic digest, retained object/version, and
 the exact database/schema identity. A backup job merely reporting success is
 not a restore proof.
 
-Restore that backup to an isolated staging database. Run `f74a-census` there
+Run the bounded inventory preflight at the same cutoff on the quiesced
+source, restore the backup into an isolated database, then run it there:
+
+```sh
+bahia-migrate --config "$SOURCE_CONFIG" --cutoff "$CUTOFF" f74a-restore-preflight
+bahia-migrate --config "$STAGING_CONFIG" --cutoff "$CUTOFF" f74a-restore-preflight
+```
+
+Compare `unauthenticated_inventory_sha256`, schema-version count, observation
+count, archived-row count, state-link count, and hot candidate count. The
+inventory covers every historical observation value, hot/archive placement,
+state link, original unit identity/retirement and schema version, in a single
+read-only SQL snapshot. An integrity mismatch aborts the preflight. A matching
+hash detects an inconsistent restore but **does not authenticate its source**:
+the output always says `deletion_authorized false`. `database_name` is only a
+diagnostic hint; a logical restore may use a different name. Capture both
+preflight outputs with the independently signed backup object digest, exact
+source database/schema identity, backup retention/credential status, and an
+attested isolated-restore result bound to the same cutoff. Generic backup
+run/restore success or an operator-supplied reference is not that evidence.
+
+Run `f74a-census` on the isolated staging database
 with the same cutoff and compare counts and a sample of retained state links
 and material transitions to the source receipt. Confirm the restored daemon
 uses a staging key and isolated relays, or leave it stopped; never let a

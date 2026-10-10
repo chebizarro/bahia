@@ -27,6 +27,7 @@ import (
 const usage = "usage: bahia-migrate [--config path] [--confirm] [--force] [--to stem] status|up|down\n" +
 	"       bahia-migrate [--config path] [--cutoff RFC3339] [--f74a-timeout duration] f74a-census\n" +
 	"       bahia-migrate [--config path] --cutoff RFC3339 [--f74a-timeout duration] f74a-compact (read-only dry run)\n" +
+	"       bahia-migrate [--config path] --cutoff RFC3339 [--f74a-timeout duration] f74a-restore-preflight (unauthenticated read-only inventory)\n" +
 	"       bahia-migrate [--config path] --confirm-quiesced f74a-import (stop daemon and all SQL writers first)\n" +
 	"       bahia-migrate [--config path] [--confirm-quiesced --outbox-path /absolute/daemon/outbox.bolt] legacy-cutover (read-only census fails when blocked; seal only when empty)\n" +
 	"       bahia-migrate [--config path] --target default|control-plane [--after token] [--max-rows n] outbox-transfer (read-only inventory; --apply is disabled)\n" +
@@ -124,13 +125,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return reportError(stderr, "outbox-transfer --max-rows must be in 1..10000")
 		}
 	}
-	if action != "f74a-census" && action != "f74a-compact" && *cutoffText != "" {
+	if action != "f74a-census" && action != "f74a-compact" && action != "f74a-restore-preflight" && *cutoffText != "" {
 		return reportError(stderr, "--cutoff is only valid for F74a actions")
 	}
-	if action != "f74a-census" && action != "f74a-compact" && *f74aTimeout != 30*time.Minute {
+	if action != "f74a-census" && action != "f74a-compact" && action != "f74a-restore-preflight" && *f74aTimeout != 30*time.Minute {
 		return reportError(stderr, "--f74a-timeout is only valid for F74a read-only actions")
 	}
-	if action == "f74a-census" || action == "f74a-compact" {
+	if action == "f74a-census" || action == "f74a-compact" || action == "f74a-restore-preflight" {
 		if *f74aTimeout < time.Second || *f74aTimeout > 24*time.Hour {
 			return reportError(stderr, "--f74a-timeout must be between 1s and 24h")
 		}
@@ -147,19 +148,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		cutoff = cutoff.UTC()
 	}
-	if action == "f74a-compact" {
+	if action == "f74a-compact" || action == "f74a-restore-preflight" {
 		if cutoff.IsZero() {
-			return reportError(stderr, "f74a-compact requires --cutoff")
+			return reportError(stderr, "%s requires --cutoff", action)
 		}
 		if !cutoff.Before(time.Now().UTC()) {
-			return reportError(stderr, "f74a-compact requires a past --cutoff")
+			return reportError(stderr, "%s requires a past --cutoff", action)
 		}
 	}
 	if action == "down" && !*confirm {
 		return reportError(stderr, "down requires --confirm")
 	}
 	loadConfig := config.Load
-	if action == "legacy-cutover" || action == "f74a-census" || action == "f74a-compact" {
+	if action == "legacy-cutover" || action == "f74a-census" || action == "f74a-compact" || action == "f74a-restore-preflight" {
 		loadConfig = config.LoadReadOnly
 	}
 	cfg, err := loadConfig(*configPath)
@@ -186,6 +187,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if action == "legacy-cutover" {
 		return runLegacyCutover(ctx, pool, *cutoverOutbox, *confirmQuiesced, stdout, stderr)
 	}
+	if action == "f74a-restore-preflight" {
+		return runF74aRestorePreflight(ctx, pool, cutoff, stdout, stderr)
+	}
 	if action == "f74a-census" || action == "f74a-compact" {
 		return runF74aMaintenance(ctx, pool, action, cutoff, stdout, stderr)
 	}
@@ -201,7 +205,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func isAction(value string) bool {
 	switch value {
-	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact", "f74a-import", "legacy-cutover", "outbox-transfer":
+	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact", "f74a-restore-preflight", "f74a-import", "legacy-cutover", "outbox-transfer":
 		return true
 	default:
 		return false
@@ -375,6 +379,35 @@ func runF74aMaintenance(ctx context.Context, pool *pgxpool.Pool, action string, 
 	}
 	if _, err := fmt.Fprintln(stdout, "observation_deletion\tdry_run_only"); err != nil {
 		return reportError(stderr, "writing F74a dry run: %v", err)
+	}
+	return 0
+}
+
+// runF74aRestorePreflight emits only an unauthenticated inventory. A matching
+// digest from another connection is not a signed backup/restore receipt.
+func runF74aRestorePreflight(ctx context.Context, pool *pgxpool.Pool, cutoff time.Time, stdout, stderr io.Writer) int {
+	result, err := repository.PreflightF74aRestore(ctx, pool, cutoff)
+	if err != nil {
+		return reportError(stderr, "F74a restore preflight: %v", err)
+	}
+	for _, item := range []struct {
+		name  string
+		value any
+	}{
+		{"database_name_diagnostic_only", result.DatabaseName},
+		{"cutoff", result.Cutoff.Format(time.RFC3339Nano)},
+		{"schema_versions", result.SchemaVersions},
+		{"observations", result.Observations},
+		{"archived_rows", result.ArchivedRows},
+		{"state_linked_observations", result.LinkedObservations},
+		{"hot_suppressible_observations_before_cutoff", result.HotCandidates},
+		{"unauthenticated_inventory_sha256", result.InventorySHA256},
+		{"deletion_authorized", false},
+		{"missing_trusted_evidence", "signed_same_bahia_database_snapshot_and_isolated_restore_attestation_bound_to_cutoff_with_revocation_and_retention"},
+	} {
+		if _, err := fmt.Fprintf(stdout, "%s\t%v\n", item.name, item.value); err != nil {
+			return reportError(stderr, "writing F74a restore preflight: %v", err)
+		}
 	}
 	return 0
 }
