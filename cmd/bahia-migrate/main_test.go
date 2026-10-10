@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -55,6 +56,37 @@ func TestF74aCompactIsReadOnlyEvenWithConfirm(t *testing.T) {
 	var output, errors bytes.Buffer
 	require.Equal(t, 1, run(context.Background(), []string{"f74a-compact"}, &output, &errors))
 	require.Contains(t, errors.String(), "requires --cutoff")
+}
+
+func TestF74aReadOnlyActionsNeverSeedMountedConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte("dev_mode: true\n")
+	require.NoError(t, os.WriteFile(path, original, 0o600))
+	t.Setenv("BAHIA_NOSTR__SIDECAR__ENABLED", "true")
+	for _, action := range []string{"f74a-census", "f74a-compact"} {
+		t.Run(action, func(t *testing.T) {
+			var output, errors bytes.Buffer
+			require.Equal(t, 1, run(context.Background(), []string{action, "--config", path, "--cutoff", "2026-10-01T00:00:00Z"}, &output, &errors))
+			require.Contains(t, errors.String(), "read-only config load refuses mutable-policy bootstrap")
+			got, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, original, got)
+		})
+	}
+}
+
+func TestF74aReadOnlyDeadlineValidation(t *testing.T) {
+	for _, args := range [][]string{
+		{"f74a-census", "--f74a-timeout", "0s"},
+		{"f74a-compact", "--cutoff", "2026-10-01T00:00:00Z", "--f74a-timeout", "25h"},
+	} {
+		var output, errors bytes.Buffer
+		require.Equal(t, 1, run(context.Background(), args, &output, &errors))
+		require.Contains(t, errors.String(), "--f74a-timeout must be between 1s and 24h")
+	}
+	var output, errors bytes.Buffer
+	require.Equal(t, 1, run(context.Background(), []string{"status", "--f74a-timeout", "1h"}, &output, &errors))
+	require.Contains(t, errors.String(), "only valid for F74a")
 }
 
 func TestF74aImportRequiresExplicitQuiescenceInEitherArgumentOrder(t *testing.T) {

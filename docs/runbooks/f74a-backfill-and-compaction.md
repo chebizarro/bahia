@@ -70,6 +70,10 @@ CONFIG=/etc/bahia/config.yaml
 bahia-migrate f74a-census --config "$CONFIG" --cutoff "$CUTOFF"
 ```
 
+The read-only F74a commands have a 30-minute deadline; use
+`--f74a-timeout 1h` for an approved larger census (maximum 24 hours).
+Deadline expiry cancels the SQL snapshot without advancing archive state.
+
 Capture the structured census result and command exit status. Distinguish
 physical package rows from distinct semantic package coordinates and
 duplicates; historical observations from state-linked current observations;

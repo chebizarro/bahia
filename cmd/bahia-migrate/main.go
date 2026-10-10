@@ -25,8 +25,8 @@ import (
 )
 
 const usage = "usage: bahia-migrate [--config path] [--confirm] [--force] [--to stem] status|up|down\n" +
-	"       bahia-migrate [--config path] [--cutoff RFC3339] f74a-census\n" +
-	"       bahia-migrate [--config path] --cutoff RFC3339 f74a-compact (read-only dry run)\n" +
+	"       bahia-migrate [--config path] [--cutoff RFC3339] [--f74a-timeout duration] f74a-census\n" +
+	"       bahia-migrate [--config path] --cutoff RFC3339 [--f74a-timeout duration] f74a-compact (read-only dry run)\n" +
 	"       bahia-migrate [--config path] --confirm-quiesced f74a-import (stop daemon and all SQL writers first)\n" +
 	"       bahia-migrate [--config path] [--confirm-quiesced --outbox-path /absolute/daemon/outbox.bolt] legacy-cutover (read-only census fails when blocked; seal only when empty)\n" +
 	"       bahia-migrate [--config path] --target default|control-plane [--after token] [--max-rows n] outbox-transfer (read-only inventory; --apply is disabled)\n" +
@@ -58,6 +58,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	confirmQuiesced := flags.Bool("confirm-quiesced", false, "confirm all daemon and SQL writers are stopped for offline cutover")
 	cutoverOutbox := flags.String("outbox-path", "", "legacy-cutover seal: absolute daemon outbox path, matching configured path")
 	cutoffText := flags.String("cutoff", "", "F74a census/compaction UTC cutoff in RFC3339 format")
+	f74aTimeout := flags.Duration("f74a-timeout", 30*time.Minute, "F74a read-only action deadline (1s..24h; default 30m)")
 	force := flags.Bool("force", false, "allow down across out-of-order applied history")
 	to := flags.String("to", "", "full filename stem to retain when running down")
 	dryRun := flags.Bool("dry-run", false, "nostr: report what would be migrated without signing or publishing")
@@ -126,6 +127,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if action != "f74a-census" && action != "f74a-compact" && *cutoffText != "" {
 		return reportError(stderr, "--cutoff is only valid for F74a actions")
 	}
+	if action != "f74a-census" && action != "f74a-compact" && *f74aTimeout != 30*time.Minute {
+		return reportError(stderr, "--f74a-timeout is only valid for F74a read-only actions")
+	}
+	if action == "f74a-census" || action == "f74a-compact" {
+		if *f74aTimeout < time.Second || *f74aTimeout > 24*time.Hour {
+			return reportError(stderr, "--f74a-timeout must be between 1s and 24h")
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *f74aTimeout)
+		defer cancel()
+	}
 	var cutoff time.Time
 	if *cutoffText != "" {
 		var parseErr error
@@ -147,7 +159,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return reportError(stderr, "down requires --confirm")
 	}
 	loadConfig := config.Load
-	if action == "legacy-cutover" {
+	if action == "legacy-cutover" || action == "f74a-census" || action == "f74a-compact" {
 		loadConfig = config.LoadReadOnly
 	}
 	cfg, err := loadConfig(*configPath)
