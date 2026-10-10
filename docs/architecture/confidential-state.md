@@ -159,8 +159,10 @@ org, member, invite, secret and notification-channel cp-state families and
 re-publishes records still using O1 or N1 encryption under the OCK envelope.
 The checked migration result accounts for each local record and fails if a
 query is truncated, a record cannot be decrypted or re-published, or the
-service identity is unavailable. The startup hook logs an incomplete result
-as an error rather than declaring success.
+service identity is unavailable. Failed or canceled checked attempts can be
+retried in the same daemon without re-publishing records already accepted by
+the projector. The startup hook logs an incomplete result as an error rather
+than declaring success; it does not itself schedule a retry.
 
 A successful checked result covers only the bounded local retained history.
 It does not prove older relay or backup inventory is empty, and an outbox-queued

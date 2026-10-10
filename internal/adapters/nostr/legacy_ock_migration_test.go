@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -59,11 +60,12 @@ type fakeProjectionHistory struct {
 	records        map[string][]repository.NostrEventRecord // "tagName:tagValue" → records
 	err            error
 	requestedLimit int
+	errForTag      string
 }
 
 func (h *fakeProjectionHistory) FindByTag(_ context.Context, tagName, tagValue string, _ []int, limit int) ([]repository.NostrEventRecord, error) {
 	h.requestedLimit = limit
-	if h.err != nil {
+	if h.err != nil && (h.errForTag == "" || h.errForTag == tagValue) {
 		return nil, h.err
 	}
 	key := tagName + ":" + tagValue
@@ -217,21 +219,29 @@ func TestLegacyOCKMigrator_RunsOnceOnly(t *testing.T) {
 		plaintext: map[string][]byte{legacyContent: []byte(plaintext)},
 	}
 
+	key := "0000000000000000000000000000000000000000000000000000000000000001"
+	pubkey, _ := publicKeyHexFromPrivateKeyHex(key)
 	history := &fakeProjectionHistory{
 		records: map[string][]repository.NostrEventRecord{
 			"t:" + kinds.CPStateTopicOrgRegistry: {
-				makeRecord("event1", "", legacyContent, orgID, kinds.CPStateTopicOrgRegistry),
+				makeRecord("event1", pubkey, legacyContent, orgID, kinds.CPStateTopicOrgRegistry),
 			},
 		},
 	}
 
-	projector := &Projector{enabled: true, history: history, logger: zap.NewNop()}
+	projector := &Projector{enabled: true, privateKey: key, servicePubkey: pubkey, history: history, publisher: &fakeProjectionPublisher{}, logger: zap.NewNop()}
 
 	migrator := NewLegacyOCKMigrator(projector, encryptor, legacyO1, nil)
-	migrator.Run(context.Background())
+	first, err := migrator.RunChecked(context.Background())
+	if err != nil || !first.Complete {
+		t.Fatalf("first run failed: %+v, %v", first, err)
+	}
 	firstRun := encryptor.calls
-
-	migrator.Run(context.Background())
+	first.Topics[kinds.CPStateTopicOrgRegistry] = LegacyOCKMigrationTopicReport{}
+	second, err := migrator.RunChecked(context.Background())
+	if err != nil || !second.Complete || second.Topics[kinds.CPStateTopicOrgRegistry].Migrated != 1 {
+		t.Fatalf("cached report mutated: %+v, %v", second, err)
+	}
 	if encryptor.calls != firstRun {
 		t.Errorf("second Run should be a no-op: calls went from %d to %d", firstRun, encryptor.calls)
 	}
@@ -274,6 +284,104 @@ func TestLegacyOCKMigrator_CheckedPublishFailure(t *testing.T) {
 	report, err := m.RunChecked(context.Background())
 	if err == nil || report.Complete || report.Topics[topic].Failed != 1 || report.Topics[topic].Migrated != 0 {
 		t.Fatalf("failed publish certified: %+v, %v", report, err)
+	}
+}
+
+func TestLegacyOCKMigrator_RetriesTransientQueryAndPublish(t *testing.T) {
+	key := "0000000000000000000000000000000000000000000000000000000000000001"
+	pubkey, _ := publicKeyHexFromPrivateKeyHex(key)
+	topic := kinds.CPStateTopicOrgRegistry
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	content := `{"schema":"bahia.org-state.aead.v1"}`
+	history := &fakeProjectionHistory{err: fmt.Errorf("temporary read failure"), records: map[string][]repository.NostrEventRecord{
+		"t:" + topic: {makeRecord("retry", pubkey, content, orgID, topic)},
+	}}
+	publisher := &fakeProjectionPublisher{err: fmt.Errorf("temporary publish failure")}
+	encryptor := &fakeConfidentialEncryptor{encrypted: map[string]string{}}
+	m := NewLegacyOCKMigrator(&Projector{enabled: true, privateKey: key, servicePubkey: pubkey,
+		history: history, publisher: publisher, logger: zap.NewNop()}, encryptor,
+		&fakeLegacyO1Decryptor{plaintext: map[string][]byte{content: []byte(fmt.Sprintf(`{"id":%q}`, orgID))}}, nil)
+	if report, err := m.RunChecked(context.Background()); err == nil || report.Complete {
+		t.Fatalf("query failure certified: %+v", report)
+	}
+	history.err = nil
+	if report, err := m.RunChecked(context.Background()); err == nil || report.Complete || report.Topics[topic].Failed != 1 {
+		t.Fatalf("publish failure certified: %+v", report)
+	}
+	publisher.err = nil
+	// The projector owns a bounded relay-backoff state after rejection; a
+	// fresh projector instance models retry after that window has cleared.
+	m.projector = &Projector{enabled: true, privateKey: key, servicePubkey: pubkey,
+		history: history, publisher: publisher, logger: zap.NewNop()}
+	report, err := m.RunChecked(context.Background())
+	if err != nil || !report.Complete || report.Topics[topic].Migrated != 1 || len(publisher.published) != 2 {
+		t.Fatalf("transient failures not retried: %+v, %v, publishes=%d", report, err, len(publisher.published))
+	}
+}
+
+func TestLegacyOCKMigrator_RetryDoesNotRepublishPriorSuccess(t *testing.T) {
+	key := "0000000000000000000000000000000000000000000000000000000000000001"
+	pubkey, _ := publicKeyHexFromPrivateKeyHex(key)
+	topic := kinds.CPStateTopicOrgRegistry
+	orgID := "550e8400-e29b-41d4-a716-446655440000"
+	content := `{"schema":"bahia.org-state.aead.v1"}`
+	history := &fakeProjectionHistory{err: fmt.Errorf("temporary later-topic failure"), errForTag: kinds.CPStateTopicSecretRegistry,
+		records: map[string][]repository.NostrEventRecord{
+			"t:" + topic: {makeRecord("already-published", pubkey, content, orgID, topic)},
+		}}
+	publisher := &fakeProjectionPublisher{}
+	encryptor := &fakeConfidentialEncryptor{encrypted: map[string]string{}}
+	m := NewLegacyOCKMigrator(&Projector{enabled: true, privateKey: key, servicePubkey: pubkey,
+		history: history, publisher: publisher, logger: zap.NewNop()}, encryptor,
+		&fakeLegacyO1Decryptor{plaintext: map[string][]byte{content: []byte(fmt.Sprintf(`{"id":%q}`, orgID))}}, nil)
+	first, err := m.RunChecked(context.Background())
+	if err == nil || first.Complete || first.Topics[topic].Migrated != 1 {
+		t.Fatalf("partial attempt incorrect: %+v, %v", first, err)
+	}
+	history.err = nil
+	second, err := m.RunChecked(context.Background())
+	if err != nil || !second.Complete || second.Topics[topic].Migrated != 1 || encryptor.calls != 1 || len(publisher.published) != 1 {
+		t.Fatalf("retry republished prior success: %+v, %v, encryptions=%d publishes=%d", second, err, encryptor.calls, len(publisher.published))
+	}
+}
+
+type blockingMigrationHistory struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (h *blockingMigrationHistory) FindByTag(_ context.Context, _, _ string, _ []int, _ int) ([]repository.NostrEventRecord, error) {
+	h.once.Do(func() { close(h.entered); <-h.release })
+	return nil, nil
+}
+func (h *blockingMigrationHistory) ListByKind(context.Context, int, int) ([]repository.NostrEventRecord, error) {
+	return nil, nil
+}
+
+func TestLegacyOCKMigrator_ConcurrentCanceledCallerDoesNotPoisonRetry(t *testing.T) {
+	history := &blockingMigrationHistory{entered: make(chan struct{}), release: make(chan struct{})}
+	m := NewLegacyOCKMigrator(&Projector{enabled: true, servicePubkey: "service", history: history, logger: zap.NewNop()},
+		&fakeConfidentialEncryptor{encrypted: map[string]string{}}, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	first := make(chan error, 1)
+	second := make(chan error, 1)
+	go func() { _, err := m.RunChecked(ctx); first <- err }()
+	<-history.entered
+	go func() {
+		report, err := m.RunChecked(context.Background())
+		if !report.Complete && err == nil {
+			err = fmt.Errorf("incomplete without error")
+		}
+		second <- err
+	}()
+	cancel()
+	close(history.release)
+	if err := <-first; err == nil {
+		t.Fatal("canceled caller unexpectedly succeeded")
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("second caller inherited cancellation: %v", err)
 	}
 }
 

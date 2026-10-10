@@ -51,10 +51,10 @@ type LegacyOCKMigrator struct {
 	legacyO1  LegacyOrgStateDecryptor
 	logger    *zap.Logger
 
-	mu         sync.Mutex
-	attempted  bool
-	lastReport LegacyOCKMigrationReport
-	lastErr    error
+	mu              sync.Mutex
+	completed       bool
+	lastReport      LegacyOCKMigrationReport
+	migratedRecords map[string]struct{}
 }
 
 // NewLegacyOCKMigrator creates a migrator. Missing dependencies are reported
@@ -121,8 +121,8 @@ func (m *LegacyOCKMigrator) Run(ctx context.Context) {
 	m.logger.Info("legacy OCK migration local scan complete", zap.Any("topics", report.Topics))
 }
 
-// RunChecked performs one migration attempt per migrator lifetime, returning
-// the same result on subsequent calls rather than silently claiming success.
+// RunChecked retries failed or canceled attempts. Only a successful local
+// scan is cached; a second caller does not inherit the first caller's failure.
 // A successful result certifies only the bounded, author-scoped local history
 // presented by ProjectionHistory after warm-start, not remote relay history.
 func (m *LegacyOCKMigrator) RunChecked(ctx context.Context) (LegacyOCKMigrationReport, error) {
@@ -131,13 +131,25 @@ func (m *LegacyOCKMigrator) RunChecked(ctx context.Context) (LegacyOCKMigrationR
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.attempted {
-		return m.lastReport, m.lastErr
+	if m.completed {
+		return cloneLegacyOCKMigrationReport(m.lastReport), nil
 	}
-	m.attempted = true
 	report, err := m.runChecked(ctx)
-	m.lastReport, m.lastErr = report, err
+	if err == nil {
+		m.completed = true
+		m.lastReport = cloneLegacyOCKMigrationReport(report)
+	}
 	return report, err
+}
+
+func cloneLegacyOCKMigrationReport(report LegacyOCKMigrationReport) LegacyOCKMigrationReport {
+	copy := LegacyOCKMigrationReport{Complete: report.Complete,
+		Topics:   make(map[string]LegacyOCKMigrationTopicReport, len(report.Topics)),
+		Failures: append([]LegacyOCKMigrationFailure(nil), report.Failures...)}
+	for topic, stats := range report.Topics {
+		copy.Topics[topic] = stats
+	}
+	return copy
 }
 
 func (m *LegacyOCKMigrator) runChecked(ctx context.Context) (LegacyOCKMigrationReport, error) {
@@ -207,6 +219,10 @@ func (m *LegacyOCKMigrator) migrateTopic(ctx context.Context, topic string, meta
 			stats.ForeignAuthor++
 			continue
 		}
+		if _, migrated := m.migratedRecords[topic+":"+rec.ID]; migrated {
+			stats.Migrated++
+			continue
+		}
 		if isConfidentialAEADV1(rec.Content) {
 			stats.AlreadyCurrent++
 			continue
@@ -235,6 +251,10 @@ func (m *LegacyOCKMigrator) migrateTopic(ctx context.Context, topic string, meta
 			fail(rec.ID, fmt.Sprintf("re-publish: %v", err))
 			continue
 		}
+		if m.migratedRecords == nil {
+			m.migratedRecords = make(map[string]struct{})
+		}
+		m.migratedRecords[topic+":"+rec.ID] = struct{}{}
 		stats.Migrated++
 	}
 	return stats, failures
