@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
@@ -27,14 +29,13 @@ type f74aTestSignedProof struct {
 	pool    *pgxpool.Pool
 	pin     string
 	receipt []byte
-	runID   uuid.UUID
 }
 
-func (p *f74aTestSignedProof) proveCurrentF74aBackup(ctx context.Context) (F74aReceiptVerification, error) {
-	if p.runID == uuid.Nil {
+func (p *f74aTestSignedProof) proveCurrentF74aBackup(ctx context.Context, runID uuid.UUID) (F74aReceiptVerification, error) {
+	if runID == uuid.Nil {
 		return VerifyF74aAttestedReceipt(ctx, p.pool, p.pin, p.receipt)
 	}
-	return verifyF74aAttestedReceiptForDeletionRun(ctx, p.pool, p.pin, p.receipt, p.runID)
+	return verifyF74aAttestedReceiptForDeletionRun(ctx, p.pool, p.pin, p.receipt, runID)
 }
 
 type f74aTestBatchProof struct {
@@ -44,7 +45,7 @@ type f74aTestBatchProof struct {
 	failOnCall int
 }
 
-func (p *f74aTestBatchProof) proveCurrentF74aBackup(context.Context) (F74aReceiptVerification, error) {
+func (p *f74aTestBatchProof) proveCurrentF74aBackup(context.Context, uuid.UUID) (F74aReceiptVerification, error) {
 	p.calls++
 	if p.fail || p.calls == p.failOnCall {
 		return F74aReceiptVerification{}, fmt.Errorf("independent backup authority unavailable")
@@ -368,13 +369,12 @@ func TestF74aConfirmedDeletionPG16SignedReceiptReconcilesAfterRestart(t *testing
 	require.NoError(t, err)
 	pin := hex.EncodeToString(pub)
 	attestor := &f74aTestSignedProof{pool: pool, pin: pin, receipt: receipt}
-	verified, err := attestor.proveCurrentF74aBackup(ctx)
+	verified, err := attestor.proveCurrentF74aBackup(ctx, uuid.Nil)
 	require.NoError(t, err)
 	require.Equal(t, initial.InventorySHA256, verified.InventorySHA256)
 	repo := newPgF74aConfirmedDeletionRepository(pool)
 	run, err := repo.startRun(ctx, attestor, 1)
 	require.NoError(t, err)
-	attestor.runID = run.ID
 	first, err := repo.nextBatch(ctx, run.ID, attestor)
 	require.NoError(t, err)
 	require.Equal(t, 1, first.Deleted)
@@ -387,13 +387,13 @@ func TestF74aConfirmedDeletionPG16SignedReceiptReconcilesAfterRestart(t *testing
 	require.Equal(t, initial.HotCandidates, reconciled.HotCandidates)
 	// No in-memory state is needed: a new provider and repository read the
 	// immutable journal and validate the exact signed receipt after restart.
-	restartedProof := &f74aTestSignedProof{pool: pool, pin: pin, receipt: receipt, runID: run.ID}
-	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	restartedProof := &f74aTestSignedProof{pool: pool, pin: pin, receipt: receipt}
+	_, err = restartedProof.proveCurrentF74aBackup(ctx, run.ID)
 	require.NoError(t, err)
 	second, err := newPgF74aConfirmedDeletionRepository(pool).nextBatch(ctx, run.ID, restartedProof)
 	require.NoError(t, err)
 	require.Equal(t, 1, second.Deleted)
-	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	_, err = restartedProof.proveCurrentF74aBackup(ctx, run.ID)
 	require.NoError(t, err)
 	var items int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM f74a_confirmed_deletion_items WHERE run_id=$1`, run.ID).Scan(&items))
@@ -413,7 +413,7 @@ func TestF74aConfirmedDeletionPG16SignedReceiptReconcilesAfterRestart(t *testing
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `ALTER TABLE f74a_confirmed_deletion_items ENABLE TRIGGER f74a_confirmed_deletion_item_immutable`)
 	require.NoError(t, err)
-	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	_, err = restartedProof.proveCurrentF74aBackup(ctx, run.ID)
 	require.ErrorContains(t, err, "deletion provenance differs")
 	_, err = pool.Exec(ctx, `ALTER TABLE f74a_confirmed_deletion_items DISABLE TRIGGER f74a_confirmed_deletion_item_immutable`)
 	require.NoError(t, err)
@@ -422,12 +422,134 @@ func TestF74aConfirmedDeletionPG16SignedReceiptReconcilesAfterRestart(t *testing
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `ALTER TABLE f74a_confirmed_deletion_items ENABLE TRIGGER f74a_confirmed_deletion_item_immutable`)
 	require.NoError(t, err)
-	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	_, err = restartedProof.proveCurrentF74aBackup(ctx, run.ID)
 	require.NoError(t, err)
 	// A hot row removed outside the journal cannot be laundered into the
 	// original signed inventory by this run's reconciliation.
 	_, err = pool.Exec(ctx, `DELETE FROM runtime_observations WHERE id=$1`, ids[0])
 	require.NoError(t, err)
-	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	_, err = restartedProof.proveCurrentF74aBackup(ctx, run.ID)
 	require.ErrorContains(t, err, "inventory differs")
+}
+
+// The test authority signs only fixture claims; operational custody and
+// non-revocable holds must be supplied by a separate deployment component.
+func TestF74aConfirmedDeletionPG16LiveAttestorRollbackAndRestart(t *testing.T) {
+	pool, ctx := disposableF74aDeletionDB(t)
+	ids, cutoff := f74aDeletionCandidates(t, ctx, pool, 3)
+	initial, err := PreflightF74aRestore(ctx, pool, cutoff)
+	require.NoError(t, err)
+	sourceIdentity, err := ReadF74aDatabaseIdentity(ctx, pool)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `CREATE DATABASE f74a_isolated_restore`)
+	require.NoError(t, err)
+	restoreCfg := pool.Config()
+	restoreCfg.ConnConfig.Database = "f74a_isolated_restore"
+	restorePool, err := pgxpool.NewWithConfig(ctx, restoreCfg)
+	require.NoError(t, err)
+	defer restorePool.Close()
+	restoreIdentity, err := ReadF74aDatabaseIdentity(ctx, restorePool)
+	require.NoError(t, err)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	_, wrongPrivate, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	receiptPayload := F74aAttestedBackupPayload{
+		Version: f74aReceiptVersion, ReceiptID: uuid.New(), SourceDatabase: sourceIdentity,
+		RestoreDatabase: restoreIdentity, Cutoff: cutoff, SnapshotID: "pg16-live-attestor-test",
+		BackupObjectRef:   "s3://independent-bucket/postgres-backup/version-1",
+		SnapshotCreatedAt: now.Add(-3 * time.Minute), BackupObjectSHA256: strings.Repeat("2", 64),
+		SourceInventorySHA256: initial.InventorySHA256, RestoreInventorySHA256: initial.InventorySHA256,
+		RestoreVerifiedAt: now.Add(-2 * time.Minute), IssuedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour),
+	}
+	message, err := receiptPayload.SigningBytes()
+	require.NoError(t, err)
+	receipt, err := json.Marshal(F74aAttestedBackupReceipt{Payload: receiptPayload,
+		Signature: hex.EncodeToString(ed25519.Sign(private, message))})
+	require.NoError(t, err)
+	mode := "valid"
+	calls := 0
+	revokeOnCall := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request f74aLiveGrantRequest
+		if r.Method != http.MethodPost || json.NewDecoder(r.Body).Decode(&request) != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		calls++
+		if mode == "unavailable" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		issued := time.Now().UTC()
+		grant := f74aLiveGrantPayload{
+			Version: f74aLiveGrantVersion, Nonce: request.Nonce, ReceiptID: request.ReceiptID,
+			ReceiptSHA256: request.ReceiptSHA256, RunID: request.RunID,
+			SourceDatabase: request.SourceDatabase, Cutoff: request.Cutoff,
+			SourceInventorySHA256: request.SourceInventorySHA256,
+			BackupObjectRef:       request.BackupObjectRef, BackupObjectSHA256: request.BackupObjectSHA256,
+			IssuedAt: issued, ExpiresAt: issued.Add(time.Minute), RetainedUntil: issued.Add(48 * time.Hour),
+			CredentialRecoveryVerifiedAt: issued, CustodyHoldID: "custody-fence-1", HoldUntilExplicitRelease: true,
+		}
+		if mode == "revoked" || calls == revokeOnCall {
+			grant.Revoked = true
+		}
+		if mode == "stale" {
+			grant.IssuedAt = issued.Add(-time.Minute)
+		}
+		key := private
+		if mode == "bad-signature" {
+			key = wrongPrivate
+		}
+		_, _ = w.Write(f74aSignedLiveGrant(t, key, grant))
+	}))
+	defer server.Close()
+	pin := hex.EncodeToString(public)
+	proof, err := newF74aLiveAttestorProof(pool, pin, receipt, server.URL, server.Client())
+	require.NoError(t, err)
+	repo := newPgF74aConfirmedDeletionRepository(pool)
+	run, err := repo.startRun(ctx, proof, 1)
+	require.NoError(t, err)
+	proof, err = newF74aLiveAttestorProof(pool, pin, receipt, server.URL, server.Client())
+	require.NoError(t, err)
+	first, err := repo.nextBatch(ctx, run.ID, proof)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Deleted)
+	for _, rejected := range []string{"revoked", "stale", "bad-signature"} {
+		mode = rejected
+		_, err = repo.nextBatch(ctx, run.ID, proof)
+		require.Error(t, err, rejected)
+		var hot, items int
+		require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, ids[2]).Scan(&hot))
+		require.Equal(t, 1, hot)
+		require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM f74a_confirmed_deletion_items WHERE run_id=$1`, run.ID).Scan(&items))
+		require.Equal(t, 1, items, "rejected authority must not advance journal")
+	}
+	mode = "valid"
+	revokeOnCall = calls + 2 // admission succeeds; pre-commit refresh revokes.
+	_, err = repo.nextBatch(ctx, run.ID, proof)
+	require.ErrorContains(t, err, "before commit")
+	var hot, items int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, ids[2]).Scan(&hot))
+	require.Equal(t, 1, hot)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM f74a_confirmed_deletion_items WHERE run_id=$1`, run.ID).Scan(&items))
+	require.Equal(t, 1, items, "pre-commit revocation must roll back journal and hot deletion")
+	revokeOnCall = 0
+	mode = "unavailable"
+	_, err = repo.nextBatch(ctx, run.ID, proof)
+	require.Error(t, err)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, ids[2]).Scan(&hot))
+	require.Equal(t, 1, hot)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM f74a_confirmed_deletion_items WHERE run_id=$1`, run.ID).Scan(&items))
+	require.Equal(t, 1, items)
+	mode = "valid"
+	// The new provider has no cached grant; it must re-check the same signed
+	// receipt against committed deletion provenance and request a fresh nonce.
+	restarted, err := newF74aLiveAttestorProof(pool, pin, receipt, server.URL, server.Client())
+	require.NoError(t, err)
+	second, err := newPgF74aConfirmedDeletionRepository(pool).nextBatch(ctx, run.ID, restarted)
+	require.NoError(t, err)
+	require.Equal(t, 1, second.Deleted)
+	require.GreaterOrEqual(t, calls, 7)
 }

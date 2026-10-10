@@ -20,7 +20,7 @@ import (
 // The private method prevents external callers from providing a self-asserted
 // adapter to the deletion seam while the operational provider is absent.
 type f74aIndependentBatchProof interface {
-	proveCurrentF74aBackup(context.Context) (F74aReceiptVerification, error)
+	proveCurrentF74aBackup(context.Context, uuid.UUID) (F74aReceiptVerification, error)
 }
 
 type f74aConfirmedDeletionRun struct {
@@ -70,7 +70,7 @@ func (r *pgF74aConfirmedDeletionRepository) startRun(ctx context.Context, proof 
 	if proof == nil || batchSize < 1 || batchSize > F74aPageLimit {
 		return run, fmt.Errorf("F74a confirmed deletion requires independent proof and batch size in 1..%d", F74aPageLimit)
 	}
-	attested, err := proof.proveCurrentF74aBackup(ctx)
+	attested, err := proof.proveCurrentF74aBackup(ctx, uuid.Nil)
 	if err != nil || !validF74aBatchProof(attested) {
 		return run, fmt.Errorf("F74a independent live backup proof is unavailable or invalid")
 	}
@@ -124,7 +124,7 @@ func (r *pgF74aConfirmedDeletionRepository) nextBatch(ctx context.Context, runID
 	}
 	// Invoke the independent live authority while the batch transaction is
 	// open. A prior successful receipt check cannot be replayed here.
-	attested, err := proof.proveCurrentF74aBackup(ctx)
+	attested, err := proof.proveCurrentF74aBackup(ctx, runID)
 	if err != nil || !matchesF74aDeletionRun(attested, run) {
 		return batch, fmt.Errorf("F74a independent live backup proof changed or is unavailable")
 	}
@@ -172,7 +172,7 @@ func (r *pgF74aConfirmedDeletionRepository) nextBatch(ctx context.Context, runID
 		if err := reconcileF74aDeletionBatch(ctx, tx, run, runID); err != nil {
 			return f74aConfirmedDeletionBatch{}, err
 		}
-		finalProof, err := proof.proveCurrentF74aBackup(ctx)
+		finalProof, err := proof.proveCurrentF74aBackup(ctx, runID)
 		if err != nil || !matchesF74aDeletionRun(finalProof, run) {
 			return f74aConfirmedDeletionBatch{}, fmt.Errorf("F74a independent live backup proof changed before commit")
 		}
@@ -276,7 +276,7 @@ func (r *pgF74aConfirmedDeletionRepository) nextBatch(ctx context.Context, runID
 	// or is revoked while rows are being examined. A failed final check rolls
 	// back deletions and progress together. The eventual authority still needs
 	// an independent fenced validity guarantee through commit.
-	finalProof, err := proof.proveCurrentF74aBackup(ctx)
+	finalProof, err := proof.proveCurrentF74aBackup(ctx, runID)
 	if err != nil || !matchesF74aDeletionRun(finalProof, run) {
 		return f74aConfirmedDeletionBatch{}, fmt.Errorf("F74a independent live backup proof changed before commit")
 	}
