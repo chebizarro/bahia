@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/db"
 	"go.uber.org/zap"
 )
@@ -30,10 +31,11 @@ type policyCensusRow struct {
 }
 
 type policyCensusReport struct {
-	ReadOnly     bool              `json:"read_only"`
-	RelaySetType string            `json:"relay_set_type"`
-	Relays       []string          `json:"relays"`
-	Rows         []policyCensusRow `json:"rows"`
+	ReadOnly      bool              `json:"read_only"`
+	RelaySetType  string            `json:"relay_set_type"`
+	PolicyEventID string            `json:"relay_policy_event_id"`
+	Relays        []string          `json:"relays"`
+	Rows          []policyCensusRow `json:"rows"`
 }
 
 func main() {
@@ -46,7 +48,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("bahia-policy-census", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("config", "config.yaml", "Bahia config path")
-	relayList := flags.String("relays", "", "comma-separated relays to audit (operator supplied; not canonical policy proof)")
+	relayList := flags.String("relays", "", "comma-separated expected effective control-plane relays; must match canonical policy")
 	maxRows := flags.Int("max-rows", 1000, "maximum SQL rows; census fails if more exist")
 	deadline := flags.Duration("deadline", 5*time.Minute, "global SQL snapshot and relay read deadline (up to 30m)")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *maxRows < 1 || *maxRows > 10000 || *deadline <= 0 || *deadline > 30*time.Minute {
@@ -77,7 +79,32 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		urls = append(urls, url)
 	}
 	if len(urls) == 0 {
-		return fail(stderr, "explicit audit relays are required; config alone does not prove effective canonical policy")
+		return fail(stderr, "explicit expected relays are required")
+	}
+	bootstrap, err := controlplane.PolicyCensusBootstrapRelays(cfg.Nostr)
+	if err != nil {
+		return fail(stderr, "resolve configured bootstrap relays: %v", err)
+	}
+	bootstrapPool := nostradapter.NewRelayPool(bootstrap, zap.NewNop(), nostradapter.WithPrivateKey(secret.Hex()))
+	defer bootstrapPool.Close()
+	bootstrapPool.Connect(ctx)
+	initialHead, err := controlplane.ReadCanonicalRelayPolicyHead(ctx, bootstrapPool, secret.Public())
+	if err != nil {
+		return fail(stderr, "read canonical relay policy from bootstrap relays: %v", err)
+	}
+	effective, err := controlplane.VerifyPolicyCensusRelays(cfg.Nostr, initialHead, urls)
+	if err != nil {
+		return fail(stderr, "bind audit relays to canonical policy: %v", err)
+	}
+	pool := nostradapter.NewRelayPool(effective, zap.NewNop(), nostradapter.WithPrivateKey(secret.Hex()))
+	defer pool.Close()
+	pool.Connect(ctx)
+	effectiveHead, err := controlplane.ReadCanonicalRelayPolicyHead(ctx, pool, secret.Public())
+	if err != nil {
+		return fail(stderr, "read canonical relay policy from effective relays: %v", err)
+	}
+	if effectiveHead.EventID != initialHead.EventID {
+		return fail(stderr, "canonical relay policy changed between bootstrap and effective relay sets")
 	}
 	conn, err := db.Connect(ctx, cfg.DB, zap.NewNop())
 	if err != nil {
@@ -110,16 +137,20 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(ids) > *maxRows {
 		return fail(stderr, "SQL policy census exceeds max-rows %d; no partial report", *maxRows)
 	}
-	pool := nostradapter.NewRelayPool(urls, zap.NewNop(), nostradapter.WithPrivateKey(secret.Hex()))
-	defer pool.Close()
-	pool.Connect(ctx)
-	report := policyCensusReport{ReadOnly: true, RelaySetType: "operator-supplied-unverified", Relays: pool.URLs(), Rows: make([]policyCensusRow, 0, len(ids))}
+	report := policyCensusReport{ReadOnly: true, RelaySetType: "signed-canonical-policy-verified", PolicyEventID: initialHead.EventID, Relays: effective, Rows: make([]policyCensusRow, 0, len(ids))}
 	for _, id := range ids {
 		result, err := nostradapter.CensusPolicyCoordinate(ctx, pool, secret.Public(), id)
 		if err != nil {
 			return fail(stderr, "policy %s history incomplete; no partial report: %v", id, err)
 		}
 		report.Rows = append(report.Rows, policyCensusRow{ID: id.String(), Status: "relay-present-sql-skipped", EventIDs: result.EventIDs})
+	}
+	lastHead, err := controlplane.ReadCanonicalRelayPolicyHead(ctx, pool, secret.Public())
+	if err != nil {
+		return fail(stderr, "reverify canonical relay policy before report: %v", err)
+	}
+	if lastHead.EventID != initialHead.EventID {
+		return fail(stderr, "canonical relay policy changed during census; no report")
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fail(stderr, "commit read-only SQL snapshot: %v", err)
