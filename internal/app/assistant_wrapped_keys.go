@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/openagentsinc/bahia/internal/adapters/signet"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
@@ -26,9 +28,9 @@ type assistantKeyWrapper interface {
 	Decrypt(context.Context, string, nostr.PubKey) (string, error)
 }
 
-// AssistantWrappedKeyManifest contains no plaintext key material. The active
-// random key is for new events; the legacy key preserves reads of immutable
-// relay events encrypted under the former private-key-derived key.
+// AssistantWrappedKeyManifest contains no plaintext key material. The random
+// v2 key has a unique generation identity; the legacy key preserves reads of
+// immutable relay events encrypted under the former private-key-derived key.
 type AssistantWrappedKeyManifest struct {
 	Schema        string                     `json:"schema"`
 	ServicePubkey string                     `json:"service_pubkey"`
@@ -52,18 +54,37 @@ type assistantWrappedKeyPlaintext struct {
 	Key           string `json:"key"`
 }
 
-// CreateAssistantWrappedKeyManifest wraps a fresh random active key and an
-// optional legacy key. The returned manifest must be durably stored before a
-// caller selects its active key; this function does not change daemon wiring.
-func CreateAssistantWrappedKeyManifest(ctx context.Context, wrapper *signet.EpochSigner, servicePubkey nostr.PubKey, legacy *service.AssistantTranscriptKey) (AssistantWrappedKeyManifest, error) {
-	return createAssistantWrappedKeyManifest(ctx, wrapper, servicePubkey, legacy)
+// CreateAssistantWrappedKeyManifest wraps a fresh random v2 key and the exact
+// deployed v1 key derived from the matching service configuration. It does not
+// persist the manifest or enable its key for new event writes.
+func CreateAssistantWrappedKeyManifest(ctx context.Context, wrapper *signet.EpochSigner, servicePubkey nostr.PubKey, cfg *config.Config) (AssistantWrappedKeyManifest, error) {
+	return createAssistantWrappedKeyManifest(ctx, wrapper, servicePubkey, cfg)
 }
 
-func createAssistantWrappedKeyManifest(ctx context.Context, wrapper assistantKeyWrapper, servicePubkey nostr.PubKey, legacy *service.AssistantTranscriptKey) (AssistantWrappedKeyManifest, error) {
+func createAssistantWrappedKeyManifest(ctx context.Context, wrapper assistantKeyWrapper, servicePubkey nostr.PubKey, cfg *config.Config) (AssistantWrappedKeyManifest, error) {
 	if err := checkAssistantWrapper(ctx, wrapper, servicePubkey); err != nil {
 		return AssistantWrappedKeyManifest{}, err
 	}
-	key := service.AssistantTranscriptKey{Ref: "assistant-transcript/service-data-key", Version: "v2", Rotation: "signet-wrapped-random", Key: make([]byte, chacha20poly1305.KeySize)}
+	if cfg == nil || strings.TrimSpace(cfg.Nostr.PrivateKey) == "" {
+		return AssistantWrappedKeyManifest{}, errors.New("legacy assistant key config is required")
+	}
+	secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey))
+	if err != nil || secret.Public() != servicePubkey {
+		return AssistantWrappedKeyManifest{}, errors.New("configured legacy service key does not match Signet service pubkey")
+	}
+	legacyProvider, err := assistantTranscriptKeyProvider(cfg)
+	if err != nil {
+		return AssistantWrappedKeyManifest{}, err
+	}
+	old, err := legacyProvider.ActiveTranscriptKey(ctx)
+	if err != nil {
+		return AssistantWrappedKeyManifest{}, err
+	}
+	generation := make([]byte, 16)
+	if _, err := rand.Read(generation); err != nil {
+		return AssistantWrappedKeyManifest{}, fmt.Errorf("generate assistant key generation: %w", err)
+	}
+	key := service.AssistantTranscriptKey{Ref: "assistant-transcript/service-data-key", Version: "v2-" + hex.EncodeToString(generation), Rotation: "signet-wrapped-random", Key: make([]byte, chacha20poly1305.KeySize)}
 	if _, err := rand.Read(key.Key); err != nil {
 		return AssistantWrappedKeyManifest{}, fmt.Errorf("generate assistant data key: %w", err)
 	}
@@ -72,20 +93,14 @@ func createAssistantWrappedKeyManifest(ctx context.Context, wrapper assistantKey
 		return AssistantWrappedKeyManifest{}, err
 	}
 	manifest := AssistantWrappedKeyManifest{Schema: assistantWrappedKeySchema, ServicePubkey: servicePubkey.Hex(), Active: active}
-	if legacy != nil {
-		old, err := validateWrappedAssistantKey(*legacy)
-		if err != nil {
-			return AssistantWrappedKeyManifest{}, fmt.Errorf("validate legacy assistant key: %w", err)
-		}
-		if old.Ref != "assistant-transcript/service-nostr-key" || old.Version != "v1" || old.Rotation != "service-nostr-key" {
-			return AssistantWrappedKeyManifest{}, errors.New("legacy assistant key identity differs from the deployed v1 key")
-		}
-		record, err := wrapAssistantKey(ctx, wrapper, servicePubkey, old)
-		if err != nil {
-			return AssistantWrappedKeyManifest{}, err
-		}
-		manifest.Legacy = &record
+	if old.Ref != "assistant-transcript/service-nostr-key" || old.Version != "v1" || old.Rotation != "service-nostr-key" {
+		return AssistantWrappedKeyManifest{}, errors.New("deployed legacy assistant key identity changed")
 	}
+	record, err := wrapAssistantKey(ctx, wrapper, servicePubkey, old)
+	if err != nil {
+		return AssistantWrappedKeyManifest{}, err
+	}
+	manifest.Legacy = &record
 	return manifest, nil
 }
 
@@ -105,9 +120,10 @@ func wrapAssistantKey(ctx context.Context, wrapper assistantKeyWrapper, serviceP
 	return AssistantWrappedKeyRecord{Ref: key.Ref, Version: key.Version, Rotation: key.Rotation, Ciphertext: ciphertext}, nil
 }
 
-// OpenAssistantWrappedKeyManifest resolves only the keys listed in a pinned
-// manifest. It never derives a key from the service nsec or falls back to raw
-// local signing. Both transcript and checkpoint stores can use this provider.
+// OpenAssistantWrappedKeyManifest resolves only keys in a pinned manifest for
+// historical reads. Its provider rejects new writes until durable create-once
+// selection of the v2 generation is implemented. It never derives a key from
+// the service nsec or falls back to raw local signing.
 func OpenAssistantWrappedKeyManifest(ctx context.Context, wrapper *signet.EpochSigner, servicePubkey nostr.PubKey, manifest AssistantWrappedKeyManifest) (service.AssistantTranscriptKeyProvider, error) {
 	return openAssistantWrappedKeyManifest(ctx, wrapper, servicePubkey, manifest)
 }
@@ -119,22 +135,26 @@ func openAssistantWrappedKeyManifest(ctx context.Context, wrapper assistantKeyWr
 	if manifest.Schema != assistantWrappedKeySchema || manifest.ServicePubkey != servicePubkey.Hex() {
 		return nil, errors.New("assistant key manifest schema or service pubkey mismatch")
 	}
+	if manifest.Active.Ref != "assistant-transcript/service-data-key" || !strings.HasPrefix(manifest.Active.Version, "v2-") || len(manifest.Active.Version) != len("v2-")+32 || manifest.Active.Rotation != "signet-wrapped-random" || manifest.Legacy == nil || manifest.Legacy.Ref != "assistant-transcript/service-nostr-key" || manifest.Legacy.Version != "v1" || manifest.Legacy.Rotation != "service-nostr-key" {
+		return nil, errors.New("assistant key manifest record roles mismatch")
+	}
+	if _, err := hex.DecodeString(strings.TrimPrefix(manifest.Active.Version, "v2-")); err != nil {
+		return nil, errors.New("invalid assistant key generation")
+	}
 	active, err := unwrapAssistantKey(ctx, wrapper, servicePubkey, manifest.Active)
 	if err != nil {
 		return nil, fmt.Errorf("open active assistant key: %w", err)
 	}
-	provider := &wrappedAssistantTranscriptKeyProvider{active: active, keys: map[string]service.AssistantTranscriptKey{assistantKeyID(active.Ref, active.Version): active}}
-	if manifest.Legacy != nil {
-		old, err := unwrapAssistantKey(ctx, wrapper, servicePubkey, *manifest.Legacy)
-		if err != nil {
-			return nil, fmt.Errorf("open legacy assistant key: %w", err)
-		}
-		id := assistantKeyID(old.Ref, old.Version)
-		if _, exists := provider.keys[id]; exists {
-			return nil, errors.New("assistant key manifest has duplicate key identity")
-		}
-		provider.keys[id] = old
+	provider := &wrappedAssistantTranscriptKeyProvider{keys: map[string]service.AssistantTranscriptKey{assistantKeyID(active.Ref, active.Version): active}}
+	old, err := unwrapAssistantKey(ctx, wrapper, servicePubkey, *manifest.Legacy)
+	if err != nil {
+		return nil, fmt.Errorf("open legacy assistant key: %w", err)
 	}
+	id := assistantKeyID(old.Ref, old.Version)
+	if _, exists := provider.keys[id]; exists {
+		return nil, errors.New("assistant key manifest has duplicate key identity")
+	}
+	provider.keys[id] = old
 	return provider, nil
 }
 
@@ -178,12 +198,11 @@ func checkAssistantWrapper(ctx context.Context, wrapper assistantKeyWrapper, ser
 }
 
 type wrappedAssistantTranscriptKeyProvider struct {
-	active service.AssistantTranscriptKey
-	keys   map[string]service.AssistantTranscriptKey
+	keys map[string]service.AssistantTranscriptKey
 }
 
 func (p *wrappedAssistantTranscriptKeyProvider) ActiveTranscriptKey(context.Context) (service.AssistantTranscriptKey, error) {
-	return validateWrappedAssistantKey(p.active)
+	return service.AssistantTranscriptKey{}, errors.New("assistant wrapped key manifest is read-only until durable create-once activation is implemented")
 }
 
 func (p *wrappedAssistantTranscriptKeyProvider) TranscriptKey(_ context.Context, ref, version string) (service.AssistantTranscriptKey, error) {
