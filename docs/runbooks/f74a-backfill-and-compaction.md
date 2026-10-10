@@ -145,11 +145,25 @@ bahia-migrate --config "$SOURCE_CONFIG" --f74a-receipt "$SIGNED_RECEIPT" f74a-ve
 ```
 
 The verifier checks the signature against the configured pin and re-reads
-the physical source database identity and full inventory. This is a
-**read-only cryptographic verification**, not deletion admission: it cannot
-independently establish that the object still exists, remains unrevoked and
-retained, or that restore credentials remain usable. It always reports
-`deletion_authorized false`; `f74a-compact --confirm` remains rejected.
+the physical source database identity and full inventory. For a receipt whose
+signed `backup_object_ref` is a local `file:///absolute/path`, add
+`--f74a-verify-object` to open that exact regular file and stream its actual
+bytes through SHA-256 under the F74a deadline. The option fails closed for a
+missing, changed, unreadable, expired, or non-local object, and reports
+`backup_object_hash_verified true` only when the observed digest matches the
+signed digest. It uses bounded memory but reads the entire object. It
+rejects FIFOs and final symlinks before reading; the timeout is checked
+before opening and between regular-file reads, but it cannot interrupt a
+kernel open, stat, or read stalled on a pathological or failed filesystem
+mount. Do not
+substitute an operator-provided path: the path comes from the signed receipt.
+
+This is a **read-only point-in-time verification**, not deletion admission.
+A local file hash cannot prove independent custody, future retention, a live
+revocation check, or restore-credential recovery; other object-store URI
+schemes have no verifier yet. The command always reports
+`revocation_status_verified false` and `deletion_authorized false`, even when
+the local object hash matches. `f74a-compact --confirm` remains rejected.
 A verified receipt can describe unarchived hot no-op samples; it does not
 authorize their deletion. The future bounded delete path must recheck an
 immutable archive copy, its digest, the material predecessor, current state

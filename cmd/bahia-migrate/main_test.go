@@ -166,10 +166,16 @@ func TestF74aVerifyReceiptFileErrorsDoNotEchoPath(t *testing.T) {
 		t.TempDir(), // Opening succeeds; reading a directory fails.
 	} {
 		var output, errors bytes.Buffer
-		status := runF74aVerifyReceipt(context.Background(), nil, "configured-pin", path, func(err error) error { return err }, &output, &errors)
+		status := runF74aVerifyReceipt(context.Background(), nil, "configured-pin", path, false, func(err error) error { return err }, &output, &errors)
 		require.Equal(t, 1, status)
 		require.Contains(t, errors.String(), "F74a receipt")
 		require.NotContains(t, errors.String(), path)
 		require.Empty(t, output.String())
 	}
+}
+
+func TestF74aVerifyObjectFlagOnlyAppliesToSignedReceipt(t *testing.T) {
+	var output, errors bytes.Buffer
+	require.Equal(t, 1, run(context.Background(), []string{"f74a-compact", "--f74a-verify-object"}, &output, &errors))
+	require.Contains(t, errors.String(), "only valid for f74a-verify-receipt")
 }

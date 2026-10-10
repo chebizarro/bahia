@@ -28,7 +28,7 @@ const usage = "usage: bahia-migrate [--config path] [--confirm] [--force] [--to 
 	"       bahia-migrate [--config path] [--cutoff RFC3339] [--f74a-timeout duration] f74a-census\n" +
 	"       bahia-migrate [--config path] --cutoff RFC3339 [--f74a-timeout duration] f74a-compact (read-only dry run)\n" +
 	"       bahia-migrate [--config path] --cutoff RFC3339 [--f74a-timeout duration] f74a-restore-preflight (unauthenticated read-only inventory)\n" +
-	"       bahia-migrate [--config path] --f74a-receipt path [--f74a-timeout duration] f74a-verify-receipt (signed read-only check; no deletion)\n" +
+	"       bahia-migrate [--config path] --f74a-receipt path [--f74a-timeout duration] f74a-verify-receipt [--f74a-verify-object] (signed read-only check; no deletion)\n" +
 	"       bahia-migrate [--config path] --confirm-quiesced f74a-import (stop daemon and all SQL writers first)\n" +
 	"       bahia-migrate [--config path] [--confirm-quiesced --outbox-path /absolute/daemon/outbox.bolt] legacy-cutover (read-only census fails when blocked; seal only when empty)\n" +
 	"       bahia-migrate [--config path] --target default|control-plane [--after token] [--max-rows n] outbox-transfer (read-only inventory; --apply is disabled)\n" +
@@ -61,6 +61,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	cutoverOutbox := flags.String("outbox-path", "", "legacy-cutover seal: absolute daemon outbox path, matching configured path")
 	cutoffText := flags.String("cutoff", "", "F74a census/compaction UTC cutoff in RFC3339 format")
 	f74aReceiptPath := flags.String("f74a-receipt", "", "F74a: path to independently attested backup/restore receipt")
+	f74aVerifyObject := flags.Bool("f74a-verify-object", false, "F74a receipt: stream and hash the signed local file:// backup object")
 	f74aTimeout := flags.Duration("f74a-timeout", 30*time.Minute, "F74a read-only action deadline (1s..24h; default 30m)")
 	force := flags.Bool("force", false, "allow down across out-of-order applied history")
 	to := flags.String("to", "", "full filename stem to retain when running down")
@@ -129,6 +130,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if action != "f74a-verify-receipt" && *f74aReceiptPath != "" {
 		return reportError(stderr, "--f74a-receipt is only valid for f74a-verify-receipt")
+	}
+	if action != "f74a-verify-receipt" && *f74aVerifyObject {
+		return reportError(stderr, "--f74a-verify-object is only valid for f74a-verify-receipt")
 	}
 	if action == "f74a-verify-receipt" && *f74aReceiptPath == "" {
 		return reportError(stderr, "f74a-verify-receipt requires --f74a-receipt")
@@ -199,7 +203,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runLegacyCutover(ctx, pool, *cutoverOutbox, *confirmQuiesced, stdout, stderr)
 	}
 	if action == "f74a-verify-receipt" {
-		return runF74aVerifyReceipt(ctx, pool, cfg.DB.F74aBackupAttestorPublicKey, *f74aReceiptPath, cfg.DB.RedactError, stdout, stderr)
+		return runF74aVerifyReceipt(ctx, pool, cfg.DB.F74aBackupAttestorPublicKey, *f74aReceiptPath, *f74aVerifyObject, cfg.DB.RedactError, stdout, stderr)
 	}
 	if action == "f74a-restore-preflight" {
 		return runF74aRestorePreflight(ctx, pool, cutoff, cfg.DB.RedactError, stdout, stderr)
@@ -430,7 +434,7 @@ func runF74aRestorePreflight(ctx context.Context, pool *pgxpool.Pool, cutoff tim
 
 // runF74aVerifyReceipt is read-only and deliberately has no handoff to the
 // confirmed deletion path. A signature does not prove current object custody.
-func runF74aVerifyReceipt(ctx context.Context, pool *pgxpool.Pool, pin, path string, redact func(error) error, stdout, stderr io.Writer) int {
+func runF74aVerifyReceipt(ctx context.Context, pool *pgxpool.Pool, pin, path string, verifyObject bool, redact func(error) error, stdout, stderr io.Writer) int {
 	if strings.TrimSpace(pin) == "" {
 		return reportError(stderr, "F74a backup attestor public key is not configured")
 	}
@@ -447,6 +451,13 @@ func runF74aVerifyReceipt(ctx context.Context, pool *pgxpool.Pool, pin, path str
 	if err != nil {
 		return reportError(stderr, "verifying F74a receipt: %v", redact(err))
 	}
+	var verifiedBytes int64
+	if verifyObject {
+		verifiedBytes, err = repository.VerifyF74aLocalBackupObject(ctx, result)
+		if err != nil {
+			return reportError(stderr, "verifying F74a backup object: %v", err)
+		}
+	}
 	for _, item := range []struct {
 		name  string
 		value any
@@ -457,8 +468,11 @@ func runF74aVerifyReceipt(ctx context.Context, pool *pgxpool.Pool, pin, path str
 		{"source_cluster_system_identifier", result.SourceDatabase.SystemIdentifier},
 		{"cutoff", result.Cutoff.Format(time.RFC3339Nano)},
 		{"inventory_sha256", result.InventorySHA256},
+		{"backup_object_hash_verified", verifyObject},
+		{"backup_object_bytes", verifiedBytes},
+		{"revocation_status_verified", false},
 		{"deletion_authorized", false},
-		{"missing_trusted_evidence", "live_backup_object_retention_revocation_and_credential_recovery_verification_plus_transactional_per_batch_admission"},
+		{"missing_trusted_evidence", "independent_live_retention_revocation_and_credential_recovery_verification_plus_transactional_per_batch_admission"},
 	} {
 		if _, err := fmt.Fprintf(stdout, "%s\t%v\n", item.name, item.value); err != nil {
 			return reportError(stderr, "writing F74a receipt verification: %v", err)

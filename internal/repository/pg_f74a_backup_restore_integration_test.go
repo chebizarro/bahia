@@ -9,8 +9,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -189,6 +191,9 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 	require.NoError(t, err)
 	dumpDigest, err := docker("exec", container, "sha256sum", "/tmp/f74a.dump")
 	require.NoError(t, err)
+	localDump := filepath.Join(t.TempDir(), "f74a.dump")
+	_, err = docker("cp", container+":/tmp/f74a.dump", localDump)
+	require.NoError(t, err)
 	t.Logf("PostgreSQL %d custom-format backup: %s", major, dumpDigest)
 
 	// A restore collision must roll back as one transaction, leaving no
@@ -229,7 +234,7 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 	payload := repository.F74aAttestedBackupPayload{
 		Version: "bahia-f74a-backup-restore-v1", ReceiptID: uuid.New(),
 		SourceDatabase: sourceIdentity, RestoreDatabase: restoreIdentity, Cutoff: sourcePreflight.Cutoff,
-		SnapshotID: "disposable-pg16-snapshot", BackupObjectRef: "file:///tmp/f74a.dump", SnapshotCreatedAt: now.Add(-3 * time.Minute),
+		SnapshotID: "disposable-pg16-snapshot", BackupObjectRef: (&url.URL{Scheme: "file", Path: localDump}).String(), SnapshotCreatedAt: now.Add(-3 * time.Minute),
 		BackupObjectSHA256:    strings.Fields(dumpDigest)[0],
 		SourceInventorySHA256: sourcePreflight.InventorySHA256, RestoreInventorySHA256: restoredPreflight.InventorySHA256,
 		RestoreVerifiedAt: now.Add(-2 * time.Minute), IssuedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour),
@@ -248,6 +253,9 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 	verification, err := repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(attestorPub), verifiedReceipt)
 	require.NoError(t, err)
 	require.Equal(t, payload.ReceiptID, verification.ReceiptID)
+	verifiedBytes, err := repository.VerifyF74aLocalBackupObject(ctx, verification)
+	require.NoError(t, err)
+	require.Greater(t, verifiedBytes, int64(0))
 	targetPayload := payload
 	targetPayload.SourceDatabase, targetPayload.RestoreDatabase = restoreIdentity, sourceIdentity
 	targetReceipt := signReceipt(targetPayload)
@@ -291,6 +299,9 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 	require.NoError(t, err)
 	_, err = repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(attestorPub), tamperedJSON)
 	require.ErrorContains(t, err, "signature")
+	require.NoError(t, os.WriteFile(localDump, []byte("changed backup bytes"), 0o600))
+	_, err = repository.VerifyF74aLocalBackupObject(ctx, verification)
+	require.ErrorContains(t, err, "SHA-256 differs")
 	zoneConfig, err := pgxpool.ParseConfig(dsn("f74a_restored"))
 	require.NoError(t, err)
 	zoneConfig.ConnConfig.RuntimeParams["TimeZone"] = "Pacific/Honolulu"
