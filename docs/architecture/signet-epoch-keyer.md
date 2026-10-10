@@ -26,7 +26,8 @@ its public text NIP-44 and binary-encrypt calls through the same fenced path.
 The binary-decrypt helper remains internal until a production caller needs it.
 Text operations reject embedded NUL and invalid UTF-8, matching Signet's text
 contract; callers with arbitrary bytes must use the binary methods. Ciphertext
-is capped at 16 MiB of base64 before decoding, including untrusted RPC results.
+and binary-decrypt plaintext are each capped at 16 MiB of base64 before
+decoding, including untrusted RPC results.
 
 The local check is not the authorization boundary: Signet must authenticate
 the dedicated NIP-46 client and atomically validate its writer lease epoch for

@@ -20,6 +20,8 @@ var errEpochNIP04Unsupported = errors.New("NIP-04 is unsupported for the fenced 
 // before base64 decoding, which otherwise allocates proportional to input.
 const maxEpochNIP44PayloadBase64 = 16 << 20
 
+const maxEpochNIP44PlaintextBase64 = 16 << 20
+
 // Encrypt implements nostr.Keyer for OCK wraps and service-only NIP-44 layers.
 // The service key never leaves Signet; the request carries the current lease
 // epoch as a third NIP-46 parameter. It has no legacy no-epoch fallback.
@@ -51,6 +53,9 @@ func (s *EpochSigner) decryptBytes(ctx context.Context, ciphertext string, sende
 	encoded, err := s.fencedNIP44(ctx, "nip44_decrypt_b64", sender, ciphertext, false)
 	if err != nil {
 		return nil, err
+	}
+	if len(encoded) > maxEpochNIP44PlaintextBase64 {
+		return nil, errors.New("Signet returned oversized NIP-44 binary plaintext")
 	}
 	plaintext, err := base64.StdEncoding.Strict().DecodeString(encoded)
 	if err != nil || len(plaintext) == 0 {

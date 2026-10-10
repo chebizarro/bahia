@@ -210,6 +210,18 @@ func TestEpochKeyerRejectsInvalidTextAndOversizedCiphertextResults(t *testing.T)
 	}
 }
 
+func TestEpochKeyerRejectsOversizedBinaryPlaintextBeforeDecode(t *testing.T) {
+	f, requests, responder := epochKeyerFixture(t)
+	*responder = func(method string, _ []string) (string, error) {
+		require.Equal(t, "nip44_decrypt_b64", method)
+		return strings.Repeat("A", maxEpochNIP44PlaintextBase64+1), nil
+	}
+	plaintext, err := f.signer.decryptBytes(context.Background(), testNIP44Payload(), f.client.Public())
+	require.ErrorContains(t, err, "oversized")
+	require.Nil(t, plaintext)
+	require.Len(t, *requests, 1)
+}
+
 func TestEpochClientNIP44CallsNeverFallBackToLegacyNoEpochRPC(t *testing.T) {
 	f, requests, _ := epochKeyerFixture(t)
 	client, err := NewClient(Config{
