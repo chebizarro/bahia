@@ -172,13 +172,42 @@ func TestEpochKeyerRejectsInvalidInputsWithoutRPC(t *testing.T) {
 	f, requests, _ := epochKeyerFixture(t)
 	_, err := f.signer.Encrypt(context.Background(), string([]byte{0xff}), f.client.Public())
 	require.ErrorContains(t, err, "UTF-8")
+	_, err = f.signer.Encrypt(context.Background(), "before\x00after", f.client.Public())
+	require.ErrorContains(t, err, "NUL-free")
 	_, err = f.signer.Encrypt(context.Background(), "hello", nostr.ZeroPK)
 	require.Error(t, err)
 	_, err = f.signer.EncryptBytes(context.Background(), nil, f.client.Public())
 	require.Error(t, err)
 	_, err = f.signer.Decrypt(context.Background(), "not-nip44", f.client.Public())
 	require.Error(t, err)
+	_, err = f.signer.Decrypt(context.Background(), strings.Repeat("A", maxEpochNIP44PayloadBase64+1), f.client.Public())
+	require.ErrorContains(t, err, "invalid NIP-44 ciphertext")
 	require.Empty(t, *requests)
+}
+
+func TestEpochKeyerRejectsInvalidTextAndOversizedCiphertextResults(t *testing.T) {
+	for name, response := range map[string]struct {
+		method   string
+		response string
+	}{
+		"nul_plaintext":        {method: "nip44_decrypt", response: "before\x00after"},
+		"oversized_ciphertext": {method: "nip44_encrypt", response: strings.Repeat("A", maxEpochNIP44PayloadBase64+1)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, requests, responder := epochKeyerFixture(t)
+			*responder = func(string, []string) (string, error) { return response.response, nil }
+			var value string
+			var err error
+			if response.method == "nip44_decrypt" {
+				value, err = f.signer.Decrypt(context.Background(), testNIP44Payload(), f.client.Public())
+			} else {
+				value, err = f.signer.Encrypt(context.Background(), "hello", f.client.Public())
+			}
+			require.Error(t, err)
+			require.Empty(t, value)
+			require.Len(t, *requests, 1)
+		})
+	}
 }
 
 func TestEpochClientNIP44CallsNeverFallBackToLegacyNoEpochRPC(t *testing.T) {

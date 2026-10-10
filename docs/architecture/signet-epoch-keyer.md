@@ -24,7 +24,14 @@ results. It never retries through a no-epoch method or raw service key. NIP-04
 is unsupported on this service-key adapter. An epoch-configured `Client` routes
 its public text NIP-44 and binary-encrypt calls through the same fenced path.
 The binary-decrypt helper remains internal until a production caller needs it.
+Text operations reject embedded NUL and invalid UTF-8, matching Signet's text
+contract; callers with arbitrary bytes must use the binary methods. Ciphertext
+is capped at 16 MiB of base64 before decoding, including untrusted RPC results.
 
 The local check is not the authorization boundary: Signet must authenticate
 the dedicated NIP-46 client and atomically validate its writer lease epoch for
 each method. The adapter has no app startup wiring or automatic activation.
+Unit tests use a fake RPC session, not a running Signet. Activation additionally
+requires an authenticated Signet-v3 interoperability test for all four methods
+with a live writer lease, including wrong/expired epoch rejection and empty or
+error result handling.

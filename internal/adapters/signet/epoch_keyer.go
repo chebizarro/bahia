@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"fiatjaf.com/nostr"
@@ -15,12 +16,16 @@ var _ nostr.Keyer = (*EpochSigner)(nil)
 
 var errEpochNIP04Unsupported = errors.New("NIP-04 is unsupported for the fenced Signet service key")
 
+// OCK wraps and service-only fields are small. Bound untrusted payloads
+// before base64 decoding, which otherwise allocates proportional to input.
+const maxEpochNIP44PayloadBase64 = 16 << 20
+
 // Encrypt implements nostr.Keyer for OCK wraps and service-only NIP-44 layers.
 // The service key never leaves Signet; the request carries the current lease
 // epoch as a third NIP-46 parameter. It has no legacy no-epoch fallback.
 func (s *EpochSigner) Encrypt(ctx context.Context, plaintext string, recipient nostr.PubKey) (string, error) {
-	if !utf8.ValidString(plaintext) {
-		return "", errors.New("NIP-44 text plaintext must be valid UTF-8; use EncryptBytes for binary")
+	if !utf8.ValidString(plaintext) || strings.IndexByte(plaintext, 0) >= 0 {
+		return "", errors.New("NIP-44 text plaintext must be NUL-free UTF-8; use EncryptBytes for binary")
 	}
 	return s.fencedNIP44(ctx, "nip44_encrypt", recipient, plaintext, true)
 }
@@ -105,8 +110,8 @@ func (s *EpochSigner) fencedNIP44(ctx context.Context, method string, peer nostr
 	if ciphertextResult && !validNIP44Payload(result) {
 		return "", errors.New("Signet returned malformed NIP-44 ciphertext")
 	}
-	if !ciphertextResult && method == "nip44_decrypt" && !utf8.ValidString(result) {
-		return "", errors.New("Signet returned invalid UTF-8 NIP-44 plaintext")
+	if !ciphertextResult && method == "nip44_decrypt" && (!utf8.ValidString(result) || strings.IndexByte(result, 0) >= 0) {
+		return "", errors.New("Signet returned invalid or NUL-containing UTF-8 NIP-44 plaintext")
 	}
 	current, err := s.lease(ctx)
 	if err != nil {
@@ -130,7 +135,7 @@ func (s *EpochSigner) fencedNIP44(ctx context.Context, method string, peer nostr
 }
 
 func validNIP44Payload(payload string) bool {
-	if len(payload) < 132 {
+	if len(payload) < 132 || len(payload) > maxEpochNIP44PayloadBase64 {
 		return false
 	}
 	decoded, err := base64.StdEncoding.Strict().DecodeString(payload)
