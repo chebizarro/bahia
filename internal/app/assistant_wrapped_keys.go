@@ -135,11 +135,8 @@ func openAssistantWrappedKeyManifest(ctx context.Context, wrapper assistantKeyWr
 	if manifest.Schema != assistantWrappedKeySchema || manifest.ServicePubkey != servicePubkey.Hex() {
 		return nil, errors.New("assistant key manifest schema or service pubkey mismatch")
 	}
-	if manifest.Active.Ref != "assistant-transcript/service-data-key" || !strings.HasPrefix(manifest.Active.Version, "v2-") || len(manifest.Active.Version) != len("v2-")+32 || manifest.Active.Rotation != "signet-wrapped-random" || manifest.Legacy == nil || manifest.Legacy.Ref != "assistant-transcript/service-nostr-key" || manifest.Legacy.Version != "v1" || manifest.Legacy.Rotation != "service-nostr-key" {
-		return nil, errors.New("assistant key manifest record roles mismatch")
-	}
-	if _, err := hex.DecodeString(strings.TrimPrefix(manifest.Active.Version, "v2-")); err != nil {
-		return nil, errors.New("invalid assistant key generation")
+	if err := validateAssistantManifestShape(manifest); err != nil {
+		return nil, err
 	}
 	active, err := unwrapAssistantKey(ctx, wrapper, servicePubkey, manifest.Active)
 	if err != nil {
@@ -224,4 +221,20 @@ func validateWrappedAssistantKey(key service.AssistantTranscriptKey) (service.As
 	}
 	key.Key = append([]byte(nil), key.Key...)
 	return key, nil
+}
+
+func validateAssistantManifestShape(manifest AssistantWrappedKeyManifest) error {
+	if manifest.Schema != assistantWrappedKeySchema {
+		return errors.New("assistant key manifest schema mismatch")
+	}
+	if _, err := nostr.PubKeyFromHex(manifest.ServicePubkey); err != nil {
+		return errors.New("invalid assistant key manifest service pubkey")
+	}
+	if manifest.Active.Ref != "assistant-transcript/service-data-key" || !strings.HasPrefix(manifest.Active.Version, "v2-") || len(manifest.Active.Version) != len("v2-")+32 || manifest.Active.Rotation != "signet-wrapped-random" || manifest.Active.Ciphertext == "" || manifest.Legacy == nil || manifest.Legacy.Ref != "assistant-transcript/service-nostr-key" || manifest.Legacy.Version != "v1" || manifest.Legacy.Rotation != "service-nostr-key" || manifest.Legacy.Ciphertext == "" {
+		return errors.New("assistant key manifest record roles mismatch")
+	}
+	if _, err := hex.DecodeString(strings.TrimPrefix(manifest.Active.Version, "v2-")); err != nil {
+		return errors.New("invalid assistant key generation")
+	}
+	return nil
 }

@@ -126,3 +126,25 @@ or parked — never dispatch authority), appends the deterministic conversion
 root once, hydrates identity and calls `Recover`. A finished run's checkpoint
 chain is loaded before the next turn so a session-scope cancellation stays
 enforced after restart.
+
+## Assistant key transition boundary
+
+Historical transcript (`30316`) and execution checkpoint (`4903`) envelopes use
+one `AssistantTranscriptKeyProvider`. The deployed v1 provider derives its
+XChaCha20 key from `nostr.private_key`. An offline transition primitive in
+`internal/app/assistant_wrapped_keys.go` obtains exactly that v1 key from the
+matching service configuration, generates a random versioned v2 key, and
+NIP-44-wraps both through the lease-fenced Signet service signer. The wrapped
+manifest retains the service pubkey and exact key identities; immutable v1
+relay events can be read after the nsec is removed only if the v1 wrap remains
+available.
+
+`assistant_manifest_store.go` stores one manifest in an existing private
+filesystem directory: a synced `0600` temp file is linked to the final path
+without replacement, then the directory is synced. Missing, corrupt, loose-
+permission or wrong-generation files fail closed. A caller must retain the
+v2 generation pin independently to detect rollback to a different valid file.
+The manifest opener is **read-only**: `ActiveTranscriptKey` rejects new writes.
+The daemon still uses its v1 provider; durable storage alone is not authority
+to enable v2 publication. Writer activation requires an independently pinned
+generation and complete transcript/checkpoint read-write restart tests.
