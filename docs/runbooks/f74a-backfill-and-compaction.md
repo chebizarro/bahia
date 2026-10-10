@@ -42,13 +42,18 @@ and hot-candidate count only from those immutable journal items, and checks
 run/batch/item counts and current archived payloads. This lets the same
 signed receipt remain verifiable after an admitted batch or restart without
 excusing unrelated database changes. It asks an independent live backup authority
-before work and again before commit. There is deliberately **no production
-implementer or CLI caller**: a signed receipt and local file hash do not prove
-live retention, revocation or credential recovery, and a non-fenced status
-check could race revocation after its last response. `--confirm` remains
-refused before SQL connection. The deletion gate remains blocked until an
-independently operated authority can provide fenced custody/revocation and
-credential-recovery evidence through each commit. This runbook
+before work and again before commit. There is a private HTTPS client for a separately operated live backup attestor,
+but **no deployed authority or CLI caller**: a signed receipt and local file
+hash do not prove live retention, revocation or credential recovery. The
+client requests a fresh nonce-bound signed custody grant before each batch and
+again before commit. Its grant must bind the exact receipt, physical database,
+cutoff, inventory, backup object, and deletion run; require recent credential
+recovery, an explicit-release custody hold, non-revocation, and retained object
+life beyond the grant. The batch also reconciles the signed inventory inside
+its own transaction before commit. `--confirm` remains refused before SQL
+connection. The deletion gate remains blocked until an independently operated
+authority actually enforces the explicit-release hold across commit and
+verifies object custody and credential recovery. This runbook
 applies only to a Bahia image exposing both read-only actions. If either
 action is absent, stop: the older image cannot perform this procedure. PostgreSQL is a
 derived index; preserve the service key, relay-held canonical records, and
@@ -172,6 +177,24 @@ before opening and between regular-file reads, but it cannot interrupt a
 kernel open, stat, or read stalled on a pathological or failed filesystem
 mount. Do not
 substitute an operator-provided path: the path comes from the signed receipt.
+
+The private live-attestor protocol uses HTTPS POST with a JSON request carrying
+a random 32-byte hex nonce, `receipt_id`, `receipt_sha256`, `run_id` (nil UUID
+before a run is created), `source_database`, `cutoff`,
+`source_inventory_sha256`, `backup_object_ref`, and `backup_object_sha256`.
+The response envelope has `payload` and hex `signature`; the Ed25519 signature
+is over `bahia-f74a-live-custody-v1`, one NUL byte, and the exact raw JSON
+payload bytes. The payload repeats all request bindings and includes `version`,
+`issued_at`, `expires_at`, `retained_until`,
+`credential_recovery_verified_at`, `revoked`, `custody_hold_id`, and
+`hold_until_explicit_release`. The client rejects missing or aliased keys,
+replays, stale grants, revocation, missing holds, and insufficient retention.
+The external authority must verify the immutable backup object version and
+its SHA-256, successful isolated restore, usable recovery credentials, and
+retention; it must prohibit object removal and revocation of an admitted hold
+until explicit release **after** the database commit. There is no authority
+endpoint configured or release workflow in Bahia. The protocol client and
+batch seam are private and cannot be invoked by `f74a-compact --confirm`.
 
 This is a **read-only point-in-time verification**, not deletion admission.
 A local file hash cannot prove independent custody, future retention, a live
