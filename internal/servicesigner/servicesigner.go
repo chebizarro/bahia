@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nip55l"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
@@ -43,7 +44,7 @@ type BinaryCipher interface {
 	DecryptBytes(ctx context.Context, ciphertext string, sender nostr.PubKey) ([]byte, error)
 }
 
-// NIP55LConfig is what the injected NIP-55L constructor receives.
+// NIP55LConfig is what the NIP-55L constructor receives.
 type NIP55LConfig struct {
 	ServicePubkey nostr.PubKey
 	AppID         string
@@ -57,7 +58,8 @@ type Options struct {
 	// Admission gates every NIP-46 request publication. Nil uses the
 	// process-wide controller.
 	Admission *nostrout.Admission
-	// NewNIP55L builds the NIP-55L D-Bus keyer. Required for method nip55l.
+	// NewNIP55L overrides the NIP-55L D-Bus keyer constructor (tests). Nil
+	// uses internal/adapters/nip55l.
 	NewNIP55L func(context.Context, NIP55LConfig) (nostr.Keyer, error)
 	// Logger receives bunker authorization requests. Nil uses slog.Default.
 	Logger *slog.Logger
@@ -104,10 +106,11 @@ func Open(ctx context.Context, cfg config.NostrConfig, opts Options) (nostr.Keye
 		}
 		signer, err = openNIP46(ctx, cfg.Signer, expected, timeout, opts.Admission, logger)
 	case config.NostrSignerNIP55L:
-		if opts.NewNIP55L == nil {
-			return nil, errors.New("nostr.signer.method=nip55l is not available in this build")
+		newNIP55L := opts.NewNIP55L
+		if newNIP55L == nil {
+			newNIP55L = openNIP55L
 		}
-		signer, err = opts.NewNIP55L(ctx, NIP55LConfig{ServicePubkey: expected, AppID: cfg.Signer.NIP55L.AppID, BusAddress: cfg.Signer.NIP55L.BusAddress, CallTimeout: timeout})
+		signer, err = newNIP55L(ctx, NIP55LConfig{ServicePubkey: expected, AppID: cfg.Signer.NIP55L.AppID, BusAddress: cfg.Signer.NIP55L.BusAddress, CallTimeout: timeout})
 		if err == nil && signer == nil {
 			err = errors.New("NIP-55L constructor returned no signer")
 		}
@@ -144,4 +147,19 @@ func closeSigner(signer nostr.Keyer) {
 	case io.Closer:
 		_ = s.Close()
 	}
+}
+
+// openNIP55L builds the D-Bus keyer. It never returns a typed-nil
+// *nip55l.Keyer as a non-nil nostr.Keyer.
+func openNIP55L(ctx context.Context, cfg NIP55LConfig) (nostr.Keyer, error) {
+	keyer, err := nip55l.New(ctx, nip55l.Config{
+		ServicePubkey: cfg.ServicePubkey,
+		AppID:         cfg.AppID,
+		BusAddress:    cfg.BusAddress,
+		CallTimeout:   cfg.CallTimeout,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return keyer, nil
 }

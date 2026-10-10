@@ -78,9 +78,6 @@ func (s *stubKeyer) Close() error                                       { s.clos
 
 func TestOpenNIP55LUsesInjectedConstructorAndVerifiesIdentity(t *testing.T) {
 	cfg := config.NostrConfig{PublicKey: testService.Public().Hex(), Signer: config.NostrSignerConfig{Method: config.NostrSignerNIP55L, NIP55L: config.NostrSignerNIP55LConfig{AppID: "bahia", BusAddress: "unix:path=/tmp/bus"}}}
-	_, err := Open(t.Context(), cfg, Options{})
-	require.ErrorContains(t, err, "not available in this build")
-
 	var got NIP55LConfig
 	stub := &stubKeyer{pubkey: testService.Public()}
 	signer, err := Open(t.Context(), cfg, Options{NewNIP55L: func(_ context.Context, c NIP55LConfig) (nostr.Keyer, error) { got = c; return stub, nil }})

@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	"github.com/openagentsinc/bahia/internal/adapters/nip55l"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
@@ -39,7 +38,6 @@ func newServiceKeyer(cfg *config.Config, admission *nostrout.Admission, logger *
 	lifetime, cancel := context.WithCancel(context.Background())
 	signer, err := servicesigner.Open(lifetime, cfg.Nostr, servicesigner.Options{
 		Admission: admission,
-		NewNIP55L: openNIP55LServiceKeyer,
 		Logger:    logger,
 	})
 	if errors.Is(err, servicesigner.ErrNotConfigured) {
@@ -56,21 +54,6 @@ func newServiceKeyer(cfg *config.Config, admission *nostrout.Admission, logger *
 			_ = closer.Close()
 		}
 	}, nil
-}
-
-// openNIP55LServiceKeyer adapts nip55l.New to the factory's constructor. It
-// never returns a typed-nil *nip55l.Keyer as a non-nil nostr.Keyer.
-func openNIP55LServiceKeyer(ctx context.Context, cfg servicesigner.NIP55LConfig) (nostr.Keyer, error) {
-	keyer, err := nip55l.New(ctx, nip55l.Config{
-		ServicePubkey: cfg.ServicePubkey,
-		AppID:         cfg.AppID,
-		BusAddress:    cfg.BusAddress,
-		CallTimeout:   cfg.CallTimeout,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return keyer, nil
 }
 
 // legacyO1OrgStateDecryptor reads records in the legacy O1 org-state format,

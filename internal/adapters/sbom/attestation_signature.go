@@ -32,8 +32,8 @@ const (
 )
 
 // AttestationSigner signs a standard Nostr event as the attesting service
-// identity: the local service key, or Signet's fenced service signer through
-// standard NIP-46 sign_event.
+// identity through the injected service signer (local key, NIP-46 bunker or
+// NIP-55L; see internal/servicesigner).
 type AttestationSigner interface {
 	SignEvent(context.Context, *nostr.Event) error
 }

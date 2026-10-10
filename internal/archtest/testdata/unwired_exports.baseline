@@ -66,7 +66,6 @@
 1	internal/adapters/nostr.Projector.ProjectionMetrics
 1	internal/adapters/nostr.Projector.PublishAgentRuntimeRelease
 1	internal/adapters/nostr.Projector.PublishAgentServiceReleaseBinding
-1	internal/adapters/nostr.Publisher.Pool
 1	internal/adapters/nostr.RelayHealth.AvgLatency
 1	internal/adapters/nostr.RelayHealth.P95Latency
 1	internal/adapters/nostr.RelayHealth.SetConnected
@@ -393,5 +392,4 @@
 1	internal/soulfactory.StatusSyncHandler.RegisterSoul
 1	internal/soulfactory.VoiceProviderRegistry.SetCacheTTL
 1	internal/soulfactory.WithProvisioningEngine
-1	internal/workflow.StaleRunDetector.SetLoomStatusReadiness
 1	internal/workflow.WithDeploymentLoomClient
