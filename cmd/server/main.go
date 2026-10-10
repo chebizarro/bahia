@@ -38,7 +38,7 @@ type serverSignalSource struct {
 }
 
 type serverDependencies struct {
-	loadConfig     func(string) (*config.Config, error)
+	loadConfig func(string) (*config.Config, error)
 	// newApplication builds an application. On reload, running is the
 	// application the candidate will replace, so it can take over resources
 	// such as an unchanged service signer session; it is nil at startup.

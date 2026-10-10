@@ -48,9 +48,6 @@ var serviceKeyReadAllowlist = map[string]string{
 	"cmd/bahia-migrate/f74a_import.go|runF74aImport": "(c)",
 	"cmd/bahia-migrate/main.go|runNostrMigration":    "(c)",
 	"internal/config/config.go|":                     "config",
-	// The relay sidecar's reload compares signer configs; it moves to
-	// servicesigner.SameSigner at integration (bahia-cd0wr.3.7).
-	"cmd/relay/main.go|sameServiceSigner": "pending bahia-cd0wr.3.7",
 }
 
 func TestServiceKeyReadsConfined(t *testing.T) {

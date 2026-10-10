@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -41,7 +44,7 @@ type testSigner struct {
 	signingAtClose bool
 }
 
-func (l *signerLedger) open(_ context.Context, cfg config.NostrConfig) (*serviceSigner, error) {
+func (l *signerLedger) open(_ context.Context, cfg config.NostrConfig, _ *zap.Logger) (*serviceSigner, error) {
 	if l.failOpen != nil {
 		return nil, l.failOpen
 	}
@@ -199,46 +202,43 @@ func TestDisablingTheSidecarClosesItsSigner(t *testing.T) {
 }
 
 func TestOpenServiceSignerRequiresAServiceIdentity(t *testing.T) {
-	_, err := openServiceSigner(t.Context(), config.Defaults().Nostr)
+	_, err := openServiceSigner(t.Context(), config.Defaults().Nostr, zap.NewNop())
 	if !errors.Is(err, servicesigner.ErrNotConfigured) {
 		t.Fatalf("openServiceSigner() error = %v, want ErrNotConfigured", err)
 	}
 }
 
-func TestSameServiceSigner(t *testing.T) {
-	base := enabledConfig("aa").Nostr
-	cases := map[string]struct {
-		change func(*config.NostrConfig)
-		same   bool
-	}{
-		"identical":         {func(*config.NostrConfig) {}, true},
-		"pubkey case":       {func(c *config.NostrConfig) { c.PublicKey = "AA" }, true},
-		"pubkey":            {func(c *config.NostrConfig) { c.PublicKey = "bb" }, false},
-		"bunker":            {func(c *config.NostrConfig) { c.Signer.BunkerURI = "bunker://other" }, false},
-		"timeout":           {func(c *config.NostrConfig) { c.Signer.Timeout = 1 }, false},
-		"method":            {func(c *config.NostrConfig) { c.Signer.Method = config.NostrSignerNIP55L }, false},
-		"unrelated sidecar": {func(c *config.NostrConfig) { c.Sidecar.ListenAddr = "127.0.0.1:1" }, true},
+// A client key file rotated under an unchanged path is a new signer: the
+// reload opens a session with the new key instead of keeping the old one.
+func TestReloadReopensTheSignerWhenTheClientKeyFileRotates(t *testing.T) {
+	ledger := &signerLedger{}
+	supervisor := newTestSupervisor(t, ledger, nil)
+	path := filepath.Join(t.TempDir(), "client.key")
+	write := func(key string) {
+		if err := os.WriteFile(path, []byte(key+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			other := base
-			tc.change(&other)
-			if got := sameServiceSigner(base, other); got != tc.same {
-				t.Fatalf("sameServiceSigner() = %v, want %v", got, tc.same)
-			}
-		})
+	cfg := enabledConfig("aa")
+	cfg.Nostr.Signer.ClientSecretKeyFile = path
+	write(strings.Repeat("1", 64))
+	for range 2 {
+		if err := supervisor.replace(cfg); err != nil {
+			t.Fatalf("replace: %v", err)
+		}
 	}
-	local := config.Defaults().Nostr
-	local.PrivateKey = "11"
-	padded := local
-	padded.PrivateKey = " 11\n"
-	if !sameServiceSigner(local, padded) {
-		t.Fatal("a trimmed-equal private key is the same local signer")
+	if len(ledger.opened) != 1 {
+		t.Fatalf("opened %d signers for an unchanged key file, want 1", len(ledger.opened))
 	}
-	rotated := local
-	rotated.PrivateKey = "22"
-	if sameServiceSigner(local, rotated) {
-		t.Fatal("a rotated private key is a different signer")
+	write(strings.Repeat("2", 64))
+	if err := supervisor.replace(cfg); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if len(ledger.opened) != 2 || ledger.opened[0].closes != 1 {
+		t.Fatalf("rotated key file: opened %d signers, old closed %d times; want 2 and 1", len(ledger.opened), ledger.opened[0].closes)
+	}
+	if err := supervisor.shutdown(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -247,11 +247,11 @@ func TestOpenServiceSignerAbortsWhenTheProcessStops(t *testing.T) {
 	cfg.PrivateKey = nostr.Generate().Hex()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if signer, err := openServiceSigner(ctx, cfg); !errors.Is(err, context.Canceled) {
+	if signer, err := openServiceSigner(ctx, cfg, zap.NewNop()); !errors.Is(err, context.Canceled) {
 		signer.Close()
 		t.Fatalf("openServiceSigner() error = %v, want context.Canceled", err)
 	}
-	signer, err := openServiceSigner(t.Context(), cfg)
+	signer, err := openServiceSigner(t.Context(), cfg, zap.NewNop())
 	if err != nil {
 		t.Fatalf("openServiceSigner(): %v", err)
 	}

@@ -10,7 +10,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"fiatjaf.com/nostr"
@@ -38,7 +37,7 @@ type sidecarFactory func(context.Context, config.NostrConfig, nostr.Signer, *zap
 
 // signerOpener opens the service signer nostr.signer configures; cancelling
 // ctx aborts a pending open but not the opened session.
-type signerOpener func(context.Context, config.NostrConfig) (*serviceSigner, error)
+type signerOpener func(context.Context, config.NostrConfig, *zap.Logger) (*serviceSigner, error)
 
 // serviceSigner is an open service identity and the config it was opened
 // from. Exactly one owner closes it.
@@ -59,10 +58,12 @@ func (s *serviceSigner) Close() {
 // sidecar always runs as the service identity (NIP-11 pubkey, write and read
 // admission, config acknowledgements), so an unconfigured signer is an
 // error. NIP-46 requests pass the process-wide outbound admission controller.
-func openServiceSigner(ctx context.Context, cfg config.NostrConfig) (*serviceSigner, error) {
+func openServiceSigner(ctx context.Context, cfg config.NostrConfig, logger *zap.Logger) (*serviceSigner, error) {
 	lifetime, cancel := context.WithCancel(context.Background())
 	abortOpen := context.AfterFunc(ctx, cancel)
-	keyer, err := servicesigner.Open(lifetime, cfg, servicesigner.Options{})
+	keyer, err := servicesigner.Open(lifetime, cfg, servicesigner.Options{
+		OnAuthURL: func(authURL string) { logger.Warn(servicesigner.AuthURLMessage, zap.String("url", authURL)) },
+	})
 	if !abortOpen() && err == nil {
 		err = ctx.Err()
 		closeKeyer(keyer)
@@ -84,16 +85,6 @@ func closeKeyer(keyer nostr.Keyer) {
 	if closer, ok := keyer.(io.Closer); ok {
 		_ = closer.Close()
 	}
-}
-
-// sameServiceSigner reports whether a and b configure the same service
-// signer, so a reload can keep the open session.
-// TODO(bahia-cd0wr.3.7): replace with servicesigner.SameSigner
-func sameServiceSigner(a, b config.NostrConfig) bool {
-	return a.ServiceSignerMethod() == b.ServiceSignerMethod() &&
-		strings.TrimSpace(a.PrivateKey) == strings.TrimSpace(b.PrivateKey) &&
-		strings.EqualFold(a.PublicKey, b.PublicKey) &&
-		a.Signer == b.Signer
 }
 
 type activeRuntime struct {
@@ -121,9 +112,15 @@ func (s *runtimeSupervisor) prepare(cfg *config.Config) (sidecarRuntime, *servic
 	if !cfg.Nostr.Sidecar.Enabled {
 		return nil, nil, nil
 	}
+	// Compare and open the client key the key file holds now, so a rotated
+	// key file opens a new session instead of keeping the old key.
+	signerCfg, err := servicesigner.ResolveClientKeyFile(cfg.Nostr)
+	if err != nil {
+		return nil, nil, err
+	}
 	signer := s.signer
-	if signer == nil || !sameServiceSigner(signer.cfg, cfg.Nostr) {
-		opened, err := s.openSigner(s.rootCtx, cfg.Nostr)
+	if signer == nil || !servicesigner.SameSigner(signer.cfg, signerCfg) {
+		opened, err := s.openSigner(s.rootCtx, signerCfg, s.logger)
 		if err != nil {
 			return nil, nil, err
 		}

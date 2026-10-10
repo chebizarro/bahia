@@ -41,7 +41,7 @@ func TestReloadWithRealSidecarSharesTheEventStore(t *testing.T) {
 		t.Fatalf("shutdown: %v", err)
 	}
 	// Every handle is closed now, so a fresh open takes the file lock.
-	fresh, err := openServiceSigner(t.Context(), cfg.Nostr)
+	fresh, err := openServiceSigner(t.Context(), cfg.Nostr, zap.NewNop())
 	if err != nil {
 		t.Fatalf("open service signer: %v", err)
 	}
