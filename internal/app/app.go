@@ -1591,10 +1591,11 @@ func New(cfg *config.Config) (*App, error) {
 
 	// create OCKManager and ConfidentialEncryptor.
 	var confidentialEncryptor *controlplane.ConfidentialEncryptor
+	var ockManager *controlplane.OCKManager
 	if controlPlaneSigner != nil && servicePubkey != "" {
 		ockHistory := nostrAdapter.NewProjectorOCKEnvelopeHistory(projectionHistory)
 		ockMemberSource := controlplane.NewTrustSetMemberSource(trustSet, orgMemberRepo)
-		ockManager := controlplane.NewOCKManager(controlplane.OCKManagerConfig{
+		ockManager = controlplane.NewOCKManager(controlplane.OCKManagerConfig{
 			Signer:        controlPlaneSigner,
 			ServicePubkey: servicePubkey,
 			Publisher:     nostrProjector, // implements OCKEnvelopePublisher via structural typing
@@ -1823,7 +1824,7 @@ func New(cfg *config.Config) (*App, error) {
 	// history is up to date from all relays before scanning.
 	if nostrProjector != nil && confidentialEncryptor != nil {
 		ockMigrator := nostrAdapter.NewLegacyOCKMigrator(
-			nostrProjector, confidentialEncryptor, legacyO1Encryptor, logger,
+			nostrProjector, confidentialEncryptor, legacyO1Encryptor, ockManager, logger,
 		)
 		nostrProjector.AddPostWarmStartHook(ockMigrator.Run)
 		logger.Info("legacy OCK migrator registered as post-warm-start hook")

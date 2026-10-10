@@ -5,57 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	gonostr "fiatjaf.com/nostr"
-	"fiatjaf.com/nostr/nip44"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 )
-
-// Read-only decryption for records NIP-44 self-encrypted to the service
-// pubkey with the raw private key. Current publishes encrypt with the
-// per-org content key (OCK) scheme via ConfidentialStateEncryptor; this
-// path exists for records still stored in the self-encrypted form.
-//
-// Readers:
-//   - LegacyOCKMigrator (legacy_ock_migration.go) re-publishes
-//     self-encrypted records under the OCK scheme at warm start.
-//   - RelayMemberEventHandler.HydrateTrustSetFromHistory dual-reads
-//     org/member/invite records (OCK format first, old-format fallback).
-//   - Relay recovery tooling can decode self-encrypted history with it.
-//
-// Self-encrypted secret/notification records on relays are audit/backup
-// copies — the daemon's source of truth for them is the database — and no
-// relay read-back path decodes them.
-//
-// The function and its call sites can be removed once no self-encrypted
-// records remain in any deployment's local event store or relay history
-// (bahia-irsry.65).
-
-// selfDecryptNIP44Legacy decrypts content that is NIP-44 self-encrypted
-// to the service's own pubkey using the raw private key. Read-only path.
-func (p *Projector) selfDecryptNIP44Legacy(content string) (string, error) {
-	if p.privateKey == "" {
-		return "", fmt.Errorf("no private key configured for legacy NIP-44 self-decryption")
-	}
-
-	secret, err := gonostr.SecretKeyFromHex(p.privateKey)
-	if err != nil {
-		return "", fmt.Errorf("parse private key: %w", err)
-	}
-	servicePubKey := secret.Public()
-
-	conversationKey, err := nip44.GenerateConversationKey(servicePubKey, secret)
-	if err != nil {
-		return "", fmt.Errorf("generate conversation key: %w", err)
-	}
-
-	plaintext, err := nip44.Decrypt(content, conversationKey)
-	if err != nil {
-		return "", fmt.Errorf("NIP-44 decrypt: %w", err)
-	}
-
-	return plaintext, nil
-}
 
 // PublishKeyEnvelope publishes a key-envelope record through the shared
 // cp-state signing/outbox pipeline. Implements controlplane.OCKEnvelopePublisher

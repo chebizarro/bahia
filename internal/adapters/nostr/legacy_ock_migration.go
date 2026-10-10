@@ -32,7 +32,7 @@ type legacyDecryptMethod int
 
 const (
 	legacyDecryptO1 legacyDecryptMethod = iota // sha256-of-private-key XChaCha AEAD (org_state_crypto.go)
-	legacyDecryptN1                            // NIP-44 self-encryption to service pubkey (confidential_state.go)
+	legacyDecryptN1                            // NIP-44 self-encryption to service pubkey
 )
 
 type legacyOCKTopic struct {
@@ -49,6 +49,7 @@ type LegacyOCKMigrator struct {
 	projector *Projector
 	encryptor ConfidentialStateEncryptor
 	legacyO1  LegacyOrgStateDecryptor
+	legacyN1  LegacyN1Decryptor
 	logger    *zap.Logger
 
 	mu              sync.Mutex
@@ -57,12 +58,19 @@ type LegacyOCKMigrator struct {
 	migratedRecords map[string]struct{}
 }
 
+// LegacyN1Decryptor is the existing OCK manager service NIP-44 decrypt path.
+// It uses the configured Keyer, so no raw service key is required here.
+type LegacyN1Decryptor interface {
+	ServiceDecrypt(ctx context.Context, ciphertext string) (string, error)
+}
+
 // NewLegacyOCKMigrator creates a migrator. Missing dependencies are reported
 // as an incomplete attempt by RunChecked.
 func NewLegacyOCKMigrator(
 	projector *Projector,
 	encryptor ConfidentialStateEncryptor,
 	legacyO1 LegacyOrgStateDecryptor,
+	legacyN1 LegacyN1Decryptor,
 	logger *zap.Logger,
 ) *LegacyOCKMigrator {
 	if logger == nil {
@@ -72,6 +80,7 @@ func NewLegacyOCKMigrator(
 		projector: projector,
 		encryptor: encryptor,
 		legacyO1:  legacyO1,
+		legacyN1:  legacyN1,
 		logger:    logger.Named("legacy-ock-migration"),
 	}
 }
@@ -227,7 +236,7 @@ func (m *LegacyOCKMigrator) migrateTopic(ctx context.Context, topic string, meta
 			stats.AlreadyCurrent++
 			continue
 		}
-		plaintext, err := m.tryLegacyDecrypt(rec.Content, meta)
+		plaintext, err := m.tryLegacyDecrypt(ctx, rec.Content, meta)
 		if err != nil {
 			fail(rec.ID, fmt.Sprintf("legacy decrypt or format: %v", err))
 			continue
@@ -261,7 +270,7 @@ func (m *LegacyOCKMigrator) migrateTopic(ctx context.Context, topic string, meta
 }
 
 // tryLegacyDecrypt attempts old-format decryption based on the decrypt method.
-func (m *LegacyOCKMigrator) tryLegacyDecrypt(content string, meta legacyOCKTopic) (string, error) {
+func (m *LegacyOCKMigrator) tryLegacyDecrypt(ctx context.Context, content string, meta legacyOCKTopic) (string, error) {
 	switch meta.decryptKind {
 	case legacyDecryptO1:
 		if m.legacyO1 == nil {
@@ -273,7 +282,13 @@ func (m *LegacyOCKMigrator) tryLegacyDecrypt(content string, meta legacyOCKTopic
 		}
 		return string(plaintext), nil
 	case legacyDecryptN1:
-		plaintext, err := m.projector.selfDecryptNIP44Legacy(content)
+		if m.legacyN1 == nil {
+			return "", fmt.Errorf("legacy N1 service decryptor not configured")
+		}
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("legacy N1 decrypt interrupted: %w", err)
+		}
+		plaintext, err := m.legacyN1.ServiceDecrypt(ctx, content)
 		if err != nil {
 			return "", fmt.Errorf("legacy N1 decrypt: %w", err)
 		}

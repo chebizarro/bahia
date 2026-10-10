@@ -157,6 +157,9 @@ material per device** — and keep the `30900` coordinates and store-first reads
 After relay warm-start, the daemon scans the retained, service-authored
 org, member, invite, secret and notification-channel cp-state families and
 re-publishes records still using O1 or N1 encryption under the OCK envelope.
+N1 self-decryption uses the same service Keyer NIP-44 capability as OCK
+service wraps; a denied or unavailable Keyer cannot fall back to raw key
+material. O1 decryption still requires its legacy key provider.
 The checked migration result accounts for each local record and fails if a
 query is truncated, a record cannot be decrypted or re-published, or the
 service identity is unavailable. Failed or canceled checked attempts can be
