@@ -21,7 +21,10 @@ import (
 	"go.uber.org/zap"
 )
 
-var errNotARequest = errors.New("not a management request")
+var (
+	errNotARequest    = errors.New("not a management request")
+	errNotProvisioner = errors.New("management sender is not a Signet provisioner")
+)
 
 // fakeSignet is an in-process Signet: a NIP-46 bunker and its gift-wrapped
 // ContextVM management plane, both served over a RelayPool.
@@ -123,6 +126,9 @@ func (s *fakeSignet) answerManagement(gift nostr.Event) (nostr.Event, error) {
 	if request.Method == "" {
 		// One of its own replies: the provisioner is the bunker's user key.
 		return nostr.Event{}, errNotARequest
+	}
+	if !seal.CheckID() || !seal.VerifySignature() || seal.PubKey != s.key.Public() {
+		return nostr.Event{}, errNotProvisioner
 	}
 	s.mu.Lock()
 	s.methods = append(s.methods, request.Method)
@@ -230,10 +236,10 @@ func TestSignetManagementRunsOnRelayPoolWithRecipientAuth(t *testing.T) {
 	}
 }
 
-// A fenced service key cannot sign the management pool's NIP-42 AUTH or
-// management seals. Epoch mode uses its dedicated owner client key for both,
-// and the reply subscription authenticates as that same gift-wrap recipient.
-func TestSignetEpochManagementUsesDedicatedClientForRecipientAuth(t *testing.T) {
+// An epoch lease owner is not a Signet provisioner. It has only its NIP-46
+// signing connection; a separate provisioner client owns management and its
+// AUTH-gated reply subscription.
+func TestSignetEpochOwnerCannotManageAndProvisionerClientStillCan(t *testing.T) {
 	relay := khatru.NewRelay()
 	store := &slicestore.SliceStore{}
 	if err := store.Init(); err != nil {
@@ -242,20 +248,18 @@ func TestSignetEpochManagementUsesDedicatedClientForRecipientAuth(t *testing.T) 
 	t.Cleanup(store.Close)
 	relay.UseEventstore(store, 500)
 	var authMu sync.Mutex
-	var refused int
 	var giftReaders []string
 	relay.OnRequest = func(ctx context.Context, filter nostr.Filter) (bool, string) {
 		if !slices.Contains(filter.Kinds, signetKindGiftWrap) {
 			return false, ""
 		}
 		authed, ok := khatru.GetAuthed(ctx)
-		authMu.Lock()
-		defer authMu.Unlock()
 		if !ok || !slices.Equal(filter.Tags["p"], []string{authed.Hex()}) {
-			refused++
 			return true, "auth-required: gift wraps are served to their recipient"
 		}
+		authMu.Lock()
 		giftReaders = append(giftReaders, authed.Hex())
+		authMu.Unlock()
 		return false, ""
 	}
 	server := httptest.NewServer(relay)
@@ -264,8 +268,12 @@ func TestSignetEpochManagementUsesDedicatedClientForRecipientAuth(t *testing.T) 
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	signet := startFakeSignet(t, ctx, relayURL)
+	provisionerSignet := startFakeSignet(t, ctx, relayURL)
+	if signet.key.Public() == provisionerSignet.key.Public() {
+		t.Fatal("service and provisioner identities must differ")
+	}
 	owner := nostr.Generate()
-	client, err := NewClient(Config{
+	ownerClient, err := NewClient(Config{
 		BunkerURI: signet.bunkerURI(relayURL), ClientSecretKey: owner.Hex(), RequireReal: true,
 		OutboundAdmission: generousTestAdmission(), ExpectedServicePubkey: signet.key.Public().Hex(),
 		EpochLease: func(context.Context) (WriterLease, error) {
@@ -275,25 +283,87 @@ func TestSignetEpochManagementUsesDedicatedClientForRecipientAuth(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = client.Close() })
-	if err := client.Connect(ctx); err != nil {
+	t.Cleanup(func() { _ = ownerClient.Close() })
+	if err := ownerClient.Connect(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.RevokeAgent(ctx, nostr.Generate().Public().Hex()); err != nil {
-		t.Fatal(err)
+	if ownerClient.management != nil || ownerClient.newManagementPool(nil) != nil {
+		t.Fatal("lease owner opened provisioner management pool")
 	}
-	if got := signet.seenMethods(); len(got) != 1 || got[0] != "agent/revoke" {
-		t.Fatalf("Signet saw %v", got)
+	if err := ownerClient.RevokeAgent(ctx, nostr.Generate().Public().Hex()); !errors.Is(err, ErrEpochManagementRequiresProvisioner) {
+		t.Fatalf("owner management error = %v, want provisioner requirement", err)
+	}
+	if len(signet.seenMethods()) != 0 {
+		t.Fatalf("owner reached management: %v", signet.seenMethods())
 	}
 	if got := signet.seenSignEvents(); got != 0 {
-		t.Fatalf("fenced bunker received %d legacy sign_event requests", got)
+		t.Fatalf("owner used %d legacy sign_event requests", got)
+	}
+
+	provisioner, err := NewClient(Config{BunkerURI: provisionerSignet.bunkerURI(relayURL), ClientSecretKey: nostr.Generate().Hex(), RequireReal: true, OutboundAdmission: generousTestAdmission()}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = provisioner.Close() })
+	if err := provisioner.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := provisioner.RevokeAgent(ctx, nostr.Generate().Public().Hex()); err != nil {
+		t.Fatal(err)
+	}
+	if got := provisionerSignet.seenMethods(); len(got) != 1 || got[0] != "agent/revoke" {
+		t.Fatalf("provisioner management methods = %v", got)
 	}
 	authMu.Lock()
 	defer authMu.Unlock()
-	if refused == 0 {
-		t.Fatal("relay never challenged unauthenticated management REQ")
+	if !slices.Contains(giftReaders, provisionerSignet.key.Public().Hex()) {
+		t.Fatalf("management readers = %v, want provisioner", giftReaders)
 	}
-	if !slices.Contains(giftReaders, owner.Public().Hex()) {
-		t.Fatalf("gift-wrap readers = %v, want owner %s", giftReaders, owner.Public().Hex())
+	if slices.Contains(giftReaders, owner.Public().Hex()) {
+		t.Fatalf("owner authenticated to management: %v", giftReaders)
+	}
+}
+
+func TestSignetManagementPolicyRejectsOwnerSeal(t *testing.T) {
+	signetKey := nostr.Generate()
+	signet := &fakeSignet{key: signetKey}
+	owner := nostr.Generate()
+	payload, err := json.Marshal(signetJSONRPCRequest{JSONRPC: "2.0", ID: "owner-attempt", Method: "agent/revoke"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rumor := nostr.Event{Kind: nostr.KindDirectMessage, Content: string(payload), CreatedAt: nostr.Now(), PubKey: owner.Public(), Tags: nostr.Tags{{"p", signetKey.Public().Hex()}}}
+	rumor.ID = rumor.GetID()
+	key, err := nip44.GenerateConversationKey(signetKey.Public(), owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealedRumor, err := nip44.Encrypt(rumor.String(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seal := nostr.Event{Kind: nostr.KindSeal, Content: sealedRumor, CreatedAt: nostr.Now(), Tags: nostr.Tags{}}
+	if err := seal.Sign(owner); err != nil {
+		t.Fatal(err)
+	}
+	nonce := nostr.Generate()
+	giftKey, err := nip44.GenerateConversationKey(signetKey.Public(), nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	giftContent, err := nip44.Encrypt(seal.String(), giftKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gift := nostr.Event{Kind: signetKindGiftWrap, Content: giftContent, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"p", signetKey.Public().Hex()}}}
+	if err := gift.Sign(nonce); err != nil {
+		t.Fatal(err)
+	}
+	_, err = signet.answerManagement(gift)
+	if !errors.Is(err, errNotProvisioner) {
+		t.Fatalf("owner management error = %v, want provisioner rejection", err)
+	}
+	if len(signet.seenMethods()) != 0 {
+		t.Fatalf("unauthorized method recorded: %v", signet.seenMethods())
 	}
 }

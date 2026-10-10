@@ -39,6 +39,9 @@ var (
 	ErrInvalidEvent = errors.New("nostr event is nil")
 	// ErrAuthoritativeAgentListingUnsupported prevents volatile cache state from being presented as Signet truth.
 	ErrAuthoritativeAgentListingUnsupported = errors.New("authoritative Signet agent listing is unsupported")
+	// ErrEpochManagementRequiresProvisioner keeps a fenced lease owner from being
+	// treated as a Signet management provisioner.
+	ErrEpochManagementRequiresProvisioner = errors.New("epoch signer client cannot perform Signet provisioner management")
 )
 
 const (
@@ -73,9 +76,10 @@ const (
 //   - Signet's ContextVM management plane (NIP-59 gift-wrapped JSON-RPC,
 //     callManagement) is a Bahia REQ/EVENT exchange and runs on the shared
 //     RelayPool: supervised per-relay REQ, CLOSED classification and NIP-42.
-//     Its pool lives as long as one bunker connection. Legacy mode
-//     authenticates as the bunker provisioner; epoch mode authenticates as
-//     the dedicated client. Replies target that same authenticated key.
+//     Its pool lives as long as one bunker connection and authenticates as
+//     the provisioner through that bunker, the identity the gift-wrapped
+//     replies are addressed to. Epoch signer clients do not open a management
+//     pool; they are lease owners, not provisioners.
 type Client struct {
 	bunkerURI         string
 	relays            []string
@@ -241,7 +245,9 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	c.setConnection(bunker, connectCtx, cancelConnect, true)
-	c.replaceManagementPool(c.newManagementPool(bunker))
+	if c.epochSigner == nil {
+		c.replaceManagementPool(c.newManagementPool(bunker))
+	}
 	installed = true
 
 	c.logger.Info("connected to Signet bunker")
@@ -330,27 +336,15 @@ func signetManagementRelays(config Config) []string {
 	return append([]string(nil), config.Relays...)
 }
 
-// newManagementPool returns the management-plane pool for one bunker
-// connection. Inbox relays serve kind-1059 replies only to the authenticated
-// recipient. Legacy management authenticates as the bunker key; fenced
-// management authenticates as its dedicated NIP-46 client key, which is also
-// the recipient of its management replies.
+// newManagementPool returns the provisioner management pool for one bunker
+// connection. Fenced writer-lease owners never receive this pool.
 func (c *Client) newManagementPool(bunker *nostrout.Bunker) *nostrpool.RelayPool {
-	if len(c.managementRelays) == 0 {
+	if c.epochSigner != nil || len(c.managementRelays) == 0 {
 		return nil
 	}
 	logger := nostrpool.NewSlogZapLogger(c.logger.With("relay_pool", "signet-management"))
-	authSign := bunker.SignEvent
-	if c.epochSigner != nil {
-		authSign = func(ctx context.Context, event *nostr.Event) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			return signEventWithKey(event, c.clientSecretKey)
-		}
-	}
 	opts := []nostrpool.RelayPoolOption{
-		nostrpool.WithAuthSignFunc(authSign),
+		nostrpool.WithAuthSignFunc(bunker.SignEvent),
 		nostrpool.WithOutboundAdmission(c.admission),
 	}
 	if c.closedRetryBudget > 0 {
@@ -989,55 +983,10 @@ func consumeSignetManagementResponse(requestID string, resp signetJSONRPCRespons
 	return true, nil
 }
 
-type signetManagementIdentity struct {
-	pubkey  nostr.PubKey
-	encrypt func(context.Context, nostr.PubKey, string) (string, error)
-	decrypt func(context.Context, nostr.PubKey, string) (string, error)
-	sign    func(context.Context, *nostr.Event) error
-}
-
-func (c *Client) managementIdentity(ctx context.Context, bunker *nostrout.Bunker) (signetManagementIdentity, error) {
-	if c.epochSigner == nil {
-		pubkey, err := bunker.GetPublicKey(ctx)
-		if err != nil {
-			return signetManagementIdentity{}, fmt.Errorf("get Signet provisioner pubkey: %w", err)
-		}
-		return signetManagementIdentity{pubkey: pubkey, encrypt: bunker.NIP44Encrypt, decrypt: bunker.NIP44Decrypt, sign: bunker.SignEvent}, nil
-	}
-	secret, err := nostrutil.SecretKeyFromHex(c.clientSecretKey)
-	if err != nil {
-		return signetManagementIdentity{}, fmt.Errorf("decode dedicated Signet client key: %w", err)
-	}
-	encrypt := func(ctx context.Context, peer nostr.PubKey, plaintext string) (string, error) {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		key, err := nip44.GenerateConversationKey(peer, secret)
-		if err != nil {
-			return "", err
-		}
-		return nip44.Encrypt(plaintext, key)
-	}
-	decrypt := func(ctx context.Context, peer nostr.PubKey, ciphertext string) (string, error) {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		key, err := nip44.GenerateConversationKey(peer, secret)
-		if err != nil {
-			return "", err
-		}
-		return nip44.Decrypt(ciphertext, key)
-	}
-	sign := func(ctx context.Context, event *nostr.Event) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return signEventWithKey(event, c.clientSecretKey)
-	}
-	return signetManagementIdentity{pubkey: secret.Public(), encrypt: encrypt, decrypt: decrypt, sign: sign}, nil
-}
-
 func (c *Client) callManagement(ctx context.Context, method string, params map[string]interface{}, out interface{}) error {
+	if c.epochSigner != nil {
+		return ErrEpochManagementRequiresProvisioner
+	}
 	bunkerPubkey, _, _, err := ParseBunkerURI(c.bunkerURI)
 	if err != nil {
 		return err
@@ -1056,11 +1005,10 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 	if bunker == nil || management == nil {
 		return ErrNotConnected
 	}
-	identity, err := c.managementIdentity(ctx, bunker)
+	provisionerPK, err := bunker.GetPublicKey(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("get Signet provisioner pubkey: %w", err)
 	}
-	provisionerPK := identity.pubkey
 
 	requestID := nostrutil.GeneratePrivateKeyHex()[:16]
 	body, err := json.Marshal(signetJSONRPCRequest{
@@ -1085,7 +1033,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		PubKey:    provisionerPK,
 	}
 	rumor.ID = rumor.GetID()
-	rumorCiphertext, err := identity.encrypt(ctx, bunkerPK, rumor.String())
+	rumorCiphertext, err := bunker.NIP44Encrypt(ctx, bunkerPK, rumor.String())
 	if err != nil {
 		return fmt.Errorf("encrypt Signet management rumor: %w", err)
 	}
@@ -1095,7 +1043,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		CreatedAt: nostr.Now(),
 		Tags:      nostr.Tags{},
 	}
-	if err := identity.sign(ctx, &seal); err != nil {
+	if err := bunker.SignEvent(ctx, &seal); err != nil {
 		return fmt.Errorf("sign Signet management seal: %w", err)
 	}
 	nonceKey := nostr.Generate()
@@ -1153,7 +1101,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 	}()
 
 	for relayEvent := range responses.Events {
-		sealJSON, err := identity.decrypt(ctx, relayEvent.PubKey, relayEvent.Content)
+		sealJSON, err := bunker.NIP44Decrypt(ctx, relayEvent.PubKey, relayEvent.Content)
 		if err != nil {
 			continue
 		}
@@ -1162,7 +1110,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 			!responseSeal.VerifySignature() || responseSeal.PubKey != bunkerPK {
 			continue
 		}
-		rumorJSON, err := identity.decrypt(ctx, responseSeal.PubKey, responseSeal.Content)
+		rumorJSON, err := bunker.NIP44Decrypt(ctx, responseSeal.PubKey, responseSeal.Content)
 		if err != nil {
 			continue
 		}
