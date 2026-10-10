@@ -302,3 +302,74 @@ func TestLiveBunkerURIValidation(t *testing.T) {
 		})
 	}
 }
+
+// withoutConnectSecret is rawURI with its secret parameter removed, as an
+// operator leaves it once the client key is paired.
+func withoutConnectSecret(t *testing.T, rawURI string) string {
+	t.Helper()
+	u, err := url.Parse(rawURI)
+	require.NoError(t, err)
+	query := u.Query()
+	require.NotEmpty(t, query.Get("secret"), "fixture URI must carry a connect secret")
+	query.Del("secret")
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+// openLiveRefused opens a signer the bunker must refuse at connect and
+// returns the error text, failing if the refusal took a timeout instead of an
+// answer. The text is never echoed: it is matched only against fixed phrases.
+func openLiveRefused(t *testing.T, ctx context.Context, bunkerURI, clientSecretHex, servicePubkey string) string {
+	t.Helper()
+	started := time.Now()
+	cfg := liveNostrConfig(bunkerURI, clientSecretHex, servicePubkey)
+	signer, err := Open(ctx, cfg, Options{Admission: liveAdmission()})
+	if err == nil {
+		closeSigner(signer)
+		t.Fatal("the bunker accepted a connect it must refuse")
+	}
+	require.Less(t, time.Since(started), cfg.Signer.Timeout/2, "a refused connect must be answered, not timed out")
+	return err.Error()
+}
+
+// TestLiveNIP46Reconnect runs in a fresh process after the writer paired in
+// TestLiveNIP46ServiceSigner, so its first open is a restart and its later
+// opens are reloads of the same client key.
+func TestLiveNIP46Reconnect(t *testing.T) {
+	fixture := loadLiveFixture(t, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	sign := func(signer nostr.Keyer, content string) {
+		t.Helper()
+		ev := liveEvent(content)
+		require.NoError(t, signer.SignEvent(ctx, &ev))
+		require.Equal(t, fixture.ExpectedServicePubkey, ev.PubKey.Hex())
+		require.True(t, ev.VerifySignature())
+	}
+
+	// Restart: this process has not connected yet, so Bahia sends the URI's
+	// secret, which this same client key already spent when it paired. The
+	// bunker accepts a paired client's own former pairing secret.
+	restarted := openLive(t, ctx, fixture.WriterBunkerURI, fixture.WriterSecretKeyHex, fixture.ExpectedServicePubkey)
+	sign(restarted, "after restart")
+
+	// Reload: a second session of the same client in the same process omits
+	// the secret it already used and reconnects on the pairing alone.
+	reloaded := openLive(t, ctx, fixture.WriterBunkerURI, fixture.WriterSecretKeyHex, fixture.ExpectedServicePubkey)
+	sign(reloaded, "after reload")
+	sign(restarted, "first session still open")
+
+	// An operator who removed the spent secret from the URI.
+	bare := withoutConnectSecret(t, fixture.WriterBunkerURI)
+	sign(openLive(t, ctx, bare, fixture.WriterSecretKeyHex, fixture.ExpectedServicePubkey), "without a secret")
+
+	// A secret spent by another client is refused at once, with guidance.
+	refused := openLiveRefused(t, ctx, fixture.WriterBunkerURI, fixture.DisplacedWriterSecretKeyHex, fixture.ExpectedServicePubkey)
+	require.True(t, strings.Contains(refused, "response error: ") && strings.Contains(refused, "single-use"),
+		"a foreign spent secret must be an explained bunker refusal")
+
+	// A client key that never paired cannot connect without a secret.
+	refused = openLiveRefused(t, ctx, bare, nostr.Generate().Hex(), fixture.ExpectedServicePubkey)
+	require.True(t, strings.Contains(refused, "response error: ") && strings.Contains(refused, "not paired"),
+		"an unpaired client without a secret must be an explained bunker refusal")
+}

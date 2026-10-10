@@ -75,7 +75,13 @@ nostr:
    service key and should not be shared with any other client.
 3. Pair: put the bunker's `bunker://` URI (with its connect secret, if any) in
    `nostr.signer.bunker_uri`. If the bunker asks for out-of-band approval,
-   Bahia logs the authorization URL.
+   Bahia logs the authorization URL. The secret is single-use: Bahia does not
+   resend it within a process, but does after a restart (and the second of
+   `bahia-server`/`bahia-relay` to start sends it too). Signet accepts its
+   own paired client's spent secret; with a bunker that ignores a reused
+   secret (startup then times out with a hint), remove `secret` from the URI
+   once the client key is paired. See
+   [Connect secrets](../architecture/service-signer.md#connect-secrets).
 4. Configure the bunker to let only that client key use the service identity.
    How is bunker-specific.
 5. Remove `nostr.private_key` from the deployment and start Bahia. Startup
@@ -128,7 +134,8 @@ release you deploy.
    From then on Signet accepts `sign_event` and NIP-44 for this identity only
    from that client; every other client, including a former writer, is
    refused.
-3. If the original connect secret was used, mint another with
+3. If the original connect secret was used by another client, mint another
+   with
    `signetctl -c signet.conf reissue-connect bahia-service --out <0600-file>`
    and put it in the URI's `secret` parameter.
 4. Allow the methods Bahia uses in the identity's policy: `connect`,

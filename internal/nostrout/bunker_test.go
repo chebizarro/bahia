@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -25,6 +26,11 @@ type testBunkerOptions struct {
 	// AuthURL, when set, is sent as an auth_url challenge before each connect
 	// answer.
 	AuthURL string
+	// Secret, when set, makes the bunker follow NIP-46 strictly: the secret
+	// pairs the first client that sends it and is then spent; a connect
+	// that reuses it is ignored (no answer); a paired client may reconnect
+	// without a secret; anything else is refused.
+	Secret string
 }
 
 // testBunker is a loopback NIP-46 bunker that signs as one service key,
@@ -42,6 +48,10 @@ type testBunker struct {
 	connects int
 	requests int
 	open     int
+	// connectParams holds every connect request's params, in order.
+	connectParams [][]string
+	paired        map[nostr.PubKey]bool
+	spent         bool
 }
 
 // newTestBunker starts a bunker signing as service. It stops at test cleanup.
@@ -50,7 +60,7 @@ func newTestBunker(t testing.TB, service nostr.SecretKey, opts testBunkerOptions
 	signer := nip46.NewStaticKeySigner(service)
 	var signerMu sync.Mutex
 	relay := khatru.NewRelay()
-	b := &testBunker{Connected: make(chan struct{}, 64), Disconnected: make(chan struct{}, 64)}
+	b := &testBunker{Connected: make(chan struct{}, 64), Disconnected: make(chan struct{}, 64), paired: map[nostr.PubKey]bool{}}
 	relay.OnConnect = func(context.Context) {
 		b.mu.Lock()
 		b.open++
@@ -101,7 +111,25 @@ func newTestBunker(t testing.TB, service nostr.SecretKey, opts testBunkerOptions
 		}
 		b.mu.Lock()
 		b.connects++
+		b.connectParams = append(b.connectParams, req.Params)
 		b.mu.Unlock()
+		if opts.Secret != "" {
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			switch {
+			case len(req.Params) > 1 && req.Params[1] == opts.Secret && !b.spent:
+				b.spent = true
+				b.paired[evt.PubKey] = true
+				reply(nip46.Response{ID: req.ID, Result: "ack"})
+			case len(req.Params) > 1 && req.Params[1] == opts.Secret:
+				// NIP-46: ignore new attempts with an old secret.
+			case len(req.Params) == 1 && b.paired[evt.PubKey]:
+				reply(nip46.Response{ID: req.ID, Result: "ack"})
+			default:
+				reply(nip46.Response{ID: req.ID, Error: "client not paired"})
+			}
+			return
+		}
 		if opts.AuthURL != "" {
 			reply(nip46.Response{ID: req.ID, Result: "auth_url", Error: opts.AuthURL})
 		}
@@ -114,7 +142,24 @@ func newTestBunker(t testing.TB, service nostr.SecretKey, opts testBunkerOptions
 	server := httptest.NewServer(relay)
 	t.Cleanup(server.Close)
 	b.uri = "bunker://" + service.Public().Hex() + "?relay=ws" + strings.TrimPrefix(server.URL, "http")
+	if opts.Secret != "" {
+		b.uri += "&secret=" + opts.Secret
+	}
 	return b
+}
+
+// ConnectParams returns the params of every connect request received.
+func (b *testBunker) ConnectParams() [][]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([][]string(nil), b.connectParams...)
+}
+
+// Unpair forgets client's pairing, as a bunker operator revoking it would.
+func (b *testBunker) Unpair(client nostr.PubKey) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.paired, client)
 }
 
 // Connects is the number of connect requests received.
@@ -217,4 +262,74 @@ func TestConnectBunkerSendsNothingWithoutAdmission(t *testing.T) {
 	if n := bunker.Requests(); n != 0 {
 		t.Fatalf("bunker received %d requests under the kill switch", n)
 	}
+}
+
+// A reload that reopens the signer reconnects the same client key. NIP-46
+// connect secrets are single-use and a strict bunker ignores a reused one, so
+// the second connect in a process omits it; a different client key still
+// sends it.
+func TestConnectBunkerReconnectOmitsTheSecretItAlreadyUsed(t *testing.T) {
+	unbounded := generousAdmission()
+	bunker := newTestBunker(t, nostr.Generate(), testBunkerOptions{Secret: "pairing-secret"})
+	client := nostr.Generate()
+	host := strings.TrimPrefix(strings.SplitN(bunker.uri, "?", 2)[0], "bunker://")
+	for range 2 {
+		session, endSession := context.WithCancel(context.Background())
+		if _, err := ConnectBunker(session, unbounded, client, bunker.uri, nil, nil); err != nil {
+			t.Fatalf("ConnectBunker: %v", err)
+		}
+		endSession()
+	}
+	got := bunker.ConnectParams()
+	want := [][]string{{host, "pairing-secret"}, {host}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("connect params = %q, want %q", got, want)
+	}
+
+	// The record is per client key: another client still offers the secret,
+	// which this bunker, having spent it, ignores until the deadline.
+	other, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if _, err := ConnectBunker(other, unbounded, nostr.Generate(), bunker.uri, nil, nil); err == nil {
+		t.Fatal("a second client paired with a spent secret")
+	}
+	if got := bunker.ConnectParams(); len(got) != 3 || len(got[2]) != 2 {
+		t.Fatalf("connect params = %q, want the other client to send the secret", got)
+	}
+}
+
+// Refusals of connect name what the operator has to do about the pairing.
+func TestConnectBunkerExplainsRefusedPairings(t *testing.T) {
+	unbounded := generousAdmission()
+	strict := newTestBunker(t, nostr.Generate(), testBunkerOptions{Secret: "pairing-secret"})
+	client := nostr.Generate()
+	session, endSession := context.WithCancel(context.Background())
+	defer endSession()
+	if _, err := ConnectBunker(session, unbounded, client, strict.uri, nil, nil); err != nil {
+		t.Fatalf("pairing connect: %v", err)
+	}
+	strict.Unpair(client.Public())
+	_, err := ConnectBunker(session, unbounded, client, strict.uri, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "client not paired") || !strings.Contains(err.Error(), "no longer paired: pair it again with a fresh connect secret") {
+		t.Fatalf("reconnect after unpairing: %v", err)
+	}
+
+	unpaired := strings.SplitN(strict.uri, "&secret=", 2)[0]
+	_, err = ConnectBunker(session, unbounded, nostr.Generate(), unpaired, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "not paired: put a fresh connect secret in the bunker URI") {
+		t.Fatalf("connect without a secret: %v", err)
+	}
+
+	refusing := newTestBunker(t, nostr.Generate(), testBunkerOptions{RefuseConnect: true})
+	_, err = ConnectBunker(session, unbounded, nostr.Generate(), refusing.uri+"&secret=other", nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "client not authorized") || !strings.Contains(err.Error(), "single-use") {
+		t.Fatalf("connect with a refused secret: %v", err)
+	}
+}
+
+// generousAdmission leaves the signer lane wide open, so tests that connect
+// repeatedly do not wait on the shared process default's small burst.
+func generousAdmission() *Admission {
+	wide := PurposeBudget{RatePerMinute: 60_000, Burst: 1_000}
+	return New(Config{Aggregate: wide, PurposeBudgets: map[Purpose]PurposeBudget{PurposeSigner: wide}, RelayWire: wide, RelayWirePriority: wide})
 }

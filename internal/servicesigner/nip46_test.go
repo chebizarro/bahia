@@ -299,6 +299,9 @@ func TestOpenNIP46UnreachableBunkerFailsWithinTimeoutWithoutLeakingPairingSecret
 	_, err := Open(t.Context(), cfg, Options{Admission: nostrout.New(nostrout.DefaultConfig())})
 	require.Error(t, err)
 	require.Less(t, time.Since(started), 10*time.Second)
+	// A silent bunker may be ignoring a reused connect secret; the error says
+	// what to do about it.
+	require.ErrorContains(t, err, "remove the secret from nostr.signer.bunker_uri or pair it again with a fresh one")
 	require.NotContains(t, err.Error(), pairing)
 	require.NotContains(t, err.Error(), strings.Repeat("3", 64))
 }

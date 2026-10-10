@@ -109,7 +109,9 @@ func connectBunker(lifetime context.Context, timeout time.Duration, connect func
 	case r := <-done:
 		return r.bunker, r.err
 	case <-timer.C:
-		return nil, fmt.Errorf("no NIP-46 connect acknowledgement within %s", timeout)
+		return nil, fmt.Errorf("no NIP-46 connect acknowledgement within %s: the bunker relays or the bunker did not answer "+
+			"(NIP-46 bunkers may ignore a connect secret that was already used: if this client key was paired before, "+
+			"remove the secret from nostr.signer.bunker_uri or pair it again with a fresh one)", timeout)
 	case <-lifetime.Done():
 		return nil, lifetime.Err()
 	}

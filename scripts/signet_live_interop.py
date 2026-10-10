@@ -17,7 +17,13 @@ opt-in `signetinterop` tests from this (clean) Bahia checkout:
      the new writer signs, NIP-44 encrypts/decrypts (text and binary) and
      signs an SBOM attestation event; the displaced writer still opens but
      every key operation is refused remotely.
-  4. TestLiveAssistantWrappedStartupHistoricalReads: wrapped read-only
+  4. TestLiveNIP46Reconnect, in a new process (a restart): the writer
+     reconnects with the connect secret it already spent, then again in the
+     same process (a reload, which omits the spent secret) and with the
+     secret removed from the URI, and signs each time; a secret spent by
+     another client and an unpaired client without a secret are refused
+     promptly with an explained error rather than a timeout.
+  5. TestLiveAssistantWrappedStartupHistoricalReads: wrapped read-only
      assistant startup through the NIP-46 service signer.
 
 Never accepts an existing identity, relay URL or database. No secret, pairing
@@ -39,6 +45,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 ASSIGNED_TEST = "TestLiveNIP46AssignedWriterSigns"
 SIGNER_TEST = "TestLiveNIP46ServiceSigner"
+RECONNECT_TEST = "TestLiveNIP46Reconnect"
 APP_TEST = "TestLiveAssistantWrappedStartupHistoricalReads"
 SIGNER_PACKAGE = "./internal/servicesigner"
 SIGNER_SOURCE = "nip46_live_integration_test.go"
@@ -325,11 +332,13 @@ def main(argv=None):
                               displaced_bunker_uri=first_uri, displaced_writer_secret_key_hex=displaced_sk, **common)
                 test_env["BAHIA_SIGNET_INTEROP_CONFIG"] = str(fixture)
                 run_go_test(bahia, test_env, SIGNER_PACKAGE, SIGNER_TEST, SIGNER_SOURCE)
+                # Phase 3: the same client keys connect again from a new process.
+                run_go_test(bahia, test_env, SIGNER_PACKAGE, RECONNECT_TEST, SIGNER_SOURCE)
 
-                # Phase 3: wrapped read-only assistant startup through the NIP-46 signer.
+                # Phase 4: wrapped read-only assistant startup through the NIP-46 signer.
                 run_app_test(bahia, test_env, root, service_sk)
                 print(f"PASS: Bahia {bahia_commit} NIP-46 service signer interop against Signet {signet_commit} "
-                      f"({ASSIGNED_TEST}, {SIGNER_TEST}, {APP_TEST}) on a disposable loopback signetd")
+                      f"({ASSIGNED_TEST}, {SIGNER_TEST}, {RECONNECT_TEST}, {APP_TEST}) on a disposable loopback signetd")
         finally:
             for process in reversed(processes):
                 process.terminate()

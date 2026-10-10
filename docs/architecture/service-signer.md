@@ -80,10 +80,39 @@ service signer session is handed across that swap instead of duplicated:
   the running one is untouched. Two sessions overlap until the replaced
   application stops. If both use the same client key (only the bunker URI,
   relays or timeout changed), a bunker that keeps one session per client may
-  refuse one of them during that window. With a new client key, the bunker
+  refuse one of them during that window, and the candidate's `connect` omits
+  a secret the running session already spent (see
+  [Connect secrets](#connect-secrets)). With a new client key, the bunker
   decides which client may sign (Signet: the client last
   `writer-acquire`d). A candidate whose bunker does not answer still costs up
   to `nostr.signer.timeout` before it is rejected.
+
+## Connect secrets
+
+NIP-46 connect secrets are single-use, and a bunker SHOULD ignore a reused
+one. Bahia sends the bunker URI's secret on a client key's first `connect` in
+a process and records (as a hash) that the bunker acknowledged it. A later
+`connect` of the same client key to the same bunker in that process (a
+changed-signer reload that reopens the session) omits the secret and relies
+on the pairing. A restart has no record and sends the secret again, and so
+does whichever of `bahia-server` and `bahia-relay` starts second, since they
+share one client key:
+
+- **Signet** (verified at nostrc `66df646ce`, `signet/src/nip46_server.c`
+  connect handling; unchanged on master at `7c09d1739`) accepts `connect` from
+  a client key it has bound with no secret, or with that client's own former
+  pairing secret (its hash is pinned at pairing). It answers at once with
+  `auth_failed` for a secret that another client spent
+  (`connect_secret mismatch`) and for a client that is not bound and sends
+  no secret.
+- **A bunker that ignores a reused secret** does not answer; opening fails
+  after `nostr.signer.timeout` with an error saying to remove the spent secret
+  from `nostr.signer.bunker_uri` or pair again. With such a bunker, remove the
+  secret from the URI once the client key is paired.
+
+A refused `connect` names the remedy: a fresh connect secret when the secret
+was spent by someone else or the client is no longer paired, or removing a
+secret this client already spent.
 
 ## Binary NIP-44 capability
 
