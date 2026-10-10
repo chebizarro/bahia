@@ -103,8 +103,8 @@ bahia-migrate --config "$STAGING_CONFIG" --cutoff "$CUTOFF" f74a-restore-preflig
 Compare `unauthenticated_inventory_sha256`, schema-version count, observation
 count, archived-row count, state-link count, and hot candidate count. The
 inventory covers every historical observation value, hot/archive placement,
-exact state-link row identities, archive batch/run journals, original unit identity/retirement and schema version, in a single
-read-only SQL snapshot. An integrity mismatch aborts the preflight. A matching
+exact state-link row identities, archive batch/run journals, original unit identity/retirement and schema version, in bounded keyset pages within a single read-only SQL snapshot,
+with journal timestamps normalized to UTC. An integrity mismatch aborts the preflight. A matching
 hash detects an inconsistent restore but **does not authenticate its source**:
 the output always says `deletion_authorized false`. `database_name` is only a
 diagnostic hint; a logical restore may use a different name. Capture both

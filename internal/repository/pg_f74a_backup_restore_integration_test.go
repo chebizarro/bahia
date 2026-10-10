@@ -159,6 +159,7 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(2), sourcePreflight.ArchivedRows)
 	require.Equal(t, int64(503), sourcePreflight.Observations)
+	require.Equal(t, int64(501), sourcePreflight.HotCandidates, "candidate predecessor must carry across keyset pages")
 	require.NotEmpty(t, sourcePreflight.InventorySHA256)
 	require.Len(t, sourceReceipt, 2)
 	var linked, archivedOnly int
@@ -209,6 +210,16 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 	require.NotEqual(t, sourcePreflight.DatabaseName, restoredPreflight.DatabaseName)
 	sourcePreflight.DatabaseName, restoredPreflight.DatabaseName = "", ""
 	require.Equal(t, sourcePreflight, restoredPreflight, "isolated restore inventory must match source snapshot")
+	zoneConfig, err := pgxpool.ParseConfig(dsn("f74a_restored"))
+	require.NoError(t, err)
+	zoneConfig.ConnConfig.RuntimeParams["TimeZone"] = "Pacific/Honolulu"
+	zoneTarget, err := pgxpool.NewWithConfig(ctx, zoneConfig)
+	require.NoError(t, err)
+	defer zoneTarget.Close()
+	zonePreflight, err := repository.PreflightF74aRestore(ctx, zoneTarget, sourcePreflight.Cutoff)
+	require.NoError(t, err)
+	zonePreflight.DatabaseName = ""
+	require.Equal(t, sourcePreflight, zonePreflight, "journal timestamps must hash identically across session timezones")
 
 	// A hot copy can mask tampering of the archived payload in the history
 	// view. Verify the archive value independently, even when the hot ID exists.

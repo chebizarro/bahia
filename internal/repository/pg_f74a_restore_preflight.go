@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 // F74aRestorePreflight is an unauthenticated, read-only inventory of one SQL
@@ -50,6 +51,11 @@ func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 		return out, err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
+	// PostgreSQL renders timestamptz values in JSON using the session zone.
+	// Pin it for deterministic archive journal hashes across connections.
+	if _, err := tx.Exec(ctx, `SET LOCAL TIME ZONE 'UTC'`); err != nil {
+		return out, fmt.Errorf("setting F74a inventory timezone: %w", err)
+	}
 	if err := tx.QueryRow(ctx, `SELECT current_database()`).Scan(&out.DatabaseName); err != nil {
 		return out, err
 	}
@@ -179,7 +185,7 @@ func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 			break
 		}
 	}
-	total, linked, _, _, hotCandidates, err := scanF74aRuns(ctx, tx, cutoff)
+	total, linked, hotCandidates, err := scanF74aCandidatesPaged(ctx, tx, cutoff)
 	if err != nil {
 		return out, err
 	}
@@ -235,6 +241,52 @@ func hashF74aJournal(ctx context.Context, tx pgx.Tx, h hash.Hash, table string, 
 		}
 		if read < f74aPreflightPageSize {
 			return nil
+		}
+	}
+}
+
+// scanF74aCandidatesPaged preserves predecessor state across bounded pages.
+// It intentionally uses the same material-change predicate as CensusF74a.
+func scanF74aCandidatesPaged(ctx context.Context, tx pgx.Tx, cutoff time.Time) (total, linked, hotCandidates int64, err error) {
+	var cursorService, cursorEnvironment, cursorID *uuid.UUID
+	var cursorObserved *time.Time
+	var previous *domain.RuntimeObservation
+	for {
+		rows, queryErr := tx.Query(ctx, f74aObservationSelect+`
+			WHERE ($1::uuid IS NULL OR
+			 (o.service_id,o.environment_id,o.observed_at,o.id) >
+			 ($1::uuid,$2::uuid,$3::timestamptz,$4::uuid))
+			ORDER BY o.service_id,o.environment_id,o.observed_at,o.id LIMIT $5`,
+			cursorService, cursorEnvironment, cursorObserved, cursorID, f74aPreflightPageSize)
+		if queryErr != nil {
+			return 0, 0, 0, fmt.Errorf("reading bounded F74a candidate page: %w", queryErr)
+		}
+		read := 0
+		for rows.Next() {
+			obs, isLinked, isHot, scanErr := scanF74aObservation(rows)
+			if scanErr != nil {
+				rows.Close()
+				return 0, 0, 0, fmt.Errorf("reading F74a candidate: %w", scanErr)
+			}
+			total++
+			if isLinked {
+				linked++
+			}
+			if previous != nil && previous.ServiceID == obs.ServiceID && previous.EnvironmentID == obs.EnvironmentID &&
+				!domain.RuntimeObservationMateriallyChanged(previous, &obs) && !isLinked && obs.ObservedAt.Before(cutoff) && isHot {
+				hotCandidates++
+			}
+			previous = &obs
+			cursorService, cursorEnvironment, cursorObserved, cursorID = &obs.ServiceID, &obs.EnvironmentID, &obs.ObservedAt, &obs.ID
+			read++
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		if read < f74aPreflightPageSize {
+			return total, linked, hotCandidates, nil
 		}
 	}
 }
