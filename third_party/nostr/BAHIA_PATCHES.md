@@ -461,3 +461,15 @@ complementary changes:
 Covered by `TestReleaseFreesBlockedEmit` (nip77/negentropy) and
 `TestNegentropyUploadReturnsWhenSessionEnds`
 (`internal/adapters/nostr/relay_frame_admission_test.go`).
+
+## NIP-46: no implicit switch_relays (nip46/client.go, bahia-cd0wr.3.10)
+
+`NewBunker` sent a `switch_relays` request through its own `RPC` whenever the
+connect second was a multiple of ten, before returning the client. That
+publication bypassed `nostrout.Bunker`'s outbound admission (signer lane and
+kill switch), and could add up to 3 s to a connect. The block is removed;
+`SwitchRelays` remains for callers that ask for it explicitly. Bahia does not:
+the service signer keeps the relays of its configured bunker URI.
+
+Covered by `TestConnectBunkerSendsNothingWithoutAdmission`
+(`internal/nostrout/bunker_test.go`).

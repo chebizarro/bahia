@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
 	"fiatjaf.com/nostr"
@@ -183,14 +182,10 @@ func NewBunker(
 		}
 	}()
 
-	// attempt switch_relays once every 10 times
-	if now%10 == 0 {
-		swctx, cancel := context.WithTimeout(ctx, time.Second*3)
-		if newRelays, _ := bunker.SwitchRelays(swctx); newRelays != nil {
-			bunker = NewBunker(ctx, clientSecretKey, targetPublicKey, newRelays, pool, func(string) {})
-		}
-		cancel()
-	}
+	// Bahia patch: upstream sent a switch_relays request here on one connect
+	// in ten. Every request must pass the caller's outbound admission, so
+	// NewBunker sends none; callers that want relay switching call
+	// SwitchRelays themselves.
 
 	<-eosed
 

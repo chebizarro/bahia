@@ -3,6 +3,9 @@ package nostrout
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -37,6 +40,7 @@ type testBunker struct {
 
 	mu       sync.Mutex
 	connects int
+	requests int
 	open     int
 }
 
@@ -75,6 +79,9 @@ func newTestBunker(t testing.TB, service nostr.SecretKey, opts testBunkerOptions
 		if json.Unmarshal([]byte(plaintext), &req) != nil {
 			return
 		}
+		b.mu.Lock()
+		b.requests++
+		b.mu.Unlock()
 		reply := func(resp nip46.Response) {
 			body, _ := json.Marshal(resp)
 			content, _ := nip44.Encrypt(string(body), key)
@@ -115,6 +122,13 @@ func (b *testBunker) Connects() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.connects
+}
+
+// Requests is the number of NIP-46 requests received, of any method.
+func (b *testBunker) Requests() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.requests
 }
 
 // OpenConnections is the number of websockets currently connected.
@@ -181,5 +195,26 @@ func TestConnectBunkerReportsAuthURL(t *testing.T) {
 	// been delivered by the time connect returns.
 	if len(got) != 1 || got[0] != authURL {
 		t.Fatalf("auth URLs = %q, want [%q]", got, authURL)
+	}
+}
+
+// No NIP-46 request leaves without a permit: under an active kill switch the
+// bunker receives nothing at all, including the switch_relays request the
+// upstream client used to send on its own (see third_party/nostr/BAHIA_PATCHES.md).
+func TestConnectBunkerSendsNothingWithoutAdmission(t *testing.T) {
+	stop := filepath.Join(t.TempDir(), "stop")
+	if err := os.WriteFile(stop, []byte("stop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bunker := newTestBunker(t, nostr.Generate(), testBunkerOptions{})
+	session, endSession := context.WithCancel(context.Background())
+	defer endSession()
+
+	_, err := ConnectBunker(session, New(Config{KillSwitchFile: stop}), nostr.Generate(), bunker.uri, nil, nil)
+	if !errors.Is(err, ErrKillSwitch) {
+		t.Fatalf("ConnectBunker error = %v, want ErrKillSwitch", err)
+	}
+	if n := bunker.Requests(); n != 0 {
+		t.Fatalf("bunker received %d requests under the kill switch", n)
 	}
 }
