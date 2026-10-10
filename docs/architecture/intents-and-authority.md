@@ -50,9 +50,12 @@ open the provisioner management relay pool, and its agent-management methods
 fail closed. A separate provisioner-backed client, distinct from the fenced
 service identity, retains the existing bunker-signed management NIP-42 AUTH,
 signed seals and reply subscription.
-Writer-lease acquisition and renewal require their own owner-authorized
-protocol path; neither the provisioner APIs nor the signer adapter impersonate
-that authority.
+Signet `agent/writer-acquire` is a provisioner-authorized administrative
+transfer, while NIP-46 `writer_renew` is authorized by the current lease owner
+and carries its epoch. The designated owner pubkey must differ from both the
+service pubkey and every Signet provisioner pubkey; a lease owner must never
+have provisioner authority. The signer adapter performs neither acquisition
+nor renewal.
 
 Event signing is separate from operations requiring raw key material. DM
 NIP-44 conversation-key derivation, legacy secret encryption and derivation,
