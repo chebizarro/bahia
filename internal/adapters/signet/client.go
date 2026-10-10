@@ -39,10 +39,6 @@ var (
 	ErrInvalidEvent = errors.New("nostr event is nil")
 	// ErrAuthoritativeAgentListingUnsupported prevents volatile cache state from being presented as Signet truth.
 	ErrAuthoritativeAgentListingUnsupported = errors.New("authoritative Signet agent listing is unsupported")
-	// ErrFencedManagementRequiresProvisioner keeps the assigned writer client
-	// of a fenced service identity from being treated as a Signet management
-	// provisioner.
-	ErrFencedManagementRequiresProvisioner = errors.New("fenced service signer client cannot perform Signet provisioner management")
 )
 
 const (
@@ -79,8 +75,7 @@ const (
 //     RelayPool: supervised per-relay REQ, CLOSED classification and NIP-42.
 //     Its pool lives as long as one bunker connection and authenticates as
 //     the provisioner through that bunker, the identity the gift-wrapped
-//     replies are addressed to. Fenced service signer clients do not open a
-//     management pool; they are assigned writers, not provisioners.
+//     replies are addressed to.
 type Client struct {
 	bunkerURI         string
 	relays            []string
@@ -90,10 +85,8 @@ type Client struct {
 	closedRetryBudget int
 	logger            *slog.Logger
 	clientSecretKey   string // NIP-46 session key
-	clientKeyExplicit bool   // Config supplied a dedicated, persistent client identity
-	serviceSigner     *ServiceSigner
-	requireReal       bool // Fail closed unless a real Signet bunker is configured and reachable
-	allowMock         bool // Explicit test/dev-only mock signing mode
+	requireReal       bool   // Fail closed unless a real Signet bunker is configured and reachable
+	allowMock         bool   // Explicit test/dev-only mock signing mode
 	connectTimeout    time.Duration
 
 	connectMu            sync.Mutex
@@ -135,10 +128,6 @@ type Config struct {
 	// requests and management gift wraps. Nil uses the process-wide
 	// controller; there is no unlimited mode.
 	OutboundAdmission *nostrout.Admission
-	// ExpectedServicePubkey selects the fenced service-key signing path: every
-	// sign/NIP-44 request goes through a ServiceSigner pinned to this pubkey,
-	// and the client never opens the provisioner management plane.
-	ExpectedServicePubkey string
 }
 
 // NewClient creates a new Signet client.
@@ -162,20 +151,11 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 		closedRetryBudget: config.ClosedRetryBudget,
 		logger:            logger.With("component", "signet"),
 		clientSecretKey:   clientSK,
-		clientKeyExplicit: config.ClientSecretKey != "",
 		requireReal:       config.RequireReal,
 		allowMock:         config.AllowMock,
 		connectTimeout:    config.ConnectTimeout,
 		agents:            make(map[string]*AgentIdentity),
 		stateChanged:      make(chan struct{}),
-	}
-
-	if config.ExpectedServicePubkey != "" {
-		signer, err := NewServiceSigner(c, config.ExpectedServicePubkey)
-		if err != nil {
-			return nil, fmt.Errorf("configure Signet service signer: %w", err)
-		}
-		c.serviceSigner = signer
 	}
 	return c, nil
 }
@@ -246,9 +226,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	c.setConnection(bunker, connectCtx, cancelConnect, true)
-	if c.serviceSigner == nil {
-		c.replaceManagementPool(c.newManagementPool(bunker))
-	}
+	c.replaceManagementPool(c.newManagementPool(bunker))
 	installed = true
 
 	c.logger.Info("connected to Signet bunker")
@@ -338,9 +316,9 @@ func signetManagementRelays(config Config) []string {
 }
 
 // newManagementPool returns the provisioner management pool for one bunker
-// connection. Fenced service signer clients never receive this pool.
+// connection.
 func (c *Client) newManagementPool(bunker *nostrout.Bunker) *nostrpool.RelayPool {
-	if c.serviceSigner != nil || len(c.managementRelays) == 0 {
+	if len(c.managementRelays) == 0 {
 		return nil
 	}
 	logger := nostrpool.NewSlogZapLogger(c.logger.With("relay_pool", "signet-management"))
@@ -480,9 +458,6 @@ func (c *Client) provisionAgentMock(agentID string) (pubkey, npub, bunkerURI str
 
 // Sign signs an event using the Signet bunker's key.
 func (c *Client) Sign(ctx context.Context, event *nostr.Event) error {
-	if c.serviceSigner != nil {
-		return c.serviceSigner.SignEvent(ctx, event)
-	}
 	c.mu.Lock()
 	connected := c.connected
 	mockMode := c.allowMock && c.bunkerURI == ""
@@ -511,9 +486,6 @@ func (c *Client) Sign(ctx context.Context, event *nostr.Event) error {
 // NIP44Encrypt encrypts plaintext to a recipient using the Signet-held staff key.
 // In production the private key remains inside the NIP-46 bunker.
 func (c *Client) NIP44Encrypt(ctx context.Context, recipient nostr.PubKey, plaintext string) (string, error) {
-	if c.serviceSigner != nil {
-		return c.serviceSigner.Encrypt(ctx, plaintext, recipient)
-	}
 	c.mu.Lock()
 	connected := c.connected
 	mockMode := c.allowMock && c.bunkerURI == ""
@@ -564,9 +536,6 @@ func (c *Client) NIP44Encrypt(ctx context.Context, recipient nostr.PubKey, plain
 // A bunker without the method fails the call rather than returning a payload
 // over mangled bytes, so an out-of-date Signet degrades to a loud error.
 func (c *Client) NIP44EncryptBytes(ctx context.Context, recipient nostr.PubKey, plaintext []byte) (string, error) {
-	if c.serviceSigner != nil {
-		return c.serviceSigner.EncryptBytes(ctx, plaintext, recipient)
-	}
 	c.mu.Lock()
 	connected := c.connected
 	mockMode := c.allowMock && c.bunkerURI == ""
@@ -618,9 +587,6 @@ func (c *Client) NIP44EncryptBytes(ctx context.Context, recipient nostr.PubKey, 
 // Concord invite material ciphertext at rest: the private key never leaves the
 // NIP-46 bunker in production.
 func (c *Client) NIP44Decrypt(ctx context.Context, counterparty nostr.PubKey, ciphertext string) (string, error) {
-	if c.serviceSigner != nil {
-		return c.serviceSigner.Decrypt(ctx, ciphertext, counterparty)
-	}
 	c.mu.Lock()
 	connected := c.connected
 	mockMode := c.allowMock && c.bunkerURI == ""
@@ -994,9 +960,6 @@ func consumeSignetManagementResponse(requestID string, resp signetJSONRPCRespons
 }
 
 func (c *Client) callManagement(ctx context.Context, method string, params map[string]interface{}, out interface{}) error {
-	if c.serviceSigner != nil {
-		return ErrFencedManagementRequiresProvisioner
-	}
 	bunkerPubkey, _, _, err := ParseBunkerURI(c.bunkerURI)
 	if err != nil {
 		return err
