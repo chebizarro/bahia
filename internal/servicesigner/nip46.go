@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"reflect"
 	"strings"
 	"time"
@@ -49,7 +48,7 @@ type nip46Keyer struct {
 	cancel   context.CancelFunc
 }
 
-func openNIP46(ctx context.Context, signer config.NostrSignerConfig, expected nostr.PubKey, timeout time.Duration, admission *nostrout.Admission, logger *slog.Logger) (*nip46Keyer, error) {
+func openNIP46(ctx context.Context, signer config.NostrSignerConfig, expected nostr.PubKey, timeout time.Duration, admission *nostrout.Admission, onAuthURL func(string)) (*nip46Keyer, error) {
 	clientSecret, err := nip46ClientSecret(signer)
 	if err != nil {
 		return nil, err
@@ -59,9 +58,7 @@ func openNIP46(ctx context.Context, signer config.NostrSignerConfig, expected no
 	}
 	lifetime, cancel := context.WithCancel(ctx)
 	bunker, err := connectBunker(lifetime, timeout, func(connectCtx context.Context) (*nostrout.Bunker, error) {
-		return nostrout.ConnectBunker(connectCtx, admission, clientSecret, signer.BunkerURI, nil, func(authURL string) {
-			logger.Warn("NIP-46 bunker requires out-of-band authorization of Bahia's client key", "url", authURL)
-		})
+		return nostrout.ConnectBunker(connectCtx, admission, clientSecret, signer.BunkerURI, nil, onAuthURL)
 	})
 	if err != nil {
 		cancel()

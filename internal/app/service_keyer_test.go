@@ -15,8 +15,40 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
+	"github.com/openagentsinc/bahia/internal/servicesigner"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	"golang.org/x/crypto/chacha20poly1305"
 )
+
+func TestServiceKeyerLogsBunkerAuthURLToAppLogger(t *testing.T) {
+	var opts servicesigner.Options
+	previous := openServiceSigner
+	t.Cleanup(func() { openServiceSigner = previous })
+	openServiceSigner = func(_ context.Context, _ config.NostrConfig, o servicesigner.Options) (nostr.Keyer, error) {
+		opts = o
+		return keyer.NewPlainKeySigner(nostr.Generate()), nil
+	}
+	core, logs := observer.New(zapcore.InfoLevel)
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = nostr.Generate().Hex()
+
+	_, release, err := newServiceKeyer(cfg, nil, zap.New(core))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if opts.OnAuthURL == nil {
+		t.Fatal("the app logger is not wired to the signer's authorization callback")
+	}
+	const authURL = "https://bunker.example/authorize/abc"
+	opts.OnAuthURL(authURL)
+	entries := logs.FilterField(zap.String("url", authURL)).All()
+	if len(entries) != 1 || entries[0].Level != zapcore.WarnLevel || entries[0].Message != servicesigner.AuthURLMessage {
+		t.Fatalf("auth URL log entries = %+v; want one warn entry on the app logger", logs.All())
+	}
+}
 
 func TestServiceKeyerLocalModeKeepsIdentity(t *testing.T) {
 	cfg := config.Defaults()

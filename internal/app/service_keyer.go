@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"strings"
 
 	"fiatjaf.com/nostr"
@@ -16,7 +15,11 @@ import (
 	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/servicesigner"
+	"go.uber.org/zap"
 )
+
+// openServiceSigner opens a service signer session (a test seam).
+var openServiceSigner = servicesigner.Open
 
 // newServiceKeyer is the single construction seam for Bahia's service
 // identity. Startup calls it once and injects the result into every consumer
@@ -31,15 +34,16 @@ import (
 // capability via nostrutil.RequireServiceKeyMaterial and fail closed with
 // nostrutil.ErrServiceKeyMaterialRequired when it is absent. Only the local
 // signer (nostrutil.LocalKeyer) provides it.
-func newServiceKeyer(cfg *config.Config, admission *nostrout.Admission, logger *slog.Logger) (nostr.Keyer, func(), error) {
+func newServiceKeyer(cfg *config.Config, admission *nostrout.Admission, logger *zap.Logger) (nostr.Keyer, func(), error) {
 	if cfg == nil {
 		return nil, func() {}, nil
 	}
+	opts := servicesigner.Options{Admission: admission}
+	if logger != nil {
+		opts.OnAuthURL = func(authURL string) { logger.Warn(servicesigner.AuthURLMessage, zap.String("url", authURL)) }
+	}
 	lifetime, cancel := context.WithCancel(context.Background())
-	signer, err := servicesigner.Open(lifetime, cfg.Nostr, servicesigner.Options{
-		Admission: admission,
-		Logger:    logger,
-	})
+	signer, err := openServiceSigner(lifetime, cfg.Nostr, opts)
 	if errors.Is(err, servicesigner.ErrNotConfigured) {
 		cancel()
 		return nil, func() {}, nil

@@ -155,7 +155,7 @@ func New(cfg *config.Config) (*App, error) {
 	// docs/runbooks/nostr-outbound-admission.md).
 	outboundAdmission := nostrout.InitDefault(nostrOutboundAdmissionConfig(cfg.Nostr.Outbound))
 
-	serviceKeyer, closeServiceKeyer, err := newServiceKeyer(cfg, outboundAdmission, nil)
+	serviceKeyer, closeServiceKeyer, err := newServiceKeyer(cfg, outboundAdmission, logger)
 	if err != nil {
 		return nil, fmt.Errorf("configuring service signer: %w", err)
 	}
