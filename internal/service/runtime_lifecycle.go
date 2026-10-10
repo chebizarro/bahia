@@ -98,7 +98,7 @@ type RuntimeLifecycleService struct {
 	logger       *zap.Logger
 	applyLock    EnvironmentApplyLocker
 
-	secretEncryptor *secretsAdapter.Encryptor
+	secretEncryptor secretsAdapter.StoredSecretDecryptor
 	healthTimeout   time.Duration
 	healthInterval  time.Duration
 }
@@ -107,7 +107,7 @@ type RuntimeLifecycleService struct {
 type RuntimeLifecycleOption func(*RuntimeLifecycleService)
 
 // WithRuntimeLifecycleSecrets merges effective Bahia secrets into direct deploy environment options.
-func WithRuntimeLifecycleSecrets(repo repository.SecretRepository, encryptor *secretsAdapter.Encryptor) RuntimeLifecycleOption {
+func WithRuntimeLifecycleSecrets(repo repository.SecretRepository, encryptor secretsAdapter.StoredSecretDecryptor) RuntimeLifecycleOption {
 	return func(s *RuntimeLifecycleService) {
 		s.secrets = repo
 		s.secretEncryptor = encryptor
@@ -1139,7 +1139,7 @@ func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, sec
 			return nil, fmt.Errorf("effective secret %q has no versioned payload", secret.Name)
 		}
 		accessedAt := time.Now().UTC()
-		value, decryptErr := s.secretEncryptor.Decrypt(version.EncryptedValue, version.EncryptionMethod)
+		value, decryptErr := s.secretEncryptor.DecryptStored(version.SecretID, version.Version, version.EncryptedValue, version.EncryptionMethod)
 		manifest := domain.SecretAccessManifest{
 			SecretID:      secret.ID,
 			VersionID:     version.ID,
@@ -1347,7 +1347,7 @@ func (s *RuntimeLifecycleService) scrubRuntimeActionError(ctx context.Context, s
 		if err != nil || version == nil {
 			return runtimeActionErrorDetailsWithheld
 		}
-		value, err := s.secretEncryptor.Decrypt(version.EncryptedValue, version.EncryptionMethod)
+		value, err := s.secretEncryptor.DecryptStored(version.SecretID, version.Version, version.EncryptedValue, version.EncryptionMethod)
 		if err != nil {
 			return runtimeActionErrorDetailsWithheld
 		}

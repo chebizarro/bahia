@@ -1,14 +1,18 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/nip44"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
@@ -18,6 +22,12 @@ import (
 type memSecretRepo struct {
 	mu      sync.RWMutex
 	secrets map[uuid.UUID]*domain.ServiceSecret
+}
+
+type rejectingSecretUpdateRepo struct{ *memSecretRepo }
+
+func (*rejectingSecretUpdateRepo) Update(context.Context, *domain.ServiceSecret) error {
+	return errors.New("simulated transaction conflict")
 }
 
 func newMemSecretRepo() *memSecretRepo {
@@ -59,9 +69,50 @@ func (r *memSecretRepo) Update(_ context.Context, s *domain.ServiceSecret) error
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cp := *s
+	cp.Version++ // Match PgSecretRepository's version-on-update contract.
+	s.Version = cp.Version
 	r.secrets[s.ID] = &cp
 	return nil
 }
+
+type versionedIntentKeyer struct {
+	key       nostr.SecretKey
+	fail      bool
+	failAfter int
+	calls     int
+}
+
+func (k *versionedIntentKeyer) GetPublicKey(context.Context) (nostr.PubKey, error) {
+	k.calls++
+	if k.fail || k.failAfter > 0 && k.calls >= k.failAfter {
+		return nostr.ZeroPK, errors.New("fenced key unavailable")
+	}
+	return k.key.Public(), nil
+}
+func (k *versionedIntentKeyer) Encrypt(_ context.Context, plaintext string, peer nostr.PubKey) (string, error) {
+	conversation, err := nip44.GenerateConversationKey(peer, k.key)
+	if err != nil {
+		return "", err
+	}
+	return nip44.Encrypt(plaintext, conversation)
+}
+func (k *versionedIntentKeyer) Decrypt(_ context.Context, ciphertext string, peer nostr.PubKey) (string, error) {
+	if k.fail {
+		return "", errors.New("fenced key unavailable")
+	}
+	conversation, err := nip44.GenerateConversationKey(peer, k.key)
+	if err != nil {
+		return "", err
+	}
+	return nip44.Decrypt(ciphertext, conversation)
+}
+func (*versionedIntentKeyer) Nip04Encrypt(context.Context, string, nostr.PubKey) (string, error) {
+	panic("unused")
+}
+func (*versionedIntentKeyer) Nip04Decrypt(context.Context, string, nostr.PubKey) (string, error) {
+	panic("unused")
+}
+func (*versionedIntentKeyer) SignEvent(context.Context, *nostr.Event) error { panic("unused") }
 
 func (r *memSecretRepo) Delete(_ context.Context, id uuid.UUID) error {
 	r.mu.Lock()
@@ -464,5 +515,153 @@ func TestSecretIntentHandler_PermissionIsWriteSecrets(t *testing.T) {
 	perm2 := handler.PermissionFor("delete")
 	if perm2 != domain.PermWriteSecrets {
 		t.Errorf("expected PermWriteSecrets for delete, got %v", perm2)
+	}
+}
+
+func TestSecretIntentVersionedWriterBindsCreateAndUpdateVersion(t *testing.T) {
+	ctx := context.Background()
+	key, err := secrets.NewRandomDataKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyer := &versionedIntentKeyer{key: nostr.Generate()}
+	repo := newMemSecretRepo()
+	handler := NewSecretIntentHandler(SecretIntentHandlerConfig{
+		Registry: repo, VersionedKey: key, ServiceKeyer: keyer, ServicePubkey: keyer.key.Public(),
+	})
+	id, serviceID := uuid.New(), uuid.New()
+	create := &Intent{Content: map[string]any{"id": id.String(), "service_id": serviceID.String(), "name": "TOKEN", "value": "first"}}
+	if err := handler.handleCreateOrUpdate(ctx, create); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repo.GetByID(ctx, id)
+	if err != nil || stored == nil || stored.EncryptionMethod != domain.EncryptionAES256V2 || stored.Version != 1 {
+		t.Fatalf("versioned create state invalid: %v, %#v", err, stored)
+	}
+	plain, err := key.Open(id, stored.Version, stored.EncryptedValue)
+	if err != nil || string(plain) != "first" {
+		t.Fatalf("versioned create unreadable: %v", err)
+	}
+	clientCipher, err := keyer.Encrypt(ctx, "second", keyer.key.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	update := &Intent{Content: map[string]any{"id": id.String(), "service_id": serviceID.String(), "encrypted_value": clientCipher, "encryption_method": "nip44"}}
+	if err := handler.handleCreateOrUpdate(ctx, update); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = repo.GetByID(ctx, id)
+	if err != nil || stored == nil || stored.EncryptionMethod != domain.EncryptionAES256V2 || stored.Version != 2 {
+		t.Fatalf("versioned update state invalid: %v, %#v", err, stored)
+	}
+	plain, err = key.Open(id, stored.Version, stored.EncryptedValue)
+	if err != nil || string(plain) != "second" {
+		t.Fatalf("versioned update unreadable: %v", err)
+	}
+	if _, err := key.Open(id, 1, stored.EncryptedValue); err == nil {
+		t.Fatal("updated ciphertext was not bound to the target version")
+	}
+}
+
+func TestSecretIntentVersionedWriterNeverFallsBackWhenFenceFails(t *testing.T) {
+	ctx := context.Background()
+	key, err := secrets.NewRandomDataKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyer := &versionedIntentKeyer{key: nostr.Generate(), fail: true}
+	repo := newMemSecretRepo()
+	handler := NewSecretIntentHandler(SecretIntentHandlerConfig{
+		Registry: repo, Encryptor: &testEncryptor{}, VersionedKey: key,
+		ServiceKeyer: keyer, ServicePubkey: keyer.key.Public(),
+	})
+	id := uuid.New()
+	intent := &Intent{Content: map[string]any{"id": id.String(), "service_id": uuid.New().String(), "value": "private"}}
+	if err := handler.handleCreateOrUpdate(ctx, intent); err == nil {
+		t.Fatal("versioned writer fell back after fenced key failure")
+	}
+	stored, err := repo.GetByID(ctx, id)
+	if err != nil || stored != nil {
+		t.Fatal("failed fenced write mutated repository")
+	}
+	keyer.fail = false
+	handler.servicePubkey = nostr.Generate().Public()
+	if err := handler.handleCreateOrUpdate(ctx, intent); err == nil {
+		t.Fatal("versioned writer accepted a changed service pubkey")
+	}
+	handler.servicePubkey = keyer.key.Public()
+	keyer.calls = 0
+	keyer.failAfter = 2
+	if err := handler.handleCreateOrUpdate(ctx, intent); err == nil {
+		t.Fatal("versioned writer accepted a lost post-seal fence")
+	}
+	stored, err = repo.GetByID(ctx, id)
+	if err != nil || stored != nil {
+		t.Fatal("lost post-seal fence mutated repository")
+	}
+}
+
+func TestSecretIntentVersionedWriterRejectsAmbiguousAndUntrustedInput(t *testing.T) {
+	ctx := context.Background()
+	key, err := secrets.NewRandomDataKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyer := &versionedIntentKeyer{key: nostr.Generate()}
+	repo := newMemSecretRepo()
+	handler := NewSecretIntentHandler(SecretIntentHandlerConfig{
+		Registry: repo, VersionedKey: key, ServiceKeyer: keyer, ServicePubkey: keyer.key.Public(),
+	})
+	cipher, err := keyer.Encrypt(ctx, "secret", keyer.key.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, extra := range []map[string]any{
+		{"encrypted_value": cipher, "value": "also-plaintext"},
+		{"encrypted_value": cipher, "encryption_method": "aes256gcm"},
+		{"encrypted_value": "not-nip44"},
+		{"value": "secret", "encryption_method": "aes256gcm-v2"},
+	} {
+		id := uuid.New()
+		content := map[string]any{"id": id.String(), "service_id": uuid.New().String()}
+		for k, v := range extra {
+			content[k] = v
+		}
+		if err := handler.handleCreateOrUpdate(ctx, &Intent{Content: content}); err == nil {
+			t.Fatal("untrusted input was accepted")
+		}
+		stored, err := repo.GetByID(ctx, id)
+		if err != nil || stored != nil {
+			t.Fatal("rejected input mutated repository")
+		}
+	}
+}
+
+func TestSecretIntentVersionedUpdateConflictKeepsPriorCiphertext(t *testing.T) {
+	ctx := context.Background()
+	key, err := secrets.NewRandomDataKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyer := &versionedIntentKeyer{key: nostr.Generate()}
+	id := uuid.New()
+	prior, err := key.Seal(id, 1, []byte("previous"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := newMemSecretRepo()
+	if err := base.Create(ctx, &domain.ServiceSecret{ID: id, ServiceID: uuid.New(), Version: 1, EncryptedValue: prior, EncryptionMethod: domain.EncryptionAES256V2}); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewSecretIntentHandler(SecretIntentHandlerConfig{
+		Registry: &rejectingSecretUpdateRepo{base}, VersionedKey: key, ServiceKeyer: keyer, ServicePubkey: keyer.key.Public(),
+	})
+	intent := &Intent{Content: map[string]any{"id": id.String(), "value": "replacement"}}
+	if err := handler.handleCreateOrUpdate(ctx, intent); err == nil {
+		t.Fatal("simulated update conflict was accepted")
+	}
+	stored, err := base.GetByID(ctx, id)
+	if err != nil || stored == nil || stored.Version != 1 || !bytes.Equal(stored.EncryptedValue, prior) {
+		t.Fatal("rejected update changed persisted secret")
 	}
 }

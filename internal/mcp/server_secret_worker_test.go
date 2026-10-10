@@ -10,6 +10,7 @@ import (
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -78,7 +79,16 @@ func (r *testSecretRepo) ListEffective(_ context.Context, serviceID, envID uuid.
 }
 
 func (r *testSecretRepo) Update(_ context.Context, s *domain.ServiceSecret) error {
+	current, ok := r.secrets[s.ID]
+	if !ok {
+		return repository.ErrNotFound
+	}
+	if s.Version != current.Version {
+		return repository.ErrConflict
+	}
 	copy := *s
+	copy.Version++ // PgSecretRepository increments only after matching current version.
+	s.Version = copy.Version
 	r.secrets[s.ID] = &copy
 	return nil
 }
@@ -224,6 +234,19 @@ func TestCallTool_SecretCRUD(t *testing.T) {
 	}
 	if plaintext != "postgres://user:new-pass@example/db" {
 		t.Fatalf("secret decrypted value was not updated")
+	}
+	secondUpdate, err := server.CallTool(ctx, "bahia_update_secret", map[string]interface{}{
+		"secret_id": secretID.String(),
+		"value":     "postgres://user:third-pass@example/db",
+	})
+	if err != nil || secondUpdate.IsError {
+		t.Fatalf("second update after optimistic version increment failed: %v, %#v", err, secondUpdate)
+	}
+	if version := int(decodeResultMap(t, secondUpdate)["version"].(float64)); version != 3 {
+		t.Fatalf("second update returned version %d, want 3", version)
+	}
+	if repo.secrets[secretID].Version != 3 {
+		t.Fatal("persisted secret version drifted after consecutive updates")
 	}
 
 	deleteRes, err := server.CallTool(ctx, "bahia_delete_secret", map[string]interface{}{"secret_id": secretID.String()})

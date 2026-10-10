@@ -35,7 +35,7 @@ type secretVersionHistoryLister interface {
 
 type EncryptedRouteHandlersConfig struct {
 	Secrets      repository.SecretRepository
-	Encryptor    *secrets.Encryptor
+	Encryptor    secrets.StoredSecretDecryptor
 	Runs         repository.DeploymentRunRepository
 	RunLogs      RunLogFetcher
 	Artifacts    repository.ArtifactRepository
@@ -49,7 +49,7 @@ type EncryptedRouteHandlersConfig struct {
 
 type EncryptedRouteHandlers struct {
 	secrets      repository.SecretRepository
-	encryptor    *secrets.Encryptor
+	encryptor    secrets.StoredSecretDecryptor
 	runs         repository.DeploymentRunRepository
 	runLogs      RunLogFetcher
 	artifacts    repository.ArtifactRepository
@@ -124,7 +124,7 @@ func (h *EncryptedRouteHandlers) RevealSecret(ctx context.Context, request Encry
 	if err != nil {
 		return nil, err
 	}
-	value, err := h.encryptor.Decrypt(secret.EncryptedValue, secret.EncryptionMethod)
+	value, err := h.encryptor.DecryptStored(secret.ID, secret.Version, secret.EncryptedValue, secret.EncryptionMethod)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt secret")
 	}
@@ -280,7 +280,7 @@ func (h *EncryptedRouteHandlers) redactRunLogSecrets(ctx context.Context, intent
 			return fmt.Errorf("referenced secret has no retained versions")
 		}
 		for i := range versions {
-			value, err := h.encryptor.Decrypt(versions[i].EncryptedValue, versions[i].EncryptionMethod)
+			value, err := h.encryptor.DecryptStored(versions[i].SecretID, versions[i].Version, versions[i].EncryptedValue, versions[i].EncryptionMethod)
 			if err != nil {
 				return fmt.Errorf("decrypt referenced secret")
 			}

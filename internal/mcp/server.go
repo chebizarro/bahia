@@ -2323,7 +2323,6 @@ func (s *Server) handleUpdateSecret(ctx context.Context, args map[string]interfa
 
 	// Update the secret
 	existing.EncryptedValue = encryptedValue
-	existing.Version++
 	existing.UpdatedAt = time.Now()
 
 	if err := s.secretsRepo.Update(ctx, existing); err != nil {

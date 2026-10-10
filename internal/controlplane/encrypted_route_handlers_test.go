@@ -533,3 +533,32 @@ func TestEncryptedRouteHandlers_GetRunLogsRedactsReferencedSecretsBeforeTailing(
 		t.Fatalf("stdout was not redacted before tailing: %q", stdout)
 	}
 }
+
+func TestEncryptedRouteHandlersRedactionReadsV2AndRefusesLegacy(t *testing.T) {
+	ctx := context.Background()
+	key, err := secrets.NewRandomDataKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	ciphertext, err := key.Seal(id, 2, []byte("private-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := newFakeEncryptedSecretRepo()
+	repo.records[id] = &domain.ServiceSecret{ID: id, Version: 2, EncryptedValue: ciphertext, EncryptionMethod: domain.EncryptionAES256V2}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Secrets: repo, Encryptor: key})
+	intent := &domain.DeploymentIntent{DesiredState: &domain.DesiredServiceSpec{SecretRefs: []domain.DesiredSecretRef{{SecretID: id}}}}
+	logs := &adapterruntime.RunLogs{Stdout: "token=private-token"}
+	if err := h.redactRunLogSecrets(ctx, intent, logs); err != nil {
+		t.Fatal(err)
+	}
+	if logs.Stdout != "token=[REDACTED]" {
+		t.Fatalf("v2 secret was not redacted: %q", logs.Stdout)
+	}
+	repo.records[id].EncryptionMethod = domain.EncryptionAES256
+	logs.Stdout = "token=private-token"
+	if err := h.redactRunLogSecrets(ctx, intent, logs); err == nil {
+		t.Fatal("v2-only reader accepted legacy history")
+	}
+}

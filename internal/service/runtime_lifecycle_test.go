@@ -160,6 +160,38 @@ func TestRuntimeLifecycleDeployMergesEffectiveSecretsOverAdoptedEnvironment(t *t
 	}
 }
 
+func TestRuntimeLifecycleV2ReaderBindsIdentityAndRefusesLegacy(t *testing.T) {
+	ctx := context.Background()
+	key, err := secretsAdapter.NewRandomDataKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	ciphertext, err := key.Seal(id, 3, []byte("runtime-token"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := newMockSecretRepo()
+	record := &domain.ServiceSecret{ID: id, ServiceID: uuid.New(), Version: 3, Name: "TOKEN", EncryptedValue: ciphertext, EncryptionMethod: domain.EncryptionAES256V2}
+	if err := repo.Create(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	lifecycle := &RuntimeLifecycleService{secrets: repo, secretEncryptor: key}
+	opts := &runtime.DeployOptions{}
+	accesses, err := lifecycle.mergeEffectiveSecrets(ctx, []domain.ServiceSecret{*record}, opts, nil, false)
+	if err != nil || opts.Environment["TOKEN"] != "runtime-token" || len(accesses) != 1 {
+		t.Fatalf("v2 runtime read failed: %v, %#v", err, opts.Environment)
+	}
+	record.EncryptionMethod = domain.EncryptionAES256
+	opts = &runtime.DeployOptions{}
+	if _, err := lifecycle.mergeEffectiveSecrets(ctx, []domain.ServiceSecret{*record}, opts, nil, false); err == nil {
+		t.Fatal("v2 runtime reader accepted legacy row")
+	}
+	if len(opts.Environment) != 0 {
+		t.Fatal("failed v2 runtime read leaked value into deploy environment")
+	}
+}
+
 func TestResolveUnitApplySecretsSeparatesSiblingEnvNames(t *testing.T) {
 	ctx := context.Background()
 	envID := uuid.New()
