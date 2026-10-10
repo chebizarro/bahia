@@ -21,16 +21,19 @@ the import remains incomplete. Restore the original local event store/outbox
 from a verified backup or resolve the relay refusal before retrying; do not
 edit the receipt or completion marker to bypass verification.
 **Confirmed deletion and live compaction are not available.** The shipped
-`f74a-census`, `f74a-compact --cutoff`, and `f74a-restore-preflight --cutoff` actions are read-only;
+`f74a-census`, `f74a-compact --cutoff`, `f74a-restore-preflight --cutoff`,
+and `f74a-verify-receipt` actions are read-only;
 `f74a-compact --confirm` is rejected. There is no `--batch-size` or
 `--backup-id` flag. Do not use another tool or manual SQL to bypass this
 guard. The archive repository has bounded, transactionally checked batches
-and protects archived successors of backdated writes, but the command cannot
-authenticate a backup and isolated restore of this exact Bahia PostgreSQL
-database. Generic `backup_runs` and `backup_restores` records can describe
+and protects archived successors of backdated writes. The signed receipt
+verifier can authenticate an independent attestor claim for this exact
+PostgreSQL database, but it cannot verify live backup object retention,
+revocation, or credential recovery before each deletion batch. Generic `backup_runs` and `backup_restores` records can describe
 unrelated workload targets; their success is not a database backup receipt.
-The deletion gate remains blocked until a trusted same-database snapshot and
-restore identity contract is implemented and independently verified. This runbook
+The deletion gate remains blocked until the attestor is operational and
+current object custody and credential recovery can be independently rechecked
+in a transactional, restart-safe bounded deletion path. This runbook
 applies only to a Bahia image exposing both read-only actions. If either
 action is absent, stop: the older image cannot perform this procedure. PostgreSQL is a
 derived index; preserve the service key, relay-held canonical records, and
@@ -113,6 +116,49 @@ source database/schema identity, backup retention/credential status, and an
 attested isolated-restore result bound to the same cutoff. Generic backup
 run/restore success or an operator-supplied reference is not that evidence.
 
+A separately operated backup attestor may sign a `bahia-f74a-backup-restore-v1`
+receipt with a **separately pinned Ed25519 public key** configured as
+`db.f74a_backup_attestor_public_key` (or
+`BAHIA_DB_F74A_BACKUP_ATTESTOR_PUBLIC_KEY`). Do not use the Bahia service
+signing key as this pin. The signed payload binds the source PostgreSQL
+cluster system identifier, database OID/name, fixed cutoff, snapshot ID and
+SHA-256 object digest, source and isolated-restore inventory digests, distinct
+restore database identity, chronology, and expiry. The JSON envelope has `payload` and a hex `signature`. The signature is
+Ed25519 over the UTF-8 bytes `bahia-f74a-backup-restore-v1` followed by one
+NUL byte and the **exact JSON bytes of `payload` as embedded in the envelope**.
+The payload fields are `version`, `receipt_id`, `source_database`,
+`restore_database`, `cutoff`, `snapshot_id`, `backup_object_ref`, `snapshot_created_at`,
+`backup_object_sha256`, `source_inventory_sha256`,
+`restore_inventory_sha256`, `restore_verified_at`, `issued_at`, and
+`expires_at`. Database identities contain `name`, `oid`, and
+`system_identifier`; SHA-256 digests are lowercase 64-character hex, and
+timestamps are RFC3339. Unknown fields, trailing JSON, expired receipts,
+non-distinct source/restore identities, and changed local inventories are
+rejected. Only the independent attestor signs; a supplied JSON path cannot
+override the configured public key. The maintenance database
+role must be able to read `pg_control_system()` (for example via `pg_monitor`);
+missing privilege is a hard failure rather than a fallback to a configured
+DSN or database name. With the attestor's signed JSON receipt at a local path:
+
+```sh
+bahia-migrate --config "$SOURCE_CONFIG" --f74a-receipt "$SIGNED_RECEIPT" f74a-verify-receipt
+```
+
+The verifier checks the signature against the configured pin and re-reads
+the physical source database identity and full inventory. This is a
+**read-only cryptographic verification**, not deletion admission: it cannot
+independently establish that the object still exists, remains unrevoked and
+retained, or that restore credentials remain usable. It always reports
+`deletion_authorized false`; `f74a-compact --confirm` remains rejected.
+A verified receipt can describe unarchived hot no-op samples; it does not
+authorize their deletion. The future bounded delete path must recheck an
+immutable archive copy, its digest, the material predecessor, current state
+links, and the signed receipt/custody status under its transaction before
+each batch, with a durable restart cursor.
+The attestor must operate outside Bahia and must verify actual backup object
+custody and an isolated restore before signing. Do not hand-author or
+self-sign a receipt with Bahia's service key.
+
 Run `f74a-census` on the isolated staging database
 with the same cutoff and compare counts and a sample of retained state links
 and material transitions to the source receipt. Confirm the restored daemon
@@ -160,8 +206,8 @@ cutoff, and a sample of preserved forensic transitions. An unexpected count,
 an absent cutoff, or a proposed state-link deletion is a stop condition.
 
 There is no executable confirmed-deletion command. Concurrent writes can
-invalidate a dry-run decision, and no trusted same-database backup/restore
-receipt is available to authorize deletion. Confirmed batching through the
+invalidate a dry-run decision, and read-only signed receipt verification
+does not prove current backup object custody or authorize deletion. Confirmed batching through the
 operator command, post-deletion census, and a second restore from the same
 operational backup remain **unmet acceptance checks**. Do not use repository
 tests or a generic workload backup record as a substitute for this gate.

@@ -605,16 +605,17 @@ type ServerConfig struct {
 
 // DBConfig holds PostgreSQL connection settings.
 type DBConfig struct {
-	Host                string        `koanf:"host" secret:"false"`
-	Port                int           `koanf:"port" secret:"false"`
-	User                string        `koanf:"user" secret:"false"`
-	Password            string        `koanf:"password" secret:"true"`
-	Name                string        `koanf:"name" secret:"false"`
-	SSLMode             string        `koanf:"sslmode" secret:"false"`
-	MaxOpenConns        int           `koanf:"max_open_conns" secret:"false"`
-	MaxIdleConns        int           `koanf:"max_idle_conns" secret:"false"`
-	ConnMaxLifetime     time.Duration `koanf:"conn_max_lifetime" secret:"false"`
-	StartupProbeTimeout time.Duration `koanf:"startup_probe_timeout" secret:"false"`
+	Host                        string        `koanf:"host" secret:"false"`
+	Port                        int           `koanf:"port" secret:"false"`
+	User                        string        `koanf:"user" secret:"false"`
+	Password                    string        `koanf:"password" secret:"true"`
+	Name                        string        `koanf:"name" secret:"false"`
+	SSLMode                     string        `koanf:"sslmode" secret:"false"`
+	MaxOpenConns                int           `koanf:"max_open_conns" secret:"false"`
+	MaxIdleConns                int           `koanf:"max_idle_conns" secret:"false"`
+	ConnMaxLifetime             time.Duration `koanf:"conn_max_lifetime" secret:"false"`
+	StartupProbeTimeout         time.Duration `koanf:"startup_probe_timeout" secret:"false"`
+	F74aBackupAttestorPublicKey string        `koanf:"f74a_backup_attestor_public_key" secret:"false"`
 }
 
 // DSN returns a PostgreSQL connection string with properly escaped components.

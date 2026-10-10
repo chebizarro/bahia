@@ -3204,3 +3204,19 @@ func TestDNSValidationEnabled(t *testing.T) {
 		}
 	})
 }
+
+func TestF74aBackupAttestorPinLoadsFromReadOnlyConfig(t *testing.T) {
+	pin := strings.Repeat("a", 64)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("dev_mode: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BAHIA_DB_F74A_BACKUP_ATTESTOR_PUBLIC_KEY", pin)
+	cfg, err := LoadReadOnly(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DB.F74aBackupAttestorPublicKey != pin {
+		t.Fatalf("backup attestor pin was not loaded from the effective config")
+	}
+}

@@ -51,7 +51,7 @@ func TestF74aCompactIsReadOnlyEvenWithConfirm(t *testing.T) {
 	} {
 		var output, errors bytes.Buffer
 		require.Equal(t, 1, run(context.Background(), args, &output, &errors))
-		require.Contains(t, errors.String(), "no trusted same-PostgreSQL backup and restore receipt contract")
+		require.Contains(t, errors.String(), "signed receipt verification is read-only")
 	}
 	var output, errors bytes.Buffer
 	require.Equal(t, 1, run(context.Background(), []string{"f74a-compact"}, &output, &errors))
@@ -122,4 +122,40 @@ func TestF74aRestorePreflightCannotConfirmDeletion(t *testing.T) {
 		require.Equal(t, 1, run(context.Background(), args, &output, &errors))
 		require.Empty(t, output.String())
 	}
+}
+
+func TestF74aVerifyReceiptRequiresIndependentPinBeforeDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("dev_mode: true\n"), 0o600))
+	for _, args := range [][]string{
+		{"f74a-verify-receipt", "--config", path, "--f74a-receipt", "unused.json"},
+		{"--config", path, "--f74a-receipt", "unused.json", "f74a-verify-receipt"},
+	} {
+		var output, errors bytes.Buffer
+		require.Equal(t, 1, run(context.Background(), args, &output, &errors))
+		require.Contains(t, errors.String(), "backup attestor public key is not configured")
+		require.Empty(t, output.String())
+	}
+	var output, errors bytes.Buffer
+	require.Equal(t, 1, run(context.Background(), []string{"f74a-verify-receipt"}, &output, &errors))
+	require.Contains(t, errors.String(), "requires --f74a-receipt")
+	output.Reset()
+	errors.Reset()
+	require.Equal(t, 1, run(context.Background(), []string{"f74a-compact", "--f74a-receipt", "unused.json"}, &output, &errors))
+	require.Contains(t, errors.String(), "only valid for f74a-verify-receipt")
+}
+
+func TestF74aVerifyReceiptNeverSeedsMountedConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte("dev_mode: true\n")
+	require.NoError(t, os.WriteFile(path, original, 0o600))
+	t.Setenv("BAHIA_NOSTR__SIDECAR__ENABLED", "true")
+	var output, errors bytes.Buffer
+	require.Equal(t, 1, run(context.Background(), []string{
+		"f74a-verify-receipt", "--config", path, "--f74a-receipt", "unused.json",
+	}, &output, &errors))
+	require.Contains(t, errors.String(), "read-only config load refuses mutable-policy bootstrap")
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, original, got)
 }

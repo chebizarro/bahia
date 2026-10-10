@@ -28,6 +28,7 @@ const usage = "usage: bahia-migrate [--config path] [--confirm] [--force] [--to 
 	"       bahia-migrate [--config path] [--cutoff RFC3339] [--f74a-timeout duration] f74a-census\n" +
 	"       bahia-migrate [--config path] --cutoff RFC3339 [--f74a-timeout duration] f74a-compact (read-only dry run)\n" +
 	"       bahia-migrate [--config path] --cutoff RFC3339 [--f74a-timeout duration] f74a-restore-preflight (unauthenticated read-only inventory)\n" +
+	"       bahia-migrate [--config path] --f74a-receipt path [--f74a-timeout duration] f74a-verify-receipt (signed read-only check; no deletion)\n" +
 	"       bahia-migrate [--config path] --confirm-quiesced f74a-import (stop daemon and all SQL writers first)\n" +
 	"       bahia-migrate [--config path] [--confirm-quiesced --outbox-path /absolute/daemon/outbox.bolt] legacy-cutover (read-only census fails when blocked; seal only when empty)\n" +
 	"       bahia-migrate [--config path] --target default|control-plane [--after token] [--max-rows n] outbox-transfer (read-only inventory; --apply is disabled)\n" +
@@ -59,6 +60,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	confirmQuiesced := flags.Bool("confirm-quiesced", false, "confirm all daemon and SQL writers are stopped for offline cutover")
 	cutoverOutbox := flags.String("outbox-path", "", "legacy-cutover seal: absolute daemon outbox path, matching configured path")
 	cutoffText := flags.String("cutoff", "", "F74a census/compaction UTC cutoff in RFC3339 format")
+	f74aReceiptPath := flags.String("f74a-receipt", "", "F74a: path to independently attested backup/restore receipt")
 	f74aTimeout := flags.Duration("f74a-timeout", 30*time.Minute, "F74a read-only action deadline (1s..24h; default 30m)")
 	force := flags.Bool("force", false, "allow down across out-of-order applied history")
 	to := flags.String("to", "", "full filename stem to retain when running down")
@@ -91,7 +93,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return reportError(stderr, "outbox-transfer --apply is disabled: SQL publisher quiescence and effective durable relay policy cannot be proven by this command; no row was claimed or enqueued")
 	}
 	if action == "f74a-compact" && *confirm {
-		return reportError(stderr, "confirmed F74a compaction is disabled: no trusted same-PostgreSQL backup and restore receipt contract exists")
+		return reportError(stderr, "confirmed F74a compaction is disabled: signed receipt verification is read-only; live backup object retention, revocation, credential recovery and per-batch admission are unproved")
 	}
 	if action == "f74a-import" && !*confirmQuiesced {
 		return reportError(stderr, "f74a-import requires --confirm-quiesced; stop all daemon and SQL writers first")
@@ -125,13 +127,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return reportError(stderr, "outbox-transfer --max-rows must be in 1..10000")
 		}
 	}
+	if action != "f74a-verify-receipt" && *f74aReceiptPath != "" {
+		return reportError(stderr, "--f74a-receipt is only valid for f74a-verify-receipt")
+	}
+	if action == "f74a-verify-receipt" && *f74aReceiptPath == "" {
+		return reportError(stderr, "f74a-verify-receipt requires --f74a-receipt")
+	}
 	if action != "f74a-census" && action != "f74a-compact" && action != "f74a-restore-preflight" && *cutoffText != "" {
 		return reportError(stderr, "--cutoff is only valid for F74a actions")
 	}
-	if action != "f74a-census" && action != "f74a-compact" && action != "f74a-restore-preflight" && *f74aTimeout != 30*time.Minute {
+	if action != "f74a-census" && action != "f74a-compact" && action != "f74a-restore-preflight" && action != "f74a-verify-receipt" && *f74aTimeout != 30*time.Minute {
 		return reportError(stderr, "--f74a-timeout is only valid for F74a read-only actions")
 	}
-	if action == "f74a-census" || action == "f74a-compact" || action == "f74a-restore-preflight" {
+	if action == "f74a-census" || action == "f74a-compact" || action == "f74a-restore-preflight" || action == "f74a-verify-receipt" {
 		if *f74aTimeout < time.Second || *f74aTimeout > 24*time.Hour {
 			return reportError(stderr, "--f74a-timeout must be between 1s and 24h")
 		}
@@ -160,7 +168,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return reportError(stderr, "down requires --confirm")
 	}
 	loadConfig := config.Load
-	if action == "legacy-cutover" || action == "f74a-census" || action == "f74a-compact" || action == "f74a-restore-preflight" {
+	if action == "legacy-cutover" || action == "f74a-census" || action == "f74a-compact" || action == "f74a-restore-preflight" || action == "f74a-verify-receipt" {
 		loadConfig = config.LoadReadOnly
 	}
 	cfg, err := loadConfig(*configPath)
@@ -172,6 +180,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return reportError(stderr, "legacy-cutover outbox path: %v", err)
 		}
+	}
+	if action == "f74a-verify-receipt" && strings.TrimSpace(cfg.DB.F74aBackupAttestorPublicKey) == "" {
+		return reportError(stderr, "F74a backup attestor public key is not configured")
 	}
 	pool, err := db.Connect(ctx, cfg.DB, zap.NewNop())
 	if err != nil {
@@ -186,6 +197,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if action == "legacy-cutover" {
 		return runLegacyCutover(ctx, pool, *cutoverOutbox, *confirmQuiesced, stdout, stderr)
+	}
+	if action == "f74a-verify-receipt" {
+		return runF74aVerifyReceipt(ctx, pool, cfg.DB.F74aBackupAttestorPublicKey, *f74aReceiptPath, cfg.DB.RedactError, stdout, stderr)
 	}
 	if action == "f74a-restore-preflight" {
 		return runF74aRestorePreflight(ctx, pool, cutoff, cfg.DB.RedactError, stdout, stderr)
@@ -205,7 +219,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func isAction(value string) bool {
 	switch value {
-	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact", "f74a-restore-preflight", "f74a-import", "legacy-cutover", "outbox-transfer":
+	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact", "f74a-restore-preflight", "f74a-verify-receipt", "f74a-import", "legacy-cutover", "outbox-transfer":
 		return true
 	default:
 		return false
@@ -409,6 +423,45 @@ func runF74aRestorePreflight(ctx context.Context, pool *pgxpool.Pool, cutoff tim
 	} {
 		if _, err := fmt.Fprintf(stdout, "%s\t%v\n", item.name, item.value); err != nil {
 			return reportError(stderr, "writing F74a restore preflight: %v", err)
+		}
+	}
+	return 0
+}
+
+// runF74aVerifyReceipt is read-only and deliberately has no handoff to the
+// confirmed deletion path. A signature does not prove current object custody.
+func runF74aVerifyReceipt(ctx context.Context, pool *pgxpool.Pool, pin, path string, redact func(error) error, stdout, stderr io.Writer) int {
+	if strings.TrimSpace(pin) == "" {
+		return reportError(stderr, "F74a backup attestor public key is not configured")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return reportError(stderr, "opening F74a receipt: %v", err)
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, repository.F74aReceiptMaxBytes+1))
+	if err != nil {
+		return reportError(stderr, "reading F74a receipt: %v", err)
+	}
+	result, err := repository.VerifyF74aAttestedReceipt(ctx, pool, pin, data)
+	if err != nil {
+		return reportError(stderr, "verifying F74a receipt: %v", redact(err))
+	}
+	for _, item := range []struct {
+		name  string
+		value any
+	}{
+		{"receipt_id", result.ReceiptID},
+		{"source_database_name", result.SourceDatabase.Name},
+		{"source_database_oid", result.SourceDatabase.OID},
+		{"source_cluster_system_identifier", result.SourceDatabase.SystemIdentifier},
+		{"cutoff", result.Cutoff.Format(time.RFC3339Nano)},
+		{"inventory_sha256", result.InventorySHA256},
+		{"deletion_authorized", false},
+		{"missing_trusted_evidence", "live_backup_object_retention_revocation_and_credential_recovery_verification_plus_transactional_per_batch_admission"},
+	} {
+		if _, err := fmt.Fprintf(stdout, "%s\t%v\n", item.name, item.value); err != nil {
+			return reportError(stderr, "writing F74a receipt verification: %v", err)
 		}
 	}
 	return 0

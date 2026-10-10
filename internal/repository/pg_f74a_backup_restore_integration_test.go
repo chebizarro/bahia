@@ -4,9 +4,14 @@ package repository_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -210,6 +215,79 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 	require.NotEqual(t, sourcePreflight.DatabaseName, restoredPreflight.DatabaseName)
 	sourcePreflight.DatabaseName, restoredPreflight.DatabaseName = "", ""
 	require.Equal(t, sourcePreflight, restoredPreflight, "isolated restore inventory must match source snapshot")
+	var monitorCanRead bool
+	require.NoError(t, source.QueryRow(ctx, `SELECT has_function_privilege('pg_monitor','pg_control_system()','EXECUTE')`).Scan(&monitorCanRead))
+	require.True(t, monitorCanRead, "PostgreSQL 16 pg_monitor must be sufficient for physical identity query")
+	sourceIdentity, err := repository.ReadF74aDatabaseIdentity(ctx, source)
+	require.NoError(t, err)
+	restoreIdentity, err := repository.ReadF74aDatabaseIdentity(ctx, target)
+	require.NoError(t, err)
+	require.NotEqual(t, sourceIdentity, restoreIdentity)
+	attestorPub, attestorPriv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	payload := repository.F74aAttestedBackupPayload{
+		Version: "bahia-f74a-backup-restore-v1", ReceiptID: uuid.New(),
+		SourceDatabase: sourceIdentity, RestoreDatabase: restoreIdentity, Cutoff: sourcePreflight.Cutoff,
+		SnapshotID: "disposable-pg16-snapshot", BackupObjectRef: "file:///tmp/f74a.dump", SnapshotCreatedAt: now.Add(-3 * time.Minute),
+		BackupObjectSHA256:    strings.Fields(dumpDigest)[0],
+		SourceInventorySHA256: sourcePreflight.InventorySHA256, RestoreInventorySHA256: restoredPreflight.InventorySHA256,
+		RestoreVerifiedAt: now.Add(-2 * time.Minute), IssuedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour),
+	}
+	signReceipt := func(p repository.F74aAttestedBackupPayload) []byte {
+		t.Helper()
+		message, signingErr := p.SigningBytes()
+		require.NoError(t, signingErr)
+		encoded, signingErr := json.Marshal(repository.F74aAttestedBackupReceipt{
+			Payload: p, Signature: hex.EncodeToString(ed25519.Sign(attestorPriv, message)),
+		})
+		require.NoError(t, signingErr)
+		return encoded
+	}
+	verifiedReceipt := signReceipt(payload)
+	verification, err := repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(attestorPub), verifiedReceipt)
+	require.NoError(t, err)
+	require.Equal(t, payload.ReceiptID, verification.ReceiptID)
+	targetPayload := payload
+	targetPayload.SourceDatabase, targetPayload.RestoreDatabase = restoreIdentity, sourceIdentity
+	targetReceipt := signReceipt(targetPayload)
+	_, err = repository.VerifyF74aAttestedReceipt(ctx, target, hex.EncodeToString(attestorPub), targetReceipt)
+	require.NoError(t, err)
+	_, err = repository.VerifyF74aAttestedReceipt(ctx, source, "", verifiedReceipt)
+	require.ErrorContains(t, err, "not configured")
+	wrongPub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	_, err = repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(wrongPub), verifiedReceipt)
+	require.ErrorContains(t, err, "signature")
+	badDatabase := payload
+	oid, err := strconv.ParseUint(badDatabase.SourceDatabase.OID, 10, 32)
+	require.NoError(t, err)
+	badDatabase.SourceDatabase.OID = strconv.FormatUint(oid+1, 10)
+	_, err = repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(attestorPub), signReceipt(badDatabase))
+	require.ErrorContains(t, err, "different PostgreSQL database")
+	badIsolation := payload
+	badIsolation.RestoreDatabase = badIsolation.SourceDatabase
+	_, err = repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(attestorPub), signReceipt(badIsolation))
+	require.ErrorContains(t, err, "invalid scope")
+	badObject := payload
+	badObject.BackupObjectRef = ""
+	_, err = repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(attestorPub), signReceipt(badObject))
+	require.ErrorContains(t, err, "invalid scope")
+	badRestore := payload
+	badRestore.RestoreInventorySHA256 = strings.Repeat("0", 64)
+	_, err = repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(attestorPub), signReceipt(badRestore))
+	require.ErrorContains(t, err, "invalid scope")
+	expired := payload
+	expired.ExpiresAt = now.Add(-time.Second)
+	_, err = repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(attestorPub), signReceipt(expired))
+	require.ErrorContains(t, err, "invalid scope")
+	tamperedReceipt := repository.F74aAttestedBackupReceipt{}
+	require.NoError(t, json.Unmarshal(verifiedReceipt, &tamperedReceipt))
+	tamperedReceipt.Payload.Cutoff = payload.Cutoff.Add(time.Second)
+	tamperedJSON, err := json.Marshal(tamperedReceipt)
+	require.NoError(t, err)
+	_, err = repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(attestorPub), tamperedJSON)
+	require.ErrorContains(t, err, "signature")
 	zoneConfig, err := pgxpool.ParseConfig(dsn("f74a_restored"))
 	require.NoError(t, err)
 	zoneConfig.ConnConfig.RuntimeParams["TimeZone"] = "Pacific/Honolulu"
@@ -295,6 +373,8 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 	changedPreflight, err := repository.PreflightF74aRestore(ctx, target, sourcePreflight.Cutoff)
 	require.NoError(t, err)
 	require.NotEqual(t, sourcePreflight.InventorySHA256, changedPreflight.InventorySHA256, "changed state link must alter inventory")
+	_, err = repository.VerifyF74aAttestedReceipt(ctx, target, hex.EncodeToString(attestorPub), targetReceipt)
+	require.ErrorContains(t, err, "inventory differs from connected database")
 	for _, id := range ids[1:] {
 		original, getErr := archive.GetArchivedByID(ctx, id)
 		require.NoError(t, getErr)
