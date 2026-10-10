@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 // Upload uploads data to the first available Blossom server.
@@ -192,18 +191,13 @@ func validateUploadDescriptor(bd *BlobDescriptor, hash string, size int64) error
 // createAuthHeader creates a Blossom BUD-11 authorization header (kind 24242).
 // Returns "Nostr <base64url-encoded-signed-event>" for authenticated requests.
 func (c *Client) createAuthHeader(ctx context.Context, url, method, contentHash string) (string, error) {
-	if c.privateKey == "" {
+	if c.signer == nil {
 		return "", nil
 	}
 
-	// Get public key from private key
-	pubkeyHex, err := nostrutil.PublicKeyHexFromPrivateKeyHex(c.privateKey)
+	pubkey, err := c.signer.GetPublicKey(ctx)
 	if err != nil {
-		return "", fmt.Errorf("deriving public key: %w", err)
-	}
-	pubkey, err := nostrutil.PubKeyFromHex(pubkeyHex)
-	if err != nil {
-		return "", fmt.Errorf("decoding public key: %w", err)
+		return "", fmt.Errorf("resolving signer public key: %w", err)
 	}
 
 	// Determine the action verb from the HTTP method
@@ -242,7 +236,7 @@ func (c *Client) createAuthHeader(ctx context.Context, url, method, contentHash 
 	}
 
 	// Sign the event
-	if err := nostrutil.SignEventWithHexKey(event, c.privateKey); err != nil {
+	if err := c.signer.SignEvent(ctx, event); err != nil {
 		return "", fmt.Errorf("signing event: %w", err)
 	}
 

@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	gonostr "fiatjaf.com/nostr"
 	"fmt"
+	"io"
+
+	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
-	"io"
-	"strings"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,12 +29,12 @@ func runF74aImport(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, 
 	if !cfg.Nostr.PublishEnabled {
 		return reportError(stderr, "f74a-import requires nostr.publish_enabled")
 	}
-	key := strings.TrimSpace(cfg.Nostr.PrivateKey)
-	secret, err := gonostr.SecretKeyFromHex(key)
+	// Offline operator tool: it signs as the service with the local key.
+	signer, err := nostrutil.NewLocalKeyer(cfg.Nostr.PrivateKey)
 	if err != nil {
 		return reportError(stderr, "f74a-import requires a valid nostr.private_key: %v", err)
 	}
-	author := secret.Public()
+	author, _ := signer.GetPublicKey(ctx)
 	relays := f74aControlPlaneRelays(cfg.Nostr)
 	if len(relays) == 0 {
 		return reportError(stderr, "f74a-import requires control-plane relays")
@@ -60,11 +61,12 @@ func runF74aImport(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, 
 	if moved := outbox.MovedAside(); moved != "" {
 		return reportError(stderr, "local outbox corruption moved %s aside; recover it before importing", moved)
 	}
-	poolRelays := nostradapter.NewRelayPool(relays, logger, nostradapter.WithPrivateKey(key))
+	poolRelays := nostradapter.NewRelayPool(relays, logger, nostradapter.WithAuthSigner(signer))
 	defer poolRelays.Close()
 	poolRelays.Connect(ctx)
 	pub := nostradapter.NewPublisher(cfg.Nostr, poolRelays, nil, logger,
 		nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane),
+		nostradapter.WithPublisherSigner(signer),
 		nostradapter.WithLocalOutbox(outbox, store))
 	ledger := f74aDeliveryLedger{store: outbox, author: author, policyID: policyID, outbox: outbox, events: store}
 	ledger.reverify = func(ctx context.Context, ev gonostr.Event) (bool, error) {
@@ -92,14 +94,11 @@ func runF74aImport(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, 
 		repository.NewPgRuntimeObservationRepository(pool), repository.NewPgEnvironmentServiceStateRepository(pool),
 		nil, nil, logger)
 	history := nostradapter.NewLocalEventRepository(store, nil).Authored(author.Hex())
-	projector := nostradapter.NewProjector(cfg.Nostr, registry, f74aTrackedPublisher{Publisher: pub, ledger: ledger}, history, logger)
+	projector := nostradapter.NewProjector(cfg.Nostr, registry, f74aTrackedPublisher{Publisher: pub, ledger: ledger}, history, logger,
+		nostradapter.WithProjectorSigner(signer, author.Hex()))
 	pub.OnDeliveryAbandoned(projector.ForgetAbandonedProjection)
 	if !projector.Enabled() {
 		return reportError(stderr, "f74a-import could not enable canonical projector")
-	}
-	signer, err := controlplane.NewPrivateKeySigner(key)
-	if err != nil {
-		return reportError(stderr, "f74a-import signer: %v", err)
 	}
 	trust := f74aMigrationTrustSet(cfg.Nostr, logger)
 	members := controlplane.NewTrustSetMemberSource(trust, nil)

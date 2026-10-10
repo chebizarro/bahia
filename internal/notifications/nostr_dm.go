@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	"fiatjaf.com/nostr/nip44"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
@@ -16,16 +15,15 @@ import (
 
 // NostrDMSender delivers notifications as NIP-44 encrypted direct messages.
 type NostrDMSender struct {
-	relayPool  *nostrAdapter.RelayPool
-	publish    func(context.Context, nostr.Event) (int, error)
-	privateKey string
-	signer     nostr.Signer
-	logger     *zap.Logger
+	relayPool *nostrAdapter.RelayPool
+	publish   func(context.Context, nostr.Event) (int, error)
+	signer    nostr.Keyer
+	logger    *zap.Logger
 }
 
-// NewNostrDMSender creates a new Nostr DM sender.
-// privateKey is Bahia's Nostr private key (hex).
-func NewNostrDMSender(relayPool *nostrAdapter.RelayPool, privateKey string, logger *zap.Logger, signers ...nostr.Signer) *NostrDMSender {
+// NewNostrDMSender creates a new Nostr DM sender that encrypts and signs as
+// the injected service Keyer.
+func NewNostrDMSender(relayPool *nostrAdapter.RelayPool, signer nostr.Keyer, logger *zap.Logger) *NostrDMSender {
 	var publish func(context.Context, nostr.Event) (int, error)
 	if relayPool != nil {
 		publish = relayPool.Publish
@@ -33,16 +31,12 @@ func NewNostrDMSender(relayPool *nostrAdapter.RelayPool, privateKey string, logg
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	sender := &NostrDMSender{
-		relayPool:  relayPool,
-		publish:    publish,
-		privateKey: privateKey,
-		logger:     logger,
+	return &NostrDMSender{
+		relayPool: relayPool,
+		publish:   publish,
+		signer:    signer,
+		logger:    logger,
 	}
-	if len(signers) > 0 {
-		sender.signer = signers[0]
-	}
-	return sender
 }
 
 // Send delivers a notification as an encrypted Nostr DM (Kind 4 with NIP-44).
@@ -52,8 +46,8 @@ func (s *NostrDMSender) Send(ctx context.Context, ch *domain.NotificationChannel
 	if s == nil || s.publish == nil {
 		return fmt.Errorf("nostr DM relay publisher is not configured")
 	}
-	if s.privateKey == "" {
-		return fmt.Errorf("nostr DM private key is not configured")
+	if s.signer == nil {
+		return fmt.Errorf("nostr DM signer is not configured")
 	}
 	if ch == nil {
 		return fmt.Errorf("nostr DM channel is required")
@@ -69,13 +63,11 @@ func (s *NostrDMSender) Send(ctx context.Context, ch *domain.NotificationChannel
 		content += string(data)
 	}
 
-	// Generate conversation key for NIP-44 encryption.
-	conversationKey, err := nostrutil.NIP44ConversationKey(recipientPubkey, s.privateKey)
+	recipient, err := nostrutil.PubKeyFromHex(recipientPubkey)
 	if err != nil {
-		return fmt.Errorf("generating conversation key: %w", err)
+		return fmt.Errorf("decode recipient pubkey: %w", err)
 	}
-
-	encrypted, err := nip44.Encrypt(content, conversationKey)
+	encrypted, err := s.signer.Encrypt(ctx, content, recipient)
 	if err != nil {
 		return fmt.Errorf("encrypting DM: %w", err)
 	}
@@ -90,13 +82,7 @@ func (s *NostrDMSender) Send(ctx context.Context, ch *domain.NotificationChannel
 		},
 	}
 
-	sign := func() error {
-		if s.signer != nil {
-			return s.signer.SignEvent(ctx, &ev)
-		}
-		return nostrutil.SignEventWithHexKey(&ev, s.privateKey)
-	}
-	if err := sign(); err != nil {
+	if err := s.signer.SignEvent(ctx, &ev); err != nil {
 		return fmt.Errorf("signing DM event: %w", err)
 	}
 

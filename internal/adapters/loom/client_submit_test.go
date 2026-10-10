@@ -2,14 +2,12 @@ package loom
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
 	"fiatjaf.com/nostr"
-	"fiatjaf.com/nostr/keyer"
 	"fiatjaf.com/nostr/nip44"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -59,7 +57,7 @@ func TestSubmitAndCancelRejectZeroRelayAcceptance(t *testing.T) {
 	pool := &submitRelayPool{accepted: &zero}
 	client := &Client{
 		pool:             pool,
-		privateKey:       nostrutil.GeneratePrivateKeyHex(),
+		signer:           testKeyer(nostrutil.GeneratePrivateKeyHex()),
 		submittedWorkers: make(map[string]string),
 		logger:           zap.NewNop(),
 	}
@@ -78,7 +76,7 @@ func TestSubmitJob_SecretsWithoutResolvedWorkerFailClosed(t *testing.T) {
 	pool := &submitRelayPool{}
 	client := &Client{
 		pool:             pool,
-		privateKey:       nostrutil.GeneratePrivateKeyHex(),
+		signer:           testKeyer(nostrutil.GeneratePrivateKeyHex()),
 		submittedWorkers: make(map[string]string),
 		logger:           zap.NewNop(),
 	}
@@ -105,7 +103,7 @@ func TestSubmitJob_RequirementsWithoutWorkerRepositoryFailClosed(t *testing.T) {
 	pool := &submitRelayPool{}
 	client := &Client{
 		pool:             pool,
-		privateKey:       nostrutil.GeneratePrivateKeyHex(),
+		signer:           testKeyer(nostrutil.GeneratePrivateKeyHex()),
 		submittedWorkers: make(map[string]string),
 		logger:           zap.NewNop(),
 	}
@@ -123,49 +121,11 @@ func TestSubmitJob_RequirementsWithoutWorkerRepositoryFailClosed(t *testing.T) {
 	}
 }
 
-func TestSubmitJob_UsesInjectedControlPlaneSigner(t *testing.T) {
-	pool := &submitRelayPool{}
-	fallbackKey := nostrutil.GeneratePrivateKeyHex()
-	controlPlaneKey := nostrutil.GeneratePrivateKeyHex()
-	decoded, err := hex.DecodeString(controlPlaneKey)
-	if err != nil {
-		t.Fatalf("decode control-plane key: %v", err)
-	}
-	var secret [32]byte
-	copy(secret[:], decoded)
-	controlPlaneSigner := keyer.NewPlainKeySigner(secret)
-	client := &Client{
-		pool:             pool,
-		privateKey:       fallbackKey,
-		jobSigner:        controlPlaneSigner,
-		submittedWorkers: make(map[string]string),
-		logger:           zap.NewNop(),
-	}
-
-	if _, err := client.SubmitJob(t.Context(), JobRequest{Type: "build"}); err != nil {
-		t.Fatalf("SubmitJob() error = %v", err)
-	}
-	wantPubkey, err := controlPlaneSigner.GetPublicKey(t.Context())
-	if err != nil {
-		t.Fatalf("control-plane public key: %v", err)
-	}
-	fallbackPubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(fallbackKey)
-	if err != nil {
-		t.Fatalf("fallback public key: %v", err)
-	}
-	if len(pool.published) != 1 || pool.published[0].PubKey.Hex() != wantPubkey.Hex() {
-		t.Fatalf("published signer = %v, want control-plane pubkey %s", pool.published, wantPubkey.Hex())
-	}
-	if pool.published[0].PubKey.Hex() == fallbackPubkey {
-		t.Fatalf("kind-5100 was signed by fallback raw key %s", fallbackPubkey)
-	}
-}
-
 func TestSubmitJob_InvalidWorkerPubkeyDoesNotPublish(t *testing.T) {
 	pool := &submitRelayPool{}
 	client := &Client{
 		pool:             pool,
-		privateKey:       nostrutil.GeneratePrivateKeyHex(),
+		signer:           testKeyer(nostrutil.GeneratePrivateKeyHex()),
 		submittedWorkers: make(map[string]string),
 		logger:           zap.NewNop(),
 	}
@@ -190,7 +150,7 @@ func TestSubmitJob_SecretsAreEncryptedForResolvedWorkerBeforePublish(t *testing.
 	pool := &submitRelayPool{}
 	client := &Client{
 		pool:             pool,
-		privateKey:       nostrutil.GeneratePrivateKeyHex(),
+		signer:           testKeyer(nostrutil.GeneratePrivateKeyHex()),
 		submittedWorkers: make(map[string]string),
 		logger:           zap.NewNop(),
 	}
@@ -229,7 +189,7 @@ func TestSubmitJob_ProjectsBoundedProfileParamsAsTags(t *testing.T) {
 	pool := &submitRelayPool{}
 	client := &Client{
 		pool:             pool,
-		privateKey:       nostrutil.GeneratePrivateKeyHex(),
+		signer:           testKeyer(nostrutil.GeneratePrivateKeyHex()),
 		submittedWorkers: make(map[string]string),
 		logger:           zap.NewNop(),
 	}
@@ -273,7 +233,7 @@ func TestSubmitJob_ProjectsBoundedProfileParamsAsTags(t *testing.T) {
 
 func TestSubmitJob_EmitsSortedImmutableAuthorizedDependencyTags(t *testing.T) {
 	pool := &submitRelayPool{}
-	client := &Client{pool: pool, privateKey: nostrutil.GeneratePrivateKeyHex(), submittedWorkers: make(map[string]string), logger: zap.NewNop()}
+	client := &Client{pool: pool, signer: testKeyer(nostrutil.GeneratePrivateKeyHex()), submittedWorkers: make(map[string]string), logger: zap.NewNop()}
 	_, err := client.SubmitJob(t.Context(), JobRequest{BuildDependencies: []BuildDependency{
 		{Name: "drydock", CloneURL: "https://git.sharegap.net/cascadia/drydock.git", CommitSHA: strings.Repeat("b", 40)},
 		{Name: "cascadia-go", CloneURL: "https://git.sharegap.net/cascadia/cascadia-go.git", CommitSHA: strings.Repeat("a", 40)},
@@ -300,7 +260,7 @@ func TestSubmitJob_RejectsFloatingDependencyReferencesBeforePublish(t *testing.T
 	for _, ref := range []string{"main", "v1.2.3", strings.Repeat("A", 40), strings.Repeat("a", 39)} {
 		t.Run(ref, func(t *testing.T) {
 			pool := &submitRelayPool{}
-			client := &Client{pool: pool, privateKey: nostrutil.GeneratePrivateKeyHex(), submittedWorkers: make(map[string]string), logger: zap.NewNop()}
+			client := &Client{pool: pool, signer: testKeyer(nostrutil.GeneratePrivateKeyHex()), submittedWorkers: make(map[string]string), logger: zap.NewNop()}
 			_, err := client.SubmitJob(t.Context(), JobRequest{BuildDependencies: []BuildDependency{{
 				Name: "drydock", CloneURL: "https://git.sharegap.net/cascadia/drydock.git", CommitSHA: ref,
 			}}})
@@ -325,7 +285,7 @@ func TestSubmitJob_RejectsCredentialBearingAndNonHTTPSDependencyURLsWithoutLeaks
 		t.Run(fmt.Sprint(index), func(t *testing.T) {
 			pool := &submitRelayPool{}
 			core, logs := observer.New(zap.DebugLevel)
-			client := &Client{pool: pool, privateKey: nostrutil.GeneratePrivateKeyHex(), submittedWorkers: make(map[string]string), logger: zap.New(core)}
+			client := &Client{pool: pool, signer: testKeyer(nostrutil.GeneratePrivateKeyHex()), submittedWorkers: make(map[string]string), logger: zap.New(core)}
 			_, err := client.SubmitJob(t.Context(), JobRequest{BuildDependencies: []BuildDependency{{
 				Name: "drydock", CloneURL: cloneURL, CommitSHA: strings.Repeat("a", 40),
 			}}})
@@ -376,7 +336,7 @@ func TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment
 		},
 	}}
 	client := &Client{
-		pool: pool, workerRepo: workers, privateKey: senderPrivateKey,
+		pool: pool, workerRepo: workers, signer: testKeyer(senderPrivateKey),
 		submittedWorkers: make(map[string]string), logger: zap.New(logCore),
 	}
 	runEventID := strings.Repeat("12", 32)

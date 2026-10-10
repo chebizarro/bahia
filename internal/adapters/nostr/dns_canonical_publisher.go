@@ -298,15 +298,7 @@ func (p *DNSCanonicalPublisher) HydrateFromStore(ctx context.Context) error {
 	if p.projector == nil || p.projector.history == nil {
 		return nil
 	}
-	servicePubkey := ""
-	if p.projector.privateKey != "" {
-		var err error
-		servicePubkey, err = publicKeyHexFromPrivateKeyHex(p.projector.privateKey)
-		if err != nil {
-			return fmt.Errorf("derive service pubkey for DNS hydration: %w", err)
-		}
-	}
-	records, err := p.projector.liveRetainedControlState(ctx, int(kinds.CPStateFamilyDNSEndpoint), servicePubkey)
+	records, err := p.projector.liveRetainedControlState(ctx, int(kinds.CPStateFamilyDNSEndpoint), p.projector.servicePubkey)
 	if err != nil {
 		return fmt.Errorf("hydrate DNS endpoint cache: %w", err)
 	}

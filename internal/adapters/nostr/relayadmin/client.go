@@ -18,7 +18,6 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
-	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 const (
@@ -53,7 +52,7 @@ var (
 	ErrDisabled           = errors.New("nip-86 relay administration is disabled")
 	ErrUnauthorizedTarget = errors.New("nip-86 relay administration target is not authorized")
 	ErrUnsupportedMethod  = errors.New("unsupported nip-86 relay administration method")
-	ErrMissingPrivateKey  = errors.New("nip-86 relay administration private key is required")
+	ErrMissingSigner      = errors.New("nip-86 relay administration signer is required")
 	ErrAuthHeader         = errors.New("nip-98 authorization header preparation failed")
 	ErrRelayError         = errors.New("nip-86 relay returned error")
 )
@@ -84,15 +83,14 @@ var allowedMethods = map[string]struct{}{
 	MethodSetIntentAuthors:            {},
 }
 
-// Config constructs an opt-in NIP-86 relay administration client. PrivateKeyHex
-// is the resolved secret value from configuration's administrator private-key
-// reference; do not store plaintext private keys in static configuration.
+// Config constructs an opt-in NIP-86 relay administration client. Signer is
+// the relay administrator identity that signs NIP-98 request authorizations.
 type Config struct {
-	Enabled       bool
-	PrivateKeyHex string
-	Targets       []Target
-	HTTPClient    *http.Client
-	Now           func() time.Time
+	Enabled    bool
+	Signer     nostr.Signer
+	Targets    []Target
+	HTTPClient *http.Client
+	Now        func() time.Time
 }
 
 // Target is one explicitly configured Bahia-owned or Bahia-authorized relay
@@ -108,7 +106,7 @@ type Target struct {
 
 type Client struct {
 	enabled    bool
-	privateKey string
+	signer     nostr.Signer
 	pubkey     string
 	targets    map[string]Target
 	httpClient *http.Client
@@ -159,15 +157,15 @@ func NewClient(cfg Config) (*Client, error) {
 	if !cfg.Enabled {
 		return client, nil
 	}
-	client.privateKey = strings.TrimSpace(cfg.PrivateKeyHex)
-	if client.privateKey == "" {
-		return nil, ErrMissingPrivateKey
+	if cfg.Signer == nil {
+		return nil, ErrMissingSigner
 	}
-	pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(client.privateKey)
+	client.signer = cfg.Signer
+	pubkey, err := cfg.Signer.GetPublicKey(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("deriving relay administrator pubkey: %w", err)
+		return nil, fmt.Errorf("resolving relay administrator pubkey: %w", err)
 	}
-	client.pubkey = strings.ToLower(pubkey)
+	client.pubkey = pubkey.Hex()
 	if len(cfg.Targets) == 0 {
 		return nil, fmt.Errorf("%w: at least one target is required", ErrUnauthorizedTarget)
 	}
@@ -214,7 +212,7 @@ func (c *Client) Call(ctx context.Context, targetRef, method string, params []an
 		return nil, fmt.Errorf("creating nip-86 request: %w", err)
 	}
 	req.Header.Set("Content-Type", ContentType)
-	authHeader, err := c.createAuthHeader(target.RelayURL, body)
+	authHeader, err := c.createAuthHeader(ctx, target.RelayURL, body)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrAuthHeader, err)
 	}
@@ -309,7 +307,7 @@ func (c *Client) TargetRefs() []string {
 	return refs
 }
 
-func (c *Client) createAuthHeader(relayURL string, body []byte) (string, error) {
+func (c *Client) createAuthHeader(ctx context.Context, relayURL string, body []byte) (string, error) {
 	payloadHash := sha256.Sum256(body)
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -331,7 +329,7 @@ func (c *Client) createAuthHeader(relayURL string, body []byte) (string, error) 
 		},
 		Content: "",
 	}
-	if err := nostrutil.SignEventWithHexKey(event, c.privateKey); err != nil {
+	if err := c.signer.SignEvent(ctx, event); err != nil {
 		return "", fmt.Errorf("signing nip-98 event: %w", err)
 	}
 	eventJSON, err := json.Marshal(event)

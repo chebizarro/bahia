@@ -56,5 +56,5 @@ func newTestProjector(cfg config.NostrConfig, source ProjectionSource, sink rela
 	if sink != nil {
 		publisher = sinkProjectionPublisher{sink: sink, repo: repo}
 	}
-	return NewProjector(cfg, source, publisher, repo, logger, opts...)
+	return newKeyedTestProjector(cfg, source, publisher, repo, logger, opts...)
 }

@@ -58,7 +58,7 @@ func testClient(t *testing.T, sub *nostrAdapter.MergedSubscription, clientSK str
 	pool := &fakeLoomRelayPool{sub: sub}
 	client := &Client{
 		pool:                   pool,
-		privateKey:             clientSK,
+		signer:                 testKeyer(clientSK),
 		clientPubkey:           clientPK,
 		jobTimeout:             time.Minute,
 		jobSubscriptionBackoff: time.Millisecond,

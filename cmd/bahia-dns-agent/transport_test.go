@@ -150,7 +150,7 @@ func (f *agentFixture) start(t *testing.T, storePath string, relays ...*agentTes
 	}
 	run := &agentRun{relays: make(chan string, 16), done: make(chan error, 1), store: store}
 	logger := zap.New(eoseCore{relays: run.relays})
-	run.pool = nostradapter.NewRelayPool(urls, zap.NewNop(), nostradapter.WithPrivateKey(f.agentKey))
+	run.pool = nostradapter.NewRelayPool(urls, zap.NewNop(), nostradapter.WithAuthSigner(keyer.NewPlainKeySigner(nostr.MustSecretKeyFromHex(f.agentKey))))
 	transport, err := newRequestTransport(run.pool, store, f.agentKey, f.requesterPub, logger)
 	require.NoError(t, err)
 	service.RegisterHandlers(transport)

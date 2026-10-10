@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/slicestore"
+	"fiatjaf.com/nostr/keyer"
 	"fiatjaf.com/nostr/khatru"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -97,9 +98,9 @@ func TestAwaitJobStatusFromWorker_RelayAuthIsThePools(t *testing.T) {
 
 	t.Run("pool signer", func(t *testing.T) {
 		reqs.Store(0)
-		pool := nostrAdapter.NewRelayPool([]string{relayURL}, zap.NewNop(), nostrAdapter.WithPrivateKey(clientSK))
+		pool := nostrAdapter.NewRelayPool([]string{relayURL}, zap.NewNop(), nostrAdapter.WithAuthSigner(keyer.NewPlainKeySigner(nostr.MustSecretKeyFromHex(clientSK))))
 		defer pool.Close()
-		client := NewClient(cfg, clientSK, pool, zap.NewNop())
+		client := NewClient(cfg, testKeyer(clientSK), pool, zap.NewNop())
 		type awaitResult struct {
 			status *JobStatus
 			err    error
@@ -132,9 +133,9 @@ func TestAwaitJobStatusFromWorker_RelayAuthIsThePools(t *testing.T) {
 	t.Run("stored result after auth", func(t *testing.T) {
 		var storedReqs atomic.Int32
 		storedURL := authRequiredRelay(t, &storedReqs, result)
-		pool := nostrAdapter.NewRelayPool([]string{storedURL}, zap.NewNop(), nostrAdapter.WithPrivateKey(clientSK))
+		pool := nostrAdapter.NewRelayPool([]string{storedURL}, zap.NewNop(), nostrAdapter.WithAuthSigner(keyer.NewPlainKeySigner(nostr.MustSecretKeyFromHex(clientSK))))
 		defer pool.Close()
-		client := NewClient(cfg, clientSK, pool, zap.NewNop())
+		client := NewClient(cfg, testKeyer(clientSK), pool, zap.NewNop())
 		status, err := client.AwaitJobStatusFromWorker(t.Context(), jobID, workerPK)
 		if err != nil || status == nil || status.Status != StatusCompleted {
 			t.Fatalf("status=%+v error=%v, want the stored result", status, err)
@@ -144,7 +145,7 @@ func TestAwaitJobStatusFromWorker_RelayAuthIsThePools(t *testing.T) {
 	t.Run("no signer", func(t *testing.T) {
 		pool := nostrAdapter.NewRelayPool([]string{relayURL}, zap.NewNop())
 		defer pool.Close()
-		client := NewClient(cfg, clientSK, pool, zap.NewNop())
+		client := NewClient(cfg, testKeyer(clientSK), pool, zap.NewNop())
 		_, err := client.AwaitJobStatusFromWorker(t.Context(), jobID, workerPK)
 		if err == nil || !strings.Contains(err.Error(), "auth-required: authenticated clients only") {
 			t.Fatalf("error = %v, want the relay's auth-required reason", err)

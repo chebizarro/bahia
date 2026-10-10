@@ -220,7 +220,7 @@ func TestResolverStoreAddedRelayCatchesUpWithoutRedownloadingTheOthers(t *testin
 func TestResolverStoreNeedsTheDefaultPool(t *testing.T) {
 	_, pubkey := generatedResolverKeyPair(t)
 	r := New([]string{"wss://relay.example.test"}, pubkey, WithStorePath(filepath.Join(t.TempDir(), "discovery.bolt")))
-	r.poolFactory = func([]string, *zap.Logger, string) relayPool { return &fakeRelayPool{} }
+	r.poolFactory = func([]string, *zap.Logger, nostr.Signer) relayPool { return &fakeRelayPool{} }
 	require.ErrorContains(t, r.Start(t.Context()), "default relay pool")
 }
 

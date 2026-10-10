@@ -175,23 +175,23 @@ type EncryptedRequestHandler func(ctx context.Context, request EncryptedRequest)
 type EncryptedResponder struct {
 	publisher     NostrEventPublisher
 	signer        casnostr.Signer
-	privateKey    string
 	servicePubkey string
 	logger        *zap.Logger
 }
 
-func NewEncryptedResponder(publisher NostrEventPublisher, signer casnostr.Signer, privateKeyHex string, logger *zap.Logger) *EncryptedResponder {
+// NewEncryptedResponder answers encrypted requests as the injected service
+// Keyer: it NIP-44-decrypts requests, encrypts results and signs them.
+func NewEncryptedResponder(publisher NostrEventPublisher, signer casnostr.Signer, logger *zap.Logger) *EncryptedResponder {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	privateKeyHex = strings.TrimSpace(privateKeyHex)
 	servicePubkey := ""
-	if privateKeyHex != "" {
-		if secret, err := nostr.SecretKeyFromHex(privateKeyHex); err == nil {
-			servicePubkey = secret.Public().Hex()
+	if signer != nil {
+		if pubkey, err := signer.GetPublicKey(context.Background()); err == nil {
+			servicePubkey = pubkey.Hex()
 		}
 	}
-	return &EncryptedResponder{publisher: publisher, signer: signer, privateKey: privateKeyHex, servicePubkey: servicePubkey, logger: logger.Named("encrypted-responder")}
+	return &EncryptedResponder{publisher: publisher, signer: signer, servicePubkey: servicePubkey, logger: logger.Named("encrypted-responder")}
 }
 
 func (r *EncryptedResponder) ServicePubkey() string {
@@ -201,7 +201,7 @@ func (r *EncryptedResponder) ServicePubkey() string {
 	return r.servicePubkey
 }
 
-func (r *EncryptedResponder) DecryptRequestContent(event *nostr.Event) ([]byte, error) {
+func (r *EncryptedResponder) DecryptRequestContent(ctx context.Context, event *nostr.Event) ([]byte, error) {
 	if event == nil {
 		return nil, fmt.Errorf("request event is nil")
 	}
@@ -211,11 +211,10 @@ func (r *EncryptedResponder) DecryptRequestContent(event *nostr.Event) ([]byte, 
 	if strings.TrimSpace(event.Content) == "" {
 		return nil, fmt.Errorf("request event content is empty")
 	}
-	conversationKey, err := r.conversationKey(event.PubKey.Hex())
-	if err != nil {
-		return nil, err
+	if r == nil || r.signer == nil {
+		return nil, fmt.Errorf("encrypted request NIP-44 signer is not configured")
 	}
-	plaintext, err := nip44.Decrypt(event.Content, conversationKey)
+	plaintext, err := r.signer.Decrypt(ctx, event.Content, event.PubKey)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt encrypted request content: %w", err)
 	}
@@ -243,11 +242,10 @@ func (r *EncryptedResponder) PublishEncryptedResult(ctx context.Context, request
 	if err != nil {
 		return fmt.Errorf("marshal encrypted result envelope: %w", err)
 	}
-	conversationKey, err := r.conversationKey(requestEvent.PubKey.Hex())
-	if err != nil {
-		return err
+	if r.signer == nil {
+		return fmt.Errorf("encrypted request NIP-44 signer is not configured")
 	}
-	ciphertext, err := nip44.Encrypt(string(content), conversationKey)
+	ciphertext, err := r.signer.Encrypt(ctx, string(content), requestEvent.PubKey)
 	if err != nil {
 		return fmt.Errorf("encrypt encrypted result content: %w", err)
 	}
@@ -273,28 +271,6 @@ func (r *EncryptedResponder) PublishEncryptedResult(ctx context.Context, request
 		return fmt.Errorf("publish encrypted result event: no relay accepted event")
 	}
 	return nil
-}
-
-func (r *EncryptedResponder) conversationKey(counterpartyPubkey string) ([32]byte, error) {
-	if r == nil || strings.TrimSpace(r.privateKey) == "" {
-		return [32]byte{}, fmt.Errorf("encrypted request NIP-44 key is not configured")
-	}
-	if counterpartyPubkey == "" {
-		return [32]byte{}, fmt.Errorf("counterparty pubkey is required")
-	}
-	counterparty, err := nostr.PubKeyFromHex(counterpartyPubkey)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("decode counterparty pubkey: %w", err)
-	}
-	secret, err := nostr.SecretKeyFromHex(r.privateKey)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("decode encrypted request private key: %w", err)
-	}
-	conversationKey, err := nip44.GenerateConversationKey(counterparty, secret)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("generate encrypted request conversation key: %w", err)
-	}
-	return conversationKey, nil
 }
 
 // contextVMDedupDefaultLimit is the default maximum number of cached ContextVM

@@ -207,13 +207,17 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		BlossomURL:         firstConfiguredBlossomServer(cfg.Blossom),
 		QdrantURL:          cfg.Qdrant.URL,
 	}, generator, signer, slogLogger, soulfactory.WithRelayClient(relayClient))
+	blossomAuth, err := blossomSigner(cfg.Blossom)
+	if err != nil {
+		return nil, err
+	}
 	provisioner := soulfactory.NewFullProvisioner(reactor, soulfactory.FullProvisionerConfig{
 		Blossom: blossom.Config{
-			Servers:       configuredBlossomServers(cfg.Blossom),
-			MaxRetries:    cfg.Blossom.MaxRetries,
-			RetryDelay:    cfg.Blossom.RetryDelay,
-			Timeout:       cfg.Blossom.Timeout,
-			PrivateKeyHex: cfg.Blossom.PrivateKey,
+			Servers:    configuredBlossomServers(cfg.Blossom),
+			MaxRetries: cfg.Blossom.MaxRetries,
+			RetryDelay: cfg.Blossom.RetryDelay,
+			Timeout:    cfg.Blossom.Timeout,
+			Signer:     blossomAuth,
 		},
 		Qdrant: qdrant.Config{
 			URL:                       cfg.Qdrant.URL,

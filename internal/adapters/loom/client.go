@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	"fiatjaf.com/nostr/nip44"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -132,9 +131,8 @@ type loomRelayHealthRecorder interface {
 type Client struct {
 	pool            loomRelayPool
 	workerRepo      repository.WorkerRepository
-	privateKey      string
+	signer          nostr.Keyer
 	clientPubkey    string
-	jobSigner       nostr.Signer
 	canonicalSigner CanonicalSigner
 
 	planeCapabilities VerifiedPlaneCapabilitySource
@@ -148,33 +146,35 @@ type Client struct {
 	logger                 *zap.Logger
 }
 
-// NewClient creates a new Loom client.
+// NewClient creates a new Loom client. signer is the injected service Keyer:
+// it signs kind-5100 job requests and NIP-44-encrypts job secrets to the
+// worker. A nil signer leaves the client able to read but not dispatch.
 // If pool is nil, a standalone pool is created from config relay URLs.
 // workerRepo is optional; when non-nil, enables auto-selection of workers.
-func NewClient(cfg config.LoomConfig, nostrPrivateKey string, pool *nostrAdapter.RelayPool, logger *zap.Logger, opts ...ClientOption) *Client {
+func NewClient(cfg config.LoomConfig, signer nostr.Keyer, pool *nostrAdapter.RelayPool, logger *zap.Logger, opts ...ClientOption) *Client {
 	if pool == nil {
 		var poolOpts []nostrAdapter.RelayPoolOption
-		if nostrPrivateKey != "" {
-			// The pool answers relays' NIP-42 challenges with the client key.
-			poolOpts = append(poolOpts, nostrAdapter.WithPrivateKey(nostrPrivateKey))
+		if signer != nil {
+			// The pool answers relays' NIP-42 challenges as the client.
+			poolOpts = append(poolOpts, nostrAdapter.WithAuthSigner(signer))
 		}
 		pool = nostrAdapter.NewRelayPool(cfg.Relays, logger, poolOpts...)
 		pool.Connect(context.Background())
 	}
 
 	clientPubkey := ""
-	if nostrPrivateKey != "" {
-		pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(nostrPrivateKey)
+	if signer != nil {
+		pubkey, err := signer.GetPublicKey(context.Background())
 		if err == nil {
-			clientPubkey = pubkey
+			clientPubkey = pubkey.Hex()
 		} else {
-			logger.Warn("failed to derive Loom client pubkey for result validation", zap.Error(err))
+			logger.Warn("failed to resolve Loom client pubkey for result validation", zap.Error(err))
 		}
 	}
 
 	c := &Client{
 		pool:                   pool,
-		privateKey:             nostrPrivateKey,
+		signer:                 signer,
 		clientPubkey:           clientPubkey,
 		submittedWorkers:       make(map[string]string),
 		jobTimeout:             cfg.JobTimeout,
@@ -203,13 +203,6 @@ type VerifiedPlaneCapabilitySource interface {
 
 func WithVerifiedPlaneCapabilities(source VerifiedPlaneCapabilitySource) ClientOption {
 	return func(c *Client) { c.planeCapabilities = source }
-}
-
-// WithJobSigner uses the supplied control-plane signer for kind-5100 job
-// requests. The raw private key remains available only for NIP-44 secret
-// encryption and as a compatibility signing fallback.
-func WithJobSigner(signer nostr.Signer) ClientOption {
-	return func(c *Client) { c.jobSigner = signer }
 }
 
 // WithCanonicalSigner injects the signer used for canonical 30900 state and
@@ -296,8 +289,8 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (_ string, retEr
 		telemetry.RecordDispatch(ctx, KindJobRequest, outcome)
 		telemetry.EndOperation(ctx, span, "bahia.loom.dispatch", outcome, retErr)
 	}()
-	if c.privateKey == "" {
-		return "", fmt.Errorf("nostr private key not configured")
+	if c.signer == nil {
+		return "", fmt.Errorf("loom client signer not configured")
 	}
 	dependencyTags, err := validatedBuildDependencyTags(job.BuildDependencies)
 	if err != nil {
@@ -433,7 +426,7 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (_ string, retEr
 
 	// NIP-44 encrypted secret env vars.
 	if len(job.Secrets) > 0 && workerPubkey != "" {
-		secretTags, err := c.encryptSecrets(job.Secrets, workerPubkey)
+		secretTags, err := c.encryptSecrets(ctx, job.Secrets, workerPubkey)
 		if err != nil {
 			return "", fmt.Errorf("encrypting secrets: %w", err)
 		}
@@ -449,11 +442,7 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (_ string, retEr
 		Tags:      tags,
 	}
 
-	if c.jobSigner != nil {
-		if err := c.jobSigner.SignEvent(ctx, &ev); err != nil {
-			return "", fmt.Errorf("signing event: %w", err)
-		}
-	} else if err := nostrutil.SignEventWithHexKey(&ev, c.privateKey); err != nil {
+	if err := c.signer.SignEvent(ctx, &ev); err != nil {
 		return "", fmt.Errorf("signing event: %w", err)
 	}
 
@@ -1017,15 +1006,15 @@ func containsCapability(values []string, required string) bool {
 // ---------------------------------------------------------------------------
 
 // encryptSecrets encrypts secret env vars using NIP-44 with the worker's pubkey.
-func (c *Client) encryptSecrets(secrets map[string]string, workerPubkey string) (nostr.Tags, error) {
-	conversationKey, err := nostrutil.NIP44ConversationKey(workerPubkey, c.privateKey)
+func (c *Client) encryptSecrets(ctx context.Context, secrets map[string]string, workerPubkey string) (nostr.Tags, error) {
+	worker, err := nostrutil.PubKeyFromHex(workerPubkey)
 	if err != nil {
-		return nil, fmt.Errorf("generating conversation key: %w", err)
+		return nil, fmt.Errorf("decode worker pubkey: %w", err)
 	}
 
 	var tags nostr.Tags
 	for key, value := range secrets {
-		encrypted, err := nip44.Encrypt(value, conversationKey)
+		encrypted, err := c.signer.Encrypt(ctx, value, worker)
 		if err != nil {
 			return nil, fmt.Errorf("encrypting secret %q: %w", key, err)
 		}

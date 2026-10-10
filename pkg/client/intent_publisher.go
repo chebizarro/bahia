@@ -102,7 +102,7 @@ func NewIntentPublisher(cfg IntentPublisherConfig) (*IntentPublisher, error) {
 		signer = localKeyer
 		cipherSigner = localKeyer
 		pubkey = secret.Public().Hex()
-		poolOptions = append(poolOptions, nostrpool.WithPrivateKey(privateKey))
+		poolOptions = append(poolOptions, nostrpool.WithAuthSigner(localKeyer))
 	}
 
 	relays := normalizeOperatorRelays(cfg.Relays)

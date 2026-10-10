@@ -106,7 +106,7 @@ func TestAwaitJobStatusFromWorker_StopsWhenThePoolGivesUp(t *testing.T) {
 	pool := nostrAdapter.NewRelayPool([]string{relayURL}, zap.NewNop(), nostrAdapter.WithRetryableClosedBudget(1))
 	defer pool.Close()
 	cfg := config.LoomConfig{JobTimeout: 10 * time.Second}
-	client := NewClient(cfg, clientSK, pool, zap.NewNop())
+	client := NewClient(cfg, testKeyer(clientSK), pool, zap.NewNop())
 	client.jobSubscriptionBackoff = time.Millisecond
 	started := time.Now()
 

@@ -47,7 +47,7 @@ func TestAuthStormAcrossFlappingConnectionsCannotExceedBudget(t *testing.T) {
 	authenticated := 0
 	for range 6 {
 		pool := NewRelayPool([]string{srv.url}, zap.NewNop(),
-			WithPrivateKey(secret.Hex()),
+			WithAuthSigner(mustLocalKeyer(secret.Hex())),
 			WithOutboundAdmission(admission),
 			WithAuthSignFunc(func(_ context.Context, event *gonostr.Event) error {
 				signCalls.Add(1)
@@ -79,7 +79,7 @@ func TestPublishAuthRetryChargesAuthAndWirePermits(t *testing.T) {
 	srv := newPoolKhatruRelay(t, requireNIP42(false))
 	secret := gonostr.Generate()
 	pool := NewRelayPool([]string{srv.url}, zap.NewNop(),
-		WithPrivateKey(secret.Hex()),
+		WithAuthSigner(mustLocalKeyer(secret.Hex())),
 		WithOutboundAdmission(admission))
 	defer pool.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -117,7 +117,7 @@ func TestKillSwitchStopsAuthFrames(t *testing.T) {
 	secret := gonostr.Generate()
 	var signCalls atomic.Int32
 	pool := NewRelayPool([]string{srv.url}, zap.NewNop(),
-		WithPrivateKey(secret.Hex()),
+		WithAuthSigner(mustLocalKeyer(secret.Hex())),
 		WithOutboundAdmission(admission),
 		WithAuthSignFunc(func(_ context.Context, event *gonostr.Event) error {
 			signCalls.Add(1)

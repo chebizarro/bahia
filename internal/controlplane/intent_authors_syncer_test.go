@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/relaysidecar"
@@ -138,8 +139,8 @@ func startSidecarTestHarness(t *testing.T, adminKey nostr.SecretKey) sidecarTest
 	t.Cleanup(httpServer.Close)
 
 	adminClient, err := relayadmin.NewClient(relayadmin.Config{
-		Enabled:       true,
-		PrivateKeyHex: adminKey.Hex(),
+		Enabled: true,
+		Signer:  keyer.NewPlainKeySigner(adminKey),
 		Targets: []relayadmin.Target{{
 			Ref:                  "test-sidecar",
 			RelayURL:             sidecarCfg.Sidecar.PublicURL,

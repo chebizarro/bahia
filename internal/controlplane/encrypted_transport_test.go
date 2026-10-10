@@ -242,7 +242,7 @@ func newResponder(t *testing.T, publisher NostrEventPublisher) *EncryptedRespond
 	if err != nil {
 		t.Fatalf("NewPrivateKeySigner: %v", err)
 	}
-	return NewEncryptedResponder(publisher, signer, testServiceKey, zap.NewNop())
+	return NewEncryptedResponder(publisher, signer, zap.NewNop())
 }
 
 func testNostrSecretKey(t *testing.T, privateKey string) nostr.SecretKey {
@@ -615,7 +615,7 @@ func TestEncryptedResponder_DecryptRequestContentRoundTrip(t *testing.T) {
 	})
 	responder := newResponder(t, &mockEncryptedPublisher{})
 
-	plaintext, err := responder.DecryptRequestContent(req)
+	plaintext, err := responder.DecryptRequestContent(context.Background(), req)
 	if err != nil {
 		t.Fatalf("DecryptRequestContent: %v", err)
 	}
@@ -799,7 +799,7 @@ func TestContextVMTransport_ProgressAckBackpressureDoesNotGateHandler(t *testing
 	if err != nil {
 		t.Fatalf("NewPrivateKeySigner: %v", err)
 	}
-	responder := NewEncryptedResponder(publisher, signer, testServiceKey, zap.NewNop())
+	responder := NewEncryptedResponder(publisher, signer, zap.NewNop())
 	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	event := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"ack-blocked","method":"deployments/run-logs-get","params":{"service_id":"svc-1"}}`)
 	transport := NewEncryptedRequestTransport(nil, responder, []string{requesterPubkey}, zap.NewNop())

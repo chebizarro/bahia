@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -61,12 +62,12 @@ func TestAuthErrorsPreserveSentinelAndUnderlyingCause(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewClient(Config{PrivateKeyHex: "z", MaxRetries: 1}, testLogger())
+			client := NewClient(Config{Signer: refusingSigner{}, MaxRetries: 1}, testLogger())
 			err := tt.run(client)
 			if !errors.Is(err, ErrAuthHeader) {
 				t.Fatalf("errors.Is(error, ErrAuthHeader) = false; error = %v", err)
 			}
-			cause := hex.InvalidByteError('z')
+			cause := errSignerRefused
 			if !errors.Is(err, cause) {
 				t.Fatalf("errors.Is(error, %v) = false; error = %v", cause, err)
 			}
@@ -500,8 +501,8 @@ func TestClient_CreateAuthHeader_WithPrivateKey(t *testing.T) {
 	pubkey, _ := nostrutil.PublicKeyHexFromPrivateKeyHex(privateKey)
 
 	client := NewClient(Config{
-		Servers:       []string{"https://example.com"},
-		PrivateKeyHex: privateKey,
+		Servers: []string{"https://example.com"},
+		Signer:  testSigner(privateKey),
 	}, testLogger())
 
 	url := "https://example.com/upload"
@@ -580,8 +581,8 @@ func TestClient_CreateAuthHeader_NoPayload(t *testing.T) {
 	privateKey := nostrutil.GeneratePrivateKeyHex()
 
 	client := NewClient(Config{
-		Servers:       []string{"https://example.com"},
-		PrivateKeyHex: privateKey,
+		Servers: []string{"https://example.com"},
+		Signer:  testSigner(privateKey),
 	}, testLogger())
 
 	header, err := client.createAuthHeader(context.Background(), "https://example.com/upload", "GET", "")
@@ -624,9 +625,9 @@ func TestClient_Upload_WithAuth(t *testing.T) {
 		server.Close()
 	}()
 	client := NewClient(Config{
-		Servers:       []string{server.URL},
-		PrivateKeyHex: privateKey,
-		MaxRetries:    1,
+		Servers:    []string{server.URL},
+		Signer:     testSigner(privateKey),
+		MaxRetries: 1,
 	}, testLogger())
 
 	_, err := client.Upload(context.Background(), data, "text/plain")
@@ -702,7 +703,7 @@ func TestClient_DownloadAuthHeaderFailureDoesNotFallbackUnauthenticated(t *testi
 	defer func() {
 		server.Close()
 	}()
-	client := NewClient(Config{Servers: []string{server.URL}, PrivateKeyHex: "not-a-private-key", MaxRetries: 1}, testLogger())
+	client := NewClient(Config{Servers: []string{server.URL}, Signer: refusingSigner{}, MaxRetries: 1}, testLogger())
 	_, err := client.Download(context.Background(), server.URL+"/"+hash)
 	if !errors.Is(err, ErrAuthHeader) {
 		t.Fatalf("Download() error = %v, want ErrAuthHeader", err)
@@ -721,7 +722,7 @@ func TestClient_ProxyAuthHeaderFailureDoesNotFallbackUnauthenticated(t *testing.
 	defer func() {
 		server.Close()
 	}()
-	client := NewClient(Config{Servers: []string{server.URL}, PrivateKeyHex: "not-a-private-key", MaxRetries: 1}, testLogger())
+	client := NewClient(Config{Servers: []string{server.URL}, Signer: refusingSigner{}, MaxRetries: 1}, testLogger())
 	url := server.URL + "/" + strings.Repeat("a", 64)
 
 	if _, err := client.HeadByURL(context.Background(), url); !errors.Is(err, ErrAuthHeader) {
@@ -789,4 +790,15 @@ func TestClient_HeadByURLAndOpenStreamByURL(t *testing.T) {
 	if string(body) != string(data) {
 		t.Fatalf("stream body = %q want %q", string(body), string(data))
 	}
+}
+
+var errSignerRefused = errors.New("signer refused")
+
+type refusingSigner struct{}
+
+func (refusingSigner) GetPublicKey(context.Context) (nostr.PubKey, error) { return nostr.PubKey{}, nil }
+func (refusingSigner) SignEvent(context.Context, *nostr.Event) error      { return errSignerRefused }
+
+func testSigner(privateKeyHex string) nostr.Signer {
+	return keyer.NewPlainKeySigner(nostr.MustSecretKeyFromHex(privateKeyHex))
 }

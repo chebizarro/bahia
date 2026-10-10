@@ -24,7 +24,7 @@ func TestBackupRunAdmissionRequiresCrossProcessFence(t *testing.T) {
 	require.NoError(t, err)
 	defer outbox.Close()
 	serviceKey := nostr.Generate()
-	projector := &Projector{enabled: true, privateKey: serviceKey.Hex(), logger: zap.NewNop()}
+	projector := withTestServiceKey(&Projector{enabled: true, logger: zap.NewNop()}, serviceKey.Hex())
 	publisher := &Publisher{localOutbox: outbox, ownEvents: events, target: repository.NostrPublishTargetControlPlane,
 		now: time.Now, logger: zap.NewNop(), wake: make(chan struct{}, 1)}
 	canonical := NewBackupCanonicalPublisher(projector, zap.NewNop())

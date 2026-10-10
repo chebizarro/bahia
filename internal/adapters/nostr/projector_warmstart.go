@@ -78,12 +78,7 @@ func (p *Projector) warmStartMigratedDomains(ctx context.Context) {
 		return
 	}
 
-	servicePubkey := ""
-	if p.privateKey != "" {
-		if derived, err := publicKeyHexFromPrivateKeyHex(p.privateKey); err == nil {
-			servicePubkey = derived
-		}
-	}
+	servicePubkey := p.servicePubkey
 
 	totalPublished := 0
 	for _, domain := range p.intentDomains {

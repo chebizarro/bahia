@@ -98,7 +98,7 @@ func TestPublisherSignedEventUsesDurableOutboxPath(t *testing.T) {
 			results: []PublishResult{{RelayURL: "wss://relay.example", Accepted: true}},
 		}},
 	}
-	publisher := NewPublisher(
+	publisher := newKeyedTestPublisher(
 		config.NostrConfig{PrivateKey: gonostr.Generate().Hex(), PublishEnabled: true},
 		NewRelayPool(nil, zap.NewNop()),
 		repo,
@@ -132,7 +132,7 @@ func TestPublisherEnqueueSignedEventDoesNotPublishInsideProofLease(t *testing.T)
 	outbox := openDeliveryTestOutbox(t)
 	archive := &blockingArchiveRepo{called: make(chan struct{}), release: make(chan struct{})}
 	t.Cleanup(func() { close(archive.release) })
-	publisher := NewPublisher(
+	publisher := newKeyedTestPublisher(
 		config.NostrConfig{PrivateKey: gonostr.Generate().Hex(), PublishEnabled: true},
 		NewRelayPool(nil, zap.NewNop()),
 		archive,
@@ -192,7 +192,7 @@ func TestPublisherPersistsFailedPublishAndBackgroundRetriesRateLimit(t *testing.
 
 	privateKey := gonostr.Generate().Hex()
 	outbox := openDeliveryTestOutbox(t)
-	publisher := NewPublisher(
+	publisher := newKeyedTestPublisher(
 		config.NostrConfig{PrivateKey: privateKey, PublishEnabled: true},
 		NewRelayPool(nil, zap.NewNop()),
 		repo,

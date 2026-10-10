@@ -12,6 +12,7 @@ import (
 	"io"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip44"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
@@ -24,7 +25,27 @@ var ErrEmptyNIP44Plaintext = errors.New("NIP-44 plaintext must not be empty")
 type Encryptor struct {
 	privateKey string // Bahia's Nostr private key (hex)
 	aesKey     []byte // derived AES-256 key for symmetric encryption
+	// unavailable, when set, is returned by every operation: the service
+	// signer holds no in-process key to derive from (bahia-cd0wr.4.7).
+	unavailable error
 }
+
+// NewServiceEncryptor builds the service-secret encryptor for the injected
+// service Keyer. Its AES key is HKDF-derived from the raw service key, which
+// no signer can serve, so a Keyer without in-process key material yields an
+// Encryptor whose every operation fails with an error wrapping
+// nostrutil.ErrServiceKeyMaterialRequired.
+func NewServiceEncryptor(serviceKeyer nostr.User) (*Encryptor, error) {
+	material, err := nostrutil.RequireServiceKeyMaterial(serviceKeyer, "service secret store (bahia-cd0wr.4.7)")
+	if err != nil {
+		return &Encryptor{unavailable: err}, nil
+	}
+	return NewEncryptor(material)
+}
+
+// Unavailable reports why every operation fails, or nil when the encryptor
+// has its key.
+func (e *Encryptor) Unavailable() error { return e.unavailable }
 
 // NewEncryptor creates a new Encryptor with the given Nostr private key.
 func NewEncryptor(nostrPrivateKey string) (*Encryptor, error) {
@@ -62,6 +83,9 @@ func NewEncryptor(nostrPrivateKey string) (*Encryptor, error) {
 
 // Encrypt encrypts a plaintext value using the specified method.
 func (e *Encryptor) Encrypt(plaintext string, method domain.EncryptionMethod) ([]byte, error) {
+	if e.unavailable != nil {
+		return nil, e.unavailable
+	}
 	switch method {
 	case domain.EncryptionNIP44:
 		return e.encryptNIP44(plaintext)
@@ -74,6 +98,9 @@ func (e *Encryptor) Encrypt(plaintext string, method domain.EncryptionMethod) ([
 
 // Decrypt decrypts an encrypted value using the specified method.
 func (e *Encryptor) Decrypt(ciphertext []byte, method domain.EncryptionMethod) (string, error) {
+	if e.unavailable != nil {
+		return "", e.unavailable
+	}
 	switch method {
 	case domain.EncryptionNIP44:
 		return e.decryptNIP44(ciphertext)

@@ -19,6 +19,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/db"
 	"github.com/openagentsinc/bahia/internal/nostrmigration"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/strutil"
 	"go.uber.org/zap"
@@ -258,7 +259,15 @@ func runNostrMigration(ctx context.Context, cfg *config.Config, pool *pgxpool.Po
 	}
 	defer func() { _ = logger.Sync() }()
 
-	relayPool := nostradapter.NewRelayPool(relayURLs, logger, nostradapter.WithPrivateKey(privateKey))
+	var poolOptions []nostradapter.RelayPoolOption
+	if privateKey != "" {
+		authSigner, err := nostrutil.NewLocalKeyer(privateKey)
+		if err != nil {
+			return reportError(stderr, "nostr migration: %v", err)
+		}
+		poolOptions = append(poolOptions, nostradapter.WithAuthSigner(authSigner))
+	}
+	relayPool := nostradapter.NewRelayPool(relayURLs, logger, poolOptions...)
 	defer relayPool.Close()
 	relayPool.Connect(ctx)
 

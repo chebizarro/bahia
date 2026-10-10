@@ -11,22 +11,21 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
-	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 // List retrieves all blobs owned by the configured private key's pubkey.
 // Requires a private key to be configured for authentication.
 func (c *Client) List(ctx context.Context) ([]BlobDescriptor, error) {
-	if c.privateKey == "" {
-		return nil, fmt.Errorf("private key required for listing own blobs")
+	if c.signer == nil {
+		return nil, fmt.Errorf("signer required for listing own blobs")
 	}
 
-	pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(c.privateKey)
+	pubkey, err := c.signer.GetPublicKey(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("deriving public key: %w", err)
+		return nil, fmt.Errorf("resolving signer public key: %w", err)
 	}
 
-	return c.ListByPubkey(ctx, pubkey)
+	return c.ListByPubkey(ctx, pubkey.Hex())
 }
 
 // ListByPubkey retrieves all blobs owned by a specific pubkey.
@@ -117,7 +116,7 @@ func (c *Client) doList(ctx context.Context, url string) ([]BlobDescriptor, erro
 
 	// Add Nostr auth if private key is configured
 	// The "t: list" tag is required per Blossom spec
-	if c.privateKey != "" {
+	if c.signer != nil {
 		authHeader, err := c.createListAuthHeader(ctx, url)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrAuthHeader, err)
@@ -156,17 +155,13 @@ func (c *Client) doList(ctx context.Context, url string) ([]BlobDescriptor, erro
 // createListAuthHeader creates a NIP-98 authorization header with the "t: list" tag.
 // This is required by Blossom servers for list operations.
 func (c *Client) createListAuthHeader(ctx context.Context, url string) (string, error) {
-	if c.privateKey == "" {
+	if c.signer == nil {
 		return "", nil
 	}
 
-	pubkeyHex, err := nostrutil.PublicKeyHexFromPrivateKeyHex(c.privateKey)
+	pubkey, err := c.signer.GetPublicKey(ctx)
 	if err != nil {
-		return "", fmt.Errorf("deriving public key: %w", err)
-	}
-	pubkey, err := nostrutil.PubKeyFromHex(pubkeyHex)
-	if err != nil {
-		return "", fmt.Errorf("decoding public key: %w", err)
+		return "", fmt.Errorf("resolving signer public key: %w", err)
 	}
 
 	// Build Blossom authorization event (kind 24242) per BUD-11
@@ -182,7 +177,7 @@ func (c *Client) createListAuthHeader(ctx context.Context, url string) (string, 
 		Content: "List Blobs",
 	}
 
-	if err := nostrutil.SignEventWithHexKey(event, c.privateKey); err != nil {
+	if err := c.signer.SignEvent(ctx, event); err != nil {
 		return "", fmt.Errorf("signing event: %w", err)
 	}
 

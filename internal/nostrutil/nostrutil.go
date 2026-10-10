@@ -21,7 +21,8 @@ func SecretKeyFromHex(privateKeyHex string) (canonicalnostr.SecretKey, error) {
 	privateKeyHex = strings.TrimSpace(privateKeyHex)
 	secret, err := canonicalnostr.SecretKeyFromHex(privateKeyHex)
 	if err != nil {
-		return canonicalnostr.SecretKey{}, fmt.Errorf("decode nostr private key: %w", err)
+		// The library error quotes the input; never echo key material.
+		return canonicalnostr.SecretKey{}, fmt.Errorf("decode nostr private key: invalid 64-char hex secret")
 	}
 	return secret, nil
 }

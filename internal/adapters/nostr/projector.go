@@ -150,7 +150,6 @@ type Projector struct {
 	dnsPolicySource      DNSPolicyProjectionSource
 	publisher            ProjectionPublisher
 	history              ProjectionHistory
-	privateKey           string
 	signer               gonostr.Signer
 	servicePubkey        string
 	enabled              bool
@@ -163,6 +162,11 @@ type Projector struct {
 	dnsPublishedBackends map[string]dnsPublishedBackend
 	dnsPublishedPolicies map[string]dnsPublishedPolicy
 	dnsCacheHydrated     bool
+
+	// Confidential-state digest key, derived from the signer's raw key
+	// material; confidentialStateHashErr is set instead when it has none.
+	confidentialStateHashKey []byte
+	confidentialStateHashErr error
 
 	// F4 warm-start: readiness gate and migrated domain list.
 	readiness     ReadinessWaiter
@@ -181,7 +185,8 @@ type Projector struct {
 // ProjectorOption configures a projector.
 type ProjectorOption func(*Projector)
 
-// WithProjectorSigner supplies the service identity for projection events.
+// WithProjectorSigner supplies the injected service Keyer and its pubkey for
+// projection events. Without it the projector is disabled.
 func WithProjectorSigner(signer gonostr.Signer, pubkey string) ProjectorOption {
 	return func(p *Projector) {
 		p.signer = signer
@@ -248,16 +253,16 @@ func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher Pro
 		logger = zap.NewNop()
 	}
 	p := &Projector{
-		source:     source,
-		publisher:  publisher,
-		history:    history,
-		privateKey: cfg.PrivateKey,
-		enabled:    cfg.PublishEnabled && cfg.PrivateKey != "" && source != nil && publisher != nil,
-		logger:     logger.Named("nostr-projector"),
+		source:    source,
+		publisher: publisher,
+		history:   history,
+		logger:    logger.Named("nostr-projector"),
 	}
 	for _, opt := range opts {
 		opt(p)
 	}
+	p.enabled = cfg.PublishEnabled && p.signer != nil && source != nil && publisher != nil
+	p.confidentialStateHashKey, p.confidentialStateHashErr = confidentialStateHashKeyFor(p.signer)
 	return p
 }
 
@@ -839,7 +844,7 @@ func (p *Projector) publishSystemDiscoveryAnnouncement(ctx context.Context, cfg 
 		return err
 	}
 	browserRelays := cfg.Nostr.BrowserRelayPolicyRelays()
-	encryptedRequestsEnabled := len(browserRelays) > 0 && cfg.Nostr.PrivateKey != ""
+	encryptedRequestsEnabled := len(browserRelays) > 0 && p.signer != nil
 	payload := map[string]any{
 		"schema":               SystemDiscoverySchema,
 		"registries":           discoveryRegistries(cfg),
@@ -1486,8 +1491,8 @@ func desiredStateTarget(spec *domain.DesiredServiceSpec) string {
 }
 
 func (p *Projector) signEvent(ctx context.Context, ev *gonostr.Event) error {
-	if p.signer != nil {
-		return p.signer.SignEvent(ctx, ev)
+	if p.signer == nil {
+		return fmt.Errorf("nostr projector signer not configured")
 	}
-	return signEventWithPrivateKeyHex(ev, p.privateKey)
+	return p.signer.SignEvent(ctx, ev)
 }

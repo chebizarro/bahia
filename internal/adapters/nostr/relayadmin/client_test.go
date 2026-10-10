@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -44,9 +45,9 @@ func TestClientErrorsPreserveSentinelAndUnderlyingCause(t *testing.T) {
 			sentinel: ErrAuthHeader,
 			run: func() error {
 				client := &Client{
-					enabled:    true,
-					privateKey: "invalid",
-					pubkey:     nostr.Generate().Public().Hex(),
+					enabled: true,
+					signer:  refusingSigner{},
+					pubkey:  nostr.Generate().Public().Hex(),
 					targets: map[string]Target{
 						"owned": {Ref: "owned", RelayURL: "wss://relay.example.com", HTTPURL: "https://relay.example.com"},
 					},
@@ -104,12 +105,11 @@ func TestClientErrorsPreserveSentinelAndUnderlyingCause(t *testing.T) {
 
 func TestClientRequiresAuthorizedConfiguredTarget(t *testing.T) {
 	secret := nostr.Generate()
-	privateKey := secret.Hex()
 	pubkey := secret.Public().Hex()
 
 	_, err := NewClient(Config{
-		Enabled:       true,
-		PrivateKeyHex: privateKey,
+		Enabled: true,
+		Signer:  keyer.NewPlainKeySigner(secret),
 		Targets: []Target{{
 			Ref:                  "owned-sidecar",
 			RelayURL:             "wss://relay.example.com",
@@ -121,8 +121,8 @@ func TestClientRequiresAuthorizedConfiguredTarget(t *testing.T) {
 	}
 
 	client, err := NewClient(Config{
-		Enabled:       true,
-		PrivateKeyHex: privateKey,
+		Enabled: true,
+		Signer:  keyer.NewPlainKeySigner(secret),
 		Targets: []Target{{
 			Ref:                  "owned-sidecar",
 			RelayURL:             "wss://relay.example.com",
@@ -139,7 +139,6 @@ func TestClientRequiresAuthorizedConfiguredTarget(t *testing.T) {
 
 func TestCallSignsPayloadBoundNIP98Authorization(t *testing.T) {
 	secret := nostr.Generate()
-	privateKey := secret.Hex()
 	pubkey := secret.Public().Hex()
 
 	var receivedBody []byte
@@ -163,9 +162,9 @@ func TestCallSignsPayloadBoundNIP98Authorization(t *testing.T) {
 	defer server.Close()
 
 	client, err := NewClient(Config{
-		Enabled:       true,
-		PrivateKeyHex: privateKey,
-		Now:           func() time.Time { return time.Unix(1_700_000_000, 0) },
+		Enabled: true,
+		Signer:  keyer.NewPlainKeySigner(secret),
+		Now:     func() time.Time { return time.Unix(1_700_000_000, 0) },
 		Targets: []Target{{
 			Ref:                  "owned-sidecar",
 			RelayURL:             "wss://relay.example.com/nostr/",
@@ -214,15 +213,15 @@ func TestCallSignsPayloadBoundNIP98Authorization(t *testing.T) {
 func TestIdenticalAdminRequestsGetDistinctNIP98Authorizations(t *testing.T) {
 	secret := nostr.Generate()
 	client := &Client{
-		privateKey: secret.Hex(), pubkey: secret.Public().Hex(),
+		signer: keyer.NewPlainKeySigner(secret), pubkey: secret.Public().Hex(),
 		now: func() time.Time { return time.Unix(1_700_000_000, 0) },
 	}
 	body := []byte(`{"method":"setintentauthors","params":[]}`)
-	first, err := client.createAuthHeader("wss://relay.example.com", body)
+	first, err := client.createAuthHeader(context.Background(), "wss://relay.example.com", body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := client.createAuthHeader("wss://relay.example.com", body)
+	second, err := client.createAuthHeader(context.Background(), "wss://relay.example.com", body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +243,6 @@ func TestIdenticalAdminRequestsGetDistinctNIP98Authorizations(t *testing.T) {
 
 func TestClientRejectsExternalPlaintextAdministrationEndpoints(t *testing.T) {
 	secret := nostr.Generate()
-	privateKey := secret.Hex()
 	pubkey := secret.Public().Hex()
 	tests := []struct {
 		name   string
@@ -264,7 +262,7 @@ func TestClientRejectsExternalPlaintextAdministrationEndpoints(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewClient(Config{Enabled: true, PrivateKeyHex: privateKey, Targets: []Target{tt.target}})
+			_, err := NewClient(Config{Enabled: true, Signer: keyer.NewPlainKeySigner(secret), Targets: []Target{tt.target}})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("NewClient() error = %v, want %q", err, tt.want)
 			}
@@ -274,7 +272,6 @@ func TestClientRejectsExternalPlaintextAdministrationEndpoints(t *testing.T) {
 
 func TestCallRejectsContextVMMutationMethodsBeforeHTTP(t *testing.T) {
 	secret := nostr.Generate()
-	privateKey := secret.Hex()
 	pubkey := secret.Public().Hex()
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -283,9 +280,9 @@ func TestCallRejectsContextVMMutationMethodsBeforeHTTP(t *testing.T) {
 	}))
 	defer server.Close()
 	client, err := NewClient(Config{
-		Enabled:       true,
-		PrivateKeyHex: privateKey,
-		Targets:       []Target{{Ref: "owned", RelayURL: "wss://relay.example.com", HTTPURL: server.URL, AdministratorPubkeys: []string{pubkey}}},
+		Enabled: true,
+		Signer:  keyer.NewPlainKeySigner(secret),
+		Targets: []Target{{Ref: "owned", RelayURL: "wss://relay.example.com", HTTPURL: server.URL, AdministratorPubkeys: []string{pubkey}}},
 	})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
@@ -301,16 +298,15 @@ func TestCallRejectsContextVMMutationMethodsBeforeHTTP(t *testing.T) {
 
 func TestCallReportsHTTPAndRelayErrors(t *testing.T) {
 	secret := nostr.Generate()
-	privateKey := secret.Hex()
 	pubkey := secret.Public().Hex()
 	statusServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}))
 	defer statusServer.Close()
 	client, err := NewClient(Config{
-		Enabled:       true,
-		PrivateKeyHex: privateKey,
-		Targets:       []Target{{Ref: "owned", RelayURL: "wss://relay.example.com", HTTPURL: statusServer.URL, AdministratorPubkeys: []string{pubkey}}},
+		Enabled: true,
+		Signer:  keyer.NewPlainKeySigner(secret),
+		Targets: []Target{{Ref: "owned", RelayURL: "wss://relay.example.com", HTTPURL: statusServer.URL, AdministratorPubkeys: []string{pubkey}}},
 	})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
@@ -357,4 +353,11 @@ func assertTag(t *testing.T, event nostr.Event, name, want string) {
 		}
 	}
 	t.Fatalf("missing tag %s", name)
+}
+
+type refusingSigner struct{}
+
+func (refusingSigner) GetPublicKey(context.Context) (nostr.PubKey, error) { return nostr.PubKey{}, nil }
+func (refusingSigner) SignEvent(context.Context, *nostr.Event) error {
+	return errors.New("signer refused")
 }

@@ -6,7 +6,7 @@ package nostr
 //         WithReadinessTracker(intentReadiness),
 //         WithIntentDomains(cfg.Nostr.IntentDomains),
 //     )
-//     NewProjector(cfg, source, publisher, history, logger, projectorOpts...)
+//     newKeyedTestProjector(cfg, source, publisher, history, logger, projectorOpts...)
 //
 // It uses a ReadinessWaiter that mirrors controlplane.ReadinessTracker's
 // channel-based Ready() contract (register filter, mark ready → channel

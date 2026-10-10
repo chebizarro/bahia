@@ -132,7 +132,7 @@ func newHygieneIntegrationHarness(t *testing.T, mutateRelay func(*hygieneProject
 	if mutateRelay != nil {
 		mutateRelay(relay)
 	}
-	responder := controlplane.NewEncryptedResponder(relay, serviceSigner, hygieneTestServiceKey, zap.NewNop())
+	responder := controlplane.NewEncryptedResponder(relay, serviceSigner, zap.NewNop())
 	transport := controlplane.NewEncryptedRequestTransport(nil, responder, nil, zap.NewNop())
 	relay.transport = transport
 	source, err := NewContextVMHygieneObservationSource(servicePubKey.Hex(), zap.NewNop())

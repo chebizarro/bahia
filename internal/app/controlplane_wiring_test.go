@@ -59,7 +59,7 @@ func TestControlPlaneSubscriberAuthorScopesDoNotWidenDefaultScope(t *testing.T) 
 	cfg.Adoption.AllowedPubkeys = []string{"adoption-operator"}
 	cfg.DirectRuntime.AllowedPubkeys = []string{"runtime-operator"}
 
-	scopes := controlPlaneSubscriberAuthorScopes(cfg, service.AssistantIdentity{Pubkey: "assistant-operator"})
+	scopes := controlPlaneSubscriberAuthorScopes(cfg, "", service.AssistantIdentity{Pubkey: "assistant-operator"})
 
 	require.Equal(t, []string{"default-operator", "assistant-operator"}, scopes.Default)
 	require.Equal(t, []string{"adoption-operator"}, scopes.Adoption)

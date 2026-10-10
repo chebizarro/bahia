@@ -56,7 +56,7 @@ func TestOperatorAllowlistRecordReadableOnlyWithFleetOCK(t *testing.T) {
 	otherKey.Key[0] ^= 0xff
 
 	sink := &allowlistSink{}
-	projector := nostradapter.NewProjector(config.NostrConfig{PrivateKey: strings.Repeat("1", 64), PublishEnabled: true}, &paritySource{}, sink, nil, zap.NewNop())
+	projector := nostradapter.NewProjector(config.NostrConfig{PublishEnabled: true}, &paritySource{}, sink, nil, zap.NewNop(), localServiceSigner(t))
 	require.True(t, projector.Enabled())
 	publisher := nostradapter.NewOperatorAllowlistPublisher(projector, fleetOCKEncryptor{key: fleetKey}, zap.NewNop())
 

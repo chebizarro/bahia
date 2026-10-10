@@ -13,6 +13,7 @@ Code wins over any page here; if they disagree, fix the page.
 | [outbox-delivery.md](outbox-delivery.md) | Local outbox durability and the abandonment contract (undelivered markers, `canonical_delivery`, operator retry) |
 | [confidential-state.md](confidential-state.md) | Org content keys (NIP-CAS-0011): envelopes, key distribution, rotation and refounding, operator allowlists, what readers do |
 | [service-signer.md](service-signer.md) | The service identity's signer (local, any NIP-46 bunker, NIP-55L): identity pinning, standard NIP-46 contract, binary NIP-44 capability |
+| [service-identity.md](service-identity.md) | The single injected service `nostr.Keyer`, raw-key derivations that fail closed, and the guard |
 | [entity-identity.md](entity-identity.md) | Author-minted UUIDv7 ids, natural keys, replay vs conflict |
 | [event-lifecycle.md](event-lifecycle.md) | NIP-01 latest-wins, NIP-09 deletion and NIP-40 expiration as every consumer applies them |
 | [web-store-first.md](web-store-first.md) | The web app's event store, boot sequence, derived views, pending intents and what stays on ContextVM |

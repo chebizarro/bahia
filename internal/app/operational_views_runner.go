@@ -4,11 +4,11 @@ import (
 	"context"
 	"strings"
 
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
-	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
@@ -111,13 +111,13 @@ func (r *operationalViewsRunner) Run(ctx context.Context) error {
 	return nil
 }
 
-func blossomOwnerKey(privateKey string) string {
-	if privateKey == "" {
+func blossomOwnerKey(signer nostr.Signer) string {
+	if signer == nil {
 		return ""
 	}
-	pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(privateKey)
+	pubkey, err := signer.GetPublicKey(context.Background())
 	if err != nil {
 		return ""
 	}
-	return pubkey
+	return pubkey.Hex()
 }

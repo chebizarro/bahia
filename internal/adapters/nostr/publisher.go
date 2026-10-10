@@ -128,11 +128,10 @@ const (
 // each event is retried to the relays of the pool it was written for. Run
 // one registered Publisher per target.
 type Publisher struct {
-	pool       *RelayPool
-	privateKey string
-	signer     nostr.Signer
-	enabled    bool
-	logger     *zap.Logger
+	pool    *RelayPool
+	signer  nostr.Signer
+	enabled bool
+	logger  *zap.Logger
 	// eventRepo is the optional PostgreSQL nostr_events table. Without a local
 	// outbox it is the outbox itself; with one it is a best-effort archive.
 	eventRepo repository.NostrEventRepository
@@ -223,29 +222,21 @@ func WithPublishTarget(target string) PublisherOption {
 	return func(p *Publisher) { p.target = target }
 }
 
-// WithPublisherSigner supplies the service identity used for publisher-owned events.
+// WithPublisherSigner supplies the injected service Keyer used for
+// publisher-owned events. Without it the publisher cannot sign and its
+// default target is disabled.
 func WithPublisherSigner(signer nostr.Signer) PublisherOption {
 	return func(p *Publisher) { p.signer = signer }
 }
 
-// NewPublisher creates a new Nostr event publisher.
-// It shares a RelayPool for persistent connections. If pool is nil, a new one
-// is created from config (for backward compatibility).
+// NewPublisher creates a new Nostr event publisher on a shared RelayPool.
 // eventRepo is optional; when non-nil, all published events are recorded to the audit table.
 func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.NostrEventRepository, logger *zap.Logger, opts ...PublisherOption) *Publisher {
 	if pool == nil {
-		poolOpts := []RelayPoolOption(nil)
-		if cfg.PrivateKey != "" {
-			poolOpts = append(poolOpts, WithPrivateKey(cfg.PrivateKey))
-		}
-		pool = NewRelayPool(cfg.Relays, logger, poolOpts...)
-		pool.Connect(context.Background())
+		panic("nostr.Publisher: a relay pool is required; this is a wiring bug")
 	}
-
 	publisher := &Publisher{
 		pool:         pool,
-		privateKey:   cfg.PrivateKey,
-		enabled:      cfg.PublishEnabled && cfg.PrivateKey != "",
 		logger:       logger,
 		eventRepo:    eventRepo,
 		publishFn:    pool.PublishToRelaysWithResults,
@@ -265,6 +256,7 @@ func NewPublisher(cfg config.NostrConfig, pool *RelayPool, eventRepo repository.
 			opt(publisher)
 		}
 	}
+	publisher.enabled = cfg.PublishEnabled && publisher.signer != nil
 	if publisher.localOutbox != nil {
 		publisher.archive = newPostgresArchive(eventRepo, logger)
 	} else if publisher.redeliveryEnabled() {
@@ -558,7 +550,7 @@ func (p *Publisher) EnqueueSignedEvent(ctx context.Context, ev *nostr.Event) err
 	if p == nil || ev == nil || !p.redeliveryEnabled() {
 		return fmt.Errorf("nostr signed event queue is not configured")
 	}
-	if p.signer == nil && p.privateKey == "" {
+	if p.signer == nil {
 		return fmt.Errorf("nostr publisher signer not configured")
 	}
 	if err := ctx.Err(); err != nil {
@@ -593,7 +585,7 @@ func (p *Publisher) PublishSignedEventWithResults(ctx context.Context, ev *nostr
 	if p == nil || ev == nil {
 		return nil, nil
 	}
-	if p.signer == nil && p.privateKey == "" {
+	if p.signer == nil {
 		return nil, fmt.Errorf("nostr publisher signer not configured")
 	}
 	if err := p.signEvent(ctx, ev); err != nil {
@@ -955,8 +947,8 @@ func (p *Publisher) Close() {
 }
 
 func (p *Publisher) signEvent(ctx context.Context, ev *nostr.Event) error {
-	if p.signer != nil {
-		return p.signer.SignEvent(ctx, ev)
+	if p.signer == nil {
+		return fmt.Errorf("nostr publisher signer not configured")
 	}
-	return signEventWithPrivateKeyHex(ev, p.privateKey)
+	return p.signer.SignEvent(ctx, ev)
 }

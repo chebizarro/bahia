@@ -17,6 +17,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/stretchr/testify/require"
@@ -86,7 +87,7 @@ func attachCanonicalMCPFixture(t *testing.T, server *Server) canonicalMCPFixture
 	sink := mcpProjectionStore{store}
 	server.stateStore = store
 	server.servicePubkey = sk.Public().Hex()
-	return canonicalMCPFixture{projector: nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, server.registry, sink, nil, zap.NewNop()), sink: sink, store: store, privateKey: sk.Hex()}
+	return canonicalMCPFixture{projector: nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, server.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk)), sink: sink, store: store, privateKey: sk.Hex()}
 }
 
 func (f canonicalMCPFixture) publishService(t *testing.T, svc *domain.Service) {
@@ -179,4 +180,15 @@ func (f canonicalMCPFixture) confidentialEncryptor(t *testing.T, server *Server)
 // legacyDNSEndpointLister exposes materialized DNS endpoints to the MCP server.
 type legacyDNSEndpointLister interface {
 	ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error)
+}
+
+// mcpProjectorSigner injects the fixture's local service key as the
+// projector's Keyer, as the daemon does.
+func mcpProjectorSigner(t testing.TB, sk nostr.SecretKey) nostrpool.ProjectorOption {
+	t.Helper()
+	signer, err := nostrutil.NewLocalKeyer(sk.Hex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return nostrpool.WithProjectorSigner(signer, sk.Public().Hex())
 }

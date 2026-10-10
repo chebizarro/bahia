@@ -10,11 +10,13 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	cascontextvm "git.sharegap.net/cascadia/cascadia-go/contextvm"
 	"github.com/google/uuid"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -212,7 +214,7 @@ func TestPlaneDiscoverRelayAuthIsThePools(t *testing.T) {
 
 	t.Run("pool signer", func(t *testing.T) {
 		reqs.Store(0)
-		support, err := discover(t, nostrAdapter.WithPrivateKey(clientKey))
+		support, err := discover(t, nostrAdapter.WithAuthSigner(keyer.NewPlainKeySigner(nostr.MustSecretKeyFromHex(clientKey))))
 		require.NoError(t, err)
 		require.True(t, SupportsPlaneClasses(support, []domain.VMLifecycleClass{domain.VMLifecycleLoomQEMU}))
 		require.Equal(t, int32(2), reqs.Load(), "the refused REQ and the pool's reissue after AUTH")
@@ -399,7 +401,7 @@ func TestPlaneWorkerEligibilityCannotUseAdvertisementOrExplicitTargetBypass(t *t
 	capability := p.Desired.ExpectedCapabilities[0]
 	w := domain.Worker{PubKey: p.WorkerPubKey, Status: domain.WorkerStatusOnline, SchedulingState: domain.WorkerSchedulingActive, MaxConcurrentJobs: 2, Capabilities: domain.WorkerCapabilities{WorkloadKinds: []string{string(domain.VMLifecycleLoomQEMU)}}}
 	job := JobRequest{WorkerPubkey: w.PubKey, RequiredExecutionPlane: &capability}
-	client := &Client{privateKey: "configured", workerRepo: planeWorkerRepo{worker: w}}
+	client := &Client{signer: testKeyer(nostrutil.GeneratePrivateKeyHex()), workerRepo: planeWorkerRepo{worker: w}}
 	_, err := client.SubmitJob(t.Context(), job)
 	require.ErrorContains(t, err, "source unavailable")
 	client.planeCapabilities = planeWorkerSource{}

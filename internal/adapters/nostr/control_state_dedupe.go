@@ -361,11 +361,10 @@ func (p *Projector) hydrateProjectionCoordinate(ctx context.Context, key project
 	if retained, ok := p.publisher.(interface {
 		latestRetainedCoordinate(context.Context, int, string, string) (*repository.NostrEventRecord, error)
 	}); ok {
-		author, deriveErr := p.authorPubkey()
-		if deriveErr != nil {
-			return fmt.Errorf("derive projection author: %w", deriveErr)
+		if p.servicePubkey == "" {
+			return fmt.Errorf("derive projection author: projector has no service identity")
 		}
-		outboxRecord, lookupErr := retained.latestRetainedCoordinate(ctx, key.wireKind, author, key.d)
+		outboxRecord, lookupErr := retained.latestRetainedCoordinate(ctx, key.wireKind, p.servicePubkey, key.d)
 		if lookupErr != nil {
 			return fmt.Errorf("hydrate outbox coordinate %d:%s: %w", key.wireKind, key.d, lookupErr)
 		}
@@ -379,14 +378,8 @@ func (p *Projector) hydrateProjectionCoordinate(ctx context.Context, key project
 	if record.Kind != key.wireKind || record.PubKey == "" {
 		return fmt.Errorf("invalid retained projection coordinate %d:%s", key.wireKind, key.d)
 	}
-	if p.privateKey != "" || p.servicePubkey != "" {
-		pubkey, err := p.authorPubkey()
-		if err != nil {
-			return fmt.Errorf("derive projection author: %w", err)
-		}
-		if record.PubKey != pubkey {
-			return nil
-		}
+	if p.servicePubkey != "" && record.PubKey != p.servicePubkey {
+		return nil
 	}
 	tags := recordTags(*record)
 	if projectionKeyOf(record.Kind, tags) != key {
@@ -451,12 +444,7 @@ func (p *Projector) hydrateProjectionCache(ctx context.Context, wireKind int) er
 		p.logger.Warn("hydrate projection dedupe cache failed; suppressing publish", zap.Int("kind", wireKind), zap.Error(err))
 		return fmt.Errorf("hydrate projection dedupe cache for kind %d: %w", wireKind, err)
 	}
-	servicePubkey := ""
-	if p.privateKey != "" || p.servicePubkey != "" {
-		if derived, deriveErr := p.authorPubkey(); deriveErr == nil {
-			servicePubkey = derived
-		}
-	}
+	servicePubkey := p.servicePubkey
 	sort.Slice(records, func(i, j int) bool {
 		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
 			return records[i].ID < records[j].ID
@@ -807,11 +795,4 @@ func (p *Projector) publishAuthoritative(ctx context.Context, wireKind int, tags
 	}
 	p.rememberProjection(key, fingerprint, createdAt)
 	return nil
-}
-
-func (p *Projector) authorPubkey() (string, error) {
-	if p.servicePubkey != "" {
-		return p.servicePubkey, nil
-	}
-	return publicKeyHexFromPrivateKeyHex(p.privateKey)
 }

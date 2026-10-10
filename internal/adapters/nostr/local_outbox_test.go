@@ -54,7 +54,7 @@ func newLocalOutboxHarness(t *testing.T, dir string, pool *RelayPool, key string
 		abandoned: make(chan gonostr.Event, 16),
 	}
 	opts := append([]PublisherOption{WithLocalOutbox(outbox, store)}, extra...)
-	h.pub = NewPublisher(config.NostrConfig{PrivateKey: key, PublishEnabled: true, PublishQuorum: quorum}, pool, nil, zap.NewNop(), opts...)
+	h.pub = newKeyedTestPublisher(config.NostrConfig{PrivateKey: key, PublishEnabled: true, PublishQuorum: quorum}, pool, nil, zap.NewNop(), opts...)
 	h.pub.newBackoff = func() *Backoff { return &Backoff{Initial: time.Millisecond, Max: 5 * time.Millisecond, Multiplier: 2} }
 	publish := h.pub.publishFn
 	h.pub.publishFn = func(ctx context.Context, ev gonostr.Event, urls []string) ([]PublishResult, error) {

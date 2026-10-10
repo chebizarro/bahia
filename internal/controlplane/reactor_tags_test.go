@@ -70,7 +70,7 @@ func TestRequestSubscriptionAuthorsFailClosedForMalformedConfiguredPubkeys(t *te
 }
 
 func TestRequestSubscriptionDoesNotUseContextVMRecipientTag(t *testing.T) {
-	reactor := &Reactor{config: Config{PrivateKey: testServiceKey}}
+	reactor := &Reactor{}
 
 	filters := reactor.buildRequestSubscriptionFilters(42)
 	if len(filters) != 1 {
