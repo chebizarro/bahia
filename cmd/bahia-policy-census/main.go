@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -47,10 +48,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	path := flags.String("config", "config.yaml", "Bahia config path")
 	relayList := flags.String("relays", "", "comma-separated relays to audit (operator supplied; not canonical policy proof)")
 	maxRows := flags.Int("max-rows", 1000, "maximum SQL rows; census fails if more exist")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *maxRows < 1 || *maxRows > 10000 {
-		fmt.Fprintln(stderr, "usage: bahia-policy-census --config path --relays url,... [--max-rows 1..10000]")
+	deadline := flags.Duration("deadline", 5*time.Minute, "global SQL snapshot and relay read deadline (up to 30m)")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *maxRows < 1 || *maxRows > 10000 || *deadline <= 0 || *deadline > 30*time.Minute {
+		fmt.Fprintln(stderr, "usage: bahia-policy-census --config path --relays url,... [--max-rows 1..10000] [--deadline 5m]")
 		return 1
 	}
+	ctx, cancel := context.WithTimeout(ctx, *deadline)
+	defer cancel()
 	cfg, err := config.LoadReadOnly(*path)
 	if err != nil {
 		return fail(stderr, "load read-only config: %v", err)
@@ -115,11 +119,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			return fail(stderr, "policy %s history incomplete; no partial report: %v", id, err)
 		}
-		status := "absent-on-selected-relays"
-		if len(result.EventIDs) > 0 {
-			status = "relay-present-sql-skipped"
-		}
-		report.Rows = append(report.Rows, policyCensusRow{ID: id.String(), Status: status, EventIDs: result.EventIDs})
+		report.Rows = append(report.Rows, policyCensusRow{ID: id.String(), Status: "relay-present-sql-skipped", EventIDs: result.EventIDs})
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fail(stderr, "commit read-only SQL snapshot: %v", err)

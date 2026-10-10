@@ -21,8 +21,9 @@ type PolicyCoordinateCensus struct {
 // CensusPolicyCoordinate reads the addressable deployment-policy coordinate
 // from every relay in the supplied pool. A cold local cache is never evidence
 // of absence. The caller must independently establish that this exact relay
-// set is the effective canonical read/write set before using an absence to
-// make an import decision.
+// set is the effective canonical read/write set before using this observation.
+// A complete EOSE with no valid event is refused, not classified as absence: the
+// underlying Nostr library may discard invalid EVENT frames before this code.
 func CensusPolicyCoordinate(ctx context.Context, pool *RelayPool, author nostr.PubKey, id uuid.UUID) (PolicyCoordinateCensus, error) {
 	if pool == nil || len(pool.URLs()) == 0 || author == (nostr.PubKey{}) || id == uuid.Nil {
 		return PolicyCoordinateCensus{}, fmt.Errorf("policy census requires relay pool, author, and policy id")
@@ -71,6 +72,9 @@ func CensusPolicyCoordinate(ctx context.Context, pool *RelayPool, author nostr.P
 						return PolicyCoordinateCensus{}, err
 					}
 				default:
+					if len(seen) == 0 {
+						return PolicyCoordinateCensus{}, fmt.Errorf("policy coordinate %s has no valid relay event; absence is unprovable because the relay transport may discard invalid frames", id)
+					}
 					ids := make([]string, 0, len(seen))
 					for eventID := range seen {
 						ids = append(ids, eventID)
