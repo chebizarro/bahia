@@ -396,6 +396,11 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 		require.NoError(t, getErr)
 		require.Equal(t, original, restored, "committed rehydration must not change archived ID, digest or provenance")
 	}
+	for _, expected := range []string{"000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys"} {
+		rolled, downErr := db.Down(ctx, target, zap.NewNop(), db.DownOptions{Confirm: true})
+		require.NoError(t, downErr)
+		require.Equal(t, []string{expected}, rolled)
+	}
 	rolled, err := db.Down(ctx, target, zap.NewNop(), db.DownOptions{Confirm: true})
 	require.NoError(t, err)
 	require.Equal(t, []string{"000079_f74a_hot_observation_immutable"}, rolled)

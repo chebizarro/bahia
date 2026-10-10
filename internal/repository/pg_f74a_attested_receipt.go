@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -82,6 +83,7 @@ type F74aAttestedBackupReceipt struct {
 
 type F74aReceiptVerification struct {
 	ReceiptID          uuid.UUID
+	ReceiptSHA256      string
 	SourceDatabase     F74aDatabaseIdentity
 	Cutoff             time.Time
 	InventorySHA256    string
@@ -94,6 +96,20 @@ type F74aReceiptVerification struct {
 // connected source database and a fresh read-only inventory. It does not
 // accept a caller-provided database identity or inventory as local proof.
 func VerifyF74aAttestedReceipt(ctx context.Context, pool *pgxpool.Pool, pinnedAttestorHex string, receiptJSON []byte) (F74aReceiptVerification, error) {
+	return verifyF74aAttestedReceipt(ctx, pool, pinnedAttestorHex, receiptJSON, nil)
+}
+
+// A future independent live backup provider may use this private verifier on
+// restart. It authenticates the same receipt against the run's immutable
+// per-row deletion provenance, not against today's physical hot flags.
+func verifyF74aAttestedReceiptForDeletionRun(ctx context.Context, pool *pgxpool.Pool, pinnedAttestorHex string, receiptJSON []byte, runID uuid.UUID) (F74aReceiptVerification, error) {
+	if runID == uuid.Nil {
+		return F74aReceiptVerification{}, fmt.Errorf("F74a deletion run ID is required")
+	}
+	return verifyF74aAttestedReceipt(ctx, pool, pinnedAttestorHex, receiptJSON, &runID)
+}
+
+func verifyF74aAttestedReceipt(ctx context.Context, pool *pgxpool.Pool, pinnedAttestorHex string, receiptJSON []byte, runID *uuid.UUID) (F74aReceiptVerification, error) {
 	var out F74aReceiptVerification
 	pub, err := hex.DecodeString(strings.TrimSpace(pinnedAttestorHex))
 	if err != nil || len(pub) != ed25519.PublicKeySize {
@@ -154,7 +170,28 @@ func VerifyF74aAttestedReceipt(ctx context.Context, pool *pgxpool.Pool, pinnedAt
 	if identity != p.SourceDatabase {
 		return out, fmt.Errorf("F74a attested receipt is for a different PostgreSQL database")
 	}
-	inventory, err := PreflightF74aRestore(ctx, pool, p.Cutoff)
+	receiptDigest := sha256.Sum256(receiptJSON)
+	receiptSHA256 := hex.EncodeToString(receiptDigest[:])
+	var inventory F74aRestorePreflight
+	if runID == nil {
+		inventory, err = PreflightF74aRestore(ctx, pool, p.Cutoff)
+	} else {
+		var runReceiptID uuid.UUID
+		var runReceiptSHA256, runInventorySHA256, runBackupSHA256 string
+		var runDatabase F74aDatabaseIdentity
+		var runCutoff time.Time
+		err = pool.QueryRow(ctx, `SELECT receipt_id,receipt_sha256,source_inventory_sha256,
+			source_database_name,source_database_oid,source_system_identifier,backup_object_sha256,cutoff
+			FROM f74a_confirmed_deletion_runs WHERE id=$1`, *runID).Scan(&runReceiptID,
+			&runReceiptSHA256, &runInventorySHA256, &runDatabase.Name, &runDatabase.OID,
+			&runDatabase.SystemIdentifier, &runBackupSHA256, &runCutoff)
+		if err != nil || runReceiptID != p.ReceiptID || runReceiptSHA256 != receiptSHA256 ||
+			runInventorySHA256 != p.SourceInventorySHA256 || runDatabase != p.SourceDatabase ||
+			runBackupSHA256 != p.BackupObjectSHA256 || !runCutoff.Equal(p.Cutoff) {
+			return out, fmt.Errorf("F74a signed receipt does not match deletion run provenance")
+		}
+		inventory, err = preflightF74aRestoreForRun(ctx, pool, p.Cutoff, *runID)
+	}
 	if err != nil {
 		return out, fmt.Errorf("F74a attested receipt local inventory: %w", err)
 	}
@@ -162,7 +199,7 @@ func VerifyF74aAttestedReceipt(ctx context.Context, pool *pgxpool.Pool, pinnedAt
 		return out, fmt.Errorf("F74a attested receipt inventory differs from connected database")
 	}
 	return F74aReceiptVerification{
-		ReceiptID: p.ReceiptID, SourceDatabase: identity, Cutoff: p.Cutoff,
+		ReceiptID: p.ReceiptID, ReceiptSHA256: receiptSHA256, SourceDatabase: identity, Cutoff: p.Cutoff,
 		InventorySHA256: inventory.InventorySHA256,
 		BackupObjectRef: p.BackupObjectRef, BackupObjectSHA256: p.BackupObjectSHA256, ExpiresAt: p.ExpiresAt,
 	}, nil
