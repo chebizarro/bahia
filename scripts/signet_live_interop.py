@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Opt-in live interop: Bahia's standard NIP-46 tests against a real signetd.
+"""Opt-in live interop: Bahia's NIP-46 service signer against a real signetd.
 
-Inputs are a Signet (nostrc) checkout, its CMake build directory and the full
-Signet commit the operator pinned for review. The runner builds signetd and
-signetctl from that exact clean commit, starts them on a private loopback
-relay with a disposable encrypted store and synthetic keys, and runs Bahia's
+Bahia opens its service identity with servicesigner.Open and
+nostr.signer.method=nip46; Signet is only the bunker under test. Inputs are a
+Signet (nostrc) checkout, its CMake build directory and the full Signet commit
+the operator pinned for review. The runner builds signetd and signetctl from
+that exact clean commit, starts them on a private loopback relay with a
+disposable encrypted store and synthetic keys, adopts a synthetic existing
+service key (`adopt-existing`, so the pubkey is preserved) and runs Bahia's
 opt-in `signetinterop` tests from this (clean) Bahia checkout:
 
-  1. TestLiveSignetAssignedWriterSigns: the first writer client, assigned with
-     `signetctl writer-acquire`, pairs and signs.
+  1. TestLiveNIP46AssignedWriterSigns: the first dedicated client key,
+     assigned with `signetctl writer-acquire`, opens the signer and signs.
   2. The writer is reassigned to a second, single-use client key.
-  3. TestLiveSignetStandardNIP46ServiceSigner: the new writer signs, NIP-44
-     encrypts/decrypts and signs an SBOM attestation event; the displaced
-     writer reconnects and every request is refused remotely.
+  3. TestLiveNIP46ServiceSigner: a wrong nostr.public_key is fatal at open;
+     the new writer signs, NIP-44 encrypts/decrypts (text and binary) and
+     signs an SBOM attestation event; the displaced writer still opens but
+     every key operation is refused remotely.
   4. TestLiveAssistantWrappedStartupHistoricalReads: wrapped read-only
-     assistant startup through the new writer.
+     assistant startup through the NIP-46 service signer.
 
 Never accepts an existing identity, relay URL or database. No secret, pairing
 URI or raw test output is written to stdout or stderr; on failure only the
@@ -33,15 +37,17 @@ import tempfile
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-ASSIGNED_TEST = "TestLiveSignetAssignedWriterSigns"
-SIGNER_TEST = "TestLiveSignetStandardNIP46ServiceSigner"
+ASSIGNED_TEST = "TestLiveNIP46AssignedWriterSigns"
+SIGNER_TEST = "TestLiveNIP46ServiceSigner"
 APP_TEST = "TestLiveAssistantWrappedStartupHistoricalReads"
-ADAPTER_PACKAGE = "./internal/adapters/signet"
+SIGNER_PACKAGE = "./internal/servicesigner"
+SIGNER_SOURCE = "nip46_live_integration_test.go"
 APP_PACKAGE = "./internal/app"
 AGENT_ID = "bahia-interop"
-# Standard NIP-46 methods Bahia's fenced service signer uses, plus Signet's
-# general binary-safe NIP-44 encrypt (Concord CORD-06 rekey blobs).
-ALLOWED_METHODS = "connect, get_public_key, sign_event, nip44_encrypt, nip44_decrypt, nip44_encrypt_b64"
+# Standard NIP-46 methods Bahia's service signer uses, plus the binary-safe
+# NIP-44 pair (nip44_*_b64) behind its optional BinaryCipher capability.
+ALLOWED_METHODS = ("connect, get_public_key, sign_event, nip44_encrypt, nip44_decrypt, "
+                   "nip44_encrypt_b64, nip44_decrypt_b64")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 HEX_KEY_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
@@ -213,9 +219,9 @@ def main(argv=None):
     for executable in ("nak", "go", "cmake", "git"):
         if subprocess.run(["which", executable], capture_output=True).returncode:
             raise RuntimeError(f"{executable} is required")
-    if not (bahia / "internal/adapters/signet/interop_integration_test.go").is_file() or \
-            not (bahia / "internal/app/assistant_wrapped_live_integration_test.go").is_file():
-        raise RuntimeError("Bahia checkout lacks the opt-in Signet interop tests")
+    if not (bahia / SIGNER_PACKAGE / SIGNER_SOURCE).is_file() or \
+            not (bahia / APP_PACKAGE / "assistant_wrapped_live_integration_test.go").is_file():
+        raise RuntimeError("Bahia checkout lacks the opt-in NIP-46 interop tests")
     bahia_commit = require_clean_checkout(bahia, "Bahia")
     require_clean_checkout(signet_repo, "Signet", signet_commit)
     cache = build / "CMakeCache.txt"
@@ -305,7 +311,7 @@ def main(argv=None):
                 first_fixture = root / "fixture-assigned.json"
                 write_fixture(first_fixture, writer_bunker_uri=first_uri, writer_secret_key_hex=displaced_sk, **common)
                 test_env["BAHIA_SIGNET_INTEROP_CONFIG"] = str(first_fixture)
-                run_go_test(bahia, test_env, ADAPTER_PACKAGE, ASSIGNED_TEST, "interop_integration_test.go")
+                run_go_test(bahia, test_env, SIGNER_PACKAGE, ASSIGNED_TEST, SIGNER_SOURCE)
 
                 # Phase 2: pair a second client and reassign the writer to it.
                 # Connect secrets are one-time; reissue writes the new one 0600.
@@ -318,11 +324,11 @@ def main(argv=None):
                 write_fixture(fixture, writer_bunker_uri=writer_uri, writer_secret_key_hex=writer_sk,
                               displaced_bunker_uri=first_uri, displaced_writer_secret_key_hex=displaced_sk, **common)
                 test_env["BAHIA_SIGNET_INTEROP_CONFIG"] = str(fixture)
-                run_go_test(bahia, test_env, ADAPTER_PACKAGE, SIGNER_TEST, "interop_integration_test.go")
+                run_go_test(bahia, test_env, SIGNER_PACKAGE, SIGNER_TEST, SIGNER_SOURCE)
 
-                # Phase 3: wrapped read-only assistant startup through the writer.
+                # Phase 3: wrapped read-only assistant startup through the NIP-46 signer.
                 run_app_test(bahia, test_env, root, service_sk)
-                print(f"PASS: Bahia {bahia_commit} standard NIP-46 interop against Signet {signet_commit} "
+                print(f"PASS: Bahia {bahia_commit} NIP-46 service signer interop against Signet {signet_commit} "
                       f"({ASSIGNED_TEST}, {SIGNER_TEST}, {APP_TEST}) on a disposable loopback signetd")
         finally:
             for process in reversed(processes):

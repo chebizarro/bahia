@@ -5,9 +5,7 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
-	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -19,10 +17,10 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
-	"github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
+	"github.com/openagentsinc/bahia/internal/servicesigner"
 )
 
 // The disposable loopback runner supplies a synthetic adopted service nsec on
@@ -40,8 +38,9 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 	if err != nil {
 		t.Fatal("read disposable fixture")
 	}
-	// Written by scripts/signet_live_interop.py. The writer is the
-	// client key currently assigned with agent/writer-acquire.
+	// Written by scripts/signet_live_interop.py. The bunker under test is
+	// Signet; the writer is the client key it currently assigns to the
+	// service identity.
 	var fixture struct {
 		Disposable            bool   `json:"disposable"`
 		SignetCommit          string `json:"signet_commit"`
@@ -66,7 +65,7 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 	}
 	serviceSecret, err := nostr.SecretKeyFromHex(strings.TrimSpace(string(serviceSecretBytes)))
 	if err != nil || serviceSecret.Public().Hex() != fixture.ExpectedServicePubkey || owner.Public() == serviceSecret.Public() {
-		t.Fatal("runner service key does not match adopted Signet pubkey")
+		t.Fatal("runner service key does not match the adopted bunker identity")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -87,21 +86,22 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 	if _, err := oldCheckpoint.Append(ctx, execution, ""); err != nil {
 		t.Fatal(err)
 	}
-	initial, err := signet.NewClient(signet.Config{BunkerURI: fixture.WriterBunkerURI, ClientSecretKey: fixture.WriterSecretKeyHex, RequireReal: true, ExpectedServicePubkey: fixture.ExpectedServicePubkey}, slog.Default())
+	// Runtime configuration: the service identity is a NIP-46 bunker reached
+	// with the dedicated writer key; Bahia holds no raw service key.
+	runtime := &config.Config{Nostr: config.NostrConfig{PublicKey: fixture.ExpectedServicePubkey, Signer: config.NostrSignerConfig{
+		Method: config.NostrSignerNIP46, BunkerURI: fixture.WriterBunkerURI, ClientSecretKey: fixture.WriterSecretKeyHex, Timeout: time.Minute,
+	}}}
+	signerCtx, closeSigner := context.WithCancel(ctx)
+	defer closeSigner()
+	signer, err := servicesigner.Open(signerCtx, runtime.Nostr, servicesigner.Options{})
 	if err != nil {
-		t.Fatal("cannot construct fenced Signet client")
+		t.Fatal("cannot open the NIP-46 service signer")
 	}
-	defer initial.Close()
-	if err := initial.Connect(ctx); err != nil {
-		t.Fatal("disposable Signet did not connect")
-	}
-	serviceSigner, err := signet.NewServiceSigner(initial, fixture.ExpectedServicePubkey)
+	// One-time migration: wrap the legacy key derived from the adopted nsec
+	// and a fresh v2 key under the service identity held by the bunker.
+	manifest, err := createAssistantWrappedKeyManifest(ctx, signer, serviceSecret.Public(), cfg)
 	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := CreateAssistantWrappedKeyManifest(ctx, serviceSigner, serviceSecret.Public(), cfg)
-	if err != nil {
-		t.Fatal("live Signet could not wrap assistant keys")
+		t.Fatal("live bunker could not wrap assistant keys")
 	}
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -111,24 +111,19 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "assistant-keys.json")
-	if err := persistAssistantWrappedKeyManifest(ctx, serviceSigner, serviceSecret.Public(), path, manifest); err != nil {
+	if err := persistAssistantWrappedKeyManifest(ctx, signer, serviceSecret.Public(), path, manifest); err != nil {
 		t.Fatal(err)
 	}
-	if err := initial.Close(); err != nil {
-		t.Fatal(err)
+	runtime.Assistant.WrappedKeys = config.AssistantWrappedKeysConfig{Mode: "wrapped_read_only", ManifestPath: path, ExpectedGeneration: manifest.Active.Version}
+	if _, err := assistantTranscriptKeyProviderWithSigner(ctx, runtime, signer); err != nil {
+		t.Fatal("wrapped startup through the shared service signer failed")
 	}
-	cfg.Assistant.WrappedKeys = config.AssistantWrappedKeysConfig{Mode: "wrapped_read_only", ManifestPath: path, ExpectedGeneration: manifest.Active.Version, SignetBunkerURI: fixture.WriterBunkerURI, OwnerClientSecretKey: fixture.WriterSecretKeyHex, ConnectTimeout: time.Minute}
-	var startupClient *signet.Client
-	provider, err := assistantTranscriptKeyProviderForStartupWithClient(ctx, cfg, serviceSecret.Public().Hex(), nil, func(options signet.Config) (*signet.Client, error) {
-		client, createErr := signet.NewClient(options, slog.Default())
-		startupClient = client
-		return client, createErr
-	})
+	closeSigner()
+	// Startup as app.go runs it today: open the configured signer, read the
+	// manifest, close the signer.
+	provider, err := assistantTranscriptKeyProviderForStartup(ctx, runtime, "", nil)
 	if err != nil {
 		t.Fatal("real assistant wrapped startup failed")
-	}
-	if startupClient == nil || !errors.Is(startupClient.Ping(ctx), signet.ErrNotConnected) {
-		t.Fatal("startup Signet bootstrap connection remained open")
 	}
 	transcript := service.NewAssistantTranscriptStore(service.AssistantTranscriptStoreConfig{Publisher: relay, Subscriber: relay, Signer: historicalSigner, Identity: service.AssistantIdentity{Pubkey: serviceSecret.Public().Hex()}, KeyProvider: provider, ServicePubkey: serviceSecret.Public().Hex()})
 	records, err := transcript.Replay(ctx, service.AssistantTranscriptReplayQuery{SessionID: "s-live"})
@@ -146,14 +141,14 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 	if _, err := transcript.AppendMessage(ctx, service.AssistantTranscriptAppend{SessionID: "s-live", Sequence: 2, Message: domain.AssistantAgentMessage{Role: domain.AssistantAgentMessageRoleUser}}); err == nil {
 		t.Fatal("wrapped startup permitted transcript write")
 	}
-	cfg.Assistant.WrappedKeys.ExpectedGeneration = "v2-wrong"
-	if _, err := assistantTranscriptKeyProviderForStartup(ctx, cfg, serviceSecret.Public().Hex(), nil); err == nil {
+	runtime.Assistant.WrappedKeys.ExpectedGeneration = "v2-wrong"
+	if _, err := assistantTranscriptKeyProviderForStartup(ctx, runtime, "", nil); err == nil {
 		t.Fatal("wrong generation fell back to raw key")
 	}
-	cfg.Assistant.WrappedKeys.ExpectedGeneration = manifest.Active.Version
+	runtime.Assistant.WrappedKeys.ExpectedGeneration = manifest.Active.Version
 	expired, expiredCancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer expiredCancel()
-	if _, err := assistantTranscriptKeyProviderForStartup(expired, cfg, serviceSecret.Public().Hex(), nil); err == nil {
+	if _, err := assistantTranscriptKeyProviderForStartup(expired, runtime, "", nil); err == nil {
 		t.Fatal("expired startup context succeeded")
 	}
 }
