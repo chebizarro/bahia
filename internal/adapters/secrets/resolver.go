@@ -15,10 +15,17 @@ import (
 type Resolver struct {
 	repo      repository.SecretRepository
 	encryptor *Encryptor
+	dataKey   *DataKey
 }
 
 func NewResolver(repo repository.SecretRepository, encryptor *Encryptor) *Resolver {
 	return &Resolver{repo: repo, encryptor: encryptor}
+}
+
+// newDataKeyResolver reads only migrated v2 rows. It has no raw-key or legacy
+// decrypt fallback and is safe to construct without a service nsec.
+func newDataKeyResolver(repo repository.SecretRepository, key *DataKey) *Resolver {
+	return &Resolver{repo: repo, dataKey: key}
 }
 
 func (r *Resolver) ResolveSecret(ctx context.Context, ref string) (string, error) {
@@ -34,7 +41,7 @@ func (r *Resolver) ResolveSecretWithAudit(ctx context.Context, ref string, opts 
 	if err != nil {
 		return "", manifest, err
 	}
-	if r == nil || r.repo == nil || r.encryptor == nil {
+	if r == nil || r.repo == nil || (r.encryptor == nil && r.dataKey == nil) {
 		return "", manifest, fmt.Errorf("secret resolver is not configured")
 	}
 	id, err := uuid.Parse(strings.TrimSpace(ref))
@@ -69,7 +76,19 @@ func (r *Resolver) ResolveSecretWithAudit(ctx context.Context, ref string, opts 
 		AccessedAt:    accessedAt,
 	}
 
-	value, decryptErr := r.encryptor.Decrypt(version.EncryptedValue, version.EncryptionMethod)
+	var value string
+	var decryptErr error
+	if r.dataKey != nil {
+		if version.EncryptionMethod != domain.EncryptionAES256V2 {
+			decryptErr = fmt.Errorf("secret version is not migrated to v2")
+		} else {
+			var plain []byte
+			plain, decryptErr = r.dataKey.Open(version.SecretID, version.Version, version.EncryptedValue)
+			value = string(plain)
+		}
+	} else {
+		value, decryptErr = r.encryptor.Decrypt(version.EncryptedValue, version.EncryptionMethod)
+	}
 	audit := &domain.SecretAccessAudit{
 		SecretID:      secret.ID,
 		VersionID:     version.ID,
