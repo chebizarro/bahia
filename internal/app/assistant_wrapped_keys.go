@@ -57,7 +57,7 @@ type assistantWrappedKeyPlaintext struct {
 // CreateAssistantWrappedKeyManifest wraps a fresh random v2 key and the exact
 // deployed v1 key derived from the matching service configuration. It does not
 // persist the manifest or enable its key for new event writes.
-func CreateAssistantWrappedKeyManifest(ctx context.Context, wrapper *signet.EpochSigner, servicePubkey nostr.PubKey, cfg *config.Config) (AssistantWrappedKeyManifest, error) {
+func CreateAssistantWrappedKeyManifest(ctx context.Context, wrapper *signet.ServiceSigner, servicePubkey nostr.PubKey, cfg *config.Config) (AssistantWrappedKeyManifest, error) {
 	return createAssistantWrappedKeyManifest(ctx, wrapper, servicePubkey, cfg)
 }
 
@@ -124,7 +124,7 @@ func wrapAssistantKey(ctx context.Context, wrapper assistantKeyWrapper, serviceP
 // historical reads. Its provider rejects new writes until durable create-once
 // selection of the v2 generation is implemented. It never derives a key from
 // the service nsec or falls back to raw local signing.
-func OpenAssistantWrappedKeyManifest(ctx context.Context, wrapper *signet.EpochSigner, servicePubkey nostr.PubKey, manifest AssistantWrappedKeyManifest) (service.AssistantTranscriptKeyProvider, error) {
+func OpenAssistantWrappedKeyManifest(ctx context.Context, wrapper *signet.ServiceSigner, servicePubkey nostr.PubKey, manifest AssistantWrappedKeyManifest) (service.AssistantTranscriptKeyProvider, error) {
 	return openAssistantWrappedKeyManifest(ctx, wrapper, servicePubkey, manifest)
 }
 

@@ -39,8 +39,8 @@ cannot prove compatibility.
    cannot fall back to a raw nsec. That work is **not** in this slice.
 2. Independently back up and verify the database, inventory all rows, and
    stop the daemon and every SQL writer. No backup or runner is included.
-3. Have a live, unexpired WriterLease for a dedicated Signet owner and the
-   existing service pubkey. Keep the legacy nsec only in an isolated offline
+3. Have a dedicated Signet client key assigned (via `agent/writer-acquire`) as
+   the sole writer for the existing service pubkey. Keep the legacy nsec only in an isolated offline
    environment; never put it in arguments, logs or the remote runtime.
 4. Implement a reviewed one-shot runner with exact service-key identity
    checks, bounded census reconciliation, strict quiescence, rollback and

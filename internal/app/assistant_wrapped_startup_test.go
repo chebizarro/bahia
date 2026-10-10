@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"fiatjaf.com/nostr/keyer"
+	"github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -97,5 +99,52 @@ func TestAssistantWrappedStartupNeverFallsBackOnMissingManifest(t *testing.T) {
 	cfg.Assistant.WrappedKeys.ExpectedGeneration = "v2-pinned"
 	if _, err := assistantTranscriptKeyProviderForStartup(t.Context(), cfg, wrapper.pubkey.Hex(), nil); err == nil {
 		t.Fatal("missing wrapped manifest silently selected the raw-key provider")
+	}
+}
+
+// The Signet fence is "this dedicated client key is the assigned writer";
+// startup carries no lease epoch or expiry and only pins the identities.
+func TestAssistantWrappedStartupRequiresOnlyDistinctDedicatedOwnerKey(t *testing.T) {
+	ctx := t.Context()
+	wrapper := assistantWrapFixture(t)
+	cfg := &config.Config{Nostr: config.NostrConfig{PrivateKey: strings.Repeat("1", 64)}}
+	manifest, err := createAssistantWrappedKeyManifest(ctx, wrapper, wrapper.pubkey, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "assistant-keys.json")
+	if err := persistAssistantWrappedKeyManifest(ctx, wrapper, wrapper.pubkey, path, manifest); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Assistant.WrappedKeys = config.AssistantWrappedKeysConfig{Mode: "wrapped_read_only", ManifestPath: path, ExpectedGeneration: manifest.Active.Version, SignetBunkerURI: "bunker://" + strings.Repeat("3", 64) + "?relay=ws://127.0.0.1:1"}
+	errStop := errors.New("stop before network")
+	var requested []signet.Config
+	newClient := func(options signet.Config) (*signet.Client, error) {
+		requested = append(requested, options)
+		return nil, errStop
+	}
+
+	cfg.Assistant.WrappedKeys.OwnerClientSecretKey = wrapper.secret.Hex()
+	if _, err := assistantTranscriptKeyProviderForStartupWithClient(ctx, cfg, wrapper.pubkey.Hex(), nil, newClient); err == nil || !strings.Contains(err.Error(), "distinct dedicated") {
+		t.Fatalf("service key reused as Signet owner key = %v", err)
+	}
+	if len(requested) != 0 {
+		t.Fatal("Signet client constructed for a non-dedicated owner key")
+	}
+
+	owner := strings.Repeat("2", 64)
+	cfg.Assistant.WrappedKeys.OwnerClientSecretKey = owner
+	if _, err := assistantTranscriptKeyProviderForStartupWithClient(ctx, cfg, wrapper.pubkey.Hex(), nil, newClient); !errors.Is(err, errStop) {
+		t.Fatalf("startup without any lease state = %v, want to reach Signet client construction", err)
+	}
+	if len(requested) != 1 || requested[0].ClientSecretKey != owner || requested[0].ExpectedServicePubkey != wrapper.pubkey.Hex() || !requested[0].RequireReal || requested[0].AllowMock {
+		t.Fatalf("fenced Signet client options = %+v", requested)
 	}
 }

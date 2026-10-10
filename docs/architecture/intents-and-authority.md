@@ -37,25 +37,21 @@ service private key; remote signing is not enabled.
 The Signet client's optional epoch signing mode requires a separately supplied
 existing service pubkey, a dedicated persistent NIP-46 client identity distinct
 from the service key, and a current writer lease snapshot. When configured,
-`Client.Sign` uses this mode and never falls back to its legacy signing path.
-It sends `sign_event` with the unsigned event JSON and decimal writer epoch,
+`Client.Sign` uses this mode and never falls back to its unpinned signing
+path. It sends standard NIP-46 `sign_event` with only the unsigned event JSON,
 then checks the returned author, unchanged event fields, NIP-01 id and
-signature before accepting it. It rejects missing, expired, wrong-owner
-or regressed local epochs and connection changes. The local lease snapshot is
-only an attempt gate: Signet must verify the authenticated client and current
-writer epoch atomically for every signature. Lease acquisition and renewal do
-not run in the daemon, and the adapter is not selected by application startup.
-An epoch signer client is a lease owner, not a Signet provisioner. It does not
-open the provisioner management relay pool, and its agent-management methods
-fail closed. A separate provisioner-backed client, distinct from the fenced
-service identity, retains the existing bunker-signed management NIP-42 AUTH,
-signed seals and reply subscription.
-Signet `agent/writer-acquire` is a provisioner-authorized administrative
-transfer, while NIP-46 `writer_renew` is authorized by the current lease owner
-and carries its epoch. The designated owner pubkey must differ from both the
-service pubkey and every Signet provisioner pubkey; a lease owner must never
-have provisioner authority. The signer adapter performs neither acquisition
-nor renewal.
+signature before accepting it, and rejects connection changes. Signet is the
+authorization boundary: a fenced service identity signs only for the
+authenticated NIP-46 client pubkey that a provisioner assigned with
+`agent/writer-acquire`. Writer client keys are single-use, and there is no
+epoch, lease expiry or renewal on the wire. A fenced signer client is an
+assigned writer, not a Signet provisioner. It does not open the provisioner
+management relay pool, and its agent-management methods fail closed. A
+separate provisioner-backed client, distinct from the fenced service
+identity, retains the existing bunker-signed management NIP-42 AUTH, signed
+seals and reply subscription. The writer pubkey must differ from both the
+service pubkey and every Signet provisioner pubkey; a writer must never have
+provisioner authority. Bahia never performs writer assignment.
 
 Event signing is separate from operations requiring raw key material. DM
 NIP-44 conversation-key derivation, legacy secret encryption and derivation,

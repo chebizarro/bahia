@@ -39,9 +39,10 @@ var (
 	ErrInvalidEvent = errors.New("nostr event is nil")
 	// ErrAuthoritativeAgentListingUnsupported prevents volatile cache state from being presented as Signet truth.
 	ErrAuthoritativeAgentListingUnsupported = errors.New("authoritative Signet agent listing is unsupported")
-	// ErrEpochManagementRequiresProvisioner keeps a fenced lease owner from being
-	// treated as a Signet management provisioner.
-	ErrEpochManagementRequiresProvisioner = errors.New("epoch signer client cannot perform Signet provisioner management")
+	// ErrFencedManagementRequiresProvisioner keeps the assigned writer client
+	// of a fenced service identity from being treated as a Signet management
+	// provisioner.
+	ErrFencedManagementRequiresProvisioner = errors.New("fenced service signer client cannot perform Signet provisioner management")
 )
 
 const (
@@ -78,8 +79,8 @@ const (
 //     RelayPool: supervised per-relay REQ, CLOSED classification and NIP-42.
 //     Its pool lives as long as one bunker connection and authenticates as
 //     the provisioner through that bunker, the identity the gift-wrapped
-//     replies are addressed to. Epoch signer clients do not open a management
-//     pool; they are lease owners, not provisioners.
+//     replies are addressed to. Fenced service signer clients do not open a
+//     management pool; they are assigned writers, not provisioners.
 type Client struct {
 	bunkerURI         string
 	relays            []string
@@ -90,7 +91,7 @@ type Client struct {
 	logger            *slog.Logger
 	clientSecretKey   string // NIP-46 session key
 	clientKeyExplicit bool   // Config supplied a dedicated, persistent client identity
-	epochSigner       *EpochSigner
+	serviceSigner     *ServiceSigner
 	requireReal       bool // Fail closed unless a real Signet bunker is configured and reachable
 	allowMock         bool // Explicit test/dev-only mock signing mode
 	connectTimeout    time.Duration
@@ -134,9 +135,9 @@ type Config struct {
 	// requests and management gift wraps. Nil uses the process-wide
 	// controller; there is no unlimited mode.
 	OutboundAdmission *nostrout.Admission
-	// EpochLease and ExpectedServicePubkey must be supplied together for the
-	// fenced service-key signing path. Bahia app startup does not set them.
-	EpochLease            WriterLeaseSource
+	// ExpectedServicePubkey selects the fenced service-key signing path: every
+	// sign/NIP-44 request goes through a ServiceSigner pinned to this pubkey,
+	// and the client never opens the provisioner management plane.
 	ExpectedServicePubkey string
 }
 
@@ -169,12 +170,12 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 		stateChanged:      make(chan struct{}),
 	}
 
-	if config.EpochLease != nil || config.ExpectedServicePubkey != "" {
-		signer, err := NewEpochSigner(c, config.ExpectedServicePubkey, config.EpochLease)
+	if config.ExpectedServicePubkey != "" {
+		signer, err := NewServiceSigner(c, config.ExpectedServicePubkey)
 		if err != nil {
-			return nil, fmt.Errorf("configure Signet epoch signer: %w", err)
+			return nil, fmt.Errorf("configure Signet service signer: %w", err)
 		}
-		c.epochSigner = signer
+		c.serviceSigner = signer
 	}
 	return c, nil
 }
@@ -245,7 +246,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	c.setConnection(bunker, connectCtx, cancelConnect, true)
-	if c.epochSigner == nil {
+	if c.serviceSigner == nil {
 		c.replaceManagementPool(c.newManagementPool(bunker))
 	}
 	installed = true
@@ -337,9 +338,9 @@ func signetManagementRelays(config Config) []string {
 }
 
 // newManagementPool returns the provisioner management pool for one bunker
-// connection. Fenced writer-lease owners never receive this pool.
+// connection. Fenced service signer clients never receive this pool.
 func (c *Client) newManagementPool(bunker *nostrout.Bunker) *nostrpool.RelayPool {
-	if c.epochSigner != nil || len(c.managementRelays) == 0 {
+	if c.serviceSigner != nil || len(c.managementRelays) == 0 {
 		return nil
 	}
 	logger := nostrpool.NewSlogZapLogger(c.logger.With("relay_pool", "signet-management"))
@@ -479,8 +480,8 @@ func (c *Client) provisionAgentMock(agentID string) (pubkey, npub, bunkerURI str
 
 // Sign signs an event using the Signet bunker's key.
 func (c *Client) Sign(ctx context.Context, event *nostr.Event) error {
-	if c.epochSigner != nil {
-		return c.epochSigner.SignEvent(ctx, event)
+	if c.serviceSigner != nil {
+		return c.serviceSigner.SignEvent(ctx, event)
 	}
 	c.mu.Lock()
 	connected := c.connected
@@ -510,8 +511,8 @@ func (c *Client) Sign(ctx context.Context, event *nostr.Event) error {
 // NIP44Encrypt encrypts plaintext to a recipient using the Signet-held staff key.
 // In production the private key remains inside the NIP-46 bunker.
 func (c *Client) NIP44Encrypt(ctx context.Context, recipient nostr.PubKey, plaintext string) (string, error) {
-	if c.epochSigner != nil {
-		return c.epochSigner.Encrypt(ctx, plaintext, recipient)
+	if c.serviceSigner != nil {
+		return c.serviceSigner.Encrypt(ctx, plaintext, recipient)
 	}
 	c.mu.Lock()
 	connected := c.connected
@@ -563,8 +564,8 @@ func (c *Client) NIP44Encrypt(ctx context.Context, recipient nostr.PubKey, plain
 // A bunker without the method fails the call rather than returning a payload
 // over mangled bytes, so an out-of-date Signet degrades to a loud error.
 func (c *Client) NIP44EncryptBytes(ctx context.Context, recipient nostr.PubKey, plaintext []byte) (string, error) {
-	if c.epochSigner != nil {
-		return c.epochSigner.EncryptBytes(ctx, plaintext, recipient)
+	if c.serviceSigner != nil {
+		return c.serviceSigner.EncryptBytes(ctx, plaintext, recipient)
 	}
 	c.mu.Lock()
 	connected := c.connected
@@ -617,8 +618,8 @@ func (c *Client) NIP44EncryptBytes(ctx context.Context, recipient nostr.PubKey, 
 // Concord invite material ciphertext at rest: the private key never leaves the
 // NIP-46 bunker in production.
 func (c *Client) NIP44Decrypt(ctx context.Context, counterparty nostr.PubKey, ciphertext string) (string, error) {
-	if c.epochSigner != nil {
-		return c.epochSigner.Decrypt(ctx, ciphertext, counterparty)
+	if c.serviceSigner != nil {
+		return c.serviceSigner.Decrypt(ctx, ciphertext, counterparty)
 	}
 	c.mu.Lock()
 	connected := c.connected
@@ -993,8 +994,8 @@ func consumeSignetManagementResponse(requestID string, resp signetJSONRPCRespons
 }
 
 func (c *Client) callManagement(ctx context.Context, method string, params map[string]interface{}, out interface{}) error {
-	if c.epochSigner != nil {
-		return ErrEpochManagementRequiresProvisioner
+	if c.serviceSigner != nil {
+		return ErrFencedManagementRequiresProvisioner
 	}
 	bunkerPubkey, _, _, err := ParseBunkerURI(c.bunkerURI)
 	if err != nil {
