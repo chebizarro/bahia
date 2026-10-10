@@ -2314,6 +2314,17 @@ func (s *Server) handleUpdateSecret(ctx context.Context, args map[string]interfa
 	if denied := s.authorizeSecretPermission(ctx, existing.ServiceID, domain.PermWriteSecrets); denied != nil {
 		return denied, nil
 	}
+	// This tool only has the legacy AES writer. In particular, never replace a
+	// v2 payload while retaining its method: readers would treat the legacy
+	// ciphertext as identity/version-bound data-key ciphertext.
+	switch existing.EncryptionMethod {
+	case domain.EncryptionAES256, domain.EncryptionNIP44:
+		// A supported legacy row may be replaced with legacy AES ciphertext.
+	case domain.EncryptionAES256V2:
+		return errorResult("versioned secret updates require the fenced v2 writer"), nil
+	default:
+		return errorResult("unsupported stored secret encryption method"), nil
+	}
 
 	// Encrypt the new value
 	encryptedValue, err := s.encryptor.Encrypt(value, domain.EncryptionAES256)
@@ -2323,6 +2334,7 @@ func (s *Server) handleUpdateSecret(ctx context.Context, args map[string]interfa
 
 	// Update the secret
 	existing.EncryptedValue = encryptedValue
+	existing.EncryptionMethod = domain.EncryptionAES256
 	existing.UpdatedAt = time.Now()
 
 	if err := s.secretsRepo.Update(ctx, existing); err != nil {
