@@ -5,6 +5,7 @@ CREATE TABLE f74a_confirmed_deletion_runs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   receipt_id UUID NOT NULL,
   receipt_sha256 TEXT NOT NULL CHECK (receipt_sha256 ~ '^[0-9a-f]{64}$'),
+  source_inventory_sha256 TEXT NOT NULL CHECK (source_inventory_sha256 ~ '^[0-9a-f]{64}$'),
   source_database_name TEXT NOT NULL,
   source_database_oid TEXT NOT NULL,
   source_system_identifier TEXT NOT NULL,
@@ -27,6 +28,7 @@ CREATE TABLE f74a_confirmed_deletion_runs (
 CREATE FUNCTION f74a_guard_confirmed_deletion_run() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW.receipt_id <> OLD.receipt_id OR NEW.receipt_sha256 <> OLD.receipt_sha256
+     OR NEW.source_inventory_sha256 <> OLD.source_inventory_sha256
      OR NEW.source_database_name <> OLD.source_database_name
      OR NEW.source_database_oid <> OLD.source_database_oid
      OR NEW.source_system_identifier <> OLD.source_system_identifier
@@ -55,8 +57,22 @@ CREATE TABLE f74a_confirmed_deletion_batches (
   cursor_environment_id UUID NOT NULL,
   cursor_observed_at TIMESTAMPTZ NOT NULL,
   cursor_id UUID NOT NULL,
-  committed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  committed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (id, run_id)
 );
+CREATE TABLE f74a_confirmed_deletion_items (
+  run_id UUID NOT NULL REFERENCES f74a_confirmed_deletion_runs(id),
+  batch_id UUID NOT NULL,
+  observation_id UUID NOT NULL,
+  row_digest BYTEA NOT NULL CHECK (length(row_digest) = 32),
+  PRIMARY KEY (run_id, observation_id),
+  FOREIGN KEY (batch_id, run_id) REFERENCES f74a_confirmed_deletion_batches(id, run_id)
+    DEFERRABLE INITIALLY DEFERRED
+);
+CREATE INDEX idx_f74a_confirmed_deletion_items_batch ON f74a_confirmed_deletion_items(batch_id, run_id);
+CREATE TRIGGER f74a_confirmed_deletion_item_immutable
+BEFORE UPDATE OR DELETE ON f74a_confirmed_deletion_items
+FOR EACH ROW EXECUTE FUNCTION f74a_archive_immutable();
 CREATE TRIGGER f74a_confirmed_deletion_batch_immutable
 BEFORE UPDATE OR DELETE ON f74a_confirmed_deletion_batches
 FOR EACH ROW EXECUTE FUNCTION f74a_archive_immutable();

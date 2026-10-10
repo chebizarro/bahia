@@ -41,6 +41,20 @@ const f74aPreflightPageSize = 500
 // state link, and original deployment-unit retirement state. DatabaseName is
 // diagnostic only: logical restores commonly change it.
 func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.Time) (F74aRestorePreflight, error) {
+	return preflightF74aRestore(ctx, pool, cutoff, nil)
+}
+
+// preflightF74aRestoreForRun reconstructs the original signed source inventory
+// only from committed, immutable per-row deletion journal entries for this
+// exact run. Other hot-row changes remain visible and invalidate the receipt.
+func preflightF74aRestoreForRun(ctx context.Context, pool *pgxpool.Pool, cutoff time.Time, runID uuid.UUID) (F74aRestorePreflight, error) {
+	if runID == uuid.Nil {
+		return F74aRestorePreflight{}, fmt.Errorf("F74a deletion run ID is required")
+	}
+	return preflightF74aRestore(ctx, pool, cutoff, &runID)
+}
+
+func preflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.Time, runID *uuid.UUID) (F74aRestorePreflight, error) {
 	var out F74aRestorePreflight
 	if cutoff.IsZero() || !cutoff.Before(time.Now().UTC()) {
 		return out, fmt.Errorf("F74a restore preflight requires a past cutoff")
@@ -98,8 +112,36 @@ func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 			return out, err
 		}
 	}
+	var expectedItems int64
+	if runID != nil {
+		var runDeleted, batchDeleted int64
+		err := tx.QueryRow(ctx, `SELECT r.deleted_count,
+			(SELECT count(*) FROM f74a_confirmed_deletion_items i WHERE i.run_id=r.id),
+			(SELECT COALESCE(sum(b.deleted_count),0) FROM f74a_confirmed_deletion_batches b WHERE b.run_id=r.id)
+			FROM f74a_confirmed_deletion_runs r WHERE r.id=$1`, *runID).Scan(&runDeleted, &expectedItems, &batchDeleted)
+		if err != nil || runDeleted != expectedItems || batchDeleted != expectedItems {
+			return out, fmt.Errorf("F74a deletion run, batch and item provenance counts disagree")
+		}
+		var mismatchedBatch bool
+		err = tx.QueryRow(ctx, `SELECT EXISTS(
+			SELECT 1 FROM f74a_confirmed_deletion_batches b WHERE b.run_id=$1
+			AND b.deleted_count <> (SELECT count(*) FROM f74a_confirmed_deletion_items i
+				WHERE i.run_id=b.run_id AND i.batch_id=b.id))`, *runID).Scan(&mismatchedBatch)
+		if err != nil || mismatchedBatch {
+			return out, fmt.Errorf("F74a deletion batch and item provenance counts disagree")
+		}
+	}
+	var seenItems, missingHotItems int64
 	var cursor *uuid.UUID
 	for {
+		itemColumns := `NULL::bytea, NULL::uuid`
+		itemJoin := ``
+		args := []any{cursor, f74aPreflightPageSize}
+		if runID != nil {
+			itemColumns = `di.row_digest, di.batch_id`
+			itemJoin = ` LEFT JOIN f74a_confirmed_deletion_items di ON di.observation_id=o.id AND di.run_id=$3`
+			args = append(args, *runID)
+		}
 		rows, err := tx.Query(ctx, `SELECT o.id,
 			f74a_observation_digest(to_jsonb(o),o.observed_at), a.row_digest,
 			CASE WHEN a.id IS NOT NULL THEN f74a_observation_digest(to_jsonb(a),a.observed_at) END,
@@ -108,25 +150,25 @@ func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 			(SELECT COALESCE(jsonb_agg(jsonb_build_array(s.service_id,s.environment_id)
 			 ORDER BY s.service_id,s.environment_id),'[]'::jsonb)::text
 			 FROM environment_service_state s WHERE s.current_observation_id=o.id),
-			o.deployment_unit_id, u.id IS NOT NULL, u.retired_at
+			o.deployment_unit_id, u.id IS NOT NULL, u.retired_at, `+itemColumns+`
 			FROM runtime_observation_history o
 			LEFT JOIN runtime_observation_archive a ON a.id=o.id
 			LEFT JOIN runtime_observations h ON h.id=o.id
-			LEFT JOIN deployment_units u ON u.id=o.deployment_unit_id
-			WHERE ($1::uuid IS NULL OR o.id > $1) ORDER BY o.id LIMIT $2`, cursor, f74aPreflightPageSize)
+			LEFT JOIN deployment_units u ON u.id=o.deployment_unit_id`+itemJoin+`
+			WHERE ($1::uuid IS NULL OR o.id > $1) ORDER BY o.id LIMIT $2`, args...)
 		if err != nil {
 			return out, fmt.Errorf("reading F74a restore inventory: %w", err)
 		}
 		read := 0
 		for rows.Next() {
 			var id uuid.UUID
-			var actual, archived, archivedActual []byte
+			var actual, archived, archivedActual, itemDigest []byte
 			var hot, unitExists bool
 			var linkCount int64
 			var links string
-			var unitID, archiveBatchID *uuid.UUID
+			var unitID, archiveBatchID, itemBatchID *uuid.UUID
 			var archivedAt, retiredAt *time.Time
-			if err := rows.Scan(&id, &actual, &archived, &archivedActual, &hot, &archiveBatchID, &archivedAt, &linkCount, &links, &unitID, &unitExists, &retiredAt); err != nil {
+			if err := rows.Scan(&id, &actual, &archived, &archivedActual, &hot, &archiveBatchID, &archivedAt, &linkCount, &links, &unitID, &unitExists, &retiredAt, &itemDigest, &itemBatchID); err != nil {
 				rows.Close()
 				return out, err
 			}
@@ -142,6 +184,17 @@ func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 				rows.Close()
 				return out, fmt.Errorf("F74a observation %s has an orphan deployment unit", id)
 			}
+			if itemDigest != nil {
+				seenItems++
+				if archived == nil || itemBatchID == nil || len(itemDigest) != sha256.Size ||
+					!bytes.Equal(itemDigest, archived) || !bytes.Equal(itemDigest, actual) {
+					rows.Close()
+					return out, fmt.Errorf("F74a deletion provenance differs from immutable archive")
+				}
+				if !hot {
+					missingHotItems++
+				}
+			}
 			if linkCount > 0 && !hot {
 				rows.Close()
 				return out, fmt.Errorf("F74a state-linked observation %s is absent from hot storage", id)
@@ -155,7 +208,7 @@ func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 				writeF74aPreflightField(h, archiveBatchID[:])
 				writeF74aPreflightField(h, []byte(archivedAt.UTC().Format(time.RFC3339Nano)))
 			}
-			if hot {
+			if hot || itemDigest != nil {
 				flags |= 2
 			}
 			if linkCount > 0 {
@@ -185,6 +238,9 @@ func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 			break
 		}
 	}
+	if seenItems != expectedItems {
+		return out, fmt.Errorf("F74a deletion provenance has missing observation rows")
+	}
 	total, linked, hotCandidates, err := scanF74aCandidatesPaged(ctx, tx, cutoff)
 	if err != nil {
 		return out, err
@@ -192,8 +248,8 @@ func PreflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 	if total != out.Observations || linked != out.LinkedObservations {
 		return out, fmt.Errorf("F74a inventory state-link counts disagree")
 	}
-	out.HotCandidates = hotCandidates
-	writeF74aPreflightField(h, []byte(fmt.Sprintf("%d", hotCandidates)))
+	out.HotCandidates = hotCandidates + missingHotItems
+	writeF74aPreflightField(h, []byte(fmt.Sprintf("%d", out.HotCandidates)))
 	out.InventorySHA256 = hex.EncodeToString(h.Sum(nil))
 	if err := tx.Commit(ctx); err != nil {
 		return out, err

@@ -27,6 +27,7 @@ type f74aConfirmedDeletionRun struct {
 	ID                 uuid.UUID
 	ReceiptID          uuid.UUID
 	ReceiptSHA256      string
+	InventorySHA256    string
 	SourceDatabase     F74aDatabaseIdentity
 	BackupObjectSHA256 string
 	Cutoff             time.Time
@@ -60,7 +61,7 @@ func validF74aBatchProof(p F74aReceiptVerification) bool {
 
 func matchesF74aDeletionRun(p F74aReceiptVerification, run f74aConfirmedDeletionRun) bool {
 	return validF74aBatchProof(p) && p.ReceiptID == run.ReceiptID &&
-		p.ReceiptSHA256 == run.ReceiptSHA256 && p.SourceDatabase == run.SourceDatabase &&
+		p.ReceiptSHA256 == run.ReceiptSHA256 && p.InventorySHA256 == run.InventorySHA256 && p.SourceDatabase == run.SourceDatabase &&
 		p.BackupObjectSHA256 == run.BackupObjectSHA256 && p.Cutoff.Equal(run.Cutoff)
 }
 
@@ -81,13 +82,14 @@ func (r *pgF74aConfirmedDeletionRepository) startRun(ctx context.Context, proof 
 		return run, fmt.Errorf("F74a backup proof is for another physical PostgreSQL database")
 	}
 	run = f74aConfirmedDeletionRun{
-		ReceiptID: attested.ReceiptID, ReceiptSHA256: attested.ReceiptSHA256, SourceDatabase: identity, BackupObjectSHA256: attested.BackupObjectSHA256,
+		ReceiptID: attested.ReceiptID, ReceiptSHA256: attested.ReceiptSHA256, InventorySHA256: attested.InventorySHA256,
+		SourceDatabase: identity, BackupObjectSHA256: attested.BackupObjectSHA256,
 		Cutoff: attested.Cutoff, BatchSize: batchSize,
 	}
 	err = r.pool.QueryRow(ctx, `INSERT INTO f74a_confirmed_deletion_runs
-		(receipt_id,receipt_sha256,source_database_name,source_database_oid,source_system_identifier,backup_object_sha256,cutoff,batch_size)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, run.ReceiptID, run.ReceiptSHA256, identity.Name, identity.OID,
-		identity.SystemIdentifier, run.BackupObjectSHA256, run.Cutoff, batchSize).Scan(&run.ID)
+		(receipt_id,receipt_sha256,source_inventory_sha256,source_database_name,source_database_oid,source_system_identifier,backup_object_sha256,cutoff,batch_size)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, run.ReceiptID, run.ReceiptSHA256, run.InventorySHA256,
+		identity.Name, identity.OID, identity.SystemIdentifier, run.BackupObjectSHA256, run.Cutoff, batchSize).Scan(&run.ID)
 	if err != nil {
 		return f74aConfirmedDeletionRun{}, fmt.Errorf("starting F74a confirmed deletion run: %w", err)
 	}
@@ -107,10 +109,10 @@ func (r *pgF74aConfirmedDeletionRepository) nextBatch(ctx context.Context, runID
 	var run f74aConfirmedDeletionRun
 	var cursorService, cursorEnvironment, cursorID *uuid.UUID
 	var cursorObserved *time.Time
-	err = tx.QueryRow(ctx, `SELECT receipt_id,receipt_sha256,source_database_name,source_database_oid,source_system_identifier,
+	err = tx.QueryRow(ctx, `SELECT receipt_id,receipt_sha256,source_inventory_sha256,source_database_name,source_database_oid,source_system_identifier,
 		backup_object_sha256,cutoff,batch_size,cursor_service_id,cursor_environment_id,cursor_observed_at,cursor_id,complete
 		FROM f74a_confirmed_deletion_runs WHERE id=$1 FOR UPDATE`, runID).Scan(
-		&run.ReceiptID, &run.ReceiptSHA256, &run.SourceDatabase.Name, &run.SourceDatabase.OID, &run.SourceDatabase.SystemIdentifier,
+		&run.ReceiptID, &run.ReceiptSHA256, &run.InventorySHA256, &run.SourceDatabase.Name, &run.SourceDatabase.OID, &run.SourceDatabase.SystemIdentifier,
 		&run.BackupObjectSHA256, &run.Cutoff, &run.BatchSize,
 		&cursorService, &cursorEnvironment, &cursorObserved, &cursorID, &run.Complete)
 	if err != nil {
@@ -232,6 +234,12 @@ func (r *pgF74aConfirmedDeletionRepository) nextBatch(ctx context.Context, runID
 		}
 		if command.RowsAffected() != 1 {
 			return batch, fmt.Errorf("F74a hot observation changed during admitted deletion")
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO f74a_confirmed_deletion_items
+			(run_id,batch_id,observation_id,row_digest) VALUES ($1,$2,$3,$4)`,
+			runID, batch.ID, k.id, archiveDigest)
+		if err != nil {
+			return batch, fmt.Errorf("journaling F74a confirmed deletion item: %w", err)
 		}
 		batch.Deleted++
 	}

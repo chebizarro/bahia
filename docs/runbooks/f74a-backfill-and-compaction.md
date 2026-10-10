@@ -33,9 +33,15 @@ revocation, or credential recovery before each deletion batch. Generic `backup_r
 unrelated workload targets; their success is not a database backup receipt.
 Migration `000081_f74a_confirmed_deletion_seam` adds a private, restartable
 keyset batch/journal seam for already archived hot observations. The seam
-rechecks the archive payload digest, state link, material predecessor, receipt
-identity and physical PostgreSQL identity in each transaction; failed batch
-work rolls back with its cursor. It asks an independent live backup authority
+rechecks the archive payload digest, state link, material predecessor, exact
+signed receipt and original inventory digest, and physical PostgreSQL identity
+in each transaction; failed batch work rolls back with its cursor. Each
+committed deletion journals its archived observation ID and digest atomically.
+A package-private read-only verifier reconstructs the receipt's original hot-presence bits
+and hot-candidate count only from those immutable journal items, and checks
+run/batch/item counts and current archived payloads. This lets the same
+signed receipt remain verifiable after an admitted batch or restart without
+excusing unrelated database changes. It asks an independent live backup authority
 before work and again before commit. There is deliberately **no production
 implementer or CLI caller**: a signed receipt and local file hash do not prove
 live retention, revocation or credential recovery, and a non-fenced status

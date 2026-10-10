@@ -4,6 +4,10 @@ package repository
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +22,20 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+type f74aTestSignedProof struct {
+	pool    *pgxpool.Pool
+	pin     string
+	receipt []byte
+	runID   uuid.UUID
+}
+
+func (p *f74aTestSignedProof) proveCurrentF74aBackup(ctx context.Context) (F74aReceiptVerification, error) {
+	if p.runID == uuid.Nil {
+		return VerifyF74aAttestedReceipt(ctx, p.pool, p.pin, p.receipt)
+	}
+	return verifyF74aAttestedReceiptForDeletionRun(ctx, p.pool, p.pin, p.receipt, p.runID)
+}
 
 type f74aTestBatchProof struct {
 	proof      F74aReceiptVerification
@@ -162,6 +180,10 @@ func TestF74aConfirmedDeletionPG16FreshProofGuardsAndRestart(t *testing.T) {
 	_, err = repo.nextBatch(ctx, run.ID, proof)
 	require.ErrorContains(t, err, "independent live backup proof changed")
 	proof.proof.ReceiptSHA256 = strings.Repeat("3", 64)
+	proof.proof.InventorySHA256 = strings.Repeat("5", 64)
+	_, err = repo.nextBatch(ctx, run.ID, proof)
+	require.ErrorContains(t, err, "independent live backup proof changed")
+	proof.proof.InventorySHA256 = strings.Repeat("1", 64)
 	proof.proof.ExpiresAt = time.Now().UTC().Add(-time.Second)
 	_, err = repo.nextBatch(ctx, run.ID, proof)
 	require.ErrorContains(t, err, "independent live backup proof changed")
@@ -185,7 +207,7 @@ func TestF74aConfirmedDeletionPG16FreshProofGuardsAndRestart(t *testing.T) {
 	finished, err := restarted.nextBatch(ctx, run.ID, proof)
 	require.NoError(t, err)
 	require.True(t, finished.Complete)
-	require.GreaterOrEqual(t, proof.calls, 8)
+	require.GreaterOrEqual(t, proof.calls, 9)
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, ids[3]).Scan(&hot))
 	require.Zero(t, hot)
 	var archived int
@@ -264,4 +286,101 @@ func TestF74aConfirmedDeletionPG16RejectsCorruptArchive(t *testing.T) {
 	require.Equal(t, 1, hot)
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM f74a_confirmed_deletion_batches WHERE run_id=$1`, run.ID).Scan(&journal))
 	require.Zero(t, journal)
+}
+
+func TestF74aConfirmedDeletionPG16SignedReceiptReconcilesAfterRestart(t *testing.T) {
+	pool, ctx := disposableF74aDeletionDB(t)
+	ids, cutoff := f74aDeletionCandidates(t, ctx, pool, 3)
+	initial, err := PreflightF74aRestore(ctx, pool, cutoff)
+	require.NoError(t, err)
+	sourceIdentity, err := ReadF74aDatabaseIdentity(ctx, pool)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `CREATE DATABASE f74a_isolated_restore`)
+	require.NoError(t, err)
+	restoreCfg := pool.Config()
+	restoreCfg.ConnConfig.Database = "f74a_isolated_restore"
+	restorePool, err := pgxpool.NewWithConfig(ctx, restoreCfg)
+	require.NoError(t, err)
+	defer restorePool.Close()
+	restoreIdentity, err := ReadF74aDatabaseIdentity(ctx, restorePool)
+	require.NoError(t, err)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	payload := F74aAttestedBackupPayload{
+		Version: f74aReceiptVersion, ReceiptID: uuid.New(),
+		SourceDatabase: sourceIdentity, RestoreDatabase: restoreIdentity, Cutoff: cutoff,
+		SnapshotID: "pg16-signed-reconciliation-test", BackupObjectRef: "file:///tmp/independent.dump",
+		SnapshotCreatedAt: now.Add(-3 * time.Minute), BackupObjectSHA256: strings.Repeat("2", 64),
+		SourceInventorySHA256: initial.InventorySHA256, RestoreInventorySHA256: initial.InventorySHA256,
+		RestoreVerifiedAt: now.Add(-2 * time.Minute), IssuedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour),
+	}
+	signingBytes, err := payload.SigningBytes()
+	require.NoError(t, err)
+	receipt, err := json.Marshal(F74aAttestedBackupReceipt{Payload: payload, Signature: hex.EncodeToString(ed25519.Sign(priv, signingBytes))})
+	require.NoError(t, err)
+	pin := hex.EncodeToString(pub)
+	attestor := &f74aTestSignedProof{pool: pool, pin: pin, receipt: receipt}
+	verified, err := attestor.proveCurrentF74aBackup(ctx)
+	require.NoError(t, err)
+	require.Equal(t, initial.InventorySHA256, verified.InventorySHA256)
+	repo := newPgF74aConfirmedDeletionRepository(pool)
+	run, err := repo.startRun(ctx, attestor, 1)
+	require.NoError(t, err)
+	attestor.runID = run.ID
+	first, err := repo.nextBatch(ctx, run.ID, attestor)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Deleted)
+	physical, err := PreflightF74aRestore(ctx, pool, cutoff)
+	require.NoError(t, err)
+	require.NotEqual(t, initial.InventorySHA256, physical.InventorySHA256, "physical hot presence changed")
+	reconciled, err := preflightF74aRestoreForRun(ctx, pool, cutoff, run.ID)
+	require.NoError(t, err)
+	require.Equal(t, initial.InventorySHA256, reconciled.InventorySHA256)
+	require.Equal(t, initial.HotCandidates, reconciled.HotCandidates)
+	// No in-memory state is needed: a new provider and repository read the
+	// immutable journal and validate the exact signed receipt after restart.
+	restartedProof := &f74aTestSignedProof{pool: pool, pin: pin, receipt: receipt, runID: run.ID}
+	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	require.NoError(t, err)
+	second, err := newPgF74aConfirmedDeletionRepository(pool).nextBatch(ctx, run.ID, restartedProof)
+	require.NoError(t, err)
+	require.Equal(t, 1, second.Deleted)
+	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	require.NoError(t, err)
+	var items int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM f74a_confirmed_deletion_items WHERE run_id=$1`, run.ID).Scan(&items))
+	require.Equal(t, 2, items)
+	for _, id := range ids[1:] {
+		var archived, hot int
+		require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observation_archive WHERE id=$1`, id).Scan(&archived))
+		require.Equal(t, 1, archived)
+		require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, id).Scan(&hot))
+		require.Zero(t, hot)
+	}
+	// A corrupt per-row journal cannot launder the changed physical hot flag.
+	_, err = pool.Exec(ctx, `ALTER TABLE f74a_confirmed_deletion_items DISABLE TRIGGER f74a_confirmed_deletion_item_immutable`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE f74a_confirmed_deletion_items SET row_digest=decode(repeat('0',64),'hex')
+		WHERE run_id=$1 AND observation_id=$2`, run.ID, ids[1])
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `ALTER TABLE f74a_confirmed_deletion_items ENABLE TRIGGER f74a_confirmed_deletion_item_immutable`)
+	require.NoError(t, err)
+	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	require.ErrorContains(t, err, "deletion provenance differs")
+	_, err = pool.Exec(ctx, `ALTER TABLE f74a_confirmed_deletion_items DISABLE TRIGGER f74a_confirmed_deletion_item_immutable`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `UPDATE f74a_confirmed_deletion_items i SET row_digest=a.row_digest
+		FROM runtime_observation_archive a WHERE i.run_id=$1 AND i.observation_id=$2 AND a.id=i.observation_id`, run.ID, ids[1])
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `ALTER TABLE f74a_confirmed_deletion_items ENABLE TRIGGER f74a_confirmed_deletion_item_immutable`)
+	require.NoError(t, err)
+	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	require.NoError(t, err)
+	// A hot row removed outside the journal cannot be laundered into the
+	// original signed inventory by this run's reconciliation.
+	_, err = pool.Exec(ctx, `DELETE FROM runtime_observations WHERE id=$1`, ids[0])
+	require.NoError(t, err)
+	_, err = restartedProof.proveCurrentF74aBackup(ctx)
+	require.ErrorContains(t, err, "inventory differs")
 }
