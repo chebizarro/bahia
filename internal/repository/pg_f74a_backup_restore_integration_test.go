@@ -262,11 +262,14 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 	badDatabase := payload
 	oid, err := strconv.ParseUint(badDatabase.SourceDatabase.OID, 10, 32)
 	require.NoError(t, err)
-	badDatabase.SourceDatabase.OID = strconv.FormatUint(oid+1, 10)
+	badDatabase.SourceDatabase.OID = strconv.FormatUint(oid+1000, 10)
 	_, err = repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(attestorPub), signReceipt(badDatabase))
 	require.ErrorContains(t, err, "different PostgreSQL database")
 	badIsolation := payload
 	badIsolation.RestoreDatabase = badIsolation.SourceDatabase
+	_, err = repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(attestorPub), signReceipt(badIsolation))
+	require.ErrorContains(t, err, "invalid scope")
+	badIsolation.RestoreDatabase.Name = "renamed-restore"
 	_, err = repository.VerifyF74aAttestedReceipt(ctx, source, hex.EncodeToString(attestorPub), signReceipt(badIsolation))
 	require.ErrorContains(t, err, "invalid scope")
 	badObject := payload

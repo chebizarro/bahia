@@ -138,7 +138,7 @@ func VerifyF74aAttestedReceipt(ctx context.Context, pool *pgxpool.Pool, pinnedAt
 		p.SnapshotCreatedAt.After(p.RestoreVerifiedAt) || p.RestoreVerifiedAt.After(p.IssuedAt) ||
 		p.IssuedAt.After(now) || !now.Before(p.ExpiresAt) ||
 		strings.TrimSpace(p.SnapshotID) == "" || strings.TrimSpace(p.SnapshotID) != p.SnapshotID ||
-		strings.TrimSpace(p.BackupObjectRef) == "" || strings.TrimSpace(p.BackupObjectRef) != p.BackupObjectRef || p.SourceDatabase == p.RestoreDatabase ||
+		strings.TrimSpace(p.BackupObjectRef) == "" || strings.TrimSpace(p.BackupObjectRef) != p.BackupObjectRef || sameF74aPhysicalDatabase(p.SourceDatabase, p.RestoreDatabase) ||
 		!validF74aIdentity(p.SourceDatabase) || !validF74aIdentity(p.RestoreDatabase) ||
 		!validF74aDigest(p.BackupObjectSHA256) || !validF74aDigest(p.SourceInventorySHA256) ||
 		!validF74aDigest(p.RestoreInventorySHA256) || p.SourceInventorySHA256 != p.RestoreInventorySHA256 {
@@ -164,6 +164,10 @@ func VerifyF74aAttestedReceipt(ctx context.Context, pool *pgxpool.Pool, pinnedAt
 	}, nil
 }
 
+func sameF74aPhysicalDatabase(a, b F74aDatabaseIdentity) bool {
+	return a.SystemIdentifier == b.SystemIdentifier && a.OID == b.OID
+}
+
 func validF74aIdentity(id F74aDatabaseIdentity) bool {
 	if strings.TrimSpace(id.Name) != id.Name || id.Name == "" {
 		return false
@@ -179,12 +183,13 @@ func validF74aDigest(text string) bool {
 	return err == nil && len(decoded) == 32 && hex.EncodeToString(decoded) == text
 }
 
-// A signed payload parsed differently by two JSON implementations is not a
-// reliable attestation. Reject duplicate keys at every nesting level before
-// verifying or interpreting the raw signed bytes.
+// Match the signed wire schema exactly. encoding/json accepts case-insensitive
+// struct-field aliases, which could give the same signed bytes different
+// meanings in another implementation. No unknown, duplicate, or aliased key
+// may enter either envelope or payload, including nested database identities.
 func rejectF74aDuplicateJSONKeys(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	if err := walkF74aJSON(decoder, 0); err != nil {
+	if err := walkF74aJSONObject(decoder, "envelope"); err != nil {
 		return fmt.Errorf("F74a receipt JSON: %w", err)
 	}
 	if _, err := decoder.Token(); err != io.EOF {
@@ -193,56 +198,79 @@ func rejectF74aDuplicateJSONKeys(data []byte) error {
 	return nil
 }
 
-func walkF74aJSON(decoder *json.Decoder, depth int) error {
-	if depth > 16 {
-		return fmt.Errorf("nesting exceeds limit")
-	}
-	token, err := decoder.Token()
+func walkF74aJSONObject(decoder *json.Decoder, schema string) error {
+	open, err := decoder.Token()
 	if err != nil {
 		return err
 	}
-	delimiter, ok := token.(json.Delim)
-	if !ok {
-		return nil
+	if open != json.Delim('{') {
+		return fmt.Errorf("expected JSON object")
 	}
-	switch delimiter {
-	case '{':
-		seen := make(map[string]struct{})
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return fmt.Errorf("object key is not a string")
-			}
-			if _, exists := seen[key]; exists {
-				return fmt.Errorf("duplicate object key %q", key)
-			}
-			seen[key] = struct{}{}
-			if err := walkF74aJSON(decoder, depth+1); err != nil {
-				return err
-			}
+	seen := make(map[string]struct{})
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return err
 		}
-	case '[':
-		for decoder.More() {
-			if err := walkF74aJSON(decoder, depth+1); err != nil {
+		key, ok := keyToken.(string)
+		if !ok {
+			return fmt.Errorf("object key is not a string")
+		}
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("duplicate object key")
+		}
+		seen[key] = struct{}{}
+		nested, allowed := f74aJSONField(schema, key)
+		if !allowed {
+			return fmt.Errorf("unexpected object key")
+		}
+		if nested != "" {
+			if err := walkF74aJSONObject(decoder, nested); err != nil {
 				return err
 			}
+			continue
 		}
-	default:
-		return fmt.Errorf("unexpected JSON delimiter")
+		value, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if _, container := value.(json.Delim); container {
+			return fmt.Errorf("unexpected JSON container")
+		}
 	}
-	closing, err := decoder.Token()
+	close, err := decoder.Token()
 	if err != nil {
 		return err
 	}
-	if closing != json.Delim('}') && closing != json.Delim(']') {
-		return fmt.Errorf("invalid JSON container")
-	}
-	if delimiter == '{' && closing != json.Delim('}') || delimiter == '[' && closing != json.Delim(']') {
-		return fmt.Errorf("mismatched JSON container")
+	if close != json.Delim('}') {
+		return fmt.Errorf("invalid JSON object")
 	}
 	return nil
+}
+
+func f74aJSONField(schema, key string) (nested string, allowed bool) {
+	switch schema {
+	case "envelope":
+		switch key {
+		case "payload":
+			return "payload", true
+		case "signature":
+			return "", true
+		}
+	case "payload":
+		switch key {
+		case "source_database", "restore_database":
+			return "database", true
+		case "version", "receipt_id", "cutoff", "snapshot_id", "backup_object_ref",
+			"snapshot_created_at", "backup_object_sha256", "source_inventory_sha256",
+			"restore_inventory_sha256", "restore_verified_at", "issued_at", "expires_at":
+			return "", true
+		}
+	case "database":
+		switch key {
+		case "name", "oid", "system_identifier":
+			return "", true
+		}
+	}
+	return "", false
 }

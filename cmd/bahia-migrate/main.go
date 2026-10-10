@@ -436,12 +436,12 @@ func runF74aVerifyReceipt(ctx context.Context, pool *pgxpool.Pool, pin, path str
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return reportError(stderr, "opening F74a receipt: %v", err)
+		return reportError(stderr, "opening F74a receipt failed")
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, repository.F74aReceiptMaxBytes+1))
 	if err != nil {
-		return reportError(stderr, "reading F74a receipt: %v", err)
+		return reportError(stderr, "reading F74a receipt failed")
 	}
 	result, err := repository.VerifyF74aAttestedReceipt(ctx, pool, pin, data)
 	if err != nil {
