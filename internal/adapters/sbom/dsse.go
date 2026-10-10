@@ -19,11 +19,11 @@ import (
 
 const DSSEPayloadTypeInToto = "application/vnd.in-toto+json"
 
-// AttestationSigner signs the SHA-256 digest of a DSSE pre-authentication
-// encoding and identifies the verification key placed in the envelope.
+// AttestationSigner signs the exact canonical in-toto statement bytes and
+// identifies the verification key placed in the envelope.
 type AttestationSigner interface {
 	KeyID() string
-	Sign(context.Context, []byte) ([]byte, error)
+	SignStatement(context.Context, []byte) ([]byte, error)
 }
 
 // NostrDSSESigner uses Bahia's configured Nostr service key for BIP-340
@@ -50,18 +50,19 @@ func (s *NostrDSSESigner) KeyID() string {
 	return s.keyID
 }
 
-func (s *NostrDSSESigner) Sign(ctx context.Context, digest []byte) ([]byte, error) {
+func (s *NostrDSSESigner) SignStatement(ctx context.Context, statement []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if s == nil || s.keyID == "" {
 		return nil, fmt.Errorf("SBOM attestation signer is not configured")
 	}
-	if len(digest) != sha256.Size {
-		return nil, fmt.Errorf("SBOM attestation signing digest must be %d bytes", sha256.Size)
+	if len(statement) == 0 {
+		return nil, fmt.Errorf("SBOM attestation statement is empty")
 	}
+	digest := sha256.Sum256(dssePAE(DSSEPayloadTypeInToto, statement))
 	privateKey, _ := btcec.PrivKeyFromBytes(s.secret[:])
-	signature, err := schnorr.Sign(privateKey, digest)
+	signature, err := schnorr.Sign(privateKey, digest[:])
 	if err != nil {
 		return nil, fmt.Errorf("sign SBOM DSSE payload: %w", err)
 	}
@@ -80,20 +81,22 @@ func SignAttestation(ctx context.Context, att *domain.SBOMAttestation, signer At
 	if err != nil {
 		return err
 	}
-	digest := sha256.Sum256(dssePAE(DSSEPayloadTypeInToto, payload))
-	signature, err := signer.Sign(ctx, digest[:])
+	signature, err := signer.SignStatement(ctx, payload)
 	if err != nil {
 		return err
 	}
-	if len(signature) == 0 {
-		return fmt.Errorf("SBOM attestation signer returned an empty signature")
+	encodedSignature := base64.StdEncoding.EncodeToString(signature)
+	keyID := strings.ToLower(strings.TrimSpace(signer.KeyID()))
+	digest := sha256.Sum256(dssePAE(DSSEPayloadTypeInToto, payload))
+	if !verifyNostrDSSESignature(keyID, encodedSignature, digest[:]) {
+		return fmt.Errorf("SBOM attestation signer returned an invalid DSSE signature")
 	}
 	att.Envelope = &domain.DSSEEnvelope{
 		PayloadType: DSSEPayloadTypeInToto,
 		Payload:     base64.StdEncoding.EncodeToString(payload),
 		Signatures: []domain.DSSESignature{{
-			KeyID: strings.ToLower(strings.TrimSpace(signer.KeyID())),
-			Sig:   base64.StdEncoding.EncodeToString(signature),
+			KeyID: keyID,
+			Sig:   encodedSignature,
 		}},
 	}
 	return nil

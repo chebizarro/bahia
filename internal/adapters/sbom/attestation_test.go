@@ -1,7 +1,9 @@
 package sbom
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,22 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
+
+type capturingStatementSigner struct {
+	underlying *NostrDSSESigner
+	statement  []byte
+	invalid    bool
+}
+
+func (s *capturingStatementSigner) KeyID() string { return s.underlying.KeyID() }
+
+func (s *capturingStatementSigner) SignStatement(ctx context.Context, statement []byte) ([]byte, error) {
+	s.statement = append([]byte(nil), statement...)
+	if s.invalid {
+		return bytes.Repeat([]byte{1}, 64), nil
+	}
+	return s.underlying.SignStatement(ctx, statement)
+}
 
 const (
 	testSHA256A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -391,6 +409,40 @@ func TestSignedAttestationVerifiesAndRejectsTampering(t *testing.T) {
 	att.Predicate.Digest["sha256"] = testSHA256A
 	if err := VerifyAttestationSignature(att, signer.KeyID()); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("tampered verification error = %v, want payload mismatch", err)
+	}
+}
+
+func TestSignAttestationPassesExactStatementAndRejectsInvalidSignature(t *testing.T) {
+	att := &domain.SBOMAttestation{
+		Type:          InTotoStatementType,
+		Subject:       []domain.AttestationSubject{{Name: "artifact", Digest: map[string]string{"sha256": testSHA256A}}},
+		PredicateType: domain.AttestationTypeSPDX,
+		Predicate:     domain.SBOMPredicate{Format: domain.SBOMFormatSPDX, Digest: map[string]string{"sha256": testSHA256B}},
+	}
+	signer := &capturingStatementSigner{underlying: testNostrDSSESigner(t)}
+	if err := SignAttestation(context.Background(), att, signer); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := base64.StdEncoding.DecodeString(att.Envelope.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(payload, signer.statement) {
+		t.Fatal("signer did not receive the exact DSSE payload bytes")
+	}
+	if got := att.Envelope.Signatures[0].KeyID; got != signer.KeyID() {
+		t.Fatalf("DSSE key ID = %q, want existing service pubkey %q", got, signer.KeyID())
+	}
+	if err := VerifyAttestationSignature(att, signer.KeyID()); err != nil {
+		t.Fatalf("signed envelope does not verify: %v", err)
+	}
+	att.Envelope = nil
+	signer.invalid = true
+	if err := SignAttestation(context.Background(), att, signer); err == nil || !strings.Contains(err.Error(), "invalid DSSE signature") {
+		t.Fatalf("invalid signer response accepted: %v", err)
+	}
+	if att.Envelope != nil {
+		t.Fatal("invalid signature installed an envelope")
 	}
 }
 

@@ -64,6 +64,17 @@ the local service key. An event signer alone cannot replace those operations;
 startup must not accept a remote-only service identity until their key-preserving
 migration and historical decryption contracts are implemented.
 
+The dormant epoch signer also implements the SBOM attestation signer interface:
+it sends the exact canonical in-toto statement bytes as base64 to Signet's
+`sign_bahia_sbom_dsse` NIP-46 method with the decimal writer epoch. Bahia
+retains the current DSSE payload, service-pubkey key ID, and BIP-340 signature
+verification before accepting an envelope. The adapter requires the pinned
+existing service pubkey, dedicated authenticated client, live writer lease and
+unchanged connection through response acceptance; it has no raw-key or
+unfenced fallback. App startup still selects the local SBOM signer. Activation
+requires a real Signet interoperability proof, not only the local fake-RPC
+tests, alongside the other raw-key migration gates.
+
 ### 1.2 Level-triggered desired state
 
 The relay keeps only the newest intent per author and coordinate, so a daemon
