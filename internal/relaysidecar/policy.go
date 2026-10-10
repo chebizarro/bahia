@@ -2,14 +2,10 @@ package relaysidecar
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"sync"
 	"time"
 
 	"fiatjaf.com/nostr"
-	"fiatjaf.com/nostr/nip19"
-	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -38,16 +34,8 @@ type policy struct {
 	configAuthors   map[string]bool
 }
 
-func newPolicy(cfg config.NostrConfig) (*policy, error) {
-	servicePubkey, ok, err := deriveFiatjafPubkey(cfg.PrivateKey)
-	if err != nil {
-		return nil, err
-	}
-	value := ""
-	if ok {
-		value = servicePubkey.Hex()
-	}
-	return &policy{now: nostr.Now, servicePubkey: value}, nil
+func newPolicy(servicePubkey nostr.PubKey) *policy {
+	return &policy{now: nostr.Now, servicePubkey: servicePubkey.Hex()}
 }
 
 func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, string) {
@@ -89,40 +77,6 @@ func (p *policy) acceptFilter(ctx context.Context, filter nostr.Filter) (bool, s
 		return true, "blocked: search queries are not enabled on the Bahia sidecar"
 	}
 	return false, ""
-}
-
-func parseFiatjafSecret(raw string) (nostr.SecretKey, bool, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nostr.SecretKey{}, false, nil
-	}
-	if strings.HasPrefix(raw, "nsec") {
-		prefix, value, err := nip19.Decode(raw)
-		if err != nil {
-			return nostr.SecretKey{}, false, fmt.Errorf("decode nostr.private_key nsec: %w", err)
-		}
-		if prefix != "nsec" {
-			return nostr.SecretKey{}, false, fmt.Errorf("nostr.private_key bech32 prefix %q is not nsec", prefix)
-		}
-		sk, ok := value.(nostr.SecretKey)
-		if !ok {
-			return nostr.SecretKey{}, false, fmt.Errorf("decode nostr.private_key nsec: unexpected value type %T", value)
-		}
-		return sk, true, nil
-	}
-	sk, err := nostr.SecretKeyFromHex(raw)
-	if err != nil {
-		return nostr.SecretKey{}, false, fmt.Errorf("decode nostr.private_key hex: %w", err)
-	}
-	return sk, true, nil
-}
-
-func deriveFiatjafPubkey(raw string) (nostr.PubKey, bool, error) {
-	sk, ok, err := parseFiatjafSecret(raw)
-	if err != nil || !ok {
-		return nostr.ZeroPK, ok, err
-	}
-	return sk.Public(), true, nil
 }
 
 // SetIntentAuthors replaces the set of pubkeys that may publish intent events.

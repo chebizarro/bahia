@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/relaysidecar"
 	"go.uber.org/zap"
@@ -17,28 +18,35 @@ func TestReloadWithRealSidecarSharesTheEventStore(t *testing.T) {
 	cfg.Nostr.Sidecar.Enabled = true
 	cfg.Nostr.Sidecar.ListenAddr = "127.0.0.1:0"
 	cfg.Nostr.Sidecar.DataDir = t.TempDir()
+	cfg.Nostr.PrivateKey = nostr.Generate().Hex()
 	supervisor := &runtimeSupervisor{
-		rootCtx: t.Context(),
-		logger:  zap.NewNop(),
-		factory: func(cfg config.NostrConfig, logger *zap.Logger) (sidecarRuntime, error) {
-			return relaysidecar.New(cfg, logger)
-		},
+		rootCtx:    t.Context(),
+		logger:     zap.NewNop(),
+		factory:    newSidecar,
+		openSigner: openServiceSigner,
 	}
-	initial, err := supervisor.prepare(cfg)
-	if err != nil {
-		t.Fatalf("prepare initial runtime: %v", err)
+	if err := supervisor.replace(cfg); err != nil {
+		t.Fatalf("initial runtime: %v", err)
 	}
-	supervisor.start(initial)
+	signer := supervisor.signer
 	for range 2 {
 		if err := supervisor.replace(cfg); err != nil {
 			t.Fatalf("replace() error = %v, want the replacement to share the open event store", err)
 		}
 	}
-	if err := supervisor.stop(); err != nil {
-		t.Fatalf("stop: %v", err)
+	if supervisor.signer != signer {
+		t.Fatal("an unchanged nostr.signer must keep the open service signer")
+	}
+	if err := supervisor.shutdown(); err != nil {
+		t.Fatalf("shutdown: %v", err)
 	}
 	// Every handle is closed now, so a fresh open takes the file lock.
-	reopened, err := relaysidecar.New(cfg.Nostr, zap.NewNop())
+	fresh, err := openServiceSigner(t.Context(), cfg.Nostr)
+	if err != nil {
+		t.Fatalf("open service signer: %v", err)
+	}
+	defer fresh.Close()
+	reopened, err := relaysidecar.New(t.Context(), cfg.Nostr, fresh.keyer, zap.NewNop())
 	if err != nil {
 		t.Fatalf("reopen after stop: %v", err)
 	}

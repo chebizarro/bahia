@@ -19,6 +19,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
 
@@ -32,6 +33,16 @@ func sidecarTestConfig(t *testing.T) config.NostrConfig {
 	return cfg
 }
 
+// localSigner is an in-process service signer for sk.
+func localSigner(t *testing.T, sk nostr.SecretKey) nostr.Signer {
+	t.Helper()
+	signer, err := nostrutil.NewLocalKeyer(sk.Hex())
+	if err != nil {
+		t.Fatalf("local signer: %v", err)
+	}
+	return signer
+}
+
 func TestSidecarNIP86RequiresBoundNIP98PersistsAndRejectsReplay(t *testing.T) {
 	adminKey := nostr.Generate()
 	managedKey := nostr.Generate()
@@ -40,7 +51,7 @@ func TestSidecarNIP86RequiresBoundNIP98PersistsAndRejectsReplay(t *testing.T) {
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.AdministratorPubkeys = []string{adminKey.Public().Hex()}
 	cfg.Sidecar.AdminPolicyPath = cfg.Sidecar.DataDir + "/relay-admin-policy.json"
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -151,7 +162,7 @@ func TestSidecarAcceptsAndQueriesSignedInteropEvent(t *testing.T) {
 	cfg.Sidecar.MaxQueryLimit = 100
 	cfg.Sidecar.DataDir = t.TempDir()
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -193,7 +204,7 @@ func TestSidecarDecouplesPublisherAcknowledgementFromBroadcast(t *testing.T) {
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.DataDir = t.TempDir()
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -217,7 +228,7 @@ func TestSidecarRetainsEventsAcrossRestart(t *testing.T) {
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.DataDir = t.TempDir()
 
-	first, err := New(cfg, zap.NewNop())
+	first, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("first New() error: %v", err)
 	}
@@ -237,7 +248,7 @@ func TestSidecarRetainsEventsAcrossRestart(t *testing.T) {
 		t.Fatalf("close first store: %v", err)
 	}
 
-	second, err := New(cfg, zap.NewNop())
+	second, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("second New() error: %v", err)
 	}
@@ -255,7 +266,7 @@ func TestSidecarAcceptsReadFiltersWithoutKinds(t *testing.T) {
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -270,7 +281,7 @@ func TestSidecarAcceptsEveryEventKindForReads(t *testing.T) {
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -333,7 +344,7 @@ func TestSidecarDoesNotApplyAuthorRestrictionsToReads(t *testing.T) {
 	pubkey := nostr.GetPublicKey(sk)
 	cfg.AuthorizedPubkeys = []string{pubkey.Hex()}
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -356,7 +367,7 @@ func TestSidecarAllowsCanonicalAndLegacyStatusResultKinds(t *testing.T) {
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -394,10 +405,9 @@ func TestSidecarDoesNotRequireScopedContextVMSubscriptions(t *testing.T) {
 	operatorSK := nostr.Generate()
 	operatorPubkey := nostr.GetPublicKey(operatorSK)
 	unknownPubkey := nostr.GetPublicKey(nostr.Generate())
-	cfg.PrivateKey = serviceSK.Hex()
 	cfg.AuthorizedPubkeys = []string{operatorPubkey.Hex()}
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, serviceSK), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -438,10 +448,9 @@ func TestSidecarAcceptsContextVMEventsRegardlessOfAuthorOrRecipient(t *testing.T
 	operatorSK := nostr.Generate()
 	operatorPubkey := nostr.GetPublicKey(operatorSK)
 	unknownPubkey := nostr.GetPublicKey(nostr.Generate())
-	cfg.PrivateKey = serviceSK.Hex()
 	cfg.AuthorizedPubkeys = []string{operatorPubkey.Hex()}
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, serviceSK), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -492,7 +501,7 @@ func TestSidecarAllowsDiscoveryKinds(t *testing.T) {
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -516,7 +525,7 @@ func TestSidecarCountIsNotCappedByQueryLimit(t *testing.T) {
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.MaxQueryLimit = 1
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -542,7 +551,7 @@ func TestSidecarCountIsNotCappedByQueryLimit(t *testing.T) {
 }
 
 func TestSidecarCountReportsStoreFailure(t *testing.T) {
-	server, err := New(sidecarTestConfig(t), zap.NewNop())
+	server, err := New(t.Context(), sidecarTestConfig(t), localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -560,7 +569,7 @@ func TestSidecarCountReportsStoreFailure(t *testing.T) {
 func TestSidecarRunClosesStoreWhenListenFails(t *testing.T) {
 	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.ListenAddr = "127.0.0.1:-1"
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -578,7 +587,7 @@ func TestSidecarServesWebsocketAtRootAndConfiguredPath(t *testing.T) {
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334/relay"
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -612,7 +621,7 @@ func TestSidecarServesNIP11OnConfiguredPath(t *testing.T) {
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334/relay"
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -642,7 +651,7 @@ func TestSidecarAcceptsArbitrarySignedRequestKind(t *testing.T) {
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -668,7 +677,7 @@ func TestSidecarAllowsNIP34Kinds(t *testing.T) {
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -724,7 +733,7 @@ func TestSidecarAllowsSoulFactoryInteropKinds(t *testing.T) {
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.MaxQueryLimit = 100
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
@@ -780,9 +789,8 @@ func TestSidecarAllowsNIP23LongFormFromServicePubkey(t *testing.T) {
 	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
-	cfg.PrivateKey = serviceSK.Hex()
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, serviceSK), zap.NewNop())
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}

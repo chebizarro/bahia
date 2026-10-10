@@ -282,7 +282,7 @@ func TestSidecarNegentropyRefusesSetsLargerThanTheLimit(t *testing.T) {
 	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.NegentropyMaxEvents = 2
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close()) })
 	relayURL := startHTTPTestServer(t, server)

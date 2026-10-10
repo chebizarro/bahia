@@ -186,7 +186,6 @@ func testSidecarForReadAuth(t *testing.T, mode string) (*Server, nostr.SecretKey
 	serviceKey := nostr.Generate()
 
 	cfg := sidecarTestConfig(t)
-	cfg.PrivateKey = serviceKey.Hex()
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.AdministratorPubkeys = []string{adminKey.Public().Hex()}
@@ -194,7 +193,7 @@ func testSidecarForReadAuth(t *testing.T, mode string) (*Server, nostr.SecretKey
 	cfg.Sidecar.ReadAuthMode = mode
 	cfg.Sidecar.ReadAuthAllowedPubkeys = []string{allowedReader.Public().Hex()}
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, serviceKey), zap.NewNop())
 	require.NoError(t, err)
 
 	// Publish a kind-30900 event (protected) into the store
@@ -315,16 +314,11 @@ func TestReadAuthEnforce_ServicePubkey_Succeeds(t *testing.T) {
 	server, _, _ := testSidecarForReadAuth(t, config.ReadAuthModeEnforce)
 	defer closeSidecarTest(t, server)
 
-	// The service pubkey is derived from the nostr.private_key
-	servicePK, _, err := deriveFiatjafPubkey(nostr.Generate().Hex())
-	require.NoError(t, err)
-	// We can't easily set the real service key, but let's test through the readAuth
-	// by checking with the key the server was initialized with.
+	// The service pubkey is the one the server's signer reports.
 	serviceKeyHex := server.readAuth.servicePubkey
 	require.NotEmpty(t, serviceKeyHex)
 	pk, err := nostr.PubKeyFromHex(serviceKeyHex)
 	require.NoError(t, err)
-	_ = servicePK // not used, we use the real one
 
 	ctx := khatru.ForceSetAuthed(context.Background(), pk)
 	filter := nostr.Filter{Kinds: []nostr.Kind{30900}}
@@ -385,7 +379,6 @@ func TestReadAuth_NoKinds_RequiresAuth(t *testing.T) {
 func TestConfigStatusEvent_HasExpiration(t *testing.T) {
 	cfg := sidecarTestConfig(t)
 	serviceKey := nostr.Generate()
-	cfg.PrivateKey = serviceKey.Hex()
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
 	cfg.Sidecar.AdministratorPubkeys = []string{nostr.Generate().Public().Hex()}
@@ -393,7 +386,7 @@ func TestConfigStatusEvent_HasExpiration(t *testing.T) {
 	cfg.Sidecar.ConfigProjectionPath = cfg.Sidecar.DataDir + "/config-projection.json"
 	cfg.Sidecar.ConfigTrustedPubkeys = []string{nostr.Generate().Public().Hex()}
 
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, serviceKey), zap.NewNop())
 	require.NoError(t, err)
 	defer closeSidecarTest(t, server)
 

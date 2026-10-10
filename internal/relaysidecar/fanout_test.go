@@ -155,7 +155,7 @@ func startSidecarForFanoutTest(t *testing.T) (*Server, string) {
 	cfg := sidecarTestConfig(t)
 	cfg.Sidecar.Enabled = true
 	cfg.Sidecar.PublicURL = "ws://localhost:3334"
-	server, err := New(cfg, zap.NewNop())
+	server, err := New(t.Context(), cfg, localSigner(t, nostr.Generate()), zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close()) })
 	httpServer := httptest.NewServer(server.Handler())

@@ -28,12 +28,11 @@ func TestFleetOperatorConfigAuthorPassesRelayGateAndConsumer(t *testing.T) {
 	operator := nostr.Generate()
 	stranger := nostr.Generate()
 	cfg := sidecarTestConfig(t)
-	cfg.PrivateKey = serviceKey.Hex()
 	cfg.AuthorizedPubkeys = []string{operator.Public().Hex()}
 	cfg.Sidecar.ServiceID = "relay-sidecar-test"
 	cfg.Sidecar.Scope = "prod"
 	cfg.Sidecar.ConfigProjectionPath = filepath.Join(t.TempDir(), "projection.json")
-	server, err := New(cfg, nil)
+	server, err := New(t.Context(), cfg, localSigner(t, serviceKey), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close()) })
 	require.NotNil(t, server.consumer)
@@ -67,7 +66,7 @@ func TestConfigStatusTimestampOrdersDifferentTrustedOperators(t *testing.T) {
 	consumer, err := NewConfigConsumer(ConfigConsumerConfig{
 		ServiceID: "relay-sidecar-test", Scope: "prod", ProjectionPath: filepath.Join(t.TempDir(), "projection.json"),
 		TrustedAuthors: []string{first.Public().Hex(), second.Public().Hex()},
-		Signer:         relayConfigSigner{secret: serviceKey},
+		Signer:         configAckSigner{signer: localSigner(t, serviceKey)},
 		Publisher: configStatusPublisherFunc(func(_ context.Context, event nostr.Event) (int, error) {
 			statuses = append(statuses, event)
 			return 1, nil
