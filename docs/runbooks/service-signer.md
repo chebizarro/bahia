@@ -42,7 +42,8 @@ assistant requires `assistant.wrapped_keys.mode=wrapped_read_only`, because
 same `nostr.public_key` and `nostr.signer` values as `bahia-server` (the
 shared `config.yaml` in Docker Compose does this). With `nip46` it connects to
 the bunker as the same dedicated client key, so a single-writer bunker sees
-one writer; its requests pass the process's outbound admission like the
+one writer; its requests pass its own outbound admission controller, built
+from the same `nostr.outbound` settings (lanes, kill switch) as the
 daemon's. With `nip55l` it needs access to the same D-Bus. It does not start
 without a service signer. A `SIGHUP` that leaves these settings unchanged
 keeps its signer session; see [`relay-sidecar.md`](../relay-sidecar.md#service-identity).

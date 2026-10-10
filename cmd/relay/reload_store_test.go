@@ -20,10 +20,11 @@ func TestReloadWithRealSidecarSharesTheEventStore(t *testing.T) {
 	cfg.Nostr.Sidecar.DataDir = t.TempDir()
 	cfg.Nostr.PrivateKey = nostr.Generate().Hex()
 	supervisor := &runtimeSupervisor{
-		rootCtx:    t.Context(),
-		logger:     zap.NewNop(),
-		factory:    newSidecar,
-		openSigner: openServiceSigner,
+		rootCtx:       t.Context(),
+		logger:        zap.NewNop(),
+		factory:       newSidecar,
+		openSigner:    openServiceSigner,
+		initAdmission: isolatedAdmission,
 	}
 	if err := supervisor.replace(cfg); err != nil {
 		t.Fatalf("initial runtime: %v", err)
@@ -41,7 +42,7 @@ func TestReloadWithRealSidecarSharesTheEventStore(t *testing.T) {
 		t.Fatalf("shutdown: %v", err)
 	}
 	// Every handle is closed now, so a fresh open takes the file lock.
-	fresh, err := openServiceSigner(t.Context(), cfg.Nostr, zap.NewNop())
+	fresh, err := openServiceSigner(t.Context(), cfg.Nostr, nil, zap.NewNop())
 	if err != nil {
 		t.Fatalf("open service signer: %v", err)
 	}

@@ -14,6 +14,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/relaysidecar"
 	"github.com/openagentsinc/bahia/internal/servicesigner"
 	"go.uber.org/zap"
@@ -35,9 +36,14 @@ type sidecarRuntime interface {
 
 type sidecarFactory func(context.Context, config.NostrConfig, nostr.Signer, *zap.Logger) (sidecarRuntime, error)
 
-// signerOpener opens the service signer nostr.signer configures; cancelling
-// ctx aborts a pending open but not the opened session.
-type signerOpener func(context.Context, config.NostrConfig, *zap.Logger) (*serviceSigner, error)
+// signerOpener opens the service signer nostr.signer configures, admitting
+// its NIP-46 requests through admission; cancelling ctx aborts a pending open
+// but not the opened session.
+type signerOpener func(context.Context, config.NostrConfig, *nostrout.Admission, *zap.Logger) (*serviceSigner, error)
+
+// admissionInit returns the process's outbound admission controller for the
+// given settings: nostrout.InitDefault in production.
+type admissionInit func(nostrout.Config) (*nostrout.Admission, error)
 
 // serviceSigner is an open service identity and the config it was opened
 // from. Exactly one owner closes it.
@@ -57,11 +63,12 @@ func (s *serviceSigner) Close() {
 // until Close, so a SIGTERM cannot end it while the runtime still signs. The
 // sidecar always runs as the service identity (NIP-11 pubkey, write and read
 // admission, config acknowledgements), so an unconfigured signer is an
-// error. NIP-46 requests pass the process-wide outbound admission controller.
-func openServiceSigner(ctx context.Context, cfg config.NostrConfig, logger *zap.Logger) (*serviceSigner, error) {
+// error. NIP-46 requests pass admission.
+func openServiceSigner(ctx context.Context, cfg config.NostrConfig, admission *nostrout.Admission, logger *zap.Logger) (*serviceSigner, error) {
 	lifetime, cancel := context.WithCancel(context.Background())
 	abortOpen := context.AfterFunc(ctx, cancel)
 	keyer, err := servicesigner.Open(lifetime, cfg, servicesigner.Options{
+		Admission: admission,
 		OnAuthURL: func(authURL string) { logger.Warn(servicesigner.AuthURLMessage, zap.String("url", authURL)) },
 	})
 	if !abortOpen() && err == nil {
@@ -96,19 +103,26 @@ type activeRuntime struct {
 // runtimeSupervisor runs one sidecar runtime at a time and owns the service
 // signer it signs with. All methods run on the reload loop's goroutine.
 type runtimeSupervisor struct {
-	rootCtx    context.Context
-	logger     *zap.Logger
-	factory    sidecarFactory
-	openSigner signerOpener
-	active     *activeRuntime
-	signer     *serviceSigner
+	rootCtx       context.Context
+	logger        *zap.Logger
+	factory       sidecarFactory
+	openSigner    signerOpener
+	initAdmission admissionInit
+	active        *activeRuntime
+	signer        *serviceSigner
 }
 
 // prepare builds the runtime for cfg without disturbing the active one. It
 // reuses the open signer when cfg leaves the service signer unchanged and
 // opens a new one otherwise; a new signer is closed here if the runtime
-// fails, so the active signer is untouched by a failed reload.
+// fails, so the active signer is untouched by a failed reload. Outbound
+// admission is fixed by the first config: a reload that changes
+// nostr.outbound is rejected, as in bahia-server.
 func (s *runtimeSupervisor) prepare(cfg *config.Config) (sidecarRuntime, *serviceSigner, error) {
+	admission, err := s.initAdmission(cfg.Nostr.Outbound.Admission())
+	if err != nil {
+		return nil, nil, fmt.Errorf("configuring nostr outbound admission: %w", err)
+	}
 	if !cfg.Nostr.Sidecar.Enabled {
 		return nil, nil, nil
 	}
@@ -120,7 +134,7 @@ func (s *runtimeSupervisor) prepare(cfg *config.Config) (sidecarRuntime, *servic
 	}
 	signer := s.signer
 	if signer == nil || !servicesigner.SameSigner(signer.cfg, signerCfg) {
-		opened, err := s.openSigner(s.rootCtx, signerCfg, s.logger)
+		opened, err := s.openSigner(s.rootCtx, signerCfg, admission, s.logger)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -225,10 +239,11 @@ func run(configPath string) error {
 	defer signal.Stop(reload)
 
 	supervisor := &runtimeSupervisor{
-		rootCtx:    rootCtx,
-		logger:     logger,
-		factory:    newSidecar,
-		openSigner: openServiceSigner,
+		rootCtx:       rootCtx,
+		logger:        logger,
+		factory:       newSidecar,
+		openSigner:    openServiceSigner,
+		initAdmission: nostrout.InitDefault,
 	}
 	defer func() { _ = supervisor.shutdown() }()
 	if err := supervisor.replace(cfg); err != nil {

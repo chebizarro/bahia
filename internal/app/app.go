@@ -177,8 +177,13 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// pools, the Signet clients, the SoulFactory relay clients, and the NIP-46
 	// service signer RPCs all resolve to the same instance. It is initialized
 	// before the service signer, whose NIP-46 requests it admits (see
-	// docs/runbooks/nostr-outbound-admission.md).
-	outboundAdmission := nostrout.InitDefault(nostrOutboundAdmissionConfig(cfg.Nostr.Outbound))
+	// docs/runbooks/nostr-outbound-admission.md). Its settings are fixed for
+	// the life of the process, so a reload candidate that changes
+	// nostr.outbound is rejected here rather than run with the old settings.
+	outboundAdmission, err := nostrout.InitDefault(cfg.Nostr.Outbound.Admission())
+	if err != nil {
+		return nil, fmt.Errorf("configuring nostr outbound admission: %w", err)
+	}
 
 	signerSession, closeServiceKeyer, err := newServiceKeyer(cfg, outboundAdmission, logger, runningSigner)
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
 	"github.com/stretchr/testify/require"
@@ -33,6 +34,17 @@ func syncTestLogger(t *testing.T, logger *zap.Logger) {
 	if err := logger.Sync(); err != nil {
 		t.Logf("test logger sync returned %v", err)
 	}
+}
+
+// A reload candidate is built with New while the process controller already
+// exists. One that changes nostr.outbound is rejected, so cmd/server keeps the
+// running application instead of reporting settings it cannot apply.
+func TestNewRejectsChangedOutboundAdmission(t *testing.T) {
+	nostrout.Default()
+	cfg := startupTestConfig("emergency")
+	cfg.Nostr.Outbound.Lanes.Signer = config.NostrOutboundLaneConfig{RatePerMinute: 1, Burst: 1}
+	_, err := New(cfg)
+	require.ErrorIs(t, err, nostrout.ErrConfigFixed)
 }
 
 func TestNewStartsEmergencyModeWithoutDatabase(t *testing.T) {

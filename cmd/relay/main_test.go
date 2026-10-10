@@ -3,14 +3,20 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/khatru"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/servicesigner"
 	"go.uber.org/zap"
 )
@@ -44,7 +50,7 @@ type testSigner struct {
 	signingAtClose bool
 }
 
-func (l *signerLedger) open(_ context.Context, cfg config.NostrConfig, _ *zap.Logger) (*serviceSigner, error) {
+func (l *signerLedger) open(_ context.Context, cfg config.NostrConfig, _ *nostrout.Admission, _ *zap.Logger) (*serviceSigner, error) {
 	if l.failOpen != nil {
 		return nil, l.failOpen
 	}
@@ -65,7 +71,13 @@ func newTestSupervisor(t *testing.T, ledger *signerLedger, factory sidecarFactor
 			return runtime, nil
 		}
 	}
-	return &runtimeSupervisor{rootCtx: t.Context(), logger: zap.NewNop(), factory: factory, openSigner: ledger.open}
+	return &runtimeSupervisor{rootCtx: t.Context(), logger: zap.NewNop(), factory: factory, openSigner: ledger.open, initAdmission: isolatedAdmission}
+}
+
+// isolatedAdmission builds a controller of the test's own instead of the
+// process-wide one, which only the first initialization in a process sets.
+func isolatedAdmission(cfg nostrout.Config) (*nostrout.Admission, error) {
+	return nostrout.New(cfg), nil
 }
 
 func enabledConfig(publicKey string) *config.Config {
@@ -202,7 +214,7 @@ func TestDisablingTheSidecarClosesItsSigner(t *testing.T) {
 }
 
 func TestOpenServiceSignerRequiresAServiceIdentity(t *testing.T) {
-	_, err := openServiceSigner(t.Context(), config.Defaults().Nostr, zap.NewNop())
+	_, err := openServiceSigner(t.Context(), config.Defaults().Nostr, nil, zap.NewNop())
 	if !errors.Is(err, servicesigner.ErrNotConfigured) {
 		t.Fatalf("openServiceSigner() error = %v, want ErrNotConfigured", err)
 	}
@@ -247,13 +259,95 @@ func TestOpenServiceSignerAbortsWhenTheProcessStops(t *testing.T) {
 	cfg.PrivateKey = nostr.Generate().Hex()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if signer, err := openServiceSigner(ctx, cfg, zap.NewNop()); !errors.Is(err, context.Canceled) {
+	if signer, err := openServiceSigner(ctx, cfg, nil, zap.NewNop()); !errors.Is(err, context.Canceled) {
 		signer.Close()
 		t.Fatalf("openServiceSigner() error = %v, want context.Canceled", err)
 	}
-	signer, err := openServiceSigner(t.Context(), cfg, zap.NewNop())
+	signer, err := openServiceSigner(t.Context(), cfg, nil, zap.NewNop())
 	if err != nil {
 		t.Fatalf("openServiceSigner(): %v", err)
 	}
 	signer.Close()
+}
+
+// The sidecar's NIP-46 requests pass the admission controller built from
+// its own nostr.outbound settings: an active kill switch refuses the connect
+// before any request reaches the bunker relay.
+func TestSidecarNIP46RequestsHonourTheConfiguredOutboundAdmission(t *testing.T) {
+	relay := khatru.NewRelay()
+	var published atomic.Int32
+	relay.OnEphemeralEvent = func(context.Context, nostr.Event) { published.Add(1) }
+	server := httptest.NewServer(relay)
+	t.Cleanup(server.Close)
+	stop := filepath.Join(t.TempDir(), "nostr-publish.stop")
+	if err := os.WriteFile(stop, []byte("stop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := enabledConfig(nostr.Generate().Public().Hex())
+	cfg.Nostr.Signer.BunkerURI = "bunker://" + nostr.Generate().Public().Hex() + "?relay=" + url.QueryEscape("ws"+strings.TrimPrefix(server.URL, "http"))
+	cfg.Nostr.Signer.ClientSecretKey = nostr.Generate().Hex()
+	cfg.Nostr.Signer.Timeout = time.Minute
+	cfg.Nostr.Outbound.KillSwitchFile = stop
+	cfg.Nostr.Outbound.Lanes.Signer = config.NostrOutboundLaneConfig{RatePerMinute: 7, Burst: 2}
+
+	var initialized []nostrout.Config
+	supervisor := &runtimeSupervisor{rootCtx: t.Context(), logger: zap.NewNop(), factory: newSidecar, openSigner: openServiceSigner,
+		initAdmission: func(c nostrout.Config) (*nostrout.Admission, error) {
+			initialized = append(initialized, c)
+			return isolatedAdmission(c)
+		}}
+	start := time.Now()
+	err := supervisor.replace(cfg)
+	if !errors.Is(err, nostrout.ErrKillSwitch) {
+		t.Fatalf("replace() error = %v, want the kill switch to refuse the NIP-46 connect", err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("refusal took %s; admission must refuse before waiting on the bunker", elapsed)
+	}
+	if len(initialized) != 1 || initialized[0].PurposeBudgets[nostrout.PurposeSigner] != (nostrout.PurposeBudget{RatePerMinute: 7, Burst: 2}) {
+		t.Fatalf("admission initialized with %+v, want the configured signer lane", initialized)
+	}
+	if supervisor.signer != nil || supervisor.active != nil {
+		t.Fatal("a refused signer must not become the supervisor's")
+	}
+	if n := published.Load(); n != 0 {
+		t.Fatalf("bunker relay received %d NIP-46 requests under the kill switch", n)
+	}
+}
+
+// Outbound admission is fixed at process start in the sidecar as in
+// bahia-server: a reload that changes nostr.outbound is rejected and the
+// running sidecar keeps serving with its signer.
+func TestReloadThatChangesOutboundAdmissionIsRejected(t *testing.T) {
+	ledger := &signerLedger{}
+	supervisor := newTestSupervisor(t, ledger, nil)
+	var fixed *nostrout.Config
+	supervisor.initAdmission = func(c nostrout.Config) (*nostrout.Admission, error) {
+		if fixed == nil {
+			fixed = &c
+		} else if !reflect.DeepEqual(*fixed, c) {
+			return nil, nostrout.ErrConfigFixed
+		}
+		return isolatedAdmission(c)
+	}
+	cfg := enabledConfig("aa")
+	if err := supervisor.replace(cfg); err != nil {
+		t.Fatalf("initial runtime: %v", err)
+	}
+	active, signer := supervisor.active, supervisor.signer
+
+	changed := enabledConfig("aa")
+	changed.Nostr.Outbound.Lanes.Signer = config.NostrOutboundLaneConfig{RatePerMinute: 1, Burst: 1}
+	if err := supervisor.replace(changed); !errors.Is(err, nostrout.ErrConfigFixed) {
+		t.Fatalf("replace() error = %v, want ErrConfigFixed", err)
+	}
+	if supervisor.active != active || supervisor.signer != signer || len(ledger.opened) != 1 || signer.close == nil {
+		t.Fatal("a rejected reload must leave the running sidecar and its signer untouched")
+	}
+	if err := supervisor.replace(cfg); err != nil {
+		t.Fatalf("reload with the original outbound settings: %v", err)
+	}
+	if err := supervisor.shutdown(); err != nil {
+		t.Fatal(err)
+	}
 }

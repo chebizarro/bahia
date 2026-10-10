@@ -843,3 +843,24 @@ func TestZeroBreakerBoundsKeepTheDefaults(t *testing.T) {
 	require.Equal(t, DefaultConfig().BreakerMax, cfg.BreakerMax)
 	require.Equal(t, 5*time.Second, normalizeConfig(Config{BreakerMin: 5 * time.Second, BreakerMax: time.Second}).BreakerMax)
 }
+
+func TestProcessControllerIsFixedAfterFirstInitialization(t *testing.T) {
+	var p processController
+	first, err := p.init(Config{KillSwitchFile: " /run/stop "})
+	require.NoError(t, err)
+
+	// Zero values and the explicit defaults they stand for are the same settings.
+	explicit := DefaultConfig()
+	explicit.KillSwitchFile = "/run/stop"
+	same, err := p.init(explicit)
+	require.NoError(t, err)
+	require.Same(t, first, same)
+
+	signer := Config{KillSwitchFile: "/run/stop", PurposeBudgets: map[Purpose]PurposeBudget{PurposeSigner: {RatePerMinute: 1, Burst: 1}}}
+	changed, err := p.init(signer)
+	require.ErrorIs(t, err, ErrConfigFixed)
+	require.Nil(t, changed)
+	_, err = p.init(Config{KillSwitchFile: "/run/other"})
+	require.ErrorIs(t, err, ErrConfigFixed)
+	require.Equal(t, "/run/stop", p.admission.killSwitchFile, "a rejected init must not touch the controller in effect")
+}

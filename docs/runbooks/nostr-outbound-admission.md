@@ -89,6 +89,16 @@ Configuration keys live under `nostr.outbound` (environment:
 Negative values are rejected by config validation. No value disables
 admission.
 
+`bahia-server` and `bahia-relay` each build their process controller from
+these settings at startup (`config.NostrOutboundConfig.Admission`), so the
+relay sidecar's NIP-46 signer requests honour the same lanes and kill switch
+file as the daemon's. The settings are fixed for the life of the process: a
+`SIGHUP` whose config changes anything under `nostr.outbound` is rejected and
+logged (`nostr outbound admission settings are fixed at process start;
+restart to apply ...`), and the process keeps running with its current
+config. Restart the process to change budgets or the kill switch path. The
+kill switch file's *content* is read on every admission and needs neither.
+
 ## Duplicate suppression
 
 The controller keeps a bounded receipt cache (4096 entries, 10 minutes) keyed

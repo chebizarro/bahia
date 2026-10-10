@@ -21,6 +21,7 @@ import (
 	"math/rand/v2"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +57,10 @@ var (
 	ErrOperation = errors.New("nostr outbound operation rejected")
 	// ErrNotConfigured means a gateway was used without an admission controller.
 	ErrNotConfigured = errors.New("nostr outbound admission is not configured")
+	// ErrConfigFixed means InitDefault received settings that differ from
+	// the ones the process-wide controller was built with. Admission settings
+	// are fixed for the life of the process; a restart applies them.
+	ErrConfigFixed = errors.New("nostr outbound admission settings are fixed at process start; restart to apply changed nostr.outbound settings")
 )
 
 // Purpose is an admission lane. Lanes partition the aggregate budget so that
@@ -327,10 +332,15 @@ type Admission struct {
 	metrics Metrics
 }
 
-var (
-	defaultOnce      sync.Once
-	defaultAdmission *Admission
-)
+// processController is the process-wide controller and the normalized
+// configuration it was built from.
+type processController struct {
+	mu        sync.Mutex
+	admission *Admission
+	cfg       Config
+}
+
+var process processController
 
 // KillSwitchEnv is the environment variable DefaultConfig reads for the
 // emergency kill-switch file path. Processes that configure the controller
@@ -342,23 +352,44 @@ const KillSwitchEnv = "BAHIA_NOSTR_OUTBOUND_KILL_SWITCH_FILE"
 // without an explicit controller shares it, so bounded defaults are genuinely
 // process-wide rather than per-pool.
 func Default() *Admission {
-	defaultOnce.Do(func() {
-		defaultAdmission = New(DefaultConfig())
-	})
-	return defaultAdmission
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	if process.admission == nil {
+		process.build(DefaultConfig())
+	}
+	return process.admission
 }
 
-// InitDefault initializes the process-wide controller from cfg exactly once
-// and returns it; cfg fields left zero keep DefaultConfig's bounded values.
-// A process entry point calls it before constructing any gateway. When the
-// default was already initialized — by an earlier InitDefault or by a
-// Default() call — the existing controller is returned unchanged, so the
-// first initialization wins and later ones are silent no-ops.
-func InitDefault(cfg Config) *Admission {
-	defaultOnce.Do(func() {
-		defaultAdmission = New(cfg)
-	})
-	return defaultAdmission
+// InitDefault initializes the process-wide controller from cfg and returns
+// it; cfg fields left zero keep DefaultConfig's bounded values. A process
+// entry point calls it before constructing any gateway. The controller is
+// built once per process: a later call with an equivalent cfg returns it, and
+// a call whose cfg differs from the one in effect (including DefaultConfig,
+// when Default() ran first) returns ErrConfigFixed, so a config reload can
+// never appear to apply admission settings it did not.
+func InitDefault(cfg Config) (*Admission, error) {
+	return process.init(cfg)
+}
+
+func (p *processController) init(cfg Config) (*Admission, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.admission == nil {
+		p.build(cfg)
+		return p.admission, nil
+	}
+	if !reflect.DeepEqual(p.cfg, normalizeConfig(cfg)) {
+		return nil, ErrConfigFixed
+	}
+	return p.admission, nil
+}
+
+// build records cfg in normalized form, so zero values and the explicit
+// defaults they stand for compare equal. Callers hold p.mu.
+func (p *processController) build(cfg Config) {
+	cfg = normalizeConfig(cfg)
+	p.admission = New(cfg)
+	p.cfg = cfg
 }
 
 // Or returns admission when non-nil and the process default otherwise. A nil
@@ -411,6 +442,7 @@ func newWithClock(cfg Config, clk clock) *Admission {
 
 func normalizeConfig(cfg Config) Config {
 	defaults := DefaultConfig()
+	cfg.KillSwitchFile = strings.TrimSpace(cfg.KillSwitchFile)
 	budgets := make(map[Purpose]PurposeBudget, len(allPurposes))
 	for _, purpose := range allPurposes {
 		budget := cfg.PurposeBudgets[purpose]

@@ -2,46 +2,10 @@ package app
 
 import (
 	"fmt"
-	"os"
-	"strings"
 	"time"
 
-	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/nostrout"
 )
-
-// nostrOutboundAdmissionConfig maps the configured nostr.outbound section onto
-// the process-wide controller configuration. Zero values keep nostrout's
-// bounded defaults; no configured value can disable admission, and a kill
-// switch file the operator did not configure still resolves from
-// BAHIA_NOSTR_OUTBOUND_KILL_SWITCH_FILE for processes whose config did not go
-// through internal/config's environment mapping.
-func nostrOutboundAdmissionConfig(cfg config.NostrOutboundConfig) nostrout.Config {
-	lane := func(c config.NostrOutboundLaneConfig) nostrout.PurposeBudget {
-		return nostrout.PurposeBudget{RatePerMinute: c.RatePerMinute, Burst: c.Burst}
-	}
-	killSwitchFile := strings.TrimSpace(cfg.KillSwitchFile)
-	if killSwitchFile == "" {
-		killSwitchFile = strings.TrimSpace(os.Getenv(nostrout.KillSwitchEnv))
-	}
-	return nostrout.Config{
-		KillSwitchFile: killSwitchFile,
-		Aggregate:      lane(cfg.Aggregate),
-		PurposeBudgets: map[nostrout.Purpose]nostrout.PurposeBudget{
-			nostrout.PurposePriority: lane(cfg.Lanes.Priority),
-			nostrout.PurposeState:    lane(cfg.Lanes.State),
-			nostrout.PurposeGeneral:  lane(cfg.Lanes.General),
-			nostrout.PurposeBulk:     lane(cfg.Lanes.Bulk),
-			nostrout.PurposeSigner:   lane(cfg.Lanes.Signer),
-		},
-		RelayWire:         lane(cfg.RelayWire),
-		RelayWirePriority: lane(cfg.RelayWirePriority),
-		BreakerMin:        cfg.BreakerMin,
-		BreakerMax:        cfg.BreakerMax,
-		DuplicateTTL:      cfg.DuplicateTTL,
-		DuplicateLimit:    cfg.DuplicateLimit,
-	}
-}
 
 // nostrOutboundAdmissionCheck renders the readiness/health view of the
 // process-wide outbound controller. It fails while the kill switch is active

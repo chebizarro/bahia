@@ -29,6 +29,11 @@ replacement runtime has taken over, and a signer that fails to open leaves
 the running sidecar untouched. On shutdown the signer is closed after the
 relay and its config workers have stopped.
 
+NIP-46 requests pass the sidecar's outbound admission controller, built at
+startup from `nostr.outbound`. A `SIGHUP` that changes `nostr.outbound` is
+rejected and the running sidecar is kept; restart to apply it (see
+[`runbooks/nostr-outbound-admission.md`](runbooks/nostr-outbound-admission.md)).
+
 ## Configuration
 
 ```yaml
