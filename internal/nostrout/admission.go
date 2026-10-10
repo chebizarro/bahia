@@ -446,6 +446,9 @@ func normalizeConfig(cfg Config) Config {
 	if cfg.BreakerMin <= 0 {
 		cfg.BreakerMin = defaults.BreakerMin
 	}
+	if cfg.BreakerMax <= 0 {
+		cfg.BreakerMax = defaults.BreakerMax
+	}
 	if cfg.BreakerMax < cfg.BreakerMin {
 		cfg.BreakerMax = cfg.BreakerMin
 	}

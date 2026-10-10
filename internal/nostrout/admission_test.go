@@ -836,3 +836,10 @@ func TestAdmitAuthCompetesWithPriorityPublications(t *testing.T) {
 	require.ErrorIs(t, a.AdmitAuth(context.Background(), relayA), ErrBudgetExceeded,
 		"a tombstone consumed the last priority token; the AUTH storm waits for a refill")
 }
+
+func TestZeroBreakerBoundsKeepTheDefaults(t *testing.T) {
+	cfg := normalizeConfig(Config{})
+	require.Equal(t, DefaultConfig().BreakerMin, cfg.BreakerMin)
+	require.Equal(t, DefaultConfig().BreakerMax, cfg.BreakerMax)
+	require.Equal(t, 5*time.Second, normalizeConfig(Config{BreakerMin: 5 * time.Second, BreakerMax: time.Second}).BreakerMax)
+}
