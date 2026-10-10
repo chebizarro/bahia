@@ -453,8 +453,6 @@ type AssistantWrappedKeysConfig struct {
 	ExpectedGeneration   string        `koanf:"expected_generation" yaml:"expected_generation" secret:"false"`
 	SignetBunkerURI      string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
 	OwnerClientSecretKey string        `koanf:"owner_client_secret_key" yaml:"owner_client_secret_key" secret:"true"`
-	LeaseEpoch           uint64        `koanf:"lease_epoch" yaml:"lease_epoch" secret:"false"`
-	LeaseExpiresAt       string        `koanf:"lease_expires_at" yaml:"lease_expires_at" secret:"false"`
 	ConnectTimeout       time.Duration `koanf:"connect_timeout" yaml:"connect_timeout" secret:"false"`
 }
 
@@ -2598,8 +2596,8 @@ func (c *Config) validateAssistant() error {
 	switch wrapped.Mode {
 	case "legacy_v1":
 	case "wrapped_read_only":
-		if !assistant.Enabled || strings.TrimSpace(wrapped.ManifestPath) == "" || strings.TrimSpace(wrapped.ExpectedGeneration) == "" || strings.TrimSpace(wrapped.SignetBunkerURI) == "" || strings.TrimSpace(wrapped.OwnerClientSecretKey) == "" || wrapped.LeaseEpoch == 0 || strings.TrimSpace(wrapped.LeaseExpiresAt) == "" {
-			return fmt.Errorf("config validation failed: assistant.wrapped_keys read-only mode requires enabled assistant, manifest path, generation pin, real Signet bunker, dedicated owner key and lease")
+		if !assistant.Enabled || strings.TrimSpace(wrapped.ManifestPath) == "" || strings.TrimSpace(wrapped.ExpectedGeneration) == "" || strings.TrimSpace(wrapped.SignetBunkerURI) == "" || strings.TrimSpace(wrapped.OwnerClientSecretKey) == "" {
+			return fmt.Errorf("config validation failed: assistant.wrapped_keys read-only mode requires enabled assistant, manifest path, generation pin, real Signet bunker and dedicated owner key")
 		}
 		if !filepath.IsAbs(wrapped.ManifestPath) || filepath.Clean(wrapped.ManifestPath) != wrapped.ManifestPath || wrapped.ConnectTimeout < 0 {
 			return fmt.Errorf("config validation failed: assistant.wrapped_keys manifest path must be absolute and clean and connect timeout non-negative")

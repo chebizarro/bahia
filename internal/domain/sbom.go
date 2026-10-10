@@ -180,7 +180,22 @@ type SBOMAttestation struct {
 	// Predicate contains the SBOM reference metadata (not the full SBOM).
 	Predicate SBOMPredicate `json:"predicate"`
 	// Envelope binds the statement above to one or more DSSE signatures.
+	// Only historical attestations carry it; it is still verified.
 	Envelope *DSSEEnvelope `json:"envelope,omitempty"`
+	// Event binds the statement above to a standard signed Nostr event whose
+	// content is the exact canonical statement JSON. New attestations use it.
+	Event *SignedNostrEvent `json:"event,omitempty"`
+}
+
+// SignedNostrEvent is a signed NIP-01 Nostr event in its wire form.
+type SignedNostrEvent struct {
+	ID        string     `json:"id"`
+	PubKey    string     `json:"pubkey"`
+	CreatedAt int64      `json:"created_at"`
+	Kind      int        `json:"kind"`
+	Tags      [][]string `json:"tags"`
+	Content   string     `json:"content"`
+	Sig       string     `json:"sig"`
 }
 
 // DSSEEnvelope is a Dead Simple Signing Envelope for an attestation statement.

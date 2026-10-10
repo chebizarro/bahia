@@ -43,26 +43,20 @@ func assistantTranscriptKeyProviderForStartupWithClient(ctx context.Context, cfg
 	if err != nil || owner.Public() == pubkey {
 		return nil, errors.New("assistant wrapped mode requires distinct dedicated Signet owner key")
 	}
-	expiresAt, err := time.Parse(time.RFC3339Nano, selected.LeaseExpiresAt)
-	if err != nil || !time.Now().Before(expiresAt) {
-		return nil, errors.New("assistant wrapped mode requires unexpired Signet writer lease")
-	}
-	lease := signet.WriterLease{Epoch: selected.LeaseEpoch, OwnerPubkey: owner.Public(), ExpiresAt: expiresAt}
-	leaseSource := func(context.Context) (signet.WriterLease, error) { return lease, nil }
 	timeout := selected.ConnectTimeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	client, err := newClient(signet.Config{BunkerURI: selected.SignetBunkerURI, Relays: relays, ClientSecretKey: strings.TrimSpace(selected.OwnerClientSecretKey), RequireReal: true, AllowMock: false, ConnectTimeout: timeout, ClosedRetryBudget: cfg.Nostr.ClosedRetryBudget, EpochLease: leaseSource, ExpectedServicePubkey: pubkey.Hex()})
+	client, err := newClient(signet.Config{BunkerURI: selected.SignetBunkerURI, Relays: relays, ClientSecretKey: strings.TrimSpace(selected.OwnerClientSecretKey), RequireReal: true, AllowMock: false, ConnectTimeout: timeout, ClosedRetryBudget: cfg.Nostr.ClosedRetryBudget, ExpectedServicePubkey: pubkey.Hex()})
 	if err != nil {
 		return nil, fmt.Errorf("initialize fenced assistant Signet reader: %w", err)
 	}
 	defer client.Close()
-	signer, err := signet.NewEpochSigner(client, pubkey.Hex(), leaseSource)
+	signer, err := signet.NewServiceSigner(client, pubkey.Hex())
 	if err != nil {
-		return nil, fmt.Errorf("initialize fenced assistant epoch signer: %w", err)
+		return nil, fmt.Errorf("initialize fenced assistant service signer: %w", err)
 	}
 	if err := client.Connect(connectCtx); err != nil {
 		return nil, fmt.Errorf("connect fenced assistant Signet reader: %w", err)

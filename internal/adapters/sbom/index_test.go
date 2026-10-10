@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
@@ -112,10 +113,7 @@ func testAttestation() *domain.SBOMAttestation {
 			NTIA: &domain.NTIACompliance{IsCompliant: true},
 		},
 	}
-	signer, err := NewNostrDSSESigner(testSBOMPrivateKey)
-	if err != nil {
-		panic(err)
-	}
+	signer := keyer.NewPlainKeySigner([32]byte(nostr.MustSecretKeyFromHex(testSBOMPrivateKey)))
 	if err := SignAttestation(context.Background(), att, signer); err != nil {
 		panic(err)
 	}
@@ -174,14 +172,14 @@ func TestBuildSBOMReferenceEvent(t *testing.T) {
 
 func TestBuildSBOMReferenceEventRejectsUnsignedAttestation(t *testing.T) {
 	att := testAttestation()
-	att.Envelope = nil
+	att.Event = nil
 	_, _, err := BuildSBOMReferenceEvent(BuildSBOMReferenceEventInput{Subject: testSubject(), Attestation: att})
 	if err == nil || !strings.Contains(err.Error(), "unsigned") {
 		t.Fatalf("BuildSBOMReferenceEvent error = %v, want unsigned rejection", err)
 	}
 }
 
-func TestParseAttestationFromEventBindsDSSESignerToPublisher(t *testing.T) {
+func TestParseAttestationFromEventBindsAttestationSignerToPublisher(t *testing.T) {
 	ev, _, err := BuildSBOMReferenceEvent(BuildSBOMReferenceEventInput{Subject: testSubject(), Attestation: testAttestation()})
 	if err != nil {
 		t.Fatal(err)

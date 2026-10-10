@@ -433,9 +433,21 @@ events durably unless `nostr.sidecar.event_retention` is set.
 
 - **SBOM reference** (`30078`): `domain=sbom`, `schema=bahia.sbom.ref.v1`,
   `d=sbom:ref:<subject-key>:<format>:<payload-sha256>`; content is the
-  in-toto-style attestation envelope; tags identify subject, format, storage
+  in-toto-style attestation; tags identify subject, format, storage
   backend, location, `x` payload hash, media type, generator and NTIA status.
-  Payload bytes live in Blossom.
+  Payload bytes live in Blossom. The attestation's signature is an embedded
+  **SBOM attestation event** under `event` (historical references carry a
+  DSSE `envelope` instead, which is still verified with the service pubkey).
+- **SBOM attestation event** (`4903`, NIP-CAS-0005 `CAS_AUDIT`), embedded in
+  the SBOM reference and signed by the service key (locally or through
+  Signet's standard NIP-46 `sign_event`): content is the exact canonical
+  in-toto statement JSON (`_type`, `subject`, `predicateType`, `predicate`);
+  tags, in order, are `domain=sbom`, `type=attestation`,
+  `schema=https://in-toto.io/Statement/v1`, one `subject=<alg>:<digest>` per
+  subject digest, then one `sbom=<alg>:<digest>` per SBOM payload digest
+  (algorithms sorted). A verifier requires a valid NIP-01 id and signature,
+  the trusted service pubkey, content byte-identical to the visible
+  statement, and exactly these tags.
 - **SBOM availability** (`30004`): `domain=sbom`,
   `schema=bahia.sbom.available-list.v1`,
   `d=sbom:available:<subject-type>:<subject-key>`; replaced as a complete set

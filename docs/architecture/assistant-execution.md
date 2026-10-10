@@ -134,7 +134,7 @@ one `AssistantTranscriptKeyProvider`. The deployed v1 provider derives its
 XChaCha20 key from `nostr.private_key`. An offline transition primitive in
 `internal/app/assistant_wrapped_keys.go` obtains exactly that v1 key from the
 matching service configuration, generates a random versioned v2 key, and
-NIP-44-wraps both through the lease-fenced Signet service signer. The wrapped
+NIP-44-wraps both through the writer-fenced Signet service signer. The wrapped
 manifest retains the service pubkey and exact key identities; immutable v1
 relay events can be read after the nsec is removed only if the v1 wrap remains
 available.
@@ -152,7 +152,9 @@ The manifest opener is **read-only**: `ActiveTranscriptKey` rejects new writes.
 Assistant startup defaults to the deployed v1 provider. Explicit
 `assistant.wrapped_keys.mode=wrapped_read_only` instead requires a local
 manifest path, independently pinned v2 generation, real Signet bunker URI,
-dedicated NIP-46 owner key and current writer lease. Startup validates the
+dedicated NIP-46 owner key that Signet has assigned as the identity's writer
+(`agent/writer-acquire`); startup carries no lease epoch or expiry and checks
+only that the owner key differs from the service key. Startup validates the
 manifest, connects to Signet, unwraps both keys under the existing service
 pubkey, then closes the bootstrap connection. It never falls back to the raw
 key provider in this mode. Transcript and checkpoint reads are available,

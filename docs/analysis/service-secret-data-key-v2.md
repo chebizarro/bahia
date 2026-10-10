@@ -39,8 +39,8 @@ cannot prove compatibility.
    cannot fall back to a raw nsec. That work is **not** in this slice.
 2. Independently back up and verify the database, inventory all rows, and
    stop the daemon and every SQL writer. No backup or runner is included.
-3. Have a live, unexpired WriterLease for a dedicated Signet owner and the
-   existing service pubkey. Keep the legacy nsec only in an isolated offline
+3. Have a dedicated Signet client key assigned (via `agent/writer-acquire`) as
+   the sole writer for the existing service pubkey. Keep the legacy nsec only in an isolated offline
    environment; never put it in arguments, logs or the remote runtime.
 4. Implement a reviewed one-shot runner with exact service-key identity
    checks, bounded census reconciliation, strict quiescence, rollback and
@@ -56,7 +56,8 @@ nsec. The remaining concrete service-secret blockers are `internal/app/app.go`
 edge-route, relay-admin and intent-author consumers, and the Gitea initiation
 credential store (`internal/adapters/gitea/initiation_store.go`). The current
 control-plane secret intent path stores client NIP-44 as-is unless the v2
-dependencies are explicitly supplied. The DSSE and NIP-44 Signet interop gate
+dependencies are explicitly supplied. The live Signet NIP-46 interop gate (`sign_event`, including event-signed SBOM
+attestations, and NIP-44)
 and complete raw-key-crypto census remain independent prerequisites.
 
 Disposable PostgreSQL 16 integration gate:

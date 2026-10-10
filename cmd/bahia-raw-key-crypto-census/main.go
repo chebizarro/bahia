@@ -250,8 +250,21 @@ func classifyEvent(r *report, kind int, content string, contentSize int, tagJSON
 					KeyID string `json:"keyid"`
 				} `json:"signatures"`
 			} `json:"envelope"`
+			Event *struct {
+				PubKey string `json:"pubkey"`
+			} `json:"event"`
 		}
-		if json.Unmarshal([]byte(content), &att) != nil || att.Envelope == nil || len(att.Envelope.Signatures) == 0 {
+		if json.Unmarshal([]byte(content), &att) != nil {
+			f.Unknown++
+			return
+		}
+		// New attestations are standard Nostr events, signable through
+		// Signet's sign_event; they need no raw-key DSSE digest signature.
+		if att.Envelope == nil && att.Event != nil && att.Event.PubKey != "" {
+			f.Classes["event_signed_reference"]++
+			return
+		}
+		if att.Envelope == nil || len(att.Envelope.Signatures) == 0 {
 			f.Unknown++
 			return
 		}

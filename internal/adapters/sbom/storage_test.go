@@ -144,8 +144,9 @@ func TestStorageResolver_ResolveAndVerify(t *testing.T) {
 		t.Fatalf("Store failed: %v", err)
 	}
 
-	att := &domain.SBOMAttestation{Type: InTotoStatementType, Predicate: domain.SBOMPredicate{Digest: map[string]string{"sha256": stored.Hash}}}
-	if err := SignAttestation(context.Background(), att, testNostrDSSESigner(t)); err != nil {
+	att := &domain.SBOMAttestation{Type: InTotoStatementType, Subject: []domain.AttestationSubject{{Name: "artifact", Digest: map[string]string{"sha256": testSHA256A}}}, Predicate: domain.SBOMPredicate{Digest: map[string]string{"sha256": stored.Hash}}}
+	_, signer := testAttestationSigner(t)
+	if err := SignAttestation(context.Background(), att, signer); err != nil {
 		t.Fatal(err)
 	}
 	verified, err := resolver.ResolveAndVerify(context.Background(), att, ResolveInput{Location: stored.Location})

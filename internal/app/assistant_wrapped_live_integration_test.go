@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -39,27 +40,23 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 	if err != nil {
 		t.Fatal("read disposable fixture")
 	}
+	// Written by scripts/signet_live_interop.py. The writer is the
+	// client key currently assigned with agent/writer-acquire.
 	var fixture struct {
 		Disposable            bool   `json:"disposable"`
 		SignetCommit          string `json:"signet_commit"`
-		BunkerURI             string `json:"bunker_uri"`
-		OwnerSecretKeyHex     string `json:"owner_secret_key_hex"`
+		WriterBunkerURI       string `json:"writer_bunker_uri"`
+		WriterSecretKeyHex    string `json:"writer_secret_key_hex"`
 		ExpectedBunkerPubkey  string `json:"expected_bunker_pubkey"`
 		ExpectedServicePubkey string `json:"expected_service_pubkey"`
-		Epoch                 uint64 `json:"epoch"`
-		ExpiresAt             string `json:"expires_at"`
 	}
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal("invalid disposable fixture")
 	}
-	if !fixture.Disposable || fixture.SignetCommit != "d5af2ef3d802f651ab87ac3cd27a9fb2583829c7" || fixture.Epoch < 2 || !assistantLiveLoopbackBunker(fixture.BunkerURI, fixture.ExpectedBunkerPubkey) {
+	if !fixture.Disposable || !assistantLiveSignetCommit.MatchString(fixture.SignetCommit) || !assistantLiveLoopbackBunker(fixture.WriterBunkerURI, fixture.ExpectedBunkerPubkey) {
 		t.Fatal("unapproved Signet fixture")
 	}
-	expiresAt, err := time.Parse(time.RFC3339Nano, fixture.ExpiresAt)
-	if err != nil || !time.Now().Add(2*time.Minute).Before(expiresAt) {
-		t.Fatal("short or invalid disposable lease")
-	}
-	owner, err := nostr.SecretKeyFromHex(fixture.OwnerSecretKeyHex)
+	owner, err := nostr.SecretKeyFromHex(fixture.WriterSecretKeyHex)
 	if err != nil {
 		t.Fatal("invalid synthetic owner key")
 	}
@@ -90,9 +87,7 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 	if _, err := oldCheckpoint.Append(ctx, execution, ""); err != nil {
 		t.Fatal(err)
 	}
-	lease := signet.WriterLease{Epoch: fixture.Epoch, OwnerPubkey: owner.Public(), ExpiresAt: expiresAt}
-	leaseSource := func(context.Context) (signet.WriterLease, error) { return lease, nil }
-	initial, err := signet.NewClient(signet.Config{BunkerURI: fixture.BunkerURI, ClientSecretKey: fixture.OwnerSecretKeyHex, RequireReal: true, EpochLease: leaseSource, ExpectedServicePubkey: fixture.ExpectedServicePubkey}, slog.Default())
+	initial, err := signet.NewClient(signet.Config{BunkerURI: fixture.WriterBunkerURI, ClientSecretKey: fixture.WriterSecretKeyHex, RequireReal: true, ExpectedServicePubkey: fixture.ExpectedServicePubkey}, slog.Default())
 	if err != nil {
 		t.Fatal("cannot construct fenced Signet client")
 	}
@@ -100,11 +95,11 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 	if err := initial.Connect(ctx); err != nil {
 		t.Fatal("disposable Signet did not connect")
 	}
-	epochSigner, err := signet.NewEpochSigner(initial, fixture.ExpectedServicePubkey, leaseSource)
+	serviceSigner, err := signet.NewServiceSigner(initial, fixture.ExpectedServicePubkey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := CreateAssistantWrappedKeyManifest(ctx, epochSigner, serviceSecret.Public(), cfg)
+	manifest, err := CreateAssistantWrappedKeyManifest(ctx, serviceSigner, serviceSecret.Public(), cfg)
 	if err != nil {
 		t.Fatal("live Signet could not wrap assistant keys")
 	}
@@ -116,13 +111,13 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "assistant-keys.json")
-	if err := persistAssistantWrappedKeyManifest(ctx, epochSigner, serviceSecret.Public(), path, manifest); err != nil {
+	if err := persistAssistantWrappedKeyManifest(ctx, serviceSigner, serviceSecret.Public(), path, manifest); err != nil {
 		t.Fatal(err)
 	}
 	if err := initial.Close(); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Assistant.WrappedKeys = config.AssistantWrappedKeysConfig{Mode: "wrapped_read_only", ManifestPath: path, ExpectedGeneration: manifest.Active.Version, SignetBunkerURI: fixture.BunkerURI, OwnerClientSecretKey: fixture.OwnerSecretKeyHex, LeaseEpoch: fixture.Epoch, LeaseExpiresAt: fixture.ExpiresAt, ConnectTimeout: time.Minute}
+	cfg.Assistant.WrappedKeys = config.AssistantWrappedKeysConfig{Mode: "wrapped_read_only", ManifestPath: path, ExpectedGeneration: manifest.Active.Version, SignetBunkerURI: fixture.WriterBunkerURI, OwnerClientSecretKey: fixture.WriterSecretKeyHex, ConnectTimeout: time.Minute}
 	var startupClient *signet.Client
 	provider, err := assistantTranscriptKeyProviderForStartupWithClient(ctx, cfg, serviceSecret.Public().Hex(), nil, func(options signet.Config) (*signet.Client, error) {
 		client, createErr := signet.NewClient(options, slog.Default())
@@ -162,6 +157,8 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 		t.Fatal("expired startup context succeeded")
 	}
 }
+
+var assistantLiveSignetCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 func assistantLiveLoopbackBunker(rawURI, bunkerPubkey string) bool {
 	uri, err := url.Parse(rawURI)

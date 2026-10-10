@@ -27,7 +27,9 @@ records (including operator allowlists, payments, security, and SoulFactory);
 the separate NIP-44 `service_inner` layers; opaque org-key-envelope NIP-44
 wrap candidates; assistant transcripts and checkpoints by recorded key
 reference/version; confidential `state_hash` tags; and signed SBOM reference
-events by embedded key ID. Other kind-30900 records are counted under
+events by embedded DSSE key ID (`event_signed_reference` counts references
+whose attestation is a standard signed Nostr event, which needs no raw-key
+DSSE signature). Other kind-30900 records are counted under
 `cp_state_unclassified`, never silently discarded. `unknown` means the row
 cannot be classified from bounded metadata. A NIP-44 shape, key reference,
 or embedded DSSE key ID does **not** prove that the existing service key can

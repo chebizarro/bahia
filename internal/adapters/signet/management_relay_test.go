@@ -236,10 +236,10 @@ func TestSignetManagementRunsOnRelayPoolWithRecipientAuth(t *testing.T) {
 	}
 }
 
-// An epoch lease owner is not a Signet provisioner. It has only its NIP-46
+// An assigned writer client is not a Signet provisioner. It has only its NIP-46
 // signing connection; a separate provisioner client owns management and its
 // AUTH-gated reply subscription.
-func TestSignetEpochOwnerCannotManageAndProvisionerClientStillCan(t *testing.T) {
+func TestSignetFencedWriterCannotManageAndProvisionerClientStillCan(t *testing.T) {
 	relay := khatru.NewRelay()
 	store := &slicestore.SliceStore{}
 	if err := store.Init(); err != nil {
@@ -276,9 +276,6 @@ func TestSignetEpochOwnerCannotManageAndProvisionerClientStillCan(t *testing.T) 
 	ownerClient, err := NewClient(Config{
 		BunkerURI: signet.bunkerURI(relayURL), ClientSecretKey: owner.Hex(), RequireReal: true,
 		OutboundAdmission: generousTestAdmission(), ExpectedServicePubkey: signet.key.Public().Hex(),
-		EpochLease: func(context.Context) (WriterLease, error) {
-			return WriterLease{Epoch: 1, OwnerPubkey: owner.Public(), ExpiresAt: time.Now().Add(time.Hour)}, nil
-		},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -288,16 +285,16 @@ func TestSignetEpochOwnerCannotManageAndProvisionerClientStillCan(t *testing.T) 
 		t.Fatal(err)
 	}
 	if ownerClient.management != nil || ownerClient.newManagementPool(nil) != nil {
-		t.Fatal("lease owner opened provisioner management pool")
+		t.Fatal("fenced writer client opened provisioner management pool")
 	}
-	if err := ownerClient.RevokeAgent(ctx, nostr.Generate().Public().Hex()); !errors.Is(err, ErrEpochManagementRequiresProvisioner) {
+	if err := ownerClient.RevokeAgent(ctx, nostr.Generate().Public().Hex()); !errors.Is(err, ErrFencedManagementRequiresProvisioner) {
 		t.Fatalf("owner management error = %v, want provisioner requirement", err)
 	}
 	if len(signet.seenMethods()) != 0 {
 		t.Fatalf("owner reached management: %v", signet.seenMethods())
 	}
 	if got := signet.seenSignEvents(); got != 0 {
-		t.Fatalf("owner used %d legacy sign_event requests", got)
+		t.Fatalf("owner sent %d unexpected sign_event requests", got)
 	}
 
 	provisioner, err := NewClient(Config{BunkerURI: provisionerSignet.bunkerURI(relayURL), ClientSecretKey: nostr.Generate().Hex(), RequireReal: true, OutboundAdmission: generousTestAdmission()}, nil)

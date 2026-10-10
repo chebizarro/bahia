@@ -24,14 +24,14 @@ type localAssistantWrapFixture struct {
 
 func (f localAssistantWrapFixture) GetPublicKey(context.Context) (nostr.PubKey, error) {
 	if f.denied {
-		return nostr.ZeroPK, errors.New("lease refused")
+		return nostr.ZeroPK, errors.New("writer refused")
 	}
 	return f.pubkey, nil
 }
 
 func (f localAssistantWrapFixture) Encrypt(_ context.Context, plain string, peer nostr.PubKey) (string, error) {
 	if f.denied {
-		return "", errors.New("lease refused")
+		return "", errors.New("writer refused")
 	}
 	key, err := nip44.GenerateConversationKey(peer, f.secret)
 	if err != nil {
@@ -42,7 +42,7 @@ func (f localAssistantWrapFixture) Encrypt(_ context.Context, plain string, peer
 
 func (f localAssistantWrapFixture) Decrypt(_ context.Context, cipher string, peer nostr.PubKey) (string, error) {
 	if f.denied {
-		return "", errors.New("lease refused")
+		return "", errors.New("writer refused")
 	}
 	key, err := nip44.GenerateConversationKey(peer, f.secret)
 	if err != nil {

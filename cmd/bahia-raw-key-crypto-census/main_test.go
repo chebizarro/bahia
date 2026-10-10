@@ -147,3 +147,20 @@ func TestCensusCoversAllOCKTopicsInnerAndOpaqueKeyWraps(t *testing.T) {
 		t.Fatal("oversized kind-30900 family vanished")
 	}
 }
+
+func TestClassifySBOMReferencesBySignatureForm(t *testing.T) {
+	r := report{ServicePubkey: testPubkey, Families: map[string]*family{"sbom_dsse_references": newFamily("unproven")}}
+	tags := `[["t","sbom-reference"]]`
+	for _, content := range []string{
+		`{"envelope":{"signatures":[{"keyid":"` + testPubkey + `"}]}}`,
+		`{"envelope":{"signatures":[{"keyid":"other"}]}}`,
+		`{"event":{"pubkey":"` + testPubkey + `"}}`,
+		`{}`,
+	} {
+		classifyEvent(&r, 30078, content, len(content), tags, len(tags))
+	}
+	f := r.Families["sbom_dsse_references"]
+	if f.Classes["service_pubkey_reference"] != 1 || f.Classes["other_key_reference"] != 1 || f.Classes["event_signed_reference"] != 1 || f.Unknown != 1 || f.SQLRows != 4 {
+		t.Fatalf("SBOM reference classification = %+v", f)
+	}
+}

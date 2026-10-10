@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	"github.com/google/uuid"
 	sbomadapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -63,10 +64,10 @@ func TestSBOMOrchestratorGeneratePublishesProjectsAndAudits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("published SBOM reference signature verification failed: %v", err)
 		}
-		verifiedReference = att.Envelope != nil && len(att.Envelope.Signatures) > 0
+		verifiedReference = att.Envelope == nil && att.Event != nil && att.Event.PubKey == publisher.signer.Public().Hex()
 	}
 	if !verifiedReference {
-		t.Fatal("published SBOM reference did not contain a verified DSSE signature")
+		t.Fatal("published SBOM reference did not contain a verified service-signed attestation event")
 	}
 
 	cached, err := orchestrator.Generate(ctx, SBOMGenerateRequest{IDempotencyKey: "run-1", Subject: manifest.Subject, Source: sbomadapter.SourceRequest{Kind: sbomadapter.SourceKindDirectory, Locator: "/tmp/source"}, Formats: []domain.SBOMFormat{domain.SBOMFormatSPDX}, Generator: sbomadapter.GeneratorSyft})
@@ -347,10 +348,7 @@ func newTestSBOMOrchestrator(t *testing.T, publisher *fakeSBOMPublisher, subscri
 	if subscriber == nil {
 		subscriber = &fakeSBOMAvailabilitySubscriber{messages: []SBOMAvailabilitySubscriptionMessage{{EOSE: true}}}
 	}
-	attestationSigner, err := sbomadapter.NewNostrDSSESigner(publisher.signer.Hex())
-	if err != nil {
-		t.Fatal(err)
-	}
+	attestationSigner := keyer.NewPlainKeySigner([32]byte(publisher.signer))
 	return NewSBOMOrchestrator(SBOMOrchestratorConfig{Generators: registry, Storage: sbomadapter.NewStorageResolver(&sbomadapter.MockBlossomClient{Blobs: map[string][]byte{}}, nil, nil, slog.Default()), Repo: repo, Publisher: publisher, Subscriber: subscriber, AttestationSigner: attestationSigner, Pubkey: publisher.signer.Public().Hex()})
 }
 
