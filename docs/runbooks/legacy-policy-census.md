@@ -42,3 +42,39 @@ when an older valid head is present, the command cannot identify every such
 filtered frame. Stop or fence
 SQL writers before using a full census operationally; the SQL snapshot alone
 cannot prevent a writer from publishing to a relay during the read.
+
+## Bounded paged dry-run
+
+For a large SQL table, run an initial page and record its signed
+`relay_policy_event_id`. Pin that ID on every resumed page and retain each
+JSON report as an operator audit artifact:
+
+```sh
+bin/bahia-policy-census --config config.yaml \
+  --relays wss://relay-a.example,wss://relay-b.example \
+  --page-size 100
+# If page.has_more is true, repeat with both:
+# --expected-policy-head <relay_policy_event_id> --after-id <page.next_after_id>.
+```
+
+Each page reads at most `--page-size + 1` ordered SQL identifiers in a
+repeatable-read, read-only transaction, then checks each selected coordinate
+through complete EOSE on every effective relay. A successful page reports
+`page.last_id`, `page.has_more` and an exclusive `page.next_after_id` only when
+another row was visible in that page's SQL snapshot. The same cursor can be
+replayed without a write-side checkpoint. The pinned signed relay-policy head
+is required on resume, checked at the start and across discovery relays before a page is emitted;
+a changed head aborts. A row without a valid relay event, a failed relay, or a
+deadline aborts the entire page with no JSON. Previously completed pages
+remain observations, not a commit log.
+
+Page runs do **not** share one SQL snapshot. A concurrent SQL insert or delete
+can change what a resumed page sees, including adding a UUID behind a prior
+cursor. Fence SQL writers and preserve source-row change evidence independently
+before interpreting a full sequence of pages. Even with that fence, a
+relay-empty coordinate is ambiguous because invalid EVENT frames may be
+filtered before observation. There is no `--publish` or import mode, and no
+page constitutes an admission or cutover receipt. Importing an SQL-only
+policy requires a separately reviewed absence/coordinate-ownership proof and
+a fenced signer/old-writer cutover; this diagnostic intentionally refuses to
+manufacture either.

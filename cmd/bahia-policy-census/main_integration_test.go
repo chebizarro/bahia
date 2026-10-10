@@ -202,3 +202,79 @@ func TestPolicyCensusPostgresRepeatableReadAndReadOnly(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "read-only")
 }
+
+func TestPolicyCensusPagedDryRunResumesWithPinnedHead(t *testing.T) {
+	pool, dsn := censusPostgres(t)
+	key := nostr.Generate()
+	relayURL, relay := censusRelay(t)
+	state := controlplane.RelayPolicyState{Schema: controlplane.RelaySettingsSchema, ContextVMRelays: []string{relayURL}}
+	head := censusSignedPolicy(t, key, state)
+	_, err := relay.AddEvent(t.Context(), head)
+	require.NoError(t, err)
+	configPath := censusConfig(t, dsn, relayURL, key)
+	ids := []uuid.UUID{uuid.MustParse("00000000-0000-0000-0000-000000000001"), uuid.MustParse("00000000-0000-0000-0000-000000000002"), uuid.MustParse("00000000-0000-0000-0000-000000000003")}
+	for _, id := range ids {
+		_, err = pool.Exec(t.Context(), `INSERT INTO deployment_policies (id, name) VALUES ($1, $2)`, id, id.String())
+		require.NoError(t, err)
+		event := nostr.Event{Kind: kinds.CASControlState, CreatedAt: nostr.Timestamp(time.Now().Add(-time.Minute).Unix()),
+			Tags: nostr.Tags{{"d", id.String()}, {"t", kinds.CPStateTopicPolicyRegistry}, {"domain", "policy"}}, Content: `{"deleted":true}`}
+		require.NoError(t, event.Sign(key))
+		_, err = relay.AddEvent(t.Context(), event)
+		require.NoError(t, err)
+	}
+	invoke := func(extra ...string) (int, policyCensusReport, string, string) {
+		t.Helper()
+		var out, errors bytes.Buffer
+		args := []string{"--config", configPath, "--relays", relayURL, "--page-size", "2", "--expected-policy-head", head.ID.Hex(), "--deadline", "15s"}
+		code := run(t.Context(), append(args, extra...), &out, &errors)
+		var report policyCensusReport
+		if code == 0 {
+			require.NoError(t, json.Unmarshal(out.Bytes(), &report))
+		}
+		return code, report, out.String(), errors.String()
+	}
+	var initialOut, initialErrors bytes.Buffer
+	code := run(t.Context(), []string{"--config", configPath, "--relays", relayURL, "--page-size", "2", "--deadline", "15s"}, &initialOut, &initialErrors)
+	require.Zero(t, code, initialErrors.String())
+	var initial policyCensusReport
+	require.NoError(t, json.Unmarshal(initialOut.Bytes(), &initial))
+	require.Equal(t, head.ID.Hex(), initial.PolicyEventID, "first page discovers the signed head to pin on resume")
+	initialOut.Reset()
+	initialErrors.Reset()
+	code = run(t.Context(), []string{"--config", configPath, "--relays", relayURL, "--page-size", "2", "--after-id", ids[1].String()}, &initialOut, &initialErrors)
+	require.Equal(t, 1, code)
+	require.Empty(t, initialOut.String())
+	require.Contains(t, initialErrors.String(), "expected-policy-head")
+	code, first, _, errors := invoke()
+	require.Zero(t, code, errors)
+	require.True(t, first.ReadOnly)
+	require.Equal(t, head.ID.Hex(), first.PolicyEventID)
+	require.Equal(t, []string{ids[0].String(), ids[1].String()}, []string{first.Rows[0].ID, first.Rows[1].ID})
+	require.Equal(t, "relay-present-sql-skipped", first.Rows[0].Status)
+	require.True(t, first.Page.HasMore)
+	require.Equal(t, ids[1].String(), first.Page.NextAfterID)
+	code, again, _, errors := invoke()
+	require.Zero(t, code, errors)
+	require.Equal(t, first, again, "same cursor must be replayable without a write-side checkpoint")
+	code, last, _, errors := invoke("--after-id", first.Page.NextAfterID)
+	require.Zero(t, code, errors)
+	require.Equal(t, ids[2].String(), last.Rows[0].ID)
+	require.Equal(t, ids[1].String(), last.Page.AfterID)
+	require.False(t, last.Page.HasMore)
+	require.Empty(t, last.Page.NextAfterID)
+	code, _, out, errors := invoke("--after-id", "not-a-uuid")
+	require.Equal(t, 1, code)
+	require.Empty(t, out)
+	require.Contains(t, errors, "canonical UUID")
+	var badOut, badErrors bytes.Buffer
+	code = run(t.Context(), []string{"--config", configPath, "--relays", relayURL, "--page-size", "2", "--expected-policy-head", strings.Repeat("a", 64)}, &badOut, &badErrors)
+	require.Equal(t, 1, code)
+	require.Empty(t, badOut.String())
+	require.Contains(t, badErrors.String(), "head changed")
+	_, err = pool.Exec(t.Context(), `INSERT INTO deployment_policies (id, name) VALUES ($1, 'sql-only')`, uuid.MustParse("00000000-0000-0000-0000-000000000004"))
+	require.NoError(t, err)
+	code, _, out, errors = invoke("--after-id", ids[2].String())
+	require.Equal(t, 1, code)
+	require.Empty(t, out, "SQL-only coordinate cannot produce an import permit")
+	require.Contains(t, errors, "absence is unprovable")
+}

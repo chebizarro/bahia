@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -38,7 +39,19 @@ type policyCensusReport struct {
 	PolicyEventID string            `json:"relay_policy_event_id"`
 	Relays        []string          `json:"relays"`
 	Rows          []policyCensusRow `json:"rows"`
+	Page          *policyCensusPage `json:"page,omitempty"`
 }
+
+// A page is a bounded observation, not an import receipt. A continuation
+// starts a new SQL snapshot; operators must independently fence SQL writers.
+type policyCensusPage struct {
+	AfterID     string `json:"after_id,omitempty"`
+	LastID      string `json:"last_id,omitempty"`
+	HasMore     bool   `json:"has_more"`
+	NextAfterID string `json:"next_after_id,omitempty"`
+}
+
+var policyHeadID = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -52,10 +65,22 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	path := flags.String("config", "config.yaml", "Bahia config path")
 	relayList := flags.String("relays", "", "comma-separated expected effective control-plane relays; must match canonical policy")
 	maxRows := flags.Int("max-rows", 1000, "maximum SQL rows; census fails if more exist")
+	pageSize := flags.Int("page-size", 0, "opt-in keyset page size (1..1000); resume requires --expected-policy-head")
+	afterID := flags.String("after-id", "", "exclusive UUID cursor for --page-size")
+	expectedHead := flags.String("expected-policy-head", "", "pinned signed relay-policy event ID for paged dry-run")
 	deadline := flags.Duration("deadline", 5*time.Minute, "global SQL snapshot and relay read deadline (up to 30m)")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *maxRows < 1 || *maxRows > 10000 || *deadline <= 0 || *deadline > 30*time.Minute {
-		fmt.Fprintln(stderr, "usage: bahia-policy-census --config path --relays url,... [--max-rows 1..10000] [--deadline 5m]")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *maxRows < 1 || *maxRows > 10000 || *pageSize < 0 || *pageSize > 1000 || *deadline <= 0 || *deadline > 30*time.Minute ||
+		(*pageSize == 0 && (*afterID != "" || *expectedHead != "")) || (*pageSize > 0 && ((*expectedHead != "" && !policyHeadID.MatchString(*expectedHead)) || (*afterID != "" && *expectedHead == ""))) {
+		fmt.Fprintln(stderr, "usage: bahia-policy-census --config path --relays url,... [--max-rows 1..10000 | --page-size 1..1000 [--expected-policy-head 64-hex-id [--after-id UUID]]] [--deadline 5m]")
 		return 1
+	}
+	var cursor uuid.UUID
+	if *afterID != "" {
+		var err error
+		cursor, err = uuid.Parse(*afterID)
+		if err != nil || cursor.String() != *afterID {
+			return fail(stderr, "after-id must be a canonical UUID")
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, *deadline)
 	defer cancel()
@@ -121,6 +146,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if hasHint && (hint.EventID != initialHead.EventID || hint.PayloadHash != initialHead.PayloadHash) {
 		return fail(stderr, "durable projection hint disagrees with signed canonical relay policy head")
 	}
+	if *expectedHead != "" && initialHead.EventID != *expectedHead {
+		return fail(stderr, "signed canonical relay policy head changed: expected %s, found %s", *expectedHead, initialHead.EventID)
+	}
 	effective, err := controlplane.VerifyPolicyCensusRelays(cfg.Nostr, initialHead, urls)
 	if err != nil {
 		return fail(stderr, "bind audit relays to canonical policy: %v", err)
@@ -149,7 +177,15 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if effectiveHead.EventID != initialHead.EventID {
 		return fail(stderr, "canonical relay policy changed between bootstrap and effective relay sets")
 	}
-	rows, err := tx.Query(ctx, "SELECT id FROM deployment_policies ORDER BY id LIMIT $1", *maxRows+1)
+	limit := *maxRows
+	if *pageSize > 0 {
+		limit = *pageSize
+	}
+	var lowerBound *uuid.UUID
+	if *afterID != "" {
+		lowerBound = &cursor
+	}
+	rows, err := tx.Query(ctx, "SELECT id FROM deployment_policies WHERE ($1::uuid IS NULL OR id > $1) ORDER BY id LIMIT $2", lowerBound, limit+1)
 	if err != nil {
 		return fail(stderr, "read policy ids: %v", err)
 	}
@@ -167,10 +203,26 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, "read policy ids: %v", err)
 	}
-	if len(ids) > *maxRows {
+	if *pageSize == 0 && len(ids) > *maxRows {
 		return fail(stderr, "SQL policy census exceeds max-rows %d; no partial report", *maxRows)
 	}
+	hasMore := *pageSize > 0 && len(ids) > *pageSize
+	if hasMore {
+		ids = ids[:*pageSize]
+	}
 	report := policyCensusReport{ReadOnly: true, RelaySetType: "signed-canonical-policy-verified", PolicyEventID: initialHead.EventID, Relays: effective, Rows: make([]policyCensusRow, 0, len(ids))}
+	if *pageSize > 0 {
+		report.Page = &policyCensusPage{HasMore: hasMore}
+		if *afterID != "" {
+			report.Page.AfterID = *afterID
+		}
+		if len(ids) > 0 {
+			report.Page.LastID = ids[len(ids)-1].String()
+			if hasMore {
+				report.Page.NextAfterID = report.Page.LastID
+			}
+		}
+	}
 	for _, id := range ids {
 		result, err := nostradapter.CensusPolicyCoordinate(ctx, pool, secret.Public(), id)
 		if err != nil {
