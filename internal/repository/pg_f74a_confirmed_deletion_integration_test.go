@@ -138,9 +138,11 @@ func f74aProofForDB(t *testing.T, ctx context.Context, pool *pgxpool.Pool, cutof
 	t.Helper()
 	identity, err := ReadF74aDatabaseIdentity(ctx, pool)
 	require.NoError(t, err)
+	inventory, err := PreflightF74aRestore(ctx, pool, cutoff)
+	require.NoError(t, err)
 	return &f74aTestBatchProof{proof: F74aReceiptVerification{
 		ReceiptID: uuid.New(), ReceiptSHA256: strings.Repeat("3", 64), SourceDatabase: identity, Cutoff: cutoff,
-		InventorySHA256: strings.Repeat("1", 64), BackupObjectSHA256: strings.Repeat("2", 64),
+		InventorySHA256: inventory.InventorySHA256, BackupObjectSHA256: strings.Repeat("2", 64),
 		ExpiresAt: time.Now().UTC().Add(time.Hour),
 	}}
 }
@@ -180,10 +182,11 @@ func TestF74aConfirmedDeletionPG16FreshProofGuardsAndRestart(t *testing.T) {
 	_, err = repo.nextBatch(ctx, run.ID, proof)
 	require.ErrorContains(t, err, "independent live backup proof changed")
 	proof.proof.ReceiptSHA256 = strings.Repeat("3", 64)
+	originalInventory := proof.proof.InventorySHA256
 	proof.proof.InventorySHA256 = strings.Repeat("5", 64)
 	_, err = repo.nextBatch(ctx, run.ID, proof)
 	require.ErrorContains(t, err, "independent live backup proof changed")
-	proof.proof.InventorySHA256 = strings.Repeat("1", 64)
+	proof.proof.InventorySHA256 = originalInventory
 	proof.proof.ExpiresAt = time.Now().UTC().Add(-time.Second)
 	_, err = repo.nextBatch(ctx, run.ID, proof)
 	require.ErrorContains(t, err, "independent live backup proof changed")
@@ -264,6 +267,50 @@ func TestF74aConfirmedDeletionPG16RollbackAndRetry(t *testing.T) {
 	finished, err := repo.nextBatch(ctx, run.ID, proof)
 	require.NoError(t, err)
 	require.True(t, finished.Complete)
+}
+
+// A DELETE trigger can mutate unrelated inventory in the very transaction
+// being admitted. A separate-connection receipt check cannot observe it yet.
+func TestF74aConfirmedDeletionPG16SameTransactionInventoryGuard(t *testing.T) {
+	pool, ctx := disposableF74aDeletionDB(t)
+	ids, cutoff := f74aDeletionCandidates(t, ctx, pool, 3)
+	proof := f74aProofForDB(t, ctx, pool, cutoff)
+	repo := newPgF74aConfirmedDeletionRepository(pool)
+	run, err := repo.startRun(ctx, proof, 1)
+	require.NoError(t, err)
+	injectedID := uuid.New()
+	_, err = pool.Exec(ctx, fmt.Sprintf(`CREATE FUNCTION f74a_test_inject_unrelated() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN
+			INSERT INTO runtime_observations(id,service_id,environment_id,observed_image_digest,
+				observed_image_repo,observed_container_id,observed_host,observed_version,
+				health_status,source,metadata,observed_at)
+			VALUES ('%s'::uuid,OLD.service_id,OLD.environment_id,'sha256:unrelated',
+				'registry.example/test','container','host','v1','healthy','runtime','{}'::jsonb,
+				OLD.observed_at + interval '10 hours');
+			RETURN OLD;
+		END $body$`, injectedID))
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `CREATE TRIGGER f74a_test_inject_unrelated AFTER DELETE ON runtime_observations
+		FOR EACH ROW EXECUTE FUNCTION f74a_test_inject_unrelated()`)
+	require.NoError(t, err)
+	_, err = repo.nextBatch(ctx, run.ID, proof)
+	require.ErrorContains(t, err, "signed source inventory changed during deletion batch")
+	var hot, injected, items, batches, examined int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, ids[1]).Scan(&hot))
+	require.Equal(t, 1, hot, "deleted hot row must roll back")
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM runtime_observations WHERE id=$1`, injectedID).Scan(&injected))
+	require.Zero(t, injected, "trigger insertion must roll back")
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM f74a_confirmed_deletion_items WHERE run_id=$1`, run.ID).Scan(&items))
+	require.Zero(t, items)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM f74a_confirmed_deletion_batches WHERE run_id=$1`, run.ID).Scan(&batches))
+	require.Zero(t, batches)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT examined_count FROM f74a_confirmed_deletion_runs WHERE id=$1`, run.ID).Scan(&examined))
+	require.Zero(t, examined)
+	_, err = pool.Exec(ctx, `DROP TRIGGER f74a_test_inject_unrelated ON runtime_observations`)
+	require.NoError(t, err)
+	batch, err := repo.nextBatch(ctx, run.ID, proof)
+	require.NoError(t, err)
+	require.Equal(t, 1, batch.Deleted)
 }
 
 func TestF74aConfirmedDeletionPG16RejectsCorruptArchive(t *testing.T) {

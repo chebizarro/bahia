@@ -56,15 +56,30 @@ func preflightF74aRestoreForRun(ctx context.Context, pool *pgxpool.Pool, cutoff 
 
 func preflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.Time, runID *uuid.UUID) (F74aRestorePreflight, error) {
 	var out F74aRestorePreflight
-	if cutoff.IsZero() || !cutoff.Before(time.Now().UTC()) {
-		return out, fmt.Errorf("F74a restore preflight requires a past cutoff")
-	}
-	out.Cutoff = cutoff.UTC()
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return out, err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
+	out, err = preflightF74aRestoreTx(ctx, tx, cutoff, runID)
+	if err != nil {
+		return out, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// preflightF74aRestoreTx reconciles against the caller's transaction snapshot.
+// Batch deletion must call it after journaling but before commit so trigger
+// side effects and other writes in the same transaction cannot evade the pin.
+func preflightF74aRestoreTx(ctx context.Context, tx pgx.Tx, cutoff time.Time, runID *uuid.UUID) (F74aRestorePreflight, error) {
+	var out F74aRestorePreflight
+	if cutoff.IsZero() || !cutoff.Before(time.Now().UTC()) {
+		return out, fmt.Errorf("F74a restore preflight requires a past cutoff")
+	}
+	out.Cutoff = cutoff.UTC()
 	// PostgreSQL renders timestamptz values in JSON using the session zone.
 	// Pin it for deterministic archive journal hashes across connections.
 	if _, err := tx.Exec(ctx, `SET LOCAL TIME ZONE 'UTC'`); err != nil {
@@ -251,9 +266,6 @@ func preflightF74aRestore(ctx context.Context, pool *pgxpool.Pool, cutoff time.T
 	out.HotCandidates = hotCandidates + missingHotItems
 	writeF74aPreflightField(h, []byte(fmt.Sprintf("%d", out.HotCandidates)))
 	out.InventorySHA256 = hex.EncodeToString(h.Sum(nil))
-	if err := tx.Commit(ctx); err != nil {
-		return out, err
-	}
 	return out, nil
 }
 

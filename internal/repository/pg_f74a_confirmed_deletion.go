@@ -169,6 +169,13 @@ func (r *pgF74aConfirmedDeletionRepository) nextBatch(ctx context.Context, runID
 		if err != nil {
 			return batch, err
 		}
+		if err := reconcileF74aDeletionBatch(ctx, tx, run, runID); err != nil {
+			return f74aConfirmedDeletionBatch{}, err
+		}
+		finalProof, err := proof.proveCurrentF74aBackup(ctx)
+		if err != nil || !matchesF74aDeletionRun(finalProof, run) {
+			return f74aConfirmedDeletionBatch{}, fmt.Errorf("F74a independent live backup proof changed before commit")
+		}
 		return batch, tx.Commit(ctx)
 	}
 	batch.ID = uuid.New()
@@ -259,6 +266,12 @@ func (r *pgF74aConfirmedDeletionRepository) nextBatch(ctx context.Context, runID
 	if err != nil {
 		return batch, fmt.Errorf("updating F74a confirmed deletion cursor: %w", err)
 	}
+	// The independent authority queries committed state on another connection.
+	// Reconcile inside this transaction as well: only this read can observe the
+	// just-journaled deletes and any same-transaction trigger side effects.
+	if err := reconcileF74aDeletionBatch(ctx, tx, run, runID); err != nil {
+		return f74aConfirmedDeletionBatch{}, err
+	}
 	// A proof that was live at transaction start is not enough if it expires
 	// or is revoked while rows are being examined. A failed final check rolls
 	// back deletions and progress together. The eventual authority still needs
@@ -271,4 +284,14 @@ func (r *pgF74aConfirmedDeletionRepository) nextBatch(ctx context.Context, runID
 		return batch, fmt.Errorf("committing F74a confirmed deletion batch: %w", err)
 	}
 	return batch, nil
+}
+
+// reconcileF74aDeletionBatch compares the pinned signed inventory against
+// this exact transaction's post-mutation view, including trigger side effects.
+func reconcileF74aDeletionBatch(ctx context.Context, tx pgx.Tx, run f74aConfirmedDeletionRun, runID uuid.UUID) error {
+	reconciled, err := preflightF74aRestoreTx(ctx, tx, run.Cutoff, &runID)
+	if err != nil || reconciled.InventorySHA256 != run.InventorySHA256 {
+		return fmt.Errorf("F74a signed source inventory changed during deletion batch")
+	}
+	return nil
 }
