@@ -18,8 +18,10 @@ identity or copy an existing service nsec into this fixture.
    provisioning and single-active-store rules.
 2. Through Signet's authenticated, encrypted provisioner management path,
    adopt a newly generated disposable service key. Confirm the returned
-   pubkey equals the test's `expected_service_pubkey`. Never paste, log, or
-   commit the service secret. Pair a **different**, dedicated NIP-46 owner
+   service pubkey equals the test's `expected_service_pubkey`. Separately pin
+   the Signet NIP-46 bunker pubkey as `expected_bunker_pubkey`; it is **not**
+   the adopted service pubkey. Never paste, log, or commit the service secret.
+   Pair a **different**, dedicated NIP-46 owner
    client with that agent. The owner must not be a Signet provisioner.
 3. Set the agent policy to permit the four `nip44_*` methods and explicitly
    list `sign_bahia_sbom_dsse` in `allow_methods`; `*` alone does not opt in
@@ -29,7 +31,7 @@ identity or copy an existing service nsec into this fixture.
    response. No other writer should touch this disposable identity while the
    test runs.
 4. Put the following JSON in a **non-repository** file with mode `0600`.
-   The bunker URI must pin the expected service pubkey and have exactly one
+   The bunker URI host must match `expected_bunker_pubkey` and have exactly one
    `ws://` or `wss://` relay at a loopback IP literal,
    with an explicit port. DNS names, non-loopback addresses and additional
    relay endpoints are rejected before any connection. Its owner key and
@@ -40,9 +42,10 @@ identity or copy an existing service nsec into this fixture.
 {
   "disposable": true,
   "signet_commit": "21eef0c050e426b158488214ed23f4e93bbd7169",
-  "bunker_uri": "bunker://<disposable-service-pubkey>?relay=ws%3A%2F%2F127.0.0.1%3A<private-port>",
+  "bunker_uri": "bunker://<disposable-Signet-bunker-pubkey>?relay=ws%3A%2F%2F127.0.0.1%3A<private-port>",
   "owner_secret_key_hex": "<dedicated-disposable-NIP46-owner-hex>",
-  "expected_service_pubkey": "<same-disposable-service-pubkey-hex>",
+  "expected_bunker_pubkey": "<disposable-Signet-bunker-pubkey-hex>",
+  "expected_service_pubkey": "<distinct-adopted-service-pubkey-hex>",
   "epoch": 2,
   "expires_at": "<writer-lease-expiration-RFC3339Nano>"
 }

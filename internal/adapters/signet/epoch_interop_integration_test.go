@@ -30,6 +30,7 @@ type epochInteropFixture struct {
 	SignetCommit          string `json:"signet_commit"`
 	BunkerURI             string `json:"bunker_uri"`
 	OwnerSecretKeyHex     string `json:"owner_secret_key_hex"`
+	ExpectedBunkerPubkey  string `json:"expected_bunker_pubkey"`
 	ExpectedServicePubkey string `json:"expected_service_pubkey"`
 	Epoch                 uint64 `json:"epoch"`
 	ExpiresAt             string `json:"expires_at"`
@@ -54,8 +55,11 @@ func loadEpochInteropFixture(t *testing.T) (epochInteropFixture, time.Time) {
 	require.Equal(t, expectedInteropSignetCommit, fixture.SignetCommit)
 	require.NotEmpty(t, fixture.BunkerURI)
 	require.NotEmpty(t, fixture.OwnerSecretKeyHex)
+	require.NotEmpty(t, fixture.ExpectedBunkerPubkey)
 	require.NotEmpty(t, fixture.ExpectedServicePubkey)
-	require.NoError(t, validateInteropBunkerURI(fixture.BunkerURI, fixture.ExpectedServicePubkey))
+	require.NotEqual(t, strings.ToLower(fixture.ExpectedServicePubkey), strings.ToLower(fixture.ExpectedBunkerPubkey),
+		"Signet bunker and service identities must be distinct")
+	require.NoError(t, validateInteropBunkerURI(fixture.BunkerURI, fixture.ExpectedBunkerPubkey))
 	require.Greater(t, fixture.Epoch, uint64(1), "acquire twice so stale-epoch proof uses a positive epoch")
 	expiresAt, err := time.Parse(time.RFC3339Nano, fixture.ExpiresAt)
 	require.NoError(t, err)
@@ -63,14 +67,14 @@ func loadEpochInteropFixture(t *testing.T) (epochInteropFixture, time.Time) {
 	return fixture, expiresAt
 }
 
-func validateInteropBunkerURI(rawURI, expectedPubkey string) error {
-	invalid := errors.New("interop bunker URI must pin the expected service pubkey and use one loopback IP relay")
+func validateInteropBunkerURI(rawURI, expectedBunkerPubkey string) error {
+	invalid := errors.New("interop bunker URI must pin the expected bunker pubkey and use one loopback IP relay")
 	if len(rawURI) == 0 || len(rawURI) > 2048 {
 		return invalid
 	}
 	u, err := url.Parse(rawURI)
 	if err != nil || u.Scheme != "bunker" || u.User != nil || u.Fragment != "" || u.Path != "" || u.Port() != "" ||
-		!strings.EqualFold(u.Hostname(), expectedPubkey) || len(u.Hostname()) != 64 {
+		!strings.EqualFold(u.Hostname(), expectedBunkerPubkey) || len(u.Hostname()) != 64 {
 		return invalid
 	}
 	if _, err := nostr.PubKeyFromHex(u.Hostname()); err != nil {
@@ -185,24 +189,28 @@ func TestLiveSignetEpochNIP44AndSBOMDSSE(t *testing.T) {
 }
 
 func TestInteropBunkerURIValidation(t *testing.T) {
-	pubkey := nostr.Generate().Public().Hex()
+	bunkerPubkey := nostr.Generate().Public().Hex()
+	servicePubkey := nostr.Generate().Public().Hex()
+	secret := "private-pairing-secret-not-for-output"
 	for name, uri := range map[string]string{
-		"valid ipv4": "bunker://" + pubkey + "?relay=ws%3A%2F%2F127.0.0.1%3A7777",
-		"valid ipv6": "bunker://" + pubkey + "?relay=ws%3A%2F%2F%5B%3A%3A1%5D%3A7777",
+		"valid ipv4": "bunker://" + bunkerPubkey + "?relay=ws%3A%2F%2F127.0.0.1%3A7777",
+		"valid ipv6": "bunker://" + bunkerPubkey + "?relay=ws%3A%2F%2F%5B%3A%3A1%5D%3A7777",
 	} {
-		t.Run(name, func(t *testing.T) { require.NoError(t, validateInteropBunkerURI(uri, pubkey)) })
+		t.Run(name, func(t *testing.T) { require.NoError(t, validateInteropBunkerURI(uri, bunkerPubkey)) })
 	}
 	for name, uri := range map[string]string{
-		"remote relay":     "bunker://" + pubkey + "?relay=wss%3A%2F%2Frelay.example%3A443",
-		"lookalike host":   "bunker://" + pubkey + "?relay=ws%3A%2F%2F127.0.0.1.evil%3A7777",
-		"wrong bunker":     "bunker://" + nostr.Generate().Public().Hex() + "?relay=ws%3A%2F%2F127.0.0.1%3A7777",
-		"extra relay":      "bunker://" + pubkey + "?relay=ws%3A%2F%2F127.0.0.1%3A7777&relay=wss%3A%2F%2Frelay.example%3A443",
-		"malformed secret": "bunker://" + pubkey + "?secret=%zz&relay=ws%3A%2F%2F127.0.0.1%3A7777",
+		"remote relay":      "bunker://" + bunkerPubkey + "?relay=wss%3A%2F%2Frelay.example%3A443",
+		"lookalike host":    "bunker://" + bunkerPubkey + "?relay=ws%3A%2F%2F127.0.0.1.evil%3A7777",
+		"service as bunker": "bunker://" + servicePubkey + "?relay=ws%3A%2F%2F127.0.0.1%3A7777",
+		"extra relay":       "bunker://" + bunkerPubkey + "?relay=ws%3A%2F%2F127.0.0.1%3A7777&relay=wss%3A%2F%2Frelay.example%3A443",
+		"secret in error":   "bunker://" + servicePubkey + "?secret=" + secret + "&relay=ws%3A%2F%2F127.0.0.1%3A7777",
+		"malformed secret":  "bunker://" + bunkerPubkey + "?secret=%zz&relay=ws%3A%2F%2F127.0.0.1%3A7777",
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := validateInteropBunkerURI(uri, pubkey)
+			err := validateInteropBunkerURI(uri, bunkerPubkey)
 			require.Error(t, err)
 			require.NotContains(t, err.Error(), uri)
+			require.NotContains(t, err.Error(), secret)
 		})
 	}
 }
