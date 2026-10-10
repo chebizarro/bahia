@@ -34,6 +34,17 @@ must not change that pubkey. A signing refusal fails the operation rather than
 falling back to a second signing key. The local configuration still loads the
 service private key; remote signing is not enabled.
 
+The Signet client's optional epoch signing mode requires a separately supplied
+existing service pubkey, a dedicated persistent NIP-46 client identity distinct
+from the service key, and a current writer lease snapshot. When configured,
+`Client.Sign` uses this mode and never falls back to its legacy signing path. It sends `sign_event` with the unsigned event JSON and decimal
+writer epoch, then checks the returned author, unchanged event fields, NIP-01
+id and signature before accepting it. It rejects missing, expired, wrong-owner
+or regressed local epochs and connection changes. The local lease snapshot is
+only an attempt gate: Signet must verify the authenticated client and current
+writer epoch atomically for every signature. Lease acquisition and renewal do
+not run in the daemon, and the adapter is not selected by application startup.
+
 Event signing is separate from operations requiring raw key material. DM
 NIP-44 conversation-key derivation, legacy secret encryption and derivation,
 confidential-state key derivation, and SBOM DSSE digest signatures still use

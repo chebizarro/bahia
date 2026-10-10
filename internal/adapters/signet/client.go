@@ -84,9 +84,11 @@ type Client struct {
 	managementRelays  []string
 	closedRetryBudget int
 	logger            *slog.Logger
-	clientSecretKey   string // Ephemeral key for NIP-46 session
-	requireReal       bool   // Fail closed unless a real Signet bunker is configured and reachable
-	allowMock         bool   // Explicit test/dev-only mock signing mode
+	clientSecretKey   string // NIP-46 session key
+	clientKeyExplicit bool   // Config supplied a dedicated, persistent client identity
+	epochSigner       *EpochSigner
+	requireReal       bool // Fail closed unless a real Signet bunker is configured and reachable
+	allowMock         bool // Explicit test/dev-only mock signing mode
 	connectTimeout    time.Duration
 
 	connectMu            sync.Mutex
@@ -128,6 +130,10 @@ type Config struct {
 	// requests and management gift wraps. Nil uses the process-wide
 	// controller; there is no unlimited mode.
 	OutboundAdmission *nostrout.Admission
+	// EpochLease and ExpectedServicePubkey must be supplied together for the
+	// fenced service-key signing path. Bahia app startup does not set them.
+	EpochLease            WriterLeaseSource
+	ExpectedServicePubkey string
 }
 
 // NewClient creates a new Signet client.
@@ -151,6 +157,7 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 		closedRetryBudget: config.ClosedRetryBudget,
 		logger:            logger.With("component", "signet"),
 		clientSecretKey:   clientSK,
+		clientKeyExplicit: config.ClientSecretKey != "",
 		requireReal:       config.RequireReal,
 		allowMock:         config.AllowMock,
 		connectTimeout:    config.ConnectTimeout,
@@ -158,6 +165,13 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 		stateChanged:      make(chan struct{}),
 	}
 
+	if config.EpochLease != nil || config.ExpectedServicePubkey != "" {
+		signer, err := NewEpochSigner(c, config.ExpectedServicePubkey, config.EpochLease)
+		if err != nil {
+			return nil, fmt.Errorf("configure Signet epoch signer: %w", err)
+		}
+		c.epochSigner = signer
+	}
 	return c, nil
 }
 
@@ -462,6 +476,9 @@ func (c *Client) provisionAgentMock(agentID string) (pubkey, npub, bunkerURI str
 
 // Sign signs an event using the Signet bunker's key.
 func (c *Client) Sign(ctx context.Context, event *nostr.Event) error {
+	if c.epochSigner != nil {
+		return c.epochSigner.SignEvent(ctx, event)
+	}
 	c.mu.Lock()
 	connected := c.connected
 	mockMode := c.allowMock && c.bunkerURI == ""
