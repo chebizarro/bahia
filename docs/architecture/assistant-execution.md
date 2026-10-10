@@ -149,6 +149,14 @@ committed file. Missing, corrupt, loose-permission or wrong-generation files fai
 closed. A caller must retain the
 v2 generation pin independently to detect rollback to a different valid file.
 The manifest opener is **read-only**: `ActiveTranscriptKey` rejects new writes.
-The daemon still uses its v1 provider; durable storage alone is not authority
-to enable v2 publication. Writer activation requires an independently pinned
-generation and complete transcript/checkpoint read-write restart tests.
+Assistant startup defaults to the deployed v1 provider. Explicit
+`assistant.wrapped_keys.mode=wrapped_read_only` instead requires a local
+manifest path, independently pinned v2 generation, real Signet bunker URI,
+dedicated NIP-46 owner key and current writer lease. Startup validates the
+manifest, connects to Signet, unwraps both keys under the existing service
+pubkey, then closes the bootstrap connection. It never falls back to the raw
+key provider in this mode. Transcript and checkpoint reads are available,
+but assistant work that needs a new encrypted event fails closed; this mode
+is not a fully functional assistant or service-key cutover. Writer activation
+requires a create-once provisioned generation and complete transcript and
+checkpoint read-write restart tests.

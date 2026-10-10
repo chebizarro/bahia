@@ -2382,7 +2382,7 @@ func New(cfg *config.Config) (*App, error) {
 				servicePubkey = secret.Public().Hex()
 			}
 		}
-		transcriptKeys, err := assistantTranscriptKeyProvider(cfg)
+		transcriptKeys, err := assistantTranscriptKeyProviderForStartup(ctx, cfg, servicePubkey, controlPlaneRelays)
 		if err != nil {
 			return nil, err
 		}
