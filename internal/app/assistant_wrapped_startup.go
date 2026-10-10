@@ -18,6 +18,12 @@ import (
 // historical key source. Wrapped mode is read-only: it cannot append a new
 // transcript or checkpoint even if other assistant runtime components run.
 func assistantTranscriptKeyProviderForStartup(ctx context.Context, cfg *config.Config, servicePubkey string, relays []string) (service.AssistantTranscriptKeyProvider, error) {
+	return assistantTranscriptKeyProviderForStartupWithClient(ctx, cfg, servicePubkey, relays, func(options signet.Config) (*signet.Client, error) {
+		return signet.NewClient(options, slog.Default())
+	})
+}
+
+func assistantTranscriptKeyProviderForStartupWithClient(ctx context.Context, cfg *config.Config, servicePubkey string, relays []string, newClient func(signet.Config) (*signet.Client, error)) (service.AssistantTranscriptKeyProvider, error) {
 	if cfg == nil || cfg.Assistant.WrappedKeys.Mode == "" || cfg.Assistant.WrappedKeys.Mode == "legacy_v1" {
 		return assistantTranscriptKeyProvider(cfg)
 	}
@@ -49,7 +55,7 @@ func assistantTranscriptKeyProviderForStartup(ctx context.Context, cfg *config.C
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	client, err := signet.NewClient(signet.Config{BunkerURI: selected.SignetBunkerURI, Relays: relays, ClientSecretKey: strings.TrimSpace(selected.OwnerClientSecretKey), RequireReal: true, AllowMock: false, ConnectTimeout: timeout, ClosedRetryBudget: cfg.Nostr.ClosedRetryBudget, EpochLease: leaseSource, ExpectedServicePubkey: pubkey.Hex()}, slog.Default())
+	client, err := newClient(signet.Config{BunkerURI: selected.SignetBunkerURI, Relays: relays, ClientSecretKey: strings.TrimSpace(selected.OwnerClientSecretKey), RequireReal: true, AllowMock: false, ConnectTimeout: timeout, ClosedRetryBudget: cfg.Nostr.ClosedRetryBudget, EpochLease: leaseSource, ExpectedServicePubkey: pubkey.Hex()})
 	if err != nil {
 		return nil, fmt.Errorf("initialize fenced assistant Signet reader: %w", err)
 	}
