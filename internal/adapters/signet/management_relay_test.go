@@ -29,12 +29,11 @@ var (
 // fakeSignet is an in-process Signet: a NIP-46 bunker and its gift-wrapped
 // ContextVM management plane, both served over a RelayPool.
 type fakeSignet struct {
-	key        nostr.SecretKey
-	signer     nip46.StaticKeySigner
-	pool       *nostrpool.RelayPool
-	mu         sync.Mutex
-	methods    []string
-	signEvents int
+	key     nostr.SecretKey
+	signer  nip46.StaticKeySigner
+	pool    *nostrpool.RelayPool
+	mu      sync.Mutex
+	methods []string
 }
 
 func startFakeSignet(t *testing.T, ctx context.Context, relayURL string) *fakeSignet {
@@ -62,13 +61,7 @@ func startFakeSignet(t *testing.T, ctx context.Context, relayURL string) *fakeSi
 			var err error
 			switch ev.Kind {
 			case nostr.KindNostrConnect:
-				var request nip46.Request
-				request, _, reply, err = s.signer.HandleRequest(ctx, *ev)
-				if request.Method == "sign_event" {
-					s.mu.Lock()
-					s.signEvents++
-					s.mu.Unlock()
-				}
+				_, _, reply, err = s.signer.HandleRequest(ctx, *ev)
 			case signetKindGiftWrap:
 				reply, err = s.answerManagement(*ev)
 			default:
@@ -84,12 +77,6 @@ func startFakeSignet(t *testing.T, ctx context.Context, relayURL string) *fakeSi
 
 func (s *fakeSignet) bunkerURI(relayURL string) string {
 	return "bunker://" + s.key.Public().Hex() + "?relay=" + url.QueryEscape(relayURL)
-}
-
-func (s *fakeSignet) seenSignEvents() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.signEvents
 }
 
 func (s *fakeSignet) seenMethods() []string {
@@ -233,91 +220,6 @@ func TestSignetManagementRunsOnRelayPoolWithRecipientAuth(t *testing.T) {
 		if reader != provisioner {
 			t.Fatalf("gift wraps read as %s, want the provisioner %s", reader, provisioner)
 		}
-	}
-}
-
-// An assigned writer client is not a Signet provisioner. It has only its NIP-46
-// signing connection; a separate provisioner client owns management and its
-// AUTH-gated reply subscription.
-func TestSignetFencedWriterCannotManageAndProvisionerClientStillCan(t *testing.T) {
-	relay := khatru.NewRelay()
-	store := &slicestore.SliceStore{}
-	if err := store.Init(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(store.Close)
-	relay.UseEventstore(store, 500)
-	var authMu sync.Mutex
-	var giftReaders []string
-	relay.OnRequest = func(ctx context.Context, filter nostr.Filter) (bool, string) {
-		if !slices.Contains(filter.Kinds, signetKindGiftWrap) {
-			return false, ""
-		}
-		authed, ok := khatru.GetAuthed(ctx)
-		if !ok || !slices.Equal(filter.Tags["p"], []string{authed.Hex()}) {
-			return true, "auth-required: gift wraps are served to their recipient"
-		}
-		authMu.Lock()
-		giftReaders = append(giftReaders, authed.Hex())
-		authMu.Unlock()
-		return false, ""
-	}
-	server := httptest.NewServer(relay)
-	t.Cleanup(server.Close)
-	relayURL := "ws" + strings.TrimPrefix(server.URL, "http")
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
-	defer cancel()
-	signet := startFakeSignet(t, ctx, relayURL)
-	provisionerSignet := startFakeSignet(t, ctx, relayURL)
-	if signet.key.Public() == provisionerSignet.key.Public() {
-		t.Fatal("service and provisioner identities must differ")
-	}
-	owner := nostr.Generate()
-	ownerClient, err := NewClient(Config{
-		BunkerURI: signet.bunkerURI(relayURL), ClientSecretKey: owner.Hex(), RequireReal: true,
-		OutboundAdmission: generousTestAdmission(), ExpectedServicePubkey: signet.key.Public().Hex(),
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = ownerClient.Close() })
-	if err := ownerClient.Connect(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if ownerClient.management != nil || ownerClient.newManagementPool(nil) != nil {
-		t.Fatal("fenced writer client opened provisioner management pool")
-	}
-	if err := ownerClient.RevokeAgent(ctx, nostr.Generate().Public().Hex()); !errors.Is(err, ErrFencedManagementRequiresProvisioner) {
-		t.Fatalf("owner management error = %v, want provisioner requirement", err)
-	}
-	if len(signet.seenMethods()) != 0 {
-		t.Fatalf("owner reached management: %v", signet.seenMethods())
-	}
-	if got := signet.seenSignEvents(); got != 0 {
-		t.Fatalf("owner sent %d unexpected sign_event requests", got)
-	}
-
-	provisioner, err := NewClient(Config{BunkerURI: provisionerSignet.bunkerURI(relayURL), ClientSecretKey: nostr.Generate().Hex(), RequireReal: true, OutboundAdmission: generousTestAdmission()}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = provisioner.Close() })
-	if err := provisioner.Connect(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := provisioner.RevokeAgent(ctx, nostr.Generate().Public().Hex()); err != nil {
-		t.Fatal(err)
-	}
-	if got := provisionerSignet.seenMethods(); len(got) != 1 || got[0] != "agent/revoke" {
-		t.Fatalf("provisioner management methods = %v", got)
-	}
-	authMu.Lock()
-	defer authMu.Unlock()
-	if !slices.Contains(giftReaders, provisionerSignet.key.Public().Hex()) {
-		t.Fatalf("management readers = %v, want provisioner", giftReaders)
-	}
-	if slices.Contains(giftReaders, owner.Public().Hex()) {
-		t.Fatalf("owner authenticated to management: %v", giftReaders)
 	}
 }
 

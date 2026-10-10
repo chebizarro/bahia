@@ -577,6 +577,22 @@ func (n NostrConfig) MarshalYAML() (any, error) {
 	return marshalRedactedYAML(n)
 }
 
+func (s NostrSignerConfig) String() string {
+	return stringRedactedConfig(s)
+}
+
+func (s NostrSignerConfig) Format(state fmt.State, verb rune) {
+	formatRedactedConfig(state, verb, s)
+}
+
+func (s NostrSignerConfig) MarshalJSON() ([]byte, error) {
+	return marshalRedactedJSON(s)
+}
+
+func (s NostrSignerConfig) MarshalYAML() (any, error) {
+	return marshalRedactedYAML(s)
+}
+
 func (r RelaySidecarConfig) String() string {
 	return stringRedactedConfig(r)
 }

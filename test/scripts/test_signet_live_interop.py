@@ -43,20 +43,21 @@ class SignetLiveInteropRunnerTests(unittest.TestCase):
 
     def test_failure_does_not_echo_private_output(self):
         secret_uri = "bunker://" + "b" * 64 + "?relay=ws%3A%2F%2F127.0.0.1%3A7777&secret=private-pairing-secret"
-        failed = subprocess.CompletedProcess(["go"], 1, f"{secret_uri}\n    interop_integration_test.go:123: boom\n", secret_uri)
+        failed = subprocess.CompletedProcess(["go"], 1, f"{secret_uri}\n    {runner.SIGNER_SOURCE}:123: boom\n", secret_uri)
         with mock.patch.object(runner.subprocess, "run", return_value=failed):
             with self.assertRaises(RuntimeError) as raised:
-                runner.run_go_test(Path("/bahia"), {}, runner.ADAPTER_PACKAGE, TEST, "interop_integration_test.go")
+                runner.run_go_test(Path("/bahia"), {}, runner.SIGNER_PACKAGE, TEST, runner.SIGNER_SOURCE)
         message = str(raised.exception)
-        self.assertIn("interop_integration_test.go:123", message)
+        self.assertIn(f"{runner.SIGNER_SOURCE}:123", message)
         self.assertNotIn("private-pairing-secret", message)
         self.assertNotIn(secret_uri, message)
 
     def test_go_test_targets_one_named_test_with_json(self):
         passed = subprocess.CompletedProcess(["go"], 0, events("run", "pass"), "")
         with mock.patch.object(runner.subprocess, "run", return_value=passed) as call:
-            runner.run_go_test(Path("/bahia"), {}, runner.ADAPTER_PACKAGE, TEST, "interop_integration_test.go")
+            runner.run_go_test(Path("/bahia"), {}, runner.SIGNER_PACKAGE, TEST, runner.SIGNER_SOURCE)
         argv = call.call_args.args[0]
+        self.assertIn(runner.SIGNER_PACKAGE, argv)
         self.assertEqual(argv[:4], ["go", "test", "-tags", "signetinterop"])
         self.assertIn(f"^{TEST}$", argv)
         self.assertIn("-json", argv)
@@ -105,7 +106,8 @@ class SignetLiveInteropRunnerTests(unittest.TestCase):
         self.assertNotIn("sign_bahia_sbom_dsse", source)
         methods = {method.strip() for method in runner.ALLOWED_METHODS.split(",")}
         self.assertEqual(methods, {"connect", "get_public_key", "sign_event", "nip44_encrypt",
-                                   "nip44_decrypt", "nip44_encrypt_b64"})
+                                   "nip44_decrypt", "nip44_encrypt_b64", "nip44_decrypt_b64"})
+        self.assertEqual(runner.SIGNER_PACKAGE, "./internal/servicesigner")
 
     def test_management_reply_parsing(self):
         reply = {"jsonrpc": "2.0", "result": {"result": {"agent_id": "bahia-interop"}}}

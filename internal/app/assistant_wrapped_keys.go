@@ -13,15 +13,14 @@ import (
 	"fiatjaf.com/nostr"
 	"golang.org/x/crypto/chacha20poly1305"
 
-	"github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
 const assistantWrappedKeySchema = "bahia.assistant.wrapped-keys.v1"
 
-// assistantKeyWrapper keeps the crypto transport replaceable only inside this
-// package's tests. Exported entry points require the fenced Signet signer.
+// assistantKeyWrapper is the part of the service identity's nostr.Keyer that
+// wraps and unwraps assistant data keys under the service pubkey.
 type assistantKeyWrapper interface {
 	GetPublicKey(context.Context) (nostr.PubKey, error)
 	Encrypt(context.Context, string, nostr.PubKey) (string, error)
@@ -54,13 +53,9 @@ type assistantWrappedKeyPlaintext struct {
 	Key           string `json:"key"`
 }
 
-// CreateAssistantWrappedKeyManifest wraps a fresh random v2 key and the exact
+// createAssistantWrappedKeyManifest wraps a fresh random v2 key and the exact
 // deployed v1 key derived from the matching service configuration. It does not
 // persist the manifest or enable its key for new event writes.
-func CreateAssistantWrappedKeyManifest(ctx context.Context, wrapper *signet.ServiceSigner, servicePubkey nostr.PubKey, cfg *config.Config) (AssistantWrappedKeyManifest, error) {
-	return createAssistantWrappedKeyManifest(ctx, wrapper, servicePubkey, cfg)
-}
-
 func createAssistantWrappedKeyManifest(ctx context.Context, wrapper assistantKeyWrapper, servicePubkey nostr.PubKey, cfg *config.Config) (AssistantWrappedKeyManifest, error) {
 	if err := checkAssistantWrapper(ctx, wrapper, servicePubkey); err != nil {
 		return AssistantWrappedKeyManifest{}, err
@@ -70,7 +65,7 @@ func createAssistantWrappedKeyManifest(ctx context.Context, wrapper assistantKey
 	}
 	secret, err := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey))
 	if err != nil || secret.Public() != servicePubkey {
-		return AssistantWrappedKeyManifest{}, errors.New("configured legacy service key does not match Signet service pubkey")
+		return AssistantWrappedKeyManifest{}, errors.New("configured legacy service key does not match the service signer pubkey")
 	}
 	legacyProvider, err := assistantTranscriptKeyProvider(cfg)
 	if err != nil {
@@ -120,14 +115,10 @@ func wrapAssistantKey(ctx context.Context, wrapper assistantKeyWrapper, serviceP
 	return AssistantWrappedKeyRecord{Ref: key.Ref, Version: key.Version, Rotation: key.Rotation, Ciphertext: ciphertext}, nil
 }
 
-// OpenAssistantWrappedKeyManifest resolves only keys in a pinned manifest for
+// openAssistantWrappedKeyManifest resolves only keys in a pinned manifest for
 // historical reads. Its provider rejects new writes until durable create-once
 // selection of the v2 generation is implemented. It never derives a key from
 // the service nsec or falls back to raw local signing.
-func OpenAssistantWrappedKeyManifest(ctx context.Context, wrapper *signet.ServiceSigner, servicePubkey nostr.PubKey, manifest AssistantWrappedKeyManifest) (service.AssistantTranscriptKeyProvider, error) {
-	return openAssistantWrappedKeyManifest(ctx, wrapper, servicePubkey, manifest)
-}
-
 func openAssistantWrappedKeyManifest(ctx context.Context, wrapper assistantKeyWrapper, servicePubkey nostr.PubKey, manifest AssistantWrappedKeyManifest) (service.AssistantTranscriptKeyProvider, error) {
 	if err := checkAssistantWrapper(ctx, wrapper, servicePubkey); err != nil {
 		return nil, err
