@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/db"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -81,9 +83,33 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(urls) == 0 {
 		return fail(stderr, "explicit expected relays are required")
 	}
+	conn, err := db.Connect(ctx, cfg.DB, zap.NewNop())
+	if err != nil {
+		return fail(stderr, "connect legacy SQL: %v", cfg.DB.RedactError(err))
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return fail(stderr, "start SQL snapshot: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	projection, err := readPolicyProjectionHint(ctx, tx, secret.Public().Hex())
+	if err != nil {
+		return fail(stderr, "read durable relay policy discovery hint: %v", err)
+	}
+	hint, hasHint, err := controlplane.PolicyCensusProjectionHint(projection, secret.Public())
+	if err != nil {
+		return fail(stderr, "validate durable relay policy discovery hint: %v", err)
+	}
 	bootstrap, err := controlplane.PolicyCensusBootstrapRelays(cfg.Nostr)
 	if err != nil {
 		return fail(stderr, "resolve configured bootstrap relays: %v", err)
+	}
+	if hasHint {
+		bootstrap, err = controlplane.PolicyCensusHydrationRelaysForState(bootstrap, hint.State)
+		if err != nil {
+			return fail(stderr, "expand durable projection discovery hints: %v", err)
+		}
 	}
 	bootstrapPool := nostradapter.NewRelayPool(bootstrap, zap.NewNop(), nostradapter.WithPrivateKey(secret.Hex()))
 	defer bootstrapPool.Close()
@@ -91,6 +117,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	initialHead, err := controlplane.ReadCanonicalRelayPolicyHead(ctx, bootstrapPool, secret.Public())
 	if err != nil {
 		return fail(stderr, "read canonical relay policy from bootstrap relays: %v", err)
+	}
+	if hasHint && (hint.EventID != initialHead.EventID || hint.PayloadHash != initialHead.PayloadHash) {
+		return fail(stderr, "durable projection hint disagrees with signed canonical relay policy head")
 	}
 	effective, err := controlplane.VerifyPolicyCensusRelays(cfg.Nostr, initialHead, urls)
 	if err != nil {
@@ -120,16 +149,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if effectiveHead.EventID != initialHead.EventID {
 		return fail(stderr, "canonical relay policy changed between bootstrap and effective relay sets")
 	}
-	conn, err := db.Connect(ctx, cfg.DB, zap.NewNop())
-	if err != nil {
-		return fail(stderr, "connect legacy SQL: %v", cfg.DB.RedactError(err))
-	}
-	defer conn.Close()
-	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return fail(stderr, "start SQL snapshot: %v", err)
-	}
-	defer tx.Rollback(ctx)
 	rows, err := tx.Query(ctx, "SELECT id FROM deployment_policies ORDER BY id LIMIT $1", *maxRows+1)
 	if err != nil {
 		return fail(stderr, "read policy ids: %v", err)
@@ -174,4 +193,27 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 func fail(stderr io.Writer, format string, args ...any) int {
 	fmt.Fprintf(stderr, format+"\n", args...)
 	return 1
+}
+
+// The read-only SQL snapshot supplies discovery hints only. No projection
+// field authorizes a relay head until the signed EVENT is read from every
+// candidate relay and matched by event ID and canonical payload hash.
+func readPolicyProjectionHint(ctx context.Context, tx pgx.Tx, author string) (*repository.RelayPolicyProjection, error) {
+	row := tx.QueryRow(ctx, `SELECT author_pubkey, event_id, event_created_at, event_accepted_at, schema,
+		canonical_payload, payload_hash, source_relay, last_sync_at, relay_confirmed_at
+		FROM relay_policy_projections WHERE author_pubkey = $1`, author)
+	projection := &repository.RelayPolicyProjection{}
+	var confirmed sql.NullTime
+	if err := row.Scan(&projection.AuthorPubkey, &projection.EventID, &projection.EventCreatedAt,
+		&projection.EventAcceptedAt, &projection.Schema, &projection.CanonicalPayload,
+		&projection.PayloadHash, &projection.SourceRelay, &projection.LastSyncAt, &confirmed); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if confirmed.Valid {
+		projection.RelayConfirmedAt = &confirmed.Time
+	}
+	return projection, nil
 }

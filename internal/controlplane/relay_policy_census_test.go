@@ -145,3 +145,33 @@ func TestPolicyCensusDiscoveryUnionAndMovingBootstrapHead(t *testing.T) {
 	require.Error(t, RecheckCanonicalRelayPolicyHead(ctx, pool, old.PubKey, old.ID.Hex()),
 		"a changed head on a bootstrap-only relay must block the final report")
 }
+
+func TestPolicyCensusProjectionHintExpandsDiscoveryButCannotOverruleSignedHead(t *testing.T) {
+	configuredURL, configuredRelay := censusRelayHandle(t)
+	hintedURL, hintedRelay := censusRelayHandle(t)
+	oldState := RelayPolicyState{Schema: RelaySettingsSchema, ContextVMRelays: []string{configuredURL}}
+	old := signedRelaySettingsStateEvent(t, time.Now().UTC().Add(-2*time.Minute), oldState)
+	_, err := configuredRelay.AddEvent(t.Context(), *old)
+	require.NoError(t, err)
+	newState := RelayPolicyState{Schema: RelaySettingsSchema, ContextVMRelays: []string{hintedURL}}
+	newer := signedRelaySettingsStateEvent(t, time.Now().UTC().Add(-time.Minute), newState)
+	_, err = hintedRelay.AddEvent(t.Context(), *newer)
+	require.NoError(t, err)
+	projection := testProjection(t, newer.PubKey.Hex(), newer.ID.Hex(), newer.CreatedAt.Time(), newState)
+	hint, found, err := PolicyCensusProjectionHint(projection, newer.PubKey)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, newer.ID.Hex(), hint.EventID)
+	candidates, err := PolicyCensusHydrationRelaysForState([]string{configuredURL}, hint.State)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{configuredURL, hintedURL}, candidates)
+	pool := nostradapter.NewRelayPool(candidates, zap.NewNop())
+	defer pool.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, err = ReadCanonicalRelayPolicyHead(ctx, pool, newer.PubKey)
+	require.ErrorContains(t, err, "heads disagree", "SQL projection is only a hint; split signed heads block the census")
+	projection.PayloadHash = strings.Repeat("0", 64)
+	_, _, err = PolicyCensusProjectionHint(projection, newer.PubKey)
+	require.ErrorContains(t, err, "payload hash mismatch")
+}

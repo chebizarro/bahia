@@ -20,7 +20,9 @@ them, so EOSE without a valid coordinate fails closed with no JSON report.
 The command reads the signed canonical `RelayPolicyState` from every
 daemon hydration candidate: configured sidecar backend/public, ContextVM,
 browser, service, generic, and NIP-34 relays, plus relays advertised by the
-signed state. It requires the same event head on every candidate and every
+validated durable PostgreSQL relay-policy projection and the signed state.
+The projection has no retained signature, so its URLs are discovery hints only;
+its event ID and payload hash must match the signed head returned by relays. It requires the same event head on every candidate and every
 derived effective control-plane relay. The derived set follows daemon sidecar-backend
 precedence, then canonical ContextVM relays, then canonical service relays.
 `--relays` must exactly match that set; a different or missing signed policy
@@ -32,8 +34,11 @@ control-plane publish set. This is a bounded read observation, not a lease again
 changes. It does not fence old SQL publishers or stage SQL rows in the outbox.
 Do not treat its output as a cutover or import receipt.
 
-An unavailable relay, terminal `CLOSED`, truncated stored result, unobserved
-or invalid signed policy event, SQL read failure, global deadline, or a row
-count beyond `--max-rows` aborts without a partial JSON report. Stop or fence
+An unavailable relay, terminal `CLOSED`, truncated stored result, no valid
+signed policy head, invalid projection hint, SQL read failure, global deadline,
+or a row count beyond `--max-rows` aborts without a partial JSON report. The
+Nostr transport may filter invalid EVENT frames before the census sees them;
+when an older valid head is present, the command cannot identify every such
+filtered frame. Stop or fence
 SQL writers before using a full census operationally; the SQL snapshot alone
 cannot prevent a writer from publishing to a relay during the read.

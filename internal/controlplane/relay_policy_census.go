@@ -9,13 +9,33 @@ import (
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/repository"
 )
 
 // CanonicalRelayPolicyHead is a signed relay-settings state independently
 // observed at every relay in a read set. It is not an SQL projection.
 type CanonicalRelayPolicyHead struct {
-	EventID string
-	State   RelayPolicyState
+	EventID     string
+	PayloadHash string
+	State       RelayPolicyState
+}
+
+// PolicyCensusProjectionHint validates the durable projection's payload and
+// provenance enough to use its relay URLs as discovery hints. The projection
+// does not retain a signature and never establishes the canonical head: that
+// identity and payload must be independently confirmed by signed relay EVENTs.
+func PolicyCensusProjectionHint(projection *repository.RelayPolicyProjection, author nostr.PubKey) (CanonicalRelayPolicyHead, bool, error) {
+	if projection == nil {
+		return CanonicalRelayPolicyHead{}, false, nil
+	}
+	if _, err := nostr.IDFromHex(projection.EventID); err != nil {
+		return CanonicalRelayPolicyHead{}, false, fmt.Errorf("projected relay policy event id: %w", err)
+	}
+	state, err := relayPolicyStateFromProjection(projection, author.Hex())
+	if err != nil {
+		return CanonicalRelayPolicyHead{}, false, err
+	}
+	return CanonicalRelayPolicyHead{EventID: projection.EventID, PayloadHash: projection.PayloadHash, State: *state}, true, nil
 }
 
 // PolicyCensusBootstrapRelays mirrors the daemon's initial relay-policy
@@ -182,7 +202,11 @@ func readCanonicalRelayPolicyFromRelay(ctx context.Context, pool *nostradapter.R
 		if head.EventID != "" && head.EventID != ev.ID.Hex() {
 			return fmt.Errorf("relay returned multiple policy heads")
 		}
-		head = CanonicalRelayPolicyHead{EventID: ev.ID.Hex(), State: *state}
+		_, payloadHash, err := canonicalRelayPolicyPayload(*state)
+		if err != nil {
+			return err
+		}
+		head = CanonicalRelayPolicyHead{EventID: ev.ID.Hex(), PayloadHash: payloadHash, State: *state}
 		return nil
 	}
 	finish := func() (CanonicalRelayPolicyHead, error) {
