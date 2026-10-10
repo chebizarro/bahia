@@ -1,9 +1,9 @@
 # Local Signet epoch cryptography interop proof
 
-**NOT YET RUN OR PROVEN. A passing run is not activation authorization.**
+**A passing disposable run is not activation authorization.**
 
 This is an opt-in, **live NIP-46** test of Bahia's dormant epoch NIP-44 and
-SBOM DSSE adapters. It does not activate remote signing in Bahia, deploy a
+SBOM DSSE adapters plus the read-only wrapped-key assistant startup path. It does not activate remote signing in Bahia, deploy a
 daemon, or remove a service key. Its only target is a disposable, synthetic
 Signet identity on a private local relay. Do not use a production service
 identity or copy an existing service nsec into this fixture.
@@ -73,3 +73,25 @@ This proof does not itself provision Signet, certify the daemon binary,
 exercise a second wrong-owner client, or prove restart/expiry/revocation
 behavior. Those require separate Signet and cutover gates. A passing run is
 not authorization to enable Bahia's remote signer or remove its raw key.
+Bahia still requires `nostr.private_key` and the raw control-plane signer; the
+wrapped assistant mode is read-only and does not remove those dependencies.
+
+The reproducible disposable runner is
+`nostrc/signet/tests/interop/run_live_epoch_bahia.py`. It generates a synthetic
+service key internally, adopts that key through Signet via stdin, and passes it
+only through stdin to the assistant startup test. It never writes the service
+secret to source, an argument vector, or logs. From a clean, committed Nostrc
+worktree configured with a dedicated CMake build directory, run:
+
+```bash
+python3 signet/tests/interop/run_live_epoch_bahia.py \
+  --build-dir /path/to/nostrc-worktree/_build \
+  --bahia /path/to/committed-bahia-worktree \
+  --bahia-commit <full-reviewed-Bahia-SHA>
+```
+
+The runner checks both the epoch adapter interop test and
+`TestLiveAssistantWrappedStartupHistoricalReads` on the same disposable loopback
+Signet lease. The latter proves historical transcript and checkpoint reads,
+no raw-key fallback or new writes, and bootstrap client closure. It does not
+enable v2 writers or remove the service key from Bahia configuration.

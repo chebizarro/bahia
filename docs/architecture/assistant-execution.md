@@ -157,6 +157,8 @@ manifest, connects to Signet, unwraps both keys under the existing service
 pubkey, then closes the bootstrap connection. It never falls back to the raw
 key provider in this mode. Transcript and checkpoint reads are available,
 but assistant work that needs a new encrypted event fails closed; this mode
-is not a fully functional assistant or service-key cutover. Writer activation
+is not a fully functional assistant or service-key cutover. The daemon still
+requires `nostr.private_key` and its raw control-plane signer for other paths;
+selecting this read-only mode does not remove or replace either. Writer activation
 requires a create-once provisioned generation and complete transcript and
 checkpoint read-write restart tests.
