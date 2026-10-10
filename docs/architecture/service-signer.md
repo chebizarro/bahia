@@ -49,7 +49,9 @@ else is discarded and the caller's event is unchanged. Text operations reject
 embedded NUL and invalid UTF-8. NIP-44 payloads are capped at 16 MiB of base64
 before decoding, including untrusted results. NIP-04 is unsupported.
 `nostr.signer.timeout` bounds the connect handshake and every request; the
-session lives as long as the context `Open` received.
+session lives as long as the context `Open` received. The session owns its
+bunker relay pool: ending the session, or a failed connect, closes the bunker
+relay connections.
 
 ## Binary NIP-44 capability
 
