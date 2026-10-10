@@ -1,4 +1,4 @@
-.PHONY: build run test race lint lint-arch arch-baseline clean migrate docker docker-compose soulfactory-coverage build-server build-cli build-relay build-fips-bahia-bridge build-openclaw-soulfactory-sidecar build-openclaw-soulfactory-control build-bahia-event-archive build-metiq-signet-enrollment build-soulfactory-runtime-validate build-bahia-dns-agent build-bahia-migrate dist-bahia-dns-agent dist-bahia-dns-agent-linux-amd64 dist-bahia-dns-agent-linux-arm64 dist-bahia-dns-agent-linux-mips-softfloat
+.PHONY: build run test race lint lint-arch arch-baseline clean migrate docker docker-compose soulfactory-coverage build-server build-cli build-relay build-fips-bahia-bridge build-openclaw-soulfactory-sidecar build-openclaw-soulfactory-control build-bahia-event-archive build-metiq-signet-enrollment build-soulfactory-runtime-validate build-bahia-dns-agent build-bahia-migrate build-bahia-policy-census dist-bahia-dns-agent dist-bahia-dns-agent-linux-amd64 dist-bahia-dns-agent-linux-arm64 dist-bahia-dns-agent-linux-mips-softfloat
 
 VERSION_BASE ?= 0.1.0
 GIT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo "dev")
@@ -6,7 +6,7 @@ VERSION ?= $(VERSION_BASE)-$(GIT_COMMIT)
 LDFLAGS := -ldflags "-X github.com/openagentsinc/bahia/internal/version.Base=$(VERSION_BASE) -X github.com/openagentsinc/bahia/internal/version.Commit=$(GIT_COMMIT) -X github.com/openagentsinc/bahia/internal/version.Full=$(VERSION)"
 
 # Build
-build: build-server build-cli build-relay build-fips-bahia-bridge build-openclaw-soulfactory-sidecar build-openclaw-soulfactory-control build-bahia-event-archive build-metiq-signet-enrollment build-soulfactory-runtime-validate build-bahia-dns-agent build-bahia-migrate
+build: build-server build-cli build-relay build-fips-bahia-bridge build-openclaw-soulfactory-sidecar build-openclaw-soulfactory-control build-bahia-event-archive build-metiq-signet-enrollment build-soulfactory-runtime-validate build-bahia-dns-agent build-bahia-migrate build-bahia-policy-census
 
 build-server:
 	go build $(LDFLAGS) -o bin/bahia-server ./cmd/server
@@ -28,6 +28,9 @@ build-openclaw-soulfactory-control:
 
 build-bahia-migrate:
 	go build $(LDFLAGS) -o bin/bahia-migrate ./cmd/bahia-migrate
+
+build-bahia-policy-census:
+	go build $(LDFLAGS) -o bin/bahia-policy-census ./cmd/bahia-policy-census
 
 build-bahia-event-archive:
 	go build $(LDFLAGS) -o bin/bahia-event-archive ./cmd/bahia-event-archive
