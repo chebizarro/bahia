@@ -55,23 +55,17 @@ provisioner authority. Bahia never performs writer assignment.
 
 Event signing is separate from operations requiring raw key material. DM
 NIP-44 conversation-key derivation, legacy secret encryption and derivation,
-confidential-state key derivation, and SBOM DSSE digest signatures still use
-the local service key. An event signer alone cannot replace those operations;
-startup must not accept a remote-only service identity until their key-preserving
+and confidential-state key derivation still use the local service key. An
+event signer alone cannot replace those operations; startup must not accept a remote-only service identity until their key-preserving
 migration and historical decryption contracts are implemented.
 
-The dormant epoch signer also implements the SBOM attestation signer interface:
-it sends the exact canonical in-toto statement bytes as base64 to Signet's
-`sign_bahia_sbom_dsse` NIP-46 method with the decimal writer epoch. Bahia
-rejects statements over Signet's 64 KiB decoded-byte limit before base64
-encoding; the largest permitted request parameter is 87,384 base64 characters.
-It retains the current DSSE payload, service-pubkey key ID, and BIP-340 signature
-verification before accepting an envelope. The adapter requires the pinned
-existing service pubkey, dedicated authenticated client, live writer lease and
-unchanged connection through response acceptance; it has no raw-key or
-unfenced fallback. App startup still selects the local SBOM signer. Activation
-requires a real Signet interoperability proof, not only the local fake-RPC
-tests, alongside the other raw-key migration gates.
+SBOM attestations are standard Nostr events: the exact canonical in-toto
+statement is the content of a `4903` (`CAS_AUDIT`, `domain=sbom`,
+`type=attestation`) event whose tags repeat the subject and SBOM digests
+([event spec](../event-spec.md)). Any `nostr.Signer` for the service key signs
+it, so the fenced Signet service signer needs only standard `sign_event`; app
+startup uses the local service key. Historical DSSE envelopes remain
+verifiable with the service pubkey alone and are never produced again.
 
 ### 1.2 Level-triggered desired state
 

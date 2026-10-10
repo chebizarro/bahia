@@ -56,7 +56,8 @@ nsec. The remaining concrete service-secret blockers are `internal/app/app.go`
 edge-route, relay-admin and intent-author consumers, and the Gitea initiation
 credential store (`internal/adapters/gitea/initiation_store.go`). The current
 control-plane secret intent path stores client NIP-44 as-is unless the v2
-dependencies are explicitly supplied. The DSSE and NIP-44 Signet interop gate
+dependencies are explicitly supplied. The live Signet NIP-46 interop gate (`sign_event`, including event-signed SBOM
+attestations, and NIP-44)
 and complete raw-key-crypto census remain independent prerequisites.
 
 Disposable PostgreSQL 16 integration gate:

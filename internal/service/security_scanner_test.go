@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	sbomadapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
@@ -247,9 +248,7 @@ func TestSecuritySBOMReferencesFromEventAcceptsActualInTotoReference(t *testing.
 		},
 	}
 	secret := nostr.MustSecretKeyFromHex("1111111111111111111111111111111111111111111111111111111111111111")
-	attestationSigner, err := sbomadapter.NewNostrDSSESigner(secret.Hex())
-	require.NoError(t, err)
-	require.NoError(t, sbomadapter.SignAttestation(context.Background(), att, attestationSigner))
+	require.NoError(t, sbomadapter.SignAttestation(context.Background(), att, keyer.NewPlainKeySigner([32]byte(secret))))
 	content, err := json.Marshal(att)
 	require.NoError(t, err)
 	ev := &nostr.Event{

@@ -19,6 +19,8 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip44"
+	"github.com/openagentsinc/bahia/internal/adapters/sbom"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/stretchr/testify/require"
 )
 
@@ -163,6 +165,21 @@ func TestLiveSignetStandardNIP46ServiceSigner(t *testing.T) {
 	require.Equal(t, servicePubkey, ev.PubKey)
 	require.True(t, ev.CheckID())
 	require.True(t, ev.VerifySignature())
+
+	// SBOM attestations are standard events signed through sign_event.
+	stamp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	att, err := sbom.NewAttestationBuilder("interop", "1", servicePubkey.Hex()).BuildAttestation(sbom.BuildAttestationInput{
+		SubjectName: "disposable-artifact", SubjectDigest: "sha256:" + strings.Repeat("1", 64),
+		SBOMData: []byte(`{"spdxVersion":"SPDX-2.3"}`), Format: domain.SBOMFormatSPDX,
+		Location:  domain.SBOMLocation{Type: domain.SBOMStorageBlossom, URI: "https://example.invalid/disposable-sbom"},
+		Timestamp: &stamp,
+	})
+	require.NoError(t, err)
+	require.NoError(t, sbom.SignAttestation(ctx, att, client.serviceSigner))
+	require.Nil(t, att.Envelope)
+	require.NotNil(t, att.Event)
+	require.Equal(t, servicePubkey.Hex(), att.Event.PubKey)
+	require.NoError(t, sbom.VerifyAttestationSignature(att, servicePubkey.Hex()))
 
 	// The peer is the writer's own client identity. Its secret is known to
 	// this test, so every Signet result is checked with an independent local

@@ -1911,9 +1911,9 @@ func New(cfg *config.Config) (*App, error) {
 			return nil, fmt.Errorf("create SBOM generator registry: %w", err)
 		}
 		sbomStorageResolver = sbomAdapter.NewStorageResolver(blossomClient, nil, nil, slog.Default())
-		attestationSigner, err := sbomAdapter.NewNostrDSSESigner(cfg.Nostr.PrivateKey)
-		if err != nil {
-			return nil, fmt.Errorf("configure SBOM attestation signer: %w", err)
+		// SBOM attestations are standard Nostr events signed by the service key.
+		if controlPlaneSigner == nil {
+			return nil, fmt.Errorf("configure SBOM attestation signer: nostr.private_key is required")
 		}
 		sbomOrchestrator = service.NewSBOMOrchestrator(service.SBOMOrchestratorConfig{
 			Generators:        generatorRegistry,
@@ -1921,7 +1921,7 @@ func New(cfg *config.Config) (*App, error) {
 			Repo:              sbomManifestRepo,
 			Publisher:         sbomPublishAdapter{publisher: controlPlanePub},
 			Subscriber:        sbomAvailabilityRelaySubscriber{pool: controlPlanePool},
-			AttestationSigner: attestationSigner,
+			AttestationSigner: controlPlaneSigner,
 			Resolver: service.SBOMSubjectResolver{
 				Artifacts:   artifactRepo,
 				Deployments: intentRepo,
