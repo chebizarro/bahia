@@ -34,6 +34,9 @@ var serviceKeyReadAllowlist = map[string]string{
 	// The service signer factory builds the local signer; the startup seam
 	// internal/app/service_keyer.go is its only production caller.
 	"internal/servicesigner/servicesigner.go|Open": "seam",
+	// Reload compares the configured key text to decide whether a candidate
+	// may keep the running signer session; it never signs or derives with it.
+	"internal/servicesigner/same.go|SameSigner": "seam (reload comparison)",
 	// (b) assistant transcript key = SHA-256 over the nsec; signature fixed by
 	// assistant_wrapped_startup.go/assistant_wrapped_keys.go (bahia-cd0wr.4.8).
 	"internal/app/app.go|assistantTranscriptKeyProvider": "(b) bahia-cd0wr.4.8",

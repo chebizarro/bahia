@@ -24,7 +24,10 @@ type Bunker struct {
 }
 
 // ConnectBunker is the admission-gated equivalent of nip46.ConnectBunker. As
-// upstream, it returns the client together with any connect error.
+// upstream, it returns the client together with any connect error, and ctx is
+// the session lifetime. With a nil pool the bunker owns its relay pool: it is
+// closed when ctx ends, or at once when the connect fails, so ending the
+// session releases the bunker relay connections.
 func ConnectBunker(
 	ctx context.Context,
 	admission *Admission,
@@ -37,11 +40,23 @@ func ConnectBunker(
 	if err != nil {
 		return nil, fmt.Errorf("invalid bunker: %w", err)
 	}
+	closeOwned := func() {}
+	if pool == nil {
+		owned := nostr.NewPool()
+		stop := context.AfterFunc(ctx, func() { owned.Close("NIP-46 session ended") })
+		closeOwned = func() {
+			stop()
+			owned.Close("NIP-46 connect failed")
+		}
+		pool = owned
+	}
 	bunker := &Bunker{
 		client:    nip46.NewBunker(ctx, clientSecretKey, parsed.HostPubKey, parsed.Relays, pool, onAuth),
 		admission: Or(admission),
 	}
-	_, err = bunker.RPC(ctx, "connect", []string{parsed.HostPubKey.Hex(), parsed.Secret})
+	if _, err = bunker.RPC(ctx, "connect", []string{parsed.HostPubKey.Hex(), parsed.Secret}); err != nil {
+		closeOwned()
+	}
 	return bunker, err
 }
 

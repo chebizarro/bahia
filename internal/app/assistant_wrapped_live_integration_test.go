@@ -121,11 +121,12 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 	closeSigner()
 	// Startup as app.go runs it: open the configured service signer once
 	// through the startup seam and inject it.
-	serviceKeyer, closeServiceKeyer, err := newServiceKeyer(runtime, nil, nil)
+	session, closeServiceKeyer, err := newServiceKeyer(runtime, nil, nil, nil)
 	if err != nil {
 		t.Fatal("startup seam cannot open the NIP-46 service signer")
 	}
 	defer closeServiceKeyer()
+	serviceKeyer := session.Keyer()
 	provider, err := assistantTranscriptKeyProviderWithSigner(ctx, runtime, serviceKeyer)
 	if err != nil {
 		t.Fatal("real assistant wrapped startup failed")

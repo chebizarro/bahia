@@ -67,7 +67,7 @@ func TestRunWithDependenciesRetainsRunningApplicationWhenReloadConfigIsInvalid(t
 				}
 				return nil, errors.New("invalid candidate")
 			},
-			newApplication: func(*config.Config) (serverApplication, error) {
+			newApplication: func(*config.Config, serverApplication) (serverApplication, error) {
 				return application, nil
 			},
 			newSignals: func() serverSignalSource {
@@ -103,7 +103,7 @@ func TestRunWithDependenciesRetainsRunningApplicationWhenReloadInitializationFai
 	go func() {
 		done <- runWithDependencies("config.yaml", serverDependencies{
 			loadConfig: func(string) (*config.Config, error) { return &config.Config{}, nil },
-			newApplication: func(*config.Config) (serverApplication, error) {
+			newApplication: func(*config.Config, serverApplication) (serverApplication, error) {
 				factoryCalls++
 				if factoryCalls == 1 {
 					return application, nil
@@ -151,7 +151,7 @@ func TestRunWithDependenciesAppliesSupportedReloadWithoutConstructingReplacement
 				loadCalls++
 				return &config.Config{Mode: "full"}, nil
 			},
-			newApplication: func(*config.Config) (serverApplication, error) {
+			newApplication: func(*config.Config, serverApplication) (serverApplication, error) {
 				factoryCalls++
 				return application, nil
 			},
@@ -193,11 +193,15 @@ func TestRunWithDependenciesStartsReplacementAfterOrderlyShutdown(t *testing.T) 
 	go func() {
 		done <- runWithDependencies("config.yaml", serverDependencies{
 			loadConfig: func(string) (*config.Config, error) { return &config.Config{}, nil },
-			newApplication: func(*config.Config) (serverApplication, error) {
+			newApplication: func(_ *config.Config, running serverApplication) (serverApplication, error) {
 				factoryCalls++
 				if factoryCalls == 1 {
+					require.Nil(t, running, "startup has no application to replace")
 					return current, nil
 				}
+				// The candidate sees the application it replaces, so it can
+				// reuse an unchanged service signer session.
+				require.Same(t, current, running)
 				close(candidateConstructed)
 				return replacement, nil
 			},

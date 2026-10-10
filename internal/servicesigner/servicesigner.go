@@ -25,6 +25,10 @@ import (
 // find their key material through its ServiceKeyMaterialHolder capability.
 var _ BinaryCipher = nostrutil.LocalKeyer{}
 
+// AuthURLMessage is the operator-facing message for a bunker's out-of-band
+// authorization URL.
+const AuthURLMessage = "NIP-46 bunker requires out-of-band authorization of Bahia's client key"
+
 // ErrNotConfigured reports that no service identity is configured: neither
 // nostr.private_key nor nostr.signer.method is set.
 var ErrNotConfigured = errors.New("no service signer configured (nostr.private_key or nostr.signer)")
@@ -61,8 +65,9 @@ type Options struct {
 	// NewNIP55L overrides the NIP-55L D-Bus keyer constructor (tests). Nil
 	// uses internal/adapters/nip55l.
 	NewNIP55L func(context.Context, NIP55LConfig) (nostr.Keyer, error)
-	// Logger receives bunker authorization requests. Nil uses slog.Default.
-	Logger *slog.Logger
+	// OnAuthURL receives the URL a NIP-46 bunker asks the operator to open to
+	// authorize Bahia's client key. Nil logs it at warn level via slog.Default.
+	OnAuthURL func(authURL string)
 }
 
 // Open builds the configured service signer and verifies that it reports the
@@ -100,11 +105,11 @@ func Open(ctx context.Context, cfg config.NostrConfig, opts Options) (nostr.Keye
 	case config.NostrSignerLocal:
 		signer, err = nostrutil.NewLocalKeyer(cfg.PrivateKey)
 	case config.NostrSignerNIP46:
-		logger := opts.Logger
-		if logger == nil {
-			logger = slog.Default()
+		onAuthURL := opts.OnAuthURL
+		if onAuthURL == nil {
+			onAuthURL = func(authURL string) { slog.Warn(AuthURLMessage, "url", authURL) }
 		}
-		signer, err = openNIP46(ctx, cfg.Signer, expected, timeout, opts.Admission, logger)
+		signer, err = openNIP46(ctx, cfg.Signer, expected, timeout, opts.Admission, onAuthURL)
 	case config.NostrSignerNIP55L:
 		newNIP55L := opts.NewNIP55L
 		if newNIP55L == nil {

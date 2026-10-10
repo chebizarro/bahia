@@ -49,7 +49,41 @@ else is discarded and the caller's event is unchanged. Text operations reject
 embedded NUL and invalid UTF-8. NIP-44 payloads are capped at 16 MiB of base64
 before decoding, including untrusted results. NIP-04 is unsupported.
 `nostr.signer.timeout` bounds the connect handshake and every request; the
-session lives as long as the context `Open` received.
+session lives as long as the context `Open` received. The session owns its
+bunker relay pool: ending the session, or a failed connect, closes the bunker
+relay connections.
+
+## Reload
+
+`SIGHUP` builds a complete candidate application before stopping the running
+one (`cmd/server`), so an invalid config never takes the daemon down. The
+service signer session is handed across that swap instead of duplicated:
+
+- **Comparison.** `servicesigner.SameSigner(a, b)` is true when the effective
+  method, the trimmed `nostr.private_key`, the case-insensitive
+  `nostr.public_key` and every `nostr.signer` setting are equal. It does no
+  I/O, so a config that still names `client_secret_key_file` is never the same
+  signer: the path alone cannot show a rotated key. `internal/app` resolves the
+  file to the key it holds at reload (`servicesigner.ResolveClientKeyFile`),
+  compares that, and opens exactly the key it compared. Rotating the file's
+  content and reloading opens a session with the new key; moving the same key
+  between inline and file keeps the session.
+- **Unchanged.** The candidate (`app.New(cfg, app.Replacing(running))`) takes
+  a hold on the running session; no second `connect` is sent. Each
+  application releases its hold last in its shutdown and the session closes
+  on the final release, so the replaced application never closes a session
+  its replacement uses, a failed candidate only drops its hold, and the
+  session closes exactly once at final shutdown.
+- **Changed.** The candidate opens its own session while the running
+  application keeps signing. On success the replaced application closes its
+  session when it stops; on failure the candidate closes its new session and
+  the running one is untouched. Two sessions overlap until the replaced
+  application stops. If both use the same client key (only the bunker URI,
+  relays or timeout changed), a bunker that keeps one session per client may
+  refuse one of them during that window. With a new client key, the bunker
+  decides which client may sign (Signet: the client last
+  `writer-acquire`d). A candidate whose bunker does not answer still costs up
+  to `nostr.signer.timeout` before it is rejected.
 
 ## Binary NIP-44 capability
 
