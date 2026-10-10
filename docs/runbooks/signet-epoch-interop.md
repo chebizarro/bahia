@@ -11,7 +11,7 @@ identity or copy an existing service nsec into this fixture.
 ## Fixture prerequisites
 
 1. Build and run one Signet daemon from commit
-   `5b16b81578a53aeb68c25119ca36ef55d0aa504d` with a fresh, disposable
+   `d5af2ef3d802f651ab87ac3cd27a9fb2583829c7` with a fresh, disposable
    encrypted store and a private loopback-IP Nostr relay. Record the build commit;
    the test config's `signet_commit` is an operator assertion, not binary
    attestation. See Signet's `signet/docs/WRITER_EPOCH_CUTOVER.md` for its
@@ -41,7 +41,7 @@ identity or copy an existing service nsec into this fixture.
 ```json
 {
   "disposable": true,
-  "signet_commit": "5b16b81578a53aeb68c25119ca36ef55d0aa504d",
+  "signet_commit": "d5af2ef3d802f651ab87ac3cd27a9fb2583829c7",
   "bunker_uri": "bunker://<disposable-Signet-bunker-pubkey>?relay=ws%3A%2F%2F127.0.0.1%3A<private-port>",
   "owner_secret_key_hex": "<dedicated-disposable-NIP46-owner-hex>",
   "expected_bunker_pubkey": "<disposable-Signet-bunker-pubkey-hex>",

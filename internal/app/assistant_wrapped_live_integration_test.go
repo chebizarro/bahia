@@ -52,7 +52,7 @@ func TestLiveAssistantWrappedStartupHistoricalReads(t *testing.T) {
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal("invalid disposable fixture")
 	}
-	if !fixture.Disposable || fixture.SignetCommit != "5b16b81578a53aeb68c25119ca36ef55d0aa504d" || fixture.Epoch < 2 || !assistantLiveLoopbackBunker(fixture.BunkerURI, fixture.ExpectedBunkerPubkey) {
+	if !fixture.Disposable || fixture.SignetCommit != "d5af2ef3d802f651ab87ac3cd27a9fb2583829c7" || fixture.Epoch < 2 || !assistantLiveLoopbackBunker(fixture.BunkerURI, fixture.ExpectedBunkerPubkey) {
 		t.Fatal("unapproved Signet fixture")
 	}
 	expiresAt, err := time.Parse(time.RFC3339Nano, fixture.ExpiresAt)
