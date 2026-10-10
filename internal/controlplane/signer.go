@@ -2,35 +2,25 @@ package controlplane
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"strings"
 
 	canonicalnostr "fiatjaf.com/nostr"
-	"fiatjaf.com/nostr/keyer"
 	casnostr "git.sharegap.net/cascadia/cascadia-go/nostr"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
-// NewPrivateKeySigner builds the canonical signer used by control-plane signing
-// paths from a hex private key. Empty keys return nil so callers can gate
-// startup on signer availability instead of checking raw key strings.
+// NewPrivateKeySigner builds a local-key signer for operator tools and tests.
+// Empty keys return nil. The daemon builds its service identity in
+// internal/app/service_keyer.go instead.
 func NewPrivateKeySigner(privateKeyHex string) (casnostr.Signer, error) {
-	privateKeyHex = strings.TrimSpace(privateKeyHex)
-	if privateKeyHex == "" {
+	if strings.TrimSpace(privateKeyHex) == "" {
 		return nil, nil
 	}
-
-	decoded, err := hex.DecodeString(privateKeyHex)
+	signer, err := nostrutil.NewLocalKeyer(privateKeyHex)
 	if err != nil {
-		return nil, fmt.Errorf("decode nostr private key: %w", err)
+		return nil, err
 	}
-	if len(decoded) != 32 {
-		return nil, fmt.Errorf("nostr private key must be 32 bytes, got %d", len(decoded))
-	}
-
-	var secret [32]byte
-	copy(secret[:], decoded)
-	signer := keyer.NewPlainKeySigner(secret)
 	return signer, nil
 }
 
