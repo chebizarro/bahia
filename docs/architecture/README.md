@@ -12,6 +12,7 @@ Code wins over any page here; if they disagree, fix the page.
 | [intents-and-authority.md](intents-and-authority.md) | Signed `30900` intents, trust set, the daemon's processing pipeline, `30315` status, canonical state, readiness, adding a domain handler |
 | [outbox-delivery.md](outbox-delivery.md) | Local outbox durability and the abandonment contract (undelivered markers, `canonical_delivery`, operator retry) |
 | [confidential-state.md](confidential-state.md) | Org content keys (NIP-CAS-0011): envelopes, key distribution, rotation and refounding, operator allowlists, what readers do |
+| [service-identity.md](service-identity.md) | The single injected service `nostr.Keyer`, raw-key derivations that fail closed, and the guard |
 | [signet-service-signer.md](signet-service-signer.md) | Fenced service-key Signet signer: standard NIP-46 RPC contract and writer fence |
 | [entity-identity.md](entity-identity.md) | Author-minted UUIDv7 ids, natural keys, replay vs conflict |
 | [event-lifecycle.md](event-lifecycle.md) | NIP-01 latest-wins, NIP-09 deletion and NIP-40 expiration as every consumer applies them |
