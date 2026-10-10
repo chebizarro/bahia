@@ -3,12 +3,16 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"fiatjaf.com/nostr"
 )
@@ -24,9 +28,11 @@ func persistAssistantWrappedKeyManifest(ctx context.Context, wrapper assistantKe
 	if _, err := openAssistantWrappedKeyManifest(ctx, wrapper, servicePubkey, manifest); err != nil {
 		return fmt.Errorf("verify assistant key manifest before persistence: %w", err)
 	}
-	if err := validateAssistantManifestPath(path); err != nil {
+	dir, name, err := openTrustedAssistantManifestDir(path)
+	if err != nil {
 		return err
 	}
+	defer dir.Close()
 	encoded, err := json.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("marshal assistant key manifest: %w", err)
@@ -34,14 +40,18 @@ func persistAssistantWrappedKeyManifest(ctx context.Context, wrapper assistantKe
 	if len(encoded) > maxAssistantManifestBytes {
 		return errors.New("assistant key manifest exceeds size bound")
 	}
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".assistant-key-manifest-*")
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return fmt.Errorf("generate assistant manifest temp name: %w", err)
+	}
+	tmpName := ".assistant-key-manifest-" + hex.EncodeToString(random)
+	fd, err := unix.Openat(int(dir.Fd()), tmpName, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
 	if err != nil {
 		return fmt.Errorf("create assistant key temp file: %w", err)
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0600); err != nil {
+	tmp := os.NewFile(uintptr(fd), tmpName)
+	defer unix.Unlinkat(int(dir.Fd()), tmpName, 0)
+	if err := unix.Fchmod(fd, 0600); err != nil {
 		tmp.Close()
 		return fmt.Errorf("secure assistant key temp file: %w", err)
 	}
@@ -59,20 +69,23 @@ func persistAssistantWrappedKeyManifest(ctx context.Context, wrapper assistantKe
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.Link(tmpName, path); err != nil {
-		if errors.Is(err, os.ErrExist) {
+	if err := unix.Linkat(int(dir.Fd()), tmpName, int(dir.Fd()), name, 0); err != nil {
+		if errors.Is(err, unix.EEXIST) {
 			return errors.New("assistant key manifest already exists; load it instead of generating another key")
 		}
 		return fmt.Errorf("create assistant key manifest without overwrite: %w", err)
 	}
-	if err := syncAssistantManifestDir(dir); err != nil {
+	if err := dir.Sync(); err != nil {
 		return fmt.Errorf("assistant key manifest linked but directory sync failed; inspect existing path before retry: %w", err)
 	}
-	if err := os.Remove(tmpName); err != nil {
+	if err := unix.Unlinkat(int(dir.Fd()), tmpName, 0); err != nil {
 		return fmt.Errorf("assistant key manifest committed but temp cleanup failed: %w", err)
 	}
-	if err := syncAssistantManifestDir(dir); err != nil {
+	if err := dir.Sync(); err != nil {
 		return fmt.Errorf("assistant key manifest committed but cleanup sync failed; inspect existing path: %w", err)
+	}
+	if err := verifyAssistantManifestDirPinned(path, dir); err != nil {
+		return err
 	}
 	return nil
 }
@@ -81,28 +94,30 @@ func persistAssistantWrappedKeyManifest(ctx context.Context, wrapper assistantKe
 // local manifest. The caller must still open it with the fenced Signet signer
 // to authenticate and decrypt each key before using it for historical reads.
 func loadAssistantWrappedKeyManifest(path string) (AssistantWrappedKeyManifest, error) {
-	if err := validateAssistantManifestPath(path); err != nil {
+	dir, name, err := openTrustedAssistantManifestDir(path)
+	if err != nil {
 		return AssistantWrappedKeyManifest{}, err
 	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return AssistantWrappedKeyManifest{}, fmt.Errorf("stat assistant key manifest: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() <= 0 || info.Size() > maxAssistantManifestBytes {
-		return AssistantWrappedKeyManifest{}, errors.New("assistant key manifest is not a bounded private regular file")
-	}
-	f, err := os.Open(path)
+	defer dir.Close()
+	fd, err := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return AssistantWrappedKeyManifest{}, fmt.Errorf("open assistant key manifest: %w", err)
 	}
+	f := os.NewFile(uintptr(fd), name)
 	defer f.Close()
-	opened, err := f.Stat()
-	if err != nil || !os.SameFile(info, opened) {
-		return AssistantWrappedKeyManifest{}, errors.New("assistant key manifest changed during open")
+	var info unix.Stat_t
+	if err := unix.Fstat(fd, &info); err != nil {
+		return AssistantWrappedKeyManifest{}, fmt.Errorf("stat assistant key manifest: %w", err)
+	}
+	if info.Mode&unix.S_IFMT != unix.S_IFREG || info.Mode&0777 != 0600 || info.Nlink != 1 || info.Uid != uint32(os.Geteuid()) || info.Size <= 0 || info.Size > maxAssistantManifestBytes {
+		return AssistantWrappedKeyManifest{}, errors.New("assistant key manifest is not a singly linked bounded private regular file owned by this user")
 	}
 	encoded, err := io.ReadAll(io.LimitReader(f, maxAssistantManifestBytes+1))
 	if err != nil || len(encoded) > maxAssistantManifestBytes {
 		return AssistantWrappedKeyManifest{}, errors.New("assistant key manifest read failed or exceeded size bound")
+	}
+	if err := verifyAssistantManifestDirPinned(path, dir); err != nil {
+		return AssistantWrappedKeyManifest{}, err
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(encoded, &fields); err != nil {
@@ -135,28 +150,60 @@ func loadAssistantWrappedKeyManifest(path string) (AssistantWrappedKeyManifest, 
 	return manifest, nil
 }
 
-func validateAssistantManifestPath(path string) error {
+func openTrustedAssistantManifestDir(path string) (*os.File, string, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return errors.New("assistant key manifest path must be absolute and clean")
+		return nil, "", errors.New("assistant key manifest path must be absolute and clean")
 	}
-	dir := filepath.Dir(path)
-	info, err := os.Lstat(dir)
+	name := filepath.Base(path)
+	if name == "." || name == string(filepath.Separator) {
+		return nil, "", errors.New("assistant key manifest filename is required")
+	}
+	directory := filepath.Dir(path)
+	fd, err := unix.Open(string(filepath.Separator), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return fmt.Errorf("stat assistant key manifest directory: %w", err)
+		return nil, "", fmt.Errorf("open assistant key root: %w", err)
 	}
-	if !info.IsDir() || info.Mode().Perm()&0077 != 0 {
-		return errors.New("assistant key manifest directory must be private and not a symlink")
+	for _, part := range strings.Split(strings.TrimPrefix(directory, string(filepath.Separator)), string(filepath.Separator)) {
+		if part == "" {
+			continue
+		}
+		next, openErr := unix.Openat(fd, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		unix.Close(fd)
+		if openErr != nil {
+			return nil, "", fmt.Errorf("open assistant key directory without symlinks: %w", openErr)
+		}
+		fd = next
 	}
-	return nil
+	var info unix.Stat_t
+	if err := unix.Fstat(fd, &info); err != nil {
+		unix.Close(fd)
+		return nil, "", fmt.Errorf("stat assistant key directory: %w", err)
+	}
+	if info.Mode&unix.S_IFMT != unix.S_IFDIR || info.Mode&0077 != 0 || info.Uid != uint32(os.Geteuid()) {
+		unix.Close(fd)
+		return nil, "", errors.New("assistant key directory must be owner-private and owned by this user")
+	}
+	return os.NewFile(uintptr(fd), directory), name, nil
 }
 
-func syncAssistantManifestDir(path string) error {
-	dir, err := os.Open(path)
+func verifyAssistantManifestDirPinned(path string, pinned *os.File) error {
+	reopened, _, err := openTrustedAssistantManifestDir(path)
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
-	return dir.Sync()
+	defer reopened.Close()
+	oldInfo, err := pinned.Stat()
+	if err != nil {
+		return err
+	}
+	newInfo, err := reopened.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(oldInfo, newInfo) {
+		return errors.New("assistant key directory changed during operation")
+	}
+	return nil
 }
 
 // Reject duplicate object keys at every level before decoding. Exact field-set

@@ -22,6 +22,11 @@ func assistantManifestFixture(t *testing.T) (localAssistantWrapFixture, Assistan
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir = realDir
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -124,8 +129,14 @@ func TestAssistantManifestStoreCrashMissingCorruptAndInsecure(t *testing.T) {
 	if err := os.Link(path, filepath.Join(filepath.Dir(path), ".assistant-key-manifest-linked")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := loadAssistantWrappedKeyManifest(path); err == nil {
+		t.Fatal("multi-linked manifest accepted before temp cleanup")
+	}
+	if err := os.Remove(filepath.Join(filepath.Dir(path), ".assistant-key-manifest-linked")); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := loadAssistantWrappedKeyManifest(path); err != nil {
-		t.Fatalf("linked committed manifest unreadable: %v", err)
+		t.Fatalf("committed manifest unreadable after cleanup: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
 		t.Fatal(err)
@@ -179,5 +190,41 @@ func TestAssistantManifestStoreRejectsJSONAliasesAndBadDirectory(t *testing.T) {
 	}
 	if _, err := loadAssistantWrappedKeyManifest(path); err == nil {
 		t.Fatal("insecure directory accepted")
+	}
+}
+
+func TestAssistantManifestStoreRejectsSymlinkAncestorAndMovedDirectory(t *testing.T) {
+	wrapper, manifest, path := assistantManifestFixture(t)
+	if err := persistAssistantWrappedKeyManifest(t.Context(), wrapper, wrapper.pubkey, path, manifest); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(path)
+	alias := filepath.Join(filepath.Dir(dir), "assistant-dir-link-"+filepath.Base(dir))
+	if err := os.Symlink(dir, alias); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(alias) })
+	if _, err := loadAssistantWrappedKeyManifest(filepath.Join(alias, filepath.Base(path))); err == nil {
+		t.Fatal("symlinked ancestor accepted for read")
+	}
+	if err := persistAssistantWrappedKeyManifest(t.Context(), wrapper, wrapper.pubkey, filepath.Join(alias, "different.json"), manifest); err == nil {
+		t.Fatal("symlinked ancestor accepted for create")
+	}
+	pinned, _, err := openTrustedAssistantManifestDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pinned.Close()
+	moved := dir + "-moved"
+	if err := os.Rename(dir, moved); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Rename(moved, dir) })
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(dir) })
+	if err := verifyAssistantManifestDirPinned(path, pinned); err == nil {
+		t.Fatal("replaced directory accepted after pin")
 	}
 }
