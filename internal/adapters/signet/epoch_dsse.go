@@ -8,8 +8,8 @@ import (
 	"strconv"
 )
 
-// The statement is metadata, not the SBOM blob. Bound its transport encoding.
-const maxSBOMDSSEStatementBytes = 1 << 20
+// Match Signet's exact statement-byte cap before base64 transport encoding.
+const maxSBOMDSSEStatementBytes = 64 << 10
 
 // KeyID identifies the existing Bahia service pubkey pinned at construction.
 func (s *EpochSigner) KeyID() string {

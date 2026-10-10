@@ -43,6 +43,24 @@ func TestEpochSBOMDSSEStatementBytesAndEpoch(t *testing.T) {
 	require.Equal(t, []epochCryptoRequest{{method: "sign_bahia_sbom_dsse", params: []string{base64.StdEncoding.EncodeToString(statement), "7"}}}, *requests)
 }
 
+func TestEpochSBOMDSSEAcceptsSignetStatementLimit(t *testing.T) {
+	f, requests, _ := dsseFixture(t)
+	statement := bytes.Repeat([]byte{'x'}, maxSBOMDSSEStatementBytes)
+	signature, err := f.signer.SignStatement(context.Background(), statement)
+	require.NoError(t, err)
+	require.Len(t, signature, 64)
+	require.Len(t, *requests, 1)
+	require.Len(t, (*requests)[0].params[0], base64.StdEncoding.EncodedLen(maxSBOMDSSEStatementBytes))
+	require.Equal(t, statement, mustDecodeBase64(t, (*requests)[0].params[0]))
+}
+
+func mustDecodeBase64(t *testing.T, encoded string) []byte {
+	t.Helper()
+	decoded, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	require.NoError(t, err)
+	return decoded
+}
+
 func TestEpochSBOMDSSERejectsMissingLeaseAndBadInputBeforeRPC(t *testing.T) {
 	f, requests, _ := dsseFixture(t)
 	_, err := f.signer.SignStatement(context.Background(), nil)

@@ -67,7 +67,9 @@ migration and historical decryption contracts are implemented.
 The dormant epoch signer also implements the SBOM attestation signer interface:
 it sends the exact canonical in-toto statement bytes as base64 to Signet's
 `sign_bahia_sbom_dsse` NIP-46 method with the decimal writer epoch. Bahia
-retains the current DSSE payload, service-pubkey key ID, and BIP-340 signature
+rejects statements over Signet's 64 KiB decoded-byte limit before base64
+encoding; the largest permitted request parameter is 87,384 base64 characters.
+It retains the current DSSE payload, service-pubkey key ID, and BIP-340 signature
 verification before accepting an envelope. The adapter requires the pinned
 existing service pubkey, dedicated authenticated client, live writer lease and
 unchanged connection through response acceptance; it has no raw-key or
