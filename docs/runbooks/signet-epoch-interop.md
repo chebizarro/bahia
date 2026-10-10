@@ -1,5 +1,7 @@
 # Local Signet epoch cryptography interop proof
 
+**NOT YET RUN OR PROVEN. A passing run is not activation authorization.**
+
 This is an opt-in, **live NIP-46** test of Bahia's dormant epoch NIP-44 and
 SBOM DSSE adapters. It does not activate remote signing in Bahia, deploy a
 daemon, or remove a service key. Its only target is a disposable, synthetic
@@ -10,7 +12,7 @@ identity or copy an existing service nsec into this fixture.
 
 1. Build and run one Signet daemon from commit
    `d097cea2219a3784ccf011d1e9bf94f9fb7f8ce2` with a fresh, disposable
-   encrypted store and a private local Nostr relay. Record the build commit;
+   encrypted store and a private loopback-IP Nostr relay. Record the build commit;
    the test config's `signet_commit` is an operator assertion, not binary
    attestation. See Signet's `signet/docs/WRITER_EPOCH_CUTOVER.md` for its
    provisioning and single-active-store rules.
@@ -27,7 +29,11 @@ identity or copy an existing service nsec into this fixture.
    response. No other writer should touch this disposable identity while the
    test runs.
 4. Put the following JSON in a **non-repository** file with mode `0600`.
-   Its owner key and bunker URI are sensitive even though the service key is
+   The bunker URI must pin the expected service pubkey and have exactly one
+   `ws://` or `wss://` relay at a loopback IP literal (`127.0.0.1` or `::1`),
+   with an explicit port. DNS names, non-loopback addresses and additional
+   relay endpoints are rejected before any connection. Its owner key and
+   bunker URI are sensitive even though the service key is
    disposable. Do not publish the file or test logs containing its contents.
 
 ```json
@@ -54,8 +60,11 @@ The tagged test **fails** if the fixture is absent; it never silently skips.
 It connects through Bahia's real NIP-46 client, checks the pinned service
 pubkey, round-trips text and binary NIP-44, signs a valid Bahia-built SBOM
 statement through `sign_bahia_sbom_dsse`, and verifies the existing DSSE
-envelope and key ID. It then sends no-epoch and stale-epoch NIP-44/DSSE calls
-over the same authenticated connection and requires no returned value.
+envelope and key ID. It then sends no-epoch and stale-epoch probes for all
+four NIP-44 methods and DSSE over the same authenticated connection. Each
+probe requires an empty result, a decrypted NIP-46 remote-error response
+(not a transport/context error), and a still-live bunker ping. Local URI
+validation errors are generic and never echo the bunker URI or pairing secret.
 
 This proof does not itself provision Signet, certify the daemon binary,
 exercise a second wrong-owner client, or prove restart/expiry/revocation
