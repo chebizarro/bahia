@@ -19,12 +19,13 @@ type NostrDMSender struct {
 	relayPool  *nostrAdapter.RelayPool
 	publish    func(context.Context, nostr.Event) (int, error)
 	privateKey string
+	signer     nostr.Signer
 	logger     *zap.Logger
 }
 
 // NewNostrDMSender creates a new Nostr DM sender.
 // privateKey is Bahia's Nostr private key (hex).
-func NewNostrDMSender(relayPool *nostrAdapter.RelayPool, privateKey string, logger *zap.Logger) *NostrDMSender {
+func NewNostrDMSender(relayPool *nostrAdapter.RelayPool, privateKey string, logger *zap.Logger, signers ...nostr.Signer) *NostrDMSender {
 	var publish func(context.Context, nostr.Event) (int, error)
 	if relayPool != nil {
 		publish = relayPool.Publish
@@ -32,12 +33,16 @@ func NewNostrDMSender(relayPool *nostrAdapter.RelayPool, privateKey string, logg
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &NostrDMSender{
+	sender := &NostrDMSender{
 		relayPool:  relayPool,
 		publish:    publish,
 		privateKey: privateKey,
 		logger:     logger,
 	}
+	if len(signers) > 0 {
+		sender.signer = signers[0]
+	}
+	return sender
 }
 
 // Send delivers a notification as an encrypted Nostr DM (Kind 4 with NIP-44).
@@ -85,7 +90,13 @@ func (s *NostrDMSender) Send(ctx context.Context, ch *domain.NotificationChannel
 		},
 	}
 
-	if err := nostrutil.SignEventWithHexKey(&ev, s.privateKey); err != nil {
+	sign := func() error {
+		if s.signer != nil {
+			return s.signer.SignEvent(ctx, &ev)
+		}
+		return nostrutil.SignEventWithHexKey(&ev, s.privateKey)
+	}
+	if err := sign(); err != nil {
 		return fmt.Errorf("signing DM event: %w", err)
 	}
 

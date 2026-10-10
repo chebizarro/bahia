@@ -147,6 +147,19 @@ func New(cfg *config.Config) (*App, error) {
 	continuityStatusStore := service.NewInMemoryContinuityStatusStore()
 	continuityRecipeExecutor := service.NewContinuityRecipeExecutor(publisher, service.WithContinuityRecipeLogger(logger))
 
+	controlPlaneSigner, err := controlplane.NewPrivateKeySigner(cfg.Nostr.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("configuring control-plane signer: %w", err)
+	}
+	servicePubkey := ""
+	if controlPlaneSigner != nil {
+		pubkey, err := controlPlaneSigner.GetPublicKey(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("resolving service signer pubkey: %w", err)
+		}
+		servicePubkey = pubkey.Hex()
+	}
+
 	// Relay pools are initialized before the optional database cache.
 	//
 	// One process-wide controller gates every outbound EVENT: these pools,
@@ -156,7 +169,7 @@ func New(cfg *config.Config) (*App, error) {
 	// docs/runbooks/nostr-outbound-admission.md).
 	outboundAdmission := nostrout.InitDefault(nostrOutboundAdmissionConfig(cfg.Nostr.Outbound))
 	poolOptions := []nostrAdapter.RelayPoolOption{
-		nostrAdapter.WithPrivateKey(cfg.Nostr.PrivateKey),
+		nostrAdapter.WithAuthSigner(controlPlaneSigner),
 		nostrAdapter.WithOutboundAdmission(outboundAdmission),
 		closedRetryBudgetOption(cfg.Nostr),
 	}
@@ -381,13 +394,15 @@ func New(cfg *config.Config) (*App, error) {
 		agentRuntimeReleaseSvc = service.NewAgentRuntimeReleaseService(agentRuntimeReleaseRepo, serviceRepo)
 	}
 	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, pgNostrEventRepo, logger,
-		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore))
+		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore),
+		nostrAdapter.WithPublisherSigner(controlPlaneSigner))
 	// Control-plane outbox publisher shared by the read-model projector, docs,
 	// SBOM and config-fabric. Its entries carry the control-plane publish
 	// target and its own runner retries them, so they are never redelivered to
 	// the interop relays.
 	controlPlanePub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, pgNostrEventRepo, logger,
 		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane),
+		nostrAdapter.WithPublisherSigner(controlPlaneSigner),
 		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore))
 	// nostr_events for its readers: PostgreSQL when available, else the
 	// local event store. An event a producer records there as pending
@@ -413,10 +428,6 @@ func New(cfg *config.Config) (*App, error) {
 	// its readers, best effort.
 	auditEventRepo := nostrAdapter.NewLocalEventRepository(localEventStore, localOutboxAdmit)
 
-	controlPlaneSigner, err := controlplane.NewPrivateKeySigner(cfg.Nostr.PrivateKey)
-	if err != nil {
-		return nil, fmt.Errorf("configuring control-plane signer: %w", err)
-	}
 	hiveCIJobClient := loom.NewClient(
 		cfg.Loom, cfg.Nostr.PrivateKey, controlPlanePool, logger,
 		loom.WithWorkerRepo(workerRepo), loom.WithJobSigner(controlPlaneSigner),
@@ -519,12 +530,6 @@ func New(cfg *config.Config) (*App, error) {
 	// Route canaries. Converging a routing provider only proves configuration
 	// was accepted, not that the route serves traffic, so managed routes are
 	// verified end to end and watched continuously.
-	servicePubkey := ""
-	if strings.TrimSpace(cfg.Nostr.PrivateKey) != "" {
-		if secret, keyErr := nostr.SecretKeyFromHex(strings.TrimSpace(cfg.Nostr.PrivateKey)); keyErr == nil {
-			servicePubkey = secret.Public().Hex()
-		}
-	}
 	// Runtime and DNS reconciliation may observe a PostgreSQL index, but must
 	// never read desired state from it. A missing service signer leaves these
 	// canonical views empty rather than promoting SQL rows at startup.
@@ -1167,6 +1172,7 @@ func New(cfg *config.Config) (*App, error) {
 		intentReadiness.MarkFilterReady("authoritative-warmstart")
 	}
 	projectorOpts = append(projectorOpts,
+		nostrAdapter.WithProjectorSigner(controlPlaneSigner, servicePubkey),
 		nostrAdapter.WithReadinessTracker(intentReadiness),
 		nostrAdapter.WithIntentDomains(warmStartDomains),
 	)
@@ -2236,7 +2242,7 @@ func New(cfg *config.Config) (*App, error) {
 	notifDispatcher.RegisterSender(domain.ChannelTypeWebhook, notifications.NewWebhookSender())
 	if cfg.Nostr.PrivateKey != "" {
 		notifDispatcher.RegisterSender(domain.ChannelTypeNostrDM,
-			notifications.NewNostrDMSender(relayPool, cfg.Nostr.PrivateKey, logger))
+			notifications.NewNostrDMSender(relayPool, cfg.Nostr.PrivateKey, logger, controlPlaneSigner))
 	}
 	notifDispatcher.SetupSubscriptions(publisher)
 

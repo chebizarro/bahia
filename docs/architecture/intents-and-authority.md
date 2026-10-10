@@ -24,6 +24,23 @@ separate coordinate spaces and never collide:
 - `(30900, operator-pubkey, d=<coordinate>)` — desired state.
 - `(30900, service-pubkey, d=<coordinate>)` — confirmed state.
 
+### Service signing identity
+
+The daemon creates one service-key Nostr signer at startup. The same signer
+signs control-plane events, projection and status events, publisher-owned audit
+events, relay NIP-42 AUTH, and notification DMs. The signer supplies the
+service pubkey used to scope canonical history; changing the signing mechanism
+must not change that pubkey. A signing refusal fails the operation rather than
+falling back to a second signing key. The local configuration still loads the
+service private key; remote signing is not enabled.
+
+Event signing is separate from operations requiring raw key material. DM
+NIP-44 conversation-key derivation, legacy secret encryption and derivation,
+confidential-state key derivation, and SBOM DSSE digest signatures still use
+the local service key. An event signer alone cannot replace those operations;
+startup must not accept a remote-only service identity until their key-preserving
+migration and historical decryption contracts are implemented.
+
 ### 1.2 Level-triggered desired state
 
 The relay keeps only the newest intent per author and coordinate, so a daemon

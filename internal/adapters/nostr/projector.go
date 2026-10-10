@@ -151,6 +151,8 @@ type Projector struct {
 	publisher            ProjectionPublisher
 	history              ProjectionHistory
 	privateKey           string
+	signer               gonostr.Signer
+	servicePubkey        string
 	enabled              bool
 	logger               *zap.Logger
 	systemConfig         *config.Config
@@ -178,6 +180,14 @@ type Projector struct {
 
 // ProjectorOption configures a projector.
 type ProjectorOption func(*Projector)
+
+// WithProjectorSigner supplies the service identity for projection events.
+func WithProjectorSigner(signer gonostr.Signer, pubkey string) ProjectorOption {
+	return func(p *Projector) {
+		p.signer = signer
+		p.servicePubkey = pubkey
+	}
+}
 
 func WithMLProjectionSource(source MLProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.mlSource = source }
@@ -1184,7 +1194,7 @@ func (p *Projector) publishSignedDirect(ctx context.Context, kind int, createdAt
 		Tags:      tags,
 		Content:   content,
 	}
-	if err := signEventWithPrivateKeyHex(&ev, p.privateKey); err != nil {
+	if err := p.signEvent(ctx, &ev); err != nil {
 		return false, err
 	}
 	err = p.publisher.PublishProjection(ctx, ev, entityType, entityID)
@@ -1473,4 +1483,11 @@ func desiredStateTarget(spec *domain.DesiredServiceSpec) string {
 		return ""
 	}
 	return spec.StableServiceKey
+}
+
+func (p *Projector) signEvent(ctx context.Context, ev *gonostr.Event) error {
+	if p.signer != nil {
+		return p.signer.SignEvent(ctx, ev)
+	}
+	return signEventWithPrivateKeyHex(ev, p.privateKey)
 }

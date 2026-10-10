@@ -361,7 +361,7 @@ func (p *Projector) hydrateProjectionCoordinate(ctx context.Context, key project
 	if retained, ok := p.publisher.(interface {
 		latestRetainedCoordinate(context.Context, int, string, string) (*repository.NostrEventRecord, error)
 	}); ok {
-		author, deriveErr := publicKeyHexFromPrivateKeyHex(p.privateKey)
+		author, deriveErr := p.authorPubkey()
 		if deriveErr != nil {
 			return fmt.Errorf("derive projection author: %w", deriveErr)
 		}
@@ -379,8 +379,8 @@ func (p *Projector) hydrateProjectionCoordinate(ctx context.Context, key project
 	if record.Kind != key.wireKind || record.PubKey == "" {
 		return fmt.Errorf("invalid retained projection coordinate %d:%s", key.wireKind, key.d)
 	}
-	if p.privateKey != "" {
-		pubkey, err := publicKeyHexFromPrivateKeyHex(p.privateKey)
+	if p.privateKey != "" || p.servicePubkey != "" {
+		pubkey, err := p.authorPubkey()
 		if err != nil {
 			return fmt.Errorf("derive projection author: %w", err)
 		}
@@ -452,8 +452,8 @@ func (p *Projector) hydrateProjectionCache(ctx context.Context, wireKind int) er
 		return fmt.Errorf("hydrate projection dedupe cache for kind %d: %w", wireKind, err)
 	}
 	servicePubkey := ""
-	if p.privateKey != "" {
-		if derived, deriveErr := publicKeyHexFromPrivateKeyHex(p.privateKey); deriveErr == nil {
+	if p.privateKey != "" || p.servicePubkey != "" {
+		if derived, deriveErr := p.authorPubkey(); deriveErr == nil {
 			servicePubkey = derived
 		}
 	}
@@ -741,7 +741,7 @@ func (p *Projector) publishSignedRelayFirst(ctx context.Context, wireKind int, t
 	}
 	createdAt := p.nextProjectionCreatedAt(key)
 	ev := gonostr.Event{Kind: gonostr.Kind(wireKind), CreatedAt: createdAt, Tags: tags, Content: content}
-	if err := signEventWithPrivateKeyHex(&ev, p.privateKey); err != nil {
+	if err := p.signEvent(ctx, &ev); err != nil {
 		return fmt.Errorf("sign relay-first record: %w", err)
 	}
 	if err := publisher.PublishBeforeCommit(ctx, ev, entityType, entityID); err != nil {
@@ -807,4 +807,11 @@ func (p *Projector) publishAuthoritative(ctx context.Context, wireKind int, tags
 	}
 	p.rememberProjection(key, fingerprint, createdAt)
 	return nil
+}
+
+func (p *Projector) authorPubkey() (string, error) {
+	if p.servicePubkey != "" {
+		return p.servicePubkey, nil
+	}
+	return publicKeyHexFromPrivateKeyHex(p.privateKey)
 }

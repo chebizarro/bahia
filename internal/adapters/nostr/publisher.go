@@ -130,6 +130,7 @@ const (
 type Publisher struct {
 	pool       *RelayPool
 	privateKey string
+	signer     nostr.Signer
 	enabled    bool
 	logger     *zap.Logger
 	// eventRepo is the optional PostgreSQL nostr_events table. Without a local
@@ -220,6 +221,11 @@ func WithLocalOutbox(outbox *localstore.Outbox, ownEvents *localstore.Store) Pub
 // dedicated target exist only because a caller asked for them to be delivered.
 func WithPublishTarget(target string) PublisherOption {
 	return func(p *Publisher) { p.target = target }
+}
+
+// WithPublisherSigner supplies the service identity used for publisher-owned events.
+func WithPublisherSigner(signer nostr.Signer) PublisherOption {
+	return func(p *Publisher) { p.signer = signer }
 }
 
 // NewPublisher creates a new Nostr event publisher.
@@ -552,13 +558,13 @@ func (p *Publisher) EnqueueSignedEvent(ctx context.Context, ev *nostr.Event) err
 	if p == nil || ev == nil || !p.redeliveryEnabled() {
 		return fmt.Errorf("nostr signed event queue is not configured")
 	}
-	if p.privateKey == "" {
-		return fmt.Errorf("nostr publisher private key not configured")
+	if p.signer == nil && p.privateKey == "" {
+		return fmt.Errorf("nostr publisher signer not configured")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := signEventWithPrivateKeyHex(ev, p.privateKey); err != nil {
+	if err := p.signEvent(ctx, ev); err != nil {
 		return err
 	}
 	if !ev.CheckID() || !ev.VerifySignature() {
@@ -587,10 +593,10 @@ func (p *Publisher) PublishSignedEventWithResults(ctx context.Context, ev *nostr
 	if p == nil || ev == nil {
 		return nil, nil
 	}
-	if p.privateKey == "" {
-		return nil, fmt.Errorf("nostr publisher private key not configured")
+	if p.signer == nil && p.privateKey == "" {
+		return nil, fmt.Errorf("nostr publisher signer not configured")
 	}
-	if err := signEventWithPrivateKeyHex(ev, p.privateKey); err != nil {
+	if err := p.signEvent(ctx, ev); err != nil {
 		return nil, err
 	}
 	attempt, err := p.enqueueAndDeliver(ctx, *ev, signedEventAuditLabel(*ev), nil)
@@ -946,4 +952,11 @@ func (p *Publisher) Close() {
 	if p.pool != nil {
 		p.pool.Close()
 	}
+}
+
+func (p *Publisher) signEvent(ctx context.Context, ev *nostr.Event) error {
+	if p.signer != nil {
+		return p.signer.SignEvent(ctx, ev)
+	}
+	return signEventWithPrivateKeyHex(ev, p.privateKey)
 }
