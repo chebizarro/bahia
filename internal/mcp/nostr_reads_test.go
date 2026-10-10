@@ -156,7 +156,7 @@ func TestMCPStoreReadsMatchRegistryFixture(t *testing.T) {
 		UpdatedAt:   time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC),
 	}
 	services.services[service.ID] = &service
-	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop())
+	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk))
 	publisher := nostrpool.NewRelayFirstStatePublisher(projector, sink)
 	require.NoError(t, publisher.PublishServiceRegistry(ctx, &service, false))
 	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex()})
@@ -188,7 +188,7 @@ func TestMCPStoreReadsMatchRegistryFixture(t *testing.T) {
 		CreatedAt:          service.CreatedAt, UpdatedAt: service.UpdatedAt,
 	}
 	environments.environments[environment.ID] = &environment
-	environmentProjector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, environmentServer.registry, sink, nil, zap.NewNop())
+	environmentProjector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, environmentServer.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk))
 	environmentPublisher := nostrpool.NewRelayFirstStatePublisher(environmentProjector, sink)
 	require.NoError(t, environmentPublisher.PublishEnvironmentRegistry(ctx, &environment, nil, false))
 	for _, tc := range []struct {
@@ -297,7 +297,7 @@ func TestMCPBackupStoreReadsMatchRepositoryFixture(t *testing.T) {
 	store := testStateStore(t)
 	sink := mcpProjectionStore{store}
 	serviceServer, _ := newTestMCPServiceServer()
-	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop())
+	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk))
 	publisher := nostrpool.NewBackupCanonicalPublisher(projector, zap.NewNop())
 	created := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	repo := domain.BackupRepository{ID: uuid.New(), Name: "archive", Backend: domain.BackupBackendKopia, RepositoryURI: "kopia://archive", CreatedAt: created, UpdatedAt: created}
@@ -367,7 +367,7 @@ func TestMCPBuildArtifactStoreReadsMatchRepositoryFixture(t *testing.T) {
 	buildRepo, artifactRepo := newTestBuildRepo(), newTestArtifactRepo()
 	registry := service.NewRegistryService(nil, nil, buildRepo, artifactRepo, nil, nil, nil, nil, nil, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
 	repositoryServer := newTestServer(registry, zap.NewNop())
-	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, repositoryServer.registry, sink, nil, zap.NewNop())
+	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, repositoryServer.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk))
 	publisher := nostrpool.NewRelayFirstStatePublisher(projector, sink)
 	serviceID := uuid.New()
 	created := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -408,7 +408,7 @@ func TestMCPConfidentialChannelStoreReadsMatchRepositoryFixture(t *testing.T) {
 	manager := controlplane.NewOCKManager(controlplane.OCKManagerConfig{Signer: signer, ServicePubkey: sk.Public().Hex(), Publisher: mcpKeyEnvelopeSink{}})
 	encryptor := controlplane.NewConfidentialEncryptor(manager, zap.NewNop())
 	serviceServer, _ := newTestMCPServiceServer()
-	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop())
+	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk))
 	publisher := nostrpool.NewNotificationCanonicalPublisher(projector, encryptor, nil, zap.NewNop())
 	repositoryServer, repo, _ := newTestMCPNotificationServer()
 	created := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -445,7 +445,7 @@ func TestMCPConfidentialSecretMetadataStoreReadsMatchRepositoryFixture(t *testin
 	manager := controlplane.NewOCKManager(controlplane.OCKManagerConfig{Signer: signer, ServicePubkey: sk.Public().Hex(), Publisher: mcpKeyEnvelopeSink{}})
 	encryptor := controlplane.NewConfidentialEncryptor(manager, zap.NewNop())
 	serviceServer, _ := newTestMCPServiceServer()
-	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop())
+	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk))
 	orgID := uuid.New()
 	publisher := nostrpool.NewSecretCanonicalPublisher(projector, encryptor, mcpSecretOrgResolver{orgID.String()}, zap.NewNop())
 	created := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -475,7 +475,7 @@ func TestMCPPaymentStoreReadsMatchRepositoryFixture(t *testing.T) {
 	encryptor := controlplane.NewConfidentialEncryptor(manager, zap.NewNop())
 	repositoryServer, paymentRepo, runID, workerPubkey := newTestMCPPaymentServer(t)
 	serviceServer, _ := newTestMCPServiceServer()
-	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop())
+	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk))
 	statePublisher := nostrpool.NewRelayFirstStatePublisher(projector, sink)
 	created := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
 	run := domain.DeploymentRun{ID: runID, DeploymentIntentID: uuid.New(), WorkerPubkey: workerPubkey, Status: domain.RunStatusRunning, CreatedAt: created, UpdatedAt: created}
@@ -636,7 +636,7 @@ func TestMCPPackageStoreReadsMatchRepositoryFixture(t *testing.T) {
 	store := testStateStore(t)
 	sink := mcpProjectionStore{store}
 	serviceServer, _ := newTestMCPServiceServer()
-	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop())
+	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk))
 	publisher := nostrpool.NewRelayFirstStatePublisher(projector, sink)
 	created := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	repo := domain.PackageRepository{ID: uuid.New(), Name: "libs", Format: domain.PackageRepositoryFormatNPM, CreatedAt: created, UpdatedAt: created}
@@ -683,7 +683,7 @@ func TestMCPMLStoreReadsMatchRepositoryFixture(t *testing.T) {
 	fixture := &mcpMLFixtureRepo{endpoint: endpoint, state: state, artifact: artifact, edges: []domain.MLProvenanceEdge{}}
 	mlRegistry := service.NewMLRegistryService(fixture, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
 	repositoryServer := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{MLRegistry: mlRegistry})
-	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, environmentServer.registry, sink, nil, zap.NewNop(), nostrpool.WithMLProjectionSource(fixture))
+	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, environmentServer.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk), nostrpool.WithMLProjectionSource(fixture))
 	publisher := nostrpool.NewMLCanonicalPublisher(projector, zap.NewNop())
 	require.NoError(t, publisher.PublishEndpointState(ctx, &state))
 	require.NoError(t, publisher.PublishProvenanceGraph(ctx, &artifact))
@@ -715,7 +715,7 @@ func TestMCPDeploymentStoreReadsMatchRepositoryFixture(t *testing.T) {
 	serviceRepo, environmentRepo, intentRepo, runRepo, stateRepo := newTestServiceRepo(), newTestEnvironmentRepo(), newTestDeploymentIntentRepo(), newTestRunRepo(), newTestDeploymentStateRepo()
 	registry := service.NewRegistryService(serviceRepo, environmentRepo, nil, nil, intentRepo, runRepo, nil, stateRepo, nil, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
 	repositoryServer := newTestServer(registry, zap.NewNop())
-	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, registry, sink, nil, zap.NewNop())
+	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk))
 	publisher := nostrpool.NewRelayFirstStatePublisher(projector, sink)
 	serviceID, environmentID := uuid.New(), uuid.New()
 	created := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -759,7 +759,7 @@ func TestMCPDNSEndpointStoreReadsMatchProjectionFixture(t *testing.T) {
 	store := testStateStore(t)
 	sink := mcpProjectionStore{store}
 	serviceServer, _ := newTestMCPServiceServer()
-	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop())
+	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk))
 	publisher := nostrpool.NewDNSCanonicalPublisher(projector, zap.NewNop())
 	endpoint := domain.DNSEndpoint{ID: uuid.New(), Family: domain.DNSEndpointFamilyService, Name: "api", Environment: "prod", FQDN: "api.example.test", Coordinate: "endpoint:service:api:prod", Zone: "example.test", Address: "192.0.2.10", Source: "runtime", DriftStatus: domain.DriftStatusDrifted, Health: domain.HealthStatusHealthy, MaterializedAt: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)}
 	_, _, err := publisher.PublishEndpoints(ctx, []domain.DNSEndpoint{endpoint})
@@ -789,7 +789,7 @@ func TestMCPRunLogsUseStoreRunMetadata(t *testing.T) {
 	sk := nostr.Generate()
 	store := testStateStore(t)
 	sink := mcpProjectionStore{store}
-	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, repositoryServer.registry, sink, nil, zap.NewNop())
+	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, repositoryServer.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk))
 	publisher := nostrpool.NewRelayFirstStatePublisher(projector, sink)
 	require.NoError(t, publisher.PublishDeploymentRunRegistry(ctx, run, false))
 	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex(), LogService: repositoryServer.logService})

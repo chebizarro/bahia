@@ -37,7 +37,9 @@ func TestConfiguredHiveCIPolicyPublishesFromRelayLocalEntitiesWithoutPostgres(t 
 	cfg := config.NostrConfig{PrivateKey: serviceKey, PublishEnabled: true}
 	pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(serviceKey)
 	require.NoError(t, err)
-	publisher := nostrAdapter.NewPublisher(cfg, nostrAdapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
+	fixtureKeyer, err := controlplane.NewPrivateKeySigner(serviceKey)
+	require.NoError(t, err)
+	publisher := nostrAdapter.NewPublisher(cfg, nostrAdapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), nostrAdapter.WithPublisherSigner(fixtureKeyer),
 		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostrAdapter.WithLocalOutbox(outbox, store))
 	t.Cleanup(func() {
 		publisher.Close()
@@ -46,7 +48,7 @@ func TestConfiguredHiveCIPolicyPublishesFromRelayLocalEntitiesWithoutPostgres(t 
 	})
 	history := nostrAdapter.NewLocalEventRepository(store, nil).Authored(pubkey)
 	registry := service.NewRegistryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	projector := nostrAdapter.NewProjector(cfg, registry, publisher, history, zap.NewNop())
+	projector := nostrAdapter.NewProjector(cfg, registry, publisher, history, zap.NewNop(), nostrAdapter.WithProjectorSigner(fixtureKeyer, pubkey))
 	publisher.OnDeliveryAbandoned(projector.ForgetAbandonedProjection)
 	orgID := uuid.New()
 	svc := domain.Service{ID: uuid.New(), OrgID: orgID, Name: "api"}

@@ -76,11 +76,13 @@ func startLedgerDaemon(t *testing.T, keyHex string) *ledgerDaemon {
 	cfg := config.NostrConfig{PrivateKey: keyHex, PublishEnabled: true}
 	pubkey, err := nostrutil.PublicKeyHexFromPrivateKeyHex(keyHex)
 	require.NoError(t, err)
-	publisher := nostrAdapter.NewPublisher(cfg, nostrAdapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
+	fixtureKeyer, err := controlplane.NewPrivateKeySigner(keyHex)
+	require.NoError(t, err)
+	publisher := nostrAdapter.NewPublisher(cfg, nostrAdapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), nostrAdapter.WithPublisherSigner(fixtureKeyer),
 		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostrAdapter.WithLocalOutbox(outbox, store))
 	history := nostrAdapter.NewLocalEventRepository(store, nil).Authored(pubkey)
 	registry := service.NewRegistryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	projector := nostrAdapter.NewProjector(cfg, registry, publisher, history, zap.NewNop())
+	projector := nostrAdapter.NewProjector(cfg, registry, publisher, history, zap.NewNop(), nostrAdapter.WithProjectorSigner(fixtureKeyer, pubkey))
 	publisher.OnDeliveryAbandoned(projector.ForgetAbandonedProjection)
 	signer, err := controlplane.NewPrivateKeySigner(keyHex)
 	require.NoError(t, err)
