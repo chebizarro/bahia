@@ -1335,10 +1335,10 @@ func New(cfg *config.Config) (*App, error) {
 		healthProvider.RegisterCheck("backup_run_status", func() HealthCheck {
 			if backupStatus.LastError() != "" {
 				return HealthCheck{Name: "backup_run_status", Status: HealthStatusWarn,
-					Message: "backup run accepted-status reconciliation is delayed"}
+					Message: "backup run accepted-status reconciliation delayed; new run admission paused"}
 			}
 			return HealthCheck{Name: "backup_run_status", Status: HealthStatusPass,
-				Message: "backup run accepted-status reconciliation is available"}
+				Message: "backup run accepted-status reconciler available; new run admission paused"}
 		})
 	}
 	backupRunReceipts, backupReceiptErr := controlplane.NewLocalBackupRunReceipts(localEventStore, localOutbox, servicePubkey)

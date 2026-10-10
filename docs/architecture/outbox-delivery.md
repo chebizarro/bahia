@@ -23,10 +23,10 @@ payments and security.
   (permanent `blocked:` / `invalid:` / `pow:` rejections) or when the bounded
   attempt budget is spent. Abandoned entries are terminal `failed` rows,
   retained for `failedOutboxRetention` (7 days) with their reason.
-- Backup-run intake stages its initial service-signed state and immutable
-  request keys in one outbox transaction. Its separate admission record keeps
-  the exact state event ID and quorum-ACK result after a settled entry is
-  pruned. A pending or failed entry does not produce an accepted run intent;
+- The currently disabled backup-run admission path would stage its initial
+  service-signed state and immutable request keys in one outbox transaction.
+  Its separate admission record keeps the exact state event ID and quorum-ACK
+  result after a settled entry is pruned. A pending or failed entry does not produce an accepted run intent;
   the same signed request can be replayed after delivery to report acceptance.
 
 For service-signed backup recipe, repository, policy, and run-state `30900` events,
@@ -47,8 +47,9 @@ Older rows without policy provenance are not promoted into proofs and refuse
 backup acceptance even if their event cache entry remains. The proof's signed
 event also preserves a pinned older config version when the replaceable local
 event cache has moved to a newer version.
-For a staged backup run, the publisher's verified quorum round also updates
-the durable admission record. The final signed accepted intent status is
+For a run staged by the tested admission path or before the production pause,
+the publisher's verified quorum round also updates the durable admission
+record. The final signed accepted intent status is
 enqueued in a separate atomic transaction after that outcome; a startup pass
 repairs a crash between the two transactions without signing a second status.
 Both the run state and accepted status remain pinned through ordinary pruning

@@ -226,10 +226,21 @@ step 6 replays the intent on restart: creates resolve by id
 (`resolveCreateByID`), deployments compare the runtime's desired hash, DNS
 applies by serial, backup job ids are UUIDv7.
 
-Backup run request intake accepts only a fresh, complete operator-signed run
-intent with an author-minted UUIDv7 and an exact, immutable execution snapshot.
-Before staging a run, the daemon verifies that each referenced service-signed
-recipe, repository, and policy version has its own control-plane relay quorum
+**Backup run admission is currently paused in production.** The async
+history/ACK/status code below is a non-admitting prerequisite exercised by
+tests, not a live intake promise: `backupRunAsyncIntakeEnabled` is false and
+`StageRunAdmission` refuses until a deployment-wide sole-custody signer fence,
+authoritative history seal, terminal signed status settlement, and
+cross-process outbox fence are available. A new signed request does not stage
+a run or return `pending`/`accepted`; a retained pending request also reports
+intake unavailable. An already-admitted, fully ACKed historical record may
+still be recognized by exact-ID replay. No backup execution is enabled.
+
+When admission is enabled after those prerequisites, the protocol accepts only
+a fresh, complete operator-signed run intent with an author-minted UUIDv7 and
+an exact, immutable execution snapshot. Before staging a run, it verifies
+that each referenced service-signed recipe, repository, and policy version has
+its own control-plane relay quorum
 ACK. The service then signs a queued kind-30900 `backup-run` state
 (`legacy_kind=31996`) and commits it with the request ID, intent ID, and run
 coordinate in one outbox transaction. The request remains **pending**, not
@@ -268,11 +279,13 @@ and the exact configuration snapshot. Repositories with a credential profile
 also require an immutable credential-version ID in the snapshot. A version ID
 is a binding, not proof that a secret can be recovered; canonical credential
 resolution and execution checkpoint recovery are still required before a run
-may execute. MCP initially reports `pending` for staged delivery; there is no
-provisional pending relay status. After run-state quorum delivery, the daemon
-stages the final accepted status without requiring a request replay. MCP
-reports acceptance only after that status also reaches relay quorum; the
-canonical queued run state is independently observable on relays.
+may execute. If admission is enabled after the missing fences, MCP would
+report `pending` during staged delivery, with no provisional pending relay
+status. After run-state quorum delivery, the reconciler would stage the final
+accepted status without requiring a request replay. MCP would report
+acceptance only after that status also reaches relay quorum; the canonical
+queued run state would be independently observable on relays. None of this is
+the response to a new production request while intake is paused.
 
 LLM release-register, deploy, rollback, approve and reject intents are also
 refused while canonical publication or execution is unavailable. Before the

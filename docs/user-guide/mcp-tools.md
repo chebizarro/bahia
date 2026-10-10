@@ -132,7 +132,25 @@ Aliases: `bahia_apply_backup_repository`, `bahia_apply_backup_policy`, `bahia_ap
 
 `request_backup_run` / `bahia_request_backup_run` requires one argument, `signed_intent_event`: the complete NIP-01 event object signed by the same operator pubkey used for MCP NIP-98 authentication. The event must be kind `30900`, `domain=backup`, `op=run`, with a UUIDv7 run `id`, `d=backup-run:<id>`, a stable `intent_id`, and the complete resolved run inputs: recipe, repository, policy (if any), backend, target, verification mode, and `execution_snapshot`. The snapshot must contain the service-signed recipe/repository/policy event IDs and exact definitions; a repository credential profile requires a `credential_version_id` UUID. Do not put secret values in the request. Add exactly one signed NIP-40 `expiration` tag after `created_at` and no more than 15 minutes later. Requests older than 15 minutes or past expiration are rejected; the normal inbound future-clock-skew limit applies.
 
-Publish the signed event to a relay first, then use `signed_intent_event` if an MCP handoff is needed. MCP requires the exact event to be visible in the daemon's local relay-synced store. **Local visibility is not a relay `OK`, delivery quorum, or backup-run acceptance receipt.** A valid request with ACKed configuration versions initially returns `pending` with the staged service-signed run-state event ID; no provisional pending relay status is emitted. After run-state relay-quorum ACK, the daemon stages a signed accepted intent status without requiring a replay. The exact status is pinned for retry until its own relay-quorum ACK; only then does replay return `accepted` without creating a second run. Outbox exhaustion does not imply refusal, because a relay may already hold the staged event. Neither result starts backup execution; credential recovery and step checkpoints remain unavailable. The old `recipe_id`/`recipe`-only MCP request and MCP `idempotency_key` are not accepted for this tool; reuse the same signed event and `intent_id` for retries.
+**Backup run intake is paused.** The signed-event schema above is enforced,
+but a new production `request_backup_run` call refuses rather than staging a
+run or returning `pending`/`accepted`. An unexpired retained pending request
+also reports intake unavailable. Only an already-admitted historical request
+with exact run-state and accepted-status relay ACK proofs can replay as
+`accepted`. The presence of a tool in `tools/list` is not an admission promise.
+Neither a local event nor a PostgreSQL run row is an acceptance receipt, and
+backup execution remains disabled.
+
+For future admission after the signer, history, terminal-status, and outbox
+fences are complete, publish the signed event to a relay first, then pass that
+exact event as `signed_intent_event` for an MCP handoff. The tested protocol
+requires local observation of the exact event and returns `pending` only after
+a service-signed run state is durably staged. It reports `accepted` only after
+both that state and its signed intent status have exact relay-quorum ACKs. No
+provisional pending relay status is emitted. Outbox exhaustion alone cannot
+prove refusal because a relay may already hold the staged event. The old
+`recipe_id`/`recipe`-only MCP request and MCP `idempotency_key` are not accepted
+for this tool; reuse the same signed event and `intent_id` for retries.
 
 ### Outbox
 
