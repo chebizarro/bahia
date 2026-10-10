@@ -44,7 +44,7 @@ func TestNostrPublishTargetMigrationRoundTrip(t *testing.T) {
 	toBefore071 := DownOptions{Confirm: true, To: "000070_hiveci_initiations"}
 	rolled, err := Down(ctx, pool, logger, toBefore071)
 	require.NoError(t, err)
-	require.Equal(t, []string{"000078_f74a_backdated_successor", "000077_f74a_unit_tombstones", "000076_f74a_observation_archive", "000075_org_strict_revocation", "000074_ml_model_version_revision", "000073_sbom_pending_publication", "000072_security_retire_failed_retryable", "000071_nostr_publish_target"}, rolled)
+	require.Equal(t, []string{"000079_f74a_hot_observation_immutable", "000078_f74a_backdated_successor", "000077_f74a_unit_tombstones", "000076_f74a_observation_archive", "000075_org_strict_revocation", "000074_ml_model_version_revision", "000073_sbom_pending_publication", "000072_security_retire_failed_retryable", "000071_nostr_publish_target"}, rolled)
 
 	insert := func(id, entityType, state, lastError string) {
 		_, err := pool.Exec(ctx, `INSERT INTO nostr_events (id, kind, pubkey, content, sig, created_at, entity_type, publish_state, last_publish_error)
@@ -75,7 +75,7 @@ func TestNostrPublishTargetMigrationRoundTrip(t *testing.T) {
 
 	rolled, err = Down(ctx, pool, logger, toBefore071)
 	require.NoError(t, err)
-	require.Equal(t, []string{"000078_f74a_backdated_successor", "000077_f74a_unit_tombstones", "000076_f74a_observation_archive", "000075_org_strict_revocation", "000074_ml_model_version_revision", "000073_sbom_pending_publication", "000072_security_retire_failed_retryable", "000071_nostr_publish_target"}, rolled)
+	require.Equal(t, []string{"000079_f74a_hot_observation_immutable", "000078_f74a_backdated_successor", "000077_f74a_unit_tombstones", "000076_f74a_observation_archive", "000075_org_strict_revocation", "000074_ml_model_version_revision", "000073_sbom_pending_publication", "000072_security_retire_failed_retryable", "000071_nostr_publish_target"}, rolled)
 	var hasTarget bool
 	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'nostr_events' AND column_name = 'publish_target')`).Scan(&hasTarget))
 	require.False(t, hasTarget)

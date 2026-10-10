@@ -89,7 +89,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return reportError(stderr, "outbox-transfer --apply is disabled: SQL publisher quiescence and effective durable relay policy cannot be proven by this command; no row was claimed or enqueued")
 	}
 	if action == "f74a-compact" && *confirm {
-		return reportError(stderr, "confirmed F74a compaction is disabled: concurrent backdated observations can turn dry-run candidates into material transitions")
+		return reportError(stderr, "confirmed F74a compaction is disabled: no trusted same-PostgreSQL backup and restore receipt contract exists")
 	}
 	if action == "f74a-import" && !*confirmQuiesced {
 		return reportError(stderr, "f74a-import requires --confirm-quiesced; stop all daemon and SQL writers first")
@@ -339,6 +339,7 @@ func runF74aMaintenance(ctx context.Context, pool *pgxpool.Pool, action string, 
 		{"unlinked_observations", census.UnlinkedObservations},
 		{"material_observation_runs", census.MaterialRuns},
 		{"suppressible_observations_before_cutoff", census.SuppressibleObservations},
+		{"hot_suppressible_observations_before_cutoff", census.HotSuppressibleObservations},
 		{"package_rows", census.PackageRows},
 		{"semantic_packages", census.SemanticPackages},
 		{"duplicate_package_rows", census.DuplicatePackages},

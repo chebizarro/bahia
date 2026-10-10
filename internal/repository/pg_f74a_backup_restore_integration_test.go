@@ -231,6 +231,9 @@ func TestF74aPostgres16BackupRestoreAfterUnitRetirement(t *testing.T) {
 	}
 	rolled, err := db.Down(ctx, target, zap.NewNop(), db.DownOptions{Confirm: true})
 	require.NoError(t, err)
+	require.Equal(t, []string{"000079_f74a_hot_observation_immutable"}, rolled)
+	rolled, err = db.Down(ctx, target, zap.NewNop(), db.DownOptions{Confirm: true})
+	require.NoError(t, err)
 	require.Equal(t, []string{"000078_f74a_backdated_successor"}, rolled)
 	_, err = db.Down(ctx, target, zap.NewNop(), db.DownOptions{Confirm: true})
 	require.ErrorContains(t, err, "cannot roll back F74a unit tombstones")

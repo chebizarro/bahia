@@ -50,7 +50,7 @@ func TestF74aCompactIsReadOnlyEvenWithConfirm(t *testing.T) {
 	} {
 		var output, errors bytes.Buffer
 		require.Equal(t, 1, run(context.Background(), args, &output, &errors))
-		require.Contains(t, errors.String(), "confirmed F74a compaction is disabled")
+		require.Contains(t, errors.String(), "no trusted same-PostgreSQL backup and restore receipt contract")
 	}
 	var output, errors bytes.Buffer
 	require.Equal(t, 1, run(context.Background(), []string{"f74a-compact"}, &output, &errors))

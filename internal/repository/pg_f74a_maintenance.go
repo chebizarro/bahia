@@ -13,20 +13,21 @@ import (
 // F74aCensus separates historical observations from the current linked
 // observations that the canonical backfill actually publishes.
 type F74aCensus struct {
-	Cutoff                   time.Time
-	Observations             int64
-	LinkedObservations       int64
-	UnlinkedObservations     int64
-	MaterialRuns             int64
-	SuppressibleObservations int64
-	PackageRows              int64
-	SemanticPackages         int64
-	DuplicatePackages        int64
-	LegacyPackageCoordinates int64
-	Releases                 int64
-	Signatures               int64
-	SBOMs                    int64
-	EstimatedPublications    int64
+	Cutoff                      time.Time
+	Observations                int64
+	LinkedObservations          int64
+	UnlinkedObservations        int64
+	MaterialRuns                int64
+	SuppressibleObservations    int64
+	HotSuppressibleObservations int64
+	PackageRows                 int64
+	SemanticPackages            int64
+	DuplicatePackages           int64
+	LegacyPackageCoordinates    int64
+	Releases                    int64
+	Signatures                  int64
+	SBOMs                       int64
+	EstimatedPublications       int64
 }
 
 const f74aObservationSelect = `SELECT o.id, o.service_id, o.environment_id,
@@ -35,45 +36,46 @@ const f74aObservationSelect = `SELECT o.id, o.service_id, o.environment_id,
 	COALESCE(o.observed_host, ''), COALESCE(o.observed_version, ''),
 	o.health_status, o.source, o.metadata, o.normalized_state,
 	COALESCE(o.normalized_hash, ''), o.observed_at,
-	EXISTS(SELECT 1 FROM environment_service_state s WHERE s.current_observation_id = o.id)
+	EXISTS(SELECT 1 FROM environment_service_state s WHERE s.current_observation_id = o.id),
+	EXISTS(SELECT 1 FROM runtime_observations h WHERE h.id = o.id)
 	FROM runtime_observation_history o`
 
 const f74aObservationScan = f74aObservationSelect + ` ORDER BY o.service_id, o.environment_id, o.observed_at, o.id`
 
-func scanF74aObservation(rows pgx.Rows) (domain.RuntimeObservation, bool, error) {
+func scanF74aObservation(rows pgx.Rows) (domain.RuntimeObservation, bool, bool, error) {
 	var obs domain.RuntimeObservation
-	var linked bool
+	var linked, hot bool
 	var metadata, normalized []byte
 	err := rows.Scan(&obs.ID, &obs.ServiceID, &obs.EnvironmentID, &obs.DeploymentUnitID,
 		&obs.ObservedImageDigest, &obs.ObservedImageRepo, &obs.ObservedContainerID,
 		&obs.ObservedHost, &obs.ObservedVersion, &obs.HealthStatus, &obs.Source,
-		&metadata, &normalized, &obs.NormalizedHash, &obs.ObservedAt, &linked)
+		&metadata, &normalized, &obs.NormalizedHash, &obs.ObservedAt, &linked, &hot)
 	if err != nil {
-		return obs, false, err
+		return obs, false, false, err
 	}
 	if err := unmarshalJSON(metadata, &obs.Metadata, "observation metadata"); err != nil {
-		return obs, false, err
+		return obs, false, false, err
 	}
 	if len(normalized) > 0 && string(normalized) != "null" {
 		obs.NormalizedState = &domain.NormalizedObservation{}
 		if err := unmarshalJSON(normalized, obs.NormalizedState, "normalized state"); err != nil {
-			return obs, false, err
+			return obs, false, false, err
 		}
 	}
-	return obs, linked, nil
+	return obs, linked, hot, nil
 }
 
-func scanF74aRuns(ctx context.Context, q pgQueryer, cutoff time.Time) (total, linked, material, suppressible int64, err error) {
+func scanF74aRuns(ctx context.Context, q pgQueryer, cutoff time.Time) (total, linked, material, suppressible, hotSuppressible int64, err error) {
 	rows, err := q.Query(ctx, f74aObservationScan)
 	if err != nil {
-		return 0, 0, 0, 0, fmt.Errorf("scanning F74a observations: %w", err)
+		return 0, 0, 0, 0, 0, fmt.Errorf("scanning F74a observations: %w", err)
 	}
 	defer rows.Close()
 	var previous *domain.RuntimeObservation
 	for rows.Next() {
-		obs, isLinked, err := scanF74aObservation(rows)
+		obs, isLinked, isHot, err := scanF74aObservation(rows)
 		if err != nil {
-			return 0, 0, 0, 0, fmt.Errorf("reading F74a observation: %w", err)
+			return 0, 0, 0, 0, 0, fmt.Errorf("reading F74a observation: %w", err)
 		}
 		total++
 		if isLinked {
@@ -83,10 +85,13 @@ func scanF74aRuns(ctx context.Context, q pgQueryer, cutoff time.Time) (total, li
 			material++
 		} else if !isLinked && obs.ObservedAt.Before(cutoff) {
 			suppressible++
+			if isHot {
+				hotSuppressible++
+			}
 		}
 		previous = &obs
 	}
-	return total, linked, material, suppressible, rows.Err()
+	return total, linked, material, suppressible, hotSuppressible, rows.Err()
 }
 
 // CensusF74a uses one repeatable-read, read-only snapshot. It never reads
@@ -117,7 +122,7 @@ func CensusF74a(ctx context.Context, pool *pgxpool.Pool, cutoff time.Time) (F74a
 			return c, fmt.Errorf("counting F74a family: %w", err)
 		}
 	}
-	c.Observations, c.LinkedObservations, c.MaterialRuns, c.SuppressibleObservations, err = scanF74aRuns(ctx, tx, c.Cutoff)
+	c.Observations, c.LinkedObservations, c.MaterialRuns, c.SuppressibleObservations, c.HotSuppressibleObservations, err = scanF74aRuns(ctx, tx, c.Cutoff)
 	if err != nil {
 		return c, err
 	}

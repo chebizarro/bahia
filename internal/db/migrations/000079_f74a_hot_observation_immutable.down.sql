@@ -1,0 +1,2 @@
+DROP TRIGGER f74a_hot_observation_immutable ON runtime_observations;
+DROP FUNCTION f74a_guard_hot_observation_update();

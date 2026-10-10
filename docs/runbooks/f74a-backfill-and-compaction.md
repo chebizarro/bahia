@@ -24,8 +24,13 @@ edit the receipt or completion marker to bypass verification.
 `f74a-census` and `f74a-compact --cutoff` actions are read-only;
 `f74a-compact --confirm` is rejected. There is no `--batch-size` or
 `--backup-id` flag. Do not use another tool or manual SQL to bypass this
-guard. The deletion and rollback acceptance gate remains blocked until a
-concurrency-safe implementation is reviewed and shipped. This runbook
+guard. The archive repository has bounded, transactionally checked batches
+and protects archived successors of backdated writes, but the command cannot
+authenticate a backup and isolated restore of this exact Bahia PostgreSQL
+database. Generic `backup_runs` and `backup_restores` records can describe
+unrelated workload targets; their success is not a database backup receipt.
+The deletion gate remains blocked until a trusted same-database snapshot and
+restore identity contract is implemented and independently verified. This runbook
 applies only to a Bahia image exposing both read-only actions. If either
 action is absent, stop: the older image cannot perform this procedure. PostgreSQL is a
 derived index; preserve the service key, relay-held canonical records, and
@@ -119,19 +124,22 @@ On the restored staging database, run only the read-only estimate:
 bahia-migrate f74a-compact --config "$STAGING_CONFIG" --cutoff "$CUTOFF"
 ```
 
-The result identifies potential **unlinked, older no-op observation
-samples** while preserving the first row of every material run, every
+The `hot_suppressible_observations_before_cutoff` result identifies the exact
+physical candidates in one repeatable-read snapshot: **unlinked, older no-op
+observation samples** while preserving the first row of every material run, every
 state-linked row, and rows newer than the cutoff. It also reports duplicate
-packages; package physical deletion is disabled. Record the estimated count,
+packages; package physical deletion is disabled. The historical
+`suppressible_observations_before_cutoff` count includes archived rows and is
+not a physical deletion count. Record the estimated count,
 cutoff, and a sample of preserved forensic transitions. An unexpected count,
 an absent cutoff, or a proposed state-link deletion is a stop condition.
 
-There is no executable confirmed-deletion command. Concurrent backdated
-observations can invalidate a dry-run decision, so neither this estimate nor
-a backup authorizes deletion. Confirmed batching, post-deletion census, and
-a second restore from the same backup remain **unmet acceptance checks**.
-They require a separately reviewed, concurrency-safe implementation and an
-isolated staging rehearsal before any live compaction is permitted.
+There is no executable confirmed-deletion command. Concurrent writes can
+invalidate a dry-run decision, and no trusted same-database backup/restore
+receipt is available to authorize deletion. Confirmed batching through the
+operator command, post-deletion census, and a second restore from the same
+operational backup remain **unmet acceptance checks**. Do not use repository
+tests or a generic workload backup record as a substitute for this gate.
 
 ## 4. Exercise the scaled integration fixture
 

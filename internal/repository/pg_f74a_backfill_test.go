@@ -56,26 +56,27 @@ func TestF74aObservationRunScanPreservesFirstMaterialAndLinkedRows(t *testing.T)
 	serviceID, envID := uuid.New(), uuid.New()
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New(), uuid.New()}
-	rows := pgxmock.NewRows([]string{"id", "service", "env", "unit", "digest", "repo", "container", "host", "version", "health", "source", "metadata", "normalized", "hash", "at", "linked"})
+	rows := pgxmock.NewRows([]string{"id", "service", "env", "unit", "digest", "repo", "container", "host", "version", "health", "source", "metadata", "normalized", "hash", "at", "linked", "hot"})
 	for i := range ids {
 		digest := "sha256:" + strings.Repeat("a", 64)
 		if i == 3 {
 			digest = "sha256:" + strings.Repeat("b", 64)
 		}
-		rows.AddRow(ids[i], serviceID, envID, nil, digest, "repo", "container", "host", "v1", "healthy", "runtime", []byte(`{}`), nil, "", base.Add(time.Duration(i)*time.Hour), i == 2)
+		rows.AddRow(ids[i], serviceID, envID, nil, digest, "repo", "container", "host", "v1", "healthy", "runtime", []byte(`{}`), nil, "", base.Add(time.Duration(i)*time.Hour), i == 2, true)
 	}
 	mock.ExpectQuery("SELECT o.id").WillReturnRows(rows)
-	total, linked, material, suppressible, err := scanF74aRuns(context.Background(), mock, base.Add(24*time.Hour))
+	total, linked, material, suppressible, hotSuppressible, err := scanF74aRuns(context.Background(), mock, base.Add(24*time.Hour))
 	require.NoError(t, err)
 	require.EqualValues(t, 4, total)
 	require.EqualValues(t, 1, linked)
 	require.EqualValues(t, 2, material)
 	require.EqualValues(t, 1, suppressible)
+	require.EqualValues(t, 1, hotSuppressible)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // A dry-run candidate can become a real A→B→A transition after a backdated
-// insert. This is why the CLI has no confirmed deletion path.
+// insert, so deletion must recheck materiality under the coordinate lock.
 func TestF74aDryRunReclassifiesBackdatedMaterialTransition(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	require.NoError(t, err)
@@ -83,9 +84,9 @@ func TestF74aDryRunReclassifiesBackdatedMaterialTransition(t *testing.T) {
 	serviceID, envID := uuid.New(), uuid.New()
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	makeRows := func(withBackdated bool) *pgxmock.Rows {
-		rows := pgxmock.NewRows([]string{"id", "service", "env", "unit", "digest", "repo", "container", "host", "version", "health", "source", "metadata", "normalized", "hash", "at", "linked"})
+		rows := pgxmock.NewRows([]string{"id", "service", "env", "unit", "digest", "repo", "container", "host", "version", "health", "source", "metadata", "normalized", "hash", "at", "linked", "hot"})
 		add := func(digest string, hour int) {
-			rows.AddRow(uuid.New(), serviceID, envID, nil, "sha256:"+strings.Repeat(digest, 64), "repo", "container", "host", "v1", "healthy", "runtime", []byte(`{}`), nil, "", base.Add(time.Duration(hour)*time.Hour), false)
+			rows.AddRow(uuid.New(), serviceID, envID, nil, "sha256:"+strings.Repeat(digest, 64), "repo", "container", "host", "v1", "healthy", "runtime", []byte(`{}`), nil, "", base.Add(time.Duration(hour)*time.Hour), false, true)
 		}
 		add("a", 1)
 		if withBackdated {
@@ -95,11 +96,11 @@ func TestF74aDryRunReclassifiesBackdatedMaterialTransition(t *testing.T) {
 		return rows
 	}
 	mock.ExpectQuery("SELECT o.id").WillReturnRows(makeRows(false))
-	_, _, _, before, err := scanF74aRuns(context.Background(), mock, base.Add(24*time.Hour))
+	_, _, _, before, _, err := scanF74aRuns(context.Background(), mock, base.Add(24*time.Hour))
 	require.NoError(t, err)
 	require.EqualValues(t, 1, before)
 	mock.ExpectQuery("SELECT o.id").WillReturnRows(makeRows(true))
-	_, _, material, after, err := scanF74aRuns(context.Background(), mock, base.Add(24*time.Hour))
+	_, _, material, after, _, err := scanF74aRuns(context.Background(), mock, base.Add(24*time.Hour))
 	require.NoError(t, err)
 	require.EqualValues(t, 3, material)
 	require.Zero(t, after)
