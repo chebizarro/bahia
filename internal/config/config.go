@@ -433,6 +433,7 @@ type AssistantConfig struct {
 	SignetBunkerURI      string                     `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
 	SignetAllowMock      bool                       `koanf:"signet_allow_mock" yaml:"signet_allow_mock" secret:"false"`
 	SignetConnectTimeout time.Duration              `koanf:"signet_connect_timeout" yaml:"signet_connect_timeout" secret:"false"`
+	WrappedKeys          AssistantWrappedKeysConfig `koanf:"wrapped_keys" yaml:"wrapped_keys"`
 	Agentic              AssistantAgenticConfig     `koanf:"agentic" yaml:"agentic"`
 	Permissions          AssistantPermissionsConfig `koanf:"permissions" yaml:"permissions"`
 	MCP                  AssistantMCPConfig         `koanf:"mcp" yaml:"mcp"`
@@ -442,6 +443,19 @@ type AssistantConfig struct {
 	Skills    AssistantExtensionSourceConfig `koanf:"skills" yaml:"skills"`
 	Commands  AssistantExtensionSourceConfig `koanf:"commands" yaml:"commands"`
 	Hooks     AssistantExtensionSourceConfig `koanf:"hooks" yaml:"hooks"`
+}
+
+// AssistantWrappedKeysConfig selects a read-only historical key source. It
+// never authorizes new assistant transcript or checkpoint writes.
+type AssistantWrappedKeysConfig struct {
+	Mode                 string        `koanf:"mode" yaml:"mode" secret:"false"`
+	ManifestPath         string        `koanf:"manifest_path" yaml:"manifest_path" secret:"false"`
+	ExpectedGeneration   string        `koanf:"expected_generation" yaml:"expected_generation" secret:"false"`
+	SignetBunkerURI      string        `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
+	OwnerClientSecretKey string        `koanf:"owner_client_secret_key" yaml:"owner_client_secret_key" secret:"true"`
+	LeaseEpoch           uint64        `koanf:"lease_epoch" yaml:"lease_epoch" secret:"false"`
+	LeaseExpiresAt       string        `koanf:"lease_expires_at" yaml:"lease_expires_at" secret:"false"`
+	ConnectTimeout       time.Duration `koanf:"connect_timeout" yaml:"connect_timeout" secret:"false"`
 }
 
 // AssistantExtensionSourceConfig points the assistant at directories that hold
@@ -2576,6 +2590,23 @@ func (c *Config) validateLLM() error {
 
 func (c *Config) validateAssistant() error {
 	assistant := &c.Assistant
+	wrapped := &assistant.WrappedKeys
+	wrapped.Mode = strings.ToLower(strings.TrimSpace(wrapped.Mode))
+	if wrapped.Mode == "" {
+		wrapped.Mode = "legacy_v1"
+	}
+	switch wrapped.Mode {
+	case "legacy_v1":
+	case "wrapped_read_only":
+		if !assistant.Enabled || strings.TrimSpace(wrapped.ManifestPath) == "" || strings.TrimSpace(wrapped.ExpectedGeneration) == "" || strings.TrimSpace(wrapped.SignetBunkerURI) == "" || strings.TrimSpace(wrapped.OwnerClientSecretKey) == "" || wrapped.LeaseEpoch == 0 || strings.TrimSpace(wrapped.LeaseExpiresAt) == "" {
+			return fmt.Errorf("config validation failed: assistant.wrapped_keys read-only mode requires enabled assistant, manifest path, generation pin, real Signet bunker, dedicated owner key and lease")
+		}
+		if !filepath.IsAbs(wrapped.ManifestPath) || filepath.Clean(wrapped.ManifestPath) != wrapped.ManifestPath || wrapped.ConnectTimeout < 0 {
+			return fmt.Errorf("config validation failed: assistant.wrapped_keys manifest path must be absolute and clean and connect timeout non-negative")
+		}
+	default:
+		return fmt.Errorf("config validation failed: assistant.wrapped_keys.mode must be legacy_v1 or wrapped_read_only")
+	}
 	assistant.LLMBaseURL = strings.TrimRight(strings.TrimSpace(assistant.LLMBaseURL), "/")
 	assistant.LLMModel = strings.TrimSpace(assistant.LLMModel)
 	assistant.LLMAPIKey = strings.TrimSpace(assistant.LLMAPIKey)

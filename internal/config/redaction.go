@@ -369,6 +369,22 @@ func (a AssistantConfig) MarshalYAML() (any, error) {
 	return marshalRedactedYAML(a)
 }
 
+func (a AssistantWrappedKeysConfig) String() string {
+	return stringRedactedConfig(a)
+}
+
+func (a AssistantWrappedKeysConfig) Format(state fmt.State, verb rune) {
+	formatRedactedConfig(state, verb, a)
+}
+
+func (a AssistantWrappedKeysConfig) MarshalJSON() ([]byte, error) {
+	return marshalRedactedJSON(a)
+}
+
+func (a AssistantWrappedKeysConfig) MarshalYAML() (any, error) {
+	return marshalRedactedYAML(a)
+}
+
 func (a AssistantAgenticConfig) String() string {
 	return stringRedactedConfig(a)
 }
