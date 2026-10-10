@@ -131,7 +131,7 @@ func TestCensusCoversAllOCKTopicsInnerAndOpaqueKeyWraps(t *testing.T) {
 	}
 	wrapTags := `[["t","org-key-envelope"]]`
 	classifyEvent(&r, 30900, nip44, len(nip44), wrapTags, len(wrapTags))
-	if r.Families["confidential_cp_state"].Classes["ock"] != 5 || r.Families["confidential_service_inner"].Classes["nip44_candidate"] != 5 || r.Families["ock_key_envelopes"].Classes["nip44_wrap_candidate"] != 1 {
+	if r.Families["confidential_cp_state"].Classes["ock"] != 5 || r.Families["confidential_service_inner"].Classes["nip44_candidate"] != 5 || r.Families["ock_key_envelopes"].Classes["nip44_wrap_candidate"] != 1 || r.Families["confidential_state_hash"].Classes["absent"] != 5 {
 		t.Fatalf("missed OCK/inner/key-wrap: %+v", r.Families)
 	}
 	if r.Families["ock_key_envelopes"].Status != "unproven" {

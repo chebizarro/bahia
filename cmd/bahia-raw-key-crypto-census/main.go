@@ -268,8 +268,15 @@ func classifyEvent(r *report, kind int, content string, contentSize int, tagJSON
 func classifyCPState(r *report, topic, content string, tags [][]string) {
 	legacy := map[string]string{"org-registry": "o1", "org-member": "o1", "org-invite": "o1", "secret-registry": "n1", "notification-channel": "n1"}
 	_, legacyTopic := legacy[topic]
+	var env struct {
+		Schema       string `json:"schema"`
+		KeyRef       string `json:"key_ref"`
+		KeyVersion   string `json:"key_version"`
+		ServiceInner string `json:"service_inner"`
+	}
+	parsed := json.Unmarshal([]byte(content), &env) == nil
 	hash := tagValue(tags, "state_hash")
-	if legacyTopic || hash != "" {
+	if legacyTopic || hash != "" || (parsed && env.Schema == "bahia.confidential.aead.v1") {
 		h := r.Families["confidential_state_hash"]
 		h.SQLRows++
 		if len(hash) == 64 && isHex(hash) {
@@ -290,13 +297,7 @@ func classifyCPState(r *report, topic, content string, tags [][]string) {
 		}
 		return
 	}
-	var env struct {
-		Schema       string `json:"schema"`
-		KeyRef       string `json:"key_ref"`
-		KeyVersion   string `json:"key_version"`
-		ServiceInner string `json:"service_inner"`
-	}
-	if json.Unmarshal([]byte(content), &env) == nil && env.Schema != "" {
+	if parsed && env.Schema != "" {
 		switch env.Schema {
 		case "bahia.confidential.aead.v1":
 			f := r.Families["confidential_cp_state"]
