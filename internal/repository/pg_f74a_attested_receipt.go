@@ -81,10 +81,13 @@ type F74aAttestedBackupReceipt struct {
 }
 
 type F74aReceiptVerification struct {
-	ReceiptID       uuid.UUID
-	SourceDatabase  F74aDatabaseIdentity
-	Cutoff          time.Time
-	InventorySHA256 string
+	ReceiptID          uuid.UUID
+	SourceDatabase     F74aDatabaseIdentity
+	Cutoff             time.Time
+	InventorySHA256    string
+	BackupObjectRef    string
+	BackupObjectSHA256 string
+	ExpiresAt          time.Time
 }
 
 // VerifyF74aAttestedReceipt checks one bounded, signed receipt against the
@@ -161,6 +164,7 @@ func VerifyF74aAttestedReceipt(ctx context.Context, pool *pgxpool.Pool, pinnedAt
 	return F74aReceiptVerification{
 		ReceiptID: p.ReceiptID, SourceDatabase: identity, Cutoff: p.Cutoff,
 		InventorySHA256: inventory.InventorySHA256,
+		BackupObjectRef: p.BackupObjectRef, BackupObjectSHA256: p.BackupObjectSHA256, ExpiresAt: p.ExpiresAt,
 	}, nil
 }
 
