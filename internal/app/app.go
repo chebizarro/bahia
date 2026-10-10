@@ -801,9 +801,11 @@ func New(cfg *config.Config) (*App, error) {
 
 	// Bahia self-identity publisher: emits 31410/31411/30360 events to relays.
 	// Wired but gated behind nostrPub availability (requires relay connectivity).
+	// The instance id is the public d tag of every status event: it is the
+	// service pubkey, never key material (bahia-h9n7f).
 	var bahiaStatusProjector *service.BahiaStatusProjector
-	if nostrPub != nil {
-		bahiaStatusProjector = service.NewBahiaStatusProjector(nostrPub, logger, cfg.Nostr.PrivateKey)
+	if nostrPub != nil && servicePubkey != "" {
+		bahiaStatusProjector = service.NewBahiaStatusProjector(nostrPub, logger, servicePubkey)
 	}
 
 	controlPlaneAuthors := compactBootstrapAuthors([]string{servicePubkey}, cfg.Nostr.AuthorizedPubkeys, cfg.Auth.BootstrapOwnerPubkeys)
