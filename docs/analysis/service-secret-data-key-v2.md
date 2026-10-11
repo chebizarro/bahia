@@ -1,5 +1,13 @@
 # Service-secret data-key v2: dormant migration slice
 
+> **Status (2026-10-11): partly superseded.** The "epoch-fenced Signet keyer"
+> below no longer exists: the service identity is any signer opened through
+> `internal/servicesigner` (see [service-signer.md](../architecture/service-signer.md)),
+> and the service pubkey will change once (key rotation, bahia-h9n7f). Storing
+> the wrapped data key only in PostgreSQL keeps PostgreSQL as the sole durable
+> home of secret material, which is an open design question (bahia-2o3on).
+> Do not wire this slice until that decision is recorded.
+
 **No production rekey command is included or enabled.** This change adds a
 package-private offline transformer exercised by disposable PG16 tests and a
 raw-key-free package-private v2 resolver, but does not replace every production

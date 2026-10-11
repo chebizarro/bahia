@@ -26,46 +26,35 @@ separate coordinate spaces and never collide:
 
 ### Service signing identity
 
-The daemon creates one service-key Nostr signer at startup. The same signer
-signs control-plane events, projection and status events, publisher-owned audit
-events, relay NIP-42 AUTH, and notification DMs. The signer supplies the
-service pubkey used to scope canonical history; changing the signing mechanism
-must not change that pubkey. A signing refusal fails the operation rather than
-falling back to a second signing key. The local configuration still loads the
-service private key; remote signing is not enabled.
+The daemon opens one service signer at startup and injects it everywhere
+([service-signer.md](service-signer.md), [service-identity.md](service-identity.md)).
+The same signer signs control-plane events, projection and status events,
+publisher-owned audit events, relay NIP-42 AUTH, and notification DMs. The
+signer is selected by `nostr.signer.method`: `local` (the key in process),
+`nip46` (any NIP-46 bunker, through a dedicated client key) or `nip55l` (a
+desktop D-Bus signer). Startup verifies that the signer reports the configured
+service pubkey (`nostr.public_key`) and refuses to start otherwise; the signer
+supplies the pubkey used to scope canonical history. A signing refusal fails
+the operation rather than falling back to a second signing key or a raw key.
 
-The Signet client's optional epoch signing mode requires a separately supplied
-existing service pubkey, a dedicated persistent NIP-46 client identity distinct
-from the service key, and a current writer lease snapshot. When configured,
-`Client.Sign` uses this mode and never falls back to its unpinned signing
-path. It sends standard NIP-46 `sign_event` with only the unsigned event JSON,
-then checks the returned author, unchanged event fields, NIP-01 id and
-signature before accepting it, and rejects connection changes. Signet is the
-authorization boundary: a fenced service identity signs only for the
-authenticated NIP-46 client pubkey that a provisioner assigned with
-`agent/writer-acquire`. Writer client keys are single-use, and there is no
-epoch, lease expiry or renewal on the wire. A fenced signer client is an
-assigned writer, not a Signet provisioner. It does not open the provisioner
-management relay pool, and its agent-management methods fail closed. A
-separate provisioner-backed client, distinct from the fenced service
-identity, retains the existing bunker-signed management NIP-42 AUTH, signed
-seals and reply subscription. The writer pubkey must differ from both the
-service pubkey and every Signet provisioner pubkey; a writer must never have
-provisioner authority. Bahia never performs writer assignment.
+Single-writer enforcement belongs to the signer, not to Bahia: Bahia sends
+only standard NIP-46 requests and never calls signer-specific or management
+methods for its own identity (for example a bunker may authorize exactly one
+client key as writer). Bahia has no epoch, lease or cross-process fence
+protocol of its own.
 
-Event signing is separate from operations requiring raw key material. DM
-NIP-44 conversation-key derivation, legacy secret encryption and derivation,
-and confidential-state key derivation still use the local service key. An
-event signer alone cannot replace those operations; startup must not accept a remote-only service identity until their key-preserving
-migration and historical decryption contracts are implemented.
+Event signing is separate from operations requiring raw key material. Legacy
+secret-store encryption, O1 org-state reads, assistant transcript keys and the
+confidential-state dedupe HMAC still derive from the raw service key. Without
+in-process key material they fail closed with `ErrServiceKeyMaterialRequired`
+(never silently skipped); their migration is tracked in bahia-cd0wr.4.x.
 
 SBOM attestations are standard Nostr events: the exact canonical in-toto
 statement is the content of a `4903` (`CAS_AUDIT`, `domain=sbom`,
 `type=attestation`) event whose tags repeat the subject and SBOM digests
-([event spec](../event-spec.md)). Any `nostr.Signer` for the service key signs
-it, so the fenced Signet service signer needs only standard `sign_event`; app
-startup uses the local service key. Historical DSSE envelopes remain
-verifiable with the service pubkey alone and are never produced again.
+([event spec](../event-spec.md)). Any service signer signs it with standard
+`sign_event`. Historical DSSE envelopes remain verifiable with the service
+pubkey alone and are never produced again.
 
 ### 1.2 Level-triggered desired state
 
@@ -272,9 +261,11 @@ applies by serial, backup job ids are UUIDv7.
 **Backup run admission is currently paused in production.** The async
 history/ACK/status code below is a non-admitting prerequisite exercised by
 tests, not a live intake promise: `backupRunAsyncIntakeEnabled` is false and
-`StageRunAdmission` refuses until a deployment-wide sole-custody signer fence,
-authoritative history seal, terminal signed status settlement, and
-cross-process outbox fence are available. A new signed request does not stage
+`StageRunAdmission` refuses until terminal signed status settlement
+(bahia-cd0wr.1), canonical credential recovery that does not depend on
+PostgreSQL (bahia-2o3on) and an exactly-once executor are available. The
+single active service-key writer is the signer's responsibility (see §1.1);
+Bahia builds no cross-process fence. A new signed request does not stage
 a run or return `pending`/`accepted`; a retained pending request also reports
 intake unavailable. An already-admitted, fully ACKed historical record may
 still be recognized by exact-ID replay. No backup execution is enabled.
@@ -322,7 +313,7 @@ and the exact configuration snapshot. Repositories with a credential profile
 also require an immutable credential-version ID in the snapshot. A version ID
 is a binding, not proof that a secret can be recovered; canonical credential
 resolution and execution checkpoint recovery are still required before a run
-may execute. If admission is enabled after the missing fences, MCP would
+may execute. If admission is enabled after those prerequisites, MCP would
 report `pending` during staged delivery, with no provisional pending relay
 status. After run-state quorum delivery, the reconciler would stage the final
 accepted status without requiring a request replay. MCP would report

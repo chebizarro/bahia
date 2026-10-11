@@ -1363,7 +1363,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		backupCanonical.SetRunPendingWake(backupHistory.Wake)
 		bgManager.RegisterWithOptions(backupHistory, RunnerRequired(false))
 		healthProvider.RegisterCheck("backup_run_history", func() HealthCheck {
-			message := "backup run admission paused: cross-process signer fence unavailable"
+			message := "backup run admission paused: terminal status, credential recovery and exactly-once execution are not yet available"
 			if last := backupHistory.LastError(); last != "" {
 				message += "; " + last
 			}
