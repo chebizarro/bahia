@@ -316,5 +316,16 @@ class EdgeImageAdmissionTests(unittest.TestCase):
                 )
 
 
+class CommittedPolicyTest(unittest.TestCase):
+    """The committed edge policy must refuse every image that can leak the
+    service nsec (bahia-h9n7f): 36d6d2d7 stopped publishing it as the status
+    d tag, and no legacy exception may bypass that floor."""
+
+    def test_floor_requires_the_nsec_leak_fix(self):
+        policy = edge.load_policy(SCRIPT.parents[1] / "deploy" / "edge" / "image-admission-policy.json")
+        self.assertIn("36d6d2d791f161d363a48a66d10dcccf2201f99d", policy["required_ancestors"])
+        self.assertEqual(policy["approved_legacy_images"], {})
+
+
 if __name__ == "__main__":
     unittest.main()
