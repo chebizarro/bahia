@@ -60,7 +60,11 @@ Pass `idempotency_key` in the arguments or `_meta.progressToken` in the `tools/c
 
 ### Secrets
 
-`bahia_list_secrets`, `bahia_create_secret`, `bahia_update_secret`, `bahia_delete_secret`. Listing returns metadata only; values are never returned by MCP.
+`bahia_list_secrets`, `bahia_create_secret`, `bahia_update_secret`, `bahia_delete_secret`. Listing returns metadata only; values are never returned by MCP. With the daemon's secret store configured, create and update take `credential_id` and `credential_version` (a Signet credential the operator imported) instead of `value`, and a `value` is refused; without a store they take `value`.
+
+```json
+{"name": "bahia_update_secret", "arguments": {"secret_id": "<uuid>", "credential_id": "cred_<64 hex>", "credential_version": 3}}
+```
 
 ### Workers and cost
 

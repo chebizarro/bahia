@@ -70,6 +70,19 @@ nostr:
 
 Everything a client can read or change goes through the relays, so the two values that matter most are `nostr.private_key` (the service identity) and the relay list. `nostr.authorized_pubkeys` names the fleet operators who may act outside any organization (policies, DNS, workers, ML, tool decisions, fleet rekeys, MCP over HTTP). See [Nostr Integration](nostr-integration.md#relays) for the full relay and sidecar reference, and each feature page for its own section (`adoption`, `direct_runtime_actions`, `dns`, `hiveci`, `llm`, `soul_factory`, `assistant`, `supervision`, `route_canaries`, `virtualization`).
 
+Secret values belong in Signet's secret store. Point the daemon at it with a dedicated requester key (never the service key) and the Signet agent that owns Bahia's credentials; see [Secret store](../architecture/secret-store.md) and the [runbook](../runbooks/signet-secret-store.md):
+
+```yaml
+secret_store:
+  backend: signet                                        # empty: no secret store
+  signet:
+    pubkey: "<signet-management-hex-pubkey>"
+    relays: ["wss://signet-relay.example.com"]
+    client_key_file: /run/secrets/bahia-secret-store.key # 64-hex requester key, mounted file only
+    owner: bahia-vault
+    request_timeout: 30s                                 # default
+```
+
 Serialized configuration (JSON, YAML, log fields) is a diagnostic view: credentials, private keys, bunker URIs, and auth headers are masked. Never save such a view back as the operational configuration.
 
 ## Your first deployment

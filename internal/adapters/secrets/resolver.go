@@ -55,6 +55,9 @@ func (r *Resolver) ResolveSecretWithAudit(ctx context.Context, ref string, opts 
 	if secret == nil {
 		return "", manifest, fmt.Errorf("secret %s not found", id)
 	}
+	if secret.EncryptionMethod == domain.EncryptionStoreRef {
+		return "", manifest, domain.SecretInStoreError(secret.ID, secret.Name)
+	}
 	version, err := r.repo.GetCurrentVersion(ctx, id)
 	if err != nil {
 		return "", manifest, fmt.Errorf("get current secret version %s: %w", id, err)

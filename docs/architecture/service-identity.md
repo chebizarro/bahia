@@ -62,3 +62,4 @@ separate identity that keeps a local key by design.
 | `cmd/bahia-leak-delete` | c | signs as the retired, leaked identity through `servicesigner.Open` (local key file, NIP-46 or NIP-55L); [runbook](../runbooks/leaked-status-event-deletion.md) |
 | `internal/relaysidecar/server.go` NIP-11 pubkey, admission, config acks | a | `New(ctx, cfg, signer, log)`; `cmd/relay` opens the signer through `servicesigner.Open` and owns it across `SIGHUP` reloads |
 | `internal/adapters/signet`, `internal/soulfactory/signet_enrollment.go` | n/a | NIP-46 *client* transport keys, not the service key |
+| `internal/app/secret_store.go` `openSecretStore` (`secret_store.signet.client_key_file`) | c (separate identity) | the [secret store](secret-store.md) requester key; startup refuses it when its pubkey is the service pubkey |

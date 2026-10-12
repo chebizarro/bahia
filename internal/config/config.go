@@ -65,6 +65,7 @@ type Config struct {
 	RouteCanaries   RouteCanaryConfig         `koanf:"route_canaries" yaml:"route_canaries"`
 	FIPS            FIPSConfig                `koanf:"fips"`
 	SoulFactory     SoulFactoryConfig         `koanf:"soul_factory" yaml:"soul_factory"`
+	SecretStore     SecretStoreConfig         `koanf:"secret_store" yaml:"secret_store"`
 }
 
 // SBOMConfig controls SBOM generation adapters.
@@ -1901,6 +1902,12 @@ func load(configPath string, persistBootstrap bool) (*Config, error) {
 		if strings.HasPrefix(key, "soul_factory_") {
 			return "soul_factory." + strings.TrimPrefix(key, "soul_factory_")
 		}
+		if strings.HasPrefix(key, "secret_store_signet_") {
+			return "secret_store.signet." + strings.TrimPrefix(key, "secret_store_signet_")
+		}
+		if strings.HasPrefix(key, "secret_store_") {
+			return "secret_store." + strings.TrimPrefix(key, "secret_store_")
+		}
 		if strings.HasPrefix(key, "loom_canonical_projection_") {
 			return "loom.canonical_projection." + strings.TrimPrefix(key, "loom_canonical_projection_")
 		}
@@ -2102,6 +2109,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateSupervision(); err != nil {
+		return err
+	}
+	if err := c.SecretStore.validate(); err != nil {
 		return err
 	}
 	mode := strings.ToLower(strings.TrimSpace(c.Mode))

@@ -43,11 +43,12 @@ Managed Compose configuration is rendered into a Bahia-owned directory. The daem
 
 ```bash
 bahia secrets list <service-id>
-bahia secrets set <service-id> DATABASE_URL --value-file /run/secrets/database-url
+bahia secrets set <service-id> DATABASE_URL --credential-id cred_<64 hex> --credential-version 1
+bahia secrets set <service-id> DATABASE_URL --value-file /run/secrets/database-url   # no secret store configured
 bahia secrets delete <service-id> <secret-id>
 ```
 
-List returns metadata only. Secret values travel in gift-wrapped intents and are resolved only at the authorized operation boundary. The web app can reveal a value through a confidential request when the signer has read permission.
+List returns metadata only. With a secret store configured, secret values live in Signet: the operator imports a value with `signetctl import-credential`, and the secret's record holds only the credential reference. Bahia fetches the value when an authorized operation needs it and never stores it ([Secret store](../../architecture/secret-store.md), [runbook](../../runbooks/signet-secret-store.md)). Without a secret store, values travel in gift-wrapped intents. The web app can reveal a value through a confidential request when the signer has read permission.
 
 ## Routing and health
 

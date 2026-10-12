@@ -43,8 +43,10 @@ methods for its own identity (for example a bunker may authorize exactly one
 client key as writer). Bahia has no epoch, lease or cross-process fence
 protocol of its own.
 
-Event signing is separate from operations requiring raw key material. Legacy
-secret-store encryption, O1 org-state reads, assistant transcript keys and the
+Event signing is separate from operations requiring raw key material. Secret
+values belong in the [secret store](secret-store.md), reached with a separate
+requester identity, never the service key. The legacy PostgreSQL secret
+encryption, O1 org-state reads, assistant transcript keys and the
 confidential-state dedupe HMAC still derive from the raw service key. Without
 in-process key material they fail closed with `ErrServiceKeyMaterialRequired`
 (never silently skipped); their migration is tracked in bahia-cd0wr.4.x.
@@ -128,9 +130,46 @@ Org membership, secrets, notification channels and Hive-CI pipeline policies are
 are `30900` rumors, NIP-44-encrypted to the service pubkey and
 published as a **NIP-59 gift wrap (kind `1059`)** tagged `p=<service-pubkey>`.
 The daemon unwraps, verifies the operator-signed seal, and then checks the inner
-author against the trust set. Secret values are additionally NIP-44-encrypted
-to the service key inside the content. How the resulting canonical records are
+author against the trust set. How the resulting canonical records are
 encrypted for members is described in [confidential state](confidential-state.md).
+
+### 1.6 Secret intents
+
+A secret intent (`domain=secret`, `schema=bahia.intent.secret.v1`,
+`d=<secret-uuid>`) names the value instead of carrying it when the daemon has
+a [secret store](secret-store.md) (`secret_store.backend=signet`):
+
+```json
+{
+  "id": "<secret-uuid>",
+  "service_id": "<service-uuid>",
+  "environment_id": "<environment-uuid, optional>",
+  "name": "DATABASE_URL",
+  "credential_ref": {"store": "signet", "credential_id": "cred_<64 hex>", "version": 2},
+  "expected_updated_at": "<RFC 3339, updates only>"
+}
+```
+
+The operator imports the value into Signet first, labelled
+`<org-id>/<service-id>/<name>`; the intent carries only the reference. The
+handler reconciles against the current canonical record read from the local
+event store (no PostgreSQL), requires the service's canonical org to be the
+intent's `org` (a secret's `service_id` never changes), then asks the store
+for the credential's metadata in that org and service: it rejects the intent
+unless the credential's label is in `<org-id>/<service-id>/`, and it exists,
+is active and is at exactly the pinned version. It then publishes the record
+with the reference; a failed canonical publish fails the intent, the record
+being the secret's only home. With PostgreSQL configured, the secret's index
+row first becomes a value-less marker (every retained legacy ciphertext of
+that id scrubbed), so PostgreSQL consumers refuse it rather than omit it. Signet being
+unreachable rejects the intent with the reason (fail closed); re-send it
+once Signet answers.
+
+With the store configured, an intent carrying `encrypted_value` or `value`
+is rejected, and an intent carrying both a reference and a value is always
+rejected. Without a store, the legacy value path applies: `encrypted_value`
+is NIP-44-encrypted to the service key (or `value` arrives from in-process
+MCP) and is sealed into PostgreSQL, which that path requires.
 
 ## 2. Authority and trust
 

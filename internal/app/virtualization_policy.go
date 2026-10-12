@@ -135,6 +135,9 @@ func (p *virtualizationPolicy) AuthorizePlaneSecret(ctx context.Context, princip
 	if err != nil || secret == nil {
 		return domain.ErrInvalidValue
 	}
+	if secret.EncryptionMethod == domain.EncryptionStoreRef {
+		return domain.SecretInStoreError(secret.ID, secret.Name)
+	}
 	svc, err := p.services.GetByID(ctx, secret.ServiceID)
 	if err != nil || svc == nil || svc.OrgID != org {
 		return domain.ErrInvalidValue

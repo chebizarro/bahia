@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -113,6 +115,23 @@ func (*versionedIntentKeyer) Nip04Decrypt(context.Context, string, nostr.PubKey)
 	panic("unused")
 }
 func (*versionedIntentKeyer) SignEvent(context.Context, *nostr.Event) error { panic("unused") }
+
+func (r *memSecretRepo) MarkStoreBacked(_ context.Context, ref domain.SecretRef) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.secrets[ref.ID]; ok && existing.ServiceID != ref.ServiceID {
+		return errors.New("index row belongs to another service")
+	}
+	for id, s := range r.secrets {
+		sameEnv := (s.EnvironmentID == nil && ref.EnvironmentID == nil) || (s.EnvironmentID != nil && ref.EnvironmentID != nil && *s.EnvironmentID == *ref.EnvironmentID)
+		if id != ref.ID && s.ServiceID == ref.ServiceID && sameEnv && s.Name == ref.Name {
+			return fmt.Errorf("marking %s: %w: [%s]", ref.ID, repository.ErrSecretNameTaken, id)
+		}
+	}
+	r.secrets[ref.ID] = &domain.ServiceSecret{ID: ref.ID, ServiceID: ref.ServiceID, EnvironmentID: ref.EnvironmentID, Name: ref.Name,
+		EncryptionMethod: domain.EncryptionStoreRef, Version: ref.Version, CreatedBy: ref.CreatedBy}
+	return nil
+}
 
 func (r *memSecretRepo) Delete(_ context.Context, id uuid.UUID) error {
 	r.mu.Lock()

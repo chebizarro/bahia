@@ -46,11 +46,13 @@ Envelope (`bahia.confidential.aead.v1`):
 }
 ```
 
-`service_inner` carries the fields members must never read — secret values and
-channel credentials (webhook URLs, signing secrets, API keys) — NIP-44-encrypted
-to the service key. Members decrypt the AEAD layer (metadata) only; secret
-value reveal remains a ContextVM request (`services/secrets-reveal`) with
-permission checks.
+`service_inner` carries the fields members must never read — channel
+credentials (webhook URLs, signing secrets, API keys) — NIP-44-encrypted to
+the service key. Secret records carry no value at all: a store-backed secret
+holds a `credential_ref` to the [secret store](secret-store.md) in its AEAD
+layer. Members decrypt the AEAD layer (metadata) only; secret value reveal
+remains a ContextVM request (`services/secrets-reveal`) with permission
+checks.
 
 ## Key distribution: key envelopes (family 32010)
 

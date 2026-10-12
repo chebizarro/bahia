@@ -3,9 +3,11 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
@@ -13,6 +15,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
 
@@ -34,31 +37,37 @@ type secretVersionHistoryLister interface {
 }
 
 type EncryptedRouteHandlersConfig struct {
-	Secrets      repository.SecretRepository
-	Encryptor    secrets.StoredSecretDecryptor
-	Runs         repository.DeploymentRunRepository
-	RunLogs      RunLogFetcher
-	Artifacts    repository.ArtifactRepository
-	Signatures   repository.ArtifactSignatureRepository
-	SignVerifier SignatureVerifier
-	Services     repository.ServiceRepository
-	Intents      repository.DeploymentIntentRepository
-	RBAC         *auth.RBAC
-	Logger       *zap.Logger
+	Secrets   repository.SecretRepository
+	Encryptor secrets.StoredSecretDecryptor
+	// SecretRecords and SecretStore reveal secrets whose canonical record
+	// references a credential in the external secret store.
+	SecretRecords SecretRecordView
+	SecretStore   secretstore.SecretStore
+	Runs          repository.DeploymentRunRepository
+	RunLogs       RunLogFetcher
+	Artifacts     repository.ArtifactRepository
+	Signatures    repository.ArtifactSignatureRepository
+	SignVerifier  SignatureVerifier
+	Services      repository.ServiceRepository
+	Intents       repository.DeploymentIntentRepository
+	RBAC          *auth.RBAC
+	Logger        *zap.Logger
 }
 
 type EncryptedRouteHandlers struct {
-	secrets      repository.SecretRepository
-	encryptor    secrets.StoredSecretDecryptor
-	runs         repository.DeploymentRunRepository
-	runLogs      RunLogFetcher
-	artifacts    repository.ArtifactRepository
-	signatures   repository.ArtifactSignatureRepository
-	signVerifier SignatureVerifier
-	services     repository.ServiceRepository
-	intents      repository.DeploymentIntentRepository
-	rbac         *auth.RBAC
-	logger       *zap.Logger
+	secrets       repository.SecretRepository
+	encryptor     secrets.StoredSecretDecryptor
+	secretRecords SecretRecordView
+	secretStore   secretstore.SecretStore
+	runs          repository.DeploymentRunRepository
+	runLogs       RunLogFetcher
+	artifacts     repository.ArtifactRepository
+	signatures    repository.ArtifactSignatureRepository
+	signVerifier  SignatureVerifier
+	services      repository.ServiceRepository
+	intents       repository.DeploymentIntentRepository
+	rbac          *auth.RBAC
+	logger        *zap.Logger
 }
 
 func NewEncryptedRouteHandlers(cfg EncryptedRouteHandlersConfig) *EncryptedRouteHandlers {
@@ -67,6 +76,7 @@ func NewEncryptedRouteHandlers(cfg EncryptedRouteHandlersConfig) *EncryptedRoute
 		logger = zap.NewNop()
 	}
 	return &EncryptedRouteHandlers{secrets: cfg.Secrets, encryptor: cfg.Encryptor,
+		secretRecords: cfg.SecretRecords, secretStore: cfg.SecretStore,
 		runs: cfg.Runs, runLogs: cfg.RunLogs, artifacts: cfg.Artifacts,
 		signatures: cfg.Signatures, signVerifier: cfg.SignVerifier,
 		services: cfg.Services, intents: cfg.Intents, rbac: cfg.RBAC,
@@ -102,9 +112,6 @@ func (h *EncryptedRouteHandlers) requireSecretDeps() error {
 }
 
 func (h *EncryptedRouteHandlers) RevealSecret(ctx context.Context, request EncryptedRequest) (any, error) {
-	if err := h.requireSecretDeps(); err != nil {
-		return nil, err
-	}
 	var payload encryptedSecretPayload
 	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
@@ -117,18 +124,85 @@ func (h *EncryptedRouteHandlers) RevealSecret(ctx context.Context, request Encry
 	if err != nil {
 		return nil, err
 	}
-	if err := h.authorizeServicePermission(ctx, request, serviceID, domain.PermReadSecrets); err != nil {
+	if h.secretRecords != nil {
+		// The canonical service record is the authority for the org: it
+		// authorizes the reveal and scopes the store, and a daemon without
+		// PostgreSQL service rows can still reveal.
+		org, err := h.canonicalServiceOrg(ctx, serviceID)
+		if err != nil {
+			return nil, err
+		}
+		if h.rbac == nil {
+			return nil, fmt.Errorf("encrypted route RBAC is not configured")
+		}
+		if err := h.rbac.CheckPermission(ctx, requestPrincipal(request), org, domain.PermReadSecrets); err != nil {
+			return nil, err
+		}
+		ref, err := h.secretRecords.CurrentSecretRef(ctx, secretID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to look up secret")
+		}
+		if ref != nil && ref.CredentialRef != nil {
+			return h.revealStoredSecret(ctx, serviceID, org, ref)
+		}
+	} else if err := h.authorizeServicePermission(ctx, request, serviceID, domain.PermReadSecrets); err != nil {
+		return nil, err
+	}
+	if err := h.requireSecretDeps(); err != nil {
 		return nil, err
 	}
 	secret, err := h.secretForService(ctx, serviceID, secretID)
 	if err != nil {
 		return nil, err
 	}
+	if secret.EncryptionMethod == domain.EncryptionStoreRef {
+		return nil, domain.SecretInStoreError(secret.ID, secret.Name)
+	}
 	value, err := h.encryptor.DecryptStored(secret.ID, secret.Version, secret.EncryptedValue, secret.EncryptionMethod)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt secret")
 	}
 	return map[string]any{"secret": secret.ToRef(), "value": value}, nil
+}
+
+// revealStoredSecret resolves a secret whose value lives in the external
+// secret store. The value is fetched for this request only and the buffer
+// Bahia holds is zeroized once the response is built.
+func (h *EncryptedRouteHandlers) canonicalServiceOrg(ctx context.Context, serviceID uuid.UUID) (uuid.UUID, error) {
+	orgID, err := h.secretRecords.ServiceOrgID(ctx, serviceID)
+	if err != nil {
+		h.logger.Warn("secret reveal: no canonical service organization", zap.String("service_id", serviceID.String()), zap.Error(err))
+		return uuid.Nil, fmt.Errorf("service organization is not available: %w", err)
+	}
+	org, err := uuid.Parse(orgID)
+	if err != nil || org == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("service organization is not available")
+	}
+	return org, nil
+}
+
+func (h *EncryptedRouteHandlers) revealStoredSecret(ctx context.Context, serviceID, org uuid.UUID, ref *domain.SecretRef) (any, error) {
+	if ref.ServiceID != serviceID {
+		return nil, fmt.Errorf("secret does not belong to service")
+	}
+	if h.secretStore == nil {
+		return nil, fmt.Errorf("secret %s is held by the secret store, which is not configured", ref.ID)
+	}
+	// The credential must belong to this secret's org and service; the
+	// store checks the credential's label against that scope.
+	value, err := h.secretStore.Resolve(ctx, *ref.CredentialRef, secretstore.Scope{OrgID: org, ServiceID: serviceID})
+	if err != nil {
+		h.logger.Warn("secret store refused reveal", zap.String("secret_id", ref.ID.String()), zap.Error(err))
+		if errors.Is(err, secretstore.ErrNotFound) || errors.Is(err, secretstore.ErrDenied) {
+			return nil, fmt.Errorf("secret store could not release secret %s: credential is not available to this org and service", ref.ID)
+		}
+		return nil, fmt.Errorf("secret store could not release secret %s: %w", ref.ID, err)
+	}
+	defer value.Zeroize()
+	if !time.Now().Before(value.LeaseExpiresAt()) {
+		return nil, fmt.Errorf("secret store lease for secret %s expired before it could be revealed", ref.ID)
+	}
+	return map[string]any{"secret": ref, "value": string(value.Bytes())}, nil
 }
 
 func (h *EncryptedRouteHandlers) secretForService(ctx context.Context, serviceID, secretID uuid.UUID) (*domain.ServiceSecret, error) {
@@ -281,6 +355,11 @@ func (h *EncryptedRouteHandlers) redactRunLogSecrets(ctx context.Context, intent
 		}
 		for i := range versions {
 			value, err := h.encryptor.DecryptStored(versions[i].SecretID, versions[i].Version, versions[i].EncryptedValue, versions[i].EncryptionMethod)
+			if errors.Is(err, domain.ErrSecretInStore) {
+				// Redaction cannot know a value it cannot read: refuse the
+				// logs rather than return them unredacted.
+				return err
+			}
 			if err != nil {
 				return fmt.Errorf("decrypt referenced secret")
 			}

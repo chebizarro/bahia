@@ -43,6 +43,9 @@ func (s *VMBootstrapService) Authorize(ctx context.Context, p *auth.Principal, v
 		if err != nil || secret == nil || secret.ID != binding.Ref.ID || secret.ServiceID != *v.ServiceID || (secret.EnvironmentID != nil && *secret.EnvironmentID != *v.EnvironmentID) {
 			return vmError(domain.VMErrorInvalid)
 		}
+		if secret.EncryptionMethod == domain.EncryptionStoreRef {
+			return domain.SecretInStoreError(secret.ID, secret.Name)
+		}
 	}
 	return nil
 }

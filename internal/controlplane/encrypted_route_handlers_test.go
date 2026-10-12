@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -560,5 +561,24 @@ func TestEncryptedRouteHandlersRedactionReadsV2AndRefusesLegacy(t *testing.T) {
 	logs.Stdout = "token=private-token"
 	if err := h.redactRunLogSecrets(ctx, intent, logs); err == nil {
 		t.Fatal("v2-only reader accepted legacy history")
+	}
+}
+
+// Redaction cannot know a value held by the secret store: run logs of an
+// intent that references a store-backed secret are refused, not returned
+// unredacted.
+func TestEncryptedRouteHandlersRedactionRefusesStoreBackedSecret(t *testing.T) {
+	key, err := secrets.NewRandomDataKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New()
+	repo := newFakeEncryptedSecretRepo()
+	repo.records[id] = &domain.ServiceSecret{ID: id, Name: "DB_PASSWORD", Version: 3, EncryptionMethod: domain.EncryptionStoreRef}
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Secrets: repo, Encryptor: key})
+	intent := &domain.DeploymentIntent{DesiredState: &domain.DesiredServiceSpec{SecretRefs: []domain.DesiredSecretRef{{SecretID: id}}}}
+	logs := &adapterruntime.RunLogs{Stdout: "password=whatever-signet-holds"}
+	if err := h.redactRunLogSecrets(context.Background(), intent, logs); !errors.Is(err, domain.ErrSecretInStore) {
+		t.Fatalf("redaction with a store-backed secret = %v", err)
 	}
 }

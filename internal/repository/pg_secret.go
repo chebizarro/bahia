@@ -2,11 +2,13 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -223,6 +225,114 @@ func (r *PgSecretRepository) RecordSecretAccessAudit(ctx context.Context, audit 
 		return fmt.Errorf("recording secret access audit: %w", err)
 	}
 	return nil
+}
+
+// ErrSecretNameTaken: another index row (a different secret id) holds the
+// same service, environment and name as a store-backed secret, so consumers
+// listing effective secrets could serve that row instead.
+var ErrSecretNameTaken = errors.New("another secret already holds this service, environment and name")
+
+// MarkStoreBacked records that a secret's value lives in the external secret
+// store. It upserts the index row as a value-less marker
+// (domain.EncryptionStoreRef) and scrubs the ciphertext of every retained
+// version, in one statement. Version rows are kept, not deleted, so access
+// audit rows that reference them stay intact. It refuses with
+// ErrSecretNameTaken, changing nothing, when a row of another id holds the
+// same service, environment and name; the check is explicit because the
+// unique constraint does not see service-wide (NULL environment) duplicates.
+func (r *PgSecretRepository) MarkStoreBacked(ctx context.Context, ref domain.SecretRef) error {
+	if ref.ID == uuid.Nil || ref.ServiceID == uuid.Nil || ref.Name == "" || ref.Version <= 0 {
+		return fmt.Errorf("marking secret store-backed: id, service_id, name and version are required")
+	}
+	taken, err := r.sameNameSecrets(ctx, ref)
+	if err != nil {
+		return err
+	}
+	if len(taken) > 0 {
+		return fmt.Errorf("marking secret %s (%s) store-backed: %w: %v", ref.ID, ref.Name, ErrSecretNameTaken, taken)
+	}
+	var marked, scrubbed int64
+	err = r.pool.QueryRow(ctx, `
+		WITH upserted AS (
+			INSERT INTO service_secrets (id, service_id, environment_id, name, encrypted_value,
+				encryption_method, version, created_by, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, ''::bytea, $5, $6, $7, now(), now())
+			ON CONFLICT (id) DO UPDATE
+			SET name = EXCLUDED.name, encrypted_value = ''::bytea,
+				encryption_method = EXCLUDED.encryption_method, version = EXCLUDED.version, updated_at = now()
+			WHERE service_secrets.service_id = EXCLUDED.service_id
+			RETURNING id
+		), scrubbed AS (
+			UPDATE secret_versions SET encrypted_value = ''::bytea, encryption_method = $5
+			WHERE secret_id = $1 AND EXISTS (SELECT 1 FROM upserted)
+			RETURNING id
+		)
+		SELECT (SELECT count(*) FROM upserted), (SELECT count(*) FROM scrubbed)
+	`, ref.ID, ref.ServiceID, ref.EnvironmentID, ref.Name, string(domain.EncryptionStoreRef), ref.Version, ref.CreatedBy).Scan(&marked, &scrubbed)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			// A same-name row appeared after the check.
+			return fmt.Errorf("marking secret %s (%s) store-backed: %w", ref.ID, ref.Name, ErrSecretNameTaken)
+		}
+		return fmt.Errorf("marking secret %s store-backed: %w", ref.ID, err)
+	}
+	if marked != 1 {
+		return fmt.Errorf("marking secret %s store-backed: the index row belongs to another service: %w", ref.ID, ErrConflict)
+	}
+	return nil
+}
+
+// BlockSameNameSecrets turns every row of another id that holds ref's
+// service, environment and name into a value-less store-ref marker and
+// scrubs its retained ciphertext, so no consumer serves it in place of the
+// store-backed secret. It returns the blocked ids.
+func (r *PgSecretRepository) BlockSameNameSecrets(ctx context.Context, ref domain.SecretRef) ([]uuid.UUID, error) {
+	rows, err := r.pool.Query(ctx, `
+		WITH blocked AS (
+			UPDATE service_secrets SET encrypted_value = ''::bytea, encryption_method = $5, updated_at = now()
+			WHERE service_id = $2 AND environment_id IS NOT DISTINCT FROM $3 AND name = $4 AND id <> $1
+			RETURNING id
+		), scrubbed AS (
+			UPDATE secret_versions SET encrypted_value = ''::bytea, encryption_method = $5
+			WHERE secret_id IN (SELECT id FROM blocked)
+			RETURNING id
+		)
+		SELECT id FROM blocked
+	`, ref.ID, ref.ServiceID, ref.EnvironmentID, ref.Name, string(domain.EncryptionStoreRef))
+	if err != nil {
+		return nil, fmt.Errorf("blocking secrets named %q: %w", ref.Name, err)
+	}
+	defer rows.Close()
+	var blocked []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("blocking secrets named %q: %w", ref.Name, err)
+		}
+		blocked = append(blocked, id)
+	}
+	return blocked, rows.Err()
+}
+
+func (r *PgSecretRepository) sameNameSecrets(ctx context.Context, ref domain.SecretRef) ([]uuid.UUID, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id FROM service_secrets
+		WHERE service_id = $2 AND environment_id IS NOT DISTINCT FROM $3 AND name = $4 AND id <> $1
+	`, ref.ID, ref.ServiceID, ref.EnvironmentID, ref.Name)
+	if err != nil {
+		return nil, fmt.Errorf("checking secret name %q: %w", ref.Name, err)
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("checking secret name %q: %w", ref.Name, err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func (r *PgSecretRepository) Delete(ctx context.Context, id uuid.UUID) error {
