@@ -2,14 +2,19 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"fiatjaf.com/nostr"
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/controlplane"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -27,6 +32,16 @@ func openSecretStore(ctx context.Context, cfg *config.Config, servicePubkey stri
 		return nil, nil
 	}
 	sc := cfg.SecretStore.Signet
+	info, err := os.Lstat(sc.ClientKeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("secret_store.signet.client_key_file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("secret_store.signet.client_key_file must be a regular file, not a symlink or device")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("secret_store.signet.client_key_file must not be accessible by group or others (mode %#o)", info.Mode().Perm())
+	}
 	raw, err := config.LoadPrivateKey(sc.ClientKeyFile, secretStoreClientKeyEnv)
 	if err != nil {
 		return nil, fmt.Errorf("read secret_store.signet.client_key_file: %w", err)
@@ -103,4 +118,30 @@ func (r *secretStoreProbeRunner) Run(ctx context.Context) error {
 	}
 	r.logger.Info("secret store startup probe succeeded")
 	return nil
+}
+
+// secretIndexOrNil keeps a nil repository from becoming a non-nil interface.
+func secretIndexOrNil(index *repository.PgSecretRepository) controlplane.SecretStoreIndex {
+	if index == nil {
+		return nil
+	}
+	return index
+}
+
+// indexStoreBackedSecrets writes the PostgreSQL marker of every canonical
+// store-backed secret.
+func indexStoreBackedSecrets(ctx context.Context, view interface {
+	StoreBackedSecrets(context.Context) ([]domain.SecretRef, error)
+}, index controlplane.SecretStoreIndex) error {
+	refs, err := view.StoreBackedSecrets(ctx)
+	if err != nil {
+		return err
+	}
+	var failed []error
+	for _, ref := range refs {
+		if err := index.MarkStoreBacked(ctx, ref); err != nil {
+			failed = append(failed, err)
+		}
+	}
+	return errors.Join(failed...)
 }

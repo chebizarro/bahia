@@ -225,6 +225,42 @@ func (r *PgSecretRepository) RecordSecretAccessAudit(ctx context.Context, audit 
 	return nil
 }
 
+// MarkStoreBacked records that a secret's value lives in the external secret
+// store. It upserts the index row as a value-less marker
+// (domain.EncryptionStoreRef) and scrubs the ciphertext of every retained
+// version, in one statement. Version rows are kept, not deleted, so access
+// audit rows that reference them stay intact.
+func (r *PgSecretRepository) MarkStoreBacked(ctx context.Context, ref domain.SecretRef) error {
+	if ref.ID == uuid.Nil || ref.ServiceID == uuid.Nil || ref.Name == "" || ref.Version <= 0 {
+		return fmt.Errorf("marking secret store-backed: id, service_id, name and version are required")
+	}
+	var marked, scrubbed int64
+	err := r.pool.QueryRow(ctx, `
+		WITH upserted AS (
+			INSERT INTO service_secrets (id, service_id, environment_id, name, encrypted_value,
+				encryption_method, version, created_by, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, ''::bytea, $5, $6, $7, now(), now())
+			ON CONFLICT (id) DO UPDATE
+			SET name = EXCLUDED.name, encrypted_value = ''::bytea,
+				encryption_method = EXCLUDED.encryption_method, version = EXCLUDED.version, updated_at = now()
+			WHERE service_secrets.service_id = EXCLUDED.service_id
+			RETURNING id
+		), scrubbed AS (
+			UPDATE secret_versions SET encrypted_value = ''::bytea, encryption_method = $5
+			WHERE secret_id = $1 AND EXISTS (SELECT 1 FROM upserted)
+			RETURNING id
+		)
+		SELECT (SELECT count(*) FROM upserted), (SELECT count(*) FROM scrubbed)
+	`, ref.ID, ref.ServiceID, ref.EnvironmentID, ref.Name, string(domain.EncryptionStoreRef), ref.Version, ref.CreatedBy).Scan(&marked, &scrubbed)
+	if err != nil {
+		return fmt.Errorf("marking secret %s store-backed: %w", ref.ID, err)
+	}
+	if marked != 1 {
+		return fmt.Errorf("marking secret %s store-backed: the index row belongs to another service: %w", ref.ID, ErrConflict)
+	}
+	return nil
+}
+
 func (r *PgSecretRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM service_secrets WHERE id = $1`, id)
 	if err != nil {

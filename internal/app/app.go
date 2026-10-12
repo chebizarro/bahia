@@ -263,6 +263,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	var sigRepo repository.ArtifactSignatureRepository
 	var policyRepo repository.DeploymentPolicyRepository
 	var secretRepo repository.SecretRepository
+	var secretIndex *repository.PgSecretRepository
 	var hiveCIInitiator *giteaAdapter.Initiator
 	var deploymentUnitRepo repository.DeploymentUnitRepository
 	var orgRepo repository.OrganizationRepository
@@ -297,7 +298,8 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		securityRepo = repository.NewPgSecurityRepository(pool)
 		sigRepo = repository.NewPgArtifactSignatureRepository(pool)
 		policyRepo = repository.NewPgDeploymentPolicyRepository(pool)
-		secretRepo = repository.NewPgSecretRepository(pool)
+		secretIndex = repository.NewPgSecretRepository(pool)
+		secretRepo = secretIndex
 		deploymentUnitRepo = repository.NewPgDeploymentUnitRepository(pool)
 		managedInstanceHealthRepo = repository.NewPgManagedInstanceHealthRepository(pool)
 		orgRepo = repository.NewPgOrganizationRepository(pool)
@@ -2324,6 +2326,16 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// records in the local event store, not PostgreSQL.
 	secretView := nostrAdapter.NewCanonicalSecretView(nostrProjector, confidentialEncryptor)
 	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, confidentialEncryptor, secretView, logger)
+	if secretIndex != nil {
+		// Store-backed secrets recorded while PostgreSQL was absent get their
+		// value-less marker, so PostgreSQL consumers fail on them instead of
+		// leaving them out.
+		nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+			if err := indexStoreBackedSecrets(ctx, secretView, secretIndex); err != nil {
+				logger.Error("store-backed secrets are missing from the PostgreSQL index; consumers may omit them", zap.Error(err))
+			}
+		})
+	}
 
 	// Register the secret intent handler when the secret domain is enabled.
 	// With a secret store it needs no database: intents carry only
@@ -2331,13 +2343,14 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// PostgreSQL secret store.
 	if enabledDomains["secret"] && (secretValues != nil || secretRepo != nil) {
 		handlerCfg := controlplane.SecretIntentHandlerConfig{
-			Registry:  secretRepo,
-			Encryptor: secretEncryptor,
-			Store:     secretValues,
-			Records:   secretView,
-			Publisher: secretCanonical,
-			Status:    intentStatus,
-			Logger:    logger,
+			Registry:   secretRepo,
+			StoreIndex: secretIndexOrNil(secretIndex),
+			Encryptor:  secretEncryptor,
+			Store:      secretValues,
+			Records:    secretView,
+			Publisher:  secretCanonical,
+			Status:     intentStatus,
+			Logger:     logger,
 		}
 		intentProcessor.RegisterHandler("secret", controlplane.NewSecretIntentHandler(handlerCfg))
 		logger.Info("secret intent handler registered", zap.Bool("secret_store", secretValues != nil), zap.Bool("sql_secret_store", secretRepo != nil))

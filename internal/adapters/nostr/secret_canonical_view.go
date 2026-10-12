@@ -108,3 +108,44 @@ func (v *CanonicalSecretView) CurrentSecretRef(ctx context.Context, secretID uui
 	}
 	return &ref, nil
 }
+
+// StoreBackedSecrets returns every current secret record whose value lives
+// in the secret store, from the daemon's retained records. A record that
+// cannot be read fails the call: a partial list would leave secrets out of
+// the PostgreSQL index silently.
+func (v *CanonicalSecretView) StoreBackedSecrets(ctx context.Context) ([]domain.SecretRef, error) {
+	if v == nil || v.projector == nil || v.projector.history == nil || v.encryptor == nil {
+		return nil, fmt.Errorf("canonical secret view is unavailable")
+	}
+	family := cpStateFamilies[KindSecretRegistry]
+	records, err := v.projector.history.FindByTag(ctx, "t", family.topic, []int{KindCASControlState}, canonicalViewLimit)
+	if err != nil {
+		return nil, err
+	}
+	if len(records) >= canonicalViewLimit {
+		return nil, fmt.Errorf("canonical secret view reached history limit")
+	}
+	var out []domain.SecretRef
+	for _, record := range records {
+		tags := recordTags(record)
+		if tagValue(tags, "legacy_kind") != strconv.Itoa(KindSecretRegistry) || isTombstoneTags(tags) {
+			continue
+		}
+		dTag := tagValue(tags, "d")
+		plaintext, err := v.encryptor.DecryptConfidential(ctx, record.Content, KindSecretRegistry, dTag, family.topic)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt secret %s: %w", dTag, err)
+		}
+		var ref domain.SecretRef
+		if err := json.Unmarshal(plaintext, &ref); err != nil {
+			return nil, fmt.Errorf("decode secret %s: %w", dTag, err)
+		}
+		if SecretDTag(ref.ID) != dTag {
+			return nil, fmt.Errorf("secret %s coordinate mismatch", dTag)
+		}
+		if ref.CredentialRef != nil {
+			out = append(out, ref)
+		}
+	}
+	return out, nil
+}

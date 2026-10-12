@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,7 +15,26 @@ const (
 	EncryptionNIP44    EncryptionMethod = "nip44"
 	EncryptionAES256   EncryptionMethod = "aes256gcm"
 	EncryptionAES256V2 EncryptionMethod = "aes256gcm-v2"
+	// EncryptionStoreRef marks a PostgreSQL index row (and its retained
+	// versions) of a secret whose value lives in the external secret store:
+	// the row holds no value.
+	EncryptionStoreRef EncryptionMethod = "store-ref"
 )
+
+// ErrSecretInStore is returned by every consumer that reads secret values
+// from PostgreSQL when the secret's value lives in the external secret
+// store. Those consumers resolve through the secret store in bahia-cd0wr.4.7;
+// until then they fail instead of omitting the secret.
+var ErrSecretInStore = errors.New("secret value is held by the secret store and this consumer still reads PostgreSQL (moves to the secret store in bahia-cd0wr.4.7)")
+
+// SecretInStoreError names the store-backed secret a PostgreSQL consumer
+// could not read.
+func SecretInStoreError(id uuid.UUID, name string) error {
+	if name == "" {
+		return fmt.Errorf("secret %s: %w", id, ErrSecretInStore)
+	}
+	return fmt.Errorf("secret %s (%s): %w", id, name, ErrSecretInStore)
+}
 
 // ServiceSecret represents an encrypted secret bound to a service (and optionally an environment).
 type ServiceSecret struct {

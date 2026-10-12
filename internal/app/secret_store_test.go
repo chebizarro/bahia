@@ -57,3 +57,17 @@ func TestSecretStoreHealthCheckFailsClosedWhileSignetIsUnreachable(t *testing.T)
 	require.True(t, strings.Contains(got.Message, "fail closed"), got.Message)
 	require.NotEmpty(t, got.Details["last_round_trip"])
 }
+
+func TestOpenSecretStoreRefusesExposedKeyFile(t *testing.T) {
+	cfg := secretStoreConfig(t, nostr.Generate())
+	require.NoError(t, os.Chmod(cfg.SecretStore.Signet.ClientKeyFile, 0o640))
+	_, err := openSecretStore(context.Background(), cfg, nostr.Generate().Public().Hex(), nostrout.Or(nil), zap.NewNop())
+	require.ErrorContains(t, err, "group or others")
+
+	link := filepath.Join(t.TempDir(), "link.key")
+	require.NoError(t, os.Chmod(cfg.SecretStore.Signet.ClientKeyFile, 0o600))
+	require.NoError(t, os.Symlink(cfg.SecretStore.Signet.ClientKeyFile, link))
+	cfg.SecretStore.Signet.ClientKeyFile = link
+	_, err = openSecretStore(context.Background(), cfg, nostr.Generate().Public().Hex(), nostrout.Or(nil), zap.NewNop())
+	require.ErrorContains(t, err, "regular file")
+}

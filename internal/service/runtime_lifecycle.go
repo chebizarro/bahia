@@ -1131,6 +1131,9 @@ func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, sec
 		if secret.Name == "" || envVar == "" {
 			continue
 		}
+		if secret.EncryptionMethod == domain.EncryptionStoreRef {
+			return accesses, domain.SecretInStoreError(secret.ID, secret.Name)
+		}
 		version, err := s.secrets.GetCurrentVersion(ctx, secret.ID)
 		if err != nil {
 			return nil, fmt.Errorf("loading current version for effective secret %q: %w", secret.Name, err)

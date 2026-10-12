@@ -114,6 +114,17 @@ func (*versionedIntentKeyer) Nip04Decrypt(context.Context, string, nostr.PubKey)
 }
 func (*versionedIntentKeyer) SignEvent(context.Context, *nostr.Event) error { panic("unused") }
 
+func (r *memSecretRepo) MarkStoreBacked(_ context.Context, ref domain.SecretRef) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.secrets[ref.ID]; ok && existing.ServiceID != ref.ServiceID {
+		return errors.New("index row belongs to another service")
+	}
+	r.secrets[ref.ID] = &domain.ServiceSecret{ID: ref.ID, ServiceID: ref.ServiceID, EnvironmentID: ref.EnvironmentID, Name: ref.Name,
+		EncryptionMethod: domain.EncryptionStoreRef, Version: ref.Version, CreatedBy: ref.CreatedBy}
+	return nil
+}
+
 func (r *memSecretRepo) Delete(_ context.Context, id uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

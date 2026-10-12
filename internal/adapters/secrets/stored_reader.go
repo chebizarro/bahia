@@ -14,7 +14,12 @@ type StoredSecretDecryptor interface {
 	DecryptStored(uuid.UUID, int, []byte, domain.EncryptionMethod) (string, error)
 }
 
-func (e *Encryptor) DecryptStored(_ uuid.UUID, _ int, ciphertext []byte, method domain.EncryptionMethod) (string, error) {
+// DecryptStored fails with domain.ErrSecretInStore for a store-backed index
+// row: its value is not in PostgreSQL.
+func (e *Encryptor) DecryptStored(secretID uuid.UUID, _ int, ciphertext []byte, method domain.EncryptionMethod) (string, error) {
+	if method == domain.EncryptionStoreRef {
+		return "", domain.SecretInStoreError(secretID, "")
+	}
 	if e == nil || method == domain.EncryptionAES256V2 {
 		return "", errors.New("legacy service-secret reader cannot read v2 ciphertext")
 	}
@@ -22,6 +27,9 @@ func (e *Encryptor) DecryptStored(_ uuid.UUID, _ int, ciphertext []byte, method 
 }
 
 func (k *DataKey) DecryptStored(secretID uuid.UUID, version int, ciphertext []byte, method domain.EncryptionMethod) (string, error) {
+	if method == domain.EncryptionStoreRef {
+		return "", domain.SecretInStoreError(secretID, "")
+	}
 	if method != domain.EncryptionAES256V2 {
 		return "", errors.New("versioned service-secret reader refuses legacy ciphertext")
 	}
