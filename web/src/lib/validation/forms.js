@@ -69,13 +69,13 @@ export const policyFormSchema = z.object({
   }
 });
 
-export const secretFormSchema = z.object({
-  name: requiredString('Secret name is required'),
-  value: z.string().min(1, 'Secret value is required')
+export const secretReferenceSchema = z.object({
+  credential_id: z.string().trim().regex(/^cred_[0-9a-f]{64}$/, 'Enter a Signet credential id (cred_ followed by 64 lowercase hex characters)'),
+  credential_version: z.coerce.number().int('Credential version must be a whole number').positive('Credential version must be at least 1')
 });
 
-export const secretValueSchema = z.object({
-  value: z.string().min(1, 'Secret value is required')
+export const secretFormSchema = secretReferenceSchema.extend({
+  name: requiredString('Secret name is required')
 });
 
 export function validateForm(schema, data) {

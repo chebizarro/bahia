@@ -1,5 +1,4 @@
-import { requestEncryptedResult, encryptedRequestsAvailable, servicePubkeyFromSystemInfo } from '$lib/nostr/encrypted-controlplane.js';
-import { encryptWithAuth } from './auth.svelte.js';
+import { requestEncryptedResult, encryptedRequestsAvailable } from '$lib/nostr/encrypted-controlplane.js';
 import { mintEntityId } from '$lib/entity-id.js';
 import { orgIdFor, submitSensitiveIntent } from './sensitive-intents.svelte.js';
 import { currentSystemInfo, loadSystemInfo } from './system.svelte.js';
@@ -130,34 +129,39 @@ export async function listServiceSecrets(serviceId) {
   }
 }
 
+function referenceForIntent(payload) {
+  if (payload.value !== undefined || payload.encrypted_value !== undefined) throw new Error('Secret values cannot be submitted in web intents');
+  const ref = payload.credential_ref;
+  if (ref?.store !== 'signet' || !/^cred_[0-9a-f]{64}$/.test(ref.credential_id) || !Number.isSafeInteger(ref.version) || ref.version < 1) {
+    throw new Error('A Signet credential id and positive version are required');
+  }
+  return { store: 'signet', credential_id: ref.credential_id, version: ref.version };
+}
+
 export async function createServiceSecret(serviceId, payload) {
   const id = String(serviceId || '').trim();
-  const info = currentSystemInfo() || await loadSystemInfo();
-  const servicePubkey = servicePubkeyFromSystemInfo(info);
-  const { value, ...rest } = payload;
+  const { name, environment_id } = payload;
+  const ref = referenceForIntent(payload);
   const secretId = mintEntityId();
   const orgId = orgIdFor({ ...payload, service_id: id });
-  const encrypted_value = value ? await encryptWithAuth(servicePubkey, value) : undefined;
   const intent = await submitSensitiveIntent({ domain: 'secret', op: 'create', coordinate: secretId, orgId,
-    content: { id: secretId, service_id: id, ...rest, ...(encrypted_value ? { encrypted_value } : {}) } });
-  const secret = { id: secretId, service_id: id, name: rest.name, org_id: orgId, pending: true, pendingIntentId: intent.intentId };
+    content: { id: secretId, service_id: id, name, ...(environment_id ? { environment_id } : {}), credential_ref: ref } });
+  const secret = { id: secretId, service_id: id, name, org_id: orgId, ...(environment_id ? { environment_id } : {}),
+    credential_ref: ref, pending: true, pendingIntentId: intent.intentId };
   upsertServiceSecret(id, secret);
   return secret;
 }
 
 export async function updateServiceSecret(serviceId, secretId, payload) {
   const id = String(serviceId || '').trim();
-  const info = currentSystemInfo() || await loadSystemInfo();
-  const servicePubkey = servicePubkeyFromSystemInfo(info);
-  const { value, ...rest } = payload;
+  const ref = referenceForIntent(payload);
   const current = getServiceSecrets(id).find(secret => secret.id === secretId);
   if (!current) throw new Error('Load the canonical secret reference before updating it');
-  const encrypted_value = value ? await encryptWithAuth(servicePubkey, value) : undefined;
   const intent = await submitSensitiveIntent({ domain: 'secret', op: 'update', coordinate: secretId,
     orgId: orgIdFor({ ...current, ...payload, service_id: id }), currentRecord: current,
-    content: { id: secretId, service_id: id, name: current.name, ...rest,
-      ...(encrypted_value ? { encrypted_value } : {}) } });
-  const secret = { ...current, ...rest, pending: true, pendingIntentId: intent.intentId };
+    content: { id: secretId, service_id: id, name: current.name,
+      ...(current.environment_id ? { environment_id: current.environment_id } : {}), credential_ref: ref } });
+  const secret = { ...current, credential_ref: ref, pending: true, pendingIntentId: intent.intentId };
   upsertServiceSecret(id, secret);
   return secret;
 }
