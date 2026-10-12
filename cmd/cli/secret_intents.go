@@ -40,12 +40,15 @@ func secretRefForName(cmd *cobra.Command, serviceID, name, environmentID string)
 	return nil, nil
 }
 
-func runSecretSetIntent(cmd *cobra.Command, serviceID, name, value, environmentID string) error {
+// runSecretSetIntent publishes a secret intent carrying either value
+// (NIP-44-encrypted to the service key) or, when credential is set, only a
+// reference to the credential in the daemon's secret store.
+func runSecretSetIntent(cmd *cobra.Command, serviceID, name, value, environmentID string, credential *domain.SecretCredentialRef) error {
 	svc, err := secretOrg(cmd, serviceID)
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(value) == "" {
+	if credential == nil && strings.TrimSpace(value) == "" {
 		return fmt.Errorf("secret value is required")
 	}
 	existing, err := secretRefForName(cmd, serviceID, name, environmentID)
@@ -61,7 +64,12 @@ func runSecretSetIntent(cmd *cobra.Command, serviceID, name, value, environmentI
 		secretID = existing.ID
 		op = "update"
 	}
-	content := map[string]interface{}{"id": secretID.String(), "service_id": serviceID, "name": name, "encryption_method": "nip44"}
+	content := map[string]interface{}{"id": secretID.String(), "service_id": serviceID, "name": name}
+	if credential != nil {
+		content["credential_ref"] = credential
+	} else {
+		content["encryption_method"] = "nip44"
+	}
 	if existing != nil {
 		if existing.UpdatedAt.IsZero() {
 			return fmt.Errorf("canonical secret %s is missing updated_at", secretID)

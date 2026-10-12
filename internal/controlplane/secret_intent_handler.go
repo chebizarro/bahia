@@ -535,6 +535,29 @@ func BuildSecretIntentContent(serviceID, secretID uuid.UUID, name, value string,
 	return content
 }
 
+// BuildSecretReferenceIntentContent builds a reference-only secret intent:
+// the value lives in the secret store and the intent names its credential.
+func BuildSecretReferenceIntentContent(serviceID, secretID uuid.UUID, name string, envID *uuid.UUID, ref domain.SecretCredentialRef) map[string]interface{} {
+	id := secretID
+	if id == uuid.Nil {
+		id = domain.NewEntityID()
+	}
+	content := map[string]interface{}{
+		"id":         id.String(),
+		"service_id": serviceID.String(),
+		"name":       name,
+		"credential_ref": map[string]interface{}{
+			"store":         ref.Store,
+			"credential_id": ref.CredentialID,
+			"version":       ref.Version,
+		},
+	}
+	if envID != nil {
+		content["environment_id"] = envID.String()
+	}
+	return content
+}
+
 // ensureSecretIntentJSON marshals any to JSON and back into a map.
 func ensureSecretIntentJSON(v any) map[string]interface{} {
 	data, err := json.Marshal(v)

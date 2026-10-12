@@ -19,6 +19,7 @@ import (
 	"fiatjaf.com/nostr/nip19"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -1180,12 +1181,27 @@ func secretsCommands() *cobra.Command {
 		RunE:  func(cmd *cobra.Command, args []string) error { return listCLISecrets(cmd, args[0]) },
 	}
 
-	var valueFile string
+	var valueFile, credentialID string
+	var credentialVersion int
 	setCmd := &cobra.Command{
 		Use:   "set [service-id] [name] [value]",
 		Short: "Set a secret",
-		Args:  cobra.RangeArgs(2, 3),
+		Long: "Set a secret. With the daemon's secret store configured, import the value into the store " +
+			"(signetctl import-credential) and pass --credential-id and --credential-version: the intent then " +
+			"carries only the reference. Otherwise pass [value] or --value-file.",
+		Args: cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			envID, _ := cmd.Flags().GetString("environment")
+			if credentialID != "" || cmd.Flags().Changed("credential-version") {
+				if valueFile != "" || len(args) == 3 {
+					return fmt.Errorf("a credential reference replaces the value: drop [value] and --value-file")
+				}
+				ref := domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: credentialID, Version: credentialVersion}
+				if err := secretstore.ValidateRef(ref); err != nil {
+					return fmt.Errorf("--credential-id and --credential-version: %w", err)
+				}
+				return runSecretSetIntent(cmd, args[0], args[1], "", envID, &ref)
+			}
 			if valueFile != "" && len(args) == 3 {
 				return fmt.Errorf("provide either [value] or --value-file, not both")
 			}
@@ -1199,14 +1215,15 @@ func secretsCommands() *cobra.Command {
 			} else if len(args) == 3 {
 				value = args[2]
 			} else {
-				return fmt.Errorf("secret value or --value-file is required")
+				return fmt.Errorf("secret value, --value-file or --credential-id is required")
 			}
-			envID, _ := cmd.Flags().GetString("environment")
-			return runSecretSetIntent(cmd, args[0], args[1], value, envID)
+			return runSecretSetIntent(cmd, args[0], args[1], value, envID, nil)
 		},
 	}
 	setCmd.Flags().String("environment", "", "Environment ID (optional, for env-specific secret)")
 	setCmd.Flags().StringVar(&valueFile, "value-file", "", "Read the secret value from an owner-only absolute file")
+	setCmd.Flags().StringVar(&credentialID, "credential-id", "", "Signet credential id (cred_...) holding the value; the intent carries only this reference")
+	setCmd.Flags().IntVar(&credentialVersion, "credential-version", 0, "Signet credential version the secret is pinned to (with --credential-id)")
 
 	deleteCmd := &cobra.Command{
 		Use:   "delete [service-id] [secret-id]",

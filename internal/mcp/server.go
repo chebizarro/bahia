@@ -1050,7 +1050,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_create_secret",
-			Description: "Create a new encrypted secret for a service",
+			Description: "Create a secret for a service. With the daemon's secret store configured, pass credential_id and credential_version (the value stays in the store); otherwise pass value.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1064,19 +1064,27 @@ func (s *Server) GetTools() []Tool {
 					},
 					"value": map[string]interface{}{
 						"type":        "string",
-						"description": "Plaintext secret value to encrypt",
+						"description": "Plaintext secret value to encrypt (only without a configured secret store)",
+					},
+					"credential_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Signet credential id (cred_...) holding the value",
+					},
+					"credential_version": map[string]interface{}{
+						"type":        "integer",
+						"description": "Signet credential version the secret is pinned to",
 					},
 					"environment_id": map[string]interface{}{
 						"type":        "string",
 						"description": "Environment UUID (optional, omit for service-wide secret)",
 					},
 				},
-				"required": []string{"service_id", "name", "value"},
+				"required": []string{"service_id", "name"},
 			},
 		},
 		{
 			Name:        "bahia_update_secret",
-			Description: "Update an existing secret's value",
+			Description: "Update an existing secret's value, or re-point it to a rotated credential version in the secret store",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1086,10 +1094,18 @@ func (s *Server) GetTools() []Tool {
 					},
 					"value": map[string]interface{}{
 						"type":        "string",
-						"description": "New plaintext secret value to encrypt",
+						"description": "New plaintext secret value to encrypt (only without a configured secret store)",
+					},
+					"credential_id": map[string]interface{}{
+						"type":        "string",
+						"description": "Signet credential id (cred_...) holding the value",
+					},
+					"credential_version": map[string]interface{}{
+						"type":        "integer",
+						"description": "Signet credential version the secret is pinned to",
 					},
 				},
-				"required": []string{"secret_id", "value"},
+				"required": []string{"secret_id"},
 			},
 		},
 		{

@@ -291,3 +291,21 @@ func TestSecretValueIntentWithoutStoreOrPostgresIsRefused(t *testing.T) {
 		t.Fatalf("value intent without PostgreSQL = %v", err)
 	}
 }
+
+// What MCP builds for a reference is exactly what the handler accepts.
+func TestBuildSecretReferenceIntentContentIsAccepted(t *testing.T) {
+	f := newReferenceFixture(t, false)
+	secretID := domain.NewEntityID()
+	ref := domain.SecretCredentialRef{Store: "signet", CredentialID: f.credID, Version: 2}
+	content := BuildSecretReferenceIntentContent(f.serviceID, secretID, "API_TOKEN", nil, ref)
+	if _, has := content["value"]; has {
+		t.Fatal("reference content carries a value")
+	}
+	if err := f.process(t, "create", content); err != nil {
+		t.Fatalf("handler refused the built reference intent: %v", err)
+	}
+	got, _ := f.canonical.CurrentSecretRef(context.Background(), secretID)
+	if got == nil || *got.CredentialRef != ref || got.Name != "API_TOKEN" {
+		t.Fatalf("record = %+v", got)
+	}
+}
