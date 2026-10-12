@@ -30,11 +30,11 @@ client key settings; settings that belong to a different method; a NIP-46
 client key equal to the service key. Secrets are redacted from logs and
 config renderings.
 
-`assistant.wrapped_keys.signet_bunker_uri`, `owner_client_secret_key` and
-`connect_timeout` have been removed; startup fails if they are still set.
-Wrapped assistant keys use the service signer. With a remote method the
-assistant requires `assistant.wrapped_keys.mode=wrapped_read_only`, because
-`legacy_v1` derives transcript keys from the raw service key.
+`assistant.wrapped_keys` has been removed; startup fails if it is still set.
+The assistant's transcript key is a Signet system credential
+(`secret_store.system_keys.assistant_transcript`), never derived from or
+wrapped to the service key, so the assistant works with every signer method
+([`assistant-transcript-keys.md`](assistant-transcript-keys.md)).
 
 ## Relay sidecar
 

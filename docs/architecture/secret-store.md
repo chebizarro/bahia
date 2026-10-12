@@ -106,6 +106,48 @@ confidential-state dedupe) is resolved at startup and held in memory for the
 life of the process, then zeroized at shutdown; the delivery lease still
 bounds the delivery, not the in-memory lifetime.
 
+### System credentials
+
+The daemon's own data keys are **system credentials**: 32 random bytes the
+operator imports into Signet under the same owner, labelled
+`bahia-system/<purpose>/<key-id>` (`internal/secretstore/system.go`).
+
+| Purpose | Label | Used for |
+|---|---|---|
+| `assistant-transcript` | `bahia-system/assistant-transcript/<key-id>` | XChaCha20-Poly1305 key of assistant transcripts (`30316`) and execution checkpoints (`4903`) |
+| `confidential-dedupe` | `bahia-system/confidential-dedupe/<key-id>` | HMAC-SHA256 key of the `state_hash` tag of confidential cp-state records |
+
+- **Namespaces never cross.** A system scope (`secretstore.SystemScope`,
+  constructible only inside `internal/secretstore`) admits exactly one label,
+  `bahia-system/<purpose>/<key-id>`. A tenant scope admits only
+  `<org-id>/<service-id>/<name>` and refuses the `bahia-system/` namespace
+  outright; a tenant label starts with an org UUID, so it can never equal a
+  system label. A secret intent naming a system credential's id is refused
+  like any other tenant's credential, and a system key reference naming a
+  tenant credential (or another purpose's or key id's credential) is refused
+  with `ErrDenied` before delivery.
+- **References live in configuration** (`secret_store.system_keys`), one list
+  per purpose, each entry an explicit `key_id`, `credential_id` and `version`.
+  The first entry of a purpose is its active key; later entries only decrypt
+  data sealed under them.
+- **Startup resolution.** The `system-keys` runner resolves every configured
+  key once, all or nothing, each exactly 32 bytes, retrying with backoff
+  (1s to 5m) while Signet is unreachable or refuses. Consumers wait for it
+  within their own deadline and otherwise fail closed with `ErrUnavailable`;
+  nothing falls back to a derived or cached key. The `system_keys` health
+  check fails readiness until every key is resolved, and warns while no
+  `confidential_dedupe` key is configured (confidential records are then not
+  published). Keys are zeroized at shutdown and never leave the keyring except
+  through `Keyring.Use`.
+- Nothing about a system key is derived from, or wrapped to, the service key.
+
+Ciphertext names the key that sealed it: an assistant event's `key_ref` is
+the credential's label and `key_version` its Signet version, so a key is
+never applied to data sealed under another. Signet delivers only a
+credential's active version, so a transcript key is rotated by importing a
+new key id, never with `rotate-credential`
+([runbook](../runbooks/assistant-transcript-keys.md)).
+
 ## Access path
 
 ### Identities
@@ -199,6 +241,8 @@ back with a different future; after a restore, re-check references.
 | Service key leaks | can sign as the service and decrypt anything NIP-44'd to it | no secret value: the requester is a different key and records hold references only |
 | Requester key leaks | can request delivery of the owner's credentials (and, while Signet requires delivery requesters to be provisioners, Signet management) | revoke the delivery grant and the provisioner grant; Signet's audit names the requester on every delivery; the key file must be a regular owner-only file |
 | An org's operator references another tenant's credential (ids are computable) | — | refused at intent time and on every resolve and reveal: the credential's label is outside `<org-id>/<service-id>/` |
+| An org's operator references a system credential | — | refused the same way: tenant scopes refuse the `bahia-system/` namespace |
+| Daemon memory (system keys) | the assistant-transcript and confidential-dedupe keys for the life of the process | zeroized at shutdown; a leaked transcript key exposes assistant history sealed under it, so rotate it (new key id) and re-encrypt |
 | PostgreSQL leaks | nothing for store-backed secrets | legacy sealed values are deleted when a secret is re-pointed |
 | Relay readers | gift-wrap sizes and timing; OCK ciphertext records | record names and service bindings are plaintext tags (tracked separately) |
 | Signet unavailable | — | fail closed: intents are rejected with the reason, reveals refused, consumers stop; the `secret_store` health check warns; nothing falls back to PostgreSQL or a cached value |
@@ -282,10 +326,9 @@ removed.
 - In bahia-cd0wr.4.7 these consumers resolve the canonical record's
   `credential_ref` per operation; the HKDF store, `service_secret_data_keys`
   and the `encrypted_value` intent path are then deleted.
-- The assistant transcript/checkpoint data key (bahia-cd0wr.4.8) and the
-  confidential-state dedupe HMAC key (bahia-cd0wr.4.9) are random 32-byte keys
-  the operator imports as Signet credentials; the daemon resolves them as
-  process-held keys. They are never wrapped to the service pubkey.
+- The assistant transcript/checkpoint key and the confidential-state dedupe
+  HMAC key are [system credentials](#system-credentials), resolved at startup
+  and held for the life of the process.
 
 ## Services without a canonical record
 
@@ -308,6 +351,15 @@ secret_store:
     client_key_file: /run/secrets/bahia-secret-store.key   # requester key, 64 hex, mounted file
     owner: bahia-vault                # Signet agent that owns Bahia's credentials
     request_timeout: 30s              # per Signet round trip
+  system_keys:                        # the daemon's own data keys (system credentials)
+    assistant_transcript:             # required when assistant.enabled; first entry is active
+      - key_id: "2026-10"             # label bahia-system/assistant-transcript/2026-10
+        credential_id: cred_<64 hex>
+        version: 1
+    confidential_dedupe:              # at most one; without it confidential records are not published
+      - key_id: "2026-10"             # label bahia-system/confidential-dedupe/2026-10
+        credential_id: cred_<64 hex>
+        version: 1
 ```
 
 `secret_store.signet.relays` is the store's own explicit relay list: relays
@@ -325,5 +377,7 @@ requester, never as the service, and publishes no control-plane event.
 `internal/adapters/signet/credential_store_test.go` runs the store against an
 in-process Signet credential plane on a real relay with NIP-42 recipient AUTH,
 Signet's authorization order and reason codes, and replies backdated by 47
-hours. `scripts/signet_secret_store_live.py` runs the opt-in live proof against
-a disposable `signetd` (see the runbook).
+hours, including system scopes (`TestCredentialStoreSystemScope`).
+`internal/secretstore/system_test.go` covers scope separation and the keyring.
+`scripts/signet_secret_store_live.py` runs the opt-in live proof against a
+disposable `signetd`, tenant and system credentials (see the runbook).

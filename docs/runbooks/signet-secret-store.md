@@ -71,6 +71,8 @@ Three identities are involved; keep them distinct:
 5. Check `GET /health`: the `secret_store` check passes once the startup
    probe (`credential/list` for the owner) has answered.
 
+6. Create the daemon's [system credentials](#system-credentials).
+
 ## Store a secret
 
 Name every credential `<org-id>/<service-id>/<name>`: the label binds it to
@@ -89,6 +91,60 @@ bahia secrets set <service-id> DATABASE_URL \
 
 The intent carries only the reference. The daemon refuses it unless the
 credential exists, is active and is at that version.
+
+## System credentials
+
+The daemon's own data keys live in Signet under the same owner, labelled
+`bahia-system/<purpose>/<key-id>` ([design](../architecture/secret-store.md#system-credentials)):
+`assistant-transcript` (required when `assistant.enabled`) and
+`confidential-dedupe` (without it confidential records such as orgs, members,
+secrets and payments are not published). Each is 32 random bytes; pick a key
+id that names the key, for example the month it was created.
+
+```bash
+umask 077
+head -c 32 /dev/urandom > /run/operator/assistant-transcript.key
+signetctl import-credential bahia-vault --type credential \
+  --label bahia-system/assistant-transcript/2026-10 --file /run/operator/assistant-transcript.key
+head -c 32 /dev/urandom > /run/operator/confidential-dedupe.key
+signetctl import-credential bahia-vault --type credential \
+  --label bahia-system/confidential-dedupe/2026-10 --file /run/operator/confidential-dedupe.key
+shred -u /run/operator/assistant-transcript.key /run/operator/confidential-dedupe.key
+signetctl list-credentials bahia-vault          # credential_id and version of each
+```
+
+Reference them in the daemon's configuration and restart it:
+
+```yaml
+secret_store:
+  system_keys:
+    assistant_transcript:
+      - {key_id: "2026-10", credential_id: cred_<64 hex>, version: 1}
+    confidential_dedupe:
+      - {key_id: "2026-10", credential_id: cred_<64 hex>, version: 1}
+```
+
+The daemon resolves them once at startup and holds them until shutdown. The
+`system_keys` health check fails readiness until both are resolved; a label
+that does not match the entry's purpose and key id is refused.
+
+**Changing the dedupe key.** Import a new `bahia-system/confidential-dedupe/<key-id>`
+credential (or `rotate-credential` the current one and bump `version`), point
+`confidential_dedupe` at it and restart. Every digest changes, so each
+confidential record is republished once, when its producer next publishes
+it, through the outbox and the `state` lane's budget, and deduplicated again
+from then on; nothing is republished in bulk. Revoke the old credential.
+
+**Assistant transcript keys** are rotated by adding a new key id, never with
+`rotate-credential` (Signet delivers only the active version, so history
+sealed under the old version would become unreadable). See
+[`assistant-transcript-keys.md`](assistant-transcript-keys.md).
+
+| `system_keys` health message | Cause |
+|---|---|
+| `resolving system keys from the secret store` | startup resolution has not finished |
+| `system keys are not resolved … retrying: …` | Signet is unreachable or refused one of the keys: `credential is not labelled bahia-system/<purpose>/<key-id>` (wrong credential or label), `version does not match` (configured version is not the active one), `is N bytes, want 32` (not a 32-byte key), `refused (no_capability)` (delivery grant) |
+| `confidential records are not published: … confidential_dedupe is not configured` | no dedupe key; confidential publishes fail closed |
 
 ## Rotate
 
@@ -176,7 +232,9 @@ Signet's audit chain records every delivery with the requester pubkey:
 `scripts/signet_secret_store_live.py --signet-repo <nostrc checkout> --build-dir <cmake build> --signet-commit <sha>`
 builds `signetd`/`signetctl` from a clean nostrc commit, runs them on a
 private loopback relay with a disposable store, sets up an owner, a
-requester and a credential exactly as above, and runs Bahia's opt-in
-`TestLiveSignetCredentialStore` (`-tags signetinterop`): resolve the pinned
-version, refuse a stale version after rotation, resolve the new version,
-fail closed after revocation and without a delivery grant.
+requester, a tenant credential and the two system credentials exactly as
+above, and runs Bahia's opt-in `TestLiveSignetCredentialStore`
+(`-tags signetinterop`): resolve the pinned version, resolve the system keys
+and refuse every system/tenant crossover and a key configured under the
+wrong purpose, refuse a stale version after rotation, resolve the new
+version, fail closed after revocation and without a delivery grant.

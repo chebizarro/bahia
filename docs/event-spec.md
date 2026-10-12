@@ -301,8 +301,10 @@ service pubkey:
 - `deleted` is `"true"` on a tombstone and `"false"` on a live record.
   Consumers compare the value. A tombstone shares its coordinate with the
   record it retires and carries minimal content (`{"deleted":true,"id":…}`).
-- Confidential families carry a `state_hash` tag (keyed hash used for
-  deduplication) and a `bahia.org-state.aead.v1` / `bahia.confidential.aead.v1`
+- Confidential families carry a `state_hash` tag (HMAC-SHA256 of the stable
+  plaintext under the daemon's `confidential-dedupe` system key, used for
+  deduplication; a new key changes every digest, so each record is
+  republished once) and a `bahia.org-state.aead.v1` / `bahia.confidential.aead.v1`
   envelope as content: `envelope=service-held-aead`,
   `algorithm=xchacha20-poly1305`, `key_ref`, `key_version`, `nonce`,
   `ciphertext`, with `d` and `t` bound as associated data. Org-scoped
@@ -510,8 +512,11 @@ events durably unless `nostr.sidecar.event_retention` is set.
   signed desired state the sidecar's config consumer applies.
 - **Assistant transcript** (`30316`): content is a
   `bahia.assistant-transcript.v1` service-held AEAD envelope; tags `session`,
-  `turn`, `role`, `seq`, `key_ref`, `key_version`, `key_rotation`, `envelope`,
-  `t=assistant-transcript`, `p` for the operator.
+  `turn`, `role`, `seq`, `key_ref`, `key_version`, `key_rotation` (when the
+  key has one), `envelope`, `t=assistant-transcript`, `p` for the operator.
+  `key_ref` is the label of the sealing Signet system credential
+  (`bahia-system/assistant-transcript/<key-id>`) and `key_version` its
+  credential version; execution checkpoints (`4903`) carry the same pair.
 - **SoulFactory fleet configuration** (`31953`): addressable by
   `d=soulfactory-fleet-config/v1`, tags `schema=soulfactory-fleet-config/v1`,
   `t=soulfactory-fleet-config`; content `{"schema","template":{agents,

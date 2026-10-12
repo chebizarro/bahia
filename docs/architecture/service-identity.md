@@ -56,8 +56,9 @@ separate identity that keeps a local key by design.
 | `pkg/discovery/resolver.go:112`, `pkg/client/intent_publisher.go:105` | a | `WithAuthSigner` |
 | `internal/adapters/secrets/nip44.go:38` secret store HKDF AES | b (4.7) | `NewServiceEncryptor(keyer)`; every op returns the sentinel without material |
 | `internal/app/service_keyer.go:41` legacy O1 org-state key | b | blocked decryptor returns the sentinel |
-| `internal/adapters/nostr/confidential_dedupe.go:51` state_hash HMAC | b | `publishCanonicalFirst` returns the sentinel |
-| `internal/app/app.go:4979` assistant transcript key, `assistant_wrapped_keys.go:68` | b (4.8) | wraps the sentinel; signature fixed by the factory slice |
+| `internal/adapters/nostr/confidential_dedupe.go` state_hash HMAC | n/a | keyed by the `confidential-dedupe` [system credential](secret-store.md#system-credentials); never the service key |
+| `internal/service/assistant_transcript_keys.go` assistant transcript and checkpoint key | n/a | the `assistant-transcript` [system credential](secret-store.md#system-credentials); never the service key |
+| `cmd/bahia-assistant-reencrypt` | c | reads a **retired** service key from a file once, to open assistant history sealed under its derived key and re-seal it under the system key; signs as the current identity through `servicesigner.Open` ([runbook](../runbooks/assistant-transcript-keys.md)) |
 | `cmd/bahia-policy-census`, `cmd/bahia-migrate` (`f74a_import`, `nostr`), `cmd/cli` (`config_fabric`, confidential reads, `soulfactory`), `cmd/bahia-dns-agent`, `cmd/openclaw-soulfactory-sidecar`, `cmd/bahia-test-relay`, `internal/nostrmigration` | c | offline/operator tools or separate identities; AUTH via a local signer |
 | `cmd/bahia-leak-delete` | c | signs as the retired, leaked identity through `servicesigner.Open` (local key file, NIP-46 or NIP-55L); [runbook](../runbooks/leaked-status-event-deletion.md) |
 | `internal/relaysidecar/server.go` NIP-11 pubkey, admission, config acks | a | `New(ctx, cfg, signer, log)`; `cmd/relay` opens the signer through `servicesigner.Open` and owns it across `SIGHUP` reloads |

@@ -54,6 +54,20 @@ layer. Members decrypt the AEAD layer (metadata) only; secret value reveal
 remains a ContextVM request (`services/secrets-reveal`) with permission
 checks.
 
+## Deduplication digest
+
+OCK ciphertext is randomized, so every confidential record also carries a
+`state_hash` tag: HMAC-SHA256 of its stable plaintext under the daemon's
+`confidential-dedupe` [system credential](secret-store.md#system-credentials).
+The projector compares that digest (with the key version) instead of the
+ciphertext, so re-asserting unchanged state publishes nothing; only the
+daemon can recompute it. The key is held in Signet and never derived from the
+service key; until it is resolved confidential publishes wait within their
+deadline and then fail, and the `system_keys` health check fails readiness.
+Replacing the key changes every digest: each record is republished once, when
+its producer next publishes it (outbox, `state` lane budget), and is
+deduplicated again from then on, including after a restart.
+
 ## Key distribution: key envelopes (family 32010)
 
 The OCK is NIP-44-wrapped to **each current member of the scope and to the

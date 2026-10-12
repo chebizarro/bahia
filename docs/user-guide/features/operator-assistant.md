@@ -47,4 +47,4 @@ assistant:
     mode: audited
 ```
 
-Without `llm_model` the batch workflow is unavailable: a turn that resolves to batch is refused with `workflow_unavailable`, while approving, rejecting, stopping, and reconciling existing batch drafts still work. The assistant signs with the daemon's `nostr.private_key`; transcripts (`30316`) and execution checkpoints (`4903`) are encrypted.
+Without `llm_model` the batch workflow is unavailable: a turn that resolves to batch is refused with `workflow_unavailable`, while approving, rejecting, stopping, and reconciling existing batch drafts still work. The assistant signs as the daemon's service identity (`nostr.signer`); transcripts (`30316`) and execution checkpoints (`4903`) are encrypted with a key held in Signet, `secret_store.system_keys.assistant_transcript`, which `assistant.enabled` requires (see [Assistant transcript keys](../../runbooks/assistant-transcript-keys.md)).
