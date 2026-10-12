@@ -235,6 +235,28 @@ func TestKeyringUseWaitsForLoad(t *testing.T) {
 	}
 }
 
+// Each store request costs outbound budget: a retry asks only for the keys
+// an earlier attempt did not resolve, and nothing is served until all are.
+func TestKeyringRetryResolvesOnlyMissingKeys(t *testing.T) {
+	a := SystemKeyRef{Purpose: PurposeAssistantTranscript, KeyID: "k1", Credential: credRef('a')}
+	b := SystemKeyRef{Purpose: PurposeConfidentialDedupe, KeyID: "k1", Credential: credRef('b')}
+	ring, _ := NewKeyring([]SystemKeyRef{a, b})
+	store := &labelStore{creds: map[string]labelledValue{a.Credential.CredentialID: {a.Label(), bytes.Repeat([]byte{1}, SystemKeySize)}}}
+	if err := ring.Load(context.Background(), store); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("first load: %v", err)
+	}
+	if err := ring.Use(context.Background(), PurposeAssistantTranscript, "", func(SystemKeyRef, []byte) error { return nil }); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("a partly resolved keyring served a key: %v", err)
+	}
+	store.creds[b.Credential.CredentialID] = labelledValue{b.Label(), bytes.Repeat([]byte{2}, SystemKeySize)}
+	if err := ring.Load(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	if store.resolved != 3 {
+		t.Fatalf("store asked %d times, want 3 (a, b, then only b)", store.resolved)
+	}
+}
+
 func TestKeyringConcurrentLoads(t *testing.T) {
 	ref := SystemKeyRef{Purpose: PurposeConfidentialDedupe, KeyID: "k1", Credential: credRef('a')}
 	ring, _ := NewKeyring([]SystemKeyRef{ref})

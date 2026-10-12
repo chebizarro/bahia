@@ -33,21 +33,19 @@ RUN cmake -S /src -B /build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=
   && cmake --build /build --target signetd signetctl \
   && mkdir -p /out/lib \
   && cp /build/signet/signetd /build/signet/signetctl /out/ \
-  && cp -a /build/libnostr/libnostr.so* /build/libjson/libnostr-json.so* \
-       /build/nips/nip04/libnip04.so* /build/nips/nip19/libnip19.so* \
-       /build/nips/nip44/libnip44.so* /build/nips/nip46/libnip46.so* /out/lib/
+  && ldd /out/signetd /out/signetctl | awk '$3 ~ "^/build/" {print $3}' | sort -u | xargs -r cp -L -t /out/lib/
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 libjson-glib-1.0-0 libjansson4 libssl3 libsqlite3-0 libsqlcipher0 libsodium23 \
-    libmicrohttpd12 libsecp256k1-1 libnsync1 libwebsockets17 libcap2 ca-certificates python3 \
+    libmicrohttpd12 libsecp256k1-1 libnsync1 libwebsockets17 libcurl4 libcap2 ca-certificates python3 \
   && rm -rf /var/lib/apt/lists/* \
   && groupadd -r signet && useradd -r -g signet -d /data -s /usr/sbin/nologin signet
 COPY --from=signet /out/signetd /out/signetctl /usr/local/bin/
 COPY --from=signet /out/lib/ /usr/local/lib/
 COPY --from=nak /out/nak /usr/local/bin/nak
 COPY --from=scripts signet_dev_seed.py signet_live_interop.py /opt/bahia/
-RUN ldconfig && ! ldd /usr/local/bin/signetd | grep -q 'not found'
+RUN ldconfig && if ldd /usr/local/bin/signetd /usr/local/bin/signetctl | grep 'not found'; then exit 1; fi
 VOLUME ["/data", "/shared"]
 HEALTHCHECK --interval=2s --timeout=2s --retries=60 CMD ["test", "-f", "/shared/ready"]
 ENTRYPOINT ["python3", "/opt/bahia/signet_dev_seed.py", "serve"]

@@ -160,8 +160,11 @@ def serve(args):
         target = state / f"{name}.key"
         target.unlink(missing_ok=True)
         os.link(keys / f"{name}.key", target)
+    # signetd runs as args.user and owns its store and the keys it reads;
+    # signetctl runs as this process's user and reads only files it owns
+    # (the system key files and the requester key stay with it).
     user = pwd.getpwnam(args.user)
-    for path in [state, keys, *state.iterdir(), *keys.iterdir()]:
+    for path in [state, config, state / "policies.toml", *(state / f"{name}.key" for name in ("db", "bunker", "provisioner"))]:
         os.chown(path, user.pw_uid, user.pw_gid)
     env = signet_env(state)
 
@@ -174,7 +177,8 @@ def serve(args):
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    relay = subprocess.Popen(["nak", "serve", "--hostname", "0.0.0.0", "--port", str(args.relay_port)], user=args.user)
+    relay = subprocess.Popen(["nak", "serve", "--hostname", "0.0.0.0", "--port", str(args.relay_port)], user=args.user,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     processes.append(relay)
     wait_tcp(args.relay_port, relay, "private relay")
     signetd = subprocess.Popen(["signetd", "-c", str(config)], env=env, user=args.user)

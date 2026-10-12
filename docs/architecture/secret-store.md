@@ -135,7 +135,11 @@ operator imports into Signet under the same owner, labelled
   (1s to 5m) while Signet is unreachable or refuses. Until the first attempt
   completes, consumers wait for it within their own deadline (at most 30s
   without one); once an attempt has failed they fail at once with
-  `ErrUnavailable` and the reason until a later attempt succeeds. Nothing falls
+  `ErrUnavailable` and the reason until a later attempt succeeds. Each key
+  costs up to three gift wraps on the outbound `priority` lane (10/min, burst
+  4 by default), so two keys resolve about half a minute after startup;
+  keys an attempt resolved are kept, so a retry asks only for the missing
+  ones. Raise `nostr.outbound.lanes.priority` to shorten it. Nothing falls
   back to a derived or cached key. The `system_keys` health
   check fails readiness until every key is resolved, and also while the
   daemon publishes confidential state without a `confidential_dedupe` key

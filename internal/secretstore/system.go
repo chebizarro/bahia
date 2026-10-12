@@ -79,7 +79,8 @@ type Keyring struct {
 	ready chan struct{}
 
 	mu       sync.RWMutex
-	keys     map[string][]byte // by label
+	keys     map[string][]byte // by label, once every key is resolved
+	partial  map[string][]byte // keys resolved so far, never served
 	loaded   bool
 	zeroized bool
 	lastErr  error
@@ -103,7 +104,7 @@ func NewKeyring(refs []SystemKeyRef) (*Keyring, error) {
 		labels[ref.Label()] = struct{}{}
 		credentials[ref.Credential.CredentialID] = struct{}{}
 	}
-	return &Keyring{refs: append([]SystemKeyRef(nil), refs...), ready: make(chan struct{})}, nil
+	return &Keyring{refs: append([]SystemKeyRef(nil), refs...), ready: make(chan struct{}), partial: map[string][]byte{}}, nil
 }
 
 // Refs returns the configured refs of purpose, active first.
@@ -120,65 +121,85 @@ func (k *Keyring) Refs(purpose string) []SystemKeyRef {
 // Empty reports whether no system key is configured.
 func (k *Keyring) Empty() bool { return len(k.refs) == 0 }
 
-// Load resolves every configured key through store. It succeeds only when
-// every key resolved, is exactly SystemKeySize bytes and the keyring is not
-// zeroized; otherwise nothing is kept and the error is retained for Status.
-// Loading a loaded keyring is a no-op.
+// Load resolves the configured keys through store. Keys resolved by an
+// earlier, failed Load are kept (in memory, never served), so a retry asks
+// the store only for the missing ones: each request costs outbound budget.
+// The keyring serves nothing until every key is resolved, is exactly
+// SystemKeySize bytes and the keyring is not zeroized; the last error is
+// retained for Status. Loading a loaded keyring is a no-op.
 func (k *Keyring) Load(ctx context.Context, store SecretStore) error {
-	k.mu.RLock()
-	done := k.loaded
-	k.mu.RUnlock()
-	if done {
+	k.mu.Lock()
+	if k.loaded {
+		k.mu.Unlock()
 		return nil
 	}
-	keys, err := k.resolve(ctx, store)
+	var missing []SystemKeyRef
+	for _, ref := range k.refs {
+		if _, ok := k.partial[ref.Label()]; !ok {
+			missing = append(missing, ref)
+		}
+	}
+	k.mu.Unlock()
+
+	err := k.resolve(ctx, store, missing)
+
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if err == nil && k.zeroized {
+	if k.zeroized {
 		err = errors.New("system keyring is shut down")
 	}
-	if err == nil && k.loaded {
-		// A concurrent Load won; keep its keys.
-		for _, key := range keys {
-			clear(key)
+	if err == nil && !k.loaded {
+		for _, ref := range k.refs {
+			if _, ok := k.partial[ref.Label()]; !ok {
+				err = fmt.Errorf("%w: system key %s was not resolved", ErrUnavailable, ref.Label())
+				break
+			}
 		}
-		return nil
 	}
 	if err != nil {
-		for _, key := range keys {
-			clear(key)
-		}
 		k.lastErr = err
 		return err
 	}
-	k.keys, k.loaded, k.lastErr = keys, true, nil
-	close(k.ready)
+	if !k.loaded {
+		k.keys, k.partial, k.loaded, k.lastErr = k.partial, nil, true, nil
+		close(k.ready)
+	}
 	return nil
 }
 
-func (k *Keyring) resolve(ctx context.Context, store SecretStore) (map[string][]byte, error) {
-	keys := make(map[string][]byte, len(k.refs))
-	if store == nil && len(k.refs) > 0 {
-		return keys, ErrNotConfigured
+// resolve fetches refs and records each key as it arrives.
+func (k *Keyring) resolve(ctx context.Context, store SecretStore, refs []SystemKeyRef) error {
+	if store == nil && len(refs) > 0 {
+		return ErrNotConfigured
 	}
-	for _, ref := range k.refs {
+	for _, ref := range refs {
 		scope, err := SystemScope(ref.Purpose, ref.KeyID)
 		if err != nil {
-			return keys, err
+			return err
 		}
 		value, err := store.Resolve(ctx, ref.Credential, scope)
 		if err != nil {
-			return keys, fmt.Errorf("system key %s: %w", ref.Label(), err)
+			return fmt.Errorf("system key %s: %w", ref.Label(), err)
 		}
 		raw := value.Bytes()
 		if len(raw) != SystemKeySize {
 			value.Zeroize()
-			return keys, fmt.Errorf("%w: system key %s is %d bytes, want %d random bytes", ErrInvalidRef, ref.Label(), len(raw), SystemKeySize)
+			return fmt.Errorf("%w: system key %s is %d bytes, want %d random bytes", ErrInvalidRef, ref.Label(), len(raw), SystemKeySize)
 		}
-		keys[ref.Label()] = append(make([]byte, 0, SystemKeySize), raw...)
+		key := append(make([]byte, 0, SystemKeySize), raw...)
 		value.Zeroize()
+		k.mu.Lock()
+		if k.zeroized || k.loaded {
+			clear(key)
+		} else {
+			if old, ok := k.partial[ref.Label()]; ok {
+				clear(old)
+			}
+			k.partial[ref.Label()] = key
+		}
+		k.mu.Unlock()
 	}
-	return keys, nil
+	return nil
 }
 
 // Status reports whether the keys are loaded and the last load error.
@@ -253,5 +274,8 @@ func (k *Keyring) Zeroize() {
 	for _, key := range k.keys {
 		clear(key)
 	}
-	k.keys, k.zeroized = nil, true
+	for _, key := range k.partial {
+		clear(key)
+	}
+	k.keys, k.partial, k.zeroized = nil, nil, true
 }
