@@ -37,8 +37,8 @@ var openServiceSigner = servicesigner.Open
 // its own session and running closes when the replaced application releases
 // it (see docs/architecture/service-signer.md, Reload).
 //
-// Raw-key derivations (secret-store HKDF, legacy O1 OCK, assistant transcript
-// keys, confidential-state dedupe HMAC) never read config: they ask the
+// Raw-key derivations (legacy O1 OCK, assistant transcript keys,
+// confidential-state dedupe HMAC) never read config: they ask the
 // Keyer for the optional nostrutil.ServiceKeyMaterialHolder capability via
 // nostrutil.RequireServiceKeyMaterial and fail closed with
 // nostrutil.ErrServiceKeyMaterialRequired when it is absent. Only the local

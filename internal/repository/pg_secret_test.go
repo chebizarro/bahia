@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"errors"
 	"regexp"
 	"testing"
 	"time"
@@ -20,7 +19,7 @@ func TestPgSecretRepositoryCreateWritesVersionRow(t *testing.T) {
 	}
 	defer mock.Close()
 	repo := newPgSecretRepositoryWithDB(mock)
-	secret := &domain.ServiceSecret{ID: uuid.New(), ServiceID: uuid.New(), Name: "TOKEN", EncryptedValue: []byte("ciphertext"), EncryptionMethod: domain.EncryptionAES256, Version: 1, CreatedBy: "operator"}
+	secret := &domain.ServiceSecret{ID: uuid.New(), ServiceID: uuid.New(), Name: "TOKEN", EncryptedValue: []byte("ciphertext"), EncryptionMethod: domain.EncryptionMethod("aes256gcm"), Version: 1, CreatedBy: "operator"}
 
 	mock.ExpectExec("WITH inserted AS").
 		WithArgs(secret.ID, secret.ServiceID, secret.EnvironmentID, secret.Name, secret.EncryptedValue, string(secret.EncryptionMethod), secret.Version, secret.CreatedBy).
@@ -28,103 +27,6 @@ func TestPgSecretRepositoryCreateWritesVersionRow(t *testing.T) {
 
 	if err := repo.Create(ctx, secret); err != nil {
 		t.Fatalf("Create: %v", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
-
-func TestPgSecretRepositoryUpdateWritesNextVersionRow(t *testing.T) {
-	ctx := context.Background()
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock: %v", err)
-	}
-	defer mock.Close()
-	repo := newPgSecretRepositoryWithDB(mock)
-	secret := &domain.ServiceSecret{ID: uuid.New(), EncryptedValue: []byte("new-ciphertext"), EncryptionMethod: domain.EncryptionNIP44, Version: 3}
-
-	mock.ExpectQuery("WITH target AS").
-		WithArgs(secret.EncryptedValue, string(secret.EncryptionMethod), secret.ID, secret.Version).
-		WillReturnRows(pgxmock.NewRows([]string{"exists", "version"}).AddRow(true, 4))
-
-	if err := repo.Update(ctx, secret); err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-	if secret.Version != 4 {
-		t.Fatalf("Version = %d, want 4", secret.Version)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
-
-func TestPgSecretRepositoryUpdateRejectsStaleVersion(t *testing.T) {
-	ctx := context.Background()
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock: %v", err)
-	}
-	defer mock.Close()
-	repo := newPgSecretRepositoryWithDB(mock)
-	secret := &domain.ServiceSecret{ID: uuid.New(), EncryptedValue: []byte("stale"), EncryptionMethod: domain.EncryptionNIP44, Version: 2}
-
-	mock.ExpectQuery("WITH target AS").
-		WithArgs(secret.EncryptedValue, string(secret.EncryptionMethod), secret.ID, secret.Version).
-		WillReturnRows(pgxmock.NewRows([]string{"exists", "version"}).AddRow(true, 0))
-
-	err = repo.Update(ctx, secret)
-	if !errors.Is(err, ErrConflict) {
-		t.Fatalf("Update error = %v, want ErrConflict", err)
-	}
-	if secret.Version != 2 {
-		t.Fatalf("Version mutated to %d after conflict", secret.Version)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
-
-func TestPgSecretRepositoryUpdateReportsMissingSecret(t *testing.T) {
-	ctx := context.Background()
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock: %v", err)
-	}
-	defer mock.Close()
-	repo := newPgSecretRepositoryWithDB(mock)
-	secret := &domain.ServiceSecret{ID: uuid.New(), EncryptedValue: []byte("missing"), EncryptionMethod: domain.EncryptionNIP44, Version: 1}
-
-	mock.ExpectQuery("WITH target AS").
-		WithArgs(secret.EncryptedValue, string(secret.EncryptionMethod), secret.ID, secret.Version).
-		WillReturnRows(pgxmock.NewRows([]string{"exists", "version"}).AddRow(false, 0))
-
-	err = repo.Update(ctx, secret)
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Update error = %v, want ErrNotFound", err)
-	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet expectations: %v", err)
-	}
-}
-
-func TestPgSecretRepositoryDeleteByNameServiceWideUsesNamePlaceholder(t *testing.T) {
-	ctx := context.Background()
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("pgxmock: %v", err)
-	}
-	defer mock.Close()
-	repo := newPgSecretRepositoryWithDB(mock)
-	serviceID := uuid.New()
-	name := "TOKEN"
-
-	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM service_secrets WHERE service_id = $1 AND environment_id IS NULL AND name = $2")).
-		WithArgs(serviceID, name).
-		WillReturnResult(pgxmock.NewResult("DELETE", 1))
-
-	if err := repo.DeleteByName(ctx, serviceID, nil, name); err != nil {
-		t.Fatalf("DeleteByName: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
@@ -147,11 +49,21 @@ func TestPgSecretRepositoryRecordSecretAccessAudit(t *testing.T) {
 	}
 
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO secret_access_audit")).
-		WithArgs(audit.ID, audit.SecretID, audit.VersionID, audit.Version, audit.ServiceID, audit.EnvironmentID, string(audit.Operation), string(audit.Outcome), audit.Actor, audit.Reason, audit.RequestID, audit.Error, audit.AccessedAt).
+		WithArgs(audit.ID, audit.SecretID, &audit.VersionID, audit.Version, audit.ServiceID, audit.EnvironmentID, string(audit.Operation), string(audit.Outcome), audit.Actor, audit.Reason, audit.RequestID, audit.Error, audit.AccessedAt).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	if err := repo.RecordSecretAccessAudit(ctx, audit); err != nil {
 		t.Fatalf("RecordSecretAccessAudit: %v", err)
+	}
+
+	// A store-backed resolve has no PostgreSQL version row: NULL.
+	storeBacked := *audit
+	storeBacked.ID, storeBacked.VersionID = uuid.New(), uuid.Nil
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO secret_access_audit")).
+		WithArgs(storeBacked.ID, storeBacked.SecretID, (*uuid.UUID)(nil), storeBacked.Version, storeBacked.ServiceID, storeBacked.EnvironmentID, string(storeBacked.Operation), string(storeBacked.Outcome), storeBacked.Actor, storeBacked.Reason, storeBacked.RequestID, storeBacked.Error, storeBacked.AccessedAt).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	if err := repo.RecordSecretAccessAudit(ctx, &storeBacked); err != nil {
+		t.Fatalf("RecordSecretAccessAudit without a version row: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

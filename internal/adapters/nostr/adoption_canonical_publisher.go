@@ -28,28 +28,18 @@ import (
 // the family uses, and an unchanged record is not signed again.
 type AdoptionCanonicalPublisher struct {
 	projector *Projector
-	encryptor ConfidentialStateEncryptor
 	logger    *zap.Logger
 }
 
-// NewAdoptionCanonicalPublisher creates the publisher. encryptor may be nil;
-// it is required only to publish imported secret references, which are
-// confidential.
-func NewAdoptionCanonicalPublisher(projector *Projector, encryptor ConfidentialStateEncryptor, logger *zap.Logger) *AdoptionCanonicalPublisher {
+// NewAdoptionCanonicalPublisher creates the publisher.
+func NewAdoptionCanonicalPublisher(projector *Projector, logger *zap.Logger) *AdoptionCanonicalPublisher {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &AdoptionCanonicalPublisher{
 		projector: projector,
-		encryptor: encryptor,
 		logger:    logger.Named("adoption-canonical"),
 	}
-}
-
-// SetEncryptor installs the confidential encryptor after construction, for
-// wiring where the encryptor is created after the publisher.
-func (p *AdoptionCanonicalPublisher) SetEncryptor(encryptor ConfidentialStateEncryptor) {
-	p.encryptor = encryptor
 }
 
 // publish signs one live plaintext record on the coordinate (legacyKind, d).
@@ -165,26 +155,4 @@ func (p *AdoptionCanonicalPublisher) PublishServiceState(ctx context.Context, st
 	}
 	tags, content := RuntimeStateRecord(state, observation)
 	return p.publish(ctx, KindServiceState, ServiceStateDTag(state.ServiceID, state.EnvironmentID), tags, content, "state.projection", &state.ServiceID)
-}
-
-// PublishSecretRef publishes the reference of one imported secret, encrypted
-// under orgID's content key like every secret reference. The secret value is
-// never part of the record.
-func (p *AdoptionCanonicalPublisher) PublishSecretRef(ctx context.Context, orgID uuid.UUID, ref domain.SecretRef) error {
-	if p == nil || p.projector == nil || !p.projector.Enabled() {
-		return fmt.Errorf("adoption canonical projector is unavailable")
-	}
-	if ref.ID == uuid.Nil || ref.ServiceID == uuid.Nil {
-		return fmt.Errorf("secret and service IDs are required")
-	}
-	if p.encryptor == nil {
-		return fmt.Errorf("confidential encryptor not configured; refusing plaintext publish of an imported secret reference")
-	}
-	dTag := SecretDTag(ref.ID)
-	tags, content := SecretRegistryRecord(&ref, false)
-	encrypted, err := p.encryptor.EncryptConfidential(ctx, orgID.String(), []byte(content), KindSecretRegistry, dTag, cpStateFamilies[KindSecretRegistry].topic, nil)
-	if err != nil {
-		return fmt.Errorf("encrypt imported secret reference: %w", err)
-	}
-	return p.projector.publishCanonicalFirst(ctx, KindSecretRegistry, dTag, false, tags, content, encrypted, "secret.projection", &ref.ID)
 }

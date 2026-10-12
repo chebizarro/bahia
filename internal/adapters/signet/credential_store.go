@@ -87,6 +87,7 @@ type CredentialStore struct {
 	reconnectMin time.Duration
 	reconnectMax time.Duration
 	pool         *nostrpool.RelayPool
+	admission    *nostrout.Admission
 	logger       *zap.Logger
 	cancel       context.CancelFunc
 	done         chan struct{}
@@ -99,7 +100,23 @@ type CredentialStore struct {
 	lastAt   time.Time
 	lastErr  error
 	everDone bool
+	// labels holds the label of every credential an Inspect admitted. A
+	// credential id is a digest of (owner, type, label), so an id's label
+	// never changes and a cached label proves its tenant without a round
+	// trip.
+	labels map[string]string
+	// reportsVersion: the last delivery reported its version (nostrc-pvj7b),
+	// so a credential whose label is cached resolves in one round trip.
+	reportsVersion bool
 }
+
+// maxRoundTripsPerResolve is the worst case of one Resolve: a one-round-trip
+// delivery that comes back without a version (Signet stopped reporting
+// versions) and is retried as inspect, deliver, inspect.
+const maxRoundTripsPerResolve = 4
+
+// maxCachedLabels bounds the label cache; it is cleared when full.
+const maxCachedLabels = 4096
 
 var _ secretstore.SecretStore = (*CredentialStore)(nil)
 
@@ -133,9 +150,10 @@ func OpenCredentialStore(ctx context.Context, cfg CredentialStoreConfig, logger 
 	if clientPK == cfg.SignetPubkey {
 		return nil, fmt.Errorf("signet secret store: client key must not be Signet's own key")
 	}
+	admission := nostrout.Or(cfg.OutboundAdmission)
 	opts := []nostrpool.RelayPoolOption{
 		nostrpool.WithAuthSigner(keyer.NewPlainKeySigner(cfg.ClientKey)),
-		nostrpool.WithOutboundAdmission(nostrout.Or(cfg.OutboundAdmission)),
+		nostrpool.WithOutboundAdmission(admission),
 	}
 	if cfg.ClosedRetryBudget > 0 {
 		opts = append(opts, nostrpool.WithRetryableClosedBudget(cfg.ClosedRetryBudget))
@@ -154,9 +172,11 @@ func OpenCredentialStore(ctx context.Context, cfg CredentialStoreConfig, logger 
 		reconnectMin: cfg.ReconnectMin,
 		reconnectMax: cfg.ReconnectMax,
 		pool:         nostrpool.NewRelayPool(cfg.Relays, named, opts...),
+		admission:    admission,
 		logger:       named,
 		done:         make(chan struct{}),
 		pending:      make(map[string]chan signetJSONRPCResponse),
+		labels:       make(map[string]string),
 		ready:        make(chan struct{}),
 		subErr:       errors.New("waiting for the first EOSE"),
 	}
@@ -232,36 +252,64 @@ func (s *CredentialStore) Inspect(ctx context.Context, credentialID string, scop
 		// tenant binding. The other tenant's label is never echoed.
 		return secretstore.Metadata{}, fmt.Errorf("%w: credential is not labelled %s<name>", secretstore.ErrDenied, scope.LabelPrefix())
 	}
-	return raw.metadata()
+	meta, err := raw.metadata()
+	if err != nil {
+		return secretstore.Metadata{}, err
+	}
+	s.mu.Lock()
+	if len(s.labels) >= maxCachedLabels {
+		clear(s.labels)
+	}
+	s.labels[credentialID] = raw.Label
+	s.mu.Unlock()
+	return meta, nil
 }
 
 // Resolve fetches the pinned version of a credential of scope under a
-// one-use Signet delivery lease. The delivery is preceded by a metadata read
-// (owner, tenant label, status, version) and asks for expected_version. A
-// Signet that reports the delivered version settles the pin in that reply;
-// otherwise a second metadata read brackets the delivery: rotation
-// increments the version atomically and never reuses one, so equal versions
-// before and after prove the delivered value is that version.
+// one-use Signet delivery lease.
+//
+// A credential whose label an earlier Inspect admitted, from a Signet that
+// reports the delivered version (nostrc-pvj7b), resolves in one round trip:
+// credential/deliver with expected_version, the tenant proven by the cached
+// label and the pin by the reported version. Otherwise the delivery is
+// preceded by a metadata read (owner, tenant label, status, version); a
+// Signet that reports the version settles the pin in its reply, and one that
+// does not is bracketed by a second metadata read: rotation increments the
+// version atomically and never reuses one, so equal versions before and
+// after prove the delivered value is that version.
 func (s *CredentialStore) Resolve(ctx context.Context, ref domain.SecretCredentialRef, scope secretstore.Scope) (*secretstore.Value, error) {
 	if err := secretstore.ValidateRef(ref); err != nil {
 		return nil, err
 	}
+	if s.oneRoundTrip(ref.CredentialID, scope) {
+		value, version, err := s.deliver(ctx, ref)
+		if err != nil {
+			return nil, err
+		}
+		if version != nil {
+			if *version != ref.Version {
+				value.Zeroize()
+				return nil, fmt.Errorf("%w: Signet delivered version %d, reference pins %d", secretstore.ErrVersionMismatch, *version, ref.Version)
+			}
+			return value, nil
+		}
+		// Signet stopped reporting versions: the delivery proves nothing
+		// about the pin without the metadata bracket.
+		value.Zeroize()
+		s.setReportsVersion(false)
+	}
 	if err := s.requireActiveVersion(ctx, ref, scope); err != nil {
 		return nil, err
 	}
-	var delivered signetDelivery
-	if err := s.call(ctx, "credential/deliver", map[string]any{"agent_id": s.owner, "credential_id": ref.CredentialID, "expected_version": ref.Version}, &delivered); err != nil {
-		return nil, err
-	}
-	payload, leaseExpiresAt, err := delivered.open(ref.CredentialID, s.owner)
+	value, version, err := s.deliver(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
-	value := secretstore.NewValue(payload, leaseExpiresAt)
-	if delivered.Version != nil {
-		if *delivered.Version != ref.Version {
+	s.setReportsVersion(version != nil)
+	if version != nil {
+		if *version != ref.Version {
 			value.Zeroize()
-			return nil, fmt.Errorf("%w: Signet delivered version %d, reference pins %d", secretstore.ErrVersionMismatch, *delivered.Version, ref.Version)
+			return nil, fmt.Errorf("%w: Signet delivered version %d, reference pins %d", secretstore.ErrVersionMismatch, *version, ref.Version)
 		}
 		return value, nil
 	}
@@ -270,6 +318,59 @@ func (s *CredentialStore) Resolve(ctx context.Context, ref domain.SecretCredenti
 		return nil, err
 	}
 	return value, nil
+}
+
+// ResolveAll resolves reqs in order as one declared outbound operation, so
+// their gift wraps are paced on the bulk lane instead of being refused by
+// the priority lane's burst. It is all or nothing.
+func (s *CredentialStore) ResolveAll(ctx context.Context, reqs []secretstore.Request) ([]*secretstore.Value, error) {
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+	// At most maxRoundTripsPerResolve round trips per request.
+	op, err := s.admission.BeginOperation(ctx, nostrout.OperationSpec{MaxEvents: maxRoundTripsPerResolve * len(reqs), MaxWait: s.timeout})
+	if err != nil {
+		return nil, fmt.Errorf("%w: outbound admission refused %d secret resolves: %w", secretstore.ErrUnavailable, len(reqs), err)
+	}
+	defer op.Close()
+	ctx = nostrout.WithOperation(ctx, op)
+	values := make([]*secretstore.Value, 0, len(reqs))
+	for i, req := range reqs {
+		value, err := s.Resolve(ctx, req.Ref, req.Scope)
+		if err != nil {
+			secretstore.ZeroizeAll(values)
+			return nil, &secretstore.BatchError{Index: i, Err: err}
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+func (s *CredentialStore) oneRoundTrip(credentialID string, scope secretstore.Scope) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	label, ok := s.labels[credentialID]
+	return ok && s.reportsVersion && scope.Admits(label)
+}
+
+func (s *CredentialStore) setReportsVersion(reports bool) {
+	s.mu.Lock()
+	s.reportsVersion = reports
+	s.mu.Unlock()
+}
+
+// deliver asks for ref's value; version is the delivered version when
+// Signet reports it.
+func (s *CredentialStore) deliver(ctx context.Context, ref domain.SecretCredentialRef) (*secretstore.Value, *int, error) {
+	var delivered signetDelivery
+	if err := s.call(ctx, "credential/deliver", map[string]any{"agent_id": s.owner, "credential_id": ref.CredentialID, "expected_version": ref.Version}, &delivered); err != nil {
+		return nil, nil, err
+	}
+	payload, leaseExpiresAt, err := delivered.open(ref.CredentialID, s.owner)
+	if err != nil {
+		return nil, nil, err
+	}
+	return secretstore.NewValue(payload, leaseExpiresAt), delivered.Version, nil
 }
 
 func (s *CredentialStore) requireActiveVersion(ctx context.Context, ref domain.SecretCredentialRef, scope secretstore.Scope) error {
@@ -339,6 +440,14 @@ func (s *CredentialStore) call(ctx context.Context, method string, params map[st
 	for {
 		select {
 		case reply := <-replies:
+			if published != nil && nostrout.OperationFromContext(ctx) != nil {
+				// An operation admits one publication at a time: the
+				// next request of the batch waits for this one's OKs.
+				select {
+				case <-published:
+				case <-ctx.Done():
+				}
+			}
 			return decodeSignetReply(method, reply, out)
 		case perr := <-published:
 			if perr != nil {

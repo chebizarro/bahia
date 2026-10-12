@@ -97,6 +97,10 @@ func (s *memSecretStore) Resolve(context.Context, domain.SecretCredentialRef, se
 	return nil, errors.New("the intent handler never resolves values")
 }
 
+func (s *memSecretStore) ResolveAll(context.Context, []secretstore.Request) ([]*secretstore.Value, error) {
+	return nil, errors.New("the intent handler never resolves values")
+}
+
 func (s *memSecretStore) Health(context.Context) error { return s.err }
 
 type referenceFixture struct {
@@ -130,7 +134,6 @@ func newReferenceFixture(t *testing.T, withRegistry bool) *referenceFixture {
 		f.repo = newMemSecretRepo()
 		cfg.Registry = f.repo
 		cfg.StoreIndex = f.repo
-		cfg.Encryptor = &testEncryptor{}
 	}
 	f.processor.RegisterHandler("secret", NewSecretIntentHandler(cfg))
 	return f
@@ -195,15 +198,16 @@ func TestSecretReferenceIntentRejections(t *testing.T) {
 		mutate func(*referenceFixture, map[string]interface{})
 		want   string
 	}{
-		{"value with the store configured", nil, func(f *referenceFixture, c map[string]interface{}) {
+		{"encrypted value", nil, func(f *referenceFixture, c map[string]interface{}) {
 			delete(c, "credential_ref")
 			c["encrypted_value"] = "nip44-ciphertext"
-		}, "not accepted in intents while the secret store is configured"},
-		{"plaintext with the store configured", nil, func(f *referenceFixture, c map[string]interface{}) {
+		}, "never carry a value"},
+		{"plaintext value", nil, func(f *referenceFixture, c map[string]interface{}) {
 			delete(c, "credential_ref")
 			c["value"] = "hunter2"
-		}, "not accepted in intents while the secret store is configured"},
-		{"reference and value", nil, func(f *referenceFixture, c map[string]interface{}) { c["encrypted_value"] = "x" }, "either credential_ref or a value"},
+		}, "never carry a value"},
+		{"reference and value", nil, func(f *referenceFixture, c map[string]interface{}) { c["encrypted_value"] = "x" }, "never carry a value"},
+		{"no reference", nil, func(f *referenceFixture, c map[string]interface{}) { delete(c, "credential_ref") }, "needs credential_ref"},
 		{"unknown backend", nil, func(f *referenceFixture, c map[string]interface{}) {
 			c["credential_ref"] = map[string]interface{}{"store": "vault", "credential_id": f.credID, "version": 2}
 		}, "invalid secret store reference"},
@@ -266,7 +270,7 @@ func TestSecretReferenceIntentRetiresLegacySealedValue(t *testing.T) {
 	f := newReferenceFixture(t, true)
 	secretID := domain.NewEntityID()
 	// A legacy secret: canonical metadata plus a sealed value in PostgreSQL.
-	f.canonical.records[secretID] = domain.SecretRef{ID: secretID, ServiceID: f.serviceID, Name: "DB_PASSWORD", EncryptionMethod: domain.EncryptionNIP44, Version: 4, CreatedAt: time.Now().UTC()}
+	f.canonical.records[secretID] = domain.SecretRef{ID: secretID, ServiceID: f.serviceID, Name: "DB_PASSWORD", EncryptionMethod: domain.EncryptionMethod("nip44"), Version: 4, CreatedAt: time.Now().UTC()}
 	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: secretID, ServiceID: f.serviceID, Name: "DB_PASSWORD", EncryptedValue: []byte("sealed"), Version: 4})
 
 	if err := f.process(t, "update", f.content(secretID, 2)); err != nil {
@@ -281,7 +285,7 @@ func TestSecretReferenceIntentRetiresLegacySealedValue(t *testing.T) {
 	// A re-point whose publish fails still retires the compromised value:
 	// the index row is a marker before the publish is attempted.
 	other := domain.NewEntityID()
-	f.canonical.records[other] = domain.SecretRef{ID: other, ServiceID: f.serviceID, Name: "API_KEY", EncryptionMethod: domain.EncryptionNIP44, Version: 1, CreatedAt: time.Now().UTC()}
+	f.canonical.records[other] = domain.SecretRef{ID: other, ServiceID: f.serviceID, Name: "API_KEY", EncryptionMethod: domain.EncryptionMethod("nip44"), Version: 1, CreatedAt: time.Now().UTC()}
 	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: other, ServiceID: f.serviceID, Name: "API_KEY", EncryptedValue: []byte("sealed"), Version: 1})
 	f.canonical.publishErr = errors.New("outbox full")
 	otherContent := f.content(other, 2)
@@ -305,7 +309,7 @@ func TestSecretReferenceIntentRetiresLegacySealedValue(t *testing.T) {
 }
 
 // requireStoreMarker asserts PostgreSQL holds a value-less marker, so its
-// consumers fail with ErrSecretInStore rather than omit the secret.
+// consumers list the secret and resolve it through the store.
 func requireStoreMarker(t *testing.T, repo *memSecretRepo, id uuid.UUID) {
 	t.Helper()
 	row, _ := repo.GetByID(context.Background(), id)
@@ -343,7 +347,7 @@ func TestSecretReferenceIntentRefusesAnotherTenantsCredential(t *testing.T) {
 	}
 }
 
-func TestSecretValueIntentWithoutStoreOrPostgresIsRefused(t *testing.T) {
+func TestSecretIntentWithoutStoreIsRefused(t *testing.T) {
 	_, ownerPub := testNostrKeypair()
 	trustSet := NewTrustSet(nil, zap.NewNop(), WithBootstrapOwners(map[string]string{testOrgID().String(): ownerPub}))
 	processor := NewIntentProcessor(trustSet, nil, nil, IntentProcessorConfig{EnabledDomains: map[string]bool{"secret": true}}, zap.NewNop())
@@ -359,8 +363,8 @@ func TestSecretValueIntentWithoutStoreOrPostgresIsRefused(t *testing.T) {
 	delete(content, "credential_ref")
 	content["encrypted_value"] = "x"
 	err = processor.ProcessRelayIntent(context.Background(), makeTestSecretIntent(t, "create", content, uuid.NewString(), ownerPub))
-	if err == nil || !strings.Contains(err.Error(), "need the PostgreSQL secret store") {
-		t.Fatalf("value intent without PostgreSQL = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "never carry a value") {
+		t.Fatalf("value intent without a store = %v", err)
 	}
 }
 
@@ -412,7 +416,7 @@ func TestSecretReferenceIntentDoesNotRevealCredentialExistence(t *testing.T) {
 func TestSecretReferenceIntentRefusesNameHeldByAnotherSecret(t *testing.T) {
 	f := newReferenceFixture(t, true)
 	legacy := domain.NewEntityID()
-	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: legacy, ServiceID: f.serviceID, Name: "DB_PASSWORD", EncryptedValue: []byte("sealed"), EncryptionMethod: domain.EncryptionNIP44, Version: 1})
+	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: legacy, ServiceID: f.serviceID, Name: "DB_PASSWORD", EncryptedValue: []byte("sealed"), EncryptionMethod: domain.EncryptionMethod("nip44"), Version: 1})
 	secretID := domain.NewEntityID()
 	err := f.process(t, "create", f.content(secretID, 2))
 	if !errors.Is(err, repository.ErrSecretNameTaken) || !strings.Contains(err.Error(), "re-point that secret") {

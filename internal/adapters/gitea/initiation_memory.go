@@ -10,7 +10,7 @@ import (
 )
 
 // MemoryInitiationStore supports explicit in-memory fixtures, including adapter
-// integration tests in other packages. Production uses PgInitiationStore; there
+// integration tests in other packages. Production uses CanonicalInitiationStore; there
 // is no implicit process-local fallback.
 type MemoryInitiationStore struct {
 	mu      sync.Mutex

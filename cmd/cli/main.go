@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"text/tabwriter"
@@ -770,6 +769,7 @@ func adoptCommands() *cobra.Command {
 	var importSelections []string
 	var importAll bool
 	var importOrgID string
+	var importNonSecretEnv []string
 	importCmd := &cobra.Command{
 		Use:   "import",
 		Short: "Import selected or all discovered containers into Bahia",
@@ -786,7 +786,7 @@ func adoptCommands() *cobra.Command {
 				return fmt.Errorf("specify --all or at least one --select alias/containerID")
 			}
 			retryKey, _ := cmd.Flags().GetString("idempotency-key")
-			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll, OrgID: strings.TrimSpace(importOrgID), IdempotencyKey: retryKey}
+			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll, OrgID: strings.TrimSpace(importOrgID), IdempotencyKey: retryKey, NonSecretEnvKeys: importNonSecretEnv}
 			result, err := runAdoptionImportIntent(cmd, req)
 			if err != nil {
 				return err
@@ -799,6 +799,7 @@ func adoptCommands() *cobra.Command {
 	importCmd.Flags().StringArrayVar(&importEnvironments, "environment", nil, "Environment name as alias=environmentName (repeatable)")
 	importCmd.Flags().StringArrayVar(&importSelections, "select", nil, "Container selection as alias/containerID[=serviceName] (repeatable)")
 	importCmd.Flags().BoolVar(&importAll, "all", false, "Import all adoptable containers from the scanned targets")
+	importCmd.Flags().StringArrayVar(&importNonSecretEnv, "non-secret-env", nil, "Environment key that is not a secret despite its name (repeatable); adoption keeps it instead of refusing the container")
 	importCmd.Flags().StringVar(&importOrgID, "org", "", "Organization UUID for imported services and environments")
 	importCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this import")
 
@@ -1182,49 +1183,30 @@ func secretsCommands() *cobra.Command {
 		RunE:  func(cmd *cobra.Command, args []string) error { return listCLISecrets(cmd, args[0]) },
 	}
 
-	var valueFile, credentialID string
+	var credentialID string
 	var credentialVersion int
 	setCmd := &cobra.Command{
-		Use:   "set [service-id] [name] [value]",
-		Short: "Set a secret",
-		Long: "Set a secret. With the daemon's secret store configured, import the value into the store " +
-			"(signetctl import-credential) and pass --credential-id and --credential-version: the intent then " +
-			"carries only the reference. Otherwise pass [value] or --value-file.",
-		Args: cobra.RangeArgs(2, 3),
+		Use:   "set [service-id] [name]",
+		Short: "Set a secret to a credential in the secret store",
+		Long: "Point a secret at a credential in the daemon's secret store. Import the value first " +
+			"(signetctl import-credential <owner> --type credential --label <org-id>/<service-id>/<name> --stdin), " +
+			"then pass --credential-id and --credential-version: the intent carries only the reference, " +
+			"never the value. Re-run with the new version after rotating the credential.",
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			envID, _ := cmd.Flags().GetString("environment")
-			if credentialID != "" || cmd.Flags().Changed("credential-version") {
-				if valueFile != "" || len(args) == 3 {
-					return fmt.Errorf("a credential reference replaces the value: drop [value] and --value-file")
-				}
-				ref := domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: credentialID, Version: credentialVersion}
-				if err := secretstore.ValidateRef(ref); err != nil {
-					return fmt.Errorf("--credential-id and --credential-version: %w", err)
-				}
-				return runSecretSetIntent(cmd, args[0], args[1], "", envID, &ref)
+			ref := domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: credentialID, Version: credentialVersion}
+			if err := secretstore.ValidateRef(ref); err != nil {
+				return fmt.Errorf("--credential-id and --credential-version: %w", err)
 			}
-			if valueFile != "" && len(args) == 3 {
-				return fmt.Errorf("provide either [value] or --value-file, not both")
-			}
-			var value string
-			if valueFile != "" {
-				var err error
-				value, err = readSecretValueFile(valueFile)
-				if err != nil {
-					return err
-				}
-			} else if len(args) == 3 {
-				value = args[2]
-			} else {
-				return fmt.Errorf("secret value, --value-file or --credential-id is required")
-			}
-			return runSecretSetIntent(cmd, args[0], args[1], value, envID, nil)
+			return runSecretSetIntent(cmd, args[0], args[1], envID, ref)
 		},
 	}
 	setCmd.Flags().String("environment", "", "Environment ID (optional, for env-specific secret)")
-	setCmd.Flags().StringVar(&valueFile, "value-file", "", "Read the secret value from an owner-only absolute file")
 	setCmd.Flags().StringVar(&credentialID, "credential-id", "", "Signet credential id (cred_...) holding the value; the intent carries only this reference")
-	setCmd.Flags().IntVar(&credentialVersion, "credential-version", 0, "Signet credential version the secret is pinned to (with --credential-id)")
+	setCmd.Flags().IntVar(&credentialVersion, "credential-version", 0, "Signet credential version the secret is pinned to")
+	_ = setCmd.MarkFlagRequired("credential-id")
+	_ = setCmd.MarkFlagRequired("credential-version")
 
 	deleteCmd := &cobra.Command{
 		Use:   "delete [service-id] [secret-id]",
@@ -1237,35 +1219,6 @@ func secretsCommands() *cobra.Command {
 
 	cmd.AddCommand(listCmd, setCmd, deleteCmd)
 	return cmd
-}
-
-func readSecretValueFile(path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		return "", fmt.Errorf("--value-file must be absolute")
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return "", fmt.Errorf("inspect --value-file: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("--value-file must be a regular file")
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return "", fmt.Errorf("--value-file must not be accessible by group or others")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read --value-file: %w", err)
-	}
-	value := strings.TrimSuffix(string(data), "\n")
-	value = strings.TrimSuffix(value, "\r")
-	if value == "" {
-		return "", fmt.Errorf("--value-file is empty")
-	}
-	if strings.ContainsRune(value, '\x00') {
-		return "", fmt.Errorf("--value-file contains a NUL byte")
-	}
-	return value, nil
 }
 
 // --- Orgs Commands ---

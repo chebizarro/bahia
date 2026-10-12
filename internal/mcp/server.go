@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
-	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -35,8 +34,6 @@ type Server struct {
 	registry           *service.RegistryService
 	llmRegistry        *service.LLMRegistryService
 	logger             *zap.Logger
-	secretsRepo        repository.SecretRepository       // optional: for secret management tools
-	encryptor          *secrets.Encryptor                // optional: for secret encryption/decryption
 	notificationRepo   repository.NotificationRepository // optional: for notification tools
 	notificationDisp   *notifications.Dispatcher         // optional: for notification testing
 	logService         *adapterruntime.LogService        // optional: for deployment run log tools
@@ -59,8 +56,6 @@ type ServerDeps struct {
 	IntentProcessor        *controlplane.IntentProcessor
 	ServicePubkey          string
 	ConfidentialReader     ConfidentialStateReader
-	SecretsRepo            repository.SecretRepository
-	Encryptor              *secrets.Encryptor
 	NotificationRepo       repository.NotificationRepository
 	NotificationDispatcher *notifications.Dispatcher
 	LogService             *adapterruntime.LogService
@@ -91,8 +86,6 @@ func NewServerWithOptionsChecked(registry *service.RegistryService, logger *zap.
 		registry:           registry,
 		llmRegistry:        deps.LLMRegistry,
 		logger:             logger,
-		secretsRepo:        deps.SecretsRepo,
-		encryptor:          deps.Encryptor,
 		notificationRepo:   deps.NotificationRepo,
 		notificationDisp:   deps.NotificationDispatcher,
 		logService:         deps.LogService,
@@ -1050,7 +1043,7 @@ func (s *Server) GetTools() []Tool {
 		},
 		{
 			Name:        "bahia_create_secret",
-			Description: "Create a secret for a service. With the daemon's secret store configured, pass credential_id and credential_version (the value stays in the store); otherwise pass value.",
+			Description: "Create a secret for a service that references a credential in the secret store. Import the value into the store first, labelled <org-id>/<service-id>/<name>; Bahia never receives the value.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -1061,10 +1054,6 @@ func (s *Server) GetTools() []Tool {
 					"name": map[string]interface{}{
 						"type":        "string",
 						"description": "Secret name (e.g., DATABASE_URL)",
-					},
-					"value": map[string]interface{}{
-						"type":        "string",
-						"description": "Plaintext secret value to encrypt (only without a configured secret store)",
 					},
 					"credential_id": map[string]interface{}{
 						"type":        "string",
@@ -1079,22 +1068,18 @@ func (s *Server) GetTools() []Tool {
 						"description": "Environment UUID (optional, omit for service-wide secret)",
 					},
 				},
-				"required": []string{"service_id", "name"},
+				"required": []string{"service_id", "name", "credential_id", "credential_version"},
 			},
 		},
 		{
 			Name:        "bahia_update_secret",
-			Description: "Update an existing secret's value, or re-point it to a rotated credential version in the secret store",
+			Description: "Re-point an existing secret to a credential (version) in the secret store, for example after rotating it",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
 					"secret_id": map[string]interface{}{
 						"type":        "string",
 						"description": "Secret UUID",
-					},
-					"value": map[string]interface{}{
-						"type":        "string",
-						"description": "New plaintext secret value to encrypt (only without a configured secret store)",
 					},
 					"credential_id": map[string]interface{}{
 						"type":        "string",
@@ -1105,7 +1090,7 @@ func (s *Server) GetTools() []Tool {
 						"description": "Signet credential version the secret is pinned to",
 					},
 				},
-				"required": []string{"secret_id"},
+				"required": []string{"secret_id", "credential_id", "credential_version"},
 			},
 		},
 		{
@@ -1886,13 +1871,6 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 		return s.handleGetRunLogs(ctx, arguments)
 	case "bahia_complete_run":
 		return s.handleCompleteRun(ctx, arguments)
-	// Secret operations
-	case "bahia_create_secret":
-		return s.handleCreateSecret(ctx, arguments)
-	case "bahia_update_secret":
-		return s.handleUpdateSecret(ctx, arguments)
-	case "bahia_delete_secret":
-		return s.handleDeleteSecret(ctx, arguments)
 	// Policy operations
 	case "bahia_create_policy":
 		return s.handleCreatePolicy(ctx, arguments)
@@ -2224,185 +2202,6 @@ func (s *Server) handleCompleteRun(ctx context.Context, args map[string]interfac
 		"status":  "completed",
 		"run_id":  runID.String(),
 		"message": fmt.Sprintf("Deployment run marked as %s", status),
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleCreateSecret(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.secretsRepo == nil || s.encryptor == nil {
-		return errorResult("secret management tools are not configured"), nil
-	}
-
-	serviceIDStr, _ := args["service_id"].(string)
-	name, _ := args["name"].(string)
-	value, _ := args["value"].(string)
-	envIDStr, _ := args["environment_id"].(string)
-
-	if name == "" {
-		return errorResult("name is required"), nil
-	}
-	if value == "" {
-		return errorResult("value is required"), nil
-	}
-
-	serviceID, err := uuid.Parse(serviceIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
-	}
-	if denied := s.authorizeSecretPermission(ctx, serviceID, domain.PermWriteSecrets); denied != nil {
-		return denied, nil
-	}
-
-	var envID *uuid.UUID
-	if envIDStr != "" {
-		parsedEnvID, err := uuid.Parse(envIDStr)
-		if err != nil {
-			return errorResult(fmt.Sprintf("invalid environment_id: %v", err)), nil
-		}
-		envID = &parsedEnvID
-	}
-
-	// Encrypt the value using AES256-GCM (default encryption method)
-	encryptedValue, err := s.encryptor.Encrypt(value, domain.EncryptionAES256)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to encrypt secret: %v", err)), nil
-	}
-
-	secret := &domain.ServiceSecret{
-		ID:               uuid.New(),
-		ServiceID:        serviceID,
-		EnvironmentID:    envID,
-		Name:             name,
-		EncryptedValue:   encryptedValue,
-		EncryptionMethod: domain.EncryptionAES256,
-		Version:          1,
-		CreatedBy:        "mcp-agent",
-		CreatedAt:        time.Now(),
-		UpdatedAt:        time.Now(),
-	}
-
-	if err := s.secretsRepo.Create(ctx, secret); err != nil {
-		return errorResult(fmt.Sprintf("failed to create secret: %v", err)), nil
-	}
-
-	s.logger.Info("secret created",
-		zap.String("secret_id", secret.ID.String()),
-		zap.String("service_id", serviceID.String()),
-		zap.String("name", name),
-	)
-
-	// Return metadata only, not the encrypted value
-	result := map[string]interface{}{
-		"status":    "created",
-		"secret_id": secret.ID.String(),
-		"name":      name,
-		"version":   secret.Version,
-		"message":   "Secret created and encrypted successfully",
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleUpdateSecret(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.secretsRepo == nil || s.encryptor == nil {
-		return errorResult("secret management tools are not configured"), nil
-	}
-
-	secretIDStr, _ := args["secret_id"].(string)
-	value, _ := args["value"].(string)
-
-	if value == "" {
-		return errorResult("value is required"), nil
-	}
-
-	secretID, err := uuid.Parse(secretIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid secret_id: %v", err)), nil
-	}
-
-	// Get existing secret
-	existing, err := s.secretsRepo.GetByID(ctx, secretID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get secret: %v", err)), nil
-	}
-	if existing == nil {
-		return errorResult("secret not found"), nil
-	}
-	if denied := s.authorizeSecretPermission(ctx, existing.ServiceID, domain.PermWriteSecrets); denied != nil {
-		return denied, nil
-	}
-	// This tool only has the legacy AES writer. In particular, never replace a
-	// v2 payload while retaining its method: readers would treat the legacy
-	// ciphertext as identity/version-bound data-key ciphertext.
-	switch existing.EncryptionMethod {
-	case domain.EncryptionAES256, domain.EncryptionNIP44:
-		// A supported legacy row may be replaced with legacy AES ciphertext.
-	case domain.EncryptionAES256V2:
-		return errorResult("versioned secret updates require the fenced v2 writer"), nil
-	default:
-		return errorResult("unsupported stored secret encryption method"), nil
-	}
-
-	// Encrypt the new value
-	encryptedValue, err := s.encryptor.Encrypt(value, domain.EncryptionAES256)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to encrypt secret: %v", err)), nil
-	}
-
-	// Update the secret
-	existing.EncryptedValue = encryptedValue
-	existing.EncryptionMethod = domain.EncryptionAES256
-	existing.UpdatedAt = time.Now()
-
-	if err := s.secretsRepo.Update(ctx, existing); err != nil {
-		return errorResult(fmt.Sprintf("failed to update secret: %v", err)), nil
-	}
-
-	s.logger.Info("secret updated",
-		zap.String("secret_id", secretID.String()),
-		zap.Int("version", existing.Version),
-	)
-
-	result := map[string]interface{}{
-		"status":    "updated",
-		"secret_id": secretID.String(),
-		"version":   existing.Version,
-		"message":   "Secret updated successfully",
-	}
-	return jsonResult(result)
-}
-
-func (s *Server) handleDeleteSecret(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.secretsRepo == nil {
-		return errorResult("secret management tools are not configured"), nil
-	}
-
-	secretIDStr, _ := args["secret_id"].(string)
-
-	secretID, err := uuid.Parse(secretIDStr)
-	if err != nil {
-		return errorResult(fmt.Sprintf("invalid secret_id: %v", err)), nil
-	}
-
-	existing, err := s.secretsRepo.GetByID(ctx, secretID)
-	if err != nil {
-		return errorResult(fmt.Sprintf("failed to get secret: %v", err)), nil
-	}
-	if existing == nil {
-		return errorResult("secret not found"), nil
-	}
-	if denied := s.authorizeSecretPermission(ctx, existing.ServiceID, domain.PermWriteSecrets); denied != nil {
-		return denied, nil
-	}
-
-	if err := s.secretsRepo.Delete(ctx, secretID); err != nil {
-		return errorResult(fmt.Sprintf("failed to delete secret: %v", err)), nil
-	}
-
-	s.logger.Info("secret deleted", zap.String("secret_id", secretID.String()))
-
-	result := map[string]interface{}{
-		"status":    "deleted",
-		"secret_id": secretID.String(),
 	}
 	return jsonResult(result)
 }

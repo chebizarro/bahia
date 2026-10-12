@@ -8,15 +8,17 @@ encrypted store and synthetic keys, and sets up what
 docs/runbooks/signet-secret-store.md describes:
 
   - an owner agent (provision) that nobody connects to;
-  - a requester key, granted provisioner rights and named as the single
-    client of the owner's credential.deliver policy;
+  - a requester key with no Signet rights but the owner's exact delivery
+    grant: the single client of its credential.deliver policy;
   - one imported credential.
 
 It then runs Bahia's opt-in TestLiveSignetCredentialStore (-tags
 signetinterop) from this clean Bahia checkout: resolve the pinned version,
-refuse another tenant's credential held by the same owner, refuse the old
-pin after a rotation and resolve the new one, refuse when the delivery grant
-names another client, refuse after revocation.
+then resolve in one round trip (Signet reports the delivered version and
+honours expected_version), refuse another tenant's credential held by the
+same owner, refuse the old pin after a rotation and resolve the new one
+(also as a paced batch), refuse when the delivery grant names another
+client, refuse after revocation.
 
 Never accepts an existing identity, relay URL or database. No secret or raw
 test output is written to stdout or stderr; on failure only the failing test
@@ -30,13 +32,12 @@ import secrets
 import subprocess
 import sys
 import tempfile
-import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from signet_live_interop import (  # noqa: E402  (shared guards of the NIP-46 interop runner)
     free_loopback_port, management, private_file, pubkey, require_clean_checkout, require_commit,
-    run, run_go_test, wait_tcp,
+    run, run_go_test, wait_management, wait_tcp,
 )
 
 LIVE_TEST = "TestLiveSignetCredentialStore"
@@ -114,20 +115,11 @@ def main(argv=None):
                 wait_tcp(relay_port, relay, "private relay")
                 signetd = subprocess.Popen([str(daemon), "-c", str(config)], stdout=daemon_log, stderr=subprocess.STDOUT, env=env)
                 processes.append(signetd)
-                # Readiness is an authenticated management round trip, not a guess.
-                for _ in range(30):
-                    if signetd.poll() is not None:
-                        raise RuntimeError("signetd exited during startup; private log withheld")
-                    try:
-                        management(ctl, config, env, "status")
-                        break
-                    except RuntimeError:
-                        time.sleep(0.2)
-                else:
-                    raise RuntimeError("signetd did not answer authenticated management status")
+                wait_management(ctl, config, env, signetd)
 
                 run([str(ctl), "-c", str(config), "provision", OWNER], env=env)
-                management(ctl, config, env, "grant-provisioner", requester_pk)
+                # The requester holds only the owner's exact delivery grant
+                # (Signet >= 0.7.0); it is never a provisioner.
                 management(ctl, config, env, "set-policy", OWNER, json.dumps(
                     {"default": "deny", "allow_clients": [requester_pk], "allow_methods": ["credential.deliver"]}))
                 # Bahia binds a credential to its tenant by label:

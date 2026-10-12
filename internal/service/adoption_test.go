@@ -13,8 +13,8 @@ import (
 	"sort"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	runtimeAdapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
-	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -37,7 +37,6 @@ type fakeAdoptionCanonical struct {
 	states       map[string]domain.EnvironmentServiceState
 	observations map[string]domain.RuntimeObservation
 	bindings     map[string]domain.AdoptionBinding
-	secretRefs   map[uuid.UUID]domain.SecretRef
 	published    []string
 	failAfter    int
 	failErr      error
@@ -52,7 +51,6 @@ func newFakeAdoptionCanonical() *fakeAdoptionCanonical {
 		states:       map[string]domain.EnvironmentServiceState{},
 		observations: map[string]domain.RuntimeObservation{},
 		bindings:     map[string]domain.AdoptionBinding{},
-		secretRefs:   map[uuid.UUID]domain.SecretRef{},
 		failAfter:    -1,
 		failErr:      errors.New("relay rejected: blocked"),
 	}
@@ -127,16 +125,6 @@ func (f *fakeAdoptionCanonical) PublishArtifactRegistry(_ context.Context, artif
 		return err
 	}
 	f.artifacts[artifact.ID] = *artifact
-	return nil
-}
-
-func (f *fakeAdoptionCanonical) PublishSecretRef(_ context.Context, _ uuid.UUID, ref domain.SecretRef) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if err := f.admit("secret"); err != nil {
-		return err
-	}
-	f.secretRefs[ref.ID] = ref
 	return nil
 }
 
@@ -275,7 +263,7 @@ func (f *fakeAdoptionCanonical) counts() map[string]int {
 	defer f.mu.Unlock()
 	return map[string]int{
 		"services": len(f.services), "environments": len(f.environments), "builds": len(f.builds), "artifacts": len(f.artifacts),
-		"states": len(f.states), "observations": len(f.observations), "bindings": len(f.bindings), "secrets": len(f.secretRefs),
+		"states": len(f.states), "observations": len(f.observations), "bindings": len(f.bindings),
 	}
 }
 
@@ -941,67 +929,10 @@ func TestAdoptionServiceScanRedactsSensitiveEnvironmentAndLabels(t *testing.T) {
 	}
 }
 
-func TestAdoptionServiceImportStoresSensitiveEnvironmentAsSecretsAndPublishesRefs(t *testing.T) {
-	ctx := context.Background()
-	server := newSensitiveAdoptionDockerServer(t)
-	defer server.Close()
-	canonical := newFakeAdoptionCanonical()
-	secretRepo := newMockSecretRepo()
-	encryptor, err := secretsAdapter.NewEncryptor("4444444444444444444444444444444444444444444444444444444444444444")
-	if err != nil {
-		t.Fatalf("NewEncryptor: %v", err)
-	}
-	adoption := newTestAdoption(canonical, &events.NoopPublisher{}, WithAdoptionSecrets(secretRepo, encryptor))
-
-	results, err := adoption.Import(ctx, localTarget(server))
-	if err != nil {
-		t.Fatalf("Import returned error: %v", err)
-	}
-	if len(results) != 1 || results[0].Status != adoptionStatusCreated {
-		t.Fatalf("unexpected import result: %#v", results)
-	}
-	if !containsString(results[0].RedactedEnvironmentKeys, "DB_PASSWORD") {
-		t.Fatalf("import result missing redacted env keys: %#v", results[0].RedactedEnvironmentKeys)
-	}
-	svc := canonical.serviceByName("secret-app")
-	if svc == nil || svc.RuntimeConfig == nil || svc.RuntimeConfig.Adopted == nil {
-		t.Fatalf("expected adopted service, svc=%#v", svc)
-	}
-	if svc.RuntimeConfig.Adopted.Environment["APP_ENV"] != "prod" {
-		t.Fatalf("safe env not retained: %#v", svc.RuntimeConfig.Adopted.Environment)
-	}
-	if _, ok := svc.RuntimeConfig.Adopted.Environment["DB_PASSWORD"]; ok {
-		t.Fatalf("sensitive env published in runtime config: %#v", svc.RuntimeConfig.Adopted.Environment)
-	}
-	if _, ok := svc.RuntimeConfig.Adopted.Labels["com.example.secret-token"]; ok {
-		t.Fatalf("sensitive label published in adopted labels: %#v", svc.RuntimeConfig.Adopted.Labels)
-	}
-	secrets, err := secretRepo.ListEffective(ctx, svc.ID, *results[0].EnvironmentID)
-	if err != nil {
-		t.Fatalf("ListEffective secrets: %v", err)
-	}
-	secretValues := map[string]string{}
-	for _, secret := range secrets {
-		value, err := encryptor.Decrypt(secret.EncryptedValue, secret.EncryptionMethod)
-		if err != nil {
-			t.Fatalf("decrypt secret %q: %v", secret.Name, err)
-		}
-		secretValues[secret.Name] = value
-		ref, ok := canonical.secretRefs[secret.ID]
-		if !ok || ref.Name != secret.Name || ref.ServiceID != svc.ID {
-			t.Fatalf("secret %q has no canonical reference: %#v", secret.Name, canonical.secretRefs)
-		}
-	}
-	if secretValues["DB_PASSWORD"] != "super-secret" || secretValues["AWS_SECRET_ACCESS_KEY"] != "aws-secret" || secretValues["DATABASE_URL"] != "postgres://user:pass@db/prod" {
-		t.Fatalf("unexpected imported secret values: %#v", secretValues)
-	}
-	steps := canonical.publishedSteps()
-	if steps[4] != "artifact" || steps[5] != "secret" || steps[len(steps)-3] != "observation" {
-		t.Fatalf("secret references must be published after the artifact and before the observation: %v", steps)
-	}
-}
-
-func TestAdoptionServiceImportRejectsSensitiveEnvironmentWithoutSecrets(t *testing.T) {
+// Adoption never copies a secret value: a container whose environment
+// carries secret values inline is refused, naming the keys and never the
+// values, and nothing is published.
+func TestAdoptionServiceImportRefusesInlineSecretValues(t *testing.T) {
 	ctx := context.Background()
 	server := newSensitiveAdoptionDockerServer(t)
 	defer server.Close()
@@ -1012,11 +943,24 @@ func TestAdoptionServiceImportRejectsSensitiveEnvironmentWithoutSecrets(t *testi
 	if err != nil {
 		t.Fatalf("Import returned error: %v", err)
 	}
-	if len(results) != 1 || results[0].Status != adoptionStatusFailed || !strings.Contains(results[0].Error, "secret storage") {
-		t.Fatalf("expected sensitive import failure, got %#v", results)
+	if len(results) != 1 || results[0].Status != adoptionStatusFailed || !strings.Contains(results[0].Error, ErrAdoptionSecretValues.Error()) {
+		t.Fatalf("expected the inline secret values to be refused, got %#v", results)
+	}
+	for _, key := range []string{"AWS_SECRET_ACCESS_KEY", "DATABASE_URL", "DB_PASSWORD"} {
+		if !strings.Contains(results[0].Error, key) {
+			t.Fatalf("refusal does not name %s: %q", key, results[0].Error)
+		}
+	}
+	for _, value := range []string{"super-secret", "aws-secret", "postgres://user:pass@db/prod"} {
+		if strings.Contains(results[0].Error, value) {
+			t.Fatalf("refusal leaked a secret value: %q", results[0].Error)
+		}
+	}
+	if !containsString(results[0].RedactedEnvironmentKeys, "DB_PASSWORD") {
+		t.Fatalf("import result missing redacted env keys: %#v", results[0].RedactedEnvironmentKeys)
 	}
 	if n := canonical.counts(); n["services"] != 0 || n["environments"] != 0 {
-		t.Fatalf("sensitive import without secrets must publish nothing: %v", n)
+		t.Fatalf("a refused import must publish nothing: %v", n)
 	}
 }
 
@@ -1594,4 +1538,63 @@ func cloneMockAdoptedIdentityRepo(src *mockAdoptedIdentityRepo) *mockAdoptedIden
 		clone.identities[fingerprint] = identity
 	}
 	return clone
+}
+
+// The classifier recognises secret names by whole tokens and connection
+// strings by their value; ordinary configuration whose name merely contains
+// a secret-like substring is kept.
+func TestAdoptionSecretClassifierUsesTokenBoundaries(t *testing.T) {
+	secrets := map[string]string{
+		"DB_PASSWORD": "x", "POSTGRES_PASSWD": "x", "MYSQL_PWD": "x", "JWT_SECRET": "x", "CLIENT_SECRET": "x",
+		"GITHUB_TOKEN": "x", "AWS_SESSION_TOKEN": "x", "AWS_SECRET_ACCESS_KEY": "x",
+		"STRIPE_API_KEY": "x", "SENDGRID_APIKEY": "x", "TLS_PRIVATE_KEY": "x", "JWT_SIGNING_KEY": "x",
+		"GCP_CREDENTIALS": "x", "SSH_PASSPHRASE": "x", "FLEET_CURATOR_BUNKER_URL": "bunker://pub?secret=s",
+		"DATABASE_URL":      "postgres://user:pass@db/prod",
+		"SENTRY_DSN":        "https://key:secret@sentry.example/1",
+		"CONNECTION_STRING": "Server=db;User Id=app;Password=hunter2;",
+		"REDIS_URL":         "redis://:hunter2@cache:6379/0",
+	}
+	plain := map[string]string{
+		"COMPASS_URL": "https://compass.example", "OAUTH_ISSUER": "https://issuer.example", "SESSION_TIMEOUT": "30m",
+		"SORT_KEY": "created_at", "AWS_REGION": "eu-west-1", "PUBLIC_KEY_URL": "https://keys.example", "BYPASS_CACHE": "1",
+		"AUTHOR": "ops", "AWS_ACCESS_KEY_ID": "AKIA0000", "DATABASE_URL": "postgres://db/prod", "REDIS_URL": "redis://cache:6379/0", "PASSWORD_MIN_LENGTH": "12",
+	}
+	for key, value := range secrets {
+		if !isSensitiveEnvironmentEntry(key, value) {
+			t.Errorf("%s is a secret", key)
+		}
+	}
+	for key, value := range plain {
+		if key == "PASSWORD_MIN_LENGTH" {
+			// A whole PASSWORD token stays a secret name: refusing is the
+			// safe side, and the operator can exempt the key.
+			continue
+		}
+		if isSensitiveEnvironmentEntry(key, value) {
+			t.Errorf("%s=%s is not a secret", key, value)
+		}
+	}
+	classified := classifyDiscoveredSensitiveData(runtime.DiscoveredContainer{Environment: map[string]string{"PASSWORD_MIN_LENGTH": "12", "DB_PASSWORD": "x"}}, "PASSWORD_MIN_LENGTH")
+	if len(classified.SensitiveEnvironmentKeys) != 1 || classified.SensitiveEnvironmentKeys[0] != "DB_PASSWORD" || classified.SafeEnvironment["PASSWORD_MIN_LENGTH"] != "12" {
+		t.Fatalf("operator exemption: %+v", classified)
+	}
+}
+
+// The operator may declare keys non-secret; once every flagged key is
+// exempted or absent the container imports and keeps those values.
+func TestAdoptionServiceImportHonoursNonSecretEnvKeys(t *testing.T) {
+	ctx := context.Background()
+	server := newSensitiveAdoptionDockerServer(t)
+	defer server.Close()
+	canonical := newFakeAdoptionCanonical()
+	adoption := newTestAdoption(canonical, &events.NoopPublisher{})
+	req := localTarget(server)
+	req.NonSecretEnvKeys = []string{"DB_PASSWORD"}
+	results, err := adoption.Import(ctx, req)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusFailed || strings.Contains(results[0].Error, "DB_PASSWORD") || !strings.Contains(results[0].Error, "AWS_SECRET_ACCESS_KEY") {
+		t.Fatalf("partial exemption = %#v", results)
+	}
 }

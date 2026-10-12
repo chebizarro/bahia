@@ -8,9 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/secretstore"
@@ -25,26 +23,17 @@ type SecretIntentPublisher interface {
 	PublishSecretDeleted(ctx context.Context, secretID uuid.UUID) error
 }
 
-// SecretIntentCRUD is the read/write contract the secret intent handler uses
-// for level-triggered reconciliation. repository.SecretRepository satisfies it.
+// SecretIntentCRUD is what the secret intent handler needs from the optional
+// PostgreSQL index beyond SecretStoreIndex: deleting a secret's row.
+// repository.SecretRepository satisfies it.
 type SecretIntentCRUD interface {
-	Create(ctx context.Context, s *domain.ServiceSecret) error
-	GetByID(ctx context.Context, id uuid.UUID) (*domain.ServiceSecret, error)
-	ListByService(ctx context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error)
-	Update(ctx context.Context, s *domain.ServiceSecret) error
 	Delete(ctx context.Context, id uuid.UUID) error
-}
-
-// SecretIntentEncryptor encrypts values supplied by the in-process MCP path
-// when the value is not already NIP-44 encrypted.
-type SecretIntentEncryptor interface {
-	Encrypt(plaintext string, method domain.EncryptionMethod) ([]byte, error)
 }
 
 // SecretStoreIndex keeps the optional PostgreSQL index consistent with
 // store-backed secrets: a value-less marker row with every retained legacy
-// ciphertext scrubbed, so PostgreSQL consumers fail with
-// domain.ErrSecretInStore instead of omitting the secret.
+// ciphertext scrubbed, so PostgreSQL consumers list the secret and resolve
+// it through the store, and never serve a legacy value under its name.
 // repository.PgSecretRepository implements it.
 type SecretStoreIndex interface {
 	MarkStoreBacked(ctx context.Context, ref domain.SecretRef) error
@@ -65,50 +54,38 @@ type SecretRecordView interface {
 // the handler reconciles the entity toward it regardless of whether prior
 // events for the coordinate have been seen.
 //
-// A reference-only intent names a credential in the external secret store
-// (content credential_ref, docs/architecture/secret-store.md). The handler
-// checks the credential with the store, then publishes the canonical record
-// with the reference; no value passes through Bahia and PostgreSQL is not
-// involved. When the store is configured, intents carrying a value
-// (encrypted_value or value) are refused.
+// A secret intent names a credential in the external secret store (content
+// credential_ref, docs/architecture/secret-store.md); it never carries a
+// value, and an intent carrying encrypted_value or value is refused. The
+// handler checks the credential with the store, then publishes the canonical
+// record with the reference; no value passes through Bahia. Without a
+// configured store every create and update is refused
+// (secretstore.ErrNotConfigured).
 //
-// Without a configured store the legacy path applies: the value in the intent
-// content is NIP-44 encrypted to the daemon's service pubkey by the client;
-// the handler seals it into PostgreSQL and publishes a canonical record
-// containing ONLY the SecretRef metadata — never the plaintext value.
-//
-// Secret REVEAL stays ContextVM — this handler does not decrypt secrets.
+// Secret REVEAL stays ContextVM — this handler resolves no value.
 //
 // See docs/architecture/intents-and-authority.md.
 type SecretIntentHandler struct {
-	registry      SecretIntentCRUD
-	encryptor     SecretIntentEncryptor
-	versionedKey  *secrets.DataKey
-	serviceKeyer  nostr.Keyer
-	servicePubkey nostr.PubKey
-	store         secretstore.SecretStore
-	records       SecretRecordView
-	storeIndex    SecretStoreIndex
-	publisher     SecretIntentPublisher
-	status        *IntentStatusPublisher
-	logger        *zap.Logger
+	registry   SecretIntentCRUD
+	store      secretstore.SecretStore
+	records    SecretRecordView
+	storeIndex SecretStoreIndex
+	publisher  SecretIntentPublisher
+	status     *IntentStatusPublisher
+	logger     *zap.Logger
 }
 
 // SecretIntentHandlerConfig configures the secret intent handler. Store and
-// Records enable reference-only intents; Registry (PostgreSQL) serves only
-// the legacy value path.
+// Records apply secret intents; Registry (PostgreSQL, optional) is the
+// derived index kept consistent with them.
 type SecretIntentHandlerConfig struct {
-	Registry      SecretIntentCRUD
-	Encryptor     SecretIntentEncryptor
-	VersionedKey  *secrets.DataKey
-	ServiceKeyer  nostr.Keyer
-	ServicePubkey nostr.PubKey
-	Store         secretstore.SecretStore
-	Records       SecretRecordView
-	StoreIndex    SecretStoreIndex
-	Publisher     SecretIntentPublisher
-	Status        *IntentStatusPublisher
-	Logger        *zap.Logger
+	Registry   SecretIntentCRUD
+	Store      secretstore.SecretStore
+	Records    SecretRecordView
+	StoreIndex SecretStoreIndex
+	Publisher  SecretIntentPublisher
+	Status     *IntentStatusPublisher
+	Logger     *zap.Logger
 }
 
 // NewSecretIntentHandler constructs the handler.
@@ -118,17 +95,13 @@ func NewSecretIntentHandler(cfg SecretIntentHandlerConfig) *SecretIntentHandler 
 		logger = zap.NewNop()
 	}
 	return &SecretIntentHandler{
-		registry:      cfg.Registry,
-		encryptor:     cfg.Encryptor,
-		versionedKey:  cfg.VersionedKey,
-		serviceKeyer:  cfg.ServiceKeyer,
-		servicePubkey: cfg.ServicePubkey,
-		store:         cfg.Store,
-		records:       cfg.Records,
-		storeIndex:    cfg.StoreIndex,
-		publisher:     cfg.Publisher,
-		status:        cfg.Status,
-		logger:        logger.Named("secret-intent"),
+		registry:   cfg.Registry,
+		store:      cfg.Store,
+		records:    cfg.Records,
+		storeIndex: cfg.StoreIndex,
+		publisher:  cfg.Publisher,
+		status:     cfg.Status,
+		logger:     logger.Named("secret-intent"),
 	}
 }
 
@@ -150,111 +123,19 @@ func (h *SecretIntentHandler) PermissionFor(_ string) domain.Permission {
 }
 
 func (h *SecretIntentHandler) handleCreateOrUpdate(ctx context.Context, intent *Intent) error {
+	_, hasCiphertext := intent.Content["encrypted_value"]
+	_, hasPlaintext := intent.Content["value"]
+	if hasCiphertext || hasPlaintext {
+		return fmt.Errorf("secret intents never carry a value: import it into the secret store labelled <org-id>/<service-id>/<name> and send credential_ref")
+	}
 	credentialRef, err := credentialRefFromIntent(intent)
 	if err != nil {
 		return err
 	}
-	_, hasCiphertext := intent.Content["encrypted_value"]
-	_, hasPlaintext := intent.Content["value"]
-	if credentialRef != nil {
-		if hasCiphertext || hasPlaintext {
-			return fmt.Errorf("a secret intent carries either credential_ref or a value, not both")
-		}
-		return h.reconcileReference(ctx, intent, *credentialRef)
+	if credentialRef == nil {
+		return fmt.Errorf("a secret intent needs credential_ref {store, credential_id, version}")
 	}
-	if h.store != nil {
-		return fmt.Errorf("secret values are not accepted in intents while the secret store is configured: import the value into the store and send credential_ref")
-	}
-	if h.registry == nil {
-		return fmt.Errorf("secret value intents need the PostgreSQL secret store; configure secret_store and send credential_ref instead")
-	}
-	parsed, err := secretFromIntentContent(intent)
-	if err != nil {
-		return fmt.Errorf("parse secret intent content: %w", err)
-	}
-
-	// Level-triggered: try to load existing.
-	existing, err := h.registry.GetByID(ctx, parsed.ID)
-	if err != nil {
-		return fmt.Errorf("look up secret before writing: %w", err)
-	}
-	targetVersion := 1
-	if existing != nil {
-		if existing.Version <= 0 || existing.Version == int(^uint(0)>>1) {
-			return fmt.Errorf("current secret version is invalid")
-		}
-		targetVersion = existing.Version + 1
-	}
-	if h.versionedKey != nil {
-		if err := h.sealVersionedIntentValue(ctx, intent, parsed, targetVersion); err != nil {
-			return err
-		}
-	} else if len(parsed.EncryptedValue) == 0 {
-		// Legacy local mode encrypts plaintext supplied by an in-process caller.
-		if plaintext, ok := intent.Content["value"].(string); ok && plaintext != "" {
-			if h.encryptor == nil {
-				return fmt.Errorf("secret value encryption is not configured")
-			}
-			encrypted, encErr := h.encryptor.Encrypt(plaintext, parsed.EncryptionMethod)
-			if encErr != nil {
-				return fmt.Errorf("failed to encrypt secret value: %w", encErr)
-			}
-			parsed.EncryptedValue = encrypted
-		} else {
-			return fmt.Errorf("secret value is required (either encrypted_value or value)")
-		}
-	}
-
-	if existing == nil {
-		if intent.ExpectedUpdatedAt != nil {
-			return &revisionConflictError{entityType: "secret", entityID: parsed.ID, expected: *intent.ExpectedUpdatedAt}
-		}
-		// Create.
-		if h.versionedKey != nil || parsed.Version == 0 {
-			parsed.Version = 1
-		}
-		now := time.Now().UTC()
-		if parsed.CreatedAt.IsZero() {
-			parsed.CreatedAt = now
-		}
-		parsed.UpdatedAt = now
-		parsed.CreatedBy = intent.Actor
-
-		if err := h.registry.Create(ctx, parsed); err != nil {
-			return fmt.Errorf("create secret: %w", err)
-		}
-	} else {
-		if intent.ExpectedUpdatedAt != nil && !intent.RevisionMatches(existing.UpdatedAt) {
-			return &revisionConflictError{entityType: "secret", entityID: parsed.ID, expected: *intent.ExpectedUpdatedAt, actual: existing.UpdatedAt}
-		}
-		// Update: keep existing metadata, update value.
-		existing.EncryptedValue = parsed.EncryptedValue
-		existing.EncryptionMethod = parsed.EncryptionMethod
-		existing.UpdatedAt = time.Now().UTC()
-		if parsed.Name != "" {
-			existing.Name = parsed.Name
-		}
-
-		if err := h.registry.Update(ctx, existing); err != nil {
-			return fmt.Errorf("update secret: %w", err)
-		}
-		parsed = existing
-	}
-
-	// Publish canonical state (SecretRef only — never the value).
-	if h.publisher != nil {
-		ref := parsed.ToRef()
-		if err := h.publisher.PublishSecretRef(ctx, ref); err != nil {
-			h.logger.Warn("failed to publish secret ref", zap.Error(err))
-			// Non-fatal: the intent was applied, the publish is best-effort.
-		}
-	}
-
-	h.logger.Info("secret created/updated via intent",
-		zap.String("secret_id", parsed.ID.String()),
-		zap.String("intent_id", intent.IntentID),
-	)
-	return nil
+	return h.reconcileReference(ctx, intent, *credentialRef)
 }
 
 // reconcileReference applies a reference-only intent. The credential must
@@ -397,47 +278,6 @@ func credentialRefFromIntent(intent *Intent) (*domain.SecretCredentialRef, error
 	return &ref, nil
 }
 
-func (h *SecretIntentHandler) sealVersionedIntentValue(ctx context.Context, intent *Intent, parsed *domain.ServiceSecret, version int) error {
-	if h.serviceKeyer == nil || h.servicePubkey == nostr.ZeroPK {
-		return fmt.Errorf("versioned service-secret writer is not configured")
-	}
-	actual, err := h.serviceKeyer.GetPublicKey(ctx)
-	if err != nil || actual != h.servicePubkey {
-		return fmt.Errorf("fenced service key is unavailable or changed")
-	}
-	value, hasPlaintext := intent.Content["value"].(string)
-	hasCiphertext := len(parsed.EncryptedValue) > 0
-	if hasCiphertext == hasPlaintext || hasPlaintext && value == "" {
-		return fmt.Errorf("exactly one nonempty secret value representation is required")
-	}
-	var plaintext string
-	if hasPlaintext {
-		if parsed.EncryptionMethod != domain.EncryptionNIP44 && parsed.EncryptionMethod != domain.EncryptionAES256 {
-			return fmt.Errorf("unsupported plaintext secret input method")
-		}
-		plaintext = value
-	} else {
-		if parsed.EncryptionMethod != domain.EncryptionNIP44 {
-			return fmt.Errorf("encrypted secret input must be NIP-44 to the existing service pubkey")
-		}
-		plaintext, err = h.serviceKeyer.Decrypt(ctx, string(parsed.EncryptedValue), h.servicePubkey)
-		if err != nil || plaintext == "" {
-			return fmt.Errorf("fenced client secret decrypt failed")
-		}
-	}
-	sealed, err := h.versionedKey.Seal(parsed.ID, version, []byte(plaintext))
-	if err != nil {
-		return fmt.Errorf("versioned service-secret seal failed")
-	}
-	actual, err = h.serviceKeyer.GetPublicKey(ctx)
-	if err != nil || actual != h.servicePubkey {
-		return fmt.Errorf("fenced service key became unavailable during secret seal")
-	}
-	parsed.EncryptedValue = sealed
-	parsed.EncryptionMethod = domain.EncryptionAES256V2
-	return nil
-}
-
 func (h *SecretIntentHandler) handleDelete(ctx context.Context, intent *Intent) error {
 	idStr, _ := intent.Content["id"].(string)
 	secretID, err := uuid.Parse(idStr)
@@ -454,15 +294,13 @@ func (h *SecretIntentHandler) handleDelete(ctx context.Context, intent *Intent) 
 		}
 	}
 
-	// Publish tombstone. With the secret store configured the canonical
-	// record is the secret's only home, so the deletion must reach it.
-	if h.publisher != nil {
-		if err := h.publisher.PublishSecretDeleted(ctx, secretID); err != nil {
-			if h.store != nil || h.registry == nil {
-				return fmt.Errorf("publish secret tombstone: %w", err)
-			}
-			h.logger.Warn("failed to publish secret tombstone", zap.Error(err))
-		}
+	// The canonical record is the secret's only home, so the deletion must
+	// reach it.
+	if h.publisher == nil {
+		return fmt.Errorf("canonical secret state is not configured")
+	}
+	if err := h.publisher.PublishSecretDeleted(ctx, secretID); err != nil {
+		return fmt.Errorf("publish secret tombstone: %w", err)
 	}
 
 	h.logger.Info("secret deleted via intent",
@@ -479,9 +317,7 @@ func secretFromIntentContent(intent *Intent) (*domain.ServiceSecret, error) {
 		return nil, fmt.Errorf("intent content is nil")
 	}
 
-	secret := &domain.ServiceSecret{
-		EncryptionMethod: domain.EncryptionNIP44,
-	}
+	secret := &domain.ServiceSecret{}
 
 	// Parse ID.
 	if idStr, ok := content["id"].(string); ok && idStr != "" {
@@ -521,16 +357,6 @@ func secretFromIntentContent(intent *Intent) (*domain.ServiceSecret, error) {
 		}
 	}
 
-	// Encryption method.
-	if method, ok := content["encryption_method"].(string); ok && method != "" {
-		secret.EncryptionMethod = domain.EncryptionMethod(method)
-	}
-
-	// Encrypted value (pre-encrypted by the client).
-	if encVal, ok := content["encrypted_value"].(string); ok && encVal != "" {
-		secret.EncryptedValue = []byte(encVal)
-	}
-
 	// Version.
 	if v, ok := content["version"].(float64); ok {
 		secret.Version = int(v)
@@ -542,37 +368,6 @@ func secretFromIntentContent(intent *Intent) (*domain.ServiceSecret, error) {
 	}
 
 	return secret, nil
-}
-
-// secretIntentPayload is used for JSON marshal/unmarshal of secret intent content.
-type secretIntentPayload struct {
-	ID               string `json:"id"`
-	ServiceID        string `json:"service_id"`
-	EnvironmentID    string `json:"environment_id,omitempty"`
-	Name             string `json:"name"`
-	Value            string `json:"value,omitempty"`           // plaintext from in-process MCP
-	EncryptedValue   string `json:"encrypted_value,omitempty"` // NIP-44 encrypted (relay intent path)
-	EncryptionMethod string `json:"encryption_method,omitempty"`
-	Version          int    `json:"version,omitempty"`
-}
-
-// BuildSecretIntentContent builds an in-process secret intent for MCP callers.
-func BuildSecretIntentContent(serviceID, secretID uuid.UUID, name, value string, envID *uuid.UUID, encryptionMethod domain.EncryptionMethod) map[string]interface{} {
-	id := secretID
-	if id == uuid.Nil {
-		id = domain.NewEntityID()
-	}
-	content := map[string]interface{}{
-		"id":                id.String(),
-		"service_id":        serviceID.String(),
-		"name":              name,
-		"value":             value,
-		"encryption_method": string(encryptionMethod),
-	}
-	if envID != nil {
-		content["environment_id"] = envID.String()
-	}
-	return content
 }
 
 // BuildSecretReferenceIntentContent builds a reference-only secret intent:
@@ -596,15 +391,4 @@ func BuildSecretReferenceIntentContent(serviceID, secretID uuid.UUID, name strin
 		content["environment_id"] = envID.String()
 	}
 	return content
-}
-
-// ensureSecretIntentJSON marshals any to JSON and back into a map.
-func ensureSecretIntentJSON(v any) map[string]interface{} {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	var out map[string]interface{}
-	_ = json.Unmarshal(data, &out)
-	return out
 }

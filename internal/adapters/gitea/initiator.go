@@ -3,7 +3,6 @@ package gitea
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -21,32 +20,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// SecretResolver resolves opaque server-side credential references to
-// plaintext values with audit recording. Matches secrets.Resolver.
+// SecretResolver resolves opaque server-side credential references (secret
+// UUIDs) to values through the secret store, recording each access
+// (secretstore.TextResolver). Without a configured store every resolution
+// fails closed with secretstore.ErrNotConfigured, before any mirror call or
+// publication, and the journal record stays at its claimed stage, so the
+// same signed request prepares once the store answers.
 type SecretResolver interface {
 	ResolveSecretWithAudit(ctx context.Context, ref string, opts domain.SecretResolveOptions) (string, domain.SecretAccessManifest, error)
-}
-
-// ErrSecretStoreUnavailable is returned when a build initiation reaches
-// credential resolution on a daemon without the secret store.
-//
-// The upstream repository credential and the fleet mirror-read password are
-// secret values, not metadata: the canonical secret registry (30900
-// secret-registry records) carries references only, and the values exist
-// solely in the PostgreSQL secret store, encrypted with the service key. The
-// initiation journal, build identity and resume of an already prepared
-// initiation need no database; only this step does, and it fails closed here
-// with the record left at its claimed stage so a retry once the store is
-// reachable prepares the initiation.
-var ErrSecretStoreUnavailable = errors.New("secret store unavailable: repository credentials are secret values held only in the PostgreSQL secret store")
-
-// SecretStoreUnavailable is the SecretResolver of a daemon that has no secret
-// store. Every resolution fails with ErrSecretStoreUnavailable.
-type SecretStoreUnavailable struct{}
-
-// ResolveSecretWithAudit fails closed with ErrSecretStoreUnavailable.
-func (SecretStoreUnavailable) ResolveSecretWithAudit(_ context.Context, _ string, _ domain.SecretResolveOptions) (string, domain.SecretAccessManifest, error) {
-	return "", domain.SecretAccessManifest{}, ErrSecretStoreUnavailable
+	// ResolveSecretsWithAudit resolves distinct refs as one paced batch.
+	ResolveSecretsWithAudit(ctx context.Context, refs []string, opts domain.SecretResolveOptions) ([]string, []domain.SecretAccessManifest, error)
 }
 
 // MirrorClient is the fleet Gitea surface the initiator depends on.
@@ -273,8 +256,24 @@ func (i *Initiator) prepareInitiation(ctx context.Context, rec *InitiationRecord
 	// though the opaque reference is supplied by trusted server configuration.
 	mirrorReadUsername := strings.TrimSpace(i.cfg.MirrorReadUsername)
 	mirrorReadCredentialRef := strings.TrimSpace(i.cfg.MirrorReadCredentialRef)
-	mirrorReadPassword := ""
-	if i.loom != nil {
+	opts := domain.SecretResolveOptions{
+		Operation: domain.SecretAccessOperationResolve,
+		Actor:     req.RequesterPubkey,
+		Reason:    "fleet gitea private-mirror build initiation",
+		RequestID: idempotencyKey,
+	}
+	var token, mirrorReadPassword string
+	var upstream domain.SecretAccessManifest
+	if i.loom == nil {
+		// The plaintext credential stays in memory and is passed only inside
+		// the HTTPS body of the Gitea migrate call, in the provider-specific
+		// auth field.
+		token, upstream, err = i.secrets.ResolveSecretWithAudit(ctx, req.CredentialRef.String(), opts)
+		if err != nil {
+			// The resolver returns no value with an error.
+			return fmt.Errorf("resolve repository credential reference: %w", err)
+		}
+	} else {
 		if mirrorReadUsername == "" || strings.ContainsAny(mirrorReadUsername, "\x00\r\n") || mirrorReadCredentialRef == "" {
 			return fmt.Errorf("loom Hive-CI dispatch requires a valid mirror-read username and credential reference")
 		}
@@ -282,44 +281,31 @@ func (i *Initiator) prepareInitiation(ctx context.Context, rec *InitiationRecord
 		if parseErr != nil || mirrorReadSecretID == uuid.Nil {
 			return fmt.Errorf("loom Hive-CI mirror-read credential reference must be a non-zero secret UUID")
 		}
-		var manifest domain.SecretAccessManifest
-		mirrorReadPassword, manifest, err = i.secrets.ResolveSecretWithAudit(ctx, mirrorReadCredentialRef, domain.SecretResolveOptions{
-			Operation: domain.SecretAccessOperationResolve,
-			Actor:     req.RequesterPubkey,
-			Reason:    "fleet gitea private-mirror read for Loom Hive-CI dispatch",
-			RequestID: idempotencyKey,
-		})
+		// The dedicated fleet-mirror read credential and the upstream
+		// credential resolve as one batch before any event is published.
+		// Exact replay returned above never re-resolves them.
+		values, manifests, err := i.secrets.ResolveSecretsWithAudit(ctx, []string{req.CredentialRef.String(), mirrorReadCredentialRef}, opts)
 		if err != nil {
-			if errors.Is(err, ErrSecretStoreUnavailable) {
-				// No value was produced, so the sentinel is kept for callers.
-				return fmt.Errorf("resolve mirror-read credential reference: %w", err)
-			}
-			return scrubSecrets(fmt.Errorf("resolve mirror-read credential reference: %w", err), mirrorReadPassword)
+			// The resolver returns no value with an error.
+			return fmt.Errorf("resolve repository and mirror-read credential references: %w", err)
 		}
+		token, mirrorReadPassword, upstream = values[0], values[1], manifests[0]
 		if strings.TrimSpace(mirrorReadPassword) == "" {
 			return fmt.Errorf("mirror-read credential reference resolved to an empty credential")
 		}
-		if manifest.SecretID != mirrorReadSecretID || manifest.ServiceID != req.ServiceID {
-			return scrubSecrets(fmt.Errorf("mirror-read credential reference must belong to the selected service"), mirrorReadPassword)
+		// The manifest check preserves the service-scoped secret boundary
+		// even though the reference comes from trusted server configuration.
+		if manifests[1].SecretID != mirrorReadSecretID || manifests[1].ServiceID != req.ServiceID {
+			return scrubSecrets(fmt.Errorf("mirror-read credential reference must belong to the selected service"), token, mirrorReadPassword)
 		}
 	}
-
-	// Resolve the opaque upstream credential reference server-side with audit.
-	// The plaintext credential stays in memory and is passed only inside the
-	// HTTPS body of the Gitea migrate call, in the provider-specific auth field.
-	token, _, err := i.secrets.ResolveSecretWithAudit(ctx, req.CredentialRef.String(), domain.SecretResolveOptions{
-		Operation: domain.SecretAccessOperationResolve,
-		Actor:     req.RequesterPubkey,
-		Reason:    "fleet gitea private-mirror build initiation",
-		RequestID: idempotencyKey,
-	})
-	if err != nil {
-		if errors.Is(err, ErrSecretStoreUnavailable) && token == "" && mirrorReadPassword == "" {
-			return fmt.Errorf("resolve repository credential reference: %w", err)
-		}
-		// The resolver can surface errors after producing a value (e.g. audit
-		// persistence failures); scrub defensively.
-		return scrubSecrets(fmt.Errorf("resolve repository credential reference: %w", err), token, mirrorReadPassword)
+	// The build request was admitted against the PostgreSQL index row of
+	// the credential; the canonical record the value came from must agree
+	// (same secret, same service), or the index is stale and the value is
+	// refused. The store already refused any credential outside that
+	// service's canonical org and service.
+	if upstream.SecretID != req.CredentialRef || upstream.ServiceID != req.ServiceID {
+		return scrubSecrets(fmt.Errorf("repository credential reference must belong to the selected service (the index disagrees with the canonical secret record)"), token, mirrorReadPassword)
 	}
 	if strings.TrimSpace(token) == "" {
 		return fmt.Errorf("repository credential reference resolved to an empty credential")

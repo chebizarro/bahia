@@ -19,14 +19,6 @@ import (
 type InitiationJournal interface {
 	PublishInitiation(ctx context.Context, sourceEventID, stage, buildID string, document, serviceOnly []byte) error
 	ReadInitiation(ctx context.Context, sourceEventID string) (*nostrAdapter.HiveCIInitiationEntry, error)
-	ListInitiations(ctx context.Context) ([]nostrAdapter.HiveCIInitiationEntry, error)
-}
-
-// InitiationIndex is the optional PostgreSQL copy of the journal.
-// *PgInitiationStore satisfies it.
-type InitiationIndex interface {
-	Upsert(context.Context, *InitiationRecord) error
-	ListInFlight(context.Context) ([]*InitiationRecord, error)
 }
 
 // initiationSecrets is the service-only layer of a journal record: material
@@ -42,11 +34,9 @@ type initiationSecrets struct {
 // record of a request the store has not seen and adopts the retained record
 // otherwise, and Advance is a stage compare-and-publish against the retained
 // record. A restart, or a daemon with no database, resumes from the journal
-// the outbox made durable. The optional SQL index is written after the
-// record is published and its failures are logged.
+// the outbox made durable.
 type CanonicalInitiationStore struct {
 	journal InitiationJournal
-	index   InitiationIndex
 	// mu serializes read-check-publish sequences on this process, so two
 	// callers cannot both decide a stage is theirs to advance.
 	mu     sync.Mutex
@@ -55,13 +45,12 @@ type CanonicalInitiationStore struct {
 
 var _ InitiationStore = (*CanonicalInitiationStore)(nil)
 
-// NewCanonicalInitiationStore returns the store over journal. index may be
-// nil.
-func NewCanonicalInitiationStore(journal InitiationJournal, index InitiationIndex, logger *zap.Logger) *CanonicalInitiationStore {
+// NewCanonicalInitiationStore returns the store over journal.
+func NewCanonicalInitiationStore(journal InitiationJournal, logger *zap.Logger) *CanonicalInitiationStore {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &CanonicalInitiationStore{journal: journal, index: index, logger: logger.Named("hiveci-initiation-journal")}
+	return &CanonicalInitiationStore{journal: journal, logger: logger.Named("hiveci-initiation-journal")}
 }
 
 func (s *CanonicalInitiationStore) available() error {
@@ -112,11 +101,6 @@ func (s *CanonicalInitiationStore) publish(ctx context.Context, rec *InitiationR
 	}
 	if err := s.journal.PublishInitiation(ctx, rec.SourceEventID, string(rec.Stage), rec.Request.BuildID.String(), document, serviceOnly); err != nil {
 		return fmt.Errorf("journal build initiation: %w", err)
-	}
-	if s.index != nil {
-		if err := s.index.Upsert(ctx, rec); err != nil {
-			s.logger.Warn("build initiation SQL index write failed; canonical journal retained", zap.String("source_event_id", rec.SourceEventID), zap.Error(err))
-		}
 	}
 	return nil
 }
@@ -195,76 +179,3 @@ func (s *CanonicalInitiationStore) Advance(ctx context.Context, from InitiationS
 	}
 	return s.publish(ctx, rec)
 }
-
-// BackfillFromIndex journals, once, the in-flight initiations that exist only
-// in the SQL index because they were claimed before the journal was
-// canonical. The marker is written only after everything was admitted.
-func (s *CanonicalInitiationStore) BackfillFromIndex(ctx context.Context, marker BackfillMarker) error {
-	if s == nil || s.index == nil || marker == nil {
-		return nil
-	}
-	if err := s.available(); err != nil {
-		return err
-	}
-	if done, err := marker.GetControlRecord("bootstrap", initiationBackfillMarker); err != nil || string(done) == "1" {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	inFlight, err := s.index.ListInFlight(ctx)
-	if err != nil {
-		return err
-	}
-	for _, rec := range inFlight {
-		existing, err := s.read(ctx, rec.SourceEventID)
-		if err != nil {
-			return err
-		}
-		if existing != nil {
-			continue
-		}
-		document, serviceOnly, err := encodeInitiation(rec)
-		if err != nil {
-			return err
-		}
-		if err := s.journal.PublishInitiation(ctx, rec.SourceEventID, string(rec.Stage), rec.Request.BuildID.String(), document, serviceOnly); err != nil {
-			return fmt.Errorf("backfill build initiation %s: %w", rec.SourceEventID, err)
-		}
-	}
-	return marker.PutControlRecord("bootstrap", initiationBackfillMarker, []byte("1"))
-}
-
-// RebuildIndex writes every retained journal record into the SQL index.
-func (s *CanonicalInitiationStore) RebuildIndex(ctx context.Context) error {
-	if s == nil || s.index == nil {
-		return nil
-	}
-	if err := s.available(); err != nil {
-		return err
-	}
-	entries, err := s.journal.ListInitiations(ctx)
-	if err != nil {
-		return err
-	}
-	var failed []error
-	for i := range entries {
-		rec, err := decodeInitiation(&entries[i])
-		if err != nil {
-			failed = append(failed, err)
-			continue
-		}
-		if err := s.index.Upsert(ctx, rec); err != nil {
-			failed = append(failed, fmt.Errorf("initiation %s: %w", rec.SourceEventID, err))
-		}
-	}
-	return errors.Join(failed...)
-}
-
-// BackfillMarker records that the one-time SQL-era backfill ran.
-// *localstore.Outbox satisfies it.
-type BackfillMarker interface {
-	GetControlRecord(family, id string) ([]byte, error)
-	PutControlRecord(family, id string, value []byte) error
-}
-
-const initiationBackfillMarker = "hiveci-initiation-canonical-v1"

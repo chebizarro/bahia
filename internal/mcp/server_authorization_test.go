@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -139,68 +138,6 @@ func TestCallToolBuildToolsEnforceTenantRBAC(t *testing.T) {
 					}
 
 				})
-			}
-		})
-	}
-}
-
-func TestCallToolRejectsCrossTenantSecretMutation(t *testing.T) {
-	for _, tool := range []string{"bahia_update_secret", "bahia_delete_secret"} {
-		t.Run(tool, func(t *testing.T) {
-			serviceRepo := newTestServiceRepo()
-			secretRepo := newTestSecretRepo()
-			encryptor, err := secrets.NewEncryptor("2222222222222222222222222222222222222222222222222222222222222222")
-			if err != nil {
-				t.Fatalf("NewEncryptor() error = %v", err)
-			}
-
-			ownerOrgID := uuid.New()
-			callerOrgID := uuid.New()
-			serviceID := uuid.New()
-			secretID := uuid.New()
-			serviceRepo.services[serviceID] = &domain.Service{ID: serviceID, OrgID: ownerOrgID, Name: "owner-service"}
-			secretRepo.secrets[secretID] = &domain.ServiceSecret{
-				ID:             secretID,
-				ServiceID:      serviceID,
-				EncryptedValue: []byte("unchanged"),
-				Version:        1,
-			}
-
-			const callerPubkey = "caller-pubkey"
-			registry := newMCPAuthorizationRegistry(serviceRepo, nil)
-			server := newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{
-				SecretsRepo:       secretRepo,
-				Encryptor:         encryptor,
-				AuthorizedPubkeys: []string{callerPubkey},
-				RBAC: auth.NewRBAC(&mcpAuthMemberLookup{member: &domain.OrgMember{
-					OrgID:  callerOrgID,
-					Pubkey: callerPubkey,
-					Role:   domain.RoleOwner,
-				}}),
-			})
-			ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
-				Subject: "npub-caller",
-				PubKey:  callerPubkey,
-				Method:  auth.MethodNIP98,
-			})
-			arguments := map[string]interface{}{"secret_id": secretID.String()}
-			if tool == "bahia_update_secret" {
-				arguments["value"] = "attacker-value"
-			}
-
-			result, err := server.CallTool(ctx, tool, arguments)
-			if err != nil {
-				t.Fatalf("CallTool() error = %v", err)
-			}
-			if result == nil || !result.IsError || !strings.Contains(result.Content[0].Text, "access denied") {
-				t.Fatalf("CallTool() result = %#v, want cross-tenant access denied", result)
-			}
-			stored := secretRepo.secrets[secretID]
-			if stored == nil {
-				t.Fatal("cross-tenant delete removed the secret")
-			}
-			if string(stored.EncryptedValue) != "unchanged" || stored.Version != 1 {
-				t.Fatalf("cross-tenant update mutated secret: %#v", stored)
 			}
 		})
 	}

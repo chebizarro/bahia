@@ -7,7 +7,6 @@ import (
 
 	canonicalnostr "fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
-	"fiatjaf.com/nostr/nip44"
 )
 
 // GeneratePrivateKeyHex returns a new canonical Nostr secret key as lowercase hex.
@@ -112,23 +111,6 @@ func EventSignatureHex(ev *canonicalnostr.Event) string {
 		return ""
 	}
 	return SignatureHex(ev.Sig)
-}
-
-// NIP44ConversationKey derives a canonical NIP-44 conversation key from hex inputs.
-func NIP44ConversationKey(recipientPubkeyHex string, privateKeyHex string) ([32]byte, error) {
-	pubkey, err := PubKeyFromHex(recipientPubkeyHex)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("decode recipient pubkey: %w", err)
-	}
-	secret, err := SecretKeyFromHex(privateKeyHex)
-	if err != nil {
-		return [32]byte{}, err
-	}
-	key, err := nip44.GenerateConversationKey(pubkey, secret)
-	if err != nil {
-		return [32]byte{}, err
-	}
-	return key, nil
 }
 
 // EncodeNpubFromHex encodes a hex pubkey as an npub bech32 value.

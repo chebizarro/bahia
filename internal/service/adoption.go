@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"reflect"
 	"regexp"
 	"sort"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
-	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -43,7 +43,6 @@ const (
 	adoptionStepService     = "service"
 	adoptionStepBuild       = "build"
 	adoptionStepArtifact    = "artifact"
-	adoptionStepSecrets     = "secrets"
 	adoptionStepObservation = "observation"
 	adoptionStepState       = "state"
 	adoptionStepFinalize    = "finalize"
@@ -73,7 +72,6 @@ type AdoptionCanonicalPublisher interface {
 	PublishServiceRegistry(ctx context.Context, svc *domain.Service) error
 	PublishBuildRegistry(ctx context.Context, build *domain.Build) error
 	PublishArtifactRegistry(ctx context.Context, artifact *domain.Artifact) error
-	PublishSecretRef(ctx context.Context, orgID uuid.UUID, ref domain.SecretRef) error
 	PublishRuntimeObservation(ctx context.Context, obs *domain.RuntimeObservation) error
 	PublishServiceState(ctx context.Context, state *domain.EnvironmentServiceState, observation *domain.RuntimeObservation) error
 }
@@ -137,17 +135,22 @@ type AdoptionService struct {
 	canonical     AdoptionCanonicalPublisher
 	view          AdoptionCanonicalView
 	index         AdoptionIndexRepositories
-	secrets       repository.SecretRepository
 	organizations repository.OrganizationRepository
 	publisher     events.Publisher
 	logger        *zap.Logger
 
-	secretEncryptor      *secretsAdapter.Encryptor
 	runtimeCfg           config.RuntimeConfig
 	allowRawDockerHosts  bool
 	allowComposeTakeover bool
 	now                  func() time.Time
 }
+
+// ErrAdoptionSecretValues refuses a container whose environment carries
+// secret values inline. Adoption never copies a secret value: Bahia holds
+// none, and only a secret store administrator imports values into the
+// store (docs/architecture/secret-store.md). The error names the keys,
+// never the values.
+var ErrAdoptionSecretValues = errors.New("the container's environment carries secret values inline, which adoption does not import; move them out of the container (for example into mounted files), or import each into the secret store and deploy the service through Bahia instead of adopting it; list a key in non_secret_env_keys (bahia adopt import --non-secret-env KEY) if it is not a secret")
 
 // AdoptionServiceOption configures adoption runtime governance behavior.
 type AdoptionServiceOption func(*AdoptionService)
@@ -165,16 +168,6 @@ func WithAdoptionRuntimeConfig(runtimeCfg config.RuntimeConfig, allowRawDockerHo
 func WithAdoptionComposeTakeoverPolicy(allow bool) AdoptionServiceOption {
 	return func(s *AdoptionService) {
 		s.allowComposeTakeover = allow
-	}
-}
-
-// WithAdoptionSecrets wires imported sensitive environment values into Bahia's
-// secret value store. Secret values are never published; without a store and
-// an encryptor a container with sensitive environment values is refused.
-func WithAdoptionSecrets(repo repository.SecretRepository, encryptor *secretsAdapter.Encryptor) AdoptionServiceOption {
-	return func(s *AdoptionService) {
-		s.secrets = repo
-		s.secretEncryptor = encryptor
 	}
 }
 
@@ -260,6 +253,10 @@ type AdoptionImportRequest struct {
 	// minted per request, such as the observation, derive their ids from it,
 	// so re-processing the same request addresses the same coordinates.
 	RequestID string
+	// NonSecretEnvKeys are environment keys the operator declares are not
+	// secrets: they are kept on the adopted service instead of refusing the
+	// container.
+	NonSecretEnvKeys []string
 }
 
 // AdoptionSelection selects one container on a target host.
@@ -434,7 +431,7 @@ func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest)
 			if selected && selection.ServiceNameOverride != "" {
 				serviceName = normalizeResourceName(selection.ServiceNameOverride)
 			}
-			imported = append(imported, s.importCandidate(ctx, req.RequestID, orgID, preview.Target, container, serviceName))
+			imported = append(imported, s.importCandidate(ctx, req.RequestID, orgID, preview.Target, container, serviceName, req.NonSecretEnvKeys))
 		}
 	}
 	if !req.ImportAll {
@@ -659,19 +656,12 @@ type adoptionPlan struct {
 	createdService bool
 	build          domain.Build
 	artifact       domain.Artifact
-	secrets        []plannedSecret
 	obs            domain.RuntimeObservation
 	state          domain.EnvironmentServiceState
 	binding        domain.AdoptionBinding
 }
 
-type plannedSecret struct {
-	id    uuid.UUID
-	name  string
-	value string
-}
-
-func (s *AdoptionService) importCandidate(ctx context.Context, requestID string, orgID uuid.UUID, target AdoptionTarget, candidate AdoptionPreviewContainer, serviceName string) AdoptionImportResult {
+func (s *AdoptionService) importCandidate(ctx context.Context, requestID string, orgID uuid.UUID, target AdoptionTarget, candidate AdoptionPreviewContainer, serviceName string, nonSecretEnvKeys []string) AdoptionImportResult {
 	discovered := candidate.Discovered
 	result := AdoptionImportResult{
 		TargetName:              target.Name,
@@ -697,11 +687,11 @@ func (s *AdoptionService) importCandidate(ctx context.Context, requestID string,
 	if serviceName == "" {
 		return fail(errors.New("service name is required"))
 	}
-	classified := classifyDiscoveredSensitiveData(discovered)
+	classified := classifyDiscoveredSensitiveData(discovered, nonSecretEnvKeys...)
 	result.RedactedEnvironmentKeys = append([]string(nil), classified.SensitiveEnvironmentKeys...)
 	result.RedactedLabelKeys = append([]string(nil), classified.SensitiveLabelKeys...)
-	if len(classified.SensitiveEnvironment) > 0 && (s.secrets == nil || s.secretEncryptor == nil) {
-		return fail(errors.New("sensitive environment values require configured secret storage and encryption"))
+	if len(classified.SensitiveEnvironmentKeys) > 0 {
+		return fail(fmt.Errorf("%w: %s", ErrAdoptionSecretValues, strings.Join(classified.SensitiveEnvironmentKeys, ", ")))
 	}
 
 	s.mu.Lock()
@@ -775,9 +765,6 @@ func (s *AdoptionService) planCandidate(ctx context.Context, requestID string, o
 	}
 	if err := s.planArtifact(ctx, plan, now); err != nil {
 		return nil, err
-	}
-	for _, name := range sortedStringKeys(classified.SensitiveEnvironment) {
-		plan.secrets = append(plan.secrets, plannedSecret{id: adoptionEntityID("secret", plan.svc.ID.String(), plan.env.ID.String(), name), name: name, value: classified.SensitiveEnvironment[name]})
 	}
 
 	obs := observationFromDiscovered(target, plan.svc.ID, plan.env.ID, discovered)
@@ -1180,11 +1167,6 @@ func (s *AdoptionService) publishPlan(ctx context.Context, plan *adoptionPlan) (
 	if err := s.canonical.PublishArtifactRegistry(ctx, &plan.artifact); err != nil {
 		return adoptionStepArtifact, fmt.Errorf("publish adoption artifact: %w", err)
 	}
-	for _, secret := range plan.secrets {
-		if err := s.importSecret(ctx, plan, secret); err != nil {
-			return adoptionStepSecrets, err
-		}
-	}
 	if err := s.canonical.PublishRuntimeObservation(ctx, &plan.obs); err != nil {
 		return adoptionStepObservation, fmt.Errorf("publish runtime observation: %w", err)
 	}
@@ -1196,60 +1178,6 @@ func (s *AdoptionService) publishPlan(ctx context.Context, plan *adoptionPlan) (
 		return adoptionStepFinalize, fmt.Errorf("publish adoption binding: %w", err)
 	}
 	return adoptionStepComplete, nil
-}
-
-// importSecret stores one imported secret value, encrypted, in the secret
-// value store and then publishes its reference. The value store is the only
-// holder of the value; it is never published.
-func (s *AdoptionService) importSecret(ctx context.Context, plan *adoptionPlan, secret plannedSecret) error {
-	if s.secrets == nil || s.secretEncryptor == nil {
-		return fmt.Errorf("sensitive environment values require configured secret storage and encryption")
-	}
-	ciphertext, encErr := s.secretEncryptor.Encrypt(secret.value, domain.EncryptionAES256)
-	if encErr != nil {
-		return fmt.Errorf("encrypting imported secret %q: %w", secret.name, encErr)
-	}
-	envID := plan.env.ID
-	record := &domain.ServiceSecret{
-		ID:               secret.id,
-		ServiceID:        plan.svc.ID,
-		EnvironmentID:    &envID,
-		Name:             secret.name,
-		EncryptedValue:   ciphertext,
-		EncryptionMethod: domain.EncryptionAES256,
-		Version:          1,
-		CreatedBy:        "adoption",
-		CreatedAt:        plan.obs.ObservedAt,
-		UpdatedAt:        plan.obs.ObservedAt,
-	}
-	// The value is replaced atomically when a transaction executor exists,
-	// so a failure between the delete and the create cannot lose a working
-	// secret; the deterministic id makes a resumed replacement idempotent.
-	replace := func(secrets repository.SecretRepository) error {
-		if secrets == nil {
-			secrets = s.secrets
-		}
-		if err := secrets.DeleteByName(ctx, plan.svc.ID, &envID, secret.name); err != nil {
-			return fmt.Errorf("replacing imported secret %q: %w", secret.name, err)
-		}
-		if err := secrets.Create(ctx, record); err != nil {
-			return fmt.Errorf("creating imported secret %q: %w", secret.name, err)
-		}
-		return nil
-	}
-	var err error
-	if s.index.Tx != nil {
-		err = s.index.Tx.WithinTx(ctx, func(repos repository.TxRepos) error { return replace(repos.Secrets) })
-	} else {
-		err = replace(nil)
-	}
-	if err != nil {
-		return err
-	}
-	if err := s.canonical.PublishSecretRef(ctx, plan.orgID, record.ToRef()); err != nil {
-		return fmt.Errorf("publish imported secret reference %q: %w", secret.name, err)
-	}
-	return nil
 }
 
 // writeIndex mirrors a published plan into the optional SQL index, in one
@@ -1883,40 +1811,100 @@ func adoptedRuntimeFingerprintsByKind(target AdoptionTarget, discovered runtime.
 
 type sensitiveDataClassification struct {
 	SafeEnvironment          map[string]string
-	SensitiveEnvironment     map[string]string
 	SensitiveEnvironmentKeys []string
 	SafeLabels               map[string]string
-	SensitiveLabels          map[string]string
 	SensitiveLabelKeys       []string
 }
 
-func classifyDiscoveredSensitiveData(discovered runtime.DiscoveredContainer) sensitiveDataClassification {
+// classifyDiscoveredSensitiveData splits a container's environment and
+// labels into what adoption may keep and the keys of what it must not
+// (secrets). nonSecretEnvKeys are environment keys the operator declared are
+// not secrets. Values are inspected but never logged or returned.
+func classifyDiscoveredSensitiveData(discovered runtime.DiscoveredContainer, nonSecretEnvKeys ...string) sensitiveDataClassification {
+	exempt := make(map[string]struct{}, len(nonSecretEnvKeys))
+	for _, key := range nonSecretEnvKeys {
+		exempt[strings.TrimSpace(key)] = struct{}{}
+	}
+	isSecretEnv := func(key, value string) bool {
+		if _, ok := exempt[strings.TrimSpace(key)]; ok {
+			return false
+		}
+		return isSensitiveEnvironmentEntry(key, value)
+	}
+	isSecretLabel := func(key, _ string) bool { return isSensitiveLabelKey(key) }
 	return sensitiveDataClassification{
-		SafeEnvironment:          safeEntries(discovered.Environment, isSensitiveEnvironmentKey),
-		SensitiveEnvironment:     sensitiveEntries(discovered.Environment, isSensitiveEnvironmentKey),
-		SensitiveEnvironmentKeys: sensitiveKeys(discovered.Environment, isSensitiveEnvironmentKey),
-		SafeLabels:               safeEntries(discovered.Labels, isSensitiveLabelKey),
-		SensitiveLabels:          sensitiveEntries(discovered.Labels, isSensitiveLabelKey),
-		SensitiveLabelKeys:       sensitiveKeys(discovered.Labels, isSensitiveLabelKey),
+		SafeEnvironment:          safeEntries(discovered.Environment, isSecretEnv),
+		SensitiveEnvironmentKeys: sensitiveKeys(discovered.Environment, isSecretEnv),
+		SafeLabels:               safeEntries(discovered.Labels, isSecretLabel),
+		SensitiveLabelKeys:       sensitiveKeys(discovered.Labels, isSecretLabel),
 	}
 }
 
-func isSensitiveEnvironmentKey(key string) bool {
-	k := strings.ToUpper(strings.TrimSpace(key))
-	if k == "" {
+// secretEnvTokens are whole key tokens (split on _ - .) that name a secret.
+var secretEnvTokens = map[string]struct{}{
+	"PASSWORD": {}, "PASSWORDS": {}, "PASSWD": {}, "PWD": {}, "PASSPHRASE": {},
+	"SECRET": {}, "SECRETS": {}, "TOKEN": {}, "TOKENS": {}, "CREDENTIAL": {}, "CREDENTIALS": {},
+	"NSEC": {}, "BUNKER": {}, "JWT": {}, "MACAROON": {},
+}
+
+// secretKeyQualifiers precede a trailing KEY token in a secret key name
+// (API_KEY, AWS_ACCESS_KEY, JWT_SIGNING_KEY, ...).
+var secretKeyQualifiers = map[string]struct{}{
+	"API": {}, "APIKEY": {}, "ACCESS": {}, "PRIVATE": {}, "SIGNING": {}, "ENCRYPTION": {}, "MASTER": {}, "SECRET": {}, "LICENSE": {}, "HMAC": {},
+}
+
+// connectionKeyTokens end a key whose value is a connection string; such a
+// value is a secret when it carries a password.
+var connectionKeyTokens = map[string]struct{}{"URL": {}, "URI": {}, "DSN": {}, "STRING": {}}
+
+// isSensitiveEnvironmentEntry recognises well-known secret names by whole
+// tokens, so COMPASS_URL, OAUTH_ISSUER, SESSION_TIMEOUT or SORT_KEY are not
+// secrets while DB_PASSWORD, GITHUB_TOKEN, STRIPE_API_KEY or
+// AWS_SECRET_ACCESS_KEY are; a connection string (DATABASE_URL, *_DSN, ...)
+// is a secret when its value carries a password.
+func isSensitiveEnvironmentEntry(key, value string) bool {
+	tokens := strings.FieldsFunc(strings.ToUpper(strings.TrimSpace(key)), func(r rune) bool {
+		return r == '_' || r == '-' || r == '.'
+	})
+	if len(tokens) == 0 {
 		return false
 	}
-	for _, token := range []string{"PASSWORD", "PASSWD", "PASS", "TOKEN", "SECRET", "PRIVATE", "CREDENTIAL", "API_KEY", "ACCESS_KEY", "AUTH", "BEARER", "COOKIE", "SESSION", "JWT", "MACAROON", "BUNKER", "NSEC", "DATABASE_URL", "DB_URL", "REDIS_URL", "POSTGRES_DSN", "POSTGRES_URL", "MYSQL_DSN", "MYSQL_URL", "MONGODB_URI", "MONGO_URI", "AMQP_URL", "RABBITMQ_URL", "CONNECTION_STRING", "DSN"} {
-		if strings.Contains(k, token) {
+	for _, token := range tokens {
+		if _, ok := secretEnvTokens[token]; ok {
 			return true
 		}
 	}
-	for _, prefix := range []string{"AWS_", "GCP_", "GOOGLE_", "AZURE_", "DOCKER_AUTH", "NPM_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "SLACK_", "STRIPE_", "SENTRY_DSN"} {
-		if strings.HasPrefix(k, prefix) {
+	last := tokens[len(tokens)-1]
+	if (last == "KEY" || last == "KEYS") && len(tokens) > 1 {
+		if _, ok := secretKeyQualifiers[tokens[len(tokens)-2]]; ok {
 			return true
 		}
 	}
-	return strings.HasSuffix(k, "_KEY") || strings.HasSuffix(k, "_CERT") || strings.HasSuffix(k, "_CERTIFICATE")
+	if last == "APIKEY" {
+		return true
+	}
+	if _, ok := connectionKeyTokens[last]; ok || strings.Join(tokens, "_") == "CONNECTION_STRING" {
+		return connectionValueHasPassword(value)
+	}
+	return false
+}
+
+// connectionValueHasPassword reports a password in a connection string:
+// URL userinfo (scheme://user:password@host) or a password/pwd parameter.
+func connectionValueHasPassword(value string) bool {
+	value = strings.TrimSpace(value)
+	if parsed, err := url.Parse(value); err == nil && parsed.User != nil {
+		if password, set := parsed.User.Password(); set && password != "" {
+			return true
+		}
+	}
+	lower := strings.ToLower(value)
+	for _, marker := range []string{"password=", "pwd=", "passwd=", "secret=", "token="} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func isSensitiveLabelKey(key string) bool {
@@ -1932,13 +1920,13 @@ func isSensitiveLabelKey(key string) bool {
 	return false
 }
 
-func safeEntries(in map[string]string, isSensitive func(string) bool) map[string]string {
+func safeEntries(in map[string]string, isSensitive func(key, value string) bool) map[string]string {
 	if len(in) == 0 {
 		return nil
 	}
 	out := map[string]string{}
 	for k, v := range in {
-		if !isSensitive(k) {
+		if !isSensitive(k, v) {
 			out[k] = v
 		}
 	}
@@ -1948,40 +1936,15 @@ func safeEntries(in map[string]string, isSensitive func(string) bool) map[string
 	return out
 }
 
-func sensitiveEntries(in map[string]string, isSensitive func(string) bool) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := map[string]string{}
-	for k, v := range in {
-		if isSensitive(k) {
-			out[k] = v
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func sensitiveKeys(in map[string]string, isSensitive func(string) bool) []string {
+func sensitiveKeys(in map[string]string, isSensitive func(key, value string) bool) []string {
 	if len(in) == 0 {
 		return nil
 	}
 	var keys []string
-	for k := range in {
-		if isSensitive(k) {
+	for k, v := range in {
+		if isSensitive(k, v) {
 			keys = append(keys, k)
 		}
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedStringKeys(in map[string]string) []string {
-	keys := make([]string, 0, len(in))
-	for k := range in {
-		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	return keys

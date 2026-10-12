@@ -34,6 +34,7 @@ type legacyMCPReadDeps struct {
 	Workers          repository.WorkerRepository
 	Payments         *service.PaymentService
 	DNSEndpoints     legacyDNSEndpointLister
+	Secrets          repository.SecretRepository
 }
 
 var legacyMCPDeps sync.Map

@@ -12,10 +12,10 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
-	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
@@ -48,19 +48,6 @@ func (r *fakeEncryptedSecretRepo) GetByID(_ context.Context, id uuid.UUID) (*dom
 		return &copy, nil
 	}
 	return nil, nil
-}
-func (r *fakeEncryptedSecretRepo) GetCurrentVersion(_ context.Context, secretID uuid.UUID) (*domain.SecretVersion, error) {
-	if s, ok := r.records[secretID]; ok {
-		return &domain.SecretVersion{ID: uuid.New(), SecretID: secretID, Version: s.Version, EncryptedValue: s.EncryptedValue, EncryptionMethod: s.EncryptionMethod, CreatedBy: s.CreatedBy, CreatedAt: s.UpdatedAt}, nil
-	}
-	return nil, nil
-}
-func (r *fakeEncryptedSecretRepo) ListVersions(ctx context.Context, secretID uuid.UUID) ([]domain.SecretVersion, error) {
-	version, err := r.GetCurrentVersion(ctx, secretID)
-	if err != nil || version == nil {
-		return nil, err
-	}
-	return []domain.SecretVersion{*version}, nil
 }
 func (r *fakeEncryptedSecretRepo) ListByService(_ context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error) {
 	out := []domain.ServiceSecret{}
@@ -478,107 +465,201 @@ func TestEncryptedRouteHandlers_GetRunLogsSuccessAndInProgressError(t *testing.T
 	}
 }
 
-func TestEncryptedRouteHandlers_GetRunLogsRedactsReferencedSecretsBeforeTailing(t *testing.T) {
-	runID := uuid.New()
-	serviceID := uuid.New()
-	intentID := uuid.New()
-	secretID := uuid.New()
+// runLogSecrets is a store-backed secret (canonical record revision 1), its
+// record and the resolver run-log redaction uses.
+func runLogSecrets(serviceID, secretID uuid.UUID, value string, updatedAt time.Time) (*memCanonicalSecrets, *resolvingSecretStore, *secretstore.Resolver) {
+	orgID := uuid.New()
+	credRef := domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_" + strings.Repeat("ab", 32), Version: 2}
+	canonical := &memCanonicalSecrets{records: map[uuid.UUID]domain.SecretRef{
+		secretID: {ID: secretID, ServiceID: serviceID, Name: "DATABASE_PASSWORD", Version: 1, CredentialRef: &credRef, UpdatedAt: updatedAt},
+	}, serviceOrg: map[uuid.UUID]string{serviceID: orgID.String()}}
+	store := &resolvingSecretStore{value: value, lease: time.Minute}
+	resolver := secretstore.NewResolver(store)
+	resolver.UseRecords(canonical)
+	return canonical, store, resolver
+}
+
+// directRun is a direct runtime run that injected secretID at record
+// revision recordVersion.
+func directRun(runID, intentID, secretID uuid.UUID, recordVersion int, createdAt time.Time) *domain.DeploymentRun {
+	return &domain.DeploymentRun{ID: runID, DeploymentIntentID: intentID, Status: domain.RunStatusSucceeded, LoomJobID: directRuntimeRunJobID, CreatedAt: createdAt,
+		ApplyMetadata: map[string]any{domain.RunSecretAccessesKey: domain.EncodeRunSecretAccesses([]domain.RunSecretAccess{{SecretID: secretID, RecordVersion: recordVersion}})}}
+}
+
+type recordingAuditor struct {
+	audits []domain.SecretAccessAudit
+	err    error
+}
+
+func (a *recordingAuditor) RecordSecretAccessAudit(_ context.Context, audit *domain.SecretAccessAudit) error {
+	a.audits = append(a.audits, *audit)
+	return a.err
+}
+
+// A non-managed direct deploy injects every effective secret without
+// desired-state references: redaction covers what the run recorded it
+// injected, before tailing.
+func TestEncryptedRouteHandlers_GetRunLogsRedactsInjectedSecretsBeforeTailing(t *testing.T) {
+	runID, serviceID, intentID, secretID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	servicesRepo, rbac := encryptedAuthDeps(t, serviceID, uuid.New(), domain.RoleViewer)
-	encryptor, err := secrets.NewEncryptor(testServiceKey)
-	if err != nil {
-		t.Fatalf("NewEncryptor: %v", err)
-	}
 	secretValue := "pa\"ssword"
-	ciphertext, err := encryptor.Encrypt(secretValue, domain.EncryptionAES256)
-	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
-	}
-	secretRepo := newFakeEncryptedSecretRepo()
-	secretRepo.records[secretID] = &domain.ServiceSecret{
-		ID: secretID, ServiceID: serviceID, Name: "DATABASE_PASSWORD",
-		EncryptedValue: ciphertext, EncryptionMethod: domain.EncryptionAES256, Version: 1,
-	}
-	intent := &domain.DeploymentIntent{
-		ID:        intentID,
-		ServiceID: serviceID,
-		DesiredState: &domain.DesiredServiceSpec{SecretRefs: []domain.DesiredSecretRef{{
-			EnvVar: "DATABASE_PASSWORD", Name: "DATABASE_PASSWORD", SecretID: secretID,
-		}}},
-	}
-	run := &domain.DeploymentRun{ID: runID, DeploymentIntentID: intentID, Status: domain.RunStatusSucceeded}
+	canonical, store, resolver := runLogSecrets(serviceID, secretID, secretValue, time.Now())
+	intent := &domain.DeploymentIntent{ID: intentID, ServiceID: serviceID}
+	run := directRun(runID, intentID, secretID, 1, time.Now())
+	audits := &recordingAuditor{err: errors.New("audit table unreachable")}
 	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{
-		Secrets:   secretRepo,
-		Encryptor: encryptor,
-		Runs:      &fakeEncryptedRunRepo{run: run},
+		SecretRecords: canonical, SecretValues: resolver, SecretAudit: audits,
+		Runs: &fakeEncryptedRunRepo{run: run},
 		RunLogs: fakeEncryptedRunLogs{logs: &adapterruntime.RunLogs{
 			RunID:  runID,
 			Stdout: "boot\nDATABASE_PASSWORD=" + secretValue + "\nready",
 			Stderr: "json=pa\\\"ssword",
 		}},
-		Services: servicesRepo,
-		Intents:  &fakeEncryptedIntentRepo{intent: intent},
-		RBAC:     rbac,
-		Logger:   zap.NewNop(),
+		Services: servicesRepo, Intents: &fakeEncryptedIntentRepo{intent: intent}, RBAC: rbac, Logger: zap.NewNop(),
 	})
 	transport, publisher := encryptedRouteTransport(t, h)
-	transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodDeploymentRunLogsGet, map[string]any{
-		"run_id": runID.String(), "tail": 2, "stream": "merged",
-	}))
-	payload := routeResultPayload(t, publisher.events[len(publisher.events)-1])
-	logs := payload["logs"].(map[string]any)
+	read := func() map[string]any {
+		transport.HandleEvent(context.Background(), makeRouteRequest(t, ContextVMMethodDeploymentRunLogsGet, map[string]any{
+			"run_id": runID.String(), "tail": 2, "stream": "merged", "request": uuid.NewString(),
+		}))
+		return routeResultPayload(t, publisher.events[len(publisher.events)-1])["logs"].(map[string]any)
+	}
+	logs := read()
 	serialized, _ := json.Marshal(logs)
 	if strings.Contains(string(serialized), secretValue) || strings.Contains(string(serialized), "pa\\\\\\\"ssword") {
-		t.Fatalf("run logs leaked referenced secret: %s", serialized)
+		t.Fatalf("run logs leaked an injected secret: %s", serialized)
 	}
 	if stdout, _ := logs["stdout"].(string); stdout != "DATABASE_PASSWORD=[REDACTED]\nready" {
 		t.Fatalf("stdout was not redacted before tailing: %q", stdout)
 	}
+	// The resolve was audited; an audit failure does not withhold the logs.
+	if len(audits.audits) != 1 || audits.audits[0].RequestID != runID.String() || audits.audits[0].Actor == "" || audits.audits[0].Version != 2 {
+		t.Fatalf("audit rows = %+v", audits.audits)
+	}
+	// A second read within the lease is served from the cache.
+	read()
+	if len(store.refs) != 1 {
+		t.Fatalf("store resolved %d times for two reads of one run", len(store.refs))
+	}
 }
 
-func TestEncryptedRouteHandlersRedactionReadsV2AndRefusesLegacy(t *testing.T) {
+// Redaction decides by canonical record revision, never by clock: a
+// re-point within the same second as the run is caught, and clock skew
+// between the run and the record does not withhold a run whose secrets are
+// unchanged. Logs it cannot redact are withheld, never returned unredacted.
+func TestEncryptedRouteHandlersRedactionWithholdsLogsItCannotRedact(t *testing.T) {
 	ctx := context.Background()
-	key, err := secrets.NewRandomDataKey()
-	if err != nil {
-		t.Fatal(err)
+	serviceID, secretID := uuid.New(), uuid.New()
+	same := time.Now().Truncate(time.Second)
+	newHandler := func(canonical *memCanonicalSecrets, resolver *secretstore.Resolver) *EncryptedRouteHandlers {
+		return NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{SecretRecords: canonical, SecretValues: resolver})
 	}
-	id := uuid.New()
-	ciphertext, err := key.Seal(id, 2, []byte("private-token"))
-	if err != nil {
-		t.Fatal(err)
+	redact := func(h *EncryptedRouteHandlers, run *domain.DeploymentRun, intent *domain.DeploymentIntent) (string, error) {
+		logs := &adapterruntime.RunLogs{Stdout: "password=s3cret"}
+		err := h.redactRunLogSecrets(ctx, "reader", run, intent, runLogsText{logs})
+		return logs.Stdout, err
 	}
-	repo := newFakeEncryptedSecretRepo()
-	repo.records[id] = &domain.ServiceSecret{ID: id, Version: 2, EncryptedValue: ciphertext, EncryptionMethod: domain.EncryptionAES256V2}
-	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Secrets: repo, Encryptor: key})
-	intent := &domain.DeploymentIntent{DesiredState: &domain.DesiredServiceSpec{SecretRefs: []domain.DesiredSecretRef{{SecretID: id}}}}
-	logs := &adapterruntime.RunLogs{Stdout: "token=private-token"}
-	if err := h.redactRunLogSecrets(ctx, intent, logs); err != nil {
-		t.Fatal(err)
-	}
-	if logs.Stdout != "token=[REDACTED]" {
-		t.Fatalf("v2 secret was not redacted: %q", logs.Stdout)
-	}
-	repo.records[id].EncryptionMethod = domain.EncryptionAES256
-	logs.Stdout = "token=private-token"
-	if err := h.redactRunLogSecrets(ctx, intent, logs); err == nil {
-		t.Fatal("v2-only reader accepted legacy history")
-	}
+
+	t.Run("clock skew with an unchanged secret", func(t *testing.T) {
+		canonical, _, resolver := runLogSecrets(serviceID, secretID, "s3cret", same.Add(time.Hour))
+		out, err := redact(newHandler(canonical, resolver), directRun(uuid.New(), uuid.New(), secretID, 1, same.Add(-time.Hour)), nil)
+		if err != nil || out != "password=[REDACTED]" {
+			t.Fatalf("redaction = %q, %v", out, err)
+		}
+	})
+	t.Run("re-pointed within the same second", func(t *testing.T) {
+		canonical, _, resolver := runLogSecrets(serviceID, secretID, "s3cret-v2", same)
+		record := canonical.records[secretID]
+		record.Version = 2
+		canonical.records[secretID] = record
+		run := directRun(uuid.New(), uuid.New(), secretID, 1, same.Add(500*time.Millisecond))
+		if _, err := redact(newHandler(canonical, resolver), run, nil); !errors.Is(err, ErrRunLogsUnredactable) {
+			t.Fatalf("same-second re-point = %v", err)
+		}
+	})
+	t.Run("legacy", func(t *testing.T) {
+		canonical, _, resolver := runLogSecrets(serviceID, secretID, "s3cret", same)
+		record := canonical.records[secretID]
+		record.CredentialRef, record.EncryptionMethod = nil, domain.EncryptionMethod("aes256gcm")
+		canonical.records[secretID] = record
+		if _, err := redact(newHandler(canonical, resolver), directRun(uuid.New(), uuid.New(), secretID, 1, same), nil); !errors.Is(err, domain.ErrLegacySecretValue) {
+			t.Fatalf("legacy secret = %v", err)
+		}
+	})
+	t.Run("missing record", func(t *testing.T) {
+		canonical, _, resolver := runLogSecrets(serviceID, secretID, "s3cret", same)
+		delete(canonical.records, secretID)
+		if _, err := redact(newHandler(canonical, resolver), directRun(uuid.New(), uuid.New(), secretID, 1, same), nil); !errors.Is(err, secretstore.ErrNoRecord) {
+			t.Fatalf("missing record = %v", err)
+		}
+	})
+	t.Run("store unavailable", func(t *testing.T) {
+		canonical, store, resolver := runLogSecrets(serviceID, secretID, "s3cret", same)
+		store.err = secretstore.ErrUnavailable
+		if _, err := redact(newHandler(canonical, resolver), directRun(uuid.New(), uuid.New(), secretID, 1, same), nil); !errors.Is(err, secretstore.ErrUnavailable) {
+			t.Fatalf("store unavailable = %v", err)
+		}
+	})
+	t.Run("runs without a record", func(t *testing.T) {
+		canonical, _, resolver := runLogSecrets(serviceID, secretID, "s3cret", same)
+		h := newHandler(canonical, resolver)
+		direct := &domain.DeploymentRun{ID: uuid.New(), LoomJobID: directRuntimeRunJobID}
+		if _, err := redact(h, direct, nil); !errors.Is(err, ErrRunLogsUnredactable) {
+			t.Fatalf("unrecorded direct run = %v", err)
+		}
+		managed := &domain.DeploymentIntent{DesiredState: &domain.DesiredServiceSpec{SecretRefs: []domain.DesiredSecretRef{{SecretID: secretID}}}}
+		if _, err := redact(h, &domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-job"}, managed); !errors.Is(err, ErrRunLogsUnredactable) {
+			t.Fatalf("unrecorded run referencing secrets = %v", err)
+		}
+		// Loom deploy jobs carry no secret from Bahia.
+		if out, err := redact(h, &domain.DeploymentRun{ID: uuid.New(), LoomJobID: "loom-job"}, &domain.DeploymentIntent{}); err != nil || out != "password=s3cret" {
+			t.Fatalf("Loom run without secret references = %q, %v", out, err)
+		}
+	})
+	t.Run("per-requester rate limit", func(t *testing.T) {
+		canonical, _, resolver := runLogSecrets(serviceID, secretID, "s3cret", same)
+		h := newHandler(canonical, resolver)
+		var limited error
+		for i := 0; i < runLogResolveBurst+1; i++ {
+			// Distinct runs: each misses the cache.
+			_, limited = redact(h, directRun(uuid.New(), uuid.New(), secretID, 1, same), nil)
+		}
+		if !errors.Is(limited, ErrRunLogRedactionRateLimited) {
+			t.Fatalf("burst+1 uncached reads = %v", limited)
+		}
+		logs := &adapterruntime.RunLogs{Stdout: "password=s3cret"}
+		if err := h.redactRunLogSecrets(ctx, "another-reader", directRun(uuid.New(), uuid.New(), secretID, 1, same), nil, runLogsText{logs}); err != nil {
+			t.Fatalf("another requester is not limited: %v", err)
+		}
+	})
 }
 
-// Redaction cannot know a value held by the secret store: run logs of an
-// intent that references a store-backed secret are refused, not returned
-// unredacted.
-func TestEncryptedRouteHandlersRedactionRefusesStoreBackedSecret(t *testing.T) {
-	key, err := secrets.NewRandomDataKey()
-	if err != nil {
-		t.Fatal(err)
+// Cached values are zeroized when their lease ends and on eviction.
+func TestRunLogSecretCacheZeroizesOnExpiryAndEviction(t *testing.T) {
+	cache := newRunLogSecretCache()
+	now := time.Now()
+	value := func(lease time.Duration) []secretstore.Resolved {
+		return []secretstore.Resolved{{Value: secretstore.NewValue([]byte("v"), now.Add(lease))}}
 	}
-	id := uuid.New()
-	repo := newFakeEncryptedSecretRepo()
-	repo.records[id] = &domain.ServiceSecret{ID: id, Name: "DB_PASSWORD", Version: 3, EncryptionMethod: domain.EncryptionStoreRef}
-	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{Secrets: repo, Encryptor: key})
-	intent := &domain.DeploymentIntent{DesiredState: &domain.DesiredServiceSpec{SecretRefs: []domain.DesiredSecretRef{{SecretID: id}}}}
-	logs := &adapterruntime.RunLogs{Stdout: "password=whatever-signet-holds"}
-	if err := h.redactRunLogSecrets(context.Background(), intent, logs); !errors.Is(err, domain.ErrSecretInStore) {
-		t.Fatalf("redaction with a store-backed secret = %v", err)
+	expired := value(-time.Second)
+	cache.put("expired", expired, now)
+	if expired[0].Value.Bytes() != nil || cache.values("expired", now) != nil {
+		t.Fatal("a value past its lease was cached")
+	}
+	first := value(time.Minute)
+	cache.put("first", first, now)
+	if got := cache.values("first", now); len(got) != 1 || got[0] != "v" {
+		t.Fatalf("cached values = %v", got)
+	}
+	if cache.values("first", now.Add(2*time.Minute)) != nil || first[0].Value.Bytes() != nil {
+		t.Fatal("a value read after its lease was served or not zeroized")
+	}
+	held := value(time.Minute)
+	cache.put("held", held, now)
+	for i := 0; i < runLogCacheCap; i++ {
+		cache.put(uuid.NewString(), value(time.Minute), now)
+	}
+	if held[0].Value.Bytes() != nil {
+		t.Fatal("an evicted value was not zeroized")
 	}
 }

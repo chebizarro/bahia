@@ -6,11 +6,12 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/stretchr/testify/require"
 )
 
-// repository credentials are secret values held only in the
-// PostgreSQL secret store, so a daemon without it fails an initiation closed
+// repository credentials are secret values held only in the secret store,
+// so a daemon without one fails an initiation closed
 // at credential resolution, with no mirror call and no publication, and
 // leaves the journal record claimed. Nothing else in initiation needs the
 // store: the same request completes once credentials resolve again.
@@ -21,11 +22,11 @@ func TestInitiationWithoutSecretStoreFailsClosedAtCredentialResolutionOnly(t *te
 
 	initiator, publisher, resolver, credentialRef, _ := newConformanceInitiator(t, server)
 	// The daemon has no secret store.
-	initiator.secrets = SecretStoreUnavailable{}
+	initiator.secrets = secretstore.NewTextResolver(secretstore.NewResolver(nil), nil, nil)
 	req := arcanaStartRequest(credentialRef)
 
 	_, err := initiator.StartHiveCIBuild(context.Background(), req)
-	require.True(t, errors.Is(err, ErrSecretStoreUnavailable), "error = %v", err)
+	require.True(t, errors.Is(err, secretstore.ErrNotConfigured), "error = %v", err)
 	require.Zero(t, gitea.migrateCalls, "no mirror is created before credentials resolve")
 	require.Empty(t, publisher.events, "nothing is published before credentials resolve")
 	record, err := initiator.store.Get(context.Background(), req.SourceEventID)

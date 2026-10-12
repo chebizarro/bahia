@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 )
@@ -23,19 +24,18 @@ func TestPgSecretStoreMarkerScrubsVersionsAndKeepsAudit(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO services (id, name, artifact_repo) VALUES ($1, $2, 'registry.example/marker')`, serviceID, "marker-"+serviceID.String()[:8]); err != nil {
 		t.Fatal(err)
 	}
-	secret := &domain.ServiceSecret{ID: uuid.New(), ServiceID: serviceID, Name: "DB_PASSWORD", EncryptedValue: []byte("sealed-v1"), EncryptionMethod: domain.EncryptionAES256, CreatedBy: "t"}
+	secret := &domain.ServiceSecret{ID: uuid.New(), ServiceID: serviceID, Name: "DB_PASSWORD", EncryptedValue: []byte("sealed-v1"), EncryptionMethod: domain.EncryptionMethod("aes256gcm"), CreatedBy: "t"}
 	if err := repo.Create(ctx, secret); err != nil {
 		t.Fatal(err)
 	}
-	secret.EncryptedValue, secret.Version = []byte("sealed-v2"), 1
-	if err := repo.Update(ctx, secret); err != nil {
+	// A second legacy version, and an access audit row of it (the era when
+	// Bahia read sealed values).
+	var currentID uuid.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO secret_versions (secret_id, version, encrypted_value, encryption_method, created_by)
+		VALUES ($1, 2, 'sealed-v2', 'aes256gcm', 't') RETURNING id`, secret.ID).Scan(&currentID); err != nil {
 		t.Fatal(err)
 	}
-	current, err := repo.GetCurrentVersion(ctx, secret.ID)
-	if err != nil || current == nil {
-		t.Fatalf("current version: %v", err)
-	}
-	if err := repo.RecordSecretAccessAudit(ctx, &domain.SecretAccessAudit{SecretID: secret.ID, VersionID: current.ID, Version: current.Version, ServiceID: serviceID,
+	if err := repo.RecordSecretAccessAudit(ctx, &domain.SecretAccessAudit{SecretID: secret.ID, VersionID: currentID, Version: 2, ServiceID: serviceID,
 		Operation: domain.SecretAccessOperationResolve, Outcome: domain.SecretAccessOutcomeSuccess, AccessedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
@@ -48,18 +48,18 @@ func TestPgSecretStoreMarkerScrubsVersionsAndKeepsAudit(t *testing.T) {
 	if err != nil || row == nil || row.EncryptionMethod != domain.EncryptionStoreRef || len(row.EncryptedValue) != 0 || row.Version != 3 {
 		t.Fatalf("marker row = %+v, %v", row, err)
 	}
-	versions, err := repo.ListVersions(ctx, secret.ID)
-	if err != nil || len(versions) != 2 {
-		t.Fatalf("versions = %d, %v", len(versions), err)
+	if versions, ciphertext := secretVersionRows(t, pool, secret.ID); versions != 2 || ciphertext != 0 {
+		t.Fatalf("versions = %d, %d still holding ciphertext", versions, ciphertext)
 	}
-	for _, v := range versions {
-		if len(v.EncryptedValue) != 0 || v.EncryptionMethod != domain.EncryptionStoreRef {
-			t.Fatalf("version %d still holds ciphertext (%s)", v.Version, v.EncryptionMethod)
-		}
+	// A store-backed resolve has no version row: its audit names none
+	// (migration 000082).
+	if err := repo.RecordSecretAccessAudit(ctx, &domain.SecretAccessAudit{SecretID: secret.ID, Version: 3, ServiceID: serviceID,
+		Operation: domain.SecretAccessOperationResolve, Outcome: domain.SecretAccessOutcomeSuccess, AccessedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("store-backed access audit: %v", err)
 	}
-	var audits int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM secret_access_audit WHERE secret_id = $1`, secret.ID).Scan(&audits); err != nil || audits != 1 {
-		t.Fatalf("audit rows = %d, %v", audits, err)
+	var audits, unversioned int
+	if err := pool.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE secret_version_id IS NULL) FROM secret_access_audit WHERE secret_id = $1`, secret.ID).Scan(&audits, &unversioned); err != nil || audits != 2 || unversioned != 1 {
+		t.Fatalf("audit rows = %d (%d unversioned), %v", audits, unversioned, err)
 	}
 	// Idempotent, and a new store-backed id gets a marker without versions.
 	if err := repo.MarkStoreBacked(ctx, ref); err != nil {
@@ -100,7 +100,7 @@ func TestPgSecretStoreMarkerRefusesAndBlocksNameCollision(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO services (id, name, artifact_repo) VALUES ($1, $2, 'registry.example/collide')`, serviceID, "collide-"+serviceID.String()[:8]); err != nil {
 		t.Fatal(err)
 	}
-	legacy := &domain.ServiceSecret{ID: uuid.New(), ServiceID: serviceID, Name: "DB_PASSWORD", EncryptedValue: []byte("sealed"), EncryptionMethod: domain.EncryptionAES256, CreatedBy: "t"}
+	legacy := &domain.ServiceSecret{ID: uuid.New(), ServiceID: serviceID, Name: "DB_PASSWORD", EncryptedValue: []byte("sealed"), EncryptionMethod: domain.EncryptionMethod("aes256gcm"), CreatedBy: "t"}
 	if err := repo.Create(ctx, legacy); err != nil {
 		t.Fatal(err)
 	}
@@ -123,9 +123,8 @@ func TestPgSecretStoreMarkerRefusesAndBlocksNameCollision(t *testing.T) {
 	if err != nil || len(effective) != 1 || effective[0].EncryptionMethod != domain.EncryptionStoreRef || len(effective[0].EncryptedValue) != 0 {
 		t.Fatalf("effective after blocking = %+v, %v", effective, err)
 	}
-	versions, err := repo.ListVersions(ctx, legacy.ID)
-	if err != nil || len(versions) != 1 || len(versions[0].EncryptedValue) != 0 {
-		t.Fatalf("blocked row's versions still hold ciphertext: %+v, %v", versions, err)
+	if versions, ciphertext := secretVersionRows(t, pool, legacy.ID); versions != 1 || ciphertext != 0 {
+		t.Fatalf("blocked row's versions: %d, %d still holding ciphertext", versions, ciphertext)
 	}
 
 	// Once the other secret is deleted the store-backed secret is indexed.
@@ -135,4 +134,16 @@ func TestPgSecretStoreMarkerRefusesAndBlocksNameCollision(t *testing.T) {
 	if err := repo.MarkStoreBacked(ctx, stored); err != nil {
 		t.Fatalf("mark after the collision is resolved: %v", err)
 	}
+}
+
+// secretVersionRows counts a secret's retained version rows and those still
+// holding ciphertext.
+func secretVersionRows(t *testing.T, pool interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, id uuid.UUID) (versions, ciphertext int) {
+	t.Helper()
+	if err := pool.QueryRow(context.Background(), `SELECT count(*), count(*) FILTER (WHERE length(encrypted_value) > 0 OR encryption_method <> 'store-ref') FROM secret_versions WHERE secret_id = $1`, id).Scan(&versions, &ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	return versions, ciphertext
 }

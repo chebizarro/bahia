@@ -31,6 +31,10 @@ fake a key. Data migration belongs to bahia-cd0wr.4.x.
 `internal/archtest/service_key_reads_test.go` fails on any non-test read of
 `config.NostrConfig.PrivateKey` outside the seam and an exact allowlist, and
 on allowlist entries that no longer match a read.
+`internal/archtest/service_key_derivations_test.go` does the same for every
+call of `nostrutil.RequireServiceKeyMaterial` (today the legacy O1 and
+state_hash rows below). Secret values never derive from the service key;
+they live in the [secret store](secret-store.md).
 
 ## Classification
 
@@ -54,7 +58,6 @@ separate identity that keeps a local key by design.
 | `internal/adapters/nostr/relayadmin/client.go:332` NIP-86 admin | a (admin identity) | `Config.Signer`; app builds it from the resolved admin secret |
 | `internal/adapters/blossom` list/upload auth | a (Blossom identity) | `Config.Signer`; app builds it from `blossom.private_key` |
 | `pkg/discovery/resolver.go:112`, `pkg/client/intent_publisher.go:105` | a | `WithAuthSigner` |
-| `internal/adapters/secrets/nip44.go:38` secret store HKDF AES | b (4.7) | `NewServiceEncryptor(keyer)`; every op returns the sentinel without material |
 | `internal/app/service_keyer.go:41` legacy O1 org-state key | b | blocked decryptor returns the sentinel |
 | `internal/adapters/nostr/confidential_dedupe.go:51` state_hash HMAC | b | `publishCanonicalFirst` returns the sentinel |
 | `internal/app/app.go:4979` assistant transcript key, `assistant_wrapped_keys.go:68` | b (4.8) | wraps the sentinel; signature fixed by the factory slice |

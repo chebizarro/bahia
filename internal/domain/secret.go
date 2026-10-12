@@ -8,32 +8,30 @@ import (
 	"github.com/google/uuid"
 )
 
-// EncryptionMethod identifies how a secret value is encrypted at rest.
+// EncryptionMethod is a PostgreSQL index row's encryption_method. Every
+// method other than EncryptionStoreRef names a value Bahia once sealed itself
+// (with a key derived from the retired service key), which it never reads:
+// such a secret is refused with ErrLegacySecretValue.
 type EncryptionMethod string
 
-const (
-	EncryptionNIP44    EncryptionMethod = "nip44"
-	EncryptionAES256   EncryptionMethod = "aes256gcm"
-	EncryptionAES256V2 EncryptionMethod = "aes256gcm-v2"
-	// EncryptionStoreRef marks a PostgreSQL index row (and its retained
-	// versions) of a secret whose value lives in the external secret store:
-	// the row holds no value.
-	EncryptionStoreRef EncryptionMethod = "store-ref"
-)
+// EncryptionStoreRef marks a PostgreSQL index row (and its retained
+// versions) of a secret whose value lives in the external secret store: the
+// row holds no value.
+const EncryptionStoreRef EncryptionMethod = "store-ref"
 
-// ErrSecretInStore is returned by every consumer that reads secret values
-// from PostgreSQL when the secret's value lives in the external secret
-// store. Those consumers resolve through the secret store in bahia-cd0wr.4.7;
-// until then they fail instead of omitting the secret.
-var ErrSecretInStore = errors.New("secret value is held by the secret store and this consumer still reads PostgreSQL (moves to the secret store in bahia-cd0wr.4.7)")
+// ErrLegacySecretValue is returned for a secret whose value Bahia sealed
+// itself (into PostgreSQL, under a key derived from the retired service key,
+// or NIP-44'd to it in an intent). Such values are compromised and Bahia
+// never decrypts them: every secret value lives in the secret store
+// (docs/architecture/secret-store.md).
+var ErrLegacySecretValue = errors.New("secret holds a legacy value sealed with the retired service key, which Bahia no longer reads: rotate the value at its source, import it into the secret store labelled <org-id>/<service-id>/<name>, then re-point the secret with `bahia secrets set <service> <name> --credential-id <id> --credential-version <n>`")
 
-// SecretInStoreError names the store-backed secret a PostgreSQL consumer
-// could not read.
-func SecretInStoreError(id uuid.UUID, name string) error {
+// LegacySecretValueError names the legacy secret a consumer refused.
+func LegacySecretValueError(id uuid.UUID, name string) error {
 	if name == "" {
-		return fmt.Errorf("secret %s: %w", id, ErrSecretInStore)
+		return fmt.Errorf("secret %s: %w", id, ErrLegacySecretValue)
 	}
-	return fmt.Errorf("secret %s (%s): %w", id, name, ErrSecretInStore)
+	return fmt.Errorf("secret %s (%s): %w", id, name, ErrLegacySecretValue)
 }
 
 // ServiceSecret represents an encrypted secret bound to a service (and optionally an environment).

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,16 +39,12 @@ func secretRefForName(cmd *cobra.Command, serviceID, name, environmentID string)
 	return nil, nil
 }
 
-// runSecretSetIntent publishes a secret intent carrying either value
-// (NIP-44-encrypted to the service key) or, when credential is set, only a
-// reference to the credential in the daemon's secret store.
-func runSecretSetIntent(cmd *cobra.Command, serviceID, name, value, environmentID string, credential *domain.SecretCredentialRef) error {
+// runSecretSetIntent publishes a secret intent that references a credential
+// in the daemon's secret store; it never carries the value.
+func runSecretSetIntent(cmd *cobra.Command, serviceID, name, environmentID string, credential domain.SecretCredentialRef) error {
 	svc, err := secretOrg(cmd, serviceID)
 	if err != nil {
 		return err
-	}
-	if credential == nil && strings.TrimSpace(value) == "" {
-		return fmt.Errorf("secret value is required")
 	}
 	existing, err := secretRefForName(cmd, serviceID, name, environmentID)
 	if err != nil {
@@ -64,12 +59,7 @@ func runSecretSetIntent(cmd *cobra.Command, serviceID, name, value, environmentI
 		secretID = existing.ID
 		op = "update"
 	}
-	content := map[string]interface{}{"id": secretID.String(), "service_id": serviceID, "name": name}
-	if credential != nil {
-		content["credential_ref"] = credential
-	} else {
-		content["encryption_method"] = "nip44"
-	}
+	content := map[string]interface{}{"id": secretID.String(), "service_id": serviceID, "name": name, "credential_ref": credential}
 	if existing != nil {
 		if existing.UpdatedAt.IsZero() {
 			return fmt.Errorf("canonical secret %s is missing updated_at", secretID)
@@ -87,7 +77,7 @@ func runSecretSetIntent(cmd *cobra.Command, serviceID, name, value, environmentI
 	if err != nil {
 		return err
 	}
-	if err := publishCLIIntent(cmd, client.PublishIntentRequest{Domain: "secret", Op: op, Coordinate: secretID.String(), OrgID: svc.OrgID.String(), IntentID: intentID, Content: content, PlaintextSecretValue: value}); err != nil {
+	if err := publishCLIIntent(cmd, client.PublishIntentRequest{Domain: "secret", Op: op, Coordinate: secretID.String(), OrgID: svc.OrgID.String(), IntentID: intentID, Content: content}); err != nil {
 		return err
 	}
 	return outputSingle(map[string]string{"intent_id": intentID, "secret_id": secretID.String()})
