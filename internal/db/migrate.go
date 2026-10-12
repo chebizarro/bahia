@@ -27,10 +27,9 @@ func withMigrationLock(ctx context.Context, pool *pgxpool.Pool, logger *zap.Logg
 	defer conn.Release()
 	defer func() {
 		// Acquisition can succeed on the server even if cancellation obscures its
-		// response. Never extend the caller's deadline to unlock: if it has
-		// expired, discard the pinned connection so an uncertain session lock
-		// cannot return to the pool.
-		unlockCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// response. Give the pinned session a bounded cleanup context independent
+		// of caller cancellation; discard it only if unlock cannot be confirmed.
+		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if _, err := conn.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", migrationLockKey); err != nil {
 			logger.Warn("releasing migration lock; discarding connection", zap.Error(err))
