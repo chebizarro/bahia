@@ -87,8 +87,8 @@ type Guard struct {
 }
 
 // New builds a guard for the service identity. controlled is the set of
-// relays Bahia operates; New fails if any of them is a well-known public relay
-// or none is given.
+// relays Bahia operates; New fails if any of them is a well-known public
+// relay. An empty set refuses every service control-plane publication.
 func New(service nostr.PubKey, controlled []string) (*Guard, error) {
 	if service == nostr.ZeroPK {
 		return nil, fmt.Errorf("relay guard: service pubkey is required")
@@ -103,9 +103,6 @@ func New(service nostr.PubKey, controlled []string) (*Guard, error) {
 			return nil, fmt.Errorf("relay guard: %s is a public relay and cannot be a controlled relay", normalized)
 		}
 		set[normalized] = struct{}{}
-	}
-	if len(set) == 0 {
-		return nil, fmt.Errorf("relay guard: at least one controlled relay is required")
 	}
 	return &Guard{service: service, controlled: set}, nil
 }

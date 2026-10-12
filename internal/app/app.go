@@ -62,6 +62,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/pipeline"
 	"github.com/openagentsinc/bahia/internal/reconcile"
+	"github.com/openagentsinc/bahia/internal/relayguard"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
@@ -197,18 +198,27 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		}
 	}()
 	servicePubkey := ""
+	var controlPlaneRelayGuard *relayguard.Guard
 	if serviceKeyer != nil {
 		pubkey, err := serviceKeyer.GetPublicKey(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("resolving service signer pubkey: %w", err)
 		}
 		servicePubkey = pubkey.Hex()
+		controlPlaneRelayGuard, err = relayguard.New(pubkey, cfg.Nostr.ControlledRelaySet())
+		if err != nil {
+			return nil, fmt.Errorf("configuring control-plane relay guard: %w", err)
+		}
 	}
 
-	// Relay pools are initialized before the optional database cache.
+	// Relay pools are initialized before the optional database cache. Every
+	// pool carries the control-plane relay guard: no pool, whatever its
+	// topology, may put a service-signed control-plane event on a relay
+	// outside nostr.controlled_relays.
 	poolOptions := []nostrAdapter.RelayPoolOption{
 		nostrAdapter.WithAuthSigner(serviceKeyer),
 		nostrAdapter.WithOutboundAdmission(outboundAdmission),
+		nostrAdapter.WithControlPlaneRelayGuard(controlPlaneRelayGuard),
 		closedRetryBudgetOption(cfg.Nostr),
 	}
 	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)

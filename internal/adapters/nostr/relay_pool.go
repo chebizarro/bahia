@@ -17,6 +17,7 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip11"
 	"github.com/openagentsinc/bahia/internal/nostrout"
+	"github.com/openagentsinc/bahia/internal/relayguard"
 	"go.uber.org/zap"
 )
 
@@ -55,6 +56,9 @@ type RelayPool struct {
 	// outboundAdmission is the fail-closed publication controller shared by
 	// every gateway in the process (see internal/nostrout).
 	outboundAdmission *nostrout.Admission
+	// relayGuard refuses service-signed control-plane events to relays
+	// outside nostr.controlled_relays (nil: no guard).
+	relayGuard *relayguard.Guard
 	// now and newReconnectBackoff pace reconnects to failing relays; both are
 	// replaceable in tests.
 	now                 func() time.Time
@@ -229,6 +233,15 @@ func WithOutboundAdmission(admission *nostrout.Admission) RelayPoolOption {
 		}
 		p.outboundAdmission = defaultOutboundAdmission()
 	}
+}
+
+// WithControlPlaneRelayGuard makes every EVENT frame this pool would write
+// pass guard first: a service-signed control-plane event is never sent to a
+// relay outside the controlled set, whatever pool topology or caller asked
+// for it. The refused relay gets a "blocked:" result, which publishers treat
+// as that relay's permanent rejection.
+func WithControlPlaneRelayGuard(guard *relayguard.Guard) RelayPoolOption {
+	return func(p *RelayPool) { p.relayGuard = guard }
 }
 
 // RelayPoolReconfigureResult describes an in-place relay topology update.
@@ -667,9 +680,24 @@ func (p *RelayPool) PublishToRelaysWithResults(ctx context.Context, ev nostr.Eve
 		return nil, nil
 	}
 
+	results := make([]PublishResult, len(relays))
+	refused := make([]bool, len(relays))
 	urls := make([]string, 0, len(relays))
-	for _, mr := range relays {
+	for i, mr := range relays {
+		if err := p.relayGuard.Check(mr.url, ev); err != nil {
+			refused[i] = true
+			results[i] = PublishResult{RelayURL: mr.url, Reason: err.Error()}
+			p.logger.Error("refused to publish a service control-plane event to a relay outside nostr.controlled_relays",
+				zap.String("relay", mr.url),
+				zap.String("event_id", ev.ID.Hex()),
+				zap.Int("kind", int(ev.Kind)),
+			)
+			continue
+		}
 		urls = append(urls, mr.url)
+	}
+	if len(urls) == 0 {
+		return results, aggregatePublishResultsError(results)
 	}
 	var (
 		pub *nostrout.Publication
@@ -685,10 +713,12 @@ func (p *RelayPool) PublishToRelaysWithResults(ctx context.Context, ev nostr.Eve
 	}
 	defer pub.Close()
 
-	results := make([]PublishResult, len(relays))
 	cached := pub.CachedResults()
 	pending := make([]int, 0, len(relays))
 	for i, mr := range relays {
+		if refused[i] {
+			continue
+		}
 		if pub.NeedsRelay(mr.url) {
 			pending = append(pending, i)
 			continue

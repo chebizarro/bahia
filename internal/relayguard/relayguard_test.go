@@ -30,13 +30,17 @@ func TestIsWellKnownPublic(t *testing.T) {
 	}
 }
 
-func TestNewRejectsPublicOrEmptyControlledSet(t *testing.T) {
+func TestNewRejectsPublicControlledRelays(t *testing.T) {
 	service := nostr.Generate().Public()
 	if _, err := New(service, []string{"wss://relay.sharegap.net", "wss://relay.damus.io"}); err == nil || !strings.Contains(err.Error(), "relay.damus.io") {
 		t.Fatalf("New with a public relay: err = %v, want refusal naming it", err)
 	}
-	if _, err := New(service, nil); err == nil {
-		t.Fatal("New with no controlled relays succeeded")
+	empty, err := New(service, nil)
+	if err != nil {
+		t.Fatalf("New with no controlled relays: %v", err)
+	}
+	if empty.Check("wss://relay.sharegap.net", nostr.Event{PubKey: service, Kind: kinds.CASControlState}) == nil {
+		t.Fatal("an empty controlled set must refuse every control-plane publication")
 	}
 	if _, err := New(nostr.ZeroPK, []string{"wss://relay.sharegap.net"}); err == nil {
 		t.Fatal("New without a service pubkey succeeded")
