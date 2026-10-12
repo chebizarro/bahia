@@ -14,9 +14,8 @@ import (
 const hiveCIPolicyMaxRetryShift = 4
 
 // hiveCIPolicyHydrator waits for the projector's first relay catch-up, then
-// reconciles configured policies when canonical service/environment records
-// change. A failed local read or publish retries with capped exponential
-// backoff until it succeeds or shuts down; canonical events retry immediately.
+// verifies the local canonical policy view before resuming pending results.
+// A failed local read retries with capped exponential backoff.
 type hiveCIPolicyHydrator struct {
 	started      chan struct{}
 	changed      chan struct{}

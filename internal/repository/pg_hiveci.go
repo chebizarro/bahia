@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -524,9 +525,7 @@ func (r *PgHiveCIRepository) GetPolicyByRepoAndWorkflow(ctx context.Context, rep
 }
 
 func (r *PgHiveCIRepository) EnsurePipelinePolicy(ctx context.Context, policy domain.HiveCIPipelinePolicy) error {
-	// Reconcile config-owned policy state in place, or insert it when absent.
-	// This lets upgrades replace existing permissive metadata with mandatory
-	// release constraints. COALESCE preserves NULL branch-pattern equality.
+	// This is a derived index of the canonical id-addressed policy.
 	metadata := policy.Metadata
 	if metadata == nil {
 		metadata = map[string]any{}
@@ -536,34 +535,25 @@ func (r *PgHiveCIRepository) EnsurePipelinePolicy(ctx context.Context, policy do
 		return err
 	}
 	_, err = r.pool.Exec(ctx, `
-		WITH reconciled AS (
-			UPDATE hiveci_pipeline_policies
-			SET enabled = $6, metadata = $7, updated_at = now()
-			WHERE repo_coordinate = $1
-			AND workflow_path = $2
-			AND COALESCE(branch_pattern, '') = COALESCE(NULLIF($3, ''), '')
-			AND service_id = $4
-			AND environment_id = $5
-			RETURNING id
-		)
 		INSERT INTO hiveci_pipeline_policies
-			(repo_coordinate, workflow_path, branch_pattern, service_id, environment_id, enabled, metadata)
-		SELECT $1, $2, NULLIF($3, ''), $4, $5, $6, $7
-		WHERE NOT EXISTS (SELECT 1 FROM reconciled)
-		AND NOT EXISTS (
-			SELECT 1 FROM hiveci_pipeline_policies
-			WHERE repo_coordinate = $1
-			AND workflow_path = $2
-			AND COALESCE(branch_pattern, '') = COALESCE(NULLIF($3, ''), '')
-			AND service_id = $4
-			AND environment_id = $5
-		)
-	`, policy.RepoCoordinate, policy.WorkflowPath, policy.BranchPattern,
-		policy.ServiceID, policy.EnvironmentID, policy.Enabled, metadataJSON)
+			(id, repo_coordinate, workflow_path, branch_pattern, service_id, environment_id, enabled, metadata, created_at, updated_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, $9, $10)
+		ON CONFLICT (id) DO UPDATE SET
+			repo_coordinate = EXCLUDED.repo_coordinate, workflow_path = EXCLUDED.workflow_path,
+			branch_pattern = EXCLUDED.branch_pattern, service_id = EXCLUDED.service_id,
+			environment_id = EXCLUDED.environment_id, enabled = EXCLUDED.enabled,
+			metadata = EXCLUDED.metadata, updated_at = EXCLUDED.updated_at
+	`, policy.ID, policy.RepoCoordinate, policy.WorkflowPath, policy.BranchPattern,
+		policy.ServiceID, policy.EnvironmentID, policy.Enabled, metadataJSON, policy.CreatedAt, policy.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("ensuring hiveci pipeline policy: %w", err)
 	}
 	return nil
+}
+
+func (r *PgHiveCIRepository) DeletePipelinePolicy(ctx context.Context, id uuid.UUID) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM hiveci_pipeline_policies WHERE id = $1`, id)
+	return err
 }
 
 func isValidHiveCIResultTransition(ctx context.Context, pool hiveCIDB, eventID string, newState domain.HiveCIProcessingState) bool {

@@ -754,8 +754,31 @@ func TestIntentPublisher_SensitiveDomains(t *testing.T) {
 	assert.True(t, pub.IsSensitiveDomain("org"))
 	assert.True(t, pub.IsSensitiveDomain("secret"))
 	assert.True(t, pub.IsSensitiveDomain("notification"))
+	assert.True(t, pub.IsSensitiveDomain("hiveci-policy"))
 	assert.False(t, pub.IsSensitiveDomain("service"))
 	assert.False(t, pub.IsSensitiveDomain("environment"))
+}
+
+func TestIntentPublisherHiveCIPolicyGiftWrapsSignedInnerIntent(t *testing.T) {
+	operatorKey := nostr.Generate()
+	serviceKey := nostr.Generate()
+	pub, err := NewIntentPublisher(IntentPublisherConfig{Relays: []string{"wss://test.relay"},
+		Signer: keyer.NewPlainKeySigner(operatorKey), Pubkey: operatorKey.Public().Hex(),
+		ServicePubkey: serviceKey.Public().Hex(), Transport: &mockIntentTransport{}})
+	require.NoError(t, err)
+	defer pub.Close()
+	id := uuid.Must(uuid.NewV7()).String()
+	intentID := uuid.Must(uuid.NewV7()).String()
+	prepared, err := pub.PrepareIntent(context.Background(), PublishIntentRequest{Domain: "hiveci-policy",
+		Op: "delete", Coordinate: "hiveci:policy:" + id, IntentID: intentID,
+		Content: map[string]any{"id": id, "intent_id": intentID, "deleted": true}})
+	require.NoError(t, err)
+	require.Equal(t, nostr.KindGiftWrap, prepared.Event.Kind)
+	require.True(t, prepared.InnerEvent.VerifySignature())
+	parsed, err := controlplane.ParseIntent(&prepared.InnerEvent)
+	require.NoError(t, err)
+	require.Equal(t, "hiveci-policy", parsed.Domain)
+	require.Equal(t, uuid.Nil, parsed.OrgID)
 }
 
 // --- Config validation ---

@@ -120,6 +120,11 @@ func (f *failingIndex) EnsurePipelinePolicy(context.Context, domain.HiveCIPipeli
 	return errors.New("database unavailable")
 }
 
+func (f *failingIndex) DeletePipelinePolicy(context.Context, uuid.UUID) error {
+	f.count()
+	return errors.New("database unavailable")
+}
+
 func (f *failingIndex) ListPolicies(context.Context) ([]domain.HiveCIPipelinePolicy, error) {
 	return nil, errors.New("database unavailable")
 }
@@ -224,6 +229,7 @@ func TestEnsurePipelinePolicyNumericMetadataDoesNotRepublishAfterJSONRoundTrip(t
 	firstTime := time.Unix(1_800_000_000, 0).UTC()
 	d.repo.now = func() time.Time { return firstTime }
 	policy := domain.HiveCIPipelinePolicy{
+		ID:             uuid.Must(uuid.NewV7()),
 		RepoCoordinate: "30617:author:api", WorkflowPath: ".hive-ci/build.yml",
 		ServiceID: uuid.New(), EnvironmentID: uuid.New(), Enabled: true,
 		Metadata: map[string]any{"attempts": int64(3), "limits": map[string]any{"cpu": 1}},
@@ -243,6 +249,56 @@ func TestEnsurePipelinePolicyNumericMetadataDoesNotRepublishAfterJSONRoundTrip(t
 	after, err := d.outbox.Counts()
 	require.NoError(t, err)
 	require.Equal(t, before, after, "JSON-decoded float64 values must compare equal to configured integers")
+}
+
+func TestPipelinePolicyIDCoordinateUpdateAndTombstoneWithoutPostgres(t *testing.T) {
+	ctx := context.Background()
+	d := startCanonicalDaemon(t, t.TempDir(), nil, nil)
+	id := uuid.Must(uuid.NewV7())
+	policy := domain.HiveCIPipelinePolicy{ID: id, RepoCoordinate: "30617:author:api",
+		WorkflowPath: ".gitea/workflows/release.yml", ServiceID: uuid.New(),
+		EnvironmentID: uuid.New(), Enabled: true, Metadata: map[string]any{}}
+	require.NoError(t, d.repo.EnsurePipelinePolicy(ctx, policy))
+	policy.BranchPattern = "main"
+	require.NoError(t, d.repo.EnsurePipelinePolicy(ctx, policy))
+	listed, err := d.repo.ListPolicies(ctx)
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	require.Equal(t, id, listed[0].ID)
+	require.Equal(t, "main", listed[0].BranchPattern)
+	require.NoError(t, d.repo.DeletePipelinePolicy(ctx, id))
+	listed, err = d.repo.ListPolicies(ctx)
+	require.NoError(t, err)
+	require.Empty(t, listed)
+	filter := nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"d": {"hiveci:policy:" + id.String()}}, Limit: 1}
+	var latest *nostr.Event
+	for ev := range d.store.QueryEvents(filter) {
+		latest = &ev
+	}
+	require.NotNil(t, latest)
+	deleted := false
+	for _, tag := range latest.Tags {
+		if len(tag) > 1 && tag[0] == "deleted" && tag[1] == "true" {
+			deleted = true
+		}
+	}
+	require.True(t, deleted)
+}
+
+func TestPipelinePolicyDeleteSurvivesIndexFailure(t *testing.T) {
+	ctx := context.Background()
+	index := &failingIndex{}
+	d := startCanonicalDaemon(t, t.TempDir(), index, nil)
+	id := uuid.Must(uuid.NewV7())
+	policy := domain.HiveCIPipelinePolicy{ID: id, RepoCoordinate: "30617:author:api",
+		WorkflowPath: ".gitea/workflows/release.yml", ServiceID: uuid.New(),
+		EnvironmentID: uuid.New(), Enabled: true, Metadata: map[string]any{}}
+	require.NoError(t, d.repo.EnsurePipelinePolicy(ctx, policy))
+	require.NoError(t, d.repo.DeletePipelinePolicy(ctx, id))
+	listed, err := d.repo.ListPolicies(ctx)
+	require.NoError(t, err)
+	require.Empty(t, listed)
+	require.Equal(t, 2, index.writes)
 }
 
 // A result that keeps failing is attempted at most maxAttempts times across
@@ -299,7 +355,7 @@ func TestIngestionDoesNotDependOnTheSQLIndex(t *testing.T) {
 	require.Equal(t, result.ID.Hex(), latest.ResultEventID)
 	require.Equal(t, "registry.example/app", latest.ImageRepo)
 
-	policy := domain.HiveCIPipelinePolicy{RepoCoordinate: loaded.RepoCoordinate, WorkflowPath: loaded.WorkflowPath,
+	policy := domain.HiveCIPipelinePolicy{ID: uuid.Must(uuid.NewV7()), RepoCoordinate: loaded.RepoCoordinate, WorkflowPath: loaded.WorkflowPath,
 		ServiceID: uuid.New(), EnvironmentID: uuid.New(), Enabled: true, Metadata: map[string]any{"workflow_digest": "abc"}}
 	require.NoError(t, d.repo.EnsurePipelinePolicy(ctx, policy))
 	require.NoError(t, d.repo.EnsurePipelinePolicy(ctx, policy), "re-ensuring is idempotent")

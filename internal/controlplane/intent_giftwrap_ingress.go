@@ -11,7 +11,7 @@ import (
 )
 
 // IntentGiftWrapIngress handles NIP-59 gift-wrapped intents for sensitive
-// domains (org, secret, notification). Per docs/architecture/confidential-state.md, sensitive-domain
+// domains (org, secret, notification, relay, hiveci-policy). Per docs/architecture/confidential-state.md, sensitive-domain
 // intents arrive as kind 1059 with #p=service-pubkey; the inner event is an
 // operator-signed 30900 t=bahia-intent.
 //
@@ -195,6 +195,7 @@ func (ig *IntentGiftWrapIngress) processVerifiedRumor(ctx context.Context, inner
 		return nil
 	}
 	intent.Actor = inner.PubKey.Hex()
+	intent.authenticatedByIngress = true
 
 	if !ig.sensitiveDomains[intent.Domain] {
 		ig.logger.Debug("unwrapped intent for non-sensitive domain, processing normally",

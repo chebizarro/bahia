@@ -2,8 +2,6 @@ package nostr
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -60,17 +58,7 @@ func (p *HiveCICanonicalPublisher) available() error {
 	return nil
 }
 
-// HiveCIPolicyKey identifies one pipeline policy: a repository workflow and
-// branch pattern bound to a service and environment.
-func HiveCIPolicyKey(policy domain.HiveCIPipelinePolicy) string {
-	sum := sha256.Sum256([]byte(policy.RepoCoordinate + "\x00" + policy.WorkflowPath + "\x00" + policy.BranchPattern +
-		"\x00" + policy.ServiceID.String() + "\x00" + policy.EnvironmentID.String()))
-	return hex.EncodeToString(sum[:])
-}
-
-// PublishPipelinePolicy publishes one pipeline policy on
-// "hiveci:policy:<key>". The repository coordinate and workflow are only in
-// the encrypted content.
+// PublishPipelinePolicy publishes one pipeline policy at its stable id coordinate.
 func (p *HiveCICanonicalPublisher) PublishPipelinePolicy(ctx context.Context, policy domain.HiveCIPipelinePolicy) error {
 	if err := p.available(); err != nil {
 		return err
@@ -79,9 +67,24 @@ func (p *HiveCICanonicalPublisher) PublishPipelinePolicy(ctx context.Context, po
 	if err != nil {
 		return err
 	}
-	key := HiveCIPolicyKey(policy)
 	tags := gonostr.Tags{{"policy", policy.ID.String()}, {"enabled", strconv.FormatBool(policy.Enabled)}}
-	return p.publishConfidential(ctx, KindHiveCIPolicyRecord, "hiveci:policy:"+key, tags, string(content), "hiveci_policy.projection", &policy.ID)
+	return p.publishConfidential(ctx, KindHiveCIPolicyRecord, "hiveci:policy:"+policy.ID.String(), tags, string(content), "hiveci_policy.projection", &policy.ID)
+}
+
+// DeletePipelinePolicy publishes an encrypted tombstone at the same coordinate.
+func (p *HiveCICanonicalPublisher) DeletePipelinePolicy(ctx context.Context, id uuid.UUID) error {
+	if err := p.available(); err != nil {
+		return err
+	}
+	d := "hiveci:policy:" + id.String()
+	content := fmt.Sprintf(`{"deleted":true,"id":%q}`, id.String())
+	family := cpStateFamilies[KindHiveCIPolicyRecord]
+	encrypted, err := p.encryptor.EncryptConfidential(ctx, kinds.FleetOCKScope, []byte(content), KindHiveCIPolicyRecord, d, family.topic, nil)
+	if err != nil {
+		return fmt.Errorf("encrypt Hive-CI policy tombstone: %w", err)
+	}
+	return p.projector.publishCanonicalFirst(ctx, KindHiveCIPolicyRecord, d, true,
+		gonostr.Tags{{"policy", id.String()}}, content, encrypted, "hiveci_policy.projection", &id)
 }
 
 // ListPipelinePolicies returns every retained pipeline policy.

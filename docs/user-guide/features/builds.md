@@ -15,6 +15,19 @@ The daemon resolves the service repository metadata and protected credential, pr
 
 The fleet initiator requires `hiveci.initiator.enabled`, an explicit source provider, and configured mirror/worker trust. Repository credentials are passed to the selected worker without being embedded in clone URLs or public events. The CLI rejects non-empty `--build-arg` values because the fleet dispatch contract has no build-argument field.
 
+## Pipeline policy
+
+Fleet operators create, update and delete Hive-CI pipeline policies with
+`bahia hiveci-policy apply` and `bahia hiveci-policy delete`. Each policy has
+an operator-minted UUIDv7 that remains fixed when its selectors or metadata
+change. Apply sends the complete desired JSON state; delete sends a tombstone.
+Use `--expected-updated-at` to reject a stale edit and read the canonical
+revision before retrying a conflict. The daemon stores encrypted canonical
+state on relays through its outbox before optionally mirroring PostgreSQL.
+No SQL or config seed creates pipeline policies. `hiveci.policies` in daemon
+configuration remains a separate build-dependency dispatch allowlist, not a
+source of pipeline-policy canonical state.
+
 ## Browse builds
 
 ```bash
