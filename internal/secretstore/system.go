@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -187,10 +188,16 @@ func (k *Keyring) Status() (loaded bool, lastErr error) {
 	return k.loaded && !k.zeroized, k.lastErr
 }
 
+// UnresolvedWait bounds how long Use waits for the first Load when the
+// caller's context has no deadline.
+const UnresolvedWait = 30 * time.Second
+
 // Use lends fn the key of purpose with keyID ("" for the purpose's active
-// key) and returns fn's error. It waits for Load while ctx allows, and fails
-// with ErrNotConfigured when no such key is configured and ErrUnavailable
-// when the keys are not loaded. fn must not retain the slice.
+// key) and returns fn's error. Before the first Load completes it waits,
+// within ctx and at most UnresolvedWait; once a Load has failed it fails at
+// once with ErrUnavailable (and the last error) until a later Load succeeds.
+// It fails with ErrNotConfigured when no such key is configured. fn must not
+// retain the slice.
 func (k *Keyring) Use(ctx context.Context, purpose, keyID string, fn func(ref SystemKeyRef, key []byte) error) error {
 	ref, ok := k.lookup(purpose, keyID)
 	if !ok {
@@ -202,14 +209,23 @@ func (k *Keyring) Use(ctx context.Context, purpose, keyID string, fn func(ref Sy
 	select {
 	case <-k.ready:
 	default:
+		if _, lastErr := k.Status(); lastErr != nil {
+			return fmt.Errorf("%w: system key %s: %w", ErrUnavailable, ref.Label(), lastErr)
+		}
+		wait := ctx
+		if _, bounded := ctx.Deadline(); !bounded {
+			var cancel context.CancelFunc
+			wait, cancel = context.WithTimeout(ctx, UnresolvedWait)
+			defer cancel()
+		}
 		select {
 		case <-k.ready:
-		case <-ctx.Done():
-			_, lastErr := k.Status()
-			if lastErr == nil {
-				lastErr = errors.New("not resolved yet")
+		case <-wait.Done():
+			lastErr := errors.New("not resolved yet")
+			if _, err := k.Status(); err != nil {
+				lastErr = err
 			}
-			return fmt.Errorf("%w: system key %s: %w (%w)", ErrUnavailable, ref.Label(), lastErr, ctx.Err())
+			return fmt.Errorf("%w: system key %s: %w (%w)", ErrUnavailable, ref.Label(), lastErr, wait.Err())
 		}
 	}
 	k.mu.RLock()

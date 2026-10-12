@@ -190,6 +190,35 @@ func TestKeyringFailsClosed(t *testing.T) {
 	}
 }
 
+// Once a load has failed, Use does not wait: callers without a deadline
+// fail at once with the reason until a later load succeeds.
+func TestKeyringUseFailsFastAfterAFailedLoad(t *testing.T) {
+	ref := SystemKeyRef{Purpose: PurposeConfidentialDedupe, KeyID: "k1", Credential: credRef('a')}
+	ring, _ := NewKeyring([]SystemKeyRef{ref})
+	if err := ring.Load(context.Background(), &labelStore{err: ErrDenied}); !errors.Is(err, ErrDenied) {
+		t.Fatalf("load: %v", err)
+	}
+	served := make(chan error, 1)
+	go func() {
+		served <- ring.Use(context.Background(), PurposeConfidentialDedupe, "", func(SystemKeyRef, []byte) error { return nil })
+	}()
+	select {
+	case err := <-served:
+		if !errors.Is(err, ErrUnavailable) || !errors.Is(err, ErrDenied) {
+			t.Fatalf("Use = %v, want ErrUnavailable carrying ErrDenied", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Use waited after a failed load")
+	}
+	store := &labelStore{creds: map[string]labelledValue{ref.Credential.CredentialID: {"bahia-system/confidential-dedupe/k1", bytes.Repeat([]byte{3}, SystemKeySize)}}}
+	if err := ring.Load(context.Background(), store); err != nil {
+		t.Fatal(err)
+	}
+	if err := ring.Use(context.Background(), PurposeConfidentialDedupe, "", func(SystemKeyRef, []byte) error { return nil }); err != nil {
+		t.Fatalf("Use after recovery: %v", err)
+	}
+}
+
 func TestKeyringUseWaitsForLoad(t *testing.T) {
 	ref := SystemKeyRef{Purpose: PurposeConfidentialDedupe, KeyID: "k1", Credential: credRef('a')}
 	ring, _ := NewKeyring([]SystemKeyRef{ref})

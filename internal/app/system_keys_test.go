@@ -115,11 +115,11 @@ func TestSystemKeysRunnerRetriesUntilResolvedAndHealthFailsClosed(t *testing.T) 
 		t.Fatalf("while failing: %+v", check)
 	}
 	store.setErr(nil)
-	if err := ring.Use(context.Background(), secretstore.PurposeConfidentialDedupe, "", func(secretstore.SystemKeyRef, []byte) error { return nil }); err != nil {
-		t.Fatalf("Use after recovery: %v", err)
-	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+	if err := ring.Use(context.Background(), secretstore.PurposeConfidentialDedupe, "", func(secretstore.SystemKeyRef, []byte) error { return nil }); err != nil {
+		t.Fatalf("Use after recovery: %v", err)
 	}
 	if check := health(); check.Status != HealthStatusPass {
 		t.Fatalf("after resolution: %+v", check)

@@ -132,9 +132,11 @@ operator imports into Signet under the same owner, labelled
   data sealed under them.
 - **Startup resolution.** The `system-keys` runner resolves every configured
   key once, all or nothing, each exactly 32 bytes, retrying with backoff
-  (1s to 5m) while Signet is unreachable or refuses. Consumers wait for it
-  within their own deadline and otherwise fail closed with `ErrUnavailable`;
-  nothing falls back to a derived or cached key. The `system_keys` health
+  (1s to 5m) while Signet is unreachable or refuses. Until the first attempt
+  completes, consumers wait for it within their own deadline (at most 30s
+  without one); once an attempt has failed they fail at once with
+  `ErrUnavailable` and the reason until a later attempt succeeds. Nothing falls
+  back to a derived or cached key. The `system_keys` health
   check fails readiness until every key is resolved, and warns while no
   `confidential_dedupe` key is configured (confidential records are then not
   published). Keys are zeroized at shutdown and never leave the keyring except
