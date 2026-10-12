@@ -35,14 +35,6 @@ func (r *testSecretRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Servi
 	return &copy, nil
 }
 
-func (r *testSecretRepo) GetCurrentVersion(_ context.Context, secretID uuid.UUID) (*domain.SecretVersion, error) {
-	secret, ok := r.secrets[secretID]
-	if !ok {
-		return nil, nil
-	}
-	return &domain.SecretVersion{ID: uuid.New(), SecretID: secretID, Version: secret.Version, EncryptedValue: secret.EncryptedValue, EncryptionMethod: secret.EncryptionMethod, CreatedBy: secret.CreatedBy, CreatedAt: secret.UpdatedAt}, nil
-}
-
 func (r *testSecretRepo) ListByService(_ context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error) {
 	out := make([]domain.ServiceSecret, 0)
 	for _, secret := range r.secrets {

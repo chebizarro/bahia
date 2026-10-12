@@ -49,19 +49,6 @@ func (r *fakeEncryptedSecretRepo) GetByID(_ context.Context, id uuid.UUID) (*dom
 	}
 	return nil, nil
 }
-func (r *fakeEncryptedSecretRepo) GetCurrentVersion(_ context.Context, secretID uuid.UUID) (*domain.SecretVersion, error) {
-	if s, ok := r.records[secretID]; ok {
-		return &domain.SecretVersion{ID: uuid.New(), SecretID: secretID, Version: s.Version, EncryptedValue: s.EncryptedValue, EncryptionMethod: s.EncryptionMethod, CreatedBy: s.CreatedBy, CreatedAt: s.UpdatedAt}, nil
-	}
-	return nil, nil
-}
-func (r *fakeEncryptedSecretRepo) ListVersions(ctx context.Context, secretID uuid.UUID) ([]domain.SecretVersion, error) {
-	version, err := r.GetCurrentVersion(ctx, secretID)
-	if err != nil || version == nil {
-		return nil, err
-	}
-	return []domain.SecretVersion{*version}, nil
-}
 func (r *fakeEncryptedSecretRepo) ListByService(_ context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error) {
 	out := []domain.ServiceSecret{}
 	for _, s := range r.records {
