@@ -25,6 +25,10 @@ describe('NIP-59 sensitive intent gift wrap', () => {
     expect(rumor.sig).toBe('');
     expect(rumor.id).toBe(getEventHash(rumor));
     expect(rumor.id).toBe(fixture.inner.id);
+    expect(JSON.parse(rumor.content).credential_ref).toEqual({
+      store: 'signet', credential_id: `cred_${'a'.repeat(64)}`, version: 2
+    });
+    expect(rumor.content).not.toMatch(/encrypted_value|"value"/);
   });
 
   it('decrypts the deterministic Go-produced wrap from the same committed fixture', () => {
