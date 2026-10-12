@@ -48,7 +48,14 @@ func BuildRegistryWithSecrets(ctx context.Context, cfg config.PackageControlplan
 		if name == "" {
 			return nil, fmt.Errorf("package backend ref must not be empty")
 		}
-		backend, err := BuildBackendWithSecrets(ctx, backendCfg, resolver)
+		var backend packagebackend.Backend
+		var err error
+		if hasSecretRefs(backendCfg) {
+			// Credentials resolve through the secret store on first use.
+			backend, err = newDeferredBackend(ctx, backendCfg, resolver)
+		} else {
+			backend, err = BuildBackendWithSecrets(ctx, backendCfg, nil)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("building package backend %q: %w", name, err)
 		}

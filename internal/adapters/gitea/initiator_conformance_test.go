@@ -40,8 +40,24 @@ var (
 )
 
 type fakeSecretResolver struct {
-	known map[string]string
-	calls []string
+	known   map[string]string
+	calls   []string
+	batches [][]string
+}
+
+func (f *fakeSecretResolver) ResolveSecretsWithAudit(ctx context.Context, refs []string, opts domain.SecretResolveOptions) ([]string, []domain.SecretAccessManifest, error) {
+	f.batches = append(f.batches, append([]string(nil), refs...))
+	var values []string
+	var manifests []domain.SecretAccessManifest
+	for _, ref := range refs {
+		value, manifest, err := f.ResolveSecretWithAudit(ctx, ref, opts)
+		if err != nil {
+			return nil, nil, err
+		}
+		values = append(values, value)
+		manifests = append(manifests, manifest)
+	}
+	return values, manifests, nil
 }
 
 func (f *fakeSecretResolver) ResolveSecretWithAudit(_ context.Context, ref string, _ domain.SecretResolveOptions) (string, domain.SecretAccessManifest, error) {

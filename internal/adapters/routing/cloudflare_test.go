@@ -161,7 +161,7 @@ func TestNewVerifyTransportUsesCustomResolver(t *testing.T) {
 func TestCloudflareVerifyHTTPSReportsNoPublicDNSRecordBeforeHTTP(t *testing.T) {
 	resolverAddr, queries := startTestDNSResponder(t, func(uint16, int) (byte, bool) { return 3, false })
 	backend, err := NewCloudflareBackend(CloudflareConfig{
-		APIToken: "token", AccountID: "account", TunnelID: "tunnel-1",
+		APIToken: staticToken("token"), AccountID: "account", TunnelID: "tunnel-1",
 		// The in-process responder returns NXDOMAIN immediately; the loop remains
 		// bounded while preserving that actionable result at the final deadline.
 		ZoneIDs: map[string]string{"example.com": "zone"}, VerifyTimeout: 500 * time.Millisecond,
@@ -196,7 +196,7 @@ func TestCloudflareVerifyHTTPSRetriesDNSUntilRecordAppears(t *testing.T) {
 		return 0, qtype == 1 && aAttempt >= 2
 	})
 	backend, err := NewCloudflareBackend(CloudflareConfig{
-		APIToken: "token", AccountID: "account", TunnelID: "tunnel-1",
+		APIToken: staticToken("token"), AccountID: "account", TunnelID: "tunnel-1",
 		ZoneIDs: map[string]string{"example.com": "zone"}, VerifyTimeout: time.Second,
 		VerifyResolverAddr: resolverAddr,
 	}, nil)
@@ -273,7 +273,7 @@ func TestCloudflareUpsertDNSUsesOwnershipMarker(t *testing.T) {
 				server.Close()
 			}()
 			backend, err := NewCloudflareBackend(CloudflareConfig{
-				APIBaseURL: server.URL, APIToken: "token", AccountID: "account",
+				APIBaseURL: server.URL, APIToken: staticToken("token"), AccountID: "account",
 				TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"},
 			}, server.Client())
 			if err != nil {
@@ -313,7 +313,7 @@ func TestCloudflareCheckRejectsUnmanagedDNSCollision(t *testing.T) {
 	}))
 	defer server.Close()
 	backend, err := NewCloudflareBackend(CloudflareConfig{
-		APIBaseURL: server.URL, APIToken: "secret-token", AccountID: "account",
+		APIBaseURL: server.URL, APIToken: staticToken("secret-token"), AccountID: "account",
 		TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"},
 	}, server.Client())
 	if err != nil {
@@ -341,7 +341,7 @@ func TestCloudflareCheckTreatsRawCoordinateAsUnmanagedCollision(t *testing.T) {
 	}))
 	defer server.Close()
 	backend, err := NewCloudflareBackend(CloudflareConfig{
-		APIBaseURL: server.URL, APIToken: "token", AccountID: "account",
+		APIBaseURL: server.URL, APIToken: staticToken("token"), AccountID: "account",
 		TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"},
 	}, server.Client())
 	if err != nil {
@@ -367,7 +367,7 @@ func TestCloudflareCheckAllowsOwnedRouteOriginUpdate(t *testing.T) {
 	}))
 	defer server.Close()
 	backend, err := NewCloudflareBackend(CloudflareConfig{
-		APIBaseURL: server.URL, APIToken: "token", AccountID: "account",
+		APIBaseURL: server.URL, APIToken: staticToken("token"), AccountID: "account",
 		TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"},
 	}, server.Client())
 	if err != nil {
@@ -409,7 +409,7 @@ func TestCloudflareRestoreDNSSelectsOwnershipMarker(t *testing.T) {
 	}))
 	defer server.Close()
 	backend, err := NewCloudflareBackend(CloudflareConfig{
-		APIBaseURL: server.URL, APIToken: "token", AccountID: "account",
+		APIBaseURL: server.URL, APIToken: staticToken("token"), AccountID: "account",
 		TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"},
 	}, server.Client())
 	if err != nil {
@@ -456,7 +456,7 @@ func TestCloudflareApplyRetainsTunnelWhenDNSCompensationFails(t *testing.T) {
 	}))
 	defer server.Close()
 	backend, err := NewCloudflareBackend(CloudflareConfig{
-		APIBaseURL: server.URL, APIToken: "token", AccountID: "account",
+		APIBaseURL: server.URL, APIToken: staticToken("token"), AccountID: "account",
 		TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"},
 	}, server.Client())
 	if err != nil {
@@ -536,7 +536,7 @@ func TestCloudflareApplyCompensatesFailedHTTPSVerification(t *testing.T) {
 	}))
 	defer server.Close()
 	backend, err := NewCloudflareBackend(CloudflareConfig{
-		APIBaseURL: server.URL, APIToken: "token", AccountID: "account",
+		APIBaseURL: server.URL, APIToken: staticToken("token"), AccountID: "account",
 		TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"},
 	}, server.Client())
 	if err != nil {
@@ -562,4 +562,8 @@ func TestCloudflareApplyCompensatesFailedHTTPSVerification(t *testing.T) {
 	if strings.Join(operations, ",") != strings.Join(wantOperations, ",") {
 		t.Fatalf("operation order = %v, want %v", operations, wantOperations)
 	}
+}
+
+func staticToken(token string) func(context.Context) (string, error) {
+	return func(context.Context) (string, error) { return token, nil }
 }

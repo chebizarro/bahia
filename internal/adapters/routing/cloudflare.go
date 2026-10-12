@@ -20,8 +20,11 @@ import (
 )
 
 type CloudflareConfig struct {
-	APIBaseURL         string
-	APIToken           string
+	APIBaseURL string
+	// APIToken returns the API token for one request. The daemon resolves
+	// it through the secret store (held after the first resolve), so a
+	// token that cannot be resolved fails the request, not construction.
+	APIToken           func(context.Context) (string, error)
 	AccountID          string
 	TunnelID           string
 	ZoneIDs            map[string]string
@@ -50,7 +53,7 @@ func NewCloudflareBackend(cfg CloudflareConfig, client *http.Client) (*Cloudflar
 	if cfg.VerifyTimeout <= 0 {
 		cfg.VerifyTimeout = 30 * time.Second
 	}
-	if strings.TrimSpace(cfg.APIToken) == "" || strings.TrimSpace(cfg.AccountID) == "" || strings.TrimSpace(cfg.TunnelID) == "" {
+	if cfg.APIToken == nil || strings.TrimSpace(cfg.AccountID) == "" || strings.TrimSpace(cfg.TunnelID) == "" {
 		return nil, fmt.Errorf("cloudflare API token, account ID, and tunnel ID are required")
 	}
 	if len(cfg.ZoneIDs) == 0 {
@@ -453,7 +456,11 @@ func (b *CloudflareBackend) do(ctx context.Context, method, path string, body an
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+b.cfg.APIToken)
+	token, err := b.cfg.APIToken(ctx)
+	if err != nil {
+		return fmt.Errorf("cloudflare API token: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := b.client.Do(req)
 	if err != nil {

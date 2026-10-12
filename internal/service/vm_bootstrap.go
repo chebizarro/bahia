@@ -3,23 +3,25 @@ package service
 import (
 	"context"
 	"reflect"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 )
 
-type VMAuditedSecretResolver interface {
-	ResolveSecretWithAudit(context.Context, string, domain.SecretResolveOptions) (string, domain.SecretAccessManifest, error)
-}
+// VMBootstrapService authorizes and delivers a persistent VM's bootstrap
+// secrets. Values resolve through the secret store at delivery and reach the
+// guest from the store's buffer, which is zeroized afterwards.
 type VMBootstrapService struct {
 	secrets     repository.SecretRepository
-	resolver    VMAuditedSecretResolver
+	resolver    SecretValues
 	permissions VMPermissionChecker
 }
 
-func NewVMBootstrapService(secrets repository.SecretRepository, resolver VMAuditedSecretResolver, permissions VMPermissionChecker) (*VMBootstrapService, error) {
+func NewVMBootstrapService(secrets repository.SecretRepository, resolver SecretValues, permissions VMPermissionChecker) (*VMBootstrapService, error) {
 	if secrets == nil || resolver == nil || permissions == nil {
 		return nil, domain.ErrInvalidValue
 	}
@@ -43,8 +45,8 @@ func (s *VMBootstrapService) Authorize(ctx context.Context, p *auth.Principal, v
 		if err != nil || secret == nil || secret.ID != binding.Ref.ID || secret.ServiceID != *v.ServiceID || (secret.EnvironmentID != nil && *secret.EnvironmentID != *v.EnvironmentID) {
 			return vmError(domain.VMErrorInvalid)
 		}
-		if secret.EncryptionMethod == domain.EncryptionStoreRef {
-			return domain.SecretInStoreError(secret.ID, secret.Name)
+		if secret.EncryptionMethod != domain.EncryptionStoreRef {
+			return domain.LegacySecretValueError(secret.ID, secret.Name)
 		}
 	}
 	return nil
@@ -69,19 +71,23 @@ func (d *vmBootstrapDelivery) Deliver(ctx context.Context, identity domain.VMRes
 	if err := d.service.Authorize(ctx, p, v); err != nil {
 		return err
 	}
+	ids := make([]uuid.UUID, 0, len(v.Bootstrap))
 	for _, binding := range v.Bootstrap {
-		value, manifest, err := d.service.resolver.ResolveSecretWithAudit(ctx, binding.Ref.ID.String(), domain.SecretResolveOptions{Actor: op.Actor, Reason: "persistent VM bootstrap", RequestID: op.ID.String(), Operation: domain.SecretAccessOperationRuntimeApply})
-		if err != nil {
-			return vmError(domain.VMErrorUnavailable)
-		}
-		if manifest.SecretID != binding.Ref.ID || manifest.ServiceID != *v.ServiceID || (manifest.EnvironmentID != nil && *manifest.EnvironmentID != *v.EnvironmentID) || manifest.VersionID == uuid.Nil || manifest.Version < 1 || manifest.Outcome != domain.SecretAccessOutcomeSuccess {
+		ids = append(ids, binding.Ref.ID)
+	}
+	resolved, err := d.service.resolver.ResolveAll(ctx, ids)
+	if err != nil || len(resolved) != len(ids) {
+		secretstore.ZeroizeResolved(resolved)
+		return vmError(domain.VMErrorUnavailable)
+	}
+	defer secretstore.ZeroizeResolved(resolved)
+	for i, binding := range v.Bootstrap {
+		secret := resolved[i].Secret
+		if secret.ID != binding.Ref.ID || secret.ServiceID != *v.ServiceID || (secret.EnvironmentID != nil && *secret.EnvironmentID != *v.EnvironmentID) || secret.CredentialRef == nil {
 			return vmError(domain.VMErrorIntegrity)
 		}
-		// Go strings cannot be erased; clear the mutable delivery copy below.
-		payload := []byte(value)
-		err = guest.ApplyBootstrap(ctx, binding.TargetKey, payload)
-		clear(payload)
-		audit := &domain.SecretAccessAudit{SecretID: manifest.SecretID, VersionID: manifest.VersionID, Version: manifest.Version, ServiceID: manifest.ServiceID, EnvironmentID: manifest.EnvironmentID, Operation: domain.SecretAccessOperationRuntimeApply, Outcome: domain.SecretAccessOutcomeSuccess, Actor: op.Actor, Reason: "persistent VM bootstrap delivery", RequestID: op.ID.String(), AccessedAt: manifest.AccessedAt}
+		err := guest.ApplyBootstrap(ctx, binding.TargetKey, resolved[i].Value.Bytes())
+		audit := &domain.SecretAccessAudit{SecretID: secret.ID, Version: secret.CredentialRef.Version, ServiceID: secret.ServiceID, EnvironmentID: secret.EnvironmentID, Operation: domain.SecretAccessOperationRuntimeApply, Outcome: domain.SecretAccessOutcomeSuccess, Actor: op.Actor, Reason: "persistent VM bootstrap delivery", RequestID: op.ID.String(), AccessedAt: time.Now().UTC()}
 		if err != nil {
 			audit.Outcome = domain.SecretAccessOutcomeFailure
 			audit.Error = string(domain.VMErrorUnconfirmed)
