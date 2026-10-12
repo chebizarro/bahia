@@ -199,6 +199,24 @@ status reports `{"key_version":"v<n>","records_republished":<n>}`. An
 organization record's `strict_revocation` flag (default `false`) makes member
 removal and role downgrade trigger the same refounding.
 
+### Secret intents
+
+`domain=secret`, `schema=bahia.intent.secret.v1`, `d=<secret-uuid>`,
+gift-wrapped. With the daemon's secret store configured the content names
+the value instead of carrying it
+([secret store](architecture/secret-store.md)):
+
+```json
+{"id":"<secret-uuid>","service_id":"<service-uuid>","environment_id":"<uuid, optional>","name":"DATABASE_URL",
+ "credential_ref":{"store":"signet","credential_id":"cred_<64 hex>","version":2},
+ "expected_updated_at":"<RFC 3339, updates only>"}
+```
+
+The credential must be active at exactly `version`. With the store
+configured, content carrying `encrypted_value` (NIP-44 to the service key) or
+`value` is rejected; without it that legacy form is the only one accepted.
+`delete` content is `{"id":"<secret-uuid>","deleted":true}`.
+
 ## 4. Interactive RPC (ContextVM `25910`)
 
 ContextVM is used only for interactions that are inherently request/response
@@ -333,6 +351,15 @@ only `{"key":"<default_unit_key>","implicit":true}`. Service-state content
 carries typed `service_id`, `environment_id`, `drift_status`, an optional
 non-secret `desired_runtime_state` snapshot and reconciliation backoff fields;
 free-form failure text is not relay content.
+
+### Secret records
+
+`t=secret-registry`, `d=<secret-uuid>`, content OCK ciphertext of
+`{"id","service_id","environment_id"?,"name","version","created_by","created_at","updated_at","deleted"}`
+plus `credential_ref` `{"store","credential_id","version"}` for a value held
+by the secret store, or `encryption_method` for a value Bahia sealed itself.
+No record ever carries a value. `version` is the record's revision;
+`credential_ref.version` pins the credential version.
 
 ### Config Fabric status
 

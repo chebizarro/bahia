@@ -1883,6 +1883,12 @@ func load(configPath string, persistBootstrap bool) (*Config, error) {
 		if strings.HasPrefix(key, "soul_factory_") {
 			return "soul_factory." + strings.TrimPrefix(key, "soul_factory_")
 		}
+		if strings.HasPrefix(key, "secret_store_signet_") {
+			return "secret_store.signet." + strings.TrimPrefix(key, "secret_store_signet_")
+		}
+		if strings.HasPrefix(key, "secret_store_") {
+			return "secret_store." + strings.TrimPrefix(key, "secret_store_")
+		}
 		if strings.HasPrefix(key, "loom_canonical_projection_") {
 			return "loom.canonical_projection." + strings.TrimPrefix(key, "loom_canonical_projection_")
 		}

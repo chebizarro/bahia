@@ -115,7 +115,9 @@ authorize signed requests.
 Intents for `org`, `secret`, `notification` and `relay` must be gift-wrapped
 (`1059`) to the service pubkey; plaintext intents for these domains are
 rejected. Their state records are encrypted with the org content key (OCK) or
-the fleet OCK, so relays and non-members hold only ciphertext. Secret
+the fleet OCK, so relays and non-members hold only ciphertext. With a
+[secret store](architecture/secret-store.md) configured, secret intents and
+records carry only a credential reference; values stay in Signet. Secret
 plaintext leaves the daemon only through the `services/secrets-reveal`
 ContextVM reply, which is encrypted to the requester.
 

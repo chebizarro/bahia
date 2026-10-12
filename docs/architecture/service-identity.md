@@ -61,3 +61,4 @@ separate identity that keeps a local key by design.
 | `cmd/bahia-policy-census`, `cmd/bahia-migrate` (`f74a_import`, `nostr`), `cmd/cli` (`config_fabric`, confidential reads, `soulfactory`), `cmd/bahia-dns-agent`, `cmd/openclaw-soulfactory-sidecar`, `cmd/bahia-test-relay`, `internal/nostrmigration` | c | offline/operator tools or separate identities; AUTH via a local signer |
 | `internal/relaysidecar/server.go` NIP-11 pubkey, admission, config acks | a | `New(ctx, cfg, signer, log)`; `cmd/relay` opens the signer through `servicesigner.Open` and owns it across `SIGHUP` reloads |
 | `internal/adapters/signet`, `internal/soulfactory/signet_enrollment.go` | n/a | NIP-46 *client* transport keys, not the service key |
+| `internal/app/secret_store.go` `openSecretStore` (`secret_store.signet.client_key_file`) | c (separate identity) | the [secret store](secret-store.md) requester key; startup refuses it when its pubkey is the service pubkey |

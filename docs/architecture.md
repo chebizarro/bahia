@@ -117,6 +117,7 @@ and supports NIP-45 COUNT and NIP-77 negentropy. Details:
 | Pending outbound events | `nostr.local_store.outbox_path` (bbolt) | durable publish with per-relay acceptance; `bahia outbox` inspects it |
 | Registry index | PostgreSQL (`db.*`) | queryable index of services, environments, builds, artifacts, intents, runs, policies, secrets, notifications, orgs, DNS, workers; `nostr_events` archives events best effort ([PostgreSQL event store lifecycle](architecture/postgres-event-store-lifecycle.md)) |
 | Payments, security targets/runs/schedules/findings, operator allowlists, Hive-CI execution state | relays only (`service.PaymentService`, `CanonicalSecurityRepository`) | PostgreSQL, when present, is a rebuildable index |
+| Secret values | Signet's generic secret store (`secret_store.*`) | fetched at use time under a short lease; canonical secret records hold only the credential reference ([secret store](architecture/secret-store.md)) |
 | Blobs, logs, SBOM payloads | Blossom (`blossom.*`) | content-addressed storage |
 | Container images | the built-in OCI registry (`oci.*`, manifests in PostgreSQL, blobs in Blossom), Harbor, or any configured registry | image distribution |
 | Relay history | sidecar `data_dir/events.bolt` | replay and retention |

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -53,5 +55,31 @@ func TestSecretStoreConfigRejects(t *testing.T) {
 	var none SecretStoreConfig
 	if err := none.validate(); err != nil {
 		t.Fatalf("an unconfigured store must validate: %v", err)
+	}
+}
+
+func TestLoadSecretStoreFromYAMLAndEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := []byte(`mode: full
+secret_store:
+  backend: signet
+  signet:
+    pubkey: "` + strings.Repeat("a", 64) + `"
+    relays: ["wss://signet.example"]
+    client_key_file: /run/secrets/bahia-secret-store.key
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BAHIA_SECRET_STORE_SIGNET_OWNER", "bahia-vault")
+	t.Setenv("BAHIA_SECRET_STORE_SIGNET_REQUEST_TIMEOUT", "12s")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	got := cfg.SecretStore
+	if got.Backend != SecretStoreBackendSignet || got.Signet.Owner != "bahia-vault" || got.Signet.RequestTimeout != 12*time.Second ||
+		got.Signet.ClientKeyFile != "/run/secrets/bahia-secret-store.key" || len(got.Signet.Relays) != 1 {
+		t.Fatalf("secret_store = %+v", got)
 	}
 }
