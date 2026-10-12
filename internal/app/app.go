@@ -234,9 +234,21 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	relayPolicyHydrationPool := nostrAdapter.NewRelayPool(relayPolicyHydrationRelays, logger, poolOptions...)
 	relayPolicyHydrationPool.Connect(ctx)
 
-	relayURLs := interopRelayURLs(cfg, controlPlaneRelays)
+	relayURLs := serviceRelayPoolURLs(cfg.Nostr, cfg.Nostr.ServiceRelayPolicyRelays(), cfg.Loom.Relays)
 	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, poolOptions...)
 	relayPool.Connect(ctx)
+	// The effective relay policy: the static lists above are bootstrap only;
+	// the canonical relay settings govern the pools, the service write set
+	// and the advertised relay events once the hydrator receives them.
+	relayTopology := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{
+		ControlPlanePool:      controlPlanePool,
+		ContextVMRequestPool:  contextVMRequestPool,
+		ContextVMResponsePool: contextVMResponsePool,
+		ServicePool:           relayPool,
+		NostrConfig:           cfg.Nostr,
+		LoomRelays:            cfg.Loom.Relays,
+		Logger:                logger,
+	})
 	logger.Info("nostr relay topology initialized",
 		zap.Strings("control_plane_relays", controlPlaneRelays),
 		zap.Strings("contextvm_request_subscription_relays", contextVMRequestRelays),
@@ -341,6 +353,11 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		logger.Error("local Nostr publish outbox was unreadable and was moved aside; events still pending in it were not delivered",
 			zap.String("moved_to", aside))
 	}
+	if relayPolicyProjectionRepo == nil {
+		// Without PostgreSQL the relay policy head is restored from the local
+		// event store; the canonical relay settings govern either way.
+		relayPolicyProjectionRepo = controlplane.NewLocalRelayPolicyProjectionStore(localEventStore)
+	}
 	// DNS and ML desired registry records live in the durable local store.
 	// PostgreSQL is a derived index and must not seed canonical state at boot.
 	dnsZoneRepo = repository.NewLocalDNSZoneRepository(localOutbox)
@@ -441,9 +458,13 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if agentRuntimeReleaseRepo != nil && serviceRepo != nil {
 		agentRuntimeReleaseSvc = service.NewAgentRuntimeReleaseService(agentRuntimeReleaseRepo, serviceRepo)
 	}
+	// The service publisher writes to, and counts nostr.publish_quorum
+	// against, the service write relays in force — never the Loom relays
+	// that share its pool.
 	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, pgNostrEventRepo, logger,
 		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore),
-		nostrAdapter.WithPublisherSigner(serviceKeyer))
+		nostrAdapter.WithPublisherSigner(serviceKeyer),
+		nostrAdapter.WithPublisherWriteRelays(relayTopology.ServiceWriteRelays))
 	// Control-plane outbox publisher shared by the read-model projector, docs,
 	// SBOM and config-fabric. Its entries carry the control-plane publish
 	// target and its own runner retries them, so they are never redelivered to
@@ -1202,6 +1223,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
 		// Worker read models are published directly from the mutation site.
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
+		nostrAdapter.WithAdvertisedRelaySource(relayTopology),
 	}
 	if dnsProjector != nil {
 		projectorOpts = append(projectorOpts,
@@ -1234,6 +1256,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
 	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePub, projectionHistory, logger, projectorOpts...)
 	controlPlanePub.OnDeliveryAbandoned(nostrProjector.ForgetAbandonedProjection)
+	relayTopology.SetAdvertiser(nostrProjector.PublishAdvertisedRelays)
 
 	// F74b: mutation-bound publishers for package intent/approval and tool
 	// provisioning. OCK is installed below before any ingress starts.
@@ -2543,23 +2566,22 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		logger.Info("NIP-23 docs publisher registered", zap.Strings("relays", controlPlaneRelays))
 	}
 
-	if servicePubkey != "" && relayPolicyProjectionRepo != nil {
-		relayTopologyCoordinator := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{
-			ControlPlanePool:      controlPlanePool,
-			ContextVMRequestPool:  contextVMRequestPool,
-			ContextVMResponsePool: contextVMResponsePool,
-			ServicePool:           relayPool,
-			NostrConfig:           cfg.Nostr,
-			LoomRelays:            cfg.Loom.Relays,
-			Logger:                logger,
-		})
+	healthProvider.RegisterCheck("relay_topology", relayTopology.Health)
+	if servicePubkey != "" {
 		relaySettingsHydrator := controlplane.NewRelaySettingsHydrator(controlplane.RelaySettingsHydratorConfig{
 			Pool:            relayPolicyHydrationPool,
 			ServicePubkey:   servicePubkey,
 			ProjectionStore: relayPolicyProjectionRepo,
+			EventStore:      localEventStore,
 			Logger:          logger,
+			OnCaughtUp:      relayTopology.MarkCaughtUp,
 			OnSnapshotApplied: func(applyCtx context.Context, state controlplane.RelayPolicyState) error {
-				if err := relayTopologyCoordinator.ApplySnapshot(applyCtx, state); err != nil {
+				if err := relayTopology.ApplySnapshot(applyCtx, state); err != nil {
+					if errors.Is(err, errRelayPolicyRefused) {
+						// Logged and reported by relay_topology health; the
+						// topology in force, and the hydration relays, stay.
+						return nil
+					}
 					return err
 				}
 				relayPolicyHydrationPool.ReconfigureRelayURLsContext(
@@ -4465,31 +4487,6 @@ func relayPolicyHydrationRelayURLsForState(configured []string, state controlpla
 		for _, relay := range candidates {
 			relays = appendUniqueRelay(relays, relay)
 		}
-	}
-	return relays
-}
-
-func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string {
-	var relays []string
-	if cfg.Nostr.Sidecar.Enabled {
-		// The sidecar is always the canonical Bahia service boundary. Generic
-		// inbound subscribers, bootstrap replay, and service projections must
-		// retain it even when no public interop relays are configured.
-		for _, r := range controlPlaneRelays {
-			relays = appendUniqueRelay(relays, r)
-		}
-	}
-	if cfg.Nostr.Sidecar.Enabled && cfg.Nostr.Sidecar.MirrorExternal {
-		// The sidecar is the upstream mirror boundary. Subscribe through it for
-		// public interop/audit traffic instead of also connecting Bahia directly to
-		// cfg.Nostr.Relays, which would create duplicate publish/subscribe loops.
-	} else {
-		for _, r := range cfg.Nostr.Relays {
-			relays = appendUniqueRelay(relays, r)
-		}
-	}
-	for _, r := range cfg.Loom.Relays {
-		relays = appendUniqueRelay(relays, r)
 	}
 	return relays
 }
