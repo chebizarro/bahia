@@ -2084,10 +2084,11 @@ func rejectRemovedEncryptedRequestKeys(k *koanf.Koanf) error {
 // transcript key manifest, so a stale deployment cannot believe it still
 // selects a transcript key source.
 func rejectRemovedAssistantWrappedKeys(k *koanf.Koanf) error {
-	for _, key := range k.Keys() {
-		if key == "assistant.wrapped_keys" || strings.HasPrefix(key, "assistant.wrapped_keys.") {
-			return fmt.Errorf("config validation failed: assistant.wrapped_keys has been removed; the transcript key is a Signet system key (secret_store.system_keys.assistant_transcript)")
-		}
+	// k.Keys lists leaves only; an empty or null block is a key of the raw
+	// assistant map.
+	assistant, _ := k.Raw()["assistant"].(map[string]any)
+	if _, present := assistant["wrapped_keys"]; present {
+		return fmt.Errorf("config validation failed: assistant.wrapped_keys has been removed; the transcript key is a Signet system key (secret_store.system_keys.assistant_transcript)")
 	}
 	return nil
 }

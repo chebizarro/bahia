@@ -128,10 +128,16 @@ func TestAssistantRequiresTranscriptSystemKey(t *testing.T) {
 }
 
 func TestRemovedAssistantWrappedKeysAreRejected(t *testing.T) {
-	for _, key := range []string{"mode", "manifest_path", "signet_bunker_uri"} {
-		t.Run(key, func(t *testing.T) {
+	for name, block := range map[string]string{
+		"mode":              "\n    mode: x",
+		"manifest_path":     "\n    manifest_path: x",
+		"signet_bunker_uri": "\n    signet_bunker_uri: x",
+		"empty":             " {}",
+		"null":              "",
+	} {
+		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.yaml")
-			body := fmt.Sprintf("assistant:\n  wrapped_keys:\n    %s: x\n", key)
+			body := "assistant:\n  wrapped_keys:" + block + "\n"
 			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 				t.Fatal(err)
 			}
