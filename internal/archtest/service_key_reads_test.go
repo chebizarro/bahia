@@ -47,7 +47,10 @@ var serviceKeyReadAllowlist = map[string]string{
 	"cmd/bahia-policy-census/main.go|run":            "(c)",
 	"cmd/bahia-migrate/f74a_import.go|runF74aImport": "(c)",
 	"cmd/bahia-migrate/main.go|runNostrMigration":    "(c)",
-	"internal/config/config.go|":                     "config",
+	// (c) the leak-deletion tool signs as the retired, leaked identity: it
+	// hands a key file's content to servicesigner.Open and uses the Keyer.
+	"cmd/bahia-leak-delete/signer.go|(signerFlags).nostrConfig": "(c) bahia-h9n7f.2",
+	"internal/config/config.go|":                                "config",
 }
 
 func TestServiceKeyReadsConfined(t *testing.T) {
