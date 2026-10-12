@@ -5,20 +5,25 @@ Inputs are a Signet (nostrc) checkout, its CMake build directory and the full
 Signet commit under review. The runner builds signetd and signetctl from that
 exact clean commit, starts them on a private loopback relay with a disposable
 encrypted store and synthetic keys, and sets up what
-docs/runbooks/signet-secret-store.md describes:
+docs/runbooks/signet-secret-store.md describes, through the same seeding code
+as the dev stack (signet_dev_seed.py):
 
   - an owner agent (provision) that nobody connects to;
   - a requester key with no Signet rights but the owner's exact delivery
     grant: the single client of its credential.deliver policy;
-  - one imported credential.
+  - one imported tenant credential and another tenant's;
+  - two system credentials (32 random bytes each) labelled
+    bahia-system/assistant-transcript/k1 and bahia-system/confidential-dedupe/k1.
 
 It then runs Bahia's opt-in TestLiveSignetCredentialStore (-tags
 signetinterop) from this clean Bahia checkout: resolve the pinned version,
 then resolve in one round trip (Signet reports the delivered version and
 honours expected_version), refuse another tenant's credential held by the
-same owner, refuse the old pin after a rotation and resolve the new one
-(also as a paced batch), refuse when the delivery grant names another
-client, refuse after revocation.
+same owner, resolve the system keys through the system scope (and refuse
+system/tenant crossovers and a key configured under the wrong purpose),
+refuse the old pin after a rotation and resolve the new one (also as a paced
+batch), refuse when the delivery grant names another client, refuse after
+revocation.
 
 Never accepts an existing identity, relay URL or database. No secret or raw
 test output is written to stdout or stderr; on failure only the failing test
@@ -39,11 +44,11 @@ from signet_live_interop import (  # noqa: E402  (shared guards of the NIP-46 in
     free_loopback_port, management, private_file, pubkey, require_clean_checkout, require_commit,
     run, run_go_test, wait_management, wait_tcp,
 )
+from signet_dev_seed import OWNER, SYSTEM_PURPOSES, seed, signet_config, signet_env  # noqa: E402
 
 LIVE_TEST = "TestLiveSignetCredentialStore"
 PACKAGE = "./internal/adapters/signet"
 SOURCE = "credential_store_live_integration_test.go"
-OWNER = "bahia-vault"
 
 
 def main(argv=None):
@@ -85,27 +90,14 @@ def main(argv=None):
             raise RuntimeError("test roles unexpectedly share a key")
         private_file(root / "bunker.key", bunker_sk + "\n")
         private_file(root / "provisioner.key", provisioner_sk + "\n")
+        private_file(root / "db.key", secrets.token_hex(32) + "\n")
         value_v1, value_v2 = root / "value-v1", root / "value-v2"
         private_file(value_v1, "postgres://live:" + secrets.token_hex(16) + "@db/one")
         private_file(value_v2, "postgres://live:" + secrets.token_hex(16) + "@db/two")
-        policy = root / "policies.toml"
-        private_file(policy, "")
+        private_file(root / "policies.toml", "")
         config = root / "signet.conf"
-        private_file(config,
-                     '[server]\nlog_level = info\nhealth_port = 0\n'
-                     f'[store]\ndb_path = {root / "store.db"}\n'
-                     f'[nostr]\nrelays = {relay_url}\nidentity = bahia-secret-store-live\n'
-                     f'bunker_pubkey = {bunker_pk}\n'
-                     f'provisioner_pubkeys = {provisioner_pk}\n'
-                     f'[policy_defaults]\ndefault_decision = deny\npolicy_file = {policy}\n'
-                     f'[audit]\npath = {root / "audit.log"}\nstdout = false\n'
-                     '[bootstrap]\nport = 0\n'
-                     '[dbus]\nunix_enabled = false\ntcp_enabled = false\n'
-                     '[nip5l]\nenabled = false\n[ssh_agent]\nenabled = false\n')
-        env = os.environ.copy()
-        env.update(SIGNET_DB_KEY=secrets.token_hex(32),
-                   SIGNET_BUNKER_NSEC_FILE=str(root / "bunker.key"),
-                   SIGNET_PROVISIONER_NSEC_FILE=str(root / "provisioner.key"))
+        private_file(config, signet_config(root, relay_url, bunker_pk, provisioner_pk))
+        env = signet_env(root)
         processes = []
         try:
             with open(root / "relay.log", "w") as relay_log, open(root / "daemon.log", "w") as daemon_log:
@@ -117,11 +109,16 @@ def main(argv=None):
                 processes.append(signetd)
                 wait_management(ctl, config, env, signetd)
 
-                run([str(ctl), "-c", str(config), "provision", OWNER], env=env)
-                # The requester holds only the owner's exact delivery grant
-                # (Signet >= 0.7.0); it is never a provisioner.
-                management(ctl, config, env, "set-policy", OWNER, json.dumps(
-                    {"default": "deny", "allow_clients": [requester_pk], "allow_methods": ["credential.deliver"]}))
+                # The owner, the requester's exact credential.deliver grant (no
+                # provisioner rights: Signet >= 0.7.0) and the system credentials,
+                # exactly as the dev stack seeds them.
+                system_key_files = {}
+                for purpose in SYSTEM_PURPOSES:
+                    key_file = root / f"{purpose}.key"
+                    with open(os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as handle:
+                        handle.write(secrets.token_bytes(32))
+                    system_key_files[purpose] = key_file
+                system_ids = seed(ctl, config, env, requester_pk, system_key_files, "k1")
                 # Bahia binds a credential to its tenant by label:
                 # <org-id>/<service-id>/<name>.
                 org_id, service_id = str(uuid.uuid4()), str(uuid.uuid4())
@@ -142,7 +139,11 @@ def main(argv=None):
                     requester_secret_key_hex=requester_sk, owner=OWNER, credential_id=credential_id,
                     org_id=org_id, service_id=service_id, foreign_credential_id=foreign_id,
                     value_v1_file=str(value_v1), value_v2_file=str(value_v2), signetctl=str(ctl),
-                    signet_config=str(config), other_client_pubkey=other_pk)) + "\n")
+                    signet_config=str(config), other_client_pubkey=other_pk,
+                    transcript_credential_id=system_ids["assistant-transcript"],
+                    transcript_key_file=str(system_key_files["assistant-transcript"]),
+                    dedupe_credential_id=system_ids["confidential-dedupe"],
+                    dedupe_key_file=str(system_key_files["confidential-dedupe"]))) + "\n")
                 test_env = env.copy()
                 test_env["BAHIA_SIGNET_SECRET_STORE_CONFIG"] = str(fixture)
                 run_go_test(bahia, test_env, PACKAGE, LIVE_TEST, SOURCE)

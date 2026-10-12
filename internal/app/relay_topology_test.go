@@ -18,10 +18,10 @@ func TestControlPlaneRelayURLsPreferSidecarBackend(t *testing.T) {
 	cfg.Sidecar.PublicURL = "ws://localhost:3000/relay"
 	cfg.Sidecar.BackendURL = "ws://relay:3334"
 
-	got := controlPlaneRelayURLs(cfg)
+	got := ControlPlaneRelayURLs(cfg)
 	want := []string{"ws://relay:3334"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("controlPlaneRelayURLs() = %v, want %v", got, want)
+		t.Fatalf("ControlPlaneRelayURLs() = %v, want %v", got, want)
 	}
 }
 
@@ -32,10 +32,10 @@ func TestControlPlaneRelayURLsUseContextVMPolicyWhenSidecarDisabled(t *testing.T
 	cfg.ContextVMRelays = []string{"wss://contextvm.example"}
 	cfg.Sidecar.Enabled = false
 
-	got := controlPlaneRelayURLs(cfg)
+	got := ControlPlaneRelayURLs(cfg)
 	want := []string{"wss://contextvm.example"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("controlPlaneRelayURLs() = %v, want %v", got, want)
+		t.Fatalf("ControlPlaneRelayURLs() = %v, want %v", got, want)
 	}
 }
 
@@ -46,10 +46,10 @@ func TestControlPlaneRelayURLsFallBackToBrowserPolicyWhenContextVMUnset(t *testi
 	cfg.ContextVMRelays = nil
 	cfg.Sidecar.Enabled = false
 
-	got := controlPlaneRelayURLs(cfg)
+	got := ControlPlaneRelayURLs(cfg)
 	want := []string{"wss://browser.example"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("controlPlaneRelayURLs() = %v, want %v", got, want)
+		t.Fatalf("ControlPlaneRelayURLs() = %v, want %v", got, want)
 	}
 }
 

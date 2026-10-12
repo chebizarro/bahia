@@ -435,7 +435,6 @@ type AssistantConfig struct {
 	SignetBunkerURI      string                     `koanf:"signet_bunker_uri" yaml:"signet_bunker_uri" secret:"true"`
 	SignetAllowMock      bool                       `koanf:"signet_allow_mock" yaml:"signet_allow_mock" secret:"false"`
 	SignetConnectTimeout time.Duration              `koanf:"signet_connect_timeout" yaml:"signet_connect_timeout" secret:"false"`
-	WrappedKeys          AssistantWrappedKeysConfig `koanf:"wrapped_keys" yaml:"wrapped_keys"`
 	Agentic              AssistantAgenticConfig     `koanf:"agentic" yaml:"agentic"`
 	Permissions          AssistantPermissionsConfig `koanf:"permissions" yaml:"permissions"`
 	MCP                  AssistantMCPConfig         `koanf:"mcp" yaml:"mcp"`
@@ -445,14 +444,6 @@ type AssistantConfig struct {
 	Skills    AssistantExtensionSourceConfig `koanf:"skills" yaml:"skills"`
 	Commands  AssistantExtensionSourceConfig `koanf:"commands" yaml:"commands"`
 	Hooks     AssistantExtensionSourceConfig `koanf:"hooks" yaml:"hooks"`
-}
-
-// AssistantWrappedKeysConfig selects a read-only historical key source. It
-// never authorizes new assistant transcript or checkpoint writes.
-type AssistantWrappedKeysConfig struct {
-	Mode               string `koanf:"mode" yaml:"mode" secret:"false"`
-	ManifestPath       string `koanf:"manifest_path" yaml:"manifest_path" secret:"false"`
-	ExpectedGeneration string `koanf:"expected_generation" yaml:"expected_generation" secret:"false"`
 }
 
 // AssistantExtensionSourceConfig points the assistant at directories that hold
@@ -1946,7 +1937,7 @@ func load(configPath string, persistBootstrap bool) (*Config, error) {
 	if err := rejectRemovedEncryptedRequestKeys(k); err != nil {
 		return nil, err
 	}
-	if err := rejectRemovedWrappedKeySignerKeys(k); err != nil {
+	if err := rejectRemovedAssistantWrappedKeys(k); err != nil {
 		return nil, err
 	}
 	if err := rejectUnknownInternalRoutingKeys(k); err != nil {
@@ -2089,14 +2080,15 @@ func rejectRemovedEncryptedRequestKeys(k *koanf.Koanf) error {
 	return nil
 }
 
-// rejectRemovedWrappedKeySignerKeys refuses the per-feature Signet settings
-// nostr.signer replaced, so a stale deployment cannot silently run with a
-// different signer than the one its operator configured.
-func rejectRemovedWrappedKeySignerKeys(k *koanf.Koanf) error {
-	for _, key := range []string{"signet_bunker_uri", "owner_client_secret_key", "connect_timeout"} {
-		if k.Exists("assistant.wrapped_keys." + key) {
-			return fmt.Errorf("config validation failed: assistant.wrapped_keys.%s has been removed; wrapped keys use the service signer configured in nostr.signer", key)
-		}
+// rejectRemovedAssistantWrappedKeys refuses the service-key-wrapped
+// transcript key manifest, so a stale deployment cannot believe it still
+// selects a transcript key source.
+func rejectRemovedAssistantWrappedKeys(k *koanf.Koanf) error {
+	// k.Keys lists leaves only; an empty or null block is a key of the raw
+	// assistant map.
+	assistant, _ := k.Raw()["assistant"].(map[string]any)
+	if _, present := assistant["wrapped_keys"]; present {
+		return fmt.Errorf("config validation failed: assistant.wrapped_keys has been removed; the transcript key is a Signet system key (secret_store.system_keys.assistant_transcript)")
 	}
 	return nil
 }
@@ -2919,23 +2911,6 @@ func (c *Config) validateLLM() error {
 
 func (c *Config) validateAssistant() error {
 	assistant := &c.Assistant
-	wrapped := &assistant.WrappedKeys
-	wrapped.Mode = strings.ToLower(strings.TrimSpace(wrapped.Mode))
-	if wrapped.Mode == "" {
-		wrapped.Mode = "legacy_v1"
-	}
-	switch wrapped.Mode {
-	case "legacy_v1":
-	case "wrapped_read_only":
-		if !assistant.Enabled || strings.TrimSpace(wrapped.ManifestPath) == "" || strings.TrimSpace(wrapped.ExpectedGeneration) == "" || !c.Nostr.HasServiceIdentity() {
-			return fmt.Errorf("config validation failed: assistant.wrapped_keys read-only mode requires enabled assistant, manifest path, generation pin and a service signer (nostr.signer)")
-		}
-		if !filepath.IsAbs(wrapped.ManifestPath) || filepath.Clean(wrapped.ManifestPath) != wrapped.ManifestPath {
-			return fmt.Errorf("config validation failed: assistant.wrapped_keys manifest path must be absolute and clean")
-		}
-	default:
-		return fmt.Errorf("config validation failed: assistant.wrapped_keys.mode must be legacy_v1 or wrapped_read_only")
-	}
 	assistant.LLMBaseURL = strings.TrimRight(strings.TrimSpace(assistant.LLMBaseURL), "/")
 	assistant.LLMModel = strings.TrimSpace(assistant.LLMModel)
 	assistant.LLMAPIKey = strings.TrimSpace(assistant.LLMAPIKey)
@@ -3059,11 +3034,6 @@ func (c *Config) validateAssistant() error {
 	if !c.Nostr.HasServiceIdentity() {
 		return fmt.Errorf("config validation failed: a service signer (nostr.private_key or nostr.signer) is required when assistant.enabled=true")
 	}
-	// legacy_v1 derives transcript keys from the raw service nsec, which a
-	// remote signer never exposes.
-	if c.Nostr.ServiceSignerMethod() != NostrSignerLocal && assistant.WrappedKeys.Mode != "wrapped_read_only" {
-		return fmt.Errorf("config validation failed: assistant.wrapped_keys.mode=wrapped_read_only is required when assistant.enabled=true with a remote nostr.signer.method")
-	}
 	if agentic.Provider != "openai_compatible" && agentic.Provider != "anthropic" {
 		return fmt.Errorf("config validation failed: assistant.agentic.provider must be one of openai_compatible, anthropic")
 	}
@@ -3082,6 +3052,9 @@ func (c *Config) validateAssistant() error {
 	}
 	if agentic.RequestTimeout <= 0 {
 		return fmt.Errorf("config validation failed: assistant.agentic.request_timeout must be > 0 when assistant.enabled=true")
+	}
+	if len(c.SecretStore.SystemKeys.AssistantTranscript) == 0 {
+		return fmt.Errorf("config validation failed: secret_store.system_keys.assistant_transcript is required when assistant.enabled=true (the transcript and checkpoint data key is a Signet system key)")
 	}
 	return nil
 }

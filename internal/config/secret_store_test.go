@@ -1,11 +1,15 @@
 package config
 
 import (
+	"encoding/binary"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/blake2b"
 )
 
 func validSignetSecretStore() SecretStoreConfig {
@@ -84,5 +88,130 @@ secret_store:
 	if got.Backend != SecretStoreBackendSignet || got.Signet.Owner != "bahia-vault" || got.Signet.RequestTimeout != 12*time.Second ||
 		got.Signet.ClientKeyFile != "/run/secrets/bahia-secret-store.key" || len(got.Signet.Relays) != 1 {
 		t.Fatalf("secret_store = %+v", got)
+	}
+}
+
+func systemKey(id string, c byte) SystemKeyConfig {
+	return SystemKeyConfig{KeyID: id, CredentialID: "cred_" + strings.Repeat(string(c), 64), Version: 1}
+}
+
+func TestSystemKeysConfig(t *testing.T) {
+	cfg := validSignetSecretStore()
+	cfg.SystemKeys = SystemKeysConfig{
+		AssistantTranscript: []SystemKeyConfig{{KeyID: " k2 ", CredentialID: " CRED_" + strings.Repeat("A", 64), Version: 2}, systemKey("k1", 'b')},
+		ConfidentialDedupe:  []SystemKeyConfig{systemKey("k1", 'c')},
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.SystemKeys.AssistantTranscript[0]; got.KeyID != "k2" || got.CredentialID != "cred_"+strings.Repeat("a", 64) {
+		t.Fatalf("not normalized: %+v", got)
+	}
+	for name, mutate := range map[string]func(*SecretStoreConfig){
+		"no backend": func(c *SecretStoreConfig) { *c = SecretStoreConfig{SystemKeys: c.SystemKeys} },
+		"two dedupe keys": func(c *SecretStoreConfig) {
+			c.SystemKeys.ConfidentialDedupe = append(c.SystemKeys.ConfidentialDedupe, systemKey("k2", 'd'))
+		},
+		"duplicate key id":  func(c *SecretStoreConfig) { c.SystemKeys.AssistantTranscript[1].KeyID = "k2" },
+		"bad key id":        func(c *SecretStoreConfig) { c.SystemKeys.AssistantTranscript[0].KeyID = "K/2" },
+		"empty key id":      func(c *SecretStoreConfig) { c.SystemKeys.ConfidentialDedupe[0].KeyID = "" },
+		"bad credential id": func(c *SecretStoreConfig) { c.SystemKeys.ConfidentialDedupe[0].CredentialID = "cred_xyz" },
+		"zero version":      func(c *SecretStoreConfig) { c.SystemKeys.ConfidentialDedupe[0].Version = 0 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := validSignetSecretStore()
+			bad.SystemKeys = SystemKeysConfig{
+				AssistantTranscript: []SystemKeyConfig{systemKey("k2", 'a'), systemKey("k1", 'b')},
+				ConfidentialDedupe:  []SystemKeyConfig{systemKey("k1", 'c')},
+			}
+			mutate(&bad)
+			if err := bad.validate(); err == nil || !strings.Contains(err.Error(), "secret_store.system_keys") {
+				t.Fatalf("validate() = %v", err)
+			}
+		})
+	}
+}
+
+func TestSystemKeysConfigLoadsFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := `secret_store:
+  backend: signet
+  signet:
+    pubkey: ` + strings.Repeat("ab", 32) + `
+    relays: [wss://signet.example/relay]
+    client_key_file: /run/secrets/bahia-secret-store.key
+    owner: bahia-vault
+  system_keys:
+    assistant_transcript:
+      - {key_id: k2, credential_id: cred_` + strings.Repeat("a", 64) + `, version: 3}
+      - {key_id: k1, credential_id: cred_` + strings.Repeat("b", 64) + `, version: 1}
+    confidential_dedupe:
+      - {key_id: k1, credential_id: cred_` + strings.Repeat("c", 64) + `, version: 1}
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := cfg.SecretStore.SystemKeys
+	if len(keys.AssistantTranscript) != 2 || keys.AssistantTranscript[0].KeyID != "k2" || keys.AssistantTranscript[0].Version != 3 || len(keys.ConfidentialDedupe) != 1 {
+		t.Fatalf("system keys = %+v", keys)
+	}
+}
+
+// assistantTranscriptKeyYAML configures the Signet store and the assistant
+// transcript system key that assistant.enabled requires.
+const assistantTranscriptKeyYAML = `secret_store:
+  backend: signet
+  signet:
+    pubkey: abababababababababababababababababababababababababababababababab
+    relays: [wss://signet.example/relay]
+    client_key_file: /run/secrets/bahia-secret-store.key
+    owner: bahia-vault
+  system_keys:
+    assistant_transcript:
+      - {key_id: k1, credential_id: cred_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, version: 1}
+`
+
+func withAssistantTranscriptKey(cfg *Config) {
+	cfg.SecretStore = validSignetSecretStore()
+	cfg.SecretStore.SystemKeys.AssistantTranscript = []SystemKeyConfig{systemKey("k1", 'a')}
+}
+
+// signetCredentialID is Signet's credential id (signet/src/store_secrets.c):
+// BLAKE2b-256 over a domain and the length-prefixed owner, type and label.
+func signetCredentialID(t *testing.T, owner, label string) string {
+	t.Helper()
+	h, err := blake2b.New256(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Write([]byte("signet-credential-id-v1"))
+	for _, value := range []string{owner, "credential", label} {
+		var n [4]byte
+		binary.BigEndian.PutUint32(n[:], uint32(len(value)))
+		h.Write(n[:])
+		h.Write([]byte(value))
+	}
+	return "cred_" + hex.EncodeToString(h.Sum(nil))
+}
+
+// The dev compose configuration loads with the dev Signet's pubkey and names
+// exactly the credentials scripts/signet_dev_seed.py imports.
+func TestComposeConfigUsesTheDevSignet(t *testing.T) {
+	t.Setenv("BAHIA_SECRET_STORE_SIGNET_PUBKEY", strings.Repeat("cd", 32))
+	cfg, err := Load(filepath.Join("..", "..", "config.compose.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SecretStore.Backend != SecretStoreBackendSignet || cfg.SecretStore.Signet.Owner != "bahia-vault" || cfg.SecretStore.Signet.Pubkey != strings.Repeat("cd", 32) {
+		t.Fatalf("secret store = %+v", cfg.SecretStore)
+	}
+	for purpose, keys := range map[string][]SystemKeyConfig{"assistant-transcript": cfg.SecretStore.SystemKeys.AssistantTranscript, "confidential-dedupe": cfg.SecretStore.SystemKeys.ConfidentialDedupe} {
+		if len(keys) != 1 || keys[0].Version != 1 || keys[0].CredentialID != signetCredentialID(t, "bahia-vault", "bahia-system/"+purpose+"/"+keys[0].KeyID) {
+			t.Fatalf("%s keys = %+v", purpose, keys)
+		}
 	}
 }

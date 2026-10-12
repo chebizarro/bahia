@@ -5,8 +5,8 @@
 This is an opt-in, **live NIP-46** test of Bahia's service signer
 (`servicesigner.Open` with `nostr.signer.method=nip46`: `get_public_key`,
 `sign_event`, `nip44_encrypt`, `nip44_decrypt`, `nip44_encrypt_b64`,
-`nip44_decrypt_b64`), event-signed SBOM attestations, and the read-only
-wrapped-key assistant startup path, against a real `signetd`. Signet is only
+`nip44_decrypt_b64`) and event-signed SBOM attestations against a real
+`signetd`. Signet is only
 the bunker under test; Bahia uses nothing Signet-specific. The run does not
 deploy a daemon or remove a service key. Its only target is a disposable,
 synthetic identity on a private loopback relay. Bahia owns the runner; Signet
@@ -113,5 +113,4 @@ single-use). Local URI validation errors never echo the URI or secret.
 This proof does not certify the daemon binary beyond the pinned source
 commit, or prove Signet restart or revocation behavior. A passing run is not
 authorization to remove a production service key. Configuring a remote
-signer is described in [`service-signer.md`](service-signer.md); the wrapped
-assistant mode remains read-only.
+signer is described in [`service-signer.md`](service-signer.md).

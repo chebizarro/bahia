@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -25,9 +26,26 @@ const (
 	assistantTranscriptMaxPastAge            = 365 * 24 * time.Hour
 )
 
-// AssistantTranscriptKey is a service-held symmetric transcript key plus the
-// relay-visible reference metadata required to decrypt historical transcript
-// events after reconnect, restart, or a new operator session.
+// AssistantTranscriptKeyRef is how ciphertext names the key that sealed it;
+// it is relay-visible (tags) and bound into the AEAD associated data.
+type AssistantTranscriptKeyRef struct {
+	Ref      string
+	Version  string
+	Rotation string
+}
+
+// AssistantTranscriptKeyProvider lends the cipher of a transcript key. The key
+// bytes never leave the provider: fn receives an XChaCha20-Poly1305 AEAD built
+// from them and must not retain it past the call.
+type AssistantTranscriptKeyProvider interface {
+	// WithActiveKey lends the key that seals new events.
+	WithActiveKey(ctx context.Context, fn func(AssistantTranscriptKeyRef, cipher.AEAD) error) error
+	// WithKey lends the key an event names by key_ref and key_version.
+	WithKey(ctx context.Context, keyRef, keyVersion string, fn func(cipher.AEAD) error) error
+}
+
+// AssistantTranscriptKey is one key held in memory by a
+// StaticAssistantTranscriptKeyProvider. Its holder clears Key when done.
 type AssistantTranscriptKey struct {
 	Ref      string
 	Version  string
@@ -35,36 +53,43 @@ type AssistantTranscriptKey struct {
 	Key      []byte
 }
 
-// AssistantTranscriptKeyProvider resolves the active service-held symmetric key
-// for new transcript events and historical keys for replay.
-type AssistantTranscriptKeyProvider interface {
-	ActiveTranscriptKey(ctx context.Context) (AssistantTranscriptKey, error)
-	TranscriptKey(ctx context.Context, keyRef, keyVersion string) (AssistantTranscriptKey, error)
-}
-
-// StaticAssistantTranscriptKeyProvider is a small production-safe building block
-// for deployments that load one service-held transcript key from configuration
-// or a secret manager before constructing the store.
+// StaticAssistantTranscriptKeyProvider serves one key its holder loaded, such
+// as the retired nsec-derived key the offline re-encryption tool opens history
+// with.
 type StaticAssistantTranscriptKeyProvider struct {
 	Key AssistantTranscriptKey
 }
 
-func (p StaticAssistantTranscriptKeyProvider) ActiveTranscriptKey(context.Context) (AssistantTranscriptKey, error) {
-	return validateAssistantTranscriptKey(p.Key)
+func (p StaticAssistantTranscriptKeyProvider) WithActiveKey(_ context.Context, fn func(AssistantTranscriptKeyRef, cipher.AEAD) error) error {
+	aead, err := p.cipher()
+	if err != nil {
+		return err
+	}
+	return fn(AssistantTranscriptKeyRef{Ref: p.Key.Ref, Version: p.Key.Version, Rotation: p.Key.Rotation}, aead)
 }
 
-func (p StaticAssistantTranscriptKeyProvider) TranscriptKey(_ context.Context, keyRef, keyVersion string) (AssistantTranscriptKey, error) {
-	key, err := validateAssistantTranscriptKey(p.Key)
+func (p StaticAssistantTranscriptKeyProvider) WithKey(_ context.Context, keyRef, keyVersion string, fn func(cipher.AEAD) error) error {
+	if p.Key.Ref != strings.TrimSpace(keyRef) {
+		return fmt.Errorf("assistant transcript key %q is not available", keyRef)
+	}
+	if strings.TrimSpace(keyVersion) != "" && p.Key.Version != strings.TrimSpace(keyVersion) {
+		return fmt.Errorf("assistant transcript key %q version %q is not available", keyRef, keyVersion)
+	}
+	aead, err := p.cipher()
 	if err != nil {
-		return AssistantTranscriptKey{}, err
+		return err
 	}
-	if key.Ref != strings.TrimSpace(keyRef) {
-		return AssistantTranscriptKey{}, fmt.Errorf("assistant transcript key %q is not available", keyRef)
+	return fn(aead)
+}
+
+func (p StaticAssistantTranscriptKeyProvider) cipher() (cipher.AEAD, error) {
+	if strings.TrimSpace(p.Key.Ref) == "" {
+		return nil, fmt.Errorf("assistant transcript key_ref is required")
 	}
-	if strings.TrimSpace(keyVersion) != "" && key.Version != strings.TrimSpace(keyVersion) {
-		return AssistantTranscriptKey{}, fmt.Errorf("assistant transcript key %q version %q is not available", keyRef, keyVersion)
+	if len(p.Key.Key) != chacha20poly1305.KeySize {
+		return nil, fmt.Errorf("assistant transcript key must be %d bytes", chacha20poly1305.KeySize)
 	}
-	return key, nil
+	return chacha20poly1305.NewX(p.Key.Key)
 }
 
 // AssistantTranscriptAppend describes one append-only assistant transcript
@@ -178,11 +203,9 @@ func (s *AssistantTranscriptStore) AppendMessage(ctx context.Context, appendReq 
 	if appendReq.Message.Role == "" {
 		return nil, fmt.Errorf("assistant transcript message role is required")
 	}
-	key, err := s.activeKey(ctx)
-	if err != nil {
-		return nil, err
+	if s.keys == nil {
+		return nil, fmt.Errorf("assistant transcript key provider is not configured")
 	}
-
 	payload := domain.AssistantTranscriptPayload{
 		SessionID: strings.TrimSpace(appendReq.SessionID),
 		TurnID:    strings.TrimSpace(appendReq.TurnID),
@@ -197,10 +220,15 @@ func (s *AssistantTranscriptStore) AppendMessage(ctx context.Context, appendReq 
 		}
 		payload.Metadata["logical_id"] = appendReq.LogicalID
 	}
-	ad := assistantTranscriptAssociatedData(payload, key)
-	envelope, err := encryptAssistantTranscriptPayload(ctx, key, payload, ad)
-	if err != nil {
-		return nil, err
+	var envelope domain.AssistantTranscriptAEADEnvelope
+	var key AssistantTranscriptKeyRef
+	if err := s.keys.WithActiveKey(ctx, func(ref AssistantTranscriptKeyRef, aead cipher.AEAD) error {
+		key = ref
+		var err error
+		envelope, err = encryptAssistantTranscriptPayload(ctx, ref, aead, payload, assistantTranscriptAssociatedData(payload, ref))
+		return err
+	}); err != nil {
+		return nil, fmt.Errorf("seal assistant transcript: %w", err)
 	}
 	content, err := json.Marshal(envelope)
 	if err != nil {
@@ -392,28 +420,6 @@ func (s *AssistantTranscriptStore) BuildModelHistory(ctx context.Context, sessio
 	return messages, nil
 }
 
-func (s *AssistantTranscriptStore) activeKey(ctx context.Context) (AssistantTranscriptKey, error) {
-	if s.keys == nil {
-		return AssistantTranscriptKey{}, fmt.Errorf("assistant transcript key provider is not configured")
-	}
-	key, err := s.keys.ActiveTranscriptKey(ctx)
-	if err != nil {
-		return AssistantTranscriptKey{}, fmt.Errorf("resolve active assistant transcript key: %w", err)
-	}
-	return validateAssistantTranscriptKey(key)
-}
-
-func (s *AssistantTranscriptStore) replayKey(ctx context.Context, keyRef, keyVersion string) (AssistantTranscriptKey, error) {
-	if s.keys == nil {
-		return AssistantTranscriptKey{}, fmt.Errorf("assistant transcript key provider is not configured")
-	}
-	key, err := s.keys.TranscriptKey(ctx, keyRef, keyVersion)
-	if err != nil {
-		return AssistantTranscriptKey{}, fmt.Errorf("resolve assistant transcript key %q: %w", keyRef, err)
-	}
-	return validateAssistantTranscriptKey(key)
-}
-
 // replayFilter scopes a replay REQ to one session by its single-letter "t"
 // topic (kinds.AssistantTranscriptSessionTopic). NIP-01 relays index only
 // single-letter tags, so schema, domain, turn and role are checked locally in
@@ -475,12 +481,15 @@ func (s *AssistantTranscriptStore) decryptEvent(ctx context.Context, ev *nostr.E
 	if envelope.Schema != domain.AssistantTranscriptSchema || envelope.Envelope != domain.AssistantTranscriptEnvelopeServiceHeldAEAD || envelope.Algorithm != domain.AssistantTranscriptAEADAlgorithmXChaCha20 {
 		return nil, fmt.Errorf("assistant transcript envelope %s has unsupported schema/envelope/algorithm", ev.ID.Hex())
 	}
-	key, err := s.replayKey(ctx, envelope.KeyRef, envelope.KeyVersion)
-	if err != nil {
-		return nil, err
+	if s.keys == nil {
+		return nil, fmt.Errorf("assistant transcript key provider is not configured")
 	}
-	payload, err := decryptAssistantTranscriptPayload(key, envelope)
-	if err != nil {
+	var payload domain.AssistantTranscriptPayload
+	if err := s.keys.WithKey(ctx, envelope.KeyRef, envelope.KeyVersion, func(aead cipher.AEAD) error {
+		var err error
+		payload, err = decryptAssistantTranscriptPayload(aead, envelope)
+		return err
+	}); err != nil {
 		return nil, fmt.Errorf("decrypt assistant transcript event %s: %w", ev.ID.Hex(), err)
 	}
 	if err := validateAssistantTranscriptPayloadAgainstTags(payload, ev.Tags, envelope); err != nil {
@@ -489,28 +498,10 @@ func (s *AssistantTranscriptStore) decryptEvent(ctx context.Context, ev *nostr.E
 	return &AssistantTranscriptRecord{Payload: payload, EventID: ev.ID.Hex(), CreatedAt: ev.CreatedAt.Time().UTC(), Pubkey: ev.PubKey.Hex(), DTag: tagValue(ev.Tags, "d")}, nil
 }
 
-func validateAssistantTranscriptKey(key AssistantTranscriptKey) (AssistantTranscriptKey, error) {
-	key.Ref = strings.TrimSpace(key.Ref)
-	key.Version = strings.TrimSpace(key.Version)
-	key.Rotation = strings.TrimSpace(key.Rotation)
-	if key.Ref == "" {
-		return AssistantTranscriptKey{}, fmt.Errorf("assistant transcript key_ref is required")
-	}
-	if len(key.Key) != chacha20poly1305.KeySize {
-		return AssistantTranscriptKey{}, fmt.Errorf("assistant transcript key must be %d bytes", chacha20poly1305.KeySize)
-	}
-	key.Key = append([]byte(nil), key.Key...)
-	return key, nil
-}
-
-func encryptAssistantTranscriptPayload(ctx context.Context, key AssistantTranscriptKey, payload domain.AssistantTranscriptPayload, ad map[string]string) (domain.AssistantTranscriptAEADEnvelope, error) {
+func encryptAssistantTranscriptPayload(ctx context.Context, key AssistantTranscriptKeyRef, aead cipher.AEAD, payload domain.AssistantTranscriptPayload, ad map[string]string) (domain.AssistantTranscriptAEADEnvelope, error) {
 	plaintext, err := json.Marshal(payload)
 	if err != nil {
 		return domain.AssistantTranscriptAEADEnvelope{}, fmt.Errorf("marshal assistant transcript payload: %w", err)
-	}
-	aead, err := chacha20poly1305.NewX(key.Key)
-	if err != nil {
-		return domain.AssistantTranscriptAEADEnvelope{}, fmt.Errorf("create assistant transcript AEAD: %w", err)
 	}
 	nonce := make([]byte, chacha20poly1305.NonceSizeX)
 	if _, err := rand.Read(nonce); err != nil {
@@ -539,7 +530,7 @@ func encryptAssistantTranscriptPayload(ctx context.Context, key AssistantTranscr
 	}, nil
 }
 
-func decryptAssistantTranscriptPayload(key AssistantTranscriptKey, envelope domain.AssistantTranscriptAEADEnvelope) (domain.AssistantTranscriptPayload, error) {
+func decryptAssistantTranscriptPayload(aead cipher.AEAD, envelope domain.AssistantTranscriptAEADEnvelope) (domain.AssistantTranscriptPayload, error) {
 	nonce, err := base64.RawStdEncoding.DecodeString(envelope.Nonce)
 	if err != nil {
 		return domain.AssistantTranscriptPayload{}, fmt.Errorf("decode nonce: %w", err)
@@ -547,10 +538,6 @@ func decryptAssistantTranscriptPayload(key AssistantTranscriptKey, envelope doma
 	ciphertext, err := base64.RawStdEncoding.DecodeString(envelope.Ciphertext)
 	if err != nil {
 		return domain.AssistantTranscriptPayload{}, fmt.Errorf("decode ciphertext: %w", err)
-	}
-	aead, err := chacha20poly1305.NewX(key.Key)
-	if err != nil {
-		return domain.AssistantTranscriptPayload{}, fmt.Errorf("create assistant transcript AEAD: %w", err)
 	}
 	adBytes, err := json.Marshal(envelope.AssociatedData)
 	if err != nil {
@@ -567,7 +554,7 @@ func decryptAssistantTranscriptPayload(key AssistantTranscriptKey, envelope doma
 	return payload, nil
 }
 
-func assistantTranscriptAssociatedData(payload domain.AssistantTranscriptPayload, key AssistantTranscriptKey) map[string]string {
+func assistantTranscriptAssociatedData(payload domain.AssistantTranscriptPayload, key AssistantTranscriptKeyRef) map[string]string {
 	ad := map[string]string{
 		domain.AssistantTranscriptTagSchema:   domain.AssistantTranscriptSchema,
 		domain.AssistantTranscriptTagDomain:   domain.AssistantDomain,
@@ -605,7 +592,7 @@ func assistantTranscriptDTag(payload domain.AssistantTranscriptPayload) string {
 	return prefix + fmt.Sprintf(":seq:%020d", payload.Sequence)
 }
 
-func assistantTranscriptTags(payload domain.AssistantTranscriptPayload, key AssistantTranscriptKey, identity AssistantIdentity, operatorPubkey string) nostr.Tags {
+func assistantTranscriptTags(payload domain.AssistantTranscriptPayload, key AssistantTranscriptKeyRef, identity AssistantIdentity, operatorPubkey string) nostr.Tags {
 	tags := nostr.Tags{
 		{"d", assistantTranscriptDTag(payload)},
 		{domain.AssistantTranscriptTagSchema, domain.AssistantTranscriptSchema},

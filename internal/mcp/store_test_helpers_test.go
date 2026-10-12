@@ -19,7 +19,9 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/openagentsinc/bahia/internal/service"
+	"github.com/openagentsinc/bahia/test/testkit/systemkeys"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -184,12 +186,18 @@ type legacyDNSEndpointLister interface {
 }
 
 // mcpProjectorSigner injects the fixture's local service key as the
-// projector's Keyer, as the daemon does.
+// projector's Keyer and the confidential-dedupe system key, as the daemon
+// does.
 func mcpProjectorSigner(t testing.TB, sk nostr.SecretKey) nostrpool.ProjectorOption {
 	t.Helper()
 	signer, err := nostrutil.NewLocalKeyer(sk.Hex())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return nostrpool.WithProjectorSigner(signer, sk.Public().Hex())
+	withSigner := nostrpool.WithProjectorSigner(signer, sk.Public().Hex())
+	withKeys := nostrpool.WithConfidentialStateHashKeys(systemkeys.Keyring(secretstore.PurposeConfidentialDedupe, 0x5a))
+	return func(p *nostrpool.Projector) {
+		withSigner(p)
+		withKeys(p)
+	}
 }

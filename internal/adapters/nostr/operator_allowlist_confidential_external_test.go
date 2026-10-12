@@ -12,6 +12,8 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/secretstore"
+	"github.com/openagentsinc/bahia/test/testkit/systemkeys"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -56,7 +58,7 @@ func TestOperatorAllowlistRecordReadableOnlyWithFleetOCK(t *testing.T) {
 	otherKey.Key[0] ^= 0xff
 
 	sink := &allowlistSink{}
-	projector := nostradapter.NewProjector(config.NostrConfig{PublishEnabled: true}, &paritySource{}, sink, nil, zap.NewNop(), localServiceSigner(t))
+	projector := nostradapter.NewProjector(config.NostrConfig{PublishEnabled: true}, &paritySource{}, sink, nil, zap.NewNop(), localServiceSigner(t), nostradapter.WithConfidentialStateHashKeys(systemkeys.Keyring(secretstore.PurposeConfidentialDedupe, 0x5a)))
 	require.True(t, projector.Enabled())
 	publisher := nostradapter.NewOperatorAllowlistPublisher(projector, fleetOCKEncryptor{key: fleetKey}, zap.NewNop())
 

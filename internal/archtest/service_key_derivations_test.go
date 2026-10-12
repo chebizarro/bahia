@@ -20,8 +20,7 @@ import (
 // (docs/architecture/secret-store.md), never under a key derived from the
 // service nsec.
 var serviceKeyDerivationAllowlist = map[string]string{
-	"internal/app/service_keyer.go|legacyO1OrgStateDecryptor":                    "(b) legacy O1 org-state decryption",
-	"internal/adapters/nostr/confidential_dedupe.go|confidentialStateHashKeyFor": "(b) bahia-cd0wr.4.9",
+	"internal/app/service_keyer.go|legacyO1OrgStateDecryptor": "(b) legacy O1 org-state decryption",
 }
 
 func TestServiceKeyMaterialDerivationsConfined(t *testing.T) {

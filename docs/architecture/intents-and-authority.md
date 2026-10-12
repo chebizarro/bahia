@@ -45,11 +45,12 @@ protocol of its own.
 
 Event signing is separate from operations requiring raw key material. Secret
 values belong in the [secret store](secret-store.md), reached with a separate
-requester identity, never the service key. O1 org-state reads, assistant
-transcript keys and the confidential-state dedupe HMAC still derive from the
-raw service key. Without
-in-process key material they fail closed with `ErrServiceKeyMaterialRequired`
-(never silently skipped); their migration is tracked in bahia-cd0wr.4.x.
+requester identity, never the service key. O1 org-state reads still derive
+from the raw service key. Without in-process key material they fail closed
+with `ErrServiceKeyMaterialRequired` (never silently skipped); their migration
+is tracked in bahia-cd0wr.4.x. Assistant transcripts and the confidential-state
+dedupe HMAC use [system credentials](secret-store.md#system-credentials) held
+in Signet.
 
 SBOM attestations are standard Nostr events: the exact canonical in-toto
 statement is the content of a `4903` (`CAS_AUDIT`, `domain=sbom`,

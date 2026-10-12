@@ -36,6 +36,12 @@ type liveSecretStoreFixture struct {
 	Signetctl         string `json:"signetctl"`
 	SignetConfig      string `json:"signet_config"`
 	OtherClientPubkey string `json:"other_client_pubkey"`
+	// System credentials: 32-byte data keys labelled
+	// bahia-system/assistant-transcript/k1 and bahia-system/confidential-dedupe/k1.
+	TranscriptCredentialID string `json:"transcript_credential_id"`
+	TranscriptKeyFile      string `json:"transcript_key_file"`
+	DedupeCredentialID     string `json:"dedupe_credential_id"`
+	DedupeKeyFile          string `json:"dedupe_key_file"`
 }
 
 // TestLiveSignetCredentialStore proves the Signet credential store against a
@@ -132,6 +138,8 @@ func TestLiveSignetCredentialStore(t *testing.T) {
 		t.Fatalf("another tenant's credential: err = %v", err)
 	}
 
+	proveSystemCredentials(ctx, t, store, fx, scope)
+
 	value, err := resolve(1)
 	if err != nil {
 		t.Fatalf("resolve v1: %v", err)
@@ -184,4 +192,70 @@ func TestLiveSignetCredentialStore(t *testing.T) {
 
 	signetctl("revoke-credential", fx.CredentialID)
 	expectRefused("revoked", 2, secretstore.ErrRevoked)
+}
+
+// proveSystemCredentials resolves the daemon's system keys through the
+// system scope, and shows the system and tenant namespaces never reach each
+// other on a real signetd.
+func proveSystemCredentials(ctx context.Context, t *testing.T, store *CredentialStore, fx liveSecretStoreFixture, tenant secretstore.Scope) {
+	t.Helper()
+	transcriptKey, err := os.ReadFile(fx.TranscriptKeyFile)
+	if err != nil || len(transcriptKey) != secretstore.SystemKeySize {
+		t.Fatal("fixture transcript_key_file")
+	}
+	dedupeKey, err := os.ReadFile(fx.DedupeKeyFile)
+	if err != nil || len(dedupeKey) != secretstore.SystemKeySize {
+		t.Fatal("fixture dedupe_key_file")
+	}
+	ref := func(id string) domain.SecretCredentialRef {
+		return domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: id, Version: 1}
+	}
+	ring, err := secretstore.NewKeyring([]secretstore.SystemKeyRef{
+		{Purpose: secretstore.PurposeAssistantTranscript, KeyID: "k1", Credential: ref(fx.TranscriptCredentialID)},
+		{Purpose: secretstore.PurposeConfidentialDedupe, KeyID: "k1", Credential: ref(fx.DedupeCredentialID)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ring.Load(ctx, store); err != nil {
+		t.Fatalf("load system keys: %v", err)
+	}
+	var held [][]byte
+	for purpose, want := range map[string][]byte{secretstore.PurposeAssistantTranscript: transcriptKey, secretstore.PurposeConfidentialDedupe: dedupeKey} {
+		if err := ring.Use(ctx, purpose, "", func(_ secretstore.SystemKeyRef, key []byte) error {
+			if string(key) != string(want) {
+				t.Fatalf("%s: resolved another key", purpose)
+			}
+			held = append(held, key)
+			return nil
+		}); err != nil {
+			t.Fatalf("use %s: %v", purpose, err)
+		}
+	}
+	ring.Zeroize()
+	for _, key := range held {
+		if string(key) != string(make([]byte, secretstore.SystemKeySize)) {
+			t.Fatal("Zeroize left a system key in memory")
+		}
+	}
+
+	if value, err := store.Resolve(ctx, ref(fx.TranscriptCredentialID), tenant); value != nil || !errors.Is(err, secretstore.ErrDenied) {
+		t.Fatalf("tenant scope reached a system credential: %v", err)
+	}
+	system, err := secretstore.SystemScope(secretstore.PurposeAssistantTranscript, "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, err := store.Resolve(ctx, ref(fx.CredentialID), system); value != nil || !errors.Is(err, secretstore.ErrDenied) {
+		t.Fatalf("system scope reached a tenant credential: %v", err)
+	}
+	// A config that names the dedupe credential as the transcript key is
+	// refused by its label, not used.
+	swapped, err := secretstore.NewKeyring([]secretstore.SystemKeyRef{{Purpose: secretstore.PurposeAssistantTranscript, KeyID: "k1", Credential: ref(fx.DedupeCredentialID)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := swapped.Load(ctx, store); !errors.Is(err, secretstore.ErrDenied) {
+		t.Fatalf("swapped purposes: err = %v, want ErrDenied", err)
+	}
 }

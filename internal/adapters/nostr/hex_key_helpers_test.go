@@ -7,6 +7,8 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
+	"github.com/openagentsinc/bahia/test/testkit/systemkeys"
 	"go.uber.org/zap"
 )
 
@@ -39,8 +41,18 @@ func withTestServiceKey(p *Projector, privateKeyHex string) *Projector {
 		pubkey, _ := publicKeyHexFromPrivateKeyHex(privateKeyHex)
 		p.servicePubkey = pubkey
 	}
-	p.confidentialStateHashKey, p.confidentialStateHashErr = confidentialStateHashKeyFor(keyer)
+	p.stateHashKeys = testStateHashKeyring(testStateHashKeyFill)
 	return p
+}
+
+// testStateHashKeyFill is the byte the default test confidential-dedupe key
+// repeats.
+const testStateHashKeyFill = 0x5a
+
+// testStateHashKeyring is a loaded keyring whose confidential-dedupe key
+// repeats fill.
+func testStateHashKeyring(fill byte) *secretstore.Keyring {
+	return systemkeys.Keyring(secretstore.PurposeConfidentialDedupe, fill)
 }
 
 // newKeyedTestProjector builds a projector signing as the fixture's
@@ -48,7 +60,7 @@ func withTestServiceKey(p *Projector, privateKeyHex string) *Projector {
 func newKeyedTestProjector(cfg config.NostrConfig, source ProjectionSource, publisher ProjectionPublisher, history ProjectionHistory, logger *zap.Logger, opts ...ProjectorOption) *Projector {
 	if cfg.PrivateKey != "" {
 		pubkey, _ := publicKeyHexFromPrivateKeyHex(cfg.PrivateKey)
-		opts = append([]ProjectorOption{WithProjectorSigner(mustLocalKeyer(cfg.PrivateKey), pubkey)}, opts...)
+		opts = append([]ProjectorOption{WithProjectorSigner(mustLocalKeyer(cfg.PrivateKey), pubkey), WithConfidentialStateHashKeys(testStateHashKeyring(testStateHashKeyFill))}, opts...)
 	}
 	return NewProjector(cfg, source, publisher, history, logger, opts...)
 }

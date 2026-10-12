@@ -214,11 +214,6 @@ func TestRawKeyDerivationsFailClosedForRemoteKeyer(t *testing.T) {
 		t.Fatalf("no identity: legacyO1OrgStateDecryptor = %v, %v; want nil, nil", legacy, err)
 	}
 
-	cfg := config.Defaults()
-	cfg.Assistant.Enabled = true
-	if _, err := assistantTranscriptKeyProvider(cfg); !errors.Is(err, nostrutil.ErrServiceKeyMaterialRequired) {
-		t.Fatalf("assistantTranscriptKeyProvider without local key = %v", err)
-	}
 }
 
 // TestLegacyO1LocalModeReadsDeployedRecords seals a record exactly as the

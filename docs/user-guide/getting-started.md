@@ -81,7 +81,17 @@ secret_store:
     client_key_file: /run/secrets/bahia-secret-store.key # 64-hex requester key, mounted file only
     owner: bahia-vault
     request_timeout: 30s                                 # default
+  system_keys:                                           # the daemon's own 32-byte data keys, held in Signet
+    assistant_transcript:                                # required with assistant.enabled; first entry seals
+      - {key_id: "2026-10", credential_id: cred_<64 hex>, version: 1}
+    confidential_dedupe:                                 # without it confidential records are not published
+      - {key_id: "2026-10", credential_id: cred_<64 hex>, version: 1}
 ```
+
+Confidential state (organizations, members, secrets, payments, security
+findings) is published only once the `confidential_dedupe` key is configured
+and resolved; until then the `system_keys` check fails readiness (`/ready`). Create both keys as
+described in the [runbook](../runbooks/signet-secret-store.md#system-credentials).
 
 Serialized configuration (JSON, YAML, log fields) is a diagnostic view: credentials, private keys, bunker URIs, and auth headers are masked. Never save such a view back as the operational configuration.
 

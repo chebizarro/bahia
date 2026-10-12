@@ -232,8 +232,8 @@ func (s *CredentialStore) Inspect(ctx context.Context, credentialID string, scop
 	if !signetCredentialIDPattern.MatchString(credentialID) {
 		return secretstore.Metadata{}, fmt.Errorf("%w: Signet credential ids are cred_ and 64 hex characters", secretstore.ErrInvalidRef)
 	}
-	if scope.OrgID == [16]byte{} || scope.ServiceID == [16]byte{} {
-		return secretstore.Metadata{}, fmt.Errorf("%w: a credential scope needs an org and a service", secretstore.ErrDenied)
+	if !scope.Valid() {
+		return secretstore.Metadata{}, fmt.Errorf("%w: a credential scope needs an org and a service, or a system purpose", secretstore.ErrDenied)
 	}
 	var raw signetCredentialMetadata
 	if err := s.call(ctx, "credential/inspect", map[string]any{"credential_id": credentialID}, &raw); err != nil {
@@ -248,9 +248,9 @@ func (s *CredentialStore) Inspect(ctx context.Context, credentialID string, scop
 		return secretstore.Metadata{}, fmt.Errorf("%w: credential is not owned by %q", secretstore.ErrDenied, s.owner)
 	}
 	if !scope.Admits(raw.Label) {
-		// One owner holds every tenant's credentials: the label is the
-		// tenant binding. The other tenant's label is never echoed.
-		return secretstore.Metadata{}, fmt.Errorf("%w: credential is not labelled %s<name>", secretstore.ErrDenied, scope.LabelPrefix())
+		// One owner holds every credential: the label is the tenant (or
+		// system) binding. The other label is never echoed.
+		return secretstore.Metadata{}, fmt.Errorf("%w: credential is not labelled %s", secretstore.ErrDenied, scope.Want())
 	}
 	meta, err := raw.metadata()
 	if err != nil {

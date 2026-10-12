@@ -127,38 +127,34 @@ root once, hydrates identity and calls `Recover`. A finished run's checkpoint
 chain is loaded before the next turn so a session-scope cancellation stays
 enforced after restart.
 
-## Assistant key transition boundary
+## Transcript and checkpoint keys
 
-Historical transcript (`30316`) and execution checkpoint (`4903`) envelopes use
-one `AssistantTranscriptKeyProvider`. The deployed v1 provider derives its
-XChaCha20 key from `nostr.private_key`. An offline transition primitive in
-`internal/app/assistant_wrapped_keys.go` obtains exactly that v1 key from the
-matching service configuration, generates a random versioned v2 key, and
-NIP-44-wraps both through the service signer (`nostr.signer`). The wrapped
-manifest retains the service pubkey and exact key identities; immutable v1
-relay events can be read after the nsec is removed only if the v1 wrap remains
-available.
+Transcript (`30316`) and execution checkpoint (`4903`) envelopes are
+XChaCha20-Poly1305 under one `AssistantTranscriptKeyProvider`,
+`service.KeyringTranscriptKeys`: the `assistant-transcript`
+[system credentials](secret-store.md#system-credentials) configured in
+`secret_store.system_keys.assistant_transcript`, resolved from Signet at
+startup and held for the life of the process. `assistant.enabled` requires at
+least one. The first configured key seals new events; the others only open
+events sealed under them. An event records its key as `key_ref` (the
+credential label, `bahia-system/assistant-transcript/<key-id>`) and
+`key_version` (its Signet version), in the tags and in the AEAD associated
+data (transcripts and checkpoints alike; checkpoints sealed under the retired
+nsec-derived key predate the binding and are only opened by the re-encryption
+tool). The provider lends a cipher built inside the keyring's callback
+(`WithActiveKey`, `WithKey`); key bytes never leave it. An event whose key is not configured, including one sealed under the
+retired nsec-derived key (`assistant-transcript/service-nostr-key`), fails
+closed with the key named; nothing derives a key from the service key.
 
-`assistant_manifest_store.go` stores one manifest in an existing private
-filesystem directory: a synced `0600` temp file is linked to the final path
-without replacement, then the directory is synced. Operations pin the owner-
-private directory handle; symlinked ancestors and unrecognized hard links are
-rejected. If a crash leaves exactly one generated same-inode temp hard link,
-restart removes that verified alias, syncs the directory and then loads the
-committed file. Missing, corrupt, loose-permission or wrong-generation files fail
-closed. A caller must retain the
-v2 generation pin independently to detect rollback to a different valid file.
-The manifest opener is **read-only**: `ActiveTranscriptKey` rejects new writes.
-Assistant startup defaults to the deployed v1 provider. Explicit
-`assistant.wrapped_keys.mode=wrapped_read_only` instead requires a local
-manifest path, an independently pinned v2 generation and a configured service
-signer (any `nostr.signer` method; see
-[`service-signer.md`](service-signer.md)). Startup validates the manifest and
-unwraps both keys through the service signer under the existing service
-pubkey. It never falls back to the raw key provider in this mode, and a
-remote signer requires it, because `legacy_v1` derives keys from the raw
-nsec. Transcript and checkpoint reads are available, but assistant work that
-needs a new encrypted event fails closed; this mode is not a fully functional
-assistant. Writer activation
-requires a create-once provisioned generation and complete transcript and
-checkpoint read-write restart tests.
+Until the keys are resolved, sealing and opening wait within the caller's
+deadline and then fail with `ErrUnavailable`; the `system_keys` health check
+fails readiness meanwhile.
+
+History sealed under the retired nsec-derived key and signed by the retired
+service identity is re-established offline by
+`cmd/bahia-assistant-reencrypt`, never at daemon start: it opens the history
+with the retired key (read once from a file), re-seals each checkpoint chain
+root to head with its predecessor links re-pointed, each transcript on its
+coordinate and each session projection with its checkpoint reference
+re-pointed, and publishes them signed by the current identity. See
+[`assistant-transcript-keys.md`](../runbooks/assistant-transcript-keys.md).

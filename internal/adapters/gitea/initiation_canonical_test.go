@@ -18,7 +18,9 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/openagentsinc/bahia/internal/service"
+	"github.com/openagentsinc/bahia/test/testkit/systemkeys"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -52,7 +54,7 @@ func startJournalDaemon(t *testing.T, dir string) *journalDaemon {
 		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostrAdapter.WithLocalOutbox(outbox, store))
 	history := nostrAdapter.NewLocalEventRepository(store, nil).Authored(pubkey)
 	registry := service.NewRegistryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	projector := nostrAdapter.NewProjector(cfg, registry, publisher, history, zap.NewNop(), nostrAdapter.WithProjectorSigner(fixtureKeyer, pubkey))
+	projector := nostrAdapter.NewProjector(cfg, registry, publisher, history, zap.NewNop(), nostrAdapter.WithProjectorSigner(fixtureKeyer, pubkey), nostrAdapter.WithConfidentialStateHashKeys(systemkeys.Keyring(secretstore.PurposeConfidentialDedupe, 0x5a)))
 	publisher.OnDeliveryAbandoned(projector.ForgetAbandonedProjection)
 	signer, err := controlplane.NewPrivateKeySigner(journalDaemonKeyHex)
 	require.NoError(t, err)

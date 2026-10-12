@@ -3,7 +3,6 @@ package app
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -94,6 +93,7 @@ type App struct {
 	SoulFactory               *soulfactory.Reactor
 	soulFactoryCloser         func() error
 	secretStore               *signetAdapter.CredentialStore
+	systemKeys                *secretstore.Keyring
 	serviceSigner             *serviceSigner
 	closeServiceKeyer         func()
 	hiveCIInitiator           *giteaAdapter.Initiator
@@ -222,7 +222,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		nostrAdapter.WithControlPlaneRelayGuard(controlPlaneRelayGuard),
 		closedRetryBudgetOption(cfg.Nostr),
 	}
-	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)
+	controlPlaneRelays := ControlPlaneRelayURLs(cfg.Nostr)
 	contextVMRequestRelays := contextVMRelayURLs(cfg.Nostr)
 	contextVMResponseRelays := append([]string(nil), contextVMRequestRelays...)
 	// Pools that carry the control plane also keep gift wraps on controlled
@@ -808,6 +808,28 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		healthProvider.RegisterCheck("secret_store", secretStoreHealthCheck(secretStore))
 		bgManager.RegisterWithOptions(&secretStoreProbeRunner{store: secretStore, timeout: cfg.SecretStore.Signet.RequestTimeout, logger: logger}, RunnerRequired(false))
 	}
+	// The daemon's own data keys (assistant transcripts, confidential-state
+	// dedupe) are Signet system credentials resolved once and held until
+	// shutdown.
+	systemKeys, err := systemKeyring(cfg)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if !secretStoreOwned {
+			systemKeys.Zeroize()
+		}
+	}()
+	confidentialPublishing := cfg.Nostr.PublishEnabled && serviceKeyer != nil
+	attempts := func() int { return 0 }
+	if !systemKeys.Empty() {
+		keysRunner := &systemKeysRunner{ring: systemKeys, store: secretValues, backoffMin: time.Second, backoffMax: 5 * time.Minute, logger: logger}
+		bgManager.RegisterWithOptions(keysRunner, RunnerRequired(false))
+		attempts = keysRunner.attemptCount
+	}
+	if !systemKeys.Empty() || confidentialPublishing {
+		healthProvider.RegisterCheck("system_keys", systemKeysHealthCheck(systemKeys, attempts, confidentialPublishing))
+	}
 	if staleRunDetector != nil {
 		healthProvider.RegisterCheck("deployment_run_health", func() HealthCheck {
 			if staleRunDetector.LoomStatusComplete() {
@@ -1272,6 +1294,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	}
 	projectorOpts = append(projectorOpts,
 		nostrAdapter.WithProjectorSigner(serviceKeyer, servicePubkey),
+		nostrAdapter.WithConfidentialStateHashKeys(systemKeys),
 		nostrAdapter.WithReadinessTracker(intentReadiness),
 		nostrAdapter.WithIntentDomains(warmStartDomains),
 	)
@@ -2492,10 +2515,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		}
 		assistantPublisher := &auditedNostrPublisher{delegate: controlPlanePool, repo: nostrEventRepo, logger: logger}
 		assistantSubscriber := assistantRelaySubscriber{pool: controlPlanePool}
-		transcriptKeys, err := assistantTranscriptKeyProviderWithSigner(ctx, cfg, serviceKeyer)
-		if err != nil {
-			return nil, err
-		}
+		transcriptKeys := service.KeyringTranscriptKeys{Ring: systemKeys}
 		transcriptStore := service.NewAssistantTranscriptStore(service.AssistantTranscriptStoreConfig{
 			Publisher:     assistantPublisher,
 			Subscriber:    assistantSubscriber,
@@ -3034,6 +3054,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		localEventStore:           localEventStore,
 		localOutbox:               localOutbox,
 		secretStore:               secretStore,
+		systemKeys:                systemKeys,
 	}
 	soulFactoryRuntimeReleased = true
 	localNostrReleased = true
@@ -3836,6 +3857,9 @@ func (a *App) RunContext(ctx context.Context) error {
 	if a.secretStore != nil {
 		a.secretStore.Close()
 	}
+	if a.systemKeys != nil {
+		a.systemKeys.Zeroize()
+	}
 
 	// Shutdown telemetry.
 	if a.Telemetry != nil {
@@ -4468,7 +4492,10 @@ func shouldRegisterHiveCIRunners(cfg config.HiveCIConfig) bool {
 	return cfg.Enabled
 }
 
-func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
+// ControlPlaneRelayURLs is the control-plane pool's relay set: the sidecar
+// backend (or public URL) when the sidecar runs, else the ContextVM relay
+// policy. Assistant events are published there.
+func ControlPlaneRelayURLs(cfg config.NostrConfig) []string {
 	if cfg.Sidecar.Enabled {
 		if cfg.Sidecar.BackendURL != "" {
 			return []string{cfg.Sidecar.BackendURL}
@@ -5070,24 +5097,6 @@ func assistantInputSchemaMap(schema map[string]interface{}) map[string]any {
 		out[key] = value
 	}
 	return out
-}
-
-func assistantTranscriptKeyProvider(cfg *config.Config) (service.AssistantTranscriptKeyProvider, error) {
-	privateKey := ""
-	if cfg != nil {
-		privateKey = strings.TrimSpace(cfg.Nostr.PrivateKey)
-	}
-	if privateKey == "" {
-		// SHA-256 over the nsec: no signer can serve it (bahia-cd0wr.4.8).
-		return nil, fmt.Errorf("assistant transcript and checkpoint key requires nostr.private_key when assistant.enabled=true: %w", nostrutil.ErrServiceKeyMaterialRequired)
-	}
-	sum := sha256.Sum256([]byte("bahia assistant transcript key v1\x00" + privateKey))
-	return service.StaticAssistantTranscriptKeyProvider{Key: service.AssistantTranscriptKey{
-		Ref:      "assistant-transcript/service-nostr-key",
-		Version:  "v1",
-		Rotation: "service-nostr-key",
-		Key:      sum[:],
-	}}, nil
 }
 
 func assistantToolNames(server *mcp.Server) []string {

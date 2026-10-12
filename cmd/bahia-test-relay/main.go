@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/slicestore"
@@ -49,6 +50,11 @@ const (
 	kindRuntimeCapability       = kinds.SoulFactoryRuntimeCapability
 )
 
+type stringList []string
+
+func (s *stringList) String() string     { return strings.Join(*s, ",") }
+func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
+
 type eventSpec struct {
 	Kind    int
 	Author  nostr.SecretKey
@@ -60,6 +66,8 @@ func main() {
 	addr := flag.String("addr", strutil.Env("BAHIA_TEST_RELAY_ADDR", "127.0.0.1:0"), "HTTP/WebSocket listen address")
 	readAuth := flag.String("read-auth", strutil.Env("BAHIA_TEST_RELAY_READ_AUTH", config.ReadAuthModeOff),
 		"NIP-42 read policy applied with the sidecar's topic classification: enforce (the sidecar default; the seeded operator and service keys are admitted), warn or off")
+	var admitted stringList
+	flag.Var(&admitted, "admit", "another 64-hex pubkey admitted to read protected kinds (repeatable), such as a harness's own service identity")
 	flag.Parse()
 	readAuthMode := config.RelaySidecarConfig{ReadAuthMode: *readAuth}.NormalizedReadAuthMode()
 
@@ -84,7 +92,7 @@ func main() {
 		// pubkey. The Playwright operator (0x33..33) is the only admitted reader
 		// besides the service identity, so an unauthenticated page sees CLOSED
 		// auth-required and must recover through AUTH like production.
-		hook := relaysidecar.ReadAuthHook(readAuthMode, servicePubKey.Hex(), []string{operatorPubkey}, nil)
+		hook := relaysidecar.ReadAuthHook(readAuthMode, servicePubKey.Hex(), append([]string{operatorPubkey}, admitted...), nil)
 		relay.OnRequest = hook
 		relay.OnCount = hook
 		relay.Info.Limitation = &nip11.RelayLimitationDocument{AuthRequired: readAuthMode == config.ReadAuthModeEnforce}

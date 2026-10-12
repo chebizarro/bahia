@@ -9,7 +9,7 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/nostrutil"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 )
 
 // confidentialStateHashTag carries a keyed digest of a confidential record's
@@ -23,37 +23,17 @@ const confidentialStateHashTag = "state_hash"
 // answering from a truncated history.
 const canonicalViewLimit = projectionHydrateLimit
 
-// confidentialStateHashDomain separates the digest key from the signing key it
-// is derived from, so the daemon key is never used directly as a MAC key.
-const confidentialStateHashDomain = "bahia/confidential-state-hash/v1"
-
 // confidentialStateHash is a keyed digest of the stable plaintext. It lets the
 // projector dedupe randomized OCK ciphertext without exposing a guessable hash
 // of sensitive payment or vulnerability data in a public tag: only the daemon
-// can recompute it, and it changes whenever the plaintext does.
+// can recompute it, and it changes whenever the plaintext does. The key is the
+// confidential-dedupe system key (secret_store.system_keys), held in Signet.
+// Replacing it changes every digest, so each coordinate is republished once,
+// on its producer's next publish, and deduplicated again from then on.
 func confidentialStateHash(key []byte, plaintext string) gonostr.Tag {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(stableContent(plaintext, false)))
 	return gonostr.Tag{confidentialStateHashTag, hex.EncodeToString(mac.Sum(nil))}
-}
-
-// deriveConfidentialStateHashKey derives the v1 digest key from the raw
-// service key text. No signer can compute it, so it exists only in local mode.
-func deriveConfidentialStateHashKey(privateKey string) []byte {
-	derive := hmac.New(sha256.New, []byte(privateKey))
-	derive.Write([]byte(confidentialStateHashDomain))
-	return derive.Sum(nil)
-}
-
-// confidentialStateHashKeyFor returns the digest key for signer, or an error
-// wrapping nostrutil.ErrServiceKeyMaterialRequired when the signer keeps its
-// key out of process (blocked on bahia-cd0wr.4.x).
-func confidentialStateHashKeyFor(signer gonostr.Signer) ([]byte, error) {
-	material, err := nostrutil.RequireServiceKeyMaterial(signer, "confidential-state dedupe digest")
-	if err != nil {
-		return nil, err
-	}
-	return deriveConfidentialStateHashKey(material), nil
 }
 
 // publishCanonicalFirst signs one confidential cp-state record for a producer
@@ -74,13 +54,17 @@ func (p *Projector) publishCanonicalFirst(ctx context.Context, legacyKind int, i
 	all := make(gonostr.Tags, 0, len(baseTags)+len(tags)+1)
 	all = append(all, baseTags...)
 	all = append(all, tags...)
-	if len(p.confidentialStateHashKey) == 0 {
-		if p.confidentialStateHashErr != nil {
-			return fmt.Errorf("publish confidential %s: %w", entityType, p.confidentialStateHashErr)
-		}
-		return fmt.Errorf("publish confidential %s: confidential state hash key is unavailable", entityType)
+	if p.stateHashKeys == nil {
+		return fmt.Errorf("publish confidential %s: %w: no confidential-dedupe system key (secret_store.system_keys.confidential_dedupe)", entityType, secretstore.ErrNotConfigured)
 	}
-	all = append(all, confidentialStateHash(p.confidentialStateHashKey, plaintext))
+	var stateHash gonostr.Tag
+	if err := p.stateHashKeys.Use(ctx, secretstore.PurposeConfidentialDedupe, "", func(_ secretstore.SystemKeyRef, key []byte) error {
+		stateHash = confidentialStateHash(key, plaintext)
+		return nil
+	}); err != nil {
+		return fmt.Errorf("publish confidential %s: %w", entityType, err)
+	}
+	all = append(all, stateHash)
 	key := projectionKeyOf(wireKind, all)
 	fingerprint := projectionFingerprint(wireKind, all, ciphertext)
 	// Retained state only sharpens the dedupe and the created_at floor; a

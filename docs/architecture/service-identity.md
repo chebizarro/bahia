@@ -32,8 +32,8 @@ fake a key. Data migration belongs to bahia-cd0wr.4.x.
 `config.NostrConfig.PrivateKey` outside the seam and an exact allowlist, and
 on allowlist entries that no longer match a read.
 `internal/archtest/service_key_derivations_test.go` does the same for every
-call of `nostrutil.RequireServiceKeyMaterial` (today the legacy O1 and
-state_hash rows below). Secret values never derive from the service key;
+call of `nostrutil.RequireServiceKeyMaterial` (today only the legacy O1 row
+below). Secret values never derive from the service key;
 they live in the [secret store](secret-store.md).
 
 ## Classification
@@ -59,8 +59,9 @@ separate identity that keeps a local key by design.
 | `internal/adapters/blossom` list/upload auth | a (Blossom identity) | `Config.Signer`; app builds it from `blossom.private_key` |
 | `pkg/discovery/resolver.go:112`, `pkg/client/intent_publisher.go:105` | a | `WithAuthSigner` |
 | `internal/app/service_keyer.go:41` legacy O1 org-state key | b | blocked decryptor returns the sentinel |
-| `internal/adapters/nostr/confidential_dedupe.go:51` state_hash HMAC | b | `publishCanonicalFirst` returns the sentinel |
-| `internal/app/app.go:4979` assistant transcript key, `assistant_wrapped_keys.go:68` | b (4.8) | wraps the sentinel; signature fixed by the factory slice |
+| `internal/adapters/nostr/confidential_dedupe.go` state_hash HMAC | n/a | keyed by the `confidential-dedupe` [system credential](secret-store.md#system-credentials); never the service key |
+| `internal/service/assistant_transcript_keys.go` assistant transcript and checkpoint key | n/a | the `assistant-transcript` [system credential](secret-store.md#system-credentials); never the service key |
+| `cmd/bahia-assistant-reencrypt` | c | reads a **retired** service key from a file once, to open assistant history sealed under its derived key and re-seal it under the system key; signs as the current identity through `servicesigner.Open` ([runbook](../runbooks/assistant-transcript-keys.md)) |
 | `cmd/bahia-policy-census`, `cmd/bahia-migrate` (`f74a_import`, `nostr`), `cmd/cli` (`config_fabric`, confidential reads, `soulfactory`), `cmd/bahia-dns-agent`, `cmd/openclaw-soulfactory-sidecar`, `cmd/bahia-test-relay`, `internal/nostrmigration` | c | offline/operator tools or separate identities; AUTH via a local signer |
 | `cmd/bahia-leak-delete` | c | signs as the retired, leaked identity through `servicesigner.Open` (local key file, NIP-46 or NIP-55L); [runbook](../runbooks/leaked-status-event-deletion.md) |
 | `internal/relaysidecar/server.go` NIP-11 pubkey, admission, config acks | a | `New(ctx, cfg, signer, log)`; `cmd/relay` opens the signer through `servicesigner.Open` and owns it across `SIGHUP` reloads |
