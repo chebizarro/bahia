@@ -49,10 +49,11 @@ type RelaySettingsHydratorConfig struct {
 	// sent EOSE and the bounded drain elapsed): the relay settings now in
 	// force are the latest the relays hold.
 	OnCaughtUp func(context.Context)
-	// EventStore, when set, durably stores every promoted relay-settings
-	// event, so LocalRelayPolicyProjectionStore restores the head after a
-	// restart without PostgreSQL.
-	EventStore RelaySettingsEventStore
+	// Validate, when set, decides whether the daemon accepts a candidate
+	// that would become the head. A refused candidate is never promoted,
+	// stored or applied, so the head (and what a restart restores) is the
+	// latest settings the daemon accepted.
+	Validate func(RelayPolicyState) error
 }
 
 // RelaySettingsHydrator validates canonical relay events and promotes only valid
@@ -71,7 +72,7 @@ type RelaySettingsHydrator struct {
 	newDrainTimer relaySettingsDrainTimerFactory
 	onSnapshot    RelaySettingsSnapshotHandler
 	onCaughtUp    func(context.Context)
-	events        RelaySettingsEventStore
+	validate      func(RelayPolicyState) error
 
 	mu               sync.Mutex
 	seenEventIDs     map[string]struct{}
@@ -122,7 +123,7 @@ func NewRelaySettingsHydrator(cfg RelaySettingsHydratorConfig) *RelaySettingsHyd
 		newDrainTimer: newDrainTimer,
 		onSnapshot:    cfg.OnSnapshotApplied,
 		onCaughtUp:    cfg.OnCaughtUp,
-		events:        cfg.EventStore,
+		validate:      cfg.Validate,
 		seenEventIDs:  make(map[string]struct{}),
 		relayEOSE:     make(map[string]struct{}),
 	}
@@ -197,6 +198,14 @@ func (h *RelaySettingsHydrator) LoadProjection(ctx context.Context) error {
 	state, err := relayPolicyStateFromProjection(projection, h.servicePubkey)
 	if err != nil {
 		return fmt.Errorf("validating durable relay settings projection: %w", err)
+	}
+	if h.validate != nil {
+		if err := h.validate(*state); err != nil {
+			h.logger.Warn("durable relay settings projection is refused by this daemon's relay guard; the bootstrap relay lists stay in force",
+				zap.String("event_id", projection.EventID), zap.Error(err))
+			h.projectionLoaded.Store(true)
+			return nil
+		}
 	}
 	h.storeSnapshot(*state, *projection)
 	if h.onSnapshot != nil {
@@ -384,6 +393,14 @@ func (h *RelaySettingsHydrator) handleEventFromRelay(ctx context.Context, ev *go
 		}
 	}
 
+	if h.validate != nil && h.wouldReplaceHead(ev) {
+		if err := h.validate(*state); err != nil {
+			h.logger.Warn("refusing relay settings state event; the accepted head stays in force",
+				zap.String("event_id", eventID), zap.Error(err))
+			return false
+		}
+	}
+
 	acceptedAt := h.now().UTC()
 	projection := repository.RelayPolicyProjection{
 		AuthorPubkey:     strings.ToLower(ev.PubKey.Hex()),
@@ -410,11 +427,6 @@ func (h *RelaySettingsHydrator) handleEventFromRelay(ctx context.Context, ev *go
 	if !promoted {
 		return false
 	}
-	if h.events != nil {
-		if _, err := h.events.SaveEvent(*ev); err != nil {
-			h.logger.Warn("storing promoted relay settings event in the local event store failed", zap.String("event_id", eventID), zap.Error(err))
-		}
-	}
 
 	h.storeSnapshot(*state, projection)
 	if h.onSnapshot != nil {
@@ -431,6 +443,22 @@ func (h *RelaySettingsHydrator) handleEventFromRelay(ctx context.Context, ev *go
 		zap.Int("service_relays", len(state.ServiceRelays)),
 	)
 	return true
+}
+
+// wouldReplaceHead reports whether ev orders after the head in memory
+// (latest created_at, then lowest id), so validating an older candidate
+// cannot report a refusal for settings that would never apply.
+func (h *RelaySettingsHydrator) wouldReplaceHead(ev *gonostr.Event) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.hasSnapshot {
+		return true
+	}
+	created := int64(ev.CreatedAt)
+	if created != h.latestCreated {
+		return created > h.latestCreated
+	}
+	return ev.ID.Hex() <= h.latestEventID
 }
 
 func (h *RelaySettingsHydrator) Snapshot() (RelayPolicyState, bool) {

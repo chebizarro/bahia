@@ -19,6 +19,12 @@ import (
 
 const relayTopologyApplyTimeout = 30 * time.Second
 
+// relayTopologyCatchUpWarnAfter bounds how long relay_topology health stays
+// pass while the canonical relay settings have not caught up (no EOSE from
+// every relay): past it the check warns, because nothing is advertised until
+// catch-up. It is a health bound, not a delivery timer.
+const relayTopologyCatchUpWarnAfter = 5 * time.Minute
+
 // Sources of the relay topology in force.
 const (
 	// relayTopologySourceBootstrap: the static nostr relay lists, in force
@@ -52,6 +58,8 @@ type relayTopologyCoordinator struct {
 	loomRelays            []string
 	logger                *zap.Logger
 	advertise             func(context.Context) error
+	now                   func() time.Time
+	startedAt             time.Time
 
 	source       string
 	effective    config.ControlPlaneRelays
@@ -69,6 +77,7 @@ type relayTopologyCoordinatorConfig struct {
 	NostrConfig           config.NostrConfig
 	LoomRelays            []string
 	Logger                *zap.Logger
+	Now                   func() time.Time
 }
 
 func newRelayTopologyCoordinator(cfg relayTopologyCoordinatorConfig) *relayTopologyCoordinator {
@@ -78,7 +87,13 @@ func newRelayTopologyCoordinator(cfg relayTopologyCoordinatorConfig) *relayTopol
 	}
 	nostrConfig := cloneNostrRelayTopologyConfig(cfg.NostrConfig)
 	static := staticControlPlaneRelays(nostrConfig)
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
 	return &relayTopologyCoordinator{
+		now:                   now,
+		startedAt:             now(),
 		controlPlanePool:      cfg.ControlPlanePool,
 		contextVMRequestPool:  cfg.ContextVMRequestPool,
 		contextVMResponsePool: cfg.ContextVMResponsePool,
@@ -151,10 +166,39 @@ func (c *relayTopologyCoordinator) MarkCaughtUp(ctx context.Context) {
 	c.runAdvertiser(ctx, advertise)
 }
 
+// ValidateSnapshot is the relay settings hydrator's validator: it refuses
+// canonical relay settings that fail controlplane.ValidateRelayPolicy before
+// they are promoted, records the refusal for health and returns an error
+// wrapping errRelayPolicyRefused.
+func (c *relayTopologyCoordinator) ValidateSnapshot(state controlplane.RelayPolicyState) error {
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+	return c.validateLocked(state)
+}
+
+// validateLocked validates state and records a refusal. Callers hold applyMu.
+func (c *relayTopologyCoordinator) validateLocked(state controlplane.RelayPolicyState) error {
+	err := controlplane.ValidateRelayPolicy(c.nostrConfig, state)
+	if err == nil {
+		return nil
+	}
+	c.mu.Lock()
+	c.refused = err.Error()
+	current := cloneAppStrings(c.effective.Service)
+	source := c.source
+	c.mu.Unlock()
+	c.logger.Error("refusing canonical relay settings; the relay topology in force is kept",
+		zap.Error(err),
+		zap.String("source", source),
+		zap.Strings("service_relays", current),
+	)
+	return fmt.Errorf("%w: %v", errRelayPolicyRefused, err)
+}
+
 // ApplySnapshot applies validated canonical relay settings. Each non-empty
 // canonical list governs (controlplane.EffectiveControlPlaneRelays). Settings
-// that fail nostr.ValidateControlPlaneRelays are refused: nothing changes,
-// the refusal is logged and reported by health, and the returned error wraps
+// that fail ValidateSnapshot are refused: nothing changes, the refusal is
+// logged and reported by health, and the returned error wraps
 // errRelayPolicyRefused.
 func (c *relayTopologyCoordinator) ApplySnapshot(ctx context.Context, state controlplane.RelayPolicyState) error {
 	if c == nil {
@@ -163,23 +207,12 @@ func (c *relayTopologyCoordinator) ApplySnapshot(ctx context.Context, state cont
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	effective := controlplane.EffectiveControlPlaneRelays(c.nostrConfig, state)
-	if err := c.nostrConfig.ValidateControlPlaneRelays("canonical relay settings", effective); err != nil {
-		c.mu.Lock()
-		c.refused = err.Error()
-		current := cloneAppStrings(c.effective.Service)
-		source := c.source
-		c.mu.Unlock()
-		c.logger.Error("refusing canonical relay settings; the relay topology in force is kept",
-			zap.Error(err),
-			zap.String("source", source),
-			zap.Strings("service_relays", current),
-		)
-		return fmt.Errorf("%w: %v", errRelayPolicyRefused, err)
-	}
-
 	c.applyMu.Lock()
 	defer c.applyMu.Unlock()
+	if err := c.validateLocked(state); err != nil {
+		return err
+	}
+	effective := controlplane.EffectiveControlPlaneRelays(c.nostrConfig, state)
 	applyCtx, cancel := context.WithTimeout(ctx, relayTopologyApplyTimeout)
 	if relayPolicySnapshotHasRuntimeTopology(state) {
 		c.reconfigurePools(applyCtx, state)
@@ -373,6 +406,16 @@ func (c *relayTopologyCoordinator) Health() HealthCheck {
 	default:
 		check.Message = "static nostr relay lists are in force until canonical relay settings are received"
 	}
+	if c.nostrConfig.ControlledRelaysUnset() {
+		check.Status = HealthStatusWarn
+		check.Message = "nostr.controlled_relays is unset: only the sidecar is a controlled relay, so control-plane events reach no other relay; list the relays Bahia operates"
+	}
+	if !c.caughtUp {
+		if waited := c.now().Sub(c.startedAt); waited > relayTopologyCatchUpWarnAfter {
+			check.Status = HealthStatusWarn
+			check.Message = "canonical relay settings have not caught up after " + waited.Round(time.Second).String() + " (no EOSE from every relay); relay sets are not advertised and the " + c.source + " relay topology stays in force"
+		}
+	}
 	if drift := c.driftLocked(); len(drift) > 0 {
 		check.Status = HealthStatusWarn
 		check.Details["drift"] = strings.Join(drift, ",")
@@ -418,6 +461,7 @@ func cloneNostrRelayTopologyConfig(cfg config.NostrConfig) config.NostrConfig {
 	cfg.ContextVMRelays = cloneAppStrings(cfg.ContextVMRelays)
 	cfg.NIP34Relays = cloneAppStrings(cfg.NIP34Relays)
 	cfg.ControlledRelays = cloneAppStrings(cfg.ControlledRelays)
+	cfg.AllowedPublicRelays = cloneAppStrings(cfg.AllowedPublicRelays)
 	return cfg
 }
 

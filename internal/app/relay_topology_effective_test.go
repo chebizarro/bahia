@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -152,5 +154,60 @@ func TestRelayTopologyRefusesCanonicalSettingsOutsideTheGuard(t *testing.T) {
 				t.Fatalf("refusal health = %#v", health)
 			}
 		})
+	}
+}
+
+func TestRelayTopologyHealthWarnsWhenCatchUpStalls(t *testing.T) {
+	coordinator, _, advertiser := newEffectiveTopologyFixture(t)
+	start := coordinator.startedAt
+	clock := start
+	coordinator.now = func() time.Time { return clock }
+
+	clock = start.Add(relayTopologyCatchUpWarnAfter - time.Second)
+	if health := coordinator.Health(); health.Status != HealthStatusPass {
+		t.Fatalf("health within the catch-up bound = %#v", health)
+	}
+	clock = start.Add(relayTopologyCatchUpWarnAfter + time.Second)
+	health := coordinator.Health()
+	if health.Status != HealthStatusWarn || !strings.Contains(health.Message, "have not caught up") {
+		t.Fatalf("health past the catch-up bound = %#v", health)
+	}
+	coordinator.MarkCaughtUp(t.Context())
+	if health := coordinator.Health(); health.Status != HealthStatusPass || advertiser.calls != 1 {
+		t.Fatalf("health after catch-up = %#v (advertised %d)", health, advertiser.calls)
+	}
+}
+
+func TestRelayTopologyHealthWarnsWhileControlledRelaysUnset(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = "test-secret-key"
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.BackendURL = "ws://relay:3334/relay"
+	cfg.Nostr.Sidecar.PublicURL = effectiveSidecarRelay
+	cfg.Nostr.ContextVMRelays = []string{"ws://relay:3334/relay"}
+	coordinator := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{NostrConfig: cfg.Nostr, Logger: zap.NewNop()})
+	health := coordinator.Health()
+	if health.Status != HealthStatusWarn || !strings.Contains(health.Message, "nostr.controlled_relays is unset") {
+		t.Fatalf("health with controlled_relays unset = %#v", health)
+	}
+}
+
+// The hydrator's validator records refusals for health before anything is
+// promoted, including public relays in the canonical NIP-34 and DM lists.
+func TestRelayTopologyValidateSnapshotRecordsRefusal(t *testing.T) {
+	coordinator, _, _ := newEffectiveTopologyFixture(t)
+	err := coordinator.ValidateSnapshot(controlplane.RelayPolicyState{
+		Schema:      controlplane.RelaySettingsSchema,
+		NIP34Relays: []string{"wss://relay.damus.io"},
+	})
+	if !errors.Is(err, errRelayPolicyRefused) {
+		t.Fatalf("ValidateSnapshot error = %v, want errRelayPolicyRefused", err)
+	}
+	health := coordinator.Health()
+	if health.Status != HealthStatusWarn || !strings.Contains(health.Details["refused"], "nip34_relays lists public relay") {
+		t.Fatalf("refusal health = %#v", health)
+	}
+	if err := coordinator.ValidateSnapshot(controlplane.RelayPolicyState{Schema: controlplane.RelaySettingsSchema, ServiceRelays: []string{effectiveSharedRelay, effectiveSidecarRelay}}); err != nil {
+		t.Fatalf("valid settings: %v", err)
 	}
 }

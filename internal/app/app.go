@@ -224,18 +224,21 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)
 	contextVMRequestRelays := contextVMRelayURLs(cfg.Nostr)
 	contextVMResponseRelays := append([]string(nil), contextVMRequestRelays...)
-	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, poolOptions...)
+	// Pools that carry the control plane also keep gift wraps on controlled
+	// relays (their ephemeral signer cannot show what they carry).
+	controlPlanePoolOptions := append(append([]nostrAdapter.RelayPoolOption(nil), poolOptions...), nostrAdapter.WithControlPlanePurpose())
+	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, controlPlanePoolOptions...)
 	controlPlanePool.Connect(ctx)
-	contextVMRequestPool := nostrAdapter.NewRelayPool(contextVMRequestRelays, logger, poolOptions...)
+	contextVMRequestPool := nostrAdapter.NewRelayPool(contextVMRequestRelays, logger, controlPlanePoolOptions...)
 	contextVMRequestPool.Connect(ctx)
-	contextVMResponsePool := nostrAdapter.NewRelayPool(contextVMResponseRelays, logger, poolOptions...)
+	contextVMResponsePool := nostrAdapter.NewRelayPool(contextVMResponseRelays, logger, controlPlanePoolOptions...)
 	contextVMResponsePool.Connect(ctx)
 	relayPolicyHydrationRelays := relayPolicyHydrationRelayURLs(cfg.Nostr)
-	relayPolicyHydrationPool := nostrAdapter.NewRelayPool(relayPolicyHydrationRelays, logger, poolOptions...)
+	relayPolicyHydrationPool := nostrAdapter.NewRelayPool(relayPolicyHydrationRelays, logger, controlPlanePoolOptions...)
 	relayPolicyHydrationPool.Connect(ctx)
 
 	relayURLs := serviceRelayPoolURLs(cfg.Nostr, cfg.Nostr.ServiceRelayPolicyRelays(), cfg.Loom.Relays)
-	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, poolOptions...)
+	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, controlPlanePoolOptions...)
 	relayPool.Connect(ctx)
 	// The effective relay policy: the static lists above are bootstrap only;
 	// the canonical relay settings govern the pools, the service write set
@@ -354,9 +357,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			zap.String("moved_to", aside))
 	}
 	if relayPolicyProjectionRepo == nil {
-		// Without PostgreSQL the relay policy head is restored from the local
-		// event store; the canonical relay settings govern either way.
-		relayPolicyProjectionRepo = controlplane.NewLocalRelayPolicyProjectionStore(localEventStore)
+		// Without PostgreSQL the accepted relay policy head is a durable local
+		// control record; the canonical relay settings govern either way.
+		relayPolicyProjectionRepo = controlplane.NewLocalRelayPolicyProjectionStore(localOutbox)
 	}
 	// DNS and ML desired registry records live in the durable local store.
 	// PostgreSQL is a derived index and must not seed canonical state at boot.
@@ -2572,9 +2575,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			Pool:            relayPolicyHydrationPool,
 			ServicePubkey:   servicePubkey,
 			ProjectionStore: relayPolicyProjectionRepo,
-			EventStore:      localEventStore,
 			Logger:          logger,
 			OnCaughtUp:      relayTopology.MarkCaughtUp,
+			Validate:        relayTopology.ValidateSnapshot,
 			OnSnapshotApplied: func(applyCtx context.Context, state controlplane.RelayPolicyState) error {
 				if err := relayTopology.ApplySnapshot(applyCtx, state); err != nil {
 					if errors.Is(err, errRelayPolicyRefused) {
@@ -2973,6 +2976,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	)
 	if pool != nil {
 		nostrTransportMetrics.setStorageSource(repository.NewPgNostrEventArchiveRepository(pool))
+	}
+	if controlPlaneRelayGuard != nil {
+		nostrTransportMetrics.guard = controlPlaneRelayGuard
 	}
 	bgManager.RegisterWithOptions(nostrTransportMetrics, RunnerRequired(false))
 

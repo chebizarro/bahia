@@ -228,7 +228,7 @@ func (h *RelaySettingsHandlers) applyPolicyDirect(ctx context.Context, req Conte
 	}
 	// The daemon refuses canonical relay settings outside its controlled
 	// relays or below its publish quorum; refuse them before they are signed.
-	if err := h.cfg.Nostr.ValidateControlPlaneRelays("relay settings", EffectiveControlPlaneRelays(h.cfg.Nostr, state)); err != nil {
+	if err := ValidateRelayPolicy(h.cfg.Nostr, state); err != nil {
 		return nil, err
 	}
 	if confirmation != nil {

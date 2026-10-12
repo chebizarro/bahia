@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,13 +37,13 @@ func TestEffectiveControlPlaneRelaysCanonicalListsGovern(t *testing.T) {
 }
 
 // Without PostgreSQL the canonical relay settings still govern: the hydrator
-// promotes the latest event after EOSE, persists it in the local event store,
-// and a restarted daemon restores it before any relay answers.
+// promotes the latest event after EOSE into the local projection record, and
+// a restarted daemon restores it before any relay answers.
 func TestRelaySettingsHydratorGovernsWithoutPostgresAcrossRestart(t *testing.T) {
 	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
-	events, err := localstore.Open(filepath.Join(t.TempDir(), "events.bolt"))
+	records, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = events.Close() })
+	t.Cleanup(func() { _ = records.Close() })
 
 	older := signedRelaySettingsStateEvent(t, time.Unix(1_000, 0), RelayPolicyState{
 		Schema: RelaySettingsSchema, ServiceRelays: []string{"wss://relay.sharegap.net", "wss://relay.damus.example"},
@@ -57,8 +58,7 @@ func TestRelaySettingsHydratorGovernsWithoutPostgresAcrossRestart(t *testing.T) 
 		return NewRelaySettingsHydrator(RelaySettingsHydratorConfig{
 			Pool:              nostradapter.NewRelayPool([]string{"wss://relay.example"}, zap.NewNop()),
 			ServicePubkey:     servicePubkey,
-			ProjectionStore:   NewLocalRelayPolicyProjectionStore(events),
-			EventStore:        events,
+			ProjectionStore:   NewLocalRelayPolicyProjectionStore(records),
 			Logger:            zap.NewNop(),
 			Now:               func() time.Time { return time.Unix(2_000, 0).UTC() },
 			OnSnapshotApplied: func(_ context.Context, state RelayPolicyState) error { applied = append(applied, state); return nil },
@@ -104,7 +104,7 @@ func TestRelaySettingsHydratorGovernsWithoutPostgresAcrossRestart(t *testing.T) 
 	require.Equal(t, latest.Content, mustRelayPolicyContent(t, snapshot))
 	require.Len(t, applied, 1, "the older event must not be applied")
 
-	// Restart: a new hydrator over the same local event store restores the
+	// Restart: a new hydrator over the same local record store restores the
 	// latest head before any relay answers and applies it.
 	applied = nil
 	restarted := newHydrator()
@@ -124,4 +124,76 @@ func mustRelayPolicyContent(t *testing.T, state RelayPolicyState) string {
 	payload, _, err := canonicalRelayPolicyPayload(state)
 	require.NoError(t, err)
 	return string(payload)
+}
+
+// A canonical relay-settings event the daemon refuses never becomes the
+// head: it is not promoted, not stored, and a restart restores the last
+// settings the daemon accepted. Older candidates are never validated.
+func TestRelaySettingsHydratorRefusedCandidateNeverBecomesHead(t *testing.T) {
+	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	records, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = records.Close() })
+	static := config.NostrConfig{
+		PublishEnabled:   true,
+		PrivateKey:       testServiceKey,
+		ServiceRelays:    []string{"wss://relay.sharegap.net"},
+		ControlledRelays: []string{"wss://relay.sharegap.net", "wss://bahia.sharegap.net/relay"},
+	}
+	var validated []string
+	validate := func(state RelayPolicyState) error {
+		validated = append(validated, strings.Join(state.ServiceRelays, ","))
+		return ValidateRelayPolicy(static, state)
+	}
+	accepted := signedRelaySettingsStateEvent(t, time.Unix(1_000, 0), RelayPolicyState{
+		Schema: RelaySettingsSchema, ServiceRelays: []string{"wss://relay.sharegap.net", "wss://bahia.sharegap.net/relay"},
+	})
+	refused := signedRelaySettingsStateEvent(t, time.Unix(1_500, 0), RelayPolicyState{
+		Schema: RelaySettingsSchema, ServiceRelays: []string{"wss://relay.sharegap.net", "wss://relay.damus.io"},
+	})
+	older := signedRelaySettingsStateEvent(t, time.Unix(500, 0), RelayPolicyState{
+		Schema: RelaySettingsSchema, ServiceRelays: []string{"wss://uncontrolled.example"},
+	})
+	newHydrator := func() *RelaySettingsHydrator {
+		return NewRelaySettingsHydrator(RelaySettingsHydratorConfig{
+			Pool:            nostradapter.NewRelayPool([]string{"wss://relay.example"}, zap.NewNop()),
+			ServicePubkey:   servicePubkey,
+			ProjectionStore: NewLocalRelayPolicyProjectionStore(records),
+			Validate:        validate,
+			Logger:          zap.NewNop(),
+			Now:             func() time.Time { return time.Unix(2_000, 0).UTC() },
+		})
+	}
+
+	h := newHydrator()
+	require.NoError(t, h.LoadProjection(t.Context()))
+	require.True(t, h.handleEvent(t.Context(), accepted))
+	require.False(t, h.handleEvent(t.Context(), refused), "a refused candidate must not be promoted")
+	require.False(t, h.handleEvent(t.Context(), older))
+	require.Equal(t, []string{"wss://relay.sharegap.net,wss://bahia.sharegap.net/relay", "wss://relay.sharegap.net,wss://relay.damus.io"}, validated,
+		"only candidates that would become the head are validated")
+	projection, ok := h.Projection()
+	require.True(t, ok)
+	require.Equal(t, accepted.ID.Hex(), projection.EventID)
+
+	// The refused event stays the newest on the relays; the restart still
+	// restores the last accepted head and does not apply the refused one.
+	restarted := newHydrator()
+	require.NoError(t, restarted.LoadProjection(t.Context()))
+	projection, ok = restarted.Projection()
+	require.True(t, ok)
+	require.Equal(t, accepted.ID.Hex(), projection.EventID, "a restart restores the last accepted settings")
+	require.False(t, restarted.handleEvent(t.Context(), refused), "the relays still serve the refused event; it stays refused")
+	projection, _ = restarted.Projection()
+	require.Equal(t, accepted.ID.Hex(), projection.EventID)
+}
+
+func TestValidateRelayPolicyChecksCanonicalNIP34AndDMRelayLists(t *testing.T) {
+	static := config.NostrConfig{ServiceRelays: []string{"wss://relay.sharegap.net"}, ControlledRelays: []string{"wss://relay.sharegap.net"}}
+	err := ValidateRelayPolicy(static, RelayPolicyState{NIP34Relays: []string{"wss://relay.damus.io"}})
+	require.ErrorContains(t, err, "canonical relay settings nip34_relays lists public relay wss://relay.damus.io")
+	err = ValidateRelayPolicy(static, RelayPolicyState{DMRelayLists: []RelayPolicyDMRelayList{{Enabled: true, Relays: []string{"wss://nos.lol"}}}})
+	require.ErrorContains(t, err, "dm_relay_lists[0].relays lists public relay wss://nos.lol")
+	static.AllowedPublicRelays = []string{"wss://relay.damus.io"}
+	require.NoError(t, ValidateRelayPolicy(static, RelayPolicyState{NIP34Relays: []string{"wss://relay.damus.io"}}))
 }

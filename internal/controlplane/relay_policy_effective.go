@@ -2,15 +2,13 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"iter"
 	"strings"
 	"sync"
 	"time"
 
-	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
-	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
 )
 
@@ -27,6 +25,26 @@ func EffectiveControlPlaneRelays(static config.NostrConfig, state RelayPolicySta
 	}
 }
 
+// ValidateRelayPolicy checks canonical relay settings against the daemon's
+// relay guard: the control-plane lists they put in force
+// (nostr.ValidateControlPlaneRelays: controlled relays, no public relay,
+// publish quorum) and their NIP-34 and DM relay lists (public relays only
+// when nostr.allowed_public_relays names them).
+func ValidateRelayPolicy(static config.NostrConfig, state RelayPolicyState) error {
+	if err := static.ValidateControlPlaneRelays("canonical relay settings", EffectiveControlPlaneRelays(static, state)); err != nil {
+		return err
+	}
+	if err := static.ValidatePublicRelayUse("canonical relay settings nip34_relays", state.NIP34Relays); err != nil {
+		return err
+	}
+	for i, list := range state.DMRelayLists {
+		if err := static.ValidatePublicRelayUse(fmt.Sprintf("canonical relay settings dm_relay_lists[%d].relays", i), list.Relays); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func firstNonEmptyRelayList(lists ...[]string) []string {
 	for _, list := range lists {
 		if len(list) > 0 {
@@ -36,103 +54,78 @@ func firstNonEmptyRelayList(lists ...[]string) []string {
 	return nil
 }
 
-// RelaySettingsEventStore is the daemon's local event store as the relay
-// settings authority uses it: the latest canonical relay-settings event and
-// durable storage for each one promoted.
-type RelaySettingsEventStore interface {
-	QueryEvents(nostr.Filter) iter.Seq[nostr.Event]
-	SaveEvent(nostr.Event) (bool, error)
+// RelayPolicyRecordStore is the daemon's durable local record store
+// (localstore.Outbox control records) as the relay policy projection uses it.
+type RelayPolicyRecordStore interface {
+	GetControlRecord(family, id string) ([]byte, error)
+	PutControlRecord(family, id string, value []byte) error
 }
+
+const relayPolicyProjectionRecordFamily = "relay-policy-projection"
 
 // LocalRelayPolicyProjectionStore is the relay-policy projection without
-// PostgreSQL: the head lives in memory and is restored from the latest
-// valid relay-settings event in the local event store, which the hydrator
-// writes every promoted event to. It orders candidates exactly as the
-// PostgreSQL projection does (repository.RelayPolicyProjectionShouldReplace).
+// PostgreSQL. Like the PostgreSQL projection it durably keeps the last
+// promoted head per author, as a local control record, and orders candidates
+// with repository.RelayPolicyProjectionShouldReplace. The hydrator promotes
+// only settings the daemon accepts, so a restart restores the last accepted
+// settings even when a refused event is the newest on the relays.
 type LocalRelayPolicyProjectionStore struct {
-	events RelaySettingsEventStore
-
-	mu     sync.Mutex
-	heads  map[string]*repository.RelayPolicyProjection
-	loaded map[string]bool
+	records RelayPolicyRecordStore
+	mu      sync.Mutex
+	// confirmed holds authors whose head a relay served in this process; a
+	// head restored from the record is unconfirmed until then, as with
+	// the PostgreSQL projection.
+	confirmed map[string]bool
 }
 
-// NewLocalRelayPolicyProjectionStore returns a projection store restored from
-// events.
-func NewLocalRelayPolicyProjectionStore(events RelaySettingsEventStore) *LocalRelayPolicyProjectionStore {
-	return &LocalRelayPolicyProjectionStore{
-		events: events,
-		heads:  make(map[string]*repository.RelayPolicyProjection),
-		loaded: make(map[string]bool),
-	}
+// NewLocalRelayPolicyProjectionStore returns a projection store over records.
+func NewLocalRelayPolicyProjectionStore(records RelayPolicyRecordStore) *LocalRelayPolicyProjectionStore {
+	return &LocalRelayPolicyProjectionStore{records: records, confirmed: make(map[string]bool)}
 }
 
 func (s *LocalRelayPolicyProjectionStore) Get(_ context.Context, authorPubkey string) (*repository.RelayPolicyProjection, error) {
-	author := strings.ToLower(strings.TrimSpace(authorPubkey))
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.loaded[author] {
-		head, err := s.restoreLocked(author)
-		if err != nil {
-			return nil, err
-		}
-		s.heads[author] = head
-		s.loaded[author] = true
-	}
-	return cloneProjection(s.heads[author]), nil
+	return s.getLocked(normalizeAuthor(authorPubkey))
 }
 
-// restoreLocked rebuilds the head from the newest valid relay-settings event
-// the local store holds for author. Restored heads are not relay-confirmed.
-func (s *LocalRelayPolicyProjectionStore) restoreLocked(author string) (*repository.RelayPolicyProjection, error) {
-	if s.events == nil {
+func (s *LocalRelayPolicyProjectionStore) getLocked(author string) (*repository.RelayPolicyProjection, error) {
+	raw, err := s.records.GetControlRecord(relayPolicyProjectionRecordFamily, author)
+	if err != nil {
+		return nil, fmt.Errorf("reading local relay policy projection: %w", err)
+	}
+	if len(raw) == 0 {
 		return nil, nil
 	}
-	pubkey, err := nostr.PubKeyFromHex(author)
-	if err != nil {
-		return nil, fmt.Errorf("relay policy projection author: %w", err)
+	var projection repository.RelayPolicyProjection
+	if err := json.Unmarshal(raw, &projection); err != nil {
+		return nil, fmt.Errorf("decoding local relay policy projection: %w", err)
 	}
-	var head *repository.RelayPolicyProjection
-	for ev := range s.events.QueryEvents(nostr.Filter{
-		Kinds:   []nostr.Kind{kinds.CASControlState},
-		Authors: []nostr.PubKey{pubkey},
-		Tags:    nostr.TagMap{kinds.CASControlStateTagD: []string{RelaySettingsDTag}},
-	}) {
-		if !ev.CheckID() || !ev.VerifySignature() {
-			continue
-		}
-		state, err := relayPolicyStateFromCanonicalEvent(&ev, author)
-		if err != nil {
-			continue
-		}
-		payload, hash, err := canonicalRelayPolicyPayload(*state)
-		if err != nil {
-			continue
-		}
-		createdAt := ev.CreatedAt.Time().UTC()
-		candidate := repository.RelayPolicyProjection{
-			AuthorPubkey: author, EventID: ev.ID.Hex(), EventCreatedAt: createdAt, EventAcceptedAt: createdAt,
-			Schema: RelaySettingsSchema, CanonicalPayload: payload, PayloadHash: hash,
-		}
-		if head == nil || repository.RelayPolicyProjectionShouldReplace(*head, candidate) {
-			head = &candidate
-		}
+	if !s.confirmed[author] {
+		projection.RelayConfirmedAt = nil
 	}
-	return head, nil
+	return &projection, nil
 }
 
-func (s *LocalRelayPolicyProjectionStore) Promote(ctx context.Context, candidate repository.RelayPolicyProjection) (bool, error) {
-	author := strings.ToLower(strings.TrimSpace(candidate.AuthorPubkey))
-	if _, err := s.Get(ctx, author); err != nil {
-		return false, err
+func (s *LocalRelayPolicyProjectionStore) putLocked(projection *repository.RelayPolicyProjection) error {
+	raw, err := json.Marshal(projection)
+	if err != nil {
+		return err
 	}
+	return s.records.PutControlRecord(relayPolicyProjectionRecordFamily, normalizeAuthor(projection.AuthorPubkey), raw)
+}
+
+func (s *LocalRelayPolicyProjectionStore) Promote(_ context.Context, candidate repository.RelayPolicyProjection) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	confirmedAt := candidate.EventAcceptedAt.UTC()
-	current := s.heads[author]
+	current, err := s.getLocked(normalizeAuthor(candidate.AuthorPubkey))
+	if err != nil {
+		return false, err
+	}
 	if current != nil && !repository.RelayPolicyProjectionShouldReplace(*current, candidate) {
 		return false, nil
 	}
+	confirmedAt := candidate.EventAcceptedAt.UTC()
 	promoted := cloneProjection(&candidate)
 	if current != nil && current.EventID == candidate.EventID {
 		promoted = cloneProjection(current)
@@ -140,18 +133,28 @@ func (s *LocalRelayPolicyProjectionStore) Promote(ctx context.Context, candidate
 		promoted.LastSyncAt = candidate.LastSyncAt
 	}
 	promoted.RelayConfirmedAt = &confirmedAt
-	s.heads[author] = promoted
+	if err := s.putLocked(promoted); err != nil {
+		return false, fmt.Errorf("storing local relay policy projection: %w", err)
+	}
+	s.confirmed[normalizeAuthor(candidate.AuthorPubkey)] = true
 	return true, nil
 }
 
+// MarkSynced records a completed catch-up. A head restored after a restart
+// stays unconfirmed until a relay serves its event again (Promote).
 func (s *LocalRelayPolicyProjectionStore) MarkSynced(_ context.Context, authorPubkey string, syncedAt time.Time) error {
-	author := strings.ToLower(strings.TrimSpace(authorPubkey))
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if head := s.heads[author]; head != nil && syncedAt.After(head.LastSyncAt) {
-		head.LastSyncAt = syncedAt
+	head, err := s.getLocked(normalizeAuthor(authorPubkey))
+	if err != nil || head == nil || !syncedAt.After(head.LastSyncAt) {
+		return err
 	}
-	return nil
+	head.LastSyncAt = syncedAt
+	return s.putLocked(head)
+}
+
+func normalizeAuthor(pubkey string) string {
+	return strings.ToLower(strings.TrimSpace(pubkey))
 }
 
 func cloneProjection(in *repository.RelayPolicyProjection) *repository.RelayPolicyProjection {
