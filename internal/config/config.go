@@ -697,9 +697,10 @@ type NostrConfig struct {
 
 	// ControlledRelays are the relays Bahia operates: the only relays that
 	// may receive service-signed control-plane events (cp-state, audit,
-	// status, OCK/NIP-44 payloads; relayguard.IsControlPlaneKind). Unset
-	// means the control-plane relays this file names (service, ContextVM and
-	// browser relays). The sidecar's URLs are always controlled. Every
+	// status, OCK/NIP-44 payloads; relayguard.IsControlPlaneKind). The
+	// sidecar's URLs are always controlled; unset means the sidecar alone. It
+	// is required when the daemon publishes with a service identity and any
+	// service, ContextVM or browser relay is not the sidecar. Every
 	// control-plane relay, static or from the canonical relay settings, must
 	// be listed here, and a well-known public relay never can be.
 	ControlledRelays []string `koanf:"controlled_relays" yaml:"controlled_relays" secret:"false"`
@@ -2575,26 +2576,58 @@ func (c NostrConfig) ServiceWriteRelays(serviceRelays []string) []string {
 	return relays
 }
 
-// ControlledRelaySet is nostr.controlled_relays or, when that is unset, the
-// control-plane relays this configuration names (service, ContextVM and
-// browser relays), plus the sidecar's backend and public URLs. Relays are
-// normalized as the relay pool normalizes them.
+// ControlledRelaySet is nostr.controlled_relays plus the sidecar's backend
+// and public URLs; with controlled_relays unset, the sidecar alone. Relays
+// are normalized as the relay pool normalizes them.
 func (c NostrConfig) ControlledRelaySet() []string {
+	relays := c.sidecarRelayURLs()
+	for _, relay := range c.ControlledRelays {
+		relays = appendUniqueRelayURL(relays, relayguard.Normalize(relay))
+	}
+	return relays
+}
+
+func (c NostrConfig) sidecarRelayURLs() []string {
 	var relays []string
 	if c.Sidecar.Enabled {
 		relays = appendUniqueRelayURL(relays, relayguard.Normalize(c.Sidecar.BackendURL))
 		relays = appendUniqueRelayURL(relays, relayguard.Normalize(c.Sidecar.PublicURL))
 	}
-	sources := [][]string{c.ControlledRelays}
-	if len(c.ControlledRelays) == 0 {
-		sources = [][]string{c.ServiceRelayPolicyRelays(), c.ContextVMRelayPolicyRelays(), c.BrowserRelayPolicyRelays()}
+	return relays
+}
+
+// SignsControlPlane reports whether the daemon publishes service-signed
+// control-plane events: publishing is enabled and a service identity
+// (nostr.private_key or a remote nostr.signer) is configured.
+func (c NostrConfig) SignsControlPlane() bool {
+	return c.PublishEnabled && (strings.TrimSpace(c.PrivateKey) != "" || strings.TrimSpace(c.Signer.Method) != "")
+}
+
+// ControlledRelaysUnset reports that nostr.controlled_relays is empty while
+// the daemon signs control-plane events, so only the sidecar is controlled.
+func (c NostrConfig) ControlledRelaysUnset() bool {
+	return len(c.ControlledRelays) == 0 && c.SignsControlPlane()
+}
+
+// requiresControlledRelays: the daemon signs control-plane events and its
+// static control-plane relays name a relay other than the sidecar, so the
+// operator must say which relays Bahia controls.
+func (c NostrConfig) requiresControlledRelays() bool {
+	if len(c.ControlledRelays) > 0 || !c.SignsControlPlane() {
+		return false
 	}
-	for _, source := range sources {
-		for _, relay := range source {
-			relays = appendUniqueRelayURL(relays, relayguard.Normalize(relay))
+	sidecar := make(map[string]struct{})
+	for _, relay := range c.sidecarRelayURLs() {
+		sidecar[relay] = struct{}{}
+	}
+	for _, list := range [][]string{c.ServiceRelayPolicyRelays(), c.ContextVMRelayPolicyRelays(), c.BrowserRelayPolicyRelays()} {
+		for _, relay := range list {
+			if _, ok := sidecar[relayguard.Normalize(relay)]; !ok {
+				return true
+			}
 		}
 	}
-	return relays
+	return false
 }
 
 // ControlPlaneRelays are the relay lists that carry Bahia's control plane:
@@ -2608,13 +2641,17 @@ type ControlPlaneRelays struct {
 // ValidateControlPlaneRelays checks control-plane relay lists against the
 // controlled relay set and the publish quorum. source names where the lists
 // come from in errors ("nostr" for this file, "canonical relay settings" at
-// runtime). Every relay must be controlled and none may be a well-known
-// public relay; a publish_quorum above 1 needs at least that many service
-// write relays.
+// runtime). No relay may be a well-known public relay; when the controlled
+// set is authoritative (controlled_relays is set, or the daemon signs
+// control-plane events) every relay must be controlled; a publish_quorum
+// above 1 needs at least that many service write relays.
 func (c NostrConfig) ValidateControlPlaneRelays(source string, lists ControlPlaneRelays) error {
-	controlled := make(map[string]struct{})
-	for _, relay := range c.ControlledRelaySet() {
-		controlled[relay] = struct{}{}
+	var controlled map[string]struct{}
+	if len(c.ControlledRelays) > 0 || c.SignsControlPlane() {
+		controlled = make(map[string]struct{})
+		for _, relay := range c.ControlledRelaySet() {
+			controlled[relay] = struct{}{}
+		}
 	}
 	for _, list := range []struct {
 		name   string
@@ -2625,7 +2662,7 @@ func (c NostrConfig) ValidateControlPlaneRelays(source string, lists ControlPlan
 			if relayguard.IsWellKnownPublic(normalized) {
 				return fmt.Errorf("%s %s lists public relay %s: Bahia's control plane is never published to public relays", source, list.name, normalized)
 			}
-			if _, ok := controlled[normalized]; !ok {
+			if _, ok := controlled[normalized]; controlled != nil && !ok {
 				return fmt.Errorf("%s %s lists %s, which is not in nostr.controlled_relays", source, list.name, normalized)
 			}
 		}
@@ -4033,6 +4070,15 @@ func (c *Config) validateNostrRelayPolicy() error {
 			return fmt.Errorf("config validation failed: nostr.controlled_relays lists public relay %s: Bahia's control plane is never published to public relays", relay)
 		}
 	}
+	if c.Nostr.requiresControlledRelays() {
+		var named []string
+		for _, list := range [][]string{c.Nostr.ServiceRelayPolicyRelays(), c.Nostr.ContextVMRelayPolicyRelays(), c.Nostr.BrowserRelayPolicyRelays()} {
+			for _, relay := range list {
+				named = appendUniqueRelayURL(named, relayguard.Normalize(relay))
+			}
+		}
+		return fmt.Errorf("config validation failed: nostr.controlled_relays is required when the daemon publishes with a service identity: list the relays Bahia operates (at least every service, contextvm and browser relay; never a public relay), e.g. controlled_relays: [%s]", strings.Join(named, ", "))
+	}
 	if err := c.Nostr.ValidateControlPlaneRelays("nostr", ControlPlaneRelays{
 		Service:   c.Nostr.ServiceRelayPolicyRelays(),
 		ContextVM: c.Nostr.ContextVMRelayPolicyRelays(),
@@ -4054,10 +4100,6 @@ func (c *Config) validateNostrRelayPolicy() error {
 // validatePublicRelayUse rejects well-known public relays in the
 // non-control-plane relay lists unless nostr.allowed_public_relays names them.
 func (c *Config) validatePublicRelayUse() error {
-	allowed := make(map[string]struct{}, len(c.Nostr.AllowedPublicRelays))
-	for _, relay := range c.Nostr.AllowedPublicRelays {
-		allowed[relayguard.Normalize(relay)] = struct{}{}
-	}
 	type relayList struct {
 		name   string
 		relays []string
@@ -4082,14 +4124,27 @@ func (c *Config) validatePublicRelayUse() error {
 		lists = append(lists, relayList{fmt.Sprintf("nostr.dm_relay_lists[%d].relays", i), list.Relays})
 	}
 	for _, list := range lists {
-		for _, relay := range list.relays {
-			normalized := relayguard.Normalize(relay)
-			if !relayguard.IsWellKnownPublic(normalized) {
-				continue
-			}
-			if _, ok := allowed[normalized]; !ok {
-				return fmt.Errorf("config validation failed: %s lists public relay %s; list it in nostr.allowed_public_relays to use it for this non-control-plane purpose", list.name, normalized)
-			}
+		if err := c.Nostr.ValidatePublicRelayUse(list.name, list.relays); err != nil {
+			return fmt.Errorf("config validation failed: %w", err)
+		}
+	}
+	return nil
+}
+
+// ValidatePublicRelayUse rejects well-known public relays in a
+// non-control-plane relay list unless nostr.allowed_public_relays names them.
+func (c NostrConfig) ValidatePublicRelayUse(name string, relays []string) error {
+	for _, relay := range relays {
+		normalized := relayguard.Normalize(relay)
+		if !relayguard.IsWellKnownPublic(normalized) {
+			continue
+		}
+		allowed := false
+		for _, permitted := range c.AllowedPublicRelays {
+			allowed = allowed || relayguard.Normalize(permitted) == normalized
+		}
+		if !allowed {
+			return fmt.Errorf("%s lists public relay %s; list it in nostr.allowed_public_relays to use it for this non-control-plane purpose", name, normalized)
 		}
 	}
 	return nil

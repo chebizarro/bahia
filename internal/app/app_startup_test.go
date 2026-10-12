@@ -144,6 +144,7 @@ func TestNewRegistersSoulFactoryWhenEnabled(t *testing.T) {
 	cfg := startupTestConfig("full")
 	configureValidSoulFactory(t, cfg, signer.pubkey)
 	cfg.Nostr.BrowserRelays = []string{"wss://browser.example", "wss://relay.example"}
+	cfg.Nostr.ControlledRelays = []string{"wss://browser.example", "wss://relay.example"}
 	app, err := New(cfg)
 	require.NoError(t, err)
 	defer syncTestLogger(t, app.Logger)

@@ -55,14 +55,29 @@ func TestControlPlaneRelaysMustBeControlled(t *testing.T) {
 	cfg.Nostr.ControlledRelays = []string{testSidecarPublicURL}
 	requireValidationError(t, cfg, "contextvm_relays lists wss://contextvm.example")
 
-	// Unset controlled_relays defaults to the configured control-plane relays.
+	// A publishing service identity must name its controlled relays: an
+	// unset list never silently trusts the relays it is meant to check.
 	cfg = Defaults()
-	cfg.Nostr.ServiceRelays = []string{testSidecarPublicURL, testSharedRelay}
-	cfg.Nostr.ContextVMRelays = []string{testSidecarPublicURL}
-	if err := cfg.validate(); err != nil {
-		t.Fatalf("validate() error: %v", err)
+	cfg.Nostr.PrivateKey = "test-secret-key"
+	cfg.Nostr.ServiceRelays = []string{testSidecarPublicURL, "wss://relay.nostr.net"}
+	requireValidationError(t, cfg, "nostr.controlled_relays is required when the daemon publishes with a service identity")
+
+	// Unset means the sidecar alone: a sidecar-only topology needs no list.
+	cfg = Defaults()
+	cfg.Nostr.PrivateKey = "test-secret-key"
+	cfg.Nostr.Sidecar = RelaySidecarConfig{Enabled: true, PublicURL: testSidecarPublicURL, BackendURL: "ws://relay:3334/relay"}
+	cfg.Nostr.ContextVMRelays = []string{"ws://relay:3334/relay"}
+	cfg.Nostr.BrowserRelays = []string{testSidecarPublicURL}
+	if got := cfg.Nostr.ControlledRelaySet(); len(got) != 2 {
+		t.Fatalf("ControlledRelaySet() = %v, want the sidecar URLs", got)
 	}
-	assertStringSlice(t, cfg.Nostr.ControlledRelaySet(), []string{testSidecarPublicURL, testSharedRelay})
+	if !cfg.Nostr.ControlledRelaysUnset() {
+		t.Fatal("ControlledRelaysUnset() = false for a signing daemon without controlled_relays")
+	}
+	err := cfg.Nostr.ValidateControlPlaneRelays("canonical relay settings", ControlPlaneRelays{Service: []string{testSharedRelay}})
+	if err == nil || !strings.Contains(err.Error(), "not in nostr.controlled_relays") {
+		t.Fatalf("canonical relay outside the sidecar-only controlled set: err = %v", err)
+	}
 }
 
 func TestPublishQuorumMustFitServiceWriteRelays(t *testing.T) {
