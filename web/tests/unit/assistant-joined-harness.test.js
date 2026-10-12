@@ -97,6 +97,10 @@ describe('assistant joined harness backend config', () => {
     expect(yaml).toContain('password: "pw\\"with-quote"');
     expect(yaml).toContain(`authorized_pubkeys: ["${'d'.repeat(64)}"]`);
     expect(yaml).toContain(`contextvm_relays: ["${RELAY}"]`);
+    expect(yaml).toContain(`controlled_relays: ["${RELAY}"]`);
+    expect(yaml).toContain('aggregate: {rate_per_minute: 1200, burst: 256}');
+    expect(yaml).toContain('state: {rate_per_minute: 600, burst: 128}');
+    expect(yaml).toContain('general: {rate_per_minute: 600, burst: 128}');
     expect(yaml).toContain('llm_base_url: "http://127.0.0.1:43000"');
     expect(yaml).toContain('default_workflow: "batch"');
   });

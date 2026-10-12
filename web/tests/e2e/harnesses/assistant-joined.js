@@ -25,7 +25,8 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { getPublicKey } from 'nostr-tools';
+import { finalizeEvent, getPublicKey, verifyEvent } from 'nostr-tools';
+import { CONTEXTVM_SERVER_ANNOUNCEMENT, NIP51_RELAY_SET } from '../../../src/lib/nostr/kinds.gen.js';
 import { startBahiaTestRelay } from '../relay-harness.js';
 
 const execFileAsync = promisify(execFile);
@@ -308,9 +309,17 @@ nostr:
   # Resolving the two system keys costs six gift wraps; with the default
   # priority budget (burst 4) readiness would wait half a minute.
   outbound:
+    # Startup publishes discovery, relay sets and every signed docs page on
+    # the state lane. This disposable loopback relay needs enough bounded
+    # capacity for that burst plus assistant projections (state) and
+    # execution checkpoints (general).
+    aggregate: {rate_per_minute: 1200, burst: 256}
     lanes:
-      priority: {rate_per_minute: 60, burst: 12}
-    relay_wire_priority: {rate_per_minute: 60, burst: 12}
+      priority: {rate_per_minute: 600, burst: 128}
+      state: {rate_per_minute: 600, burst: 128}
+      general: {rate_per_minute: 600, burst: 128}
+    relay_wire: {rate_per_minute: 1200, burst: 256}
+    relay_wire_priority: {rate_per_minute: 600, burst: 128}
 secret_store:
   backend: signet
   signet:
@@ -355,11 +364,85 @@ async function readJSON(url) {
   return response.json();
 }
 
+// /ready proves the daemon can serve, not that the browser can discover its
+// ContextVM capability. Prove the service-signed announcement and advertised
+// browser/ContextVM relay sets are actually readable through the relay's
+// enforced NIP-42 policy before exposing the dashboard to Playwright.
+export function waitForAssistantDiscovery({ relayUrl, servicePubkey, serviceSecretHex, timeoutMs = STARTUP_TIMEOUT_MS, WebSocketImpl = WebSocket }) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocketImpl(relayUrl);
+    const secret = Buffer.from(serviceSecretHex, 'hex');
+    const required = new Set(['bahia-system-v1', 'bahia-browser-v1', 'bahia-contextvm-v1']);
+    const seen = new Set();
+    const subscriptionId = 'assistant-joined-discovery';
+    let authEventId = '';
+    let authenticated = false;
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      socket.close();
+      if (error) reject(error);
+      else resolve();
+    };
+    const deadline = setTimeout(() => finish(new Error(`service discovery did not reach ${relayUrl}; observed ${[...seen].join(', ') || 'no records'}`)), timeoutMs);
+    const subscribe = () => socket.send(JSON.stringify(['REQ', subscriptionId, {
+      kinds: [CONTEXTVM_SERVER_ANNOUNCEMENT, NIP51_RELAY_SET], authors: [servicePubkey], '#d': [...required]
+    }]));
+    socket.addEventListener('open', subscribe);
+    socket.addEventListener('error', () => finish(new Error(`service discovery relay connection failed: ${relayUrl}`)));
+    socket.addEventListener('close', () => {
+      if (!settled) finish(new Error(`service discovery relay closed before required records arrived: ${relayUrl}`));
+    });
+    socket.addEventListener('message', ({ data }) => {
+      if (settled) return;
+      let frame;
+      try { frame = JSON.parse(String(data)); }
+      catch { finish(new Error('service discovery relay sent invalid JSON')); return; }
+      if (frame[0] === 'AUTH' && !authEventId) {
+        const event = finalizeEvent({ kind: 22242, created_at: Math.floor(Date.now() / 1000),
+          tags: [['relay', relayUrl], ['challenge', frame[1]]], content: '' }, secret);
+        authEventId = event.id;
+        socket.send(JSON.stringify(['AUTH', event]));
+      } else if (frame[0] === 'OK' && frame[1] === authEventId) {
+        if (frame[2] !== true) finish(new Error(`service discovery NIP-42 AUTH rejected: ${frame[3] || 'no reason'}`));
+        else { authenticated = true; subscribe(); }
+      } else if (frame[0] === 'CLOSED' && frame[1] === subscriptionId) {
+        if (!authenticated && /^auth-required:/i.test(frame[2] || '')) return;
+        finish(new Error(`service discovery REQ closed: ${frame[2] || 'no reason'}`));
+      } else if (frame[0] === 'EVENT' && frame[1] === subscriptionId) {
+        const event = frame[2];
+        if (!verifyEvent(event) || event.pubkey !== servicePubkey) {
+          finish(new Error('service discovery relay delivered an invalid service event'));
+          return;
+        }
+        const d = event.tags?.find((tag) => tag[0] === 'd')?.[1];
+        if (!required.has(d)) return;
+        if (d === 'bahia-system-v1') {
+          let content;
+          try { content = JSON.parse(event.content); }
+          catch { finish(new Error('service discovery announcement has invalid JSON')); return; }
+          if (content.schema !== 'bahia.system-discovery.v1' || content.features?.encrypted_nostr_requests !== true) {
+            finish(new Error('service discovery does not advertise encrypted ContextVM requests'));
+            return;
+          }
+        } else if (!event.tags?.some((tag) => tag[0] === 'relay' && tag[1] === relayUrl)) {
+          finish(new Error(`service discovery relay set ${d} does not advertise ${relayUrl}`));
+          return;
+        }
+        seen.add(d);
+        if (seen.size === required.size) finish();
+      }
+    });
+  });
+}
+
 function startBackend({ binary, configPath, backendPort, logFile }) {
-  // The controlplane reactor logs this once its ContextVM subscription has
-  // caught up; before that a browser request (ephemeral 25910) would be lost.
+  // The ContextVM follower must have completed its historical REQ before
+  // Playwright can publish a request that may use an ephemeral wrapper.
   const proc = startProcess('bahia backend', binary, ['-config', configPath], {
-    ready: /control-plane EOSE received/,
+    ready: /ContextVM requests caught up/,
     logFile
   });
   const ready = proc.ready.then(async () => {
@@ -534,6 +617,7 @@ export async function startAssistantJoinedHarness({ skipDashboardBuild = false }
     log('starting backend');
     stops.push(() => backend?.stop());
     await launchBackend();
+    await waitForAssistantDiscovery({ relayUrl: relay.wsUrl, servicePubkey, serviceSecretHex });
 
     const restartBackend = async () => {
       log('restarting backend');
