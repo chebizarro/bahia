@@ -1278,9 +1278,6 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			nostrAdapter.WithDNSBackendProjectionSource(localDNSBackendProjectionSource{repo: dnsBackendRepo, logger: logger}),
 		)
 	}
-	if dnsPolicyRepo != nil {
-		projectorOpts = append(projectorOpts, nostrAdapter.WithDNSPolicyProjectionSource(dnsPolicyRepositoryProjectionSource{repo: dnsPolicyRepo}))
-	}
 	// SBOM events are published from the SBOM orchestrator's mutation site.
 	// Warm-start covers ALL cp-state domains: every domain's canonical
 	// records are published from mutation sites, and warm-start re-publishes
@@ -3982,14 +3979,6 @@ func (a assistantDNSRegistryAdapter) ListDNSPolicies(ctx context.Context) ([]dom
 		return nil, nil
 	}
 	return a.policies.List(ctx)
-}
-
-type dnsPolicyRepositoryProjectionSource struct {
-	repo repository.DNSPolicyRepository
-}
-
-func (s dnsPolicyRepositoryProjectionSource) ListEnabledDNSPolicies(ctx context.Context) ([]domain.DNSPolicy, error) {
-	return s.repo.ListEnabled(ctx)
 }
 
 type configDNSBackendProjectionSource struct {

@@ -89,11 +89,6 @@ type DNSBackendProjectionSource interface {
 	ListDNSBackendStates(ctx context.Context) []domain.DNSBackendState
 }
 
-// DNSPolicyProjectionSource is the authoritative DNS policy read model source used by the projector.
-type DNSPolicyProjectionSource interface {
-	ListEnabledDNSPolicies(ctx context.Context) ([]domain.DNSPolicy, error)
-}
-
 type dnsPublishedEndpoint struct {
 	FQDN    string
 	Payload string
@@ -148,7 +143,6 @@ type Projector struct {
 	dnsSource            DNSProjectionSource
 	dnsZoneSource        DNSZoneProjectionSource
 	dnsBackendSource     DNSBackendProjectionSource
-	dnsPolicySource      DNSPolicyProjectionSource
 	publisher            ProjectionPublisher
 	history              ProjectionHistory
 	signer               gonostr.Signer
@@ -234,10 +228,6 @@ func WithDNSZoneProjectionSource(source DNSZoneProjectionSource) ProjectorOption
 
 func WithDNSBackendProjectionSource(source DNSBackendProjectionSource) ProjectorOption {
 	return func(p *Projector) { p.dnsBackendSource = source }
-}
-
-func WithDNSPolicyProjectionSource(source DNSPolicyProjectionSource) ProjectorOption {
-	return func(p *Projector) { p.dnsPolicySource = source }
 }
 
 // AdvertisedRelays are the relay lists Bahia advertises in its relay-set
@@ -371,9 +361,8 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		events.EventLLMDeploymentRunCreated,
 		events.EventLLMDeploymentRunCompleted,
 		// Observation/sync/state-changed/drift events are not audited.
-		// EventLLMDeploymentRunStatusChanged, EventLLMRouteObservation,
-		// EventLLMRouteStateChanged, EventLLMRouteDriftDetected,
-		// EventLLMGatewayRouteSynced, eventDNSZoneSynced, eventDNSRecordChanged,
+		// EventLLMDeploymentRunStatusChanged, EventLLMRouteStateChanged,
+		// eventDNSZoneSynced, eventDNSRecordChanged,
 		// eventDNSDriftDetected: their state is already published as replaceable
 		// cp-state by mutation-site publishers. DNS endpoint registered/deregistered
 		// are discrete mutations and remain.
@@ -829,7 +818,7 @@ func (p *Projector) publishSystemDiscoveryAnnouncement(ctx context.Context, cfg 
 		"versions":                    discoveryVersions(),
 		"observed_deployments":        observedDeployments,
 		"observed_deployments_status": observedStatus,
-		"control_plane":               discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil || p.dnsZoneSource != nil || p.dnsBackendSource != nil || p.dnsPolicySource != nil),
+		"control_plane":               discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil || p.dnsZoneSource != nil || p.dnsBackendSource != nil),
 		"blossom": map[string]any{
 			"enabled":       cfg.Blossom.Enabled,
 			"url":           cfg.Blossom.URL,

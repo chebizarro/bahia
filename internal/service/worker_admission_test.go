@@ -76,7 +76,7 @@ func TestDynamicHeadroomRequiresWorkloadPlusReserveForMemoryScenarios(t *testing
 		{name: "min equals reserve", min: reserve},
 		{name: "min above reserve", min: 6 * gibibyte},
 	}
-	scopes := []AdmissionScope{AdmissionScopeServiceDeploy, AdmissionScopeLLMDeploy, AdmissionScopeMLDeploy, AdmissionScopeBackup}
+	scopes := []AdmissionScope{AdmissionScopeServiceDeploy, AdmissionScopeMLDeploy, AdmissionScopeBackup}
 	for _, scenario := range scenarios {
 		for _, scope := range scopes {
 			t.Run(string(scope)+"/"+scenario.name, func(t *testing.T) {
@@ -115,12 +115,12 @@ func TestDynamicHeadroomPreservesDiskAndVRAMReserve(t *testing.T) {
 	}
 
 	worker = dynamicAdmissionWorker(64*gibibyte, 64*gibibyte, required-1)
-	decision = Evaluate(WorkerAdmissionRequest{Scope: AdmissionScopeLLMDeploy, Worker: &worker, MinVRAMBytes: min, PressureThresholds: thresholds})
+	decision = Evaluate(WorkerAdmissionRequest{Scope: AdmissionScopeMLDeploy, Worker: &worker, MinVRAMBytes: min, PressureThresholds: thresholds})
 	if decision.Eligible || decision.Code != "dynamic_headroom_insufficient" {
 		t.Fatalf("expected VRAM reserve rejection below %d bytes, got %#v", required, decision)
 	}
 	worker = dynamicAdmissionWorker(64*gibibyte, 64*gibibyte, required)
-	decision = Evaluate(WorkerAdmissionRequest{Scope: AdmissionScopeLLMDeploy, Worker: &worker, MinVRAMBytes: min, PressureThresholds: thresholds})
+	decision = Evaluate(WorkerAdmissionRequest{Scope: AdmissionScopeMLDeploy, Worker: &worker, MinVRAMBytes: min, PressureThresholds: thresholds})
 	if !decision.Eligible {
 		t.Fatalf("expected VRAM admission at workload+reserve %d bytes, got %#v", required, decision)
 	}

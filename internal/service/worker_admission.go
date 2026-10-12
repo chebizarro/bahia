@@ -13,7 +13,6 @@ type AdmissionScope string
 
 const (
 	AdmissionScopeServiceDeploy AdmissionScope = "service_deploy"
-	AdmissionScopeLLMDeploy     AdmissionScope = "llm_deploy"
 	AdmissionScopeMLDeploy      AdmissionScope = "ml_deploy"
 	AdmissionScopeBackup        AdmissionScope = "backup"
 	AdmissionScopeCleanup       AdmissionScope = "cleanup"

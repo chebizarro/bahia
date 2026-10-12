@@ -26,12 +26,11 @@ var sqlPromotionCalls = map[string]bool{
 // views. These argument names identify the current PostgreSQL-backed assembly,
 // rather than banning the reconciler or coordinator abstraction itself.
 var sqlSourcedStartupCalls = map[string]string{
-	"NewReconciler":                 "stateRepo",
-	"NewDNSProjector":               "stateRepo",
-	"NewStaleRunDetector":           "nostrEventRepo",
-	"NewLLMProvisioningCoordinator": "llmRunRepo",
-	"NewBackupSchedulerRunner":      "backupScheduler",
-	"loadAssistantSessions":         "nostrEventRepo",
+	"NewReconciler":            "stateRepo",
+	"NewDNSProjector":          "stateRepo",
+	"NewStaleRunDetector":      "nostrEventRepo",
+	"NewBackupSchedulerRunner": "backupScheduler",
+	"loadAssistantSessions":    "nostrEventRepo",
 }
 
 // These coordinators may serve freshly validated signed requests, but their

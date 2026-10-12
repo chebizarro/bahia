@@ -256,3 +256,32 @@ func containsNormalizedString(values []string, want string) bool {
 	}
 	return false
 }
+
+func totalGPUMemoryGB(w domain.Worker) int {
+	total := 0
+	for _, a := range w.Accelerators {
+		count := a.Count
+		if count <= 0 {
+			count = 1
+		}
+		total += count * a.MemoryGB
+	}
+	return total
+}
+
+func compactReasons(reasons []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		reason = strings.TrimSpace(reason)
+		if reason == "" || seen[reason] {
+			continue
+		}
+		seen[reason] = true
+		out = append(out, reason)
+		if len(out) >= 8 {
+			break
+		}
+	}
+	return out
+}

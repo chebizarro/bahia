@@ -936,20 +936,6 @@ func (s *fakeDNSBackendProjectionSource) ListDNSBackendStates(context.Context) [
 	return append([]domain.DNSBackendState(nil), s.backends...)
 }
 
-type fakeDNSPolicyProjectionSource struct {
-	policies []domain.DNSPolicy
-}
-
-func (s *fakeDNSPolicyProjectionSource) ListEnabledDNSPolicies(context.Context) ([]domain.DNSPolicy, error) {
-	out := make([]domain.DNSPolicy, 0, len(s.policies))
-	for _, policy := range s.policies {
-		if policy.Enabled {
-			out = append(out, policy)
-		}
-	}
-	return out, nil
-}
-
 // TestProjectorPublishesDNSAuditEvents verifies that DNS endpoint
 // registered/deregistered events produce audit facts, while DNS sync/drift
 // events do not (observation/sync events removed from audit set).
@@ -1024,7 +1010,7 @@ func TestProjectorSystemDiscoveryAdvertisesDNSOnlyWhenSourceConfigured(t *testin
 	cfg.Nostr.BrowserRelays = []string{"ws://localhost:3000/relay"}
 
 	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true), WithDNSProjectionSource(&fakeDNSProjectionSource{}), WithDNSPolicyProjectionSource(&fakeDNSPolicyProjectionSource{}))
+	projector := newTestProjector(cfg.Nostr, newFakeProjectionSource(), sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true), WithDNSProjectionSource(&fakeDNSProjectionSource{}))
 	projector.publishSystemConfigOnStartup(ctx)
 
 	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)

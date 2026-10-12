@@ -35,10 +35,8 @@
 1	internal/adapters/llm.AvatarProviderReplicate
 1	internal/adapters/llm.AvatarStylePresetByID
 1	internal/adapters/llm.IsContextTooLarge
-1	internal/adapters/llm.NewExternalAPIProvisioner
 1	internal/adapters/llm.NewHTTPGatewayRouteManager
 1	internal/adapters/llm.NewRuntimeProvisioner
-1	internal/adapters/llm.WithExternalAPISecretResolver
 1	internal/adapters/llm.WithHTTPClient
 1	internal/adapters/llm.WithRuntimeFactory
 1	internal/adapters/nostr.DecodeBahiaIdentity
@@ -288,8 +286,6 @@
 1	internal/service.JobStatsTracker.GetAllStats
 1	internal/service.JobStatsTracker.RecordJobCompletion
 1	internal/service.LLMParityReport.OK
-1	internal/service.LLMProvisioningCoordinator.ProcessOnce
-1	internal/service.LLMProvisioningCoordinator.SetupSubscriptions
 1	internal/service.LLMRegistryService.ListRouteStates
 1	internal/service.LocalManagedInstanceState.BackfillFromIndex
 1	internal/service.MLProvenanceService.RegisterArtifactRef
@@ -309,8 +305,6 @@
 1	internal/service.NewDefaultMLArtifactResolverSet
 1	internal/service.NewInMemoryPowerAwareOrchestrator
 1	internal/service.NewJobStatsTracker
-1	internal/service.NewLLMPlacementService
-1	internal/service.NewLLMProvisioningCoordinator
 1	internal/service.NewMLInferenceProvisioningCoordinator
 1	internal/service.NewMLProvenanceService
 1	internal/service.NewMLRecipeCoordinator
@@ -353,8 +347,6 @@
 1	internal/service.WithContinuityRuntimeAdapter
 1	internal/service.WithContinuityStorageAdapter
 1	internal/service.WithContinuityWakeAdapter
-1	internal/service.WithLLMPromotionLock
-1	internal/service.WithLLMProvisioningResponder
 1	internal/service.WithMLInferenceProvisioningConfig
 1	internal/service.WithMLInferenceProvisioningGateway
 1	internal/service.WithMLInferenceProvisioningResponder

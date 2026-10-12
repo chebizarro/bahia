@@ -257,7 +257,7 @@ func TestDNSCanonicalPublisherPublishesPolicy(t *testing.T) {
 	policyID := uuid.New()
 	zoneID := uuid.New()
 	ttl := 120
-	pub, sink := newTestPublisher(t, WithDNSPolicyProjectionSource(&fakeDNSPolicyProjectionSource{}))
+	pub, sink := newTestPublisher(t)
 
 	policy := domain.DNSPolicy{
 		ID:     policyID,

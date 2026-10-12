@@ -29,10 +29,6 @@ func TestCoordinatorsFailClosedWhenMandatoryDependenciesAreMissing(t *testing.T)
 			name: "ML inference", dependency: "registry",
 			run: (&MLInferenceProvisioningCoordinator{}).Run, processOnce: (&MLInferenceProvisioningCoordinator{}).ProcessOnce,
 		},
-		{
-			name: "LLM provisioning", dependency: "registry",
-			run: (&LLMProvisioningCoordinator{}).Run, processOnce: (&LLMProvisioningCoordinator{}).ProcessOnce,
-		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

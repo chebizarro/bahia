@@ -8,7 +8,6 @@
 1	internal/service/backup_retention_coordinator.go time.NewTicker
 1	internal/service/backup_run_coordinator.go time.NewTicker
 1	internal/service/failover_trigger_engine.go time.NewTicker
-1	internal/service/llm_provisioning_coordinator.go time.NewTicker
 1	internal/service/managed_instance_supervisor.go time.NewTicker
 2	internal/service/ml_inference_provisioning_coordinator.go time.NewTicker
 2	internal/service/ml_recipe_coordinator.go time.NewTicker
