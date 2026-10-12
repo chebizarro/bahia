@@ -1777,7 +1777,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		giftWrapIngress = controlplane.NewIntentGiftWrapIngress(controlplane.IntentGiftWrapIngressConfig{
 			Signer:           serviceKeyer,
 			Processor:        intentProcessor,
-			SensitiveDomains: []string{"org", "secret", "notification", "relay"},
+			SensitiveDomains: []string{"org", "secret", "notification", "relay", "hiveci-policy"},
 			Logger:           logger,
 		})
 		intentProcessor.SetGiftWrapIngress(giftWrapIngress)
@@ -2155,7 +2155,8 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		resumer := hiveciAdapter.NewPendingResultResumer(hiveRepo, bridge, cfg.HiveCI.MaxRetries, logger)
 		hivePolicyHydrator = newHiveCIPolicyHydrator(&hivePolicyReady,
 			func(ctx context.Context) error {
-				return ensureConfiguredHiveCIPipelinePolicies(ctx, cfg.HiveCI.Policies, service.NewLocalAdoptionView(localSupervisionState), hiveRepo)
+				_, err := hiveRepo.ListPolicies(ctx)
+				return err
 			},
 			func(ctx context.Context, resume bool) {
 				hiveResultMu.Lock()
@@ -2187,7 +2188,10 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			zap.Int("trusted_release_attestors", len(cfg.HiveCI.TrustedReleaseAttestors)),
 			zap.Bool("auto_register_builds", cfg.HiveCI.AutoRegisterBuilds),
 			zap.Bool("sql_index", hiveIndex != nil),
-			zap.Int("pipeline_policies", len(cfg.HiveCI.Policies)))
+			zap.Int("build_dispatch_policies", len(cfg.HiveCI.Policies)))
+	}
+	if enabledDomains["hiveci-policy"] {
+		intentProcessor.RegisterHandler("hiveci-policy", controlplane.NewHiveCIPolicyIntentHandler(hiveRepo))
 	}
 	healthProvider.RegisterCheck("hiveci", func() HealthCheck {
 		check := HealthCheck{Name: "hiveci", Status: HealthStatusPass, Message: "Hive-CI evidence, result state and the accepted-release ledger are read from the local event store; pending results resume from canonical state",

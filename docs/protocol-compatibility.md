@@ -9,6 +9,7 @@ topic constants are in `internal/kinds`.
 | Capability | Contract | Required behavior |
 |---|---|---|
 | Desired-state mutation | `30900`, `t=bahia-intent` | client-signed; sensitive domains use a `1059`/`21059` gift wrap |
+| Hive-CI pipeline-policy mutation | `30900`, `domain=hiveci-policy`, `t=hiveci-policy` | fleet-operator-signed complete desired state at `hiveci:policy:<uuidv7>`; service-signed encrypted state/tombstone follows |
 | Intent disposition | `30315`, `t=intent-status` | requester-scoped accepted/rejected status; not durable state |
 | Canonical state | `30900`, `schema=bahia.cp-state.v1` | addressable latest-wins record with a family `#t` topic |
 | Operational status | `30315` | addressable NIP-38 state/progress |

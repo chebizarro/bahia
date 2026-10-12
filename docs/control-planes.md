@@ -125,7 +125,9 @@ ContextVM reply, which is encrypted to the requester.
 
 - **Hive-CI**: `build/request` is an intent; the CI bus is Hive-CI's
   `5401`/`5402`. Operators must trust the service pubkey as a CI issuer for
-  self-dispatched runs.
+  self-dispatched runs. Fleet operators manage pipeline-policy desired state
+  with signed `30900` `hiveci-policy` intents; the service publishes its
+  encrypted `hiveci-policy` canonical state or tombstone before any SQL index.
 - **Loom**: deployments executed by workers use Loom's own kinds; Bahia
   publishes run health as `30315` and, when `loom.canonical_projection` is
   enabled, job state as `30900`/`4903`.

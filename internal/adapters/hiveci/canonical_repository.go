@@ -25,6 +25,7 @@ import (
 // event store. *nostr.HiveCICanonicalPublisher satisfies it.
 type CanonicalState interface {
 	PublishPipelinePolicy(context.Context, domain.HiveCIPipelinePolicy) error
+	DeletePipelinePolicy(context.Context, uuid.UUID) error
 	ListPipelinePolicies(context.Context) ([]domain.HiveCIPipelinePolicy, error)
 	PublishResultState(context.Context, domain.HiveCIResultState) error
 	ListResultStates(ctx context.Context, resultEventID, runEventID string) ([]domain.HiveCIResultState, error)
@@ -32,10 +33,6 @@ type CanonicalState interface {
 	ListAcceptedReleases(ctx context.Context, releaseIdentity string) ([]domain.HiveCIAcceptedRelease, error)
 	PublishReleaseConflict(context.Context, domain.HiveCIReleaseConflict) error
 }
-
-// hiveCIPolicyNamespace derives the id of a pipeline policy that has no
-// SQL-era id from its key, so every daemon names the same policy the same way.
-var hiveCIPolicyNamespace = uuid.MustParse("4f0a7b8e-2d3c-4e5f-9a1b-6c7d8e9f0a1b")
 
 // evidenceQueryLimit bounds how many signed events one read scans.
 const evidenceQueryLimit = 1000
@@ -492,9 +489,8 @@ func (r *CanonicalRepository) GetPolicyByRepoAndWorkflow(ctx context.Context, re
 	return &found, nil
 }
 
-// EnsurePipelinePolicy publishes the policy, keeping the id of the canonical
-// record for the same key so releases accepted under it keep referring to it.
-// The optional SQL index is never read to create canonical policy state.
+// EnsurePipelinePolicy publishes an author-identified policy before its optional
+// SQL index. Selectors may change without changing the policy's identity.
 func (r *CanonicalRepository) EnsurePipelinePolicy(ctx context.Context, policy domain.HiveCIPipelinePolicy) error {
 	if err := r.available(); err != nil {
 		return err
@@ -504,24 +500,26 @@ func (r *CanonicalRepository) EnsurePipelinePolicy(ctx context.Context, policy d
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	key := policyKeyOf(policy)
+	if policy.ID == uuid.Nil {
+		return fmt.Errorf("Hive-CI policy id is required")
+	}
 	retained, err := r.canonical.ListPipelinePolicies(ctx)
 	if err != nil {
 		return err
 	}
 	now := r.now()
-	policy.ID = uuid.Nil
 	for _, existing := range retained {
-		if policyKeyOf(existing) == key {
-			policy.ID, policy.CreatedAt = existing.ID, existing.CreatedAt
-			if policy.Enabled == existing.Enabled && samePolicyMetadata(policy.Metadata, existing.Metadata) {
+		if existing.ID == policy.ID {
+			policy.CreatedAt = existing.CreatedAt
+			if policy.RepoCoordinate == existing.RepoCoordinate && policy.WorkflowPath == existing.WorkflowPath &&
+				policy.BranchPattern == existing.BranchPattern && policy.ServiceID == existing.ServiceID &&
+				policy.EnvironmentID == existing.EnvironmentID && policy.Enabled == existing.Enabled &&
+				samePolicyMetadata(policy.Metadata, existing.Metadata) {
 				return nil
 			}
-			break
+		} else if policyKeyOf(existing) == policyKeyOf(policy) {
+			return fmt.Errorf("Hive-CI policy selectors already belong to %s", existing.ID)
 		}
-	}
-	if policy.ID == uuid.Nil {
-		policy.ID = uuid.NewSHA1(hiveCIPolicyNamespace, []byte(key))
 	}
 	if policy.CreatedAt.IsZero() {
 		policy.CreatedAt = now
@@ -532,6 +530,28 @@ func (r *CanonicalRepository) EnsurePipelinePolicy(ctx context.Context, policy d
 	}
 	if r.index != nil {
 		r.mirror("policy", r.index.EnsurePipelinePolicy(ctx, policy))
+	}
+	return nil
+}
+
+// DeletePipelinePolicy retains a canonical tombstone even when no prior live
+// policy is locally visible (the daemon may have missed the create intent).
+func (r *CanonicalRepository) DeletePipelinePolicy(ctx context.Context, id uuid.UUID) error {
+	if err := r.available(); err != nil {
+		return err
+	}
+	if id == uuid.Nil {
+		return fmt.Errorf("Hive-CI policy id is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.canonical.DeletePipelinePolicy(ctx, id); err != nil {
+		return fmt.Errorf("publish Hive-CI pipeline policy tombstone: %w", err)
+	}
+	if index, ok := r.index.(interface {
+		DeletePipelinePolicy(context.Context, uuid.UUID) error
+	}); ok {
+		r.mirror("policy delete", index.DeletePipelinePolicy(ctx, id))
 	}
 	return nil
 }

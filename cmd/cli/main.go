@@ -90,6 +90,7 @@ func newRootCommand() *cobra.Command {
 		workersCommands(),
 		logsCommands(),
 		policiesCommands(),
+		hiveCIPolicyCommands(),
 		configCommands(),
 		secretsCommands(),
 		orgsCommands(),

@@ -111,6 +111,9 @@ type Intent struct {
 	// Actor is the pubkey that originated the intent. For relay-path intents
 	// this is Event.PubKey; for in-process MCP dispatch it is the caller's pubkey.
 	Actor string
+	// authenticatedByIngress is set only after NIP-59 seal verification or
+	// signed-inner verification by IntentGiftWrapIngress.
+	authenticatedByIngress bool
 }
 
 // IntentProcessorConfig configures the processor.
@@ -196,15 +199,25 @@ func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Even
 		return nil // silent drop for malformed events
 	}
 	intent.Actor = ev.PubKey.Hex()
+	if intent.Domain == "hiveci-policy" {
+		if err := validateHiveCIPolicySignedEnvelope(intent); err != nil {
+			return err
+		}
+	}
 	if isLLMLifecycleIntent(intent) {
 		if err := p.validateLLMLifecycleAdmission(intent); err != nil {
 			return err
 		}
 	}
 
-	// Reject plaintext intents for sensitive domains.
-	if p.giftWrapIngress != nil && p.giftWrapIngress.RejectPlaintextSensitiveIntent(ctx, intent) {
-		return fmt.Errorf("plaintext intent rejected for sensitive domain %q", intent.Domain)
+	// Unknown plaintext authors must not induce a daemon-signed rejection.
+	if p.giftWrapIngress != nil {
+		if p.giftWrapIngress.isSensitiveDomain(intent.Domain) && !p.trustSet.IsKnownPrincipal(intent.Actor) {
+			return nil
+		}
+		if p.giftWrapIngress.RejectPlaintextSensitiveIntent(ctx, intent) {
+			return fmt.Errorf("plaintext intent rejected for sensitive domain %q", intent.Domain)
+		}
 	}
 
 	return p.process(ctx, intent, false)
@@ -216,6 +229,11 @@ func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Even
 func (p *IntentProcessor) ProcessInProcess(ctx context.Context, intent *Intent) error {
 	if intent == nil {
 		return fmt.Errorf("intent is required")
+	}
+	if intent.Domain == "hiveci-policy" {
+		if err := validateHiveCIPolicySignedEnvelope(intent); err != nil {
+			return err
+		}
 	}
 	if isLLMLifecycleIntent(intent) {
 		if err := p.validateLLMLifecycleAdmission(intent); err != nil {
@@ -573,6 +591,8 @@ func intentContentHash(content map[string]any) string {
 
 func requiresStrictIntentReplay(intent *Intent) bool {
 	switch intent.Domain {
+	case "hiveci-policy":
+		return true
 	case "backup":
 		return intent.Op == "run"
 	case "org":
@@ -661,7 +681,7 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 		return nil, fmt.Errorf("missing intent_id tag")
 	}
 	if intent.OrgID == uuid.Nil && !(intent.Domain == "org" && intent.Op == "rekey") && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" &&
-		intent.Domain != "adoption" && intent.Domain != "tool" && intent.Domain != "security" && intent.Domain != "sbom" && intent.Domain != "relay" {
+		intent.Domain != "adoption" && intent.Domain != "tool" && intent.Domain != "security" && intent.Domain != "sbom" && intent.Domain != "relay" && intent.Domain != "hiveci-policy" {
 		return nil, fmt.Errorf("missing or invalid org tag")
 	}
 
@@ -734,7 +754,7 @@ var RegisteredIntentDomains = []string{
 	"dns", "worker", "deployment", "runtime", "org", "secret", "notification",
 	"artifact", "adoption",
 	"build", "tool",
-	"security", "sbom", "relay", "virtualization",
+	"security", "sbom", "relay", "virtualization", "hiveci-policy",
 }
 
 // BuildEnabledDomains enables every registered domain except explicit opt-outs.

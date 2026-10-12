@@ -18,6 +18,9 @@ same set of events always yields the same state regardless of arrival order:
    Entity removal in Bahia is **not** NIP-09: the daemon publishes a `30900`
    tombstone (`deleted: true`) so readers learn the entity was removed
    deliberately (see [intents](intents-and-authority.md#12-level-triggered-desired-state)).
+   The one NIP-09 request Bahia's operators publish is `bahia-leak-delete`'s,
+   which names events by `e` tag only
+   ([runbook](../runbooks/leaked-status-event-deletion.md)).
 3. **NIP-40 expiration.** An event whose `expiration` tag is in the past is
    ignored on arrival, and a live event is dropped when its expiration passes
    (the web sweeps every five minutes; the sidecar sweeps stored events).

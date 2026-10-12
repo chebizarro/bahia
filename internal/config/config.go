@@ -1346,9 +1346,9 @@ type OCIServiceAccountConfig struct {
 	RepoPrefixes []string `koanf:"repo_prefixes" secret:"false"` // e.g. cascadia/
 }
 
-// HiveCIPolicyConfig declares a pipeline policy resolved after relay catch-up.
-// Service and environment names must match unambiguous canonical local records;
-// an unchanged policy is not re-signed on each restart.
+// HiveCIPolicyConfig authorizes build-dependency dispatch from configured
+// repositories. It does not create canonical Hive-CI pipeline policies;
+// those are operator-signed intents.
 type HiveCIPolicyConfig struct {
 	RepoCoordinate    string                        `koanf:"repo_coordinate" yaml:"repo_coordinate" secret:"false"`
 	WorkflowPath      string                        `koanf:"workflow_path" yaml:"workflow_path" secret:"false"`

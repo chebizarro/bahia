@@ -126,10 +126,10 @@ replay after restart, or the in-process MCP path never applies an intent twice.
 
 ### 1.5 Encrypted intents
 
-Org membership, secrets and notification channels are sensitive. Their intents
-are the same inner `30900` event, NIP-44-encrypted to the service pubkey and
+Org membership, secrets, notification channels and Hive-CI pipeline policies are sensitive. Their intents
+are `30900` rumors, NIP-44-encrypted to the service pubkey and
 published as a **NIP-59 gift wrap (kind `1059`)** tagged `p=<service-pubkey>`.
-The daemon unwraps, verifies the inner signature, and then checks the inner
+The daemon unwraps, verifies the operator-signed seal, and then checks the inner
 author against the trust set. How the resulting canonical records are
 encrypted for members is described in [confidential state](confidential-state.md).
 
@@ -275,11 +275,25 @@ RBAC). Registration is in `internal/app/app.go` (`RegisterHandler("<domain>",
 handler)`), and the domain name must be added to
 `controlplane.RegisteredIntentDomains`; the app test compares the two sets so a
 handler cannot be left out of default-on processing. Registered domains:
-`service`, `environment`, `policy`, `package`, `backup`, `llm`, `ml`, `dns`,
+`service`, `environment`, `policy`, `hiveci-policy`, `package`, `backup`, `llm`, `ml`, `dns`,
 `worker`, `deployment`, `runtime`, `org`, `secret`, `notification`, `artifact`,
 `adoption`, `build`, `tool`, `security`, `sbom`, `relay`. Every registered
 domain is processed by default; `nostr.intent_domains_disabled` opts specific
 domains out.
+
+`hiveci-policy` is fleet-scoped and accepts only configured fleet operators.
+Its `d` coordinate is `hiveci:policy:<policy-uuidv7>`; `op=create|update` carries
+the complete selectors, service/environment UUIDs, enabled flag and metadata,
+while `op=delete` carries `id` and `deleted=true`. The client mints the policy
+UUIDv7 once and uses it on every revision. `intent_id` is a separate UUIDv7 in
+the tag and content, and retries reuse the exact id and content. A stale
+`expected_updated_at` produces a `conflict` status before publication. The
+handler calls the Hive-CI canonical repository, which signs an encrypted
+`hiveci-policy` cp-state record or tombstone at the stable ID coordinate through
+the outbox, then optionally mirrors PostgreSQL. The inner `30900` rumor is
+authenticated by the operator-signed NIP-59 seal. Configuration never seeds this
+canonical policy family; `hiveci.policies` remains a separate fleet build-
+dependency dispatch allowlist.
 
 The `tool/approval-response` handler accepts only an operator-signed `30900`
 envelope whose actor, coordinate, operation, idempotency key, and content match

@@ -25,6 +25,12 @@ Nostr is Bahia's control plane and source of durable product state. Clients subs
 
 Fleet integrations keep their protocol kinds, including Hive-CI workflow evidence and Soul Factory requests/results. Use the feature guide for each interop contract.
 
+Hive-CI pipeline policies are distinct from workflow evidence: fleet operators
+sign kind `30900` `hiveci-policy` intents at `hiveci:policy:<policy-uuidv7>`
+and gift-wrap them to the service pubkey.
+The service publishes an encrypted `30900` canonical policy or tombstone at
+that coordinate and a `30315` intent status. PostgreSQL is not required.
+
 ## Intents
 
 A kind-`30900` intent is a parameterized replaceable request document:

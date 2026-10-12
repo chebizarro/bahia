@@ -46,12 +46,32 @@ Confidential families (organizations, members, secrets metadata, notification ch
 Mutations are signed kind `30900` intents (see [Nostr Integration](nostr-integration.md#intents)). The CLI:
 
 1. builds and signs the intent with a UUIDv7 `intent_id` (`--idempotency-key` to supply your own),
-2. gift-wraps it when the domain is `org`, `secret`, or `notification` (a NIP-44-capable signer is required),
+2. gift-wraps it when the domain is `org`, `secret`, `notification`, or `hiveci-policy` (a NIP-44-capable signer is required),
 3. stores the signed event in its local outbox (`$XDG_DATA_HOME/bahia/outbox.bolt` or `~/.local/share/bahia/outbox.bolt`),
 4. subscribes for the status, publishes, and requires at least one relay `OK`,
 5. waits up to `--result-timeout` for the daemon's `30315` intent status.
 
 Exit codes: `0` accepted, `1` rejected or conflict, `2` published but no status received (the command prints `intent_id` and `event_id`; inspect with `bahia outbox list`), `3` no relay accepted the event. Retry a timed-out intent with the same `--idempotency-key` rather than minting a new one.
+
+### Hive-CI pipeline policies
+
+```bash
+bahia --relay wss://operator-relay.example --nostr-key-file operator.key \
+  --service-pubkey "$BAHIA_NOSTR_SERVICE_PUBKEY" \
+  hiveci-policy apply --file policy.json --op create --idempotency-key <attempt-uuidv7>
+bahia hiveci-policy apply --file policy.json --op update \
+  --expected-updated-at 2026-10-11T12:00:00Z --idempotency-key <new-attempt-uuidv7>
+bahia hiveci-policy delete --id <policy-uuidv7> \
+  --expected-updated-at 2026-10-11T12:00:00Z --idempotency-key <new-attempt-uuidv7>
+```
+
+The JSON file contains a stable, operator-minted UUIDv7 `id`, repository and
+workflow selectors, service/environment UUIDs, `enabled`, and `metadata`.
+The CLI adds `intent_id`, signs the `30900` intent, publishes through its
+outbox, and waits for `30315`. The schema and exact tags are in the
+[event spec](../event-spec.md#3-intents-30900-tbahia-intent). Reuse the same
+`--idempotency-key` and identical file/revision on retry. This command is
+fleet-scoped; it does not need `--org`.
 
 Updates carry the record's canonical `updated_at` as `expected_updated_at`; on a stale revision the daemon answers `conflict`, so re-read and retry deliberately.
 
