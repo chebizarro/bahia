@@ -74,12 +74,16 @@ func TestCLILastOpsThroughD76Handlers(t *testing.T) {
 	if len(artifacts.imports) != 1 || artifacts.imports[0].EnvironmentID != environmentID {
 		t.Fatalf("observed import not handled: %#v", artifacts.imports)
 	}
-	adopt := append(append([]string{}, base...), "adopt", "import", "--target", "production=docker-prod", "--select", "production/container-123=production")
+	credentialID := "cred_" + strings.Repeat("a", 64)
+	adopt := append(append([]string{}, base...), "adopt", "import", "--target", "production=docker-prod", "--select", "production/container-123=production", "--secret-ref", "DB_PASSWORD="+credentialID+":2")
 	if err := executeIntentCommand(t, adopt...); err != nil {
 		t.Fatal(err)
 	}
 	if len(adoption.imported) != 1 || len(adoption.imported[0].Selections) != 1 {
 		t.Fatalf("adoption import not handled: %#v", adoption.imported)
+	}
+	if got := adoption.imported[0].SecretRefs["DB_PASSWORD"]; got.Store != "signet" || got.CredentialID != credentialID || got.Version != 2 {
+		t.Fatalf("secret ref not forwarded: %#v", got)
 	}
 	dns := append(append([]string{}, base...), "dns", "drift-remediate", "--zone", "example.com")
 	if err := executeIntentCommand(t, dns...); err != nil {
@@ -99,6 +103,18 @@ func TestCLILastOpsThroughD76Handlers(t *testing.T) {
 		}
 	}
 
+}
+
+func TestParseAdoptionSecretRefsRejectsValuesAndDuplicates(t *testing.T) {
+	for _, args := range [][]string{
+		{"DB_PASSWORD=inline-value"},
+		{"DB_PASSWORD=cred_123:0"},
+		{"DB_PASSWORD=cred_123:1", "DB_PASSWORD=cred_456:1"},
+	} {
+		if _, err := parseAdoptionSecretRefs(args); err == nil {
+			t.Fatalf("accepted %#v", args)
+		}
+	}
 }
 
 func TestCLILastOpsD76FixtureContent(t *testing.T) {

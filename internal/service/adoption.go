@@ -18,6 +18,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
 
@@ -43,6 +44,7 @@ const (
 	adoptionStepService     = "service"
 	adoptionStepBuild       = "build"
 	adoptionStepArtifact    = "artifact"
+	adoptionStepSecret      = "secret"
 	adoptionStepObservation = "observation"
 	adoptionStepState       = "state"
 	adoptionStepFinalize    = "finalize"
@@ -51,6 +53,19 @@ const (
 
 // adoptionIDNamespace derives the deterministic ids of adopted resources.
 var adoptionIDNamespace = uuid.NewSHA1(uuid.NameSpaceOID, []byte("bahia:adoption:v1"))
+var adoptionCredentialID = regexp.MustCompile(`^cred_[0-9a-fA-F]{64}$`)
+
+// ValidateAdoptionCredentialRef accepts only Signet credential identifiers,
+// so an inline value cannot be mistaken for a reference in a signed intent.
+func ValidateAdoptionCredentialRef(ref domain.SecretCredentialRef) error {
+	if err := secretstore.ValidateRef(ref); err != nil {
+		return err
+	}
+	if !adoptionCredentialID.MatchString(ref.CredentialID) {
+		return secretstore.ErrInvalidRef
+	}
+	return nil
+}
 
 // adoptionEntityID derives the id of an adopted resource from the facts that
 // identify it, so a retry or a resumed adoption addresses the same canonical
@@ -74,6 +89,20 @@ type AdoptionCanonicalPublisher interface {
 	PublishArtifactRegistry(ctx context.Context, artifact *domain.Artifact) error
 	PublishRuntimeObservation(ctx context.Context, obs *domain.RuntimeObservation) error
 	PublishServiceState(ctx context.Context, state *domain.EnvironmentServiceState, observation *domain.RuntimeObservation) error
+}
+
+// AdoptionSecretReferences is the reference-only secret path used by adoption.
+type AdoptionSecretReferences struct {
+	Store secretstore.SecretStore
+	View  interface {
+		CurrentSecretRef(context.Context, uuid.UUID) (*domain.SecretRef, error)
+	}
+	Publisher interface {
+		PublishSecretRef(context.Context, domain.SecretRef) error
+	}
+	Index interface {
+		MarkStoreBacked(context.Context, domain.SecretRef) error
+	}
 }
 
 // AdoptionIndexRepositories are the optional SQL repositories the adoption
@@ -138,6 +167,7 @@ type AdoptionService struct {
 	organizations repository.OrganizationRepository
 	publisher     events.Publisher
 	logger        *zap.Logger
+	secrets       AdoptionSecretReferences
 
 	runtimeCfg           config.RuntimeConfig
 	allowRawDockerHosts  bool
@@ -150,7 +180,10 @@ type AdoptionService struct {
 // none, and only a secret store administrator imports values into the
 // store (docs/architecture/secret-store.md). The error names the keys,
 // never the values.
-var ErrAdoptionSecretValues = errors.New("the container's environment carries secret values inline, which adoption does not import; move them out of the container (for example into mounted files), or import each into the secret store and deploy the service through Bahia instead of adopting it; list a key in non_secret_env_keys (bahia adopt import --non-secret-env KEY) if it is not a secret")
+var ErrAdoptionSecretValues = errors.New("the container's environment carries secret values inline; import each value into the secret store and provide --secret-ref KEY=credential-id:version, or declare a non-secret key with --non-secret-env KEY")
+
+// ConfigureSecretReferences installs the secret seam once the confidential publisher exists.
+func (s *AdoptionService) ConfigureSecretReferences(refs AdoptionSecretReferences) { s.secrets = refs }
 
 // AdoptionServiceOption configures adoption runtime governance behavior.
 type AdoptionServiceOption func(*AdoptionService)
@@ -253,10 +286,12 @@ type AdoptionImportRequest struct {
 	// minted per request, such as the observation, derive their ids from it,
 	// so re-processing the same request addresses the same coordinates.
 	RequestID string
+	Actor     string
 	// NonSecretEnvKeys are environment keys the operator declares are not
 	// secrets: they are kept on the adopted service instead of refusing the
 	// container.
 	NonSecretEnvKeys []string
+	SecretRefs       map[string]domain.SecretCredentialRef
 }
 
 // AdoptionSelection selects one container on a target host.
@@ -431,7 +466,7 @@ func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest)
 			if selected && selection.ServiceNameOverride != "" {
 				serviceName = normalizeResourceName(selection.ServiceNameOverride)
 			}
-			imported = append(imported, s.importCandidate(ctx, req.RequestID, orgID, preview.Target, container, serviceName, req.NonSecretEnvKeys))
+			imported = append(imported, s.importCandidate(ctx, req.RequestID, req.Actor, orgID, preview.Target, container, serviceName, req.NonSecretEnvKeys, req.SecretRefs))
 		}
 	}
 	if !req.ImportAll {
@@ -659,9 +694,10 @@ type adoptionPlan struct {
 	obs            domain.RuntimeObservation
 	state          domain.EnvironmentServiceState
 	binding        domain.AdoptionBinding
+	secrets        []domain.SecretRef
 }
 
-func (s *AdoptionService) importCandidate(ctx context.Context, requestID string, orgID uuid.UUID, target AdoptionTarget, candidate AdoptionPreviewContainer, serviceName string, nonSecretEnvKeys []string) AdoptionImportResult {
+func (s *AdoptionService) importCandidate(ctx context.Context, requestID, actor string, orgID uuid.UUID, target AdoptionTarget, candidate AdoptionPreviewContainer, serviceName string, nonSecretEnvKeys []string, secretRefs map[string]domain.SecretCredentialRef) AdoptionImportResult {
 	discovered := candidate.Discovered
 	result := AdoptionImportResult{
 		TargetName:              target.Name,
@@ -671,6 +707,12 @@ func (s *AdoptionService) importCandidate(ctx context.Context, requestID string,
 		Warnings:                append([]string(nil), candidate.Warnings...),
 		RedactedEnvironmentKeys: append([]string(nil), candidate.RedactedEnvironmentKeys...),
 		RedactedLabelKeys:       append([]string(nil), candidate.RedactedLabelKeys...),
+	}
+	if candidate.ExistingServiceID != nil {
+		result.ServiceID = candidate.ExistingServiceID
+	} else {
+		id := adoptionEntityID("service", orgID.String(), target.Name, discovered.TargetName)
+		result.ServiceID = &id
 	}
 	fail := func(err error) AdoptionImportResult {
 		result.Status = adoptionStatusFailed
@@ -688,16 +730,35 @@ func (s *AdoptionService) importCandidate(ctx context.Context, requestID string,
 		return fail(errors.New("service name is required"))
 	}
 	classified := classifyDiscoveredSensitiveData(discovered, nonSecretEnvKeys...)
+	for key := range secretRefs {
+		if _, present := discovered.Environment[key]; !present {
+			continue
+		}
+		if _, safe := classified.SafeEnvironment[key]; safe {
+			delete(classified.SafeEnvironment, key)
+			classified.SensitiveEnvironmentKeys = append(classified.SensitiveEnvironmentKeys, key)
+		}
+	}
+	sort.Strings(classified.SensitiveEnvironmentKeys)
 	result.RedactedEnvironmentKeys = append([]string(nil), classified.SensitiveEnvironmentKeys...)
 	result.RedactedLabelKeys = append([]string(nil), classified.SensitiveLabelKeys...)
-	if len(classified.SensitiveEnvironmentKeys) > 0 {
-		return fail(fmt.Errorf("%w: %s", ErrAdoptionSecretValues, strings.Join(classified.SensitiveEnvironmentKeys, ", ")))
+	var missing []string
+	for _, key := range classified.SensitiveEnvironmentKeys {
+		if _, ok := secretRefs[key]; !ok {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		return fail(fmt.Errorf("%w: %s", ErrAdoptionSecretValues, strings.Join(missing, ", ")))
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	plan, err := s.planCandidate(ctx, requestID, orgID, target, discovered, classified, serviceName)
 	if err != nil {
+		return fail(err)
+	}
+	if err := s.planSecrets(ctx, plan, secretRefs, actor); err != nil {
 		return fail(err)
 	}
 	result.ServiceName = plan.svc.Name
@@ -724,6 +785,13 @@ func (s *AdoptionService) importCandidate(ctx context.Context, requestID string,
 	if err := s.writeIndex(ctx, plan); err != nil {
 		result.IndexError = err.Error()
 		s.logger.Warn("adoption SQL index write failed; canonical state retained", zap.String("service_id", plan.svc.ID.String()), zap.String("environment_id", plan.env.ID.String()), zap.Error(err))
+	} else if s.secrets.Index != nil {
+		for _, ref := range plan.secrets {
+			if err := s.secrets.Index.MarkStoreBacked(ctx, ref); err != nil {
+				result.IndexError = fmt.Sprintf("index secret %s: %v", ref.Name, err)
+				break
+			}
+		}
 	}
 	s.publisher.Publish(ctx, events.Event{
 		Type:     adoptionImportedEvent,
@@ -817,6 +885,56 @@ func (s *AdoptionService) planCandidate(ctx context.Context, requestID string, o
 		UpdatedAt:        now,
 	}
 	return plan, nil
+}
+
+// planSecrets validates store metadata without fetching a value. A retry uses
+// the same secret coordinate and preserves its revision when unchanged.
+func (s *AdoptionService) planSecrets(ctx context.Context, plan *adoptionPlan, refs map[string]domain.SecretCredentialRef, actor string) error {
+	if len(plan.classified.SensitiveEnvironmentKeys) == 0 {
+		return nil
+	}
+	if s.secrets.Store == nil || s.secrets.View == nil || s.secrets.Publisher == nil {
+		return fmt.Errorf("%w: adoption needs a configured reference-only secret path", secretstore.ErrNotConfigured)
+	}
+	for _, key := range plan.classified.SensitiveEnvironmentKeys {
+		ref := refs[key]
+		if err := ValidateAdoptionCredentialRef(ref); err != nil {
+			return fmt.Errorf("secret reference for %s is invalid: %w", key, secretstore.ErrInvalidRef)
+		}
+		id := adoptionEntityID("secret", plan.svc.ID.String(), key)
+		existing, err := s.secrets.View.CurrentSecretRef(ctx, id)
+		if err != nil {
+			return fmt.Errorf("read canonical secret %s: %w", key, err)
+		}
+		if existing != nil && (existing.ServiceID != plan.svc.ID || existing.Name != key || existing.EnvironmentID != nil) {
+			return fmt.Errorf("secret coordinate for %s is occupied", key)
+		}
+		meta, err := s.secrets.Store.Inspect(ctx, ref.CredentialID, secretstore.Scope{OrgID: plan.orgID, ServiceID: plan.svc.ID})
+		if err != nil {
+			if errors.Is(err, secretstore.ErrNotFound) || errors.Is(err, secretstore.ErrDenied) {
+				return fmt.Errorf("secret reference for %s: credential is not available to this org and service", key)
+			}
+			return fmt.Errorf("secret reference for %s: credential inspection failed", key)
+		}
+		if meta.Label != plan.orgID.String()+"/"+plan.svc.ID.String()+"/"+key {
+			return fmt.Errorf("secret reference for %s: credential is not available to this org and service", key)
+		}
+		if meta.Status != secretstore.StatusActive || meta.Version != ref.Version {
+			return fmt.Errorf("secret reference for %s: credential is not active at the pinned version", key)
+		}
+		if existing != nil && existing.CredentialRef != nil && *existing.CredentialRef == ref {
+			plan.secrets = append(plan.secrets, *existing)
+			continue
+		}
+		now := domain.NormalizeRevisionTime(s.now())
+		next := domain.SecretRef{ID: id, ServiceID: plan.svc.ID, Name: key, CredentialRef: &ref, Version: 1, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+		if existing != nil {
+			next.Version = existing.Version + 1
+			next.CreatedBy, next.CreatedAt = existing.CreatedBy, existing.CreatedAt
+		}
+		plan.secrets = append(plan.secrets, next)
+	}
+	return nil
 }
 
 func (s *AdoptionService) planEnvironment(ctx context.Context, plan *adoptionPlan, now time.Time) error {
@@ -1166,6 +1284,11 @@ func (s *AdoptionService) publishPlan(ctx context.Context, plan *adoptionPlan) (
 	}
 	if err := s.canonical.PublishArtifactRegistry(ctx, &plan.artifact); err != nil {
 		return adoptionStepArtifact, fmt.Errorf("publish adoption artifact: %w", err)
+	}
+	for _, ref := range plan.secrets {
+		if err := s.secrets.Publisher.PublishSecretRef(ctx, ref); err != nil {
+			return adoptionStepSecret, fmt.Errorf("publish adoption secret %s: %w", ref.Name, err)
+		}
 	}
 	if err := s.canonical.PublishRuntimeObservation(ctx, &plan.obs); err != nil {
 		return adoptionStepObservation, fmt.Errorf("publish runtime observation: %w", err)

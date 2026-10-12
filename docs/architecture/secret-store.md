@@ -380,9 +380,11 @@ string and zeroizes the store's buffer.
   drops the held value and whatever was built from it (the relay admin
   client, the package backend); concurrent uses share one resolve. A package
   backend resolves all its credentials as one batch.
-- **Adoption** imports no values: a container whose environment carries
-  secret values inline is refused, naming the keys (Bahia cannot write into
-  the store, and only a store administrator chooses labels). Keys are secret
+- **Adoption** imports no values: the operator first imports each inline
+  secret value into Signet under the exact label `<org-id>/<service-id>/<name>`
+  and supplies `secret_refs` in the adoption import intent. Bahia inspects the
+  credential and publishes a reference-only service secret; an unmapped
+  sensed-secret key is refused by name. Keys are secret
   by whole name tokens (`*_PASSWORD`, `*_SECRET`, `*_TOKEN`,
   `*_API_KEY`, `*_PRIVATE_KEY`, `*_ACCESS_KEY`, ...) or, for connection
   strings (`*_URL`, `*_URI`, `*_DSN`, `CONNECTION_STRING`), by a password in

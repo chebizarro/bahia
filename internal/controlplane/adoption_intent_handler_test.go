@@ -64,6 +64,7 @@ func TestAdoptionImportIntentIncompletePublishIsRejectedWithProgressAndResumes(t
 	require.Equal(t, "artifact", progress[0].(map[string]any)["step"])
 	require.Equal(t, true, progress[0].(map[string]any)["incomplete"])
 	require.Equal(t, intent.IntentID, adoption.requests[0].RequestID, "the intent id keys the resources minted per request")
+	require.Equal(t, testPubkey, adoption.requests[0].Actor, "secret audit metadata names the signed operator")
 
 	// Re-delivering the same signed intent resumes the adoption and is then
 	// accepted with its progress; a third delivery is an idempotent replay.

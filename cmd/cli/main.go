@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/secretstore"
+	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -770,6 +772,7 @@ func adoptCommands() *cobra.Command {
 	var importAll bool
 	var importOrgID string
 	var importNonSecretEnv []string
+	var importSecretRefs []string
 	importCmd := &cobra.Command{
 		Use:   "import",
 		Short: "Import selected or all discovered containers into Bahia",
@@ -785,8 +788,12 @@ func adoptCommands() *cobra.Command {
 			if !importAll && len(selections) == 0 {
 				return fmt.Errorf("specify --all or at least one --select alias/containerID")
 			}
+			secretRefs, err := parseAdoptionSecretRefs(importSecretRefs)
+			if err != nil {
+				return err
+			}
 			retryKey, _ := cmd.Flags().GetString("idempotency-key")
-			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll, OrgID: strings.TrimSpace(importOrgID), IdempotencyKey: retryKey, NonSecretEnvKeys: importNonSecretEnv}
+			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll, OrgID: strings.TrimSpace(importOrgID), IdempotencyKey: retryKey, NonSecretEnvKeys: importNonSecretEnv, SecretRefs: secretRefs}
 			result, err := runAdoptionImportIntent(cmd, req)
 			if err != nil {
 				return err
@@ -800,11 +807,36 @@ func adoptCommands() *cobra.Command {
 	importCmd.Flags().StringArrayVar(&importSelections, "select", nil, "Container selection as alias/containerID[=serviceName] (repeatable)")
 	importCmd.Flags().BoolVar(&importAll, "all", false, "Import all adoptable containers from the scanned targets")
 	importCmd.Flags().StringArrayVar(&importNonSecretEnv, "non-secret-env", nil, "Environment key that is not a secret despite its name (repeatable); adoption keeps it instead of refusing the container")
+	importCmd.Flags().StringArrayVar(&importSecretRefs, "secret-ref", nil, "Imported Signet credential as KEY=credential-id:version (repeatable); adopted secrets contain references only")
 	importCmd.Flags().StringVar(&importOrgID, "org", "", "Organization UUID for imported services and environments")
 	importCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this import")
 
 	cmd.AddCommand(scanCmd, importCmd)
 	return cmd
+}
+
+func parseAdoptionSecretRefs(args []string) (map[string]domain.SecretCredentialRef, error) {
+	refs := make(map[string]domain.SecretCredentialRef, len(args))
+	for _, arg := range args {
+		key, rest, ok := strings.Cut(arg, "=")
+		id, versionText, hasVersion := strings.Cut(rest, ":")
+		if !ok || !hasVersion || key == "" || id == "" || strings.Contains(versionText, ":") || strings.TrimSpace(key) != key || strings.ContainsAny(key, "=\x00\r\n") {
+			return nil, fmt.Errorf("--secret-ref must be KEY=credential-id:version")
+		}
+		if _, exists := refs[key]; exists {
+			return nil, fmt.Errorf("--secret-ref repeats key %s", key)
+		}
+		version, err := strconv.Atoi(versionText)
+		if err != nil || version < 1 {
+			return nil, fmt.Errorf("--secret-ref %s needs a positive version", key)
+		}
+		ref := domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: id, Version: version}
+		if err := service.ValidateAdoptionCredentialRef(ref); err != nil {
+			return nil, fmt.Errorf("--secret-ref %s has an invalid credential reference", key)
+		}
+		refs[key] = ref
+	}
+	return refs, nil
 }
 
 type adoptionPreviewRow struct {
