@@ -121,9 +121,14 @@ Create the new key file, run step 3 for its pubkey, point
 |---|---|
 | `no Signet round trip yet` | the startup probe has not finished |
 | `Signet did not answer … within …` | Signet or its relays are down, the relays do not serve the requester's gift wraps (NIP-42), or the requester is not a provisioner (Signet's refusal carries no request id, so it surfaces as a timeout) |
-| `no relay accepted the Signet request` | every relay refused the gift wrap; the message lists each relay's reason |
+| `no relay accepted the Signet request` | every relay refused the gift wrap (the message lists each relay's reason), or outbound admission refused it (`budget exhausted`, circuit breaker, kill switch) |
 | `refused (no_capability)` | the owner's delivery policy does not name this requester |
 | `refused (not_owner)` / `credential is not owned by …` | the credential belongs to another owner |
+
+Each secret resolve publishes three gift wraps on the outbound `priority`
+lane, shared with operator results and ContextVM replies; size
+`nostr.outbound.lanes.priority` for the number of secrets an operation
+resolves at once ([outbound admission](nostr-outbound-admission.md)).
 
 Signet's audit chain records every delivery with the requester pubkey:
 `signetctl verify-audit`.

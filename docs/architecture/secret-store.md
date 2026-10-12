@@ -130,6 +130,11 @@ value and gets it back; no state is read through it.
 - `credential/deliver` returns `{credential_id, agent_id, payload_b64,
   lease_id, lease_expires_at}`; Signet mints and burns a 60-second lease in
   the same audited transaction.
+- Every request is one gift wrap on the process-wide outbound `priority`
+  lane ([outbound admission](../runbooks/nostr-outbound-admission.md)): a
+  `Resolve` costs three, an `Inspect` or `Health` one, plus the reply
+  subscription's NIP-42 AUTH. Admission fails fast; an exhausted budget is
+  `ErrUnavailable` and the request is not queued or retried.
 
 ### Pinning a version
 

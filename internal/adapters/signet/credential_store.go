@@ -275,8 +275,8 @@ func (s *CredentialStore) call(ctx context.Context, method string, params map[st
 	// early when no relay accepted the request.
 	published := make(chan error, 1)
 	go func() {
-		results, _ := s.pool.PublishWithResults(ctx, gift)
-		published <- publishOutcome(results)
+		results, err := s.pool.PublishWithResults(ctx, gift)
+		published <- publishOutcome(results, err)
 	}()
 	for {
 		select {
@@ -302,8 +302,11 @@ func (s *CredentialStore) record(err error) {
 	s.lastAt, s.lastErr, s.everDone = time.Now(), err, true
 }
 
-func publishOutcome(results []nostrpool.PublishResult) error {
-	reasons := make([]string, 0, len(results))
+// publishOutcome is nil when at least one relay accepted the request. An
+// outbound admission refusal (budget, circuit breaker, kill switch) arrives
+// as publishErr with no per-relay results; the request is not retried here.
+func publishOutcome(results []nostrpool.PublishResult, publishErr error) error {
+	reasons := make([]string, 0, len(results)+1)
 	for _, result := range results {
 		if result.Succeeded() {
 			return nil
@@ -313,6 +316,9 @@ func publishOutcome(results []nostrpool.PublishResult) error {
 			reason = result.Error.Error()
 		}
 		reasons = append(reasons, result.RelayURL+": "+reason)
+	}
+	if publishErr != nil {
+		reasons = append(reasons, publishErr.Error())
 	}
 	return fmt.Errorf("%w: no relay accepted the Signet request (%s)", secretstore.ErrUnavailable, strings.Join(reasons, "; "))
 }

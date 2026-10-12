@@ -21,6 +21,7 @@ import (
 	"fiatjaf.com/nostr/nip44"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
@@ -506,5 +507,44 @@ func TestOpenCredentialStoreValidates(t *testing.T) {
 			store.Close()
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// An exhausted outbound budget refuses the request before any relay I/O; the
+// store fails closed with the admission reason instead of waiting or retrying.
+func TestCredentialStoreOutboundBudgetFailsClosed(t *testing.T) {
+	relayURL, _ := recipientAuthRelay(t, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	vault := startFakeVault(t, ctx, relayURL)
+	client := nostr.Generate()
+	vault.provisioners[client.Public()] = true
+	generous := nostrout.PurposeBudget{RatePerMinute: 600_000, Burst: 100_000}
+	tight := nostrout.New(nostrout.Config{
+		Aggregate: generous,
+		PurposeBudgets: map[nostrout.Purpose]nostrout.PurposeBudget{
+			// One token for the reply subscription's NIP-42 AUTH, one for
+			// the first request.
+			nostrout.PurposePriority: {RatePerMinute: 1, Burst: 2},
+			nostrout.PurposeState:    generous, nostrout.PurposeGeneral: generous, nostrout.PurposeBulk: generous, nostrout.PurposeSigner: generous,
+		},
+		RelayWire: generous, RelayWirePriority: generous,
+		MaxActivePublications: 1000, MaxRelayIdentities: 1000, MaxOpaqueWaiters: 1000,
+	})
+	store, err := OpenCredentialStore(ctx, CredentialStoreConfig{SignetPubkey: vault.key.Public(), Relays: []string{relayURL}, ClientKey: client,
+		Owner: "bahia-vault", RequestTimeout: 20 * time.Second, OutboundAdmission: tight}, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	if err := store.Health(ctx); err != nil {
+		t.Fatalf("first request within budget: %v", err)
+	}
+	err = store.Health(ctx)
+	if !errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "budget") {
+		t.Fatalf("request over budget = %v", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("the refusal waited for the deadline")
 	}
 }

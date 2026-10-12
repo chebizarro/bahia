@@ -13,7 +13,6 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
@@ -73,7 +72,7 @@ func TestLiveSignetCredentialStore(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 	store, err := OpenCredentialStore(ctx, CredentialStoreConfig{SignetPubkey: signetPK, Relays: []string{fx.RelayURL}, ClientKey: requester,
-		Owner: fx.Owner, RequestTimeout: 30 * time.Second, OutboundAdmission: nostrout.Or(nil)}, zap.NewNop())
+		Owner: fx.Owner, RequestTimeout: 30 * time.Second, OutboundAdmission: generousTestAdmission()}, zap.NewNop())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
