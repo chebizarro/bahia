@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
-	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -43,7 +42,6 @@ const (
 	adoptionStepService     = "service"
 	adoptionStepBuild       = "build"
 	adoptionStepArtifact    = "artifact"
-	adoptionStepSecrets     = "secrets"
 	adoptionStepObservation = "observation"
 	adoptionStepState       = "state"
 	adoptionStepFinalize    = "finalize"
@@ -73,7 +71,6 @@ type AdoptionCanonicalPublisher interface {
 	PublishServiceRegistry(ctx context.Context, svc *domain.Service) error
 	PublishBuildRegistry(ctx context.Context, build *domain.Build) error
 	PublishArtifactRegistry(ctx context.Context, artifact *domain.Artifact) error
-	PublishSecretRef(ctx context.Context, orgID uuid.UUID, ref domain.SecretRef) error
 	PublishRuntimeObservation(ctx context.Context, obs *domain.RuntimeObservation) error
 	PublishServiceState(ctx context.Context, state *domain.EnvironmentServiceState, observation *domain.RuntimeObservation) error
 }
@@ -137,17 +134,22 @@ type AdoptionService struct {
 	canonical     AdoptionCanonicalPublisher
 	view          AdoptionCanonicalView
 	index         AdoptionIndexRepositories
-	secrets       repository.SecretRepository
 	organizations repository.OrganizationRepository
 	publisher     events.Publisher
 	logger        *zap.Logger
 
-	secretEncryptor      *secretsAdapter.Encryptor
 	runtimeCfg           config.RuntimeConfig
 	allowRawDockerHosts  bool
 	allowComposeTakeover bool
 	now                  func() time.Time
 }
+
+// ErrAdoptionSecretValues refuses a container whose environment carries
+// secret values inline. Adoption never copies a secret value: Bahia holds
+// none, and only a secret store administrator imports values into the
+// store (docs/architecture/secret-store.md). The error names the keys,
+// never the values.
+var ErrAdoptionSecretValues = errors.New("the container's environment carries secret values inline, which adoption does not import; move them out of the container (for example into mounted files), or import each into the secret store and deploy the service through Bahia instead of adopting it")
 
 // AdoptionServiceOption configures adoption runtime governance behavior.
 type AdoptionServiceOption func(*AdoptionService)
@@ -165,16 +167,6 @@ func WithAdoptionRuntimeConfig(runtimeCfg config.RuntimeConfig, allowRawDockerHo
 func WithAdoptionComposeTakeoverPolicy(allow bool) AdoptionServiceOption {
 	return func(s *AdoptionService) {
 		s.allowComposeTakeover = allow
-	}
-}
-
-// WithAdoptionSecrets wires imported sensitive environment values into Bahia's
-// secret value store. Secret values are never published; without a store and
-// an encryptor a container with sensitive environment values is refused.
-func WithAdoptionSecrets(repo repository.SecretRepository, encryptor *secretsAdapter.Encryptor) AdoptionServiceOption {
-	return func(s *AdoptionService) {
-		s.secrets = repo
-		s.secretEncryptor = encryptor
 	}
 }
 
@@ -659,16 +651,9 @@ type adoptionPlan struct {
 	createdService bool
 	build          domain.Build
 	artifact       domain.Artifact
-	secrets        []plannedSecret
 	obs            domain.RuntimeObservation
 	state          domain.EnvironmentServiceState
 	binding        domain.AdoptionBinding
-}
-
-type plannedSecret struct {
-	id    uuid.UUID
-	name  string
-	value string
 }
 
 func (s *AdoptionService) importCandidate(ctx context.Context, requestID string, orgID uuid.UUID, target AdoptionTarget, candidate AdoptionPreviewContainer, serviceName string) AdoptionImportResult {
@@ -700,8 +685,8 @@ func (s *AdoptionService) importCandidate(ctx context.Context, requestID string,
 	classified := classifyDiscoveredSensitiveData(discovered)
 	result.RedactedEnvironmentKeys = append([]string(nil), classified.SensitiveEnvironmentKeys...)
 	result.RedactedLabelKeys = append([]string(nil), classified.SensitiveLabelKeys...)
-	if len(classified.SensitiveEnvironment) > 0 && (s.secrets == nil || s.secretEncryptor == nil) {
-		return fail(errors.New("sensitive environment values require configured secret storage and encryption"))
+	if len(classified.SensitiveEnvironmentKeys) > 0 {
+		return fail(fmt.Errorf("%w: %s", ErrAdoptionSecretValues, strings.Join(classified.SensitiveEnvironmentKeys, ", ")))
 	}
 
 	s.mu.Lock()
@@ -775,9 +760,6 @@ func (s *AdoptionService) planCandidate(ctx context.Context, requestID string, o
 	}
 	if err := s.planArtifact(ctx, plan, now); err != nil {
 		return nil, err
-	}
-	for _, name := range sortedStringKeys(classified.SensitiveEnvironment) {
-		plan.secrets = append(plan.secrets, plannedSecret{id: adoptionEntityID("secret", plan.svc.ID.String(), plan.env.ID.String(), name), name: name, value: classified.SensitiveEnvironment[name]})
 	}
 
 	obs := observationFromDiscovered(target, plan.svc.ID, plan.env.ID, discovered)
@@ -1180,11 +1162,6 @@ func (s *AdoptionService) publishPlan(ctx context.Context, plan *adoptionPlan) (
 	if err := s.canonical.PublishArtifactRegistry(ctx, &plan.artifact); err != nil {
 		return adoptionStepArtifact, fmt.Errorf("publish adoption artifact: %w", err)
 	}
-	for _, secret := range plan.secrets {
-		if err := s.importSecret(ctx, plan, secret); err != nil {
-			return adoptionStepSecrets, err
-		}
-	}
 	if err := s.canonical.PublishRuntimeObservation(ctx, &plan.obs); err != nil {
 		return adoptionStepObservation, fmt.Errorf("publish runtime observation: %w", err)
 	}
@@ -1196,60 +1173,6 @@ func (s *AdoptionService) publishPlan(ctx context.Context, plan *adoptionPlan) (
 		return adoptionStepFinalize, fmt.Errorf("publish adoption binding: %w", err)
 	}
 	return adoptionStepComplete, nil
-}
-
-// importSecret stores one imported secret value, encrypted, in the secret
-// value store and then publishes its reference. The value store is the only
-// holder of the value; it is never published.
-func (s *AdoptionService) importSecret(ctx context.Context, plan *adoptionPlan, secret plannedSecret) error {
-	if s.secrets == nil || s.secretEncryptor == nil {
-		return fmt.Errorf("sensitive environment values require configured secret storage and encryption")
-	}
-	ciphertext, encErr := s.secretEncryptor.Encrypt(secret.value, domain.EncryptionAES256)
-	if encErr != nil {
-		return fmt.Errorf("encrypting imported secret %q: %w", secret.name, encErr)
-	}
-	envID := plan.env.ID
-	record := &domain.ServiceSecret{
-		ID:               secret.id,
-		ServiceID:        plan.svc.ID,
-		EnvironmentID:    &envID,
-		Name:             secret.name,
-		EncryptedValue:   ciphertext,
-		EncryptionMethod: domain.EncryptionAES256,
-		Version:          1,
-		CreatedBy:        "adoption",
-		CreatedAt:        plan.obs.ObservedAt,
-		UpdatedAt:        plan.obs.ObservedAt,
-	}
-	// The value is replaced atomically when a transaction executor exists,
-	// so a failure between the delete and the create cannot lose a working
-	// secret; the deterministic id makes a resumed replacement idempotent.
-	replace := func(secrets repository.SecretRepository) error {
-		if secrets == nil {
-			secrets = s.secrets
-		}
-		if err := secrets.DeleteByName(ctx, plan.svc.ID, &envID, secret.name); err != nil {
-			return fmt.Errorf("replacing imported secret %q: %w", secret.name, err)
-		}
-		if err := secrets.Create(ctx, record); err != nil {
-			return fmt.Errorf("creating imported secret %q: %w", secret.name, err)
-		}
-		return nil
-	}
-	var err error
-	if s.index.Tx != nil {
-		err = s.index.Tx.WithinTx(ctx, func(repos repository.TxRepos) error { return replace(repos.Secrets) })
-	} else {
-		err = replace(nil)
-	}
-	if err != nil {
-		return err
-	}
-	if err := s.canonical.PublishSecretRef(ctx, plan.orgID, record.ToRef()); err != nil {
-		return fmt.Errorf("publish imported secret reference %q: %w", secret.name, err)
-	}
-	return nil
 }
 
 // writeIndex mirrors a published plan into the optional SQL index, in one
@@ -1883,20 +1806,16 @@ func adoptedRuntimeFingerprintsByKind(target AdoptionTarget, discovered runtime.
 
 type sensitiveDataClassification struct {
 	SafeEnvironment          map[string]string
-	SensitiveEnvironment     map[string]string
 	SensitiveEnvironmentKeys []string
 	SafeLabels               map[string]string
-	SensitiveLabels          map[string]string
 	SensitiveLabelKeys       []string
 }
 
 func classifyDiscoveredSensitiveData(discovered runtime.DiscoveredContainer) sensitiveDataClassification {
 	return sensitiveDataClassification{
 		SafeEnvironment:          safeEntries(discovered.Environment, isSensitiveEnvironmentKey),
-		SensitiveEnvironment:     sensitiveEntries(discovered.Environment, isSensitiveEnvironmentKey),
 		SensitiveEnvironmentKeys: sensitiveKeys(discovered.Environment, isSensitiveEnvironmentKey),
 		SafeLabels:               safeEntries(discovered.Labels, isSensitiveLabelKey),
-		SensitiveLabels:          sensitiveEntries(discovered.Labels, isSensitiveLabelKey),
 		SensitiveLabelKeys:       sensitiveKeys(discovered.Labels, isSensitiveLabelKey),
 	}
 }
@@ -1948,22 +1867,6 @@ func safeEntries(in map[string]string, isSensitive func(string) bool) map[string
 	return out
 }
 
-func sensitiveEntries(in map[string]string, isSensitive func(string) bool) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := map[string]string{}
-	for k, v := range in {
-		if isSensitive(k) {
-			out[k] = v
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
 func sensitiveKeys(in map[string]string, isSensitive func(string) bool) []string {
 	if len(in) == 0 {
 		return nil
@@ -1973,15 +1876,6 @@ func sensitiveKeys(in map[string]string, isSensitive func(string) bool) []string
 		if isSensitive(k) {
 			keys = append(keys, k)
 		}
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedStringKeys(in map[string]string) []string {
-	keys := make([]string, 0, len(in))
-	for k := range in {
-		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	return keys

@@ -1376,11 +1376,11 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		logger.Warn("adoption is disabled: the daemon has no service key to read its canonical state with", zap.Error(supervisionStateErr))
 	}
 	if cfg.Adoption.Enabled && supervisionFromLocalState {
-		adoptionCanonical = nostrAdapter.NewAdoptionCanonicalPublisher(nostrProjector, nil, logger)
+		adoptionCanonical = nostrAdapter.NewAdoptionCanonicalPublisher(nostrProjector, logger)
 		adoptionOptions := []service.AdoptionServiceOption{
 			service.WithAdoptionRuntimeConfig(cfg.Runtime, cfg.Adoption.AllowRawDockerHosts),
 			service.WithAdoptionComposeTakeoverPolicy(cfg.Adoption.AllowComposeTakeover),
-			service.WithAdoptionSecrets(secretRepo, secretEncryptor),
+
 			service.WithAdoptionOrganizations(orgRepo),
 		}
 		if dbAvailable && pool != nil {
@@ -1713,9 +1713,6 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		registerOCKRotationHealthCheck(healthProvider, ockManager.PendingRotations)
 		confidentialEncryptor = controlplane.NewConfidentialEncryptor(ockManager, logger)
 		f74bCanonical.SetEncryptor(confidentialEncryptor)
-		if adoptionCanonical != nil {
-			adoptionCanonical.SetEncryptor(confidentialEncryptor)
-		}
 	} else if enabledDomains["org"] {
 		logger.Error("org domain requires control-plane signer for confidential state; " +
 			"disabling org domain to prevent plaintext state publication")
