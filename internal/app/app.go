@@ -62,6 +62,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/notifications"
 	"github.com/openagentsinc/bahia/internal/pipeline"
 	"github.com/openagentsinc/bahia/internal/reconcile"
+	"github.com/openagentsinc/bahia/internal/relayguard"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/openagentsinc/bahia/internal/service"
@@ -199,36 +200,60 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		}
 	}()
 	servicePubkey := ""
+	var controlPlaneRelayGuard *relayguard.Guard
 	if serviceKeyer != nil {
 		pubkey, err := serviceKeyer.GetPublicKey(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("resolving service signer pubkey: %w", err)
 		}
 		servicePubkey = pubkey.Hex()
+		controlPlaneRelayGuard, err = relayguard.New(pubkey, cfg.Nostr.ControlledRelaySet())
+		if err != nil {
+			return nil, fmt.Errorf("configuring control-plane relay guard: %w", err)
+		}
 	}
 
-	// Relay pools are initialized before the optional database cache.
+	// Relay pools are initialized before the optional database cache. Every
+	// pool carries the control-plane relay guard: no pool, whatever its
+	// topology, may put a service-signed control-plane event on a relay
+	// outside nostr.controlled_relays.
 	poolOptions := []nostrAdapter.RelayPoolOption{
 		nostrAdapter.WithAuthSigner(serviceKeyer),
 		nostrAdapter.WithOutboundAdmission(outboundAdmission),
+		nostrAdapter.WithControlPlaneRelayGuard(controlPlaneRelayGuard),
 		closedRetryBudgetOption(cfg.Nostr),
 	}
 	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)
 	contextVMRequestRelays := contextVMRelayURLs(cfg.Nostr)
 	contextVMResponseRelays := append([]string(nil), contextVMRequestRelays...)
-	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, poolOptions...)
+	// Pools that carry the control plane also keep gift wraps on controlled
+	// relays (their ephemeral signer cannot show what they carry).
+	controlPlanePoolOptions := append(append([]nostrAdapter.RelayPoolOption(nil), poolOptions...), nostrAdapter.WithControlPlanePurpose())
+	controlPlanePool := nostrAdapter.NewRelayPool(controlPlaneRelays, logger, controlPlanePoolOptions...)
 	controlPlanePool.Connect(ctx)
-	contextVMRequestPool := nostrAdapter.NewRelayPool(contextVMRequestRelays, logger, poolOptions...)
+	contextVMRequestPool := nostrAdapter.NewRelayPool(contextVMRequestRelays, logger, controlPlanePoolOptions...)
 	contextVMRequestPool.Connect(ctx)
-	contextVMResponsePool := nostrAdapter.NewRelayPool(contextVMResponseRelays, logger, poolOptions...)
+	contextVMResponsePool := nostrAdapter.NewRelayPool(contextVMResponseRelays, logger, controlPlanePoolOptions...)
 	contextVMResponsePool.Connect(ctx)
 	relayPolicyHydrationRelays := relayPolicyHydrationRelayURLs(cfg.Nostr)
-	relayPolicyHydrationPool := nostrAdapter.NewRelayPool(relayPolicyHydrationRelays, logger, poolOptions...)
+	relayPolicyHydrationPool := nostrAdapter.NewRelayPool(relayPolicyHydrationRelays, logger, controlPlanePoolOptions...)
 	relayPolicyHydrationPool.Connect(ctx)
 
-	relayURLs := interopRelayURLs(cfg, controlPlaneRelays)
-	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, poolOptions...)
+	relayURLs := serviceRelayPoolURLs(cfg.Nostr, cfg.Nostr.ServiceRelayPolicyRelays(), cfg.Loom.Relays)
+	relayPool := nostrAdapter.NewRelayPool(relayURLs, logger, controlPlanePoolOptions...)
 	relayPool.Connect(ctx)
+	// The effective relay policy: the static lists above are bootstrap only;
+	// the canonical relay settings govern the pools, the service write set
+	// and the advertised relay events once the hydrator receives them.
+	relayTopology := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{
+		ControlPlanePool:      controlPlanePool,
+		ContextVMRequestPool:  contextVMRequestPool,
+		ContextVMResponsePool: contextVMResponsePool,
+		ServicePool:           relayPool,
+		NostrConfig:           cfg.Nostr,
+		LoomRelays:            cfg.Loom.Relays,
+		Logger:                logger,
+	})
 	logger.Info("nostr relay topology initialized",
 		zap.Strings("control_plane_relays", controlPlaneRelays),
 		zap.Strings("contextvm_request_subscription_relays", contextVMRequestRelays),
@@ -335,6 +360,11 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		logger.Error("local Nostr publish outbox was unreadable and was moved aside; events still pending in it were not delivered",
 			zap.String("moved_to", aside))
 	}
+	if relayPolicyProjectionRepo == nil {
+		// Without PostgreSQL the accepted relay policy head is a durable local
+		// control record; the canonical relay settings govern either way.
+		relayPolicyProjectionRepo = controlplane.NewLocalRelayPolicyProjectionStore(localOutbox)
+	}
 	// DNS and ML desired registry records live in the durable local store.
 	// PostgreSQL is a derived index and must not seed canonical state at boot.
 	dnsZoneRepo = repository.NewLocalDNSZoneRepository(localOutbox)
@@ -435,9 +465,13 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if agentRuntimeReleaseRepo != nil && serviceRepo != nil {
 		agentRuntimeReleaseSvc = service.NewAgentRuntimeReleaseService(agentRuntimeReleaseRepo, serviceRepo)
 	}
+	// The service publisher writes to, and counts nostr.publish_quorum
+	// against, the service write relays in force — never the Loom relays
+	// that share its pool.
 	nostrPub := nostrAdapter.NewPublisher(cfg.Nostr, relayPool, pgNostrEventRepo, logger,
 		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore),
-		nostrAdapter.WithPublisherSigner(serviceKeyer))
+		nostrAdapter.WithPublisherSigner(serviceKeyer),
+		nostrAdapter.WithPublisherWriteRelays(relayTopology.ServiceWriteRelays))
 	// Control-plane outbox publisher shared by the read-model projector, docs,
 	// SBOM and config-fabric. Its entries carry the control-plane publish
 	// target and its own runner retries them, so they are never redelivered to
@@ -1216,6 +1250,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		nostrAdapter.WithWorkerProjectionSource(workerRepo),
 		// Worker read models are published directly from the mutation site.
 		nostrAdapter.WithSystemDiscoveryConfig(cfg, true),
+		nostrAdapter.WithAdvertisedRelaySource(relayTopology),
 	}
 	if dnsProjector != nil {
 		projectorOpts = append(projectorOpts,
@@ -1248,6 +1283,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
 	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePub, projectionHistory, logger, projectorOpts...)
 	controlPlanePub.OnDeliveryAbandoned(nostrProjector.ForgetAbandonedProjection)
+	relayTopology.SetAdvertiser(nostrProjector.PublishAdvertisedRelays)
 
 	// F74b: mutation-bound publishers for package intent/approval and tool
 	// provisioning. OCK is installed below before any ingress starts.
@@ -2575,23 +2611,22 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		logger.Info("NIP-23 docs publisher registered", zap.Strings("relays", controlPlaneRelays))
 	}
 
-	if servicePubkey != "" && relayPolicyProjectionRepo != nil {
-		relayTopologyCoordinator := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{
-			ControlPlanePool:      controlPlanePool,
-			ContextVMRequestPool:  contextVMRequestPool,
-			ContextVMResponsePool: contextVMResponsePool,
-			ServicePool:           relayPool,
-			NostrConfig:           cfg.Nostr,
-			LoomRelays:            cfg.Loom.Relays,
-			Logger:                logger,
-		})
+	healthProvider.RegisterCheck("relay_topology", relayTopology.Health)
+	if servicePubkey != "" {
 		relaySettingsHydrator := controlplane.NewRelaySettingsHydrator(controlplane.RelaySettingsHydratorConfig{
 			Pool:            relayPolicyHydrationPool,
 			ServicePubkey:   servicePubkey,
 			ProjectionStore: relayPolicyProjectionRepo,
 			Logger:          logger,
+			OnCaughtUp:      relayTopology.MarkCaughtUp,
+			Validate:        relayTopology.ValidateSnapshot,
 			OnSnapshotApplied: func(applyCtx context.Context, state controlplane.RelayPolicyState) error {
-				if err := relayTopologyCoordinator.ApplySnapshot(applyCtx, state); err != nil {
+				if err := relayTopology.ApplySnapshot(applyCtx, state); err != nil {
+					if errors.Is(err, errRelayPolicyRefused) {
+						// Logged and reported by relay_topology health; the
+						// topology in force, and the hydration relays, stay.
+						return nil
+					}
 					return err
 				}
 				relayPolicyHydrationPool.ReconfigureRelayURLsContext(
@@ -2985,6 +3020,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	)
 	if pool != nil {
 		nostrTransportMetrics.setStorageSource(repository.NewPgNostrEventArchiveRepository(pool))
+	}
+	if controlPlaneRelayGuard != nil {
+		nostrTransportMetrics.guard = controlPlaneRelayGuard
 	}
 	bgManager.RegisterWithOptions(nostrTransportMetrics, RunnerRequired(false))
 
@@ -4504,31 +4542,6 @@ func relayPolicyHydrationRelayURLsForState(configured []string, state controlpla
 		for _, relay := range candidates {
 			relays = appendUniqueRelay(relays, relay)
 		}
-	}
-	return relays
-}
-
-func interopRelayURLs(cfg *config.Config, controlPlaneRelays []string) []string {
-	var relays []string
-	if cfg.Nostr.Sidecar.Enabled {
-		// The sidecar is always the canonical Bahia service boundary. Generic
-		// inbound subscribers, bootstrap replay, and service projections must
-		// retain it even when no public interop relays are configured.
-		for _, r := range controlPlaneRelays {
-			relays = appendUniqueRelay(relays, r)
-		}
-	}
-	if cfg.Nostr.Sidecar.Enabled && cfg.Nostr.Sidecar.MirrorExternal {
-		// The sidecar is the upstream mirror boundary. Subscribe through it for
-		// public interop/audit traffic instead of also connecting Bahia directly to
-		// cfg.Nostr.Relays, which would create duplicate publish/subscribe loops.
-	} else {
-		for _, r := range cfg.Nostr.Relays {
-			relays = appendUniqueRelay(relays, r)
-		}
-	}
-	for _, r := range cfg.Loom.Relays {
-		relays = appendUniqueRelay(relays, r)
 	}
 	return relays
 }

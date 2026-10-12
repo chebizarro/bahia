@@ -2067,6 +2067,7 @@ func TestNostrDMRelayListsAreExplicitAndSeparated(t *testing.T) {
 	cfg.Notifications.NostrDM = true
 	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
 	cfg.Nostr.ContextVMRelays = []string{"wss://contextvm.example"}
+	cfg.Nostr.ControlledRelays = []string{"wss://browser.example", "wss://contextvm.example"}
 	cfg.Nostr.DMRelayLists = []DMRelayListConfig{{
 		Enabled:  true,
 		Feature:  " Notifications ",

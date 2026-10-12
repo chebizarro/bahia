@@ -33,6 +33,7 @@ const usage = "usage: bahia-migrate [--config path] [--confirm] [--force] [--to 
 	"       bahia-migrate [--config path] --confirm-quiesced f74a-import (stop daemon and all SQL writers first)\n" +
 	"       bahia-migrate [--config path] [--confirm-quiesced --outbox-path /absolute/daemon/outbox.bolt] legacy-cutover (read-only census fails when blocked; seal only when empty)\n" +
 	"       bahia-migrate [--config path] --target default|control-plane [--after token] [--max-rows n] outbox-transfer (read-only inventory; --apply is disabled)\n" +
+	"       bahia-migrate [--config path] --export-dir /absolute/new/dir [--export-relays url,... --export-service-pubkey hex] export (unsigned SQL drafts)\n" +
 	"       bahia-migrate [--config path] [--dry-run] [--relays url,...] [--relay-backfill] nostr"
 
 func main() {
@@ -71,6 +72,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	transferAfter := flags.String("after", "", "outbox-transfer: continuation token printed by a prior inventory page")
 	maxRows := flags.Int("max-rows", 1000, "outbox-transfer: maximum SQL rows inspected (1..10000)")
 	transferApply := flags.Bool("apply", false, "outbox-transfer: disabled until a fenced, crash-safe ownership protocol is available")
+	exportDir := flags.String("export-dir", "", "export: absolute path to a new private output directory")
+	exportRelays := flags.String("export-relays", "", "export: optional comma-separated read-only canonical relays")
+	exportServicePubkey := flags.String("export-service-pubkey", "", "export: service pubkey for scoped canonical comparison")
+	exportTimeout := flags.Duration("export-timeout", 30*time.Second, "export: optional canonical REQ/EOSE deadline")
 	relays := flags.String("relays", "", "nostr: comma-separated relays to publish to (default: sidecar plus nostr.relays)")
 	relayBackfill := flags.Bool("relay-backfill", false, "nostr: also read legacy events back from the relays (default: nostr.legacy_relay_backfill)")
 	action := ""
@@ -120,6 +125,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if action != "outbox-transfer" && (*transferTarget != "" || *transferAfter != "" || *maxRows != 1000) {
 		return reportError(stderr, "outbox inventory flags are only valid for outbox-transfer")
+	}
+	if action != "export" && (*exportDir != "" || *exportRelays != "" || *exportServicePubkey != "" || *exportTimeout != 30*time.Second) {
+		return reportError(stderr, "export flags are only valid for export")
+	}
+	if action == "export" && *exportDir == "" {
+		return reportError(stderr, "export requires --export-dir")
 	}
 	if action == "outbox-transfer" {
 		if *transferTarget != "default" && *transferTarget != "control-plane" {
@@ -173,7 +184,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return reportError(stderr, "down requires --confirm")
 	}
 	loadConfig := config.Load
-	if action == "legacy-cutover" || action == "f74a-census" || action == "f74a-compact" || action == "f74a-restore-preflight" || action == "f74a-verify-receipt" {
+	if action == "legacy-cutover" || action == "export" || action == "f74a-census" || action == "f74a-compact" || action == "f74a-restore-preflight" || action == "f74a-verify-receipt" {
 		loadConfig = config.LoadReadOnly
 	}
 	cfg, err := loadConfig(*configPath)
@@ -188,6 +199,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if action == "f74a-verify-receipt" && strings.TrimSpace(cfg.DB.F74aBackupAttestorPublicKey) == "" {
 		return reportError(stderr, "F74a backup attestor public key is not configured")
+	}
+	if action == "export" {
+		return runLegacyExport(ctx, cfg, *exportDir, strutil.SplitCSV(*exportRelays), *exportServicePubkey, *exportTimeout, stdout, stderr)
 	}
 	pool, err := db.Connect(ctx, cfg.DB, zap.NewNop())
 	if err != nil {
@@ -224,7 +238,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func isAction(value string) bool {
 	switch value {
-	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact", "f74a-restore-preflight", "f74a-verify-receipt", "f74a-import", "legacy-cutover", "outbox-transfer":
+	case "status", "up", "down", "nostr", "f74a-census", "f74a-compact", "f74a-restore-preflight", "f74a-verify-receipt", "f74a-import", "legacy-cutover", "outbox-transfer", "export":
 		return true
 	default:
 		return false
@@ -265,7 +279,11 @@ func runNostrMigration(ctx context.Context, cfg *config.Config, pool *pgxpool.Po
 		if err != nil {
 			return reportError(stderr, "nostr migration: %v", err)
 		}
-		poolOptions = append(poolOptions, nostradapter.WithAuthSigner(authSigner))
+		guard, err := serviceRelayGuard(ctx, cfg.Nostr, authSigner, relayURLs)
+		if err != nil {
+			return reportError(stderr, "nostr migration: %v", err)
+		}
+		poolOptions = append(poolOptions, nostradapter.WithAuthSigner(authSigner), nostradapter.WithControlPlaneRelayGuard(guard))
 	}
 	relayPool := nostradapter.NewRelayPool(relayURLs, logger, poolOptions...)
 	defer relayPool.Close()

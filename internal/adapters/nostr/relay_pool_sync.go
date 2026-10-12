@@ -296,6 +296,9 @@ func (p *RelayPool) uploadNegentropyChunk(ctx context.Context, op *nostrout.Oper
 // connection under the operation's bulk permit and the relay's wire budget,
 // with the same receipt and breaker accounting as a pool publication.
 func (p *RelayPool) publishAdmittedToSessionRelay(ctx context.Context, op *nostrout.Operation, relay *nostr.Relay, ev nostr.Event) error {
+	if err := p.checkRelayGuard(relay.URL, ev); err != nil {
+		return err
+	}
 	pub, err := op.Begin(ctx, ev, []string{relay.URL})
 	if err != nil {
 		return err

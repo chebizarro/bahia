@@ -11,6 +11,7 @@
 #     that no longer exists never fires, which is worse than a noisy one.
 #
 
+
 bahia_adoption_candidates_total
 bahia_adoption_import_duration_seconds
 bahia_adoption_import_failure_total
@@ -55,6 +56,7 @@ bahia_loom_jobs_inflight
 bahia_loom_jobs_total
 bahia_nostr_archive_batches
 bahia_nostr_backoff_seconds
+bahia_nostr_control_plane_guard_refusals_total
 bahia_nostr_eose_latency_seconds
 bahia_nostr_event_store_bytes
 bahia_nostr_event_store_oldest_hot_timestamp_seconds

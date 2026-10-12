@@ -222,6 +222,18 @@ func WithPublishTarget(target string) PublisherOption {
 	return func(p *Publisher) { p.target = target }
 }
 
+// WithPublisherWriteRelays sets the publisher's write relays: the relays each
+// delivery round targets and counts nostr.publish_quorum against. relays is
+// read every round, so a relay topology change applies to pending entries on
+// their next round. Without it the write relays are every relay of the pool.
+func WithPublisherWriteRelays(relays func() []string) PublisherOption {
+	return func(p *Publisher) {
+		if relays != nil {
+			p.relayURLs = relays
+		}
+	}
+}
+
 // WithPublisherSigner supplies the injected service Keyer used for
 // publisher-owned events. Without it the publisher cannot sign and its
 // default target is disabled.

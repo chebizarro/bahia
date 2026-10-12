@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/relayguard"
 	"github.com/openagentsinc/bahia/internal/strutil"
 
 	"github.com/knadh/koanf/parsers/yaml"
@@ -695,6 +696,21 @@ type NostrConfig struct {
 	DMRelayLists               []DMRelayListConfig       `koanf:"dm_relay_lists" yaml:"dm_relay_lists"`
 	RelayAdministration        RelayAdministrationConfig `koanf:"relay_administration" yaml:"relay_administration"`
 
+	// ControlledRelays are the relays Bahia operates: the only relays that
+	// may receive service-signed control-plane events (cp-state, audit,
+	// status, OCK/NIP-44 payloads; relayguard.IsControlPlaneKind). The
+	// sidecar's URLs are always controlled; unset means the sidecar alone. It
+	// is required when the daemon publishes with a service identity and any
+	// service, ContextVM or browser relay is not the sidecar. Every
+	// control-plane relay, static or from the canonical relay settings, must
+	// be listed here, and a well-known public relay never can be.
+	ControlledRelays []string `koanf:"controlled_relays" yaml:"controlled_relays" secret:"false"`
+	// AllowedPublicRelays explicitly permits well-known public relays
+	// (relayguard.IsWellKnownPublic) in non-control-plane relay lists: Loom,
+	// NIP-34, DM relay lists, Soul Factory, DNS agent and FIPS relays. They
+	// remain invalid in every control-plane list.
+	AllowedPublicRelays []string `koanf:"allowed_public_relays" yaml:"allowed_public_relays" secret:"false"`
+
 	// RelayAuthUnavailablePolicy is fixed to exclude_and_fail: if a relay requires
 	// NIP-42 AUTH and no valid signer is available for the operation, consumers
 	// must exclude that relay, surface the CLOSED/OK reason in health/error
@@ -715,7 +731,10 @@ type NostrConfig struct {
 	// publishes: how many configured write relays must accept an event (OK
 	// true or duplicate) before a publish call returns success.
 	//   - 1 (the default; 0/unset means the same): at least one relay.
-	//   - N > 1: at least N relays (capped at the number of write relays).
+	//   - N > 1: at least N relays. The service write set
+	//     (ServiceWriteRelays) must have at least N relays: configuration
+	//     with fewer fails validation, and canonical relay settings with
+	//     fewer are refused at runtime.
 	//   - -1 (PublishQuorumAllRelays): every configured write relay.
 	// It does not change delivery tracking: the outbox row stays pending, and
 	// relays that have not accepted keep being retried, until every write
@@ -2522,6 +2541,8 @@ func (c *Config) normalizeNostrRelays() {
 		c.Nostr.DMRelayLists[i].Identity = strings.ToLower(strings.TrimSpace(c.Nostr.DMRelayLists[i].Identity))
 		c.Nostr.DMRelayLists[i].Relays = normalizeRelayList(c.Nostr.DMRelayLists[i].Relays)
 	}
+	c.Nostr.ControlledRelays = normalizeRelayList(c.Nostr.ControlledRelays)
+	c.Nostr.AllowedPublicRelays = normalizeRelayList(c.Nostr.AllowedPublicRelays)
 	c.Nostr.PrivateRelays = cloneStrings(c.Nostr.ServiceRelays)
 	c.Nostr.PrivateBrowserRelays = cloneStrings(c.Nostr.BrowserRelays)
 	c.Nostr.RelayAuthUnavailablePolicy = strings.ToLower(strings.TrimSpace(c.Nostr.RelayAuthUnavailablePolicy))
@@ -2535,6 +2556,145 @@ func (c NostrConfig) ServiceRelayPolicyRelays() []string {
 		return cloneStrings(c.ServiceRelays)
 	}
 	return cloneStrings(c.Relays)
+}
+
+// ServiceWriteRelays is the relay set the daemon's service publisher writes
+// to and counts nostr.publish_quorum against, for the given service relay
+// policy. With the sidecar enabled the sidecar is always a write relay,
+// addressed by its backend URL; its public URL in the policy names the same
+// relay and is not counted twice. With mirror_external the sidecar is the
+// only write relay.
+func (c NostrConfig) ServiceWriteRelays(serviceRelays []string) []string {
+	var relays []string
+	if c.Sidecar.Enabled {
+		sidecar := relayguard.Normalize(c.Sidecar.BackendURL)
+		relays = appendUniqueRelayURL(relays, sidecar)
+		if c.Sidecar.MirrorExternal {
+			return relays
+		}
+		public := relayguard.Normalize(c.Sidecar.PublicURL)
+		for _, relay := range serviceRelays {
+			if normalized := relayguard.Normalize(relay); normalized != public {
+				relays = appendUniqueRelayURL(relays, normalized)
+			}
+		}
+		return relays
+	}
+	for _, relay := range serviceRelays {
+		relays = appendUniqueRelayURL(relays, relayguard.Normalize(relay))
+	}
+	return relays
+}
+
+// ControlledRelaySet is nostr.controlled_relays plus the sidecar's backend
+// and public URLs; with controlled_relays unset, the sidecar alone. Relays
+// are normalized as the relay pool normalizes them.
+func (c NostrConfig) ControlledRelaySet() []string {
+	relays := c.sidecarRelayURLs()
+	for _, relay := range c.ControlledRelays {
+		relays = appendUniqueRelayURL(relays, relayguard.Normalize(relay))
+	}
+	return relays
+}
+
+func (c NostrConfig) sidecarRelayURLs() []string {
+	var relays []string
+	if c.Sidecar.Enabled {
+		relays = appendUniqueRelayURL(relays, relayguard.Normalize(c.Sidecar.BackendURL))
+		relays = appendUniqueRelayURL(relays, relayguard.Normalize(c.Sidecar.PublicURL))
+	}
+	return relays
+}
+
+// SignsControlPlane reports whether the daemon publishes service-signed
+// control-plane events: publishing is enabled and a service identity
+// (nostr.private_key or a remote nostr.signer) is configured.
+func (c NostrConfig) SignsControlPlane() bool {
+	return c.PublishEnabled && (strings.TrimSpace(c.PrivateKey) != "" || strings.TrimSpace(c.Signer.Method) != "")
+}
+
+// ControlledRelaysUnset reports that nostr.controlled_relays is empty while
+// the daemon signs control-plane events, so only the sidecar is controlled.
+func (c NostrConfig) ControlledRelaysUnset() bool {
+	return len(c.ControlledRelays) == 0 && c.SignsControlPlane()
+}
+
+// requiresControlledRelays: the daemon signs control-plane events and its
+// static control-plane relays name a relay other than the sidecar, so the
+// operator must say which relays Bahia controls.
+func (c NostrConfig) requiresControlledRelays() bool {
+	if len(c.ControlledRelays) > 0 || !c.SignsControlPlane() {
+		return false
+	}
+	sidecar := make(map[string]struct{})
+	for _, relay := range c.sidecarRelayURLs() {
+		sidecar[relay] = struct{}{}
+	}
+	for _, list := range [][]string{c.ServiceRelayPolicyRelays(), c.ContextVMRelayPolicyRelays(), c.BrowserRelayPolicyRelays()} {
+		for _, relay := range list {
+			if _, ok := sidecar[relayguard.Normalize(relay)]; !ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ControlPlaneRelays are the relay lists that carry Bahia's control plane:
+// service publication, ContextVM requests and responses, and browser reads.
+type ControlPlaneRelays struct {
+	Service   []string
+	ContextVM []string
+	Browser   []string
+}
+
+// ValidateControlPlaneRelays checks control-plane relay lists against the
+// controlled relay set and the publish quorum. source names where the lists
+// come from in errors ("nostr" for this file, "canonical relay settings" at
+// runtime). No relay may be a well-known public relay; when the controlled
+// set is authoritative (controlled_relays is set, or the daemon signs
+// control-plane events) every relay must be controlled; a publish_quorum
+// above 1 needs at least that many service write relays.
+func (c NostrConfig) ValidateControlPlaneRelays(source string, lists ControlPlaneRelays) error {
+	var controlled map[string]struct{}
+	if len(c.ControlledRelays) > 0 || c.SignsControlPlane() {
+		controlled = make(map[string]struct{})
+		for _, relay := range c.ControlledRelaySet() {
+			controlled[relay] = struct{}{}
+		}
+	}
+	for _, list := range []struct {
+		name   string
+		relays []string
+	}{{"service_relays", lists.Service}, {"contextvm_relays", lists.ContextVM}, {"browser_relays", lists.Browser}} {
+		for _, relay := range list.relays {
+			normalized := relayguard.Normalize(relay)
+			if relayguard.IsWellKnownPublic(normalized) {
+				return fmt.Errorf("%s %s lists public relay %s: Bahia's control plane is never published to public relays", source, list.name, normalized)
+			}
+			if _, ok := controlled[normalized]; controlled != nil && !ok {
+				return fmt.Errorf("%s %s lists %s, which is not in nostr.controlled_relays", source, list.name, normalized)
+			}
+		}
+	}
+	if quorum := c.PublishQuorum; quorum > 1 {
+		if write := c.ServiceWriteRelays(lists.Service); len(write) < quorum {
+			return fmt.Errorf("%s service_relays give %d service write relays %v, fewer than nostr.publish_quorum %d", source, len(write), write, quorum)
+		}
+	}
+	return nil
+}
+
+func appendUniqueRelayURL(relays []string, relay string) []string {
+	if relay == "" {
+		return relays
+	}
+	for _, existing := range relays {
+		if existing == relay {
+			return relays
+		}
+	}
+	return append(relays, relay)
 }
 
 func (c NostrConfig) BrowserRelayPolicyRelays() []string {
@@ -3915,12 +4075,89 @@ func (c *Config) validateNostrRelayPolicy() error {
 	if c.Nostr.PublishQuorum < PublishQuorumAllRelays {
 		return fmt.Errorf("config validation failed: nostr.publish_quorum must be >= 1, or -1 for every write relay (0/unset means 1)")
 	}
+	for _, relay := range c.Nostr.ControlledRelays {
+		if relayguard.IsWellKnownPublic(relay) {
+			return fmt.Errorf("config validation failed: nostr.controlled_relays lists public relay %s: Bahia's control plane is never published to public relays", relay)
+		}
+	}
+	if c.Nostr.requiresControlledRelays() {
+		var named []string
+		for _, list := range [][]string{c.Nostr.ServiceRelayPolicyRelays(), c.Nostr.ContextVMRelayPolicyRelays(), c.Nostr.BrowserRelayPolicyRelays()} {
+			for _, relay := range list {
+				named = appendUniqueRelayURL(named, relayguard.Normalize(relay))
+			}
+		}
+		return fmt.Errorf("config validation failed: nostr.controlled_relays is required when the daemon publishes with a service identity: list the relays Bahia operates (at least every service, contextvm and browser relay; never a public relay), e.g. controlled_relays: [%s]", strings.Join(named, ", "))
+	}
+	if err := c.Nostr.ValidateControlPlaneRelays("nostr", ControlPlaneRelays{
+		Service:   c.Nostr.ServiceRelayPolicyRelays(),
+		ContextVM: c.Nostr.ContextVMRelayPolicyRelays(),
+		Browser:   c.Nostr.BrowserRelayPolicyRelays(),
+	}); err != nil {
+		return fmt.Errorf("config validation failed: %w", err)
+	}
+	if err := c.validatePublicRelayUse(); err != nil {
+		return err
+	}
 	switch c.Nostr.RelayAuthUnavailablePolicy {
 	case RelayAuthUnavailableExcludeAndFail:
 		return nil
 	default:
 		return fmt.Errorf("config validation failed: nostr.relay_auth_unavailable must be %q", RelayAuthUnavailableExcludeAndFail)
 	}
+}
+
+// validatePublicRelayUse rejects well-known public relays in the
+// non-control-plane relay lists unless nostr.allowed_public_relays names them.
+func (c *Config) validatePublicRelayUse() error {
+	type relayList struct {
+		name   string
+		relays []string
+	}
+	lists := []relayList{
+		{"loom.relays", c.Loom.Relays},
+		{"nostr.nip34_relays", c.Nostr.NIP34Relays},
+		{"soul_factory.relays", c.SoulFactory.Relays},
+		{"soul_factory.additional_relays", c.SoulFactory.AdditionalRelays},
+		{"soul_factory.nip05_relays", c.SoulFactory.NIP05Relays},
+		{"fips.relay_urls", c.FIPS.RelayURLs},
+	}
+	backendNames := make([]string, 0, len(c.DNS.Backends))
+	for name := range c.DNS.Backends {
+		backendNames = append(backendNames, name)
+	}
+	sort.Strings(backendNames)
+	for _, name := range backendNames {
+		lists = append(lists, relayList{"dns.backends." + name + ".agent_relays", c.DNS.Backends[name].AgentRelays})
+	}
+	for i, list := range c.Nostr.DMRelayLists {
+		lists = append(lists, relayList{fmt.Sprintf("nostr.dm_relay_lists[%d].relays", i), list.Relays})
+	}
+	for _, list := range lists {
+		if err := c.Nostr.ValidatePublicRelayUse(list.name, list.relays); err != nil {
+			return fmt.Errorf("config validation failed: %w", err)
+		}
+	}
+	return nil
+}
+
+// ValidatePublicRelayUse rejects well-known public relays in a
+// non-control-plane relay list unless nostr.allowed_public_relays names them.
+func (c NostrConfig) ValidatePublicRelayUse(name string, relays []string) error {
+	for _, relay := range relays {
+		normalized := relayguard.Normalize(relay)
+		if !relayguard.IsWellKnownPublic(normalized) {
+			continue
+		}
+		allowed := false
+		for _, permitted := range c.AllowedPublicRelays {
+			allowed = allowed || relayguard.Normalize(permitted) == normalized
+		}
+		if !allowed {
+			return fmt.Errorf("%s lists public relay %s; list it in nostr.allowed_public_relays to use it for this non-control-plane purpose", name, normalized)
+		}
+	}
+	return nil
 }
 
 func (c *Config) validateDMRelayLists() error {

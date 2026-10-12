@@ -55,8 +55,9 @@ auth:
 
 nostr:
   private_key: "<service-hex-key>"
-  relays: ["wss://relay.example.com"]
+  service_relays: ["wss://relay.example.com"]   # Bahia-controlled relays only; never a public relay
   browser_relays: ["wss://relay.example.com"]
+  publish_quorum: 1                               # at most the number of service relays
   authorized_pubkeys: ["<fleet-operator-hex-pubkey>"]
   bootstrap_owners:
     "11111111-1111-1111-1111-111111111111": "<org-owner-hex-pubkey>"

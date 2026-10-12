@@ -2,6 +2,46 @@
 
 Normal Bahia startup never imports PostgreSQL rows into canonical relay/local state. Do not restore any boot-time DNS, ML, adoption, Hive-CI, security, policy, initiation, managed-instance, or F74a promotion hook to make an upgrade appear complete.
 
+## Operator re-assertion review
+
+`bahia-migrate export` reads the three SQL-only candidate families into a new, private review directory. It does not publish, sign, access a service key, import SQL rows into the daemon, or mark cutover complete. Run it with a dedicated PostgreSQL role that has `SELECT` but no table writes, schema `CREATE`, or elevated role privileges; the command enforces those checks and uses one `REPEATABLE READ READ ONLY` snapshot. The directory must not already exist and must be an absolute path.
+
+```bash
+bahia-migrate --config config.yaml --export-dir /secure/reviews/rotation-2026-10-11 export
+# Optional coordinate comparison against the current service author's relays:
+bahia-migrate --config config.yaml --export-dir /secure/reviews/rotation-2026-10-11-checked \
+  --export-relays wss://relay.example --export-service-pubkey "$SERVICE_PUBKEY" \
+  --export-timeout 30s export
+```
+
+The optional comparison uses a scoped, unsigned `REQ` and requires real EOSE from every configured relay. A failed/incomplete comparison produces no directory. It detects **visible matching coordinates only**, not global absence: encrypted Hive-CI policy selectors cannot be compared without operator decryption, and a fresh policy UUIDv7 has no old SQL-ID coordinate. The index labels every row for review; a canonical duplicate is omitted from draft files rather than overwritten. Re-read canonical state immediately before signing because relays can change after the snapshot.
+
+The directory contains `index.json` (family, legacy row ID, coordinate, review status, notes and draft filename) and one JSON file per draft. Every intent file has `kind:30900`, current tags and a JSON `content` object, but **no pubkey, signature or event ID**. Do not publish the file as a Nostr event. The security files are deliberately **not** registration intents: no target-registration domain exists. Each is only a `{"target":...}` input shaped for `security/scan-run`; signing a scan-run requests a scan and may create a target as a scanner side effect, not assert a durable target registration. Review whether each target is still wanted. No security run/history row is migrated.
+
+For adoption, the current `adoption/import` intent coordinate is `adoption:<org>`, so all selected identities of an organization share one draft. Each selection identifies one container on a distinct target alias. Check the live Docker host, container ID, service/environment ownership and adoption preview; drop dead or mismatched rows. Replace every `REPLACE_WITH_SIGNET_ENDPOINT_REF` with a configured endpoint reference after the [Signet secret-store decision](../architecture/confidential-state.md) (bahia-2o3on); no SQL endpoint, environment value or Docker credential is exported. The handler does not accept resource IDs in adoption/import and derives its own stable resource IDs; legacy identity UUIDs are not copied into the intent. Keep the generated UUIDv7 `intent_id` fixed for the reviewed group and retries. The operator can translate the reviewed `targets` and `selections` into repeatable CLI flags and sign with **their own** key:
+
+```bash
+bahia --relay wss://relay.example --nostr-key-file operator.key --service-pubkey "$SERVICE_PUBKEY" \
+  adopt scan --org "$ORG" --target alias=reviewed-endpoint-ref --environment alias=production
+bahia --relay wss://relay.example --nostr-key-file operator.key --service-pubkey "$SERVICE_PUBKEY" \
+  adopt import --org "$ORG" --target alias=reviewed-endpoint-ref \
+  --environment alias=production --select alias/<live-container-id>=reviewed-service-name \
+  --idempotency-key <draft-intent-id>
+```
+
+Repeat `--target`, `--environment` and `--select` for every reviewed entry in the **same organization draft**, not one event per SQL row. The CLI's `IntentPublisher` signs the operator intent. Check its accepted `30315` status and the service-signed canonical binding; a published `OK` alone is not application success.
+
+For Hive-CI, each file carries a newly minted, fixed UUIDv7 policy ID and a separate UUIDv7 `intent_id`. The old SQL ID is retained only in `index.json`: the new schema requires UUIDv7 and the legacy SQL FK/index reconciliation is tracked in bahia-qdgcl. SQL metadata is not copied; review and supply any needed non-secret metadata, verify selectors against decrypted canonical policies, and use the CLI's gift-wrapped operator-signed publisher:
+
+```bash
+jq '.content' /secure/reviews/rotation-2026-10-11-checked/hiveci-policy-<uuidv7>.json > /secure/reviews/reviewed-policy.json
+bahia --relay wss://relay.example --nostr-key-file operator.key --service-pubkey "$SERVICE_PUBKEY" \
+  hiveci-policy apply --file /secure/reviews/reviewed-policy.json --op create \
+  --idempotency-key <draft-intent-id>
+```
+
+Do not sign an unchanged draft merely because it parses. The exporter cannot establish Docker liveness, Signet readiness, encrypted selector uniqueness, effective operator authority, or a relay-wide absence certificate. Keep `index.json` with the rotation record, and leave the legacy SQL rows intact until the separate cutover gates below are satisfied.
+
 `bahia-migrate legacy-cutover` is a **read-only census**, not a data importer. It scans a repeatable-read PostgreSQL snapshot and prints JSON row counts for every known table in those eight legacy families, including `security_observable_publications` and the adoption prerequisite `org_ownership_repair`, plus pending and failed signed PostgreSQL outbox rows. Its `blockers` array names each nonempty table or outbox state with the exact count. A blocked read-only census prints the full JSON report to stdout and exits nonzero; do not interpret an exit code alone as a complete report. The `security_osv_vulnerability_cache` is deliberately excluded: it caches external OSV reference data, not Bahia intent or publication state. A missing table, SQL error, or incomplete census is an error, not an empty family. Nonzero counts are conservatively blocked because a SQL row count cannot prove that a matching relay event exists. This includes repaired ownership rows and SQL-derived mirrors; the command does not guess. The census uses a non-mutating config load; if mutable-policy environment seeds would rewrite the YAML, it fails with guidance instead.
 
 ## Procedure

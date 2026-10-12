@@ -31,12 +31,24 @@ db:
 nostr:
   private_key: ""                 # nsec or 64-hex service key; inject as a secret
   authorized_pubkeys: []           # fleet operator 64-hex pubkeys
-  service_relays: []               # daemon publication and backfill
+  # Bootstrap relay topology. Once the canonical relay settings (operator
+  # relay policy) are received, they govern; these lists apply until then.
+  service_relays: []               # daemon publication and backfill (Bahia-controlled relays only)
   browser_relays: []               # advertised browser read relays
   contextvm_relays: []             # intents and encrypted interactive RPC
   nip34_relays: []
+  # Relays Bahia operates; the only relays that receive service-signed
+  # control-plane events (the sidecar always is). Empty means the sidecar
+  # alone; required when the daemon publishes with a service identity and
+  # any service/contextvm/browser relay is not the sidecar. Canonical relay
+  # settings may only choose relays listed here.
+  controlled_relays: []
+  # Well-known public relays (the internal/relayguard denylist) permitted in
+  # non-control-plane lists (loom, nip34, DM relay lists). Never valid for
+  # the control plane.
+  allowed_public_relays: []
   publish_enabled: true
-  publish_quorum: 1                # -1 requires every configured write relay
+  publish_quorum: 1                # relays that must accept; <= service write relays; -1 = all
   closed_retry_budget: 5
   relay_auth_unavailable: exclude_and_fail
   stale_run_after: 5m
