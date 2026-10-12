@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -236,11 +237,12 @@ func (p *RelayPool) InspectBackupRunHistory(ctx context.Context, store BackupRun
 					draining = false
 				}
 			}
-			if !sub.AllRelaysReachedEOSE() || len(sub.StoredOutcomes()) != len(urls) || !slices.Equal(sub.RelayURLs(), urls) {
-				return nil, fmt.Errorf("backup run history lacks all configured relay EOSE: %w", sub.StoredEventsIncomplete(nil))
-			}
 			if incomplete := sub.StoredEventsIncomplete(nil); incomplete != nil {
-				return nil, incomplete
+				return nil, fmt.Errorf("backup run history lacks all configured relay EOSE: %w", incomplete)
+			}
+			established := sub.RelayURLs()
+			if !sub.AllRelaysReachedEOSE() || len(sub.StoredOutcomes()) != len(urls) || !maps.Equal(relayURLSet(established), relayURLSet(urls)) {
+				return nil, fmt.Errorf("backup run history lacks all configured relay EOSE: configured %v, established %v", urls, established)
 			}
 			connections := make(map[string]uint64, len(urls))
 			for _, url := range urls {

@@ -350,6 +350,7 @@ func TestInboundSyncPagesPastAFullPageWithUntil(t *testing.T) {
 	store := openTestLocalStore(t, "")
 	run := startSyncRun(t, newSyncTestPool(relay), store, nil, syncTestConfig())
 	run.waitCaughtUp(t, ctx, relay.url, 1)
+	run.waitLive(t, ctx, relay.url, 2)
 
 	require.ElementsMatch(t, eventIDs(audit...), drainIDs(run.handled))
 	var pages, bounded int
