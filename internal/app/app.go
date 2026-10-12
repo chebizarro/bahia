@@ -538,6 +538,28 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger, runtimeRegistryAuth)
 	logger.Info("runtime resolver initialized", zap.String("default_type", cfg.Runtime.Type))
 
+	// External secret store (docs/architecture/secret-store.md). Secret values
+	// configured through it never touch PostgreSQL, relays or intents.
+	secretStore, err := openSecretStore(ctx, cfg, servicePubkey, outboundAdmission, logger)
+	if err != nil {
+		return nil, fmt.Errorf("configuring secret store: %w", err)
+	}
+	secretStoreOwned := false
+	defer func() {
+		if secretStore != nil && !secretStoreOwned {
+			secretStore.Close()
+		}
+	}()
+	// secretValues is the seam consumers use; nil when no store is configured.
+	var secretValues secretstore.SecretStore
+	if secretStore != nil {
+		secretValues = secretStore
+	}
+	// secretResolver resolves a secret, by id, through its canonical record
+	// and the store. Every consumer resolves at use time; the canonical
+	// records are attached once the projector exists (UseRecords below).
+	secretResolver := secretstore.NewResolver(secretValues)
+
 	// Secret encryptor: its AES key is HKDF-derived from the raw service key,
 	// so without in-process key material every operation fails with
 	// nostrutil.ErrServiceKeyMaterialRequired (bahia-cd0wr.4.7).
@@ -587,7 +609,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	var runtimeLifecycleSvc *service.RuntimeLifecycleService
 	if cfg.DirectRuntime.Enabled {
 		var runtimeApplyLockOpts []service.RuntimeLifecycleOption
-		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleSecrets(secretRepo, secretEncryptor))
+		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleSecrets(secretRepo, secretResolver))
 		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleDeploymentUnits(deploymentUnitRepo))
 		if runtimeApplyLock != nil {
 			runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeApplyLock(runtimeApplyLock))
@@ -792,22 +814,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	}
 	healthProvider := NewHealthProvider(nil, bgManager)
 
-	// External secret store (docs/architecture/secret-store.md). Secret values
-	// configured through it never touch PostgreSQL, relays or intents.
-	secretStore, err := openSecretStore(ctx, cfg, servicePubkey, outboundAdmission, logger)
-	if err != nil {
-		return nil, fmt.Errorf("configuring secret store: %w", err)
-	}
-	secretStoreOwned := false
-	defer func() {
-		if secretStore != nil && !secretStoreOwned {
-			secretStore.Close()
-		}
-	}()
-	// secretValues is the seam consumers use; nil when no store is configured.
-	var secretValues secretstore.SecretStore
 	if secretStore != nil {
-		secretValues = secretStore
 		healthProvider.RegisterCheck("secret_store", secretStoreHealthCheck(secretStore))
 		bgManager.RegisterWithOptions(&secretStoreProbeRunner{store: secretStore, timeout: cfg.SecretStore.Signet.RequestTimeout, logger: logger}, RunnerRequired(false))
 	}
@@ -2361,6 +2368,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// handler reconciles against, come from the daemon's own canonical
 	// records in the local event store, not PostgreSQL.
 	secretView := nostrAdapter.NewCanonicalSecretView(nostrProjector, confidentialEncryptor)
+	secretResolver.UseRecords(secretView)
 	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, confidentialEncryptor, secretView, logger)
 	if secretIndex != nil {
 		// Store-backed secrets recorded while PostgreSQL was absent get their

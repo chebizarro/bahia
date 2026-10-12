@@ -214,11 +214,16 @@ func (r *PgSecretRepository) RecordSecretAccessAudit(ctx context.Context, audit 
 	if audit.AccessedAt.IsZero() {
 		audit.AccessedAt = time.Now().UTC()
 	}
+	// A store-backed secret has no version row (migration 000082).
+	var versionID *uuid.UUID
+	if audit.VersionID != uuid.Nil {
+		versionID = &audit.VersionID
+	}
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO secret_access_audit (id, secret_id, secret_version_id, version, service_id,
 			environment_id, operation, outcome, actor, reason, request_id, error, accessed_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-	`, audit.ID, audit.SecretID, audit.VersionID, audit.Version, audit.ServiceID,
+	`, audit.ID, audit.SecretID, versionID, audit.Version, audit.ServiceID,
 		audit.EnvironmentID, string(audit.Operation), string(audit.Outcome), audit.Actor,
 		audit.Reason, audit.RequestID, audit.Error, audit.AccessedAt)
 	if err != nil {

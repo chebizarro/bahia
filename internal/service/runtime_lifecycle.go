@@ -12,10 +12,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime/vm"
-	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
 
@@ -98,19 +98,21 @@ type RuntimeLifecycleService struct {
 	logger       *zap.Logger
 	applyLock    EnvironmentApplyLocker
 
-	secretEncryptor secretsAdapter.StoredSecretDecryptor
-	healthTimeout   time.Duration
-	healthInterval  time.Duration
+	secretValues   SecretValues
+	healthTimeout  time.Duration
+	healthInterval time.Duration
 }
 
 // RuntimeLifecycleOption configures runtime lifecycle behavior.
 type RuntimeLifecycleOption func(*RuntimeLifecycleService)
 
-// WithRuntimeLifecycleSecrets merges effective Bahia secrets into direct deploy environment options.
-func WithRuntimeLifecycleSecrets(repo repository.SecretRepository, encryptor secretsAdapter.StoredSecretDecryptor) RuntimeLifecycleOption {
+// WithRuntimeLifecycleSecrets merges effective Bahia secrets into direct
+// deploy environment options: repo lists which secrets apply, values
+// resolves them through the secret store at apply time.
+func WithRuntimeLifecycleSecrets(repo repository.SecretRepository, values SecretValues) RuntimeLifecycleOption {
 	return func(s *RuntimeLifecycleService) {
 		s.secrets = repo
-		s.secretEncryptor = encryptor
+		s.secretValues = values
 	}
 }
 
@@ -1104,83 +1106,56 @@ func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, sec
 	if err != nil {
 		return nil, err
 	}
-	if len(secrets) == 0 {
-		if len(bindings) > 0 {
-			return nil, fmt.Errorf("managed desired state references unavailable secrets")
-		}
-		return nil, nil
-	}
-	if s.secretEncryptor == nil {
-		return nil, fmt.Errorf("effective secrets are configured but secret encryption is unavailable")
-	}
-	if opts.Environment == nil {
-		opts.Environment = map[string]string{}
-	}
-	accesses := make([]domain.SecretAccessManifest, 0, len(secrets))
-	resolvedBindings := make(map[uuid.UUID]struct{}, len(bindings))
+	envVars := make(map[uuid.UUID]string, len(secrets))
+	selected := make([]domain.ServiceSecret, 0, len(secrets))
 	for _, secret := range secrets {
 		envVar := secret.Name
 		if managed {
-			var selected bool
-			envVar, selected = bindings[secret.ID]
-			if !selected {
+			var ok bool
+			if envVar, ok = bindings[secret.ID]; !ok {
 				continue
 			}
-			resolvedBindings[secret.ID] = struct{}{}
 		}
 		if secret.Name == "" || envVar == "" {
 			continue
 		}
-		if secret.EncryptionMethod == domain.EncryptionStoreRef {
-			return accesses, domain.SecretInStoreError(secret.ID, secret.Name)
-		}
-		version, err := s.secrets.GetCurrentVersion(ctx, secret.ID)
-		if err != nil {
-			return nil, fmt.Errorf("loading current version for effective secret %q: %w", secret.Name, err)
-		}
-		if version == nil {
-			return nil, fmt.Errorf("effective secret %q has no versioned payload", secret.Name)
-		}
-		accessedAt := time.Now().UTC()
-		value, decryptErr := s.secretEncryptor.DecryptStored(version.SecretID, version.Version, version.EncryptedValue, version.EncryptionMethod)
-		manifest := domain.SecretAccessManifest{
-			SecretID:      secret.ID,
-			VersionID:     version.ID,
-			Version:       version.Version,
-			ServiceID:     secret.ServiceID,
-			EnvironmentID: secret.EnvironmentID,
-			Name:          secret.Name,
-			Operation:     domain.SecretAccessOperationResolve,
-			Outcome:       domain.SecretAccessOutcomeSuccess,
-			AccessedAt:    accessedAt,
-		}
+		envVars[secret.ID] = envVar
+		selected = append(selected, secret)
+	}
+	if managed && len(selected) != len(bindings) {
+		return nil, fmt.Errorf("managed desired state references unavailable secrets")
+	}
+	if len(selected) == 0 {
+		return nil, nil
+	}
+	resolved, err := resolveSecretValues(ctx, s.secretValues, selected)
+	if err != nil {
+		return nil, fmt.Errorf("resolving effective secrets: %w", err)
+	}
+	defer secretstore.ZeroizeResolved(resolved)
+	if opts.Environment == nil {
+		opts.Environment = map[string]string{}
+	}
+	accesses := make([]domain.SecretAccessManifest, 0, len(resolved))
+	for i, r := range resolved {
+		manifest := resolvedSecretManifest(selected[i], r, domain.SecretAccessOperationResolve)
 		audit := &domain.SecretAccessAudit{
-			SecretID:      secret.ID,
-			VersionID:     version.ID,
-			Version:       version.Version,
-			ServiceID:     secret.ServiceID,
-			EnvironmentID: secret.EnvironmentID,
+			SecretID:      manifest.SecretID,
+			Version:       manifest.Version,
+			ServiceID:     manifest.ServiceID,
+			EnvironmentID: manifest.EnvironmentID,
 			Operation:     domain.SecretAccessOperationResolve,
 			Outcome:       domain.SecretAccessOutcomeSuccess,
 			Reason:        "runtime_desired_state_apply",
-			AccessedAt:    accessedAt,
+			AccessedAt:    manifest.AccessedAt,
 		}
-		if decryptErr != nil {
-			manifest.Outcome = domain.SecretAccessOutcomeFailure
-			audit.Outcome = domain.SecretAccessOutcomeFailure
-			audit.Error = decryptErr.Error()
-		}
-		if auditErr := s.secrets.RecordSecretAccessAudit(ctx, audit); auditErr != nil {
-			return nil, auditErr
+		if err := s.secrets.RecordSecretAccessAudit(ctx, audit); err != nil {
+			return nil, err
 		}
 		accesses = append(accesses, manifest)
-		if decryptErr != nil {
-			return accesses, fmt.Errorf("decrypting effective secret %q version %d: %w", secret.Name, version.Version, decryptErr)
-		}
-		opts.Environment[envVar] = value
-	}
-	if managed && len(resolvedBindings) != len(bindings) {
-		return accesses, fmt.Errorf("managed desired state references unavailable secrets")
+		// The runtime API takes the environment as Go strings, which
+		// cannot be zeroized; the store's buffer is.
+		opts.Environment[envVars[selected[i].ID]] = string(r.Value.Bytes())
 	}
 	return accesses, nil
 }
@@ -1214,7 +1189,7 @@ func (s *RuntimeLifecycleService) recordRuntimeApplySecretAudit(ctx context.Cont
 		errorText = applyErr.Error()
 	}
 	for _, access := range accesses {
-		if access.SecretID == uuid.Nil || access.VersionID == uuid.Nil {
+		if access.SecretID == uuid.Nil {
 			continue
 		}
 		err := s.secrets.RecordSecretAccessAudit(ctx, &domain.SecretAccessAudit{
@@ -1341,20 +1316,14 @@ func (s *RuntimeLifecycleService) scrubRuntimeActionError(ctx context.Context, s
 	if len(effective) == 0 {
 		return actionErr.Error()
 	}
-	if s.secretEncryptor == nil {
+	resolved, err := resolveSecretValues(ctx, s.secretValues, effective)
+	if err != nil {
 		return runtimeActionErrorDetailsWithheld
 	}
-	values := make([]string, 0, len(effective))
-	for _, secret := range effective {
-		version, err := s.secrets.GetCurrentVersion(ctx, secret.ID)
-		if err != nil || version == nil {
-			return runtimeActionErrorDetailsWithheld
-		}
-		value, err := s.secretEncryptor.DecryptStored(version.SecretID, version.Version, version.EncryptedValue, version.EncryptionMethod)
-		if err != nil {
-			return runtimeActionErrorDetailsWithheld
-		}
-		if value != "" {
+	defer secretstore.ZeroizeResolved(resolved)
+	values := make([]string, 0, len(resolved))
+	for _, r := range resolved {
+		if value := string(r.Value.Bytes()); value != "" {
 			values = append(values, value)
 		}
 	}
