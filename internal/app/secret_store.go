@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/google/uuid"
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
@@ -128,20 +130,103 @@ func secretIndexOrNil(index *repository.PgSecretRepository) controlplane.SecretS
 	return index
 }
 
-// indexStoreBackedSecrets writes the PostgreSQL marker of every canonical
-// store-backed secret.
-func indexStoreBackedSecrets(ctx context.Context, view interface {
-	StoreBackedSecrets(context.Context) ([]domain.SecretRef, error)
-}, index controlplane.SecretStoreIndex) error {
-	refs, err := view.StoreBackedSecrets(ctx)
+// storeBackedIndex is what the startup index pass needs from PostgreSQL;
+// repository.PgSecretRepository implements it.
+type storeBackedIndex interface {
+	MarkStoreBacked(ctx context.Context, ref domain.SecretRef) error
+	BlockSameNameSecrets(ctx context.Context, ref domain.SecretRef) ([]uuid.UUID, error)
+}
+
+// secretIndexRunner gives every canonical store-backed secret its
+// value-less PostgreSQL marker once the projector has warm-started, so
+// PostgreSQL consumers refuse such secrets instead of omitting them or
+// serving another row. A row of another secret holding the same service,
+// environment and name is blocked (made a scrubbed marker) rather than
+// served. Until every secret is safely indexed the pass retries with
+// backoff and its health check fails readiness with the reason.
+type secretIndexRunner struct {
+	view interface {
+		StoreBackedSecrets(context.Context) ([]domain.SecretRef, error)
+	}
+	index      storeBackedIndex
+	warm       <-chan struct{}
+	backoffMin time.Duration
+	backoffMax time.Duration
+	logger     *zap.Logger
+
+	mu       sync.Mutex
+	attempts int
+	lastErr  error
+	indexed  bool
+}
+
+func (r *secretIndexRunner) Name() string { return "secret-store-index" }
+
+func (r *secretIndexRunner) Run(ctx context.Context) error {
+	select {
+	case <-r.warm:
+	case <-ctx.Done():
+		return nil
+	}
+	backoff := r.backoffMin
+	for {
+		err := r.pass(ctx)
+		r.mu.Lock()
+		r.attempts++
+		r.lastErr, r.indexed = err, err == nil
+		r.mu.Unlock()
+		if err == nil {
+			r.logger.Info("store-backed secrets indexed in PostgreSQL")
+			return nil
+		}
+		r.logger.Error("store-backed secrets are not safely indexed in PostgreSQL; retrying", zap.Error(err), zap.Duration("backoff", backoff))
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		case <-timer.C:
+		}
+		backoff = min(backoff*2, r.backoffMax)
+	}
+}
+
+func (r *secretIndexRunner) pass(ctx context.Context) error {
+	refs, err := r.view.StoreBackedSecrets(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("read canonical store-backed secrets: %w", err)
 	}
 	var failed []error
 	for _, ref := range refs {
-		if err := index.MarkStoreBacked(ctx, ref); err != nil {
+		err := r.index.MarkStoreBacked(ctx, ref)
+		if errors.Is(err, repository.ErrSecretNameTaken) {
+			blocked, blockErr := r.index.BlockSameNameSecrets(ctx, ref)
+			if blockErr != nil {
+				failed = append(failed, blockErr)
+				continue
+			}
+			failed = append(failed, fmt.Errorf("secret %s (%s): %w; rows %v are blocked (no consumer serves them) until one of these secrets is deleted", ref.ID, ref.Name, repository.ErrSecretNameTaken, blocked))
+			continue
+		}
+		if err != nil {
 			failed = append(failed, err)
 		}
 	}
 	return errors.Join(failed...)
+}
+
+func (r *secretIndexRunner) healthCheck() HealthCheck {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	check := HealthCheck{Name: "secret_store_index", Details: map[string]string{"attempts": fmt.Sprintf("%d", r.attempts)}}
+	switch {
+	case r.indexed:
+		check.Status, check.Message = HealthStatusPass, "store-backed secrets are indexed in PostgreSQL"
+	case r.lastErr != nil:
+		check.Status = HealthStatusFail
+		check.Message = "store-backed secrets are not safely indexed in PostgreSQL, so PostgreSQL consumers could omit them; retrying: " + r.lastErr.Error()
+	default:
+		check.Status, check.Message = HealthStatusWarn, "waiting for the projector warm start to index store-backed secrets"
+	}
+	return check
 }

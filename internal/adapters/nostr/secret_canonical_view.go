@@ -56,7 +56,9 @@ func (v *CanonicalSecretView) ServiceOrgID(ctx context.Context, serviceID uuid.U
 		return "", fmt.Errorf("resolve service %s: %w", serviceID, err)
 	}
 	if record == nil {
-		return "", fmt.Errorf("service %s has no canonical record", serviceID)
+		// A service created before relay-canonical state can exist only in
+		// PostgreSQL. Its secrets cannot be published until it has a record.
+		return "", fmt.Errorf("service %s has no canonical record: publish it with `bahia services update --org <org-id> --service %s`, then retry", serviceID, serviceID)
 	}
 	var content struct {
 		OrgID string `json:"org_id"`

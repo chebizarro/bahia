@@ -304,10 +304,9 @@ func (s *CredentialStore) call(ctx context.Context, method string, params map[st
 	select {
 	case <-ready:
 	case <-ctx.Done():
-		s.mu.Lock()
-		reason := s.subErr
-		s.mu.Unlock()
-		return fmt.Errorf("%w: %w (%v)", secretstore.ErrUnavailable, errReplySubscriptionDown, reason)
+		// The subscription's reason can name relays; it is in LastOutcome
+		// and the log, not in this caller-visible error.
+		return fmt.Errorf("%w: %w", secretstore.ErrUnavailable, errReplySubscriptionDown)
 	}
 
 	idBytes := make([]byte, 16)
@@ -335,7 +334,7 @@ func (s *CredentialStore) call(ctx context.Context, method string, params map[st
 	published := make(chan error, 1)
 	go func() {
 		results, err := s.pool.PublishWithResults(ctx, gift)
-		published <- publishOutcome(results, err)
+		published <- s.publishOutcome(method, results, err)
 	}()
 	for {
 		select {
@@ -361,25 +360,28 @@ func (s *CredentialStore) record(err error) {
 	s.lastAt, s.lastErr, s.everDone = time.Now(), err, true
 }
 
-// publishOutcome is nil when at least one relay accepted the request. An
-// outbound admission refusal (budget, circuit breaker, kill switch) arrives
-// as publishErr with no per-relay results; the request is not retried here.
-func publishOutcome(results []nostrpool.PublishResult, publishErr error) error {
-	reasons := make([]string, 0, len(results)+1)
+// publishOutcome is nil when at least one relay accepted the request. Each
+// relay's refusal is logged; the error, which reaches intent status and
+// reveal responses, names no relay. An outbound admission refusal (budget,
+// circuit breaker, kill switch) arrives as publishErr with no per-relay
+// results and is local, so its reason is kept; the request is not retried.
+func (s *CredentialStore) publishOutcome(method string, results []nostrpool.PublishResult, publishErr error) error {
 	for _, result := range results {
 		if result.Succeeded() {
 			return nil
 		}
+	}
+	for _, result := range results {
 		reason := result.Reason
 		if result.Error != nil {
 			reason = result.Error.Error()
 		}
-		reasons = append(reasons, result.RelayURL+": "+reason)
+		s.logger.Warn("Signet relay refused a secret store request", zap.String("method", method), zap.String("relay", result.RelayURL), zap.String("reason", reason))
 	}
-	if publishErr != nil {
-		reasons = append(reasons, publishErr.Error())
+	if publishErr != nil && len(results) == 0 {
+		return fmt.Errorf("%w: outbound admission refused the Signet request: %w", secretstore.ErrUnavailable, publishErr)
 	}
-	return fmt.Errorf("%w: no relay accepted the Signet request (%s)", secretstore.ErrUnavailable, strings.Join(reasons, "; "))
+	return fmt.Errorf("%w: no relay accepted the Signet request (%d refused; see the daemon log)", secretstore.ErrUnavailable, len(results))
 }
 
 // wrapRequest builds rumor (kind 14) → seal (kind 13, signed by the

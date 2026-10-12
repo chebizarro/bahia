@@ -2364,13 +2364,15 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, confidentialEncryptor, secretView, logger)
 	if secretIndex != nil {
 		// Store-backed secrets recorded while PostgreSQL was absent get their
-		// value-less marker, so PostgreSQL consumers fail on them instead of
-		// leaving them out.
-		nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
-			if err := indexStoreBackedSecrets(ctx, secretView, secretIndex); err != nil {
-				logger.Error("store-backed secrets are missing from the PostgreSQL index; consumers may omit them", zap.Error(err))
-			}
-		})
+		// value-less marker once the projector has warm-started, so
+		// PostgreSQL consumers fail on them instead of leaving them out.
+		warm := make(chan struct{})
+		var warmOnce sync.Once
+		nostrProjector.AddPostWarmStartHook(func(context.Context) { warmOnce.Do(func() { close(warm) }) })
+		indexRunner := &secretIndexRunner{view: secretView, index: secretIndex, warm: warm,
+			backoffMin: time.Second, backoffMax: 5 * time.Minute, logger: logger}
+		bgManager.RegisterWithOptions(indexRunner, RunnerRequired(false))
+		healthProvider.RegisterCheck("secret_store_index", indexRunner.healthCheck)
 	}
 
 	// Register the secret intent handler when the secret domain is enabled.

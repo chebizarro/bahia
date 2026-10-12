@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
@@ -157,4 +158,59 @@ func TestRevealSecretRefusesAnotherTenantsCredential(t *testing.T) {
 	if strings.Contains(response.Error.Message, "org-b-secret") {
 		t.Fatal("the refusal carries the value")
 	}
+}
+
+// Reveal authorizes against, and scopes the store with, the org of the
+// service's canonical record, not the PostgreSQL service row's org: a member
+// of the canonical org reveals; a member of only the stale PostgreSQL org
+// does not.
+func TestRevealSecretUsesCanonicalOrgWhenPostgresDiffers(t *testing.T) {
+	serviceID, canonicalOrg, staleOrg, secretID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	credRef := domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_" + strings.Repeat("cd", 32), Version: 1}
+	canonical := &memCanonicalSecrets{records: map[uuid.UUID]domain.SecretRef{secretID: {ID: secretID, ServiceID: serviceID, CredentialRef: &credRef}},
+		serviceOrg: map[uuid.UUID]string{serviceID: canonicalOrg.String()}}
+	label := canonicalOrg.String() + "/" + serviceID.String() + "/DB_PASSWORD"
+
+	pgServices, _ := encryptedAuthDeps(t, serviceID, staleOrg, domain.RoleAdmin)
+	_, canonicalMember := encryptedAuthDeps(t, serviceID, canonicalOrg, domain.RoleAdmin)
+	_, staleMember := encryptedAuthDeps(t, serviceID, staleOrg, domain.RoleAdmin)
+
+	for name, tc := range map[string]struct {
+		rbac    *auth.RBAC
+		allowed bool
+	}{
+		"member of the canonical org":       {canonicalMember, true},
+		"member of the PostgreSQL org only": {staleMember, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &resolvingSecretStore{value: "canonical-org-value", lease: time.Minute, label: label}
+			h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{SecretRecords: canonical, SecretStore: store, Services: pgServices, RBAC: tc.rbac, Logger: zap.NewNop()})
+			transport, publisher := encryptedRouteTransport(t, h)
+			transport.HandleEvent(context.Background(), uniqueRevealRequest(t, serviceID, secretID))
+			response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+			if tc.allowed {
+				if response.Error != nil || response.Result.(map[string]any)["value"] != "canonical-org-value" {
+					t.Fatalf("reveal = %+v / %+v", response.Result, response.Error)
+				}
+				if store.scopes[0].OrgID != canonicalOrg {
+					t.Fatalf("scoped with org %s, want the canonical org", store.scopes[0].OrgID)
+				}
+				return
+			}
+			if response.Error == nil || len(store.refs) != 0 {
+				t.Fatalf("a member of only the PostgreSQL org revealed: %+v", response.Result)
+			}
+		})
+	}
+
+	t.Run("no PostgreSQL service rows", func(t *testing.T) {
+		store := &resolvingSecretStore{value: "store-only", lease: time.Minute, label: label}
+		h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{SecretRecords: canonical, SecretStore: store, RBAC: canonicalMember, Logger: zap.NewNop()})
+		transport, publisher := encryptedRouteTransport(t, h)
+		transport.HandleEvent(context.Background(), uniqueRevealRequest(t, serviceID, secretID))
+		response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+		if response.Error != nil || response.Result.(map[string]any)["value"] != "store-only" {
+			t.Fatalf("store-only reveal = %+v / %+v", response.Result, response.Error)
+		}
+	})
 }

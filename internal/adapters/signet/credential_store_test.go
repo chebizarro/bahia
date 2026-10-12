@@ -690,8 +690,14 @@ func TestCredentialStoreRelayRefusalFailsBeforeTimeout(t *testing.T) {
 	}
 	t.Cleanup(store.Close)
 	err = store.Health(ctx)
-	if !errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "no relay accepted") || !strings.Contains(err.Error(), "blocked:") {
+	if !errors.Is(err, secretstore.ErrUnavailable) || !strings.Contains(err.Error(), "no relay accepted") {
 		t.Fatalf("Health through a refusing relay = %v", err)
+	}
+	// The error reaches intent status and reveal responses: no relay URL or
+	// relay reason in it (they are logged).
+	host := strings.TrimPrefix(relayURL, "ws://")
+	if strings.Contains(err.Error(), host) || strings.Contains(err.Error(), "blocked:") {
+		t.Fatalf("caller-visible error carries relay details: %v", err)
 	}
 	if ctx.Err() != nil {
 		t.Fatal("refusal was only detected by the deadline")

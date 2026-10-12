@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
@@ -318,7 +320,7 @@ func (h *SecretIntentHandler) reconcileReference(ctx context.Context, intent *In
 	scope := secretstore.Scope{OrgID: intent.OrgID, ServiceID: next.ServiceID}
 	meta, err := h.store.Inspect(ctx, ref.CredentialID, scope)
 	if err != nil {
-		return fmt.Errorf("check credential: %w", err)
+		return publicCredentialError(h.logger, err)
 	}
 	switch {
 	case meta.Status == secretstore.StatusRevoked:
@@ -340,6 +342,9 @@ func (h *SecretIntentHandler) reconcileReference(ctx context.Context, intent *In
 			return fmt.Errorf("the PostgreSQL secret index cannot record store-backed secrets")
 		}
 		if err := h.storeIndex.MarkStoreBacked(ctx, next); err != nil {
+			if errors.Is(err, repository.ErrSecretNameTaken) {
+				return fmt.Errorf("secret %s: %w: re-point that secret instead (bahia secrets set reuses its id) or delete it first", next.ID, err)
+			}
 			return fmt.Errorf("index secret %s as store-backed: %w", next.ID, err)
 		}
 	}
@@ -352,6 +357,21 @@ func (h *SecretIntentHandler) reconcileReference(ctx context.Context, intent *In
 		zap.String("intent_id", intent.IntentID),
 	)
 	return nil
+}
+
+// errCredentialNotAvailable is the one public reason for a credential the
+// intent may not use: missing, another tenant's, or refused to this daemon.
+// Intent status is a relay record, so it never tells those apart (that would
+// let one tenant probe another's credential ids); the detail goes to the
+// debug log.
+var errCredentialNotAvailable = errors.New("credential is not available to this org and service")
+
+func publicCredentialError(logger *zap.Logger, err error) error {
+	if errors.Is(err, secretstore.ErrNotFound) || errors.Is(err, secretstore.ErrDenied) {
+		logger.Debug("credential refused", zap.Error(err))
+		return fmt.Errorf("check credential: %w", errCredentialNotAvailable)
+	}
+	return fmt.Errorf("check credential: %w", err)
 }
 
 // credentialRefFromIntent parses content credential_ref, or returns nil

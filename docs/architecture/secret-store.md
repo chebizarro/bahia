@@ -61,7 +61,12 @@ credential and choose its label; Bahia org roles cannot. `Inspect` and
 
 The refusal never echoes the other tenant's label, and credential ids are
 kept out of Info logs and of intent status text (status events are relay
-records).
+records). A credential that does not exist and one that belongs to another
+tenant (or that Signet refuses to this daemon) give the same public reason,
+`credential is not available to this org and service`, so intent status is
+no oracle for another tenant's credential ids; the detail is logged at Debug.
+Errors that reach intent status and reveal responses name no relay: relay
+refusals are logged, and callers see only that no relay accepted the request.
 
 ### The seam
 
@@ -241,9 +246,11 @@ removed.
 
 ## Consumers
 
-- Reveal (`services/secrets-reveal`) resolves store-backed secrets through the
-  seam, in the secret's org and service scope, after the usual RBAC check,
-  and zeroizes Bahia's buffer once the response is built.
+- Reveal (`services/secrets-reveal`) takes the org from the service's
+  canonical record, checks the requester's read permission in that org,
+  resolves store-backed secrets through the seam in that org and service
+  scope, and zeroizes Bahia's buffer once the response is built. It needs no
+  PostgreSQL service row.
 - Every other consumer still reads values from PostgreSQL and moves to the
   seam in bahia-cd0wr.4.7: runtime injection (`runtime_lifecycle.go`), the
   `secrets.Resolver` users (package registries, LLM provisioning, Gitea/Hive-CI
@@ -256,6 +263,22 @@ removed.
   of deploying without it, and redaction refuses the logs rather than return
   them unredacted. Markers are written before the canonical publish and, after
   warm start, for every store-backed record the local store holds.
+- **Run logs.** Run-log retrieval redacts every value of the secrets a
+  deployment references before returning the logs. A store-backed secret's
+  value is not in PostgreSQL, so redaction cannot know what to remove; the
+  logs of a run that references a re-pointed or store-backed secret are
+  refused (`ErrSecretInStore`) rather than returned unredacted, until
+  redaction resolves values through the seam in bahia-cd0wr.4.7.
+- **Name collisions.** PostgreSQL consumers pick a secret by service,
+  environment and name. A store-backed secret whose name another index row
+  already holds (a different secret id) would let them serve that row. A
+  reference intent that would collide is refused with the remedy, changing
+  nothing. A canonical store-backed record found colliding by the warm-start
+  index pass blocks the other row (it becomes a scrubbed store-ref marker, so
+  nothing serves it). The `secret_store_index` health check fails readiness
+  with the secret's name until one of the two secrets is deleted, and the pass
+  retries with backoff (1s to 5m). The check also fails, with the reason,
+  while any store-backed secret cannot be indexed.
 - In bahia-cd0wr.4.7 these consumers resolve the canonical record's
   `credential_ref` per operation; the HKDF store, `service_secret_data_keys`
   and the `encrypted_value` intent path are then deleted.
@@ -263,6 +286,16 @@ removed.
   confidential-state dedupe HMAC key (bahia-cd0wr.4.9) are random 32-byte keys
   the operator imports as Signet credentials; the daemon resolves them as
   process-held keys. They are never wrapped to the service pubkey.
+
+## Services without a canonical record
+
+A secret record is encrypted for its service's org, read from the service's
+canonical record. A service created before relay-canonical state can exist
+only in PostgreSQL; publishing or revealing its secrets then fails closed
+with `service <id> has no canonical record: publish it with
+bahia services update --org <org-id> --service <id>, then retry`.
+Running that command publishes the record; nothing falls back to the
+PostgreSQL row's org.
 
 ## Configuration
 

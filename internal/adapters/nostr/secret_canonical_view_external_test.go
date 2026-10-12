@@ -67,6 +67,12 @@ func TestCanonicalSecretViewReadsOwnRecordsWithoutPostgres(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, orgID.String(), gotOrg)
 
+	// A service known only to PostgreSQL (created before relay-canonical
+	// state) has no org here; the error names the fix.
+	unknown := uuid.New()
+	_, err = view.ServiceOrgID(ctx, unknown)
+	require.ErrorContains(t, err, "bahia services update --org <org-id> --service "+unknown.String())
+
 	secretID := uuid.New()
 	absent, err := view.CurrentSecretRef(ctx, secretID)
 	require.NoError(t, err)

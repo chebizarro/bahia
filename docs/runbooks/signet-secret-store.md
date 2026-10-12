@@ -140,7 +140,28 @@ Create the new key file, run step 3 for its pubkey, point
 A deploy (or other consumer) failing with `secret value is held by the
 secret store and this consumer still reads PostgreSQL` names a store-backed
 secret whose consumer moves to the secret store in bahia-cd0wr.4.7; until
-then such secrets can be revealed but not injected.
+then such secrets can be revealed but not injected. Run logs of a deployment
+that references such a secret are refused for the same reason: redaction
+cannot remove a value it cannot read, and the logs are never returned
+unredacted.
+
+| `secret_store_index` (fails readiness) | Cause and fix |
+|---|---|
+| `… another secret already holds this service, environment and name …; rows [...] are blocked` | two secrets share an effective name; the other row is blocked so nothing serves it. Delete one of the two (`bahia secrets delete`); the pass retries and the check passes |
+| any other reason | the warm-start pass could not index a store-backed secret (PostgreSQL unreachable, unreadable record); it retries with backoff |
+
+A reference intent rejected with `another secret already holds this service,
+environment and name … re-point that secret instead` changed nothing: run
+`bahia secrets set` for the existing secret (it reuses its id) instead of
+creating a second one.
+
+`credential is not available to this org and service` means the credential
+does not exist, is labelled for another org or service, or Signet refused it
+to this daemon; the daemon's Debug log has the detail.
+
+`service <id> has no canonical record` names a service created before
+relay-canonical state: run `bahia services update --org <org-id> --service
+<id>` once, then retry.
 
 Each secret resolve publishes three gift wraps on the outbound `priority`
 lane, shared with operator results and ContextVM replies; size

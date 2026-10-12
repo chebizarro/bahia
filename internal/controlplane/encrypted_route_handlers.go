@@ -124,17 +124,29 @@ func (h *EncryptedRouteHandlers) RevealSecret(ctx context.Context, request Encry
 	if err != nil {
 		return nil, err
 	}
-	if err := h.authorizeServicePermission(ctx, request, serviceID, domain.PermReadSecrets); err != nil {
-		return nil, err
-	}
 	if h.secretRecords != nil {
+		// The canonical service record is the authority for the org: it
+		// authorizes the reveal and scopes the store, and a daemon without
+		// PostgreSQL service rows can still reveal.
+		org, err := h.canonicalServiceOrg(ctx, serviceID)
+		if err != nil {
+			return nil, err
+		}
+		if h.rbac == nil {
+			return nil, fmt.Errorf("encrypted route RBAC is not configured")
+		}
+		if err := h.rbac.CheckPermission(ctx, requestPrincipal(request), org, domain.PermReadSecrets); err != nil {
+			return nil, err
+		}
 		ref, err := h.secretRecords.CurrentSecretRef(ctx, secretID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to look up secret")
 		}
 		if ref != nil && ref.CredentialRef != nil {
-			return h.revealStoredSecret(ctx, serviceID, ref)
+			return h.revealStoredSecret(ctx, serviceID, org, ref)
 		}
+	} else if err := h.authorizeServicePermission(ctx, request, serviceID, domain.PermReadSecrets); err != nil {
+		return nil, err
 	}
 	if err := h.requireSecretDeps(); err != nil {
 		return nil, err
@@ -156,7 +168,20 @@ func (h *EncryptedRouteHandlers) RevealSecret(ctx context.Context, request Encry
 // revealStoredSecret resolves a secret whose value lives in the external
 // secret store. The value is fetched for this request only and the buffer
 // Bahia holds is zeroized once the response is built.
-func (h *EncryptedRouteHandlers) revealStoredSecret(ctx context.Context, serviceID uuid.UUID, ref *domain.SecretRef) (any, error) {
+func (h *EncryptedRouteHandlers) canonicalServiceOrg(ctx context.Context, serviceID uuid.UUID) (uuid.UUID, error) {
+	orgID, err := h.secretRecords.ServiceOrgID(ctx, serviceID)
+	if err != nil {
+		h.logger.Warn("secret reveal: no canonical service organization", zap.String("service_id", serviceID.String()), zap.Error(err))
+		return uuid.Nil, fmt.Errorf("service organization is not available: %w", err)
+	}
+	org, err := uuid.Parse(orgID)
+	if err != nil || org == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("service organization is not available")
+	}
+	return org, nil
+}
+
+func (h *EncryptedRouteHandlers) revealStoredSecret(ctx context.Context, serviceID, org uuid.UUID, ref *domain.SecretRef) (any, error) {
 	if ref.ServiceID != serviceID {
 		return nil, fmt.Errorf("secret does not belong to service")
 	}
@@ -165,17 +190,12 @@ func (h *EncryptedRouteHandlers) revealStoredSecret(ctx context.Context, service
 	}
 	// The credential must belong to this secret's org and service; the
 	// store checks the credential's label against that scope.
-	orgID, err := h.secretRecords.ServiceOrgID(ctx, serviceID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve the secret's organization")
-	}
-	org, err := uuid.Parse(orgID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve the secret's organization")
-	}
 	value, err := h.secretStore.Resolve(ctx, *ref.CredentialRef, secretstore.Scope{OrgID: org, ServiceID: serviceID})
 	if err != nil {
 		h.logger.Warn("secret store refused reveal", zap.String("secret_id", ref.ID.String()), zap.Error(err))
+		if errors.Is(err, secretstore.ErrNotFound) || errors.Is(err, secretstore.ErrDenied) {
+			return nil, fmt.Errorf("secret store could not release secret %s: credential is not available to this org and service", ref.ID)
+		}
 		return nil, fmt.Errorf("secret store could not release secret %s: %w", ref.ID, err)
 	}
 	defer value.Zeroize()

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
@@ -215,7 +216,7 @@ func TestSecretReferenceIntentRejections(t *testing.T) {
 		{"revoked", func(f *referenceFixture) {
 			f.store.creds[f.credID] = secretstore.Metadata{CredentialID: f.credID, Label: f.label(), Version: 2, Status: secretstore.StatusRevoked}
 		}, nil, "revoked"},
-		{"unknown credential", func(f *referenceFixture) { delete(f.store.creds, f.credID) }, nil, "not found"},
+		{"unknown credential", func(f *referenceFixture) { delete(f.store.creds, f.credID) }, nil, "not available to this org and service"},
 		{"store unavailable", func(f *referenceFixture) { f.store.err = secretstore.ErrUnavailable }, nil, "unavailable"},
 		{"service of another org", func(f *referenceFixture) { f.canonical.serviceOrg[f.serviceID] = uuid.NewString() }, nil, "does not belong to org"},
 		{"canonical publish fails", func(f *referenceFixture) { f.canonical.publishErr = errors.New("outbox full") }, nil, "outbox full"},
@@ -283,7 +284,9 @@ func TestSecretReferenceIntentRetiresLegacySealedValue(t *testing.T) {
 	f.canonical.records[other] = domain.SecretRef{ID: other, ServiceID: f.serviceID, Name: "API_KEY", EncryptionMethod: domain.EncryptionNIP44, Version: 1, CreatedAt: time.Now().UTC()}
 	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: other, ServiceID: f.serviceID, Name: "API_KEY", EncryptedValue: []byte("sealed"), Version: 1})
 	f.canonical.publishErr = errors.New("outbox full")
-	if err := f.process(t, "update", f.content(other, 2)); err == nil {
+	otherContent := f.content(other, 2)
+	otherContent["name"] = "API_KEY"
+	if err := f.process(t, "update", otherContent); err == nil {
 		t.Fatal("a failed publish must fail the intent")
 	}
 	requireStoreMarker(t, f.repo, other)
@@ -293,7 +296,9 @@ func TestSecretReferenceIntentRetiresLegacySealedValue(t *testing.T) {
 	// lost) is scrubbed by id all the same.
 	orphan := domain.NewEntityID()
 	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: orphan, ServiceID: f.serviceID, Name: "ORPHAN", EncryptedValue: []byte("sealed"), Version: 1})
-	if err := f.process(t, "create", f.content(orphan, 2)); err != nil {
+	orphanContent := f.content(orphan, 2)
+	orphanContent["name"] = "ORPHAN"
+	if err := f.process(t, "create", orphanContent); err != nil {
 		t.Fatalf("reference intent for an unindexed id: %v", err)
 	}
 	requireStoreMarker(t, f.repo, orphan)
@@ -325,8 +330,8 @@ func TestSecretReferenceIntentRefusesAnotherTenantsCredential(t *testing.T) {
 			f.store.creds[f.credID] = secretstore.Metadata{CredentialID: f.credID, Label: label(f), Version: 2, Status: secretstore.StatusActive}
 			secretID := domain.NewEntityID()
 			err := f.process(t, "create", f.content(secretID, 2))
-			if !errors.Is(err, secretstore.ErrDenied) {
-				t.Fatalf("err = %v, want ErrDenied", err)
+			if !errors.Is(err, errCredentialNotAvailable) {
+				t.Fatalf("err = %v, want the public not-available reason", err)
 			}
 			if strings.Contains(err.Error(), f.credID) {
 				t.Fatalf("the refusal (a public status) names the credential id: %v", err)
@@ -374,5 +379,49 @@ func TestBuildSecretReferenceIntentContentIsAccepted(t *testing.T) {
 	got, _ := f.canonical.CurrentSecretRef(context.Background(), secretID)
 	if got == nil || *got.CredentialRef != ref || got.Name != "API_TOKEN" {
 		t.Fatalf("record = %+v", got)
+	}
+}
+
+// Intent status is a relay record: a missing credential and another
+// tenant's credential get the same public reason, so one tenant cannot probe
+// another's credential ids.
+func TestSecretReferenceIntentDoesNotRevealCredentialExistence(t *testing.T) {
+	reasons := map[string]string{}
+	for name, setup := range map[string]func(*referenceFixture){
+		"missing": func(f *referenceFixture) { delete(f.store.creds, f.credID) },
+		"another tenant's": func(f *referenceFixture) {
+			f.store.creds[f.credID] = secretstore.Metadata{CredentialID: f.credID, Label: uuid.NewString() + "/" + uuid.NewString() + "/X", Version: 2, Status: secretstore.StatusActive}
+		},
+	} {
+		f := newReferenceFixture(t, false)
+		setup(f)
+		err := f.process(t, "create", f.content(domain.NewEntityID(), 2))
+		if err == nil {
+			t.Fatalf("%s: accepted", name)
+		}
+		reasons[name] = err.Error()
+	}
+	if reasons["missing"] != reasons["another tenant's"] {
+		t.Fatalf("public reasons differ: %q vs %q", reasons["missing"], reasons["another tenant's"])
+	}
+}
+
+// With PostgreSQL, a reference intent whose name another secret already
+// holds for the service and environment is refused before anything is
+// published or changed, with the remedy; the other secret keeps its value.
+func TestSecretReferenceIntentRefusesNameHeldByAnotherSecret(t *testing.T) {
+	f := newReferenceFixture(t, true)
+	legacy := domain.NewEntityID()
+	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: legacy, ServiceID: f.serviceID, Name: "DB_PASSWORD", EncryptedValue: []byte("sealed"), EncryptionMethod: domain.EncryptionNIP44, Version: 1})
+	secretID := domain.NewEntityID()
+	err := f.process(t, "create", f.content(secretID, 2))
+	if !errors.Is(err, repository.ErrSecretNameTaken) || !strings.Contains(err.Error(), "re-point that secret") {
+		t.Fatalf("err = %v", err)
+	}
+	if ref, _ := f.canonical.CurrentSecretRef(context.Background(), secretID); ref != nil {
+		t.Fatal("published despite the collision")
+	}
+	if row, _ := f.repo.GetByID(context.Background(), legacy); row == nil || string(row.EncryptedValue) != "sealed" {
+		t.Fatal("a refused intent changed another secret's row")
 	}
 }
