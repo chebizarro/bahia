@@ -18,7 +18,11 @@ An `adoption` `import` intent (`bahia adopt import --org "$ORG" --target prod=pr
 
 An interrupted import resumes from its binding records after a daemon restart; retrying with the same `--idempotency-key` is safe.
 
-Adoption never copies a secret value. A container whose environment carries secret values inline (keys such as `*_PASSWORD`, `*_TOKEN`, `*_SECRET`, `DATABASE_URL`) is refused, and the result names the keys, never the values. Move those values out of the container (for example into mounted files), or import each into the [secret store](../../runbooks/signet-secret-store.md) and deploy the service through Bahia instead of adopting it. Non-secret environment values are kept on the adopted service.
+Adoption never copies a secret value. A container whose environment carries secret values inline is refused, and the result names the keys, never the values. A key is a secret by whole name tokens (`*_PASSWORD`, `*_PASSWD`, `*_SECRET`, `*_TOKEN`, `*_CREDENTIALS`, `*_API_KEY`, `*_PRIVATE_KEY`, `*_ACCESS_KEY`, `*_SIGNING_KEY`, ...) or, for a connection string (`*_URL`, `*_URI`, `*_DSN`, `CONNECTION_STRING`), when its value carries a password; `COMPASS_URL`, `SESSION_TIMEOUT` or `SORT_KEY` are not secrets. Move secret values out of the container (for example into mounted files), or import each into the [secret store](../../runbooks/signet-secret-store.md) and deploy the service through Bahia instead of adopting it. A key flagged by name that is not a secret can be declared with `--non-secret-env KEY` (intent field `non_secret_env_keys`). Non-secret environment values are kept on the adopted service.
+
+```bash
+bahia adopt import --org "$ORG" --target prod=prod-docker --all --non-secret-env PASSWORD_MIN_LENGTH
+```
 
 ## Configuration
 

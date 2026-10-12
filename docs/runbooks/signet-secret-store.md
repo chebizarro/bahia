@@ -144,9 +144,27 @@ Daemon credentials named in configuration by secret id
 (`edge_routing.api_token_ref`,
 `nostr.relay_administration.administrator_private_key_ref`, package backend
 `auth_secret_ref`/`tls_secret_ref`/`secret_refs`) are service secrets too:
-migrate them the same way. They resolve on first use and are held for the
-life of the process; edge routing and relay administration follow a
-re-point on their next use, package backends after a restart.
+migrate them the same way. They resolve on first use and are held until the
+store's delivery lease ends (60 s): the next use resolves again, so a re-point,
+a revocation or an expiry takes effect within a minute, and a deleted or
+unresolvable secret drops the held value.
+
+### Migrations
+
+- `000082_secret_access_audit_store_backed` makes
+  `secret_access_audit.secret_version_id` nullable: a store-backed resolve
+  has no PostgreSQL version row. Its down migration refuses once such audit
+  rows exist (delete them first if you must roll back).
+- `000083_drop_service_secret_data_keys` drops `service_secret_data_keys`.
+  It held at most wrapped data keys of a format whose writer and rekey were
+  never wired into the daemon: never a secret value, and no production
+  secret was sealed with it. A row still marked `aes256gcm-v2` would be a
+  legacy value every consumer refuses.
+
+Access audit rows reference the secret's index row and its service row.
+Deploys and VM bootstrap fail if their audit row cannot be written;
+configuration credentials, text consumers and run-log redaction log the
+failure and proceed (a store-backed secret may not be indexed yet).
 
 ## Rotate the requester key
 
@@ -175,8 +193,16 @@ record` means the daemon has not received the secret's record yet (cold
 start) or the secret was deleted.
 
 Run logs are withheld, never returned unredacted, with `logs withheld
-because they cannot be safely redacted` when a referenced secret is legacy,
-missing, unresolvable right now, or was re-pointed after the run began.
+because they cannot be safely redacted` when a secret the run injected is
+legacy, missing, unresolvable right now, or was re-pointed since the run
+injected it (its canonical record revision changed), and for direct runs
+from before the injected secrets were recorded. `run log redaction is rate
+limited for this requester` clears within a minute; logs of a run read
+recently are served from a short-lived cache.
+
+Adoption refuses a container naming its secret environment keys; if a key
+is not a secret (`PASSWORD_MIN_LENGTH`), list it with `bahia adopt import
+--non-secret-env PASSWORD_MIN_LENGTH`.
 
 | `secret_store_index` (fails readiness) | Cause and fix |
 |---|---|

@@ -136,3 +136,38 @@ func TestCredentialStoreResolveAllIsPacedAndAllOrNothing(t *testing.T) {
 		t.Fatalf("single resolve over the priority budget = %v", err)
 	}
 }
+
+// A batch is admitted for its worst case: every request taking the
+// one-round-trip path, getting no version back, and falling back to the
+// bracketed path (four gift wraps).
+func TestCredentialStoreResolveAllAdmitsTheFallbackWorstCase(t *testing.T) {
+	f := newVaultFixture(t, 10*time.Second)
+	f.vault.set(func(v *fakeVault) { v.reportVersion = true })
+	var reqs []secretstore.Request
+	for _, name := range []string{"A", "B"} {
+		id := f.vault.put("bahia-vault", f.label(name), 1, "active", "value-"+name)
+		if _, err := f.store.Inspect(f.ctx, id, f.scope); err != nil {
+			t.Fatal(err)
+		}
+		reqs = append(reqs, secretstore.Request{Ref: ref(id, 1), Scope: f.scope})
+	}
+	// Prime version reporting, then make Signet stop reporting versions.
+	value, err := f.store.Resolve(f.ctx, reqs[0].Ref, f.scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Zeroize()
+	f.vault.set(func(v *fakeVault) { v.reportVersion = false })
+	f.store.setReportsVersion(true)
+	before := len(f.vault.seen())
+	values, err := f.store.ResolveAll(f.ctx, reqs)
+	if err != nil {
+		t.Fatalf("ResolveAll across a version-reporting change: %v", err)
+	}
+	secretstore.ZeroizeAll(values)
+	// First request: deliver (no version), inspect, deliver, inspect; the
+	// second already knows Signet stopped: inspect, deliver, inspect.
+	if got := len(f.vault.seen()) - before; got != 7 {
+		t.Fatalf("Signet saw %d requests, want 7", got)
+	}
+}

@@ -175,7 +175,8 @@ value and gets it back; no state is read through it.
   subscription's NIP-42 AUTH. A lone `Resolve`, `Inspect` or `Health` goes
   on the process-wide `priority` lane and fails fast: an exhausted budget is
   `ErrUnavailable` and the request is not queued or retried. `ResolveAll`
-  declares one bounded operation (three gift wraps per request at most) and
+  declares one bounded operation (four gift wraps per request at most: a
+  one-round-trip delivery without a version, then the bracket) and
   is paced on the `bulk` lane instead; its requests are sent one at a time,
   each after the previous one's relay OKs.
 
@@ -219,7 +220,7 @@ back with a different future; after a restore, re-check references.
 | Relay readers | gift-wrap sizes and timing; OCK ciphertext records | record names and service bindings are plaintext tags (tracked separately) |
 | Signet unavailable | — | fail closed: intents are rejected with the reason, reveals refused, consumers stop; the `secret_store` health check warns; nothing falls back to PostgreSQL or a cached value |
 | Forged reply | — | ignored unless sealed by the configured Signet key; the call fails closed at its deadline |
-| Daemon memory | the resolved buffer | zeroized after use, as are the byte copies Bahia decodes the reply from. The NIP-44 plaintexts of the reply are Go strings and cannot be overwritten; they stay until garbage collection. Reveal, runtime environments, redaction and text consumers (`TextResolver`) copy the value into Go strings, which likewise cannot be zeroized; process-held configuration credentials stay for the life of the process. None of these is logged or persisted. |
+| Daemon memory | the resolved buffer | zeroized after use, as are the byte copies Bahia decodes the reply from. The NIP-44 plaintexts of the reply are Go strings and cannot be overwritten; they stay until garbage collection. Reveal, runtime environments, redaction and text consumers (`TextResolver`) copy the value into Go strings, which likewise cannot be zeroized; process-held configuration credentials stay until their lease ends or they fail. None of these is logged or persisted. |
 
 Signet's own controls (SQLCipher store, per-agent envelope keys, audit chain,
 backup/restore) are in nostrc `signet/docs/THREAT_MODEL.md`.
@@ -283,33 +284,60 @@ resolve fails with `secretstore.ErrNotConfigured`; nothing falls back.
 | VM plane secrets (`virtualization_policy.go`) | nothing (admission check) | legacy secrets are refused |
 | Hive-CI build requests and initiation (`encrypted_build_handlers.go`, `adapters/gitea`) | the upstream and mirror-read credentials, one batch | the initiation stays `claimed`; legacy credentials are refused up front |
 | Reveal (`services/secrets-reveal`) | the one secret, in its service's canonical org | refused |
-| Run-log redaction (`deployments/run-logs-get`) | every secret the run's desired state references, one batch | the logs are withheld, never returned unredacted |
-| Edge routing API token, relay administrator key, package backend credentials | on first use, then held for the process (below) | the feature's calls fail closed |
+| Run-log redaction (`deployments/run-logs-get`) | every secret the run recorded it injected, one batch, cached per run for the lease | the logs are withheld, never returned unredacted |
+| Edge routing API token, relay administrator key, package backend credentials | on first use, then held until the store lease ends (below) | the feature's calls fail closed |
 | LLM gateway/health headers (`adapters/llm`) | per call, through `secretstore.TextResolver` | the call fails |
 
 Consumers whose APIs take text (HTTP headers, Git credentials, registry
 passwords) use `secretstore.TextResolver`, which copies the value into a Go
-string and zeroizes the store's buffer. With PostgreSQL configured every
-resolve is also recorded in `secret_access_audit` (actor, reason, credential
-version; no PostgreSQL version row exists for a store-backed secret).
+string and zeroizes the store's buffer.
 
-- **Run logs.** The store releases only the version a secret is pinned to
-  now. Redaction refuses the logs of a run that references a legacy secret,
-  a secret without a record, or a secret re-pointed after the run began
-  (its record's `updated_at` is later than the run's `created_at`): the run
-  may contain a value redaction cannot know (`ErrRunLogsUnredactable`).
+- **Access audit.** With PostgreSQL configured, resolves are recorded in
+  `secret_access_audit` (actor, reason, credential version; no PostgreSQL
+  version row exists for a store-backed secret, migration 000082). The table
+  references the secret's index row and the service row. Deploys and VM
+  bootstrap list their secrets from those rows, so their audit row is
+  required and its failure fails the operation. Configuration credentials,
+  text consumers and run-log redaction may resolve a secret that is not
+  indexed yet (or run without PostgreSQL): their audit row is best effort, a
+  failure is logged and the resolve proceeds; Signet's audit chain records
+  every delivery regardless.
+- **Run logs.** A direct runtime run records, before each apply, the secrets
+  the apply injects: secret id and canonical record revision, no credential,
+  no value (apply metadata `secret_accesses`; the deploy aborts if it
+  cannot be written). Redaction resolves exactly those secrets, including
+  every effective secret of a non-managed deploy. The store releases only
+  the version a secret is pinned to now, so the logs are withheld
+  (`ErrRunLogsUnredactable`) when a secret's record revision differs from
+  the one the run injected (re-pointed since; decided by revision, never by
+  clock), when a secret is legacy or has no record, or when a run predates
+  the record and could have injected secrets. Loom deploy jobs carry no
+  secret from Bahia. Resolved values are cached per run until the earliest
+  store lease ends (zeroized on expiry or eviction, 32 runs); a requester
+  causes at most 6 store batches a minute (burst 3) and is told to retry
+  beyond; every resolve writes an audit row. A failed apply scrubs its error
+  with the values it injected instead of resolving them again.
 - **Process-held configuration credentials.** `edge_routing.api_token_ref`,
   `nostr.relay_administration.administrator_private_key_ref` and package
   backend `auth_secret_ref`/`tls_secret_ref`/`secret_refs` name service
   secrets. They resolve on the feature's first use, not at startup, so the
-  daemon starts while Signet or the canonical record is unavailable; a failed
-  resolve is not cached. The edge routing token and the relay administrator
-  key follow a re-point on their next use (the canonical reference is
-  compared locally on every use); a package backend holds its credentials
-  until restart.
+  daemon starts while Signet or the canonical record is unavailable. The
+  value is held only until the store's delivery lease ends (60 s at Signet);
+  the next use resolves again (one round trip once the label is known),
+  which notices a revoked or expired credential and picks up a re-point. The
+  edge routing token and relay administrator key also compare the canonical
+  reference on every use (a local read). Any failure, and a deleted secret,
+  drops the held value and whatever was built from it (the relay admin
+  client, the package backend); concurrent uses share one resolve. A package
+  backend resolves all its credentials as one batch.
 - **Adoption** imports no values: a container whose environment carries
   secret values inline is refused, naming the keys (Bahia cannot write into
-  the store, and only a store administrator chooses labels).
+  the store, and only a store administrator chooses labels). Keys are secret
+  by whole name tokens (`*_PASSWORD`, `*_SECRET`, `*_TOKEN`,
+  `*_API_KEY`, `*_PRIVATE_KEY`, `*_ACCESS_KEY`, ...) or, for connection
+  strings (`*_URL`, `*_URI`, `*_DSN`, `CONNECTION_STRING`), by a password in
+  the value; the import intent's `non_secret_env_keys` lists keys the
+  operator declares are not secrets.
 - **PostgreSQL index.** With PostgreSQL configured, a store-backed secret
   keeps a value-less index row (`encryption_method = store-ref`; every
   retained legacy ciphertext of that id scrubbed, access audit rows kept),

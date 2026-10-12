@@ -179,9 +179,10 @@ bahia state drifted        # records whose drift_status is exactly "drifted"
 bahia adopt scan   --target prod=prod-docker [--environment prod=production] [--offset 0 --limit 20]
 bahia adopt import --org "$ORG" --target prod=prod-docker --all
 bahia adopt import --org "$ORG" --target prod=prod-docker --select prod/<container-id>=payment-api
+bahia adopt import --org "$ORG" --target prod=prod-docker --all --non-secret-env PASSWORD_MIN_LENGTH
 ```
 
-Targets are server-managed endpoint references (`alias=endpointRef`); `--raw-target alias=dockerHost` is accepted only when the daemon sets `adoption.allow_raw_docker_hosts`. `scan` returns a redacted findings page (`total_findings`, `next_offset`, `truncated`) in the accepted status; `import` returns an intent ID and candidate count and the imported services appear as canonical records. Both require the signer in `adoption.allowed_pubkeys`.
+Targets are server-managed endpoint references (`alias=endpointRef`); `--raw-target alias=dockerHost` is accepted only when the daemon sets `adoption.allow_raw_docker_hosts`. `scan` returns a redacted findings page (`total_findings`, `next_offset`, `truncated`) in the accepted status; `import` returns an intent ID and candidate count and the imported services appear as canonical records. Both require the signer in `adoption.allowed_pubkeys`. A container whose environment carries secret values inline is refused, naming the keys; `--non-secret-env KEY` (repeatable) declares a key flagged by name that is not a secret.
 
 ### dns
 

@@ -110,6 +110,11 @@ type CredentialStore struct {
 	reportsVersion bool
 }
 
+// maxRoundTripsPerResolve is the worst case of one Resolve: a one-round-trip
+// delivery that comes back without a version (Signet stopped reporting
+// versions) and is retried as inspect, deliver, inspect.
+const maxRoundTripsPerResolve = 4
+
 // maxCachedLabels bounds the label cache; it is cleared when full.
 const maxCachedLabels = 4096
 
@@ -322,8 +327,8 @@ func (s *CredentialStore) ResolveAll(ctx context.Context, reqs []secretstore.Req
 	if len(reqs) == 0 {
 		return nil, nil
 	}
-	// At most three round trips (inspect, deliver, inspect) per request.
-	op, err := s.admission.BeginOperation(ctx, nostrout.OperationSpec{MaxEvents: 3 * len(reqs), MaxWait: s.timeout})
+	// At most maxRoundTripsPerResolve round trips per request.
+	op, err := s.admission.BeginOperation(ctx, nostrout.OperationSpec{MaxEvents: maxRoundTripsPerResolve * len(reqs), MaxWait: s.timeout})
 	if err != nil {
 		return nil, fmt.Errorf("%w: outbound admission refused %d secret resolves: %w", secretstore.ErrUnavailable, len(reqs), err)
 	}
