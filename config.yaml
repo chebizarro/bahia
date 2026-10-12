@@ -38,10 +38,12 @@ nostr:
   contextvm_relays: []             # intents and encrypted interactive RPC
   nip34_relays: []
   # Relays Bahia operates; the only relays that receive service-signed
-  # control-plane events. Empty means service + contextvm + browser relays.
-  # Canonical relay settings may only choose relays listed here.
+  # control-plane events (the sidecar always is). Empty means the sidecar
+  # alone; required when the daemon publishes with a service identity and
+  # any service/contextvm/browser relay is not the sidecar. Canonical relay
+  # settings may only choose relays listed here.
   controlled_relays: []
-  # Well-known public relays (damus.io, nos.lol, ...) permitted in
+  # Well-known public relays (the internal/relayguard denylist) permitted in
   # non-control-plane lists (loom, nip34, DM relay lists). Never valid for
   # the control plane.
   allowed_public_relays: []
