@@ -105,7 +105,7 @@ Rules:
 - `d`, `domain`, `intent_id` and `t=bahia-intent` are required. `op` defaults
   to `update`. `schema` is `bahia.intent.<domain>.v1`.
 - `org` is required except for fleet-scoped domains (`dns`, `ml`, `worker`,
-  `adoption`, `tool`, `security`, `sbom`, `relay`) and `org/rekey` of the
+  `adoption`, `tool`, `security`, `sbom`, `relay`, `hiveci-policy`) and `org/rekey` of the
   fleet scope.
 - `intent_id` is the idempotency key. A replay with the same id and content is
   acknowledged again without re-execution; the same id with different content
@@ -113,13 +113,35 @@ Rules:
 - `content.expected_updated_at`, when present, is the canonical record's
   RFC 3339 `updated_at` string (microsecond precision). A numeric epoch is
   rejected; a mismatch is rejected before any state changes.
+
+**Hive-CI pipeline policy.** An operator signs kind `30900` with
+`d=hiveci:policy:<policy-uuidv7>`, `domain=hiveci-policy`,
+`schema=bahia.intent.hiveci-policy.v1`, `t=bahia-intent`, `t=hiveci-policy`,
+`op=create|update|delete`, and a separate UUIDv7 `intent_id` tag. No org tag
+is required. Create and update content is the complete desired state:
+
+```json
+{"id":"0199c693-7b5f-7a42-b13e-fb6107ff039b","intent_id":"0199c693-7b5f-7a42-b13e-fb6107ff039e","repo_coordinate":"30617:<repo-author>:<repo-name>","workflow_path":".gitea/workflows/release.yml","branch_pattern":"main","service_id":"0199c693-7b5f-7a42-b13e-fb6107ff039c","environment_id":"0199c693-7b5f-7a42-b13e-fb6107ff039d","enabled":true,"metadata":{}}
+```
+
+`branch_pattern` is optional; `metadata` is required and may be empty.
+`expected_updated_at` is optional on updates and deletes. Delete content is
+`{"id":"<policy-uuidv7>","intent_id":"<attempt-uuidv7>","deleted":true}`.
+The `id` is fixed at creation even when selectors change; it is not derived
+from the repository or workflow. The content schema is
+[`schemas/hiveci_pipeline_policy_intent.json`](../schemas/hiveci_pipeline_policy_intent.json).
+The operator-authenticated `30900` rumor travels inside a NIP-59 `1059` gift wrap to the service
+pubkey, so repository selectors and metadata are not plaintext relay content.
+The service publishes fleet-OCK encrypted `hiveci-policy` cp-state at the
+same `d` coordinate (or an encrypted tombstone with `deleted=true`); the
+outcome is a bounded `30315` intent status. PostgreSQL is only an index.
 - Content is the full desired state (level-triggered), not a diff.
 - The daemon authorizes the signer through its TrustSet: per-org RBAC for org
   domains, `nostr.authorized_pubkeys` for fleet-scoped domains, and bootstrap
   owners for org creation. Unauthorized or malformed intents receive a
   `rejected` status.
-- Intents for the sensitive domains `org`, `secret`, `notification` and
-  `relay` must arrive as a NIP-59 `1059` gift wrap addressed to the service
+- Intents for the sensitive domains `org`, `secret`, `notification`, `relay`
+  and `hiveci-policy` must arrive as a NIP-59 `1059` gift wrap addressed to the service
   pubkey (`p` tag) whose rumor is the signed `30900`; a plaintext intent for
   these domains is rejected.
 - `nostr.intent_domains_disabled` turns a domain off; all registered domains
@@ -292,7 +314,7 @@ service pubkey:
 | Org and tenancy | `org-registry`, `org-member`, `org-invite`, `org-key-envelope` | `org:<id>`, `org:member:<org>:<pubkey>`, `org:invite:<org>:<id>` | OCK ciphertext |
 | Secrets, notifications | `secret-registry`, `notification-channel`, `notification-log` | `<prefix>:<id>`; log is one latest-50 window per channel | OCK ciphertext |
 | Payments | `payment-record` | per record | fleet-OCK ciphertext |
-| Adoption, Hive-CI | `adoption-binding`; `hiveci-policy`, `hiveci-result`, `hiveci-initiation`, `hiveci-release` | `adoption:binding:<svc>:<env>`; `hiveci:policy:<hash>`, `hiveci:result:<event>`, `hiveci:initiation:<event>` | binding public; Hive-CI records fleet-OCK ciphertext |
+| Adoption, Hive-CI | `adoption-binding`; `hiveci-policy`, `hiveci-result`, `hiveci-initiation`, `hiveci-release` | `adoption:binding:<svc>:<env>`; `hiveci:policy:<uuidv7>`, `hiveci:result:<event>`, `hiveci:initiation:<event>` | binding public; Hive-CI records fleet-OCK ciphertext |
 | Tools | `tool-provision-intent`, `tool-denylist`, `tool-profile` | `<prefix>:<id>` | fleet-OCK ciphertext |
 | Blossom | `blossom-admin`, `blossom-blob` | per blob/admin record | fleet-OCK ciphertext |
 | Operators | `operator-allowlist` | `operators:continuity`, `operators:soul-factory` | fleet-OCK ciphertext; no `p` tags |

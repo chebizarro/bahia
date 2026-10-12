@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bahia.dev/schemas/hiveci_pipeline_policy_intent.json",
+  "title": "Bahia Hive-CI pipeline-policy intent content v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "intent_id", "repo_coordinate", "workflow_path", "service_id", "environment_id", "enabled", "metadata"],
+      "properties": {
+        "id": {"$ref": "#/$defs/uuidv7"},
+        "intent_id": {"$ref": "#/$defs/uuidv7"},
+        "repo_coordinate": {"type": "string", "minLength": 1},
+        "workflow_path": {"type": "string", "minLength": 1},
+        "branch_pattern": {"type": "string"},
+        "service_id": {"type": "string", "format": "uuid"},
+        "environment_id": {"type": "string", "format": "uuid"},
+        "enabled": {"type": "boolean"},
+        "metadata": {"type": "object"},
+        "expected_updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "intent_id", "deleted"],
+      "properties": {
+        "id": {"$ref": "#/$defs/uuidv7"},
+        "intent_id": {"$ref": "#/$defs/uuidv7"},
+        "deleted": {"const": true},
+        "expected_updated_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  ],
+  "$defs": {
+    "uuidv7": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"}
+  }
+}

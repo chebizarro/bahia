@@ -127,7 +127,7 @@ func NewIntentPublisher(cfg IntentPublisherConfig) (*IntentPublisher, error) {
 	sensitiveDomains := make(map[string]bool)
 	domains := cfg.SensitiveDomains
 	if len(domains) == 0 {
-		domains = []string{"org", "secret", "notification"}
+		domains = []string{"org", "secret", "notification", "hiveci-policy"}
 	}
 	for _, d := range domains {
 		sensitiveDomains[strings.ToLower(d)] = true
@@ -175,7 +175,7 @@ type PublishIntentRequest struct {
 	Coordinate string
 	// Schema is the intent schema (e.g. "bahia.intent.service.v1").
 	Schema string
-	// OrgID is the org UUID.
+	// OrgID is the org UUID; hiveci-policy is fleet-scoped and omits it.
 	OrgID string
 	// Content is the full desired state as a JSON-serializable map.
 	Content map[string]interface{}
@@ -236,7 +236,7 @@ func (p *IntentPublisher) BuildIntentEvent(req PublishIntentRequest) (nostr.Even
 	if req.IntentID == "" {
 		return nostr.Event{}, fmt.Errorf("intent_id is required")
 	}
-	if req.OrgID == "" {
+	if req.OrgID == "" && req.Domain != "hiveci-policy" {
 		return nostr.Event{}, fmt.Errorf("org_id is required")
 	}
 	if req.Op == "" {
@@ -274,20 +274,23 @@ func (p *IntentPublisher) BuildIntentEvent(req PublishIntentRequest) (nostr.Even
 		topicTag = strings.ReplaceAll(topicTag, "_", "-")
 	}
 
+	tags := nostr.Tags{
+		{"d", req.Coordinate},
+		{"domain", req.Domain},
+		{"schema", req.Schema},
+		{"t", "bahia-intent"},
+		{"t", topicTag},
+		{"op", req.Op},
+	}
+	if req.OrgID != "" {
+		tags = append(tags, nostr.Tag{"org", req.OrgID})
+	}
+	tags = append(tags, nostr.Tag{"intent_id", req.IntentID})
 	ev := nostr.Event{
 		Kind:      30900,
 		CreatedAt: nostr.Now(),
-		Tags: nostr.Tags{
-			{"d", req.Coordinate},
-			{"domain", req.Domain},
-			{"schema", req.Schema},
-			{"t", "bahia-intent"},
-			{"t", topicTag},
-			{"op", req.Op},
-			{"org", req.OrgID},
-			{"intent_id", req.IntentID},
-		},
-		Content: string(contentJSON),
+		Tags:      tags,
+		Content:   string(contentJSON),
 	}
 
 	return ev, nil

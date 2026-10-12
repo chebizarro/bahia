@@ -145,3 +145,7 @@ runtime reconciles ──▶ runtime observation ──▶ service-state (observ
 - [CLI Reference](cli-reference.md) — every command and flag
 - [Notifications](features/notifications.md) — alerts for failed deployments and policy breaches
 - [Troubleshooting](troubleshooting.md) — relay, signer, and authorization problems
+
+Hive-CI pipeline policies are authored with operator-signed
+`bahia hiveci-policy` intents. The `hiveci.policies` configuration only
+authorizes build-dependency dispatch; it does not seed canonical policies.

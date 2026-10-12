@@ -98,6 +98,10 @@ authorization or a restart-safe commit outcome. See the
   with a per-run ephemeral `publisher` key and targets a Loom `5100` job
   (`cmd=loom-ci`) at a trusted worker advertising `loom-ci`, carrying only
   NIP-44-encrypted `secret` tags for that worker and no payment tag.
+  Pipeline-policy mutations use Bahia's existing operator-signed `30900`
+  `hiveci-policy` intent envelope, not the Hive-CI evidence kinds or config
+  seeding. The service publishes fleet-OCK encrypted `hiveci-policy` cp-state
+  at `hiveci:policy:<author-minted-uuidv7>` through the outbox.
 - **SoulFactory.** Templates, drafts, souls, provisioning and runtime
   control use the SoulFactory kinds exchanged directly with its reactors and
   runtimes; Bahia projects provisioning progress into `30900`/`4903`.
