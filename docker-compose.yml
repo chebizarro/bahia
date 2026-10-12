@@ -16,6 +16,28 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Disposable Signet holding the daemon's dev system keys (confidential-state
+  # dedupe, assistant transcripts): built from a nostrc checkout (Signet >=
+  # 0.7.0), seeded with throwaway keys on first start. See
+  # docs/runbooks/signet-secret-store.md#dev-compose-stack.
+  signet:
+    build:
+      context: deploy/signet-dev
+      additional_contexts:
+        nostrc: ${NOSTRC_DIR:?set NOSTRC_DIR to a nostrc checkout with Signet >= 0.7.0}
+        scripts: scripts
+    image: bahia-signet-dev:local
+    cap_add:
+      - IPC_LOCK
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - signetdata:/data
+      - signetshared:/shared
+    restart: unless-stopped
+
   bahia:
     build:
       context: .
@@ -26,7 +48,8 @@ services:
         VERSION: ${VERSION:-}
     ports:
       - "8080:8080"
-    command: ["--config", "/etc/bahia/config.yaml"]
+    entrypoint: ["/bin/sh", "/opt/bahia-dev/with-signet-env.sh"]
+    command: ["bahia-server", "--config", "/etc/bahia/config.yaml"]
     # Must be the HOST's docker socket GID, as a number. "docker" by name would
     # resolve against this container's /etc/group (gid 101) and the non-root
     # user would get EACCES on the socket. Find it with:
@@ -37,6 +60,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./config.compose.yaml:/etc/bahia/config.yaml:ro
       - nostrarchive:/var/lib/bahia/nostr-archive
+      - signetshared:/run/signet-dev:ro
+      - ./deploy/signet-dev/with-signet-env.sh:/opt/bahia-dev/with-signet-env.sh:ro
     environment:
       BAHIA_DB_HOST: postgres
       BAHIA_DB_PORT: "5432"
@@ -52,6 +77,8 @@ services:
       BAHIA_NOSTR_AUTHORIZED_PUBKEYS: ${BAHIA_NOSTR_AUTHORIZED_PUBKEYS:-}
     depends_on:
       postgres:
+        condition: service_healthy
+      signet:
         condition: service_healthy
     restart: unless-stopped
     # Container health is liveness-only so a Signet outage does not restart Bahia.
@@ -74,18 +101,25 @@ services:
         VERSION_BASE: ${VERSION_BASE:-0.1.0}
         GIT_COMMIT: ${GIT_COMMIT:-dev}
         VERSION: ${VERSION:-}
-    entrypoint: ["bahia-relay"]
-    command: ["--config", "/etc/bahia/config.yaml"]
+    # The relay reads the same configuration, whose secret_store needs the
+    # dev Signet's pubkey.
+    entrypoint: ["/bin/sh", "/opt/bahia-dev/with-signet-env.sh"]
+    command: ["bahia-relay", "--config", "/etc/bahia/config.yaml"]
     ports:
       - "3334:3334"
     volumes:
       - relaydata:/var/lib/bahia/relay-sidecar
       - ./config.compose.yaml:/etc/bahia/config.yaml:ro
+      - signetshared:/run/signet-dev:ro
+      - ./deploy/signet-dev/with-signet-env.sh:/opt/bahia-dev/with-signet-env.sh:ro
     environment:
       BAHIA_LOG_LEVEL: info
       BAHIA_LOG_FORMAT: json
       BAHIA_NOSTR_PRIVATE_KEY: ${BAHIA_NOSTR_PRIVATE_KEY:?BAHIA_NOSTR_PRIVATE_KEY is required}
       BAHIA_NOSTR_AUTHORIZED_PUBKEYS: ${BAHIA_NOSTR_AUTHORIZED_PUBKEYS:-}
+    depends_on:
+      signet:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -q --header='Accept: application/nostr+json' -O /dev/null http://localhost:3334/relay"]
@@ -120,3 +154,5 @@ volumes:
   pgdata:
   relaydata:
   nostrarchive:
+  signetdata:
+  signetshared:

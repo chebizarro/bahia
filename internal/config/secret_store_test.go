@@ -1,11 +1,15 @@
 package config
 
 import (
+	"encoding/binary"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/blake2b"
 )
 
 func validSignetSecretStore() SecretStoreConfig {
@@ -174,4 +178,40 @@ const assistantTranscriptKeyYAML = `secret_store:
 func withAssistantTranscriptKey(cfg *Config) {
 	cfg.SecretStore = validSignetSecretStore()
 	cfg.SecretStore.SystemKeys.AssistantTranscript = []SystemKeyConfig{systemKey("k1", 'a')}
+}
+
+// signetCredentialID is Signet's credential id (signet/src/store_secrets.c):
+// BLAKE2b-256 over a domain and the length-prefixed owner, type and label.
+func signetCredentialID(t *testing.T, owner, label string) string {
+	t.Helper()
+	h, err := blake2b.New256(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Write([]byte("signet-credential-id-v1"))
+	for _, value := range []string{owner, "credential", label} {
+		var n [4]byte
+		binary.BigEndian.PutUint32(n[:], uint32(len(value)))
+		h.Write(n[:])
+		h.Write([]byte(value))
+	}
+	return "cred_" + hex.EncodeToString(h.Sum(nil))
+}
+
+// The dev compose configuration loads with the dev Signet's pubkey and names
+// exactly the credentials scripts/signet_dev_seed.py imports.
+func TestComposeConfigUsesTheDevSignet(t *testing.T) {
+	t.Setenv("BAHIA_SECRET_STORE_SIGNET_PUBKEY", strings.Repeat("cd", 32))
+	cfg, err := Load(filepath.Join("..", "..", "config.compose.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SecretStore.Backend != SecretStoreBackendSignet || cfg.SecretStore.Signet.Owner != "bahia-vault" || cfg.SecretStore.Signet.Pubkey != strings.Repeat("cd", 32) {
+		t.Fatalf("secret store = %+v", cfg.SecretStore)
+	}
+	for purpose, keys := range map[string][]SystemKeyConfig{"assistant-transcript": cfg.SecretStore.SystemKeys.AssistantTranscript, "confidential-dedupe": cfg.SecretStore.SystemKeys.ConfidentialDedupe} {
+		if len(keys) != 1 || keys[0].Version != 1 || keys[0].CredentialID != signetCredentialID(t, "bahia-vault", "bahia-system/"+purpose+"/"+keys[0].KeyID) {
+			t.Fatalf("%s keys = %+v", purpose, keys)
+		}
+	}
 }

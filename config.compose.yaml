@@ -24,3 +24,21 @@ nostr:
 reconcile:
   enabled: true
   interval: 60s
+
+# The daemon's system keys live in the disposable dev Signet (service
+# "signet", deploy/signet-dev). Its pubkey reaches the daemon as
+# BAHIA_SECRET_STORE_SIGNET_PUBKEY and the requester key as
+# /tmp/bahia-secret-store.key (deploy/signet-dev/with-signet-env.sh).
+secret_store:
+  backend: signet
+  signet:
+    relays: ["ws://signet:7777"]
+    client_key_file: /tmp/bahia-secret-store.key
+    owner: bahia-vault
+  system_keys:
+    # Signet's credential ids for owner bahia-vault and labels
+    # bahia-system/<purpose>/dev (scripts/signet_dev_seed.py checks them).
+    assistant_transcript:
+      - {key_id: dev, credential_id: cred_68410e36fa42f5405b8f1c73c3b3fc7b8d98a3501ed1c9373e6620acba7d22ff, version: 1}
+    confidential_dedupe:
+      - {key_id: dev, credential_id: cred_9efaafe3b2b4b5c3016d06f0a77c2a3a4680cdca06d49e73610104da56a116c1, version: 1}
