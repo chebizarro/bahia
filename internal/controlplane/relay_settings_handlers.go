@@ -226,6 +226,11 @@ func (h *RelaySettingsHandlers) applyPolicyDirect(ctx context.Context, req Conte
 	if err := normalizeAndValidateRelayPolicy(&state); err != nil {
 		return nil, err
 	}
+	// The daemon refuses canonical relay settings outside its controlled
+	// relays or below its publish quorum; refuse them before they are signed.
+	if err := h.cfg.Nostr.ValidateControlPlaneRelays("relay settings", EffectiveControlPlaneRelays(h.cfg.Nostr, state)); err != nil {
+		return nil, err
+	}
 	if confirmation != nil {
 		if err := h.publishAudit(ctx, req, state, "relay-settings.replacement-confirmed", confirmation); err != nil {
 			return nil, fmt.Errorf("publish replacement confirmation before relay policy mutation: %w", err)
@@ -234,7 +239,7 @@ func (h *RelaySettingsHandlers) applyPolicyDirect(ctx context.Context, req Conte
 	if err := h.publishState(ctx, req, state, "updated"); err != nil {
 		return nil, err
 	}
-	if err := h.publishRelayTopology(ctx, req, state); err != nil {
+	if err := h.publishDMRelayLists(ctx, req, state); err != nil {
 		return nil, err
 	}
 	if err := h.publishAudit(ctx, req, state, "relay-settings.updated", confirmation); err != nil {
@@ -304,21 +309,11 @@ func (h *RelaySettingsHandlers) publishState(ctx context.Context, req ContextVMR
 	return nil
 }
 
-func (h *RelaySettingsHandlers) publishRelayTopology(ctx context.Context, req ContextVMRequest, state RelayPolicyState) error {
-	if err := h.publishRelaySet(ctx, req, "bahia-browser-v1", state.BrowserRelays); err != nil {
-		return err
-	}
-	if err := h.publishRelaySet(ctx, req, "bahia-contextvm-v1", state.ContextVMRelays); err != nil {
-		return err
-	}
-	if err := h.publishRelaySet(ctx, req, "bahia-service-v1", state.ServiceRelays); err != nil {
-		return err
-	}
-	if len(state.NIP34Relays) > 0 {
-		if err := h.publishRelaySet(ctx, req, "bahia-nip34-v1", state.NIP34Relays); err != nil {
-			return err
-		}
-	}
+// publishDMRelayLists publishes the policy's service DM relay lists. The
+// advertised relay sets (bahia-*-v1) are not published here: the projector
+// publishes them from the effective relay policy once the daemon applies
+// this state.
+func (h *RelaySettingsHandlers) publishDMRelayLists(ctx context.Context, req ContextVMRequest, state RelayPolicyState) error {
 	for _, list := range state.DMRelayLists {
 		if !list.Enabled || list.Feature != config.DMRelayListFeatureNotifications || list.Identity != config.DMRelayListIdentityService || len(list.Relays) == 0 {
 			continue
@@ -326,27 +321,6 @@ func (h *RelaySettingsHandlers) publishRelayTopology(ctx context.Context, req Co
 		if err := h.publishDMRelayList(ctx, req, list); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func (h *RelaySettingsHandlers) publishRelaySet(ctx context.Context, req ContextVMRequest, dTag string, relays []string) error {
-	publisher, signer, err := h.publisherForRequest(req)
-	if err != nil {
-		return err
-	}
-	tags := nostr.Tags{{"d", dTag}, {"title", dTag}}
-	for _, relay := range relays {
-		tags = append(tags, nostr.Tag{"relay", relay})
-	}
-	ev := &nostr.Event{Kind: kinds.RelaySetDiscovery, CreatedAt: nostr.Now(), Tags: tags, Content: ""}
-	if err := SignGoNostrEvent(ctx, signer, ev); err != nil {
-		return fmt.Errorf("sign relay set %s: %w", dTag, err)
-	}
-	if published, err := publisher.Publish(ctx, *ev); err != nil {
-		return fmt.Errorf("publish relay set %s: %w", dTag, err)
-	} else if published == 0 {
-		return fmt.Errorf("publish relay set %s: no relay accepted event", dTag)
 	}
 	return nil
 }

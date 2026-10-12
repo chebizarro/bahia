@@ -45,11 +45,22 @@ type RelaySettingsHydratorConfig struct {
 	PostEOSEDrain     time.Duration
 	NewDrainTimer     relaySettingsDrainTimerFactory
 	OnSnapshotApplied RelaySettingsSnapshotHandler
+	// OnCaughtUp runs each time historical catch-up completes (every relay
+	// sent EOSE and the bounded drain elapsed): the relay settings now in
+	// force are the latest the relays hold.
+	OnCaughtUp func(context.Context)
+	// EventStore, when set, durably stores every promoted relay-settings
+	// event, so LocalRelayPolicyProjectionStore restores the head after a
+	// restart without PostgreSQL.
+	EventStore RelaySettingsEventStore
 }
 
 // RelaySettingsHydrator validates canonical relay events and promotes only valid
-// heads into the durable PostgreSQL server projection. Relay discovery caches
-// and browser emergency overrides are intentionally outside this component.
+// heads into the durable server projection (PostgreSQL, or
+// LocalRelayPolicyProjectionStore without it): REQ for the operator relay
+// policy coordinate, latest-wins promotion, catch-up on EOSE. Relay discovery
+// caches and browser emergency overrides are intentionally outside this
+// component.
 type RelaySettingsHydrator struct {
 	pool          *nostradapter.RelayPool
 	servicePubkey string
@@ -59,6 +70,8 @@ type RelaySettingsHydrator struct {
 	postEOSEDrain time.Duration
 	newDrainTimer relaySettingsDrainTimerFactory
 	onSnapshot    RelaySettingsSnapshotHandler
+	onCaughtUp    func(context.Context)
+	events        RelaySettingsEventStore
 
 	mu               sync.Mutex
 	seenEventIDs     map[string]struct{}
@@ -108,6 +121,8 @@ func NewRelaySettingsHydrator(cfg RelaySettingsHydratorConfig) *RelaySettingsHyd
 		postEOSEDrain: drain,
 		newDrainTimer: newDrainTimer,
 		onSnapshot:    cfg.OnSnapshotApplied,
+		onCaughtUp:    cfg.OnCaughtUp,
+		events:        cfg.EventStore,
 		seenEventIDs:  make(map[string]struct{}),
 		relayEOSE:     make(map[string]struct{}),
 	}
@@ -280,6 +295,9 @@ func (h *RelaySettingsHydrator) subscribe(ctx context.Context) error {
 			h.logger.Info("relay settings historical catch-up completed after bounded EOSE drain",
 				zap.Int("relay_eose_count", h.relayEOSECount()),
 			)
+			if h.onCaughtUp != nil {
+				h.onCaughtUp(ctx)
+			}
 		case ev, ok := <-eventsCh:
 			if !ok {
 				eventsCh = nil
@@ -391,6 +409,11 @@ func (h *RelaySettingsHydrator) handleEventFromRelay(ctx context.Context, ev *go
 	h.mu.Unlock()
 	if !promoted {
 		return false
+	}
+	if h.events != nil {
+		if _, err := h.events.SaveEvent(*ev); err != nil {
+			h.logger.Warn("storing promoted relay settings event in the local event store failed", zap.String("event_id", eventID), zap.Error(err))
+		}
 	}
 
 	h.storeSnapshot(*state, projection)
