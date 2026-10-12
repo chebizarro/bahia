@@ -147,7 +147,7 @@ func TestVMBootstrapRefusesLegacySecret(t *testing.T) {
 	_, _, _, v, principal := vmFixture(t)
 	svc, env := uuid.New(), uuid.New()
 	v.ServiceID, v.EnvironmentID = &svc, &env
-	secret := domain.ServiceSecret{ID: uuid.New(), ServiceID: svc, EnvironmentID: &env, Name: "RDP_PASSWORD", EncryptionMethod: domain.EncryptionAES256}
+	secret := domain.ServiceSecret{ID: uuid.New(), ServiceID: svc, EnvironmentID: &env, Name: "RDP_PASSWORD", EncryptionMethod: domain.EncryptionMethod("aes256gcm")}
 	v.Bootstrap = []domain.VMBootstrapBinding{{TargetKey: "rdp", Ref: domain.SecretRef{ID: secret.ID}}}
 	secrets := &vmSecretRepo{secret: secret}
 	resolver := &vmSecretResolver{repo: secrets}

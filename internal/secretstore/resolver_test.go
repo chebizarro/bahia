@@ -73,7 +73,7 @@ func TestResolverResolvesCanonicalReferencesInTheServicesScope(t *testing.T) {
 		CredentialRef: &domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: "cred_a", Version: 3}}
 	second := &domain.SecretRef{ID: uuid.New(), ServiceID: svc, Name: "API_KEY",
 		CredentialRef: &domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: "cred_b", Version: 1}}
-	legacy := &domain.SecretRef{ID: uuid.New(), ServiceID: svc, Name: "OLD", EncryptionMethod: domain.EncryptionAES256}
+	legacy := &domain.SecretRef{ID: uuid.New(), ServiceID: svc, Name: "OLD", EncryptionMethod: domain.EncryptionMethod("aes256gcm")}
 	scope := secretstore.Scope{OrgID: org, ServiceID: svc}
 	store := &fakeStore{values: map[string]string{"cred_a": scope.LabelPrefix(), "cred_b": scope.LabelPrefix()}}
 	records := fakeRecords{

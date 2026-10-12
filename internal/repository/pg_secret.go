@@ -71,55 +71,6 @@ func (r *PgSecretRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain
 	return s, nil
 }
 
-func (r *PgSecretRepository) GetCurrentVersion(ctx context.Context, secretID uuid.UUID) (*domain.SecretVersion, error) {
-	v := &domain.SecretVersion{}
-	var method string
-	err := r.pool.QueryRow(ctx, `
-		SELECT id, secret_id, version, encrypted_value, encryption_method, created_by, created_at
-		FROM secret_versions
-		WHERE secret_id = $1
-		ORDER BY version DESC
-		LIMIT 1
-	`, secretID).Scan(&v.ID, &v.SecretID, &v.Version, &v.EncryptedValue, &method, &v.CreatedBy, &v.CreatedAt)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("getting current secret version: %w", err)
-	}
-	v.EncryptionMethod = domain.EncryptionMethod(method)
-	return v, nil
-}
-
-// ListVersions returns every retained value for a secret so security-sensitive
-// consumers such as stored log redaction remain safe after secret rotation.
-func (r *PgSecretRepository) ListVersions(ctx context.Context, secretID uuid.UUID) ([]domain.SecretVersion, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT id, secret_id, version, encrypted_value, encryption_method, created_by, created_at
-		FROM secret_versions
-		WHERE secret_id = $1
-		ORDER BY version DESC
-	`, secretID)
-	if err != nil {
-		return nil, fmt.Errorf("listing secret versions: %w", err)
-	}
-	defer rows.Close()
-	versions := make([]domain.SecretVersion, 0)
-	for rows.Next() {
-		var version domain.SecretVersion
-		var method string
-		if err := rows.Scan(&version.ID, &version.SecretID, &version.Version, &version.EncryptedValue, &method, &version.CreatedBy, &version.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scanning secret version: %w", err)
-		}
-		version.EncryptionMethod = domain.EncryptionMethod(method)
-		versions = append(versions, version)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating secret versions: %w", err)
-	}
-	return versions, nil
-}
-
 func (r *PgSecretRepository) ListByService(ctx context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, service_id, environment_id, name, encrypted_value,
@@ -164,44 +115,6 @@ func (r *PgSecretRepository) ListEffective(ctx context.Context, serviceID, envID
 	}
 	defer rows.Close()
 	return scanSecrets(rows)
-}
-
-func (r *PgSecretRepository) Update(ctx context.Context, s *domain.ServiceSecret) error {
-	if s == nil {
-		return fmt.Errorf("updating secret: secret is nil")
-	}
-	if s.Version <= 0 {
-		return fmt.Errorf("updating secret %s: expected version must be positive", s.ID)
-	}
-
-	var exists bool
-	var updatedVersion int
-	err := r.pool.QueryRow(ctx, `
-		WITH target AS (
-			SELECT 1 FROM service_secrets WHERE id = $3
-		), updated AS (
-			UPDATE service_secrets
-			SET encrypted_value = $1, encryption_method = $2, version = version + 1, updated_at = now()
-			WHERE id = $3 AND version = $4
-			RETURNING id, version, encrypted_value, encryption_method, created_by, updated_at
-		), history AS (
-			INSERT INTO secret_versions (secret_id, version, encrypted_value, encryption_method, created_by, created_at)
-			SELECT id, version, encrypted_value, encryption_method, created_by, updated_at FROM updated
-			RETURNING version
-		)
-		SELECT EXISTS(SELECT 1 FROM target), COALESCE((SELECT version FROM history), 0)
-	`, s.EncryptedValue, string(s.EncryptionMethod), s.ID, s.Version).Scan(&exists, &updatedVersion)
-	if err != nil {
-		return fmt.Errorf("updating secret: %w", err)
-	}
-	if !exists {
-		return fmt.Errorf("updating secret %s: %w", s.ID, ErrNotFound)
-	}
-	if updatedVersion == 0 {
-		return fmt.Errorf("updating secret %s at version %d: %w", s.ID, s.Version, ErrConflict)
-	}
-	s.Version = updatedVersion
-	return nil
 }
 
 func (r *PgSecretRepository) RecordSecretAccessAudit(ctx context.Context, audit *domain.SecretAccessAudit) error {
@@ -344,23 +257,6 @@ func (r *PgSecretRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM service_secrets WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("deleting secret: %w", err)
-	}
-	return nil
-}
-
-func (r *PgSecretRepository) DeleteByName(ctx context.Context, serviceID uuid.UUID, envID *uuid.UUID, name string) error {
-	var err error
-	if envID != nil {
-		_, err = r.pool.Exec(ctx, `
-			DELETE FROM service_secrets WHERE service_id = $1 AND environment_id = $2 AND name = $3
-		`, serviceID, envID, name)
-	} else {
-		_, err = r.pool.Exec(ctx, `
-			DELETE FROM service_secrets WHERE service_id = $1 AND environment_id IS NULL AND name = $2
-		`, serviceID, name)
-	}
-	if err != nil {
-		return fmt.Errorf("deleting secret by name: %w", err)
 	}
 	return nil
 }

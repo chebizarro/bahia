@@ -88,7 +88,7 @@ func TestRuntimeInjectionResolvesStoreBackedSecretsAndRefusesLegacy(t *testing.T
 
 	// A row that still holds a value sealed with the retired service key is
 	// refused, naming it, before the store is asked for anything.
-	legacy := &domain.ServiceSecret{ID: uuid.New(), ServiceID: serviceID, Name: "LEGACY", EncryptedValue: []byte("sealed"), EncryptionMethod: domain.EncryptionAES256}
+	legacy := &domain.ServiceSecret{ID: uuid.New(), ServiceID: serviceID, Name: "LEGACY", EncryptedValue: []byte("sealed"), EncryptionMethod: domain.EncryptionMethod("aes256gcm")}
 	opts = &runtime.DeployOptions{}
 	_, err = lifecycle.mergeEffectiveSecrets(ctx, []domain.ServiceSecret{*db, *legacy}, opts, nil, false)
 	require.ErrorIs(t, err, domain.ErrLegacySecretValue)

@@ -234,7 +234,7 @@ func TestRevealSecretUsesCanonicalOrgWhenPostgresDiffers(t *testing.T) {
 func TestRevealSecretRefusesLegacySealedValue(t *testing.T) {
 	serviceID, orgID, secretID := uuid.New(), uuid.New(), uuid.New()
 	canonical := &memCanonicalSecrets{records: map[uuid.UUID]domain.SecretRef{
-		secretID: {ID: secretID, ServiceID: serviceID, Name: "OLD_TOKEN", Version: 3, EncryptionMethod: domain.EncryptionAES256},
+		secretID: {ID: secretID, ServiceID: serviceID, Name: "OLD_TOKEN", Version: 3, EncryptionMethod: domain.EncryptionMethod("aes256gcm")},
 	}, serviceOrg: map[uuid.UUID]string{serviceID: orgID.String()}}
 	store := &resolvingSecretStore{value: "never", lease: time.Minute}
 	services, rbac := encryptedAuthDeps(t, serviceID, orgID, domain.RoleAdmin)

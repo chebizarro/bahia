@@ -198,11 +198,6 @@ func (p *HiveCICanonicalPublisher) ReadInitiation(ctx context.Context, sourceEve
 	return &entries[0], nil
 }
 
-// ListInitiations returns every retained journal record.
-func (p *HiveCICanonicalPublisher) ListInitiations(ctx context.Context) ([]HiveCIInitiationEntry, error) {
-	return p.listInitiations(ctx, nil)
-}
-
 func (p *HiveCICanonicalPublisher) listInitiations(ctx context.Context, match func(gonostr.Tags) bool) ([]HiveCIInitiationEntry, error) {
 	if p == nil || p.projector == nil || p.projector.history == nil || p.encryptor == nil {
 		return nil, fmt.Errorf("Hive-CI canonical local view is unavailable")

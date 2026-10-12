@@ -87,7 +87,7 @@ func TestHeldSecretResolvesOnFirstUseAndFollowsRepointing(t *testing.T) {
 	require.Equal(t, "value-v2", text)
 	require.Equal(t, 3, store.resolves)
 
-	records.secret = &domain.SecretRef{ID: id, ServiceID: uuid.New(), Name: "TOKEN", EncryptionMethod: domain.EncryptionAES256}
+	records.secret = &domain.SecretRef{ID: id, ServiceID: uuid.New(), Name: "TOKEN", EncryptionMethod: domain.EncryptionMethod("aes256gcm")}
 	_, err = held.get(ctx)
 	require.ErrorIs(t, err, domain.ErrLegacySecretValue)
 }

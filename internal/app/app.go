@@ -40,7 +40,6 @@ import (
 	routingAdapter "github.com/openagentsinc/bahia/internal/adapters/routing"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	sbomAdapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
-	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	securityAdapter "github.com/openagentsinc/bahia/internal/adapters/security"
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/adapters/signing"
@@ -566,22 +565,6 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		secretAudit = secretRepo
 	}
 	secretText := secretstore.NewTextResolver(secretResolver, secretAudit)
-
-	// Secret encryptor: its AES key is HKDF-derived from the raw service key,
-	// so without in-process key material every operation fails with
-	// nostrutil.ErrServiceKeyMaterialRequired (bahia-cd0wr.4.7).
-	var secretEncryptor *secretsAdapter.Encryptor
-	if serviceKeyer != nil {
-		secretEncryptor, err = secretsAdapter.NewServiceEncryptor(serviceKeyer)
-		if err != nil {
-			return nil, fmt.Errorf("configuring secret encryption: %w", err)
-		}
-		if blocked := secretEncryptor.Unavailable(); blocked != nil {
-			logger.Warn("service secret store blocked: every secret read and write fails until the raw-key migration lands", zap.Error(blocked))
-		} else {
-			logger.Info("secrets encryption enabled")
-		}
-	}
 
 	var publicRoutePlanner *service.PublicRoutePlanner
 	var internalRouteBackend *routingAdapter.NginxBackend
@@ -2784,27 +2767,14 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		// The initiation journal (prepared signed events, pinned
 		// job, per-run publisher key in the service-only layer) is a
 		// confidential record in the local event store; the build id is
-		// derived from the signed request. PostgreSQL is an optional index
-		// rebuilt from the journal after warm start.
+		// derived from the signed request.
 		var initiationStore giteaAdapter.InitiationStore
 		if nostrProjector != nil && confidentialEncryptor != nil {
 			journal := hiveCanonical
 			if journal == nil {
 				journal = nostrAdapter.NewHiveCICanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
 			}
-			var initiationIndex giteaAdapter.InitiationIndex
-			if dbAvailable && pool != nil && secretEncryptor != nil {
-				initiationIndex = giteaAdapter.NewPgInitiationStore(pool, secretEncryptor)
-			}
-			canonicalInitiations := giteaAdapter.NewCanonicalInitiationStore(journal, initiationIndex, logger)
-			if initiationIndex != nil {
-				nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
-					if err := canonicalInitiations.RebuildIndex(ctx); err != nil {
-						logger.Warn("Hive-CI initiation SQL index rebuild failed", zap.Error(err))
-					}
-				})
-			}
-			initiationStore = canonicalInitiations
+			initiationStore = giteaAdapter.NewCanonicalInitiationStore(journal, logger)
 		}
 		if cfg.HiveCI.Initiator.Enabled && initiationStore == nil {
 			logger.Error("Hive-CI build initiator disabled: the initiation journal needs the Nostr projector and the confidential encryptor",

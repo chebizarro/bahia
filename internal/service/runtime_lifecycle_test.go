@@ -344,7 +344,7 @@ func TestRuntimeLifecycleDeployLegacySecretDoesNotMutateDesiredState(t *testing.
 	)
 
 	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
-	if err := secretRepo.Create(ctx, &domain.ServiceSecret{ServiceID: svc.ID, EnvironmentID: &env.ID, Name: "API_TOKEN", EncryptedValue: []byte("not-valid-aes"), EncryptionMethod: domain.EncryptionAES256, CreatedBy: "test"}); err != nil {
+	if err := secretRepo.Create(ctx, &domain.ServiceSecret{ServiceID: svc.ID, EnvironmentID: &env.ID, Name: "API_TOKEN", EncryptedValue: []byte("not-valid-aes"), EncryptionMethod: domain.EncryptionMethod("aes256gcm"), CreatedBy: "test"}); err != nil {
 		t.Fatalf("create invalid secret: %v", err)
 	}
 

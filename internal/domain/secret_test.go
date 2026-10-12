@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +17,7 @@ func TestServiceSecret_ToRef(t *testing.T) {
 		EnvironmentID:    &envID,
 		Name:             "DATABASE_URL",
 		EncryptedValue:   []byte("encrypted-stuff"),
-		EncryptionMethod: EncryptionNIP44,
+		EncryptionMethod: EncryptionStoreRef,
 		Version:          3,
 		CreatedBy:        "npub1abc",
 		CreatedAt:        time.Now().UTC(),
@@ -36,7 +38,7 @@ func TestServiceSecret_ToRef(t *testing.T) {
 	if ref.Name != "DATABASE_URL" {
 		t.Errorf("expected DATABASE_URL, got %s", ref.Name)
 	}
-	if ref.EncryptionMethod != EncryptionNIP44 {
+	if ref.EncryptionMethod != EncryptionStoreRef {
 		t.Error("EncryptionMethod mismatch")
 	}
 	if ref.Version != 3 {
@@ -44,11 +46,15 @@ func TestServiceSecret_ToRef(t *testing.T) {
 	}
 }
 
-func TestEncryptionMethods(t *testing.T) {
-	if EncryptionNIP44 != "nip44" {
-		t.Errorf("expected nip44, got %s", EncryptionNIP44)
+func TestLegacySecretValueErrorNamesTheSecretAndTheRemedy(t *testing.T) {
+	id := uuid.New()
+	err := LegacySecretValueError(id, "DB_PASSWORD")
+	if !errors.Is(err, ErrLegacySecretValue) {
+		t.Fatalf("%v is not ErrLegacySecretValue", err)
 	}
-	if EncryptionAES256 != "aes256gcm" {
-		t.Errorf("expected aes256gcm, got %s", EncryptionAES256)
+	for _, want := range []string{id.String(), "DB_PASSWORD", "rotate", "--credential-id"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("%q does not mention %q", err, want)
+		}
 	}
 }

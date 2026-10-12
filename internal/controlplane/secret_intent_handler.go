@@ -23,13 +23,10 @@ type SecretIntentPublisher interface {
 	PublishSecretDeleted(ctx context.Context, secretID uuid.UUID) error
 }
 
-// SecretIntentCRUD is the read/write contract the secret intent handler uses
-// for level-triggered reconciliation. repository.SecretRepository satisfies it.
+// SecretIntentCRUD is what the secret intent handler needs from the optional
+// PostgreSQL index beyond SecretStoreIndex: deleting a secret's row.
+// repository.SecretRepository satisfies it.
 type SecretIntentCRUD interface {
-	Create(ctx context.Context, s *domain.ServiceSecret) error
-	GetByID(ctx context.Context, id uuid.UUID) (*domain.ServiceSecret, error)
-	ListByService(ctx context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error)
-	Update(ctx context.Context, s *domain.ServiceSecret) error
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 

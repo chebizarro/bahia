@@ -42,7 +42,7 @@ func TestVirtualizationPlaneSecretAdmitsStoreBackedAndRefusesLegacy(t *testing.T
 	principal := &auth.Principal{Subject: key, PubKey: key, Method: auth.MethodNIP98}
 	require.NoError(t, policy.AuthorizePlaneSecret(context.Background(), principal, org, domain.SecretRef{ID: secretID}))
 
-	secrets.secret.EncryptionMethod = domain.EncryptionAES256
+	secrets.secret.EncryptionMethod = domain.EncryptionMethod("aes256gcm")
 	err := policy.AuthorizePlaneSecret(context.Background(), principal, org, domain.SecretRef{ID: secretID})
 	require.True(t, errors.Is(err, domain.ErrLegacySecretValue), "err = %v", err)
 	require.ErrorContains(t, err, "PLANE_TOKEN")

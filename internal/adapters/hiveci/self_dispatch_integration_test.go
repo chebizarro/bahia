@@ -40,6 +40,15 @@ func (selfDispatchSecretResolver) ResolveSecretWithAudit(context.Context, string
 	return "resolved-only-in-memory", domain.SecretAccessManifest{}, nil
 }
 
+func (r selfDispatchSecretResolver) ResolveSecretsWithAudit(ctx context.Context, refs []string, opts domain.SecretResolveOptions) ([]string, []domain.SecretAccessManifest, error) {
+	values := make([]string, len(refs))
+	manifests := make([]domain.SecretAccessManifest, len(refs))
+	for i, ref := range refs {
+		values[i], manifests[i], _ = r.ResolveSecretWithAudit(ctx, ref, opts)
+	}
+	return values, manifests, nil
+}
+
 type selfDispatchPublisher struct{ events []nostr.Event }
 
 func (p *selfDispatchPublisher) Publish(_ context.Context, event nostr.Event) (int, error) {

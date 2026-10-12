@@ -8,18 +8,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// EncryptionMethod identifies how a secret value is encrypted at rest.
+// EncryptionMethod is a PostgreSQL index row's encryption_method. Every
+// method other than EncryptionStoreRef names a value Bahia once sealed itself
+// (with a key derived from the retired service key), which it never reads:
+// such a secret is refused with ErrLegacySecretValue.
 type EncryptionMethod string
 
-const (
-	EncryptionNIP44    EncryptionMethod = "nip44"
-	EncryptionAES256   EncryptionMethod = "aes256gcm"
-	EncryptionAES256V2 EncryptionMethod = "aes256gcm-v2"
-	// EncryptionStoreRef marks a PostgreSQL index row (and its retained
-	// versions) of a secret whose value lives in the external secret store:
-	// the row holds no value.
-	EncryptionStoreRef EncryptionMethod = "store-ref"
-)
+// EncryptionStoreRef marks a PostgreSQL index row (and its retained
+// versions) of a secret whose value lives in the external secret store: the
+// row holds no value.
+const EncryptionStoreRef EncryptionMethod = "store-ref"
 
 // ErrLegacySecretValue is returned for a secret whose value Bahia sealed
 // itself (into PostgreSQL, under a key derived from the retired service key,
@@ -90,14 +88,4 @@ func (s *ServiceSecret) ToRef() SecretRef {
 		CreatedAt:        s.CreatedAt,
 		UpdatedAt:        s.UpdatedAt,
 	}
-}
-
-// ErrSecretInStore is returned by PostgreSQL value readers for store-backed
-// secrets.
-var ErrSecretInStore = errors.New("secret value is held by the secret store and this consumer still reads PostgreSQL (moves to the secret store in bahia-cd0wr.4.7)")
-
-// SecretInStoreError names the store-backed secret a PostgreSQL consumer
-// could not read.
-func SecretInStoreError(id uuid.UUID, name string) error {
-	return fmt.Errorf("secret %s (%s): %w", id, name, ErrSecretInStore)
 }

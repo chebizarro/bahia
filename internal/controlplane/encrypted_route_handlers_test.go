@@ -568,7 +568,7 @@ func TestEncryptedRouteHandlersRedactionWithholdsLogsItCannotRedact(t *testing.T
 		t.Fatalf("secret re-pointed after the run = %v", err)
 	}
 
-	record.UpdatedAt, record.CredentialRef, record.EncryptionMethod = runStart.Add(-time.Hour), nil, domain.EncryptionAES256
+	record.UpdatedAt, record.CredentialRef, record.EncryptionMethod = runStart.Add(-time.Hour), nil, domain.EncryptionMethod("aes256gcm")
 	canonical.records[secretID] = record
 	if _, err := redact(); !errors.Is(err, domain.ErrLegacySecretValue) {
 		t.Fatalf("legacy secret = %v", err)

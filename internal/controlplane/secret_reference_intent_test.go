@@ -270,7 +270,7 @@ func TestSecretReferenceIntentRetiresLegacySealedValue(t *testing.T) {
 	f := newReferenceFixture(t, true)
 	secretID := domain.NewEntityID()
 	// A legacy secret: canonical metadata plus a sealed value in PostgreSQL.
-	f.canonical.records[secretID] = domain.SecretRef{ID: secretID, ServiceID: f.serviceID, Name: "DB_PASSWORD", EncryptionMethod: domain.EncryptionNIP44, Version: 4, CreatedAt: time.Now().UTC()}
+	f.canonical.records[secretID] = domain.SecretRef{ID: secretID, ServiceID: f.serviceID, Name: "DB_PASSWORD", EncryptionMethod: domain.EncryptionMethod("nip44"), Version: 4, CreatedAt: time.Now().UTC()}
 	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: secretID, ServiceID: f.serviceID, Name: "DB_PASSWORD", EncryptedValue: []byte("sealed"), Version: 4})
 
 	if err := f.process(t, "update", f.content(secretID, 2)); err != nil {
@@ -285,7 +285,7 @@ func TestSecretReferenceIntentRetiresLegacySealedValue(t *testing.T) {
 	// A re-point whose publish fails still retires the compromised value:
 	// the index row is a marker before the publish is attempted.
 	other := domain.NewEntityID()
-	f.canonical.records[other] = domain.SecretRef{ID: other, ServiceID: f.serviceID, Name: "API_KEY", EncryptionMethod: domain.EncryptionNIP44, Version: 1, CreatedAt: time.Now().UTC()}
+	f.canonical.records[other] = domain.SecretRef{ID: other, ServiceID: f.serviceID, Name: "API_KEY", EncryptionMethod: domain.EncryptionMethod("nip44"), Version: 1, CreatedAt: time.Now().UTC()}
 	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: other, ServiceID: f.serviceID, Name: "API_KEY", EncryptedValue: []byte("sealed"), Version: 1})
 	f.canonical.publishErr = errors.New("outbox full")
 	otherContent := f.content(other, 2)
@@ -416,7 +416,7 @@ func TestSecretReferenceIntentDoesNotRevealCredentialExistence(t *testing.T) {
 func TestSecretReferenceIntentRefusesNameHeldByAnotherSecret(t *testing.T) {
 	f := newReferenceFixture(t, true)
 	legacy := domain.NewEntityID()
-	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: legacy, ServiceID: f.serviceID, Name: "DB_PASSWORD", EncryptedValue: []byte("sealed"), EncryptionMethod: domain.EncryptionNIP44, Version: 1})
+	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: legacy, ServiceID: f.serviceID, Name: "DB_PASSWORD", EncryptedValue: []byte("sealed"), EncryptionMethod: domain.EncryptionMethod("nip44"), Version: 1})
 	secretID := domain.NewEntityID()
 	err := f.process(t, "create", f.content(secretID, 2))
 	if !errors.Is(err, repository.ErrSecretNameTaken) || !strings.Contains(err.Error(), "re-point that secret") {

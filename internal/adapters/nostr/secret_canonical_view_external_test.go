@@ -89,7 +89,7 @@ func TestCanonicalSecretViewReadsOwnRecordsWithoutPostgres(t *testing.T) {
 	require.Equal(t, *ref.CredentialRef, *current.CredentialRef)
 	require.Equal(t, ref.Name, current.Name)
 	require.Empty(t, current.EncryptionMethod)
-	legacy := domain.SecretRef{ID: uuid.New(), ServiceID: service.ID, Name: "LEGACY", Version: 1, EncryptionMethod: domain.EncryptionNIP44, CreatedAt: ref.CreatedAt, UpdatedAt: ref.UpdatedAt}
+	legacy := domain.SecretRef{ID: uuid.New(), ServiceID: service.ID, Name: "LEGACY", Version: 1, EncryptionMethod: domain.EncryptionMethod("nip44"), CreatedAt: ref.CreatedAt, UpdatedAt: ref.UpdatedAt}
 	require.NoError(t, secrets.PublishSecretRef(ctx, legacy))
 	stored, err := view.StoreBackedSecrets(ctx)
 	require.NoError(t, err)
