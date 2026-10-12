@@ -11,7 +11,7 @@ The page provides:
 - links to operational settings;
 - read-only service identity, service relays, publish state, Blossom, OCI registry, runtime, feature, registry, and version information.
 
-Observed deployment versions come from runtime observations. Build information describes packaged artifacts and does not prove that a version is running.
+Observed deployment versions come from canonical runtime-state records in the daemon's local event store. The discovery announcement marks that snapshot `available` even when no workloads are observed, or `unavailable` if the event source is absent. Build information describes packaged artifacts and does not prove that a version is running.
 
 ## Profile
 

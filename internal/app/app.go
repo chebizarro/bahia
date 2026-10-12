@@ -1301,7 +1301,12 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// The projector's memory of what it published is its own latest events
 	// in the local event store, never PostgreSQL.
 	projectionHistory := nostrAdapter.NewLocalEventRepository(localEventStore, nil).Authored(servicePubkey)
-	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, registry, controlPlanePub, projectionHistory, logger, projectorOpts...)
+	projectorOpts = append(projectorOpts, nostrAdapter.WithObservedDeploymentState(localEventStore))
+	projectorSource, projectorSourceErr := registry.ProjectionSource()
+	if projectorSourceErr != nil {
+		logger.Info("SQL-backed projector source unavailable; canonical local history remains active", zap.Error(projectorSourceErr))
+	}
+	nostrProjector := nostrAdapter.NewProjector(cfg.Nostr, projectorSource, controlPlanePub, projectionHistory, logger, projectorOpts...)
 	controlPlanePub.OnDeliveryAbandoned(nostrProjector.ForgetAbandonedProjection)
 	relayTopology.SetAdvertiser(nostrProjector.PublishAdvertisedRelays)
 
@@ -2921,7 +2926,11 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			controlPlanePool, serviceKeyer, workerReadModelSvc, logger)
 		reactorOpts = append(reactorOpts,
 			controlplane.WithWorkerReadModelPublisher(workerReadModelPublisher))
-		setupWorkerReadModelEventSubscriptions(publisher, workerReadModelPublisher, registry, mlRegistry, logger)
+		var workerMLSource *service.MLRegistryService
+		if dbAvailable {
+			workerMLSource = mlRegistry
+		}
+		setupWorkerReadModelEventSubscriptions(publisher, workerReadModelPublisher, projectorSource, workerMLSource, logger)
 		if llmRegistry != nil {
 			reactorOpts = append(reactorOpts, controlplane.WithLLMRegistry(llmRegistry))
 		}
@@ -3611,9 +3620,11 @@ func setupWorkerReadModelEventSubscriptions(
 		}
 		workerReadModelPublisher.PublishForWorker(ctx, run.WorkerPubkey)
 	}
-	pub.Subscribe(events.EventDeploymentRunCreated, publishForDeploymentRun)
-	pub.Subscribe(events.EventDeploymentRunStatusChanged, publishForDeploymentRun)
-	pub.Subscribe(events.EventDeploymentRunCompleted, publishForDeploymentRun)
+	if registry != nil {
+		pub.Subscribe(events.EventDeploymentRunCreated, publishForDeploymentRun)
+		pub.Subscribe(events.EventDeploymentRunStatusChanged, publishForDeploymentRun)
+		pub.Subscribe(events.EventDeploymentRunCompleted, publishForDeploymentRun)
+	}
 
 	// ML deployment run events: same pattern, using the ML registry.
 	if mlRegistry != nil {

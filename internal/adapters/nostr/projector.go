@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,8 +24,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// ProjectionSource is the authoritative state reader used by the projector.
-// service.RegistryService satisfies this interface.
+// ProjectionSource is the registry read contract accepted by NewProjector.
+// Discovery reads canonical local events instead and does not require it.
 type ProjectionSource interface {
 	ListServices(ctx context.Context) ([]domain.Service, error)
 	GetService(ctx context.Context, id uuid.UUID) (*domain.Service, error)
@@ -138,9 +139,8 @@ type ProjectionPublisher interface {
 	PublishProjection(ctx context.Context, ev gonostr.Event, entityType string, entityID *uuid.UUID) error
 }
 
-// Projector republishes Bahia's authoritative DB state into canonical Nostr
-// read models and append-only audit events. It is rebuildable: a startup and
-// periodic snapshot can repair a cold or wiped sidecar store.
+// Projector publishes canonical Nostr read models, discovery and audit events.
+// Its local history supports warm-start after a cold or wiped sidecar store.
 type Projector struct {
 	source               ProjectionSource
 	mlSource             MLProjectionSource
@@ -156,6 +156,7 @@ type Projector struct {
 	enabled              bool
 	logger               *zap.Logger
 	systemConfig         *config.Config
+	observedState        ObservedDeploymentState
 	relaySource          AdvertisedRelaySource
 	mcpTransport         bool
 	dnsPublishMu         sync.Mutex
@@ -185,6 +186,16 @@ type Projector struct {
 
 // ProjectorOption configures a projector.
 type ProjectorOption func(*Projector)
+
+// ObservedDeploymentState reads retained canonical events, not an SQL index.
+// The local bbolt event store satisfies this interface.
+type ObservedDeploymentState interface {
+	QueryEvents(gonostr.Filter) iter.Seq[gonostr.Event]
+}
+
+func WithObservedDeploymentState(state ObservedDeploymentState) ProjectorOption {
+	return func(p *Projector) { p.observedState = state }
+}
 
 // WithConfidentialStateHashKeys supplies the keyring holding the
 // confidential-dedupe system key that keys every confidential record's
@@ -290,8 +301,8 @@ type ProjectionCoordinateHistory interface {
 	LatestByCoordinate(ctx context.Context, kind int, d string) (*repository.NostrEventRecord, error)
 }
 
-// NewProjector creates a canonical Nostr read-model projector. history may be
-// nil, in which case the dedupe cache starts cold.
+// NewProjector creates a canonical Nostr read-model projector. source and
+// history may be nil; without history the dedupe cache starts cold.
 func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher ProjectionPublisher, history ProjectionHistory, logger *zap.Logger, opts ...ProjectorOption) *Projector {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -308,7 +319,7 @@ func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher Pro
 	if p.relaySource == nil && p.systemConfig != nil {
 		p.relaySource = staticAdvertisedRelays{cfg: p.systemConfig.Nostr}
 	}
-	p.enabled = cfg.PublishEnabled && p.signer != nil && source != nil && publisher != nil
+	p.enabled = cfg.PublishEnabled && p.signer != nil && publisher != nil
 	return p
 }
 
@@ -808,95 +819,17 @@ func shouldRefreshObservedDeploymentsProjection(eventType events.EventType) bool
 	}
 }
 
-func (p *Projector) observedDeployments(ctx context.Context) ([]observedDeploymentDiscovery, error) {
-	source := p.source
-	services, err := source.ListServices(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list services for observed deployments: %w", err)
-	}
-	environments, err := source.ListEnvironments(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list environments for observed deployments: %w", err)
-	}
-	states, err := source.ListAllStates(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list states for observed deployments: %w", err)
-	}
-
-	servicesByID := make(map[uuid.UUID]domain.Service, len(services))
-	for _, service := range services {
-		servicesByID[service.ID] = service
-	}
-	environmentsByID := make(map[uuid.UUID]domain.Environment, len(environments))
-	for _, environment := range environments {
-		environmentsByID[environment.ID] = environment
-	}
-
-	deployments := make([]observedDeploymentDiscovery, 0, len(states))
-	for i := range states {
-		state := &states[i]
-		if state.CurrentObservationID == nil {
-			continue
-		}
-		observation, err := source.GetLatestObservation(ctx, state.ServiceID, state.EnvironmentID)
-		if err != nil {
-			return nil, fmt.Errorf("get latest observation for service %s in environment %s: %w", state.ServiceID, state.EnvironmentID, err)
-		}
-		if observation == nil || observation.ID != *state.CurrentObservationID {
-			continue
-		}
-
-		service := servicesByID[state.ServiceID]
-		environment := environmentsByID[state.EnvironmentID]
-		deployment := observedDeploymentDiscovery{
-			ServiceID:           state.ServiceID.String(),
-			ServiceName:         service.Name,
-			EnvironmentID:       state.EnvironmentID.String(),
-			EnvironmentName:     environment.Name,
-			RuntimeType:         string(service.RuntimeType),
-			RuntimeTarget:       service.RuntimeTargetName(),
-			ObservationID:       observation.ID.String(),
-			ObservedVersion:     observation.ObservedVersion,
-			ObservedImageRepo:   observation.ObservedImageRepo,
-			ObservedImageDigest: observation.ObservedImageDigest,
-			ObservedContainerID: observation.ObservedContainerID,
-			ObservedHost:        observation.ObservedHost,
-			ObservationSource:   observation.Source,
-			HealthStatus:        string(observation.HealthStatus),
-			DriftStatus:         string(state.DriftStatus),
-			ObservedAt:          formatTime(observation.ObservedAt),
-		}
-		if state.DeploymentUnitID != nil {
-			deployment.DeploymentUnitID = state.DeploymentUnitID.String()
-		}
-		deployments = append(deployments, deployment)
-	}
-
-	sort.Slice(deployments, func(i, j int) bool {
-		left := strings.ToLower(deployments[i].EnvironmentName) + "\x00" +
-			strings.ToLower(deployments[i].ServiceName) + "\x00" +
-			deployments[i].EnvironmentID + "\x00" + deployments[i].ServiceID + "\x00" + deployments[i].DeploymentUnitID
-		right := strings.ToLower(deployments[j].EnvironmentName) + "\x00" +
-			strings.ToLower(deployments[j].ServiceName) + "\x00" +
-			deployments[j].EnvironmentID + "\x00" + deployments[j].ServiceID + "\x00" + deployments[j].DeploymentUnitID
-		return left < right
-	})
-	return deployments, nil
-}
-
 func (p *Projector) publishSystemDiscoveryAnnouncement(ctx context.Context, cfg *config.Config) error {
-	observedDeployments, err := p.observedDeployments(ctx)
-	if err != nil {
-		return err
-	}
+	observedDeployments, observedStatus := p.observedDeployments(ctx)
 	browserRelays := cfg.Nostr.BrowserRelayPolicyRelays()
 	encryptedRequestsEnabled := len(browserRelays) > 0 && p.signer != nil
 	payload := map[string]any{
-		"schema":               SystemDiscoverySchema,
-		"registries":           discoveryRegistries(cfg),
-		"versions":             discoveryVersions(),
-		"observed_deployments": observedDeployments,
-		"control_plane":        discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil || p.dnsZoneSource != nil || p.dnsBackendSource != nil || p.dnsPolicySource != nil),
+		"schema":                      SystemDiscoverySchema,
+		"registries":                  discoveryRegistries(cfg),
+		"versions":                    discoveryVersions(),
+		"observed_deployments":        observedDeployments,
+		"observed_deployments_status": observedStatus,
+		"control_plane":               discoveryControlPlane(cfg.LLM.Enabled, p.mcpTransport, p.dnsSource != nil || p.dnsZoneSource != nil || p.dnsBackendSource != nil || p.dnsPolicySource != nil),
 		"blossom": map[string]any{
 			"enabled":       cfg.Blossom.Enabled,
 			"url":           cfg.Blossom.URL,

@@ -49,7 +49,9 @@ locally signed intents, and the daemon's HTTP API is not a data path. Code:
    adverts, activity/ops, intent status (`kinds:[30315], #p:[me]`), profile and
    relay list (`kinds:[0,10002], authors:[me]`). Discovery is optional metadata;
    its absence disables only the daemon-dependent features (assistant, secret
-   reveal, log fetch).
+   reveal, log fetch). Discovery's `observed_deployments_status` distinguishes
+   an available but empty canonical workload snapshot from an unavailable
+   daemon-local event source; it does not depend on PostgreSQL.
 6. On EOSE per relay per filter, persist the cursor and flip the domain's
    "synced" badge; once every filter has EOSE from at least one relay the
    indicator reads "live" (`sync-status.svelte.js`). EOSE is a badge, never a

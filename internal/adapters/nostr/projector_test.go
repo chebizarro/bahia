@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
@@ -31,6 +33,7 @@ type captureProjectionPublisher struct {
 	zeroAcceptedKind   map[int]bool
 	errorsByRelayD     map[string]error
 	zeroAcceptedRelayD map[string]bool
+	onPublish          func(gonostr.Event)
 }
 
 func (p *captureProjectionPublisher) Publish(_ context.Context, ev gonostr.Event) (int, error) {
@@ -57,6 +60,9 @@ func (p *captureProjectionPublisher) Publish(_ context.Context, ev gonostr.Event
 		}
 	}
 	p.events = append(p.events, ev)
+	if p.onPublish != nil {
+		p.onPublish(ev)
+	}
 	return 1, nil
 }
 
@@ -565,7 +571,13 @@ func TestProjectorPublishesObservedDeploymentsWithoutEmbeddedSidecar(t *testing.
 	cfg.Nostr.ServiceRelays = []string{"wss://service.example"}
 
 	sink := &captureProjectionPublisher{}
-	projector := newTestProjector(cfg.Nostr, source, sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.bolt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	seedObservedDiscoveryState(t, store, source)
+	projector := newTestProjector(cfg.Nostr, nil, sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true), WithObservedDeploymentState(store))
 	projector.publishSystemConfigOnStartup(ctx)
 
 	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
@@ -576,6 +588,9 @@ func TestProjectorPublishesObservedDeploymentsWithoutEmbeddedSidecar(t *testing.
 	deployments, ok := payload["observed_deployments"].([]any)
 	if !ok || len(deployments) != 2 {
 		t.Fatalf("observed deployments = %#v, want two current runtime observations", payload["observed_deployments"])
+	}
+	if payload["observed_deployments_status"] != "available" {
+		t.Fatalf("observed deployments status = %#v", payload["observed_deployments_status"])
 	}
 	first, ok := deployments[0].(map[string]any)
 	if !ok {
@@ -597,6 +612,93 @@ func TestProjectorPublishesObservedDeploymentsWithoutEmbeddedSidecar(t *testing.
 	assertOneRelaySet(t, sink, BrowserRelaySetDTag)
 	assertOneRelaySet(t, sink, ContextVMRelaySetDTag)
 	assertOneRelaySet(t, sink, ServiceRelaySetDTag)
+}
+
+func seedObservedDiscoveryState(t *testing.T, store *localstore.Store, source *fakeProjectionSource) {
+	t.Helper()
+	save := func(legacyKind int, coordinate string, tags gonostr.Tags, content string) {
+		t.Helper()
+		wireKind, envelope := controlStateEnvelope(legacyKind, coordinate, false)
+		ev := gonostr.Event{Kind: gonostr.Kind(wireKind), CreatedAt: gonostr.Now(), Tags: append(envelope, tags...), Content: content}
+		if err := signEventWithPrivateKeyHex(&ev, projectorTestPrivateKey); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.SaveEvent(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, svc := range source.services {
+		tags, content := serviceRegistryRecord(&svc, false)
+		save(KindServiceRegistry, svc.ID.String(), tags, content)
+	}
+	for _, env := range source.envs {
+		tags, content := environmentRegistryRecord(&env, nil, false)
+		save(KindEnvironmentRegistry, env.ID.String(), tags, content)
+	}
+	for _, state := range source.states {
+		var obs *domain.RuntimeObservation
+		if state.CurrentObservationID != nil {
+			stored := source.observations[*state.CurrentObservationID]
+			obs = &stored
+		}
+		tags, content := RuntimeStateRecord(&state, obs)
+		save(KindServiceState, kinds.ServiceStateDTag(state.ServiceID.String(), state.EnvironmentID.String()), tags, content)
+	}
+}
+
+func TestProjectorRunWithoutDatabasePublishesDiscovery(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = projectorTestPrivateKey
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.bolt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sink := &captureProjectionPublisher{onPublish: func(ev gonostr.Event) {
+		if eventKindInt(&ev) == kinds.ContextVMServerAnnouncement {
+			cancel()
+		}
+	}}
+	projector := newTestProjector(cfg.Nostr, nil, sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true), WithObservedDeploymentState(store))
+	if !projector.Enabled() {
+		t.Fatal("DB-less projector must remain enabled")
+	}
+	if err := projector.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(discovery.Content), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["observed_deployments_status"] != "available" {
+		t.Fatalf("status = %#v", payload["observed_deployments_status"])
+	}
+	if deployments, ok := payload["observed_deployments"].([]any); !ok || len(deployments) != 0 {
+		t.Fatalf("deployments = %#v, want empty canonical state", payload["observed_deployments"])
+	}
+}
+
+func TestProjectorDiscoveryMarksObservedDeploymentsUnavailableWithoutStore(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Nostr.PrivateKey = projectorTestPrivateKey
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+	sink := &captureProjectionPublisher{}
+	projector := newTestProjector(cfg.Nostr, nil, sink, nil, zap.NewNop(), WithSystemDiscoveryConfig(cfg, true))
+	projector.publishSystemConfigOnStartup(context.Background())
+	discovery := assertOneSignedKind(t, sink, kinds.ContextVMServerAnnouncement)
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(discovery.Content), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["observed_deployments_status"] != "unavailable" {
+		t.Fatalf("status = %#v", payload["observed_deployments_status"])
+	}
 }
 
 func TestProjectorSystemDiscoveryDoesNotInferDMRelayListFromPublicRelaySets(t *testing.T) {
@@ -1151,7 +1253,7 @@ func assertSystemDiscoveryEnvelopeForBrowser(t *testing.T, ev gonostr.Event) {
 	if err := json.Unmarshal([]byte(ev.Content), &payload); err != nil {
 		t.Fatalf("unmarshal discovery content: %v", err)
 	}
-	wantTopLevel := []string{"assistant", "blossom", "control_plane", "features", "nostr", "observed_deployments", "oci", "registries", "runtime", "schema", "versions"}
+	wantTopLevel := []string{"assistant", "blossom", "control_plane", "features", "nostr", "observed_deployments", "observed_deployments_status", "oci", "registries", "runtime", "schema", "versions"}
 	if got := sortedDiscoveryPayloadKeys(payload); !reflect.DeepEqual(got, wantTopLevel) {
 		t.Fatalf("discovery top-level keys = %#v, want browser protocol envelope keys %#v", got, wantTopLevel)
 	}
