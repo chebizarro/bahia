@@ -210,7 +210,7 @@ func TestDefaultIntentDomainsProcessEveryRegisteredHandler(t *testing.T) {
 			event := nostr.Event{
 				Kind: 30900, CreatedAt: nostr.Now(),
 				Tags: nostr.Tags{{"d", domainName + "-test"}, {"t", "bahia-intent"},
-					{"domain", domainName}, {"op", "create"}, {"org", orgID.String()},
+					{"domain", domainName}, {"schema", "bahia.intent." + domainName + ".v1"}, {"op", "create"}, {"org", orgID.String()},
 					{"intent_id", "default-" + domainName}},
 				Content: `{"name":"test"}`,
 			}
@@ -218,7 +218,13 @@ func TestDefaultIntentDomainsProcessEveryRegisteredHandler(t *testing.T) {
 			intent, err := controlplane.ParseIntent(&event)
 			require.NoError(t, err)
 			intent.Actor = actor
-			require.NoError(t, app.IntentProcessor.ProcessInProcess(context.Background(), intent))
+			err = app.IntentProcessor.ProcessInProcess(context.Background(), intent)
+			if domainName == "hiveci-policy" {
+				// This domain requires a durable outcome status; the fixture has no write relays.
+				require.ErrorContains(t, err, "no write relays configured")
+			} else {
+				require.NoError(t, err)
+			}
 			require.Len(t, handler.received(), 1)
 		})
 	}
@@ -247,7 +253,7 @@ func TestIntentDomainsDisabledStopsExactlyListedDomains(t *testing.T) {
 		app.IntentProcessor.RegisterHandler(domainName, handler)
 		event := nostr.Event{Kind: 30900, CreatedAt: nostr.Now(),
 			Tags: nostr.Tags{{"d", domainName + "-opt-out"}, {"t", "bahia-intent"},
-				{"domain", domainName}, {"op", "create"}, {"org", orgID.String()},
+				{"domain", domainName}, {"schema", "bahia.intent." + domainName + ".v1"}, {"op", "create"}, {"org", orgID.String()},
 				{"intent_id", "opt-out-" + domainName}},
 			Content: `{"name":"test"}`}
 		require.NoError(t, event.Sign(actorKey))
@@ -258,6 +264,9 @@ func TestIntentDomainsDisabledStopsExactlyListedDomains(t *testing.T) {
 		if domainName == "service" || domainName == "policy" {
 			require.ErrorContains(t, err, "disabled", domainName)
 			require.Empty(t, handler.received(), domainName)
+		} else if domainName == "hiveci-policy" {
+			require.ErrorContains(t, err, "no write relays configured")
+			require.Len(t, handler.received(), 1, domainName)
 		} else {
 			require.NoError(t, err, domainName)
 			require.Len(t, handler.received(), 1, domainName)
@@ -279,10 +288,10 @@ func TestDefaultSensitiveIntentDomainsRequireGiftWrap(t *testing.T) {
 	defer syncTestLogger(t, app.Logger)
 	defer closeRelayPools(app.relayPools...)
 
-	for _, domainName := range []string{"org", "secret", "notification"} {
+	for _, domainName := range []string{"org", "secret", "notification", "hiveci-policy"} {
 		event := nostr.Event{Kind: 30900, CreatedAt: nostr.Now(),
 			Tags: nostr.Tags{{"d", domainName + "-plaintext"}, {"t", "bahia-intent"},
-				{"domain", domainName}, {"op", "create"}, {"org", orgID.String()},
+				{"domain", domainName}, {"schema", "bahia.intent." + domainName + ".v1"}, {"op", "create"}, {"org", orgID.String()},
 				{"intent_id", "plaintext-" + domainName}},
 			Content: `{"name":"test"}`}
 		require.NoError(t, event.Sign(actorKey))
