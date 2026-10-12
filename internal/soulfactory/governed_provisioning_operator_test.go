@@ -17,8 +17,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/telemetry"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/soulfactory/saga"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type unavailableSoulGenerator struct{ calls int }
@@ -26,6 +29,35 @@ type unavailableSoulGenerator struct{ calls int }
 func (g *unavailableSoulGenerator) Generate(context.Context, domain.SoulGeneratorInput) (*domain.SoulGeneratorOutput, error) {
 	g.calls++
 	return nil, &saga.SafeError{Code: "dependency_unavailable", Retryable: true}
+}
+
+func TestGovernedProvisioningWithoutDatabaseRejectsBeforeEffects(t *testing.T) {
+	registry := service.NewRegistryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
+	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{}, slogDefaultLogger())
+	require.NoError(t, err)
+	signer := newFakeSigner(t)
+	generator := &unavailableSoulGenerator{}
+	reactor := NewReactor(Config{SoulFactoryPubkey: signer.pubkey, AuthorizedPubkeys: []string{signer.pubkey}}, generator, signer, slogDefaultLogger())
+	capture := attachPublishCapture(reactor)
+	reactor.findProvisioningResultFn = func(context.Context, string) (*nostr.Event, error) { return nil, nil }
+	full := &FullProvisioner{reactor: reactor, bahiaIntegration: integration}
+	provisioner, err := NewProductionGovernedProvisioner(full, ProductionGovernedProvisionerConfig{StateDir: t.TempDir()})
+	require.NoError(t, err)
+	require.NoError(t, reactor.InstallProvisioningEngine(provisioner))
+	_, err = provisioner.Provision(t.Context(), &domain.ProvisioningRequest{AgentID: "scout"}, &domain.ProvisioningRun{RequestID: "direct-check"})
+	var missing *service.MissingRegistryRepositoryError
+	require.ErrorAs(t, err, &missing)
+	require.Equal(t, "services", missing.Repository)
+
+	event := buildProvisioningEvent(t, signer.pubkey, "db-less-rejection", nostr.Tags{{"method", soulFactoryLegacyProvisionMethod}}, fmt.Sprintf(`{"agent_id":"scout","brief":"Provision","spec_hash":"test-spec","runtime":{"target":"openclaw","runtime_release_id":%q}}`, uuid.NewString()))
+	reactor.handleProvisioningRequest(t.Context(), event)
+	require.Equal(t, 0, generator.calls)
+	require.Equal(t, domain.ProvisioningStatusFailed, reactor.GetRun(event.ID.Hex()).Status)
+	results := capture.eventsByKind(domain.KindProvisioningResult)
+	require.Len(t, results, 1)
+	require.Equal(t, "error", findTag(results[0], "status"))
+	require.Contains(t, results[0].Content, "registry repository unavailable: services")
+	require.Empty(t, capture.eventsByKind(domain.KindAgentSoul))
 }
 
 // Start at the reactor's direct provisioning event handler without seeding the

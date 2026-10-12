@@ -17,6 +17,7 @@ import (
 // It handles service registration, deployment intents, status sync, and lifecycle actions.
 type BahiaIntegration struct {
 	registry               *service.RegistryService
+	registryUnavailable    error
 	orgID                  uuid.UUID
 	agentEnvID             uuid.UUID // Default environment for agents
 	deployRuntimeArtifacts bool
@@ -45,10 +46,11 @@ func NewBahiaIntegration(registry *service.RegistryService, config BahiaIntegrat
 		logger = slog.Default()
 	}
 	bi := &BahiaIntegration{
-		registry:               registry,
 		deployRuntimeArtifacts: config.DeployRuntimeArtifacts,
 		logger:                 logger,
 	}
+	// Keep the relay runtime available without handing it a partial SQL registry.
+	bi.registry, bi.registryUnavailable = registry.ProjectionSource()
 	if strings.TrimSpace(config.OrganizationID) != "" {
 		orgID, err := uuid.Parse(strings.TrimSpace(config.OrganizationID))
 		if err != nil {
@@ -68,9 +70,22 @@ func NewBahiaIntegration(registry *service.RegistryService, config BahiaIntegrat
 	return bi, nil
 }
 
+func (bi *BahiaIntegration) registryService() (*service.RegistryService, error) {
+	if bi.registry == nil {
+		if bi.registryUnavailable != nil {
+			return nil, bi.registryUnavailable
+		}
+		return nil, &service.MissingRegistryRepositoryError{Repository: "registry"}
+	}
+	return bi.registry, nil
+}
+
 // RegisterSoulAsService creates a bahia Service entry for a newly provisioned soul.
 // Returns the service ID on success.
 func (bi *BahiaIntegration) RegisterSoulAsService(ctx context.Context, soul *domain.AgentSoul) (uuid.UUID, error) {
+	if _, err := bi.registryService(); err != nil {
+		return uuid.Nil, err
+	}
 	logger := bi.logger.With("agent_id", soul.AgentID, "soul_id", soul.ID)
 	logger.Info("registering soul as bahia service")
 
@@ -154,6 +169,9 @@ func (bi *BahiaIntegration) CreateInitialDeployment(ctx context.Context, soul *d
 	}
 	if err := domain.ValidateImageDigest(deployable.ImageDigest); err != nil {
 		return nil, fmt.Errorf("%w: invalid runtime artifact digest: %v", ErrDeployableArtifactRequired, err)
+	}
+	if _, err := bi.registryService(); err != nil {
+		return nil, err
 	}
 	svc, err := bi.registry.GetService(ctx, serviceID)
 	if err != nil {
@@ -376,6 +394,9 @@ func (bi *BahiaIntegration) SyncSoulStatus(ctx context.Context, soul *domain.Age
 	if bi.agentEnvID == uuid.Nil {
 		return "unmanaged", nil
 	}
+	if _, err := bi.registryService(); err != nil {
+		return "", err
+	}
 
 	// Get current deployment state
 	state, err := bi.registry.GetEnvironmentServiceState(ctx, *soul.BahiaServiceID, bi.agentEnvID)
@@ -428,6 +449,9 @@ func (bi *BahiaIntegration) HandleLifecycleAction(ctx context.Context, soul *dom
 	if soul.BahiaServiceID == nil {
 		bi.logger.Debug("no bahia service ID for lifecycle action", "action", action)
 		return ErrLifecycleUnsupported
+	}
+	if _, err := bi.registryService(); err != nil {
+		return err
 	}
 
 	logger := bi.logger.With("agent_id", soul.AgentID, "service_id", *soul.BahiaServiceID, "action", action)
@@ -489,6 +513,9 @@ func (bi *BahiaIntegration) createLifecycleDeploymentIntent(ctx context.Context,
 	if bi.agentEnvID == uuid.Nil {
 		return nil, nil
 	}
+	if _, err := bi.registryService(); err != nil {
+		return nil, err
+	}
 
 	state, err := bi.registry.GetEnvironmentServiceState(ctx, *soul.BahiaServiceID, bi.agentEnvID)
 	if err != nil {
@@ -529,6 +556,9 @@ func (bi *BahiaIntegration) recordLifecycleObservation(ctx context.Context, soul
 	}
 	if bi.agentEnvID == uuid.Nil {
 		return nil
+	}
+	if _, err := bi.registryService(); err != nil {
+		return err
 	}
 
 	var desiredDigest string
@@ -586,6 +616,9 @@ func (bi *BahiaIntegration) getRuntimeType(tier domain.SoulTier) domain.RuntimeT
 // EnsureAgentEnvironment creates the default agent environment if it doesn't exist.
 // Returns the environment ID.
 func (bi *BahiaIntegration) EnsureAgentEnvironment(ctx context.Context) (uuid.UUID, error) {
+	if _, err := bi.registryService(); err != nil {
+		return uuid.Nil, err
+	}
 	const envName = "agents"
 	if bi.agentEnvID != uuid.Nil {
 		existing, err := bi.registry.GetEnvironment(ctx, bi.agentEnvID)

@@ -10,6 +10,7 @@ package soulfactory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrout"
+	"github.com/openagentsinc/bahia/internal/service"
 )
 
 // Config holds reactor configuration.
@@ -686,7 +688,9 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 		run.Error = err.Error()
 		now := time.Now()
 		run.CompletedAt = &now
-		if _, governed := r.provisioner.(interface{ ownsTerminalFailureProjection() }); !governed {
+		var missing *service.MissingRegistryRepositoryError
+		_, governed := r.provisioner.(interface{ ownsTerminalFailureProjection() })
+		if !governed || errors.As(err, &missing) {
 			if publishErr := r.publishError(ctx, event, string(run.CurrentStep), err.Error(), run.ID.String()); publishErr != nil {
 				logger.Error("failed to publish provisioning error", "error", publishErr)
 			}

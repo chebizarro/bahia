@@ -372,6 +372,15 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 	if zapLog == nil {
 		zapLog = zap.NewNop()
 	}
+	sqlRegistryUnavailable := false
+	if registry != nil {
+		var err error
+		registry, err = registry.ProjectionSource()
+		if err != nil {
+			sqlRegistryUnavailable = true
+			zapLog.Info("SQL-backed reactor handlers unavailable", zap.Error(err))
+		}
+	}
 
 	// Use provided pool or create a new one
 	if pool == nil {
@@ -406,6 +415,13 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 	r.workerStatePublisher = NewWorkerStatePublisher(r.publisher, r.signer)
 	for _, opt := range opts {
 		opt(r)
+	}
+	if sqlRegistryUnavailable {
+		// These direct command handlers still need SQL-only registry families.
+		// Canonical ML model/endpoint intents run through IntentProcessor, not here.
+		r.backupRegistry = nil
+		r.mlRegistry = nil
+		r.llmRegistry = nil
 	}
 	if r.workerStatePublisher != nil {
 		r.workerStatePublisher.ConfigureAudit(r.nostrEvents, r.zapLog)
