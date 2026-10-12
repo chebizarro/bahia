@@ -823,12 +823,15 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			systemKeys.Zeroize()
 		}
 	}()
+	confidentialPublishing := cfg.Nostr.PublishEnabled && serviceKeyer != nil
+	attempts := func() int { return 0 }
 	if !systemKeys.Empty() {
 		keysRunner := &systemKeysRunner{ring: systemKeys, store: secretValues, backoffMin: time.Second, backoffMax: 5 * time.Minute, logger: logger}
 		bgManager.RegisterWithOptions(keysRunner, RunnerRequired(false))
-		healthProvider.RegisterCheck("system_keys", systemKeysHealthCheck(systemKeys, keysRunner.attemptCount))
-	} else if cfg.Nostr.PublishEnabled && serviceKeyer != nil {
-		healthProvider.RegisterCheck("system_keys", systemKeysHealthCheck(systemKeys, func() int { return 0 }))
+		attempts = keysRunner.attemptCount
+	}
+	if !systemKeys.Empty() || confidentialPublishing {
+		healthProvider.RegisterCheck("system_keys", systemKeysHealthCheck(systemKeys, attempts, confidentialPublishing))
 	}
 	if staleRunDetector != nil {
 		healthProvider.RegisterCheck("deployment_run_health", func() HealthCheck {

@@ -144,7 +144,7 @@ sealed under the old version would become unreadable). See
 |---|---|
 | `resolving system keys from the secret store` | startup resolution has not finished |
 | `system keys are not resolved … retrying: …` | Signet is unreachable or refused one of the keys: `credential is not labelled bahia-system/<purpose>/<key-id>` (wrong credential or label), `version does not match` (configured version is not the active one), `is N bytes, want 32` (not a 32-byte key), `refused (no_capability)` (delivery grant) |
-| `confidential records are not published: … confidential_dedupe is not configured` | no dedupe key; confidential publishes fail closed |
+| `confidential records cannot be published: … confidential_dedupe is not configured` (fails readiness) | publishing is on but no dedupe key is configured; every confidential write fails closed |
 
 ## Rotate
 

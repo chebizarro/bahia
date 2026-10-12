@@ -137,10 +137,10 @@ operator imports into Signet under the same owner, labelled
   without one); once an attempt has failed they fail at once with
   `ErrUnavailable` and the reason until a later attempt succeeds. Nothing falls
   back to a derived or cached key. The `system_keys` health
-  check fails readiness until every key is resolved, and warns while no
-  `confidential_dedupe` key is configured (confidential records are then not
-  published). Keys are zeroized at shutdown and never leave the keyring except
-  through `Keyring.Use`.
+  check fails readiness until every key is resolved, and also while the
+  daemon publishes confidential state without a `confidential_dedupe` key
+  (every confidential write would fail). Keys are zeroized at shutdown and
+  never leave the keyring except through `Keyring.Use`.
 - Nothing about a system key is derived from, or wrapped to, the service key.
 
 Ciphertext names the key that sealed it: an assistant event's `key_ref` is

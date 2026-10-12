@@ -95,7 +95,7 @@ func TestSystemKeysRunnerRetriesUntilResolvedAndHealthFailsClosed(t *testing.T) 
 		credentialID('b'): {"bahia-system/confidential-dedupe/k1", bytes.Repeat([]byte{2}, secretstore.SystemKeySize)},
 	}}
 	runner := &systemKeysRunner{ring: ring, store: store, backoffMin: time.Millisecond, backoffMax: time.Millisecond, logger: zap.NewNop()}
-	health := systemKeysHealthCheck(ring, runner.attemptCount)
+	health := systemKeysHealthCheck(ring, runner.attemptCount, true)
 	if check := health(); check.Status != HealthStatusFail {
 		t.Fatalf("before resolution: %+v", check)
 	}
@@ -130,13 +130,23 @@ func TestSystemKeysRunnerRetriesUntilResolvedAndHealthFailsClosed(t *testing.T) 
 	}
 }
 
-func TestSystemKeysHealthWarnsWithoutDedupeKey(t *testing.T) {
+// A daemon that publishes confidential state without a dedupe key would fail
+// every confidential write: it is not ready.
+func TestSystemKeysHealthFailsReadinessWithoutDedupeKey(t *testing.T) {
 	ring, err := systemKeyring(config.Defaults())
 	if err != nil {
 		t.Fatal(err)
 	}
-	check := systemKeysHealthCheck(ring, func() int { return 0 })()
-	if check.Status != HealthStatusWarn || !strings.Contains(check.Message, "secret_store.system_keys.confidential_dedupe is not configured") {
-		t.Fatalf("no keys: %+v", check)
+	check := systemKeysHealthCheck(ring, func() int { return 0 }, true)()
+	if check.Status != HealthStatusFail || !strings.Contains(check.Message, "secret_store.system_keys.confidential_dedupe is not configured") {
+		t.Fatalf("publishing without a dedupe key: %+v", check)
+	}
+	if check := systemKeysHealthCheck(ring, func() int { return 0 }, false)(); check.Status != HealthStatusPass {
+		t.Fatalf("not publishing, no keys: %+v", check)
+	}
+	provider := NewHealthProvider(nil, nil)
+	provider.RegisterCheck("system_keys", systemKeysHealthCheck(ring, func() int { return 0 }, true))
+	if snapshot := provider.Readiness(); snapshot.Ready {
+		t.Fatal("readiness passes while confidential writes cannot be published")
 	}
 }

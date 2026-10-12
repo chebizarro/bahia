@@ -90,7 +90,7 @@ secret_store:
 
 Confidential state (organizations, members, secrets, payments, security
 findings) is published only once the `confidential_dedupe` key is configured
-and resolved; the `system_keys` health check reports it. Create both keys as
+and resolved; until then the `system_keys` check fails readiness (`/ready`). Create both keys as
 described in the [runbook](../runbooks/signet-secret-store.md#system-credentials).
 
 Serialized configuration (JSON, YAML, log fields) is a diagnostic view: credentials, private keys, bunker URIs, and auth headers are masked. Never save such a view back as the operational configuration.

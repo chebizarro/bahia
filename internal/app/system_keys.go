@@ -89,14 +89,20 @@ func systemKeyLabels(ring *secretstore.Keyring) []string {
 }
 
 // systemKeysHealthCheck fails readiness until every configured system key is
-// resolved, and warns while confidential publishing has no dedupe key.
-func systemKeysHealthCheck(ring *secretstore.Keyring, attempts func() int) func() HealthCheck {
+// resolved and, while the daemon publishes confidential state, whenever the
+// confidential-dedupe key is not configured: without it every confidential
+// write (orgs, members, secrets, payments, security, operator allowlists)
+// fails, so the daemon is not ready to serve them.
+func systemKeysHealthCheck(ring *secretstore.Keyring, attempts func() int, confidentialPublishing bool) func() HealthCheck {
 	return func() HealthCheck {
 		check := HealthCheck{Name: "system_keys", Details: map[string]string{"keys": strings.Join(systemKeyLabels(ring), ",")}}
 		loaded, lastErr := ring.Status()
 		switch {
+		case confidentialPublishing && len(ring.Refs(secretstore.PurposeConfidentialDedupe)) == 0:
+			check.Status = HealthStatusFail
+			check.Message = "confidential records cannot be published: secret_store.system_keys.confidential_dedupe is not configured"
 		case ring.Empty():
-			check.Status = HealthStatusWarn
+			check.Status, check.Message = HealthStatusPass, "no system keys configured"
 		case loaded:
 			check.Status, check.Message = HealthStatusPass, "system keys resolved from the secret store"
 		case lastErr != nil:
@@ -105,12 +111,6 @@ func systemKeysHealthCheck(ring *secretstore.Keyring, attempts func() int) func(
 			check.Details["attempts"] = fmt.Sprintf("%d", attempts())
 		default:
 			check.Status, check.Message = HealthStatusFail, "resolving system keys from the secret store"
-		}
-		if len(ring.Refs(secretstore.PurposeConfidentialDedupe)) == 0 {
-			if check.Status == HealthStatusPass {
-				check.Status = HealthStatusWarn
-			}
-			check.Message = strings.TrimPrefix(check.Message+"; ", "; ") + "confidential records are not published: secret_store.system_keys.confidential_dedupe is not configured"
 		}
 		return check
 	}
