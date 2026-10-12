@@ -68,25 +68,57 @@ type Metadata struct {
 	RevokedAt    time.Time
 }
 
-// Scope is the tenant a credential must belong to. One store owner holds
-// every tenant's credentials, so the store releases a credential only when
-// its label is in the scope's namespace, "<org-id>/<service-id>/<name>"
-// (LabelPrefix). Labels are set by whoever imports the credential into the
-// store, which requires store administrator rights, not Bahia org roles.
+// Scope is whose credential a caller may resolve. One store owner holds every
+// credential, so the store releases one only when its label is in the scope:
+//
+//   - a tenant scope {OrgID, ServiceID} admits "<org-id>/<service-id>/<name>"
+//     (LabelPrefix);
+//   - a system scope (SystemScope) admits exactly one daemon-internal
+//     credential, "bahia-system/<purpose>/<key-id>".
+//
+// The namespaces cannot overlap: a tenant label starts with a UUID and a
+// tenant scope refuses the system namespace outright, and a system scope can
+// only be built in this package. Labels are set by whoever imports the
+// credential into the store, which requires store administrator rights, not
+// Bahia org roles.
 type Scope struct {
 	OrgID     uuid.UUID
 	ServiceID uuid.UUID
+	// system is the exact label of a system scope; empty for a tenant.
+	system string
 }
 
-// LabelPrefix is the label namespace of the scope's credentials.
+// LabelPrefix is the label namespace of a tenant scope's credentials.
 func (s Scope) LabelPrefix() string {
 	return s.OrgID.String() + "/" + s.ServiceID.String() + "/"
 }
 
+// Valid reports whether the scope names a tenant or a system credential.
+func (s Scope) Valid() bool {
+	if s.system != "" {
+		return s.OrgID == uuid.Nil && s.ServiceID == uuid.Nil
+	}
+	return s.OrgID != uuid.Nil && s.ServiceID != uuid.Nil
+}
+
+// Want describes the labels the scope admits, for refusals.
+func (s Scope) Want() string {
+	if s.system != "" {
+		return s.system
+	}
+	return s.LabelPrefix() + "<name>"
+}
+
 // Admits reports whether label names a credential of this scope.
 func (s Scope) Admits(label string) bool {
+	if !s.Valid() {
+		return false
+	}
+	if s.system != "" {
+		return label == s.system
+	}
 	prefix := s.LabelPrefix()
-	return s.OrgID != uuid.Nil && s.ServiceID != uuid.Nil && len(label) > len(prefix) && strings.HasPrefix(label, prefix)
+	return len(label) > len(prefix) && strings.HasPrefix(label, prefix) && !IsSystemLabel(label)
 }
 
 // SecretStore resolves and inspects externally held secret values.

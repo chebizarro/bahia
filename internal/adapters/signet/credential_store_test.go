@@ -416,6 +416,7 @@ func TestCredentialStoreRefusesOtherTenantsCredentials(t *testing.T) {
 		"the bare scope prefix":           f.vault.put("bahia-vault", f.scope.LabelPrefix(), 1, "active", "prefix"),
 		"a prefix lookalike (no slash)":   f.vault.put("bahia-vault", f.scope.OrgID.String()+"/"+f.scope.ServiceID.String()+"X/name", 1, "active", "x"),
 		"an org id that only starts same": f.vault.put("bahia-vault", f.scope.OrgID.String()[:8]+"/"+f.scope.ServiceID.String()+"/name", 1, "active", "y"),
+		"a daemon system credential":      f.vault.put("bahia-vault", "bahia-system/"+secretstore.PurposeConfidentialDedupe+"/k1", 1, "active", "system-key"),
 	}
 	for name, id := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -437,6 +438,42 @@ func TestCredentialStoreRefusesOtherTenantsCredentials(t *testing.T) {
 	}
 	if _, err := f.store.Inspect(f.ctx, cases["another org's credential"], secretstore.Scope{}); !errors.Is(err, secretstore.ErrDenied) {
 		t.Fatalf("an empty scope = %v, want ErrDenied", err)
+	}
+}
+
+// A system scope reaches exactly its own bahia-system/<purpose>/<key-id>
+// credential: never a tenant's, another purpose's or another key id's.
+func TestCredentialStoreSystemScope(t *testing.T) {
+	f := newVaultFixture(t, 10*time.Second)
+	key := strings.Repeat("k", secretstore.SystemKeySize)
+	own := f.vault.put("bahia-vault", "bahia-system/assistant-transcript/k1", 1, "active", key)
+	scope, err := secretstore.SystemScope(secretstore.PurposeAssistantTranscript, "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := f.store.Resolve(f.ctx, ref(own, 1), scope)
+	if err != nil {
+		t.Fatalf("Resolve own system credential: %v", err)
+	}
+	if string(value.Bytes()) != key {
+		t.Fatal("resolved the wrong system key")
+	}
+	value.Zeroize()
+	for name, id := range map[string]string{
+		"a tenant credential":   f.vault.put("bahia-vault", f.label("DB_PASSWORD"), 1, "active", "tenant"),
+		"another purpose":       f.vault.put("bahia-vault", "bahia-system/confidential-dedupe/k1", 1, "active", key),
+		"another key id":        f.vault.put("bahia-vault", "bahia-system/assistant-transcript/k2", 1, "active", key),
+		"a system label suffix": f.vault.put("bahia-vault", "bahia-system/assistant-transcript/k1/x", 1, "active", key),
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := len(f.vault.seen())
+			if value, err := f.store.Resolve(f.ctx, ref(id, 1), scope); value != nil || !errors.Is(err, secretstore.ErrDenied) {
+				t.Fatalf("Resolve = %v, %v; want ErrDenied", value, err)
+			}
+			if slices.Contains(f.vault.seen()[before:], "credential/deliver") {
+				t.Fatal("a credential outside the system scope was delivered")
+			}
+		})
 	}
 }
 
