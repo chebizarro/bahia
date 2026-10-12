@@ -112,6 +112,8 @@ nothing is stored beyond the signer session.
 - **Versions**: the daemon's signed `observed_deployments` projection — each
   row is an environment-service state joined with its runtime observation
   (names, target, observed version or digest, host, health, drift, time).
+  `observed_deployments_status` is `unavailable` if the daemon has no canonical
+  local event source; an empty list with `available` means no observed workloads.
 - **Build information**: the web artifact version and the backend's
   packaged artifact catalog; not evidence of what is deployed.
 
