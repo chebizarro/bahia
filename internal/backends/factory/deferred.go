@@ -5,27 +5,32 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/openagentsinc/bahia/internal/backends/packagebackend"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// deferredBackend is a backend whose configuration names secrets. The
-// secrets are resolved through the secret store on the backend's first use,
-// not at startup, so the daemon starts while the store is unavailable and
-// the backend fails closed until its credentials resolve. Once built, the
-// backend (and the credentials in it) is held for the life of the process.
-// Type and Capabilities depend only on non-secret configuration and come
-// from the same configuration built without credentials, which never makes
-// a request.
+// deferredBackend is a backend whose configuration names secrets. Its
+// credentials are resolved through the secret store, as one batch, on the
+// backend's first use rather than at startup, so the daemon starts while the
+// store is unavailable and the backend fails closed until they resolve. The
+// built backend (and the credentials in it) is held only until the store's
+// delivery lease ends; the next use resolves and builds again, which picks
+// up a re-pointed secret and fails closed on a revoked, expired or deleted
+// one. A failed rebuild drops the held backend. Type and Capabilities depend
+// only on non-secret configuration and come from the same configuration
+// built without credentials, which never makes a request.
 type deferredBackend struct {
 	shape    packagebackend.Backend
 	cfg      config.PackageBackendConfig
 	resolver SecretResolver
+	now      func() time.Time
 
-	mu      sync.Mutex
-	backend packagebackend.Backend
+	mu         sync.Mutex
+	backend    packagebackend.Backend
+	validUntil time.Time
 }
 
 func newDeferredBackend(ctx context.Context, cfg config.PackageBackendConfig, resolver SecretResolver) (*deferredBackend, error) {
@@ -47,7 +52,7 @@ func newDeferredBackend(ctx context.Context, cfg config.PackageBackendConfig, re
 	if err != nil {
 		return nil, err
 	}
-	return &deferredBackend{shape: shape, cfg: cfg, resolver: resolver}, nil
+	return &deferredBackend{shape: shape, cfg: cfg, resolver: resolver, now: time.Now}, nil
 }
 
 func hasSecretRefs(cfg config.PackageBackendConfig) bool {
@@ -57,14 +62,15 @@ func hasSecretRefs(cfg config.PackageBackendConfig) bool {
 func (d *deferredBackend) get(ctx context.Context) (packagebackend.Backend, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.backend != nil {
+	if d.backend != nil && d.now().Before(d.validUntil) {
 		return d.backend, nil
 	}
-	backend, err := BuildBackendWithSecrets(ctx, d.cfg, d.resolver)
+	backend, validUntil, err := buildBackend(ctx, d.cfg, d.resolver)
 	if err != nil {
+		d.backend, d.validUntil = nil, time.Time{}
 		return nil, fmt.Errorf("package backend %s credentials: %w", strings.TrimSpace(d.cfg.Type), err)
 	}
-	d.backend = backend
+	d.backend, d.validUntil = backend, validUntil
 	return backend, nil
 }
 

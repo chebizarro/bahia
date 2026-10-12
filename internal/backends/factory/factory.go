@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -21,10 +22,11 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// SecretResolver resolves production secret references into plaintext secret
-// payloads. The concrete resolver is supplied by the secrets adapter layer.
+// SecretResolver resolves a backend's secret references (secret UUIDs) as
+// one batch through the secret store (secretstore.TextResolver). The values
+// may be held until validUntil, the earliest store lease.
 type SecretResolver interface {
-	ResolveSecret(ctx context.Context, ref string) (string, error)
+	ResolveSecrets(ctx context.Context, refs []string) (values []string, validUntil time.Time, err error)
 }
 
 type backendSecrets struct {
@@ -69,13 +71,25 @@ func BuildBackend(cfg config.PackageBackendConfig) (packagebackend.Backend, erro
 }
 
 func BuildBackendWithSecrets(ctx context.Context, cfg config.PackageBackendConfig, resolver SecretResolver) (packagebackend.Backend, error) {
+	backend, _, err := buildBackend(ctx, cfg, resolver)
+	return backend, err
+}
+
+// buildBackend builds the backend and reports until when its credentials
+// may be held (zero without secret references).
+func buildBackend(ctx context.Context, cfg config.PackageBackendConfig, resolver SecretResolver) (packagebackend.Backend, time.Time, error) {
 	if cfg.InsecureSkipVerify {
-		return nil, fmt.Errorf("package backends require TLS certificate and hostname verification")
+		return nil, time.Time{}, fmt.Errorf("package backends require TLS certificate and hostname verification")
 	}
-	secrets, err := resolveBackendSecrets(ctx, cfg, resolver)
+	secrets, validUntil, err := resolveBackendSecrets(ctx, cfg, resolver)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
+	backend, err := newBackend(cfg, secrets)
+	return backend, validUntil, err
+}
+
+func newBackend(cfg config.PackageBackendConfig, secrets backendSecrets) (packagebackend.Backend, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 30 * time.Second
 	}
@@ -99,53 +113,70 @@ func BuildBackendWithSecrets(ctx context.Context, cfg config.PackageBackendConfi
 	}
 }
 
-func resolveBackendSecrets(ctx context.Context, cfg config.PackageBackendConfig, resolver SecretResolver) (backendSecrets, error) {
+func resolveBackendSecrets(ctx context.Context, cfg config.PackageBackendConfig, resolver SecretResolver) (backendSecrets, time.Time, error) {
 	if (cfg.AuthSecretRef != "" && strings.TrimSpace(cfg.AuthSecretRef) == "") || (cfg.TLSSecretRef != "" && strings.TrimSpace(cfg.TLSSecretRef) == "") {
-		return backendSecrets{}, fmt.Errorf("package backend secret references must not be blank")
+		return backendSecrets{}, time.Time{}, fmt.Errorf("package backend secret references must not be blank")
 	}
-	needsResolver := strings.TrimSpace(cfg.AuthSecretRef) != "" || strings.TrimSpace(cfg.TLSSecretRef) != "" || len(cfg.SecretRefs) > 0
-	if needsResolver && resolver == nil {
-		return backendSecrets{}, fmt.Errorf("package backend secret refs require a secrets resolver")
+	authRef, tlsRef := strings.TrimSpace(cfg.AuthSecretRef), strings.TrimSpace(cfg.TLSSecretRef)
+	var refs []string
+	if authRef != "" {
+		refs = append(refs, authRef)
+	}
+	if tlsRef != "" {
+		refs = append(refs, tlsRef)
+	}
+	genericKeys := make([]string, 0, len(cfg.SecretRefs))
+	for key, ref := range cfg.SecretRefs {
+		if strings.TrimSpace(key) == "" || strings.TrimSpace(ref) == "" {
+			return backendSecrets{}, time.Time{}, fmt.Errorf("secret_refs require nonempty keys and references")
+		}
+		genericKeys = append(genericKeys, key)
+	}
+	sort.Strings(genericKeys)
+	for _, key := range genericKeys {
+		refs = append(refs, strings.TrimSpace(cfg.SecretRefs[key]))
+	}
+	if len(refs) == 0 {
+		return backendSecrets{}, time.Time{}, nil
+	}
+	if resolver == nil {
+		return backendSecrets{}, time.Time{}, fmt.Errorf("package backend secret refs require a secrets resolver")
+	}
+	// One batch for every credential of the backend.
+	payloads, validUntil, err := resolver.ResolveSecrets(ctx, refs)
+	if err != nil || len(payloads) != len(refs) {
+		return backendSecrets{}, time.Time{}, fmt.Errorf("resolve package backend secret refs: secret unavailable or access denied")
 	}
 	var out backendSecrets
-	if ref := strings.TrimSpace(cfg.AuthSecretRef); ref != "" {
-		payload, err := resolver.ResolveSecret(ctx, ref)
+	next := 0
+	if authRef != "" {
+		auth, err := parseAuthSecret(payloads[next])
 		if err != nil {
-			return backendSecrets{}, fmt.Errorf("resolve auth_secret_ref: secret unavailable or access denied")
-		}
-		auth, err := parseAuthSecret(payload)
-		if err != nil {
-			return backendSecrets{}, fmt.Errorf("invalid auth_secret_ref: %w", err)
+			return backendSecrets{}, time.Time{}, fmt.Errorf("invalid auth_secret_ref: %w", err)
 		}
 		out.Auth = auth
+		next++
 	}
-	if ref := strings.TrimSpace(cfg.TLSSecretRef); ref != "" {
-		payload, err := resolver.ResolveSecret(ctx, ref)
+	if tlsRef != "" {
+		tlsCfg, values, err := parseTLSSecret(payloads[next])
 		if err != nil {
-			return backendSecrets{}, fmt.Errorf("resolve tls_secret_ref: secret unavailable or access denied")
-		}
-		tlsCfg, values, err := parseTLSSecret(payload)
-		if err != nil {
-			return backendSecrets{}, fmt.Errorf("invalid tls_secret_ref: %w", err)
+			return backendSecrets{}, time.Time{}, fmt.Errorf("invalid tls_secret_ref: %w", err)
 		}
 		out.TLS = tlsCfg
 		out.Redactions = values
+		next++
 	}
-	if len(cfg.SecretRefs) > 0 {
-		out.Generic = make(map[string]string, len(cfg.SecretRefs))
-		for key, ref := range cfg.SecretRefs {
-			ref = strings.TrimSpace(ref)
-			if strings.TrimSpace(key) == "" || ref == "" {
-				return backendSecrets{}, fmt.Errorf("secret_refs require nonempty keys and references")
+	if len(genericKeys) > 0 {
+		out.Generic = make(map[string]string, len(genericKeys))
+		for _, key := range genericKeys {
+			if strings.TrimSpace(payloads[next]) == "" {
+				return backendSecrets{}, time.Time{}, fmt.Errorf("resolve secret_refs: secret unavailable or access denied")
 			}
-			payload, err := resolver.ResolveSecret(ctx, ref)
-			if err != nil || strings.TrimSpace(payload) == "" {
-				return backendSecrets{}, fmt.Errorf("resolve secret_refs: secret unavailable or access denied")
-			}
-			out.Generic[key] = payload
+			out.Generic[key] = payloads[next]
+			next++
 		}
 	}
-	return out, nil
+	return out, validUntil, nil
 }
 
 func parseAuthSecret(payload string) (packagebackend.AuthConfig, error) {

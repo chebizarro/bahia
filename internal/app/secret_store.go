@@ -240,48 +240,87 @@ func (r *secretIndexRunner) healthCheck() HealthCheck {
 // .administrator_private_key_ref). It is resolved through the secret store on
 // first use rather than at startup, so the daemon starts while the store or
 // the canonical record is not yet available, and the feature fails closed
-// until it is. Once resolved its text is held for the life of the process,
-// like any process-held key (docs/architecture/secret-store.md); re-pointing
-// the secret is noticed on the next use and resolves the new version. A
-// failed resolve is not cached.
+// until it is. The text is held only until the store's delivery lease ends;
+// the next use resolves again (one round trip with expected_version), which
+// notices a revoked or expired credential. Every use also compares the
+// canonical reference (a local read): a re-pointed secret resolves the new
+// version, and a deleted secret or one that cannot be read drops the held
+// text. Any failure drops it. Concurrent uses share one resolve, without
+// holding the lock across it.
 type heldSecret struct {
 	resolver *secretstore.TextResolver
 	ref      string
 	reason   string
+	now      func() time.Time
 
-	mu   sync.Mutex
-	pin  domain.SecretCredentialRef
+	mu         sync.Mutex
+	pin        domain.SecretCredentialRef
+	text       string
+	validUntil time.Time
+	flight     *heldFlight
+}
+
+type heldFlight struct {
+	done chan struct{}
 	text string
+	err  error
 }
 
 func newHeldSecret(resolver *secretstore.TextResolver, ref, reason string) *heldSecret {
-	return &heldSecret{resolver: resolver, ref: ref, reason: reason}
+	return &heldSecret{resolver: resolver, ref: ref, reason: reason, now: time.Now}
+}
+
+// dropLocked forgets the held text (Go strings cannot be overwritten; the
+// reference is dropped so nothing serves it).
+func (h *heldSecret) dropLocked() {
+	h.pin, h.text, h.validUntil = domain.SecretCredentialRef{}, "", time.Time{}
 }
 
 // get returns the credential text.
 func (h *heldSecret) get(ctx context.Context) (string, error) {
+	current, refErr := h.resolver.CurrentReference(ctx, h.ref)
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	current, err := h.resolver.CurrentReference(ctx, h.ref)
+	if refErr != nil {
+		h.dropLocked()
+		h.mu.Unlock()
+		return "", fmt.Errorf("%s: %w", h.reason, refErr)
+	}
+	if h.text != "" && current == h.pin && h.now().Before(h.validUntil) {
+		text := h.text
+		h.mu.Unlock()
+		return text, nil
+	}
+	flight := h.flight
+	leader := flight == nil
+	if leader {
+		flight = &heldFlight{done: make(chan struct{})}
+		h.flight = flight
+	}
+	h.mu.Unlock()
+	if !leader {
+		select {
+		case <-flight.done:
+			return flight.text, flight.err
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	held, err := h.resolver.ResolveHeld(ctx, []string{h.ref}, domain.SecretResolveOptions{Actor: "bahia", Reason: h.reason})
+	if err == nil && strings.TrimSpace(held.Values[0]) == "" {
+		err = errors.New("the secret is empty")
+	}
+	h.mu.Lock()
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", h.reason, err)
+		h.dropLocked()
+		flight.err = fmt.Errorf("%s: %w", h.reason, err)
+	} else {
+		h.pin, h.text, h.validUntil = held.Pins[0], held.Values[0], held.ValidUntil
+		flight.text = held.Values[0]
 	}
-	if h.text != "" && current == h.pin {
-		return h.text, nil
-	}
-	text, manifest, err := h.resolver.ResolveSecretWithAudit(ctx, h.ref, domain.SecretResolveOptions{Actor: "bahia", Reason: h.reason})
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", h.reason, err)
-	}
-	if manifest.Version != current.Version {
-		// Re-pointed between the two reads; the next use settles it.
-		return "", fmt.Errorf("%s: the secret was re-pointed while resolving; retry", h.reason)
-	}
-	if strings.TrimSpace(text) == "" {
-		return "", fmt.Errorf("%s: the secret is empty", h.reason)
-	}
-	h.pin, h.text = current, text
-	return text, nil
+	h.flight = nil
+	h.mu.Unlock()
+	close(flight.done)
+	return flight.text, flight.err
 }
 
 // heldRelayAdmin is the NIP-86 relay administration client, signing with
@@ -304,11 +343,13 @@ func newHeldRelayAdmin(secrets *secretstore.TextResolver, ref string, targets []
 
 func (h *heldRelayAdmin) current(ctx context.Context) (*relayadmin.Client, error) {
 	text, err := h.key.get(ctx)
-	if err != nil {
-		return nil, err
-	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if err != nil {
+		// The client holds a signer over the key: drop it with the key.
+		h.keyText, h.client = "", nil
+		return nil, err
+	}
 	if h.client != nil && h.keyText == text {
 		return h.client, nil
 	}

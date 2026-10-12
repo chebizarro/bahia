@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openagentsinc/bahia/internal/backends/packagebackend"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -18,8 +19,8 @@ import (
 
 type resolverFunc func(context.Context, string) (string, error)
 
-func (f resolverFunc) ResolveSecret(ctx context.Context, ref string) (string, error) {
-	return f(ctx, ref)
+func (f resolverFunc) ResolveSecrets(ctx context.Context, refs []string) ([]string, time.Time, error) {
+	return resolveEach(ctx, refs, f)
 }
 
 func TestSecretResolutionFailsClosedWithoutLeakingResolverErrors(t *testing.T) {

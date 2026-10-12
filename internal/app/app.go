@@ -559,12 +559,15 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// records are attached once the projector exists (UseRecords below).
 	secretResolver := secretstore.NewResolver(secretValues)
 	// secretText serves consumers whose APIs take secret text; it records
-	// each access in the PostgreSQL audit when PostgreSQL is configured.
+	// each access in the PostgreSQL audit when PostgreSQL is configured, and
+	// an audit row it cannot write is logged, not fatal.
 	var secretAudit secretstore.Auditor
 	if secretRepo != nil {
 		secretAudit = secretRepo
 	}
-	secretText := secretstore.NewTextResolver(secretResolver, secretAudit)
+	secretText := secretstore.NewTextResolver(secretResolver, secretAudit, func(secretID uuid.UUID, err error) {
+		logger.Warn("secret access audit not recorded", zap.String("secret_id", secretID.String()), zap.Error(err))
+	})
 
 	var publicRoutePlanner *service.PublicRoutePlanner
 	var internalRouteBackend *routingAdapter.NginxBackend

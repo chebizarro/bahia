@@ -22,7 +22,7 @@ func TestInitiationWithoutSecretStoreFailsClosedAtCredentialResolutionOnly(t *te
 
 	initiator, publisher, resolver, credentialRef, _ := newConformanceInitiator(t, server)
 	// The daemon has no secret store.
-	initiator.secrets = secretstore.NewTextResolver(secretstore.NewResolver(nil), nil)
+	initiator.secrets = secretstore.NewTextResolver(secretstore.NewResolver(nil), nil, nil)
 	req := arcanaStartRequest(credentialRef)
 
 	_, err := initiator.StartHiveCIBuild(context.Background(), req)

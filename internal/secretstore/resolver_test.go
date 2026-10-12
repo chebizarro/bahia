@@ -160,3 +160,41 @@ func containsAll(s string, parts ...string) bool {
 	}
 	return true
 }
+
+type failingAuditor struct{ calls int }
+
+func (a *failingAuditor) RecordSecretAccessAudit(context.Context, *domain.SecretAccessAudit) error {
+	a.calls++
+	return errors.New("secret_access_audit references a row not indexed yet")
+}
+
+// A held batch may be kept until its earliest lease; an access row that
+// cannot be written is reported but does not fail the resolve.
+func TestTextResolverHeldBatchAndNonBlockingAudit(t *testing.T) {
+	org, svc := uuid.New(), uuid.New()
+	scope := secretstore.Scope{OrgID: org, ServiceID: svc}
+	a := &domain.SecretRef{ID: uuid.New(), ServiceID: svc, Name: "A", Version: 2,
+		CredentialRef: &domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: "cred_a", Version: 3}}
+	b := &domain.SecretRef{ID: uuid.New(), ServiceID: svc, Name: "B", Version: 1,
+		CredentialRef: &domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: "cred_b", Version: 1}}
+	store := &fakeStore{values: map[string]string{"cred_a": scope.LabelPrefix(), "cred_b": scope.LabelPrefix()}}
+	r := secretstore.NewResolver(store)
+	r.UseRecords(fakeRecords{secrets: map[uuid.UUID]*domain.SecretRef{a.ID: a, b.ID: b}, orgs: map[uuid.UUID]string{svc: org.String()}})
+	audit := &failingAuditor{}
+	var reported []uuid.UUID
+	text := secretstore.NewTextResolver(r, audit, func(id uuid.UUID, _ error) { reported = append(reported, id) })
+
+	held, err := text.ResolveHeld(t.Context(), []string{a.ID.String(), b.ID.String()}, domain.SecretResolveOptions{Reason: "test"})
+	if err != nil {
+		t.Fatalf("ResolveHeld with an unwritable audit: %v", err)
+	}
+	if held.Values[0] != "cred_a@3" || held.Pins[1] != *b.CredentialRef || held.Manifests[0].RecordVersion != 2 {
+		t.Fatalf("held = %+v", held)
+	}
+	if held.ValidUntil.IsZero() || held.ValidUntil.After(time.Now().Add(time.Minute)) {
+		t.Fatalf("valid until %v is not the store lease", held.ValidUntil)
+	}
+	if audit.calls != 2 || len(reported) != 2 {
+		t.Fatalf("audit calls %d, reported %d", audit.calls, len(reported))
+	}
+}
