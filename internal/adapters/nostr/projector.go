@@ -155,6 +155,7 @@ type Projector struct {
 	enabled              bool
 	logger               *zap.Logger
 	systemConfig         *config.Config
+	relaySource          AdvertisedRelaySource
 	mcpTransport         bool
 	dnsPublishMu         sync.Mutex
 	dnsPublished         map[string]dnsPublishedEndpoint
@@ -221,6 +222,42 @@ func WithDNSPolicyProjectionSource(source DNSPolicyProjectionSource) ProjectorOp
 	return func(p *Projector) { p.dnsPolicySource = source }
 }
 
+// AdvertisedRelays are the relay lists Bahia advertises in its relay-set
+// (bahia-browser-v1, bahia-contextvm-v1, bahia-service-v1, bahia-nip34-v1)
+// and NIP-65 events.
+type AdvertisedRelays struct {
+	Browser   []string
+	ContextVM []string
+	Service   []string
+	NIP34     []string
+}
+
+// AdvertisedRelaySource supplies the relay lists in force. ok is false while
+// they are not yet known (the canonical relay settings have not caught up),
+// and nothing is advertised until they are.
+type AdvertisedRelaySource interface {
+	AdvertisedRelays() (relays AdvertisedRelays, ok bool)
+}
+
+// WithAdvertisedRelaySource makes the projector advertise the effective
+// relay policy instead of the static configuration.
+func WithAdvertisedRelaySource(source AdvertisedRelaySource) ProjectorOption {
+	return func(p *Projector) { p.relaySource = source }
+}
+
+// staticAdvertisedRelays advertises the configured relay lists; it is the
+// source when the projector is not given the effective relay policy.
+type staticAdvertisedRelays struct{ cfg config.NostrConfig }
+
+func (s staticAdvertisedRelays) AdvertisedRelays() (AdvertisedRelays, bool) {
+	return AdvertisedRelays{
+		Browser:   s.cfg.BrowserRelayPolicyRelays(),
+		ContextVM: s.cfg.ContextVMRelayPolicyRelays(),
+		Service:   s.cfg.ServiceRelayPolicyRelays(),
+		NIP34:     s.cfg.NIP34RelayPolicyRelays(),
+	}, true
+}
+
 func WithSystemDiscoveryConfig(cfg *config.Config, mcpTransportEnabled bool) ProjectorOption {
 	return func(p *Projector) {
 		p.systemConfig = cfg
@@ -260,6 +297,9 @@ func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher Pro
 	}
 	for _, opt := range opts {
 		opt(p)
+	}
+	if p.relaySource == nil && p.systemConfig != nil {
+		p.relaySource = staticAdvertisedRelays{cfg: p.systemConfig.Nostr}
 	}
 	p.enabled = cfg.PublishEnabled && p.signer != nil && source != nil && publisher != nil
 	p.confidentialStateHashKey, p.confidentialStateHashErr = confidentialStateHashKeyFor(p.signer)
@@ -920,21 +960,44 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 		}
 		return nil
 	}
-	contextVMRelays := cfg.Nostr.ContextVMRelayPolicyRelays()
-	serviceRelays := cfg.Nostr.ServiceRelayPolicyRelays()
 	if err := p.publishSystemDiscoveryAnnouncement(ctx, cfg); err != nil {
 		return err
 	}
-	if err := p.publishRelaySet(ctx, BrowserRelaySetDTag, browserRelays); err != nil {
+	return p.PublishAdvertisedRelays(ctx)
+}
+
+// PublishAdvertisedRelays publishes the relay-set events and the service's
+// NIP-65 relay list from the relay lists in force (AdvertisedRelaySource).
+// It publishes nothing until the source knows them; the dedupe pipeline skips
+// events that already match. The relay settings coordinator calls it when
+// the canonical relay settings catch up and whenever they change.
+func (p *Projector) PublishAdvertisedRelays(ctx context.Context) error {
+	if p.relaySource == nil {
+		return nil
+	}
+	relays, ok := p.relaySource.AdvertisedRelays()
+	if !ok {
+		p.logger.Debug("relay lists in force are not known yet; relay sets are advertised once the canonical relay settings catch up")
+		return nil
+	}
+	if len(relays.Browser) == 0 {
+		return nil
+	}
+	if err := p.publishRelaySet(ctx, BrowserRelaySetDTag, relays.Browser); err != nil {
 		return err
 	}
-	if err := p.publishRelaySet(ctx, ContextVMRelaySetDTag, contextVMRelays); err != nil {
+	if err := p.publishRelaySet(ctx, ContextVMRelaySetDTag, relays.ContextVM); err != nil {
 		return err
 	}
-	if err := p.publishRelaySet(ctx, ServiceRelaySetDTag, serviceRelays); err != nil {
+	if err := p.publishRelaySet(ctx, ServiceRelaySetDTag, relays.Service); err != nil {
 		return err
 	}
-	return p.publishServiceNIP65RelayPreferences(ctx, serviceRelays, contextVMRelays)
+	if len(relays.NIP34) > 0 {
+		if err := p.publishRelaySet(ctx, NIP34RelaySetDTag, relays.NIP34); err != nil {
+			return err
+		}
+	}
+	return p.publishServiceNIP65RelayPreferences(ctx, relays.Service, relays.ContextVM)
 }
 
 func (p *Projector) publishConfiguredDMRelayListsFromSystemConfig(ctx context.Context) error {
