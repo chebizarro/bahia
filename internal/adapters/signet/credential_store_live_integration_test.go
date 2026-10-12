@@ -39,10 +39,13 @@ type liveSecretStoreFixture struct {
 }
 
 // TestLiveSignetCredentialStore proves the Signet credential store against a
-// real signetd: the requester resolves the pinned version through
-// credential/inspect + credential/deliver, a rotation makes the old pin fail
-// closed and the new pin resolve, a withdrawn delivery grant and a revoked
-// credential fail closed, and nothing is ever returned in their place.
+// real signetd and a requester holding only the owner's exact delivery
+// grant: the requester resolves the pinned version through
+// credential/inspect + credential/deliver, after which Signet's reported
+// version makes every resolve one credential/deliver with expected_version;
+// a rotation makes the old pin fail closed and the new pin resolve (alone and
+// as a paced batch); a withdrawn delivery grant and a revoked credential fail
+// closed, and nothing is ever returned in their place.
 func TestLiveSignetCredentialStore(t *testing.T) {
 	path := os.Getenv("BAHIA_SIGNET_SECRET_STORE_CONFIG")
 	if path == "" {
@@ -141,6 +144,17 @@ func TestLiveSignetCredentialStore(t *testing.T) {
 	}
 	value.Zeroize()
 
+	// Signet reported the delivered version and the inspect proved the
+	// label: from here a resolve is a single credential/deliver.
+	if !store.oneRoundTrip(fx.CredentialID, scope) {
+		t.Fatal("Signet did not report the delivered version: resolves keep the inspect bracket")
+	}
+	value, err = resolve(1)
+	if err != nil || string(value.Bytes()) != string(value1) {
+		t.Fatalf("one-round-trip resolve v1: %v", err)
+	}
+	value.Zeroize()
+
 	signetctl("rotate-credential", fx.CredentialID, "--file", fx.ValueV2File)
 	expectRefused("v1 after rotation", 1, secretstore.ErrVersionMismatch)
 	value, err = resolve(2)
@@ -151,6 +165,14 @@ func TestLiveSignetCredentialStore(t *testing.T) {
 		t.Fatal("resolve v2 returned another value")
 	}
 	value.Zeroize()
+	batch, err := store.ResolveAll(ctx, []secretstore.Request{
+		{Ref: domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: fx.CredentialID, Version: 2}, Scope: scope},
+		{Ref: domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: fx.CredentialID, Version: 2}, Scope: scope},
+	})
+	if err != nil || len(batch) != 2 || string(batch[0].Bytes()) != string(value2) || string(batch[1].Bytes()) != string(value2) {
+		t.Fatalf("paced batch resolve v2: %v", err)
+	}
+	secretstore.ZeroizeAll(batch)
 
 	grant := func(client string) string {
 		policy, _ := json.Marshal(map[string]any{"default": "deny", "allow_clients": []string{client}, "allow_methods": []string{"credential.deliver"}})
