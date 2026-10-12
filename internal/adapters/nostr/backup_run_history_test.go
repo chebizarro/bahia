@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,7 +24,9 @@ import (
 func TestBackupRunHistoryRequiresExactAllRelayEOSEAndStableConnection(t *testing.T) {
 	first := newNIP11LimitRelay(t, map[string]int{"max_limit": 20})
 	second := newNIP11LimitRelay(t, map[string]int{"max_limit": 20})
-	pool := NewRelayPool([]string{first.url, second.url}, zap.NewNop())
+	urls := []string{first.url, second.url}
+	slices.Sort(urls)
+	pool := NewRelayPool([]string{urls[1], urls[0]}, zap.NewNop())
 	defer pool.Close()
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 	require.NoError(t, err)
