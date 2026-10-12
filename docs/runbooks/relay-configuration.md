@@ -14,13 +14,16 @@ static `nostr.service_relays` (falling back to `nostr.relays`),
 they are in force until the canonical settings are received.
 
 1. **Startup.** The daemon connects with the static lists, then restores the
-   last promoted canonical settings (PostgreSQL projection, or the local
-   event store without PostgreSQL) and applies them before any intent or
-   publication runs.
+   last canonical settings it accepted (PostgreSQL projection, or a durable
+   local control record without PostgreSQL) and applies them before any
+   intent or publication runs.
 2. **Catch-up.** The relay settings hydrator REQs the canonical coordinate on
-   every configured and policy-named relay. Events are validated and
-   promoted latest-wins (`created_at`, then lowest id). After EOSE from every
-   relay it marks catch-up, and only then are the relay-set events advertised.
+   every configured and policy-named relay. Events are validated, checked
+   against the relay guard below, and promoted latest-wins (`created_at`,
+   then lowest id); a refused event is never promoted, stored or applied, so
+   the newest event on the relays can be refused while the last accepted
+   settings stay in force across restarts. After EOSE from every relay it
+   marks catch-up, and only then are the relay-set events advertised.
 3. **Runtime change.** A new canonical record is applied as soon as the
    hydrator receives it: the relay pools are reconfigured in place (open
    subscriptions are re-issued on the new relays; reconnects use the pool's
@@ -39,9 +42,12 @@ the bootstrap list in force. The same effective lists drive:
 
 ## Controlled relays and the guard
 
-`nostr.controlled_relays` lists the relays Bahia operates. Unset, it is the
-static service, ContextVM and browser relays; the sidecar's `backend_url` and
-`public_url` are always controlled.
+`nostr.controlled_relays` lists the relays Bahia operates; the sidecar's
+`backend_url` and `public_url` are always controlled. Unset means the sidecar
+alone. It is **required** — startup fails and names the fix — when the daemon
+publishes (`publish_enabled`) with a service identity and any service,
+ContextVM or browser relay is not the sidecar; `relay_topology` warns while it
+is unset.
 
 - **Startup fails** when a service, ContextVM or browser relay is not
   controlled, or when any control-plane list or `controlled_relays` names a
@@ -56,13 +62,21 @@ static service, ContextVM and browser relays; the sidecar's `backend_url` and
   `controlled_relays` and restart first.
 - **Every daemon relay pool refuses** to write a service-signed control-plane
   event (`30900` cp-state including OCK and NIP-44 payloads, `4903`,
-  `30315`, `31410`/`31411`/`30360`, relay and discovery lists) to a relay that
-  is not controlled. The relay gets a `blocked:` result, which the outbox
-  treats as that relay's permanent rejection.
+  `30315`, `31410`/`31411`/`30360`, relay and discovery lists, plaintext
+  ContextVM `25910`, NIP-09 deletions) to a relay that is not controlled. The
+  control-plane, ContextVM and service pools also keep NIP-59 gift wraps
+  (ephemeral signer) on controlled relays; the service pool holds the Loom
+  relays too. The relay gets a `blocked:` result, which the outbox treats as
+  that relay's permanent rejection. Each refused (relay, kind) is logged at
+  error level once; `bahia_nostr_control_plane_guard_refusals_total` counts
+  them all.
+- `bahia-migrate nostr` and `bahia-migrate f74a-import` sign with the service
+  key: their target relays (`--relays` or config) must pass the same rules,
+  and their pools carry the same guard.
 - Public relays are allowed only in non-control-plane lists (`loom.relays`,
   `nostr.nip34_relays`, `nostr.dm_relay_lists`, `soul_factory.*`,
-  `dns.backends.*.agent_relays`, `fips.relay_urls`) and only when
-  `nostr.allowed_public_relays` names them.
+  `dns.backends.*.agent_relays`, `fips.relay_urls`, and the canonical NIP-34
+  and DM relay lists) and only when `nostr.allowed_public_relays` names them.
 
 ## Publish quorum
 
@@ -81,12 +95,12 @@ quorum at its own relay count.
 | Detail | Meaning |
 |---|---|
 | `source` | `bootstrap` (static lists) or `canonical` |
-| `caught_up` | canonical settings caught up (EOSE); relay sets are advertised |
+| `caught_up` | canonical settings caught up (EOSE); relay sets are advertised. Still `false` after 5 minutes: `warn` |
 | `service_relays`, `contextvm_relays`, `browser_relays` | effective lists |
 | `service_write_relays`, `publish_quorum`, `required_acceptances` | what a publish must reach |
 | `controlled_relays` | the guard's set |
 | `static_service_relays`, `drift` | static lists that differ from the canonical ones (`warn`) |
-| `refused` | why the latest canonical settings were refused (`warn`) |
+| `refused` | why the latest canonical settings were refused (`warn`); the last accepted settings stay in force |
 
 `relay_policy_projection` reports the canonical record's event id and hash.
 
@@ -112,7 +126,15 @@ configuration at startup. With the service key rotation:
 
    Drop `nostr.relays` (it is only the fallback for `service_relays`) and any
    `BAHIA_NOSTR_RELAYS` override. Keep `browser_relays`/`contextvm_relays` on
-   Bahia-controlled relays.
+   Bahia-controlled relays and list them in `controlled_relays`.
+
+   Startup also now refuses well-known public relays in the non-control-plane
+   lists unless `nostr.allowed_public_relays` names them. Check
+   `loom.relays`, `nostr.nip34_relays`, `nostr.dm_relay_lists`,
+   `soul_factory.relays`/`additional_relays`/`nip05_relays` (purplepag.es is
+   a common NIP-05 relay), `dns.backends.*.agent_relays` and `fips.relay_urls`:
+   remove each public relay or list it in `allowed_public_relays`. The error
+   names the key and the relay.
 2. Start the daemon. `relay_topology` shows `source=bootstrap`, then
    `canonical` once the existing relay settings are received.
 3. Apply the relay policy again from the web relay settings with the same

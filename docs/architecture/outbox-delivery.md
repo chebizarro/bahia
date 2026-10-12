@@ -73,7 +73,8 @@ with fewer fails validation and canonical relay settings with fewer are
 refused ([relay configuration](../runbooks/relay-configuration.md)).
 
 Every relay pool also refuses to write a service-signed control-plane event
-to a relay outside `nostr.controlled_relays`; that relay's result is a local
+(and, on control-plane pools, a gift wrap) to a relay outside
+`nostr.controlled_relays`; that relay's result is a local
 `blocked:` rejection, permanent for the entry like a relay-sent one. With the
 effective policy validated against the same set, the guard does not fire for
 a publisher's own write relays.
