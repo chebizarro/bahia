@@ -97,7 +97,7 @@ func (*ProductionGovernedProvisioner) ownsTerminalSuccessProjection() {}
 // release and deployment-unit dependencies may be nil during database-degraded
 // startup, but provisioning then fails closed before registry mutation.
 func NewProductionGovernedProvisioner(full *FullProvisioner, cfg ProductionGovernedProvisionerConfig) (*ProductionGovernedProvisioner, error) {
-	if full == nil || full.reactor == nil || full.bahiaIntegration == nil || full.bahiaIntegration.registry == nil {
+	if full == nil || full.reactor == nil || full.bahiaIntegration == nil {
 		return nil, fmt.Errorf("production governed provisioning requires FullProvisioner, Reactor, and Bahia integration")
 	}
 	root := strings.TrimSpace(cfg.StateDir)
@@ -137,6 +137,9 @@ func (p *ProductionGovernedProvisioner) RetireExpiredRuns(ctx context.Context, n
 func (p *ProductionGovernedProvisioner) Provision(ctx context.Context, req *domain.ProvisioningRequest, run *domain.ProvisioningRun) (*domain.AgentSoul, error) {
 	if req == nil || run == nil {
 		return nil, fmt.Errorf("governed provisioning requires request and run")
+	}
+	if _, err := p.full.bahiaIntegration.registryService(); err != nil {
+		return nil, err
 	}
 	unlock, err := p.states.lockRequest(ctx, run.RequestID)
 	if err != nil {
@@ -541,6 +544,10 @@ func (p *productionProvisioningPort) prepareAvatarAndWorkspace(ctx context.Conte
 }
 
 func (p *productionProvisioningPort) ensureServiceUnit(ctx context.Context, spec ProvisioningSpec) error {
+	registry, err := p.engine.full.bahiaIntegration.registryService()
+	if err != nil {
+		return err
+	}
 	if p.engine.units == nil {
 		return fmt.Errorf("production governed provisioning deployment-unit repository is not configured")
 	}
@@ -548,7 +555,6 @@ func (p *productionProvisioningPort) ensureServiceUnit(ctx context.Context, spec
 	if err != nil {
 		return err
 	}
-	registry := p.engine.full.bahiaIntegration.registry
 	serviceName := soulServiceName(spec.AgentID)
 	existingService, err := registry.GetServiceByName(ctx, serviceName)
 	if err != nil {
@@ -652,6 +658,10 @@ func (p *productionProvisioningPort) ensureRuntimeRelease(ctx context.Context, s
 }
 
 func (p *productionProvisioningPort) ensureBahiaDeployment(ctx context.Context, spec ProvisioningSpec) error {
+	registry, err := p.engine.full.bahiaIntegration.registryService()
+	if err != nil {
+		return err
+	}
 	state, err := p.engine.states.load(ctx, spec.RequestID)
 	if err != nil {
 		return err
@@ -659,7 +669,6 @@ func (p *productionProvisioningPort) ensureBahiaDeployment(ctx context.Context, 
 	if state.Release == nil || state.ReleaseBinding == nil {
 		return fmt.Errorf("runtime release must be selected before Bahia deployment")
 	}
-	registry := p.engine.full.bahiaIntegration.registry
 	orgID := p.engine.full.bahiaIntegration.OrganizationID()
 	prior, err := registry.GetDeploymentIntentForRuntimeRelease(ctx, orgID, state.ServiceID, state.Release.ID)
 	if err != nil {
@@ -946,7 +955,10 @@ func verifyGovernedMetadata(what string, meta map[string]any, spec ProvisioningS
 // fails closed on any ownership, correlation, or governed-spec disagreement
 // with the replay. It never trusts the private adapter ledger alone.
 func (p *productionProvisioningPort) inspectRealStep(ctx context.Context, spec ProvisioningSpec, state *productionProvisioningState, step OrderedStep) error {
-	registry := p.engine.full.bahiaIntegration.registry
+	registry, err := p.engine.full.bahiaIntegration.registryService()
+	if err != nil {
+		return err
+	}
 	orgID := p.engine.full.bahiaIntegration.OrganizationID()
 	switch step {
 	case StepRegisterServiceUnit:

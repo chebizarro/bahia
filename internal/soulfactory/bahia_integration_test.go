@@ -108,7 +108,16 @@ func TestBahiaIntegrationRegistrationIsRestartReplayIdempotent(t *testing.T) {
 
 func TestBahiaIntegrationRegistrationFailureIsReturned(t *testing.T) {
 	services := &sfMockServiceRepo{services: map[uuid.UUID]*domain.Service{}, createErr: errors.New("service store unavailable")}
-	registry := service.NewRegistryService(services, nil, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
+	registry := service.NewRegistryService(
+		services, &sfMockEnvRepo{envs: map[uuid.UUID]*domain.Environment{}},
+		&sfMockBuildRepo{builds: map[uuid.UUID]*domain.Build{}},
+		&sfMockArtifactRepo{artifacts: map[uuid.UUID]*domain.Artifact{}},
+		&sfMockIntentRepo{intents: map[uuid.UUID]*domain.DeploymentIntent{}},
+		&sfMockRunRepo{runs: map[uuid.UUID]*domain.DeploymentRun{}},
+		&sfMockObservationRepo{observations: map[string][]domain.RuntimeObservation{}},
+		&sfMockStateRepo{states: map[string]*domain.EnvironmentServiceState{}},
+		nil, &events.NoopPublisher{}, zap.NewNop(),
+	)
 	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{}, slogDefaultLogger())
 	if err != nil {
 		t.Fatalf("NewBahiaIntegration() error = %v", err)
@@ -119,6 +128,49 @@ func TestBahiaIntegrationRegistrationFailureIsReturned(t *testing.T) {
 	}
 	if serviceID != uuid.Nil {
 		t.Fatalf("RegisterSoulAsService() ID = %s, want nil UUID on failure", serviceID)
+	}
+}
+
+func TestBahiaIntegrationWithoutDatabaseFailsClosed(t *testing.T) {
+	registry := service.NewRegistryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, &events.NoopPublisher{}, zap.NewNop())
+	envID := uuid.New()
+	integration, err := NewBahiaIntegration(registry, BahiaIntegrationConfig{AgentEnvironmentID: envID.String(), DeployRuntimeArtifacts: true}, slogDefaultLogger())
+	if err != nil {
+		t.Fatalf("NewBahiaIntegration() error = %v", err)
+	}
+	if integration.registry != nil {
+		t.Fatal("partially wired registry was retained by SoulFactory")
+	}
+	serviceID := uuid.New()
+	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", BahiaServiceID: &serviceID}
+	checks := map[string]func() error{
+		"register service": func() error {
+			_, err := integration.RegisterSoulAsService(t.Context(), soul)
+			return err
+		},
+		"initial deployment": func() error {
+			_, err := integration.CreateInitialDeployment(t.Context(), soul, serviceID, runtimeArtifactResult())
+			return err
+		},
+		"status sync": func() error {
+			_, err := integration.SyncSoulStatus(t.Context(), soul)
+			return err
+		},
+		"lifecycle": func() error {
+			return integration.HandleLifecycleAction(t.Context(), soul, domain.SoulActionSuspend)
+		},
+		"environment": func() error {
+			_, err := integration.EnsureAgentEnvironment(t.Context())
+			return err
+		},
+	}
+	for name, call := range checks {
+		t.Run(name, func(t *testing.T) {
+			var missing *service.MissingRegistryRepositoryError
+			if err := call(); !errors.As(err, &missing) || missing.Repository != "services" {
+				t.Fatalf("error = %v, want typed missing-services error", err)
+			}
+		})
 	}
 }
 
